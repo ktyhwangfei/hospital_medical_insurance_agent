@@ -2,8 +2,20 @@ from datetime import UTC, datetime
 from typing import Any
 
 
+TASKS: dict[str, dict[str, Any]] = {}
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def save_task(task: dict[str, Any]) -> dict[str, Any]:
+    TASKS[task['task_id']] = task
+    return task
+
+
+def get_task(task_id: str) -> dict[str, Any] | None:
+    return TASKS.get(task_id)
 
 
 def create_task(
@@ -13,7 +25,7 @@ def create_task(
     responsible_role: str,
     workflow_id: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    task = {
         "task_id": task_id,
         "task_type": task_type,
         "status": "pending",
@@ -22,6 +34,7 @@ def create_task(
         "workflow_id": workflow_id,
         "updated_at": _now(),
     }
+    return save_task(task)
 
 
 def update_task_confirmation(

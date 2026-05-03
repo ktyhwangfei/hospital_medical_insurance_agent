@@ -2,6 +2,7 @@ import hashlib
 
 from src.config.security_policy.rules import HIGH_RISK_ACTIONS
 from src.runtime.api.schemas import AgentResponse
+from src.runtime.task_closure.service import create_task
 
 
 def detect_blocked_actions(message: str) -> list[str]:
@@ -17,7 +18,7 @@ def build_human_confirmation_response(actions: list[str]) -> AgentResponse:
         status='waiting_human_confirmation',
         result={'message': '命中高风险动作，需人工在既有业务系统确认后执行'},
         citations=[{'source_type': 'risk_control_policy', 'source_id': 'HIGH_RISK_ACTIONS', 'summary': '高风险动作黑名单'}],
-        tasks=[{'task_id': task_id, 'task_type': 'human_confirmation', 'status': 'pending', 'description': '请人工确认高风险动作', 'workflow_id': workflow_id}],
+        tasks=[create_task(task_id, 'human_confirmation', '请人工确认高风险动作', '医保办', workflow_id)],
         missing_fields=[],
         uncertainties=['AI 不会自动执行高风险动作，需人工确认并在既有业务系统处理'],
         blocked_actions=actions,
