@@ -104,13 +104,16 @@ runtime/api (FastAPI 路由)
 - **文件命名**: `snake_case`（后端）；类名 `PascalCase`；常量 `UPPER_SNAKE_CASE`
 - **无注释**: 代码不加注释，除非明确要求
 
-### MVP 阶段的技术债务
+### MVP 阶段的剩余技术债务
 
-以下已知妥协与编码规范矛盾，后续迭代需修正：
+- `AgentResponse` 内部仍有部分 `dict[str, Any]` 字段，后续需逐步 Pydantic 化。
+- 运行时编排当前为顺序执行器，尚未实现完整 DAG、并行执行、断点续执。
+- 审计、workflow、task 状态当前为内存实现，重启后不保留。
+- 真实院内系统适配器尚未接入，当前仍为内存适配器。
 
-- `routes.py` 的 `chat()` 返回裸 `dict` 而非 `AgentResponse` Pydantic 实例
-- `pre_discharge_joint_qc/service.py` 硬编码风险数据，未调用适配器（违反解耦纪律）
-- `build_human_confirmation_response()` 中 `task_id` 硬编码为 `task-human-confirm-001`
+### OpenSpec 过程债
+
+- `openspec/changes/archive/2026-05-03-enhance-intent-recognition/tasks.md` 中任务勾选状态与当前代码存在不一致；后续归档或维护 OpenSpec 时应以代码和测试状态为准补齐记录。
 
 ## 安全约束（硬性）
 
