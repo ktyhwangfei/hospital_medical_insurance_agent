@@ -84,3 +84,15 @@ def test_generate_exhausted_error(gateway):
     with patch.object(gateway, "_call_provider", side_effect=ModelServerError("error", model_name="gpt-4o-mini")):
         with pytest.raises(ModelExhaustedError):
             gateway.generate(messages, "llm", "settlement_exception_guidance")
+
+
+def test_generate_stream_reraises_provider_error(gateway):
+    messages = [Message(role="user", content="Hello")]
+
+    with patch.object(gateway, "_get_provider") as mock_get_provider:
+        provider = MagicMock()
+        provider.invoke_stream.side_effect = ModelServerError("stream failed", model_name="test-model")
+        mock_get_provider.return_value = provider
+
+        with pytest.raises(ModelServerError):
+            list(gateway.generate_stream(messages, "llm", "default"))
