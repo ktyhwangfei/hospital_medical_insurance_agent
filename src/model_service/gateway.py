@@ -96,6 +96,7 @@ class ModelGateway:
         except Exception as e:
             latency_ms = int((time.time() - start) * 1000)
             logger.error("model_stream_interrupted", extra={"model_name": model_name, "scene": scene, "total_chunks": total_chunks, "latency_ms": latency_ms, "error": str(e)})
+            raise
 
     def _call_provider(self, request: ModelRequest, model_name: str) -> ModelResponse:
         provider = self._get_provider(model_name)

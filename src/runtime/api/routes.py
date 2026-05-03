@@ -168,6 +168,18 @@ def model_test(request: ModelTestRequest) -> ModelTestResponse:
     )
 
 
+def model_error_detail(exc: Exception) -> dict:
+    if isinstance(exc, ModelAuthError):
+        return error_detail('MODEL_AUTH_ERROR', '模型服务鉴权失败，请检查 API Key 是否有效', {'event_type': 'model_auth_error'})
+    if isinstance(exc, ModelRateLimitError):
+        return error_detail('MODEL_RATE_LIMITED', '模型服务请求过于频繁，请稍后重试', {'event_type': 'model_rate_limited'})
+    if isinstance(exc, ModelExhaustedError):
+        return error_detail('MODEL_EXHAUSTED', '模型服务回退链已耗尽，请稍后重试', {'event_type': 'model_exhausted'})
+    if isinstance(exc, ModelServerError):
+        return error_detail('MODEL_UPSTREAM_ERROR', '模型服务上游暂时不可用，请稍后重试', {'event_type': 'model_upstream_error'})
+    return error_detail('MODEL_STREAM_ERROR', '模型流式响应失败，请稍后重试', {'event_type': 'model_stream_error'})
+
+
 @router.post('/model-test/stream')
 def model_test_stream(request: ModelTestRequest) -> StreamingResponse:
     def events() -> Iterator[str]:
@@ -196,7 +208,7 @@ def model_test_stream(request: ModelTestRequest) -> StreamingResponse:
                 },
             )
         except Exception as exc:
-            yield sse_event('error', {'error_code': 'MODEL_STREAM_ERROR', 'message': str(exc)})
+            yield sse_event('error', model_error_detail(exc))
         yield sse_event('done', {})
 
     return StreamingResponse(events(), media_type='text/event-stream')
