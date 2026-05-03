@@ -72,6 +72,22 @@ def test_workflow_status_returns_real_state_after_chat():
     assert response.json()["status"] in ["completed", "degraded", "waiting_human_confirmation"]
 
 
+def test_audit_view_can_restore_high_risk_workflow():
+    client = TestClient(create_app())
+    chat = client.post(
+        "/api/v1/medical-insurance-ai-agent/chat",
+        json={"user_id": "U001", "role": "medical_office", "message": "请自动退费", "patient_id": "P001", "encounter_id": "E001"},
+    )
+    workflow_id = chat.json()["audit"]["workflow_id"]
+
+    response = client.get(f"/api/v1/medical-insurance-ai-agent/workflows/{workflow_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workflow_id"] == workflow_id
+    assert body["status"] == "waiting_human_confirmation"
+
+
 def test_task_status_returns_real_task_after_high_risk_chat():
     client = TestClient(create_app())
     chat = client.post(

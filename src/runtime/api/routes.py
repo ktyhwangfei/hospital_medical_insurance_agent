@@ -18,8 +18,10 @@ from src.runtime.context.service import build_runtime_context
 from src.runtime.intent.parser import parse_intent
 from src.runtime.orchestration.service import execute_plan
 from src.runtime.planning.service import build_execution_plan
+from src.runtime.runtime_state.models import StepState, WorkflowInstance
 from src.runtime.runtime_state.store import runtime_state_store
 from src.runtime.task_closure.service import get_task, save_task, update_task_confirmation
+from src.security.audit.service import build_workflow_audit_view, record_audit_event
 from src.security.authorization.service import visible_fields_for, is_allowed
 from src.security.desensitization.service import mask_name
 from src.security.risk_control.service import detect_blocked_actions, build_human_confirmation_response
@@ -64,7 +66,14 @@ def process_chat_request(request: ChatRequest) -> AgentResponse:
         return AgentResponse(status='needs_clarification', missing_fields=missing)
     blocked = detect_blocked_actions(request.message)
     if blocked:
-        return build_human_confirmation_response(blocked)
+        response = build_human_confirmation_response(blocked)
+        workflow_id = response.audit["workflow_id"]
+        steps = [StepState(step_id=step_id, status="completed") for step_id in response.audit["steps"]]
+        runtime_state_store.save_workflow(WorkflowInstance(workflow_id=workflow_id, scenario=response.scenario, status=response.status, current_step=steps[-1].step_id if steps else None, steps=steps))
+        record_audit_event('workflow_executed', workflow_id, payload={'scenario': response.scenario, 'status': response.status})
+        for step in steps:
+            record_audit_event('workflow_step_completed', workflow_id, step.step_id)
+        return response
     intent_result = parse_intent(request.message)
     scenario = intent_result.intent
 
@@ -106,11 +115,11 @@ def patient_context(patient_id: str, encounter_id: str, user_id: str, role: str)
 
 
 @router.get('/workflows/{workflow_id}')
-def workflow_status(workflow_id: str) -> WorkflowStatusResponse:
-    workflow = runtime_state_store.get_workflow(workflow_id)
-    if workflow is None:
+def workflow_status(workflow_id: str) -> dict:
+    view = build_workflow_audit_view(workflow_id)
+    if view is None:
         raise HTTPException(status_code=404, detail=error_detail('WORKFLOW_NOT_FOUND', 'workflow 不存在', {'event_type': 'workflow_not_found'}))
-    return WorkflowStatusResponse(workflow_id=workflow.workflow_id, status=workflow.status)
+    return view
 
 
 @router.get('/tasks/{task_id}')
