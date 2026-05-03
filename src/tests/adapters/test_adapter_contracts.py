@@ -1,5 +1,11 @@
 from src.adapters.base.models import AdapterCallContext, AdapterCallResult, AdapterCallStatus, AdapterError, DataQualityStatus
 from src.adapters.base.service import adapter_citation, failed_result, successful_result
+from src.adapters.billing.in_memory import InMemoryBillingAdapter
+from src.adapters.drg_dip.in_memory import InMemoryDrgDipAdapter
+from src.adapters.emr.in_memory import InMemoryEmrAdapter
+from src.adapters.his.in_memory import InMemoryHisAdapter
+from src.adapters.medical_record.in_memory import InMemoryMedicalRecordAdapter
+from src.adapters.pre_audit.in_memory import InMemoryPreAuditAdapter
 from src.shared.schemas.contracts import Citation
 
 
@@ -63,3 +69,17 @@ def test_adapter_citation_falls_back_to_capability_when_no_message():
     citation = adapter_citation(result)
 
     assert citation.summary == "query_transaction"
+
+
+def test_in_memory_adapters_return_adapter_call_result():
+    adapters = [
+        InMemoryBillingAdapter().query_billing_status("P001", "E001"),
+        InMemoryDrgDipAdapter().query_group_result("P001", "E001"),
+        InMemoryEmrAdapter().query_record_summary("P001", "E001"),
+        InMemoryHisAdapter().query_orders("P001", "E001"),
+        InMemoryMedicalRecordAdapter().query_homepage("P001", "E001"),
+        InMemoryPreAuditAdapter().query_audit_result("P001", "E001"),
+    ]
+
+    assert all(isinstance(result, AdapterCallResult) for result in adapters)
+    assert {result.status for result in adapters} == {AdapterCallStatus.SUCCESS}

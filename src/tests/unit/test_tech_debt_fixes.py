@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from src.adapters.base.models import AdapterCallResult, AdapterCallStatus
 from src.runtime.api.schemas import (
     AgentResponse,
     ChatRequest,
@@ -76,24 +77,27 @@ def test_pre_discharge_qc_calls_adapters_not_hardcode():
         patch('src.business_scenarios.pre_discharge_joint_qc.service.InMemoryDrgDipAdapter') as mock_drg,
         patch('src.business_scenarios.pre_discharge_joint_qc.service.InMemoryMedicalRecordAdapter') as mock_mr,
     ):
-        mock_pre_audit.return_value.query_audit_result.return_value = {
-            'risk': 'test_audit_risk',
-            'risk_level': 'high',
-            'patient_id': 'P001',
-            'encounter_id': 'E001',
-        }
-        mock_drg.return_value.query_group_result.return_value = {
-            'risk': 'test_drg_risk',
-            'risk_level': 'medium',
-            'patient_id': 'P001',
-            'encounter_id': 'E001',
-        }
-        mock_mr.return_value.query_homepage.return_value = {
-            'risk': 'test_mr_risk',
-            'risk_level': 'low',
-            'patient_id': 'P001',
-            'encounter_id': 'E001',
-        }
+        mock_pre_audit.return_value.query_audit_result.return_value = AdapterCallResult(
+            status=AdapterCallStatus.SUCCESS,
+            source_system='pre_audit',
+            source_record_id='P001:E001',
+            capability='query_audit_result',
+            data={'risk': 'test_audit_risk', 'risk_level': 'high', 'patient_id': 'P001', 'encounter_id': 'E001'},
+        )
+        mock_drg.return_value.query_group_result.return_value = AdapterCallResult(
+            status=AdapterCallStatus.SUCCESS,
+            source_system='drg_dip',
+            source_record_id='P001:E001',
+            capability='query_group_result',
+            data={'risk': 'test_drg_risk', 'risk_level': 'medium', 'patient_id': 'P001', 'encounter_id': 'E001'},
+        )
+        mock_mr.return_value.query_homepage.return_value = AdapterCallResult(
+            status=AdapterCallStatus.SUCCESS,
+            source_system='medical_record',
+            source_record_id='P001:E001',
+            capability='query_homepage',
+            data={'risk': 'test_mr_risk', 'risk_level': 'low', 'patient_id': 'P001', 'encounter_id': 'E001'},
+        )
 
         from src.business_scenarios.pre_discharge_joint_qc.service import run_pre_discharge_qc
 
