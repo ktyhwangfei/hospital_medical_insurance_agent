@@ -19,6 +19,7 @@ from src.runtime.intent.parser import parse_intent
 from src.runtime.orchestration.service import execute_plan
 from src.runtime.planning.service import build_execution_plan
 from src.runtime.runtime_state.store import runtime_state_store
+from src.runtime.task_closure.service import get_task, save_task, update_task_confirmation
 from src.security.authorization.service import visible_fields_for, is_allowed
 from src.security.desensitization.service import mask_name
 from src.security.risk_control.service import detect_blocked_actions, build_human_confirmation_response
@@ -114,7 +115,10 @@ def workflow_status(workflow_id: str) -> WorkflowStatusResponse:
 
 @router.get('/tasks/{task_id}')
 def task_status(task_id: str) -> TaskStatusResponse:
-    return TaskStatusResponse(task_id=task_id, status='not_implemented')
+    task = get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=error_detail('TASK_NOT_FOUND', 'task 不存在', {'event_type': 'task_not_found'}))
+    return TaskStatusResponse(task_id=task_id, status=task['status'])
 
 
 @router.post('/tasks/confirm')
@@ -122,11 +126,13 @@ def confirm_task(request: TaskConfirmRequest) -> TaskConfirmResponse:
     if request.action not in ('confirm', 'reject'):
         raise HTTPException(status_code=400, detail=error_detail('INVALID_ACTION', 'action 必须是 confirm 或 reject'))
 
+    task = get_task(request.task_id) or {'task_id': request.task_id, 'task_type': 'human_confirmation', 'status': 'pending', 'description': '人工确认任务'}
+    updated = save_task(update_task_confirmation(task, request.action, request.user_id, request.reason))
     return TaskConfirmResponse(
         task_id=request.task_id,
-        status='confirmed' if request.action == 'confirm' else 'rejected',
+        status=updated['status'],
         confirmed_by=request.user_id,
-        confirmed_at='2026-05-02T00:00:00Z',
+        confirmed_at=updated['confirmed_at'],
         reason=request.reason,
         result={} if request.action == 'confirm' else {'blocked': True, 'message': '用户拒绝执行该操作'},
     )

@@ -70,3 +70,30 @@ def test_workflow_status_returns_real_state_after_chat():
     assert response.status_code == 200
     assert response.json()["workflow_id"] == workflow_id
     assert response.json()["status"] in ["completed", "degraded", "waiting_human_confirmation"]
+
+
+def test_task_status_returns_real_task_after_high_risk_chat():
+    client = TestClient(create_app())
+    chat = client.post(
+        "/api/v1/medical-insurance-ai-agent/chat",
+        json={"user_id": "U001", "role": "medical_office", "message": "请自动退费并冲正", "patient_id": "P001", "encounter_id": "E001"},
+    )
+    task_id = chat.json()["tasks"][0]["task_id"]
+
+    response = client.get(f"/api/v1/medical-insurance-ai-agent/tasks/{task_id}")
+
+    assert response.status_code == 200
+    assert response.json()["task_id"] == task_id
+    assert response.json()["status"] == "pending"
+
+
+def test_confirm_task_uses_runtime_time_not_hardcoded_value():
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/v1/medical-insurance-ai-agent/tasks/confirm",
+        json={"task_id": "task-manual-001", "action": "confirm", "user_id": "U001", "reason": "已在系统处理"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["confirmed_at"] != "2026-05-02T00:00:00Z"
+    assert response.json()["confirmed_at"].endswith("Z")
