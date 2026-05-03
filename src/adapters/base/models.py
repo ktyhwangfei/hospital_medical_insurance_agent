@@ -4,6 +4,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class AdapterCallStatus(str, Enum):
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
 class DataQualityStatus(str, Enum):
     COMPLETE = "complete"
     DEGRADED = "degraded"
@@ -19,7 +24,7 @@ class AdapterCallContext(BaseModel):
 
 
 class AdapterCallResult(BaseModel):
-    status: str
+    status: AdapterCallStatus
     source_system: str
     source_record_id: str | None = None
     capability: str
