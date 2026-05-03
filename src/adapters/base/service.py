@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from src.adapters.base.models import AdapterCallContext, AdapterCallResult, DataQualityStatus
+from src.adapters.base.models import AdapterCallContext, AdapterCallResult, AdapterCallStatus, DataQualityStatus
+from src.shared.schemas.contracts import Citation
 
 
 def _now() -> str:
@@ -10,7 +11,7 @@ def _now() -> str:
 
 def successful_result(context: AdapterCallContext, source_system: str, source_record_id: str, capability: str, data: dict[str, Any]) -> AdapterCallResult:
     return AdapterCallResult(
-        status="success",
+        status=AdapterCallStatus.SUCCESS,
         source_system=source_system,
         source_record_id=source_record_id,
         capability=capability,
@@ -26,7 +27,7 @@ def successful_result(context: AdapterCallContext, source_system: str, source_re
 
 def failed_result(context: AdapterCallContext, source_system: str, capability: str, error_type: str, message: str) -> AdapterCallResult:
     return AdapterCallResult(
-        status="failed",
+        status=AdapterCallStatus.FAILED,
         source_system=source_system,
         capability=capability,
         data_quality=DataQualityStatus.DEGRADED,
@@ -39,9 +40,9 @@ def failed_result(context: AdapterCallContext, source_system: str, capability: s
     )
 
 
-def adapter_citation(result: AdapterCallResult) -> dict[str, str]:
-    return {
-        "source_type": result.source_system,
-        "source_id": result.source_record_id or result.capability,
-        "summary": result.message or result.capability,
-    }
+def adapter_citation(result: AdapterCallResult) -> Citation:
+    return Citation(
+        source_type=result.source_system,
+        source_id=result.source_record_id or result.capability,
+        summary=result.message or result.capability,
+    )
