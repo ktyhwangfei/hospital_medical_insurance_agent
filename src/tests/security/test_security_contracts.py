@@ -1,5 +1,7 @@
 from src.shared.schemas.contracts import AuditEvent, Citation, ErrorDetail, RuntimeTask, StreamErrorEvent
 from src.shared.schemas.responses import error_detail
+from src.runtime.scheduling.service import degraded_response
+from src.security.risk_control.service import build_human_confirmation_response
 
 
 def test_contract_models_dump_to_api_compatible_dicts():
@@ -23,3 +25,22 @@ def test_error_detail_uses_standard_error_model():
         "audit_event": {"event_type": "permission_denied"},
     }
     assert ErrorDetail(**detail).error_code == "PERMISSION_DENIED"
+
+
+def test_high_risk_response_has_traceability_and_task():
+    response = build_human_confirmation_response(["退费", "冲正"])
+
+    assert response.status == "waiting_human_confirmation"
+    assert response.tasks[0]["task_type"] == "human_confirmation"
+    assert response.citations or response.uncertainties
+    assert response.audit["event_type"] == "high_risk_action_blocked"
+    assert "退费" in response.blocked_actions
+
+
+def test_degraded_response_has_uncertainty_source_and_audit_event():
+    response = degraded_response("P002", "E001", "医保接口调用失败，当前结论存在不确定性")
+
+    assert response.status == "degraded"
+    assert response.uncertainties
+    assert response.citations
+    assert response.audit["event_type"] == "degraded_response_returned"
