@@ -8,15 +8,17 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from src.config.model_service import ModelServiceConfig
-from src.business_scenarios.pre_discharge_joint_qc.service import run_pre_discharge_qc
-from src.business_scenarios.settlement_exception_guide.service import guide_settlement_exception
 from src.data_platform.data_access.in_memory import build_sample_store
 from src.model_service import Message, ModelGateway
 from src.model_service.exceptions import ModelAuthError, ModelExhaustedError, ModelRateLimitError, ModelServerError
 from src.runtime.api.schemas import AgentResponse, ChatRequest, ModelTestRequest, ModelTestResponse, PatientContextResponse, TaskConfirmRequest, TaskConfirmResponse, TaskStatusResponse, WorkflowStatusResponse
 from src.runtime.api.streaming import sse_event
 from src.runtime.clarification.service import missing_context_fields
+from src.runtime.context.service import build_runtime_context
 from src.runtime.intent.parser import parse_intent
+from src.runtime.orchestration.service import execute_plan
+from src.runtime.planning.service import build_execution_plan
+from src.runtime.runtime_state.store import runtime_state_store
 from src.security.authorization.service import visible_fields_for, is_allowed
 from src.security.desensitization.service import mask_name
 from src.security.risk_control.service import detect_blocked_actions, build_human_confirmation_response
@@ -68,8 +70,9 @@ def process_chat_request(request: ChatRequest) -> AgentResponse:
     if scenario in ('settlement_exception_guidance', 'pre_discharge_quality_control'):
         if not is_allowed(request.role, scenario):
             raise HTTPException(status_code=403, detail=error_detail('PERMISSION_DENIED', '角色无权访问该场景', {'event_type': 'permission_denied'}))
-        handler = guide_settlement_exception if scenario == 'settlement_exception_guidance' else run_pre_discharge_qc
-        response = handler(request.patient_id, request.encounter_id)
+        context = build_runtime_context(request, intent_result)
+        plan = build_execution_plan(context)
+        response = execute_plan(context, plan)
         response.citations.extend(
             {'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in intent_result.citations
         )
@@ -103,7 +106,10 @@ def patient_context(patient_id: str, encounter_id: str, user_id: str, role: str)
 
 @router.get('/workflows/{workflow_id}')
 def workflow_status(workflow_id: str) -> WorkflowStatusResponse:
-    return WorkflowStatusResponse(workflow_id=workflow_id, status='not_implemented')
+    workflow = runtime_state_store.get_workflow(workflow_id)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail=error_detail('WORKFLOW_NOT_FOUND', 'workflow 不存在', {'event_type': 'workflow_not_found'}))
+    return WorkflowStatusResponse(workflow_id=workflow.workflow_id, status=workflow.status)
 
 
 @router.get('/tasks/{task_id}')

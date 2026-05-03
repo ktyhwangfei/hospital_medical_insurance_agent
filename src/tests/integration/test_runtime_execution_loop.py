@@ -1,3 +1,6 @@
+from fastapi.testclient import TestClient
+
+from src.runtime.api.app import create_app
 from src.runtime.runtime_state.models import StepState, WorkflowInstance
 from src.runtime.runtime_state.store import RuntimeStateStore
 from src.runtime.task_closure.service import create_task, update_task_confirmation
@@ -37,3 +40,33 @@ def test_task_closure_creates_and_confirms_task():
     assert confirmed["status"] == "confirmed"
     assert confirmed["confirmed_by"] == "U001"
     assert confirmed["confirmed_at"].endswith("Z")
+
+
+def test_chat_creates_workflow_audit_and_preserves_response_shape():
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/v1/medical-insurance-ai-agent/chat",
+        json={"user_id": "U001", "role": "medical_office", "message": "医保结算失败", "patient_id": "P001", "encounter_id": "E001"},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["scenario"] == "settlement_exception_guidance"
+    assert body["status"] == "completed"
+    assert body["audit"]["workflow_id"].startswith("wf-")
+    assert "steps" in body["audit"]
+
+
+def test_workflow_status_returns_real_state_after_chat():
+    client = TestClient(create_app())
+    chat = client.post(
+        "/api/v1/medical-insurance-ai-agent/chat",
+        json={"user_id": "U001", "role": "medical_office", "message": "医保结算失败", "patient_id": "P001", "encounter_id": "E001"},
+    )
+    workflow_id = chat.json()["audit"]["workflow_id"]
+
+    response = client.get(f"/api/v1/medical-insurance-ai-agent/workflows/{workflow_id}")
+
+    assert response.status_code == 200
+    assert response.json()["workflow_id"] == workflow_id
+    assert response.json()["status"] in ["completed", "degraded", "waiting_human_confirmation"]
