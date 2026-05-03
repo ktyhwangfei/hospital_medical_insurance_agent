@@ -1,8 +1,19 @@
-from dataclasses import dataclass, field
+from pydantic import BaseModel, Field
 
 
-@dataclass
-class WorkflowInstance:
-    workflow_id: str
+class StepState(BaseModel):
+    step_id: str
     status: str
-    steps: list[str] = field(default_factory=list)
+    input_refs: list[str] = Field(default_factory=list)
+    output_refs: list[str] = Field(default_factory=list)
+    error: str | None = None
+    audit_refs: list[str] = Field(default_factory=list)
+
+
+class WorkflowInstance(BaseModel):
+    workflow_id: str
+    scenario: str
+    status: str
+    current_step: str | None = None
+    steps: list[StepState] = Field(default_factory=list)
+    audit_refs: list[str] = Field(default_factory=list)
