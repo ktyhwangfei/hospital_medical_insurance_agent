@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>医保 AI 导办智能体 MVP</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #1d2129; height: 100vh; display: flex; }
+.sidebar { width: 260px; background: #fff; border-right: 1px solid #e5e6eb; display: flex; flex-direction: column; }
+.sidebar-header { padding: 20px; border-bottom: 1px solid #e5e6eb; }
+.sidebar-header h2 { font-size: 16px; color: #165dff; }
+.sidebar-header p { font-size: 12px; color: #86909c; margin-top: 4px; }
+.form-group { padding: 12px 20px; }
+.form-group label { display: block; font-size: 12px; color: #86909c; margin-bottom: 4px; font-weight: 500; }
+.form-group select, .form-group input { width: 100%; padding: 8px 12px; border: 1px solid #e5e6eb; border-radius: 6px; font-size: 13px; background: #f7f8fa; }
+.form-group select:focus, .form-group input:focus { outline: none; border-color: #165dff; background: #fff; }
+.quick-actions { padding: 12px 20px; border-top: 1px solid #e5e6eb; }
+.quick-actions h4 { font-size: 12px; color: #86909c; margin-bottom: 8px; }
+.quick-btn { display: block; width: 100%; padding: 8px 12px; margin-bottom: 6px; background: #f2f3f5; border: 1px solid #e5e6eb; border-radius: 6px; font-size: 12px; color: #4e5969; cursor: pointer; text-align: left; transition: all .15s; }
+.quick-btn:hover { background: #e8f3ff; border-color: #bedaff; color: #165dff; }
+.main { flex: 1; display: flex; flex-direction: column; max-height: 100vh; }
+.main-header { padding: 16px 24px; background: #fff; border-bottom: 1px solid #e5e6eb; display: flex; align-items: center; justify-content: space-between; }
+.main-header h1 { font-size: 18px; font-weight: 600; }
+.main-header .status-badge { font-size: 12px; padding: 2px 10px; border-radius: 12px; background: #e8ffea; color: #00b42a; }
+.messages { flex: 1; overflow-y: auto; padding: 20px 24px; }
+.msg { margin-bottom: 16px; display: flex; }
+.msg.user { justify-content: flex-end; }
+.msg .bubble { max-width: 70%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.6; }
+.msg.user .bubble { background: #165dff; color: #fff; border-bottom-right-radius: 4px; }
+.msg.bot .bubble { background: #fff; border: 1px solid #e5e6eb; border-bottom-left-radius: 4px; }
+.msg.bot .bubble h3 { font-size: 14px; margin-bottom: 8px; color: #165dff; }
+.msg.bot .bubble .field { margin: 4px 0; font-size: 13px; }
+.msg.bot .bubble .field .label { color: #86909c; }
+.msg.bot .bubble .field .value { color: #1d2129; font-weight: 500; }
+.msg.bot .bubble .risk-high { color: #f53f3f; }
+.msg.bot .bubble .risk-medium { color: #ff7d00; }
+.msg.bot .bubble .risk-low { color: #00b42a; }
+.msg.bot .bubble .citation { font-size: 12px; color: #86909c; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #e5e6eb; }
+.msg.bot .bubble .task-item { background: #f7f8fa; padding: 8px 12px; border-radius: 6px; margin: 4px 0; font-size: 13px; }
+.confirm-area { margin-top: 10px; display: flex; gap: 8px; }
+.confirm-btn { padding: 6px 20px; border-radius: 6px; border: none; font-size: 13px; cursor: pointer; font-weight: 500; }
+.confirm-btn.approve { background: #165dff; color: #fff; }
+.confirm-btn.approve:hover { background: #0e4dff; }
+.confirm-btn.deny { background: #f2f3f5; color: #4e5969; border: 1px solid #e5e6eb; }
+.confirm-btn.deny:hover { background: #ffece8; color: #f53f3f; border-color: #f53f3f; }
+.input-area { padding: 16px 24px; background: #fff; border-top: 1px solid #e5e6eb; }
+.input-row { display: flex; gap: 8px; }
+.input-row input { flex: 1; padding: 10px 16px; border: 1px solid #e5e6eb; border-radius: 8px; font-size: 14px; }
+.input-row input:focus { outline: none; border-color: #165dff; }
+.input-row button { padding: 10px 24px; background: #165dff; color: #fff; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500; }
+.input-row button:hover { background: #0e4dff; }
+.input-row button:disabled { background: #bedaff; cursor: not-allowed; }
+.empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: #c9cdd4; }
+.empty-state .inner { text-align: center; }
+.empty-state .inner .icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state .inner p { font-size: 14px; }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h2>医保 AI 导办智能体</h2>
+    <p>Memory MVP 演示模式</p>
+  </div>
+  <div class="form-group">
+    <label>当前角色</label>
+    <select id="roleSelect" onchange="onRoleChange()">
+      <option value="medical_office">医保办</option>
+      <option value="cashier">收费员</option>
+      <option value="clinician">临床医生</option>
+      <option value="medical_record_staff">病案室</option>
+      <option value="information_department">信息科</option>
+    </select>
+  </div>
+  <div class="form-group">
+    <label>响应模式</label>
+    <select id="streamMode">
+      <option value="stream" selected>流式模式</option>
+      <option value="normal">非流式模式</option>
+    </select>
+  </div>
+  <div class="form-group">
+    <label>患者 ID</label>
+    <input id="patientId" value="P001" placeholder="如 P001">
+  </div>
+  <div class="form-group">
+    <label>就诊 ID</label>
+    <input id="encounterId" value="E001" placeholder="如 E001">
+  </div>
+  <div class="quick-actions">
+    <h4>快捷场景</h4>
+    <button class="quick-btn" onclick="sendQuick('患者 P001 本次医保结算失败，帮我看一下原因')">结算异常导办</button>
+    <button class="quick-btn" onclick="sendQuick('帮我检查患者 P001 出院前医保风险')">出院前联合质控</button>
+    <button class="quick-btn" onclick="sendQuick('请直接给患者 P001 执行退费冲正')">高风险动作拦截</button>
+    <button class="quick-btn" onclick="sendQuick('患者 P002 本次医保结算失败')">降级响应 (P002)</button>
+  </div>
+  <div class="quick-actions">
+    <h4>模型服务测试</h4>
+    <button class="quick-btn" onclick="testModel('你好，请介绍一下你自己')">LLM 基础调用</button>
+    <button class="quick-btn" onclick="testModel('医保结算失败有哪些常见原因？')">LLM 业务问答</button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="main-header">
+    <h1>医保智能导办工作台</h1>
+    <span class="status-badge">Memory MVP</span>
+  </div>
+  <div id="messages" class="messages">
+    <div class="empty-state" id="emptyState">
+      <div class="inner">
+        <div class="icon">&#128137;</div>
+        <p>选择角色和患者，发起导办请求</p>
+      </div>
+    </div>
+  </div>
+  <div class="input-area">
+    <div class="input-row">
+      <input id="msgInput" placeholder="输入导办请求..." onkeydown="if(event.key==='Enter')sendMessage()">
+      <button onclick="sendMessage()">发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api/v1/medical-insurance-ai-agent';
+const userId = 'u-demo-001';
+
+function getRole() { return document.getElementById('roleSelect').value; }
+function getPatientId() { return document.getElementById('patientId').value.trim(); }
+function getEncounterId() { return document.getElementById('encounterId').value.trim(); }
+function isStreamMode() { return document.getElementById('streamMode').value === 'stream'; }
+
+function addMsg(type, html) {
+  const el = document.getElementById('emptyState');
+  if (el) el.remove();
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg ' + type;
+  div.innerHTML = '<div class="bubble">' + html + '</div>';
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function addStreamingMsg(title) {
+  const el = document.getElementById('emptyState');
+  if (el) el.remove();
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = '<div class="bubble"><h3>' + escapeHtml(title) + '</h3><div class="stream-content"></div></div>';
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+  return div.querySelector('.stream-content');
+}
+
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function parseSseBlock(block) {
+  const lines = block.split('\n');
+  let event = 'message';
+  let data = '';
+  lines.forEach(function(line) {
+    if (line.startsWith('event: ')) event = line.slice(7).trim();
+    if (line.startsWith('data: ')) data += line.slice(6);
+  });
+  return { event: event, data: data ? JSON.parse(data) : {} };
+}
+
+async function readSse(resp, onEvent) {
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  while (true) {
+    const result = await reader.read();
+    if (result.done) break;
+    buffer += decoder.decode(result.value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop();
+    parts.forEach(function(part) {
+      if (part.trim()) onEvent(parseSseBlock(part));
+    });
+  }
+  if (buffer.trim()) onEvent(parseSseBlock(buffer));
+}
+
+function renderResult(data) {
+  let html = '';
+  if (data.scenario) html += '<h3>' + escapeHtml(scenarioLabel(data.scenario)) + '</h3>';
+  html += '<div class="field"><span class="label">状态：</span><span class="value">' + escapeHtml(statusLabel(data.status)) + '</span></div>';
+
+  if (data.missing_fields && data.missing_fields.length) {
+    html += '<div class="field"><span class="label">缺失字段：</span><span class="value">' + data.missing_fields.map(escapeHtml).join(', ') + '</span></div>';
+  }
+
+  if (data.blocked_actions && data.blocked_actions.length) {
+    html += '<div class="field" style="color:#f53f3f"><span class="label">拦截动作：</span><span class="value">' + data.blocked_actions.map(escapeHtml).join('、') + '</span></div>';
+  }
+
+  if (data.uncertainties && data.uncertainties.length) {
+    html += '<div class="field" style="color:#ff7d00"><span class="label">不确定性：</span>' + data.uncertainties.map(escapeHtml).join('；') + '</div>';
+  }
+
+  if (data.result) {
+    if (data.result.exception_type) {
+      html += '<div class="field"><span class="label">异常类型：</span><span class="value">' + escapeHtml(data.result.exception_type) + '</span></div>';
+    }
+    if (data.result.error_code) {
+      html += '<div class="field"><span class="label">错误码：</span><span class="value">' + escapeHtml(data.result.error_code) + '</span></div>';
+    }
+    if (data.result.error_explanation) {
+      html += '<div class="field"><span class="label">错误解释：</span><span class="value">' + escapeHtml(data.result.error_explanation) + '</span></div>';
+    }
+    if (data.result.responsible_role) {
+      html += '<div class="field"><span class="label">责任角色：</span><span class="value">' + escapeHtml(data.result.responsible_role) + '</span></div>';
+    }
+    if (data.result.recommended_steps) {
+      html += '<div class="field"><span class="label">推荐步骤：</span></div>';
+      data.result.recommended_steps.forEach(function(s) { html += '<div class="task-item">' + escapeHtml(s) + '</div>'; });
+    }
+    if (data.result.risks) {
+      html += '<div class="field"><span class="label">风险清单：</span></div>';
+      data.result.risks.forEach(function(r) {
+        const cls = r.risk_level === 'high' ? 'risk-high' : (r.risk_level === 'medium' ? 'risk-medium' : 'risk-low');
+        html += '<div class="task-item"><span class="' + cls + '">[' + escapeHtml(r.risk_level) + ']</span> ' + escapeHtml(r.risk_type) + ' — ' + escapeHtml(r.recommendation) + ' <span class="label">(' + escapeHtml(r.responsible_role) + ')</span></div>';
+      });
+    }
+  }
+
+  if (data.tasks && data.tasks.length) {
+    html += '<div class="field" style="margin-top:8px"><span class="label">待办任务：</span></div>';
+    data.tasks.forEach(function(t) {
+      html += '<div class="task-item">' + escapeHtml(t.task_type) + ' | ' + escapeHtml(t.status) + (t.description ? ' | ' + escapeHtml(t.description) : '') + (t.responsible_role ? ' <span class="label">(' + escapeHtml(t.responsible_role) + ')</span>' : '') + '</div>';
+    });
+  }
+
+  if (data.citations && data.citations.length) {
+    html += '<div class="citation">来源引用：';
+    html += data.citations.map(function(c) { return escapeHtml(c.source_type) + ':' + escapeHtml(c.source_id); }).join('；');
+    html += '</div>';
+  }
+
+  if (data.audit && data.audit.workflow_id) {
+    html += '<div class="citation">流程：' + escapeHtml(data.audit.workflow_id) + ' | 步骤：' + data.audit.steps.map(escapeHtml).join(' → ') + '</div>';
+  }
+
+  if (data.status === 'waiting_human_confirmation' && data.tasks && data.tasks.length) {
+    const taskId = data.tasks[0].task_id;
+    html += '<div class="confirm-area">';
+    html += '<button class="confirm-btn approve" onclick="confirmTask(\'' + taskId + '\',\'confirm\')">确认执行</button>';
+    html += '<button class="confirm-btn deny" onclick="confirmTask(\'' + taskId + '\',\'reject\')">拒绝</button>';
+    html += '</div>';
+  }
+
+  return html;
+}
+
+function scenarioLabel(s) {
+  const m = { 'settlement_exception_guidance': '医保结算异常导办', 'pre_discharge_quality_control': '出院前联合质控', 'high_risk_action_confirmation': '高风险动作确认' };
+  return m[s] || s;
+}
+function statusLabel(s) {
+  const m = { 'completed': '已完成', 'needs_clarification': '需要补充信息', 'waiting_human_confirmation': '等待人工确认', 'degraded': '降级响应', 'not_implemented': '暂未实现' };
+  return m[s] || s;
+}
+function roleLabel(r) {
+  const m = { 'medical_office': '医保办', 'cashier': '收费员', 'clinician': '临床医生', 'medical_record_staff': '病案室', 'information_department': '信息科' };
+  return m[r] || r;
+}
+
+async function sendMessage() {
+  const input = document.getElementById('msgInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  addMsg('user', escapeHtml(msg));
+  await callChat(msg);
+}
+
+async function sendQuick(msg) {
+  addMsg('user', escapeHtml(msg));
+  await callChat(msg);
+}
+
+async function callChat(msg) {
+  if (isStreamMode()) {
+    await callChatStream(msg);
+    return;
+  }
+  await callChatNormal(msg);
+}
+
+async function callChatNormal(msg) {
+  const body = {
+    user_id: userId,
+    role: getRole(),
+    message: msg,
+    patient_id: getPatientId() || null,
+    encounter_id: getEncounterId() || null,
+  };
+  try {
+    const resp = await fetch(API + '/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await resp.json();
+    if (!resp.ok) {
+      const detail = data.detail || {};
+      addMsg('bot', '<span style="color:#f53f3f">' + escapeHtml(detail.error_code || 'ERROR') + '：' + escapeHtml(detail.message || resp.statusText) + '</span>');
+      return;
+    }
+    addMsg('bot', renderResult(data));
+  } catch (e) {
+    addMsg('bot', '<span style="color:#f53f3f">请求失败：' + escapeHtml(e.message) + '</span>');
+  }
+}
+
+async function callChatStream(msg) {
+  const body = {
+    user_id: userId,
+    role: getRole(),
+    message: msg,
+    patient_id: getPatientId() || null,
+    encounter_id: getEncounterId() || null,
+  };
+  const area = addStreamingMsg('业务导办流式执行');
+  try {
+    const resp = await fetch(API + '/chat/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!resp.ok || !resp.body) {
+      area.innerHTML += '<div style="color:#f53f3f">流式请求失败，切换为非流式重试中...</div>';
+      await callChatNormal(msg);
+      return;
+    }
+    await readSse(resp, function(evt) {
+      if (evt.event === 'step') {
+        area.innerHTML += '<div class="task-item">' + escapeHtml(evt.data.message || evt.data.step) + '</div>';
+      }
+      if (evt.event === 'final') {
+        area.innerHTML += renderResult(evt.data);
+      }
+      if (evt.event === 'error') {
+        area.innerHTML += '<div style="color:#f53f3f">' + escapeHtml(evt.data.message || '流式执行失败') + '</div>';
+      }
+    });
+  } catch (e) {
+    area.innerHTML += '<div style="color:#f53f3f">流式请求失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function confirmTask(taskId, action) {
+  try {
+    const resp = await fetch(API + '/tasks/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task_id: taskId, action: action, user_id: userId }) });
+    const data = await resp.json();
+    const label = action === 'confirm' ? '已确认' : '已拒绝';
+    addMsg('bot', '<div class="field"><span class="label">人工确认结果：</span><span class="value" style="color:' + (action === 'confirm' ? '#00b42a' : '#f53f3f') + '">' + label + '</span></div>' +
+      '<div class="field"><span class="label">操作人：</span><span class="value">' + escapeHtml(data.confirmed_by) + '</span></div>' +
+      (data.result && data.result.message ? '<div class="field"><span class="label">说明：</span><span class="value">' + escapeHtml(data.result.message) + '</span></div>' : ''));
+  } catch (e) {
+    addMsg('bot', '<span style="color:#f53f3f">确认失败：' + escapeHtml(e.message) + '</span>');
+  }
+}
+
+function onRoleChange() {}
+
+async function testModel(msg) {
+  if (isStreamMode()) {
+    await testModelStream(msg);
+    return;
+  }
+  await testModelNormal(msg);
+}
+
+async function testModelNormal(msg) {
+  addMsg('user', '[模型测试] ' + escapeHtml(msg));
+  try {
+    const resp = await fetch(API + '/model-test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, scene: 'default' }),
+    });
+
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    let data = null;
+    let text = '';
+
+    if (contentType.includes('application/json')) {
+      try {
+        data = await resp.json();
+      } catch (e) {
+        text = resp.statusText || '模型调用失败，请稍后重试';
+      }
+    } else {
+      text = await resp.text();
+    }
+
+    if (!resp.ok) {
+      const detail = data && data.detail ? data.detail : {};
+      const message = detail.message || text || resp.statusText || '模型调用失败，请稍后重试';
+      addMsg('bot', '<span style="color:#f53f3f">模型调用失败：' + escapeHtml(message) + '</span>');
+      return;
+    }
+
+    if (!data) {
+      addMsg('bot', '<span style="color:#f53f3f">模型调用失败：响应格式无效</span>');
+      return;
+    }
+
+    let html = '<h3>模型服务测试</h3>';
+    html += '<div class="field"><span class="label">模型：</span><span class="value">' + escapeHtml(data.model_name) + '</span></div>';
+    html += '<div class="field"><span class="label">耗时：</span><span class="value">' + data.latency_ms + 'ms</span></div>';
+    html += '<div class="field"><span class="label">Token：</span><span class="value">输入 ' + data.prompt_tokens + ' / 输出 ' + data.completion_tokens + '</span></div>';
+    html += '<div class="field" style="margin-top:8px;padding:12px;background:#f7f8fa;border-radius:6px;white-space:pre-wrap">' + escapeHtml(data.content) + '</div>';
+    addMsg('bot', html);
+  } catch (e) {
+    addMsg('bot', '<span style="color:#f53f3f">请求失败：' + escapeHtml(e.message) + '</span>');
+  }
+}
+
+async function testModelStream(msg) {
+  addMsg('user', '[模型测试] ' + escapeHtml(msg));
+  const area = addStreamingMsg('模型服务流式测试');
+  let text = '';
+  try {
+    const resp = await fetch(API + '/model-test/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, scene: 'default' }),
+    });
+    if (!resp.ok || !resp.body) {
+      area.innerHTML += '<div style="color:#f53f3f">流式请求失败，切换为非流式重试中...</div>';
+      await testModelNormal(msg);
+      return;
+    }
+    await readSse(resp, function(evt) {
+      if (evt.event === 'delta') {
+        text += evt.data.content || '';
+        area.innerHTML = '<div style="white-space:pre-wrap">' + escapeHtml(text) + '</div>';
+      }
+      if (evt.event === 'final') {
+        area.innerHTML += '<div class="citation">完成：' + escapeHtml(evt.data.finish_reason || 'stop') + '</div>';
+      }
+      if (evt.event === 'error') {
+        area.innerHTML += '<div style="color:#f53f3f">' + escapeHtml(evt.data.message || '模型流式调用失败') + '</div>';
+      }
+    });
+  } catch (e) {
+    area.innerHTML += '<div style="color:#f53f3f">流式请求失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+</script>
+</body>
+</html>

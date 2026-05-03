@@ -1,0 +1,2 @@
+def build_pending_task(task_id: str, task_type: str, description: str, responsible_role: str) -> dict:
+    return {'task_id': task_id, 'task_type': task_type, 'status': 'pending', 'description': description, 'responsible_role': responsible_role}

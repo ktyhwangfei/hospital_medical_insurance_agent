@@ -1,0 +1,130 @@
+<mxfile host="Electron">
+  <diagram name="第 1 页" id="J4ZR3i3vDZgZ1IiWpXLc">
+    <mxGraphModel dx="1210" dy="749" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="W8WghsdPKZElre1TfEqL-36" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="" vertex="1">
+          <mxGeometry height="410" width="940" x="70" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="BIvqgrSBJrkz6kycpxYR-1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;dashPattern=12 12;fillColor=#fff2cc;strokeColor=#d6b656;" value="" vertex="1">
+          <mxGeometry height="144" width="914" x="86" y="206" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-7" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" value="" vertex="1">
+          <mxGeometry height="130" width="390" x="70" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="Chat" vertex="1">
+          <mxGeometry height="40" width="120" x="77" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="文件上传" vertex="1">
+          <mxGeometry height="40" width="120" x="204" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="语音交互" vertex="1">
+          <mxGeometry height="40" width="120" x="334" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-11" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="业务交互入口（&lt;font style=&quot;color: light-dark(rgb(5, 5, 5), rgb(43, 6, 255));&quot;&gt;统一门户、嵌入式&lt;/font&gt;）" vertex="1">
+          <mxGeometry height="30" width="220" x="160" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-12" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#bac8d3;strokeColor=#23445d;" value="" vertex="1">
+          <mxGeometry height="130" width="540" x="470" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="智能体编排配置&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;场景流程配置&lt;/div&gt;&lt;div&gt;编排规则维护&lt;/div&gt;&lt;div&gt;版本发布管理&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="120" x="481" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="知识数据上传&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;知识库管理&lt;/div&gt;&lt;div&gt;文档自动向量化&lt;/div&gt;&lt;div&gt;问答对导入&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="120" x="608" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-16" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="平台交互入口" vertex="1">
+          <mxGeometry height="30" width="120" x="680" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-17" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="业务系统适配配置&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;接口映射配置&lt;/div&gt;&lt;div&gt;鉴权方式配置&lt;/div&gt;&lt;div&gt;字段与错误码映射&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="120" x="883" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-18" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="MCP/Tool/Skill/A2A配置&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;扩展能力接入&lt;/div&gt;&lt;div&gt;参数与权限配置&lt;/div&gt;&lt;div&gt;服务启停管理&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="140" x="736" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-24" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontColor=#333333;strokeColor=#666666;" value="统一接入网关&lt;div&gt;&lt;span style=&quot;background-color: transparent;&quot;&gt;API 网关 / SSO / 认证鉴权 / 角色权限 / 租户隔离 / 限流熔断 / Token 校验 / 日志监控 / 风控审计&lt;/span&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="40" width="940" x="70" y="154" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-37" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="医保业务意图识别&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;结算异常 / 出院质控 / 拒付申诉 / DRG-DIP 运营 / 政策规则解释&lt;/div&gt;" vertex="1">
+          <mxGeometry height="114" width="120" x="355" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-38" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="统一交互 API&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;标准对话接口&lt;/div&gt;&lt;div&gt;参数校验&lt;/div&gt;&lt;div&gt;版本与用量统计&lt;/div&gt;" vertex="1">
+          <mxGeometry height="114" width="120" x="94" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-39" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="任务规划&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;查询 / 检索 / 规则解释 / 系统调用 / 证据组织 / 材料生成 / 任务分派&lt;/span&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="114" width="120" x="485" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-40" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="医保 AI 导办与 Agent 核心运行时服务" vertex="1">
+          <mxGeometry height="30" width="290" x="390" y="206" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-41" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="编排执行引擎&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;DAG任务调度&lt;/div&gt;&lt;div&gt;超时重试熔断&lt;/div&gt;&lt;div&gt;断电续执&lt;/div&gt;" vertex="1">
+          <mxGeometry height="114" width="120" x="615" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-42" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="会话与上下文管理&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;会话状态管理&lt;/div&gt;&lt;div&gt;上下文装载与恢复&lt;/div&gt;&lt;div&gt;多模态对象关联&lt;/div&gt;" vertex="1">
+          <mxGeometry height="114" width="120" x="224" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-43" parent="1" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;dashPattern=12 12;fillColor=#d5e8d4;strokeColor=#82b366;" value="" vertex="1">
+          <mxGeometry height="248" width="244.5" x="750" y="352" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-54" parent="1" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;dashPattern=12 12;fillColor=#e1d5e7;strokeColor=#9673a6;" value="" vertex="1">
+          <mxGeometry height="247" width="644" x="86" y="353" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-55" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="知识服务&lt;div&gt;&lt;div&gt;医保政策 / 错误码 / 规则解释 / 院内制度 / 申诉模板&lt;/div&gt;&lt;div&gt;知识接入加工&lt;/div&gt;&lt;div&gt;检索召回服务&lt;/div&gt;&lt;div&gt;增量索引更新&lt;/div&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="90" width="156" x="94" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-56" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="Tool注册与调度服务&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;Tool元数据管理&lt;/div&gt;&lt;div&gt;结果缓存&lt;/div&gt;&lt;div&gt;安全沙箱&lt;/div&gt;" vertex="1">
+          <mxGeometry height="90" width="157" x="263" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-58" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="知识与扩展服务" vertex="1">
+          <mxGeometry height="30" width="120" x="355" y="353" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-60" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="Skill管理服务&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;Skil包发布&lt;/div&gt;&lt;div&gt;依赖完整性检测&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="90" width="149" x="431" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-61" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="能力调度&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;外部能力调度&lt;/span&gt;&lt;/div&gt;&lt;div&gt;执行结果汇总&lt;/div&gt;&lt;div&gt;负载优先级队列&lt;/div&gt;" vertex="1">
+          <mxGeometry height="114" width="120" x="746" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-100" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;展&lt;/font&gt;&lt;div&gt;&lt;span style=&quot;font-size: 24px;&quot;&gt;现&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;font style=&quot;font-size: 24px;&quot;&gt;层&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="100" width="60" x="14" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-101" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;span style=&quot;font-size: 24px;&quot;&gt;接&lt;/span&gt;&lt;div&gt;&lt;span style=&quot;font-size: 24px;&quot;&gt;入&lt;/span&gt;&lt;br&gt;&lt;div&gt;&lt;font style=&quot;font-size: 24px;&quot;&gt;层&lt;/font&gt;&lt;/div&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="77" width="60" x="12" y="133" as="geometry" />
+        </mxCell>
+        <mxCell id="W8WghsdPKZElre1TfEqL-102" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;span style=&quot;font-size: 24px;&quot;&gt;服&lt;/span&gt;&lt;div&gt;&lt;span style=&quot;font-size: 24px;&quot;&gt;务&lt;/span&gt;&lt;br&gt;&lt;div&gt;&lt;font style=&quot;font-size: 24px;&quot;&gt;层&lt;/font&gt;&lt;/div&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="30" width="60" x="10" y="353" as="geometry" />
+        </mxCell>
+        <mxCell id="BIvqgrSBJrkz6kycpxYR-2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;结果生成与任务闭环&lt;/span&gt;&lt;/div&gt;&lt;div&gt;结构化解析校验&lt;/div&gt;&lt;div&gt;输出安全审查&lt;/div&gt;&lt;div&gt;来源引用标注&lt;/div&gt;&lt;div&gt;任务待办生成&lt;/div&gt;&lt;div&gt;处理记录留痕&lt;/div&gt;&lt;div&gt;结果追踪反馈&lt;/div&gt;" vertex="1">
+          <mxGeometry height="114" width="120" x="876" y="236" as="geometry" />
+        </mxCell>
+        <mxCell id="BIvqgrSBJrkz6kycpxYR-3" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="模型服务" vertex="1">
+          <mxGeometry height="30" width="120" x="820" y="350" as="geometry" />
+        </mxCell>
+        <mxCell id="BIvqgrSBJrkz6kycpxYR-4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="MCP接入服务&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;长连接保活&lt;/div&gt;&lt;div&gt;多传输协议&lt;/div&gt;&lt;div&gt;工具列表同步&lt;/div&gt;" vertex="1">
+          <mxGeometry height="90" width="120" x="600" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="BIvqgrSBJrkz6kycpxYR-5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="智能体协同（A2A）服务&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;Agent注册发现&lt;/div&gt;&lt;div&gt;任务委托协议&lt;/div&gt;&lt;div&gt;信任与鉴权&lt;/div&gt;" vertex="1">
+          <mxGeometry height="110" width="156" x="160" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="BIvqgrSBJrkz6kycpxYR-6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="业务系统适配器服务&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;div style=&quot;text-align: left;&quot;&gt;医保专业系统 / 医院业务系统适配&lt;/div&gt;&lt;div style=&quot;text-align: left;&quot;&gt;API / 中间库 / 数据视图 / 文件同步 / 消息订阅&lt;/div&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="110" width="120" x="530" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="BIvqgrSBJrkz6kycpxYR-7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="模型网关&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;统一调用入口&lt;/div&gt;&lt;div&gt;语义缓存&lt;/div&gt;&lt;div&gt;内容过滤脱敏&lt;/div&gt;" vertex="1">
+          <mxGeometry height="81" width="120" x="812.25" y="389" as="geometry" />
+        </mxCell>
+        <mxCell id="BIvqgrSBJrkz6kycpxYR-8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="模型推理&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;推理任务承载&lt;/div&gt;&lt;div&gt;并发资源调度&lt;/div&gt;&lt;div&gt;模型结果返回&lt;/div&gt;" vertex="1">
+          <mxGeometry height="90" width="120" x="812.25" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="bzsBpF4PCQsItwlEMKiB-1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="医生工作站&lt;div&gt;医保办工作台&lt;/div&gt;" vertex="1">
+          <mxGeometry height="40" width="120" x="77" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="bzsBpF4PCQsItwlEMKiB-2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="&lt;div&gt;收费异常&lt;/div&gt;病案质控" vertex="1">
+          <mxGeometry height="40" width="120" x="205" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="bzsBpF4PCQsItwlEMKiB-3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="科主任视图&lt;div&gt;院领导驾驶舱&lt;/div&gt;" vertex="1">
+          <mxGeometry height="40" width="120" x="334" y="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
