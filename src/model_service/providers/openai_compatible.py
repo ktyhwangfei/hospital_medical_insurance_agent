@@ -32,35 +32,47 @@ class OpenAICompatibleProvider:
 
     def invoke_stream(self, request: ModelRequest) -> Iterator[StreamChunk]:
         payload = self._build_payload(request, stream=True)
-        with httpx.Client(timeout=self._timeout) as client:
-            with client.stream(
-                "POST",
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-            ) as response:
-                self._check_status(response)
-                for line in response.iter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    data = line[6:]
-                    if data.strip() == "[DONE]":
-                        break
-                    chunk = json.loads(data)
-                    delta = chunk["choices"][0].get("delta", {})
-                    content = delta.get("content", "")
-                    finish_reason = chunk["choices"][0].get("finish_reason")
-                    usage = None
-                    if "usage" in chunk:
-                        usage = TokenUsage(
-                            prompt_tokens=chunk["usage"].get("prompt_tokens", 0),
-                            completion_tokens=chunk["usage"].get("completion_tokens", 0),
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                with client.stream(
+                    "POST",
+                    f"{self._base_url}/chat/completions",
+                    json=payload,
+                    headers=self._headers(),
+                ) as response:
+                    if response.status_code >= 400:
+                        response.read()
+                    self._check_status(response)
+                    for line in response.iter_lines():
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data = line[6:]
+                        if data.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError as exc:
+                            raise ModelServerError(f"Malformed stream JSON: {exc}", model_name=request.model_type) from exc
+                        delta = chunk["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        finish_reason = chunk["choices"][0].get("finish_reason")
+                        usage = None
+                        if "usage" in chunk:
+                            usage = TokenUsage(
+                                prompt_tokens=chunk["usage"].get("prompt_tokens", 0),
+                                completion_tokens=chunk["usage"].get("completion_tokens", 0),
+                            )
+                        yield StreamChunk(
+                            content=content,
+                            finish_reason=finish_reason,
+                            usage=usage,
                         )
-                    yield StreamChunk(
-                        content=content,
-                        finish_reason=finish_reason,
-                        usage=usage,
-                    )
+        except httpx.TimeoutException as exc:
+            raise ModelTimeoutError(f"Model provider timeout: {exc}", model_name=request.model_type) from exc
+        except httpx.NetworkError as exc:
+            raise ModelServerError(f"Model provider network error: {exc}", model_name=request.model_type) from exc
+        except httpx.HTTPError as exc:
+            raise ModelServerError(f"Model provider http error: {exc}", model_name=request.model_type) from exc
 
     def invoke_embedding(self, text: str, model: str) -> ModelResponse:
         payload = {"input": text, "model": model}
