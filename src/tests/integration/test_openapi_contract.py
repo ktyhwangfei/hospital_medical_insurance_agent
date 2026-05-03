@@ -25,6 +25,16 @@ def test_health_version_and_openapi_contract():
     assert '/api/v1/medical-insurance-ai-agent/tasks/{task_id}' in paths
 
 
+def test_workflow_and_task_paths_are_in_openapi():
+    client = TestClient(create_app())
+    schema = client.get("/openapi.json").json()
+
+    paths = schema["paths"]
+    assert "/api/v1/medical-insurance-ai-agent/workflows/{workflow_id}" in paths
+    assert "/api/v1/medical-insurance-ai-agent/tasks/{task_id}" in paths
+    assert "/api/v1/medical-insurance-ai-agent/model-test/stream" in paths
+
+
 def test_chat_stream_returns_step_final_and_done_events():
     client = TestClient(create_app())
 
