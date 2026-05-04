@@ -10,14 +10,13 @@ class RetrievalFilter(BaseModel):
     campus_id: str | None = None
     scenario: str | None = None
     asset_types: set[KnowledgeAssetType] = Field(default_factory=set)
-    effective_date: str | None = None
 
 
 class RetrievalRequest(BaseModel):
     query: str
     filters: RetrievalFilter
-    max_results: int = 5
-    context_budget: int = 1200
+    max_results: int = Field(default=5, gt=0, le=50)
+    context_budget: int = Field(default=1200, gt=0)
     trace_id: str | None = None
 
 
