@@ -1,7 +1,14 @@
 from src.adapters.insurance_interface.in_memory import InMemoryInsuranceInterfaceAdapter
 from src.knowledge_extension.knowledge.in_memory import ERROR_CODE_KNOWLEDGE
+from src.knowledge_extension.service import KnowledgeEnhancementRequest, build_default_knowledge_extension_service
 from src.runtime.api.schemas import AgentResponse
 from src.runtime.scheduling.service import degraded_response
+
+
+def enhance_settlement_knowledge(error_code: str, patient_id: str | None) -> dict:
+    service = build_default_knowledge_extension_service()
+    result = service.enhance(KnowledgeEnhancementRequest(message=f"医保结算异常错误码 {error_code}", scenario="settlement_exception", role="medical_insurance_officer", patient_id=patient_id, tenant_id="tenant-a", campus_id="north", rule_code=error_code))
+    return result.to_agent_payload()
 
 
 def guide_settlement_exception(patient_id: str, encounter_id: str) -> AgentResponse:
@@ -10,7 +17,7 @@ def guide_settlement_exception(patient_id: str, encounter_id: str) -> AgentRespo
 
     tx = InMemoryInsuranceInterfaceAdapter().query_transaction(patient_id, encounter_id)
     knowledge = ERROR_CODE_KNOWLEDGE[tx.error_code]
-    return AgentResponse(
+    response = AgentResponse(
         scenario='settlement_exception_guidance',
         status='completed',
         result={
@@ -31,3 +38,8 @@ def guide_settlement_exception(patient_id: str, encounter_id: str) -> AgentRespo
         blocked_actions=[],
         audit={'workflow_id': f'wf-{patient_id}-{encounter_id}', 'steps': ['query_transaction', 'retrieve_error_code', 'build_result']},
     )
+    ext_knowledge = enhance_settlement_knowledge(tx.error_code, patient_id)
+    response.citations.extend(ext_knowledge["citations"])
+    response.uncertainties.extend(ext_knowledge["uncertainties"])
+    response.audit["knowledge_extension"] = ext_knowledge["audit_events"]
+    return response

@@ -1,7 +1,14 @@
 from src.adapters.drg_dip.in_memory import InMemoryDrgDipAdapter
 from src.adapters.medical_record.in_memory import InMemoryMedicalRecordAdapter
 from src.adapters.pre_audit.in_memory import InMemoryPreAuditAdapter
+from src.knowledge_extension.service import KnowledgeEnhancementRequest, build_default_knowledge_extension_service
 from src.runtime.api.schemas import AgentResponse
+
+
+def enhance_qc_knowledge(patient_id: str | None) -> dict:
+    service = build_default_knowledge_extension_service()
+    result = service.enhance(KnowledgeEnhancementRequest(message="出院前联合质控 DRG DIP 病案风险", scenario="pre_discharge_qc", role="doctor", patient_id=patient_id, rule_code="DRG_LOSS_RISK"))
+    return result.to_agent_payload()
 
 
 def run_pre_discharge_qc(patient_id: str, encounter_id: str) -> AgentResponse:
@@ -18,7 +25,7 @@ def run_pre_discharge_qc(patient_id: str, encounter_id: str) -> AgentResponse:
         {'task_id': f'task-qc-{idx}', 'task_type': 'rectification', 'status': 'pending', 'responsible_role': risk['responsible_role'], 'description': risk['recommendation']}
         for idx, risk in enumerate(risks, start=1)
     ]
-    return AgentResponse(
+    response = AgentResponse(
         scenario='pre_discharge_quality_control',
         status='completed',
         result={'risks': risks},
@@ -33,3 +40,8 @@ def run_pre_discharge_qc(patient_id: str, encounter_id: str) -> AgentResponse:
         blocked_actions=[],
         audit={'workflow_id': f'wf-qc-{patient_id}-{encounter_id}', 'steps': ['query_pre_audit', 'query_drg_dip', 'query_medical_record', 'create_tasks']},
     )
+    knowledge = enhance_qc_knowledge(patient_id)
+    response.citations.extend(knowledge["citations"])
+    response.uncertainties.extend(knowledge["uncertainties"])
+    response.audit["knowledge_extension"] = knowledge["audit_events"]
+    return response
