@@ -25,6 +25,16 @@ def test_health_version_and_openapi_contract():
     assert '/api/v1/medical-insurance-ai-agent/tasks/{task_id}' in paths
 
 
+def test_workflow_and_task_paths_are_in_openapi():
+    client = TestClient(create_app())
+    schema = client.get("/openapi.json").json()
+
+    paths = schema["paths"]
+    assert "/api/v1/medical-insurance-ai-agent/workflows/{workflow_id}" in paths
+    assert "/api/v1/medical-insurance-ai-agent/tasks/{task_id}" in paths
+    assert "/api/v1/medical-insurance-ai-agent/model-test/stream" in paths
+
+
 def test_chat_stream_returns_step_final_and_done_events():
     client = TestClient(create_app())
 
@@ -149,3 +159,22 @@ def test_model_test_returns_exhausted_error(monkeypatch):
     assert response.status_code == 503
     assert response.headers['content-type'].startswith('application/json')
     assert response.json()['detail']['error_code'] == 'MODEL_EXHAUSTED'
+
+
+def test_model_test_stream_returns_structured_error_and_done(monkeypatch):
+    from src.model_service.exceptions import ModelServerError
+    from src.runtime.api import routes
+
+    def fake_generate_stream(self, messages, model_type, scene):
+        raise ModelServerError("stream failed", model_name="test-model")
+        yield
+
+    monkeypatch.setattr(routes.ModelGateway, "generate_stream", fake_generate_stream)
+    client = TestClient(create_app())
+
+    response = client.post("/api/v1/medical-insurance-ai-agent/model-test/stream", json={"message": "hello", "scene": "default"})
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert "MODEL_UPSTREAM_ERROR" in response.text
+    assert "event: done" in response.text

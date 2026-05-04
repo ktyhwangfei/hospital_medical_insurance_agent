@@ -342,7 +342,9 @@ async function callChatStream(msg) {
         area.innerHTML += renderResult(evt.data);
       }
       if (evt.event === 'error') {
-        area.innerHTML += '<div style="color:#f53f3f">' + escapeHtml(evt.data.message || '流式执行失败') + '</div>';
+        const errorCode = evt.data.error_code || evt.data.detail?.error_code || 'STREAM_ERROR';
+        const message = evt.data.message || evt.data.detail?.message || JSON.stringify(evt.data);
+        area.innerHTML += '<div style="color:#f53f3f">' + escapeHtml('流式错误 ' + errorCode + ': ' + message) + '</div>';
       }
     });
   } catch (e) {
@@ -443,7 +445,9 @@ async function testModelStream(msg) {
         area.innerHTML += '<div class="citation">完成：' + escapeHtml(evt.data.finish_reason || 'stop') + '</div>';
       }
       if (evt.event === 'error') {
-        area.innerHTML += '<div style="color:#f53f3f">' + escapeHtml(evt.data.message || '模型流式调用失败') + '</div>';
+        const errorCode = evt.data.error_code || evt.data.detail?.error_code || 'STREAM_ERROR';
+        const message = evt.data.message || evt.data.detail?.message || JSON.stringify(evt.data);
+        area.innerHTML += '<div style="color:#f53f3f">' + escapeHtml('流式错误 ' + errorCode + ': ' + message) + '</div>';
       }
     });
   } catch (e) {
