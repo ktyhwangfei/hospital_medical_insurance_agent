@@ -18,4 +18,4 @@ def test_settlement_exception_guidance_returns_traceable_recommendation():
     assert body['status'] == 'completed'
     assert body['result']['exception_type'] == '费用上传异常'
     assert body['result']['responsible_role'] == '收费员'
-    assert {c['source_type'] for c in body['citations']} >= {'insurance_transaction', 'knowledge_error_code'}
+    assert {c['source_type'] for c in body['citations']} >= {'insurance_interface', 'knowledge_error_code'}
