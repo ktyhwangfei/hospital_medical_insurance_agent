@@ -15,40 +15,58 @@ class InMemoryKnowledgeAssetRepository:
     def __init__(self, assets: list[KnowledgeAsset], chunks: list[KnowledgeChunk]):
         self._assets = {asset.asset_id: asset.model_copy(deep=True) for asset in assets}
         self._chunks = {chunk.chunk_id: chunk.model_copy(deep=True) for chunk in chunks}
-        self.audit_events: list[AuditSummary] = []
+        self._audit_events: list[AuditSummary] = []
+
+    @property
+    def audit_events(self) -> list[AuditSummary]:
+        return self.list_audit_events()
+
+    def list_audit_events(self) -> list[AuditSummary]:
+        return [event.model_copy(deep=True) for event in self._audit_events]
 
     def add_asset(self, asset: KnowledgeAsset) -> AssetWriteResult:
         existing = self._assets.get(asset.asset_id)
         if existing and existing.version == asset.version and existing.status is KnowledgeAssetStatus.PUBLISHED:
-            self.audit_events.append(AuditSummary(event_type="knowledge_asset_duplicate_version", summary={"asset_id": asset.asset_id}))
+            self._audit_events.append(AuditSummary(event_type="knowledge_asset_duplicate_version", summary={"asset_id": asset.asset_id}))
             return AssetWriteResult(
                 status=KnowledgeExtensionStatus.VERSION_MISMATCH,
                 reason="duplicate_published_version",
                 user_message="重复的已发布知识资产版本不能覆盖",
                 asset_id=asset.asset_id,
             )
+        if asset.status is KnowledgeAssetStatus.PUBLISHED and self._has_duplicate_published_business_key(asset):
+            self._audit_events.append(AuditSummary(event_type="knowledge_asset_duplicate_business_key", summary={"asset_id": asset.asset_id, "version": asset.version}))
+            return AssetWriteResult(
+                status=KnowledgeExtensionStatus.VERSION_MISMATCH,
+                reason="duplicate_published_business_key",
+                user_message="重复的已发布知识资产业务版本不能写入",
+                asset_id=asset.asset_id,
+            )
         self._assets[asset.asset_id] = asset.model_copy(deep=True)
-        self.audit_events.append(AuditSummary(event_type="knowledge_asset_added", summary={"asset_id": asset.asset_id}))
+        self._audit_events.append(AuditSummary(event_type="knowledge_asset_added", summary={"asset_id": asset.asset_id}))
         return AssetWriteResult(status=KnowledgeExtensionStatus.SUCCESS, reason="created", user_message="知识资产已保存", asset_id=asset.asset_id)
 
     def add_chunk(self, chunk: KnowledgeChunk) -> AssetWriteResult:
         self._chunks[chunk.chunk_id] = chunk.model_copy(deep=True)
-        self.audit_events.append(AuditSummary(event_type="knowledge_chunk_added", summary={"chunk_id": chunk.chunk_id}))
+        self._audit_events.append(AuditSummary(event_type="knowledge_chunk_added", summary={"chunk_id": chunk.chunk_id}))
         return AssetWriteResult(status=KnowledgeExtensionStatus.SUCCESS, reason="created", user_message="知识切片已保存", asset_id=chunk.asset_id)
 
-    def get_asset(self, asset_id: str) -> KnowledgeAsset:
-        return self._assets[asset_id].model_copy(deep=True)
+    def get_asset(self, asset_id: str) -> KnowledgeAsset | None:
+        asset = self._assets.get(asset_id)
+        if asset is None:
+            return None
+        return asset.model_copy(deep=True)
 
     def list_assets(self, query: AssetQuery) -> list[KnowledgeAsset]:
         result = []
         for asset in self._assets.values():
             if not query.include_inactive and asset.status is not KnowledgeAssetStatus.PUBLISHED:
-                self.audit_events.append(AuditSummary(event_type="knowledge_asset_filtered", summary={"asset_id": asset.asset_id, "reason": asset.status.value}))
+                self._audit_events.append(AuditSummary(event_type="knowledge_asset_filtered", summary={"asset_id": asset.asset_id, "reason": asset.status.value}))
                 continue
             if query.asset_types and asset.asset_type not in query.asset_types:
                 continue
             if not asset.visibility.allows(query.role, query.tenant_id, query.campus_id):
-                self.audit_events.append(AuditSummary(event_type="knowledge_asset_filtered", summary={"asset_id": asset.asset_id, "reason": "visibility"}))
+                self._audit_events.append(AuditSummary(event_type="knowledge_asset_filtered", summary={"asset_id": asset.asset_id, "reason": "visibility"}))
                 continue
             result.append(asset.model_copy(deep=True))
         return result
@@ -64,7 +82,7 @@ class InMemoryKnowledgeAssetRepository:
             if query.asset_types and chunk.asset_type not in query.asset_types:
                 continue
             if not chunk.visibility.allows(query.role, query.tenant_id, query.campus_id):
-                self.audit_events.append(AuditSummary(event_type="knowledge_chunk_filtered", summary={"chunk_id": chunk.chunk_id, "reason": "visibility"}))
+                self._audit_events.append(AuditSummary(event_type="knowledge_chunk_filtered", summary={"chunk_id": chunk.chunk_id, "reason": "visibility"}))
                 continue
             result.append(chunk.model_copy(deep=True))
         return result
@@ -73,7 +91,18 @@ class InMemoryKnowledgeAssetRepository:
         return AssetRepositorySnapshot(
             assets=[asset.model_copy(deep=True) for asset in self._assets.values()],
             chunks=[chunk.model_copy(deep=True) for chunk in self._chunks.values()],
-            audit_events=[event.model_copy(deep=True) for event in self.audit_events],
+            audit_events=[event.model_copy(deep=True) for event in self._audit_events],
+        )
+
+    def _has_duplicate_published_business_key(self, candidate: KnowledgeAsset) -> bool:
+        return any(
+            asset.asset_id != candidate.asset_id
+            and asset.status is KnowledgeAssetStatus.PUBLISHED
+            and asset.asset_type is candidate.asset_type
+            and asset.source == candidate.source
+            and asset.title == candidate.title
+            and asset.version == candidate.version
+            for asset in self._assets.values()
         )
 
 
