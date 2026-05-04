@@ -2,6 +2,16 @@ from src.knowledge_extension.assets.in_memory import build_default_asset_reposit
 from src.knowledge_extension.assets.models import AssetQuery, KnowledgeAssetStatus, KnowledgeAssetType
 
 
+def test_audit_events_property_returns_copy_without_leaking_internal_state():
+    repo = build_default_asset_repository()
+    repo.list_assets(AssetQuery(role="medical_insurance_officer", include_inactive=False))
+
+    events = repo.audit_events
+    events.clear()
+
+    assert repo.audit_events
+
+
 def test_default_assets_include_policy_error_code_rule_and_template():
     repo = build_default_asset_repository()
 
@@ -50,3 +60,22 @@ def test_duplicate_published_version_is_rejected():
 
     assert result.status.value == "version_mismatch"
     assert "重复" in result.user_message
+
+
+def test_get_asset_returns_none_when_missing():
+    repo = build_default_asset_repository()
+
+    asset = repo.get_asset("missing")
+
+    assert asset is None
+
+
+def test_duplicate_published_business_unique_key_is_rejected():
+    repo = build_default_asset_repository()
+    original = repo.get_asset("asset-policy-001")
+    duplicate = original.model_copy(update={"asset_id": "asset-policy-duplicate-001"})
+
+    result = repo.add_asset(duplicate)
+
+    assert result.status.value == "version_mismatch"
+    assert result.reason == "duplicate_published_business_key"
