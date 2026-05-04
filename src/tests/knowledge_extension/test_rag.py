@@ -24,13 +24,15 @@ def test_context_budget_trims_results():
     retriever = InMemoryHybridRetriever(build_default_asset_repository())
     result = retriever.retrieve(RetrievalRequest(query="医保 出院 审核 DRG DIP 病案", filters=RetrievalFilter(role="doctor", scenario="pre_discharge_qc"), context_budget=12))
 
-    assert result.context.truncated_count >= 0
+    assert result.context.truncated_count > 0
     assert len(result.context.context_text) <= 12
 
 
 def test_public_citation_hides_locator():
     retriever = InMemoryHybridRetriever(build_default_asset_repository())
     result = retriever.retrieve(RetrievalRequest(query="医保结算异常", filters=RetrievalFilter(role="doctor", scenario="settlement_exception")))
+
+    assert result.citations[0].internal_locator is not None
 
     public = result.citations[0].to_public_dict()
 
