@@ -237,9 +237,13 @@ function renderResult(data) {
   }
 
   if (data.citations && data.citations.length) {
-    html += '<div class="citation">来源引用：';
-    html += data.citations.map(function(c) { return escapeHtml(c.source_type) + ':' + escapeHtml(c.source_id); }).join('；');
-    html += '</div>';
+    html += '<div class="citation">来源引用：<ul style="margin:4px 0 0 16px;padding:0;list-style:disc">';
+    html += data.citations.map(function(c) {
+      const label = escapeHtml(c.source_type) + ':' + escapeHtml(c.source_id);
+      const detail = (c.title || c.evidence) ? ' — ' + escapeHtml(c.title || '') + (c.evidence ? ': ' + escapeHtml(c.evidence) : '') : '';
+      return '<li>' + label + detail + '</li>';
+    }).join('');
+    html += '</ul></div>';
   }
 
   if (data.audit && data.audit.workflow_id) {

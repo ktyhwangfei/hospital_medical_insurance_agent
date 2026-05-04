@@ -14,7 +14,7 @@ from src.data_platform.data_access.in_memory import build_sample_store
 from src.model_service import Message, ModelGateway
 from src.model_service.exceptions import ModelAuthError, ModelExhaustedError, ModelRateLimitError, ModelServerError
 from src.runtime.api.schemas import AgentResponse, ChatRequest, ModelTestRequest, ModelTestResponse, PatientContextResponse, TaskConfirmRequest, TaskConfirmResponse, TaskStatusResponse, WorkflowStatusResponse
-from src.runtime.api.streaming import sse_event
+from src.runtime.api.streaming import ensure_knowledge_fields, sse_event
 from src.runtime.clarification.service import missing_context_fields
 from src.runtime.intent.parser import parse_intent
 from src.security.authorization.service import visible_fields_for, is_allowed
@@ -45,7 +45,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             yield sse_event('step', {'step': 'scenario_processing', 'message': '正在执行场景导办'})
             result = process_chat_request(request)
             yield sse_event('step', {'step': 'response_rendering', 'message': '正在生成结构化结果'})
-            yield sse_event('final', result.model_dump())
+            yield sse_event('final', ensure_knowledge_fields(result.model_dump()))
         except HTTPException as exc:
             yield sse_event('error', {'status_code': exc.status_code, 'detail': exc.detail})
         except Exception as exc:
