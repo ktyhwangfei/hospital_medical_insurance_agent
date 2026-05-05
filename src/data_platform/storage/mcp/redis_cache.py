@@ -8,7 +8,7 @@ class RedisMcpCache:
     def health(self) -> McpStorageHealth:
         return McpStorageHealth(
             status=McpStorageHealthStatus.UNHEALTHY,
-            postgres_available=True,
+            postgres_available=False,
             redis_available=False,
-            details={"backend": "redis", "reason": "driver_not_configured"},
+            details={"backend": "redis", "reason": "driver_not_configured", "unchecked_dependencies": "postgresql"},
         )
