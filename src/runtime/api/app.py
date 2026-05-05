@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from src.runtime.api.mcp_routes import router as mcp_router
 from src.runtime.api.routes import router
 
 
@@ -19,4 +20,5 @@ def create_app() -> FastAPI:
         return FileResponse(Path(__file__).parent.parent.parent / 'static' / 'index.html')
 
     app.include_router(router, prefix='/api/v1/medical-insurance-ai-agent')
+    app.include_router(mcp_router)
     return app
