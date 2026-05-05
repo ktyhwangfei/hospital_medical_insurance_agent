@@ -83,7 +83,7 @@ class McpCapability(BaseModel):
 
     @property
     def requires_human_confirmation(self) -> bool:
-        return self.risk_level is McpRiskLevel.HIGH or self.has_external_side_effects
+        return self.risk_level == McpRiskLevel.HIGH or self.has_external_side_effects
 
 
 class McpCapabilitySelectionRequest(BaseModel):
