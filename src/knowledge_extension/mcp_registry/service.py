@@ -12,6 +12,15 @@ from src.knowledge_extension.mcp_registry.models import (
 
 _RISK_ORDER = {McpRiskLevel.LOW: 1, McpRiskLevel.MEDIUM: 2, McpRiskLevel.HIGH: 3}
 _NO_SELECTION_UNCERTAINTY = "未找到满足当前场景、角色、权限和风险约束的 MCP 能力"
+_REASON_SERVER_MISSING = "server_missing"
+_REASON_SERVER_UNAVAILABLE = "server_unavailable"
+_REASON_CAPABILITY_DISABLED = "capability_disabled"
+_REASON_TYPE_MISMATCH = "type_mismatch"
+_REASON_SCENARIO_MISMATCH = "scenario_mismatch"
+_REASON_ROLE_DENIED = "role_denied"
+_REASON_PERMISSION_DENIED = "permission_denied"
+_REASON_RISK_BLOCKED = "risk_blocked"
+_AUTHORIZATION_EXCLUSION_REASONS = {_REASON_ROLE_DENIED, _REASON_PERMISSION_DENIED}
 
 
 class McpRegistryService:
@@ -74,8 +83,11 @@ class McpRegistryService:
         )
 
     def _empty_selection_status(self, excluded: dict[str, str]) -> KnowledgeExtensionStatus:
-        if excluded and all(reason == "permission_denied" for reason in excluded.values()):
+        exclusion_reasons = set(excluded.values())
+        if exclusion_reasons and exclusion_reasons.issubset(_AUTHORIZATION_EXCLUSION_REASONS):
             return KnowledgeExtensionStatus.PERMISSION_DENIED
+        if exclusion_reasons == {_REASON_RISK_BLOCKED}:
+            return KnowledgeExtensionStatus.HIGH_RISK_BLOCKED
         return KnowledgeExtensionStatus.NO_HIT
 
     def _exclusion_reason(
@@ -85,19 +97,19 @@ class McpRegistryService:
         request: McpCapabilitySelectionRequest,
     ) -> str | None:
         if server is None:
-            return "server_missing"
-        if server.status is not McpServerStatus.ENABLED:
-            return "server_unavailable"
+            return _REASON_SERVER_MISSING
+        if server.status != McpServerStatus.ENABLED:
+            return _REASON_SERVER_UNAVAILABLE
         if not capability.enabled:
-            return "capability_disabled"
-        if request.capability_type is not None and capability.capability_type is not request.capability_type:
-            return "type_mismatch"
+            return _REASON_CAPABILITY_DISABLED
+        if request.capability_type is not None and capability.capability_type != request.capability_type:
+            return _REASON_TYPE_MISMATCH
         if capability.supported_scenarios and request.scenario not in capability.supported_scenarios:
-            return "scenario_mismatch"
+            return _REASON_SCENARIO_MISMATCH
         if capability.required_roles and request.role not in capability.required_roles:
-            return "role_denied"
+            return _REASON_ROLE_DENIED
         if not capability.required_permissions.issubset(request.permissions):
-            return "permission_denied"
+            return _REASON_PERMISSION_DENIED
         if capability.requires_human_confirmation or _RISK_ORDER[capability.risk_level] > _RISK_ORDER[request.max_risk_level]:
-            return "risk_blocked"
+            return _REASON_RISK_BLOCKED
         return None
