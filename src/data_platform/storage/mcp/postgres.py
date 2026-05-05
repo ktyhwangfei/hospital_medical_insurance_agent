@@ -9,6 +9,6 @@ class PostgresMcpStorage:
         return McpStorageHealth(
             status=McpStorageHealthStatus.UNHEALTHY,
             postgres_available=False,
-            redis_available=True,
-            details={"backend": "postgresql", "reason": "driver_not_configured"},
+            redis_available=False,
+            details={"backend": "postgresql", "reason": "driver_not_configured", "unchecked_dependencies": "redis"},
         )
