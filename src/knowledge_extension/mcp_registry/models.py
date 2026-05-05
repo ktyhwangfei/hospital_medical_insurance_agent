@@ -101,3 +101,19 @@ class McpCapabilitySelectionResult(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
     audit_events: list[AuditSummary] = Field(default_factory=list)
+
+
+class McpHandshakeResult(BaseModel):
+    status: KnowledgeExtensionStatus
+    protocol_version: str | None = None
+    discovered_capabilities: list[McpCapability] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    audit_events: list[AuditSummary] = Field(default_factory=list)
+
+
+class McpToolInvocationResult(BaseModel):
+    status: KnowledgeExtensionStatus
+    output: dict[str, Any] = Field(default_factory=dict)
+    citations: list[Citation] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    audit_events: list[AuditSummary] = Field(default_factory=list)
