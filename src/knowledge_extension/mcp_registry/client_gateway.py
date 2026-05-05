@@ -1,3 +1,4 @@
+import copy
 from typing import Any
 
 from src.knowledge_extension.common.models import AuditSummary, KnowledgeExtensionStatus
@@ -16,7 +17,7 @@ class InMemoryMcpClientGateway:
         tool_results: dict[str, dict[str, Any]] | None = None,
     ):
         self._discovered_capabilities = [item.model_copy(deep=True) for item in discovered_capabilities or []]
-        self._tool_results = tool_results or {}
+        self._tool_results = copy.deepcopy(tool_results) if tool_results else {}
 
     def handshake(self, server: McpServer) -> McpHandshakeResult:
         return McpHandshakeResult(
@@ -45,14 +46,14 @@ class InMemoryMcpClientGateway:
             )
         return McpToolInvocationResult(
             status=KnowledgeExtensionStatus.SUCCESS,
-            output=self._tool_results.get(capability.capability_id, {}).copy(),
+            output=copy.deepcopy(self._tool_results.get(capability.capability_id, {})),
             audit_events=[
                 AuditSummary(
                     event_type="mcp_tool_invoked",
                     summary={
                         "server_id": server.server_id,
                         "capability_id": capability.capability_id,
-                        "argument_keys": sorted(arguments),
+                        "argument_count": len(arguments),
                     },
                 )
             ],
