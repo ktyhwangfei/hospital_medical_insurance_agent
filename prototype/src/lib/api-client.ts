@@ -35,8 +35,13 @@ function toSseEventType(value: string): SseEventType | null {
   return SSE_EVENT_TYPES.includes(eventType as SseEventType) ? (eventType as SseEventType) : null
 }
 
-async function readJsonSafely(response: Response): Promise<unknown> {
-  return response.json().catch(() => null)
+function errorCause(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function textSummary(text: string): string | null {
+  const summary = text.trim().slice(0, 200)
+  return summary || null
 }
 
 function normalizeErrorDetail(detail: unknown): ApiErrorDetail | null {
@@ -59,14 +64,43 @@ function normalizeErrorDetail(detail: unknown): ApiErrorDetail | null {
 }
 
 export async function parseError(response: Response): Promise<ApiClientError> {
-  const body = await readJsonSafely(response)
-  const detail = isRecord(body) ? normalizeErrorDetail(body.detail) : null
+  const text = await response.text()
+  const summary = textSummary(text)
+  let body: unknown = null
+
+  if (summary) {
+    try {
+      body = JSON.parse(text) as unknown
+    } catch {
+      body = null
+    }
+  }
+
+  let detail: ApiErrorDetail | null = null
+
+  if (isRecord(body)) {
+    detail = normalizeErrorDetail(body.detail) ?? normalizeErrorDetail(body)
+
+    if (!detail && typeof body.detail === 'string') {
+      detail = {
+        error_code: `HTTP_${response.status}`,
+        message: body.detail,
+      }
+    }
+
+    if (!detail && typeof body.message === 'string') {
+      detail = {
+        error_code: `HTTP_${response.status}`,
+        message: body.message,
+      }
+    }
+  }
 
   return new ApiClientError(
     response.status,
     detail ?? {
       error_code: `HTTP_${response.status}`,
-      message: response.statusText || '请求失败',
+      message: summary ?? (response.statusText || '请求失败'),
     }
   )
 }
@@ -89,7 +123,19 @@ export async function requestJson<T>(path: string, init?: RequestInit): Promise<
   }
 
   const text = await response.text()
-  return (text ? JSON.parse(text) : undefined) as T
+  if (!text) {
+    return undefined as T
+  }
+
+  try {
+    return JSON.parse(text) as T
+  } catch (error) {
+    throw new ApiClientError(response.status, {
+      error_code: 'INVALID_JSON_RESPONSE',
+      message: '后端返回了无效 JSON 响应',
+      audit_event: { path, cause: errorCause(error) },
+    })
+  }
 }
 
 export function fallbackAgentResponse(message: string): AgentResponse {
@@ -346,9 +392,10 @@ export async function readSseStream(
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let shouldStop = false
 
   try {
-    while (true) {
+    while (!shouldStop) {
       const { done, value } = await reader.read()
 
       if (done) {
@@ -364,13 +411,26 @@ export async function readSseStream(
         const event = parseSseChunk(chunk)
         if (event) {
           onEvent(event)
+
+          if (event.event === 'done') {
+            shouldStop = true
+            break
+          }
         }
       }
     }
 
-    const trailingEvent = parseSseChunk(buffer)
+    const trailingEvent = shouldStop ? null : parseSseChunk(buffer)
     if (trailingEvent) {
       onEvent(trailingEvent)
+
+      if (trailingEvent.event === 'done') {
+        shouldStop = true
+      }
+    }
+
+    if (shouldStop) {
+      await reader.cancel().catch(() => undefined)
     }
   } finally {
     reader.releaseLock()
@@ -380,6 +440,7 @@ export async function readSseStream(
 export function parseSseChunk(chunk: string): SseEvent | null {
   const lines = chunk.replace(/\r\n/g, '\n').split('\n')
   let event: SseEventType | null = null
+  let rawEvent: string | null = null
   const dataLines: string[] = []
 
   for (const line of lines) {
@@ -388,7 +449,8 @@ export function parseSseChunk(chunk: string): SseEvent | null {
     }
 
     if (line.startsWith('event:')) {
-      event = toSseEventType(line.slice('event:'.length))
+      rawEvent = line.slice('event:'.length).trim()
+      event = toSseEventType(rawEvent)
       continue
     }
 
@@ -408,7 +470,20 @@ export function parseSseChunk(chunk: string): SseEvent | null {
 
   try {
     return { event, data: JSON.parse(rawData) as unknown }
-  } catch {
-    return { event, data: rawData }
+  } catch (error) {
+    if (event === 'token') {
+      return { event, data: rawData }
+    }
+
+    return {
+      event: 'error',
+      data: {
+        error_code: 'INVALID_SSE_EVENT',
+        message: '后端返回了无效 SSE JSON 事件',
+        raw_event: rawEvent ?? event,
+        raw_data: rawData,
+        audit_event: { cause: errorCause(error) },
+      },
+    }
   }
 }
