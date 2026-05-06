@@ -51,20 +51,6 @@ function isTestMode(value: unknown): value is TestMode {
   return typeof value === 'string' && modes.includes(value as TestMode)
 }
 
-function isModelTestResponse(value: unknown): value is ModelTestResponse {
-  if (!isRecord(value)) {
-    return false
-  }
-
-  return (
-    typeof value.content === 'string' &&
-    typeof value.model_name === 'string' &&
-    typeof value.latency_ms === 'number' &&
-    typeof value.prompt_tokens === 'number' &&
-    typeof value.completion_tokens === 'number'
-  )
-}
-
 function hasFallbackFlag(value: unknown): boolean {
   return isRecord(value) && value.fallback === true
 }
@@ -85,7 +71,7 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function streamEventText(data: unknown): string {
+function streamContent(data: unknown): string {
   if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean') {
     return String(data)
   }
@@ -99,7 +85,36 @@ function streamEventText(data: unknown): string {
     }
   }
 
-  return safeStringify(data)
+  return ''
+}
+
+function numberField(data: unknown, field: string): number | null {
+  if (!isRecord(data)) {
+    return null
+  }
+
+  const value = data[field]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function stringField(data: unknown, field: string): string | null {
+  if (!isRecord(data)) {
+    return null
+  }
+
+  const value = data[field]
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+function createStreamResult(content: string, finalData: unknown, startedAt: number, fallback: boolean): ModelTestResponse {
+  return {
+    content,
+    model_name: stringField(finalData, 'model_name') ?? 'streaming-model',
+    latency_ms: numberField(finalData, 'latency_ms') ?? Math.max(0, Date.now() - startedAt),
+    prompt_tokens: numberField(finalData, 'prompt_tokens') ?? 0,
+    completion_tokens: numberField(finalData, 'completion_tokens') ?? 0,
+    fallback: fallback || hasFallbackFlag(finalData) || undefined,
+  }
 }
 
 function errorMessage(data: unknown): string {
@@ -177,9 +192,46 @@ export default function ModelTest() {
       return
     }
 
-    const streamState: { fallbackDetected: boolean; finalResult: ModelTestResponse | null } = {
+    const streamState: {
+      fallbackDetected: boolean
+      finalResult: ModelTestResponse | null
+      finalData: unknown
+      completed: boolean
+      errored: boolean
+      content: string
+    } = {
       fallbackDetected: false,
       finalResult: null,
+      finalData: null,
+      completed: false,
+      errored: false,
+      content: '',
+    }
+    const startedAt = Date.now()
+
+    const appendStreamContent = (chunk: string) => {
+      if (!chunk) {
+        return
+      }
+
+      streamState.content += chunk
+      setStreamText(streamState.content)
+    }
+
+    const finalizeStream = (finalData: unknown) => {
+      if (streamState.errored || streamState.completed) {
+        return
+      }
+
+      streamState.finalData = finalData
+      streamState.finalResult = createStreamResult(
+        streamState.content,
+        finalData,
+        startedAt,
+        streamState.fallbackDetected
+      )
+      streamState.completed = true
+      setResult(streamState.finalResult)
     }
 
     setLoading(true)
@@ -189,29 +241,55 @@ export default function ModelTest() {
 
     try {
       await testModelStream({ message: requestMessage, scene }, (event: SseEvent) => {
+        if (streamState.errored) {
+          return
+        }
+
         if (hasFallbackFlag(event.data)) {
           streamState.fallbackDetected = true
         }
 
-        if (event.event === 'token' || event.event === 'delta' || event.event === 'final') {
-          setStreamText((current) => `${current}${streamEventText(event.data)}`)
+        if (event.event === 'start') {
+          return
         }
 
-        if (event.event === 'final' && isModelTestResponse(event.data)) {
-          streamState.finalResult = event.data
-          setResult(event.data)
+        if (event.event === 'token' || event.event === 'delta') {
+          appendStreamContent(streamContent(event.data))
+          return
+        }
+
+        if (event.event === 'final') {
+          appendStreamContent(streamContent(event.data))
+          finalizeStream(event.data)
+          return
+        }
+
+        if (event.event === 'done') {
+          finalizeStream(streamState.finalData ?? event.data)
+          return
         }
 
         if (event.event === 'error') {
+          streamState.errored = true
+          streamState.finalResult = null
+          setResult(null)
           setError(errorMessage(event.data))
         }
       })
 
-      if (streamState.finalResult) {
+      if (!streamState.errored && !streamState.completed) {
+        finalizeStream(streamState.finalData)
+      }
+
+      if (!streamState.errored && streamState.finalResult) {
         addHistory(streamState.finalResult, requestMessage)
       }
 
-      if (streamState.fallbackDetected || streamState.finalResult?.fallback) {
+      if (streamState.errored || !streamState.finalResult) {
+        return
+      }
+
+      if (streamState.fallbackDetected || streamState.finalResult.fallback) {
         setFallback()
       } else {
         setConnected()
