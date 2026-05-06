@@ -60,32 +60,32 @@ export default function Home() {
       {/* 主内容区 */}
       <main className="max-w-7xl mx-auto px-4 py-6">
         <Tabs defaultValue="chat" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 lg:grid-cols-7">
-            <TabsTrigger value="chat" className="flex items-center gap-2">
+          <TabsList className="grid h-auto w-full grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-7">
+            <TabsTrigger value="chat" className="flex h-auto min-h-9 items-center gap-2 whitespace-normal">
               <MessageCircle className="w-4 h-4" />
               AI导办对话
             </TabsTrigger>
-            <TabsTrigger value="settlement" className="flex items-center gap-2">
+            <TabsTrigger value="settlement" className="flex h-auto min-h-9 items-center gap-2 whitespace-normal">
               <AlertTriangle className="w-4 h-4" />
               结算异常导办
             </TabsTrigger>
-            <TabsTrigger value="qc" className="flex items-center gap-2">
+            <TabsTrigger value="qc" className="flex h-auto min-h-9 items-center gap-2 whitespace-normal">
               <ClipboardCheck className="w-4 h-4" />
               出院前联合质控
             </TabsTrigger>
-            <TabsTrigger value="dashboard" className="flex items-center gap-2">
+            <TabsTrigger value="dashboard" className="flex h-auto min-h-9 items-center gap-2 whitespace-normal">
               <BarChart3 className="w-4 h-4" />
               运营驾驶舱
             </TabsTrigger>
-            <TabsTrigger value="mcp" className="flex items-center gap-2">
+            <TabsTrigger value="mcp" className="flex h-auto min-h-9 items-center gap-2 whitespace-normal">
               <Server className="w-4 h-4" />
               MCP管理
             </TabsTrigger>
-            <TabsTrigger value="knowledge" className="flex items-center gap-2">
+            <TabsTrigger value="knowledge" className="flex h-auto min-h-9 items-center gap-2 whitespace-normal">
               <BookOpen className="w-4 h-4" />
               知识浏览
             </TabsTrigger>
-            <TabsTrigger value="model" className="flex items-center gap-2">
+            <TabsTrigger value="model" className="flex h-auto min-h-9 items-center gap-2 whitespace-normal">
               <FlaskConical className="w-4 h-4" />
               模型测试
             </TabsTrigger>
@@ -96,7 +96,7 @@ export default function Home() {
           </TabsContent>
 
           <TabsContent value="settlement">
-            <SettlementExceptionList currentRole={currentRole} />
+            <SettlementExceptionList />
           </TabsContent>
 
           <TabsContent value="qc">
@@ -125,7 +125,7 @@ export default function Home() {
 }
 
 // 结算异常列表组件
-function SettlementExceptionList({ currentRole }: { currentRole: string }) {
+function SettlementExceptionList() {
   const exceptions = [
     {
       id: 'SE001',
