@@ -1,5 +1,114 @@
+export type RiskLevel = '高' | '中' | '低'
+export type WorkStatus = '待处理' | '处理中' | '已完成'
+export type Priority = '高' | '中' | '低'
+export type McpCapabilityType = 'Tool' | 'Resource' | 'Prompt' | 'Service'
+export type McpTransport = 'stdio' | 'sse' | 'streamable_http'
+export type McpServerStatus = 'enabled' | 'disabled' | 'degraded' | 'unhealthy'
+
+export interface SettlementExceptionMock {
+  id: string
+  patientId: string
+  patientName: string
+  encounterId: string
+  exceptionType: string
+  errorCode: string
+  errorMsg: string
+  detectedAt: string
+  status: WorkStatus
+  priority: Priority
+}
+
+export interface DischargeRiskMock {
+  type: string
+  level: RiskLevel
+  description: string
+  source: string
+}
+
+export interface DischargeQcMock {
+  id: string
+  patientId: string
+  patientName: string
+  encounterId: string
+  department: string
+  doctor: string
+  expectedDischargeDate: string
+  risks: DischargeRiskMock[]
+  status: WorkStatus
+  priority: Priority
+}
+
+export interface RoleDefinitionMock {
+  id: string
+  name: string
+  icon: string
+  description: string
+}
+
+export interface McpServerMock {
+  server_id: string
+  name: string
+  endpoint: string
+  transport: McpTransport
+  status: McpServerStatus
+  protocol_version: string
+  auth_headers: Record<string, string>
+  metadata: Record<string, string>
+}
+
+export interface McpStorageHealthMock {
+  status: 'ok' | 'degraded' | 'down'
+  backend: 'memory' | 'postgresql' | 'redis'
+  details: {
+    server_count: number
+    capability_count: number
+    checked_at: string
+  }
+}
+
+export interface McpCapabilityMock {
+  id: string
+  type: McpCapabilityType
+  name: string
+  count: number
+  color: string
+}
+
+export interface KnowledgeAssetMock {
+  title: string
+  value: string
+  coverage: number
+  color: string
+}
+
+export interface RagResultMock {
+  source: string
+  score: number
+  summary: string
+}
+
+export interface DrgRuleMock {
+  code: string
+  title: string
+  summary: string
+}
+
+export interface PromptTemplateMock {
+  name: string
+  scenario: string
+  role: string
+}
+
+export interface ModelTestMockResult {
+  content: string
+  model_name: string
+  latency_ms: number
+  prompt_tokens: number
+  completion_tokens: number
+}
+
 // 模拟数据 - 医保结算异常导办场景
-export const settlementExceptions = [
+export const settlementExceptions: SettlementExceptionMock[] = [
   {
     id: 'SE001',
     patientId: 'P001',
@@ -39,7 +148,7 @@ export const settlementExceptions = [
 ]
 
 // 模拟数据 - 出院前联合质控场景
-export const dischargeQCList = [
+export const dischargeQCList: DischargeQcMock[] = [
   {
     id: 'QC001',
     patientId: 'P001',
@@ -161,7 +270,7 @@ export const errorCodeKnowledge = {
 }
 
 // 角色定义
-export const roles = [
+export const roles: RoleDefinitionMock[] = [
   {
     id: 'cashier',
     name: '收费员',
@@ -247,13 +356,13 @@ export type SettlementException = (typeof settlementExceptions)[0]
 export type DischargeQC = (typeof dischargeQCList)[0]
 export type ErrorCodeKnowledge = typeof errorCodeKnowledge
 
-export const mockMcpServers = [
+export const mockMcpServers: McpServerMock[] = [
   {
     server_id: 'mcp-knowledge-search',
     name: '知识检索 MCP 服务',
     endpoint: 'http://127.0.0.1:9101/sse',
-    transport: 'sse' as const,
-    status: 'enabled' as const,
+    transport: 'sse',
+    status: 'enabled',
     protocol_version: '2025-03-26',
     auth_headers: {},
     metadata: { owner: '医保办', scene: 'knowledge_search' },
@@ -262,15 +371,15 @@ export const mockMcpServers = [
     server_id: 'mcp-policy-rules',
     name: '政策规则 MCP 服务',
     endpoint: 'http://127.0.0.1:9102/mcp',
-    transport: 'streamable_http' as const,
-    status: 'degraded' as const,
+    transport: 'streamable_http',
+    status: 'degraded',
     protocol_version: '2025-03-26',
     auth_headers: {},
     metadata: { owner: '信息科', scene: 'policy_rule' },
   },
 ]
 
-export const mockMcpStorageHealth = {
+export const mockMcpStorageHealth: McpStorageHealthMock = {
   status: 'ok',
   backend: 'memory',
   details: {
@@ -280,38 +389,38 @@ export const mockMcpStorageHealth = {
   },
 }
 
-export const mockMcpCapabilities = [
+export const mockMcpCapabilities: McpCapabilityMock[] = [
   { id: 'tool-search-policy', type: 'Tool', name: '政策检索工具', count: 3, color: 'text-blue-600' },
   { id: 'resource-error-codes', type: 'Resource', name: '错误码资源', count: 2, color: 'text-green-600' },
   { id: 'prompt-qc-guide', type: 'Prompt', name: '质控导办提示', count: 2, color: 'text-purple-600' },
   { id: 'service-risk-score', type: 'Service', name: '风险评分服务', count: 1, color: 'text-orange-600' },
 ]
 
-export const mockKnowledgeAssets = [
+export const mockKnowledgeAssets: KnowledgeAssetMock[] = [
   { title: '错误码知识库', value: '128条', coverage: 92, color: 'text-blue-600' },
   { title: '政策规则库', value: '56条', coverage: 81, color: 'text-green-600' },
   { title: 'DRG/DIP知识库', value: '34条', coverage: 74, color: 'text-purple-600' },
   { title: '提示模板库', value: '18个', coverage: 88, color: 'text-orange-600' },
 ]
 
-export const mockRagResults = [
+export const mockRagResults: RagResultMock[] = [
   { source: '医保政策规则库', score: 0.91, summary: '待遇资格校验失败时，应先核验参保状态、待遇享受期和账户状态。' },
   { source: '错误码知识库 ERR_001', score: 0.86, summary: 'ERR_001 表示患者待遇资格校验不通过，常见原因为医保卡未激活或待遇过期。' },
   { source: '结算异常处置流程', score: 0.78, summary: '收费员确认患者信息后，由医保办协助恢复待遇资格或指导患者补缴。' },
 ]
 
-export const mockDrgRules = [
+export const mockDrgRules: DrgRuleMock[] = [
   { code: 'DRG-BM21', title: '髋膝关节置换病组', summary: '关注主要诊断、手术操作编码和高值耗材说明完整性。' },
   { code: 'DIP-CV1', title: '心血管介入病种', summary: '关注检查费用占比、耗材适应症和住院天数合理性。' },
 ]
 
-export const mockPromptTemplates = [
+export const mockPromptTemplates: PromptTemplateMock[] = [
   { name: '结算异常导办模板', scenario: 'settlement_exception_guidance', role: '收费员' },
   { name: '出院前质控模板', scenario: 'pre_discharge_quality_control', role: '病案室' },
   { name: '政策解释模板', scenario: 'policy_explanation', role: '医保办' },
 ]
 
-export const mockModelTestResult = {
+export const mockModelTestResult: ModelTestMockResult = {
   content: '这是离线模式下的模型测试结果。后端模型服务不可用时，前端会保留演示体验。',
   model_name: 'mock-model',
   latency_ms: 120,
