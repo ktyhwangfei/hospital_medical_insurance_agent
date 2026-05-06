@@ -113,7 +113,7 @@ export interface McpStorageHealth {
   [key: string]: unknown
 }
 
-export type SseEventType = 'step' | 'final' | 'error' | 'done' | 'token'
+export type SseEventType = 'start' | 'step' | 'delta' | 'final' | 'error' | 'done' | 'token'
 
 export interface SseEvent<T = unknown> {
   event: SseEventType

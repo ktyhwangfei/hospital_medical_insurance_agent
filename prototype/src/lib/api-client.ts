@@ -24,7 +24,7 @@ import { ApiClientError } from './types'
 
 export const API_PREFIX = '/api/v1/medical-insurance-ai-agent'
 
-const SSE_EVENT_TYPES: readonly SseEventType[] = ['step', 'final', 'error', 'done', 'token']
+const SSE_EVENT_TYPES: readonly SseEventType[] = ['start', 'step', 'delta', 'final', 'error', 'done', 'token']
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
