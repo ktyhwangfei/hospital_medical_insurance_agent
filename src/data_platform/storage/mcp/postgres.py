@@ -49,6 +49,14 @@ class PostgresMcpStorage:
         return [McpCapability(**self._dialect.json_load(row["payload_json"])) for row in rows]
 
     def health(self) -> McpStorageHealth:
-        database_health = self._executor.health()
-        status = McpStorageHealthStatus.HEALTHY if database_health.status == DatabaseHealthStatus.HEALTHY else McpStorageHealthStatus.UNHEALTHY
-        return McpStorageHealth(status=status, postgres_available=database_health.available, redis_available=False, details={"backend": database_health.backend.value, **database_health.details})
+        try:
+            database_health = self._executor.health()
+        except Exception:
+            return McpStorageHealth(status=McpStorageHealthStatus.UNHEALTHY, postgres_available=False, redis_available=False)
+        status_map = {
+            DatabaseHealthStatus.HEALTHY: McpStorageHealthStatus.HEALTHY,
+            DatabaseHealthStatus.DEGRADED: McpStorageHealthStatus.DEGRADED,
+        }
+        status = status_map.get(database_health.status, McpStorageHealthStatus.UNHEALTHY)
+        safe_details = {k: str(v) for k, v in database_health.details.items()}
+        return McpStorageHealth(status=status, postgres_available=database_health.available, redis_available=False, details={"backend": database_health.backend.value, **safe_details})

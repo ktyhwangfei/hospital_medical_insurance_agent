@@ -1,13 +1,16 @@
 from src.data_platform.persistence.dialects import PostgresDialect
 from src.data_platform.persistence.models import DatabaseBackend, DatabaseHealth, DatabaseHealthStatus, QueryResult, SqlStatement
+from src.data_platform.storage.mcp.models import McpStorageHealthStatus
 from src.data_platform.storage.mcp.postgres import PostgresMcpStorage, mcp_schema_statements
 from src.knowledge_extension.mcp_registry.models import McpCapability, McpCapabilityType, McpRiskLevel, McpServer, McpServerStatus, McpTransportType
 
 
 class FakeExecutor:
-    def __init__(self):
+    def __init__(self, health_status: DatabaseHealthStatus = DatabaseHealthStatus.HEALTHY, health_raises: bool = False):
         self.statements: list[SqlStatement] = []
         self.rows: dict[str, dict] = {}
+        self._health_status = health_status
+        self._health_raises = health_raises
 
     def execute(self, statement: SqlStatement) -> QueryResult:
         self.statements.append(statement)
@@ -22,7 +25,9 @@ class FakeExecutor:
         return list(self.rows.values())
 
     def health(self) -> DatabaseHealth:
-        return DatabaseHealth(status=DatabaseHealthStatus.HEALTHY, backend=DatabaseBackend.POSTGRESQL, available=True)
+        if self._health_raises:
+            raise RuntimeError("executor unavailable")
+        return DatabaseHealth(status=self._health_status, backend=DatabaseBackend.POSTGRESQL, available=True)
 
 
 def test_mcp_schema_statements_include_servers_and_capabilities():
@@ -67,3 +72,79 @@ def test_postgres_mcp_storage_saves_and_loads_capability():
 
     assert "insert into mcp_capabilities" in executor.statements[0].sql
     assert loaded == capability
+
+
+def test_get_server_returns_none_when_not_found():
+    executor = FakeExecutor()
+    storage = PostgresMcpStorage(executor=executor, dialect=PostgresDialect())
+
+    result = storage.get_server("nonexistent")
+
+    assert result is None
+
+
+def test_get_capability_returns_none_when_not_found():
+    executor = FakeExecutor()
+    storage = PostgresMcpStorage(executor=executor, dialect=PostgresDialect())
+
+    result = storage.get_capability("nonexistent")
+
+    assert result is None
+
+
+def test_list_servers_returns_empty_list():
+    executor = FakeExecutor()
+    executor.rows = {}
+    storage = PostgresMcpStorage(executor=executor, dialect=PostgresDialect())
+
+    result = storage.list_servers()
+
+    assert result == []
+
+
+def test_list_capabilities_returns_empty_list():
+    executor = FakeExecutor()
+    executor.rows = {}
+    storage = PostgresMcpStorage(executor=executor, dialect=PostgresDialect())
+
+    result = storage.list_capabilities()
+
+    assert result == []
+
+
+def test_health_maps_healthy():
+    executor = FakeExecutor(health_status=DatabaseHealthStatus.HEALTHY)
+    storage = PostgresMcpStorage(executor=executor, dialect=PostgresDialect())
+
+    result = storage.health()
+
+    assert result.status == McpStorageHealthStatus.HEALTHY
+    assert result.postgres_available is True
+
+
+def test_health_maps_unhealthy():
+    executor = FakeExecutor(health_status=DatabaseHealthStatus.UNHEALTHY)
+    storage = PostgresMcpStorage(executor=executor, dialect=PostgresDialect())
+
+    result = storage.health()
+
+    assert result.status == McpStorageHealthStatus.UNHEALTHY
+
+
+def test_health_maps_degraded():
+    executor = FakeExecutor(health_status=DatabaseHealthStatus.DEGRADED)
+    storage = PostgresMcpStorage(executor=executor, dialect=PostgresDialect())
+
+    result = storage.health()
+
+    assert result.status == McpStorageHealthStatus.DEGRADED
+
+
+def test_health_returns_unhealthy_on_executor_exception():
+    executor = FakeExecutor(health_raises=True)
+    storage = PostgresMcpStorage(executor=executor, dialect=PostgresDialect())
+
+    result = storage.health()
+
+    assert result.status == McpStorageHealthStatus.UNHEALTHY
+    assert result.postgres_available is False
