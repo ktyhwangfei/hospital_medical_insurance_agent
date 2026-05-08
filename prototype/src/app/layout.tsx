@@ -3,7 +3,11 @@ import { Inter } from 'next/font/google'
 import { ApiProvider } from '@/lib/api-context'
 import './globals.css'
 
-const inter = Inter({ subsets: ['latin'] })
+const inter = Inter({
+  subsets: ['latin'],
+  fallback: ['system-ui', 'Arial'],
+  preload: false,
+})
 
 export const metadata: Metadata = {
   title: '医保AI导办与运营协同平台 - 原型演示',
