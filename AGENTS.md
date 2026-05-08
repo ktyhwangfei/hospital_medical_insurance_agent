@@ -82,7 +82,7 @@ runtime/api (FastAPI 路由)
 | `GET /tasks/{task_id}` | 任务状态查询 |
 | `GET /version` | 版本信息 |
 
-前端演示页: `src/static/index.html`，根路径 `/` 直接返回。
+前端原型目录: `prototype/`，基于 Next.js 独立运行；FastAPI 后端只提供 API，不再从 `src/static/` 返回静态页面。
 
 ### MVP 场景与适配器
 
