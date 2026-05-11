@@ -1,4 +1,21 @@
-export type RoleId = 'cashier' | 'insurance_office' | 'it_department' | 'medical_record'
+export type RoleId = 'cashier' | 'medical_office' | 'information_department' | 'medical_record_staff' | 'clinician'
+
+export type Skill = {
+  skill_id: string
+  name: string
+  description: string
+  owner: string
+  enabled: boolean
+  risk_level: string
+  intent_keywords: string[]
+  required_roles: string[]
+  skill_metadata: {
+    author: string
+    version: string
+    category?: string
+    tags: string[]
+  }
+}
 
 export type ApiConnectionStatus = 'unknown' | 'connected' | 'fallback'
 

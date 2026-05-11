@@ -20,10 +20,14 @@ export default function KnowledgeExplorer() {
   const [query, setQuery] = useState('待遇资格校验失败')
   const [searched, setSearched] = useState(false)
 
-  const visibleRagResults = useMemo(
-    () => (searched ? mockRagResults : mockRagResults.slice(0, 1)),
-    [searched]
-  )
+  const visibleRagResults = useMemo(() => {
+    if (!searched) return mockRagResults.slice(0, 1)
+    const q = query.trim().toLowerCase()
+    if (!q) return mockRagResults
+    return mockRagResults.filter(
+      (r) => r.summary.toLowerCase().includes(q) || r.source.toLowerCase().includes(q)
+    )
+  }, [searched, query])
 
   return (
     <div className="space-y-6">
