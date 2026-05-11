@@ -1,3 +1,5 @@
+import warnings
+
 from src.business_scenarios.pre_discharge_joint_qc.service import run_pre_discharge_qc
 from src.business_scenarios.settlement_exception_guide.service import guide_settlement_exception
 from src.runtime.api.schemas import AgentResponse
@@ -10,6 +12,11 @@ from src.security.risk_control.service import build_human_confirmation_response,
 
 
 def execute_plan(context: RuntimeContext, plan: ExecutionPlan) -> AgentResponse:
+    warnings.warn(
+        "This module is deprecated. Use UnifiedScenarioExecutor instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     steps = [StepState(step_id=step.step_id, status="completed") for step in plan.steps]
     if plan.scenario == "settlement_exception_guidance":
         response = guide_settlement_exception(context.patient_id, context.encounter_id)
