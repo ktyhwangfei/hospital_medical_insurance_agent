@@ -22,7 +22,7 @@ def test_chat_returns_agent_response_instance():
         patient_id='P001',
         encounter_id='E001',
     )
-    result = chat(request)
+    result = chat(request, security_result=None)
     assert isinstance(result, AgentResponse)
 
 
@@ -34,7 +34,7 @@ def test_chat_missing_context_returns_agent_response():
         role='cashier',
         message='医保结算失败了，帮我看看',
     )
-    result = chat(request)
+    result = chat(request, security_result=None)
     assert isinstance(result, AgentResponse)
     assert result.status == 'needs_clarification'
     assert result.missing_fields == ['patient_id', 'encounter_id']
@@ -42,8 +42,15 @@ def test_chat_missing_context_returns_agent_response():
 
 def test_patient_context_returns_typed_model():
     from src.runtime.api.routes import patient_context
+    from src.runtime.dependencies import get_insurance_adapter
 
-    result = patient_context(patient_id='P001', encounter_id='E001', user_id='u1', role='cashier')
+    result = patient_context(
+        patient_id='P001',
+        encounter_id='E001',
+        user_id='u1',
+        role='cashier',
+        insurance_adapter=get_insurance_adapter(),
+    )
     assert isinstance(result, PatientContextResponse)
     assert result.settlement_status == 'failed'
 
