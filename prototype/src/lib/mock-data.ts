@@ -278,19 +278,19 @@ export const roles: RoleDefinitionMock[] = [
     description: '负责医保结算、费用上传、交易查询',
   },
   {
-    id: 'insurance_office',
+    id: 'medical_office',
     name: '医保办',
     icon: '🏥',
     description: '负责医保政策解释、拒付处理、科室协调',
   },
   {
-    id: 'it_department',
+    id: 'information_department',
     name: '信息科',
     icon: '💻',
     description: '负责系统接口、数据问题排查、技术支撑',
   },
   {
-    id: 'medical_record',
+    id: 'medical_record_staff',
     name: '病案室',
     icon: '📋',
     description: '负责病案首页质量、编码审核、DRG入组',
