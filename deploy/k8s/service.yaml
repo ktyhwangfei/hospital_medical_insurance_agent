@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: medical-insurance-ai-agent
+  labels:
+    app: medical-insurance-ai-agent
+spec:
+  type: ClusterIP
+  selector:
+    app: medical-insurance-ai-agent
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
