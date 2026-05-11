@@ -1,8 +1,15 @@
+import warnings
+
 from src.runtime.context.models import RuntimeContext
 from src.runtime.planning.models import ExecutionPlan, PlanStep, RiskLevel, StepType
 
 
 def build_execution_plan(context: RuntimeContext) -> ExecutionPlan:
+    warnings.warn(
+        "This module is deprecated. Use UnifiedScenarioExecutor instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if context.intent == "settlement_exception_guidance":
         steps = [
             PlanStep(step_id="query_transaction", step_type=StepType.ADAPTER_CALL, capability="insurance_interface.query_transaction"),
