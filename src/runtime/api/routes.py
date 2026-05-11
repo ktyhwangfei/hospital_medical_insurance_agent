@@ -4,30 +4,80 @@ from collections.abc import Iterator
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from src.adapters.ports import InsuranceInterfacePort
 from src.config.model_service import ModelServiceConfig
+from src.runtime.dependencies import get_insurance_adapter
 from src.data_platform.data_access.in_memory import build_sample_store
+from src.data_platform.storage.skill.factory import create_skill_storage
+from src.data_platform.storage.tool.factory import create_tool_storage
 from src.model_service import Message, ModelGateway
 from src.model_service.exceptions import ModelAuthError, ModelExhaustedError, ModelRateLimitError, ModelServerError
 from src.runtime.api.schemas import AgentResponse, ChatRequest, ModelTestRequest, ModelTestResponse, PatientContextResponse, TaskConfirmRequest, TaskConfirmResponse, TaskStatusResponse, WorkflowStatusResponse
 from src.runtime.api.streaming import ensure_knowledge_fields, sse_event
-from src.runtime.clarification.service import missing_context_fields
-from src.runtime.context.service import build_runtime_context
+from src.runtime.orchestrator import RuntimeOrchestrator
 from src.runtime.intent.parser import parse_intent
-from src.runtime.orchestration.service import execute_plan
-from src.runtime.planning.service import build_execution_plan
 from src.runtime.runtime_state.models import StepState, WorkflowInstance
 from src.runtime.runtime_state.store import runtime_state_store
+from src.runtime.scenario_executor import UnifiedScenarioExecutor
+from src.runtime.skill_registry.engine import SkillExecutionEngine
 from src.runtime.task_closure.service import get_task, save_task, update_task_confirmation
 from src.security.audit.service import build_workflow_audit_view, record_audit_event
-from src.security.authorization.service import visible_fields_for, is_allowed
+from src.security.authorization.service import visible_fields_for
 from src.security.desensitization.service import mask_name
-from src.security.risk_control.service import detect_blocked_actions, build_human_confirmation_response
+from src.security.risk_control.service import build_human_confirmation_response, detect_blocked_actions
 from src.shared.schemas.responses import error_detail
 
 router = APIRouter()
+
+_tool_storage = create_tool_storage()
+_skill_storage = create_skill_storage()
+
+from src.data_platform.storage.skill.seed import seed_default_skills, seed_default_tools
+seed_default_tools(_tool_storage)
+seed_default_skills(_skill_storage, _tool_storage)
+
+# In-memory registry: task_id -> (compiled_graph, thread_id)
+# Used to resume LangGraph executions paused by interrupt()
+_checkpoint_registry: dict[str, tuple] = {}
+
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+
+
+def get_orchestrator() -> RuntimeOrchestrator:
+    """Build a RuntimeOrchestrator with all required dependencies injected."""
+    executor = UnifiedScenarioExecutor(_skill_storage, _tool_storage, _checkpoint_registry)
+    return RuntimeOrchestrator(
+        intent_parser=parse_intent,
+        security_checker=lambda _: [],
+        scenario_executor=executor,
+        skill_executor=SkillExecutionEngine(),
+        authorization_checker=None,
+        tool_storage=_tool_storage,
+    )
+
+
+def verify_security(request: ChatRequest) -> AgentResponse | None:
+    """FastAPI dependency: check for high-risk actions before processing."""
+    blocked = detect_blocked_actions(request.message)
+    if blocked:
+        return build_human_confirmation_response(blocked)
+    return None
+
+
+# ── Route helpers ─────────────────────────────────────────────────────────────
+
+
+def process_chat_request(request: ChatRequest) -> AgentResponse:
+    """Process a chat request through the orchestration pipeline."""
+    orchestrator = get_orchestrator()
+    return orchestrator.execute_request(request)
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 
 @router.get('/version')
@@ -36,12 +86,48 @@ def version() -> dict[str, str]:
 
 
 @router.post('/chat')
-def chat(request: ChatRequest) -> AgentResponse:
+def chat(
+    request: ChatRequest,
+    security_result: AgentResponse | None = Depends(verify_security),
+) -> AgentResponse:
+    if security_result:
+        _persist_security_workflow(security_result)
+        return security_result
     return process_chat_request(request)
 
 
+def _persist_security_workflow(response: AgentResponse) -> None:
+    """Persist workflow state for high-risk action blocked responses."""
+    workflow_id = response.audit.get("workflow_id", "")
+    if not workflow_id:
+        return
+    workflow = WorkflowInstance(
+        workflow_id=workflow_id,
+        scenario=response.scenario or "high_risk_action_confirmation",
+        status=response.status,
+        current_step="awaiting_human_confirmation",
+        steps=[StepState(step_id="detect_high_risk_action", status="completed"),
+               StepState(step_id="awaiting_human_confirmation", status="waiting")],
+    )
+    runtime_state_store.save_workflow(workflow)
+    record_audit_event("workflow_executed", workflow_id, payload={"scenario": response.scenario, "status": response.status})
+    record_audit_event("workflow_step_completed", workflow_id, "detect_high_risk_action")
+
+
 @router.post('/chat/stream')
-def chat_stream(request: ChatRequest) -> StreamingResponse:
+def chat_stream(
+    request: ChatRequest,
+    security_result: AgentResponse | None = Depends(verify_security),
+) -> StreamingResponse:
+    if security_result:
+        def error_events() -> Iterator[str]:
+            yield sse_event('error', {
+                'status_code': 200,
+                'detail': security_result.model_dump(),
+            })
+            yield sse_event('done', {})
+        return StreamingResponse(error_events(), media_type='text/event-stream')
+
     def events() -> Iterator[str]:
         try:
             yield sse_event('step', {'step': 'intent_detection', 'message': '正在识别意图'})
@@ -60,46 +146,17 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
     return StreamingResponse(events(), media_type='text/event-stream')
 
 
-def process_chat_request(request: ChatRequest) -> AgentResponse:
-    missing = missing_context_fields(request.patient_id, request.encounter_id)
-    if missing:
-        return AgentResponse(status='needs_clarification', missing_fields=missing)
-    blocked = detect_blocked_actions(request.message)
-    if blocked:
-        response = build_human_confirmation_response(blocked)
-        workflow_id = response.audit["workflow_id"]
-        steps = [StepState(step_id=step_id, status="completed") for step_id in response.audit["steps"]]
-        runtime_state_store.save_workflow(WorkflowInstance(workflow_id=workflow_id, scenario=response.scenario, status=response.status, current_step=steps[-1].step_id if steps else None, steps=steps))
-        record_audit_event('workflow_executed', workflow_id, payload={'scenario': response.scenario, 'status': response.status})
-        for step in steps:
-            record_audit_event('workflow_step_completed', workflow_id, step.step_id)
-        return response
-    intent_result = parse_intent(request.message)
-    scenario = intent_result.intent
-
-    if scenario in ('settlement_exception_guidance', 'pre_discharge_quality_control'):
-        if not is_allowed(request.role, scenario):
-            raise HTTPException(status_code=403, detail=error_detail('PERMISSION_DENIED', '角色无权访问该场景', {'event_type': 'permission_denied'}))
-        context = build_runtime_context(request, intent_result)
-        plan = build_execution_plan(context)
-        response = execute_plan(context, plan)
-        response.citations.extend(
-            {'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in intent_result.citations
-        )
-        return response
-
-    return AgentResponse(
-        status='not_implemented',
-        uncertainties=[f'未识别的意图: {request.message}'],
-        citations=[{'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in intent_result.citations],
-    )
-
-
 @router.get('/patient-context/{patient_id}/{encounter_id}', response_model_exclude_none=True)
-def patient_context(patient_id: str, encounter_id: str, user_id: str, role: str) -> PatientContextResponse:
+def patient_context(
+    patient_id: str,
+    encounter_id: str,
+    user_id: str,
+    role: str,
+    insurance_adapter: InsuranceInterfacePort = Depends(get_insurance_adapter),
+) -> PatientContextResponse:
     store = build_sample_store()
     patient = store.get_patient(patient_id)
-    tx = store.get_insurance_transaction(patient_id, encounter_id)
+    tx_result = insurance_adapter.query_transaction(patient_id, encounter_id)
     fields = visible_fields_for(role)
     kwargs = {
         'patient': {'patient_id': patient.patient_id, 'name': mask_name(patient.name)},
@@ -108,7 +165,7 @@ def patient_context(patient_id: str, encounter_id: str, user_id: str, role: str)
     if 'encounter_id' in fields:
         kwargs['encounter_id'] = encounter_id
     if 'settlement_status' in fields:
-        kwargs['settlement_status'] = tx.settlement_status
+        kwargs['settlement_status'] = tx_result.data.get('settlement_status', 'unknown')
     if 'audit_risks' in fields:
         kwargs['audit_risks'] = []
     return PatientContextResponse(**kwargs)
@@ -140,6 +197,39 @@ def confirm_task(request: TaskConfirmRequest) -> TaskConfirmResponse:
     if request.action not in ('confirm', 'reject'):
         raise HTTPException(status_code=400, detail=error_detail('INVALID_ACTION', 'action 必须是 confirm 或 reject'))
 
+    # LangGraph resume path — resume graph paused by interrupt()
+    if request.task_id in _checkpoint_registry:
+        from langgraph.types import Command
+
+        graph, thread_id = _checkpoint_registry[request.task_id]
+        confirmed = request.action == 'confirm'
+        final_state = graph.invoke(
+            Command(resume={"confirmed": confirmed}),
+            {"configurable": {"thread_id": thread_id}},
+        )
+        agent_response = final_state.get("response")
+
+        task = get_task(request.task_id) or {'task_id': request.task_id, 'task_type': 'human_confirmation', 'status': 'pending', 'description': '人工确认任务'}
+        updated = save_task(update_task_confirmation(task, request.action, request.user_id, request.reason))
+
+        workflow = runtime_state_store.get_workflow(thread_id)
+        if workflow:
+            workflow.status = "completed" if confirmed else "rejected"
+            workflow.current_step = "response_build"
+            workflow.steps.append(StepState(step_id="response_build", status="completed"))
+            runtime_state_store.save_workflow(workflow)
+
+        result_data = agent_response.model_dump() if agent_response else {}
+        return TaskConfirmResponse(
+            task_id=request.task_id,
+            status=updated['status'],
+            confirmed_by=request.user_id,
+            confirmed_at=updated['confirmed_at'],
+            reason=request.reason,
+            result=result_data if request.action == 'confirm' else {'blocked': True, 'message': '用户拒绝执行该操作'},
+        )
+
+    # Fallback path for non-LangGraph tasks
     task = get_task(request.task_id) or {'task_id': request.task_id, 'task_type': 'human_confirmation', 'status': 'pending', 'description': '人工确认任务'}
     updated = save_task(update_task_confirmation(task, request.action, request.user_id, request.reason))
     return TaskConfirmResponse(
@@ -211,22 +301,30 @@ def model_test_stream(request: ModelTestRequest) -> StreamingResponse:
     def events() -> Iterator[str]:
         gateway = ModelGateway()
         messages = [Message(role='user', content=request.message)]
+        start = time.time()
         yield sse_event('start', {'scene': request.scene})
         completion_tokens = 0
         prompt_tokens = 0
         finish_reason = None
+        content_parts: list[str] = []
+        model_name = 'streaming-model'
         try:
             for chunk in gateway.generate_stream(messages=messages, model_type='llm', scene=request.scene):
                 if chunk.content:
+                    content_parts.append(chunk.content)
                     yield sse_event('delta', {'content': chunk.content})
                 if chunk.usage:
                     prompt_tokens = chunk.usage.prompt_tokens
                     completion_tokens = chunk.usage.completion_tokens
                 if chunk.finish_reason:
                     finish_reason = chunk.finish_reason
+            latency_ms = int((time.time() - start) * 1000)
             yield sse_event(
                 'final',
                 {
+                    'content': ''.join(content_parts),
+                    'model_name': model_name,
+                    'latency_ms': latency_ms,
                     'scene': request.scene,
                     'prompt_tokens': prompt_tokens,
                     'completion_tokens': completion_tokens,
