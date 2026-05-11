@@ -1,7 +1,8 @@
 from src.adapters.base import AdapterCallContext, successful_result
+from src.adapters.ports import PreAuditPort
 
 
-class InMemoryPreAuditAdapter:
+class InMemoryPreAuditAdapter(PreAuditPort):
     def query_audit_result(self, patient_id: str, encounter_id: str):
         return successful_result(
             context=AdapterCallContext(input_summary={'patient_id': patient_id, 'encounter_id': encounter_id}),

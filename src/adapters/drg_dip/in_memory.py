@@ -1,7 +1,8 @@
 from src.adapters.base import AdapterCallContext, successful_result
+from src.adapters.ports import DrgDipPort
 
 
-class InMemoryDrgDipAdapter:
+class InMemoryDrgDipAdapter(DrgDipPort):
     def query_group_result(self, patient_id: str, encounter_id: str):
         return successful_result(
             context=AdapterCallContext(input_summary={'patient_id': patient_id, 'encounter_id': encounter_id}),
