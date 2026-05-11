@@ -1,7 +1,26 @@
 from pydantic import BaseModel, Field
 
 from src.knowledge_extension.assets.models import KnowledgeAssetType, KnowledgeChunk
-from src.knowledge_extension.common.models import AuditSummary, Citation, KnowledgeExtensionStatus
+from src.knowledge_extension.common.models import AuditSummary, KnowledgeExtensionStatus
+from src.knowledge_extension.common.models import Citation as CommonCitation
+
+
+class Citation(BaseModel):
+    """A citation linking generated content back to a specific source."""
+
+    source: str
+    page: int | None = None
+    text: str
+    relevance_score: float = 0.0
+
+
+class RAGResult(BaseModel):
+    """Result of a RAG pipeline query with citations and confidence."""
+
+    answer: str
+    citations: list[Citation] = Field(default_factory=list)
+    confidence: float = 0.0
+    sources: list[str] = Field(default_factory=list)
 
 
 class RetrievalFilter(BaseModel):
@@ -28,7 +47,7 @@ class RetrievalHit(BaseModel):
 
 class ContextPackage(BaseModel):
     hits: list[RetrievalHit] = Field(default_factory=list)
-    citations: list[Citation] = Field(default_factory=list)
+    citations: list[CommonCitation] = Field(default_factory=list)
     context_text: str = ""
     truncated_count: int = 0
 
@@ -37,6 +56,6 @@ class RetrievalResult(BaseModel):
     status: KnowledgeExtensionStatus
     hits: list[RetrievalHit] = Field(default_factory=list)
     context: ContextPackage = Field(default_factory=ContextPackage)
-    citations: list[Citation] = Field(default_factory=list)
+    citations: list[CommonCitation] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
     audit_events: list[AuditSummary] = Field(default_factory=list)
