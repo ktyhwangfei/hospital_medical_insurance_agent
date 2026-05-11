@@ -1,7 +1,8 @@
 from src.adapters.base import AdapterCallContext, successful_result
+from src.adapters.ports import MedicalRecordPort
 
 
-class InMemoryMedicalRecordAdapter:
+class InMemoryMedicalRecordAdapter(MedicalRecordPort):
     def query_homepage(self, patient_id: str, encounter_id: str):
         return successful_result(
             context=AdapterCallContext(input_summary={'patient_id': patient_id, 'encounter_id': encounter_id}),

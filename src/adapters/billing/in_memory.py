@@ -1,7 +1,8 @@
 from src.adapters.base import AdapterCallContext, successful_result
+from src.adapters.ports import BillingPort
 
 
-class InMemoryBillingAdapter:
+class InMemoryBillingAdapter(BillingPort):
     def query_billing_status(self, patient_id: str, encounter_id: str):
         return successful_result(
             context=AdapterCallContext(input_summary={'patient_id': patient_id, 'encounter_id': encounter_id}),

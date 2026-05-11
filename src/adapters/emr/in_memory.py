@@ -1,7 +1,8 @@
 from src.adapters.base import AdapterCallContext, successful_result
+from src.adapters.ports import EmrPort
 
 
-class InMemoryEmrAdapter:
+class InMemoryEmrAdapter(EmrPort):
     def query_record_summary(self, patient_id: str, encounter_id: str):
         return successful_result(
             context=AdapterCallContext(input_summary={'patient_id': patient_id, 'encounter_id': encounter_id}),
