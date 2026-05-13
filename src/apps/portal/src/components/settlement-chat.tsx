@@ -593,7 +593,7 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
         : '未检测'
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100dvh-7.5rem)]">
+    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100dvh-7.5rem)]" data-testid="chat-grid">
       {/* 左侧：快捷问题 */}
       <Card className="lg:col-span-1 flex flex-col border-slate-200/70 shadow-sm">
         <CardHeader className="pb-3 px-5 pt-5">
@@ -787,7 +787,7 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
               })()}
 
               {isStreaming && streamingContent && (
-                <div className="flex items-end gap-3 flex-row">
+                <div className="flex items-end gap-3 flex-row" data-testid="streaming-indicator">
                   <Avatar className="h-9 w-9 shrink-0 bg-gradient-to-br from-cyan-400 to-blue-500 shadow-lg shadow-cyan-900/20 ring-2 ring-white/10">
                     <AvatarFallback>
                       <Bot className="h-5 w-5 text-white" />
@@ -806,7 +806,7 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
               )}
 
               {isLoading && !isStreaming && (
-                <div className="flex items-end gap-3 flex-row">
+                <div className="flex items-end gap-3 flex-row" data-testid="loading-indicator">
                   <Avatar className="h-9 w-9 shrink-0 bg-gradient-to-br from-cyan-400 to-blue-500 shadow-lg shadow-cyan-900/20 ring-2 ring-white/10">
                     <AvatarFallback>
                       <Bot className="h-5 w-5 text-white" />
@@ -832,6 +832,7 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
           <div className="p-3 border-t border-white/[0.06] bg-slate-900/80 backdrop-blur-sm">
             <div className="flex gap-2.5 items-end">
               <Input
+                data-testid="chat-input"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
@@ -840,13 +841,14 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
                 disabled={isLoading}
               />
               <Button
+                data-testid="send-button"
                 onClick={() => handleSend()}
                 disabled={isLoading || !input.trim()}
                 size="icon"
                 className="h-[42px] w-[42px] rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 text-white hover:from-blue-400 hover:to-blue-500 disabled:from-slate-700 disabled:to-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed transition-all duration-200 shadow-lg shadow-blue-900/30 active:scale-95"
               >
                 {isLoading ? (
-                  <Loader2 className="w-4.5 h-4.5 animate-spin" />
+                  <Loader2 data-testid="loader-icon" className="w-4.5 h-4.5 animate-spin" />
                 ) : (
                   <Send className="w-4.5 h-4.5" />
                 )}
