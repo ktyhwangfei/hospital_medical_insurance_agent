@@ -342,6 +342,7 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
   const [streamingRequest, setStreamingRequest] = useState<ChatRequest | null>(null)
   const [streamEnabled, setStreamEnabled] = useState(false)
   const scrollBottomRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
   const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prefilledRef = useRef<string | null>(null)
 
@@ -426,7 +427,12 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
   })
 
   useEffect(() => {
-    scrollBottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (viewportRef.current) {
+      viewportRef.current.scrollTo({
+        top: viewportRef.current.scrollHeight,
+        behavior: 'smooth',
+      })
+    }
   }, [messages, streamingContent])
 
     const handleSend = async (text?: string) => {
@@ -682,7 +688,7 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
 
         <CardContent className="flex-1 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] min-h-0 p-0">
           <div className="flex min-h-0 flex-col border-r border-white/[0.06]">
-            <ScrollArea className="flex-1 px-6 pt-5 pb-3">
+            <ScrollArea className="flex-1 px-6 pt-5 pb-3" viewportRef={viewportRef}>
               {/* Intent/RAG stat bar */}
               <div className="mb-5 grid grid-cols-3 gap-3">
                 <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-3 shadow-sm">
