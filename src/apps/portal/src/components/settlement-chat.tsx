@@ -593,7 +593,7 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
         : '未检测'
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100vh-200px)]">
+    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100dvh-7.5rem)]">
       {/* 左侧：快捷问题 */}
       <Card className="lg:col-span-1 flex flex-col border-slate-200/70 shadow-sm">
         <CardHeader className="pb-3 px-5 pt-5">
