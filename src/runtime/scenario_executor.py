@@ -6,11 +6,14 @@ This implements the ScenarioExecutor protocol used by RuntimeOrchestrator.
 """
 
 import hashlib
+import logging
+from collections.abc import Callable
 
 from fastapi import HTTPException
 
+logger = logging.getLogger(__name__)
+
 from src.data_platform.storage.skill.ports import SkillStorage
-from src.data_platform.storage.tool.ports import ToolStorage
 from src.runtime.api.schemas import AgentResponse
 from src.runtime.api.streaming import ensure_knowledge_fields
 from src.runtime.clarification.service import missing_context_fields
@@ -184,24 +187,28 @@ class UnifiedScenarioExecutor:
     def __init__(
         self,
         skill_storage: SkillStorage,
-        tool_storage: ToolStorage,
         checkpoint_registry: dict[str, tuple],
     ) -> None:
         self._skill_storage = skill_storage
-        self._tool_storage = tool_storage
         self._checkpoint_registry = checkpoint_registry
 
     def can_handle(self, scenario: str) -> bool:
         return True
 
-    def execute(self, context: RuntimeContext) -> AgentResponse:
+    def execute(self, context: RuntimeContext, on_event: Callable[[str, dict], None] | None = None) -> AgentResponse:
+        """执行场景分发。
+
+        Args:
+            context: 运行时上下文
+            on_event: 流式事件回调，透传给技能执行引擎
+        """
         # Phase 1: Try @-mention skill execution
-        result = self._try_mention_execution(context)
+        result = self._try_mention_execution(context, on_event=on_event)
         if result is not None:
             return result
 
         # Phase 2: Try keyword-based skill matching
-        result = self._try_skill_matching(context)
+        result = self._try_skill_matching(context, on_event=on_event)
         if result is not None:
             return result
 
@@ -220,8 +227,17 @@ class UnifiedScenarioExecutor:
             citations=[{'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in context.intent_citations],
         )
 
-    def _try_mention_execution(self, context: RuntimeContext) -> AgentResponse | None:
-        """Try executing a skill via @-mention."""
+    def _try_mention_execution(
+        self,
+        context: RuntimeContext,
+        on_event: Callable[[str, dict], None] | None = None,
+    ) -> AgentResponse | None:
+        """Try executing a skill via @-mention.
+
+        Args:
+            context: 运行时上下文
+            on_event: 流式事件回调，透传给技能执行引擎
+        """
         mention_result = parse_message(context.message)
         skill_ids = context.mentioned_skill_ids or mention_result.mentioned_skill_ids
 
@@ -254,14 +270,19 @@ class UnifiedScenarioExecutor:
             insurance_adapter=get_insurance_adapter(),
             his_adapter=get_his_adapter(),
             billing_adapter=get_billing_adapter(),
+            on_event=on_event,
         )
-        response = engine.execute_skill(skill, exec_context, self._tool_storage)
+        response = engine.execute_skill(skill, exec_context)
         response.audit["matched_skill"] = skill_id
         steps = [StepState(step_id=step_id, status="completed") for step_id in response.audit.get("steps", [])]
         _persist_workflow(exec_context.workflow_id, response.scenario, response.status, steps)
         return response
 
-    def _try_skill_matching(self, context: RuntimeContext) -> AgentResponse | None:
+    def _try_skill_matching(
+        self,
+        context: RuntimeContext,
+        on_event: Callable[[str, dict], None] | None = None,
+    ) -> AgentResponse | None:
         """Try matching and executing a skill based on intent keywords."""
         match = match_skill_by_intent(context.message, context.role, self._skill_storage)
         if not match:
@@ -287,8 +308,9 @@ class UnifiedScenarioExecutor:
             insurance_adapter=get_insurance_adapter(),
             his_adapter=get_his_adapter(),
             billing_adapter=get_billing_adapter(),
+            on_event=on_event,
         )
-        response = engine.execute_skill(skill, exec_context, self._tool_storage)
+        response = engine.execute_skill(skill, exec_context)
         response.audit["matched_skill"] = match.skill_id
         response.audit["matched_keywords"] = match.matched_keywords
         steps = [StepState(step_id=step_id, status="completed") for step_id in response.audit.get("steps", [])]
@@ -304,7 +326,7 @@ class UnifiedScenarioExecutor:
         if not is_allowed(context.role, context.intent):
             raise HTTPException(status_code=403, detail=error_detail('PERMISSION_DENIED', '角色无权访问该场景', {'event_type': 'permission_denied'}))
 
-        from src.runtime.langgraph.checkpoint import get_memory_checkpointer
+        from src.runtime.langgraph.checkpoint import get_checkpointer
         from src.runtime.langgraph.pre_discharge_qc import build_pre_discharge_qc_graph
         from src.runtime.langgraph.settlement_exception import build_settlement_exception_graph
 
@@ -313,8 +335,8 @@ class UnifiedScenarioExecutor:
             'pre_discharge_quality_control': build_pre_discharge_qc_graph,
         }
 
-        memory = get_memory_checkpointer()
-        graph = GRAPH_BUILDERS[context.intent](checkpointer=memory)
+        checkpointer = get_checkpointer()
+        graph = GRAPH_BUILDERS[context.intent](checkpointer=checkpointer)
         thread_id = context.workflow_id
         thread_config = {"configurable": {"thread_id": thread_id}}
 
@@ -352,6 +374,24 @@ class UnifiedScenarioExecutor:
         response.citations.extend(
             {'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in context.intent_citations
         )
+
+        # 记录 LangGraph 场景执行任务（非阻塞）
+        try:
+            from src.runtime.task_closure.service import create_task as _create_task
+            _create_task(
+                f"task-orch-{hashlib.md5(context.workflow_id.encode()).hexdigest()[:8]}",
+                "langgraph_execution",
+                f"LangGraph场景: {context.intent}",
+                context.role or "system",
+                context.workflow_id,
+                executor_type="langgraph",
+                input_data={"scenario": context.intent, "thread_id": thread_id, "patient_id": context.patient_id},
+                output_data={"state_keys": list(state.keys())} if state else {},
+                status="completed",
+            )
+        except Exception as e:
+            logger.warning(f"记录LangGraph执行任务失败 (非阻断): {e}")
+
         steps = [StepState(step_id=s, status="completed") for s in response.audit.get("steps", [])]
         _persist_workflow(context.workflow_id, response.scenario, response.status, steps)
         return response
