@@ -3,6 +3,7 @@ import {
   mockMcpServers,
   mockMcpStorageHealth,
   mockModelTestResult,
+  mockStreamingChatResponse,
 } from './mock-data'
 import type {
   AgentResponse,
@@ -195,9 +196,12 @@ function fallbackPatientContext(
   }
 }
 
-function emitFallbackChatStream(message: string, onEvent: (event: SseEvent) => void) {
-  onEvent({ event: 'final', data: fallbackAgentResponse(message) })
-  onEvent({ event: 'done', data: { fallback: true } })
+function emitFallbackChatStream(
+  message: string,
+  onEvent: (event: SseEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  return mockStreamingChatResponse(message, onEvent, signal)
 }
 
 function emitFallbackModelStream(onEvent: (event: SseEvent) => void) {
@@ -306,7 +310,7 @@ export async function sendChatStream(
         message: request.message,
         error: (err as Error).message,
       })
-      emitFallbackChatStream(request.message, onEvent)
+      await emitFallbackChatStream(request.message, onEvent, controller.signal)
       return
     }
 
