@@ -205,6 +205,154 @@ function emitFallbackModelStream(onEvent: (event: SseEvent) => void) {
   onEvent({ event: 'done', data: { fallback: true } })
 }
 
+// ── Internal helper: sleep with abort signal support ────────────
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timer)
+        reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+        return
+      }
+      const onAbort = () => {
+        clearTimeout(timer)
+        reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+  })
+}
+
+// ── Forward abort from one signal to an AbortController ────────
+function forwardAbortSignal(source: AbortSignal, target: AbortController): void {
+  if (source.aborted) {
+    target.abort(source.reason)
+    return
+  }
+  source.addEventListener('abort', () => target.abort(source.reason), { once: true })
+}
+
+/**
+ * sendChatStream — POST to /chat/stream with SSE streaming response.
+ *
+ * Refactored with:
+ *  - AbortController-based cancellation (return { cancel })
+ *  - Auto-retry on network errors (TypeError) with exponential backoff + jitter, max 3 attempts
+ *  - Retry count exposed in return value
+ *  - Optional external AbortSignal parameter for parent-driven cancellation
+ *  - Keeps existing mock fallback behavior when backend is unreachable after retries
+ */
+export async function sendChatStream(
+  request: ChatRequest,
+  onEvent: (event: SseEvent) => void,
+  signal?: AbortSignal
+): Promise<{ cancel: () => void; retryCount: number }> {
+  // Internal controller ensures cancel() always works, even without external signal
+  const controller = new AbortController()
+
+  // If an external signal is provided, forward its abort to our controller
+  if (signal) {
+    forwardAbortSignal(signal, controller)
+  }
+
+  const cancel = () => controller.abort()
+  const fetchUrl = `${API_PREFIX}/chat/stream`
+  let retryCount = 0
+  const maxRetries = 3
+
+  async function attempt(): Promise<void> {
+    // ── Check for pre-existing abort before starting ──
+    if (controller.signal.aborted) {
+      throw controller.signal.reason ?? new DOMException('Aborted', 'AbortError')
+    }
+
+    let response: Response
+
+    try {
+      response = await fetch(fetchUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      })
+    } catch (err: unknown) {
+      // Intentional cancellation — do not retry or fallback
+      if (controller.signal.aborted) throw err
+
+      // Network error (TypeError): retry with exponential backoff + jitter
+      if (err instanceof TypeError && retryCount < maxRetries) {
+        retryCount++
+        const delay =
+          Math.min(1000 * Math.pow(3, retryCount - 1), 10000) *
+          (0.8 + Math.random() * 0.4)
+        console.warn(
+          '[API] 网络请求失败，第 ' +
+            retryCount +
+            '/' +
+            maxRetries +
+            ' 次重试 (等待 ' +
+            Math.round(delay) +
+            'ms):',
+          { url: fetchUrl, message: request.message, error: (err as Error).message }
+        )
+        await sleepWithSignal(delay, controller.signal)
+        return attempt()
+      }
+
+      // Non-retryable error or retries exhausted → fallback to mock
+      console.warn('[API] 后端不可达，降级到 mock 模式:', {
+        url: fetchUrl,
+        message: request.message,
+        error: (err as Error).message,
+      })
+      emitFallbackChatStream(request.message, onEvent)
+      return
+    }
+
+    // ── HTTP error (4xx/5xx) — no retry, propagate ──
+    if (!response.ok) {
+      const apiError = await parseError(response)
+      console.error('[API] 后端返回非 2xx 状态:', {
+        status: apiError.status,
+        error_code: apiError.detail.error_code,
+        message: apiError.detail.message,
+      })
+      throw apiError
+    }
+
+    // ── Missing response body ──
+    if (!response.body) {
+      const msg = '浏览器不支持流式响应'
+      console.error('[API]', msg)
+      throw new Error(msg)
+    }
+
+    // ── Read the SSE stream ──
+    await readSseStream(response.body, onEvent)
+  }
+
+  try {
+    await attempt()
+  } catch (err: unknown) {
+    // Swallow intentional cancellation errors — caller explicitly called cancel()
+    if (
+      !controller.signal.aborted &&
+      err instanceof DOMException &&
+      err.name === 'AbortError'
+    ) {
+      // Edge case: abort happened between the signal check and the catch
+    }
+    if (controller.signal.aborted) {
+      // Silent cancellation — do not propagate
+      return { cancel, retryCount }
+    }
+    throw err
+  }
+
+  return { cancel, retryCount }
+}
+
 export async function sendChat(request: ChatRequest): Promise<AgentResponse> {
   try {
     return await requestJson<AgentResponse>('/chat', {
@@ -224,43 +372,6 @@ export async function sendChat(request: ChatRequest): Promise<AgentResponse> {
     console.warn('[API] 后端不可达，降级到 mock 模式:', { url: '/chat', message: request.message })
     return fallbackAgentResponse(request.message)
   }
-}
-
-export async function sendChatStream(
-  request: ChatRequest,
-  onEvent: (event: SseEvent) => void
-): Promise<void> {
-  let response: Response
-
-  try {
-    response = await fetch(`${API_PREFIX}/chat/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    })
-  } catch {
-    console.warn('[API] 后端不可达，降级到 mock 模式:', { url: `${API_PREFIX}/chat/stream`, message: request.message })
-    emitFallbackChatStream(request.message, onEvent)
-    return
-  }
-
-  if (!response.ok) {
-    const error = await parseError(response)
-    console.error('[API] 后端返回非 2xx 状态:', {
-      status: error.status,
-      error_code: error.detail.error_code,
-      message: error.detail.message,
-    })
-    throw error
-  }
-
-  if (!response.body) {
-    const msg = '浏览器不支持流式响应'
-    console.error('[API]', msg)
-    throw new Error(msg)
-  }
-
-  await readSseStream(response.body, onEvent)
 }
 
 export async function testModel(request: ModelTestRequest): Promise<ModelTestResponse> {
@@ -449,6 +560,17 @@ export function initialMcpServers(): McpServer[] {
   return mockMcpServers.map((server) => ({ ...server }))
 }
 
+/**
+ * readSseStream — Read an SSE stream from a ReadableStream<Uint8Array>.
+ *
+ * Added keepalive support:
+ *  - After 15 seconds of no data, emits a synthetic `stream:step` event
+ *    with { step: 'keepalive', message: '等待服务器响应...' }
+ *  - The 15s timer resets each time new data arrives
+ *  - Timer is cleaned up when the stream ends
+ *
+ * Signature unchanged for backward compatibility.
+ */
 export async function readSseStream(
   body: ReadableStream<Uint8Array>,
   onEvent: (event: SseEvent) => void
@@ -458,9 +580,42 @@ export async function readSseStream(
   let buffer = ''
   let shouldStop = false
 
+  // ── Keepalive timer ──────────────────────────────────────────
+  let keepaliveTimer: ReturnType<typeof setTimeout> | null = null
+
+  function startKeepalive(): void {
+    clearKeepalive()
+    keepaliveTimer = setTimeout(() => {
+      // Emit synthetic keepalive event to keep the connection alive
+      onEvent({
+        event: 'stream:step',
+        data: { step: 'keepalive', message: '等待服务器响应...' },
+      })
+      // Re-arm timer for next keepalive interval
+      startKeepalive()
+    }, 15000)
+  }
+
+  function clearKeepalive(): void {
+    if (keepaliveTimer !== null) {
+      clearTimeout(keepaliveTimer)
+      keepaliveTimer = null
+    }
+  }
+
+  function resetKeepalive(): void {
+    startKeepalive()
+  }
+
+  // Start keepalive monitoring
+  resetKeepalive()
+
   try {
     while (!shouldStop) {
       const { done, value } = await reader.read()
+
+      // Data arrived → reset keepalive timer
+      resetKeepalive()
 
       if (done) {
         buffer += decoder.decode()
@@ -497,6 +652,7 @@ export async function readSseStream(
       await reader.cancel().catch(() => undefined)
     }
   } finally {
+    clearKeepalive()
     reader.releaseLock()
   }
 }
