@@ -214,11 +214,11 @@ class UnifiedScenarioExecutor:
 
         # Phase 3: Try LangGraph / business scenario dispatch
         if context.intent in ('settlement_exception_guidance', 'pre_discharge_quality_control'):
-            return self._execute_scenario_langgraph(context)
+            return self._execute_scenario_langgraph(context, on_event=on_event)
 
         # Phase 4: MCP tool invocation
         if context.intent == 'mcp_tool_invocation' or _looks_like_mcp_request(context.message):
-            return self._execute_mcp(context)
+            return self._execute_mcp(context, on_event=on_event)
 
         # Fallback
         return AgentResponse(
@@ -226,6 +226,18 @@ class UnifiedScenarioExecutor:
             uncertainties=[f'未识别的意图: {context.message}'],
             citations=[{'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in context.intent_citations],
         )
+
+    def execute_streaming(self, context: RuntimeContext, on_event: Callable[[str, dict], None]) -> AgentResponse:
+        """流式执行入口，强制要求 on_event 回调。
+
+        Args:
+            context: 运行时上下文
+            on_event: 流式事件回调，必需参数
+
+        Returns:
+            AgentResponse: 执行结果
+        """
+        return self.execute(context, on_event=on_event)
 
     def _try_mention_execution(
         self,
@@ -317,8 +329,17 @@ class UnifiedScenarioExecutor:
         _persist_workflow(exec_context.workflow_id, response.scenario, response.status, steps)
         return response
 
-    def _execute_scenario_langgraph(self, context: RuntimeContext) -> AgentResponse:
-        """Execute a known business scenario via LangGraph."""
+    def _execute_scenario_langgraph(
+        self,
+        context: RuntimeContext,
+        on_event: Callable[[str, dict], None] | None = None,
+    ) -> AgentResponse:
+        """Execute a known business scenario via LangGraph.
+
+        Args:
+            context: 运行时上下文
+            on_event: 流式事件回调，透传给 StreamingLangGraph 用于逐节点事件推送
+        """
         missing = missing_context_fields(context.patient_id, context.encounter_id)
         if missing:
             return AgentResponse(status='needs_clarification', missing_fields=missing)
@@ -329,6 +350,7 @@ class UnifiedScenarioExecutor:
         from src.runtime.langgraph.checkpoint import get_checkpointer
         from src.runtime.langgraph.pre_discharge_qc import build_pre_discharge_qc_graph
         from src.runtime.langgraph.settlement_exception import build_settlement_exception_graph
+        from src.runtime.langgraph.streaming import StreamingLangGraph
 
         GRAPH_BUILDERS = {
             'settlement_exception_guidance': build_settlement_exception_graph,
@@ -341,9 +363,15 @@ class UnifiedScenarioExecutor:
         thread_config = {"configurable": {"thread_id": thread_id}}
 
         initial = _build_langgraph_initial(context.intent, context)
-        state = graph.invoke(initial, thread_config)
+        streaming_graph = StreamingLangGraph(
+            graph=graph,
+            graph_builder_fn=GRAPH_BUILDERS[context.intent],
+            scenario=context.intent,
+            on_event=on_event,
+        )
+        state = streaming_graph.invoke(initial, thread_config)
 
-        snapshot = graph.get_state(thread_config)
+        snapshot = streaming_graph.graph.get_state(thread_config)
         if snapshot.next:
             task_id = f"task-orch-{hashlib.md5(thread_id.encode()).hexdigest()[:8]}"
             self._checkpoint_registry[task_id] = (graph, thread_id)
@@ -396,8 +424,17 @@ class UnifiedScenarioExecutor:
         _persist_workflow(context.workflow_id, response.scenario, response.status, steps)
         return response
 
-    def _execute_mcp(self, context: RuntimeContext) -> AgentResponse:
-        """Execute MCP tool invocation."""
+    def _execute_mcp(
+        self,
+        context: RuntimeContext,
+        on_event: Callable[[str, dict], None] | None = None,
+    ) -> AgentResponse:
+        """Execute MCP tool invocation.
+
+        Args:
+            context: 运行时上下文
+            on_event: 流式事件回调（预留，MCP流式事件将在后续版本接入）
+        """
         if not is_allowed(context.role, 'mcp_tool_invocation'):
             raise HTTPException(status_code=403, detail=error_detail('PERMISSION_DENIED', '角色无权访问该场景', {'event_type': 'permission_denied'}))
 
