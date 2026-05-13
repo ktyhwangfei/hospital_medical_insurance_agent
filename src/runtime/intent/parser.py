@@ -48,14 +48,32 @@ def _parse_llm_json(content: str, raw_message: str) -> IntentResult:
 
 
 def _parse_via_keywords(message: str) -> IntentResult:
-    if '结算失败' in message or '医保结算' in message:
-        intent = 'settlement_exception_guidance'
-    elif '出院前' in message or '医保风险' in message:
-        intent = 'pre_discharge_quality_control'
-    else:
-        intent = 'unknown'
+    entries = get_intent_registry()
+    best_entry = None
+    best_score = 0
+    for entry in entries:
+        if entry.status != 'active' and entry.intent_id != 'unknown':
+            continue
+        if not entry.keywords:
+            continue
+        score = 0
+        for kw in entry.keywords:
+            if kw in message:
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_entry = entry
+
+    if best_entry and best_score > 0:
+        return IntentResult(
+            intent=best_entry.intent_id,
+            confidence=0.5,
+            entities={},
+            citations=['关键词匹配降级'],
+            raw_message=message,
+        )
     return IntentResult(
-        intent=intent,
+        intent='unknown',
         confidence=0.5,
         entities={},
         citations=['关键词匹配降级'],

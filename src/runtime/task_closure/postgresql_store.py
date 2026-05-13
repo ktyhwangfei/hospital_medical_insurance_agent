@@ -1,11 +1,12 @@
+import json
 from datetime import UTC, datetime
 from typing import Any
 
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+def _now() -> datetime:
+    return datetime.now(UTC)
 
 
 def _row_to_task(row: dict[str, Any]) -> dict[str, Any]:
@@ -23,9 +24,21 @@ def _row_to_task(row: dict[str, Any]) -> dict[str, Any]:
     if row.get("confirmed_by") is not None:
         task["confirmed_by"] = row["confirmed_by"]
     if row.get("confirmed_at") is not None:
-        task["confirmed_at"] = row["confirmed_at"]
+        task["confirmed_at"] = row["confirmed_at"].isoformat() if hasattr(row["confirmed_at"], "isoformat") else row["confirmed_at"]
     if row.get("reason") is not None:
         task["reason"] = row["reason"]
+    if row.get("executor_type") is not None:
+        task["executor_type"] = row["executor_type"]
+    if row.get("input_data") is not None:
+        task["input_data"] = row["input_data"]
+    if row.get("output_data") is not None:
+        task["output_data"] = row["output_data"]
+    if row.get("step_id") is not None:
+        task["step_id"] = row["step_id"]
+    if row.get("error_message") is not None:
+        task["error_message"] = row["error_message"]
+    if row.get("duration_ms") is not None:
+        task["duration_ms"] = row["duration_ms"]
     if row.get("updated_at") is not None:
         task["updated_at"] = row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else row["updated_at"]
     else:
@@ -44,11 +57,17 @@ class PostgreSQLTaskStore:
     def __init__(self, client: PostgreSQLClient):
         self._client = client
 
+    def _serialize(self, value: Any) -> Any:
+        """Convert dict values to JSON strings for PostgreSQL JSONB columns."""
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False, default=str)
+        return value
+
     def save_task(self, task: dict[str, Any]) -> dict[str, Any]:
         """Insert or update a task record."""
         now = _now()
-        sql = """insert into tasks (task_id, task_type, status, description, responsible_role, workflow_id, confirmed_by, confirmed_at, reason, created_at, updated_at)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        sql = """insert into tasks (task_id, task_type, status, description, responsible_role, workflow_id, confirmed_by, confirmed_at, reason, executor_type, input_data, output_data, step_id, error_message, duration_ms, created_at, updated_at)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 on conflict (task_id) do update set
     task_type = excluded.task_type,
     status = excluded.status,
@@ -58,6 +77,12 @@ on conflict (task_id) do update set
     confirmed_by = excluded.confirmed_by,
     confirmed_at = excluded.confirmed_at,
     reason = excluded.reason,
+    executor_type = excluded.executor_type,
+    input_data = excluded.input_data,
+    output_data = excluded.output_data,
+    step_id = excluded.step_id,
+    error_message = excluded.error_message,
+    duration_ms = excluded.duration_ms,
     updated_at = excluded.updated_at"""
         try:
             self._client.execute(
@@ -72,6 +97,12 @@ on conflict (task_id) do update set
                     task.get("confirmed_by"),
                     task.get("confirmed_at"),
                     task.get("reason"),
+                    task.get("executor_type"),
+                    self._serialize(task.get("input_data")),
+                    self._serialize(task.get("output_data")),
+                    task.get("step_id"),
+                    task.get("error_message"),
+                    task.get("duration_ms"),
                     now,
                     now,
                 ),
@@ -97,17 +128,36 @@ on conflict (task_id) do update set
         description: str,
         responsible_role: str,
         workflow_id: str | None = None,
+        executor_type: str | None = None,
+        input_data: dict | None = None,
+        output_data: dict | None = None,
+        step_id: str | None = None,
+        error_message: str | None = None,
+        duration_ms: float | None = None,
+        status: str = "pending",
     ) -> dict[str, Any]:
         """Create a new pending task."""
-        task = {
+        task: dict[str, Any] = {
             "task_id": task_id,
             "task_type": task_type,
-            "status": "pending",
+            "status": status,
             "description": description,
             "responsible_role": responsible_role,
             "workflow_id": workflow_id,
             "updated_at": _now(),
         }
+        if executor_type is not None:
+            task["executor_type"] = executor_type
+        if input_data is not None:
+            task["input_data"] = input_data
+        if output_data is not None:
+            task["output_data"] = output_data
+        if step_id is not None:
+            task["step_id"] = step_id
+        if error_message is not None:
+            task["error_message"] = error_message
+        if duration_ms is not None:
+            task["duration_ms"] = duration_ms
         return self.save_task(task)
 
     def update_task_confirmation(

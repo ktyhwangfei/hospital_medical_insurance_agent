@@ -2,6 +2,8 @@ from src.runtime.runtime_state.store import runtime_state_store
 from src.security.audit.in_memory import audit_log
 
 
+# Deprecated: use GatewayAuditMiddleware for automatic request auditing.
+# This function remains for workflow-level audit events (used by _persist_security_workflow).
 def record_audit_event(event_type: str, workflow_id: str | None = None, step_id: str | None = None, payload: dict | None = None) -> dict:
     return audit_log.record(event_type, workflow_id, step_id, payload)
 

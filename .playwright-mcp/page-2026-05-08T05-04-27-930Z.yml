@@ -1,0 +1,74 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - generic [ref=e7]: 医
+          - generic [ref=e8]:
+            - heading "医保AI导办与运营协同平台" [level=1] [ref=e9]
+            - paragraph [ref=e10]: 原型演示系统 v1.0
+        - generic [ref=e11]:
+          - generic [ref=e12]:
+            - img
+            - text: 未检测
+          - combobox [ref=e13]:
+            - generic [ref=e15]:
+              - generic [ref=e16]: 💰
+              - generic [ref=e17]: 收费员
+            - img: ▼
+          - textbox [ref=e18]: cashier
+          - generic [ref=e19]: "当前角色: 收费员"
+    - main [ref=e20]:
+      - generic [ref=e21]:
+        - tablist [ref=e22]:
+          - tab "AI导办对话" [selected] [ref=e23]:
+            - img
+            - text: AI导办对话
+          - tab "结算异常导办" [ref=e24]:
+            - img
+            - text: 结算异常导办
+          - tab "出院前联合质控" [ref=e25]:
+            - img
+            - text: 出院前联合质控
+          - tab "运营驾驶舱" [ref=e26]:
+            - img
+            - text: 运营驾驶舱
+          - tab "MCP管理" [ref=e27]:
+            - img
+            - text: MCP管理
+          - tab "知识浏览" [ref=e28]:
+            - img
+            - text: 知识浏览
+          - tab "模型测试" [ref=e29]:
+            - img
+            - text: 模型测试
+        - tabpanel [ref=e30]:
+          - generic [ref=e31]:
+            - generic [ref=e32]:
+              - generic [ref=e34]: 💡 快捷提问
+              - generic [ref=e35]:
+                - button "为什么这个患者结算失败" [ref=e36]
+                - button "这个患者出院前还有哪些风险" [ref=e37]
+                - button "本月哪个科室DRG亏损最多" [ref=e38]
+                - generic [ref=e39]:
+                  - paragraph [ref=e40]: 当前角色视图
+                  - generic [ref=e41]: 💰 收费员视图
+            - generic [ref=e42]:
+              - generic [ref=e44]:
+                - img [ref=e47]
+                - generic [ref=e50]:
+                  - generic [ref=e51]: 医保AI导办助手
+                  - paragraph [ref=e52]: 在线 • 响应时间 <1秒
+                - generic [ref=e53]:
+                  - img
+                  - text: 未检测
+              - generic [ref=e54]:
+                - generic [ref=e57]:
+                  - img [ref=e60]
+                  - paragraph [ref=e64]: 您好！我是医保AI导办助手 🤖 我可以帮您： • 查询医保结算异常原因 • 解释医保错误码 • 生成出院前质控清单 • 分析DRG/DIP盈亏情况 • 提供处理步骤导办 请告诉我您需要什么帮助？
+                - generic [ref=e66]:
+                  - textbox "输入您的问题..." [ref=e67]
+                  - button [ref=e68]:
+                    - img
+  - button "Open Next.js Dev Tools" [ref=e74] [cursor=pointer]:
+    - img [ref=e75]

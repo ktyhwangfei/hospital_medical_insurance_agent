@@ -1,0 +1,9 @@
+Task 9 — _json_safe_deep: ALL PASS
+- date → isoformat string
+- datetime → isoformat string
+- Decimal → float
+- bytes → utf-8 decoded
+- set → list
+- dict → recursive
+- list → recursive
+- None/int/str/float/bool preserved

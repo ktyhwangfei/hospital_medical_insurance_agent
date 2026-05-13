@@ -67,12 +67,11 @@ runtime/api (FastAPI 路由)
 - **高风险动作**: 必须拦截转为 `waiting_human_confirmation`，由人工在既有业务系统执行
 - **来源可追溯**: AI 输出必须携带 `citations` 或声明 `uncertainties`，禁止无来源的确定性结论
 - **模型调用统一**: 所有 LLM 调用必须通过 `model_service/gateway`，禁止直接调用 HTTP 接口；异常通过 `model_service/exceptions` 分类处理
+- **领域语言统一**: 所有领域模型（类名、变量名、方法名）的命名必须遵循 `src/domain/AGENTS.md` 中的通用语言字典，禁止同一概念在代码中有多个命名；新增领域概念必须同步更新该文档
 
 ### API
 
 路由前缀: `/api/v1/medical-insurance-ai-agent`（除 `/health` 外）。完整接口清单见 `docs/steering/接口设计文档.md`。
-
-
 
 前端应用目录: `src/apps/` 下三个独立 Next.js 16 应用：
 - **portal/** — 业务应用入口，路由：`/`（Chat 导办）、`/settlement`（结算异常）、`/qc`（出院前质控）、`/dashboard`（运营看板）
@@ -88,6 +87,7 @@ runtime/api (FastAPI 路由)
 - **类型安全**: 禁止裸 `dict` 作为返回类型，使用 Pydantic BaseModel；API 响应统一使用 `AgentResponse` 结构
 - **异常标准**: `{ error_code, message, audit_event }`，通过 `shared.schemas.responses.error_detail()` 生成
 - **文件命名**: `snake_case`（后端）；类名 `PascalCase`；常量 `UPPER_SNAKE_CASE`
+- **领域建模**: 所有领域模型必须遵循 `src/domain/AGENTS.md` 的 DDD 战术分类（Entity / Value Object / Aggregate Root / Domain Service），严格按照对应的代码模式（frozen dataclass / Protocol / Pydantic BaseModel）；新增领域概念必须同步更新通用语言字典
 - **中文注释**: 核心流程代码添加中文注释
 - **模型调用**: 通过 `model_service.gateway.ModelGateway` 统一调用，使用 `model_type` + `scene` 路由到具体模型
 - **存储多态**: 所有存储（skill/tool/task/workflow/audit）遵循 ports/adapter 模式，默认 PostgreSQL，可通过 `USE_MEMORY_STORAGE=1` 回退到内存实现

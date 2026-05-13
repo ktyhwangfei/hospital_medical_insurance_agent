@@ -27,4 +27,5 @@ def build_runtime_context(request: ChatRequest, intent_result: IntentResult) -> 
         intent_entities=intent_result.entities,
         intent_citations=intent_result.citations,
         requested_at=requested_at,
+        mentioned_skill_ids=request.mentioned_skill_ids,
     )

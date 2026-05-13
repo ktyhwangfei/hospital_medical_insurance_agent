@@ -1,0 +1,5 @@
+Task 9 — None not cached (penetration protection): PASS
+- fetch_fn returns None → result is None
+- _safe_set is NOT called (cache.get_json("test:none") returns None)
+- _misses is incremented
+- No KeyError or exception

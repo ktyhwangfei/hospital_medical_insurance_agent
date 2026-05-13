@@ -19,3 +19,5 @@ class WorkflowInstance(BaseModel):
     audit_refs: list[str] = Field(default_factory=list)
     knowledge_events: list[dict] = Field(default_factory=list)
     knowledge_degradation_reasons: list[str] = Field(default_factory=list)
+    session_id: str | None = None
+    patient_id: str | None = None

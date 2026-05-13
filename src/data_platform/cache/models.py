@@ -28,3 +28,4 @@ class RateLimitResult(BaseModel):
     allowed: bool
     current_count: int
     limit: int
+    window_seconds: int = 0

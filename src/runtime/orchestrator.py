@@ -26,7 +26,6 @@ Architecture notes:
 from collections.abc import Callable
 from typing import Protocol
 
-from src.data_platform.storage.tool.ports import ToolStorage
 from src.domain.skill.models import Skill
 from src.runtime.api.schemas import AgentResponse, ChatRequest
 from src.runtime.context.models import RuntimeContext
@@ -81,14 +80,12 @@ class SkillExecutor(Protocol):
         self,
         skill: Skill,
         context: RuntimeContext,
-        tool_storage: ToolStorage,
     ) -> AgentResponse:
         """Execute a skill within the given runtime context.
 
         Args:
             skill: The skill definition (steps, allowed tools, owner).
             context: Runtime context with patient, encounter, and user info.
-            tool_storage: Storage backend for resolving tool references.
 
         Returns:
             Structured AgentResponse with step results and audit trail.
@@ -120,7 +117,6 @@ class RuntimeOrchestrator:
             scenario_executor=my_scenario_executor,
             skill_executor=my_skill_executor,
             authorization_checker=is_allowed,
-            tool_storage=_tool_storage,
         )
         response = orchestrator.execute_request(chat_request)
     """
@@ -132,14 +128,12 @@ class RuntimeOrchestrator:
         scenario_executor: ScenarioExecutor,
         skill_executor: SkillExecutor,
         authorization_checker: Callable[[str, str], bool] | None = None,
-        tool_storage: ToolStorage | None = None,
     ) -> None:
         self._intent_parser = intent_parser
         self._security_checker = security_checker
         self._scenario_executor = scenario_executor
         self._skill_executor = skill_executor
         self._authorization_checker = authorization_checker
-        self._tool_storage = tool_storage
 
     def execute_request(self, request: ChatRequest) -> AgentResponse:
         """Execute a chat request through the full orchestration lifecycle.

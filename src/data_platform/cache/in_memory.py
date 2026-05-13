@@ -27,6 +27,21 @@ class InMemoryCacheClient:
         self._purge_expired_key(key)
         return key in self._values
 
+    def delete_pattern(self, prefix: str) -> int:
+        """Delete all keys starting with the given prefix.
+
+        Performs expired key purge on each candidate before deleting.
+        Returns count of deleted keys.
+        """
+        keys_to_delete = [k for k in self._values if k.startswith(prefix)]
+        for key in keys_to_delete:
+            self._purge_expired_key(key)
+        # Re-check which keys still exist after purge
+        keys_to_delete = [k for k in keys_to_delete if k in self._values]
+        for key in keys_to_delete:
+            del self._values[key]
+        return len(keys_to_delete)
+
     def health(self) -> CacheHealth:
         return CacheHealth(status=CacheHealthStatus.HEALTHY, backend=CacheBackend.IN_MEMORY, available=True, details={"backend": "in_memory"})
 

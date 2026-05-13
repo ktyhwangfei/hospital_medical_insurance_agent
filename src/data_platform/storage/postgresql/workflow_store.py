@@ -40,6 +40,8 @@ def _row_to_workflow(row: dict[str, Any]) -> WorkflowInstance:
         audit_refs=audit_refs,
         knowledge_events=knowledge_events,
         knowledge_degradation_reasons=knowledge_degradation_reasons,
+        session_id=row.get("session_id"),
+        patient_id=row.get("patient_id"),
     )
 
 
@@ -49,10 +51,12 @@ create table if not exists workflows (
     scenario varchar(64) not null,
     status varchar(32) not null,
     current_step varchar(128),
-    steps json not null default '[]',
-    audit_refs json not null default '[]',
-    knowledge_events json not null default '[]',
-    knowledge_degradation_reasons json not null default '[]',
+    steps jsonb not null default '[]'::jsonb,
+    audit_refs jsonb not null default '[]'::jsonb,
+    knowledge_events jsonb not null default '[]'::jsonb,
+    knowledge_degradation_reasons jsonb not null default '[]'::jsonb,
+    session_id varchar(128),
+    patient_id varchar(64),
     created_at timestamptz not null default current_timestamp,
     updated_at timestamptz not null default current_timestamp
 )
@@ -67,7 +71,7 @@ class PostgreSQLWorkflowStore:
 
     def ensure_tables(self) -> None:
         """Create the workflows table if it does not exist."""
-        self._client.execute("create table if not exists workflows (workflow_id varchar(128) primary key, scenario varchar(64) not null, status varchar(32) not null, current_step varchar(128), steps json not null default '[]', audit_refs json not null default '[]', knowledge_events json not null default '[]', knowledge_degradation_reasons json not null default '[]', created_at timestamptz not null default current_timestamp, updated_at timestamptz not null default current_timestamp)")
+        self._client.execute("create table if not exists workflows (workflow_id varchar(128) primary key, scenario varchar(64) not null, status varchar(32) not null, current_step varchar(128), steps jsonb not null default '[]'::jsonb, audit_refs jsonb not null default '[]'::jsonb, knowledge_events jsonb not null default '[]'::jsonb, knowledge_degradation_reasons jsonb not null default '[]'::jsonb, session_id varchar(128), patient_id varchar(64), created_at timestamptz not null default current_timestamp, updated_at timestamptz not null default current_timestamp)")
 
     def save_workflow(self, workflow: WorkflowInstance) -> WorkflowInstance:
         """Insert or update a workflow."""
@@ -77,8 +81,8 @@ class PostgreSQLWorkflowStore:
         knowledge_degradation_reasons_json = json.dumps(workflow.knowledge_degradation_reasons, ensure_ascii=False, sort_keys=True)
         now = _now()
 
-        sql = """insert into workflows (workflow_id, scenario, status, current_step, steps, audit_refs, knowledge_events, knowledge_degradation_reasons, created_at, updated_at)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        sql = """insert into workflows (workflow_id, scenario, status, current_step, steps, audit_refs, knowledge_events, knowledge_degradation_reasons, session_id, patient_id, created_at, updated_at)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 on conflict (workflow_id) do update set
     scenario = excluded.scenario,
     status = excluded.status,
@@ -87,6 +91,8 @@ on conflict (workflow_id) do update set
     audit_refs = excluded.audit_refs,
     knowledge_events = excluded.knowledge_events,
     knowledge_degradation_reasons = excluded.knowledge_degradation_reasons,
+    session_id = excluded.session_id,
+    patient_id = excluded.patient_id,
     updated_at = excluded.updated_at"""
         try:
             self._client.execute(
@@ -100,6 +106,8 @@ on conflict (workflow_id) do update set
                     audit_refs_json,
                     knowledge_events_json,
                     knowledge_degradation_reasons_json,
+                    workflow.session_id,
+                    workflow.patient_id,
                     now,
                     now,
                 ),

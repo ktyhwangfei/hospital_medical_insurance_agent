@@ -1,0 +1,86 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - img [ref=e6]
+        - generic [ref=e10]:
+          - heading "医保AI导办与运营协同平台" [level=1] [ref=e11]
+          - paragraph [ref=e12]: v1.0
+      - generic [ref=e13]:
+        - generic [ref=e14]:
+          - img
+          - text: 未检测
+        - combobox [ref=e15]:
+          - generic [ref=e17]:
+            - generic [ref=e18]: 💰
+            - generic [ref=e19]: 收费员
+          - img: ▼
+        - textbox [ref=e20]: cashier
+        - generic [ref=e21]: 收费员
+    - generic [ref=e22]:
+      - complementary [ref=e23]:
+        - generic [ref=e24]:
+          - generic [ref=e25]:
+            - generic [ref=e26]: 业务应用
+            - button "AI导办对话" [ref=e27]:
+              - img [ref=e28]
+              - generic [ref=e30]: AI导办对话
+            - button "结算异常导办" [active] [ref=e31]:
+              - img [ref=e32]
+              - generic [ref=e34]: 结算异常导办
+            - button "出院前联合质控" [ref=e35]:
+              - img [ref=e36]
+              - generic [ref=e40]: 出院前联合质控
+            - button "运营驾驶舱" [ref=e41]:
+              - img [ref=e42]
+              - generic [ref=e44]: 运营驾驶舱
+          - generic [ref=e45]:
+            - generic [ref=e46]: 平台管理
+            - button "MCP管理" [ref=e47]:
+              - img [ref=e48]
+              - generic [ref=e51]: MCP管理
+            - button "知识浏览" [ref=e52]:
+              - img [ref=e53]
+              - generic [ref=e55]: 知识浏览
+            - button "模型测试" [ref=e56]:
+              - img [ref=e57]
+              - generic [ref=e59]: 模型测试
+        - button "收起菜单" [ref=e61]:
+          - img [ref=e62]
+          - generic [ref=e64]: 收起菜单
+      - main [ref=e65]:
+        - generic [ref=e123]:
+          - generic [ref=e124]:
+            - heading "医保结算异常导办" [level=2] [ref=e125]
+            - generic [ref=e126]: 3个异常待处理
+          - generic [ref=e127]:
+            - generic [ref=e129]:
+              - generic [ref=e130]:
+                - generic [ref=e131]:
+                  - heading "张三" [level=3] [ref=e132]
+                  - generic [ref=e133]: 高优先级
+                  - generic [ref=e134]: 待处理
+                - paragraph [ref=e135]: "错误码: ERR_001"
+                - paragraph [ref=e136]: 患者待遇资格校验不通过
+              - button "查看处理步骤" [ref=e137]
+            - generic [ref=e139]:
+              - generic [ref=e140]:
+                - generic [ref=e141]:
+                  - heading "李四" [level=3] [ref=e142]
+                  - generic [ref=e143]: 中优先级
+                  - generic [ref=e144]: 处理中
+                - paragraph [ref=e145]: "错误码: ERR_002"
+                - paragraph [ref=e146]: 诊疗项目目录对码错误
+              - button "查看处理步骤" [ref=e147]
+            - generic [ref=e149]:
+              - generic [ref=e150]:
+                - generic [ref=e151]:
+                  - heading "王五" [level=3] [ref=e152]
+                  - generic [ref=e153]: 高优先级
+                  - generic [ref=e154]: 待处理
+                - paragraph [ref=e155]: "错误码: ERR_003"
+                - paragraph [ref=e156]: DRG分组结果与费用不匹配
+              - button "查看处理步骤" [ref=e157]
+  - button "Open Next.js Dev Tools" [ref=e118] [cursor=pointer]:
+    - img [ref=e119]
+  - alert [ref=e122]
