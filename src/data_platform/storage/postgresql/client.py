@@ -10,6 +10,8 @@ class PostgreSQLClient:
     as default connection string.
     """
 
+    _CONNECT_TIMEOUT = int(os.environ.get("POSTGRES_CONNECT_TIMEOUT", "5"))
+
     def __init__(self, database_url: str | None = None):
         self._database_url = database_url or os.environ.get("DATABASE_URL")
         self._conn = None
@@ -22,18 +24,29 @@ class PostgreSQLClient:
             raise RuntimeError(msg)
         import psycopg
 
-        self._conn = psycopg.connect(self._database_url, autocommit=False)
+        print(f"[STARTUP] PostgreSQLClient: 正在连接 {self._database_url} (超时={self._CONNECT_TIMEOUT}s)", flush=True)
+        try:
+            self._conn = psycopg.connect(
+                self._database_url,
+                autocommit=True,
+                connect_timeout=self._CONNECT_TIMEOUT,
+            )
+            print("[STARTUP] PostgreSQLClient: 连接成功", flush=True)
+        except psycopg.OperationalError as e:
+            print(f"[STARTUP] PostgreSQLClient: 连接失败 (超时={self._CONNECT_TIMEOUT}s) — {e}", flush=True)
+            raise
 
     @contextmanager
     def transaction(self):
         """Transaction context manager. Commits on success, rolls back on error."""
         self._ensure_connected()
+        self._conn.execute("BEGIN")
         try:
             yield self._conn
-            self._conn.commit()
+            self._conn.execute("COMMIT")
         except BaseException:
             if self._conn is not None:
-                self._conn.rollback()
+                self._conn.execute("ROLLBACK")
             raise
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:

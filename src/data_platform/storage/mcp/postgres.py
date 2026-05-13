@@ -7,7 +7,7 @@ from src.knowledge_extension.mcp_registry.models import McpCapability, McpServer
 
 def mcp_schema_statements() -> list[SqlStatement]:
     return [
-        SqlStatement(sql="create table if not exists mcp_servers (server_id varchar(128) primary key, payload_json text not null, status varchar(32) not null, transport varchar(32) not null, updated_at timestamp default current_timestamp)"),
+        SqlStatement(sql="create table if not exists mcp_servers (server_id varchar(128) primary key, name varchar(256), payload_json text not null, status varchar(32) not null, transport varchar(32) not null, updated_at timestamp default current_timestamp)"),
         SqlStatement(sql="create table if not exists mcp_capabilities (capability_id varchar(128) primary key, server_id varchar(128) not null, payload_json text not null, capability_type varchar(32) not null, risk_level varchar(32) not null, enabled boolean not null, updated_at timestamp default current_timestamp)"),
         SqlStatement(sql="create index if not exists idx_mcp_capabilities_server_id on mcp_capabilities (server_id)"),
     ]
@@ -47,6 +47,11 @@ class PostgresMcpStorage:
     def list_capabilities(self) -> list[McpCapability]:
         rows = self._executor.fetch_all(SqlStatement(sql="select payload_json from mcp_capabilities order by capability_id"))
         return [McpCapability(**self._dialect.json_load(row["payload_json"])) for row in rows]
+
+    def delete_capability(self, capability_id: str) -> bool:
+        sql = f"delete from mcp_capabilities where capability_id = {self._dialect.placeholder(1)}"
+        self._executor.execute(SqlStatement(sql=sql, params=(capability_id,)))
+        return True
 
     def health(self) -> McpStorageHealth:
         try:

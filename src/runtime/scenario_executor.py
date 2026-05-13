@@ -433,20 +433,62 @@ class UnifiedScenarioExecutor:
 
         Args:
             context: 运行时上下文
-            on_event: 流式事件回调（预留，MCP流式事件将在后续版本接入）
+            on_event: 流式事件回调，透传给 McpRuntimeIntegration 用于 MCP 调用事件推送
         """
         if not is_allowed(context.role, 'mcp_tool_invocation'):
             raise HTTPException(status_code=403, detail=error_detail('PERMISSION_DENIED', '角色无权访问该场景', {'event_type': 'permission_denied'}))
 
-        from src.runtime.orchestration.service import execute_plan
-        from src.runtime.planning.service import build_execution_plan
-
-        plan = build_execution_plan(context)
-        response = execute_plan(context, plan)
-        response.citations.extend(
-            {'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in context.intent_citations
+        from src.knowledge_extension.mcp_registry.models import (
+            McpCapabilitySelectionRequest,
+            McpCapabilityType,
+            McpRiskLevel,
         )
-        return response
+        from src.runtime.api.mcp_routes import _service as mcp_registry
+        from src.runtime.orchestration.mcp_integration import McpRuntimeIntegration
+
+        # 构建 MCP 集成层，透传 on_event 以实现流式事件推送
+        mcp_integration = McpRuntimeIntegration(
+            registry=mcp_registry,
+            on_event=on_event,
+        )
+
+        # 根据当前上下文选择 MCP 能力（emit tool_call / tool_result 事件）
+        selection = mcp_integration.select_for_step(
+            McpCapabilitySelectionRequest(
+                scenario=context.intent,
+                role=context.role,
+                capability_type=McpCapabilityType.TOOL,
+                max_risk_level=McpRiskLevel.LOW,
+            ),
+        )
+
+        # 构建响应
+        if selection.selected_capabilities:
+            return AgentResponse(
+                scenario="mcp_tool_invocation",
+                status="completed",
+                result={
+                    "selected_capabilities": [
+                        {"capability_id": c.capability_id, "name": c.name, "description": c.description}
+                        for c in selection.selected_capabilities
+                    ],
+                },
+                citations=[
+                    {'source_type': 'mcp_registry', 'source_id': c.capability_id, 'summary': c.description}
+                    for c in selection.selected_capabilities
+                ]
+                + [{'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in context.intent_citations],
+                uncertainties=selection.uncertainties,
+            )
+
+        return AgentResponse(
+            scenario="mcp_tool_invocation",
+            status="completed",
+            result={"message": "未找到匹配的 MCP 工具", "excluded": selection.excluded_capabilities},
+            uncertainties=selection.uncertainties
+            or ["未找到满足当前场景、角色、权限和风险约束的 MCP 能力"],
+            citations=[{'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in context.intent_citations],
+        )
 
 
 class _RequestShim:

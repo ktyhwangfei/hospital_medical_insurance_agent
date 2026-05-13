@@ -1,0 +1,48 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - img "OpenClaw" [ref=e6]
+    - generic [ref=e7]: OpenClaw
+    - generic [ref=e8]: 网关仪表盘
+  - generic [ref=e9]:
+    - generic [ref=e10]:
+      - generic [ref=e11]: WebSocket URL
+      - textbox "WebSocket URL" [ref=e12]:
+        - /placeholder: ws://127.0.0.1:18789
+        - text: ws://127.0.0.1:18789
+    - generic [ref=e13]:
+      - generic [ref=e14]: 网关令牌
+      - generic [ref=e15]:
+        - textbox "网关令牌 Toggle token visibility" [ref=e16]:
+          - /placeholder: OPENCLAW_GATEWAY_TOKEN (可选)
+        - button "Toggle token visibility" [ref=e17] [cursor=pointer]:
+          - img [ref=e18]
+    - generic [ref=e23]:
+      - generic [ref=e24]: 密码 (不存储)
+      - generic [ref=e25]:
+        - textbox "密码 (不存储) Toggle password visibility" [ref=e26]:
+          - /placeholder: 可选
+        - button "Toggle password visibility" [ref=e27] [cursor=pointer]:
+          - img [ref=e28]
+    - button "连接" [ref=e33] [cursor=pointer]
+  - generic [ref=e34]:
+    - generic [ref=e35]: 如何连接
+    - list [ref=e36]:
+      - listitem [ref=e37]:
+        - text: 在主机上启动网关：
+        - 'button "Copy command: openclaw gateway run" [ref=e38]':
+          - code [ref=e39]: openclaw gateway run
+          - button "Copy command" [ref=e40] [cursor=pointer]:
+            - generic [ref=e41]:
+              - img [ref=e43]
+              - img [ref=e47]
+      - listitem [ref=e49]:
+        - text: 获取带令牌的仪表盘 URL：
+        - 'button "Copy command: openclaw dashboard" [ref=e50]':
+          - code [ref=e51]: openclaw dashboard
+          - button "Copy command" [ref=e52] [cursor=pointer]:
+            - generic [ref=e53]:
+              - img [ref=e55]
+              - img [ref=e59]
+      - listitem [ref=e61]: 将 WebSocket URL 和令牌粘贴到上方，或直接打开带令牌的 URL。
+    - link "查看文档 →" [ref=e63] [cursor=pointer]:
+      - /url: https://docs.openclaw.ai/web/dashboard

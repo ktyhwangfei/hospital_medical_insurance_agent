@@ -27,6 +27,12 @@ class InMemoryMcpStorage:
     def list_capabilities(self) -> list[McpCapability]:
         return [self._capabilities[key].model_copy(deep=True) for key in sorted(self._capabilities)]
 
+    def delete_capability(self, capability_id: str) -> bool:
+        if capability_id in self._capabilities:
+            del self._capabilities[capability_id]
+            return True
+        return False
+
     def health(self) -> McpStorageHealth:
         return McpStorageHealth(
             status=McpStorageHealthStatus.HEALTHY,

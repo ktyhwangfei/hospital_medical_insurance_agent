@@ -1,0 +1,44 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - heading "医保 AI 导办智能体" [level=2] [ref=e4]
+      - paragraph [ref=e5]: Memory MVP 演示模式
+    - generic [ref=e6]:
+      - generic [ref=e7]: 当前角色
+      - combobox [ref=e8]:
+        - option "医保办" [selected]
+        - option "收费员"
+        - option "临床医生"
+        - option "病案室"
+        - option "信息科"
+    - generic [ref=e9]:
+      - generic [ref=e10]: 响应模式
+      - combobox [ref=e11]:
+        - option "流式模式" [selected]
+        - option "非流式模式"
+    - generic [ref=e12]:
+      - generic [ref=e13]: 患者 ID
+      - textbox "如 P001" [ref=e14]: P001
+    - generic [ref=e15]:
+      - generic [ref=e16]: 就诊 ID
+      - textbox "如 E001" [ref=e17]: E001
+    - generic [ref=e18]:
+      - heading "快捷场景" [level=4] [ref=e19]
+      - button "结算异常导办" [ref=e20] [cursor=pointer]
+      - button "出院前联合质控" [ref=e21] [cursor=pointer]
+      - button "高风险动作拦截" [ref=e22] [cursor=pointer]
+      - button "降级响应 (P002)" [ref=e23] [cursor=pointer]
+    - generic [ref=e24]:
+      - heading "模型服务测试" [level=4] [ref=e25]
+      - button "LLM 基础调用" [ref=e26] [cursor=pointer]
+      - button "LLM 业务问答" [ref=e27] [cursor=pointer]
+  - generic [ref=e28]:
+    - generic [ref=e29]:
+      - heading "医保智能导办工作台" [level=1] [ref=e30]
+      - generic [ref=e31]: Memory MVP
+    - generic [ref=e34]:
+      - generic [ref=e35]: 💉
+      - paragraph [ref=e36]: 选择角色和患者，发起导办请求
+    - generic [ref=e38]:
+      - textbox "输入导办请求..." [ref=e39]
+      - button "发送" [ref=e40] [cursor=pointer]

@@ -1,0 +1,47 @@
+{
+  "active_plan": "D:\\project\\hospital_medical_insurance_agent\\.sisyphus\\plans\\chat-ui-refactor.md",
+  "started_at": "2026-05-13T10:17:33.730Z",
+  "completed_at": null,
+  "session_ids": [
+    "ses_1df60def7ffeMB9mcIJI2C4GqE"
+  ],
+  "plan_name": "chat-ui-refactor",
+  "worktree_path": null,
+  "completed": false,
+  "waves_completed": [],
+  "remaining": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "F1",
+    "F2",
+    "F3",
+    "F4"
+  ],
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "Wave 1 — Bug 3修复：微调器永不停止（安全超时 + 缺失done事件处理）",
+      "session_id": "ses_1df26f99affeVNN7O4NMYF5Jki",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-05-13T10:20:31.931Z"
+    }
+  },
+  "session_origins": {
+    "ses_1df60def7ffeMB9mcIJI2C4GqE": "direct"
+  }
+}

@@ -3,8 +3,10 @@ import os
 import time
 from collections.abc import Iterator
 
+print("[STARTUP] routes.py 模块开始加载 (load_dotenv 之前)", flush=True)
 from dotenv import load_dotenv
 load_dotenv()
+print("[STARTUP] routes.py load_dotenv 完成", flush=True)
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -34,15 +36,25 @@ from src.security.desensitization.service import mask_name
 from src.security.risk_control.service import build_human_confirmation_response, detect_blocked_actions
 from src.shared.schemas.responses import error_detail
 
+print("[STARTUP] routes.py 模块开始加载", flush=True)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+print("[STARTUP] routes.py 步骤 1/3: 创建技能存储 (create_skill_storage)", flush=True)
 _skill_storage = create_skill_storage()
+print("[STARTUP] routes.py 步骤 1/3: 技能存储创建完成", flush=True)
+
+print("[STARTUP] routes.py 步骤 2/3: 创建数据存储 (create_data_store)", flush=True)
 _data_store = create_data_store()
+print("[STARTUP] routes.py 步骤 2/3: 数据存储创建完成", flush=True)
 
 from src.data_platform.storage.skill.seed import seed_default_skills
+print("[STARTUP] routes.py 步骤 3/3: 播种默认技能 (seed_default_skills)", flush=True)
 seed_default_skills(_skill_storage)
+print("[STARTUP] routes.py 步骤 3/3: 技能播种完成", flush=True)
+print("[STARTUP] routes.py 模块加载完毕", flush=True)
 
 # In-memory registry: task_id -> (compiled_graph, thread_id)
 # Used to resume LangGraph executions paused by interrupt()

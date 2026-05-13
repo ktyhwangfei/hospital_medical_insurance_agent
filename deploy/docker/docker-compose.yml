@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:123456@postgres:5432/hospital_mcp
+      - REDIS_URL=redis://redis:6379/0
+      - MILVUS_URI=http://milvus:19530
+      - MODEL_API_KEY=${MODEL_API_KEY}
+    depends_on:
+      - postgres
+      - redis
+      - milvus
+    volumes:
+      - ../../skills:/app/skills
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123456
+      POSTGRES_DB: hospital_mcp
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  milvus:
+    image: milvusdb/milvus:v2.4-latest
+    ports:
+      - "19530:19530"
+    volumes:
+      - milvus_data:/var/lib/milvus
+
+volumes:
+  postgres_data:
+  redis_data:
+  milvus_data:

@@ -39,6 +39,8 @@ def _row_to_workflow(row: dict[str, Any]) -> WorkflowInstance:
         audit_refs=audit_refs,
         knowledge_events=knowledge_events,
         knowledge_degradation_reasons=knowledge_degradation_reasons,
+        session_id=row.get("session_id"),
+        patient_id=row.get("patient_id"),
     )
 
 
@@ -62,8 +64,8 @@ class PostgreSQLRuntimeStateStore:
         )
         now = _now()
 
-        sql = """insert into workflows (workflow_id, scenario, status, current_step, steps, audit_refs, knowledge_events, knowledge_degradation_reasons, created_at, updated_at)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        sql = """insert into workflows (workflow_id, scenario, status, current_step, steps, audit_refs, knowledge_events, knowledge_degradation_reasons, session_id, patient_id, created_at, updated_at)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 on conflict (workflow_id) do update set
     scenario = excluded.scenario,
     status = excluded.status,
@@ -72,6 +74,8 @@ on conflict (workflow_id) do update set
     audit_refs = excluded.audit_refs,
     knowledge_events = excluded.knowledge_events,
     knowledge_degradation_reasons = excluded.knowledge_degradation_reasons,
+    session_id = excluded.session_id,
+    patient_id = excluded.patient_id,
     updated_at = excluded.updated_at"""
         try:
             self._client.execute(
@@ -85,6 +89,8 @@ on conflict (workflow_id) do update set
                     audit_refs_json,
                     knowledge_events_json,
                     knowledge_degradation_reasons_json,
+                    workflow.session_id,
+                    workflow.patient_id,
                     now,
                     now,
                 ),

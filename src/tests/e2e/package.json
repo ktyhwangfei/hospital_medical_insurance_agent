@@ -1,0 +1,19 @@
+{
+  "name": "hospital-e2e-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "E2E tests for hospital medical insurance AI agent system",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:smoke": "npx playwright test smoke/",
+    "test:portal": "npx playwright test flows/portal/",
+    "test:admin": "npx playwright test flows/admin/",
+    "test:cross": "npx playwright test flows/cross-app/",
+    "test:ui": "npx playwright test --ui",
+    "report": "npx playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "typescript": "^5.7.0"
+  }
+}

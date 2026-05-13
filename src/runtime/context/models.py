@@ -16,3 +16,4 @@ class RuntimeContext(BaseModel):
     intent_entities: dict[str, Any] = Field(default_factory=dict)
     intent_citations: list[str] = Field(default_factory=list)
     requested_at: str
+    mentioned_skill_ids: list[str] = Field(default_factory=list)
