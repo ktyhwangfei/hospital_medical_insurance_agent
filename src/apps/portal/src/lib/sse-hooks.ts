@@ -501,7 +501,8 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         }
 
         cancelRef.current = cancelFn
-        updateStatus('connected')
+        // Stream completed — mark as closed (works with or without server 'done' event)
+        updateStatus('closed')
       } catch (err: unknown) {
         if (cancelled) return
 

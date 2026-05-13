@@ -342,6 +342,7 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
   const [streamingRequest, setStreamingRequest] = useState<ChatRequest | null>(null)
   const [streamEnabled, setStreamEnabled] = useState(false)
   const scrollBottomRef = useRef<HTMLDivElement>(null)
+  const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prefilledRef = useRef<string | null>(null)
 
   // ── useChatStream hook ────────────────────────────────────────
@@ -508,6 +509,26 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
       setStreamingRequest(null)
     }
   }, [sseStatus, streamEnabled])
+
+  // Safety timeout: force-reset streaming state after 30 seconds
+  useEffect(() => {
+    if (!streamEnabled) return
+
+    safetyTimerRef.current = setTimeout(() => {
+      console.warn('[SettlementChat] Safety timeout — force-resetting streaming state')
+      setIsLoading(false)
+      setIsStreaming(false)
+      setStreamEnabled(false)
+      setStreamingRequest(null)
+    }, 30000)
+
+    return () => {
+      if (safetyTimerRef.current) {
+        clearTimeout(safetyTimerRef.current)
+        safetyTimerRef.current = null
+      }
+    }
+  }, [streamEnabled])
 
   const quickQuestions = [
     '为什么这个患者结算失败',
