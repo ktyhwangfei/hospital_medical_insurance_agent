@@ -16,10 +16,10 @@ export class ChatPage extends BasePage {
   constructor(page: Page) {
     super(page, 'http://127.0.0.1:3000');
 
-    this.messageInput = page.getByPlaceholder(/输入|Type|Message/i).or(page.getByRole('textbox'));
-    this.sendButton = page.getByRole('button', { name: /发送|submit|send/i });
-    this.responseArea = page.locator('[class*="response"], [class*="message"], [class*="chat"]').first();
-    this.streamingIndicator = page.locator('[class*="streaming"], [class*="loading"]');
+    this.messageInput = page.locator('[data-testid="chat-input"]');
+    this.sendButton = page.locator('[data-testid="send-button"]');
+    this.responseArea = page.locator('[data-testid="chat-viewport"]');
+    this.streamingIndicator = page.locator('[data-testid="streaming-indicator"]');
     this.doneIndicator = page.getByText('done');
     this.citations = page.locator('[class*="citation"]');
     this.errorMessage = page.locator('[class*="error"], [role="alert"]');
