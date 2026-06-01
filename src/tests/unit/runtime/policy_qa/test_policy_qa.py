@@ -361,6 +361,30 @@ class TestIntentDetector:
         except ImportError:
             pytest.skip("IntentDetector not available")
 
+    def test_detects_pooling_self_pay_target(self):
+        """统筹自付问题必须命中结构化目标费用项。"""
+        from src.runtime.policy_qa.intent_detector import IntentDetector
+        from src.runtime.policy_qa.models import PolicyQAIntent
+
+        detector = IntentDetector()
+        result = detector._keyword_based_detection("为什么我这次统筹自付这么多？")
+
+        assert result.intent == PolicyQAIntent.TREATMENT_DECOMPOSITION
+        assert result.query_type == "统筹自付解释"
+        assert result.target_fee_item == "pooling_self_pay"
+        assert result.target_fee_label == "统筹自付"
+        assert result.need_patient_data is True
+
+    def test_detects_pooling_self_pay_synonym(self):
+        """统筹自费是统筹自付的口语同义表达。"""
+        from src.runtime.policy_qa.intent_detector import IntentDetector
+
+        detector = IntentDetector()
+        result = detector._keyword_based_detection("统筹自费为什么这么高？")
+
+        assert result.target_fee_item == "pooling_self_pay"
+        assert result.target_fee_label == "统筹自付"
+
 
 class TestExplanationGenerator:
     """测试解释生成器"""
