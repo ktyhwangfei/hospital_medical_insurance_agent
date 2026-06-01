@@ -98,11 +98,9 @@ class SegmentInfo:
     actual_ratio: float = 0.0
     pay: float = 0.0
     calculation: str = ""
-    rule_id: str = ""          # 来源政策规则ID（溯源用）
-    policy_source: str = ""    # 来源政策条文原文（溯源用）
-    # 规则溯源：该分段对应的政策规则
-    rule_id: str = ""
-    policy_source: str = ""  # 政策条文原文，用于解释时引用
+    # 规则溯源：该分段对应的来源政策规则与条文原文
+    rule_id: str = ""  # 来源政策规则ID（溯源用）
+    policy_source: str = ""  # 政策条文原文，用于解释引用
 
 
 @dataclass
