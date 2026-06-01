@@ -74,10 +74,16 @@ class TestPolicyQAModels:
         result = PolicyQAIntentResult(
             intent=PolicyQAIntent.TREATMENT_DECOMPOSITION,
             settlement_id="1671213",
+            need_patient_data=True,
+            query_type="统筹自付解释",
+            confidence=0.95,
             target_fee_item="pooling_self_pay",
             target_fee_label="统筹自付",
         )
 
+        assert result.need_patient_data is True
+        assert result.query_type == "统筹自付解释"
+        assert result.confidence == 0.95
         assert result.target_fee_item == "pooling_self_pay"
         assert result.target_fee_label == "统筹自付"
 
@@ -85,29 +91,34 @@ class TestPolicyQAModels:
         """测试重写问题区分检索问题与解释上下文"""
         from src.runtime.policy_qa.models import RewrittenQuestion
 
-        rewritten_question = RewrittenQuestion(
+        rewritten = RewrittenQuestion(
             original="为什么我这次统筹自付这么多？",
-            rewritten="解释本次住院统筹自付金额形成原因",
-            search_query="北京市医保住院统筹自付 起付线 分段 自付比例",
+            rewritten="城镇职工 退休人员 住院 统筹基金 起付线以上 分段 自付比例",
+            search_query="城镇职工 退休人员 住院 统筹基金 起付线以上 分段 自付比例",
             explanation_context={
-                "settlement_id": "1671213",
-                "target_fee_item": "pooling_self_pay",
-                "target_fee_label": "统筹自付",
+                "fund_type": "城镇职工",
+                "person_type": "退休",
+                "medical_type": "普通住院",
+                "pooling_self_pay": 4962.67,
             },
             semantic_mappings={"统筹自付": "pooling_self_pay"},
             warnings=["检索问题已去除个人金额上下文"],
         )
 
-        assert rewritten_question.original == "为什么我这次统筹自付这么多？"
-        assert rewritten_question.rewritten == "解释本次住院统筹自付金额形成原因"
-        assert rewritten_question.search_query == "北京市医保住院统筹自付 起付线 分段 自付比例"
-        assert rewritten_question.explanation_context == {
-            "settlement_id": "1671213",
-            "target_fee_item": "pooling_self_pay",
-            "target_fee_label": "统筹自付",
+        assert rewritten.original == "为什么我这次统筹自付这么多？"
+        assert rewritten.rewritten == "城镇职工 退休人员 住院 统筹基金 起付线以上 分段 自付比例"
+        assert rewritten.search_query == "城镇职工 退休人员 住院 统筹基金 起付线以上 分段 自付比例"
+        assert "【业务上下文】" not in rewritten.search_query
+        assert rewritten.explanation_context == {
+            "fund_type": "城镇职工",
+            "person_type": "退休",
+            "medical_type": "普通住院",
+            "pooling_self_pay": 4962.67,
         }
-        assert rewritten_question.semantic_mappings == {"统筹自付": "pooling_self_pay"}
-        assert rewritten_question.warnings == ["检索问题已去除个人金额上下文"]
+        assert rewritten.explanation_context["person_type"] == "退休"
+        assert rewritten.explanation_context["pooling_self_pay"] == 4962.67
+        assert rewritten.semantic_mappings == {"统筹自付": "pooling_self_pay"}
+        assert rewritten.warnings == ["检索问题已去除个人金额上下文"]
 
     def test_sql_query_result(self):
         """测试SQLQueryResult模型"""
@@ -166,37 +177,25 @@ class TestPolicyQAModels:
 
     def test_segment_calculation_result_supports_reconciliation_and_warnings(self):
         """测试分段计算结果支持权威金额对账与告警"""
-        from src.runtime.policy_qa.models import SegmentCalculationResult, SegmentInfo
+        from src.runtime.policy_qa.models import SegmentCalculationResult
 
         result = SegmentCalculationResult(
-            segments=[
-                SegmentInfo(
-                    lower=650.0,
-                    upper=30000.0,
-                    amount=29350.0,
-                    base_ratio=0.15,
-                    person_ratio=0.6,
-                    actual_ratio=0.09,
-                    pay=2641.50,
-                )
-            ],
-            total_pay=2641.50,
-            authoritative_amount=2641.49,
+            total_pay=4962.68,
+            authoritative_amount=4962.67,
             reconciliation_difference=0.01,
             reconciliation_tolerance=0.01,
             reconciliation_matched=True,
-            reconciliation_message="分段计算金额与权威字段误差在容差内",
-            warnings=["按两位小数展示可能存在尾差"],
+            reconciliation_message="政策解释计算与业务库金额一致",
+            warnings=["按现有字段估算统筹分段基数"],
         )
 
-        assert len(result.segments) == 1
-        assert result.total_pay == 2641.50
-        assert result.authoritative_amount == 2641.49
+        assert result.total_pay == 4962.68
+        assert result.authoritative_amount == 4962.67
         assert result.reconciliation_difference == 0.01
         assert result.reconciliation_tolerance == 0.01
         assert result.reconciliation_matched is True
-        assert result.reconciliation_message == "分段计算金额与权威字段误差在容差内"
-        assert result.warnings == ["按两位小数展示可能存在尾差"]
+        assert result.reconciliation_message == "政策解释计算与业务库金额一致"
+        assert result.warnings == ["按现有字段估算统筹分段基数"]
 
 
 class TestFeeDecompositionSkill:
