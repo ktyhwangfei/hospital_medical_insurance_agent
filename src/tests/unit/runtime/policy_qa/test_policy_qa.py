@@ -313,6 +313,50 @@ class TestQuestionRewriter:
         except ImportError:
             pytest.skip("QuestionRewriter not available")
 
+    @pytest.mark.asyncio
+    async def test_rewrite_pooling_self_pay_uses_short_search_query(self):
+        """统筹自付解释必须使用短检索查询，并保留结构化解释上下文。"""
+        from src.runtime.policy_qa.models import PolicyQAIntent, SQLQueryResult
+        from src.runtime.policy_qa.question_rewriter import QuestionRewriter
+
+        sql_result = SQLQueryResult(
+            yb_brdjxx={
+                "fund_type": "城镇职工",
+                "fund_type_raw": "城镇职工",
+                "PER_TYPE": "退休",
+                "PER_TYPE_raw": "退休人员",
+                "yllb": "普通住院",
+                "yllb_raw": "普通住院",
+            },
+            yb_dyxxnd={"fynd": "2025"},
+            yb_dyxxzy={"bcqfje": 650.0, "bcybnje": 164411.81},
+            yb_zyfdxx={
+                "bdfyzje": 189085.85,
+                "bdybnzje": 164411.81,
+                "bdtczf": 4962.67,
+                "bdtczfje": 91759.51,
+                "bddegwyzf": 13407.93,
+                "bddegwyzfje": 53631.71,
+            },
+        )
+
+        result = await QuestionRewriter().rewrite(
+            "为什么我这次统筹自付这么多？",
+            sql_result,
+            intent=PolicyQAIntent.TREATMENT_DECOMPOSITION,
+            target_fee_item="pooling_self_pay",
+        )
+
+        assert result.rewritten == result.search_query
+        assert "【业务上下文】" not in result.search_query
+        assert "城镇职工" in result.search_query
+        assert "退休人员" in result.search_query
+        assert "住院" in result.search_query
+        assert "统筹" in result.search_query
+        assert "自付比例" in result.search_query
+        assert result.explanation_context["target_fee_item"] == "pooling_self_pay"
+        assert result.explanation_context["pooling_self_pay"] == 4962.67
+
 
 class TestIntentDetector:
     """测试意图识别器"""
