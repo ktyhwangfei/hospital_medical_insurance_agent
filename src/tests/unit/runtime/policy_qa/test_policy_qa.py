@@ -353,9 +353,27 @@ class TestQuestionRewriter:
         assert "退休人员" in result.search_query
         assert "住院" in result.search_query
         assert "统筹" in result.search_query
+        assert "起付线以上" in result.search_query
         assert "自付比例" in result.search_query
+        assert "退休人员个人负担比例" in result.search_query
         assert result.explanation_context["target_fee_item"] == "pooling_self_pay"
+        assert result.explanation_context["target_fee_label"] == "统筹自付"
         assert result.explanation_context["pooling_self_pay"] == 4962.67
+        assert result.semantic_mappings["target_fee_item"] == "pooling_self_pay"
+        assert result.semantic_mappings["fund_type"] == "城镇职工"
+        assert result.semantic_mappings["per_type"] == result.explanation_context["person_type"]
+        assert result.semantic_mappings["yllb"] == "普通住院"
+
+    def test_pooling_self_pay_retired_detection_includes_retired_status_variants(self):
+        """统筹自付退休判断必须覆盖政策字段常见取值。"""
+        from src.runtime.policy_qa.question_rewriter import QuestionRewriter
+
+        rewriter = QuestionRewriter()
+
+        assert rewriter._is_retired("退休", None) is True
+        assert rewriter._is_retired("退职", None) is True
+        assert rewriter._is_retired("2", None) is True
+        assert rewriter._is_retired("在职", "1") is False
 
 
 class TestIntentDetector:
