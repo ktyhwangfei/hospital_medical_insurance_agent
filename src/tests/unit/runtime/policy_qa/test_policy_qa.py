@@ -549,3 +549,56 @@ class TestPolicyQAOrchestrator:
             assert orchestrator is not None
         except ImportError:
             pytest.skip("PolicyQAOrchestrator not available")
+
+    @pytest.mark.asyncio
+    async def test_search_policy_rules_uses_pooling_self_pay_filters(self):
+        """统筹自付检索必须优先命中统筹分段等相关政策规则。"""
+        from src.runtime.policy_qa.models import PolicyQAIntent, SQLQueryResult
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+
+        class FakeSearchEngine:
+            def __init__(self):
+                self.calls = []
+
+            def search(self, question, top_k=10, expr=None):
+                self.calls.append({"question": question, "top_k": top_k, "expr": expr})
+                return [
+                    {
+                        "rule_id": "rule_pooling_segment_1",
+                        "rule_type": "统筹分段",
+                        "source_text": "起付线以上至3万元部分，退休人员按统筹分段比例自付。",
+                        "insu_type": "城镇职工",
+                        "psn_type": "退休",
+                        "med_type": "普通住院",
+                        "payment_ratio": "0.15",
+                        "amount_band": "650-30000",
+                        "score": 0.98,
+                    }
+                ]
+
+        search_engine = FakeSearchEngine()
+        orchestrator = PolicyQAOrchestrator(
+            model_gateway=None,
+            search_engine=search_engine,
+        )
+        sql_result = SQLQueryResult(
+            yb_brdjxx={
+                "fund_type": "城镇职工",
+                "PER_TYPE": "退休",
+                "yllb": "普通住院",
+            }
+        )
+
+        rules = await orchestrator._search_policy_rules(
+            "城镇职工 退休人员 住院 统筹基金 起付线以上 分段 自付比例",
+            sql_result,
+            intent=PolicyQAIntent.TREATMENT_DECOMPOSITION,
+            target_fee_item="pooling_self_pay",
+        )
+
+        assert len(rules) == 1
+        assert rules[0].rule_type == "统筹分段"
+        assert search_engine.calls
+        first_expr = search_engine.calls[0]["expr"]
+        assert "统筹分段" in first_expr
+        assert "城镇职工" in first_expr
