@@ -529,6 +529,73 @@ class TestExplanationGenerator:
         except ImportError:
             pytest.skip("ExplanationGenerator not available")
 
+    def test_placeholder_explains_pooling_self_pay_with_reconciliation(self):
+        """统筹自付占位解释必须展示结构化分段事实与对账结果。"""
+        from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
+        from src.runtime.policy_qa.models import (
+            ExplanationContext,
+            FeeDecompositionResult,
+            PolicyQAIntent,
+            PolicyQAIntentResult,
+            SegmentCalculationResult,
+            SegmentInfo,
+            TreatmentDecomposition,
+            TreatmentItem,
+        )
+
+        context = ExplanationContext(
+            question="为什么我这次统筹自付这么多？",
+            intent=PolicyQAIntentResult(
+                intent=PolicyQAIntent.TREATMENT_DECOMPOSITION,
+                settlement_id="1671213",
+                target_fee_item="pooling_self_pay",
+                target_fee_label="统筹自付",
+            ),
+            decomposition=FeeDecompositionResult(
+                treatment=TreatmentDecomposition(
+                    pooling_self_pay=TreatmentItem(
+                        value=4962.67,
+                        source="yb_zyfdxx.bdtczf",
+                    ),
+                    deductible=TreatmentItem(
+                        value=650.0,
+                        source="yb_dyxxzy.bcqfje",
+                    ),
+                ),
+                segments=SegmentCalculationResult(
+                    total_pay=4962.68,
+                    authoritative_amount=4962.67,
+                    reconciliation_difference=0.01,
+                    reconciliation_tolerance=0.01,
+                    reconciliation_matched=True,
+                    reconciliation_message="政策解释计算与业务库金额一致",
+                    warnings=["按现有字段估算统筹分段基数：医保内金额 - 大额支付 - 大额自付"],
+                    segments=[
+                        SegmentInfo(
+                            lower=650,
+                            upper=30000,
+                            amount=29350,
+                            base_ratio=0.15,
+                            person_ratio=0.6,
+                            actual_ratio=0.09,
+                            pay=2641.5,
+                            calculation="29,350.00 × 15% × 60% = 29,350.00 × 9% = 2,641.50",
+                            policy_source="起付线以上至3万元部分，自付比例15%",
+                        )
+                    ],
+                ),
+            ),
+        )
+
+        text = ExplanationGenerator()._generate_placeholder(context)
+
+        assert "业务库已结算的统筹自付金额为 4,962.67 元" in text
+        assert "yb_zyfdxx.bdtczf" in text
+        assert "基础自付比例" in text
+        assert "退休人员系数" in text
+        assert "政策解释计算与业务库金额一致" in text
+        assert "起付线以上至3万元部分，自付比例15%" in text
+
 
 class TestPolicyQAOrchestrator:
     """测试政策问答编排器"""
