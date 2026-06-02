@@ -292,6 +292,67 @@ class TestFeeDecompositionSkill:
         except ImportError:
             pytest.skip("FeeDecompositionSkill not available")
 
+    def test_get_person_ratio_recognizes_retired_text(self):
+        """人员系数不能只依赖数字代码，也要识别退休文本。"""
+        from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
+
+        skill = FeeDecompositionSkill()
+
+        assert skill._get_person_ratio({"PER_TYPE": "退休"}) == 0.6
+        assert skill._get_person_ratio({"PER_TYPE": "退休人员"}) == 0.6
+        assert skill._get_person_ratio({"PER_TYPE": "在职"}) == 1.0
+
+    def test_decompose_pooling_self_pay_reconciles_with_authoritative_amount(self):
+        """统筹自付以业务库金额为权威值，并保存分段解释计算值。"""
+        from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
+        from src.runtime.policy_qa.models import PolicyRule, SQLQueryResult
+
+        sql_result = SQLQueryResult(
+            yb_brdjxx={"PER_TYPE": "退休", "PER_TYPE_raw": "退休人员"},
+            yb_dyxxzy={"bcqfje": 650.0, "bcybnje": 164411.81},
+            yb_zyfdxx={
+                "bdfyzje": 189085.85,
+                "bdybnzje": 164411.81,
+                "bdtczf": 4962.67,
+                "bdtczfje": 91759.51,
+                "bddegwyzf": 13407.93,
+                "bddegwyzfje": 53631.71,
+                "bdgryf": 43694.67,
+            },
+        )
+        rules = [
+            PolicyRule(
+                rule_id="r1",
+                rule_type="统筹分段",
+                amount_band="650-30000",
+                payment_ratio="0.15",
+                source_text="起付线以上至3万元部分，自付比例15%",
+            ),
+            PolicyRule(
+                rule_id="r2",
+                rule_type="统筹分段",
+                amount_band="30000-40000",
+                payment_ratio="0.10",
+                source_text="3万元至4万元部分，自付比例10%",
+            ),
+            PolicyRule(
+                rule_id="r3",
+                rule_type="统筹分段",
+                amount_band="40000-inf",
+                payment_ratio="0.05",
+                source_text="4万元以上部分，自付比例5%",
+            ),
+        ]
+
+        result = FeeDecompositionSkill().decompose(sql_result, rules)
+
+        assert result.treatment.pooling_self_pay.value == 4962.67
+        assert result.segments.authoritative_amount == 4962.67
+        assert result.segments.reconciliation_tolerance == 0.01
+        assert result.segments.reconciliation_matched is False
+        assert "政策解释计算与结算结果存在差异，需要人工复核" in result.segments.reconciliation_message
+        assert any("估算统筹分段基数" in warning for warning in result.segments.warnings)
+
 
 class TestQuestionRewriter:
     """测试问题重写器"""
