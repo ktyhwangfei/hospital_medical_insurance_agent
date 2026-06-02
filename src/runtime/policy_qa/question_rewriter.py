@@ -101,6 +101,10 @@ class QuestionRewriter:
                     explanation_context=explanation_context,
                     semantic_mappings={
                         **semantic_mappings,
+                        "target_fee_item": "pooling_self_pay",
+                        "fund_type": fund_type,
+                        "per_type": explanation_context["person_type"],
+                        "yllb": yllb,
                         "统筹自付": "pooling_self_pay",
                     },
                 )
@@ -194,8 +198,11 @@ class QuestionRewriter:
 
     def _is_retired(self, per_type: str | None, per_type_raw: str | None) -> bool:
         """判断人员类别是否为退休人员。"""
-        candidates = [str(value) for value in (per_type, per_type_raw) if value]
-        return any("退休" in value or value in {"2", "02"} for value in candidates)
+        candidates = [str(value).strip() for value in (per_type, per_type_raw) if value]
+        return any(
+            "退休" in value or "退职" in value or value in {"2", "02"}
+            for value in candidates
+        )
 
     def _build_pooling_self_pay_search_query(self, sql_result: SQLQueryResult) -> str:
         """构建统筹自付解释专用短检索查询，避免向向量检索注入大段业务上下文。"""
@@ -216,8 +223,10 @@ class QuestionRewriter:
                 person_label,
                 medical_label,
                 "统筹基金",
+                "起付线以上",
                 "分段",
                 "自付比例",
+                "退休人员个人负担比例",
             ]
             if part
         ]
@@ -232,6 +241,7 @@ class QuestionRewriter:
 
         context: dict[str, Any] = {
             "target_fee_item": "pooling_self_pay",
+            "target_fee_label": "统筹自付",
             "fund_type": brdjxx.get("fund_type") or "",
             "fund_type_raw": brdjxx.get("fund_type_raw") or "",
             "person_type": per_type,
