@@ -596,6 +596,91 @@ class TestExplanationGenerator:
         assert "政策解释计算与业务库金额一致" in text
         assert "起付线以上至3万元部分，自付比例15%" in text
 
+    def test_pooling_self_pay_placeholder_includes_patient_context_and_authoritative_statement(self):
+        """统筹自付解释必须说明患者上下文和业务库金额权威性。"""
+        from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
+        from src.runtime.policy_qa.models import (
+            ExplanationContext,
+            FeeDecompositionResult,
+            PolicyQAIntent,
+            PolicyQAIntentResult,
+            RewrittenQuestion,
+            SegmentCalculationResult,
+            TreatmentDecomposition,
+            TreatmentItem,
+        )
+
+        context = ExplanationContext(
+            question="为什么我这次统筹自付这么多？",
+            intent=PolicyQAIntentResult(
+                intent=PolicyQAIntent.TREATMENT_DECOMPOSITION,
+                settlement_id="1671213",
+                target_fee_item="pooling_self_pay",
+                target_fee_label="统筹自付",
+            ),
+            rewritten_question=RewrittenQuestion(
+                explanation_context={
+                    "fund_type": "城镇职工",
+                    "medical_type": "普通住院",
+                    "person_type": "退休",
+                    "year": "2025",
+                }
+            ),
+            decomposition=FeeDecompositionResult(
+                treatment=TreatmentDecomposition(
+                    pooling_self_pay=TreatmentItem(value=4962.67, source="yb_zyfdxx.bdtczf"),
+                ),
+                segments=SegmentCalculationResult(
+                    total_pay=4962.67,
+                    authoritative_amount=4962.67,
+                    reconciliation_matched=True,
+                    reconciliation_message="政策解释计算与业务库金额一致",
+                ),
+            ),
+        )
+
+        text = ExplanationGenerator()._generate_placeholder(context)
+
+        assert "城镇职工" in text
+        assert "普通住院" in text
+        assert "退休" in text
+        assert "业务库金额为本次结算的权威金额" in text
+        assert "yb_zyfdxx.bdtczf" in text
+
+    def test_pooling_self_pay_placeholder_declares_uncertainty_without_segments(self):
+        """缺少统筹分段规则时不能编造比例，必须输出不确定性声明。"""
+        from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
+        from src.runtime.policy_qa.models import (
+            ExplanationContext,
+            FeeDecompositionResult,
+            PolicyQAIntent,
+            PolicyQAIntentResult,
+            SegmentCalculationResult,
+            TreatmentDecomposition,
+            TreatmentItem,
+        )
+
+        context = ExplanationContext(
+            question="为什么我这次统筹自付这么多？",
+            intent=PolicyQAIntentResult(
+                intent=PolicyQAIntent.TREATMENT_DECOMPOSITION,
+                settlement_id="1671213",
+                target_fee_item="pooling_self_pay",
+            ),
+            decomposition=FeeDecompositionResult(
+                treatment=TreatmentDecomposition(
+                    pooling_self_pay=TreatmentItem(value=4962.67, source="yb_zyfdxx.bdtczf"),
+                ),
+                segments=SegmentCalculationResult(total_pay=0.0),
+            ),
+        )
+
+        text = ExplanationGenerator()._generate_placeholder(context)
+
+        assert "未检索到完整的统筹分段政策规则" in text
+        assert "不确定性：缺少统筹分段比例政策依据" in text
+        assert "无法稳定解释计算过程" in text
+
 
 class TestPolicyQAOrchestrator:
     """测试政策问答编排器"""
@@ -669,3 +754,108 @@ class TestPolicyQAOrchestrator:
         first_expr = search_engine.calls[0]["expr"]
         assert "统筹分段" in first_expr
         assert "城镇职工" in first_expr
+
+    @pytest.mark.asyncio
+    async def test_process_intent_detail_includes_target_fee_item(self):
+        """统筹自付问题的意图 SSE detail 必须暴露结构化目标费用项。"""
+        from src.runtime.policy_qa.models import PolicyQARequest
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+
+        orchestrator = PolicyQAOrchestrator(model_gateway=None)
+        events = []
+
+        async for event in orchestrator.process(
+            PolicyQARequest(question="为什么我这次统筹自付这么多？", settlement_id="1671213")
+        ):
+            events.append(event)
+            if event.step == "intent" and event.status == "done":
+                break
+
+        intent_done = events[-1]
+        assert intent_done.detail["intent"] == "treatment_decomposition"
+        assert intent_done.detail["query_type"] == "统筹自付解释"
+        assert intent_done.detail["target_fee_item"] == "pooling_self_pay"
+        assert intent_done.detail["target_fee_label"] == "统筹自付"
+
+    @pytest.mark.asyncio
+    async def test_process_query_sql_data_exposes_settlement_details(self):
+        """查询 SSE detail 必须通过 adapter 暴露结算明细数据。"""
+        from src.runtime.policy_qa.models import PolicyQARequest, SQLQueryResult
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+
+        class FakeSQLFetcher:
+            async def fetch_all_tables(self, settlement_id):
+                return SQLQueryResult(
+                    yb_brdjxx={
+                        "fund_type": "城镇职工",
+                        "fund_type_raw": "城镇职工",
+                        "PER_TYPE": "退休",
+                        "PER_TYPE_raw": "退休人员",
+                        "yllb": "普通住院",
+                        "yllb_raw": "普通住院",
+                    },
+                    yb_dyxxnd={"fynd": "2025"},
+                    yb_dyxxzy={"bcqfje": 650.0, "bcybnje": 164411.81},
+                    yb_zyfdxx={"bdtczf": 4962.67, "bdtczfje": 91759.51},
+                )
+
+        orchestrator = PolicyQAOrchestrator(
+            model_gateway=None,
+            sql_fetcher=FakeSQLFetcher(),
+        )
+
+        query_done = None
+        async for event in orchestrator.process(
+            PolicyQARequest(question="为什么我这次统筹自付这么多？", settlement_id="1671213")
+        ):
+            if event.step == "query_sql_data" and event.status == "done":
+                query_done = event
+                break
+
+        assert query_done is not None
+        assert query_done.detail["settlement_id"] == "1671213"
+        assert "yb_zyfdxx" in query_done.detail["tables"]
+
+    def test_serialize_decomposition_includes_reconciliation_and_warnings(self):
+        """分解 detail 必须输出统筹自付对账结构和数据口径提示。"""
+        from src.runtime.policy_qa.models import (
+            FeeDecompositionResult,
+            SegmentCalculationResult,
+            SegmentInfo,
+        )
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+
+        decomposition = FeeDecompositionResult(
+            segments=SegmentCalculationResult(
+                total_pay=4962.68,
+                authoritative_amount=4962.67,
+                reconciliation_difference=0.01,
+                reconciliation_tolerance=0.01,
+                reconciliation_matched=True,
+                reconciliation_message="政策解释计算与业务库金额一致",
+                warnings=["按现有字段估算统筹分段基数：医保内金额 - 大额支付 - 大额自付"],
+                segments=[
+                    SegmentInfo(
+                        lower=650,
+                        upper=30000,
+                        amount=29350,
+                        base_ratio=0.15,
+                        person_ratio=0.6,
+                        actual_ratio=0.09,
+                        pay=2641.5,
+                        rule_id="r1",
+                        policy_source="起付线以上至3万元部分，自付比例15%",
+                    )
+                ],
+            )
+        )
+
+        detail = PolicyQAOrchestrator(model_gateway=None)._serialize_decomposition(decomposition)
+
+        assert detail["segments"]["warnings"] == ["按现有字段估算统筹分段基数：医保内金额 - 大额支付 - 大额自付"]
+        assert detail["segments"]["reconciliation"]["authoritative_amount"] == 4962.67
+        assert detail["segments"]["reconciliation"]["calculated_amount"] == 4962.68
+        assert detail["segments"]["reconciliation"]["difference"] == 0.01
+        assert detail["segments"]["reconciliation"]["tolerance"] == 0.01
+        assert detail["segments"]["reconciliation"]["matched"] is True
+        assert detail["segments"]["reconciliation"]["message"] == "政策解释计算与业务库金额一致"
