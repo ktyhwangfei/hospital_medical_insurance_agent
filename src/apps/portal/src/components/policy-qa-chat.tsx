@@ -348,21 +348,9 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
             // ★ 防泄漏：过滤禁止展示的字段
             const data = stripForbiddenFields(rawData as Record<string, unknown>)
 
-            // ── 处理 result 事件（后端合并结果）──
+            // ── 处理 result 事件（只提取结果数据，不覆写步骤）──
+            // ★ 步骤已在流式过程中逐条构建，result 事件不应覆盖
             if (eventType === 'result') {
-              // 提取 public_steps 并更新步骤状态
-              const publicSteps = data.public_steps as Array<Record<string, unknown>> | undefined
-              if (publicSteps && Array.isArray(publicSteps)) {
-                const updatedSteps: PolicyQAStep[] = publicSteps.map((s) => ({
-                  step: String(s.step || ''),  // 保持英文名，ThinkingChain 内部有 STEP_CONFIGS
-                  status: (s.status === 'done' ? 'done' : 'running') as PolicyQAStep['status'],
-                  publicMessage: String(s.public_message || ''),
-                  publicDetail: s.public_detail as Record<string, unknown> | undefined,
-                  startTime: Date.now(),
-                  endTime: Date.now(),
-                }))
-                setSteps(updatedSteps)
-              }
               // 提取 result 内容
               const resultData = data.result as Record<string, unknown> | undefined
               if (resultData) {

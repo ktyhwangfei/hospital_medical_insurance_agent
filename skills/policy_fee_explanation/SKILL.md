@@ -14,21 +14,25 @@ steps:
     depends_on: []
     type: MCP
     label: 查询结算数据
+    purpose: "获取患者基本信息（险种、人员类型、医疗类别）和结算数据，为后续问题精准化和费用计算提供上下文"
   - id: search_policy_rules
     tool: search_policy_rules
     depends_on: [query_sql_data]
     type: KNOWLEDGE
     label: 检索政策规则
+    purpose: "按目标费用项从知识库检索对应的政策规则（分段比例、起付线、封顶线、药品目录等），作为费用计算和解释的参数依据"
   - id: calculate_explanation
     tool: calculate_fee_explanation
     depends_on: [query_sql_data, search_policy_rules]
     type: SKILL
     label: 费用计算
+    purpose: "根据结算数据和政策规则，执行分段计算、对账校准，生成结构化的费用分解结果"
   - id: generate_explanation
     tool: generate_policy_explanation
     depends_on: [query_sql_data, search_policy_rules, calculate_explanation]
     type: MCP
     label: 生成解释
+    purpose: "基于费用计算结果和政策依据，流式生成患者视角和院端视角两份自然语言解释"
 config_file: config.yaml
 ---
 
@@ -49,7 +53,18 @@ config_file: config.yaml
 
 ## 执行流程
 
-1. SQL 查询：从 SQL Server 获取患者结算数据（待遇分解、费用明细、年度累计、住院信息、患者登记）
-2. 政策检索：按 target_fee_item 定向检索 Milvus 政策规则库
-3. 费用计算：config.yaml 路由到对应计算器，执行分段计算
-4. LLM 解释：流式生成患者视角 + 院端视角两份解释
+### Step 1: 查询结算数据（MCP）
+从 SQL Server 获取患者基本信息（险种、人员类型、医疗类别、年度累计）和本次结算数据（待遇分解、费用明细、住院信息）。
+**目的**：获取患者上下文，为后续问题重写和费用计算提供数据基础。例如，险种是"城镇职工"还是"城乡居民"、人员类型是"在职"还是"退休"，直接影响分段计算的人员系数。
+
+### Step 2: 检索政策规则（KNOWLEDGE）
+按 target_fee_item 从 Milvus 知识库检索对应的政策规则。config.yaml 中的 `policy_filters` 控制检索范围——例如统筹自付需要检索支付比例、起付线、封顶线三类规则。
+**目的**：获取计算所需的参数依据（分段比例、起付线金额、封顶线金额等），避免"为了查而查"。
+
+### Step 3: 费用计算（SKILL）
+config.yaml 路由到对应计算器，根据结算数据和政策规则执行计算。例如统筹自付的分段计算（Σ 各分段金额 × 各分段自付比例 × 人员系数），并与结算系统中的权威金额对账。
+**目的**：将原始数据和政策规则转化为可解释的费用分解结果。
+
+### Step 4: 生成解释（MCP）
+基于费用计算结果和政策依据，通过 LLM 流式生成患者视角和院端视角两份自然语言解释。
+**目的**：让患者和医院工作人员都能理解费用构成，而不是只给一串数字。
