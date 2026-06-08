@@ -130,6 +130,23 @@ class PolicySearchAdapter(PolicySearchTool):
                         top_k=top_k,
                     ),
                 )
+                # ★ 降级 1：精确匹配 0 结果 → 去掉险种过滤，只用医疗类别 + 人员类型
+                if not results and insu_type:
+                    results = await loop.run_in_executor(
+                        None,
+                        lambda: self._engine.search_with_context(
+                            question=query,
+                            insu_type=None,
+                            psn_type=psn_type if psn_type else None,
+                            med_type=med_type if med_type else None,
+                            top_k=top_k,
+                        ),
+                    )
+                # ★ 降级 2：仍然 0 → 完全去掉上下文，纯关键词搜索
+                if not results:
+                    results = await loop.run_in_executor(
+                        None, lambda: self._engine.search(query, top_k=top_k)
+                    )
             else:
                 results = await loop.run_in_executor(
                     None, lambda: self._engine.search(query, top_k=top_k)
@@ -187,11 +204,20 @@ class LlmExplainAdapter(LlmExplainTool):
                 return
 
         # 将 dict 适配为完整的 ExplanationContext
+        from src.runtime.policy_qa.models import PolicyQAIntentResult, PolicyQAIntent
+        intent_result = PolicyQAIntentResult(
+            intent=getattr(PolicyQAIntent, str(context.get("intent", "fee_decomposition")), PolicyQAIntent.FEE_DECOMPOSITION),
+            settlement_id=context.get("settlement_id", ""),
+            confidence=0.9,
+            query_type=context.get("query_type", ""),
+            target_fee_item=context.get("target_fee_item", ""),
+        )
         ctx = ExplanationContext(
             question=context.get("question", ""),
             user_role=context.get("user_role", "患者"),
             rag_miss=context.get("rag_miss", False),
         )
+        ctx.intent = intent_result  # ★ 必须设置，_generate_placeholder 依赖它
         # ★ 补传费用分解结果和政策规则
         calc_result = context.get("calculation_result")
         if calc_result:
