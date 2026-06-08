@@ -51,9 +51,9 @@ class SqlQueryAdapter(SqlQueryTool):
             fund_type_raw = yb_brdjxx.get("fund_type", "")
             person_type_raw = yb_brdjxx.get("PER_TYPE", "")
             medical_type_raw = yb_brdjxx.get("yllb", "")
-            fund_type = normalizer.normalize("fund_type", str(fund_type_raw)) or str(fund_type_raw)
-            person_type = normalizer.normalize("person_type", str(person_type_raw)) or str(person_type_raw)
-            medical_type = normalizer.normalize("medical_type", str(medical_type_raw)) or str(medical_type_raw)
+            fund_type = normalizer.normalize("险种类别", str(fund_type_raw)) or str(fund_type_raw)
+            person_type = normalizer.normalize("人群标签", str(person_type_raw)) or str(person_type_raw)
+            medical_type = normalizer.normalize("医疗类别", str(medical_type_raw)) or str(medical_type_raw)
         else:
             fund_type = str(yb_brdjxx.get("fund_type", ""))
             person_type = str(yb_brdjxx.get("PER_TYPE", ""))
