@@ -384,8 +384,8 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
                   error: typeof data.error === 'string' ? data.error : undefined,
                 }
 
-                // ★ 提取 RAG 政策卡片（search 步骤 done 时）
-                if (data.step === 'search' && data.status === 'done') {
+                // ★ 提取 RAG 政策卡片（search_policy_rules 步骤 done 时）
+                if (data.step === 'search_policy_rules' && data.status === 'done') {
                   const cards = data.policy_cards || data.policyCards
                   if (cards && Array.isArray(cards)) {
                     setPolicyCards(cards.map((c: Record<string, unknown>) => ({
@@ -404,8 +404,8 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
                   }
                 }
 
-                // ★ 提取双视角解释（explain 步骤 done 时）
-                if (data.step === 'explain' && data.status === 'done') {
+                // ★ 提取双视角解释（generate_explanation 步骤 done 时）
+                if (data.step === 'generate_explanation' && data.status === 'done') {
                   if (data.patient_view || data.patientView) {
                     setPatientView(String(data.patient_view || data.patientView || ''))
                   }
@@ -439,8 +439,8 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
                   scrollToBottom()
                 }
 
-                // 提取费用分解数据（decomposition 步骤完成时）
-                if (data.step === 'decomposition' && data.status === 'done' && data.detail) {
+                // 提取费用分解数据（calculate_explanation 步骤完成时）
+                if (data.step === 'calculate_explanation' && data.status === 'done' && data.detail) {
                   const detail = data.detail as Record<string, unknown>
 
                   // 提取待遇分解
@@ -519,7 +519,7 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
                 }
 
                 // 如果是最后一步完成，启动打字机效果
-                if (data.step === 'explain' && data.status === 'done') {
+                if (data.step === 'generate_explanation' && data.status === 'done') {
                   if (fullResponse) {
                     startTypewriter(fullResponse)
                   } else {
