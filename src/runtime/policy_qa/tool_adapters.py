@@ -118,6 +118,9 @@ class PolicySearchAdapter(PolicySearchTool):
             psn_type = str(patient_info.get("person_type", "") or "")
             med_type = str(patient_info.get("medical_type", "") or "")
 
+            # ★ 标准化：去掉"人员"等后缀，对齐 Milvus 存储值
+            psn_type = psn_type.replace("人员", "").strip()  # "退休人员"→"退休"
+
             # 只有当有实际上下文时才用 search_with_context
             if insu_type or psn_type or med_type:
                 results = await loop.run_in_executor(
