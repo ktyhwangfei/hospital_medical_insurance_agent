@@ -39,30 +39,42 @@ class SqlQueryAdapter(SqlQueryTool):
 
         result = await self._fetcher.fetch_all_tables(settlement_id)
 
-        # 从 SQL 结果映射到标准化字段
-        yb_zyfdxx = result.yb_zyfdxx if hasattr(result, 'yb_zyfdxx') else {}
-        yb_dyxxzy = result.yb_dyxxzy if hasattr(result, 'yb_dyxxzy') else {}
-        yb_dyxxnd = result.yb_dyxxnd if hasattr(result, 'yb_dyxxnd') else {}
-        yb_brdjxx = result.yb_brdjxx if hasattr(result, 'yb_brdjxx') else {}
+        # 从 SQL 结果映射到标准化字段（使用 normalizer 将编码转为中文标签）
+        yb_zyfdxx = getattr(result, 'yb_zyfdxx', None) or {}
+        yb_dyxxzy = getattr(result, 'yb_dyxxzy', None) or {}
+        yb_dyxxnd = getattr(result, 'yb_dyxxnd', None) or {}
+        yb_brdjxx = getattr(result, 'yb_brdjxx', None) or {}
+
+        # ★ 使用 dictionary_normalizer 将编码转为中文标签
+        normalizer = self._fetcher.normalizer if hasattr(self._fetcher, 'normalizer') else None
+        if normalizer and isinstance(yb_brdjxx, dict):
+            fund_type_raw = yb_brdjxx.get("fund_type", "")
+            person_type_raw = yb_brdjxx.get("PER_TYPE", "")
+            medical_type_raw = yb_brdjxx.get("yllb", "")
+            fund_type = normalizer.normalize("fund_type", str(fund_type_raw)) or str(fund_type_raw)
+            person_type = normalizer.normalize("person_type", str(person_type_raw)) or str(person_type_raw)
+            medical_type = normalizer.normalize("medical_type", str(medical_type_raw)) or str(medical_type_raw)
+        else:
+            fund_type = str(yb_brdjxx.get("fund_type", ""))
+            person_type = str(yb_brdjxx.get("PER_TYPE", ""))
+            medical_type = str(yb_brdjxx.get("yllb", ""))
 
         total_fee = float(yb_zyfdxx.get("bdfyzje", 0))
         in_scope = float(yb_zyfdxx.get("bdybnzje", 0))
 
-        treatment = {
-            "total_fee": total_fee,
-            "in_scope": in_scope,
-            "deductible": float(yb_dyxxzy.get("bcqfje", 0)),
-            "pooling_self_pay": float(yb_zyfdxx.get("bdtczf", 0)),
-            "pooling_payment": float(yb_zyfdxx.get("bdtczfje", 0)),
-            "major_self_pay": float(yb_zyfdxx.get("bddegwyzf", 0)),
-            "major_payment": float(yb_zyfdxx.get("bddegwyzfje", 0)),
-            "personal_liability": float(yb_zyfdxx.get("bdgryf", 0)),
-            "out_of_scope": max(0.0, total_fee - in_scope),
-        }
-
         return PatientSettlementData(
             settlement_id=settlement_id,
-            treatment=treatment,
+            treatment={
+                "total_fee": total_fee,
+                "in_scope": in_scope,
+                "deductible": float(yb_dyxxzy.get("bcqfje", 0)),
+                "pooling_self_pay": float(yb_zyfdxx.get("bdtczf", 0)),
+                "pooling_payment": float(yb_zyfdxx.get("bdtczfje", 0)),
+                "major_self_pay": float(yb_zyfdxx.get("bddegwyzf", 0)),
+                "major_payment": float(yb_zyfdxx.get("bddegwyzfje", 0)),
+                "personal_liability": float(yb_zyfdxx.get("bdgryf", 0)),
+                "out_of_scope": max(0.0, total_fee - in_scope),
+            },
             fee_details=result.yb_zyfymx if hasattr(result, 'yb_zyfymx') else [],
             annual={
                 "year": yb_dyxxnd.get("fynd", ""),
@@ -70,9 +82,9 @@ class SqlQueryAdapter(SqlQueryTool):
             },
             admission=yb_dyxxzy,
             patient_info={
-                "fund_type": str(yb_brdjxx.get("fund_type", "")),
-                "person_type": str(yb_brdjxx.get("PER_TYPE", "")),
-                "medical_type": str(yb_brdjxx.get("yllb", "")),
+                "fund_type": fund_type,
+                "person_type": person_type,
+                "medical_type": medical_type,
             },
         )
 
@@ -166,8 +178,13 @@ class LlmExplainAdapter(LlmExplainTool):
     async def generate_stream(self, context: dict) -> AsyncIterator[str]:
         if self._generator is None:
             from src.model_service.gateway import ModelGateway
-            model = ModelGateway()
-            self._generator = ExplanationGenerator(model_gateway=model)
+            try:
+                model = ModelGateway()
+                self._generator = ExplanationGenerator(model_gateway=model)
+            except Exception:
+                # LLM 不可用，生成文本兜底解释
+                yield self._build_fallback_text(context)
+                return
 
         # 将 dict 适配为完整的 ExplanationContext
         ctx = ExplanationContext(
@@ -185,5 +202,78 @@ class LlmExplainAdapter(LlmExplainTool):
         if policy_rules:
             ctx.policy_rules = policy_rules
 
-        async for chunk in self._generator.generate(ctx):
-            yield chunk
+        # 尝试调 LLM，失败则兜底
+        try:
+            async for chunk in self._generator.generate(ctx):
+                yield chunk
+        except Exception:
+            yield self._build_fallback_text(context)
+
+    def _build_fallback_text(self, context: dict) -> str:
+        """LLM 不可用时，从计算数据生成兜底文本解释"""
+        calc = context.get("calculation_result", {}) or {}
+        treatment = calc.get("treatment", {})
+        segments = calc.get("segments", {})
+        seg_list = segments.get("segments", [])
+        reconciliation = segments.get("reconciliation", {})
+
+        lines = ["## 费用分解结果\n"]
+
+        total_fee = treatment.get("total_fee", 0)
+        personal_liability = treatment.get("personal_liability", 0)
+        pooling_self_pay = treatment.get("pooling_self_pay", 0)
+        deductible = treatment.get("deductible", 0)
+
+        lines.append(f"本次住院总费用: **{total_fee:,.2f}** 元")
+        lines.append(f"个人应负: **{personal_liability:,.2f}** 元")
+        lines.append("")
+
+        if seg_list:
+            lines.append("### 分段计算明细")
+            for i, seg in enumerate(seg_list, 1):
+                lines.append(
+                    f"{i}. {seg.get('lower', 0):,.0f} - {seg.get('upper', '∞' if seg.get('upper') == float('inf') else seg.get('upper', 0)):,.0f} 元"
+                    if seg.get('upper') != float('inf')
+                    else f"{i}. {seg.get('lower', 0):,.0f} 元以上"
+                )
+                lines.append(f"   段内金额: {seg.get('amount', 0):,.2f} 元")
+                lines.append(f"   自付金额: {seg.get('pay', 0):,.2f} 元")
+                calc_text = seg.get("calculation", "")
+                if calc_text:
+                    lines.append(f"   计算: {calc_text}")
+                policy = seg.get("policy_source", "")
+                if policy:
+                    lines.append(f"   政策: {policy}")
+                lines.append("")
+
+        if reconciliation:
+            lines.append("### 对账结果")
+            authoritative = reconciliation.get("authoritative_amount", 0)
+            calculated = reconciliation.get("calculated_amount", 0)
+            lines.append(f"系统金额: {authoritative:,.2f} 元")
+            lines.append(f"计算金额: {calculated:,.2f} 元")
+            lines.append(f"差异: {reconciliation.get('difference', 0):,.2f} 元")
+            matched = reconciliation.get("matched", False)
+            if matched:
+                lines.append("✓ 计算与系统金额一致")
+            else:
+                lines.append("⚠️ 计算与系统金额存在差异，需人工复核")
+
+        # 政策依据
+        policy_rules = context.get("policy_rules", []) or []
+        if policy_rules:
+            lines.append("")
+            lines.append("### 政策依据")
+            for r in policy_rules[:5]:
+                rule_type = getattr(r, 'rule_type', '') or r.get('rule_type', '')
+                title = getattr(r, 'title', '') or r.get('title', '')
+                evidence = getattr(r, 'evidence_text', '') or r.get('evidence_text', '')
+                if title:
+                    lines.append(f"- [{rule_type}] {title}")
+                if evidence:
+                    lines.append(f"  {evidence[:200]}")
+        elif context.get("rag_miss"):
+            lines.append("")
+            lines.append("⚠️ 未检索到相关政策规则")
+
+        return "\n".join(lines)
