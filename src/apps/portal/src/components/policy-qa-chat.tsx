@@ -109,6 +109,7 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
   const [officeView, setOfficeView] = useState('')
   const [ragMiss, setRagMiss] = useState(false)
   const [selectedView, setSelectedView] = useState<'patient' | 'office'>('patient')
+  const [showPolicyPanel, setShowPolicyPanel] = useState(false) // 政策知识侧面板
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const typewriterRef = useRef<NodeJS.Timeout | null>(null)
@@ -275,6 +276,7 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
     setOfficeView('')
     setRagMiss(false)
     setSelectedView('patient')
+    setShowPolicyPanel(false)
 
     // 添加用户消息
     setMessages((prev) => [
@@ -654,26 +656,52 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
 
             {/* 查询进度卡片 - 使用 ThinkingChain 组件 */}
             {steps.length > 0 && (
-              <ThinkingChain
-                steps={steps as ThinkingStep[]}
-                isLoading={isLoading}
-              />
+              <>
+                <ThinkingChain
+                  steps={steps as ThinkingStep[]}
+                  isLoading={isLoading}
+                />
+                {/* ★ 查询相关知识按钮 */}
+                {!isLoading && (
+                  <div style={{ display: 'flex', justifyContent: 'flex-start', animation: 'message-in 0.45s ease-out' }}>
+                    <button
+                      onClick={() => setShowPolicyPanel(!showPolicyPanel)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '8px 16px',
+                        borderRadius: '10px',
+                        background: showPolicyPanel
+                          ? 'rgba(6,182,212,0.12)'
+                          : 'rgba(255,255,255,0.03)',
+                        border: showPolicyPanel
+                          ? '1px solid rgba(6,182,212,0.3)'
+                          : '1px solid rgba(255,255,255,0.08)',
+                        color: showPolicyPanel ? '#06b6d4' : '#94a3b8',
+                        fontSize: '13px',
+                        fontFamily: 'inherit',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                      }}
+                    >
+                      <span style={{ fontSize: '15px' }}>📚</span>
+                      查询相关知识
+                    </button>
+                  </div>
+                )}
+              </>
             )}
 
             {/* RAG 未命中警告 */}
             {ragMiss && (
               <div
                 style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '8px',
-                  padding: '12px 16px',
-                  borderRadius: '12px',
+                  display: 'flex', alignItems: 'flex-start', gap: '8px',
+                  padding: '12px 16px', borderRadius: '12px',
                   background: 'rgba(234,179,8,0.08)',
                   border: '1px solid rgba(234,179,8,0.2)',
-                  color: '#eab308',
-                  fontSize: '13px',
-                  lineHeight: 1.5,
+                  color: '#eab308', fontSize: '13px', lineHeight: 1.5,
                   animation: 'message-in 0.45s ease-out',
                 }}
               >
@@ -682,8 +710,152 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
               </div>
             )}
 
-            {/* 政策问答结果卡片 */}
-            {(treatments.length > 0 || feeBreakdown.length > 0 || evidence.length > 0 || policyCards.length > 0) && (
+            {/* ★ 政策知识侧面板 */}
+            {showPolicyPanel && !isLoading && (
+              <div
+                style={{
+                  borderRadius: '16px',
+                  background: 'rgba(255,255,255,0.02)',
+                  border: '1px solid rgba(6,182,212,0.15)',
+                  overflow: 'hidden',
+                  animation: 'message-in 0.45s ease-out',
+                }}
+              >
+                {/* 面板头部 */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '12px 16px',
+                  borderBottom: '1px solid rgba(255,255,255,0.04)',
+                  background: 'rgba(6,182,212,0.04)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '16px' }}>📚</span>
+                    <span style={{ fontSize: '14px', fontWeight: 600, color: '#e2e8f0' }}>
+                      相关政策知识
+                    </span>
+                    <span style={{
+                      fontSize: '11px', color: '#64748b',
+                      background: 'rgba(255,255,255,0.04)',
+                      padding: '2px 8px', borderRadius: '9999px',
+                    }}>
+                      {policyCards.length + evidence.length} 条
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setShowPolicyPanel(false)}
+                    style={{
+                      background: 'none', border: 'none', color: '#64748b',
+                      cursor: 'pointer', fontSize: '18px', padding: '2px 6px',
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* 面板内容 */}
+                <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {/* 政策卡片 */}
+                  {policyCards.map((card, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: '10px 14px',
+                        borderRadius: '10px',
+                        background: 'rgba(255,255,255,0.02)',
+                        border: '1px solid rgba(255,255,255,0.05)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                        <span style={{
+                          fontSize: '10px', fontWeight: 600, padding: '1px 6px',
+                          borderRadius: '4px',
+                          background: card.score && card.score > 0
+                            ? 'rgba(16,185,129,0.12)' : 'rgba(148,163,184,0.08)',
+                          color: card.score && card.score > 0 ? '#10b981' : '#94a3b8',
+                        }}>
+                          {card.ruleType || '政策规则'}
+                        </span>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0', flex: 1 }}>
+                          {card.title}
+                        </span>
+                        {card.score !== undefined && (
+                          <span style={{
+                            fontSize: '10px', color: '#64748b',
+                            fontFamily: 'monospace',
+                          }}>
+                            相关度 {Math.abs(card.score).toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: 1.5 }}>
+                        {card.evidenceText}
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px', lineHeight: 1.4 }}>
+                        📎 {card.clause}
+                      </div>
+                      {card.matchedReason && (
+                        <div style={{ fontSize: '10px', color: '#475569', marginTop: '4px' }}>
+                          匹配原因: {card.matchedReason}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* 证据项 */}
+                  {evidence.map((ev, idx) => (
+                    <div
+                      key={`ev-${idx}`}
+                      style={{
+                        padding: '10px 14px',
+                        borderRadius: '10px',
+                        background: 'rgba(16,185,129,0.03)',
+                        border: '1px solid rgba(16,185,129,0.08)',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#e2e8f0', marginBottom: '4px' }}>
+                        {ev.item}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#10b981', fontFamily: 'monospace' }}>
+                        {ev.value?.toLocaleString?.('zh-CN', { minimumFractionDigits: 2 }) ?? ev.value} 元
+                      </div>
+                      {ev.sourceTable && (
+                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>
+                          📊 {ev.sourceTable}
+                        </div>
+                      )}
+                      {ev.policyRule && (
+                        <div style={{ fontSize: '10px', color: '#475569', marginTop: '2px' }}>
+                          📎 {ev.policyRule}
+                        </div>
+                      )}
+                      {ev.calculation && (
+                        <div style={{
+                          fontSize: '10px', color: '#64748b', marginTop: '4px',
+                          background: 'rgba(0,0,0,0.2)', padding: '6px 8px',
+                          borderRadius: '6px', fontFamily: 'monospace', whiteSpace: 'pre-wrap',
+                        }}>
+                          {ev.calculation}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* 空状态 */}
+                  {policyCards.length === 0 && evidence.length === 0 && (
+                    <div style={{
+                      textAlign: 'center', padding: '20px',
+                      color: '#64748b', fontSize: '13px',
+                    }}>
+                      <span style={{ fontSize: '24px', display: 'block', marginBottom: '8px' }}>📭</span>
+                      暂未检索到相关政策和证据
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 政策问答结果卡片 — 步骤完成后总是展示 */}
+            {!isLoading && steps.some(s => s.status === 'done') && (
               <PolicyAnswerCard
                 treatments={treatments}
                 feeBreakdown={feeBreakdown}
@@ -749,8 +921,8 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
               </div>
             )}
 
-            {/* ★ 双视角解释（患者视角 / 院端视角） */}
-            {(patientView || officeView) && (
+            {/* ★ 双视角解释 — 步骤完成后总是展示 */}
+            {!isLoading && steps.some(s => s.status === 'done') && (
               <div
                 style={{
                   borderRadius: '16px',
@@ -761,25 +933,20 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
                 }}
               >
                 {/* 标签切换 */}
-                <div
-                  style={{
-                    display: 'flex',
-                    borderBottom: '1px solid rgba(255,255,255,0.06)',
-                  }}
-                >
+                <div style={{
+                  display: 'flex',
+                  borderBottom: '1px solid rgba(255,255,255,0.06)',
+                }}>
                   <button
                     onClick={() => setSelectedView('patient')}
                     style={{
-                      flex: 1,
-                      padding: '10px 16px',
-                      fontSize: '13px',
-                      fontWeight: selectedView === 'patient' ? 600 : 400,
+                      flex: 1, padding: '10px 16px',
+                      fontSize: '13px', fontWeight: selectedView === 'patient' ? 600 : 400,
                       color: selectedView === 'patient' ? '#06b6d4' : '#94a3b8',
                       background: selectedView === 'patient' ? 'rgba(6,182,212,0.06)' : 'transparent',
                       border: 'none',
                       borderBottom: selectedView === 'patient' ? '2px solid #06b6d4' : '2px solid transparent',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s',
+                      cursor: 'pointer', transition: 'all 0.2s',
                     }}
                   >
                     👤 患者视角
@@ -787,24 +954,26 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
                   <button
                     onClick={() => setSelectedView('office')}
                     style={{
-                      flex: 1,
-                      padding: '10px 16px',
-                      fontSize: '13px',
-                      fontWeight: selectedView === 'office' ? 600 : 400,
+                      flex: 1, padding: '10px 16px',
+                      fontSize: '13px', fontWeight: selectedView === 'office' ? 600 : 400,
                       color: selectedView === 'office' ? '#a855f7' : '#94a3b8',
                       background: selectedView === 'office' ? 'rgba(168,85,247,0.06)' : 'transparent',
                       border: 'none',
                       borderBottom: selectedView === 'office' ? '2px solid #a855f7' : '2px solid transparent',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s',
+                      cursor: 'pointer', transition: 'all 0.2s',
                     }}
                   >
                     🏥 院端视角
                   </button>
                 </div>
                 {/* 内容区域 */}
-                <div style={{ padding: '16px', whiteSpace: 'pre-wrap', fontSize: '14px', lineHeight: 1.6, color: '#f1f5f9' }}>
-                  {selectedView === 'patient' ? patientView : officeView}
+                <div style={{
+                  padding: '16px', whiteSpace: 'pre-wrap', fontSize: '14px',
+                  lineHeight: 1.6, color: '#f1f5f9',
+                }}>
+                  {selectedView === 'patient'
+                    ? (patientView || '暂无患者视角解释。请检查后端服务是否正常运行，或尝试重新提问。')
+                    : (officeView || '暂无院端视角解释。请检查后端服务是否正常运行，或尝试重新提问。')}
                 </div>
               </div>
             )}
