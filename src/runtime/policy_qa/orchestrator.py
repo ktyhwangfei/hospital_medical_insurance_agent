@@ -166,6 +166,11 @@ class PolicyQAOrchestrator:
                 query=request.question,
                 filters=policy_filters,
                 top_k=10,
+                patient_info={
+                    "fund_type": sql_data.patient_info.get("fund_type", ""),
+                    "person_type": sql_data.patient_info.get("person_type", ""),
+                    "medical_type": sql_data.patient_info.get("medical_type", ""),
+                } if hasattr(sql_data, 'patient_info') else None,
             )
             yield PolicyQAResponse(
                 step="search_policy_rules",
@@ -222,6 +227,13 @@ class PolicyQAOrchestrator:
                 "question": request.question,
                 "user_role": "患者",
                 "rag_miss": len(skill_policy_rules) == 0,
+                "intent": intent_result.intent.value if intent_result.intent else "treatment_decomposition",
+                "query_type": intent_result.query_type or "",
+                "settlement_id": intent_result.settlement_id or "",
+                "target_fee_item": fee_item,
+                "sql_data": sql_data,
+                "policy_rules": skill_policy_rules,
+                "calculation_result": calculation_result,
             }
             async for chunk in self.adapters["llm"].generate_stream(context_dict):
                 full_response += chunk
