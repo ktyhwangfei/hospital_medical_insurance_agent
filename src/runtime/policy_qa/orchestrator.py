@@ -1,20 +1,28 @@
 """
-医保政策问答RAG系统 - 编排器
+医保政策问答RAG系统 - 编排器（适配器驱动）
 
-串联6个步骤:
-1. 意图识别 (LLM, 非流式)
-2. SQL Server查询
-3. 问题重写
-4. RAG检索 (Milvus, 向量+高级搜索)
-5. 费用拆分计算Skill
-6. 大模型润色 (基于角色, 流式)
+串联5个步骤（通过 adapter + skill 配置路由）:
+0. 意图识别 (LLM, 非流式)
+1. SQL 查询 via adapter (MCP类型)
+2. 政策检索 via adapter (KNOWLEDGE类型)
+3. 计算 via config.yaml 路由 (SKILL类型)
+4. 解释生成 via adapter streaming (MCP类型)
 """
 
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
+
+import yaml
+
+# 加载 skill 包
+_skill_dir = Path(__file__).parent.parent.parent.parent / "skills"
+if str(_skill_dir) not in sys.path:
+    sys.path.insert(0, str(_skill_dir))
 
 from src.model_service.gateway import ModelGateway
 from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
@@ -35,6 +43,19 @@ from src.runtime.policy_qa.question_rewriter import QuestionRewriter
 from src.runtime.policy_qa.sql_data_fetcher import SQLDataFetcher
 
 logger = logging.getLogger(__name__)
+
+
+def _load_skill_config() -> dict:
+    """从 skill 包加载费用路由配置"""
+    config_path = _skill_dir / "policy_fee_explanation" / "config.yaml"
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def _load_calculators() -> dict:
+    """从 skill 包加载计算器注册表"""
+    from policy_fee_explanation.calculator import CALCULATOR_REGISTRY
+    return CALCULATOR_REGISTRY
 
 
 class PolicyQAOrchestrator:
@@ -62,6 +83,20 @@ class PolicyQAOrchestrator:
         # 意图识别器（使用模型网关）
         self.intent_detector = IntentDetector(model_gateway=model_gateway)
 
+        # ★ 新增：加载 skill 配置和计算器
+        self.skill_config = _load_skill_config()
+        self.calculators = _load_calculators()
+
+        # ★ 新增：初始化适配器
+        from src.runtime.policy_qa.tool_adapters import (
+            SqlQueryAdapter, PolicySearchAdapter, LlmExplainAdapter,
+        )
+        self.adapters = {
+            "sql": SqlQueryAdapter(sql_fetcher),
+            "policy": PolicySearchAdapter(search_engine),
+            "llm": LlmExplainAdapter(explanation_generator),
+        }
+
     async def process(
         self,
         request: PolicyQARequest,
@@ -75,13 +110,10 @@ class PolicyQAOrchestrator:
         Yields:
             PolicyQAResponse: SSE事件
         """
-        context = ExplanationContext(question=request.question)
-
         try:
-            # Step 1: 意图识别
-            yield PolicyQAResponse(step="intent", status="running")
+            # Step 0: 意图识别（保留原有逻辑）
+            yield PolicyQAResponse(step="intent", status="running", public_message="正在识别问题意图")
             intent_result = await self._detect_intent(request)
-            context.intent = intent_result
             yield PolicyQAResponse(
                 step="intent",
                 status="done",
@@ -89,81 +121,123 @@ class PolicyQAOrchestrator:
                     "intent": intent_result.intent.value,
                     "settlement_id": intent_result.settlement_id,
                     "confidence": intent_result.confidence,
+                    "query_type": intent_result.query_type,
+                    "target_fee_item": intent_result.target_fee_item,
+                    "target_fee_label": intent_result.target_fee_label,
                 },
+                public_detail={
+                    "summary": f"识别为「{intent_result.query_type or '费用分解'}」问题",
+                    "confidence": intent_result.confidence,
+                },
+                public_message=f"检测到「{intent_result.query_type or '费用分解'}」问题",
             )
 
-            # Step 2: SQL Server查询
-            yield PolicyQAResponse(step="sql_query", status="running")
-            sql_result = await self._fetch_sql_data(intent_result.settlement_id)
-            context.sql_result = sql_result
+            # Step 1: SQL 查询 via adapter（MCP 类型）
+            yield PolicyQAResponse(step="query_sql_data", status="running", public_message="正在查询患者结算数据")
+            sql_data = await self.adapters["sql"].query(intent_result.settlement_id)
             yield PolicyQAResponse(
-                step="sql_query",
+                step="query_sql_data",
                 status="done",
                 detail={
+                    "settlement_id": intent_result.settlement_id,
                     "tables": [
                         "yb_zyfdxx",
                         "yb_zyfymx",
                         "yb_dyxxnd",
                         "yb_dyxxzy",
                         "yb_brdjxx",
-                    ]
+                    ],
                 },
-            )
-
-            # Step 3: 问题重写（传递意图和目标费用项信息）
-            yield PolicyQAResponse(step="rewrite", status="running")
-            rewritten = await self._rewrite_question(
-                request.question,
-                sql_result,
-                intent_result.intent,
-                target_fee_item=intent_result.target_fee_item,
-            )
-            context.rewritten_question = rewritten
-            yield PolicyQAResponse(
-                step="rewrite",
-                status="done",
-                detail={
-                    "rewritten_question": rewritten.rewritten,
-                    "search_query": rewritten.search_query,
-                    "explanation_context": rewritten.explanation_context,
-                    "warnings": rewritten.warnings,
+                public_detail={
+                    "summary": "已查询患者结算数据与费用明细",
                 },
+                public_message="已获取结算数据与费用明细",
             )
 
-            # Step 4: RAG检索（传递意图信息用于定向检索）
-            yield PolicyQAResponse(step="search", status="running")
-            policy_rules = await self._search_policy_rules(
-                rewritten.search_query or rewritten.rewritten,
-                sql_result,
-                intent=intent_result.intent,
-                target_fee_item=intent_result.target_fee_item,
+            # Step 2: 政策检索 via adapter（按 config.yaml 路由确定 policy_filters）
+            yield PolicyQAResponse(step="search_policy_rules", status="running", public_message="正在检索相关政策规则")
+
+            fee_item = intent_result.target_fee_item
+            routes = self.skill_config.get("fee_explanation_routes", {})
+            route = routes.get(fee_item) or self.skill_config.get("default_route", {})
+            policy_filters = route.get("policy_filters", [])
+
+            skill_policy_rules = await self.adapters["policy"].search(
+                query=request.question,
+                filters=policy_filters,
+                top_k=10,
             )
-            context.policy_rules = policy_rules
             yield PolicyQAResponse(
-                step="search",
+                step="search_policy_rules",
                 status="done",
-                detail={"rules_count": len(policy_rules)},
+                detail={"rules_count": len(skill_policy_rules)},
+                public_detail={
+                    "summary": f"已检索到 {len(skill_policy_rules)} 条相关政策规则",
+                    "rules_count": len(skill_policy_rules),
+                    "rag_miss": len(skill_policy_rules) == 0,
+                    "policy_filters": policy_filters,
+                },
+                public_message=f"检索到 {len(skill_policy_rules)} 条政策规则" if skill_policy_rules else "未检索到匹配的政策规则，将基于结算数据解释",
+                policy_cards=[
+                    {
+                        "title": r.title or f"[{r.rule_type}] {r.clause}",
+                        "clause": r.clause or "",
+                        "evidence_text": r.evidence_text or "",
+                        "matched_reason": r.matched_reason or f"匹配规则类型: {r.rule_type}",
+                        "rule_type": r.rule_type,
+                        "score": r.score,
+                    }
+                    for r in skill_policy_rules
+                ],
             )
 
-            # Step 5: 费用拆分计算Skill
-            yield PolicyQAResponse(step="decomposition", status="running")
-            decomposition = await self._calculate_decomposition(sql_result, policy_rules)
-            context.decomposition = decomposition
+            # Step 3: 计算 via config.yaml 路由（SKILL 类型）
+            yield PolicyQAResponse(step="calculate_explanation", status="running", public_message="正在计算费用分解")
+
+            calculator_name = route.get("calculator", "FeeDecompositionCalculator")
+            CalculatorClass = self.calculators.get(calculator_name)
+            if CalculatorClass:
+                calculator = CalculatorClass()
+                calculation_result = calculator.calculate(sql_data, skill_policy_rules)
+            else:
+                logger.warning(f"Calculator {calculator_name} not found in registry, using empty result")
+                calculation_result = {"error": f"Calculator {calculator_name} not found"}
+
+            treatment = calculation_result.get("treatment", {})
             yield PolicyQAResponse(
-                step="decomposition",
+                step="calculate_explanation",
                 status="done",
-                detail=self._serialize_decomposition(decomposition),
+                detail=calculation_result,
+                public_detail={
+                    "summary": f"费用分解完成 · 总费用 {treatment.get('total_fee', 0):,.2f} 元 · 个人应负 {treatment.get('personal_liability', 0):,.2f} 元",
+                    "evidence_count": calculation_result.get("evidence_count", 0),
+                },
+                public_message=f"费用分解完成 · 总费用 {treatment.get('total_fee', 0):,.2f} 元 · 个人应负 {treatment.get('personal_liability', 0):,.2f} 元",
             )
 
-            # Step 6: 大模型润色 (流式)
-            yield PolicyQAResponse(step="explain", status="running")
-            async for chunk in self._generate_explanation(context):
+            # Step 4: 解释生成 via adapter streaming（MCP 类型）
+            yield PolicyQAResponse(step="generate_explanation", status="running", public_message="正在生成自然语言解释")
+            full_response = ""
+            context_dict = {
+                "question": request.question,
+                "user_role": "患者",
+                "rag_miss": len(skill_policy_rules) == 0,
+            }
+            async for chunk in self.adapters["llm"].generate_stream(context_dict):
+                full_response += chunk
                 yield PolicyQAResponse(
-                    step="explain",
+                    step="generate_explanation",
                     status="streaming",
                     chunk=chunk,
+                    public_message=chunk,
                 )
-            yield PolicyQAResponse(step="explain", status="done")
+            yield PolicyQAResponse(
+                step="generate_explanation",
+                status="done",
+                public_message="解释生成完成",
+                patient_view=full_response,
+                office_view=full_response,
+            )
 
         except Exception as e:
             logger.exception("PolicyQA processing failed")
@@ -386,6 +460,11 @@ class PolicyQAOrchestrator:
                     rule_type=entity.get("rule_type", entity.get("fact_type", "")),
                     rule_value=entity.get("rule_value", ""),
                     score=score,
+                    # ★ 新增：RAG 政策卡片展示字段
+                    title=entity.get("title", ""),
+                    clause=entity.get("clause", ""),
+                    evidence_text=entity.get("evidence_text", entity.get("source_text", "")),
+                    matched_reason=self._build_matched_reason(entity),
                 )
                 policy_rules.append(rule)
 
@@ -526,6 +605,15 @@ class PolicyQAOrchestrator:
             },
             "segments": {
                 "total_pay": decomposition.segments.total_pay,
+                "warnings": decomposition.segments.warnings,
+                "reconciliation": {
+                    "authoritative_amount": decomposition.segments.authoritative_amount,
+                    "calculated_amount": decomposition.segments.total_pay,
+                    "difference": decomposition.segments.reconciliation_difference,
+                    "tolerance": decomposition.segments.reconciliation_tolerance,
+                    "matched": decomposition.segments.reconciliation_matched,
+                    "message": decomposition.segments.reconciliation_message,
+                },
                 "segments": [
                     {
                         "lower": seg.lower,
@@ -544,3 +632,26 @@ class PolicyQAOrchestrator:
             },
             "evidence_count": len(decomposition.evidence),
         }
+
+    @staticmethod
+    def _build_matched_reason(entity: dict) -> str:
+        """构建匹配原因说明（RAG 政策卡片展示用）。
+
+        Args:
+            entity: Milvus 搜索结果的实体字段 dict
+
+        Returns:
+            人性化匹配原因字符串，如 "险种=城镇职工, 人员类别=退休, 规则类型=统筹分段"
+        """
+        parts = []
+        if entity.get("insu_type"):
+            parts.append(f"险种={entity['insu_type']}")
+        if entity.get("psn_type"):
+            parts.append(f"人群={entity['psn_type']}")
+        if entity.get("med_type"):
+            parts.append(f"医疗={entity['med_type']}")
+        if entity.get("rule_type"):
+            parts.append(f"类型={entity['rule_type']}")
+        if entity.get("payment_ratio"):
+            parts.append(f"比例={entity['payment_ratio']}")
+        return "、".join(parts) if parts else "政策规则匹配"
