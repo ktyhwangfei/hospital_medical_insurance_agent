@@ -1,0 +1,18 @@
+queries:
+  - query_name: deductible_tertiary_standard
+    required: true
+    filters:
+      rule_type: 起付线
+      hosp_lv: 三级医院
+      psn_type: 全部
+    description: 三级医院起付线标准
+
+  - query_name: deductible_second_admission_halved
+    required: false
+    filters:
+      rule_type: 计算公式
+    text_must_include_all:
+      - 起付线
+      - 50%
+      - 减半
+    description: 二次及以上住院起付线减半规则

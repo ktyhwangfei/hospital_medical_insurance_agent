@@ -1,0 +1,29 @@
+# 计算指标：统筹范围内费用 (in_scope_total)
+# 派生指标 — 由 total_fee - self_fee - first_pay_fee 计算得出
+# 对应结算记录中的「统筹范围内费用」，是医保报销的计算基数
+indicator_id: in_scope_total
+name: 统筹范围内费用
+business_object: Settlement
+description: 总费用中剔除自费费用和乙类先行自付后，纳入医保统筹基金计算范围的费用。作为报销基数使用。
+category: numeric
+value_type: float
+unit: 元
+source:
+  type: derived
+depends_on:
+  - total_fee
+  - self_fee
+  - first_pay_fee
+computation: "total_fee - self_fee - first_pay_fee"
+formula:
+  expression: "total_fee - self_fee - first_pay_fee"
+  dependencies:
+    - total_fee
+    - self_fee
+    - first_pay_fee
+  type: arithmetic
+semantic_tags:
+  - 统筹范围内
+  - 报销基数
+  - 医保内
+  - 可报金额

@@ -1,0 +1,49 @@
+# 测试用例: 统筹支付解释 — 结算单 1671213
+# 用于验证 policy-fee-explanation skill 的 pooling_payment 策略执行
+
+input:
+  question: "统筹支付是什么意思"
+  settlement_id: "1671213"
+
+expected:
+  skill_id: policy-fee-explanation
+  target_fee_item: pooling_payment
+  target_field: basic_pooling_payment
+  data_source: REAL_DB
+  mock_used: false
+  can_answer: true
+  partial_answer: false
+  target_amount: 35000.00
+
+  case_context:
+    person_type: 退休人员
+    insurance_type: 城镇职工基本医疗保险
+    service_type: 普通住院
+    hospital_level: 三级医院
+    deductible: 650.00
+    basic_pooling_payment: 35000.00
+
+  evidence_completeness:
+    level: full_policy_ratio_matched
+
+  policy_evidence_count: 4
+
+  must_contain:
+    - 三级医院
+    - 统筹支付
+    - 35,000.00
+    - 统筹基金
+    - 支付比例
+    - 退休人员
+    - 不包含起付线
+    - 不包含统筹自付
+    - "不是您个人出的钱"
+
+  must_not_contain:
+    - "if t."
+    - undefined
+    - "null"
+    - '{"ratio"'
+    - mock
+    - "AI思维链"
+    - embedding_text

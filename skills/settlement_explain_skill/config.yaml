@@ -1,0 +1,27 @@
+# 费用解释路由表
+# key = target_fee_item，新增费用项只需加一条记录
+fee_explanation_routes:
+  pooling_self_pay:
+    calculator: "FeeDecompositionCalculator"
+    policy_filters: ["支付比例", "起付线", "封顶线", "计算公式"]
+    description: "统筹自付解释"
+
+  personal_liability:
+    calculator: "PersonalLiabilityCalculator"
+    policy_filters: ["支付比例", "起付线", "封顶线", "计算公式"]
+    description: "个人应付解释"
+
+  deductible:
+    calculator: "DeductibleExplainer"
+    policy_filters: ["起付线", "计算公式"]
+    description: "起付线解释"
+
+  out_of_scope:
+    calculator: "OutOfScopeCalculator"
+    policy_filters: ["支付比例", "起付线", "封顶线", "计算公式"]
+    description: "医保外费用解释"
+
+default_route:
+  calculator: "FeeDecompositionCalculator"
+  policy_filters: ["支付比例", "起付线", "封顶线", "计算公式"]
+  description: "通用费用解释"

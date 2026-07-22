@@ -1,0 +1,27 @@
+category: 医疗机构等级
+description: 数据模型1 字典 Sheet → 医疗机构等级 标准化字典
+entries:
+- standard_value: 三级
+  synonyms: []
+  description: ''
+- standard_value: 二级
+  synonyms: []
+  description: ''
+- standard_value: 一级
+  synonyms: []
+  description: ''
+- standard_value: 无等级
+  synonyms: []
+  description: ''
+cross_system_mappings:
+  data_model1_loader:
+    level_1: 一级医院
+    level_2: 二级医院
+    level_3: 三级医院
+    level1_and_below: 一级医院
+    level1: 一级医院
+    level2: 二级医院
+    level3: 三级医院
+    primary: 一级及以下
+    secondary: 二级
+    tertiary: 三级

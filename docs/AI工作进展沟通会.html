@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="tokyo-night">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Coding 实践经验 · 医保AI项目</title>
+<link rel="stylesheet" href="C:/Users/于金宝/.config/opencode/skills/html-ppt/assets/fonts.css">
+<link rel="stylesheet" href="C:/Users/于金宝/.config/opencode/skills/html-ppt/assets/base.css">
+<link rel="stylesheet" id="theme-link" href="C:/Users/于金宝/.config/opencode/skills/html-ppt/assets/themes/tokyo-night.css">
+<link rel="stylesheet" href="C:/Users/于金宝/.config/opencode/skills/html-ppt/assets/animations/animations.css">
+<style>
+  :root { --glow-cyan: rgba(6,182,212,0.25); --glow-purple: rgba(168,85,247,0.2); }
+
+  /* ── Ambient orbs ── */
+  .cover-fx {
+    position: absolute; inset: 0; z-index: 0;
+    pointer-events: none; overflow: hidden;
+  }
+  .cover-fx .orb {
+    position: absolute; border-radius: 50%;
+    filter: blur(80px); opacity: 0.35;
+    animation: orb-drift 12s ease-in-out infinite alternate;
+  }
+  @keyframes orb-drift {
+    0%   { transform: translate(0, 0) scale(1); }
+    50%  { transform: translate(40px, -30px) scale(1.15); }
+    100% { transform: translate(-20px, 20px) scale(0.9); }
+  }
+
+  /* ── Big number pills ── */
+  .big-num {
+    font-size: 48px; font-weight: 800; line-height: 1;
+    background: linear-gradient(135deg, var(--accent), #a855f7);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .num-label {
+    font-size: 12px; color: var(--text-3); line-height: 1.4;
+    margin-top: 4px;
+  }
+
+  /* ── Simple cards ── */
+  .simple-card {
+    border-radius: 10px; padding: 16px 18px;
+    border: 1px solid var(--border); background: var(--surface);
+    font-size: 13px; line-height: 1.6; color: var(--text-2);
+  }
+  .simple-card .card-title {
+    font-size: 15px; font-weight: 700; color: var(--text-1);
+    margin-bottom: 6px; display: flex; align-items: center; gap: 8px;
+  }
+  .simple-card .card-title .icon { font-size: 20px; }
+
+  /* ── Code block ── */
+  .code-block {
+    background: #0d1117; border: 1px solid #30363d;
+    border-radius: 8px; padding: 10px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; line-height: 1.5;
+    color: #c9d1d9; overflow-x: auto;
+    margin: 8px 0;
+  }
+  .code-block .comment { color: #8b949e; }
+  .code-block .keyword { color: #ff7b72; }
+  .code-block .string { color: #a5d6ff; }
+  .code-block .func { color: #d2a8ff; }
+
+  /* ── Tag pills ── */
+  .tag { display: inline-block; font-size: 10px; font-weight: 700;
+    padding: 2px 8px; border-radius: 4px; letter-spacing: 0.3px; }
+  .tag-green { background: rgba(16,185,129,0.15); color: #10b981; }
+  .tag-amber { background: rgba(245,158,11,0.15); color: #f59e0b; }
+  .tag-red   { background: rgba(239,68,68,0.15); color: #ef4444; }
+
+  /* ── Two col layout ── */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+</style>
+</head>
+<body data-themes="tokyo-night,dracula,catppuccin-mocha" data-theme-base="C:/Users/于金宝/.config/opencode/skills/html-ppt/assets/themes/">
+<div class="deck">
+
+  <!-- ════════════════════════════════════════════════════════
+       SLIDE 1 — 封面 + 数据 + 3个核心做法
+       ════════════════════════════════════════════════════════ -->
+  <section class="slide" data-title="AI Coding 怎么做" style="padding: 32px 44px 20px; position: relative; overflow: hidden;">
+    <div class="cover-fx">
+      <div class="orb" style="width:300px;height:300px;top:-80px;right:-60px;background:#06b6d4;"></div>
+      <div class="orb" style="width:250px;height:250px;bottom:-60px;left:-40px;background:#a855f7;animation-delay:-4s;"></div>
+    </div>
+
+    <div style="position:relative; z-index:1;">
+      <!-- Header -->
+      <p class="kicker" style="margin-bottom:4px;">AI Coding 实践经验 · 医保AI智能体项目</p>
+      <h1 class="h1 anim-fade-up" data-anim="fade-up" style="margin:0; font-size:42px;">让 AI 写代码，<span class="gradient-text">人管架构</span></h1>
+
+      <!-- Data row -->
+      <div style="display:flex; gap:32px; margin-top:16px;" class="anim-fade-up" data-anim="fade-up">
+        <div><div class="big-num">625</div><div class="num-label">源码文件</div></div>
+        <div><div class="big-num">163K</div><div class="num-label">行代码</div></div>
+        <div><div class="big-num">153</div><div class="num-label">测试文件</div></div>
+        <div><div class="big-num">125</div><div class="num-label">Git 提交</div></div>
+      </div>
+
+      <!-- 3 core practices -->
+      <div style="margin-top:20px;">
+        <p style="font-size:13px; font-weight:700; color:var(--accent); margin-bottom:10px;">✦  三个核心做法</p>
+
+        <div class="two-col" style="gap:12px;">
+          <!-- Practice 1 -->
+          <div class="simple-card anim-fade-up" data-anim="fade-up" style="animation-delay:0.1s;">
+            <div class="card-title"><span class="icon">📋</span>做法一：先写规格书，再让 AI 写代码</div>
+            <div>
+              每个目录下放一个 <code>AGENTS.md</code>，写明：<br>
+              • 这个模块是干嘛的<br>
+              • 接口怎么定义（输入/输出/异常）<br>
+              • 有哪些已知陷阱<br>
+              <span style="color:var(--accent);">→ AI 读规格书后直接产出符合规范的代码，不需要每次重复说</span>
+            </div>
+          </div>
+
+          <!-- Practice 2 -->
+          <div class="simple-card anim-fade-up" data-anim="fade-up" style="animation-delay:0.2s;">
+            <div class="card-title"><span class="icon">🔌</span>做法二：接口定死，实现随便换</div>
+            <div>
+              先定义接口（Protocol），AI 只写实现：<br>
+              • 医保接口适配器 → 先定义 <code>InsurancePort</code><br>
+              • AI 写内存版实现（开发时用）<br>
+              • 后期换真实系统实现，接口不动<br>
+              <span style="color:var(--accent);">→ 7 个适配器全部独立，AI 改内部不影响外部</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Practice 3 -->
+        <div class="simple-card anim-fade-up" data-anim="fade-up" style="margin-top:12px; animation-delay:0.3s;">
+          <div class="card-title"><span class="icon">🧪</span>做法三：测试先行，红→绿→回归</div>
+          <div>
+            不是写完代码再补测试，而是 <strong>测试驱动</strong>：<br>
+            <span class="tag tag-red">红</span> 先写测试（此时测试必失败）→ <span class="tag tag-amber">绿</span> AI 写代码让测试通过 → <span class="tag tag-green">回归</span> 跑全部测试确保没破坏其他模块<br>
+            <span style="color:var(--accent);">→ 153 个测试文件，三层递进：单元测试 → API 测试 → Flow 流程测试</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="deck-footer" style="position:relative; z-index:1; margin-top:14px;">
+      <span class="dim2">医保AI项目组 · AI Coding 实践</span>
+      <span class="slide-number" data-current="1" data-total="2"></span>
+    </div>
+    <div class="notes">开场：先亮数据 — 625个文件、16万行代码、153个测试文件、125次提交。然后讲三个核心做法：1) 先写AGENTS.md规格书，AI按规范编码；2) 接口定死实现随便换，7个适配器独立；3) 测试先行，红→绿→回归，三层递进。</div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════
+       SLIDE 2 — 测试流程举例 + 踩过的坑 + 经验
+       ════════════════════════════════════════════════════════ -->
+  <section class="slide" data-title="测试流程 & 经验教训" style="padding: 32px 44px 20px; position: relative; overflow: hidden;">
+    <div class="cover-fx">
+      <div class="orb" style="width:280px;height:280px;top:-50px;left:-80px;background:#a855f7;animation-delay:-2s;"></div>
+      <div class="orb" style="width:200px;height:200px;bottom:-40px;right:60px;background:#f59e0b;animation-delay:-6s;"></div>
+    </div>
+
+    <div style="position:relative; z-index:1;">
+      <p class="kicker">具体例子：测试怎么写</p>
+      <h2 class="h2 anim-fade-up" data-anim="fade-up" style="font-size:32px;">测试流程 & <span class="gradient-text">踩坑经验</span></h2>
+
+      <!-- Example: Test flow -->
+      <div class="simple-card anim-fade-up" data-anim="fade-up" style="margin-top:12px; animation-delay:0.1s;">
+        <div class="card-title"><span class="icon">📝</span>举例：结算异常导办 — 测试怎么驱动开发</div>
+
+        <div style="display:flex; gap:12px; margin-top:8px;">
+          <div style="flex:1;">
+            <p style="font-size:11px; color:var(--text-3); margin-bottom:4px;"><strong>Step 1：写测试（红）</strong> — 人类写</p>
+            <div class="code-block">
+<span class="comment"># 测试：患者 P001 结算失败，AI 应该识别意图</span>
+<span class="keyword">def</span> <span class="func">test_detect_settlement_intent</span>():
+    result = <span class="func">detect_intent</span>(<span class="string">"患者 P001 结算失败了"</span>)
+    <span class="func">assert</span> result.intent == <span class="string">"settlement_exception"</span>
+    <span class="func">assert</span> result.confidence > <span class="string">0.8</span>
+            </div>
+          </div>
+          <div style="flex:1;">
+            <p style="font-size:11px; color:var(--text-3); margin-bottom:4px;"><strong>Step 2：AI 写实现（绿）</strong> — AI 生成</p>
+            <div class="code-block">
+<span class="comment"># AI 生成的实现代码</span>
+<span class="keyword">class</span> <span class="func">IntentDetector</span>:
+    <span class="keyword">def</span> <span class="func">detect</span>(self, msg):
+        <span class="keyword">if</span> <span class="string">"结算"</span> <span class="keyword">in</span> msg <span class="keyword">or</span> <span class="string">"收费"</span> <span class="keyword">in</span> msg:
+            <span class="keyword">return</span> Intent(
+                <span class="string">"settlement_exception"</span>, <span class="string">0.92</span>
+            )
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:8px;">
+          <span class="tag tag-red">红</span> 测试先写，此时运行必失败 → 
+          <span class="tag tag-amber">绿</span> AI 写代码让测试通过 → 
+          <span class="tag tag-green">回归</span> 跑全部 153 个测试确保没破坏其他模块
+        </div>
+      </div>
+
+      <!-- Pitfalls -->
+      <div style="margin-top:14px;">
+        <p style="font-size:13px; font-weight:700; color:var(--accent); margin-bottom:8px;">✦  踩过的三个坑</p>
+
+        <div class="two-col" style="gap:10px;">
+          <div class="simple-card" style="border-color:rgba(239,68,68,0.3);">
+            <div class="card-title"><span style="color:#ef4444;">❌</span>坑 1：AI 上下文不够，乱调用接口</div>
+            <div>
+              AI 不知道其他模块的接口，会写出跨层调用的代码。比如让前端组件直接调数据库。<br>
+              <strong>解决</strong>：每个目录自包含，AGENTS.md 写明「只能调哪些接口」
+            </div>
+          </div>
+
+          <div class="simple-card" style="border-color:rgba(245,158,11,0.3);">
+            <div class="card-title"><span style="color:#f59e0b;">⚠️</span>坑 2：AI 偷偷压类型错误</div>
+            <div>
+              AI 写不出类型时，会偷偷加 <code>as any</code> 或 <code>@ts-ignore</code>。<br>
+              <strong>解决</strong>：硬性规则 — 禁止提交，CI 自动检查，发现即报错
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Key lessons -->
+      <div style="margin-top:12px;">
+        <p style="font-size:13px; font-weight:700; color:var(--accent); margin-bottom:6px;">✦  三条经验</p>
+        <div style="display:flex; gap:10px;">
+          <div class="simple-card" style="flex:1; padding:10px 12px;">
+            <strong>1. 规格书比提示词重要</strong><br>
+            <span style="font-size:12px;">AGENTS.md 是「常驻上下文」，不需要每次重复说。投入 10 分钟写规格，省下 2 小时改代码。</span>
+          </div>
+          <div class="simple-card" style="flex:1; padding:10px 12px;">
+            <strong>2. 架构是 AI 的安全网</strong><br>
+            <span style="font-size:12px;">接口定死、模块隔离、安全围栏 — 这些约束让 AI 在正确方向上发挥，而不是在错误方向上高产出。</span>
+          </div>
+          <div class="simple-card" style="flex:1; padding:10px 12px;">
+            <strong>3. 人在回路是审核者</strong><br>
+            <span style="font-size:12px;">高风险动作（结算/退费/病案修改）AI 不碰，必须人工确认。AI 输出必须带引用来源。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="deck-footer" style="position:relative; z-index:1; margin-top:12px;">
+      <span class="dim2">医保AI项目组 · AI Coding 实践</span>
+      <span class="slide-number" data-current="2" data-total="2"></span>
+    </div>
+    <div class="notes">第二页：先展示测试驱动的具体例子 — 结算异常导办场景，左边是人类写的测试代码（红），右边是AI生成的实现代码（绿）。然后讲三个坑：1) AI上下文不够乱调用接口；2) AI偷偷压类型错误；3) 领域知识不对等。最后三条经验：规格书比提示词重要、架构是AI的安全网、人在回路是审核者。</div>
+  </section>
+
+</div>
+<script src="C:/Users/于金宝/.config/opencode/skills/html-ppt/assets/runtime.js"></script>
+</body></html>

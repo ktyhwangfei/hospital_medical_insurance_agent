@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-themes="corporate-clean,tokyo-night,nord,catppuccin-mocha,blueprint">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>医保智能体技术路径领导汇报</title>
+  <link rel="stylesheet" href="../../../.roo/skills/html-ppt/assets/fonts.css">
+  <link rel="stylesheet" href="../../../.roo/skills/html-ppt/assets/base.css">
+  <link rel="stylesheet" id="theme-link" href="../../../.roo/skills/html-ppt/assets/themes/corporate-clean.css">
+  <link rel="stylesheet" href="../../../.roo/skills/html-ppt/assets/animations/animations.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="tpl-mi-tech-path">
+<div class="deck">
+
+  <section class="slide cover" data-title="封面">
+    <div class="cover-layout">
+      <div class="cover-copy">
+        <p class="kicker">医保 AI 平台 · 技术路径汇报</p>
+        <h1 class="h1 anim-fade-up" data-anim="fade-up">院端医保智能体<br><span class="gradient-text">技术路径</span></h1>
+        <p class="lede">围绕政策规则结构化、RAG 检索增强、业务系统适配、MCP/Skill 扩展与安全闭环，建设可追溯、可管控、可扩展的医保 AI 协同中枢。</p>
+        <div class="cover-meta">
+          <span>领导汇报版 · 10 页 · 2026</span>
+        </div>
+      </div>
+      <div class="cover-diagram" aria-hidden="true">
+        <div class="orbit core">医保 AI</div>
+        <div class="orbit o1">政策</div>
+        <div class="orbit o2">规则</div>
+        <div class="orbit o3">数据</div>
+        <div class="orbit o4">安全</div>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>各位领导好，这份汇报主要讲我们当前医保智能体项目的技术路径。我的表达重点不是单纯讲一个聊天机器人，而是讲清楚我们为什么要把它建设成一个<strong>可追溯、可管控、可扩展的医保 AI 协同中枢</strong>。</p>
+      <p>医保场景和普通问答最大的区别在于：它涉及政策依据、患者诊次、费用明细、待遇计算和高风险业务动作。任何一个结论都不能只靠大模型“生成”，必须能说明数据来自哪里、政策来自哪里、计算过程是什么、哪些环节需要人工确认。</p>
+      <p>所以今天我会围绕 5 个关键词展开：<strong>政策问答、RAG、规则结构化、MCP 扩展、安全闭环</strong>。最后落到领导关心的建设价值：降低解释成本、提升医保服务效率、减少业务风险，并为后续医保运营和智能监管打基础。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="为什么要建">
+    <p class="kicker">01 · 建设价值</p>
+    <h2 class="h2">不是再做一个问答入口，<br>而是补齐医保业务的<span class="accent">解释与协同能力</span></h2>
+    <div class="grid g3 mt-l">
+      <div class="value-card blue">
+        <span class="num">01</span>
+        <h4>政策变化快</h4>
+        <p>政策文件、解读材料、院内口径和实际结算规则分散，人工解释口径难统一。</p>
+      </div>
+      <div class="value-card green">
+        <span class="num">02</span>
+        <h4>费用解释难</h4>
+        <p>患者问的是一句话，背后需要联动诊次、待遇、费用明细、年度累计和政策条款。</p>
+      </div>
+      <div class="value-card orange">
+        <span class="num">03</span>
+        <h4>风险要可控</h4>
+        <p>医保结算、病案修改、退费冲正等动作必须保持人工确认和审计留痕。</p>
+      </div>
+    </div>
+    <div class="quote-panel mt-l">目标：把“问、查、算、释、办、管”串成一条可追溯的智能服务链路。</div>
+    <aside class="notes">
+      <p>这一页先回答一个问题：为什么我们需要建设这套能力。医保业务里有三个典型痛点。第一是<strong>政策变化快、口径难统一</strong>。政策文件、政策解读、经办规则、院内制度都在不同渠道，人工回答很容易出现理解偏差。</p>
+      <p>第二是<strong>费用解释难</strong>。患者问“为什么我报销这么多”，看似是一句话，实际要查患者身份、险种、医疗类别、住院次数、起付线、统筹支付、大额支付、费用明细，还要匹配对应政策规则。</p>
+      <p>第三是<strong>业务风险必须可控</strong>。AI 可以解释、提示、组织证据、生成建议，但不能直接替代医保正式结算、病案修改或退费冲正。我们的建设目标就是把“问、查、算、释、办、管”串起来，形成可追溯、可审计、可人工接管的服务链路。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="总体技术路径">
+    <p class="kicker">02 · 总体路径</p>
+    <h2 class="h2">一条主线：<span class="accent">自然语言请求</span>转成可执行、可追溯的医保任务</h2>
+    <div class="path-line mt-l">
+      <div class="path-node"><b>问</b><span>统一 Chat / 嵌入入口</span></div>
+      <div class="path-arrow">→</div>
+      <div class="path-node"><b>识</b><span>意图识别 / 上下文装载</span></div>
+      <div class="path-arrow">→</div>
+      <div class="path-node"><b>查</b><span>SQL / 适配器 / MCP</span></div>
+      <div class="path-arrow">→</div>
+      <div class="path-node"><b>检</b><span>RAG / 规则召回</span></div>
+      <div class="path-arrow">→</div>
+      <div class="path-node"><b>算</b><span>Skill / 规则执行</span></div>
+      <div class="path-arrow">→</div>
+      <div class="path-node"><b>控</b><span>安全围栏 / 人工确认</span></div>
+    </div>
+    <div class="grid g2 mt-l">
+      <div class="card card-accent">
+        <h4>AI 负责理解和组织</h4>
+        <p class="dim">识别问题、改写查询、召回证据、生成可读解释，把复杂结果转成角色化语言。</p>
+      </div>
+      <div class="card card-accent">
+        <h4>系统负责计算和治理</h4>
+        <p class="dim">结构化规则、费用拆分、权限控制、审计留痕，保证关键结论有依据。</p>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>总体技术路径可以概括为一条主线：把用户的一句自然语言请求，转成可执行、可追溯的医保任务。这里不是让大模型直接回答，而是让它进入一个受控流程。</p>
+      <p>第一步是“问”，通过统一门户或嵌入式组件进入系统。第二步是“识”，装载用户、患者、页面和会话上下文，判断用户到底是在问政策、问费用、问结算异常，还是需要办理协同。第三步是“查”，通过 SQL、适配器或 MCP 读取业务系统数据。</p>
+      <p>第四步是“检”，通过 RAG 和结构化字段过滤召回政策依据。第五步是“算”，用规则执行或 Skill 做费用拆分、待遇分段和证据组织。最后是“控”，通过权限、脱敏、高风险动作拦截和人工确认，保证 AI 只在边界内提供建议和解释。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="四层架构">
+    <p class="kicker">03 · 平台架构</p>
+    <h2 class="h2">四层架构承接落地：<br><span class="accent">应用牵引、平台支撑、数据赋能、系统接入</span></h2>
+    <div class="layers mt-l">
+      <div class="layer saas"><b>SaaS 应用产品层</b><span>政策问答 · 结算异常导办 · 出院前质控 · 运营驾驶舱</span></div>
+      <div class="layer paas"><b>PaaS 平台支撑层</b><span>接入安全 · 会话上下文 · 智能编排 · 模型服务 · 知识服务 · 业务适配 · 任务闭环</span></div>
+      <div class="layer daas"><b>DaaS 数据与知识服务层</b><span>结构化存储 · 向量库 · 缓存 · 政策知识库 · 规则解释库 · 患者医保画像</span></div>
+      <div class="layer infra"><b>系统接入与基础设施层</b><span>HIS · EMR · 收费 · 病案 · 医保接口 · 事前审核 · DRG/DIP · SQL Server · Milvus</span></div>
+    </div>
+    <aside class="notes">
+      <p>从架构上看，我们不是做一个孤立应用，而是按照四层体系落地。最上层是 SaaS 应用产品层，面向医保办、收费窗口、病案室、临床科室和领导驾驶舱提供业务入口。政策问答只是其中一个切入场景，后面可以扩展到结算异常导办、出院前质控、拒付申诉和运营分析。</p>
+      <p>中间的 PaaS 层是核心，承载接入安全、会话上下文、智能编排、模型服务、知识服务、业务适配和任务闭环。也就是说，后续每增加一个场景，不是重新做一套系统，而是在同一套平台能力上组合编排。</p>
+      <p>DaaS 层提供数据与知识底座，包括结构化数据、向量知识库、规则库、缓存和审计数据。最底层对接医院已有 HIS、EMR、收费、病案和医保专业系统。这个架构的好处是边界清晰，既能复用现有系统，又能逐步沉淀 AI 平台能力。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="政策问答 RAG">
+    <p class="kicker">04 · 核心场景</p>
+    <h2 class="h2">政策问答不止检索文本，关键是<span class="accent">数据 + 规则 + 计算 + 解释</span></h2>
+    <div class="six-steps mt-l">
+      <div><span>1</span><b>意图识别</b><p>判断是否需要患者诊次和费用数据。</p></div>
+      <div><span>2</span><b>SQL 查询</b><p>读取待遇分解、费用明细、年度累计等表。</p></div>
+      <div><span>3</span><b>问题重写</b><p>把原始编码映射为险种、医疗类别和人群标签。</p></div>
+      <div><span>4</span><b>RAG 检索</b><p>按向量召回 + 结构化字段过滤匹配政策规则。</p></div>
+      <div><span>5</span><b>费用拆分</b><p>用 Skill 计算医保内外、起付线、统筹、大额。</p></div>
+      <div><span>6</span><b>角色解释</b><p>输出带引用、带不确定性的自然语言说明。</p></div>
+    </div>
+    <div class="evidence-strip mt-l">
+      <span>每个数字有来源</span><span>每条结论有政策</span><span>每次解释可回放</span>
+    </div>
+    <aside class="notes">
+      <p>政策问答是最适合给领导演示的切入点，但这里要强调：我们做的不是普通知识库检索，而是“数据、规则、计算、解释”一体化。</p>
+      <p>流程分为六步。第一步识别意图，比如用户问“为什么我的费用是这些”，系统要判断这不是普通政策咨询，而是需要患者诊次和费用数据。第二步查询 SQL Server，读取待遇分解、费用明细、年度累计、住院信息和患者登记等表。第三步问题重写，把数据库里的代码映射成业务语言，比如把险种代码转成“城镇职工”，把医疗类别转成“普通住院”。</p>
+      <p>第四步进入 RAG 检索，用向量召回政策文本，同时按险种、人群、医院等级、规则类型等结构化字段过滤。第五步用费用拆分 Skill 做计算。第六步再由模型生成患者版、收费员版或管理人员版解释。最终做到每个数字有来源、每条结论有政策、每次解释可回放。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="政策规则结构化">
+    <p class="kicker">05 · 知识工程</p>
+    <h2 class="h2">政策要先变成三类资产，<br>RAG 才能从“能搜到”走向<span class="accent">“能执行”</span></h2>
+    <div class="asset-grid mt-l">
+      <div class="asset-card">
+        <span class="asset-icon">📄</span>
+        <h4>政策知识资产</h4>
+        <p>原文、条款、解读、来源链接，用于检索、引用和证据展示。</p>
+      </div>
+      <div class="asset-card hot">
+        <span class="asset-icon">⚙️</span>
+        <h4>规则结构化资产</h4>
+        <p>起付线、比例、封顶线、周期、适用对象，用于计算和判断。</p>
+      </div>
+      <div class="asset-card">
+        <span class="asset-icon">💬</span>
+        <h4>解释语料资产</h4>
+        <p>面向患者、经办、管理人员的解释模板和话术口径。</p>
+      </div>
+    </div>
+    <div class="pipeline mt-l">
+      <span>清洗</span><span>切分</span><span>分类</span><span>候选抽取</span><span>程序校验</span><span>人工审核</span><span>规则发布</span>
+    </div>
+    <aside class="notes">
+      <p>这里是技术路线里非常关键的一点：政策不能只当文本做 RAG。普通 RAG 的问题是“能搜到”，但医保场景还要求“能计算、能判断、能解释”。所以我们把政策加工成三类资产。</p>
+      <p>第一类是政策知识资产，包括政策原文、条款、政策解读、来源链接和发布时间，用于检索和引用。第二类是规则结构化资产，这是最核心的部分，把自然语言里的起付线、报销比例、封顶线、90 天周期、首次住院和第二次住院等条件转成结构化规则。第三类是解释语料资产，用于针对患者、窗口人员和管理人员生成不同口径的解释。</p>
+      <p>加工链路也必须受控：先清洗文本，再条款切分，再做规则分类，再由模型抽取候选规则，之后程序校验格式和数值范围，最后必须人工审核发布。这里坚持一个原则：<strong>AI 负责提取，人负责确认，系统负责执行</strong>。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="费用解释树">
+    <p class="kicker">06 · 可解释计算</p>
+    <h2 class="h2">把一笔费用拆成解释树：<br><span class="accent">总费用 → 医保内 → 医保外 → 证据链</span></h2>
+    <div class="explain-tree mt-l">
+      <div class="tree-root">总费用</div>
+      <div class="tree-branch">
+        <div class="tree-node good"><b>医保内</b><span>起付线 · 统筹支付 · 统筹自付 · 大额支付 · 个人应负</span></div>
+        <div class="tree-node warn"><b>医保外</b><span>丙类全自费 · 特需项目 · 自付比例 · 限价超出 · 其他归因</span></div>
+      </div>
+      <div class="tree-leaf">费用明细表 + 待遇分解表 + 年度累计表 + 政策规则 + 计算公式</div>
+    </div>
+    <div class="formula-box mt-l">
+      <b>核心公式</b>
+      <span>统筹自付 = Σ（各分段金额 × 基础自付比例 × 人员系数）</span>
+    </div>
+    <aside class="notes">
+      <p>费用解释树是把技术能力变成业务价值的关键呈现方式。患者看到的是总费用和报销结果，但系统内部要把它拆成一棵可追溯的解释树。</p>
+      <p>第一层是总费用。第二层拆成医保内和医保外。医保内再细分为起付线、统筹支付、统筹自付、大额支付、大额自付和个人应负；医保外再按照丙类全自费、特需项目、自付比例、住院限价、医保支付标准超出等原因归因。每个节点都要能回到原始数据表，比如待遇分解表、费用明细表、年度累计表和住院信息表。</p>
+      <p>同时，关键金额不能只是展示数据库结果，还要能解释为什么。比如统筹自付需要按政策规则分段计算：每段金额乘基础自付比例，再乘人员系数。这样才能回答“为什么是这个数字”，而不是只告诉用户“系统就是这么算的”。这也是领导最容易感受到价值的地方。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="MCP 扩展体系">
+    <p class="kicker">07 · 能力扩展</p>
+    <h2 class="h2">MCP / Tool / Skill：让智能体从“会说”升级为<span class="accent">“会查、会算、会协同”</span></h2>
+    <div class="capability-map mt-l">
+      <div class="cap center-cap">Agent 编排引擎</div>
+      <div class="cap ring r1"><b>Tool</b><span>标准化工具调用</span></div>
+      <div class="cap ring r2"><b>Skill</b><span>费用拆分、证据组织、材料生成</span></div>
+      <div class="cap ring r3"><b>MCP</b><span>外部能力注册、发现、远程调用</span></div>
+      <div class="cap ring r4"><b>Adapter</b><span>HIS、EMR、收费、医保接口防腐层</span></div>
+    </div>
+    <div class="grid g3 mt-l compact">
+      <div class="mini-card">统一注册</div>
+      <div class="mini-card">权限校验</div>
+      <div class="mini-card">调用审计</div>
+    </div>
+    <aside class="notes">
+      <p>要让医保智能体真正落地，不能只依赖大模型生成文本，还需要让它具备可控的工具调用能力。这里我们采用 MCP、Tool、Skill 和 Adapter 分层。</p>
+      <p>Tool 是最基础的标准化工具，比如查询某个结算单、读取费用明细、获取患者上下文。Skill 是更高层的业务能力，比如费用拆分计算、申诉材料组织、政策证据汇总。MCP 负责把外部工具和服务标准化接入，让能力可以注册、发现和调用。Adapter 则是对医院现有 HIS、EMR、收费、病案、医保接口等系统做防腐封装，避免业务逻辑直接耦合厂商接口。</p>
+      <p>这套设计给领导传递的核心信息是：以后扩展新场景，不是改一堆业务代码，而是把能力按规范接入平台，由 Agent 编排引擎按权限、上下文和风险等级去调用。这样既能快速扩展，又能统一治理。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="安全闭环">
+    <p class="kicker">08 · 风险控制</p>
+    <h2 class="h2">医保 AI 的底线：<span class="accent">能解释、能建议、能留痕</span>，但不越权替代正式业务系统</h2>
+    <div class="guardrail-grid mt-l">
+      <div class="guardrail-card"><b>身份与权限</b><span>角色权限、租户隔离、工具级授权</span></div>
+      <div class="guardrail-card"><b>数据脱敏</b><span>患者隐私、敏感字段、最小必要输出</span></div>
+      <div class="guardrail-card"><b>高风险拦截</b><span>退费、冲正、正式结算、病案修改转人工确认</span></div>
+      <div class="guardrail-card"><b>引用溯源</b><span>政策原文、数据表、计算过程、模型不确定性声明</span></div>
+      <div class="guardrail-card"><b>审计回放</b><span>请求、响应、工具调用、人工确认全链路留痕</span></div>
+      <div class="guardrail-card"><b>运行监测</b><span>命中率、采纳率、异常率、工具调用成功率</span></div>
+    </div>
+    <aside class="notes">
+      <p>这一页是领导最关心的风险控制。医保 AI 的底线是：可以解释、可以建议、可以组织证据、可以生成待办，但不能越权替代正式业务系统做最终交易或裁决。</p>
+      <p>具体来说，我们在六个方面设置安全闭环。第一是身份与权限，系统要知道当前是谁、来自哪个入口、有什么角色权限，工具调用也要授权。第二是数据脱敏，患者身份信息、诊疗信息和费用明细都要遵循最小必要原则。第三是高风险动作拦截，像退费、冲正、正式结算、病案修改这类操作，AI 只能提示和生成任务，必须转人工确认。</p>
+      <p>第四是引用溯源，任何确定性结论都要带政策依据、数据来源或不确定性声明。第五是审计回放，记录请求、响应、工具调用和人工确认。第六是运行监测，通过命中率、采纳率、异常率和工具调用成功率持续优化。这套机制保证系统上线后可监管、可追责、可持续改进。</p>
+    </aside>
+  </section>
+
+  <section class="slide closing" data-title="总结">
+    <p class="kicker">09 · 汇报收束</p>
+    <h2 class="h2">最终建设目标：<br>形成院端医保 AI 的<span class="gradient-text">智能协同中枢</span></h2>
+    <div class="summary-grid mt-l">
+      <div><b>对患者/窗口</b><span>解释更清楚，口径更统一，等待更少。</span></div>
+      <div><b>对医保办</b><span>异常更快定位，证据更快组织，任务可闭环。</span></div>
+      <div><b>对医院管理</b><span>风险可监测，运营可分析，能力可复用。</span></div>
+    </div>
+    <div class="kpi-row mt-l">
+      <div><b>首期切入</b><span>政策问答 + 费用解释</span></div>
+      <div><b>结论溯源</b><span>100%</span></div>
+      <div><b>高风险动作</b><span>100% 转人工</span></div>
+      <div><b>知识更新</b><span>版本化发布</span></div>
+    </div>
+    <div class="final-message mt-l">技术路径成立的标志：政策能引用 · 规则能计算 · 数据能追溯 · 风险能管控 · 结果能闭环</div>
+    <div class="deck-footer">
+      <span class="mono">医保智能体技术路径汇报</span>
+      <span class="slide-number" data-current="10" data-total="10"></span>
+    </div>
+    <aside class="notes">
+      <p>最后做一个收束。我们建设这套医保智能体，不是为了追热点，也不是为了替代现有业务系统，而是为了在医院医保管理中补上一层智能协同能力。</p>
+      <p>对患者和窗口来说，价值是解释更清楚、口径更统一、等待更少。对医保办来说，价值是异常能更快定位，证据能更快组织，任务能够跟踪闭环。对医院管理来说，价值是医保风险可监测、运营问题可分析、平台能力可复用。</p>
+      <p>落地上建议首期聚焦政策问答和费用解释，把起付线、报销比例、医保内外归因这些高频问题跑通。验收时重点看三件事：结论是否 100% 可溯源，高风险动作是否 100% 转人工，知识和规则是否能版本化发布。</p>
+      <p>我认为这条技术路径成立的标志可以用五句话概括：<strong>政策能引用、规则能计算、数据能追溯、风险能管控、结果能闭环</strong>。只要第一阶段跑通这五点，后续扩展到结算异常、出院前质控、拒付申诉和医保运营驾驶舱，就具备了清晰的技术基础和管理抓手。</p>
+    </aside>
+  </section>
+
+</div>
+
+<div class="hint">S 演讲者视图 · T 切换主题 · ← → 翻页 · F 全屏 · O 总览</div>
+<script src="../../../.roo/skills/html-ppt/assets/runtime.js"></script>
+</body>
+</html>

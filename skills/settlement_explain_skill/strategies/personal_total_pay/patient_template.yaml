@@ -1,0 +1,21 @@
+# 个人总支付患者视角模板
+conclusion_header: 【本次结论】
+conclusion_template: '本次结算中，您的"个人总支付"为 {amount} 元，包含以下费用构成明细。'
+
+composition_header: 【费用构成】
+composition_intro: "个人总支付不是单一费用项目，而是多个费用来源的总和。"
+composition_table_body: >
+  起付线 {deductible} 元
+  + 统筹自付 {pooling_self_pay} 元
+  + 大额自付 {large_self} 元
+  = 个人总支付 {personal_total_pay} 元
+composition_note: "注：如存在目录外自费、先行自付等其他个人负担项，也已包含在个人总支付中。"
+
+what_is_this_header: 【什么是个人总支付】
+what_is_this_template: "这是本次住院全部需要您自己承担的钱，包含多个不同来源：起付线（报销门槛）、统筹自付（统筹段按比例自付）、大额自付（大额段按比例自付）以及目录外自费等其他个人负担。医保统筹基金和大额基金支付的费用不包含在内。个人总支付不等于统筹自付，统筹自付只是个人总支付的一部分。"
+
+evidence_header: 【政策依据】
+evidence_intro: "个人总支付是结算系统的综合计算结果，以下为本次适用的相关政策依据："
+
+summary_header: 【一句话总结】
+summary_template: '{amount} 元是您本次住院的"个人总支付"，包含起付线、统筹自付、大额自付等全部个人负担项。个人总支付不等于统筹自付，统筹自付只是其中一部分，两者不可混淆。'

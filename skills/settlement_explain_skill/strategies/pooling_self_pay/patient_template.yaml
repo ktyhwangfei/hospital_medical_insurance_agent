@@ -1,0 +1,33 @@
+# 统筹自付患者视角模板
+conclusion_header: 【本次结论】
+conclusion_template: '本次结算中，您的"{fee_label}"为 {amount} 元。'
+
+what_is_this_header: 【这是什么钱】
+what_is_this_template: "这笔钱不是全部自费，也不是大额自付，而是已经进入基本医保统筹报销范围后，按照政策比例仍需要个人承担的部分。"
+
+evidence_header: 【本次适用的政策依据】
+evidence_intro: "根据已匹配到的政策，本次费用按以下规则报销："
+
+ratio_header: 【政策比例怎么影响您】
+retiree_conclusion: "因此，{amount} 元不是系统随意给出的金额，而是本次结算在真实结算数据基础上，按照三级医院住院分段支付比例和退休人员折算规则形成的基本统筹段个人承担金额。"
+
+relationship_header: 【本次金额关系】
+relationship_items:
+  - field: deductible
+    label: 起付线
+    description: "医保开始报销前，先由个人承担的部分；"
+  - field: basic_pooling_payment
+    label: 统筹支付
+    description: "基本医保统筹基金已经支付的部分；"
+  - field: basic_pooling_self_pay
+    label: 统筹自付
+    description: "基本医保统筹段内，按比例由个人承担的部分；"
+  - field: large_amount_self_pay
+    label: 大额自付
+    description: "进入大额保障段后个人承担的部分，和统筹自付不是一回事；"
+  - field: personal_total_pay
+    label: 个人总支付
+    description: "包含多类个人负担，不等于统筹自付。"
+
+summary_header: 【一句话总结】
+summary_template: '{amount} 是"基本医保统筹段内按政策比例需要您个人承担的钱"，不包含起付线、大额自付、医保外费用和目录先行自付。'

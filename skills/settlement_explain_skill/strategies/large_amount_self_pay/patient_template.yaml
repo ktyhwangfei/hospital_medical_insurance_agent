@@ -1,0 +1,38 @@
+# 大额自付患者视角模板
+conclusion: '本次结算中，您的大额自付为 {amount} 元。'
+
+what_is_this: '大额自付是进入大额医疗互助保障段后按比例由个人承担的部分。
+
+在基本医保统筹段达到封顶线后，超出的合规医疗费用会进入大额医疗互助保障段。
+该段内费用不是由医保 100% 承担，而是按政策比例由大额互助基金和个人分别承担，
+其中个人按比例承担的部分就是「大额自付」。
+
+{amount} 元不包含起付线（报销前个人先承担的固定金额）和统筹自付（基本统筹段内个人承担的部分）。'
+
+evidence_header: '【本次适用的政策依据】'
+evidence_intro: '根据已匹配到的政策，本次大额段费用按以下规则执行：'
+no_policy: '当前未检索到可引用的大额段政策依据，以下仅基于真实结算字段进行解释，不能作为完整政策依据。'
+
+summary: '{amount} 元是本次结算进入大额医疗互助保障段后按比例由您个人承担的部分。大额自付不同于起付线（报销门槛）和统筹自付（基本统筹段内自付），是进入大额段后才产生的费用。'
+
+# 金额关系配置
+relationship_header: '【本次金额关系】'
+relationship_items:
+  - field: deductible
+    label: 起付线
+    description: '医保开始报销前先由个人承担的部分，不计入统筹段也不计入大额段；'
+  - field: basic_pooling_self_pay
+    label: 统筹自付
+    description: '基本医保统筹段内按比例由个人承担的部分，与大额自付不是同一种费用；'
+  - field: basic_pooling_payment
+    label: 统筹支付
+    description: '基本医保统筹基金已经支付的部分；'
+  - field: large_amount_payment
+    label: 大额支付
+    description: '大额医疗互助基金已经支付的部分；'
+  - field: large_amount_self_pay
+    label: 大额自付
+    description: '进入大额段后按比例由个人承担的部分；'
+  - field: personal_total_pay
+    label: 个人总支付
+    description: '包含起付线、统筹自付、大额自付等多类个人负担，不等于大额自付。'

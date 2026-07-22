@@ -1,0 +1,19 @@
+# 业务对象：结算记录 (Settlement)
+# L1 业务对象层定义 — 一次医保结算的完整记录
+object_id: Settlement
+name: 结算记录
+description: 一次医保结算的完整记录，包括费用明细、支付金额、自付金额、结算方式等。是费用解释和结算异常场景的核心业务对象。
+fields:
+  - setl_type          # 结算方式（按项目付费、DRG、单病种等）
+  - admission_order    # 住院次数（首次、二次及以上）
+  - pooling_pay        # 统筹支付（TCZF_PAY）
+  - pooling_self_pay   # 统筹自付（TCZF_SELF）
+  - deductible_line    # 起付线（QFX）
+  - cash_pay           # 个人现金支付（CASH_PAY）
+  - total_fee          # 总费用
+  - self_fee           # 自费费用
+  - first_pay_fee      # 乙类先行自付
+  - in_scope_total     # 统筹范围内费用（计算指标：total_fee - self_fee - first_pay_fee）
+  - payment_ratio      # 支付比例
+  - error_code         # 结算异常错误码
+  - settlement_status  # 结算状态

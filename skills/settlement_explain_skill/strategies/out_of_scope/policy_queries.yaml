@@ -1,0 +1,26 @@
+# 医保外费用政策查询计划
+queries:
+  - query_name: medical_insurance_catalog_scope
+    required: true
+    filters:
+      rule_type: 目录范围
+    psn_type_allow_all: true
+    text_must_include_any:
+      - 医保目录
+      - 三大目录
+      - 药品目录
+      - 诊疗项目
+      - 医疗服务设施
+    description: 医保三大目录范围规定
+
+  - query_name: self_funded_items_policy
+    required: false
+    filters:
+      rule_type: 自费政策
+    psn_type_allow_all: true
+    text_must_include_any:
+      - 自费
+      - 丙类
+      - 目录外
+      - 全自费
+    description: 自费项目相关政策规定

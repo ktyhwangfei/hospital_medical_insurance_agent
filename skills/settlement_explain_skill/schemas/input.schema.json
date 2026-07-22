@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hospital-ai/schemas/policy-fee-explanation/input.schema.json",
+  "title": "Skill Input Schema",
+  "description": "policy-fee-explanation skill 的输入结构。",
+  "type": "object",
+  "required": ["question", "settlement_id"],
+  "properties": {
+    "question": {
+      "type": "string",
+      "description": "用户的自然语言问题",
+      "minLength": 1,
+      "examples": ["我的统筹自付为什么这么多", "起付线是什么意思"]
+    },
+    "settlement_id": {
+      "type": "string",
+      "description": "结算单号（登记号）",
+      "minLength": 1,
+      "examples": ["1671213"]
+    },
+    "target_fee_item": {
+      "type": "string",
+      "description": "可选：显式指定目标费用项，覆盖意图识别结果",
+      "enum": ["pooling_self_pay", "deductible", "large_amount_self_pay", "pooling_payment", "personal_total_pay", "out_of_scope"]
+    }
+  }
+}

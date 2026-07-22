@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>院端医保AI智能体 — 产品介绍</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Noto+Sans+SC:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ======== RESET & BASE ======== */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{
+  width:100%;height:100%;overflow:hidden;
+  font-family:'Inter','Noto Sans SC',-apple-system,BlinkMacSystemFont,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  background:#f0f3f7;
+  display:flex;align-items:center;justify-content:center;
+}
+
+/* ======== SLIDE CONTAINER ======== */
+.slide{
+  position:relative;
+  width:1280px;height:720px;
+  background:linear-gradient(160deg, #ffffff 0%, #f5f7fa 40%, #e8edf4 100%);
+  border-radius:12px;
+  box-shadow:0 4px 40px rgba(10,37,64,.12), 0 1px 4px rgba(10,37,64,.06);
+  overflow:hidden;
+  padding:56px 72px 40px;
+  display:flex;flex-direction:column;
+}
+
+/* ======== BACKGROUND DECORATION ======== */
+.bg-orb{
+  position:absolute;border-radius:50%;pointer-events:none;
+  opacity:.06;filter:blur(60px);
+}
+.bg-orb.o1{width:420px;height:420px;background:#0a2540;top:-120px;right:-80px;}
+.bg-orb.o2{width:300px;height:300px;background:#1d4ed8;bottom:-80px;left:-60px;}
+.bg-orb.o3{width:200px;height:200px;background:#3b82f6;top:50%;left:50%;
+  transform:translate(-50%,-50%);}
+
+/* ======== TOP BAR ======== */
+.top-bar{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:32px;position:relative;z-index:1;
+}
+.top-bar .brand{font-size:13px;font-weight:600;color:#8898aa;letter-spacing:.12em;
+  text-transform:uppercase;display:flex;align-items:center;gap:10px;}
+.top-bar .brand::before{
+  content:'';display:inline-block;width:28px;height:2px;
+  background:linear-gradient(90deg,#0a2540,#1d4ed8);border-radius:1px;
+}
+.top-bar .date{font-size:13px;color:#8898aa;}
+
+/* ======== TITLE AREA ======== */
+.title-area{position:relative;z-index:1;margin-bottom:24px;}
+.title-area .kicker{
+  font-size:13px;font-weight:700;color:#1d4ed8;letter-spacing:.1em;
+  text-transform:uppercase;margin-bottom:8px;
+  opacity:0;animation:fadeUp .7s .15s forwards;
+}
+.title-area h1{
+  font-size:52px;font-weight:800;line-height:1.1;letter-spacing:-.03em;
+  color:#0a2540;margin-bottom:8px;
+  opacity:0;animation:fadeUp .7s .25s forwards;
+}
+.title-area h1 .hl{
+  background:linear-gradient(135deg,#0a2540 0%,#1d4ed8 70%);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;color:transparent;
+}
+.title-area .sub{
+  font-size:17px;color:#64748b;font-weight:400;max-width:700px;
+  opacity:0;animation:fadeUp .7s .35s forwards;
+}
+
+/* ======== MAIN CONTENT: TWO COLUMNS ======== */
+.main-content{
+  display:grid;grid-template-columns:1fr 72px 1fr;gap:0;align-items:start;
+  position:relative;z-index:1;flex:1;
+}
+
+/* ======== PANEL CARDS ======== */
+.panel{
+  background:rgba(255,255,255,.75);
+  backdrop-filter:blur(8px);
+  border:1px solid rgba(10,37,64,.08);
+  border-radius:10px;padding:28px 30px;
+  box-shadow:0 1px 3px rgba(10,37,64,.04),0 4px 12px rgba(10,37,64,.04);
+  height:100%;
+}
+.panel.pain{border-top:3px solid #dc2626;}
+.panel.solve{border-top:3px solid #0e9f6e;}
+.panel h3{
+  font-size:20px;font-weight:700;margin-bottom:18px;
+  display:flex;align-items:center;gap:10px;
+}
+.panel.pain h3{color:#b91c1c;}
+.panel.solve h3{color:#0e9f6e;}
+.panel .emoji{font-size:24px;}
+.panel ul{list-style:none;padding:0;}
+.panel ul li{
+  position:relative;padding:10px 0 10px 28px;
+  font-size:14.5px;line-height:1.55;color:#334155;
+  border-bottom:1px solid rgba(10,37,64,.04);
+}
+.panel ul li:last-child{border-bottom:none;}
+.panel.pain ul li::before{
+  content:'';position:absolute;left:4px;top:17px;
+  width:7px;height:7px;border-radius:50%;background:#dc2626;
+  opacity:.6;
+}
+.panel.solve ul li::before{
+  content:'';position:absolute;left:4px;top:17px;
+  width:7px;height:7px;border-radius:50%;background:#0e9f6e;
+}
+
+/* ======== CENTER DIVIDER ======== */
+.divider{
+  display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:16px;
+}
+.divider .arrow-icon{
+  width:48px;height:48px;border-radius:50%;
+  background:#0a2540;color:#fff;
+  display:flex;align-items:center;justify-content:center;
+  font-size:22px;font-weight:800;
+  box-shadow:0 4px 16px rgba(10,37,64,.2);
+}
+.divider .arrow-line{
+  width:2px;height:40px;background:linear-gradient(180deg,#0a2540,#1d4ed8);
+  border-radius:1px;
+}
+.divider .tag{
+  font-size:11px;font-weight:700;color:#0a2540;letter-spacing:.08em;
+  writing-mode:vertical-rl;text-orientation:mixed;
+}
+
+/* ======== SCENARIO BADGES ======== */
+.scenarios{
+  display:flex;gap:12px;margin-top:20px;flex-wrap:wrap;
+  position:relative;z-index:1;
+}
+.scenario{
+  padding:8px 20px;border-radius:999px;
+  font-size:13px;font-weight:600;letter-spacing:.01em;
+  background:linear-gradient(135deg,rgba(10,37,64,.06),rgba(29,78,216,.08));
+  color:#1e40af;border:1px solid rgba(29,78,216,.15);
+  white-space:nowrap;
+  opacity:0;animation:fadeUp .6s forwards;
+}
+.scenario:nth-child(1){animation-delay:.55s}
+.scenario:nth-child(2){animation-delay:.62s}
+.scenario:nth-child(3){animation-delay:.69s}
+.scenario:nth-child(4){animation-delay:.76s}
+.scenario:nth-child(5){animation-delay:.83s}
+
+/* ======== BOTTOM TAGLINE ======== */
+.tagline{
+  margin-top:16px;position:relative;z-index:1;
+  display:flex;align-items:center;gap:14px;
+}
+.tagline .pill{
+  padding:6px 16px;border-radius:999px;
+  font-size:12px;font-weight:700;letter-spacing:.04em;
+  background:#0a2540;color:#fff;
+}
+.tagline p{
+  font-size:14px;color:#64748b;font-weight:400;
+}
+
+/* ======== ANIMATIONS ======== */
+@keyframes fadeUp{
+  from{opacity:0;transform:translateY(24px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+.panel.pain{opacity:0;animation:fadeUp .7s .45s forwards;}
+.panel.solve{opacity:0;animation:fadeUp .7s .45s forwards;}
+.divider{opacity:0;animation:fadeUp .7s .50s forwards;}
+
+/* ======== RESPONSIVE ======== */
+@media(max-width:1320px){
+  .slide{width:96vw;height:auto;aspect-ratio:16/9;padding:40px 48px 32px;border-radius:8px}
+  .title-area h1{font-size:38px}
+  .panel ul li{font-size:13px;padding:8px 0 8px 24px;}
+  .panel{padding:20px 22px;}
+}
+
+@media print{
+  html,body{background:#fff}
+  .slide{box-shadow:none;border-radius:0}
+}
+</style>
+</head>
+<body>
+
+<div class="slide">
+  <!-- Background orbs -->
+  <div class="bg-orb o1"></div>
+  <div class="bg-orb o2"></div>
+  <div class="bg-orb o3"></div>
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <span class="brand">院端医保AI智能体</span>
+    <span class="date">2026.06</span>
+  </div>
+
+  <!-- Title -->
+  <div class="title-area">
+    <p class="kicker">产品定位 · 一页讲清</p>
+    <h1>解决什么问题？<span class="hl">怎么解决的？</span></h1>
+    <p class="sub">医院医保管理面临多系统、多角色、碎片化挑战 — AI智能协同中枢，打通数据孤岛，让每个角色获得精准导办</p>
+  </div>
+
+  <!-- Main: Pain → Solution -->
+  <div class="main-content">
+    <!-- Pain Panel -->
+    <div class="panel pain">
+      <h3><span class="emoji">🔴</span> 当前痛点</h3>
+      <ul>
+        <li>医保政策频繁调整，人工解读效率低、口径不一致</li>
+        <li>HIS / 收费 / 病案 / DRG 系统数据分散，跨平台排查一次结算异常平均耗时 30 分钟以上</li>
+        <li>拒付申诉缺少系统化证据组织，依赖个人经验，申诉成功率不稳定</li>
+        <li>DRG/DIP 盈亏分析需要手工导出多系统数据，院领导缺乏实时运营视图</li>
+      </ul>
+    </div>
+
+    <!-- Divider -->
+    <div class="divider">
+      <div class="arrow-icon">→</div>
+      <div class="arrow-line"></div>
+      <span class="tag">AI 协同</span>
+    </div>
+
+    <!-- Solution Panel -->
+    <div class="panel solve">
+      <h3><span class="emoji">🟢</span> AI 解法</h3>
+      <ul>
+        <li>统一自然语言入口：门户模式 + 嵌入式组件（嵌入 HIS/EMR），不改变医生现有工作习惯</li>
+        <li>智能编排引擎：意图识别 → 任务规划 → 多系统协同调用 → 结果汇总闭环</li>
+        <li>自动组织证据链、生成申诉材料、定位异常根因，提供可执行建议</li>
+        <li>院领导驾驶舱：实时 DRG/DIP 盈亏、科室排名、异常趋势一目了然</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Core scenarios -->
+  <div class="scenarios">
+    <span class="scenario">💊 结算异常导办</span>
+    <span class="scenario">🏥 出院前联合质控</span>
+    <span class="scenario">📝 拒付申诉助手</span>
+    <span class="scenario">📊 DRG/DIP 运营分析</span>
+    <span class="scenario">📖 政策规则解释</span>
+  </div>
+
+  <!-- Bottom tagline -->
+  <div class="tagline">
+    <span class="pill">核心定位</span>
+    <p>不替代既有业务系统，而是让多系统数据协同起来，<strong>读取结果、解释原因、组织证据、生成建议、分派任务、跟踪闭环</strong></p>
+  </div>
+</div>
+
+</body>
+</html>

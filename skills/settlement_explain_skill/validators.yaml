@@ -1,0 +1,65 @@
+# validators.yaml — 输出验证规则
+# 定义输出必须满足的约束条件
+#
+# 规则类型:
+#   - forbidden_text: 任何模式(LLM/模板)都禁止出现的文本片段
+#   - required_patient_answer_contains: 模板模式必须包含的文本片段
+#     (LLM 模式跳过: skip_for_llm: true)
+#   - required_patient_answer_contains_when_complete: 完整匹配时额外要求
+#   - llm_output_checks: LLM 模式特有检查
+
+# 禁止出现在任何输出字段中的文本片段
+forbidden_text:
+  - "if t."
+  - "else"
+  - "undefined"
+  - "null"
+  - "None"
+  - "NaN"
+  - '{"ratio"'
+  - "embedding_text"
+  - "Milvus score"
+  - "yb_zyfdxx"
+  - "yb_dyxxzy"
+  - "rule_id"
+  - "clause_id"
+
+# 患者视角答案必须包含的文本片段（模板模式）
+# skip_for_llm: true 表示 LLM 模式下跳过此项检查
+required_patient_answer_contains:
+  - text: "统筹自付"
+    skip_for_llm: true
+  - text: "三级医院"
+    skip_for_llm: true
+  - text: "85%"
+    skip_for_llm: true
+  - text: "90%"
+    skip_for_llm: true
+  - text: "95%"
+    skip_for_llm: true
+  - text: "退休人员"
+    skip_for_llm: true
+  - text: "60%"
+    skip_for_llm: true
+  - text: "不包含起付线"
+    skip_for_llm: true
+  - text: "不包含大额自付"
+    skip_for_llm: true
+
+# 完整匹配时额外必须包含的文本片段（模板模式）
+# skip_for_llm: true 表示 LLM 模式下跳过此项检查
+required_patient_answer_contains_when_complete:
+  - text: "9%"
+    skip_for_llm: true
+  - text: "6%"
+    skip_for_llm: true
+  - text: "3%"
+    skip_for_llm: true
+
+# LLM 输出检查规则（仅在 LLM 模式下执行）
+# 这些规则验证 LLM 生成的结构完整性
+llm_output_checks:
+  - description: "输出必须包含【本次结论】标识头"
+    text: "【本次结论】"
+  - description: "输出必须包含至少一个金额数字"
+    pattern: "\\d+[,.]?\\d*"

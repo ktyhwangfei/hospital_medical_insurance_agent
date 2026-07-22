@@ -1,0 +1,59 @@
+# 测试用例: 统筹自付解释 — 结算单 1671213
+# 用于验证 policy-fee-explanation skill 的完整执行流程
+
+input:
+  question: "我的统筹自付为什么这么多"
+  settlement_id: "1671213"
+
+expected:
+  skill_id: policy-fee-explanation
+  target_fee_item: pooling_self_pay
+  target_field: basic_pooling_self_pay
+  data_source: REAL_DB
+  mock_used: false
+  can_answer: true
+  partial_answer: false
+  target_amount: 4962.67
+
+  case_context:
+    person_type: 退休人员
+    insurance_type: 城镇职工基本医疗保险
+    service_type: 普通住院
+    hospital_level: 三级医院
+    deductible: 650.00
+    basic_pooling_self_pay: 4962.67
+
+  evidence_completeness:
+    level: full_policy_ratio_matched
+
+  policy_evidence_count: 4
+
+  must_contain:
+    - 三级医院
+    - 起付标准至3万元
+    - 85%
+    - 15%
+    - 90%
+    - 10%
+    - 95%
+    - 5%
+    - 退休人员
+    - 60%
+    - 9%
+    - 6%
+    - 3%
+    - 不包含起付线
+    - 不包含大额自付
+    - "不是系统随意给出的金额"
+
+  must_not_contain:
+    - "if t."
+    - undefined
+    - "null"
+    - '{"ratio"'
+    - mock
+    - "AI思维链"
+    - embedding_text
+    - yb_zyfdxx
+
+  trace_events_count: 14

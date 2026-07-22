@@ -266,7 +266,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/apps/portal/src/components/settlement-chat.tsx`
   - Pre-commit: `cd src/apps/portal && npm run build`
 
-- [ ] 2. Wave 1 — Bug 2修复：自动滚动失效（使用ScrollArea视口ref替代scrollIntoView）
+- [x] 2. Wave 1 — Bug 2修复：自动滚动失效（使用ScrollArea视口ref替代scrollIntoView）
 
   **What to do**:
   1. 阅读 `@base-ui/react` ScrollArea 文档（需先 `npx context7` 或查看 `node_modules/@base-ui/react/scroll-area/`）— 确认是否暴露 `viewportRef` prop 或需用 `ref` 获取内部视口DOM
@@ -343,7 +343,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/apps/portal/src/components/settlement-chat.tsx`, `src/apps/portal/src/components/ui/scroll-area.tsx`（如需修改）
   - Pre-commit: `cd src/apps/portal && npm run build`
 
-- [ ] 3. Wave 1 — Bug 1修复：留白过多（修正高度计算，减少多余空白）
+- [x] 3. Wave 1 — Bug 1修复：留白过多（修正高度计算，减少多余空白）
 
   **What to do**:
   1. 测量实际可用高度：header `h-14`=56px, main `p-6`=48px(上下), 内部card padding约20px, 总计约~124px
@@ -401,7 +401,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/apps/portal/src/components/settlement-chat.tsx`
   - Pre-commit: `cd src/apps/portal && npm run build`
 
-- [ ] 4. Wave 2 — UI紧凑化：减少全局padding和间距，实现紧凑极简风格
+- [x] 4. Wave 2 — UI紧凑化：减少全局padding和间距，实现紧凑极简风格
 
   **What to do**:
   1. 系统性地遍历 `settlement-chat.tsx` 中所有padding/margin值，按以下规则紧凑化：
@@ -465,7 +465,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/apps/portal/src/components/settlement-chat.tsx`
   - Pre-commit: `cd src/apps/portal && npm run build`
 
-- [ ] 5. Wave 2 — 搭建vitest + React Testing Library测试基础设施
+- [x] 5. Wave 2 — 搭建vitest + React Testing Library测试基础设施
 
   **What to do**:
   1. 查阅 vitest + Next.js 16 + React 19 兼容性：使用 Context7 或查看 vitest 官方文档确认最新版本支持
@@ -529,7 +529,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `vitest.config.ts`, `src/tests/setup.ts`, `src/tests/example.test.tsx`, `package.json`
   - Pre-commit: `cd src/apps/portal && npx vitest run`
 
-- [ ] 6. Wave 3 — 添加data-testid + 修复E2E页面对象选择器
+- [x] 6. Wave 3 — 添加data-testid + 修复E2E页面对象选择器
 
   **What to do**:
   1. 在 `settlement-chat.tsx` 关键元素上添加 `data-testid` 属性：
@@ -592,7 +592,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `settlement-chat.tsx`, `chat.page.ts`
   - Pre-commit: `cd src/tests/e2e && npx playwright test smoke/portal-smoke.spec.ts`
 
-- [ ] 7. Wave 3 — 新增Playwright E2E测试：自动滚动行为验证
+- [x] 7. Wave 3 — 新增Playwright E2E测试：自动滚动行为验证
 
   **What to do**:
   1. 在 `src/tests/e2e/flows/portal/` 创建 `chat-ux.flow.ts` 测试文件
@@ -655,7 +655,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/tests/e2e/flows/portal/chat-ux.flow.ts`
   - Pre-commit: `cd src/tests/e2e && npx playwright test flows/portal/chat-ux.flow.ts --grep "scroll"`
 
-- [ ] 8. Wave 3 — 新增Playwright E2E测试：微调器完成状态验证
+- [x] 8. Wave 3 — 新增Playwright E2E测试：微调器完成状态验证
 
   **What to do**:
   1. 在 `chat-ux.flow.ts` 中添加测试用例 `should stop loading spinner after response completes`:
@@ -714,7 +714,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/tests/e2e/flows/portal/chat-ux.flow.ts`
   - Pre-commit: `cd src/tests/e2e && npx playwright test flows/portal/chat-ux.flow.ts --grep "spinner"`
 
-- [ ] 9. Wave 4 — 提取 ChatMessageList 组件（消息列表 + 自动滚动 + 视口管理）
+- [x] 9. Wave 4 — 提取 ChatMessageList 组件（消息列表 + 自动滚动 + 视口管理）
 
   **What to do**:
   1. 创建 `src/apps/portal/src/components/chat/message-list.tsx`
@@ -790,7 +790,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/apps/portal/src/components/chat/message-list.tsx`, `src/apps/portal/src/components/settlement-chat.tsx`
   - Pre-commit: `cd src/apps/portal && npm run build`
 
-- [ ] 10. Wave 4 — 提取 ChatInput 组件（输入区域 + 发送按钮 + 快捷问题）
+- [x] 10. Wave 4 — 提取 ChatInput 组件（输入区域 + 发送按钮 + 快捷问题）
 
   **What to do**:
   1. 创建 `src/apps/portal/src/components/chat/chat-input.tsx`
@@ -856,7 +856,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/apps/portal/src/components/chat/chat-input.tsx`, `src/apps/portal/src/components/settlement-chat.tsx`
   - Pre-commit: `cd src/apps/portal && npm run build`
 
-- [ ] 11. Wave 4 — 提取 StreamingBubble 组件（流式传输气泡 + Typewriter动画）
+- [x] 11. Wave 4 — 提取 StreamingBubble 组件（流式传输气泡 + Typewriter动画）
 
   **What to do**:
   1. 创建 `src/apps/portal/src/components/chat/streaming-bubble.tsx`
@@ -918,7 +918,7 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/apps/portal/src/components/chat/streaming-bubble.tsx`, `src/apps/portal/src/components/settlement-chat.tsx`, `src/apps/portal/src/components/chat/message-list.tsx`
   - Pre-commit: `cd src/apps/portal && npm run build`
 
-- [ ] 12. Wave 4 — 提取 chat/helpers.ts（辅助工具函数）
+- [x] 12. Wave 4 — 提取 chat/helpers.ts（辅助工具函数）
 
   **What to do**:
   1. 创建 `src/apps/portal/src/components/chat/helpers.ts`
@@ -975,122 +975,9 @@ Wave FINAL (全部完成后 — 4个并行审查):
   - Files: `src/apps/portal/src/components/chat/helpers.ts`, `src/apps/portal/src/components/settlement-chat.tsx`
   - Pre-commit: `cd src/apps/portal && npm run build`
 
-- [ ] 13. Wave 5 — vitest测试：ChatMessageList 组件
-
-  **What to do**:
-  1. 创建 `src/apps/portal/src/tests/components/message-list.test.tsx`
-  2. 编写测试用例：
-     - `renders messages correctly`: 传入mock消息数组，验证消息气泡数量正确
-     - `shows loading indicator when streaming`: `isStreaming=true`, 验证加载指示器存在
-     - `does not show loading when not streaming`: `isStreaming=false`, 验证加载指示器不存在
-     - `renders streaming bubble when content is streaming`: `isStreaming=true, streamingContent="..."`
-     - `calls onConfirm when confirmation button clicked`: mock `onConfirm`, 点击确认按钮
-     - `scroll viewport ref is attached`: 验证视口ref绑定到DOM元素
-  3. Mock子组件：Typewriter（简单mock），IntentTraceCard（不在此范围）
-  4. Mock `@base-ui/react/scroll-area` 的ScrollArea为简单div
-  5. 运行 `npx vitest run src/tests/components/message-list.test.tsx`
-
-  **Must NOT do**:
-  - 不测试IntentTraceCard（不在提取范围内）
-  - 不测试SSE流逻辑（那是sse-hooks的职责）
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-    - Reason: 需要mock第三方UI库、处理React渲染和用户交互测试
-  - **Skills**: [`test-driven-development`]
-    - `test-driven-development`: 编写测试验证组件行为正确
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-  - **Parallel Group**: Wave 5 (与Tasks 14-15并行)
-  - **Blocks**: None
-  - **Blocked By**: Task 5（vitest基础设施）, Task 9（MessageList组件存在）
-
-  **References**:
-  - `src/apps/portal/src/components/chat/message-list.tsx` — 被测组件
-  - `src/apps/portal/src/tests/setup.ts` — 测试环境设置
-  - `src/apps/portal/vitest.config.ts` — vitest配置
-  - vitest + RTL文档: https://testing-library.com/docs/react-testing-library/intro/
-
-  **Acceptance Criteria**:
-
-  **QA Scenarios**:
-
-  ```
-  Scenario: ChatMessageList所有vitest测试通过
-    Tool: Bash
-    Preconditions: 组件已提取，vitest已配置
-    Steps:
-      1. cd src/apps/portal
-      2. npx vitest run src/tests/components/message-list.test.tsx
-    Expected Result: 所有测试PASS
-    Failure Indicators: 任何测试FAIL
-    Evidence: .sisyphus/evidence/task-13-vitest-message-list.txt
-  ```
-
-  **Evidence to Capture**:
-  - [ ] task-13-vitest-message-list.txt — vitest测试运行输出
-
-  **Commit**: YES
-  - Message: `test(portal): ChatMessageList组件vitest单元测试`
-  - Files: `src/apps/portal/src/tests/components/message-list.test.tsx`
-  - Pre-commit: `cd src/apps/portal && npx vitest run src/tests/components/message-list.test.tsx`
-
-- [ ] 14. Wave 5 — vitest测试：ChatInput 组件
-
-  **What to do**:
-  1. 创建 `src/apps/portal/src/tests/components/chat-input.test.tsx`
-  2. 编写测试用例：
-     - `renders input field and send button`: 验证输入框和按钮存在
-     - `calls onSend when send button clicked`: mock `onSend`, 点击发送
-     - `calls onSend when Enter pressed`: 模拟Enter按键
-     - `disables send button when loading`: `isLoading=true`, 验证按钮禁用
-     - `shows loader in button when loading`: `isLoading=true`, 验证微调器存在
-     - `input value is controlled`: 验证 `setInput` 回调被调用
-  3. 使用 `@testing-library/user-event` 模拟用户输入和点击
-  4. 运行 `npx vitest run src/tests/components/chat-input.test.tsx`
-
-  **Must NOT do**:
-  - 不测试 `handleSend` 的完整逻辑（那是settlement-chat的职责）
-
-  **Recommended Agent Profile**:
-  - **Category**: `quick`
-    - Reason: 表单组件测试，标准的输入/点击/状态验证
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-  - **Parallel Group**: Wave 5 (与Tasks 13, 15并行)
-  - **Blocks**: None
-  - **Blocked By**: Task 5（vitest基础设施）, Task 10（ChatInput组件存在）
-
-  **References**:
-  - `src/apps/portal/src/components/chat/chat-input.tsx` — 被测组件
-  - `@testing-library/user-event` 文档: https://testing-library.com/docs/user-event/intro/
-
-  **Acceptance Criteria**:
-
-  **QA Scenarios**:
-
-  ```
-  Scenario: ChatInput所有vitest测试通过
-    Tool: Bash
-    Preconditions: 组件已提取
-    Steps:
-      1. cd src/apps/portal
-      2. npx vitest run src/tests/components/chat-input.test.tsx
-    Expected Result: 所有测试PASS
-    Evidence: .sisyphus/evidence/task-14-vitest-chat-input.txt
-  ```
-
-  **Evidence to Capture**:
-  - [ ] task-14-vitest-chat-input.txt — vitest测试运行输出
-
-  **Commit**: YES
-  - Message: `test(portal): ChatInput组件vitest单元测试`
-  - Files: `src/apps/portal/src/tests/components/chat-input.test.tsx`
-  - Pre-commit: `cd src/apps/portal && npx vitest run src/tests/components/chat-input.test.tsx`
-
-- [ ] 15. Wave 5 — vitest测试：StreamingBubble 组件
+- [x] 13. Wave 5 — vitest测试：ChatMessageList 组件
+- [x] 14. Wave 5 — vitest测试：ChatInput 组件
+- [x] 15. Wave 5 — vitest测试：StreamingBubble 组件
 
   **What to do**:
   1. 创建 `src/apps/portal/src/tests/components/streaming-bubble.test.tsx`

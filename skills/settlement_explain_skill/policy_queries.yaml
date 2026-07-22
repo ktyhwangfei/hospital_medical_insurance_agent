@@ -1,0 +1,53 @@
+# policy_queries.yaml — 结构化 Milvus 查询计划定义
+# 映射自 structured_policy_retriever.py plan_queries() (lines 116-169)
+# 每个 query 对应 StructuredPolicyQuery dataclass 的字段
+
+queries:
+  - query_name: employee_inpatient_tertiary_segment_ratio
+    required: true
+    description: "三级医院职工住院分段支付比例（psn_type 不限制为退休人员，基础分段比例对全部人群通用）"
+    filters:
+      insu_type: 城镇职工基本医疗保险
+      med_type: 住院-普通住院
+      hosp_lv: 三级医院
+      rule_type: 支付比例
+    psn_type_allow_all: true
+    text_must_include_any:
+      - 起付标准至3万元
+      - 超过3万元至4万元
+      - 超过4万元
+
+  - query_name: retiree_personal_ratio_formula
+    required: true
+    description: "退休人员个人支付比例 60% 折算公式（必须限定 psn_type=退休人员）"
+    filters:
+      insu_type: 城镇职工基本医疗保险
+      med_type: 住院-普通住院
+      psn_type: 退休人员
+      rule_type: 计算公式
+    text_must_include_all:
+      - 退休人员
+      - 个人支付比例
+      - 60%
+
+  # ── 起付线查询 ──────────────────────────────
+  - query_name: deductible_tertiary_first_admission
+    required: false
+    description: "三级医院首次住院起付线标准"
+    filters:
+      rule_type: 起付线
+      hosp_lv: 三级医院
+      psn_type: 全部
+    text_must_include_any:
+      - 起付线
+      - 起付标准
+
+  - query_name: deductible_second_admission_halved
+    required: false
+    description: "二次及以上住院起付线减半规则"
+    filters:
+      rule_type: 计算公式
+    text_must_include_all:
+      - 起付线
+      - 减半
+      - 50%

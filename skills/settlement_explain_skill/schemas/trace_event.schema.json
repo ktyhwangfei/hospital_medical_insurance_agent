@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hospital-ai/schemas/policy-fee-explanation/trace_event.schema.json",
+  "title": "Trace Event Schema",
+  "description": "skill 执行链路中的单个事件。",
+  "type": "object",
+  "required": ["step_id", "step_name", "status"],
+  "properties": {
+    "step_id": {
+      "type": "string",
+      "description": "步骤标识，如 intent_detection, query_sql_data, search_policy_rules"
+    },
+    "step_name": {
+      "type": "string",
+      "description": "步骤中文名称"
+    },
+    "step_number": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 14
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "done", "error", "skipped"],
+      "description": "步骤执行状态"
+    },
+    "duration_ms": {
+      "type": "number",
+      "description": "执行耗时（毫秒）"
+    },
+    "detail": {
+      "type": "string",
+      "description": "步骤详细信息（可渲染给用户）"
+    },
+    "data": {
+      "type": "object",
+      "description": "步骤产出数据（可选，调试用）"
+    }
+  }
+}
