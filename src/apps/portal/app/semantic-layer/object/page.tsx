@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import {
   Box, FileText, Loader2, Search, Layers, Pencil, Check, X, Plus, Trash2, AlertTriangle,
-  ChevronDown, ChevronUp, ShieldCheck, ShieldAlert,
+  ChevronDown, ChevronUp, ShieldCheck, ShieldAlert, History,
 } from 'lucide-react'
 
 // ── Types ───────────────────────────────────────────────────────
@@ -22,6 +22,7 @@ interface SemanticObject {
   status: string
   identifier?: string
   version?: string
+  current_version?: string | null
 }
 
 interface DomainInfo {
@@ -139,6 +140,91 @@ function PublishCheckDialog({ obj, onCancel, onPublished }: {
   )
 }
 
+// ── Version History Dialog ─────────────────────────────────────
+
+interface ObjectVersionInfo {
+  version_id: string
+  object_code: string
+  version: string
+  published_at: string
+  published_by?: string | null
+  changelog?: string | null
+  metric_count: number
+}
+
+function VersionHistoryDialog({ obj, onClose }: { obj: SemanticObject; onClose: () => void }) {
+  const [versions, setVersions] = useState<ObjectVersionInfo[]>([])
+  const [locks, setLocks] = useState<{ skill_id: string; locked_version: string | null }[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    Promise.all([
+      fetchJson<ObjectVersionInfo[]>(`${SEMANTIC_API}/objects/${encodeURIComponent(obj.object_code)}/versions`),
+      fetchJson<{ locked_by_skills?: { skill_id: string; locked_version: string | null }[] }>(`${SEMANTIC_API}/objects/${encodeURIComponent(obj.object_code)}`),
+    ]).then(([vs, d]) => {
+      setVersions(Array.isArray(vs) ? vs : [])
+      setLocks(d.locked_by_skills ?? [])
+    }).catch((err: Error) => setError(err.message))
+      .finally(() => setLoading(false))
+  }, [obj.object_code])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+      <div className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+        <div className="flex items-start gap-3">
+          <div className="shrink-0 rounded-full bg-purple-50 p-2"><History className="h-5 w-5 text-purple-500" /></div>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-slate-800">版本历史</h3>
+            <p className="text-xs text-slate-500">{obj.name}（<code className="text-[10px]">{obj.object_code}</code>）</p>
+          </div>
+          <button onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+        </div>
+
+        {/* locked_by_skills */}
+        {locks.length > 0 && (
+          <div className="mt-3 rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            <span className="font-medium">技能锁定：</span>
+            {locks.map((l, i) => (
+              <span key={i} className="ml-1">
+                {l.skill_id}{l.locked_version ? `@v${l.locked_version}` : '（跟随最新）'}
+                {i < locks.length - 1 ? '、' : ''}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center gap-2 py-8 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />加载中...</div>
+          ) : error ? (
+            <div className="py-8 text-center text-sm text-red-500">{error}</div>
+          ) : versions.length === 0 ? (
+            <div className="py-8 text-center text-sm text-slate-400">尚未发布任何版本</div>
+          ) : (
+            <div className="space-y-2">
+              {[...versions].reverse().map((v) => (
+                <div key={v.version_id} className={`rounded-lg border px-3 py-2 ${v.version === obj.current_version ? 'border-emerald-300 bg-emerald-50/50' : 'border-slate-200 bg-slate-50/50'}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-md bg-slate-700 px-2 py-0.5 font-mono text-[10px] font-medium text-white">v{v.version}</span>
+                      {v.version === obj.current_version && <Badge variant="outline" className="text-[9px] text-emerald-600 border-emerald-300">当前</Badge>}
+                      <span className="text-xs text-slate-500">{v.metric_count} 个指标</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">{new Date(v.published_at).toLocaleString('zh-CN')}</span>
+                  </div>
+                  {v.changelog && <p className="mt-1 text-xs text-slate-600">{v.changelog}</p>}
+                  {v.published_by && <p className="text-[10px] text-slate-400">发布人：{v.published_by}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Delete Confirm ───────────────────────────────────────────────
 
 function DeleteConfirmDialog({ obj, onConfirm, onCancel }: {
@@ -222,6 +308,7 @@ function ObjectCardRow({ obj, domainName, domains, onSave, onDelete }: {
   const [editDraft, setEditDraft] = useState<Record<string, string> | null>(null)
   const [saving, setSaving] = useState(false)
   const [showPublishCheck, setShowPublishCheck] = useState(false)
+  const [showVersionHistory, setShowVersionHistory] = useState(false)
 
   const startEdit = useCallback(() => {
     setEditDraft({
@@ -276,11 +363,11 @@ function ObjectCardRow({ obj, domainName, domains, onSave, onDelete }: {
 
   const handlePublish = useCallback(async () => {
     try {
-      await fetchJson(`${SEMANTIC_API}/objects/${encodeURIComponent(obj.object_code)}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'published' }),
+      const result = await fetchJson<{ version: string }>(`${SEMANTIC_API}/objects/${encodeURIComponent(obj.object_code)}/publish`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ changelog: '前端发布' }),
       })
-      onSave({ ...obj, status: 'published' })
+      onSave({ ...obj, status: 'published', current_version: result.version })
       setShowPublishCheck(false)
     } catch (err: any) { alert(err.message) }
   }, [obj, onSave])
@@ -302,7 +389,9 @@ function ObjectCardRow({ obj, domainName, domains, onSave, onDelete }: {
           </div>
           <div className="mt-0.5 flex items-center gap-3 text-xs text-slate-500">
             <span className="flex items-center gap-1"><Layers className="h-3 w-3 text-blue-500" />{domainName}</span>
-            {obj.version && <span className="font-mono text-slate-400">v{obj.version}</span>}
+            {obj.current_version
+              ? <span className="font-mono text-emerald-500">已发布 v{obj.current_version}</span>
+              : <span className="font-mono text-slate-400">未发布</span>}
           </div>
           {obj.definition && (
             <p className="mt-1 line-clamp-2 text-xs text-slate-500">{obj.definition}</p>
@@ -331,6 +420,9 @@ function ObjectCardRow({ obj, domainName, domains, onSave, onDelete }: {
           </button>
           <button onClick={() => onDelete(obj)} className="rounded-md p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50" title="删除">
             <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <button onClick={() => setShowVersionHistory(true)} className="rounded-md p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50" title="版本历史">
+            <History className="h-3.5 w-3.5" />
           </button>
           <button onClick={() => editing ? setEditDraft(null) : startEdit()} className="rounded-md p-1.5 text-slate-400 hover:text-slate-600" title={editing ? '收起' : '展开'}>
             {editing ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -377,6 +469,11 @@ function ObjectCardRow({ obj, domainName, domains, onSave, onDelete }: {
       {/* ── Publish Check ── */}
       {showPublishCheck && (
         <PublishCheckDialog obj={obj} onCancel={() => setShowPublishCheck(false)} onPublished={handlePublish} />
+      )}
+
+      {/* ── Version History ── */}
+      {showVersionHistory && (
+        <VersionHistoryDialog obj={obj} onClose={() => setShowVersionHistory(false)} />
       )}
     </div>
   )
