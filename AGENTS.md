@@ -25,10 +25,8 @@
 # 启动开发服务器（--factory 必须指定，因为 create_app 是工厂函数）
 uvicorn src.runtime.api.app:create_app --host 127.0.0.1 --port 8000 --factory --reload
 
-# 前端开发服务器（三个独立 Next.js 16 应用，各自独立运行）
+# 前端开发服务器（Next.js 16 应用）
 cd src/apps/portal && npm run dev    # 业务应用入口（默认端口 3000）
-cd src/apps/admin  && npm run dev    # 平台管理入口（默认端口 3001）
-cd src/apps/embed  && npm run dev    # 嵌入式组件（默认端口 3002）
 
 ```
 ## 架构
@@ -37,7 +35,7 @@ cd src/apps/embed  && npm run dev    # 嵌入式组件（默认端口 3002）
 
 PaaS 层七个服务域是系统的核心能力分解：接入安全（gateway）、会话上下文（runtime/session+context）、智能编排（runtime/intent+planning+orchestration）、模型服务（model_service）、知识服务（knowledge_extension）、业务适配（adapters）、任务闭环（runtime/task_closure）。
 
-当前已实现后端核心子集（`src/` 下）及三个前端应用（`src/apps/` 下）。
+当前已实现后端核心子集（`src/` 下）及前端应用 portal（`src/apps/portal` 下）。
 
 ### 目录职责映射
 
@@ -46,7 +44,7 @@ Agent 编码时根据以下映射定位代码位置：
 | 目录 | 职责 | 当前状态 |
 |------|------|----------|
 | `runtime/` | Agent 核心运行时：API 入口、会话上下文、意图识别、澄清、编排（含 LangGraph）、调度、响应（含 SSE 流式）、任务闭环、事件日志、技能注册、政策问答 | 已实现（api/context/intent/clarification/planning/orchestration/scheduling/task_closure/runtime_state/event_log/capability_nodes/skill_registry/langgraph/policy_qa） |
-| `business_scenarios/` | 医保业务场景：结算异常导办、出院前联合质控、MCP 工具调用 | 三个场景已实现 |
+| `business_scenarios/` | 医保业务场景：结算异常导办、出院前联合质控 | 场景代码已实现（settlement_exception_guide、pre_discharge_joint_qc），运行时入口整合至 runtime/scenario_executor |
 | `model_service/` | 模型服务网关：统一调用入口、路由策略、OpenAI 兼容 Provider、流式生成、异常分类、模型配置管理、Provider 管理 | 已实现（gateway/router/providers/openai_compatible/exceptions/models/ports） |
 | `knowledge_extension/` | 知识与扩展：规则解释（含 Milvus 政策检索+SQL Server 数据源）、MCP 注册中心、扩展注册 | 已实现（common/extension_registry/mcp_registry/rule_explanation + policy_retrieval 含 Milvus/SQLServer/语义映射；原 knowledge/rag/assets/prompt_templates 已删除，由 stub 提供兼容） |
 | `adapters/` | 外部系统防腐层：医保接口、事前审核、DRG/DIP、HIS、EMR、病案、收费 | 7 个内存适配器 + base 基类（models/service）+ ports 端口定义均已实现 |
@@ -58,7 +56,7 @@ Agent 编码时根据以下映射定位代码位置：
 | `shared/` | 共享基础：异常模型、响应契约、Schema 契约、技能加载器/注册表 | 已实现（exceptions/schemas/skills） |
 | `gateway/` | 统一接入网关：API网关、渠道识别、认证鉴权、租户隔离、限流熔断、请求安全校验、接入日志 | 已实现（api_gateway/channel/auth/tenant/rate_limiter/request_guard/access_log） |
 | `interaction/` | 多模态交互层：Chat对话、文件上传、语音交互、页面上下文、消息提醒、知识上传 | 已实现（chat/file/voice/page_context/notification/knowledge_upload） |
-| `apps/` | SaaS 应用入口层：三个独立 Next.js 16 应用 — Portal（业务导办）、Admin（平台管理）、Embed（嵌入式组件） | 已实现（portal/ 含 chat/settlement/qc/dashboard/policy-qa 路由，admin/ 含 mcp/knowledge/model/skills 路由，embed/ 含嵌入式 chat widget） |
+| `apps/` | SaaS 应用入口层：Next.js 16 应用 Portal（业务导办与政策问答） | 已实现（portal/ 含 policy-qa/semantic-layer/policy-knowledge/skills/qa-history 路由，及 settlement/qc/dashboard） |
 | `skills/` | Skill 驱动架构：自包含的医保业务能力包（费用解释、起付线、大额自付等），通过 YAML 配置 + Python assembler 实现声明式业务逻辑。每个 Skill 通过 `business_action` + `business_object` 挂载到平台七类业务动作 | 已实现（settlement_explain_skill/ 含 SKILL.md + schemas + templates + scripts，已声明 `explain` + `settlement`） |
 | `src/skill_infra/` | Skill 基础设施：动态加载器（SkillLoader）、关键词路由器（SkillRouter），自动扫描 skills/ 目录发现和加载 skill 包 | 已实现（skill_loader.py, skill_router.py） |
 | `src/domain/common/actions.py` | Business Action 枚举：平台最高层业务分类（七类动作 + 十类对象 + 能力矩阵白名单） | 已实现（BusinessAction, BusinessObject, VALID_ACTION_OBJECT_PAIRS） |
@@ -74,7 +72,7 @@ runtime/api (FastAPI 路由)
   → security/authorization (权限校验)
   → runtime/orchestrator (统一编排)
       ├─ runtime/langgraph (LangGraph 图式执行：检查点 + 人工确认中断)
-      ├─ business_scenarios/{settlement_exception_guide, pre_discharge_joint_qc, mcp_tool_invocation}
+      ├─ business_scenarios/{settlement_exception_guide, pre_discharge_joint_qc}
       ├─ src/skill_infra/skill_router (SkillRouter：关键词路由)
       │   └─ skills/settlement_explain_skill (Skill 驱动：YAML 配置 + assembler)
       └─ runtime/skill_registry (技能/工具执行引擎)
@@ -129,12 +127,10 @@ runtime/api (FastAPI 路由)
 
 路由前缀: `/api/v1/medical-insurance-ai-agent`（除 `/health` 外）。完整接口清单见 `docs/steering/接口设计文档.md`。
 
-前端应用目录: `src/apps/` 下三个独立 Next.js 16 应用：
-- **portal/** — 业务应用入口，路由：`/policy-qa`（政策问答）、`/`（Chat 导办）、`/settlement`（结算异常）、`/qc`（出院前质控）、`/dashboard`（运营看板）
-- **admin/** — 平台管理入口，路由：`/`（管理首页）、`/mcp`（MCP 管理）、`/knowledge`（知识管理）、`/model`（模型测试）、`/skills`（技能管理）
-- **embed/** — 嵌入式组件（嵌入 HIS/EMR），路由：`/`（精简版 Chat widget）
+前端应用目录: `src/apps/portal/`（Next.js 16 应用，当前唯一前端入口）：
+- **portal/** — 业务应用入口，路由：`/policy-qa`（政策问答，主入口）、`/semantic-layer`（语义层）、`/policy-knowledge`（政策知识）、`/skills`（技能）、`/qa-history`（问答历史）、`/`（Chat 导办）、`/settlement`（结算异常）、`/qc`（出院前质控）、`/dashboard`（运营看板）
 
-三个应用各自独立构建、独立运行，共享同一后端 API（`/api/v1/medical-insurance-ai-agent/*`）。
+应用独立构建运行，调用后端 API（`/api/v1/medical-insurance-ai-agent/*`）。
 
 ## 编码规范
 
@@ -195,10 +191,10 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - 样例数据仅包含 `P001/E001`，`P002` 触发降级路径
 - 测试中 `HIGH_RISK_ACTIONS` 是 `set`，`detect_blocked_actions` 返回顺序不稳定，断言应使用 `set()` 比较
 - PowerShell 中 `&&` 和 `||` 无效，用 `;` 分隔命令
-- 模型服务需要配置 `MODEL_API_KEY` 环境变量，未配置时 `/model-test` 返回 503
-- SSE 流式端点（`/chat/stream`、`/model-test/stream`）的 `done` 事件标志流结束，前端需据此关闭 EventSource
+- 模型服务需要配置 `MODEL_API_KEY` 环境变量，未配置时模型相关接口不可用
+- SSE 流式端点（`/api/v1/medical-insurance-ai-agent/policy-qa/stream`）的 `done` 事件标志流结束，前端需据此关闭 EventSource（原 `/chat/stream` 已迁移至 policy-qa）
 - LangGraph 人工确认通过 `interrupt()` 暂停图执行，`_checkpoint_registry` 维护 task_id → (graph, thread_id) 映射，用于恢复执行
-- `src/apps/` 下的三个 Next.js 应用版本均为 16.x，API 和约定可能与训练数据不同，编码前应先查阅 `node_modules/next/dist/docs/`
+- `src/apps/portal/` 为 Next.js 16.x 应用，API 和约定可能与训练数据不同，编码前应先查阅 `node_modules/next/dist/docs/`
 - `domain/tool/` 和 `data_platform/storage/tool/` 是完全空目录（无 `__init__.py`），import 会报错 — 不要使用
 - `runtime/orchestration/service.py` 和 `runtime/planning/service.py` 已 DEPRECATED，使用 `scenario_executor.py` 代替
 - boulder continuation 活跃时，`task(run_in_background=true)` 的通知与 system-reminder 互扰，导致后台任务结果丢失。串行多任务时用 `run_in_background=false`
