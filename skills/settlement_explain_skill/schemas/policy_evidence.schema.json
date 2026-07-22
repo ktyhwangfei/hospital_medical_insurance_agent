@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hospital-ai/schemas/policy-fee-explanation/policy_evidence.schema.json",
+  "title": "Policy Evidence Schema",
+  "description": "单条政策证据的结构。",
+  "type": "object",
+  "required": ["rule_type", "source_text"],
+  "properties": {
+    "policy_title": {
+      "type": "string",
+      "description": "政策标题（截断80字）"
+    },
+    "clause_text": {
+      "type": "string",
+      "description": "政策条款全文"
+    },
+    "source_text": {
+      "type": "string",
+      "description": "政策证据原文（用于解析比例/规则）"
+    },
+    "rule_type": {
+      "type": "string",
+      "description": "规则类型",
+      "examples": ["支付比例", "计算公式", "起付线标准"]
+    },
+    "rule_tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "规则标签 [rule_type, insu_type, med_type, hosp_lv, psn_type]"
+    },
+    "matched_query": {
+      "type": "string",
+      "description": "本次匹配使用的查询名称"
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "applied_reason": {
+      "type": "string",
+      "description": "本条证据适用于本次查询的原因"
+    },
+    "rule_id": {
+      "type": "string",
+      "description": "内部规则ID（禁止展示给患者）"
+    },
+    "payment_ratio": {
+      "type": "string",
+      "description": "支付比例"
+    },
+    "amount_band": {
+      "type": "string",
+      "description": "金额区间"
+    },
+    "rule_value": {
+      "type": "string",
+      "description": "规则值（JSON字符串）"
+    },
+    "psn_type": {
+      "type": "string",
+      "description": "人员类型（顶层字段，用于解析）"
+    },
+    "insu_type": {
+      "type": "string"
+    },
+    "med_type": {
+      "type": "string"
+    },
+    "hosp_lv": {
+      "type": "string"
+    }
+  }
+}

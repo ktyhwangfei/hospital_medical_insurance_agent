@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>医保结算可解释能力建设进展</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Noto+Sans+SC:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ======== RESET ======== */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;font-family:'Inter','Noto Sans SC',sans-serif;-webkit-font-smoothing:antialiased;background:#f0f3f7;display:flex;align-items:center;justify-content:center}
+/* ======== DECK ======== */
+.deck{position:relative;width:1280px;height:720px;background:#fff;border-radius:12px;box-shadow:0 4px 40px rgba(10,37,64,.12),0 1px 4px rgba(10,37,64,.06);overflow:hidden}
+/* ======== SLIDE SYSTEM ======== */
+.slide{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:52px 72px 40px;opacity:0;pointer-events:none;transform:translateX(30px);transition:opacity .5s cubic-bezier(.4,0,.2,1),transform .5s cubic-bezier(.4,0,.2,1)}
+.slide.is-active{opacity:1;pointer-events:auto;transform:translateX(0);z-index:2}
+/* ======== BG ORB ======== */
+.bg-orb{position:absolute;border-radius:50%;pointer-events:none;opacity:.04;filter:blur(64px)}
+.bg-orb.o1{width:380px;height:380px;background:#0a2540;top:-100px;right:-60px}
+.bg-orb.o2{width:260px;height:260px;background:#1d4ed8;bottom:-60px;left:-40px}
+/* ======== TOP BAR ======== */
+.top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px;position:relative;z-index:1}
+.top-bar .brand{font-size:12px;font-weight:600;color:#8898aa;letter-spacing:.1em;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+.top-bar .brand::before{content:'';width:24px;height:2px;background:linear-gradient(90deg,#0a2540,#1d4ed8);border-radius:1px}
+.top-bar .page-indicator{font-size:12px;color:#8898aa;font-weight:500}
+/* ======== KICKER + TITLE ======== */
+.kicker{font-size:13px;font-weight:700;color:#1d4ed8;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;position:relative;z-index:1}
+.h1{font-size:48px;font-weight:800;line-height:1.1;letter-spacing:-.03em;color:#0a2540;margin-bottom:8px;position:relative;z-index:1}
+.h1 .hl{background:linear-gradient(135deg,#0a2540,#1d4ed8);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+.sub{font-size:16px;color:#64748b;font-weight:400;max-width:700px;margin-bottom:0;position:relative;z-index:1}
+/* ======== THREE COLUMN CARDS ======== */
+.col3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;position:relative;z-index:1;flex:1;align-content:start}
+.card{border:1px solid rgba(10,37,64,.08);border-radius:10px;padding:24px 22px;background:rgba(255,255,255,.7);box-shadow:0 1px 3px rgba(10,37,64,.03)}
+.card .card-icon{font-size:28px;margin-bottom:10px}
+.card h3{font-size:17px;font-weight:700;color:#0a2540;margin-bottom:12px}
+.card ul{list-style:none;padding:0}
+.card ul li{position:relative;padding:8px 0;font-size:13.5px;line-height:1.5;color:#475569;border-bottom:1px solid rgba(10,37,64,.04)}
+.card ul li:last-child{border-bottom:none}
+.card ul li::before{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:8px;vertical-align:middle;position:relative;top:-1px}
+.card.type1 ul li::before{background:#dc2626}
+.card.type2 ul li::before{background:#d97706}
+.card.type3 ul li::before{background:#0ea5e9}
+.card.type1{border-top:3px solid #dc2626}
+.card.type2{border-top:3px solid #d97706}
+.card.type3{border-top:3px solid #0ea5e9}
+/* ======== FOOTER MESSAGE ======== */
+.foot-msg{margin-top:20px;display:flex;align-items:center;gap:10px;position:relative;z-index:1}
+.foot-msg .tag{font-size:11px;font-weight:700;padding:4px 12px;border-radius:999px;background:#0a2540;color:#fff;white-space:nowrap}
+.foot-msg p{font-size:13px;color:#64748b}
+/* ======== PAGE 2: FLOW ======== */
+.flow-section{position:relative;z-index:1;flex:1;display:flex;flex-direction:column;justify-content:center}
+.flow-row{display:flex;align-items:center;gap:14px;margin:0 auto;max-width:1100px}
+.flow-node{flex:1;background:#fff;border:1px solid rgba(10,37,64,.1);border-radius:10px;padding:20px 16px;text-align:center;box-shadow:0 2px 8px rgba(10,37,64,.04)}
+.flow-node .n-icon{font-size:28px;margin-bottom:6px}
+.flow-node .n-label{font-size:14px;font-weight:700;color:#0a2540;margin-bottom:4px}
+.flow-node .n-desc{font-size:11px;color:#8898aa;line-height:1.4}
+.flow-arrow{color:#cbd5e1;font-size:24px;font-weight:300;flex-shrink:0}
+.flow-node.hl{border-color:#1d4ed8;box-shadow:0 0 0 3px rgba(29,78,216,.12),0 2px 8px rgba(10,37,64,.04)}
+/* ======== EXAMPLE BOX ======== */
+.example-box{margin-top:32px;background:linear-gradient(135deg,rgba(10,37,64,.03),rgba(29,78,216,.04));border:1px solid rgba(29,78,216,.12);border-radius:10px;padding:22px 28px}
+.example-box .ex-title{font-size:14px;font-weight:700;color:#1d4ed8;margin-bottom:12px}
+.example-box .ex-formula{font-family:'JetBrains Mono','Consolas',monospace;font-size:12.5px;line-height:1.9;color:#334155}
+.example-box .ex-formula span.label{color:#8898aa;font-size:11px}
+.example-box .ex-formula span.num{color:#0a2540;font-weight:600}
+.example-box .ex-formula span.res{color:#0e9f6e;font-weight:700}
+/* ======== PAGE 3: PROGRESS ======== */
+.progress-section{position:relative;z-index:1;flex:1;display:flex;flex-direction:column;justify-content:center;gap:20px}
+.phase-row{display:grid;grid-template-columns:1fr 2fr 1fr;gap:20px;align-items:start}
+.phase-card{background:#fff;border:1px solid rgba(10,37,64,.08);border-radius:10px;padding:22px 24px;box-shadow:0 1px 3px rgba(10,37,64,.03)}
+.phase-card h3{font-size:16px;font-weight:700;margin-bottom:6px}
+.phase-card .pct{font-size:28px;font-weight:800;margin-bottom:4px}
+.phase-card ul{list-style:none;padding:0;margin-top:10px}
+.phase-card ul li{font-size:13px;color:#475569;padding:5px 0;line-height:1.5}
+.phase-card.done{border-left:3px solid #0e9f6e}
+.phase-card.done h3{color:#0e9f6e}
+.phase-card.done .pct{color:#0e9f6e}
+.phase-card.active{border-left:3px solid #1d4ed8}
+.phase-card.active h3{color:#1d4ed8}
+.phase-card.active .pct{color:#1d4ed8}
+.phase-card.next{border-left:3px solid #cbd5e1}
+.phase-card.next h3{color:#64748b}
+.phase-card.next .pct{color:#8898aa}
+/* ======== BOTTOM KEY MSG ======== */
+.key-msg{margin-top:16px;padding:16px 24px;background:#0a2540;border-radius:10px;position:relative;z-index:1}
+.key-msg p{color:rgba(255,255,255,.9);font-size:14px;line-height:1.6;text-align:center;font-weight:500}
+.key-msg p strong{color:#fff}
+/* ======== NAV HINT ======== */
+.nav-hint{position:absolute;bottom:18px;right:28px;font-size:11px;color:#cbd5e1;z-index:2}
+/* ======== ANIM ======== */
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.a1{opacity:0;animation:fadeUp .6s .1s forwards}
+.a2{opacity:0;animation:fadeUp .6s .2s forwards}
+.a3{opacity:0;animation:fadeUp .6s .3s forwards}
+.a4{opacity:0;animation:fadeUp .6s .4s forwards}
+.a5{opacity:0;animation:fadeUp .6s .5s forwards}
+.a6{opacity:0;animation:fadeUp .6s .6s forwards}
+.a7{opacity:0;animation:fadeUp .6s .7s forwards}
+/* ======== RESPONSIVE ======== */
+@media(max-width:1320px){
+  .deck{width:96vw;height:auto;aspect-ratio:16/9;border-radius:8px}
+  .slide{padding:36px 48px 28px}
+  .h1{font-size:38px}
+  .col3{gap:12px}
+  .card{padding:18px 16px}
+}
+</style>
+</head>
+<body>
+
+<div class="deck">
+
+  <!-- ═══════════ PAGE 1: 痛点 ═══════════ -->
+  <section class="slide is-active" data-title="当前业务痛点">
+    <div class="bg-orb o1"></div><div class="bg-orb o2"></div>
+    <div class="top-bar"><span class="brand">院端医保AI智能体</span><span class="page-indicator">1 / 3</span></div>
+    <p class="kicker a1">患者为什么问？</p>
+    <h1 class="h1 a2">患者和医保办咨询最集中的<span class="hl">三类问题</span></h1>
+    <p class="sub a3">高频咨询每天消耗医保办大量人工时间，根源在于：系统只给结果，不给解释</p>
+
+    <div class="col3 a4">
+      <div class="card type1">
+        <div class="card-icon">💰</div>
+        <h3>待遇类</h3>
+        <ul>
+          <li>起付线为什么是 1,950 元？</li>
+          <li>为什么第二次住院只收 650 元？</li>
+          <li>封顶线是多少？</li>
+          <li>统筹支付为什么是 91,759 元？</li>
+        </ul>
+      </div>
+      <div class="card type2">
+        <div class="card-icon">🧮</div>
+        <h3>费用类</h3>
+        <ul>
+          <li>统筹自付 4,962 元怎么来的？</li>
+          <li>大额自付 13,407 元怎么来的？</li>
+          <li>哪些费用进入医保内？</li>
+          <li>哪些费用属于医保外？</li>
+        </ul>
+      </div>
+      <div class="card type3">
+        <div class="card-icon">📋</div>
+        <h3>目录类</h3>
+        <ul>
+          <li>哪个药不能报销？</li>
+          <li>为什么这个耗材只报 80%？</li>
+          <li>为什么这次比上次报销少？</li>
+          <li>国谈药、集采药的报销规则？</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="foot-msg a5">
+      <span class="tag">核心矛盾</span>
+      <p>医院系统只展示结算数字，不解释为什么是这个数字 — <strong>患者不理解就投诉，医保办翻政策解释耗时长</strong></p>
+    </div>
+    <div class="nav-hint">← → 翻页 · F 全屏</div>
+  </section>
+
+  <!-- ═══════════ PAGE 2: 解法 ═══════════ -->
+  <section class="slide" data-title="我们能解释">
+    <div class="bg-orb o1"></div><div class="bg-orb o2"></div>
+    <div class="top-bar"><span class="brand">院端医保AI智能体</span><span class="page-indicator">2 / 3</span></div>
+    <p class="kicker a1">我们能不能解释？</p>
+    <h1 class="h1 a2"><span class="hl">能做</span> — 本质是「政策规则 + 结算数据」的自动解释</h1>
+    <p class="sub a3">不是凭空生成答案，而是<strong>政策匹配 → 数据计算 → 解释生成</strong>，每一步都可追溯</p>
+
+    <div class="flow-section">
+      <!-- Flow -->
+      <div class="flow-row a4">
+        <div class="flow-node">
+          <div class="n-icon">🏥</div>
+          <div class="n-label">住院登记</div>
+          <div class="n-desc">识别参保类型<br>退休职工</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node">
+          <div class="n-icon">⚙️</div>
+          <div class="n-label">识别医疗类别</div>
+          <div class="n-desc">三级医院<br>普通住院</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node hl">
+          <div class="n-icon">📖</div>
+          <div class="n-label">查询待遇政策</div>
+          <div class="n-desc">起付线 · 分段比例<br>人员系数</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node">
+          <div class="n-icon">🔢</div>
+          <div class="n-label">自动分段计算</div>
+          <div class="n-desc">医保内费用<br>逐段套用比例</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node">
+          <div class="n-icon">✅</div>
+          <div class="n-label">输出解释</div>
+          <div class="n-desc">政策依据 + 数据<br>+ 计算过程</div>
+        </div>
+      </div>
+
+      <!-- Example -->
+      <div class="example-box a5">
+        <div class="ex-title">📐 案例：患者问「统筹自付为什么是 4,962.67 元？」</div>
+        <div class="ex-formula">
+          <span class="label">医保内费用</span> <span class="num">164,411.81</span> 元<br>
+          <span class="label">起付线</span> <span class="num">650</span> 元（退休职工 · 第二次住院）<br>
+          <span class="label">统筹内金额</span> <span class="num">97,372.18</span> 元<br>
+          <br>
+          <span class="label">分段①</span> 650→30,000：<span class="num">29,350</span> × 15% × 60%（退休系数）= <span class="num">2,641.50</span><br>
+          <span class="label">分段②</span> 30,000→40,000：<span class="num">10,000</span> × 10% × 60% = <span class="num">600.00</span><br>
+          <span class="label">分段③</span> 40,000→97,372：<span class="num">57,372.18</span> × 5% × 60% = <span class="num">1,721.17</span><br>
+          <br>
+          <span class="label">合计</span> <span class="res">2,641.50 + 600.00 + 1,721.17 = 4,962.67 元 ✓</span>
+        </div>
+      </div>
+    </div>
+    <div class="nav-hint">← → 翻页 · F 全屏</div>
+  </section>
+
+  <!-- ═══════════ PAGE 3: 进展与计划 ═══════════ -->
+  <section class="slide" data-title="进展与计划">
+    <div class="bg-orb o1"></div><div class="bg-orb o2"></div>
+    <div class="top-bar"><span class="brand">院端医保AI智能体</span><span class="page-indicator">3 / 3</span></div>
+    <p class="kicker a1">什么时候能落地？</p>
+    <h1 class="h1 a2">三阶段推进，<span class="hl">第一阶段已完成 70%</span></h1>
+    <p class="sub a3">项目技术可行性高，核心难点不在 AI，而在医保政策规则和历史待遇规则的持续沉淀与标准化</p>
+
+    <div class="progress-section a4">
+      <div class="phase-row">
+        <!-- Phase 1 -->
+        <div class="phase-card done">
+          <h3>第一阶段</h3>
+          <div class="pct">≈ 70%</div>
+          <p style="font-size:13px;color:#475569">待遇解释 · 当前</p>
+          <ul>
+            <li>起付线解释</li>
+            <li>统筹支付解释</li>
+            <li>统筹自付解释</li>
+            <li>封顶线解释</li>
+            <li>分段计算展示</li>
+          </ul>
+        </div>
+        <!-- Phase 2 -->
+        <div class="phase-card active">
+          <h3>第二阶段</h3>
+          <div class="pct">规划中</div>
+          <p style="font-size:13px;color:#475569">费用归因解释</p>
+          <ul>
+            <li>自费原因逐项追溯</li>
+            <li>自付原因逐项追溯</li>
+            <li>药品限价原因</li>
+            <li>耗材限价原因</li>
+            <li>甲乙丙类目录匹配</li>
+          </ul>
+        </div>
+        <!-- Phase 3 -->
+        <div class="phase-card next">
+          <h3>第三阶段</h3>
+          <div class="pct">待规划</div>
+          <p style="font-size:13px;color:#475569">患者智能问答</p>
+          <ul>
+            <li>患者自助查询</li>
+            <li>结算结果解读</li>
+            <li>政策依据展示</li>
+            <li>计算过程展示</li>
+            <li>费用明细归因</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Key message -->
+    <div class="key-msg a5">
+      <p>
+        <strong>项目技术可行性高</strong>，核心难点不在 AI，而在<strong>医保政策规则和历史待遇规则的持续沉淀与标准化</strong>。
+        目前已完成待遇类解释能力建设，下一步将推进费用归因解释，逐步形成医保结算「可解释服务」。
+      </p>
+    </div>
+    <div class="nav-hint">← → 翻页 · F 全屏</div>
+  </section>
+
+</div>
+
+<script>
+// Minimal navigation
+(function(){
+  const slides = document.querySelectorAll('.slide');
+  let idx = 0;
+  function show(i){
+    slides.forEach((s,j)=>{s.classList.toggle('is-active',j===i);
+      s.querySelectorAll('[class*="a1"],[class*="a2"],[class*="a3"],[class*="a4"],[class*="a5"],[class*="a6"],[class*="a7"]').forEach(el=>{
+        el.style.animation='none';el.offsetHeight;el.style.animation='';
+      });
+    });
+    const pi = document.querySelectorAll('.page-indicator');
+    pi.forEach(p=>p.textContent=(i+1)+' / '+slides.length);
+  }
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key==='ArrowDown'||e.key===' '){e.preventDefault();idx=Math.min(idx+1,slides.length-1);show(idx)}
+    if(e.key==='ArrowLeft'||e.key==='ArrowUp'){e.preventDefault();idx=Math.max(idx-1,0);show(idx)}
+  });
+  // Click nav
+  document.addEventListener('click',e=>{
+    if(e.clientX > window.innerWidth*0.7){idx=Math.min(idx+1,slides.length-1);show(idx)}
+    else if(e.clientX < window.innerWidth*0.3){idx=Math.max(idx-1,0);show(idx)}
+  });
+})();
+</script>
+
+</body>
+</html>

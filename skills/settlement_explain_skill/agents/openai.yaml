@@ -1,0 +1,47 @@
+# agents/openai.yaml — MCP 依赖声明
+#
+# 本文件声明 policy-fee-explanation skill 所需的 MCP 能力。
+# 产品层负责在运行时注册这些 MCP，skill 不自行实现 MCP。
+
+required_mcp_capabilities:
+  - id: settlement-data
+    description: "查询真实结算数据（SQL Server）"
+    protocol: "stdio"
+    purpose: "获取结算上下文（人员类别、险种、医院等级、费用明细等）"
+    example_input:
+      settlement_id: "1671213"
+    example_output:
+      case_context:
+        person_type: "退休人员"
+        insurance_type: "城镇职工基本医疗保险"
+        hospital_level: "三级医院"
+        deductible: 650.00
+        basic_pooling_self_pay: 4962.67
+
+  - id: structured-policy-rule
+    description: "结构化政策规则查询（Milvus 标量字段过滤）"
+    protocol: "stdio"
+    purpose: "从 policy_rules 集合按 insu_type/med_type/rule_type 等字段精确查询政策规则"
+    example_input:
+      query_name: "employee_inpatient_tertiary_segment_ratio"
+      filters:
+        insu_type: "城镇职工基本医疗保险"
+        med_type: "住院-普通住院"
+        hosp_lv: "三级医院"
+        rule_type: "支付比例"
+    example_output:
+      evidence:
+        - rule_type: "支付比例"
+          source_text: "起付标准至3万元的部分，统筹基金支付85%，职工支付15%"
+          payment_ratio: "85%"
+
+optional_mcp_capabilities:
+  - id: policy-vector-search
+    description: "向量语义检索兜底（Milvus 向量相似度搜索）"
+    protocol: "stdio"
+    purpose: "当结构化查询无结果时，回退到向量语义搜索获取政策规则"
+
+  - id: audit-trace
+    description: "审计链路事件记录"
+    protocol: "stdio"
+    purpose: "记录每次 skill 执行的完整 trace_events 供审计追溯"

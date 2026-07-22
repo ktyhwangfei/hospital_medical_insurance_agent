@@ -1,0 +1,70 @@
+# field_mapping.yaml — 字段名 → 显示标签映射
+# 数据来源:
+#   - settlement-explanation-page.tsx FACT_LABELS (lines 52-65)
+#   - policy_qa_routes.py definition block (line 1222-1226)
+
+target_field:
+  technical_name: basic_pooling_self_pay
+  display_name: 统筹自付
+  definition: 基本医保统筹段内按政策比例由个人承担的金额。
+  excludes:
+    - 起付线
+    - 大额自付
+    - 目录外自费
+    - 乙类先行自付
+    - 限价外费用
+
+# 结算上下文字段映射
+settlement_fields:
+  deductible:
+    label: 起付线
+    description: 医保开始报销前，先由个人承担的部分。
+    db_source: yb_dyxxzy.bcqfje
+  medical_insurance_inner_amount:
+    label: 医保内费用
+    description: 本次结算纳入医保报销范围的费用总额。
+    db_source: yb_dyxxzy.bcybnje
+  basic_pooling_payment:
+    label: 统筹支付
+    description: 基本医保统筹基金已经支付的部分。
+    db_source: yb_dyxxzy.bctcje
+  basic_pooling_self_pay:
+    label: 统筹自付
+    description: 基本医保统筹段内，按比例由个人承担的部分。
+    db_source: yb_dyxxzy.bczfje
+  large_amount_payment:
+    label: 大额支付
+    description: 大额医疗费用补助基金支付的部分。
+    db_source: yb_dyxxzy.debxbxje
+  large_amount_self_pay:
+    label: 大额自付
+    description: 进入大额保障段后个人承担的部分。
+    db_source: yb_dyxxzy.dezfje
+  personal_total_pay:
+    label: 个人总支付
+    description: 包含多类个人负担，不等于统筹自付。
+    db_source: yb_dyxxzy.grzfje
+
+  person_type:
+    label: 人员类别
+    description: 参保人员类别（在职/退休等）。
+    db_source: yb_zyjyxx.PER_TYPE
+  insurance_type:
+    label: 险种类型
+    description: 基本医保险种类型。
+    db_source: yb_brdjxx.FUND_TYPE
+  service_type:
+    label: 医疗类别
+    description: 本次医疗服务的业务类别。
+    db_source: yb_brdjxx.yllb
+  hospital_level:
+    label: 医院等级
+    description: 医疗机构等级。
+    db_source: —
+
+# 默认值（当真实结算字段缺失时）
+defaults:
+  insurance_type: 城镇职工
+  service_type: 普通住院
+  hospital_level: 三级医院
+  person_type: 退休人员

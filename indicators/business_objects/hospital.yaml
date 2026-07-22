@@ -1,0 +1,8 @@
+# 业务对象：医疗机构 (Hospital)
+# L1 业务对象层定义 — 提供医疗服务的医院信息
+object_id: Hospital
+name: 医疗机构
+description: 提供医疗服务的医院基本信息，包括等级、名称等。用于确定适用的医保政策和起付标准。
+fields:
+  - hosp_lv            # 医疗机构等级（一级、二级、三级、社区）
+  - hosp_name          # 医疗机构名称（隐式）

@@ -1,0 +1,234 @@
+﻿# explanation_templates.yaml — 患者视角 + 医保办视角模板
+# 映射自 policy_qa_routes.py:
+#   - _build_patient_answer() (lines 530-662)
+#   - _build_office_answer() (lines 665-745)
+# 支持变量替换、条件段落、证据循环
+
+# ── 患者视角模板 ────────────────────────────────────────────────
+patient_view:
+  sections:
+    - id: conclusion
+      header: '【本次结论】'
+      template: '本次结算中，您的"{fee_label}"为 {target_amount} 元。'
+      condition: ""  # always shown
+
+    - id: what_is_this
+      header: '【这是什么钱】'
+      template: '这笔钱不是全部自费，也不是大额自付，而是已经进入基本医保统筹报销范围后，按照政策比例仍需要个人承担的部分。'
+      condition: ""
+
+    - id: policy_evidence
+      header: '【本次适用的政策依据】'
+      # 有证据时展示详细依据
+      condition_has_evidence: "policy_evidence_count > 0"
+      template_has_evidence: '根据已匹配到的政策，本次费用按以下规则报销：'
+      # 无证据且 no_policy_matched 时
+      condition_no_policy: "policy_status == 'no_policy_matched'"
+      template_no_policy: '当前未检索到可引用政策依据，本页仅说明真实结算字段含义，不能作为完整政策解释。'
+      # 部分匹配时
+      condition_partial: ""
+      template_partial: '当前已匹配部分政策依据，以下解释可能不完整。'
+      # 循环项格式
+      each_item:
+        header: '政策依据 {idx}：'
+        excerpt_label: '政策原文摘录：'
+        excerpt_quote: '"{excerpt}"'
+        reason_label: '本次适用原因：'
+        reason_value: "{reason}"
+
+    - id: ratio_impact
+      header: '【政策比例怎么影响您】'
+      # 完整匹配 + 退休人员
+      condition_complete_with_retiree: "has_complete and has_retiree"
+      retiree_intro_complete: '根据已匹配到的政策规则，三级医院住院费用不是由医保 100% 报销，而是按费用区间分段支付：'
+      # 分段循环模板（完整匹配）
+      segment_item_complete:
+        line: '{idx}. {lower} {upper_text}的部分：'
+        sub_line: '   统筹基金支付 {fund}%，职工个人支付 {personal}%；'
+      retiree_rule_intro: '您本次属于退休人员，政策还规定：'
+      retiree_rule_line: '退休人员个人支付比例为职工个人支付比例的 60%。'
+      retiree_calc_intro: '所以退休人员实际个人承担比例为：'
+      retiree_segment_item:
+        line: '{idx}. {lower} {upper_text}部分：'
+        calc_line: '   {personal}% × 60% = {retiree_pct}%；'
+      # 完整 + 退休人员结论
+      retiree_conclusion: '因此，{target_amount} 元不是系统随意给出的金额，而是本次结算在真实结算数据基础上，按照三级医院住院分段支付比例和退休人员折算规则形成的基本统筹段个人承担金额。'
+
+      # 完整匹配但无退休人员
+      condition_complete_no_retiree: "has_complete and not has_retiree"
+      segment_intro_no_retiree: '根据已匹配到的政策规则，三级医院住院费用分段支付比例为：'
+      segment_item_no_retiree:
+        line: '{idx}. {lower} {upper_text}：统筹基金支付 {fund}%，职工个人支付 {personal}%；'
+      no_retiree_note: '当前已匹配部分政策依据，但还缺少完整分段规则（退休人员折算规则未匹配），以下解释可能不完整。'
+
+      # 无政策
+      condition_no_policy: "policy_status == 'no_policy_matched'"
+      no_policy_template: '当前未检索到可引用政策依据，本页仅说明真实结算字段含义，不能作为完整政策解释。'
+
+      # 部分匹配
+      condition_partial: ""
+      partial_template: '当前已匹配部分政策依据，但还缺少完整分段规则，以下解释可能不完整。'
+
+    - id: amount_relationship
+      header: '【本次金额关系】'
+      items:
+        - field: deductible
+          template: '- 起付线 {value} 元：医保开始报销前，先由个人承担的部分；'
+          empty_template: '- 起付线：未获取；'
+        - field: basic_pooling_payment
+          template: '- 统筹支付 {value} 元：基本医保统筹基金已经支付的部分；'
+          empty_template: '- 统筹支付：未获取；'
+        - field: basic_pooling_self_pay
+          template: '- 统筹自付 {value} 元：基本医保统筹段内，按比例由个人承担的部分；'
+          empty_template: '- 统筹自付 {value} 元；'
+        - field: large_amount_self_pay
+          template: '- 大额自付 {value} 元：进入大额保障段后个人承担的部分，和统筹自付不是一回事；'
+          empty_template: '- 大额自付：未获取；'
+        - field: personal_total_pay
+          template: '- 个人总支付 {value} 元：包含多类个人负担，不等于统筹自付。'
+          empty_template: '- 个人总支付：未获取。'
+
+    - id: summary
+      header: '【一句话总结】'
+      template: '{target_amount} 是"基本医保统筹段内按政策比例需要您个人承担的钱"，不包含起付线、大额自付、医保外费用和目录先行自付。'
+
+    - id: completeness_note
+      condition: "not (has_complete and has_retiree)"
+      template: '当前解释的是政策口径和结算结果，若要逐段复算还需要分段金额明细。'
+
+# ── 医保办视角模板 ──────────────────────────────────────────────
+office_view:
+  sections:
+    - id: field_source
+      template: '本次解释对象为"{fee_label}"，金额为 {target_amount} 元。'
+      is_first_line: true
+
+    - id: settlement_context
+      header: '一、结算上下文'
+      # 字段列表，按顺序输出
+      fields:
+        - label: 参保体系
+          value_field: insurance_type
+          default: 未获取
+        - label: 人员类别
+          value_field: person_type
+          default: 未获取
+        - label: 医疗类别
+          value_field: service_type
+          default: 未获取
+        - label: 医院等级
+          value_field: hospital_level
+          default: 未获取
+          # 如果 policy 匹配三级医院但 hospital_level 为空，使用政策上下文
+          policy_override: '三级医院（由政策匹配上下文确认）'
+          policy_override_condition: "has_employee_segments and (hospital_level_raw == '' or hospital_level_raw == '待确认')"
+        - label: 起付线
+          value_field: deductible
+          is_money: true
+        - label: 医保内费用
+          value_field: medical_insurance_inner_amount
+          is_money: true
+        - label: 基本统筹支付
+          value_field: basic_pooling_payment
+          is_money: true
+        - label: 基本统筹自付
+          value_field: basic_pooling_self_pay
+          is_money: true
+        - label: 大额支付
+          value_field: large_amount_payment
+          is_money: true
+        - label: 大额自付
+          value_field: large_amount_self_pay
+          is_money: true
+        - label: 个人总支付
+          value_field: personal_total_pay
+          is_money: true
+
+    - id: policy_rules
+      header: '二、适用政策规则'
+      condition: "has_employee_segments"
+      insurance_hosp_template: '本次为{insurance_type}{hospital_level_display}{service_type_display}，匹配到三级医院住院分段支付比例：'
+      segment_line_template: '- {lower}{upper_text}：统筹基金支付 {fund}%，职工个人支付 {personal}%；'
+      # 退休人员子段
+      retiree_sub_header: ""
+      retiree_intro: '同时，本次人员类别为退休人员，匹配到退休人员折算规则：'
+      retiree_ratio_line: '- 退休人员个人支付比例为职工个人支付比例的 {ratio}%。'
+      retiree_calc_header: '因此，退休人员在上述分段中的个人负担比例为：'
+      retiree_segment_line: '- {lower}{upper_text}：{personal}% × {ratio}% = {retiree_pct}%；'
+      # 退休人员未匹配
+      retiree_missing: '（退休人员折算公式未匹配到。）'
+
+    - id: ratio_derivation
+      header: '三、金额口径说明'
+      template: '{target_amount} 元不是通过"医保内费用 - 统筹支付"简单倒推得到，也不包含起付线、大额自付、目录外费用。它是结算系统在完成起付线扣减、统筹段归集、年度累计、封顶线控制和分段比例计算后，写入基本统筹自付字段的结果。'
+      condition: ""
+
+    - id: completeness
+      header: '四、当前解释完整性'
+      always_include:
+        - '已完成：统筹自付与起付线、大额自付、个人总支付的口径区分；'
+      conditional_items:
+        - condition: "has_settlement_data"
+          template: '- 已完成：真实结算字段追溯；'
+        - condition: "has_employee_segments"
+          template: '- 已完成：三级医院住院分段比例匹配（{segment_count} 段）；'
+        - condition: "has_retiree"
+          template: '- 已完成：退休人员 60% 折算规则匹配；'
+      summary_template: '如果需要做到逐分段复算 {target_amount} 元，还需要进一步返回每个分段实际进入金额、年度统筹累计和封顶线占用明细。'
+
+# ── 分段比例提取配置 ──────────────────────────────────────────
+# 迁移自 _extract_segment_ratios() (policy_qa_routes.py lines 750-931)
+
+segment_extraction:
+  # 核心正则：匹配"统筹基金支付XX%，职工支付YY%"
+  regex_pattern: '(?:统筹基金支付|基金支付)\s*(\d+)%\s*[,，]?\s*职工(?:个人)?支付\s*(\d+)%'
+
+  # 区间关键词 → 标准化 lower/upper（长匹配优先）
+  band_patterns:
+    - { keyword: '起付标准至3万元', lower: '起付标准', upper: '3万元' }
+    - { keyword: '超过3万元至4万元', lower: '3万元', upper: '4万元' }
+    - { keyword: '超过4万元', lower: '4万元', upper: 'inf' }
+    - { keyword: '4万元以上', lower: '4万元', upper: 'inf' }
+    - { keyword: '3万元至4万元', lower: '3万元', upper: '4万元' }
+    - { keyword: '至3万元', lower: '起付标准', upper: '3万元' }
+
+  # 区间排序标签（金额从低到高）
+  band_order:
+    - { lower: '起付标准', upper: '3万元' }
+    - { lower: '3万元', upper: '4万元' }
+    - { lower: '4万元', upper: 'inf' }
+
+  # 退休人员检测配置
+  retiree_detection:
+    rule_type: '计算公式'
+    keywords_in_source: ['60%']
+    retiree_keywords: ['退休', 'retiree']
+    ratio: 60
+
+# ── 计算链路配置 ──────────────────────────────────────────────
+calculation_trace:
+  method: '分段比例 × 退休人员优惠系数。结构化政策规则检索自 Milvus policy_rules。'
+  step_templates:
+    confirm_settlement: '本次结算单号: {settlement_id}'
+    confirm_identity: '本次结算人员为 {person_type}，险种 {insurance_type}，医疗类别 {service_type}。'
+    confirm_deductible: '本次起付线为 {deductible} 元。起付线以下费用不计入统筹段。'
+    confirm_pooling_amount: '医保内费用 {inner_amount} 元减去起付线 {deductible} 元 = 统筹段金额 {pooling_amount} 元。'
+    segment_calc: '{lower}{upper_text}：职工自付比例 {personal}%，退休人员系数 {ratio}%，实际自付比例 {retiree_pct}%。（{personal}% × {ratio}% = {retiree_pct}%）'
+    segment_calc_no_retiree: '{lower}{upper_text}：职工支付 {personal}%。（退休人员折算公式未匹配，按职工比例展示）'
+    policy_source: '已匹配 {segment_count} 条三级医院分段比例规则 + 1 条退休人员折算公式。来源: Milvus policy_rules 集合，结构化字段查询。'
+    fallback: '统筹段金额按医院等级、人员类别对应的分段比例计算个人负担。完整分段规则需通过 RAG 检索政策依据后确定。当前结算数据中统筹自付为权威值。'
+    verification: '业务库统筹自付金额为 {self_pay} 元，统筹支付金额为 {pooling_payment} 元。大额自付金额为 {large_self_pay} 元，与统筹自付相互独立。'
+    conclusion: '统筹自付 {self_pay} 元 ≠ 患者总自付 {personal_total} 元。统筹自付仅含基本医保统筹段内个人按比例承担部分，不含起付线、大额自付、目录外自费等。'
+
+# ── 警告信息配置 ──────────────────────────────────────────────
+warnings:
+  base:
+    - '本结果来自真实数据库查询。'
+    - '统筹自付 ≠ 患者总自付。统筹自付仅含基本医保统筹段内个人按比例承担部分。'
+    - '统筹自付不包含大额自付（本次大额自付为 {large_amount_self_pay} 元）。'
+    - '不能通过「统筹支付 + 统筹自付 + 起付线」简单倒推医保内费用，统筹段受年度累计、封顶线、历史已支付金额等因素影响。'
+    - '本页面展示的是「待遇计算口径」，不是简单字段相加。'
+  policy_status_warnings:
+    full_policy_matched: '已匹配完整政策比例规则。如需逐段复算，还需要每个分段实际进入金额明细。'
+    partial_policy_matched: '政策比例规则尚未完整匹配，解释基于已匹配的部分规则和结算数据。'
+    no_policy_matched: '政策依据未匹配，当前展示基于结算数据的概览，不能作为完整政策解释。'

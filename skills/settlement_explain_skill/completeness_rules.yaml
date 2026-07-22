@@ -1,0 +1,29 @@
+# completeness_rules.yaml — 解释完整性评估规则
+# 映射自 _build_explanation_completeness() (policy_qa_routes.py lines 960-991)
+
+rules:
+  # 完整匹配：有真实数据 + 完整分段比例 + 退休人员规则
+  full_policy_ratio_matched:
+    required_evidence:
+      - employee_inpatient_tertiary_segment_ratio
+      - retiree_personal_ratio_formula
+    required_segments: 3
+    required_retiree: true
+    message: "已匹配到本次适用的三级医院住院分段支付比例和退休人员折算规则。"
+    detail_message: "当前已能解释政策口径和结算字段来源；如需逐段复算{target_amount}元，还需要每个分段实际进入金额明细。"
+    level: "policy_ratio_fully_matched"
+
+  # 部分匹配：有真实数据 + 分段比例，但无退休人员规则
+  partial_policy_matched:
+    message: "已匹配分段比例和真实结算字段，但退休人员折算规则未匹配。"
+    level: "policy_partial"
+
+  # 仅有真实数据，无政策匹配
+  real_data_only:
+    message: "仅有真实结算字段，政策依据未匹配。"
+    level: "real_data_only"
+
+  # 数据不完整
+  incomplete:
+    message: "解释数据不完整。"
+    level: "incomplete"

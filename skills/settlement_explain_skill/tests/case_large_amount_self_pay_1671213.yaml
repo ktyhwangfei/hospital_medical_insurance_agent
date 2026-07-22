@@ -1,0 +1,43 @@
+# 测试用例: 大额自付解释 — 结算单 1671213
+# 用于验证 policy-fee-explanation skill 的 large_amount_self_pay 策略执行
+
+input:
+  question: "我的大额自付为什么这么多"
+  settlement_id: "1671213"
+
+expected:
+  skill_id: policy-fee-explanation
+  target_fee_item: large_amount_self_pay
+  target_field: large_amount_self_pay
+  data_source: REAL_DB
+  mock_used: false
+  can_answer: true
+  partial_answer: false
+  target_amount: 1500.00
+
+  case_context:
+    person_type: 退休人员
+    insurance_type: 城镇职工基本医疗保险
+    service_type: 普通住院
+    hospital_level: 三级医院
+    deductible: 650.00
+    large_amount_self_pay: 1500.00
+
+  evidence_completeness:
+    level: full_policy_matched
+
+  must_contain:
+    - 大额自付
+    - 1,500.00
+    - 大额医疗互助
+    - 按比例
+    - 个人承担
+    - 统筹自付
+
+  must_not_contain:
+    - undefined
+    - "null"
+    - "if t."
+    - mock
+    - "AI思维链"
+    - embedding_text

@@ -1,0 +1,15 @@
+# 统筹支付政策查询计划
+queries:
+  - query_name: employee_inpatient_tertiary_fund_ratio
+    required: true
+    filters:
+      insu_type: 城镇职工基本医疗保险
+      med_type: 住院-普通住院
+      hosp_lv: 三级医院
+      rule_type: 支付比例
+    psn_type_allow_all: true
+    text_must_include_any:
+      - 起付标准至3万元
+      - 超过3万元至4万元
+      - 超过4万元
+    description: 三级医院住院统筹基金分段支付比例（三段：85%/90%/95%）

@@ -1,50 +1,242 @@
-version: '3.8'
-
 services:
-  app:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
-    ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql://postgres:123456@postgres:5432/hospital_mcp
-      - REDIS_URL=redis://redis:6379/0
-      - MILVUS_URI=http://milvus:19530
-      - MODEL_API_KEY=${MODEL_API_KEY}
-    depends_on:
-      - postgres
-      - redis
-      - milvus
-    volumes:
-      - ../../skills:/app/skills
 
+  # ==========================================================
+  # SQL SERVER
+  # ==========================================================
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sql2022
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      SA_PASSWORD: ${SA_PASSWORD}
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/opt/mssql-tools18/bin/sqlcmd",
+          "-S",
+          "localhost",
+          "-U",
+          "sa",
+          "-P",
+          "${SA_PASSWORD}",
+          "-Q",
+          "SELECT 1",
+          "-C"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - medical-net
+
+  # ==========================================================
+  # POSTGRESQL + PGVECTOR
+  # ==========================================================
   postgres:
-    image: postgres:15
+    image: pgvector/pgvector:pg16
+    container_name: medical-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 123456
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: hospital_mcp
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - medical-net
 
+  # ==========================================================
+  # REDIS
+  # ==========================================================
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
+    container_name: medical-redis
+    restart: unless-stopped
+    command:
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "-a",
+          "${REDIS_PASSWORD}",
+          "ping"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - medical-net
 
+  # ==========================================================
+  # REDIS INSIGHT
+  # ==========================================================
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: redisinsight
+    restart: unless-stopped
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight_data:/data
+    depends_on:
+      - redis
+    networks:
+      - medical-net
+
+  # ==========================================================
+  # ETCD
+  # ==========================================================
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: milvus-etcd
+    restart: unless-stopped
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: 1000
+      ETCD_QUOTA_BACKEND_BYTES: 4294967296
+    command:
+      - etcd
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+    networks:
+      - medical-net
+
+  # ==========================================================
+  # MINIO
+  # ==========================================================
+  minio:
+    image: minio/minio
+    container_name: milvus-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - medical-net
+
+  # ==========================================================
+  # MILVUS
+  # ==========================================================
   milvus:
-    image: milvusdb/milvus:v2.4-latest
+    image: milvusdb/milvus:v2.4.15
+    container_name: milvus-standalone
+    restart: unless-stopped
+    command:
+      - milvus
+      - run
+      - standalone
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_USER}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_PASSWORD}
+    depends_on:
+      - etcd
+      - minio
     ports:
       - "19530:19530"
+      - "9091:9091"
     volumes:
       - milvus_data:/var/lib/milvus
+    networks:
+      - medical-net
 
+  # ==========================================================
+  # ATTU
+  # ==========================================================
+  attu:
+    image: zilliz/attu:v2.4
+    container_name: attu
+    restart: unless-stopped
+    ports:
+      - "8010:3000"
+    environment:
+      MILVUS_URL: milvus:19530
+    depends_on:
+      - milvus
+    networks:
+      - medical-net
+
+  # ==========================================================
+  # OLLAMA
+  # ==========================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - medical-net
+
+  # ==========================================================
+  # OPEN WEBUI
+  # ==========================================================
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "3005:8080"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - open_webui_data:/app/backend/data
+    depends_on:
+      - ollama
+    networks:
+      - medical-net
+
+networks:
+  medical-net:
+    driver: bridge
+
+# ==========================================================
+# 统一声明数据卷 (Docker Named Volumes)
+# ==========================================================
 volumes:
+  sqlserver_data:
   postgres_data:
   redis_data:
+  redisinsight_data:
+  minio_data:
   milvus_data:
+  ollama_data:
+  open_webui_data:

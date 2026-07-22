@@ -1,0 +1,50 @@
+# 测试用例: 个人总支付解释 — 结算单 1671213
+# 用于验证 policy-fee-explanation skill 的 personal_total_pay 策略执行
+
+input:
+  question: "个人总支付是怎么算出来的"
+  settlement_id: "1671213"
+
+expected:
+  skill_id: policy-fee-explanation
+  target_fee_item: personal_total_pay
+  target_field: personal_total_pay
+  data_source: REAL_DB
+  mock_used: false
+  can_answer: true
+  partial_answer: false
+  target_amount: 7112.67
+
+  case_context:
+    person_type: 退休人员
+    insurance_type: 城镇职工基本医疗保险
+    service_type: 普通住院
+    hospital_level: 三级医院
+    deductible: 650.00
+    basic_pooling_self_pay: 4962.67
+    large_amount_self_pay: 1500.00
+    personal_total_pay: 7112.67
+
+  evidence_completeness:
+    level: full_policy_matched
+
+  must_contain:
+    - 个人总支付
+    - 7,112.67
+    - 起付线
+    - 统筹自付
+    - 大额自付
+    - 费用构成
+    - 总和
+    - 总支付
+    - 自己承担
+
+  must_not_contain:
+    - "if t."
+    - undefined
+    - "null"
+    - '{"ratio"'
+    - mock
+    - "AI思维链"
+    - embedding_text
+    - yb_zyfdxx

@@ -1,5 +1,24 @@
 # AGENTS.md - 院端医保智能体系统
 
+> **Agent 动工前先读本文件（5 分钟）**，然后按需深入子目录的 AGENTS.md。
+> **进度追踪**：当前项目进度见 **`PROGRESS.md`**。
+> **详细治理**：模块边界、风险分级、变更证据模板见 **`docs/governance/`**。
+
+## Agent 动工前检查清单
+
+□ 已读 §安全约束（高风险拦截、来源可追溯、脱敏）
+□ 已查 `PROGRESS.md` 当前焦点领域
+□ 已确认改动范围不超出"最小可验证单元"（见 §精准修改）
+□ 已查 `src/domain/AGENTS.md` 相关领域的通用语言字典
+□ 涉及外部系统 → 走 `adapters/` 防腐层
+□ 涉及模型调用 → 走 `model_service/gateway` 统一入口
+
+## Agent 收工前检查清单
+
+□ 所有改动已通过 LSP 诊断（零新增错误）
+□ 遇到任何阻塞性故障？→ 运行 `/retrospect`，自动评估能自动化还是留文档
+□ 学到新模式？→ 同上
+
 ## 启动命令
 
 ```bash
@@ -26,10 +45,10 @@ Agent 编码时根据以下映射定位代码位置：
 
 | 目录 | 职责 | 当前状态 |
 |------|------|----------|
-| `runtime/` | Agent 核心运行时：API 入口、会话上下文、意图识别、澄清、编排（含 LangGraph）、调度、响应（含 SSE 流式）、任务闭环、事件日志、技能注册 | 已实现（api/context/intent/clarification/planning/orchestration/scheduling/task_closure/runtime_state/event_log/capability_nodes/skill_registry/langgraph） |
+| `runtime/` | Agent 核心运行时：API 入口、会话上下文、意图识别、澄清、编排（含 LangGraph）、调度、响应（含 SSE 流式）、任务闭环、事件日志、技能注册、政策问答 | 已实现（api/context/intent/clarification/planning/orchestration/scheduling/task_closure/runtime_state/event_log/capability_nodes/skill_registry/langgraph/policy_qa） |
 | `business_scenarios/` | 医保业务场景：结算异常导办、出院前联合质控、MCP 工具调用 | 三个场景已实现 |
 | `model_service/` | 模型服务网关：统一调用入口、路由策略、OpenAI 兼容 Provider、流式生成、异常分类、模型配置管理、Provider 管理 | 已实现（gateway/router/providers/openai_compatible/exceptions/models/ports） |
-| `knowledge_extension/` | 知识与扩展：错误码知识库、RAG（含 Milvus 向量库端口）、规则解释、提示模板（含渲染引擎）、MCP 注册中心、扩展注册、知识资产（含切片管理→向量化）、申诉模板 | 已实现（knowledge/rag/rule_explanation/assets/extension_registry/mcp_registry + postgres CRUD） |
+| `knowledge_extension/` | 知识与扩展：规则解释（含 Milvus 政策检索+SQL Server 数据源）、MCP 注册中心、扩展注册 | 已实现（common/extension_registry/mcp_registry/rule_explanation + policy_retrieval 含 Milvus/SQLServer/语义映射；原 knowledge/rag/assets/prompt_templates 已删除，由 stub 提供兼容） |
 | `adapters/` | 外部系统防腐层：医保接口、事前审核、DRG/DIP、HIS、EMR、病案、收费 | 7 个内存适配器 + base 基类（models/service）+ ports 端口定义均已实现 |
 | `data_platform/` | DaaS 数据底座：数据访问、存储端口、缓存（含 Redis）、持久化（含 PostgreSQL 方言/迁移/执行器）、Skill/MCP/向量存储 | 已实现（data_access/cache/persistence/storage 含 skill/mcp/postgresql/vector 子目录） |
 | `domain/` | 领域模型：患者、医保、费用、审核风险、DRG/DIP、病案、任务、申诉、医嘱费用、技能 | 已实现（patient/insurance/task/common/drg_dip/medical_record/audit_risk/appeal/order_fee/skill） |
@@ -39,7 +58,10 @@ Agent 编码时根据以下映射定位代码位置：
 | `shared/` | 共享基础：异常模型、响应契约、Schema 契约、技能加载器/注册表 | 已实现（exceptions/schemas/skills） |
 | `gateway/` | 统一接入网关：API网关、渠道识别、认证鉴权、租户隔离、限流熔断、请求安全校验、接入日志 | 已实现（api_gateway/channel/auth/tenant/rate_limiter/request_guard/access_log） |
 | `interaction/` | 多模态交互层：Chat对话、文件上传、语音交互、页面上下文、消息提醒、知识上传 | 已实现（chat/file/voice/page_context/notification/knowledge_upload） |
-| `apps/` | SaaS 应用入口层：三个独立 Next.js 16 应用 — Portal（业务导办）、Admin（平台管理）、Embed（嵌入式组件） | 已实现（portal/ 含 chat/settlement/qc/dashboard 路由，admin/ 含 mcp/knowledge/model/skills 路由，embed/ 含嵌入式 chat widget） |
+| `apps/` | SaaS 应用入口层：三个独立 Next.js 16 应用 — Portal（业务导办）、Admin（平台管理）、Embed（嵌入式组件） | 已实现（portal/ 含 chat/settlement/qc/dashboard/policy-qa 路由，admin/ 含 mcp/knowledge/model/skills 路由，embed/ 含嵌入式 chat widget） |
+| `skills/` | Skill 驱动架构：自包含的医保业务能力包（费用解释、起付线、大额自付等），通过 YAML 配置 + Python assembler 实现声明式业务逻辑。每个 Skill 通过 `business_action` + `business_object` 挂载到平台七类业务动作 | 已实现（settlement_explain_skill/ 含 SKILL.md + schemas + templates + scripts，已声明 `explain` + `settlement`） |
+| `src/skill_infra/` | Skill 基础设施：动态加载器（SkillLoader）、关键词路由器（SkillRouter），自动扫描 skills/ 目录发现和加载 skill 包 | 已实现（skill_loader.py, skill_router.py） |
+| `src/domain/common/actions.py` | Business Action 枚举：平台最高层业务分类（七类动作 + 十类对象 + 能力矩阵白名单） | 已实现（BusinessAction, BusinessObject, VALID_ACTION_OBJECT_PAIRS） |
 | `deploy/` | 部署配置：Docker、K8s、环境变量模板 | 已实现（docker/k8s/env） |
 
 ### 业务流向
@@ -47,19 +69,52 @@ Agent 编码时根据以下映射定位代码位置：
 ```
 runtime/api (FastAPI 路由)
   → runtime/intent (意图识别：关键词降级 / LLM 解析 / LangGraph 图式)
+  → src/domain/common/actions (Business Action 分类：Explain/Query/Guide/Verify/Compare/Evaluate/Analyze)
   → security/risk_control (高风险拦截)
   → security/authorization (权限校验)
   → runtime/orchestrator (统一编排)
       ├─ runtime/langgraph (LangGraph 图式执行：检查点 + 人工确认中断)
       ├─ business_scenarios/{settlement_exception_guide, pre_discharge_joint_qc, mcp_tool_invocation}
+      ├─ src/skill_infra/skill_router (SkillRouter：关键词路由)
+      │   └─ skills/settlement_explain_skill (Skill 驱动：YAML 配置 + assembler)
       └─ runtime/skill_registry (技能/工具执行引擎)
   → model_service/gateway (模型调用：路由 → Provider → 流式/非流式)
   → adapters/* (外部系统防腐层，当前均为内存实现)
-  → knowledge_extension/* (错误码/政策知识库、RAG、规则解释、MCP 注册)
+  → knowledge_extension/* (政策知识库、规则解释、MCP 注册)
   → 返回 AgentResponse 结构（或 SSE 流式事件）
 ```
 
 ### 核心约定
+
+## 编码前思考
+- 明确假设，不确定时询问而非猜测。
+- 存在歧义时，列出多种解释，不默默选一种。
+- 如果任务有明显更简单的做法，直接指出。
+- 发现矛盾或不一致时停下来，要求澄清。
+
+## 简洁优先
+- 用最少的代码解决问题。
+- 不为一次性需求创建抽象层。
+- 不为"万一以后需要"加灵活性和可配置性。
+- 如果 200 行可以写成 50 行，重写它。
+- 检查标准：资深工程师会觉得这过于复杂吗？如果是，简化。
+
+## 精准修改
+- 只修改与当前任务直接相关的代码。
+- 不顺手改进相邻代码、注释或格式。
+- 不重构本来能正常工作的部分。
+- 匹配现有代码风格，即使你更偏好另一种写法。
+- 因你的修改而变成死代码的导入和变量，删除掉。
+- 发现预先存在的死代码时，提出来但不要删。
+
+**最小可验证单元** = 一条完整的用户故事，可独立测试、验证、回滚。例如："用户通过 Chat 查询结算异常"（前端 chat 组件 + 后端 service + DB 查询），或"修复 policy-qa 页面的渲染 bug"（仅前端页面，不涉及后端）。
+
+## 目标驱动执行
+- 定义清晰的成功标准再开始。
+- "修复 bug" 转化为 "写一个重现 bug 的测试，然后让它通过"。
+- "添加验证" 转化为 "为无效输入写测试，然后让它们通过"。
+- "重构 X" 转化为 "确保重构前后所有测试都能通过"。
+- 多步骤任务先给简短计划，每一步带验证方式。
 
 - **核心设计文档**: `docs/steering/` 下含 数据库设计文档.md（18张表定义）、接口设计文档.md（40+ API端点定义）、原型设计文档.md（前端组件规范）
 - **平台定位**: AI 导办与协同中枢，不替代医保正式结算/事前审核/DRG分组/病案修改等既有业务系统
@@ -68,13 +123,14 @@ runtime/api (FastAPI 路由)
 - **来源可追溯**: AI 输出必须携带 `citations` 或声明 `uncertainties`，禁止无来源的确定性结论
 - **模型调用统一**: 所有 LLM 调用必须通过 `model_service/gateway`，禁止直接调用 HTTP 接口；异常通过 `model_service/exceptions` 分类处理
 - **领域语言统一**: 所有领域模型（类名、变量名、方法名）的命名必须遵循 `src/domain/AGENTS.md` 中的通用语言字典，禁止同一概念在代码中有多个命名；新增领域概念必须同步更新该文档
+- **文档溯源**: 关键结论标注来源。`[来源: 接口设计 §4.2]` 为可靠引用，`[推断: 基于框架约定]` 和 `[建议]` 必须审核
 
 ### API
 
 路由前缀: `/api/v1/medical-insurance-ai-agent`（除 `/health` 外）。完整接口清单见 `docs/steering/接口设计文档.md`。
 
 前端应用目录: `src/apps/` 下三个独立 Next.js 16 应用：
-- **portal/** — 业务应用入口，路由：`/`（Chat 导办）、`/settlement`（结算异常）、`/qc`（出院前质控）、`/dashboard`（运营看板）
+- **portal/** — 业务应用入口，路由：`/policy-qa`（政策问答）、`/`（Chat 导办）、`/settlement`（结算异常）、`/qc`（出院前质控）、`/dashboard`（运营看板）
 - **admin/** — 平台管理入口，路由：`/`（管理首页）、`/mcp`（MCP 管理）、`/knowledge`（知识管理）、`/model`（模型测试）、`/skills`（技能管理）
 - **embed/** — 嵌入式组件（嵌入 HIS/EMR），路由：`/`（精简版 Chat widget）
 
@@ -93,93 +149,20 @@ runtime/api (FastAPI 路由)
 - **存储多态**: 所有存储（skill/tool/task/workflow/audit）遵循 ports/adapter 模式，默认 PostgreSQL，可通过 `USE_MEMORY_STORAGE=1` 回退到内存实现
 
 > 测试目录结构、命令速查、模块↔测试映射、测试编写模式等详见 `src/tests/AGENTS.md`。
+> 
+> **统一测试口径与风险分级验证矩阵详见 `docs/governance/TEST-VERIFICATION-MATRIX.md`**。该文档统一了本文件与 `src/tests/AGENTS.md` 的测试分层表述，定义了风险等级（R1-R4）与最低验证要求的映射关系，是所有测试相关决策的唯一权威参考。
 
-### 开发完成验证流程（硬性，不可跳过）
+### 开发完成验证流程（硬性）
 
-> **⛔ 核心规则：代码开发完成后，必须严格按 单元测试 → API 测试 → Flow 测试 的顺序逐步验证。三个阶段全部通过才算开发完成。任何阶段失败即视为开发未完成，禁止声称"开发完成"。**
+> ⛔ 代码开发完成后，必须严格按 **单元测试 → API 测试 → Flow 测试** 顺序逐步验证。三个阶段全部通过才算完成。
 
-**验证顺序（严格串行，前一步通过后才能执行下一步）：**
+完整验证流程、命令速查、模块→测试映射详见 `src/tests/AGENTS.md`。统一测试口径与风险等级验证矩阵见 `docs/governance/TEST-VERIFICATION-MATRIX.md`。
 
-**第一步：单元测试（必须全部通过）**
-```bash
-# 根据修改的模块，运行对应的单元测试目录
-python -m pytest src/tests/unit/<模块目录> -v
+### 缺陷驱动测试铁律
 
-# 示例：
-python -m pytest src/tests/unit/runtime/intent -v           # 修改了 intent 模块
-python -m pytest src/tests/unit/model_service -v             # 修改了 model_service
-python -m pytest src/tests/unit/knowledge_extension -v       # 修改了 knowledge_extension
-python -m pytest src/tests/unit/security -v                  # 修改了 security
-python -m pytest src/tests/unit/data_platform -v             # 修改了 data_platform
-```
+> ⛔ 遇到 Bug → 先查测试是否已覆盖 → 未覆盖则先补测试（先红后绿）再修 Bug。禁止跳过测试直接修。
 
-**第二步：API 端点测试（单元测试通过后执行，必须全部通过）**
-```bash
-# 根据修改的路由文件，运行对应的 API 测试
-python -m pytest src/tests/integration/api/test_<路由名>.py -v
-
-# 示例：
-python -m pytest src/tests/integration/api/test_knowledge_routes.py -v   # 修改了 knowledge_routes.py
-python -m pytest src/tests/integration/api/test_model_routes.py -v       # 修改了 model_routes.py
-python -m pytest src/tests/integration/api/test_mcp_routes.py -v         # 修改了 mcp_routes.py
-python -m pytest src/tests/integration/api/test_skill_routes_api.py -v   # 修改了 skill_routes.py
-python -m pytest src/tests/integration/api/test_openapi_contract.py -v   # 修改了 routes.py
-```
-
-**第三步：Flow 流程测试（API 测试通过后执行，必须全部通过）**
-```bash
-python -m pytest src/tests/integration/flow -v -k "<场景关键词>"
-
-# 示例：
-python -m pytest src/tests/integration/flow -v -k "settlement"            # 结算异常相关
-python -m pytest src/tests/integration/flow -v -k "human_confirmation"    # 人工确认相关
-python -m pytest src/tests/integration/flow -v -k "langgraph"             # LangGraph 相关
-```
-
-**快速验证全部（适用于大范围修改）**：
-```bash
-python -m pytest src/tests/unit -v --tb=short -x              # 全部单元测试
-python -m pytest src/tests/integration/api -v --tb=short       # 全部 API 测试
-python -m pytest src/tests/integration/flow -v --tb=short      # 全部 Flow 测试
-```
-
-**硬性约束（违反即视为开发未完成）：**
-
-1. **顺序不可颠倒**：必须先通过单元测试，再跑 API 测试，最后跑 Flow 测试。禁止跳过任何阶段。
-2. **失败必须修复**：任何步骤中有测试失败，必须修复后从失败步骤重新开始验证。禁止跳过失败的测试、禁止用 `# noqa` / `@pytest.mark.skip` 跳过失败用例。
-3. **全部通过才算完成**：三个阶段全部绿色通过后，才能标记开发任务为完成状态，才能进行代码提交。
-4. **修复后需回归**：修复测试失败后，需重新运行该阶段全部测试（而非仅之前失败的用例），确保修复未引入新问题。
-
-### 缺陷驱动的测试强化铁律（硬性）
-
-> **⛔ 核心规则：遇到任何 Bug，必须从测试层面双向归因，杜绝同一类问题反复出现。**
-
-**Bug 修复前必须执行的两步检查（不可跳过）：**
-
-**第一步：检查当前测试是否已覆盖该 Bug 场景**
-- 根据 Bug 涉及的模块路径，对照「模块 ↔ 测试映射」表找到对应测试目录
-- 运行对应测试，确认是否存在覆盖该逻辑路径的用例
-- 若为前端 Bug，同步检查 `src/tests/e2e/` 下的业务流程测试和冒烟测试
-
-**第二步 A：若测试未覆盖 → 先补测试，再修 Bug**
-1. 在对应模块的测试文件中新增用例，精确复现 Bug 的触发条件与输入
-2. 确认新增的测试用例**当前状态为 FAIL**（红）——证明测试能有效捕获该 Bug
-3. 修复业务代码，使测试通过（绿）
-4. 运行该模块全量测试（单元 → API → Flow 按顺序），确保修复未引入回归
-
-**第二步 B：若测试已覆盖但未能发现 → 排查测试为何失效，并加固**
-1. 检查已覆盖测试的断言是否不够精确（如仅断言 `status_code == 200`，未校验响应体关键字段）
-2. 检查 Mock/Stub 是否过度宽松导致真实异常被屏蔽（如异常被 `mock.return_value` 吞没）
-3. 加固测试用例：
-   - 增加边界条件与异常路径的断言
-   - 减少过度 Mock，优先使用集成级验证
-   - 对关键字段增加类型与值域校验
-4. 确认加固后的测试能暴露当前 Bug（先红后绿，同上）
-
-**硬性约束：**
-- **禁止跳过上述步骤直接修 Bug**——跳步修复视为流程违规
-- Bug 修复的 commit message 中必须注明覆盖该 Bug 的测试文件路径
-- 同一类型 Bug 出现第二次时，视为测试体系缺陷，需在团队复盘会上讨论加固方案
+完整流程、加固方法、测试映射表详见 `src/tests/AGENTS.md`。
 
 ---
 
@@ -198,6 +181,10 @@ python -m pytest src/tests/integration/flow -v --tb=short      # 全部 Flow 测
 - 敏感数据通过 `security/desensitization/` 脱敏处理后输出
 - MCP 工具调用需通过 `knowledge_extension/mcp_registry/` 的安全边界校验（风险等级 + 角色权限）
 
+### 跨层一致性
+
+涉及多层改动时，显式核对：前端 DTO ↔ 后端 Pydantic（字段名/类型/必填，注意 snake_case ↔ camelCase）；后端 Entity ↔ DB 列（显式映射，禁止隐式匹配）；前端 API 调用 ↔ 后端路由（HTTP method + 路径一致）。
+
 ## Git 提交规范
 
 Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
@@ -214,6 +201,44 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - `src/apps/` 下的三个 Next.js 应用版本均为 16.x，API 和约定可能与训练数据不同，编码前应先查阅 `node_modules/next/dist/docs/`
 - `domain/tool/` 和 `data_platform/storage/tool/` 是完全空目录（无 `__init__.py`），import 会报错 — 不要使用
 - `runtime/orchestration/service.py` 和 `runtime/planning/service.py` 已 DEPRECATED，使用 `scenario_executor.py` 代替
+- boulder continuation 活跃时，`task(run_in_background=true)` 的通知与 system-reminder 互扰，导致后台任务结果丢失。串行多任务时用 `run_in_background=false`
+
+### 陷阱模板
+
+新增陷阱按以下格式写入，禁止自由格式：
+
+```
+- 一句描述陷阱现象（中文）。关键代码/命令（英文）。后果和正确做法。
+```
+
+反面示例：`- 启动服务器失败`（太模糊）  
+正面示例：`- Get-Process 的 CommandLine 不可靠，漏杀导致 EADDRINUSE。改用 netstat -ano 反查 PID。`
+
+### 启动服务器陷阱（PowerShell）
+
+> ⛔ 直接用 `start-servers.ps1` 和 `stop-servers.ps1`，不要手动启动。
+
+```bash
+# 启动
+.\start-servers.ps1
+
+# 停止
+.\stop-servers.ps1
+```
+
+脚本自动处理：端口冲突检测、旧进程清理、启动验证、前端编译等待。
+
+## 排障零步骤
+
+> ⛔ 修了没用？先确认用户在执行哪段代码（哪个 URL？哪个 SSE 端点？哪个组件？），再动手改。
+
+反面案例与排障流程详见 `src/runtime/AGENTS.md` §排障零步骤。
+
+## 通用排障铁律
+
+> ⛔ 渲染异常 ≠ 渲染层问题。先隔离数据层（curl / console.log），确认数据时序，再动 UI 代码。
+
+排障流程、诊断命令与案例详见 `src/runtime/AGENTS.md` §流式接口排障铁律。
 
 ## 生产环境配置
 

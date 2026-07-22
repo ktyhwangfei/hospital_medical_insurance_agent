@@ -1,0 +1,165 @@
+# skill_manifest.yaml — Skill 声明文件
+# 供 src/skill_infra/skill_loader.py 动态发现和加载
+
+skill_id: settlement_explain_skill
+skill_name: 结算解释技能
+version: "2.0.0"
+
+# ── 业务动作分类 ──────────────────────────────────────────────
+# 参见：Business Action Specification V1.0
+# Business Action 决定"做什么"，Business Object 决定"处理谁"
+business_action: explain       # 解释：为什么（面向患者，解释已发生的事实）
+business_object: settlement    # 结算：操作对象为医保结算数据
+
+# ── 语义层声明（新增）─────────────────────────────────────────────
+needed_objects:
+  - object_code: "Settlement"
+    metrics:
+      - deductible
+      - basic_pooling_payment
+      - basic_pooling_self_pay
+      - large_amount_payment
+      - large_amount_self_pay
+      - personal_total_pay
+      - person_type
+      - insurance_type
+      - service_type
+      - hospital_level
+    importance: "core"
+
+# ── 路由配置 ──────────────────────────────────────────────────
+
+# 关键词精简原则：只保留用户对医保人员会「说出口」的词
+# 内部字段名（规则ID、条款标识、来源事实ID 等）从关键词表移除，
+# 由 LLM 语义路由兜底。共约 130 → 25 个核心词。
+supported_intents:
+  # ── 费用类（用户最常问的核心词）──
+  - 统筹自付
+  - 起付线
+  - 门槛费
+  - 报销比例
+  - 大额自付
+  - 封顶线
+  - 自费
+  - 个人总支付
+  - 医保内
+  - 医保外
+  - 报销
+  - 统筹支付
+  - 大病保险
+  - 个人负担
+  # ── 人群类（用户会提的身份）──
+  - 职工医保
+  - 居民医保
+  - 退休
+  - 在职
+  # ── 场景类（用户表达困惑/求助）──
+  - 为什么这么多
+  - 怎么算的
+  - 能报多少
+  - 花了多少
+  # ── 高频场景 ──
+  - 结算
+  - 费用
+excluded_intents: []  # unified skill — no exclusions
+
+# ── 依赖声明 ──────────────────────────────────────────────────
+
+required_settlement_fields:
+  - deductible
+  - medical_insurance_inner_amount
+  - basic_pooling_payment
+  - basic_pooling_self_pay
+  - large_amount_payment
+  - large_amount_self_pay
+  - personal_total_pay
+  - person_type
+  - insurance_type
+  - service_type
+  - hospital_level
+
+required_mcp:
+  - settlement-data
+  - structured-policy-rule
+
+optional_mcp:
+  - policy-vector-search
+  - audit-trace
+
+# ── 输出结构 ──────────────────────────────────────────────────
+
+output_schema: schemas/output.schema.json
+
+forbidden_output:
+  - if t.
+  - undefined
+  - "null"
+  - None
+  - "NaN"
+  - '{"ratio"'
+  - embedding_text
+  - "Milvus score"
+  - yb_zyfdxx
+  - yb_dyxxzy
+
+# ── 测试用例 ──────────────────────────────────────────────────
+
+test_cases:
+  - tests/case_pooling_self_pay_1671213.yaml
+
+# ── 前端展示配置 ──────────────────────────────────────────────
+
+display:
+  mode: single  # single | compare
+
+  # 参保信息（输入上下文 — 决定了什么规则适用）
+  profile:
+    title: 您的参保信息
+    items:
+      - field: person_type
+        label: 人员类别
+      - field: insurance_type
+        label: 参保类型
+      - field: service_type
+        label: 医疗类别
+      - field: hospital_level
+        label: 医院等级
+
+  # 费用明细（输出字段 — 按业务含义分组）
+  output:
+    - group: 医保帮您付的
+      items:
+        - field: basic_pooling_payment
+          label: 统筹基金支付
+          format: money
+        - field: large_amount_payment
+          label: 大额基金支付
+          format: money
+
+    - group: 您个人承担的
+      items:
+        - field: deductible
+          label: 起付线
+          format: money
+          hint: 报销前个人全额承担
+        - field: basic_pooling_self_pay
+          label: 统筹自付
+          format: money
+          highlight: true
+          hint: 统筹段内按比例自付
+        - field: large_amount_self_pay
+          label: 大额自付
+          format: money
+          hint: 大额段内按比例自付
+
+    - group: 合计
+      items:
+        - field: personal_total_pay
+          label: 个人总支付
+          format: money
+          hint: 以上所有个人承担项之和
+
+  # 折叠区（默认关闭）
+  collapsible:
+    - policy_evidence   # 政策依据
+    - calculation_trace # 计算过程（专业人员）

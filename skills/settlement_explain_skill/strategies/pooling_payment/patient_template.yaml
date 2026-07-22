@@ -1,0 +1,44 @@
+# 统筹支付患者视角模板
+
+conclusion_header: 【本次结论】
+conclusion_template: '本次结算中，您的"{fee_label}"为 {amount} 元。'
+
+what_is_this_header: 【这是什么钱】
+what_is_this_template: "统筹支付是基本医保统筹基金已经为您支付的金额，不是您个人出的钱。简单说，这部分是医保帮您付了，不需要您自己掏腰包。"
+
+evidence_header: 【本次适用的政策依据】
+evidence_intro: "根据已匹配到的政策，本次统筹基金按以下规则计算："
+
+ratio_header: 【政策比例如何决定统筹支付】
+tertiary_intro: "根据已匹配到的政策规则，三级医院住院费用不是全额医保报销，而是按费用区间分段确定统筹基金支付比例："
+segment_item: '{idx}. {lower} {upper}的部分：统筹基金支付 {fund}%'
+retiree_intro: "\n您本次属于退休人员，政策规定退休人员个人支付比例为在职职工个人支付比例的60%。\n这意味着基金实际支付比例更高，具体为："
+retiree_segment_item: '{idx}. {lower} {upper}部分：统筹基金支付 {adj_fund}%（退休优惠后）'
+retiree_conclusion: "\n因此，{amount} 元是统筹基金按三级医院住院分段支付比例（退休优惠后）为您实际支付的金额，并非系统随意生成。"
+ratio_unavailable: "当前未检索到可引用的分段比例政策依据，统筹支付金额来源于真实结算数据。"
+
+relationship_header: 【本次金额关系】
+relationship_items:
+  - field: deductible
+    label: 起付线
+    description: "医保开始报销前先由个人承担的部分，不计入统筹段；"
+  - field: basic_pooling_self_pay
+    label: 统筹自付
+    description: "进入统筹段后按比例由个人承担的部分，统筹支付和统筹自付共同构成统筹段基金+个人分担；"
+  - field: large_amount_payment
+    label: 大额支付
+    description: "进入大额段后由大额互助基金支付的部分；"
+  - field: large_amount_self_pay
+    label: 大额自付
+    description: "进入大额段后按比例由个人承担的部分；"
+  - field: personal_total_pay
+    label: 个人总支付
+    description: "包含起付线、统筹自付、大额自付等多类个人负担，与统筹支付无关；"
+  - field: medical_insurance_inner_amount
+    label: 医保内费用
+    description: "纳入医保报销范围的总费用，统筹支付是其中的一部分。"
+
+summary_header: 【一句话总结】
+summary_template: '{amount} 元是"基本医保统筹基金按政策比例为本次住院支付的金额"，统筹支付越高说明医保报销越多，不是患者需要额外出的钱。'
+
+incomplete_footer: "当前金额来源于真实结算数据，若要逐段复算还需要分段金额明细。"

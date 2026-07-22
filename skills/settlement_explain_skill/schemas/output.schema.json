@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hospital-ai/schemas/policy-fee-explanation/output.schema.json",
+  "title": "Skill Output Schema",
+  "description": "policy-fee-explanation skill 的标准输出结构。",
+  "type": "object",
+  "required": [
+    "skill_id", "target_fee_item", "data_source", "mock_used",
+    "can_answer", "patient_answer", "office_answer", "trace_events"
+  ],
+  "properties": {
+    "skill_id": {
+      "type": "string",
+      "const": "policy-fee-explanation"
+    },
+    "target_fee_item": {
+      "type": "string",
+      "description": "识别的目标费用项"
+    },
+    "target_field": {
+      "type": "string",
+      "description": "对应的结算字段名"
+    },
+    "target_amount": {
+      "type": "number",
+      "description": "目标金额"
+    },
+    "data_source": {
+      "type": "string",
+      "enum": ["REAL_DB", "MOCK"]
+    },
+    "mock_used": {
+      "type": "boolean"
+    },
+    "can_answer": {
+      "type": "boolean",
+      "description": "是否有足够数据回答用户问题"
+    },
+    "partial_answer": {
+      "type": "boolean",
+      "description": "是否仅能部分回答（数据不全/政策缺失）"
+    },
+    "case_context": {
+      "$ref": "#/$defs/CaseContext"
+    },
+    "policy_evidence": {
+      "type": "array",
+      "items": { "$ref": "policy_evidence.schema.json" }
+    },
+    "evidence_completeness": {
+      "$ref": "#/$defs/Completeness"
+    },
+    "recalculation_completeness": {
+      "$ref": "#/$defs/Completeness"
+    },
+    "patient_answer": {
+      "type": "string",
+      "description": "患者视角自然语言解释"
+    },
+    "office_answer": {
+      "type": "string",
+      "description": "医保办视角专业解释"
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "trace_events": {
+      "type": "array",
+      "items": { "$ref": "trace_event.schema.json" }
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "passed": { "type": "boolean" },
+        "checks": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "CaseContext": {
+      "type": "object",
+      "properties": {
+        "person_type": { "type": "string" },
+        "insurance_type": { "type": "string" },
+        "service_type": { "type": "string" },
+        "hospital_level": { "type": "string" },
+        "deductible": { "type": "number" },
+        "basic_pooling_payment": { "type": "number" },
+        "basic_pooling_self_pay": { "type": "number" },
+        "large_amount_payment": { "type": "number" },
+        "large_amount_self_pay": { "type": "number" },
+        "personal_total_pay": { "type": "number" }
+      }
+    },
+    "Completeness": {
+      "type": "object",
+      "properties": {
+        "level": { "type": "string" },
+        "message": { "type": "string" },
+        "has_real_data": { "type": "boolean" },
+        "has_segment_policy": { "type": "boolean" },
+        "has_retiree_factor": { "type": "boolean" },
+        "has_segment_amount_detail": { "type": "boolean" }
+      }
+    }
+  }
+}
