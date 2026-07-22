@@ -1,7 +1,10 @@
-"""Tests for seed data migration from YAML to Registry."""
+"""Tests for seed data — 真实语义层（3 域 / 7 对象 / 22 指标）。
+
+对齐生产 PostgreSQL 数据，编码为 zydyxx.* 物理编码（skill 依赖的唯一真源）。
+"""
 import pytest
 from src.semantic_layer.registry import InMemoryRegistryStore, SemanticRegistry
-from src.semantic_layer.seed import seed_settlement_domain
+from src.semantic_layer.seed import seed_semantic_layer
 
 
 @pytest.fixture
@@ -10,46 +13,44 @@ def registry():
     return SemanticRegistry(store)
 
 
-class TestSeedSettlementDomain:
-    def test_seed_creates_domain(self, registry):
-        seed_settlement_domain(registry._store)
-        domain = registry._store.get_domain("settlement")
-        assert domain is not None
-        assert domain.name == "医保结算"
+class TestSeedSemanticLayer:
+    def test_seed_creates_domains(self, registry):
+        seed_semantic_layer(registry._store)
+        assert registry._store.get_domain("ybdy").name == "医保待遇"
+        assert registry._store.get_domain("ybjs").name == "医保结算"
+        assert registry._store.get_domain("ybml").name == "医保目录"
 
-    def test_seed_creates_object(self, registry):
-        seed_settlement_domain(registry._store)
-        obj = registry.get_object("Settlement")
-        assert obj is not None
-        assert obj.source_object == "InsuranceTransaction"
-        assert obj.identifier == "settlement_id"
+    def test_seed_creates_objects(self, registry):
+        seed_semantic_layer(registry._store)
+        for code in ["djxx", "nddyxx", "ypml", "zydyxx", "zyfdxx", "zyfymx", "zyjyxx"]:
+            assert registry.get_object(code) is not None, f"对象 {code} 应存在"
 
-    def test_seed_creates_all_metrics(self, registry):
-        seed_settlement_domain(registry._store)
-        metrics = registry.get_metrics_by_object("Settlement")
-        metric_codes = {m.metric_code for m in metrics}
-        assert "Settlement.deductible" in metric_codes
-        assert "Settlement.basic_pooling_payment" in metric_codes
-        assert "Settlement.basic_pooling_self_pay" in metric_codes
-        assert "Settlement.personal_total_pay" in metric_codes
+    def test_seed_creates_metrics(self, registry):
+        seed_semantic_layer(registry._store)
+        m = registry.get_metric("zydyxx.bcqfje")
+        assert m is not None and m.name == "起付线"
+        assert registry.get_metric("zyfdxx.bdtczf") is not None   # 统筹自付
+        assert registry.get_metric("zyjyxx.rylb") is not None     # 人员类别
+        assert registry.get_metric("djxx.fund_type") is not None  # 险种类型
 
     def test_seed_creates_value_domains(self, registry):
-        seed_settlement_domain(registry._store)
-        assert registry.has_value_domain("HOSPITAL_LEVEL")
+        seed_semantic_layer(registry._store)
+        assert registry.has_value_domain("FUND_TYPE")
+        assert registry.has_value_domain("YLLB")
         assert registry.has_value_domain("PERSON_TYPE")
-        assert registry.has_value_domain("INSURANCE_TYPE")
 
     def test_seed_enum_metrics_have_value_domain(self, registry):
-        seed_settlement_domain(registry._store)
-        hospital_level = registry.get_metric("Settlement.hospital_level")
-        assert hospital_level is not None
-        assert hospital_level.value_domain == "HOSPITAL_LEVEL"
+        seed_semantic_layer(registry._store)
+        rylb = registry.get_metric("zyjyxx.rylb")
+        assert rylb is not None
+        assert rylb.value_domain == "PERSON_TYPE"
+        fund_type = registry.get_metric("djxx.fund_type")
+        assert fund_type.value_domain == "FUND_TYPE"
 
     def test_seed_core_metrics_marked_core(self, registry):
-        seed_settlement_domain(registry._store)
-        for metric in registry.get_metrics_by_object("Settlement"):
+        seed_semantic_layer(registry._store)
+        for metric in registry.get_metrics_by_object("zyfdxx"):
             if metric.metric_code in (
-                "Settlement.deductible", "Settlement.basic_pooling_payment",
-                "Settlement.basic_pooling_self_pay", "Settlement.personal_total_pay",
+                "zyfdxx.bdtczfje", "zyfdxx.bdtczf", "zyfdxx.bdgryf",
             ):
                 assert metric.importance == "core", f"{metric.metric_code} should be core"

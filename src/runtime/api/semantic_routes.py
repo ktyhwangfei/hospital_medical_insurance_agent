@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile
@@ -48,6 +49,7 @@ class MetricSummary(BaseModel):
     metric_type: str
     importance: str
     status: str
+    usage_count: int = 0
 
 
 class MetricDetail(BaseModel):
@@ -89,6 +91,9 @@ class SemanticSummary(BaseModel):
     mapping_rate: float
     skill_references: int
     domain_progress: list[DomainProgress]
+    discovery_tables: int = 0
+    discovery_fields: int = 0
+    discovery_unmapped: int = 0
 
 
 class FieldMetadataItem(BaseModel):
@@ -277,26 +282,10 @@ def get_field_metadata(
     )
 
 
-_registry = None
-
-
 def get_registry():
-    global _registry
-    if _registry is None:
-        import os
-        from src.semantic_layer.registry import InMemoryRegistryStore, SemanticRegistry
-        if os.environ.get("USE_MEMORY_STORAGE") == "1":
-            from src.semantic_layer.seed import seed_settlement_domain
-            store = InMemoryRegistryStore()
-            seed_settlement_domain(store)
-            _registry = SemanticRegistry(store)
-        else:
-            from src.data_platform.storage.postgresql.semantic_registry_store import (
-                PostgresRegistryStore,
-            )
-            store = PostgresRegistryStore()
-            _registry = SemanticRegistry(store)
-    return _registry
+    """委托给语义层的全局单例（集中维护，避免服务层反向依赖路由层）。"""
+    from src.semantic_layer.registry import get_semantic_registry
+    return get_semantic_registry()
 
 
 class CreateObjectRequest(BaseModel):
@@ -399,7 +388,8 @@ def get_object(object_code: str):
 def list_metrics(object_code: str | None = Query(None)):
     reg = get_registry()
     metrics = reg.get_metrics_by_object(object_code) if object_code else []
-    return [MetricSummary(metric_code=m.metric_code, name=m.name, object_code=m.object_code, metric_type=m.metric_type, importance=m.importance, status=m.status) for m in metrics]
+    refs = _get_skill_metric_refs()
+    return [MetricSummary(metric_code=m.metric_code, name=m.name, object_code=m.object_code, metric_type=m.metric_type, importance=m.importance, status=m.status, usage_count=refs.get(m.metric_code, 0)) for m in metrics]
 
 
 @router.get("/metrics/{metric_code:path}/value-mismatch", response_model=ValueMismatchResponse)
@@ -423,11 +413,9 @@ def get_metric(metric_code: str):
     metric = reg.get_metric(metric_code)
     if metric is None:
         raise HTTPException(status_code=404, detail=f"Metric '{metric_code}' not found")
-    # 质量分直接从发现中心取
-    qs = _calc_quality_from_discovery(metric.source_field, metric.source_object) if metric.source_field else 0.0
-    if qs > 0 and qs != metric.quality_score:
-        metric.quality_score = qs
-        reg._store.save_metric(metric)
+    # GET 只读：质量分直接返回已持久化的值（在保存映射或扫描完成时计算写入）
+    # usage_count 取静态技能引用数（物理编码与语义编码不一致，运行时累加不可靠）
+    usage_count = _get_skill_metric_refs().get(metric.metric_code, metric.usage_count)
     return MetricDetail(
         metric_code=metric.metric_code, name=metric.name, definition=metric.definition,
         object_code=metric.object_code, metric_type=metric.metric_type,
@@ -435,7 +423,7 @@ def get_metric(metric_code: str):
         importance=metric.importance, value_domain=metric.value_domain,
         source_object=metric.source_object, source_field=metric.source_field,
         source_adapter_port=metric.source_adapter_port,
-        usage_count=metric.usage_count, quality_score=qs,
+        usage_count=usage_count, quality_score=metric.quality_score,
         version=metric.version, status=metric.status,
     )
 
@@ -749,6 +737,75 @@ def delete_domain(domain_code: str):
     return {"status": "ok", "domain_code": domain_code}
 
 
+# ── 技能引用计数（静态计算）────────────────────────────────────
+# 背景：usage_count 原为运行时计数器，仅在技能执行时累加；未执行时恒为 0，
+# 看板「技能引用」无法反映技能对指标的静态引用关系。
+# 改为静态扫描 skill_manifest：按 metric_code（生产环境）或 source_field（内存种子）
+# 双策略匹配，统计每个指标被多少 Skill 引用。
+_skill_refs_cache: dict[str, int] | None = None
+_skill_refs_cache_ts: float = 0.0
+_SKILL_REFS_TTL = 30.0  # 缓存 30s，避免 metrics 页面 N+1 调用重复扫描
+
+
+def _compute_skill_metric_refs() -> dict[str, int]:
+    """静态计算每个指标被多少 Skill 引用。
+
+    needed_objects 声明的 {object_code}.{metric} 直接匹配语义层 metric_code。
+    编码统一后（skill_manifest 与语义层均为 zydyxx.* 物理编码），无需 source_field 兼容。
+    返回 {metric_code: 引用该指标的 Skill 数}。
+    """
+    import yaml
+    from pathlib import Path
+    from src.config.production import SKILLS_DIR
+
+    reg = get_registry()
+    store = reg._store
+    all_metrics = store.list_metrics()
+
+    if not all_metrics:
+        return {}
+
+    all_metric_codes = {m.metric_code for m in all_metrics}
+
+    skills_root = Path(SKILLS_DIR)
+    refs: dict[str, int] = {}
+
+    for manifest_path in skills_root.glob("*/skill_manifest.yaml"):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = yaml.safe_load(f) or {}
+        except Exception:
+            logger.warning("读取 skill_manifest 失败: %s", manifest_path, exc_info=True)
+            continue
+
+        # 命中的指标（同一 Skill 对同一指标只计一次）
+        hit_metrics: set[str] = set()
+
+        # needed_objects 的 {object_code}.{metric} 直接匹配语义层 metric_code
+        for obj_decl in manifest.get("needed_objects", []):
+            obj_code = obj_decl.get("object_code", "")
+            for mc in obj_decl.get("metrics", []):
+                full_code = f"{obj_code}.{mc}"
+                if full_code in all_metric_codes:
+                    hit_metrics.add(full_code)
+
+        for mc in hit_metrics:
+            refs[mc] = refs.get(mc, 0) + 1
+
+    return refs
+
+
+def _get_skill_metric_refs() -> dict[str, int]:
+    """带 TTL 缓存地获取技能引用计数。"""
+    global _skill_refs_cache, _skill_refs_cache_ts
+    now = time.time()
+    if _skill_refs_cache is not None and (now - _skill_refs_cache_ts) < _SKILL_REFS_TTL:
+        return _skill_refs_cache
+    _skill_refs_cache = _compute_skill_metric_refs()
+    _skill_refs_cache_ts = now
+    return _skill_refs_cache
+
+
 @router.get("/summary", response_model=SemanticSummary)
 def get_semantic_summary():
     reg = get_registry()
@@ -757,6 +814,7 @@ def get_semantic_summary():
     domains = store.list_domains()
     all_objects = store.list_objects()
     all_metrics = store.list_metrics()
+    skill_refs_map = _get_skill_metric_refs()
 
     domains_count = len(domains)
     objects_count = len(all_objects)
@@ -773,7 +831,7 @@ def get_semantic_summary():
     unmapped_count = sum(1 for m in all_metrics if not m.source_field)
     mapping_rate = (mapped_count / metrics_count * 100.0) if metrics_count > 0 else 0.0
 
-    skill_references = sum(m.usage_count for m in all_metrics)
+    skill_references = sum(skill_refs_map.values())
 
     domain_progress = []
     for domain in domains:
@@ -784,7 +842,7 @@ def get_semantic_summary():
         total = len(domain_metrics)
         mapped = sum(1 for m in domain_metrics if _is_mapped(m))
         pct = (mapped / total * 100.0) if total > 0 else 0.0
-        refs = sum(m.usage_count for m in domain_metrics)
+        refs = sum(skill_refs_map.get(m.metric_code, 0) for m in domain_metrics)
         domain_progress.append(DomainProgress(
             domain_code=domain.domain_code,
             name=domain.name,
@@ -793,6 +851,19 @@ def get_semantic_summary():
             percentage=round(pct, 1),
             skill_refs=refs,
         ))
+
+    # 发现扫描汇总：取最近一次成功扫描的表/字段统计，无扫描记录时降级为 0
+    discovery_tables = 0
+    discovery_fields = 0
+    discovery_unmapped = 0
+    try:
+        latest_scan = _get_discovery_store().get_latest_result()
+        if latest_scan:
+            discovery_tables = latest_scan.get("total_tables", 0) or 0
+            discovery_fields = latest_scan.get("total_fields", 0) or 0
+            discovery_unmapped = latest_scan.get("unmapped_fields", 0) or 0
+    except Exception:
+        logger.warning("get_semantic_summary: 加载发现扫描结果失败，降级为 0", exc_info=True)
 
     return SemanticSummary(
         domains_count=domains_count,
@@ -804,6 +875,9 @@ def get_semantic_summary():
         mapping_rate=round(mapping_rate, 1),
         skill_references=skill_references,
         domain_progress=domain_progress,
+        discovery_tables=discovery_tables,
+        discovery_fields=discovery_fields,
+        discovery_unmapped=discovery_unmapped,
     )
 
 
@@ -900,6 +974,93 @@ def _calc_quality_from_discovery(source_field: str, source_object: str | None = 
     return 0.0
 
 
+def _refresh_quality_scores_from_scan(result_fields: list[dict]) -> int:
+    """扫描完成后，根据最新字段元数据批量刷新已映射指标的质量分。
+
+    替代原先 GET /metrics/{code} 里“读时算+写”的反模式：质量分在扫描
+    结束后一次性同步入库，详情接口只需返回已持久化的值。
+    Returns: 实际更新的指标条数。
+    """
+    reg = get_registry()
+    store = reg._store
+    try:
+        metrics = store.list_metrics()
+    except Exception:
+        logger.warning("_refresh_quality_scores_from_scan: list_metrics 失败", exc_info=True)
+        return 0
+
+    # 构建字段查找索引：优先 table.field 全路径，回退纯字段名
+    by_full: dict[str, dict] = {}
+    by_name: dict[str, dict] = {}
+    for f in result_fields:
+        fn = (f.get("field_name") or "")
+        tn = (f.get("table_name") or "")
+        if fn:
+            by_full[f"{tn}.{fn}".lower()] = f
+            by_name[fn.lower()] = f
+
+    updated = 0
+    for m in metrics:
+        if not m.source_field:
+            continue
+        sf = m.source_field.lower().strip()
+        field_meta = None
+        if "." in sf:
+            field_meta = by_full.get(sf)
+            if field_meta is None:
+                field_meta = by_name.get(sf.split(".", 1)[1])
+        else:
+            field_meta = by_name.get(sf)
+            if field_meta is None and m.source_object:
+                field_meta = by_full.get(f"{m.source_object.lower()}.{sf}")
+        qs = calc_field_value_score(field_meta).total if field_meta else 0.0
+        if qs != m.quality_score:
+            m.quality_score = qs
+            store.save_metric(m)
+            updated += 1
+    if updated:
+        logger.info("_refresh_quality_scores_from_scan: 刷新 %d 个指标质量分", updated)
+    return updated
+
+
+# ── Discovery 字段语义匹配：Milvus 单例（避免每请求重连） ──
+_discovery_milvus: dict | None = None  # {"collection": col, "provider": provider}
+
+
+def _get_discovery_milvus() -> dict | None:
+    """懒加载 discovery_fields Milvus 集合（应用级单例，连接仅建立一次）。
+
+    不可用（未安装 pymilvus / 未配置 / 集合不存在）时返回 None，调用方降级。
+    """
+    global _discovery_milvus
+    if _discovery_milvus is not None:
+        return _discovery_milvus
+    try:
+        from pymilvus import Collection, connections, utility
+        from src.config.production import MILVUS_HOST, MILVUS_PORT
+        from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provider import get_embedding_provider
+
+        # 使用独立 alias，避免与其他模块的 default 连接冲突
+        connections.connect(alias="discovery", host=MILVUS_HOST, port=str(MILVUS_PORT))
+        if not utility.has_collection("discovery_fields"):
+            logger.info("field_match: Milvus 无 discovery_fields 集合，降级为模糊匹配")
+            return None
+        col = Collection("discovery_fields")
+        col.load()
+        provider = get_embedding_provider("sentence_transformer")
+        _discovery_milvus = {"collection": col, "provider": provider}
+        return _discovery_milvus
+    except Exception:
+        logger.warning("field_match: Milvus 初始化失败，降级为模糊匹配", exc_info=True)
+        return None
+
+
+def _reset_discovery_milvus() -> None:
+    """重置 Milvus 单例，强制下次调用重连。"""
+    global _discovery_milvus
+    _discovery_milvus = None
+
+
 class FieldMatchRequest(BaseModel):
     query: str
     definition: str = ""
@@ -922,17 +1083,12 @@ def field_match(req: FieldMatchRequest):
     query_text = f"{req.query} {req.definition}".strip()
     matches: list[FieldMatchItem] = []
 
-    # Try Milvus vector search first
-    try:
-        from pymilvus import Collection, connections, utility
-        from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provider import get_embedding_provider
-        from src.config.production import MILVUS_HOST, MILVUS_PORT
-
-        connections.connect(host=MILVUS_HOST, port=str(MILVUS_PORT))
-        if utility.has_collection("discovery_fields"):
-            col = Collection("discovery_fields")
-            col.load()
-            provider = get_embedding_provider("sentence_transformer")
+    # 优先使用 Milvus 向量检索（复用应用级单例连接）
+    milvus = _get_discovery_milvus()
+    if milvus is not None:
+        try:
+            col = milvus["collection"]
+            provider = milvus["provider"]
             query_vec = provider.encode([query_text])[0].tolist()
             results = col.search(
                 data=[query_vec], anns_field="embedding",
@@ -947,11 +1103,12 @@ def field_match(req: FieldMatchRequest):
                         description=h.entity.get("description", ""),
                         score=round(float(h.distance), 4),
                     ))
-            connections.disconnect("default")
             if matches:
                 return FieldMatchResponse(matches=matches)
-    except Exception:
-        pass  # Fallback to fuzzy match
+        except Exception:
+            logger.warning("field_match: Milvus 查询失败，降级为模糊匹配", exc_info=True)
+            # 连接可能已断，重置单例以便下次重试
+            _reset_discovery_milvus()
 
     # Fallback: fuzzy text match from discovery results
     from src.data_platform.storage.postgresql.discovery_store import DiscoveryStore
@@ -1007,20 +1164,23 @@ def list_value_domains():
     """列出所有值域及其映射数量。"""
     reg = get_registry()
     store = reg._store
+    # PostgreSQL：批量 JOIN 查询，避免 N+1
+    if hasattr(store, "list_value_domains_with_counts"):
+        return [
+            ValueDomainInfo(
+                domain_code=vd.domain_code, name=vd.name, description=vd.description,
+                mapping_count=cnt, standard_values=vd.standard_values or [],
+            )
+            for vd, cnt in store.list_value_domains_with_counts()
+        ]
+    # 内存版回退（值域数量少，逐条可接受）
     result = []
-    # 兼容内存和 PostgreSQL 两种存储
-    if hasattr(store, '_value_domains'):
-        codes = list(store._value_domains.keys())
-    else:
-        # PostgreSQL: 直接查表
-        client = store._get_client()
-        rows = client.execute("SELECT domain_code FROM semantic_value_domains ORDER BY domain_code")
-        codes = [r['domain_code'] for r in rows]
-    for vd_code in codes:
-        vd = store.get_value_domain(vd_code)
-        if vd:
-            mappings = store.get_value_mappings(vd_code)
-            result.append(ValueDomainInfo(domain_code=vd.domain_code, name=vd.name, description=vd.description, mapping_count=len(mappings), standard_values=vd.standard_values or []))
+    if hasattr(store, "_value_domains"):
+        for vd_code in list(store._value_domains.keys()):
+            vd = store.get_value_domain(vd_code)
+            if vd:
+                mappings = store.get_value_mappings(vd_code)
+                result.append(ValueDomainInfo(domain_code=vd.domain_code, name=vd.name, description=vd.description, mapping_count=len(mappings), standard_values=vd.standard_values or []))
     return result
 
 
@@ -1205,6 +1365,190 @@ def get_skill_metrics(skill_id: str):
     return result
 
 
+def _resolve_skill_metric_codes(skill_id: str) -> list[str]:
+    """从 skill_manifest.yaml 的 needed_objects 解析出完整指标编码列表。"""
+    import yaml
+    from pathlib import Path
+    from src.config.production import SKILLS_DIR
+    manifest_path = Path(SKILLS_DIR) / skill_id / "skill_manifest.yaml"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail=f"技能 '{skill_id}' 不存在")
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = yaml.safe_load(f) or {}
+    codes: list[str] = []
+    for obj_decl in manifest.get("needed_objects", []):
+        obj_code = obj_decl.get("object_code", "")
+        for m in obj_decl.get("metrics", []):
+            codes.append(f"{obj_code}.{m}")
+    return codes
+
+
+@router.get("/skills/{skill_id}/query-plan")
+def get_skill_query_plan(skill_id: str):
+    """返回技能的取数查询计划（纯元数据，不执行 SQL）。
+
+    展示：技能消费的指标 → 解析为物理表/列 → 按表分组的批量取数计划 → 未映射项。
+    供 skills 页「查询计划」Tab 可视化取数透视。
+    """
+    from src.runtime.discovery.semantic_source import get_semantic_data_source
+
+    metric_codes = _resolve_skill_metric_codes(skill_id)
+    if not metric_codes:
+        raise HTTPException(status_code=404, detail=f"技能 '{skill_id}' 未声明 needed_objects")
+    source = get_semantic_data_source()
+    plan = source.build_query_plan(metric_codes)
+    return plan
+
+
+class SkillQueryExecuteRequest(BaseModel):
+    djh: str | int
+    patient_id: str | None = None
+    encounter_id: str | None = None
+
+
+@router.post("/skills/{skill_id}/query-execute")
+def execute_skill_query(skill_id: str, req: SkillQueryExecuteRequest):
+    """试运行：按给定 djh 真实取数，返回每个指标的实际值。
+
+    复用 discovery 的 SQL Server 连接通道。
+    """
+    from src.runtime.discovery.semantic_source import get_semantic_data_source
+
+    metric_codes = _resolve_skill_metric_codes(skill_id)
+    source = get_semantic_data_source()
+    context = {"djh": req.djh}
+    if req.patient_id:
+        context["patient_id"] = req.patient_id
+    if req.encounter_id:
+        context["encounter_id"] = req.encounter_id
+    values = source.query(metric_codes, context=context)
+    # 附带 source_field 便于前端展示「指标 → 物理字段 → 值」
+    reg = get_registry()
+    store = reg._store
+    items = []
+    for code in metric_codes:
+        m = store.get_metric(code)
+        items.append({
+            "metric_code": code,
+            "name": m.name if m else code,
+            "source_field": m.source_field if m else None,
+            "value": values.get(code),
+        })
+    return {"skill_id": skill_id, "djh": req.djh, "items": items}
+
+
+# SettlementContext 字段 → 语义指标编码（一致性校验用）
+# [来源: settlement_data_provider.SettlementContext 与语义层指标的对应]
+_SETTLEMENT_CONTEXT_TO_METRIC = {
+    "deductible": "zydyxx.bcqfje",
+    "medical_insurance_inner_amount": "zydyxx.bcybnje",
+    "basic_pooling_payment": "zyfdxx.bdtczfje",
+    "basic_pooling_self_pay": "zyfdxx.bdtczf",
+    "large_amount_payment": "zyfdxx.bddezfje",
+    "large_amount_self_pay": "zyfdxx.bddezf",
+    "personal_total_pay": "zyfdxx.bdgryf",
+    "person_type": "zyjyxx.rylb",
+    "insurance_type": "djxx.fund_type",
+    "service_type": "djxx.yllb",
+}
+
+
+@router.get("/skills/{skill_id}/consistency-check")
+def consistency_check_skill(skill_id: str, djh: str):
+    """一致性校验：同一 djh 下，语义层路径 vs 现有 business_sql 路径的取数对比。
+
+    回答“语义层建的映射对不对”：对每个指标对比两条路径的值，标出差异。
+    仅 settlement_explain_skill 有并行 business_sql 路径；其他技能返回未支持。
+    """
+    from src.runtime.discovery.semantic_source import get_semantic_data_source
+
+    if skill_id != "settlement_explain_skill":
+        return {"skill_id": skill_id, "supported": False,
+                "message": "该技能无并行 business_sql 路径，无法对比"}
+
+    metric_codes = _resolve_skill_metric_codes(skill_id)
+
+    # ① 语义层 flat 路径
+    source = get_semantic_data_source()
+    semantic_values = source.query(metric_codes, context={"djh": djh})
+    # ①' 语义层 joined 路径（复用 business_sql JOIN）
+    joined_values = source.query(metric_codes, context={"djh": djh}, join_mode="joined")
+
+    # ② business_sql 路径（现有生产路径）
+    business_values: dict[str, Any] = {}
+    business_error: str | None = None
+    try:
+        from src.config.production import DATA_SOURCE_MODE
+        if DATA_SOURCE_MODE != "real_db":
+            business_error = f"DATA_SOURCE_MODE={DATA_SOURCE_MODE}，未启用真实 DB"
+        else:
+            from src.runtime.policy_qa.settlement_data_provider import RealDbSettlementDataProvider
+            provider = RealDbSettlementDataProvider()
+            raw = provider.client.get_case_context_raw(settlement_id=djh)
+            raw_data = raw.raw_data or {}
+            # 映射 SettlementContext 字段 → 指标编码
+            for ctx_field, metric_code in _SETTLEMENT_CONTEXT_TO_METRIC.items():
+                raw_key = {
+                    "deductible": "bcqfje", "medical_insurance_inner_amount": "bcybnje",
+                    "basic_pooling_payment": "bdtczfje", "basic_pooling_self_pay": "bdtczf",
+                    "large_amount_payment": "bddegwyzfje", "large_amount_self_pay": "bddegwyzf",
+                    "personal_total_pay": "bdgryf", "person_type": "PER_TYPE",
+                    "insurance_type": "fund_type", "service_type": "yllb",
+                }.get(ctx_field, ctx_field)
+                if raw_key in raw_data:
+                    business_values[metric_code] = raw_data.get(raw_key)
+    except Exception as e:
+        business_error = str(e)
+
+    # ③ 逐指标对比
+    reg = get_registry()
+    store = reg._store
+    items = []
+    for code in metric_codes:
+        m = store.get_metric(code)
+        sem_v = semantic_values.get(code)
+        join_v = joined_values.get(code)
+        biz_v = business_values.get(code)
+        # 只对两条路径都返回的数值型指标判定 match
+        compared = code in business_values
+        match = (compared and _values_equal(sem_v, biz_v))
+        joined_match = (compared and _values_equal(join_v, biz_v))
+        items.append({
+            "metric_code": code,
+            "name": m.name if m else code,
+            "semantic_value": sem_v,
+            "semantic_joined_value": join_v,
+            "business_sql_value": biz_v,
+            "compared": compared,
+            "match": match,
+            "joined_match": joined_match,
+        })
+    matched = sum(1 for it in items if it["match"])
+    joined_matched = sum(1 for it in items if it["joined_match"])
+    compared = sum(1 for it in items if it["compared"])
+    return {
+        "skill_id": skill_id, "djh": djh, "supported": True,
+        "business_sql_error": business_error,
+        "summary": {
+            "compared": compared,
+            "flat_matched": matched, "flat_mismatched": compared - matched,
+            "joined_matched": joined_matched, "joined_mismatched": compared - joined_matched,
+        },
+        "items": items,
+    }
+
+
+def _values_equal(a: Any, b: Any) -> bool:
+    """数值型容差比较；非数值要求相等。"""
+    try:
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            return abs(float(a) - float(b)) < 0.01
+    except Exception:
+        pass
+    return str(a) == str(b)
+
+
+
 # ── Discovery scan endpoints ────────────────────────────────────────────────────────
 
 
@@ -1360,9 +1704,14 @@ async def get_scan_status(task_id: str):
             cached_count = 0
             scanned_count = 0
 
+            # 预分组 table → fields（O(F) 一次），避免循环内重复全量过滤
+            fields_by_table: dict[str, list[dict]] = {}
+            for _f in result.get("fields", []):
+                fields_by_table.setdefault(_f.get("table_name", ""), []).append(_f)
+
             for ts in table_statuses:
                 table = ts["table"]
-                table_fields = [f for f in result.get("fields", []) if f.get("table_name") == table]
+                table_fields = fields_by_table.get(table, [])
                 # 新增字段 = 当前字段中，历史上从未出现过的「表名:字段名」
                 new_count = 0
                 for f in table_fields:
@@ -1385,6 +1734,12 @@ async def get_scan_status(task_id: str):
                 unmapped_fields=unmapped_fields,
                 new_found=total_new,
             )
+
+            # 扫描完成后批量刷新已映射指标的质量分（替代 GET 端点里的读时写入）
+            try:
+                _refresh_quality_scores_from_scan(result.get("fields", []))
+            except Exception:
+                logger.warning("扫描后刷新质量分失败", exc_info=True)
 
             yield f"event: done\ndata: {json.dumps({'status': 'completed', 'tables_scanned': len(tables), 'total_fields': total_fields, 'mapped_fields': mapped_fields, 'unmapped_fields': unmapped_fields, 'new_mappings': total_new})}\n\n"
         except Exception as exc:
@@ -1420,7 +1775,14 @@ def get_discovery_results():
                 mapped_fields_set.add(s)
                 usage_map[m.source_field] = m.usage_count
     except Exception:
-        pass
+        logger.warning("get_discovery_results: 构建 mapped_fields_set 失败，降级为全未映射", exc_info=True)
+
+    # 批量预取全部字段释义，避免循环内逐条查询（N+1 → 1）
+    try:
+        desc_map = store.get_all_field_descriptions()
+    except Exception:
+        logger.warning("get_discovery_results: 批量加载字段释义失败，降级为空表", exc_info=True)
+        desc_map = {}
 
     for f in latest_result.get("fields", []):
         tables_seen.add(f.get("table_name", ""))
@@ -1433,13 +1795,13 @@ def get_discovery_results():
         else:
             unmapped_count += 1
 
-        # 合并 Excel 导入的字段释义（从 DB 读取）
+        # 合并 Excel 导入的字段释义（从预取的 dict 查询，O(1)）
         table = f.get("table_name", "")
         field_name = f.get("field_name", "")
         description = f.get("description")
         is_primary_key = False
         remark = None
-        desc_entry = store.get_field_description(table, field_name)
+        desc_entry = desc_map.get(f"{table}:{field_name}".lower())
         if desc_entry:
             description = desc_entry.get("description") or description
             is_primary_key = desc_entry.get("is_primary_key", False)

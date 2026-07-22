@@ -216,8 +216,7 @@ class BenefitPoolingSelfPayAssembler:
         Returns:
             Same response format as execute()
         """
-        settlement_facts = business_facts.get("Settlement", {})
-        ctx = self._build_context_from_facts(settlement_facts)
+        ctx = self._build_context_from_facts(business_facts)
         return self.execute(settlement_context=ctx, target_fee_item=self._detect_target_from_question(question), **kwargs)
 
     @staticmethod
@@ -235,21 +234,37 @@ class BenefitPoolingSelfPayAssembler:
         # default: 统筹自付
         return "pooling_self_pay"
 
+    # 语义层 metric_code → skill 内部语义名映射。
+    # facts 由 Builder 生成，结构为 {object_code: {metric_short_name: value}}，
+    # metric key 为 metric_code 去掉对象前缀的短名。此映射把语义层编码转译为
+    # calculator / fact_builder 使用的内部语义名字段（skill 内部实现细节）。
+    _FACT_FIELD_MAP: dict[str, str] = {
+        "zydyxx.bcqfje": "deductible",
+        "zydyxx.bcybnje": "medical_insurance_inner_amount",
+        "zyfdxx.bdtczfje": "basic_pooling_payment",
+        "zyfdxx.bdtczf": "basic_pooling_self_pay",
+        "zyfdxx.bddezfje": "large_amount_payment",
+        "zyfdxx.bddezf": "large_amount_self_pay",
+        "zyfdxx.bdgryf": "personal_total_pay",
+        "zyjyxx.rylb": "person_type",
+        "djxx.fund_type": "insurance_type",
+        "djxx.yllb": "service_type",
+    }
+
     def _build_context_from_facts(self, facts: dict) -> dict:
-        """Build a context dict from standardized Business Facts.
-        This replaces the MCP settlement-data call."""
-        return {
-            "deductible": facts.get("deductible"),
-            "basic_pooling_payment": facts.get("basic_pooling_payment"),
-            "basic_pooling_self_pay": facts.get("basic_pooling_self_pay"),
-            "large_amount_payment": facts.get("large_amount_payment"),
-            "large_amount_self_pay": facts.get("large_amount_self_pay"),
-            "personal_total_pay": facts.get("personal_total_pay"),
-            "person_type": facts.get("person_type"),
-            "insurance_type": facts.get("insurance_type"),
-            "service_type": facts.get("service_type"),
-            "hospital_level": facts.get("hospital_level"),
-        }
+        """从语义层 Business Facts 构建 skill 内部上下文（语义名字段）。
+
+        facts 结构：{object_code: {metric_short_name: value}}（由 Builder 生成）。
+        返回 {内部语义名: value}，供 calculator / fact_builder 消费。
+        """
+        ctx: dict[str, Any] = {}
+        for metric_code, internal_field in self._FACT_FIELD_MAP.items():
+            obj_code, _, short = metric_code.partition(".")
+            obj_facts = facts.get(obj_code, {})
+            ctx[internal_field] = obj_facts.get(short)
+        # hospital_level：语义层暂无对应指标（gap），保留占位
+        ctx["hospital_level"] = None
+        return ctx
 
 
 # ── 动态加载入口 ────────────────────────────────────────────────
