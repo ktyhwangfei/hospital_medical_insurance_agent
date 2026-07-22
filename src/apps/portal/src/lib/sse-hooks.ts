@@ -419,8 +419,19 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       case 'step': {
         const data = event.data as Record<string, unknown>
         const stepName = typeof data.step === 'string' ? data.step : undefined
-        const stepMsg = typeof data.message === 'string' ? data.message : ''
+        const stepMsg = typeof data.public_message === 'string'
+          ? data.public_message
+          : typeof data.message === 'string'
+            ? data.message
+            : ''
         const stepTs = typeof data.event_timestamp === 'string' ? data.event_timestamp : undefined
+        // 后端可能直接带 status 字段（Policy QA 端点），也可能依赖 step_complete 事件
+        const stepStatus = typeof data.status === 'string'
+          ? (data.status === 'done' ? 'completed' as const
+            : data.status === 'running' ? 'running' as const
+            : data.status === 'error' ? 'error' as const
+            : 'running' as const)
+          : 'running' as const
 
         if (stepName) {
           onStepRef.current?.(stepName, stepMsg)
@@ -429,17 +440,35 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
             if (existing) {
               return prev.map((s) =>
                 s.step === stepName
-                  ? { ...s, message: stepMsg || s.message, status: 'running', timestamp: stepTs || s.timestamp }
+                  ? { ...s, message: stepMsg || s.message, status: stepStatus, timestamp: stepTs || s.timestamp }
                   : s,
               )
             }
-            return [...prev, { step: stepName, message: stepMsg, status: 'running', timestamp: stepTs }]
+            return [...prev, { step: stepName, message: stepMsg, status: stepStatus, timestamp: stepTs }]
           })
         }
         break
       }
 
+      case 'step_complete': {
+        const data = event.data as Record<string, unknown>
+        const stepName = typeof data.step === 'string' ? data.step : undefined
+
+        if (stepName) {
+          setSteps((prev) =>
+            prev.map((s) =>
+              s.step === stepName ? { ...s, status: 'completed' } : s,
+            ),
+          )
+        }
+        break
+      }
+
       case 'final': {
+        // 标记所有剩余 running 步骤为 completed
+        setSteps((prev) =>
+          prev.map((s) => (s.status === 'running' ? { ...s, status: 'completed' as const } : s)),
+        )
         const response = event.data as AgentResponse
         if (response && response.status) {
           onFinalRef.current?.(response)
@@ -459,6 +488,10 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       }
 
       case 'done':
+        // 标记所有剩余 running 步骤为 completed
+        setSteps((prev) =>
+          prev.map((s) => (s.status === 'running' ? { ...s, status: 'completed' as const } : s)),
+        )
         updateStatus('closed')
         break
     }

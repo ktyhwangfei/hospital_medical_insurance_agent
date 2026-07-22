@@ -296,4 +296,119 @@ export class ApiClientError extends Error {
   }
 }
 
+// --- Infra Skill Types ---
+
+export interface InfraSkillItem {
+  skill_id: string
+  skill_name: string
+  business_action: string
+  business_object: string
+  include_keywords: string[]
+  excluded_intents: string[]
+}
+
+export interface InfraSkillFilesStructure {
+  agents: string[]
+  schemas: string[]
+  templates: string[]
+  scripts: string[]
+  references: string[]
+  tests: string[]
+  strategies: string[]
+}
+
+export interface FieldMappingItem {
+  label: string
+  description: string
+  db_source: string
+}
+
+export interface FieldMappingResponse {
+  target_field: Record<string, unknown>
+  settlement_fields: Record<string, FieldMappingItem>
+  defaults: Record<string, string>
+}
+
+export interface InfraSkillDetailResponse {
+  skill_id: string
+  skill_name: string
+  business_action: string
+  business_object: string
+  include_keywords: string[]
+  excluded_intents: string[]
+  manifest: Record<string, unknown>
+  readme: string
+  files_structure: InfraSkillFilesStructure
+  field_mapping: FieldMappingResponse | null
+}
+
+export interface SkillRouteTestRequest {
+  question: string
+}
+
+export interface SkillRouteTestResponse {
+  question: string
+  matched_skill_id?: string | null
+}
+
+export interface SkillExecuteTestRequest {
+  question: string
+  target_fee_item?: string | null
+  context?: Record<string, unknown>
+  evidence?: Record<string, unknown>
+  status?: Record<string, unknown>
+}
+
+export interface SkillExecuteTestResponse {
+  skill_id: string
+  status: string
+  result: unknown
+}
+
+// ── QA History Types ────────────────────────────────────────────
+
+export interface QAWorkflowStep {
+  step_id: string
+  status: string
+}
+
+export interface QATask {
+  task_id: string
+  task_type: string
+  status: string
+  description: string
+  executor_type: string
+  step_id?: string
+  duration_ms?: number
+  error_message?: string
+  created_at: string
+  input_data: Record<string, unknown>
+  output_data: Record<string, unknown>
+}
+
+export interface QAWorkflow {
+  workflow_id: string
+  scenario: string
+  status: string
+  current_step?: string
+  steps: QAWorkflowStep[]
+  tasks: QATask[]
+}
+
+export interface QASession {
+  session_id: string
+  user_id: string
+  role: string
+  created_at: string
+  last_active: string
+  workflows: QAWorkflow[]
+}
+
+export interface QAHistoryResponse {
+  total: number
+  limit: number
+  offset: number
+  items: QASession[]
+}
+
 

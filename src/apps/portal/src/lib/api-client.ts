@@ -5,6 +5,39 @@ import {
   mockModelTestResult,
   mockStreamingChatResponse,
 } from './mock-data'
+
+// ── Infra Skills API ──
+
+export interface InfraSkillsFilter {
+  business_action?: string
+  business_object?: string
+}
+
+export async function listInfraSkills(filter?: InfraSkillsFilter): Promise<InfraSkillItem[]> {
+  const params = new URLSearchParams()
+  if (filter?.business_action) params.set('business_action', filter.business_action)
+  if (filter?.business_object) params.set('business_object', filter.business_object)
+  const query = params.toString()
+  return requestJson<InfraSkillItem[]>(`/infra-skills${query ? `?${query}` : ''}`)
+}
+
+export async function getInfraSkillDetail(skillId: string): Promise<InfraSkillDetailResponse> {
+  return requestJson<InfraSkillDetailResponse>(`/infra-skills/${encodeURIComponent(skillId)}`)
+}
+
+export async function testInfraSkillRouting(request: SkillRouteTestRequest): Promise<SkillRouteTestResponse> {
+  return requestJson<SkillRouteTestResponse>('/infra-skills/route-test', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
+
+export async function testInfraSkillExecution(skillId: string, request: SkillExecuteTestRequest): Promise<SkillExecuteTestResponse> {
+  return requestJson<SkillExecuteTestResponse>(`/infra-skills/${encodeURIComponent(skillId)}/test`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
 import type {
   AgentResponse,
   ApiErrorDetail,
@@ -15,6 +48,7 @@ import type {
   ModelTestRequest,
   ModelTestResponse,
   PatientContextResponse,
+  QAHistoryResponse,
   SseEvent,
   SseEventType,
   TaskConfirmRequest,
@@ -22,6 +56,12 @@ import type {
   TaskStatusResponse,
   WorkflowListItem,
   WorkflowStatusResponse,
+  InfraSkillItem,
+  InfraSkillDetailResponse,
+  SkillRouteTestRequest,
+  SkillRouteTestResponse,
+  SkillExecuteTestRequest,
+  SkillExecuteTestResponse,
 } from './types'
 import { ApiClientError } from './types'
 
@@ -533,6 +573,19 @@ export async function fetchTaskStatus(taskId: string): Promise<TaskStatusRespons
   }
 }
 
+export async function fetchQAHistory(params?: {
+  userId?: string
+  limit?: number
+  offset?: number
+}): Promise<QAHistoryResponse> {
+  const searchParams = new URLSearchParams()
+  if (params?.userId) searchParams.set('user_id', params.userId)
+  if (params?.limit !== undefined) searchParams.set('limit', String(params.limit))
+  if (params?.offset !== undefined) searchParams.set('offset', String(params.offset))
+  const query = searchParams.toString()
+  return requestJson<QAHistoryResponse>(`/policy-qa/history${query ? `?${query}` : ''}`)
+}
+
 export async function fetchMcpStorageHealth(): Promise<McpStorageHealth> {
   try {
     return await requestJson<McpStorageHealth>('/mcp/storage/health')
@@ -635,6 +688,12 @@ export async function readSseStream(
         if (event) {
           onEvent(event)
 
+          // ★ 出让微任务队列给 React 渲染 ——
+          // 不加这步的话，同一次 reader.read() 里的所有事件
+          // 都会在同一个同步循环中触发 setState，
+          // React 18 会批量合并成一次渲染，思维链看不到逐条更新。
+          await new Promise<void>(resolve => setTimeout(resolve, 0))
+
           if (event.event === 'done') {
             shouldStop = true
             break
@@ -646,6 +705,7 @@ export async function readSseStream(
     const trailingEvent = shouldStop ? null : parseSseChunk(buffer)
     if (trailingEvent) {
       onEvent(trailingEvent)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
 
       if (trailingEvent.event === 'done') {
         shouldStop = true

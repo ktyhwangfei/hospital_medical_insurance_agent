@@ -5,7 +5,8 @@ import ChatMessageList from '@/components/chat/message-list'
 // Cleanup DOM between tests to avoid leakage from StrictMode double-render
 afterEach(() => cleanup())
 
-// Mock sub-components used by ChatMessageList
+// Mock sub-components used by ChatMessageList — explicit any is acceptable for test mocks
+/* eslint-disable @typescript-eslint/no-explicit-any */
 vi.mock('@/components/ui/scroll-area', () => ({
   ScrollArea: ({ children, viewportRef, className }: any) => {
     // jsdom doesn't implement scrollTo on elements, so we patch the ref
@@ -37,6 +38,7 @@ vi.mock('@/components/ui/avatar', () => ({
 }))
 
 vi.mock('@/components/intent-trace-card', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   default: (_props: any) => (
     <div data-testid="intent-trace-card">IntentTrace</div>
   ),
@@ -45,6 +47,7 @@ vi.mock('@/components/intent-trace-card', () => ({
 vi.mock('@/components/chat/typewriter', () => ({
   Typewriter: ({ text }: any) => <span>{text}</span>,
 }))
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 describe('ChatMessageList', () => {
   const baseProps = {
@@ -93,17 +96,12 @@ describe('ChatMessageList', () => {
   })
 
   it('shows intent trace card when intentTrace is provided', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const trace = { intent: 'test', confidence: 0.9, status: 'routed', top_candidates: [] } as any
     render(
       <ChatMessageList
         {...baseProps}
-        intentTrace={
-          {
-            intent: 'test',
-            confidence: 0.9,
-            status: 'routed',
-            top_candidates: [],
-          } as any
-        }
+        intentTrace={trace}
       />,
     )
     const cards = screen.getAllByTestId('intent-trace-card')

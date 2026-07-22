@@ -1,0 +1,1992 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🏥 医保AI导办中枢 · 导办即对话</title>
+<!-- Google Fonts: Noto Sans SC + JetBrains Mono -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================
+   CSS Variables — Design Tokens
+   ============================================ */
+:root {
+  --bg-app: #0a0e17;
+  --bg-chat: #0f1520;
+  --bg-card: rgba(255,255,255,0.03);
+  --bg-card-hover: rgba(255,255,255,0.06);
+  --bg-elevated: rgba(19,27,42,0.95);
+  --border-subtle: rgba(255,255,255,0.06);
+  --border-card: rgba(255,255,255,0.08);
+
+  /* Semantic Colors */
+  --cyan: #06b6d4;
+  --cyan-glow: rgba(6,182,212,0.15);
+  --blue: #3b82f6;
+  --blue-glow: rgba(59,130,246,0.15);
+  --purple: #a855f7;
+  --purple-glow: rgba(168,85,247,0.2);
+  --amber: #eab308;
+  --amber-glow: rgba(234,179,8,0.15);
+  --green: #10b981;
+  --green-glow: rgba(16,185,129,0.15);
+  --red: #ef4444;
+  --red-glow: rgba(239,68,68,0.15);
+
+  /* Text */
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  /* Gradients */
+  --grad-brand: linear-gradient(135deg, #06b6d4, #14b8a6, #10b981);
+  --grad-user: linear-gradient(135deg, #2563eb, #06b6d4);
+  --grad-send: linear-gradient(135deg, #06b6d4, #10b981);
+
+  /* Typography */
+  --font-sans: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+  /* Spacing */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* Sizing */
+  --header-h: 56px;
+
+  /* Shadows */
+  --shadow-card: 0 4px 24px rgba(0,0,0,0.3);
+  --shadow-glow-cyan: 0 0 30px rgba(6,182,212,0.08);
+  --shadow-glow-purple: 0 0 30px rgba(168,85,247,0.08);
+
+  /* Easing */
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* ============================================
+   Reset & Base
+   ============================================ */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  font-family: var(--font-sans);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(71,85,105,0.5); border-radius: var(--radius-full); }
+::-webkit-scrollbar-thumb:hover { background: rgba(71,85,105,0.8); }
+
+/* ============================================
+   Scan-line Overlay
+   ============================================ */
+.chat-area::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(6,182,212,0.012) 2px,
+    rgba(6,182,212,0.012) 4px
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ============================================
+   Header (56px, fixed)
+   ============================================ */
+.header {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--header-h);
+  background: rgba(10,14,23,0.88);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  z-index: 100;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.hamburger-btn {
+  width: 36px; height: 36px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: background 0.2s var(--ease-smooth);
+  flex-shrink: 0;
+}
+.hamburger-btn:hover { background: rgba(255,255,255,0.06); }
+.hamburger-btn span {
+  display: block;
+  width: 18px; height: 2px;
+  background: var(--text-primary);
+  border-radius: 1px;
+  transition: all 0.3s var(--ease-smooth);
+}
+.hamburger-btn.active span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+.hamburger-btn.active span:nth-child(2) { opacity: 0; transform: scaleX(0); }
+.hamburger-btn.active span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+.brand-text {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  background: var(--grad-brand);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  white-space: nowrap;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* Connection Badge */
+.connection-badge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: rgba(16,185,129,0.08);
+  padding: 5px 12px 5px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(16,185,129,0.2);
+  user-select: none;
+}
+.pulse-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  position: relative;
+  flex-shrink: 0;
+}
+.pulse-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--green);
+  animation: pulse-ring 2s ease-out infinite;
+  opacity: 0.6;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.8); opacity: 0; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+/* ============================================
+   Main Layout
+   ============================================ */
+.main-layout {
+  padding-top: var(--header-h);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  max-width: 820px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 20px;
+  min-height: 0;
+  position: relative;
+}
+
+/* ============================================
+   Quick Entry Bar
+   ============================================ */
+.quick-entry-bar {
+  padding: 18px 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-subtle);
+  animation: fade-slide-down 0.5s var(--ease-smooth);
+}
+
+.quick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all 0.3s var(--ease-smooth);
+  white-space: nowrap;
+  user-select: none;
+}
+.quick-chip:hover {
+  border-color: var(--cyan);
+  background: var(--cyan-glow);
+  color: var(--text-primary);
+  box-shadow: 0 0 20px rgba(6,182,212,0.08);
+  transform: translateY(-1px);
+}
+.quick-chip:active {
+  transform: scale(0.96);
+}
+
+/* ============================================
+   Chat Viewport (scrollable)
+   ============================================ */
+.chat-viewport {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  scroll-behavior: smooth;
+  position: relative;
+  z-index: 1;
+}
+
+/* ============================================
+   Messages
+   ============================================ */
+.message {
+  display: flex;
+  gap: 10px;
+  max-width: 88%;
+  animation: message-in 0.45s var(--ease-smooth) both;
+}
+.message.bot { align-self: flex-start; }
+.message.user { align-self: flex-end; flex-direction: row-reverse; }
+
+.message-avatar {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  margin-top: 4px;
+}
+.message.bot .message-avatar { background: linear-gradient(135deg, #06b6d4, #14b8a6); }
+.message.user .message-avatar { background: var(--grad-user); }
+
+.message-bubble {
+  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 1.7;
+  position: relative;
+}
+.message.bot .message-bubble {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  color: var(--text-primary);
+  border-bottom-left-radius: 4px;
+}
+.message.user .message-bubble {
+  background: var(--grad-user);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.message-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  padding: 0 4px;
+}
+.message.bot .message-time { text-align: left; }
+.message.user .message-time { text-align: right; }
+
+/* Typewriter */
+.typewriter-content { display: inline; white-space: pre-wrap; }
+.typewriter-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  background: var(--cyan);
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  animation: cursor-blink 0.7s step-end infinite;
+}
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.message-bubble p { margin-bottom: 8px; }
+.message-bubble p:last-child { margin-bottom: 0; }
+
+/* ============================================
+   🧠 AI Thinking Chain Card (INLINE)
+   ============================================ */
+.thinking-chain-card {
+  align-self: flex-start;
+  max-width: 100%;
+  width: 100%;
+  background: rgba(19,27,42,0.6);
+  border: 1px solid rgba(99,102,241,0.2);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  overflow: hidden;
+  flex-shrink: 0; /* 防止 flex 容器压缩卡片高度，避免与后续消息重叠 */
+  box-shadow: 0 0 40px rgba(99,102,241,0.05);
+  animation: thinking-in 0.5s var(--ease-smooth) both;
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  background: rgba(255,255,255,0.02);
+}
+.thinking-header-icon { font-size: 18px; }
+.thinking-header-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+.thinking-header-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--cyan);
+  background: var(--cyan-glow);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+}
+.thinking-header-badge .mini-pulse {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--cyan);
+  animation: mini-pulse 1.5s ease-in-out infinite;
+}
+@keyframes mini-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+/* Steps Container */
+.thinking-steps {
+  padding: 12px 18px 8px;
+}
+
+.thinking-step {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  position: relative;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.4s var(--ease-smooth), transform 0.4s var(--ease-smooth);
+}
+.thinking-step.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Vertical connecting line */
+.thinking-step::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 32px;
+  bottom: 0;
+  width: 2px;
+  background: rgba(255,255,255,0.06);
+  transition: background 0.6s var(--ease-smooth);
+}
+.thinking-step:last-child::before { display: none; }
+.thinking-step.completed::before { background: var(--green); }
+
+/* Step Dot */
+.step-dot {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  position: relative;
+  z-index: 1;
+  transition: all 0.4s var(--ease-smooth);
+  margin-top: 2px;
+}
+.step-dot.pending {
+  background: rgba(71,85,105,0.3);
+  border: 2px solid rgba(71,85,105,0.5);
+  color: var(--text-muted);
+}
+.step-dot.running {
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+.step-dot.done {
+  border: none;
+  box-shadow: 0 0 12px rgba(16,185,129,0.3);
+}
+.step-dot.done::after {
+  content: '✓';
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Per-type running colors */
+.step-dot.running.intent-type { background: var(--cyan); box-shadow: 0 0 16px var(--cyan-glow); }
+.step-dot.running.adapter-type { background: var(--blue); box-shadow: 0 0 16px var(--blue-glow); }
+.step-dot.running.knowledge-type { background: var(--amber); box-shadow: 0 0 16px var(--amber-glow); }
+.step-dot.running.mcp-type { background: var(--purple); box-shadow: 0 0 16px var(--purple-glow); }
+.step-dot.running.rule-type { background: var(--green); box-shadow: 0 0 16px var(--green-glow); }
+
+/* Per-type done colors */
+.step-dot.done.intent-type { background: var(--cyan); }
+.step-dot.done.adapter-type { background: var(--blue); }
+.step-dot.done.knowledge-type { background: var(--amber); }
+.step-dot.done.mcp-type { background: var(--purple); }
+.step-dot.done.rule-type { background: var(--green); }
+
+@keyframes dot-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+/* Step Content */
+.step-content {
+  flex: 1;
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.step-icon { font-size: 14px; flex-shrink: 0; }
+.step-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Type badge */
+.step-type-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.step-type-badge.intent-type { background: var(--cyan-glow); color: var(--cyan); }
+.step-type-badge.adapter-type { background: var(--blue-glow); color: var(--blue); }
+.step-type-badge.knowledge-type { background: var(--amber-glow); color: var(--amber); }
+.step-type-badge.mcp-type { background: var(--purple-glow); color: var(--purple); }
+.step-type-badge.rule-type { background: var(--green-glow); color: var(--green); }
+
+.step-duration {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.step-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.5;
+  font-family: var(--font-mono);
+}
+
+.step-detail .mcp-tag {
+  display: inline-block;
+  background: rgba(168,85,247,0.15);
+  color: var(--purple);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+/* Step status indicator */
+.step-status {
+  font-size: 11px;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.step-status.pending { color: var(--text-muted); }
+.step-status.running { color: var(--cyan); font-weight: 600; }
+.step-status.done { color: var(--green); }
+
+/* Thinking Chain Footer */
+.thinking-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-top: 1px solid rgba(255,255,255,0.04);
+}
+.thinking-footer .total-time {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.thinking-footer .step-count {
+  color: var(--text-muted);
+}
+.thinking-footer .step-count span {
+  color: var(--cyan);
+  font-weight: 600;
+}
+
+/* ============================================
+   📋 Guidance Card
+   ============================================ */
+.guidance-card {
+  align-self: flex-start;
+  max-width: 100%;
+  width: 100%;
+  background: rgba(19,27,42,0.6);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  flex-shrink: 0; /* 防止 flex 容器压缩卡片高度 */
+  box-shadow: var(--shadow-card);
+  animation: guidance-slide-in 0.6s var(--ease-bounce) both;
+}
+
+.guidance-card.accent-error {
+  border-left: 4px solid var(--red);
+}
+.guidance-card.accent-warning {
+  border-left: 4px solid var(--amber);
+}
+.guidance-card.accent-normal {
+  border-left: 4px solid var(--green);
+}
+
+.guidance-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px 12px;
+}
+
+.guidance-error-icon {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.guidance-card.accent-error .guidance-error-icon {
+  background: var(--red-glow);
+}
+.guidance-card.accent-warning .guidance-error-icon {
+  background: var(--amber-glow);
+}
+.guidance-card.accent-normal .guidance-error-icon {
+  background: var(--green-glow);
+}
+
+.guidance-error-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.guidance-error-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.guidance-body {
+  padding: 4px 18px 14px;
+}
+
+.guidance-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.02);
+  border-radius: var(--radius-md);
+  margin-bottom: 14px;
+}
+
+.guidance-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.guidance-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.guidance-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.02);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255,255,255,0.04);
+}
+.guidance-step-num {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: rgba(6,182,212,0.12);
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.guidance-step-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  flex: 1;
+}
+
+.guidance-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.02);
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+}
+.guidance-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.guidance-meta-item .meta-label {
+  color: var(--text-muted);
+}
+.guidance-meta-item .meta-value {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.guidance-meta-item .risk-low { color: var(--green); }
+.guidance-meta-item .risk-medium { color: var(--amber); }
+.guidance-meta-item .risk-high { color: var(--red); }
+
+.guidance-footer {
+  padding: 12px 18px 16px;
+  border-top: 1px solid rgba(255,255,255,0.04);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.guidance-citation {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s var(--ease-smooth);
+}
+.guidance-citation:hover {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-secondary);
+  border-color: rgba(255,255,255,0.1);
+}
+
+/* ============================================
+   Suggestion Chips (above input)
+   ============================================ */
+.suggestion-chips {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0 6px;
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.suggestion-chips::-webkit-scrollbar { display: none; }
+
+.chip-btn {
+  flex-shrink: 0;
+  padding: 7px 15px;
+  border: 1px solid var(--border-card);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.25s var(--ease-smooth);
+}
+.chip-btn:hover {
+  border-color: var(--cyan);
+  background: var(--cyan-glow);
+  color: var(--text-primary);
+}
+
+/* ============================================
+   Input Area
+   ============================================ */
+.input-area {
+  padding: 6px 0 18px;
+  flex-shrink: 0;
+}
+
+.input-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  background: rgba(15,21,32,0.8);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--radius-lg);
+  padding: 8px 8px 8px 16px;
+  transition: border-color 0.25s var(--ease-smooth), box-shadow 0.25s var(--ease-smooth);
+  backdrop-filter: blur(8px);
+}
+.input-container:focus-within {
+  border-color: rgba(6,182,212,0.4);
+  box-shadow: 0 0 0 3px rgba(6,182,212,0.06);
+}
+
+.chat-textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  resize: none;
+  min-height: 22px;
+  max-height: 120px;
+  padding: 3px 0;
+}
+.chat-textarea::placeholder { color: var(--text-muted); }
+
+.send-btn {
+  width: 36px; height: 36px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--grad-send);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s var(--ease-smooth);
+  flex-shrink: 0;
+  font-size: 16px;
+}
+.send-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 20px rgba(6,182,212,0.25);
+}
+.send-btn:active { transform: scale(0.95); }
+.send-btn.sent {
+  background: var(--green);
+  pointer-events: none;
+}
+
+/* ============================================
+   Drawer (Shared)
+   ============================================ */
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s var(--ease-smooth);
+}
+.drawer-overlay.open { opacity: 1; pointer-events: auto; }
+
+.drawer {
+  position: fixed;
+  top: 0;
+  height: 100%;
+  z-index: 210;
+  background: rgba(15,23,42,0.98);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  color: var(--text-primary);
+  transition: transform 0.35s var(--ease-smooth);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 60px rgba(0,0,0,0.5);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.drawer-left {
+  left: 0;
+  width: 280px;
+  transform: translateX(-100%);
+}
+.drawer-left.open { transform: translateX(0); }
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.drawer-header h2 {
+  font-size: 15px;
+  font-weight: 600;
+  background: var(--grad-brand);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.drawer-close {
+  width: 32px; height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 18px;
+  transition: all 0.2s var(--ease-smooth);
+}
+.drawer-close:hover { background: rgba(255,255,255,0.06); color: var(--text-primary); }
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 0;
+}
+
+/* Navigation */
+.nav-list {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  gap: 2px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-secondary);
+  transition: all 0.2s var(--ease-smooth);
+  text-decoration: none;
+}
+.nav-item:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+.nav-item.active { background: var(--cyan-glow); color: var(--cyan); font-weight: 600; }
+.nav-item .nav-icon { width: 20px; text-align: center; font-size: 16px; flex-shrink: 0; }
+
+.drawer-divider { height: 1px; background: var(--border-subtle); margin: 12px 20px; }
+.drawer-section { padding: 4px 20px; }
+
+.drawer-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.role-select {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.04);
+  font-size: 13px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s var(--ease-smooth);
+}
+.role-select:focus { border-color: var(--cyan); }
+.role-select option { background: #1e293b; color: var(--text-primary); }
+
+.drawer-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.drawer-quick-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.drawer-quick-link {
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s var(--ease-smooth);
+  display: block;
+}
+.drawer-quick-link:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+
+/* ============================================
+   Welcome message emphasis
+   ============================================ */
+.welcome-msg .greeting {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+/* ============================================
+   Animations
+   ============================================ */
+@keyframes fade-slide-down {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes thinking-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes guidance-slide-in {
+  0% { opacity: 0; transform: translateY(30px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ============================================
+   Particles
+   ============================================ */
+.particle-container {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.particle {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: var(--cyan);
+  border-radius: 50%;
+  opacity: 0;
+  animation: particle-float 12s ease-in-out infinite;
+}
+
+@keyframes particle-float {
+  0% { opacity: 0; transform: translateY(100vh) translateX(0) scale(0); }
+  10% { opacity: 0.25; }
+  90% { opacity: 0.08; }
+  100% { opacity: 0; transform: translateY(-10vh) translateX(80px) scale(1); }
+}
+
+/* ============================================
+   Responsive
+   ============================================ */
+@media (max-width: 768px) {
+  .chat-area { padding: 0 14px; }
+  .message { max-width: 95%; }
+  .drawer-left { width: 280px; }
+  .quick-entry-bar { gap: 8px; }
+  .quick-chip { font-size: 12px; padding: 6px 12px; }
+  .thinking-step { padding: 8px 0; }
+  .step-name { font-size: 12px; }
+  .step-detail { font-size: 11px; }
+  .thinking-footer { flex-direction: column; gap: 4px; align-items: flex-start; }
+  .guidance-meta { flex-direction: column; gap: 8px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ======== PARTICLES ======== -->
+<div class="particle-container" id="particleContainer"></div>
+
+<!-- ======== HEADER ======== -->
+<header class="header" data-testid="app-header">
+  <div class="header-left">
+    <button class="hamburger-btn" data-testid="hamburger-button" id="hamburgerBtn" aria-label="打开导航菜单">
+      <span></span><span></span><span></span>
+    </button>
+    <span class="brand-text">🏥 医保AI导办中枢</span>
+  </div>
+  <div class="header-right">
+    <div class="connection-badge">
+      <span class="pulse-dot"></span>
+      <span>已连接</span>
+    </div>
+  </div>
+</header>
+
+<!-- ======== MAIN LAYOUT ======== -->
+<div class="main-layout">
+  <div class="chat-area">
+
+    <!-- Quick Entry Bar -->
+    <div class="quick-entry-bar" data-testid="quick-entry-bar">
+      <button class="quick-chip" data-chip="患者 P001 结算失败了，E-UPLOAD-001，帮我看看怎么回事">🔍 结算导办</button>
+      <button class="quick-chip" data-chip="这个患者出院前还有哪些质控风险">🏥 出院质控</button>
+      <button class="quick-chip" data-chip="本月哪个科室DRG亏损最多">📊 运营看板</button>
+    </div>
+
+    <!-- Chat Viewport -->
+    <div class="chat-viewport" data-testid="chat-viewport" id="chatViewport">
+
+      <!-- Welcome message -->
+      <div class="message bot welcome-msg">
+        <div class="message-avatar" aria-hidden="true">🤖</div>
+        <div>
+          <div class="message-bubble">
+            <p class="greeting">👋 您好！我是医保 AI 导办助手</p>
+            <p>我可以帮助您：</p>
+            <p>• 分析患者结算异常原因并给出处理建议<br>
+            • 筛查出院前患者的质量控制风险<br>
+            • 查询 DRG/DIP 运营数据和科室排名</p>
+            <p>请描述您需要协助的事项，或从上方快捷入口中选择。</p>
+          </div>
+          <div class="message-time" id="welcomeTime">--:--:--</div>
+        </div>
+      </div>
+
+      <!-- User message (demo) -->
+      <div class="message user" id="demoUserMsg" style="display:none;">
+        <div class="message-avatar" aria-hidden="true">👤</div>
+        <div>
+          <div class="message-bubble" id="demoUserBubble">
+            <p>患者 P001 结算失败了，E-UPLOAD-001，帮我看看怎么回事</p>
+          </div>
+          <div class="message-time" id="demoUserTime">--:--:--</div>
+        </div>
+      </div>
+
+      <!-- ======== AI Thinking Chain (INLINE) ======== -->
+      <div class="thinking-chain-card" data-testid="thinking-chain" id="thinkingChain" style="display:none;">
+        <div class="thinking-header">
+          <span class="thinking-header-icon">🧠</span>
+          <span class="thinking-header-title">AI 思维链 · 实时推理过程</span>
+          <span class="thinking-header-badge">
+            <span class="mini-pulse"></span>
+            <span id="statusLabel_orig">实时</span>
+          </span>
+        </div>
+        <div class="thinking-steps" id="thinkingSteps">
+          <!-- Step 1: Intent Detection -->
+          <div class="thinking-step" data-step-type="intent" id="step_1_orig">
+            <div class="step-dot pending intent-type" id="dot_1_orig">🎯</div>
+            <div class="step-content">
+              <div class="step-header">
+                <span class="step-icon">🎯</span>
+                <span class="step-name">意图识别</span>
+                <span class="step-type-badge intent-type">INTENT</span>
+                <span class="step-duration" id="dur_1_orig">0.0s</span>
+              </div>
+              <div class="step-detail" id="detail_1_orig">等待识别...</div>
+              <div class="step-status pending" id="status_1_orig">○ 待处理</div>
+            </div>
+          </div>
+          <!-- Step 2: Adapter Call (Insurance Interface) -->
+          <div class="thinking-step" data-step-type="adapter" id="step_2_orig">
+            <div class="step-dot pending adapter-type" id="dot_2_orig">🔌</div>
+            <div class="step-content">
+              <div class="step-header">
+                <span class="step-icon">🔌</span>
+                <span class="step-name">适配器调用</span>
+                <span class="step-type-badge adapter-type">ADAPTER</span>
+                <span class="step-duration" id="dur_2_orig">0.0s</span>
+              </div>
+              <div class="step-detail" id="detail_2_orig">等待调用...</div>
+              <div class="step-status pending" id="status_2_orig">○ 待处理</div>
+            </div>
+          </div>
+          <!-- Step 3: Knowledge Retrieval -->
+          <div class="thinking-step" data-step-type="knowledge" id="step_3_orig">
+            <div class="step-dot pending knowledge-type" id="dot_3_orig">📚</div>
+            <div class="step-content">
+              <div class="step-header">
+                <span class="step-icon">📚</span>
+                <span class="step-name">知识检索</span>
+                <span class="step-type-badge knowledge-type">KNOWLEDGE</span>
+                <span class="step-duration" id="dur_3_orig">0.0s</span>
+              </div>
+              <div class="step-detail" id="detail_3_orig">等待检索...</div>
+              <div class="step-status pending" id="status_3_orig">○ 待处理</div>
+            </div>
+          </div>
+          <!-- Step 4: MCP Tool Call (PURPLE - DISTINCTIVE) -->
+          <div class="thinking-step" data-step-type="mcp" id="step_4_orig">
+            <div class="step-dot pending mcp-type" id="dot_4_orig">🔧</div>
+            <div class="step-content">
+              <div class="step-header">
+                <span class="step-icon">🔧</span>
+                <span class="step-name">MCP 工具调用</span>
+                <span class="step-type-badge mcp-type">MCP</span>
+                <span class="step-duration" id="dur_4_orig">0.0s</span>
+              </div>
+              <div class="step-detail" id="detail_4_orig">等待调用...</div>
+              <div class="step-status pending" id="status_4_orig">○ 待处理</div>
+            </div>
+          </div>
+          <!-- Step 5: Rule Check -->
+          <div class="thinking-step" data-step-type="rule" id="step_5_orig">
+            <div class="step-dot pending rule-type" id="dot_5_orig">🛡️</div>
+            <div class="step-content">
+              <div class="step-header">
+                <span class="step-icon">🛡️</span>
+                <span class="step-name">规则校验</span>
+                <span class="step-type-badge rule-type">RULE</span>
+                <span class="step-duration" id="dur_5_orig">0.0s</span>
+              </div>
+              <div class="step-detail" id="detail_5_orig">等待校验...</div>
+              <div class="step-status pending" id="status_5_orig">○ 待处理</div>
+            </div>
+          </div>
+        </div>
+        <div class="thinking-footer">
+          <span class="total-time">⏱ 总耗时: <span id="totalTime_orig">0.0</span>s</span>
+          <span class="step-count"><span id="completedCount_orig">0</span>/5 步骤完成</span>
+        </div>
+      </div>
+
+      <!-- ======== Guidance Card ======== -->
+      <div class="guidance-card accent-error" data-testid="guidance-card" id="guidanceCard" style="display:none;">
+        <div class="guidance-header">
+          <div class="guidance-error-icon">⚠️</div>
+          <div>
+            <div class="guidance-error-title" id="guidanceTitle">结算异常: E-UPLOAD-001</div>
+            <div class="guidance-error-code" id="guidanceCode">错误码 · 费用明细上传不完整</div>
+          </div>
+        </div>
+        <div class="guidance-body">
+          <div class="guidance-summary" id="guidanceSummary">
+            费用明细未全部上传，导致医保预结算校验失败。系统检测到 1 条异常费用记录未成功上传至医保中心。
+          </div>
+
+          <div class="guidance-section-title">🎯 处理步骤</div>
+          <div class="guidance-steps" id="guidanceSteps">
+            <div class="guidance-step-item">
+              <span class="guidance-step-num">1</span>
+              <span class="guidance-step-text">核对收费系统费用上传状态，确认缺失的费用明细项</span>
+            </div>
+            <div class="guidance-step-item">
+              <span class="guidance-step-num">2</span>
+              <span class="guidance-step-text">补传失败的费用明细至医保前置服务器</span>
+            </div>
+            <div class="guidance-step-item">
+              <span class="guidance-step-num">3</span>
+              <span class="guidance-step-text">重新发起医保预结算，并保留接口返回的流水号以备核查</span>
+            </div>
+          </div>
+
+          <div class="guidance-meta">
+            <div class="guidance-meta-item">
+              <span class="meta-label">👤 责任角色:</span>
+              <span class="meta-value">收费员</span>
+            </div>
+            <div class="guidance-meta-item">
+              <span class="meta-label">⚡ 风险等级:</span>
+              <span class="meta-value risk-low">低 · 可安全处理</span>
+            </div>
+            <div class="guidance-meta-item">
+              <span class="meta-label">📋 处理方式:</span>
+              <span class="meta-value">人工操作</span>
+            </div>
+          </div>
+        </div>
+        <div class="guidance-footer">
+          <span class="guidance-citation">📎 错误码知识库: E-UPLOAD-001</span>
+          <span class="guidance-citation">📎 医保政策 MCP: 费用上传完整性为结算前置条件</span>
+          <span class="guidance-citation">📎 DRG 规则: 结算异常处理流程 V3.2</span>
+        </div>
+      </div>
+
+      <!-- Bot response (typewriter target) -->
+      <div class="message bot" id="typewriterMessage" style="display:none;">
+        <div class="message-avatar" aria-hidden="true">🤖</div>
+        <div>
+          <div class="message-bubble">
+            <div class="typewriter-content" id="typewriterContent"></div>
+          </div>
+          <div class="message-time" id="typewriterTime">--:--:--</div>
+        </div>
+      </div>
+
+    </div><!-- /chat-viewport -->
+
+    <!-- Suggestion Chips -->
+    <div class="suggestion-chips" data-testid="suggestion-chips">
+      <button class="chip-btn" data-chip="查询患者 P002 的结算状态">📋 查询患者结算状态</button>
+      <button class="chip-btn" data-chip="出院前质控有哪些需要注意">🏥 出院前质控要点</button>
+      <button class="chip-btn" data-chip="DRG QY 是什么意思">📊 DRG术语解释</button>
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-area" data-testid="input-area">
+      <div class="input-container">
+        <textarea class="chat-textarea" data-testid="chat-input" id="chatInput" placeholder="描述您的问题，例如：患者 P001 结算失败了..." rows="1"></textarea>
+        <button class="send-btn" data-testid="send-button" id="sendBtn" aria-label="发送">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+
+  </div><!-- /chat-area -->
+</div><!-- /main-layout -->
+
+<!-- ======== OVERLAY ======== -->
+<div class="drawer-overlay" id="drawerOverlay"></div>
+
+<!-- ======== LEFT DRAWER (Hamburger) ======== -->
+<aside class="drawer drawer-left" id="leftDrawer" data-testid="nav-drawer">
+  <div class="drawer-header">
+    <h2>导航菜单</h2>
+    <button class="drawer-close" id="leftDrawerClose" aria-label="关闭菜单">✕</button>
+  </div>
+  <div class="drawer-body">
+    <nav class="nav-list">
+      <a class="nav-item active" href="#">
+        <span class="nav-icon">💬</span>
+        对话导办
+      </a>
+      <a class="nav-item" href="#">
+        <span class="nav-icon">⚠️</span>
+        结算异常
+      </a>
+      <a class="nav-item" href="#">
+        <span class="nav-icon">🏥</span>
+        出院前质控
+      </a>
+      <a class="nav-item" href="#">
+        <span class="nav-icon">📊</span>
+        运营看板
+      </a>
+    </nav>
+
+    <div class="drawer-divider"></div>
+
+    <div class="drawer-section">
+      <div class="drawer-label">角色切换</div>
+      <select class="role-select" id="roleSelect">
+        <option value="doctor">🏥 临床医生</option>
+        <option value="charge" selected>💰 收费员</option>
+        <option value="nurse">👩‍⚕️ 护士</option>
+        <option value="admin">⚙️ 系统管理员</option>
+      </select>
+    </div>
+
+    <div class="drawer-divider"></div>
+
+    <div class="drawer-section">
+      <div class="drawer-label" style="margin-bottom:6px;font-size:12px;">快捷入口</div>
+      <div class="drawer-quick-links">
+        <a class="drawer-quick-link" href="#">📋 结算异常列表</a>
+        <a class="drawer-quick-link" href="#">📈 DRG 运营日报</a>
+        <a class="drawer-quick-link" href="#">🔧 系统配置</a>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-footer">医保AI导办平台 v0.1</div>
+</aside>
+
+<script>
+(function() {
+  'use strict';
+
+  // ---- DOM refs ----
+  var hamburgerBtn = document.getElementById('hamburgerBtn');
+  var leftDrawer = document.getElementById('leftDrawer');
+  var drawerOverlay = document.getElementById('drawerOverlay');
+  var leftDrawerClose = document.getElementById('leftDrawerClose');
+  var chatInput = document.getElementById('chatInput');
+  var sendBtn = document.getElementById('sendBtn');
+  var chatViewport = document.getElementById('chatViewport');
+  var chipBtns = document.querySelectorAll('[data-chip]');
+  var quickChips = document.querySelectorAll('.quick-chip');
+  var demoUserMsg = document.getElementById('demoUserMsg');
+  var thinkingChain = document.getElementById('thinkingChain');
+  var guidanceCard = document.getElementById('guidanceCard');
+  var typewriterMessage = document.getElementById('typewriterMessage');
+  var typewriterContent = document.getElementById('typewriterContent');
+
+  // Track active instances for cleanup
+  var activeChainInstance = null;
+  var activeTypewriter = null;
+
+  // ---- Helpers ----
+  function openLeftDrawer() {
+    leftDrawer.classList.add('open');
+    drawerOverlay.classList.add('open');
+    hamburgerBtn.classList.add('active');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeLeftDrawer() {
+    leftDrawer.classList.remove('open');
+    if (!document.querySelector('.drawer-right.open')) {
+      drawerOverlay.classList.remove('open');
+      document.body.style.overflow = '';
+    }
+    hamburgerBtn.classList.remove('active');
+  }
+
+  function closeAllDrawers() {
+    closeLeftDrawer();
+  }
+
+  function getCurrentTime() {
+    var d = new Date();
+    return String(d.getHours()).padStart(2,'0') + ':' +
+           String(d.getMinutes()).padStart(2,'0') + ':' +
+           String(d.getSeconds()).padStart(2,'0');
+  }
+
+  function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+
+  // ---- Reliable Scroll (wait for reflow after DOM mutation) ----
+  function scrollToBottom() {
+    // Use rAF to guarantee the browser has laid out new content
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        chatViewport.scrollTop = chatViewport.scrollHeight;
+      });
+    });
+  }
+
+  // ---- Hamburger ----
+  hamburgerBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    if (leftDrawer.classList.contains('open')) {
+      closeLeftDrawer();
+    } else {
+      openLeftDrawer();
+    }
+  });
+
+  leftDrawerClose.addEventListener('click', closeLeftDrawer);
+  drawerOverlay.addEventListener('click', closeAllDrawers);
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeAllDrawers();
+      if (document.activeElement) document.activeElement.blur();
+    }
+  });
+
+  // ---- Set welcome time ----
+  document.getElementById('welcomeTime').textContent = getCurrentTime();
+
+  // ---- Input auto-resize ----
+  chatInput.addEventListener('input', function() {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+  });
+
+  // =============================================
+  //  Typewriter Engine
+  // =============================================
+  function Typewriter(options) {
+    this.element = options.element;
+    this.text = options.text || '';
+    this.speed = options.speed || { min: 30, max: 80 };
+    this.onComplete = options.onComplete || null;
+    this.index = 0;
+    this.timeout = null;
+    this.cursorEl = null;
+    this._destroyed = false;
+    this._rootCard = options.rootCard || null;
+  }
+
+  Typewriter.prototype.start = function() {
+    this.element.innerHTML = '';
+    this.cursorEl = document.createElement('span');
+    this.cursorEl.className = 'typewriter-cursor';
+    this.element.appendChild(this.cursorEl);
+    activeTypewriter = this;
+    this._type();
+  };
+
+  Typewriter.prototype._type = function() {
+    if (this._destroyed) return;
+    if (this.index < this.text.length) {
+      var char = this.text.charAt(this.index);
+      if (char === '\n') {
+        this.element.insertBefore(document.createElement('br'), this.cursorEl);
+      } else if (char === '\u258C') {
+        // skip cursor char
+      } else {
+        this.element.insertBefore(document.createTextNode(char), this.cursorEl);
+      }
+      this.index++;
+      scrollToBottom();
+      var delay = this.speed.min + Math.random() * (this.speed.max - this.speed.min);
+      this.timeout = setTimeout(this._type.bind(this), delay);
+    } else {
+      var self = this;
+      setTimeout(function() {
+        if (!self._destroyed && self.cursorEl && self.cursorEl.parentNode) {
+          self.cursorEl.style.animation = 'none';
+          self.cursorEl.style.opacity = '0';
+        }
+        setTimeout(function() {
+          if (!self._destroyed && self.cursorEl && self.cursorEl.parentNode) {
+            self.cursorEl.remove();
+          }
+          if (self.onComplete) self.onComplete();
+        }, 300);
+      }, 400);
+    }
+  };
+
+  Typewriter.prototype.destroy = function() {
+    this._destroyed = true;
+    if (this.timeout) clearTimeout(this.timeout);
+    if (this.cursorEl && this.cursorEl.parentNode) {
+      this.cursorEl.remove();
+    }
+    if (activeTypewriter === this) activeTypewriter = null;
+    if (this._rootCard) {
+      var timeEl = this._rootCard.querySelector('.message-time');
+      if (timeEl) timeEl.textContent = getCurrentTime();
+    }
+  };
+
+  // =============================================
+  //  Thinking Chain HTML Template (factory)
+  //  —— produces a fresh card with unique IDs each call
+  // =============================================
+  function buildThinkingChainHTML(uid) {
+    return '<div class="thinking-chain-card" data-testid="thinking-chain" style="">' +
+      '<div class="thinking-header">' +
+        '<span class="thinking-header-icon">🧠</span>' +
+        '<span class="thinking-header-title">AI 思维链 · 实时推理过程</span>' +
+        '<span class="thinking-header-badge">' +
+          '<span class="mini-pulse"></span>' +
+          '<span id="statusLabel_' + uid + '">实时</span>' +
+        '</span>' +
+      '</div>' +
+      '<div class="thinking-steps">' +
+        '<div class="thinking-step" data-step-type="intent" id="step_1_' + uid + '">' +
+          '<div class="step-dot pending intent-type" id="dot_1_' + uid + '">🎯</div>' +
+          '<div class="step-content">' +
+            '<div class="step-header"><span class="step-icon">🎯</span><span class="step-name">意图识别</span><span class="step-type-badge intent-type">INTENT</span><span class="step-duration" id="dur_1_' + uid + '">0.0s</span></div>' +
+            '<div class="step-detail" id="detail_1_' + uid + '">等待识别...</div>' +
+            '<div class="step-status pending" id="status_1_' + uid + '">○ 待处理</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="thinking-step" data-step-type="adapter" id="step_2_' + uid + '">' +
+          '<div class="step-dot pending adapter-type" id="dot_2_' + uid + '">🔌</div>' +
+          '<div class="step-content">' +
+            '<div class="step-header"><span class="step-icon">🔌</span><span class="step-name">适配器调用</span><span class="step-type-badge adapter-type">ADAPTER</span><span class="step-duration" id="dur_2_' + uid + '">0.0s</span></div>' +
+            '<div class="step-detail" id="detail_2_' + uid + '">等待调用...</div>' +
+            '<div class="step-status pending" id="status_2_' + uid + '">○ 待处理</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="thinking-step" data-step-type="knowledge" id="step_3_' + uid + '">' +
+          '<div class="step-dot pending knowledge-type" id="dot_3_' + uid + '">📚</div>' +
+          '<div class="step-content">' +
+            '<div class="step-header"><span class="step-icon">📚</span><span class="step-name">知识检索</span><span class="step-type-badge knowledge-type">KNOWLEDGE</span><span class="step-duration" id="dur_3_' + uid + '">0.0s</span></div>' +
+            '<div class="step-detail" id="detail_3_' + uid + '">等待检索...</div>' +
+            '<div class="step-status pending" id="status_3_' + uid + '">○ 待处理</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="thinking-step" data-step-type="mcp" id="step_4_' + uid + '">' +
+          '<div class="step-dot pending mcp-type" id="dot_4_' + uid + '">🔧</div>' +
+          '<div class="step-content">' +
+            '<div class="step-header"><span class="step-icon">🔧</span><span class="step-name">MCP 工具调用</span><span class="step-type-badge mcp-type">MCP</span><span class="step-duration" id="dur_4_' + uid + '">0.0s</span></div>' +
+            '<div class="step-detail" id="detail_4_' + uid + '">等待调用...</div>' +
+            '<div class="step-status pending" id="status_4_' + uid + '">○ 待处理</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="thinking-step" data-step-type="rule" id="step_5_' + uid + '">' +
+          '<div class="step-dot pending rule-type" id="dot_5_' + uid + '">🛡️</div>' +
+          '<div class="step-content">' +
+            '<div class="step-header"><span class="step-icon">🛡️</span><span class="step-name">规则校验</span><span class="step-type-badge rule-type">RULE</span><span class="step-duration" id="dur_5_' + uid + '">0.0s</span></div>' +
+            '<div class="step-detail" id="detail_5_' + uid + '">等待校验...</div>' +
+            '<div class="step-status pending" id="status_5_' + uid + '">○ 待处理</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="thinking-footer">' +
+        '<span class="total-time">⏱ 总耗时: <span id="totalTime_' + uid + '">0.0</span>s</span>' +
+        '<span class="step-count"><span id="completedCount_' + uid + '">0</span>/5 步骤完成</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function buildGuidanceCardHTML(uid) {
+    return '<div class="guidance-card accent-error" data-testid="guidance-card">' +
+      '<div class="guidance-header">' +
+        '<div class="guidance-error-icon">⚠️</div>' +
+        '<div>' +
+          '<div class="guidance-error-title">结算异常: E-UPLOAD-001</div>' +
+          '<div class="guidance-error-code">错误码 · 费用明细上传不完整</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="guidance-body">' +
+        '<div class="guidance-summary">费用明细未全部上传，导致医保预结算校验失败。系统检测到 1 条异常费用记录未成功上传至医保中心。</div>' +
+        '<div class="guidance-section-title">🎯 处理步骤</div>' +
+        '<div class="guidance-steps">' +
+          '<div class="guidance-step-item"><span class="guidance-step-num">1</span><span class="guidance-step-text">核对收费系统费用上传状态，确认缺失的费用明细项</span></div>' +
+          '<div class="guidance-step-item"><span class="guidance-step-num">2</span><span class="guidance-step-text">补传失败的费用明细至医保前置服务器</span></div>' +
+          '<div class="guidance-step-item"><span class="guidance-step-num">3</span><span class="guidance-step-text">重新发起医保预结算，并保留接口返回的流水号以备核查</span></div>' +
+        '</div>' +
+        '<div class="guidance-meta">' +
+          '<div class="guidance-meta-item"><span class="meta-label">👤 责任角色:</span><span class="meta-value">收费员</span></div>' +
+          '<div class="guidance-meta-item"><span class="meta-label">⚡ 风险等级:</span><span class="meta-value risk-low">低 · 可安全处理</span></div>' +
+          '<div class="guidance-meta-item"><span class="meta-label">📋 处理方式:</span><span class="meta-value">人工操作</span></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="guidance-footer">' +
+        '<span class="guidance-citation">📎 错误码知识库: E-UPLOAD-001</span>' +
+        '<span class="guidance-citation">📎 医保政策 MCP: 费用上传完整性为结算前置条件</span>' +
+        '<span class="guidance-citation">📎 DRG 规则: 结算异常处理流程 V3.2</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function buildTypewriterMessageHTML(uid) {
+    return '<div class="message bot" style="display:;">' +
+      '<div class="message-avatar" aria-hidden="true">🤖</div>' +
+      '<div>' +
+        '<div class="message-bubble"><div class="typewriter-content" id="tw_content_' + uid + '"></div></div>' +
+        '<div class="message-time" id="tw_time_' + uid + '">--:--:--</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // =============================================
+  //  Particles
+  // =============================================
+  function createParticles() {
+    var container = document.getElementById('particleContainer');
+    if (!container) return;
+    var count = 12;
+    for (var i = 0; i < count; i++) {
+      var p = document.createElement('div');
+      p.className = 'particle';
+      p.style.left = Math.random() * 100 + '%';
+      p.style.animationDuration = (8 + Math.random() * 10) + 's';
+      p.style.animationDelay = (Math.random() * 12) + 's';
+      p.style.width = (1.5 + Math.random() * 2.5) + 'px';
+      p.style.height = p.style.width;
+      container.appendChild(p);
+    }
+  }
+
+  // =============================================
+  //  Thinking Chain Step Controller (generic)
+  //  —— accepts root element, finds children by uid-prefixed IDs
+  // =============================================
+  var STEP_CONFIGS = [
+    { id: 1, type: 'intent',    duration: 800, name: '意图识别',
+      detailRunning: '正在解析用户语义...',
+      detailDone: '识别为「医保结算异常导办」· 置信度 97%' },
+    { id: 2, type: 'adapter',   duration: 700, name: '适配器调用',
+      detailRunning: '查询患者 P001 结算交易流水...',
+      detailDone: 'query_transaction(P001, E001) → settlement: failed' },
+    { id: 3, type: 'knowledge', duration: 600, name: '知识检索',
+      detailRunning: '检索错误码知识库...',
+      detailDone: 'E-UPLOAD-001 → 「费用明细未全部上传」' },
+    { id: 4, type: 'mcp',       duration: 900, name: 'MCP 工具调用',
+      detailRunning: '调用 insurance-policy-mcp...',
+      detailDone: '<span class="mcp-tag">MCP</span> insurance-policy-mcp · query_policy_by_error_code(E-UPLOAD-001)<br>→ 医保政策: 费用上传完整性为结算前置条件' },
+    { id: 5, type: 'rule',      duration: 500, name: '规则校验',
+      detailRunning: '执行安全规则校验...',
+      detailDone: '无高风险动作 · 已通过安全校验' }
+  ];
+
+  function runThinkingChain(rootEl, uid, callback) {
+    var totalSteps = 5;
+    var completed = 0;
+    var chainStartTime = Date.now();
+    var pendingTimers = [];
+
+    function el(id) {
+      return rootEl.querySelector('#step_' + id + '_' + uid) || null;
+    }
+    function byId(suffixId) {
+      return rootEl.querySelector('#' + suffixId + '_' + uid) || null;
+    }
+
+    function cleanup() {
+      pendingTimers.forEach(function(t) { clearTimeout(t); clearInterval(t); });
+      pendingTimers = [];
+    }
+
+    function activateStep(idx) {
+      var config = STEP_CONFIGS[idx];
+      var stepEl = el(config.id);
+      if (!stepEl) return;
+
+      var dotEl     = byId('dot_' + config.id);
+      var durEl     = byId('dur_' + config.id);
+      var detailEl  = byId('detail_' + config.id);
+      var statusEl  = byId('status_' + config.id);
+
+      // Make visible
+      stepEl.classList.add('visible');
+
+      // Update dot to running
+      if (dotEl) dotEl.className = 'step-dot running ' + config.type + '-type';
+
+      // Update detail
+      if (detailEl) detailEl.innerHTML = config.detailRunning;
+      if (statusEl) { statusEl.className = 'step-status running'; statusEl.innerHTML = '⟳ 执行中'; }
+
+      scrollToBottom();
+
+      // Start timing
+      var stepStart = Date.now();
+      var durationTimer = setInterval(function() {
+        var elapsed = ((Date.now() - stepStart) / 1000).toFixed(1);
+        if (durEl) durEl.textContent = elapsed + 's';
+      }, 100);
+      pendingTimers.push(durationTimer);
+
+      // Complete after duration
+      var doneTimer = setTimeout(function() {
+        var ti = pendingTimers.indexOf(durationTimer);
+        if (ti >= 0) pendingTimers.splice(ti, 1);
+        clearInterval(durationTimer);
+
+        var totalElapsed = ((Date.now() - stepStart) / 1000).toFixed(1);
+        if (durEl) durEl.textContent = totalElapsed + 's';
+
+        if (dotEl) dotEl.className = 'step-dot done ' + config.type + '-type';
+        if (detailEl) detailEl.innerHTML = config.detailDone;
+        if (statusEl) { statusEl.className = 'step-status done'; statusEl.innerHTML = '✓ 完成'; }
+        stepEl.classList.add('completed');
+
+        completed++;
+        var completedCountEl = byId('completedCount');
+        var totalTimeEl = byId('totalTime');
+        if (completedCountEl) completedCountEl.textContent = completed;
+        var totalSec = ((Date.now() - chainStartTime) / 1000).toFixed(1);
+        if (totalTimeEl) totalTimeEl.textContent = totalSec;
+
+        if (completed >= totalSteps) {
+          var statusLabelEl = byId('statusLabel');
+          if (statusLabelEl) statusLabelEl.textContent = '完成';
+        }
+
+        scrollToBottom();
+
+        if (idx + 1 < totalSteps) {
+          var nextTimer = setTimeout(function() { activateStep(idx + 1); }, 200);
+          pendingTimers.push(nextTimer);
+        } else {
+          var finalTimer = setTimeout(function() {
+            cleanup();
+            if (callback) callback();
+          }, 400);
+          pendingTimers.push(finalTimer);
+        }
+      }, config.duration);
+      pendingTimers.push(doneTimer);
+    }
+
+    // Store for potential cleanup
+    activeChainInstance = { rootEl: rootEl, uid: uid, cleanup: cleanup };
+
+    // Show card
+    rootEl.style.display = '';
+    scrollToBottom();
+
+    // Start first step after reflow
+    setTimeout(function() { activateStep(0); }, 300);
+  }
+
+  // =============================================
+  //  Send Action
+  // =============================================
+  function doSend() {
+    var text = chatInput.value.trim();
+    if (!text) return;
+
+    // Cleanup any previous chain/typewriter
+    if (activeChainInstance) {
+      activeChainInstance.cleanup();
+      activeChainInstance = null;
+    }
+    if (activeTypewriter) {
+      activeTypewriter.destroy();
+      activeTypewriter = null;
+    }
+
+    sendBtn.classList.add('sent');
+    sendBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+
+    setTimeout(function() {
+      sendBtn.classList.remove('sent');
+      sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+    }, 1500);
+
+    // Add user message
+    var msgDiv = document.createElement('div');
+    msgDiv.className = 'message user';
+    msgDiv.innerHTML = '<div class="message-avatar" aria-hidden="true">👤</div><div><div class="message-bubble"><p>' + escapeHtml(text) + '</p></div><div class="message-time">' + getCurrentTime() + '</div></div>';
+    chatViewport.appendChild(msgDiv);
+
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+    scrollToBottom();
+
+    // Simulate response: build fresh cards with unique ID
+    var uid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+    setTimeout(function() {
+      // 1. Append fresh thinking chain
+      var tcHTML = buildThinkingChainHTML(uid);
+      var tcWrap = document.createElement('div');
+      tcWrap.innerHTML = tcHTML;
+      var tcEl = tcWrap.firstChild;
+      chatViewport.appendChild(tcEl);
+      scrollToBottom();
+
+      // 2. Run chain, then show guidance card + typewriter
+      runThinkingChain(tcEl, uid, function() {
+        // Guidance card
+        var gcWrap = document.createElement('div');
+        gcWrap.innerHTML = buildGuidanceCardHTML(uid);
+        var gcEl = gcWrap.firstChild;
+        chatViewport.appendChild(gcEl);
+        scrollToBottom();
+
+        setTimeout(function() {
+          // Typewriter message
+          var twWrap = document.createElement('div');
+          twWrap.innerHTML = buildTypewriterMessageHTML(uid);
+          var twMsg = twWrap.firstChild;
+          chatViewport.appendChild(twMsg);
+          scrollToBottom();
+
+          var twText =
+            '好的，已经完成全链路分析。以下是针对患者 P001 结算异常 E-UPLOAD-001 的完整导办报告。\n\n' +
+            '📋 问题定位：费用明细未全部上传导致医保预结算校验失败。\n\n' +
+            '系统已自动排查以下维度：\n' +
+            '• 结算流水 → 失败 (错误码: E-UPLOAD-001)\n' +
+            '• 错误码知识库 → 已命中「费用明细上传不完整」\n' +
+            '• 医保政策 MCP → 已确认费用上传完整性为结算前置条件\n' +
+            '• 安全规则 → 无高风险项，可直通导办\n\n' +
+            '请按照上方导办卡片中的步骤操作，如有疑问可继续咨询。';
+
+          new Typewriter({
+            element: document.getElementById('tw_content_' + uid),
+            text: twText,
+            speed: { min: 20, max: 50 },
+            rootCard: twMsg,
+            onComplete: function() {
+              var timeEl = document.getElementById('tw_time_' + uid);
+              if (timeEl) timeEl.textContent = getCurrentTime();
+            }
+          }).start();
+        }, 500);
+      });
+    }, 500 + Math.random() * 500);
+  }
+
+  sendBtn.addEventListener('click', doSend);
+
+  chatInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      doSend();
+    }
+  });
+
+  // ---- Quick entry chips ----
+  quickChips.forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var text = btn.getAttribute('data-chip');
+      if (text) {
+        chatInput.value = text;
+        chatInput.focus();
+        chatInput.style.height = 'auto';
+        chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+      }
+    });
+  });
+
+  // ---- Suggestion chips ----
+  chipBtns.forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var text = btn.getAttribute('data-chip');
+      if (text && chatInput) {
+        chatInput.value = text;
+        chatInput.focus();
+        chatInput.style.height = 'auto';
+        chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+      }
+    });
+  });
+
+  // =============================================
+  //  Demo Flow (uses original template IDs)
+  // =============================================
+  function startDemoFlow() {
+    // Show user message
+    demoUserMsg.style.display = '';
+    document.getElementById('demoUserTime').textContent = getCurrentTime();
+    scrollToBottom();
+
+    // After 0.8s, start thinking chain on the original template
+    setTimeout(function() {
+      // Pass the original thinkingChain element; use 'orig' as uid
+      // matching the _orig suffix IDs in the static HTML template
+      runThinkingChain(thinkingChain, 'orig', function() {
+        // After thinking chain completes, show guidance card
+        guidanceCard.style.display = '';
+        scrollToBottom();
+
+        // After a brief pause, start typewriter
+        setTimeout(function() {
+          typewriterMessage.style.display = '';
+          scrollToBottom();
+
+          var typewriterText =
+            '好的，已经完成全链路分析。以下是针对患者 P001 结算异常 E-UPLOAD-001 的完整导办报告。\n\n' +
+            '📋 问题定位：费用明细未全部上传导致医保预结算校验失败。\n\n' +
+            '系统已自动排查以下维度：\n' +
+            '• 结算流水 → 失败 (错误码: E-UPLOAD-001)\n' +
+            '• 错误码知识库 → 已命中「费用明细上传不完整」\n' +
+            '• 医保政策 MCP → 已确认费用上传完整性为结算前置条件\n' +
+            '• 安全规则 → 无高风险项，可直通导办\n\n' +
+            '请按照上方导办卡片中的步骤操作，如有疑问可继续咨询。';
+
+          var tw = new Typewriter({
+            element: typewriterContent,
+            text: typewriterText,
+            speed: { min: 20, max: 50 },
+            rootCard: typewriterMessage,
+            onComplete: function() {
+              document.getElementById('typewriterTime').textContent = getCurrentTime();
+            }
+          });
+          tw.start();
+        }, 500);
+      });
+    }, 800);
+  }
+
+  // =============================================
+  //  Init
+  // =============================================
+  createParticles();
+  scrollToBottom();
+  setTimeout(startDemoFlow, 2000);
+
+})();
+</script>
+
+</body>
+</html>

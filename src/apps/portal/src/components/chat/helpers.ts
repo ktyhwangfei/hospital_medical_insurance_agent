@@ -1,4 +1,4 @@
-import type { AgentResponse, Citation, IntentTrace } from '@/lib/types'
+import type { AgentResponse, Citation } from '@/lib/types'
 
 // ── Shared UI types ──────────────────────────────────────────
 
@@ -52,29 +52,12 @@ export interface GuideTrace {
 
 // ── Helpers ──────────────────────────────────────────────────
 
-const streamTextFields = ['token', 'delta', 'content', 'text', 'message'] as const
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export function hasFallbackFlag(value: unknown): boolean {
   return isRecord(value) && value.fallback === true
-}
-
-function streamContent(data: unknown): string {
-  if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean') {
-    return String(data)
-  }
-
-  if (isRecord(data)) {
-    for (const field of streamTextFields) {
-      const value = data[field]
-      if (typeof value === 'string') return value
-    }
-  }
-
-  return ''
 }
 
 export function extractContent(result: Record<string, unknown>): string {

@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -17,311 +16,22 @@ import {
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import {
-  Send,
   Bot,
-  User,
   Sparkles,
   AlertTriangle,
-  Loader2,
-  AlertCircle,
-  BrainCircuit,
-  GitBranch,
-  ShieldCheck,
-  FileText,
-  RotateCcw,
-  CheckCircle2,
-  Clock3,
-  Database,
   Target,
-  Workflow,
-  HelpCircle,
   Zap,
 } from 'lucide-react'
 import { confirmTask } from '@/lib/api-client'
 import { useApiContext } from '@/lib/api-context'
 import { ApiClientError } from '@/lib/types'
-import type { AgentResponse, ChatRequest, Citation, IntentTrace } from '@/lib/types'
-import IntentTraceCard from './intent-trace-card'
+import type { AgentResponse, ChatRequest, IntentTrace } from '@/lib/types'
 import { useChatStream } from '@/lib/sse-hooks'
-import type { ConnectionStatus, StreamStepDisplay } from '@/lib/sse-hooks'
 import ExecutionTimeline from './chat/execution-timeline'
-import type { ExecutionStep } from './chat/execution-timeline'
-import { Typewriter } from './chat/typewriter'
-
-interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-  fallback?: boolean
-  kind?: 'normal' | 'clarification' | 'confirmation'
-}
-
-interface PendingConfirmation {
-  taskId: string
-  description: string
-}
-
-type StageStatus = 'pending' | 'running' | 'done' | 'blocked'
-
-interface PipelineStage {
-  id: string
-  label: string
-  description: string
-  status: StageStatus
-}
-
-interface IntentCandidateLocal {
-  id: string
-  label: string
-  score: number
-  status: '已实现' | '规划中' | '需澄清'
-}
-
-interface RagEvidence {
-  title: string
-  source: string
-  summary: string
-  score: number
-}
-
-interface GuideTrace {
-  originalQuery: string
-  rewrittenQuery: string
-  intentLabel: string
-  confidence: number
-  routeStatus: string
-  candidates: IntentCandidateLocal[]
-  evidences: RagEvidence[]
-  stages: PipelineStage[]
-  citations: Citation[]
-  auditId?: string
-}
-
-const streamTextFields = ['token', 'delta', 'content', 'text', 'message'] as const
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function hasFallbackFlag(value: unknown): boolean {
-  return isRecord(value) && value.fallback === true
-}
-
-function streamContent(data: unknown): string {
-  if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean') {
-    return String(data)
-  }
-
-  if (isRecord(data)) {
-    for (const field of streamTextFields) {
-      const value = data[field]
-      if (typeof value === 'string') return value
-    }
-  }
-
-  return ''
-}
-
-function extractContent(result: Record<string, unknown>): string {
-  const content = result.content
-  if (typeof content === 'string') return content
-
-  if (result.skill_name && result.steps_completed) {
-    const outputs = result.outputs as Record<string, unknown> | undefined
-    let text = `📋 技能执行完成: ${result.skill_name}\n`
-    const steps = result.steps_completed as string[]
-    text += `✅ 已完成步骤: ${steps.join(' → ')}\n`
-    if (outputs && typeof outputs === 'object') {
-      for (const [stepId, stepResult] of Object.entries(outputs)) {
-        const sr = stepResult as Record<string, unknown>
-        const output = sr.output as Record<string, unknown> | undefined
-        if (output && typeof output === 'object' && Object.keys(output).length > 0) {
-          text += `\n📌 ${stepId}:\n`
-          for (const [key, val] of Object.entries(output)) {
-            if (val !== null && val !== undefined && val !== '') {
-              text += `  - ${key}: ${typeof val === 'string' ? val : JSON.stringify(val)}\n`
-            }
-          }
-        }
-      }
-    }
-    return text
-  }
-
-  if (result.exception_type || result.error_code) {
-    let text = '🔍 结算异常分析结果\n\n'
-    if (result.error_code) text += `❌ 错误码: ${result.error_code}\n`
-    if (result.exception_type) text += `⚠️ 异常类型: ${result.exception_type}\n`
-    if (result.error_explanation) text += `📝 说明: ${result.error_explanation}\n`
-    if (result.responsible_role) text += `👤 责任角色: ${result.responsible_role}\n`
-    const steps = result.recommended_steps as string[] | undefined
-    if (steps && steps.length > 0) {
-      text += '\n📋 处理建议:\n'
-      steps.forEach((s, i) => { text += `  ${i + 1}. ${s}\n` })
-    }
-    return text
-  }
-
-  if (result.qc_recommendation || result.risks) {
-    let text = '🏥 出院前质控分析结果\n\n'
-    const risks = result.risks as Array<Record<string, unknown>> | undefined
-    if (risks && risks.length > 0) {
-      text += '⚠️ 风险项:\n'
-      risks.forEach((r, i) => {
-        text += `  ${i + 1}. [${r.risk_level || '中'}] ${r.risk_type || ''} - ${r.recommendation || ''}\n`
-        if (r.responsible_role) text += `     责任角色: ${r.responsible_role}\n`
-      })
-    }
-    if (result.qc_recommendation) text += `\n💡 建议: ${result.qc_recommendation}\n`
-    return text
-  }
-
-  if (result.message && typeof result.message === 'string') {
-    return result.message
-  }
-
-  if (content === null || content === undefined) {
-    const meaningfulKeys = Object.keys(result).filter(
-      (k) => result[k] !== null && result[k] !== undefined && result[k] !== ''
-    )
-    if (meaningfulKeys.length === 0) return '🤔 未能获取到有效信息，请换个方式提问试试。'
-    return JSON.stringify(result, null, 2)
-  }
-
-  if (typeof content === 'object' && Object.keys(content as object).length === 0) {
-    const resultKeys = Object.keys(result).filter((k) => k !== 'content')
-    if (resultKeys.length === 0) return '🤔 未能获取到有效信息，请换个方式提问试试。'
-    return JSON.stringify(result, null, 2)
-  }
-
-  return JSON.stringify(content, null, 2)
-}
-
-function roleDisplayName(role: string): string {
-  const names: Record<string, string> = {
-    cashier: '收费员',
-    medical_office: '医保办',
-    information_department: '信息科',
-    medical_record_staff: '病案室',
-    clinician: '临床医生',
-  }
-  return names[role] ?? '院内用户'
-}
-
-function scenarioLabel(scenario?: string | null): string {
-  const labels: Record<string, string> = {
-    settlement_exception_guidance: '医保结算异常导办',
-    pre_discharge_quality_control: '出院前联合质控',
-    high_risk_action_confirmation: '高风险动作确认',
-    mcp_tool_invocation: 'MCP 工具调用',
-    denial_appeal_assistant: '拒付申诉助手',
-    policy_rule_explanation: '政策规则解释',
-    unknown: '待澄清场景',
-  }
-  return labels[scenario || 'unknown'] ?? (scenario || '待澄清场景')
-}
-
-function clampPercent(value: number): number {
-  return Math.max(0, Math.min(100, value))
-}
-
-function inferIntentLabel(message: string, response?: AgentResponse): string {
-  if (response?.scenario) return scenarioLabel(response.scenario)
-  if (/出院|质控|风险/.test(message)) return '出院前联合质控'
-  if (/拒付|申诉/.test(message)) return '拒付申诉助手'
-  if (/政策|规则|目录|报销/.test(message)) return '政策规则解释'
-  if (/画图|流程图|drawio|diagram|导出/.test(message)) return 'MCP 工具调用'
-  if (/结算|错误码|报错|收费/.test(message)) return '医保结算异常导办'
-  return '待澄清场景'
-}
-
-function mockCandidates(message: string, response?: AgentResponse): IntentCandidateLocal[] {
-  const primary = inferIntentLabel(message, response)
-  const base: IntentCandidateLocal[] = [
-    { id: 'settlement_exception_guidance', label: '医保结算异常导办', score: 86, status: '已实现' },
-    { id: 'pre_discharge_quality_control', label: '出院前联合质控', score: 73, status: '已实现' },
-    { id: 'policy_rule_explanation', label: '政策规则解释', score: 58, status: '规划中' },
-  ]
-  const selected = base.find((item) => item.label === primary)
-  if (selected) {
-    return [
-      { ...selected, score: response?.status === 'needs_clarification' ? 62 : 91 },
-      ...base.filter((item) => item.id !== selected.id).slice(0, 2),
-    ]
-  }
-  return [
-    { id: 'unknown', label: '需要补充业务场景', score: 45, status: '需澄清' },
-    ...base.slice(0, 2),
-  ]
-}
-
-function evidenceFromResponse(response?: AgentResponse): RagEvidence[] {
-  const citations = response?.citations || []
-  if (citations.length > 0) {
-    return citations.slice(0, 3).map((citation, index) => ({
-      title: citation.source_type || `依据 ${index + 1}`,
-      source: citation.source_id || 'runtime-citation',
-      summary: citation.summary || '系统返回的业务依据',
-      score: 88 - index * 6,
-    }))
-  }
-  return [
-    {
-      title: '意图知识库 · 医保场景边界',
-      source: 'intent-knowledge-base',
-      summary: '用于区分结算异常、出院质控、政策解释和拒付申诉等入口场景。',
-      score: 84,
-    },
-    {
-      title: '运行时上下文 · 当前患者',
-      source: 'runtime-context',
-      summary: '结合当前角色、患者 P001、就诊 E001 和页面入口补全导办语义。',
-      score: 79,
-    },
-  ]
-}
-
-function buildGuideTrace(message: string, role: string, response?: AgentResponse): GuideTrace {
-  const needsClarification = response?.status === 'needs_clarification'
-  const waitingConfirmation = response?.status === 'waiting_human_confirmation'
-  const blocked = (response?.blocked_actions?.length || 0) > 0
-  const intentLabel = inferIntentLabel(message, response)
-  const confidence = needsClarification ? 48 : waitingConfirmation ? 89 : response?.status === 'not_implemented' ? 64 : 92
-
-  return {
-    originalQuery: message,
-    rewrittenQuery: `以${roleDisplayName(role)}身份，围绕当前患者 P001 / E001 处理：${message}`,
-    intentLabel,
-    confidence,
-    routeStatus: needsClarification ? '需要业务澄清' : waitingConfirmation ? '等待人工确认' : response?.status === 'not_implemented' ? '能力未开通' : '已进入导办流程',
-    candidates: mockCandidates(message, response),
-    evidences: evidenceFromResponse(response),
-    stages: [
-      { id: 'rewrite', label: 'Query Rewrite', description: '结合角色、患者和页面上下文补全问题', status: 'done' },
-      { id: 'retrieval', label: 'RAG 候选召回', description: '召回意图定义、业务术语和场景边界', status: 'done' },
-      { id: 'intent', label: 'LLM 意图判别', description: '在候选场景中进行结构化判别', status: needsClarification ? 'blocked' : 'done' },
-      { id: 'guardrail', label: '安全与路由校验', description: '检查权限、高风险动作、未开通能力和缺失字段', status: blocked || waitingConfirmation ? 'blocked' : 'done' },
-    ],
-    citations: response?.citations || [],
-    auditId: typeof response?.audit?.workflow_id === 'string' ? response.audit.workflow_id : 'wf-preview-intent',
-  }
-}
-
-function stageStyle(status: StageStatus): string {
-  const styles: Record<StageStatus, string> = {
-    pending: 'border-slate-200/60 bg-slate-50/50 text-slate-500',
-    running: 'border-blue-200/80 bg-blue-50/60 text-blue-700',
-    done: 'border-emerald-200/80 bg-emerald-50/60 text-emerald-700',
-    blocked: 'border-amber-200/80 bg-amber-50/60 text-amber-700',
-  }
-  return styles[status]
-}
-
-function stageIcon(status: StageStatus) {
-  if (status === 'done') return <CheckCircle2 className="w-3.5 h-3.5" />
-  if (status === 'blocked') return <AlertTriangle className="w-3.5 h-3.5" />
-  if (status === 'running') return <Loader2 className="w-3.5 h-3.5 animate-spin" />
-  return <Clock3 className="w-3.5 h-3.5" />
-}
+import ChatMessageList from './chat/message-list'
+import ChatInput from './chat/chat-input'
+import { extractContent, hasFallbackFlag, clampPercent } from './chat/helpers'
+import type { ChatMessage, PendingConfirmation } from './chat/helpers'
 
 export default function SettlementChat({ currentRole, prefilledMessage, onPrefillConsumed }: { currentRole: string; prefilledMessage?: string; onPrefillConsumed?: () => void }) {
   const { connectionStatus, setConnected, setFallback } = useApiContext()
@@ -341,18 +51,14 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
   const [intentTrace, setIntentTrace] = useState<IntentTrace | null>(null)
   const [streamingRequest, setStreamingRequest] = useState<ChatRequest | null>(null)
   const [streamEnabled, setStreamEnabled] = useState(false)
-  const scrollBottomRef = useRef<HTMLDivElement>(null)
-  const viewportRef = useRef<HTMLDivElement>(null)
   const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prefilledRef = useRef<string | null>(null)
 
   // ── useChatStream hook ────────────────────────────────────────
   const {
     status: sseStatus,
-    cancel: cancelStream,
     streamingContent,
     steps,
-    error: streamError,
     clear: clearStream,
   } = useChatStream({
     request: streamingRequest,
@@ -426,20 +132,10 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
     },
   })
 
-  useEffect(() => {
-    if (viewportRef.current) {
-      viewportRef.current.scrollTo({
-        top: viewportRef.current.scrollHeight,
-        behavior: 'smooth',
-      })
-    }
-  }, [messages, streamingContent])
-
-    const handleSend = async (text?: string) => {
+  const handleSend = async (text?: string) => {
     const messageText = text || input
     if (!messageText.trim() || isLoading) return
 
-    console.log('[SettlementChat] Sending message:', { message: messageText, role: currentRole, patient_id: 'P001', encounter_id: 'E001' })
     setMessages((prev) => [...prev, { role: 'user', content: messageText }])
     setIntentTrace(null)
     setInput('')
@@ -568,22 +264,6 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
   const intentConfidence = intentTrace ? clampPercent(intentTrace.confidence * 100) : 0
   const intentConfidenceText = `${intentConfidence}%`
   const intentStatusStr = intentTrace ? intentStatusLabel(intentTrace.status) : '等待'
-  const sidebarCandidates = intentTrace
-    ? intentTrace.top_candidates.map((c, i) => ({
-        id: c.intent_id,
-        label: intentIdToLabel(c.intent_id),
-        score: clampPercent(c.score * 100),
-        status: i === 0 ? '首选' : '候选',
-      }))
-    : []
-  const sidebarStages: PipelineStage[] = intentTrace
-    ? [
-        { id: 'recall', label: '候选召回', description: '关键词/语义双路召回', status: intentTrace.top_candidates.length > 0 ? 'done' : 'running' },
-        { id: 'llm', label: 'LLM判别', description: '结构化意图判别', status: intentTrace.status === 'needs_clarification' ? 'blocked' : intentTrace.top_candidates.length > 0 ? 'done' : 'running' },
-        { id: 'verify', label: '结果校验', description: '字段/权限/风险校验', status: intentTrace.status === 'routed' ? 'done' : 'running' },
-        { id: 'route', label: '决策路由', description: '路由至业务场景', status: intentTrace.status === 'routed' ? 'done' : 'blocked' },
-      ]
-    : []
 
   const statusLabel =
     connectionStatus === 'connected'
@@ -688,173 +368,28 @@ export default function SettlementChat({ currentRole, prefilledMessage, onPrefil
 
         <CardContent className="flex-1 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] min-h-0 p-0">
           <div className="flex min-h-0 flex-col border-r border-white/[0.06]">
-            <ScrollArea className="flex-1 px-4 pt-3 pb-2" viewportRef={viewportRef}>
-              {/* Intent/RAG stat bar */}
-              <div className="mb-3 grid grid-cols-3 gap-3">
-                <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5 shadow-sm">
-                  <div className="flex items-center gap-2 text-[11px] text-slate-500"><Target className="w-3.5 h-3.5 text-cyan-400/70" /> 当前意图</div>
-                  <div className="mt-1 truncate text-sm font-semibold text-white/90">{intentLabelStr}</div>
-                </div>
-                <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5 shadow-sm">
-                  <div className="flex items-center gap-2 text-[11px] text-slate-500"><BrainCircuit className="w-3.5 h-3.5 text-violet-400/70" /> 置信度</div>
-                  <div className="mt-1 flex items-center gap-2">
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
-                      <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-violet-400" style={{ width: intentConfidenceText }} />
-                    </div>
-                    <span className="text-sm font-semibold text-white/90">{intentConfidenceText}</span>
-                  </div>
-                </div>
-                <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5 shadow-sm">
-                  <div className="flex items-center gap-2 text-[11px] text-slate-500"><Workflow className="w-3.5 h-3.5 text-emerald-400/70" /> 路由状态</div>
-                  <div className="mt-1 truncate text-sm font-semibold text-white/90">{intentStatusStr}</div>
-                </div>
-              </div>
+            <ChatMessageList
+              messages={messages}
+              isStreaming={isStreaming}
+              streamingContent={streamingContent}
+              isLoading={isLoading}
+              steps={steps}
+              intentTrace={intentTrace}
+              intentLabelStr={intentLabelStr}
+              intentConfidenceText={intentConfidenceText}
+              intentStatusStr={intentStatusStr}
+              connectionStatus={connectionStatus}
+              statusLabel={statusLabel}
+              onConfirm={handleTaskConfirm}
+              pendingConfirmation={pendingConfirmation}
+            />
 
-              {intentTrace && (
-                <div className="mb-3">
-                  <IntentTraceCard intentTrace={intentTrace} isStreaming={isStreaming && !streamingContent} />
-                </div>
-              )}
-
-              <div className="space-y-3">
-                {messages.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    className={`flex items-end gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'} ${
-                      idx > 1 ? 'animate-slide-in-right' : ''
-                    }`}
-                    style={{ animationDelay: '0ms' }}
-                  >
-                    {msg.role === 'assistant' ? (
-                      <Avatar className="h-9 w-9 shrink-0 bg-gradient-to-br from-cyan-400 to-blue-500 shadow-lg shadow-cyan-900/20 ring-2 ring-white/10">
-                        <AvatarFallback>
-                          <Bot className="h-5 w-5 text-white" />
-                        </AvatarFallback>
-                      </Avatar>
-                    ) : (
-                      <Avatar className="h-9 w-9 shrink-0 bg-white/[0.08] border border-white/[0.06]">
-                        <AvatarFallback>
-                          <User className="h-5 w-5 text-slate-300" />
-                        </AvatarFallback>
-                      </Avatar>
-                    )}
-                    <div
-                      className={`max-w-[80%] flex flex-col ${
-                        msg.role === 'user' ? 'items-end' : 'items-start'
-                      }`}
-                    >
-                      <div
-                        className={`px-4 py-2.5 text-sm leading-relaxed tracking-normal whitespace-pre-wrap ${
-                          msg.role === 'user'
-                            ? 'bg-gradient-to-br from-cyan-400 to-blue-500 text-white rounded-2xl rounded-tr-md shadow-lg shadow-cyan-900/25'
-                            : msg.kind === 'clarification'
-                              ? 'bg-gradient-to-br from-amber-50 to-amber-100/80 text-amber-950 border border-amber-200/60 rounded-2xl rounded-tl-md shadow-sm'
-                              : msg.kind === 'confirmation'
-                                ? 'bg-gradient-to-br from-rose-50 to-rose-100/80 text-rose-950 border border-rose-200/60 rounded-2xl rounded-tl-md shadow-sm'
-                                : msg.fallback
-                                  ? 'bg-gradient-to-br from-amber-50/95 to-amber-100/70 text-slate-800 border border-amber-200/70 rounded-2xl rounded-tl-md shadow-sm'
-                                  : 'bg-white/95 text-slate-800 border border-white/20 rounded-2xl rounded-tl-md shadow-sm'
-                        }`}
-                      >
-                        {msg.kind === 'clarification' && (
-                          <div className="mb-3 flex items-center gap-2 rounded-xl bg-white/70 px-3 py-2 text-xs font-semibold text-amber-800 border border-amber-200/40">
-                            <HelpCircle className="w-3.5 h-3.5" /> 需要补充业务场景后继续导办
-                          </div>
-                        )}
-                        {msg.kind === 'confirmation' && (
-                          <div className="mb-3 flex items-center gap-2 rounded-xl bg-white/70 px-3 py-2 text-xs font-semibold text-rose-800 border border-rose-200/40">
-                            <ShieldCheck className="w-3.5 h-3.5" /> 命中高风险动作，已转人工确认
-                          </div>
-                        )}
-                        {msg.content}
-                        {msg.fallback && (
-                          <div className="flex items-center gap-1.5 mt-3 pt-2.5 border-t border-amber-200/40">
-                            <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                            <span className="text-[11px] font-medium text-amber-600">离线演示模式</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-              {intentTrace && (() => {
-                const lastMsg = messages[messages.length - 1]
-                const showBeforeResponse = lastMsg?.role === 'user' || isStreaming
-                return showBeforeResponse ? (
-                  <IntentTraceCard intentTrace={intentTrace} isStreaming={isStreaming && !streamingContent} />
-                ) : null
-              })()}
-
-              {isStreaming && streamingContent && (
-                <div className="flex items-end gap-3 flex-row" data-testid="streaming-indicator">
-                  <Avatar className="h-9 w-9 shrink-0 bg-gradient-to-br from-cyan-400 to-blue-500 shadow-lg shadow-cyan-900/20 ring-2 ring-white/10">
-                    <AvatarFallback>
-                      <Bot className="h-5 w-5 text-white" />
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="max-w-[80%]">
-                    <div className="bg-white/95 text-slate-800 border border-white/20 rounded-2xl rounded-tl-md shadow-sm px-4 py-2.5">
-                      <Typewriter 
-                        text={streamingContent} 
-                        isTyping={isStreaming}
-                        awaitingToolCall={steps.some(s => s.status === 'running' || s.status === 'pending')}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {isLoading && !isStreaming && (
-                <div className="flex items-end gap-3 flex-row" data-testid="loading-indicator">
-                  <Avatar className="h-9 w-9 shrink-0 bg-gradient-to-br from-cyan-400 to-blue-500 shadow-lg shadow-cyan-900/20 ring-2 ring-white/10">
-                    <AvatarFallback>
-                      <Bot className="h-5 w-5 text-white" />
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="border border-white/20 rounded-2xl rounded-tl-md shadow-sm px-4 py-3 bg-white/95">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-slate-500">识别中</span>
-                      <div className="flex gap-1">
-                        <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" style={{ animationDelay: '0ms' }} />
-                        <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" style={{ animationDelay: '300ms' }} />
-                        <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" style={{ animationDelay: '600ms' }} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div ref={scrollBottomRef} />
-            </div>
-          </ScrollArea>
-
-          <div className="p-3 border-t border-white/[0.06] bg-slate-900/80 backdrop-blur-sm">
-            <div className="flex gap-2.5 items-end">
-              <Input
-                data-testid="chat-input"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-                placeholder="描述您的问题，例如：这个患者为什么结不了，或者这条规则什么意思…"
-                className="flex-1 h-auto py-2.5 px-3.5 text-sm bg-white/[0.06] text-white/90 placeholder:text-slate-500 border-white/[0.08] rounded-xl focus:bg-white/[0.1] focus:ring-2 focus:ring-blue-400/15 focus:border-blue-400/40 transition-all duration-200"
-                disabled={isLoading}
-              />
-              <Button
-                data-testid="send-button"
-                onClick={() => handleSend()}
-                disabled={isLoading || !input.trim()}
-                size="icon"
-                className="h-[42px] w-[42px] rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 text-white hover:from-blue-400 hover:to-blue-500 disabled:from-slate-700 disabled:to-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed transition-all duration-200 shadow-lg shadow-blue-900/30 active:scale-95"
-              >
-                {isLoading ? (
-                  <Loader2 data-testid="loader-icon" className="w-4.5 h-4.5 animate-spin" />
-                ) : (
-                  <Send className="w-4.5 h-4.5" />
-                )}
-              </Button>
-            </div>
-          </div>
+            <ChatInput
+              input={input}
+              setInput={setInput}
+              isLoading={isLoading}
+              onSend={() => handleSend()}
+            />
           </div>
 
           <aside className="hidden xl:flex min-h-0 flex-col bg-slate-900/60 backdrop-blur-sm">
