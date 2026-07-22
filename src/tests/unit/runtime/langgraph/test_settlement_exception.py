@@ -5,7 +5,7 @@ from langgraph.types import Command
 
 from src.adapters.base import AdapterCallContext, successful_result
 from src.adapters.insurance_interface.in_memory import InMemoryInsuranceInterfaceAdapter
-from src.knowledge_extension.knowledge.factory import create_knowledge_store
+from src.knowledge_extension.knowledge_stub import create_knowledge_store
 from src.runtime.langgraph.settlement_exception import (
     build_settlement_exception_graph,
     check_high_risk,
