@@ -240,23 +240,24 @@ class BenefitPoolingSelfPayAssembler:
         )
 
 
-    def execute_via_registry(self, business_facts: dict, question: str, **kwargs):
+    def execute_via_registry(self, business_facts: dict, question: str,
+                             target_fee_item: str | None = None, **kwargs):
         """
         Execute skill using pre-built Business Facts from Semantic Registry.
-        
-        This is the new execution path — Skill receives standardized facts
-        instead of calling MCPs directly for data retrieval.
-        
+
+        This is the new execution path (A-重) — Skill receives standardized facts
+        built by BusinessFactsBuilder (经已发布版本锁定)，instead of calling MCPs
+        directly for data retrieval.
+
         Args:
             business_facts: Standardized BusinessFactsResponse.facts dict
             question: User's natural language question
-            **kwargs: Additional context
-        
-        Returns:
-            Same response format as execute()
+            target_fee_item: 目标费用项（调用方已检测时传入，否则按 question 推断）
+            **kwargs: Additional context (policy_evidence, policy_status)
         """
         ctx = self._build_context_from_facts(business_facts)
-        return self.execute(settlement_context=ctx, target_fee_item=self._detect_target_from_question(question), **kwargs)
+        tfi = target_fee_item or self._detect_target_from_question(question)
+        return self.execute(settlement_context=ctx, target_fee_item=tfi, **kwargs)
 
     @staticmethod
     def _detect_target_from_question(question: str) -> str:
