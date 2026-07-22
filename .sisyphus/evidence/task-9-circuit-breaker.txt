@@ -1,8 +1,0 @@
-Task 9 — Circuit Breaker: ALL PASS
-- Starts closed (failure_count=0, circuit_open=False)
-- Opens after CIRCUIT_BREAKER_THRESHOLD failures (default 5)
-- Bypasses cache when open
-- Auto-recovers after CIRCUIT_BREAKER_WINDOW (default 60s) elapsed
-- Within window: stays open
-- _record_success resets to closed
-- _safe_get triggered failures increment counters

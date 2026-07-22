@@ -1,6 +1,0 @@
-Task 9 — _cached_read: ALL PASS
-- Hit: returns cached, fetch NOT called, _hits incremented
-- Miss: calls fetch, caches result, _misses incremented
-- None result: not cached (penetration protection)
-- Disabled: skips cache, calls fetch directly, no hit count
-- Exception from fetch: propagated to caller
