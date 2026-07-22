@@ -33,6 +33,10 @@ def full_chain():
         "data_quality": type("Quality", (), {"value": "complete"})(),
     })()
     builder = BusinessFactsBuilder(registry, {"InsuranceInterfacePort": adapter})
+    # 阶段3：发布测试涉及的对象，否则 get_metric_mapping 返回空
+    registry.publish_object("zydyxx")
+    registry.publish_object("zyfdxx")
+    registry.publish_object("zyjyxx")
     return registry, builder
 
 

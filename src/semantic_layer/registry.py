@@ -468,17 +468,37 @@ class SemanticRegistry:
     def get_metric_mapping(
         self, object_code: str, metric_codes: list[str]
     ) -> list[Metric]:
-        """Get Metric objects for Builder — skips nonexistent metrics silently."""
-        result: list[Metric] = []
-        for code in metric_codes:
-            full_code = (
-                code if "." in code
-                else f"{object_code}.{code}"
-            )
-            metric = self._store.get_metric(full_code)
-            if metric is not None:
-                result.append(metric)
-        return result
+        """从对象最新已发布版本快照取指标（运行时锁定）。
+
+        - 未发布对象返回空列表：skill 只能消费已发布的指标。
+        - 阶段4 将允许 skill 指定 locked_version pin 到具体版本。
+        """
+        versions = self._store.list_object_versions(object_code)
+        if not versions:
+            return []
+        latest = versions[-1]  # 已按版本号升序排序
+        wanted = {
+            code if "." in code else f"{object_code}.{code}"
+            for code in metric_codes
+        }
+        return [
+            self._version_metric_to_metric(vm, object_code)
+            for vm in latest.metrics if vm.metric_code in wanted
+        ]
+
+    @staticmethod
+    def _version_metric_to_metric(
+        vm: ObjectVersionMetric, object_code: str
+    ) -> Metric:
+        """把快照指标重建为 Metric（Builder 按 Metric 类型消费）。"""
+        return Metric(
+            metric_code=vm.metric_code, object_code=object_code, name=vm.name,
+            definition=vm.definition, metric_type=vm.metric_type,
+            semantic_type=vm.semantic_type, unit=vm.unit, required=vm.required,
+            source_object=vm.source_object, source_field=vm.source_field,
+            source_adapter_port=vm.source_adapter_port,
+            value_domain=vm.value_domain, importance=vm.importance,
+        )
 
     # Value Domain resolution
     def resolve_value(self, domain_code: str, source_value: str) -> str:

@@ -50,6 +50,7 @@ def registry():
     store.save_value_mapping(ValueDomainMapping(
         domain_code="HOSPITAL_LEVEL", source_value="3", standard_value="LEVEL_3",
     ))
+    reg.publish_object("Settlement")  # 阶段3：发布后 get_metric_mapping 才生效
     return reg
 
 
@@ -114,3 +115,31 @@ class TestGetMetricsForBuilder:
         mapping = registry.get_metric_mapping("Settlement", ["deductible"])
         assert len(mapping) == 1
         assert mapping[0].metric_code == "Settlement.deductible"
+
+    def test_unpublished_object_returns_empty(self):
+        """未发布对象的 get_metric_mapping 返回空（阶段3 锁定语义）。"""
+        store = InMemoryRegistryStore()
+        reg = SemanticRegistry(store)
+        store.save_domain(BusinessDomain(domain_code="d", name="d"))
+        store.save_object(BusinessObject(object_code="Unpublished", domain_code="d", name="未发布"))
+        store.save_metric(Metric(metric_code="Unpublished.x", object_code="Unpublished", name="x"))
+        assert reg.get_metric_mapping("Unpublished", ["x"]) == []
+
+
+# ── A-1: get_semantic_registry 全局单例 ───────────────────────
+
+
+def test_get_semantic_registry_singleton(monkeypatch):
+    """get_semantic_registry 返回同一实例，且内存后端可加载种子数据。"""
+    import src.semantic_layer.registry as reg_mod
+    monkeypatch.setenv("USE_MEMORY_STORAGE", "1")
+    reg_mod._semantic_registry_instance = None
+    try:
+        r1 = reg_mod.get_semantic_registry()
+        r2 = reg_mod.get_semantic_registry()
+        assert r1 is r2  # 单例
+        assert hasattr(r1, "list_objects")
+        # 内存后端应含种子 Settlement 域
+        assert len(r1.list_objects()) >= 1
+    finally:
+        reg_mod._semantic_registry_instance = None

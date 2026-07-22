@@ -85,6 +85,47 @@ class TestVersionQuery:
         assert bcqfje.importance == "core"
 
 
+class TestRuntimeLocking:
+    """阶段3：get_metric_mapping 锁定到已发布版本快照。"""
+
+    def test_unpublished_object_returns_empty(self, registry):
+        """未发布对象：get_metric_mapping 返回空。"""
+        assert registry.get_metric_mapping("zydyxx", ["bcqfje"]) == []
+
+    def test_published_object_returns_snapshot(self, registry):
+        """发布后：get_metric_mapping 返回快照指标。"""
+        registry.publish_object("zydyxx")
+        mapping = registry.get_metric_mapping("zydyxx", ["bcqfje", "bcybnje"])
+        assert len(mapping) == 2
+        assert {m.metric_code for m in mapping} == {"zydyxx.bcqfje", "zydyxx.bcybnje"}
+
+    def test_short_code_expansion(self, registry):
+        """短名展开为全码匹配快照，且保留 source_field。"""
+        registry.publish_object("zydyxx")
+        mapping = registry.get_metric_mapping("zydyxx", ["bcqfje"])
+        assert mapping[0].metric_code == "zydyxx.bcqfje"
+        assert mapping[0].source_field == "yb_dyxxzy.bcqfje"
+
+    def test_locking_ignores_live_metric_changes(self, registry):
+        """发布后改 live metric 不影响锁定（快照冻结）。"""
+        registry.publish_object("zydyxx")
+        m = registry.get_metric("zydyxx.bcqfje")
+        m.source_field = "被篡改的字段"
+        registry._store.save_metric(m)
+        mapping = registry.get_metric_mapping("zydyxx", ["bcqfje"])
+        assert mapping[0].source_field == "yb_dyxxzy.bcqfje"
+
+    def test_republish_switches_to_new_version(self, registry):
+        """重新发布后，锁定切到新版本快照（含 live 改动）。"""
+        registry.publish_object("zydyxx")  # v1
+        m = registry.get_metric("zydyxx.bcybnje")
+        m.name = "新医保内"
+        registry._store.save_metric(m)
+        registry.publish_object("zydyxx")  # v2 含改动
+        mapping = registry.get_metric_mapping("zydyxx", ["bcybnje"])
+        assert mapping[0].name == "新医保内"
+
+
 # ── API 层测试（publish / versions 端点）──
 
 @pytest.fixture

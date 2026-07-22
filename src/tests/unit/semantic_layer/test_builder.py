@@ -17,7 +17,11 @@ from src.semantic_layer.builder import BusinessFactsBuilder
 def registry():
     store = InMemoryRegistryStore()
     seed_semantic_layer(store)
-    return SemanticRegistry(store)
+    reg = SemanticRegistry(store)
+    # 阶段3：get_metric_mapping 只读已发布版本，故预先发布测试涉及的对象
+    reg.publish_object("zydyxx")
+    reg.publish_object("zyjyxx")
+    return reg
 
 
 @pytest.fixture
