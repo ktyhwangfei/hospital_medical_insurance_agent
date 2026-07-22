@@ -11,13 +11,13 @@ def router():
 
 def test_resolve_known_scene(router):
     model_name, fallbacks = router.resolve("settlement_exception_guidance", ModelType.LLM)
-    assert model_name == "deepseek-ai/DeepSeek-V3.2"
-    assert "deepseek-ai/DeepSeek-V4-Flash" in fallbacks
+    assert model_name == "deepseek-chat"
+    assert fallbacks == []
 
 
 def test_resolve_unknown_scene_defaults(router):
     model_name, fallbacks = router.resolve("unknown_scene", ModelType.LLM)
-    assert model_name == "deepseek-ai/DeepSeek-V3.2"
+    assert model_name == "deepseek-chat"
 
 
 def test_resolve_embedding(router):
@@ -27,9 +27,9 @@ def test_resolve_embedding(router):
 
 
 def test_get_model_params(router):
-    params = router.get_model_params("deepseek-ai/DeepSeek-V3.2")
+    params = router.get_model_params("deepseek-chat")
     assert params["temperature"] == 0.1
-    assert params["max_tokens"] == 512
+    assert params["max_tokens"] == 4096
 
 
 def test_get_model_params_defaults(router):

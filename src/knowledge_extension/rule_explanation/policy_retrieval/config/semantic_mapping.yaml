@@ -1,0 +1,39 @@
+hospital_level:
+  "1": "一级及以下"
+  "一级": "一级及以下"
+  "一级医院": "一级及以下"
+  "一级及以下": "一级及以下"
+  "基层": "一级及以下"
+  "2": "二级"
+  "二级": "二级"
+  "二级医院": "二级"
+  "3": "三级"
+  "三级": "三级"
+  "三级医院": "三级"
+
+service_type:
+  "21": "inpatient"
+  "住院": "inpatient"
+  "inpatient": "inpatient"
+  "11": "outpatient"
+  "门诊": "outpatient"
+  "outpatient": "outpatient"
+
+population:
+  "城乡老年人": "adult"
+  "劳动年龄内居民": "adult"
+  "成人居民": "adult"
+  "成人": "adult"
+  "adult": "adult"
+  "学生儿童": "student_child"
+  "学生": "student_child"
+  "儿童": "student_child"
+  "student_child": "student_child"
+
+insurance_type:
+  "城乡居民医保": "urban_rural_resident"
+  "城乡居民基本医疗保险": "urban_rural_resident"
+  "居民医保": "urban_rural_resident"
+  "urban_rural_resident": "urban_rural_resident"
+  "职工医保": "employee"
+  "employee": "employee"

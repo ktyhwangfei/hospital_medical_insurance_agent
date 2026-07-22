@@ -1,30 +1,30 @@
+# ⚠️ load_dotenv 必须在所有其他 import 之前，否则 production.py 的模块级
+# os.getenv() 会在 .env 加载前执行，导致 DATA_SOURCE_MODE 等配置始终为默认值。
+from dotenv import load_dotenv
+load_dotenv()
+
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.data_platform.storage.skill.seed import seed_default_skills
 from src.gateway.api_gateway.audit_middleware import GatewayAuditMiddleware
-from src.runtime.api.knowledge_routes import router as knowledge_router
-from src.runtime.api.mcp_routes import router as mcp_router
-from src.runtime.api.model_routes import router as model_router
-from src.runtime.api.routes import _skill_storage, router
-from src.runtime.api.skill_routes import router as skill_router
+from src.runtime.api.infra_skill_routes import router as infra_skill_router
+from src.runtime.api.policy_knowledge_routes import router as policy_knowledge_router
+from src.runtime.api.policy_qa_routes import router as policy_qa_router
+from src.runtime.api.semantic_layer_routes import router as semantic_layer_router
+from src.runtime.api.semantic_routes import router as semantic_router
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    print("[STARTUP] lifespan: 步骤 1/2 加载数据存储", flush=True)
+    print("[STARTUP] lifespan: 加载数据存储", flush=True)
     from src.data_platform.data_access.factory import create_data_store
     create_data_store()
-    print("[STARTUP] lifespan: 步骤 1/2 完成", flush=True)
-
-    print("[STARTUP] lifespan: 步骤 2/2 播种默认技能", flush=True)
-    seed_default_skills(_skill_storage)
-    print("[STARTUP] lifespan: 步骤 2/2 完成", flush=True)
+    print("[STARTUP] lifespan: 完成", flush=True)
     yield
 
 
@@ -40,8 +40,6 @@ def create_app() -> FastAPI:
         allow_origins=[
             'http://127.0.0.1:3000',
             'http://localhost:3000',
-            'http://127.0.0.1:5173',
-            'http://localhost:5173',
         ],
         allow_credentials=True,
         allow_methods=['*'],
@@ -53,10 +51,10 @@ def create_app() -> FastAPI:
         return {'status': 'ok'}
 
     print("[STARTUP] create_app: 注册路由模块", flush=True)
-    app.include_router(router, prefix='/api/v1/medical-insurance-ai-agent')
-    app.include_router(skill_router, prefix='/api/v1/medical-insurance-ai-agent')
-    app.include_router(mcp_router)
-    app.include_router(knowledge_router, prefix='/api/v1/medical-insurance-ai-agent')
-    app.include_router(model_router, prefix='/api/v1/medical-insurance-ai-agent')
+    app.include_router(infra_skill_router, prefix='/api/v1/medical-insurance-ai-agent')
+    app.include_router(policy_knowledge_router)
+    app.include_router(policy_qa_router, prefix='/api/v1/medical-insurance-ai-agent/policy-qa')
+    app.include_router(semantic_layer_router)
+    app.include_router(semantic_router)
     print("[STARTUP] create_app: 完成", flush=True)
     return app

@@ -41,9 +41,22 @@ _MCP_KEYWORDS = frozenset({
     '画图', '画一下', '画个', 'drawio', 'diagram', '图表', '架构图', '流程图', '导出', 'export', 'draw',
 })
 
+# Fee/费用相关关键词 — 路由到 Policy QA 费用分解管道
+_FEE_KEYWORDS = frozenset({
+    '统筹自付', '自付', '统筹支付', '报销比例', '起付线', '封顶线',
+    '费用分解', '费用明细', '费用构成', '为什么这么多', '怎么算的',
+    '大额', '个人应负', '医保外', '医保内', '待遇分解', '自费',
+    '报销多少', '能报多少', '报销了多少钱', '花了多少',
+})
+
 
 def _looks_like_mcp_request(message: str) -> bool:
     return any(kw in message for kw in _MCP_KEYWORDS)
+
+
+def _looks_like_fee_question(message: str) -> bool:
+    """检测是否为费用/报销相关的问题，应路由到 Policy QA 管道。"""
+    return any(kw in message for kw in _FEE_KEYWORDS)
 
 
 def _persist_workflow(workflow_id: str, scenario: str, status: str, steps: list[StepState]) -> None:
@@ -58,6 +71,36 @@ def _persist_workflow(workflow_id: str, scenario: str, status: str, steps: list[
     record_audit_event('workflow_executed', workflow_id, payload={'scenario': scenario, 'status': status})
     for step in steps:
         record_audit_event('workflow_step_completed', workflow_id, step.step_id)
+
+
+def _track_skill_metrics(skill_id: str) -> None:
+    """技能执行后，从 manifest 读取 needed_objects，为引用的指标 usage_count +1。"""
+    try:
+        import yaml
+        from pathlib import Path
+        from src.config.production import SKILLS_DIR
+        from src.runtime.api.semantic_routes import get_registry
+        manifest_path = Path(SKILLS_DIR) / skill_id / "skill_manifest.yaml"
+        if not manifest_path.exists():
+            return
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = yaml.safe_load(f)
+        reg = get_registry()
+        store = reg._store
+        count = 0
+        for obj_decl in manifest.get("needed_objects", []):
+            obj_code = obj_decl.get("object_code", "")
+            for mc in obj_decl.get("metrics", []):
+                full_code = f"{obj_code}.{mc}"
+                metric = store.get_metric(full_code)
+                if metric:
+                    metric.usage_count = (metric.usage_count or 0) + 1
+                    store.save_metric(metric)
+                    count += 1
+        if count:
+            logger.info("tracked usage for skill '%s': %d metrics", skill_id, count)
+    except Exception as e:
+        logger.debug("track_skill_metrics failed: %s", e)
 
 
 def _state_to_agent_response_from_graph(scenario: str, state: dict, workflow_id: str) -> AgentResponse:
@@ -216,6 +259,10 @@ class UnifiedScenarioExecutor:
         if context.intent in ('settlement_exception_guidance', 'pre_discharge_quality_control'):
             return self._execute_scenario_langgraph(context, on_event=on_event)
 
+        # Phase 3.5: Fee/费用相关问题 → 路由到 Policy QA 费用分解管道
+        if _looks_like_fee_question(context.message):
+            return self._execute_policy_qa(context, on_event=on_event)
+
         # Phase 4: MCP tool invocation
         if context.intent == 'mcp_tool_invocation' or _looks_like_mcp_request(context.message):
             return self._execute_mcp(context, on_event=on_event)
@@ -285,6 +332,7 @@ class UnifiedScenarioExecutor:
             on_event=on_event,
         )
         response = engine.execute_skill(skill, exec_context)
+        _track_skill_metrics(skill_id)
         response.audit["matched_skill"] = skill_id
         steps = [StepState(step_id=step_id, status="completed") for step_id in response.audit.get("steps", [])]
         _persist_workflow(exec_context.workflow_id, response.scenario, response.status, steps)
@@ -323,6 +371,7 @@ class UnifiedScenarioExecutor:
             on_event=on_event,
         )
         response = engine.execute_skill(skill, exec_context)
+        _track_skill_metrics(match.skill_id)
         response.audit["matched_skill"] = match.skill_id
         response.audit["matched_keywords"] = match.matched_keywords
         steps = [StepState(step_id=step_id, status="completed") for step_id in response.audit.get("steps", [])]
@@ -443,7 +492,7 @@ class UnifiedScenarioExecutor:
             McpCapabilityType,
             McpRiskLevel,
         )
-        from src.runtime.api.mcp_routes import _service as mcp_registry
+        from src.knowledge_extension.mcp_registry import _service as mcp_registry
         from src.runtime.orchestration.mcp_integration import McpRuntimeIntegration
 
         # 构建 MCP 集成层，透传 on_event 以实现流式事件推送
@@ -489,6 +538,147 @@ class UnifiedScenarioExecutor:
             or ["未找到满足当前场景、角色、权限和风险约束的 MCP 能力"],
             citations=[{'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in context.intent_citations],
         )
+
+    def _execute_policy_qa(
+        self,
+        context: RuntimeContext,
+        on_event: Callable[[str, dict], None] | None = None,
+    ) -> AgentResponse:
+        """将费用/报销相关问题路由到 Policy QA 费用分解管道。
+
+        使用 PolicyQAOrchestrator 的 6 步流程（意图识别→SQL查询→问题重写→
+        政策检索→费用分解→解释生成），基于真实结算数据 + 政策规则给出答案。
+
+        Args:
+            context: 运行时上下文
+            on_event: 流式事件回调，透传 Policy QA 管道的步骤事件
+        """
+        import asyncio
+
+        from src.runtime.policy_qa.models import PolicyQARequest
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+        from src.runtime.policy_qa.question_rewriter import QuestionRewriter
+        from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
+        from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
+        from src.runtime.policy_qa.sql_data_fetcher import SQLDataFetcher
+
+        settlement_id = getattr(context, 'encounter_id', None) or '1671213'
+
+        async def _run_pipeline() -> str:
+            """运行 Policy QA 管道，返回文本解释。"""
+            # 初始化组件
+            sql_fetcher = None
+            try:
+                sql_fetcher = SQLDataFetcher()
+            except Exception as e:
+                logger.warning(f"SQL fetcher init failed: {e}")
+
+            question_rewriter = QuestionRewriter()
+            fee_skill = FeeDecompositionSkill()
+
+            model_gateway = None
+            try:
+                from src.model_service.gateway import ModelGateway
+                model_gateway = ModelGateway()
+            except Exception as e:
+                logger.warning(f"Model gateway init failed: {e}")
+
+            explanation_gen = ExplanationGenerator(model_gateway=model_gateway)
+
+            orchestrator = PolicyQAOrchestrator(
+                model_gateway=model_gateway,
+                sql_fetcher=sql_fetcher,
+                question_rewriter=question_rewriter,
+                fee_skill=fee_skill,
+                explanation_generator=explanation_gen,
+            )
+
+            request = PolicyQARequest(
+                question=context.message,
+                settlement_id=settlement_id,
+            )
+
+            full_text = ""
+            decomposition_data = None
+
+            async for response in orchestrator.process(request):
+                # 发射 stream:step 事件（用于前端执行步骤展示）
+                if on_event:
+                    step_data = {
+                        "step": response.step,
+                        "status": response.status,  # ★ 传递状态给前端，否则前端永远 running
+                        "message": response.public_detail.get("summary", f"步骤: {response.step}")
+                        if response.public_detail
+                        else f"步骤: {response.step}",
+                    }
+                    on_event("stream:step", step_data)
+
+                # 累积 explanation 的流式 chunks
+                if response.step == "explain" and response.chunk:
+                    full_text += response.chunk
+                    if on_event:
+                        on_event("stream:delta", {"content": response.chunk})
+
+                # 捕获费用分解数据
+                if response.step == "decomposition" and response.status == "done":
+                    decomposition_data = response.detail
+
+            return full_text, decomposition_data
+
+        try:
+            full_text, decomposition_data = asyncio.run(_run_pipeline())
+
+            if not full_text:
+                # 如果没有生成解释，构建基本摘要
+                if decomposition_data:
+                    treatment = decomposition_data.get("treatment", {})
+                    full_text = (
+                        f"根据您的结算数据，总费用为 {treatment.get('total_fee', 0):,.2f} 元。\n\n"
+                        f"费用构成如下：\n"
+                        f"• 医保内费用: {treatment.get('in_scope', 0):,.2f} 元\n"
+                        f"• 起付线: {treatment.get('deductible', 0):,.2f} 元\n"
+                        f"• 统筹支付: {treatment.get('pooling_payment', 0):,.2f} 元\n"
+                        f"• 统筹自付: {treatment.get('pooling_self_pay', 0):,.2f} 元\n"
+                        f"• 大额支付: {treatment.get('major_payment', 0):,.2f} 元\n"
+                        f"• 大额自付: {treatment.get('major_self_pay', 0):,.2f} 元\n"
+                        f"• 个人应负: {treatment.get('personal_liability', 0):,.2f} 元\n"
+                        f"• 医保外: {treatment.get('out_of_scope', 0):,.2f} 元\n\n"
+                        f"统筹自付部分由分段计算决定，具体取决于您的医保类型、在职/退休状态及费用分段。\n"
+                        f"详细计算过程请查看费用分解卡片。"
+                    )
+                else:
+                    full_text = "费用分解计算中，请检查结算数据是否完整。"
+
+            result_data: dict = {"content": full_text}
+            if decomposition_data:
+                result_data["decomposition"] = decomposition_data
+
+            return AgentResponse(
+                scenario="policy_qa_fee_decomposition",
+                status="completed",
+                result=result_data,
+                citations=[],
+                tasks=[],
+                missing_fields=[],
+                uncertainties=[],
+                blocked_actions=[],
+                audit={"workflow_id": context.workflow_id, "steps": [
+                    "intent", "sql_query", "rewrite", "search", "decomposition", "explain"
+                ]},
+            )
+        except Exception as e:
+            logger.exception(f"Policy QA pipeline failed: {e}")
+            return AgentResponse(
+                scenario="policy_qa_fee_decomposition",
+                status="completed",
+                result={"content": f"费用分析过程中遇到问题：{str(e)}\n请您稍后重试或联系医保办确认。"},
+                citations=[],
+                tasks=[],
+                missing_fields=[],
+                uncertainties=[f"费用分析异常: {str(e)}"],
+                blocked_actions=[],
+                audit={"workflow_id": context.workflow_id},
+            )
 
 
 class _RequestShim:

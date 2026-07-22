@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "123456")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "hospital_mcp")
 
 DATABASE_URL = os.getenv(
@@ -22,13 +22,18 @@ DATABASE_URL = os.getenv(
 # Redis 配置
 REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 
-REDIS_URL = os.getenv("REDIS_URL", f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
+_redis_auth = f":{REDIS_PASSWORD}@" if REDIS_PASSWORD else ""
+REDIS_URL = os.getenv("REDIS_URL", f"redis://{_redis_auth}{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
 
 # Milvus 配置
 MILVUS_HOST = os.getenv("MILVUS_HOST", "127.0.0.1")
-MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19121"))
+MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
+MILVUS_USER = os.getenv("MILVUS_USER", "")
+MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "")
+MILVUS_TOKEN = os.getenv("MILVUS_TOKEN", "")
 
 MILVUS_URI = os.getenv("MILVUS_URI", f"tcp://{MILVUS_HOST}:{MILVUS_PORT}")
 
@@ -107,3 +112,10 @@ CACHE_ENABLED_KNOWLEDGE = os.getenv("CACHE_ENABLED_KNOWLEDGE", "1")
 CACHE_ENABLED_RULE = os.getenv("CACHE_ENABLED_RULE", "1")
 CACHE_ENABLED_ASSET = os.getenv("CACHE_ENABLED_ASSET", "1")
 CACHE_ENABLED_APPEAL = os.getenv("CACHE_ENABLED_APPEAL", "1")
+
+# ============================================================
+# 数据源模式：决定结算解释等场景使用真实数据库还是模拟数据
+# ============================================================
+# "mock" (默认) — 使用内存中的模拟数据
+# "real_db" — 查询真实 SQL Server 业务数据库
+DATA_SOURCE_MODE = os.getenv("DATA_SOURCE_MODE", "mock")

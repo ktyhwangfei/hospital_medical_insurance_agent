@@ -2,11 +2,18 @@
 医保政策问答RAG系统 - 数据模型
 
 定义PolicyQA流程中使用的数据结构
+
+v2 新增:
+- TraceEvent / TraceEventStatus: 结构化执行链路事件
+- AnswerabilityResult: 可回答性判断结果
+- PolicyQATraceResponse: 完整链路响应（替代旧 PolicyQAResponse 作为最终结果）
 """
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -27,6 +34,8 @@ class PolicyQARequest:
     question: str
     settlement_id: str
     session_id: str | None = None
+    user_id: str = ""
+    role: str = ""
 
 
 @dataclass
@@ -64,7 +73,14 @@ class RewrittenQuestion:
 
 @dataclass
 class PolicyRule:
-    """政策规则"""
+    """政策规则
+
+    新增字段（RAG 政策卡片展示用）:
+    - title: 政策标题（如 "城镇职工医保统筹基金支付比例"）
+    - clause: 条文编号（如 "第十七条"）
+    - evidence_text: 证据原文（法律条文完整文本）
+    - matched_reason: 匹配原因（如 "险种=城镇职工, 人员类别=退休"）
+    """
     rule_id: str = ""
     fact_id: str = ""
     policy_id: str = ""
@@ -85,6 +101,11 @@ class PolicyRule:
     rule_type: str = ""
     rule_value: str = ""
     score: float = 0.0
+    # ★ 新增：RAG 政策卡片展示字段
+    title: str = ""           # 政策标题
+    clause: str = ""          # 条文编号
+    evidence_text: str = ""   # 证据原文
+    matched_reason: str = ""  # 匹配原因
 
 
 @dataclass
@@ -181,12 +202,28 @@ class FeeDecompositionResult:
 
 @dataclass
 class PolicyQAResponse:
-    """政策问答响应"""
+    """政策问答响应
+
+    detail: 完整内部数据（含调试信息，用于下游计算）— 前端禁止渲染
+    public_detail: 结构化公共数据（前端渲染用，可程序化消费）
+    public_message: 人性化步骤描述字符串（优先展示）
+    patient_view: 患者视角解释文本
+    office_view: 院端视角解释文本
+    policy_cards: RAG 政策卡片列表，每项含 title/clause/evidence_text/matched_reason
+    """
     step: str = ""
     status: str = ""  # running/done/streaming/error
     detail: dict[str, Any] = field(default_factory=dict)
+    public_detail: dict[str, Any] = field(default_factory=dict)
     chunk: str = ""
     error: str = ""
+    # ★ 新增字段
+    public_message: str = ""                           # 人性化步骤摘要
+    patient_view: str = ""                             # 患者视角最终解释
+    office_view: str = ""                              # 院端视角最终解释
+    policy_cards: list[dict[str, Any]] = field(default_factory=list)  # RAG 政策卡片
+    # ★ 当前步骤的 trace_event 数据
+    trace_event: dict[str, Any] | None = None
 
 
 @dataclass
@@ -202,3 +239,109 @@ class ExplanationContext:
     policy_rules: list[PolicyRule] = field(default_factory=list)
     decomposition: FeeDecompositionResult = field(default_factory=FeeDecompositionResult)
     user_role: str = "患者"  # 患者/收费员/医生/医保管理员
+    rag_miss: bool = False   # ★ 新增: RAG 是否未命中政策规则
+
+
+# ════════════════════════════════════════════════════════════════
+# v2: 结构化执行链路事件模型 (Trace Events)
+# ════════════════════════════════════════════════════════════════
+
+class TraceEventStatus(Enum):
+    """执行链路事件状态"""
+    PENDING = "pending"    # 等待执行
+    RUNNING = "running"    # 执行中
+    SUCCESS = "success"    # 成功完成
+    WARNING = "warning"    # 完成但有警告（如输出校验存在警告、政策规则部分缺失）
+    FAILED = "failed"      # 执行失败
+    SKIPPED = "skipped"    # 已跳过
+
+
+@dataclass
+class TraceEvent:
+    """单条执行链路事件（符合前端 trace_events 契约）"""
+    step_id: str                                    # 步骤标识: intent_detection, skill_routing, settlement_query...
+    step_name: str                                  # 步骤中文名: 意图识别, Skill 匹配...
+    status: str = "pending"                         # pending / running / success / failed / skipped
+    started_at: str = ""                            # ISO 8601 开始时间
+    finished_at: str = ""                           # ISO 8601 结束时间
+    duration_ms: float = 0.0                        # 执行耗时（毫秒）
+    summary: str = ""                               # 步骤摘要（前端直接渲染）
+    details: dict[str, Any] = field(default_factory=dict)  # 结构化详情（前端折叠展示）
+    error: str | None = None                        # 错误信息（仅 failed 状态）
+
+
+@dataclass
+class AnswerabilityResult:
+    """可回答性判断结果"""
+    can_answer: bool = False                        # 是否可以回答
+    partial_answer: bool = False                    # 是否可以部分回答
+    reason: str = ""                                # 判断原因
+    missing_items: list[str] = field(default_factory=list)  # 缺失项列表
+    checks: dict[str, bool] = field(default_factory=dict)   # 各项检查明细
+
+
+class PolicyQARunStatus(Enum):
+    """问答执行整体状态"""
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+@dataclass
+class PolicyQATraceResponse:
+    """
+    完整问答执行链路响应 — 前端唯一真相来源。
+    
+    替代旧 PolicyQAResponse 的零散 step 事件，
+    提供结构化 run_id / status / can_answer / trace_events / result。
+    """
+    run_id: str = field(default_factory=lambda: f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}")
+    status: str = "running"                         # PolicyQARunStatus: running / success / failed
+    can_answer: bool = False                        # 可回答性标记
+    partial_answer: bool = False                    # 部分可回答标记
+    selected_skill_id: str = ""                     # 命中的 skill ID
+    trace_events: list[TraceEvent] = field(default_factory=list)  # 执行链路事件列表
+    result: dict[str, Any] = field(default_factory=dict)          # 最终结果
+    
+
+# ── TraceEvent 工厂方法 ─────────────────────────────────────────
+
+def make_trace_event(
+    step_id: str,
+    step_name: str,
+    status: str = "pending",
+    summary: str = "",
+    details: dict[str, Any] | None = None,
+    duration_ms: float = 0.0,
+    error: str | None = None,
+) -> TraceEvent:
+    """便捷创建 TraceEvent"""
+    now = datetime.now(timezone.utc).isoformat()
+    return TraceEvent(
+        step_id=step_id,
+        step_name=step_name,
+        status=status,
+        started_at=now if status in ("running",) else "",
+        finished_at=now if status in ("success", "failed", "skipped") else "",
+        duration_ms=duration_ms,
+        summary=summary,
+        details=details or {},
+        error=error,
+    )
+
+
+def make_answerability(
+    can_answer: bool = False,
+    partial_answer: bool = False,
+    reason: str = "",
+    missing_items: list[str] | None = None,
+    checks: dict[str, bool] | None = None,
+) -> AnswerabilityResult:
+    """便捷创建 AnswerabilityResult"""
+    return AnswerabilityResult(
+        can_answer=can_answer,
+        partial_answer=partial_answer,
+        reason=reason,
+        missing_items=missing_items or [],
+        checks=checks or {},
+    )

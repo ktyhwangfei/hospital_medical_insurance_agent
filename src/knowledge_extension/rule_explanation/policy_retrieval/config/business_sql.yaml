@@ -1,0 +1,176 @@
+queries:
+  settlement_context:
+    description: 待遇分解层上下文。基于医保内金额、人员类别、险种类型、
+      医疗类别、医院等级、起付线、年度统筹累计支付等信息，
+      将医保内金额继续拆分为起付线、基本统筹、大额医疗、
+      补充支付和个人负担。
+
+      根据登记号(djh)查询患者当前结算相关信息，
+      包括：
+
+      1. 基本身份与待遇类型
+        - 登记号(djh)
+        - 险种类型(fund_type)
+        - 人员类别(PER_TYPE)
+        - 医疗类别(yllb)
+
+      2. 年度待遇周期信息
+        - 费用年度(fynd)
+
+      3. 本次待遇计算信息
+        - 本次起付金额(bcqfje)
+        - 本次起算日期(bcqsrq)
+        - 本次医保内金额(bcybnje)
+
+      4. 本次基金支付结果
+        - 本段统筹支付金额(bdtczfje)
+        - 本段统筹自付金额(bdtczf)
+        - 本段大额支付金额(bddegwyzfje)
+        - 本段大额自付金额(bddegwyzf)
+        - 本段个人应负金额(bdgryf)
+
+      5. 本次费用汇总
+        - 本段截止日期(bdjzrq)
+        - 本段费用总额(bdfyzje)
+
+      该上下文用于：
+      - 医保待遇分段计算
+      - 基本统筹与大额切层
+      - 起付线计算
+      - 医保费用解释树构建
+      - 患者费用解释
+      - 医保结算可解释分析
+    params:
+      - djh
+    sql: |
+      SELECT 
+          a.djh, 
+          -- 转换险种名称
+          CASE a.FUND_TYPE
+              WHEN '3'  THEN '城镇职工'
+              WHEN '4'  THEN '工伤保险'
+              WHEN '31' THEN '离休统筹'
+              WHEN '32' THEN '公疗医照'
+              WHEN '33' THEN '征地超转人员'
+              WHEN '91' THEN '城镇居民基本医疗保险_学生儿童'
+              WHEN '92' THEN '城镇居民基本医疗保险_无保障老年人'
+              WHEN '93' THEN '城镇居民基本医疗保险_无业'
+              ELSE '未知险种(' + CAST(a.FUND_TYPE AS VARCHAR) + ')' -- 兜底：如果出现新代码，显示"未知(代码)"
+          END AS fund_type,
+          
+          -- 转换医疗类别名称
+          CASE a.yllb
+              WHEN '11' THEN '普通门诊'
+              WHEN '12' THEN '急诊'
+              WHEN '14' THEN '门慢'
+              WHEN '16' THEN '门特'
+              WHEN '21' THEN '普通住院'
+              WHEN '22' THEN '单病种住院'
+              WHEN '24' THEN '日间手术'
+              WHEN '31' THEN '药店购药'
+              WHEN '51' THEN '生育门诊'
+              WHEN '52' THEN '生育住院'
+              WHEN '61' THEN '家庭病床'
+              WHEN '91' THEN '其他'
+              ELSE '未知类别(' + CAST(a.yllb AS VARCHAR) + ')' 
+          END AS yllb,
+          
+           e.PER_TYPE,
+           b.fynd,
+           b.bnzqslj,
+           c.zqxh,
+           c.bcqfje,
+          c.bcqsrq,
+          d.bdjzrq,
+          d.bdfyzje,
+          c.bcybnje,
+          d.bdtczfje,
+          d.bdtczf,
+          d.bddegwyzfje,
+          d.bddegwyzf,
+          d.bdgryf
+      FROM yb_brdjxx a  
+      LEFT JOIN yb_dyxxnd b ON a.djh = b.djh 
+      LEFT JOIN yb_dyxxzy c ON a.djh = c.djh 
+      LEFT JOIN yb_zyfdxx d ON a.djh = d.djh and d.bdqsrq = c.bcqsrq
+      LEFT JOIN yb_zyjyxx e ON a.djh = e.djh
+      WHERE a.djh = ?; 
+  fee_catalog_context:
+      description: 目录规则层上下文。基于费用明细识别甲乙丙、特需、自付比例、
+        住院限价、医保支付标准等规则，解释医保外金额形成原因，
+        输出医保内金额、医保外金额及医保外归因。。
+
+        归因规则包括：
+
+        1. 特需项目(txbz=1)
+        2. 丙类全自费(sfxmdj=3)
+        3. 按自付比例(SP_SCALE)产生的医保外
+        4. 按住院限价(A_zyxj)产生的医保外
+        5. 按医保支付标准(MEDIC_L)产生的医保外
+        6. 全额纳入医保内项目
+        7. 其他无法归因项目
+
+        输出字段包括：
+        - 收费项目编码(xmdm)
+        - 收费项目名称(xmmc)
+        - 收费项目等级(sfxmdj)
+        - 特需标志(txbz)
+        - 总金额(zje)
+        - 医保内金额(ybnje)
+        - 医保外金额(ybwje)
+        - 自付比例(SP_SCALE)
+        - 医保支付标准(MEDIC_L)
+        - 住院限价(A_zyxj)
+        - 医保外原因分类(ybwje_reason)
+
+        用于构建医保费用解释树中的：
+        “医保外费用形成原因”节点。
+      params:
+        - djh
+        - fsrq
+      sql:
+        WITH mx AS (
+          SELECT
+              a.djh,
+              a.fsrq,
+              a.xmdm,
+              a.xmmc,
+              a.sfxmdj,
+              a.txbz,
+              a.zje,
+              a.ybnje,
+              a.ybwje,
+              a.sl,
+              a.SP_SCALE,
+              a.MEDIC_L,
+              b.A_zyxj,
+
+              CASE
+                  WHEN a.txbz = 1 THEN '01_特需项目'
+                  WHEN a.sfxmdj = '3' THEN '02_丙类全自费'
+                  WHEN ISNULL(a.SP_SCALE, 0) <> 0 THEN '03_按自付比例'
+                  WHEN ISNULL(a.SP_SCALE, 0) = 0
+                      AND b.A_zyxj IS NOT NULL
+                      AND b.A_zyxj > 0
+                      AND b.A_zyxj <> 999999
+                      AND a.ybwje > 0
+                  THEN '04_按住院限价A_zyxj'
+                  WHEN ISNULL(a.SP_SCALE, 0) = 0
+                      AND a.MEDIC_L IS NOT NULL
+                      AND a.MEDIC_L > 0
+                      AND a.MEDIC_L <> 999999
+                      AND a.ybwje > 0
+                  THEN '05_按MEDIC_L限价'
+                  WHEN ISNULL(a.ybwje, 0) = 0 THEN '00_全部纳入医保内'
+                  ELSE '99_其他未归因'
+              END AS ybwje_reason
+          FROM yb_zyfymx a
+          LEFT JOIN yb_ypzdml b
+              ON a.xmdm = b.ypbm
+          WHERE a.djh = ?
+            AND a.fsrq < ?
+        )
+        SELECT *
+        FROM mx
+        WHERE ybwje > 0
+        ORDER BY ybwje_reason, ybwje DESC;

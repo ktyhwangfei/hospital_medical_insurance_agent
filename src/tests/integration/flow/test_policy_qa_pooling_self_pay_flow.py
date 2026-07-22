@@ -65,6 +65,11 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
                 ).__dict__,
             ]
 
+        def search_with_context(self, question, insu_type=None, med_type=None,
+                                psn_type=None, top_k=10):
+            """与 search() 同义，适配 PolicySearchAdapter 的接口请求。"""
+            return self.search(question, top_k=top_k)
+
     orchestrator = PolicyQAOrchestrator(
         model_gateway=None,
         sql_fetcher=FakeSQLFetcher(),
@@ -83,11 +88,13 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
     intent_done = next(event for event in events if event.step == "intent" and event.status == "done")
     query_done = next(event for event in events if event.step == "query_sql_data" and event.status == "done")
     calculate_done = next(event for event in events if event.step == "calculate_explanation" and event.status == "done")
-    explanation_text = "".join(event.chunk for event in events if event.step == "generate_explanation" and event.status == "streaming")
+    explanation_done = next(event for event in events if event.step == "generate_explanation" and event.status == "done")
 
     assert intent_done.detail["target_fee_item"] == "pooling_self_pay"
     assert query_done.detail["settlement_id"] == "1671213"
     assert calculate_done.detail["segments"]["segments"]
     assert calculate_done.detail["segments"]["reconciliation"]["authoritative_amount"] == 4962.67
-    # 解释结果为流式生成（内容取决于 adapter 传入的上下文富度）
-    assert len(explanation_text) > 0
+    # 双视角解释：患者视角 + 院端视角，均应生成且内容不同
+    assert len(explanation_done.patient_view) > 0, "患者视角解释不应为空"
+    assert len(explanation_done.office_view) > 0, "院端视角解释不应为空"
+    assert explanation_done.patient_view != explanation_done.office_view, "患者视角与院端视角应有不同内容"

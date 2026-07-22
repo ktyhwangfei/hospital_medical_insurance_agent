@@ -1,5 +1,5 @@
 from src.adapters.insurance_interface.in_memory import InMemoryInsuranceInterfaceAdapter
-from src.knowledge_extension.knowledge.factory import create_knowledge_store
+from src.knowledge_extension.knowledge_stub import create_knowledge_store
 from src.knowledge_extension.mcp_registry.demo_tools import build_demo_mcp_tool_service
 from src.knowledge_extension.service import KnowledgeEnhancementRequest, build_default_knowledge_extension_service
 from src.runtime.api.schemas import AgentResponse

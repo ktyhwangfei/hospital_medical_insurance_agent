@@ -5,7 +5,7 @@ from src.adapters.base.service import adapter_citation
 from src.adapters.billing.in_memory import InMemoryBillingAdapter
 from src.adapters.his.in_memory import InMemoryHisAdapter
 from src.adapters.insurance_interface.in_memory import InMemoryInsuranceInterfaceAdapter
-from src.knowledge_extension.knowledge.factory import create_knowledge_store
+from src.knowledge_extension.knowledge_stub import create_knowledge_store
 from src.runtime.api.schemas import AgentResponse
 from src.runtime.langgraph.states import BaseAgentState
 

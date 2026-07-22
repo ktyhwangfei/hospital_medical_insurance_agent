@@ -12,7 +12,7 @@ from src.runtime.context.models import RuntimeContext
 from src.runtime.task_closure.service import create_task as _create_task
 from src.runtime.task_closure.service import save_task as _save_task
 from src.security.risk_control.service import build_human_confirmation_response
-from src.knowledge_extension.knowledge.factory import create_knowledge_store
+from src.knowledge_extension.knowledge_stub import create_knowledge_store
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,11 @@ _TOOL_CAPABILITY_REFS: dict[str, str] = {
     "query_pre_audit": "pre_audit.query_audit_result",
     "query_drg_dip": "drg_dip.query_group_result",
     "query_medical_record": "medical_record.query_homepage",
+    # 政策问答相关 tool
+    "query_sql_settlement_data": "policy_qa.query_sql_data",
+    "search_policy_rules": "policy_qa.search_rules",
+    "calculate_fee_decomposition": "policy_qa.calculate_decomposition",
+    "generate_policy_explanation": "policy_qa.generate_explanation",
 }
 
 # Known tool_id → risk_level mapping (high-risk tools)
@@ -174,6 +179,141 @@ class SkillExecutionEngine:
             return self._call_his_adapter(ref, context, step)
         elif ref.startswith("billing."):
             return self._call_billing_adapter(ref, context, step)
+        elif ref.startswith("policy_qa."):
+            return self._call_policy_qa_service(ref, context, step, accumulated)
+        return {"status": "completed", "tool_id": step.tool_id, "output": {}}
+
+    def _call_policy_qa_service(self, ref: str, context: RuntimeContext, step: SkillStep, accumulated: dict) -> dict:
+        """处理政策问答相关的 tool"""
+        settlement_id = context.encounter_id or context.patient_id or ""
+        
+        if ref == "policy_qa.query_sql_data":
+            # 查询 SQL 数据
+            from src.runtime.policy_qa.sql_data_fetcher import SQLDataFetcher
+            try:
+                fetcher = SQLDataFetcher()
+                import asyncio
+                sql_result = asyncio.get_event_loop().run_until_complete(fetcher.fetch_all_tables(settlement_id))
+                return {
+                    "status": "completed",
+                    "tool_id": step.tool_id,
+                    "output": {
+                        "treatment": sql_result.yb_zyfdxx,
+                        "fee_details_count": len(sql_result.yb_zyfymx),
+                        "annual": sql_result.yb_dyxxnd,
+                        "admission": sql_result.yb_dyxxzy,
+                        "patient": sql_result.yb_brdjxx,
+                    },
+                }
+            except Exception as e:
+                logger.error(f"Policy QA SQL query error: {e}")
+                return {"status": "failed", "tool_id": step.tool_id, "output": {"error": str(e)}}
+        
+        elif ref == "policy_qa.search_rules":
+            # 搜索政策规则
+            from src.runtime.policy_qa.policy_rules_search import PolicyRulesSearchEngine
+            from src.config.production import MILVUS_HOST, MILVUS_PORT
+            try:
+                engine = PolicyRulesSearchEngine(host=MILVUS_HOST, port=MILVUS_PORT, embedding_kind="hash")
+                # 从 accumulated 中获取 SQL 结果用于过滤（已标准化）
+                sql_output = accumulated.get("query_sql_data", {}).get("output", {})
+                patient = sql_output.get("patient", {})
+                insu_type = patient.get("fund_type", "")  # 已标准化
+                psn_type = patient.get("PER_TYPE", "")  # 已标准化
+                
+                print(f"[SKILL] 搜索政策规则 (已标准化): insu_type={insu_type}, psn_type={psn_type}", flush=True)
+                
+                # 构建过滤表达式（使用标准化后的值）
+                expr_parts = []
+                if insu_type:
+                    expr_parts.append(f'insu_type == "{insu_type}"')
+                if psn_type:
+                    expr_parts.append(f'(psn_type == "{psn_type}" or psn_type == "全部")')
+                expr = " and ".join(expr_parts) if expr_parts else None
+                
+                print(f"[SKILL] 过滤表达式: {expr}", flush=True)
+                
+                # 获取问题
+                question = context.question or "费用分解"
+                results = engine.search(question, top_k=10, expr=expr)
+                
+                print(f"[SKILL] 搜索结果: {len(results)} 条", flush=True)
+                
+                return {
+                    "status": "completed",
+                    "tool_id": step.tool_id,
+                    "output": {
+                        "rules_count": len(results),
+                        "rules": results[:5],  # 只返回前5条
+                    },
+                }
+            except Exception as e:
+                logger.error(f"Policy QA search error: {e}")
+                return {"status": "failed", "tool_id": step.tool_id, "output": {"error": str(e)}}
+        
+        elif ref == "policy_qa.calculate_decomposition":
+            # 计算费用分解
+            from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
+            from src.runtime.policy_qa.models import SQLQueryResult, PolicyRule
+            try:
+                # 从 accumulated 中获取 SQL 结果和政策规则
+                sql_output = accumulated.get("query_sql_data", {}).get("output", {})
+                rules_output = accumulated.get("search_rules", {}).get("output", {})
+                
+                # 构建 SQLQueryResult
+                sql_result = SQLQueryResult()
+                sql_result.yb_zyfdxx = sql_output.get("treatment", {})
+                sql_result.yb_dyxxzy = sql_output.get("admission", {})
+                sql_result.yb_brdjxx = sql_output.get("patient", {})
+                
+                # 构建 PolicyRule 列表
+                policy_rules = []
+                for rule_data in rules_output.get("rules", []):
+                    policy_rules.append(PolicyRule(
+                        rule_id=rule_data.get("rule_id", ""),
+                        rule_type=rule_data.get("rule_type", ""),
+                        payment_ratio=rule_data.get("payment_ratio", ""),
+                        source_text=rule_data.get("source_text", ""),
+                        insu_type=rule_data.get("insu_type", ""),
+                        psn_type=rule_data.get("psn_type", ""),
+                    ))
+                
+                # 执行分解
+                skill = FeeDecompositionSkill()
+                result = skill.decompose(sql_result, policy_rules)
+                
+                return {
+                    "status": "completed",
+                    "tool_id": step.tool_id,
+                    "output": {
+                        "total_fee": result.treatment.total_fee.value,
+                        "in_scope": result.treatment.in_scope.value,
+                        "deductible": result.treatment.deductible.value,
+                        "pooling_payment": result.treatment.pooling_payment.value,
+                        "pooling_self_pay": result.treatment.pooling_self_pay.value,
+                        "major_payment": result.treatment.major_payment.value,
+                        "major_self_pay": result.treatment.major_self_pay.value,
+                        "personal_liability": result.treatment.personal_liability.value,
+                        "out_of_scope": result.treatment.out_of_scope.value,
+                        "evidence_count": len(result.evidence),
+                    },
+                }
+            except Exception as e:
+                logger.error(f"Policy QA decomposition error: {e}")
+                return {"status": "failed", "tool_id": step.tool_id, "output": {"error": str(e)}}
+        
+        elif ref == "policy_qa.generate_explanation":
+            # 生成解释（简化版，实际应该调用 LLM）
+            decomposition_output = accumulated.get("calculate_decomposition", {}).get("output", {})
+            return {
+                "status": "completed",
+                "tool_id": step.tool_id,
+                "output": {
+                    "explanation": f"费用分解完成：总费用 {decomposition_output.get('total_fee', 0):,.2f} 元",
+                    "decomposition": decomposition_output,
+                },
+            }
+        
         return {"status": "completed", "tool_id": step.tool_id, "output": {}}
 
     def _call_insurance_adapter(self, ref: str, context: RuntimeContext, step: SkillStep) -> dict:
