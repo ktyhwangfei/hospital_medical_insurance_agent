@@ -38,6 +38,8 @@ class BusinessObject(BaseModel):
     relations: list[ObjectRelation] = Field(default_factory=list, description="对象关系")
     version: str = Field(default="1.0", max_length=32)
     status: str = Field(default="draft", max_length=32, description="draft / published")
+    current_version: Optional[str] = Field(
+        None, description="当前已发布版本号（str）；None=从未发布")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -65,6 +67,50 @@ class Metric(BaseModel):
     status: str = Field(default="draft", max_length=32)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ObjectVersionMetric(BaseModel):
+    """版本快照中的指标 — Metric 的不可变字段子集。
+
+    发布时从 Metric 冻结，之后不再随 live Metric 变化。
+    """
+    metric_code: str
+    name: str
+    definition: Optional[str] = None
+    metric_type: str = "Atomic"
+    semantic_type: Optional[str] = None
+    unit: Optional[str] = None
+    required: bool = False
+    source_object: Optional[str] = None
+    source_field: Optional[str] = None
+    source_adapter_port: Optional[str] = None
+    value_domain: Optional[str] = None
+    importance: str = "optional"
+
+    @classmethod
+    def from_metric(cls, m: "Metric") -> "ObjectVersionMetric":
+        return cls(
+            metric_code=m.metric_code, name=m.name, definition=m.definition,
+            metric_type=m.metric_type, semantic_type=m.semantic_type, unit=m.unit,
+            required=m.required, source_object=m.source_object,
+            source_field=m.source_field, source_adapter_port=m.source_adapter_port,
+            value_domain=m.value_domain, importance=m.importance,
+        )
+
+
+class BusinessObjectVersion(BaseModel):
+    """对象发布版本快照 — 不可变。
+
+    冻结某次发布时的对象元数据 + 该对象全部指标。Skill 运行时锁定读取此快照（阶段3）。
+    """
+    version_id: str = Field(..., description="版本快照唯一ID（UUID）")
+    object_code: str
+    version: str = Field(..., description="发布版本号，递增整数 str（'1','2'...）")
+    snapshot: dict[str, Any] = Field(..., description="对象元数据快照")
+    metrics: list[ObjectVersionMetric] = Field(default_factory=list)
+    published_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    published_by: Optional[str] = None
+    changelog: Optional[str] = None
 
 
 class ValueDomain(BaseModel):
