@@ -5,7 +5,6 @@ from mcp import ClientSession
 
 from src.knowledge_extension.mcp_registry.models import (
     McpServer,
-    McpServerStatus,
     McpTransportType,
 )
 
@@ -17,7 +16,6 @@ def streamable_http_server() -> McpServer:
         name="Test HTTP Server",
         endpoint="http://localhost:9999/mcp",
         transport=McpTransportType.STREAMABLE_HTTP,
-        status=McpServerStatus.ENABLED,
     )
 
 
@@ -28,8 +26,6 @@ def stdio_server() -> McpServer:
         name="Test Stdio Server",
         endpoint="stdio://local",
         transport=McpTransportType.STDIO,
-        status=McpServerStatus.ENABLED,
-        connection_config={"command": "python", "args": ["-m", "test_server"]},
     )
 
 
