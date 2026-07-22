@@ -826,12 +826,24 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
         policy_status = "no_policy_matched"
 
     # ★ Skill 驱动：通过 assembler 生成所有解释输出（统一处理所有费用类型）
-    skill_result = assembler.execute(
-        settlement_context=context,
-        policy_evidence=policy_evidence,
-        policy_status=policy_status,
-        target_fee_item=target_fee_item,
-    )
+    # A-重：语义层数据路径（开关 USE_SEMANTIC_LAYER_PATH=1 启用）
+    # 把 SettlementContext 经 BusinessFactsBuilder（已发布版本锁定）转为 facts，
+    # 再走 execute_via_registry；默认关闭，沿用 SQL 直连路径。
+    import os
+    if os.environ.get("USE_SEMANTIC_LAYER_PATH") == "1":
+        from src.semantic_layer.settlement_bridge import build_settlement_facts
+        facts = build_settlement_facts(context)
+        skill_result = assembler.execute_via_registry(
+            facts, question, target_fee_item=target_fee_item,
+            policy_evidence=policy_evidence, policy_status=policy_status,
+        )
+    else:
+        skill_result = assembler.execute(
+            settlement_context=context,
+            policy_evidence=policy_evidence,
+            policy_status=policy_status,
+            target_fee_item=target_fee_item,
+        )
 
     # ★ 从 Manifest 读取前端展示配置，构建 profile / output_groups / display_config
     manifest = get_skill_manifest(skill_id) or {}
