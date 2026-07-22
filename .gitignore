@@ -110,11 +110,15 @@ Thumbs.db
 desktop.ini
 
 # ============================================================
-# Agent 工作笔记（临时草稿/笔记；plans 与 boulder.json 已入库则不受影响）
+# Agent / AI 工具本地目录（各工具本地配置与 skill 缓存，不入库）
 # ============================================================
-.sisyphus/notepads/
-.sisyphus/drafts/
+.agents/
+.claude/
 .opencode/
+.qoder/
+.roo/
+.sisyphus/
+.workbuddy/
 
 # ============================================================
 # 工作树 / 规划工具
