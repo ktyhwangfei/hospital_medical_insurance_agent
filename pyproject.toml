@@ -31,3 +31,6 @@ dev = [
     "sqlalchemy>=2.0.50",
     "uvicorn>=0.48.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
