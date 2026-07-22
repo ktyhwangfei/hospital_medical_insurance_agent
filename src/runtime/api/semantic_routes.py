@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -24,6 +25,7 @@ class ObjectSummary(BaseModel):
     name: str
     domain_code: str
     status: str
+    current_version: str | None = None
     definition: str | None = None
     identifier: str | None = None
     version: str | None = None
@@ -40,6 +42,7 @@ class ObjectDetail(BaseModel):
     relations: list[dict]
     version: str
     status: str
+    current_version: str | None = None
 
 
 class MetricSummary(BaseModel):
@@ -367,7 +370,7 @@ def delete_object(object_code: str):
 def list_objects(domain_code: str | None = Query(None)):
     reg = get_registry()
     objects = reg.list_objects(domain_code)
-    return [ObjectSummary(object_code=o.object_code, name=o.name, domain_code=o.domain_code, status=o.status, definition=o.definition, identifier=o.identifier, version=o.version) for o in objects]
+    return [ObjectSummary(object_code=o.object_code, name=o.name, domain_code=o.domain_code, status=o.status, current_version=o.current_version, definition=o.definition, identifier=o.identifier, version=o.version) for o in objects]
 
 
 @router.get("/objects/{object_code}", response_model=ObjectDetail)
@@ -381,7 +384,82 @@ def get_object(object_code: str):
         domain_code=obj.domain_code, identifier=obj.identifier,
         source_object=obj.source_object, source_adapter_port=obj.source_adapter_port,
         relations=[r.model_dump() for r in obj.relations], version=obj.version, status=obj.status,
+        current_version=obj.current_version,
     )
+
+
+# ── 对象版本快照（阶段2）──
+class VersionMetricInfo(BaseModel):
+    metric_code: str
+    name: str
+    semantic_type: str | None = None
+    required: bool
+    source_field: str | None = None
+    importance: str
+
+
+class ObjectVersionInfo(BaseModel):
+    version_id: str
+    object_code: str
+    version: str
+    published_at: datetime
+    published_by: str | None = None
+    changelog: str | None = None
+    metric_count: int
+
+
+class ObjectVersionDetail(ObjectVersionInfo):
+    snapshot: dict
+    metrics: list[VersionMetricInfo]
+
+
+class PublishObjectRequest(BaseModel):
+    changelog: str | None = None
+    published_by: str | None = None
+
+
+@router.post("/objects/{object_code}/publish", response_model=ObjectVersionInfo)
+def publish_object(object_code: str, req: PublishObjectRequest):
+    """发布对象：冻结当前草稿指标为不可变版本快照。"""
+    reg = get_registry()
+    try:
+        version = reg.publish_object(
+            object_code, changelog=req.changelog, published_by=req.published_by)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return ObjectVersionInfo(
+        version_id=version.version_id, object_code=version.object_code,
+        version=version.version, published_at=version.published_at,
+        published_by=version.published_by, changelog=version.changelog,
+        metric_count=len(version.metrics))
+
+
+@router.get("/objects/{object_code}/versions", response_model=list[ObjectVersionInfo])
+def list_object_versions(object_code: str):
+    """列出对象所有发布版本。"""
+    reg = get_registry()
+    versions = reg.list_object_versions(object_code)
+    return [ObjectVersionInfo(
+        version_id=v.version_id, object_code=v.object_code, version=v.version,
+        published_at=v.published_at, published_by=v.published_by,
+        changelog=v.changelog, metric_count=len(v.metrics)) for v in versions]
+
+
+@router.get("/objects/{object_code}/versions/{version}", response_model=ObjectVersionDetail)
+def get_object_version(object_code: str, version: str):
+    """查看指定版本快照详情（含冻结的指标列表）。"""
+    reg = get_registry()
+    v = reg.get_object_version(object_code, version)
+    if v is None:
+        raise HTTPException(status_code=404, detail=f"版本 {object_code}@{version} 不存在")
+    return ObjectVersionDetail(
+        version_id=v.version_id, object_code=v.object_code, version=v.version,
+        published_at=v.published_at, published_by=v.published_by, changelog=v.changelog,
+        metric_count=len(v.metrics), snapshot=v.snapshot,
+        metrics=[VersionMetricInfo(
+            metric_code=m.metric_code, name=m.name, semantic_type=m.semantic_type,
+            required=m.required, source_field=m.source_field, importance=m.importance
+        ) for m in v.metrics])
 
 
 @router.get("/metrics", response_model=list[MetricSummary])

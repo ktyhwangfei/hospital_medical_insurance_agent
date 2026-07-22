@@ -18,6 +18,8 @@ from src.semantic_layer.models import (
     BusinessObject,
     ObjectRelation,
     Metric,
+    ObjectVersionMetric,
+    BusinessObjectVersion,
     ValueDomain,
     ValueDomainMapping,
 )
@@ -97,6 +99,22 @@ CREATE TABLE IF NOT EXISTS semantic_value_mappings (
     UNIQUE(domain_code, source_value)
 );
 CREATE INDEX IF NOT EXISTS idx_semantic_value_mappings_domain ON semantic_value_mappings(domain_code);
+
+-- 对象发布版本快照（阶段2）
+ALTER TABLE semantic_objects ADD COLUMN IF NOT EXISTS current_version VARCHAR(32);
+
+CREATE TABLE IF NOT EXISTS semantic_object_versions (
+    version_id VARCHAR(64) PRIMARY KEY,
+    object_code VARCHAR(64) NOT NULL REFERENCES semantic_objects(object_code) ON DELETE CASCADE,
+    version VARCHAR(32) NOT NULL,
+    snapshot JSONB NOT NULL,
+    metrics JSONB NOT NULL DEFAULT '[]'::jsonb,
+    published_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_by VARCHAR(128),
+    changelog TEXT,
+    UNIQUE(object_code, version)
+);
+CREATE INDEX IF NOT EXISTS idx_semantic_object_versions_object ON semantic_object_versions(object_code);
 """
 
 
@@ -131,6 +149,7 @@ def _row_to_object(row: dict) -> BusinessObject:
         relations=relations,
         version=row.get("version", "1.0"),
         status=row.get("status", "draft"),
+        current_version=row.get("current_version"),
         created_at=row.get("created_at", _now()),
         updated_at=row.get("updated_at", _now()),
     )
@@ -189,6 +208,26 @@ def _row_to_value_mapping(row: dict) -> ValueDomainMapping:
     )
 
 
+def _row_to_object_version(row: dict) -> BusinessObjectVersion:
+    snapshot = row.get("snapshot")
+    if isinstance(snapshot, str):
+        snapshot = json.loads(snapshot)
+    metrics_raw = row.get("metrics")
+    if isinstance(metrics_raw, str):
+        metrics_raw = json.loads(metrics_raw)
+    metrics = [ObjectVersionMetric(**m) for m in (metrics_raw or [])]
+    return BusinessObjectVersion(
+        version_id=row["version_id"],
+        object_code=row["object_code"],
+        version=row["version"],
+        snapshot=snapshot or {},
+        metrics=metrics,
+        published_at=row.get("published_at", _now()),
+        published_by=row.get("published_by"),
+        changelog=row.get("changelog"),
+    )
+
+
 class PostgresRegistryStore:
     """PostgreSQL-backed implementation of RegistryStore Protocol."""
 
@@ -201,8 +240,19 @@ class PostgresRegistryStore:
             self._client = PostgreSQLClient(self._database_url)
             self._ensure_schema()
             self._seed_if_empty()
+            self._ensure_yb_dictionaries()
             logger.info("PostgresRegistryStore: PostgreSQL 初始化完成")
         return self._client
+
+    def _ensure_yb_dictionaries(self) -> None:
+        """幂等 ensure：医保字典码→标签映射（FUND_TYPE/YLLB/PERSON_TYPE）。
+
+        upsert 语义，每次进程启动安全重复执行。"""
+        try:
+            from src.semantic_layer.seed import ensure_yb_dictionary_mappings
+            ensure_yb_dictionary_mappings(self)
+        except Exception:
+            logger.warning("ensure_yb_dictionary_mappings 失败，跳过", exc_info=True)
 
     def _ensure_schema(self) -> None:
         try:
@@ -299,8 +349,8 @@ class PostgresRegistryStore:
             """INSERT INTO semantic_objects
                (object_code, domain_code, name, definition, identifier,
                 source_object, source_adapter_port, relations, version, status,
-                created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                current_version, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (object_code) DO UPDATE SET
                    domain_code = EXCLUDED.domain_code,
                    name = EXCLUDED.name,
@@ -311,10 +361,11 @@ class PostgresRegistryStore:
                    relations = EXCLUDED.relations,
                    version = EXCLUDED.version,
                    status = EXCLUDED.status,
+                   current_version = EXCLUDED.current_version,
                    updated_at = EXCLUDED.updated_at""",
             (obj.object_code, obj.domain_code, obj.name, obj.definition,
              obj.identifier, obj.source_object, obj.source_adapter_port,
-             relations_json, obj.version, obj.status,
+             relations_json, obj.version, obj.status, obj.current_version,
              obj.created_at, obj.updated_at),
         )
 
@@ -467,6 +518,20 @@ class PostgresRegistryStore:
         )
         return [_row_to_value_mapping(r) for r in rows]
 
+    def list_value_domains_with_counts(self) -> list[tuple[ValueDomain, int]]:
+        """一条 JOIN 查询返回所有值域及其映射数，替代逐条查询的 N+1。"""
+        client = self._get_client()
+        rows = client.execute(
+            """SELECT vd.*, COALESCE(vm.cnt, 0) AS mapping_count
+               FROM semantic_value_domains vd
+               LEFT JOIN (
+                   SELECT domain_code, COUNT(*) AS cnt
+                   FROM semantic_value_mappings GROUP BY domain_code
+               ) vm ON vm.domain_code = vd.domain_code
+               ORDER BY vd.domain_code"""
+        )
+        return [(_row_to_value_domain(r), int(r.get("mapping_count", 0))) for r in rows]
+
     def delete_value_mapping(self, domain_code: str, source_value: str) -> None:
         client = self._get_client()
         client.execute(
@@ -480,3 +545,40 @@ class PostgresRegistryStore:
             "DELETE FROM semantic_value_domains WHERE domain_code = %s",
             (domain_code,),
         )
+
+    # ═══════════════════════════════════════════════════════════════
+    # Object Version Snapshot
+    # ═══════════════════════════════════════════════════════════════
+
+    def save_object_version(self, version: BusinessObjectVersion) -> None:
+        client = self._get_client()
+        snapshot_json = json.dumps(version.snapshot, ensure_ascii=False)
+        metrics_json = json.dumps(
+            [m.model_dump() for m in version.metrics], ensure_ascii=False)
+        client.execute(
+            """INSERT INTO semantic_object_versions
+               (version_id, object_code, version, snapshot, metrics,
+                published_at, published_by, changelog)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+            (version.version_id, version.object_code, version.version,
+             snapshot_json, metrics_json, version.published_at,
+             version.published_by, version.changelog),
+        )
+
+    def get_object_version(self, object_code: str, version: str) -> Optional[BusinessObjectVersion]:
+        client = self._get_client()
+        rows = client.execute(
+            """SELECT * FROM semantic_object_versions
+               WHERE object_code = %s AND version = %s""",
+            (object_code, version),
+        )
+        return _row_to_object_version(rows[0]) if rows else None
+
+    def list_object_versions(self, object_code: str) -> list[BusinessObjectVersion]:
+        client = self._get_client()
+        rows = client.execute(
+            """SELECT * FROM semantic_object_versions
+               WHERE object_code = %s ORDER BY (version::int)""",
+            (object_code,),
+        )
+        return [_row_to_object_version(r) for r in rows]
