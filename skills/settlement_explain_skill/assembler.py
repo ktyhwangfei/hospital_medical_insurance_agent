@@ -106,7 +106,46 @@ class BenefitPoolingSelfPayAssembler:
         # 仅向后兼容模式，不传入 IndicatorContext
         result = strategy.execute(settlement_context, evidence, policy_status)
 
-        return self._build_result(result, evidence, policy_status, target_fee_item)
+        skill_result = self._build_result(result, evidence, policy_status, target_fee_item)
+        # A-轻：版本准入守卫 —— 校验 skill 声明的指标均来自已发布版本（阶段3锁定对skill生效）
+        dep_warnings = self._verify_skill_dependencies()
+        if dep_warnings:
+            skill_result.warnings.extend(dep_warnings)
+        return skill_result
+
+    def _verify_skill_dependencies(self) -> list[str]:
+        """校验 skill 声明的指标都在已发布版本中。
+
+        数据源（settlement_data_provider 的 SQL）不经语义层，此处为版本准入守卫：
+        遍历 _FACT_FIELD_MAP 声明的语义层编码，确认对应对象已发布且指标在最新已发布
+        版本快照中。缺失/未发布时返回警告列表（空=全部通过）。
+
+        默认仅警告不拒绝；后续可经 STRICT_SKILL_LOCKING 升级为硬拒绝。
+        """
+        from collections import defaultdict
+        try:
+            from src.semantic_layer.registry import get_semantic_registry
+            reg = get_semantic_registry()
+        except Exception:
+            return []  # 语义层不可用时跳过校验，不阻断 skill
+
+        by_obj: dict[str, list[str]] = defaultdict(list)
+        for code in self._FACT_FIELD_MAP:
+            obj, _, _ = code.partition(".")
+            by_obj[obj].append(code)
+        warnings: list[str] = []
+        for obj_code, codes in by_obj.items():
+            versions = reg.list_object_versions(obj_code)
+            if not versions:
+                warnings.append(f"[版本守卫] 对象 {obj_code} 未发布，指标未经版本控制")
+                continue
+            latest = versions[-1]
+            published = {m.metric_code for m in latest.metrics}
+            for code in codes:
+                if code not in published:
+                    warnings.append(
+                        f"[版本守卫] {code} 不在已发布版本 {obj_code}@{latest.version}")
+        return warnings
 
     def execute_with_context(
         self,
