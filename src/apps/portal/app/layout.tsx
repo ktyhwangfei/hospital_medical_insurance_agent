@@ -5,10 +5,11 @@ import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Noto_Sans_SC } from 'next/font/google'
 import {
-  MessageSquare,
-  ClipboardList,
-  SearchCheck,
-  LayoutDashboard,
+  FileText,
+  Wand2,
+  BookOpen,
+  History,
+  Brain,
   ChevronLeft,
   ChevronRight,
   Activity,
@@ -51,10 +52,11 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: '对话导办', href: '/', icon: <MessageSquare className="size-4" /> },
-  { label: '结算异常', href: '/settlement', icon: <ClipboardList className="size-4" /> },
-  { label: '出院前质控', href: '/qc', icon: <SearchCheck className="size-4" /> },
-  { label: '运营看板', href: '/dashboard', icon: <LayoutDashboard className="size-4" /> },
+  { label: '政策问答', href: '/policy-qa', icon: <FileText className="size-4" /> },
+  { label: '技能', href: '/skills', icon: <Wand2 className="size-4" /> },
+  { label: '语义层', href: '/semantic-layer', icon: <Brain className="size-4" /> },
+  { label: '政策知识', href: '/policy-knowledge', icon: <BookOpen className="size-4" /> },
+  { label: '问答历史', href: '/qa-history', icon: <History className="size-4" /> },
 ]
 
 // --- Connection Status Badge ---

@@ -5,9 +5,9 @@ import { cn } from '@/lib/utils'
 
 
 /* ============================================================
-   ThinkingChain — AI 思维链 · 实时推理过程
+   ThinkingChain — 问答执行链路
 
-   匹配 v3 原型设计：
+    匹配 v3 原型设计：
    - 只显示已接收的步骤，未到达的步骤不显示
    - 步骤逐个出现，带动画过渡
    - 垂直时间线 + 连接竖线
@@ -509,7 +509,7 @@ function ThinkingStepItem({
 // ── 主组件 ─────────────────────────────────────────────────────
 
 /**
- * ThinkingChain — AI 思维链 · 实时推理过程
+ * ThinkingChain — 问答执行链路
  *
  * 以垂直时间线形式展示执行步骤，
  * 只显示已接收的步骤，未到达的步骤不显示。
@@ -579,7 +579,7 @@ export default function ThinkingChain({ steps, isLoading }: ThinkingChainProps) 
       <div className="flex items-center gap-2.5 px-4 py-3 border-b border-white/[0.04] bg-white/[0.02]">
         <span className="text-lg">🧠</span>
         <span className="text-sm font-semibold text-slate-100 flex-1">
-          AI 思维链 · 实时推理过程
+          问答执行链路
         </span>
         <div
           className={cn(

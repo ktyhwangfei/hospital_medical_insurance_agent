@@ -1,10 +1,2 @@
-'use client'
-
-import SettlementExceptionList from '@/components/settlement-exception-list'
-import { useRoleContext } from '../layout'
-
-export default function SettlementPage() {
-  const { currentRole } = useRoleContext()
-
-  return <SettlementExceptionList currentRole={currentRole} />
-}
+﻿import { redirect } from 'next/navigation'
+export default function Page() { redirect('/policy-qa') }

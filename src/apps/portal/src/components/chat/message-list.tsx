@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useMemo } from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
@@ -14,7 +14,8 @@ import {
   Workflow,
 } from 'lucide-react'
 import IntentTraceCard from '../intent-trace-card'
-import { Typewriter } from './typewriter'
+import StreamingBubble from './streaming-bubble'
+import ThinkingChain from '../thinking-chain'
 import type { IntentTrace } from '@/lib/types'
 import type { StreamStepDisplay } from '@/lib/sse-hooks'
 import type { ChatMessage, PendingConfirmation } from './helpers'
@@ -53,6 +54,20 @@ export default function ChatMessageList({
   const viewportRef = useRef<HTMLDivElement>(null)
   const scrollBottomRef = useRef<HTMLDivElement>(null)
 
+  // Convert StreamStepDisplay[] to ThinkingStep[] for ThinkingChain
+  const thinkingSteps = useMemo(() => {
+    return steps.map((step, index) => ({
+      step: step.step,
+      status: step.status === 'completed' ? 'done' as const :
+              step.status === 'pending' ? 'pending' as const :
+              step.status === 'running' ? 'running' as const :
+              step.status as 'running' | 'done' | 'error' | 'streaming' | 'pending',
+      startTime: step.timestamp ? new Date(step.timestamp).getTime() : Date.now() - (index * 500),
+      publicMessage: step.message || undefined,  // ★ SSE 的 public_message → 思维链详情
+      detail: step.message ? { message: step.message } : undefined,
+    }))
+  }, [steps])
+
   // Auto-scroll to bottom when messages or streaming content changes
   useEffect(() => {
     if (viewportRef.current) {
@@ -61,7 +76,7 @@ export default function ChatMessageList({
         behavior: 'smooth',
       })
     }
-  }, [messages, streamingContent])
+  }, [messages, streamingContent, steps])
 
   return (
     <ScrollArea className="flex-1 px-4 pt-3 pb-2" viewportRef={viewportRef}>
@@ -162,26 +177,18 @@ export default function ChatMessageList({
           ) : null
         })()}
 
-        {isStreaming && streamingContent && (
-          <div className="flex items-end gap-3 flex-row" data-testid="streaming-indicator">
-            <Avatar className="h-9 w-9 shrink-0 bg-gradient-to-br from-cyan-400 to-blue-500 shadow-lg shadow-cyan-900/20 ring-2 ring-white/10">
-              <AvatarFallback>
-                <Bot className="h-5 w-5 text-white" />
-              </AvatarFallback>
-            </Avatar>
-            <div className="max-w-[80%]">
-              <div className="bg-white/95 text-slate-800 border border-white/20 rounded-2xl rounded-tl-md shadow-sm px-4 py-2.5">
-                <Typewriter
-                  text={streamingContent}
-                  isTyping={isStreaming}
-                  awaitingToolCall={steps.some(s => s.status === 'running' || s.status === 'pending')}
-                />
-              </div>
-            </div>
+        {/* Thinking Chain - inline between user message and response */}
+        {thinkingSteps.length > 0 && (
+          <div className="my-3">
+            <ThinkingChain steps={thinkingSteps} isLoading={isLoading} />
           </div>
         )}
 
-        {isLoading && !isStreaming && (
+        {isStreaming && streamingContent && (
+          <StreamingBubble isStreaming={isStreaming} streamingContent={streamingContent} steps={steps} />
+        )}
+
+        {isLoading && !isStreaming && thinkingSteps.length === 0 && (
           <div className="flex items-end gap-3 flex-row" data-testid="loading-indicator">
             <Avatar className="h-9 w-9 shrink-0 bg-gradient-to-br from-cyan-400 to-blue-500 shadow-lg shadow-cyan-900/20 ring-2 ring-white/10">
               <AvatarFallback>

@@ -1,26 +1,22 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Badge } from '@/components/ui/badge'
-import { Loader2, Send, Bot, User } from 'lucide-react'
+import { Loader2, Search, ChevronDown, ChevronRight, Info } from 'lucide-react'
 import ThinkingChain from '@/components/thinking-chain'
 import type { ThinkingStep } from '@/components/thinking-chain'
+import ExecutionTracePanel from '@/components/execution-trace-panel'
+import type { TraceEventItem } from '@/components/execution-trace-panel'
+import ResultStatusBar from '@/components/result-status-bar'
 import PolicyAnswerCard from '@/components/policy-answer-card'
+import SettlementExplanationPage from '@/components/settlement-explanation-page'
+import type { SettlementExplanationData } from '@/lib/settlement-explanation-types'
 import type {
   TreatmentItem,
   FeeBreakdownItem,
   EvidenceItem,
 } from '@/components/policy-answer-card'
-
-interface PolicyQAMessage {
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: Date
-}
 
 interface PolicyQAStep {
   step: string
@@ -46,259 +42,124 @@ interface PolicyCardItem {
   score?: number
 }
 
-interface PolicyQAChatProps {
-  settlementId?: string
-}
-
-// ── SSE 不可达时的步骤模拟降级方案 ──────────────────────────────
-const SIMULATED_STEPS = [
-  { step: '识别问题意图', message: '正在识别问题意图' },
-  { step: '查询结算数据', message: '正在查询结算数据' },
-  { step: '重写用户问题', message: '正在结合患者信息精准化问题' },
-  { step: '检索政策依据', message: '正在检索相关政策依据' },
-  { step: '生成费用解释', message: '正在生成费用解释' },
-  { step: '输出双视角答案', message: '正在生成患者视角和院端视角答案' },
+// ── 数据防泄漏：过滤 SSE 数据中禁止展示的字段 ──────────────────
+const FORBIDDEN_KEY_PATTERNS = [
+  'reasoning', 'reasoning_content', 'chain_of_thought', 'thought',
+  'scratchpad', 'debug', 'internal', 'prompt', 'messages',
+  'raw_response', 'tool_calls', 'agent_trace',
 ]
 
-async function simulateSteps(
-  setSteps: React.Dispatch<React.SetStateAction<PolicyQAStep[]>>,
-  setTypewriterText: React.Dispatch<React.SetStateAction<string>>,
-  setIsTyping: React.Dispatch<React.SetStateAction<boolean>>,
-  _setTreatments: React.Dispatch<React.SetStateAction<TreatmentItem[]>>,
-  _setFeeBreakdown: React.Dispatch<React.SetStateAction<FeeBreakdownItem[]>>,
-  _setEvidence: React.Dispatch<React.SetStateAction<EvidenceItem[]>>,
-  setPatientView: React.Dispatch<React.SetStateAction<string>>,
-  setOfficeView: React.Dispatch<React.SetStateAction<string>>,
-  setRagMiss: React.Dispatch<React.SetStateAction<boolean>>,
-) {
-  for (let i = 0; i < SIMULATED_STEPS.length; i++) {
-    const s = SIMULATED_STEPS[i]
-    // running
-    setSteps(prev => [...prev, { step: s.step, status: 'running', publicMessage: s.message, startTime: Date.now() }])
-    await new Promise(r => setTimeout(r, 400 + Math.random() * 300))
-    // done（最后一步保持 running 直至结束）
-    const isLast = i === SIMULATED_STEPS.length - 1
-    setSteps(prev => prev.map(st => st.step === s.step ? { ...st, status: isLast ? 'running' : 'done' as const, endTime: Date.now() } : st))
+function stripForbiddenFields(obj: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(obj)) {
+    const keyLower = key.toLowerCase()
+    const isForbidden = FORBIDDEN_KEY_PATTERNS.some(p => keyLower.includes(p))
+    if (isForbidden) continue
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = stripForbiddenFields(value as Record<string, unknown>)
+    } else if (Array.isArray(value)) {
+      result[key] = (value as unknown[]).map(item =>
+        item !== null && typeof item === 'object' && !Array.isArray(item)
+          ? stripForbiddenFields(item as Record<string, unknown>)
+          : item
+      )
+    } else {
+      result[key] = value
+    }
   }
-
-  setTypewriterText('当前后端服务不可达，已切换到离线演示模式。\n请启动后端服务后重新尝试。')
-  setIsTyping(false)
-  setPatientView('后端服务不可达，无法生成患者视角解释。')
-  setOfficeView('后端服务不可达，无法生成院端视角解释。')
-  setRagMiss(true)
+  return result
 }
 
-export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
-  const [messages, setMessages] = useState<PolicyQAMessage[]>([
-    {
-      role: 'assistant',
-      content: '您好！我是医保政策问答助手 🤖\n\n我可以帮您：\n• 解释费用构成\n• 了解待遇计算\n• 查询起付线规则\n• 了解报销比例\n• 分析封顶线\n\n请输入您的问题，或提供结算ID开始查询。',
-      timestamp: new Date(),
-    },
-  ])
-  const [input, setInput] = useState('')
+const EXAMPLE_QUESTIONS = [
+  '统筹自付为什么是 4962.67 元？',
+  '这次住院的报销比例是多少？',
+  '起付线是怎么计算的？',
+  '某项费用为什么不报销/不在医保内？',
+] as const
+
+export default function PolicyQAChat() {
+  const [settlementId, setSettlementId] = useState('1671213')
+  const [question, setQuestion] = useState('')
+  const [activeQuestion, setActiveQuestion] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [steps, setSteps] = useState<PolicyQAStep[]>([])
-  const [typewriterText, setTypewriterText] = useState('')
-  const [isTyping, setIsTyping] = useState(false)
   const [treatments, setTreatments] = useState<TreatmentItem[]>([])
   const [feeBreakdown, setFeeBreakdown] = useState<FeeBreakdownItem[]>([])
   const [evidence, setEvidence] = useState<EvidenceItem[]>([])
   const [policyCards, setPolicyCards] = useState<PolicyCardItem[]>([])
+  const [settlementEvidence, setSettlementEvidence] = useState<EvidenceItem[]>([])
+  const [calculationSteps, setCalculationSteps] = useState<EvidenceItem[]>([])
   const [patientView, setPatientView] = useState('')
   const [officeView, setOfficeView] = useState('')
   const [ragMiss, setRagMiss] = useState(false)
   const [selectedView, setSelectedView] = useState<'patient' | 'office'>('patient')
-  const [showPolicyPanel, setShowPolicyPanel] = useState(false) // 政策知识侧面板
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const typewriterRef = useRef<NodeJS.Timeout | null>(null)
+  // 真实数据库查询状态
+  const [realSettlementData, setRealSettlementData] = useState<SettlementExplanationData | null>(null)
+  const [dataSourceError, setDataSourceError] = useState('')
+  const [dataSourceLoading, setDataSourceLoading] = useState(false)
+  // 处理进度折叠状态
+  const [progressCollapsed, setProgressCollapsed] = useState(false)
 
-  // ── 数据防泄漏：过滤 SSE 数据中禁止展示的字段 ──────────────────
-  const FORBIDDEN_KEY_PATTERNS = [
-    'reasoning', 'reasoning_content', 'chain_of_thought', 'thought',
-    'scratchpad', 'debug', 'internal', 'prompt', 'messages',
-    'raw_response', 'tool_calls', 'agent_trace',
-  ]
+  // ── 问答执行链路状态 ──
+  const [traceEvents, setTraceEvents] = useState<TraceEventItem[]>([])
+  const [runStatus, setRunStatus] = useState<'running' | 'success' | 'failed'>('running')
+  const [canAnswer, setCanAnswer] = useState(false)
+  const [partialAnswer, setPartialAnswer] = useState(false)
+  const [canAnswerReason, setCanAnswerReason] = useState('')
+  const [missingItems, setMissingItems] = useState<string[]>([])
+  const [targetFeeItem, setTargetFeeItem] = useState('')
+  const [targetField, setTargetField] = useState('')
+  const [subFlow, setSubFlow] = useState('')
 
-  function stripForbiddenFields(obj: Record<string, unknown>): Record<string, unknown> {
-    const result: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(obj)) {
-      const keyLower = key.toLowerCase()
-      const isForbidden = FORBIDDEN_KEY_PATTERNS.some(p => keyLower.includes(p))
-      if (isForbidden) continue
-      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-        result[key] = stripForbiddenFields(value as Record<string, unknown>)
-      } else if (Array.isArray(value)) {
-        result[key] = (value as unknown[]).map(item =>
-          item !== null && typeof item === 'object' && !Array.isArray(item)
-            ? stripForbiddenFields(item as Record<string, unknown>)
-            : item
-        )
-      } else {
-        result[key] = value
-      }
-    }
-    return result
-  }
+  // ── 计算已完成步骤数 ─────────────────────────────────────
+  const completedCount = steps.filter((s) => s.status === 'done').length
 
-  // ── 步骤展示映射 ──────────────────────────────────────────
-  const STEP_DISPLAY_NAMES: Record<string, string> = {
-    intent: '识别问题意图',
-    query_sql_data: '查询结算数据',
-    search_policy_rules: '检索政策依据',
-    calculate_explanation: '费用计算',
-    generate_explanation: '生成解释',
-    // 向后兼容旧步骤名
-    sql_query: '查询结算数据',
-    rewrite: '重写用户问题',
-    search: '检索政策依据',
-    decomposition: '生成费用解释',
-    explain: '输出双视角答案',
-  }
+  // ── 判断当前问题是否为统筹自付类 ─────────────────────────
+  const isTongChouQuestion = /统筹自付|分段计算|起付线|报销比例|个人负担/.test(activeQuestion)
 
-  // 事件队列机制：逐步展示步骤
-  const eventQueueRef = useRef<Array<{ data: PolicyQAStep; timestamp: number }>>([])
-  const queueTimerRef = useRef<NodeJS.Timeout | null>(null)
-  const isProcessingQueueRef = useRef(false)
-
-  // 处理队列中的事件
-  const processQueue = useCallback(() => {
-    if (eventQueueRef.current.length === 0) {
-      isProcessingQueueRef.current = false
-      return
-    }
-
-    isProcessingQueueRef.current = true
-    const { data } = eventQueueRef.current.shift()!
-
-    setSteps((prev) => {
-      const existing = prev.findIndex((s) => s.step === data.step)
-      if (existing >= 0) {
-        const updated = [...prev]
-        updated[existing] = {
-          ...updated[existing],
-          ...data,
-          endTime: data.status === 'done' ? Date.now() : updated[existing].endTime,
-        }
-        return updated
-      }
-      return [...prev, {
-        ...data,
-        startTime: Date.now()
-      }]
-    })
-
-    // 继续处理下一个事件
-    queueTimerRef.current = setTimeout(processQueue, 300)
-  }, [])
-
-  // 入队事件
-  const enqueueEvent = useCallback((data: PolicyQAStep) => {
-    eventQueueRef.current.push({ data, timestamp: Date.now() })
-
-    if (!isProcessingQueueRef.current) {
-      processQueue()
-    }
-  }, [processQueue])
-
-  // 清理队列定时器
-  useEffect(() => {
-    return () => {
-      if (queueTimerRef.current) {
-        clearTimeout(queueTimerRef.current)
-      }
-    }
-  }, [])
-
-  // 自动滚动到底部
-  const scrollToBottom = useCallback(() => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-        }
-      })
-    })
-  }, [])
-
-  useEffect(() => {
-    scrollToBottom()
-  }, [messages, steps, typewriterText, scrollToBottom])
-
-  // 打字机效果
-  const startTypewriter = useCallback((text: string) => {
-    setIsTyping(true)
-    setTypewriterText('')
-    let index = 0
-    const speed = { min: 20, max: 50 }
-
-    const type = () => {
-      if (index < text.length) {
-        const char = text.charAt(index)
-        setTypewriterText(prev => prev + char)
-        index++
-        scrollToBottom()
-        const delay = speed.min + Math.random() * (speed.max - speed.min)
-        typewriterRef.current = setTimeout(type, delay)
-      } else {
-        setIsTyping(false)
-      }
-    }
-
-    type()
-  }, [scrollToBottom])
-
-  // 清理打字机
-  useEffect(() => {
-    return () => {
-      if (typewriterRef.current) {
-        clearTimeout(typewriterRef.current)
-      }
-    }
-  }, [])
-
+  // ── 提交查询 ─────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!input.trim() || isLoading) return
+    if (!question.trim() || isLoading) return
 
-    const userMessage = input.trim()
-    setInput('')
+    const userMessage = question.trim()
     setIsLoading(true)
+    setActiveQuestion(userMessage)
     setSteps([])
-    setTypewriterText('')
-    setIsTyping(false)
     setTreatments([])
     setFeeBreakdown([])
     setEvidence([])
     setPolicyCards([])
+    setSettlementEvidence([])
+    setCalculationSteps([])
     setPatientView('')
     setOfficeView('')
     setRagMiss(false)
     setSelectedView('patient')
-    setShowPolicyPanel(false)
-
-    // 添加用户消息
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content: userMessage, timestamp: new Date() },
-    ])
-
-    // 清空事件队列
-    eventQueueRef.current = []
-    if (queueTimerRef.current) {
-      clearTimeout(queueTimerRef.current)
-    }
-    isProcessingQueueRef.current = false
+    setRealSettlementData(null)
+    setDataSourceError('')
+    setDataSourceLoading(false)
+    setProgressCollapsed(false) // 默认展开执行链路
+    setTraceEvents([])
+    setRunStatus('running')
+    setCanAnswer(false)
+    setPartialAnswer(false)
+    setCanAnswerReason('')
+    setMissingItems([])
+    setTargetFeeItem('')
+    setTargetField('')
+    setSubFlow('')
 
     // 构建请求
     const request = {
       question: userMessage,
       settlement_id: settlementId || '1671213',
+      user_id: 'demo',        // ★ 持久化用：需与 useApiContext 的 userId 一致
+      role: 'cashier',         // ★ 持久化用：用户角色
     }
 
+    // ── SSE 流式请求 ──────────────────────────────────────
     try {
-      // 使用SSE流式请求
       const response = await fetch('/api/v1/medical-insurance-ai-agent/policy-qa/stream', {
         method: 'POST',
         headers: {
@@ -318,7 +179,6 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
 
       const decoder = new TextDecoder()
       let buffer = ''
-      let fullResponse = ''
 
       while (true) {
         const { done, value } = await reader.read()
@@ -351,9 +211,7 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
             const data = stripForbiddenFields(rawData as Record<string, unknown>)
 
             // ── 处理 result 事件（只提取结果数据，不覆写步骤）──
-            // ★ 步骤已在流式过程中逐条构建，result 事件不应覆盖
             if (eventType === 'result') {
-              // 提取 result 内容
               const resultData = data.result as Record<string, unknown> | undefined
               if (resultData) {
                 if (resultData.patient_view) setPatientView(String(resultData.patient_view))
@@ -368,713 +226,707 @@ export default function PolicyQAChat({ settlementId }: PolicyQAChatProps) {
                     score: Number(c.score || 0),
                   })))
                 }
+                // ★ 提取结算溯源证据
+                if (resultData.settlement_evidence && Array.isArray(resultData.settlement_evidence)) {
+                  setSettlementEvidence((resultData.settlement_evidence as Array<Record<string, unknown>>).map(e => ({
+                    item: String(e.item || ''),
+                    value: Number(e.value || 0),
+                    sourceTable: String(e.source_table || e.sourceTable || ''),
+                    policyRule: String(e.policy_rule && typeof e.policy_rule === 'object'
+                      ? JSON.stringify(e.policy_rule)
+                      : e.policy_rule || ''),
+                    calculation: String(e.calculation && typeof e.calculation === 'object'
+                      ? JSON.stringify(e.calculation)
+                      : e.calculation || ''),
+                  })))
+                }
+                // ★ 提取分段计算步骤
+                if (resultData.calculation_steps && Array.isArray(resultData.calculation_steps)) {
+                  setCalculationSteps((resultData.calculation_steps as Array<Record<string, unknown>>).map(step => ({
+                    item: `第${step.segment_index}段 (${Number(step.lower).toLocaleString('zh-CN')}-${Number(step.upper) === Infinity || !step.upper ? '∞' : Number(step.upper).toLocaleString('zh-CN')}元)`,
+                    value: Number(step.pay || 0),
+                    sourceTable: `段内金额: ${Number(step.amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`,
+                    policyRule: String(step.policy_source || '未关联政策条文'),
+                    calculation: `基础比例 ${(Number(step.base_ratio) * 100).toFixed(0)}% × 人员系数 ${(Number(step.person_ratio) * 100).toFixed(0)}% = 实际比例 ${(Number(step.actual_ratio) * 100).toFixed(0)}%\n${Number(step.amount).toLocaleString('zh-CN', { minimumFractionDigits: 2 })} × ${(Number(step.actual_ratio) * 100).toFixed(0)}% = ${Number(step.pay).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`,
+                  })))
+                }
+                // ★ 提取 can_answer / trace_events
+                if (typeof resultData.can_answer === 'boolean') {
+                  setCanAnswer(resultData.can_answer as boolean)
+                }
+                if (typeof resultData.partial_answer === 'boolean') {
+                  setPartialAnswer(resultData.partial_answer as boolean)
+                }
+                if (resultData.can_answer_reason) {
+                  setCanAnswerReason(String(resultData.can_answer_reason))
+                }
+                if (resultData.missing_items && Array.isArray(resultData.missing_items)) {
+                  setMissingItems(resultData.missing_items as string[])
+                }
+                if (resultData.trace_events && Array.isArray(resultData.trace_events)) {
+                  const events = resultData.trace_events as Array<Record<string, unknown>>
+                  setTraceEvents(events.map(e => ({
+                    step_id: String(e.step_id || ''),
+                    step_name: String(e.step_name || ''),
+                    step_number: Number(e.step_number || 0),
+                    status: (e.status || 'pending') as TraceEventItem['status'],
+                    duration_ms: Number(e.duration_ms || 0),
+                    summary: String(e.summary || ''),
+                    details: e.details as Record<string, unknown> | undefined,
+                    error: e.error ? String(e.error) : undefined,
+                  })))
+                  setRunStatus('success')
+                }
+              }
+            }
+
+            // ── 处理 trace_event 事件（单步实时溯源）──
+            else if (eventType === 'trace_event') {
+              const evt = data as Record<string, unknown>
+              if (evt.step_id) {
+                const newEvent: TraceEventItem = {
+                  step_id: String(evt.step_id),
+                  step_name: String(evt.step_name || ''),
+                  step_number: Number(evt.step_number || 0),
+                  status: (evt.status || 'running') as TraceEventItem['status'],
+                  duration_ms: Number(evt.duration_ms || 0),
+                  summary: String(evt.summary || ''),
+                  details: evt.detail as Record<string, unknown> | undefined,
+                  error: evt.error ? String(evt.error) : undefined,
+                }
+                setTraceEvents((prev) => {
+                  const idx = prev.findIndex((t) => t.step_id === newEvent.step_id)
+                  if (idx >= 0) {
+                    const updated = [...prev]
+                    updated[idx] = { ...updated[idx], ...newEvent }
+                    return updated
+                  }
+                  return [...prev, newEvent]
+                })
               }
             }
 
             // ── 处理 step 事件 ──
             else if (data.step && data.status) {
-                // ★ 构建步骤数据，分离内部 detail 与用户可展示字段
-                const stepData: PolicyQAStep = {
-                  step: String(data.step),
-                  status: String(data.status) as PolicyQAStep['status'],
-                  detail: data.detail as Record<string, unknown> | undefined,
-                  publicDetail: (data.public_detail || data.publicDetail) as Record<string, unknown> | undefined,
-                  publicMessage: String(data.public_message || data.publicMessage || ''),
-                  chunk: typeof data.chunk === 'string' ? data.chunk : undefined,
-                  error: typeof data.error === 'string' ? data.error : undefined,
-                }
+              const stepData: PolicyQAStep = {
+                step: String(data.step),
+                status: String(data.status) as PolicyQAStep['status'],
+                detail: data.detail as Record<string, unknown> | undefined,
+                publicDetail: (data.public_detail || data.publicDetail) as Record<string, unknown> | undefined,
+                publicMessage: String(data.public_message || data.publicMessage || ''),
+                chunk: typeof data.chunk === 'string' ? data.chunk : undefined,
+                error: typeof data.error === 'string' ? data.error : undefined,
+              }
 
-                // ★ 提取 RAG 政策卡片（search_policy_rules 步骤 done 时）
-                if (data.step === 'search_policy_rules' && data.status === 'done') {
-                  const cards = data.policy_cards || data.policyCards
-                  if (cards && Array.isArray(cards)) {
-                    setPolicyCards(cards.map((c: Record<string, unknown>) => ({
-                      title: String(c.title || ''),
-                      clause: String(c.clause || ''),
-                      evidenceText: String(c.evidence_text || c.evidenceText || ''),
-                      matchedReason: String(c.matched_reason || c.matchedReason || ''),
-                      ruleType: String(c.rule_type || c.ruleType || ''),
-                      score: Number(c.score || 0),
+              // ★ 提取 RAG 政策卡片（search_policy_rules 步骤 done 时）
+              if (data.step === 'search_policy_rules' && data.status === 'done') {
+                const cards = data.policy_cards || data.policyCards
+                if (cards && Array.isArray(cards)) {
+                  setPolicyCards(cards.map((c: Record<string, unknown>) => ({
+                    title: String(c.title || ''),
+                    clause: String(c.clause || ''),
+                    evidenceText: String(c.evidence_text || c.evidenceText || ''),
+                    matchedReason: String(c.matched_reason || c.matchedReason || ''),
+                    ruleType: String(c.rule_type || c.ruleType || ''),
+                    score: Number(c.score || 0),
+                  })))
+                }
+                // 检测 RAG 未命中
+                const pd = (data.public_detail || data.publicDetail) as Record<string, unknown> | undefined
+                if (pd && pd.rag_miss) {
+                  setRagMiss(true)
+                }
+              }
+
+              // ★ 提取双视角解释（generate_explanation 步骤 done 时）
+              if (data.step === 'generate_explanation' && data.status === 'done') {
+                if (data.patient_view || data.patientView) {
+                  setPatientView(String(data.patient_view || data.patientView || ''))
+                }
+                if (data.office_view || data.officeView) {
+                  setOfficeView(String(data.office_view || data.officeView || ''))
+                }
+              }
+
+              // ★ 提取 trace_result 步骤中的执行链路和可回答性
+              if (data.step === 'trace_result' && data.status === 'done') {
+                const detail = data.detail as Record<string, unknown> | undefined
+                if (detail) {
+                  if (typeof detail.can_answer === 'boolean') {
+                    setCanAnswer(detail.can_answer as boolean)
+                  }
+                  if (typeof detail.partial_answer === 'boolean') {
+                    setPartialAnswer(detail.partial_answer as boolean)
+                  }
+                  if (detail.can_answer_reason) {
+                    setCanAnswerReason(String(detail.can_answer_reason))
+                  }
+                  if (detail.missing_items && Array.isArray(detail.missing_items)) {
+                    setMissingItems(detail.missing_items as string[])
+                  }
+                  if (detail.target_fee_item) {
+                    setTargetFeeItem(String(detail.target_fee_item))
+                  }
+                  if (detail.target_field) {
+                    setTargetField(String(detail.target_field))
+                  }
+                  if (detail.sub_flow) {
+                    setSubFlow(String(detail.sub_flow))
+                  }
+                  if (detail.trace_events && Array.isArray(detail.trace_events)) {
+                    const events = detail.trace_events as Array<Record<string, unknown>>
+                    setTraceEvents(events.map(e => ({
+                      step_id: String(e.step_id || ''),
+                      step_name: String(e.step_name || ''),
+                      step_number: Number(e.step_number || 0),
+                      status: (e.status || 'pending') as TraceEventItem['status'],
+                      duration_ms: Number(e.duration_ms || 0),
+                      summary: String(e.summary || ''),
+                      details: e.details as Record<string, unknown> | undefined,
+                      error: e.error ? String(e.error) : undefined,
                     })))
+                    setRunStatus('success')
                   }
-                  // 检测 RAG 未命中
-                  const pd = (data.public_detail || data.publicDetail) as Record<string, unknown> | undefined
-                  if (pd && pd.rag_miss) {
-                    setRagMiss(true)
-                  }
-                }
-
-                // ★ 提取双视角解释（generate_explanation 步骤 done 时）
-                if (data.step === 'generate_explanation' && data.status === 'done') {
-                  if (data.patient_view || data.patientView) {
-                    setPatientView(String(data.patient_view || data.patientView || ''))
-                  }
-                  if (data.office_view || data.officeView) {
-                    setOfficeView(String(data.office_view || data.officeView || ''))
-                  }
-                }
-
-                // 使用事件队列逐步展示步骤（running 状态立即显示，done 状态入队）
-                if (data.status === 'running') {
-                  // running 状态立即显示，给用户即时反馈
-                  setSteps((prev) => {
-                    const existing = prev.findIndex((s) => s.step === data.step)
-                    if (existing >= 0) {
-                      const updated = [...prev]
-                      updated[existing] = { ...updated[existing], ...stepData, status: 'running' as const }
-                      return updated
-                    }
-                    return [...prev, { ...stepData, startTime: Date.now(), status: 'running' as const }]
-                  })
-                } else {
-                  // done/streaming/error 状态入队，按间隔逐步展示
-                  enqueueEvent(stepData)
-                }
-
-                // 如果是流式内容，累积到完整响应
-                if (data.status === 'streaming' && data.chunk) {
-                  fullResponse += data.chunk
-                  // 实时更新打字机文本（流式效果）
-                  setTypewriterText(fullResponse)
-                  scrollToBottom()
-                }
-
-                // 提取费用分解数据（calculate_explanation 步骤完成时）
-                if (data.step === 'calculate_explanation' && data.status === 'done' && data.detail) {
-                  const detail = data.detail as Record<string, unknown>
-
-                  // 提取待遇分解
-                  if (detail.treatment && typeof detail.treatment === 'object') {
-                    const treatment = detail.treatment as Record<string, number>
-                    const treatmentItems: TreatmentItem[] = [
-                      { label: '总费用', value: treatment.total_fee || 0, variant: 'primary' },
-                      { label: '医保内', value: treatment.in_scope || 0, variant: 'primary' },
-                      { label: '起付线', value: treatment.deductible || 0 },
-                      { label: '统筹支付', value: treatment.pooling_payment || 0 },
-                      { label: '统筹自付', value: treatment.pooling_self_pay || 0 },
-                      { label: '大额支付', value: treatment.major_payment || 0 },
-                      { label: '大额自付', value: treatment.major_self_pay || 0 },
-                      { label: '个人应负', value: treatment.personal_liability || 0 },
-                      { label: '医保外', value: treatment.out_of_scope || 0 },
-                    ]
-                    setTreatments(treatmentItems)
-                  }
-
-                  // 提取费用分解（后端返回 fees，前端兼容 fee_breakdown）
-                  const fees = detail.fees || detail.fee_breakdown
-                  if (fees && typeof fees === 'object' && 'categories' in fees) {
-                    const feesData = fees as { categories: Array<{ category: string; total_amount: number; in_scope_amount: number; out_of_scope_amount: number }> }
-                    const feeBreakdownItems: FeeBreakdownItem[] = feesData.categories.map(cat => ({
-                      label: cat.category,
-                      amount: cat.total_amount,
-                      description: `医保内 ${cat.in_scope_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })} 元，医保外 ${cat.out_of_scope_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })} 元`,
-                    }))
-                    setFeeBreakdown(feeBreakdownItems)
-                  }
-
-                  // 提取分段计算数据（新增：展示分段计算详情）
-                  if (detail.segments && typeof detail.segments === 'object') {
-                    const segments = detail.segments as {
-                      total_pay: number
-                      segments: Array<{
-                        lower: number
-                        upper: number
-                        amount: number
-                        base_ratio: number
-                        person_ratio: number
-                        actual_ratio: number
-                        pay: number
-                        calculation: string
-                        rule_id: string
-                        policy_source: string
-                      }>
-                    }
-
-                    // 将分段计算转换为证据项展示
-                    const segmentEvidence: EvidenceItem[] = segments.segments.map((seg, idx) => ({
-                      item: `第${idx + 1}段 (${seg.lower.toLocaleString('zh-CN')}-${seg.upper === Infinity ? '∞' : seg.upper.toLocaleString('zh-CN')}元)`,
-                      value: seg.pay,
-                      sourceTable: `段内金额: ${seg.amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`,
-                      policyRule: seg.policy_source || '未关联政策条文',
-                      calculation: `基础比例 ${seg.base_ratio * 100}% × 人员系数 ${seg.person_ratio * 100}% = 实际比例 ${seg.actual_ratio * 100}%\n${seg.amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })} × ${seg.actual_ratio * 100}% = ${seg.pay.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`,
-                    }))
-
-                    // 添加合计项
-                    segmentEvidence.push({
-                      item: '统筹自付合计',
-                      value: segments.total_pay,
-                      sourceTable: '分段计算合计',
-                      policyRule: '各段自付金额之和',
-                      calculation: segments.segments.map((s, i) => `第${i + 1}段: ${s.pay.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`).join(' + ') + ` = ${segments.total_pay.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`,
-                    })
-
-                    // 合并到现有证据中
-                    setEvidence(prev => [...prev, ...segmentEvidence])
-                  }
-
-                  // 提取溯源证据
-                  if (detail.evidence && Array.isArray(detail.evidence)) {
-                    setEvidence(detail.evidence as EvidenceItem[])
-                  }
-                }
-
-                // 如果是最后一步完成，启动打字机效果
-                if (data.step === 'generate_explanation' && data.status === 'done') {
-                  if (fullResponse) {
-                    startTypewriter(fullResponse)
-                  } else {
-                    // 如果没有流式内容，显示默认消息
-                    setTypewriterText('费用分解完成，请查看上方查询进度了解详细步骤。')
-                    setIsTyping(false)
+                  if (detail.status) {
+                    setRunStatus(detail.status as 'running' | 'success' | 'failed')
                   }
                 }
               }
-            } catch {
-              // 忽略解析错误
+
+              // 直接更新步骤状态
+              setSteps((prev) => {
+                const existing = prev.findIndex((s) => s.step === data.step)
+                if (existing >= 0) {
+                  const updated = [...prev]
+                  updated[existing] = {
+                    ...updated[existing],
+                    ...stepData,
+                    endTime: data.status === 'done' ? Date.now() : updated[existing].endTime,
+                  }
+                  return updated
+                }
+                return [...prev, {
+                  ...stepData,
+                  startTime: Date.now()
+                }]
+              })
+
+              // 提取费用分解数据（calculate_explanation 步骤完成时）
+              if (data.step === 'calculate_explanation' && data.status === 'done' && data.detail) {
+                const detail = data.detail as Record<string, unknown>
+
+                // 提取待遇分解
+                if (detail.treatment && typeof detail.treatment === 'object') {
+                  const treatment = detail.treatment as Record<string, number>
+                  const treatmentItems: TreatmentItem[] = [
+                    { label: '总费用', value: treatment.total_fee || 0, variant: 'primary' },
+                    { label: '医保内', value: treatment.in_scope || 0, variant: 'primary' },
+                    { label: '起付线', value: treatment.deductible || 0 },
+                    { label: '统筹支付', value: treatment.pooling_payment || 0 },
+                    { label: '统筹自付', value: treatment.pooling_self_pay || 0 },
+                    { label: '大额支付', value: treatment.major_payment || 0 },
+                    { label: '大额自付', value: treatment.major_self_pay || 0 },
+                    { label: '个人应负', value: treatment.personal_liability || 0 },
+                    { label: '医保外', value: treatment.out_of_scope || 0 },
+                  ]
+                  setTreatments(treatmentItems)
+                }
+
+                // 提取费用分解
+                const fees = detail.fees || detail.fee_breakdown
+                if (fees && typeof fees === 'object' && 'categories' in fees) {
+                  const feesData = fees as { categories: Array<{ category: string; total_amount: number; in_scope_amount: number; out_of_scope_amount: number }> }
+                  const feeBreakdownItems: FeeBreakdownItem[] = feesData.categories.map(cat => ({
+                    label: cat.category,
+                    amount: cat.total_amount,
+                    description: `医保内 ${cat.in_scope_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })} 元，医保外 ${cat.out_of_scope_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })} 元`,
+                  }))
+                  setFeeBreakdown(feeBreakdownItems)
+                }
+
+                // 提取分段计算数据
+                if (detail.segments && typeof detail.segments === 'object') {
+                  const segments = detail.segments as {
+                    total_pay: number
+                    segments: Array<{
+                      lower: number
+                      upper: number
+                      amount: number
+                      base_ratio: number
+                      person_ratio: number
+                      actual_ratio: number
+                      pay: number
+                      calculation: string
+                      rule_id: string
+                      policy_source: string
+                    }>
+                  }
+
+                  const segmentEvidence: EvidenceItem[] = segments.segments.map((seg, idx) => ({
+                    item: `第${idx + 1}段 (${seg.lower.toLocaleString('zh-CN')}-${seg.upper === Infinity ? '∞' : seg.upper.toLocaleString('zh-CN')}元)`,
+                    value: seg.pay,
+                    sourceTable: `段内金额: ${seg.amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`,
+                    policyRule: seg.policy_source || '未关联政策条文',
+                    calculation: `基础比例 ${seg.base_ratio * 100}% × 人员系数 ${seg.person_ratio * 100}% = 实际比例 ${seg.actual_ratio * 100}%\n${seg.amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })} × ${seg.actual_ratio * 100}% = ${seg.pay.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`,
+                  }))
+
+                  segmentEvidence.push({
+                    item: '统筹自付合计',
+                    value: segments.total_pay,
+                    sourceTable: '分段计算合计',
+                    policyRule: '各段自付金额之和',
+                    calculation: segments.segments.map((s, i) => `第${i + 1}段: ${s.pay.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`).join(' + ') + ` = ${segments.total_pay.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}元`,
+                  })
+
+                  setEvidence(prev => [...prev, ...segmentEvidence])
+                }
+
+                // 提取溯源证据
+                if (detail.evidence && Array.isArray(detail.evidence)) {
+                  setEvidence(detail.evidence as EvidenceItem[])
+                }
+              }
             }
+          } catch {
+            // 忽略解析错误
           }
         }
+      }
     } catch (error) {
-      console.warn('[Policy QA] 后端不可达，使用步骤模拟模式:', error)
-      // ── 模拟步骤逐步展示（后端不可达时的降级方案）──
-      await simulateSteps(
-        setSteps, setTypewriterText, setIsTyping,
-        setTreatments, setFeeBreakdown, setEvidence,
-        setPatientView, setOfficeView, setRagMiss,
-      )
-    } finally {
-      setIsLoading(false)
+      console.warn('[Policy QA] SSE 不可达', error)
+      // SSE 失败时不再模拟步骤，REST 端点仍会尝试查询
     }
+
+    // ── 真实数据库查询：调用 settlement-explanation REST 端点 ──
+    if (/统筹自付|分段计算|起付线|报销比例|个人负担/.test(userMessage)) {
+      setDataSourceLoading(true)
+      setDataSourceError('')
+      setRealSettlementData(null)
+      try {
+        const realApiUrl = `/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation?settlement_id=${encodeURIComponent(settlementId || '1671213')}&question=${encodeURIComponent(userMessage)}`
+        const realResp = await fetch(realApiUrl)
+        if (!realResp.ok) {
+          const errText = await realResp.text()
+          throw new Error(errText || `HTTP ${realResp.status}`)
+        }
+        const realData = await realResp.json() as SettlementExplanationData
+        setRealSettlementData(realData)
+      } catch (err) {
+        console.error('[Policy QA] 真实数据库查询失败:', err)
+        setDataSourceError(String(err))
+        setRealSettlementData(null)
+      } finally {
+        setDataSourceLoading(false)
+      }
+    }
+
+    setIsLoading(false)
   }
 
+  // ── 渲染 ──────────────────────────────────────────────────
+
+  const showEmptyState =
+    !isLoading &&
+    !dataSourceLoading &&
+    !activeQuestion &&
+    steps.length === 0 &&
+    traceEvents.length === 0 &&
+    !realSettlementData
+
   return (
-    <Card
-      className="h-full flex flex-col"
-      style={{
-        background: '#0f1520',
-        border: '1px solid rgba(255,255,255,0.06)',
-        borderRadius: '16px',
-        boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
-      }}
-    >
-      <CardHeader className="pb-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <CardTitle className="text-lg" style={{ color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Bot className="h-5 w-5" style={{ color: '#06b6d4' }} />
-          <span style={{
-            background: 'linear-gradient(135deg, #06b6d4, #14b8a6, #10b981)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text',
-          }}>
-            医保政策问答
-          </span>
-          {settlementId && (
-            <Badge
-              variant="outline"
-              className="ml-2 text-xs"
-              style={{
-                background: 'rgba(6,182,212,0.1)',
-                border: '1px solid rgba(6,182,212,0.3)',
-                color: '#06b6d4',
-              }}
-            >
-              结算ID: {settlementId}
-            </Badge>
-          )}
-        </CardTitle>
-      </CardHeader>
-
-      <CardContent className="flex-1 flex flex-col p-0" style={{ background: '#0a0e17' }}>
-        {/* 消息列表 */}
-        <ScrollArea className="flex-1 p-4" ref={scrollRef}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {messages.map((message, index) => (
-              <div
-                key={index}
-                style={{
-                  display: 'flex',
-                  justifyContent: message.role === 'user' ? 'flex-end' : 'flex-start',
-                  animation: 'message-in 0.45s ease-out',
-                }}
-              >
-                <div
-                  style={{
-                    maxWidth: '85%',
-                    borderRadius: '16px',
-                    padding: '12px 16px',
-                    background: message.role === 'user'
-                      ? 'linear-gradient(135deg, #2563eb, #06b6d4)'
-                      : 'rgba(255,255,255,0.03)',
-                    border: message.role === 'user' ? 'none' : '1px solid rgba(255,255,255,0.06)',
-                    color: '#f1f5f9',
-                    borderBottomLeftRadius: message.role === 'assistant' ? '4px' : '16px',
-                    borderBottomRightRadius: message.role === 'user' ? '4px' : '16px',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                    {message.role === 'assistant' && (
-                      <div
-                        style={{
-                          width: '28px',
-                          height: '28px',
-                          borderRadius: '50%',
-                          background: 'linear-gradient(135deg, #06b6d4, #10b981)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '14px',
-                          flexShrink: 0,
-                        }}
-                      >
-                        🤖
-                      </div>
-                    )}
-                    <div style={{ whiteSpace: 'pre-wrap', fontSize: '14px', lineHeight: 1.6 }}>
-                      {message.content}
-                    </div>
-                    {message.role === 'user' && (
-                      <div
-                        style={{
-                          width: '28px',
-                          height: '28px',
-                          borderRadius: '50%',
-                          background: 'linear-gradient(135deg, #2563eb, #06b6d4)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '14px',
-                          flexShrink: 0,
-                        }}
-                      >
-                        👤
-                      </div>
-                    )}
-                  </div>
+    <div className="grid gap-4 lg:grid-cols-[440px_1fr]">
+      {/* Left rail: 输入 + 运行态/链路（桌面端更像控制台，信息密度更高） */}
+      <section className="space-y-4 lg:sticky lg:top-6 self-start">
+        {/* ══════════════════════════════════════════════════════
+            QueryPanel — 结算单号 + 问题输入 + 查询按钮
+            ══════════════════════════════════════════════════════ */}
+        <div className="rounded-2xl border border-slate-200/70 bg-white/70 p-5 shadow-[0_12px_40px_rgba(15,23,42,0.06)] backdrop-blur">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid gap-3">
+              <div className="grid gap-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-700">结算单号</label>
+                  <span className="text-[11px] font-mono text-slate-400">支持粘贴</span>
                 </div>
-              </div>
-            ))}
-
-            {/* 查询进度卡片 - 使用 ThinkingChain 组件 */}
-            {steps.length > 0 && (
-              <>
-                <ThinkingChain
-                  steps={steps as ThinkingStep[]}
-                  isLoading={isLoading}
+                <Input
+                  value={settlementId}
+                  onChange={(e) => setSettlementId(e.target.value)}
+                  placeholder="例如 1671213"
+                  disabled={isLoading}
+                  className="h-9 bg-white/60 max-w-[160px]"
                 />
-                {/* ★ 查询相关知识按钮 */}
-                {!isLoading && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-start', animation: 'message-in 0.45s ease-out' }}>
-                    <button
-                      onClick={() => setShowPolicyPanel(!showPolicyPanel)}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        padding: '8px 16px',
-                        borderRadius: '10px',
-                        background: showPolicyPanel
-                          ? 'rgba(6,182,212,0.12)'
-                          : 'rgba(255,255,255,0.03)',
-                        border: showPolicyPanel
-                          ? '1px solid rgba(6,182,212,0.3)'
-                          : '1px solid rgba(255,255,255,0.08)',
-                        color: showPolicyPanel ? '#06b6d4' : '#94a3b8',
-                        fontSize: '13px',
-                        fontFamily: 'inherit',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s',
-                      }}
-                    >
-                      <span style={{ fontSize: '15px' }}>📚</span>
-                      查询相关知识
-                    </button>
-                  </div>
+              </div>
+
+              <div className="grid gap-2">
+                <label className="text-xs font-semibold text-slate-700">问题</label>
+                <Input
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  placeholder="例如：统筹自付为什么是 4962.67 元？"
+                  disabled={isLoading}
+                  className="h-9 bg-white/60"
+                />
+              </div>
+
+              <Button
+                type="submit"
+                disabled={isLoading || !question.trim()}
+                className="h-9 bg-[#2563EB] hover:bg-[#2563EB]/90 text-white"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <Search className="h-4 w-4 mr-1" />
                 )}
-              </>
-            )}
+                查询
+              </Button>
+            </div>
 
-            {/* RAG 未命中警告 */}
-            {ragMiss && (
-              <div
-                style={{
-                  display: 'flex', alignItems: 'flex-start', gap: '8px',
-                  padding: '12px 16px', borderRadius: '12px',
-                  background: 'rgba(234,179,8,0.08)',
-                  border: '1px solid rgba(234,179,8,0.2)',
-                  color: '#eab308', fontSize: '13px', lineHeight: 1.5,
-                  animation: 'message-in 0.45s ease-out',
-                }}
-              >
-                <span style={{ fontSize: '16px', flexShrink: 0 }}>⚠️</span>
-                <span>未检索到匹配的政策规则，以下解释基于系统已有结算数据。建议咨询医院医保办确认。</span>
+            {/* 状态标识行 */}
+            <div className="flex items-center gap-2 text-xs flex-wrap">
+              <span className="bg-slate-100/80 text-slate-700 px-2 py-0.5 rounded-md font-medium ring-1 ring-slate-200/60">
+                身份：收费员
+              </span>
+
+              {/* 数据来源标识 */}
+              {realSettlementData ? (
+                realSettlementData.data_source === 'REAL_DB' && !realSettlementData.mock_used ? (
+                  <span className="bg-[#059669]/10 text-[#059669] border border-[#059669]/25 px-2 py-0.5 rounded-md font-mono text-[11px]">
+                    真实数据库 REAL_DB
+                  </span>
+                ) : realSettlementData.mock_used ? (
+                  <span className="bg-[#D97706]/10 text-[#D97706] border border-[#D97706]/25 px-2 py-0.5 rounded-md font-mono text-[11px]">
+                    当前为模拟数据，不可用于产品验证
+                  </span>
+                ) : null
+              ) : !isLoading && steps.length === 0 ? (
+                <span className="text-slate-400 font-mono text-[11px]">未查询</span>
+              ) : null}
+            </div>
+          </form>
+        </div>
+
+        {/* ══════════════════════════════════════════════════════
+            问答执行链路（trace_events 驱动）
+            ══════════════════════════════════════════════════════ */}
+        {traceEvents.length > 0 && (
+          <ExecutionTracePanel traceEvents={traceEvents} isLoading={isLoading} />
+        )}
+
+        {/* 回退：旧版步骤（当无 traceEvents 时使用 ThinkingChain） */}
+        {steps.length > 0 && traceEvents.length === 0 && (
+          <div className="bg-white/70 border border-slate-200/70 rounded-2xl overflow-hidden backdrop-blur">
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50/60 transition-colors text-left"
+              onClick={() => setProgressCollapsed(!progressCollapsed)}
+            >
+              <div className="flex items-center gap-2">
+                {progressCollapsed ? (
+                  <ChevronRight className="w-4 h-4 text-slate-500" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-slate-500" />
+                )}
+                <span className="text-sm font-semibold text-slate-900">处理进度</span>
+                {isLoading && (
+                  <span className="text-[11px] text-slate-400 font-mono animate-pulse">处理中...</span>
+                )}
               </div>
-            )}
-
-            {/* ★ 政策知识侧面板 */}
-            {showPolicyPanel && !isLoading && (
-              <div
-                style={{
-                  borderRadius: '16px',
-                  background: 'rgba(255,255,255,0.02)',
-                  border: '1px solid rgba(6,182,212,0.15)',
-                  overflow: 'hidden',
-                  animation: 'message-in 0.45s ease-out',
-                }}
-              >
-                {/* 面板头部 */}
-                <div style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '12px 16px',
-                  borderBottom: '1px solid rgba(255,255,255,0.04)',
-                  background: 'rgba(6,182,212,0.04)',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '16px' }}>📚</span>
-                    <span style={{ fontSize: '14px', fontWeight: 600, color: '#e2e8f0' }}>
-                      相关政策知识
-                    </span>
-                    <span style={{
-                      fontSize: '11px', color: '#64748b',
-                      background: 'rgba(255,255,255,0.04)',
-                      padding: '2px 8px', borderRadius: '9999px',
-                    }}>
-                      {policyCards.length + evidence.length} 条
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => setShowPolicyPanel(false)}
-                    style={{
-                      background: 'none', border: 'none', color: '#64748b',
-                      cursor: 'pointer', fontSize: '18px', padding: '2px 6px',
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
-
-                {/* 面板内容 */}
-                <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {/* 政策卡片 */}
-                  {policyCards.map((card, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        padding: '10px 14px',
-                        borderRadius: '10px',
-                        background: 'rgba(255,255,255,0.02)',
-                        border: '1px solid rgba(255,255,255,0.05)',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                        <span style={{
-                          fontSize: '10px', fontWeight: 600, padding: '1px 6px',
-                          borderRadius: '4px',
-                          background: card.score && card.score > 0
-                            ? 'rgba(16,185,129,0.12)' : 'rgba(148,163,184,0.08)',
-                          color: card.score && card.score > 0 ? '#10b981' : '#94a3b8',
-                        }}>
-                          {card.ruleType || '政策规则'}
-                        </span>
-                        <span style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0', flex: 1 }}>
-                          {card.title}
-                        </span>
-                        {card.score !== undefined && (
-                          <span style={{
-                            fontSize: '10px', color: '#64748b',
-                            fontFamily: 'monospace',
-                          }}>
-                            相关度 {Math.abs(card.score).toFixed(2)}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: 1.5 }}>
-                        {card.evidenceText}
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px', lineHeight: 1.4 }}>
-                        📎 {card.clause}
-                      </div>
-                      {card.matchedReason && (
-                        <div style={{ fontSize: '10px', color: '#475569', marginTop: '4px' }}>
-                          匹配原因: {card.matchedReason}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-
-                  {/* 证据项 */}
-                  {evidence.map((ev, idx) => (
-                    <div
-                      key={`ev-${idx}`}
-                      style={{
-                        padding: '10px 14px',
-                        borderRadius: '10px',
-                        background: 'rgba(16,185,129,0.03)',
-                        border: '1px solid rgba(16,185,129,0.08)',
-                      }}
-                    >
-                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#e2e8f0', marginBottom: '4px' }}>
-                        {ev.item}
-                      </div>
-                      <div style={{ fontSize: '12px', color: '#10b981', fontFamily: 'monospace' }}>
-                        {ev.value?.toLocaleString?.('zh-CN', { minimumFractionDigits: 2 }) ?? ev.value} 元
-                      </div>
-                      {ev.sourceTable && (
-                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>
-                          📊 {ev.sourceTable}
-                        </div>
-                      )}
-                      {ev.policyRule && (
-                        <div style={{ fontSize: '10px', color: '#475569', marginTop: '2px' }}>
-                          📎 {ev.policyRule}
-                        </div>
-                      )}
-                      {ev.calculation && (
-                        <div style={{
-                          fontSize: '10px', color: '#64748b', marginTop: '4px',
-                          background: 'rgba(0,0,0,0.2)', padding: '6px 8px',
-                          borderRadius: '6px', fontFamily: 'monospace', whiteSpace: 'pre-wrap',
-                        }}>
-                          {ev.calculation}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-
-                  {/* 空状态 */}
-                  {policyCards.length === 0 && evidence.length === 0 && (
-                    <div style={{
-                      textAlign: 'center', padding: '20px',
-                      color: '#64748b', fontSize: '13px',
-                    }}>
-                      <span style={{ fontSize: '24px', display: 'block', marginBottom: '8px' }}>📭</span>
-                      暂未检索到相关政策和证据
-                    </div>
-                  )}
-                </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 font-mono">
+                  {completedCount}/{steps.length} 步骤完成
+                </span>
               </div>
-            )}
+            </button>
 
-            {/* 政策问答结果卡片 — 步骤完成后总是展示 */}
-            {!isLoading && steps.some(s => s.status === 'done') && (
-              <PolicyAnswerCard
-                treatments={treatments}
-                feeBreakdown={feeBreakdown}
-                evidence={evidence}
-                policyCards={policyCards}
-              />
-            )}
-
-            {/* 打字机效果消息 - 匹配v3原型 */}
-            {typewriterText && (
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'flex-start',
-                  animation: 'message-in 0.45s ease-out',
-                }}
-              >
-                <div
-                  style={{
-                    maxWidth: '85%',
-                    borderRadius: '16px',
-                    padding: '12px 16px',
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                    color: '#f1f5f9',
-                    borderBottomLeftRadius: '4px',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                    <div
-                      style={{
-                        width: '28px',
-                        height: '28px',
-                        borderRadius: '50%',
-                        background: 'linear-gradient(135deg, #06b6d4, #10b981)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '14px',
-                        flexShrink: 0,
-                      }}
-                    >
-                      🤖
-                    </div>
-                    <div style={{ whiteSpace: 'pre-wrap', fontSize: '14px', lineHeight: 1.6 }}>
-                      {typewriterText}
-                      {isTyping && (
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            width: '2px',
-                            height: '16px',
-                            background: '#06b6d4',
-                            marginLeft: '2px',
-                            verticalAlign: 'text-bottom',
-                            animation: 'blink 1s step-end infinite',
-                          }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ★ 双视角解释 — 步骤完成后总是展示 */}
-            {!isLoading && steps.some(s => s.status === 'done') && (
-              <div
-                style={{
-                  borderRadius: '16px',
-                  background: 'rgba(255,255,255,0.03)',
-                  border: '1px solid rgba(255,255,255,0.06)',
-                  overflow: 'hidden',
-                  animation: 'message-in 0.45s ease-out',
-                }}
-              >
-                {/* 标签切换 */}
-                <div style={{
-                  display: 'flex',
-                  borderBottom: '1px solid rgba(255,255,255,0.06)',
-                }}>
-                  <button
-                    onClick={() => setSelectedView('patient')}
-                    style={{
-                      flex: 1, padding: '10px 16px',
-                      fontSize: '13px', fontWeight: selectedView === 'patient' ? 600 : 400,
-                      color: selectedView === 'patient' ? '#06b6d4' : '#94a3b8',
-                      background: selectedView === 'patient' ? 'rgba(6,182,212,0.06)' : 'transparent',
-                      border: 'none',
-                      borderBottom: selectedView === 'patient' ? '2px solid #06b6d4' : '2px solid transparent',
-                      cursor: 'pointer', transition: 'all 0.2s',
-                    }}
-                  >
-                    👤 患者视角
-                  </button>
-                  <button
-                    onClick={() => setSelectedView('office')}
-                    style={{
-                      flex: 1, padding: '10px 16px',
-                      fontSize: '13px', fontWeight: selectedView === 'office' ? 600 : 400,
-                      color: selectedView === 'office' ? '#a855f7' : '#94a3b8',
-                      background: selectedView === 'office' ? 'rgba(168,85,247,0.06)' : 'transparent',
-                      border: 'none',
-                      borderBottom: selectedView === 'office' ? '2px solid #a855f7' : '2px solid transparent',
-                      cursor: 'pointer', transition: 'all 0.2s',
-                    }}
-                  >
-                    🏥 院端视角
-                  </button>
-                </div>
-                {/* 内容区域 */}
-                <div style={{
-                  padding: '16px', whiteSpace: 'pre-wrap', fontSize: '14px',
-                  lineHeight: 1.6, color: '#f1f5f9',
-                }}>
-                  {selectedView === 'patient'
-                    ? (patientView || '暂无患者视角解释。请检查后端服务是否正常运行，或尝试重新提问。')
-                    : (officeView || '暂无院端视角解释。请检查后端服务是否正常运行，或尝试重新提问。')}
-                </div>
-              </div>
-            )}
-
-            {/* 加载状态 */}
-            {isLoading && steps.length === 0 && (
-              <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                <div
-                  style={{
-                    borderRadius: '16px',
-                    padding: '12px 16px',
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Loader2 className="h-4 w-4 animate-spin" style={{ color: '#06b6d4' }} />
-                    <span style={{ fontSize: '14px', color: '#94a3b8' }}>处理中...</span>
-                  </div>
-                </div>
+            {!progressCollapsed && (
+              <div className="border-t border-slate-200/70">
+                <ThinkingChain steps={steps as ThinkingStep[]} isLoading={isLoading} />
               </div>
             )}
           </div>
-        </ScrollArea>
+        )}
 
-        {/* 输入区域 - 匹配v3原型 */}
-        <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-          <form onSubmit={handleSubmit} style={{ display: 'flex', gap: '10px' }}>
-            <div
-              style={{
-                flex: 1,
-                display: 'flex',
-                alignItems: 'center',
-                background: 'rgba(15,21,32,0.8)',
-                border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: '12px',
-                padding: '8px 8px 8px 16px',
-                transition: 'border-color 0.25s, box-shadow 0.25s',
-              }}
-            >
-              <Input
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="描述您的问题，例如：统筹自付为什么是4962.67元？"
-                disabled={isLoading}
-                style={{
-                  flex: 1,
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  color: '#f1f5f9',
-                  fontSize: '14px',
-                  boxShadow: 'none',
-                }}
-              />
+        {/* ══════════════════════════════════════════════════════
+            解释对象指示器
+            ══════════════════════════════════════════════════════ */}
+        {targetFeeItem && !isLoading && (
+          <div className="flex items-center gap-2 bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2 text-sm backdrop-blur">
+            <span className="text-slate-500">解释对象：</span>
+            <span className="font-semibold text-slate-800">{targetFeeItem}</span>
+            {targetField && (
+              <span className="text-[11px] font-mono text-slate-400">({targetField})</span>
+            )}
+            {subFlow && (
+              <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">
+                {subFlow}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════
+            Result Status Bar — 可回答性状态
+            ══════════════════════════════════════════════════════ */}
+        {runStatus !== 'running' && (
+          <ResultStatusBar
+            runStatus={runStatus}
+            canAnswer={canAnswer}
+            partialAnswer={partialAnswer}
+            canAnswerReason={canAnswerReason}
+            missingItems={missingItems}
+          />
+        )}
+      </section>
+
+      {/* Right: 结果区（空态/加载/结果/错误） */}
+      <section className="space-y-4 min-w-0">
+        {/* 空态：引导用户更快上手 */}
+        {showEmptyState && (
+          <div className="rounded-2xl border border-slate-200/70 bg-white/65 p-6 shadow-[0_12px_40px_rgba(15,23,42,0.06)] backdrop-blur">
+            <div className="flex items-start justify-between gap-6">
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-slate-900">从哪里开始？</div>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  先填写结算单号，再用一句话描述你想解释的字段或费用项目（越具体越快）。
+                </p>
+                <ul className="mt-3 space-y-1.5 text-sm text-slate-600">
+                  <li className="flex gap-2">
+                    <span className="mt-2 size-1.5 rounded-full bg-blue-500/70 shrink-0" />
+                    返回政策条文与匹配原因（可追溯）
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="mt-2 size-1.5 rounded-full bg-blue-500/70 shrink-0" />
+                    输出患者/院端两种表述，方便沟通
+                  </li>
+                </ul>
+              </div>
+
+              <div className="hidden sm:block rounded-2xl bg-gradient-to-br from-blue-600 to-sky-500 p-[1px]">
+                <div className="rounded-2xl bg-slate-950/90 px-4 py-3">
+                  <div className="text-[11px] font-mono text-slate-300">TIP</div>
+                  <div className="mt-1 text-xs text-slate-100">
+                    尝试问：<span className="font-semibold">“统筹自付为什么是 X 元？”</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <Button
-              type="submit"
-              disabled={isLoading || !input.trim()}
-              style={{
-                background: 'linear-gradient(135deg, #06b6d4, #10b981)',
-                borderRadius: '8px',
-                width: '40px',
-                height: '40px',
-                border: 'none',
-                cursor: isLoading || !input.trim() ? 'not-allowed' : 'pointer',
-                opacity: isLoading || !input.trim() ? 0.5 : 1,
-                transition: 'all 0.25s',
-              }}
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-            </Button>
-          </form>
-        </div>
-      </CardContent>
 
-      {/* 全局动画样式 */}
-      <style jsx global>{`
-        @keyframes message-in {
-          from { opacity: 0; transform: translateY(12px) scale(0.98); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes thinking-in {
-          from { opacity: 0; transform: translateY(16px) scale(0.97); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes pulse-ring {
-          0% { box-shadow: 0 0 0 0 rgba(6,182,212,0.4); }
-          70% { box-shadow: 0 0 0 10px rgba(6,182,212,0); }
-          100% { box-shadow: 0 0 0 0 rgba(6,182,212,0); }
-        }
-        @keyframes blink {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0; }
-        }
-      `}</style>
-    </Card>
+            <div className="mt-5">
+              <div className="text-xs font-semibold text-slate-700 mb-2">示例问题</div>
+              <div className="flex flex-wrap gap-2">
+                {EXAMPLE_QUESTIONS.map((q) => (
+                  <Button
+                    key={q}
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    className="bg-white/70 hover:bg-white"
+                    onClick={() => setQuestion(q)}
+                  >
+                    {q}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 真实数据库查询加载中 — 骨架屏 */}
+        {dataSourceLoading && (
+          <div className="space-y-4 animate-pulse">
+            {/* Conclusion card skeleton */}
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div className="flex items-center gap-2 px-5 py-3.5 border-b border-slate-200">
+                <div className="w-4 h-4 rounded bg-slate-200" />
+                <div className="h-3.5 bg-slate-200 rounded w-28" />
+              </div>
+              <div className="px-8 py-8 text-center space-y-4">
+                <div className="h-3 bg-slate-200 rounded w-16 mx-auto" />
+                <div className="h-12 bg-slate-200 rounded w-48 mx-auto" />
+                <div className="h-4 bg-slate-200 rounded w-64 mx-auto" />
+                <div className="flex justify-center gap-2">
+                  <div className="h-5 bg-slate-200 rounded w-16" />
+                  <div className="h-5 bg-slate-200 rounded w-20" />
+                  <div className="h-5 bg-slate-200 rounded w-14" />
+                </div>
+              </div>
+            </div>
+
+            {/* Dual-view tabs skeleton */}
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div className="flex items-center gap-2 px-5 py-3.5 border-b border-slate-200">
+                <div className="w-4 h-4 rounded bg-slate-200" />
+                <div className="h-3.5 bg-slate-200 rounded w-20" />
+              </div>
+              <div className="px-5 pt-4 pb-4">
+                <div className="flex gap-1 mb-4">
+                  <div className="h-8 bg-slate-200 rounded-md w-24" />
+                  <div className="h-8 bg-slate-200 rounded-md w-24" />
+                </div>
+                <div className="h-24 bg-slate-200 rounded-lg w-full" />
+              </div>
+            </div>
+
+            {/* Two-column grid skeleton: calculate + settlement facts */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200">
+                  <div className="w-4 h-4 rounded bg-slate-200" />
+                  <div className="h-3.5 bg-slate-200 rounded w-20" />
+                </div>
+                <div className="px-4 py-4 space-y-3">
+                  <div className="h-3 bg-slate-200 rounded w-3/4" />
+                  <div className="h-3 bg-slate-200 rounded w-5/6" />
+                  <div className="h-3 bg-slate-200 rounded w-2/3" />
+                  <div className="h-3 bg-slate-200 rounded w-4/5" />
+                </div>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200">
+                  <div className="w-4 h-4 rounded bg-slate-200" />
+                  <div className="h-3.5 bg-slate-200 rounded w-28" />
+                </div>
+                <div className="divide-y divide-slate-100">
+                  {[1,2,3,4,5].map((i) => (
+                    <div key={i} className="flex items-center justify-between px-4 py-2.5">
+                      <div className="h-3 bg-slate-200 rounded w-16" />
+                      <div className="h-3 bg-slate-200 rounded w-20" />
+                      <div className="h-3 bg-slate-200 rounded w-24" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Policy evidence skeleton */}
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200">
+                <div className="w-4 h-4 rounded bg-slate-200" />
+                <div className="h-3.5 bg-slate-200 rounded w-20" />
+              </div>
+              <div className="px-4 py-3 space-y-2">
+                <div className="h-4 bg-slate-200 rounded w-full" />
+                <div className="h-4 bg-slate-200 rounded w-5/6" />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center gap-2 text-sm text-slate-400 pt-1">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>正在查询真实数据库...</span>
+            </div>
+          </div>
+        )}
+
+        {/* 真实数据库查询失败 */}
+        {dataSourceError && !dataSourceLoading && (
+          <div className="bg-white border border-red-200 rounded-xl p-6">
+            <div className="flex items-start gap-3">
+              <span className="text-[#DC2626] text-lg leading-none mt-0.5">✕</span>
+              <div>
+                <div className="text-sm font-semibold text-[#DC2626]">真实数据库查询失败</div>
+                <div className="text-sm text-slate-600 mt-1 leading-relaxed">{dataSourceError}</div>
+                <div className="text-xs text-slate-500 mt-2">
+                  请检查数据库连接和结算单号。当前不会展示 mock 数据。
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 真实数据库查询成功 — 展示 SettlementExplanationPage */}
+        {realSettlementData && !dataSourceLoading && <SettlementExplanationPage data={realSettlementData} />}
+
+        {/* 无法回答 — show reason */}
+        {!isLoading && runStatus === 'success' && !canAnswer && (
+          <div className="bg-white border border-slate-200 rounded-xl p-6">
+            <div className="flex items-start gap-3">
+              <Info className="h-5 w-5 text-slate-400 shrink-0 mt-0.5" />
+              <div>
+                <div className="text-sm font-semibold text-slate-700">当前无法提供答案</div>
+                <div className="text-sm text-slate-500 mt-1 leading-relaxed">
+                  {canAnswerReason ||
+                    '系统未获取到足够的结算字段或政策依据来回答该问题。请尝试调整问题表述，或检查结算单号是否正确。'}
+                </div>
+                {missingItems.length > 0 && (
+                  <div className="mt-2">
+                    <div className="text-xs text-slate-400 mb-1">缺少以下信息：</div>
+                    <ul className="space-y-1">
+                      {missingItems.map((item, i) => (
+                        <li key={i} className="text-xs text-slate-500 flex items-center gap-1.5">
+                          <span className="w-1 h-1 rounded-full bg-slate-300 shrink-0" />
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 非统筹自付问题：canAnswer 或 partialAnswer 时显示 */}
+        {!isLoading && (canAnswer || partialAnswer) && !isTongChouQuestion && (
+          <>
+            <PolicyAnswerCard
+              treatments={treatments}
+              feeBreakdown={feeBreakdown}
+              evidence={evidence}
+              policyCards={policyCards}
+            />
+
+            {/* 双视角解释 — 浅色主题标签页 */}
+            {(patientView || officeView) && (
+              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                {/* 标签切换 */}
+                <div className="flex border-b border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedView('patient')}
+                    className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+                      selectedView === 'patient'
+                        ? 'text-[#2563EB] border-b-2 border-[#2563EB] bg-blue-50/50'
+                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    患者视角
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedView('office')}
+                    className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+                      selectedView === 'office'
+                        ? 'text-[#2563EB] border-b-2 border-[#2563EB] bg-blue-50/50'
+                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    院端视角
+                  </button>
+                </div>
+                {/* 内容区域 */}
+                <div className="p-4 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                  {selectedView === 'patient'
+                    ? patientView ||
+                      '暂无患者视角解释。请检查后端服务是否正常运行，或尝试重新提问。'
+                    : officeView ||
+                      '暂无院端视角解释。请检查后端服务是否正常运行，或尝试重新提问。'}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* 初始加载状态（尚无步骤） */}
+        {isLoading && steps.length === 0 && !dataSourceLoading && (
+          <div className="bg-white border border-slate-200 rounded-xl p-6">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 animate-spin text-[#2563EB]" />
+              <span className="text-sm text-slate-500">处理中...</span>
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
   )
 }
