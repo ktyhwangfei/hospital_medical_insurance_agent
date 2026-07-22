@@ -43,6 +43,7 @@ class ObjectDetail(BaseModel):
     version: str
     status: str
     current_version: str | None = None
+    locked_by_skills: list[dict] = []
 
 
 class MetricSummary(BaseModel):
@@ -385,6 +386,7 @@ def get_object(object_code: str):
         source_object=obj.source_object, source_adapter_port=obj.source_adapter_port,
         relations=[r.model_dump() for r in obj.relations], version=obj.version, status=obj.status,
         current_version=obj.current_version,
+        locked_by_skills=_compute_skill_locks().get(object_code, []),
     )
 
 
@@ -882,6 +884,31 @@ def _get_skill_metric_refs() -> dict[str, int]:
     _skill_refs_cache = _compute_skill_metric_refs()
     _skill_refs_cache_ts = now
     return _skill_refs_cache
+
+
+def _compute_skill_locks() -> dict[str, list[dict]]:
+    """扫描 skill_manifest 的 locked_versions，返回每个对象的锁定情况。
+
+    返回 {object_code: [{skill_id, locked_version}, ...]}。
+    locked_version=None 表示跟随最新已发布（follow latest published）。
+    """
+    import yaml
+    from pathlib import Path
+    from src.config.production import SKILLS_DIR
+
+    locks: dict[str, list[dict]] = {}
+    for manifest_path in Path(SKILLS_DIR).glob("*/skill_manifest.yaml"):
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = yaml.safe_load(f) or {}
+        except Exception:
+            logger.warning("读取 skill_manifest 失败: %s", manifest_path, exc_info=True)
+            continue
+        skill_id = manifest.get("skill_id", manifest_path.parent.name)
+        for obj_code, ver in (manifest.get("locked_versions") or {}).items():
+            locks.setdefault(obj_code, []).append(
+                {"skill_id": skill_id, "locked_version": ver})
+    return locks
 
 
 @router.get("/summary", response_model=SemanticSummary)
