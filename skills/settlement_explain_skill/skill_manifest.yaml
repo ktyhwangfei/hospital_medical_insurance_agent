@@ -11,21 +11,38 @@ version: "2.0.0"
 business_action: explain       # 解释：为什么（面向患者，解释已发生的事实）
 business_object: settlement    # 结算：操作对象为医保结算数据
 
-# ── 语义层声明（新增）─────────────────────────────────────────────
+# ── 语义层声明 ─────────────────────────────────────────────────
+# 对齐语义层真实指标编码（Settlement 对象）。物理字段映射见各指标的
+# source_field，与 field_mapping.yaml 的 db_source 一致。
+# 注意：hospital_level 为派生/默认值（无对应数据源指标），不在此声明。
 needed_objects:
-  - object_code: "Settlement"
+  - object_code: "zydyxx"          # 住院待遇
     metrics:
-      - deductible
-      - basic_pooling_payment
-      - basic_pooling_self_pay
-      - large_amount_payment
-      - large_amount_self_pay
-      - personal_total_pay
-      - person_type
-      - insurance_type
-      - service_type
-      - hospital_level
+      - bcqfje                      # 起付线
+      - bcybnje                     # 医保内费用
     importance: "core"
+  - object_code: "zyfdxx"          # 住院分段
+    metrics:
+      - bdtczfje                    # 统筹支付
+      - bdtczf                      # 统筹自付
+      - bddezfje                    # 大额支付
+      - bddezf                      # 大额自付
+      - bdgryf                      # 个人应付（≈个人总支付）
+    importance: "core"
+  - object_code: "zyjyxx"          # 住院交易
+    metrics:
+      - rylb                        # 人员类别
+    importance: "core"
+  - object_code: "djxx"            # 参保人登记
+    metrics:
+      - fund_type                   # 险种类型
+      - yllb                        # 医疗类别
+    importance: "core"
+  - object_code: "zyfymx"          # 住院费用明细
+    metrics:
+      - ybwje                       # 医保外金额（自费项策略）
+      - ybnje                       # 医保内金额
+    importance: "optional"
 
 # ── 路由配置 ──────────────────────────────────────────────────
 
@@ -66,17 +83,17 @@ excluded_intents: []  # unified skill — no exclusions
 # ── 依赖声明 ──────────────────────────────────────────────────
 
 required_settlement_fields:
-  - deductible
-  - medical_insurance_inner_amount
-  - basic_pooling_payment
-  - basic_pooling_self_pay
-  - large_amount_payment
-  - large_amount_self_pay
-  - personal_total_pay
-  - person_type
-  - insurance_type
-  - service_type
-  - hospital_level
+  - zydyxx.bcqfje        # 起付线
+  - zydyxx.bcybnje       # 医保内费用
+  - zyfdxx.bdtczfje      # 统筹支付
+  - zyfdxx.bdtczf        # 统筹自付
+  - zyfdxx.bddezfje      # 大额支付
+  - zyfdxx.bddezf        # 大额自付
+  - zyfdxx.bdgryf        # 个人应付
+  - zyjyxx.rylb          # 人员类别
+  - djxx.fund_type       # 险种类型
+  - djxx.yllb            # 医疗类别
+  # hospital_level：语义层暂无对应指标（gap），待补充后声明
 
 required_mcp:
   - settlement-data
@@ -113,48 +130,48 @@ display:
   mode: single  # single | compare
 
   # 参保信息（输入上下文 — 决定了什么规则适用）
+  # field 统一使用语义层指标编码（object.metric）
   profile:
     title: 您的参保信息
     items:
-      - field: person_type
+      - field: zyjyxx.rylb
         label: 人员类别
-      - field: insurance_type
+      - field: djxx.fund_type
         label: 参保类型
-      - field: service_type
+      - field: djxx.yllb
         label: 医疗类别
-      - field: hospital_level
-        label: 医院等级
+      # hospital_level：语义层暂无对应指标（gap），待补充后声明
 
   # 费用明细（输出字段 — 按业务含义分组）
   output:
     - group: 医保帮您付的
       items:
-        - field: basic_pooling_payment
+        - field: zyfdxx.bdtczfje
           label: 统筹基金支付
           format: money
-        - field: large_amount_payment
+        - field: zyfdxx.bddezfje
           label: 大额基金支付
           format: money
 
     - group: 您个人承担的
       items:
-        - field: deductible
+        - field: zydyxx.bcqfje
           label: 起付线
           format: money
           hint: 报销前个人全额承担
-        - field: basic_pooling_self_pay
+        - field: zyfdxx.bdtczf
           label: 统筹自付
           format: money
           highlight: true
           hint: 统筹段内按比例自付
-        - field: large_amount_self_pay
+        - field: zyfdxx.bddezf
           label: 大额自付
           format: money
           hint: 大额段内按比例自付
 
     - group: 合计
       items:
-        - field: personal_total_pay
+        - field: zyfdxx.bdgryf
           label: 个人总支付
           format: money
           hint: 以上所有个人承担项之和
