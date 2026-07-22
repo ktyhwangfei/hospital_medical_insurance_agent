@@ -58,7 +58,12 @@ class PostgreSQLTaskStore:
         self._client = client
 
     def _serialize(self, value: Any) -> Any:
-        """Convert dict values to JSON strings for PostgreSQL JSONB columns."""
+        """Convert dict values to JSON strings for PostgreSQL JSONB columns.
+
+        Returns '{}' for None to satisfy NOT NULL constraints on JSONB columns.
+        """
+        if value is None:
+            return '{}'
         if isinstance(value, dict):
             return json.dumps(value, ensure_ascii=False, default=str)
         return value
@@ -185,3 +190,14 @@ on conflict (task_id) do update set
     ) -> dict[str, Any]:
         """Create a pending task (convenience wrapper)."""
         return self.create_task(task_id, task_type, description, responsible_role)
+
+    def list_tasks_by_workflow(self, workflow_id: str) -> list[dict[str, Any]]:
+        """List all tasks for a given workflow."""
+        try:
+            rows = self._client.execute(
+                "SELECT * FROM tasks WHERE workflow_id = %s ORDER BY created_at ASC",
+                (workflow_id,),
+            )
+            return [_row_to_task(r) for r in rows]
+        except RuntimeError:
+            return []

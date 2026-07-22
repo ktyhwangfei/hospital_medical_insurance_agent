@@ -20,111 +20,109 @@ from src.runtime.policy_qa.models import ExplanationContext, FeeDecompositionRes
 
 logger = logging.getLogger(__name__)
 
-# 解释生成Prompt模板 - 核心要求: 每个金额必须关联到具体的政策规则
+
+def _safe_money(value) -> str:
+    """安全格式化金额：null/0/空 → '未获取'。"""
+    if value is None or value == '' or (isinstance(value, (int, float)) and value == 0):
+        return '未获取'
+    try:
+        return f'{float(value):,.2f}'
+    except (ValueError, TypeError):
+        return '未获取'
+
+
+# ── 解释生成 Prompt 模板 ─────────────────────────────────────────
+# 核心原则：用户问什么只答什么，不展开无关内容
+
 EXPLANATION_PROMPTS = {
-    "患者": """你是一个医保政策解释助手，需要用通俗易懂的语言向患者解释费用构成。
+    "患者": """你是医保政策解释助手。面向患者，必须简短、通俗。
 
-【核心要求】每个金额数字都必须说明"根据哪条政策规则计算得出"。
-
-用户问题: {question}
-
-费用分解结果:
-{decomposition_text}
-
-政策依据（每条规则对应一个金额）:
-{policy_text}
-
-请按以下结构解释:
-1. 患者基本情况（险种、人员类别、医疗类别）
-2. 总费用及医保报销情况
-3. 个人需要支付多少
-4. 【重点】为什么是这个金额——逐段说明:
-   - 第一段: 金额是多少，根据哪条政策，基础比例是多少，人员优惠是多少，实际比例是多少
-   - 第二段: ...（同上）
-   - ...
-5. 总结: 退休人员/在职人员享受的优惠政策
-
-注意:
-- 使用简单易懂的语言
-- 每个数字都要引用具体的政策条文
-- 说明"基础比例 × 人员系数 = 实际比例"的计算过程
-- 让患者明白自己的费用构成和政策依据""",
-
-    "收费员": """你是一个医保政策解释助手，需要向收费员详细解释费用构成。
-
-【核心要求】每个金额数字都必须说明"根据哪条政策规则计算得出"。
+【铁律】
+1. 只回答用户问题。用户只问了 X，你就只解释 X。禁止解释其他费用项。
+2. 禁止介绍医保报销流程。禁止展开大额支付、医保外费用，除非它们直接导致 X 的金额变化。
+3. 禁止使用"首先/其次/最后/综上所述"等长篇结构。
 
 用户问题: {question}
 
-费用分解结果:
-{decomposition_text}
-
-政策依据（每条规则对应一个金额）:
-{policy_text}
-
-请按以下结构解释:
-1. 患者基本情况（险种、人员类别、医疗类别）
-2. 费用分解明细（甲类/乙类/丙类）
-3. 待遇分解明细（统筹/大额/个人）
-4. 【重点】分段计算过程——逐段说明:
-   - 段范围、段内金额、基础比例、人员系数、实际比例、自付金额
-   - 每段都必须引用对应的政策条文
-5. 政策依据汇总
-6. 便于收费员向患者解释的话术
-
-注意:
-- 使用专业术语
-- 详细说明计算过程
-- 每段计算都必须引用政策条文
-- 提供政策依据""",
-
-    "医生": """你是一个医保政策解释助手，需要向医生解释费用构成。
-
-【核心要求】每个金额数字都必须说明"根据哪条政策规则计算得出"。
-
-用户问题: {question}
-
-费用分解结果:
+费用数据（仅使用与问题相关的部分）:
 {decomposition_text}
 
 政策依据:
 {policy_text}
 
-请从医生角度解释:
-1. 费用构成（哪些是医保内，哪些是医保外）
-2. 分段计算明细——每段的比例和金额，以及对应的政策依据
-3. 哪些项目影响了报销比例
-4. 如何优化费用结构
+{RAG_MISS_NOTE}
 
-注意:
-- 关注医保内/外费用
-- 分析费用结构
-- 提供优化建议""",
+请用 3 段以内回答:
+- 第1段: 一句话直接回答（"您的统筹自付是 X 元，原因如下："）
+- 第2段: 简要说明关键计算（只列与问题直接相关的金额和比例，不要列全部）
+- 第3段: 一句话总结 + 引用 1 条政策依据
+- 如果没有政策依据，第3段改为"以上解释基于结算数据，建议咨询医保办确认"
 
-    "医保管理员": """你是一个医保政策解释助手，需要向医保管理员详细解释费用构成。
+禁止：
+- 列出所有费用项
+- 介绍医保报销流程
+- 超出用户问题的解释""",
 
-【核心要求】每个金额数字都必须说明"根据哪条政策规则计算得出"。
+    "收费员": """你是医保政策解释助手。面向医保办/收费员，专业精确。
+
+【铁律】
+1. 只回答用户问题，不要展开无关费用项。
+2. 展示结算字段来源、RAG政策依据、计算口径。
+3. 如果政策规则不足以精确还原计算结果，必须明确写"需继续追溯"，禁止编造公式。
 
 用户问题: {question}
 
-费用分解结果:
+结算数据与政策依据:
+{decomposition_text}
+
+RAG政策依据:
+{policy_text}
+
+{RAG_MISS_NOTE}
+
+请按以下结构回答（共 3 个区块）:
+
+### 1. 结算字段
+列出与问题直接相关的结算字段（表名、字段名、值）。只列相关的，不超过 5 条。
+
+### 2. 政策依据
+逐条列出 RAG 命中的政策规则（条文编号 + 关键内容摘要）。
+
+### 3. 计算口径
+- 说明当前使用的计算方式
+- 如果分段规则完整：列出每段计算（金额 × 比例 × 系数 = 结果）
+- 如果分段规则不完整：写"当前命中 N 条规则，不足以精确还原。需继续追溯 [缺失的规则类型]。"
+- 如有对账差异：写明差异金额和可能原因
+
+禁止：
+- 介绍医保报销全流程
+- 展开与问题无关的费用项
+- 在规则不全时编造公式""",
+
+    # ★ 优化：合并双视角 prompt — 一次 LLM 调用生成两个视角
+    "dual": """你是医保政策解释助手。请同时生成两个视角的解释，用分隔符隔开。
+
+用户问题: {question}
+
+费用数据:
 {decomposition_text}
 
 政策依据:
 {policy_text}
 
-请从医保管理角度详细解释:
-1. 费用分解明细
-2. 待遇分解明细
-3. 【重点】分段计算过程——逐段说明金额、比例、政策依据
-4. 政策依据
-5. 合规性分析
+{RAG_MISS_NOTE}
 
-注意:
-- 使用专业术语
-- 详细说明计算过程
-- 每段都必须引用政策条文
-- 分析合规性""",
+请严格按以下格式输出：
+
+===PATIENT===
+（面向患者的解释，简短通俗，3 段以内。直接回答金额和原因，不要介绍流程。）
+===PATIENT_END===
+
+===OFFICE===
+（面向医保办/收费员的解释，专业精确。包含结算字段来源、政策依据、计算口径。）
+===OFFICE_END===
+
+禁止在分隔符之外输出任何内容。""",
 }
 
 
@@ -165,7 +163,7 @@ class ExplanationGenerator:
             messages = [Message(role="user", content=prompt)]
             for chunk in self.model_gateway.generate_stream(
                 messages=messages,
-                model_type="explanation_generation",
+                model_type="llm",
                 scene="policy_qa",
             ):
                 if chunk.content:
@@ -194,11 +192,23 @@ class ExplanationGenerator:
             context.decomposition, context.policy_rules
         )
 
+        # RAG 未命中提示
+        if context.rag_miss:
+            rag_miss_note = (
+                "⚠️ 注意：本次检索未找到与用户问题直接匹配的政策规则。"
+                "请基于结算数据（费用分解结果）进行解释，并在回答中明确告知用户"
+                "「未检索到相关政策条文，以下解释基于系统已有结算数据」。"
+                "不要编造政策条文。"
+            )
+        else:
+            rag_miss_note = ""
+
         # 构建Prompt
         prompt = EXPLANATION_PROMPTS[user_role].format(
             question=context.question,
             decomposition_text=decomposition_text,
             policy_text=policy_text,
+            RAG_MISS_NOTE=rag_miss_note,
         )
 
         return prompt
@@ -236,8 +246,6 @@ class ExplanationGenerator:
             lines.append(f"  计算: {seg.calculation}")
             if seg.policy_source:
                 lines.append(f"  政策依据: {seg.policy_source}")
-            if seg.rule_id:
-                lines.append(f"  规则ID: {seg.rule_id}")
             lines.append("")
         lines.append(f"【统筹自付合计】{decomposition.segments.total_pay:,.2f}元")
         lines.append("")
@@ -257,7 +265,17 @@ class ExplanationGenerator:
         格式化政策规则，按分段组织
 
         核心: 把政策规则与分段计算关联，形成"规则→金额"的映射。
+
+        兼容 SkillPolicyRule (tool_interfaces) 和域 PolicyRule (models)，
+        使用 getattr 回退链: source_text → evidence_text → title。
         """
+        def _rule_text(rule) -> str:
+            """安全获取规则文本，兼容 SkillPolicyRule 和域 PolicyRule"""
+            return (getattr(rule, 'source_text', None)
+                    or getattr(rule, 'evidence_text', '')
+                    or getattr(rule, 'title', '')
+                    or '')
+
         lines = []
 
         # 1. 分段对应规则
@@ -274,21 +292,24 @@ class ExplanationGenerator:
                     # 从 policy_rules 中查找匹配的规则
                     matching_rule = self._find_matching_rule(seg, policy_rules)
                     if matching_rule:
-                        lines.append(f"  政策条文: {matching_rule.source_text}")
+                        lines.append(f"  政策条文: {_rule_text(matching_rule)}")
                 lines.append("")
 
         # 2. 其他相关规则（起付线、封顶线等）
-        other_rules = [r for r in policy_rules if r.rule_type != "统筹分段"]
+        other_rules = [r for r in policy_rules if getattr(r, 'rule_type', '') != "统筹分段"]
         if other_rules:
             lines.append("【其他相关政策】")
             for i, rule in enumerate(other_rules[:5], 1):
-                lines.append(f"{i}. [{rule.rule_type}] {rule.source_text}")
-                if rule.payment_ratio:
-                    lines.append(f"   支付比例: {rule.payment_ratio}")
-                if rule.deductible_amount:
-                    lines.append(f"   起付线: {rule.deductible_amount}")
-                if rule.cap_amount:
-                    lines.append(f"   封顶线: {rule.cap_amount}")
+                lines.append(f"{i}. [{getattr(rule, 'rule_type', '')}] {_rule_text(rule)}")
+                payment_ratio = getattr(rule, 'payment_ratio', '')
+                if payment_ratio:
+                    lines.append(f"   支付比例: {payment_ratio}")
+                deductible = getattr(rule, 'deductible_amount', '')
+                if deductible:
+                    lines.append(f"   起付线: {deductible}")
+                cap = getattr(rule, 'cap_amount', '')
+                if cap:
+                    lines.append(f"   封顶线: {cap}")
             lines.append("")
 
         if not lines:
@@ -299,31 +320,48 @@ class ExplanationGenerator:
     def _find_matching_rule(self, seg, policy_rules: list):
         """
         查找与分段匹配的政策规则
+
+        兼容 SkillPolicyRule (tool_interfaces) 和域 PolicyRule (models)。
+        优先 rule_id 匹配，其次 payment_ratio 匹配，最后按 rule_type 返回首条。
         """
         for rule in policy_rules:
-            if rule.rule_type == "统筹分段":
-                # 尝试匹配 rule_id
-                if seg.rule_id and rule.rule_id == seg.rule_id:
+            if getattr(rule, 'rule_type', '') == "统筹分段":
+                # 尝试匹配 rule_id（仅域 PolicyRule 有此字段）
+                rule_id = getattr(rule, 'rule_id', None)
+                if seg.rule_id and rule_id == seg.rule_id:
                     return rule
-                # 或者匹配 payment_ratio
-                try:
-                    rule_ratio = float(rule.payment_ratio.replace("%", "")) / 100 if "%" in rule.payment_ratio else float(rule.payment_ratio)
-                    if abs(rule_ratio - seg.base_ratio) < 0.001:
-                        return rule
-                except (ValueError, TypeError):
-                    continue
+                # 或者匹配 payment_ratio（仅域 PolicyRule 有此字段）
+                payment_ratio = getattr(rule, 'payment_ratio', None)
+                if payment_ratio:
+                    try:
+                        ratio_str = str(payment_ratio)
+                        rule_ratio = float(ratio_str.replace("%", "")) / 100 if "%" in ratio_str else float(ratio_str)
+                        if abs(rule_ratio - seg.base_ratio) < 0.001:
+                            return rule
+                    except (ValueError, TypeError):
+                        continue
+        # 宽松回退：返回第一条 rule_type == "统筹分段" 的规则
+        for rule in policy_rules:
+            if getattr(rule, 'rule_type', '') == "统筹分段":
+                return rule
         return None
 
     def _format_policy_rules(self, policy_rules: list) -> str:
         """
         格式化政策规则（兼容旧接口）
+
+        兼容 SkillPolicyRule 和域 PolicyRule。
         """
         if not policy_rules:
             return "暂无政策依据"
 
         lines = []
         for i, rule in enumerate(policy_rules[:5], 1):
-            lines.append(f"{i}. [{rule.rule_type}] {rule.source_text}")
+            rule_text = (getattr(rule, 'source_text', None)
+                         or getattr(rule, 'evidence_text', '')
+                         or getattr(rule, 'title', '')
+                         or '')
+            lines.append(f"{i}. [{getattr(rule, 'rule_type', '')}] {rule_text}")
 
         return "\n".join(lines)
 
@@ -332,10 +370,14 @@ class ExplanationGenerator:
         生成占位符解释（根据用户问题生成个性化回答）
 
         核心改进: 基于实际分段计算结果和政策规则生成解释，
-        而不是硬编码文本。
+        而不是硬编码文本。区分患者视角（通俗）和院端视角（专业）。
         """
+        is_patient = context.user_role == "患者"
+        role_label = "【患者视角】" if is_patient else "【院端/医保办视角】"
+
         if context.intent.target_fee_item == "pooling_self_pay":
-            return self._generate_pooling_self_pay_placeholder(context)
+            base = self._generate_pooling_self_pay_placeholder(context)
+            return role_label + "\n" + base
 
         decomposition = context.decomposition
         question = context.question
@@ -350,15 +392,15 @@ class ExplanationGenerator:
 
         # 2. 总览
         lines.append(f"【费用概览】")
-        lines.append(f"- 总费用：{decomposition.treatment.total_fee.value:,.2f} 元")
-        lines.append(f"- 医保内：{decomposition.treatment.in_scope.value:,.2f} 元")
-        lines.append(f"- 医保外：{decomposition.treatment.out_of_scope.value:,.2f} 元")
+        lines.append(f"- 总费用：{_safe_money(decomposition.treatment.total_fee.value)} 元")
+        lines.append(f"- 医保内：{_safe_money(decomposition.treatment.in_scope.value)} 元")
+        lines.append(f"- 医保外：{_safe_money(decomposition.treatment.out_of_scope.value)} 元")
         lines.append("")
 
         # 3. 统筹自付分段解释（核心）
         if "统筹自付" in question or "自付" in question:
             lines.append(f"【统筹自付详解】")
-            lines.append(f"您的统筹自付金额为 {decomposition.treatment.pooling_self_pay.value:,.2f} 元。")
+            lines.append(f"您的统筹自付金额为 {_safe_money(decomposition.treatment.pooling_self_pay.value)} 元。")
             lines.append("")
             lines.append("这笔费用的计算依据如下：")
             lines.append("")
@@ -366,17 +408,17 @@ class ExplanationGenerator:
             # 逐段解释
             for i, seg in enumerate(decomposition.segments.segments, 1):
                 lines.append(f"第{i}段：{seg.lower:,.0f}-{seg.upper:,.0f} 元")
-                lines.append(f"  - 段内金额：{seg.amount:,.2f} 元")
+                lines.append(f"  - 段内金额：{_safe_money(seg.amount)} 元")
                 lines.append(f"  - 基础自付比例：{seg.base_ratio:.0%}")
                 lines.append(f"  - 人员系数：{seg.person_ratio:.0%}")
                 lines.append(f"  - 实际自付比例：{seg.actual_ratio:.0%}")
-                lines.append(f"  - 该段自付：{seg.pay:,.2f} 元")
+                lines.append(f"  - 该段自付：{_safe_money(seg.pay)} 元")
                 lines.append(f"  - 计算：{seg.calculation}")
                 if seg.policy_source:
                     lines.append(f"  - 政策依据：{seg.policy_source}")
                 lines.append("")
 
-            lines.append(f"合计：{decomposition.segments.total_pay:,.2f} 元")
+            lines.append(f"合计：{_safe_money(decomposition.segments.total_pay)} 元")
             lines.append("")
 
             # 人员优惠说明
@@ -391,49 +433,53 @@ class ExplanationGenerator:
         # 4. 起付线解释
         elif "起付线" in question:
             lines.append(f"【起付线详解】")
-            lines.append(f"您的起付线金额为 {decomposition.treatment.deductible.value:,.2f} 元。")
+            lines.append(f"您的起付线金额为 {_safe_money(decomposition.treatment.deductible.value)} 元。")
             lines.append("")
             lines.append("起付线是指医保基金开始支付前，需要个人先行承担的费用额度。")
             lines.append("")
             # 查找起付线规则
             deductible_rule = self._find_rule_by_type(policy_rules, "起付线")
             if deductible_rule:
-                lines.append(f"政策依据：{deductible_rule.source_text}")
+                rule_text = (getattr(deductible_rule, 'source_text', None)
+                             or getattr(deductible_rule, 'evidence_text', '')
+                             or getattr(deductible_rule, 'title', '')
+                             or '')
+                lines.append(f"政策依据：{rule_text}")
             lines.append("")
 
         # 5. 报销比例解释
         elif "报销" in question or "比例" in question:
             lines.append(f"【报销比例详解】")
             lines.append(f"本次住院的医保报销情况：")
-            lines.append(f"- 统筹支付：{decomposition.treatment.pooling_payment.value:,.2f} 元")
-            lines.append(f"- 大额支付：{decomposition.treatment.major_payment.value:,.2f} 元")
-            lines.append(f"- 合计报销：{decomposition.treatment.pooling_payment.value + decomposition.treatment.major_payment.value:,.2f} 元")
+            lines.append(f"- 统筹支付：{_safe_money(decomposition.treatment.pooling_payment.value)} 元")
+            lines.append(f"- 大额支付：{_safe_money(decomposition.treatment.major_payment.value)} 元")
+            lines.append(f"- 合计报销：{_safe_money(decomposition.treatment.pooling_payment.value + decomposition.treatment.major_payment.value)} 元")
             lines.append("")
             lines.append("报销比例根据以下因素确定：")
             for i, seg in enumerate(decomposition.segments.segments, 1):
-                lines.append(f"- 第{i}段 ({seg.lower:,.0f}-{seg.upper:,.0f}元): 基础比例 {seg.base_ratio:.0%}, 实际比例 {seg.actual_ratio:.0%}")
+                lines.append(f"- 第{i}段 ({_safe_money(seg.lower)}-{_safe_money(seg.upper)}元): 基础比例 {seg.base_ratio:.0%}, 实际比例 {seg.actual_ratio:.0%}")
             lines.append("")
 
         # 6. 通用回答
         else:
             lines.append(f"【费用构成】")
-            lines.append(f"- 总费用：{decomposition.treatment.total_fee.value:,.2f} 元")
-            lines.append(f"- 医保内：{decomposition.treatment.in_scope.value:,.2f} 元")
-            lines.append(f"- 医保外：{decomposition.treatment.out_of_scope.value:,.2f} 元")
+            lines.append(f"- 总费用：{_safe_money(decomposition.treatment.total_fee.value)} 元")
+            lines.append(f"- 医保内：{_safe_money(decomposition.treatment.in_scope.value)} 元")
+            lines.append(f"- 医保外：{_safe_money(decomposition.treatment.out_of_scope.value)} 元")
             lines.append("")
             lines.append(f"【医保报销】")
-            lines.append(f"- 统筹支付：{decomposition.treatment.pooling_payment.value:,.2f} 元")
-            lines.append(f"- 大额支付：{decomposition.treatment.major_payment.value:,.2f} 元")
+            lines.append(f"- 统筹支付：{_safe_money(decomposition.treatment.pooling_payment.value)} 元")
+            lines.append(f"- 大额支付：{_safe_money(decomposition.treatment.major_payment.value)} 元")
             lines.append("")
             lines.append(f"【个人承担】")
-            lines.append(f"- 起付线：{decomposition.treatment.deductible.value:,.2f} 元")
-            lines.append(f"- 统筹自付：{decomposition.treatment.pooling_self_pay.value:,.2f} 元")
-            lines.append(f"- 大额自付：{decomposition.treatment.major_self_pay.value:,.2f} 元")
-            lines.append(f"- 个人应负：{decomposition.treatment.personal_liability.value:,.2f} 元")
+            lines.append(f"- 起付线：{_safe_money(decomposition.treatment.deductible.value)} 元")
+            lines.append(f"- 统筹自付：{_safe_money(decomposition.treatment.pooling_self_pay.value)} 元")
+            lines.append(f"- 大额自付：{_safe_money(decomposition.treatment.major_self_pay.value)} 元")
+            lines.append(f"- 个人应负：{_safe_money(decomposition.treatment.personal_liability.value)} 元")
             lines.append("")
 
         lines.append("如果您对这笔费用有疑问，建议咨询医院医保办或当地医保局。")
-        return "\n".join(lines)
+        return role_label + "\n" + "\n".join(lines)
 
     def _generate_pooling_self_pay_placeholder(self, context: ExplanationContext) -> str:
         """基于结构化事实生成统筹自付确定性解释。"""
@@ -447,17 +493,35 @@ class ExplanationGenerator:
             else pooling_self_pay.value
         )
 
+        explanation_context = context.rewritten_question.explanation_context or {}
+        patient_context_parts = []
+        if explanation_context.get("fund_type"):
+            patient_context_parts.append(str(explanation_context["fund_type"]))
+        if explanation_context.get("medical_type"):
+            patient_context_parts.append(str(explanation_context["medical_type"]))
+        if explanation_context.get("person_type"):
+            patient_context_parts.append(str(explanation_context["person_type"]))
+        if explanation_context.get("year"):
+            patient_context_parts.append(f"{explanation_context['year']}年度")
+
         lines = [
             "根据本次结算业务库和已检索到的统筹分段规则，为您解释“统筹自付”金额：",
             "",
-            "【业务库结算金额】",
-            f"- 业务库已结算的统筹自付金额为 {pooling_self_pay.value:,.2f} 元。",
         ]
-        if pooling_self_pay.source:
-            lines.append(f"- 金额来源：{pooling_self_pay.source}")
-        if treatment.deductible.source:
+        if patient_context_parts:
+            lines.extend([
+                "【患者与结算上下文】",
+                f"- 本次上下文：{'、'.join(patient_context_parts)}。",
+                "",
+            ])
+        lines.extend([
+            "【业务库结算金额】",
+            f"- 业务库已结算的统筹自付金额为 {_safe_money(pooling_self_pay.value)} 元。",
+            "- 业务库金额为本次结算的权威金额，政策解释计算值仅用于解释和复核。",
+        ])
+        if treatment.deductible.value is not None and treatment.deductible.value != 0:
             lines.append(
-                f"- 起付线：{treatment.deductible.value:,.2f} 元，来源：{treatment.deductible.source}"
+                f"- 起付线：{_safe_money(treatment.deductible.value)} 元。"
             )
         lines.append("")
 
@@ -475,12 +539,12 @@ class ExplanationGenerator:
 
         lines.append("【统筹分段计算】")
         for index, segment in enumerate(segments.segments, 1):
-            lines.append(f"第{index}段：{segment.lower:,.0f}-{segment.upper:,.0f} 元")
-            lines.append(f"- 段内金额：{segment.amount:,.2f} 元")
+            lines.append(f"第{index}段：{_safe_money(segment.lower)}-{_safe_money(segment.upper)} 元")
+            lines.append(f"- 段内金额：{_safe_money(segment.amount)} 元")
             lines.append(f"- 基础自付比例：{segment.base_ratio:.0%}")
             lines.append(f"- 退休人员系数：{segment.person_ratio:.0%}")
             lines.append(f"- 实际自付比例：{segment.actual_ratio:.0%}")
-            lines.append(f"- 该段统筹自付：{segment.pay:,.2f} 元")
+            lines.append(f"- 该段统筹自付：{_safe_money(segment.pay)} 元")
             if segment.calculation:
                 lines.append(f"- 计算：{segment.calculation}")
             if segment.policy_source:
@@ -488,19 +552,92 @@ class ExplanationGenerator:
             lines.append("")
 
         lines.append("【政策解释计算与业务库对账】")
-        lines.append(f"- 政策解释计算合计：{segments.total_pay:,.2f} 元")
-        lines.append(f"- 业务库金额：{authoritative_amount:,.2f} 元")
+        lines.append(f"- 政策解释计算合计：{_safe_money(segments.total_pay)} 元")
+        lines.append(f"- 业务库金额：{_safe_money(authoritative_amount)} 元")
         if segments.reconciliation_difference is not None:
-            lines.append(f"- 差异：{segments.reconciliation_difference:,.2f} 元")
-        lines.append(f"- 容差：{segments.reconciliation_tolerance:,.2f} 元")
+            lines.append(f"- 差异：{_safe_money(segments.reconciliation_difference)} 元")
+        lines.append(f"- 容差：{_safe_money(segments.reconciliation_tolerance)} 元")
         if segments.reconciliation_message:
             lines.append(f"- 对账结论：{segments.reconciliation_message}")
 
         return "\n".join(lines)
 
     def _find_rule_by_type(self, policy_rules: list, rule_type: str):
-        """查找指定类型的政策规则"""
+        """查找指定类型的政策规则（兼容 SkillPolicyRule 和域 PolicyRule）"""
         for rule in policy_rules:
-            if rule.rule_type == rule_type:
+            if getattr(rule, 'rule_type', '') == rule_type:
                 return rule
         return None
+
+    async def generate_dual_views(
+        self,
+        context: ExplanationContext,
+    ) -> tuple[str, str]:
+        """生成双视角解释 — ★ 一次 LLM 调用同时生成患者+院端两个视角。
+
+        Returns:
+            (patient_view, office_view)
+        """
+        if self.model_gateway is None:
+            placeholder = self._generate_placeholder(context)
+            return placeholder, placeholder
+
+        try:
+            decomposition_text = self._format_decomposition(context.decomposition)
+            policy_text = self._format_policy_rules_with_segments(
+                context.decomposition, context.policy_rules
+            )
+            rag_miss_note = (
+                "⚠️ 注意：本次检索未找到与用户问题直接匹配的政策规则。"
+                "请基于结算数据进行解释，并在回答中明确告知用户"
+                "「未检索到相关政策条文，以下解释基于系统已有结算数据」。"
+                "不要编造政策条文。"
+            ) if context.rag_miss else ""
+
+            prompt = EXPLANATION_PROMPTS["dual"].format(
+                question=context.question,
+                decomposition_text=decomposition_text,
+                policy_text=policy_text,
+                RAG_MISS_NOTE=rag_miss_note,
+            )
+            result = self.model_gateway.generate(
+                messages=[Message(role="user", content=prompt)],
+                model_type="llm",
+                scene="policy_qa",
+            )
+
+            patient_view, office_view = self._parse_dual_response(result.content)
+            return patient_view, office_view
+
+        except Exception as e:
+            logger.exception("Dual view generation failed, falling back to placeholder")
+            placeholder = self._generate_placeholder(context)
+            return placeholder, placeholder
+
+    def _parse_dual_response(self, content: str) -> tuple[str, str]:
+        """解析合并 prompt 的双视角输出。"""
+        import re
+
+        patient_view = ""
+        office_view = ""
+
+        patient_match = re.search(
+            r"===PATIENT===\s*\n(.*?)===PATIENT_END===",
+            content, re.DOTALL
+        )
+        if patient_match:
+            patient_view = patient_match.group(1).strip()
+
+        office_match = re.search(
+            r"===OFFICE===\s*\n(.*?)===OFFICE_END===",
+            content, re.DOTALL
+        )
+        if office_match:
+            office_view = office_match.group(1).strip()
+
+        if not patient_view:
+            patient_view = content
+        if not office_view:
+            office_view = patient_view
+
+        return patient_view, office_view

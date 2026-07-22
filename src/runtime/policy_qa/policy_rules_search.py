@@ -1,7 +1,7 @@
 """
 医保政策问答RAG系统 - policy_rules 搜索引擎
 
-搜索 Milvus policy_rules 集合
+搜索 Milvus policy_rules 集合（使用 MilvusClient API）
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from pymilvus import Collection, connections
+from pymilvus import MilvusClient
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class PolicyRulesSearchEngine:
     """
     policy_rules 集合搜索引擎
     
-    直接搜索 policy_rules 集合，返回匹配的政策规则
+    使用 MilvusClient API 搜索 policy_rules 集合，返回匹配的政策规则。
     """
 
     def __init__(
@@ -27,17 +27,14 @@ class PolicyRulesSearchEngine:
         port: str = "19530",
         embedding_kind: str = "hash",
     ):
-        # 连接 Milvus
-        connections.connect(alias="default", host=host, port=port)
-        
-        # 获取集合
-        self.collection = Collection("policy_rules")
-        self.collection.load()
-        
+        uri = f"http://{host}:{port}"
+        self.client = MilvusClient(uri=uri)
+        self.collection_name = "policy_rules"
+
         # 初始化嵌入提供者
         self._init_embedding(embedding_kind)
-        
-        logger.info(f"Initialized PolicyRulesSearchEngine: {host}:{port}")
+
+        logger.info(f"Initialized PolicyRulesSearchEngine: {uri}")
 
     def _init_embedding(self, kind: str) -> None:
         """初始化嵌入提供者"""
@@ -84,28 +81,30 @@ class PolicyRulesSearchEngine:
                 "rule_type", "rule_value", "amount_band",
             ]
             
-            # 执行搜索
-            results = self.collection.search(
+            # 执行搜索（MilvusClient API）
+            results = self.client.search(
+                collection_name=self.collection_name,
                 data=[vector],
                 anns_field="embedding",
-                param=search_params,
+                search_params=search_params,
                 limit=top_k,
-                expr=expr,
+                filter=expr,
                 output_fields=output_fields,
             )
             
-            # 转换结果
+            # 转换结果: MilvusClient.search() 返回 list[list[dict]]
+            # 外层对应每个查询向量，内层是命中结果
             rules = []
-            for hits in results:
-                for hit in hits:
+            for query_hits in results:
+                for hit in query_hits:
                     entity = {}
                     for field in output_fields:
                         try:
-                            entity[field] = hit.entity.get(field)
+                            entity[field] = hit["entity"].get(field)
                         except Exception:
                             entity[field] = None
                     
-                    entity["score"] = float(hit.score) if hit.score is not None else 0.0
+                    entity["score"] = float(hit["distance"]) if hit.get("distance") is not None else 0.0
                     rules.append(entity)
             
             logger.info(f"Searched policy_rules: question='{question[:50]}...', found {len(rules)} rules")
@@ -152,8 +151,9 @@ class PolicyRulesSearchEngine:
         if expr:
             # ★ 优先使用纯标量查询（不依赖向量相似度）
             try:
-                results = self.collection.query(
-                    expr=expr,
+                results = self.client.query(
+                    collection_name=self.collection_name,
+                    filter=expr,
                     output_fields=output_fields,
                     limit=top_k,
                 )

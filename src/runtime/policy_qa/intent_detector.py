@@ -66,32 +66,36 @@ class IntentDetector:
 
     async def detect(self, question: str) -> PolicyQAIntentResult:
         """
-        检测用户意图
+        检测用户意图 — 关键词优先，LLM 兜底。
 
-        Args:
-            question: 用户问题
-
-        Returns:
-            PolicyQAIntentResult: 意图识别结果
+        策略：先用关键词匹配，confidence ≥ 0.9 直接返回（省一次 LLM 调用）；
+        仅当关键词匹配失败或不确信时才调用 LLM。
         """
         try:
             # 如果没有模型网关，使用关键词匹配
             if self.model_gateway is None:
                 return self._keyword_based_detection(question)
 
-            # 使用LLM进行意图识别
-            prompt = INTENT_DETECTION_PROMPT.format(question=question)
+            # ★ 优化：关键词优先 — 高置信度命中直接返回，跳过 LLM
+            keyword_result = self._keyword_based_detection(question)
+            if keyword_result.confidence >= 0.9:
+                logger.info(
+                    "Intent detected via keyword (confidence=%.2f), skipping LLM",
+                    keyword_result.confidence,
+                )
+                return keyword_result
 
-            # 调用模型
+            # 关键词不确信，调用 LLM
+            prompt = INTENT_DETECTION_PROMPT.format(question=question)
             messages = [Message(role="user", content=prompt)]
             response = await self.model_gateway.generate(
                 messages=messages,
-                model_type="intent_detection",
+                model_type="llm",
                 scene="policy_qa",
             )
 
             # 解析响应
-            result = self._parse_llm_response(response.content)
+            result = self._parse_llm_response(response.content, question)
             return result
 
         except Exception as e:
@@ -123,6 +127,18 @@ class IntentDetector:
                 target_fee_label="统筹自付",
             )
 
+        # 大额自付（在报销比例之前，因为"大额"也包含比例概念）
+        if any(kw in question_lower for kw in ["大额自付", "大额个人负担", "大额互助"]):
+            return PolicyQAIntentResult(
+                intent=PolicyQAIntent.PAYMENT_RATIO,
+                settlement_id="",
+                need_patient_data=True,
+                query_type="大额自付",
+                confidence=0.85,
+                target_fee_item="large_amount_self_pay",
+                target_fee_label="大额自付",
+            )
+
         # 报销比例（必须在待遇分解之前，因为"报销"也匹配待遇分解）
         if any(kw in question_lower for kw in ["比例", "报销比例", "支付比例"]):
             return PolicyQAIntentResult(
@@ -131,6 +147,8 @@ class IntentDetector:
                 need_patient_data=True,
                 query_type="报销比例",
                 confidence=0.8,
+                target_fee_item="payment_ratio",
+                target_fee_label="报销比例",
             )
 
         # 封顶线（必须在待遇分解之前）
@@ -141,6 +159,8 @@ class IntentDetector:
                 need_patient_data=True,
                 query_type="封顶线",
                 confidence=0.8,
+                target_fee_item="cap_amount",
+                target_fee_label="封顶线",
             )
 
         # 起付线
@@ -151,10 +171,23 @@ class IntentDetector:
                 need_patient_data=True,
                 query_type="起付线",
                 confidence=0.8,
+                target_fee_item="deductible",
+                target_fee_label="起付线",
             )
 
         # 费用分解
         if any(kw in question_lower for kw in ["费用", "多少钱", "花了", "收费", "账单"]):
+            # 检测是否包含具体费用项关键词
+            if any(kw in question_lower for kw in ["统筹自付", "统筹自费", "起付线"]):
+                return PolicyQAIntentResult(
+                    intent=PolicyQAIntent.FEE_DECOMPOSITION,
+                    settlement_id="",
+                    need_patient_data=True,
+                    query_type="费用分解",
+                    confidence=0.85,
+                    target_fee_item="pooling_self_pay",
+                    target_fee_label="统筹自付",
+                )
             return PolicyQAIntentResult(
                 intent=PolicyQAIntent.FEE_DECOMPOSITION,
                 settlement_id="",
@@ -165,6 +198,17 @@ class IntentDetector:
 
         # 待遇分解（放在后面，因为"报销"可能也匹配其他意图）
         if any(kw in question_lower for kw in ["待遇", "统筹", "大额"]):
+            # 检测是否包含大额互助关键词
+            if "大额" in question_lower:
+                return PolicyQAIntentResult(
+                    intent=PolicyQAIntent.TREATMENT_DECOMPOSITION,
+                    settlement_id="",
+                    need_patient_data=True,
+                    query_type="待遇分解",
+                    confidence=0.8,
+                    target_fee_item="large_amount_self_pay",
+                    target_fee_label="大额自付",
+                )
             return PolicyQAIntentResult(
                 intent=PolicyQAIntent.TREATMENT_DECOMPOSITION,
                 settlement_id="",
@@ -182,7 +226,7 @@ class IntentDetector:
             confidence=0.6,
         )
 
-    def _parse_llm_response(self, response: str) -> PolicyQAIntentResult:
+    def _parse_llm_response(self, response: str, question: str = "") -> PolicyQAIntentResult:
         """
         解析LLM响应
 
@@ -223,5 +267,5 @@ class IntentDetector:
 
         except Exception as e:
             logger.warning(f"Failed to parse LLM response: {e}")
-            # 降级到关键词匹配
-            return self._keyword_based_detection(response)
+            # 降级到关键词匹配（使用原始问题而非 LLM 响应）
+            return self._keyword_based_detection(question) if question else self._keyword_based_detection(response)

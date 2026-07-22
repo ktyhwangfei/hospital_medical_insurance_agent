@@ -2,6 +2,79 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
+from typing import Any, Optional
+
+# ---------------------------------------------------------
+# Infra Skill 相关的 Schema
+# ---------------------------------------------------------
+
+class InfraSkillItem(BaseModel):
+    skill_id: str
+    skill_name: str
+    business_action: str = ""
+    business_object: str = ""
+    include_keywords: list[str] = Field(default_factory=list)
+    excluded_intents: list[str] = Field(default_factory=list)
+
+class InfraSkillFilesStructure(BaseModel):
+    agents: list[str] = Field(default_factory=list)
+    schemas: list[str] = Field(default_factory=list)
+    templates: list[str] = Field(default_factory=list)
+    scripts: list[str] = Field(default_factory=list)
+    references: list[str] = Field(default_factory=list)
+    tests: list[str] = Field(default_factory=list)
+    strategies: list[str] = Field(default_factory=list)
+
+class FieldMappingItem(BaseModel):
+    """语义层字段映射条目"""
+    label: str = ""
+    description: str = ""
+    db_source: str = ""
+
+
+class FieldMappingResponse(BaseModel):
+    """技能字段映射汇总"""
+    target_field: dict[str, Any] = Field(default_factory=dict)
+    settlement_fields: dict[str, FieldMappingItem] = Field(default_factory=dict)
+    defaults: dict[str, str] = Field(default_factory=dict)
+
+
+class InfraSkillDetailResponse(BaseModel):
+    skill_id: str
+    skill_name: str
+    business_action: str = ""
+    business_object: str = ""
+    include_keywords: list[str] = Field(default_factory=list)
+    excluded_intents: list[str] = Field(default_factory=list)
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    readme: str = ""
+    files_structure: InfraSkillFilesStructure = Field(default_factory=InfraSkillFilesStructure)
+    field_mapping: FieldMappingResponse | None = None
+
+class SkillRouteTestRequest(BaseModel):
+    question: str
+
+class SkillRouteTestResponse(BaseModel):
+    question: str
+    matched_skill_id: Optional[str] = None
+
+class SkillExecuteTestRequest(BaseModel):
+    question: str
+    target_fee_item: Optional[str] = None
+    context: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    status: str = "no_policy_matched"
+
+class SkillRefreshResponse(BaseModel):
+    """热重载响应"""
+    skill_count: int
+    skills: list[InfraSkillItem] = Field(default_factory=list)
+    message: str = ""
+
+class SkillExecuteTestResponse(BaseModel):
+    skill_id: str
+    status: str
+    result: Any
 
 
 class ChatRequest(BaseModel):
@@ -85,174 +158,3 @@ class ModelTestResponse(BaseModel):
     latency_ms: int
     prompt_tokens: int
     completion_tokens: int
-
-
-class SkillStepRequest(BaseModel):
-    step_id: str
-    tool_id: str
-    depends_on: list[str] = Field(default_factory=list)
-
-
-class SkillCreateRequest(BaseModel):
-    skill_id: str
-    name: str
-    description: str
-    owner: str
-    steps: list[SkillStepRequest] = Field(default_factory=list)
-    intent_keywords: list[str] = Field(default_factory=list)
-    required_roles: set[str] = Field(default_factory=set)
-    risk_level: str = "low"
-    license: str | None = None
-    compatibility: str | None = None
-    allowed_tools: list[str] = Field(default_factory=list)
-    skill_metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class SkillUpdateRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    owner: str | None = None
-    steps: list[dict[str, Any]] | None = None
-    intent_keywords: list[str] | None = None
-    required_roles: set[str] | None = None
-    enabled: bool | None = None
-    risk_level: str | None = None
-    license: str | None = None
-    compatibility: str | None = None
-    allowed_tools: list[str] | None = None
-    skill_metadata: dict[str, Any] | None = None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 知识管理 Schemas
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class ErrorCodeCreate(BaseModel):
-    error_code: str
-    description: str | None = None
-    exception_type: str | None = None
-    responsible_role: str | None = None
-    recommendation: str | None = None
-
-
-class ErrorCodeUpdate(BaseModel):
-    description: str | None = None
-    exception_type: str | None = None
-    responsible_role: str | None = None
-    recommendation: str | None = None
-
-
-class RuleCreate(BaseModel):
-    rule_id: str
-    rule_name: str
-    category: str | None = None
-    scenario: str | None = None
-    rule_content: str | None = None
-    explanation: str | None = None
-    applicable_roles: list[str] | None = None
-    risk_level: str | None = 'LOW'
-    effective_date: str | None = None
-    enabled: bool | None = True
-
-
-class RuleUpdate(BaseModel):
-    rule_name: str | None = None
-    category: str | None = None
-    scenario: str | None = None
-    rule_content: str | None = None
-    explanation: str | None = None
-    applicable_roles: list[str] | None = None
-    risk_level: str | None = None
-    effective_date: str | None = None
-    enabled: bool | None = None
-
-
-class AssetCreate(BaseModel):
-    asset_id: str
-    title: str
-    source: str | None = None
-    asset_type: str | None = None
-    version: str | None = None
-    status: str | None = None
-    summary: str | None = None
-    visibility: dict[str, Any] | None = None
-    index_status: str | None = None
-    effective_date: str | None = None
-    imported_at: str | None = None
-
-
-class AssetUpdate(BaseModel):
-    title: str | None = None
-    source: str | None = None
-    asset_type: str | None = None
-    version: str | None = None
-    status: str | None = None
-    summary: str | None = None
-    visibility: dict[str, Any] | None = None
-    index_status: str | None = None
-
-
-class ChunkCreate(BaseModel):
-    chunk_id: str
-    text: str
-    asset_type: str | None = None
-    title: str | None = None
-    section: str | None = None
-    summary: str | None = None
-    tags: list[str] | None = None
-    scenario_tags: list[str] | None = None
-    visibility: dict[str, Any] | None = None
-    locator: str | None = None
-    embedding_id: str | None = None
-
-
-class AppealTemplateCreate(BaseModel):
-    template_id: str
-    template_name: str
-    template_type: str | None = None
-    denial_reason_pattern: str | None = None
-    content: str
-    required_evidence: list[str] | None = None
-    applicable_scenarios: list[str] | None = None
-    enabled: bool | None = True
-
-
-class AppealTemplateUpdate(BaseModel):
-    template_name: str | None = None
-    template_type: str | None = None
-    denial_reason_pattern: str | None = None
-    content: str | None = None
-    required_evidence: list[str] | None = None
-    applicable_scenarios: list[str] | None = None
-    enabled: bool | None = None
-
-
-class PromptTemplateCreate(BaseModel):
-    template_id: str
-    template_name: str
-    template_type: str
-    scenario: str | None = None
-    role: str | None = None
-    system_prompt: str | None = None
-    user_prompt_template: str | None = None
-    variables: list[str] | None = None
-    output_format: dict[str, Any] | None = None
-    enabled: bool | None = True
-
-
-class PromptTemplateUpdate(BaseModel):
-    template_name: str | None = None
-    template_type: str | None = None
-    scenario: str | None = None
-    role: str | None = None
-    system_prompt: str | None = None
-    user_prompt_template: str | None = None
-    variables: list[str] | None = None
-    output_format: dict[str, Any] | None = None
-    enabled: bool | None = None
-
-
-class PromptTemplateRenderRequest(BaseModel):
-    template_id: str
-    variables: dict[str, str]

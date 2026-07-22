@@ -22,17 +22,29 @@ class PostgreSQLClient:
         if not self._database_url:
             msg = "DATABASE_URL is not configured. Set the DATABASE_URL environment variable or pass database_url to the constructor."
             raise RuntimeError(msg)
-        import psycopg
 
         print(f"[STARTUP] PostgreSQLClient: 正在连接 {self._database_url} (超时={self._CONNECT_TIMEOUT}s)", flush=True)
+        
+        # 尝试 psycopg (v3) 或回退到 psycopg2
         try:
+            import psycopg
             self._conn = psycopg.connect(
                 self._database_url,
                 autocommit=True,
                 connect_timeout=self._CONNECT_TIMEOUT,
             )
-            print("[STARTUP] PostgreSQLClient: 连接成功", flush=True)
-        except psycopg.OperationalError as e:
+            print("[STARTUP] PostgreSQLClient: 使用 psycopg v3 连接成功", flush=True)
+        except ImportError:
+            print("[STARTUP] PostgreSQLClient: psycopg v3 不可用，尝试 psycopg2...", flush=True)
+            import psycopg2
+            import psycopg2.extras
+            self._conn = psycopg2.connect(
+                self._database_url,
+                connect_timeout=self._CONNECT_TIMEOUT,
+            )
+            self._conn.autocommit = True
+            print("[STARTUP] PostgreSQLClient: 使用 psycopg2 连接成功", flush=True)
+        except Exception as e:
             print(f"[STARTUP] PostgreSQLClient: 连接失败 (超时={self._CONNECT_TIMEOUT}s) — {e}", flush=True)
             raise
 

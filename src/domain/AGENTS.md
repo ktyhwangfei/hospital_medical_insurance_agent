@@ -49,6 +49,7 @@ domain/
 ### 目录
 
 1. [限界上下文总览](#1-限界上下文总览)
+1.5. [Business Action 业务动作层](#15-business-action-业务动作层)
 2. [患者上下文（Patient）](#2-患者上下文-patient)
 3. [医保上下文（Insurance）](#3-医保上下文-insurance)
 4. [医嘱费用上下文（Order & Fee）](#4-医嘱费用上下文-order--fee)
@@ -122,6 +123,99 @@ domain/
 #### 核心跨域复合键
 
 - `(patient_id, encounter_id)` — 跨所有业务上下文的通用复合标识键
+
+---
+
+---
+
+### 1.5. Business Action 业务动作层
+
+#### 概述
+
+Business Action 是平台最高层业务分类，位于限界上下文之上。所有 Agent、Skill、Workflow、Prompt、Tool 都必须挂载到统一的 Business Action。新增业务优先新增 Skill，而不是新增 Business Action。
+
+参见：`Business Action Specification V1.0`（项目根目录下的设计规范文档）。
+
+#### 代码位置
+
+`src/domain/common/actions.py`
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 业务动作 | `BusinessAction` | **Value Object** | `StrEnum` | 平台最高层业务分类，七类动作之一 |
+| 解释 | `EXPLAIN` | Value Object | `StrEnum` | 解释已发生的事实，回答"为什么" |
+| 查询 | `QUERY` | Value Object | `StrEnum` | 查询已有数据，回答"是什么" |
+| 导办 | `GUIDE` | Value Object | `StrEnum` | 指导办理流程，回答"怎么办" |
+| 核验 | `VERIFY` | Value Object | `StrEnum` | 验证已有结果是否正确，回答"对不对" |
+| 对比 | `COMPARE` | Value Object | `StrEnum` | 比较两个对象，回答"有什么不同" |
+| 评估 | `EVALUATE` | Value Object | `StrEnum` | 评估假设影响，回答"如果这样会怎样" |
+| 分析 | `ANALYZE` | Value Object | `StrEnum` | 面向管理的统计分析，回答"有什么规律" |
+| 业务对象 | `BusinessObject` | **Value Object** | `StrEnum` | Business Action 操作的对象 |
+| 结算对象 | `SETTLEMENT` | Value Object | `StrEnum` | 医保结算数据 |
+| 待遇对象 | `BENEFIT` | Value Object | `StrEnum` | 医保待遇数据 |
+| 政策对象 | `POLICY` | Value Object | `StrEnum` | 医保政策规则 |
+| 目录对象 | `DIRECTORY` | Value Object | `StrEnum` | 医保三大目录 |
+| 慢特病对象 | `CHRONIC_DISEASE` | Value Object | `StrEnum` | 慢特病资格与报销 |
+| 转诊对象 | `REFERRAL` | Value Object | `StrEnum` | 转诊转院流程 |
+| 申诉对象 | `APPEAL` | Value Object | `StrEnum` | 医保拒付申诉 |
+| 病案对象 | `MEDICAL_RECORD` | Value Object | `StrEnum` | 病案首页数据 |
+| DRG/DIP对象 | `DRG_DIP` | Value Object | `StrEnum` | DRG/DIP 分组数据 |
+| 投诉对象 | `COMPLAINT` | Value Object | `StrEnum` | 投诉与咨询数据 |
+| 能力矩阵 | `VALID_ACTION_OBJECT_PAIRS` | **Value Object** | `frozenset` | 合法 Action-Object 组合白名单 |
+
+#### 设计原则
+
+1. **Business Action 是平台最高层业务分类，不允许随意扩展。**
+2. **Skill 是平台唯一开发单元，所有研发工作围绕 Skill 展开。**
+3. **Business Action 决定"做什么"，Business Object 决定"处理谁"，两者共同唯一确定一个 Skill。**
+4. **新增业务优先新增 Skill，而不是新增 Business Action。**
+5. **Evaluate（评估）与 Explain（解释）严格区分：解释过去发生的事实，评估未来假设的影响。**
+6. **LLM 不决定业务分类，只负责辅助识别；Business Action 的定义始终由医保业务驱动，而不是模型能力驱动。**
+
+#### Action × Object 能力矩阵
+
+| Object | Explain | Query | Guide | Verify | Compare | Evaluate | Analyze |
+|--------|---------|-------|-------|--------|---------|----------|---------|
+| Settlement | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ |
+| Benefit | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ |
+| Policy | ✅ | ✅ | — | — | ✅ | — | — |
+| Directory | ✅ | ✅ | — | ✅ | — | — | — |
+| Chronic Disease | — | ✅ | ✅ | ✅ | — | — | — |
+| Referral | — | — | ✅ | ✅ | — | — | — |
+| Appeal | — | — | ✅ | — | — | — | — |
+| Medical Record | — | — | — | ✅ | — | — | — |
+| DRG/DIP | — | — | — | — | — | — | ✅ |
+| Complaint | — | — | — | — | — | — | ✅ |
+
+#### Skill 分类规范
+
+每个 Skill 必须在 `skill_manifest.yaml` 中声明：
+
+```yaml
+business_action: explain       # BusinessAction 枚举值
+business_object: settlement    # BusinessObject 枚举值
+```
+
+命名约定：`{BusinessObject}{BusinessAction}Skill`，例如 `SettlementExplainSkill`、`BenefitQuerySkill`。
+
+#### 动作路由
+
+```text
+用户问题
+  → Business Action Recognition（做什么）
+  → Business Object Recognition（处理谁）
+  → Skill Router（哪个 Skill）
+  → Skill Execution
+```
+
+#### 与限界上下文的关系
+
+- Business Action 是**行为维度**的分类，限界上下文是**领域维度**的分类
+- 同一个 Business Object（如 Settlement）可能跨多个限界上下文（Insurance + OrderFee）
+- 同一个 Business Action（如 Explain）可能在不同 Object 上由不同的 Skill 实现
+- Business Action 层不替代限界上下文，而是作为顶层的路由维度补充
 
 ---
 
@@ -708,6 +802,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `AuditResult` | 审核结果 | AuditRisk | Aggregate Root |
 | `AuditService` | 审计服务 | Security | Domain Service |
 | `BillingPort` | 收费系统适配器端口 | Insurance | Domain Service |
+| `BusinessAction` | 业务动作 | Common | Value Object |
+| `BusinessObject` | 业务对象 | Common | Value Object |
 | `ChatRequest` | Chat 请求 | Shared | DTO |
 | `Citation` | 引用来源 | Shared / Knowledge | Value Object |
 | `ClosureTask` | 闭环任务 | TaskClosure | Entity |

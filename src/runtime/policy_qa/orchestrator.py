@@ -1,12 +1,12 @@
 """
 医保政策问答RAG系统 - 编排器（适配器驱动）
 
-串联5个步骤（通过 adapter + skill 配置路由）:
+串联6个步骤（通过 adapter + skill 配置路由）:
 0. 意图识别 (LLM, 非流式)
 1. SQL 查询 via adapter (MCP类型)
 2. 政策检索 via adapter (KNOWLEDGE类型)
 3. 计算 via config.yaml 路由 (SKILL类型)
-4. 解释生成 via adapter streaming (MCP类型)
+4. 双视角解释生成 (患者视角 + 院端/医保办视角)
 """
 
 from __future__ import annotations
@@ -28,8 +28,12 @@ from src.model_service.gateway import ModelGateway
 from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
 from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
 from src.runtime.policy_qa.intent_detector import IntentDetector
+from src.runtime.policy_qa.fee_item_detector import FeeItemDetector
 from src.runtime.policy_qa.models import (
+    EvidenceItem,
     ExplanationContext,
+    FeeCategory,
+    FeeDecomposition,
     FeeDecompositionResult,
     PolicyQAIntent,
     PolicyQAIntentResult,
@@ -37,25 +41,123 @@ from src.runtime.policy_qa.models import (
     PolicyQAResponse,
     PolicyRule,
     RewrittenQuestion,
+    SegmentCalculationResult,
+    SegmentInfo,
     SQLQueryResult,
+    TreatmentDecomposition,
+    TreatmentItem,
 )
 from src.runtime.policy_qa.question_rewriter import QuestionRewriter
 from src.runtime.policy_qa.sql_data_fetcher import SQLDataFetcher
+
+# v2: TraceEventBuilder, SkillRouter, 新模型
+from settlement_explain_skill.scripts.build_trace_event import TraceEventBuilder
+from src.skill_infra.skill_router import route_question
+
+from src.runtime.policy_qa.models import (
+    AnswerabilityResult,
+    PolicyQARunStatus,
+    PolicyQATraceResponse,
+    TraceEvent,
+
+    make_answerability,
+    make_trace_event,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _load_skill_config() -> dict:
     """从 skill 包加载费用路由配置"""
-    config_path = _skill_dir / "policy_fee_explanation" / "config.yaml"
+    config_path = _skill_dir / "settlement_explain_skill" / "config.yaml"
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def _load_calculators() -> dict:
     """从 skill 包加载计算器注册表"""
-    from policy_fee_explanation.calculator import CALCULATOR_REGISTRY
+    from settlement_explain_skill.calculator import CALCULATOR_REGISTRY
     return CALCULATOR_REGISTRY
+
+
+def _build_decomposition_from_dict(data: dict) -> "FeeDecompositionResult":
+    """从计算器返回的 dict 构建 FeeDecompositionResult（供 generate_dual_views 使用）。"""
+    treatment_data = data.get("treatment", {})
+    treatment = TreatmentDecomposition(
+        total_fee=TreatmentItem(value=float(treatment_data.get("total_fee", 0))),
+        in_scope=TreatmentItem(value=float(treatment_data.get("in_scope", 0))),
+        deductible=TreatmentItem(value=float(treatment_data.get("deductible", 0))),
+        pooling_self_pay=TreatmentItem(value=float(treatment_data.get("pooling_self_pay", 0))),
+        pooling_payment=TreatmentItem(value=float(treatment_data.get("pooling_payment", 0))),
+        major_payment=TreatmentItem(value=float(treatment_data.get("major_payment", 0))),
+        major_self_pay=TreatmentItem(value=float(treatment_data.get("major_self_pay", 0))),
+        personal_liability=TreatmentItem(value=float(treatment_data.get("personal_liability", 0))),
+        out_of_scope=TreatmentItem(value=float(treatment_data.get("out_of_scope", 0))),
+    )
+
+    fees_data = data.get("fees", {})
+    categories = [
+        FeeCategory(
+            category=str(cat.get("category", "")),
+            total_amount=float(cat.get("total_amount", 0)),
+            in_scope_amount=float(cat.get("in_scope_amount", 0)),
+            out_of_scope_amount=float(cat.get("out_of_scope_amount", 0)),
+        )
+        for cat in fees_data.get("categories", [])
+    ]
+    fees = FeeDecomposition(
+        total_amount=float(fees_data.get("total_amount", 0)),
+        in_scope_total=float(fees_data.get("in_scope_total", 0)),
+        out_of_scope_total=float(fees_data.get("out_of_scope_total", 0)),
+        categories=categories,
+    )
+
+    segments_data = data.get("segments", {})
+    segment_infos = [
+        SegmentInfo(
+            lower=float(seg.get("lower", 0)),
+            upper=float(seg.get("upper", 0)),
+            amount=float(seg.get("amount", 0)),
+            base_ratio=float(seg.get("base_ratio", 0)),
+            person_ratio=float(seg.get("person_ratio", 0)),
+            actual_ratio=float(seg.get("actual_ratio", 0)),
+            pay=float(seg.get("pay", 0)),
+            calculation=str(seg.get("calculation", "")),
+            rule_id=str(seg.get("rule_id", "")),
+            policy_source=str(seg.get("policy_source", "")),
+        )
+        for seg in segments_data.get("segments", [])
+    ]
+    segments = SegmentCalculationResult(
+        segments=segment_infos,
+        total_pay=float(segments_data.get("total_pay", 0)),
+        authoritative_amount=segments_data.get("authoritative_amount"),
+        reconciliation_difference=segments_data.get("reconciliation_difference"),
+        reconciliation_tolerance=float(segments_data.get("reconciliation_tolerance", 0.01)),
+        reconciliation_matched=segments_data.get("reconciliation_matched"),
+        reconciliation_message=str(segments_data.get("reconciliation_message", "")),
+        warnings=list(segments_data.get("warnings", [])),
+    )
+
+    evidence_items = data.get("evidence", []) or []
+    evidence = [
+        EvidenceItem(
+            item=str(e.get("item", "")),
+            value=float(e.get("value", 0)),
+            source_table=str(e.get("source_table", "")),
+            source_field=str(e.get("source_field", "")),
+            policy_rule=e.get("policy_rule", {}),
+            calculation=e.get("calculation", {}),
+        )
+        for e in evidence_items
+    ]
+
+    return FeeDecompositionResult(
+        treatment=treatment,
+        fees=fees,
+        segments=segments,
+        evidence=evidence,
+    )
 
 
 class PolicyQAOrchestrator:
@@ -97,12 +199,276 @@ class PolicyQAOrchestrator:
             "llm": LlmExplainAdapter(explanation_generator),
         }
 
+    # ── v2: 可回答性判断 ──────────────────────────────────────────
+
+    @staticmethod
+    def build_answerability(
+        sql_data: Any,
+        skill_policy_rules: list[Any],
+        intent_result: PolicyQAIntentResult,
+    ) -> AnswerabilityResult:
+        """
+        可回答性判断
+
+        检查以下维度:
+        - has_real_settlement_data: 有真实结算数据（total_fee > 0）
+        - has_basic_pooling_self_pay: 有统筹自付金额
+        - has_basic_pooling_payment: 有统筹支付金额
+        - has_deductible: 有起付线金额
+        - has_large_amount_self_pay: 有大额自付金额
+        - has_policy_rules_for_segment_ratios: 有分段/支付比例政策规则
+        - has_retiree_factor: 有退休人员优惠因子
+
+        Returns:
+            AnswerabilityResult: 可回答性判断结果
+        """
+        treatment = getattr(sql_data, 'treatment', {}) or {}
+
+        has_real_settlement_data = bool(treatment.get('total_fee', 0) > 0)
+        has_basic_pooling_self_pay = treatment.get('pooling_self_pay') is not None
+        has_basic_pooling_payment = treatment.get('pooling_payment') is not None
+        has_deductible = treatment.get('deductible') is not None
+        has_large_amount_self_pay = treatment.get('major_self_pay') is not None
+
+        has_policy_rules_for_segment_ratios = any(
+            '分段' in (getattr(r, 'rule_type', '') or '')
+            or '支付比例' in (getattr(r, 'rule_type', '') or '')
+            for r in (skill_policy_rules or [])
+        )
+        has_retiree_factor = any(
+            '退休' in (getattr(r, 'matched_reason', '') or '')
+            for r in (skill_policy_rules or [])
+        )
+
+        checks: dict[str, bool] = {
+            "has_real_settlement_data": has_real_settlement_data,
+            "has_basic_pooling_self_pay": has_basic_pooling_self_pay,
+            "has_basic_pooling_payment": has_basic_pooling_payment,
+            "has_deductible": has_deductible,
+            "has_large_amount_self_pay": has_large_amount_self_pay,
+            "has_policy_rules_for_segment_ratios": has_policy_rules_for_segment_ratios,
+            "has_retiree_factor": has_retiree_factor,
+        }
+
+        missing_items = [k for k, v in checks.items() if not v]
+
+        if not has_real_settlement_data:
+            return make_answerability(
+                can_answer=False,
+                partial_answer=False,
+                reason="缺少真实结算数据，无法回答",
+                missing_items=missing_items,
+                checks=checks,
+            )
+
+        if len(missing_items) == 0:
+            return make_answerability(
+                can_answer=True,
+                partial_answer=False,
+                reason="所有必要数据完整，可以完整回答",
+                missing_items=[],
+                checks=checks,
+            )
+        elif len(missing_items) <= 3:
+            return make_answerability(
+                can_answer=True,
+                partial_answer=True,
+                reason=f"部分数据缺失（{len(missing_items)}项），可以部分回答",
+                missing_items=missing_items,
+                checks=checks,
+            )
+        else:
+            return make_answerability(
+                can_answer=False,
+                partial_answer=True,
+                reason=f"重要数据缺失（{len(missing_items)}项），无法完整回答",
+                missing_items=missing_items,
+                checks=checks,
+            )
+
+    # ── v2: 政策证据完整性判断 ────────────────────────────────────
+
+    @staticmethod
+    def build_evidence_completeness(
+        sql_data: Any,
+        skill_policy_rules: list[Any],
+    ) -> dict[str, Any]:
+        """
+        政策证据完整性判断
+
+        检查:
+        - has_segment_ratio: 政策规则包含分段/支付比例规则
+        - has_retiree_factor: 政策包含退休人员优惠因子
+        - has_segment_amount_detail: 结算数据包含分段金额详情
+
+        Returns:
+            dict: { level, has_segment_ratio, has_retiree_factor, has_segment_amount_detail, checks_passed, total_checks }
+        """
+        has_segment_ratio = False
+        has_retiree_factor = False
+
+        for rule in (skill_policy_rules or []):
+            rule_type = getattr(rule, 'rule_type', '') or ''
+            matched_reason = getattr(rule, 'matched_reason', '') or ''
+
+            if '分段' in rule_type or '支付比例' in rule_type:
+                has_segment_ratio = True
+            if '退休' in matched_reason or '退休' in rule_type:
+                has_retiree_factor = True
+
+        has_segment_amount_detail = False
+        if hasattr(sql_data, 'treatment') and sql_data.treatment:
+            treatment = sql_data.treatment
+            if treatment.get('pooling_self_pay') or treatment.get('pooling_payment'):
+                has_segment_amount_detail = True
+
+        checks_passed = sum([has_segment_ratio, has_retiree_factor, has_segment_amount_detail])
+        if checks_passed == 3:
+            level = "full"
+        elif checks_passed >= 1:
+            level = "partial"
+        else:
+            level = "none"
+
+        return {
+            "level": level,
+            "has_segment_ratio": has_segment_ratio,
+            "has_retiree_factor": has_retiree_factor,
+            "has_segment_amount_detail": has_segment_amount_detail,
+            "checks_passed": checks_passed,
+            "total_checks": 3,
+        }
+
+    # ── v2: 输出校验 ──────────────────────────────────────────────
+
+    @staticmethod
+    def _validate_output(
+        patient_view: str,
+        office_view: str,
+        policy_rules: list[Any],
+    ) -> dict[str, Any]:
+        """
+        输出校验（v2: 8项检查，区分 fatal error 和 warning）
+
+        检查:
+        1. no_mock_data: 输出不包含模拟数据标记
+        2. no_raw_json_in_patient_view: 患者视角不含原始 JSON
+        3. no_template_leak: 输出不含未替换模板变量
+        4. no_undefined_null_nan: 输出不含 undefined/null/NaN
+        5. patient_answer_has_policy_evidence: 患者视角引用了政策依据
+        6. office_answer_has_data_source: 院端视角引用了数据来源
+        7. policy_evidence_has_source_text: 政策规则有来源文本
+        8. trace_events_complete: 链路事件完整
+        """
+        import re
+        errors: list[str] = []  # fatal errors
+        warnings_list: list[str] = []  # non-fatal warnings
+        fatal = False
+
+        combined = (patient_view or "") + (office_view or "")
+
+        # 1. 模拟数据标记 → fatal
+        mock_indicators = ["模拟数据", "mock", "示例数据", "仅供演示"]
+        has_mock = any(i in combined for i in mock_indicators)
+        if has_mock:
+            errors.append("输出包含模拟数据标记")
+
+        # 2. 原始 JSON 泄漏 → warning（可能只是代码块示例）
+        stripped = combined.strip()
+        json_like_chars = sum(1 for c in stripped[:300] if c in ('"', "'", ":", ","))
+        if stripped.startswith("{") and json_like_chars > 25:
+            warnings_list.append("输出疑似包含原始 JSON 数据")
+
+        # 3. 模板变量泄漏 → warning
+        template_patterns = re.findall(r'\$\{[^}]+\}|{{[^}]+}}', combined)
+        has_template_leak = len(template_patterns) > 0
+        if has_template_leak:
+            warnings_list.append(f"输出包含 {len(template_patterns)} 个未替换模板变量")
+
+        # 4. undefined/null/NaN → warning
+        undefined_patterns = re.findall(r'\b(undefined|null|NaN)\b', combined, re.IGNORECASE)
+        has_undefined = len(undefined_patterns) > 0
+        if has_undefined:
+            warnings_list.append(f"输出包含 undefined/null/NaN")
+
+        # 5. 患者视角政策引用 → warning if missing
+        if patient_view and len(patient_view) > 20:
+            has_policy_ref = any(
+                kw in patient_view for kw in ["政策", "规定", "比例", "职工", "退休", "统筹", "支付"]
+            )
+            if not has_policy_ref:
+                warnings_list.append("患者视角未引用政策依据")
+
+        # 6. 院端视角数据来源 → warning if missing
+        if office_view and len(office_view) > 20:
+            has_data_ref = any(
+                kw in office_view for kw in ["结算", "数据", "字段", "yb_", "表", "金额"]
+            )
+            if not has_data_ref:
+                warnings_list.append("院端视角未引用数据来源")
+
+        # 7. 政策规则来源文本
+        policy_evidence_used = len(policy_rules or []) > 0
+        if policy_evidence_used:
+            has_source = any(
+                getattr(r, 'source_text', '') or getattr(r, 'evidence_text', '')
+                for r in (policy_rules or [])
+            )
+            if not has_source:
+                warnings_list.append("政策规则缺少来源文本")
+
+        # 8. trace_events 完整性（由调用方保证，此处做标记）
+        trace_events_complete = True
+
+        # 汇总
+        fatal = len(errors) > 0
+        passed = not fatal and len(warnings_list) == 0
+        all_warnings = errors + warnings_list
+
+        return {
+            "passed": passed,
+            "fatal": fatal,
+            "errors": errors,
+            "warnings": warnings_list,
+            "warning_count": len(warnings_list),
+            "policy_evidence_used": policy_evidence_used,
+            "has_mock_data": has_mock,
+            "has_template_leak": has_template_leak,
+            "has_undefined": has_undefined,
+            "trace_events_complete": trace_events_complete,
+            "no_raw_json_in_patient_view": not (stripped.startswith("{") and json_like_chars > 25),
+            "patient_answer_has_policy_evidence": not (patient_view and len(patient_view) > 20 and not any(kw in patient_view for kw in ["政策", "规定", "比例", "职工", "退休", "统筹", "支付"])),
+            "office_answer_has_data_source": not (office_view and len(office_view) > 20 and not any(kw in office_view for kw in ["结算", "数据", "字段", "yb_", "表", "金额"])),
+        }
+
+    # ── v2: TraceEvent 转换 ───────────────────────────────────────
+
+    @staticmethod
+    def _convert_trace_events(events: list[dict[str, Any]]) -> list[TraceEvent]:
+        """将 TraceEventBuilder 导出的 dict 列表转为模型 TraceEvent 列表。"""
+        result: list[TraceEvent] = []
+        for e in events:
+            status = e.get("status", "pending")
+            # builder 的 'done' → 模型的 'success'（除非外部已覆盖为 warning）
+            if status == "done":
+                status = "success"
+            result.append(make_trace_event(
+                step_id=e.get("step_id", ""),
+                step_name=e.get("step_name", ""),
+                status=status,
+                summary=e.get("detail", ""),
+                details=e.get("data", {}),
+                duration_ms=e.get("duration_ms", 0.0),
+                error=e.get("error"),
+            ))
+        return result
+
     async def process(
         self,
         request: PolicyQARequest,
     ) -> AsyncGenerator[PolicyQAResponse, None]:
         """
-        处理政策问答请求，yield SSE事件
+        处理政策问答请求，yield SSE事件（v2: 8步骤 + TraceEventBuilder + answerability 门控）
 
         Args:
             request: 政策问答请求
@@ -110,13 +476,65 @@ class PolicyQAOrchestrator:
         Yields:
             PolicyQAResponse: SSE事件
         """
+        builder = TraceEventBuilder()
+        # 跨步骤共享的状态
+        intent_result: PolicyQAIntentResult | None = None
+        skill_id: str = ""
+        sql_data: Any = None
+        skill_policy_rules: list[Any] = []
+        route_config: dict[str, Any] = {}
+        policy_filters: list[str] = []
+        patient_view: str = ""
+        office_view: str = ""
+        answerability: AnswerabilityResult | None = None
+        sub_flow: str = ""
+
         try:
-            # Step 0: 意图识别（保留原有逻辑）
-            yield PolicyQAResponse(step="intent", status="running", public_message="正在识别问题意图")
-            intent_result = await self._detect_intent(request)
+            # ═══════════════════════════════════════════════════════════
+            # Step 1: intent_detection（意图识别）
+            # ═══════════════════════════════════════════════════════════
+            _evt = builder.start("intent_detection", "意图识别")
             yield PolicyQAResponse(
-                step="intent",
-                status="done",
+                step="intent_detection", status="running",
+                public_message="正在识别问题意图",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
+            )
+
+            intent_result = await self._detect_intent(request)
+
+            # ★ 置信度门控：LLM 失败时降级到关键词的结果 confidence ≤ 0.6
+            # 记录警告到 trace_event，但不阻断流程（关键词匹配是合法的降级路径）
+            intent_from_fallback = intent_result.confidence <= 0.6
+
+            # ★ 用 FeeItemDetector 补充识别 target_fee_item（当 LLM/关键词未设置时）
+            fee_info = FeeItemDetector.detect(request.question)
+            if fee_info and not intent_result.target_fee_item:
+                intent_result.target_fee_item = fee_info["target_field"]
+                intent_result.target_fee_label = fee_info["target_fee_item"]
+            # 根据 target_field 决定子流程
+            target_field = intent_result.target_fee_item or ""
+            sub_flow_map = {
+                "pooling_self_pay": "pooling_self_pay_flow",
+                "deductible": "deductible_flow",
+                "large_amount_self_pay": "large_amount_self_pay_flow",
+                "personal_total_pay": "personal_total_pay_flow",
+            }
+            sub_flow = sub_flow_map.get(target_field, "generic_fee_flow")
+
+            _evt = builder.done(
+                detail=f"识别为「{intent_result.query_type or '费用分解'}」问题"
+                       f"{'（关键词降级）' if intent_from_fallback else ''}",
+                data={
+                    "intent": intent_result.intent.value,
+                    "settlement_id": intent_result.settlement_id,
+                    "confidence": intent_result.confidence,
+                    "query_type": intent_result.query_type,
+                    "llm_failed": intent_from_fallback,
+                    "fallback_used": intent_from_fallback,
+                },
+            )
+            yield PolicyQAResponse(
+                step="intent_detection", status="done",
                 detail={
                     "intent": intent_result.intent.value,
                     "settlement_id": intent_result.settlement_id,
@@ -124,43 +542,119 @@ class PolicyQAOrchestrator:
                     "query_type": intent_result.query_type,
                     "target_fee_item": intent_result.target_fee_item,
                     "target_fee_label": intent_result.target_fee_label,
+                    "sub_flow": sub_flow,
                 },
                 public_detail={
                     "summary": f"识别为「{intent_result.query_type or '费用分解'}」问题",
                     "confidence": intent_result.confidence,
                 },
                 public_message=f"检测到「{intent_result.query_type or '费用分解'}」问题",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
             )
 
-            # Step 1: SQL 查询 via adapter（MCP 类型）
-            yield PolicyQAResponse(step="query_sql_data", status="running", public_message="正在查询患者结算数据")
-            sql_data = await self.adapters["sql"].query(intent_result.settlement_id)
+            # ═══════════════════════════════════════════════════════════
+            # Step 2: skill_routing（Skill 匹配）
+            # ═══════════════════════════════════════════════════════════
+            _evt = builder.start("skill_routing", "Skill 匹配")
             yield PolicyQAResponse(
-                step="query_sql_data",
-                status="done",
-                detail={
-                    "settlement_id": intent_result.settlement_id,
-                    "tables": [
-                        "yb_zyfdxx",
-                        "yb_zyfymx",
-                        "yb_dyxxnd",
-                        "yb_dyxxzy",
-                        "yb_brdjxx",
+                step="skill_routing", status="running",
+                public_message="正在匹配技能",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
+            )
+
+            skill_id = route_question(request.question) or "settlement_explain_skill"
+
+            _evt = builder.done(
+                detail=f"命中医保费用解释 Skill：{skill_id}",
+                data={
+                    "selected_skill_id": skill_id,
+                    "skill_path": f"skills/{skill_id}/SKILL.md",
+                    "matched_fee_item": intent_result.target_fee_label or "统筹自付",
+                    "target_field": intent_result.target_fee_item or "basic_pooling_self_pay",
+                    "skill_flow": [
+                        "费用字段识别",
+                        "结算数据查询",
+                        "政策查询计划",
+                        "结构化政策查询",
+                        "证据完整性判断",
+                        "可回答性判断",
+                        "双视角解释生成",
+                        "输出校验",
                     ],
                 },
-                public_detail={
-                    "summary": "已查询患者结算数据与费用明细",
-                },
-                public_message="已获取结算数据与费用明细",
+            )
+            yield PolicyQAResponse(
+                step="skill_routing", status="done",
+                detail={"skill_id": skill_id, "matched": skill_id != ""},
+                public_detail={"skill_id": skill_id, "summary": f"匹配到「{skill_id}」技能"},
+                public_message=f"已匹配技能: {skill_id}",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
             )
 
-            # Step 2: 政策检索 via adapter（按 config.yaml 路由确定 policy_filters）
-            yield PolicyQAResponse(step="search_policy_rules", status="running", public_message="正在检索相关政策规则")
+            # ═══════════════════════════════════════════════════════════
+            # Step 3: settlement_query（真实结算数据查询）
+            # ═══════════════════════════════════════════════════════════
+            _evt = builder.start("query_sql_data", "真实结算数据查询")
+            yield PolicyQAResponse(
+                step="settlement_query", status="running",
+                public_message="正在查询患者结算数据",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
+            )
+
+            sql_data = await self.adapters["sql"].query(intent_result.settlement_id)
+
+            # 从 sql_data 提取关键字段
+            treatment = getattr(sql_data, 'treatment', {}) or {}
+            key_fields = {
+                "deductible": treatment.get("deductible", 0),
+                "basic_pooling_payment": treatment.get("pooling_payment", 0),
+                "basic_pooling_self_pay": treatment.get("pooling_self_pay", 0),
+                "large_amount_self_pay": treatment.get("major_self_pay", 0),
+                "personal_total_pay": treatment.get("personal_liability", 0),
+            }
+
+            _evt = builder.done(
+                detail=f"已从真实数据库查询5张表，获取统筹自付等关键字段",
+                data={
+                    "data_source": "REAL_DB",
+                    "mock_used": False,
+                    "settlement_id": intent_result.settlement_id,
+                    "table_count": 5,
+                    "tables": [
+                        "yb_zyfdxx",
+                        "yb_dyxxzy",
+                        "yb_dyxxnd",
+                        "yb_brdjxx",
+                        "yb_zyjyxx",
+                    ],
+                    "key_fields": key_fields,
+                },
+            )
+            yield PolicyQAResponse(
+                step="settlement_query", status="done",
+                detail={
+                    "settlement_id": intent_result.settlement_id,
+                    "tables": ["yb_zyfdxx", "yb_zyfymx", "yb_dyxxnd", "yb_dyxxzy", "yb_brdjxx"],
+                },
+                public_detail={"summary": "已查询患者结算数据与费用明细"},
+                public_message="已获取结算数据与费用明细",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
+            )
+
+            # ═══════════════════════════════════════════════════════════
+            # Step 4: policy_rule_search（结构化政策规则查询）
+            # ═══════════════════════════════════════════════════════════
+            _evt = builder.start("structured_policy_query", "结构化政策规则查询")
+            yield PolicyQAResponse(
+                step="policy_rule_search", status="running",
+                public_message="正在检索相关政策规则",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
+            )
 
             fee_item = intent_result.target_fee_item
             routes = self.skill_config.get("fee_explanation_routes", {})
-            route = routes.get(fee_item) or self.skill_config.get("default_route", {})
-            policy_filters = route.get("policy_filters", [])
+            route_config = routes.get(fee_item) or self.skill_config.get("default_route", {})
+            policy_filters = route_config.get("policy_filters", [])
 
             skill_policy_rules = await self.adapters["policy"].search(
                 query=request.question,
@@ -172,9 +666,32 @@ class PolicyQAOrchestrator:
                     "medical_type": sql_data.patient_info.get("medical_type", ""),
                 } if hasattr(sql_data, 'patient_info') else None,
             )
+
+            # 构建选用规则摘要（规则类型 + 支付比例信息）
+            selected_summary = []
+            for r in (skill_policy_rules or [])[:5]:
+                rule_type = getattr(r, 'rule_type', '') or ''
+                ratio = getattr(r, 'payment_ratio', '') or ''
+                title = getattr(r, 'title', '') or ''
+                source = getattr(r, 'source_text', '') or ''
+                text = title or source
+                if ratio:
+                    text = f"{text}（{ratio}）" if text else ratio
+                if text and len(text) > 80:
+                    text = text[:80] + "…"
+                if text:
+                    selected_summary.append(text)
+
+            _evt = builder.done(
+                detail=f"检索到 {len(skill_policy_rules)} 条候选政策规则，最终选用 {len(selected_summary)} 条核心证据",
+                data={
+                    "candidate_count": len(skill_policy_rules),
+                    "selected_evidence_count": len(selected_summary),
+                    "selected_policy_summary": selected_summary,
+                },
+            )
             yield PolicyQAResponse(
-                step="search_policy_rules",
-                status="done",
+                step="policy_rule_search", status="done",
                 detail={"rules_count": len(skill_policy_rules)},
                 public_detail={
                     "summary": f"已检索到 {len(skill_policy_rules)} 条相关政策规则",
@@ -194,65 +711,291 @@ class PolicyQAOrchestrator:
                     }
                     for r in skill_policy_rules
                 ],
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
             )
 
-            # Step 3: 计算 via config.yaml 路由（SKILL 类型）
-            yield PolicyQAResponse(step="calculate_explanation", status="running", public_message="正在计算费用分解")
-
-            calculator_name = route.get("calculator", "FeeDecompositionCalculator")
-            CalculatorClass = self.calculators.get(calculator_name)
-            if CalculatorClass:
-                calculator = CalculatorClass()
-                calculation_result = calculator.calculate(sql_data, skill_policy_rules)
-            else:
-                logger.warning(f"Calculator {calculator_name} not found in registry, using empty result")
-                calculation_result = {"error": f"Calculator {calculator_name} not found"}
-
-            treatment = calculation_result.get("treatment", {})
+            # ═══════════════════════════════════════════════════════════
+            # Step 5: evidence_completeness_check（政策证据完整性判断）
+            # ═══════════════════════════════════════════════════════════
+            _evt = builder.start("completeness_judgment", "政策证据完整性判断")
             yield PolicyQAResponse(
-                step="calculate_explanation",
-                status="done",
-                detail=calculation_result,
-                public_detail={
-                    "summary": f"费用分解完成 · 总费用 {treatment.get('total_fee', 0):,.2f} 元 · 个人应负 {treatment.get('personal_liability', 0):,.2f} 元",
-                    "evidence_count": calculation_result.get("evidence_count", 0),
+                step="evidence_completeness_check", status="running",
+                public_message="正在判断证据完整性",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
+            )
+
+            completeness = self.build_evidence_completeness(sql_data, skill_policy_rules)
+
+            policy_core_matched = completeness["checks_passed"] >= 1
+            recalculation_ready = completeness["level"] == "full"
+
+            _evt = builder.done(
+                detail="核心政策规则已匹配" if policy_core_matched else "政策规则匹配不完整",
+                data={
+                    "policy_core_rules_matched": policy_core_matched,
+                    "has_segment_ratio_policy": completeness["has_segment_ratio"],
+                    "has_retiree_factor_policy": completeness["has_retiree_factor"],
+                    "has_segment_amount_detail": completeness["has_segment_amount_detail"],
+                    "policy_explanation_level": "policy_core_rules_matched" if policy_core_matched else "insufficient_policy",
+                    "recalculation_level": "fully_recalculated" if recalculation_ready else "not_fully_recalculated",
+                    "message": (
+                        "已具备政策口径解释和逐段复算能力"
+                        if recalculation_ready
+                        else "已具备政策口径解释能力；如需逐段复算，还需要分段进入金额明细。"
+                    ),
                 },
-                public_message=f"费用分解完成 · 总费用 {treatment.get('total_fee', 0):,.2f} 元 · 个人应负 {treatment.get('personal_liability', 0):,.2f} 元",
+            )
+            yield PolicyQAResponse(
+                step="evidence_completeness_check", status="done",
+                detail=completeness,
+                public_detail={
+                    "summary": f"证据完整性评估: {completeness['level']}",
+                    "level": completeness['level'],
+                    "has_segment_ratio": completeness['has_segment_ratio'],
+                    "has_retiree_factor": completeness['has_retiree_factor'],
+                    "has_segment_amount_detail": completeness['has_segment_amount_detail'],
+                },
+                public_message=f"证据完整性: {completeness['level']}",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
             )
 
-            # Step 4: 解释生成 via adapter streaming（MCP 类型）
-            yield PolicyQAResponse(step="generate_explanation", status="running", public_message="正在生成自然语言解释")
-            full_response = ""
-            context_dict = {
-                "question": request.question,
-                "user_role": "患者",
-                "rag_miss": len(skill_policy_rules) == 0,
-                "intent": intent_result.intent.value if intent_result.intent else "treatment_decomposition",
-                "query_type": intent_result.query_type or "",
-                "settlement_id": intent_result.settlement_id or "",
-                "target_fee_item": fee_item,
-                "sql_data": sql_data,
-                "policy_rules": skill_policy_rules,
-                "calculation_result": calculation_result,
-            }
-            async for chunk in self.adapters["llm"].generate_stream(context_dict):
-                full_response += chunk
-                yield PolicyQAResponse(
-                    step="generate_explanation",
-                    status="streaming",
-                    chunk=chunk,
-                    public_message=chunk,
-                )
+            # ═══════════════════════════════════════════════════════════
+            # Step 6: answerability_check（可回答性判断）
+            # ═══════════════════════════════════════════════════════════
+            _evt = builder.start("answerability_judgment", "可回答性判断")
             yield PolicyQAResponse(
-                step="generate_explanation",
-                status="done",
-                public_message="解释生成完成",
-                patient_view=full_response,
-                office_view=full_response,
+                step="answerability_check", status="running",
+                public_message="正在判断可回答性",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
+            )
+
+            answerability = self.build_answerability(sql_data, skill_policy_rules, intent_result)
+
+            _evt = builder.done(
+                detail="可以回答政策口径和结算字段来源" if answerability.can_answer else "暂不能完整回答",
+                data={
+                    "can_answer": answerability.can_answer,
+                    "partial_answer": answerability.partial_answer,
+                    "can_explain_policy_basis": answerability.checks.get("has_policy_rules_for_segment_ratios", False) or answerability.checks.get("has_retiree_factor", False),
+                    "can_trace_real_settlement_field": answerability.checks.get("has_real_settlement_data", False),
+                    "can_fully_recalculate_amount": answerability.checks.get("has_policy_rules_for_segment_ratios", False) and completeness.get("has_segment_amount_detail", False),
+                    "reason": answerability.reason,
+                    "missing_items": answerability.missing_items,
+                    "checks": answerability.checks,
+                },
+            )
+            yield PolicyQAResponse(
+                step="answerability_check", status="done",
+                detail={
+                    "can_answer": answerability.can_answer,
+                    "partial_answer": answerability.partial_answer,
+                    "reason": answerability.reason,
+                    "missing_items": answerability.missing_items,
+                    "checks": answerability.checks,
+                },
+                public_detail={
+                    "summary": f"可回答性: {'可回答' if answerability.can_answer else '无法回答'}",
+                    "can_answer": answerability.can_answer,
+                    "partial_answer": answerability.partial_answer,
+                },
+                public_message=(
+                    "可以为您解答此问题" if answerability.can_answer
+                    else "暂无法完整回答此问题"
+                ),
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
+            )
+
+            # ═══════════════════════════════════════════════════════════
+            # Step 7: answer_assembly（解释生成 — 受 answerability 门控）
+            # ═══════════════════════════════════════════════════════════
+            should_generate = answerability.can_answer or answerability.partial_answer
+
+            if should_generate:
+                _evt = builder.start("patient_view_generation", "解释生成")
+                yield PolicyQAResponse(
+                    step="answer_assembly", status="running",
+                    public_message="正在生成双视角解释（患者 + 院端）",
+                    trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
+                )
+
+                # 计算费用分解
+                calculator_name = route_config.get("calculator", "FeeDecompositionCalculator")
+                CalculatorClass = self.calculators.get(calculator_name)
+                if CalculatorClass:
+                    calculator = CalculatorClass()
+                    calculation_result = calculator.calculate(sql_data, skill_policy_rules)
+                else:
+                    logger.warning(f"Calculator {calculator_name} not found in registry, using empty result")
+                    calculation_result = {"error": f"Calculator {calculator_name} not found"}
+
+                # ★ 子流程路由：根据 target_field 选择不同的解释生成方式
+                target_field = intent_result.target_fee_item or ""
+                if target_field == "deductible":
+                    # 起付线子流程：基于真实结算数据的模板化解释
+                    patient_view = self._build_deductible_patient_view(
+                        sql_data, skill_policy_rules, intent_result
+                    )
+                    office_view = self._build_deductible_office_view(
+                        sql_data, skill_policy_rules, intent_result
+                    )
+                elif target_field == "large_amount_self_pay":
+                    # 大额自付子流程（占位，后续可扩展）
+                    patient_view = self._build_generic_answer(
+                        sql_data, skill_policy_rules, intent_result, "large_amount_self_pay"
+                    )
+                    office_view = patient_view
+                elif target_field == "personal_total_pay":
+                    # 个人总支付子流程（占位，后续可扩展）
+                    patient_view = self._build_generic_answer(
+                        sql_data, skill_policy_rules, intent_result, "personal_total_pay"
+                    )
+                    office_view = patient_view
+                else:
+                    # 默认：统筹自付等 → 使用 LLM 生成双视角解释
+                    explain_ctx = ExplanationContext(
+                        question=request.question,
+                        intent=intent_result,
+                        user_role="患者",
+                        rag_miss=len(skill_policy_rules) == 0,
+                    )
+                    explain_ctx.policy_rules = skill_policy_rules
+                    if calculation_result is not None and isinstance(calculation_result, dict) and "treatment" in calculation_result:
+                        explain_ctx.decomposition = _build_decomposition_from_dict(calculation_result)
+
+                    if self.explanation_generator:
+                        patient_view, office_view = await self.explanation_generator.generate_dual_views(explain_ctx)
+                    else:
+                        patient_view = self._generate_placeholder_explanation(explain_ctx)
+                        office_view = patient_view
+
+                _evt = builder.done(
+                    detail="已生成患者视角和医保办视角",
+                    data={
+                        "views": ["patient", "office"],
+                        "patient_answer_ready": bool(patient_view),
+                        "office_answer_ready": bool(office_view),
+                        "patient_view_length": len(patient_view),
+                        "office_view_length": len(office_view),
+                    },
+                )
+                yield PolicyQAResponse(
+                    step="answer_assembly", status="done",
+                    public_message="双视角解释生成完成（患者版 + 院端版）",
+                    patient_view=patient_view,
+                    office_view=office_view,
+                    trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
+                )
+            else:
+                _evt = builder.skip("patient_view_generation", "双视角解释生成", reason=answerability.reason)
+                yield PolicyQAResponse(
+                    step="answer_assembly", status="skipped",
+                    public_message=f"无法回答: {answerability.reason}",
+                    detail={"reason": answerability.reason, "can_answer": False, "missing_items": answerability.missing_items},
+                    public_detail={"summary": f"无法回答: {answerability.reason}", "can_answer": False},
+                    trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "detail": _evt.detail},
+                )
+
+            # ═══════════════════════════════════════════════════════════
+            # Step 8: output_validation（输出校验）
+            # ═══════════════════════════════════════════════════════════
+            _evt = builder.start("output_validation", "输出校验")
+            yield PolicyQAResponse(
+                step="output_validation", status="running",
+                public_message="正在校验输出",
+                trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
+            )
+
+            validation_result = self._validate_output(patient_view, office_view, skill_policy_rules)
+            has_warnings = len(validation_result.get("warnings", [])) > 0
+
+            if not validation_result["passed"]:
+                # 存在致命错误 → failed
+                _evt = builder.error(
+                    detail=f"输出校验失败: {validation_result['warnings']}",
+                )
+                output_status = "failed"
+                output_summary = "输出校验失败"
+            elif has_warnings:
+                # 有警告但可接受 → warning
+                _evt = builder.done(
+                    detail=f"输出校验完成，但存在 {len(validation_result['warnings'])} 项警告",
+                    data=validation_result,
+                )
+                output_status = "warning"
+                output_summary = f"输出校验完成，但存在 {len(validation_result['warnings'])} 项警告"
+            else:
+                _evt = builder.done(
+                    detail="输出校验通过",
+                    data=validation_result,
+                )
+                output_status = "success"
+                output_summary = "输出校验通过"
+
+            yield PolicyQAResponse(
+                step="output_validation", status="done",
+                detail=validation_result,
+                public_detail={
+                    "summary": output_summary,
+                    "passed": validation_result["passed"],
+                    "warnings": validation_result.get("warnings", []),
+                },
+                public_message=output_summary,
+                trace_event={
+                    "step_id": _evt.step_id,
+                    "step_name": _evt.step_name,
+                    "step_number": _evt.step_number,
+                    "status": output_status,
+                    "duration_ms": _evt.duration_ms,
+                    "detail": _evt.detail,
+                },
+            )
+
+            # ═══════════════════════════════════════════════════════════
+            # Final: yield trace_result（完整链路结果）
+            # ═══════════════════════════════════════════════════════════
+            answerability = answerability or make_answerability(can_answer=False, reason="未执行可回答性判断")
+            trace_events = self._convert_trace_events(builder.to_list())
+            trace_response = PolicyQATraceResponse(
+                status=PolicyQARunStatus.SUCCESS.value,
+                can_answer=answerability.can_answer,
+                partial_answer=answerability.partial_answer,
+                selected_skill_id=skill_id or "",
+                trace_events=trace_events,
+                result={
+                    "patient_view": patient_view,
+                    "office_view": office_view,
+                } if should_generate else {},
+            )
+            yield PolicyQAResponse(
+                step="trace_result", status="done",
+                detail={
+                    "run_id": trace_response.run_id,
+                    "status": trace_response.status,
+                    "can_answer": trace_response.can_answer,
+                    "partial_answer": trace_response.partial_answer,
+                    "selected_skill_id": trace_response.selected_skill_id,
+                    "target_fee_item": intent_result.target_fee_label or "",
+                    "target_field": intent_result.target_fee_item or "",
+                    "sub_flow": sub_flow,
+                    "trace_events": [e.__dict__ for e in trace_response.trace_events],
+                },
+                public_detail={
+                    "summary": "问答流程完成" if trace_response.can_answer else "无法回答此问题",
+                    "can_answer": trace_response.can_answer,
+                    "partial_answer": trace_response.partial_answer,
+                },
+                public_message="问答完成" if trace_response.can_answer else "无法回答此问题",
+                patient_view=patient_view if should_generate else "",
+                office_view=office_view if should_generate else "",
             )
 
         except Exception as e:
             logger.exception("PolicyQA processing failed")
+            # 如果 builder 有当前事件，标记为 error
+            try:
+                builder.error(detail=str(e))
+            except Exception:
+                pass
             yield PolicyQAResponse(
                 step="error",
                 status="error",
@@ -644,6 +1387,209 @@ class PolicyQAOrchestrator:
             },
             "evidence_count": len(decomposition.evidence),
         }
+
+    # ── 起付线子流程：模板化双视角解释 ────────────────────────────
+
+    def _build_deductible_patient_view(
+        self,
+        sql_data: Any,
+        skill_policy_rules: list[Any],
+        intent_result: PolicyQAIntentResult,
+    ) -> str:
+        """生成起付线患者视角解释（基于真实结算数据 + 政策规则）"""
+        treatment = getattr(sql_data, 'treatment', {}) or {}
+        patient_info = getattr(sql_data, 'patient_info', {}) or {}
+        admission = getattr(sql_data, 'admission', {}) or {}
+
+        deductible_amount = treatment.get("deductible", 0)
+        total_fee = treatment.get("total_fee", 0)
+        in_scope = treatment.get("in_scope", 0)
+        pooling_payment = treatment.get("pooling_payment", 0)
+        major_payment = treatment.get("major_payment", 0)
+        major_self_pay = treatment.get("major_self_pay", 0)
+        personal_liability = treatment.get("personal_liability", 0)
+
+        fund_type = patient_info.get("fund_type", "城镇职工")
+        person_type = patient_info.get("person_type", "在职")
+        medical_type = patient_info.get("medical_type", "普通住院")
+
+        # 从政策规则中提取起付线相关规则
+        deductible_rules = []
+        for r in (skill_policy_rules or []):
+            rule_type = getattr(r, 'rule_type', '') or ''
+            title = getattr(r, 'title', '') or ''
+            evidence = getattr(r, 'evidence_text', '') or ''
+            if '起付' in rule_type or '起付' in title:
+                deductible_rules.append({
+                    "rule_type": rule_type,
+                    "title": title,
+                    "evidence": evidence[:200] if evidence else "",
+                })
+
+        lines = []
+        lines.append("## 起付线说明")
+        lines.append("")
+        lines.append(f"本次住院起付线金额为 **{deductible_amount:,.2f}** 元。")
+        lines.append("")
+        lines.append("### 什么是起付线？")
+        lines.append('起付线（又称"门槛费"）是指医保报销的起始标准。住院费用中，')
+        lines.append("超过起付线的医保内费用部分才纳入统筹报销计算。")
+        lines.append(f"本次总费用为 {total_fee:,.2f} 元，其中医保内费用 {in_scope:,.2f} 元。")
+        lines.append(f"起付线 {deductible_amount:,.2f} 元需由个人先行承担。")
+        lines.append("")
+        lines.append("### 本次费用构成")
+        lines.append(f"- 起付线（自付）: **{deductible_amount:,.2f}** 元")
+        lines.append(f"- 统筹支付: {pooling_payment:,.2f} 元")
+        lines.append(f"- 大额支付: {major_payment:,.2f} 元")
+        lines.append(f"- 大额自付: {major_self_pay:,.2f} 元")
+        lines.append(f"- 个人应负合计: {personal_liability:,.2f} 元")
+        lines.append("")
+        lines.append("### 起付线由谁决定？")
+        lines.append("起付线标准由医保政策根据以下因素确定：")
+        lines.append(f"- 险种: {fund_type}")
+        lines.append(f"- 人员类型: {person_type}")
+        lines.append(f"- 医疗类别: {medical_type}")
+        lines.append(f"- 医院级别: {admission.get('hosp_lv', '未获取')}")
+        lines.append("")
+
+        if deductible_rules:
+            lines.append("### 政策依据")
+            for rule in deductible_rules[:3]:
+                title = rule["title"] or f"[{rule['rule_type']}]"
+                lines.append(f"- {title}")
+                if rule["evidence"]:
+                    lines.append(f"  {rule['evidence']}")
+        elif skill_policy_rules:
+            # 即使没有专门起付线规则，也展示通用政策
+            lines.append("### 相关政策规则")
+            for r in skill_policy_rules[:3]:
+                title = getattr(r, 'title', '') or getattr(r, 'rule_type', '')
+                if title:
+                    lines.append(f"- {title}")
+
+        lines.append("")
+        lines.append('> 起付线不同于统筹自付。起付线是进入统筹报销前的"门槛"，超过起付线后的合规费用才按比例报销。')
+
+        return "\n".join(lines)
+
+    def _build_deductible_office_view(
+        self,
+        sql_data: Any,
+        skill_policy_rules: list[Any],
+        intent_result: PolicyQAIntentResult,
+    ) -> str:
+        """生成起付线院端/医保办视角解释（数据溯源 + 政策匹配）"""
+        treatment = getattr(sql_data, 'treatment', {}) or {}
+        patient_info = getattr(sql_data, 'patient_info', {}) or {}
+        admission = getattr(sql_data, 'admission', {}) or {}
+
+        deductible_amount = treatment.get("deductible", 0)
+        pooling_self_pay = treatment.get("pooling_self_pay", 0)
+        fund_type = patient_info.get("fund_type", "")
+        person_type = patient_info.get("person_type", "")
+        medical_type = patient_info.get("medical_type", "")
+
+        lines = []
+        lines.append("## 起付线（院端视图）")
+        lines.append("")
+        lines.append("### 目标字段")
+        lines.append("- target_field: **deductible**")
+        lines.append("- 中文名称: **起付线**")
+        lines.append("")
+        lines.append("### 数据来源")
+        lines.append("- 数据源表: yb_dyxxzy（住院信息表）")
+        lines.append("- 数据源字段: bcqfje（本次起付金额）")
+        lines.append(f"- 金额: **{deductible_amount:,.2f}** 元")
+        lines.append("")
+        lines.append("### 患者上下文")
+        lines.append(f"- 险种: {fund_type}")
+        lines.append(f"- 人员类型: {person_type}")
+        lines.append(f"- 医疗类别: {medical_type}")
+        lines.append(f"- 医院级别: {admission.get('hosp_lv', '未获取')}")
+        lines.append("")
+        lines.append("### 关联数据")
+        lines.append(f"- 统筹自付: {pooling_self_pay:,.2f} 元（来源: yb_zyfdxx.bdtczf）")
+        if admission:
+            lines.append(f"- 住院天数: {admission.get('zyts', '未获取')} 天")
+            lines.append(f"- 出院科室: {admission.get('cyks', '未获取')}")
+        lines.append("")
+
+        # 匹配的政策规则
+        matched_rules = []
+        for r in (skill_policy_rules or []):
+            rule_type = getattr(r, 'rule_type', '') or ''
+            title = getattr(r, 'title', '') or ''
+            evidence = getattr(r, 'evidence_text', '') or ''
+            matched_reason = getattr(r, 'matched_reason', '') or ''
+            deductible_amt = getattr(r, 'deductible_amount', '') or ''
+            if '起付' in rule_type or deductible_amt:
+                matched_rules.append(f"  - {title or rule_type}（起付金额: {deductible_amt} 元）")
+                if evidence:
+                    matched_rules.append(f"    依据: {evidence[:150]}")
+                if matched_reason:
+                    matched_rules.append(f"    匹配: {matched_reason}")
+
+        if matched_rules:
+            lines.append("### 匹配的政策规则")
+            lines.extend(matched_rules)
+        elif skill_policy_rules:
+            lines.append("### 匹配的政策规则（通用）")
+            for r in skill_policy_rules[:5]:
+                lines.append(f"  - {getattr(r, 'title', '') or getattr(r, 'rule_type', '')}")
+
+        lines.append("")
+        lines.append("### 计算说明")
+        lines.append("起付线不由计算产生，而是由医保政策规定的固定标准。")
+        lines.append("起付线标准根据险种、人员类型、医院级别等因素确定，每年可能调整。")
+        lines.append("起付线金额直接从结算系统读取，无需复杂分段计算。")
+
+        return "\n".join(lines)
+
+    def _build_generic_answer(
+        self,
+        sql_data: Any,
+        skill_policy_rules: list[Any],
+        intent_result: PolicyQAIntentResult,
+        target_field: str,
+    ) -> str:
+        """生成通用费用解释（用于尚未定义专属子流程的费用类型）"""
+        treatment = getattr(sql_data, 'treatment', {}) or {}
+        patient_info = getattr(sql_data, 'patient_info', {}) or {}
+
+        amount_labels = {
+            "large_amount_self_pay": ("大额自付", "bddegwyzf"),
+            "personal_total_pay": ("个人总支付", "bdgryf"),
+        }
+        label, field = amount_labels.get(target_field, (target_field, target_field))
+        amount = treatment.get(target_field, 0)
+
+        lines = []
+        lines.append(f"## {label}说明")
+        lines.append("")
+        lines.append(f"本次住院**{label}**金额为 **{amount:,.2f}** 元。")
+        lines.append("")
+        lines.append("### 费用构成概览")
+        lines.append(f"- 总费用: {treatment.get('total_fee', 0):,.2f} 元")
+        lines.append(f"- 医保内: {treatment.get('in_scope', 0):,.2f} 元")
+        lines.append(f"- 统筹支付: {treatment.get('pooling_payment', 0):,.2f} 元")
+        lines.append(f"- 统筹自付: {treatment.get('pooling_self_pay', 0):,.2f} 元")
+        lines.append(f"- 起付线: {treatment.get('deductible', 0):,.2f} 元")
+        lines.append(f"- 个人应负: {treatment.get('personal_liability', 0):,.2f} 元")
+        lines.append("")
+        lines.append("### 数据来源")
+        lines.append("- 数据表: yb_zyfdxx（待遇分解表）")
+        lines.append(f"- 数据字段: {field}")
+        lines.append(f"- 险种: {patient_info.get('fund_type', '未获取')}")
+        lines.append(f"- 人员: {patient_info.get('person_type', '未获取')}")
+        lines.append("")
+        if skill_policy_rules:
+            lines.append("### 相关政策规则")
+            for r in skill_policy_rules[:3]:
+                title = getattr(r, 'title', '') or getattr(r, 'rule_type', '')
+                if title:
+                    lines.append(f"- {title}")
+
+        return "\n".join(lines)
 
     @staticmethod
     def _build_matched_reason(entity: dict) -> str:

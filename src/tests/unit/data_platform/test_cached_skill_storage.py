@@ -63,9 +63,9 @@ class TestSkillCacheHit:
 
         # Assert: underlying was NOT called (cache hit)
         spy.assert_not_called()
-        # Result should be the cached dict version of the skill
+        # Result should be a real Skill object (not dict) after model reconstruction
         assert result is not None
-        assert result["skill_id"] == "test-skill"
+        assert result.skill_id == "test-skill"
 
     def test_get_skill_miss_calls_underlying(self, storage: CachedSkillStorage, underlying: InMemorySkillStorage, sample_skill: Skill) -> None:
         """First call with empty cache should call underlying exactly once."""
@@ -92,7 +92,7 @@ class TestListSkillsCacheHit:
 
         spy.assert_not_called()
         assert len(result) == 1
-        assert result[0]["skill_id"] == "test-skill"
+        assert result[0].skill_id == "test-skill"
 
 
 # ── Write-through: save_skill invalidates cache ──────────────────────────

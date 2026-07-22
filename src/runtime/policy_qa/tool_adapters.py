@@ -13,7 +13,7 @@ _skill_dir = Path(__file__).parent.parent.parent.parent / "skills"
 if str(_skill_dir) not in sys.path:
     sys.path.insert(0, str(_skill_dir))
 
-from policy_fee_explanation.tool_interfaces import (
+from settlement_explain_skill.tool_interfaces import (
     SqlQueryTool,
     PolicySearchTool,
     LlmExplainTool,
@@ -130,6 +130,7 @@ class PolicySearchAdapter(PolicySearchTool):
                         top_k=top_k,
                     ),
                 )
+
                 # ★ 降级 1：精确匹配 0 结果 → 去掉险种过滤，只用医疗类别 + 人员类型
                 if not results and insu_type:
                     results = await loop.run_in_executor(
@@ -147,6 +148,31 @@ class PolicySearchAdapter(PolicySearchTool):
                     results = await loop.run_in_executor(
                         None, lambda: self._engine.search(query, top_k=top_k)
                     )
+
+                # ★★★ 补充查询：当存在人员类别（如退休人员）时，分段比例规则的
+                # psn_type 可能为 "全部"，会被上面的 psn_type 过滤排除。
+                # 需要额外查询一次（不带 psn_type 过滤）来获取这些分段比例规则。
+                if psn_type and len(results) < 4:
+                    extra_results = await loop.run_in_executor(
+                        None,
+                        lambda: self._engine.search_with_context(
+                            question=query,
+                            insu_type=insu_type if insu_type else None,
+                            psn_type=None,  # ★ 不限制人员类别
+                            med_type=med_type if med_type else None,
+                            top_k=max(top_k, 20),  # ★ 增大 top_k 确保分段规则全部返回
+                        ),
+                    )
+                    # Milvus 返回的可能是 LazyList，转成普通 list 才能安全合并
+                    results = list(results) if hasattr(results, '__iter__') else results
+                    existing_ids = {r.get("rule_id", "") for r in results}
+                    for r in extra_results:
+                        rid = r.get("rule_id", "")
+                        if rid and rid not in existing_ids:
+                            existing_ids.add(rid)
+                            r["score"] = 1.0
+                            results.append(r)
+
             else:
                 results = await loop.run_in_executor(
                     None, lambda: self._engine.search(query, top_k=top_k)
@@ -156,13 +182,8 @@ class PolicySearchAdapter(PolicySearchTool):
                 None, lambda: self._engine.search(query, top_k=top_k)
             )
 
-        # PolicyRulesSearchEngine.search() is synchronous, wrap in executor
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        results = await loop.run_in_executor(
-            None, lambda: self._engine.search(query, top_k=top_k)
-        )
+        # ★ FIX: 不再无条件覆盖前面的 search_with_context 结果
+        # 前面 if patient_info 分支已经赋值 results，这里直接进入过滤阶段
 
         filtered = []
         for r in results:

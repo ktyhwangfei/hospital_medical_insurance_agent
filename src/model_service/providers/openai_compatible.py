@@ -1,10 +1,13 @@
 import json
+import logging
 from typing import Iterator
 
 import httpx
 
 from src.model_service.exceptions import ModelAuthError, ModelRateLimitError, ModelServerError, ModelTimeoutError
 from src.model_service.models import Message, ModelRequest, ModelResponse, StreamChunk, TokenUsage
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAICompatibleProvider:
@@ -120,6 +123,42 @@ class OpenAICompatibleProvider:
     def _handle_response(self, response: httpx.Response) -> ModelResponse:
         self._check_status(response)
         data = response.json()
+        
+        # 兼容不同的响应格式
+        if "choices" not in data:
+            # 尝试其他格式
+            if "result" in data:
+                # 某些 API 返回 {"result": "..."}
+                return ModelResponse(
+                    content=str(data["result"]),
+                    model_name=data.get("model", ""),
+                    usage=TokenUsage(prompt_tokens=0, completion_tokens=0),
+                    finish_reason="stop",
+                )
+            elif "response" in data:
+                return ModelResponse(
+                    content=str(data["response"]),
+                    model_name=data.get("model", ""),
+                    usage=TokenUsage(prompt_tokens=0, completion_tokens=0),
+                    finish_reason="stop",
+                )
+            elif "text" in data:
+                return ModelResponse(
+                    content=str(data["text"]),
+                    model_name=data.get("model", ""),
+                    usage=TokenUsage(prompt_tokens=0, completion_tokens=0),
+                    finish_reason="stop",
+                )
+            else:
+                # 兜底：返回整个响应作为内容
+                logger.warning(f"Unexpected model response format: {list(data.keys())}")
+                return ModelResponse(
+                    content=str(data),
+                    model_name="",
+                    usage=TokenUsage(prompt_tokens=0, completion_tokens=0),
+                    finish_reason="stop",
+                )
+        
         choice = data["choices"][0]
         usage = data.get("usage", {})
         return ModelResponse(
@@ -137,5 +176,9 @@ class OpenAICompatibleProvider:
             raise ModelAuthError(f"Auth error: {response.text}", model_name="")
         if response.status_code == 429:
             raise ModelRateLimitError(f"Rate limited: {response.text}", model_name="")
+        if response.status_code == 400:
+            raise ModelServerError(f"Bad request: {response.text}", model_name="")
+        if 400 <= response.status_code < 500 and response.status_code not in (400, 401, 403, 429):
+            raise ModelServerError(f"Client error ({response.status_code}): {response.text}", model_name="")
         if response.status_code >= 500:
             raise ModelServerError(f"Server error: {response.text}", model_name="")

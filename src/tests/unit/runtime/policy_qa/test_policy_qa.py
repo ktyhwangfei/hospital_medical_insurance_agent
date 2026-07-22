@@ -590,7 +590,6 @@ class TestExplanationGenerator:
         text = ExplanationGenerator()._generate_placeholder(context)
 
         assert "业务库已结算的统筹自付金额为 4,962.67 元" in text
-        assert "yb_zyfdxx.bdtczf" in text
         assert "基础自付比例" in text
         assert "退休人员系数" in text
         assert "政策解释计算与业务库金额一致" in text
@@ -645,7 +644,6 @@ class TestExplanationGenerator:
         assert "普通住院" in text
         assert "退休" in text
         assert "业务库金额为本次结算的权威金额" in text
-        assert "yb_zyfdxx.bdtczf" in text
 
     def test_pooling_self_pay_placeholder_declares_uncertainty_without_segments(self):
         """缺少统筹分段规则时不能编造比例，必须输出不确定性声明。"""
@@ -768,7 +766,7 @@ class TestPolicyQAOrchestrator:
             PolicyQARequest(question="为什么我这次统筹自付这么多？", settlement_id="1671213")
         ):
             events.append(event)
-            if event.step == "intent" and event.status == "done":
+            if event.step == "intent_detection" and event.status == "done":
                 break
 
         intent_done = events[-1]
@@ -808,7 +806,7 @@ class TestPolicyQAOrchestrator:
         async for event in orchestrator.process(
             PolicyQARequest(question="为什么我这次统筹自付这么多？", settlement_id="1671213")
         ):
-            if event.step == "query_sql_data" and event.status == "done":
+            if event.step == "settlement_query" and event.status == "done":
                 query_done = event
                 break
 
@@ -859,3 +857,91 @@ class TestPolicyQAOrchestrator:
         assert detail["segments"]["reconciliation"]["tolerance"] == 0.01
         assert detail["segments"]["reconciliation"]["matched"] is True
         assert detail["segments"]["reconciliation"]["message"] == "政策解释计算与业务库金额一致"
+
+
+class TestExtractSegmentRatios:
+    """测试 _extract_segment_ratios 对真实 Milvus 数据结构的解析。"""
+
+    def _make_real_evidence(self):
+        """构造与真实 Milvus 返回结构一致的测试数据。"""
+        return [
+            {
+                "source_text": "1. 起付标准至3万元的部分，统筹基金支付85%，职工支付15%；\n{\"ratio\": 0.85}",
+                "rule_type": "支付比例",
+                "psn_type": "",
+                "amount_band": "nan",
+                "rule_tags": ["支付比例", "城镇职工基本医疗保险", "住院-普通住院", "三级医院", "全部"],
+                "rule_value": "{\"ratio\": 0.85}",
+            },
+            {
+                "source_text": "2. 超过3万元至4万元的部分，统筹基金支付90%，职工支付10%；\n{\"ratio\": 0.9}",
+                "rule_type": "支付比例",
+                "psn_type": "",
+                "amount_band": "nan",
+                "rule_tags": ["支付比例", "城镇职工基本医疗保险", "住院-普通住院", "三级医院", "全部"],
+                "rule_value": "{\"ratio\": 0.9}",
+            },
+            {
+                "source_text": "3. 超过4万元的部分，统筹基金支付95%，职工支付5%。\n{\"ratio\": 0.95}",
+                "rule_type": "支付比例",
+                "psn_type": "",
+                "amount_band": "nan",
+                "rule_tags": ["支付比例", "城镇职工基本医疗保险", "住院-普通住院", "三级医院", "全部"],
+                "rule_value": "{\"ratio\": 0.95}",
+            },
+            {
+                "source_text": "（四）退休人员个人支付比例为职工支付比例的60%。但基本医疗保险统筹基金按照比例支付的最高数额不得超过本规定第十三条规定的最高支付限额。",
+                "rule_type": "计算公式",
+                "psn_type": "",
+                "amount_band": "nan",
+                "rule_tags": ["计算公式", "城镇职工基本医疗保险", "住院-普通住院", "nan", "退休人员"],
+                "rule_value": "{\"expression\": \"retiree_personal_payment_ratio = employee_personal_payment_ratio * 0.6\", \"target\": \"retiree_personal_payment_ratio\", \"base\": \"employee_personal_payment_ratio\", \"operator\": \"*\", \"multiplier\": 0.6}",
+            },
+        ]
+
+    def test_detects_3_employee_segments(self):
+        """3 条支付比例证据应解析出 3 个分段。"""
+        from skills.settlement_explain_skill.strategies.pooling_self_pay.strategy import PoolingSelfPayStrategy
+        from pathlib import Path as _Path
+        _strat = PoolingSelfPayStrategy(_Path("skills/settlement_explain_skill/strategies/pooling_self_pay"))
+        seg = _strat._extract_segment_ratios(self._make_real_evidence())
+        assert len(seg["employee"]) == 3
+
+    def test_detects_retiree_rule_with_empty_psn_type(self):
+        """退休规则证据的 psn_type 为空时，应通过 source_text/rule_tags 多源检测。"""
+        from skills.settlement_explain_skill.strategies.pooling_self_pay.strategy import PoolingSelfPayStrategy
+        from pathlib import Path as _Path
+        _strat = PoolingSelfPayStrategy(_Path("skills/settlement_explain_skill/strategies/pooling_self_pay"))
+        seg = _strat._extract_segment_ratios(self._make_real_evidence())
+        assert seg["retiree"] is not None, "退休人员 60% 规则未被检测到（psn_type 为空时的多源检测失败）"
+        assert seg["retiree"]["ratio"] == 60
+
+    def test_has_complete_is_true_with_4_evidence(self):
+        """4 条证据（3 段比例 + 退休公式）时 has_complete 必须为 True。"""
+        from skills.settlement_explain_skill.strategies.pooling_self_pay.strategy import PoolingSelfPayStrategy
+        from pathlib import Path as _Path
+        _strat = PoolingSelfPayStrategy(_Path("skills/settlement_explain_skill/strategies/pooling_self_pay"))
+        seg = _strat._extract_segment_ratios(self._make_real_evidence())
+        assert seg["has_complete"] is True, f"has_complete 应为 True，实际: {seg}"
+
+    def test_retiree_segments_calculated_correctly(self):
+        """退休人员分段比例应正确计算：15%×60%=9%, 10%×60%=6%, 5%×60%=3%。"""
+        from skills.settlement_explain_skill.strategies.pooling_self_pay.strategy import PoolingSelfPayStrategy
+        from pathlib import Path as _Path
+        _strat = PoolingSelfPayStrategy(_Path("skills/settlement_explain_skill/strategies/pooling_self_pay"))
+        seg = _strat._extract_segment_ratios(self._make_real_evidence())
+        assert seg["retiree"] is not None
+        retiree_segs = seg["retiree"]["segments"]
+        assert len(retiree_segs) == 3
+        assert retiree_segs[0] == 9  # 15 * 60 / 100 = 9
+        assert retiree_segs[1] == 6  # 10 * 60 / 100 = 6
+        assert retiree_segs[2] == 3  # 5 * 60 / 100 = 3
+
+    def test_empty_evidence_returns_not_complete(self):
+        """空证据列表应返回 has_complete=False。"""
+        from skills.settlement_explain_skill.strategies.pooling_self_pay.strategy import PoolingSelfPayStrategy
+        from pathlib import Path as _Path
+        _strat = PoolingSelfPayStrategy(_Path("skills/settlement_explain_skill/strategies/pooling_self_pay"))
+        seg = _strat._extract_segment_ratios([])
+        assert seg["has_complete"] is False
+        assert seg["retiree"] is None

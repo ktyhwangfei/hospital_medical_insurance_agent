@@ -5,7 +5,7 @@ from langgraph.types import interrupt
 
 from src.adapters.base import AdapterCallStatus
 from src.adapters.insurance_interface.in_memory import InMemoryInsuranceInterfaceAdapter
-from src.knowledge_extension.knowledge.factory import create_knowledge_store
+from src.knowledge_extension.knowledge_stub import create_knowledge_store
 from src.runtime.langgraph.settlement_state import SettlementState
 
 _logger = logging.getLogger(__name__)

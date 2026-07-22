@@ -96,6 +96,9 @@ def _create_task_store():
             responsible_role: str,
         ) -> dict[str, Any]:
             return self.create_task(task_id, task_type, description, responsible_role)
+
+        def list_tasks_by_workflow(self, workflow_id: str) -> list[dict[str, Any]]:
+            return [t for t in self._tasks.values() if t.get("workflow_id") == workflow_id]
     
     logger.info("Using in-memory task store")
     return InMemoryTaskStore()
@@ -150,3 +153,7 @@ def build_pending_task(
     responsible_role: str,
 ) -> dict[str, Any]:
     return _task_store.build_pending_task(task_id, task_type, description, responsible_role)
+
+
+def list_tasks_by_workflow(workflow_id: str) -> list[dict[str, Any]]:
+    return _task_store.list_tasks_by_workflow(workflow_id)

@@ -25,7 +25,12 @@ def _step_to_dict(step: StepState) -> dict[str, Any]:
 def _row_to_workflow(row: dict[str, Any]) -> WorkflowInstance:
     steps_data = json.loads(row["steps"]) if isinstance(row["steps"], str) else (row["steps"] or [])
     audit_refs = json.loads(row["audit_refs"]) if isinstance(row["audit_refs"], str) else (row["audit_refs"] or [])
-    knowledge_events = json.loads(row["knowledge_events"]) if isinstance(row["knowledge_events"], str) else (row["knowledge_events"] or [])
+    raw_knowledge_events = json.loads(row["knowledge_events"]) if isinstance(row["knowledge_events"], str) else (row["knowledge_events"] or [])
+    # 兼容历史数据：knowledge_events 可能存字符串而不是 dict
+    knowledge_events = [
+        e if isinstance(e, dict) else {"event": str(e)}
+        for e in raw_knowledge_events
+    ]
     knowledge_degradation_reasons = (
         json.loads(row["knowledge_degradation_reasons"])
         if isinstance(row["knowledge_degradation_reasons"], str)

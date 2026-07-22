@@ -47,9 +47,12 @@ class StreamingEmitter:
         payload = self._build_payload({"intent": intent, "confidence": confidence})
         self._yield(sse_event(STREAM_EVENT_START, payload))
 
-    def emit_step(self, step: str, message: str) -> None:
+    def emit_step(self, step: str, message: str, status: str | None = None) -> None:
         """发射 stream:step 事件，标识推理或处理步骤。"""
-        payload = self._build_payload({"step": step, "message": message})
+        payload_dict: dict[str, Any] = {"step": step, "message": message}
+        if status:
+            payload_dict["status"] = status
+        payload = self._build_payload(payload_dict)
         self._yield(sse_event(STREAM_EVENT_STEP, payload))
 
     def emit_intent_trace(self, trace: dict) -> None:

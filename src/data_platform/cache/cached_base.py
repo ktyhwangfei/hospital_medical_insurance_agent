@@ -159,10 +159,11 @@ class CachedStorageBase:
 
     # ── Safe cache operations ────────────────────────────────────────
 
-    def _safe_get(self, key: str) -> dict[str, Any] | None:
+    def _safe_get(self, key: str) -> Any:
         """安全地从缓存中读取值。
 
         失败时记录故障并返回 None，永不传播异常。
+        返回值可能是 dict / list / None，取决于缓存的数据类型。
         """
         if not self._should_try_cache():
             return None
@@ -178,10 +179,11 @@ class CachedStorageBase:
             self._record_failure()
             return None
 
-    def _safe_set(self, key: str, value: dict[str, Any], ttl: int | None = None) -> None:
+    def _safe_set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """安全地写入缓存。
 
         失败时记录故障，永不传播异常。
+        value 可以是 dict / list / Any，由底层 CacheClient 序列化。
         """
         if not self._enabled:
             return
