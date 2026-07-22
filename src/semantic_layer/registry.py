@@ -466,24 +466,31 @@ class SemanticRegistry:
         return self._store.list_metrics(object_code=object_code)
 
     def get_metric_mapping(
-        self, object_code: str, metric_codes: list[str]
+        self, object_code: str, metric_codes: list[str],
+        version: Optional[str] = None,
     ) -> list[Metric]:
-        """从对象最新已发布版本快照取指标（运行时锁定）。
+        """从对象已发布版本快照取指标（运行时锁定）。
 
-        - 未发布对象返回空列表：skill 只能消费已发布的指标。
-        - 阶段4 将允许 skill 指定 locked_version pin 到具体版本。
+        - version=None：读最新已发布版本（follow latest published）。
+        - version='1'：读指定版本（skill locked_version pin）。
+        - 未发布/版本不存在返回空列表：skill 只能消费已发布的指标。
         """
-        versions = self._store.list_object_versions(object_code)
-        if not versions:
-            return []
-        latest = versions[-1]  # 已按版本号升序排序
+        if version is not None:
+            target = self._store.get_object_version(object_code, version)
+            if target is None:
+                return []
+        else:
+            versions = self._store.list_object_versions(object_code)
+            if not versions:
+                return []
+            target = versions[-1]  # 已按版本号升序排序
         wanted = {
             code if "." in code else f"{object_code}.{code}"
             for code in metric_codes
         }
         return [
             self._version_metric_to_metric(vm, object_code)
-            for vm in latest.metrics if vm.metric_code in wanted
+            for vm in target.metrics if vm.metric_code in wanted
         ]
 
     @staticmethod

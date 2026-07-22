@@ -44,6 +44,15 @@ needed_objects:
       - ybnje                       # 医保内金额
     importance: "optional"
 
+# 对象版本锁定（阶段4）：
+#   null / 缺省 = 跟随最新已发布版本（follow latest published）
+#   指定版本号  = 锁定到该版本，对象重新发布后本 skill 不自动跟随，需显式升级
+locked_versions:
+  zydyxx: null
+  zyfdxx: null
+  zyjyxx: null
+  djxx: null
+
 # ── 路由配置 ──────────────────────────────────────────────────
 
 # 关键词精简原则：只保留用户对医保人员会「说出口」的词

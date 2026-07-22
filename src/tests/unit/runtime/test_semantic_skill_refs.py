@@ -72,3 +72,11 @@ def test_metric_code_strategy_matches_manifest(monkeypatch):
     refs = sr._compute_skill_metric_refs()
     assert refs.get("zydyxx.bcqfje", 0) >= 1
     assert refs.get("zyfdxx.bdtczf", 0) >= 1
+
+
+def test_compute_skill_locks_parses_manifest():
+    """阶段4：_compute_skill_locks 扫描 manifest 的 locked_versions。"""
+    locks = sr._compute_skill_locks()
+    assert "zydyxx" in locks
+    assert any(l["skill_id"] == "settlement_explain_skill" and l["locked_version"] is None
+               for l in locks["zydyxx"])

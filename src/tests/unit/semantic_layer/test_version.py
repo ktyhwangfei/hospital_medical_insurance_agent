@@ -125,6 +125,23 @@ class TestRuntimeLocking:
         mapping = registry.get_metric_mapping("zydyxx", ["bcybnje"])
         assert mapping[0].name == "新医保内"
 
+    def test_pin_to_specific_version(self, registry):
+        """阶段4：version 参数读指定版本快照，而非最新。"""
+        registry.publish_object("zydyxx")  # v1
+        m = registry.get_metric("zydyxx.bcybnje")
+        m.name = "v1医保内"
+        registry._store.save_metric(m)
+        registry.publish_object("zydyxx")  # v2 含改名
+        # pin v1 → 旧名
+        assert registry.get_metric_mapping("zydyxx", ["bcybnje"], version="1")[0].name == "医保内费用"
+        # 默认（latest）→ v2 新名
+        assert registry.get_metric_mapping("zydyxx", ["bcybnje"])[0].name == "v1医保内"
+
+    def test_pin_nonexistent_version_returns_empty(self, registry):
+        """锁定到不存在的版本 → 空。"""
+        registry.publish_object("zydyxx")
+        assert registry.get_metric_mapping("zydyxx", ["bcqfje"], version="99") == []
+
 
 # ── API 层测试（publish / versions 端点）──
 
@@ -196,3 +213,12 @@ class TestPublishAPI:
         by_code = {o["object_code"]: o for o in resp.json()}
         assert by_code["zydyxx"]["current_version"] == "1"
         assert by_code["djxx"]["current_version"] is None
+
+    def test_object_detail_shows_locked_by_skills(self, api_client):
+        """阶段4：对象详情返回哪些 skill 锁定了它及锁定版本。"""
+        client, reg = api_client
+        reg.publish_object("zydyxx")
+        resp = client.get(f"{self._BASE}/objects/zydyxx")
+        locks = resp.json()["locked_by_skills"]
+        # settlement_explain_skill 声明了 zydyxx 的 locked_versions
+        assert any(l["skill_id"] == "settlement_explain_skill" for l in locks)
