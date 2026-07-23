@@ -86,6 +86,7 @@ class ObjectVersionMetric(BaseModel):
     source_adapter_port: Optional[str] = None
     value_domain: Optional[str] = None
     importance: str = "optional"
+    default_value: Optional[Any] = None
 
     @classmethod
     def from_metric(cls, m: "Metric") -> "ObjectVersionMetric":
@@ -95,6 +96,7 @@ class ObjectVersionMetric(BaseModel):
             required=m.required, source_object=m.source_object,
             source_field=m.source_field, source_adapter_port=m.source_adapter_port,
             value_domain=m.value_domain, importance=m.importance,
+            default_value=m.default_value,
         )
 
 

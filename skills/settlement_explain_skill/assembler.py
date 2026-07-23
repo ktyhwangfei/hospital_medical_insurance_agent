@@ -289,6 +289,7 @@ class BenefitPoolingSelfPayAssembler:
         "zyjyxx.rylb": "person_type",
         "djxx.fund_type": "insurance_type",
         "djxx.yllb": "service_type",
+        "djxx.hospital_level": "hospital_level",
     }
 
     def _build_context_from_facts(self, facts: dict) -> dict:

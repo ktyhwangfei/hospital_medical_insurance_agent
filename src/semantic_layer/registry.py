@@ -505,6 +505,7 @@ class SemanticRegistry:
             source_object=vm.source_object, source_field=vm.source_field,
             source_adapter_port=vm.source_adapter_port,
             value_domain=vm.value_domain, importance=vm.importance,
+            default_value=vm.default_value,
         )
 
     # Value Domain resolution

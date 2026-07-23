@@ -40,8 +40,15 @@ class BusinessFactsBuilder:
                 warnings.append(f"No metrics found for object {object_code}")
                 continue
 
+            # 常量指标（无 adapter + 有 default_value）直接取固定值，不调 adapter
             adapter_groups: dict[str, list] = {}
             for metric in metrics:
+                if metric.default_value is not None and not metric.source_adapter_port:
+                    value = metric.default_value
+                    if metric.value_domain:
+                        value = self._registry.resolve_value(metric.value_domain, str(value))
+                    obj_facts[metric.metric_code.split(".")[-1]] = value
+                    continue
                 port = metric.source_adapter_port or "default"
                 if port not in adapter_groups:
                     adapter_groups[port] = []
