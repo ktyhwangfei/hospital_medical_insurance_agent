@@ -33,7 +33,7 @@ _SKILL_OBJECTS = [
     ObjectMetricRequest(object_code="zyfdxx",
                         metric_codes=["bdtczfje", "bdtczf", "bddezfje", "bddezf", "bdgryf"]),
     ObjectMetricRequest(object_code="zyjyxx", metric_codes=["rylb"]),
-    ObjectMetricRequest(object_code="djxx", metric_codes=["fund_type", "yllb"]),
+    ObjectMetricRequest(object_code="djxx", metric_codes=["fund_type", "yllb", "hospital_level"]),
 ]
 
 

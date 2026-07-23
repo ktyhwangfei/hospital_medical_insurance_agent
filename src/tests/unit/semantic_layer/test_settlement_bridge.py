@@ -55,6 +55,7 @@ class TestSettlementBridge:
         assert facts["zyfdxx"]["bdtczfje"] == 28560.0
         assert facts["zyfdxx"]["bdtczf"] == 4520.0
         assert facts["zyfdxx"]["bdgryf"] == 5820.0
+        assert facts["djxx"]["hospital_level"] == "三级医院"  # 常量指标
 
     def test_build_facts_unpublished_returns_empty(self, registry):
         """未发布对象 → facts 为空（锁定生效，skill 拿不到数据）。"""

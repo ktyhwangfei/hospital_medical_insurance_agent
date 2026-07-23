@@ -37,6 +37,7 @@ needed_objects:
     metrics:
       - fund_type                   # 险种类型
       - yllb                        # 医疗类别
+      - hospital_level              # 医院等级（常量，固定三级医院）
     importance: "core"
   - object_code: "zyfymx"          # 住院费用明细
     metrics:
@@ -102,7 +103,7 @@ required_settlement_fields:
   - zyjyxx.rylb          # 人员类别
   - djxx.fund_type       # 险种类型
   - djxx.yllb            # 医疗类别
-  # hospital_level：语义层暂无对应指标（gap），待补充后声明
+  - djxx.hospital_level # 医院等级（常量，固定三级医院）
 
 required_mcp:
   - settlement-data
@@ -149,7 +150,8 @@ display:
         label: 参保类型
       - field: djxx.yllb
         label: 医疗类别
-      # hospital_level：语义层暂无对应指标（gap），待补充后声明
+      - field: djxx.hospital_level
+        label: 医院等级
 
   # 费用明细（输出字段 — 按业务含义分组）
   output:

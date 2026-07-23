@@ -120,15 +120,16 @@ def _seed_objects(store: RegistryStore) -> None:
 
 def _m(metric_code, object_code, name, definition, semantic_type, *,
        unit=None, required=False, source_object=None, source_field=None,
-       source_adapter_port=None, value_domain=None, importance="optional"):
+       source_adapter_port=None, value_domain=None, importance="optional",
+       default_value=None):
     """指标构造助手，减少重复参数。"""
-    store_save = None  # 占位，实际由调用方 save
     return Metric(
         metric_code=metric_code, object_code=object_code, name=name,
         definition=definition, metric_type="Atomic", semantic_type=semantic_type,
         unit=unit, required=required, source_object=source_object,
         source_field=source_field, source_adapter_port=source_adapter_port,
         value_domain=value_domain, importance=importance,
+        default_value=default_value,
         version="1.0", status="draft",
     )
 
@@ -139,6 +140,9 @@ def _seed_metrics(store: RegistryStore) -> None:
         # ── djxx 参保人登记 ──
         _m("djxx.djh", "djxx", "登记号", "登记号", "String",
            source_field="yb_brdjxx.djh"),
+        _m("djxx.hospital_level", "djxx", "医院等级",
+           "医院等级（常量：数据库无此字段，固定三级医院）", "Enum",
+           default_value="三级医院", importance="core"),
         _m("djxx.fund_type", "djxx", "险种类型", "基本医保险种类型", "Enum",
            source_object="InsuranceTransaction", source_field="yb_brdjxx.FUND_TYPE",
            source_adapter_port=_ADAPTER, value_domain="FUND_TYPE", importance="core"),

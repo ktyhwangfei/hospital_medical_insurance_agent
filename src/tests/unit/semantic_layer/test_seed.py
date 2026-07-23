@@ -32,6 +32,8 @@ class TestSeedSemanticLayer:
         assert registry.get_metric("zyfdxx.bdtczf") is not None   # 统筹自付
         assert registry.get_metric("zyjyxx.rylb") is not None     # 人员类别
         assert registry.get_metric("djxx.fund_type") is not None  # 险种类型
+        hl = registry.get_metric("djxx.hospital_level")  # 常量指标
+        assert hl is not None and hl.default_value == "三级医院"
 
     def test_seed_creates_value_domains(self, registry):
         seed_semantic_layer(registry._store)
