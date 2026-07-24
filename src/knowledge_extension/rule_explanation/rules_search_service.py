@@ -139,3 +139,15 @@ class RulesSearchService:
                     fact_text = fr[0].get("fact_text", "")
             groups.append({"fact_id": fid, "fact_text": fact_text, "rules": rs})
         return groups
+
+    def search_database(
+        self, metric_codes: list[str], context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """target=database：经指标 source_field 映射查业务库（SQLServer）。
+
+        复用 SemanticDataSource.query（两段式 source_field + 按 context[filter_key] 过滤）。
+        [来源: §4.3 跨世界查找；SemanticDataSource 已验证端到端可用]
+        [注: 当前按登记号(djh)过滤，跨世界查询语义待后续设计深化]
+        """
+        from src.runtime.discovery.semantic_source import SemanticDataSource
+        return SemanticDataSource().query(metric_codes, context)
