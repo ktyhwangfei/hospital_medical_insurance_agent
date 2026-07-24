@@ -326,7 +326,7 @@ class DataModel1Loader:
     def __init__(
         self,
         host: str = "127.0.0.1",
-        port: str = "19121",
+        port: str = "19530",
         embedding_kind: str = "sentence_transformer",
     ):
         self.host = host
@@ -721,8 +721,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--port",
-        default="19121",
-        help="Milvus端口 (默认: 19121)",
+        default="19530",
+        help="Milvus端口 (默认: 19530)",
     )
     parser.add_argument(
         "--embedding-kind",

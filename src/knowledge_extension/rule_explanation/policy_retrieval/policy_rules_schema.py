@@ -29,8 +29,8 @@ POLICY_RULES_OUTPUT_FIELDS = [
 ]
 
 
-def connect_milvus(host: str = "127.0.0.1", port: str = "19121", alias: str = "default") -> None:
-    """连接Milvus，注意端口为19121（非默认19530）"""
+def connect_milvus(host: str = "127.0.0.1", port: str = "19530", alias: str = "default") -> None:
+    """连接Milvus（默认端口 19530；历史误记为 19121，实际为 19530）"""
     connections.connect(alias=alias, host=host, port=port)
 
 
