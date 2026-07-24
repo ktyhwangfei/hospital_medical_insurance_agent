@@ -63,8 +63,9 @@ class SemanticDataSource:
         values = src.query(["zyfdxx.bdtczf"], context={"djh": 1})
     """
 
-    def __init__(self) -> None:
+    def __init__(self, meta_store=None) -> None:
         self._registry = get_semantic_registry()
+        self._meta_store = meta_store  # 注入 PolicyMetaStore（多源路由，P7.2b）
 
     # ============================================================
     # 连接复用
@@ -82,6 +83,34 @@ class SemanticDataSource:
         except Exception:
             logger.debug("取 discovery source_config 失败，回退环境变量", exc_info=True)
         return {}
+
+    def _get_meta_store(self):
+        """PolicyMetaStore 实例（可注入；不可用时返回 None，调用方降级）。"""
+        if self._meta_store is not None:
+            return self._meta_store
+        try:
+            from src.data_platform.storage.postgresql.policy_meta_store import PolicyMetaStore
+            return PolicyMetaStore()
+        except Exception:
+            logger.debug("PolicyMetaStore 不可用", exc_info=True)
+            return None
+
+    def _resolve_datasource_connection(self, ds_id):
+        """按 datasource_id 从注册表取连接配置（P7.2b 多源路由）。
+
+        ds_id=None → 回退默认源（_resolve_source_config）；
+        ds_id 存在且启用 → 返回其 connection_config；
+        未找到/禁用 → None（调用方跳过该组）。
+        """
+        if not ds_id:
+            return self._resolve_source_config()
+        meta = self._get_meta_store()
+        if meta is None:
+            return None
+        ds = meta.get_datasource(ds_id)
+        if ds and ds.get("enabled") and ds.get("connection_config"):
+            return ds["connection_config"]
+        return None
 
     def _connect(self, cfg: dict):
         """复用 sqlserver_source 的驱动降级连接逻辑。
