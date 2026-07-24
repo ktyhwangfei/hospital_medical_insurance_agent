@@ -106,7 +106,7 @@ class PolicySearchAdapter(PolicySearchTool):
         if self._engine is None:
             from src.config.production import MILVUS_HOST, MILVUS_PORT
             self._engine = PolicyRulesSearchEngine(
-                host=MILVUS_HOST, port=MILVUS_PORT, embedding_kind="hash"
+                host=MILVUS_HOST, port=MILVUS_PORT
             )
 
         import asyncio

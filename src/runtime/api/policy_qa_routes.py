@@ -102,7 +102,6 @@ def _init_search_engine():
         engine = PolicyRulesSearchEngine(
             host=MILVUS_HOST,
             port=MILVUS_PORT,
-            embedding_kind="hash",  # 使用hash快速初始化，生产环境改为sentence_transformer
         )
         logger.info(f'Initialized PolicyRulesSearchEngine: {MILVUS_HOST}:{MILVUS_PORT}')
         return engine

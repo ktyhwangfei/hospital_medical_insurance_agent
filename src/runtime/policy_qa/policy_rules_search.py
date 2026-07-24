@@ -25,7 +25,7 @@ class PolicyRulesSearchEngine:
         self,
         host: str = "127.0.0.1",
         port: str = "19530",
-        embedding_kind: str = "hash",
+        embedding_kind: str = "sentence_transformer",
     ):
         uri = f"http://{host}:{port}"
         self.client = MilvusClient(uri=uri)

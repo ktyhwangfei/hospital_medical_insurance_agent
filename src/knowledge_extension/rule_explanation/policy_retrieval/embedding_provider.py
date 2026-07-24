@@ -18,9 +18,21 @@ class SentenceTransformerEmbeddingProvider(EmbeddingProvider):
     def __init__(self, model_path: str | None = None):
         from sentence_transformers import SentenceTransformer
 
-        self.model_path = model_path or os.getenv("EMBEDDING_MODEL_PATH") or "BAAI/bge-base-zh-v1.5"
+        self.model_path = model_path or self._resolve_model_path()
         self.model = SentenceTransformer(self.model_path)
         self._dim = self.model.get_sentence_embedding_dimension()
+
+    @staticmethod
+    def _resolve_model_path() -> str:
+        """解析模型路径：环境变量 EMBEDDING_MODEL_PATH > 项目本地 models/ > HuggingFace 在线。"""
+        env = os.getenv("EMBEDDING_MODEL_PATH")
+        if env:
+            return env
+        # 探测项目根下的本地模型（CWD-based，生产部署 CWD 通常为项目根）
+        local = os.path.join(os.getcwd(), "models", "bge-base-zh-v1.5")
+        if os.path.isdir(local):
+            return local
+        return "BAAI/bge-base-zh-v1.5"  # fallback：从 HuggingFace 拉取
 
     @property
     def dim(self) -> int:
