@@ -140,18 +140,31 @@ class SchemaUpdateExecutor:
         extracted_at: str = "",
         schema_version: int = 1,
         confidence: float = 0.0,
+        batch_size: int = 20,
+        on_progress=None,
     ) -> dict[str, Any]:
-        """对 doc 下所有 rules 应用策略：read → modify → write。
+        """对 doc 下所有 rules 应用策略：read → 分批 modify/write。
 
-        Returns: {"processed": 写入条数, "total": 读取条数}
+        分批限速（设计文档 §6.3）：按 batch_size 切片，每批独立 modify+write，
+        通过 on_progress(processed, total) 上报进度，支持中断后按 rule_id 幂等重跑。
+
+        Returns: {"processed": 已处理条数, "total": 读取条数}
         """
         entities = self._reader(doc_id) if self._reader else []
-        update_rules(
-            entities, strategy, new_values=new_values,
-            frozen_field_codes=frozen_field_codes,
-            deleted_field_codes=deleted_field_codes,
-            extracted_at=extracted_at, schema_version=schema_version,
-            confidence=confidence,
-        )
-        written = self._writer(entities) if self._writer else 0
-        return {"processed": written, "total": len(entities)}
+        total = len(entities)
+        processed = 0
+        for i in range(0, total, batch_size):
+            batch = entities[i:i + batch_size]
+            update_rules(
+                batch, strategy, new_values=new_values,
+                frozen_field_codes=frozen_field_codes,
+                deleted_field_codes=deleted_field_codes,
+                extracted_at=extracted_at, schema_version=schema_version,
+                confidence=confidence,
+            )
+            if self._writer:
+                self._writer(batch)
+            processed += len(batch)
+            if on_progress:
+                on_progress(processed, total)
+        return {"processed": processed, "total": total}
