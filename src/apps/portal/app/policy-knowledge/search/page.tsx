@@ -215,14 +215,17 @@ export default function RetrievalPage() {
                         )}
                       </div>
                       <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 md:grid-cols-3">
-                        {[['payment_ratio', '支付比例'], ['deductible_amount', '起付'], ['cap_amount', '封顶'], ['amount_band', '分段'], ['rule_value', '规则值']].map(([k, label]) => (
-                          r[k] ? (
+                        {[['payment_ratio', '支付比例'], ['deductible_amount', '起付'], ['cap_amount', '封顶'], ['amount_band', '分段'], ['rule_value', '规则值']].map(([k, label]) => {
+                          const raw = r[k]
+                          // FieldTrace 对象（{value, confidence, extracted_at}）取 .value（P2 字段级溯源）
+                          const val = raw && typeof raw === 'object' ? raw.value : raw
+                          return val ? (
                             <div key={k} className="text-xs">
                               <span className="text-slate-400">{label}: </span>
-                              <span className="font-medium text-slate-700">{String(r[k])}</span>
+                              <span className="font-medium text-slate-700">{String(val)}</span>
                             </div>
                           ) : null
-                        ))}
+                        })}
                       </div>
                     </div>
                   ))}
