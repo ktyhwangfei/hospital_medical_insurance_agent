@@ -148,11 +148,27 @@
 
 ---
 
+## 测试套件债务（已知失败）
+
+> 全量回归当前 ~56 failed（2026-07-24 盘点）。demo_tools broken import 已修复（commit `d63b968`，消除 ~102），剩余分类如下，按需治理：
+
+| 类别 | 数量 | 根因 | 治理方式 |
+|---|---|---|---|
+| 端点迁移 404 | ~46 | chat 端点迁移到 `/policy-qa/stream`(SSE)，flow/langgraph 测试 POST 旧 `/chat` 返回 404 | 迁移 ~46 测试到新 SSE 契约（大工程） |
+| skill_infra | 33 | skill manifest name "医保费用解释"→"结算解释技能"，测试断言旧值 | 更新断言 |
+| error_code stub | 4 | knowledge 模块已删除，`knowledge_stub.get_error_code` 返回 `{}`，测试断言旧数据 | skip（测试已失效） |
+| data_platform | 2 | `CachedSkillStorage.get_skill` 返回 dict，测试期望 Skill 对象 | 实现加 model reconstruction 或更新测试 |
+| test_service | 1 | Milvus E001 政策数据缺失 | skip（环境依赖） |
+
+---
+
 ## 变更日志
 
 | 日期 | 变更 | 影响单元 |
 |------|------|---------|
 | 2026-07-07 | 初始化进度追踪文件 | 全部 32 个单元 |
+| 2026-07-24 | A 测试治理：修复 demo_tools broken import（6460f62 重构遗留），全量 ~158→~56 failed | runtime/langgraph + integration/flow |
+| 2026-07-24 | 记录测试套件债务（剩余 ~56 failed 分类） | 全量回归 |
 
 ---
 
