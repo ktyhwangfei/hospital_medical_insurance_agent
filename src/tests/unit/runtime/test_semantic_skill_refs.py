@@ -51,6 +51,21 @@ def test_list_metrics_carries_usage_count(fresh_registry):
     assert any(it.usage_count >= 1 for it in items)
 
 
+def test_list_metrics_returns_all_when_no_object_code(fresh_registry):
+    """不传 object_code 应返回全部指标（回归：曾误返回空列表）。
+
+    [来源: P7 验证发现 GET /semantic/metrics 不传 object_code 时返回 []，
+    导致前端 metric 列表页显示空。根因 semantic_routes.list_metrics 的
+    `if object_code else []` 分支错误。]
+    """
+    items = sr.list_metrics(object_code=None)
+    assert len(items) > 1, "不传 object_code 应返回全部指标，而非空列表"
+    # 对比：传具体 object_code 只返回该对象的指标
+    zydyxx_only = sr.list_metrics(object_code="zydyxx")
+    assert all(it.object_code == "zydyxx" for it in zydyxx_only)
+    assert len(items) > len(zydyxx_only), "全部指标应多于单对象指标"
+
+
 def test_metric_code_strategy_matches_manifest(monkeypatch):
     """needed_objects 的 {object_code}.{metric} 直接匹配语义层 metric_code。
 
