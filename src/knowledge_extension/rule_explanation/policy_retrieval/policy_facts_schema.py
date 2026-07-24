@@ -31,6 +31,8 @@ def create_policy_facts_collection(
     collection_name: str = FACT_COLLECTION,
 ) -> Collection:
     """创建 policy_facts 集合。collection_name 可参数化（测试用临时名隔离）。"""
+    if not connections.has_connection(alias):
+        connect_milvus(alias=alias)
     if utility.has_collection(collection_name, using=alias):
         if drop_existing:
             utility.drop_collection(collection_name, using=alias)

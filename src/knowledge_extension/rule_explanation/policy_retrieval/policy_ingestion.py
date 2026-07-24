@@ -66,6 +66,7 @@ def build_ingest_records(
                 confidence=rule.get("confidence", 0.7),
             )
             entity["fact_id"] = fact_id   # 关联回所属 fact
+            entity["doc_id"] = doc_id     # LLM 不产 doc_id，由编排填
             rule_entities.append(entity)
 
     return fact_records, rule_entities

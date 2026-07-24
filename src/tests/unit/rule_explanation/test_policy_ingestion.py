@@ -49,6 +49,7 @@ def test_build_ingest_records_vector_reuse_and_lineage():
     for e in rule_entities:
         assert e["vector"] == fact_vector, "rule 应复用所属 fact 的向量（§4.1）"
         assert e["fact_id"] == fact_id, "rule 应关联所属 fact_id"
+        assert e["doc_id"] == "d1", "rule 应携带所属文档 doc_id（LLM 不产 doc_id，由编排填）"
 
     # 核心维度进固定 schema
     types = {e["rule_type"] for e in rule_entities}
