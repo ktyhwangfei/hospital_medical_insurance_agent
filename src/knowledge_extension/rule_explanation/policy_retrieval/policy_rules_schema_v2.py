@@ -118,3 +118,54 @@ def drop_policy_rules_v2_collection(
     _connect(alias=alias)
     if utility.has_collection(collection_name, using=alias):
         utility.drop_collection(collection_name, using=alias)
+
+
+# 详情字段集合：这些字段不进固定 schema，作为 FieldTrace 落 dynamic field。
+# 核心维度（CORE_DIM_FIELDS）外的字段都视为详情字段。
+DETAIL_FIELDS = (
+    "payment_ratio", "deductible_amount", "cap_amount", "amount_band",
+    "time_period", "admission_order", "priority", "rule_value", "source_text",
+    "entities", "relations",
+)
+
+
+def rule_to_entity(
+    rule: dict[str, Any],
+    vector: list[float],
+    extracted_at: str = "",
+    schema_version: int = 1,
+    confidence: float = 0.0,
+) -> dict[str, Any]:
+    """把一条规则 dict 转为 Milvus entity。
+
+    - 核心维度 → 固定 schema 字段（顶层标量）。
+    - 详情字段 → FieldTrace dict（落 dynamic field，字段级溯源）。
+    - vector → 由调用方提供（P2 占位；P3 由 fact 向量复用，§4.1）。
+
+    Args:
+        rule: 规则 dict，含核心维度 + 详情字段（详情字段为裸值）。
+        vector: 规则向量（复用 fact 的事实向量）。
+        extracted_at: 本次提取时间（ISO），用于所有详情字段的溯源。
+        schema_version: 本次提取所用 schema 版本。
+        confidence: 本次提取置信度。
+    """
+    entity: dict[str, Any] = {"vector": vector, "schema_version": schema_version}
+
+    # 核心维度（rule_id/fact_id/doc_id/rule_type/insu_type/med_type/hosp_lv/psn_type/setl_type）
+    for dim in CORE_DIM_FIELDS:
+        if dim in ("vector", "schema_version"):
+            continue
+        entity[dim] = str(rule.get(dim, ""))
+
+    # 详情字段 → FieldTrace（裸值包成溯源对象）
+    for detail in DETAIL_FIELDS:
+        if detail in rule and rule[detail] is not None:
+            trace = FieldTrace(
+                value=rule[detail],
+                extracted_at=extracted_at,
+                schema_version=schema_version,
+                confidence=confidence,
+            )
+            entity[detail] = trace.model_dump()
+
+    return entity
