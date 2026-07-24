@@ -184,3 +184,30 @@ def upsert_rules(col: Collection, entities: list[dict[str, Any]]) -> int:
     col.insert(entities)
     col.flush()
     return len(entities)
+
+
+def query_rules_by_doc(
+    doc_id: str,
+    col: Collection | None = None,
+    collection_name: str = POLICY_RULES_V2_COLLECTION,
+    alias: str = "default",
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    """按 doc_id 查询 policy_rules_v2 的所有规则（P5 执行器的 read 步骤）。
+
+    col 可注入（测试用 fake collection）；生产时内部连接 Milvus。
+    output_fields=['*'] 取全部字段（含 dynamic 详情字段的 FieldTrace dict）。
+
+    [来源: 设计文档 §6.1 read-modify-write]
+    """
+    if col is None:
+        _connect(alias)
+        if not utility.has_collection(collection_name, using=alias):
+            return []
+        col = Collection(collection_name, using=alias)
+        col.load()
+    return col.query(
+        expr=f'doc_id == "{doc_id}"',
+        output_fields=["*"],
+        limit=limit,
+    )
