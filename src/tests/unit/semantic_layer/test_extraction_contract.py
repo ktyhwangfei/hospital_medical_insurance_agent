@@ -94,3 +94,25 @@ def test_entity_kind_routed_to_entities():
     assert len(schema.entities) == 1
     assert schema.entities[0].code == "hospital"
     assert schema.fields == []
+
+
+def test_publish_object_unlocks_extraction_schema():
+    """publish_object 发布后，build_extraction_schema 应返回该对象指标（解锁 §3.1）。
+
+    发布前契约空（draft 不进），发布后有数据。这是 P3 推迟 3.1 的根因验证。
+    """
+    store = InMemoryRegistryStore()
+    reg = SemanticRegistry(store)
+    store.save_object(BusinessObject(object_code="t_unlock", domain_code="d", name="解锁测试"))
+    store.save_metric(Metric(
+        metric_code="t_unlock.f1", object_code="t_unlock", name="字段1",
+        metric_kind="field", semantic_type="Amount",
+    ))
+    # 发布前：draft 不进契约
+    schema_before = build_extraction_schema(reg, "t_unlock")
+    assert len(schema_before.fields) == 0, "draft 指标不应进契约"
+    # 发布后：published 进契约
+    reg.publish_object("t_unlock")
+    schema_after = build_extraction_schema(reg, "t_unlock")
+    assert len(schema_after.fields) == 1, "发布后契约应有 1 个字段"
+    assert schema_after.fields[0].code == "f1"
