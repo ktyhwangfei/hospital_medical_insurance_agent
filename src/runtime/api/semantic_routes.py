@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from src.data_platform.storage.postgresql.policy_meta_store import PolicyMetaStore
 from src.semantic_layer.extraction_contract import ExtractionSchema, build_extraction_schema
 
 logger = logging.getLogger(__name__)
@@ -2269,3 +2270,62 @@ def update_field_description(req: FieldDescriptionUpdateRequest):
         remark=req.remark,
     )
     return {"status": "ok", "message": f"已更新 {req.table}.{req.field} 的字段释义"}
+
+
+# ════════════════════ datasource 数据源注册表（P7.1）═════════════════════
+# [依据: docs/steering/政策知识管线设计.md §7.6]
+# 多源注册表：SQL Server ×N + Milvus ×1，供 discovery 扫描与语义层取数路由。
+
+_meta_store: PolicyMetaStore | None = None
+
+
+def _get_meta_store() -> PolicyMetaStore:
+    """PolicyMetaStore 单例工厂（测试可通过 monkeypatch 替换为内存假对象）。"""
+    global _meta_store
+    if _meta_store is None:
+        _meta_store = PolicyMetaStore()
+    return _meta_store
+
+
+class DatasourceCreateRequest(BaseModel):
+    name: str
+    type: str  # sqlserver | milvus
+    connection_config: dict = {}
+    id: str | None = None
+
+
+class DatasourceToggleRequest(BaseModel):
+    enabled: bool
+
+
+@router.get("/datasources")
+def list_datasources(enabled_only: bool = Query(False)):
+    """列出全部（或仅启用的）数据源。"""
+    return _get_meta_store().list_datasources(enabled_only=enabled_only)
+
+
+@router.post("/datasources", status_code=201)
+def register_datasource(req: DatasourceCreateRequest):
+    """注册新数据源（SQL Server / Milvus）。"""
+    return _get_meta_store().register_datasource(
+        name=req.name, ds_type=req.type,
+        connection_config=req.connection_config, ds_id=req.id or "",
+    )
+
+
+@router.get("/datasources/{ds_id}")
+def get_datasource(ds_id: str):
+    """查询单个数据源。"""
+    ds = _get_meta_store().get_datasource(ds_id)
+    if ds is None:
+        raise HTTPException(status_code=404, detail=f"数据源 '{ds_id}' 不存在")
+    return ds
+
+
+@router.patch("/datasources/{ds_id}")
+def toggle_datasource(ds_id: str, req: DatasourceToggleRequest):
+    """启用/禁用数据源。"""
+    if _get_meta_store().get_datasource(ds_id) is None:
+        raise HTTPException(status_code=404, detail=f"数据源 '{ds_id}' 不存在")
+    _get_meta_store().toggle_datasource(ds_id, req.enabled)
+    return _get_meta_store().get_datasource(ds_id)
