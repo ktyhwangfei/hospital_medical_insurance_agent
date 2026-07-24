@@ -39,6 +39,20 @@ class _FakeMetaStore:
             rows = [r for r in rows if r["metric_code"] == metric_code]
         return rows
 
+    def update_task_progress(self, task_id, processed, total, status=""):
+        t = self.tasks.get(task_id)
+        if t:
+            t["processed"] = processed
+            t["total"] = total
+            if status:
+                t["status"] = status
+
+    def fail_task(self, task_id, error):
+        t = self.tasks.get(task_id)
+        if t:
+            t["status"] = "failed"
+            t["error"] = error
+
 
 @pytest.fixture
 def client(monkeypatch):
@@ -96,3 +110,57 @@ def test_publish_validates_strategy(client):
     # 缺 strategy 应 422
     r = c.post(f"{BASE}/publish", json={"metric_code": "zcgz.x"})
     assert r.status_code == 422
+
+
+def test_publish_with_affected_docs_executes(client, monkeypatch):
+    """提供 affected_docs → 触发 evolve 执行，task 标记 done（§7.3）。"""
+    import src.runtime.api.policy_pipeline_routes as m
+    calls: list = []
+
+    class _FakeExec:
+        def evolve(self, doc_id, strategy, **kw):
+            calls.append((doc_id, strategy))
+            return {"processed": 2, "total": 2}
+
+    monkeypatch.setattr(m, "_build_schema_executor", lambda: _FakeExec())
+    c, fake = client
+    r = c.post(f"{BASE}/publish", json={
+        "metric_code": "zcgz.x", "strategy": "soft_delete",
+        "affected_docs": ["d1", "d2"],
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "done"
+    assert data["summary"]["docs"] == 2
+    assert data["summary"]["processed"] == 4  # 2 docs × 2
+    assert calls == [("d1", "soft_delete"), ("d2", "soft_delete")]
+    tid = data["task_id"]
+    assert fake.tasks[tid]["status"] == "done"
+
+
+def test_publish_no_affected_docs_stays_pending(client):
+    """不提供 affected_docs → 仅创建 task（status=pending，兼容）。"""
+    c, _ = client
+    r = c.post(f"{BASE}/publish", json={"metric_code": "zcgz.x", "strategy": "soft_delete"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "pending"
+
+
+def test_publish_execution_failure_marks_failed(client, monkeypatch):
+    """evolve 抛异常 → task 标记 failed，响应 500。"""
+    import src.runtime.api.policy_pipeline_routes as m
+
+    class _BoomExec:
+        def evolve(self, doc_id, strategy, **kw):
+            raise RuntimeError("Milvus 不可用")
+
+    monkeypatch.setattr(m, "_build_schema_executor", lambda: _BoomExec())
+    c, fake = client
+    r = c.post(f"{BASE}/publish", json={
+        "metric_code": "zcgz.x", "strategy": "soft_delete",
+        "affected_docs": ["d1"],
+    })
+    assert r.status_code == 500
+    tid = [k for k in fake.tasks][0]
+    assert fake.tasks[tid]["status"] == "failed"
+    assert "Milvus 不可用" in fake.tasks[tid]["error"]

@@ -497,20 +497,72 @@ class SchemaUpdatePublishRequest(BaseModel):
     strategy: str  # incremental | full | soft_delete
     change_type: str = "modify"  # add | modify | remove
     schema_version: int = 1
+    affected_docs: list[str] = []  # 受影响文档（调用方提供，绕开 metric_code 反查缺口）
+    new_values: dict | None = None  # incremental/full 新值（LLM 提取后续接）
+
+
+def _build_schema_executor():
+    """构造 schema 更新执行器：reader=query_rules_by_doc，writer=upsert_rules（真实 Milvus）。
+
+    测试可通过 monkeypatch 替换为 fake executor。真实执行需 Milvus 可用。
+    """
+    from src.knowledge_extension.rule_explanation.schema_update_executor import SchemaUpdateExecutor
+    from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
+        query_rules_by_doc, upsert_rules, POLICY_RULES_V2_COLLECTION,
+    )
+    from pymilvus import Collection
+
+    def _writer(entities):
+        col = Collection(POLICY_RULES_V2_COLLECTION)
+        col.load()
+        return upsert_rules(col, entities)
+
+    return SchemaUpdateExecutor(
+        reader=lambda doc_id: query_rules_by_doc(doc_id),
+        writer=_writer,
+    )
 
 
 @router.post("/schema-update/publish")
 def publish_schema_update(req: SchemaUpdatePublishRequest):
-    """创建 schema 更新任务（§7.3）。
+    """触发 schema 更新执行（§7.3 read-modify-write）。
 
-    第一版只创建 task（status=pending）。真实执行触发（evolve：查受影响 doc +
-    LLM 重提取 + 批量 upsert）推迟到配置 MODEL_API_KEY + 实现 doc 查询后。
+    - 无 affected_docs：仅创建 task（status=pending，兼容旧调用）。
+    - 有 affected_docs：create task → 逐 doc evolve（read→modify→write）→ 标记 done。
+      incremental/full 需 new_values（LLM 提取后续接，当前由调用方提供）。
     """
     task = _get_meta_store().create_task(
         metric_code=req.metric_code, change_type=req.change_type,
         strategy=req.strategy, schema_version=req.schema_version,
     )
-    return {"task_id": task["task_id"], "status": task["status"]}
+    task_id = task["task_id"]
+
+    if not req.affected_docs:
+        return {"task_id": task_id, "status": "pending"}
+
+    executor = _build_schema_executor()
+    meta = _get_meta_store()
+    grand_processed = 0
+    grand_total = 0
+    try:
+        for doc_id in req.affected_docs:
+            summary = executor.evolve(
+                doc_id, req.strategy, new_values=req.new_values,
+                schema_version=req.schema_version,
+                on_progress=lambda p, t: meta.update_task_progress(
+                    task_id, grand_processed + p, grand_total + t, status="running"),
+            )
+            grand_processed += summary["processed"]
+            grand_total += summary["total"]
+        meta.update_task_progress(task_id, grand_processed, grand_total, status="done")
+        return {
+            "task_id": task_id, "status": "done",
+            "summary": {"processed": grand_processed, "total": grand_total,
+                        "docs": len(req.affected_docs)},
+        }
+    except Exception as exc:
+        meta.fail_task(task_id, str(exc))
+        raise HTTPException(status_code=500, detail=f"schema 更新执行失败: {exc}")
 
 
 @router.get("/schema-update/tasks/{task_id}")
