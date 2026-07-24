@@ -56,3 +56,27 @@ class TestSeedSemanticLayer:
                 "zyfdxx.bdtczfje", "zyfdxx.bdtczf", "zyfdxx.bdgryf",
             ):
                 assert metric.importance == "core", f"{metric.metric_code} should be core"
+
+
+def test_zcgz_seed_marks_core_dimensions_indexed(registry):
+    """zcgz 核心检索维度应标注 indexed=True + extraction_hint；详情字段 indexed=False。
+
+    [依据: docs/steering/政策知识管线设计文档.md §3.1 / §3.3（核心维度进固定 schema）]
+    """
+    seed_semantic_layer(registry._store)
+
+    # 核心检索维度：indexed=True，且有 extraction_hint
+    for code in ("zcgz.rule_type", "zcgz.insu_type", "zcgz.med_type",
+                 "zcgz.hosp_lv", "zcgz.psn_type", "zcgz.setl_type"):
+        m = registry.get_metric(code)
+        assert m is not None, f"种子缺失 {code}"
+        assert m.indexed is True, f"{code} 应为核心检索维度 (indexed=True)"
+        assert m.extraction_hint, f"{code} 缺少 extraction_hint"
+
+    # 详情字段：indexed=False（走 Milvus dynamic field）
+    payment = registry.get_metric("zcgz.payment_ratio")
+    assert payment is not None
+    assert payment.indexed is False
+
+    # 仍为 draft（发布流程在 P4 质量门禁）
+    assert registry.get_metric("zcgz.insu_type").status == "draft"
