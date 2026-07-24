@@ -242,7 +242,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 
 - **PostgreSQL**: `postgres:123456@127.0.0.1:5432/hospital_mcp`
 - **Redis**: `127.0.0.1:6379`
-- **Milvus**: `127.0.0.1:19121`
+- **Milvus**: `127.0.0.1:19530`（注：历史文档误记为 19121，实际端口为 19530，见 `src/config/production.py` 默认值）
 - **Skills目录**: 项目根目录下的 `skills/` 目录
 
 配置可通过环境变量覆盖，详见 `src/config/production.py`。
