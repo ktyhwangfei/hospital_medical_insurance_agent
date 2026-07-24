@@ -1,6 +1,5 @@
 from src.adapters.insurance_interface.in_memory import InMemoryInsuranceInterfaceAdapter
 from src.knowledge_extension.knowledge_stub import create_knowledge_store
-from src.knowledge_extension.mcp_registry.demo_tools import build_demo_mcp_tool_service
 from src.knowledge_extension.service import KnowledgeEnhancementRequest, build_default_knowledge_extension_service
 from src.runtime.api.schemas import AgentResponse
 from src.runtime.scheduling.service import degraded_response
@@ -80,15 +79,6 @@ def guide_settlement_exception(patient_id: str, encounter_id: str) -> AgentRespo
         blocked_actions=[],
         audit={"workflow_id": f"wf-{patient_id}-{encounter_id}", "steps": ["query_transaction", "retrieve_error_code", "build_result"]},
     )
-    mcp_insight = build_demo_mcp_tool_service().invoke_for_scenario(
-        scenario="settlement_exception_guidance",
-        role="medical_office",
-        tool_name="query_policy_by_error_code",
-        arguments={"patient_id": patient_id, "encounter_id": encounter_id, "error_code": error_code},
-    )
-    response.result["mcp_insights"] = [mcp_insight]
-    response.citations.extend(mcp_insight["citations"])
-    response.audit["mcp_tool_invocations"] = mcp_insight["audit_events"]
     ext_knowledge = enhance_settlement_knowledge(error_code, patient_id)
     response.citations.extend(ext_knowledge["citations"])
     response.uncertainties.extend(ext_knowledge["uncertainties"])
