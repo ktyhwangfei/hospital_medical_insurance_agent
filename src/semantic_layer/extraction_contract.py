@@ -115,3 +115,62 @@ def build_extraction_schema(
         schema_version=schema_version, fields=fields, entities=entities,
         relations=relations, dictionaries=dictionaries,
     )
+
+
+def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) -> str:
+    """从提取契约动态拼 LLM 提示词（schema-driven，加维度不改此函数）。
+
+    [来源: §3.1 extraction_hint 动态拼 prompt；§7.1 契约结构]
+    """
+    # 字段说明（核心检索维度 + 详情字段）
+    if schema.fields:
+        fields_desc = "\n".join(
+            f"- {f.code}（{f.name}）"
+            + (f"：{f.extraction_hint}" if f.extraction_hint else "")
+            + (f" 值域：{', '.join(schema.dictionaries[f.value_domain])}"
+               if f.value_domain and f.value_domain in schema.dictionaries else "")
+            for f in schema.fields
+        )
+    else:
+        fields_desc = "（无 published 字段——请先 publish_object）"
+
+    # 实体说明
+    entities_desc = "\n".join(
+        f"- {e.code}（{e.name}）" + (f"：{e.extraction_hint}" if e.extraction_hint else "")
+        for e in schema.entities
+    ) or "（无）"
+
+    # 关系说明（三元组）
+    relations_desc = "\n".join(
+        f"- {r.code}：({r.subject_hint}, {r.predicate_hint}, {r.object_hint})"
+        for r in schema.relations
+    ) or "（无）"
+
+    field_codes = [f.code for f in schema.fields]
+    fields_json_example = ", ".join(f'"{c}": ""' for c in field_codes)
+    return f"""你是一个医保政策分析专家。请从政策文本中提取所有"政策事实"，并从每个事实提取结构化规则。
+
+## 提取字段（来自语义层 published 指标，schema_version={schema.schema_version}）
+{fields_desc}
+
+## 实体
+{entities_desc}
+
+## 关系
+{relations_desc}
+
+## 政策文件
+{title}
+
+## 原文
+{text}
+
+## 输出格式
+返回 JSON 数组，每个事实含 fact_text + rules（rules 含上述字段 {field_codes}，原文未提及填空字符串""）：
+[
+  {{
+    "fact_text": "完整事实描述",
+    "rules": [{{ {fields_json_example} }}]
+  }}
+]
+"""
