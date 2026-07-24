@@ -12,6 +12,8 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from src.semantic_layer.extraction_contract import ExtractionSchema, build_extraction_schema
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -390,6 +392,26 @@ def get_object(object_code: str):
     )
 
 
+@router.get("/objects/{object_code}/extraction-schema", response_model=ExtractionSchema)
+def get_extraction_schema(object_code: str):
+    """提取契约（政策管线只读消费）：返回该对象 status=published 指标的提取 schema。
+
+    [来源: docs/steering/政策知识管线设计文档.md §7.1]
+    政策管线据此动态生成 LLM 提取 prompt；本端点不修改语义层状态。
+    """
+    reg = get_registry()
+    if reg.get_object(object_code) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error_code": "OBJECT_NOT_FOUND",
+                "message": f"对象 '{object_code}' 不存在",
+                "audit_event": {"object_code": object_code},
+            },
+        )
+    return build_extraction_schema(reg, object_code)
+
+
 # ── 对象版本快照（阶段2）──
 class VersionMetricInfo(BaseModel):
     metric_code: str
@@ -570,6 +592,9 @@ def create_metric(req: CreateMetricRequest):
         metric.source_field = req.source_field
     if req.source_table:
         metric.source_object = req.source_table
+    # 从发现中心计算质量分（与批量创建/更新保持一致）
+    if req.source_field:
+        metric.quality_score = _calc_quality_from_discovery(req.source_field, req.source_table or metric.source_object)
     store.save_metric(metric)
     return {"status": "ok", "metric_code": metric_code, "name": metric.name}
 
@@ -616,6 +641,9 @@ def create_metrics_batch(req: BatchCreateMetricsRequest):
                 metric.source_field = item.source_field
             if item.source_table:
                 metric.source_object = item.source_table
+            # 从发现中心计算质量分（与单条创建/更新保持一致）
+            if item.source_field:
+                metric.quality_score = _calc_quality_from_discovery(item.source_field, item.source_table or metric.source_object)
             store.save_metric(metric)
             results.append(BatchCreateMetricResult(
                 index=i, metric_code=metric_code, name=item.name, status="created",
@@ -700,6 +728,22 @@ def delete_metric(metric_code: str):
         raise HTTPException(status_code=404, detail=f"指标 '{metric_code}' 不存在")
     store.delete_metric(metric_code)
     return {"status": "ok", "metric_code": metric_code}
+
+
+@router.post("/metrics/refresh-quality-scores")
+def refresh_quality_scores():
+    """按最新发现扫描结果，重新计算并回填所有已映射指标的质量分。
+
+    适用于「指标先建、扫描后到」导致 quality_score 滞留为 0 的场景，
+    无需重跑全量扫描即可拉取最新质量分。
+    """
+    store = _get_discovery_store()
+    latest = store.get_latest_result()
+    if not latest:
+        raise HTTPException(status_code=409, detail="暂无发现扫描结果，请先执行扫描")
+    fields = latest.get("fields", [])
+    updated = _refresh_quality_scores_from_scan(fields)
+    return {"status": "ok", "updated": updated, "total_fields": len(fields)}
 
 
 @router.get("/health")
@@ -1055,6 +1099,23 @@ def calc_field_quality(field: dict, usage_count: int = 0) -> float:
     return calc_field_value_score(field, usage_count).total
 
 
+def _match_table_name(discovery_tn: str, metric_tn: str) -> bool:
+    """匹配发现中心的 table_name 与指标的 source_object/source_field 中的表名。
+    发现中心可能存储 \"dbo.yyxx\"，而指标使用 \"yyxx\" — 取最后一段匹配。"""
+    if not metric_tn:
+        return True
+    dt = discovery_tn.lower().strip()
+    mt = metric_tn.lower().strip()
+    if dt == mt:
+        return True
+    # 去掉 schema 前缀后匹配
+    if "." in dt:
+        dt = dt.rsplit(".", 1)[-1]
+    if "." in mt:
+        mt = mt.rsplit(".", 1)[-1]
+    return dt == mt
+
+
 def _calc_quality_from_discovery(source_field: str, source_object: str | None = None) -> float:
     """根据发现中心字段元数据自动计算质量分。"""
     try:
@@ -1072,7 +1133,7 @@ def _calc_quality_from_discovery(source_field: str, source_object: str | None = 
         for f in latest.get("fields", []):
             fn = f.get("field_name", "")
             tn = f.get("table_name", "")
-            if fn == field_name and (not table_name or tn == table_name):
+            if fn == field_name and _match_table_name(tn, table_name):
                 return calc_field_value_score(f).total
     except Exception as e:
         import logging; logging.getLogger(__name__).warning("_calc_quality_from_discovery failed for '%s': %s", source_field, e)
@@ -1101,7 +1162,13 @@ def _refresh_quality_scores_from_scan(result_fields: list[dict]) -> int:
         fn = (f.get("field_name") or "")
         tn = (f.get("table_name") or "")
         if fn:
-            by_full[f"{tn}.{fn}".lower()] = f
+            # 同时用完整路径和去掉 schema 前缀的路径做索引
+            full_key = f"{tn}.{fn}".lower()
+            by_full[full_key] = f
+            # 去掉 schema 前缀（如 dbo.）后的路径
+            if "." in tn:
+                short_tn = tn.rsplit(".", 1)[-1]
+                by_full[f"{short_tn}.{fn}".lower()] = f
             by_name[fn.lower()] = f
 
     updated = 0
