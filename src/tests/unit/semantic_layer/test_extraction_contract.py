@@ -116,3 +116,31 @@ def test_publish_object_unlocks_extraction_schema():
     schema_after = build_extraction_schema(reg, "t_unlock")
     assert len(schema_after.fields) == 1, "发布后契约应有 1 个字段"
     assert schema_after.fields[0].code == "f1"
+
+
+def test_build_prompt_from_schema_is_field_agnostic():
+    """构建器从 schema 动态拼提示词——加维度只改语义层，不改此函数（§3.1 核心证明）。"""
+    from src.semantic_layer.extraction_contract import (
+        build_prompt_from_schema, ExtractionSchema, FieldContract,
+    )
+    # schema A：1 个字段
+    schema_a = ExtractionSchema(fields=[FieldContract(code="f1", name="字段1")])
+    prompt_a = build_prompt_from_schema("原文A", "标题A", schema_a)
+    assert "f1" in prompt_a and "字段1" in prompt_a
+    assert "原文A" in prompt_a and "标题A" in prompt_a
+
+    # schema B：2 个字段 + extraction_hint + value_domain（证明 hint/值域也动态拼）
+    schema_b = ExtractionSchema(
+        fields=[
+            FieldContract(code="f1", name="字段1"),
+            FieldContract(code="f2", name="字段2", extraction_hint="必须提取此金额",
+                          value_domain="vd"),
+        ],
+        dictionaries={"vd": ["高", "低"]},
+    )
+    prompt_b = build_prompt_from_schema("原文B", "标题B", schema_b)
+    assert "f2" in prompt_b, "新字段应自动进提示词"
+    assert "必须提取此金额" in prompt_b, "extraction_hint 应进提示词"
+    assert "高" in prompt_b, "value_domain 字典值应进提示词"
+    # 关键：构建器代码没变，schema 不同 → 提示词不同（字段无关）
+    assert prompt_a != prompt_b
