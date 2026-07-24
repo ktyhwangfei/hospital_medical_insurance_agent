@@ -166,6 +166,10 @@ class SemanticRegistry:
     def get_metrics_by_object(self, object_code: str) -> list[Metric]:
         return self._store.list_metrics(object_code=object_code)
 
+    def list_metrics(self, object_code: Optional[str] = None) -> list[Metric]:
+        """列全部指标，或按 object_code 过滤（object_code=None 返回全部）。"""
+        return self._store.list_metrics(object_code=object_code)
+
     def get_metric_mapping(
         self, object_code: str, metric_codes: list[str],
         version: Optional[str] = None,

@@ -490,7 +490,7 @@ def get_object_version(object_code: str, version: str):
 @router.get("/metrics", response_model=list[MetricSummary])
 def list_metrics(object_code: str | None = Query(None)):
     reg = get_registry()
-    metrics = reg.get_metrics_by_object(object_code) if object_code else []
+    metrics = reg.list_metrics(object_code)
     refs = _get_skill_metric_refs()
     return [MetricSummary(metric_code=m.metric_code, name=m.name, object_code=m.object_code, metric_type=m.metric_type, importance=m.importance, status=m.status, usage_count=refs.get(m.metric_code, 0)) for m in metrics]
 
