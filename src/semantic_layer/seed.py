@@ -86,6 +86,7 @@ def _seed_domains(store: RegistryStore) -> None:
         ("ybdy", "医保待遇", 1),
         ("ybjs", "医保结算", 2),
         ("ybml", "医保目录", 3),
+        ("ybzc", "医保政策", 4),
     ]:
         store.save_domain(BusinessDomain(domain_code=code, name=name, sort_order=order))
 
@@ -106,6 +107,8 @@ def _seed_objects(store: RegistryStore) -> None:
         ("zyfymx", "ybjs", "住院费用明细",
          "住院费用明细项目：项目编码/名称、收费等级、特需标志、数量、金额（总/医保内/医保外）、自付比例、归因分类。是费用解释树的数据来源。"),
         ("zyjyxx", "ybjs", "住院交易", "住院交易信息"),
+        ("zcgz", "ybzc", "政策规则",
+         "从非结构化政策原文中结构化提取的医保规则。每个规则19个字段，来源于政策知识管线(policy_pipeline)的LLM提取结果，存储于PostgreSQL policy_extractions表。来源路径：政策原文 → 政策片段提取 → 规则结构化 → 语义层指标。"),
     ]
     for code, domain, name, definition in objects:
         store.save_object(BusinessObject(
@@ -121,7 +124,8 @@ def _seed_objects(store: RegistryStore) -> None:
 def _m(metric_code, object_code, name, definition, semantic_type, *,
        unit=None, required=False, source_object=None, source_field=None,
        source_adapter_port=None, value_domain=None, importance="optional",
-       default_value=None):
+       default_value=None, metric_kind="field", indexed=False,
+       extraction_hint=None, schema_version=1):
     """指标构造助手，减少重复参数。"""
     return Metric(
         metric_code=metric_code, object_code=object_code, name=name,
@@ -130,6 +134,8 @@ def _m(metric_code, object_code, name, definition, semantic_type, *,
         source_field=source_field, source_adapter_port=source_adapter_port,
         value_domain=value_domain, importance=importance,
         default_value=default_value,
+        metric_kind=metric_kind, indexed=indexed,
+        extraction_hint=extraction_hint, schema_version=schema_version,
         version="1.0", status="draft",
     )
 
@@ -208,6 +214,56 @@ def _seed_metrics(store: RegistryStore) -> None:
            source_object="yb_zyfymx", source_field="yb_zyfymx.ybwje"),
         _m("zyfymx.zfbl", "zyfymx", "自付比例", None, "Amount",
            source_object="yb_zyfymx", source_field="yb_zyfymx.SP_SCALE"),
+        # ── zcgz 政策规则（19 字段，来源: 非结构化政策 → LLM 提取 → policy_extractions）──
+        # 标识符
+        _m("zcgz.rule_id", "zcgz", "规则ID", "系统生成的规则唯一标识", "String",
+           source_field="zcgz.rule_id", source_object="policy_extractions"),
+        _m("zcgz.fact_id", "zcgz", "来源事实ID", "关联的policy_fact标识", "String",
+           source_field="zcgz.fact_id", source_object="policy_extractions"),
+        _m("zcgz.policy_id", "zcgz", "政策文件ID", "关联的原始政策文件标识", "String",
+           source_field="zcgz.policy_id", source_object="policy_extractions"),
+        _m("zcgz.clause_id", "zcgz", "条款ID", "关联的政策条款标识", "String",
+           source_field="zcgz.clause_id", source_object="policy_extractions"),
+        _m("zcgz.source_text", "zcgz", "原始政策文本", "用于解释和溯源的原始文本", "String",
+           source_field="zcgz.source_text", source_object="policy_extractions"),
+        # 维度指标（有字典关联）
+        _m("zcgz.insu_type", "zcgz", "险种类别", "城镇职工、城乡居民、超转人员、生育保险", "Enum",
+           source_field="zcgz.insu_type", source_object="policy_extractions", value_domain="insu_type",
+           indexed=True, extraction_hint="参保险种，取值见 insu_type 字典：城镇职工/城乡居民/超转人员/生育保险"),
+        _m("zcgz.med_type", "zcgz", "医疗类别", "住院-普通住院、门诊-一般门特", "Enum",
+           source_field="zcgz.med_type", source_object="policy_extractions", value_domain="med_type",
+           indexed=True, extraction_hint="医疗服务类别，取值见 med_type 字典：住院/门诊/门诊特殊病等"),
+        _m("zcgz.hosp_lv", "zcgz", "医疗机构等级", "一级医院、二级医院、三级医院、社区", "Enum",
+           source_field="zcgz.hosp_lv", source_object="policy_extractions", value_domain="hosp_lv",
+           indexed=True, extraction_hint="定点医疗机构等级，取值见 hosp_lv 字典：一级/二级/三级/社区"),
+        _m("zcgz.psn_type", "zcgz", "人群标签", "退休、在职、70岁以上、学生儿童（嵌套字段）", "Enum",
+           source_field="zcgz.psn_type", source_object="policy_extractions", value_domain="psn_type",
+           indexed=True, extraction_hint="适用人群标签，取值见 psn_type 字典：在职/退休/学生儿童等"),
+        _m("zcgz.setl_type", "zcgz", "结算方式", "按项目付费、DRG、单病种、床日定额", "Enum",
+           source_field="zcgz.setl_type", source_object="policy_extractions", value_domain="setl_type",
+           indexed=True, extraction_hint="付费/结算方式，取值见 setl_type 字典：按项目/DRG/单病种/床日定额"),
+        _m("zcgz.admission_order", "zcgz", "住院次数", "第几次住院", "Enum",
+           source_field="zcgz.admission_order", source_object="policy_extractions"),
+        # 数值指标
+        _m("zcgz.payment_ratio", "zcgz", "支付比例", "医保基金支付比例", "Amount",
+           unit="%", source_field="zcgz.payment_ratio", source_object="policy_extractions"),
+        _m("zcgz.deductible_amount", "zcgz", "起付金额", "起付标准金额", "Amount",
+           unit="元", source_field="zcgz.deductible_amount", source_object="policy_extractions"),
+        _m("zcgz.cap_amount", "zcgz", "封顶金额", "最高支付限额金额", "Amount",
+           unit="元", source_field="zcgz.cap_amount", source_object="policy_extractions"),
+        # 条件指标
+        _m("zcgz.amount_band", "zcgz", "金额分段", "金额分段区间", "String",
+           source_field="zcgz.amount_band", source_object="policy_extractions"),
+        _m("zcgz.time_period", "zcgz", "时间周期", "医保年度等时间周期", "String",
+           source_field="zcgz.time_period", source_object="policy_extractions"),
+        # 元指标
+        _m("zcgz.priority", "zcgz", "规则优先级", "规则优先级", "String",
+           source_field="zcgz.priority", source_object="policy_extractions"),
+        _m("zcgz.rule_type", "zcgz", "规则类型", "动态规则类型（嵌套字段）", "String",
+           source_field="zcgz.rule_type", source_object="policy_extractions",
+           indexed=True, extraction_hint="规则的业务类别，如 起付线/报销比例/封顶线/分段比例"),
+        _m("zcgz.rule_value", "zcgz", "规则值", "动态规则值（嵌套字段）", "String",
+           source_field="zcgz.rule_value", source_object="policy_extractions"),
     ]
     for metric in metrics:
         store.save_metric(metric)
