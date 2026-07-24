@@ -77,9 +77,6 @@ def test_resolve_metric_no_source_field_unmapped():
     r = src.resolve_metric("o.m3")
     assert r["unmapped"] is True
 
-
-# ── build_query_plan 多源分组（P7.2b）──────────────────────
-
 def test_build_query_plan_groups_by_datasource():
     """不同 datasource_id 的指标应分成不同组；同 ds 同表合并。"""
     src = _make_source_with([
@@ -106,3 +103,45 @@ def test_build_query_plan_single_source_datasource_id_none():
     assert len(plan["tables"]) == 1
     assert plan["tables"][0]["datasource_id"] is None
     assert plan["tables"][0]["table"] == "t1"
+
+
+# ── 多源连接路由（P7.2b 执行层）──────────────────────────
+
+class _FakeMeta:
+    """PolicyMetaStore 替身：只实现 get_datasource。"""
+    def __init__(self, ds_map):
+        self.ds_map = ds_map
+    def get_datasource(self, ds_id):
+        return self.ds_map.get(ds_id)
+
+
+def _make_source_with_meta(meta):
+    src = SemanticDataSource.__new__(SemanticDataSource)
+    src._meta_store = meta
+    return src
+
+
+def test_resolve_connection_returns_ds_config():
+    meta = _FakeMeta({"ds1": {"id": "ds1", "enabled": True,
+                              "connection_config": {"host": "h1", "database": "d1"}}})
+    src = _make_source_with_meta(meta)
+    cfg = src._resolve_datasource_connection("ds1")
+    assert cfg == {"host": "h1", "database": "d1"}
+
+
+def test_resolve_connection_disabled_returns_none():
+    meta = _FakeMeta({"ds1": {"enabled": False, "connection_config": {"host": "h1"}}})
+    src = _make_source_with_meta(meta)
+    assert src._resolve_datasource_connection("ds1") is None
+
+
+def test_resolve_connection_unknown_returns_none():
+    src = _make_source_with_meta(_FakeMeta({}))
+    assert src._resolve_datasource_connection("no_such") is None
+
+
+def test_resolve_connection_none_ds_falls_back():
+    """ds_id=None 回退默认源配置（_resolve_source_config）。"""
+    src = _make_source_with_meta(_FakeMeta({}))
+    cfg = src._resolve_datasource_connection(None)
+    assert isinstance(cfg, dict)
