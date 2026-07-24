@@ -262,7 +262,25 @@ class PipelineOrchestrator:
             return []
 
     def _build_fact_extraction_prompt(self, text: str, title: str) -> str:
-        """构建事实提取的 LLM prompt。要求输出完整 19 字段结构化规则。"""
+        """构建事实提取 prompt（schema-driven，§3.1）。
+
+        从语义层读 zcgz 对象的 published 指标契约，动态拼提示词（加维度不改代码）。
+        回退：registry 不可用或契约空时用硬编码 legacy prompt（保证提取不中断）。
+        """
+        from src.semantic_layer.registry import create_registry
+        from src.semantic_layer.extraction_contract import (
+            build_extraction_schema, build_prompt_from_schema,
+        )
+        try:
+            schema = build_extraction_schema(create_registry(), "zcgz")
+            if schema.fields or schema.entities or schema.relations:
+                return build_prompt_from_schema(text, title, schema)
+        except Exception:
+            pass
+        return self._legacy_fact_extraction_prompt(text, title)
+
+    def _legacy_fact_extraction_prompt(self, text: str, title: str) -> str:
+        """[legacy] 硬编码 19 字段 prompt（registry 不可用时的回退）。"""
         return f"""你是一个医保政策分析专家。请从以下政策文本中提取所有"政策事实"，并从每个事实中提取结构化的"政策规则"。
 
 ## 定义
