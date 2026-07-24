@@ -35,6 +35,24 @@ DEFAULT_FILTER_COLUMN = "djh"
 DEFAULT_FILTER_CONTEXT_KEY = "djh"
 
 
+def parse_source_field(source_field: str) -> tuple[str | None, str, str]:
+    """解析 source_field 为 (datasource_id, table, column)。
+
+    三段式 "ds.table.column" → (ds, table, column)，声明指标所属数据源；
+    两段式 "table.column"   → (None, table, column)，向后兼容（走默认源）；
+    超过三段 "ds.dbo.t.c"   → (ds, "dbo.t", c)，中间段归 table；
+    单段   "column"         → (None, column, column)。
+
+    [来源: docs/steering/政策知识管线设计.md §7.6 三段式寻址]
+    """
+    parts = source_field.split(".")
+    if len(parts) >= 3:
+        return parts[0], ".".join(parts[1:-1]), parts[-1]
+    if len(parts) == 2:
+        return None, parts[0], parts[1]
+    return None, source_field, source_field
+
+
 class SemanticDataSource:
     """语义层 → 真实 SQL Server 的取数通道。
 
@@ -105,11 +123,12 @@ class SemanticDataSource:
                 "metric_code": metric_code, "unmapped": True,
                 "reason": "无 source_field", "name": metric.name,
             }
-        table, column = (sf.split(".", 1) + [""])[:2] if "." in sf else (sf, sf)
+        ds_id, table, column = parse_source_field(sf)
         return {
             "metric_code": metric_code,
             "name": metric.name,
             "source_field": sf,
+            "datasource_id": ds_id,
             "table": table,
             "column": column,
             "object_code": metric.object_code,
@@ -134,11 +153,18 @@ class SemanticDataSource:
     # ============================================================
 
     def build_query_plan(self, metric_codes: list[str]) -> dict[str, Any]:
-        """生成查询计划：打几张表、各取哪些列、filter 列、未映射项。"""
+        """生成查询计划：打几张表、各取哪些列、filter 列、未映射项。
+
+        多源支持：按 (datasource_id, table) 分组，不同数据源的同名表分开。
+        """
         resolved = [self.resolve_metric(c) for c in metric_codes]
         mapped = [r for r in resolved if not r.get("unmapped")]
         unmapped = [r for r in resolved if r.get("unmapped")]
-        groups = self.group_by_table(resolved)
+
+        # 按 (datasource_id, table) 分组（datasource_id=None 表示走默认源）
+        groups: dict[tuple[str | None, str], list[dict[str, Any]]] = {}
+        for r in mapped:
+            groups.setdefault((r.get("datasource_id"), r["table"]), []).append(r)
 
         return {
             "total_metrics": len(metric_codes),
@@ -148,6 +174,7 @@ class SemanticDataSource:
             "filter_context_key": DEFAULT_FILTER_CONTEXT_KEY,
             "tables": [
                 {
+                    "datasource_id": ds_id,
                     "table": tbl,
                     "columns": [m["column"] for m in metrics],
                     "metrics": [
@@ -156,7 +183,7 @@ class SemanticDataSource:
                         for m in metrics
                     ],
                 }
-                for tbl, metrics in groups.items()
+                for (ds_id, tbl), metrics in groups.items()
             ],
             "unmapped": unmapped,
         }
