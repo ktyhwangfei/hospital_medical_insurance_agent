@@ -145,3 +145,56 @@ def test_resolve_connection_none_ds_falls_back():
     src = _make_source_with_meta(_FakeMeta({}))
     cfg = src._resolve_datasource_connection(None)
     assert isinstance(cfg, dict)
+
+
+# ── _query_flat 多源执行（P7.2b）──────────────────────────
+
+class _FakeConn:
+    def cursor(self):
+        return _FakeCursor()
+    def close(self):
+        pass
+
+
+class _FakeCursor:
+    def execute(self, sql, *args):
+        pass
+    def fetchone(self):
+        return None  # 不返回值，仅验证连接选择
+
+
+def test_query_flat_multi_source_uses_per_ds_connection():
+    """多源：两个不同 ds 的指标 → 连接两个不同数据源。"""
+    store = InMemoryRegistryStore()
+    reg = SemanticRegistry(store)
+    store.save_domain(BusinessDomain(domain_code="d", name="d"))
+    store.save_object(BusinessObject(object_code="o", domain_code="d", name="o"))
+    store.save_metric(Metric(metric_code="o.m1", object_code="o", name="a", source_field="ds1.t1.c1"))
+    store.save_metric(Metric(metric_code="o.m2", object_code="o", name="b", source_field="ds2.t2.c2"))
+    src = _make_source_with_meta(_FakeMeta({
+        "ds1": {"enabled": True, "connection_config": {"host": "h1", "database": "d1", "schema": "dbo"}},
+        "ds2": {"enabled": True, "connection_config": {"host": "h2", "database": "d2", "schema": "dbo"}},
+    }))
+    src._registry = reg
+    connected: list[str] = []
+    src._connect = lambda cfg: (connected.append(cfg["host"]), _FakeConn())[1]
+    src.query(["o.m1", "o.m2"], context={"djh": 1})
+    assert set(connected) == {"h1", "h2"}
+
+
+def test_query_flat_skips_group_with_no_connection():
+    """某 ds 未注册/禁用 → 跳过该组，不报错。"""
+    store = InMemoryRegistryStore()
+    reg = SemanticRegistry(store)
+    store.save_domain(BusinessDomain(domain_code="d", name="d"))
+    store.save_object(BusinessObject(object_code="o", domain_code="d", name="o"))
+    store.save_metric(Metric(metric_code="o.m1", object_code="o", name="a", source_field="ds_ok.t1.c1"))
+    store.save_metric(Metric(metric_code="o.m2", object_code="o", name="b", source_field="ds_missing.t2.c2"))
+    src = _make_source_with_meta(_FakeMeta({
+        "ds_ok": {"enabled": True, "connection_config": {"host": "h1", "database": "d1"}},
+    }))
+    src._registry = reg
+    connected: list[str] = []
+    src._connect = lambda cfg: (connected.append(cfg["host"]), _FakeConn())[1]
+    src.query(["o.m1", "o.m2"], context={"djh": 1})
+    assert connected == ["h1"]  # 只连了存在的源
