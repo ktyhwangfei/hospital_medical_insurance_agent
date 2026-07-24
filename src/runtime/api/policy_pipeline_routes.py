@@ -29,6 +29,8 @@ from fastapi.responses import StreamingResponse
 from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
 from src.knowledge_extension.rule_explanation.pipeline_orchestrator import PipelineOrchestrator
 from src.shared.schemas.responses import error_detail
+from src.data_platform.storage.postgresql.policy_meta_store import PolicyMetaStore
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -475,3 +477,52 @@ def list_unpublished_rules(
     page_items = flat_rules[start:end]
 
     return {"items": page_items, "total": total, "page": page, "page_size": page_size}
+
+
+# ════════════════════ schema-update 重新结构化任务（P5.4，§7.3/§7.4）═════════════════════
+
+_meta_store: PolicyMetaStore | None = None
+
+
+def _get_meta_store() -> PolicyMetaStore:
+    """PolicyMetaStore 单例（测试可 monkeypatch 注入内存假 store）。"""
+    global _meta_store
+    if _meta_store is None:
+        _meta_store = PolicyMetaStore()
+    return _meta_store
+
+
+class SchemaUpdatePublishRequest(BaseModel):
+    metric_code: str
+    strategy: str  # incremental | full | soft_delete
+    change_type: str = "modify"  # add | modify | remove
+    schema_version: int = 1
+
+
+@router.post("/schema-update/publish")
+def publish_schema_update(req: SchemaUpdatePublishRequest):
+    """创建 schema 更新任务（§7.3）。
+
+    第一版只创建 task（status=pending）。真实执行触发（evolve：查受影响 doc +
+    LLM 重提取 + 批量 upsert）推迟到配置 MODEL_API_KEY + 实现 doc 查询后。
+    """
+    task = _get_meta_store().create_task(
+        metric_code=req.metric_code, change_type=req.change_type,
+        strategy=req.strategy, schema_version=req.schema_version,
+    )
+    return {"task_id": task["task_id"], "status": task["status"]}
+
+
+@router.get("/schema-update/tasks/{task_id}")
+def get_schema_update_task(task_id: str):
+    task = _get_meta_store().get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务 '{task_id}' 不存在")
+    return task
+
+
+@router.get("/schema-update/tasks")
+def list_schema_update_tasks(
+    status: str = Query(""), metric_code: str = Query("")
+):
+    return _get_meta_store().list_tasks(status=status, metric_code=metric_code)

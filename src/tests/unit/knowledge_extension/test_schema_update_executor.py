@@ -182,3 +182,38 @@ def test_executor_evolve_soft_delete_no_writer_needed():
     assert out["processed"] == 1
     assert written[0]["schema_version"] == 3
     assert written[0]["cap_amount"]["value"] == "50万"  # 数据保留
+
+
+# ── evolve 分批 + 进度（P5.3）─────────────────────────────
+
+def test_executor_evolve_batches_and_reports_progress():
+    """分批限速：5 条按 batch_size=2 切成 3 批（2+2+1），writer 调 3 次。"""
+    entities = [_sample_entity() for _ in range(5)]
+    for i, e in enumerate(entities):
+        e["rule_id"] = f"r{i}"
+    write_calls: list[int] = []
+    progress_calls: list[tuple[int, int]] = []
+    ex = SchemaUpdateExecutor(
+        reader=lambda d: entities,
+        writer=lambda batch: write_calls.append(len(batch)),
+    )
+    out = ex.evolve(
+        "d", "soft_delete", deleted_field_codes=set(), schema_version=2,
+        batch_size=2, on_progress=lambda p, t: progress_calls.append((p, t)),
+    )
+    assert out["total"] == 5
+    assert out["processed"] == 5
+    assert write_calls == [2, 2, 1]  # 3 批
+    assert progress_calls == [(2, 5), (4, 5), (5, 5)]
+
+
+def test_executor_evolve_default_batch_single_call():
+    """默认 batch_size=20：少量数据单批写完，向后兼容。"""
+    entities = [_sample_entity(), _sample_entity()]
+    write_calls: list[int] = []
+    ex = SchemaUpdateExecutor(
+        reader=lambda d: entities,
+        writer=lambda b: write_calls.append(len(b)),
+    )
+    ex.evolve("d", "soft_delete", deleted_field_codes=set(), schema_version=2)
+    assert write_calls == [2]  # 单批
