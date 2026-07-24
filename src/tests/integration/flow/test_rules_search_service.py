@@ -22,7 +22,32 @@ def _milvus_ready() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _milvus_ready(), reason="Milvus 不可用")
+def _mssql_conn_str() -> str:
+    """从 .env 读 MSSQL_* 构造连接串（避免硬编码密码）。"""
+    from dotenv import load_dotenv
+    load_dotenv()
+    import os
+    return (
+        f"DRIVER={{{os.getenv('MSSQL_DRIVER', 'SQL Server')}}};"
+        f"SERVER={os.getenv('MSSQL_HOST', '127.0.0.1')},{os.getenv('MSSQL_PORT', '1433')};"
+        f"DATABASE={os.getenv('MSSQL_DATABASE', 'bjybdb')};"
+        f"UID={os.getenv('MSSQL_USER', 'sa')};PWD={os.getenv('MSSQL_PASSWORD', '')}"
+    )
+
+
+def _db_ready() -> bool:
+    """PG(registry) + SQLServer(业务库) 都可用才跑跨世界测试。"""
+    try:
+        import pyodbc
+        conn = pyodbc.connect(_mssql_conn_str(), timeout=2)
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+milvus_test = pytest.mark.skipif(not _milvus_ready(), reason="Milvus 不可用")
+db_test = pytest.mark.skipif(not _db_ready(), reason="PG/SQLServer 业务库不可用")
 
 
 def _seed_test_data(rules_col_name: str, facts_col_name: str):
@@ -59,6 +84,7 @@ def _seed_test_data(rules_col_name: str, facts_col_name: str):
     upsert_rules(rules_col, rules)
 
 
+@milvus_test
 def test_search_precise_filters_and_groups():
     """precise 标量过滤 + 按 fact 分组 + join fact_text。"""
     from pymilvus import connections, utility
@@ -83,6 +109,7 @@ def test_search_precise_filters_and_groups():
                 utility.drop_collection(n)
 
 
+@milvus_test
 def test_search_semantic_and_hybrid():
     """semantic 向量召回 + hybrid 标量过滤+向量。需真实向量化（加载模型）。"""
     from pymilvus import connections, utility
@@ -142,3 +169,28 @@ def test_search_semantic_and_hybrid():
         for n in (rcol, fcol):
             if utility.has_collection(n):
                 utility.drop_collection(n)
+
+
+@db_test
+def test_search_database_via_semantic_source():
+    """target=database：经指标 source_field 映射查业务库（SemanticDataSource 封装）。
+
+    [来源: §4.3 跨世界查找；登记号为临时方案，跨世界查询语义待后续设计深化]
+    """
+    import pyodbc
+    from src.knowledge_extension.rule_explanation.rules_search_service import RulesSearchService
+    # 取真实登记号（yb_brdjxx 是 seed 里 source_field 指向的真实表）
+    conn = pyodbc.connect(_mssql_conn_str(), timeout=3)
+    cur = conn.cursor()
+    cur.execute("SELECT TOP 1 djh FROM yb_brdjxx")
+    row = cur.fetchone()
+    conn.close()
+    assert row is not None, "yb_brdjxx 无数据"
+    djh = row[0]
+
+    svc = RulesSearchService()
+    # djxx.fund_type 的 source_field=yb_brdjxx.FUND_TYPE（seed 验证过）
+    result = svc.search_database(["djxx.fund_type", "djxx.yllb"], {"djh": djh})
+    assert "djxx.fund_type" in result
+    assert result["djxx.fund_type"] is not None, "业务取值应非空（如 '城镇职工'）"
+    assert result["djxx.yllb"] is not None
