@@ -78,3 +78,49 @@ def test_run_discovery_single_source_config_backward_compatible(monkeypatch):
     monkeypatch.setattr(service, "scan_sqlserver", fake_scan)
     run_discovery(source_config={"sqlserver": {"host": "legacy", "database": "d"}})
     assert calls == ["legacy"]  # 只扫一个
+
+
+# ── _run_discovery_sync 多源接线（P7.2，semantic_routes）──
+
+
+def test_run_discovery_sync_passes_meta_store_when_no_sqlserver(monkeypatch):
+    """source_config 无 sqlserver 时自动取 meta_store 传给 run_discovery。"""
+    from src.runtime.api import semantic_routes
+    from src.runtime.discovery import service
+
+    captured: dict = {}
+
+    def fake_run(source_config=None, store=None, meta_store=None):
+        captured["meta_store"] = meta_store
+        return {"tables": [], "total_tables": 0, "total_fields": 0,
+                "mapped_fields": 0, "unmapped_fields": 0,
+                "fields": [], "table_statuses": []}
+
+    monkeypatch.setattr(service, "run_discovery", fake_run)
+    sentinel = object()
+    monkeypatch.setattr(semantic_routes, "_get_meta_store", lambda: sentinel)
+    semantic_routes._run_discovery_sync({"sample_limit": 10000}, None)
+    assert captured["meta_store"] is sentinel
+
+
+def test_run_discovery_sync_skips_meta_store_when_sqlserver_config(monkeypatch):
+    """source_config 有 sqlserver 时不取 meta_store（单源兼容）。"""
+    from src.runtime.api import semantic_routes
+    from src.runtime.discovery import service
+
+    captured: dict = {}
+
+    def fake_run(source_config=None, store=None, meta_store=None):
+        captured["meta_store"] = meta_store
+        return {"tables": [], "total_tables": 0, "total_fields": 0,
+                "mapped_fields": 0, "unmapped_fields": 0,
+                "fields": [], "table_statuses": []}
+
+    monkeypatch.setattr(service, "run_discovery", fake_run)
+
+    def boom():
+        raise AssertionError("source_config 有 sqlserver 时不应取 meta_store")
+
+    monkeypatch.setattr(semantic_routes, "_get_meta_store", boom)
+    semantic_routes._run_discovery_sync({"sqlserver": {"host": "h", "database": "d"}}, None)
+    assert captured["meta_store"] is None
