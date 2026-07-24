@@ -67,6 +67,60 @@ class RulesSearchService:
         )
         return self._group_by_fact(rules)
 
+    def search_semantic(self, query_text: str, top_k: int = 20) -> list[dict[str, Any]]:
+        """语义检索：query 向量化 → policy_rules_v2 向量搜索（复用 fact 向量）。
+
+        [来源: §4.2 语义模式]
+        """
+        from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provider import (
+            get_embedding_provider,
+        )
+        self._ensure_loaded()
+        vec = get_embedding_provider().encode([query_text])[0]
+        results = self._client.search(
+            collection_name=self._rules_col,
+            data=[vec],
+            anns_field="vector",
+            search_params={"metric_type": "COSINE", "params": {"ef": 64}},
+            limit=top_k,
+            output_fields=RULE_OUTPUT_FIELDS,
+        )
+        return self._group_by_fact(self._parse_hits(results))
+
+    def search_hybrid(
+        self, query_text: str, filters: dict[str, str], top_k: int = 20
+    ) -> list[dict[str, Any]]:
+        """混合检索：向量召回 + 核心维度标量过滤。
+
+        [来源: §4.2 混合模式]
+        """
+        from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provider import (
+            get_embedding_provider,
+        )
+        self._ensure_loaded()
+        vec = get_embedding_provider().encode([query_text])[0]
+        flt = self._build_filter(filters)
+        results = self._client.search(
+            collection_name=self._rules_col,
+            data=[vec],
+            anns_field="vector",
+            search_params={"metric_type": "COSINE", "params": {"ef": 64}},
+            filter=flt or "",
+            limit=top_k,
+            output_fields=RULE_OUTPUT_FIELDS,
+        )
+        return self._group_by_fact(self._parse_hits(results))
+
+    @staticmethod
+    def _parse_hits(results) -> list[dict[str, Any]]:
+        """解析 MilvusClient.search 返回（list[list[hit]]）→ rules list（带 score）。"""
+        rules = []
+        for hit in results[0]:
+            e = dict(hit["entity"])
+            e["score"] = float(hit["distance"])
+            rules.append(e)
+        return rules
+
     def _group_by_fact(self, rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """按 fact_id 聚合 rules，join policy_facts.fact_text。"""
         by_fact: dict[str, list[dict]] = {}
