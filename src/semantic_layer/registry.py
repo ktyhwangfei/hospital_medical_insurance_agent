@@ -1,319 +1,20 @@
 from __future__ import annotations
 
+"""
+Semantic Registry — 业务对象 / Metric / 值域的 CRUD 与运行时查询入口。
+
+设计时（Design Time）：通过 RegistryStore 持久化 Domain/Object/Metric/ValueDomain。
+运行时（Run Time）：get_metric_mapping 从对象已发布版本快照取指标（版本锁定）。
+全局单例 get_semantic_registry() 供路由层 / 服务层消费，依赖方向单向向下。
+
+说明：历史上本文件还并存过 A 系 IndicatorRegistry（扫描 indicators/*.yaml）与
+get_registry() 单例，服务于已退役的 IndicatorContext 增强路径。双注册表收敛时
+整体移除，统一以 SemanticRegistry（B 系，PostgreSQL 持久化 + 版本发布）为唯一注册表。
+"""
 import os
-
-"""
-指标注册表 - 扫描 indicators/ 目录加载指标定义和字典
-
-功能:
-1. 扫描 indicators/_from_datamodel1/policy_fields.yaml 加载指标定义
-2. 扫描 indicators/dictionaries/ 加载标准化字典
-3. 按需扫描 indicators/fee/（如存在）加载费用类指标
-4. 提供全局单例 get_registry() 供其他模块使用
-"""
-import logging
-from pathlib import Path
-from typing import Optional
-
-import yaml
-
-from src.config.semantic_layer import AUTO_GENERATED_DIR, DICTIONARIES_DIR
-from src.domain.indicator.models import DictionaryEntry, IndicatorDefinition
-
-logger = logging.getLogger(__name__)
-
-
-class IndicatorRegistry:
-    """
-    指标注册表
-
-    管理所有指标定义和字典的注册与查询。
-    支持按 indicator_id、category、semantic tag 检索。
-    """
-
-    def __init__(self) -> None:
-        # 指标定义: indicator_id → IndicatorDefinition
-        self._definitions: dict[str, IndicatorDefinition] = {}
-        # 字典: category_name → list[DictionaryEntry]
-        self._dictionaries: dict[str, list[DictionaryEntry]] = {}
-        # 语义标签 → indicator_id 列表的索引
-        self._tag_index: dict[str, list[str]] = {}
-        # 是否已初始化
-        self._initialized: bool = False
-
-    # ============================================================
-    # 初始化与加载
-    # ============================================================
-
-    def initialize(self) -> None:
-        """初始化注册表：扫描所有 YAML 文件并加载"""
-        if self._initialized:
-            return
-
-        self._load_policy_fields()
-        self._load_dictionaries()
-        self._load_fee_indicators()
-        self._build_tag_index()
-
-        self._initialized = True
-        logger.info(
-            "指标注册表初始化完成: %d 个指标, %d 个字典类别",
-            len(self._definitions),
-            len(self._dictionaries),
-        )
-
-    def _load_policy_fields(self) -> None:
-        """从 policy_fields.yaml 加载指标定义"""
-        policy_path = Path(AUTO_GENERATED_DIR) / "policy_fields.yaml"
-        if not policy_path.exists():
-            logger.warning("policy_fields.yaml 不存在，请先运行 datamodel1_importer")
-            return
-
-        with open(policy_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-
-        if not data or "indicators" not in data:
-            logger.warning("policy_fields.yaml 格式无效或无指标定义")
-            return
-
-        for item in data["indicators"]:
-            try:
-                definition = IndicatorDefinition(**item)
-                self._definitions[definition.indicator_id] = definition
-            except Exception as e:
-                logger.warning("跳过无效指标定义 %s: %s", item.get("indicator_id", "?"), e)
-
-        logger.info("已加载 %d 个政策字段指标", len(data.get("indicators", [])))
-
-    def _load_dictionaries(self) -> None:
-        """扫描 dictionaries/ 目录加载所有字典 YAML"""
-        dict_dir = Path(DICTIONARIES_DIR)
-        if not dict_dir.exists():
-            logger.warning("字典目录不存在: %s", dict_dir)
-            return
-
-        for yaml_file in sorted(dict_dir.glob("*.yaml")):
-            try:
-                with open(yaml_file, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-
-                if not data or "entries" not in data:
-                    continue
-
-                category = data.get("category", yaml_file.stem)
-                entries = []
-                for entry_data in data["entries"]:
-                    entry = DictionaryEntry(
-                        category=category,
-                        standard_value=entry_data.get("standard_value", ""),
-                        synonyms=entry_data.get("synonyms", []),
-                        description=entry_data.get("description", ""),
-                        code=entry_data.get("code"),
-                    )
-                    entries.append(entry)
-
-                self._dictionaries[category] = entries
-                logger.debug("已加载字典: %s (%d 条)", category, len(entries))
-            except Exception as e:
-                logger.warning("加载字典文件 %s 失败: %s", yaml_file, e)
-
-        logger.info("已加载 %d 个字典类别", len(self._dictionaries))
-
-    def _load_fee_indicators(self) -> None:
-        """扫描 indicators/fee/ 目录（如存在）加载费用类指标"""
-        from src.config.semantic_layer import INDICATORS_DIR
-
-        fee_dir = Path(INDICATORS_DIR) / "fee"
-        if not fee_dir.exists():
-            logger.debug("费用指标目录不存在，跳过: %s", fee_dir)
-            return
-
-        for yaml_file in sorted(fee_dir.glob("*.yaml")):
-            try:
-                with open(yaml_file, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-
-                if not data or "indicators" not in data:
-                    # 可能是单指标文件
-                    if "indicator_id" in data:
-                        data = {"indicators": [data]}
-                    else:
-                        continue
-
-                for item in data["indicators"]:
-                    try:
-                        definition = IndicatorDefinition(**item)
-                        self._definitions[definition.indicator_id] = definition
-                    except Exception as e:
-                        logger.warning("跳过无效费用指标 %s: %s", item.get("indicator_id", "?"), e)
-            except Exception as e:
-                logger.warning("加载费用指标文件 %s 失败: %s", yaml_file, e)
-
-    def _build_tag_index(self) -> None:
-        """构建语义标签 → indicator_id 的索引"""
-        self._tag_index.clear()
-        for def_id, definition in self._definitions.items():
-            for tag in definition.semantic_tags:
-                if tag not in self._tag_index:
-                    self._tag_index[tag] = []
-                self._tag_index[tag].append(def_id)
-
-    # ============================================================
-    # 指标查询
-    # ============================================================
-
-    def get(self, indicator_id: str) -> Optional[IndicatorDefinition]:
-        """按 ID 获取指标定义"""
-        self.initialize()
-        return self._definitions.get(indicator_id)
-
-    def list_all(self) -> list[IndicatorDefinition]:
-        """获取全部指标定义"""
-        self.initialize()
-        return list(self._definitions.values())
-
-    def list_by_category(self, category: str) -> list[IndicatorDefinition]:
-        """按分类获取指标列表
-        
-        Args:
-            category: "dimension" | "numeric" | "condition" | "meta"
-        """
-        self.initialize()
-        return [d for d in self._definitions.values() if d.category == category]
-
-    def search_by_tag(self, tag: str) -> list[IndicatorDefinition]:
-        """按语义标签搜索指标
-        
-        Args:
-            tag: 语义标签（如 "险种", "起付线"）
-
-        Returns:
-            匹配该标签的所有指标定义
-        """
-        self.initialize()
-        ids = self._tag_index.get(tag, [])
-        return [self._definitions[i] for i in ids if i in self._definitions]
-
-    def search_by_keyword(self, keyword: str) -> list[IndicatorDefinition]:
-        """按关键词在名称、描述、标签中搜索指标
-        
-        Args:
-            keyword: 搜索关键词
-
-        Returns:
-            匹配的所有指标定义
-        """
-        self.initialize()
-        keyword_lower = keyword.lower()
-        results = []
-        for definition in self._definitions.values():
-            if (keyword_lower in definition.name.lower()
-                    or keyword_lower in definition.description.lower()
-                    or keyword_lower in definition.indicator_id.lower()
-                    or any(keyword_lower in tag.lower() for tag in definition.semantic_tags)):
-                results.append(definition)
-        return results
-
-    def list_dimensions(self) -> list[IndicatorDefinition]:
-        """获取所有维度指标（用于 Milvus 过滤）"""
-        return self.list_by_category("dimension")
-
-    # ============================================================
-    # 字典查询
-    # ============================================================
-
-    def get_dictionary(self, category: str) -> list[DictionaryEntry]:
-        """按类别获取字典条目"""
-        self.initialize()
-        return self._dictionaries.get(category, [])
-
-    def list_dictionary_categories(self) -> list[dict]:
-        """获取所有字典分类及条目计数"""
-        self.initialize()
-        return [
-            {"category": cat, "entry_count": len(entries)}
-            for cat, entries in self._dictionaries.items()
-        ]
-
-    def get_dictionary_entries(self, category: str) -> list[DictionaryEntry] | None:
-        """获取指定字典分类的条目，不存在返回 None"""
-        self.initialize()
-        if category not in self._dictionaries:
-            return None
-        return self._dictionaries[category]
-
-    def get_importer_status(self) -> str:
-        """获取导入器状态"""
-        self.initialize()
-        if self._definitions:
-            return f"loaded_{len(self._definitions)}_indicators"
-        return "no_data"
-
-    def normalize_value(self, category: str, raw_value: str) -> Optional[str]:
-        """使用字典将原始值标准化为标准值
-
-        匹配策略:
-        1. 完全匹配 standard_value
-        2. 完全匹配 synonyms 列表
-        3. 模糊匹配（raw_value 包含/被包含于 standard_value 或 synonyms）
-
-        Args:
-            category: 字典类别（如"险种类别"）
-            raw_value: 原始值（如"310"或"职工医保"）
-
-        Returns:
-            标准化后的标准值，未匹配则返回 None
-        """
-        self.initialize()
-        entries = self._dictionaries.get(category, [])
-        if not entries:
-            return None
-
-        raw_lower = raw_value.strip().lower()
-
-        # 1. 精确匹配 standard_value
-        for entry in entries:
-            if entry.standard_value.lower() == raw_lower:
-                return entry.standard_value
-
-        # 2. 精确匹配 synonyms
-        for entry in entries:
-            if any(s.lower() == raw_lower for s in entry.synonyms):
-                return entry.standard_value
-
-        # 3. 模糊匹配：raw_value 包含于 standard_value
-        for entry in entries:
-            if raw_lower in entry.standard_value.lower():
-                return entry.standard_value
-
-        # 4. 模糊匹配：raw_value 包含于某个 synonym
-        for entry in entries:
-            if any(raw_lower in s.lower() for s in entry.synonyms):
-                return entry.standard_value
-
-        return None
-
-
-# ============================================================
-# 全局单例
-# ============================================================
-
-_registry_instance: Optional[IndicatorRegistry] = None
-
-
-def get_registry() -> IndicatorRegistry:
-    """获取全局指标注册表单例"""
-    global _registry_instance
-    if _registry_instance is None:
-        _registry_instance = IndicatorRegistry()
-    _registry_instance.initialize()
-    return _registry_instance
-
-
-# ── Semantic Registry (Phase-1 Entity/Metric/ValueDomain CRUD) ──
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Optional, Protocol
 
 from src.semantic_layer.models import (
     BusinessDomain, BusinessObject, Metric,
@@ -534,6 +235,8 @@ class SemanticRegistry:
         if obj is None:
             raise ValueError(f"对象 '{object_code}' 不存在")
         metrics = self._store.list_metrics(object_code=object_code)
+        if not metrics:
+            raise ValueError(f"对象 '{object_code}' 无指标，不能发布（§5：空指标不能发布）")
         existing = self._store.list_object_versions(object_code)
         next_version = str(len(existing) + 1)
         snapshot = BusinessObjectVersion(
@@ -554,6 +257,10 @@ class SemanticRegistry:
         obj.current_version = next_version
         obj.status = "published"
         self._store.save_object(obj)
+        # 同步 metric.status → published（解锁 build_extraction_schema / 契约，§5 发布）
+        for m in metrics:
+            m.status = "published"
+            self._store.save_metric(m)
         return snapshot
 
     def get_object_version(self, object_code: str, version: str) -> Optional[BusinessObjectVersion]:
@@ -581,9 +288,9 @@ _semantic_registry_instance: Optional[SemanticRegistry] = None
 
 
 def get_semantic_registry() -> SemanticRegistry:
-    """获取全局 SemanticRegistry 单例。
+    """获取全局 SemanticRegistry 单例（项目唯一注册表）。
 
-    依赖方向：路由层 / 服务层 → 语义层。替代原先散落在路由层的 get_registry()。
+    依赖方向：路由层 / 服务层 → 语义层。
     """
     global _semantic_registry_instance
     if _semantic_registry_instance is not None:
