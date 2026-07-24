@@ -1753,10 +1753,19 @@ def _get_discovery_store() -> "DiscoveryStore":
     return _discovery_store
 
 
-def _run_discovery_sync(source_config: dict, store=None) -> dict:
-    """Lazy wrapper to avoid circular import at module load time."""
+def _run_discovery_sync(source_config: dict, store=None, meta_store=None) -> dict:
+    """Lazy wrapper to avoid circular import at module load time.
+
+    多源（P7.2）：source_config 无 sqlserver 时从注册表取启用源逐个扫描。
+    """
     from src.runtime.discovery.service import run_discovery
-    return run_discovery(source_config, store)
+    # source_config 无 sqlserver 配置时，从 datasource 注册表取多源
+    if not (source_config or {}).get("sqlserver") and meta_store is None:
+        try:
+            meta_store = _get_meta_store()
+        except Exception:
+            meta_store = None
+    return run_discovery(source_config, store, meta_store=meta_store)
 
 
 @router.post("/discovery/incremental-update", response_model=DiscoveryScanResponse)
