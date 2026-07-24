@@ -54,3 +54,55 @@ def test_create_v2_collection_has_core_dims_and_dynamic():
     finally:
         if utility.has_collection(tmp_name):
             utility.drop_collection(tmp_name)
+
+
+def test_upsert_and_query_with_field_trace():
+    """写入一条规则（核心维度 + payment_ratio 字段级溯源 + 占位向量），
+    标量查询命中，读回 payment_ratio 是含 value/confidence 的 dict。
+    """
+    from pymilvus import connections, utility
+    from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
+        create_policy_rules_v2_collection,
+        rule_to_entity,
+    )
+
+    connections.connect(alias="default", host="127.0.0.1", port="19530")
+    tmp_name = "_test_pr_v2_write"
+    try:
+        col = create_policy_rules_v2_collection(collection_name=tmp_name, drop_existing=True)
+
+        rule = {
+            "rule_id": "r_smoke_1",
+            "fact_id": "f_smoke_1",
+            "doc_id": "d_smoke_1",
+            "rule_type": "支付比例",
+            "insu_type": "城镇职工基本医疗保险",
+            "med_type": "住院-普通住院",
+            "hosp_lv": "三级医院",
+            "psn_type": "退休人员",
+            "setl_type": "按项目付费",
+            # 详情字段（裸值）—— rule_to_entity 会包成 FieldTrace
+            "payment_ratio": "85%",
+            "deductible_amount": "1300元",
+        }
+        placeholder_vector = [0.01] * 768  # P2 占位；P3 由 fact 向量复用
+        entity = rule_to_entity(rule, vector=placeholder_vector)
+
+        col.insert([entity])
+        col.load()
+        res = col.query(
+            expr='insu_type == "城镇职工基本医疗保险" and hosp_lv == "三级医院"',
+            output_fields=["rule_type", "payment_ratio", "deductible_amount"],
+            limit=5,
+        )
+        assert len(res) == 1
+        hit = res[0]
+        assert hit["rule_type"] == "支付比例"
+        # payment_ratio 是字段级溯源 dict（非裸值）
+        pr = hit["payment_ratio"]
+        assert isinstance(pr, dict)
+        assert pr["value"] == "85%"
+        assert "extracted_at" in pr and "schema_version" in pr and "confidence" in pr
+    finally:
+        if utility.has_collection(tmp_name):
+            utility.drop_collection(tmp_name)
