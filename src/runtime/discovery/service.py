@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 def _get_registry_source_fields() -> set[str]:
     """从语义层 registry 获取所有已映射的 source_field（含完整路径和纯字段名）。"""
     try:
-        from src.runtime.api.semantic_routes import get_registry
-        reg = get_registry()
+        from src.semantic_layer.registry import get_semantic_registry
+        reg = get_semantic_registry()
         fields: set[str] = set()
         for m in reg._store.list_metrics():
             if m.source_field:

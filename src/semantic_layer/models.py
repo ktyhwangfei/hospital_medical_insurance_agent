@@ -65,6 +65,11 @@ class Metric(BaseModel):
     quality_score: float = Field(default=0.0, description="数据质量评分")
     version: str = Field(default="1.0", max_length=32)
     status: str = Field(default="draft", max_length=32)
+    # ── 政策知识管线扩展（语义拉齐：指标 = 结构化提取的元数据契约）──
+    metric_kind: str = Field(default="field", max_length=32, description="指标种类：field / entity / relation（实体与关系也是指标）")
+    indexed: bool = Field(default=False, description="是否核心检索维度：True→进 Milvus 固定 schema + 标量索引；False→详情走 dynamic field")
+    extraction_hint: Optional[str] = Field(None, description="给 LLM 的提取说明，动态拼 prompt 用")
+    schema_version: int = Field(default=1, description="schema 演化版本，配合字段级溯源")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -87,6 +92,11 @@ class ObjectVersionMetric(BaseModel):
     value_domain: Optional[str] = None
     importance: str = "optional"
     default_value: Optional[Any] = None
+    # 发布快照也冻结政策管线扩展字段（提取契约从快照读）
+    metric_kind: str = "field"
+    indexed: bool = False
+    extraction_hint: Optional[str] = None
+    schema_version: int = 1
 
     @classmethod
     def from_metric(cls, m: "Metric") -> "ObjectVersionMetric":
@@ -97,6 +107,8 @@ class ObjectVersionMetric(BaseModel):
             source_field=m.source_field, source_adapter_port=m.source_adapter_port,
             value_domain=m.value_domain, importance=m.importance,
             default_value=m.default_value,
+            metric_kind=m.metric_kind, indexed=m.indexed,
+            extraction_hint=m.extraction_hint, schema_version=m.schema_version,
         )
 
 

@@ -13,7 +13,6 @@ from typing import Any
 
 from ..base import BaseFeeStrategy
 
-
 class PoolingPaymentStrategy(BaseFeeStrategy):
     """统筹支付解释策略。"""
 
@@ -62,40 +61,6 @@ class PoolingPaymentStrategy(BaseFeeStrategy):
                 )
             )
         return queries
-
-    def _build_dynamic_policy_queries(self) -> list[Any] | None:
-        """当 IndicatorContext 可用时，使用语义层动态构建统筹支付政策查询。"""
-        from ..semantic_utils import build_structured_query_from_context
-
-        ctx = self._indicator_context
-        if ctx is None:
-            return None
-
-        # 查询 1：分段支付比例（动态维度 + 固定 rule_type）
-        query1 = build_structured_query_from_context(
-            ctx,
-            query_name="employee_inpatient_tertiary_segment_ratio",
-            text_must_include_any=[
-                "起付标准至3万元",
-                "超过3万元至4万元",
-                "超过4万元",
-            ],
-            psn_type_allow_all=True,
-        )
-        if query1 is not None:
-            query1.filters["rule_type"] = "支付比例"
-
-        # 查询 2：退休人员优惠（可选）
-        query2 = build_structured_query_from_context(
-            ctx,
-            query_name="retiree_personal_ratio_formula",
-            text_must_include_all=["退休人员", "个人支付比例", "60%"],
-            required=False,
-        )
-        if query2 is not None:
-            query2.filters["rule_type"] = "计算公式"
-
-        return [q for q in [query1, query2] if q is not None]
 
     # ── patient answer ─────────────────────────────────────────
 

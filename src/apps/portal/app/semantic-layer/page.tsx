@@ -31,6 +31,9 @@ interface SemanticSummary {
   mapping_rate: number
   skill_references: number
   domain_progress: DomainProgress[]
+  discovery_tables: number
+  discovery_fields: number
+  discovery_unmapped: number
 }
 
 // ── API Path ─────────────────────────────────────────────────────
@@ -135,8 +138,8 @@ export default function SemanticLayerDashboard() {
   if (loading) {
     return (
       <div className="flex flex-col gap-6">
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-          {Array.from({ length: 5 }).map((_, i) => (
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
             <Card key={i} className="border border-slate-200 bg-white shadow-sm">
               <CardHeader className="pb-2">
                 <div className="h-3 w-16 animate-pulse rounded bg-slate-200" />
@@ -185,8 +188,8 @@ export default function SemanticLayerDashboard() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* ── Top Stat Cards (5 columns) ─────────────────────────── */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      {/* ── Top Stat Cards (4 columns) ─────────────────────────── */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-1.5">
             <CardTitle className="text-[11px] font-medium text-slate-500">领域</CardTitle>
@@ -228,19 +231,7 @@ export default function SemanticLayerDashboard() {
             <div className="text-2xl font-bold tracking-tight text-amber-600">
               {data.skill_references}
             </div>
-            <p className="text-[10px] text-slate-400 mt-0.5">已被技能引用的指标数</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-slate-200 bg-white shadow-sm">
-          <CardHeader className="pb-1.5">
-            <CardTitle className="text-[11px] font-medium text-slate-500">数据源</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold tracking-tight text-slate-700">
-              {new Set(data.domain_progress.map(d => d.domain_code)).size}
-            </div>
-            <p className="text-[10px] text-slate-400 mt-0.5">已接入的独立数据源</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">指标累计被引用次数</p>
           </CardContent>
         </Card>
       </div>
@@ -341,9 +332,9 @@ export default function SemanticLayerDashboard() {
           title="发现中心"
           description="扫描表结构自动发现字段"
           stats={[
-            { label: '域数', value: data.domains_count, accent: 'text-blue-600' },
-            { label: '对象数', value: data.objects_count, accent: 'text-cyan-600' },
-            { label: '指标数', value: data.metrics_count, accent: 'text-purple-600' },
+            { label: '扫描表数', value: data.discovery_tables, accent: 'text-blue-600' },
+            { label: '发现字段', value: data.discovery_fields, accent: 'text-purple-600' },
+            { label: '待映射', value: data.discovery_unmapped, accent: 'text-red-500' },
           ]}
           href="/semantic-layer/discovery"
         />

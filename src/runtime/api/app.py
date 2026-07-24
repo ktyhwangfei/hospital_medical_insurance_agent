@@ -12,8 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.gateway.api_gateway.audit_middleware import GatewayAuditMiddleware
 from src.runtime.api.infra_skill_routes import router as infra_skill_router
 from src.runtime.api.policy_knowledge_routes import router as policy_knowledge_router
+from src.runtime.api.policy_pipeline_routes import router as policy_pipeline_router
 from src.runtime.api.policy_qa_routes import router as policy_qa_router
-from src.runtime.api.semantic_layer_routes import router as semantic_layer_router
 from src.runtime.api.semantic_routes import router as semantic_router
 
 logger = logging.getLogger(__name__)
@@ -53,8 +53,8 @@ def create_app() -> FastAPI:
     print("[STARTUP] create_app: 注册路由模块", flush=True)
     app.include_router(infra_skill_router, prefix='/api/v1/medical-insurance-ai-agent')
     app.include_router(policy_knowledge_router)
+    app.include_router(policy_pipeline_router)
     app.include_router(policy_qa_router, prefix='/api/v1/medical-insurance-ai-agent/policy-qa')
-    app.include_router(semantic_layer_router)
     app.include_router(semantic_router)
     print("[STARTUP] create_app: 完成", flush=True)
     return app

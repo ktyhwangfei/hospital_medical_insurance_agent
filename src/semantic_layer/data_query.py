@@ -15,7 +15,7 @@
 import logging
 from typing import Any
 
-from src.runtime.api.semantic_routes import get_registry
+from src.semantic_layer.registry import get_semantic_registry
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class MetricDataQueryService:
     """
 
     def __init__(self):
-        self._registry = get_registry()
+        self._registry = get_semantic_registry()
 
     def resolve_metrics(self, metric_codes: list[str]) -> dict[str, dict[str, Any]]:
         """
@@ -126,12 +126,26 @@ class MetricDataQueryService:
                     results[code] = None
                     logger.debug("metric '%s' is unmapped, no value", code)
         else:
-            # 生产版本占位：按表分组后调用 adapter
-            groups = self.group_by_table(resolved)
-            logger.info(
-                "query plan: %d metrics → %d tables: %s",
-                len(metric_codes), len(groups), list(groups.keys()),
-            )
+            # 生产路径：调用 SemanticDataSource 真实取数（复用 discovery 的 SQL Server 通道）
+            # 组装 context：把所有可用标识符（patient_id/encounter_id/raw_data）交给 source，
+            # source 按配置的 filter_context_key（默认 djh）从 context 取过滤值。
+            try:
+                from src.runtime.discovery.semantic_source import get_semantic_data_source
+
+                context: dict[str, Any] = {}
+                if patient_id:
+                    context["patient_id"] = patient_id
+                if encounter_id:
+                    context["encounter_id"] = encounter_id
+                if isinstance(raw_data, dict):
+                    context.update(raw_data)
+                source = get_semantic_data_source()
+                results = source.query(metric_codes, context=context)
+            except Exception:
+                logger.warning(
+                    "query: SemanticDataSource 取数失败，降级返回空结果",
+                    exc_info=True,
+                )
 
         return results
 

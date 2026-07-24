@@ -141,3 +141,6 @@ src/tests/report/
 # 根目录 playwright verifier 输出（测试产物）
 # ============================================================
 /verifier-*.json
+
+# embedding 模型权重缓存（本地，不入库）
+/models/

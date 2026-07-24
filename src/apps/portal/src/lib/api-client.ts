@@ -38,6 +38,41 @@ export async function testInfraSkillExecution(skillId: string, request: SkillExe
     body: JSON.stringify(request),
   })
 }
+
+// ── 语义层（最新）：技能消费的语义指标 ───────────────────────────
+
+export async function getSkillSemanticMetrics(skillId: string): Promise<SkillSemanticMetric[]> {
+  return requestJson<SkillSemanticMetric[]>(`/semantic/skills/${encodeURIComponent(skillId)}/metrics`)
+}
+
+export async function getSemanticMetricDetail(metricCode: string): Promise<SemanticMetricDetail> {
+  return requestJson<SemanticMetricDetail>(`/semantic/metrics/${encodeURIComponent(metricCode)}`)
+}
+
+// ── 语义层：技能查询计划与试运行 ───────────────────────────────
+
+export async function getSkillQueryPlan(skillId: string): Promise<SkillQueryPlan> {
+  return requestJson<SkillQueryPlan>(`/semantic/skills/${encodeURIComponent(skillId)}/query-plan`)
+}
+
+export async function executeSkillQuery(
+  skillId: string,
+  djh: string | number
+): Promise<SkillQueryExecuteResult> {
+  return requestJson<SkillQueryExecuteResult>(
+    `/semantic/skills/${encodeURIComponent(skillId)}/query-execute`,
+    { method: 'POST', body: JSON.stringify({ djh }) }
+  )
+}
+
+export async function checkSkillConsistency(
+  skillId: string,
+  djh: string
+): Promise<ConsistencyCheckResult> {
+  return requestJson<ConsistencyCheckResult>(
+    `/semantic/skills/${encodeURIComponent(skillId)}/consistency-check?djh=${encodeURIComponent(djh)}`
+  )
+}
 import type {
   AgentResponse,
   ApiErrorDetail,
@@ -62,6 +97,11 @@ import type {
   SkillRouteTestResponse,
   SkillExecuteTestRequest,
   SkillExecuteTestResponse,
+  SkillSemanticMetric,
+  SemanticMetricDetail,
+  SkillQueryPlan,
+  SkillQueryExecuteResult,
+  ConsistencyCheckResult,
 } from './types'
 import { ApiClientError } from './types'
 
