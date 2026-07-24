@@ -38,35 +38,65 @@ def _is_mapped(field_name: str, table_name: str, source_fields: set[str]) -> boo
     return fn in source_fields or full in source_fields
 
 
-def run_discovery(source_config: dict | None = None, store=None) -> dict:
-    """执行 discovery 扫描，返回完整结果。支持增量扫描（需传入 store）。"""
+def list_enabled_sqlserver_sources(meta_store) -> list[tuple[str | None, str, dict]]:
+    """从 datasource 注册表取所有启用的 SQL Server 源（P7.2 多源扫描）。
+
+    返回 [(datasource_id, name, connection_config), ...]；meta_store=None 返回 []。
+    """
+    if meta_store is None:
+        return []
+    sources: list[tuple[str | None, str, dict]] = []
+    try:
+        for ds in meta_store.list_datasources(enabled_only=True):
+            if ds.get("type") != "sqlserver":
+                continue
+            sources.append((ds.get("id"), ds.get("name", ""), ds.get("connection_config") or {}))
+    except Exception as exc:
+        logger.warning("list_enabled_sqlserver_sources 失败: %s", exc)
+    return sources
+
+
+def run_discovery(source_config: dict | None = None, store=None, meta_store=None) -> dict:
+    """执行 discovery 扫描，返回完整结果。
+
+    多源（P7.2）：source_config 为空时从 datasource 注册表取多源逐个扫描合并。
+    单源（兼容）：显式传 source_config 时仅扫描该源。
+    """
     config = DiscoverySourceConfig(**(source_config or {}))
     source_fields = _get_registry_source_fields()
 
-    # 确定实际使用的配置
-    cfg = config.sqlserver.model_dump() if config.sqlserver else {}
-    tables: list[str] = []
-    fields: list[dict[str, Any]] = []
+    # 确定扫描目标列表：[(ds_id, name, cfg), ...]
+    if config.sqlserver:
+        targets = [(None, "manual", config.sqlserver.model_dump())]
+    else:
+        targets = list_enabled_sqlserver_sources(meta_store)
 
-    if not cfg.get("database"):
+    if not targets or not any(t[2].get("database") for t in targets):
         raise ValueError("未配置有效的 SQL Server 数据源，请在页面「数据源」中填写连接信息")
 
-    try:
-        result = scan_sqlserver(cfg, store=store)
-        tables = result["tables"]
-        for f in result["fields"]:
+    tables: list[str] = []
+    fields: list[dict[str, Any]] = []
+    table_statuses: list[dict[str, Any]] = []
+
+    for ds_id, _name, cfg in targets:
+        if not cfg.get("database"):
+            continue
+        try:
+            result = scan_sqlserver(cfg, store=store)
+        except Exception as exc:
+            logger.error("SQL Server 扫描失败 ds=%s: %s", ds_id, exc)
+            raise
+        tables.extend(result.get("tables", []))
+        for f in result.get("fields", []):
             f["mapped"] = _is_mapped(f["field_name"], f.get("table_name", ""), source_fields)
+            f["datasource_id"] = ds_id  # 标记来源（三段式寻址基础）
             fields.append(f)
-        # 保留 table_statuses 供 SSE 进度使用
         if "table_statuses" in result:
-            result["table_statuses"] = result["table_statuses"]
-        logger.info("SQL Server 扫描完成: %d 表, %d 字段", len(tables), len(fields))
-    except Exception as exc:
-        logger.error("SQL Server 扫描失败: %s", exc)
-        raise
+            table_statuses.extend(result["table_statuses"])
+        logger.info("SQL Server 扫描完成 ds=%s: %d 表, %d 字段",
+                    ds_id, len(result.get("tables", [])), len(result.get("fields", [])))
 
     mapped_count = sum(1 for f in fields if f["mapped"])
-    unmapped_count = len(fields) - mapped_count
 
     return {
         "tables": tables,
@@ -75,5 +105,6 @@ def run_discovery(source_config: dict | None = None, store=None) -> dict:
         "mapped_fields": mapped_count,
         "unmapped_fields": len(fields) - mapped_count,
         "fields": fields,
+        "table_statuses": table_statuses,
     }
 
