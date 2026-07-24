@@ -377,28 +377,47 @@ def publish_extraction_v2(extraction_id: str):
 
 @router.post("/rules/search")
 async def search_rules(request: Request):
-    """政策规则混合检索（P6，基于 policy_rules_v2）。
+    """政策规则混合检索（P6，基于 policy_rules_v2 + 业务库）。
 
-    body: {mode: "precise"|"semantic"|"hybrid", query?, filters?, top_k?}
-    - precise: filters 必填（核心维度 rule_type/insu_type/med_type/...）
-    - semantic: query 必填（自然语言）
-    - hybrid: query + filters 都填
+    body: {mode, query?, filters?, target, metric_codes?, context?, top_k?}
+    - mode: precise|semantic|hybrid（target=policy/both 时生效）
+    - target: policy(默认)|database|both
+      - policy: 查政策规则（三模式）
+      - database: 查业务数据（经 source_field 映射查 SQLServer，需 metric_codes+context）
+      - both: 政策规则 + 业务数据
     """
     from src.knowledge_extension.rule_explanation.rules_search_service import RulesSearchService
     body = await request.json()
     mode = body.get("mode", "precise")
+    target = body.get("target", "policy")
     top_k = int(body.get("top_k", 20))
     svc = RulesSearchService()
-    if mode == "precise":
-        groups = svc.search_precise(body.get("filters", {}), top_k=top_k)
-    elif mode == "semantic":
-        groups = svc.search_semantic(body["query"], top_k=top_k)
-    elif mode == "hybrid":
-        groups = svc.search_hybrid(body["query"], body.get("filters", {}), top_k=top_k)
-    else:
-        raise HTTPException(status_code=400, detail=error_detail(
-            "INVALID_MODE", f"mode 必须是 precise/semantic/hybrid，实际={mode}", {}))
-    return {"mode": mode, "groups": groups, "total_groups": len(groups)}
+
+    groups: list = []
+    if target in ("policy", "both"):
+        if mode == "precise":
+            groups = svc.search_precise(body.get("filters", {}), top_k=top_k)
+        elif mode == "semantic":
+            groups = svc.search_semantic(body["query"], top_k=top_k)
+        elif mode == "hybrid":
+            groups = svc.search_hybrid(body["query"], body.get("filters", {}), top_k=top_k)
+        else:
+            raise HTTPException(status_code=400, detail=error_detail(
+                "INVALID_MODE", f"mode 必须是 precise/semantic/hybrid，实际={mode}", {}))
+
+    database_values: dict = {}
+    if target in ("database", "both"):
+        metric_codes = body.get("metric_codes", [])
+        if not metric_codes:
+            raise HTTPException(status_code=400, detail=error_detail(
+                "NO_METRICS", "target=database/both 必须提供 metric_codes", {}))
+        database_values = svc.search_database(metric_codes, body.get("context", {}))
+
+    return {
+        "mode": mode, "target": target,
+        "groups": groups, "total_groups": len(groups),
+        "database_values": database_values,
+    }
 
 
 @router.get("/rules/{rule_id}/lineage")
