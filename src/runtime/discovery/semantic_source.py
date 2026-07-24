@@ -166,17 +166,6 @@ class SemanticDataSource:
             "unmapped": False,
         }
 
-    def group_by_table(
-        self, resolved: list[dict[str, Any]]
-    ) -> dict[str, list[dict[str, Any]]]:
-        """按物理表分组（批量取数的基础）。"""
-        groups: dict[str, list[dict[str, Any]]] = {}
-        for r in resolved:
-            if r.get("unmapped"):
-                continue
-            groups.setdefault(r["table"], []).append(r)
-        return groups
-
     # ============================================================
     # 查询计划（纯元数据，不执行）
     # ============================================================
@@ -255,7 +244,12 @@ class SemanticDataSource:
     ) -> dict[str, Any]:
         """flat 模式：每表单独 SELECT TOP 1，取数后应用值域转换。"""
         resolved = [self.resolve_metric(c) for c in metric_codes]
-        groups = self.group_by_table(resolved)
+        # 多源分组：按 (datasource_id, table)（P7.2b）
+        groups: dict[tuple[str | None, str], list[dict[str, Any]]] = {}
+        for r in resolved:
+            if r.get("unmapped"):
+                continue
+            groups.setdefault((r.get("datasource_id"), r["table"]), []).append(r)
         results: dict[str, Any] = {c: None for c in metric_codes}
 
         if not groups:
@@ -269,17 +263,19 @@ class SemanticDataSource:
             )
             return results
 
-        cfg = self._resolve_source_config()
-        conn = None
-        try:
-            conn = self._connect(cfg)
-        except Exception as exc:
-            logger.error("query: 连接 SQL Server 失败: %s", exc)
-            return results
-
-        try:
-            schema = cfg.get("schema", "dbo")
-            for table, metrics in groups.items():
+        # 多源：每组按 datasource_id 选连接（P7.2b）
+        for (ds_id, table), metrics in groups.items():
+            cfg = self._resolve_datasource_connection(ds_id)
+            if not cfg:
+                logger.warning("query: 跳过无连接组 ds=%s table=%s", ds_id, table)
+                continue
+            try:
+                conn = self._connect(cfg)
+            except Exception as exc:
+                logger.warning("query: 连接失败 ds=%s table=%s: %s", ds_id, table, exc)
+                continue
+            try:
+                schema = cfg.get("schema", "dbo")
                 # 同表多列合并为一次 SELECT（批量取数）
                 cols = ", ".join(f"[{m['column']}]" for m in metrics)
                 sql = (
@@ -295,12 +291,12 @@ class SemanticDataSource:
                         for m, val in zip(metrics, row):
                             results[m["metric_code"]] = val
                 except Exception:
-                    logger.warning("query: 取数失败 table=%s", table, exc_info=True)
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+                    logger.warning("query: 取数失败 ds=%s table=%s", ds_id, table, exc_info=True)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
         # 值域转换：对声明了 value_domain 的枚举型指标，码→标准标签
         # [来源: 弥合与 business_sql.yaml CASE 的转换差异]
