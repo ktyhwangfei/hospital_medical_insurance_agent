@@ -3,7 +3,6 @@ from src.adapters.emr.in_memory import InMemoryEmrAdapter
 from src.adapters.his.in_memory import InMemoryHisAdapter
 from src.adapters.medical_record.in_memory import InMemoryMedicalRecordAdapter
 from src.adapters.pre_audit.in_memory import InMemoryPreAuditAdapter
-from src.knowledge_extension.mcp_registry.demo_tools import build_demo_mcp_tool_service
 from src.knowledge_extension.service import KnowledgeEnhancementRequest, build_default_knowledge_extension_service
 from src.runtime.api.schemas import AgentResponse
 
@@ -133,15 +132,6 @@ def run_pre_discharge_qc(patient_id: str, encounter_id: str) -> AgentResponse:
         blocked_actions=[],
         audit={"workflow_id": f"wf-qc-{patient_id}-{encounter_id}", "steps": ["query_pre_audit", "query_drg_dip", "query_medical_record", "create_tasks"]},
     )
-    mcp_insight = build_demo_mcp_tool_service().invoke_for_scenario(
-        scenario="pre_discharge_quality_control",
-        role="medical_office",
-        tool_name="get_pre_discharge_checklist",
-        arguments={"patient_id": patient_id, "encounter_id": encounter_id},
-    )
-    response.result["mcp_insights"] = [mcp_insight]
-    response.citations.extend(mcp_insight["citations"])
-    response.audit["mcp_tool_invocations"] = mcp_insight["audit_events"]
     knowledge = enhance_qc_knowledge(patient_id)
     response.citations.extend(knowledge["citations"])
     response.uncertainties.extend(knowledge["uncertainties"])
