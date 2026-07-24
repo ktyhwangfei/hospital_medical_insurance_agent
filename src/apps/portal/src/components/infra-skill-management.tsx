@@ -20,6 +20,7 @@ import {
   listInfraSkills,
   testInfraSkillExecution,
   testInfraSkillRouting,
+  getSkillSemanticMetrics,
 } from '@/lib/api-client'
 import type {
   InfraSkillDetailResponse,
@@ -27,6 +28,7 @@ import type {
   FieldMappingItem,
 } from '@/lib/types'
 import SkillQuestionExplainer from './skill-question-explainer'
+import SkillQueryPlan from './skill-query-plan'
 
 // ── Business Action / Object 中文标签映射 ──
 
@@ -192,6 +194,9 @@ export default function InfraSkillManagement() {
   const [routeResult, setRouteResult] = useState<string | null>(null)
   const [routeTesting, setRouteTesting] = useState(false)
 
+  // 各技能引用的语义指标数（语义层消费视图）
+  const [metricCounts, setMetricCounts] = useState<Record<string, number>>({})
+
   // Execution Test State
   const [testQuestion, setTestQuestion] = useState('')
   const [testTargetFeeItem, setTestTargetFeeItem] = useState('')
@@ -212,6 +217,18 @@ export default function InfraSkillManagement() {
         business_object: objectFilter || undefined,
       })
       setSkills(data)
+      // 并发拉取每个技能引用的语义指标数（容错：失败记 0）
+      const counts = await Promise.all(
+        data.map(async (s) => {
+          try {
+            const ms = await getSkillSemanticMetrics(s.skill_id)
+            return [s.skill_id, ms.length] as const
+          } catch {
+            return [s.skill_id, 0] as const
+          }
+        })
+      )
+      setMetricCounts(Object.fromEntries(counts))
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载研发技能失败')
     } finally {
@@ -349,6 +366,7 @@ export default function InfraSkillManagement() {
                   <tr className="border-b text-left">
                     <th className="pb-3 pr-4 font-medium text-gray-600">技能名称 / ID</th>
                     <th className="pb-3 pr-4 font-medium text-gray-600">业务动作</th>
+                    <th className="pb-3 pr-4 font-medium text-gray-600">引用指标</th>
                     <th className="pb-3 pr-4 font-medium text-gray-600">包含关键词</th>
                     <th className="pb-3 pr-4 font-medium text-gray-600">排除关键词</th>
                     <th className="pb-3 font-medium text-gray-600">操作</th>
@@ -363,6 +381,11 @@ export default function InfraSkillManagement() {
                       </td>
                       <td className="py-3 pr-4">
                         <ActionObjectBadge action={skill.business_action} object={skill.business_object} />
+                      </td>
+                      <td className="py-3 pr-4">
+                        <span className={`font-mono text-sm tabular-nums ${(metricCounts[skill.skill_id] ?? 0) > 0 ? 'text-blue-600 font-semibold' : 'text-gray-400'}`} title="从语义层 /semantic/skills/{id}/metrics 统计">
+                          {metricCounts[skill.skill_id] ?? '—'}
+                        </span>
                       </td>
                       <td className="py-3 pr-4">
                         <div className="flex flex-wrap gap-1">
@@ -418,6 +441,7 @@ export default function InfraSkillManagement() {
             <Tabs defaultValue="explain" orientation="horizontal" className="flex-col">
               <TabsList className="mb-4">
                 <TabsTrigger value="explain">费用项解析</TabsTrigger>
+                <TabsTrigger value="query-plan">查询计划</TabsTrigger>
                 <TabsTrigger value="manifest">Manifest (元数据)</TabsTrigger>
                 <TabsTrigger value="fields">字段映射</TabsTrigger>
                 <TabsTrigger value="files">目录结构</TabsTrigger>
@@ -426,8 +450,13 @@ export default function InfraSkillManagement() {
 
               <TabsContent value="explain">
                 <SkillQuestionExplainer
+                  skillId={selectedSkill.skill_id}
                   strategies={selectedSkill.files_structure.strategies}
                 />
+              </TabsContent>
+
+              <TabsContent value="query-plan">
+                <SkillQueryPlan skillId={selectedSkill.skill_id} />
               </TabsContent>
               
               <TabsContent value="manifest" className="bg-gray-50 p-4 rounded-md overflow-x-auto">

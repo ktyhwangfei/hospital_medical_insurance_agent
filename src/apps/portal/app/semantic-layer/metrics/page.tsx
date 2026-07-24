@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import {
   Search, Filter, ArrowUpDown, ExternalLink, Loader2, BarChart3,
   Pencil, Check, X, Plus, Trash2, AlertTriangle, ChevronDown, ChevronUp,
-  Settings2,
+  Settings2, RefreshCw,
 } from 'lucide-react'
 import ValueDomainConfigModal from '../value-domain-config-modal'
 import StandardValuesModal from '../standard-values-modal'
@@ -258,8 +258,9 @@ export default function MetricsCenterPage() {
   const [sortField, setSortField] = useState<SortField>('object_code'); const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showAddForm, setShowAddForm] = useState(false); const [deleteTarget, setDeleteTarget] = useState<EnrichedMetric | null>(null)
   const [vdConfigMetric, setVdConfigMetric] = useState<EnrichedMetric | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
-  const fetchData = useCallback(() => { setLoading(true); setError(null); fetchAllMetrics().then(({ metrics: m, objects: o }) => { setMetrics(m); setObjects(o); setLoading(false) }).catch((err: Error) => { setError(err.message); setLoading(false) }) }, [])
+  const fetchData = useCallback(() => { setLoading(true); setError(null); return fetchAllMetrics().then(({ metrics: m, objects: o }) => { setMetrics(m); setObjects(o); setLoading(false) }).catch((err: Error) => { setError(err.message); setLoading(false) }) }, [])
   useEffect(() => { fetchData() }, [fetchData])
 
   const stats = useMemo(() => {
@@ -297,6 +298,15 @@ export default function MetricsCenterPage() {
     fetchData()
   }, [fetchData])
   const handleAdd = useCallback(() => { setShowAddForm(false); fetchData() }, [fetchData])
+  const handleRefreshQuality = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const res = await fetchJson<{ updated: number }>(`${SEMANTIC_API}/metrics/refresh-quality-scores`, { method: 'POST' })
+      await fetchData()
+      alert(`已按最新发现扫描刷新 ${res.updated} 个指标的质量分`)
+    } catch (err: any) { alert(err.message) }
+    setRefreshing(false)
+  }, [fetchData])
   const handleDeleteConfirm = useCallback(async () => { if (!deleteTarget) return; try { await fetch(`${SEMANTIC_API}/metrics/${encodeURIComponent(deleteTarget.metric_code)}`, { method: 'DELETE' }) } catch (err: any) { alert(err.message) }; setDeleteTarget(null); setMetrics((prev) => prev.filter((m) => m.metric_code !== deleteTarget.metric_code)) }, [deleteTarget])
 
   if (loading) return <div className="flex flex-col gap-6"><div className="grid grid-cols-2 gap-4 lg:grid-cols-4">{Array.from({ length: 4 }).map((_, i) => (<Card key={i}><CardHeader className="pb-2"><div className="h-3 w-16 animate-pulse rounded bg-slate-200" /></CardHeader><CardContent><div className="h-8 w-20 animate-pulse rounded bg-slate-200" /></CardContent></Card>))}</div><div className="flex flex-wrap gap-3">{Array.from({ length: 4 }).map((_, i) => (<div key={i} className="h-8 w-28 animate-pulse rounded-md bg-slate-200" />))}</div><div className="rounded-lg border border-slate-200"><div className="border-b border-slate-200 bg-slate-50 px-3 py-2.5"><div className="h-3 w-48 animate-pulse rounded bg-slate-200" /></div><div className="divide-y divide-slate-200">{Array.from({ length: 8 }).map((_, i) => (<div key={i} className="flex items-center gap-4 px-3 py-3"><div className="h-4 w-32 animate-pulse rounded bg-slate-200" /><div className="h-3 w-20 animate-pulse rounded bg-slate-200" /><div className="h-3 w-16 animate-pulse rounded bg-slate-200" /><div className="h-5 w-14 animate-pulse rounded-full bg-slate-200" /><div className="h-3 w-10 animate-pulse rounded bg-slate-200" /><div className="h-4 w-12 animate-pulse rounded bg-slate-200" /></div>))}</div></div></div>
@@ -304,7 +314,7 @@ export default function MetricsCenterPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between"><div><p className="text-sm text-slate-500">全局浏览与筛选所有指标，支持增删改查</p></div><button type="button" onClick={() => setShowAddForm(true)} className="flex items-center gap-1 rounded-md bg-purple-50 px-2.5 py-1.5 text-xs font-medium text-purple-600 hover:bg-purple-100"><Plus className="h-3.5 w-3.5" />新建指标</button></div>
+      <div className="flex items-center justify-between"><div><p className="text-sm text-slate-500">全局浏览与筛选所有指标，支持增删改查</p></div><div className="flex items-center gap-2"><button type="button" onClick={handleRefreshQuality} disabled={refreshing} className="flex items-center gap-1 rounded-md bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-100 disabled:opacity-40"><RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? '刷新中...' : '刷新质量分'}</button><button type="button" onClick={() => setShowAddForm(true)} className="flex items-center gap-1 rounded-md bg-purple-50 px-2.5 py-1.5 text-xs font-medium text-purple-600 hover:bg-purple-100"><Plus className="h-3.5 w-3.5" />新建指标</button></div></div>
       {showAddForm && <AddMetricForm objects={objects} onAdded={handleAdd} onCancel={() => setShowAddForm(false)} />}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Card className="border-slate-200/70 bg-white/80 shadow-sm"><CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-slate-600">指标总数</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold tracking-tight text-blue-600">{stats.total}</div></CardContent></Card>

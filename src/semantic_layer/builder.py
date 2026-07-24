@@ -49,7 +49,15 @@ class BusinessFactsBuilder:
                         value = self._registry.resolve_value(metric.value_domain, str(value))
                     obj_facts[metric.metric_code.split(".")[-1]] = value
                     continue
-                port = metric.source_adapter_port or "default"
+                port = metric.source_adapter_port
+                if not port:
+                    # P0-3: 空 source_adapter_port 不应静默路由到 'default'，
+                    # 否则可能拿到错来源的数据。fail-fast：精确告警并跳过。
+                    warnings.append(
+                        f"Metric '{metric.metric_code}' has no source_adapter_port "
+                        f"configured, skipped"
+                    )
+                    continue
                 if port not in adapter_groups:
                     adapter_groups[port] = []
                 adapter_groups[port].append(metric)

@@ -45,6 +45,11 @@ def create_policy_nodes_collection(dim: int, drop_existing: bool = False) -> Col
 
 
 def create_policy_facts_collection(dim: int, drop_existing: bool = False) -> Collection:
+    """[已废弃] 政策知识管线已采用 policy_facts_schema.create_policy_facts_collection。
+
+    本函数为 policy_retrieval 早期结构化事实设计（字段 amount/ratio/conditions_json 等），
+    与新管线「事实全文 + 向量入口」语义不同，且从未实际创建。新代码请勿使用。
+    """
     if utility.has_collection(FACT_COLLECTION):
         if drop_existing:
             utility.drop_collection(FACT_COLLECTION)

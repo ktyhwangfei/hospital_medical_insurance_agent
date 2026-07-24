@@ -62,7 +62,15 @@ CREATE TABLE IF NOT EXISTS discovery_table_checkpoints (
     error_message TEXT,
     PRIMARY KEY (table_name, schema_name)
 );
-"""
+
+-- 历史已发现字段累积表（增量扫描判断“新增字段”用，避免加载全部历史 JSON）
+CREATE TABLE IF NOT EXISTS discovery_seen_fields (
+    field_key VARCHAR(600) PRIMARY KEY,
+    table_name VARCHAR(256) NOT NULL,
+    field_name VARCHAR(256) NOT NULL,
+    first_seen_task VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);"""
 
 
 def _now() -> str:
@@ -167,6 +175,24 @@ class DiscoveryStore:
         logger.info("DiscoveryStore: task %s 结果已持久化 (%d 表, %d 字段, %d 新增)",
                     task_id, tables_count, fields_count, new_found)
 
+        # 累积 seen 字段（供增量扫描判断新增字段，避免下次加载全部历史 JSON）
+        try:
+            seen_rows = []
+            for f in result.get("fields", []):
+                tn = f.get("table_name", "")
+                fn = f.get("field_name", "")
+                if fn:
+                    seen_rows.append((f"{tn}:{fn}".lower(), tn, fn, task_id))
+            if seen_rows:
+                client.execute_many(
+                    """INSERT INTO discovery_seen_fields (field_key, table_name, field_name, first_seen_task)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (field_key) DO NOTHING""",
+                    seen_rows,
+                )
+        except Exception:
+            logger.warning("DiscoveryStore: 累积 seen 字段失败", exc_info=True)
+
     def update_task_error(self, task_id: str, error_message: str) -> None:
         client = self._get_client()
         client.execute(
@@ -202,6 +228,25 @@ class DiscoveryStore:
     def get_latest_result(self) -> dict | None:
         """获取最近一次成功扫描的原始字段数据（兼容旧接口）。"""
         return self.get_latest_completed_result()
+
+    def get_latest_source_config(self) -> dict | None:
+        """获取最近一次成功扫描使用的 source_config（含 SQL Server 连接配置）。
+
+        供 SemanticDataSource 复用同一连接通道取数。
+        """
+        client = self._get_client()
+        rows = client.execute(
+            """SELECT source_config FROM discovery_scan_tasks
+               WHERE status = 'completed' AND source_config IS NOT NULL
+               ORDER BY completed_at DESC LIMIT 1"""
+        )
+        if not rows:
+            return None
+        cfg = rows[0].get("source_config")
+        if isinstance(cfg, str):
+            import json
+            cfg = json.loads(cfg)
+        return cfg or None
 
     # ── 扫描历史 ──────────────────────────────────────────────────
 
@@ -286,6 +331,26 @@ class DiscoveryStore:
             "remark": r.get("remark"),
         }
 
+    def get_all_field_descriptions(self) -> dict[str, dict]:
+        """一次性加载全部字段释义，返回 {lookup_key: {description, is_primary_key, remark}}。
+
+        替代逐条 get_field_description 的 N+1 查询。lookup_key 形如
+        "table_name:field_name"（已小写）。描述表数据量有限，全量加载可接受。
+        """
+        client = self._get_client()
+        rows = client.execute(
+            "SELECT lookup_key, description, is_primary_key, remark "
+            "FROM discovery_field_descriptions"
+        )
+        return {
+            r["lookup_key"]: {
+                "description": r.get("description"),
+                "is_primary_key": r.get("is_primary_key", False),
+                "remark": r.get("remark"),
+            }
+            for r in rows
+        }
+
     def get_field_descriptions_count(self) -> int:
         client = self._get_client()
         rows = client.execute("SELECT COUNT(*) as cnt FROM discovery_field_descriptions")
@@ -302,40 +367,17 @@ class DiscoveryStore:
         return set()
 
     def get_previously_scanned_fields(self, exclude_task_id: str | None = None) -> set[str]:
-        """获取历史扫描中已出现过的「表名:字段名」集合（排除当前任务）。
+        """获取历史扫描中已出现过的「表名:字段名」集合。
 
-        用于判断当前扫描中哪些字段是真正的新增字段。
+        从 discovery_seen_fields 累积表查询（O(1) 单表 SELECT），
+        替代原先加载全部历史 result_data JSON 的实现。
+        当前任务结果在扫描完成时才写入，因此天然不包含当前任务。
         """
         client = self._get_client()
-        if exclude_task_id:
-            rows = client.execute(
-                """SELECT result_data FROM discovery_scan_tasks
-                   WHERE status = 'completed' AND result_data IS NOT NULL AND task_id != %s
-                   ORDER BY completed_at DESC""",
-                (exclude_task_id,),
-            )
-        else:
-            rows = client.execute(
-                """SELECT result_data FROM discovery_scan_tasks
-                   WHERE status = 'completed' AND result_data IS NOT NULL
-                   ORDER BY completed_at DESC"""
-            )
-        seen: set[str] = set()
-        for row in rows:
-            result = row.get("result_data")
-            if isinstance(result, str):
-                try:
-                    result = json.loads(result)
-                except Exception:
-                    continue
-            if not result:
-                continue
-            for f in result.get("fields", []):
-                key = f"{f.get('table_name', '')}:{f.get('field_name', '')}".lower()
-                if key:
-                    seen.add(key)
-        logger.info("DiscoveryStore: get_previously_scanned_fields → %d 个历史字段（排除 %s）",
-                    len(seen), exclude_task_id or "无")
+        rows = client.execute("SELECT field_key FROM discovery_seen_fields")
+        seen = {r["field_key"] for r in rows if r.get("field_key")}
+        logger.info("DiscoveryStore: get_previously_scanned_fields → %d 个历史字段",
+                    len(seen))
         return seen
 
     # ── 表级检查点（增量扫描） ──────────────────────────────────

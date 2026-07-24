@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS semantic_metrics (
     quality_score DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     version VARCHAR(32) NOT NULL DEFAULT '1.0',
     status VARCHAR(32) NOT NULL DEFAULT 'draft',
+    -- 政策知识管线扩展（语义拉齐）
+    metric_kind VARCHAR(32) NOT NULL DEFAULT 'field',
+    indexed BOOLEAN NOT NULL DEFAULT FALSE,
+    extraction_hint TEXT,
+    schema_version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -179,6 +184,10 @@ def _row_to_metric(row: dict) -> Metric:
         quality_score=float(row.get("quality_score", 0.0)),
         version=row.get("version", "1.0"),
         status=row.get("status", "draft"),
+        metric_kind=row.get("metric_kind", "field"),
+        indexed=bool(row.get("indexed", False)),
+        extraction_hint=row.get("extraction_hint"),
+        schema_version=int(row.get("schema_version", 1)),
         created_at=row.get("created_at", _now()),
         updated_at=row.get("updated_at", _now()),
     )
@@ -272,6 +281,19 @@ class PostgresRegistryStore:
             # 兼容已存在的数据库：补加 standard_values 列
             self._client.execute(
                 "ALTER TABLE semantic_value_domains ADD COLUMN IF NOT EXISTS standard_values JSONB DEFAULT '[]'::jsonb"
+            )
+            # 政策知识管线扩展：为已有 semantic_metrics 表补加 4 列
+            self._client.execute(
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS metric_kind VARCHAR(32) NOT NULL DEFAULT 'field'"
+            )
+            self._client.execute(
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS indexed BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+            self._client.execute(
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS extraction_hint TEXT"
+            )
+            self._client.execute(
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1"
             )
             logger.info("PostgresRegistryStore: standard_values 列已确认存在")
             logger.debug("PostgresRegistryStore: 表结构已确认")
@@ -414,8 +436,9 @@ class PostgresRegistryStore:
                 source_object, source_field, source_adapter_port,
                 transformation, value_domain, importance,
                 usage_count, quality_score, version, status,
+                metric_kind, indexed, extraction_hint, schema_version,
                 created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (metric_code) DO UPDATE SET
                    object_code = EXCLUDED.object_code,
                    name = EXCLUDED.name,
@@ -435,6 +458,10 @@ class PostgresRegistryStore:
                    quality_score = EXCLUDED.quality_score,
                    version = EXCLUDED.version,
                    status = EXCLUDED.status,
+                   metric_kind = EXCLUDED.metric_kind,
+                   indexed = EXCLUDED.indexed,
+                   extraction_hint = EXCLUDED.extraction_hint,
+                   schema_version = EXCLUDED.schema_version,
                    updated_at = EXCLUDED.updated_at""",
             (metric.metric_code, metric.object_code, metric.name, metric.definition,
              metric.metric_type, metric.semantic_type, metric.unit, metric.required,
@@ -442,6 +469,7 @@ class PostgresRegistryStore:
              metric.source_object, metric.source_field, metric.source_adapter_port,
              transformation_json, metric.value_domain, metric.importance,
              metric.usage_count, metric.quality_score, metric.version, metric.status,
+             metric.metric_kind, metric.indexed, metric.extraction_hint, metric.schema_version,
              metric.created_at, metric.updated_at),
         )
 

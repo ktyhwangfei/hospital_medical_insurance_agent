@@ -365,6 +365,95 @@ export interface SkillExecuteTestResponse {
   result: unknown
 }
 
+// ── 语义层（最新）：技能↔指标关系 ─────────────────────────────────
+
+/** GET /semantic/skills/{skill_id}/metrics —— 技能引用的语义指标 */
+export interface SkillSemanticMetric {
+  metric_code: string
+  name: string
+  object_code: string
+  usage_count: number
+}
+
+/** GET /semantic/metrics/{code} —— 指标详情（取数映射/质量/值域状态） */
+export interface SemanticMetricDetail {
+  metric_code: string
+  name: string
+  definition: string | null
+  object_code: string
+  metric_type: string
+  semantic_type: string | null
+  unit: string | null
+  required: boolean
+  importance: string
+  value_domain: string | null
+  source_object: string | null
+  source_field: string | null
+  source_adapter_port: string | null
+  usage_count: number
+  quality_score: number
+  version: string
+  status: string
+}
+
+// ── 语义层：技能查询计划与试运行 ───────────────────────────────
+
+/** GET /semantic/skills/{id}/query-plan */
+export interface QueryPlanTable {
+  table: string
+  columns: string[]
+  metrics: { metric_code: string; name: string; column: string; semantic_type: string | null }[]
+}
+export interface SkillQueryPlan {
+  total_metrics: number
+  mapped_count: number
+  unmapped_count: number
+  filter_column: string
+  filter_context_key: string
+  tables: QueryPlanTable[]
+  unmapped: { metric_code: string; unmapped: boolean; reason?: string; name?: string }[]
+}
+
+/** POST /semantic/skills/{id}/query-execute */
+export interface QueryExecuteItem {
+  metric_code: string
+  name: string
+  source_field: string | null
+  value: unknown
+}
+export interface SkillQueryExecuteResult {
+  skill_id: string
+  djh: string | number
+  items: QueryExecuteItem[]
+}
+
+/** GET /semantic/skills/{id}/consistency-check?djh=X */
+export interface ConsistencyItem {
+  metric_code: string
+  name: string
+  semantic_value: unknown
+  semantic_joined_value: unknown
+  business_sql_value: unknown
+  compared: boolean
+  match: boolean
+  joined_match: boolean
+}
+export interface ConsistencyCheckResult {
+  skill_id: string
+  djh: string
+  supported: boolean
+  message?: string
+  business_sql_error: string | null
+  summary: {
+    compared: number
+    flat_matched: number
+    flat_mismatched: number
+    joined_matched: number
+    joined_mismatched: number
+  }
+  items: ConsistencyItem[]
+}
+
 // ── QA History Types ────────────────────────────────────────────
 
 export interface QAWorkflowStep {

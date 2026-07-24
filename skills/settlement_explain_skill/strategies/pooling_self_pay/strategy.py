@@ -17,7 +17,6 @@ from skills.settlement_explain_skill.fact_builder import FactBuilder
 from skills.settlement_explain_skill.output_parser import OutputParser, ParsedOutput
 from skills.settlement_explain_skill.scripts.validate_skill_result import validate_patient_answer
 
-
 class PoolingSelfPayStrategy(BaseFeeStrategy):
     """统筹自付解释策略。"""
 
@@ -55,52 +54,6 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
                 psn_type_allow_all=q.get("psn_type_allow_all", False),
             ))
         return queries
-
-    def _build_dynamic_policy_queries(self) -> list[Any] | None:
-        """当 IndicatorContext 可用时，使用语义层动态构建政策查询。
-
-        利用 extract_dimension_filters() 从指标上下文中提取维度值
-        （如保险类型、医院等级、医疗类别），替代 YAML 硬编码的 filters。
-
-        保留 text_must_include_any / text_must_include_all 关键词过滤，
-        确保查询仍能命中正确的分段比例和退休人员公式。
-        """
-        from ..semantic_utils import build_structured_query_from_context
-
-        ctx = self._indicator_context
-        if ctx is None:
-            return None
-
-        # 查询 1：通用分段比例（动态维度 + 固定 rule_type）
-        query1 = build_structured_query_from_context(
-            ctx,
-            query_name="employee_inpatient_tertiary_segment_ratio",
-            text_must_include_any=[
-                "起付标准至3万元",
-                "超过3万元至4万元",
-                "超过4万元",
-            ],
-            psn_type_allow_all=True,
-        )
-        if query1 is not None:
-            # 追加固定过滤条件
-            query1.filters["rule_type"] = "支付比例"
-
-        # 查询 2：退休人员 60% 折算公式（动态维度 + 固定 psn_type=退休人员）
-        query2 = build_structured_query_from_context(
-            ctx,
-            query_name="retiree_personal_ratio_formula",
-            text_must_include_all=[
-                "退休人员",
-                "个人支付比例",
-                "60%",
-            ],
-        )
-        if query2 is not None:
-            query2.filters["rule_type"] = "计算公式"
-            # psn_type 由 extract_dimension_filters 动态提供（若上下文有退休人员标记）
-
-        return [q for q in [query1, query2] if q is not None]
 
     # ── patient answer ─────────────────────────────────────────
 

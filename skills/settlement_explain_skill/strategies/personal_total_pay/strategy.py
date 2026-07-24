@@ -15,7 +15,6 @@ from src.semantic_layer.formula_evaluator import FormulaEvaluator
 
 from ..base import BaseFeeStrategy
 
-
 class PersonalTotalPayStrategy(BaseFeeStrategy):
     """个人总支付解释策略。"""
 
@@ -53,33 +52,6 @@ class PersonalTotalPayStrategy(BaseFeeStrategy):
                 psn_type_allow_all=q.get("psn_type_allow_all", False),
             ))
         return queries
-
-    def _build_dynamic_policy_queries(self) -> list[Any] | None:
-        """当 IndicatorContext 可用时，使用语义层动态构建个人总支付政策查询。"""
-        from ..semantic_utils import build_structured_query_from_context
-
-        ctx = self._indicator_context
-        if ctx is None:
-            return None
-
-        query1 = build_structured_query_from_context(
-            ctx,
-            query_name="personal_total_pay_definition",
-            text_must_include_all=["个人", "总支付"],
-        )
-        if query1 is not None:
-            query1.filters["rule_type"] = "定义"
-
-        query2 = build_structured_query_from_context(
-            ctx,
-            query_name="self_pay_composition_rules",
-            text_must_include_any=["自付", "负担"],
-            required=False,
-        )
-        if query2 is not None:
-            query2.filters["rule_type"] = "支付比例"
-
-        return [q for q in [query1, query2] if q is not None]
 
     # ── patient answer ─────────────────────────────────────────
 

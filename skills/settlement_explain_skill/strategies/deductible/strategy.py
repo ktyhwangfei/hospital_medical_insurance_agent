@@ -11,7 +11,6 @@ from typing import Any
 
 from ..base import BaseFeeStrategy
 
-
 class DeductibleStrategy(BaseFeeStrategy):
     """起付线解释策略。"""
 
@@ -45,39 +44,6 @@ class DeductibleStrategy(BaseFeeStrategy):
                 psn_type_allow_all=q.get("psn_type_allow_all", False),
             ))
         return queries
-
-    def _build_dynamic_policy_queries(self) -> list[Any] | None:
-        """当 IndicatorContext 可用时，使用语义层动态构建起付线政策查询。
-
-        从指标上下文中提取医院等级、保险类型等维度值，
-        替代 YAML 中硬编码的 filters，保持文本关键词过滤。
-        """
-        from ..semantic_utils import build_structured_query_from_context
-
-        ctx = self._indicator_context
-        if ctx is None:
-            return None
-
-        # 查询 1：三级医院起付线标准（动态维度 + 固定 rule_type=起付线）
-        query1 = build_structured_query_from_context(
-            ctx,
-            query_name="deductible_tertiary_standard",
-            psn_type_allow_all=False,
-        )
-        if query1 is not None:
-            query1.filters["rule_type"] = "起付线"
-
-        # 查询 2：二次住院起付线减半（可选查询）
-        query2 = build_structured_query_from_context(
-            ctx,
-            query_name="deductible_second_admission_halved",
-            text_must_include_all=["起付线", "50%", "减半"],
-            required=False,
-        )
-        if query2 is not None:
-            query2.filters["rule_type"] = "计算公式"
-
-        return [q for q in [query1, query2] if q is not None]
 
     def build_patient_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str

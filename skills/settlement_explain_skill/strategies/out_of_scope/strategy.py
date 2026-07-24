@@ -13,7 +13,6 @@ from typing import Any
 
 from ..base import BaseFeeStrategy
 
-
 class OutOfScopeStrategy(BaseFeeStrategy):
     """医保外费用解释策略。"""
 
@@ -60,33 +59,6 @@ class OutOfScopeStrategy(BaseFeeStrategy):
                 )
             )
         return queries
-
-    def _build_dynamic_policy_queries(self) -> list[Any] | None:
-        """当 IndicatorContext 可用时，使用语义层动态构建医保外费用政策查询。"""
-        from ..semantic_utils import build_structured_query_from_context
-
-        ctx = self._indicator_context
-        if ctx is None:
-            return None
-
-        query1 = build_structured_query_from_context(
-            ctx,
-            query_name="out_of_scope_catalog_definition",
-            text_must_include_any=["医保目录", "目录外", "自费"],
-        )
-        if query1 is not None:
-            query1.filters["rule_type"] = "定义"
-
-        query2 = build_structured_query_from_context(
-            ctx,
-            query_name="out_of_scope_full_pay_rule",
-            text_must_include_any=["全额自费", "目录外", "丙类"],
-            required=False,
-        )
-        if query2 is not None:
-            query2.filters["rule_type"] = "支付比例"
-
-        return [q for q in [query1, query2] if q is not None]
 
     # ── patient answer ─────────────────────────────────────────
 

@@ -43,8 +43,6 @@ class BaseFeeStrategy(ABC):
     def __init__(self, config_dir: Path):
         self.config_dir = config_dir
         self._configs: dict[str, Any] = {}
-        # 运行时上下文（每次 execute() 时设置）
-        self._indicator_context: Any = None
 
     def _load_yaml(self, filename: str) -> dict[str, Any]:
         import yaml
@@ -57,71 +55,6 @@ class BaseFeeStrategy(ABC):
         return self._configs[filename]
 
     # ── 统一字段访问 ─────────────────────────────────────────
-
-    def _get(self, ctx: Any, field_name: str, default: Any = 0) -> Any:
-        """统一字段取值：兼容 settlement_context 和 IndicatorContext
-
-        当 _indicator_context 存在时，优先从此提取字段值；
-        否则回退到 ctx 对象的 getattr。
-
-        Args:
-            ctx: 由 execute() 传入的上下文（可能已是 ContextProxy）
-            field_name: 字段名（如 "basic_pooling_self_pay"）
-            default: 默认值
-
-        Returns:
-            字段值
-        """
-        from .semantic_utils import get_field as _semantic_get_field
-
-        # 如果 ctx 已是 ContextProxy，直接委托 getattr
-        if hasattr(ctx, "_settlement_ctx") or hasattr(ctx, "_indicator_ctx"):
-            return getattr(ctx, field_name, default)
-
-        # 如果 _indicator_context 存在，使用语义层取值
-        if self._indicator_context is not None:
-            return _semantic_get_field(self._indicator_context, field_name, default)
-
-        # 兜底：直接 getattr
-        return getattr(ctx, field_name, default)
-
-    def _get_normalized_dimension(
-        self, ctx: Any, field_name: str, dict_category: str, default: str = ""
-    ) -> str:
-        """获取并标准化维度值
-
-        从上下文中提取维度原始值，然后使用注册表字典标准化。
-        如 insurance_type 的原始值 "310" → "城镇职工基本医疗保险"。
-
-        Args:
-            ctx: 结算上下文（或 ContextProxy）
-            field_name: 字段名（如 "insurance_type"）
-            dict_category: 字典类别（如 "险种类别"）
-            default: 标准化失败时的默认值
-
-        Returns:
-            标准化后的维度值字符串
-        """
-        raw = self._get(ctx, field_name, None)
-        if raw is None:
-            return default
-
-        from .semantic_utils import normalize_dimension_value
-
-        normalized = normalize_dimension_value(raw, dict_category)
-        return normalized if normalized else str(raw)
-
-    def _build_dynamic_policy_queries(self) -> list[Any] | None:
-        """使用语义层动态构建政策查询（替代 YAML 硬编码）
-
-        子类可覆盖此方法，在 _indicator_context 存在时返回动态查询列表。
-        返回 None 表示不使用动态查询，回退到 YAML。
-        默认实现返回 None（保持向后兼容）。
-
-        Returns:
-            list[StructuredPolicyQuery] 或 None
-        """
-        return None
 
     # ── 抽象方法 ─────────────────────────────────────────────
 
@@ -170,7 +103,6 @@ class BaseFeeStrategy(ABC):
 
     def execute(
         self, ctx: Any, evidence: list[dict], policy_status: str,
-        indicator_context: Any = None,
     ) -> StrategyResult:
         """执行完整策略（委托给各个 build_* 方法）。
 
@@ -178,33 +110,21 @@ class BaseFeeStrategy(ABC):
             ctx: 结算上下文（属性式访问）
             evidence: 政策证据列表
             policy_status: 政策匹配状态
-            indicator_context: 可选的 IndicatorContext，提供语义层增强
 
         Returns:
             StrategyResult
         """
-        from .semantic_utils import ContextProxy
-
-        # 存储 IndicatorContext 供 _get / _get_normalized_dimension 使用
-        self._indicator_context = indicator_context
-
-        # 当 IndicatorContext 存在时，包装为 ContextProxy 提供统一访问
-        effective_ctx: Any = ctx
-        if indicator_context is not None:
-            effective_ctx = ContextProxy(ctx, indicator_context)
-
-        # 动态策略查询优先（语义层驱动），回退到 YAML
-        dynamic_queries = self._build_dynamic_policy_queries()
-        policy_queries = dynamic_queries if dynamic_queries is not None else self.build_policy_queries()
+        # YAML 结构化查询（语义层动态查询路径已退役，统一走 YAML）
+        policy_queries = self.build_policy_queries()
 
         return StrategyResult(
             definition=self.build_definition(),
-            patient_answer=self.build_patient_answer(effective_ctx, evidence, policy_status),
-            office_answer=self.build_office_answer(effective_ctx, evidence, policy_status),
-            calculation_trace=self.build_calculation_trace(effective_ctx, evidence),
+            patient_answer=self.build_patient_answer(ctx, evidence, policy_status),
+            office_answer=self.build_office_answer(ctx, evidence, policy_status),
+            calculation_trace=self.build_calculation_trace(ctx, evidence),
             policy_queries=policy_queries,
-            warnings=self.build_warnings(effective_ctx, policy_status),
-            completeness=self.build_completeness(effective_ctx, evidence),
+            warnings=self.build_warnings(ctx, policy_status),
+            completeness=self.build_completeness(ctx, evidence),
             target_fee_item=self.fee_item,
             target_field=self.fee_field,
         )
