@@ -169,3 +169,18 @@ def rule_to_entity(
             entity[detail] = trace.model_dump()
 
     return entity
+
+
+def upsert_rules(col: Collection, entities: list[dict[str, Any]]) -> int:
+    """批量写入规则实体（rule_to_entity 产出）到 policy_rules_v2。
+
+    Args:
+        col: policy_rules_v2 Collection（已创建）。
+        entities: 每条为 rule_to_entity 返回的 dict。
+    Returns: 写入条数。
+    """
+    if not entities:
+        return 0
+    col.insert(entities)
+    col.flush()
+    return len(entities)
