@@ -7,6 +7,7 @@ import pytest
 from unittest.mock import MagicMock
 from src.semantic_layer.models import (
     BusinessFactsRequest, ObjectMetricRequest, BusinessFactsResponse,
+    BusinessObject, Metric,
 )
 from src.semantic_layer.registry import InMemoryRegistryStore, SemanticRegistry
 from src.semantic_layer.seed import seed_semantic_layer
@@ -87,6 +88,39 @@ class TestBuilderBasic:
         result = builder.build(request)
         assert result.facts["zydyxx"]["bcqfje"] == 1300
 
+    def test_metric_without_source_adapter_port_warns_not_routes_to_default(self):
+        """空 source_adapter_port 不应静默路由到 'default'，而应精确告警并跳过。
+
+        回归 P0-3：原先 `port = metric.source_adapter_port or "default"` 会让
+        未配置端口的指标悄悄走到名为 'default' 的适配器，可能拿到错来源的数据。
+        修正后应 fail-fast：精确指出哪个 metric 缺端口配置。
+        """
+        store = InMemoryRegistryStore()
+        store.save_object(BusinessObject(
+            object_code="testobj", domain_code="test", name="测试对象",
+            source_adapter_port=None,
+        ))
+        store.save_metric(Metric(
+            metric_code="testobj.nomapping", object_code="testobj", name="无端口指标",
+            source_adapter_port=None, default_value=None, importance="optional",
+        ))
+        reg = SemanticRegistry(store)
+        reg.publish_object("testobj")
+
+        builder = BusinessFactsBuilder(reg, {})  # 不注册任何 adapter
+        result = builder.build(BusinessFactsRequest(
+            objects=[ObjectMetricRequest(
+                object_code="testobj", metric_codes=["nomapping"])],
+            context={"patient_id": "P001"},
+        ))
+
+        # 不应出现误导性的 'default' 适配器告警
+        assert not any("default" in w for w in result.meta.warnings), result.meta.warnings
+        # 应精确指出该 metric 未配置端口
+        assert any("nomapping" in w for w in result.meta.warnings), result.meta.warnings
+        # facts 中不应出现该指标
+        assert "nomapping" not in result.facts.get("testobj", {})
+
     def test_adapters_called_with_context(self, registry, mock_insurance_adapter):
         builders = {"InsuranceInterfacePort": mock_insurance_adapter}
         builder = BusinessFactsBuilder(registry, builders)
@@ -100,3 +134,23 @@ class TestBuilderBasic:
         call_args = mock_insurance_adapter.query_transaction.call_args
         assert call_args.kwargs.get("patient_id") == "P001"
         assert call_args.kwargs.get("encounter_id") == "E001"
+
+
+def test_publish_object_promotes_metric_status():
+    """publish_object 发布对象时，metric.status 应同步 draft→published（契约读取的前置）。"""
+    store = InMemoryRegistryStore()
+    reg = SemanticRegistry(store)
+    store.save_object(BusinessObject(object_code="t_pub", domain_code="d", name="测试"))
+    store.save_metric(Metric(metric_code="t_pub.f1", object_code="t_pub", name="字段1"))
+    assert store.list_metrics("t_pub")[0].status == "draft"  # 发布前 draft
+    reg.publish_object("t_pub")
+    assert store.list_metrics("t_pub")[0].status == "published"  # 发布后 published
+
+
+def test_publish_object_rejects_empty_object():
+    """空对象（无 metric）不能发布（§5：空指标不能发布）。"""
+    store = InMemoryRegistryStore()
+    reg = SemanticRegistry(store)
+    store.save_object(BusinessObject(object_code="t_empty", domain_code="d", name="空对象"))
+    with pytest.raises(ValueError, match="无.*指标|metric|空"):
+        reg.publish_object("t_empty")
