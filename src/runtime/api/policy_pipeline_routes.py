@@ -375,6 +375,32 @@ def publish_extraction_v2(extraction_id: str):
 
 # ═══════════════ Rules — lineage ═══════════════
 
+@router.post("/rules/search")
+async def search_rules(request: Request):
+    """政策规则混合检索（P6，基于 policy_rules_v2）。
+
+    body: {mode: "precise"|"semantic"|"hybrid", query?, filters?, top_k?}
+    - precise: filters 必填（核心维度 rule_type/insu_type/med_type/...）
+    - semantic: query 必填（自然语言）
+    - hybrid: query + filters 都填
+    """
+    from src.knowledge_extension.rule_explanation.rules_search_service import RulesSearchService
+    body = await request.json()
+    mode = body.get("mode", "precise")
+    top_k = int(body.get("top_k", 20))
+    svc = RulesSearchService()
+    if mode == "precise":
+        groups = svc.search_precise(body.get("filters", {}), top_k=top_k)
+    elif mode == "semantic":
+        groups = svc.search_semantic(body["query"], top_k=top_k)
+    elif mode == "hybrid":
+        groups = svc.search_hybrid(body["query"], body.get("filters", {}), top_k=top_k)
+    else:
+        raise HTTPException(status_code=400, detail=error_detail(
+            "INVALID_MODE", f"mode 必须是 precise/semantic/hybrid，实际={mode}", {}))
+    return {"mode": mode, "groups": groups, "total_groups": len(groups)}
+
+
 @router.get("/rules/{rule_id}/lineage")
 def get_rule_lineage(rule_id: str):
     return {"rule_id": rule_id, "lineages": _get_store().get_lineages_by_rule(rule_id)}
