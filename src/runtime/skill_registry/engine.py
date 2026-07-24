@@ -214,7 +214,7 @@ class SkillExecutionEngine:
             from src.runtime.policy_qa.policy_rules_search import PolicyRulesSearchEngine
             from src.config.production import MILVUS_HOST, MILVUS_PORT
             try:
-                engine = PolicyRulesSearchEngine(host=MILVUS_HOST, port=MILVUS_PORT, embedding_kind="hash")
+                engine = PolicyRulesSearchEngine(host=MILVUS_HOST, port=MILVUS_PORT)
                 # 从 accumulated 中获取 SQL 结果用于过滤（已标准化）
                 sql_output = accumulated.get("query_sql_data", {}).get("output", {})
                 patient = sql_output.get("patient", {})
