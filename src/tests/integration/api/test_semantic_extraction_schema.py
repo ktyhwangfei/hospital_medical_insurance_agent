@@ -27,30 +27,46 @@ def test_unknown_object_returns_404(client):
     assert r.status_code == 404
 
 
-def test_zcgz_contract_structure_when_all_draft(client):
-    """种子 zcgz 19 指标均为 draft，契约 fields 应为空（发布流程在 P4 质量门禁）。"""
+def test_zcgz_contract_returns_all_seed_fields_after_publish(client):
+    """P8.3：种子后 zcgz 自动发布，契约应返回全部 19 字段 + 5 政策字典。
+
+    [来源: docs/steering/政策知识管线设计计划.md Phase 8.3 — zcgz 指标 published + value_domain]
+    收口标准：契约含全部字段。
+    """
     r = client.get(f"{BASE}/objects/zcgz/extraction-schema")
     assert r.status_code == 200
     data = r.json()
-    assert data["fields"] == []
+    # 19 个 zcgz 字段全部进契约
+    codes = {f["code"] for f in data["fields"]}
+    assert len(data["fields"]) == 19, f"期望 19 字段，实际 {len(data['fields'])}"
+    # 核心检索维度带索引 + 值域
+    insu = next(f for f in data["fields"] if f["code"] == "insu_type")
+    assert insu["indexed"] is True
+    assert insu["value_domain"] == "insu_type"
+    # 5 政策字典已解析
+    assert set(data["dictionaries"]) == {
+        "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+    }
+    assert "城镇职工基本医疗保险" in data["dictionaries"]["insu_type"]
+    # 无实体/关系
     assert data["entities"] == []
     assert data["relations"] == []
-    assert "schema_version" in data
-    assert "dictionaries" in data
 
 
 def test_zcgz_contract_returns_published_field(client):
-    """手动把一条 zcgz 指标置为 published，验证契约返回它。"""
+    """手动覆盖一条 zcgz 指标的 extraction_hint，验证契约透传最新值。
+
+    P8.3 后 zcgz 种子即 published，此测试改为验证契约透传运行时覆写。
+    """
     reg = reg_mod.get_semantic_registry()
     store = reg._store
     m = store.get_metric("zcgz.insu_type")
     assert m is not None
-    m.status = "published"
-    m.indexed = True
+    assert m.status == "published"  # P8.3 种子已发布
     m.extraction_hint = "城镇职工/城乡居民"
     store.save_metric(m)
 
     r = client.get(f"{BASE}/objects/zcgz/extraction-schema")
     assert r.status_code == 200
-    codes = [f["code"] for f in r.json()["fields"]]
-    assert "insu_type" in codes
+    insu = next(f for f in r.json()["fields"] if f["code"] == "insu_type")
+    assert insu["extraction_hint"] == "城镇职工/城乡居民"

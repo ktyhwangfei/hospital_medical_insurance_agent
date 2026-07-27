@@ -5,6 +5,9 @@
 from src.semantic_layer.extraction_contract import build_extraction_schema
 from src.semantic_layer.models import BusinessDomain, BusinessObject, Metric, ValueDomain
 from src.semantic_layer.registry import InMemoryRegistryStore, SemanticRegistry
+from src.semantic_layer.seed import (
+    ensure_policy_dictionaries, publish_seed_policy_object, seed_semantic_layer,
+)
 
 
 def _make_registry():
@@ -144,3 +147,61 @@ def test_build_prompt_from_schema_is_field_agnostic():
     assert "高" in prompt_b, "value_domain 字典值应进提示词"
     # 关键：构建器代码没变，schema 不同 → 提示词不同（字段无关）
     assert prompt_a != prompt_b
+
+
+# ── P8.3：种子发布后契约含全部字段 + 5 政策字典（收口标准）─────────
+
+
+def test_seed_publish_unlocks_full_zcgz_contract():
+    """P8.3 收口：seed + publish_seed_policy_object 后，契约含全部 19 字段 + 5 字典。
+
+    [来源: docs/steering/政策知识管线开发计划.md Phase 8.3 — zcgz 指标 published + value_domain]
+    """
+    store = InMemoryRegistryStore()
+    reg = SemanticRegistry(store)
+    seed_semantic_layer(store)
+    # 发布前契约空（draft 不进）
+    assert build_extraction_schema(reg, "zcgz").fields == []
+    publish_seed_policy_object(reg)
+    schema = build_extraction_schema(reg, "zcgz")
+    # 19 字段全部进契约
+    assert len(schema.fields) == 19, f"期望 19 字段，实际 {len(schema.fields)}"
+    codes = {f.code for f in schema.fields}
+    assert codes == {
+        "rule_id", "fact_id", "policy_id", "clause_id", "source_text",
+        "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+        "admission_order", "payment_ratio", "deductible_amount", "cap_amount",
+        "amount_band", "time_period", "priority", "rule_type", "rule_value",
+    }
+    # 核心检索维度 indexed + value_domain
+    insu = next(f for f in schema.fields if f.code == "insu_type")
+    assert insu.indexed is True and insu.value_domain == "insu_type"
+    # 5 政策字典全部解析
+    assert set(schema.dictionaries) == {
+        "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+    }
+    assert "三级" in schema.dictionaries["hosp_lv"]
+    assert "城镇职工基本医疗保险" in schema.dictionaries["insu_type"]
+
+
+def test_publish_seed_policy_object_idempotent():
+    """publish_seed_policy_object 幂等：重复调用不产生新版本。"""
+    store = InMemoryRegistryStore()
+    reg = SemanticRegistry(store)
+    seed_semantic_layer(store)
+    publish_seed_policy_object(reg)
+    v1 = reg.list_object_versions("zcgz")
+    assert len(v1) == 1
+    publish_seed_policy_object(reg)  # 再调用不应新增版本
+    assert reg.list_object_versions("zcgz") == v1
+
+
+def test_ensure_policy_dictionaries_seeds_five_domains():
+    """ensure_policy_dictionaries 灌入 5 个政策值域（standard_values）。"""
+    store = InMemoryRegistryStore()
+    ensure_policy_dictionaries(store)
+    for code in ("insu_type", "med_type", "hosp_lv", "psn_type", "setl_type"):
+        vd = store.get_value_domain(code)
+        assert vd is not None, f"缺少值域 {code}"
+        assert vd.standard_values, f"{code} standard_values 为空"
+    assert "三级" in store.get_value_domain("hosp_lv").standard_values

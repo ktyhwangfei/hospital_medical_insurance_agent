@@ -300,10 +300,15 @@ def get_semantic_registry() -> SemanticRegistry:
     if _semantic_registry_instance is not None:
         return _semantic_registry_instance
     if os.environ.get("USE_MEMORY_STORAGE") == "1":
-        from src.semantic_layer.seed import seed_settlement_domain
+        from src.semantic_layer.seed import (
+            seed_settlement_domain, publish_seed_policy_object,
+        )
         store = InMemoryRegistryStore()
         seed_settlement_domain(store)
-        _semantic_registry_instance = SemanticRegistry(store)
+        reg = SemanticRegistry(store)
+        # P8.3：种子后发布 zcgz，解锁提取契约（build_extraction_schema 只收 published）
+        publish_seed_policy_object(reg)
+        _semantic_registry_instance = reg
     else:
         from src.data_platform.storage.postgresql.semantic_registry_store import (
             PostgresRegistryStore,
