@@ -240,7 +240,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 
 系统现在使用 `src/config/production.py` 作为统一配置文件，包含：
 
-- **PostgreSQL**: `postgres:123456@127.0.0.1:5432/hospital_mcp`
+- **PostgreSQL**: `postgres:postgres@127.0.0.1:5432/hospital_mcp`（注：密码为 `postgres`，非历史文档误记的 `123456`；可通过 `POSTGRES_PASSWORD` 环境变量覆盖，见 `src/config/production.py`）
 - **Redis**: `127.0.0.1:6379`
 - **Milvus**: `127.0.0.1:19530`（注：历史文档误记为 19121，实际端口为 19530，见 `src/config/production.py` 默认值）
 - **Skills目录**: 项目根目录下的 `skills/` 目录
