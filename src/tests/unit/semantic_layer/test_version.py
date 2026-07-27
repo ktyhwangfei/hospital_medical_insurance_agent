@@ -81,7 +81,7 @@ class TestVersionQuery:
         """快照指标保留 source_field（阶段3 运行时锁定要用）。"""
         v = registry.publish_object("zydyxx")
         bcqfje = next(m for m in v.metrics if m.metric_code == "zydyxx.bcqfje")
-        assert bcqfje.source_field == "yb_dyxxzy.bcqfje"
+        assert bcqfje.source_field == "bjybdb.yb_dyxxzy.bcqfje"
         assert bcqfje.importance == "core"
 
 
@@ -104,7 +104,7 @@ class TestRuntimeLocking:
         registry.publish_object("zydyxx")
         mapping = registry.get_metric_mapping("zydyxx", ["bcqfje"])
         assert mapping[0].metric_code == "zydyxx.bcqfje"
-        assert mapping[0].source_field == "yb_dyxxzy.bcqfje"
+        assert mapping[0].source_field == "bjybdb.yb_dyxxzy.bcqfje"
 
     def test_locking_ignores_live_metric_changes(self, registry):
         """发布后改 live metric 不影响锁定（快照冻结）。"""
@@ -113,7 +113,7 @@ class TestRuntimeLocking:
         m.source_field = "被篡改的字段"
         registry._store.save_metric(m)
         mapping = registry.get_metric_mapping("zydyxx", ["bcqfje"])
-        assert mapping[0].source_field == "yb_dyxxzy.bcqfje"
+        assert mapping[0].source_field == "bjybdb.yb_dyxxzy.bcqfje"
 
     def test_republish_switches_to_new_version(self, registry):
         """重新发布后，锁定切到新版本快照（含 live 改动）。"""

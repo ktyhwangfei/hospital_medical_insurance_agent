@@ -1128,9 +1128,12 @@ def _calc_quality_from_discovery(source_field: str, source_object: str | None = 
         field_name = source_field
         table_name = source_object or ""
         if "." in source_field:
-            parts = source_field.split(".", 1)
-            table_name = parts[0]
-            field_name = parts[1]
+            # 三段式 ds.table.column：取末两段为 table/field（兼容两段式）
+            parts = source_field.rsplit(".", 2)
+            if len(parts) == 3:
+                table_name, field_name = parts[1], parts[2]
+            else:
+                table_name, field_name = parts[0], parts[1]
         for f in latest.get("fields", []):
             fn = f.get("field_name", "")
             tn = f.get("table_name", "")
@@ -1181,7 +1184,7 @@ def _refresh_quality_scores_from_scan(result_fields: list[dict]) -> int:
         if "." in sf:
             field_meta = by_full.get(sf)
             if field_meta is None:
-                field_meta = by_name.get(sf.split(".", 1)[1])
+                field_meta = by_name.get(sf.rsplit(".", 1)[-1])
         else:
             field_meta = by_name.get(sf)
             if field_meta is None and m.source_object:
