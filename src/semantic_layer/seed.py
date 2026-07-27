@@ -62,12 +62,69 @@ def ensure_yb_dictionary_mappings(store: RegistryStore) -> None:
                 source_value=source_value,
                 standard_value=standard_value,
             ))
+    ensure_policy_dictionaries(store)
+
+
+# ── 政策规则字典（源自 raw/数据模型1.xlsx 字典 sheet，一次性转录）──────────
+# xlsx 退为一次性种子：标准值转录进 seed，运行时不再读 xlsx。
+# zcgz 维度指标 value_domain 引用此处 5 个域。
+_POLICY_DICTIONARY_VALUES: dict[str, tuple[str, list[str]]] = {
+    # domain_code: (name, standard_values)
+    "insu_type": ("险种类别", [
+        "城镇职工基本医疗保险", "城乡居民基本医疗保险", "生育保险",
+        "城乡居民大病保险", "企业补充医疗保险",
+    ]),
+    "med_type": ("医疗类别", [
+        "门诊-普通门急诊", "门诊-普通肾透析", "门诊-一般门特", "门诊-门诊贵重药品",
+        "门诊-急诊留观", "门诊-家庭病床", "住院-普通住院", "住院-门特住院",
+        "住院-精神病住院", "住院-生育", "住院-计划生育",
+    ]),
+    "hosp_lv": ("医疗机构等级", ["三级", "二级", "一级", "无等级"]),
+    "psn_type": ("人群标签", [
+        "在职职工", "灵活就业人员", "残疾人员", "优抚对象", "特困供养人员",
+        "低收入救助人员", "劳动年龄内居民", "城乡老年人", "退休人员", "学生儿童",
+    ]),
+    "setl_type": ("结算方式", [
+        "按项目付费", "单病种付费", "DRG付费", "DIP付费", "精神病床日定额",
+        "精神病项目+定额", "精神病外院费用按普通住院", "精神病试出院",
+        "器官移植抗排异定额", "生育定额", "计划生育定额", "产检定额",
+    ]),
+}
+
+
+def ensure_policy_dictionaries(store: RegistryStore) -> None:
+    """幂等 ensure：把政策规则字典（5 域）灌入语义层值域（standard_values）。
+
+    [来源: raw/数据模型1.xlsx 字典 sheet 一次性转录；zcgz 维度指标 value_domain 引用]
+    """
+    for domain_code, (name, values) in _POLICY_DICTIONARY_VALUES.items():
+        store.save_value_domain(ValueDomain(
+            domain_code=domain_code, name=name,
+            description=f"政策规则字典（源自数据模型1.xlsx，P8.3 种子）",
+            standard_values=list(values),
+        ))
+
+
+def publish_seed_policy_object(registry) -> None:
+    """发布 zcgz 种子对象（幂等），解锁提取契约（build_extraction_schema 只收 published）。
+
+    [来源: docs/steering/政策知识管线开发计划.md Phase 8.3 — zcgz 指标 published]
+    新鲜环境种子后调用一次；已有版本快照则跳过，避免重复发布产生新版本号。
+    """
+    obj = registry.get_object("zcgz")
+    if obj is None:
+        return
+    if registry.list_object_versions("zcgz"):
+        return  # 已发布过，幂等跳过
+    registry.publish_object("zcgz", changelog="P8.3 种子发布政策规则对象，解锁提取契约")
 
 
 def seed_semantic_layer(store: RegistryStore) -> None:
     """灌入真实语义层：3 域 / 7 对象 / 22 指标（对齐生产 PostgreSQL）。
 
-    所有对象/指标初始为 status=draft，需经发布流程（阶段2）转为 published。
+    所有对象/指标初始为 status=draft。zcgz 的发布在种子完成后由
+    ``publish_seed_policy_object``（经 ``publish_object`` 质量门禁）单独执行，
+    以解锁提取契约——保持本函数纯净（多测试直接调用并断言 draft）。
     """
     _seed_domains(store)
     _seed_objects(store)

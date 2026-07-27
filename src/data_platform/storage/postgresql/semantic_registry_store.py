@@ -309,6 +309,10 @@ class PostgresRegistryStore:
         logger.info("PostgresRegistryStore: 首次运行，执行种子数据...")
         from src.semantic_layer.seed import seed_settlement_domain
         seed_settlement_domain(self)
+        # P8.3：种子后发布 zcgz，解锁提取契约（build_extraction_schema 只收 published）
+        from src.semantic_layer.registry import SemanticRegistry
+        from src.semantic_layer.seed import publish_seed_policy_object
+        publish_seed_policy_object(SemanticRegistry(self))
 
     def close(self) -> None:
         if self._client is not None:
