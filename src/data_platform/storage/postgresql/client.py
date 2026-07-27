@@ -13,8 +13,28 @@ class PostgreSQLClient:
     _CONNECT_TIMEOUT = int(os.environ.get("POSTGRES_CONNECT_TIMEOUT", "5"))
 
     def __init__(self, database_url: str | None = None):
-        self._database_url = database_url or os.environ.get("DATABASE_URL")
+        self._database_url = (
+            database_url
+            or os.environ.get("DATABASE_URL")
+            or self._build_url_from_postgres_env()
+        )
         self._conn = None
+
+    @staticmethod
+    def _build_url_from_postgres_env() -> str | None:
+        """DATABASE_URL 缺失时，从 POSTGRES_* 分项变量合成连接串。
+
+        与 src/config/production.py 的合成逻辑保持一致，避免 PolicyMetaStore
+        等无参构造场景因 .env 未显式写 DATABASE_URL 而连不上。
+        """
+        host = os.environ.get("POSTGRES_HOST")
+        if not host:
+            return None
+        user = os.environ.get("POSTGRES_USER", "postgres")
+        password = os.environ.get("POSTGRES_PASSWORD", "")
+        port = os.environ.get("POSTGRES_PORT", "5432")
+        db = os.environ.get("POSTGRES_DB", "hospital_mcp")
+        return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
     def _ensure_connected(self) -> None:
         if self._conn is not None:
