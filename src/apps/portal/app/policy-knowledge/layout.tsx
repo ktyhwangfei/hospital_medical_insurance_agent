@@ -1,7 +1,7 @@
 'use client'
 
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, FileText, GitBranch, Database, Search } from 'lucide-react'
+import { LayoutDashboard, FileText, Boxes, ListTree, Compass } from 'lucide-react'
 
 interface NavTab {
   label: string
@@ -9,12 +9,15 @@ interface NavTab {
   icon: React.ComponentType<{ className?: string }>
 }
 
+// P9 重构：4 tab（概览/政策原文/规则提取/已入库规则+知识检索）
+// → 5 tab（概览/政策/事实/结构化/发现）。
+// [来源: docs/steering/政策知识管线开发计划.md Phase 9]
 const NAV_TABS: NavTab[] = [
-  { label: '管线概览', href: '/policy-knowledge', icon: LayoutDashboard },
-  { label: '政策原文', href: '/policy-knowledge/documents', icon: FileText },
-  { label: '规则提取', href: '/policy-knowledge/extractions', icon: GitBranch },
-  { label: '已入库规则', href: '/policy-knowledge/rules', icon: Database },
-  { label: '知识检索', href: '/policy-knowledge/search', icon: Search },
+  { label: '概览', href: '/policy-knowledge', icon: LayoutDashboard },
+  { label: '政策', href: '/policy-knowledge/documents', icon: FileText },
+  { label: '事实', href: '/policy-knowledge/facts', icon: Boxes },
+  { label: '结构化', href: '/policy-knowledge/structured', icon: ListTree },
+  { label: '发现', href: '/policy-knowledge/discovery', icon: Compass },
 ]
 
 function getActiveTab(pathname: string): string {
