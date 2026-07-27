@@ -131,6 +131,9 @@ class BusinessFactsBuilder:
             return None
         if "." in field_name:
             parts = field_name.split(".")
+            # 三段式 ds.table.column：跳过首段 ds（adapter 业务对象 data 无 ds 层）
+            if len(parts) >= 3:
+                parts = parts[1:]
             current = data
             for part in parts:
                 if isinstance(current, dict) and part in current:
