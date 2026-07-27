@@ -5,7 +5,7 @@
 // 非富版两步机械（构成化细节见结构化 tab）。后端：policy-pipeline/extractions + publish-v2。
 // [来源: docs/steering/政策知识管线开发计划.md Phase 9.4]
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -85,6 +85,15 @@ function extractRules(f?: ExtractedFields): PolicyRule[] {
 }
 
 export default function FactsPage() {
+  // useSearchParams 需 Suspense 边界（Next 16 静态生成要求）。
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center py-16"><Loader2 className="size-5 animate-spin text-slate-400" /></div>}>
+      <FactsContent />
+    </Suspense>
+  )
+}
+
+function FactsContent() {
   const params = useSearchParams()
   const [extractions, setExtractions] = useState<Extraction[]>([])
   const [loading, setLoading] = useState(false)
