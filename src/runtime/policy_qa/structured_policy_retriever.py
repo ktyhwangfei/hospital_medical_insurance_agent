@@ -23,10 +23,9 @@ from typing import Any
 from pymilvus import MilvusClient
 
 from src.runtime.policy_qa.policy_rules_search import (
-    resolve_policy_rules_collection,
-    output_fields_for as _output_fields_for,
-    normalize_rule_entity,
-    _is_v2_collection,
+    COLLECTION_NAME,
+    OUTPUT_FIELDS,
+    unpack_detail,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,15 +101,8 @@ class StructuredPolicyRuleRetriever:
     """
     结构化政策规则检索器。
 
-    使用 Milvus scalar query（非向量 search）精准查询 policy_rules。
+    使用 Milvus scalar query（非向量 search）精准查询 policy_rules_v2。
     """
-
-    MILVUS_OUTPUT_FIELDS = [
-        "rule_id", "fact_id", "policy_id", "clause_id", "source_text",
-        "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
-        "payment_ratio", "deductible_amount", "cap_amount",
-        "rule_type", "rule_value", "amount_band", "embedding_text",
-    ]
 
     def __init__(
         self,
@@ -120,8 +112,7 @@ class StructuredPolicyRuleRetriever:
     ):
         uri = f"http://{host}:{port}"
         self.client = MilvusClient(uri=uri)
-        # P0.3 灰度开关：默认旧名，经 POLICY_RULES_COLLECTION 可切新 collection
-        self.collection_name = resolve_policy_rules_collection(collection_name)
+        self.collection_name = collection_name or COLLECTION_NAME
         logger.info(f"StructuredPolicyRuleRetriever initialized: {uri}")
 
     # ── 查询规划 ─────────────────────────────────────────────────
@@ -225,7 +216,7 @@ class StructuredPolicyRuleRetriever:
         print(f"[MILVUS-QUERY] Expr: {expr}", flush=True)
         print(f"[MILVUS-QUERY] Text must include ANY: {query.text_must_include_any}", flush=True)
         print(f"[MILVUS-QUERY] Text must include ALL: {query.text_must_include_all}", flush=True)
-        print(f"[MILVUS-QUERY] Output fields: {self.MILVUS_OUTPUT_FIELDS}", flush=True)
+        print(f"[MILVUS-QUERY] Output fields: {OUTPUT_FIELDS}", flush=True)
         print(f"[MILVUS-QUERY] Top K: {top_k}", flush=True)
 
         try:
@@ -233,7 +224,7 @@ class StructuredPolicyRuleRetriever:
             raw_results = self.client.query(
                 collection_name=self.collection_name,
                 filter=expr,
-                output_fields=_output_fields_for(self.collection_name),
+                output_fields=OUTPUT_FIELDS,
                 limit=top_k,
             )
             print(f"[MILVUS-QUERY] Scalar query returned {len(raw_results)} raw records", flush=True)
@@ -252,17 +243,14 @@ class StructuredPolicyRuleRetriever:
                       f"psn={r.get('psn_type','')} type={r.get('rule_type','')}", flush=True)
                 print(f"[MILVUS-QUERY]        src: {src}", flush=True)
 
-        # v2 detail 字段归一化（FieldTrace dict → 裸值）
-        is_v2 = _is_v2_collection(self.collection_name)
+        # detail 字段归一化（FieldTrace dict → 裸值）
         for r in raw_results:
-            normalize_rule_entity(r, is_v2)
+            unpack_detail(r)
 
         # 后处理：文本关键词过滤
         skipped_keyword = 0
         for r in raw_results:
-            source_text = str(r.get("source_text", "") or "")
-            embedding_text = str(r.get("embedding_text", "") or "")
-            combined_text = source_text + " " + embedding_text
+            combined_text = str(r.get("source_text", "") or "")
 
             # 检查 text_must_include_any
             if query.text_must_include_any:
@@ -293,12 +281,12 @@ class StructuredPolicyRuleRetriever:
                     fallback = self.client.query(
                         collection_name=self.collection_name,
                         filter=like_expr,
-                        output_fields=_output_fields_for(self.collection_name),
+                        output_fields=OUTPUT_FIELDS,
                         limit=top_k,
                     )
                     print(f"[MILVUS-QUERY]   LIKE fallback returned {len(fallback)} records", flush=True)
                     for r in fallback:
-                        normalize_rule_entity(r, is_v2)
+                        unpack_detail(r)
                         r["score"] = 1.0
                         r["_query_name"] = query.query_name
                         if r not in results:

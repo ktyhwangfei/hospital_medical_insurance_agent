@@ -32,13 +32,19 @@ def _get_collection():
         raise HTTPException(status_code=503, detail=error_detail("MILVUS_UNAVAILABLE", "pymilvus 未安装", {}))
     try:
         connections.connect(host=MILVUS_HOST, port=str(MILVUS_PORT), timeout=5)
-        return Collection("policy_rules")
+        return Collection("policy_rules_v2")
     except Exception as e:
         raise HTTPException(status_code=503, detail=error_detail("MILVUS_UNAVAILABLE", f"Milvus 连接失败: {e}", {}))
 
 
 def _row_to_dict(row: dict) -> dict:
-    """将 Milvus 查询结果转为纯字符串 dict。"""
+    """将 Milvus 查询结果转为纯字符串 dict。
+
+    policy_rules_v2 的 detail 字段（payment_ratio 等）是 FieldTrace dict，
+    先解包为裸 value，再统一转字符串。
+    """
+    from src.runtime.policy_qa.policy_rules_search import unpack_detail
+    unpack_detail(row)
     return {k: str(v) if v is not None else "" for k, v in row.items()}
 
 
@@ -188,7 +194,7 @@ def get_stats():
                 distributions[field] = {}
 
     return {
-        "collection": "policy_rules",
+        "collection": "policy_rules_v2",
         "available": num > 0,
         "total": num,
         "distributions": distributions,
