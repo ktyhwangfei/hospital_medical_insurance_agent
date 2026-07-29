@@ -32,6 +32,54 @@ def resolve_policy_rules_collection(explicit: str | None = None) -> str:
     )
 
 
+# P10.1a schema 适配：新旧 collection 字段差异（向量名/详情值结构/政策标识）
+LEGACY_OUTPUT_FIELDS = [
+    "rule_id", "fact_id", "policy_id", "clause_id", "source_text",
+    "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+    "payment_ratio", "deductible_amount", "cap_amount",
+    "rule_type", "rule_value", "amount_band",
+]
+V2_OUTPUT_FIELDS = [
+    "rule_id", "fact_id", "doc_id", "source_text",
+    "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+    "payment_ratio", "deductible_amount", "cap_amount",
+    "rule_type", "rule_value", "amount_band",
+]
+# v2 detail 字段落 dynamic field，值是 FieldTrace dict（需解包为裸值）
+V2_DETAIL_FIELDS = (
+    "payment_ratio", "deductible_amount", "cap_amount", "amount_band",
+    "time_period", "admission_order", "priority", "rule_value", "source_text",
+)
+
+
+def _is_v2_collection(collection_name: str) -> bool:
+    return "_v2" in collection_name
+
+
+def resolve_anns_field(collection_name: str) -> str:
+    """新旧 collection 向量字段名不同：旧 embedding，v2 vector。"""
+    return "vector" if _is_v2_collection(collection_name) else "embedding"
+
+
+def output_fields_for(collection_name: str) -> list[str]:
+    """新旧 collection 输出字段不同：v2 无 policy_id/clause_id，有 doc_id。"""
+    return V2_OUTPUT_FIELDS if _is_v2_collection(collection_name) else LEGACY_OUTPUT_FIELDS
+
+
+def normalize_rule_entity(entity: dict[str, Any], is_v2: bool) -> dict[str, Any]:
+    """归一化读出的 rule：v2 detail 字段是 FieldTrace dict，解包为裸值（下游无感）。"""
+    if not is_v2:
+        return entity
+    for f in V2_DETAIL_FIELDS:
+        v = entity.get(f)
+        if isinstance(v, dict) and "value" in v:
+            entity[f] = v["value"]
+    # v2 用 doc_id 标识文档，复制到 policy_id 兼容下游
+    if "policy_id" not in entity:
+        entity["policy_id"] = entity.get("doc_id", "")
+    return entity
+
+
 class PolicyRulesSearchEngine:
     """
     policy_rules 集合搜索引擎
@@ -93,19 +141,14 @@ class PolicyRulesSearchEngine:
                 "params": {"ef": 64},
             }
             
-            # 输出字段
-            output_fields = [
-                "rule_id", "fact_id", "policy_id", "clause_id", "source_text",
-                "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
-                "payment_ratio", "deductible_amount", "cap_amount",
-                "rule_type", "rule_value", "amount_band",
-            ]
+            # 输出字段（新旧 schema 适配，P10.1a）
+            output_fields = output_fields_for(self.collection_name)
             
             # 执行搜索（MilvusClient API）
             results = self.client.search(
                 collection_name=self.collection_name,
                 data=[vector],
-                anns_field="embedding",
+                anns_field=resolve_anns_field(self.collection_name),
                 search_params=search_params,
                 limit=top_k,
                 filter=expr,
@@ -123,6 +166,7 @@ class PolicyRulesSearchEngine:
                             entity[field] = hit["entity"].get(field)
                         except Exception:
                             entity[field] = None
+                    entity = normalize_rule_entity(entity, _is_v2_collection(self.collection_name))
                     
                     entity["score"] = float(hit["distance"]) if hit.get("distance") is not None else 0.0
                     rules.append(entity)
@@ -148,13 +192,8 @@ class PolicyRulesSearchEngine:
         纯标量过滤不依赖 embedding 质量，直接按字段值匹配。
         如果标量过滤 0 结果，回退到向量搜索 + LIKE 宽松匹配。
         """
-        # 输出字段
-        output_fields = [
-            "rule_id", "fact_id", "policy_id", "clause_id", "source_text",
-            "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
-            "payment_ratio", "deductible_amount", "cap_amount",
-            "rule_type", "rule_value", "amount_band",
-        ]
+        # 输出字段（新旧 schema 适配，P10.1a）
+        output_fields = output_fields_for(self.collection_name)
 
         # 构建标量过滤表达式
         parts = []
@@ -179,6 +218,7 @@ class PolicyRulesSearchEngine:
                 )
                 if results:
                     for r in results:
+                        normalize_rule_entity(r, _is_v2_collection(self.collection_name))
                         r["score"] = 1.0  # 标量匹配默认满分
                     return results
             except Exception:
