@@ -129,6 +129,46 @@ DETAIL_FIELDS = (
 )
 
 
+# ── 维度值标准化（政策原文值 → 业务标准值，对齐 semantic_layer/seed.py 字典）──
+# hosp_lv: seed.py 标准 ["三级","二级","一级","无等级"]
+_HOSP_LV_NORMALIZE = {
+    "社区": "一级",      # 社区卫生服务中心 ≈ 一级
+    "未定级": "无等级",
+}
+# med_type: seed.py 标准 ["住院-普通住院","住院-门特住院","门诊-普通门急诊","门诊-一般门特",...]
+# 政策原文多用大类（"住院"），业务结算是细类（"住院-普通住院"）。
+_MED_TYPE_NORMALIZE = {
+    "住院": "住院-普通住院",
+    "门诊": "门诊-普通门急诊",
+    "门特": "门诊-一般门特",
+    "急诊": "门诊-急诊留观",
+    "购药": "门诊-普通门急诊",
+}
+
+
+def normalize_hosp_lv(value: str) -> str:
+    """医院等级标准化到 seed.py 业务字典值。"""
+    return _HOSP_LV_NORMALIZE.get(value, value)
+
+
+def normalize_med_type(value: str) -> str:
+    """医疗类别标准化：政策大类 → seed.py 业务细类。
+
+    复合值（含分隔符，如"住院,门特"）取第一个可映射的大类。
+    """
+    if not value:
+        return value
+    if value in _MED_TYPE_NORMALIZE:
+        return _MED_TYPE_NORMALIZE[value]
+    for sep in (",", "，", ";", "；"):
+        if sep in value:
+            for part in value.split(sep):
+                p = part.strip()
+                if p in _MED_TYPE_NORMALIZE:
+                    return _MED_TYPE_NORMALIZE[p]
+    return value
+
+
 def rule_to_entity(
     rule: dict[str, Any],
     vector: list[float],
@@ -152,10 +192,16 @@ def rule_to_entity(
     entity: dict[str, Any] = {"vector": vector, "schema_version": schema_version}
 
     # 核心维度（rule_id/fact_id/doc_id/rule_type/insu_type/med_type/hosp_lv/psn_type/setl_type）
+    # hosp_lv/med_type 标准化到业务字典值（对齐 semantic_layer/seed.py）
     for dim in CORE_DIM_FIELDS:
         if dim in ("vector", "schema_version"):
             continue
-        entity[dim] = str(rule.get(dim, ""))
+        val = str(rule.get(dim, ""))
+        if dim == "hosp_lv":
+            val = normalize_hosp_lv(val)
+        elif dim == "med_type":
+            val = normalize_med_type(val)
+        entity[dim] = val
 
     # 详情字段 → FieldTrace（裸值包成溯源对象）
     for detail in DETAIL_FIELDS:
