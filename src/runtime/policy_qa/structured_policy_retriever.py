@@ -22,7 +22,12 @@ from typing import Any
 
 from pymilvus import MilvusClient
 
-from src.runtime.policy_qa.policy_rules_search import resolve_policy_rules_collection
+from src.runtime.policy_qa.policy_rules_search import (
+    resolve_policy_rules_collection,
+    output_fields_for as _output_fields_for,
+    normalize_rule_entity,
+    _is_v2_collection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +233,7 @@ class StructuredPolicyRuleRetriever:
             raw_results = self.client.query(
                 collection_name=self.collection_name,
                 filter=expr,
-                output_fields=self.MILVUS_OUTPUT_FIELDS,
+                output_fields=_output_fields_for(self.collection_name),
                 limit=top_k,
             )
             print(f"[MILVUS-QUERY] Scalar query returned {len(raw_results)} raw records", flush=True)
@@ -246,6 +251,11 @@ class StructuredPolicyRuleRetriever:
                       f"med={r.get('med_type','')} hosp={r.get('hosp_lv','')} "
                       f"psn={r.get('psn_type','')} type={r.get('rule_type','')}", flush=True)
                 print(f"[MILVUS-QUERY]        src: {src}", flush=True)
+
+        # v2 detail 字段归一化（FieldTrace dict → 裸值）
+        is_v2 = _is_v2_collection(self.collection_name)
+        for r in raw_results:
+            normalize_rule_entity(r, is_v2)
 
         # 后处理：文本关键词过滤
         skipped_keyword = 0
@@ -283,11 +293,12 @@ class StructuredPolicyRuleRetriever:
                     fallback = self.client.query(
                         collection_name=self.collection_name,
                         filter=like_expr,
-                        output_fields=self.MILVUS_OUTPUT_FIELDS,
+                        output_fields=_output_fields_for(self.collection_name),
                         limit=top_k,
                     )
                     print(f"[MILVUS-QUERY]   LIKE fallback returned {len(fallback)} records", flush=True)
                     for r in fallback:
+                        normalize_rule_entity(r, is_v2)
                         r["score"] = 1.0
                         r["_query_name"] = query.query_name
                         if r not in results:

@@ -150,7 +150,7 @@
 | P8.3 | 种子政策值域 + zcgz 发布解锁契约 | ✅ commit `c89139d` |
 | P8.4 | 迁移后重提取拉高填充率 | ✅ 全量重提取 8 篇 + 干净重建（337 rules，insu 31%→98%、psn 20%→63%）；med/hosp/setl 低填充为内容特性（政策少涉及医院等级/结算方式） |
 | P9 | 前端 5 tab 重构（概览/政策/事实/结构化/发现） | ✅ commit `610272c`→`c87a99d` |
-| P10.1 | 政策问答读入口切到新 collection（P0 配置开关） | ⚪ 未开始（P0.3 开关已落地，前置就绪） |
+| P10.1 | 政策问答读入口切到新 collection（P0 配置开关） | ✅ schema 适配层完成（两读入口兼容 v2：向量字段/detail FieldTrace 解包/doc_id 兼容），灰度验证通过（4 问题新旧命中一致、v2 相关性正确） |
 | P10.2 | 下线旧 policy_rules / 旧 policy_facts / 旧 extractions API | ⚪ 未开始 |
 
 ### 2.3 里程碑达成情况
@@ -163,7 +163,7 @@
 | M4 检索能力完整 | 三模式 + 跨世界查找可用 | P6,P7 | ✅ |
 | M5 知识资产迁移完成 | 现状数据全部进入新模型 | P8 | ✅ 达成（全量重提取 + 干净重建，337 rules / 8 文档） |
 | M6 前端重构完成 | 5 tab 上线 | P9 | ✅ |
-| M7 生产切换 | 政策问答跑在新模型，旧路径下线 | P10 | ⚪ |
+| M7 生产切换 | 政策问答跑在新模型，旧路径下线 | P10 | 🟡 P10.1 切换能力就绪（schema 适配+灰度验证），待实际灰度打开 + P10.2 下线 |
 
 ---
 
@@ -214,6 +214,7 @@
 | 2026-07-28 | 政策知识开发推进：①P0.3 切换开关落地（`POLICY_RULES_COLLECTION`）②`gateway.generate` 支持 max_tokens 覆盖 ③`MODEL_TIMEOUT` 环境变量 ④长文档分片提取（`_split_text`），长文档 0→86 facts ⑤P8.4 价值验证（insu 31%→98%、psn 20%→84%） | §2 P0.3/P8.4；model_service/pipeline_orchestrator |
 | 2026-07-28 | **P8.4 publish 路径修复**：`build_ingest_records` 生成唯一 rule_id，修复 P3 `publish_to_new_collections` 空 PK 去重丢数据 bug（之前所有 publish 只存活 1 条）；修复后价值兑现到 policy_rules_v2（insu 31%→70%、psn 20%→58%） | §2 P8.4；policy_ingestion（影响 P3 数据完整性） |
 | 2026-07-28 | **P8.4 全量收尾完成（M5 达成）**：全量重提取 8 篇文档（schema-driven 分片）+ 干净重建 policy_facts/rules_v2（269 facts / 337 rules / 0 空 rule_id）；填充率 insu 31%→98%、psn 20%→63%；med/hosp/setl 低填充为政策内容特性 | §2 P8.4/M5 |
+| 2026-07-29 | **P10.1a 政策问答读入口 schema 适配层**：policy_rules_search + structured_policy_retriever 适配 v2 schema（向量字段 vector、detail FieldTrace dict 解包、doc_id→policy_id 兼容）；灰度验证通过（4 典型问题新旧命中一致、v2 相关性正确）；stash 验证无回归 | §2 P10.1/M7 |
 
 ---
 
