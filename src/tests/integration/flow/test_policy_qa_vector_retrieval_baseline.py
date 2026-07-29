@@ -3,11 +3,11 @@
 目的：固化 PolicyRulesSearchEngine 默认配置下语义向量检索的健康行为。
 
 背景（bug）：默认/多处实例化曾用 embedding_kind="hash"(384维)，
-而 policy_rules collection 的 embedding 是 bge 768 维语义向量 → 维度不匹配 →
+而 policy_rules_v2 的 vector 是 bge 768 维语义向量 → 维度不匹配 →
 异常被 search 的 except 吞掉 → 永远返回空。
 修复：默认改为 sentence_transformer（bge 768维，与灌数据同空间）。
 
-依赖：Milvus @ 127.0.0.1:19530（policy_rules 57条）+ sentence_transformers + 本地 bge 模型。
+依赖：Milvus @ 127.0.0.1:19530（policy_rules_v2）+ sentence_transformers + 本地 bge 模型。
 任一缺失则 skip，不阻塞 CI。
 """
 import pytest
@@ -22,8 +22,8 @@ def _policy_rules_ready() -> bool:
     try:
         from pymilvus import MilvusClient
         c = MilvusClient(uri=MILVUS_URI, timeout=2)
-        ok = "policy_rules" in c.list_collections() and int(
-            c.get_collection_stats("policy_rules").get("row_count", 0)) > 0
+        ok = "policy_rules_v2" in c.list_collections() and int(
+            c.get_collection_stats("policy_rules_v2").get("row_count", 0)) > 0
         c.close()
         return ok
     except Exception:
@@ -32,7 +32,7 @@ def _policy_rules_ready() -> bool:
 
 pytestmark = pytest.mark.skipif(
     not _policy_rules_ready(),
-    reason="Milvus policy_rules 不可用（需 127.0.0.1:19530 + 数据）",
+    reason="Milvus policy_rules_v2 不可用（需 127.0.0.1:19530 + 数据）",
 )
 
 

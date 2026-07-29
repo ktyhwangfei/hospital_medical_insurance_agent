@@ -356,18 +356,7 @@ def delete_extraction(extraction_id: str):
 
 @router.post("/extractions/{extraction_id}/publish")
 def publish_extraction(extraction_id: str):
-    result = _get_orchestrator().publish_extraction(extraction_id)
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=error_detail("PUBLISH_FAILED", result.get("error", ""), {"extraction_id": extraction_id}))
-    return result
-
-
-@router.post("/extractions/{extraction_id}/publish-v2")
-def publish_extraction_v2(extraction_id: str):
-    """发布到新 collection（policy_facts + policy_rules_v2，P3 新通路）。
-
-    与 /publish（写旧 policy_rules）并存；P10 切换后此端点成为主入口。
-    """
+    """发布到 policy_facts + policy_rules_v2（schema-driven 提取结果入库）。"""
     result = _get_orchestrator().publish_to_new_collections(extraction_id)
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=error_detail(
