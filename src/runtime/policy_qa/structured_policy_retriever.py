@@ -22,6 +22,8 @@ from typing import Any
 
 from pymilvus import MilvusClient
 
+from src.runtime.policy_qa.policy_rules_search import resolve_policy_rules_collection
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,10 +107,16 @@ class StructuredPolicyRuleRetriever:
         "rule_type", "rule_value", "amount_band", "embedding_text",
     ]
 
-    def __init__(self, host: str = "127.0.0.1", port: str = "19530"):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: str = "19530",
+        collection_name: str | None = None,
+    ):
         uri = f"http://{host}:{port}"
         self.client = MilvusClient(uri=uri)
-        self.collection_name = "policy_rules"
+        # P0.3 灰度开关：默认旧名，经 POLICY_RULES_COLLECTION 可切新 collection
+        self.collection_name = resolve_policy_rules_collection(collection_name)
         logger.info(f"StructuredPolicyRuleRetriever initialized: {uri}")
 
     # ── 查询规划 ─────────────────────────────────────────────────

@@ -7,11 +7,29 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from pymilvus import MilvusClient
 
 logger = logging.getLogger(__name__)
+
+# P0.3 灰度开关：政策问答读入口可切换 collection。
+# 默认旧名 policy_rules，保证灰度切换（P10.1）前生产行为零变化。
+# 设环境变量 POLICY_RULES_COLLECTION=policy_rules_v2 即切到新模型。
+DEFAULT_POLICY_RULES_COLLECTION = "policy_rules"
+
+
+def resolve_policy_rules_collection(explicit: str | None = None) -> str:
+    """解析政策规则 collection 名（P0.3 灰度开关）。
+
+    优先级：显式参数 > 环境变量 POLICY_RULES_COLLECTION > 默认旧名。
+    """
+    if explicit:
+        return explicit
+    return os.environ.get(
+        "POLICY_RULES_COLLECTION", DEFAULT_POLICY_RULES_COLLECTION
+    )
 
 
 class PolicyRulesSearchEngine:
@@ -26,10 +44,12 @@ class PolicyRulesSearchEngine:
         host: str = "127.0.0.1",
         port: str = "19530",
         embedding_kind: str = "sentence_transformer",
+        collection_name: str | None = None,
     ):
         uri = f"http://{host}:{port}"
         self.client = MilvusClient(uri=uri)
-        self.collection_name = "policy_rules"
+        # P0.3 灰度开关：默认旧名，经 POLICY_RULES_COLLECTION 可切新 collection
+        self.collection_name = resolve_policy_rules_collection(collection_name)
 
         # 初始化嵌入提供者
         self._init_embedding(embedding_kind)

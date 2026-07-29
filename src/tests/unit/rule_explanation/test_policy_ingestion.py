@@ -71,3 +71,22 @@ def test_build_ingest_records_empty_fact_text_uses_zero_vector():
     )
     assert fact_records[0]["vector"] == [0.0] * 768
     assert rule_entities[0]["vector"] == fact_records[0]["vector"]
+
+
+def test_build_ingest_records_generates_unique_rule_id():
+    """每个 rule_entity 必须有唯一非空 rule_id。
+
+    LLM 提取的 rule 不含 rule_id（系统字段），build_ingest_records 必须生成，
+    否则 Milvus 空 PK 去重导致 publish 数据丢失（P8.4 实测：publish 120 条只存活 1 条）。
+    """
+    facts = [{"fact_text": "测试", "rules": [
+        {"rule_type": "起付线", "insu_type": "城镇职工"},
+        {"rule_type": "支付比例", "insu_type": "城镇职工"},
+    ]}]
+    _, rule_entities = build_ingest_records(
+        facts, doc_id="d3", provider=FakeProvider(), extracted_at="t"
+    )
+    ids = [e["rule_id"] for e in rule_entities]
+    assert all(ids), "rule_id 不能为空（Milvus 空 PK 去重会丢数据）"
+    assert len(set(ids)) == len(ids), "rule_id 必须唯一"
+    assert all(rid.startswith("rule_") for rid in ids), "生成的 rule_id 应有 rule_ 前缀"

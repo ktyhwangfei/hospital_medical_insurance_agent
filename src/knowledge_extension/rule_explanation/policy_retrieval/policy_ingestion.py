@@ -59,8 +59,11 @@ def build_ingest_records(
         })
 
         for rule in fact.get("rules", []):
+            # rule_id 是系统字段（LLM 不产），必须生成唯一值，
+            # 否则 Milvus 空 PK 去重导致 publish 数据丢失
+            rule_id = rule.get("rule_id") or f"rule_{uuid.uuid4().hex[:12]}"
             entity = rule_to_entity(
-                rule,
+                {**rule, "rule_id": rule_id},
                 vector=vector,            # 复用所属 fact 向量（§4.1）
                 extracted_at=extracted_at,
                 confidence=rule.get("confidence", 0.7),

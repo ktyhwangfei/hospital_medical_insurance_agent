@@ -96,3 +96,36 @@ def test_generate_stream_reraises_provider_error(gateway):
 
         with pytest.raises(ModelServerError):
             list(gateway.generate_stream(messages, "llm", "default"))
+
+
+def test_generate_max_tokens_override(gateway):
+    """调用方可传 max_tokens 覆盖 router 默认（长文档提取 JSON 需更大输出空间）。"""
+    messages = [Message(role="user", content="Hello")]
+    captured = {}
+
+    def fake_call(request, model_name):
+        captured["max_tokens"] = request.max_tokens
+        return _make_response()
+
+    with patch.object(gateway, "_call_provider", side_effect=fake_call):
+        gateway.generate(messages, "llm", "test", max_tokens=8192)
+
+    assert captured["max_tokens"] == 8192
+
+
+def test_generate_default_max_tokens_unchanged(gateway):
+    """不传 max_tokens 时沿用 router 默认（向后兼容，行为与改动前一致）。"""
+    messages = [Message(role="user", content="Hello")]
+    # 取 router 默认值，断言 generate 用它（不依赖具体数字）
+    model_name, _ = gateway._router.resolve("test", "llm")
+    expected = gateway._router.get_model_params(model_name)["max_tokens"]
+    captured = {}
+
+    def fake_call(request, model_name):
+        captured["max_tokens"] = request.max_tokens
+        return _make_response()
+
+    with patch.object(gateway, "_call_provider", side_effect=fake_call):
+        gateway.generate(messages, "llm", "test")
+
+    assert captured["max_tokens"] == expected

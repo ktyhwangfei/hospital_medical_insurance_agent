@@ -54,11 +54,16 @@ class PipelineOrchestrator:
         self._store.update_document(doc_id, {"status": "processing"})
 
         try:
-            # ── LLM 全文提取政策事实 ──
-            facts = self._extract_policy_facts(
-                content,
-                document_title=doc.get("title", ""),
-            )
+            # ── LLM 提取政策事实（长文档分片，避免 JSON 输出超 max_tokens 截断）──
+            # 片长 1000：平衡“规则密集片仍截断”与“片数过多拖慢”（9069 字 → ~10 片）
+            chunks = self._split_text(content, max_len=1000)
+            facts: list[dict[str, Any]] = []
+            for chunk in chunks:
+                facts.extend(
+                    self._extract_policy_facts(
+                        chunk, document_title=doc.get("title", "")
+                    )
+                )
 
             if not facts:
                 self._store.update_document(doc_id, {"status": "extracted"})
@@ -196,6 +201,27 @@ class PipelineOrchestrator:
 
     # ═══════════════ Policy Fact Extraction (LLM) ═══════════════
 
+    def _split_text(self, text: str, max_len: int = 1500) -> list[str]:
+        """按段落切分长文档，每片不超过 max_len（段落粒度，不破坏句子）。
+
+        长文档全文提取的 JSON 输出会超 max_tokens 被截断，分片后逐片提取可避免。
+        """
+        if len(text) <= max_len:
+            return [text]
+        chunks: list[str] = []
+        cur: list[str] = []
+        cur_len = 0
+        for para in text.split("\n"):
+            plen = len(para)
+            if cur and cur_len + plen > max_len:
+                chunks.append("\n".join(cur))
+                cur, cur_len = [], 0
+            cur.append(para)
+            cur_len += plen
+        if cur:
+            chunks.append("\n".join(cur))
+        return chunks
+
     def _extract_policy_facts(
         self,
         document_text: str,
@@ -218,10 +244,13 @@ class PipelineOrchestrator:
         try:
             gateway = ModelGateway()
             messages = [Message(role="user", content=prompt)]
+            # 长文档提取的 JSON 输出常超 router 默认 max_tokens 被截断，
+            # 这里显式放大输出空间（P8.4 迁移后重提取所需）
             response = gateway.generate(
                 messages=messages,
                 model_type="llm",
                 scene="policy_qa",
+                max_tokens=8192,
             )
 
             content = response.content.strip()
