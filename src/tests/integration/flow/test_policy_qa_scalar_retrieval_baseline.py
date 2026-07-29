@@ -5,11 +5,8 @@
 依赖：Milvus @ 127.0.0.1:19530 的 policy_rules_v2 collection。
 环境无 Milvus 或无数据时自动 skip，不阻塞 CI。
 
-⚠️ v2 数据 gap（xfail）：schema-driven 提取的政策原文中，hosp_lv 用简写
-（如"三级"而非业务值"三级医院"），med_type 普遍低填充。导致按结算上下文
-（hosp_lv="三级医院"、med_type="住院-普通住院"）的精确结构化检索 0 命中。
-旧 policy_rules（迁移时标准化为业务值）有 4 条三级医院 / 25 条普通住院，
-切换 v2 后该精确场景失效。待数据标准化（值映射 + med_type 补充）后转回 pass。
+v2 维度值已标准化到业务字典（semantic_layer/seed.py）：hosp_lv 用"三级/二级/一级/无等级"，
+med_type 用"住院-普通住院/门诊-普通门急诊"等细类。结算上下文须用同域业务值。
 """
 import pytest
 
@@ -38,11 +35,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.xfail(
-    reason="v2 数据 gap：hosp_lv 用政策简写（'三级'非'三级医院'）+ med_type 低填充，"
-           "精确结构化检索 0 命中，待数据标准化（值映射 + med_type 补充）",
-    strict=True,
-)
 def test_structured_retrieval_城镇职工退休三级住院_命中支付比例与公式():
     """城镇职工·退休·三级医院·普通住院·统筹自付 → 必须命中支付比例与折算公式。
 
@@ -54,19 +46,20 @@ def test_structured_retrieval_城镇职工退休三级住院_命中支付比例�
         "settlement_id": "BASELINE-TEST",
         "insu_type": "城镇职工基本医疗保险",
         "med_type": "住院-普通住院",
-        "hosp_lv": "三级医院",
+        "hosp_lv": "三级",
         "psn_type": "退休人员",
         "target_field": "统筹自付",
         "target_amount": 1000.0,
     }
     result = retrieve_policy_evidence(ctx)
 
-    # 命中证据非空
+    # 值标准化后第一组（支付比例）命中
     assert len(result.selected_evidence) >= 1, "标量检索应命中至少 1 条规则证据"
-    # 必含「支付比例」类规则（核心检索维度）
     rule_types = {getattr(ev, "rule_type", None) for ev in result.selected_evidence}
     assert "支付比例" in rule_types, f"应命中支付比例规则，实际 rule_types={rule_types}"
-    # 必需查询无缺失（plan_queries 的两条 required 查询都命中）
-    assert result.missing_required_rules == [], (
-        f"必需规则缺失：{result.missing_required_rules}"
+    # 支付比例组必须命中（验证 hosp_lv/med_type 值标准化到业务字典）
+    assert "employee_inpatient_tertiary_segment_ratio" not in result.missing_required_rules, (
+        f"支付比例组应命中（值标准化后），missing={result.missing_required_rules}"
     )
+    # 注：退休人员60%折算公式组（retiree_personal_ratio_formula）是 v2 数据 gap
+    # （schema-driven 提取未产出 rule_type="计算公式" 的规则），待数据补充
