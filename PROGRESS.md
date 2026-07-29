@@ -15,8 +15,8 @@
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
-| P8.4 重提取 | 依赖 LLM 调用 | 配置 `MODEL_API_KEY` |
-| P10 灰度切换 | 需 P8 完成（P8.4 待做）| 完成 P8.4 或决定跳过重提取直接切 |
+| P8.4 全量重提取 | 提取障碍已解决（分片+max_tokens+timeout） | 执行全量重提取 + publish-v2（数据操作） |
+| P10 灰度切换 | P0.3 切换开关已落地（前置完成） | P8.4 收口 + P0 回归基线全绿 |
 | §10.1/10.2 安全审计 | 需对接医院 SSO / 外部系统 | 获取医院 SSO 文档 |
 | §11.1/11.2 适配器 | 需真实医保 / DRG 系统 API | 获取系统 API 文档和测试环境 |
 
@@ -149,9 +149,9 @@
 | P8.1 | 重建新 collection | ✅ |
 | P8.2 | 迁移 105 条 extractions → facts + rules_v2 | ✅ commit `7398c22` |
 | P8.3 | 种子政策值域 + zcgz 发布解锁契约 | ✅ commit `c89139d` |
-| P8.4 | 迁移后重提取拉高填充率（现状 3/15） | ⚪ 待做（需 MODEL_API_KEY） |
+| P8.4 | 迁移后重提取拉高填充率 | 🟡 publish 路径修复（rule_id 空 PK 去重 bug）+ 价值兑现到 v2（insu 31%→70%、psn 20%→58%）；剩余=全量重提取所有 8 篇文档 |
 | P9 | 前端 5 tab 重构（概览/政策/事实/结构化/发现） | ✅ commit `610272c`→`c87a99d` |
-| P10.1 | 政策问答读入口切到新 collection（P0 配置开关） | ⚪ 未开始 |
+| P10.1 | 政策问答读入口切到新 collection（P0 配置开关） | ⚪ 未开始（P0.3 开关已落地，前置就绪） |
 | P10.2 | 下线旧 policy_rules / 旧 policy_facts / 旧 extractions API | ⚪ 未开始 |
 
 ### 2.3 里程碑达成情况
@@ -212,6 +212,8 @@
 | 2026-07-27 | P8.3 种子政策值域 + zcgz 发布解锁契约 | §2 P8.3 ✅ |
 | 2026-07-27 | P9 前端 5 tab 重构全部完成（9.1-9.7，7 提交，M6 达成） | §2 P9 ✅ |
 | 2026-07-27 | 重写 PROGRESS.md：补入 §2 政策管线主线，修正当前焦点 | 本文件整体 |
+| 2026-07-28 | 政策知识开发推进：①P0.3 切换开关落地（`POLICY_RULES_COLLECTION`）②`gateway.generate` 支持 max_tokens 覆盖 ③`MODEL_TIMEOUT` 环境变量 ④长文档分片提取（`_split_text`），长文档 0→86 facts ⑤P8.4 价值验证（insu 31%→98%、psn 20%→84%） | §2 P0.3/P8.4；model_service/pipeline_orchestrator |
+| 2026-07-28 | **P8.4 publish 路径修复**：`build_ingest_records` 生成唯一 rule_id，修复 P3 `publish_to_new_collections` 空 PK 去重丢数据 bug（之前所有 publish 只存活 1 条）；修复后价值兑现到 policy_rules_v2（insu 31%→70%、psn 20%→58%） | §2 P8.4；policy_ingestion（影响 P3 数据完整性） |
 
 ---
 

@@ -64,7 +64,13 @@ class ModelGateway:
         self._router = router or ModelRouter()
         self._config = ModelServiceConfig()
 
-    def generate(self, messages: list[Message], model_type: str, scene: str) -> ModelResponse:
+    def generate(
+        self,
+        messages: list[Message],
+        model_type: str,
+        scene: str,
+        max_tokens: int | None = None,
+    ) -> ModelResponse:
         model_name, fallbacks = self._router.resolve(scene, model_type)
         chain = [model_name] + fallbacks
         failures = []
@@ -103,7 +109,8 @@ class ModelGateway:
                 model_type=current_model,
                 scene=scene,
                 temperature=params["temperature"],
-                max_tokens=params["max_tokens"],
+                # 调用方可传 max_tokens 覆盖 router 默认（长文档提取需更大输出空间）
+                max_tokens=params["max_tokens"] if max_tokens is None else max_tokens,
             )
 
             model_failed = False
