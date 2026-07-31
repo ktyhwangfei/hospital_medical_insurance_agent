@@ -1,7 +1,7 @@
 'use client'
 
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, FileText, Boxes, ListTree, Compass } from 'lucide-react'
+import { LayoutDashboard, FileText, Anchor, Lightbulb } from 'lucide-react'
 
 interface NavTab {
   label: string
@@ -9,15 +9,13 @@ interface NavTab {
   icon: React.ComponentType<{ className?: string }>
 }
 
-// P9 重构：4 tab（概览/政策原文/规则提取/已入库规则+知识检索）
-// → 5 tab（概览/政策/事实/结构化/发现）。
-// [来源: docs/steering/政策知识管线开发计划.md Phase 9]
+// 政策知识治理平台 · 4 模块 nav（映射不在本平台，留 /semantic-layer）。
+// [来源: docs/steering/政策知识治理平台设计-V2.1.md §5.1]
 const NAV_TABS: NavTab[] = [
   { label: '概览', href: '/policy-knowledge', icon: LayoutDashboard },
-  { label: '政策', href: '/policy-knowledge/documents', icon: FileText },
-  { label: '事实', href: '/policy-knowledge/facts', icon: Boxes },
-  { label: '结构化', href: '/policy-knowledge/structured', icon: ListTree },
-  { label: '发现', href: '/policy-knowledge/discovery', icon: Compass },
+  { label: '文档', href: '/policy-knowledge/documents', icon: FileText },
+  { label: '单元', href: '/policy-knowledge/units', icon: Anchor },
+  { label: '知识', href: '/policy-knowledge/knowledge', icon: Lightbulb },
 ]
 
 function getActiveTab(pathname: string): string {
@@ -41,7 +39,13 @@ export default function PolicyKnowledgeLayout({ children }: { children: React.Re
       </div>
 
       <main className="mx-auto w-full max-w-[1200px] p-6">
-        {/* Tab Navigation */}
+        {/* 治理平台标题 + Tab Navigation */}
+        <div className="mb-4 flex items-center gap-2">
+          <span className="inline-flex h-7 items-center rounded-full bg-white/70 px-3 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 backdrop-blur">
+            政策知识治理
+          </span>
+          <span className="text-xs text-slate-400">质量 · 版本 · 审核 · 发布 · 追踪 · 影响分析</span>
+        </div>
         <nav className="flex w-full items-center gap-1 border-b border-slate-200 mb-6">
           {NAV_TABS.map((tab) => {
             const Icon = tab.icon

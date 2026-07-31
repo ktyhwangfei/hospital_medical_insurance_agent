@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>院端医保智能体系统 · 项目进度汇报 · 幻灯片画廊（打印视图）</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Inter:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --primary: #16335B;
+      --primary-deep: #0F2547;
+      --accent-1: #0E9F6E;
+      --accent-2: #F59E0B;
+      --neutral: #475569;
+      --bg: #F4F7FB;
+      --ink: #0F172A;
+      --muted: #64748B;
+      --line: #E2E8F0;
+      --font-title: 'Montserrat', 'Noto Sans SC', sans-serif;
+      --font-body: 'Inter', 'Noto Sans SC', sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); }
+    body { padding: 32px 28px 56px; }
+
+    /* Screen header */
+    .gallery-header {
+      max-width: 1280px; margin: 0 auto 24px;
+      padding: 20px 24px;
+      background: linear-gradient(135deg, var(--primary-deep) 0%, var(--primary) 100%);
+      color: #fff; border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(22,51,91,0.18);
+    }
+    .gallery-header .eyebrow {
+      font-size: 12px; letter-spacing: 0.28em; opacity: 0.7;
+      font-family: var(--font-body); text-transform: uppercase;
+    }
+    .gallery-header h1 {
+      font-family: var(--font-title); font-size: 26px; margin: 8px 0 4px; font-weight: 700;
+    }
+    .gallery-header .meta {
+      display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; opacity: 0.85;
+      font-family: var(--font-body);
+    }
+    .gallery-header .meta .dot { opacity: 0.4; }
+    .gallery-header .print-hint {
+      margin-top: 12px; font-size: 12.5px; opacity: 0.8;
+      border-top: 1px solid rgba(255,255,255,0.15); padding-top: 10px;
+    }
+
+    /* Grid (screen) */
+    .gallery-grid {
+      max-width: 1280px; margin: 0 auto;
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px;
+    }
+    .card {
+      background: #fff; border-radius: 14px; overflow: hidden;
+      box-shadow: 0 4px 14px rgba(15,23,42,0.06), 0 1px 3px rgba(15,23,42,0.04);
+      border: 1px solid var(--line);
+      break-inside: avoid; page-break-inside: avoid;
+    }
+    .card .frame {
+      position: relative; background: #0F2547;
+      aspect-ratio: 16 / 9; overflow: hidden;
+    }
+    .card .frame img {
+      width: 100%; height: 100%; object-fit: contain; object-position: center; display: block;
+      background: #0F2547;
+    }
+    .card .frame .badge {
+      position: absolute; top: 12px; left: 12px;
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 12px; border-radius: 999px;
+      background: rgba(15,37,71,0.78); color: #fff;
+      font-family: var(--font-body); font-size: 12px; letter-spacing: 0.16em;
+      backdrop-filter: blur(6px);
+    }
+    .card .frame .badge .num {
+      font-family: var(--font-title); font-weight: 700; font-size: 13px;
+      color: var(--accent-1);
+    }
+    .card .caption {
+      padding: 14px 18px 16px;
+      border-top: 3px solid var(--accent-1);
+    }
+    .card .caption .label {
+      font-size: 11px; letter-spacing: 0.22em; color: var(--muted);
+      font-family: var(--font-body); text-transform: uppercase; margin-bottom: 4px;
+    }
+    .card .caption .title {
+      font-family: var(--font-title); font-size: 15.5px; font-weight: 700;
+      color: var(--primary); line-height: 1.4;
+    }
+
+    /* Footer */
+    .gallery-footer {
+      max-width: 1280px; margin: 28px auto 0; text-align: center;
+      font-size: 12px; color: var(--muted); font-family: var(--font-body);
+    }
+
+    /* Print: each poster on its own landscape page */
+    @page { size: A4 landscape; margin: 10mm; }
+    @media print {
+      html, body { background: #fff !important; padding: 0; }
+      .gallery-header {
+        box-shadow: none; border-radius: 0;
+        margin: 0 0 6mm; padding: 8mm 10mm 6mm;
+      }
+      .gallery-header .print-hint { display: none; }
+      .gallery-header h1 { font-size: 18px; }
+      .gallery-header .eyebrow { font-size: 9px; }
+      .gallery-header .meta { font-size: 10px; }
+      .gallery-grid {
+        display: block; gap: 0;
+      }
+      .card {
+        box-shadow: none; border: 1px solid #CBD5E1; border-radius: 6px;
+        margin: 0 0 6mm; overflow: hidden;
+        page-break-after: always; break-after: page;
+      }
+      .card:last-child { page-break-after: auto; break-after: auto; }
+      .card .frame { aspect-ratio: 16 / 9; }
+      .card .caption .title { font-size: 12px; }
+      .card .caption .label { font-size: 9px; }
+      .card .caption { padding: 6px 10px 8px; border-top-width: 2px; }
+      .gallery-footer { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="gallery-header">
+    <div class="eyebrow">HOSPITAL MEDICAL INSURANCE · AI AGENT · PROGRESS REVIEW</div>
+    <h1>院端医保智能体系统 · 项目进度汇报</h1>
+    <div class="meta">
+      <span>汇报对象：院领导</span><span class="dot">|</span>
+      <span>截至 2026-07-29</span><span class="dot">|</span>
+      <span>版本 v1.0</span><span class="dot">|</span>
+      <span>共 10 页</span>
+    </div>
+    <div class="print-hint">打印提示：使用浏览器「打印 → 另存为 PDF」或直接打印，每页幻灯片将按横向 A4 一页一张输出。</div>
+  </header>
+
+  <main class="gallery-grid" id="gallery"></main>
+
+  <div class="gallery-footer">
+    由前端单页 PPT 自动生成 · 截图源 <code>/index.html?page=N</code>
+  </div>
+
+  <!-- 数据源：与 docs/pages.json 保持一致；嵌入以便 file:// 直接打开 -->
+  <script type="application/json" id="pages-data">
+[
+  { "pageNum": 1, "title": "院端医保智能体系统 · 项目进度汇报" },
+  { "pageNum": 2, "title": "项目定位：院端医保 AI 导办与运营协同中枢" },
+  { "pageNum": 3, "title": "整体进展：32 个功能单元，28 项实现完成" },
+  { "pageNum": 4, "title": "主线突破：政策知识管线重构（P0→P10）" },
+  { "pageNum": 5, "title": "技术架构：四层体系 + 七类服务域 + 四条工程纪律" },
+  { "pageNum": 6, "title": "业务能力：八大场景 + 平台能力全面落地" },
+  { "pageNum": 7, "title": "质量保障：核心套件全绿，技术债透明披露" },
+  { "pageNum": 8, "title": "风险与阻塞：4 项外部依赖待协调" },
+  { "pageNum": 9, "title": "下一步路线图：三步闭环，兑现价值" },
+  { "pageNum": 10, "title": "总结与资源请求" }
+]
+  </script>
+
+  <script>
+    (function () {
+      // 根据打开方式自适应图片前缀：
+      //   file:// 双击打开（本机打印主流程） -> 相对 docs/posters/app/ 到项目根再进 frontend/public
+      //   http(s):// 经静态服务/Vite 代理    -> 走 web 绝对路径（前提是服务根能解析 /assets/...）
+      var IMG_BASE = (location.protocol === 'file:')
+        ? '../../../frontend/public/assets/images/posters/pages/'
+        : '/assets/images/posters/pages/';
+
+      var dataNode = document.getElementById('pages-data');
+      var pages;
+      try {
+        pages = JSON.parse(dataNode.textContent.trim());
+      } catch (e) {
+        console.error('解析页面数据失败', e);
+        pages = [];
+      }
+
+      var grid = document.getElementById('gallery');
+      var html = pages.map(function (p) {
+        var src = IMG_BASE + 'page-' + p.pageNum + '.png';
+        return ''
+          + '<section class="card">'
+          +   '<div class="frame">'
+          +     '<span class="badge"><span class="num">' + p.pageNum + '</span><span>/ 10</span></span>'
+          +     '<img src="' + src + '" alt="第 ' + p.pageNum + ' 页：' + escapeHtml(p.title) + '" loading="lazy" />'
+          +   '</div>'
+          +   '<div class="caption">'
+          +     '<div class="label">SLIDE ' + String(p.pageNum).padStart(2, '0') + '</div>'
+          +     '<div class="title">' + escapeHtml(p.title) + '</div>'
+          +   '</div>'
+          + '</section>';
+      }).join('\n');
+      grid.innerHTML = html;
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c];
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

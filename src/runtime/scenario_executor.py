@@ -234,6 +234,22 @@ class UnifiedScenarioExecutor:
     ) -> None:
         self._skill_storage = skill_storage
         self._checkpoint_registry = checkpoint_registry
+        # Runtime 增强组件（可选注入，未配置时不影响现有流程）
+        self._memory_manager = None
+        self._context_planner = None
+        self._context_composer = None
+
+    def with_runtime_enhancement(
+        self,
+        memory_manager=None,
+        context_planner=None,
+        context_composer=None,
+    ) -> "UnifiedScenarioExecutor":
+        """链式配置 Runtime 增强组件。"""
+        self._memory_manager = memory_manager
+        self._context_planner = context_planner
+        self._context_composer = context_composer
+        return self
 
     def can_handle(self, scenario: str) -> bool:
         return True
@@ -245,6 +261,10 @@ class UnifiedScenarioExecutor:
             context: 运行时上下文
             on_event: 流式事件回调，透传给技能执行引擎
         """
+        # === Runtime 上下文增强（横切关注点）===
+        context = self._apply_runtime_enhancement(context)
+        # === Runtime 增强结束 ===
+
         # Phase 1: Try @-mention skill execution
         result = self._try_mention_execution(context, on_event=on_event)
         if result is not None:
@@ -273,6 +293,68 @@ class UnifiedScenarioExecutor:
             uncertainties=[f'未识别的意图: {context.message}'],
             citations=[{'source_type': 'intent_recognition', 'source_id': c, 'summary': c} for c in context.intent_citations],
         )
+
+    def _apply_runtime_enhancement(self, context: RuntimeContext) -> RuntimeContext:
+        """应用 Runtime 上下文增强。
+
+        当配置了 MemoryManager / ContextPlanner / ContextComposer 时：
+        1. 加载/创建 Session
+        2. 加载 Memory
+        3. Context Planner：决定需要什么
+        4. 按需下探语义层
+        5. Context Composer：组装 LLM Context
+        6. 注入增强后的上下文
+
+        未配置时直接返回原上下文，零影响。
+        """
+        if not self._memory_manager or not context.session_id:
+            return context
+
+        try:
+            # 1. 加载 Memory
+            memories = self._memory_manager.build_context_memories(context)
+
+            # 2. Context Planner：决定需要什么（如果配置了）
+            if self._context_planner:
+                from src.runtime.intent.models import IntentResult
+                intent_result = IntentResult(
+                    intent=context.intent,
+                    confidence=context.intent_confidence,
+                    entities=context.intent_entities,
+                    citations=context.intent_citations,
+                    raw_message=context.message,
+                )
+                need = self._context_planner.plan(intent_result, context)
+
+                # 话题切换：清除 TOPIC 策略的记忆
+                if need.topic_changed:
+                    self._memory_manager.expire_on_topic_change(
+                        context.session_id, context.intent
+                    )
+                    # 重新加载
+                    memories = self._memory_manager.build_context_memories(context)
+
+            # 3. Context Composer：组装 LLM Context（如果配置了）
+            if self._context_composer and memories:
+                llm_context = self._context_composer.compose(
+                    memories=memories,
+                    session_summary=f"Session {context.session_id}: {context.current_topic or context.intent}",
+                )
+                context.llm_context = llm_context.model_dump()
+
+            # 4. 注入增强后的记忆
+            context.enriched_memories = [m.model_dump() for m in memories]
+
+            logger.info(
+                f"Runtime enhancement applied for session {context.session_id}: "
+                f"{len(memories)} memories, llm_context={context.llm_context is not None}"
+            )
+
+        except Exception as e:
+            # Runtime 增强失败不阻断主流程
+            logger.warning(f"Runtime enhancement failed (non-blocking): {e}")
+
+        return context
 
     def execute_streaming(self, context: RuntimeContext, on_event: Callable[[str, dict], None]) -> AgentResponse:
         """流式执行入口，强制要求 on_event 回调。

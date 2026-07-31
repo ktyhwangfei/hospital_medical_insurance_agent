@@ -269,7 +269,7 @@ export default function PolicyDocumentsPage() {
                       {extracting === d.doc_id ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
                       <span className="ml-1">提取</span>
                     </button>
-                    <Link href={`/policy-knowledge/facts?doc_id=${d.doc_id}`} className="rounded px-2 py-0.5 text-xs font-medium text-purple-600 hover:bg-purple-50">事实</Link>
+                    <Link href={`/policy-knowledge/knowledge?doc_id=${d.doc_id}&sub=audit`} className="rounded px-2 py-0.5 text-xs font-medium text-amber-600 hover:bg-amber-50">审核</Link>
                     <button onClick={() => handleDelete(d.doc_id)} className="rounded px-2 py-0.5 text-xs font-medium text-rose-600 hover:bg-rose-50"><Trash2 className="size-3.5" /></button>
                   </div>
                 </td>

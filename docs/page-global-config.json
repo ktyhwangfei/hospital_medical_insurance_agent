@@ -1,0 +1,14 @@
+{
+  "slideStyle": "business",
+  "colorScheme": "Corporate Medical Blue",
+  "primaryColor": "#16335B",
+  "accentColor1": "#0E9F6E",
+  "accentColor2": "#F59E0B",
+  "neutralColor": "#475569",
+  "background": {
+    "type": "color",
+    "value": "#F4F7FB"
+  },
+  "fontTitle": "'Montserrat', 'Noto Sans SC', sans-serif",
+  "fontBody": "'Inter', 'Noto Sans SC', sans-serif"
+}

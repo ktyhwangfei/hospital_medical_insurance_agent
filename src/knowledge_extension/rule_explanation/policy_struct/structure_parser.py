@@ -85,6 +85,37 @@ BREADCRUMB_OR_WEB_UI_LINES = {
 
 META_LINE_RE = re.compile(r"^\[(发文字号|发文机构|发布日期|有效性)\]$|^政府令$|^〔\d+〕$|^\d+号$")
 
+# 政府网站页脚/导航 boilerplate：逐行丢弃，避免污染末尾条款（不破坏正文完整性）。
+# [来源: 用户要求 req4 — 排除正文前后的无用内容]
+WEB_BOILERPLATE_RE = re.compile(
+    r"^("
+    r"建议意见|法律声明|网站地图|关于我们|使用帮助|网站无障碍|无障碍阅读|无障碍|"
+    r"移动版|简体版|繁体版|简体|繁体|简|繁|"
+    r"官方微信|官方微博|官方抖音|官方客户端|官方APP|扫码|二维码|关注我们|"
+    r"返回顶部|返回首页|打印|分享|收藏|取消收藏|字体大小|字体：|"
+    r"北京政务服务网|访问我的专属空间|智能问答|首页|通知公告|要闻动态|"
+    r"政务公开|政务服务|政民互动|本网站|一网通查|一网通办|高级搜索|"
+    r"政策文件搜索|政策文件|搜索结果|包含以下全部的关键词|包含以下的完整关|"
+    r"相关解读|相关政策|其他文件|政策公开|我要咨询|我要投诉|办事服务|"
+    r"中共中央|国务院"
+    r")$"
+    r"|^(服务热线|咨询电话|联系电话|客服电话|传真|邮政编码|地址)[：:]"
+    r"|^(主办|承办|协办|指导单位|技术支持)[：:]"
+    r"|^(政府网站标识码|网站标识码)[：:]?"
+    r"|^(京公网安备|公网安备|ICP备案|备案序号|京ICP|粤ICP|沪ICP)"
+    r"|^(版权所有|Copyright|©|All Right)"
+)
+# 中文落款日期（如「二○一○年四月十五日」「2010年4月15日」），单独成行视为落款，丢弃
+# 注意：网页常用 ○(U+25CB 圆圈) 代替 〇(U+3007)，用显式转义确保两者都在字符类里
+SIGNATURE_DATE_RE = re.compile(
+    r"^[\u4e00-\u9fff\u3007\u25cb0-9]{2,}年"
+    r"[\u4e00-\u9fff\u3007\u25cb0-9]{1,3}月"
+    r"[\u4e00-\u9fff\u3007\u25cb0-9]{1,4}日?$"
+)
+# 发文机构落款（单独成行的机构名，如「北京市人力资源和社会保障局」）。
+# 保守判定：纯中文、4-20字、以机构后缀结尾；仅在末尾落款区出现，不破坏条款正文。
+ORG_SIGNATURE_RE = re.compile(r"^[\u4e00-\u9fff]{4,20}(局|委员会|办公室|办公厅|厅|部|院|中心|管理局|监督管理局|管理中心)$")
+
 
 def detect_clause_level(line: str):
     line = normalize_marker(line.strip())
@@ -136,6 +167,13 @@ def clean_and_split_lines(text: str, *, drop_catalog: bool = True) -> List[str]:
         if line in BREADCRUMB_OR_WEB_UI_LINES:
             continue
         if META_LINE_RE.match(line):
+            continue
+        # 丢弃政府网站页脚/导航 boilerplate 与落款日期/机构签名（req4）
+        if WEB_BOILERPLATE_RE.match(line):
+            continue
+        if SIGNATURE_DATE_RE.match(line):
+            continue
+        if ORG_SIGNATURE_RE.match(line):
             continue
         raw_lines.extend(split_inline_clause_markers(line))
 

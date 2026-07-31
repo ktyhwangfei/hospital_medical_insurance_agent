@@ -12,6 +12,7 @@
 □ 已查 `src/domain/AGENTS.md` 相关领域的通用语言字典
 □ 涉及外部系统 → 走 `adapters/` 防腐层
 □ 涉及模型调用 → 走 `model_service/gateway` 统一入口
+□ 涉及政策知识治理门户（`policy-knowledge/`）→ 收到新需求先追加到 `docs/steering/政策知识治理-需求迭代记录.md` 再动手
 
 ## Agent 收工前检查清单
 
