@@ -1,9 +1,0 @@
-# 业务对象：患者 (Patient)
-# L1 业务对象层定义 — 参保人基本信息
-object_id: Patient
-name: 患者
-description: 参保人的基本信息，包括人群分类、险种归属、身份标识等。是跨所有业务上下文的起始身份锚点。
-fields:
-  - psn_type           # 人群标签（退休、在职、学生儿童等）
-  - insu_type          # 险种类别（城镇职工、城乡居民等）
-  - patient_id         # 患者ID（隐式，所有场景均使用）
