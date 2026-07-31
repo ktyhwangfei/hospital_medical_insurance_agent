@@ -40,8 +40,8 @@ domain/
 
 ## 全局领域知识库 — 医院医保智能体系统
 
-> **文档版本**: 1.0
-> **更新日期**: 2026-05-13
+> **文档版本**: 1.1
+> **更新日期**: 2026-07-31
 > **维护说明**: 本文件为项目的 **通用语言（Ubiquitous Language）** 权威定义。所有代码中的类名、变量名、方法名必须严格遵循此字典。新增领域概念时，必须同步更新此文件。
 
 ---
@@ -62,6 +62,7 @@ domain/
 11. [知识上下文（Knowledge）](#11-知识上下文-knowledge)
 12. [安全上下文（Security）](#12-安全上下文-security)
 13. [模型服务上下文（Model Service）](#13-模型服务上下文-model-service)
+13.5. [Runtime 上下文（Runtime）](#135-runtime-上下文runtime)
 14. [共享通用层（Shared / Common）](#14-共享通用层-shared--common)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
@@ -682,6 +683,58 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 13.5. Runtime 上下文（Runtime）
+
+#### 概述
+
+管理 Agent 运行时的会话级业务记忆、上下文规划与编排、推理状态。是"智能管道"（意图解析 → 技能匹配 → 上下文规划）的核心支撑，让连续追问、话题切换、主体切换场景获得正确的上下文。设计决策见评估报告 ADR-007（RuntimeContext 演进而非新建 BusinessSession）、ADR-008（Context Planner 作为意图识别第三阶段）、ADR-009（Runtime 增强作为 scenario_executor 横切关注点）。
+
+#### 文件位置
+
+`src/runtime/memory/` + `src/runtime/context_composer/` + `src/runtime/intent/planner.py` + `src/runtime/reasoning/` + `src/runtime/runtime_state/models.py` + `src/data_platform/storage/memory/`
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 业务记忆 | `BusinessMemory` | **Entity**（可变） | Pydantic `BaseModel` | 会话级业务记忆，通过 `memory_id` 唯一标识；仅存领域对象引用（`ref_id`）+ 关键字段快照（`object_snapshot`），领域真相以语义层/外部系统为准 |
+| 记忆类型 | `MemoryType` | **Value Object** | `StrEnum` | 记忆对应的业务对象类型：patient / visit / settlement / policy / rule / drug / disease / indicator / conversation |
+| 过期策略 | `ExpirePolicy` | **Value Object** | `StrEnum` | 记忆失效策略：SESSION（会话结束）/ TOPIC（话题切换）/ STICKY（跨话题保留）/ TIME（时间过期，默认 30 分钟无活动失效） |
+| 记忆快照版本 | `version` (BusinessMemory) | Value Object | `int` | 快照版本号，刷新时 +1，用于检测领域对象更新 |
+| 上下文需求 | `ContextNeed` | **Value Object** | Pydantic `BaseModel` | Context Planner 的输出：需要加载哪些业务对象、命中哪些记忆、是否下探语义层（`must_query_semantic`）、是否话题/主体切换 |
+| 推理状态 | `ReasoningState` | **Entity**（可变） | Pydantic `BaseModel` | 会话级推理临时态，通过 `session_id` 标识，聚合推理链与假设；与 LangGraph checkpoint 通过 `workflow_id` 关联而非合并 |
+| 推理步骤 | `ReasoningStep` | **Entity** | Pydantic `BaseModel` | 推理链中的一个中间结论，含 `claim` / `kind` / `depends_on` / `confidence` / `citations` / `source_memory_ids`（来源可追溯） |
+| 推理步骤类型 | `ReasoningStep.kind`（规划抽为 `ReasoningKind` 枚举） | Value Object | `str` 字面量 | 取值："fact"（事实）/ "inference"（推论）/ "hypothesis"（假设）/ "verified"（已验证）；当前为 `str` 字段，后续演进为独立枚举 |
+| 推理假设 | `Hypothesis` | **Entity**（可变） | Pydantic `BaseModel` | 待验证假设，状态流转：open → confirmed / rejected；确认后自动转为 verified 推理步骤 |
+| 记忆存储端口 | `MemoryStore` | **Domain Service**（接口） | Protocol | 业务记忆存储接口（save / get / list_by_session / delete 等），PostgreSQL / 内存双实现，`USE_MEMORY_STORAGE=1` 回退内存 |
+| 记忆管理器 | `MemoryManager` | **Domain Service**（实现） | — | 记忆生命周期管理：合并（Merge）、覆盖（Replace）、过期（Expire）、刷新（Refresh）、压缩（Compression）、会话恢复（Replay） |
+| 上下文规划器 | `ContextPlanner` | **Domain Service**（实现） | — | 意图识别管道第三阶段（解析 → 匹配 → 规划）：从意图提取所需业务对象类型，检查 Memory 命中，检测话题/主体切换 |
+| 上下文编排器 | `ContextComposer` | **Domain Service**（实现） | — | 从 Memory 挑选最有价值信息并排序，按 Token 预算组织为 LLM Context；超预算时摘要（summarize）而非截断（truncate） |
+| LLM 上下文 | `LLMContext` | **DTO** | Pydantic `BaseModel` | Context Composer 的输出契约：会话摘要 + 选中记忆（`MemoryBrief`）+ 推理链 + 预算用量 |
+| 推理状态管理器 | `ReasoningStateManager` | **Domain Service**（实现） | — | 推理链维护、假设管理（创建/确认/拒绝）、连续追问的推理复用 |
+
+#### 业务规则
+
+- `BusinessMemory` 不复制领域对象全部数据，仅保存引用 + 关键字段快照；领域真相权威来源是语义层与外部系统（经 `adapters/` 防腐层）
+- 记忆的 `importance`（0~1）供 Composer 排序：> 0.7 全量放入，0.3~0.7 摘要放入，≤ 0.3 丢弃
+- TIME 策略记忆超过阈值（默认 30 分钟）无活动自动失效（`MemoryManager.expire_by_time`）
+- `ReasoningStep` 必须携带 `citations` 或 `source_memory_ids` 以满足"来源可追溯"安全约束
+- 推理状态是会话级临时态，不复用为知识；与 LangGraph 图执行状态（checkpoint）分离存储
+- `MemoryStore` 遵循 ports/adapter 模式，默认 PostgreSQL，`USE_MEMORY_STORAGE=1` 回退内存实现
+
+#### 生命周期
+
+```
+用户消息 → 意图解析（parser）→ 技能匹配（skill_matcher）→ 上下文规划（ContextPlanner）
+    → 输出 ContextNeed（命中记忆 / 下探语义层 / 话题主体切换）
+    → MemoryManager 读取/写入 BusinessMemory（MemoryStore）
+    → ContextComposer 编排 LLMContext（Token 预算 + 摘要策略）
+    → ReasoningStateManager 维护推理链（ReasoningStep）与假设（Hypothesis）
+    → 注入 RuntimeContext → 场景执行
+```
+
+---
+
 ### 14. 共享通用层（Shared / Common）
 
 #### 概述
@@ -803,6 +856,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `AuditService` | 审计服务 | Security | Domain Service |
 | `BillingPort` | 收费系统适配器端口 | Insurance | Domain Service |
 | `BusinessAction` | 业务动作 | Common | Value Object |
+| `BusinessMemory` | 业务记忆 | Runtime | Entity |
 | `BusinessObject` | 业务对象 | Common | Value Object |
 | `ChatRequest` | Chat 请求 | Shared | DTO |
 | `Citation` | 引用来源 | Shared / Knowledge | Value Object |
@@ -810,6 +864,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Coding` | 编码信息 | MedicalRecord | Value Object |
 | `ComplianceScore` | 合规评分 | AuditRisk | Value Object |
 | `Consumable` | 耗材 | OrderFee | Value Object |
+| `ContextComposer` | 上下文编排器 | Runtime | Domain Service |
+| `ContextNeed` | 上下文需求 | Runtime | Value Object |
+| `ContextPlanner` | 上下文规划器 | Runtime | Domain Service |
 | `DataQualityStatus` | 数据质量状态 | Shared | Value Object |
 | `DenialRecord` | 拒付记录 | Appeal | Entity |
 | `DesensitizationService` | 脱敏服务 | Security | Domain Service |
@@ -819,11 +876,13 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `DrgGroupResult` | DRG 分组结果 | DrgDip | Value Object |
 | `Drug` | 药品 | OrderFee | Value Object |
 | `EmrPort` | EMR 适配器端口 | MedicalRecord | Domain Service |
+| `ExpirePolicy` | 过期策略 | Runtime | Value Object |
 | `ErrorCodeEntry` | 错误码知识条目 | Knowledge | Entity |
 | `ErrorDetail` | 错误详情 | Shared | DTO |
 | `Evidence` | 证据材料 | Appeal | Entity |
 | `FeeItem` | 费用明细 | OrderFee | Entity |
 | `HisPort` | HIS 适配器端口 | Patient | Domain Service |
+| `Hypothesis` | 推理假设 | Runtime | Entity |
 | `InsuranceInterfacePort` | 医保接口适配器端口 | Insurance | Domain Service |
 | `InsuranceTransaction` | 医保交易 | Insurance | Entity |
 | `IntentResult` | 意图识别结果 | Runtime | DTO |
@@ -831,12 +890,16 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `KnowledgeChunk` | 知识切片 | Knowledge | Entity |
 | `KnowledgeEnhancementService` | 知识扩展服务 | Knowledge | Domain Service |
 | `KnowledgeExtensionStatus` | 知识扩展状态 | Knowledge | Value Object |
+| `LLMContext` | LLM 上下文 | Runtime | DTO |
 | `McpCapability` | MCP 能力 | SkillTool | Entity |
 | `McpRiskLevel` | MCP 风险等级 | SkillTool | Value Object |
 | `McpServer` | MCP 服务器 | SkillTool | Entity |
 | `McpTransportType` | MCP 传输类型 | SkillTool | Value Object |
 | `MedicalRecordHomepage` | 病案首页 | MedicalRecord | Aggregate Root |
 | `MedicalRecordPort` | 病案适配器端口 | MedicalRecord | Domain Service |
+| `MemoryManager` | 记忆管理器 | Runtime | Domain Service |
+| `MemoryStore` | 记忆存储端口 | Runtime | Domain Service |
+| `MemoryType` | 记忆类型 | Runtime | Value Object |
 | `ModelGateway` | 模型网关 | ModelService | Domain Service |
 | `ModelRequest` | 模型请求 | ModelService | DTO |
 | `ModelResponse` | 模型响应 | ModelService | DTO |
@@ -847,6 +910,10 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ProfitLoss` | 盈亏分析 | DrgDip | Value Object |
 | `PromptTemplate` | 提示模板 | Knowledge | Entity |
 | `RAGPipeline` | RAG 管线 | Knowledge | Domain Service |
+| `ReasoningState` | 推理状态 | Runtime | Entity |
+| `ReasoningStateManager` | 推理状态管理器 | Runtime | Domain Service |
+| `ReasoningStep` | 推理步骤 | Runtime | Entity |
+| `ReasoningStep.kind` | 推理步骤类型 | Runtime | Value Object |
 | `RiskControlService` | 风控服务 | Security | Domain Service |
 | `RiskFlag` | 风险标记 | AuditRisk | Entity |
 | `Role` | 角色 | Shared | Value Object |
