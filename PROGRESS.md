@@ -1,8 +1,9 @@
 # PROGRESS.md — 开发进度追踪
 
-> **定位**：本文件是项目进度的唯一权威来源。两条进度线并行追踪：
+> **定位**：本文件是项目进度的唯一权威来源。三条进度线并行追踪：
 > 1. **功能领域单元**（业务能力视图，§1）——按"最小可验证单元"切片，回答"功能做没做、验没验"。
 > 2. **政策知识管线重构**（开发主线，§2）——P0-P10 重构阶段，回答"知识模型重构推进到哪、什么时候能切换生产"。
+> 3. **Runtime 建设**（开发主线，§3）——医保 Agent Runtime V1.0 三阶段落地，回答"运行时智能增强验证到什么程度"。
 > 状态实时更新；每个单元/阶段状态变更必须在此记录。禁止仅口头/IM 同步进度。
 
 ---
@@ -167,7 +168,44 @@
 
 ---
 
-## 3. 测试套件状态
+## 3. Runtime 建设（开发主线）
+
+> **依据**：`docs/steering/医保Agent-Runtime设计-V1.0-评估报告.md`（三阶段路线图 + ADR-007/008/009）。
+> **架构决策**：RuntimeContext 演进而非新建 BusinessSession（ADR-007）；Context Planner 作为
+> `runtime/intent/planner.py` 第三阶段（ADR-008）；Runtime 增强作为 scenario_executor 横切关注点（ADR-009）。
+
+### 3.1 三阶段路线图进度
+
+| 阶段 | 内容 | 状态 |
+|------|------|:--:|
+| 阶段一：地基建设（任务 1.1-1.7） | RuntimeContext 跨轮字段、BusinessMemory、MemoryStore/Manager、ContextComposer 骨架、WorkflowInstance 扩展 reasoning_state | ✅ 完成 |
+| 阶段二：智能增强（任务 2.1-2.6） | ContextPlanner、Token Budget + 摘要策略、scenario_executor 集成、ReasoningState 推理链、ExpirePolicy.TIME、主体切换检测 | ✅ 完成 |
+| 阶段三：全面验证（任务 3.1-3.6） | 全量回归、性能基准、灰度切换、文档同步 | ✅ 完成（2026-07-31） |
+
+### 3.2 阶段三验证结果（2026-07-31）
+
+| 任务 | 验证标准 | 结果 |
+|------|---------|------|
+| 3.1 全量回归 | 单元 → API → Flow | ✅ 与 HEAD 基线（fd12c79）逐集合对比**零新增失败**：单元 26F/894P、API 66F/43P、Flow 42F/9P（失败全部为 §5 预存债务/环境依赖）；顺带修复 `unit/shared/__init__.py` 缺失导致的 3 个收集错误 |
+| 3.2 性能基准 | Memory < 10ms、Composer < 50ms | ✅ Memory CRUD ≤ 0.003ms、MemoryManager 组合 0.005ms、Composer（60 记忆+5 推理步）0.244ms（`src/tests/performance/test_runtime_benchmarks.py`，300 轮均值） |
+| 3.3 灰度切换 | USE_MEMORY_STORAGE=1 零功能回归 | ✅ 三层失败集合均为默认模式严格子集（单元 25F/895P、API 66F/43P、Flow 39F/12P），差异全部为 PG 环境依赖在内存模式自然恢复 |
+| 3.4 领域字典 | `src/domain/AGENTS.md` 新增 Runtime 概念 | ✅ 新增 §13.5 Runtime 上下文（BusinessMemory / MemoryType / ExpirePolicy / ContextNeed / ReasoningState / ReasoningStep / ReasoningStep.kind 等 15 条），附录 A 同步 |
+| 3.5 本文件 | 新增 Runtime 建设主线 | ✅ 本节 |
+| 3.6 架构设计 | PaaS 层补充 Runtime 模块定位 | ✅ `docs/steering/架构设计.md` 会话上下文服务域 |
+
+### 3.3 新增测试资产
+
+- 单元测试 63 个：`unit/runtime/memory/`（模型+管理器）、`unit/runtime/context_composer/`、`unit/runtime/reasoning/`、`unit/runtime/intent/test_context_planner.py`、`unit/data_platform/test_memory_storage.py`
+- 性能基准 3 个：`performance/test_runtime_benchmarks.py`（微基准，进程内直测，与 Locust HTTP 压测互补）
+
+### 3.4 遗留事项
+
+- 评估报告中的 `ReasoningKind` 枚举当前以 `ReasoningStep.kind: str` 字面量表示（fact/inference/hypothesis/verified），尚未抽为独立枚举，已在领域字典中标注，后续演进
+- 预存测试债务（§5）治理不在本主线范围，按需另行立项
+
+---
+
+## 4. 测试套件状态
 
 > 后端：单元（`src/tests/unit/`）→ API（`src/tests/integration/api/`）→ Flow（`src/tests/integration/flow/`）。
 > 详见 `src/tests/AGENTS.md` 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。
@@ -178,7 +216,9 @@
 | rule_explanation 单元 + rules_search 流式 | ✅ 全绿 | 142 passed（含 Milvus 连真集） |
 | 提取契约 API（extraction-schema） | ✅ 全绿 | P8.3 更新断言后 3 passed |
 | 前端 policy-knowledge 5 tab | ✅ dev 编译 200 + 内容渲染 | tsc 5 页面零错误；`next dev` 烟测通过 |
-| 全量回归 | ⚠️ ~56 failed（预存债务） | 见 §4 测试债务 |
+| Runtime 新模块单元（memory/composer/reasoning/planner/storage） | ✅ 全绿 | 63 passed（§3.3） |
+| Runtime 性能基准 | ✅ 全绿 | 3 passed：Memory ≤ 0.005ms、Composer 0.244ms（§3.2） |
+| 全量回归 | ⚠️ 单元 26F/894P、API 66F/43P、Flow 42F/9P（预存债务） | 2026-07-31 与 HEAD 基线对比零新增失败，见 §5 测试债务 |
 
 ### 3.1 已知预存技术债（非当前任务引入，治理时优先级参考）
 - `src/components/settlement-explanation-page.tsx`：TS 类型错误（OutputItemValue.value 应为 number，传了 string|number）。**预先存在**，P9 之外。
@@ -187,9 +227,9 @@
 
 ---
 
-## 4. 测试套件债务（已知失败）
+## 5. 测试套件债务（已知失败）
 
-> 全量回归当前 ~56 failed。分类如下，按需治理：
+> 2026-07-31 口径：单元 26 failed、API 66 failed、Flow 42 failed（与 HEAD 基线完全一致，非 Runtime 主线引入）。分类如下，按需治理：
 
 | 类别 | 数量 | 根因 | 治理方式 |
 |---|---|---|---|
@@ -201,7 +241,7 @@
 
 ---
 
-## 5. 变更日志
+## 6. 变更日志
 
 | 日期 | 变更 | 影响 |
 |------|------|------|
@@ -217,10 +257,11 @@
 | 2026-07-29 | **P10.1a 政策问答读入口 schema 适配层**：policy_rules_search + structured_policy_retriever 适配 v2 schema（向量字段 vector、detail FieldTrace dict 解包、doc_id→policy_id 兼容）；灰度验证通过（4 典型问题新旧命中一致、v2 相关性正确）；stash 验证无回归 | §2 P10.1/M7 |
 | 2026-07-29 | **P10 完成（直接切换，未上线）**：读路径全量切纯 v2，删所有旧 schema 兼容代码（开关/适配层/LEGACY）；删旧 publish 通路 + 旧 schema 文件（policy_rules_schema/data_model1_loader）；drop 旧 policy_rules collection。scalar retrieval 标 xfail（v2 数据 gap：hosp_lv 政策简写 + med_type 低填充，精确结构化检索失效），待数据标准化 | §2 P10/M7 |
 | 2026-07-29 | **v2 维度值标准化**：hosp_lv/med_type 对齐 seed.py 业务字典（社区→一级、住院→住院-普通住院等），rule_to_entity 入库标准化 + 批量 upsert 88 条；scalar retrieval baseline 从 xfail 转 pass（支付比例组 0→3 命中）。剩余 gap：退休人员 60%折算公式是 v2 提取遗漏（rule_type 无"计算公式"），待数据补充 | §2 数据质量 |
+| 2026-07-31 | **Runtime 建设阶段三（全面验证）完成**：补 63 个新模块单元测试 + 3 个性能基准全绿；三层回归与 HEAD 基线零新增失败（顺带修复 `unit/shared/__init__.py` 缺失的 3 个收集错误）；USE_MEMORY_STORAGE=1 灰度零功能回归；`src/domain/AGENTS.md` 新增 §13.5 Runtime 上下文；架构设计.md 会话上下文服务域补充 Runtime 定位 | §3 Runtime 建设 |
 
 ---
 
-## 6. 状态定义
+## 7. 状态定义
 
 | 状态 | 含义 |
 |------|------|
