@@ -167,10 +167,10 @@
   <script>
     (function () {
       // 根据打开方式自适应图片前缀：
-      //   file:// 双击打开（本机打印主流程） -> 相对 docs/posters/app/ 到项目根再进 frontend/public
+      //   file:// 双击打开（本机打印主流程） -> 相对 docs/posters/app/ 到项目根再进 ppt-presentation/public
       //   http(s):// 经静态服务/Vite 代理    -> 走 web 绝对路径（前提是服务根能解析 /assets/...）
       var IMG_BASE = (location.protocol === 'file:')
-        ? '../../../frontend/public/assets/images/posters/pages/'
+        ? '../../../ppt-presentation/public/assets/images/posters/pages/'
         : '/assets/images/posters/pages/';
 
       var dataNode = document.getElementById('pages-data');
