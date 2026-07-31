@@ -1,15 +1,20 @@
 'use client'
 
+// 政策知识治理 · 概览（治理看板）。
+// 生命周期分布 + 待审 + 低置信预警 + 影响分析占位 + discovery 入口。
+// [来源: docs/steering/政策知识治理平台设计-V2.1.md §5.2]
+//
+// 数据聚合：policy-pipeline/summary（extraction 计数）+ policy-knowledge/stats（Milvus 已发布）。
+
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import {
-  FileText, Boxes, ListTree, AlertTriangle, ArrowRight, Loader2,
-  ShieldCheck, Compass, Activity,
+  FileText, Anchor, Lightbulb, ShieldCheck, AlertTriangle, Loader2,
+  Compass, Activity, GitBranch, Gauge,
 } from 'lucide-react'
 
-const API = '/api/v1/medical-insurance-ai-agent/policy-pipeline'
+const PIPELINE_API = '/api/v1/medical-insurance-ai-agent/policy-pipeline'
 const MILVUS_API = '/api/v1/medical-insurance-ai-agent/policy-knowledge'
-const SEMANTIC_API = '/api/v1/medical-insurance-ai-agent/semantic'
 
 interface PipelineSummary {
   documents_count: number
@@ -20,62 +25,39 @@ interface PipelineSummary {
   extractions_published: number
 }
 
-interface SemanticSummary {
-  domains_count: number
-  objects_count: number
-  metrics_count: number
-  mapped_count: number
-  unmapped_count: number
-  mapping_rate: number
-  value_missing_count: number
-  skill_references: number
-  discovery_tables: number
-  discovery_fields: number
-  discovery_unmapped: number
-}
+const LC_BAR: { key: string; label: string; color: string }[] = [
+  { key: 'draft', label: '待审 Draft', color: 'bg-slate-400' },
+  { key: 'reviewed', label: '待发布 Review', color: 'bg-amber-400' },
+  { key: 'published', label: '已发布 Published', color: 'bg-emerald-500' },
+  { key: 'rejected', label: '已驳回', color: 'bg-red-400' },
+]
 
-interface SchemaUpdateTask {
-  task_id: string
-  metric_code: string
-  strategy: string
-  status: string  // pending | running | done | failed
-  progress: number
-  total: number
-  processed: number
-  updated_at?: string
-}
-
-const TASK_STATUS_LABEL: Record<string, { label: string; cls: string }> = {
-  pending: { label: '待执行', cls: 'bg-slate-100 text-slate-600' },
-  running: { label: '执行中', cls: 'bg-blue-100 text-blue-700' },
-  done: { label: '已完成', cls: 'bg-emerald-100 text-emerald-700' },
-  failed: { label: '失败', cls: 'bg-red-100 text-red-700' },
-}
-
-export default function PolicyPipelineDashboard() {
+export default function GovernanceDashboard() {
   const [data, setData] = useState<PipelineSummary | null>(null)
   const [milvusTotal, setMilvusTotal] = useState(0)
-  const [semantic, setSemantic] = useState<SemanticSummary | null>(null)
-  const [tasks, setTasks] = useState<SchemaUpdateTask[]>([])
+  const [lowConfCount, setLowConfCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
-      const [summaryRes, statsRes, semanticRes, tasksRes] = await Promise.all([
-        fetch(`${API}/summary`),
+      const [summaryRes, statsRes] = await Promise.all([
+        fetch(`${PIPELINE_API}/summary`),
         fetch(`${MILVUS_API}/stats`),
-        fetch(`${SEMANTIC_API}/summary`),
-        fetch(`${API}/schema-update/tasks`),
       ])
       if (summaryRes.ok) setData(await summaryRes.json())
-      if (statsRes.ok) {
-        const s = await statsRes.json()
-        setMilvusTotal(s.total || 0)
-      }
-      if (semanticRes.ok) setSemantic(await semanticRes.json())
-      if (tasksRes.ok) setTasks(await tasksRes.json())
+      if (statsRes.ok) { const s = await statsRes.json(); setMilvusTotal(s.total || 0) }
+
+      // 低置信预警：扫一页 extractions 统计 < 0.8（轻量，仅预警示意）
+      try {
+        const r = await fetch(`${PIPELINE_API}/extractions?page=1&page_size=100`)
+        if (r.ok) {
+          const d = await r.json()
+          const items = d.items || []
+          setLowConfCount(items.filter((e: any) => (e.confidence ?? 1) < 0.8).length)
+        }
+      } catch { /* ignore */ }
     } catch {
       setError('无法连接后端')
     } finally {
@@ -89,196 +71,161 @@ export default function PolicyPipelineDashboard() {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-3">
         <Loader2 className="size-6 text-blue-500 animate-spin" />
-        <span className="text-sm text-slate-400">加载管线数据...</span>
+        <span className="text-sm text-slate-400">加载治理数据...</span>
       </div>
     )
   }
 
-  if (error) {
+  if (error || !data) {
     return (
-      <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-    )
-  }
-
-  if (!data) {
-    return (
-      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-        管线概览数据暂不可用，请确认后端 policy-pipeline 接口已启用。
+      <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        {error || '治理概览数据暂不可用，请确认后端 policy-pipeline 接口已启用。'}
       </div>
     )
   }
 
   const d = data
-  const pendingDocs = d.documents_raw
+  const rejected = Math.max(0, d.extractions_count - d.extractions_draft - d.extractions_reviewed - d.extractions_published)
+  const lcCounts: Record<string, number> = {
+    draft: d.extractions_draft,
+    reviewed: d.extractions_reviewed,
+    published: d.extractions_published,
+    rejected,
+  }
+  const lcTotal = d.extractions_count || 1
   const pendingReview = d.extractions_draft
 
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
       <header className="space-y-1">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex h-7 items-center rounded-full bg-white/70 px-2.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 backdrop-blur">
-            政策知识管线
-          </span>
-          <span className="text-xs text-slate-500">从政策原文到知识规则的全流程管理</span>
-        </div>
-        <h2 className="text-xl font-semibold tracking-tight text-slate-900">概览</h2>
+        <h2 className="text-xl font-semibold tracking-tight text-slate-900">治理概览</h2>
+        <p className="text-xs text-slate-500">质量 · 版本 · 审核 · 发布 · 追踪 · 影响分析</p>
       </header>
 
-      {/* Top Stats */}
+      {/* 四对象统计 */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Link href="/policy-knowledge/documents" className="block group">
-          <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm transition-all hover:border-blue-400/50 hover:shadow-md">
-            <div className="flex items-center gap-2 mb-2">
-              <FileText className="size-4 text-blue-500" />
-              <span className="text-xs text-slate-500">政策原文</span>
-            </div>
-            <div className="text-2xl font-bold text-blue-600">{d.documents_count}</div>
-            {pendingDocs > 0 && <div className="mt-1 text-xs text-amber-600">{pendingDocs} 条待提取</div>}
-          </div>
-        </Link>
+        <StatCard href="/policy-knowledge/documents" icon={FileText} color="blue" label="文档" value={d.documents_count} sub={d.documents_raw > 0 ? `${d.documents_raw} 待提取` : undefined} />
+        <StatCard href="/policy-knowledge/units" icon={Anchor} color="purple" label="单元 (Unit)" value={d.extractions_count} />
+        <StatCard href="/policy-knowledge/knowledge?sub=library" icon={Lightbulb} color="emerald" label="已发布知识" value={milvusTotal} sub="进入检索池" />
+        <StatCard href="/policy-knowledge/knowledge?sub=audit" icon={ShieldCheck} color="amber" label="待审知识" value={pendingReview} sub={pendingReview > 0 ? '需人工审核' : undefined} />
+      </div>
 
-        <Link href="/policy-knowledge/facts" className="block group">
-          <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm transition-all hover:border-purple-400/50 hover:shadow-md">
-            <div className="flex items-center gap-2 mb-2">
-              <Boxes className="size-4 text-purple-500" />
-              <span className="text-xs text-slate-500">事实/提取</span>
+      {/* 生命周期分布（治理核心可视化）*/}
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <GitBranch className="size-4 text-indigo-500" />
+          <h3 className="text-sm font-semibold text-slate-700">知识生命周期分布</h3>
+          <span className="ml-auto text-xs text-slate-400">共 {d.extractions_count} 条</span>
+        </div>
+        {/* 堆叠条 */}
+        <div className="mb-3 flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
+          {LC_BAR.map((b) => {
+            const cnt = lcCounts[b.key] || 0
+            const pct = (cnt / lcTotal) * 100
+            return pct > 0 ? <div key={b.key} className={b.color} style={{ width: `${pct}%` }} title={`${b.label}: ${cnt}`} /> : null
+          })}
+        </div>
+        {/* 图例 + 计数 */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {LC_BAR.map((b) => (
+            <div key={b.key} className="flex items-center gap-1.5">
+              <span className={`size-2.5 rounded-sm ${b.color}`} />
+              <span className="text-[11px] text-slate-500">{b.label}</span>
+              <span className="ml-auto text-sm font-semibold text-slate-700">{lcCounts[b.key] || 0}</span>
             </div>
-            <div className="text-2xl font-bold text-purple-600">{d.extractions_count}</div>
-            {pendingReview > 0 && <div className="mt-1 text-xs text-amber-600">{pendingReview} 条待审核</div>}
-          </div>
-        </Link>
-
-        <Link href="/policy-knowledge/structured" className="block group">
-          <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm transition-all hover:border-emerald-400/50 hover:shadow-md">
-            <div className="flex items-center gap-2 mb-2">
-              <ListTree className="size-4 text-emerald-500" />
-              <span className="text-xs text-slate-500">已入库规则</span>
-            </div>
-            <div className="text-2xl font-bold text-emerald-600">{milvusTotal}</div>
-          </div>
-        </Link>
-
-        <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="size-4 text-amber-500" />
-            <span className="text-xs text-slate-500">待处理</span>
-          </div>
-          <div className="text-2xl font-bold text-amber-600">{pendingDocs + pendingReview}</div>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+          <span className="rounded bg-violet-100 px-1.5 py-0.5 text-violet-700">已替代</span>
+          <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-zinc-600">已废止</span>
+          两态随版本治理接入（V2.1 §3.1），当前数据暂未承载。
         </div>
       </div>
 
-      {/* 3-Step Pipeline Progress */}
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="text-sm font-semibold text-slate-700 mb-4">处理流程</h3>
-        <div className="flex items-center gap-0">
-          {/* Step 1 */}
-          <div className="flex-1 text-center">
-            <div className={`inline-flex size-10 items-center justify-center rounded-full text-sm font-bold ${d.documents_count > 0 ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-400'}`}>1</div>
-            <div className="mt-1.5 text-xs font-medium text-slate-600">政策原文</div>
-            <div className="text-[10px] text-slate-400">{d.documents_count} 条</div>
+      {/* 质量 + 影响分析 */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* 质量概览 */}
+        <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <Gauge className="size-4 text-cyan-500" />
+            <h3 className="text-sm font-semibold text-slate-700">质量概览</h3>
           </div>
-          <ArrowRight className="size-4 text-slate-300 shrink-0" />
-          {/* Step 2 */}
-          <div className="flex-1 text-center">
-            <div className={`inline-flex size-10 items-center justify-center rounded-full text-sm font-bold ${d.extractions_count > 0 ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-400'}`}>2</div>
-            <div className="mt-1.5 text-xs font-medium text-slate-600">事实拆分</div>
-            <div className="text-[10px] text-slate-400">{d.extractions_count} 条</div>
-          </div>
-          <ArrowRight className="size-4 text-slate-300 shrink-0" />
-          {/* Step 3 */}
-          <div className="flex-1 text-center">
-            <div className={`inline-flex size-10 items-center justify-center rounded-full text-sm font-bold ${milvusTotal > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>3</div>
-            <div className="mt-1.5 text-xs font-medium text-slate-600">结构化入库</div>
-            <div className="text-[10px] text-slate-400">{milvusTotal} 条</div>
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="size-4 text-amber-500" />
+              <span className="text-xs text-slate-500">低置信预警 (&lt;0.8)</span>
+              <span className="ml-auto text-lg font-bold text-amber-600">{lowConfCount}</span>
+              <Link href="/policy-knowledge/knowledge?sub=audit" className="ml-2 text-[10px] text-slate-400 hover:text-slate-600">查看 →</Link>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <ShieldCheck className="size-4 text-slate-300" />
+              质量门禁（填充率 / 值域合规率 / 黄金样本一致性）随提取增强接入。
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* 质量与映射概览（9.2 新增） */}
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center gap-2 mb-4">
-          <ShieldCheck className="size-4 text-indigo-500" />
-          <h3 className="text-sm font-semibold text-slate-700">质量与映射概览</h3>
-          <Link href="/policy-knowledge/discovery" className="ml-auto text-xs text-slate-400 hover:text-slate-600">
-            发现 →
-          </Link>
+        {/* 影响分析（占位）*/}
+        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <Activity className="size-4 text-indigo-500" />
+            <h3 className="text-sm font-semibold text-slate-700">影响分析</h3>
+            <span className="ml-auto rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">待接入</span>
+          </div>
+          <p className="text-xs leading-relaxed text-slate-500">
+            政策变更 → 定位受影响 Unit → 关联 Knowledge → 经提取契约反查 Metric（止于此，Skill/Agent 独立消费）。
+            影响链 <code className="rounded bg-slate-100 px-1 text-[10px]">Document → Unit → Knowledge → Metric</code> 随文档版本治理接入。
+          </p>
         </div>
-        {semantic ? (
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <div>
-              <div className="text-xs text-slate-500">指标映射率</div>
-              <div className="mt-1 text-2xl font-bold text-indigo-600">{Math.round(semantic.mapping_rate * 100)}%</div>
-              <div className="text-[10px] text-slate-400">{semantic.mapped_count}/{semantic.metrics_count} 指标已映射</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">未映射指标</div>
-              <div className="mt-1 text-2xl font-bold text-amber-600">{semantic.unmapped_count}</div>
-              <div className="text-[10px] text-slate-400">值域缺失 {semantic.value_missing_count}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">语义层规模</div>
-              <div className="mt-1 text-2xl font-bold text-slate-700">{semantic.metrics_count}</div>
-              <div className="text-[10px] text-slate-400">{semantic.domains_count} 域 / {semantic.objects_count} 对象</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">数据源扫描</div>
-              <div className="mt-1 text-2xl font-bold text-slate-700">{semantic.discovery_tables}</div>
-              <div className="text-[10px] text-slate-400">{semantic.discovery_fields} 字段 / {semantic.discovery_unmapped} 未映射</div>
-            </div>
-          </div>
-        ) : (
-          <div className="text-xs text-slate-400">语义层 summary 接口暂不可用。</div>
-        )}
-      </div>
-
-      {/* 更新任务状态（9.2 新增） */}
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center gap-2 mb-4">
-          <Activity className="size-4 text-cyan-500" />
-          <h3 className="text-sm font-semibold text-slate-700">schema 演化任务</h3>
-        </div>
-        {tasks.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            {tasks.slice(0, 5).map((t) => {
-              const st = TASK_STATUS_LABEL[t.status] || { label: t.status, cls: 'bg-slate-100 text-slate-600' }
-              return (
-                <div key={t.task_id} className="flex items-center gap-3 rounded-lg border border-slate-100 px-3 py-2">
-                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${st.cls}`}>{st.label}</span>
-                  <code className="text-xs text-slate-600">{t.metric_code}</code>
-                  <span className="text-xs text-slate-400">{t.strategy}</span>
-                  <div className="ml-auto flex items-center gap-2">
-                    <div className="h-1.5 w-24 overflow-hidden rounded-full bg-slate-100">
-                      <div className="h-full bg-cyan-500" style={{ width: `${t.progress}%` }} />
-                    </div>
-                    <span className="text-xs text-slate-500">{t.processed}/{t.total}</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            <Compass className="size-3.5" />暂无 schema 演化任务。
-          </div>
-        )}
       </div>
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Link href="/policy-knowledge/documents" className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 text-sm font-medium text-blue-700 hover:bg-blue-50 transition-colors">
-          <FileText className="size-4" /> 管理政策原文
-          <ArrowRight className="size-3.5 ml-auto" />
+          <FileText className="size-4" /> 管理文档 <span className="ml-auto text-slate-300">→</span>
         </Link>
-        <Link href="/policy-knowledge/facts" className="flex items-center gap-3 rounded-lg border border-purple-200 bg-purple-50/50 px-4 py-3 text-sm font-medium text-purple-700 hover:bg-purple-50 transition-colors">
-          <Boxes className="size-4" /> 事实拆分与提取
-          <ArrowRight className="size-3.5 ml-auto" />
+        <Link href="/policy-knowledge/units" className="flex items-center gap-3 rounded-lg border border-purple-200 bg-purple-50/50 px-4 py-3 text-sm font-medium text-purple-700 hover:bg-purple-50 transition-colors">
+          <Anchor className="size-4" /> 浏览单元 <span className="ml-auto text-slate-300">→</span>
         </Link>
-        <Link href="/policy-knowledge/structured" className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50/50 px-4 py-3 text-sm font-medium text-emerald-700 hover:bg-emerald-50 transition-colors">
-          <ListTree className="size-4" /> 结构化检索
-          <ArrowRight className="size-3.5 ml-auto" />
+        <Link href="/policy-knowledge/knowledge?sub=audit" className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50/50 px-4 py-3 text-sm font-medium text-amber-700 hover:bg-amber-50 transition-colors">
+          <ShieldCheck className="size-4" /> 知识审核 <span className="ml-auto text-slate-300">→</span>
         </Link>
       </div>
+
+      {/* Discovery 入口（候选指标回写语义层）*/}
+      <Link href="/policy-knowledge/discovery" className="flex items-center gap-2 text-xs text-slate-400 hover:text-slate-600">
+        <Compass className="size-3.5" /> 发现（扫描高频实体/关系 → 候选指标回写语义层）→
+      </Link>
     </div>
+  )
+}
+
+function StatCard({
+  href, icon: Icon, color, label, value, sub,
+}: {
+  href: string
+  icon: React.ComponentType<{ className?: string }>
+  color: 'blue' | 'purple' | 'emerald' | 'amber'
+  label: string
+  value: number
+  sub?: string
+}) {
+  const palette: Record<string, string> = {
+    blue: 'hover:border-blue-400/50 text-blue-600',
+    purple: 'hover:border-purple-400/50 text-purple-600',
+    emerald: 'hover:border-emerald-400/50 text-emerald-600',
+    amber: 'hover:border-amber-400/50 text-amber-600',
+  }
+  return (
+    <Link href={href} className="block group">
+      <div className={`rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm transition-all ${palette[color]} hover:shadow-md`}>
+        <div className="mb-2 flex items-center gap-2">
+          <Icon className="size-4" />
+          <span className="text-xs text-slate-500">{label}</span>
+        </div>
+        <div className="text-2xl font-bold">{value}</div>
+        {sub && <div className="mt-1 text-xs text-slate-400">{sub}</div>}
+      </div>
+    </Link>
   )
 }

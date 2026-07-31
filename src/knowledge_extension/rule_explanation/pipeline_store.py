@@ -68,6 +68,7 @@ ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS crawl_status VARCHAR(32);
 ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS crawl_time TIMESTAMPTZ;
 ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS coverage_ratio FLOAT DEFAULT 0;
 ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS coverage_detail JSONB DEFAULT '{}';
+ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS dup_state JSONB DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_docs_category ON policy_documents(category);
 CREATE INDEX IF NOT EXISTS idx_docs_region ON policy_documents(policy_region);
 """
@@ -156,29 +157,110 @@ class PipelineStore:
         conditions = []
         params: list[Any] = []
         if status:
-            conditions.append("status = %s")
+            conditions.append("d.status = %s")
             params.append(status)
         if keyword.strip():
-            conditions.append("title ILIKE %s")
+            conditions.append("d.title ILIKE %s")
             params.append(f"%{keyword.strip()}%")
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         offset = (page - 1) * page_size
 
-        count_row = client.execute(f"SELECT COUNT(*) as cnt FROM policy_documents {where}", tuple(params))
+        count_row = client.execute(f"SELECT COUNT(*) as cnt FROM policy_documents d {where}", tuple(params))
         total = count_row[0]["cnt"] if count_row else 0
 
         rows = client.execute(
-            f"SELECT * FROM policy_documents {where} ORDER BY created_at DESC LIMIT %s OFFSET %s",
-            tuple(params) + (page_size, offset),
+            f"SELECT d.* FROM policy_documents d {where} ORDER BY d.created_at DESC",
+            tuple(params),
         )
-        items = [self._doc_row(r) for r in rows]
-        return {"items": items, "total": total, "page": page, "page_size": page_size}
+        # 待处理数与前端 stats.draft 口径一致：以「去重后的叶子单元」为计数单位。
+        # 之前用 SQL 子查询统计 draft 提取记录条数，会把「source_text 匹配不到叶子」
+        # 的孤儿记录算进去，导致列表显示「待处理 N」但选中后前端按单元算=0（显示已完成）。
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            doc = self._doc_row(r)
+            doc["pending_count"] = self._pending_unit_count(doc)
+            items.append(doc)
+        offset = (page - 1) * page_size
+        # 待处理多的优先（保留原排序语义），Python 层排序后分页
+        items.sort(key=lambda x: (-x["pending_count"], x.get("created_at", "")))
+        paged = items[offset:offset + page_size]
+        return {"items": paged, "total": total, "page": page, "page_size": page_size}
+
+    def _pending_unit_count(self, doc: dict[str, Any]) -> int:
+        """与前端 stats.draft 口径一致的待处理单元数。
+
+        = draft 单元（有 draft 提取记录且状态聚合为 draft 的去重叶子）
+          + 无提取记录且未经 unit_audit 审核的去重叶子。
+
+        孤儿 draft 记录（source_text 匹配不到叶子）不计入。
+        [来源: 排障 doc_466953309ccf/doc_ebea08e4d59d 孤儿记录导致待处理数虚高]
+        """
+        doc_id = doc["doc_id"]
+        try:
+            from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import (
+                parse_kept_leaves,
+                match_leaves,
+            )
+            _root, _by_id, _all_leaves, kept = parse_kept_leaves(
+                doc.get("content_text", ""), doc.get("title", "")
+            )
+        except Exception:
+            logger.exception("parse_kept_leaves failed for doc %s", doc_id)
+            return 0
+        if not kept:
+            return 0
+        rows = self._get_client().execute(
+            "SELECT source_text, extracted_fields, status FROM policy_extractions WHERE doc_id = %s",
+            (doc_id,),
+        )
+        # 每个 kept 叶子关联的提取状态列表（复刻前端 leafStatus 聚合）
+        kept_status: dict[str, list[str]] = {lf.node_id: [] for lf in kept}
+        for r in rows:
+            fields = r.get("extracted_fields") or {}
+            if isinstance(fields, str):
+                try:
+                    fields = json.loads(fields)
+                except (json.JSONDecodeError, TypeError):
+                    fields = {}
+            fact = fields.get("fact_text") if isinstance(fields, dict) else ""
+            src = (fact or r.get("source_text") or "").strip()
+            for lid in match_leaves(src, kept):
+                if lid in kept_status:
+                    kept_status[lid].append(r["status"])
+
+        def leaf_status(statuses: list[str]) -> str:
+            if not statuses:
+                return "pending"
+            if any(s == "rejected" for s in statuses):
+                return "rejected"
+            if all(s == "published" for s in statuses):
+                return "published"
+            if all(s in ("reviewed", "published") for s in statuses):
+                return "reviewed"
+            return "draft"
+
+        dup_state = doc.get("dup_state") or {}
+        unit_audit = dup_state.get("unit_audit", {}) or {}
+        draft_cnt = sum(1 for lid, st in kept_status.items() if leaf_status(st) == "draft")
+        no_ext_pending = sum(
+            1 for lid, st in kept_status.items() if not st and lid not in unit_audit
+        )
+        return draft_cnt + no_ext_pending
 
     def get_document(self, doc_id: str) -> dict[str, Any] | None:
         rows = self._get_client().execute(
             "SELECT * FROM policy_documents WHERE doc_id = %s", (doc_id,)
         )
         return self._doc_row(rows[0]) if rows else None
+
+    def save_dup_state(self, doc_id: str, state: dict[str, Any]) -> bool:
+        """保存重复处理状态（需求1：持久化，重启不丢失）"""
+        client = self._get_client()
+        client.execute(
+            "UPDATE policy_documents SET dup_state = %s, updated_at = CURRENT_TIMESTAMP WHERE doc_id = %s",
+            (json.dumps(state, ensure_ascii=False), doc_id),
+        )
+        return True
 
     def create_document(self, data: dict[str, Any]) -> dict[str, Any]:
         import hashlib
@@ -314,6 +396,8 @@ class PipelineStore:
             "status": row["status"],
             "coverage_ratio": float(row.get("coverage_ratio", 0)),
             "coverage_detail": self._json_field(row.get("coverage_detail")),
+            "dup_state": self._json_field(row.get("dup_state")),
+            "pending_count": int(row.get("pending_count", 0)) if row.get("pending_count") is not None else 0,
             "created_at": str(row["created_at"]) if row.get("created_at") else "",
             "updated_at": str(row.get("updated_at")) if row.get("updated_at") else "",
         }

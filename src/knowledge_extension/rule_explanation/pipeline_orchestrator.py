@@ -147,6 +147,46 @@ class PipelineOrchestrator:
             chunks.append("\n".join(cur))
         return chunks
 
+    def extract_single(self, doc_id: str, source_text: str) -> dict[str, Any]:
+        """对单段文本提取政策事实并创建一条提取记录（用于无提取记录的单元）。"""
+        doc = self._store.get_document(doc_id)
+        if not doc:
+            return {"success": False, "error": "文档不存在", "doc_id": doc_id}
+        try:
+            facts = self._extract_policy_facts(source_text, document_title=doc.get("title", ""))
+            if not facts:
+                # LLM 未提取出事实 → 创建一条占位记录（source_text 原样保留，状态 draft）
+                extraction_item = {
+                    "extraction_id": f"ext_{uuid.uuid4().hex[:12]}",
+                    "doc_id": doc_id,
+                    "source_text": source_text,
+                    "extracted_fields": {"fact_text": source_text, "rules": [], "total_rules": 0},
+                    "confidence": 0.5,
+                }
+                self._store.batch_create_extractions([extraction_item])
+                return {"success": True, "doc_id": doc_id, "extractions_created": 1, "facts": 0}
+            extraction_items = []
+            for fact in facts:
+                fact_rules = fact.get("rules", [])
+                confidences = [r.get("confidence", 0.7) for r in fact_rules]
+                avg_conf = sum(confidences) / len(confidences) if confidences else 0.7
+                extraction_items.append({
+                    "extraction_id": f"ext_{uuid.uuid4().hex[:12]}",
+                    "doc_id": doc_id,
+                    "source_text": fact.get("fact_text", source_text),
+                    "extracted_fields": {
+                        "fact_text": fact.get("fact_text", ""),
+                        "rules": fact_rules,
+                        "total_rules": len(fact_rules),
+                    },
+                    "confidence": round(avg_conf, 2),
+                })
+            count = self._store.batch_create_extractions(extraction_items)
+            return {"success": True, "doc_id": doc_id, "extractions_created": count, "facts": len(facts)}
+        except Exception as e:
+            logger.error("单条提取失败 doc_id=%s: %s", doc_id, e)
+            return {"success": False, "error": str(e), "doc_id": doc_id}
+
     def _extract_policy_facts(
         self,
         document_text: str,
@@ -453,3 +493,42 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
         except Exception as e:
             logger.error("发布到新 collection 失败 ext=%s: %s", extraction_id, e)
             return {"success": False, "error": str(e), "extraction_id": extraction_id}
+
+    # ═══════════════ Single-unit Re-extraction (LLM) ═══════════════
+
+    def reextract_unit(self, extraction_id: str) -> dict[str, Any]:
+        """对单个单元重新调用 LLM 提取（人工审核不通过后触发）。
+
+        复用 _extract_policy_facts：用单元 source_text 作为输入，取首条事实覆盖
+        extracted_fields，置信度回填规则均值，状态重置为 draft（需重新审核）。
+        """
+        ext = self._store.get_extraction(extraction_id)
+        if not ext:
+            return {"success": False, "error": "提取记录不存在"}
+        doc = self._store.get_document(ext["doc_id"])
+        title = doc.get("title", "") if doc else ""
+        source = ext.get("source_text") or ext.get("extracted_fields", {}).get("fact_text", "")
+        if not source.strip():
+            return {"success": False, "error": "单元无源文本，无法重提取"}
+
+        facts = self._extract_policy_facts(source, title)
+        if not facts:
+            return {"success": False, "error": "LLM 未返回结果（请检查 MODEL_API_KEY 与模型配置）"}
+
+        fact = facts[0]
+        rules = fact.get("rules", []) or []
+        confs = [float(r.get("confidence", 0.7) or 0.7) for r in rules]
+        avg_conf = round(sum(confs) / len(confs), 2) if confs else 0.7
+
+        merged_fields = {**(ext.get("extracted_fields") or {})}
+        merged_fields["fact_text"] = fact.get("fact_text", source)
+        merged_fields["rules"] = rules
+        merged_fields["total_rules"] = len(rules)
+        merged_fields.pop("audit_reason", None)  # 重提取清除上次驳回原因
+
+        updated = self._store.update_extraction(extraction_id, {
+            "extracted_fields": merged_fields,
+            "confidence": avg_conf,
+            "status": "draft",  # 重提取后需重新审核
+        })
+        return {"success": True, "extraction_id": extraction_id, "extraction": updated}

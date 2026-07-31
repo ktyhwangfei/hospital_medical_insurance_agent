@@ -310,6 +310,25 @@ def delete_document(doc_id: str):
     return {"deleted": True, "doc_id": doc_id}
 
 
+# ── 重复处理状态持久化（需求1）──
+
+@router.get("/documents/{doc_id}/dup-state")
+def get_dup_state(doc_id: str):
+    """获取重复处理状态（已处理/已标记重复），重启不丢失。"""
+    doc = _get_store().get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=error_detail("NOT_FOUND", "文档不存在", {"doc_id": doc_id}))
+    return doc.get("dup_state", {}) or {}
+
+
+@router.put("/documents/{doc_id}/dup-state")
+async def save_dup_state(doc_id: str, request: Request):
+    """保存重复处理状态。"""
+    body = await request.json()
+    _get_store().save_dup_state(doc_id, body)
+    return body
+
+
 @router.post("/documents/{doc_id}/extract")
 def trigger_extraction(doc_id: str):
     result = _get_orchestrator().run_extraction(doc_id)
@@ -318,16 +337,97 @@ def trigger_extraction(doc_id: str):
     return result
 
 
+@router.post("/documents/{doc_id}/extract-leaf")
+async def extract_single_leaf(doc_id: str, request: Request):
+    """对单个叶子单元触发 LLM 提取（用于无提取记录的单元）。"""
+    import traceback
+    body = await request.json()
+    source_text = body.get("source_text", "").strip()
+    if not source_text:
+        raise HTTPException(status_code=400, detail=error_detail("BAD_REQUEST", "source_text 不能为空", {}))
+    try:
+        result = _get_orchestrator().extract_single(doc_id, source_text)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_detail("EXTRACTION_ERROR", str(e), {"doc_id": doc_id}))
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=error_detail("EXTRACTION_FAILED", result.get("error", ""), {"doc_id": doc_id}))
+    return result
+
+
+@router.get("/documents/{doc_id}/structure")
+def get_document_structure(doc_id: str):
+    """文档结构树（章/条/段/项/目 层级，含祖先面包屑 path + 上级语境）。
+
+    供前端「单元」页按文档树渲染、仅在叶子节点做单元划分、单元含上级内容。
+    [来源: docs/steering/政策知识治理平台设计-V2.1.md §5.4 需求1-4]
+    """
+    doc = _get_store().get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=error_detail("NOT_FOUND", "文档不存在", {"doc_id": doc_id}))
+    from src.knowledge_extension.rule_explanation.policy_struct.structure_parser import (
+        parse_policy_structure, node_to_dict,
+    )
+    content_text = doc.get("content_text", "") or ""
+    root = parse_policy_structure(content_text, document_title=doc.get("title", ""))
+    return {
+        "doc_id": doc_id,
+        "title": doc.get("title", ""),
+        "content_text": content_text,
+        "root": node_to_dict(root),
+    }
+
+
 # ═══════════════ Extractions ═══════════════
 
 @router.get("/extractions")
 def list_extractions(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=1000),
     doc_id: str = Query(""),
     status: str = Query(""),
 ):
     return _get_store().list_extractions(page=page, page_size=page_size, doc_id=doc_id, status=status)
+
+
+@router.post("/extractions/batch/audit")
+async def batch_audit_extractions(request: Request):
+    """批量审核单元。body: {extraction_ids: [], action: "approve"|"reject", reason?: ""}
+
+    - approve → status=reviewed（清除上次的 audit_reason）
+    - reject  → status=rejected，并把驳回原因写入 extracted_fields.audit_reason（必填）
+    """
+    body = await request.json()
+    ids = body.get("extraction_ids") or []
+    action = body.get("action")
+    reason = (body.get("reason") or "").strip()
+    if not ids or action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail=error_detail(
+            "INVALID_INPUT", "extraction_ids 不能为空，action 必须是 approve/reject", {}))
+    if action == "reject" and not reason:
+        raise HTTPException(status_code=400, detail=error_detail("NO_REASON", "驳回需填写原因", {}))
+
+    store = _get_store()
+    results = []
+    for eid in ids:
+        ext = store.get_extraction(eid)
+        if not ext:
+            results.append({"extraction_id": eid, "ok": False, "error": "不存在"})
+            continue
+        fields = dict(ext.get("extracted_fields") or {})
+        if action == "reject":
+            fields["audit_reason"] = reason
+        else:
+            fields.pop("audit_reason", None)
+        store.update_extraction(eid, {
+            "status": "reviewed" if action == "approve" else "rejected",
+            "extracted_fields": fields,
+        })
+        results.append({"extraction_id": eid, "ok": True})
+    return {
+        "success": True, "action": action, "reason": reason if action == "reject" else "",
+        "updated": sum(1 for r in results if r["ok"]), "results": results,
+    }
 
 
 @router.get("/extractions/{extraction_id}")
@@ -361,6 +461,19 @@ def publish_extraction(extraction_id: str):
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=error_detail(
             "PUBLISH_FAILED", result.get("error", ""), {"extraction_id": extraction_id}))
+    return result
+
+
+@router.post("/extractions/{extraction_id}/reextract")
+def reextract_unit(extraction_id: str):
+    """对单个单元手动触发 LLM 重新提取（审核不通过后用）。
+
+    重提取后状态重置为 draft（需重新审核）。需配置 MODEL_API_KEY。
+    """
+    result = _get_orchestrator().reextract_unit(extraction_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=error_detail(
+            "REEXTRACT_FAILED", result.get("error", ""), {"extraction_id": extraction_id}))
     return result
 
 
