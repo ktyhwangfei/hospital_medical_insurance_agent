@@ -243,8 +243,8 @@ function AuditView({ docId }: { docId: string }) {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${lc.cls}`}>{lc.label}</span>
                   <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200">{ktLabel}</span>
-                  <span className="flex items-center gap-1 text-[11px] text-slate-500">
-                    <FileText className="size-3" />{ext.doc_title || ext.doc_id}
+                  <span className="flex items-center gap-1 text-[11px] text-slate-500 min-w-0">
+                    <FileText className="size-3 shrink-0" /><span className="truncate">{ext.doc_title || ext.doc_id}</span>
                   </span>
                   {!!ext.extracted_fields?.unit_no && (
                     <code className="text-[10px] text-slate-400">{String(ext.extracted_fields.unit_no)}</code>
