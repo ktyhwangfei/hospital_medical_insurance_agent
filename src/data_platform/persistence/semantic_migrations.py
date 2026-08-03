@@ -70,4 +70,49 @@ SEMANTIC_LAYER_STATEMENTS: list[SqlStatement] = [
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """),
+    SqlStatement(sql="""
+        CREATE TABLE IF NOT EXISTS metric_source_binding (
+            binding_id VARCHAR(64) PRIMARY KEY,
+            metric_code VARCHAR(256) NOT NULL REFERENCES metric(metric_code),
+            source_type VARCHAR(32) NOT NULL,
+            source_ref VARCHAR(512) NOT NULL,
+            source_field VARCHAR(256) NOT NULL,
+            source_version VARCHAR(128) NOT NULL,
+            evidence TEXT NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'draft',
+            reviewed_by VARCHAR(128),
+            reviewed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(metric_code, source_type, source_ref, source_field, source_version)
+        )
+    """),
+    SqlStatement(sql="""
+        CREATE TABLE IF NOT EXISTS source_value_mapping (
+            mapping_id VARCHAR(64) PRIMARY KEY,
+            metric_code VARCHAR(256) NOT NULL REFERENCES metric(metric_code),
+            domain_code VARCHAR(128) NOT NULL REFERENCES value_domain(domain_code),
+            binding_id VARCHAR(64) NOT NULL REFERENCES metric_source_binding(binding_id),
+            source_value VARCHAR(512) NOT NULL,
+            standard_value VARCHAR(512) NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'draft',
+            reviewed_by VARCHAR(128),
+            reviewed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(binding_id, source_value)
+        )
+    """),
+    SqlStatement(sql="""
+        CREATE TABLE IF NOT EXISTS standard_value_proposal (
+            proposal_id VARCHAR(64) PRIMARY KEY,
+            domain_code VARCHAR(128) NOT NULL REFERENCES value_domain(domain_code),
+            standard_value VARCHAR(512) NOT NULL,
+            evidence TEXT NOT NULL,
+            source_ref VARCHAR(512) NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'draft',
+            reviewed_by VARCHAR(128),
+            reviewed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(domain_code, standard_value, source_ref)
+        )
+    """),
 ]

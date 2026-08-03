@@ -15,6 +15,7 @@ from src.runtime.api.policy_knowledge_routes import router as policy_knowledge_r
 from src.runtime.api.policy_pipeline_routes import router as policy_pipeline_router
 from src.runtime.api.policy_qa_routes import router as policy_qa_router
 from src.runtime.api.semantic_routes import router as semantic_router
+from src.runtime.api.semantic_alignment_routes import router as semantic_alignment_router
 
 logger = logging.getLogger(__name__)
 
@@ -56,5 +57,6 @@ def create_app() -> FastAPI:
     app.include_router(policy_pipeline_router)
     app.include_router(policy_qa_router, prefix='/api/v1/medical-insurance-ai-agent/policy-qa')
     app.include_router(semantic_router)
+    app.include_router(semantic_alignment_router)
     print("[STARTUP] create_app: 完成", flush=True)
     return app

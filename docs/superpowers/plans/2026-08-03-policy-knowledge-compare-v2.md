@@ -97,7 +97,7 @@
 
   Run: `python -m pytest src/tests/unit/knowledge_extension/test_knowledge_workbench.py src/tests/unit/knowledge_extension/test_pipeline_coverage.py src/tests/unit/knowledge_extension/test_pipeline_chunking.py -v --tb=short`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
   Commit: `feat: 建立稳定的政策单元与知识读取模型`
 
@@ -106,21 +106,22 @@
 **Files:**
 - Create: `src/knowledge_extension/rule_explanation/semantic_alignment.py`
 - Create: `src/data_platform/storage/postgresql/semantic_alignment_store.py`
-- Modify: `src/semantic_layer/models.py`
-- Modify: `src/runtime/api/semantic_routes.py`
+- Modify: `src/semantic_layer/registry.py`
+- Create: `src/runtime/api/semantic_alignment_routes.py`
+- Modify: `src/runtime/api/app.py`
 - Modify: `src/data_platform/persistence/semantic_migrations.py`
 - Test: `src/tests/unit/knowledge_extension/test_semantic_alignment.py`
 - Test: `src/tests/integration/api/test_semantic_alignment_api.py`
 
-- [ ] **Step 1: Write failing multi-source and draft-only tests**
+- [x] **Step 1: Write failing multi-source and draft-only tests**
 
   Assert that one published metric accepts multiple bindings from `structured_field` and `policy_knowledge`; duplicate bindings are idempotent; a policy binding carries `doc_id/unit_id/knowledge_id/field_code/evidence/version`; source values map many-to-one to a standard value; new standard values remain draft until object publication.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
   Run: `python -m pytest src/tests/unit/knowledge_extension/test_semantic_alignment.py -v --tb=short`
 
-- [ ] **Step 3: Add source-binding models and storage schema**
+- [x] **Step 3: Add source-binding models and storage schema**
 
   ```python
   class MetricSourceBinding(BaseModel):
@@ -144,11 +145,11 @@
 
   Add `semantic_metric_source_binding` and `semantic_source_value_mapping` tables with unique constraints on `(metric_code, source_type, source_ref, source_field, source_version)` and `(binding_id, source_value)`.
 
-- [ ] **Step 4: Add public semantic APIs**
+- [x] **Step 4: Add public semantic APIs**
 
   Add typed endpoints for binding an existing metric, batch binding, creating a draft metric with source bindings, and proposing a draft standard value. Knowledge routes call these public services only; no access to `registry._store` and no implicit `publish_object()`.
 
-- [ ] **Step 5: Verify T1 then T2a**
+- [x] **Step 5: Verify T1 then T2a**
 
   Run in order:
 
