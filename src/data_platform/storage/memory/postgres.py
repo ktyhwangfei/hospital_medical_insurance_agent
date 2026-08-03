@@ -4,12 +4,15 @@
 """
 
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from src.data_platform.storage.memory.ports import MemoryStore
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
 from src.runtime.memory.models import BusinessMemory, ExpirePolicy, MemoryType
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -55,8 +58,38 @@ def _row_to_memory(row: dict[str, Any]) -> BusinessMemory:
 class PostgresMemoryStore:
     """PostgreSQL 业务记忆存储"""
 
+    # 建表 DDL（遵循项目约定：所有表通过 CREATE TABLE IF NOT EXISTS 自动建表）
+    _DDL = """
+    CREATE TABLE IF NOT EXISTS business_memories (
+        memory_id VARCHAR(64) PRIMARY KEY,
+        session_id VARCHAR(128) NOT NULL,
+        type VARCHAR(32) NOT NULL,
+        ref_id VARCHAR(128),
+        object_snapshot JSONB,
+        importance DOUBLE PRECISION,
+        confidence DOUBLE PRECISION,
+        expire_policy VARCHAR(16),
+        relations JSONB,
+        version INTEGER DEFAULT 1,
+        last_used_at VARCHAR(64),
+        created_at VARCHAR(64)
+    )
+    """
+
     def __init__(self, database_url: str):
         self._client = PostgreSQLClient(database_url)
+        self._schema_ready = False
+
+    def _ensure_schema(self) -> None:
+        """确保 business_memories 表存在（首次使用时建表，失败降级不阻塞）。"""
+        if self._schema_ready:
+            return
+        try:
+            self._client.execute(self._DDL)
+            self._schema_ready = True
+        except Exception as e:
+            # 建表失败（如数据库不可用）：记日志，后续操作走各自的降级路径
+            logger.warning(f"Failed to ensure business_memories schema: {e}")
 
     def save(self, memory: BusinessMemory) -> BusinessMemory:
         sql = """insert into business_memories (
@@ -75,13 +108,16 @@ class PostgresMemoryStore:
             relations = excluded.relations,
             version = excluded.version,
             last_used_at = excluded.last_used_at"""
+        self._ensure_schema()
         try:
             self._client.execute(sql, _memory_to_row(memory))
-        except RuntimeError:
+        except Exception:
+            # 存储失败降级：记忆丢失不阻塞主流程
             pass
         return memory
 
     def get(self, memory_id: str) -> BusinessMemory | None:
+        self._ensure_schema()
         try:
             rows = self._client.execute(
                 "select * from business_memories where memory_id = %s", (memory_id,)
@@ -89,54 +125,59 @@ class PostgresMemoryStore:
             if not rows:
                 return None
             return _row_to_memory(rows[0])
-        except RuntimeError:
+        except Exception:
             return None
 
     def list_by_session(self, session_id: str) -> list[BusinessMemory]:
+        self._ensure_schema()
         try:
             rows = self._client.execute(
                 "select * from business_memories where session_id = %s order by last_used_at desc",
                 (session_id,),
             )
             return [_row_to_memory(r) for r in rows]
-        except RuntimeError:
+        except Exception:
             return []
 
     def list_by_session_and_type(self, session_id: str, type: str) -> list[BusinessMemory]:
+        self._ensure_schema()
         try:
             rows = self._client.execute(
                 "select * from business_memories where session_id = %s and type = %s order by last_used_at desc",
                 (session_id, type),
             )
             return [_row_to_memory(r) for r in rows]
-        except RuntimeError:
+        except Exception:
             return []
 
     def delete(self, memory_id: str) -> bool:
+        self._ensure_schema()
         try:
             self._client.execute(
                 "delete from business_memories where memory_id = %s", (memory_id,)
             )
             return True
-        except RuntimeError:
+        except Exception:
             return False
 
     def delete_by_session(self, session_id: str) -> int:
+        self._ensure_schema()
         try:
             rows = self._client.execute(
                 "delete from business_memories where session_id = %s returning memory_id",
                 (session_id,),
             )
             return len(rows)
-        except RuntimeError:
+        except Exception:
             return 0
 
     def delete_by_session_and_type(self, session_id: str, type: str) -> int:
+        self._ensure_schema()
         try:
             rows = self._client.execute(
                 "delete from business_memories where session_id = %s and type = %s returning memory_id",
                 (session_id, type),
             )
             return len(rows)
-        except RuntimeError:
+        except Exception:
             return 0

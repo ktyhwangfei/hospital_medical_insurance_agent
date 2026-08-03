@@ -21,6 +21,7 @@ from src.model_service.gateway import ModelGateway
 from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
 from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
 from src.runtime.policy_qa.models import PolicyQARequest, PolicyQAResponse
+from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
 from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
 from src.runtime.policy_qa.question_rewriter import QuestionRewriter
 from src.runtime.policy_qa.sql_data_fetcher import SQLDataFetcher
@@ -47,6 +48,9 @@ from src.runtime.infra_event.context import set_infra_context
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 搜索引擎初始化超时（秒）：Milvus 未就绪时快速降级，避免阻塞流式响应
+_SEARCH_ENGINE_INIT_TIMEOUT = 10
 
 
 def _sse_event(event_type: str, data: dict | str) -> str:
@@ -90,19 +94,35 @@ def _sanitize(obj: dict) -> dict:
 
 
 def _init_search_engine():
-    """
-    初始化Milvus搜索引擎
+    """初始化Milvus搜索引擎（带超时保护）
+
+    MilvusClient 构造在 Milvus 代理未就绪时会长时间重试，
+    若不加超时，整个流式响应会被阻塞数分钟。
+    超时后快速降级（返回 None），与原 "except → None" 的降级意图一致。
 
     Returns:
         PolicyRulesSearchEngine实例或None
     """
+    import concurrent.futures
+
     try:
         from src.runtime.policy_qa.policy_rules_search import PolicyRulesSearchEngine
 
-        engine = PolicyRulesSearchEngine(
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(
+            PolicyRulesSearchEngine,
             host=MILVUS_HOST,
             port=MILVUS_PORT,
         )
+        try:
+            engine = future.result(timeout=_SEARCH_ENGINE_INIT_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            logger.warning(
+                f'Search engine init timed out after {_SEARCH_ENGINE_INIT_TIMEOUT}s, degrading'
+            )
+            pool.shutdown(wait=False, cancel_futures=True)
+            return None
+        pool.shutdown(wait=False)
         logger.info(f'Initialized PolicyRulesSearchEngine: {MILVUS_HOST}:{MILVUS_PORT}')
         return engine
     except Exception as e:
@@ -149,6 +169,18 @@ async def _policy_qa_stream(
         user_id=user_id,
         role=role,
     )
+
+    # ── Runtime 增强：上下文规划（Memory/Planner/Reasoning，失败降级不阻塞）──
+    runtime_bridge = get_runtime_bridge()
+    context_need = runtime_bridge.prepare_turn(
+        session_id=session_id,
+        question=request.question,
+        settlement_id=request.settlement_id,
+        user_id=user_id,
+        role=role,
+    )
+    if context_need:
+        yield _sse_event("context_need", _sanitize(context_need))
 
     # 累积结果用于 task 记录
     accumulated_steps: list[dict] = []
@@ -365,6 +397,16 @@ async def _policy_qa_stream(
                 yield _sse_event("step", step_event)
                 await asyncio.sleep(0)  # 仅出让事件循环，不阻塞
 
+                # ── Runtime 增强：沉淀记忆与推理步骤（降级返回空列表）──
+                for evt_type, evt_payload in runtime_bridge.record_step(
+                    session_id=session_id,
+                    step=response.step,
+                    detail=response.detail if isinstance(response.detail, dict) else {},
+                    settlement_id=request.settlement_id,
+                ):
+                    yield _sse_event(evt_type, _sanitize(evt_payload))
+                    await asyncio.sleep(0)
+
             elif response.status == "streaming":
                 # 流式文本：发送 chunk 事件
                 chunk_data = {"step": response.step, "status": "streaming"}
@@ -418,6 +460,13 @@ async def _policy_qa_stream(
                 "selected_skill_id": trace_selected_skill_id,
             },
         })
+        # ── Runtime 增强：推理链与记忆计数附加到 result（在 _sanitize 之后，
+        #    避免 reasoning_* 键被防泄漏过滤；该数据为策划后的公开契约）──
+        runtime_extra = runtime_bridge.finalize_turn(
+            session_id=session_id, question=request.question,
+        )
+        if runtime_extra and isinstance(consolidated_result.get("result"), dict):
+            consolidated_result["result"].update(runtime_extra)
         yield _sse_event("result", consolidated_result)
 
         # ── 持久化：记录 task 并完成 workflow ──
