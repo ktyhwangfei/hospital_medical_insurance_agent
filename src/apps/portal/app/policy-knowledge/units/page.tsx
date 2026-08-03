@@ -892,7 +892,7 @@ function UnitsContent() {
           <div className="border-b border-slate-100 px-3 py-2 flex items-center gap-2">
             <Lightbulb className="size-3.5 text-slate-400" />
             <span className="text-xs font-semibold text-slate-600">单元（{derived?.units.length ?? 0}）</span>
-            {docTitle && <span className="truncate text-[10px] text-slate-400" title={docTitle}>· {docTitle}</span>}
+            {docTitle && <span className="truncate text-[10px] text-slate-400 min-w-0 shrink" title={docTitle}>· {docTitle}</span>}
             <Link href={`/policy-knowledge/knowledge?doc_id=${selectedDocId}&sub=audit`}
               className="ml-auto flex shrink-0 items-center gap-0.5 text-[10px] text-amber-600 hover:text-amber-700">
               知识库审核 <ChevronRight className="size-3" />
