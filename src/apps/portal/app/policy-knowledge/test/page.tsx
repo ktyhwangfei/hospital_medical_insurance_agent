@@ -103,7 +103,7 @@ export default function PolicyKnowledgeTestPage() {
     {busy && <div className="fixed right-6 top-6 z-40 flex items-center gap-2 rounded-full bg-slate-900 px-3 py-2 text-xs text-white shadow-lg"><Loader2 className="size-3.5 animate-spin" />处理中</div>}
 
     <SearchWorkbench />
-    <QualityDashboard releases={releases} activeRelease={activeRelease} latestRun={latestRun} caseResults={caseResults} onSelectRelease={restoreQuality} onRun={run} onPromote={promote} onRollback={rollback} />
+    <QualityDashboard releases={releases} activeRelease={activeRelease} latestRun={latestRun} currentCaseSetVersion={Math.max(0, ...cases.map((item) => item.case_set_version))} caseResults={caseResults} onSelectRelease={restoreQuality} onRun={run} onPromote={promote} onRollback={rollback} />
     <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
       <TestCasePanel cases={cases} onSaved={refresh} />
       <CandidatePanel onCreated={refresh} />

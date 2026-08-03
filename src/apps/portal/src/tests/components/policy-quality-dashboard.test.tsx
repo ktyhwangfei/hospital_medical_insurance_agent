@@ -21,7 +21,7 @@ describe('QualityDashboard', () => {
 
   it('visualizes same-set comparison and requires a separate human publish click', () => {
     const promote = vi.fn()
-    render(<QualityDashboard releases={[release('candidate_passed', 'passed')]} activeRelease={release('baseline', 'active')} latestRun={run} onRun={vi.fn()} onPromote={promote} />)
+    render(<QualityDashboard releases={[release('candidate_passed', 'passed')]} activeRelease={release('baseline', 'active')} latestRun={run} currentCaseSetVersion={1} onRun={vi.fn()} onPromote={promote} />)
 
     expect(screen.getAllByText('95%')).toHaveLength(2)
     expect(screen.getAllByText('80%')).toHaveLength(2)
@@ -33,7 +33,7 @@ describe('QualityDashboard', () => {
   })
 
   it('blocks publish when quality gate failed', () => {
-    render(<QualityDashboard releases={[release('candidate_failed', 'failed')]} activeRelease={release('baseline', 'active')} latestRun={{ ...run, status: 'failed', release_id: 'candidate_failed', blocked_reasons: ['候选质量必须严格高于当前版本'] }} onRun={vi.fn()} onPromote={vi.fn()} />)
+    render(<QualityDashboard releases={[release('candidate_failed', 'failed')]} activeRelease={release('baseline', 'active')} latestRun={{ ...run, status: 'failed', release_id: 'candidate_failed', blocked_reasons: ['候选质量必须严格高于当前版本'] }} currentCaseSetVersion={1} onRun={vi.fn()} onPromote={vi.fn()} />)
 
     expect(screen.getByRole('button', { name: '人工发布候选版本' })).toBeDisabled()
     expect(screen.getByText(/候选质量必须严格高于当前版本/)).toBeInTheDocument()
@@ -41,11 +41,22 @@ describe('QualityDashboard', () => {
 
   it('shows per-case failures and exposes rollback only for retired releases', () => {
     const rollback = vi.fn()
-    render(<QualityDashboard releases={[release('candidate_failed', 'failed'), release('previous', 'retired')]} activeRelease={release('baseline', 'active')} latestRun={{ ...run, status: 'failed', release_id: 'candidate_failed', blocked_reasons: ['必测用例未全部通过'] }} caseResults={[{ run_id: 'run_1', target: 'candidate', case_id: 'case_1', repeat_index: 0, result_knowledge_ids: [], score: 0, passed: false, diagnostics: { recall: 0 } }]} onRun={vi.fn()} onPromote={vi.fn()} onRollback={rollback} />)
+    render(<QualityDashboard releases={[release('candidate_failed', 'failed'), release('previous', 'retired')]} activeRelease={release('baseline', 'active')} latestRun={{ ...run, status: 'failed', release_id: 'candidate_failed', blocked_reasons: ['必测用例未全部通过'] }} currentCaseSetVersion={1} caseResults={[{ run_id: 'run_1', target: 'candidate', case_id: 'case_1', repeat_index: 0, result_knowledge_ids: [], score: 0, passed: false, diagnostics: { recall: 0 } }]} onRun={vi.fn()} onPromote={vi.fn()} onRollback={rollback} />)
 
     expect(screen.getAllByText(/case_1/)).toHaveLength(2)
     expect(screen.getByText(/候选.*→.*基线/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '回滚到 previous' }))
     expect(rollback).toHaveBeenCalledWith('previous')
+  })
+
+  it.each([
+    ['failed run', { status: 'failed' as const }],
+    ['another release', { release_id: 'other' }],
+    ['stale case set', { case_set_version: 0 }],
+    ['stale config', { config_hash: 'forged' }],
+  ])('disables publish for a passed release with %s', (_, runUpdate) => {
+    render(<QualityDashboard releases={[release('candidate_passed', 'passed')]} activeRelease={release('baseline', 'active')} latestRun={{ ...run, ...runUpdate }} currentCaseSetVersion={1} onRun={vi.fn()} onPromote={vi.fn()} />)
+
+    expect(screen.getByRole('button', { name: '人工发布候选版本' })).toBeDisabled()
   })
 })

@@ -5,10 +5,11 @@ import { ArrowRight, CheckCircle2, FlaskConical, LockKeyhole, Rocket, ShieldAler
 
 import type { KnowledgeRelease, QualityCaseResult, QualityRun } from '@/lib/policy-knowledge-api'
 
-export function QualityDashboard({ releases, activeRelease, latestRun, caseResults = [], onSelectRelease, onRun, onPromote, onRollback }: {
+export function QualityDashboard({ releases, activeRelease, latestRun, currentCaseSetVersion, caseResults = [], onSelectRelease, onRun, onPromote, onRollback }: {
   releases: KnowledgeRelease[]
   activeRelease: KnowledgeRelease | null
   latestRun: QualityRun | null
+  currentCaseSetVersion: number
   caseResults?: QualityCaseResult[]
   onSelectRelease?: (releaseId: string) => void
   onRun: (releaseId: string) => void
@@ -21,6 +22,11 @@ export function QualityDashboard({ releases, activeRelease, latestRun, caseResul
   const selected = candidates.find((release) => release.release_id === effectiveReleaseId)
   const run = latestRun?.release_id === effectiveReleaseId ? latestRun : null
   const canPublish = selected?.status === 'passed'
+    && run?.status === 'passed'
+    && run.release_id === selected.release_id
+    && run.case_set_version === selected.case_set_version
+    && run.case_set_version === currentCaseSetVersion
+    && run.config_hash === selected.config_hash
   const failedCases = caseResults.filter((item) => item.target === 'candidate' && !item.passed)
   const caseDiffs = buildCaseDiffs(caseResults)
 
