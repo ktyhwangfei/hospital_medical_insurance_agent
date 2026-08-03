@@ -11,3 +11,16 @@ def test_policy_quality_schema_contains_atomic_release_pointer() -> None:
     assert "CHECK (SINGLETON_ID)" in ddl
     assert "TARGET VARCHAR(16)" in ddl
     assert "PRIMARY KEY (RUN_ID, TARGET, CASE_ID, REPEAT_INDEX)" in ddl
+
+
+def test_release_switch_serializes_concurrent_pointer_updates() -> None:
+    import inspect
+
+    from src.data_platform.storage.postgresql.policy_quality_store import (
+        PostgresPolicyQualityStore,
+    )
+
+    source = inspect.getsource(PostgresPolicyQualityStore._switch_release)
+    assert "pg_advisory_xact_lock" in source
+    assert "policy_active_release" in source
+    assert "FOR UPDATE" in source

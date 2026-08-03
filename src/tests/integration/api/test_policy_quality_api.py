@@ -23,6 +23,19 @@ def _client(monkeypatch) -> tuple[TestClient, InMemoryPolicyQualityStore]:
     service = PolicyQualityService(store, Searcher())
     monkeypatch.setattr(policy_workbench_routes, "_get_quality_store", lambda: store)
     monkeypatch.setattr(policy_workbench_routes, "_get_quality_service", lambda: service)
+
+    class ContentSource:
+        def records(self):
+            return ([{"fact_id": "fact_1"}], [{"rule_id": "kn_1"}])
+
+    class Builder:
+        def build(self, release_id: str, *, facts, rules):
+            release = store.get_release(release_id)
+            assert release is not None and facts and rules
+            return store.save_release(release.model_copy(update={"status": "ready"}))
+
+    monkeypatch.setattr(policy_workbench_routes, "_get_release_content_source", lambda: ContentSource())
+    monkeypatch.setattr(policy_workbench_routes, "_get_release_index_builder", lambda: Builder())
     return TestClient(create_app()), store
 
 
@@ -58,6 +71,12 @@ def test_candidate_release_uses_one_versioned_collection_pair(monkeypatch) -> No
     assert response.json()["status"] == "building"
     assert response.json()["facts_collection"] == "policy_facts_rel_20260803_01"
     assert response.json()["rules_collection"] == "policy_rules_rel_20260803_01"
+    built = client.post(f"{PREFIX}/releases/rel_20260803_01/build")
+    assert built.status_code == 200
+    assert built.json()["status"] == "ready"
+    listed = client.get(f"{PREFIX}/releases")
+    assert listed.status_code == 200
+    assert listed.json()[0]["release_id"] == "rel_20260803_01"
 
 
 def test_run_detail_and_manual_promotion(monkeypatch) -> None:
@@ -98,6 +117,10 @@ def test_run_detail_and_manual_promotion(monkeypatch) -> None:
     assert run["status"] == "passed"
     detail = client.get(f"{PREFIX}/quality-runs/{run['run_id']}")
     assert detail.status_code == 200
+    case_results = client.get(f"{PREFIX}/quality-runs/{run['run_id']}/case-results")
+    assert case_results.status_code == 200
+    assert len(case_results.json()) == 6
+    assert {item["target"] for item in case_results.json()} == {"candidate", "baseline"}
     assert client.get(f"{PREFIX}/releases/active").json()["release_id"] == "baseline"
 
     promoted = client.post(

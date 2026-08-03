@@ -167,6 +167,21 @@ def test_comparison_rejects_different_test_configuration() -> None:
         ).run_release("candidate", repeat_count=3)
 
 
+def test_comparison_rejects_baseline_from_a_different_case_set() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    store = _store_with_case_and_baseline()
+    baseline = store.get_release("baseline")
+    assert baseline is not None
+    store.releases["baseline"] = baseline.model_copy(update={"case_set_version": 0})
+
+    with pytest.raises(ValueError, match="相同用例集版本"):
+        PolicyQualityService(
+            store,
+            SequenceSearcher({"baseline": [[]], "candidate": [["kn_expected"]]}),
+        ).run_release("candidate", repeat_count=3)
+
+
 def test_repeat_count_cannot_be_less_than_three() -> None:
     from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
 

@@ -149,6 +149,12 @@ class PostgresPolicyQualityStore:
         )
         return KnowledgeRelease(**rows[0]) if rows else None
 
+    def list_releases(self) -> list[KnowledgeRelease]:
+        rows = self._get_client().execute(
+            "SELECT * FROM policy_knowledge_releases ORDER BY created_at DESC"
+        )
+        return [KnowledgeRelease(**row) for row in rows]
+
     def get_active_release(self) -> KnowledgeRelease | None:
         rows = self._get_client().execute(
             """SELECT r.* FROM policy_active_release a
@@ -168,6 +174,14 @@ class PostgresPolicyQualityStore:
         allowed = ("passed", "retired") if allow_retired else ("passed",)
         with client.transaction() as connection:
             with connection.cursor() as cursor:
+                # 固定事务锁覆盖“尚无 singleton 行”的首发场景，再锁现有活动指针行。
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext('policy_active_release'))"
+                )
+                cursor.execute(
+                    "SELECT release_id FROM policy_active_release "
+                    "WHERE singleton_id=TRUE FOR UPDATE"
+                )
                 cursor.execute(
                     "SELECT status FROM policy_knowledge_releases WHERE release_id=%s FOR UPDATE",
                     (release_id,),
@@ -227,3 +241,10 @@ class PostgresPolicyQualityStore:
               json.dumps(item.result_knowledge_ids), item.score, item.passed,
               json.dumps(item.diagnostics)) for item in results],
         )
+
+    def list_case_results(self, run_id: str) -> list[QualityCaseResult]:
+        rows = self._get_client().execute(
+            "SELECT * FROM policy_quality_case_results WHERE run_id=%s ORDER BY case_id,target,repeat_index",
+            (run_id,),
+        )
+        return [QualityCaseResult(**row) for row in rows]

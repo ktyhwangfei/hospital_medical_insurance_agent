@@ -20,6 +20,7 @@ from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStor
 from src.knowledge_extension.rule_explanation.quality_models import (
     KnowledgeRelease,
     PolicyQATestCase,
+    QualityCaseResult,
     QualityRun,
 )
 from src.knowledge_extension.rule_explanation.quality_service import (
@@ -27,6 +28,11 @@ from src.knowledge_extension.rule_explanation.quality_service import (
     RulesReleaseSearcher,
 )
 from src.knowledge_extension.rule_explanation.quality_store import PolicyQualityStore
+from src.knowledge_extension.rule_explanation.release_index import (
+    KnowledgeWorkbenchReleaseSource,
+    MilvusReleaseIndexBackend,
+    ReleaseIndexBuilder,
+)
 from src.knowledge_extension.rule_explanation.semantic_alignment import (
     get_semantic_alignment_service,
 )
@@ -42,6 +48,8 @@ router = APIRouter(
 _service: KnowledgeWorkbenchService | None = None
 _quality_store: PolicyQualityStore | None = None
 _quality_service: PolicyQualityService | None = None
+_release_index_builder: ReleaseIndexBuilder | None = None
+_release_content_source: KnowledgeWorkbenchReleaseSource | None = None
 
 
 def _get_service() -> KnowledgeWorkbenchService:
@@ -69,6 +77,28 @@ def _get_quality_service() -> PolicyQualityService:
             _get_quality_store(), RulesReleaseSearcher()
         )
     return _quality_service
+
+
+def _get_release_index_builder() -> ReleaseIndexBuilder:
+    global _release_index_builder
+    if _release_index_builder is None:
+        _release_index_builder = ReleaseIndexBuilder(
+            _get_quality_store(), MilvusReleaseIndexBackend()
+        )
+    return _release_index_builder
+
+
+def _get_release_content_source() -> KnowledgeWorkbenchReleaseSource:
+    global _release_content_source
+    if _release_content_source is None:
+        from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provider import (
+            get_embedding_provider,
+        )
+
+        _release_content_source = KnowledgeWorkbenchReleaseSource(
+            _get_service(), get_embedding_provider()
+        )
+    return _release_content_source
 
 
 class CreateReleaseRequest(BaseModel):
@@ -153,6 +183,34 @@ def create_candidate_release(request: CreateReleaseRequest) -> KnowledgeRelease:
     return store.save_release(release)
 
 
+@router.get("/releases", response_model=list[KnowledgeRelease])
+def list_releases() -> list[KnowledgeRelease]:
+    return _get_quality_store().list_releases()
+
+
+@router.post("/releases/{release_id}/build", response_model=KnowledgeRelease)
+def build_candidate_release(release_id: str) -> KnowledgeRelease:
+    try:
+        facts, rules = _get_release_content_source().records()
+        return _get_release_index_builder().build(
+            release_id, facts=facts, rules=rules
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "POLICY_RELEASE_BUILD_BLOCKED", str(exc), {"release_id": release_id}
+            ),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_RELEASE_INDEX_UNAVAILABLE", str(exc), {"release_id": release_id}
+            ),
+        ) from exc
+
+
 @router.get("/releases/active", response_model=KnowledgeRelease)
 def get_active_release() -> KnowledgeRelease:
     release = _get_quality_store().get_active_release()
@@ -188,9 +246,23 @@ def get_quality_run(run_id: str) -> QualityRun:
     if run is None:
         raise HTTPException(
             status_code=404,
-            detail=error_detail("POLICY_QUALITY_RUN_NOT_FOUND", "质量运行不存在", {"run_id": run_id}),
+            detail=error_detail(
+                "POLICY_QUALITY_RUN_NOT_FOUND",
+                "质量运行不存在",
+                {"run_id": run_id},
+            ),
         )
     return run
+
+
+@router.get("/quality-runs/{run_id}/case-results", response_model=list[QualityCaseResult])
+def list_quality_case_results(run_id: str) -> list[QualityCaseResult]:
+    if _get_quality_store().get_run(run_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("POLICY_QUALITY_RUN_NOT_FOUND", "质量运行不存在", {"run_id": run_id}),
+        )
+    return _get_quality_store().list_case_results(run_id)
 
 
 @router.post("/releases/{release_id}/promote", response_model=KnowledgeRelease)

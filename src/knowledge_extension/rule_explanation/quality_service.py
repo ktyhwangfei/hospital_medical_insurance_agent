@@ -142,6 +142,8 @@ class PolicyQualityService:
             raise ValueError("没有可用的经典测试用例")
         if candidate.case_set_version != case_set_version:
             raise ValueError("候选版本的用例集版本不是当前版本")
+        if baseline and baseline.case_set_version != case_set_version:
+            raise ValueError("候选版本与当前版本必须使用相同用例集版本")
         if baseline and baseline.config_hash != candidate.config_hash:
             raise ValueError("候选版本与当前版本的测试配置不一致")
 

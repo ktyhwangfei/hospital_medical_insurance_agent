@@ -77,3 +77,59 @@ def test_unhealthy_collection_pair_never_becomes_ready() -> None:
         )
 
     assert store.get_release(release.release_id).status == "building"  # type: ignore[union-attr]
+
+
+def test_workbench_content_source_preserves_stable_knowledge_id() -> None:
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
+        ApprovedUnit,
+        KnowledgeConfidence,
+        KnowledgeItem,
+        KnowledgeWorkbenchDocument,
+        WorkbenchDocumentList,
+        WorkbenchDocumentSummary,
+    )
+    from src.knowledge_extension.rule_explanation.release_index import (
+        KnowledgeWorkbenchReleaseSource,
+    )
+
+    item = KnowledgeItem(
+        knowledge_id="kn_stable",
+        unit_id="unit_1",
+        extraction_id="ext_1",
+        relationship_source="persisted",
+        business_sentence="在职职工住院支付比例为80%。",
+        source_text="政策原文",
+        fields=[],
+        confidence=KnowledgeConfidence(
+            completeness=1, accuracy=None, source_fidelity=1,
+            model_confidence=1, value_domain_compliance=None, overall=1,
+        ),
+        citations=[],
+    )
+
+    class Workbench:
+        def list_documents(self):
+            return WorkbenchDocumentList(items=[WorkbenchDocumentSummary(
+                doc_id="doc_1", doc_title="政策", approved_unit_count=1, knowledge_count=1,
+            )], total=1)
+
+        def get_document(self, doc_id: str):
+            return KnowledgeWorkbenchDocument(
+                doc_id=doc_id, doc_title="政策", contract_version="2",
+                units=[ApprovedUnit(
+                    unit_id="unit_1", doc_id=doc_id, doc_title="政策", path=["第一条"],
+                    source_text="政策原文", order_no=1, status="reviewed",
+                    knowledge_count=1, knowledge=[item],
+                )],
+            )
+
+    class Provider:
+        dim = 2
+
+        def encode(self, texts: list[str]):
+            return [[0.1, 0.2] for _ in texts]
+
+    facts, rules = KnowledgeWorkbenchReleaseSource(Workbench(), Provider()).records()
+
+    assert len(facts) == 1
+    assert rules[0]["rule_id"] == "kn_stable"

@@ -1,7 +1,7 @@
 'use client'
 
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, FileText, Anchor, Lightbulb } from 'lucide-react'
+import { LayoutDashboard, FileText, Anchor, Lightbulb, FlaskConical } from 'lucide-react'
 
 interface NavTab {
   label: string
@@ -9,13 +9,14 @@ interface NavTab {
   icon: React.ComponentType<{ className?: string }>
 }
 
-// 政策知识治理平台 · 4 模块 nav（映射不在本平台，留 /semantic-layer）。
+// 政策知识治理平台 · 测试位于知识之后，门禁通过并人工发布后才对外生效。
 // [来源: docs/steering/政策知识治理平台设计-V2.1.md §5.1]
 const NAV_TABS: NavTab[] = [
   { label: '概览', href: '/policy-knowledge', icon: LayoutDashboard },
   { label: '文档', href: '/policy-knowledge/documents', icon: FileText },
   { label: '单元', href: '/policy-knowledge/units', icon: Anchor },
   { label: '知识', href: '/policy-knowledge/knowledge', icon: Lightbulb },
+  { label: '测试', href: '/policy-knowledge/test', icon: FlaskConical },
 ]
 
 function getActiveTab(pathname: string): string {
@@ -38,7 +39,7 @@ export default function PolicyKnowledgeLayout({ children }: { children: React.Re
         <div className="absolute inset-0 opacity-[0.35] [background-image:linear-gradient(to_right,rgba(15,23,42,0.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(15,23,42,0.05)_1px,transparent_1px)] [background-size:44px_44px]" />
       </div>
 
-      <main className="mx-auto w-full max-w-[1200px] p-6">
+      <main className="mx-auto w-full max-w-[1440px] p-6">
         {/* 治理平台标题 + Tab Navigation */}
         <div className="mb-4 flex items-center gap-2">
           <span className="inline-flex h-7 items-center rounded-full bg-white/70 px-3 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 backdrop-blur">
