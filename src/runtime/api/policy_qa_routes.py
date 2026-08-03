@@ -903,7 +903,9 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
         profile["items"] = []
         for item in display_config["profile"].get("items", []):
             field = item.get("field", "")
-            value = getattr(context, field, "") or ""
+            # field 为 SQL 列名（如 zyjyxx.rylb），需映射到 SettlementContext 属性名
+            attr = assembler._FACT_FIELD_MAP.get(field, field)
+            value = getattr(context, attr, "") or ""
             profile["items"].append({
                 "label": item.get("label", field),
                 "field": field,
@@ -915,7 +917,9 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
         group_entry = {"group": group_def.get("group", ""), "items": []}
         for item_def in group_def.get("items", []):
             field = item_def.get("field", "")
-            value = getattr(context, field, 0) or 0
+            # field 为 SQL 列名（如 zyfdxx.bdtczf），需映射到 SettlementContext 属性名
+            attr = assembler._FACT_FIELD_MAP.get(field, field)
+            value = getattr(context, attr, 0) or 0
             entry = {
                 "label": item_def.get("label", field),
                 "field": field,
