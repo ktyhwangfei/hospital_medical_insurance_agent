@@ -231,4 +231,11 @@
 | `verified` | 全链路验证通过，可归档 |
 | `archived` | 已归档 |
 
+### 2026-08-03 政策知识 issue #2 Task 7–9
+
+- 状态：**verified**。完成知识页三栏对齐、测试页和候选版质量门禁。
+- 实现提交：`f494fb9` 、`f3bbc73` 、`23c4890` 、`f2d5cb8` 、`0d71738` 、`8b9bb77` 、`8c36381`。
+- 验证：后端单元/API/Flow 聚焦测试通过；前端 Vitest 通过；Playwright Chromium 政策知识发布流 3/3 通过；Orca 已实际验证知识页和测试页并截图。
+- 已知预存问题：Portal 全量 TypeScript 仍被 `settlement-explanation-page.tsx` 类型债务阻塞；不属于本次改动。
+
 > **维护约定**：每次状态变更必须在此记录。§2 与 `docs/steering/政策知识管线开发计划.md` 双向同步。
