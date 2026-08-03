@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
-import { Plus, Search, FileText, Trash2, Play, Eye, Loader2, Upload, Globe, Edit3, Download } from 'lucide-react'
+import { Plus, Search, FileText, Trash2, Play, Loader2, Upload, Download } from 'lucide-react'
 
 const API = '/api/v1/medical-insurance-ai-agent/policy-pipeline'
 
@@ -30,8 +30,10 @@ interface Document {
   crawl_time: string
   status: string
   rule_ids: string[]
+  unit_total: number
+  unit_audited: number
   coverage_ratio: number
-  coverage_detail: { ratio: number; covered_chars: number; total_chars: number }
+  coverage_detail: { ratio: number; kept_units: number; total_units: number }
   created_at: string
   updated_at: string
 }
@@ -52,6 +54,11 @@ const sourceLabel: Record<string, string> = {
   manual: '手动录入',
   upload: '文件上传',
   crawl: '爬虫导入',
+}
+
+// 统一日期格式为 yyyy-mm-dd（存储值可能带 00:00:00 时间部分）
+function fmtDate(s?: string): string {
+  return s ? s.slice(0, 10) : '-'
 }
 
 export default function PolicyDocumentsPage() {
@@ -151,7 +158,7 @@ export default function PolicyDocumentsPage() {
       const d = await r.json()
       if (d.success) {
         const cov = d.coverage
-        const covMsg = cov ? `\n覆盖率: ${(cov.ratio * 100).toFixed(0)}% (${cov.covered_chars}/${cov.total_chars} 字符)` : ''
+        const covMsg = cov ? `\n单元产出率: ${(cov.ratio * 100).toFixed(0)}% (${cov.kept_units}/${cov.total_units} 单元)` : ''
         alert(`提取完成：${d.total_facts} 个事实，${d.total_rules} 条规则${covMsg}`)
         fetchDocs()
       } else {
@@ -213,45 +220,43 @@ export default function PolicyDocumentsPage() {
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
 
       {/* Table */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+      <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto shadow-sm">
         <table className="w-full text-sm">
           <thead><tr className="bg-slate-50/95 border-b border-slate-200">
-            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase">标题</th>
-            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase w-[90px]">发文机构</th>
-            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase w-[80px]">来源</th>
-            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase w-[80px]">状态</th>
-            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase w-[80px]">发布日期</th>
-            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase w-[60px]">规则</th>
-            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase w-[70px]">覆盖</th>
-            <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-slate-500 uppercase w-[180px]">操作</th>
+            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase w-[40%]">标题</th>
+            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase whitespace-nowrap w-[130px]">发文机构</th>
+            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase whitespace-nowrap w-[70px]">状态</th>
+            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase whitespace-nowrap w-[84px]">发布日期</th>
+            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase whitespace-nowrap w-[72px]">单元</th>
+            <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase whitespace-nowrap w-[80px]">覆盖</th>
+            <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-slate-500 uppercase whitespace-nowrap w-[112px]">操作</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr><td colSpan={8} className="px-4 py-16 text-center"><Loader2 className="size-5 text-blue-500 animate-spin mx-auto" /></td></tr>
+              <tr><td colSpan={7} className="px-4 py-16 text-center"><Loader2 className="size-5 text-blue-500 animate-spin mx-auto" /></td></tr>
             ) : docs.length === 0 ? (
-              <tr><td colSpan={8} className="px-4 py-16 text-center text-sm text-slate-400">暂无政策原文，点击新增原文开始</td></tr>
+              <tr><td colSpan={7} className="px-4 py-16 text-center text-sm text-slate-400">暂无政策原文，点击新增原文开始</td></tr>
             ) : docs.map(d => (
               <tr key={d.doc_id} className="hover:bg-blue-50/20 transition-colors">
                 <td className="px-4 py-3">
-                  <button onClick={() => handleViewDetail(d.doc_id)} className="text-sm font-medium text-slate-800 hover:text-blue-600 text-left">{d.title}</button>
+                  <button onClick={() => handleViewDetail(d.doc_id)} className="block w-full truncate text-sm font-medium text-slate-800 hover:text-blue-600 text-left" title={d.title}>{d.title}</button>
                 </td>
-                <td className="px-4 py-3 text-xs text-slate-500">{d.issuing_agency || '-'}</td>
-                <td className="px-4 py-3">
-                  <span className="inline-flex items-center gap-1 rounded-md bg-slate-50 px-2 py-0.5 text-xs text-slate-500 ring-1 ring-slate-200">
-                    {d.source_type === 'crawl' ? <Globe className="size-3" /> : d.source_type === 'upload' ? <Upload className="size-3" /> : <Edit3 className="size-3" />}
-                    {sourceLabel[d.source_type] || d.source_type}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap max-w-[140px] truncate" title={d.issuing_agency}>{d.issuing_agency || '-'}</td>
+                <td className="px-4 py-3 whitespace-nowrap">
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${statusColor[d.status] || 'bg-slate-100 text-slate-500'}`}>
                     {statusLabel[d.status] || d.status}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-xs text-slate-500">{d.publish_date || '-'}</td>
-                <td className="px-4 py-3 text-xs text-slate-500">{(d.rule_ids || []).length}</td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">{fmtDate(d.publish_date)}</td>
+                <td className="px-4 py-3 text-xs whitespace-nowrap">
+                  <Link href={`/policy-knowledge/units?doc_id=${d.doc_id}`} className="inline-flex items-baseline rounded hover:underline" title="查看该文档的结构单元">
+                    <span className="font-medium text-emerald-600">{d.unit_audited || 0}</span>
+                    <span className="text-slate-400"> / {d.unit_total || 0}</span>
+                  </Link>
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap">
                   {d.status === 'extracted' && d.coverage_ratio > 0 ? (
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5" title={`结构单元产出率：保留 ${d.coverage_detail?.kept_units ?? 0} / ${d.coverage_detail?.total_units ?? 0} 个单元`}>
                       <div className="w-10 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                         <div className="h-full bg-emerald-400 rounded-full" style={{ width: `${Math.round(d.coverage_ratio * 100)}%` }} />
                       </div>
@@ -261,17 +266,14 @@ export default function PolicyDocumentsPage() {
                     <span className="text-xs text-slate-300">-</span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-right">
-                  <div className="flex items-center justify-end gap-1">
-                    <button onClick={() => handleViewDetail(d.doc_id)} className="rounded px-2 py-0.5 text-xs font-medium text-slate-600 hover:bg-slate-100"><Eye className="size-3.5" /></button>
-                    <button onClick={() => handleExtract(d.doc_id)} disabled={extracting === d.doc_id || d.status === 'processing'}
-                      className="rounded px-2.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  {d.status === 'raw' && (
+                    <button onClick={() => handleExtract(d.doc_id)} disabled={extracting === d.doc_id}
+                      className="flex items-center rounded px-2.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed">
                       {extracting === d.doc_id ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
                       <span className="ml-1">提取</span>
                     </button>
-                    <Link href={`/policy-knowledge/knowledge?doc_id=${d.doc_id}&sub=audit`} className="rounded px-2 py-0.5 text-xs font-medium text-amber-600 hover:bg-amber-50">审核</Link>
-                    <button onClick={() => handleDelete(d.doc_id)} className="rounded px-2 py-0.5 text-xs font-medium text-rose-600 hover:bg-rose-50"><Trash2 className="size-3.5" /></button>
-                  </div>
+                  )}
                 </td>
               </tr>
             ))}
@@ -424,13 +426,18 @@ export default function PolicyDocumentsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 backdrop-blur-sm px-4" onClick={() => setDetail(null)}>
           <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="sticky top-0 flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-white/95 rounded-t-2xl">
-              <div className="flex items-center gap-3">
-                <FileText className="size-5 text-blue-500" />
-                <span className="font-semibold text-slate-800">{detail.title}</span>
+              <div className="flex items-center gap-3 min-w-0">
+                <FileText className="size-5 shrink-0 text-blue-500" />
+                <span className="font-semibold text-slate-800 truncate" title={detail.title}>{detail.title}</span>
               </div>
-              <button onClick={() => setDetail(null)} className="rounded-lg p-1.5 text-slate-400 hover:text-slate-600">
-                <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button onClick={() => { handleDelete(detail.doc_id); setDetail(null) }} className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50">
+                  <Trash2 className="size-3.5" /> 删除
+                </button>
+                <button onClick={() => setDetail(null)} className="rounded-lg p-1.5 text-slate-400 hover:text-slate-600">
+                  <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
             </div>
             <div className="p-6 space-y-3">
               <div className="grid grid-cols-3 gap-2 text-sm">
@@ -443,7 +450,7 @@ export default function PolicyDocumentsPage() {
                 <div><span className="text-[10px] text-slate-400">政策层级</span><p>{detail.policy_level || '-'}</p></div>
                 <div><span className="text-[10px] text-slate-400">来源类型</span><p>{sourceLabel[detail.source_type]}</p></div>
                 <div><span className="text-[10px] text-slate-400">状态</span><p>{statusLabel[detail.status]}</p></div>
-                <div><span className="text-[10px] text-slate-400">发布日期</span><p>{detail.publish_date || '-'}</p></div>
+                <div><span className="text-[10px] text-slate-400">发布日期</span><p>{fmtDate(detail.publish_date)}</p></div>
                 <div><span className="text-[10px] text-slate-400">实施日期</span><p>{detail.effective_date || '-'}</p></div>
                 <div><span className="text-[10px] text-slate-400">废止日期</span><p>{detail.abolition_date || '-'}</p></div>
                 <div><span className="text-[10px] text-slate-400">成文日期</span><p>{detail.document_date || '-'}</p></div>

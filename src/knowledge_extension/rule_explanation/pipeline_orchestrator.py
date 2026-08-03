@@ -101,7 +101,10 @@ class PipelineOrchestrator:
                     "confidence": round(avg_conf, 2),
                 })
 
-            # ── 持久化 ──
+            # ── 持久化（先清空旧提取记录，避免重提取时 LLM 漂移堆积近似重复）──
+            wiped = self._store.delete_extractions_by_doc(doc_id)
+            if wiped:
+                logger.info("重提取 doc_id=%s：清空旧提取记录 %d 条", doc_id, wiped)
             count = self._store.batch_create_extractions(extraction_items)
 
             # ── 更新文档状态 + 覆盖率 ──
@@ -363,36 +366,27 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
     # ═══════════════ Coverage ═══════════════
 
     @staticmethod
-    def _calculate_coverage(document_text: str, facts: list[dict]) -> dict[str, Any]:
-        """计算政策事实对原文的覆盖率。
+    def _calculate_coverage(document_text: str, document_title: str = "") -> dict[str, Any]:
+        """结构单元产出率 = kept_units / all_units。
 
-        通过匹配每个 fact_text 在原文中的出现位置来估算覆盖率。
+        覆盖率语义：政策原文经结构拆分后，去重保留的叶子单元占全部叶子的比例。
+        - 单元 = 文档结构叶子（条/项/目），由 Python 确定性拆分得到。
+        - 网页抓取的导航/搜索样板噪声在 parse 阶段已被剔除，不计入分母。
+        - 因此一篇正常提取的政策文档覆盖率通常接近 100%（提取单元无遗漏）。
+
+        [变更] 旧实现按 LLM 提取的 fact_text 在原文中逐字/k-gram 匹配字符位置，
+        既受 LLM 改写影响、又被文档噪声稀释，数值偏低且语义模糊，已废弃。
         """
-        normalized_doc = re.sub(r"\s+", "", document_text)
-        total_chars = len(normalized_doc)
-        if total_chars == 0:
-            return {"ratio": 0, "covered_chars": 0, "total_chars": 0}
-
-        # 计算每个事实覆盖的字符数（通过原文匹配）
-        covered_positions: set[int] = set()
-        for fact in facts:
-            fact_text = fact.get("fact_text", "")
-            normalized_fact = re.sub(r"\s+", "", fact_text)
-            if normalized_fact and len(normalized_fact) >= 3:
-                # 在原文中查找事实文本的位置
-                idx = normalized_doc.find(normalized_fact)
-                if idx >= 0:
-                    for pos in range(idx, idx + len(normalized_fact)):
-                        covered_positions.add(pos)
-
-        covered_chars = len(covered_positions)
-        ratio = round(min(covered_chars / total_chars, 1.0), 2)
-
-        return {
-            "ratio": ratio,
-            "covered_chars": covered_chars,
-            "total_chars": total_chars,
-        }
+        try:
+            from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import parse_kept_leaves
+            _root, _by_id, all_leaves, kept = parse_kept_leaves(document_text or "", document_title or "")
+        except Exception:
+            logger.exception("parse_kept_leaves failed in coverage calc")
+            return {"ratio": 0, "kept_units": 0, "total_units": 0}
+        total = len(all_leaves)
+        kept_n = len(kept)
+        ratio = round(min(kept_n / total, 1.0), 2) if total else 0
+        return {"ratio": ratio, "kept_units": kept_n, "total_units": total}
 
     # ═══════════════ Regex Fallback ═══════════════
 
