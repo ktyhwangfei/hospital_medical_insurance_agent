@@ -61,7 +61,7 @@ def _db_ready() -> bool:
         from src.config.production import SQLSERVER_HOST  # noqa: F401
         conn = pyodbc.connect(
             "DRIVER={SQL Server};SERVER=127.0.0.1,1433;DATABASE=bjybdb;"
-            "UID=sa;PWD=REDACTED", timeout=2)
+            "UID=sa;PWD=${SA_PASSWORD}", timeout=2)
         conn.close()
         return True
     except Exception:
@@ -77,7 +77,7 @@ def test_search_database_via_semantic_source():
     # 取真实登记号（yb_brdjxx 是 seed 里 source_field 指向的真实表）
     conn = pyodbc.connect(
         "DRIVER={SQL Server};SERVER=127.0.0.1,1433;DATABASE=bjybdb;"
-        "UID=sa;PWD=REDACTED", timeout=3)
+        "UID=sa;PWD=${SA_PASSWORD}", timeout=3)
     cur = conn.cursor()
     cur.execute("SELECT TOP 1 djh FROM yb_brdjxx")
     row = cur.fetchone()
@@ -199,7 +199,7 @@ python -m pytest src/tests/integration/flow/test_rules_search_service.py src/tes
 python -c "
 from dotenv import load_dotenv; load_dotenv()
 import pyodbc
-conn = pyodbc.connect('DRIVER={SQL Server};SERVER=127.0.0.1,1433;DATABASE=bjybdb;UID=sa;PWD=REDACTED',timeout=3)
+conn = pyodbc.connect('DRIVER={SQL Server};SERVER=127.0.0.1,1433;DATABASE=bjybdb;UID=sa;PWD=${SA_PASSWORD}',timeout=3)
 djh = conn.cursor(); djh.execute('SELECT TOP 1 djh FROM yb_brdjxx'); d = djh.fetchone()[0]; conn.close()
 from src.runtime.api.app import create_app
 from fastapi.testclient import TestClient
