@@ -1,3 +1,4 @@
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
@@ -5,7 +6,11 @@ from typing import Optional, List, Tuple
 import hashlib
 import base64
 
-ID_SECRET_KEY = "sdgfxx"
+# 稳定 ID 的 keyed-hash 密钥：由环境变量注入，禁止硬编码（安全审计发现）。
+# 默认值保留仅为兼容历史已入库 node_id；新部署应在首次提取前设置
+# POLICY_NODE_ID_SECRET=<强随机值>（python -c "import secrets; print(secrets.token_hex(32))"）。
+# 注意：修改密钥会改变生成结果，已入库的 node_id 将失效，需重新提取并重灌向量库。
+ID_SECRET_KEY = os.getenv("POLICY_NODE_ID_SECRET", "sdgfxx")
 CN_NUM = "一二三四五六七八九十百千万零〇两"
 
 

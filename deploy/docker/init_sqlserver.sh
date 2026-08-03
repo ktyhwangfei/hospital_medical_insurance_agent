@@ -78,8 +78,8 @@ if [ -f "$ENV_FILE" ]; then
     SA_PASSWORD=$(grep -oP '^SA_PASSWORD=\K.*' "$ENV_FILE" 2>/dev/null | head -1 || echo "")
 fi
 if [ -z "$SA_PASSWORD" ]; then
-    SA_PASSWORD="REDACTED"
-    log WARN "SA_PASSWORD not found in .env, using default"
+    log ERROR "SA_PASSWORD not found in $ENV_FILE — refusing to fall back to a hardcoded default (security audit: hardcoded default removed). Set SA_PASSWORD in ${DOCKER_DIR}/.env"
+    exit 1
 fi
 log INFO "SA password loaded (length: ${#SA_PASSWORD})"
 
