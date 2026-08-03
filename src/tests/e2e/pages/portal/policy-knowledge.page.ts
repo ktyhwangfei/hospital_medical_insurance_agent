@@ -67,7 +67,7 @@ export class PolicyKnowledgePage extends BasePage {
   }
 
   blockedReason(reason: string): Locator {
-    return this.page.getByText(reason, { exact: true });
+    return this.page.getByText(reason);
   }
 
   rollbackButton(releaseId: string): Locator {

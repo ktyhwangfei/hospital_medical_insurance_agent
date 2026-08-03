@@ -20,6 +20,7 @@ export default defineConfig({
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 1440, height: 900 },
+        ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}),
       },
     },
     {
@@ -52,18 +53,6 @@ export default defineConfig({
       command: 'npm run dev',
       port: 3000,
       cwd: '../../apps/portal',
-      reuseExistingServer: true,
-    },
-    {
-      command: 'npm run dev',
-      port: 3001,
-      cwd: '../../apps/admin',
-      reuseExistingServer: true,
-    },
-    {
-      command: 'npm run dev',
-      port: 3002,
-      cwd: '../../apps/embed',
       reuseExistingServer: true,
     },
   ],
