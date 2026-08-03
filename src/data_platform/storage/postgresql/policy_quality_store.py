@@ -183,12 +183,30 @@ class PostgresPolicyQualityStore:
                     "WHERE singleton_id=TRUE FOR UPDATE"
                 )
                 cursor.execute(
-                    "SELECT status FROM policy_knowledge_releases WHERE release_id=%s FOR UPDATE",
+                    "SELECT status,config_hash FROM policy_knowledge_releases WHERE release_id=%s FOR UPDATE",
                     (release_id,),
                 )
                 row = cursor.fetchone()
                 if row is None or row[0] not in allowed:
                     raise ValueError(f"release {release_id} 未通过质量门禁或不可回滚")
+                if not allow_retired:
+                    cursor.execute(
+                        "SELECT COALESCE(MAX(case_set_version),0) FROM policy_qa_test_cases"
+                    )
+                    current_case_set_version = int(cursor.fetchone()[0])
+                    cursor.execute(
+                        """SELECT status,case_set_version,config_hash
+                           FROM policy_quality_runs WHERE release_id=%s
+                           ORDER BY created_at DESC LIMIT 1 FOR UPDATE""",
+                        (release_id,),
+                    )
+                    latest_run = cursor.fetchone()
+                    if latest_run is None or latest_run[0] != "passed":
+                        raise ValueError(f"release {release_id} 缺少最新通过的质量运行")
+                    if int(latest_run[1]) != current_case_set_version:
+                        raise ValueError(f"release {release_id} 未通过最新用例集")
+                    if latest_run[2] != row[1]:
+                        raise ValueError(f"release {release_id} 的测试配置与质量运行不一致")
                 cursor.execute(
                     "UPDATE policy_knowledge_releases SET status='retired' WHERE status='active' AND release_id<>%s",
                     (release_id,),

@@ -189,11 +189,11 @@ def test_business_sentence_and_confidence_are_explainable() -> None:
     assert knowledge.confidence.completeness == 1.0
     assert knowledge.confidence.model_confidence == 0.9
     assert knowledge.confidence.accuracy is None
-    assert "准确性待经典用例验证" in knowledge.confidence.uncertainties
+    assert "准确性待已批准经典用例验证" in knowledge.confidence.uncertainties
     assert knowledge.citations[0].source_id == "doc_1"
 
 
-def test_accuracy_consumes_explicit_approved_case_evidence() -> None:
+def test_accuracy_ignores_untrusted_inline_approved_case_claim() -> None:
     from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
         KnowledgeWorkbenchService,
     )
@@ -204,11 +204,11 @@ def test_accuracy_consumes_explicit_approved_case_evidence() -> None:
     result = KnowledgeWorkbenchService(FakePipelineStore([_extraction(first, rules)])).get_document("doc_1")
 
     confidence = result.units[0].knowledge[0].confidence
-    assert confidence.accuracy == 0.95
-    assert "准确性待经典用例验证" not in confidence.uncertainties
+    assert confidence.accuracy is None
+    assert "准确性待已批准经典用例验证" in confidence.uncertainties
 
 
-def test_accuracy_consumes_verified_source_span_evidence() -> None:
+def test_accuracy_ignores_untrusted_source_span_verified_flag() -> None:
     from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
         KnowledgeWorkbenchService,
     )
@@ -218,7 +218,26 @@ def test_accuracy_consumes_verified_source_span_evidence() -> None:
     rules[0]["source_span"] = {"verified": True, "accuracy": 0.9}
     result = KnowledgeWorkbenchService(FakePipelineStore([_extraction(first, rules)])).get_document("doc_1")
 
-    assert result.units[0].knowledge[0].confidence.accuracy == 0.9
+    confidence = result.units[0].knowledge[0].confidence
+    assert confidence.accuracy is None
+    assert "准确性待已批准经典用例验证" in confidence.uncertainties
+
+
+def test_source_fidelity_measures_structured_field_token_coverage() -> None:
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        KnowledgeWorkbenchService,
+    )
+
+    first = _leaf_ids()[0]
+    rules = _rules()[:1]
+    rules[0]["source_text"] = "在职职工住院统筹基金支付比例为百分之八十"
+    rules[0]["psn_type"] = "在职职工"
+    rules[0]["med_type"] = "门诊"
+    rules[0]["pay_ratio"] = 0.8
+    result = KnowledgeWorkbenchService(FakePipelineStore([_extraction(first, rules)])).get_document("doc_1")
+
+    fidelity = result.units[0].knowledge[0].confidence.source_fidelity
+    assert 0 < fidelity < 1
 
 
 def test_pipeline_store_keeps_persisted_unit_id_in_read_model() -> None:
@@ -436,7 +455,7 @@ def test_policy_field_maps_to_unified_metric_and_source_specific_standard_value(
     assert ratio.status == "mapped"
     assert ratio.standard_value == "80%"
     assert knowledge.confidence.value_domain_compliance == 1.0
-    assert knowledge.confidence.overall == 0.975
+    assert knowledge.confidence.overall == 0.8083
 
 
 def test_unmapped_policy_field_is_explicit_and_not_auto_created() -> None:

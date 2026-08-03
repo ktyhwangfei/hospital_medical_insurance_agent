@@ -151,20 +151,24 @@ def _confidence(rule: dict[str, Any], extraction: dict[str, Any]) -> KnowledgeCo
         else 0.0
     )
     source_text = str(rule.get("source_text") or extraction.get("source_text") or "").strip()
-    fact_text = str((extraction.get("extracted_fields") or {}).get("fact_text") or "").strip()
-    source_fidelity = 1.0 if source_text and (source_text in fact_text or fact_text in source_text) else 0.0
-    model_confidence = _clamp(rule.get("confidence", extraction.get("confidence", 0.0)))
-    accuracy_evidence = rule.get(
-        "approved_case_accuracy", extraction.get("approved_case_accuracy")
+    normalized_source = "".join(source_text.lower().split())
+    field_values = [
+        "".join(str(rule.get(key)).lower().split())
+        for key in applicable
+        if _present(rule.get(key))
+    ]
+    source_fidelity = (
+        sum(value in normalized_source for value in field_values) / len(field_values)
+        if normalized_source and field_values
+        else 0.0
     )
-    source_span = rule.get("source_span") or extraction.get("source_span")
-    if accuracy_evidence is None and isinstance(source_span, dict) and source_span.get("verified"):
-        accuracy_evidence = source_span.get("accuracy", 1.0)
-    accuracy = _clamp(accuracy_evidence) if accuracy_evidence is not None else None
-    known = (completeness, source_fidelity, model_confidence, *(() if accuracy is None else (accuracy,)))
-    uncertainties = ["值域合规性待标准化契约验证"]
-    if accuracy is None:
-        uncertainties.insert(0, "准确性待经典用例验证")
+    model_confidence = _clamp(rule.get("confidence", extraction.get("confidence", 0.0)))
+    accuracy = None
+    known = (completeness, source_fidelity, model_confidence)
+    uncertainties = [
+        "准确性待已批准经典用例验证",
+        "值域合规性待标准化契约验证",
+    ]
     return KnowledgeConfidence(
         completeness=round(completeness, 4),
         accuracy=accuracy,

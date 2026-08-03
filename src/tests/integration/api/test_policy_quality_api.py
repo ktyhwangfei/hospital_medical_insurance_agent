@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from src.knowledge_extension.rule_explanation.quality_models import KnowledgeRelease
+from src.knowledge_extension.rule_explanation.quality_models import KnowledgeRelease, QualityRun
 from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
 from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
 from src.runtime.api.app import create_app
 
 
 PREFIX = "/api/v1/medical-insurance-ai-agent/policy-workbench"
+QUALITY_CONFIG_HASH = "197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22"
 
 
 class Searcher:
@@ -96,7 +97,11 @@ def test_run_detail_and_manual_promotion(monkeypatch) -> None:
         rules_collection="policy_rules_baseline",
         contract_version="1",
         case_set_version=1,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
+    ))
+    store.save_run(QualityRun(
+        run_id="run_baseline", release_id="baseline", case_set_version=1,
+        config_hash=QUALITY_CONFIG_HASH, status="passed",
     ))
     store.promote_release("baseline", "reviewer_a")
     store.save_release(KnowledgeRelease(
@@ -106,7 +111,7 @@ def test_run_detail_and_manual_promotion(monkeypatch) -> None:
         rules_collection="policy_rules_candidate",
         contract_version="2",
         case_set_version=1,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
     ))
 
     run_response = client.post(
@@ -143,7 +148,11 @@ def test_blocked_promotion_returns_409_and_preserves_active_release(monkeypatch)
         rules_collection="policy_rules_baseline",
         contract_version="1",
         case_set_version=0,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
+    ))
+    store.save_run(QualityRun(
+        run_id="run_baseline", release_id="baseline", case_set_version=0,
+        config_hash=QUALITY_CONFIG_HASH, status="passed",
     ))
     store.promote_release("baseline", "reviewer_a")
     store.save_release(KnowledgeRelease(
@@ -153,7 +162,7 @@ def test_blocked_promotion_returns_409_and_preserves_active_release(monkeypatch)
         rules_collection="policy_rules_failed",
         contract_version="2",
         case_set_version=0,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
     ))
 
     response = client.post(

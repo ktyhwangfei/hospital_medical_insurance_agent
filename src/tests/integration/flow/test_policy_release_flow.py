@@ -3,10 +3,14 @@ from __future__ import annotations
 from src.knowledge_extension.rule_explanation.quality_models import (
     KnowledgeRelease,
     PolicyQATestCase,
+    QualityRun,
 )
 from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
 from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
 from src.knowledge_extension.rule_explanation.release_index import ReleaseIndexBuilder
+
+
+QUALITY_CONFIG_HASH = "197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22"
 
 
 class HealthyBackend:
@@ -44,7 +48,11 @@ def test_candidate_build_test_and_manual_atomic_promotion_flow() -> None:
         rules_collection="policy_rules_baseline",
         contract_version="1",
         case_set_version=1,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
+    ))
+    store.save_run(QualityRun(
+        run_id="run_baseline", release_id="baseline", case_set_version=1,
+        config_hash=QUALITY_CONFIG_HASH, status="passed",
     ))
     store.promote_release("baseline", "reviewer_a")
     store.save_release(KnowledgeRelease(
@@ -54,7 +62,7 @@ def test_candidate_build_test_and_manual_atomic_promotion_flow() -> None:
         rules_collection="policy_rules_candidate",
         contract_version="2",
         case_set_version=1,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
     ))
 
     ready = ReleaseIndexBuilder(store, HealthyBackend()).build(

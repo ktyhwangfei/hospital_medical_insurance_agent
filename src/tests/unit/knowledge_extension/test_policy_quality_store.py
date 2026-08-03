@@ -3,6 +3,9 @@ from __future__ import annotations
 import pytest
 
 
+QUALITY_CONFIG_HASH = "197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22"
+
+
 def _release(release_id: str, status: str = "ready"):
     from src.knowledge_extension.rule_explanation.quality_models import KnowledgeRelease
 
@@ -13,8 +16,20 @@ def _release(release_id: str, status: str = "ready"):
         rules_collection=f"policy_rules_{release_id}",
         contract_version="2",
         case_set_version=1,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
     )
+
+
+def _save_passed_run(store, release_id: str, case_set_version: int = 1) -> None:
+    from src.knowledge_extension.rule_explanation.quality_models import QualityRun
+
+    store.save_run(QualityRun(
+        run_id=f"run_{release_id}",
+        release_id=release_id,
+        case_set_version=case_set_version,
+        config_hash=QUALITY_CONFIG_HASH,
+        status="passed",
+    ))
 
 
 def test_case_changes_create_new_case_set_version() -> None:
@@ -95,7 +110,9 @@ def test_only_passed_release_can_be_promoted_atomically() -> None:
     from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
 
     store = InMemoryPolicyQualityStore()
+    store._case_set_version = 1
     store.save_release(_release("rel_old", status="passed"))
+    _save_passed_run(store, "rel_old")
     store.promote_release("rel_old", promoted_by="reviewer")
     store.save_release(_release("rel_failed", status="failed"))
 
@@ -110,9 +127,12 @@ def test_promotion_switches_one_pointer_and_rollback_restores_previous_release()
     from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
 
     store = InMemoryPolicyQualityStore()
+    store._case_set_version = 1
     store.save_release(_release("rel_1", status="passed"))
+    _save_passed_run(store, "rel_1")
     store.promote_release("rel_1", promoted_by="reviewer")
     store.save_release(_release("rel_2", status="passed"))
+    _save_passed_run(store, "rel_2")
 
     promoted = store.promote_release("rel_2", promoted_by="reviewer")
 
@@ -125,3 +145,40 @@ def test_promotion_switches_one_pointer_and_rollback_restores_previous_release()
     assert rolled_back.release_id == "rel_1"
     assert store.get_active_release().release_id == "rel_1"  # type: ignore[union-attr]
     assert store.get_release("rel_2").status == "retired"  # type: ignore[union-attr]
+
+
+def test_promotion_rejects_passed_run_after_case_set_changes() -> None:
+    from src.knowledge_extension.rule_explanation.quality_models import PolicyQATestCase
+    from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+    store = InMemoryPolicyQualityStore()
+    store.save_test_case(PolicyQATestCase(
+        case_id="case_1", name="原用例", query="原用例", mode="semantic"
+    ))
+    store.save_release(_release("candidate", status="passed"))
+    _save_passed_run(store, "candidate")
+    store.save_test_case(PolicyQATestCase(
+        case_id="case_2", name="新增用例", query="新增用例", mode="semantic"
+    ))
+
+    with pytest.raises(ValueError, match="最新用例集"):
+        store.promote_release("candidate", promoted_by="reviewer")
+
+
+def test_promotion_rejects_passed_run_with_different_config_hash() -> None:
+    from src.knowledge_extension.rule_explanation.quality_models import QualityRun
+    from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+    store = InMemoryPolicyQualityStore()
+    store._case_set_version = 1
+    store.save_release(_release("candidate", status="passed"))
+    store.save_run(QualityRun(
+        run_id="run_candidate",
+        release_id="candidate",
+        case_set_version=1,
+        config_hash="forged",
+        status="passed",
+    ))
+
+    with pytest.raises(ValueError, match="测试配置"):
+        store.promote_release("candidate", promoted_by="reviewer")

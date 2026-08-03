@@ -90,6 +90,13 @@ class InMemoryPolicyQualityStore:
                 raise ValueError(f"release 不存在: {release_id}")
             if target.status != "passed":
                 raise ValueError(f"release {release_id} 未通过质量门禁")
+            latest = self.get_latest_run(release_id)
+            if latest is None or latest.status != "passed":
+                raise ValueError(f"release {release_id} 缺少最新通过的质量运行")
+            if latest.case_set_version != self.current_case_set_version():
+                raise ValueError(f"release {release_id} 未通过最新用例集")
+            if latest.config_hash != target.config_hash:
+                raise ValueError(f"release {release_id} 的测试配置与质量运行不一致")
             return self._switch_active(target, promoted_by)
 
     def rollback_release(self, release_id: str, promoted_by: str) -> KnowledgeRelease:

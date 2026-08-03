@@ -50,6 +50,7 @@ export function QualityDashboard({ releases, activeRelease, latestRun, caseResul
         <Metric label="活动版质量" value={run.baseline_score} />
         <Metric label="重复一致性" value={run.consistency_score} />
       </div>
+      <ComparisonBars candidate={run.candidate_score} baseline={run.baseline_score} />
       {!!run.blocked_reasons.length && <ul className="mt-3 space-y-1 text-xs text-red-700">{run.blocked_reasons.map((reason) => <li key={reason}>· {reason}</li>)}</ul>}
       {!!failedCases.length && <div className="mt-3"><p className="text-[11px] font-semibold text-red-800">逐用例失败明细</p><ul className="mt-1 space-y-1 text-[11px] text-red-700">{failedCases.map((item) => <li key={`${item.case_id}-${item.repeat_index}`}>{item.case_id} · 第 {item.repeat_index + 1} 次 · 得分 {Math.round(item.score * 100)}% · {JSON.stringify(item.diagnostics)}</li>)}</ul></div>}
       {!!caseDiffs.length && <div className="mt-3 rounded-lg bg-white/70 p-3"><p className="text-[11px] font-semibold text-slate-700">候选 / 基线逐案 diff</p><ul className="mt-2 space-y-1 font-mono text-[10px] text-slate-600">{caseDiffs.map((item) => <li key={`${item.caseId}-${item.repeatIndex}`}>{item.caseId} #{item.repeatIndex + 1} · 候选 [{item.candidateIds.join(', ') || '—'}] ({pctValue(item.candidateScore)}) → 基线 [{item.baselineIds.join(', ') || '—'}] ({pctValue(item.baselineScore)})</li>)}</ul></div>}
@@ -85,6 +86,18 @@ function ReleaseCard({ label, release, accent }: { label: string; release: Knowl
 
 function Metric({ label, value }: { label: string; value: number | null }) {
   return <div className="rounded-lg bg-white/80 p-2 text-center"><p className="text-[10px] text-slate-400">{label}</p><p className="mt-1 text-sm font-bold text-slate-800">{value === null ? '—' : `${Math.round(value * 100)}%`}</p></div>
+}
+
+function ComparisonBars({ candidate, baseline }: { candidate: number | null; baseline: number | null }) {
+  return <div className="mt-3 space-y-2 rounded-lg bg-white/80 p-3">
+    <QualityBar label="候选版本质量" value={candidate} color="bg-violet-500" />
+    <QualityBar label="活动版本质量" value={baseline} color="bg-blue-500" />
+  </div>
+}
+
+function QualityBar({ label, value, color }: { label: string; value: number | null; color: string }) {
+  const percent = Math.round((value || 0) * 100)
+  return <div className="grid grid-cols-[5rem_1fr_2.5rem] items-center gap-2 text-[10px] text-slate-500"><span>{label}</span><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div aria-label={`${label} ${percent}%`} className={`h-full rounded-full ${color}`} style={{ width: `${percent}%` }} /></div><span className="text-right font-semibold text-slate-700">{value === null ? '—' : `${percent}%`}</span></div>
 }
 
 function statusLabel(status: KnowledgeRelease['status']) {

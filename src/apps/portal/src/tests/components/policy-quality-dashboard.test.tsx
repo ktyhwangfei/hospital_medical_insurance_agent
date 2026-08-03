@@ -13,7 +13,7 @@ const release = (release_id: string, status: KnowledgeRelease['status']): Knowle
 const run: QualityRun = {
   run_id: 'run_1', release_id: 'candidate_passed', baseline_release_id: 'baseline',
   status: 'passed', candidate_score: 0.95, baseline_score: 0.8,
-  consistency_score: 1, blocked_reasons: [], repeat_count: 3,
+  consistency_score: 1, blocked_reasons: [], repeat_count: 3, case_set_version: 1, config_hash: 'cfg_1',
 }
 
 describe('QualityDashboard', () => {
@@ -23,8 +23,10 @@ describe('QualityDashboard', () => {
     const promote = vi.fn()
     render(<QualityDashboard releases={[release('candidate_passed', 'passed')]} activeRelease={release('baseline', 'active')} latestRun={run} onRun={vi.fn()} onPromote={promote} />)
 
-    expect(screen.getByText('95%')).toBeInTheDocument()
-    expect(screen.getByText('80%')).toBeInTheDocument()
+    expect(screen.getAllByText('95%')).toHaveLength(2)
+    expect(screen.getAllByText('80%')).toHaveLength(2)
+    expect(screen.getByLabelText('候选版本质量 95%')).toHaveStyle({ width: '95%' })
+    expect(screen.getByLabelText('活动版本质量 80%')).toHaveStyle({ width: '80%' })
     expect(screen.getByText('测试通过，待人工发布')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '人工发布候选版本' }))
     expect(promote).toHaveBeenCalledWith('candidate_passed')

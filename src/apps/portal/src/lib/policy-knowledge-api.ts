@@ -128,7 +128,16 @@ export interface QualityRun {
   consistency_score: number | null
   blocked_reasons: string[]
   repeat_count: number
+  case_set_version: number
+  config_hash: string
 }
+
+export const QUALITY_RUN_CONFIG = {
+  repeat_count: 3,
+  minimum_quality: 0.8,
+  minimum_consistency: 0.9,
+} as const
+export const QUALITY_CONFIG_HASH = '197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -202,8 +211,8 @@ export const createRelease = (body: { release_id: string; contract_version: stri
 export const listReleases = () => request<KnowledgeRelease[]>(`${WORKBENCH_API}/releases`)
 export const buildRelease = (releaseId: string) =>
   request<KnowledgeRelease>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/build`, { method: 'POST' })
-export const runQuality = (releaseId: string, repeatCount = 3) =>
-  request<QualityRun>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/test`, json('POST', { repeat_count: repeatCount }))
+export const runQuality = (releaseId: string) =>
+  request<QualityRun>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/test`, json('POST', QUALITY_RUN_CONFIG))
 export const getActiveRelease = () => request<KnowledgeRelease>(`${WORKBENCH_API}/releases/active`)
 export const promoteRelease = (releaseId: string, reviewedBy: string) =>
   request<KnowledgeRelease>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/promote`, json('POST', { reviewed_by: reviewedBy }))

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+from hashlib import sha256
 from itertools import combinations
 from statistics import mean
 from typing import Protocol
@@ -14,6 +15,16 @@ from src.knowledge_extension.rule_explanation.quality_models import (
     QualityRun,
 )
 from src.knowledge_extension.rule_explanation.quality_store import PolicyQualityStore
+
+
+def quality_config_hash(
+    repeat_count: int, minimum_quality: float, minimum_consistency: float
+) -> str:
+    payload = (
+        f"minimum_consistency={minimum_consistency:g}&"
+        f"minimum_quality={minimum_quality:g}&repeat_count={repeat_count}"
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
 
 
 class ReleaseSearchPort(Protocol):
@@ -75,14 +86,17 @@ class PolicyQualityService:
         cases = self._store.list_test_cases(active_only=True)
         case_set_version = self._store.current_case_set_version()
         baseline = self._store.get_active_release()
-        self._validate_comparison(candidate, baseline, case_set_version, cases)
+        config_hash = quality_config_hash(
+            repeat_count, minimum_quality, minimum_consistency
+        )
+        self._validate_comparison(candidate, case_set_version, config_hash, cases)
 
         run = QualityRun(
             run_id=f"run_{uuid4().hex}",
             release_id=candidate.release_id,
             baseline_release_id=baseline.release_id if baseline else None,
             case_set_version=case_set_version,
-            config_hash=candidate.config_hash,
+            config_hash=config_hash,
             repeat_count=repeat_count,
             status="running",
         )
@@ -135,14 +149,16 @@ class PolicyQualityService:
     @staticmethod
     def _validate_comparison(
         candidate: KnowledgeRelease,
-        baseline: KnowledgeRelease | None,
         case_set_version: int,
+        config_hash: str,
         cases: list[PolicyQATestCase],
     ) -> None:
         if not cases:
             raise ValueError("没有可用的经典测试用例")
-        if baseline and baseline.config_hash != candidate.config_hash:
-            raise ValueError("候选版本与当前版本的测试配置不一致")
+        if candidate.case_set_version != case_set_version:
+            raise ValueError("候选版本未绑定当前经典用例集，请重新创建候选版本")
+        if candidate.config_hash != config_hash:
+            raise ValueError("候选版本测试配置与实际运行配置不一致")
 
     def _evaluate(
         self,

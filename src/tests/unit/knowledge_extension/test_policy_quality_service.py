@@ -7,8 +7,12 @@ import pytest
 from src.knowledge_extension.rule_explanation.quality_models import (
     KnowledgeRelease,
     PolicyQATestCase,
+    QualityRun,
 )
 from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+
+QUALITY_CONFIG_HASH = "197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22"
 
 
 class SequenceSearcher:
@@ -40,7 +44,14 @@ def _store_with_case_and_baseline() -> InMemoryPolicyQualityStore:
         rules_collection="policy_rules_baseline",
         contract_version="1",
         case_set_version=1,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
+    ))
+    store.save_run(QualityRun(
+        run_id="run_baseline",
+        release_id="baseline",
+        case_set_version=1,
+        config_hash=QUALITY_CONFIG_HASH,
+        status="passed",
     ))
     store.promote_release("baseline", "reviewer")
     store.save_release(KnowledgeRelease(
@@ -50,7 +61,7 @@ def _store_with_case_and_baseline() -> InMemoryPolicyQualityStore:
         rules_collection="policy_rules_candidate",
         contract_version="2",
         case_set_version=1,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
     ))
     return store
 
@@ -110,9 +121,17 @@ def test_strictly_better_stable_candidate_passes_gate() -> None:
 
 
 def test_required_case_failure_blocks_even_when_average_threshold_is_low() -> None:
-    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+    from src.knowledge_extension.rule_explanation.quality_service import (
+        PolicyQualityService,
+        quality_config_hash,
+    )
 
     store = _store_with_case_and_baseline()
+    candidate = store.get_release("candidate")
+    assert candidate is not None
+    store.releases["candidate"] = candidate.model_copy(update={
+        "config_hash": quality_config_hash(3, 0.0, 0.9)
+    })
     searcher = SequenceSearcher({"baseline": [[]], "candidate": [["kn_other"]]})
 
     run = PolicyQualityService(store, searcher).run_release(
@@ -141,7 +160,7 @@ def test_without_baseline_candidate_uses_absolute_threshold() -> None:
         rules_collection="policy_rules_candidate",
         contract_version="1",
         case_set_version=1,
-        config_hash="cfg_1",
+        config_hash=QUALITY_CONFIG_HASH,
     ))
 
     run = PolicyQualityService(
@@ -152,22 +171,22 @@ def test_without_baseline_candidate_uses_absolute_threshold() -> None:
     assert run.baseline_score is None
 
 
-def test_comparison_rejects_different_test_configuration() -> None:
+def test_run_rejects_release_config_that_does_not_match_runtime_configuration() -> None:
     from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
 
     store = _store_with_case_and_baseline()
     candidate = store.get_release("candidate")
     assert candidate is not None
-    store.releases["candidate"] = candidate.model_copy(update={"config_hash": "cfg_other"})
+    store.releases["candidate"] = candidate.model_copy(update={"config_hash": "forged"})
 
-    with pytest.raises(ValueError, match="测试配置不一致"):
+    with pytest.raises(ValueError, match="测试配置.*不一致"):
         PolicyQualityService(
             store,
             SequenceSearcher({"baseline": [[]], "candidate": [["kn_expected"]]}),
         ).run_release("candidate", repeat_count=3)
 
 
-def test_comparison_uses_current_active_cases_despite_immutable_release_versions() -> None:
+def test_comparison_retests_stale_baseline_with_current_candidate_case_set() -> None:
     from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
 
     store = _store_with_case_and_baseline()
@@ -181,6 +200,11 @@ def test_comparison_uses_current_active_cases_despite_immutable_release_versions
         mode="semantic",
         expected_knowledge_ids=["kn_expected"],
     ))
+    candidate = store.get_release("candidate")
+    assert candidate is not None
+    store.releases["candidate"] = candidate.model_copy(
+        update={"case_set_version": store.current_case_set_version()}
+    )
 
     run = PolicyQualityService(
         store,
@@ -188,6 +212,25 @@ def test_comparison_uses_current_active_cases_despite_immutable_release_versions
     ).run_release("candidate", repeat_count=3)
 
     assert run.case_set_version == store.current_case_set_version()
+
+
+def test_run_rejects_candidate_from_an_older_case_set() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    store = _store_with_case_and_baseline()
+    store.save_test_case(PolicyQATestCase(
+        case_id="case_2",
+        name="新增当前用例",
+        query="新增当前用例",
+        mode="semantic",
+        expected_knowledge_ids=["kn_expected"],
+    ))
+
+    with pytest.raises(ValueError, match="候选版本.*用例集"):
+        PolicyQualityService(
+            store,
+            SequenceSearcher({"baseline": [[]], "candidate": [["kn_expected"]]}),
+        ).run_release("candidate", repeat_count=3)
 
 
 def test_score_rewards_expected_order_and_penalizes_swapped_ids() -> None:

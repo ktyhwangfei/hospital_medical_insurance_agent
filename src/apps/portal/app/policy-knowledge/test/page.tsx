@@ -21,6 +21,8 @@ import {
   type PolicyTestCase,
   type QualityCaseResult,
   type QualityRun,
+  QUALITY_CONFIG_HASH,
+  QUALITY_RUN_CONFIG,
 } from '@/lib/policy-knowledge-api'
 
 type Mode = 'precise' | 'semantic' | 'hybrid'
@@ -69,7 +71,7 @@ export default function PolicyKnowledgeTestPage() {
 
   async function run(releaseId: string) {
     setBusy('run'); setError('')
-    try { const result = await runQuality(releaseId, 3); setLatestRun(result); setCaseResults(await listQualityCaseResults(result.run_id)); await refresh() }
+    try { const result = await runQuality(releaseId); setLatestRun(result); setCaseResults(await listQualityCaseResults(result.run_id)); await refresh() }
     catch (reason) { setError(reason instanceof Error ? reason.message : '统一测试失败') }
     finally { setBusy('') }
   }
@@ -156,39 +158,43 @@ function TestCasePanel({ cases, onSaved }: { cases: PolicyTestCase[]; onSaved: (
   const [name, setName] = useState('')
   const [query, setQuery] = useState('')
   const [expected, setExpected] = useState('')
+  const [mode, setMode] = useState<Mode>('semantic')
+  const [filtersJson, setFiltersJson] = useState('{}')
+  const [required, setRequired] = useState(true)
   const [error, setError] = useState('')
   async function submit(event: FormEvent) {
     event.preventDefault(); setError('')
     try {
-      await saveTestCase({ case_id: editingId || `case_${Date.now()}`, name, query, mode: 'semantic', expected_knowledge_ids: expected.split(',').map((item) => item.trim()).filter(Boolean), filters: {}, required: true, active: true })
-      setEditingId(''); setName(''); setQuery(''); setExpected(''); onSaved()
+      const parsedFilters = JSON.parse(filtersJson) as unknown
+      if (!parsedFilters || Array.isArray(parsedFilters) || typeof parsedFilters !== 'object') throw new Error('过滤条件必须是 JSON 对象')
+      await saveTestCase({ case_id: editingId || `case_${Date.now()}`, name, query, mode, expected_knowledge_ids: expected.split(',').map((item) => item.trim()).filter(Boolean), filters: parsedFilters as Record<string, unknown>, required, active: true })
+      setEditingId(''); setName(''); setQuery(''); setExpected(''); setMode('semantic'); setFiltersJson('{}'); setRequired(true); onSaved()
     } catch (reason) { setError(reason instanceof Error ? reason.message : '用例保存失败') }
   }
   async function deactivate(item: PolicyTestCase) {
     await saveTestCase({ ...item, active: false }); onSaved()
   }
   function edit(item: PolicyTestCase) {
-    setEditingId(item.case_id); setName(item.name); setQuery(item.query); setExpected(item.expected_knowledge_ids.join(', '))
+    setEditingId(item.case_id); setName(item.name); setQuery(item.query); setExpected(item.expected_knowledge_ids.join(', ')); setMode(item.mode); setFiltersJson(JSON.stringify(item.filters, null, 2)); setRequired(item.required)
   }
-  return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center gap-2"><Database className="size-4 text-amber-600" /><h3 className="text-sm font-semibold">经典测试用例</h3><span className="ml-auto text-xs text-slate-400">{cases.length} 条</span></div><div className="mt-3 max-h-56 space-y-2 overflow-auto">{cases.map((item) => <div key={item.case_id} className={`rounded-lg border p-2 ${item.active ? 'border-slate-100' : 'border-slate-100 opacity-50'}`}><div className="flex gap-2"><p className="text-xs font-semibold text-slate-700">{item.name}</p>{item.required && <span className="rounded bg-red-50 px-1 text-[9px] text-red-600">必测</span>}<button type="button" onClick={() => edit(item)} className="ml-auto text-[10px] text-blue-700">编辑</button>{item.active && <button type="button" onClick={() => void deactivate(item)} className="text-[10px] text-red-600">停用</button>}</div><p className="mt-1 text-[11px] text-slate-500">{item.query}</p><p className="mt-1 font-mono text-[9px] text-slate-400">期望：{item.expected_knowledge_ids.join(', ') || '未设置'}</p></div>)}</div><form onSubmit={submit} className="mt-4 grid gap-2"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="用例名称" className="rounded-lg border border-slate-200 px-3 py-2 text-xs" /><input required value={query} onChange={(event) => setQuery(event.target.value)} placeholder="测试问题" className="rounded-lg border border-slate-200 px-3 py-2 text-xs" /><input required value={expected} onChange={(event) => setExpected(event.target.value)} placeholder="期望 knowledge_id，逗号分隔" className="rounded-lg border border-slate-200 px-3 py-2 text-xs" />{error && <p className="text-xs text-red-600">{error}</p>}<button className="flex w-fit items-center gap-1 rounded-lg border border-amber-200 px-3 py-2 text-xs font-semibold text-amber-700"><Plus className="size-3.5" />{editingId ? '保存用例修改' : '新增必测用例'}</button></form></section>
+  return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center gap-2"><Database className="size-4 text-amber-600" /><h3 className="text-sm font-semibold">经典测试用例</h3><span className="ml-auto text-xs text-slate-400">{cases.length} 条</span></div><div className="mt-3 max-h-56 space-y-2 overflow-auto">{cases.map((item) => <div key={item.case_id} className={`rounded-lg border p-2 ${item.active ? 'border-slate-100' : 'border-slate-100 opacity-50'}`}><div className="flex gap-2"><p className="text-xs font-semibold text-slate-700">{item.name}</p>{item.required && <span className="rounded bg-red-50 px-1 text-[9px] text-red-600">必测</span>}<button type="button" onClick={() => edit(item)} className="ml-auto text-[10px] text-blue-700">编辑</button>{item.active && <button type="button" onClick={() => void deactivate(item)} className="text-[10px] text-red-600">停用</button>}</div><p className="mt-1 text-[11px] text-slate-500">{item.query}</p><p className="mt-1 font-mono text-[9px] text-slate-400">{item.mode} · 期望：{item.expected_knowledge_ids.join(', ') || '未设置'}</p></div>)}</div><form onSubmit={submit} className="mt-4 grid gap-2"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="用例名称" className="rounded-lg border border-slate-200 px-3 py-2 text-xs" /><input required value={query} onChange={(event) => setQuery(event.target.value)} placeholder="测试问题" className="rounded-lg border border-slate-200 px-3 py-2 text-xs" /><select aria-label="用例模式" value={mode} onChange={(event) => setMode(event.target.value as Mode)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs"><option value="precise">精准</option><option value="semantic">语义</option><option value="hybrid">混合</option></select><textarea aria-label="过滤条件 JSON" value={filtersJson} onChange={(event) => setFiltersJson(event.target.value)} rows={3} className="rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs" /><label className="flex items-center gap-2 text-xs text-slate-600"><input aria-label="必测用例" type="checkbox" checked={required} onChange={(event) => setRequired(event.target.checked)} />必测用例</label><input required value={expected} onChange={(event) => setExpected(event.target.value)} placeholder="期望 knowledge_id，逗号分隔" className="rounded-lg border border-slate-200 px-3 py-2 text-xs" />{error && <p className="text-xs text-red-600">{error}</p>}<button className="flex w-fit items-center gap-1 rounded-lg border border-amber-200 px-3 py-2 text-xs font-semibold text-amber-700"><Plus className="size-3.5" />{editingId ? '保存用例修改' : '新增测试用例'}</button></form></section>
 }
 
 function CandidatePanel({ onCreated }: { onCreated: () => void }) {
   const [releaseId, setReleaseId] = useState(`rel_${new Date().toISOString().slice(0, 10).replaceAll('-', '')}_01`)
   const [contract, setContract] = useState('2')
-  const [config, setConfig] = useState('default_v1')
   const [message, setMessage] = useState('')
   async function submit(event: FormEvent) {
     event.preventDefault(); setMessage('')
     try {
-      await createRelease({ release_id: releaseId, contract_version: contract, config_hash: config })
+      await createRelease({ release_id: releaseId, contract_version: contract, config_hash: QUALITY_CONFIG_HASH })
       await buildRelease(releaseId)
       setMessage('候选版本及独立索引已构建，可执行统一测试')
       onCreated()
     }
     catch (reason) { setMessage(reason instanceof Error ? reason.message : '候选版本创建失败') }
   }
-  return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-sm font-semibold">候选版本</h3><p className="mt-1 text-xs text-slate-500">一个版本固定绑定一对 facts/rules collection，禁止混用。</p><form onSubmit={submit} className="mt-4 grid gap-2"><input required pattern="[A-Za-z0-9_]+" value={releaseId} onChange={(event) => setReleaseId(event.target.value)} className="rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs" /><input required value={contract} onChange={(event) => setContract(event.target.value)} placeholder="语义契约版本" className="rounded-lg border border-slate-200 px-3 py-2 text-xs" /><input required value={config} onChange={(event) => setConfig(event.target.value)} placeholder="测试配置哈希" className="rounded-lg border border-slate-200 px-3 py-2 text-xs" />{message && <p className="text-xs text-slate-600">{message}</p>}<button className="flex w-fit items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"><Plus className="size-3.5" />创建候选版本</button></form></section>
+  return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-sm font-semibold">候选版本</h3><p className="mt-1 text-xs text-slate-500">固定配置：重复 {QUALITY_RUN_CONFIG.repeat_count} 次，质量 ≥ {QUALITY_RUN_CONFIG.minimum_quality}，一致性 ≥ {QUALITY_RUN_CONFIG.minimum_consistency}。</p><form onSubmit={submit} className="mt-4 grid gap-2"><input required pattern="[A-Za-z0-9_]+" value={releaseId} onChange={(event) => setReleaseId(event.target.value)} className="rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs" /><input required value={contract} onChange={(event) => setContract(event.target.value)} placeholder="语义契约版本" className="rounded-lg border border-slate-200 px-3 py-2 text-xs" /><input aria-label="测试配置哈希" readOnly value={QUALITY_CONFIG_HASH} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-[10px] text-slate-500" />{message && <p className="text-xs text-slate-600">{message}</p>}<button className="flex w-fit items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"><Plus className="size-3.5" />创建候选版本</button></form></section>
 }
 
 function Choice({ label, value, options, onChange }: { label: string; value: string; options: string[][]; onChange: (value: string) => void }) {
