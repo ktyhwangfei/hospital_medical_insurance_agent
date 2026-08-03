@@ -178,7 +178,10 @@ class PipelineStore:
         items: list[dict[str, Any]] = []
         for r in rows:
             doc = self._doc_row(r)
-            doc["pending_count"] = self._pending_unit_count(doc)
+            stats = self._unit_stats(doc)
+            doc["unit_total"] = stats["total"]
+            doc["unit_audited"] = stats["audited"]
+            doc["pending_count"] = stats["pending"]
             items.append(doc)
         offset = (page - 1) * page_size
         # 待处理多的优先（保留原排序语义），Python 层排序后分页
@@ -186,10 +189,12 @@ class PipelineStore:
         paged = items[offset:offset + page_size]
         return {"items": paged, "total": total, "page": page, "page_size": page_size}
 
-    def _pending_unit_count(self, doc: dict[str, Any]) -> int:
-        """与前端 stats.draft 口径一致的待处理单元数。
+    def _unit_stats(self, doc: dict[str, Any]) -> dict[str, int]:
+        """按去重叶子单元统计：总数 / 审核通过 / 待处理。
 
-        = draft 单元（有 draft 提取记录且状态聚合为 draft 的去重叶子）
+        - total：parse_kept_leaves 得到的去重叶子数（= 文档单元总数）。
+        - audited：叶子状态聚合为 reviewed 或 published 的数量（“审核通过”）。
+        - pending：与原 stats.draft 口径一致 = draft 叶子
           + 无提取记录且未经 unit_audit 审核的去重叶子。
 
         孤儿 draft 记录（source_text 匹配不到叶子）不计入。
@@ -206,9 +211,9 @@ class PipelineStore:
             )
         except Exception:
             logger.exception("parse_kept_leaves failed for doc %s", doc_id)
-            return 0
+            return {"total": 0, "audited": 0, "pending": 0}
         if not kept:
-            return 0
+            return {"total": 0, "audited": 0, "pending": 0}
         rows = self._get_client().execute(
             "SELECT source_text, extracted_fields, status FROM policy_extractions WHERE doc_id = %s",
             (doc_id,),
@@ -241,11 +246,18 @@ class PipelineStore:
 
         dup_state = doc.get("dup_state") or {}
         unit_audit = dup_state.get("unit_audit", {}) or {}
-        draft_cnt = sum(1 for lid, st in kept_status.items() if leaf_status(st) == "draft")
+        audited_cnt = sum(
+            1 for st in kept_status.values() if leaf_status(st) in ("reviewed", "published")
+        )
+        draft_cnt = sum(1 for st in kept_status.values() if leaf_status(st) == "draft")
         no_ext_pending = sum(
             1 for lid, st in kept_status.items() if not st and lid not in unit_audit
         )
-        return draft_cnt + no_ext_pending
+        return {
+            "total": len(kept),
+            "audited": audited_cnt,
+            "pending": draft_cnt + no_ext_pending,
+        }
 
     def get_document(self, doc_id: str) -> dict[str, Any] | None:
         rows = self._get_client().execute(
