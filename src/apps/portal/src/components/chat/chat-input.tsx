@@ -11,21 +11,35 @@ interface ChatInputProps {
   setInput: (value: string) => void
   isLoading: boolean
   onSend: () => void
+  /** 可选：覆盖输入框占位符（默认导办场景文案） */
+  placeholder?: string
+  /** 可选：覆盖容器样式（默认暗色底；政策问答等浅色页面可覆写） */
+  containerClassName?: string
+  /** 可选：覆盖输入框样式 */
+  inputClassName?: string
 }
 
 // ── Component ────────────────────────────────────────────────
 
-export default function ChatInput({ input, setInput, isLoading, onSend }: ChatInputProps) {
+export default function ChatInput({
+  input,
+  setInput,
+  isLoading,
+  onSend,
+  placeholder = '描述您的问题，例如：这个患者为什么结不了，或者这条规则什么意思…',
+  containerClassName,
+  inputClassName,
+}: ChatInputProps) {
   return (
-    <div className="p-3 border-t border-white/[0.06] bg-slate-900/80 backdrop-blur-sm">
+    <div className={containerClassName ?? 'p-3 border-t border-white/[0.06] bg-slate-900/80 backdrop-blur-sm'}>
       <div className="flex gap-2.5 items-end">
         <Input
           data-testid="chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && onSend()}
-          placeholder="描述您的问题，例如：这个患者为什么结不了，或者这条规则什么意思…"
-          className="flex-1 h-auto py-2.5 px-3.5 text-sm bg-white/[0.06] text-white/90 placeholder:text-slate-500 border-white/[0.08] rounded-xl focus:bg-white/[0.1] focus:ring-2 focus:ring-blue-400/15 focus:border-blue-400/40 transition-all duration-200"
+          placeholder={placeholder}
+          className={inputClassName ?? 'flex-1 h-auto py-2.5 px-3.5 text-sm bg-white/[0.06] text-white/90 placeholder:text-slate-500 border-white/[0.08] rounded-xl focus:bg-white/[0.1] focus:ring-2 focus:ring-blue-400/15 focus:border-blue-400/40 transition-all duration-200'}
           disabled={isLoading}
         />
         <Button
