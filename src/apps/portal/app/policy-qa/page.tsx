@@ -1,6 +1,6 @@
 'use client'
 
-import PolicyQAChat from '@/components/policy-qa-chat'
+import PolicyQAWorkspace from '@/components/policy-qa/policy-qa-workspace'
 
 export default function PolicyQAPage() {
   return (
@@ -19,15 +19,16 @@ export default function PolicyQAPage() {
             <span className="inline-flex h-7 items-center rounded-full bg-white/70 px-2.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 backdrop-blur">
               政策·QA
             </span>
-            <span className="text-xs text-slate-500">结算解释 / 政策依据 / 双视角输出</span>
+            <span className="text-xs text-slate-500">持续对话 / 会话记忆 / 推理可追溯</span>
           </div>
           <h2 className="text-xl font-semibold tracking-tight text-slate-900">政策问答</h2>
           <p className="text-sm text-slate-600">
-            输入结算单号与问题，获取可追溯的政策依据、计算过程与患者/院端解释。
+            首轮提供结算单号锚定主体，之后可连续追问；会话记忆与推理链全程可见。
           </p>
         </header>
 
-        <PolicyQAChat />
+        {/* 持续对话工作区（旧一次性表单组件 policy-qa-chat.tsx 保留作回退） */}
+        <PolicyQAWorkspace />
       </div>
     </div>
   )
