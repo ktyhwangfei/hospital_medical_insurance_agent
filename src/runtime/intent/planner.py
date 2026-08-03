@@ -151,11 +151,18 @@ class ContextPlanner:
             import re
             possible_names = re.findall(r'[\u4e00-\u9fff]{2,4}', message)
             if len(possible_names) > 0:
-                # 排除常见非人名词
-                non_name_words = {"费用", "结算", "医保", "报销", "住院", "门诊", "药品", "政策"}
+                # 排除常见非人名词（业务词汇及其常见组合）
+                non_name_words = {"费用", "结算", "医保", "报销", "住院", "门诊", "药品", "政策",
+                                  "住院费用", "费用构成", "费用明细", "结算单", "查询住院",
+                                  "报销比例", "统筹自付", "起付线", "个人负担", "门诊费用"}
                 for name in possible_names:
-                    if name not in non_name_words:
-                        return True
+                    if name in non_name_words:
+                        continue
+                    # 名字片段以业务词结尾也视为业务表达（如"查询住院""费用结算"），非人名
+                    if any(name.endswith(w) for w in
+                           ("费用", "结算", "医保", "报销", "住院", "门诊", "药品", "政策")):
+                        continue
+                    return True
 
         return False
 

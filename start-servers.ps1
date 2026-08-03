@@ -29,6 +29,16 @@ if (netstat -ano | Select-String ":${PORT_BACKEND}\s.*LISTENING|:${PORT_FRONTEND
 Write-Host "  Ports free" -ForegroundColor Green
 
 Write-Host "[3/5] Start backend (single process, no --reload)..." -ForegroundColor Cyan
+# NOTE: keep comments ASCII-only (see stop-servers.ps1 for encoding rationale).
+# Inject MSSQL connection env vars for the backend process (SqlServerBusinessDataClient
+# requires MSSQL_DATABASE/USER/PASSWORD). Pre-set env vars win; defaults match the local
+# docker SQL Server (bjybdb, see deploy/docker/init_sqlserver.sh).
+if (-not $env:MSSQL_HOST) { $env:MSSQL_HOST = "localhost" }
+if (-not $env:MSSQL_PORT) { $env:MSSQL_PORT = "1433" }
+if (-not $env:MSSQL_DATABASE) { $env:MSSQL_DATABASE = "bjybdb" }
+if (-not $env:MSSQL_USER) { $env:MSSQL_USER = "sa" }
+if (-not $env:MSSQL_PASSWORD) { $env:MSSQL_PASSWORD = "REDACTED" }
+if (-not $env:MSSQL_DRIVER) { $env:MSSQL_DRIVER = "SQL Server" }
 # NOTE: uvicorn --reload spawns multiprocessing workers; if the master dies the workers
 #   become orphans holding the port + stale code (see stop-servers.ps1). Use single process
 #   for daily dev; restart via .\stop-servers.ps1; .\start-servers.ps1 after backend edits.
