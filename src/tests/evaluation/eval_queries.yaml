@@ -1,0 +1,585 @@
+# 检索评估 query 集 — Phase 1 版（50 query）
+#
+# 基于 policy_rules_v2 实际数据（337 rules, 6 rule_types, 4 insu_types）
+# 覆盖维度：rule_type × insu_type × hosp_lv × psn_type × med_type
+#
+# 每项 expected 字段：
+#   rule_types: 期望命中的规则类型（policy_rules_v2.rule_type）
+#   insu_type/hosp_lv/psn_type/med_type/setl_type: 维度约束（policy_rules_v2 实际字段名）
+#   min_relevant_hits: 期望至少返回的相关结果数
+#   difficulty: easy / medium / hard
+#
+# 标注方法：宽松标注（自动），基于 policy_rules_v2 的维度字段判断相关性。
+# 参见：docs/research/知识召回质量评估方案.md §2
+
+queries:
+  # ═══════════════════════════════════════════════════════════
+  # 起付线（deductible）— 8 rules
+  # ═══════════════════════════════════════════════════════════
+  - id: Q001
+    question: "三级医院住院的起付线是多少"
+    expected:
+      rule_types: ["起付线"]
+      hosp_lv: "三级"
+      min_relevant_hits: 1
+    difficulty: easy
+
+  - id: Q002
+    question: "城乡居民大病保险起付标准是多少"
+    expected:
+      rule_types: ["起付线"]
+      insu_type: "大病保险"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q003
+    question: "第二次住院起付线怎么减半"
+    expected:
+      rule_types: ["起付线"]
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q004
+    question: "门诊起付标准"
+    expected:
+      rule_types: ["起付线"]
+      med_type: "门诊-普通门急诊"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q005
+    question: "一级医院住院起付标准"
+    expected:
+      rule_types: ["起付线"]
+      hosp_lv: "一级"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q006
+    question: "起付标准"
+    expected:
+      rule_types: ["起付线"]
+      min_relevant_hits: 3
+    difficulty: easy
+
+  # ═══════════════════════════════════════════════════════════
+  # 支付比例（payment_ratio）— 44 rules
+  # ═══════════════════════════════════════════════════════════
+  - id: Q010
+    question: "在职职工住院费用 3 万到 4 万的报销比例"
+    expected:
+      rule_types: ["支付比例"]
+      insu_type: "城镇职工基本医疗保险"
+      med_type: "住院-普通住院"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q011
+    question: "退休人员统筹自付比例怎么计算"
+    expected:
+      rule_types: ["支付比例"]
+      psn_type: "退休人员"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q012
+    question: "城乡居民住院报销比例"
+    expected:
+      rule_types: ["支付比例"]
+      insu_type: "城乡居民基本医疗保险"
+      med_type: "住院-普通住院"
+      min_relevant_hits: 2
+    difficulty: medium
+
+  - id: Q013
+    question: "一级医院住院报销比例"
+    expected:
+      rule_types: ["支付比例"]
+      hosp_lv: "一级"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q014
+    question: "住院费用超过 4 万的部分报销多少"
+    expected:
+      rule_types: ["支付比例"]
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q015
+    question: "三级医院职工医保报销比例分段计算"
+    expected:
+      rule_types: ["支付比例"]
+      insu_type: "城镇职工基本医疗保险"
+      hosp_lv: "三级"
+      min_relevant_hits: 2
+    difficulty: medium
+
+  - id: Q016
+    question: "居民医保和职工医保住院待遇有什么区别"
+    expected:
+      rule_types: ["支付比例"]
+      min_relevant_hits: 3
+    difficulty: hard
+
+  - id: Q017
+    question: "职工医保报销比例"
+    expected:
+      rule_types: ["支付比例"]
+      insu_type: "城镇职工基本医疗保险"
+      min_relevant_hits: 2
+    difficulty: easy
+
+  - id: Q018
+    question: "城乡居民门诊报销比例"
+    expected:
+      rule_types: ["支付比例"]
+      insu_type: "城乡居民基本医疗保险"
+      med_type: "门诊-普通门急诊"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q019
+    question: "门诊慢特病的报销政策"
+    expected:
+      rule_types: ["支付比例"]
+      med_type: "门诊-一般门特"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q020
+    question: "灵活就业人员医保报销比例和职工一样吗"
+    expected:
+      rule_types: ["支付比例"]
+      psn_type: "灵活就业"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  # ═══════════════════════════════════════════════════════════
+  # 封顶线（cap）— 9 rules
+  # ═══════════════════════════════════════════════════════════
+  - id: Q030
+    question: "基本医疗保险最高支付限额是多少"
+    expected:
+      rule_types: ["封顶线"]
+      min_relevant_hits: 2
+    difficulty: easy
+
+  - id: Q031
+    question: "城乡居民医保住院最高支付限额"
+    expected:
+      rule_types: ["封顶线"]
+      insu_type: "城乡居民基本医疗保险"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q032
+    question: "大病医疗保险基金最高支付限额"
+    expected:
+      rule_types: ["封顶线"]
+      insu_type: "大病保险"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q033
+    question: "门诊最高支付限额"
+    expected:
+      rule_types: ["封顶线"]
+      med_type: "门诊-普通门急诊"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  # ═══════════════════════════════════════════════════════════
+  # 通用规则（general）— 173 rules
+  # ═══════════════════════════════════════════════════════════
+  - id: Q040
+    question: "离休干部无工作配偶怎么参保"
+    expected:
+      rule_types: ["通用规则"]
+      psn_type: "离休人员"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q041
+    question: "学生儿童怎么参加医保"
+    expected:
+      rule_types: ["通用规则"]
+      psn_type: "学生儿童"
+      min_relevant_hits: 2
+    difficulty: easy
+
+  - id: Q042
+    question: "精神疾病住院按什么标准结算"
+    expected:
+      rule_types: ["通用规则"]
+      med_type: "住院-普通住院"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q043
+    question: "急诊留观费用怎么报销"
+    expected:
+      rule_types: ["通用规则"]
+      med_type: "门诊-急诊留观"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q044
+    question: "困难人群参保有什么优惠政策"
+    expected:
+      rule_types: ["通用规则"]
+      psn_type: "困难人群"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q045
+    question: "转院治疗费用怎么结算"
+    expected:
+      rule_types: ["通用规则"]
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q046
+    question: "住院连续计算起付线转院怎么算"
+    expected:
+      rule_types: ["通用规则", "起付线"]
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q047
+    question: "参保人员的基本信息和缴费记录怎么查"
+    expected:
+      rule_types: ["通用规则"]
+      min_relevant_hits: 1
+    difficulty: hard
+
+  # ═══════════════════════════════════════════════════════════
+  # 适用范围（scope）— 70 rules
+  # ═══════════════════════════════════════════════════════════
+  - id: Q050
+    question: "哪些人可以参加城乡居民医保"
+    expected:
+      rule_types: ["适用范围"]
+      insu_type: "城乡居民基本医疗保险"
+      min_relevant_hits: 2
+    difficulty: easy
+
+  - id: Q051
+    question: "退养人员参加医保需要什么材料"
+    expected:
+      rule_types: ["适用范围"]
+      psn_type: "城乡居民"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q052
+    question: "城乡居民医保的参保人员范围包括哪些"
+    expected:
+      rule_types: ["适用范围"]
+      insu_type: "城乡居民基本医疗保险"
+      min_relevant_hits: 3
+    difficulty: easy
+
+  - id: Q053
+    question: "职工医保参保范围"
+    expected:
+      rule_types: ["适用范围"]
+      insu_type: "城镇职工基本医疗保险"
+      min_relevant_hits: 2
+    difficulty: easy
+
+  - id: Q054
+    question: "跨省异地就医怎么办理备案"
+    expected:
+      rule_types: ["适用范围"]
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q055
+    question: "大病保险参保范围包含哪些人"
+    expected:
+      rule_types: ["适用范围"]
+      insu_type: "大病保险"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q056
+    question: "灵活就业人员可以参加职工医保吗"
+    expected:
+      rule_types: ["适用范围"]
+      psn_type: "灵活就业"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q057
+    question: "退休人员还需要继续缴纳医保吗"
+    expected:
+      rule_types: ["适用范围"]
+      psn_type: "退休人员"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q058
+    question: "城乡居民医保包含生育医疗费用吗"
+    expected:
+      rule_types: ["适用范围"]
+      insu_type: "城乡居民基本医疗保险"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  # ═══════════════════════════════════════════════════════════
+  # 排除规则（exclusion）— 33 rules
+  # ═══════════════════════════════════════════════════════════
+  - id: Q060
+    question: "哪些医疗费用医保不报销"
+    expected:
+      rule_types: ["排除规则"]
+      min_relevant_hits: 3
+    difficulty: easy
+
+  - id: Q061
+    question: "非急诊抢救的费用能列入急诊报销吗"
+    expected:
+      rule_types: ["排除规则"]
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q062
+    question: "城乡居民医保缴费年限能算职工医保吗"
+    expected:
+      rule_types: ["排除规则"]
+      insu_type: "城乡居民基本医疗保险"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q063
+    question: "骗取医保基金会有什么处罚"
+    expected:
+      rule_types: ["排除规则"]
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q064
+    question: "定点医疗机构违规会怎么样"
+    expected:
+      rule_types: ["排除规则"]
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q065
+    question: "医保基金不予支付的范围"
+    expected:
+      rule_types: ["排除规则"]
+      min_relevant_hits: 3
+    difficulty: easy
+
+  # ═══════════════════════════════════════════════════════════
+  # 跨类别 / 混合（cross-category）— hard
+  # ═══════════════════════════════════════════════════════════
+  - id: Q070
+    question: "异地就医的报销比例和封顶线怎么算"
+    expected:
+      rule_types: ["支付比例", "封顶线"]
+      min_relevant_hits: 2
+    difficulty: hard
+
+  - id: Q071
+    question: "退休职工住院能报销多少"
+    expected:
+      rule_types: ["支付比例", "起付线"]
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q072
+    question: "城乡居民大病能报销多少有上限吗"
+    expected:
+      rule_types: ["封顶线", "支付比例"]
+      insu_type: "大病保险"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q073
+    question: "学生儿童看病住院怎么报销需要什么手续"
+    expected:
+      rule_types: ["支付比例", "通用规则"]
+      psn_type: "学生儿童"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  # ═══════════════════════════════════════════════════════════
+  # 按项目结算（setl_type）— 22 rules
+  # ═══════════════════════════════════════════════════════════
+  - id: Q080
+    question: "按项目付费的报销标准是什么"
+    expected:
+      rule_types: ["支付比例"]
+      setl_type: "按项目"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q081
+    question: "按床日付费的标准"
+    expected:
+      rule_types: ["通用规则"]
+      setl_type: "按床日"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q082
+    question: "按病种付费和按项目付费有什么区别"
+    expected:
+      rule_types: ["通用规则", "支付比例"]
+      min_relevant_hits: 1
+    difficulty: hard
+
+  # ═══════════════════════════════════════════════════════════
+  # 简单关键词查询（easy）
+  # ═══════════════════════════════════════════════════════════
+  - id: Q090
+    question: "医保报销"
+    expected:
+      rule_types: ["支付比例"]
+      min_relevant_hits: 3
+    difficulty: easy
+
+  - id: Q091
+    question: "起付线"
+    expected:
+      rule_types: ["起付线"]
+      min_relevant_hits: 3
+    difficulty: easy
+
+  - id: Q092
+    question: "封顶线"
+    expected:
+      rule_types: ["封顶线"]
+      min_relevant_hits: 3
+    difficulty: easy
+
+  - id: Q093
+    question: "参保范围"
+    expected:
+      rule_types: ["适用范围"]
+      min_relevant_hits: 5
+    difficulty: easy
+
+  - id: Q094
+    question: "不予支付"
+    expected:
+      rule_types: ["排除规则"]
+      min_relevant_hits: 3
+    difficulty: easy
+
+  # ═══════════════════════════════════════════════════════════
+  # 按人群（psn_type）
+  # ═══════════════════════════════════════════════════════════
+  - id: Q100
+    question: "在职职工医保待遇"
+    expected:
+      rule_types: ["支付比例", "适用范围"]
+      psn_type: "在职职工"
+      min_relevant_hits: 2
+    difficulty: medium
+
+  - id: Q101
+    question: "城乡居民参保后有什么待遇"
+    expected:
+      rule_types: ["支付比例", "适用范围"]
+      psn_type: "城乡居民"
+      min_relevant_hits: 2
+    difficulty: medium
+
+  - id: Q102
+    question: "困难人群医疗救助怎么申请"
+    expected:
+      rule_types: ["通用规则", "适用范围"]
+      psn_type: "困难人群"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  # ═══════════════════════════════════════════════════════
+  # 补充维度覆盖（Q103-Q112）：二级医院、按人头/按病种、大病保险细分、无等级
+  # ═══════════════════════════════════════════════════════
+  - id: Q103
+    question: "二级医院住院起付标准是多少"
+    expected:
+      rule_types: ["起付线"]
+      hosp_lv: "二级"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q104
+    question: "二级医院职工医保住院报销比例"
+    expected:
+      rule_types: ["支付比例"]
+      hosp_lv: "二级"
+      insu_type: "城镇职工基本医疗保险"
+      min_relevant_hits: 1
+    difficulty: medium
+
+  - id: Q105
+    question: "大病保险住院报销规则"
+    expected:
+      rule_types: ["支付比例", "封顶线"]
+      insu_type: "大病保险"
+      med_type: "住院-普通住院"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q106
+    question: "大病保险门诊特殊病的报销政策"
+    expected:
+      rule_types: ["支付比例"]
+      insu_type: "大病保险"
+      med_type: "门诊-一般门特"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q107
+    question: "按人头付费适用于哪些场景"
+    expected:
+      rule_types: ["通用规则", "适用范围"]
+      setl_type: "按人头"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q108
+    question: "按病种付费怎么报销"
+    expected:
+      rule_types: ["支付比例"]
+      setl_type: "按病种"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q109
+    question: "无等级医院怎么确定起付线和报销比例"
+    expected:
+      rule_types: ["起付线", "支付比例"]
+      hosp_lv: "无等级"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q110
+    question: "公务员参加医保有什么特殊政策"
+    expected:
+      rule_types: ["适用范围"]
+      psn_type: "公务员"
+      min_relevant_hits: 1
+    difficulty: hard
+
+  - id: Q111
+    question: "门诊急诊留观的费用能报销吗"
+    expected:
+      rule_types: ["支付比例", "起付线"]
+      med_type: "门诊-急诊留观"
+      min_relevant_hits: 1
+    difficulty: easy
+
+  - id: Q112
+    question: "在职职工和退休人员住院报销比例有什么不同"
+    expected:
+      rule_types: ["支付比例"]
+      psn_type: "在职职工,退休人员"
+      med_type: "住院-普通住院"
+      min_relevant_hits: 1
+    difficulty: hard

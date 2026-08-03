@@ -216,14 +216,32 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 > ⛔ 直接用 `start-servers.ps1` 和 `stop-servers.ps1`，不要手动启动。
 
 ```bash
-# 启动
+# 启动（默认端口：后端 8000 / 前端 3000）
 .\start-servers.ps1
 
-# 停止
+# 停止（默认端口：后端 8000 / 前端 3000）
 .\stop-servers.ps1
 ```
 
 脚本自动处理：端口冲突检测、旧进程清理、启动验证、前端编译等待。
+
+**多工作区并行（端口参数化）**：不同 worktree 并行开发时，各自指定端口组合，互不干扰：
+
+```bash
+# worktree A（默认 8000/3000）
+.\start-servers.ps1
+
+# worktree B：自定义端口
+.\start-servers.ps1 -BackendPort 8100 -FrontendPort 3100
+
+# 停止（只停指定组合，绝不误杀其他工作区服务）
+.\stop-servers.ps1 -BackendPort 8100 -FrontendPort 3100
+.\stop-servers.ps1 -Ports @(8100,3100)     # 等价简写
+.\stop-servers.ps1 -BackendPort 8100       # 只停后端
+```
+
+- 前端启动时自动注入 `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:<BackendPort>`，使 portal 代理到本工作区后端
+- 停止逻辑按端口定位进程（netstat），命令行匹配仅作补充且校验本工作区路径，不会误杀其他工作区的同名服务
 
 ## 排障零步骤
 
