@@ -229,6 +229,13 @@ class PostgresPolicyQualityStore:
         )
         return QualityRun(**rows[0]) if rows else None
 
+    def get_latest_run(self, release_id: str) -> QualityRun | None:
+        rows = self._get_client().execute(
+            "SELECT * FROM policy_quality_runs WHERE release_id=%s ORDER BY created_at DESC LIMIT 1",
+            (release_id,),
+        )
+        return QualityRun(**rows[0]) if rows else None
+
     def save_case_results(self, results: list[QualityCaseResult]) -> None:
         self._get_client().execute_many(
             """INSERT INTO policy_quality_case_results

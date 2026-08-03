@@ -121,6 +121,10 @@ def test_run_detail_and_manual_promotion(monkeypatch) -> None:
     assert case_results.status_code == 200
     assert len(case_results.json()) == 6
     assert {item["target"] for item in case_results.json()} == {"candidate", "baseline"}
+    latest = client.get(f"{PREFIX}/releases/candidate/quality/latest")
+    assert latest.status_code == 200
+    assert latest.json()["run"]["run_id"] == run["run_id"]
+    assert len(latest.json()["case_results"]) == 6
     assert client.get(f"{PREFIX}/releases/active").json()["release_id"] == "baseline"
 
     promoted = client.post(

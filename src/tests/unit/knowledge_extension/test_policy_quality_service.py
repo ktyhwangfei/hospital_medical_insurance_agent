@@ -167,19 +167,50 @@ def test_comparison_rejects_different_test_configuration() -> None:
         ).run_release("candidate", repeat_count=3)
 
 
-def test_comparison_rejects_baseline_from_a_different_case_set() -> None:
+def test_comparison_uses_current_active_cases_despite_immutable_release_versions() -> None:
     from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
 
     store = _store_with_case_and_baseline()
     baseline = store.get_release("baseline")
     assert baseline is not None
     store.releases["baseline"] = baseline.model_copy(update={"case_set_version": 0})
+    store.save_test_case(PolicyQATestCase(
+        case_id="case_2",
+        name="新增当前用例",
+        query="新增当前用例",
+        mode="semantic",
+        expected_knowledge_ids=["kn_expected"],
+    ))
 
-    with pytest.raises(ValueError, match="相同用例集版本"):
-        PolicyQualityService(
-            store,
-            SequenceSearcher({"baseline": [[]], "candidate": [["kn_expected"]]}),
-        ).run_release("candidate", repeat_count=3)
+    run = PolicyQualityService(
+        store,
+        SequenceSearcher({"baseline": [[]], "candidate": [["kn_expected"]]}),
+    ).run_release("candidate", repeat_count=3)
+
+    assert run.case_set_version == store.current_case_set_version()
+
+
+def test_score_rewards_expected_order_and_penalizes_swapped_ids() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import _score_result
+
+    exact, _, exact_diagnostics = _score_result(["kn_a", "kn_b"], ["kn_a", "kn_b"])
+    swapped, _, swapped_diagnostics = _score_result(["kn_b", "kn_a"], ["kn_a", "kn_b"])
+
+    assert exact == 1.0
+    assert swapped < exact
+    assert swapped_diagnostics["rank_score"] < exact_diagnostics["rank_score"]
+
+
+def test_repeat_consistency_is_order_sensitive() -> None:
+    from src.knowledge_extension.rule_explanation.quality_models import QualityCaseResult
+    from src.knowledge_extension.rule_explanation.quality_service import _repeat_consistency
+
+    results = [
+        QualityCaseResult(run_id="run", target="candidate", case_id="case", repeat_index=0, result_knowledge_ids=["kn_a", "kn_b"], score=1, passed=True),
+        QualityCaseResult(run_id="run", target="candidate", case_id="case", repeat_index=1, result_knowledge_ids=["kn_b", "kn_a"], score=0.5, passed=True),
+    ]
+
+    assert _repeat_consistency(results) < 1.0
 
 
 def test_repeat_count_cannot_be_less_than_three() -> None:

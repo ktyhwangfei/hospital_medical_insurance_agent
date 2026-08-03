@@ -188,7 +188,16 @@ function Status({ status }: { status: StandardizedField['status'] }) {
 }
 
 function Value({ label, value, empty = false }: { label: string; value: unknown; empty?: boolean }) {
-  return <div className="rounded-lg bg-slate-50 p-2"><p className="text-[9px] text-slate-400">{label}</p><p className="mt-0.5 break-all font-mono text-[11px] text-slate-700">{empty ? '—' : String(value ?? '—')}</p></div>
+  return <div className="rounded-lg bg-slate-50 p-2"><p className="text-[9px] text-slate-400">{label}</p><p className="mt-0.5 break-all font-mono text-[11px] text-slate-700">{empty ? '—' : readableValue(value)}</p></div>
+}
+
+function readableValue(value: unknown): string {
+  if (value === null || value === undefined) return '—'
+  if (typeof value !== 'object') return String(value)
+  const stable = (_key: string, item: unknown) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)))
+    : item
+  return JSON.stringify(value, stable)
 }
 
 function Empty({ text }: { text: string }) {

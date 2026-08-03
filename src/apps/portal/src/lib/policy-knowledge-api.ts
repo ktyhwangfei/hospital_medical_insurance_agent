@@ -223,6 +223,14 @@ export interface QualityCaseResult {
   diagnostics: Record<string, unknown>
 }
 
+export interface QualityRunReport {
+  run: QualityRun
+  case_results: QualityCaseResult[]
+}
+
+export const getLatestReleaseQuality = (releaseId: string) =>
+  request<QualityRunReport>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/quality/latest`)
+
 export const searchPolicyKnowledge = (body: Record<string, unknown>) =>
   request<{ groups: Array<Record<string, unknown>>; total_groups: number }>(
     `${PIPELINE_API}/rules/search`, json('POST', body)

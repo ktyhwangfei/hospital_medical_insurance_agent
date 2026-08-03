@@ -71,7 +71,7 @@ export function MetricDraftDialog({ sources, onClose, onCreated }: {
       </div>
       <div className="mt-4 max-h-[55vh] space-y-2 overflow-y-auto">
         {rows.map((row, index) => <div key={`${row.knowledge_id}-${row.source_field}`} className="grid gap-2 rounded-xl border border-slate-200 p-3 md:grid-cols-[1fr_1.2fr]">
-          <div><p className="text-[10px] text-slate-400">政策来源字段</p><p className="mt-1 text-xs font-semibold text-slate-700">{row.field_name}</p><p className="mt-1 font-mono text-[10px] text-slate-400">{row.source_field} = {String(row.source_value ?? '')}</p></div>
+          <div><p className="text-[10px] text-slate-400">政策来源字段</p><p className="mt-1 text-xs font-semibold text-slate-700">{row.field_name}</p><p className="mt-1 font-mono text-[10px] text-slate-400">{row.source_field} = {typeof row.source_value === 'object' ? JSON.stringify(row.source_value) : String(row.source_value ?? '')}</p></div>
           <div className="grid grid-cols-2 gap-2">
             <input aria-label={`${row.field_name}指标编码`} value={row.metricCode} onChange={(event) => setRows((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, metricCode: event.target.value } : item))} className="rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs" />
             <input aria-label={`${row.field_name}指标名称`} value={row.name} onChange={(event) => setRows((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} className="rounded-lg border border-slate-200 px-3 py-2 text-xs" />

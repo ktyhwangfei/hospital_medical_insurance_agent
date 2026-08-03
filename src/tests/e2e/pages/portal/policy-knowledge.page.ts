@@ -12,6 +12,8 @@ export class PolicyKnowledgePage extends BasePage {
   readonly qualityGate: Locator;
   readonly publishButton: Locator;
   readonly scopedPublishButtons: Locator;
+  readonly runButton: Locator;
+  readonly activeReleaseCard: Locator;
 
   constructor(page: Page) {
     super(page, 'http://127.0.0.1:3000');
@@ -24,6 +26,8 @@ export class PolicyKnowledgePage extends BasePage {
     this.qualityGate = page.getByRole('heading', { name: '候选版与活动版同集对跑' });
     this.publishButton = page.getByRole('button', { name: '人工发布候选版本' });
     this.scopedPublishButtons = page.getByRole('button', { name: /发布.*Unit|发布.*Knowledge/ });
+    this.runButton = page.getByRole('button', { name: '批量统一测试' });
+    this.activeReleaseCard = page.getByText('当前活动版本').locator('..');
   }
 
   async gotoKnowledge(): Promise<void> {
@@ -55,6 +59,18 @@ export class PolicyKnowledgePage extends BasePage {
   }
 
   async runCandidate(): Promise<void> {
-    await this.page.getByRole('button', { name: '批量统一测试' }).click();
+    await this.runButton.click();
+  }
+
+  async publishCandidate(): Promise<void> {
+    await this.publishButton.click();
+  }
+
+  blockedReason(reason: string): Locator {
+    return this.page.getByText(reason, { exact: true });
+  }
+
+  rollbackButton(releaseId: string): Locator {
+    return this.page.getByRole('button', { name: `回滚到 ${releaseId}` });
   }
 }

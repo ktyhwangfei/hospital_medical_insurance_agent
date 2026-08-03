@@ -8,6 +8,7 @@ import {
   createRelease,
   buildRelease,
   getActiveRelease,
+  getLatestReleaseQuality,
   listReleases,
   listQualityCaseResults,
   listTestCases,
@@ -43,15 +44,28 @@ export default function PolicyKnowledgeTestPage() {
         listReleases(), listTestCases(), getActiveRelease().catch(() => null),
       ])
       setReleases(releaseItems); setCases(caseItems); setActiveRelease(active)
+      const candidate = releaseItems.find((item) => !['active', 'retired'].includes(item.status))
+      if (candidate) await restoreQuality(candidate.release_id)
     } catch (reason) { setError(reason instanceof Error ? reason.message : '测试页加载失败') }
   }, [])
   useEffect(() => {
     void Promise.all([listReleases(), listTestCases(), getActiveRelease().catch(() => null)])
       .then(([releaseItems, caseItems, active]) => {
         setReleases(releaseItems); setCases(caseItems); setActiveRelease(active)
+        const candidate = releaseItems.find((item) => !['active', 'retired'].includes(item.status))
+        if (candidate) void restoreQuality(candidate.release_id)
       })
       .catch((reason) => setError(reason instanceof Error ? reason.message : '测试页加载失败'))
   }, [])
+
+  async function restoreQuality(releaseId: string) {
+    try {
+      const report = await getLatestReleaseQuality(releaseId)
+      setLatestRun(report.run); setCaseResults(report.case_results)
+    } catch {
+      setLatestRun(null); setCaseResults([])
+    }
+  }
 
   async function run(releaseId: string) {
     setBusy('run'); setError('')
@@ -87,7 +101,7 @@ export default function PolicyKnowledgeTestPage() {
     {busy && <div className="fixed right-6 top-6 z-40 flex items-center gap-2 rounded-full bg-slate-900 px-3 py-2 text-xs text-white shadow-lg"><Loader2 className="size-3.5 animate-spin" />处理中</div>}
 
     <SearchWorkbench />
-    <QualityDashboard releases={releases} activeRelease={activeRelease} latestRun={latestRun} caseResults={caseResults} onRun={run} onPromote={promote} onRollback={rollback} />
+    <QualityDashboard releases={releases} activeRelease={activeRelease} latestRun={latestRun} caseResults={caseResults} onSelectRelease={restoreQuality} onRun={run} onPromote={promote} onRollback={rollback} />
     <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
       <TestCasePanel cases={cases} onSaved={refresh} />
       <CandidatePanel onCreated={refresh} />

@@ -193,6 +193,34 @@ def test_business_sentence_and_confidence_are_explainable() -> None:
     assert knowledge.citations[0].source_id == "doc_1"
 
 
+def test_accuracy_consumes_explicit_approved_case_evidence() -> None:
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        KnowledgeWorkbenchService,
+    )
+
+    first = _leaf_ids()[0]
+    rules = _rules()[:1]
+    rules[0]["approved_case_accuracy"] = 0.95
+    result = KnowledgeWorkbenchService(FakePipelineStore([_extraction(first, rules)])).get_document("doc_1")
+
+    confidence = result.units[0].knowledge[0].confidence
+    assert confidence.accuracy == 0.95
+    assert "准确性待经典用例验证" not in confidence.uncertainties
+
+
+def test_accuracy_consumes_verified_source_span_evidence() -> None:
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        KnowledgeWorkbenchService,
+    )
+
+    first = _leaf_ids()[0]
+    rules = _rules()[:1]
+    rules[0]["source_span"] = {"verified": True, "accuracy": 0.9}
+    result = KnowledgeWorkbenchService(FakePipelineStore([_extraction(first, rules)])).get_document("doc_1")
+
+    assert result.units[0].knowledge[0].confidence.accuracy == 0.9
+
+
 def test_pipeline_store_keeps_persisted_unit_id_in_read_model() -> None:
     from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
 

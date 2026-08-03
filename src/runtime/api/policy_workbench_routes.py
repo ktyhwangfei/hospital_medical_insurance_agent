@@ -117,6 +117,11 @@ class ReleaseReviewRequest(BaseModel):
     reviewed_by: str = Field(min_length=1, max_length=128)
 
 
+class QualityRunReport(BaseModel):
+    run: QualityRun
+    case_results: list[QualityCaseResult]
+
+
 @router.get("/documents", response_model=WorkbenchDocumentList)
 def list_workbench_documents() -> WorkbenchDocumentList:
     try:
@@ -263,6 +268,24 @@ def list_quality_case_results(run_id: str) -> list[QualityCaseResult]:
             detail=error_detail("POLICY_QUALITY_RUN_NOT_FOUND", "质量运行不存在", {"run_id": run_id}),
         )
     return _get_quality_store().list_case_results(run_id)
+
+
+@router.get("/releases/{release_id}/quality/latest", response_model=QualityRunReport)
+def get_latest_release_quality(release_id: str) -> QualityRunReport:
+    run = _get_quality_store().get_latest_run(release_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "POLICY_QUALITY_RUN_NOT_FOUND",
+                "候选版本尚无质量运行",
+                {"release_id": release_id},
+            ),
+        )
+    return QualityRunReport(
+        run=run,
+        case_results=_get_quality_store().list_case_results(run.run_id),
+    )
 
 
 @router.post("/releases/{release_id}/promote", response_model=KnowledgeRelease)

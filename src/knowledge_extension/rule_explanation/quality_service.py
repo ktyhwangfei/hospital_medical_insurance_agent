@@ -1,6 +1,7 @@
 """政策知识候选版与活动版的统一质量评测服务。"""
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 from itertools import combinations
 from statistics import mean
 from typing import Protocol
@@ -140,10 +141,6 @@ class PolicyQualityService:
     ) -> None:
         if not cases:
             raise ValueError("没有可用的经典测试用例")
-        if candidate.case_set_version != case_set_version:
-            raise ValueError("候选版本的用例集版本不是当前版本")
-        if baseline and baseline.case_set_version != case_set_version:
-            raise ValueError("候选版本与当前版本必须使用相同用例集版本")
         if baseline and baseline.config_hash != candidate.config_hash:
             raise ValueError("候选版本与当前版本的测试配置不一致")
 
@@ -209,10 +206,18 @@ def _score_result(
     precision = len(matched) / len(result) if result else 0.0
     recall = len(matched) / len(expected)
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    return f1, expected <= result, {
+    positions = {knowledge_id: index for index, knowledge_id in enumerate(result_ids)}
+    rank_score = mean(
+        1 / (abs(positions[knowledge_id] - expected_index) + 1)
+        if knowledge_id in positions else 0.0
+        for expected_index, knowledge_id in enumerate(expected_ids)
+    )
+    score = f1 * rank_score
+    return score, expected <= result, {
         "precision": precision,
         "recall": recall,
         "f1": f1,
+        "rank_score": rank_score,
     }
 
 
@@ -221,12 +226,11 @@ def _mean_score(results: list[QualityCaseResult]) -> float:
 
 
 def _repeat_consistency(results: list[QualityCaseResult]) -> float:
-    by_case: dict[str, list[set[str]]] = {}
+    by_case: dict[str, list[list[str]]] = {}
     for result in results:
-        by_case.setdefault(result.case_id, []).append(set(result.result_knowledge_ids))
+        by_case.setdefault(result.case_id, []).append(result.result_knowledge_ids)
     similarities: list[float] = []
     for repetitions in by_case.values():
         for left, right in combinations(repetitions, 2):
-            union = left | right
-            similarities.append(len(left & right) / len(union) if union else 1.0)
+            similarities.append(SequenceMatcher(a=left, b=right, autojunk=False).ratio())
     return mean(similarities) if similarities else 1.0

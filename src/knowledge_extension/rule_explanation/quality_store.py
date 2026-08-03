@@ -26,6 +26,7 @@ class PolicyQualityStore(Protocol):
     def rollback_release(self, release_id: str, promoted_by: str) -> KnowledgeRelease: ...
     def save_run(self, run: QualityRun) -> QualityRun: ...
     def get_run(self, run_id: str) -> QualityRun | None: ...
+    def get_latest_run(self, release_id: str) -> QualityRun | None: ...
     def save_case_results(self, results: list[QualityCaseResult]) -> None: ...
     def list_case_results(self, run_id: str) -> list[QualityCaseResult]: ...
 
@@ -118,6 +119,11 @@ class InMemoryPolicyQualityStore:
     def get_run(self, run_id: str) -> QualityRun | None:
         run = self.runs.get(run_id)
         return run.model_copy(deep=True) if run else None
+
+    def get_latest_run(self, release_id: str) -> QualityRun | None:
+        matches = [run for run in self.runs.values() if run.release_id == release_id]
+        latest = max(matches, key=lambda run: run.created_at, default=None)
+        return latest.model_copy(deep=True) if latest else None
 
     def save_case_results(self, results: list[QualityCaseResult]) -> None:
         self.case_results.extend(item.model_copy(deep=True) for item in results)

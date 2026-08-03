@@ -80,6 +80,17 @@ def test_candidate_and_baseline_results_are_stored_separately() -> None:
     }
 
 
+def test_latest_run_is_queryable_by_release() -> None:
+    from src.knowledge_extension.rule_explanation.quality_models import QualityRun
+    from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+    store = InMemoryPolicyQualityStore()
+    store.save_run(QualityRun(run_id="run_1", release_id="candidate", case_set_version=1, config_hash="cfg"))
+    store.save_run(QualityRun(run_id="run_2", release_id="candidate", case_set_version=2, config_hash="cfg"))
+
+    assert store.get_latest_run("candidate").run_id == "run_2"  # type: ignore[union-attr]
+
+
 def test_only_passed_release_can_be_promoted_atomically() -> None:
     from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
 

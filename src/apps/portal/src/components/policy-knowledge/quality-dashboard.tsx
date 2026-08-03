@@ -5,11 +5,12 @@ import { ArrowRight, CheckCircle2, FlaskConical, LockKeyhole, Rocket, ShieldAler
 
 import type { KnowledgeRelease, QualityCaseResult, QualityRun } from '@/lib/policy-knowledge-api'
 
-export function QualityDashboard({ releases, activeRelease, latestRun, caseResults = [], onRun, onPromote, onRollback }: {
+export function QualityDashboard({ releases, activeRelease, latestRun, caseResults = [], onSelectRelease, onRun, onPromote, onRollback }: {
   releases: KnowledgeRelease[]
   activeRelease: KnowledgeRelease | null
   latestRun: QualityRun | null
   caseResults?: QualityCaseResult[]
+  onSelectRelease?: (releaseId: string) => void
   onRun: (releaseId: string) => void
   onPromote: (releaseId: string) => void
   onRollback?: (releaseId: string) => void
@@ -21,11 +22,12 @@ export function QualityDashboard({ releases, activeRelease, latestRun, caseResul
   const run = latestRun?.release_id === effectiveReleaseId ? latestRun : null
   const canPublish = selected?.status === 'passed'
   const failedCases = caseResults.filter((item) => item.target === 'candidate' && !item.passed)
+  const caseDiffs = buildCaseDiffs(caseResults)
 
   return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
     <div className="flex flex-wrap items-start gap-3">
       <div><p className="flex items-center gap-1.5 text-xs font-semibold text-violet-700"><FlaskConical className="size-4" />统一质量门禁</p><h3 className="mt-1 text-base font-semibold text-slate-900">候选版与活动版同集对跑</h3><p className="mt-1 text-xs text-slate-500">相同用例、相同配置、至少重复 3 次；测试不会自动发布。</p></div>
-      <select aria-label="选择候选版本" value={effectiveReleaseId} onChange={(event) => setReleaseId(event.target.value)} className="ml-auto rounded-lg border border-slate-200 px-3 py-2 text-xs">
+      <select aria-label="选择候选版本" value={effectiveReleaseId} onChange={(event) => { setReleaseId(event.target.value); onSelectRelease?.(event.target.value) }} className="ml-auto rounded-lg border border-slate-200 px-3 py-2 text-xs">
         {!candidates.length && <option value="">暂无候选版本</option>}
         {candidates.map((release) => <option key={release.release_id} value={release.release_id}>{release.release_id} · {statusLabel(release.status)}</option>)}
       </select>
@@ -50,6 +52,7 @@ export function QualityDashboard({ releases, activeRelease, latestRun, caseResul
       </div>
       {!!run.blocked_reasons.length && <ul className="mt-3 space-y-1 text-xs text-red-700">{run.blocked_reasons.map((reason) => <li key={reason}>· {reason}</li>)}</ul>}
       {!!failedCases.length && <div className="mt-3"><p className="text-[11px] font-semibold text-red-800">逐用例失败明细</p><ul className="mt-1 space-y-1 text-[11px] text-red-700">{failedCases.map((item) => <li key={`${item.case_id}-${item.repeat_index}`}>{item.case_id} · 第 {item.repeat_index + 1} 次 · 得分 {Math.round(item.score * 100)}% · {JSON.stringify(item.diagnostics)}</li>)}</ul></div>}
+      {!!caseDiffs.length && <div className="mt-3 rounded-lg bg-white/70 p-3"><p className="text-[11px] font-semibold text-slate-700">候选 / 基线逐案 diff</p><ul className="mt-2 space-y-1 font-mono text-[10px] text-slate-600">{caseDiffs.map((item) => <li key={`${item.caseId}-${item.repeatIndex}`}>{item.caseId} #{item.repeatIndex + 1} · 候选 [{item.candidateIds.join(', ') || '—'}] ({pctValue(item.candidateScore)}) → 基线 [{item.baselineIds.join(', ') || '—'}] ({pctValue(item.baselineScore)})</li>)}</ul></div>}
     </div>}
 
     <div className="mt-4 flex flex-wrap justify-end gap-2">
@@ -61,6 +64,20 @@ export function QualityDashboard({ releases, activeRelease, latestRun, caseResul
     <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-xs font-semibold text-slate-700">发布与回滚历史</p><div className="mt-2 space-y-2">{releases.filter((release) => release.status === 'active' || release.status === 'retired').map((release) => <div key={release.release_id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px]"><span className="font-mono text-slate-700">{release.release_id}</span><span className="text-slate-400">{statusLabel(release.status)}</span>{release.status === 'retired' && onRollback && <button type="button" aria-label={`回滚到 ${release.release_id}`} onClick={() => onRollback(release.release_id)} className="ml-auto rounded border border-amber-200 px-2 py-1 font-semibold text-amber-700">回滚</button>}</div>)}</div></div>
   </section>
 }
+
+function buildCaseDiffs(results: QualityCaseResult[]) {
+  const grouped = new Map<string, { caseId: string; repeatIndex: number; candidateIds: string[]; baselineIds: string[]; candidateScore: number | null; baselineScore: number | null }>()
+  for (const result of results) {
+    const key = `${result.case_id}:${result.repeat_index}`
+    const item = grouped.get(key) || { caseId: result.case_id, repeatIndex: result.repeat_index, candidateIds: [], baselineIds: [], candidateScore: null, baselineScore: null }
+    if (result.target === 'candidate') { item.candidateIds = result.result_knowledge_ids; item.candidateScore = result.score }
+    else { item.baselineIds = result.result_knowledge_ids; item.baselineScore = result.score }
+    grouped.set(key, item)
+  }
+  return [...grouped.values()]
+}
+
+const pctValue = (value: number | null) => value === null ? '—' : `${Math.round(value * 100)}%`
 
 function ReleaseCard({ label, release, accent }: { label: string; release: KnowledgeRelease | null; accent: 'violet' | 'blue' }) {
   return <div className={`rounded-xl border p-3 ${accent === 'violet' ? 'border-violet-200 bg-violet-50/50' : 'border-blue-200 bg-blue-50/50'}`}><p className="text-[10px] text-slate-400">{label}</p>{release ? <><p className="mt-1 font-mono text-xs font-semibold text-slate-700">{release.release_id}</p><p className="mt-2 text-[11px] text-slate-500">契约 v{release.contract_version} · 用例集 v{release.case_set_version}</p><span className="mt-2 inline-block rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">{statusLabel(release.status)}</span></> : <p className="mt-4 text-xs text-slate-400">暂无版本</p>}</div>

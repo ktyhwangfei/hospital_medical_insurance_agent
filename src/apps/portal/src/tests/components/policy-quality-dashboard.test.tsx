@@ -41,7 +41,8 @@ describe('QualityDashboard', () => {
     const rollback = vi.fn()
     render(<QualityDashboard releases={[release('candidate_failed', 'failed'), release('previous', 'retired')]} activeRelease={release('baseline', 'active')} latestRun={{ ...run, status: 'failed', release_id: 'candidate_failed', blocked_reasons: ['必测用例未全部通过'] }} caseResults={[{ run_id: 'run_1', target: 'candidate', case_id: 'case_1', repeat_index: 0, result_knowledge_ids: [], score: 0, passed: false, diagnostics: { recall: 0 } }]} onRun={vi.fn()} onPromote={vi.fn()} onRollback={rollback} />)
 
-    expect(screen.getByText(/case_1/)).toBeInTheDocument()
+    expect(screen.getAllByText(/case_1/)).toHaveLength(2)
+    expect(screen.getByText(/候选.*→.*基线/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '回滚到 previous' }))
     expect(rollback).toHaveBeenCalledWith('previous')
   })

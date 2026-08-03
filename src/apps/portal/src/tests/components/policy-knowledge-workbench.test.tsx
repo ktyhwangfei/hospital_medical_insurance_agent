@@ -21,7 +21,7 @@ const document: WorkbenchDocument = {
         source_text: '在职职工住院政策原文',
         fields: [{ field_code: 'payment_ratio', field_name: '支付比例', raw_value: '80%' }],
         standardized_fields: [{
-          source_field: 'payment_ratio', source_value: '80%', status: 'unmapped',
+          source_field: 'payment_ratio', source_value: { min: 0.8, max: 1 }, status: 'unmapped',
           metric_code: null, metric_name: null, value_domain: null,
           standard_value: null, binding_id: null,
         }],
@@ -54,6 +54,7 @@ describe('KnowledgeWorkbench', () => {
     expect(screen.getByText('在职职工住院时，统筹基金支付比例为80%。')).toBeInTheDocument()
     expect(screen.getAllByText('待验证')).toHaveLength(2)
     expect(screen.getByText('未映射')).toBeInTheDocument()
+    expect(screen.getByText('{"max":1,"min":0.8}')).toBeInTheDocument()
     expect(screen.getByText('模型置信')).toBeInTheDocument()
     expect(screen.getByText('值域合规')).toBeInTheDocument()
     expect(screen.getByText(/职工医保政策原文/)).toBeInTheDocument()

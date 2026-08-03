@@ -78,6 +78,8 @@ _NON_BUSINESS_FIELDS = {
     "clause_id",
     "source_text",
     "confidence",
+    "approved_case_accuracy",
+    "source_span",
 }
 
 _APPLICABLE_FIELDS = {
@@ -152,15 +154,25 @@ def _confidence(rule: dict[str, Any], extraction: dict[str, Any]) -> KnowledgeCo
     fact_text = str((extraction.get("extracted_fields") or {}).get("fact_text") or "").strip()
     source_fidelity = 1.0 if source_text and (source_text in fact_text or fact_text in source_text) else 0.0
     model_confidence = _clamp(rule.get("confidence", extraction.get("confidence", 0.0)))
-    known = (completeness, source_fidelity, model_confidence)
+    accuracy_evidence = rule.get(
+        "approved_case_accuracy", extraction.get("approved_case_accuracy")
+    )
+    source_span = rule.get("source_span") or extraction.get("source_span")
+    if accuracy_evidence is None and isinstance(source_span, dict) and source_span.get("verified"):
+        accuracy_evidence = source_span.get("accuracy", 1.0)
+    accuracy = _clamp(accuracy_evidence) if accuracy_evidence is not None else None
+    known = (completeness, source_fidelity, model_confidence, *(() if accuracy is None else (accuracy,)))
+    uncertainties = ["值域合规性待标准化契约验证"]
+    if accuracy is None:
+        uncertainties.insert(0, "准确性待经典用例验证")
     return KnowledgeConfidence(
         completeness=round(completeness, 4),
-        accuracy=None,
+        accuracy=accuracy,
         source_fidelity=source_fidelity,
         model_confidence=model_confidence,
         value_domain_compliance=None,
         overall=round(sum(known) / len(known), 4),
-        uncertainties=["准确性待经典用例验证", "值域合规性待标准化契约验证"],
+        uncertainties=uncertainties,
     )
 
 

@@ -10,12 +10,14 @@ import {
   getWorkbenchDocuments,
   bindExistingMetric,
   listSemanticMetrics,
+  listReleases,
   proposeStandardValue,
   type MetricDraftSource,
   type SemanticMetricSummary,
   type StandardizedField,
   type WorkbenchDocument,
   type WorkbenchDocumentSummary,
+  type KnowledgeRelease,
 } from '@/lib/policy-knowledge-api'
 
 export default function KnowledgePage() {
@@ -24,6 +26,7 @@ export default function KnowledgePage() {
   const [document, setDocument] = useState<WorkbenchDocument | null>(null)
   const [draftSources, setDraftSources] = useState<MetricDraftSource[]>([])
   const [metrics, setMetrics] = useState<SemanticMetricSummary[]>([])
+  const [releases, setReleases] = useState<KnowledgeRelease[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -37,6 +40,7 @@ export default function KnowledgePage() {
 
   useEffect(() => {
     void listSemanticMetrics().then(setMetrics).catch((reason) => setError(reason instanceof Error ? reason.message : '已有指标加载失败'))
+    void listReleases().then(setReleases).catch(() => setReleases([]))
   }, [])
 
   const loadDocument = useCallback(async () => {
@@ -76,7 +80,7 @@ export default function KnowledgePage() {
 
   return <div className="space-y-4">
     <header className="flex flex-wrap items-end gap-3">
-      <div><p className="text-xs font-semibold text-blue-700">Unit × Knowledge × Metric</p><h2 className="mt-1 text-xl font-semibold text-slate-900">政策知识对齐工作台</h2><p className="mt-1 text-xs text-slate-500">左侧只读取单元页审核通过的内容；指标和值域变更均创建人工审核草稿。</p></div>
+      <div><p className="text-xs font-semibold text-blue-700">Unit × Knowledge × Metric</p><h2 className="mt-1 text-xl font-semibold text-slate-900">政策知识对齐工作台</h2><p className="mt-1 text-xs text-slate-500">左侧只读取单元页审核通过的内容；指标和值域变更均创建人工审核草稿。</p><div className="mt-2 flex flex-wrap gap-1.5">{releases.filter((release) => !['active', 'retired'].includes(release.status)).map((release) => <span key={release.release_id} className="rounded-full bg-violet-50 px-2 py-1 text-[10px] font-semibold text-violet-700">内部候选 · {release.release_id} · {release.status}</span>)}</div></div>
       <div className="ml-auto flex items-center gap-2">
         <select aria-label="选择政策文档" value={docId} onChange={(event) => setDocId(event.target.value)} className="max-w-72 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
           {!documents.length && <option value="">暂无可用文档</option>}
