@@ -18,6 +18,7 @@ class PolicyQualityStore(Protocol):
     def save_test_case(self, case: PolicyQATestCase) -> PolicyQATestCase: ...
     def list_test_cases(self, active_only: bool = True) -> list[PolicyQATestCase]: ...
     def current_case_set_version(self) -> int: ...
+    def create_release(self, release: KnowledgeRelease) -> KnowledgeRelease: ...
     def save_release(self, release: KnowledgeRelease) -> KnowledgeRelease: ...
     def get_release(self, release_id: str) -> KnowledgeRelease | None: ...
     def list_releases(self) -> list[KnowledgeRelease]: ...
@@ -73,6 +74,13 @@ class InMemoryPolicyQualityStore:
             self.releases[release.release_id] = release.model_copy(deep=True)
             return release.model_copy(deep=True)
 
+    def create_release(self, release: KnowledgeRelease) -> KnowledgeRelease:
+        with self._lock:
+            if release.release_id in self.releases:
+                raise ValueError(f"release {release.release_id} 已存在")
+            self.releases[release.release_id] = release.model_copy(deep=True)
+            return release.model_copy(deep=True)
+
     def get_release(self, release_id: str) -> KnowledgeRelease | None:
         item = self.releases.get(release_id)
         return item.model_copy(deep=True) if item else None
@@ -97,12 +105,14 @@ class InMemoryPolicyQualityStore:
                 raise ValueError(f"release {release_id} 未通过最新用例集")
             if latest.config_hash != target.config_hash:
                 raise ValueError(f"release {release_id} 的测试配置与质量运行不一致")
+            if latest.baseline_release_id != self.active_release_id:
+                raise ValueError(f"release {release_id} 的质量运行活动基线已过期")
             return self._switch_active(target, promoted_by)
 
     def rollback_release(self, release_id: str, promoted_by: str) -> KnowledgeRelease:
         with self._lock:
             target = self.releases.get(release_id)
-            if target is None or target.status not in {"retired", "passed"}:
+            if target is None or target.status != "retired" or target.promoted_at is None:
                 raise ValueError(f"release {release_id} 不可回滚")
             return self._switch_active(target, promoted_by)
 

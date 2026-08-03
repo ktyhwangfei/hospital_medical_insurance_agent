@@ -394,6 +394,8 @@
 
 - [ ] **Step 5: Commit**
 
+  Security follow-up: release promotion and rollback reviewer identity must come from the authenticated request context once hospital SSO/RBAC is connected; the current `reviewed_by` request field is not a trusted identity source and must not be treated as audit proof.
+
   Commit: `docs: 更新政策知识统一对齐与发布设计`
 
 ---

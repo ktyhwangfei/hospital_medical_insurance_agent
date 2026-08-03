@@ -170,13 +170,6 @@ def list_test_cases() -> list[PolicyQATestCase]:
 @router.post("/releases", response_model=KnowledgeRelease, status_code=201)
 def create_candidate_release(request: CreateReleaseRequest) -> KnowledgeRelease:
     store = _get_quality_store()
-    if store.get_release(request.release_id) is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=error_detail(
-                "POLICY_RELEASE_EXISTS", "候选版本已存在", {"release_id": request.release_id}
-            ),
-        )
     release = KnowledgeRelease(
         release_id=request.release_id,
         facts_collection=f"policy_facts_{request.release_id}",
@@ -185,7 +178,15 @@ def create_candidate_release(request: CreateReleaseRequest) -> KnowledgeRelease:
         case_set_version=store.current_case_set_version(),
         config_hash=request.config_hash,
     )
-    return store.save_release(release)
+    try:
+        return store.create_release(release)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "POLICY_RELEASE_EXISTS", str(exc), {"release_id": request.release_id}
+            ),
+        ) from exc
 
 
 @router.get("/releases", response_model=list[KnowledgeRelease])

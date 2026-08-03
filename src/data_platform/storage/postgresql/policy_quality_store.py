@@ -143,6 +143,25 @@ class PostgresPolicyQualityStore:
         )
         return release
 
+    def create_release(self, release: KnowledgeRelease) -> KnowledgeRelease:
+        rows = self._get_client().execute(
+            """INSERT INTO policy_knowledge_releases
+               (release_id,status,facts_collection,rules_collection,contract_version,
+                case_set_version,config_hash,quality_score,consistency_score,created_at,promoted_at,promoted_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (release_id) DO NOTHING RETURNING *""",
+            (
+                release.release_id, release.status, release.facts_collection,
+                release.rules_collection, release.contract_version,
+                release.case_set_version, release.config_hash, release.quality_score,
+                release.consistency_score, release.created_at, release.promoted_at,
+                release.promoted_by,
+            ),
+        )
+        if not rows:
+            raise ValueError(f"release {release.release_id} 已存在")
+        return KnowledgeRelease(**rows[0])
+
     def get_release(self, release_id: str) -> KnowledgeRelease | None:
         rows = self._get_client().execute(
             "SELECT * FROM policy_knowledge_releases WHERE release_id=%s", (release_id,)
@@ -171,7 +190,7 @@ class PostgresPolicyQualityStore:
 
     def _switch_release(self, release_id: str, promoted_by: str, allow_retired: bool) -> KnowledgeRelease:
         client = self._get_client()
-        allowed = ("passed", "retired") if allow_retired else ("passed",)
+        allowed = ("retired",) if allow_retired else ("passed",)
         with client.transaction() as connection:
             with connection.cursor() as cursor:
                 # 固定事务锁覆盖“尚无 singleton 行”的首发场景，再锁现有活动指针行。
@@ -182,20 +201,24 @@ class PostgresPolicyQualityStore:
                     "SELECT release_id FROM policy_active_release "
                     "WHERE singleton_id=TRUE FOR UPDATE"
                 )
+                active_row = cursor.fetchone()
+                current_active_release_id = active_row[0] if active_row else None
                 cursor.execute(
-                    "SELECT status,config_hash FROM policy_knowledge_releases WHERE release_id=%s FOR UPDATE",
+                    "SELECT status,config_hash,promoted_at FROM policy_knowledge_releases WHERE release_id=%s FOR UPDATE",
                     (release_id,),
                 )
                 row = cursor.fetchone()
                 if row is None or row[0] not in allowed:
                     raise ValueError(f"release {release_id} 未通过质量门禁或不可回滚")
+                if allow_retired and row[2] is None:
+                    raise ValueError(f"release {release_id} 不可回滚")
                 if not allow_retired:
                     cursor.execute(
                         "SELECT COALESCE(MAX(case_set_version),0) FROM policy_qa_test_cases"
                     )
                     current_case_set_version = int(cursor.fetchone()[0])
                     cursor.execute(
-                        """SELECT status,case_set_version,config_hash
+                        """SELECT status,case_set_version,config_hash,baseline_release_id
                            FROM policy_quality_runs WHERE release_id=%s
                            ORDER BY created_at DESC LIMIT 1 FOR UPDATE""",
                         (release_id,),
@@ -207,6 +230,8 @@ class PostgresPolicyQualityStore:
                         raise ValueError(f"release {release_id} 未通过最新用例集")
                     if latest_run[2] != row[1]:
                         raise ValueError(f"release {release_id} 的测试配置与质量运行不一致")
+                    if latest_run[3] != current_active_release_id:
+                        raise ValueError(f"release {release_id} 的质量运行活动基线已过期")
                 cursor.execute(
                     "UPDATE policy_knowledge_releases SET status='retired' WHERE status='active' AND release_id<>%s",
                     (release_id,),

@@ -103,40 +103,50 @@ class PolicyQualityService:
         self._store.save_run(run)
         self._store.save_release(candidate.model_copy(update={"status": "testing"}))
 
-        candidate_results = self._evaluate(run, "candidate", candidate, cases)
-        baseline_results = (
-            self._evaluate(run, "baseline", baseline, cases) if baseline else []
-        )
-        all_results = [*candidate_results, *baseline_results]
-        self._store.save_case_results(all_results)
+        try:
+            candidate_results = self._evaluate(run, "candidate", candidate, cases)
+            baseline_results = (
+                self._evaluate(run, "baseline", baseline, cases) if baseline else []
+            )
+            self._store.save_case_results([*candidate_results, *baseline_results])
 
-        candidate_score = _mean_score(candidate_results)
-        baseline_score = _mean_score(baseline_results) if baseline else None
-        consistency = _repeat_consistency(candidate_results)
-        blocked_reasons = self._blocked_reasons(
-            cases=cases,
-            candidate_results=candidate_results,
-            candidate_score=candidate_score,
-            baseline_score=baseline_score,
-            consistency=consistency,
-            minimum_quality=minimum_quality,
-            minimum_consistency=minimum_consistency,
-        )
-        status = "failed" if blocked_reasons else "passed"
-        finished = run.model_copy(update={
-            "status": status,
-            "candidate_score": candidate_score,
-            "baseline_score": baseline_score,
-            "consistency_score": consistency,
-            "blocked_reasons": blocked_reasons,
-        })
-        self._store.save_run(finished)
-        self._store.save_release(candidate.model_copy(update={
-            "status": status,
-            "quality_score": candidate_score,
-            "consistency_score": consistency,
-        }))
-        return finished
+            candidate_score = _mean_score(candidate_results)
+            baseline_score = _mean_score(baseline_results) if baseline else None
+            consistency = _repeat_consistency(candidate_results)
+            blocked_reasons = self._blocked_reasons(
+                cases=cases,
+                candidate_results=candidate_results,
+                candidate_score=candidate_score,
+                baseline_score=baseline_score,
+                consistency=consistency,
+                minimum_quality=minimum_quality,
+                minimum_consistency=minimum_consistency,
+            )
+            status = "failed" if blocked_reasons else "passed"
+            finished = run.model_copy(update={
+                "status": status,
+                "candidate_score": candidate_score,
+                "baseline_score": baseline_score,
+                "consistency_score": consistency,
+                "blocked_reasons": blocked_reasons,
+            })
+            self._store.save_run(finished)
+            self._store.save_release(candidate.model_copy(update={
+                "status": status,
+                "quality_score": candidate_score,
+                "consistency_score": consistency,
+            }))
+            return finished
+        except Exception as exc:
+            failed = run.model_copy(update={
+                "status": "failed",
+                "blocked_reasons": [f"质量运行异常: {type(exc).__name__}"],
+            })
+            try:
+                self._store.save_run(failed)
+            finally:
+                self._store.save_release(candidate.model_copy(update={"status": "ready"}))
+            raise
 
     def _require_candidate(self, release_id: str) -> KnowledgeRelease:
         release = self._store.get_release(release_id)

@@ -264,3 +264,22 @@ def test_repeat_count_cannot_be_less_than_three() -> None:
             _store_with_case_and_baseline(),
             SequenceSearcher({"baseline": [[]], "candidate": [[]]}),
         ).run_release("candidate", repeat_count=2)
+
+
+def test_search_failure_records_failed_run_and_restores_ready_release() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    class FailingSearcher:
+        def search(self, release, case):
+            raise RuntimeError("backend unavailable")
+
+    store = _store_with_case_and_baseline()
+
+    with pytest.raises(RuntimeError, match="backend unavailable"):
+        PolicyQualityService(store, FailingSearcher()).run_release("candidate")
+
+    run = store.get_latest_run("candidate")
+    assert run is not None
+    assert run.status == "failed"
+    assert run.blocked_reasons == ["质量运行异常: RuntimeError"]
+    assert store.get_release("candidate").status == "ready"  # type: ignore[union-attr]

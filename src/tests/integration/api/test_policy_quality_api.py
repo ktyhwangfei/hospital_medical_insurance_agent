@@ -78,6 +78,13 @@ def test_candidate_release_uses_one_versioned_collection_pair(monkeypatch) -> No
     listed = client.get(f"{PREFIX}/releases")
     assert listed.status_code == 200
     assert listed.json()[0]["release_id"] == "rel_20260803_01"
+    duplicate = client.post(f"{PREFIX}/releases", json={
+        "release_id": "rel_20260803_01",
+        "contract_version": "3",
+        "config_hash": "forged",
+    })
+    assert duplicate.status_code == 409
+    assert client.get(f"{PREFIX}/releases").json()[0]["contract_version"] == "2"
 
 
 def test_run_detail_and_manual_promotion(monkeypatch) -> None:

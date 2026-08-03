@@ -91,4 +91,19 @@ describe('KnowledgeWorkbench', () => {
     fireEvent.click(screen.getByRole('option', { name: /知识 1/ }))
     expect(screen.getByRole('tab', { name: '标准化阶段' })).toHaveAttribute('aria-selected', 'true')
   })
+
+  it('resets selections when switching documents', () => {
+    const { rerender } = render(<KnowledgeWorkbench document={document} metrics={[]} onBindExisting={vi.fn()} onCreateMetricDrafts={vi.fn()} onProposeValue={vi.fn()} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择支付比例' }))
+    const nextDocument: WorkbenchDocument = {
+      ...document,
+      doc_id: 'doc_2',
+      units: [{ ...document.units[0], doc_id: 'doc_2', unit_id: 'unit_3', path: ['第三条'], knowledge: [] }],
+    }
+
+    rerender(<KnowledgeWorkbench document={nextDocument} metrics={[]} onBindExisting={vi.fn()} onCreateMetricDrafts={vi.fn()} onProposeValue={vi.fn()} />)
+
+    expect(screen.getByRole('option', { name: /第三条/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByRole('button', { name: /批量生成指标草稿 \(1\)/ })).not.toBeInTheDocument()
+  })
 })

@@ -23,7 +23,11 @@ const pct = (value: number | null) => value === null ? '待验证' : `${Math.rou
 
 type MobileStep = 'units' | 'knowledge' | 'standardization'
 
-export function KnowledgeWorkbench({ document, metrics, onBindExisting, onCreateMetricDrafts, onProposeValue }: Props) {
+export function KnowledgeWorkbench(props: Props) {
+  return <KnowledgeWorkbenchState key={props.document.doc_id} {...props} />
+}
+
+function KnowledgeWorkbenchState({ document, metrics, onBindExisting, onCreateMetricDrafts, onProposeValue }: Props) {
   const [unitId, setUnitId] = useState(document.units[0]?.unit_id || '')
   const unit = document.units.find((item) => item.unit_id === unitId) || document.units[0]
   const [knowledgeId, setKnowledgeId] = useState(unit?.knowledge[0]?.knowledge_id || '')

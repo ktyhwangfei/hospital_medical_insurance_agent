@@ -20,12 +20,16 @@ def _release(release_id: str, status: str = "ready"):
     )
 
 
-def _save_passed_run(store, release_id: str, case_set_version: int = 1) -> None:
+def _save_passed_run(
+    store, release_id: str, case_set_version: int = 1,
+    baseline_release_id: str | None = None,
+) -> None:
     from src.knowledge_extension.rule_explanation.quality_models import QualityRun
 
     store.save_run(QualityRun(
         run_id=f"run_{release_id}",
         release_id=release_id,
+        baseline_release_id=baseline_release_id,
         case_set_version=case_set_version,
         config_hash=QUALITY_CONFIG_HASH,
         status="passed",
@@ -132,7 +136,7 @@ def test_promotion_switches_one_pointer_and_rollback_restores_previous_release()
     _save_passed_run(store, "rel_1")
     store.promote_release("rel_1", promoted_by="reviewer")
     store.save_release(_release("rel_2", status="passed"))
-    _save_passed_run(store, "rel_2")
+    _save_passed_run(store, "rel_2", baseline_release_id="rel_1")
 
     promoted = store.promote_release("rel_2", promoted_by="reviewer")
 
@@ -145,6 +149,47 @@ def test_promotion_switches_one_pointer_and_rollback_restores_previous_release()
     assert rolled_back.release_id == "rel_1"
     assert store.get_active_release().release_id == "rel_1"  # type: ignore[union-attr]
     assert store.get_release("rel_2").status == "retired"  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("status", ["ready", "testing", "passed"])
+def test_rollback_rejects_release_that_was_never_active(status: str) -> None:
+    from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+    store = InMemoryPolicyQualityStore()
+    store.save_release(_release("candidate", status=status))
+
+    with pytest.raises(ValueError, match="不可回滚"):
+        store.rollback_release("candidate", promoted_by="reviewer")
+
+
+def test_promotion_rejects_run_compared_to_stale_active_release() -> None:
+    from src.knowledge_extension.rule_explanation.quality_models import QualityRun
+    from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+    store = InMemoryPolicyQualityStore()
+    store._case_set_version = 1
+    store.save_release(_release("current", status="active"))
+    store.active_release_id = "current"
+    store.save_release(_release("candidate", status="passed"))
+    store.save_run(QualityRun(
+        run_id="run_candidate", release_id="candidate", baseline_release_id="previous",
+        case_set_version=1, config_hash=QUALITY_CONFIG_HASH, status="passed",
+    ))
+
+    with pytest.raises(ValueError, match="活动基线"):
+        store.promote_release("candidate", promoted_by="reviewer")
+
+
+def test_create_release_is_atomic_and_preserves_existing_identity() -> None:
+    from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+    store = InMemoryPolicyQualityStore()
+    original = store.create_release(_release("candidate"))
+
+    with pytest.raises(ValueError, match="已存在"):
+        store.create_release(_release("candidate").model_copy(update={"contract_version": "3"}))
+
+    assert store.get_release("candidate") == original
 
 
 def test_promotion_rejects_passed_run_after_case_set_changes() -> None:
