@@ -209,6 +209,12 @@ class PostgresPolicyQualityStore:
         )
         return run
 
+    def get_run(self, run_id: str) -> QualityRun | None:
+        rows = self._get_client().execute(
+            "SELECT * FROM policy_quality_runs WHERE run_id=%s", (run_id,)
+        )
+        return QualityRun(**rows[0]) if rows else None
+
     def save_case_results(self, results: list[QualityCaseResult]) -> None:
         self._get_client().execute_many(
             """INSERT INTO policy_quality_case_results

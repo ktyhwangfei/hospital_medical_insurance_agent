@@ -21,6 +21,40 @@ class ReleaseSearchPort(Protocol):
     def search(self, release: KnowledgeRelease, case: PolicyQATestCase) -> list[str]: ...
 
 
+class RulesReleaseSearcher:
+    """使用 release 同时提供的两个 collection 名执行经典用例检索。"""
+
+    def __init__(self) -> None:
+        self._services: dict[str, object] = {}
+
+    def search(self, release: KnowledgeRelease, case: PolicyQATestCase) -> list[str]:
+        from src.knowledge_extension.rule_explanation.rules_search_service import (
+            RulesSearchService,
+        )
+
+        service = self._services.get(release.release_id)
+        if service is None:
+            service = RulesSearchService(
+                rules_col_name=release.rules_collection,
+                facts_col_name=release.facts_collection,
+            )
+            self._services[release.release_id] = service
+        typed_service = service
+        filters = {key: str(value) for key, value in case.filters.items()}
+        if case.mode == "precise":
+            groups = typed_service.search_precise(filters)  # type: ignore[attr-defined]
+        elif case.mode == "semantic":
+            groups = typed_service.search_semantic(case.query)  # type: ignore[attr-defined]
+        else:
+            groups = typed_service.search_hybrid(case.query, filters)  # type: ignore[attr-defined]
+        return [
+            str(rule.get("knowledge_id") or rule.get("rule_id"))
+            for group in groups
+            for rule in group.get("rules", [])
+            if rule.get("knowledge_id") or rule.get("rule_id")
+        ]
+
+
 class PolicyQualityService:
     def __init__(self, store: PolicyQualityStore, searcher: ReleaseSearchPort) -> None:
         self._store = store
