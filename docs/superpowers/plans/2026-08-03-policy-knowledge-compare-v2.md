@@ -37,17 +37,17 @@
 - Modify: `src/runtime/api/policy_pipeline_routes.py`
 - Test: `src/tests/unit/knowledge_extension/test_knowledge_workbench.py`
 
-- [ ] **Step 1: Write failing identity and approved-unit tests**
+- [x] **Step 1: Write failing identity and approved-unit tests**
 
   Cover: only `reviewed/published` or approved `unit_audit` units are returned; merged duplicate units are excluded; one Unit returns multiple Knowledge items; reordering rules does not change `knowledge_id`; explicit `unit_id` wins and legacy text matching is marked `legacy_match`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
   Run: `python -m pytest src/tests/unit/knowledge_extension/test_knowledge_workbench.py -v --tb=short`
 
   Expected: import failure for `knowledge_workbench_service`.
 
-- [ ] **Step 3: Add typed models and deterministic legacy identity**
+- [x] **Step 3: Add typed models and deterministic legacy identity**
 
   Required public models:
 
@@ -85,15 +85,15 @@
 
   Legacy `knowledge_id` must hash `extraction_id + canonical JSON(rule without rule_id/index)`; array position must never enter the hash. Persisted `rule_id`/`knowledge_id` is preferred.
 
-- [ ] **Step 4: Persist explicit Unit identity for new extraction writes**
+- [x] **Step 4: Persist explicit Unit identity for new extraction writes**
 
   Add `policy_extractions.unit_id VARCHAR(64)` with an idempotent `ALTER TABLE` and index. Add `unit_id` to create/read/update. Change `extract-leaf` to a Pydantic request containing `unit_id` and `source_text`, validate the node belongs to the requested document, and pass it through `PipelineOrchestrator.extract_single()`.
 
-- [ ] **Step 5: Build coherent sentences and explainable confidence**
+- [x] **Step 5: Build coherent sentences and explainable confidence**
 
   Use deterministic templates by `rule_type` (`eligibility`, `payment_ratio`, `deductible`, `cap`, fallback) with subject/condition/result/unit. Completeness uses only fields applicable to that rule type; accuracy is computed only from field values supported by source spans or approved golden cases; source fidelity measures citation coverage. Missing evidence yields `accuracy=None` plus `uncertainties` and must not be converted into a fabricated default score; UI displays “待验证”。
 
-- [ ] **Step 6: Verify GREEN and regression**
+- [x] **Step 6: Verify GREEN and regression**
 
   Run: `python -m pytest src/tests/unit/knowledge_extension/test_knowledge_workbench.py src/tests/unit/knowledge_extension/test_pipeline_coverage.py src/tests/unit/knowledge_extension/test_pipeline_chunking.py -v --tb=short`
 

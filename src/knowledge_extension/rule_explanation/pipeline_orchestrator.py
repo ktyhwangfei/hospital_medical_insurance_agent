@@ -80,11 +80,22 @@ class PipelineOrchestrator:
             coverage = self._calculate_coverage(content, facts)
 
             # ── 每个事实 → 一条提取记录 ──
+            from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import (
+                match_leaves,
+                parse_kept_leaves,
+            )
+
+            _root, _by_id, _all_leaves, kept_leaves = parse_kept_leaves(
+                content,
+                doc.get("title", ""),
+            )
             extraction_items: list[dict[str, Any]] = []
             total_rules = 0
             for fact in facts:
                 fact_rules = fact.get("rules", [])
                 total_rules += len(fact_rules)
+                matched_units = match_leaves(fact.get("fact_text", ""), kept_leaves)
+                unit_id = matched_units[0] if len(matched_units) == 1 else ""
 
                 confidences = [r.get("confidence", 0.7) for r in fact_rules]
                 avg_conf = sum(confidences) / len(confidences) if confidences else 0.7
@@ -92,6 +103,7 @@ class PipelineOrchestrator:
                 extraction_items.append({
                     "extraction_id": f"ext_{uuid.uuid4().hex[:12]}",
                     "doc_id": doc_id,
+                    "unit_id": unit_id,
                     "source_text": fact.get("fact_text", ""),
                     "extracted_fields": {
                         "fact_text": fact.get("fact_text", ""),
@@ -150,7 +162,7 @@ class PipelineOrchestrator:
             chunks.append("\n".join(cur))
         return chunks
 
-    def extract_single(self, doc_id: str, source_text: str) -> dict[str, Any]:
+    def extract_single(self, doc_id: str, source_text: str, unit_id: str = "") -> dict[str, Any]:
         """对单段文本提取政策事实并创建一条提取记录（用于无提取记录的单元）。"""
         doc = self._store.get_document(doc_id)
         if not doc:
@@ -162,6 +174,7 @@ class PipelineOrchestrator:
                 extraction_item = {
                     "extraction_id": f"ext_{uuid.uuid4().hex[:12]}",
                     "doc_id": doc_id,
+                    "unit_id": unit_id,
                     "source_text": source_text,
                     "extracted_fields": {"fact_text": source_text, "rules": [], "total_rules": 0},
                     "confidence": 0.5,
@@ -176,6 +189,7 @@ class PipelineOrchestrator:
                 extraction_items.append({
                     "extraction_id": f"ext_{uuid.uuid4().hex[:12]}",
                     "doc_id": doc_id,
+                    "unit_id": unit_id,
                     "source_text": fact.get("fact_text", source_text),
                     "extracted_fields": {
                         "fact_text": fact.get("fact_text", ""),
