@@ -100,10 +100,9 @@ class PolicyQualityService:
             repeat_count=repeat_count,
             status="running",
         )
-        self._store.save_run(run)
-        self._store.save_release(candidate.model_copy(update={"status": "testing"}))
-
         try:
+            self._store.save_run(run)
+            self._store.save_release(candidate.model_copy(update={"status": "testing"}))
             candidate_results = self._evaluate(run, "candidate", candidate, cases)
             baseline_results = (
                 self._evaluate(run, "baseline", baseline, cases) if baseline else []

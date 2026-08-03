@@ -27,8 +27,10 @@ class SequenceSearcher:
         return sequence[index % len(sequence)]
 
 
-def _store_with_case_and_baseline() -> InMemoryPolicyQualityStore:
-    store = InMemoryPolicyQualityStore()
+def _store_with_case_and_baseline(
+    store: InMemoryPolicyQualityStore | None = None,
+) -> InMemoryPolicyQualityStore:
+    store = store or InMemoryPolicyQualityStore()
     store.save_test_case(PolicyQATestCase(
         case_id="case_1",
         name="职工住院支付比例",
@@ -277,6 +279,33 @@ def test_search_failure_records_failed_run_and_restores_ready_release() -> None:
 
     with pytest.raises(RuntimeError, match="backend unavailable"):
         PolicyQualityService(store, FailingSearcher()).run_release("candidate")
+
+    run = store.get_latest_run("candidate")
+    assert run is not None
+    assert run.status == "failed"
+    assert run.blocked_reasons == ["质量运行异常: RuntimeError"]
+    assert store.get_release("candidate").status == "ready"  # type: ignore[union-attr]
+
+
+def test_initial_testing_state_failure_marks_persisted_run_failed_and_restores_ready() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    class FailingTestingStore(InMemoryPolicyQualityStore):
+        failed_once = False
+
+        def save_release(self, release):
+            if release.status == "testing" and not self.failed_once:
+                self.failed_once = True
+                raise RuntimeError("testing state unavailable")
+            return super().save_release(release)
+
+    store = _store_with_case_and_baseline(FailingTestingStore())
+
+    with pytest.raises(RuntimeError, match="testing state unavailable"):
+        PolicyQualityService(
+            store,
+            SequenceSearcher({"baseline": [[]], "candidate": [["kn_expected"]]}),
+        ).run_release("candidate")
 
     run = store.get_latest_run("candidate")
     assert run is not None
