@@ -1,5 +1,8 @@
 'use client'
 
+// 页面顶层使用 useSearchParams → 关闭静态预渲染（Next.js 要求 Suspense 或动态渲染）
+export const dynamic = 'force-dynamic'
+
 // 政策知识治理 · 知识模块（原"结构化"tab 改造）。
 // 3 子视图：审核（治理心脏）/ 检索（三模式+跨世界）/ 规则库（浏览+溯源）。
 // [来源: docs/steering/政策知识治理平台设计-V2.1.md §5.5]

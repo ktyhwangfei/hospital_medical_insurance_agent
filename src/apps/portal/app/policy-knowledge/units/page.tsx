@@ -1,5 +1,8 @@
 'use client'
 
+// 页面顶层使用 useSearchParams → 关闭静态预渲染（Next.js 要求 Suspense 或动态渲染）
+export const dynamic = 'force-dynamic'
+
 // 政策知识治理 · 单元模块（三栏 v5，Python 结构拆分 + 审核）。
 // [来源: docs/steering/政策知识治理平台设计-V2.1.md §5.4/§5.5；按用户迭代要求]
 //

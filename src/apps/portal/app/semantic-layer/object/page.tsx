@@ -1,6 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+// 页面顶层使用 useSearchParams → 关闭静态预渲染（Next.js 要求 Suspense 或动态渲染）
+export const dynamic = 'force-dynamic'
+
+import { useCallback, useEffect, useMemo, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -497,6 +500,15 @@ function ObjectPageSkeleton() {
 // ── Main Page ───────────────────────────────────────────────────
 
 export default function ObjectListPage() {
+  // useSearchParams 需在 Suspense 边界内（Next.js 预渲染要求）
+  return (
+    <Suspense fallback={<ObjectPageSkeleton />}>
+      <ObjectListPageInner />
+    </Suspense>
+  )
+}
+
+function ObjectListPageInner() {
   const searchParams = useSearchParams()
   const initialDomain = searchParams.get('domain_code') || '全部域'
 
