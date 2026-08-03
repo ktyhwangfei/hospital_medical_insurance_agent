@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+from collections import defaultdict
+
+import pytest
+
+from src.knowledge_extension.rule_explanation.quality_models import (
+    KnowledgeRelease,
+    PolicyQATestCase,
+)
+from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+
+class SequenceSearcher:
+    def __init__(self, results: dict[str, list[list[str]]]) -> None:
+        self.results = results
+        self.calls: dict[str, int] = defaultdict(int)
+
+    def search(self, release: KnowledgeRelease, case: PolicyQATestCase) -> list[str]:
+        index = self.calls[release.release_id]
+        self.calls[release.release_id] += 1
+        sequence = self.results[release.release_id]
+        return sequence[index % len(sequence)]
+
+
+def _store_with_case_and_baseline() -> InMemoryPolicyQualityStore:
+    store = InMemoryPolicyQualityStore()
+    store.save_test_case(PolicyQATestCase(
+        case_id="case_1",
+        name="职工住院支付比例",
+        query="职工住院支付比例",
+        mode="semantic",
+        expected_knowledge_ids=["kn_expected"],
+        required=True,
+    ))
+    store.save_release(KnowledgeRelease(
+        release_id="baseline",
+        status="passed",
+        facts_collection="policy_facts_baseline",
+        rules_collection="policy_rules_baseline",
+        contract_version="1",
+        case_set_version=1,
+        config_hash="cfg_1",
+    ))
+    store.promote_release("baseline", "reviewer")
+    store.save_release(KnowledgeRelease(
+        release_id="candidate",
+        status="ready",
+        facts_collection="policy_facts_candidate",
+        rules_collection="policy_rules_candidate",
+        contract_version="2",
+        case_set_version=1,
+        config_hash="cfg_1",
+    ))
+    return store
+
+
+def test_equal_quality_to_baseline_is_blocked() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    store = _store_with_case_and_baseline()
+    searcher = SequenceSearcher({
+        "baseline": [["kn_expected"]],
+        "candidate": [["kn_expected"]],
+    })
+
+    run = PolicyQualityService(store, searcher).run_release("candidate", repeat_count=3)
+
+    assert run.status == "failed"
+    assert "候选质量必须严格高于当前版本" in run.blocked_reasons
+    assert store.get_release("candidate").status == "failed"  # type: ignore[union-attr]
+    assert store.get_active_release().release_id == "baseline"  # type: ignore[union-attr]
+
+
+def test_unstable_repeated_results_block_release() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    store = _store_with_case_and_baseline()
+    searcher = SequenceSearcher({
+        "baseline": [[]],
+        "candidate": [["kn_expected"], ["kn_other"], ["kn_expected"]],
+    })
+
+    run = PolicyQualityService(store, searcher).run_release(
+        "candidate", repeat_count=3, minimum_consistency=0.9,
+    )
+
+    assert run.status == "failed"
+    assert run.consistency_score < 0.9  # type: ignore[operator]
+    assert "重复运行一致性低于门槛" in run.blocked_reasons
+
+
+def test_strictly_better_stable_candidate_passes_gate() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    store = _store_with_case_and_baseline()
+    searcher = SequenceSearcher({
+        "baseline": [[]],
+        "candidate": [["kn_expected"]],
+    })
+
+    run = PolicyQualityService(store, searcher).run_release("candidate", repeat_count=3)
+
+    assert run.status == "passed"
+    assert run.candidate_score == 1.0
+    assert run.baseline_score == 0.0
+    assert run.consistency_score == 1.0
+    assert store.get_release("candidate").status == "passed"  # type: ignore[union-attr]
+    assert store.get_active_release().release_id == "baseline"  # type: ignore[union-attr]
+
+
+def test_required_case_failure_blocks_even_when_average_threshold_is_low() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    store = _store_with_case_and_baseline()
+    searcher = SequenceSearcher({"baseline": [[]], "candidate": [["kn_other"]]})
+
+    run = PolicyQualityService(store, searcher).run_release(
+        "candidate", repeat_count=3, minimum_quality=0.0,
+    )
+
+    assert run.status == "failed"
+    assert "必测用例未全部通过" in run.blocked_reasons
+
+
+def test_without_baseline_candidate_uses_absolute_threshold() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    store = InMemoryPolicyQualityStore()
+    store.save_test_case(PolicyQATestCase(
+        case_id="case_1",
+        name="首版必测",
+        query="首版必测",
+        mode="semantic",
+        expected_knowledge_ids=["kn_expected"],
+    ))
+    store.save_release(KnowledgeRelease(
+        release_id="candidate",
+        status="ready",
+        facts_collection="policy_facts_candidate",
+        rules_collection="policy_rules_candidate",
+        contract_version="1",
+        case_set_version=1,
+        config_hash="cfg_1",
+    ))
+
+    run = PolicyQualityService(
+        store, SequenceSearcher({"candidate": [["kn_expected"]]})
+    ).run_release("candidate", repeat_count=3)
+
+    assert run.status == "passed"
+    assert run.baseline_score is None
+
+
+def test_comparison_rejects_different_test_configuration() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    store = _store_with_case_and_baseline()
+    candidate = store.get_release("candidate")
+    assert candidate is not None
+    store.releases["candidate"] = candidate.model_copy(update={"config_hash": "cfg_other"})
+
+    with pytest.raises(ValueError, match="测试配置不一致"):
+        PolicyQualityService(
+            store,
+            SequenceSearcher({"baseline": [[]], "candidate": [["kn_expected"]]}),
+        ).run_release("candidate", repeat_count=3)
+
+
+def test_repeat_count_cannot_be_less_than_three() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    with pytest.raises(ValueError, match="至少重复运行 3 次"):
+        PolicyQualityService(
+            _store_with_case_and_baseline(),
+            SequenceSearcher({"baseline": [[]], "candidate": [[]]}),
+        ).run_release("candidate", repeat_count=2)
