@@ -77,6 +77,7 @@ EXTRACTIONS_TABLE = """
 CREATE TABLE IF NOT EXISTS policy_extractions (
     extraction_id VARCHAR(64) PRIMARY KEY,
     doc_id VARCHAR(64) NOT NULL REFERENCES policy_documents(doc_id) ON DELETE CASCADE,
+    unit_id VARCHAR(64),
     source_text TEXT NOT NULL,
     source_text_hash VARCHAR(64) NOT NULL,
     extracted_fields JSONB NOT NULL DEFAULT '{}',
@@ -88,8 +89,14 @@ CREATE TABLE IF NOT EXISTS policy_extractions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_ext_doc_id ON policy_extractions(doc_id);
+CREATE INDEX IF NOT EXISTS idx_ext_unit_id ON policy_extractions(unit_id);
 CREATE INDEX IF NOT EXISTS idx_ext_status ON policy_extractions(status);
 CREATE INDEX IF NOT EXISTS idx_ext_hash ON policy_extractions(source_text_hash);
+"""
+
+EXTRACTIONS_MIGRATION = """
+ALTER TABLE policy_extractions ADD COLUMN IF NOT EXISTS unit_id VARCHAR(64);
+CREATE INDEX IF NOT EXISTS idx_ext_unit_id ON policy_extractions(unit_id);
 """
 
 LINEAGE_TABLE = """
@@ -143,6 +150,13 @@ class PipelineStore:
                     client.execute(stmt)
                 except Exception:
                     pass  # 表不存在时静默跳过
+        for stmt in EXTRACTIONS_MIGRATION.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                try:
+                    client.execute(stmt)
+                except Exception:
+                    pass
 
     # ── Policy Documents ──────────────────────────────────────────
 
@@ -465,23 +479,30 @@ class PipelineStore:
         for item in items:
             extraction_id = item.get("extraction_id") or f"ext_{uuid.uuid4().hex[:12]}"
             doc_id = item["doc_id"]
+            unit_id = item.get("unit_id") or None
             source_text = item.get("source_text", "")
             source_text_hash = hashlib.sha256(source_text.encode()).hexdigest()[:16]
             extracted_fields = item.get("extracted_fields", {})
             confidence = item.get("confidence", 0.0)
 
             # 去重
-            existing = client.execute(
-                "SELECT extraction_id FROM policy_extractions WHERE doc_id=%s AND source_text_hash=%s",
-                (doc_id, source_text_hash),
-            )
+            if unit_id:
+                existing = client.execute(
+                    "SELECT extraction_id FROM policy_extractions WHERE doc_id=%s AND unit_id=%s AND source_text_hash=%s",
+                    (doc_id, unit_id, source_text_hash),
+                )
+            else:
+                existing = client.execute(
+                    "SELECT extraction_id FROM policy_extractions WHERE doc_id=%s AND source_text_hash=%s",
+                    (doc_id, source_text_hash),
+                )
             if existing:
                 continue
 
             client.execute(
-                """INSERT INTO policy_extractions (extraction_id, doc_id, source_text, source_text_hash, extracted_fields, confidence, status, created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'draft', %s, %s)""",
-                (extraction_id, doc_id, source_text, source_text_hash, json.dumps(extracted_fields), confidence, now, now),
+                """INSERT INTO policy_extractions (extraction_id, doc_id, unit_id, source_text, source_text_hash, extracted_fields, confidence, status, created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'draft', %s, %s)""",
+                (extraction_id, doc_id, unit_id, source_text, source_text_hash, json.dumps(extracted_fields), confidence, now, now),
             )
             count += 1
         return count
@@ -525,6 +546,7 @@ class PipelineStore:
         return {
             "extraction_id": row["extraction_id"],
             "doc_id": row["doc_id"],
+            "unit_id": row.get("unit_id", "") or "",
             "doc_title": row.get("doc_title", ""),
             "source_text": row.get("source_text", ""),
             "source_text_hash": row.get("source_text_hash", ""),

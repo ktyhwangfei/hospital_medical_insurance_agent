@@ -31,18 +31,21 @@ class TestSemanticMigration:
         for stmt in SEMANTIC_LAYER_STATEMENTS:
             assert "PRIMARY KEY" in stmt.sql.upper()
 
-    def test_exactly_five_tables_defined(self):
+    def test_semantic_alignment_tables_are_defined(self):
         table_names: list[str] = []
         for stmt in SEMANTIC_LAYER_STATEMENTS:
             name = _extract_table_name(stmt.sql)
             assert name is not None, f"Could not extract table name from: {stmt.sql}"
             table_names.append(name)
-        assert len(table_names) == 5
+        assert len(table_names) == 8
         assert "business_domain" in table_names
         assert "business_object" in table_names
         assert "metric" in table_names
         assert "value_domain" in table_names
         assert "value_domain_mapping" in table_names
+        assert "metric_source_binding" in table_names
+        assert "source_value_mapping" in table_names
+        assert "standard_value_proposal" in table_names
 
     def test_metric_has_usage_count_and_quality_score(self):
         metric_ddl = _get_ddl_by_table("metric")
@@ -61,3 +64,8 @@ class TestSemanticMigration:
     def test_value_domain_mapping_has_unique_constraint(self):
         mapping_ddl = _get_ddl_by_table("value_domain_mapping")
         assert "UNIQUE(domain_code, source_value)" in mapping_ddl
+
+    def test_metric_source_binding_keeps_source_version_and_uniqueness(self):
+        binding_ddl = _get_ddl_by_table("metric_source_binding")
+        assert "source_version" in binding_ddl
+        assert "UNIQUE(metric_code, source_type, source_ref, source_field, source_version)" in binding_ddl

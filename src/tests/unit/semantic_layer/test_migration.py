@@ -22,8 +22,8 @@ class TestSemanticMigration:
                 f"Statement missing PRIMARY KEY: {stmt.sql[:80]}..."
             )
 
-    def test_exactly_five_tables_defined(self):
-        """V1 should create exactly 5 tables."""
+    def test_semantic_alignment_tables_are_defined(self):
+        """语义层应包含双来源字段和值域对齐表。"""
         table_names = []
         for stmt in SEMANTIC_LAYER_STATEMENTS:
             # Extract table name: CREATE TABLE IF NOT EXISTS <name> (
@@ -32,12 +32,15 @@ class TestSemanticMigration:
             paren_pos = sql.index("(", exists_pos)
             table_name = sql[exists_pos:paren_pos].strip().strip('"').strip("'")
             table_names.append(table_name)
-        assert len(table_names) == 5, f"Expected 5 tables, got {len(table_names)}: {table_names}"
+        assert len(table_names) == 8, f"Expected 8 tables, got {len(table_names)}: {table_names}"
         assert "business_domain" in table_names
         assert "business_object" in table_names
         assert "metric" in table_names
         assert "value_domain" in table_names
         assert "value_domain_mapping" in table_names
+        assert "metric_source_binding" in table_names
+        assert "source_value_mapping" in table_names
+        assert "standard_value_proposal" in table_names
 
     def test_metric_has_usage_count_and_quality_score(self):
         """Metric table must include data value exploration fields."""

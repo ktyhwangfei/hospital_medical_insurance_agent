@@ -603,6 +603,11 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 可见性范围 | `VisibilityScope` | **Value Object** | Pydantic `BaseModel` | 知识资产的角色/租户/院区可见性控制 |
 | 知识扩展状态 | `KnowledgeExtensionStatus` | **Value Object** | `StrEnum` | "success" / "no_hit" / "partial_degraded" 等 |
 | 引用来源 | `Citation` | **Value Object** | Pydantic `BaseModel` | 知识输出的来源追溯（**存在两份：domain 和 knowledge 各有一份**） |
+| 审核通过单元 | `ApprovedUnit` | **Value Object** | Pydantic `BaseModel` | 单元页审核通过、可进入知识结构化阶段的政策 Unit |
+| 政策知识项 | `KnowledgeItem` | **Entity** | Pydantic `BaseModel` | 从一个 Unit 提炼的独立结构化知识，以稳定 `knowledge_id` 标识 |
+| 指标来源绑定 | `MetricSourceBinding` | **Entity** | Pydantic `BaseModel` | 将结构化字段或政策 Knowledge 字段绑定到统一标准指标，保留来源版本和证据 |
+| 来源值映射 | `SourceValueMapping` | **Entity** | Pydantic `BaseModel` | 将某个来源字段的原始值映射到标准指标的统一标准值 |
+| 标准值提案 | `StandardValueProposal` | **Entity** | Pydantic `BaseModel` | 现有标准值域无法承接来源值时提交的人工审核草稿 |
 
 #### 业务规则
 
@@ -610,6 +615,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - 错误码知识库支持 PostgreSQL 和内存两种存储，通过配置切换
 - 知识资产使用 `VisibilityScope` 控制可见性（角色 + 租户 + 院区）
 - `Citation` 在 `src/domain/common/models.py` 和 `src/knowledge_extension/common/models.py` 各有一份，需要注意区分
+- 结构化字段与政策 Knowledge 字段是两类权威来源，通过 `MetricSourceBinding` 多对一汇聚到同一标准指标；不得分别建立平行指标体系
+- 新指标、来源值映射和标准值提案默认均为 `draft`，只有语义层独立审核动作可以发布
 
 #### 生命周期
 

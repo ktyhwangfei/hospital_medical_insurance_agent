@@ -170,6 +170,23 @@ class SemanticRegistry:
         """列全部指标，或按 object_code 过滤（object_code=None 返回全部）。"""
         return self._store.list_metrics(object_code=object_code)
 
+    def save_metric_draft(self, metric: Metric) -> None:
+        """通过公开边界保存草稿指标，禁止调用方直接访问私有 store。"""
+        if metric.status != "draft":
+            raise ValueError("新建指标必须先保存为 draft")
+        if self._store.get_object(metric.object_code) is None:
+            raise ValueError(f"对象 '{metric.object_code}' 不存在")
+        self._store.save_metric(metric)
+
+    def get_value_domain(self, domain_code: str) -> Optional[ValueDomain]:
+        return self._store.get_value_domain(domain_code)
+
+    def save_value_domain(self, value_domain: ValueDomain) -> None:
+        self._store.save_value_domain(value_domain)
+
+    def save_value_mapping(self, mapping: ValueDomainMapping) -> None:
+        self._store.save_value_mapping(mapping)
+
     def get_metric_mapping(
         self, object_code: str, metric_codes: list[str],
         version: Optional[str] = None,

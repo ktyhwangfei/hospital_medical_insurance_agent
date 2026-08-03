@@ -655,13 +655,13 @@ function UnitsContent() {
     setBusy('')
   }
   // 需求2：为无提取记录的单元触发单条 LLM 提取
-  async function triggerLeafExtract(leafText: string) {
+  async function triggerLeafExtract(unitId: string, leafText: string) {
     if (!selectedDocId || !leafText.trim()) return
     setBusy(selectedDocId)
     try {
       const r = await fetch(`${API}/documents/${selectedDocId}/extract-leaf`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_text: leafText }),
+        body: JSON.stringify({ unit_id: unitId, source_text: leafText }),
       })
       if (r.ok) { const d = await r.json(); flash(`提取完成：新建 ${d.extractions_created || 0} 条记录`); await refreshUnits(selectedDocId); fetchDocs() }
       else { const d = await r.json().catch(() => ({})); flash(`提取失败：${d.detail?.message || '未知错误'}`) }
@@ -1019,7 +1019,7 @@ function UnitsContent() {
                     onConfirmReject={() => singleReason.trim() ? batchAudit([u.leaf.node_id], 'reject', singleReason.trim()) : flash('请填驳回原因')}
                     onSetSingleReason={setSingleReason}
                     onReextract={() => batchReextract([u.leaf.node_id])}
-                    onExtractLeaf={() => triggerLeafExtract(u.leaf.text)}
+                    onExtractLeaf={() => triggerLeafExtract(u.leaf.node_id, u.leaf.text)}
                     onResolveDup={() => setDupModalKey(u.leaf.node_id)}
                     unitRef={(el) => { if (el) unitRefs.current.set(u.leaf.node_id, el); else unitRefs.current.delete(u.leaf.node_id) }} />
                 ))}

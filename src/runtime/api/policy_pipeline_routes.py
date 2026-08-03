@@ -30,7 +30,7 @@ from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStor
 from src.knowledge_extension.rule_explanation.pipeline_orchestrator import PipelineOrchestrator
 from src.shared.schemas.responses import error_detail
 from src.data_platform.storage.postgresql.policy_meta_store import PolicyMetaStore
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -337,16 +337,37 @@ def trigger_extraction(doc_id: str):
     return result
 
 
+class ExtractLeafRequest(BaseModel):
+    """单个政策单元提取请求，必须携带稳定 Unit 标识。"""
+
+    unit_id: str = Field(min_length=1, max_length=64)
+    source_text: str = Field(min_length=1)
+
+
 @router.post("/documents/{doc_id}/extract-leaf")
-async def extract_single_leaf(doc_id: str, request: Request):
+def extract_single_leaf(doc_id: str, request: ExtractLeafRequest):
     """对单个叶子单元触发 LLM 提取（用于无提取记录的单元）。"""
     import traceback
-    body = await request.json()
-    source_text = body.get("source_text", "").strip()
+    from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import parse_kept_leaves
+
+    source_text = request.source_text.strip()
     if not source_text:
         raise HTTPException(status_code=400, detail=error_detail("BAD_REQUEST", "source_text 不能为空", {}))
+    document = _get_store().get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail=error_detail("NOT_FOUND", "文档不存在", {"doc_id": doc_id}))
+    _root, _by_id, _all_leaves, kept = parse_kept_leaves(
+        document.get("content_text", "") or "",
+        document.get("title", "") or "",
+    )
+    if request.unit_id not in {leaf.node_id for leaf in kept}:
+        raise HTTPException(status_code=400, detail=error_detail(
+            "INVALID_UNIT",
+            "unit_id 不属于当前文档的有效单元",
+            {"doc_id": doc_id, "unit_id": request.unit_id},
+        ))
     try:
-        result = _get_orchestrator().extract_single(doc_id, source_text)
+        result = _get_orchestrator().extract_single(doc_id, source_text, unit_id=request.unit_id)
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=error_detail("EXTRACTION_ERROR", str(e), {"doc_id": doc_id}))
