@@ -37,6 +37,19 @@ class KnowledgeConfidence(BaseModel):
     uncertainties: list[str] = Field(default_factory=list)
 
 
+class StandardizedField(BaseModel):
+    """政策来源字段到统一标准指标和值域的对齐结果。"""
+
+    source_field: str
+    source_value: Any
+    status: Literal["mapped", "unmapped", "not_applicable", "invalid"]
+    metric_code: str | None = None
+    metric_name: str | None = None
+    value_domain: str | None = None
+    standard_value: Any | None = None
+    binding_id: str | None = None
+
+
 class KnowledgeItem(BaseModel):
     """一条可独立选择、测试和追溯的政策知识。"""
 
@@ -47,6 +60,7 @@ class KnowledgeItem(BaseModel):
     business_sentence: str
     source_text: str
     fields: list[KnowledgeField]
+    standardized_fields: list[StandardizedField] = Field(default_factory=list)
     confidence: KnowledgeConfidence
     citations: list[KnowledgeCitation]
 
@@ -70,5 +84,19 @@ class KnowledgeWorkbenchDocument(BaseModel):
 
     doc_id: str
     doc_title: str
+    contract_version: str | None = None
     units: list[ApprovedUnit]
 
+
+class WorkbenchDocumentSummary(BaseModel):
+    """知识工作台文档选择器条目。"""
+
+    doc_id: str
+    doc_title: str
+    approved_unit_count: int
+    knowledge_count: int
+
+
+class WorkbenchDocumentList(BaseModel):
+    items: list[WorkbenchDocumentSummary]
+    total: int

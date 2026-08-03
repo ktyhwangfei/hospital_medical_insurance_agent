@@ -156,7 +156,7 @@
   1. `python -m pytest src/tests/unit/knowledge_extension/test_semantic_alignment.py src/tests/unit/semantic_layer -v --tb=short`
   2. `python -m pytest src/tests/integration/api/test_semantic_alignment_api.py src/tests/integration/api/test_semantic_extraction_schema.py -v --tb=short`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   Commit: `feat: 支持双来源指标和值域统一对齐`
 
@@ -170,19 +170,19 @@
 - Test: `src/tests/unit/knowledge_extension/test_knowledge_workbench.py`
 - Test: `src/tests/integration/api/test_policy_workbench_api.py`
 
-- [ ] **Step 1: Write failing mapping tests**
+- [x] **Step 1: Write failing mapping tests**
 
   Assert field states `mapped/unmapped/not_applicable/invalid`; raw and standard values are both preserved; mapping is bound to the published `zcgz` contract version; unavailable semantic registry returns a typed 503 and never an empty successful contract.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
   Run: `python -m pytest src/tests/unit/knowledge_extension/test_knowledge_workbench.py -v --tb=short -k mapping`
 
-- [ ] **Step 3: Implement read-only projection**
+- [x] **Step 3: Implement read-only projection**
 
   Expose `GET /policy-workbench/documents` and `GET /policy-workbench/documents/{doc_id}` with response models. The document response contains approved Unit list, selected contract version, Knowledge confidence, field mapping and citations. Reuse `build_extraction_schema(registry, "zcgz")` plus public alignment queries.
 
-- [ ] **Step 4: Verify T1 then T2a**
+- [x] **Step 4: Verify T1 then T2a**
 
   Run in order:
 

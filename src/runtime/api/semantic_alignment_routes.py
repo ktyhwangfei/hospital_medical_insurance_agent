@@ -1,14 +1,11 @@
 """结构化数据与政策知识统一指标/值域对齐 API。"""
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.knowledge_extension.rule_explanation.semantic_alignment import (
     CreateMetricDraft,
-    InMemorySemanticAlignmentStore,
     MetricSourceBinding,
     MetricSourceBindingDraft,
     SemanticAlignmentService,
@@ -16,9 +13,9 @@ from src.knowledge_extension.rule_explanation.semantic_alignment import (
     SourceValueMappingDraft,
     StandardValueProposal,
     StandardValueProposalDraft,
+    get_semantic_alignment_service,
 )
 from src.semantic_layer.models import Metric
-from src.semantic_layer.registry import get_semantic_registry
 from src.shared.schemas.responses import error_detail
 
 
@@ -27,21 +24,8 @@ router = APIRouter(
     tags=["semantic-alignment"],
 )
 
-_service: SemanticAlignmentService | None = None
-
-
 def _get_service() -> SemanticAlignmentService:
-    global _service
-    if _service is None:
-        if os.environ.get("USE_MEMORY_STORAGE") == "1":
-            store = InMemorySemanticAlignmentStore()
-        else:
-            from src.data_platform.storage.postgresql.semantic_alignment_store import (
-                PostgresSemanticAlignmentStore,
-            )
-            store = PostgresSemanticAlignmentStore()
-        _service = SemanticAlignmentService(get_semantic_registry(), store)
-    return _service
+    return get_semantic_alignment_service()
 
 
 def _bad_request(exc: ValueError) -> HTTPException:

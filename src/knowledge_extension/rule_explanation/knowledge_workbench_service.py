@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
     ApprovedUnit,
@@ -13,11 +13,25 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_models import 
     KnowledgeField,
     KnowledgeItem,
     KnowledgeWorkbenchDocument,
+    StandardizedField,
+    WorkbenchDocumentList,
+    WorkbenchDocumentSummary,
 )
 from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import (
     match_leaves,
     parse_kept_leaves,
 )
+
+if TYPE_CHECKING:
+    from src.knowledge_extension.rule_explanation.semantic_alignment import (
+        SemanticAlignmentService,
+    )
+    from src.semantic_layer.models import Metric
+    from src.semantic_layer.registry import SemanticRegistry
+
+
+class SemanticContractUnavailable(RuntimeError):
+    """已发布语义契约无法读取，工作台不得伪装为空结果。"""
 
 
 class PipelineReadPort(Protocol):
@@ -31,6 +45,14 @@ class PipelineReadPort(Protocol):
         page_size: int = 1000,
         doc_id: str = "",
         status: str = "",
+    ) -> dict[str, Any]: ...
+
+    def list_documents(
+        self,
+        page: int = 1,
+        page_size: int = 100,
+        status: str = "",
+        keyword: str = "",
     ) -> dict[str, Any]: ...
 
 
@@ -162,13 +184,38 @@ def _unit_status(extractions: list[dict[str, Any]], audit: dict[str, Any] | None
 class KnowledgeWorkbenchService:
     """组合政策结构与提取记录，不产生任何写操作。"""
 
-    def __init__(self, pipeline_store: PipelineReadPort) -> None:
+    def __init__(
+        self,
+        pipeline_store: PipelineReadPort,
+        registry: "SemanticRegistry | None" = None,
+        alignment_service: "SemanticAlignmentService | None" = None,
+    ) -> None:
         self._pipeline_store = pipeline_store
+        self._registry = registry
+        self._alignment_service = alignment_service
+
+    def list_documents(self) -> WorkbenchDocumentList:
+        """只列出至少含一个审核通过 Unit 的政策文档。"""
+        source = self._pipeline_store.list_documents(page=1, page_size=1000)
+        items: list[WorkbenchDocumentSummary] = []
+        for document in source.get("items", []):
+            workbench = self.get_document(str(document.get("doc_id") or ""))
+            if not workbench.units:
+                continue
+            items.append(WorkbenchDocumentSummary(
+                doc_id=workbench.doc_id,
+                doc_title=workbench.doc_title,
+                approved_unit_count=len(workbench.units),
+                knowledge_count=sum(unit.knowledge_count for unit in workbench.units),
+            ))
+        return WorkbenchDocumentList(items=items, total=len(items))
 
     def get_document(self, doc_id: str) -> KnowledgeWorkbenchDocument:
         document = self._pipeline_store.get_document(doc_id)
         if document is None:
             raise ValueError(f"政策文档不存在: {doc_id}")
+
+        contract_version, published_metrics = self._load_contract()
 
         _root, _by_id, _all_leaves, kept = parse_kept_leaves(
             str(document.get("content_text") or ""),
@@ -214,6 +261,8 @@ class KnowledgeWorkbenchService:
                             extraction=extraction,
                             relationship_source=relationship_source,
                             rule=rule,
+                            contract_version=contract_version,
+                            published_metrics=published_metrics,
                         )
                     )
             units.append(
@@ -232,19 +281,41 @@ class KnowledgeWorkbenchService:
         return KnowledgeWorkbenchDocument(
             doc_id=doc_id,
             doc_title=str(document.get("title") or ""),
+            contract_version=contract_version,
             units=units,
         )
 
-    @staticmethod
+    def _load_contract(self) -> tuple[str | None, dict[str, "Metric"]]:
+        if self._registry is None:
+            return None, {}
+        try:
+            obj = self._registry.get_object("zcgz")
+            if obj is None:
+                raise SemanticContractUnavailable("语义对象 zcgz 不存在")
+            metrics = {
+                metric.metric_code.split(".", 1)[-1]: metric
+                for metric in self._registry.list_metrics("zcgz")
+                if metric.status == "published"
+            }
+            return obj.current_version or obj.version, metrics
+        except SemanticContractUnavailable:
+            raise
+        except Exception as exc:
+            raise SemanticContractUnavailable(str(exc)) from exc
+
     def _knowledge_item(
+        self,
         *,
         document: dict[str, Any],
         unit_id: str,
         extraction: dict[str, Any],
         relationship_source: str,
         rule: dict[str, Any],
+        contract_version: str | None,
+        published_metrics: dict[str, "Metric"],
     ) -> KnowledgeItem:
         extraction_id = str(extraction.get("extraction_id") or "")
+        knowledge_id = _knowledge_id(extraction_id, rule)
         source_text = str(rule.get("source_text") or extraction.get("source_text") or "")
         structured_fields = [
             KnowledgeField(
@@ -255,15 +326,44 @@ class KnowledgeWorkbenchService:
             for key, value in rule.items()
             if key not in _NON_BUSINESS_FIELDS and _present(value)
         ]
+        standardized_fields = self._standardize_fields(
+            doc_id=str(document.get("doc_id") or ""),
+            unit_id=unit_id,
+            knowledge_id=knowledge_id,
+            contract_version=contract_version,
+            fields=structured_fields,
+            published_metrics=published_metrics,
+        )
+        confidence = _confidence(rule, extraction)
+        domain_results = [
+            item for item in standardized_fields if item.value_domain is not None
+        ]
+        if domain_results:
+            compliance = sum(item.status == "mapped" for item in domain_results) / len(domain_results)
+            known_scores = (
+                confidence.completeness,
+                confidence.source_fidelity,
+                confidence.model_confidence,
+                compliance,
+            )
+            confidence = confidence.model_copy(update={
+                "value_domain_compliance": round(compliance, 4),
+                "overall": round(sum(known_scores) / len(known_scores), 4),
+                "uncertainties": [
+                    item for item in confidence.uncertainties
+                    if item != "值域合规性待标准化契约验证"
+                ],
+            })
         return KnowledgeItem(
-            knowledge_id=_knowledge_id(extraction_id, rule),
+            knowledge_id=knowledge_id,
             unit_id=unit_id,
             extraction_id=extraction_id,
             relationship_source=relationship_source,
             business_sentence=_sentence(rule),
             source_text=source_text,
             fields=structured_fields,
-            confidence=_confidence(rule, extraction),
+            standardized_fields=standardized_fields,
+            confidence=confidence,
             citations=[
                 KnowledgeCitation(
                     source_id=str(document.get("doc_id") or ""),
@@ -274,3 +374,74 @@ class KnowledgeWorkbenchService:
                 )
             ],
         )
+
+    def _standardize_fields(
+        self,
+        *,
+        doc_id: str,
+        unit_id: str,
+        knowledge_id: str,
+        contract_version: str | None,
+        fields: list[KnowledgeField],
+        published_metrics: dict[str, "Metric"],
+    ) -> list[StandardizedField]:
+        if self._registry is None:
+            return []
+        source_ref = f"{doc_id}/{unit_id}/{knowledge_id}"
+        results: list[StandardizedField] = []
+        for field in fields:
+            metric = published_metrics.get(field.field_code)
+            binding = None
+            if self._alignment_service is not None:
+                for candidate in published_metrics.values():
+                    bindings = self._alignment_service.list_metric_bindings(candidate.metric_code)
+                    binding = next((item for item in bindings if (
+                        item.status == "published"
+                        and item.source_type == "policy_knowledge"
+                        and item.source_ref == source_ref
+                        and item.source_field == field.field_code
+                        and item.source_version == (contract_version or item.source_version)
+                    )), None)
+                    if binding is not None:
+                        metric = candidate
+                        break
+            if metric is None:
+                results.append(StandardizedField(
+                    source_field=field.field_code,
+                    source_value=field.raw_value,
+                    status="unmapped",
+                ))
+                continue
+            standard_value = field.raw_value
+            status = "mapped"
+            if metric.value_domain:
+                domain = self._registry.get_value_domain(metric.value_domain)
+                if domain is None:
+                    status = "invalid"
+                    standard_value = None
+                elif field.raw_value in domain.standard_values:
+                    standard_value = field.raw_value
+                elif binding is not None and self._alignment_service is not None:
+                    resolved = self._alignment_service.resolve_source_value(
+                        binding.binding_id,
+                        str(field.raw_value),
+                    )
+                    if resolved == str(field.raw_value):
+                        status = "invalid"
+                        standard_value = None
+                    else:
+                        standard_value = resolved
+                else:
+                    status = "invalid"
+                    standard_value = None
+            results.append(StandardizedField(
+                source_field=field.field_code,
+                source_value=field.raw_value,
+                status=status,
+                metric_code=metric.metric_code,
+                metric_name=metric.name,
+                value_domain=metric.value_domain,
+                standard_value=standard_value,
+                binding_id=binding.binding_id if binding else None,
+            ))
+        return results

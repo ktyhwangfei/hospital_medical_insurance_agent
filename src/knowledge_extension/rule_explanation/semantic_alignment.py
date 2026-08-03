@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal, Protocol
@@ -271,3 +272,26 @@ class SemanticAlignmentService:
         if binding is None:
             raise ValueError(f"来源绑定不存在: {binding_id}")
         return binding
+
+
+_semantic_alignment_service: SemanticAlignmentService | None = None
+
+
+def get_semantic_alignment_service() -> SemanticAlignmentService:
+    """获取统一语义对齐服务，供语义层和政策工作台共同使用。"""
+    global _semantic_alignment_service
+    if _semantic_alignment_service is None:
+        from src.semantic_layer.registry import get_semantic_registry
+
+        if os.environ.get("USE_MEMORY_STORAGE") == "1":
+            store: SemanticAlignmentStore = InMemorySemanticAlignmentStore()
+        else:
+            from src.data_platform.storage.postgresql.semantic_alignment_store import (
+                PostgresSemanticAlignmentStore,
+            )
+            store = PostgresSemanticAlignmentStore()
+        _semantic_alignment_service = SemanticAlignmentService(
+            get_semantic_registry(),
+            store,
+        )
+    return _semantic_alignment_service
