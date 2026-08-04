@@ -260,6 +260,7 @@
 | 2026-07-29 | **v2 维度值标准化**：hosp_lv/med_type 对齐 seed.py 业务字典（社区→一级、住院→住院-普通住院等），rule_to_entity 入库标准化 + 批量 upsert 88 条；scalar retrieval baseline 从 xfail 转 pass（支付比例组 0→3 命中）。剩余 gap：退休人员 60%折算公式是 v2 提取遗漏（rule_type 无"计算公式"），待数据补充 | §2 数据质量 |
 | 2026-07-31 | **Runtime 建设阶段三（全面验证）完成**：补 63 个新模块单元测试 + 3 个性能基准全绿；三层回归与 HEAD 基线零新增失败（顺带修复 `unit/shared/__init__.py` 缺失的 3 个收集错误）；USE_MEMORY_STORAGE=1 灰度零功能回归；`src/domain/AGENTS.md` 新增 §13.5 Runtime 上下文；架构设计.md 会话上下文服务域补充 Runtime 定位 | §3 Runtime 建设 |
 | 2026-08-03 | **政策问答前端持续对话改造（阶段一+阶段二）**：①`usePolicyQAStream` hook（session_id 跨轮复用 + 自解析 SSE 的 context_need/memory_update/reasoning_step/result，snake→camel 在 hook 层统一转换）②三区工作区（顶栏 SessionAnchorBar 锚点带 + 主体切换横幅、左栏 MemoryPanel 会话记忆、主区 ChatStream 持续对话）③结算单号降级为「首帧锚定 + @换结算/@换患者/@新会话」④首轮 richResult 费用分解保留（复用 SettlementExplanationPage）⑤推理链可折叠（ReasoningChainCollapsible）。前端 vitest 69 passed（含本次新增 20 项）、`next build` EXIT=0。顺手修复预存 build 阻塞：settlement-explanation-page TS 类型 + 3 页 useSearchParams 预渲染 | §3.5（前端政策问答） |
+| 2026-08-04 | **政策问答质量修复 + Skill 驱动迁移**：①修复链路三连（MSSQL 环境变量注入→查询无结果；POSTGRES_PASSWORD 默认值→记忆不沉淀；subject_changed 误判→横幅误弹）②P0/P1/P2 优化（dummy 降级真实数据模板 + answer_mode 来源徽标 + 记忆业务键值 + 话题锚点 + 推理链业务化 + error 事件契约）③严肃化 + 回答价值门控（未获取/分段不完整拒绝，引导咨询医保办）④**SSE 对话流迁移 Skill 驱动执行**（旧编排器 PolicyQAOrchestrator 退役；skill dummy 降级 + strategy 单例缓存串答案修复；`DATA_SOURCE_MODE=real_db` 注入；响应 30s+→1.3s）。落地记录见 `docs/steering/医保Agent-政策问答前端改造-落地记录-V1.0.md` | §3.5（前端政策问答）/ §3（Runtime） |
 
 ---
 
