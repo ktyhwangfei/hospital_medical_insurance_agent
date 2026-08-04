@@ -60,18 +60,16 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
     def build_patient_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
-        if not hasattr(self, "_cached_llm_output"):
-            self._cached_llm_output = self._generate_via_llm(ctx, evidence, policy_status)
-        return self._cached_llm_output.conclusion
+        # 不缓存：strategy 为单例，缓存会跨请求/跨结算单串答案（生产 bug）
+        return self._generate_via_llm(ctx, evidence, policy_status).conclusion
 
     # ── office answer ──────────────────────────────────────────
 
     def build_office_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
-        if not hasattr(self, "_cached_llm_output"):
-            self._cached_llm_output = self._generate_via_llm(ctx, evidence, policy_status)
-        return self._cached_llm_output.office_note
+        # 不缓存：同上
+        return self._generate_via_llm(ctx, evidence, policy_status).office_note
 
     # ── LLM generation ─────────────────────────────────────────
 
@@ -91,6 +89,14 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
             ParsedOutput (conclusion + office_note)
         """
         import yaml
+
+        # Step 0: dummy 调试模式（MODEL_BASE_URL=dummy）→ 模型只返回固定 mock，
+        # 不可作为回答。降级为基于真实结算数据的确定性模板（不写死金额）。
+        from src.model_service.gateway import ModelGateway as _GatewayCls
+        _gw = _GatewayCls()
+        _cfg = getattr(_gw, "_config", None)
+        if getattr(_cfg, "base_url", "") == "dummy":
+            return self._build_dummy_fallback(ctx, evidence, policy_status)
 
         # Step 1: 提取分段比例
         segment_ratios = self._extract_segment_ratios(evidence)
@@ -130,6 +136,51 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
         )
 
         return parsed
+
+    # ── dummy 调试模式降级 ─────────────────────────────────────
+
+    def _build_dummy_fallback(
+        self, ctx: Any, evidence: list[dict], policy_status: str
+    ) -> ParsedOutput:
+        """dummy 模式（无真实 LLM）下的确定性回答：基于真实结算数据生成。
+
+        不写死金额；分段规则不足时明确说明无法精确还原，并引导咨询医保办。
+        """
+        amount = self._fmt_money(getattr(ctx, "basic_pooling_self_pay", 0))
+        deductible = self._fmt_money(getattr(ctx, "deductible", 0))
+        seg = self._extract_segment_ratios(evidence)
+
+        if seg.get("has_complete") and seg.get("retiree"):
+            conclusion = (
+                f"根据本次结算数据，您的统筹自付金额为 {amount} 元。\n\n"
+                "该金额由基本医保统筹段内按政策比例分段计算得出，"
+                "并叠加退休人员 60% 自付折算。"
+            )
+            office_note = (
+                f"统筹自付 {amount} 元（来源：yb_zyfdxx.bdtczf）。"
+                f"分段依据：职工分段比例 × 退休系数 60%。"
+            )
+        elif policy_status == "full_policy_matched":
+            conclusion = (
+                f"根据本次结算数据，您的统筹自付金额为 {amount} 元，"
+                f"起付线为 {deductible} 元。"
+            )
+            office_note = (
+                f"统筹自付 {amount} 元（来源：yb_zyfdxx.bdtczf），起付线 {deductible} 元。"
+            )
+        else:
+            conclusion = (
+                f"根据本次结算数据，您的统筹自付金额为 {amount} 元。\n\n"
+                "当前未检索到完整的分段支付比例政策规则，无法精确还原计算过程。"
+                "为避免误导，建议携带结算单前往医院医保办或拨打当地医保局服务热线咨询。"
+                "\n\n本回答仅供参考，不作为报销或结算依据。"
+            )
+            office_note = (
+                f"统筹自付 {amount} 元（来源：yb_zyfdxx.bdtczf）；"
+                f"政策匹配状态：{policy_status}，分段规则不完整，无法精确还原。"
+            )
+
+        return ParsedOutput(conclusion=conclusion, office_note=office_note)
 
     # ── calculation trace ──────────────────────────────────────
 

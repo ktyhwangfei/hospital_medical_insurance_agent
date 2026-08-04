@@ -19,24 +19,17 @@ from fastapi.responses import StreamingResponse
 
 from src.model_service.gateway import ModelGateway
 from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
-from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
 from src.runtime.policy_qa.models import PolicyQARequest, PolicyQAResponse
 from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
-from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
-from src.runtime.policy_qa.question_rewriter import QuestionRewriter
-from src.runtime.policy_qa.sql_data_fetcher import SQLDataFetcher
 from src.runtime.policy_qa.settlement_data_provider import (
     SettlementNotFoundError,
     create_settlement_data_provider,
 )
 from src.runtime.policy_qa.structured_policy_retriever import (
-    StructuredPolicyRuleRetriever,
-    NormalizedPolicyContext,
     retrieve_policy_evidence,
 )
 from src.config.production import MILVUS_HOST, MILVUS_PORT
 from src.skill_infra.skill_router import route_question, get_assembler, get_skill_manifest
-from src.runtime.policy_qa.fee_item_detector import FeeItemDetector
 from src.runtime.policy_qa.persistence import (
     ensure_session_and_workflow,
     record_qa_task,
@@ -52,8 +45,8 @@ router = APIRouter()
 # 搜索引擎初始化超时（秒）：PolicyRulesSearchEngine 构造会加载 sentence-transformer
 # embedding 模型（本地约 19-32s，含首次下载），超时需能容纳该加载；Milvus 未就绪时
 # 快速降级不阻塞流式响应。失败后进入 120s 冷却，避免每轮重复等待。
-_SEARCH_ENGINE_INIT_TIMEOUT = 60
-_SEARCH_ENGINE_FAIL_COOLDOWN = 120
+# （注：_init_search_engine 已随旧编排器退役删除；结构化政策检索走 skill 查询计划，
+#  由 structured_policy_retriever 直接连 Milvus，不加载 embedding 模型。）
 
 
 def _sse_event(event_type: str, data: dict | str) -> str:
@@ -94,66 +87,6 @@ def _sanitize(obj: dict) -> dict:
         else:
             result[key] = value
     return result
-
-
-# 搜索引擎模块级缓存：PolicyRulesSearchEngine 构造会加载 sentence-transformer
-# embedding 模型（约 19-32s），若每次请求重新初始化，每轮都白等。初始化成功后复用；
-# 失败记录时间戳进入冷却期（避免 Milvus 挂起时每轮重复等待），冷却后重试。
-import time as _time_module
-_search_engine_cache: Any | None = None
-_search_engine_cache_valid = False
-_search_engine_last_fail_at = 0.0
-
-
-def _init_search_engine():
-    """初始化Milvus搜索引擎（带超时保护 + 模块级缓存 + 失败冷却）
-
-    MilvusClient 构造在 Milvus 代理未就绪时会长时间重试，
-    若不加超时，整个流式响应会被阻塞数分钟。
-    超时后快速降级（返回 None），与原 "except → None" 的降级意图一致。
-
-    Returns:
-        PolicyRulesSearchEngine实例或None
-    """
-    global _search_engine_cache, _search_engine_cache_valid, _search_engine_last_fail_at
-
-    # 缓存命中：复用已加载的引擎（含 embedding 模型），避免每轮 19s+ 重复加载
-    if _search_engine_cache_valid:
-        return _search_engine_cache
-
-    # 失败冷却：上次失败后短时间内直接降级，不重复等待
-    if _time_module.time() - _search_engine_last_fail_at < _SEARCH_ENGINE_FAIL_COOLDOWN:
-        return None
-
-    import concurrent.futures
-
-    try:
-        from src.runtime.policy_qa.policy_rules_search import PolicyRulesSearchEngine
-
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(
-            PolicyRulesSearchEngine,
-            host=MILVUS_HOST,
-            port=str(MILVUS_PORT),
-        )
-        try:
-            engine = future.result(timeout=_SEARCH_ENGINE_INIT_TIMEOUT)
-        except concurrent.futures.TimeoutError:
-            logger.warning(
-                f'Search engine init timed out after {_SEARCH_ENGINE_INIT_TIMEOUT}s, degrading'
-            )
-            _search_engine_last_fail_at = _time_module.time()
-            pool.shutdown(wait=False, cancel_futures=True)
-            return None
-        pool.shutdown(wait=False)
-        logger.info(f'Initialized PolicyRulesSearchEngine: {MILVUS_HOST}:{MILVUS_PORT}')
-        _search_engine_cache = engine
-        _search_engine_cache_valid = True
-        return engine
-    except Exception as e:
-        logger.warning(f'Failed to initialize search engine: {e}')
-        _search_engine_last_fail_at = _time_module.time()
-        return None
 
 
 async def _policy_qa_stream(
@@ -212,60 +145,17 @@ async def _policy_qa_stream(
     accumulated_steps: list[dict] = []
     
     try:
-        # 初始化组件
-        # 1. SQL数据获取器
-        sql_fetcher = None
-        try:
-            print("[POLICY-QA] 初始化 SQL 数据获取器...", flush=True)
-            sql_fetcher = SQLDataFetcher()
-            print("[POLICY-QA] SQL 数据获取器初始化成功", flush=True)
-        except Exception as e:
-            print(f'[POLICY-QA] SQL 数据获取器初始化失败: {e}', flush=True)
-            logger.warning(f'Failed to initialize SQL fetcher: {e}')
-
-        # 2. 问题重写器
-        print("[POLICY-QA] 初始化问题重写器...", flush=True)
-        question_rewriter = QuestionRewriter()
-        print("[POLICY-QA] 问题重写器初始化成功", flush=True)
-
-        # 3. 搜索引擎 (Milvus)
-        print("[POLICY-QA] 初始化搜索引擎...", flush=True)
-        search_engine = _init_search_engine()
-        print(f'[POLICY-QA] 搜索引擎初始化: {'成功' if search_engine else '失败'}', flush=True)
-
-        # 4. 费用拆分计算Skill
-        print("[POLICY-QA] 初始化费用拆分计算Skill...", flush=True)
-        fee_skill = FeeDecompositionSkill()
-        print("[POLICY-QA] 费用拆分计算Skill初始化成功", flush=True)
-
-        # 5. 模型网关
+        # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
+        # 旧编排器（PolicyQAOrchestrator）已退役：政策检索/计算/回答统一走 skill 策略引擎。
+        provider = create_settlement_data_provider()
         model_gateway = None
         try:
-            print("[POLICY-QA] 初始化模型网关...", flush=True)
             model_gateway = ModelGateway()
-            print("[POLICY-QA] 模型网关初始化成功", flush=True)
         except Exception as e:
-            print(f'[POLICY-QA] 模型网关初始化失败: {e}', flush=True)
-            logger.warning(f'Failed to initialize model gateway: {e}')
-
-        # 6. 解释生成器（依赖模型网关）
-        print("[POLICY-QA] 初始化解释生成器...", flush=True)
+            logger.warning(f'Model gateway init failed: {e}')
         explanation_generator = ExplanationGenerator(model_gateway=model_gateway)
-        print("[POLICY-QA] 解释生成器初始化成功", flush=True)
 
-        # 创建编排器
-        print("[POLICY-QA] 创建编排器...", flush=True)
-        orchestrator = PolicyQAOrchestrator(
-            model_gateway=model_gateway,
-            sql_fetcher=sql_fetcher,
-            question_rewriter=question_rewriter,
-            search_engine=search_engine,
-            fee_skill=fee_skill,
-            explanation_generator=explanation_generator,
-        )
-        print("[POLICY-QA] 编排器创建成功，开始处理...", flush=True)
-
-        # 处理请求并yield SSE事件
+        # 处理请求并 yield SSE 事件（Skill 驱动：五步流程）
         step_count = 0
         public_steps: list[dict] = []          # 累积公开步骤
         result_patient_view = ""               # 最终结果：患者视角
@@ -283,180 +173,163 @@ async def _policy_qa_stream(
         trace_events_list: list[dict] = []
         trace_selected_skill_id: str = ""
 
-        async for response in orchestrator.process(request):
-            step_count += 1
-            logger.debug(f'[POLICY-QA] 步骤 {step_count}: {response.step} - {response.status}')
+        _loop = asyncio.get_event_loop()
 
-            # ── 内部数据写入日志，不返回前端 ──
-            if response.detail:
-                logger.debug(f'[POLICY-QA] [INTERNAL] step={response.step} detail={json.dumps(response.detail, ensure_ascii=False, default=str)[:500]}')
-            
-            # ── 构建公开步骤（仅含用户可展示字段）──
-            public_step = {
-                "step": response.step,
-                "status": response.status,
-            }
-            if response.public_message:
-                public_step["public_message"] = response.public_message
-            if response.public_detail:
-                public_step["public_detail"] = _sanitize(response.public_detail)
-            if response.detail:
-                public_step["detail"] = _sanitize(response.detail)
-            if response.error:
-                public_step["error"] = response.error
+        async def _yield_step(
+            step_name: str,
+            status: str,
+            public_message: str = "",
+            step_number: int = 0,
+        ) -> AsyncGenerator[str, None]:
+            """发送 step + trace_event（前端执行链路展示）。"""
+            step_evt: dict[str, Any] = {"step": step_name, "status": status}
+            if public_message:
+                step_evt["public_message"] = public_message
+            public_steps.append(step_evt)
+            accumulated_steps.append(step_evt)
+            yield _sse_event("step", _sanitize(step_evt))
+            await asyncio.sleep(0)
+            yield _sse_event("trace_event", _sanitize({
+                "step_id": step_name,
+                "step_name": step_name,
+                "step_number": step_number,
+                "status": status,
+            }))
+            await asyncio.sleep(0)
 
-            # ── v2: 发送 trace_event（如有）──
-            if response.trace_event is not None:
-                yield _sse_event("trace_event", _sanitize(response.trace_event))
-                await asyncio.sleep(0)
+        # ═══ Step 1: intent_detection（关键词 → 目标费用项）═══
+        _fee_item_keywords = [
+            ("deductible", ["起付线", "起付标准", "门槛费"]),
+            ("large_amount_self_pay", ["大额自付", "大额互助"]),
+            ("pooling_payment", ["统筹支付", "统筹报销"]),
+            ("personal_total_pay", ["个人总支付", "个人负担"]),
+            ("pooling_self_pay", ["统筹自付", "基本统筹自付", "统筹段个人承担"]),
+        ]
+        target_fee_item = "pooling_self_pay"
+        for _fi, _kws in _fee_item_keywords:
+            if any(_kw in (request.question or "") for _kw in _kws):
+                target_fee_item = _fi
+                break
+        async for _ev in _yield_step("intent_detection", "running", "识别问题意图…", 1):
+            yield _ev
+        async for _ev in _yield_step("intent_detection", "done", f"识别为「{target_fee_item}」费用解释", 1):
+            yield _ev
 
-            if response.status == "done":
-                public_steps.append(public_step)
-                accumulated_steps.append(public_step)  # 持久化用
+        # ═══ Step 2: skill_routing（SkillRouter 路由到技能）═══
+        skill_id = route_question(request.question) or "settlement_explain_skill"
+        assembler = get_assembler(skill_id)
+        if assembler is None:
+            raise RuntimeError(f"Skill '{skill_id}' 未加载")
+        trace_selected_skill_id = skill_id
+        async for _ev in _yield_step("skill_routing", "running", "匹配技能…", 2):
+            yield _ev
+        async for _ev in _yield_step("skill_routing", "done", f"匹配技能: {skill_id}", 2):
+            yield _ev
 
-                # ── 逐步骤记录 task（LLM/MCP/SQL）──
-                try:
-                    step_input: dict[str, Any] = {}
-                    step_output: dict[str, Any] = {}
-                    step_duration = None
+        # ═══ Step 3: settlement_query（真实结算数据）═══
+        async for _ev in _yield_step("settlement_query", "running", "查询真实结算数据…", 3):
+            yield _ev
+        settlement_context = await provider.get_settlement_context(request.settlement_id)
+        for _evt_type, _evt_payload in runtime_bridge.record_step(
+            session_id=session_id,
+            step="settlement_query",
+            detail={
+                "settlement_id": request.settlement_id,
+                "total_fee": settlement_context.total_amount,
+                "deductible": settlement_context.deductible,
+                "basic_pooling_self_pay": settlement_context.basic_pooling_self_pay,
+            },
+            settlement_id=request.settlement_id,
+        ):
+            yield _sse_event(_evt_type, _sanitize(_evt_payload))
+            await asyncio.sleep(0)
+        async for _ev in _yield_step("settlement_query", "done", "结算数据获取完成", 3):
+            yield _ev
 
-                    if response.step == "intent_detection":
-                        step_input = {"question": request.question}
-                        if response.detail and isinstance(response.detail, dict):
-                            step_output = {"intent": response.detail.get("intent", ""), "confidence": response.detail.get("confidence", 0)}
-                    elif response.step in ("settlement_query", "query_sql_data"):
-                        step_input = {"settlement_id": request.settlement_id}
-                        if response.detail and isinstance(response.detail, dict):
-                            step_output = response.detail
-                    elif response.step in ("policy_rule_search", "structured_policy_query"):
-                        step_input = {"question": request.question, "policy_filters": response.detail.get("policy_filters", []) if isinstance(response.detail, dict) else []}
-                        if response.detail and isinstance(response.detail, dict):
-                            step_output = {"rules_count": response.detail.get("rules_count", 0)}
-                    elif response.step in ("answer_assembly", "patient_view_generation"):
-                        step_input = {"question": request.question}
-                        step_output = {
-                            "patient_view": (response.patient_view or "")[:500],
-                            "office_view": (response.office_view or "")[:500],
-                        }
-                    elif response.detail and isinstance(response.detail, dict):
-                        step_output = response.detail
+        # ═══ Step 4: policy_rule_search（skill 查询计划 + 结构化检索）═══
+        async for _ev in _yield_step("policy_rule_search", "running", "检索政策规则…", 4):
+            yield _ev
+        _normalized_ctx: dict[str, Any] = {
+            "settlement_id": settlement_context.settlement_id,
+            "insu_type": _normalize_insu_type(settlement_context.insurance_type or "城镇职工"),
+            "med_type": _normalize_med_type(settlement_context.service_type or "普通住院"),
+            "hosp_lv": settlement_context.hospital_level or "三级医院",
+            "psn_type": settlement_context.person_type or "退休人员",
+            "target_field": assembler._get_fee_field(target_fee_item),
+            "target_amount": assembler._get_fee_amount(settlement_context, target_fee_item),
+        }
+        _custom_queries = assembler.build_policy_queries(target_fee_item)
+        _retrieval_result = await _loop.run_in_executor(
+            None,
+            lambda: retrieve_policy_evidence(
+                settlement_context=_normalized_ctx,
+                host=MILVUS_HOST,
+                port=str(MILVUS_PORT),
+                custom_queries=_custom_queries,
+            ),
+        )
+        policy_evidence: list[dict] = []
+        for _ev in _retrieval_result.selected_evidence:
+            policy_evidence.append({
+                "title": _ev.source_text[:80] + "..." if len(_ev.source_text) > 80 else _ev.source_text,
+                "clause": _ev.source_text,
+                "evidence_text": _ev.source_text,
+                "matched_reason": _ev.applied_reason or f"匹配规则类型: {_ev.rule_type}",
+                "rule_type": _ev.rule_type,
+                "score": _ev.score,
+                "source_text": _ev.source_text,
+                "payment_ratio": _ev.payment_ratio,
+                "amount_band": _ev.amount_band,
+                "rule_value": _ev.rule_value,
+            })
+        policy_status = "no_policy_matched"
+        if not _retrieval_result.missing_required_rules and len(policy_evidence) >= 2:
+            policy_status = "full_policy_matched"
+        elif len(policy_evidence) > 0:
+            policy_status = "partial_policy_matched"
+        for _evt_type, _evt_payload in runtime_bridge.record_step(
+            session_id=session_id,
+            step="policy_rule_search",
+            detail={"rules_count": len(policy_evidence), "policy_filters": []},
+        ):
+            yield _sse_event(_evt_type, _sanitize(_evt_payload))
+            await asyncio.sleep(0)
+        async for _ev in _yield_step(
+            "policy_rule_search", "done",
+            f"检索到 {len(policy_evidence)} 条政策规则" if policy_evidence else "未检索到匹配的政策规则",
+            4,
+        ):
+            yield _ev
 
-                    if response.trace_event and isinstance(response.trace_event, dict):
-                        step_duration = response.trace_event.get("duration_ms")
+        # ═══ Step 5: skill_execution（skill 策略引擎执行）═══
+        async for _ev in _yield_step("skill_execution", "running", "生成费用解释…", 5):
+            yield _ev
+        skill_result = await _loop.run_in_executor(
+            None,
+            lambda: assembler.execute(
+                settlement_context=settlement_context,
+                policy_evidence=policy_evidence,
+                policy_status=policy_status,
+                target_fee_item=target_fee_item,
+            ),
+        )
+        for _evt_type, _evt_payload in runtime_bridge.record_step(
+            session_id=session_id, step="answer_assembly", detail={},
+        ):
+            yield _sse_event(_evt_type, _sanitize(_evt_payload))
+            await asyncio.sleep(0)
+        async for _ev in _yield_step("skill_execution", "done", "费用解释生成完成", 5):
+            yield _ev
 
-                    record_step_task(
-                        workflow_id=workflow_id,
-                        step_id=response.step,
-                        step_name=response.step,
-                        status="completed",
-                        input_data=step_input,
-                        output_data=step_output,
-                        duration_ms=step_duration,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to record step task {response.step}: {e}")
-
-                # 捕获最终结果
-                if response.patient_view:
-                    result_patient_view = response.patient_view
-                if response.office_view:
-                    result_office_view = response.office_view
-                if response.policy_cards:
-                    result_policy_evidence = response.policy_cards
-
-                # 捕获结算溯源证据和计算步骤（calculate_explanation 步骤）
-                if response.step == "calculate_explanation" and response.detail:
-                    detail = response.detail
-                    # 分段计算步骤
-                    segments = detail.get("segments", {})
-                    if isinstance(segments, dict) and segments.get("segments"):
-                        result_calculation_steps = [
-                            {
-                                "segment_index": i + 1,
-                                "lower": float(seg.get("lower", 0)),
-                                "upper": float(seg.get("upper", 0)),
-                                "amount": float(seg.get("amount", 0)),
-                                "base_ratio": float(seg.get("base_ratio", 0)),
-                                "person_ratio": float(seg.get("person_ratio", 0)),
-                                "actual_ratio": float(seg.get("actual_ratio", 0)),
-                                "pay": float(seg.get("pay", 0)),
-                                "calculation": str(seg.get("calculation", "")),
-                                "policy_source": str(seg.get("policy_source", "")),
-                                "rule_id": str(seg.get("rule_id", "")),
-                            }
-                            for i, seg in enumerate(segments["segments"])
-                        ]
-                    # 结算溯源证据
-                    evidence_list = detail.get("evidence", [])
-                    if isinstance(evidence_list, list):
-                        result_settlement_evidence = [
-                            {
-                                "item": str(e.get("item", "")),
-                                "value": float(e.get("value", 0)),
-                                "source_table": str(e.get("source_table", "")),
-                                "source_field": str(e.get("source_field", "")),
-                                "policy_rule": e.get("policy_rule", {}),
-                                "calculation": e.get("calculation", {}),
-                            }
-                            for e in evidence_list
-                        ]
-
-                # ★ v2: 捕获 trace_result 数据
-                if response.step == "trace_result" and response.detail:
-                    tr = response.detail
-                    trace_run_id = tr.get("run_id", "") or ""
-                    trace_can_answer = bool(tr.get("can_answer", False))
-                    trace_partial_answer = bool(tr.get("partial_answer", False))
-                    trace_selected_skill_id = tr.get("selected_skill_id", "") or ""
-                    trace_events_list_raw = tr.get("trace_events", [])
-                    if isinstance(trace_events_list_raw, list):
-                        trace_events_list = trace_events_list_raw
-                    trace_can_answer_reason = tr.get("reason", "") or ""
-                    # 如果 trace_result 中有 patient_view/office_view，也捕获
-                    if response.patient_view:
-                        result_patient_view = response.patient_view
-                    if response.office_view:
-                        result_office_view = response.office_view
-
-                # 发送步骤 done 事件 — 不再添加人为延迟，立即推送
-                step_event = _sanitize(public_step)
-                yield _sse_event("step", step_event)
-                await asyncio.sleep(0)  # 仅出让事件循环，不阻塞
-
-                # ── Runtime 增强：沉淀记忆与推理步骤（降级返回空列表）──
-                for evt_type, evt_payload in runtime_bridge.record_step(
-                    session_id=session_id,
-                    step=response.step,
-                    detail=response.detail if isinstance(response.detail, dict) else {},
-                    settlement_id=request.settlement_id,
-                ):
-                    yield _sse_event(evt_type, _sanitize(evt_payload))
-                    await asyncio.sleep(0)
-
-            elif response.status == "streaming":
-                # 流式文本：发送 chunk 事件
-                chunk_data = {"step": response.step, "status": "streaming"}
-                if response.chunk:
-                    chunk_data["chunk"] = response.chunk
-                if response.public_message:
-                    chunk_data["public_message"] = response.public_message
-                yield _sse_event("step", _sanitize(chunk_data))
-                await asyncio.sleep(0)
-
-            else:
-                # running / error 状态立即发送
-                public_steps.append(public_step)
-                yield _sse_event("step", _sanitize(public_step))
-                await asyncio.sleep(0)
-
-            # 如果是错误：先发 error 事件（前端据此提示），再 done 结束
-            if response.status == "error":
-                logger.error(f'[POLICY-QA] 处理出错: {response.error}')
-                await asyncio.sleep(0)
-                yield _sse_event("error", {"message": response.error or "政策问答处理出错"})
-                await asyncio.sleep(0)
-                yield _sse_event("done", {})
-                return
+        # ── 结果捕获（供 result 事件组装）──
+        result_patient_view = skill_result.patient_answer or ""
+        result_office_view = skill_result.office_answer or ""
+        result_policy_evidence = policy_evidence
+        result_settlement_evidence = []
+        result_calculation_steps = []
+        trace_can_answer = bool(result_patient_view)
+        trace_partial_answer = False
+        trace_can_answer_reason = skill_result.policy_status_message
 
         # ── 所有步骤完成：发送合并结果 ──
         logger.info(f'[POLICY-QA] 处理完成，发送 result 事件（共 {len(public_steps)} 个步骤）')
@@ -657,7 +530,7 @@ async def debug_structured_policy_search(
         retrieval_result = retrieve_policy_evidence(
             settlement_context=normalized_ctx,
             host=MILVUS_HOST,
-            port=MILVUS_PORT,
+            port=str(MILVUS_PORT),
         )
 
         # 序列化 selected_evidence
@@ -856,7 +729,7 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
         retrieval_result = retrieve_policy_evidence(
             settlement_context=normalized_ctx,
             host=MILVUS_HOST,
-            port=MILVUS_PORT,
+            port=str(MILVUS_PORT),
             custom_queries=custom_queries,
         )
 
@@ -1102,3 +975,4 @@ async def get_qa_history(
     except Exception as e:
         logger.exception("Failed to get QA history")
         raise HTTPException(status_code=500, detail=f"获取历史记录失败: {str(e)}")
+
