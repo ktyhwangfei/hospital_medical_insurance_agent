@@ -7,11 +7,11 @@
 // 并提供 表格 / JSON 两种视图切换（JSON 展示字段级完整结构）。
 
 import { useState } from 'react'
-import { ChevronRight, CircleAlert, Code2, Link2, Sparkles, Table2 } from 'lucide-react'
+import { ChevronRight, CircleAlert, Code2, Link2, MinusCircle, Sparkles, Table2 } from 'lucide-react'
 
 import type { KnowledgeItem, WorkbenchDocument } from '@/lib/policy-knowledge-api'
 
-import { Empty, pct, readableValue, Score } from './workbench-shared'
+import { Empty, FieldValue, knowledgeHasStructuredValue, pct, Score } from './workbench-shared'
 
 interface Props {
   document: WorkbenchDocument
@@ -68,6 +68,11 @@ function KnowledgeCard({ knowledge, index, selected, view, onSelect }: {
       <div className="flex items-center gap-2 text-[11px] font-semibold text-indigo-700">
         <Sparkles className="size-3.5" />知识 {index + 1}
         {knowledge.relationship_source === 'legacy_match' && <span className="font-normal text-amber-600">历史文本关联</span>}
+        {!knowledgeHasStructuredValue(knowledge) && (
+          <span className="flex items-center gap-0.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-500" title="无金额或数值类结构化字段，仅人群/类别/实体描述">
+            <MinusCircle className="size-3" />无结构化价值
+          </span>
+        )}
         <ChevronRight className="ml-auto size-3.5" />
       </div>
 
@@ -100,15 +105,15 @@ function TableContent({ knowledge }: { knowledge: KnowledgeItem }) {
         <table className="w-full border-collapse overflow-hidden rounded-lg text-[11px]">
           <thead>
             <tr className="bg-slate-100 text-left text-[10px] text-slate-500">
-              <th className="px-2 py-1 font-medium">字段</th>
+              <th className="w-20 px-2 py-1 font-medium">字段</th>
               <th className="px-2 py-1 font-medium">值</th>
             </tr>
           </thead>
           <tbody>
             {knowledge.fields.map((field) => (
-              <tr key={field.field_code} className="border-t border-slate-100 bg-white">
-                <td className="whitespace-nowrap px-2 py-1 text-slate-500">{field.field_name}</td>
-                <td className="break-all px-2 py-1 font-mono text-slate-700">{readableValue(field.raw_value)}</td>
+              <tr key={field.field_code} className="border-t border-slate-100 bg-white align-top">
+                <td className="px-2 py-1 text-slate-500">{field.field_name || field.field_code}</td>
+                <td className="px-2 py-1"><FieldValue value={field.raw_value} /></td>
               </tr>
             ))}
           </tbody>

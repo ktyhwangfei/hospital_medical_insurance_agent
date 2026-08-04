@@ -86,7 +86,7 @@ function KnowledgeWorkbenchState({ document, metrics, onBindExisting, onCreateMe
         ))}
       </div>
 
-      <div className="grid min-h-[620px] gap-3 lg:grid-cols-[0.85fr_1.15fr_1.2fr]">
+      <div className="grid min-h-[620px] gap-3 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1.05fr)_minmax(0,1.25fr)]">
         <Column className={mobileStep === 'units' ? '' : 'hidden lg:block'} title="审核通过的单元" subtitle={`${document.units.length} 个可用单元`}>
           <UnitsColumn document={document} selectedUnitId={unit?.unit_id || ''} onSelectUnit={selectUnit} />
         </Column>
