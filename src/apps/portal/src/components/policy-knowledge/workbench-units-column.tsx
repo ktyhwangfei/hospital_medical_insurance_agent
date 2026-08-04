@@ -8,11 +8,11 @@
 //   · 面包屑 = 父级路径（path 去掉末段），叶子自身标题由正文承载，避免重叠
 //   · 正文 = source_text（与标题重叠部分折叠）
 
-import { FileCheck2 } from 'lucide-react'
+import { FileCheck2, MinusCircle } from 'lucide-react'
 
 import type { WorkbenchDocument } from '@/lib/policy-knowledge-api'
 
-import { Empty } from './workbench-shared'
+import { Empty, unitHasStructuredValue } from './workbench-shared'
 
 interface Props {
   document: WorkbenchDocument
@@ -40,16 +40,23 @@ export function UnitsColumn({ document, selectedUnitId, onSelectUnit }: Props) {
         const title = item.path[item.path.length - 1] || ''
         const parentPath = item.path.slice(0, -1)
         const redundant = isTitleRedundant(title, item.source_text)
+        const hasValue = unitHasStructuredValue(item.knowledge)
+        const selected = item.unit_id === selectedUnitId
         return (
           <button key={item.unit_id} id={`policy-unit-${item.unit_id}`} role="option" type="button"
-            aria-selected={item.unit_id === selectedUnitId}
+            aria-selected={selected}
             aria-controls="policy-knowledge-column"
             onClick={() => onSelectUnit(item.unit_id)}
-            className={`w-full rounded-xl border p-3 text-left transition ${item.unit_id === selectedUnitId ? 'border-blue-400 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+            className={`w-full rounded-xl border p-3 text-left transition ${selected ? 'border-blue-400 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'} ${hasValue ? '' : 'opacity-70'}`}>
             <div className="flex items-center gap-2">
               <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
                 <FileCheck2 className="mr-1 inline size-3" />{item.status === 'published' ? '已发布' : '已审核'}
               </span>
+              {!hasValue && (
+                <span className="flex items-center gap-0.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500" title="该单元知识均为人群/类别/实体描述，无金额或数值类结构化字段">
+                  <MinusCircle className="size-3" />无结构化价值
+                </span>
+              )}
               <span className="ml-auto text-[11px] text-slate-400">{item.knowledge_count} 条知识</span>
             </div>
 
@@ -61,11 +68,11 @@ export function UnitsColumn({ document, selectedUnitId, onSelectUnit }: Props) {
             )}
 
             {/* 标题（叶子自身标题/首句） */}
-            <p className="mt-1 text-xs font-semibold text-slate-700">{title || '政策正文'}</p>
+            <p className="mt-1 line-clamp-2 text-xs font-semibold leading-5 text-slate-700">{title || '政策正文'}</p>
 
             {/* 正文：与标题重叠（叶子标题即全文）时不再渲染，避免同文本二次展示 */}
             {!redundant && (
-              <p className="mt-1 text-xs leading-5 text-slate-500 line-clamp-4">
+              <p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-500">
                 {item.source_text}
               </p>
             )}
