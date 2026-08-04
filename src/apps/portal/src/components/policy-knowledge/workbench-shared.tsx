@@ -16,21 +16,47 @@ import type {
 // 判断一条知识/一个单元是否具备「值得结构化」的价值：以金额/数值类字段为高价值信号，
 // 人群/类别/实体描述类字段不构成结构化价值（如「人群=城乡居民」本身无量化意义）。
 
-/** 高价值字段：涉及金额/比例/限额/数值区间，有明确量化意义 */
-const HIGH_VALUE_FIELDS = new Set([
+/** 事实型字段：涉及金额/比例/限额/数值区间，有明确量化意义（高结构化价值） */
+const FACT_FIELDS = new Set([
   'payment_ratio',      // 支付比例
   'deductible_amount',  // 起付额
   'cap_amount',         // 封顶额
   'amount_band',        // 金额区间
-  'rule_value',         // 规则值（含金额时有效，见 hasMoneyPattern）
   'admission_order',    // 住院序次（数值）
+])
+
+/** 维度型字段：过滤维度/索引标签（值域标准化，中等价值） */
+const DIMENSION_FIELDS = new Set([
+  'rule_type',    // 知识类型
+  'insu_type',    // 险种
+  'med_type',     // 医疗类别
+  'hosp_lv',      // 医疗机构等级
+  'psn_type',     // 人员类别
+  'setl_type',    // 结算方式
+  'time_period',  // 时间周期（含数值但偏索引）
+])
+
+/** 描述型字段：AI 辅助/非结构化（低结构化价值，折叠展示） */
+const DESCRIPTIVE_FIELDS = new Set([
+  'entities',   // 实体抽取
+  'relations',  // 关系抽取
+  'priority',   // 优先级
+  'rule_value', // 规则值（自然语言；含金额模式时另有 high-value 判定）
 ])
 
 /** 金额/比例模式：数字 + 元/万元/% 等 */
 const MONEY_PATTERN = /\d+(?:\.\d+)?\s*(元|万元|万|块|%|％|分之)/
 
+/** 通用数值模式：数字 + 常见单位（元/天/次/人/年/月/岁/% 等），用于识别量化规则 */
+const NUMERIC_PATTERN = /\d+(?:\.\d+)?\s*(元|万元|万|块|%|％|分之|天|日|次|人|年|月|岁|周|小时)/
+
 function hasMoneyPattern(value: unknown): boolean {
   return typeof value === 'string' && MONEY_PATTERN.test(value)
+}
+
+/** 文本是否含量化数值（金额/天数/次数/年龄等），可作为事实型信号 */
+function hasNumericPattern(value: unknown): boolean {
+  return typeof value === 'string' && NUMERIC_PATTERN.test(value)
 }
 
 /** 字段是否有实质内容（非空、非占位） */
@@ -43,12 +69,21 @@ function hasSubstance(value: unknown): boolean {
   return true
 }
 
+/** 字段分层：'fact' | 'dimension' | 'descriptive' */
+export function fieldTier(field: KnowledgeField): 'fact' | 'dimension' | 'descriptive' {
+  if (FACT_FIELDS.has(field.field_code)) return 'fact'
+  if (DIMENSION_FIELDS.has(field.field_code)) return 'dimension'
+  if (DESCRIPTIVE_FIELDS.has(field.field_code)) return 'descriptive'
+  // 未归类字段：含量化数值（金额/天数/次数/年龄等）视为事实型，否则描述型
+  return hasNumericPattern(field.raw_value) ? 'fact' : 'descriptive'
+}
+
 /** 单个结构化字段是否具有高结构化价值 */
 export function fieldHasStructuredValue(field: KnowledgeField): boolean {
   if (!hasSubstance(field.raw_value)) return false
-  if (HIGH_VALUE_FIELDS.has(field.field_code)) return true
-  // rule_value 等文本字段内含金额/比例数字时视为有价值
-  if (hasMoneyPattern(field.raw_value)) return true
+  if (FACT_FIELDS.has(field.field_code)) return true
+  // 未归类文本字段内含金额/量化数值时视为有价值
+  if (hasMoneyPattern(field.raw_value) || hasNumericPattern(field.raw_value)) return true
   return false
 }
 
