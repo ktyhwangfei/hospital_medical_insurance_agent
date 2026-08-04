@@ -133,10 +133,33 @@ class ExplanationGenerator:
 
     核心能力: 把分段计算结果中的每一段，与对应的政策规则关联，
     形成"金额→政策条文→计算过程"的因果解释链。
+
+    【输出契约（P2 说明）】
+    - 唯一出口：orchestrator 的 answer_assembly 步骤通过 `generate_dual_views` 获取
+      (patient_view, office_view)，经 PolicyQAResponse 透出，routes 汇总进 result。
+    - 模式（mode 属性，供前端标注回答来源）：llm（真实模型）/ dummy（调试降级模板，
+      基于真实结算数据）/ fallback（无网关占位）。
+    - 任何模式下输出必须是自然语言文本；模型输出结构化 JSON 时 `_parse_dual_response`
+      兜底回退占位模板（防止前端展示原始 JSON）。
     """
 
     def __init__(self, model_gateway: ModelGateway | None = None):
         self.model_gateway = model_gateway
+        # 解释生成模式（供前端标注回答来源）：
+        # - "llm"    ：接入真实 LLM，回答由模型生成（需人工核对）
+        # - "dummy"  ：调试模式（MODEL_BASE_URL=dummy），固定 mock 不可用 →
+        #              统一降级为基于真实结算数据的模板解释（见 generate_dual_views）
+        # - "fallback"：无模型网关，仅占位模板
+        if model_gateway is None:
+            self.mode = "fallback"
+        else:
+            cfg = getattr(model_gateway, "_config", None)
+            base_url = getattr(cfg, "base_url", "") or ""
+            self.mode = "dummy" if base_url == "dummy" else "llm"
+
+    def _is_dummy(self) -> bool:
+        """是否处于 dummy 调试模式（无真实 LLM 可用）。"""
+        return self.mode == "dummy"
 
     async def generate(
         self,
@@ -580,6 +603,12 @@ class ExplanationGenerator:
             (patient_view, office_view)
         """
         if self.model_gateway is None:
+            placeholder = self._generate_placeholder(context)
+            return placeholder, placeholder
+
+        # ★ dummy 调试模式：model_gateway 返回固定 mock（写死金额，换结算单即错），
+        # 不可作为回答。统一降级为基于真实结算数据（decomposition）的模板解释。
+        if self.mode == "dummy":
             placeholder = self._generate_placeholder(context)
             return placeholder, placeholder
 

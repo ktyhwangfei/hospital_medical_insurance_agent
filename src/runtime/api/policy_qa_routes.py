@@ -449,9 +449,11 @@ async def _policy_qa_stream(
                 yield _sse_event("step", _sanitize(public_step))
                 await asyncio.sleep(0)
 
-            # 如果是错误，发送 done 并退出
+            # 如果是错误：先发 error 事件（前端据此提示），再 done 结束
             if response.status == "error":
                 logger.error(f'[POLICY-QA] 处理出错: {response.error}')
+                await asyncio.sleep(0)
+                yield _sse_event("error", {"message": response.error or "政策问答处理出错"})
                 await asyncio.sleep(0)
                 yield _sse_event("done", {})
                 return
@@ -484,6 +486,8 @@ async def _policy_qa_stream(
                 "trace_events": trace_events_list,
                 "run_id": trace_run_id,
                 "selected_skill_id": trace_selected_skill_id,
+                # 回答来源（前端据此标注真实性）：llm（模型生成）/ dummy（降级模板）/ fallback
+                "answer_mode": getattr(explanation_generator, "mode", "fallback"),
             },
         })
         # ── Runtime 增强：推理链与记忆计数附加到 result（在 _sanitize 之后，

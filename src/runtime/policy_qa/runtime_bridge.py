@@ -49,6 +49,26 @@ def _new_memory_id() -> str:
     return f"m-{uuid.uuid4().hex[:12]}"
 
 
+# 话题推导规则：问题关键词 → 顶栏话题标签（优先级从高到低）
+_TOPIC_RULES: list[tuple[tuple[str, ...], str]] = [
+    (("起付线", "门槛费", "门槛"), "起付线"),
+    (("统筹自付", "自付", "统筹支付", "报销比例", "报销多少"), "统筹自付/报销"),
+    (("大额", "封顶线", "最高支付限额"), "大额/封顶"),
+    (("个人应负", "个人负担", "个人总支付"), "个人负担"),
+    (("医保外", "自费", "不在医保"), "医保外费用"),
+    (("住院费用", "费用构成", "费用分解", "费用明细", "总费用"), "费用构成"),
+    (("药品", "药"), "药品费用"),
+]
+
+
+def _derive_topic(question: str) -> str | None:
+    """从问题关键词推导话题标签（供顶栏锚点展示）。"""
+    for keywords, label in _TOPIC_RULES:
+        if any(kw in question for kw in keywords):
+            return label
+    return None
+
+
 def _pick_snapshot_fields(detail: dict[str, Any]) -> dict[str, Any]:
     """从步骤 detail 中挑选小规模标量字段作为记忆快照。"""
     snapshot: dict[str, Any] = {}
@@ -64,7 +84,11 @@ def _pick_snapshot_fields(detail: dict[str, Any]) -> dict[str, Any]:
 
 
 def _memory_card(memory: BusinessMemory) -> dict[str, Any]:
-    """将记忆转换为 SSE 传输的精简卡片（不含完整快照，防泄漏）。"""
+    """将记忆转换为 SSE 传输的精简卡片。
+
+    snapshot 为 record_step 时经 _pick_snapshot_fields 挑选的小规模标量
+    （≤8 字段、值 ≤64 字符），不含完整快照，防泄漏；前端据此展示业务值。
+    """
     return {
         "memory_id": memory.memory_id,
         "type": memory.type.value,
@@ -73,6 +97,7 @@ def _memory_card(memory: BusinessMemory) -> dict[str, Any]:
         "expire_policy": memory.expire_policy.value,
         "version": memory.version,
         "snapshot_keys": list(memory.object_snapshot.keys()),
+        "snapshot": dict(memory.object_snapshot),
     }
 
 
@@ -124,6 +149,8 @@ class PolicyQARuntimeBridge:
 
             return {
                 "session_id": session_id,
+                "settlement_id": settlement_id or None,
+                "topic": _derive_topic(question),
                 "object_types": need.object_types,
                 "memory_ids": need.memory_ids,
                 "must_query_semantic": need.must_query_semantic,
@@ -224,12 +251,31 @@ class PolicyQARuntimeBridge:
     def _on_calculate(
         self, session_id: str, detail: dict[str, Any]
     ) -> list[tuple[str, dict[str, Any]]]:
-        """分段计算完成：记录 inference 推理步（关联结算记忆）。"""
+        """分段计算完成：记录带真实金额的 inference 推理步（业务化 claim）。"""
         settlement_memories = self._memory.get_by_session_and_type(session_id, MemoryType.SETTLEMENT)
         source_ids = [m.memory_id for m in settlement_memories[:1]]
+
+        # 从步骤 detail 提取真实金额，生成业务化推理 claim（防御性取值）
+        treatment = (detail or {}).get("treatment", {}) if isinstance(detail, dict) else {}
+        if not isinstance(treatment, dict):
+            treatment = {}
+        try:
+            pooling_self_pay = float(treatment.get("pooling_self_pay", 0) or 0)
+            deductible = float(treatment.get("deductible", 0) or 0)
+            major_self_pay = float(treatment.get("major_self_pay", 0) or 0)
+            if pooling_self_pay or deductible or major_self_pay:
+                claim = (
+                    f"待遇分段计算：统筹自付 {pooling_self_pay:,.2f} 元，"
+                    f"起付线 {deductible:,.2f} 元，大额自付 {major_self_pay:,.2f} 元"
+                )
+            else:
+                claim = "完成待遇分段计算（起付线/统筹/大额分段自付）"
+        except (TypeError, ValueError):
+            claim = "完成待遇分段计算（起付线/统筹/大额分段自付）"
+
         step = self._reasoning.add_step(
             session_id,
-            claim="完成待遇分段计算（起付线/统筹/大额分段自付）",
+            claim=claim,
             kind="inference",
             confidence=0.9,
             source_memory_ids=source_ids,
