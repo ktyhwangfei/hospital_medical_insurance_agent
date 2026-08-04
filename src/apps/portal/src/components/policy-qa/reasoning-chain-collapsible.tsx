@@ -10,7 +10,7 @@
  */
 
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, GitBranch } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { ReasoningStep } from '@/lib/policy-qa-session'
 
 // ── Props ────────────────────────────────────────────────────
@@ -59,12 +59,10 @@ export default function ReasoningChainCollapsible({
         type="button"
         data-testid="reasoning-chain-toggle"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-slate-600 hover:bg-slate-100/70"
+        className="flex w-full items-center gap-1 px-2 py-1.5 text-left text-[11px] font-normal text-slate-400 transition-colors hover:text-slate-600"
       >
-        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        <GitBranch className="h-3.5 w-3.5 text-slate-400" />
-        推理链
-        <span className="font-mono text-[11px] font-normal text-slate-400">{steps.length} 步</span>
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {open ? '收起依据' : '查看依据'}
       </button>
 
       {/* 步骤列表（垂直时间线） */}
@@ -91,11 +89,6 @@ export default function ReasoningChainCollapsible({
                     )}
                   </div>
                   <div className="mt-0.5 text-xs leading-relaxed text-slate-700">{step.claim}</div>
-                  {step.sourceMemoryIds.length > 0 && (
-                    <div className="mt-0.5 font-mono text-[10px] text-slate-400">
-                      来源记忆: {step.sourceMemoryIds.join(', ')}
-                    </div>
-                  )}
                 </div>
               </div>
             )

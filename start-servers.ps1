@@ -30,6 +30,23 @@ Write-Host "  Ports free" -ForegroundColor Green
 
 Write-Host "[3/5] Start backend (single process, no --reload)..." -ForegroundColor Cyan
 # NOTE: keep comments ASCII-only (see stop-servers.ps1 for encoding rationale).
+# Load .env if present (gitignored: holds secrets like MODEL_API_KEY). Pre-set env vars win,
+# so system-level env or interactive overrides are respected.
+$envFile = Join-Path $WORKDIR ".env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+            $idx = $line.IndexOf("=")
+            $k = $line.Substring(0, $idx).Trim()
+            $v = $line.Substring($idx + 1).Trim().Trim('"').Trim("'")
+            if (-not (Get-Item -Path "Env:$k" -ErrorAction SilentlyContinue)) {
+                Set-Item -Path "Env:$k" -Value $v
+            }
+        }
+    }
+    Write-Host "  Loaded .env" -ForegroundColor DarkGray
+}
 # Inject MSSQL connection env vars for the backend process (SqlServerBusinessDataClient
 # requires MSSQL_DATABASE/USER/PASSWORD). Pre-set env vars win; defaults match the local
 # docker SQL Server (bjybdb, see deploy/docker/init_sqlserver.sh).

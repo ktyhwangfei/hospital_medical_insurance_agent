@@ -160,14 +160,12 @@ describe('usePolicyQAStream', () => {
       snapshot: { settlement_id: '1671213', total_fee: 189085.85 },
     })
 
-    // 最后一条 assistant 消息：内容 + 推理链 + 引用记忆 + answer_mode
+    // 最后一条 assistant 消息：内容 + 推理链
     const last = result.current.messages[result.current.messages.length - 1]
     expect(last.role).toBe('assistant')
     expect(last.content).toContain('本次住院统筹自付 4962.67 元')
     expect(last.reasoning).toHaveLength(1)
     expect(last.reasoning![0]).toMatchObject({ stepId: 'step-1', kind: 'fact', claim: '已获取结算单 1671213 的结算数据' })
-    expect(last.citedMemoryIds).toEqual(['m-settle'])
-    expect(last.answerMode).toBeUndefined() // mock 流未携带 answer_mode 时保持 undefined
   })
 
   it('流式结束后 isStreaming=false', async () => {
@@ -212,23 +210,6 @@ describe('usePolicyQAStream', () => {
     const types = result.current.memories.map((m) => m.type)
     expect(types).not.toContain('settlement')
     expect(types).toContain('policy')
-  })
-
-  it('解析 result.answer_mode 到消息（来源徽标数据）', async () => {
-    const events = firstTurnEvents().map(([evt, data]) => {
-      if (evt === 'result') {
-        const payload = data as { result: Record<string, unknown> }
-        return [evt, { ...payload, result: { ...payload.result, answer_mode: 'dummy' } }] as [string, unknown]
-      }
-      return [evt, data] as [string, unknown]
-    })
-    streamQueue = [sseText(events)]
-    const { result } = renderHook(() => usePolicyQAStream())
-    await act(async () => {
-      await result.current.send('查询住院费用', { settlementId: '1671213' })
-    })
-    const last = result.current.messages[result.current.messages.length - 1]
-    expect(last.answerMode).toBe('dummy')
   })
 
   it('无锚点时 send 返回 false 且不发请求', async () => {

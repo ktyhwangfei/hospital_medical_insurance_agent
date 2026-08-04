@@ -40,11 +40,6 @@ describe('SessionAnchorBar', () => {
     expect(screen.getByText(/未锚定结算单/)).toBeInTheDocument()
   })
 
-  it('渲染话题徽标', () => {
-    render(<SessionAnchorBar anchor={makeAnchor({ topic: '统筹自付偏少' })} />)
-    expect(screen.getByText('话题 统筹自付偏少')).toBeInTheDocument()
-  })
-
   it('subject_changed=true 时渲染主体切换横幅', () => {
     render(
       <SessionAnchorBar
@@ -75,8 +70,4 @@ describe('SessionAnchorBar', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 
-  it('展示 sessionId（调试信息）', () => {
-    render(<SessionAnchorBar anchor={makeAnchor()} sessionId="sess-abc" />)
-    expect(screen.getByText('session: sess-abc')).toBeInTheDocument()
-  })
 })

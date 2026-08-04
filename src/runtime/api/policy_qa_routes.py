@@ -19,6 +19,11 @@ from fastapi.responses import StreamingResponse
 
 from src.model_service.gateway import ModelGateway
 from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
+from src.runtime.policy_qa.explanation_mode import (
+    ExplanationMode,
+    detect_explanation_mode,
+    fee_item_label,
+)
 from src.runtime.policy_qa.models import PolicyQARequest, PolicyQAResponse
 from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
 from src.runtime.policy_qa.settlement_data_provider import (
@@ -197,22 +202,15 @@ async def _policy_qa_stream(
             }))
             await asyncio.sleep(0)
 
-        # ═══ Step 1: intent_detection（关键词 → 目标费用项）═══
-        _fee_item_keywords = [
-            ("deductible", ["起付线", "起付标准", "门槛费"]),
-            ("large_amount_self_pay", ["大额自付", "大额互助"]),
-            ("pooling_payment", ["统筹支付", "统筹报销"]),
-            ("personal_total_pay", ["个人总支付", "个人负担"]),
-            ("pooling_self_pay", ["统筹自付", "基本统筹自付", "统筹段个人承担"]),
-        ]
-        target_fee_item = "pooling_self_pay"
-        for _fi, _kws in _fee_item_keywords:
-            if any(_kw in (request.question or "") for _kw in _kws):
-                target_fee_item = _fi
-                break
+        # ═══ Step 1: intent_detection（统一解释模式识别，C 方案）═══
+        # overview（费用构成总览）/ single_item（单项），消除「默认 pooling_self_pay」有毒默认
+        _explanation_mode, _detected_fee_item = detect_explanation_mode(request.question or "")
+        _is_overview = _explanation_mode == ExplanationMode.OVERVIEW
+        target_fee_item = _detected_fee_item or "pooling_self_pay"
         async for _ev in _yield_step("intent_detection", "running", "识别问题意图…", 1):
             yield _ev
-        async for _ev in _yield_step("intent_detection", "done", f"识别为「{target_fee_item}」费用解释", 1):
+        _intent_label = "费用构成总览" if _is_overview else f"{fee_item_label(target_fee_item)}费用解释"
+        async for _ev in _yield_step("intent_detection", "done", f"识别为「{_intent_label}」", 1):
             yield _ev
 
         # ═══ Step 2: skill_routing（SkillRouter 路由到技能）═══
@@ -249,51 +247,53 @@ async def _policy_qa_stream(
         # ═══ Step 4: policy_rule_search（skill 查询计划 + 结构化检索）═══
         async for _ev in _yield_step("policy_rule_search", "running", "检索政策规则…", 4):
             yield _ev
-        _normalized_ctx: dict[str, Any] = {
-            "settlement_id": settlement_context.settlement_id,
-            "insu_type": _normalize_insu_type(settlement_context.insurance_type or "城镇职工"),
-            "med_type": _normalize_med_type(settlement_context.service_type or "普通住院"),
-            "hosp_lv": settlement_context.hospital_level or "三级医院",
-            "psn_type": settlement_context.person_type or "退休人员",
-            "target_field": assembler._get_fee_field(target_fee_item),
-            "target_amount": assembler._get_fee_amount(settlement_context, target_fee_item),
-        }
-        _custom_queries = assembler.build_policy_queries(target_fee_item)
-        _retrieval_result = await _loop.run_in_executor(
-            None,
-            lambda: retrieve_policy_evidence(
-                settlement_context=_normalized_ctx,
-                host=MILVUS_HOST,
-                port=str(MILVUS_PORT),
-                custom_queries=_custom_queries,
-            ),
-        )
         policy_evidence: list[dict] = []
-        for _ev in _retrieval_result.selected_evidence:
-            policy_evidence.append({
-                "title": _ev.source_text[:80] + "..." if len(_ev.source_text) > 80 else _ev.source_text,
-                "clause": _ev.source_text,
-                "evidence_text": _ev.source_text,
-                "matched_reason": _ev.applied_reason or f"匹配规则类型: {_ev.rule_type}",
-                "rule_type": _ev.rule_type,
-                "score": _ev.score,
-                "source_text": _ev.source_text,
-                "payment_ratio": _ev.payment_ratio,
-                "amount_band": _ev.amount_band,
-                "rule_value": _ev.rule_value,
-            })
         policy_status = "no_policy_matched"
-        if not _retrieval_result.missing_required_rules and len(policy_evidence) >= 2:
-            policy_status = "full_policy_matched"
-        elif len(policy_evidence) > 0:
-            policy_status = "partial_policy_matched"
-        for _evt_type, _evt_payload in runtime_bridge.record_step(
-            session_id=session_id,
-            step="policy_rule_search",
-            detail={"rules_count": len(policy_evidence), "policy_filters": []},
-        ):
-            yield _sse_event(_evt_type, _sanitize(_evt_payload))
-            await asyncio.sleep(0)
+        # overview 模式是纯数据总览，不依赖单项政策规则；仅 single_item 检索单项政策
+        if not _is_overview:
+            _normalized_ctx: dict[str, Any] = {
+                "settlement_id": settlement_context.settlement_id,
+                "insu_type": _normalize_insu_type(settlement_context.insurance_type or "城镇职工"),
+                "med_type": _normalize_med_type(settlement_context.service_type or "普通住院"),
+                "hosp_lv": settlement_context.hospital_level or "三级医院",
+                "psn_type": settlement_context.person_type or "退休人员",
+                "target_field": assembler._get_fee_field(target_fee_item),
+                "target_amount": assembler._get_fee_amount(settlement_context, target_fee_item),
+            }
+            _custom_queries = assembler.build_policy_queries(target_fee_item)
+            _retrieval_result = await _loop.run_in_executor(
+                None,
+                lambda: retrieve_policy_evidence(
+                    settlement_context=_normalized_ctx,
+                    host=MILVUS_HOST,
+                    port=str(MILVUS_PORT),
+                    custom_queries=_custom_queries,
+                ),
+            )
+            for _ev in _retrieval_result.selected_evidence:
+                policy_evidence.append({
+                    "title": _ev.source_text[:80] + "..." if len(_ev.source_text) > 80 else _ev.source_text,
+                    "clause": _ev.source_text,
+                    "evidence_text": _ev.source_text,
+                    "matched_reason": _ev.applied_reason or f"匹配规则类型: {_ev.rule_type}",
+                    "rule_type": _ev.rule_type,
+                    "score": _ev.score,
+                    "source_text": _ev.source_text,
+                    "payment_ratio": _ev.payment_ratio,
+                    "amount_band": _ev.amount_band,
+                    "rule_value": _ev.rule_value,
+                })
+            if not _retrieval_result.missing_required_rules and len(policy_evidence) >= 2:
+                policy_status = "full_policy_matched"
+            elif len(policy_evidence) > 0:
+                policy_status = "partial_policy_matched"
+            for _evt_type, _evt_payload in runtime_bridge.record_step(
+                session_id=session_id,
+                step="policy_rule_search",
+                detail={"rules_count": len(policy_evidence), "policy_filters": []},
+            ):
+                yield _sse_event(_evt_type, _sanitize(_evt_payload))
+                await asyncio.sleep(0)
         async for _ev in _yield_step(
             "policy_rule_search", "done",
             f"检索到 {len(policy_evidence)} 条政策规则" if policy_evidence else "未检索到匹配的政策规则",
@@ -301,35 +301,77 @@ async def _policy_qa_stream(
         ):
             yield _ev
 
-        # ═══ Step 5: skill_execution（skill 策略引擎执行）═══
-        async for _ev in _yield_step("skill_execution", "running", "生成费用解释…", 5):
+        # ═══ Step 5: skill_execution（skill 策略引擎执行 / overview 总览生成）═══
+        _exec_msg = "生成费用构成总览…" if _is_overview else "生成费用解释…"
+        async for _ev in _yield_step("skill_execution", "running", _exec_msg, 5):
             yield _ev
-        skill_result = await _loop.run_in_executor(
-            None,
-            lambda: assembler.execute(
-                settlement_context=settlement_context,
-                policy_evidence=policy_evidence,
-                policy_status=policy_status,
-                target_fee_item=target_fee_item,
-            ),
-        )
+        # overview → 费用构成总表（纯数据，不检索单项政策）；single_item → assembler 单项解释
+        overview_payload: dict | None = None
+        result_patient_view = ""
+        result_office_view = ""
+        trace_can_answer_reason = ""
+        _single_skill_result = None
+        if _is_overview:
+            overview_payload = await _loop.run_in_executor(
+                None,
+                lambda: _build_overview_payload(settlement_context, request.question, skill_id, assembler),
+            )
+            result_patient_view = overview_payload["patient_answer"]
+            result_office_view = overview_payload["office_answer"]
+            trace_can_answer_reason = overview_payload["policy_warning"]
+        else:
+            _single_skill_result = await _loop.run_in_executor(
+                None,
+                lambda: assembler.execute(
+                    settlement_context=settlement_context,
+                    policy_evidence=policy_evidence,
+                    policy_status=policy_status,
+                    target_fee_item=target_fee_item,
+                ),
+            )
+            result_patient_view = _single_skill_result.patient_answer or ""
+            result_office_view = _single_skill_result.office_answer or ""
+            trace_can_answer_reason = _single_skill_result.policy_status_message
         for _evt_type, _evt_payload in runtime_bridge.record_step(
             session_id=session_id, step="answer_assembly", detail={},
         ):
             yield _sse_event(_evt_type, _sanitize(_evt_payload))
             await asyncio.sleep(0)
-        async for _ev in _yield_step("skill_execution", "done", "费用解释生成完成", 5):
+        _exec_done_msg = "费用构成总览生成完成" if _is_overview else "费用解释生成完成"
+        async for _ev in _yield_step("skill_execution", "done", _exec_done_msg, 5):
             yield _ev
 
         # ── 结果捕获（供 result 事件组装）──
-        result_patient_view = skill_result.patient_answer or ""
-        result_office_view = skill_result.office_answer or ""
         result_policy_evidence = policy_evidence
         result_settlement_evidence = []
-        result_calculation_steps = []
         trace_can_answer = bool(result_patient_view)
         trace_partial_answer = False
-        trace_can_answer_reason = skill_result.policy_status_message
+
+        # single_item 的结构化计算依据（overview 模式留空）——此前被丢弃，
+        # 导致前端只拿到文本，无法展示「为什么这么多」的算账过程。
+        _calc_steps: list[dict] = []
+        _definition: dict | None = None
+        _warnings: list[str] = []
+        _completeness: dict | None = None
+        _case_context: dict | None = None
+        if _single_skill_result is not None:
+            _trace = _single_skill_result.calculation_trace or {}
+            _calc_steps = _trace.get("steps", []) if isinstance(_trace, dict) else []
+            _definition = _single_skill_result.definition or None
+            _warnings = _single_skill_result.warnings or []
+            _completeness = _single_skill_result.explanation_completeness or None
+            _case_context = {
+                "person_type": getattr(settlement_context, "person_type", None),
+                "insurance_type": getattr(settlement_context, "insurance_type", None),
+                "service_type": getattr(settlement_context, "service_type", None),
+                "hospital_level": getattr(settlement_context, "hospital_level", None),
+                "deductible": getattr(settlement_context, "deductible", None),
+                "basic_pooling_payment": getattr(settlement_context, "basic_pooling_payment", None),
+                "basic_pooling_self_pay": getattr(settlement_context, "basic_pooling_self_pay", None),
+                "large_amount_payment": getattr(settlement_context, "large_amount_payment", None),
+                "large_amount_self_pay": getattr(settlement_context, "large_amount_self_pay", None),
+                "personal_total_pay": getattr(settlement_context, "personal_total_pay", None),
+            }
 
         # ── 所有步骤完成：发送合并结果 ──
         logger.info(f'[POLICY-QA] 处理完成，发送 result 事件（共 {len(public_steps)} 个步骤）')
@@ -352,7 +394,11 @@ async def _policy_qa_stream(
                 **result_views,
                 "policy_evidence": result_policy_evidence,
                 "settlement_evidence": result_settlement_evidence,
-                "calculation_steps": result_calculation_steps,
+                "calculation_steps": _calc_steps,
+                "definition": _definition,
+                "warnings": _warnings,
+                "explanation_completeness": _completeness,
+                "case_context": _case_context,
                 "can_answer": trace_can_answer,
                 "partial_answer": trace_partial_answer,
                 "can_answer_reason": trace_can_answer_reason,
@@ -665,6 +711,155 @@ def _clean_policy_excerpt(text: str) -> str:
 # 产品层不再包含统筹自付专属解释逻辑。
 
 
+def _assemble_display_payload(context: Any, skill_id: str, assembler: Any) -> dict:
+    """从 SettlementContext + skill manifest 组装前端展示数据。
+
+    抽取自 _process_single_settlement，供 single-item 与 overview 两种模式复用，
+    消除双端点的展示组装重复（C 方案：统一双端点）。
+
+    Returns:
+        {"profile": dict, "output_groups": list, "display_config": dict}
+    """
+    manifest = get_skill_manifest(skill_id) or {}
+    display_config = manifest.get("display", {})
+
+    profile: dict[str, Any] = {}
+    if "profile" in display_config:
+        profile["title"] = display_config["profile"].get("title", "")
+        profile["items"] = []
+        for item in display_config["profile"].get("items", []):
+            field = item.get("field", "")
+            # field 为 SQL 列名（如 zyjyxx.rylb），需映射到 SettlementContext 属性名
+            attr = assembler._FACT_FIELD_MAP.get(field, field)
+            value = getattr(context, attr, "") or ""
+            profile["items"].append({
+                "label": item.get("label", field),
+                "field": field,
+                "value": value,
+            })
+
+    output_groups: list[dict[str, Any]] = []
+    for group_def in display_config.get("output", []):
+        group_entry: dict[str, Any] = {"group": group_def.get("group", ""), "items": []}
+        for item_def in group_def.get("items", []):
+            field = item_def.get("field", "")
+            # field 为 SQL 列名（如 zyfdxx.bdtczf），需映射到 SettlementContext 属性名
+            attr = assembler._FACT_FIELD_MAP.get(field, field)
+            value = getattr(context, attr, 0) or 0
+            entry: dict[str, Any] = {
+                "label": item_def.get("label", field),
+                "field": field,
+                "value": value,
+            }
+            if "format" in item_def:
+                entry["format"] = item_def["format"]
+            if "hint" in item_def:
+                entry["hint"] = item_def["hint"]
+            if "highlight" in item_def:
+                entry["highlight"] = item_def["highlight"]
+            group_entry["items"].append(entry)
+        output_groups.append(group_entry)
+
+    return {"profile": profile, "output_groups": output_groups, "display_config": display_config}
+
+
+def _build_overview_payload(context: Any, question: str, skill_id: str, assembler: Any) -> dict:
+    """overview 模式：从真实结算数据组装「费用构成总览」。
+
+    不依赖政策检索（总览是纯数据展示，避免无依据的逐段复算）；
+    直接复用 skill manifest 的 display 配置生成 profile/output_groups，
+    与 SettlementExplanationData 契约兼容，前端可用同一组件渲染。
+
+    Returns:
+        兼容 _process_single_settlement 返回结构的 dict，关键字段：
+        - patient_view / office_view: 总览文本（自然语言汇总 + 结构化字段）
+        - case_context / profile / output_groups: 结构化构成数据
+        - target_fee_item="overview" / target_field="total_amount"
+    """
+    display = _assemble_display_payload(context, skill_id, assembler)
+
+    total = _fmt_money(context.total_amount)
+    pooling_payment = _fmt_money(context.basic_pooling_payment)
+    large_payment = _fmt_money(context.large_amount_payment)
+    deductible = _fmt_money(context.deductible)
+    pooling_self_pay = _fmt_money(context.basic_pooling_self_pay)
+    large_self_pay = _fmt_money(context.large_amount_self_pay)
+    personal_total = _fmt_money(context.personal_total_pay)
+
+    patient_view = (
+        f"本次住院总费用 {total} 元。\n\n"
+        f"【医保支付】统筹基金支付 {pooling_payment} 元，大额基金支付 {large_payment} 元。\n"
+        f"【个人承担】起付线 {deductible} 元、统筹自付 {pooling_self_pay} 元、"
+        f"大额自付 {large_self_pay} 元，个人总支付合计 {personal_total} 元。\n\n"
+        f"如需了解某一项的详细计算，可以直接追问"
+        f"（例如「统筹自付为什么是 {pooling_self_pay} 元」）。\n\n"
+        f"本回答基于真实结算数据，仅供参考，不作为报销或结算依据。"
+    )
+
+    office_view = (
+        f"结算单 {context.settlement_id} 费用构成（来源：yb_zyfdxx / yb_dyxxzy）：\n"
+        f"- 总费用 {total}\n"
+        f"- 统筹支付 {pooling_payment} / 统筹自付 {pooling_self_pay}\n"
+        f"- 大额支付 {large_payment} / 大额自付 {large_self_pay}\n"
+        f"- 起付线 {deductible}\n"
+        f"- 个人总支付 {personal_total}\n"
+        f"参保：{context.person_type} / {context.insurance_type} / {context.service_type}"
+    )
+
+    return {
+        "question": question or "查询住院费用构成",
+        "answer_type": "benefit_calculation_explanation",
+        "target_fee_item": "overview",
+        "target_field": "total_amount",
+        "target_amount": context.total_amount,
+        "data_source": "REAL_DB",
+        "mock_used": False,
+        "query_trace": {
+            "settlement_id": context.settlement_id,
+            "tables": context.tables_queried,
+            "sql_profile": context.query_profile,
+        },
+        "definition": {
+            "name": "住院费用构成",
+            "plain_text": "本次住院结算的费用构成总览，包含医保支付与个人承担各部分金额。",
+            "excludes": [],
+        },
+        "case_context": {
+            "person_type": context.person_type,
+            "insurance_type": context.insurance_type,
+            "service_type": context.service_type,
+            "hospital_level": context.hospital_level,
+            "deductible": context.deductible,
+            "yearly_cycle_count": getattr(context, "yearly_cycle_count", 0),
+            "basic_pooling_payment": context.basic_pooling_payment,
+            "basic_pooling_self_pay": context.basic_pooling_self_pay,
+            "large_amount_payment": context.large_amount_payment,
+            "large_amount_self_pay": context.large_amount_self_pay,
+            "personal_total_pay": context.personal_total_pay,
+        },
+        "policy_evidence": [],
+        "policy_status": "no_policy_matched",
+        "policy_warning": "费用构成总览不依赖单项政策规则；如需单项计算过程，请针对该单项提问。",
+        "calculation_trace": {"method": "汇总真实结算字段", "steps": []},
+        "patient_answer": patient_view,
+        "office_answer": office_view,
+        "ratio_explanation": {},
+        "explanation_completeness": {
+            "level": "real_data_only",
+            "message": "总览基于真实结算字段汇总。",
+            "has_real_data": True,
+        },
+        "warnings": [
+            "本结果来自真实数据库查询。",
+            "如需某一项的详细政策计算过程，请针对该单项提问。",
+        ],
+        "mode": "single",
+        "profile": display["profile"],
+        "output_groups": display["output_groups"],
+        "display_config": display["display_config"],
+    }
+
+
 async def _process_single_settlement(settlement_id: str, question: str = "") -> dict:
     """提取单个结算单的完整处理流程，返回结果字典。
 
@@ -693,19 +888,13 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
     if assembler is None:
         raise HTTPException(status_code=500, detail=f"Skill '{skill_id}' not loaded")
 
-    # ★ 推断目标费用项（关键词 → fee_item）
-    _fee_item_keywords = [
-        ("deductible", ["起付线", "起付标准", "门槛费"]),
-        ("large_amount_self_pay", ["大额自付", "大额互助"]),
-        ("pooling_payment", ["统筹支付", "统筹报销"]),
-        ("personal_total_pay", ["个人总支付", "个人负担"]),
-        ("pooling_self_pay", ["统筹自付", "基本统筹自付", "统筹段个人承担"]),
-    ]
-    target_fee_item = "pooling_self_pay"  # default
-    for fee_item, keywords in _fee_item_keywords:
-        if any(kw in (question or "") for kw in keywords):
-            target_fee_item = fee_item
-            break
+    # ★ 统一解释模式识别（C 方案）：overview（费用构成总览）/ single_item（单项）
+    #    消除原先「未命中关键词 → 默认 pooling_self_pay」的有毒默认。
+    mode, detected_fee_item = detect_explanation_mode(question or "")
+    if mode == ExplanationMode.OVERVIEW:
+        # 总览模式：直接返回费用构成总表，不检索单项政策、不走 assembler 单项解释
+        return _build_overview_payload(context, question, skill_id, assembler)
+    target_fee_item = detected_fee_item or "pooling_self_pay"
 
     # ★ 结构化政策规则检索（使用 skill 定义的查询计划）
     policy_evidence: list[dict] = []
@@ -796,46 +985,11 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
             target_fee_item=target_fee_item,
         )
 
-    # ★ 从 Manifest 读取前端展示配置，构建 profile / output_groups / display_config
-    manifest = get_skill_manifest(skill_id) or {}
-    display_config = manifest.get("display", {})
-
-    profile = {}
-    if "profile" in display_config:
-        profile["title"] = display_config["profile"].get("title", "")
-        profile["items"] = []
-        for item in display_config["profile"].get("items", []):
-            field = item.get("field", "")
-            # field 为 SQL 列名（如 zyjyxx.rylb），需映射到 SettlementContext 属性名
-            attr = assembler._FACT_FIELD_MAP.get(field, field)
-            value = getattr(context, attr, "") or ""
-            profile["items"].append({
-                "label": item.get("label", field),
-                "field": field,
-                "value": value,
-            })
-
-    output_groups = []
-    for group_def in display_config.get("output", []):
-        group_entry = {"group": group_def.get("group", ""), "items": []}
-        for item_def in group_def.get("items", []):
-            field = item_def.get("field", "")
-            # field 为 SQL 列名（如 zyfdxx.bdtczf），需映射到 SettlementContext 属性名
-            attr = assembler._FACT_FIELD_MAP.get(field, field)
-            value = getattr(context, attr, 0) or 0
-            entry = {
-                "label": item_def.get("label", field),
-                "field": field,
-                "value": value,
-            }
-            if "format" in item_def:
-                entry["format"] = item_def["format"]
-            if "hint" in item_def:
-                entry["hint"] = item_def["hint"]
-            if "highlight" in item_def:
-                entry["highlight"] = item_def["highlight"]
-            group_entry["items"].append(entry)
-        output_groups.append(group_entry)
+    # ★ 复用共享展示组装（C 方案：消除双端点重复）
+    _display = _assemble_display_payload(context, skill_id, assembler)
+    profile = _display["profile"]
+    output_groups = _display["output_groups"]
+    display_config = _display["display_config"]
 
     return {
         "question": question or f'{assembler._get_fee_label(target_fee_item)}为什么是{_fmt_money(assembler._get_fee_amount(context, target_fee_item))}？',

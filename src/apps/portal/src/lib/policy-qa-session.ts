@@ -10,7 +10,6 @@
  */
 
 import type { ChatMessage } from '@/components/chat/helpers'
-import type { SettlementExplanationData } from '@/lib/settlement-explanation-types'
 
 // ── 前端会话级状态类型（camelCase，组件层只见这一套）──────────────
 
@@ -68,23 +67,33 @@ export interface ReasoningStep {
   sourceMemoryIds: string[]
 }
 
-/** 回答来源（result.answer_mode，前端据此标注真实性） */
-export type AnswerMode = 'llm' | 'dummy' | 'fallback' | string
-
 /** 扩展 ChatMessage（向后兼容：新增字段均可选） */
 export interface PolicyQAChatMessage extends ChatMessage {
   /** 本轮推理链（reasoning_step 累积 + result.reasoning_steps 定稿） */
   reasoning?: ReasoningStep[]
-  /** 本轮引用的记忆 ID */
-  citedMemoryIds?: string[]
   /** 本轮上下文规划（仅 assistant 消息） */
   contextNeed?: ContextNeedSnapshot
-  /** 结构化结果（费用分解等，首轮复用 SettlementExplanationPage 渲染） */
-  richResult?: SettlementExplanationData
   /** 院端视角文本（result.office_view） */
   officeView?: string
-  /** 回答来源（llm=模型生成 / dummy=演示降级模板 / fallback=基础模板） */
-  answerMode?: AnswerMode
+  /** 单项解释的计算步骤（result.calculation_steps，single_item 模式） */
+  calculationSteps?: Array<{ step_name: string; description: string }>
+  /** 费用项定义（result.definition） */
+  definition?: { name: string; plain_text: string; excludes?: string[] }
+  /** 重要提醒（result.warnings） */
+  warnings?: string[]
+  /** 本次结算各指标真实值（result.case_context） */
+  caseContext?: {
+    person_type?: string | null
+    insurance_type?: string | null
+    service_type?: string | null
+    hospital_level?: string | null
+    deductible?: number | null
+    basic_pooling_payment?: number | null
+    basic_pooling_self_pay?: number | null
+    large_amount_payment?: number | null
+    large_amount_self_pay?: number | null
+    personal_total_pay?: number | null
+  }
 }
 
 // ── 后端 SSE payload 类型（snake_case，与 runtime_bridge.py 对齐）──
@@ -275,9 +284,6 @@ export function emptyAnchor(): SessionAnchor {
     subjectChangeMsg: null,
   }
 }
-
-/** 费用解释类问题判定（命中时才拉取 richResult，与旧 policy-qa-chat 行为一致） */
-export const FEE_QUESTION_PATTERN = /统筹自付|分段计算|起付线|报销比例|个人负担|住院费用|费用构成/
 
 // ── SSE 解析（保留后端原始事件名；readSseStream 的 SseEventType 白名单
 //    不含 context_need 等 Runtime 事件，故此处自解析）────────────────

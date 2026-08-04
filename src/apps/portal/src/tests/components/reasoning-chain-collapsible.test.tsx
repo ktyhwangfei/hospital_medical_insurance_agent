@@ -33,11 +33,10 @@ describe('ReasoningChainCollapsible', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('默认折叠：显示步数，不显示步骤内容', () => {
+  it('默认折叠：显示「查看依据」入口，不显示步骤内容', () => {
     render(<ReasoningChainCollapsible steps={[makeStep({})]} />)
     expect(screen.getByTestId('reasoning-chain-toggle')).toBeInTheDocument()
-    expect(screen.getByText('推理链')).toBeInTheDocument()
-    expect(screen.getByText('1 步')).toBeInTheDocument()
+    expect(screen.getByText('查看依据')).toBeInTheDocument()
     expect(screen.queryByTestId('reasoning-steps')).toBeNull()
   })
 
@@ -64,15 +63,5 @@ describe('ReasoningChainCollapsible', () => {
   it('defaultOpen=true 时默认展开', () => {
     render(<ReasoningChainCollapsible steps={[makeStep({})]} defaultOpen />)
     expect(screen.getByTestId('reasoning-steps')).toBeInTheDocument()
-  })
-
-  it('渲染来源记忆 ID', () => {
-    render(
-      <ReasoningChainCollapsible
-        steps={[makeStep({ sourceMemoryIds: ['m-settle', 'm-policy'] })]}
-        defaultOpen
-      />,
-    )
-    expect(screen.getByText(/来源记忆: m-settle, m-policy/)).toBeInTheDocument()
   })
 })

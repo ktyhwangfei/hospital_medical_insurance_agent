@@ -6,14 +6,12 @@
  * 设计依据：docs/steering/医保Agent-政策问答前端改造设计-V1.0.md §4.2/§七/§八
  * - 对话气泡复用 chat 组件族样式；输入框复用 chat/chat-input（包一层 @ 指令解析）
  * - 结算单号降级为「首帧锚定 + @换结算」，连续追问复用锚点
- * - 首轮 richResult（费用分解）复用 SettlementExplanationPage 渲染
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Bot, User, Loader2, ChevronDown, ChevronRight } from 'lucide-react'
+import { Bot, User, Loader2, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react'
 import ChatInput from '@/components/chat/chat-input'
 import ThinkingChain from '@/components/thinking-chain'
-import SettlementExplanationPage from '@/components/settlement-explanation-page'
 import ReasoningChainCollapsible from '@/components/policy-qa/reasoning-chain-collapsible'
 import {
   extractSettlementId,
@@ -45,6 +43,12 @@ export default function ChatStream({ stream }: ChatStreamProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const { messages, isStreaming, steps, anchor } = stream
+
+  // 通俗版解释：自动发起一条追问，复用现有结算锚点（零后端改动）
+  const handlePlainExplain = async () => {
+    if (isStreaming) return
+    await stream.send('请用更通俗的语言，避免医保专业术语，重新解释一下刚才的费用')
+  }
 
   // 新消息 / 流式更新时自动滚到底部
   useEffect(() => {
@@ -138,7 +142,12 @@ export default function ChatStream({ stream }: ChatStreamProps) {
         )}
 
         {messages.map((msg, idx) => (
-          <MessageBubble key={idx} message={msg} isStreaming={isStreaming && idx === messages.length - 1} />
+          <MessageBubble
+            key={idx}
+            message={msg}
+            isStreaming={isStreaming && idx === messages.length - 1}
+            onPlainExplain={msg.role === 'assistant' ? handlePlainExplain : undefined}
+          />
         ))}
 
         {/* 本轮执行链路（流式期间可折叠展示） */}
@@ -190,38 +199,87 @@ export default function ChatStream({ stream }: ChatStreamProps) {
 
 // ── 单条消息气泡 ─────────────────────────────────────────────
 
-/** 回答来源徽标文案（answer_mode → 用户可见标识，严肃风格） */
-function AnswerModeBadge({ mode }: { mode: string }) {
-  if (mode === 'llm') {
-    return (
-      <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">
-        AI 生成 · 请核对
-      </span>
-    )
-  }
-  if (mode === 'dummy') {
-    return (
-      <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-        演示环境 · 金额基于真实结算数据，不可作为报销依据
-      </span>
-    )
-  }
+function fmtMoney(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—'
+  return `${v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 元`
+}
+
+/** 计算依据（single_item 模式）：本次金额关系 + 计算步骤 + 释义 + 提醒。默认收起。 */
+function CalculationEvidence({ message }: { message: PolicyQAChatMessage }) {
+  const ctx = message.caseContext
+  const steps = message.calculationSteps ?? []
+  const hasContent =
+    !!ctx || steps.length > 0 || !!message.definition || (message.warnings?.length ?? 0) > 0
+  if (!hasContent) return null
+
+  const rows: Array<{ label: string; value: number | null | undefined }> = ctx
+    ? [
+        { label: '统筹支付', value: ctx.basic_pooling_payment },
+        { label: '统筹自付', value: ctx.basic_pooling_self_pay },
+        { label: '大额支付', value: ctx.large_amount_payment },
+        { label: '大额自付', value: ctx.large_amount_self_pay },
+        { label: '起付线', value: ctx.deductible },
+        { label: '个人总支付', value: ctx.personal_total_pay },
+      ]
+    : []
+
   return (
-    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
-      基础模式
-    </span>
+    <details className="w-full overflow-hidden rounded-xl border border-slate-200/70 bg-slate-50/50">
+      <summary className="cursor-pointer select-none px-3 py-2 text-[11px] font-medium text-slate-500 hover:text-slate-700">
+        计算依据
+      </summary>
+      <div className="space-y-3 border-t border-slate-200/60 px-3 py-2.5 text-xs text-slate-600">
+        {rows.length > 0 && (
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            {rows.map((r) => (
+              <div key={r.label} className="flex items-center justify-between">
+                <span className="text-slate-500">{r.label}</span>
+                <span className="font-mono text-slate-700">{fmtMoney(r.value)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {steps.length > 0 && (
+          <ol className="space-y-1.5">
+            {steps.map((s, i) => (
+              <li key={i}>
+                <span className="font-medium text-slate-700">{s.step_name}</span>
+                <p className="leading-relaxed text-slate-500">{s.description}</p>
+              </li>
+            ))}
+          </ol>
+        )}
+        {message.definition && (
+          <p className="leading-relaxed text-slate-500">
+            <span className="font-medium text-slate-700">释义：</span>
+            {message.definition.plain_text}
+          </p>
+        )}
+        {message.warnings && message.warnings.length > 0 && (
+          <ul className="space-y-1">
+            {message.warnings.map((w, i) => (
+              <li key={i} className="leading-relaxed text-amber-600">
+                ⚠ {w}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
   )
 }
 
 function MessageBubble({
   message,
   isStreaming,
+  onPlainExplain,
 }: {
   message: PolicyQAChatMessage
   isStreaming: boolean
+  onPlainExplain?: () => void
 }) {
   const isUser = message.role === 'user'
-  const showRichResult = !isUser && message.richResult
+  const [copied, setCopied] = useState(false)
 
   return (
     <div className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -260,24 +318,47 @@ function MessageBubble({
           </div>
         )}
 
-        {/* 回答来源徽标（真实性标识，严肃风格） */}
-        {!isUser && message.answerMode && !isStreaming && (
-          <AnswerModeBadge mode={message.answerMode} />
+        {/* 合规免责（每条 assistant 回答固定显示，不依赖文本尾巴） */}
+        {!isUser && message.content && !isStreaming && (
+          <p className="px-1 text-[10px] leading-relaxed text-slate-400">
+            本回答基于真实结算数据，仅供解释参考，不作为报销或结算依据。
+          </p>
         )}
 
-        {/* 本轮引用记忆标识 */}
-        {!isUser && message.citedMemoryIds && message.citedMemoryIds.length > 0 && (
-          <div className="text-[11px] text-slate-400">
-            引用记忆 {message.citedMemoryIds.length} 条
+        {/* 动作：复制 / 通俗版解释 */}
+        {!isUser && message.content && !isStreaming && (
+          <div className="flex items-center gap-3 text-[11px] text-slate-400">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(message.content)
+                  setCopied(true)
+                  setTimeout(() => setCopied(false), 1500)
+                } catch {
+                  /* 忽略复制失败（如无剪贴板权限） */
+                }
+              }}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-slate-100 hover:text-slate-600"
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              {copied ? '已复制' : '复制'}
+            </button>
+            {onPlainExplain && (
+              <button
+                type="button"
+                onClick={onPlainExplain}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-slate-100 hover:text-slate-600"
+              >
+                通俗版解释
+              </button>
+            )}
           </div>
         )}
 
-        {/* 结构化结果（首轮费用分解，复用 SettlementExplanationPage） */}
-        {showRichResult && (
-          <div className="w-full">
-            <SettlementExplanationPage data={message.richResult!} />
-          </div>
-        )}
+        {/* 计算依据（single_item 模式，默认收起） */}
+        {!isUser && <CalculationEvidence message={message} />}
+
       </div>
     </div>
   )

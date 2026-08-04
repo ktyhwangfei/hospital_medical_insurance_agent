@@ -3,20 +3,17 @@
 /**
  * SessionAnchorBar —— 顶栏业务主体锚点带（BusinessSession 可视化）
  *
- * 设计依据：docs/steering/医保Agent-政策问答前端改造设计-V1.0.md §三/§4.2
- * - 展示当前患者/就诊/结算/话题徽标
+ * - 展示当前患者/就诊/结算徽标（一线员工关心的业务主体）
  * - context_need.subject_changed=true 时渲染主体切换横幅（可关闭）
  */
 
-import { User, Building2, CreditCard, MessageSquare, X } from 'lucide-react'
+import { User, Building2, CreditCard, X } from 'lucide-react'
 import type { SessionAnchor } from '@/lib/policy-qa-session'
 
 // ── Props ────────────────────────────────────────────────────
 
 interface SessionAnchorBarProps {
   anchor: SessionAnchor
-  /** 会话 ID（跨轮复用，调试信息） */
-  sessionId?: string
   /** 关闭主体切换横幅 */
   onDismissSubjectChange?: () => void
 }
@@ -52,7 +49,6 @@ function AnchorBadge({
 
 export default function SessionAnchorBar({
   anchor,
-  sessionId,
   onDismissSubjectChange,
 }: SessionAnchorBarProps) {
   return (
@@ -85,19 +81,6 @@ export default function SessionAnchorBar({
           />
         ) : (
           <span className="text-xs text-slate-400">未锚定结算单（首轮提问请提供单号）</span>
-        )}
-        {anchor.topic && (
-          <AnchorBadge
-            icon={<MessageSquare className="h-3.5 w-3.5" />}
-            label={`话题 ${anchor.topic}`}
-            accent="amber"
-          />
-        )}
-
-        {sessionId && (
-          <span className="ml-auto font-mono text-[10px] text-slate-300">
-            session: {sessionId}
-          </span>
         )}
       </div>
 

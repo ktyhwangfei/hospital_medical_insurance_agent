@@ -14,11 +14,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { SettlementExplanationData } from '@/lib/settlement-explanation-types'
 import {
   applyContextNeed,
   emptyAnchor,
-  FEE_QUESTION_PATTERN,
   mergeReasoningSteps,
   newSessionId,
   parseSseBlock,
@@ -72,7 +70,6 @@ export interface UsePolicyQAStreamReturn {
 }
 
 const STREAM_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/stream'
-const EXPLANATION_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation'
 
 /** 更新最后一条 assistant 消息（本轮 in-flight 消息） */
 function updateLastAssistant(
@@ -189,7 +186,6 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
               : []
             updateLastAssistant(setMessages, (msg) => {
               const merged: ReasoningStep[] = mergeReasoningSteps(msg.reasoning ?? [], finalSteps)
-              const cited = Array.from(new Set(merged.flatMap((s) => s.sourceMemoryIds)))
               // 无有效回答时的兜底：引导用户咨询医保办/当地医保局（不生成猜测内容）
               const unavailableReply =
                 '当前无法基于已有结算数据给出准确、可靠的费用解释。\n\n' +
@@ -204,12 +200,25 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
                   canAnswerReason ||
                   unavailableReply,
                 reasoning: merged,
-                citedMemoryIds: cited,
                 contextNeed: turnContextNeed.current ?? undefined,
-                answerMode:
-                  typeof result.answer_mode === 'string'
-                    ? result.answer_mode
-                    : undefined,
+                calculationSteps: Array.isArray(result.calculation_steps)
+                  ? (result.calculation_steps as Array<{ step_name: string; description: string }>)
+                  : undefined,
+                definition: (result.definition ?? undefined) as
+                  | { name: string; plain_text: string; excludes?: string[] }
+                  | undefined,
+                warnings: Array.isArray(result.warnings)
+                  ? (result.warnings as string[])
+                  : undefined,
+                caseContext: (result.case_context ?? undefined) as {
+                  person_type?: string | null
+                  deductible?: number | null
+                  basic_pooling_payment?: number | null
+                  basic_pooling_self_pay?: number | null
+                  large_amount_payment?: number | null
+                  large_amount_self_pay?: number | null
+                  personal_total_pay?: number | null
+                } | undefined,
               }
             })
             break
@@ -246,9 +255,6 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
       const text = question.trim()
       const settlementId = opts?.settlementId ?? anchorRef.current.settlementId
       if (!text || !settlementId || isStreaming) return false
-
-      // 本轮新锚定的结算（用于 richResult 拉取与锚点更新）
-      const anchoredNow = Boolean(opts?.settlementId) || anchorRef.current.settlementId !== settlementId
 
       abortRef.current?.abort()
       const controller = new AbortController()
@@ -328,20 +334,6 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
               msg.content ||
               `服务暂时不可用，请稍后重试。\n\n如持续异常，请联系医院信息科或携带结算单前往医保办咨询。\n\n本回答仅供参考，不作为报销或结算依据。`,
           }))
-        }
-      }
-
-      // ── richResult：费用解释类问题拉取结构化结算解释（复用旧端点行为）──
-      if (!controller.signal.aborted && anchoredNow && FEE_QUESTION_PATTERN.test(text)) {
-        try {
-          const url = `${EXPLANATION_URL}?settlement_id=${encodeURIComponent(settlementId)}&question=${encodeURIComponent(text)}`
-          const resp = await fetch(url, { signal: controller.signal })
-          if (resp.ok) {
-            const rich = (await resp.json()) as SettlementExplanationData
-            updateLastAssistant(setMessages, (msg) => ({ ...msg, richResult: rich }))
-          }
-        } catch (e) {
-          console.warn('[usePolicyQAStream] richResult 拉取失败（已忽略）', e)
         }
       }
 

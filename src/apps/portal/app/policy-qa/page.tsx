@@ -17,13 +17,12 @@ export default function PolicyQAPage() {
         <header className="space-y-1">
           <div className="flex items-center gap-2">
             <span className="inline-flex h-7 items-center rounded-full bg-white/70 px-2.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 backdrop-blur">
-              政策·QA
+              医保费用 · 智能解答
             </span>
-            <span className="text-xs text-slate-500">持续对话 / 会话记忆 / 推理可追溯</span>
           </div>
           <h2 className="text-xl font-semibold tracking-tight text-slate-900">政策问答</h2>
           <p className="text-sm text-slate-600">
-            首轮提供结算单号锚定主体，之后可连续追问；会话记忆与推理链全程可见。
+            输入患者结算单号，快速查清费用构成与自付原因，向患者做出准确解释。
           </p>
         </header>
 
