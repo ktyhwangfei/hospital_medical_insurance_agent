@@ -1,0 +1,304 @@
+# Policy QA Chat-first 重构设计
+
+日期：2026-08-04  
+状态：已完成交互评审，待实施计划  
+风险等级：R4（修改 Policy QA 核心响应契约与结算解释链路）
+
+## 1. 背景
+
+当前 `policy-qa` 页面把查询表单、执行步骤、双视角答案、结算来源、费用分解和政策证据同时铺在页面上。主要问题不是功能不足，而是产品模型混杂：页面既像业务查询看板，又像 Agent 运行监控，还试图承担患者沟通界面。
+
+现有前端逻辑集中在 `PolicyQAChat` 中，包含大量分散状态、SSE 解析、字段映射、安全过滤和展示分支。当前 SSE 解析还按单行处理 `event:` 和 `data:`，无法稳定表达完整 SSE 帧，重构时必须先以测试固定正确行为。
+
+本次设计将页面重新定位为院端专业 Chat-first 产品：Agent 在后台自动完成结算核对与政策检索，前台优先呈现答案、政策引用和连续追问。执行细节采用渐进披露，不再作为主视觉。
+
+## 2. 产品判断依据
+
+当前主流 AI 产品会根据任务复杂度选择交互模型：
+
+- 即时咨询使用 Chat-first，回答和来源是主内容。
+- 可独立编辑、复用或导出的长内容才进入 Canvas/Artifact。
+- 分钟级长任务、后台执行和人工审批才持续展示任务进度。
+
+Policy QA 是高频、短时、可连续追问的专业咨询，不是后台长任务。因此不采用任务看板、常驻步骤栏或左右监控布局。
+
+参考：
+
+- OpenAI：Chat 与 Work 的产品分工，<https://help.openai.com/en/articles/20001275-chatgpt-work-and-codex>
+- OpenAI：搜索回答的行内引用与来源入口，<https://help.openai.com/en/articles/9237897-connectors-in-chatgpt>
+- Anthropic：Artifacts 仅承载独立、可复用的重要内容，<https://support.anthropic.com/en/articles/9487310-what-are-artifacts-and-how-do-i-use-them>
+- Google：Canvas 用于协作编辑和导出独立成果，<https://support.google.com/gemini/answer/16047321>
+
+## 3. 目标与成功标准
+
+### 3.1 目标
+
+1. 将 `policy-qa` 重构为单列、居中、连续追问的 Chat-first 页面。
+2. 建立浅色医疗专业内容区，同时保留 Portal 现有深色全局导航。
+3. 将会话状态、SSE 解析、安全过滤和展示组件拆分为清晰边界。
+4. 将双视角输出统一为面向当前院端角色的单一答案。
+5. 从公开响应和 UI 删除结算数据表名、字段名和来源明细，内部审计追溯保留。
+6. 保留结构化费用、计算过程、政策证据、引用和不确定性。
+
+### 3.2 成功标准
+
+- 1280–1920px 桌面端中，问题、回答和输入框沿单一阅读轴排列。
+- 空闲状态以 Agent 能力和示例问题引导用户，不出现传统顶部查询表单。
+- 结算单号作为 Composer 上下文标签存在，可继续用于请求。
+- 执行中只显示一句用户可理解的动态状态；完成后收敛为查证摘要。
+- 唯一答案字段为 `answer`，不再返回或渲染 `patient_view`、`office_view`。
+- 公开响应不再返回或渲染 `settlement_evidence`。
+- 政策结论携带引用；无法形成可靠结论时携带 `uncertainties`。
+- SSE 事件在分块、跨行、畸形帧和 `done` 场景下均有自动化测试。
+- 单元测试、API 测试、Flow 测试、性能测试和 E2E 按治理要求通过。
+
+## 4. 范围
+
+### 4.1 本次包含
+
+- Portal `policy-qa` 内容区视觉与布局重构。
+- 前端组件化、会话 reducer、SSE 帧解析和安全映射。
+- 后端 Policy QA 单答案生成和输出校验。
+- Policy QA 响应契约更新。
+- 删除双视角和公开结算来源相关前后端代码。
+- 对应单元、API、Flow、性能和 E2E 验证。
+
+### 4.2 本次不包含
+
+- Portal 其他页面浅色化或全局主题迁移。
+- 手机和平板专项布局。
+- 新增患者端页面或“生成患者沟通说明”动作。
+- 修改政策检索算法、结算计算规则或模型路由策略。
+- 展示内部推理、原始工具响应、数据库表名或字段名。
+
+## 5. 交互设计
+
+### 5.1 页面结构
+
+页面保留深色全局导航，内容区使用浅色背景。主内容最大宽度约 760–840px，沿单一阅读轴排列：
+
+1. 页面标题和轻量会话操作。
+2. 用户消息。
+3. Agent 查证摘要。
+4. Agent 答案正文。
+5. 结构化金额与按需展开的计算明细。
+6. 行内政策引用和“来源”入口。
+7. 建议追问。
+8. 底部持续可用的 Composer。
+
+不使用常驻左右栏、数据驾驶舱、顶部业务表单或大面积步骤卡。
+
+### 5.2 空闲状态
+
+- 居中展示 Agent 能力说明和三个到四个示例问题。
+- Composer 是主要操作入口。
+- 结算单号显示为上下文标签，而非独立表单区。
+
+### 5.3 执行中
+
+- 用户消息立即进入对话。
+- Agent 区域显示一条来自 `public_message` 的动态状态，例如“正在核对结算数据”。
+- 不展示内部推理、工具参数、数据库结构或完整执行时间线。
+- 当前请求完成前禁用重复提交，避免并发状态污染。
+
+### 5.4 完成状态
+
+- 先展示结论，再展示解释。
+- “已核对当前结算单与 6 条政策依据”作为轻量摘要，可按需展开公开、可审计的步骤摘要。
+- 金额结构使用简洁列表或表格，不使用多指标仪表盘。
+- 计算过程和费用明细使用折叠区。
+- 政策引用进入正文或答案尾部；完整来源通过临时 Dialog 打开，不形成常驻分栏。
+- 答案后提供自然的建议追问。
+
+### 5.5 部分回答与失败
+
+- `partial`：保留已确认内容，显式列出缺失信息和不确定性。
+- `unavailable`：不生成确定性结论，提供重试和人工咨询建议。
+- 政策未命中：说明未找到足够政策依据。
+- 网络中断或畸形 SSE：保留已接收内容，标记流中断并允许重试。
+
+## 6. 前端架构
+
+建议结构：
+
+```text
+policy-qa/page.tsx
+└─ PolicyQAWorkspace
+   ├─ PolicyQAEmptyState
+   ├─ PolicyMessageList
+   │  ├─ UserMessage
+   │  └─ PolicyAgentAnswer
+   │     ├─ VerificationSummary
+   │     ├─ CalculationDisclosure
+   │     └─ PolicySourcesDialog
+   └─ PolicyComposer
+
+usePolicyQASession
+├─ session reducer
+├─ submit / retry
+└─ SessionViewModel
+
+policy-qa-stream
+├─ SSE frame parser
+├─ forbidden-field filter
+├─ backend-field mapper
+└─ typed session events
+```
+
+### 6.1 职责边界
+
+- `PolicyQAWorkspace` 只负责页面编排。
+- `usePolicyQASession` 管理查询生命周期和 reducer，不包含视觉代码。
+- `policy-qa-stream` 是纯逻辑模块，负责完整 SSE 帧解析、安全过滤和类型映射。
+- `PolicyAgentAnswer` 组合现有结构化金额、费用和政策展示能力，不解析网络数据。
+- `PolicySourcesDialog` 仅展示政策依据，不展示结算表名和字段名。
+
+避免为每个小块创建单独抽象；仅拆分具有独立职责、状态或测试价值的单元。
+
+## 7. 后端契约
+
+公开结果结构：
+
+```text
+Policy QA result
+├─ answer
+├─ answer_status             complete / partial / unavailable
+├─ treatments
+├─ fee_breakdown
+├─ calculation_steps
+├─ policy_evidence
+├─ citations
+├─ uncertainties
+└─ verification_summary
+```
+
+### 7.1 删除字段
+
+- `patient_view`
+- `office_view`
+- `settlement_evidence`
+
+不保留兼容字段。当前唯一前端消费者 Portal 与后端在同一变更中同步升级。
+
+### 7.2 单答案生成
+
+- 答案面向请求中现有的院端角色；本次不新增认证、角色推断或权限逻辑。
+- 结算金额与政策结论在一份答案中表达。
+- 结构化金额、计算步骤和政策依据继续独立返回，避免从自然语言反向解析。
+- “生成患者沟通说明”未来如有真实需求，应作为独立业务动作设计。
+
+### 7.3 输出校验
+
+删除双视角专用校验，统一检查：
+
+- 不包含模拟数据标记。
+- 不包含原始 JSON、模板变量、`undefined`、`null` 或 `NaN` 泄漏。
+- 金额结论已通过内部结算数据核对。
+- 政策结论包含可展示引用。
+- 无法可靠回答时包含 `uncertainties`，且不输出伪确定结论。
+- Trace 和内部数据来源完整写入审计，不进入公开答案。
+
+## 8. 数据流
+
+```text
+Composer submit
+→ usePolicyQASession.start
+→ POST /policy-qa/stream
+→ parse complete SSE frames
+→ strip forbidden fields
+→ map typed session event
+→ session reducer
+→ SessionViewModel
+→ Chat-first UI
+```
+
+SSE 解析以空行作为帧边界，正确关联 `event:` 与随后的一个或多个 `data:` 行。`done` 明确结束当前请求。畸形事件被隔离并记录，不清空已接收的安全内容。
+
+## 9. 安全与审计
+
+- 所有流式数据先过滤禁止字段，再进入前端状态。
+- 禁止展示 reasoning、chain-of-thought、prompt、raw response、tool calls 和 agent trace。
+- 数据库表名、字段名和查询链路只进入内部审计事件。
+- 内部审计遵循现有权限与脱敏边界。
+- 用户答案必须携带政策引用或不确定性。
+- 页面固定显示“结果仅供经办参考，以正式医保系统和政策原文为准”。
+
+## 10. 测试与验证
+
+本次修改核心 API 契约并涉及结算解释链路，按 R4 执行人工设计和完整验证。
+
+### 10.1 缺陷驱动测试
+
+先补失败测试，重现 SSE `event:` 与 `data:` 跨行后事件类型丢失的问题，再实现帧解析器使测试通过。
+
+### 10.2 单元测试
+
+后端：
+
+- 单答案生成。
+- `complete`、`partial`、`unavailable` 输出校验。
+- 政策引用或不确定性门禁。
+- 公开结果不包含被删除字段。
+
+前端 Vitest：
+
+- SSE 分块、跨行、多 `data:`、畸形 JSON 和 `done`。
+- 禁止字段递归过滤。
+- reducer 状态迁移与 retry。
+- Chat-first 核心组件的空闲、执行中、完成和受限状态。
+
+### 10.3 API 测试
+
+- 流式端点返回 `answer` 和 `answer_status`。
+- 不返回 `patient_view`、`office_view`、`settlement_evidence`。
+- 政策结论包含引用；不可回答时包含不确定性。
+
+### 10.4 Flow 测试
+
+- 完整回答。
+- 部分回答。
+- 政策未命中。
+- 模型降级。
+- 流式结束与异常恢复。
+
+### 10.5 性能与 E2E
+
+API 响应结构发生变化，执行流式端点性能验证。E2E 覆盖：
+
+- Chat-first 空闲状态和 Composer。
+- 结算上下文标签。
+- 流式回答。
+- 政策引用 Dialog。
+- 计算与费用明细折叠区。
+- 连续追问。
+- 部分回答和重试。
+
+验证顺序严格为：单元测试 → API 测试 → Flow 测试；三者通过后执行性能与 E2E。
+
+## 11. 迁移与回滚
+
+### 11.1 迁移
+
+前后端在同一分支、同一交付单元中更新。先通过契约测试固定新响应，再切换 Portal 消费逻辑，最后删除旧字段和旧组件。
+
+### 11.2 回滚
+
+变更集中在独立分支，按提交回滚。由于不保留旧契约兼容字段，后端与 Portal 必须整体回滚，不允许只回滚一侧。
+
+## 12. 风险
+
+- 删除字段会使旧前端无法正常渲染，必须同步发布。
+- SSE 解析器替换可能改变事件时序，需以 API、Flow 和 E2E 三层固定。
+- 后端单答案生成可能遗漏原双视角中的信息，需用政策引用与金额核对测试约束。
+- 结构化回答内容较多时可能再次产生看板化倾向；实现评审应坚持单一阅读轴和渐进披露。
+
+## 13. 最终决策摘要
+
+- 产品模型：Chat-first。
+- 视觉：深色全局导航 + 浅色内容区。
+- 布局：桌面端单列居中，无常驻左右栏。
+- Agent 表达：自动查证、引用、连续追问；执行过程弱化并按需展开。
+- 回答：单一院端答案，不保留双视角。
+- 数据来源：公开 UI 不展示结算表名和字段名，内部审计保留。
+- 架构：完整组件化重构，但避免无价值的细粒度抽象。
+- 验证：R4，严格执行全链路验证。
