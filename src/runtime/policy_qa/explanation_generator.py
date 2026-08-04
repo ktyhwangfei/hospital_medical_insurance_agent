@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -606,7 +607,7 @@ class ExplanationGenerator:
                 scene="policy_qa",
             )
 
-            patient_view, office_view = self._parse_dual_response(result.content)
+            patient_view, office_view = self._parse_dual_response(result.content, context)
             return patient_view, office_view
 
         except Exception as e:
@@ -614,8 +615,12 @@ class ExplanationGenerator:
             placeholder = self._generate_placeholder(context)
             return placeholder, placeholder
 
-    def _parse_dual_response(self, content: str) -> tuple[str, str]:
-        """解析合并 prompt 的双视角输出。"""
+    def _parse_dual_response(self, content: str, context: ExplanationContext) -> tuple[str, str]:
+        """解析合并 prompt 的双视角输出。
+
+        若模型返回结构化 JSON（如调试 dummy 模式的遗留输出）而非自然语言，
+        则回退到基于结算数据的占位解释，避免前端展示原始 JSON。
+        """
         import re
 
         patient_view = ""
@@ -636,6 +641,14 @@ class ExplanationGenerator:
             office_view = office_match.group(1).strip()
 
         if not patient_view:
+            # 防止模型输出结构化 JSON（rule_type/rule_name...）而非自然语言
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    placeholder = self._generate_placeholder(context)
+                    return placeholder, placeholder
+            except Exception:
+                pass
             patient_view = content
         if not office_view:
             office_view = patient_view

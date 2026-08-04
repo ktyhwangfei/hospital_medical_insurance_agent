@@ -91,9 +91,28 @@ class ModelGateway:
                     "仅供参考，不作为报销凭证。\n"
                 )
             elif "结算周期" in messages[-1].content or "90天" in messages[-1].content:
-                content = '{"rule_type":"period_rule","rule_name":"住院90天结算周期","medical_scene":"住院","period_rule":{"cycle_days":90},"source_evidence":{"original_text":"住院治疗每90天为一个结算周期"}}'
+                content = (
+                    "===PATIENT===\n"
+                    "根据本次结算数据，住院治疗满 90 天将按医保政策进入新的结算周期。"
+                    "周期切换后起付线重新计算，超出部分的费用按对应政策比例报销。\n"
+                    "===PATIENT_END===\n"
+                    "===OFFICE===\n"
+                    "匹配规则：住院 90 天结算周期（period_rule）。"
+                    "数据来源：结算记录 + 政策规则检索。\n"
+                    "===OFFICE_END===\n"
+                )
             else:
-                content = '{"rule_type":"deductible_rule","rule_name":"免起付线购买国谈药","medical_scene":"住院","applicable_condition":{"hospitalization_count":">=1"},"calculation":{"deductible_amount":"0"},"source_evidence":{"original_text":"不计起付线"}}'
+                content = (
+                    "===PATIENT===\n"
+                    "根据本次结算数据，您的统筹自付金额为 4,962.67 元，"
+                    "这是基本医保统筹段内按政策比例需要您个人承担的部分，"
+                    "不包含起付线、大额自付和医保外费用。\n"
+                    "===PATIENT_END===\n"
+                    "===OFFICE===\n"
+                    "本次结算统筹自付 4,962.67 元（来源：yb_zyfdxx.bdtczf），"
+                    "为统筹段按政策比例自付部分，已匹配相关政策规则。\n"
+                    "===OFFICE_END===\n"
+                )
 
             return ModelResponse(
                 content=content,

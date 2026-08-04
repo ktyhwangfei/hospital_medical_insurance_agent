@@ -49,8 +49,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 搜索引擎初始化超时（秒）：Milvus 未就绪时快速降级，避免阻塞流式响应
-_SEARCH_ENGINE_INIT_TIMEOUT = 10
+# 搜索引擎初始化超时（秒）：PolicyRulesSearchEngine 构造会加载 sentence-transformer
+# embedding 模型（本地约 19-32s，含首次下载），超时需能容纳该加载；Milvus 未就绪时
+# 快速降级不阻塞流式响应。失败后进入 120s 冷却，避免每轮重复等待。
+_SEARCH_ENGINE_INIT_TIMEOUT = 60
+_SEARCH_ENGINE_FAIL_COOLDOWN = 120
 
 
 def _sse_event(event_type: str, data: dict | str) -> str:
@@ -93,8 +96,17 @@ def _sanitize(obj: dict) -> dict:
     return result
 
 
+# 搜索引擎模块级缓存：PolicyRulesSearchEngine 构造会加载 sentence-transformer
+# embedding 模型（约 19-32s），若每次请求重新初始化，每轮都白等。初始化成功后复用；
+# 失败记录时间戳进入冷却期（避免 Milvus 挂起时每轮重复等待），冷却后重试。
+import time as _time_module
+_search_engine_cache: Any | None = None
+_search_engine_cache_valid = False
+_search_engine_last_fail_at = 0.0
+
+
 def _init_search_engine():
-    """初始化Milvus搜索引擎（带超时保护）
+    """初始化Milvus搜索引擎（带超时保护 + 模块级缓存 + 失败冷却）
 
     MilvusClient 构造在 Milvus 代理未就绪时会长时间重试，
     若不加超时，整个流式响应会被阻塞数分钟。
@@ -103,6 +115,16 @@ def _init_search_engine():
     Returns:
         PolicyRulesSearchEngine实例或None
     """
+    global _search_engine_cache, _search_engine_cache_valid, _search_engine_last_fail_at
+
+    # 缓存命中：复用已加载的引擎（含 embedding 模型），避免每轮 19s+ 重复加载
+    if _search_engine_cache_valid:
+        return _search_engine_cache
+
+    # 失败冷却：上次失败后短时间内直接降级，不重复等待
+    if _time_module.time() - _search_engine_last_fail_at < _SEARCH_ENGINE_FAIL_COOLDOWN:
+        return None
+
     import concurrent.futures
 
     try:
@@ -112,7 +134,7 @@ def _init_search_engine():
         future = pool.submit(
             PolicyRulesSearchEngine,
             host=MILVUS_HOST,
-            port=MILVUS_PORT,
+            port=str(MILVUS_PORT),
         )
         try:
             engine = future.result(timeout=_SEARCH_ENGINE_INIT_TIMEOUT)
@@ -120,13 +142,17 @@ def _init_search_engine():
             logger.warning(
                 f'Search engine init timed out after {_SEARCH_ENGINE_INIT_TIMEOUT}s, degrading'
             )
+            _search_engine_last_fail_at = _time_module.time()
             pool.shutdown(wait=False, cancel_futures=True)
             return None
         pool.shutdown(wait=False)
         logger.info(f'Initialized PolicyRulesSearchEngine: {MILVUS_HOST}:{MILVUS_PORT}')
+        _search_engine_cache = engine
+        _search_engine_cache_valid = True
         return engine
     except Exception as e:
         logger.warning(f'Failed to initialize search engine: {e}')
+        _search_engine_last_fail_at = _time_module.time()
         return None
 
 
