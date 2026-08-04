@@ -886,12 +886,22 @@ class PolicyQAOrchestrator:
                     trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
                 )
             else:
+                # 无法可靠回答：不生成猜测性内容，直接给出引导（用户咨询医保办/医保局）
                 _evt = builder.skip("patient_view_generation", "双视角解释生成", reason=answerability.reason)
+                unavailable_reply = (
+                    "当前无法基于已有结算数据给出准确、可靠的费用解释。\n\n"
+                    "为避免误导，本系统不生成猜测性回答。建议您：\n"
+                    "- 携带医保结算单前往医院医保办（收费窗口）咨询；\n"
+                    "- 或拨打当地医保局服务热线 / 咨询当地医保经办机构。\n\n"
+                    "本回答仅供参考，不作为报销或结算依据。"
+                )
                 yield PolicyQAResponse(
                     step="answer_assembly", status="skipped",
                     public_message=f"无法回答: {answerability.reason}",
                     detail={"reason": answerability.reason, "can_answer": False, "missing_items": answerability.missing_items},
                     public_detail={"summary": f"无法回答: {answerability.reason}", "can_answer": False},
+                    patient_view=unavailable_reply,
+                    office_view=unavailable_reply,
                     trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "detail": _evt.detail},
                 )
 

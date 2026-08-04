@@ -160,14 +160,13 @@ describe('usePolicyQAStream', () => {
       snapshot: { settlement_id: '1671213', total_fee: 189085.85 },
     })
 
-    // 最后一条 assistant 消息：内容 + 推理链 + 引用记忆 + 院端视角 + answer_mode
+    // 最后一条 assistant 消息：内容 + 推理链 + 引用记忆 + answer_mode
     const last = result.current.messages[result.current.messages.length - 1]
     expect(last.role).toBe('assistant')
     expect(last.content).toContain('本次住院统筹自付 4962.67 元')
     expect(last.reasoning).toHaveLength(1)
     expect(last.reasoning![0]).toMatchObject({ stepId: 'step-1', kind: 'fact', claim: '已获取结算单 1671213 的结算数据' })
     expect(last.citedMemoryIds).toEqual(['m-settle'])
-    expect(last.officeView).toContain('本次结算统筹自付金额为 4962.67 元')
     expect(last.answerMode).toBeUndefined() // mock 流未携带 answer_mode 时保持 undefined
   })
 

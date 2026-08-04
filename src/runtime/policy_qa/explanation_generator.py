@@ -394,14 +394,10 @@ class ExplanationGenerator:
         生成占位符解释（根据用户问题生成个性化回答）
 
         核心改进: 基于实际分段计算结果和政策规则生成解释，
-        而不是硬编码文本。区分患者视角（通俗）和院端视角（专业）。
+        而不是硬编码文本。输出单视角自然语言（前端已移除双视角切换）。
         """
-        is_patient = context.user_role == "患者"
-        role_label = "【患者视角】" if is_patient else "【院端/医保办视角】"
-
         if context.intent.target_fee_item == "pooling_self_pay":
-            base = self._generate_pooling_self_pay_placeholder(context)
-            return role_label + "\n" + base
+            return self._generate_pooling_self_pay_placeholder(context)
 
         decomposition = context.decomposition
         question = context.question
@@ -503,7 +499,7 @@ class ExplanationGenerator:
             lines.append("")
 
         lines.append("如果您对这笔费用有疑问，建议咨询医院医保办或当地医保局。")
-        return role_label + "\n" + "\n".join(lines)
+        return "\n".join(lines)
 
     def _generate_pooling_self_pay_placeholder(self, context: ExplanationContext) -> str:
         """基于结构化事实生成统筹自付确定性解释。"""
@@ -599,9 +595,17 @@ class ExplanationGenerator:
     ) -> tuple[str, str]:
         """生成双视角解释 — ★ 一次 LLM 调用同时生成患者+院端两个视角。
 
+        价值门控：当结算数据不足以给出可靠回答（金额缺失/为 0）时，
+        不生成无价值解释，改为明确的「建议咨询医保办/当地医保局」引导回复。
+
         Returns:
             (patient_view, office_view)
         """
+        # 价值门控：数据不足 → 直接引导咨询，不生成含糊回答
+        if not self._has_valuable_data(context):
+            refusal = self._refusal_reply()
+            return refusal, refusal
+
         if self.model_gateway is None:
             placeholder = self._generate_placeholder(context)
             return placeholder, placeholder
@@ -643,6 +647,41 @@ class ExplanationGenerator:
             logger.exception("Dual view generation failed, falling back to placeholder")
             placeholder = self._generate_placeholder(context)
             return placeholder, placeholder
+
+    # ── 回答价值门控 ─────────────────────────────────────────────
+
+    @staticmethod
+    def _has_valuable_data(context: ExplanationContext) -> bool:
+        """判断结算数据是否足以给出有价值的回答。
+
+        任一关键金额可用（>0 或非"未获取"）即认为可回答；
+        全部缺失/为 0 时拒绝回答（避免输出无意义或误导内容）。
+        """
+        decomposition = context.decomposition
+        if decomposition is None or decomposition.treatment is None:
+            return False
+        try:
+            values = [
+                decomposition.treatment.total_fee.value,
+                decomposition.treatment.in_scope.value,
+                decomposition.treatment.pooling_self_pay.value,
+                decomposition.treatment.pooling_payment.value,
+                decomposition.treatment.personal_liability.value,
+            ]
+        except AttributeError:
+            return False
+        return any(isinstance(v, (int, float)) and v > 0 for v in values)
+
+    @staticmethod
+    def _refusal_reply() -> str:
+        """数据不足/存在风险时的标准引导回复（不编造、不猜测）。"""
+        return (
+            "当前无法基于已有结算数据给出准确、可靠的费用解释。\n\n"
+            "为避免误导，本系统不生成猜测性回答。建议您：\n"
+            "- 携带医保结算单前往医院医保办（收费窗口）咨询；\n"
+            "- 或拨打当地医保局服务热线 / 咨询当地医保经办机构。\n\n"
+            "本回答仅供参考，不作为报销或结算依据。"
+        )
 
     def _parse_dual_response(self, content: str, context: ExplanationContext) -> tuple[str, str]:
         """解析合并 prompt 的双视角输出。

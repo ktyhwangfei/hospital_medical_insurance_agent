@@ -51,23 +51,23 @@ describe('MemoryPanel', () => {
     expect(cards[1]).toHaveAttribute('data-type', 'policy')
   })
 
-  it('命中记忆标注 ✓ 来自记忆', () => {
+  it('命中记忆标注 来自记忆', () => {
     const memories = [makeCard({ memoryId: 'm-1', hitThisTurn: true })]
     render(<MemoryPanel memories={memories} />)
-    expect(screen.getByText('✓ 来自记忆')).toBeInTheDocument()
+    expect(screen.getByText('来自记忆')).toBeInTheDocument()
   })
 
-  it('本轮新查标注 ✨ 本轮新查（未命中时不重复标注）', () => {
+  it('本轮新查标注 本轮新查（未命中时不重复标注）', () => {
     const memories = [makeCard({ memoryId: 'm-1', isNewThisTurn: true, hitThisTurn: false })]
     render(<MemoryPanel memories={memories} />)
-    expect(screen.getByText('✨ 本轮新查')).toBeInTheDocument()
-    expect(screen.queryByText('✓ 来自记忆')).toBeNull()
+    expect(screen.getByText('本轮新查')).toBeInTheDocument()
+    expect(screen.queryByText('来自记忆')).toBeNull()
   })
 
-  it('STICKY 记忆标注 📌 跨话题保留', () => {
+  it('STICKY 记忆标注 跨话题保留', () => {
     const memories = [makeCard({ memoryId: 'm-1', expirePolicy: 'sticky' })]
     render(<MemoryPanel memories={memories} />)
-    expect(screen.getByText('📌 跨话题保留')).toBeInTheDocument()
+    expect(screen.getByText('跨话题保留')).toBeInTheDocument()
   })
 
   it('渲染 snapshot_keys 字段标签（无业务值时）', () => {

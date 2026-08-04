@@ -80,7 +80,7 @@ export default function SessionAnchorBar({
         {anchor.settlementId ? (
           <AnchorBadge
             icon={<CreditCard className="h-3.5 w-3.5" />}
-            label={`结算 ${anchor.settlementId} ★`}
+            label={`结算 ${anchor.settlementId}`}
             accent="emerald"
           />
         ) : (
@@ -101,13 +101,13 @@ export default function SessionAnchorBar({
         )}
       </div>
 
-      {/* 主体切换横幅（条件渲染） */}
+      {/* 主体切换横幅（条件渲染，严肃文案） */}
       {anchor.subjectChanged && anchor.subjectChangeMsg && (
         <div
           data-testid="subject-change-banner"
           className="flex items-center justify-between gap-3 rounded-xl border border-amber-200/80 bg-amber-50/90 px-4 py-2.5 text-sm text-amber-800"
         >
-          <span>⚠ {anchor.subjectChangeMsg}</span>
+          <span>{anchor.subjectChangeMsg}</span>
           {onDismissSubjectChange && (
             <button
               type="button"

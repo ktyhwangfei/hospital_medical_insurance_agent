@@ -190,10 +190,19 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
             updateLastAssistant(setMessages, (msg) => {
               const merged: ReasoningStep[] = mergeReasoningSteps(msg.reasoning ?? [], finalSteps)
               const cited = Array.from(new Set(merged.flatMap((s) => s.sourceMemoryIds)))
+              // 无有效回答时的兜底：引导用户咨询医保办/当地医保局（不生成猜测内容）
+              const unavailableReply =
+                '当前无法基于已有结算数据给出准确、可靠的费用解释。\n\n' +
+                '为避免误导，本系统不生成猜测性回答。建议您携带医保结算单前往医院医保办（收费窗口）咨询，' +
+                '或拨打当地医保局服务热线咨询。\n\n本回答仅供参考，不作为报销或结算依据。'
               return {
                 ...msg,
-                content: msg.content || patientView || officeView || canAnswerReason || '（本轮未生成文本回答）',
-                officeView: officeView || undefined,
+                content:
+                  msg.content ||
+                  patientView ||
+                  officeView ||
+                  canAnswerReason ||
+                  unavailableReply,
                 reasoning: merged,
                 citedMemoryIds: cited,
                 contextNeed: turnContextNeed.current ?? undefined,
@@ -211,7 +220,11 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
             setError(message)
             updateLastAssistant(setMessages, (msg) => ({
               ...msg,
-              content: msg.content || `⚠️ ${message}`,
+              content:
+                msg.content ||
+                `暂无法回答该问题：${message}\n\n` +
+                  '建议您核对结算单号后重试；如有疑问，请携带结算单前往医院医保办（收费窗口）' +
+                  '或拨打当地医保局服务热线咨询。\n\n本回答仅供参考，不作为报销或结算依据。',
             }))
             break
           }
@@ -311,7 +324,9 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
           setError(message)
           updateLastAssistant(setMessages, (msg) => ({
             ...msg,
-            content: msg.content || `⚠️ 请求失败：${message}`,
+            content:
+              msg.content ||
+              `服务暂时不可用，请稍后重试。\n\n如持续异常，请联系医院信息科或携带结算单前往医保办咨询。\n\n本回答仅供参考，不作为报销或结算依据。`,
           }))
         }
       }

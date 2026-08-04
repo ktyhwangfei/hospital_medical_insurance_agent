@@ -190,19 +190,19 @@ export default function ChatStream({ stream }: ChatStreamProps) {
 
 // ── 单条消息气泡 ─────────────────────────────────────────────
 
-/** 回答来源徽标文案（answer_mode → 用户可见标识） */
+/** 回答来源徽标文案（answer_mode → 用户可见标识，严肃风格） */
 function AnswerModeBadge({ mode }: { mode: string }) {
   if (mode === 'llm') {
     return (
       <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">
-        ✨ AI 生成 · 请核对
+        AI 生成 · 请核对
       </span>
     )
   }
   if (mode === 'dummy') {
     return (
       <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-        ⚠️ 演示模式 · 金额基于真实结算数据
+        演示环境 · 金额基于真实结算数据，不可作为报销依据
       </span>
     )
   }
@@ -222,11 +222,6 @@ function MessageBubble({
 }) {
   const isUser = message.role === 'user'
   const showRichResult = !isUser && message.richResult
-  // 双视角切换（患者视角 = content，院端视角 = officeView）
-  const [view, setView] = useState<'patient' | 'office'>('patient')
-  const showDualView = !isUser && Boolean(message.officeView)
-  const displayContent =
-    !isUser && view === 'office' && message.officeView ? message.officeView : message.content
 
   return (
     <div className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -242,32 +237,15 @@ function MessageBubble({
       </div>
 
       <div className={`flex max-w-[85%] flex-col gap-2 ${isUser ? 'items-end' : 'items-start'}`}>
-        {/* 双视角切换（患者/院端） */}
-        {showDualView && (
-          <div className="flex gap-1 rounded-lg bg-slate-100/80 p-0.5">
-            <button
-              type="button"
-              onClick={() => setView('patient')}
-              className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                view === 'patient' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-600'
-              }`}
-            >
-              患者视角
-            </button>
-            <button
-              type="button"
-              onClick={() => setView('office')}
-              className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                view === 'office' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-600'
-              }`}
-            >
-              院端视角
-            </button>
+        {/* 推理链（位于回答文本上方，可折叠） */}
+        {!isUser && message.reasoning && message.reasoning.length > 0 && (
+          <div className="w-full">
+            <ReasoningChainCollapsible steps={message.reasoning} />
           </div>
         )}
 
         {/* 文本气泡 */}
-        {(displayContent || isStreaming) && (
+        {(message.content || isStreaming) && (
           <div
             className={`whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm ${
               isUser
@@ -275,29 +253,22 @@ function MessageBubble({
                 : 'rounded-tl-md border border-slate-200/80 bg-white text-slate-800'
             }`}
           >
-            {displayContent}
+            {message.content}
             {isStreaming && !isUser && (
               <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-blue-500 align-middle" />
             )}
           </div>
         )}
 
-        {/* 回答来源徽标（真实性标识） */}
+        {/* 回答来源徽标（真实性标识，严肃风格） */}
         {!isUser && message.answerMode && !isStreaming && (
           <AnswerModeBadge mode={message.answerMode} />
-        )}
-
-        {/* 推理链（可折叠，阶段二） */}
-        {!isUser && message.reasoning && message.reasoning.length > 0 && (
-          <div className="w-full">
-            <ReasoningChainCollapsible steps={message.reasoning} />
-          </div>
         )}
 
         {/* 本轮引用记忆标识 */}
         {!isUser && message.citedMemoryIds && message.citedMemoryIds.length > 0 && (
           <div className="text-[11px] text-slate-400">
-            💭 引用记忆 {message.citedMemoryIds.length} 条
+            引用记忆 {message.citedMemoryIds.length} 条
           </div>
         )}
 

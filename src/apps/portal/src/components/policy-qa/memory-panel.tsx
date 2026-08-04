@@ -107,7 +107,6 @@ export default function MemoryPanel({ memories, lastContextNeed }: MemoryPanelPr
           对话后将在此沉淀结算 / 政策 / 规则记忆
         </div>
       )}
-
       {/* 记忆卡列表（按类型分组） */}
       <div className="space-y-3">
         {groups.map((group) => {
@@ -156,21 +155,21 @@ function MemoryCardView({ card }: { card: MemoryCard }) {
         <span className="font-mono text-[11px] font-medium text-slate-700">
           {card.refId ?? card.memoryId.slice(0, 8)}
         </span>
-        {/* 来源标注 */}
+        {/* 来源标注（严肃风格，纯文字） */}
         <div className="flex items-center gap-1">
           {card.hitThisTurn && (
             <span className="rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700">
-              ✓ 来自记忆
+              来自记忆
             </span>
           )}
           {card.isNewThisTurn && !card.hitThisTurn && (
             <span className="rounded bg-blue-100 px-1 py-0.5 text-[10px] font-medium text-blue-700">
-              ✨ 本轮新查
+              本轮新查
             </span>
           )}
           {card.expirePolicy === 'sticky' && (
             <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] font-medium text-slate-500">
-              📌 跨话题保留
+              跨话题保留
             </span>
           )}
         </div>

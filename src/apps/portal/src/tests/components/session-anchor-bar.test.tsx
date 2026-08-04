@@ -32,7 +32,7 @@ describe('SessionAnchorBar', () => {
     render(<SessionAnchorBar anchor={makeAnchor()} />)
     expect(screen.getByText('患者 P001')).toBeInTheDocument()
     expect(screen.getByText('就诊 E001')).toBeInTheDocument()
-    expect(screen.getByText('结算 1671213 ★')).toBeInTheDocument()
+    expect(screen.getByText('结算 1671213')).toBeInTheDocument()
   })
 
   it('无结算单时显示未锚定提示', () => {
