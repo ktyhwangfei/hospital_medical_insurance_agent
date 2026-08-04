@@ -606,15 +606,20 @@ class ExplanationGenerator:
             refusal = self._refusal_reply()
             return refusal, refusal
 
-        if self.model_gateway is None:
-            placeholder = self._generate_placeholder(context)
+        def _quality_gated(placeholder: str) -> tuple[str, str]:
+            """生成后质量检查：含"未获取/待定"等缺失标记 → 拒绝回答。"""
+            if self._text_has_missing_markers(placeholder):
+                refusal = self._refusal_reply()
+                return refusal, refusal
             return placeholder, placeholder
+
+        if self.model_gateway is None:
+            return _quality_gated(self._generate_placeholder(context))
 
         # ★ dummy 调试模式：model_gateway 返回固定 mock（写死金额，换结算单即错），
         # 不可作为回答。统一降级为基于真实结算数据（decomposition）的模板解释。
         if self.mode == "dummy":
-            placeholder = self._generate_placeholder(context)
-            return placeholder, placeholder
+            return _quality_gated(self._generate_placeholder(context))
 
         try:
             decomposition_text = self._format_decomposition(context.decomposition)
@@ -645,8 +650,7 @@ class ExplanationGenerator:
 
         except Exception as e:
             logger.exception("Dual view generation failed, falling back to placeholder")
-            placeholder = self._generate_placeholder(context)
-            return placeholder, placeholder
+            return _quality_gated(self._generate_placeholder(context))
 
     # ── 回答价值门控 ─────────────────────────────────────────────
 
@@ -654,8 +658,10 @@ class ExplanationGenerator:
     def _has_valuable_data(context: ExplanationContext) -> bool:
         """判断结算数据是否足以给出有价值的回答。
 
-        任一关键金额可用（>0 或非"未获取"）即认为可回答；
-        全部缺失/为 0 时拒绝回答（避免输出无意义或误导内容）。
+        判定规则：
+        1. treatment 关键金额任一可用（>0）—— 无数据拒绝；
+        2. 「统筹自付」类问题必须已完成分段计算（存在 pay>0 的分段）——
+           否则无法解释"为什么这么多"，半成品（未获取）直接拒绝。
         """
         decomposition = context.decomposition
         if decomposition is None or decomposition.treatment is None:
@@ -670,7 +676,23 @@ class ExplanationGenerator:
             ]
         except AttributeError:
             return False
-        return any(isinstance(v, (int, float)) and v > 0 for v in values)
+        if not any(isinstance(v, (int, float)) and v > 0 for v in values):
+            return False
+
+        # 统筹自付类问题：必须存在计算出的分段（pay > 0），否则拒绝
+        if context.intent.target_fee_item == "pooling_self_pay":
+            segments = decomposition.segments
+            if segments is None or not segments.segments:
+                return False
+            if not any(getattr(s, "pay", 0) and s.pay > 0 for s in segments.segments):
+                return False
+
+        return True
+
+    @staticmethod
+    def _text_has_missing_markers(text: str) -> bool:
+        """回答文本是否含"未获取"等缺失标记（半成品回答直接拒绝）。"""
+        return "未获取" in text or "待定" in text
 
     @staticmethod
     def _refusal_reply() -> str:
