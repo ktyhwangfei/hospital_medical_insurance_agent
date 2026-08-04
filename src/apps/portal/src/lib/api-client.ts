@@ -21,6 +21,10 @@ export async function listInfraSkills(filter?: InfraSkillsFilter): Promise<Infra
   return requestJson<InfraSkillItem[]>(`/infra-skills${query ? `?${query}` : ''}`)
 }
 
+export async function getInfraSkillsOverview(): Promise<InfraSkillOverviewResponse> {
+  return requestJson<InfraSkillOverviewResponse>('/infra-skills/overview')
+}
+
 export async function getInfraSkillDetail(skillId: string): Promise<InfraSkillDetailResponse> {
   return requestJson<InfraSkillDetailResponse>(`/infra-skills/${encodeURIComponent(skillId)}`)
 }
@@ -93,6 +97,7 @@ import type {
   WorkflowStatusResponse,
   InfraSkillItem,
   InfraSkillDetailResponse,
+  InfraSkillOverviewResponse,
   SkillRouteTestRequest,
   SkillRouteTestResponse,
   SkillExecuteTestRequest,

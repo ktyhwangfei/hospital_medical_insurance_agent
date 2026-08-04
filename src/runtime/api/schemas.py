@@ -57,6 +57,11 @@ class SkillRouteTestRequest(BaseModel):
 class SkillRouteTestResponse(BaseModel):
     question: str
     matched_skill_id: Optional[str] = None
+    confidence: float = 0.0
+    match_method: str = "none"
+    matched_keywords: list[str] = Field(default_factory=list)
+    excluded_keywords: list[str] = Field(default_factory=list)
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
 
 class SkillExecuteTestRequest(BaseModel):
     question: str
@@ -75,6 +80,30 @@ class SkillExecuteTestResponse(BaseModel):
     skill_id: str
     status: str
     result: Any
+    warnings: list[str] = Field(default_factory=list)
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    trace: list[dict[str, Any]] = Field(default_factory=list)
+    input_summary: dict[str, Any] = Field(default_factory=dict)
+    latency_ms: int | None = None
+
+
+class InfraSkillOverviewItem(BaseModel):
+    skill_id: str
+    skill_name: str
+    business_action: str = ""
+    business_object: str = ""
+    loaded: bool = True
+    manifest_valid: bool = True
+    field_mapping_configured: bool = False
+    metric_count: int = 0
+    last_test_status: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class InfraSkillOverviewResponse(BaseModel):
+    skill_count: int
+    skills: list[InfraSkillOverviewItem] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):

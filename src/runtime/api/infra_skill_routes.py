@@ -1,4 +1,5 @@
 import logging
+import time
 from pathlib import Path
 
 import yaml
@@ -10,6 +11,8 @@ logger = logging.getLogger(__name__)
 from src.runtime.api.schemas import (
     FieldMappingItem,
     FieldMappingResponse,
+    InfraSkillOverviewItem,
+    InfraSkillOverviewResponse,
     InfraSkillDetailResponse,
     InfraSkillFilesStructure,
     InfraSkillItem,
@@ -21,7 +24,8 @@ from src.runtime.api.schemas import (
 )
 from src.shared.schemas.responses import error_detail
 from src.skill_infra.skill_loader import get_loader, refresh_loader
-from src.skill_infra.skill_router import get_assembler, route_question
+from src.skill_infra.skill_router import get_assembler
+from src.skill_infra.unified_router import route_question_ranked
 
 router = APIRouter()
 
@@ -104,6 +108,11 @@ def _read_field_mapping(skill_dir: Path) -> FieldMappingResponse | None:
         return None
 
 
+@router.get("/infra-skills/overview", response_model=InfraSkillOverviewResponse)
+def get_infra_skills_overview_early() -> InfraSkillOverviewResponse:
+    return get_infra_skills_overview()
+
+
 @router.get("/infra-skills/{skill_id}", response_model=InfraSkillDetailResponse)
 def get_infra_skill_details(skill_id: str) -> InfraSkillDetailResponse:
     loader = get_loader()
@@ -149,10 +158,37 @@ def get_infra_skill_details(skill_id: str) -> InfraSkillDetailResponse:
 
 @router.post("/infra-skills/route-test", response_model=SkillRouteTestResponse)
 def test_infra_skill_routing(request: SkillRouteTestRequest) -> SkillRouteTestResponse:
-    matched_id = route_question(request.question)
+    matches = route_question_ranked(request.question, min_confidence=0.0)
+    top = matches[0] if matches else None
     return SkillRouteTestResponse(
         question=request.question,
-        matched_skill_id=matched_id,
+        matched_skill_id=top.skill_id if top else None,
+        confidence=top.confidence if top else 0.0,
+        match_method=top.match_method if top else "none",
+        matched_keywords=top.matched_keywords if top else [],
+        candidates=[match.to_dict() for match in matches[:5]],
+    )
+
+
+def _safe_input_summary(request: SkillExecuteTestRequest) -> dict[str, object]:
+    """只返回调试所需的非敏感上下文摘要，不回显原始患者数据。"""
+    context = request.context or {}
+    return {
+        "context_keys": sorted(context.keys()),
+        "patient_id": context.get("patient_id"),
+        "encounter_id": context.get("encounter_id"),
+        "target_fee_item": request.target_fee_item,
+    }
+
+
+def _result_diagnostics(result: object) -> tuple[list[str], list[dict], list[str], list[dict]]:
+    if not isinstance(result, dict):
+        return [], [], [], []
+    return (
+        list(result.get("warnings", []) or []),
+        list(result.get("citations", []) or []),
+        list(result.get("uncertainties", []) or []),
+        list(result.get("trace", []) or []),
     )
 
 
@@ -190,18 +226,57 @@ def test_infra_skill_execution(
         if "target_fee_item" in sig.parameters and request.target_fee_item:
             kwargs["target_fee_item"] = request.target_fee_item
 
+        started = time.perf_counter()
         result = assembler.execute(**kwargs)
+        warnings, citations, uncertainties, trace = _result_diagnostics(result)
         
         return SkillExecuteTestResponse(
             skill_id=skill_id,
             status="success",
             result=result,
+            warnings=warnings,
+            citations=citations,
+            uncertainties=uncertainties,
+            trace=trace,
+            input_summary=_safe_input_summary(request),
+            latency_ms=round((time.perf_counter() - started) * 1000),
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=error_detail("SKILL_EXECUTION_FAILED", str(e), {"skill_id": skill_id}),
         )
+
+
+@router.get("/infra-skills/overview", response_model=InfraSkillOverviewResponse)
+def get_infra_skills_overview() -> InfraSkillOverviewResponse:
+    """返回管理页面使用的 Skill 健康摘要。"""
+    loader = get_loader()
+    items: list[InfraSkillOverviewItem] = []
+    for skill_id, skill in loader.get_all().items():
+        skill_dir = Path(SKILLS_DIR) / skill_id
+        manifest_path = skill_dir / "skill_manifest.yaml"
+        warnings: list[str] = []
+        manifest_valid = manifest_path.exists()
+        if not manifest_valid:
+            warnings.append("缺少 skill_manifest.yaml")
+        field_mapping_configured = (skill_dir / "field_mapping.yaml").exists()
+        metric_count = sum(
+            len(declaration.get("metrics", []))
+            for declaration in (skill.manifest.get("needed_objects", []) or [])
+            if isinstance(declaration, dict)
+        )
+        items.append(InfraSkillOverviewItem(
+            skill_id=skill_id,
+            skill_name=skill.skill_name,
+            business_action=skill.business_action,
+            business_object=skill.business_object,
+            manifest_valid=manifest_valid,
+            field_mapping_configured=field_mapping_configured,
+            metric_count=metric_count,
+            warnings=warnings,
+        ))
+    return InfraSkillOverviewResponse(skill_count=len(items), skills=items)
 
 
 @router.post("/infra-skills/refresh", response_model=SkillRefreshResponse)

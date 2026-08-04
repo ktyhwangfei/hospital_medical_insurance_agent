@@ -349,6 +349,17 @@ export interface SkillRouteTestRequest {
 export interface SkillRouteTestResponse {
   question: string
   matched_skill_id?: string | null
+  confidence: number
+  match_method: string
+  matched_keywords: string[]
+  excluded_keywords: string[]
+  candidates: Array<{
+    skill_id: string
+    skill_name: string
+    confidence: number
+    matched_keywords: string[]
+    match_method: string
+  }>
 }
 
 export interface SkillExecuteTestRequest {
@@ -363,6 +374,30 @@ export interface SkillExecuteTestResponse {
   skill_id: string
   status: string
   result: unknown
+  warnings: string[]
+  citations: Array<Record<string, unknown>>
+  uncertainties: string[]
+  trace: Array<Record<string, unknown>>
+  input_summary: Record<string, unknown>
+  latency_ms?: number | null
+}
+
+export interface InfraSkillOverviewItem {
+  skill_id: string
+  skill_name: string
+  business_action: string
+  business_object: string
+  loaded: boolean
+  manifest_valid: boolean
+  field_mapping_configured: boolean
+  metric_count: number
+  last_test_status?: string | null
+  warnings: string[]
+}
+
+export interface InfraSkillOverviewResponse {
+  skill_count: number
+  skills: InfraSkillOverviewItem[]
 }
 
 // ── 语义层（最新）：技能↔指标关系 ─────────────────────────────────

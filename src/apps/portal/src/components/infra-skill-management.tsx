@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Beaker, BookOpen, Code2, Database, Play, Search, FolderTree } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +17,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   getInfraSkillDetail,
+  getInfraSkillsOverview,
   listInfraSkills,
   testInfraSkillExecution,
   testInfraSkillRouting,
@@ -26,6 +27,7 @@ import type {
   InfraSkillDetailResponse,
   InfraSkillItem,
   FieldMappingItem,
+  InfraSkillOverviewItem,
 } from '@/lib/types'
 import SkillQuestionExplainer from './skill-question-explainer'
 import SkillQueryPlan from './skill-query-plan'
@@ -86,7 +88,6 @@ function SkillFieldMapping({ detail }: { detail: InfraSkillDetailResponse }) {
   const manifest = detail.manifest as Record<string, unknown> | undefined
   const requiredSettlementFields: string[] = (manifest?.required_settlement_fields as string[] | undefined) ?? []
   const requiredMcp: string[] = (manifest?.required_mcp as string[] | undefined) ?? []
-  const optionalMcp: string[] = (manifest?.optional_mcp as string[] | undefined) ?? []
   const fieldMapping = detail.field_mapping
 
   if (!fieldMapping?.settlement_fields) {
@@ -175,10 +176,13 @@ export default function InfraSkillManagement() {
   const [skills, setSkills] = useState<InfraSkillItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [overview, setOverview] = useState<InfraSkillOverviewItem[]>([])
+  const [overviewError, setOverviewError] = useState<string | null>(null)
 
   // Filter state
   const [actionFilter, setActionFilter] = useState<string>('')
   const [objectFilter, setObjectFilter] = useState<string>('')
+  const [search, setSearch] = useState('')
 
   // Modals state
   const [detailDialogOpen, setDetailDialogOpen] = useState(false)
@@ -192,6 +196,7 @@ export default function InfraSkillManagement() {
   // Route Test State
   const [routeQuestion, setRouteQuestion] = useState('')
   const [routeResult, setRouteResult] = useState<string | null>(null)
+  const [routeDetails, setRouteDetails] = useState<Awaited<ReturnType<typeof testInfraSkillRouting>> | null>(null)
   const [routeTesting, setRouteTesting] = useState(false)
 
   // 各技能引用的语义指标数（语义层消费视图）
@@ -202,13 +207,10 @@ export default function InfraSkillManagement() {
   const [testTargetFeeItem, setTestTargetFeeItem] = useState('')
   const [testContext, setTestContext] = useState('{\n  "patient_id": "P001",\n  "encounter_id": "E001"\n}')
   const [testResult, setTestResult] = useState<string | null>(null)
+  const [executionDetails, setExecutionDetails] = useState<Awaited<ReturnType<typeof testInfraSkillExecution>> | null>(null)
   const [executingTest, setExecutingTest] = useState(false)
 
-  useEffect(() => {
-    loadSkills()
-  }, [actionFilter, objectFilter])
-
-  const loadSkills = async () => {
+  const loadSkills = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -217,6 +219,13 @@ export default function InfraSkillManagement() {
         business_object: objectFilter || undefined,
       })
       setSkills(data)
+      try {
+        const summary = await getInfraSkillsOverview()
+        setOverview(summary.skills)
+        setOverviewError(null)
+      } catch (overviewErr) {
+        setOverviewError(overviewErr instanceof Error ? overviewErr.message : '无法加载 Skill 状态')
+      }
       // 并发拉取每个技能引用的语义指标数（容错：失败记 0）
       const counts = await Promise.all(
         data.map(async (s) => {
@@ -234,7 +243,13 @@ export default function InfraSkillManagement() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [actionFilter, objectFilter])
+
+  useEffect(() => {
+    // 页面进入和筛选变化时需要主动同步远端 Skill 列表。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadSkills()
+  }, [loadSkills])
 
   const openDetail = async (skillId: string) => {
     setDetailDialogOpen(true)
@@ -252,6 +267,7 @@ export default function InfraSkillManagement() {
   const openTest = (skillId: string) => {
     setTestDialogOpen(true)
     setTestResult(null)
+    setExecutionDetails(null)
     // Pre-load details if needed, but we mainly need skillId
     // If we want to show skill name, we can find it
     const s = skills.find((x) => x.skill_id === skillId)
@@ -262,8 +278,10 @@ export default function InfraSkillManagement() {
     if (!routeQuestion.trim()) return
     setRouteTesting(true)
     setRouteResult(null)
+    setRouteDetails(null)
     try {
       const res = await testInfraSkillRouting({ question: routeQuestion })
+      setRouteDetails(res)
       setRouteResult(res.matched_skill_id ? `匹配到技能: ${res.matched_skill_id}` : '未匹配到任何技能')
     } catch (err) {
       setRouteResult(`错误: ${err instanceof Error ? err.message : '未知错误'}`)
@@ -276,6 +294,7 @@ export default function InfraSkillManagement() {
     if (!selectedSkill || !testQuestion.trim()) return
     setExecutingTest(true)
     setTestResult(null)
+    setExecutionDetails(null)
     try {
       let parsedContext = undefined
       if (testContext.trim()) {
@@ -289,6 +308,7 @@ export default function InfraSkillManagement() {
       }
 
       const res = await testInfraSkillExecution(selectedSkill.skill_id, payload)
+      setExecutionDetails(res)
       setTestResult(JSON.stringify(res, null, 2))
     } catch (err) {
       setTestResult(`执行失败:\n${err instanceof Error ? err.message : '未知错误'}`)
@@ -296,6 +316,11 @@ export default function InfraSkillManagement() {
       setExecutingTest(false)
     }
   }
+
+  const visibleSkills = skills.filter((skill) => {
+    const query = search.trim().toLowerCase()
+    return !query || `${skill.skill_name} ${skill.skill_id}`.toLowerCase().includes(query)
+  })
 
   return (
     <div className="space-y-4">
@@ -354,6 +379,23 @@ export default function InfraSkillManagement() {
           )}
           <span className="text-xs text-gray-400 ml-auto">{skills.length} 个技能</span>
         </div>
+        <div className="px-6 pb-3">
+          <Input aria-label="搜索 Skill" placeholder="搜索名称或 Skill ID" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        {overviewError && (
+          <div className="mx-6 mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            状态摘要加载失败：{overviewError}。列表仍可使用。
+            <button className="ml-2 underline" onClick={loadSkills}>重试</button>
+          </div>
+        )}
+        {overview.length > 0 && (
+          <div className="mx-6 mb-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs"><div className="text-slate-500">已加载</div><strong>{overview.filter((item) => item.loaded).length}</strong></div>
+            <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs"><div className="text-slate-500">Manifest 正常</div><strong>{overview.filter((item) => item.manifest_valid).length}</strong></div>
+            <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs"><div className="text-slate-500">字段映射</div><strong>{overview.filter((item) => item.field_mapping_configured).length}</strong></div>
+            <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs"><div className="text-slate-500">指标引用</div><strong>{overview.reduce((total, item) => total + item.metric_count, 0)}</strong></div>
+          </div>
+        )}
         <CardContent>
           {loading ? (
             <div className="text-center py-8 text-gray-500">加载中...</div>
@@ -373,7 +415,7 @@ export default function InfraSkillManagement() {
                   </tr>
                 </thead>
                 <tbody>
-                  {skills.map((skill) => (
+                  {visibleSkills.map((skill) => (
                     <tr key={skill.skill_id} className="border-b last:border-0 hover:bg-gray-50">
                       <td className="py-3 pr-4">
                         <div className="font-medium">{skill.skill_name}</div>
@@ -521,6 +563,8 @@ export default function InfraSkillManagement() {
                 placeholder="例如：统筹自付是什么？" 
                 value={routeQuestion}
                 onChange={e => setRouteQuestion(e.target.value)}
+                aria-label="路由测试问题"
+                data-testid="route-question"
               />
             </div>
             <Button onClick={handleRouteTest} disabled={routeTesting || !routeQuestion.trim()} className="w-full">
@@ -530,7 +574,14 @@ export default function InfraSkillManagement() {
             {routeResult && (
               <div className="mt-4 p-3 bg-gray-50 border rounded-md">
                 <span className="text-sm font-medium text-gray-700">匹配结果：</span>
-                <div className="mt-1 text-sm font-mono text-blue-600 font-bold">{routeResult}</div>
+                <div data-testid="route-result" className="mt-1 text-sm font-mono text-blue-600 font-bold">{routeResult}</div>
+                {routeDetails && (
+                  <div className="mt-3 space-y-2 text-xs text-gray-600">
+                    <div>置信度：<strong>{Math.round(routeDetails.confidence * 100)}%</strong>　方式：{routeDetails.match_method}</div>
+                    <div>命中关键词：{routeDetails.matched_keywords.length ? routeDetails.matched_keywords.join('、') : '无'}</div>
+                    {routeDetails.candidates.length > 1 && <div>候选：{routeDetails.candidates.map((candidate) => `${candidate.skill_name} (${Math.round(candidate.confidence * 100)}%)`).join('、')}</div>}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -553,6 +604,8 @@ export default function InfraSkillManagement() {
                 placeholder="用户的提问" 
                 value={testQuestion}
                 onChange={e => setTestQuestion(e.target.value)}
+                aria-label="执行测试问题"
+                data-testid="execution-question"
               />
             </div>
             <div>
@@ -581,7 +634,15 @@ export default function InfraSkillManagement() {
             {testResult && (
               <div className="mt-4">
                 <label className="text-sm font-medium mb-1 block">执行结果：</label>
-                <pre className="p-3 bg-gray-900 text-gray-100 rounded-md text-xs font-mono overflow-x-auto max-h-64 overflow-y-auto">
+                {executionDetails && (
+                  <div className="mb-3 space-y-2 text-xs">
+                    {executionDetails.warnings.length > 0 && <div className="rounded border border-amber-200 bg-amber-50 p-2 text-amber-700">警告：{executionDetails.warnings.join('；')}</div>}
+                    {executionDetails.uncertainties.length > 0 && <div className="rounded border border-orange-200 bg-orange-50 p-2 text-orange-700">不确定性：{executionDetails.uncertainties.join('；')}</div>}
+                    {executionDetails.citations.length > 0 && <div className="rounded border border-blue-200 bg-blue-50 p-2 text-blue-700">来源：{executionDetails.citations.length} 条</div>}
+                    {executionDetails.latency_ms != null && <div className="text-gray-500">耗时：{executionDetails.latency_ms}ms</div>}
+                  </div>
+                )}
+                <pre data-testid="execution-result" className="p-3 bg-gray-900 text-gray-100 rounded-md text-xs font-mono overflow-x-auto max-h-64 overflow-y-auto">
                   {testResult}
                 </pre>
               </div>

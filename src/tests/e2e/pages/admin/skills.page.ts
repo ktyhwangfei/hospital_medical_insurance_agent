@@ -14,6 +14,11 @@ export class SkillsPage extends BasePage {
   readonly submitButton: Locator;
   readonly deleteButton: Locator;
   readonly enableToggle: Locator;
+  readonly routeTestButton: Locator;
+  readonly routeQuestion: Locator;
+  readonly routeResult: Locator;
+  readonly executionQuestion: Locator;
+  readonly executionResult: Locator;
 
   constructor(page: Page) {
     super(page, 'http://127.0.0.1:3001');
@@ -33,6 +38,11 @@ export class SkillsPage extends BasePage {
     this.submitButton = page.getByRole('button', { name: /确定|提交|submit|save|保存/i });
     this.deleteButton = page.getByRole('button', { name: /删除|delete|移除/i });
     this.enableToggle = page.locator('[class*="toggle"], [class*="switch"], input[type="checkbox"]');
+    this.routeTestButton = page.getByRole('button', { name: /璺敱娴嬭瘯|route/i });
+    this.routeQuestion = page.getByTestId('route-question');
+    this.routeResult = page.getByTestId('route-result');
+    this.executionQuestion = page.getByTestId('execution-question');
+    this.executionResult = page.getByTestId('execution-result');
   }
 
   /**
@@ -126,5 +136,34 @@ export class SkillsPage extends BasePage {
    */
   async getSkillCount(): Promise<number> {
     return this.skillList.locator('tr, [class*="row"], li').count();
+  }
+
+  async openRouteTest(): Promise<void> {
+    await this.routeTestButton.click();
+  }
+
+  async openExecutionTest(skillName?: string): Promise<void> {
+    const row = skillName ? this.getSkillRow(skillName) : this.skillList.locator('tbody tr').first();
+    await row.getByRole('button', { name: /娴嬭瘯|test/i }).click();
+  }
+
+  async submitRouteQuestion(question: string): Promise<void> {
+    await this.routeQuestion.fill(question);
+    await this.page.getByRole('button', { name: /娴嬭瘯鍖归厤|test/i }).click();
+  }
+
+  async readRouteExplanation(): Promise<string> {
+    await this.routeResult.waitFor({ state: 'visible' });
+    return (await this.routeResult.textContent()) ?? '';
+  }
+
+  async submitExecutionQuestion(question: string): Promise<void> {
+    await this.executionQuestion.fill(question);
+    await this.page.getByRole('button', { name: /杩愯娴嬭瘯|run/i }).click();
+  }
+
+  async readExecutionResult(): Promise<string> {
+    await this.executionResult.waitFor({ state: 'visible' });
+    return (await this.executionResult.textContent()) ?? '';
   }
 }
