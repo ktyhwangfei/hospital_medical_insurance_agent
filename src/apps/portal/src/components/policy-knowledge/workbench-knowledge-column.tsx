@@ -215,6 +215,12 @@ function KnowledgeCard({ knowledge, index, selected, view, onSelect, onFocus }: 
   const dimFields = knowledge.fields.filter((f) => fieldTier(f) === 'dimension')
   const descFields = knowledge.fields.filter((f) => fieldTier(f) === 'descriptive')
 
+  // 业务句清洗：优先取 rule_value 自然语言，避免展示 entities/relations JSON 拼接句
+  const mainSentence = knowledge.fields.find((f) => f.field_code === 'rule_value')?.raw_value
+    ?? knowledge.business_sentence
+  // 原文对照：优先取 citations evidence（政策原文），数字高亮在此处才有审计意义
+  const evidence = knowledge.citations[0]?.evidence || knowledge.source_text || ''
+
   return (
     <button type="button" id={`policy-knowledge-${knowledge.knowledge_id}`} role="option" aria-selected={selected}
       aria-controls="policy-standardization-column"
@@ -233,8 +239,8 @@ function KnowledgeCard({ knowledge, index, selected, view, onSelect, onFocus }: 
         <ChevronRightIcon className="ml-auto size-3.5" />
       </div>
 
-      {/* 业务句 */}
-      <p className="mt-2 text-sm font-medium leading-6 text-slate-800">{knowledge.business_sentence}</p>
+      {/* 业务句（rule_value 自然语言） */}
+      <p className="mt-2 text-sm font-medium leading-6 text-slate-800">{typeof mainSentence === 'string' ? mainSentence : readableValue(mainSentence)}</p>
 
       {view === 'table' ? (
         <TableContent knowledge={knowledge}
@@ -244,12 +250,15 @@ function KnowledgeCard({ knowledge, index, selected, view, onSelect, onFocus }: 
         <JsonContent knowledge={knowledge} />
       )}
 
-      {!!knowledge.citations.length && (
-        <ul aria-label="来源引用" className="mt-2 space-y-1 text-[11px] text-slate-500">
-          {knowledge.citations.map((citation, citationIndex) => (
-            <li key={`${citation.title}-${citationIndex}`}><Link2 className="mr-1 inline size-3" />{citation.title}：<EvidenceQuote text={citation.evidence} /></li>
-          ))}
-        </ul>
+      {/* 原文对照（Evidence-first）：数字高亮 */}
+      {evidence && (
+        <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50/40 px-2.5 py-2">
+          <p className="text-[10px] font-semibold text-amber-700">原文对照</p>
+          <p className="mt-0.5 text-[11px] leading-5 text-slate-600"><EvidenceQuote text={evidence} /></p>
+          {knowledge.citations[0] && (
+            <p className="mt-1 flex items-center gap-1 text-[10px] text-slate-400"><Link2 className="size-3 shrink-0" />{knowledge.citations[0].title}</p>
+          )}
+        </div>
       )}
     </button>
   )

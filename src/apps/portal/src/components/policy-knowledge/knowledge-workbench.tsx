@@ -20,6 +20,7 @@ import type {
 } from '@/lib/policy-knowledge-api'
 
 import { Column } from './workbench-shared'
+import { knowledgeHasStructuredValue } from './workbench-shared'
 import { UnitsColumn } from './workbench-units-column'
 import { KnowledgeColumn } from './workbench-knowledge-column'
 import { StandardizationColumn } from './workbench-standardization-column'
@@ -44,16 +45,22 @@ function KnowledgeWorkbenchState({ document, metrics, onBindExisting, onCreateMe
   const [selectedFields, setSelectedFields] = useState<string[]>([])
   const [selectedMetrics, setSelectedMetrics] = useState<Record<string, string>>({})
   const [mobileStep, setMobileStep] = useState<MobileStep>('units')
-
   const unit = document.units.find((item) => item.unit_id === unitId) || document.units[0]
   const knowledge: KnowledgeItem | undefined =
-    unit?.knowledge.find((item) => item.knowledge_id === knowledgeId) || unit?.knowledge[0]
+    unit?.knowledge.find((item) => item.knowledge_id === knowledgeId)
+    || unit?.knowledge.find(knowledgeHasStructuredValue)
+    || unit?.knowledge[0]
 
-  /** 选中单元联动：重置其下知识选中 */
+  /** 首选有结构化价值的知识（避免默认展示 entities JSON 噪音条） */
+  function firstValuableKnowledge(list: KnowledgeItem[]): string {
+    return list.find(knowledgeHasStructuredValue)?.knowledge_id || list[0]?.knowledge_id || ''
+  }
+
+  /** 选中单元联动：重置其下知识选中（优先有价值知识） */
   function selectUnit(nextUnitId: string) {
     const next = document.units.find((item) => item.unit_id === nextUnitId)
     setUnitId(nextUnitId)
-    setKnowledgeId(next?.knowledge[0]?.knowledge_id || '')
+    setKnowledgeId(firstValuableKnowledge(next?.knowledge || []))
     setSelectedFields([])
     setMobileStep('knowledge')
   }
