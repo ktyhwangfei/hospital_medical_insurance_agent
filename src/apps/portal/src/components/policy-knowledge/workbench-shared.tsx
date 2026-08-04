@@ -55,7 +55,7 @@ function hasMoneyPattern(value: unknown): boolean {
 }
 
 /** 文本是否含量化数值（金额/天数/次数/年龄等），可作为事实型信号 */
-function hasNumericPattern(value: unknown): boolean {
+export function hasNumericPattern(value: unknown): boolean {
   return typeof value === 'string' && NUMERIC_PATTERN.test(value)
 }
 
@@ -71,10 +71,14 @@ function hasSubstance(value: unknown): boolean {
 
 /** 字段分层：'fact' | 'dimension' | 'descriptive' */
 export function fieldTier(field: KnowledgeField): 'fact' | 'dimension' | 'descriptive' {
-  if (FACT_FIELDS.has(field.field_code)) return 'fact'
+  if (FACT_FIELDS.has(field.field_code)) {
+    // 事实型字段必须含量化数值，"不限"/"低"/"高" 等非数字值不算
+    if (hasNumericPattern(field.raw_value)) return 'fact'
+    return 'dimension' // 退化为维度型展示
+  }
   if (DIMENSION_FIELDS.has(field.field_code)) return 'dimension'
   if (DESCRIPTIVE_FIELDS.has(field.field_code)) return 'descriptive'
-  // 未归类字段：含量化数值（金额/天数/次数/年龄等）视为事实型，否则描述型
+  // 未归类字段：含量化数值视为事实型，否则描述型
   return hasNumericPattern(field.raw_value) ? 'fact' : 'descriptive'
 }
 

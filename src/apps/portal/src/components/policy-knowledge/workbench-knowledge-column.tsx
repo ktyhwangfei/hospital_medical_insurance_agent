@@ -13,7 +13,7 @@ import { Check, ChevronDown, ChevronRight, ChevronRight as ChevronRightIcon, Cir
 
 import type { KnowledgeItem, WorkbenchDocument } from '@/lib/policy-knowledge-api'
 
-import { Empty, FieldValue, fieldTier, knowledgeHasStructuredValue, pct, readableValue } from './workbench-shared'
+import { Empty, FieldValue, fieldTier, hasNumericPattern, knowledgeHasStructuredValue, pct, readableValue } from './workbench-shared'
 
 interface Props {
   document: WorkbenchDocument
@@ -106,16 +106,10 @@ function FocusDialog({ knowledge, onClose }: { knowledge: KnowledgeItem; onClose
         </div>
 
         <div className="max-h-[70vh] space-y-4 overflow-y-auto p-5">
-          {/* 业务句 */}
-          <div>
-            <p className="text-[10px] font-semibold uppercase text-slate-400">业务句</p>
-            <p className="mt-1 text-sm font-medium leading-6 text-slate-800">{knowledge.business_sentence}</p>
-          </div>
-
-          {/* 原文对照（Evidence-first） */}
+          {/* 原文对照（Evidence-first，替代业务句，避免重复） */}
           <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
             <p className="text-[10px] font-semibold text-amber-700">原文对照 · 数字高亮</p>
-            <p className="mt-1.5 text-xs leading-6 text-slate-700"><EvidenceQuote text={evidence} /></p>
+            <p className="mt-1.5 text-sm font-medium leading-6 text-slate-800"><EvidenceQuote text={evidence} /></p>
             {knowledge.citations[0] && (
               <p className="mt-1.5 text-[10px] text-slate-400">来源：{knowledge.citations[0].title}</p>
             )}
@@ -147,8 +141,8 @@ function FocusDialog({ knowledge, onClose }: { knowledge: KnowledgeItem; onClose
             </div>
           )}
 
-          {/* 置信度 */}
-          <div className="rounded-lg bg-slate-50 px-3 py-2">
+          {/* 置信度（总分条+明细 title） */}
+          <div className="rounded-lg bg-slate-50 px-3 py-2" title={`完整性 ${pct(knowledge.confidence.completeness)} · 原文一致 ${pct(knowledge.confidence.source_fidelity)} · 模型 ${pct(knowledge.confidence.model_confidence)} · 值域 ${pct(knowledge.confidence.value_domain_compliance)}`}>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-slate-400">置信度</span>
               <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-200">
@@ -156,9 +150,6 @@ function FocusDialog({ knowledge, onClose }: { knowledge: KnowledgeItem; onClose
               </div>
               <span className="text-xs font-semibold text-slate-700">{pct(knowledge.confidence.overall)}</span>
             </div>
-            <p className="mt-1 text-[10px] text-slate-400">
-              完整性 {pct(knowledge.confidence.completeness)} · 原文一致 {pct(knowledge.confidence.source_fidelity)} · 模型 {pct(knowledge.confidence.model_confidence)} · 值域 {pct(knowledge.confidence.value_domain_compliance)}
-            </p>
             {!!knowledge.confidence.uncertainties.length && (
               <p className="mt-1 flex items-start gap-1 text-[11px] leading-4 text-amber-700">
                 <CircleAlert className="mt-0.5 size-3 shrink-0" />{knowledge.confidence.uncertainties.join('；')}
@@ -215,11 +206,14 @@ function KnowledgeCard({ knowledge, index, selected, view, onSelect, onFocus }: 
   const dimFields = knowledge.fields.filter((f) => fieldTier(f) === 'dimension')
   const descFields = knowledge.fields.filter((f) => fieldTier(f) === 'descriptive')
 
-  // 业务句清洗：优先取 rule_value 自然语言，避免展示 entities/relations JSON 拼接句
-  const mainSentence = knowledge.fields.find((f) => f.field_code === 'rule_value')?.raw_value
-    ?? knowledge.business_sentence
-  // 原文对照：优先取 citations evidence（政策原文），数字高亮在此处才有审计意义
-  const evidence = knowledge.citations[0]?.evidence || knowledge.source_text || ''
+  // 主展示文本：优先含量化数字的文本（rule_value > evidence > business_sentence），审计可高亮；
+//   全都不含数字时退回用 business_sentence 兜底，避免无内容可展示
+  const ruleValue = knowledge.fields.find((f) => f.field_code === 'rule_value')?.raw_value
+  const evidence = knowledge.citations[0]?.evidence || ''
+  const rvStr = ruleValue == null ? '' : (typeof ruleValue === 'string' ? ruleValue : readableValue(ruleValue))
+  const numericSource = [rvStr, evidence, knowledge.business_sentence].find((t) => hasNumericPattern(t))
+  const mainText = numericSource || knowledge.business_sentence
+  const mainLabel = mainText === rvStr ? '规则值 · 数字高亮' : mainText === evidence ? '原文对照 · 数字高亮' : '知识摘要 · 数字高亮'
 
   return (
     <button type="button" id={`policy-knowledge-${knowledge.knowledge_id}`} role="option" aria-selected={selected}
@@ -239,8 +233,14 @@ function KnowledgeCard({ knowledge, index, selected, view, onSelect, onFocus }: 
         <ChevronRightIcon className="ml-auto size-3.5" />
       </div>
 
-      {/* 业务句（rule_value 自然语言） */}
-      <p className="mt-2 text-sm font-medium leading-6 text-slate-800">{typeof mainSentence === 'string' ? mainSentence : readableValue(mainSentence)}</p>
+      {/* 主文本：优先含量化数字的文本（rule_value/evidence/business_sentence），只展示一个 + 高亮 */}
+      <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50/40 px-2.5 py-2">
+        <p className="text-[10px] font-semibold text-amber-700">{mainLabel}</p>
+        <p className="mt-0.5 text-sm font-medium leading-6 text-slate-800"><EvidenceQuote text={mainText} /></p>
+        {knowledge.citations[0] && (
+          <p className="mt-1 flex items-center gap-1 text-[10px] text-slate-400"><Link2 className="size-3 shrink-0" />{knowledge.citations[0].title}</p>
+        )}
+      </div>
 
       {view === 'table' ? (
         <TableContent knowledge={knowledge}
@@ -248,17 +248,6 @@ function KnowledgeCard({ knowledge, index, selected, view, onSelect, onFocus }: 
           showDescriptive={showDescriptive} onToggleDescriptive={() => setShowDescriptive((v) => !v)} />
       ) : (
         <JsonContent knowledge={knowledge} />
-      )}
-
-      {/* 原文对照（Evidence-first）：数字高亮 */}
-      {evidence && (
-        <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50/40 px-2.5 py-2">
-          <p className="text-[10px] font-semibold text-amber-700">原文对照</p>
-          <p className="mt-0.5 text-[11px] leading-5 text-slate-600"><EvidenceQuote text={evidence} /></p>
-          {knowledge.citations[0] && (
-            <p className="mt-1 flex items-center gap-1 text-[10px] text-slate-400"><Link2 className="size-3 shrink-0" />{knowledge.citations[0].title}</p>
-          )}
-        </div>
       )}
     </button>
   )
@@ -324,8 +313,8 @@ function TableContent({ knowledge, factFields, dimFields, descFields, showDescri
         </div>
       )}
 
-      {/* 置信度条 */}
-      <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+      {/* 置信度条（总分+明细缩为 title） */}
+      <div className="rounded-lg bg-slate-50 px-2 py-1.5" title={`完整性 ${pct(knowledge.confidence.completeness)} · 原文一致 ${pct(knowledge.confidence.source_fidelity)} · 模型 ${pct(knowledge.confidence.model_confidence)} · 值域 ${pct(knowledge.confidence.value_domain_compliance)}`}>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-400">置信度</span>
           <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-200">
@@ -333,9 +322,6 @@ function TableContent({ knowledge, factFields, dimFields, descFields, showDescri
           </div>
           <span className="text-[11px] font-semibold text-slate-700">{pct(knowledge.confidence.overall)}</span>
         </div>
-        <p className="mt-1 text-[9px] text-slate-400">
-          完整性 {pct(knowledge.confidence.completeness)} · 原文一致 {pct(knowledge.confidence.source_fidelity)} · 模型 {pct(knowledge.confidence.model_confidence)} · 值域 {pct(knowledge.confidence.value_domain_compliance)}
-        </p>
       </div>
 
       {!!knowledge.confidence.uncertainties.length && (

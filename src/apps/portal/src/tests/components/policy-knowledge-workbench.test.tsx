@@ -51,12 +51,16 @@ describe('KnowledgeWorkbench', () => {
     expect(screen.getByRole('heading', { name: '审核通过的单元' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '结构化知识' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '指标与值域标化' })).toBeInTheDocument()
-    expect(screen.getByText('在职职工住院时，统筹基金支付比例为80%。')).toBeInTheDocument()
-    // 置信度条降噪：不再有独立「待验证」格子；主置信度 + 明细行
+    // 主文本含业务句（数字高亮 mark 会分割文本，用片段匹配）
+    expect(screen.getByText(/统筹基金支付比例为/)).toBeInTheDocument()
+    // mark 高亮 80%；原文对照面板结构化值面板也可能含数值，这里只断言存在高亮标记
+    const marks = screen.getAllByText('80%')
+    expect(marks.length).toBeGreaterThanOrEqual(1)
+    // 置信度条降噪：不再有独立「待验证」格子；主置信度条 + 明细缩为 title 属性
     expect(screen.queryAllByText('待验证')).toHaveLength(0)
     expect(screen.getByText('置信度')).toBeInTheDocument()
-    expect(screen.getByText(/模型 90%/)).toBeInTheDocument()
-    expect(screen.getByText(/值域 待验证/)).toBeInTheDocument()
+    // 总分条可见（confidence.overall=0.96 → 96%）
+    expect(screen.getByText('96%')).toBeInTheDocument()
     expect(screen.getByText('未映射')).toBeInTheDocument()
     expect(screen.getByText('{"max":1,"min":0.8}')).toBeInTheDocument()
     expect(screen.getByText(/职工医保政策原文/)).toBeInTheDocument()
