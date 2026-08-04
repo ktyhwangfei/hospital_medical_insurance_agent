@@ -29,6 +29,8 @@ describe('toContextNeed', () => {
   it('snake_case 字段正确映射为 camelCase', () => {
     const cn = toContextNeed({
       session_id: 'sess-1',
+      settlement_id: '1671213',
+      topic: '统筹自付/报销',
       object_types: ['Settlement', 'Policy'],
       memory_ids: ['m-1', 'm-2'],
       must_query_semantic: true,
@@ -41,6 +43,8 @@ describe('toContextNeed', () => {
       mustQuerySemantic: true,
       topicChanged: false,
       subjectChanged: true,
+      settlementId: '1671213',
+      topic: '统筹自付/报销',
     })
   })
 
@@ -50,11 +54,13 @@ describe('toContextNeed', () => {
     expect(cn.memoryIds).toEqual([])
     expect(cn.mustQuerySemantic).toBe(false)
     expect(cn.subjectChanged).toBe(false)
+    expect(cn.settlementId).toBeNull()
+    expect(cn.topic).toBeNull()
   })
 })
 
 describe('toMemoryCard', () => {
-  it('转换 memory_update 中的记忆卡', () => {
+  it('转换 memory_update 中的记忆卡（含 snapshot 业务值）', () => {
     const card = toMemoryCard({
       memory_id: 'm-abc',
       type: 'settlement',
@@ -62,12 +68,14 @@ describe('toMemoryCard', () => {
       importance: 0.9,
       expire_policy: 'topic',
       snapshot_keys: ['settlement_id', 'total_fee'],
+      snapshot: { settlement_id: '1671213', total_fee: 189085.85 },
     })
     expect(card.memoryId).toBe('m-abc')
     expect(card.type).toBe('settlement')
     expect(card.refId).toBe('1671213')
     expect(card.expirePolicy).toBe('topic')
     expect(card.snapshotKeys).toEqual(['settlement_id', 'total_fee'])
+    expect(card.snapshot).toEqual({ settlement_id: '1671213', total_fee: 189085.85 })
     expect(card.isNewThisTurn).toBe(true)
     expect(card.hitThisTurn).toBe(false)
   })

@@ -175,7 +175,18 @@ function MemoryCardView({ card }: { card: MemoryCard }) {
           )}
         </div>
       </div>
-      {card.snapshotKeys.length > 0 && (
+      {card.snapshot && Object.keys(card.snapshot).length > 0 ? (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {Object.entries(card.snapshot).map(([key, value]) => (
+            <span
+              key={key}
+              className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[10px] text-slate-500"
+            >
+              {key}: {String(value)}
+            </span>
+          ))}
+        </div>
+      ) : card.snapshotKeys.length > 0 ? (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {card.snapshotKeys.map((key) => (
             <span
@@ -186,7 +197,7 @@ function MemoryCardView({ card }: { card: MemoryCard }) {
             </span>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

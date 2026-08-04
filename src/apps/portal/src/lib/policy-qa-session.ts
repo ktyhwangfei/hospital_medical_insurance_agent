@@ -36,6 +36,8 @@ export interface MemoryCard {
   importance: number
   expirePolicy: 'session' | 'topic' | 'sticky' | 'time' | string
   snapshotKeys: string[]
+  /** 记忆快照业务值（后端脱敏后的小标量，如 settlement_id/total_fee） */
+  snapshot?: Record<string, string | number | boolean>
   /** 本轮 context_need.memory_ids 是否命中 */
   hitThisTurn: boolean
   /** 本轮是否新沉淀 */
@@ -49,6 +51,10 @@ export interface ContextNeedSnapshot {
   mustQuerySemantic: boolean
   topicChanged: boolean
   subjectChanged: boolean
+  /** 当前结算单（后端回显，用于锚点同步） */
+  settlementId?: string | null
+  /** 当前话题标签（后端从问题推导） */
+  topic?: string | null
 }
 
 /** 推理链步骤（reasoning_step 事件 / result.reasoning_steps） */
@@ -62,6 +68,9 @@ export interface ReasoningStep {
   sourceMemoryIds: string[]
 }
 
+/** 回答来源（result.answer_mode，前端据此标注真实性） */
+export type AnswerMode = 'llm' | 'dummy' | 'fallback' | string
+
 /** 扩展 ChatMessage（向后兼容：新增字段均可选） */
 export interface PolicyQAChatMessage extends ChatMessage {
   /** 本轮推理链（reasoning_step 累积 + result.reasoning_steps 定稿） */
@@ -74,12 +83,16 @@ export interface PolicyQAChatMessage extends ChatMessage {
   richResult?: SettlementExplanationData
   /** 院端视角文本（result.office_view） */
   officeView?: string
+  /** 回答来源（llm=模型生成 / dummy=演示降级模板 / fallback=基础模板） */
+  answerMode?: AnswerMode
 }
 
 // ── 后端 SSE payload 类型（snake_case，与 runtime_bridge.py 对齐）──
 
 export interface RawContextNeed {
   session_id?: string
+  settlement_id?: string | null
+  topic?: string | null
   object_types?: string[]
   memory_ids?: string[]
   must_query_semantic?: boolean
@@ -95,6 +108,7 @@ export interface RawMemoryCard {
   expire_policy?: string
   version?: number
   snapshot_keys?: string[]
+  snapshot?: Record<string, string | number | boolean>
 }
 
 export interface RawMemoryUpdate {
@@ -127,6 +141,8 @@ export function toContextNeed(raw: RawContextNeed): ContextNeedSnapshot {
     mustQuerySemantic: raw.must_query_semantic === true,
     topicChanged: raw.topic_changed === true,
     subjectChanged: raw.subject_changed === true,
+    settlementId: raw.settlement_id ?? null,
+    topic: raw.topic ?? null,
   }
 }
 
@@ -138,6 +154,7 @@ export function toMemoryCard(raw: RawMemoryCard): MemoryCard {
     importance: typeof raw.importance === 'number' ? raw.importance : 0.5,
     expirePolicy: String(raw.expire_policy ?? 'session'),
     snapshotKeys: Array.isArray(raw.snapshot_keys) ? raw.snapshot_keys : [],
+    snapshot: raw.snapshot,
     hitThisTurn: false,
     isNewThisTurn: true,
   }

@@ -42,6 +42,7 @@ function firstTurnEvents() {
       'context_need',
       {
         session_id: 'sess-1',
+        settlement_id: '1671213',
         object_types: ['Settlement', 'Policy'],
         memory_ids: [],
         must_query_semantic: true,
@@ -50,7 +51,7 @@ function firstTurnEvents() {
       },
     ],
     ['step', { step: 'settlement_query', status: 'running', public_message: '查询结算数据…' }],
-    ['memory_update', { action: 'upsert', memory: { memory_id: 'm-settle', type: 'settlement', ref_id: '1671213', importance: 0.9, expire_policy: 'topic', snapshot_keys: ['settlement_id', 'total_fee'] } }],
+    ['memory_update', { action: 'upsert', memory: { memory_id: 'm-settle', type: 'settlement', ref_id: '1671213', importance: 0.9, expire_policy: 'topic', snapshot_keys: ['settlement_id', 'total_fee'], snapshot: { settlement_id: '1671213', total_fee: 189085.85 } } }],
     ['reasoning_step', { step_id: 'step-1', claim: '已获取结算单 1671213 的结算数据', kind: 'fact', depends_on: [], confidence: 0.95, citations: [], source_memory_ids: ['m-settle'] }],
     ['step', { step: 'settlement_query', status: 'done', public_message: '结算数据获取完成' }],
     ['step', { step: 'answer_assembly', status: 'running', public_message: '生成回答…' }],
@@ -137,14 +138,18 @@ describe('usePolicyQAStream', () => {
       await result.current.send('查询住院费用', { settlementId: '1671213' })
     })
 
-    // lastContextNeed：camelCase 转换完成
+    // lastContextNeed：camelCase 转换完成（含 settlementId/topic 回显）
     expect(result.current.lastContextNeed).toMatchObject({
       objectTypes: ['Settlement', 'Policy'],
       mustQuerySemantic: true,
       subjectChanged: false,
+      settlementId: '1671213',
     })
 
-    // memories：memory_update upsert
+    // anchor：topic 从 context_need 同步到锚点
+    expect(result.current.anchor.topic).toBeNull()
+
+    // memories：memory_update upsert（含 snapshot 业务值）
     expect(result.current.memories).toHaveLength(1)
     expect(result.current.memories[0]).toMatchObject({
       memoryId: 'm-settle',
@@ -152,9 +157,10 @@ describe('usePolicyQAStream', () => {
       refId: '1671213',
       expirePolicy: 'topic',
       isNewThisTurn: true,
+      snapshot: { settlement_id: '1671213', total_fee: 189085.85 },
     })
 
-    // 最后一条 assistant 消息：内容 + 推理链 + 引用记忆 + 院端视角
+    // 最后一条 assistant 消息：内容 + 推理链 + 引用记忆 + 院端视角 + answer_mode
     const last = result.current.messages[result.current.messages.length - 1]
     expect(last.role).toBe('assistant')
     expect(last.content).toContain('本次住院统筹自付 4962.67 元')
@@ -162,6 +168,7 @@ describe('usePolicyQAStream', () => {
     expect(last.reasoning![0]).toMatchObject({ stepId: 'step-1', kind: 'fact', claim: '已获取结算单 1671213 的结算数据' })
     expect(last.citedMemoryIds).toEqual(['m-settle'])
     expect(last.officeView).toContain('本次结算统筹自付金额为 4962.67 元')
+    expect(last.answerMode).toBeUndefined() // mock 流未携带 answer_mode 时保持 undefined
   })
 
   it('流式结束后 isStreaming=false', async () => {
@@ -206,6 +213,23 @@ describe('usePolicyQAStream', () => {
     const types = result.current.memories.map((m) => m.type)
     expect(types).not.toContain('settlement')
     expect(types).toContain('policy')
+  })
+
+  it('解析 result.answer_mode 到消息（来源徽标数据）', async () => {
+    const events = firstTurnEvents().map(([evt, data]) => {
+      if (evt === 'result') {
+        const payload = data as { result: Record<string, unknown> }
+        return [evt, { ...payload, result: { ...payload.result, answer_mode: 'dummy' } }] as [string, unknown]
+      }
+      return [evt, data] as [string, unknown]
+    })
+    streamQueue = [sseText(events)]
+    const { result } = renderHook(() => usePolicyQAStream())
+    await act(async () => {
+      await result.current.send('查询住院费用', { settlementId: '1671213' })
+    })
+    const last = result.current.messages[result.current.messages.length - 1]
+    expect(last.answerMode).toBe('dummy')
   })
 
   it('无锚点时 send 返回 false 且不发请求', async () => {

@@ -124,13 +124,18 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
             turnContextNeed.current = cn
             setLastContextNeed(cn)
             setMemories((prev) => applyContextNeed(prev, cn))
-            if (cn.subjectChanged) {
-              setAnchor((prev) => ({
-                ...prev,
-                subjectChanged: true,
-                subjectChangeMsg: `已切换业务主体，旧结算/患者上下文已清除（政策记忆保留）`,
-              }))
-            }
+            setAnchor((prev) => ({
+              ...prev,
+              // 同步后端回显的结算单与话题（话题标签展示）
+              settlementId: cn.settlementId ?? prev.settlementId,
+              topic: cn.topic ?? prev.topic,
+              ...(cn.subjectChanged
+                ? {
+                    subjectChanged: true,
+                    subjectChangeMsg: `已切换业务主体，旧结算/患者上下文已清除（政策记忆保留）`,
+                  }
+                : {}),
+            }))
             break
           }
           case 'memory_update': {
@@ -192,6 +197,10 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
                 reasoning: merged,
                 citedMemoryIds: cited,
                 contextNeed: turnContextNeed.current ?? undefined,
+                answerMode:
+                  typeof result.answer_mode === 'string'
+                    ? result.answer_mode
+                    : undefined,
               }
             })
             break

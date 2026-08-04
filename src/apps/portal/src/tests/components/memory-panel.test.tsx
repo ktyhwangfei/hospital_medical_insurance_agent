@@ -70,11 +70,24 @@ describe('MemoryPanel', () => {
     expect(screen.getByText('📌 跨话题保留')).toBeInTheDocument()
   })
 
-  it('渲染 snapshot_keys 字段标签', () => {
+  it('渲染 snapshot_keys 字段标签（无业务值时）', () => {
     const memories = [makeCard({ memoryId: 'm-1', snapshotKeys: ['settlement_id', 'total_fee'] })]
     render(<MemoryPanel memories={memories} />)
     expect(screen.getByText('settlement_id')).toBeInTheDocument()
     expect(screen.getByText('total_fee')).toBeInTheDocument()
+  })
+
+  it('渲染 snapshot 业务键值（键: 值）', () => {
+    const memories = [
+      makeCard({
+        memoryId: 'm-1',
+        snapshotKeys: ['settlement_id', 'total_fee'],
+        snapshot: { settlement_id: '1671213', total_fee: 189085.85 },
+      }),
+    ]
+    render(<MemoryPanel memories={memories} />)
+    expect(screen.getByText('settlement_id: 1671213')).toBeInTheDocument()
+    expect(screen.getByText('total_fee: 189085.85')).toBeInTheDocument()
   })
 
   it('lastContextNeed 命中时显示本轮复用记忆条数', () => {
