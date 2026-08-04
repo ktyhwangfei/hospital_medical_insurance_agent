@@ -105,7 +105,12 @@ class FeeDecompositionCalculator:
         remaining = max(0, in_scope - deductible)
 
         # 从规则中提取分段比例
-        band_rules = [r for r in rules if r.rule_type == "payment_ratio"]
+        # ★ rule_type 契约：检索器（structured_policy_retriever）返回中文「支付比例」，
+        #   计算器需兼容英文枚举与中文标签，避免规则被误丢导致分段算不出。
+        band_rules = [
+            r for r in rules
+            if r.rule_type in ("payment_ratio", "支付比例", "统筹分段")
+        ]
         for rule in band_rules:
             band = self._parse_band(rule.evidence_text)
             if band and band["lower"] < band.get("upper", float("inf")):

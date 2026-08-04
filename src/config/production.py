@@ -8,10 +8,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 # PostgreSQL 配置
+# 注：默认密码 postgres（见 AGENTS.md 生产环境配置；可用 POSTGRES_PASSWORD 覆盖）
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "hospital_mcp")
 
 DATABASE_URL = os.getenv(

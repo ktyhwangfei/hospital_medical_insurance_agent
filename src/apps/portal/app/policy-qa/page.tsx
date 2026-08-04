@@ -1,6 +1,6 @@
 'use client'
 
-import PolicyQAChat from '@/components/policy-qa-chat'
+import PolicyQAWorkspace from '@/components/policy-qa/policy-qa-workspace'
 
 export default function PolicyQAPage() {
   return (
@@ -17,17 +17,17 @@ export default function PolicyQAPage() {
         <header className="space-y-1">
           <div className="flex items-center gap-2">
             <span className="inline-flex h-7 items-center rounded-full bg-white/70 px-2.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 backdrop-blur">
-              政策·QA
+              医保费用 · 智能解答
             </span>
-            <span className="text-xs text-slate-500">结算解释 / 政策依据 / 双视角输出</span>
           </div>
           <h2 className="text-xl font-semibold tracking-tight text-slate-900">政策问答</h2>
           <p className="text-sm text-slate-600">
-            输入结算单号与问题，获取可追溯的政策依据、计算过程与患者/院端解释。
+            输入患者结算单号，快速查清费用构成与自付原因，向患者做出准确解释。
           </p>
         </header>
 
-        <PolicyQAChat />
+        {/* 持续对话工作区（旧一次性表单组件 policy-qa-chat.tsx 保留作回退） */}
+        <PolicyQAWorkspace />
       </div>
     </div>
   )

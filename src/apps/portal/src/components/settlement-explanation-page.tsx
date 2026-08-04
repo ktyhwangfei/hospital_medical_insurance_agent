@@ -132,7 +132,7 @@ function deriveOutputGroups(data: SettlementExplanationData): OutputGroupValue[]
     group: g.group,
     items: g.fields.map((f) => ({
       label: f.label,
-      value: data.case_context?.[f.field] ?? 0,
+      value: Number(data.case_context?.[f.field] ?? 0),
       format: 'money' as const,
       hint: f.hint,
       highlight: f.highlight,
@@ -175,7 +175,10 @@ function getComparison(data: SettlementExplanationData): { diff_summary?: string
 // ═══════════════════════════════════════════════════════════════
 
 function ProfileCard({ data }: { data: SettlementExplanationData }) {
-  const items = data.profile?.items ?? deriveProfile(data.case_context)
+  // profile 运行期可能是 { items: [...] } 对象（比较模式），类型定义未覆盖 → 与本文件
+  // getCompareProfile 一致使用运行时断言访问，随后由 deriveProfile 防御性回退
+  const profileItems = (data as unknown as { profile?: { items?: ProfileValue[] } }).profile?.items
+  const items = profileItems ?? deriveProfile(data.case_context)
 
   return (
     <div

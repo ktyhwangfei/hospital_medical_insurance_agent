@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -132,10 +133,33 @@ class ExplanationGenerator:
 
     核心能力: 把分段计算结果中的每一段，与对应的政策规则关联，
     形成"金额→政策条文→计算过程"的因果解释链。
+
+    【输出契约（P2 说明）】
+    - 唯一出口：orchestrator 的 answer_assembly 步骤通过 `generate_dual_views` 获取
+      (patient_view, office_view)，经 PolicyQAResponse 透出，routes 汇总进 result。
+    - 模式（mode 属性，供前端标注回答来源）：llm（真实模型）/ dummy（调试降级模板，
+      基于真实结算数据）/ fallback（无网关占位）。
+    - 任何模式下输出必须是自然语言文本；模型输出结构化 JSON 时 `_parse_dual_response`
+      兜底回退占位模板（防止前端展示原始 JSON）。
     """
 
     def __init__(self, model_gateway: ModelGateway | None = None):
         self.model_gateway = model_gateway
+        # 解释生成模式（供前端标注回答来源）：
+        # - "llm"    ：接入真实 LLM，回答由模型生成（需人工核对）
+        # - "dummy"  ：调试模式（MODEL_BASE_URL=dummy），固定 mock 不可用 →
+        #              统一降级为基于真实结算数据的模板解释（见 generate_dual_views）
+        # - "fallback"：无模型网关，仅占位模板
+        if model_gateway is None:
+            self.mode = "fallback"
+        else:
+            cfg = getattr(model_gateway, "_config", None)
+            base_url = getattr(cfg, "base_url", "") or ""
+            self.mode = "dummy" if base_url == "dummy" else "llm"
+
+    def _is_dummy(self) -> bool:
+        """是否处于 dummy 调试模式（无真实 LLM 可用）。"""
+        return self.mode == "dummy"
 
     async def generate(
         self,
@@ -370,14 +394,10 @@ class ExplanationGenerator:
         生成占位符解释（根据用户问题生成个性化回答）
 
         核心改进: 基于实际分段计算结果和政策规则生成解释，
-        而不是硬编码文本。区分患者视角（通俗）和院端视角（专业）。
+        而不是硬编码文本。输出单视角自然语言（前端已移除双视角切换）。
         """
-        is_patient = context.user_role == "患者"
-        role_label = "【患者视角】" if is_patient else "【院端/医保办视角】"
-
         if context.intent.target_fee_item == "pooling_self_pay":
-            base = self._generate_pooling_self_pay_placeholder(context)
-            return role_label + "\n" + base
+            return self._generate_pooling_self_pay_placeholder(context)
 
         decomposition = context.decomposition
         question = context.question
@@ -479,7 +499,7 @@ class ExplanationGenerator:
             lines.append("")
 
         lines.append("如果您对这笔费用有疑问，建议咨询医院医保办或当地医保局。")
-        return role_label + "\n" + "\n".join(lines)
+        return "\n".join(lines)
 
     def _generate_pooling_self_pay_placeholder(self, context: ExplanationContext) -> str:
         """基于结构化事实生成统筹自付确定性解释。"""
@@ -575,12 +595,31 @@ class ExplanationGenerator:
     ) -> tuple[str, str]:
         """生成双视角解释 — ★ 一次 LLM 调用同时生成患者+院端两个视角。
 
+        价值门控：当结算数据不足以给出可靠回答（金额缺失/为 0）时，
+        不生成无价值解释，改为明确的「建议咨询医保办/当地医保局」引导回复。
+
         Returns:
             (patient_view, office_view)
         """
-        if self.model_gateway is None:
-            placeholder = self._generate_placeholder(context)
+        # 价值门控：数据不足 → 直接引导咨询，不生成含糊回答
+        if not self._has_valuable_data(context):
+            refusal = self._refusal_reply()
+            return refusal, refusal
+
+        def _quality_gated(placeholder: str) -> tuple[str, str]:
+            """生成后质量检查：含"未获取/待定"等缺失标记 → 拒绝回答。"""
+            if self._text_has_missing_markers(placeholder):
+                refusal = self._refusal_reply()
+                return refusal, refusal
             return placeholder, placeholder
+
+        if self.model_gateway is None:
+            return _quality_gated(self._generate_placeholder(context))
+
+        # ★ dummy 调试模式：model_gateway 返回固定 mock（写死金额，换结算单即错），
+        # 不可作为回答。统一降级为基于真实结算数据（decomposition）的模板解释。
+        if self.mode == "dummy":
+            return _quality_gated(self._generate_placeholder(context))
 
         try:
             decomposition_text = self._format_decomposition(context.decomposition)
@@ -606,16 +645,72 @@ class ExplanationGenerator:
                 scene="policy_qa",
             )
 
-            patient_view, office_view = self._parse_dual_response(result.content)
+            patient_view, office_view = self._parse_dual_response(result.content, context)
             return patient_view, office_view
 
         except Exception as e:
             logger.exception("Dual view generation failed, falling back to placeholder")
-            placeholder = self._generate_placeholder(context)
-            return placeholder, placeholder
+            return _quality_gated(self._generate_placeholder(context))
 
-    def _parse_dual_response(self, content: str) -> tuple[str, str]:
-        """解析合并 prompt 的双视角输出。"""
+    # ── 回答价值门控 ─────────────────────────────────────────────
+
+    @staticmethod
+    def _has_valuable_data(context: ExplanationContext) -> bool:
+        """判断结算数据是否足以给出有价值的回答。
+
+        判定规则：
+        1. treatment 关键金额任一可用（>0）—— 无数据拒绝；
+        2. 「统筹自付」类问题必须已完成分段计算（存在 pay>0 的分段）——
+           否则无法解释"为什么这么多"，半成品（未获取）直接拒绝。
+        """
+        decomposition = context.decomposition
+        if decomposition is None or decomposition.treatment is None:
+            return False
+        try:
+            values = [
+                decomposition.treatment.total_fee.value,
+                decomposition.treatment.in_scope.value,
+                decomposition.treatment.pooling_self_pay.value,
+                decomposition.treatment.pooling_payment.value,
+                decomposition.treatment.personal_liability.value,
+            ]
+        except AttributeError:
+            return False
+        if not any(isinstance(v, (int, float)) and v > 0 for v in values):
+            return False
+
+        # 统筹自付类问题：必须存在计算出的分段（pay > 0），否则拒绝
+        if context.intent.target_fee_item == "pooling_self_pay":
+            segments = decomposition.segments
+            if segments is None or not segments.segments:
+                return False
+            if not any(getattr(s, "pay", 0) and s.pay > 0 for s in segments.segments):
+                return False
+
+        return True
+
+    @staticmethod
+    def _text_has_missing_markers(text: str) -> bool:
+        """回答文本是否含"未获取"等缺失标记（半成品回答直接拒绝）。"""
+        return "未获取" in text or "待定" in text
+
+    @staticmethod
+    def _refusal_reply() -> str:
+        """数据不足/存在风险时的标准引导回复（不编造、不猜测）。"""
+        return (
+            "当前无法基于已有结算数据给出准确、可靠的费用解释。\n\n"
+            "为避免误导，本系统不生成猜测性回答。建议您：\n"
+            "- 携带医保结算单前往医院医保办（收费窗口）咨询；\n"
+            "- 或拨打当地医保局服务热线 / 咨询当地医保经办机构。\n\n"
+            "本回答仅供参考，不作为报销或结算依据。"
+        )
+
+    def _parse_dual_response(self, content: str, context: ExplanationContext) -> tuple[str, str]:
+        """解析合并 prompt 的双视角输出。
+
+        若模型返回结构化 JSON（如调试 dummy 模式的遗留输出）而非自然语言，
+        则回退到基于结算数据的占位解释，避免前端展示原始 JSON。
+        """
         import re
 
         patient_view = ""
@@ -636,6 +731,14 @@ class ExplanationGenerator:
             office_view = office_match.group(1).strip()
 
         if not patient_view:
+            # 防止模型输出结构化 JSON（rule_type/rule_name...）而非自然语言
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    placeholder = self._generate_placeholder(context)
+                    return placeholder, placeholder
+            except Exception:
+                pass
             patient_view = content
         if not office_view:
             office_view = patient_view
