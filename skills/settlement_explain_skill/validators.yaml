@@ -39,7 +39,6 @@ forbidden_text:
   - "rylb"
   - "yllb"
   # Skill 标准化内部字段
-  - "deductible"
   - "medical_insurance_inner_amount"
   - "basic_pooling_payment"
   - "basic_pooling_self_pay"

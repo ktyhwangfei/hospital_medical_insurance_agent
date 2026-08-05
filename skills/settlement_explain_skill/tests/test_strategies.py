@@ -284,8 +284,8 @@ def test_strategy_filters_internal_identifiers_case_insensitively(
 ):
     evidence = [
         {
-            "source_text": f"内部实现标识 {internal_identifier}",
-            "applied_reason": f"通过 {internal_identifier} 命中",
+            "source_text": f"内部实现标识{internal_identifier}字段",
+            "applied_reason": f"通过{internal_identifier}命中",
         }
     ]
 
@@ -297,6 +297,40 @@ def test_strategy_filters_internal_identifiers_case_insensitively(
 
     assert result.answer.strip()
     assert internal_identifier.casefold() not in result.answer.casefold()
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Your deductible is 650 yuan.",
+        "We provide financial assistance.",
+        "Nonetheless, the result is confirmed.",
+    ],
+)
+def test_validator_and_strategy_allow_legal_english(
+    answer, monkeypatch, settlement_context
+):
+    from skills.settlement_explain_skill.scripts.validate_skill_result import (
+        validate_answer,
+    )
+
+    validation = validate_answer(
+        answer,
+        target_fee_item="deductible",
+        skip_for_llm=True,
+    )
+    assert validation.passed
+
+    strategy = get_strategy("deductible")
+    monkeypatch.setattr(strategy, "build_answer", lambda *_args: answer)
+    result = strategy.execute(
+        settlement_context,
+        [],
+        "no_policy_matched",
+    )
+
+    assert result.answer == answer
+    assert not any("安全降级" in warning for warning in result.warnings)
 
 
 # ══════════════════════════════════════════════════════════════════════════

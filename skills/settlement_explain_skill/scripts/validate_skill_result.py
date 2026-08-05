@@ -64,6 +64,38 @@ class ValidationResult:
 # ── 内部工具 ──────────────────────────────────────────────────
 
 
+_ASCII_IDENTIFIER = re.compile(r"[A-Za-z0-9_]+")
+_ASCII_IDENTIFIER_CHARS = "A-Za-z0-9_"
+
+
+def _contains_forbidden(text: str, forbidden: str) -> bool:
+    """按内部标识符语义匹配禁止项，避免误伤合法英文子串。"""
+    normalized_text = text.casefold()
+    token = str(forbidden).casefold()
+    if not token:
+        return False
+
+    if token == "yb_":
+        pattern = rf"(?<![{_ASCII_IDENTIFIER_CHARS}])yb_[A-Za-z0-9_]+"
+        return re.search(pattern, normalized_text) is not None
+
+    if token.endswith(".") and _ASCII_IDENTIFIER.fullmatch(token[:-1]):
+        pattern = (
+            rf"(?<![{_ASCII_IDENTIFIER_CHARS}]){re.escape(token)}"
+            r"[A-Za-z0-9_]+"
+        )
+        return re.search(pattern, normalized_text) is not None
+
+    if _ASCII_IDENTIFIER.fullmatch(token):
+        pattern = (
+            rf"(?<![{_ASCII_IDENTIFIER_CHARS}]){re.escape(token)}"
+            rf"(?![{_ASCII_IDENTIFIER_CHARS}])"
+        )
+        return re.search(pattern, normalized_text) is not None
+
+    return token in normalized_text
+
+
 def _get_required(
     target_fee_item: str, is_complete: bool, skip_for_llm: bool = False
 ) -> list[str]:
@@ -127,9 +159,8 @@ def validate_answer(
         result.passed = False
 
     # 1. 禁止文本扫描（无论模式都执行）
-    normalized_answer = answer_text.casefold()
     for fb in FORBIDDEN_TEXT:
-        if fb and str(fb).casefold() in normalized_answer:
+        if _contains_forbidden(answer_text, fb):
             result.errors.append(f"答案包含禁止文本: {repr(fb)}")
             result.passed = False
 
@@ -157,9 +188,8 @@ def validate_llm_output(output: str) -> ValidationResult:
     result = ValidationResult()
 
     # 1. 禁止文本扫描
-    normalized_output = output.casefold()
     for fb in FORBIDDEN_TEXT:
-        if fb and str(fb).casefold() in normalized_output:
+        if _contains_forbidden(output, fb):
             result.errors.append(f"LLM 输出包含禁止文本: {repr(fb)}")
             result.passed = False
 
