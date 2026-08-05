@@ -181,7 +181,7 @@ Commit: `feat: add immutable skill artifact model`
 - Create: `src/data_platform/storage/skill/version_factory.py`
 - Test: `src/tests/unit/data_platform/test_skill_version_storage.py`
 
-- [ ] **Step 1: 写存储契约失败测试**
+- [x] **Step 1: 写存储契约失败测试**
 
 ```python
 def test_in_memory_version_storage_is_idempotent_by_artifact():
@@ -199,13 +199,13 @@ def test_in_memory_version_storage_rejects_semver_collision():
         storage.save_version(_version("b" * 64))
 ```
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/data_platform/test_skill_version_storage.py -q --tb=short`
 
 Expected: FAIL，原因是版本存储类尚不存在。
 
-- [ ] **Step 3: 实现端口和内存存储**
+- [x] **Step 3: 实现端口和内存存储**
 
 ```python
 class SkillVersionStorage(Protocol):
@@ -217,7 +217,7 @@ class SkillVersionStorage(Protocol):
 
 内存实现按 `(skill_id, semantic_version)` 检查冲突，按 `(skill_id, artifact_hash)` 保证幂等，并始终返回深拷贝。
 
-- [ ] **Step 4: 实现 PostgreSQL 表与适配器**
+- [x] **Step 4: 实现 PostgreSQL 表与适配器**
 
 ```sql
 CREATE TABLE IF NOT EXISTS skill_versions (
@@ -241,7 +241,7 @@ CREATE TABLE IF NOT EXISTS skill_versions (
 
 保存版本前以 Manifest 快照中的 `skill_id/skill_name` 幂等补齐 `skills` 身份行，再写入带外键的版本行。捕获唯一约束冲突并转换为 `SkillVersionConflictError`，禁止 API 泄露数据库异常文本。
 
-- [ ] **Step 5: 运行存储测试并提交**
+- [x] **Step 5: 运行存储测试并提交**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/data_platform/test_skill_version_storage.py -q --tb=short`
 
