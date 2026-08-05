@@ -4,6 +4,7 @@
 测试policy_qa相关的API端点
 """
 
+import json
 import os
 import pytest
 
@@ -15,11 +16,112 @@ from fastapi.testclient import TestClient
 from src.runtime.api.app import create_app
 
 
+def _sse_events(body: str) -> list[tuple[str, dict]]:
+    events = []
+    for block in body.replace("\r\n", "\n").split("\n\n"):
+        event_name = ""
+        data_lines = []
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                event_name = line.removeprefix("event:").strip()
+            if line.startswith("data:"):
+                data_lines.append(line.removeprefix("data:").lstrip())
+        if event_name and data_lines:
+            events.append((event_name, json.loads("\n".join(data_lines))))
+    return events
+
+
+def _nested_keys(value) -> set[str]:
+    if isinstance(value, dict):
+        return set(value).union(*(_nested_keys(item) for item in value.values()), set())
+    if isinstance(value, list):
+        return set().union(*(_nested_keys(item) for item in value), set())
+    return set()
+
+
 @pytest.fixture
 def client():
     """创建测试客户端"""
     app = create_app()
     return TestClient(app)
+
+
+@pytest.fixture
+def safe_policy_qa_dependencies(monkeypatch):
+    """隔离外部 SQL/Milvus/模型依赖，让 SSE 确定性到达 result。"""
+    from types import SimpleNamespace
+
+    from src.runtime.api import policy_qa_routes
+    from src.runtime.policy_qa.settlement_data_provider import SettlementContext
+
+    class FakeSettlementDataProvider:
+        async def get_settlement_context(self, settlement_id: str) -> SettlementContext:
+            return SettlementContext(
+                settlement_id=settlement_id,
+                person_type="退休人员",
+                insurance_type="城镇职工基本医疗保险",
+                service_type="普通住院",
+                hospital_level="三级医院",
+                deductible=650.0,
+                medical_insurance_inner_amount=164411.81,
+                basic_pooling_payment=91759.51,
+                basic_pooling_self_pay=4962.67,
+                large_amount_payment=53631.71,
+                large_amount_self_pay=13407.93,
+                personal_total_pay=43694.67,
+                total_amount=189085.85,
+            )
+
+    class FakeAssembler:
+        @staticmethod
+        def _get_fee_field(_target_fee_item: str) -> str:
+            return "basic_pooling_self_pay"
+
+        @staticmethod
+        def _get_fee_amount(context: SettlementContext, _target_fee_item: str) -> float:
+            return context.basic_pooling_self_pay
+
+        @staticmethod
+        def build_policy_queries(_target_fee_item: str) -> list:
+            return []
+
+        @staticmethod
+        def execute(**_kwargs):
+            return SimpleNamespace(
+                answer="统筹自付为 4,962.67 元，按起付线以上政策区间分段计算。",
+                calculation_trace={
+                    "steps": [{"label": "统筹自付", "formula": "按政策区间分段计算"}],
+                },
+                definition={"name": "统筹自付", "plain_text": "个人按政策承担的部分。"},
+                warnings=[],
+                explanation_completeness={"level": "complete"},
+                policy_status="full_policy_matched",
+                policy_status_message="已匹配完整政策依据。",
+            )
+
+    evidence = SimpleNamespace(
+        source_text="起付线以上部分按政策规定分段计算统筹自付。",
+        applied_reason="匹配统筹自付支付比例规则",
+        rule_type="支付比例",
+        score=0.99,
+        payment_ratio="0.15",
+        amount_band="650-30000",
+        rule_value="15%",
+    )
+    monkeypatch.setattr(
+        policy_qa_routes,
+        "create_settlement_data_provider",
+        lambda: FakeSettlementDataProvider(),
+    )
+    monkeypatch.setattr(
+        policy_qa_routes,
+        "retrieve_policy_evidence",
+        lambda **_kwargs: SimpleNamespace(
+            selected_evidence=[evidence, evidence],
+            missing_required_rules=[],
+        ),
+    )
+    monkeypatch.setattr(policy_qa_routes, "get_assembler", lambda _skill_id: FakeAssembler())
 
 
 class TestPolicyQAStreamEndpoint:
@@ -72,8 +174,10 @@ class TestPolicyQAStreamEndpoint:
             # 检查Content-Type
             assert "text/event-stream" in response.headers.get("content-type", "")
 
-    def test_stream_endpoint_exposes_pooling_self_pay_contract(self, client):
-        """统筹自付问题的 SSE 事件必须暴露适配器驱动的完整链路步骤。"""
+    def test_stream_endpoint_does_not_expose_internal_trace_events(
+        self, client, safe_policy_qa_dependencies
+    ):
+        """公开 SSE 只允许业务事件，不能透出推理链或内部 trace。"""
         response = client.post(
             "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
             json={
@@ -83,16 +187,67 @@ class TestPolicyQAStreamEndpoint:
         )
 
         assert response.status_code == 200
-        body = response.text
         assert "text/event-stream" in response.headers.get("content-type", "")
-        assert "pooling_self_pay" in body
-        assert "统筹自付" in body
-        # 适配器驱动的新步骤名称
-        assert "query_sql_data" in body
-        assert "search_policy_rules" in body
-        assert "calculate_explanation" in body
-        assert "generate_explanation" in body
-        assert "reconciliation" in body
+        events = _sse_events(response.text)
+        event_names = {name for name, _payload in events}
+        assert event_names <= {
+            "context_need",
+            "memory_update",
+            "step",
+            "result",
+            "error",
+            "done",
+        }
+        assert not {"trace_event", "reasoning_step"}.intersection(event_names)
+        assert "result" in event_names
+        assert events[-1][0] == "done"
+        assert events[-1][1]["answer_status"] in {"complete", "partial", "unavailable"}
+
+    def test_stream_endpoint_returns_single_safe_answer_contract(
+        self, client, safe_policy_qa_dependencies
+    ):
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={
+                "question": "统筹自付为什么这么多？",
+                "settlement_id": "1671213",
+            },
+        )
+
+        assert response.status_code == 200
+        result_event = next(
+            payload["result"]
+            for event_name, payload in _sse_events(response.text)
+            if event_name == "result"
+        )
+        assert result_event["answer"]
+        assert result_event["answer_status"] in {"complete", "partial", "unavailable"}
+        assert set(result_event) == {
+            "answer",
+            "answer_status",
+            "case_context",
+            "calculation_steps",
+            "definition",
+            "warnings",
+            "policy_evidence",
+            "citations",
+            "uncertainties",
+            "verification_summary",
+        }
+        forbidden = {
+            "patient_view",
+            "office_view",
+            "settlement_evidence",
+            "answer_mode",
+            "run_id",
+            "selected_skill_id",
+            "query_trace",
+            "trace_events",
+            "reasoning_steps",
+        }
+        assert not forbidden.intersection(_nested_keys(result_event))
+        assert "yb_" not in json.dumps(result_event, ensure_ascii=False).lower()
+        assert result_event["citations"] or result_event["uncertainties"]
 
 
 class TestPolicyQATestEndpoint:

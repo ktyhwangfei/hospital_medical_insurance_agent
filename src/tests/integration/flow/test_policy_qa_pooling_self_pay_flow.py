@@ -3,6 +3,48 @@
 import pytest
 
 
+@pytest.mark.parametrize(
+    ("can_answer", "partial_answer", "policy_status", "expected_status"),
+    [
+        (True, False, "full_policy_matched", "complete"),
+        (True, False, "partial_policy_matched", "partial"),
+        (False, False, "no_policy_matched", "unavailable"),
+    ],
+)
+def test_public_result_status_and_evidence_whitelist(
+    can_answer, partial_answer, policy_status, expected_status
+):
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    result = _build_public_result(
+        answer="统筹自付解释" if can_answer else "当前信息不足，无法可靠解释该费用。",
+        can_answer=can_answer,
+        partial_answer=partial_answer,
+        policy_status=policy_status,
+        policy_evidence=[
+            {
+                "title": "职工医保住院待遇政策",
+                "clause": "起付线以上部分按规定比例由个人承担。",
+                "score": 0.98,
+                "query_trace": {"sql": "select * from yb_zyfdxx"},
+                "raw_sql": "select * from yb_dyxxzy",
+                "rule_id": "internal-rule-id",
+            }
+        ],
+        calculation_steps=[{"label": "统筹自付", "formula": "按政策区间分段计算"}],
+        definition={"name": "统筹自付", "plain_text": "个人按政策承担的部分。"},
+        warnings=[],
+        case_context={"settlement_id": "1671213", "basic_pooling_self_pay": 4962.67},
+    )
+
+    assert result.answer_status == expected_status
+    assert result.citations or result.uncertainties
+    dumped = result.model_dump(mode="json")
+    assert set(dumped["policy_evidence"][0]) == {"title", "excerpt", "score"}
+    assert "yb_zyfdxx" not in str(dumped)
+    assert "yb_dyxxzy" not in str(dumped)
+
+
 @pytest.mark.asyncio
 async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
     """输入统筹自付问题后，输出必须包含上下文、分段比例、权威金额和复核结论。"""
