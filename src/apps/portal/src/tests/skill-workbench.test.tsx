@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,6 +10,7 @@ const mockGetInfraSkillDetail = vi.fn()
 const mockListInfraSkillVersions = vi.fn()
 const mockListSkillEvalRuns = vi.fn()
 const mockListSkillReleases = vi.fn()
+const mockActivateSkillRelease = vi.fn()
 
 vi.mock('@/lib/api-client', () => ({
   getSkillGovernanceWorkbench: (...args: unknown[]) => mockGetSkillGovernanceWorkbench(...args),
@@ -25,8 +26,37 @@ vi.mock('@/lib/api-client', () => ({
   createSkillRelease: vi.fn(),
   requestSkillReleaseApproval: vi.fn(),
   approveSkillRelease: vi.fn(),
-  activateSkillRelease: vi.fn(),
+  activateSkillRelease: (...args: unknown[]) => mockActivateSkillRelease(...args),
 }))
+
+function releasePage(status: 'approval_pending' | 'approved' | 'active') {
+  return {
+    items: [{
+      release_id: 'release-1',
+      skill_id: 'settlement_explain_skill',
+      version_id: 'version-1',
+      environment: 'test',
+      status,
+      baseline_release_id: null,
+      eval_run_id: 'run-1',
+      artifact_hash: 'a'.repeat(64),
+      config_hash: 'b'.repeat(64),
+      rollout_percent: 0,
+      runtime_mode: 'shadow',
+      revision: status === 'active' ? 4 : 3,
+      created_by: 'portal-user',
+      created_at: '2026-08-05T06:00:00Z',
+      activated_at: status === 'active' ? '2026-08-05T06:30:00Z' : null,
+      retired_at: null,
+      approval: status === 'approval_pending' ? null : {
+        approved_by: 'information-admin',
+        approver_role: 'information_department',
+        approved_at: '2026-08-05T06:20:00Z',
+      },
+    }],
+    total: 1,
+  }
+}
 
 const workbenchResponse = {
   summary: {
@@ -76,6 +106,7 @@ describe('Skill governance workbench', () => {
     mockListInfraSkillVersions.mockResolvedValue([])
     mockListSkillEvalRuns.mockResolvedValue({ items: [], total: 0 })
     mockListSkillReleases.mockResolvedValue({ items: [], total: 0 })
+    mockActivateSkillRelease.mockResolvedValue({ status: 'active' })
   })
 
   afterEach(() => {
@@ -136,5 +167,32 @@ describe('Skill governance workbench', () => {
 
     expect(screen.getByRole('tab', { name: '评测' })).toHaveAttribute('aria-selected', 'true')
     expect(window.location.search).toContain('tab=evaluation')
+  })
+
+  it('shows exactly one primary release action for approval pending', async () => {
+    mockListSkillReleases.mockResolvedValue(releasePage('approval_pending'))
+    render(<SkillGovernanceWorkbench />)
+
+    await userEvent.click(await screen.findByRole('tab', { name: '发布' }))
+
+    expect(await screen.findByRole('button', { name: '人工审批通过' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: '申请审批' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '激活 Test Shadow' })).not.toBeInTheDocument()
+  })
+
+  it('refreshes catalog and lifecycle after activation', async () => {
+    let releaseStatus: 'approved' | 'active' = 'approved'
+    mockListSkillReleases.mockImplementation(async () => releasePage(releaseStatus))
+    mockActivateSkillRelease.mockImplementation(async () => {
+      releaseStatus = 'active'
+      return releasePage('active').items[0]
+    })
+    render(<SkillGovernanceWorkbench />)
+
+    await userEvent.click(await screen.findByRole('tab', { name: '发布' }))
+    await userEvent.click(await screen.findByRole('button', { name: '激活 Test Shadow' }))
+
+    await waitFor(() => expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('Test Shadow 已激活')).toBeVisible()
   })
 })

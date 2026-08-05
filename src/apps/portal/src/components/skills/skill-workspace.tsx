@@ -139,12 +139,23 @@ export default function SkillWorkspace({
           </TabsContent>
           <TabsContent value="evaluation">
             {errors.evaluations ? <p role="alert" className="text-sm text-red-700">{errors.evaluations}</p> : (
-              <SkillEvaluationSuite skillId={item.skill_id} versions={versions} />
+              <SkillEvaluationSuite
+                skillId={item.skill_id}
+                versions={versions}
+                readOnly={environment === 'dev'}
+                onChanged={handleChanged}
+              />
             )}
           </TabsContent>
           <TabsContent value="release">
             {errors.releases ? <p role="alert" className="text-sm text-red-700">{errors.releases}</p> : (
-              <SkillReleasePanel skillId={item.skill_id} versions={versions} />
+              <SkillReleasePanel
+                skillId={item.skill_id}
+                versions={versions}
+                environment={environment}
+                readOnly={environment === 'dev'}
+                onChanged={handleChanged}
+              />
             )}
           </TabsContent>
           <TabsContent value="development">

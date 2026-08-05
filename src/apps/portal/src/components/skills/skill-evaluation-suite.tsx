@@ -23,6 +23,8 @@ import type {
 interface SkillEvaluationSuiteProps {
   skillId: string
   versions: SkillVersionResponse[]
+  readOnly?: boolean
+  onChanged?: () => Promise<void> | void
 }
 
 
@@ -34,6 +36,8 @@ function errorMessage(error: unknown): string {
 export default function SkillEvaluationSuite({
   skillId,
   versions,
+  readOnly = false,
+  onChanged,
 }: SkillEvaluationSuiteProps) {
   const [cases, setCases] = useState<SkillEvalCaseResponse[]>([])
   const [runs, setRuns] = useState<SkillEvalRunResponse[]>([])
@@ -88,6 +92,7 @@ export default function SkillEvaluationSuite({
       })
       setQuestion('')
       await load()
+      await onChanged?.()
     } catch (mutationError) {
       setError(errorMessage(mutationError))
     } finally {
@@ -104,6 +109,7 @@ export default function SkillEvaluationSuite({
         version_id: currentVersion.version_id,
       })
       await load()
+      await onChanged?.()
     } catch (mutationError) {
       setError(errorMessage(mutationError))
     } finally {
@@ -124,18 +130,23 @@ export default function SkillEvaluationSuite({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Input
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-          placeholder="输入脱敏后的固定路由问题"
-          className="min-w-64 flex-1"
-        />
-        <Button variant="outline" onClick={addCase} disabled={mutating || !question.trim()}>
-          <Plus className="mr-1 h-4 w-4" />新增必测用例
-        </Button>
-        <Button onClick={runEvaluation} disabled={mutating || !currentVersion || cases.length === 0}>
-          <Play className="mr-1 h-4 w-4" />运行候选评测
-        </Button>
+        {!readOnly && (
+          <>
+            <Input
+              aria-label="脱敏评测问题"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder="输入脱敏后的固定路由问题"
+              className="min-w-64 flex-1"
+            />
+            <Button variant="outline" onClick={addCase} disabled={mutating || !question.trim()}>
+              <Plus className="mr-1 h-4 w-4" />新增必测用例
+            </Button>
+            <Button onClick={runEvaluation} disabled={mutating || !currentVersion || cases.length === 0}>
+              <Play className="mr-1 h-4 w-4" />运行候选评测
+            </Button>
+          </>
+        )}
         <Button variant="ghost" size="icon" onClick={() => void load()} aria-label="刷新评测">
           <RefreshCw className="h-4 w-4" />
         </Button>
@@ -161,7 +172,7 @@ export default function SkillEvaluationSuite({
               <div>新增失败 <strong>{latestRun.metrics.regression_count}</strong></div>
               <div>新增误接管 <strong>{latestRun.metrics.new_false_takeover_count}</strong></div>
             </div>
-            {latestRun.results.map((result) => (
+            {latestRun.results.filter((result) => !result.candidate_passed).map((result) => (
               <div key={result.case_id} className="flex items-center justify-between rounded border px-3 py-2 text-xs">
                 <span className="font-mono">{result.case_id.slice(0, 12)}</span>
                 <span>{result.candidate_skill_id ?? 'no-match'} / {result.baseline_skill_id ?? 'no-match'}</span>
