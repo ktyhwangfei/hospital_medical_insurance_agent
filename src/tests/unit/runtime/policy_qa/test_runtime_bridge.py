@@ -123,13 +123,13 @@ def test_record_policy_step_uses_sticky_policy_memory():
 
 
 def test_record_calculate_and_answer_steps_link_source_memories():
-    """计算/答案步骤的推理步关联结算与政策记忆（来源可追溯）。"""
+    """计算/答案生成步骤的推理步关联结算与政策记忆（来源可追溯）。"""
     bridge, _, reasoning_manager = _make_bridge()
     bridge.record_step(session_id="s1", step="settlement_query", detail={}, settlement_id="1671213")
     bridge.record_step(session_id="s1", step="structured_policy_query", detail={"rules_count": 3})
 
     calc_events = bridge.record_step(session_id="s1", step="calculate_explanation", detail={})
-    answer_events = bridge.record_step(session_id="s1", step="answer_assembly", detail={})
+    answer_events = bridge.record_step(session_id="s1", step="answer_generation", detail={})
 
     calc_step = dict(calc_events[0][1])
     answer_step = dict(answer_events[0][1])

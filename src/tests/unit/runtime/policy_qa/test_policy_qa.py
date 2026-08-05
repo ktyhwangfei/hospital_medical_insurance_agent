@@ -14,6 +14,20 @@ os.environ["USE_MEMORY_STORAGE"] = "1"
 class TestPolicyQAModels:
     """测试policy_qa模型"""
 
+    def test_policy_qa_response_has_single_answer(self):
+        from src.runtime.policy_qa.models import PolicyQAResponse
+
+        response = PolicyQAResponse(
+            step="answer_generation",
+            status="done",
+            answer="已完成解释",
+            answer_status="complete",
+        )
+        assert response.answer == "已完成解释"
+        assert response.answer_status == "complete"
+        assert not hasattr(response, "patient_view")
+        assert not hasattr(response, "office_view")
+
     def test_policy_qa_intent_enum(self):
         """测试PolicyQAIntent枚举"""
         from src.runtime.policy_qa.models import PolicyQAIntent
@@ -511,6 +525,18 @@ class TestIntentDetector:
 
 class TestExplanationGenerator:
     """测试解释生成器"""
+
+    def test_explanation_generator_returns_one_answer(self):
+        import asyncio
+
+        from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
+        from src.runtime.policy_qa.models import ExplanationContext
+
+        generator = ExplanationGenerator(model_gateway=None)
+        answer = asyncio.run(generator.generate_answer(ExplanationContext()))
+        assert isinstance(answer, str)
+        assert answer
+        assert not hasattr(generator, "generate_dual_views")
 
     def test_generator_import(self):
         """测试生成器是否可以导入"""

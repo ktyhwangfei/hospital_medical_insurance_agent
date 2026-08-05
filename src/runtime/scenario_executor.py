@@ -695,11 +695,11 @@ class UnifiedScenarioExecutor:
                     }
                     on_event("stream:step", step_data)
 
-                # 累积 explanation 的流式 chunks
-                if response.step == "explain" and response.chunk:
-                    full_text += response.chunk
+                # 累积政策问答生成的单一答案
+                if response.step == "answer_generation" and response.answer:
+                    full_text += response.answer
                     if on_event:
-                        on_event("stream:delta", {"content": response.chunk})
+                        on_event("stream:delta", {"content": response.answer})
 
                 # 捕获费用分解数据
                 if response.step == "decomposition" and response.status == "done":
