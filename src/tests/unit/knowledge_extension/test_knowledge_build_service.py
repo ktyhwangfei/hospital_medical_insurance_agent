@@ -180,6 +180,16 @@ class _FailingCandidateInvalidation:
         raise self.failure
 
 
+class _CommitThenRaiseChangeSetStore(InMemoryChangeSetStore):
+    def __init__(self, failure: Exception) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def save(self, change_set: KnowledgeChangeSet) -> KnowledgeChangeSet:
+        super().save(change_set)
+        raise self.failure
+
+
 class _RecordingStore:
     def __init__(
         self,
@@ -237,13 +247,14 @@ class _RecordingStore:
         result_change_set_id: str | None = None,
     ) -> models.KnowledgeBuildTask:
         self.fail_and_release_calls += 1
-        self.transitions.append("FAILED")
-        return self.inner.fail_and_release(
+        result = self.inner.fail_and_release(
             task_id,
             error_code=error_code,
             error_message=error_message,
             result_change_set_id=result_change_set_id,
         )
+        self.transitions.append(result.status)
+        return result
 
 
 class _ClaimRaceStore(_RecordingStore):
@@ -266,6 +277,20 @@ class _ConcurrentRunningSaveStore(_RecordingStore):
 
     def save(self, task: models.KnowledgeBuildTask) -> models.KnowledgeBuildTask:
         if task.status == "RUNNING":
+            self.transitions.append(task.status)
+            self.snapshots.append(task.model_copy(deep=True))
+            self.inner.save(task)
+            raise self.failure
+        return super().save(task)
+
+
+class _CommitThenRaiseFinalSaveStore(_RecordingStore):
+    def __init__(self, failure: Exception) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def save(self, task: models.KnowledgeBuildTask) -> models.KnowledgeBuildTask:
+        if task.status == "WAITING_REVIEW":
             self.transitions.append(task.status)
             self.snapshots.append(task.model_copy(deep=True))
             self.inner.save(task)
@@ -1510,3 +1535,70 @@ def test_failure_cleanup_error_preserves_original_exception_with_note() -> None:
     )
     assert store.fail_and_release_calls == 1
     assert store.get_claim("doc-1", "unit-1") is not None
+
+
+def test_candidate_save_commit_then_raise_recovers_and_invalidates_candidate() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    original = RuntimeError("candidate save response lost")
+    candidate_store = _CommitThenRaiseChangeSetStore(original)
+    builder = ChangeSetService(object(), candidate_store)
+    store = _RecordingStore()
+    service, _workbench, _store, _builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        builder=builder,
+        task_id_factory=lambda: "KB_candidate_commit_then_raise",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert exc_info.value is original
+    candidate = candidate_store.list()[0]
+    failed = store.inner.get("KB_candidate_commit_then_raise")
+    assert failed is not None
+    assert failed.status == "FAILED"
+    assert failed.result_change_set_id == candidate.change_set_id
+    assert candidate.status == "FAILED"
+    assert store.get_claim("doc-1", "unit-1") is None
+
+
+def test_final_task_save_commit_then_raise_preserves_review_state_and_claim() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    original = RuntimeError("final task save response lost")
+    store = _CommitThenRaiseFinalSaveStore(original)
+    candidate_store = InMemoryChangeSetStore()
+    builder = ChangeSetService(object(), candidate_store)
+    service, _workbench, _store, _builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        builder=builder,
+        task_id_factory=lambda: "KB_final_commit_then_raise",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert exc_info.value is original
+    latest = store.inner.get("KB_final_commit_then_raise")
+    assert latest is not None
+    assert latest.status == "WAITING_REVIEW"
+    assert store.fail_and_release_calls == 1
+    assert store.get_claim("doc-1", "unit-1") is not None
+    candidate = candidate_store.list()[0]
+    assert latest.result_change_set_id == candidate.change_set_id
+    assert candidate.status == "PENDING_REVIEW"

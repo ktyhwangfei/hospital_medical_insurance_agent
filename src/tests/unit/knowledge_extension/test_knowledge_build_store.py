@@ -1052,3 +1052,30 @@ def test_postgresql_fail_and_release_rolls_back_task_when_claim_delete_fails(
     fake.fail_claim_delete = False
     assert store.get(created.task_id) == running
     assert store.get_claim("doc-1", "unit-1").task_id == created.task_id
+
+
+@pytest.mark.parametrize("backend", ["memory", "postgresql"])
+@pytest.mark.parametrize(
+    "later_status",
+    ["WAITING_REVIEW", "APPROVED_PENDING_RELEASE"],
+)
+def test_fail_and_release_preserves_concurrently_advanced_task_and_claim(
+    backend: str,
+    later_status: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _fake = _store_for_backend(backend, monkeypatch)
+    created = store.create_with_claims(_make_task("task-advanced"))
+    advanced = _move_to_status(store, created, later_status)
+    claim_before = store.get_claim("doc-1", "unit-1")
+
+    result = store.fail_and_release(
+        created.task_id,
+        error_code="RuntimeError",
+        error_message="stale worker failure",
+        result_change_set_id="CS_stale_failure",
+    )
+
+    assert result == advanced
+    assert store.get(created.task_id) == advanced
+    assert store.get_claim("doc-1", "unit-1") == claim_before

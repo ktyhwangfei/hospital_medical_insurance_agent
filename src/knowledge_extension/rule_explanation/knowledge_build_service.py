@@ -13,6 +13,7 @@ from src.knowledge_extension.rule_explanation.change_set_models import (
 from src.knowledge_extension.rule_explanation.change_set_service import (
     ChangeSetService,
     SelectedKnowledgeUnit,
+    change_set_id_for_task,
 )
 
 from src.knowledge_extension.rule_explanation.knowledge_build_models import (
@@ -195,6 +196,7 @@ class KnowledgeBuildService:
             updated_at=created_at,
         )
         created = self._store.create_with_claims(queued)
+        expected_change_set_id = change_set_id_for_task(task_id)
         result_change_set_id: str | None = None
         try:
             running = self._store.save(
@@ -242,6 +244,18 @@ class KnowledgeBuildService:
                 )
             )
         except Exception as error:
+            if result_change_set_id is None:
+                try:
+                    persisted = self._change_set_service.get_change_set(
+                        expected_change_set_id
+                    )
+                    if persisted is not None:
+                        result_change_set_id = persisted.change_set_id
+                except Exception as lookup_error:
+                    error.add_note(
+                        "查询已持久化知识构建候选时出错: "
+                        f"{type(lookup_error).__name__}: {lookup_error}"
+                    )
             self._record_failure(created, error, result_change_set_id)
             raise
 
@@ -251,8 +265,9 @@ class KnowledgeBuildService:
         error: Exception,
         result_change_set_id: str | None,
     ) -> None:
+        failed_task: KnowledgeBuildTask | None = None
         try:
-            self._store.fail_and_release(
+            failed_task = self._store.fail_and_release(
                 created.task_id,
                 error_code=type(error).__name__,
                 error_message=str(error),
@@ -263,7 +278,11 @@ class KnowledgeBuildService:
                 "记录知识构建任务失败状态时出错: "
                 f"{type(recording_error).__name__}: {recording_error}"
             )
-        if result_change_set_id is None:
+        if (
+            result_change_set_id is None
+            or failed_task is None
+            or failed_task.status != "FAILED"
+        ):
             return
         try:
             self._change_set_service.fail_candidate(

@@ -360,8 +360,7 @@ class InMemoryKnowledgeBuildStore:
             current = self._tasks.get(task_id)
             if current is None:
                 raise KnowledgeBuildTaskNotFound(task_id)
-            if current.status in _TERMINAL_STATUSES:
-                self._release_claims_unlocked(task_id)
+            if current.status not in {"QUEUED", "RUNNING"}:
                 return current.model_copy(deep=True)
             failed = _failed_task(
                 current,
@@ -639,32 +638,31 @@ class PostgreSQLKnowledgeBuildStore:
                 current = self._task_from_payload(
                     self._record_value(current_record, "payload", 0)
                 )
-                if current.status in _TERMINAL_STATUSES:
-                    failed = current
-                else:
-                    failed = _failed_task(
-                        current,
-                        error_code=error_code,
-                        error_message=error_message,
-                        result_change_set_id=result_change_set_id,
-                    )
-                    updated_record = self._execute_transaction(
-                        connection,
-                        _UPDATE_TASK,
-                        (
-                            failed.status,
-                            failed.model_dump_json(),
-                            failed.updated_at,
-                            failed.task_id,
-                            current.updated_at,
-                        ),
-                        fetch_one=True,
-                    )
-                    if updated_record is None:
-                        raise KnowledgeBuildTaskVersionConflict(task_id)
-                    failed = self._task_from_payload(
-                        self._record_value(updated_record, "payload", 0)
-                    )
+                if current.status not in {"QUEUED", "RUNNING"}:
+                    return current.model_copy(deep=True)
+                failed = _failed_task(
+                    current,
+                    error_code=error_code,
+                    error_message=error_message,
+                    result_change_set_id=result_change_set_id,
+                )
+                updated_record = self._execute_transaction(
+                    connection,
+                    _UPDATE_TASK,
+                    (
+                        failed.status,
+                        failed.model_dump_json(),
+                        failed.updated_at,
+                        failed.task_id,
+                        current.updated_at,
+                    ),
+                    fetch_one=True,
+                )
+                if updated_record is None:
+                    raise KnowledgeBuildTaskVersionConflict(task_id)
+                failed = self._task_from_payload(
+                    self._record_value(updated_record, "payload", 0)
+                )
                 self._execute_transaction(
                     connection,
                     "DELETE FROM policy_knowledge_unit_claims WHERE task_id = %s",
