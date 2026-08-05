@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SkillGovernanceWorkbench from '@/components/skills/skill-governance-workbench'
@@ -6,11 +7,25 @@ import SkillGovernanceWorkbench from '@/components/skills/skill-governance-workb
 const mockGetSkillGovernanceWorkbench = vi.fn()
 const mockListInfraSkillCatalog = vi.fn()
 const mockGetInfraSkillDetail = vi.fn()
+const mockListInfraSkillVersions = vi.fn()
+const mockListSkillEvalRuns = vi.fn()
+const mockListSkillReleases = vi.fn()
 
 vi.mock('@/lib/api-client', () => ({
   getSkillGovernanceWorkbench: (...args: unknown[]) => mockGetSkillGovernanceWorkbench(...args),
   listInfraSkillCatalog: (...args: unknown[]) => mockListInfraSkillCatalog(...args),
   getInfraSkillDetail: (...args: unknown[]) => mockGetInfraSkillDetail(...args),
+  listInfraSkillVersions: (...args: unknown[]) => mockListInfraSkillVersions(...args),
+  listSkillEvalRuns: (...args: unknown[]) => mockListSkillEvalRuns(...args),
+  listSkillReleases: (...args: unknown[]) => mockListSkillReleases(...args),
+  syncInfraSkillVersion: vi.fn(),
+  listSkillEvalCases: vi.fn().mockResolvedValue({ items: [], total: 0, suite_version: 1 }),
+  createSkillEvalCase: vi.fn(),
+  createSkillEvalRun: vi.fn(),
+  createSkillRelease: vi.fn(),
+  requestSkillReleaseApproval: vi.fn(),
+  approveSkillRelease: vi.fn(),
+  activateSkillRelease: vi.fn(),
 }))
 
 const workbenchResponse = {
@@ -58,6 +73,9 @@ describe('Skill governance workbench', () => {
       files_structure: {},
       field_mapping: null,
     })
+    mockListInfraSkillVersions.mockResolvedValue([])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [], total: 0 })
+    mockListSkillReleases.mockResolvedValue({ items: [], total: 0 })
   })
 
   afterEach(() => {
@@ -92,5 +110,31 @@ describe('Skill governance workbench', () => {
 
     expect(await screen.findByTestId('skill-catalog-item-settlement_explain_skill')).toBeVisible()
     expect(await screen.findByText('SKILL_DETAIL_FAILED')).toBeVisible()
+  })
+
+  it('shows server-backed lifecycle steps and five tabs', async () => {
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText('版本登记')).toBeVisible()
+    expect(screen.getByText('批量评测')).toBeVisible()
+    expect(screen.getByText('人工审批')).toBeVisible()
+    expect(screen.getByText('Test 激活')).toBeVisible()
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      '总览',
+      '版本',
+      '评测',
+      '发布',
+      '开发详情',
+    ])
+  })
+
+  it('navigates a blocked step to its evidence tab', async () => {
+    const user = userEvent.setup()
+    render(<SkillGovernanceWorkbench />)
+
+    await user.click(await screen.findByRole('button', { name: /批量评测/ }))
+
+    expect(screen.getByRole('tab', { name: '评测' })).toHaveAttribute('aria-selected', 'true')
+    expect(window.location.search).toContain('tab=evaluation')
   })
 })

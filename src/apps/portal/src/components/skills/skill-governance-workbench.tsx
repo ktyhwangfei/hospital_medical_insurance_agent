@@ -2,10 +2,9 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { getInfraSkillDetail, getSkillGovernanceWorkbench, listInfraSkillCatalog } from '@/lib/api-client'
+import { getSkillGovernanceWorkbench, listInfraSkillCatalog } from '@/lib/api-client'
 import type {
   InfraSkillCatalogItem,
-  InfraSkillDetailResponse,
   SkillGovernanceStatus,
   SkillWorkbenchItem,
   SkillWorkbenchSummary,
@@ -15,6 +14,7 @@ import type {
 import SkillCatalogPanel from './skill-catalog-panel'
 import SkillGovernanceSummary from './skill-governance-summary'
 import SkillWorkbenchHeader from './skill-workbench-header'
+import SkillWorkspace from './skill-workspace'
 
 const VALID_TABS = new Set<SkillWorkbenchTab>([
   'overview',
@@ -90,14 +90,6 @@ function catalogFallback(item: InfraSkillCatalogItem): SkillWorkbenchItem {
   }
 }
 
-const tabs: Array<{ value: SkillWorkbenchTab; label: string }> = [
-  { value: 'overview', label: '概览' },
-  { value: 'versions', label: '版本' },
-  { value: 'evaluation', label: '评测' },
-  { value: 'release', label: '发布' },
-  { value: 'development', label: '开发' },
-]
-
 export default function SkillGovernanceWorkbench() {
   const [initialState] = useState(readWorkbenchUrl)
   const [items, setItems] = useState<SkillWorkbenchItem[]>([])
@@ -112,8 +104,6 @@ export default function SkillGovernanceWorkbench() {
   const [businessAction, setBusinessAction] = useState(initialState.businessAction)
   const [businessObject, setBusinessObject] = useState(initialState.businessObject)
   const [refreshToken, setRefreshToken] = useState(0)
-  const [detail, setDetail] = useState<InfraSkillDetailResponse | null>(null)
-  const [detailError, setDetailError] = useState<string | null>(null)
   const [routeNotice, setRouteNotice] = useState(false)
 
   const prepareCatalogReload = useCallback(() => {
@@ -137,8 +127,6 @@ export default function SkillGovernanceWorkbench() {
     setGovernanceStatus(status)
   }, [prepareCatalogReload])
   const handleSelect = useCallback((skillId: string) => {
-    setDetail(null)
-    setDetailError(null)
     setSelectedSkillId(skillId)
   }, [])
 
@@ -155,8 +143,6 @@ export default function SkillGovernanceWorkbench() {
       if (!current) return
       setItems(response.items)
       setSummary(response.summary)
-      setDetail(null)
-      setDetailError(null)
       setSelectedSkillId((selected) => response.items.some((item) => item.skill_id === selected)
         ? selected
         : response.items[0]?.skill_id ?? null)
@@ -174,8 +160,6 @@ export default function SkillGovernanceWorkbench() {
         if (!current) return
         const fallbackItems = fallback.items.map(catalogFallback)
         setItems(fallbackItems)
-        setDetail(null)
-        setDetailError(null)
         setSelectedSkillId((selected) => fallbackItems.some((item) => item.skill_id === selected)
           ? selected
           : fallbackItems[0]?.skill_id ?? null)
@@ -189,17 +173,6 @@ export default function SkillGovernanceWorkbench() {
     })
     return () => { current = false }
   }, [businessAction, businessObject, governanceStatus, query, refreshToken])
-
-  useEffect(() => {
-    if (!selectedSkillId) return
-    let current = true
-    getInfraSkillDetail(selectedSkillId).then((response) => {
-      if (current) setDetail(response)
-    }).catch((error: unknown) => {
-      if (current) setDetailError(error instanceof Error ? error.message : '无法加载 Skill 详情')
-    })
-    return () => { current = false }
-  }, [selectedSkillId])
 
   useEffect(() => {
     replaceWorkbenchUrl({
@@ -245,32 +218,18 @@ export default function SkillGovernanceWorkbench() {
           onSelect={handleSelect}
         />
         <main className="min-w-0 bg-slate-50/50 p-4 md:p-6">
-          {selectedSkillId ? (
-            <section data-testid={`skill-workspace-${selectedSkillId}`} className="rounded-xl border border-slate-200 bg-white">
-              <div className="border-b border-slate-200 px-5 py-4">
-                <h2 className="text-lg font-semibold text-slate-950">{detail?.skill_name ?? selectedSkillId}</h2>
-                <p className="mt-1 font-mono text-xs text-slate-500">{selectedSkillId}</p>
-              </div>
-              <div role="tablist" aria-label="Skill 工作区" className="flex overflow-x-auto border-b border-slate-200 px-3">
-                {tabs.map((tab) => (
-                  <button
-                    key={tab.value}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeTab === tab.value}
-                    onClick={() => setActiveTab(tab.value)}
-                    className="border-b-2 border-transparent px-3 py-3 text-sm text-slate-500 aria-selected:border-blue-600 aria-selected:font-medium aria-selected:text-blue-700"
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-              <div className="min-h-72 p-5">
-                {detailError ? <p role="alert" className="text-sm text-red-700">{detailError}</p> : (
-                  <p className="text-sm text-slate-500">{detail ? `${tabs.find((tab) => tab.value === activeTab)?.label}信息` : '正在加载详情…'}</p>
-                )}
-              </div>
-            </section>
+          {selectedSkillId && items.find((item) => item.skill_id === selectedSkillId) ? (
+            <SkillWorkspace
+              key={selectedSkillId}
+              item={items.find((item) => item.skill_id === selectedSkillId)!}
+              activeTab={activeTab}
+              environment={environment}
+              onTabChange={setActiveTab}
+              onChanged={() => {
+                prepareCatalogReload()
+                setRefreshToken((value) => value + 1)
+              }}
+            />
           ) : (
             <div className="flex min-h-72 items-center justify-center text-sm text-slate-500">请选择一个 Skill</div>
           )}
