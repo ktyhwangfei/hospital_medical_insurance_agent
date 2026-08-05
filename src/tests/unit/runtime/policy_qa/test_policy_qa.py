@@ -526,6 +526,14 @@ class TestIntentDetector:
 class TestExplanationGenerator:
     """测试解释生成器"""
 
+    def test_safe_money_formats_zero_but_preserves_missing_values(self):
+        from src.runtime.policy_qa.explanation_generator import _safe_money
+
+        assert _safe_money(0) == "0.00"
+        assert _safe_money(0.0) == "0.00"
+        assert _safe_money(None) == "未获取"
+        assert _safe_money("") == "未获取"
+
     def test_explanation_generator_returns_one_answer(self):
         import asyncio
 

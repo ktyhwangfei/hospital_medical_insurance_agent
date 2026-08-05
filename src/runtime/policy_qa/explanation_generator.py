@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 
 def _safe_money(value) -> str:
-    """安全格式化金额：null/0/空 → '未获取'。"""
-    if value is None or value == '' or (isinstance(value, (int, float)) and value == 0):
+    """安全格式化金额：null/空 → '未获取'。"""
+    if value is None or value == '':
         return '未获取'
     try:
         return f'{float(value):,.2f}'
