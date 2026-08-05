@@ -41,7 +41,7 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
             return [
                 PolicyRule(
                     rule_id="r1",
-                    rule_type="统筹分段",
+                    rule_type="支付比例",
                     amount_band="650-30000",
                     payment_ratio="0.15",
                     source_text="起付线以上至3万元部分，自付比例15%",
@@ -49,7 +49,7 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
                 ).__dict__,
                 PolicyRule(
                     rule_id="r2",
-                    rule_type="统筹分段",
+                    rule_type="支付比例",
                     amount_band="30000-40000",
                     payment_ratio="0.10",
                     source_text="3万元至4万元部分，自付比例10%",
@@ -57,7 +57,7 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
                 ).__dict__,
                 PolicyRule(
                     rule_id="r3",
-                    rule_type="统筹分段",
+                    rule_type="支付比例",
                     amount_band="40000-inf",
                     payment_ratio="0.05",
                     source_text="4万元以上部分，自付比例5%",
@@ -89,6 +89,7 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
     query_done = next(event for event in events if event.step == "settlement_query" and event.status == "done")
     policy_done = next(event for event in events if event.step == "policy_rule_search" and event.status == "done")
     explanation_done = next(event for event in events if event.step == "answer_generation" and event.status == "done")
+    trace_done = next(event for event in events if event.step == "trace_result" and event.status == "done")
 
     assert intent_done.detail["target_fee_item"] == "pooling_self_pay"
     assert query_done.detail["settlement_id"] == "1671213"
@@ -98,3 +99,5 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
     assert explanation_done.answer_status == "complete"
     assert not hasattr(explanation_done, "patient_view")
     assert not hasattr(explanation_done, "office_view")
+    assert trace_done.detail["status"] == "success"
+    assert trace_done.answer_status == "complete"

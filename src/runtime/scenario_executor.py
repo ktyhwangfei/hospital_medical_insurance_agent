@@ -787,7 +787,10 @@ class UnifiedScenarioExecutor:
             return AgentResponse(
                 scenario="policy_qa_fee_decomposition",
                 status="completed",
-                result={"content": f"费用分析过程中遇到问题：{str(e)}\n请您稍后重试或联系医保办确认。"},
+                result={
+                    "content": f"费用分析过程中遇到问题：{str(e)}\n请您稍后重试或联系医保办确认。",
+                    "answer_status": "unavailable",
+                },
                 citations=[],
                 tasks=[],
                 missing_fields=[],

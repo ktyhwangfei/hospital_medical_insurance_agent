@@ -20,7 +20,7 @@ def _context() -> RuntimeContext:
     )
 
 
-def _patch_policy_qa_pipeline(monkeypatch, events):
+def _patch_policy_qa_pipeline(monkeypatch, events, error=None):
     import src.model_service.gateway as gateway_module
     import src.runtime.policy_qa.explanation_generator as generator_module
     import src.runtime.policy_qa.orchestrator as orchestrator_module
@@ -31,6 +31,8 @@ def _patch_policy_qa_pipeline(monkeypatch, events):
             pass
 
         async def process(self, request):
+            if error is not None:
+                raise error
             for event in events:
                 yield event
 
@@ -80,6 +82,21 @@ def test_policy_qa_unavailable_answer_preserves_uncertainty(monkeypatch):
                 answer_status="unavailable",
             ),
         ],
+    )
+    executor = UnifiedScenarioExecutor(InMemorySkillStorage(), {})
+
+    response = executor._execute_policy_qa(_context())
+
+    assert response.status == "completed"
+    assert response.result["answer_status"] == "unavailable"
+    assert response.uncertainties
+
+
+def test_policy_qa_pipeline_error_is_unavailable(monkeypatch):
+    _patch_policy_qa_pipeline(
+        monkeypatch,
+        [],
+        error=RuntimeError("pipeline failed"),
     )
     executor = UnifiedScenarioExecutor(InMemorySkillStorage(), {})
 
