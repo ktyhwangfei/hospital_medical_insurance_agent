@@ -22,7 +22,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 from src.skill_infra.skill_loader import get_loader, LoadedSkill
 
@@ -118,6 +118,37 @@ def _compute_keyword_score(
 ) -> tuple[float, list[str]]:
     """兼容旧测试与调用方的私有入口。"""
     return compute_keyword_score(question, skill)
+
+
+def rank_keyword_skills(
+    question: str,
+    skills: Iterable[LoadedSkill],
+    *,
+    min_confidence: float = 0.0,
+) -> list[SkillMatch]:
+    """使用运行时一致的评分、排序和阈值规则排列给定 Skill。"""
+    matches: list[SkillMatch] = []
+    for skill in skills:
+        confidence, matched_keywords = compute_keyword_score(question, skill)
+        rounded_confidence = round(confidence, 4)
+        if rounded_confidence <= 0.0 or rounded_confidence < min_confidence:
+            continue
+        matches.append(
+            SkillMatch(
+                skill_id=skill.skill_id,
+                skill_name=skill.skill_name,
+                confidence=rounded_confidence,
+                matched_keywords=matched_keywords,
+            )
+        )
+    matches.sort(
+        key=lambda match: (
+            -match.confidence,
+            -len(match.matched_keywords),
+            match.skill_id,
+        ),
+    )
+    return matches
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -250,32 +281,11 @@ def route_question_ranked(
     loader = get_loader()
     skills = loader.get_all()
 
-    matches: list[SkillMatch] = []
-
-    for skill_id, skill in skills.items():
-        confidence, matched_keywords = compute_keyword_score(question, skill)
-        if confidence <= 0.0:
-            continue
-
-        matches.append(SkillMatch(
-            skill_id=skill_id,
-            skill_name=skill.skill_name,
-            confidence=round(confidence, 4),
-            matched_keywords=matched_keywords,
-        ))
-
-    # 按 confidence 降序，confidence 相同时按 match 数量降序
-    matches.sort(key=lambda m: (m.confidence, len(m.matched_keywords)), reverse=True)
-
-    if min_confidence > 0.0:
-        before = len(matches)
-        matches = [m for m in matches if m.confidence >= min_confidence]
-        filtered = before - len(matches)
-        if filtered:
-            logger.debug(
-                "[UnifiedRouter] Filtered %d/%d matches below min_confidence=%.2f",
-                filtered, before, min_confidence,
-            )
+    matches = rank_keyword_skills(
+        question,
+        skills.values(),
+        min_confidence=min_confidence,
+    )
 
     if matches:
         logger.info(

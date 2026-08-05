@@ -85,7 +85,6 @@ export default function SkillEvaluationSuite({
         source_type: 'manual',
         source_ref: 'portal-skill-workbench',
         contains_sensitive_data: false,
-        created_by: 'portal-user',
       })
       setQuestion('')
       await load()
@@ -103,7 +102,6 @@ export default function SkillEvaluationSuite({
     try {
       await createSkillEvalRun(skillId, {
         version_id: currentVersion.version_id,
-        created_by: 'portal-quality-user',
       })
       await load()
     } catch (mutationError) {

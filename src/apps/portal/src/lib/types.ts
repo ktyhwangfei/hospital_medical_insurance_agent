@@ -381,7 +381,6 @@ export interface SkillEvalCaseCreateRequest {
   source_type?: string
   source_ref?: string
   contains_sensitive_data?: false
-  created_by: string
 }
 
 export interface SkillEvalMetricsResponse {
@@ -418,9 +417,11 @@ export interface SkillEvalRunResponse {
   baseline_version_id?: string | null
   suite_version: number
   config_hash: string
+  routing_manifest_hash: string
   status: 'running' | 'passed' | 'failed' | 'cancelled' | 'error'
   metrics: SkillEvalMetricsResponse
   results: SkillEvalResultResponse[]
+  case_snapshots: SkillEvalCaseResponse[]
   created_by: string
   created_at: string
   completed_at?: string | null
@@ -434,7 +435,6 @@ export interface SkillEvalRunListResponse {
 export interface SkillEvalRunCreateRequest {
   version_id: string
   baseline_version_id?: string | null
-  created_by: string
 }
 
 export interface SkillReleaseResponse {
@@ -465,7 +465,6 @@ export interface SkillReleaseCreateRequest {
   version_id: string
   eval_run_id: string
   environment: 'dev' | 'test'
-  created_by: string
 }
 
 export interface SkillReleaseTransitionRequest {
@@ -473,8 +472,6 @@ export interface SkillReleaseTransitionRequest {
 }
 
 export interface SkillReleaseApproveRequest extends SkillReleaseTransitionRequest {
-  approved_by: string
-  approver_role: string
   reason: string
 }
 

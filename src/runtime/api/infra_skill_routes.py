@@ -1,7 +1,13 @@
 import logging
+import os
 import time
+import hashlib
+import json
+from dataclasses import dataclass
+from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Protocol, cast
 
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -16,6 +22,8 @@ from src.data_platform.storage.skill.governance_ports import (
     SkillGovernanceConflictError,
     SkillGovernanceNotFoundError,
 )
+from src.data_platform.cache import create_cache_client
+from src.data_platform.cache.ports import IdempotencyStore
 
 logger = logging.getLogger(__name__)
 from src.runtime.api.schemas import (
@@ -43,6 +51,7 @@ from src.runtime.skill_management.governance_service import (
     SkillGovernanceGateError,
     SkillGovernanceService,
 )
+from src.domain.skill.governance_models import SkillRelease
 from src.runtime.api.skill_schemas import (
     SkillEvalCaseCreateRequest,
     SkillEvalCaseListResponse,
@@ -58,6 +67,7 @@ from src.runtime.api.skill_schemas import (
     SkillReleaseTransitionRequest,
 )
 from src.shared.schemas.responses import error_detail
+from src.gateway.auth import AuthStatus, authenticator
 from src.skill_infra.artifact import SkillArtifactError
 from src.skill_infra.skill_loader import get_loader, refresh_loader
 from src.skill_infra.skill_router import get_assembler
@@ -90,9 +100,238 @@ def get_skill_governance_service() -> SkillGovernanceService:
 SkillGovernanceServiceDependency = Annotated[
     SkillGovernanceService, Depends(get_skill_governance_service)
 ]
+
+
+@dataclass(frozen=True)
+class SkillControlPrincipal:
+    user_id: str
+    roles: tuple[str, ...]
+
+
+def _resolve_dev_principal(
+    authorization: str | None,
+    *,
+    required_permission: str,
+) -> SkillControlPrincipal:
+    if os.getenv("SKILL_CONTROL_DEV_MODE", "").lower() not in ("1", "true", "yes"):
+        raise HTTPException(
+            status_code=403,
+            detail=error_detail(
+                "SKILL_CONTROL_DISABLED",
+                "Skill 治理写操作仅在显式开发模式下开放",
+            ),
+        )
+    if authorization is None:
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("AUTHENTICATION_REQUIRED", "Skill 治理写操作需要登录凭证"),
+        )
+    auth_result = authenticator.validate_token(authorization)
+    if not auth_result.is_success:
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("INVALID_AUTHENTICATION", auth_result.error_message),
+        )
+    permitted = authenticator.check_permission(auth_result, required_permission)
+    if permitted.status == AuthStatus.INSUFFICIENT_PERMISSION:
+        raise HTTPException(
+            status_code=403,
+            detail=error_detail("SKILL_CONTROL_FORBIDDEN", permitted.error_message),
+        )
+    if not auth_result.user_id.strip():
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("INVALID_AUTHENTICATION", "登录凭证缺少用户标识"),
+        )
+    return SkillControlPrincipal(
+        user_id=auth_result.user_id.strip(),
+        roles=tuple(auth_result.roles),
+    )
+
+
+def get_skill_control_principal(
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> SkillControlPrincipal:
+    return _resolve_dev_principal(
+        authorization, required_permission="skill:release:test"
+    )
+
+
+def get_skill_evaluation_principal(
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> SkillControlPrincipal:
+    return _resolve_dev_principal(
+        authorization, required_permission="skill:evaluate"
+    )
+
+
+SkillControlPrincipalDependency = Annotated[
+    SkillControlPrincipal, Depends(get_skill_control_principal)
+]
+SkillEvaluationPrincipalDependency = Annotated[
+    SkillControlPrincipal, Depends(get_skill_evaluation_principal)
+]
+
+
+def get_skill_approval_principal(
+    principal: SkillControlPrincipalDependency,
+) -> SkillControlPrincipal:
+    if "information_department" not in principal.roles:
+        raise HTTPException(
+            status_code=403,
+            detail=error_detail(
+                "SKILL_APPROVAL_ROLE_FORBIDDEN", "只有信息科角色可以审批 test 发布"
+            ),
+        )
+    return principal
+
+
+SkillApprovalPrincipalDependency = Annotated[
+    SkillControlPrincipal, Depends(get_skill_approval_principal)
+]
 IdempotencyKey = Annotated[
     str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
 ]
+
+
+class SkillIdempotencyStore(IdempotencyStore, Protocol):
+    def get_json(self, key: str) -> dict[str, object] | None: ...
+
+    def set_json(
+        self, key: str, value: dict[str, object], ttl_seconds: int
+    ) -> None: ...
+
+    def exists(self, key: str) -> bool: ...
+
+    def delete(self, key: str) -> None: ...
+
+
+@lru_cache(maxsize=1)
+def get_skill_idempotency_store() -> SkillIdempotencyStore:
+    if os.getenv("USE_MEMORY_STORAGE", "").lower() in ("1", "true", "yes"):
+        from src.data_platform.cache.in_memory import InMemoryCacheClient
+
+        return InMemoryCacheClient()
+    return cast(SkillIdempotencyStore, create_cache_client())
+
+
+SkillIdempotencyStoreDependency = Annotated[
+    SkillIdempotencyStore, Depends(get_skill_idempotency_store)
+]
+
+
+def _idempotent_release_mutation(
+    *,
+    store: SkillIdempotencyStore,
+    scope: str,
+    idempotency_key: str,
+    request_payload: dict[str, object],
+    operation: Callable[[], SkillRelease],
+    recovery: Callable[[], SkillRelease | None] | None = None,
+) -> SkillReleaseResponse:
+    scoped_key = f"skill-governance:{scope}:{idempotency_key}"
+    serialized = json.dumps(
+        request_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    request_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    try:
+        existing = store.get_result(scoped_key)
+        if existing is not None:
+            if existing.get("_request_hash") != request_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail=error_detail(
+                        "IDEMPOTENCY_KEY_REUSED",
+                        "Idempotency-Key 已用于不同请求",
+                    ),
+                )
+            return SkillReleaseResponse.model_validate(existing)
+        cache_key = f"idempotency:{scoped_key}"
+        reservation = store.get_json(cache_key)
+        if (
+            reservation is not None
+            and reservation.get("request_hash") not in (None, request_hash)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=error_detail(
+                    "IDEMPOTENCY_KEY_REUSED",
+                    "Idempotency-Key 已用于不同请求",
+                ),
+            )
+        if reservation is not None and recovery is not None:
+            recovered = recovery()
+            if recovered is not None:
+                response = SkillReleaseResponse.model_validate(recovered.model_dump())
+                stored = {
+                    **response.model_dump(mode="json"),
+                    "_request_hash": request_hash,
+                }
+                try:
+                    store.complete(scoped_key, stored, ttl_seconds=86400)
+                except Exception:
+                    logger.exception(
+                        "Failed to complete recovered Skill idempotency key: %s",
+                        scoped_key,
+                    )
+                return response
+        if not store.reserve(scoped_key, ttl_seconds=86400):
+            raise HTTPException(
+                status_code=409,
+                detail=error_detail(
+                    "IDEMPOTENCY_REQUEST_IN_PROGRESS",
+                    "相同 Idempotency-Key 的请求正在处理中",
+                ),
+            )
+        store.set_json(
+            cache_key,
+            {"status": "reserved", "request_hash": request_hash},
+            ttl_seconds=86400,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail("IDEMPOTENCY_STORE_UNAVAILABLE", "幂等存储不可用"),
+        ) from exc
+
+    try:
+        response = SkillReleaseResponse.model_validate(operation().model_dump())
+    except Exception:
+        try:
+            store.delete(f"idempotency:{scoped_key}")
+        except Exception:
+            logger.exception("Failed to release Skill idempotency key: %s", scoped_key)
+        raise
+    stored = {**response.model_dump(mode="json"), "_request_hash": request_hash}
+    try:
+        store.complete(scoped_key, stored, ttl_seconds=86400)
+    except Exception:
+        logger.exception("Failed to complete Skill idempotency key: %s", scoped_key)
+    return response
+
+
+def _idempotent_release_id(scope: str, idempotency_key: str) -> str:
+    return hashlib.sha256(f"{scope}:{idempotency_key}".encode("utf-8")).hexdigest()[:32]
+
+
+def _recover_release_status(
+    service: SkillGovernanceService,
+    *,
+    skill_id: str,
+    release_id: str,
+    status_value: str,
+    expected_revision: int,
+) -> SkillRelease | None:
+    release = service.find_release(skill_id, release_id)
+    if (
+        release is None
+        or release.status.value != status_value
+        or release.revision != expected_revision + 1
+    ):
+        return None
+    return release
 
 
 @router.get("/infra-skills", response_model=list[InfraSkillItem])
@@ -174,7 +413,7 @@ def list_skill_eval_cases(
     cases = service.list_cases(enabled_only=enabled_only)
     return SkillEvalCaseListResponse(
         items=[SkillEvalCaseResponse.model_validate(case.model_dump()) for case in cases],
-        suite_version=max((case.suite_version for case in cases), default=0),
+        suite_version=service.current_suite_version(),
         total=len(cases),
     )
 
@@ -187,10 +426,17 @@ def list_skill_eval_cases(
 def create_skill_eval_case(
     request: SkillEvalCaseCreateRequest,
     service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
 ) -> SkillEvalCaseResponse:
     try:
-        case = service.create_case(**request.model_dump())
-    except (SkillGovernanceConflictError, SkillGovernanceNotFoundError) as exc:
+        case = service.create_case(
+            **request.model_dump(), created_by=principal.user_id
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
         raise _governance_error(exc) from exc
     return SkillEvalCaseResponse.model_validate(case.model_dump())
 
@@ -203,10 +449,15 @@ def update_skill_eval_case(
     case_id: str,
     request: SkillEvalCaseUpdateRequest,
     service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
 ) -> SkillEvalCaseResponse:
     try:
         case = service.update_case(case_id, **request.model_dump())
-    except (SkillGovernanceConflictError, SkillGovernanceNotFoundError) as exc:
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
         raise _governance_error(exc) from exc
     return SkillEvalCaseResponse.model_validate(case.model_dump())
 
@@ -235,9 +486,12 @@ def create_skill_eval_run(
     skill_id: str,
     request: SkillEvalRunCreateRequest,
     service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
 ) -> SkillEvalRunResponse:
     try:
-        run = service.create_eval_run(skill_id, **request.model_dump())
+        run = service.create_eval_run(
+            skill_id, **request.model_dump(), created_by=principal.user_id
+        )
     except (
         SkillGovernanceConflictError,
         SkillGovernanceGateError,
@@ -288,17 +542,40 @@ def create_skill_release(
     skill_id: str,
     request: SkillReleaseCreateRequest,
     service: SkillGovernanceServiceDependency,
-    _idempotency_key: IdempotencyKey,
+    principal: SkillControlPrincipalDependency,
+    idempotency_key: IdempotencyKey,
+    idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
+    scope = f"{skill_id}:candidate"
+    release_id = _idempotent_release_id(scope, idempotency_key)
     try:
-        release = service.create_candidate(skill_id, **request.model_dump())
+        return _idempotent_release_mutation(
+            store=idempotency_store,
+            scope=scope,
+            idempotency_key=idempotency_key,
+            request_payload={
+                **request.model_dump(mode="json"),
+                "created_by": principal.user_id,
+            },
+            operation=lambda: service.create_candidate(
+                skill_id,
+                **request.model_dump(),
+                created_by=principal.user_id,
+                release_id=release_id,
+            ),
+            recovery=lambda: service.create_candidate(
+                skill_id,
+                **request.model_dump(),
+                created_by=principal.user_id,
+                release_id=release_id,
+            ),
+        )
     except (
         SkillGovernanceConflictError,
         SkillGovernanceGateError,
         SkillGovernanceNotFoundError,
     ) as exc:
         raise _governance_error(exc) from exc
-    return SkillReleaseResponse.model_validate(release.model_dump())
 
 
 @router.post(
@@ -310,11 +587,26 @@ def request_skill_release_approval(
     release_id: str,
     request: SkillReleaseTransitionRequest,
     service: SkillGovernanceServiceDependency,
-    _idempotency_key: IdempotencyKey,
+    _principal: SkillControlPrincipalDependency,
+    idempotency_key: IdempotencyKey,
+    idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        release = service.request_approval(
-            skill_id, release_id, expected_revision=request.expected_revision
+        return _idempotent_release_mutation(
+            store=idempotency_store,
+            scope=f"{skill_id}:{release_id}:request-approval",
+            idempotency_key=idempotency_key,
+            request_payload=request.model_dump(mode="json"),
+            operation=lambda: service.request_approval(
+                skill_id, release_id, expected_revision=request.expected_revision
+            ),
+            recovery=lambda: _recover_release_status(
+                service,
+                skill_id=skill_id,
+                release_id=release_id,
+                status_value="approval_pending",
+                expected_revision=request.expected_revision,
+            ),
         )
     except (
         SkillGovernanceConflictError,
@@ -322,7 +614,6 @@ def request_skill_release_approval(
         SkillGovernanceNotFoundError,
     ) as exc:
         raise _governance_error(exc) from exc
-    return SkillReleaseResponse.model_validate(release.model_dump())
 
 
 @router.post(
@@ -334,11 +625,34 @@ def approve_skill_release(
     release_id: str,
     request: SkillReleaseApproveRequest,
     service: SkillGovernanceServiceDependency,
-    _idempotency_key: IdempotencyKey,
+    principal: SkillApprovalPrincipalDependency,
+    idempotency_key: IdempotencyKey,
+    idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        release = service.approve_release(
-            skill_id, release_id, **request.model_dump()
+        return _idempotent_release_mutation(
+            store=idempotency_store,
+            scope=f"{skill_id}:{release_id}:approve",
+            idempotency_key=idempotency_key,
+            request_payload={
+                **request.model_dump(mode="json"),
+                "approved_by": principal.user_id,
+            },
+            operation=lambda: service.approve_release(
+                skill_id,
+                release_id,
+                expected_revision=request.expected_revision,
+                approved_by=principal.user_id,
+                approver_role="information_department",
+                reason=request.reason,
+            ),
+            recovery=lambda: _recover_release_status(
+                service,
+                skill_id=skill_id,
+                release_id=release_id,
+                status_value="approved",
+                expected_revision=request.expected_revision,
+            ),
         )
     except (
         SkillGovernanceConflictError,
@@ -346,7 +660,6 @@ def approve_skill_release(
         SkillGovernanceNotFoundError,
     ) as exc:
         raise _governance_error(exc) from exc
-    return SkillReleaseResponse.model_validate(release.model_dump())
 
 
 @router.post(
@@ -358,11 +671,26 @@ def activate_skill_release(
     release_id: str,
     request: SkillReleaseTransitionRequest,
     service: SkillGovernanceServiceDependency,
-    _idempotency_key: IdempotencyKey,
+    _principal: SkillControlPrincipalDependency,
+    idempotency_key: IdempotencyKey,
+    idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        release = service.activate_release(
-            skill_id, release_id, expected_revision=request.expected_revision
+        return _idempotent_release_mutation(
+            store=idempotency_store,
+            scope=f"{skill_id}:{release_id}:activate",
+            idempotency_key=idempotency_key,
+            request_payload=request.model_dump(mode="json"),
+            operation=lambda: service.activate_release(
+                skill_id, release_id, expected_revision=request.expected_revision
+            ),
+            recovery=lambda: _recover_release_status(
+                service,
+                skill_id=skill_id,
+                release_id=release_id,
+                status_value="active",
+                expected_revision=request.expected_revision,
+            ),
         )
     except (
         SkillGovernanceConflictError,
@@ -370,7 +698,6 @@ def activate_skill_release(
         SkillGovernanceNotFoundError,
     ) as exc:
         raise _governance_error(exc) from exc
-    return SkillReleaseResponse.model_validate(release.model_dump())
 
 
 def _list_files_in_dir(base_dir: Path, sub_dir: str) -> list[str]:
@@ -552,7 +879,7 @@ def sync_infra_skill_version(
 
 @router.post("/infra-skills/route-test", response_model=SkillRouteTestResponse)
 def test_infra_skill_routing(request: SkillRouteTestRequest) -> SkillRouteTestResponse:
-    matches = route_question_ranked(request.question, min_confidence=0.0)
+    matches = route_question_ranked(request.question, min_confidence=0.1)
     top = matches[0] if matches else None
     return SkillRouteTestResponse(
         question=request.question,

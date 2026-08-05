@@ -77,6 +77,7 @@ export async function createSkillEvalCase(
 ): Promise<SkillEvalCaseResponse> {
   return requestJson<SkillEvalCaseResponse>('/infra-skills/eval-cases', {
     method: 'POST',
+    headers: skillEvaluationHeaders(),
     body: JSON.stringify(request),
   })
 }
@@ -93,7 +94,11 @@ export async function createSkillEvalRun(
 ): Promise<SkillEvalRunResponse> {
   return requestJson<SkillEvalRunResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/eval-runs`,
-    { method: 'POST', body: JSON.stringify(request) },
+    {
+      method: 'POST',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify(request),
+    },
   )
 }
 
@@ -106,8 +111,32 @@ export async function listSkillReleases(
   )
 }
 
-function idempotencyHeaders(idempotencyKey: string): HeadersInit {
-  return { 'Idempotency-Key': idempotencyKey }
+const DEV_SKILL_CONTROL_TOKEN = 'test.eyJzdWIiOiJwb3J0YWwtZGV2ZWxvcGVyIiwicm9sZXMiOlsiZGV2ZWxvcGVyIl0sInBlcm1pc3Npb25zIjpbInNraWxsOnJlbGVhc2U6dGVzdCIsInNraWxsOmV2YWx1YXRlIl0sImV4cCI6NDEwMjQ0NDgwMH0.signature'
+const DEV_SKILL_APPROVAL_TOKEN = 'test.eyJzdWIiOiJwb3J0YWwtaW5mb3JtYXRpb24tYWRtaW4iLCJyb2xlcyI6WyJpbmZvcm1hdGlvbl9kZXBhcnRtZW50Il0sInBlcm1pc3Npb25zIjpbInNraWxsOnJlbGVhc2U6dGVzdCJdLCJleHAiOjQxMDI0NDQ4MDB9.signature'
+
+function skillEvaluationHeaders(): HeadersInit {
+  const headers: Record<string, string> = {}
+  if (typeof window !== 'undefined') {
+    const token = window.sessionStorage.getItem('skill-control-token')
+      ?? (process.env.NODE_ENV !== 'production' ? DEV_SKILL_CONTROL_TOKEN : null)
+    if (token) headers.Authorization = `Bearer ${token}`
+  }
+  return headers
+}
+
+function skillControlHeaders(
+  idempotencyKey: string,
+  approval = false,
+): HeadersInit {
+  const headers: Record<string, string> = { 'Idempotency-Key': idempotencyKey }
+  if (typeof window !== 'undefined') {
+    const storageKey = approval ? 'skill-approval-token' : 'skill-control-token'
+    const fallback = approval ? DEV_SKILL_APPROVAL_TOKEN : DEV_SKILL_CONTROL_TOKEN
+    const token = window.sessionStorage.getItem(storageKey)
+      ?? (process.env.NODE_ENV !== 'production' ? fallback : null)
+    if (token) headers.Authorization = `Bearer ${token}`
+  }
+  return headers
 }
 
 export async function createSkillRelease(
@@ -119,7 +148,7 @@ export async function createSkillRelease(
     `/infra-skills/${encodeURIComponent(skillId)}/releases`,
     {
       method: 'POST',
-      headers: idempotencyHeaders(idempotencyKey),
+      headers: skillControlHeaders(idempotencyKey),
       body: JSON.stringify(request),
     },
   )
@@ -135,7 +164,7 @@ export async function requestSkillReleaseApproval(
     `/infra-skills/${encodeURIComponent(skillId)}/releases/${encodeURIComponent(releaseId)}/request-approval`,
     {
       method: 'POST',
-      headers: idempotencyHeaders(idempotencyKey),
+      headers: skillControlHeaders(idempotencyKey),
       body: JSON.stringify(request),
     },
   )
@@ -151,7 +180,7 @@ export async function approveSkillRelease(
     `/infra-skills/${encodeURIComponent(skillId)}/releases/${encodeURIComponent(releaseId)}/approve`,
     {
       method: 'POST',
-      headers: idempotencyHeaders(idempotencyKey),
+      headers: skillControlHeaders(idempotencyKey, true),
       body: JSON.stringify(request),
     },
   )
@@ -167,7 +196,7 @@ export async function activateSkillRelease(
     `/infra-skills/${encodeURIComponent(skillId)}/releases/${encodeURIComponent(releaseId)}/activate`,
     {
       method: 'POST',
-      headers: idempotencyHeaders(idempotencyKey),
+      headers: skillControlHeaders(idempotencyKey),
       body: JSON.stringify(request),
     },
   )

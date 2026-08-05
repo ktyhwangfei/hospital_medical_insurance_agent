@@ -101,7 +101,6 @@ export default function SkillReleasePanel({ skillId, versions }: SkillReleasePan
         version_id: eligible.version_id,
         eval_run_id: eligible.run_id,
         environment: 'test',
-        created_by: 'portal-developer',
       },
       mutationKey(skillId, 'candidate'),
     ))
@@ -121,8 +120,6 @@ export default function SkillReleasePanel({ skillId, versions }: SkillReleasePan
         release.release_id,
         {
           expected_revision: release.revision,
-          approved_by: 'portal-information-admin',
-          approver_role: 'information_department',
           reason: '固定评测门禁通过，同意 test shadow 激活',
         },
         mutationKey(skillId, 'approve'),

@@ -18,6 +18,16 @@ class SkillGovernanceNotFoundError(LookupError):
 
 
 class SkillGovernanceStorage(Protocol):
+    def next_suite_version(self) -> int: ...
+
+    def current_suite_version(self) -> int: ...
+
+    def save_case_with_new_suite_version(
+        self, case: SkillEvalCase
+    ) -> SkillEvalCase: ...
+
+    def snapshot_enabled_cases(self) -> tuple[int, list[SkillEvalCase]]: ...
+
     def save_case(self, case: SkillEvalCase) -> SkillEvalCase: ...
 
     def get_case(self, case_id: str) -> SkillEvalCase | None: ...
@@ -51,7 +61,19 @@ class SkillGovernanceStorage(Protocol):
     ) -> SkillRelease: ...
 
     def activate_release(
-        self, release_id: str, *, expected_revision: int
+        self,
+        release_id: str,
+        *,
+        expected_revision: int,
+        expected_suite_version: int | None = None,
+    ) -> SkillRelease: ...
+
+    def approve_release(
+        self,
+        release: SkillRelease,
+        approval: SkillReleaseApproval,
+        *,
+        expected_revision: int,
     ) -> SkillRelease: ...
 
     def save_approval(

@@ -46,31 +46,49 @@ CREATE TABLE IF NOT EXISTS skill_eval_cases (
     updated_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS skill_eval_suite_state (
+    singleton_id SMALLINT PRIMARY KEY CHECK (singleton_id = 1),
+    revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO skill_eval_suite_state (singleton_id, revision)
+SELECT 1, COALESCE(MAX(suite_version), 0) FROM skill_eval_cases
+ON CONFLICT (singleton_id) DO UPDATE SET
+    revision = GREATEST(
+        skill_eval_suite_state.revision,
+        EXCLUDED.revision
+    );
+
 CREATE TABLE IF NOT EXISTS skill_eval_runs (
     run_id VARCHAR(64) PRIMARY KEY,
-    skill_id VARCHAR(128) NOT NULL,
-    version_id VARCHAR(64) NOT NULL,
-    baseline_version_id VARCHAR(64),
+    skill_id VARCHAR(128) NOT NULL REFERENCES skills(skill_id),
+    version_id VARCHAR(64) NOT NULL REFERENCES skill_versions(version_id),
+    baseline_version_id VARCHAR(64) REFERENCES skill_versions(version_id),
     suite_version INTEGER NOT NULL,
     config_hash VARCHAR(64) NOT NULL,
+    routing_manifest_hash VARCHAR(64) NOT NULL,
     status VARCHAR(32) NOT NULL,
     metrics JSONB NOT NULL,
     results JSONB NOT NULL DEFAULT '[]',
+    case_snapshots JSONB NOT NULL DEFAULT '[]',
     created_by VARCHAR(128) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_skill_eval_runs_skill_created
     ON skill_eval_runs(skill_id, created_at DESC);
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS case_snapshots JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS routing_manifest_hash VARCHAR(64) NOT NULL DEFAULT repeat('0', 64);
 
 CREATE TABLE IF NOT EXISTS skill_releases (
     release_id VARCHAR(64) PRIMARY KEY,
-    skill_id VARCHAR(128) NOT NULL,
-    version_id VARCHAR(64) NOT NULL,
+    skill_id VARCHAR(128) NOT NULL REFERENCES skills(skill_id),
+    version_id VARCHAR(64) NOT NULL REFERENCES skill_versions(version_id),
     environment VARCHAR(32) NOT NULL,
     status VARCHAR(32) NOT NULL,
-    baseline_release_id VARCHAR(64),
-    eval_run_id VARCHAR(64) NOT NULL,
+    baseline_release_id VARCHAR(64) REFERENCES skill_releases(release_id),
+    eval_run_id VARCHAR(64) NOT NULL REFERENCES skill_eval_runs(run_id),
     artifact_hash VARCHAR(64) NOT NULL,
     config_hash VARCHAR(64) NOT NULL,
     rollout_percent INTEGER NOT NULL DEFAULT 0,
@@ -89,11 +107,11 @@ CREATE INDEX IF NOT EXISTS idx_skill_releases_skill_environment_created
 
 CREATE TABLE IF NOT EXISTS skill_release_approvals (
     approval_id VARCHAR(64) PRIMARY KEY,
-    release_id VARCHAR(64) NOT NULL UNIQUE,
+    release_id VARCHAR(64) NOT NULL UNIQUE REFERENCES skill_releases(release_id),
     artifact_hash VARCHAR(64) NOT NULL,
-    eval_run_id VARCHAR(64) NOT NULL,
+    eval_run_id VARCHAR(64) NOT NULL REFERENCES skill_eval_runs(run_id),
     config_hash VARCHAR(64) NOT NULL,
-    baseline_release_id VARCHAR(64),
+    baseline_release_id VARCHAR(64) REFERENCES skill_releases(release_id),
     approved_by VARCHAR(128) NOT NULL,
     approver_role VARCHAR(128) NOT NULL,
     reason TEXT NOT NULL,
@@ -132,6 +150,50 @@ class PostgresSkillGovernanceStorage:
         if value is None:
             return default
         return json.loads(value) if isinstance(value, str) else value
+
+    def next_suite_version(self) -> int:
+        rows = self._get_client().execute(
+            """
+            UPDATE skill_eval_suite_state
+            SET revision = revision + 1
+            WHERE singleton_id = 1
+            RETURNING revision
+            """
+        )
+        if not rows:
+            raise SkillGovernanceConflictError("评测集版本分配失败")
+        return int(rows[0]["revision"])
+
+    def current_suite_version(self) -> int:
+        rows = self._get_client().execute(
+            "SELECT revision FROM skill_eval_suite_state WHERE singleton_id = 1"
+        )
+        return int(rows[0]["revision"]) if rows else 0
+
+    def save_case_with_new_suite_version(
+        self, case: SkillEvalCase
+    ) -> SkillEvalCase:
+        client = self._get_client()
+        with client.transaction():
+            suite_version = self.next_suite_version()
+            versioned_case = case.model_copy(
+                update={"suite_version": suite_version}, deep=True
+            )
+            return self.save_case(versioned_case)
+
+    def snapshot_enabled_cases(self) -> tuple[int, list[SkillEvalCase]]:
+        client = self._get_client()
+        with client.transaction():
+            rows = client.execute(
+                """
+                SELECT revision FROM skill_eval_suite_state
+                WHERE singleton_id = 1
+                FOR SHARE
+                """
+            )
+            suite_version = int(rows[0]["revision"]) if rows else 0
+            cases = self.list_cases(enabled_only=True)
+            return suite_version, cases
 
     def save_case(self, case: SkillEvalCase) -> SkillEvalCase:
         rows = self._get_client().execute(
@@ -195,9 +257,9 @@ class PostgresSkillGovernanceStorage:
             """
             INSERT INTO skill_eval_runs (
                 run_id, skill_id, version_id, baseline_version_id, suite_version,
-                config_hash, status, metrics, results, created_by, created_at,
-                completed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                config_hash, routing_manifest_hash, status, metrics, results,
+                case_snapshots, created_by, created_at, completed_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
@@ -207,9 +269,11 @@ class PostgresSkillGovernanceStorage:
                 run.baseline_version_id,
                 run.suite_version,
                 run.config_hash,
+                run.routing_manifest_hash,
                 run.status.value,
                 self._json(run.metrics.model_dump(mode="json")),
                 self._json([result.model_dump(mode="json") for result in run.results]),
+                self._json([case.model_dump(mode="json") for case in run.case_snapshots]),
                 run.created_by,
                 run.created_at,
                 run.completed_at,
@@ -316,11 +380,28 @@ class PostgresSkillGovernanceStorage:
         return self._row_to_release(rows[0])
 
     def activate_release(
-        self, release_id: str, *, expected_revision: int
+        self,
+        release_id: str,
+        *,
+        expected_revision: int,
+        expected_suite_version: int | None = None,
     ) -> SkillRelease:
         client = self._get_client()
         now = datetime.now(timezone.utc)
         with client.transaction():
+            if expected_suite_version is not None:
+                suite_rows = client.execute(
+                    """
+                    SELECT revision FROM skill_eval_suite_state
+                    WHERE singleton_id = 1
+                    FOR SHARE
+                    """
+                )
+                current_suite_version = (
+                    int(suite_rows[0]["revision"]) if suite_rows else 0
+                )
+                if current_suite_version != expected_suite_version:
+                    raise SkillGovernanceConflictError("评测集版本已变化")
             rows = client.execute(
                 "SELECT * FROM skill_releases WHERE release_id = %s FOR UPDATE",
                 (release_id,),
@@ -332,6 +413,21 @@ class PostgresSkillGovernanceStorage:
                 raise SkillGovernanceConflictError("发布 revision 已变化")
             if candidate.status != SkillReleaseStatus.APPROVED:
                 raise SkillGovernanceConflictError("只有 approved release 可以激活")
+            active_rows = client.execute(
+                """
+                SELECT release_id FROM skill_releases
+                WHERE skill_id = %s AND environment = %s AND status = 'active'
+                FOR UPDATE
+                """,
+                (candidate.skill_id, candidate.environment.value),
+            )
+            if len(active_rows) > 1:
+                raise SkillGovernanceConflictError(
+                    "同一 Skill 和环境存在多个 active release"
+                )
+            active_id = active_rows[0]["release_id"] if active_rows else None
+            if active_id != candidate.baseline_release_id:
+                raise SkillGovernanceConflictError("活动基线已变化")
             client.execute(
                 """
                 UPDATE skill_releases SET
@@ -351,6 +447,69 @@ class PostgresSkillGovernanceStorage:
                 (now, release_id, expected_revision),
             )
         return self._row_to_release(activated_rows[0])
+
+    def approve_release(
+        self,
+        release: SkillRelease,
+        approval: SkillReleaseApproval,
+        *,
+        expected_revision: int,
+    ) -> SkillRelease:
+        if release.revision != expected_revision + 1:
+            raise SkillGovernanceConflictError("新 revision 必须递增 1")
+        if release.status != SkillReleaseStatus.APPROVED:
+            raise SkillGovernanceConflictError("审批事务的目标状态必须是 approved")
+        if approval.release_id != release.release_id:
+            raise SkillGovernanceConflictError("审批证据与发布不匹配")
+        client = self._get_client()
+        try:
+            with client.transaction():
+                current_rows = client.execute(
+                    "SELECT revision FROM skill_releases WHERE release_id = %s FOR UPDATE",
+                    (release.release_id,),
+                )
+                if not current_rows:
+                    raise SkillGovernanceNotFoundError(
+                        f"发布不存在: {release.release_id}"
+                    )
+                if current_rows[0]["revision"] != expected_revision:
+                    raise SkillGovernanceConflictError("发布 revision 已变化")
+                client.execute(
+                    """
+                    INSERT INTO skill_release_approvals (
+                        approval_id, release_id, artifact_hash, eval_run_id,
+                        config_hash, baseline_release_id, approved_by,
+                        approver_role, reason, approved_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        approval.approval_id,
+                        approval.release_id,
+                        approval.artifact_hash,
+                        approval.eval_run_id,
+                        approval.config_hash,
+                        approval.baseline_release_id,
+                        approval.approved_by,
+                        approval.approver_role,
+                        approval.reason,
+                        approval.approved_at,
+                    ),
+                )
+                updated_rows = client.execute(
+                    """
+                    UPDATE skill_releases SET status = 'approved', revision = %s
+                    WHERE release_id = %s AND revision = %s
+                    RETURNING *
+                    """,
+                    (release.revision, release.release_id, expected_revision),
+                )
+        except (SkillGovernanceConflictError, SkillGovernanceNotFoundError):
+            raise
+        except Exception as exc:
+            raise SkillGovernanceConflictError(
+                "审批证据或发布 revision 冲突"
+            ) from exc
+        return self._row_to_release(updated_rows[0])
 
     def save_approval(
         self, approval: SkillReleaseApproval
@@ -424,6 +583,7 @@ class PostgresSkillGovernanceStorage:
     def _row_to_run(cls, row: dict[str, Any]) -> SkillEvalRun:
         metrics = cls._json_value(row.get("metrics"), {})
         results = cls._json_value(row.get("results"), [])
+        case_snapshots = cls._json_value(row.get("case_snapshots"), [])
         return SkillEvalRun(
             run_id=row["run_id"],
             skill_id=row["skill_id"],
@@ -431,9 +591,13 @@ class PostgresSkillGovernanceStorage:
             baseline_version_id=row.get("baseline_version_id"),
             suite_version=row["suite_version"],
             config_hash=row["config_hash"],
+            routing_manifest_hash=row["routing_manifest_hash"],
             status=row["status"],
             metrics=SkillEvalMetrics.model_validate(metrics),
             results=[SkillEvalResult.model_validate(result) for result in results],
+            case_snapshots=[
+                SkillEvalCase.model_validate(case) for case in case_snapshots
+            ],
             created_by=row["created_by"],
             created_at=row["created_at"],
             completed_at=row.get("completed_at"),

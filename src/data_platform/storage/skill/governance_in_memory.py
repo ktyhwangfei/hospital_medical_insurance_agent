@@ -1,6 +1,7 @@
 """开发与测试使用的 Skill 治理内存存储。"""
 
 from datetime import datetime, timezone
+from threading import RLock
 
 from src.data_platform.storage.skill.governance_ports import (
     SkillGovernanceConflictError,
@@ -22,10 +23,41 @@ class InMemorySkillGovernanceStorage:
         self._runs: dict[str, SkillEvalRun] = {}
         self._releases: dict[str, SkillRelease] = {}
         self._approvals: dict[str, SkillReleaseApproval] = {}
+        self._suite_version = 0
+        self._suite_version_lock = RLock()
 
     @staticmethod
     def _copy[T](value: T) -> T:
         return value.model_copy(deep=True)  # type: ignore[attr-defined, no-any-return]
+
+    def next_suite_version(self) -> int:
+        with self._suite_version_lock:
+            self._suite_version = max(
+                self._suite_version,
+                max((case.suite_version for case in self._cases.values()), default=0),
+            ) + 1
+            return self._suite_version
+
+    def current_suite_version(self) -> int:
+        with self._suite_version_lock:
+            return max(
+                self._suite_version,
+                max((case.suite_version for case in self._cases.values()), default=0),
+            )
+
+    def save_case_with_new_suite_version(
+        self, case: SkillEvalCase
+    ) -> SkillEvalCase:
+        with self._suite_version_lock:
+            suite_version = self.next_suite_version()
+            versioned_case = case.model_copy(
+                update={"suite_version": suite_version}, deep=True
+            )
+            return self.save_case(versioned_case)
+
+    def snapshot_enabled_cases(self) -> tuple[int, list[SkillEvalCase]]:
+        with self._suite_version_lock:
+            return self.current_suite_version(), self.list_cases(enabled_only=True)
 
     def save_case(self, case: SkillEvalCase) -> SkillEvalCase:
         existing = self._cases.get(case.case_id)
@@ -33,6 +65,8 @@ class InMemorySkillGovernanceStorage:
             raise SkillGovernanceConflictError("评测用例 suite_version 必须递增")
         stored = self._copy(case)
         self._cases[case.case_id] = stored
+        with self._suite_version_lock:
+            self._suite_version = max(self._suite_version, case.suite_version)
         return self._copy(stored)
 
     def get_case(self, case_id: str) -> SkillEvalCase | None:
@@ -126,6 +160,23 @@ class InMemorySkillGovernanceStorage:
         return self._copy(stored)
 
     def activate_release(
+        self,
+        release_id: str,
+        *,
+        expected_revision: int,
+        expected_suite_version: int | None = None,
+    ) -> SkillRelease:
+        with self._suite_version_lock:
+            if (
+                expected_suite_version is not None
+                and self.current_suite_version() != expected_suite_version
+            ):
+                raise SkillGovernanceConflictError("评测集版本已变化")
+            return self._activate_release_unlocked(
+                release_id, expected_revision=expected_revision
+            )
+
+    def _activate_release_unlocked(
         self, release_id: str, *, expected_revision: int
     ) -> SkillRelease:
         candidate = self._releases.get(release_id)
@@ -144,6 +195,13 @@ class InMemorySkillGovernanceStorage:
             and release.environment == candidate.environment
             and release.status == SkillReleaseStatus.ACTIVE
         ]
+        if len(active_ids) > 1:
+            raise SkillGovernanceConflictError(
+                "同一 Skill 和环境存在多个 active release"
+            )
+        active_id = active_ids[0] if active_ids else None
+        if active_id != candidate.baseline_release_id:
+            raise SkillGovernanceConflictError("活动基线已变化")
         for active_id in active_ids:
             current = self._releases[active_id]
             self._releases[active_id] = current.model_copy(
@@ -165,6 +223,32 @@ class InMemorySkillGovernanceStorage:
         )
         self._releases[release_id] = activated
         return self._copy(activated)
+
+    def approve_release(
+        self,
+        release: SkillRelease,
+        approval: SkillReleaseApproval,
+        *,
+        expected_revision: int,
+    ) -> SkillRelease:
+        current = self._releases.get(release.release_id)
+        if current is None:
+            raise SkillGovernanceNotFoundError(f"发布不存在: {release.release_id}")
+        if current.revision != expected_revision:
+            raise SkillGovernanceConflictError("发布 revision 已变化")
+        if release.revision != expected_revision + 1:
+            raise SkillGovernanceConflictError("新 revision 必须递增 1")
+        if release.status != SkillReleaseStatus.APPROVED:
+            raise SkillGovernanceConflictError("审批事务的目标状态必须是 approved")
+        if approval.release_id != release.release_id:
+            raise SkillGovernanceConflictError("审批证据与发布不匹配")
+        if release.release_id in self._approvals:
+            raise SkillGovernanceConflictError("该发布已经存在审批证据")
+        stored_release = self._copy(release)
+        stored_approval = self._copy(approval)
+        self._releases[release.release_id] = stored_release
+        self._approvals[release.release_id] = stored_approval
+        return self._copy(stored_release)
 
     def save_approval(
         self, approval: SkillReleaseApproval

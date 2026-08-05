@@ -15,7 +15,6 @@ class SkillEvalCaseCreateRequest(BaseModel):
     source_type: str = "manual"
     source_ref: str = ""
     contains_sensitive_data: Literal[False] = False
-    created_by: str = Field(min_length=1, max_length=128)
 
 
 class SkillEvalCaseUpdateRequest(BaseModel):
@@ -56,7 +55,6 @@ class SkillEvalCaseListResponse(BaseModel):
 class SkillEvalRunCreateRequest(BaseModel):
     version_id: str = Field(min_length=1, max_length=64)
     baseline_version_id: str | None = Field(default=None, max_length=64)
-    created_by: str = Field(min_length=1, max_length=128)
 
 
 class SkillEvalMetricsResponse(BaseModel):
@@ -93,9 +91,11 @@ class SkillEvalRunResponse(BaseModel):
     baseline_version_id: str | None
     suite_version: int
     config_hash: str
+    routing_manifest_hash: str
     status: str
     metrics: SkillEvalMetricsResponse
     results: list[SkillEvalResultResponse]
+    case_snapshots: list[SkillEvalCaseResponse]
     created_by: str
     created_at: datetime
     completed_at: datetime | None
@@ -110,7 +110,6 @@ class SkillReleaseCreateRequest(BaseModel):
     version_id: str = Field(min_length=1, max_length=64)
     eval_run_id: str = Field(min_length=1, max_length=64)
     environment: Literal["dev", "test"] = "test"
-    created_by: str = Field(min_length=1, max_length=128)
 
 
 class SkillReleaseTransitionRequest(BaseModel):
@@ -118,8 +117,6 @@ class SkillReleaseTransitionRequest(BaseModel):
 
 
 class SkillReleaseApproveRequest(SkillReleaseTransitionRequest):
-    approved_by: str = Field(min_length=1, max_length=128)
-    approver_role: str = Field(min_length=1, max_length=128)
     reason: str = Field(min_length=1, max_length=1000)
 
 

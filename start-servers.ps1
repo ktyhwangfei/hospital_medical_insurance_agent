@@ -59,6 +59,8 @@ if (-not $env:MSSQL_DRIVER) { $env:MSSQL_DRIVER = "SQL Server" }
 # Enable real-DB data source so the skill path (settlement_data_provider) can query
 # the SQL Server settlement context (REST + SSE skill execution require real_db mode).
 if (-not $env:DATA_SOURCE_MODE) { $env:DATA_SOURCE_MODE = "real_db" }
+# Local-only Skill release controls use the mock authenticator. Production remains disabled.
+if (-not $env:SKILL_CONTROL_DEV_MODE) { $env:SKILL_CONTROL_DEV_MODE = "1" }
 # NOTE: uvicorn --reload spawns multiprocessing workers; if the master dies the workers
 #   become orphans holding the port + stale code (see stop-servers.ps1). Use single process
 #   for daily dev; restart via .\stop-servers.ps1; .\start-servers.ps1 after backend edits.

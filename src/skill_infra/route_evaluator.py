@@ -14,7 +14,7 @@ from src.domain.skill.governance_models import (
     SkillEvalResult,
 )
 from src.skill_infra.skill_loader import LoadedSkill
-from src.skill_infra.unified_router import compute_keyword_score
+from src.skill_infra.unified_router import rank_keyword_skills
 
 
 class RouteSuiteEvaluation(BaseModel):
@@ -48,20 +48,22 @@ def _route(
     question: str,
     manifests: Sequence[Mapping[str, Any]],
 ) -> tuple[str | None, float, list[str]]:
-    matches: list[tuple[float, int, str, list[str]]] = []
-    for manifest in manifests:
-        skill = _loaded_skill(manifest)
-        if not skill.skill_id:
-            continue
-        confidence, keywords = compute_keyword_score(question, skill)
-        if confidence <= 0.0:
-            continue
-        matches.append((confidence, len(keywords), skill.skill_id, keywords))
-    matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    skills = [
+        skill
+        for manifest in manifests
+        if (skill := _loaded_skill(manifest)).skill_id
+    ]
+    matches = rank_keyword_skills(question, skills, min_confidence=0.1)
     if not matches:
         return None, 0.0, []
-    confidence, _, skill_id, keywords = matches[0]
-    return skill_id, min(round(confidence, 4), 1.0), keywords
+    top = matches[0]
+    return top.skill_id, top.confidence, top.matched_keywords
+
+
+def _is_mandatory(case: SkillEvalCase) -> bool:
+    high_risk_tags = {"high", "high_risk", "r4"}
+    normalized_tags = {tag.strip().lower() for tag in case.risk_tags}
+    return case.required or bool(high_risk_tags.intersection(normalized_tags))
 
 
 def _diff(
@@ -107,7 +109,7 @@ def evaluate_route_suite(
                 baseline_confidence=baseline_confidence,
                 candidate_passed=candidate_passed,
                 baseline_passed=baseline_passed,
-                required=case.required,
+                required=_is_mandatory(case),
                 diff=_diff(
                     candidate_id,
                     baseline_id,

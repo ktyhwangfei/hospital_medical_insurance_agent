@@ -7,6 +7,58 @@ schema-update 等端点 500。修复后 client 应在 DATABASE_URL 缺失时从 
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
 
 
+def test_shared_client_blocks_execute_until_transaction_finishes():
+    """共享客户端不得让其他线程的 SQL 穿插进当前事务。"""
+    from threading import Event, Thread
+
+    transaction_started = Event()
+    allow_transaction_to_finish = Event()
+    concurrent_execute_started = Event()
+
+    class _Cursor:
+        description = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, _params=()):
+            if sql == "SELECT concurrent":
+                concurrent_execute_started.set()
+
+    class _Connection:
+        closed = False
+
+        def execute(self, sql):
+            if sql == "BEGIN":
+                transaction_started.set()
+
+        def cursor(self):
+            return _Cursor()
+
+    client = PostgreSQLClient(database_url="postgresql://unused")
+    client._conn = _Connection()
+
+    def hold_transaction():
+        with client.transaction():
+            allow_transaction_to_finish.wait(timeout=1)
+
+    transaction_thread = Thread(target=hold_transaction)
+    transaction_thread.start()
+    assert transaction_started.wait(timeout=1)
+
+    execute_thread = Thread(target=lambda: client.execute("SELECT concurrent"))
+    execute_thread.start()
+
+    assert not concurrent_execute_started.wait(timeout=0.1)
+    allow_transaction_to_finish.set()
+    transaction_thread.join(timeout=1)
+    execute_thread.join(timeout=1)
+    assert concurrent_execute_started.is_set()
+
+
 def test_fallback_to_postgres_env(monkeypatch):
     """DATABASE_URL 缺失 + POSTGRES_* 存在 → 合成连接串。"""
     monkeypatch.delenv("DATABASE_URL", raising=False)

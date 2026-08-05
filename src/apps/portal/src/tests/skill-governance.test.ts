@@ -27,7 +27,6 @@ describe('Skill governance API client', () => {
     await createSkillEvalRun('demo/skill', {
       version_id: 'version-1',
       baseline_version_id: 'version-0',
-      created_by: 'quality-user',
     })
 
     expect(fetchMock.mock.calls[0][0]).toBe(
@@ -36,7 +35,6 @@ describe('Skill governance API client', () => {
     expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
       version_id: 'version-1',
       baseline_version_id: 'version-0',
-      created_by: 'quality-user',
     })
   })
 
@@ -52,7 +50,6 @@ describe('Skill governance API client', () => {
         version_id: 'version-1',
         eval_run_id: 'run-1',
         environment: 'test',
-        created_by: 'developer',
       },
       'candidate-key',
     )

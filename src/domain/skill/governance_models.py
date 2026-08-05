@@ -107,9 +107,11 @@ class SkillEvalRun(BaseModel):
     baseline_version_id: str | None = None
     suite_version: int = Field(ge=1)
     config_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    routing_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     status: SkillEvalRunStatus
     metrics: SkillEvalMetrics
     results: list[SkillEvalResult] = Field(default_factory=list)
+    case_snapshots: list[SkillEvalCase] = Field(default_factory=list)
     created_by: str = Field(min_length=1, max_length=128)
     created_at: datetime = Field(default_factory=_utc_now)
     completed_at: datetime | None = None

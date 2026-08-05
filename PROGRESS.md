@@ -32,12 +32,12 @@
 | 模型服务与管理 | 4 | 0 | 4 | 0 | 0 | — |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 | 知识库管理 | 3 | 0 | 3 | 0 | 0 | §2 P9 5 tab 已上线，详见 §2 |
-| 技能管理 | 4 | 1 | 3 | 0 | 0 | 阶段 1 版本化资产库已验证 |
+| 技能管理 | 5 | 2 | 3 | 0 | 0 | 阶段 2 批量评测与 test 发布门禁已验证 |
 | 运营看板 | 2 | 0 | 2 | 0 | 0 | — |
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **33** | **1** | **28** | **2** | **2** | — |
+| **合计** | **34** | **2** | **28** | **2** | **2** | — |
 
 > **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。**政策问答/知识库管理两领域的"真实最新进度"
@@ -98,10 +98,13 @@
 | 7.2 | 费用解释 Skill 执行 | `settlement_explain_skill/` → `skill_registry/engine.py` | impl_done |
 | 7.3 | 技能列表与管理 | `infra_skill_routes.py` | impl_done |
 | 7.4 | 版本化 Skill 资产库：制品哈希、版本登记、证据查询与 Portal 展示 | `skill_infra/artifact.py` → `runtime/skill_management/version_service.py` → `infra_skill_routes.py` → Portal `/skills` | verified |
+| 7.5 | 固定路由评测与 test 发布门禁：候选/基线差异、人工审批、唯一 active 与 shadow resolver | `skill_infra/route_evaluator.py` → `runtime/skill_management/governance_service.py` → `infra_skill_routes.py` → Portal `/skills` | verified |
 
 7.4 验证证据（2026-08-05）：T1 新功能相关测试 18 passed；T2a Skill API 10 passed；T2b 版本目录 Flow 1 passed；Portal Vitest 3 passed、变更文件 ESLint 通过、Next.js build 通过；Chromium E2E 1 passed。旧 `test_skill_mention.py` / `test_skill_intent_matching.py` 中 8 个请求已下线路由的 404 为预存测试债务，不计入 7.4 通过证据。
 
-兼容与回滚：运行时仍由 `SkillLoader` / `SkillRouter` 选择当前文件系统 Skill，未切换到版本解析器；需要回滚时让 Portal 恢复调用 `GET /infra-skills` 并停止调用 catalog/version 端点即可，已登记版本是只读证据，不影响业务执行。
+7.5 验证证据（2026-08-05）：T1 治理模型/路由评测/存储/应用服务及统一路由回归 71 passed；T2a Skill API 14 passed；T2b 固定评测到 test shadow active Flow 1 passed；Portal Vitest 5 passed、变更文件 ESLint 通过、Next.js build 通过；Chromium E2E 2 passed；本地 PostgreSQL 治理表初始化与查询通过。发布门禁会在制品、评测配置、测试集、全量路由 Manifest 或活动基线变化后拒绝激活；高风险标签自动进入必测集，评测运行原子冻结 suite revision 与用例快照；同一 Skill 与环境由事务和唯一索引保证最多一个 active。发布写操作默认关闭，仅由本地开发脚本显式开启并要求 `skill:release:test` 权限，候选创建人与审批人均来自认证上下文且禁止自审；生产 SSO/JWT 校验仍按 §10.1 作为外部系统接入项推进。
+
+兼容与回滚：运行时仍由 `SkillLoader` / `SkillRouter` 选择当前文件系统 Skill；test active 仅由 Release Resolver 以 shadow 模式解析，不切换真实流量。需要回滚控制面时停止调用 eval/release 端点即可，已登记版本、评测与发布证据不会影响现有业务执行。
 
 #### 运营看板 / 嵌入式 / 安全与审计 / 适配器接入
 | # | 单元 | 状态 | 备注 |

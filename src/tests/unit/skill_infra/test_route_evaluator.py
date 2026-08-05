@@ -7,6 +7,7 @@ def _case(
     expected_skill_id: str | None,
     *,
     required: bool = True,
+    risk_tags: list[str] | None = None,
 ) -> SkillEvalCase:
     return SkillEvalCase(
         case_id=question,
@@ -14,6 +15,7 @@ def _case(
         question_template=question,
         expected_skill_id=expected_skill_id,
         required=required,
+        risk_tags=risk_tags or [],
         created_by="quality-user",
     )
 
@@ -74,3 +76,28 @@ def test_empty_suite_never_passes_release_gate() -> None:
 
     assert evaluation.metrics.total == 0
     assert evaluation.metrics.gate_passed is False
+
+
+def test_high_risk_case_is_mandatory_even_when_not_marked_required() -> None:
+    case = _case(
+        "正式结算前检查",
+        "settlement",
+        required=False,
+        risk_tags=["high"],
+    )
+    manifests = [_manifest("settlement", ["其他关键词"])]
+
+    evaluation = evaluate_route_suite([case], manifests, manifests)
+
+    assert evaluation.metrics.gate_passed is False
+
+
+def test_evaluator_uses_runtime_keyword_threshold() -> None:
+    weak_keywords = ["医保"] + [f"关键词{index}" for index in range(30)]
+    case = _case("医保" + "情况" * 100, None)
+    manifests = [_manifest("settlement", weak_keywords)]
+
+    evaluation = evaluate_route_suite([case], manifests, manifests)
+
+    assert evaluation.results[0].candidate_skill_id is None
+    assert evaluation.metrics.gate_passed is True

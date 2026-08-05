@@ -291,11 +291,11 @@ Commit: `feat: manage skill evaluations and test releases`
 
 **Files:** `src/tests/integration/flow/test_skill_evaluation_release_flow.py`, `src/tests/e2e/pages/portal/skill-catalog.page.ts`, `src/tests/e2e/flows/portal/skill-catalog.flow.ts`, `PROGRESS.md`
 
-- [ ] **Step 1: 写后端 Flow 测试**
+- [x] **Step 1: 写后端 Flow 测试**
 
 完整故事使用内存存储：登记版本 → 创建必测用例 → 评测通过 → candidate → request approval → approve → test active → shadow resolver 返回该版本；另断言第二个 active 不会共存。
 
-- [ ] **Step 2: 先运行 T1，再运行 API，再运行 Flow**
+- [x] **Step 2: 先运行 T1，再运行 API，再运行 Flow**
 
 Run 1: Task 4 单元测试命令。
 
@@ -305,11 +305,11 @@ Run 3: `uv run --frozen python -m pytest src/tests/integration/flow/test_skill_e
 
 Expected: 三阶段全部 PASS。
 
-- [ ] **Step 3: 扩展 Portal E2E**
+- [x] **Step 3: 扩展 Portal E2E**
 
 浏览器流程验证：打开 `/skills` → 选择 Skill → 查看“批量评测” → 运行固定用例 → 查看“测试发布”门禁 → 完成人工审批 → 页面显示 `test active / shadow`。API 数据使用测试专用内存存储，测试后停止服务器。
 
-- [ ] **Step 4: 使用项目脚本启动并执行浏览器验证**
+- [x] **Step 4: 使用项目脚本启动并执行浏览器验证**
 
 Run 1: `.\start-servers.ps1`
 
@@ -319,11 +319,11 @@ Run 3: `.\stop-servers.ps1`
 
 Expected: PASS，且浏览器控制台无本功能新增错误。
 
-- [ ] **Step 5: 更新 PROGRESS 并最终复验**
+- [x] **Step 5: 更新 PROGRESS 并最终复验**
 
 记录阶段 2 的文件、提交、T1/T2a/T2b/前端/E2E 证据；预存失败只如实记录，不扩大修改范围。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 Commit: `test: verify skill evaluation release flow`
 
