@@ -379,21 +379,26 @@ class PolicyQAOrchestrator:
         if has_undefined:
             errors.append("输出包含 undefined/null/NaN")
 
-        policy_keywords = ["政策", "规定", "条文", "依据", "比例", "统筹", "支付"]
-        uncertainty_keywords = ["不确定性", "未检索到", "无法", "建议咨询", "仅供参考"]
-        has_policy_reference = any(kw in text for kw in policy_keywords)
+        policy_evidence_used = len(policy_rules or []) > 0
+        has_policy_reference = any(
+            getattr(rule, "source_text", "") or getattr(rule, "evidence_text", "")
+            for rule in (policy_rules or [])
+        )
+        uncertainty_keywords = [
+            "不确定性",
+            "未检索到",
+            "无法可靠确认",
+            "无法基于",
+            "建议核对",
+            "建议咨询",
+            "仅供参考，不作为",
+        ]
         has_uncertainty = any(kw in text for kw in uncertainty_keywords)
         if text and not (has_policy_reference or has_uncertainty):
-            warnings_list.append("答案未包含政策引用或不确定性声明")
+            errors.append("答案缺少可核验政策来源或明确不确定性声明")
 
-        policy_evidence_used = len(policy_rules or []) > 0
-        if policy_evidence_used:
-            has_source = any(
-                getattr(r, 'source_text', '') or getattr(r, 'evidence_text', '')
-                for r in (policy_rules or [])
-            )
-            if not has_source:
-                warnings_list.append("政策规则缺少来源文本")
+        if policy_evidence_used and not has_policy_reference:
+            warnings_list.append("政策规则缺少来源文本")
 
         fatal = len(errors) > 0
         passed = not fatal
@@ -839,40 +844,70 @@ class PolicyQAOrchestrator:
                     else "complete"
                 )
 
-                _evt = builder.done(
+            else:
+                # 无法可靠回答：不生成猜测性内容，直接给出引导（用户咨询医保办/医保局）
+                answer = ExplanationGenerator._refusal_reply()
+
+            # 安全校验必须发生在任何携带 answer 的响应对外发送之前。
+            validation_result = self._validate_output(answer, skill_policy_rules)
+            if should_generate and validation_result["passed"] and answer_status == "complete":
+                _answer_evt = builder.done(
                     detail="已生成政策解释",
                     data={
-                        "answer_ready": bool(answer),
+                        "answer_ready": True,
                         "answer_length": len(answer),
                         "answer_status": answer_status,
                     },
                 )
-                yield PolicyQAResponse(
-                    step="answer_generation", status="done",
-                    public_message="政策解释生成完成",
-                    answer=answer,
-                    answer_status=answer_status,
-                    trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
+                answer_event_status = "done"
+                answer_message = "政策解释生成完成"
+                answer_detail: dict[str, Any] = {}
+            elif should_generate:
+                if not validation_result["passed"]:
+                    answer = ExplanationGenerator._refusal_reply()
+                answer_status = "unavailable"
+                _answer_evt = builder.error(
+                    detail="答案因来源校验失败或不可用，已替换为安全提示"
                 )
+                answer_event_status = "skipped"
+                answer_message = "无法生成可核验的政策解释"
+                answer_detail = {
+                    "reason": "source_validation_failed",
+                    "can_answer": False,
+                    "validation_errors": validation_result["errors"],
+                }
             else:
-                # 无法可靠回答：不生成猜测性内容，直接给出引导（用户咨询医保办/医保局）
-                _evt = builder.skip("answer_generation", "答案生成", reason=answerability.reason)
-                answer = (
-                    "当前无法基于已有结算数据给出准确、可靠的费用解释。\n\n"
-                    "为避免误导，本系统不生成猜测性回答。建议您：\n"
-                    "- 携带医保结算单前往医院医保办（收费窗口）咨询；\n"
-                    "- 或拨打当地医保局服务热线 / 咨询当地医保经办机构。\n\n"
-                    "本回答仅供参考，不作为报销或结算依据。"
+                _answer_evt = builder.skip(
+                    "answer_generation", "答案生成", reason=answerability.reason
                 )
-                yield PolicyQAResponse(
-                    step="answer_generation", status="skipped",
-                    public_message=f"无法回答: {answerability.reason}",
-                    detail={"reason": answerability.reason, "can_answer": False, "missing_items": answerability.missing_items},
-                    public_detail={"summary": f"无法回答: {answerability.reason}", "can_answer": False},
-                    answer=answer,
-                    answer_status=answer_status,
-                    trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "detail": _evt.detail},
-                )
+                answer_event_status = "skipped"
+                answer_message = f"无法回答: {answerability.reason}"
+                answer_detail = {
+                    "reason": answerability.reason,
+                    "can_answer": False,
+                    "missing_items": answerability.missing_items,
+                }
+
+            yield PolicyQAResponse(
+                step="answer_generation",
+                status=answer_event_status,
+                public_message=answer_message,
+                detail=answer_detail,
+                public_detail={
+                    "summary": answer_message,
+                    "can_answer": answer_status == "complete",
+                },
+                answer=answer,
+                answer_status=answer_status,
+                trace_event={
+                    "step_id": _answer_evt.step_id,
+                    "step_name": _answer_evt.step_name,
+                    "step_number": _answer_evt.step_number,
+                    "status": _answer_evt.status,
+                    "duration_ms": _answer_evt.duration_ms,
+                    "detail": _answer_evt.detail,
+                },
+            )
 
             # ═══════════════════════════════════════════════════════════
             # Step 8: output_validation（输出校验）
@@ -884,7 +919,6 @@ class PolicyQAOrchestrator:
                 trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
             )
 
-            validation_result = self._validate_output(answer, skill_policy_rules)
             has_warnings = len(validation_result.get("warnings", [])) > 0
 
             if not validation_result["passed"]:
@@ -933,11 +967,16 @@ class PolicyQAOrchestrator:
             # Final: yield trace_result（完整链路结果）
             # ═══════════════════════════════════════════════════════════
             answerability = answerability or make_answerability(can_answer=False, reason="未执行可回答性判断")
+            answer_succeeded = answer_status == "complete" and validation_result["passed"]
             trace_events = self._convert_trace_events(builder.to_list())
             trace_response = PolicyQATraceResponse(
-                status=PolicyQARunStatus.SUCCESS.value,
-                can_answer=answerability.can_answer,
-                partial_answer=answerability.partial_answer,
+                status=(
+                    PolicyQARunStatus.SUCCESS.value
+                    if answer_succeeded
+                    else PolicyQARunStatus.FAILED.value
+                ),
+                can_answer=answerability.can_answer and answer_succeeded,
+                partial_answer=answerability.partial_answer and answer_succeeded,
                 selected_skill_id=skill_id or "",
                 trace_events=trace_events,
                 result={

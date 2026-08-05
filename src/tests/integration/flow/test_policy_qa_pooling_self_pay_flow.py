@@ -85,15 +85,15 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
     ):
         events.append(event)
 
-    intent_done = next(event for event in events if event.step == "intent" and event.status == "done")
-    query_done = next(event for event in events if event.step == "query_sql_data" and event.status == "done")
-    calculate_done = next(event for event in events if event.step == "calculate_explanation" and event.status == "done")
+    intent_done = next(event for event in events if event.step == "intent_detection" and event.status == "done")
+    query_done = next(event for event in events if event.step == "settlement_query" and event.status == "done")
+    policy_done = next(event for event in events if event.step == "policy_rule_search" and event.status == "done")
     explanation_done = next(event for event in events if event.step == "answer_generation" and event.status == "done")
 
     assert intent_done.detail["target_fee_item"] == "pooling_self_pay"
     assert query_done.detail["settlement_id"] == "1671213"
-    assert calculate_done.detail["segments"]["segments"]
-    assert calculate_done.detail["segments"]["reconciliation"]["authoritative_amount"] == 4962.67
+    assert policy_done.detail["rules_count"] == 3
+    assert policy_done.policy_cards
     assert explanation_done.answer
     assert explanation_done.answer_status == "complete"
     assert not hasattr(explanation_done, "patient_view")

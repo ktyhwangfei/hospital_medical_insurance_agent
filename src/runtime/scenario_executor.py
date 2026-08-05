@@ -8,6 +8,7 @@ This implements the ScenarioExecutor protocol used by RuntimeOrchestrator.
 import hashlib
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -646,8 +647,13 @@ class UnifiedScenarioExecutor:
 
         settlement_id = getattr(context, 'encounter_id', None) or '1671213'
 
-        async def _run_pipeline() -> str:
-            """运行 Policy QA 管道，返回文本解释。"""
+        async def _run_pipeline() -> tuple[
+            str,
+            dict[str, Any] | None,
+            str,
+            list[dict[str, Any]],
+        ]:
+            """运行 Policy QA 管道，返回答案、分解数据、状态和政策卡片。"""
             # 初始化组件
             sql_fetcher = None
             try:
@@ -682,6 +688,8 @@ class UnifiedScenarioExecutor:
 
             full_text = ""
             decomposition_data = None
+            answer_status = "unavailable"
+            policy_cards: list[dict[str, Any]] = []
 
             async for response in orchestrator.process(request):
                 # 发射 stream:step 事件（用于前端执行步骤展示）
@@ -695,9 +703,13 @@ class UnifiedScenarioExecutor:
                     }
                     on_event("stream:step", step_data)
 
-                # 累积政策问答生成的单一答案
+                if response.policy_cards:
+                    policy_cards.extend(response.policy_cards)
+
+                # 收集政策问答生成的单一答案及其可用状态
                 if response.step == "answer_generation" and response.answer:
-                    full_text += response.answer
+                    full_text = response.answer
+                    answer_status = response.answer_status
                     if on_event:
                         on_event("stream:delta", {"content": response.answer})
 
@@ -705,10 +717,12 @@ class UnifiedScenarioExecutor:
                 if response.step == "decomposition" and response.status == "done":
                     decomposition_data = response.detail
 
-            return full_text, decomposition_data
+            return full_text, decomposition_data, answer_status, policy_cards
 
         try:
-            full_text, decomposition_data = asyncio.run(_run_pipeline())
+            full_text, decomposition_data, answer_status, policy_cards = asyncio.run(
+                _run_pipeline()
+            )
 
             if not full_text:
                 # 如果没有生成解释，构建基本摘要
@@ -731,18 +745,38 @@ class UnifiedScenarioExecutor:
                 else:
                     full_text = "费用分解计算中，请检查结算数据是否完整。"
 
-            result_data: dict = {"content": full_text}
+            result_data: dict[str, Any] = {
+                "content": full_text,
+                "answer_status": answer_status,
+            }
             if decomposition_data:
                 result_data["decomposition"] = decomposition_data
+
+            citations = [
+                {
+                    "source_type": "policy_rule",
+                    "source_id": card.get("clause") or card.get("title") or f"policy-card-{index}",
+                    "summary": card.get("evidence_text") or card.get("title") or "政策规则",
+                }
+                for index, card in enumerate(policy_cards, start=1)
+                if card.get("evidence_text") or card.get("title")
+            ]
+            uncertainties: list[str] = []
+            if answer_status != "complete":
+                uncertainties.append(
+                    "政策解释当前不可用：未获得足够的可核验政策依据或结算数据，请核对结算单。"
+                )
+            elif not citations:
+                uncertainties.append("答案未携带可展示的政策来源，建议联系医保办核对。")
 
             return AgentResponse(
                 scenario="policy_qa_fee_decomposition",
                 status="completed",
                 result=result_data,
-                citations=[],
+                citations=citations,
                 tasks=[],
                 missing_fields=[],
-                uncertainties=[],
+                uncertainties=uncertainties,
                 blocked_actions=[],
                 audit={"workflow_id": context.workflow_id, "steps": [
                     "intent", "sql_query", "rewrite", "search", "decomposition", "explain"
