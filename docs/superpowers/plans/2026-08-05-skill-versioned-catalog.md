@@ -54,7 +54,7 @@
 - Test: `src/tests/unit/domain/skill/test_skill_version_models.py`
 - Test: `src/tests/unit/skill_infra/test_artifact.py`
 
-- [ ] **Step 1: 写领域模型失败测试**
+- [x] **Step 1: 写领域模型失败测试**
 
 ```python
 def test_skill_version_rejects_non_sha256_hash():
@@ -72,13 +72,13 @@ def test_skill_version_rejects_non_sha256_hash():
         )
 ```
 
-- [ ] **Step 2: 运行模型测试并确认因模块不存在而失败**
+- [x] **Step 2: 运行模型测试并确认因模块不存在而失败**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/domain/skill/test_skill_version_models.py -q --tb=short`
 
 Expected: FAIL，原因是 `src.domain.skill.version_models` 尚不存在。
 
-- [ ] **Step 3: 实现最小领域模型**
+- [x] **Step 3: 实现最小领域模型**
 
 ```python
 class SkillValidationStatus(StrEnum):
@@ -104,7 +104,7 @@ class SkillVersion(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 ```
 
-- [ ] **Step 4: 写制品哈希失败测试**
+- [x] **Step 4: 写制品哈希失败测试**
 
 ```python
 def test_build_artifact_snapshot_is_stable_and_ignores_pycache(tmp_path):
@@ -124,13 +124,13 @@ def test_build_artifact_snapshot_rejects_path_outside_skills_root(tmp_path):
         build_skill_artifact(outside, skills_root=tmp_path)
 ```
 
-- [ ] **Step 5: 运行哈希测试并确认失败**
+- [x] **Step 5: 运行哈希测试并确认失败**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/skill_infra/test_artifact.py -q --tb=short`
 
 Expected: FAIL，原因是 `build_skill_artifact` 尚不存在。
 
-- [ ] **Step 6: 实现安全遍历与确定性哈希**
+- [x] **Step 6: 实现安全遍历与确定性哈希**
 
 ```python
 def build_skill_artifact(skill_dir: Path, *, skills_root: Path) -> SkillArtifactSnapshot:
@@ -164,7 +164,7 @@ def build_skill_artifact(skill_dir: Path, *, skills_root: Path) -> SkillArtifact
     )
 ```
 
-- [ ] **Step 7: 运行两组测试并提交**
+- [x] **Step 7: 运行两组测试并提交**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/domain/skill/test_skill_version_models.py src/tests/unit/skill_infra/test_artifact.py -q --tb=short`
 

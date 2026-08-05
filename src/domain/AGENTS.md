@@ -551,6 +551,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 技能 | `Skill` | **Entity** (Aggregate Root) | Pydantic `BaseModel` | 可编排的 AI 能力单元，含多步骤和工具调用 |
 | 技能步骤 | `SkillStep` | **Entity** | Pydantic `BaseModel` | 技能中的一个执行步骤，绑定特定工具 |
 | 技能元数据 | `SkillMetadata` | **Value Object** | Pydantic `BaseModel` | 技能的版本、标签、作者等描述信息 |
+| 技能版本 | `SkillVersion` | **Entity** | Pydantic `BaseModel`（frozen） | 由 Git 提交与制品哈希唯一追溯的不可变技能版本 |
+| 技能制品快照 | `SkillArtifactSnapshot` | **Value Object** | Pydantic `BaseModel`（frozen） | Skill 目录规范化后的 Manifest、依赖、文件清单与 SHA-256 |
+| 技能校验状态 | `SkillValidationStatus` | **Value Object** | `StrEnum` | pending / passed / failed |
 | 技能拥有者 | `ToolOwner` | **Value Object** | `StrEnum` | 技能/工具的归属角色（与 `Role` 一致但缺少 CLINICIAN） |
 | MCP 服务器 | `McpServer` | **Entity** | Pydantic `BaseModel` | 通过 MCP 协议注册的外部能力服务器 |
 | MCP 能力 | `McpCapability` | **Entity** | Pydantic `BaseModel` | MCP 服务器暴露的具体能力点（工具/资源/提示） |
