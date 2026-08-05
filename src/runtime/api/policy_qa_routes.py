@@ -131,23 +131,83 @@ _INTERNAL_TABLE_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])yb_[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
+_SEMANTIC_OBJECT_FIELD_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:zydyxx|zyfdxx|zyjyxx|djxx)\."
+    r"[A-Za-z0-9_]+(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_INTERNAL_BARE_IDENTIFIERS = frozenset({
+    # settlement_field_mapping 与 assembler._FACT_FIELD_MAP 的原始字段。
+    "bcqfje",
+    "bcybnje",
+    "bctcje",
+    "bczfje",
+    "bdtczf",
+    "bdtczfje",
+    "bddegwyzf",
+    "bddegwyzfje",
+    "bddezf",
+    "bddezfje",
+    "bdgryf",
+    "debxbxje",
+    "dezfje",
+    "grzfje",
+    "fund_type",
+    "per_type",
+    "yllb",
+    "rylb",
+    # 标准化字段；deductible 是合法医保术语，刻意保留为公开自然语言。
+    "medical_insurance_inner_amount",
+    "basic_pooling_payment",
+    "basic_pooling_self_pay",
+    "large_amount_payment",
+    "large_amount_self_pay",
+    "personal_total_pay",
+    "person_type",
+    "insurance_type",
+    "service_type",
+    "hospital_level",
+    # 内部查询与追踪字段。
+    "sql_profile",
+    "tables_queried",
+    "query_trace",
+    "raw_sql",
+})
 _INTERNAL_IDENTIFIER_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])(?:bdtczf|bcqfje|basic_pooling_self_pay|"
-    r"sql_profile|tables_queried|query_trace|raw_sql)(?![A-Za-z0-9_])",
+    r"(?<![A-Za-z0-9_])(?:"
+    + "|".join(
+        re.escape(identifier)
+        for identifier in sorted(_INTERNAL_BARE_IDENTIFIERS, key=len, reverse=True)
+    )
+    + r")(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 _SQL_STATEMENT_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])(?:select|insert|update|delete)(?![A-Za-z0-9_])",
+    r"(?<![A-Za-z0-9_])(?:select|insert|update|delete|merge|drop|alter|create|"
+    r"truncate|exec(?:ute)?|call)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
+_CREDENTIAL_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:dsn|password|passwd|pwd|token|api[_-]?key|secret|"
+    r"connection[_-]?string)(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def _contains_internal_implementation(value: Any) -> bool:
+    text = str(value or "")
+    return bool(_SQL_STATEMENT_PATTERN.search(text) or _CREDENTIAL_PATTERN.search(text))
 
 
 def _public_text(value: Any) -> str:
     """移除公开文案中的内部表名和存储实现名称。"""
     text = str(value or "").strip()
+    if _CREDENTIAL_PATTERN.search(text):
+        return "内部连接细节已隐藏。"
     if _SQL_STATEMENT_PATTERN.search(text):
         return "内部查询细节已隐藏。"
     text = _INTERNAL_TABLE_PATTERN.sub("结算数据字段", text)
+    text = _SEMANTIC_OBJECT_FIELD_PATTERN.sub("结算数据字段", text)
     text = _INTERNAL_IDENTIFIER_PATTERN.sub("内部字段", text)
     return re.sub(
         r"(?<![A-Za-z0-9_])Milvus\s+policy_rules(?![A-Za-z0-9_])",
@@ -237,7 +297,7 @@ def _build_public_result(
             or evidence.get("evidence_text")
             or evidence.get("source_text")
         )
-        if _SQL_STATEMENT_PATTERN.search(str(raw_excerpt or "")):
+        if _contains_internal_implementation(raw_excerpt):
             continue
         excerpt = _public_text(raw_excerpt)
         if not excerpt:

@@ -359,6 +359,37 @@ class TestPolicyQAStreamEndpoint:
 
 
 class TestSettlementExplanationEndpoint:
+    @pytest.mark.parametrize(
+        ("unsafe_text", "forbidden_token"),
+        [
+            ("来源zyfdxx.bdgryf。", "zyfdxx.bdgryf"),
+            ("来源ZYDYXX.BCYBNJE!", "zydyxx.bcybnje"),
+            ("金额bddezf。", "bddezf"),
+            ("金额BDGRYF，", "bdgryf"),
+            ("执行MERGE INTO claims USING source ON claims.id=source.id。", "merge"),
+            ("连接DSN=hospital;password=secret;token=abc123。", "password"),
+        ],
+    )
+    def test_rest_success_sanitizes_extended_internal_text(
+        self, client, monkeypatch, unsafe_text, forbidden_token
+    ):
+        from src.runtime.api import policy_qa_routes
+
+        async def fake_process(_settlement_id, _question=""):
+            payload = _internal_settlement_payload()
+            payload["answer"] = unsafe_text
+            return payload
+
+        monkeypatch.setattr(policy_qa_routes, "_process_single_settlement", fake_process)
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "1671213"},
+        )
+
+        assert response.status_code == 200
+        assert forbidden_token not in response.json()["answer"].casefold()
+
     def test_rest_success_returns_only_public_contract(self, client, monkeypatch):
         from src.runtime.api import policy_qa_routes
 

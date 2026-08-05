@@ -240,6 +240,104 @@ def test_public_text_sanitizer_handles_chinese_ascii_boundaries(
     assert forbidden_token not in public_text.casefold()
 
 
+@pytest.mark.parametrize(
+    ("unsafe_text", "forbidden_token"),
+    [
+        ("来源zyfdxx.bdgryf。", "zyfdxx.bdgryf"),
+        ("来源ZYDYXX.BCYBNJE!", "zydyxx.bcybnje"),
+        ("来源zyjyxx.rylb，", "zyjyxx.rylb"),
+        ("来源DJXX.FUND_TYPE。", "djxx.fund_type"),
+        ("来源yb_brdjxx.FUND_TYPE。", "yb_brdjxx.fund_type"),
+        ("金额bddezf。", "bddezf"),
+        ("金额BDGRYF，", "bdgryf"),
+        ("字段bdtczfje。", "bdtczfje"),
+        ("字段bddegwyzf。", "bddegwyzf"),
+        ("字段bddegwyzfje。", "bddegwyzfje"),
+        ("字段bcybnje。", "bcybnje"),
+        ("字段bctcje。", "bctcje"),
+        ("字段bczfje。", "bczfje"),
+        ("字段debxbxje。", "debxbxje"),
+        ("字段dezfje。", "dezfje"),
+        ("字段grzfje。", "grzfje"),
+        ("字段PER_TYPE。", "per_type"),
+        ("字段FUND_TYPE。", "fund_type"),
+        ("字段yllb。", "yllb"),
+        ("字段rylb。", "rylb"),
+        ("字段medical_insurance_inner_amount。", "medical_insurance_inner_amount"),
+        ("字段basic_pooling_payment。", "basic_pooling_payment"),
+        ("字段large_amount_payment。", "large_amount_payment"),
+        ("字段large_amount_self_pay。", "large_amount_self_pay"),
+        ("字段personal_total_pay。", "personal_total_pay"),
+        ("字段person_type。", "person_type"),
+        ("字段insurance_type。", "insurance_type"),
+        ("字段service_type。", "service_type"),
+        ("字段hospital_level。", "hospital_level"),
+    ],
+)
+def test_public_text_sanitizer_blocks_mapped_internal_identifiers(
+    unsafe_text, forbidden_token
+):
+    from src.runtime.api.policy_qa_routes import _public_text
+
+    public_text = _public_text(unsafe_text)
+
+    assert forbidden_token not in public_text.casefold()
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "WITH claims AS (SELECT * FROM yb_zyfdxx) SELECT * FROM claims",
+        "请执行MERGE INTO claims USING source ON claims.id=source.id。",
+        "请执行DROP TABLE claims。",
+        "请执行ALTER TABLE claims ADD secret varchar(20)。",
+        "请执行CREATE TABLE claims(id int)。",
+        "请执行TRUNCATE TABLE claims。",
+        "请执行EXEC claim_proc。",
+        "请执行CALL claim_proc()。",
+        "连接DSN=hospital;password=secret;token=abc123。",
+    ],
+)
+def test_public_text_sanitizer_blocks_sql_and_credentials(unsafe_text):
+    from src.runtime.api.policy_qa_routes import _public_text
+
+    public_text = _public_text(unsafe_text).casefold()
+
+    assert all(
+        token not in public_text
+        for token in (
+            "with",
+            "select",
+            "merge",
+            "drop",
+            "alter",
+            "create",
+            "truncate",
+            "exec",
+            "call",
+            "dsn",
+            "password",
+            "token",
+            "secret",
+            "abc123",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "safe_text",
+    [
+        "The financial review is complete.",
+        "Nonetheless, the deductible remains unchanged.",
+        "The deductible is 650 yuan.",
+    ],
+)
+def test_public_text_sanitizer_preserves_legal_natural_language(safe_text):
+    from src.runtime.api.policy_qa_routes import _public_text
+
+    assert _public_text(safe_text) == safe_text
+
+
 def test_internal_only_evidence_is_dropped_instead_of_becoming_placeholder_citation():
     from src.runtime.api.policy_qa_routes import _build_public_result
 
@@ -261,6 +359,34 @@ def test_internal_only_evidence_is_dropped_instead_of_becoming_placeholder_citat
     assert result.citations == []
     assert result.verification_summary.policy_count == 0
     assert result.uncertainties
+
+
+@pytest.mark.parametrize(
+    "internal_excerpt",
+    [
+        "MERGE INTO claims USING source ON claims.id=source.id",
+        "DSN=hospital;password=secret;token=abc123",
+    ],
+)
+def test_sql_or_credential_only_evidence_is_dropped(internal_excerpt):
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    result = _build_public_result(
+        answer="可核对真实金额。",
+        can_answer=True,
+        partial_answer=False,
+        policy_status="full_policy_matched",
+        policy_evidence=[
+            {"title": "内部实现", "clause": internal_excerpt, "score": 0.9},
+        ],
+        calculation_steps=[{"step_name": "核对", "description": "按比例计算。"}],
+        definition={"name": "统筹自付", "plain_text": "个人承担部分。"},
+        warnings=[],
+        case_context={"basic_pooling_self_pay": 0.0},
+    )
+
+    assert result.policy_evidence == []
+    assert result.citations == []
 
 
 def test_public_text_sanitizer_preserves_normal_chinese_and_zero_amount():
