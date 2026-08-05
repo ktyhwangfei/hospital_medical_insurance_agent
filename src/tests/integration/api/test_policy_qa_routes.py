@@ -249,6 +249,32 @@ class TestPolicyQAStreamEndpoint:
         assert "yb_" not in json.dumps(result_event, ensure_ascii=False).lower()
         assert result_event["citations"] or result_event["uncertainties"]
 
+    def test_stream_task_persistence_uses_public_evidence_count_key(
+        self, client, safe_policy_qa_dependencies, monkeypatch
+    ):
+        from src.runtime.api import policy_qa_routes
+
+        persisted_outputs = []
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "record_qa_task",
+            lambda **kwargs: persisted_outputs.append(kwargs["output_data"]),
+        )
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={
+                "question": "统筹自付为什么这么多？",
+                "settlement_id": "1671213",
+            },
+        )
+
+        assert response.status_code == 200
+        assert persisted_outputs
+        output_data = persisted_outputs[-1]
+        assert "evidence_count" in output_data
+        assert "policy_evidence_count" not in output_data
+
 
 class TestPolicyQATestEndpoint:
     """测试政策问答测试端点"""

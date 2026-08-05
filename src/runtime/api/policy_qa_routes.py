@@ -549,7 +549,7 @@ async def _policy_qa_stream(
                 output_data={
                     "answer_excerpt": public_result.answer[:500],
                     "answer_status": public_result.answer_status,
-                    "policy_evidence_count": len(result_policy_evidence),
+                    "evidence_count": len(result_policy_evidence),
                     "internal_run_id": trace_run_id,
                 },
                 duration_ms=duration_ms,
