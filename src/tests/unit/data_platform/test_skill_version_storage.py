@@ -102,6 +102,9 @@ def test_postgres_storage_creates_parent_identity_before_version() -> None:
     parent_index = next(i for i, sql in enumerate(statements) if sql.startswith("insert into skills"))
     version_index = next(i for i, sql in enumerate(statements) if sql.startswith("insert into skill_versions"))
     assert parent_index < version_index
+    parent_sql, parent_params = client.calls[parent_index]
+    assert "risk_level" in parent_sql.lower()
+    assert parent_params[4] == "low"
 
 
 def test_version_storage_factory_uses_process_singleton_in_memory(monkeypatch: pytest.MonkeyPatch) -> None:

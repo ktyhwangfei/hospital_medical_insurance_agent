@@ -75,8 +75,10 @@ class PostgresSkillVersionStorage:
         skill_name = str(manifest.get("skill_name") or version.skill_id)
         description = str(manifest.get("description") or f"{skill_name} Skill")
         parent_sql = """
-            INSERT INTO skills (skill_id, name, description, owner, skill_metadata)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO skills (
+                skill_id, name, description, owner, risk_level, skill_metadata
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (skill_id) DO NOTHING
         """
         insert_sql = """
@@ -114,6 +116,7 @@ class PostgresSkillVersionStorage:
                         skill_name,
                         description,
                         "information_department",
+                        "low",
                         json.dumps({"version": version.semantic_version}),
                     ),
                 )
