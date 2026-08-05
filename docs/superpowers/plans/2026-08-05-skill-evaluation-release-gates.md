@@ -131,7 +131,7 @@ Commit: `feat: evaluate skill routes from immutable manifests`
 
 **Files:** `src/data_platform/storage/skill/governance_ports.py`, `src/data_platform/storage/skill/governance_in_memory.py`, `src/data_platform/storage/skill/governance_postgres.py`, `src/data_platform/storage/skill/governance_factory.py`, `src/tests/unit/data_platform/test_skill_governance_storage.py`
 
-- [ ] **Step 1: 写存储契约失败测试**
+- [x] **Step 1: 写存储契约失败测试**
 
 ```python
 def test_activation_retires_previous_active_atomically() -> None:
@@ -149,11 +149,11 @@ def test_activation_rejects_stale_revision() -> None:
         storage.activate_release("new", expected_revision=2)
 ```
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/data_platform/test_skill_governance_storage.py -q --tb=short`
 
-- [ ] **Step 3: 实现端口、深拷贝内存实现和 PostgreSQL 表**
+- [x] **Step 3: 实现端口、深拷贝内存实现和 PostgreSQL 表**
 
 PostgreSQL 新增 `skill_eval_cases`、`skill_eval_runs`、`skill_releases`、`skill_release_approvals`。逐案结果以内嵌 JSONB 保存在 run 中，避免本阶段引入第五张表；不保存患者上下文。active 唯一性通过部分唯一索引保证：
 
@@ -165,7 +165,7 @@ WHERE status = 'active';
 
 激活在一个事务内锁定候选与当前 active，校验 revision，退休旧 active，再激活候选。工厂遵循 `USE_MEMORY_STORAGE`。
 
-- [ ] **Step 4: 运行存储测试**
+- [x] **Step 4: 运行存储测试**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/data_platform/test_skill_governance_storage.py -q --tb=short`
 
