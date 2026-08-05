@@ -195,6 +195,7 @@ class KnowledgeBuildService:
             updated_at=created_at,
         )
         created = self._store.create_with_claims(queued)
+        result_change_set_id: str | None = None
         try:
             running = self._store.save(
                 created.model_copy(
@@ -209,6 +210,7 @@ class KnowledgeBuildService:
                 semantic_contract_version=preflight.semantic_contract_version,
                 supersedes_candidate_id=None,
             )
+            result_change_set_id = change_set.change_set_id
             completed_units = [
                 unit.model_copy(
                     update={
@@ -240,43 +242,38 @@ class KnowledgeBuildService:
                 )
             )
         except Exception as error:
-            self._record_failure(created, error)
+            self._record_failure(created, error, result_change_set_id)
             raise
 
     def _record_failure(
         self,
         created: KnowledgeBuildTask,
         error: Exception,
+        result_change_set_id: str | None,
     ) -> None:
         try:
-            latest = self._store.get(created.task_id) or created
-            if latest.status not in {"QUEUED", "RUNNING"}:
-                return
-            failed_units = [
-                unit.model_copy(
-                    update={
-                        "status": "FAILED",
-                        "error_code": type(error).__name__,
-                        "error_message": str(error),
-                    },
-                    deep=True,
-                )
-                for unit in latest.units
-            ]
-            self._store.save(
-                latest.model_copy(
-                    update={
-                        "status": "FAILED",
-                        "units": failed_units,
-                        "finished_at": self._clock_now(),
-                    },
-                    deep=True,
-                )
+            self._store.fail_and_release(
+                created.task_id,
+                error_code=type(error).__name__,
+                error_message=str(error),
+                result_change_set_id=result_change_set_id,
             )
         except Exception as recording_error:
             error.add_note(
                 "记录知识构建任务失败状态时出错: "
                 f"{type(recording_error).__name__}: {recording_error}"
+            )
+        if result_change_set_id is None:
+            return
+        try:
+            self._change_set_service.fail_candidate(
+                result_change_set_id,
+                reason=str(error),
+            )
+        except Exception as candidate_error:
+            error.add_note(
+                "失效知识构建候选时出错: "
+                f"{type(candidate_error).__name__}: {candidate_error}"
             )
 
     def _evaluate_preflight(

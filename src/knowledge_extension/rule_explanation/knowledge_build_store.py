@@ -133,6 +133,15 @@ class KnowledgeBuildStore(Protocol):
 
     def release_claims(self, task_id: str) -> None: ...
 
+    def fail_and_release(
+        self,
+        task_id: str,
+        *,
+        error_code: str,
+        error_message: str,
+        result_change_set_id: str | None = None,
+    ) -> KnowledgeBuildTask: ...
+
 
 def _validate_unique_task_units(task: KnowledgeBuildTask) -> None:
     logical_units: set[tuple[str, str]] = set()
@@ -226,6 +235,37 @@ def _require_terminal_task(
     return task
 
 
+def _failed_task(
+    current: KnowledgeBuildTask,
+    *,
+    error_code: str,
+    error_message: str,
+    result_change_set_id: str | None,
+) -> KnowledgeBuildTask:
+    failed_units = [
+        unit.model_copy(
+            update={
+                "status": "FAILED",
+                "error_code": error_code,
+                "error_message": error_message,
+            },
+            deep=True,
+        )
+        for unit in current.units
+    ]
+    failed = current.model_copy(
+        update={
+            "status": "FAILED",
+            "units": failed_units,
+            "result_change_set_id": result_change_set_id
+            or current.result_change_set_id,
+            "finished_at": utc_now(),
+        },
+        deep=True,
+    )
+    return _merge_saved_task(current, failed)
+
+
 class InMemoryKnowledgeBuildStore:
     """线程安全的内存构建任务存储。"""
 
@@ -307,6 +347,31 @@ class InMemoryKnowledgeBuildStore:
         with self._lock:
             _require_terminal_task(self._tasks.get(task_id), task_id)
             self._release_claims_unlocked(task_id)
+
+    def fail_and_release(
+        self,
+        task_id: str,
+        *,
+        error_code: str,
+        error_message: str,
+        result_change_set_id: str | None = None,
+    ) -> KnowledgeBuildTask:
+        with self._lock:
+            current = self._tasks.get(task_id)
+            if current is None:
+                raise KnowledgeBuildTaskNotFound(task_id)
+            if current.status in _TERMINAL_STATUSES:
+                self._release_claims_unlocked(task_id)
+                return current.model_copy(deep=True)
+            failed = _failed_task(
+                current,
+                error_code=error_code,
+                error_message=error_message,
+                result_change_set_id=result_change_set_id,
+            )
+            self._tasks[task_id] = failed
+            self._release_claims_unlocked(task_id)
+            return failed.model_copy(deep=True)
 
     def _release_claims_unlocked(self, task_id: str) -> None:
         logical_keys = [
@@ -547,6 +612,65 @@ class PostgreSQLKnowledgeBuildStore:
                     "DELETE FROM policy_knowledge_unit_claims WHERE task_id = %s",
                     (task_id,),
                 )
+
+    def fail_and_release(
+        self,
+        task_id: str,
+        *,
+        error_code: str,
+        error_message: str,
+        result_change_set_id: str | None = None,
+    ) -> KnowledgeBuildTask:
+        with self._lock:
+            with self._get_client().transaction() as connection:
+                current_record = self._execute_transaction(
+                    connection,
+                    """
+                    SELECT payload
+                    FROM policy_knowledge_build_tasks
+                    WHERE task_id = %s
+                    FOR UPDATE
+                    """,
+                    (task_id,),
+                    fetch_one=True,
+                )
+                if current_record is None:
+                    raise KnowledgeBuildTaskNotFound(task_id)
+                current = self._task_from_payload(
+                    self._record_value(current_record, "payload", 0)
+                )
+                if current.status in _TERMINAL_STATUSES:
+                    failed = current
+                else:
+                    failed = _failed_task(
+                        current,
+                        error_code=error_code,
+                        error_message=error_message,
+                        result_change_set_id=result_change_set_id,
+                    )
+                    updated_record = self._execute_transaction(
+                        connection,
+                        _UPDATE_TASK,
+                        (
+                            failed.status,
+                            failed.model_dump_json(),
+                            failed.updated_at,
+                            failed.task_id,
+                            current.updated_at,
+                        ),
+                        fetch_one=True,
+                    )
+                    if updated_record is None:
+                        raise KnowledgeBuildTaskVersionConflict(task_id)
+                    failed = self._task_from_payload(
+                        self._record_value(updated_record, "payload", 0)
+                    )
+                self._execute_transaction(
+                    connection,
+                    "DELETE FROM policy_knowledge_unit_claims WHERE task_id = %s",
+                    (task_id,),
+                )
+                return failed.model_copy(deep=True)
 
     @staticmethod
     def _task_params(task: KnowledgeBuildTask) -> tuple[Any, ...]:

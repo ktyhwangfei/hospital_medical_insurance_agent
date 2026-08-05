@@ -1001,3 +1001,54 @@ def test_save_allows_mutable_progress_result_and_unit_fields(
     claim = store.get_claim("doc-1", "unit-1")
     assert claim.unit_revision_id == "revision-1"
     assert claim.task_id == "task-1"
+
+
+@pytest.mark.parametrize("backend", ["memory", "postgresql"])
+def test_fail_and_release_uses_latest_task_and_atomically_releases_claims(
+    backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _fake = _store_for_backend(backend, monkeypatch)
+    created = store.create_with_claims(_make_task("task-failure"))
+    running = store.save(created.model_copy(update={"status": "RUNNING"}))
+
+    failed = store.fail_and_release(
+        created.task_id,
+        error_code="KnowledgeBuildTaskVersionConflict",
+        error_message="concurrent update",
+        result_change_set_id="CS_partial_candidate",
+    )
+
+    assert running.updated_at != created.updated_at
+    assert failed.status == "FAILED"
+    assert failed.result_change_set_id == "CS_partial_candidate"
+    assert failed.finished_at is not None
+    assert failed.finished_at.tzinfo is not None
+    assert [unit.status for unit in failed.units] == ["FAILED"]
+    assert [unit.error_code for unit in failed.units] == [
+        "KnowledgeBuildTaskVersionConflict"
+    ]
+    assert [unit.error_message for unit in failed.units] == ["concurrent update"]
+    assert store.get(created.task_id) == failed
+    assert store.get_claim("doc-1", "unit-1") is None
+
+
+def test_postgresql_fail_and_release_rolls_back_task_when_claim_delete_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakePostgreSQLClient()
+    store = _postgres_store(monkeypatch, fake)
+    created = store.create_with_claims(_make_task("task-failure"))
+    running = store.save(created.model_copy(update={"status": "RUNNING"}))
+    fake.fail_claim_delete = True
+
+    with pytest.raises(RuntimeError, match="claim"):
+        store.fail_and_release(
+            created.task_id,
+            error_code="RuntimeError",
+            error_message="build failed",
+        )
+
+    fake.fail_claim_delete = False
+    assert store.get(created.task_id) == running
+    assert store.get_claim("doc-1", "unit-1").task_id == created.task_id

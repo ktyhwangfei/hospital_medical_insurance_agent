@@ -15,8 +15,13 @@ from src.knowledge_extension.rule_explanation.change_set_models import (
     ChangeSetItem,
     KnowledgeChangeSet,
 )
+from src.knowledge_extension.rule_explanation.change_set_service import ChangeSetService
+from src.knowledge_extension.rule_explanation.change_set_store import (
+    InMemoryChangeSetStore,
+)
 from src.knowledge_extension.rule_explanation.knowledge_build_store import (
     InMemoryKnowledgeBuildStore,
+    KnowledgeBuildTaskVersionConflict,
     UnitRevisionClaimed,
 )
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
@@ -159,6 +164,22 @@ class _ChangeSetOnlyBuilder:
         return result
 
 
+class _FailingCandidateInvalidation:
+    def __init__(
+        self,
+        delegate: ChangeSetService,
+        failure: Exception,
+    ) -> None:
+        self.delegate = delegate
+        self.failure = failure
+
+    def build_for_units(self, **kwargs: Any) -> KnowledgeChangeSet:
+        return self.delegate.build_for_units(**kwargs)
+
+    def fail_candidate(self, change_set_id: str, *, reason: str) -> None:
+        raise self.failure
+
+
 class _RecordingStore:
     def __init__(
         self,
@@ -172,6 +193,7 @@ class _RecordingStore:
         self.transitions: list[str] = []
         self.snapshots: list[models.KnowledgeBuildTask] = []
         self.get_calls = 0
+        self.fail_and_release_calls = 0
 
     def create_with_claims(
         self, task: models.KnowledgeBuildTask
@@ -206,6 +228,23 @@ class _RecordingStore:
     def release_claims(self, task_id: str) -> None:
         self.inner.release_claims(task_id)
 
+    def fail_and_release(
+        self,
+        task_id: str,
+        *,
+        error_code: str,
+        error_message: str,
+        result_change_set_id: str | None = None,
+    ) -> models.KnowledgeBuildTask:
+        self.fail_and_release_calls += 1
+        self.transitions.append("FAILED")
+        return self.inner.fail_and_release(
+            task_id,
+            error_code=error_code,
+            error_message=error_message,
+            result_change_set_id=result_change_set_id,
+        )
+
 
 class _ClaimRaceStore(_RecordingStore):
     def __init__(self, failure: UnitRevisionClaimed) -> None:
@@ -220,14 +259,45 @@ class _ClaimRaceStore(_RecordingStore):
         raise self.failure
 
 
+class _ConcurrentRunningSaveStore(_RecordingStore):
+    def __init__(self, failure: KnowledgeBuildTaskVersionConflict) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def save(self, task: models.KnowledgeBuildTask) -> models.KnowledgeBuildTask:
+        if task.status == "RUNNING":
+            self.transitions.append(task.status)
+            self.snapshots.append(task.model_copy(deep=True))
+            self.inner.save(task)
+            raise self.failure
+        return super().save(task)
+
+
+class _FailingCompensationStore(_RecordingStore):
+    def __init__(self, failure: Exception) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def fail_and_release(
+        self,
+        task_id: str,
+        *,
+        error_code: str,
+        error_message: str,
+        result_change_set_id: str | None = None,
+    ) -> models.KnowledgeBuildTask:
+        self.fail_and_release_calls += 1
+        raise self.failure
+
+
 def _create_service(
     documents: Iterable[KnowledgeWorkbenchDocument],
     *,
     store: Any | None = None,
-    builder: _ChangeSetOnlyBuilder | None = None,
+    builder: Any | None = None,
     clock: Any | None = None,
     task_id_factory: Any | None = None,
-) -> tuple[Any, _Workbench, Any, _ChangeSetOnlyBuilder]:
+) -> tuple[Any, _Workbench, Any, Any]:
     module = _build_service_module()
     workbench = _Workbench(documents)
     build_store = store if store is not None else _RecordingStore()
@@ -880,7 +950,7 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
     first = _unit(
         doc_id="doc-a",
         doc_title="Policy A",
-        unit_id="unit-a",
+        unit_id="shared-unit",
         source_text="exact source A",
         path=["Chapter A"],
     )
@@ -893,7 +963,7 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
     second = _unit(
         doc_id="doc-b",
         doc_title="Policy B",
-        unit_id="unit-b",
+        unit_id="shared-unit",
         source_text="exact source B",
         path=["Chapter B"],
     )
@@ -913,8 +983,8 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
         build_mode="REBUILD",
         rebuild_reason="Policy source refreshed",
         unit_revisions=[
-            _selection("doc-a", "unit-a", "exact source A"),
-            _selection("doc-b", "unit-b", "exact source B"),
+            _selection("doc-a", "shared-unit", "exact source A"),
+            _selection("doc-b", "shared-unit", "exact source B"),
         ],
     )
 
@@ -943,9 +1013,9 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
         {
             "doc_id": "doc-a",
             "doc_title": "Policy A",
-            "unit_id": "unit-a",
+            "unit_id": "shared-unit",
             "unit_revision_id": _selection(
-                "doc-a", "unit-a", "exact source A"
+                "doc-a", "shared-unit", "exact source A"
             ).unit_revision_id,
             "path": ["Chapter A"],
             "status": "PENDING",
@@ -956,9 +1026,9 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
         {
             "doc_id": "doc-b",
             "doc_title": "Policy B",
-            "unit_id": "unit-b",
+            "unit_id": "shared-unit",
             "unit_revision_id": _selection(
-                "doc-b", "unit-b", "exact source B"
+                "doc-b", "shared-unit", "exact source B"
             ).unit_revision_id,
             "path": ["Chapter B"],
             "status": "PENDING",
@@ -978,20 +1048,20 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
         (selected.unit.doc_id, selected.unit.unit_id, selected.unit.source_text)
         for selected in call["units"]
     ] == [
-        ("doc-a", "unit-a", "exact source A"),
-        ("doc-b", "unit-b", "exact source B"),
+        ("doc-a", "shared-unit", "exact source A"),
+        ("doc-b", "shared-unit", "exact source B"),
     ]
     candidate = builder.results[0]
     assert [(item.doc_id, item.unit_id) for item in candidate.items] == [
-        ("doc-a", "unit-a"),
-        ("doc-b", "unit-b"),
+        ("doc-a", "shared-unit"),
+        ("doc-b", "shared-unit"),
     ]
     assert [
         (source.doc_id, source.unit_id, source.unit_revision_id)
         for source in candidate.source_units
     ] == [
-        ("doc-a", "unit-a", queued.units[0].unit_revision_id),
-        ("doc-b", "unit-b", queued.units[1].unit_revision_id),
+        ("doc-a", "shared-unit", queued.units[0].unit_revision_id),
+        ("doc-b", "shared-unit", queued.units[1].unit_revision_id),
     ]
     assert result.status == "WAITING_REVIEW"
     assert result.started_at == fixed_time
@@ -1002,11 +1072,11 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
     assert result.result_summary == candidate.summary
     assert [unit.status for unit in result.units] == ["BUILT", "BUILT"]
     assert [unit.candidate_result_ids for unit in result.units] == [
-        ["ci_doc-a_unit-a"],
-        ["ci_doc-b_unit-b"],
+        ["ci_doc-a_shared-unit"],
+        ["ci_doc-b_shared-unit"],
     ]
-    assert store.get_claim("doc-a", "unit-a") is not None
-    assert store.get_claim("doc-b", "unit-b") is not None
+    assert store.get_claim("doc-a", "shared-unit") is not None
+    assert store.get_claim("doc-b", "shared-unit") is not None
     assert store.get_claim("doc-a", "unit-excluded") is None
 
 
@@ -1176,7 +1246,8 @@ def test_create_task_build_failure_marks_failed_releases_claim_and_reraises() ->
     failed = store.inner.get("KB_build_failure")
     assert failed is not None
     assert failed.status == "FAILED"
-    assert failed.finished_at == fixed_time
+    assert failed.finished_at is not None
+    assert failed.finished_at.tzinfo is not None
     assert failed.processed_units == 0
     assert [unit.status for unit in failed.units] == ["FAILED"]
     assert [unit.error_code for unit in failed.units] == ["RuntimeError"]
@@ -1227,9 +1298,12 @@ def test_create_task_final_save_failure_attempts_failed_cleanup() -> None:
     )
     failure = RuntimeError("final save failed")
     store = _RecordingStore(final_save_failure=failure)
+    candidate_store = InMemoryChangeSetStore()
+    builder = ChangeSetService(object(), candidate_store)
     service, _workbench, _store, builder = _create_service(
         [_document("doc-1", "Policy", [source])],
         store=store,
+        builder=builder,
         task_id_factory=lambda: "KB_final_failure",
     )
 
@@ -1242,6 +1316,9 @@ def test_create_task_final_save_failure_attempts_failed_cleanup() -> None:
     failed = store.inner.get("KB_final_failure")
     assert failed is not None
     assert failed.status == "FAILED"
+    candidate = candidate_store.list()[0]
+    assert failed.result_change_set_id == candidate.change_set_id
+    assert candidate.status == "FAILED"
     assert [unit.error_code for unit in failed.units] == ["RuntimeError"]
     assert [unit.error_message for unit in failed.units] == [str(failure)]
     assert store.transitions == [
@@ -1251,4 +1328,185 @@ def test_create_task_final_save_failure_attempts_failed_cleanup() -> None:
         "FAILED",
     ]
     assert store.get_claim("doc-1", "unit-1") is None
-    assert len(builder.calls) == 1
+    with pytest.raises(ValueError):
+        builder.approve(candidate.change_set_id, "reviewer")
+
+
+def test_create_task_clock_failure_after_claim_uses_safe_failure_timestamp() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    initial_time = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+    clock_calls = 0
+
+    def failing_clock() -> datetime:
+        nonlocal clock_calls
+        clock_calls += 1
+        if clock_calls == 1:
+            return initial_time
+        raise RuntimeError("injected clock unavailable")
+
+    store = _RecordingStore()
+    service, _workbench, _store, builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        clock=failing_clock,
+        task_id_factory=lambda: "KB_clock_failure",
+    )
+
+    with pytest.raises(RuntimeError, match="injected clock unavailable") as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    failed = store.inner.get("KB_clock_failure")
+    assert failed is not None
+    assert failed.status == "FAILED"
+    assert failed.finished_at is not None
+    assert failed.finished_at.tzinfo is not None
+    assert [unit.error_message for unit in failed.units] == [str(exc_info.value)]
+    assert store.fail_and_release_calls == 1
+    assert store.get_claim("doc-1", "unit-1") is None
+    assert builder.calls == []
+
+
+def test_create_task_cas_conflict_uses_transactional_failure_cleanup() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    failure = KnowledgeBuildTaskVersionConflict("KB_cas_conflict")
+    store = _ConcurrentRunningSaveStore(failure)
+    service, _workbench, _store, builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        task_id_factory=lambda: "KB_cas_conflict",
+    )
+
+    with pytest.raises(KnowledgeBuildTaskVersionConflict) as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert exc_info.value is failure
+    failed = store.inner.get("KB_cas_conflict")
+    assert failed is not None
+    assert failed.status == "FAILED"
+    assert store.fail_and_release_calls == 1
+    assert store.get_claim("doc-1", "unit-1") is None
+    assert builder.calls == []
+
+
+def test_create_task_duplicate_id_preserves_existing_task_and_claim() -> None:
+    existing_unit = _unit(
+        doc_id="doc-old",
+        doc_title="Old Policy",
+        unit_id="old-unit",
+        source_text="old source",
+    )
+    new_unit = _unit(
+        doc_id="doc-new",
+        doc_title="New Policy",
+        unit_id="new-unit",
+        source_text="new source",
+    )
+    store = _RecordingStore()
+    _claim_task(
+        store=store.inner,
+        task_id="KB_duplicate",
+        unit=existing_unit,
+        status="QUEUED",
+    )
+    existing_before = store.inner.get("KB_duplicate")
+    claim_before = store.inner.get_claim("doc-old", "old-unit")
+    service, _workbench, _store, builder = _create_service(
+        [_document("doc-new", "New Policy", [new_unit])],
+        store=store,
+        task_id_factory=lambda: "KB_duplicate",
+    )
+
+    with pytest.raises(ValueError, match="KB_duplicate"):
+        service.create_task(
+            _request([_selection("doc-new", "new-unit", "new source")])
+        )
+
+    assert store.inner.get("KB_duplicate") == existing_before
+    assert store.inner.get_claim("doc-old", "old-unit") == claim_before
+    assert store.inner.get_claim("doc-new", "new-unit") is None
+    assert store.fail_and_release_calls == 0
+    assert builder.calls == []
+
+
+def test_candidate_invalidation_failure_preserves_original_exception_with_note() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    original = RuntimeError("final task save failed")
+    invalidation = RuntimeError("candidate invalidation failed")
+    store = _RecordingStore(final_save_failure=original)
+    candidate_store = InMemoryChangeSetStore()
+    actual_builder = ChangeSetService(object(), candidate_store)
+    builder = _FailingCandidateInvalidation(actual_builder, invalidation)
+    service, _workbench, _store, _builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        builder=builder,
+        task_id_factory=lambda: "KB_invalidation_failure",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert exc_info.value is original
+    assert any(
+        "candidate invalidation failed" in note
+        for note in getattr(original, "__notes__", [])
+    )
+    failed = store.inner.get("KB_invalidation_failure")
+    assert failed is not None
+    assert failed.status == "FAILED"
+    assert failed.result_change_set_id == candidate_store.list()[0].change_set_id
+    assert store.get_claim("doc-1", "unit-1") is None
+    assert candidate_store.list()[0].status == "PENDING_REVIEW"
+
+
+def test_failure_cleanup_error_preserves_original_exception_with_note() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    original = RuntimeError("candidate build failed")
+    cleanup = RuntimeError("transactional cleanup failed")
+    store = _FailingCompensationStore(cleanup)
+    builder = _ChangeSetOnlyBuilder(failure=original)
+    service, _workbench, _store, _builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        builder=builder,
+        task_id_factory=lambda: "KB_cleanup_failure",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert exc_info.value is original
+    assert any(
+        "transactional cleanup failed" in note
+        for note in getattr(original, "__notes__", [])
+    )
+    assert store.fail_and_release_calls == 1
+    assert store.get_claim("doc-1", "unit-1") is not None
