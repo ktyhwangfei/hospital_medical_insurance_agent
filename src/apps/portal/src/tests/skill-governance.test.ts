@@ -4,6 +4,7 @@ import {
   activateSkillRelease,
   createSkillEvalRun,
   createSkillRelease,
+  listSkillReleases,
 } from '@/lib/api-client'
 
 
@@ -65,5 +66,25 @@ describe('Skill governance API client', () => {
     expect(new Headers(candidateInit.headers).get('Idempotency-Key')).toBe('candidate-key')
     expect(new Headers(activateInit.headers).get('Idempotency-Key')).toBe('activate-key')
     expect(JSON.parse(String(activateInit.body))).toEqual({ expected_revision: 3 })
+  })
+
+  it('reads the non-sensitive approval summary from releases', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      items: [{
+        release_id: 'release-1',
+        approval: {
+          approved_by: 'information-admin',
+          approver_role: 'information_department',
+          approved_at: '2026-08-05T06:00:00Z',
+        },
+      }],
+      total: 1,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await listSkillReleases('demo/skill')
+
+    expect(response.items[0].approval?.approved_by).toBe('information-admin')
+    expect(response.items[0].approval).not.toHaveProperty('reason')
   })
 })

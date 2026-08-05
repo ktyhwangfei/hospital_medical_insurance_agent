@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  getSkillGovernanceWorkbench,
   listInfraSkillCatalog,
   listInfraSkillVersions,
   syncInfraSkillVersion,
@@ -68,6 +69,34 @@ describe('Skill catalog API client', () => {
 
     expect(fetchMock.mock.calls[0][0]).toBe(
       '/api/v1/medical-insurance-ai-agent/infra-skills/demo%20skill/versions',
+    )
+  })
+
+  it('requests the governance workbench with URL-safe filters', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      summary: {
+        total: 0,
+        healthy: 0,
+        needs_evaluation: 0,
+        pending_approval: 0,
+        test_active: 0,
+        updated_at: '2026-08-05T06:00:00Z',
+      },
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 50,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getSkillGovernanceWorkbench({
+      query: '结算 skill',
+      governance_status: 'needs_evaluation',
+      business_action: 'explain',
+    })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/v1/medical-insurance-ai-agent/infra-skills/workbench?business_action=explain&governance_status=needs_evaluation&query=%E7%BB%93%E7%AE%97+skill',
     )
   })
 })

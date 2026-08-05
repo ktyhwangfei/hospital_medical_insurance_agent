@@ -28,6 +28,14 @@ export interface InfraSkillCatalogFilter extends InfraSkillsFilter {
   query?: string
 }
 
+export interface SkillWorkbenchFilter extends InfraSkillsFilter {
+  page?: number
+  page_size?: number
+  artifact_status?: string
+  governance_status?: SkillGovernanceStatus
+  query?: string
+}
+
 export async function getInfraSkillsOverview(): Promise<InfraSkillOverviewResponse> {
   return requestJson<InfraSkillOverviewResponse>('/infra-skills/overview')
 }
@@ -49,6 +57,23 @@ export async function listInfraSkillCatalog(
   const query = params.toString()
   return requestJson<InfraSkillCatalogResponse>(
     `/infra-skills/catalog${query ? `?${query}` : ''}`,
+  )
+}
+
+export async function getSkillGovernanceWorkbench(
+  filter: SkillWorkbenchFilter = {},
+): Promise<SkillWorkbenchResponse> {
+  const params = new URLSearchParams()
+  if (filter.page) params.set('page', String(filter.page))
+  if (filter.page_size) params.set('page_size', String(filter.page_size))
+  if (filter.business_action) params.set('business_action', filter.business_action)
+  if (filter.business_object) params.set('business_object', filter.business_object)
+  if (filter.artifact_status) params.set('artifact_status', filter.artifact_status)
+  if (filter.governance_status) params.set('governance_status', filter.governance_status)
+  if (filter.query) params.set('query', filter.query)
+  const query = params.toString()
+  return requestJson<SkillWorkbenchResponse>(
+    `/infra-skills/workbench${query ? `?${query}` : ''}`,
   )
 }
 
@@ -280,11 +305,13 @@ import type {
   SkillEvalRunCreateRequest,
   SkillEvalRunListResponse,
   SkillEvalRunResponse,
+  SkillGovernanceStatus,
   SkillReleaseApproveRequest,
   SkillReleaseCreateRequest,
   SkillReleaseListResponse,
   SkillReleaseResponse,
   SkillReleaseTransitionRequest,
+  SkillWorkbenchResponse,
   SkillRouteTestRequest,
   SkillRouteTestResponse,
   SkillExecuteTestRequest,

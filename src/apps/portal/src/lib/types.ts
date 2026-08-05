@@ -344,6 +344,52 @@ export interface InfraSkillCatalogResponse {
   total: number
 }
 
+export type SkillGovernanceStatus =
+  | 'gate_failed'
+  | 'pending_approval'
+  | 'needs_evaluation'
+  | 'artifact_changed'
+  | 'healthy'
+
+export type SkillWorkbenchTab =
+  | 'overview'
+  | 'versions'
+  | 'evaluation'
+  | 'release'
+  | 'development'
+
+export interface SkillWorkbenchSummary {
+  total: number
+  healthy: number
+  needs_evaluation: number
+  pending_approval: number
+  test_active: number
+  updated_at: string
+}
+
+export interface SkillWorkbenchItem {
+  skill_id: string
+  skill_name: string
+  business_action: string
+  business_object: string
+  semantic_version: string
+  artifact_status: 'registered' | 'changed' | 'unregistered'
+  validation_status: 'pending' | 'passed' | 'failed'
+  latest_eval_status: SkillEvalRunResponse['status'] | null
+  test_release_status: SkillReleaseResponse['status'] | null
+  test_active_version: string | null
+  governance_status: SkillGovernanceStatus
+  attention_reason: string | null
+}
+
+export interface SkillWorkbenchResponse {
+  summary: SkillWorkbenchSummary
+  items: SkillWorkbenchItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface SkillVersionSyncRequest {
   source_commit?: string
   created_by: string
@@ -454,6 +500,13 @@ export interface SkillReleaseResponse {
   created_at: string
   activated_at?: string | null
   retired_at?: string | null
+  approval?: SkillReleaseApprovalSummary | null
+}
+
+export interface SkillReleaseApprovalSummary {
+  approved_by: string
+  approver_role: string
+  approved_at: string
 }
 
 export interface SkillReleaseListResponse {
