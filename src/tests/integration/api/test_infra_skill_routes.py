@@ -377,6 +377,12 @@ def test_eval_and_manual_approval_are_required_for_test_activation(
     assert active.json()["status"] == "active"
     assert active.json()["runtime_mode"] == "shadow"
     assert sum(item["status"] == "active" for item in releases.json()["items"]) == 1
+    active_item = next(
+        item for item in releases.json()["items"] if item["status"] == "active"
+    )
+    assert active_item["approval"]["approved_by"] == "information-admin"
+    assert active_item["approval"]["approver_role"] == "information_department"
+    assert "reason" not in active_item["approval"]
 
 
 def test_sensitive_eval_case_is_rejected(client: TestClient) -> None:

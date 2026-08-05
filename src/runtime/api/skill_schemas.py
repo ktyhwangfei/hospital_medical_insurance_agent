@@ -120,6 +120,44 @@ class SkillReleaseApproveRequest(SkillReleaseTransitionRequest):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class SkillWorkbenchSummaryResponse(BaseModel):
+    total: int
+    healthy: int
+    needs_evaluation: int
+    pending_approval: int
+    test_active: int
+    updated_at: datetime
+
+
+class SkillWorkbenchItemResponse(BaseModel):
+    skill_id: str
+    skill_name: str
+    business_action: str
+    business_object: str
+    semantic_version: str
+    artifact_status: str
+    validation_status: str
+    latest_eval_status: str | None
+    test_release_status: str | None
+    test_active_version: str | None
+    governance_status: str
+    attention_reason: str | None
+
+
+class SkillWorkbenchResponse(BaseModel):
+    summary: SkillWorkbenchSummaryResponse
+    items: list[SkillWorkbenchItemResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class SkillReleaseApprovalSummaryResponse(BaseModel):
+    approved_by: str
+    approver_role: str
+    approved_at: datetime
+
+
 class SkillReleaseResponse(BaseModel):
     release_id: str
     skill_id: str
@@ -137,6 +175,7 @@ class SkillReleaseResponse(BaseModel):
     created_at: datetime
     activated_at: datetime | None
     retired_at: datetime | None
+    approval: SkillReleaseApprovalSummaryResponse | None = None
 
 
 class SkillReleaseListResponse(BaseModel):

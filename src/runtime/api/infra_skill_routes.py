@@ -51,6 +51,10 @@ from src.runtime.skill_management.governance_service import (
     SkillGovernanceGateError,
     SkillGovernanceService,
 )
+from src.runtime.skill_management.workbench_service import (
+    SkillGovernanceStatus,
+    SkillWorkbenchService,
+)
 from src.domain.skill.governance_models import SkillRelease
 from src.runtime.api.skill_schemas import (
     SkillEvalCaseCreateRequest,
@@ -61,10 +65,12 @@ from src.runtime.api.skill_schemas import (
     SkillEvalRunListResponse,
     SkillEvalRunResponse,
     SkillReleaseApproveRequest,
+    SkillReleaseApprovalSummaryResponse,
     SkillReleaseCreateRequest,
     SkillReleaseListResponse,
     SkillReleaseResponse,
     SkillReleaseTransitionRequest,
+    SkillWorkbenchResponse,
 )
 from src.shared.schemas.responses import error_detail
 from src.gateway.auth import AuthStatus, authenticator
@@ -99,6 +105,18 @@ def get_skill_governance_service() -> SkillGovernanceService:
 
 SkillGovernanceServiceDependency = Annotated[
     SkillGovernanceService, Depends(get_skill_governance_service)
+]
+
+
+def get_skill_workbench_service(
+    version_service: SkillVersionServiceDependency,
+    governance_service: SkillGovernanceServiceDependency,
+) -> SkillWorkbenchService:
+    return SkillWorkbenchService(version_service, governance_service)
+
+
+SkillWorkbenchServiceDependency = Annotated[
+    SkillWorkbenchService, Depends(get_skill_workbench_service)
 ]
 
 
@@ -381,6 +399,29 @@ def list_infra_skill_catalog(
     return InfraSkillCatalogResponse.model_validate(catalog.model_dump())
 
 
+@router.get("/infra-skills/workbench", response_model=SkillWorkbenchResponse)
+def get_infra_skill_workbench(
+    service: SkillWorkbenchServiceDependency,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    business_action: str = Query(default=""),
+    business_object: str = Query(default=""),
+    artifact_status: str = Query(default=""),
+    governance_status: SkillGovernanceStatus | None = Query(default=None),
+    query: str = Query(default="", max_length=128),
+) -> SkillWorkbenchResponse:
+    workbench = service.list_workbench(
+        page=page,
+        page_size=page_size,
+        business_action=business_action,
+        business_object=business_object,
+        artifact_status=artifact_status,
+        governance_status=governance_status,
+        query=query,
+    )
+    return SkillWorkbenchResponse.model_validate(workbench.model_dump())
+
+
 def _governance_error(exc: Exception) -> HTTPException:
     if isinstance(exc, SkillGovernanceNotFoundError):
         return HTTPException(
@@ -528,9 +569,24 @@ def list_skill_releases(
 ) -> SkillReleaseListResponse:
     releases = service.list_releases(skill_id, environment)
     return SkillReleaseListResponse(
-        items=[SkillReleaseResponse.model_validate(item.model_dump()) for item in releases],
+        items=[_release_response(service, item) for item in releases],
         total=len(releases),
     )
+
+
+def _release_response(
+    service: SkillGovernanceService,
+    release: SkillRelease | SkillReleaseResponse,
+) -> SkillReleaseResponse:
+    approval = service.get_release_approval(release.release_id)
+    payload = release.model_dump()
+    if approval is not None:
+        payload["approval"] = SkillReleaseApprovalSummaryResponse(
+            approved_by=approval.approved_by,
+            approver_role=approval.approver_role,
+            approved_at=approval.approved_at,
+        )
+    return SkillReleaseResponse.model_validate(payload)
 
 
 @router.post(
@@ -549,7 +605,7 @@ def create_skill_release(
     scope = f"{skill_id}:candidate"
     release_id = _idempotent_release_id(scope, idempotency_key)
     try:
-        return _idempotent_release_mutation(
+        release = _idempotent_release_mutation(
             store=idempotency_store,
             scope=scope,
             idempotency_key=idempotency_key,
@@ -570,6 +626,7 @@ def create_skill_release(
                 release_id=release_id,
             ),
         )
+        return _release_response(service, release)
     except (
         SkillGovernanceConflictError,
         SkillGovernanceGateError,
@@ -592,7 +649,7 @@ def request_skill_release_approval(
     idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        return _idempotent_release_mutation(
+        release = _idempotent_release_mutation(
             store=idempotency_store,
             scope=f"{skill_id}:{release_id}:request-approval",
             idempotency_key=idempotency_key,
@@ -608,6 +665,7 @@ def request_skill_release_approval(
                 expected_revision=request.expected_revision,
             ),
         )
+        return _release_response(service, release)
     except (
         SkillGovernanceConflictError,
         SkillGovernanceGateError,
@@ -630,7 +688,7 @@ def approve_skill_release(
     idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        return _idempotent_release_mutation(
+        release = _idempotent_release_mutation(
             store=idempotency_store,
             scope=f"{skill_id}:{release_id}:approve",
             idempotency_key=idempotency_key,
@@ -654,6 +712,7 @@ def approve_skill_release(
                 expected_revision=request.expected_revision,
             ),
         )
+        return _release_response(service, release)
     except (
         SkillGovernanceConflictError,
         SkillGovernanceGateError,
@@ -676,7 +735,7 @@ def activate_skill_release(
     idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        return _idempotent_release_mutation(
+        release = _idempotent_release_mutation(
             store=idempotency_store,
             scope=f"{skill_id}:{release_id}:activate",
             idempotency_key=idempotency_key,
@@ -692,6 +751,7 @@ def activate_skill_release(
                 expected_revision=request.expected_revision,
             ),
         )
+        return _release_response(service, release)
     except (
         SkillGovernanceConflictError,
         SkillGovernanceGateError,
