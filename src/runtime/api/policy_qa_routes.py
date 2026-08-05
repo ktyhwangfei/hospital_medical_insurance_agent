@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time as _time
 from collections.abc import AsyncGenerator
@@ -46,6 +47,7 @@ from src.runtime.policy_qa.persistence import (
     finalize_workflow,
 )
 from src.runtime.infra_event.context import set_infra_context
+from src.shared.schemas.responses import error_detail
 
 logger = logging.getLogger(__name__)
 
@@ -125,16 +127,51 @@ _PUBLIC_AMOUNT_FIELDS = frozenset({
     "personal_total_pay",
     "total_amount",
 })
-_INTERNAL_TABLE_PATTERN = re.compile(r"\byb_[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?\b", re.IGNORECASE)
+_INTERNAL_TABLE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])yb_[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_INTERNAL_IDENTIFIER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:bdtczf|bcqfje|basic_pooling_self_pay|"
+    r"sql_profile|tables_queried|query_trace|raw_sql)(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_SQL_STATEMENT_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:select|insert|update|delete)(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
 
 
 def _public_text(value: Any) -> str:
     """移除公开文案中的内部表名和存储实现名称。"""
     text = str(value or "").strip()
-    if re.search(r"\b(select|insert|update|delete)\b", text, flags=re.IGNORECASE):
+    if _SQL_STATEMENT_PATTERN.search(text):
         return "内部查询细节已隐藏。"
     text = _INTERNAL_TABLE_PATTERN.sub("结算数据字段", text)
-    return re.sub(r"\bMilvus\s+policy_rules\b", "政策知识库", text, flags=re.IGNORECASE)
+    text = _INTERNAL_IDENTIFIER_PATTERN.sub("内部字段", text)
+    return re.sub(
+        r"(?<![A-Za-z0-9_])Milvus\s+policy_rules(?![A-Za-z0-9_])",
+        "政策知识库",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def _answerability_from_completeness(
+    completeness: dict | None,
+    warnings: list[str] | None,
+) -> tuple[bool, bool]:
+    """只依据策略执行元数据判断是否可回答，避免把非空文案当作事实状态。"""
+    completeness = completeness if isinstance(completeness, dict) else {}
+    level = str(completeness.get("level") or "")
+    has_real_data = completeness.get("has_real_data") is True
+    safety_fallback = any(
+        "未通过安全校验" in str(warning)
+        for warning in warnings or []
+    )
+    can_answer = has_real_data and not safety_fallback
+    partial_answer = can_answer and not level.startswith("full_policy")
+    return can_answer, partial_answer
 
 
 def _build_public_result(
@@ -148,6 +185,7 @@ def _build_public_result(
     definition: dict | None,
     warnings: list[str],
     case_context: dict | None,
+    is_overview: bool = False,
 ) -> PolicyQAPublicResult:
     """用字段白名单把内部执行结果重建为唯一公开回答契约。"""
     safe_context = None
@@ -192,26 +230,32 @@ def _build_public_result(
     for evidence in policy_evidence or []:
         if not isinstance(evidence, dict):
             continue
-        excerpt = _public_text(
+        raw_excerpt = (
             evidence.get("excerpt")
             or evidence.get("clause")
             or evidence.get("clause_text")
             or evidence.get("evidence_text")
             or evidence.get("source_text")
         )
+        if _SQL_STATEMENT_PATTERN.search(str(raw_excerpt or "")):
+            continue
+        excerpt = _public_text(raw_excerpt)
         if not excerpt:
             continue
         title = _public_text(evidence.get("title") or evidence.get("policy_title") or "政策依据")
+        citation_key = (title, excerpt)
+        if citation_key in seen_citations:
+            continue
         score = evidence.get("score")
         try:
             public_score = float(score) if score is not None and not isinstance(score, bool) else None
         except (TypeError, ValueError):
             public_score = None
+        if public_score is not None and not math.isfinite(public_score):
+            public_score = None
         safe_evidence.append({"title": title, "excerpt": excerpt, "score": public_score})
-        citation_key = (title, excerpt)
-        if citation_key not in seen_citations:
-            citations.append(PolicyCitation(title=title, excerpt=excerpt))
-            seen_citations.add(citation_key)
+        citations.append(PolicyCitation(title=title, excerpt=excerpt))
+        seen_citations.add(citation_key)
 
     safe_answer = _public_text(answer)
     has_real_amount = bool(safe_context) and any(
@@ -220,7 +264,18 @@ def _build_public_result(
         and not isinstance(safe_context[key], bool)
         for key in _PUBLIC_AMOUNT_FIELDS
     )
-    if safe_answer and can_answer and policy_status == "full_policy_matched":
+    calculation_checked = bool(safe_steps)
+    policy_count = len(safe_evidence)
+    if is_overview and safe_answer and can_answer and has_real_amount:
+        answer_status = "complete"
+    elif (
+        safe_answer
+        and can_answer
+        and has_real_amount
+        and calculation_checked
+        and policy_status == "full_policy_matched"
+        and policy_count > 0
+    ):
         answer_status = "complete"
     elif safe_answer and (partial_answer or (can_answer and has_real_amount)):
         answer_status = "partial"
@@ -229,7 +284,9 @@ def _build_public_result(
         safe_answer = safe_answer or "当前信息不足，无法可靠回答该问题。"
 
     uncertainties: list[str] = []
-    if not citations:
+    if is_overview:
+        uncertainties.append("费用总览不涉及单项政策匹配或单项计算过程核验。")
+    elif not citations:
         uncertainties.append("未检索到可展示的政策依据。")
     if answer_status == "partial":
         uncertainties.append("政策依据不完整，当前回答仅供核对真实结算金额。")
@@ -237,7 +294,11 @@ def _build_public_result(
         uncertainties.append("现有结算数据和政策依据不足以形成可靠结论。")
 
     verification_messages = {
-        "complete": "结算金额、计算过程和政策依据已完成核对。",
+        "complete": (
+            "真实结算金额已完成核对；费用总览不涉及单项政策或计算过程核验。"
+            if is_overview
+            else "结算金额、计算过程和政策依据已完成核对。"
+        ),
         "partial": "已核对结算金额，但政策依据或计算过程仍不完整。",
         "unavailable": "现有信息不足，未形成可靠核对结论。",
     }
@@ -253,8 +314,8 @@ def _build_public_result(
         uncertainties=uncertainties,
         verification_summary=VerificationSummary(
             settlement_checked=has_real_amount,
-            calculation_checked=bool(safe_steps),
-            policy_count=len(safe_evidence),
+            calculation_checked=calculation_checked,
+            policy_count=policy_count,
             message=verification_messages[answer_status],
         ),
     )
@@ -492,6 +553,11 @@ async def _policy_qa_stream(
         _warnings: list[str] = []
         _case_context: dict | None = None
         if _single_skill_result is not None:
+            policy_status = _single_skill_result.policy_status or policy_status
+            trace_can_answer, trace_partial_answer = _answerability_from_completeness(
+                _single_skill_result.explanation_completeness,
+                _single_skill_result.warnings,
+            )
             _trace = _single_skill_result.calculation_trace or {}
             _calc_steps = _trace.get("steps", []) if isinstance(_trace, dict) else []
             _definition = _single_skill_result.definition or None
@@ -509,6 +575,8 @@ async def _policy_qa_stream(
                 "personal_total_pay": getattr(settlement_context, "personal_total_pay", None),
             }
         elif overview_payload is not None:
+            trace_can_answer = True
+            trace_partial_answer = False
             _trace = overview_payload.get("calculation_trace") or {}
             _calc_steps = _trace.get("steps", []) if isinstance(_trace, dict) else []
             _definition = overview_payload.get("definition") or None
@@ -528,6 +596,7 @@ async def _policy_qa_stream(
             definition=_definition,
             warnings=_warnings,
             case_context=_case_context,
+            is_overview=_is_overview,
         )
         # Runtime 仍在服务端维护推理链与对话记忆，但不把内部推理快照并入公开结果。
         runtime_bridge.finalize_turn(
@@ -549,7 +618,7 @@ async def _policy_qa_stream(
                 output_data={
                     "answer_excerpt": public_result.answer[:500],
                     "answer_status": public_result.answer_status,
-                    "evidence_count": len(result_policy_evidence),
+                    "evidence_count": len(public_result.policy_evidence),
                     "internal_run_id": trace_run_id,
                 },
                 duration_ms=duration_ms,
@@ -558,7 +627,10 @@ async def _policy_qa_stream(
         except Exception as e:
             logger.warning(f"Failed to persist QA result: {e}")
 
-        yield _sse_event("done", {"answer_status": public_result.answer_status})
+        yield _sse_event(
+            "done",
+            {"answer_status": public_result.answer_status, "success": True},
+        )
 
     except Exception as e:
         print(f'[POLICY-QA] 处理异常: {e}', flush=True)
@@ -583,8 +655,22 @@ async def _policy_qa_stream(
         except Exception as pe:
             logger.warning(f"Failed to persist error state: {pe}")
 
-        yield _sse_event("error", {"message": "政策问答处理失败，请稍后重试或联系医保办。"})
-        yield _sse_event("done", {})
+        error_code = "POLICY_QA_FAILED"
+        yield _sse_event(
+            "error",
+            {
+                "error_code": error_code,
+                "message": "政策问答处理失败，请稍后重试或联系医保办。",
+            },
+        )
+        yield _sse_event(
+            "done",
+            {
+                "answer_status": "unavailable",
+                "success": False,
+                "error_code": error_code,
+            },
+        )
 
 
 @router.post("/stream")
@@ -951,6 +1037,9 @@ def _build_overview_payload(context: Any, question: str, skill_id: str, assemble
             "message": "总览基于真实结算字段汇总。",
             "has_real_data": True,
         },
+        "can_answer": True,
+        "partial_answer": False,
+        "is_overview": True,
         "warnings": [
             "本结果来自真实数据库查询。",
             "如需某一项的详细政策计算过程，请针对该单项提问。",
@@ -1093,6 +1182,10 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
     output_groups = _display["output_groups"]
     display_config = _display["display_config"]
 
+    can_answer, partial_answer = _answerability_from_completeness(
+        skill_result.explanation_completeness,
+        skill_result.warnings,
+    )
     return {
         "question": question or f'{assembler._get_fee_label(target_fee_item)}为什么是{_fmt_money(assembler._get_fee_amount(context, target_fee_item))}？',
         "answer_type": "benefit_calculation_explanation",
@@ -1127,6 +1220,9 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
         "answer": skill_result.answer,
         "ratio_explanation": skill_result.ratio_explanation,
         "explanation_completeness": skill_result.explanation_completeness,
+        "can_answer": can_answer,
+        "partial_answer": partial_answer,
+        "is_overview": False,
         "warnings": skill_result.warnings,
         "mode": "single",
         "profile": profile,
@@ -1140,16 +1236,25 @@ def _public_result_from_internal_payload(payload: dict) -> PolicyQAPublicResult:
     trace = payload.get("calculation_trace") or {}
     steps = trace.get("steps", []) if isinstance(trace, dict) else []
     answer = str(payload.get("answer") or "")
+    if "can_answer" in payload or "partial_answer" in payload:
+        can_answer = payload.get("can_answer") is True
+        partial_answer = payload.get("partial_answer") is True
+    else:
+        can_answer, partial_answer = _answerability_from_completeness(
+            payload.get("explanation_completeness"),
+            payload.get("warnings"),
+        )
     return _build_public_result(
         answer=answer,
-        can_answer=bool(answer),
-        partial_answer=False,
+        can_answer=can_answer,
+        partial_answer=partial_answer,
         policy_status=str(payload.get("policy_status") or "no_policy_matched"),
         policy_evidence=payload.get("policy_evidence") or [],
         calculation_steps=steps,
         definition=payload.get("definition"),
         warnings=payload.get("warnings") or [],
         case_context=payload.get("case_context"),
+        is_overview=payload.get("is_overview") is True,
     )
 
 
@@ -1218,17 +1323,45 @@ async def get_settlement_explanation(
             "warnings": (primary.get("warnings") or [])
             + (secondary.get("warnings") or [])
             + ["对比结果已合并为单一公开回答。"],
+            "can_answer": primary.get("can_answer") is True
+            and secondary.get("can_answer") is True,
+            "partial_answer": primary.get("partial_answer") is True
+            or secondary.get("partial_answer") is True,
+            "is_overview": primary.get("is_overview") is True
+            and secondary.get("is_overview") is True,
         }
         return _public_result_from_internal_payload(combined)
 
-    except SettlementNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except RuntimeError as e:
+    except SettlementNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "POLICY_QA_SETTLEMENT_NOT_FOUND",
+                "未找到对应的结算记录。",
+                {"operation": "settlement_explanation"},
+            ),
+        )
+    except RuntimeError:
         # Raised when DATA_SOURCE_MODE != "real_db"
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
+        logger.exception("Settlement explanation runtime failure")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_UNAVAILABLE",
+                "政策问答服务暂时不可用，请稍后重试。",
+                {"operation": "settlement_explanation"},
+            ),
+        )
+    except Exception:
         logger.exception("Settlement explanation query failed")
-        raise HTTPException(status_code=503, detail=f'真实数据库查询失败: {str(e)}')
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_UNAVAILABLE",
+                "政策问答服务暂时不可用，请稍后重试。",
+                {"operation": "settlement_explanation"},
+            ),
+        )
 
 
 # ── 问答历史端点 ──────────────────────────────────────────────

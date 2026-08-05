@@ -1,48 +1,285 @@
 """政策问答统筹自付样板链路 Flow 测试。"""
 
+from copy import deepcopy
+
 import pytest
+from pydantic import ValidationError
+
+
+def _valid_public_result_payload() -> dict:
+    return {
+        "answer": "统筹自付解释",
+        "answer_status": "complete",
+        "case_context": {
+            "person_type": "退休人员",
+            "basic_pooling_self_pay": 4962.67,
+        },
+        "calculation_steps": [
+            {"step_name": "分段计算", "description": "按政策区间核对"},
+        ],
+        "definition": {
+            "name": "统筹自付",
+            "plain_text": "个人按政策承担的部分。",
+            "excludes": ["起付线"],
+        },
+        "warnings": [],
+        "policy_evidence": [
+            {"title": "职工医保住院待遇政策", "excerpt": "按规定比例承担。", "score": 0.98},
+        ],
+        "citations": [
+            {"title": "职工医保住院待遇政策", "excerpt": "按规定比例承担。"},
+        ],
+        "uncertainties": [],
+        "verification_summary": {
+            "settlement_checked": True,
+            "calculation_checked": True,
+            "policy_count": 1,
+            "message": "已完成核对。",
+        },
+    }
 
 
 @pytest.mark.parametrize(
-    ("can_answer", "partial_answer", "policy_status", "expected_status"),
+    ("field", "extra_key", "extra_value"),
     [
-        (True, False, "full_policy_matched", "complete"),
-        (True, False, "partial_policy_matched", "partial"),
-        (False, False, "no_policy_matched", "unavailable"),
+        ("case_context", "query_trace", {"sql": "SELECT * FROM yb_zyfdxx"}),
+        ("calculation_steps", "raw_sql", "SELECT * FROM yb_zyfdxx"),
+        ("definition", "raw_field", "bdtczf"),
+        ("policy_evidence", "query_trace", {"sql_profile": "settlement_context"}),
     ],
 )
-def test_public_result_status_and_evidence_whitelist(
-    can_answer, partial_answer, policy_status, expected_status
+def test_public_contract_forbids_nested_internal_fields(field, extra_key, extra_value):
+    from src.runtime.policy_qa.public_contract import PolicyQAPublicResult
+
+    payload = deepcopy(_valid_public_result_payload())
+    target = payload[field][0] if isinstance(payload[field], list) else payload[field]
+    target[extra_key] = extra_value
+
+    with pytest.raises(ValidationError):
+        PolicyQAPublicResult.model_validate(payload)
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), float("-inf")])
+def test_public_contract_rejects_non_finite_policy_score(score):
+    from src.runtime.policy_qa.public_contract import PolicyQAPublicResult
+
+    payload = _valid_public_result_payload()
+    payload["policy_evidence"][0]["score"] = score
+
+    with pytest.raises(ValidationError):
+        PolicyQAPublicResult.model_validate(payload)
+
+
+def test_public_contract_accepts_valid_nested_result():
+    from src.runtime.policy_qa.public_contract import PolicyQAPublicResult
+
+    result = PolicyQAPublicResult.model_validate(_valid_public_result_payload())
+
+    assert result.case_context.basic_pooling_self_pay == 4962.67
+    assert result.calculation_steps[0].step_name == "分段计算"
+    assert result.policy_evidence[0].score == 0.98
+
+
+@pytest.mark.parametrize(
+    (
+        "can_answer",
+        "partial_answer",
+        "policy_status",
+        "real_case_data",
+        "public_evidence",
+        "has_calculation",
+        "expected_status",
+    ),
+    [
+        (True, False, "full_policy_matched", True, "valid", True, "complete"),
+        (True, False, "full_policy_matched", True, "valid", False, "partial"),
+        (True, False, "full_policy_matched", True, "none", True, "partial"),
+        (True, False, "full_policy_matched", True, "internal", True, "partial"),
+        (False, False, "full_policy_matched", True, "valid", True, "unavailable"),
+        (True, False, "full_policy_matched", False, "valid", True, "unavailable"),
+        (False, True, "partial_policy_matched", True, "valid", True, "partial"),
+        (False, False, "no_policy_matched", False, "none", False, "unavailable"),
+    ],
+)
+def test_public_result_status_and_verification_truth_table(
+    can_answer,
+    partial_answer,
+    policy_status,
+    real_case_data,
+    public_evidence,
+    has_calculation,
+    expected_status,
 ):
     from src.runtime.api.policy_qa_routes import _build_public_result
 
-    result = _build_public_result(
-        answer="统筹自付解释" if can_answer else "当前信息不足，无法可靠解释该费用。",
-        can_answer=can_answer,
-        partial_answer=partial_answer,
-        policy_status=policy_status,
-        policy_evidence=[
+    evidence_by_kind = {
+        "valid": [
             {
                 "title": "职工医保住院待遇政策",
                 "clause": "起付线以上部分按规定比例由个人承担。",
                 "score": 0.98,
-                "query_trace": {"sql": "select * from yb_zyfdxx"},
-                "raw_sql": "select * from yb_dyxxzy",
-                "rule_id": "internal-rule-id",
             }
         ],
-        calculation_steps=[{"label": "统筹自付", "formula": "按政策区间分段计算"}],
+        "internal": [
+            {
+                "title": "SQL_PROFILE",
+                "clause": "SELECT * FROM yb_zyfdxx",
+                "score": 0.98,
+            }
+        ],
+        "none": [],
+    }
+    result = _build_public_result(
+        answer=(
+            "统筹自付解释"
+            if can_answer or partial_answer
+            else "当前信息不足，无法可靠解释该费用。"
+        ),
+        can_answer=can_answer,
+        partial_answer=partial_answer,
+        policy_status=policy_status,
+        policy_evidence=evidence_by_kind[public_evidence],
+        calculation_steps=(
+            [{"label": "统筹自付", "formula": "按政策区间分段计算"}]
+            if has_calculation
+            else []
+        ),
         definition={"name": "统筹自付", "plain_text": "个人按政策承担的部分。"},
         warnings=[],
-        case_context={"settlement_id": "1671213", "basic_pooling_self_pay": 4962.67},
+        case_context={"basic_pooling_self_pay": 0.0} if real_case_data else None,
     )
 
     assert result.answer_status == expected_status
     assert result.citations or result.uncertainties
-    dumped = result.model_dump(mode="json")
-    assert set(dumped["policy_evidence"][0]) == {"title", "excerpt", "score"}
-    assert "yb_zyfdxx" not in str(dumped)
-    assert "yb_dyxxzy" not in str(dumped)
+    assert result.verification_summary.settlement_checked is real_case_data
+    assert result.verification_summary.calculation_checked is has_calculation
+    assert result.verification_summary.policy_count == (1 if public_evidence == "valid" else 0)
+    if expected_status == "complete":
+        assert "已完成核对" in result.verification_summary.message
+    elif expected_status == "partial":
+        assert "不完整" in result.verification_summary.message
+    else:
+        assert "不足" in result.verification_summary.message
+
+
+def test_overview_result_is_complete_without_claiming_policy_or_calculation_verification():
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    result = _build_public_result(
+        answer="本次住院费用构成总览。",
+        can_answer=True,
+        partial_answer=False,
+        policy_status="no_policy_matched",
+        policy_evidence=[],
+        calculation_steps=[],
+        definition={"name": "住院费用构成", "plain_text": "真实结算金额汇总。"},
+        warnings=[],
+        case_context={"total_amount": 0.0},
+        is_overview=True,
+    )
+
+    assert result.answer_status == "complete"
+    assert result.verification_summary.settlement_checked is True
+    assert result.verification_summary.calculation_checked is False
+    assert result.verification_summary.policy_count == 0
+    assert "不涉及单项政策" in result.verification_summary.message
+    assert result.uncertainties
+
+
+@pytest.mark.parametrize(
+    ("location", "unsafe_text", "forbidden_token"),
+    [
+        ("answer", "说明来源yb_zyfdxx。", "yb_zyfdxx"),
+        ("warning", "请查YB_DYXXZY!", "yb_dyxxzy"),
+        ("calculation", "金额来自bdtczf，", "bdtczf"),
+        ("calculation", "起付线来自BCQFJE。", "bcqfje"),
+        ("answer", "内部basic_pooling_self_pay。", "basic_pooling_self_pay"),
+        ("warning", "使用sql_profile配置。", "sql_profile"),
+        ("evidence", "tables_queried列表。", "tables_queried"),
+    ],
+)
+def test_public_text_sanitizer_handles_chinese_ascii_boundaries(
+    location, unsafe_text, forbidden_token
+):
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    kwargs = {
+        "answer": "正常政策解释。",
+        "can_answer": True,
+        "partial_answer": False,
+        "policy_status": "full_policy_matched",
+        "policy_evidence": [
+            {"title": "医保政策", "clause": "按规定比例承担。", "score": 0.9},
+        ],
+        "calculation_steps": [{"step_name": "核对", "description": "按比例计算。"}],
+        "definition": {"name": "统筹自付", "plain_text": "个人承担部分。"},
+        "warnings": [],
+        "case_context": {"basic_pooling_self_pay": 0.0},
+    }
+    if location == "answer":
+        kwargs["answer"] = unsafe_text
+    elif location == "warning":
+        kwargs["warnings"] = [unsafe_text]
+    elif location == "calculation":
+        kwargs["calculation_steps"] = [{"step_name": "核对", "description": unsafe_text}]
+    else:
+        kwargs["policy_evidence"] = [
+            {"title": "医保政策", "clause": unsafe_text, "score": 0.9},
+        ]
+
+    result = _build_public_result(**kwargs)
+    if location == "answer":
+        public_text = result.answer
+    elif location == "warning":
+        public_text = result.warnings[0]
+    elif location == "calculation":
+        public_text = result.calculation_steps[0].description
+    else:
+        public_text = result.policy_evidence[0].excerpt
+
+    assert forbidden_token not in public_text.casefold()
+
+
+def test_internal_only_evidence_is_dropped_instead_of_becoming_placeholder_citation():
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    result = _build_public_result(
+        answer="可核对真实金额。",
+        can_answer=True,
+        partial_answer=False,
+        policy_status="full_policy_matched",
+        policy_evidence=[
+            {"title": "SQL_PROFILE", "clause": "SELECT * FROM yb_zyfdxx", "score": 0.9},
+        ],
+        calculation_steps=[{"step_name": "核对", "description": "按比例计算。"}],
+        definition={"name": "统筹自付", "plain_text": "个人承担部分。"},
+        warnings=[],
+        case_context={"basic_pooling_self_pay": 0.0},
+    )
+
+    assert result.policy_evidence == []
+    assert result.citations == []
+    assert result.verification_summary.policy_count == 0
+    assert result.uncertainties
+
+
+def test_public_text_sanitizer_preserves_normal_chinese_and_zero_amount():
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    result = _build_public_result(
+        answer="本次统筹自付为 0 元。",
+        can_answer=True,
+        partial_answer=True,
+        policy_status="no_policy_matched",
+        policy_evidence=[],
+        calculation_steps=[],
+        definition={"name": "统筹自付", "plain_text": "个人承担部分。"},
+        warnings=["零金额是合法结算结果。"],
+        case_context={"basic_pooling_self_pay": 0.0},
+    )
+
+    assert result.answer == "本次统筹自付为 0 元。"
+    assert result.case_context.basic_pooling_self_pay == 0.0
 
 
 @pytest.mark.asyncio

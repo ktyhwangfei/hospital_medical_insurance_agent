@@ -39,6 +39,37 @@ def _nested_keys(value) -> set[str]:
     return set()
 
 
+def _internal_settlement_payload() -> dict:
+    return {
+        "answer": "统筹自付按政策比例计算。",
+        "can_answer": True,
+        "partial_answer": False,
+        "policy_status": "full_policy_matched",
+        "policy_evidence": [
+            {
+                "title": "职工医保住院待遇政策",
+                "clause": "起付线以上部分按规定比例承担。",
+                "score": 0.99,
+                "query_trace": {"table": "yb_zyfdxx"},
+            }
+        ],
+        "calculation_trace": {
+            "steps": [{"step_name": "分段计算", "description": "按政策区间计算。"}],
+            "raw_sql": "SELECT * FROM yb_zyfdxx",
+        },
+        "definition": {"name": "统筹自付", "plain_text": "个人承担部分。"},
+        "warnings": [],
+        "case_context": {
+            "basic_pooling_self_pay": 4962.67,
+            "query_trace": {"sql_profile": "settlement_context"},
+        },
+        "explanation_completeness": {
+            "level": "full_policy_matched",
+            "has_real_data": True,
+        },
+    }
+
+
 @pytest.fixture
 def client():
     """创建测试客户端"""
@@ -94,7 +125,10 @@ def safe_policy_qa_dependencies(monkeypatch):
                 },
                 definition={"name": "统筹自付", "plain_text": "个人按政策承担的部分。"},
                 warnings=[],
-                explanation_completeness={"level": "complete"},
+                explanation_completeness={
+                    "level": "full_policy_matched",
+                    "has_real_data": True,
+                },
                 policy_status="full_policy_matched",
                 policy_status_message="已匹配完整政策依据。",
             )
@@ -200,6 +234,8 @@ class TestPolicyQAStreamEndpoint:
         }
         assert not {"trace_event", "reasoning_step"}.intersection(event_names)
         assert "result" in event_names
+        assert sum(name == "result" for name, _payload in events) == 1
+        assert sum(name == "done" for name, _payload in events) == 1
         assert events[-1][0] == "done"
         assert events[-1][1]["answer_status"] in {"complete", "partial", "unavailable"}
 
@@ -272,8 +308,112 @@ class TestPolicyQAStreamEndpoint:
         assert response.status_code == 200
         assert persisted_outputs
         output_data = persisted_outputs[-1]
-        assert "evidence_count" in output_data
-        assert "policy_evidence_count" not in output_data
+        assert set(output_data) == {
+            "answer_excerpt",
+            "answer_status",
+            "evidence_count",
+            "internal_run_id",
+        }
+        assert output_data["evidence_count"] == 1
+
+    def test_stream_failure_has_safe_terminal_contract(self, client, monkeypatch):
+        from src.runtime.api import policy_qa_routes
+
+        class FailingProvider:
+            async def get_settlement_context(self, _settlement_id):
+                raise RuntimeError("SELECT password FROM yb_zyfdxx WHERE secret='raw'")
+
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "create_settlement_data_provider",
+            lambda: FailingProvider(),
+        )
+        monkeypatch.setattr(policy_qa_routes, "get_assembler", lambda _skill_id: object())
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "统筹自付为什么这么多？", "settlement_id": "1671213"},
+        )
+
+        assert response.status_code == 200
+        events = _sse_events(response.text)
+        assert sum(name == "result" for name, _payload in events) == 0
+        assert sum(name == "error" for name, _payload in events) == 1
+        assert sum(name == "done" for name, _payload in events) == 1
+        error_payload = next(payload for name, payload in events if name == "error")
+        done_payload = next(payload for name, payload in events if name == "done")
+        assert error_payload == {
+            "error_code": "POLICY_QA_FAILED",
+            "message": "政策问答处理失败，请稍后重试或联系医保办。",
+        }
+        assert done_payload == {
+            "answer_status": "unavailable",
+            "success": False,
+            "error_code": "POLICY_QA_FAILED",
+        }
+        public_stream = response.text.casefold()
+        assert all(
+            token not in public_stream
+            for token in ("select", "password", "yb_zyfdxx", "secret")
+        )
+
+
+class TestSettlementExplanationEndpoint:
+    def test_rest_success_returns_only_public_contract(self, client, monkeypatch):
+        from src.runtime.api import policy_qa_routes
+
+        async def fake_process(_settlement_id, _question=""):
+            return _internal_settlement_payload()
+
+        monkeypatch.setattr(policy_qa_routes, "_process_single_settlement", fake_process)
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "1671213", "question": "统筹自付为什么这么多？"},
+        )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert set(result) == {
+            "answer",
+            "answer_status",
+            "case_context",
+            "calculation_steps",
+            "definition",
+            "warnings",
+            "policy_evidence",
+            "citations",
+            "uncertainties",
+            "verification_summary",
+        }
+        assert result["answer_status"] == "complete"
+        assert not {"query_trace", "raw_sql", "sql_profile"}.intersection(
+            _nested_keys(result)
+        )
+
+    @pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
+    def test_rest_exception_returns_stable_generic_error(
+        self, client, monkeypatch, error_type
+    ):
+        from src.runtime.api import policy_qa_routes
+
+        async def fake_process(_settlement_id, _question=""):
+            raise error_type("SELECT password FROM yb_zyfdxx WHERE secret='raw'")
+
+        monkeypatch.setattr(policy_qa_routes, "_process_single_settlement", fake_process)
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "1671213"},
+        )
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert set(detail) == {"error_code", "message", "audit_event"}
+        assert detail["error_code"] == "POLICY_QA_UNAVAILABLE"
+        assert detail["message"] == "政策问答服务暂时不可用，请稍后重试。"
+        public_body = response.text.casefold()
+        assert all(token not in public_body for token in ("select", "password", "yb_zyfdxx", "secret"))
 
 
 class TestPolicyQATestEndpoint:
