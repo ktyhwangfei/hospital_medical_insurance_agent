@@ -47,6 +47,12 @@ class FeeDecompositionCalculator:
             seg["person_ratio"] = self._get_person_ratio(fund_type, is_retired)
             seg["actual_ratio"] = seg["base_ratio"] * seg["person_ratio"]
             seg["pay"] = round(seg["amount"] * seg["actual_ratio"], 2)
+            if seg["rule_id"] != "deductible_rule":
+                seg["calculation"] = (
+                    f"{seg['amount']:,.2f} × {seg['base_ratio']:.0%} × "
+                    f"{seg['person_ratio']:.0%} = {seg['amount']:,.2f} × "
+                    f"{seg['actual_ratio']:.0%} = {seg['pay']:,.2f}"
+                )
             total_calculated += seg["pay"]
 
         # 5. 与权威金额对账
