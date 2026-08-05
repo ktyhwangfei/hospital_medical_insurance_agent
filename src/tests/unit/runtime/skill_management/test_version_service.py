@@ -124,3 +124,20 @@ def test_sync_unknown_skill_raises_explicit_error(tmp_path: Path) -> None:
         service.sync_version(
             "missing_skill", source_commit="abc1234", created_by="tester"
         )
+
+
+def test_sync_resolves_git_commit_when_request_omits_it(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path)
+    loader = _FakeLoader({skill.skill_id: skill})
+    service = SkillVersionService(
+        storage=InMemorySkillVersionStorage(),
+        loader=loader,
+        skills_root=tmp_path,
+        source_commit_resolver=lambda: "def5678",
+    )
+
+    version = service.sync_version(
+        "demo_skill", source_commit=None, created_by="tester"
+    )
+
+    assert version.source_commit == "def5678"

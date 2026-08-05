@@ -55,7 +55,7 @@ class InfraSkillCatalogResponse(BaseModel):
 
 
 class SkillVersionSyncRequest(BaseModel):
-    source_commit: str = Field(min_length=7, max_length=64)
+    source_commit: str | None = Field(default=None, min_length=7, max_length=64)
     created_by: str = Field(min_length=1, max_length=128)
 
 class InfraSkillFilesStructure(BaseModel):

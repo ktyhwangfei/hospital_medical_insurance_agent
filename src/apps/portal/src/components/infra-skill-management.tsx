@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Beaker, BookOpen, Code2, Database, Play, Search, FolderTree } from 'lucide-react'
+import { Beaker, BookOpen, Code2, Database, GitCommit, Play, Search, FolderTree } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,16 +18,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   getInfraSkillDetail,
   getInfraSkillsOverview,
-  listInfraSkills,
+  listInfraSkillCatalog,
+  listInfraSkillVersions,
+  syncInfraSkillVersion,
   testInfraSkillExecution,
   testInfraSkillRouting,
   getSkillSemanticMetrics,
 } from '@/lib/api-client'
 import type {
   InfraSkillDetailResponse,
-  InfraSkillItem,
+  InfraSkillCatalogItem,
   FieldMappingItem,
   InfraSkillOverviewItem,
+  SkillVersionResponse,
 } from '@/lib/types'
 import SkillQuestionExplainer from './skill-question-explainer'
 import SkillQueryPlan from './skill-query-plan'
@@ -63,6 +66,21 @@ function actionLabel(action: string): string {
 
 function objectLabel(obj: string): string {
   return OBJECT_LABELS[obj] || obj || '—'
+}
+
+const ARTIFACT_STATUS_LABELS: Record<InfraSkillCatalogItem['artifact_status'], string> = {
+  registered: '已登记',
+  changed: '文件已变化',
+  unregistered: '未登记',
+}
+
+function ArtifactStatusBadge({ status }: { status: InfraSkillCatalogItem['artifact_status'] }) {
+  const className = status === 'registered'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    : status === 'changed'
+      ? 'border-amber-200 bg-amber-50 text-amber-700'
+      : 'border-slate-200 bg-slate-50 text-slate-600'
+  return <Badge variant="outline" className={className}>{ARTIFACT_STATUS_LABELS[status]}</Badge>
 }
 
 // ── 动作 × 对象 组合徽章 ──
@@ -173,7 +191,8 @@ function FieldCard({ fieldName, item, required }: { fieldName: string; item: Fie
 }
 
 export default function InfraSkillManagement() {
-  const [skills, setSkills] = useState<InfraSkillItem[]>([])
+  const [skills, setSkills] = useState<InfraSkillCatalogItem[]>([])
+  const [catalogTotal, setCatalogTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [overview, setOverview] = useState<InfraSkillOverviewItem[]>([])
@@ -191,6 +210,10 @@ export default function InfraSkillManagement() {
 
   // Selected skill
   const [selectedSkill, setSelectedSkill] = useState<InfraSkillDetailResponse | null>(null)
+  const [selectedCatalogSkill, setSelectedCatalogSkill] = useState<InfraSkillCatalogItem | null>(null)
+  const [versions, setVersions] = useState<SkillVersionResponse[]>([])
+  const [versionError, setVersionError] = useState<string | null>(null)
+  const [syncingVersion, setSyncingVersion] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
 
   // Route Test State
@@ -214,11 +237,14 @@ export default function InfraSkillManagement() {
     setLoading(true)
     setError(null)
     try {
-      const data = await listInfraSkills({
+      const data = await listInfraSkillCatalog({
+        page: 1,
+        page_size: 100,
         business_action: actionFilter || undefined,
         business_object: objectFilter || undefined,
       })
-      setSkills(data)
+      setSkills(data.items)
+      setCatalogTotal(data.total)
       try {
         const summary = await getInfraSkillsOverview()
         setOverview(summary.skills)
@@ -228,7 +254,7 @@ export default function InfraSkillManagement() {
       }
       // 并发拉取每个技能引用的语义指标数（容错：失败记 0）
       const counts = await Promise.all(
-        data.map(async (s) => {
+        data.items.map(async (s) => {
           try {
             const ms = await getSkillSemanticMetrics(s.skill_id)
             return [s.skill_id, ms.length] as const
@@ -254,13 +280,47 @@ export default function InfraSkillManagement() {
   const openDetail = async (skillId: string) => {
     setDetailDialogOpen(true)
     setLoadingDetail(true)
+    setSelectedCatalogSkill(skills.find((skill) => skill.skill_id === skillId) ?? null)
+    setVersionError(null)
+    setVersions([])
     try {
-      const data = await getInfraSkillDetail(skillId)
-      setSelectedSkill(data)
+      const detail = await getInfraSkillDetail(skillId)
+      setSelectedSkill(detail)
     } catch (err) {
-      console.error(err)
+      setVersionError(err instanceof Error ? err.message : 'Skill 详情加载失败')
     } finally {
       setLoadingDetail(false)
+    }
+    try {
+      setVersions(await listInfraSkillVersions(skillId))
+    } catch (err) {
+      setVersionError(err instanceof Error ? err.message : '版本证据加载失败')
+    }
+  }
+
+  const handleSyncVersion = async () => {
+    if (!selectedCatalogSkill) return
+    setSyncingVersion(true)
+    setVersionError(null)
+    try {
+      await syncInfraSkillVersion(selectedCatalogSkill.skill_id, {
+        created_by: 'portal-workbench',
+      })
+      const versionItems = await listInfraSkillVersions(selectedCatalogSkill.skill_id)
+      setVersions(versionItems)
+      await loadSkills()
+      setSelectedCatalogSkill((current) => {
+        if (!current || versionItems.length === 0) return current
+        return {
+          ...current,
+          artifact_status: 'registered',
+          registered_version: versionItems[0],
+        }
+      })
+    } catch (err) {
+      setVersionError(err instanceof Error ? err.message : '版本登记失败')
+    } finally {
+      setSyncingVersion(false)
     }
   }
 
@@ -333,7 +393,7 @@ export default function InfraSkillManagement() {
           <CardTitle className="flex items-center justify-between">
             <span className="flex items-center gap-2">
               <Code2 className="w-5 h-5" />
-              文件系统级技能 (Infra Skills)
+              Skill 版本化资产库
             </span>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => setRouteDialogOpen(true)}>
@@ -377,7 +437,7 @@ export default function InfraSkillManagement() {
               清除筛选
             </button>
           )}
-          <span className="text-xs text-gray-400 ml-auto">{skills.length} 个技能</span>
+          <span className="text-xs text-gray-400 ml-auto">{catalogTotal} 个技能</span>
         </div>
         <div className="px-6 pb-3">
           <Input aria-label="搜索 Skill" placeholder="搜索名称或 Skill ID" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -408,6 +468,9 @@ export default function InfraSkillManagement() {
                   <tr className="border-b text-left">
                     <th className="pb-3 pr-4 font-medium text-gray-600">技能名称 / ID</th>
                     <th className="pb-3 pr-4 font-medium text-gray-600">业务动作</th>
+                    <th className="pb-3 pr-4 font-medium text-gray-600">版本</th>
+                    <th className="pb-3 pr-4 font-medium text-gray-600">制品状态</th>
+                    <th className="pb-3 pr-4 font-medium text-gray-600">校验</th>
                     <th className="pb-3 pr-4 font-medium text-gray-600">引用指标</th>
                     <th className="pb-3 pr-4 font-medium text-gray-600">包含关键词</th>
                     <th className="pb-3 pr-4 font-medium text-gray-600">排除关键词</th>
@@ -416,13 +479,38 @@ export default function InfraSkillManagement() {
                 </thead>
                 <tbody>
                   {visibleSkills.map((skill) => (
-                    <tr key={skill.skill_id} className="border-b last:border-0 hover:bg-gray-50">
+                    <tr
+                      key={skill.skill_id}
+                      className="border-b last:border-0 hover:bg-gray-50"
+                      data-testid={`skill-row-${skill.skill_id}`}
+                    >
                       <td className="py-3 pr-4">
                         <div className="font-medium">{skill.skill_name}</div>
                         <div className="text-xs text-gray-500 mt-0.5 font-mono">{skill.skill_id}</div>
                       </td>
                       <td className="py-3 pr-4">
                         <ActionObjectBadge action={skill.business_action} object={skill.business_object} />
+                      </td>
+                      <td className="py-3 pr-4">
+                        <div className="font-mono text-xs">v{skill.semantic_version}</div>
+                        <div
+                          className="mt-0.5 font-mono text-[10px] text-gray-400"
+                          title={skill.artifact_hash}
+                        >
+                          {skill.artifact_hash.slice(0, 12)}
+                        </div>
+                      </td>
+                      <td className="py-3 pr-4">
+                        <ArtifactStatusBadge status={skill.artifact_status} />
+                      </td>
+                      <td className="py-3 pr-4 text-xs">
+                        {skill.registered_version?.validation_status === 'passed' ? (
+                          <span className="text-emerald-700">通过</span>
+                        ) : skill.registered_version?.validation_status === 'failed' ? (
+                          <span className="text-red-600">失败</span>
+                        ) : (
+                          <span className="text-gray-400">未校验</span>
+                        )}
                       </td>
                       <td className="py-3 pr-4">
                         <span className={`font-mono text-sm tabular-nums ${(metricCounts[skill.skill_id] ?? 0) > 0 ? 'text-blue-600 font-semibold' : 'text-gray-400'}`} title="从语义层 /semantic/skills/{id}/metrics 统计">
@@ -484,6 +572,7 @@ export default function InfraSkillManagement() {
               <TabsList className="mb-4">
                 <TabsTrigger value="explain">费用项解析</TabsTrigger>
                 <TabsTrigger value="query-plan">查询计划</TabsTrigger>
+                <TabsTrigger value="versions">版本证据</TabsTrigger>
                 <TabsTrigger value="manifest">Manifest (元数据)</TabsTrigger>
                 <TabsTrigger value="fields">字段映射</TabsTrigger>
                 <TabsTrigger value="files">目录结构</TabsTrigger>
@@ -499,6 +588,64 @@ export default function InfraSkillManagement() {
 
               <TabsContent value="query-plan">
                 <SkillQueryPlan skillId={selectedSkill.skill_id} />
+              </TabsContent>
+
+              <TabsContent value="versions">
+                <div className="space-y-4" data-testid="version-evidence">
+                  {versionError && (
+                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      {versionError}
+                    </div>
+                  )}
+                  {selectedCatalogSkill && (
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-slate-50 px-4 py-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <ArtifactStatusBadge status={selectedCatalogSkill.artifact_status} />
+                          <span className="font-mono text-sm">v{selectedCatalogSkill.semantic_version}</span>
+                          <span className="text-xs text-gray-500">{selectedCatalogSkill.file_count} 个文件</span>
+                        </div>
+                        <div className="font-mono text-xs text-gray-500" title={selectedCatalogSkill.artifact_hash}>
+                          artifact hash: {selectedCatalogSkill.artifact_hash}
+                        </div>
+                      </div>
+                      {selectedCatalogSkill.artifact_status !== 'registered' && (
+                        <Button
+                          size="sm"
+                          onClick={handleSyncVersion}
+                          disabled={syncingVersion}
+                          data-testid="register-skill-version"
+                        >
+                          <GitCommit className="mr-1 h-4 w-4" />
+                          {syncingVersion ? '登记中...' : '登记当前版本'}
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  {versions.length === 0 ? (
+                    <div className="py-8 text-center text-sm text-gray-500">尚无已登记版本</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {versions.map((version) => (
+                        <div key={version.version_id} className="rounded-lg border px-4 py-3 text-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <strong>v{version.semantic_version}</strong>
+                            <span className={version.validation_status === 'passed' ? 'text-emerald-700' : 'text-amber-700'}>
+                              {version.validation_status === 'passed' ? '校验通过' : version.validation_status}
+                            </span>
+                          </div>
+                          <dl className="mt-2 grid gap-1 text-xs text-gray-600 md:grid-cols-2">
+                            <div><dt className="inline text-gray-400">Git commit：</dt><dd className="inline font-mono">{version.source_commit}</dd></div>
+                            <div><dt className="inline text-gray-400">文件数：</dt><dd className="inline">{version.file_count}</dd></div>
+                            <div className="md:col-span-2 break-all"><dt className="inline text-gray-400">artifact hash：</dt><dd className="inline font-mono">{version.artifact_hash}</dd></div>
+                            <div><dt className="inline text-gray-400">登记人：</dt><dd className="inline">{version.created_by}</dd></div>
+                            <div><dt className="inline text-gray-400">登记时间：</dt><dd className="inline">{new Date(version.created_at).toLocaleString()}</dd></div>
+                          </dl>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </TabsContent>
               
               <TabsContent value="manifest" className="bg-gray-50 p-4 rounded-md overflow-x-auto">

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,22 +60,42 @@ class SkillVersionService:
         storage: SkillVersionStorage,
         loader: _SkillLoaderView,
         skills_root: str | Path,
+        source_commit_resolver: Callable[[], str] | None = None,
     ) -> None:
         self._storage = storage
         self._loader = loader
         self._skills_root = Path(skills_root)
+        self._source_commit_resolver = source_commit_resolver or self._resolve_source_commit
+
+    def _resolve_source_commit(self) -> str:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self._skills_root.parent), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError("无法解析当前 Skill 源代码的 Git commit") from exc
+        return result.stdout.strip().lower()
 
     def sync_version(
         self,
         skill_id: str,
         *,
-        source_commit: str,
+        source_commit: str | None,
         created_by: str,
     ) -> SkillVersion:
         loaded_skill = self._loader.get(skill_id)
         if loaded_skill is None:
             raise SkillNotFoundError(f"未找到 Skill: {skill_id}")
-        if not re.fullmatch(r"[0-9a-f]{7,64}", source_commit):
+        resolved_source_commit = (
+            source_commit.strip().lower()
+            if source_commit is not None
+            else self._source_commit_resolver()
+        )
+        if not re.fullmatch(r"[0-9a-f]{7,64}", resolved_source_commit):
             raise ValueError("source_commit 必须是 7-64 位小写十六进制 Git SHA")
         if not created_by.strip():
             raise ValueError("created_by 不能为空")
@@ -95,7 +116,7 @@ class SkillVersionService:
             version_id=uuid4().hex,
             skill_id=skill_id,
             semantic_version=snapshot.semantic_version,
-            source_commit=source_commit,
+            source_commit=resolved_source_commit,
             source_path=snapshot.source_path,
             artifact_hash=snapshot.artifact_hash,
             manifest_snapshot=snapshot.manifest_snapshot,

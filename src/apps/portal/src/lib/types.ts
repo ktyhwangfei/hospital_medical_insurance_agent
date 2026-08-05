@@ -307,6 +307,48 @@ export interface InfraSkillItem {
   excluded_intents: string[]
 }
 
+export interface SkillValidationIssueResponse {
+  code: string
+  message: string
+  path?: string | null
+}
+
+export interface SkillVersionResponse {
+  version_id: string
+  skill_id: string
+  semantic_version: string
+  source_commit: string
+  source_path: string
+  artifact_hash: string
+  manifest_snapshot: Record<string, unknown>
+  dependency_snapshot: Record<string, unknown>
+  file_count: number
+  validation_status: 'pending' | 'passed' | 'failed'
+  validation_issues: SkillValidationIssueResponse[]
+  created_by: string
+  created_at: string
+}
+
+export interface InfraSkillCatalogItem extends InfraSkillItem {
+  semantic_version: string
+  artifact_hash: string
+  artifact_status: 'registered' | 'changed' | 'unregistered'
+  file_count: number
+  registered_version?: SkillVersionResponse | null
+}
+
+export interface InfraSkillCatalogResponse {
+  items: InfraSkillCatalogItem[]
+  page: number
+  page_size: number
+  total: number
+}
+
+export interface SkillVersionSyncRequest {
+  source_commit?: string
+  created_by: string
+}
+
 export interface InfraSkillFilesStructure {
   agents: string[]
   schemas: string[]

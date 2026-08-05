@@ -39,7 +39,7 @@
 - Create: `src/tests/unit/data_platform/test_skill_version_storage.py` — 存储契约。
 - Create: `src/tests/unit/runtime/skill_management/test_version_service.py` — 应用服务。
 - Modify: `src/tests/integration/api/test_infra_skill_routes.py` — 新端点与旧契约兼容。
-- Create: `src/apps/portal/src/lib/skill-catalog.test.ts` — API 客户端契约。
+- Create: `src/apps/portal/src/tests/skill-catalog.test.ts` — API 客户端契约。
 - Create: `src/tests/e2e/pages/portal/skill-catalog.page.ts` — Portal 版本化资产页 Page Object。
 - Create: `src/tests/e2e/flows/portal/skill-catalog.flow.ts` — 资产登记与证据展示流程。
 - Modify: `PROGRESS.md` — 增加技能管理阶段 1 的实施与验证状态。
@@ -344,10 +344,10 @@ Commit: `feat: expose versioned skill catalog api`
 **Files:**
 - Modify: `src/apps/portal/src/lib/types.ts`
 - Modify: `src/apps/portal/src/lib/api-client.ts`
-- Create: `src/apps/portal/src/lib/skill-catalog.test.ts`
+- Create: `src/apps/portal/src/tests/skill-catalog.test.ts`
 - Modify: `src/apps/portal/src/components/infra-skill-management.tsx`
 
-- [ ] **Step 1: 写 API 客户端失败测试**
+- [x] **Step 1: 写 API 客户端失败测试**
 
 ```typescript
 it('requests the paginated skill catalog', async () => {
@@ -359,15 +359,15 @@ it('requests the paginated skill catalog', async () => {
 })
 ```
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
-Run: `npm test -- --run src/lib/skill-catalog.test.ts`
+Run: `npm test -- src/tests/skill-catalog.test.ts`
 
 Workdir: `src/apps/portal`
 
 Expected: FAIL，原因是 `listInfraSkillCatalog` 尚未导出。
 
-- [ ] **Step 3: 实现前端 DTO 和客户端**
+- [x] **Step 3: 实现前端 DTO 和客户端**
 
 ```typescript
 export interface InfraSkillCatalogItem extends InfraSkillItem {
@@ -387,13 +387,13 @@ export interface InfraSkillCatalogResponse {
 }
 ```
 
-- [ ] **Step 4: 升级列表和详情交互**
+- [x] **Step 4: 升级列表和详情交互**
 
 列表新增“版本 / 制品状态 / 校验”三列；哈希只显示前 12 位并保留完整 title；详情新增“版本证据”页签；未登记或文件已变化时显示“登记当前版本”按钮；登记成功只刷新当前 Skill 和目录，不清空筛选或其他已加载区域；错误显示在局部区域。
 
-- [ ] **Step 5: 运行前端测试、lint、build 并提交**
+- [x] **Step 5: 运行前端测试、lint、build 并提交**
 
-Run 1: `npm test -- --run src/lib/skill-catalog.test.ts`
+Run 1: `npm test -- src/tests/skill-catalog.test.ts`
 
 Run 2: `npm run lint`
 
@@ -402,6 +402,8 @@ Run 3: `npm run build`
 Workdir: `src/apps/portal`
 
 Expected: 全部 PASS。
+
+执行证据：定向 Vitest、变更文件 ESLint、Next.js build 均通过；全仓库 ESLint 仍有 105 个位于未改文件的预存错误，未越界修复。
 
 Commit: `feat: show skill version evidence in portal`
 

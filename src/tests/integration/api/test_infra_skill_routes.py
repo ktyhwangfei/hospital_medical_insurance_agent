@@ -18,6 +18,7 @@ def client():
         storage=InMemorySkillVersionStorage(),
         loader=get_loader(),
         skills_root=SKILLS_DIR,
+        source_commit_resolver=lambda: "abc1234",
     )
     app.dependency_overrides[get_skill_version_service] = lambda: service
     return TestClient(app)
@@ -87,7 +88,7 @@ def test_sync_and_read_version_evidence(client: TestClient) -> None:
 
     synced = client.post(
         f"{PREFIX}/infra-skills/{skill_id}/versions/sync",
-        json={"source_commit": "abc1234", "created_by": "tester"},
+        json={"created_by": "tester"},
     )
     assert synced.status_code == 201
 

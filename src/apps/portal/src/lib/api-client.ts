@@ -21,12 +21,51 @@ export async function listInfraSkills(filter?: InfraSkillsFilter): Promise<Infra
   return requestJson<InfraSkillItem[]>(`/infra-skills${query ? `?${query}` : ''}`)
 }
 
+export interface InfraSkillCatalogFilter extends InfraSkillsFilter {
+  page?: number
+  page_size?: number
+  artifact_status?: string
+  query?: string
+}
+
 export async function getInfraSkillsOverview(): Promise<InfraSkillOverviewResponse> {
   return requestJson<InfraSkillOverviewResponse>('/infra-skills/overview')
 }
 
 export async function getInfraSkillDetail(skillId: string): Promise<InfraSkillDetailResponse> {
   return requestJson<InfraSkillDetailResponse>(`/infra-skills/${encodeURIComponent(skillId)}`)
+}
+
+export async function listInfraSkillCatalog(
+  filter?: InfraSkillCatalogFilter,
+): Promise<InfraSkillCatalogResponse> {
+  const params = new URLSearchParams()
+  if (filter?.page) params.set('page', String(filter.page))
+  if (filter?.page_size) params.set('page_size', String(filter.page_size))
+  if (filter?.business_action) params.set('business_action', filter.business_action)
+  if (filter?.business_object) params.set('business_object', filter.business_object)
+  if (filter?.artifact_status) params.set('artifact_status', filter.artifact_status)
+  if (filter?.query) params.set('query', filter.query)
+  const query = params.toString()
+  return requestJson<InfraSkillCatalogResponse>(
+    `/infra-skills/catalog${query ? `?${query}` : ''}`,
+  )
+}
+
+export async function listInfraSkillVersions(skillId: string): Promise<SkillVersionResponse[]> {
+  return requestJson<SkillVersionResponse[]>(
+    `/infra-skills/${encodeURIComponent(skillId)}/versions`,
+  )
+}
+
+export async function syncInfraSkillVersion(
+  skillId: string,
+  request: SkillVersionSyncRequest,
+): Promise<SkillVersionResponse> {
+  return requestJson<SkillVersionResponse>(
+    `/infra-skills/${encodeURIComponent(skillId)}/versions/sync`,
+    { method: 'POST', body: JSON.stringify(request) },
+  )
 }
 
 export async function testInfraSkillRouting(request: SkillRouteTestRequest): Promise<SkillRouteTestResponse> {
@@ -98,6 +137,9 @@ import type {
   InfraSkillItem,
   InfraSkillDetailResponse,
   InfraSkillOverviewResponse,
+  InfraSkillCatalogResponse,
+  SkillVersionResponse,
+  SkillVersionSyncRequest,
   SkillRouteTestRequest,
   SkillRouteTestResponse,
   SkillExecuteTestRequest,
