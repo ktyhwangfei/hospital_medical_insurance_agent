@@ -54,7 +54,7 @@
 
 **Files:** `src/domain/skill/governance_models.py`, `src/domain/skill/__init__.py`, `src/domain/AGENTS.md`, `src/tests/unit/domain/skill/test_skill_governance_models.py`
 
-- [ ] **Step 1: 写失败测试，锁定不可变证据与状态值**
+- [x] **Step 1: 写失败测试，锁定不可变证据与状态值**
 
 ```python
 def test_release_approval_freezes_all_gate_evidence() -> None:
@@ -78,15 +78,15 @@ def test_release_rejects_unsupported_rollout_or_environment() -> None:
         _release(environment="prod")
 ```
 
-- [ ] **Step 2: 运行测试并确认模块不存在**
+- [x] **Step 2: 运行测试并确认模块不存在**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/domain/skill/test_skill_governance_models.py -q --tb=short`
 
-- [ ] **Step 3: 实现最小模型**
+- [x] **Step 3: 实现最小模型**
 
 模型包括 `SkillEvalCase`、`SkillEvalResult`、`SkillEvalMetrics`、`SkillEvalRun`、`SkillRelease`、`SkillReleaseApproval`，以及 `SkillEvalRunStatus`、`SkillEvalDiff`、`SkillReleaseEnvironment`、`SkillReleaseStatus`。所有证据模型 `ConfigDict(frozen=True)`；哈希限定 64 位小写 SHA-256；环境仅 `dev/test`；发布 revision 从 1 开始。
 
-- [ ] **Step 4: 更新领域通用语言字典并运行测试**
+- [x] **Step 4: 更新领域通用语言字典并运行测试**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/domain/skill/test_skill_governance_models.py -q --tb=short`
 
