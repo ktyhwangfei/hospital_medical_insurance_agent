@@ -110,7 +110,12 @@ export default function SkillWorkspace({
         </div>
       </div>
       <SkillLifecycleStepper item={item} onNavigate={onTabChange} />
-      <Tabs value={activeTab} onValueChange={(value) => onTabChange(value as SkillWorkbenchTab)} className="gap-0">
+      <Tabs
+        data-testid="skill-workspace-tabs"
+        value={activeTab}
+        onValueChange={(value) => onTabChange(value as SkillWorkbenchTab)}
+        className="flex-col gap-0"
+      >
         <div className="overflow-x-auto border-b border-slate-200 px-4">
           <TabsList aria-label="Skill 治理视图" variant="line" className="h-11 gap-2">
             <TabsTrigger value="overview">总览</TabsTrigger>

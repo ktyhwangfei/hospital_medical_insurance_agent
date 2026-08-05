@@ -37,9 +37,11 @@ export default function SkillVersionsTab({ item, versions, error, readOnly, onCh
           <h3 className="font-medium text-slate-900">当前工作区制品</h3>
           <p className="mt-1 text-sm text-slate-500">{item.artifact_status === 'registered' ? '当前内容与登记版本一致' : '检测到未登记的制品变化'}</p>
         </div>
-        <Button disabled={readOnly || syncing} onClick={() => void syncVersion()}>
-          <RefreshCw className="h-4 w-4" /> {syncing ? '登记中…' : '登记当前制品'}
-        </Button>
+        {item.artifact_status !== 'registered' && (
+          <Button data-testid="register-skill-version" disabled={readOnly || syncing} onClick={() => void syncVersion()}>
+            <RefreshCw className="h-4 w-4" /> {syncing ? '登记中…' : '登记当前制品'}
+          </Button>
+        )}
       </div>
       {(error || mutationError) && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error ?? mutationError}</p>}
       <ol className="relative ml-2 border-l border-slate-200 pl-5">

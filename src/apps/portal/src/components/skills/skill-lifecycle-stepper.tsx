@@ -35,6 +35,13 @@ const attentionLabels: Record<string, string> = {
   artifact_not_registered: '当前制品已变化，需要重新登记',
 }
 
+const completedDescriptions: Record<string, string> = {
+  '版本登记': '制品已登记并通过校验',
+  '批量评测': '当前固定评测已通过',
+  '人工审批': '人工审批证据已冻结',
+  'Test 激活': 'Test Shadow 已激活',
+}
+
 export function lifecycleSteps(item: SkillWorkbenchItem): LifecycleStep[] {
   const registered = item.artifact_status === 'registered' && item.validation_status === 'passed'
   const evaluated = item.latest_eval_status === 'passed'
@@ -70,6 +77,7 @@ export default function SkillLifecycleStepper({ item, onNavigate }: SkillLifecyc
         <li key={`${step.label}-${index}`}>
           <button
             type="button"
+            aria-current={step.state === 'current' ? 'step' : undefined}
             onClick={() => onNavigate(step.tab)}
             className={cn(
               'flex w-full items-start gap-3 rounded-lg border px-3 py-3 text-left transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
@@ -90,7 +98,9 @@ export default function SkillLifecycleStepper({ item, onNavigate }: SkillLifecyc
             </span>
             <span className="min-w-0">
               <span className="block text-sm font-medium text-slate-900">{step.label}</span>
-              <span className="mt-0.5 block text-xs leading-5 text-slate-500">{step.description}</span>
+              <span className="mt-0.5 block text-xs leading-5 text-slate-500">
+                {step.state === 'completed' ? completedDescriptions[step.label] : step.description}
+              </span>
             </span>
           </button>
         </li>

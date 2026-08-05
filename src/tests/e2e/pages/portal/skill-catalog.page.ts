@@ -3,40 +3,46 @@ import { Locator, Page } from '@playwright/test';
 import { BasePage } from '../base.page';
 
 
-/** Portal Skill 版本化资产库 Page Object。 */
+/** Portal Skill 治理工作台 Page Object。 */
 export class SkillCatalogPage extends BasePage {
   readonly title: Locator;
-  readonly catalogTitle: Locator;
-  readonly versionEvidence: Locator;
+  readonly workspace: Locator;
+  readonly lifecycle: Locator;
+  readonly routeDrawer: Locator;
   readonly evaluationSuite: Locator;
   readonly releasePanel: Locator;
 
   constructor(page: Page) {
     super(page, 'http://127.0.0.1:3000');
-    this.title = page.getByRole('heading', { name: '技能包管理' });
-    this.catalogTitle = page.getByText('Skill 版本化资产库');
-    this.versionEvidence = page.getByTestId('version-evidence');
+    this.title = page.getByRole('heading', { name: 'Skill 管理' });
+    this.workspace = page.getByTestId('skill-governance-workbench');
+    this.lifecycle = page.getByLabel('Skill 生命周期');
+    this.routeDrawer = page.getByRole('dialog', { name: '路由调试' });
     this.evaluationSuite = page.getByTestId('skill-evaluation-suite');
     this.releasePanel = page.getByTestId('skill-release-panel');
   }
 
   async goto(): Promise<void> {
     await super.goto('/skills');
+    await this.title.waitFor({ state: 'visible' });
   }
 
-  row(skillId: string): Locator {
-    return this.page.getByTestId(`skill-row-${skillId}`);
+  catalogItem(skillId: string): Locator {
+    return this.page.getByTestId(`skill-catalog-item-${skillId}`);
   }
 
-  async openVersionEvidence(skillId: string): Promise<void> {
-    const row = this.row(skillId);
-    await row.getByRole('button', { name: '详情' }).click();
-    await this.page.getByRole('tab', { name: '版本证据' }).click();
-    await this.versionEvidence.waitFor({ state: 'visible' });
+  async selectSkill(skillId: string): Promise<void> {
+    await this.catalogItem(skillId).click();
+    await this.page.getByTestId(`skill-workspace-${skillId}`).waitFor({ state: 'visible' });
+  }
+
+  async openTab(name: '总览' | '版本' | '评测' | '发布' | '开发详情'): Promise<void> {
+    await this.page.getByRole('tab', { name }).click();
   }
 
   async registerCurrentVersion(skillId: string): Promise<void> {
-    await this.openVersionEvidence(skillId);
+    await this.selectSkill(skillId);
+    await this.openTab('版本');
     const registerButton = this.page.getByTestId('register-skill-version');
     if (await registerButton.isVisible()) {
       await registerButton.click();
@@ -44,16 +50,10 @@ export class SkillCatalogPage extends BasePage {
     }
   }
 
-  async openEvaluation(skillId: string): Promise<void> {
-    const row = this.row(skillId);
-    await row.getByRole('button', { name: '详情' }).click();
-    await this.page.getByRole('tab', { name: '批量评测' }).click();
+  async runFixedEvaluation(question: string): Promise<void> {
+    await this.openTab('评测');
     await this.evaluationSuite.waitFor({ state: 'visible' });
-  }
-
-  async runFixedEvaluation(skillId: string, question: string): Promise<void> {
-    await this.openEvaluation(skillId);
-    await this.page.getByPlaceholder('输入脱敏后的固定路由问题').fill(question);
+    await this.page.getByLabel('脱敏评测问题').fill(question);
     await this.page.getByRole('button', { name: '新增必测用例' }).click();
     await this.evaluationSuite.getByText(question).first().waitFor({ state: 'visible' });
     await this.page.getByRole('button', { name: '运行候选评测' }).click();
@@ -61,20 +61,18 @@ export class SkillCatalogPage extends BasePage {
   }
 
   async approveAndActivateTestRelease(): Promise<void> {
-    await this.page.getByRole('tab', { name: '测试发布' }).click();
+    await this.openTab('发布');
     await this.releasePanel.waitFor({ state: 'visible' });
-    const createButton = this.releasePanel.getByRole('button', { name: '从通过评测创建候选' });
-    await createButton.waitFor({ state: 'visible' });
-    await createButton.click();
-    const requestButton = this.releasePanel.getByRole('button', { name: '申请审批' }).first();
-    await requestButton.waitFor({ state: 'visible' });
-    await requestButton.click();
-    const approveButton = this.releasePanel.getByRole('button', { name: '人工审批通过' }).first();
-    await approveButton.waitFor({ state: 'visible' });
-    await approveButton.click();
-    const activateButton = this.releasePanel.getByRole('button', { name: '激活到 test' }).first();
-    await activateButton.waitFor({ state: 'visible' });
-    await activateButton.click();
-    await this.releasePanel.getByText('test active').first().waitFor({ state: 'visible' });
+    for (const action of [
+      '从通过评测创建候选',
+      '申请审批',
+      '人工审批通过',
+      '激活 Test Shadow',
+    ]) {
+      const button = this.releasePanel.getByRole('button', { name: action });
+      await button.waitFor({ state: 'visible' });
+      await button.click();
+    }
+    await this.releasePanel.getByText('Test Shadow 已激活').waitFor({ state: 'visible' });
   }
 }

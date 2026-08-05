@@ -12,6 +12,7 @@ interface SkillCatalogPanelProps {
   businessAction: string
   businessObject: string
   loading: boolean
+  hiddenOnMobile?: boolean
   onQueryChange: (query: string) => void
   onBusinessActionChange: (action: string) => void
   onBusinessObjectChange: (object: string) => void
@@ -51,6 +52,7 @@ export default function SkillCatalogPanel({
   businessAction,
   businessObject,
   loading,
+  hiddenOnMobile = false,
   onQueryChange,
   onBusinessActionChange,
   onBusinessObjectChange,
@@ -73,12 +75,13 @@ export default function SkillCatalogPanel({
     const nextIndex = Math.min(Math.max(currentIndex + delta, 0), buttons.length - 1)
     if (buttons[nextIndex]) {
       event.preventDefault()
+      buttons[nextIndex].click()
       buttons[nextIndex].focus()
     }
   }
 
   return (
-    <aside className="flex min-h-0 flex-col border-r border-slate-200 bg-white" aria-label="Skill 目录">
+    <aside className={cn('min-h-0 flex-col border-r border-slate-200 bg-white md:flex', hiddenOnMobile ? 'hidden' : 'flex')} aria-label="Skill 目录">
       <div className="space-y-3 border-b border-slate-200 p-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-2 h-4 w-4 text-slate-400" />

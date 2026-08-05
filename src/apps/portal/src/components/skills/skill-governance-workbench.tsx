@@ -43,8 +43,10 @@ interface WorkbenchUrlState {
   businessObject: string
 }
 
-function readWorkbenchUrl(): WorkbenchUrlState {
-  const params = new URLSearchParams(window.location.search)
+export function readWorkbenchUrl(
+  search = typeof window === 'undefined' ? '' : window.location.search,
+): WorkbenchUrlState {
+  const params = new URLSearchParams(search)
   const tab = params.get('tab') as SkillWorkbenchTab | null
   const status = params.get('status') as SkillGovernanceStatus | null
   return {
@@ -108,6 +110,7 @@ export default function SkillGovernanceWorkbench() {
   const [refreshToken, setRefreshToken] = useState(0)
   const [routeDrawerOpen, setRouteDrawerOpen] = useState(false)
   const [executionDrawerOpen, setExecutionDrawerOpen] = useState(false)
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(initialState.skillId !== null)
 
   const prepareCatalogReload = useCallback(() => {
     setLoading(true)
@@ -131,6 +134,7 @@ export default function SkillGovernanceWorkbench() {
   }, [prepareCatalogReload])
   const handleSelect = useCallback((skillId: string) => {
     setSelectedSkillId(skillId)
+    setMobileDetailOpen(true)
   }, [])
 
   useEffect(() => {
@@ -206,7 +210,7 @@ export default function SkillGovernanceWorkbench() {
         onStatusChange={handleGovernanceStatusChange}
       />
       {catalogError && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{catalogError}</p>}
-      <div className="grid min-h-[620px] flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm md:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid min-h-[480px] flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm md:max-h-[calc(100vh-16rem)] md:min-h-[620px] md:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[288px_minmax(0,1fr)]">
         <SkillCatalogPanel
           items={items}
           selectedSkillId={selectedSkillId}
@@ -214,12 +218,20 @@ export default function SkillGovernanceWorkbench() {
           businessAction={businessAction}
           businessObject={businessObject}
           loading={loading}
+          hiddenOnMobile={mobileDetailOpen}
           onQueryChange={handleQueryChange}
           onBusinessActionChange={handleBusinessActionChange}
           onBusinessObjectChange={handleBusinessObjectChange}
           onSelect={handleSelect}
         />
-        <main className="min-w-0 bg-slate-50/50 p-4 md:p-6">
+        <main className={`${mobileDetailOpen ? 'block' : 'hidden'} min-w-0 overflow-y-auto bg-slate-50/50 p-3 md:block md:p-6`}>
+          <button
+            type="button"
+            onClick={() => setMobileDetailOpen(false)}
+            className="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 md:hidden"
+          >
+            返回 Skill 目录
+          </button>
           {selectedSkillId && items.find((item) => item.skill_id === selectedSkillId) ? (
             <SkillWorkspace
               key={selectedSkillId}

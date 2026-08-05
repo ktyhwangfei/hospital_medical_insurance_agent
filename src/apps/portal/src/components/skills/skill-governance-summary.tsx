@@ -24,7 +24,7 @@ export default function SkillGovernanceSummary({
   onStatusChange,
 }: SkillGovernanceSummaryProps) {
   return (
-    <section aria-label="治理摘要" className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 md:grid-cols-5">
+    <section aria-label="治理摘要" className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 md:grid-cols-3 xl:grid-cols-5">
       {summaryItems.map((item) => {
         const selected = item.status !== null && activeStatus === item.status
         return (

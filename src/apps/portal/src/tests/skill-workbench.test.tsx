@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import SkillGovernanceWorkbench from '@/components/skills/skill-governance-workbench'
+import SkillGovernanceWorkbench, { readWorkbenchUrl } from '@/components/skills/skill-governance-workbench'
 
 const mockGetSkillGovernanceWorkbench = vi.fn()
 const mockListInfraSkillCatalog = vi.fn()
@@ -120,6 +120,20 @@ describe('Skill governance workbench', () => {
     vi.clearAllMocks()
   })
 
+  it('uses safe defaults while the page is prerendered without window', () => {
+    const browserWindow = window
+    vi.stubGlobal('window', undefined)
+
+    expect(readWorkbenchUrl()).toMatchObject({
+      skillId: null,
+      tab: 'overview',
+      env: 'test',
+      query: '',
+    })
+
+    vi.stubGlobal('window', browserWindow)
+  })
+
   it('renders one title, actionable summary and compact catalog', async () => {
     render(<SkillGovernanceWorkbench />)
 
@@ -163,6 +177,7 @@ describe('Skill governance workbench', () => {
       '发布',
       '开发详情',
     ])
+    expect(screen.getByTestId('skill-workspace-tabs')).toHaveClass('flex-col')
   })
 
   it('navigates a blocked step to its evidence tab', async () => {

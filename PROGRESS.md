@@ -99,10 +99,13 @@
 | 7.3 | 技能列表与管理 | `infra_skill_routes.py` | impl_done |
 | 7.4 | 版本化 Skill 资产库：制品哈希、版本登记、证据查询与 Portal 展示 | `skill_infra/artifact.py` → `runtime/skill_management/version_service.py` → `infra_skill_routes.py` → Portal `/skills` | verified |
 | 7.5 | 固定路由评测与 test 发布门禁：候选/基线差异、人工审批、唯一 active 与 shadow resolver | `skill_infra/route_evaluator.py` → `runtime/skill_management/governance_service.py` → `infra_skill_routes.py` → Portal `/skills` | verified |
+| 7.6 | Skill 治理工作台方案 2：聚合读模型、双栏目录、生命周期证据、单主动作发布与调试抽屉 | `runtime/skill_management/workbench_service.py` → `/infra-skills/workbench` → Portal `/skills` | verified |
 
 7.4 验证证据（2026-08-05）：T1 新功能相关测试 18 passed；T2a Skill API 10 passed；T2b 版本目录 Flow 1 passed；Portal Vitest 3 passed、变更文件 ESLint 通过、Next.js build 通过；Chromium E2E 1 passed。旧 `test_skill_mention.py` / `test_skill_intent_matching.py` 中 8 个请求已下线路由的 404 为预存测试债务，不计入 7.4 通过证据。
 
 7.5 验证证据（2026-08-05）：T1 治理模型/路由评测/存储/应用服务及统一路由回归 71 passed；T2a Skill API 14 passed；T2b 固定评测到 test shadow active Flow 1 passed；Portal Vitest 5 passed、变更文件 ESLint 通过、Next.js build 通过；Chromium E2E 2 passed；本地 PostgreSQL 治理表初始化与查询通过。发布门禁会在制品、评测配置、测试集、全量路由 Manifest 或活动基线变化后拒绝激活；高风险标签自动进入必测集，评测运行原子冻结 suite revision 与用例快照；同一 Skill 与环境由事务和唯一索引保证最多一个 active。发布写操作默认关闭，仅由本地开发脚本显式开启并要求 `skill:release:test` 权限，候选创建人与审批人均来自认证上下文且禁止自审；生产 SSO/JWT 校验仍按 §10.1 作为外部系统接入项推进。
+
+7.6 验证证据（2026-08-05）：按 T1 → T2a → T2b 顺序分别为 35 passed、18 passed、1 passed；Portal Vitest 17 passed、全变更范围 ESLint 零错误、Next.js 生产构建通过；Chromium E2E 4 passed，覆盖固定评测到 Test Shadow 激活及刷新恢复、路由抽屉上下文、390px 无横向溢出和目录键盘导航。Orca 真实浏览器视觉检查通过，并据此修复了 Tabs 横向挤压问题；前后端最终通过统一脚本停止。聚合接口失败时目录可回退，详情证据独立失败不清空目录；审批摘要只暴露审批人、角色和时间，不包含审批理由。
 
 兼容与回滚：运行时仍由 `SkillLoader` / `SkillRouter` 选择当前文件系统 Skill；test active 仅由 Release Resolver 以 shadow 模式解析，不切换真实流量。需要回滚控制面时停止调用 eval/release 端点即可，已登记版本、评测与发布证据不会影响现有业务执行。
 
