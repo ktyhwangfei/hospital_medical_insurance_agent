@@ -169,6 +169,52 @@ def test_output_schema_requires_answer_only():
     assert "office_answer" not in required | properties
 
 
+def test_output_schema_accepts_answer_and_rejects_legacy_fields():
+    import json
+    from pathlib import Path
+
+    from jsonschema import Draft202012Validator, ValidationError
+
+    schema_path = Path(__file__).parents[1] / "schemas" / "output.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema)
+    payload = {
+        "skill_id": "policy-fee-explanation",
+        "target_fee_item": "pooling_self_pay",
+        "target_field": "basic_pooling_self_pay",
+        "target_amount": 4962.67,
+        "data_source": "REAL_DB",
+        "mock_used": False,
+        "can_answer": True,
+        "partial_answer": False,
+        "case_context": {},
+        "policy_evidence": [],
+        "evidence_completeness": {},
+        "recalculation_completeness": {},
+        "answer": "本次结算的统筹自付金额已确认。",
+        "calculation_trace": {},
+        "ratio_explanation": {},
+        "explanation_completeness": {},
+        "definition": {},
+        "policy_status": "full_policy_matched",
+        "policy_status_message": "已匹配完整政策依据。",
+        "llm_readable_context": "当前结算上下文。",
+        "warnings": [],
+        "trace_events": [],
+        "validation": {"passed": True, "checks": []},
+    }
+
+    validator.validate(payload)
+    with pytest.raises(ValidationError):
+        validator.validate(
+            {
+                **payload,
+                "patient_answer": "旧患者答案",
+                "office_answer": "旧医保办答案",
+            }
+        )
+
+
 def test_prompt_requires_single_conclusion_only():
     import yaml
     from pathlib import Path
@@ -180,6 +226,45 @@ def test_prompt_requires_single_conclusion_only():
     assert "[OFFICE_NOTE]" not in prompt
     assert "院端备注" not in prompt
     assert "面向当前院端经办角色的单一自然语言解释" in prompt_config["user_prompt"]
+
+
+def test_pooling_self_pay_missing_conclusion_uses_safe_fallback(
+    monkeypatch, settlement_context, mock_evidence
+):
+    from skills.settlement_explain_skill.output_parser import OutputParser
+
+    strategy = get_strategy("pooling_self_pay")
+    monkeypatch.setattr(
+        strategy,
+        "_generate_via_llm",
+        lambda *_args: OutputParser.parse("模型未返回结论标记"),
+    )
+
+    result = strategy.execute(
+        settlement_context, mock_evidence, "full_policy_matched"
+    )
+
+    assert result.answer.strip()
+    assert "统筹自付" in result.answer
+
+
+def test_all_strategies_filter_forbidden_tokens_from_evidence(settlement_context):
+    malicious_evidence = [
+        {
+            "source_text": "内部来源 yb_zyfdxx，规则编号 rule_id",
+            "applied_reason": "按 rule_id 命中内部字段 yb_zyfdxx",
+        }
+    ]
+
+    for name in list_strategies():
+        result = get_strategy(name).execute(
+            settlement_context,
+            malicious_evidence,
+            "partial_policy_matched",
+        )
+        assert result.answer.strip()
+        assert "yb_zyfdxx" not in result.answer
+        assert "rule_id" not in result.answer
 
 
 # ══════════════════════════════════════════════════════════════════════════

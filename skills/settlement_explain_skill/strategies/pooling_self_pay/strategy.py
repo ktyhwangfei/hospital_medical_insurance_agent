@@ -15,7 +15,6 @@ from src.model_service.gateway import ModelGateway
 from src.model_service.models import Message
 from skills.settlement_explain_skill.fact_builder import FactBuilder
 from skills.settlement_explain_skill.output_parser import OutputParser, ParsedOutput
-from skills.settlement_explain_skill.scripts.validate_skill_result import validate_answer
 
 class PoolingSelfPayStrategy(BaseFeeStrategy):
     """统筹自付解释策略。"""
@@ -75,7 +74,7 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
         Step 3: 加载 prompt_template.yaml 并注入事实 JSON
         Step 4: 调用 ModelGateway.generate()
         Step 5: 使用 OutputParser 解析 LLM 输出
-        Step 6: 使用 skip_for_llm=True 运行校验
+        Step 6: 由 BaseFeeStrategy.execute 的单一出口统一校验
 
         Returns:
             ParsedOutput (conclusion + office_note)
@@ -117,17 +116,7 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
         )
 
         # Step 5: 解析 LLM 输出
-        parsed = OutputParser.parse(response.content)
-
-        # Step 6: 校验（skip_for_llm=True 跳过模板特有检查）
-        validate_answer(
-            parsed.conclusion,
-            target_fee_item=self.fee_item,
-            is_complete=segment_ratios.get("has_complete", False),
-            skip_for_llm=True,
-        )
-
-        return parsed
+        return OutputParser.parse(response.content)
 
     # ── dummy 调试模式降级 ─────────────────────────────────────
 

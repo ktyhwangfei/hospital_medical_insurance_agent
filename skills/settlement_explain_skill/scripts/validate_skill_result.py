@@ -120,17 +120,22 @@ def validate_answer(
         ValidationResult
     """
     result = ValidationResult()
+    answer_text = answer if isinstance(answer, str) else ""
+
+    if not answer_text.strip():
+        result.errors.append("答案不能为空")
+        result.passed = False
 
     # 1. 禁止文本扫描（无论模式都执行）
     for fb in FORBIDDEN_TEXT:
-        if fb and fb in answer:
+        if fb and fb in answer_text:
             result.errors.append(f"答案包含禁止文本: {repr(fb)}")
             result.passed = False
 
     # 2. 必须文本检查
     required = _get_required(target_fee_item, is_complete, skip_for_llm)
     for req in required:
-        if req not in answer:
+        if req not in answer_text:
             result.warnings.append(f"答案缺少必须文本: {req}")
 
     return result

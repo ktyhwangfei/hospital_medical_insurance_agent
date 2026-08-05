@@ -15,6 +15,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from skills.settlement_explain_skill.scripts.validate_skill_result import (
+    validate_answer,
+)
+
 # 延迟导入避免启动时依赖未就绪
 _MAKE_LLM_READABLE = None
 
@@ -108,16 +112,40 @@ class BaseFeeStrategy(ABC):
         """
         # YAML 结构化查询（语义层动态查询路径已退役，统一走 YAML）
         policy_queries = self.build_policy_queries()
+        completeness = self.build_completeness(ctx, evidence)
+        warnings = self.build_warnings(ctx, policy_status)
+        answer = str(self.build_answer(ctx, evidence, policy_status) or "").strip()
+        validation = validate_answer(
+            answer,
+            target_fee_item=self.fee_item,
+            is_complete=str(completeness.get("level", "")).startswith(
+                "full_policy"
+            ),
+            skip_for_llm=True,
+        )
+        if not validation.passed:
+            answer = self._build_safe_answer()
+            warnings = [
+                *warnings,
+                "原始答案未通过安全校验，已返回安全降级解释。",
+            ]
 
         return StrategyResult(
             definition=self.build_definition(),
-            answer=self.build_answer(ctx, evidence, policy_status),
+            answer=answer,
             calculation_trace=self.build_calculation_trace(ctx, evidence),
             policy_queries=policy_queries,
-            warnings=self.build_warnings(ctx, policy_status),
-            completeness=self.build_completeness(ctx, evidence),
+            warnings=warnings,
+            completeness=completeness,
             target_fee_item=self.fee_item,
             target_field=self.fee_field,
+        )
+
+    def _build_safe_answer(self) -> str:
+        fee_label = self.fee_label or "该费用项"
+        return (
+            f"当前无法提供可靠的{fee_label}解释。"
+            "请核对结算数据后重试，或联系医院医保办进一步确认。"
         )
 
     @staticmethod

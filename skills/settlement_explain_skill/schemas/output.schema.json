@@ -4,6 +4,7 @@
   "title": "Skill Output Schema",
   "description": "policy-fee-explanation skill 的标准输出结构。",
   "type": "object",
+  "additionalProperties": false,
   "required": [
     "skill_id", "target_fee_item", "data_source", "mock_used",
     "can_answer", "answer", "trace_events"
@@ -56,6 +57,27 @@
     "answer": {
       "type": "string",
       "description": "面向当前院端经办角色的单一自然语言解释"
+    },
+    "calculation_trace": {
+      "type": "object"
+    },
+    "ratio_explanation": {
+      "type": "object"
+    },
+    "explanation_completeness": {
+      "type": "object"
+    },
+    "definition": {
+      "type": "object"
+    },
+    "policy_status": {
+      "type": "string"
+    },
+    "policy_status_message": {
+      "type": "string"
+    },
+    "llm_readable_context": {
+      "type": "string"
     },
     "warnings": {
       "type": "array",
