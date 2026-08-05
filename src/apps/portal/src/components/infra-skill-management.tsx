@@ -34,6 +34,8 @@ import type {
 } from '@/lib/types'
 import SkillQuestionExplainer from './skill-question-explainer'
 import SkillQueryPlan from './skill-query-plan'
+import SkillEvaluationSuite from './skills/skill-evaluation-suite'
+import SkillReleasePanel from './skills/skill-release-panel'
 
 // ── Business Action / Object 中文标签映射 ──
 
@@ -569,10 +571,12 @@ export default function InfraSkillManagement() {
             <div className="py-12 text-center text-gray-500">加载详情中...</div>
           ) : selectedSkill ? (
             <Tabs defaultValue="explain" orientation="horizontal" className="flex-col">
-              <TabsList className="mb-4">
+              <TabsList className="mb-4 h-auto flex-wrap">
                 <TabsTrigger value="explain">费用项解析</TabsTrigger>
                 <TabsTrigger value="query-plan">查询计划</TabsTrigger>
                 <TabsTrigger value="versions">版本证据</TabsTrigger>
+                <TabsTrigger value="evaluation">批量评测</TabsTrigger>
+                <TabsTrigger value="release">测试发布</TabsTrigger>
                 <TabsTrigger value="manifest">Manifest (元数据)</TabsTrigger>
                 <TabsTrigger value="fields">字段映射</TabsTrigger>
                 <TabsTrigger value="files">目录结构</TabsTrigger>
@@ -646,6 +650,14 @@ export default function InfraSkillManagement() {
                     </div>
                   )}
                 </div>
+              </TabsContent>
+
+              <TabsContent value="evaluation">
+                <SkillEvaluationSuite skillId={selectedSkill.skill_id} versions={versions} />
+              </TabsContent>
+
+              <TabsContent value="release">
+                <SkillReleasePanel skillId={selectedSkill.skill_id} versions={versions} />
               </TabsContent>
               
               <TabsContent value="manifest" className="bg-gray-50 p-4 rounded-md overflow-x-auto">

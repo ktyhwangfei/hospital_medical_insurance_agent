@@ -349,6 +349,135 @@ export interface SkillVersionSyncRequest {
   created_by: string
 }
 
+export interface SkillEvalCaseResponse {
+  case_id: string
+  suite_version: number
+  question_template: string
+  expected_skill_id?: string | null
+  required: boolean
+  risk_tags: string[]
+  business_tags: string[]
+  source_type: string
+  source_ref: string
+  contains_sensitive_data: boolean
+  enabled: boolean
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillEvalCaseListResponse {
+  items: SkillEvalCaseResponse[]
+  suite_version: number
+  total: number
+}
+
+export interface SkillEvalCaseCreateRequest {
+  question_template: string
+  expected_skill_id?: string | null
+  required?: boolean
+  risk_tags?: string[]
+  business_tags?: string[]
+  source_type?: string
+  source_ref?: string
+  contains_sensitive_data?: false
+  created_by: string
+}
+
+export interface SkillEvalMetricsResponse {
+  total: number
+  passed: number
+  required_total: number
+  required_passed: number
+  top1_accuracy: number
+  baseline_top1_accuracy: number
+  regression_count: number
+  new_false_takeover_count: number
+  gate_passed: boolean
+}
+
+export interface SkillEvalResultResponse {
+  case_id: string
+  expected_skill_id?: string | null
+  candidate_skill_id?: string | null
+  baseline_skill_id?: string | null
+  candidate_confidence: number
+  baseline_confidence: number
+  candidate_passed: boolean
+  baseline_passed: boolean
+  required: boolean
+  diff: 'unchanged_pass' | 'unchanged_fail' | 'new_pass' | 'new_failure' | 'route_changed'
+  candidate_keywords: string[]
+  baseline_keywords: string[]
+}
+
+export interface SkillEvalRunResponse {
+  run_id: string
+  skill_id: string
+  version_id: string
+  baseline_version_id?: string | null
+  suite_version: number
+  config_hash: string
+  status: 'running' | 'passed' | 'failed' | 'cancelled' | 'error'
+  metrics: SkillEvalMetricsResponse
+  results: SkillEvalResultResponse[]
+  created_by: string
+  created_at: string
+  completed_at?: string | null
+}
+
+export interface SkillEvalRunListResponse {
+  items: SkillEvalRunResponse[]
+  total: number
+}
+
+export interface SkillEvalRunCreateRequest {
+  version_id: string
+  baseline_version_id?: string | null
+  created_by: string
+}
+
+export interface SkillReleaseResponse {
+  release_id: string
+  skill_id: string
+  version_id: string
+  environment: 'dev' | 'test'
+  status: 'candidate' | 'approval_pending' | 'approved' | 'active' | 'retired'
+  baseline_release_id?: string | null
+  eval_run_id: string
+  artifact_hash: string
+  config_hash: string
+  rollout_percent: 0 | 100
+  runtime_mode: 'shadow'
+  revision: number
+  created_by: string
+  created_at: string
+  activated_at?: string | null
+  retired_at?: string | null
+}
+
+export interface SkillReleaseListResponse {
+  items: SkillReleaseResponse[]
+  total: number
+}
+
+export interface SkillReleaseCreateRequest {
+  version_id: string
+  eval_run_id: string
+  environment: 'dev' | 'test'
+  created_by: string
+}
+
+export interface SkillReleaseTransitionRequest {
+  expected_revision: number
+}
+
+export interface SkillReleaseApproveRequest extends SkillReleaseTransitionRequest {
+  approved_by: string
+  approver_role: string
+  reason: string
+}
+
 export interface InfraSkillFilesStructure {
   agents: string[]
   schemas: string[]

@@ -259,23 +259,23 @@ Commit: `feat: expose skill evaluation and test releases`
 
 **Files:** `src/apps/portal/src/lib/types.ts`, `src/apps/portal/src/lib/api-client.ts`, `src/apps/portal/src/components/skills/skill-evaluation-suite.tsx`, `src/apps/portal/src/components/skills/skill-release-panel.tsx`, `src/apps/portal/src/components/infra-skill-management.tsx`, `src/apps/portal/src/tests/skill-governance.test.ts`
 
-- [ ] **Step 1: 写前端 API 客户端失败测试**
+- [x] **Step 1: 写前端 API 客户端失败测试**
 
 验证路径编码、snake_case DTO、`Idempotency-Key` 和 `expected_revision` 请求体；为评测运行和发布激活动作各覆盖一个请求。
 
-- [ ] **Step 2: 运行并确认导出不存在**
+- [x] **Step 2: 运行并确认导出不存在**
 
 Run: `npm exec vitest run src/tests/skill-governance.test.ts` (workdir `src/apps/portal`)
 
-- [ ] **Step 3: 实现类型、客户端和两个最小组件**
+- [x] **Step 3: 实现类型、客户端和两个最小组件**
 
 “批量评测”页签展示用例总数、最近运行、必测通过率、候选/基线差异和失败原因；允许新增脱敏问题并对已登记版本运行评测。“测试发布”页签展示门禁状态、revision、审批证据和 shadow 标识；按钮严格按 candidate → approval_pending → approved → active 启用，不在前端自行推导服务端门禁。
 
-- [ ] **Step 4: 接入详情工作区，处理局部错误而不清空其他页签**
+- [x] **Step 4: 接入详情工作区，处理局部错误而不清空其他页签**
 
 组件仅接收 `skillId` 与 `versions`，自行维护局部 loading/error/mutation 状态。
 
-- [ ] **Step 5: 运行 Vitest、目标 ESLint 和构建**
+- [x] **Step 5: 运行 Vitest、目标 ESLint 和构建**
 
 Run 1: `npm exec vitest run src/tests/skill-catalog.test.ts src/tests/skill-governance.test.ts`
 

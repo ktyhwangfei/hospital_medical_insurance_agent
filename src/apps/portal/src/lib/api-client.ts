@@ -68,6 +68,111 @@ export async function syncInfraSkillVersion(
   )
 }
 
+export async function listSkillEvalCases(): Promise<SkillEvalCaseListResponse> {
+  return requestJson<SkillEvalCaseListResponse>('/infra-skills/eval-cases')
+}
+
+export async function createSkillEvalCase(
+  request: SkillEvalCaseCreateRequest,
+): Promise<SkillEvalCaseResponse> {
+  return requestJson<SkillEvalCaseResponse>('/infra-skills/eval-cases', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
+
+export async function listSkillEvalRuns(skillId: string): Promise<SkillEvalRunListResponse> {
+  return requestJson<SkillEvalRunListResponse>(
+    `/infra-skills/${encodeURIComponent(skillId)}/eval-runs`,
+  )
+}
+
+export async function createSkillEvalRun(
+  skillId: string,
+  request: SkillEvalRunCreateRequest,
+): Promise<SkillEvalRunResponse> {
+  return requestJson<SkillEvalRunResponse>(
+    `/infra-skills/${encodeURIComponent(skillId)}/eval-runs`,
+    { method: 'POST', body: JSON.stringify(request) },
+  )
+}
+
+export async function listSkillReleases(
+  skillId: string,
+  environment: 'dev' | 'test' = 'test',
+): Promise<SkillReleaseListResponse> {
+  return requestJson<SkillReleaseListResponse>(
+    `/infra-skills/${encodeURIComponent(skillId)}/releases?environment=${environment}`,
+  )
+}
+
+function idempotencyHeaders(idempotencyKey: string): HeadersInit {
+  return { 'Idempotency-Key': idempotencyKey }
+}
+
+export async function createSkillRelease(
+  skillId: string,
+  request: SkillReleaseCreateRequest,
+  idempotencyKey: string,
+): Promise<SkillReleaseResponse> {
+  return requestJson<SkillReleaseResponse>(
+    `/infra-skills/${encodeURIComponent(skillId)}/releases`,
+    {
+      method: 'POST',
+      headers: idempotencyHeaders(idempotencyKey),
+      body: JSON.stringify(request),
+    },
+  )
+}
+
+export async function requestSkillReleaseApproval(
+  skillId: string,
+  releaseId: string,
+  request: SkillReleaseTransitionRequest,
+  idempotencyKey: string,
+): Promise<SkillReleaseResponse> {
+  return requestJson<SkillReleaseResponse>(
+    `/infra-skills/${encodeURIComponent(skillId)}/releases/${encodeURIComponent(releaseId)}/request-approval`,
+    {
+      method: 'POST',
+      headers: idempotencyHeaders(idempotencyKey),
+      body: JSON.stringify(request),
+    },
+  )
+}
+
+export async function approveSkillRelease(
+  skillId: string,
+  releaseId: string,
+  request: SkillReleaseApproveRequest,
+  idempotencyKey: string,
+): Promise<SkillReleaseResponse> {
+  return requestJson<SkillReleaseResponse>(
+    `/infra-skills/${encodeURIComponent(skillId)}/releases/${encodeURIComponent(releaseId)}/approve`,
+    {
+      method: 'POST',
+      headers: idempotencyHeaders(idempotencyKey),
+      body: JSON.stringify(request),
+    },
+  )
+}
+
+export async function activateSkillRelease(
+  skillId: string,
+  releaseId: string,
+  request: SkillReleaseTransitionRequest,
+  idempotencyKey: string,
+): Promise<SkillReleaseResponse> {
+  return requestJson<SkillReleaseResponse>(
+    `/infra-skills/${encodeURIComponent(skillId)}/releases/${encodeURIComponent(releaseId)}/activate`,
+    {
+      method: 'POST',
+      headers: idempotencyHeaders(idempotencyKey),
+      body: JSON.stringify(request),
+    },
+  )
+}
+
 export async function testInfraSkillRouting(request: SkillRouteTestRequest): Promise<SkillRouteTestResponse> {
   return requestJson<SkillRouteTestResponse>('/infra-skills/route-test', {
     method: 'POST',
@@ -140,6 +245,17 @@ import type {
   InfraSkillCatalogResponse,
   SkillVersionResponse,
   SkillVersionSyncRequest,
+  SkillEvalCaseCreateRequest,
+  SkillEvalCaseListResponse,
+  SkillEvalCaseResponse,
+  SkillEvalRunCreateRequest,
+  SkillEvalRunListResponse,
+  SkillEvalRunResponse,
+  SkillReleaseApproveRequest,
+  SkillReleaseCreateRequest,
+  SkillReleaseListResponse,
+  SkillReleaseResponse,
+  SkillReleaseTransitionRequest,
   SkillRouteTestRequest,
   SkillRouteTestResponse,
   SkillExecuteTestRequest,
