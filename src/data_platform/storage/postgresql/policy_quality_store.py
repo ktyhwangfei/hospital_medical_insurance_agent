@@ -36,12 +36,15 @@ CREATE TABLE IF NOT EXISTS policy_knowledge_releases (
     contract_version VARCHAR(64) NOT NULL,
     case_set_version INTEGER NOT NULL,
     config_hash VARCHAR(128) NOT NULL,
+    source_change_set_id VARCHAR(64),
     quality_score DOUBLE PRECISION,
     consistency_score DOUBLE PRECISION,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     promoted_at TIMESTAMPTZ,
     promoted_by VARCHAR(128)
 );
+ALTER TABLE policy_knowledge_releases
+ADD COLUMN IF NOT EXISTS source_change_set_id VARCHAR(64);
 
 CREATE TABLE IF NOT EXISTS policy_quality_runs (
     run_id VARCHAR(64) PRIMARY KEY,
@@ -125,37 +128,42 @@ class PostgresPolicyQualityStore:
         return [PolicyQATestCase(**row) for row in rows]
 
     def save_release(self, release: KnowledgeRelease) -> KnowledgeRelease:
-        self._get_client().execute(
+        rows = self._get_client().execute(
             """INSERT INTO policy_knowledge_releases
                (release_id,status,facts_collection,rules_collection,contract_version,
-                case_set_version,config_hash,quality_score,consistency_score,created_at,promoted_at,promoted_by)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                case_set_version,config_hash,source_change_set_id,quality_score,
+                consistency_score,created_at,promoted_at,promoted_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (release_id) DO UPDATE SET status=EXCLUDED.status,
                quality_score=EXCLUDED.quality_score,consistency_score=EXCLUDED.consistency_score,
-               promoted_at=EXCLUDED.promoted_at,promoted_by=EXCLUDED.promoted_by""",
+               promoted_at=EXCLUDED.promoted_at,promoted_by=EXCLUDED.promoted_by
+               RETURNING *""",
             (
                 release.release_id, release.status, release.facts_collection,
                 release.rules_collection, release.contract_version,
-                release.case_set_version, release.config_hash, release.quality_score,
-                release.consistency_score, release.created_at, release.promoted_at,
-                release.promoted_by,
+                release.case_set_version, release.config_hash,
+                release.source_change_set_id, release.quality_score,
+                release.consistency_score, release.created_at,
+                release.promoted_at, release.promoted_by,
             ),
         )
-        return release
+        return KnowledgeRelease(**rows[0])
 
     def create_release(self, release: KnowledgeRelease) -> KnowledgeRelease:
         rows = self._get_client().execute(
             """INSERT INTO policy_knowledge_releases
                (release_id,status,facts_collection,rules_collection,contract_version,
-                case_set_version,config_hash,quality_score,consistency_score,created_at,promoted_at,promoted_by)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                case_set_version,config_hash,source_change_set_id,quality_score,
+                consistency_score,created_at,promoted_at,promoted_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (release_id) DO NOTHING RETURNING *""",
             (
                 release.release_id, release.status, release.facts_collection,
                 release.rules_collection, release.contract_version,
-                release.case_set_version, release.config_hash, release.quality_score,
-                release.consistency_score, release.created_at, release.promoted_at,
-                release.promoted_by,
+                release.case_set_version, release.config_hash,
+                release.source_change_set_id, release.quality_score,
+                release.consistency_score, release.created_at,
+                release.promoted_at, release.promoted_by,
             ),
         )
         if not rows:

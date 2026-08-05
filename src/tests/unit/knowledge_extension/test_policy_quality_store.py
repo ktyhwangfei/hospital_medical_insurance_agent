@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 
 
@@ -18,6 +20,72 @@ def _release(release_id: str, status: str = "ready"):
         case_set_version=1,
         config_hash=QUALITY_CONFIG_HASH,
     )
+
+
+def _release_with_source(
+    release_id: str,
+    source_change_set_id: str,
+    status: str = "ready",
+):
+    from src.knowledge_extension.rule_explanation.quality_models import KnowledgeRelease
+
+    return KnowledgeRelease(
+        release_id=release_id,
+        status=status,
+        facts_collection=f"policy_facts_{release_id}",
+        rules_collection=f"policy_rules_{release_id}",
+        contract_version="2",
+        case_set_version=1,
+        config_hash=QUALITY_CONFIG_HASH,
+        source_change_set_id=source_change_set_id,
+    )
+
+
+class _FakePolicyQualityClient:
+    """仅替代 PostgreSQL I/O，保留 release UPSERT 的真实字段语义。"""
+
+    def __init__(self) -> None:
+        self.releases: dict[str, dict] = {}
+
+    def execute(self, sql: str, params=None):
+        normalized = " ".join(sql.split())
+        upper = normalized.upper()
+        if upper.startswith("INSERT INTO POLICY_KNOWLEDGE_RELEASES"):
+            assert params is not None
+            columns_text = normalized.split("(", 1)[1].split(")", 1)[0]
+            columns = [column.strip() for column in columns_text.split(",")]
+            inserted = dict(zip(columns, params, strict=True))
+            release_id = inserted["release_id"]
+            existing = self.releases.get(release_id)
+            if existing is not None and "DO NOTHING" in upper:
+                return []
+            if existing is None:
+                self.releases[release_id] = inserted
+            else:
+                update_clause = normalized.split("DO UPDATE SET", 1)[1]
+                update_clause = update_clause.split("RETURNING", 1)[0]
+                for field in re.findall(r"(\w+)=EXCLUDED\.\w+", update_clause):
+                    existing[field] = inserted[field]
+            if "RETURNING *" in upper:
+                return [self.releases[release_id].copy()]
+            return []
+        if upper.startswith("SELECT * FROM POLICY_KNOWLEDGE_RELEASES WHERE"):
+            assert params is not None
+            row = self.releases.get(params[0])
+            return [row.copy()] if row else []
+        if upper.startswith("SELECT * FROM POLICY_KNOWLEDGE_RELEASES ORDER BY"):
+            return [row.copy() for row in reversed(self.releases.values())]
+        raise AssertionError(f"未支持的 SQL: {normalized}")
+
+
+def _postgres_store(client: _FakePolicyQualityClient):
+    from src.data_platform.storage.postgresql.policy_quality_store import (
+        PostgresPolicyQualityStore,
+    )
+
+    store = PostgresPolicyQualityStore("postgresql://test")
+    store._client = client
+    return store
 
 
 def _save_passed_run(
@@ -65,6 +133,98 @@ def test_ready_release_identity_is_immutable() -> None:
 
     with pytest.raises(ValueError, match="不可修改"):
         store.save_release(_release("rel_1").model_copy(update={"contract_version": "3"}))
+
+
+def test_release_without_source_lineage_roundtrips_in_memory() -> None:
+    from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+    store = InMemoryPolicyQualityStore()
+    created = store.create_release(_release("legacy"))
+    saved = store.save_release(created.model_copy(update={"status": "testing"}))
+
+    assert created.source_change_set_id is None
+    assert saved.source_change_set_id is None
+    assert store.get_release("legacy").source_change_set_id is None  # type: ignore[union-attr]
+    assert store.list_releases()[0].source_change_set_id is None
+
+
+def test_release_source_lineage_roundtrips_in_memory() -> None:
+    from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+    store = InMemoryPolicyQualityStore()
+    created = store.create_release(_release_with_source("candidate", "change_set_1"))
+    saved = store.save_release(created.model_copy(update={"status": "testing"}))
+
+    assert created.source_change_set_id == "change_set_1"
+    assert saved.source_change_set_id == "change_set_1"
+    assert store.get_release("candidate").source_change_set_id == "change_set_1"  # type: ignore[union-attr]
+    assert store.list_releases()[0].source_change_set_id == "change_set_1"
+
+
+def test_release_source_lineage_is_immutable_in_memory() -> None:
+    from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
+
+    store = InMemoryPolicyQualityStore()
+    store.create_release(_release_with_source("candidate", "change_set_1"))
+
+    with pytest.raises(ValueError, match="不可修改"):
+        store.save_release(_release_with_source("candidate", "change_set_2"))
+
+    assert store.get_release("candidate").source_change_set_id == "change_set_1"  # type: ignore[union-attr]
+
+
+def test_policy_quality_schema_migrates_release_source_lineage() -> None:
+    from src.data_platform.storage.postgresql.policy_quality_store import QUALITY_SCHEMA
+
+    ddl = " ".join(QUALITY_SCHEMA.upper().split())
+
+    assert "SOURCE_CHANGE_SET_ID VARCHAR(64)" in ddl
+    assert (
+        "ALTER TABLE POLICY_KNOWLEDGE_RELEASES ADD COLUMN IF NOT EXISTS "
+        "SOURCE_CHANGE_SET_ID VARCHAR(64)"
+    ) in ddl
+
+
+def test_release_without_source_lineage_roundtrips_in_postgres_store() -> None:
+    client = _FakePolicyQualityClient()
+    store = _postgres_store(client)
+    legacy = _release("legacy")
+    client.releases[legacy.release_id] = legacy.model_dump(
+        exclude={"source_change_set_id"}
+    )
+
+    loaded = store.get_release("legacy")
+    saved = store.save_release(legacy.model_copy(update={"status": "testing"}))
+
+    assert loaded is not None and loaded.source_change_set_id is None
+    assert saved.source_change_set_id is None
+    assert store.list_releases()[0].source_change_set_id is None
+
+
+def test_release_source_lineage_roundtrips_in_postgres_store() -> None:
+    client = _FakePolicyQualityClient()
+    store = _postgres_store(client)
+    release = _release_with_source("candidate", "change_set_1")
+
+    created = store.create_release(release)
+    loaded = store.get_release("candidate")
+    saved = store.save_release(release.model_copy(update={"status": "testing"}))
+
+    assert created.source_change_set_id == "change_set_1"
+    assert loaded is not None and loaded.source_change_set_id == "change_set_1"
+    assert saved.source_change_set_id == "change_set_1"
+    assert store.list_releases()[0].source_change_set_id == "change_set_1"
+
+
+def test_release_source_lineage_is_immutable_in_postgres_store() -> None:
+    client = _FakePolicyQualityClient()
+    store = _postgres_store(client)
+    store.create_release(_release_with_source("candidate", "change_set_1"))
+
+    saved = store.save_release(_release_with_source("candidate", "change_set_2"))
+
+    assert saved.source_change_set_id == "change_set_1"
+    assert store.get_release("candidate").source_change_set_id == "change_set_1"  # type: ignore[union-attr]
 
 
 def test_candidate_and_baseline_results_are_stored_separately() -> None:

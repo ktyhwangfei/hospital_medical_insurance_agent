@@ -67,7 +67,7 @@ class InMemoryPolicyQualityStore:
             if existing is not None:
                 immutable = (
                     "facts_collection", "rules_collection", "contract_version",
-                    "case_set_version", "config_hash",
+                    "case_set_version", "config_hash", "source_change_set_id",
                 )
                 if any(getattr(existing, key) != getattr(release, key) for key in immutable):
                     raise ValueError(f"release {release.release_id} 的版本身份不可修改")
