@@ -390,6 +390,45 @@ class TestSettlementExplanationEndpoint:
         assert response.status_code == 200
         assert forbidden_token not in response.json()["answer"].casefold()
 
+    @pytest.mark.parametrize(
+        "internal_excerpt",
+        [
+            "zyfdxx.bdgryf",
+            "yb_zyfdxx.bdtczf",
+            "tables_queried",
+        ],
+    )
+    def test_rest_drops_table_or_field_only_evidence(
+        self, client, monkeypatch, internal_excerpt
+    ):
+        from src.runtime.api import policy_qa_routes
+
+        async def fake_process(_settlement_id, _question=""):
+            payload = _internal_settlement_payload()
+            payload["policy_evidence"] = [
+                {
+                    "title": "内部字段",
+                    "clause": internal_excerpt,
+                    "score": 0.99,
+                }
+            ]
+            return payload
+
+        monkeypatch.setattr(policy_qa_routes, "_process_single_settlement", fake_process)
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "1671213"},
+        )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["policy_evidence"] == []
+        assert result["citations"] == []
+        assert result["verification_summary"]["policy_count"] == 0
+        assert result["answer_status"] == "partial"
+        assert result["uncertainties"]
+
     def test_rest_success_returns_only_public_contract(self, client, monkeypatch):
         from src.runtime.api import policy_qa_routes
 

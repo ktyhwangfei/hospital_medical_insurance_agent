@@ -196,7 +196,16 @@ _CREDENTIAL_PATTERN = re.compile(
 
 def _contains_internal_implementation(value: Any) -> bool:
     text = str(value or "")
-    return bool(_SQL_STATEMENT_PATTERN.search(text) or _CREDENTIAL_PATTERN.search(text))
+    return any(
+        pattern.search(text)
+        for pattern in (
+            _SQL_STATEMENT_PATTERN,
+            _CREDENTIAL_PATTERN,
+            _INTERNAL_TABLE_PATTERN,
+            _SEMANTIC_OBJECT_FIELD_PATTERN,
+            _INTERNAL_IDENTIFIER_PATTERN,
+        )
+    )
 
 
 def _public_text(value: Any) -> str:
@@ -297,12 +306,16 @@ def _build_public_result(
             or evidence.get("evidence_text")
             or evidence.get("source_text")
         )
-        if _contains_internal_implementation(raw_excerpt):
+        raw_title = evidence.get("title") or evidence.get("policy_title") or "政策依据"
+        if (
+            _contains_internal_implementation(raw_excerpt)
+            or _contains_internal_implementation(raw_title)
+        ):
             continue
         excerpt = _public_text(raw_excerpt)
         if not excerpt:
             continue
-        title = _public_text(evidence.get("title") or evidence.get("policy_title") or "政策依据")
+        title = _public_text(raw_title)
         citation_key = (title, excerpt)
         if citation_key in seen_citations:
             continue

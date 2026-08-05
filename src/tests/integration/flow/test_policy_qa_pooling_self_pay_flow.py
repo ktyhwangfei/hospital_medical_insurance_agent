@@ -235,7 +235,9 @@ def test_public_text_sanitizer_handles_chinese_ascii_boundaries(
     elif location == "calculation":
         public_text = result.calculation_steps[0].description
     else:
-        public_text = result.policy_evidence[0].excerpt
+        assert result.policy_evidence == []
+        assert result.citations == []
+        return
 
     assert forbidden_token not in public_text.casefold()
 
@@ -387,6 +389,91 @@ def test_sql_or_credential_only_evidence_is_dropped(internal_excerpt):
 
     assert result.policy_evidence == []
     assert result.citations == []
+
+
+@pytest.mark.parametrize(
+    "internal_excerpt",
+    [
+        "zyfdxx.bdgryf",
+        "yb_zyfdxx.bdtczf",
+        "tables_queried",
+    ],
+)
+def test_table_or_field_only_evidence_cannot_make_answer_complete(internal_excerpt):
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    result = _build_public_result(
+        answer="统筹自付按政策比例计算。",
+        can_answer=True,
+        partial_answer=False,
+        policy_status="full_policy_matched",
+        policy_evidence=[
+            {"title": "内部字段", "clause": internal_excerpt, "score": 0.9},
+        ],
+        calculation_steps=[{"step_name": "核对", "description": "按比例计算。"}],
+        definition={"name": "统筹自付", "plain_text": "个人承担部分。"},
+        warnings=[],
+        case_context={"basic_pooling_self_pay": 4962.67},
+    )
+
+    assert result.policy_evidence == []
+    assert result.citations == []
+    assert result.verification_summary.policy_count == 0
+    assert result.answer_status == "partial"
+    assert result.uncertainties
+
+
+def test_legal_policy_excerpt_remains_public_evidence():
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    result = _build_public_result(
+        answer="统筹自付按政策比例计算。",
+        can_answer=True,
+        partial_answer=False,
+        policy_status="full_policy_matched",
+        policy_evidence=[
+            {
+                "title": "职工医保住院待遇政策",
+                "clause": "起付线以上部分按规定比例由个人承担。",
+                "score": 0.9,
+            },
+        ],
+        calculation_steps=[{"step_name": "核对", "description": "按比例计算。"}],
+        definition={"name": "统筹自付", "plain_text": "个人承担部分。"},
+        warnings=[],
+        case_context={"basic_pooling_self_pay": 4962.67},
+    )
+
+    assert len(result.policy_evidence) == 1
+    assert len(result.citations) == 1
+    assert result.verification_summary.policy_count == 1
+    assert result.answer_status == "complete"
+
+
+def test_internal_identifier_in_evidence_title_drops_whole_evidence():
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    result = _build_public_result(
+        answer="统筹自付按政策比例计算。",
+        can_answer=True,
+        partial_answer=False,
+        policy_status="full_policy_matched",
+        policy_evidence=[
+            {
+                "title": "zyfdxx.bdgryf",
+                "clause": "内部字段说明。",
+                "score": 0.9,
+            },
+        ],
+        calculation_steps=[{"step_name": "核对", "description": "按比例计算。"}],
+        definition={"name": "统筹自付", "plain_text": "个人承担部分。"},
+        warnings=[],
+        case_context={"basic_pooling_self_pay": 4962.67},
+    )
+
+    assert result.policy_evidence == []
+    assert result.citations == []
+    assert result.verification_summary.policy_count == 0
 
 
 def test_public_text_sanitizer_preserves_normal_chinese_and_zero_amount():
