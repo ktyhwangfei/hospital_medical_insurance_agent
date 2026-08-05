@@ -43,8 +43,6 @@ CREATE TABLE IF NOT EXISTS policy_knowledge_releases (
     promoted_at TIMESTAMPTZ,
     promoted_by VARCHAR(128)
 );
-ALTER TABLE policy_knowledge_releases
-ADD COLUMN IF NOT EXISTS source_change_set_id VARCHAR(64);
 
 CREATE TABLE IF NOT EXISTS policy_quality_runs (
     run_id VARCHAR(64) PRIMARY KEY,
@@ -81,6 +79,21 @@ CREATE TABLE IF NOT EXISTS policy_active_release (
 );
 """
 
+RELEASE_SOURCE_LINEAGE_COLUMN_QUERY = """
+SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'policy_knowledge_releases'
+      AND column_name = 'source_change_set_id'
+) AS exists
+"""
+
+RELEASE_SOURCE_LINEAGE_MIGRATION_SQL = """
+ALTER TABLE policy_knowledge_releases
+ADD COLUMN IF NOT EXISTS source_change_set_id VARCHAR(64)
+"""
+
 
 class PostgresPolicyQualityStore:
     """PolicyQualityStore 的 PostgreSQL adapter。"""
@@ -95,6 +108,13 @@ class PostgresPolicyQualityStore:
             for statement in QUALITY_SCHEMA.split(";"):
                 if statement.strip():
                     self._client.execute(statement)
+            column_rows = self._client.execute(RELEASE_SOURCE_LINEAGE_COLUMN_QUERY)
+            if not column_rows[0]["exists"]:
+                self._client.execute("SET lock_timeout = '5s'")
+                try:
+                    self._client.execute(RELEASE_SOURCE_LINEAGE_MIGRATION_SQL)
+                finally:
+                    self._client.execute("RESET lock_timeout")
         return self._client
 
     def save_test_case(self, case: PolicyQATestCase) -> PolicyQATestCase:
@@ -137,6 +157,13 @@ class PostgresPolicyQualityStore:
                ON CONFLICT (release_id) DO UPDATE SET status=EXCLUDED.status,
                quality_score=EXCLUDED.quality_score,consistency_score=EXCLUDED.consistency_score,
                promoted_at=EXCLUDED.promoted_at,promoted_by=EXCLUDED.promoted_by
+               WHERE policy_knowledge_releases.facts_collection = EXCLUDED.facts_collection
+               AND policy_knowledge_releases.rules_collection = EXCLUDED.rules_collection
+               AND policy_knowledge_releases.contract_version = EXCLUDED.contract_version
+               AND policy_knowledge_releases.case_set_version = EXCLUDED.case_set_version
+               AND policy_knowledge_releases.config_hash = EXCLUDED.config_hash
+               AND policy_knowledge_releases.source_change_set_id
+                   IS NOT DISTINCT FROM EXCLUDED.source_change_set_id
                RETURNING *""",
             (
                 release.release_id, release.status, release.facts_collection,
@@ -147,6 +174,8 @@ class PostgresPolicyQualityStore:
                 release.promoted_at, release.promoted_by,
             ),
         )
+        if not rows:
+            raise ValueError(f"release {release.release_id} 的版本身份不可修改")
         return KnowledgeRelease(**rows[0])
 
     def create_release(self, release: KnowledgeRelease) -> KnowledgeRelease:

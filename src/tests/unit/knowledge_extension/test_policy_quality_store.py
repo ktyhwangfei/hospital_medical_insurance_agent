@@ -44,12 +44,28 @@ def _release_with_source(
 class _FakePolicyQualityClient:
     """仅替代 PostgreSQL I/O，保留 release UPSERT 的真实字段语义。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, has_source_lineage_column: bool = True) -> None:
         self.releases: dict[str, dict] = {}
+        self.has_source_lineage_column = has_source_lineage_column
+        self.fail_source_lineage_migration = False
+        self.executed_sql: list[str] = []
 
     def execute(self, sql: str, params=None):
         normalized = " ".join(sql.split())
         upper = normalized.upper()
+        self.executed_sql.append(normalized)
+        if "FROM INFORMATION_SCHEMA.COLUMNS" in upper:
+            assert "TABLE_SCHEMA = CURRENT_SCHEMA()" in upper
+            assert "TABLE_NAME = 'POLICY_KNOWLEDGE_RELEASES'" in upper
+            assert "COLUMN_NAME = 'SOURCE_CHANGE_SET_ID'" in upper
+            return [{"exists": self.has_source_lineage_column}]
+        if upper.startswith("ALTER TABLE POLICY_KNOWLEDGE_RELEASES"):
+            if self.fail_source_lineage_migration:
+                raise RuntimeError("migration lock timeout")
+            self.has_source_lineage_column = True
+            return []
+        if upper.startswith(("CREATE ", "SET LOCK_TIMEOUT", "RESET LOCK_TIMEOUT")):
+            return []
         if upper.startswith("INSERT INTO POLICY_KNOWLEDGE_RELEASES"):
             assert params is not None
             columns_text = normalized.split("(", 1)[1].split(")", 1)[0]
@@ -63,6 +79,20 @@ class _FakePolicyQualityClient:
                 self.releases[release_id] = inserted
             else:
                 update_clause = normalized.split("DO UPDATE SET", 1)[1]
+                where_clause = update_clause.split("WHERE", 1)[1] if "WHERE" in update_clause else ""
+                guards = re.findall(
+                    r"policy_knowledge_releases\.(\w+)\s+"
+                    r"(=|IS NOT DISTINCT FROM)\s+EXCLUDED\.\w+",
+                    where_clause,
+                    flags=re.IGNORECASE,
+                )
+                for field, operator in guards:
+                    current = existing.get(field)
+                    proposed = inserted.get(field)
+                    if operator == "=" and (current is None or proposed is None):
+                        return []
+                    if current != proposed:
+                        return []
                 update_clause = update_clause.split("RETURNING", 1)[0]
                 for field in re.findall(r"(\w+)=EXCLUDED\.\w+", update_clause):
                     existing[field] = inserted[field]
@@ -85,6 +115,19 @@ def _postgres_store(client: _FakePolicyQualityClient):
 
     store = PostgresPolicyQualityStore("postgresql://test")
     store._client = client
+    return store
+
+
+def _initialize_postgres_store(monkeypatch, client: _FakePolicyQualityClient):
+    from src.data_platform.storage.postgresql import policy_quality_store
+
+    monkeypatch.setattr(
+        policy_quality_store,
+        "PostgreSQLClient",
+        lambda database_url: client,
+    )
+    store = policy_quality_store.PostgresPolicyQualityStore("postgresql://test")
+    store._get_client()
     return store
 
 
@@ -174,15 +217,62 @@ def test_release_source_lineage_is_immutable_in_memory() -> None:
 
 
 def test_policy_quality_schema_migrates_release_source_lineage() -> None:
-    from src.data_platform.storage.postgresql.policy_quality_store import QUALITY_SCHEMA
+    from src.data_platform.storage.postgresql import policy_quality_store
 
-    ddl = " ".join(QUALITY_SCHEMA.upper().split())
+    ddl = " ".join(policy_quality_store.QUALITY_SCHEMA.upper().split())
+    migration = " ".join(
+        getattr(
+            policy_quality_store,
+            "RELEASE_SOURCE_LINEAGE_MIGRATION_SQL",
+            "",
+        ).upper().split()
+    )
 
     assert "SOURCE_CHANGE_SET_ID VARCHAR(64)" in ddl
+    assert "ALTER TABLE POLICY_KNOWLEDGE_RELEASES" not in ddl
     assert (
         "ALTER TABLE POLICY_KNOWLEDGE_RELEASES ADD COLUMN IF NOT EXISTS "
         "SOURCE_CHANGE_SET_ID VARCHAR(64)"
-    ) in ddl
+    ) in migration
+
+
+def test_existing_release_source_column_skips_alter(monkeypatch) -> None:
+    client = _FakePolicyQualityClient(has_source_lineage_column=True)
+
+    _initialize_postgres_store(monkeypatch, client)
+
+    assert any("INFORMATION_SCHEMA.COLUMNS" in sql.upper() for sql in client.executed_sql)
+    assert not any(
+        sql.upper().startswith("ALTER TABLE POLICY_KNOWLEDGE_RELEASES")
+        for sql in client.executed_sql
+    )
+    assert not any("LOCK_TIMEOUT" in sql.upper() for sql in client.executed_sql)
+
+
+def test_missing_release_source_column_runs_bounded_migration(monkeypatch) -> None:
+    client = _FakePolicyQualityClient(has_source_lineage_column=False)
+
+    _initialize_postgres_store(monkeypatch, client)
+
+    upper_sql = [sql.upper() for sql in client.executed_sql]
+    set_index = upper_sql.index("SET LOCK_TIMEOUT = '5S'")
+    alter_index = next(
+        index for index, sql in enumerate(upper_sql)
+        if sql.startswith("ALTER TABLE POLICY_KNOWLEDGE_RELEASES")
+    )
+    reset_index = upper_sql.index("RESET LOCK_TIMEOUT")
+    assert set_index < alter_index < reset_index
+    assert client.has_source_lineage_column is True
+
+
+def test_release_source_migration_resets_lock_timeout_on_failure(monkeypatch) -> None:
+    client = _FakePolicyQualityClient(has_source_lineage_column=False)
+    client.fail_source_lineage_migration = True
+
+    with pytest.raises(RuntimeError, match="migration lock timeout"):
+        _initialize_postgres_store(monkeypatch, client)
+
+    assert client.executed_sql[-1].upper() == "RESET LOCK_TIMEOUT"
 
 
 def test_release_without_source_lineage_roundtrips_in_postgres_store() -> None:
@@ -216,15 +306,26 @@ def test_release_source_lineage_roundtrips_in_postgres_store() -> None:
     assert store.list_releases()[0].source_change_set_id == "change_set_1"
 
 
-def test_release_source_lineage_is_immutable_in_postgres_store() -> None:
+@pytest.mark.parametrize(("field", "replacement"), [
+    ("facts_collection", "other_facts"),
+    ("rules_collection", "other_rules"),
+    ("contract_version", "3"),
+    ("case_set_version", 2),
+    ("config_hash", "other_config"),
+    ("source_change_set_id", "change_set_2"),
+])
+def test_release_identity_is_immutable_in_postgres_store(
+    field: str,
+    replacement: str | int,
+) -> None:
     client = _FakePolicyQualityClient()
     store = _postgres_store(client)
-    store.create_release(_release_with_source("candidate", "change_set_1"))
+    original = store.create_release(_release_with_source("candidate", "change_set_1"))
 
-    saved = store.save_release(_release_with_source("candidate", "change_set_2"))
+    with pytest.raises(ValueError, match="不可修改"):
+        store.save_release(original.model_copy(update={field: replacement}))
 
-    assert saved.source_change_set_id == "change_set_1"
-    assert store.get_release("candidate").source_change_set_id == "change_set_1"  # type: ignore[union-attr]
+    assert store.get_release("candidate") == original
 
 
 def test_candidate_and_baseline_results_are_stored_separately() -> None:
