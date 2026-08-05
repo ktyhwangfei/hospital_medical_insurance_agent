@@ -48,7 +48,10 @@ class _FakePolicyQualityClient:
         self.releases: dict[str, dict] = {}
         self.has_source_lineage_column = has_source_lineage_column
         self.fail_source_lineage_migration = False
+        self.fail_lock_timeout_reset = False
+        self.fail_close = False
         self.executed_sql: list[str] = []
+        self.closed = False
 
     def execute(self, sql: str, params=None):
         normalized = " ".join(sql.split())
@@ -64,6 +67,8 @@ class _FakePolicyQualityClient:
                 raise RuntimeError("migration lock timeout")
             self.has_source_lineage_column = True
             return []
+        if upper == "RESET LOCK_TIMEOUT" and self.fail_lock_timeout_reset:
+            raise RuntimeError("lock timeout reset failed")
         if upper.startswith(("CREATE ", "SET LOCK_TIMEOUT", "RESET LOCK_TIMEOUT")):
             return []
         if upper.startswith("INSERT INTO POLICY_KNOWLEDGE_RELEASES"):
@@ -106,6 +111,11 @@ class _FakePolicyQualityClient:
         if upper.startswith("SELECT * FROM POLICY_KNOWLEDGE_RELEASES ORDER BY"):
             return [row.copy() for row in reversed(self.releases.values())]
         raise AssertionError(f"未支持的 SQL: {normalized}")
+
+    def close(self) -> None:
+        self.closed = True
+        if self.fail_close:
+            raise RuntimeError("client close failed")
 
 
 def _postgres_store(client: _FakePolicyQualityClient):
@@ -273,6 +283,77 @@ def test_release_source_migration_resets_lock_timeout_on_failure(monkeypatch) ->
         _initialize_postgres_store(monkeypatch, client)
 
     assert client.executed_sql[-1].upper() == "RESET LOCK_TIMEOUT"
+
+
+def test_failed_initialization_retries_with_fresh_client(monkeypatch) -> None:
+    from src.data_platform.storage.postgresql import policy_quality_store
+
+    failed_client = _FakePolicyQualityClient(has_source_lineage_column=False)
+    failed_client.fail_source_lineage_migration = True
+    retry_client = _FakePolicyQualityClient(has_source_lineage_column=False)
+    clients = iter([failed_client, retry_client])
+    monkeypatch.setattr(
+        policy_quality_store,
+        "PostgreSQLClient",
+        lambda database_url: next(clients),
+    )
+    store = policy_quality_store.PostgresPolicyQualityStore("postgresql://test")
+
+    with pytest.raises(RuntimeError, match="migration lock timeout"):
+        store._get_client()
+
+    assert failed_client.closed is True
+    assert store._client is None
+
+    initialized = store._get_client()
+
+    assert initialized is retry_client
+    assert retry_client.has_source_lineage_column is True
+    assert any(
+        "INFORMATION_SCHEMA.COLUMNS" in sql.upper()
+        for sql in retry_client.executed_sql
+    )
+
+
+def test_migration_failure_remains_primary_when_reset_also_fails(monkeypatch) -> None:
+    from src.data_platform.storage.postgresql import policy_quality_store
+
+    client = _FakePolicyQualityClient(has_source_lineage_column=False)
+    client.fail_source_lineage_migration = True
+    client.fail_lock_timeout_reset = True
+    monkeypatch.setattr(
+        policy_quality_store,
+        "PostgreSQLClient",
+        lambda database_url: client,
+    )
+    store = policy_quality_store.PostgresPolicyQualityStore("postgresql://test")
+
+    with pytest.raises(RuntimeError, match="migration lock timeout"):
+        store._get_client()
+
+    assert client.executed_sql[-1].upper() == "RESET LOCK_TIMEOUT"
+    assert client.closed is True
+    assert store._client is None
+
+
+def test_initialization_failure_remains_primary_when_close_fails(monkeypatch) -> None:
+    from src.data_platform.storage.postgresql import policy_quality_store
+
+    client = _FakePolicyQualityClient(has_source_lineage_column=False)
+    client.fail_source_lineage_migration = True
+    client.fail_close = True
+    monkeypatch.setattr(
+        policy_quality_store,
+        "PostgreSQLClient",
+        lambda database_url: client,
+    )
+    store = policy_quality_store.PostgresPolicyQualityStore("postgresql://test")
+
+    with pytest.raises(RuntimeError, match="migration lock timeout"):
+        store._get_client()
+
+    assert client.closed is True
+    assert store._client is None
 
 
 def test_release_without_source_lineage_roundtrips_in_postgres_store() -> None:

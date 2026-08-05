@@ -103,19 +103,36 @@ class PostgresPolicyQualityStore:
         self._client: PostgreSQLClient | None = None
 
     def _get_client(self) -> PostgreSQLClient:
-        if self._client is None:
-            self._client = PostgreSQLClient(self._database_url)
+        if self._client is not None:
+            return self._client
+        client = PostgreSQLClient(self._database_url)
+        try:
             for statement in QUALITY_SCHEMA.split(";"):
                 if statement.strip():
-                    self._client.execute(statement)
-            column_rows = self._client.execute(RELEASE_SOURCE_LINEAGE_COLUMN_QUERY)
+                    client.execute(statement)
+            column_rows = client.execute(RELEASE_SOURCE_LINEAGE_COLUMN_QUERY)
             if not column_rows[0]["exists"]:
-                self._client.execute("SET lock_timeout = '5s'")
+                client.execute("SET lock_timeout = '5s'")
+                migration_error: BaseException | None = None
                 try:
-                    self._client.execute(RELEASE_SOURCE_LINEAGE_MIGRATION_SQL)
+                    client.execute(RELEASE_SOURCE_LINEAGE_MIGRATION_SQL)
+                except BaseException as exc:
+                    migration_error = exc
+                    raise
                 finally:
-                    self._client.execute("RESET lock_timeout")
-        return self._client
+                    try:
+                        client.execute("RESET lock_timeout")
+                    except BaseException:
+                        if migration_error is None:
+                            raise
+        except BaseException:
+            try:
+                client.close()
+            except BaseException:
+                pass
+            raise
+        self._client = client
+        return client
 
     def save_test_case(self, case: PolicyQATestCase) -> PolicyQATestCase:
         client = self._get_client()
