@@ -220,15 +220,15 @@ Commit: `feat: enforce skill test release gates`
 
 **Files:** `src/runtime/api/skill_schemas.py`, `src/runtime/api/infra_skill_routes.py`, `src/tests/integration/api/test_infra_skill_routes.py`
 
-- [ ] **Step 1: 写 API 失败测试**
+- [x] **Step 1: 写 API 失败测试**
 
 测试用户故事：创建脱敏用例 → 同步版本 → `POST eval-runs` 返回 202 且结果 passed → 创建 test candidate → 未审批激活返回 409 + `gate_failures` → request-approval → approve → activate → 查询只有一个 active。额外覆盖敏感样本拒绝 422、失败评测拒绝 candidate、stale revision 返回 409。
 
-- [ ] **Step 2: 运行并确认新增端点 404**
+- [x] **Step 2: 运行并确认新增端点 404**
 
 Run: `uv run --frozen python -m pytest src/tests/integration/api/test_infra_skill_routes.py -q --tb=short`
 
-- [ ] **Step 3: 实现显式 DTO 和端点**
+- [x] **Step 3: 实现显式 DTO 和端点**
 
 新增端点必须声明在 `/{skill_id}` 动态详情路由之前：
 
@@ -245,7 +245,7 @@ POST     /infra-skills/{skill_id}/releases/{release_id}/activate
 
 评测计算是本地确定性操作，API 以 `202 Accepted` 返回已经落库的终态 run，保留未来替换后台任务的契约。所有冲突使用 `error_detail()`；门禁错误的 `audit_event` 包含结构化 `gate_failures`，不拼接患者内容。
 
-- [ ] **Step 4: 按 T1 → T2a 顺序验证并提交**
+- [x] **Step 4: 按 T1 → T2a 顺序验证并提交**
 
 Run 1: Task 4 的单元测试命令。
 

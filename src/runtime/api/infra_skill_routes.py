@@ -4,11 +4,18 @@ from pathlib import Path
 from typing import Annotated
 
 import yaml
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from src.config.production import SKILLS_DIR
 from src.data_platform.storage.skill.version_factory import get_skill_version_storage
 from src.data_platform.storage.skill.version_ports import SkillVersionConflictError
+from src.data_platform.storage.skill.governance_factory import (
+    get_skill_governance_storage,
+)
+from src.data_platform.storage.skill.governance_ports import (
+    SkillGovernanceConflictError,
+    SkillGovernanceNotFoundError,
+)
 
 logger = logging.getLogger(__name__)
 from src.runtime.api.schemas import (
@@ -32,6 +39,24 @@ from src.runtime.skill_management.version_service import (
     SkillNotFoundError,
     SkillVersionService,
 )
+from src.runtime.skill_management.governance_service import (
+    SkillGovernanceGateError,
+    SkillGovernanceService,
+)
+from src.runtime.api.skill_schemas import (
+    SkillEvalCaseCreateRequest,
+    SkillEvalCaseListResponse,
+    SkillEvalCaseResponse,
+    SkillEvalCaseUpdateRequest,
+    SkillEvalRunCreateRequest,
+    SkillEvalRunListResponse,
+    SkillEvalRunResponse,
+    SkillReleaseApproveRequest,
+    SkillReleaseCreateRequest,
+    SkillReleaseListResponse,
+    SkillReleaseResponse,
+    SkillReleaseTransitionRequest,
+)
 from src.shared.schemas.responses import error_detail
 from src.skill_infra.artifact import SkillArtifactError
 from src.skill_infra.skill_loader import get_loader, refresh_loader
@@ -51,6 +76,22 @@ def get_skill_version_service() -> SkillVersionService:
 
 SkillVersionServiceDependency = Annotated[
     SkillVersionService, Depends(get_skill_version_service)
+]
+
+
+def get_skill_governance_service() -> SkillGovernanceService:
+    return SkillGovernanceService(
+        storage=get_skill_governance_storage(),
+        version_storage=get_skill_version_storage(),
+        loader=get_loader(),
+    )
+
+
+SkillGovernanceServiceDependency = Annotated[
+    SkillGovernanceService, Depends(get_skill_governance_service)
+]
+IdempotencyKey = Annotated[
+    str, Header(alias="Idempotency-Key", min_length=1, max_length=128)
 ]
 
 
@@ -99,6 +140,237 @@ def list_infra_skill_catalog(
         query=query,
     )
     return InfraSkillCatalogResponse.model_validate(catalog.model_dump())
+
+
+def _governance_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, SkillGovernanceNotFoundError):
+        return HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_GOVERNANCE_NOT_FOUND", str(exc)),
+        )
+    if isinstance(exc, SkillGovernanceGateError):
+        return HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "SKILL_RELEASE_GATE_FAILED",
+                str(exc),
+                {"gate_failures": exc.gate_failures},
+            ),
+        )
+    return HTTPException(
+        status_code=409,
+        detail=error_detail("SKILL_GOVERNANCE_CONFLICT", str(exc)),
+    )
+
+
+@router.get(
+    "/infra-skills/eval-cases",
+    response_model=SkillEvalCaseListResponse,
+)
+def list_skill_eval_cases(
+    service: SkillGovernanceServiceDependency,
+    enabled_only: bool = Query(default=False),
+) -> SkillEvalCaseListResponse:
+    cases = service.list_cases(enabled_only=enabled_only)
+    return SkillEvalCaseListResponse(
+        items=[SkillEvalCaseResponse.model_validate(case.model_dump()) for case in cases],
+        suite_version=max((case.suite_version for case in cases), default=0),
+        total=len(cases),
+    )
+
+
+@router.post(
+    "/infra-skills/eval-cases",
+    response_model=SkillEvalCaseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_skill_eval_case(
+    request: SkillEvalCaseCreateRequest,
+    service: SkillGovernanceServiceDependency,
+) -> SkillEvalCaseResponse:
+    try:
+        case = service.create_case(**request.model_dump())
+    except (SkillGovernanceConflictError, SkillGovernanceNotFoundError) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalCaseResponse.model_validate(case.model_dump())
+
+
+@router.put(
+    "/infra-skills/eval-cases/{case_id}",
+    response_model=SkillEvalCaseResponse,
+)
+def update_skill_eval_case(
+    case_id: str,
+    request: SkillEvalCaseUpdateRequest,
+    service: SkillGovernanceServiceDependency,
+) -> SkillEvalCaseResponse:
+    try:
+        case = service.update_case(case_id, **request.model_dump())
+    except (SkillGovernanceConflictError, SkillGovernanceNotFoundError) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalCaseResponse.model_validate(case.model_dump())
+
+
+@router.get(
+    "/infra-skills/{skill_id}/eval-runs",
+    response_model=SkillEvalRunListResponse,
+)
+def list_skill_eval_runs(
+    skill_id: str,
+    service: SkillGovernanceServiceDependency,
+) -> SkillEvalRunListResponse:
+    runs = service.list_eval_runs(skill_id)
+    return SkillEvalRunListResponse(
+        items=[SkillEvalRunResponse.model_validate(run.model_dump()) for run in runs],
+        total=len(runs),
+    )
+
+
+@router.post(
+    "/infra-skills/{skill_id}/eval-runs",
+    response_model=SkillEvalRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_skill_eval_run(
+    skill_id: str,
+    request: SkillEvalRunCreateRequest,
+    service: SkillGovernanceServiceDependency,
+) -> SkillEvalRunResponse:
+    try:
+        run = service.create_eval_run(skill_id, **request.model_dump())
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalRunResponse.model_validate(run.model_dump())
+
+
+@router.get(
+    "/infra-skills/{skill_id}/eval-runs/{run_id}",
+    response_model=SkillEvalRunResponse,
+)
+def get_skill_eval_run(
+    skill_id: str,
+    run_id: str,
+    service: SkillGovernanceServiceDependency,
+) -> SkillEvalRunResponse:
+    try:
+        run = service.get_eval_run(skill_id, run_id)
+    except SkillGovernanceNotFoundError as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalRunResponse.model_validate(run.model_dump())
+
+
+@router.get(
+    "/infra-skills/{skill_id}/releases",
+    response_model=SkillReleaseListResponse,
+)
+def list_skill_releases(
+    skill_id: str,
+    service: SkillGovernanceServiceDependency,
+    environment: str | None = Query(default=None, pattern=r"^(dev|test)$"),
+) -> SkillReleaseListResponse:
+    releases = service.list_releases(skill_id, environment)
+    return SkillReleaseListResponse(
+        items=[SkillReleaseResponse.model_validate(item.model_dump()) for item in releases],
+        total=len(releases),
+    )
+
+
+@router.post(
+    "/infra-skills/{skill_id}/releases",
+    response_model=SkillReleaseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_skill_release(
+    skill_id: str,
+    request: SkillReleaseCreateRequest,
+    service: SkillGovernanceServiceDependency,
+    _idempotency_key: IdempotencyKey,
+) -> SkillReleaseResponse:
+    try:
+        release = service.create_candidate(skill_id, **request.model_dump())
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillReleaseResponse.model_validate(release.model_dump())
+
+
+@router.post(
+    "/infra-skills/{skill_id}/releases/{release_id}/request-approval",
+    response_model=SkillReleaseResponse,
+)
+def request_skill_release_approval(
+    skill_id: str,
+    release_id: str,
+    request: SkillReleaseTransitionRequest,
+    service: SkillGovernanceServiceDependency,
+    _idempotency_key: IdempotencyKey,
+) -> SkillReleaseResponse:
+    try:
+        release = service.request_approval(
+            skill_id, release_id, expected_revision=request.expected_revision
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillReleaseResponse.model_validate(release.model_dump())
+
+
+@router.post(
+    "/infra-skills/{skill_id}/releases/{release_id}/approve",
+    response_model=SkillReleaseResponse,
+)
+def approve_skill_release(
+    skill_id: str,
+    release_id: str,
+    request: SkillReleaseApproveRequest,
+    service: SkillGovernanceServiceDependency,
+    _idempotency_key: IdempotencyKey,
+) -> SkillReleaseResponse:
+    try:
+        release = service.approve_release(
+            skill_id, release_id, **request.model_dump()
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillReleaseResponse.model_validate(release.model_dump())
+
+
+@router.post(
+    "/infra-skills/{skill_id}/releases/{release_id}/activate",
+    response_model=SkillReleaseResponse,
+)
+def activate_skill_release(
+    skill_id: str,
+    release_id: str,
+    request: SkillReleaseTransitionRequest,
+    service: SkillGovernanceServiceDependency,
+    _idempotency_key: IdempotencyKey,
+) -> SkillReleaseResponse:
+    try:
+        release = service.activate_release(
+            skill_id, release_id, expected_revision=request.expected_revision
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillReleaseResponse.model_validate(release.model_dump())
 
 
 def _list_files_in_dir(base_dir: Path, sub_dir: str) -> list[str]:
