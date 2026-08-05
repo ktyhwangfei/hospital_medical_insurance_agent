@@ -1,7 +1,7 @@
 """
 PoolingSelfPayStrategy — 统筹自付解释策略。
 
-负责：统筹段分段比例、退休人员60%折算、统筹自付患者/医保办视角。
+负责：统筹段分段比例、退休人员60%折算、统筹自付单一答案。
 """
 
 from __future__ import annotations
@@ -10,12 +10,12 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ..base import BaseFeeStrategy, StrategyResult
+from ..base import BaseFeeStrategy
 from src.model_service.gateway import ModelGateway
 from src.model_service.models import Message
 from skills.settlement_explain_skill.fact_builder import FactBuilder
 from skills.settlement_explain_skill.output_parser import OutputParser, ParsedOutput
-from skills.settlement_explain_skill.scripts.validate_skill_result import validate_patient_answer
+from skills.settlement_explain_skill.scripts.validate_skill_result import validate_answer
 
 class PoolingSelfPayStrategy(BaseFeeStrategy):
     """统筹自付解释策略。"""
@@ -55,21 +55,13 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
             ))
         return queries
 
-    # ── patient answer ─────────────────────────────────────────
+    # ── answer ─────────────────────────────────────────────────
 
-    def build_patient_answer(
+    def build_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
         # 不缓存：strategy 为单例，缓存会跨请求/跨结算单串答案（生产 bug）
         return self._generate_via_llm(ctx, evidence, policy_status).conclusion
-
-    # ── office answer ──────────────────────────────────────────
-
-    def build_office_answer(
-        self, ctx: Any, evidence: list[dict], policy_status: str
-    ) -> str:
-        # 不缓存：同上
-        return self._generate_via_llm(ctx, evidence, policy_status).office_note
 
     # ── LLM generation ─────────────────────────────────────────
 
@@ -128,7 +120,7 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
         parsed = OutputParser.parse(response.content)
 
         # Step 6: 校验（skip_for_llm=True 跳过模板特有检查）
-        validate_patient_answer(
+        validate_answer(
             parsed.conclusion,
             target_fee_item=self.fee_item,
             is_complete=segment_ratios.get("has_complete", False),

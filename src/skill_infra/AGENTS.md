@@ -149,19 +149,19 @@ skills/settlement_explain_skill/
 ├── assembler.py                ← 轻量调度器（~120行，委托给 Strategy）
 └── strategies/
     ├── base.py                 ← BaseFeeStrategy 抽象类
-    │                             7个抽象方法：build_definition / build_policy_queries
-    │                             / build_patient_answer / build_office_answer
-    │                             / build_calculation_trace / build_warnings / build_completeness
+    │                             6个抽象方法：build_definition / build_policy_queries
+    │                             / build_answer / build_calculation_trace
+    │                             / build_warnings / build_completeness
     ├── registry.py             ← STRATEGY_REGISTRY（延迟导入 + 实例缓存）
     ├── pooling_self_pay/       ← 统筹自付策略
     │   ├── strategy.py         ←   PoolingSelfPayStrategy（含 _extract_segment_ratios）
     │   ├── definition.yaml     ←   "统筹段内按政策比例由个人承担的金额"
-    │   ├── patient_template.yaml ← 6段患者视角模板（结论/是什么钱/政策依据/比例影响/金额关系/总结）
+    │   ├── answer_template.yaml  ← 6段单一答案模板（结论/是什么钱/政策依据/比例影响/金额关系/总结）
     │   └── policy_queries.yaml ←   85/90/95 分段 + 退休60% 折算
     ├── deductible/             ← 起付线策略
     │   ├── strategy.py         ←   DeductibleStrategy
     │   ├── definition.yaml     ←   "医保开始报销前需先由个人承担的固定金额"
-    │   ├── patient_template.yaml
+    │   ├── answer_template.yaml
     │   └── policy_queries.yaml ←   起付线标准 + 二次住院减半
     └── large_amount_self_pay/  ← 大额自付策略（框架）
         ├── strategy.py
@@ -190,8 +190,7 @@ endpoint → assembler.execute(ctx, evidence, status, target_fee_item)
              │
              └─ strategy.execute(ctx, evidence, status)
                   ├─ build_definition()       ← 独立定义
-                  ├─ build_patient_answer()   ← 独立模板
-                  ├─ build_office_answer()    ← 独立模板
+                  ├─ build_answer()           ← 独立单一答案模板
                   ├─ build_policy_queries()   ← 独立查询计划
                   ├─ build_calculation_trace()← 独立计算链路
                   ├─ build_warnings()         ← 独立警告

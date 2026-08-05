@@ -53,12 +53,12 @@ class PersonalTotalPayStrategy(BaseFeeStrategy):
             ))
         return queries
 
-    # ── patient answer ─────────────────────────────────────────
+    # ── answer ─────────────────────────────────────────────────
 
-    def build_patient_answer(
+    def build_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
-        cfg = self._load_yaml("patient_template.yaml")
+        cfg = self._load_yaml("answer_template.yaml")
 
         amt = self._fmt_money(getattr(ctx, "personal_total_pay", 0))
         deductible = self._fmt_money(getattr(ctx, "deductible", 0))
@@ -122,47 +122,6 @@ class PersonalTotalPayStrategy(BaseFeeStrategy):
         summary_tpl = cfg.get("summary_template", '{amount} 元是您本次住院的"个人总支付"，包含起付线、统筹自付、大额自付等全部个人负担项。个人总支付不等于统筹自付，统筹自付只是其中一部分，两者不可混淆。')
         lines.append(summary_tpl.replace("{amount}", amt))
 
-        return "\n".join(lines)
-
-    # ── office answer ──────────────────────────────────────────
-
-    def build_office_answer(
-        self, ctx: Any, evidence: list[dict], policy_status: str
-    ) -> str:
-        amt = self._fmt_money(getattr(ctx, "personal_total_pay", 0))
-        deductible = self._fmt_money(getattr(ctx, "deductible", 0))
-        pool_self = self._fmt_money(getattr(ctx, "basic_pooling_self_pay", 0))
-        large_self = self._fmt_money(getattr(ctx, "large_amount_self_pay", 0))
-        pool_pay = self._fmt_money(getattr(ctx, "basic_pooling_payment", 0))
-        large_pay = self._fmt_money(getattr(ctx, "large_amount_payment", 0))
-
-        lines = [
-            f'本次解释对象为"{self.fee_label}"，金额为 {amt} 元。',
-            "",
-            "一、结算上下文",
-            f'- 参保体系：{getattr(ctx, "insurance_type", "") or "未获取"}',
-            f'- 人员类别：{getattr(ctx, "person_type", "") or "未获取"}',
-            f'- 医疗类别：{getattr(ctx, "service_type", "") or "未获取"}',
-            f'- 医院等级：{getattr(ctx, "hospital_level", "") or "未获取"}',
-            f"- 起付线：{deductible} 元",
-            f"- 统筹自付：{pool_self} 元",
-            f"- 大额自付：{large_self} 元",
-            f"- 统筹支付：{pool_pay} 元",
-            f"- 大额支付：{large_pay} 元",
-            "",
-            "二、个人总支付构成分析",
-            f"个人总支付 {amt} 元由以下费用项目构成：",
-            f"  起付线 {deductible} 元（来源：yb_dyxxzy.bcqfje）",
-            f"+ 统筹自付 {pool_self} 元（来源：yb_zyfdxx.bdtczf）",
-            f"+ 大额自付 {large_self} 元（来源：yb_zyfdxx.bddegwyzf）",
-            f"+ 其他个人负担项（来源：结算系统综合计算）",
-            f"= 个人总支付 {amt} 元（来源：yb_zyfdxx.bdgryf）",
-            "",
-            "三、金额口径说明",
-            "个人总支付是结算系统的汇总字段，等于所有个人负担类项目的总和。",
-            "个人总支付 ≠ 统筹自付。统筹自付仅含基本统筹段按比例自付部分。",
-            "个人总支付包含起付线、统筹自付、大额自付以及目录外自费（如有）。",
-        ]
         return "\n".join(lines)
 
     # ── calculation trace ──────────────────────────────────────

@@ -1,4 +1,4 @@
-# 统筹自付患者视角模板
+# 统筹自付单一答案模板
 conclusion_header: 【本次结论】
 conclusion_template: '本次结算中，您的"{fee_label}"为 {amount} 元。'
 

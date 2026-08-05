@@ -1,7 +1,7 @@
 """
 LargeAmountSelfPayStrategy — 大额自付解释策略。
 
-负责：大额段支付比例说明、大额自付患者/医保办视角、大额与统筹/起付线区分。
+负责：大额段支付比例说明、大额自付单一答案、大额与统筹/起付线区分。
 """
 
 from __future__ import annotations
@@ -49,12 +49,12 @@ class LargeAmountSelfPayStrategy(BaseFeeStrategy):
             ))
         return queries
 
-    # ── patient answer ─────────────────────────────────────────
+    # ── answer ─────────────────────────────────────────────────
 
-    def build_patient_answer(
+    def build_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
-        cfg = self._load_yaml("patient_template.yaml")
+        cfg = self._load_yaml("answer_template.yaml")
         amt = self._fmt_money(getattr(ctx, "large_amount_self_pay", 0))
         large_pay = self._fmt_money(getattr(ctx, "large_amount_payment", 0))
         deductible = self._fmt_money(getattr(ctx, "deductible", 0))
@@ -118,39 +118,6 @@ class LargeAmountSelfPayStrategy(BaseFeeStrategy):
         lines.append("【一句话总结】")
         lines.append(cfg.get("summary", "{amount} 元是本次结算进入大额医疗互助保障段后按比例由您个人承担的部分。").replace("{amount}", amt))
 
-        return "\n".join(lines)
-
-    # ── office answer ──────────────────────────────────────────
-
-    def build_office_answer(
-        self, ctx: Any, evidence: list[dict], policy_status: str
-    ) -> str:
-        amt = self._fmt_money(getattr(ctx, "large_amount_self_pay", 0))
-        deductible = self._fmt_money(getattr(ctx, "deductible", 0))
-        inner = self._fmt_money(getattr(ctx, "medical_insurance_inner_amount", 0))
-        pool_pay = self._fmt_money(getattr(ctx, "basic_pooling_payment", 0))
-        pool_self = self._fmt_money(getattr(ctx, "basic_pooling_self_pay", 0))
-        large_pay = self._fmt_money(getattr(ctx, "large_amount_payment", 0))
-
-        lines = [
-            f'本次解释对象为"{self.fee_label}"，金额为 {amt} 元。',
-            "",
-            "一、结算上下文",
-            f'- 参保体系：{getattr(ctx, "insurance_type", "") or "未获取"}',
-            f'- 人员类别：{getattr(ctx, "person_type", "") or "未获取"}',
-            f'- 医疗类别：{getattr(ctx, "service_type", "") or "未获取"}',
-            f'- 医院等级：{getattr(ctx, "hospital_level", "") or "未查询"}',
-            f"- 起付线：{deductible} 元",
-            f"- 医保内费用：{inner} 元",
-            f"- 基本统筹支付：{pool_pay} 元",
-            f"- 基本统筹自付：{pool_self} 元",
-            f"- 大额支付：{large_pay} 元",
-            f"- 大额自付：{amt} 元（来源于真实结算数据 yb_dyxxzy.dqzfje）",
-            "",
-            "二、金额口径说明",
-            f"{amt} 元是基本医保统筹段达到封顶线后，超出部分进入大额医疗互助保障段，按政策比例由个人承担的部分。",
-            "大额自付与统筹自付（基本统筹段内按比例自付）及起付线（报销前固定自付）互不包含。",
-        ]
         return "\n".join(lines)
 
     # ── calculation trace ──────────────────────────────────────

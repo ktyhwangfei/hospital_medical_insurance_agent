@@ -1,4 +1,4 @@
-# 医保外费用患者视角模板
+# 医保外费用单一答案模板
 
 conclusion_header: 【本次结论】
 conclusion_with_amount: '本次结算中，您有 {amount} 元属于医保外费用（不在医保报销目录范围内的费用），需由您全额自费。'

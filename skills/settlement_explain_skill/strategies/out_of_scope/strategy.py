@@ -60,12 +60,12 @@ class OutOfScopeStrategy(BaseFeeStrategy):
             )
         return queries
 
-    # ── patient answer ─────────────────────────────────────────
+    # ── answer ─────────────────────────────────────────────────
 
-    def build_patient_answer(
+    def build_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
-        cfg = self._load_yaml("patient_template.yaml")
+        cfg = self._load_yaml("answer_template.yaml")
 
         # out_of_scope 字段可能不存在结算上下文，尝试安全获取
         amount_raw = getattr(ctx, "out_of_scope", None)
@@ -181,54 +181,6 @@ class OutOfScopeStrategy(BaseFeeStrategy):
             summary_tpl.replace("{amount}", target_val)
         )
 
-        return "\n".join(lines)
-
-    # ── office answer ──────────────────────────────────────────
-
-    def build_office_answer(
-        self, ctx: Any, evidence: list[dict], policy_status: str
-    ) -> str:
-        amount_raw = getattr(ctx, "out_of_scope", None)
-        target_amt = (
-            self._fmt_money(amount_raw) if amount_raw is not None else "未获取"
-        )
-
-        pool_self = self._fmt_money(getattr(ctx, "basic_pooling_self_pay", 0))
-        deductible = self._fmt_money(getattr(ctx, "deductible", 0))
-        inner = self._fmt_money(getattr(ctx, "medical_insurance_inner_amount", 0))
-        pool_pay = self._fmt_money(getattr(ctx, "basic_pooling_payment", 0))
-        large_pay = self._fmt_money(getattr(ctx, "large_amount_payment", 0))
-        large_self = self._fmt_money(getattr(ctx, "large_amount_self_pay", 0))
-        personal = self._fmt_money(getattr(ctx, "personal_total_pay", 0))
-
-        lines = [
-            f'本次解释对象为"{self.fee_label}"',
-            f'金额为 {target_amt} 元。',
-            "",
-            "一、结算上下文",
-            f'- 参保体系：{getattr(ctx, "insurance_type", "") or "未获取"}',
-            f'- 人员类别：{getattr(ctx, "person_type", "") or "未获取"}',
-            f'- 医疗类别：{getattr(ctx, "service_type", "") or "未获取"}',
-            f'- 医院等级：{getattr(ctx, "hospital_level", "") or "未查询"}',
-            f"- 起付线：{deductible} 元",
-            f"- 医保内费用：{inner} 元",
-            f"- 基本统筹支付：{pool_pay} 元",
-            f"- 基本统筹自付：{pool_self} 元",
-            f"- 大额支付：{large_pay} 元",
-            f"- 大额自付：{large_self} 元",
-            f"- 个人总支付：{personal} 元",
-            "",
-            "二、费用口径与政策依据",
-            "医保外费用是指不在医保三大目录（药品、诊疗项目、医疗服务设施）范围内的费用。",
-            "根据国家医保'保基本'原则，目录外费用不属于基本医保基金的支付范围，",
-            "无法纳入统筹报销计算，需由患者全额自费。",
-            "",
-            "三、医保外费用与目录内自付的核心区别",
-            "- 目录内自付（统筹自付/起付线/大额自付）：属于医保目录范围内费用，",
-            "  只是按政策规定需个人按比例承担一部分",
-            "- 医保外费用：根本不在医保目录范围内，全额不参与医保报销计算",
-            "  两者是性质完全不同的费用类别",
-        ]
         return "\n".join(lines)
 
     # ── calculation trace ──────────────────────────────────────

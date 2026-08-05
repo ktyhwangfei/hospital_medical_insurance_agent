@@ -20,27 +20,27 @@ skills/
 ├── AGENTS.md
 ├── __init__.py
 └── settlement_explain_skill/         # 医保费用解释 Skill v2.0
-    ├── SKILL.md                    #   YAML front matter + 14步执行流程
+    ├── SKILL.md                    #   YAML front matter + 13步执行流程
     ├── skill_manifest.yaml         #   SkillLoader 发现配置（业务动作、关键词、MCP 依赖）
     ├── assembler.py                #   轻量调度器（~120行，委托给 Strategy）
     ├── agents/openai.yaml          #   MCP 依赖声明
     ├── schemas/                    #   JSON Schema（input/output/trace_event/evidence）
-    ├── templates/                  #   解释模板（patient_view/office_view/cannot_answer）
+    ├── templates/                  #   解释模板（answer/cannot_answer/partial_answer）
     ├── scripts/                    #   上下文标准化、输出校验、链路事件
     ├── references/                 #   领域术语、查询模式、字段映射、质量标准
     ├── tests/                      #   验收测试用例
     └── strategies/                 #   ★ Strategy Pattern — 费用项策略包
-        ├── base.py                 #     BaseFeeStrategy 抽象类（7个抽象方法）
+        ├── base.py                 #     BaseFeeStrategy 抽象类（6个抽象方法）
         ├── registry.py             #     STRATEGY_REGISTRY（延迟导入 + 实例缓存）
         ├── pooling_self_pay/       #     统筹自付策略
         │   ├── strategy.py         #       PoolingSelfPayStrategy
         │   ├── definition.yaml     #       "统筹段内按政策比例由个人承担的金额"
-        │   ├── patient_template.yaml
+        │   ├── answer_template.yaml
         │   └── policy_queries.yaml #       85/90/95 + 退休60%
         ├── deductible/             #     起付线策略
         │   ├── strategy.py         #       DeductibleStrategy
         │   ├── definition.yaml     #       "医保开始报销前需先由个人承担的固定金额"
-        │   ├── patient_template.yaml
+        │   ├── answer_template.yaml
         │   └── policy_queries.yaml #       起付线标准 + 二次减半
         └── large_amount_self_pay/  #     大额自付策略（框架）
             ├── strategy.py

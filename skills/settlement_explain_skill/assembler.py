@@ -12,14 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from .strategies.registry import get_strategy
-from .strategies.semantic_utils import make_llm_readable
 
 
 @dataclass
 class SkillResult:
     """技能执行的标准输出结果。"""
-    patient_answer: str
-    office_answer: str
+    answer: str
     calculation_trace: dict
     ratio_explanation: dict = None
     explanation_completeness: dict = None
@@ -162,8 +160,7 @@ class BenefitPoolingSelfPayAssembler:
         }
 
         return SkillResult(
-            patient_answer=result.patient_answer,
-            office_answer=result.office_answer,
+            answer=result.answer,
             calculation_trace=result.calculation_trace,
             definition=result.definition,
             explanation_completeness=result.completeness,

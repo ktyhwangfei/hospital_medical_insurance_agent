@@ -2,7 +2,7 @@
 BaseStrategy — 费用解释策略抽象基类。
 
 每个费用项（统筹自付、起付线、大额自付等）拥有独立的 Strategy 子类。
-Strategy 负责：definition、policy_queries、patient_answer、office_answer、
+Strategy 负责：definition、policy_queries、answer、
 calculation_trace、warnings、completeness。
 
 assembler.py 不再包含解释逻辑，仅做分发。
@@ -23,8 +23,7 @@ _MAKE_LLM_READABLE = None
 class StrategyResult:
     """Strategy 执行的标准输出。"""
     definition: dict
-    patient_answer: str
-    office_answer: str
+    answer: str
     calculation_trace: dict
     policy_queries: list[Any]
     warnings: list[str]
@@ -69,17 +68,10 @@ class BaseFeeStrategy(ABC):
         ...
 
     @abstractmethod
-    def build_patient_answer(
+    def build_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
-        """生成患者视角解释。"""
-        ...
-
-    @abstractmethod
-    def build_office_answer(
-        self, ctx: Any, evidence: list[dict], policy_status: str
-    ) -> str:
-        """生成医保办视角解释。"""
+        """生成面向当前院端经办角色的单一解释。"""
         ...
 
     @abstractmethod
@@ -119,8 +111,7 @@ class BaseFeeStrategy(ABC):
 
         return StrategyResult(
             definition=self.build_definition(),
-            patient_answer=self.build_patient_answer(ctx, evidence, policy_status),
-            office_answer=self.build_office_answer(ctx, evidence, policy_status),
+            answer=self.build_answer(ctx, evidence, policy_status),
             calculation_trace=self.build_calculation_trace(ctx, evidence),
             policy_queries=policy_queries,
             warnings=self.build_warnings(ctx, policy_status),
