@@ -44,7 +44,7 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
                     rule_type="支付比例",
                     amount_band="650-30000",
                     payment_ratio="0.15",
-                    source_text="起付线以上至3万元部分，自付比例15%",
+                    source_text="起付线以上至3万元部分，自付比例15%；650-30000: 15%",
                     score=0.99,
                 ).__dict__,
                 PolicyRule(
@@ -52,7 +52,7 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
                     rule_type="支付比例",
                     amount_band="30000-40000",
                     payment_ratio="0.10",
-                    source_text="3万元至4万元部分，自付比例10%",
+                    source_text="3万元至4万元部分，自付比例10%；30000-40000: 10%",
                     score=0.98,
                 ).__dict__,
                 PolicyRule(
@@ -60,7 +60,7 @@ async def test_policy_qa_pooling_self_pay_flow_outputs_explainable_chain():
                     rule_type="支付比例",
                     amount_band="40000-inf",
                     payment_ratio="0.05",
-                    source_text="4万元以上部分，自付比例5%",
+                    source_text="4万元以上部分，自付比例5%；40000-999999: 5%",
                     score=0.97,
                 ).__dict__,
             ]
