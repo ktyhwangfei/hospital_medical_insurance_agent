@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from datetime import datetime
-from typing import TYPE_CHECKING
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from src.knowledge_extension.rule_explanation.change_set_models import (
+    SourceUnitRevision,
+)
+from src.knowledge_extension.rule_explanation.change_set_service import (
+    ChangeSetService,
+    SelectedKnowledgeUnit,
+)
 
 from src.knowledge_extension.rule_explanation.knowledge_build_models import (
     CreateKnowledgeBuildTaskRequest,
@@ -13,6 +21,7 @@ from src.knowledge_extension.rule_explanation.knowledge_build_models import (
     KnowledgeBuildBlocker,
     KnowledgeBuildPreflight,
     KnowledgeBuildTask,
+    KnowledgeBuildTaskUnit,
     KnowledgeBuildWarning,
     utc_now,
 )
@@ -25,12 +34,6 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_models import 
 from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
     KnowledgeWorkbenchService,
 )
-
-if TYPE_CHECKING:
-    from src.knowledge_extension.rule_explanation.change_set_service import (
-        ChangeSetService,
-    )
-
 
 _PIPELINE_VERSION = "policy-workbench-v1"
 _MODEL_SCENE = "policy_structuring"
@@ -146,6 +149,140 @@ class KnowledgeBuildService:
         request: CreateKnowledgeBuildTaskRequest,
     ) -> KnowledgeBuildPreflight:
         """按服务端最新来源、占用和语义契约执行只读提交前校验。"""
+        result, _resolved = self._evaluate_preflight(request)
+        return result
+
+    def create_task(
+        self,
+        request: CreateKnowledgeBuildTaskRequest,
+    ) -> KnowledgeBuildTask:
+        """从单次服务端快照校验、占用并构建待审核候选。"""
+        preflight, resolved = self._evaluate_preflight(request)
+        if not preflight.can_submit or preflight.semantic_contract_version is None:
+            raise KnowledgeBuildPreflightBlocked(preflight)
+
+        created_at = self._clock_now()
+        task_id = (
+            self._task_id_factory()
+            if self._task_id_factory is not None
+            else f"KB_{created_at.astimezone(timezone.utc):%Y%m%d}_{uuid4().hex[:12]}"
+        )
+        if not task_id.strip():
+            raise ValueError("知识构建任务 ID 不能为空")
+
+        queued = KnowledgeBuildTask(
+            task_id=task_id,
+            name=request.name,
+            status="QUEUED",
+            build_mode=request.build_mode,
+            rebuild_reason=request.rebuild_reason,
+            semantic_contract_version=preflight.semantic_contract_version,
+            pipeline_version=self.pipeline_version,
+            model_scene=self.model_scene,
+            config_hash=self.config_hash,
+            created_by=request.created_by,
+            units=[
+                KnowledgeBuildTaskUnit(
+                    doc_id=selected.source_revision.doc_id,
+                    doc_title=selected.source_revision.doc_title,
+                    unit_id=selected.source_revision.unit_id,
+                    unit_revision_id=selected.source_revision.unit_revision_id,
+                    path=list(selected.source_revision.path),
+                )
+                for selected in resolved
+            ],
+            created_at=created_at,
+            updated_at=created_at,
+        )
+        created = self._store.create_with_claims(queued)
+        try:
+            running = self._store.save(
+                created.model_copy(
+                    update={"status": "RUNNING", "started_at": self._clock_now()},
+                    deep=True,
+                )
+            )
+            change_set = self._change_set_service.build_for_units(
+                task_id=task_id,
+                task_name=request.name,
+                units=list(resolved),
+                semantic_contract_version=preflight.semantic_contract_version,
+                supersedes_candidate_id=None,
+            )
+            completed_units = [
+                unit.model_copy(
+                    update={
+                        "status": "BUILT",
+                        "candidate_result_ids": [
+                            item.item_id
+                            for item in change_set.items
+                            if item.doc_id == unit.doc_id
+                            and item.unit_id == unit.unit_id
+                        ],
+                    },
+                    deep=True,
+                )
+                for unit in running.units
+            ]
+            return self._store.save(
+                running.model_copy(
+                    update={
+                        "status": "WAITING_REVIEW",
+                        "units": completed_units,
+                        "processed_units": len(completed_units),
+                        "result_change_set_id": change_set.change_set_id,
+                        "result_summary": {
+                            key: int(value) for key, value in change_set.summary.items()
+                        },
+                        "finished_at": self._clock_now(),
+                    },
+                    deep=True,
+                )
+            )
+        except Exception as error:
+            self._record_failure(created, error)
+            raise
+
+    def _record_failure(
+        self,
+        created: KnowledgeBuildTask,
+        error: Exception,
+    ) -> None:
+        try:
+            latest = self._store.get(created.task_id) or created
+            if latest.status not in {"QUEUED", "RUNNING"}:
+                return
+            failed_units = [
+                unit.model_copy(
+                    update={
+                        "status": "FAILED",
+                        "error_code": type(error).__name__,
+                        "error_message": str(error),
+                    },
+                    deep=True,
+                )
+                for unit in latest.units
+            ]
+            self._store.save(
+                latest.model_copy(
+                    update={
+                        "status": "FAILED",
+                        "units": failed_units,
+                        "finished_at": self._clock_now(),
+                    },
+                    deep=True,
+                )
+            )
+        except Exception as recording_error:
+            error.add_note(
+                "记录知识构建任务失败状态时出错: "
+                f"{type(recording_error).__name__}: {recording_error}"
+            )
+
+    def _evaluate_preflight(
+        self,
+        request: CreateKnowledgeBuildTaskRequest,
+    ) -> tuple[KnowledgeBuildPreflight, tuple[SelectedKnowledgeUnit, ...]]:
         documents = self._load_documents()
         current_units = {
             (unit.doc_id, unit.unit_id): (document, unit)
@@ -155,6 +292,7 @@ class KnowledgeBuildService:
         blockers: list[KnowledgeBuildBlocker] = []
         warnings: list[KnowledgeBuildWarning] = []
         selected_contract_versions: list[str | None] = []
+        resolved: list[SelectedKnowledgeUnit] = []
         buildable_count = 0
         rebuild_count = 0
 
@@ -174,12 +312,24 @@ class KnowledgeBuildService:
 
             document, unit = current
             selected_contract_versions.append(document.contract_version)
-            unit_blocked = False
             current_revision_id = unit_revision_id_for(
                 doc_id=unit.doc_id,
                 unit_id=unit.unit_id,
                 source_text=unit.source_text,
             )
+            resolved.append(
+                SelectedKnowledgeUnit(
+                    unit=unit.model_copy(deep=True),
+                    source_revision=SourceUnitRevision(
+                        doc_id=unit.doc_id,
+                        doc_title=unit.doc_title,
+                        unit_id=unit.unit_id,
+                        unit_revision_id=current_revision_id,
+                        path=list(unit.path),
+                    ),
+                )
+            )
+            unit_blocked = False
             if selection.unit_revision_id != current_revision_id:
                 blockers.append(
                     KnowledgeBuildBlocker(
@@ -253,16 +403,25 @@ class KnowledgeBuildService:
                 )
             )
 
-        return KnowledgeBuildPreflight(
-            selected_count=len(request.unit_revisions),
-            buildable_count=buildable_count,
-            blocking_count=len(blockers),
-            rebuild_count=rebuild_count,
-            can_submit=not blockers,
-            semantic_contract_version=semantic_contract_version,
-            blockers=blockers,
-            warnings=warnings,
+        return (
+            KnowledgeBuildPreflight(
+                selected_count=len(request.unit_revisions),
+                buildable_count=buildable_count,
+                blocking_count=len(blockers),
+                rebuild_count=rebuild_count,
+                can_submit=not blockers,
+                semantic_contract_version=semantic_contract_version,
+                blockers=blockers,
+                warnings=warnings,
+            ),
+            tuple(resolved),
         )
+
+    def _clock_now(self) -> datetime:
+        current = self._clock()
+        if current.tzinfo is None or current.utcoffset() is None:
+            raise ValueError("知识构建任务时钟必须返回带时区时间")
+        return current
 
     def _load_documents(self) -> list[KnowledgeWorkbenchDocument]:
         summaries = self._workbench.list_documents()

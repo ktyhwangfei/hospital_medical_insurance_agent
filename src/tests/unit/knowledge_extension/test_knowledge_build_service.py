@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import re
 from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from src.knowledge_extension.rule_explanation import knowledge_build_models as models
+from src.knowledge_extension.rule_explanation.change_set_models import (
+    ChangeSetItem,
+    KnowledgeChangeSet,
+)
 from src.knowledge_extension.rule_explanation.knowledge_build_store import (
     InMemoryKnowledgeBuildStore,
+    UnitRevisionClaimed,
 )
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
     ApprovedUnit,
@@ -84,6 +91,159 @@ class _Workbench:
     def get_document(self, doc_id: str) -> KnowledgeWorkbenchDocument:
         self.get_document_calls += 1
         return self.documents[doc_id].model_copy(deep=True)
+
+
+class _ChangeSetOnlyBuilder:
+    """Task-scoped fake deliberately exposes no document-wide build method."""
+
+    def __init__(self, *, failure: Exception | None = None) -> None:
+        self.failure = failure
+        self.calls: list[dict[str, Any]] = []
+        self.results: list[KnowledgeChangeSet] = []
+
+    def build_for_units(
+        self,
+        *,
+        task_id: str,
+        task_name: str,
+        units: list[Any],
+        semantic_contract_version: str,
+        supersedes_candidate_id: str | None = None,
+    ) -> KnowledgeChangeSet:
+        self.calls.append(
+            {
+                "task_id": task_id,
+                "task_name": task_name,
+                "units": list(units),
+                "semantic_contract_version": semantic_contract_version,
+                "supersedes_candidate_id": supersedes_candidate_id,
+            }
+        )
+        if self.failure is not None:
+            raise self.failure
+        items = [
+            ChangeSetItem(
+                item_id=f"ci_{selected.unit.doc_id}_{selected.unit.unit_id}",
+                change_type="ADD",
+                rule_id=f"rule_{selected.unit.doc_id}_{selected.unit.unit_id}",
+                doc_id=selected.unit.doc_id,
+                unit_id=selected.unit.unit_id,
+            )
+            for selected in units
+        ]
+        result = KnowledgeChangeSet(
+            change_set_id=f"CS_{task_id}",
+            source_document_version_id="|".join(
+                sorted({selected.unit.doc_id for selected in units})
+            ),
+            doc_id=(
+                units[0].unit.doc_id
+                if len({selected.unit.doc_id for selected in units}) == 1
+                else "MULTI"
+            ),
+            doc_title=task_name,
+            build_task_id=task_id,
+            source_units=[selected.source_revision for selected in units],
+            semantic_contract_version=semantic_contract_version,
+            supersedes_candidate_id=supersedes_candidate_id,
+            summary={
+                "additions": len(items),
+                "modifications": 0,
+                "replacements": 0,
+                "expirations": 0,
+                "unchanged": 0,
+            },
+            items=items,
+        )
+        self.results.append(result)
+        return result
+
+
+class _RecordingStore:
+    def __init__(
+        self,
+        *,
+        running_save_failure: Exception | None = None,
+        final_save_failure: Exception | None = None,
+    ) -> None:
+        self.inner = InMemoryKnowledgeBuildStore()
+        self.running_save_failure = running_save_failure
+        self.final_save_failure = final_save_failure
+        self.transitions: list[str] = []
+        self.snapshots: list[models.KnowledgeBuildTask] = []
+        self.get_calls = 0
+
+    def create_with_claims(
+        self, task: models.KnowledgeBuildTask
+    ) -> models.KnowledgeBuildTask:
+        self.transitions.append(task.status)
+        self.snapshots.append(task.model_copy(deep=True))
+        return self.inner.create_with_claims(task)
+
+    def save(self, task: models.KnowledgeBuildTask) -> models.KnowledgeBuildTask:
+        self.transitions.append(task.status)
+        self.snapshots.append(task.model_copy(deep=True))
+        if task.status == "RUNNING" and self.running_save_failure is not None:
+            failure = self.running_save_failure
+            self.running_save_failure = None
+            raise failure
+        if task.status == "WAITING_REVIEW" and self.final_save_failure is not None:
+            failure = self.final_save_failure
+            self.final_save_failure = None
+            raise failure
+        return self.inner.save(task)
+
+    def get(self, task_id: str) -> models.KnowledgeBuildTask | None:
+        self.get_calls += 1
+        return self.inner.get(task_id)
+
+    def list(self) -> list[models.KnowledgeBuildTask]:
+        return self.inner.list()
+
+    def get_claim(self, doc_id: str, unit_id: str) -> Any:
+        return self.inner.get_claim(doc_id, unit_id)
+
+    def release_claims(self, task_id: str) -> None:
+        self.inner.release_claims(task_id)
+
+
+class _ClaimRaceStore(_RecordingStore):
+    def __init__(self, failure: UnitRevisionClaimed) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def create_with_claims(
+        self, task: models.KnowledgeBuildTask
+    ) -> models.KnowledgeBuildTask:
+        self.transitions.append(task.status)
+        self.snapshots.append(task.model_copy(deep=True))
+        raise self.failure
+
+
+def _create_service(
+    documents: Iterable[KnowledgeWorkbenchDocument],
+    *,
+    store: Any | None = None,
+    builder: _ChangeSetOnlyBuilder | None = None,
+    clock: Any | None = None,
+    task_id_factory: Any | None = None,
+) -> tuple[Any, _Workbench, Any, _ChangeSetOnlyBuilder]:
+    module = _build_service_module()
+    workbench = _Workbench(documents)
+    build_store = store if store is not None else _RecordingStore()
+    change_set_builder = builder or _ChangeSetOnlyBuilder()
+    kwargs: dict[str, Any] = {}
+    if clock is not None:
+        kwargs["clock"] = clock
+    if task_id_factory is not None:
+        kwargs["task_id_factory"] = task_id_factory
+    service = module.KnowledgeBuildService(
+        workbench_service=workbench,
+        change_set_service=change_set_builder,
+        store=build_store,
+        **kwargs,
+    )
+    return service, workbench, build_store, change_set_builder
 
 
 def _service(
@@ -713,3 +873,382 @@ def test_service_exposes_deterministic_pipeline_configuration() -> None:
     assert service_a.config_hash == service_b.config_hash
     assert len(service_a.config_hash) == 64
     int(service_a.config_hash, 16)
+
+
+def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
+    fixed_time = datetime(2026, 8, 5, 9, 30, tzinfo=timezone.utc)
+    first = _unit(
+        doc_id="doc-a",
+        doc_title="Policy A",
+        unit_id="unit-a",
+        source_text="exact source A",
+        path=["Chapter A"],
+    )
+    excluded = _unit(
+        doc_id="doc-a",
+        doc_title="Policy A",
+        unit_id="unit-excluded",
+        source_text="must not build",
+    )
+    second = _unit(
+        doc_id="doc-b",
+        doc_title="Policy B",
+        unit_id="unit-b",
+        source_text="exact source B",
+        path=["Chapter B"],
+    )
+    store = _RecordingStore()
+    service, workbench, _store, builder = _create_service(
+        [
+            _document("doc-a", "Policy A", [first, excluded]),
+            _document("doc-b", "Policy B", [second]),
+        ],
+        store=store,
+        clock=lambda: fixed_time,
+        task_id_factory=lambda: "KB_20260805_fixed000001",
+    )
+    request = models.CreateKnowledgeBuildTaskRequest(
+        name="Selected policy build",
+        created_by="reviewer-a",
+        build_mode="REBUILD",
+        rebuild_reason="Policy source refreshed",
+        unit_revisions=[
+            _selection("doc-a", "unit-a", "exact source A"),
+            _selection("doc-b", "unit-b", "exact source B"),
+        ],
+    )
+
+    result = service.create_task(request)
+
+    assert store.transitions == ["QUEUED", "RUNNING", "WAITING_REVIEW"]
+    queued = store.snapshots[0]
+    assert queued.task_id == "KB_20260805_fixed000001"
+    assert queued.name == request.name
+    assert queued.build_mode == request.build_mode
+    assert queued.rebuild_reason == request.rebuild_reason
+    assert queued.created_by == request.created_by
+    assert queued.semantic_contract_version == "contract-v1"
+    assert queued.pipeline_version == service.pipeline_version
+    assert queued.model_scene == service.model_scene
+    assert queued.config_hash == service.config_hash
+    assert queued.created_at == fixed_time
+    assert queued.updated_at == fixed_time
+    assert queued.processed_units == 0
+    assert queued.result_change_set_id is None
+    assert queued.result_summary == {}
+    assert queued.issue_count == 0
+    assert queued.started_at is None
+    assert queued.finished_at is None
+    assert [unit.model_dump() for unit in queued.units] == [
+        {
+            "doc_id": "doc-a",
+            "doc_title": "Policy A",
+            "unit_id": "unit-a",
+            "unit_revision_id": _selection(
+                "doc-a", "unit-a", "exact source A"
+            ).unit_revision_id,
+            "path": ["Chapter A"],
+            "status": "PENDING",
+            "candidate_result_ids": [],
+            "error_code": None,
+            "error_message": None,
+        },
+        {
+            "doc_id": "doc-b",
+            "doc_title": "Policy B",
+            "unit_id": "unit-b",
+            "unit_revision_id": _selection(
+                "doc-b", "unit-b", "exact source B"
+            ).unit_revision_id,
+            "path": ["Chapter B"],
+            "status": "PENDING",
+            "candidate_result_ids": [],
+            "error_code": None,
+            "error_message": None,
+        },
+    ]
+    assert workbench.get_document_calls == 2
+    assert len(builder.calls) == 1
+    call = builder.calls[0]
+    assert call["task_id"] == queued.task_id
+    assert call["task_name"] == request.name
+    assert call["semantic_contract_version"] == "contract-v1"
+    assert call["supersedes_candidate_id"] is None
+    assert [
+        (selected.unit.doc_id, selected.unit.unit_id, selected.unit.source_text)
+        for selected in call["units"]
+    ] == [
+        ("doc-a", "unit-a", "exact source A"),
+        ("doc-b", "unit-b", "exact source B"),
+    ]
+    candidate = builder.results[0]
+    assert [(item.doc_id, item.unit_id) for item in candidate.items] == [
+        ("doc-a", "unit-a"),
+        ("doc-b", "unit-b"),
+    ]
+    assert [
+        (source.doc_id, source.unit_id, source.unit_revision_id)
+        for source in candidate.source_units
+    ] == [
+        ("doc-a", "unit-a", queued.units[0].unit_revision_id),
+        ("doc-b", "unit-b", queued.units[1].unit_revision_id),
+    ]
+    assert result.status == "WAITING_REVIEW"
+    assert result.started_at == fixed_time
+    assert result.finished_at == fixed_time
+    assert result.processed_units == 2
+    assert result.issue_count == 0
+    assert result.result_change_set_id == candidate.change_set_id
+    assert result.result_summary == candidate.summary
+    assert [unit.status for unit in result.units] == ["BUILT", "BUILT"]
+    assert [unit.candidate_result_ids for unit in result.units] == [
+        ["ci_doc-a_unit-a"],
+        ["ci_doc-b_unit-b"],
+    ]
+    assert store.get_claim("doc-a", "unit-a") is not None
+    assert store.get_claim("doc-b", "unit-b") is not None
+    assert store.get_claim("doc-a", "unit-excluded") is None
+
+
+def test_create_task_default_id_uses_utc_date_and_lowercase_uuid_prefix() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    local_time = datetime(
+        2026,
+        8,
+        6,
+        1,
+        15,
+        tzinfo=timezone(timedelta(hours=8)),
+    )
+    service, _workbench, _store, _builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        clock=lambda: local_time,
+    )
+
+    result = service.create_task(
+        _request([_selection("doc-1", "unit-1", "source")])
+    )
+
+    assert re.fullmatch(r"KB_20260805_[0-9a-f]{12}", result.task_id)
+
+
+def test_create_task_rejects_blank_injected_id_before_any_write() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    service, _workbench, store, builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        task_id_factory=lambda: " \t ",
+    )
+
+    with pytest.raises(ValueError, match="ID"):
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert store.transitions == []
+    assert store.list() == []
+    assert builder.calls == []
+
+
+def test_create_task_raises_typed_preflight_blocker_without_state() -> None:
+    module = _build_service_module()
+    service, _workbench, store, builder = _create_service([])
+    request = _request(
+        [
+            models.KnowledgeBuildUnitRevision(
+                doc_id="unknown-doc",
+                unit_id="unknown-unit",
+                unit_revision_id="unknown-revision",
+            )
+        ]
+    )
+
+    with pytest.raises(module.KnowledgeBuildPreflightBlocked) as exc_info:
+        service.create_task(request)
+
+    assert [blocker.code for blocker in exc_info.value.result.blockers] == [
+        "UNIT_NOT_APPROVED"
+    ]
+    assert store.transitions == []
+    assert store.list() == []
+    assert builder.calls == []
+
+
+def test_create_task_revalidates_after_public_preflight_against_fresh_source() -> None:
+    module = _build_service_module()
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="version one",
+    )
+    service, workbench, store, builder = _create_service(
+        [_document("doc-1", "Policy", [source])]
+    )
+    request = _request([_selection("doc-1", "unit-1", "version one")])
+    assert service.preflight(request).can_submit is True
+    workbench.documents["doc-1"] = _document(
+        "doc-1",
+        "Policy",
+        [source.model_copy(update={"source_text": "version two"})],
+    )
+
+    with pytest.raises(module.KnowledgeBuildPreflightBlocked) as exc_info:
+        service.create_task(request)
+
+    assert [blocker.code for blocker in exc_info.value.result.blockers] == [
+        "UNIT_REVISION_CHANGED"
+    ]
+    assert workbench.get_document_calls == 2
+    assert store.transitions == []
+    assert builder.calls == []
+
+
+def test_create_task_preserves_atomic_claim_race_and_skips_build_or_cleanup() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    race = UnitRevisionClaimed(
+        doc_id="doc-1",
+        unit_id="unit-1",
+        unit_revision_id=_selection(
+            "doc-1", "unit-1", "source"
+        ).unit_revision_id,
+        task_id="KB_competing",
+    )
+    store = _ClaimRaceStore(race)
+    service, workbench, _store, builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        task_id_factory=lambda: "KB_race_attempt",
+    )
+
+    with pytest.raises(UnitRevisionClaimed) as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert exc_info.value is race
+    assert workbench.get_document_calls == 1
+    assert store.transitions == ["QUEUED"]
+    assert store.inner.list() == []
+    assert store.get_calls == 0
+    assert builder.calls == []
+
+
+def test_create_task_build_failure_marks_failed_releases_claim_and_reraises() -> None:
+    fixed_time = datetime(2026, 8, 5, 11, 0, tzinfo=timezone.utc)
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    failure = RuntimeError("candidate generation failed")
+    store = _RecordingStore()
+    builder = _ChangeSetOnlyBuilder(failure=failure)
+    service, _workbench, _store, _builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        builder=builder,
+        clock=lambda: fixed_time,
+        task_id_factory=lambda: "KB_build_failure",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert exc_info.value is failure
+    failed = store.inner.get("KB_build_failure")
+    assert failed is not None
+    assert failed.status == "FAILED"
+    assert failed.finished_at == fixed_time
+    assert failed.processed_units == 0
+    assert [unit.status for unit in failed.units] == ["FAILED"]
+    assert [unit.error_code for unit in failed.units] == ["RuntimeError"]
+    assert [unit.error_message for unit in failed.units] == [str(failure)]
+    assert store.transitions == ["QUEUED", "RUNNING", "FAILED"]
+    assert store.get_claim("doc-1", "unit-1") is None
+
+
+def test_create_task_running_save_failure_attempts_failed_cleanup() -> None:
+    fixed_time = datetime(2026, 8, 5, 11, 30, tzinfo=timezone.utc)
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    failure = RuntimeError("running save failed")
+    store = _RecordingStore(running_save_failure=failure)
+    service, _workbench, _store, builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        clock=lambda: fixed_time,
+        task_id_factory=lambda: "KB_running_failure",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert exc_info.value is failure
+    failed = store.inner.get("KB_running_failure")
+    assert failed is not None
+    assert failed.status == "FAILED"
+    assert [unit.error_code for unit in failed.units] == ["RuntimeError"]
+    assert [unit.error_message for unit in failed.units] == [str(failure)]
+    assert store.transitions == ["QUEUED", "RUNNING", "FAILED"]
+    assert store.get_claim("doc-1", "unit-1") is None
+    assert builder.calls == []
+
+
+def test_create_task_final_save_failure_attempts_failed_cleanup() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    failure = RuntimeError("final save failed")
+    store = _RecordingStore(final_save_failure=failure)
+    service, _workbench, _store, builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        task_id_factory=lambda: "KB_final_failure",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        service.create_task(
+            _request([_selection("doc-1", "unit-1", "source")])
+        )
+
+    assert exc_info.value is failure
+    failed = store.inner.get("KB_final_failure")
+    assert failed is not None
+    assert failed.status == "FAILED"
+    assert [unit.error_code for unit in failed.units] == ["RuntimeError"]
+    assert [unit.error_message for unit in failed.units] == [str(failure)]
+    assert store.transitions == [
+        "QUEUED",
+        "RUNNING",
+        "WAITING_REVIEW",
+        "FAILED",
+    ]
+    assert store.get_claim("doc-1", "unit-1") is None
+    assert len(builder.calls) == 1
