@@ -16,6 +16,7 @@ interface SkillOverviewTabProps {
   evalRuns: SkillEvalRunResponse[]
   releases: SkillReleaseResponse[]
   onNavigate: (tab: SkillWorkbenchTab) => void
+  onOpenExecution: () => void
 }
 
 function shortHash(hash: string | undefined): string {
@@ -28,6 +29,7 @@ export default function SkillOverviewTab({
   evalRuns,
   releases,
   onNavigate,
+  onOpenExecution,
 }: SkillOverviewTabProps) {
   const nextStep = lifecycleSteps(item).find((step) => step.state !== 'completed')
   const currentVersion = versions[0]
@@ -78,7 +80,8 @@ export default function SkillOverviewTab({
         <div className="mt-3 flex flex-wrap gap-x-8 gap-y-2 text-sm">
           <span className="text-slate-500">状态 <strong className="ml-2 text-slate-900">{latestRelease?.status ?? item.test_release_status ?? '无发布'}</strong></span>
           <span className="text-slate-500">Active 版本 <strong className="ml-2 text-slate-900">{item.test_active_version ?? '—'}</strong></span>
-          <button type="button" onClick={() => onNavigate('development')} className="font-medium text-blue-700 hover:underline">打开调试与开发详情</button>
+          <button type="button" onClick={onOpenExecution} className="font-medium text-blue-700 hover:underline">执行调试</button>
+          <button type="button" onClick={() => onNavigate('development')} className="font-medium text-blue-700 hover:underline">查看开发详情</button>
         </div>
       </section>
     </div>

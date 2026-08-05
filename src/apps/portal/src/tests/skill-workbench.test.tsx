@@ -11,6 +11,8 @@ const mockListInfraSkillVersions = vi.fn()
 const mockListSkillEvalRuns = vi.fn()
 const mockListSkillReleases = vi.fn()
 const mockActivateSkillRelease = vi.fn()
+const mockTestInfraSkillRouting = vi.fn()
+const mockTestInfraSkillExecution = vi.fn()
 
 vi.mock('@/lib/api-client', () => ({
   getSkillGovernanceWorkbench: (...args: unknown[]) => mockGetSkillGovernanceWorkbench(...args),
@@ -27,6 +29,8 @@ vi.mock('@/lib/api-client', () => ({
   requestSkillReleaseApproval: vi.fn(),
   approveSkillRelease: vi.fn(),
   activateSkillRelease: (...args: unknown[]) => mockActivateSkillRelease(...args),
+  testInfraSkillRouting: (...args: unknown[]) => mockTestInfraSkillRouting(...args),
+  testInfraSkillExecution: (...args: unknown[]) => mockTestInfraSkillExecution(...args),
 }))
 
 function releasePage(status: 'approval_pending' | 'approved' | 'active') {
@@ -107,6 +111,8 @@ describe('Skill governance workbench', () => {
     mockListSkillEvalRuns.mockResolvedValue({ items: [], total: 0 })
     mockListSkillReleases.mockResolvedValue({ items: [], total: 0 })
     mockActivateSkillRelease.mockResolvedValue({ status: 'active' })
+    mockTestInfraSkillRouting.mockResolvedValue({ candidates: [] })
+    mockTestInfraSkillExecution.mockResolvedValue({ status: 'completed' })
   })
 
   afterEach(() => {
@@ -194,5 +200,27 @@ describe('Skill governance workbench', () => {
 
     await waitFor(() => expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(2))
     expect(await screen.findByText('Test Shadow 已激活')).toBeVisible()
+  })
+
+  it('keeps selected skill and tab after closing route diagnostics', async () => {
+    const user = userEvent.setup()
+    render(<SkillGovernanceWorkbench />)
+
+    await user.click(await screen.findByRole('button', { name: '路由调试' }))
+    expect(screen.getByRole('dialog', { name: '路由调试' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '关闭路由调试' }))
+
+    expect(screen.getByTestId('skill-workspace-settlement_explain_skill')).toBeVisible()
+    expect(window.location.search).toContain('skill=settlement_explain_skill')
+  })
+
+  it('does not persist diagnostic questions in the URL', async () => {
+    const user = userEvent.setup()
+    render(<SkillGovernanceWorkbench />)
+
+    await user.click(await screen.findByRole('button', { name: '路由调试' }))
+    await user.type(screen.getByLabelText('路由问题'), '统筹自付为什么这么多')
+
+    expect(window.location.href).not.toContain(encodeURIComponent('统筹自付为什么这么多'))
   })
 })

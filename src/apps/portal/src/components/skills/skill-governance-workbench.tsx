@@ -13,6 +13,8 @@ import type {
 
 import SkillCatalogPanel from './skill-catalog-panel'
 import SkillGovernanceSummary from './skill-governance-summary'
+import SkillExecutionTestDrawer from './skill-execution-test-drawer'
+import SkillRouteTestDrawer from './skill-route-test-drawer'
 import SkillWorkbenchHeader from './skill-workbench-header'
 import SkillWorkspace from './skill-workspace'
 
@@ -104,7 +106,8 @@ export default function SkillGovernanceWorkbench() {
   const [businessAction, setBusinessAction] = useState(initialState.businessAction)
   const [businessObject, setBusinessObject] = useState(initialState.businessObject)
   const [refreshToken, setRefreshToken] = useState(0)
-  const [routeNotice, setRouteNotice] = useState(false)
+  const [routeDrawerOpen, setRouteDrawerOpen] = useState(false)
+  const [executionDrawerOpen, setExecutionDrawerOpen] = useState(false)
 
   const prepareCatalogReload = useCallback(() => {
     setLoading(true)
@@ -187,11 +190,11 @@ export default function SkillGovernanceWorkbench() {
   }, [activeTab, businessAction, businessObject, environment, governanceStatus, query, selectedSkillId])
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-[1600px] flex-col gap-5 p-4 md:p-6">
+    <div data-testid="skill-governance-workbench" className="mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-[1600px] flex-col gap-5 p-4 md:p-6">
       <SkillWorkbenchHeader
         environment={environment}
         onEnvironmentChange={setEnvironment}
-        onOpenRouteTest={() => setRouteNotice(true)}
+        onOpenRouteTest={() => setRouteDrawerOpen(true)}
         onRefresh={() => {
           prepareCatalogReload()
           setRefreshToken((value) => value + 1)
@@ -202,7 +205,6 @@ export default function SkillGovernanceWorkbench() {
         activeStatus={governanceStatus}
         onStatusChange={handleGovernanceStatusChange}
       />
-      {routeNotice && <p role="status" className="text-sm text-slate-500">请选择 Skill 后进行路由调试</p>}
       {catalogError && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{catalogError}</p>}
       <div className="grid min-h-[620px] flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm md:grid-cols-[320px_minmax(0,1fr)]">
         <SkillCatalogPanel
@@ -225,6 +227,7 @@ export default function SkillGovernanceWorkbench() {
               activeTab={activeTab}
               environment={environment}
               onTabChange={setActiveTab}
+              onOpenExecution={() => setExecutionDrawerOpen(true)}
               onChanged={() => {
                 prepareCatalogReload()
                 setRefreshToken((value) => value + 1)
@@ -235,6 +238,16 @@ export default function SkillGovernanceWorkbench() {
           )}
         </main>
       </div>
+      <SkillRouteTestDrawer
+        open={routeDrawerOpen}
+        onOpenChange={setRouteDrawerOpen}
+        onSelectSkill={handleSelect}
+      />
+      <SkillExecutionTestDrawer
+        open={executionDrawerOpen}
+        skillId={selectedSkillId}
+        onOpenChange={setExecutionDrawerOpen}
+      />
     </div>
   )
 }

@@ -31,6 +31,7 @@ interface SkillWorkspaceProps {
   environment: 'dev' | 'test'
   onTabChange: (tab: SkillWorkbenchTab) => void
   onChanged: () => void
+  onOpenExecution: () => void
 }
 
 interface EvidenceErrors {
@@ -57,6 +58,7 @@ export default function SkillWorkspace({
   environment,
   onTabChange,
   onChanged,
+  onOpenExecution,
 }: SkillWorkspaceProps) {
   const [detail, setDetail] = useState<InfraSkillDetailResponse | null>(null)
   const [versions, setVersions] = useState<SkillVersionResponse[]>([])
@@ -126,6 +128,7 @@ export default function SkillWorkspace({
               evalRuns={evalRuns}
               releases={releases}
               onNavigate={onTabChange}
+              onOpenExecution={onOpenExecution}
             />
           </TabsContent>
           <TabsContent value="versions">
@@ -159,7 +162,7 @@ export default function SkillWorkspace({
             )}
           </TabsContent>
           <TabsContent value="development">
-            <SkillDevelopmentTab detail={detail} error={errors.detail} />
+            <SkillDevelopmentTab detail={detail} error={errors.detail} onOpenExecution={onOpenExecution} />
           </TabsContent>
           {activeTab !== 'development' && errors.detail && (
             <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{errors.detail}</p>
