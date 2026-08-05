@@ -267,6 +267,38 @@ def test_all_strategies_filter_forbidden_tokens_from_evidence(settlement_context
         assert "rule_id" not in result.answer
 
 
+@pytest.mark.parametrize(
+    "internal_identifier",
+    [
+        "yb_brdjxx",
+        "bdtczf",
+        "basic_pooling_self_pay",
+        "RuLe_Id",
+        "SQL_PROFILE",
+        "tables_queried",
+        "Clause_ID",
+    ],
+)
+def test_strategy_filters_internal_identifiers_case_insensitively(
+    internal_identifier, settlement_context
+):
+    evidence = [
+        {
+            "source_text": f"内部实现标识 {internal_identifier}",
+            "applied_reason": f"通过 {internal_identifier} 命中",
+        }
+    ]
+
+    result = get_strategy("deductible").execute(
+        settlement_context,
+        evidence,
+        "partial_policy_matched",
+    )
+
+    assert result.answer.strip()
+    assert internal_identifier.casefold() not in result.answer.casefold()
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # PoolingSelfPayStrategy — 统筹自付
 # ══════════════════════════════════════════════════════════════════════════

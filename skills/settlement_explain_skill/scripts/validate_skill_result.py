@@ -127,8 +127,9 @@ def validate_answer(
         result.passed = False
 
     # 1. 禁止文本扫描（无论模式都执行）
+    normalized_answer = answer_text.casefold()
     for fb in FORBIDDEN_TEXT:
-        if fb and fb in answer_text:
+        if fb and str(fb).casefold() in normalized_answer:
             result.errors.append(f"答案包含禁止文本: {repr(fb)}")
             result.passed = False
 
@@ -156,8 +157,9 @@ def validate_llm_output(output: str) -> ValidationResult:
     result = ValidationResult()
 
     # 1. 禁止文本扫描
+    normalized_output = output.casefold()
     for fb in FORBIDDEN_TEXT:
-        if fb and fb in output:
+        if fb and str(fb).casefold() in normalized_output:
             result.errors.append(f"LLM 输出包含禁止文本: {repr(fb)}")
             result.passed = False
 
