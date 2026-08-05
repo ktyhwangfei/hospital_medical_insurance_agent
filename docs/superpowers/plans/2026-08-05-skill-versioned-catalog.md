@@ -259,7 +259,7 @@ Commit: `feat: persist immutable skill versions`
 - Create: `src/tests/unit/runtime/skill_management/test_version_service.py`
 - Modify: `src/tests/integration/api/test_infra_skill_routes.py`
 
-- [ ] **Step 1: 写服务失败测试**
+- [x] **Step 1: 写服务失败测试**
 
 ```python
 def test_sync_current_version_is_idempotent(tmp_path):
@@ -278,17 +278,17 @@ def test_catalog_marks_changed_artifact(tmp_path):
     assert service.list_catalog(page=1, page_size=20).items[0].artifact_status == "changed"
 ```
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/runtime/skill_management/test_version_service.py -q --tb=short`
 
 Expected: FAIL，原因是 `SkillVersionService` 尚不存在。
 
-- [ ] **Step 3: 实现最小应用服务**
+- [x] **Step 3: 实现最小应用服务**
 
 服务必须：校验 Skill 已加载；从 `SKILLS_DIR/<skill_id>` 构建快照；按制品哈希幂等登记；生成 `uuid4().hex`；目录查询返回 `registered / changed / unregistered`；筛选在分页前执行；不存在时抛出显式 `SkillNotFoundError`。
 
-- [ ] **Step 4: 写 API 失败测试**
+- [x] **Step 4: 写 API 失败测试**
 
 ```python
 def test_catalog_is_paginated_without_breaking_legacy_list(client):
@@ -310,13 +310,13 @@ def test_sync_and_read_version_evidence(client):
     assert versions.json()[0]["artifact_hash"] == synced.json()["artifact_hash"]
 ```
 
-- [ ] **Step 5: 运行 API 测试并确认失败**
+- [x] **Step 5: 运行 API 测试并确认失败**
 
 Run: `uv run --frozen python -m pytest src/tests/integration/api/test_infra_skill_routes.py -q --tb=short`
 
 Expected: FAIL，新增端点返回 404。
 
-- [ ] **Step 6: 实现 DTO 与端点**
+- [x] **Step 6: 实现 DTO 与端点**
 
 新增端点必须位于 `/{skill_id}` 动态路由之前：
 
@@ -329,7 +329,7 @@ POST /infra-skills/{skill_id}/versions/sync
 
 `sync` 仅接受 `source_commit` 和 `created_by`，不接受任意文件内容；冲突返回 409，路径/Manifest 校验失败返回 422，不存在返回 404，错误统一通过 `error_detail()`。
 
-- [ ] **Step 7: 按顺序运行单元与 API 测试并提交**
+- [x] **Step 7: 按顺序运行单元与 API 测试并提交**
 
 Run 1: `uv run --frozen python -m pytest src/tests/unit/domain/skill/test_skill_version_models.py src/tests/unit/skill_infra/test_artifact.py src/tests/unit/data_platform/test_skill_version_storage.py src/tests/unit/runtime/skill_management/test_version_service.py -q --tb=short`
 

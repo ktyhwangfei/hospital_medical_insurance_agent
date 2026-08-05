@@ -16,6 +16,48 @@ class InfraSkillItem(BaseModel):
     include_keywords: list[str] = Field(default_factory=list)
     excluded_intents: list[str] = Field(default_factory=list)
 
+
+class SkillValidationIssueResponse(BaseModel):
+    code: str
+    message: str
+    path: str | None = None
+
+
+class SkillVersionResponse(BaseModel):
+    version_id: str
+    skill_id: str
+    semantic_version: str
+    source_commit: str
+    source_path: str
+    artifact_hash: str
+    manifest_snapshot: dict[str, Any] = Field(default_factory=dict)
+    dependency_snapshot: dict[str, Any] = Field(default_factory=dict)
+    file_count: int
+    validation_status: str
+    validation_issues: list[SkillValidationIssueResponse] = Field(default_factory=list)
+    created_by: str
+    created_at: datetime
+
+
+class InfraSkillCatalogItem(InfraSkillItem):
+    semantic_version: str
+    artifact_hash: str
+    artifact_status: str
+    file_count: int
+    registered_version: SkillVersionResponse | None = None
+
+
+class InfraSkillCatalogResponse(BaseModel):
+    items: list[InfraSkillCatalogItem] = Field(default_factory=list)
+    page: int
+    page_size: int
+    total: int
+
+
+class SkillVersionSyncRequest(BaseModel):
+    source_commit: str = Field(min_length=7, max_length=64)
+    created_by: str = Field(min_length=1, max_length=128)
+
 class InfraSkillFilesStructure(BaseModel):
     agents: list[str] = Field(default_factory=list)
     schemas: list[str] = Field(default_factory=list)

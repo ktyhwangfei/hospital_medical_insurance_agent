@@ -1,16 +1,20 @@
 import logging
 import time
 from pathlib import Path
+from typing import Annotated
 
 import yaml
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.config.production import SKILLS_DIR
+from src.data_platform.storage.skill.version_factory import get_skill_version_storage
+from src.data_platform.storage.skill.version_ports import SkillVersionConflictError
 
 logger = logging.getLogger(__name__)
 from src.runtime.api.schemas import (
     FieldMappingItem,
     FieldMappingResponse,
+    InfraSkillCatalogResponse,
     InfraSkillOverviewItem,
     InfraSkillOverviewResponse,
     InfraSkillDetailResponse,
@@ -21,13 +25,33 @@ from src.runtime.api.schemas import (
     SkillRefreshResponse,
     SkillRouteTestRequest,
     SkillRouteTestResponse,
+    SkillVersionResponse,
+    SkillVersionSyncRequest,
+)
+from src.runtime.skill_management.version_service import (
+    SkillNotFoundError,
+    SkillVersionService,
 )
 from src.shared.schemas.responses import error_detail
+from src.skill_infra.artifact import SkillArtifactError
 from src.skill_infra.skill_loader import get_loader, refresh_loader
 from src.skill_infra.skill_router import get_assembler
 from src.skill_infra.unified_router import route_question_ranked
 
 router = APIRouter()
+
+
+def get_skill_version_service() -> SkillVersionService:
+    return SkillVersionService(
+        storage=get_skill_version_storage(),
+        loader=get_loader(),
+        skills_root=SKILLS_DIR,
+    )
+
+
+SkillVersionServiceDependency = Annotated[
+    SkillVersionService, Depends(get_skill_version_service)
+]
 
 
 @router.get("/infra-skills", response_model=list[InfraSkillItem])
@@ -54,6 +78,27 @@ def list_infra_skills(
             )
         )
     return result
+
+
+@router.get("/infra-skills/catalog", response_model=InfraSkillCatalogResponse)
+def list_infra_skill_catalog(
+    service: SkillVersionServiceDependency,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    business_action: str = Query(default=""),
+    business_object: str = Query(default=""),
+    artifact_status: str = Query(default=""),
+    query: str = Query(default="", max_length=128),
+) -> InfraSkillCatalogResponse:
+    catalog = service.list_catalog(
+        page=page,
+        page_size=page_size,
+        business_action=business_action,
+        business_object=business_object,
+        artifact_status=artifact_status,
+        query=query,
+    )
+    return InfraSkillCatalogResponse.model_validate(catalog.model_dump())
 
 
 def _list_files_in_dir(base_dir: Path, sub_dir: str) -> list[str]:
@@ -154,6 +199,83 @@ def get_infra_skill_details(skill_id: str) -> InfraSkillDetailResponse:
         files_structure=files_struct,
         field_mapping=field_mapping,
     )
+
+
+@router.get(
+    "/infra-skills/{skill_id}/versions",
+    response_model=list[SkillVersionResponse],
+)
+def list_infra_skill_versions(
+    skill_id: str,
+    service: SkillVersionServiceDependency,
+) -> list[SkillVersionResponse]:
+    return [
+        SkillVersionResponse.model_validate(version.model_dump())
+        for version in service.list_versions(skill_id)
+    ]
+
+
+@router.get(
+    "/infra-skills/{skill_id}/versions/{version_id}",
+    response_model=SkillVersionResponse,
+)
+def get_infra_skill_version(
+    skill_id: str,
+    version_id: str,
+    service: SkillVersionServiceDependency,
+) -> SkillVersionResponse:
+    try:
+        version = service.get_version(skill_id, version_id)
+    except SkillNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "SKILL_VERSION_NOT_FOUND",
+                str(exc),
+                {"skill_id": skill_id, "version_id": version_id},
+            ),
+        ) from exc
+    return SkillVersionResponse.model_validate(version.model_dump())
+
+
+@router.post(
+    "/infra-skills/{skill_id}/versions/sync",
+    response_model=SkillVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def sync_infra_skill_version(
+    skill_id: str,
+    request: SkillVersionSyncRequest,
+    service: SkillVersionServiceDependency,
+) -> SkillVersionResponse:
+    try:
+        version = service.sync_version(
+            skill_id,
+            source_commit=request.source_commit,
+            created_by=request.created_by,
+        )
+    except SkillNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "SKILL_NOT_FOUND", str(exc), {"skill_id": skill_id}
+            ),
+        ) from exc
+    except SkillVersionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "SKILL_VERSION_CONFLICT", str(exc), {"skill_id": skill_id}
+            ),
+        ) from exc
+    except (SkillArtifactError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "SKILL_VERSION_INVALID", str(exc), {"skill_id": skill_id}
+            ),
+        ) from exc
+    return SkillVersionResponse.model_validate(version.model_dump())
 
 
 @router.post("/infra-skills/route-test", response_model=SkillRouteTestResponse)
