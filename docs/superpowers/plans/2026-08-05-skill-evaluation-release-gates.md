@@ -98,7 +98,7 @@ Commit: `feat: model skill evaluation and release gates`
 
 **Files:** `src/skill_infra/unified_router.py`, `src/skill_infra/route_evaluator.py`, `src/tests/unit/skill_infra/test_route_evaluator.py`, `src/tests/unit/skill_infra/test_unified_router.py`
 
-- [ ] **Step 1: 写候选/基线差异失败测试**
+- [x] **Step 1: 写候选/基线差异失败测试**
 
 ```python
 def test_evaluate_route_suite_marks_new_failure() -> None:
@@ -111,15 +111,15 @@ def test_evaluate_route_suite_marks_new_failure() -> None:
     assert run.results[0].diff == SkillEvalDiff.NEW_FAILURE
 ```
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/skill_infra/test_route_evaluator.py -q --tb=short`
 
-- [ ] **Step 3: 抽取评分 Protocol 并实现评测器**
+- [x] **Step 3: 抽取评分 Protocol 并实现评测器**
 
 `unified_router._compute_keyword_score` 保持兼容并委托给公开纯函数；`route_evaluator` 将 Manifest 快照转换为只读候选，使用与线上 keyword router 相同的评分和排序。门禁计算：必测通过率 100%、总体准确率不低于基线、新增误接管 0；差异分类为 `unchanged_pass / unchanged_fail / new_pass / new_failure / route_changed`。
 
-- [ ] **Step 4: 运行新旧路由测试**
+- [x] **Step 4: 运行新旧路由测试**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/skill_infra/test_route_evaluator.py src/tests/unit/skill_infra/test_unified_router.py -q --tb=short`
 

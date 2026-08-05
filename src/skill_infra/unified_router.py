@@ -59,7 +59,7 @@ class SkillMatch:
         }
 
 
-def _compute_keyword_score(
+def compute_keyword_score(
     question: str,
     skill: LoadedSkill,
 ) -> tuple[float, list[str]]:
@@ -110,6 +110,14 @@ def _compute_keyword_score(
             )
 
     return confidence, matched_keywords
+
+
+def _compute_keyword_score(
+    question: str,
+    skill: LoadedSkill,
+) -> tuple[float, list[str]]:
+    """兼容旧测试与调用方的私有入口。"""
+    return compute_keyword_score(question, skill)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -245,7 +253,7 @@ def route_question_ranked(
     matches: list[SkillMatch] = []
 
     for skill_id, skill in skills.items():
-        confidence, matched_keywords = _compute_keyword_score(question, skill)
+        confidence, matched_keywords = compute_keyword_score(question, skill)
         if confidence <= 0.0:
             continue
 
