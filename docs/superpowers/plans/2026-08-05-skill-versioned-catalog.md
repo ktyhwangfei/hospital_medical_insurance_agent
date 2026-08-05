@@ -414,7 +414,7 @@ Commit: `feat: show skill version evidence in portal`
 - Create: `src/tests/e2e/flows/portal/skill-catalog.flow.ts`
 - Modify: `PROGRESS.md`
 
-- [ ] **Step 1: 先补充 E2E 期望**
+- [x] **Step 1: 先补充 E2E 期望**
 
 ```typescript
 test('登记当前 Skill 版本并查看不可变证据', async ({ page }) => {
@@ -426,7 +426,7 @@ test('登记当前 Skill 版本并查看不可变证据', async ({ page }) => {
 })
 ```
 
-- [ ] **Step 2: 启动服务并运行 E2E**
+- [x] **Step 2: 启动服务并运行 E2E**
 
 Run 1: `.\start-servers.ps1`
 
@@ -436,7 +436,7 @@ Workdir: `src/tests/e2e`
 
 Expected: PASS。失败时保留截图和 trace；完成后运行项目根目录 `.\stop-servers.ps1`。
 
-- [ ] **Step 3: 严格执行 R4 收尾验证**
+- [x] **Step 3: 严格执行 R4 收尾验证**
 
 Run 1（T1）: `uv run --frozen python -m pytest src/tests/unit/domain/skill src/tests/unit/skill_infra src/tests/unit/data_platform/test_skill_version_storage.py src/tests/unit/runtime/skill_management -q --tb=short`
 
@@ -450,10 +450,12 @@ Workdir: `src/apps/portal`
 
 Expected: 新增及相关测试全部通过；预存 3 项基线失败单独列示，不得伪装为本次回归。
 
-- [ ] **Step 4: 更新进度和兼容/回滚说明**
+执行证据：T1 18 passed；T2a 10 passed；新增 T2b `test_skill_version_catalog_flow.py` 1 passed；旧 Skill Flow 仍有 8 个调用已下线路由的 404。Chromium E2E 1 passed，服务已通过 `stop-servers.ps1` 清理。
+
+- [x] **Step 4: 更新进度和兼容/回滚说明**
 
 在 `PROGRESS.md` 技能管理下新增阶段 1：记录版本模型、目录 API、Portal 展示和验证结果。回滚方式为恢复旧 Portal 使用 `GET /infra-skills`，停止调用版本端点；运行时始终未切换，故回滚不影响 SkillRouter/SkillLoader。
 
-- [ ] **Step 5: 提交进度证据**
+- [x] **Step 5: 提交进度证据**
 
 Commit: `docs: record skill catalog phase one verification`

@@ -32,12 +32,12 @@
 | 模型服务与管理 | 4 | 0 | 4 | 0 | 0 | — |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 | 知识库管理 | 3 | 0 | 3 | 0 | 0 | §2 P9 5 tab 已上线，详见 §2 |
-| 技能管理 | 3 | 0 | 3 | 0 | 0 | — |
+| 技能管理 | 4 | 1 | 3 | 0 | 0 | 阶段 1 版本化资产库已验证 |
 | 运营看板 | 2 | 0 | 2 | 0 | 0 | — |
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **32** | **0** | **28** | **2** | **2** | — |
+| **合计** | **33** | **1** | **28** | **2** | **2** | — |
 
 > **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。**政策问答/知识库管理两领域的"真实最新进度"
@@ -97,6 +97,11 @@
 | 7.1 | 技能注册/加载/路由 | `skill_loader.py` → `skill_router.py` | impl_done |
 | 7.2 | 费用解释 Skill 执行 | `settlement_explain_skill/` → `skill_registry/engine.py` | impl_done |
 | 7.3 | 技能列表与管理 | `infra_skill_routes.py` | impl_done |
+| 7.4 | 版本化 Skill 资产库：制品哈希、版本登记、证据查询与 Portal 展示 | `skill_infra/artifact.py` → `runtime/skill_management/version_service.py` → `infra_skill_routes.py` → Portal `/skills` | verified |
+
+7.4 验证证据（2026-08-05）：T1 新功能相关测试 18 passed；T2a Skill API 10 passed；T2b 版本目录 Flow 1 passed；Portal Vitest 3 passed、变更文件 ESLint 通过、Next.js build 通过；Chromium E2E 1 passed。旧 `test_skill_mention.py` / `test_skill_intent_matching.py` 中 8 个请求已下线路由的 404 为预存测试债务，不计入 7.4 通过证据。
+
+兼容与回滚：运行时仍由 `SkillLoader` / `SkillRouter` 选择当前文件系统 Skill，未切换到版本解析器；需要回滚时让 Portal 恢复调用 `GET /infra-skills` 并停止调用 catalog/version 端点即可，已登记版本是只读证据，不影响业务执行。
 
 #### 运营看板 / 嵌入式 / 安全与审计 / 适配器接入
 | # | 单元 | 状态 | 备注 |
