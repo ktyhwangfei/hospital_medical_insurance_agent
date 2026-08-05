@@ -177,15 +177,15 @@ Commit: `feat: persist skill evaluation and release state`
 
 **Files:** `src/runtime/skill_management/governance_service.py`, `src/tests/unit/runtime/skill_management/test_governance_service.py`
 
-- [ ] **Step 1: 写完整门禁失败测试**
+- [x] **Step 1: 写完整门禁失败测试**
 
 覆盖：新增/更新用例递增 suite version；创建运行从 immutable version manifest 执行；必测失败时 run 为 failed；失败 run 不能创建 candidate；未申请审批不能 approve；未 approve 不能 activate；基线变化或审批证据变化拒绝 activate；通过路径成为唯一 test active。
 
-- [ ] **Step 2: 运行并确认失败**
+- [x] **Step 2: 运行并确认失败**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/runtime/skill_management/test_governance_service.py -q --tb=short`
 
-- [ ] **Step 3: 实现服务和 shadow resolver**
+- [x] **Step 3: 实现服务和 shadow resolver**
 
 核心流程：
 
@@ -208,7 +208,7 @@ resolve_shadow(skill_id, environment)
   → return active release/version without changing actual execution
 ```
 
-- [ ] **Step 4: 运行应用服务及前置单元测试**
+- [x] **Step 4: 运行应用服务及前置单元测试**
 
 Run: `uv run --frozen python -m pytest src/tests/unit/domain/skill/test_skill_governance_models.py src/tests/unit/skill_infra/test_route_evaluator.py src/tests/unit/data_platform/test_skill_governance_storage.py src/tests/unit/runtime/skill_management/test_governance_service.py -q --tb=short`
 

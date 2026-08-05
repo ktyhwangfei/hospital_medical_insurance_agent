@@ -1,0 +1,432 @@
+"""Skill 批量评测、人工审批与 test shadow 发布应用服务。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime, timezone
+from typing import Any, Protocol
+from uuid import uuid4
+
+from src.data_platform.storage.skill.governance_ports import (
+    SkillGovernanceConflictError,
+    SkillGovernanceNotFoundError,
+    SkillGovernanceStorage,
+)
+from src.data_platform.storage.skill.version_ports import SkillVersionStorage
+from src.domain.skill.governance_models import (
+    SkillEvalCase,
+    SkillEvalRun,
+    SkillEvalRunStatus,
+    SkillRelease,
+    SkillReleaseApproval,
+    SkillReleaseEnvironment,
+    SkillReleaseStatus,
+)
+from src.domain.skill.version_models import SkillValidationStatus, SkillVersion
+from src.skill_infra.route_evaluator import evaluate_route_suite
+
+
+class SkillGovernanceGateError(ValueError):
+    """评测、审批或基线门禁未通过。"""
+
+    def __init__(self, message: str, gate_failures: list[str]) -> None:
+        super().__init__(message)
+        self.gate_failures = gate_failures
+
+
+class _LoadedSkill(Protocol):
+    manifest: dict[str, Any]
+
+
+class _LoaderView(Protocol):
+    def get_all(self) -> dict[str, _LoadedSkill]: ...
+
+
+class SkillGovernanceService:
+    _GATE_CONFIG: dict[str, object] = {
+        "router": "keyword_v1",
+        "required_pass_rate": 1.0,
+        "allow_accuracy_regression": False,
+        "max_new_false_takeovers": 0,
+        "runtime_mode": "shadow",
+    }
+
+    def __init__(
+        self,
+        *,
+        storage: SkillGovernanceStorage,
+        version_storage: SkillVersionStorage,
+        loader: _LoaderView,
+    ) -> None:
+        self._storage = storage
+        self._version_storage = version_storage
+        self._loader = loader
+
+    def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]:
+        return self._storage.list_cases(enabled_only=enabled_only)
+
+    def create_case(
+        self,
+        *,
+        question_template: str,
+        expected_skill_id: str | None,
+        required: bool,
+        risk_tags: list[str],
+        business_tags: list[str],
+        source_type: str,
+        source_ref: str,
+        contains_sensitive_data: bool,
+        created_by: str,
+    ) -> SkillEvalCase:
+        suite_version = self._next_suite_version()
+        return self._storage.save_case(
+            SkillEvalCase(
+                case_id=uuid4().hex,
+                suite_version=suite_version,
+                question_template=question_template.strip(),
+                expected_skill_id=expected_skill_id,
+                required=required,
+                risk_tags=risk_tags,
+                business_tags=business_tags,
+                source_type=source_type,
+                source_ref=source_ref,
+                contains_sensitive_data=contains_sensitive_data,
+                created_by=created_by.strip(),
+            )
+        )
+
+    def update_case(
+        self,
+        case_id: str,
+        *,
+        question_template: str,
+        expected_skill_id: str | None,
+        required: bool,
+        risk_tags: list[str],
+        business_tags: list[str],
+        source_type: str,
+        source_ref: str,
+        enabled: bool,
+        contains_sensitive_data: bool,
+    ) -> SkillEvalCase:
+        current = self._storage.get_case(case_id)
+        if current is None:
+            raise SkillGovernanceNotFoundError(f"评测用例不存在: {case_id}")
+        updated = current.model_copy(
+            update={
+                "suite_version": self._next_suite_version(),
+                "question_template": question_template.strip(),
+                "expected_skill_id": expected_skill_id,
+                "required": required,
+                "risk_tags": risk_tags,
+                "business_tags": business_tags,
+                "source_type": source_type,
+                "source_ref": source_ref,
+                "enabled": enabled,
+                "contains_sensitive_data": contains_sensitive_data,
+                "updated_at": datetime.now(timezone.utc),
+            },
+            deep=True,
+        )
+        return self._storage.save_case(SkillEvalCase.model_validate(updated.model_dump()))
+
+    def _next_suite_version(self) -> int:
+        cases = self._storage.list_cases()
+        return max((case.suite_version for case in cases), default=0) + 1
+
+    def create_eval_run(
+        self,
+        skill_id: str,
+        *,
+        version_id: str,
+        baseline_version_id: str | None,
+        created_by: str,
+    ) -> SkillEvalRun:
+        candidate = self._require_version(skill_id, version_id)
+        if candidate.validation_status != SkillValidationStatus.PASSED:
+            raise SkillGovernanceGateError(
+                "候选版本校验未通过", ["version_validation_failed"]
+            )
+        cases = self._storage.list_cases(enabled_only=True)
+        if not cases:
+            raise SkillGovernanceGateError("固定评测集为空", ["eval_suite_empty"])
+
+        resolved_baseline = self._resolve_baseline_version(
+            skill_id, baseline_version_id
+        )
+        candidate_manifests = self._manifests_with_version(candidate)
+        baseline_manifests = (
+            self._manifests_with_version(resolved_baseline)
+            if resolved_baseline is not None
+            else self._runtime_manifests()
+        )
+        evaluation = evaluate_route_suite(
+            cases, candidate_manifests, baseline_manifests
+        )
+        now = datetime.now(timezone.utc)
+        suite_version = max(case.suite_version for case in cases)
+        config_hash = self._config_hash(suite_version)
+        run = SkillEvalRun(
+            run_id=uuid4().hex,
+            skill_id=skill_id,
+            version_id=version_id,
+            baseline_version_id=(
+                resolved_baseline.version_id if resolved_baseline is not None else None
+            ),
+            suite_version=suite_version,
+            config_hash=config_hash,
+            status=(
+                SkillEvalRunStatus.PASSED
+                if evaluation.metrics.gate_passed
+                else SkillEvalRunStatus.FAILED
+            ),
+            metrics=evaluation.metrics,
+            results=evaluation.results,
+            created_by=created_by.strip(),
+            created_at=now,
+            completed_at=now,
+        )
+        return self._storage.save_run(run)
+
+    def list_eval_runs(self, skill_id: str) -> list[SkillEvalRun]:
+        return self._storage.list_runs(skill_id)
+
+    def get_eval_run(self, skill_id: str, run_id: str) -> SkillEvalRun:
+        run = self._storage.get_run(skill_id, run_id)
+        if run is None:
+            raise SkillGovernanceNotFoundError(f"评测运行不存在: {run_id}")
+        return run
+
+    def create_candidate(
+        self,
+        skill_id: str,
+        *,
+        version_id: str,
+        eval_run_id: str,
+        environment: SkillReleaseEnvironment | str,
+        created_by: str,
+    ) -> SkillRelease:
+        resolved_environment = SkillReleaseEnvironment(environment)
+        version = self._require_version(skill_id, version_id)
+        run = self.get_eval_run(skill_id, eval_run_id)
+        failures: list[str] = []
+        if version.validation_status != SkillValidationStatus.PASSED:
+            failures.append("version_validation_failed")
+        if run.status != SkillEvalRunStatus.PASSED or not run.metrics.gate_passed:
+            failures.append("evaluation_failed")
+        if run.version_id != version_id:
+            failures.append("evaluation_version_mismatch")
+        if run.config_hash != self._config_hash(run.suite_version):
+            failures.append("evaluation_config_changed")
+        if failures:
+            raise SkillGovernanceGateError("评测未通过，不能创建候选发布", failures)
+
+        active = self.resolve_shadow(skill_id, resolved_environment)
+        release = SkillRelease(
+            release_id=uuid4().hex,
+            skill_id=skill_id,
+            version_id=version_id,
+            environment=resolved_environment,
+            status=SkillReleaseStatus.CANDIDATE,
+            baseline_release_id=active.release_id if active is not None else None,
+            eval_run_id=eval_run_id,
+            artifact_hash=version.artifact_hash,
+            config_hash=run.config_hash,
+            created_by=created_by.strip(),
+        )
+        return self._storage.save_release(release)
+
+    def request_approval(
+        self,
+        skill_id: str,
+        release_id: str,
+        *,
+        expected_revision: int,
+    ) -> SkillRelease:
+        release = self._require_release(skill_id, release_id)
+        self._require_revision(release, expected_revision)
+        if release.status != SkillReleaseStatus.CANDIDATE:
+            raise SkillGovernanceGateError(
+                "只有 candidate 可以申请人工审批", ["invalid_release_status"]
+            )
+        self._validate_frozen_evidence(release)
+        pending = release.model_copy(
+            update={
+                "status": SkillReleaseStatus.APPROVAL_PENDING,
+                "revision": release.revision + 1,
+            },
+            deep=True,
+        )
+        return self._storage.update_release(
+            pending, expected_revision=expected_revision
+        )
+
+    def approve_release(
+        self,
+        skill_id: str,
+        release_id: str,
+        *,
+        expected_revision: int,
+        approved_by: str,
+        approver_role: str,
+        reason: str,
+    ) -> SkillRelease:
+        release = self._require_release(skill_id, release_id)
+        self._require_revision(release, expected_revision)
+        if release.status != SkillReleaseStatus.APPROVAL_PENDING:
+            raise SkillGovernanceGateError(
+                "发布尚未申请人工审批", ["approval_not_requested"]
+            )
+        self._validate_frozen_evidence(release)
+        approval = SkillReleaseApproval(
+            approval_id=uuid4().hex,
+            release_id=release.release_id,
+            artifact_hash=release.artifact_hash,
+            eval_run_id=release.eval_run_id,
+            config_hash=release.config_hash,
+            baseline_release_id=release.baseline_release_id,
+            approved_by=approved_by.strip(),
+            approver_role=approver_role.strip(),
+            reason=reason.strip(),
+        )
+        self._storage.save_approval(approval)
+        approved = release.model_copy(
+            update={
+                "status": SkillReleaseStatus.APPROVED,
+                "revision": release.revision + 1,
+            },
+            deep=True,
+        )
+        return self._storage.update_release(
+            approved, expected_revision=expected_revision
+        )
+
+    def activate_release(
+        self,
+        skill_id: str,
+        release_id: str,
+        *,
+        expected_revision: int,
+    ) -> SkillRelease:
+        release = self._require_release(skill_id, release_id)
+        self._require_revision(release, expected_revision)
+        if release.status != SkillReleaseStatus.APPROVED:
+            raise SkillGovernanceGateError(
+                "必须完成人工审批后才能激活 test release",
+                ["manual_approval_required"],
+            )
+        self._validate_frozen_evidence(release)
+        approval = self._storage.get_approval(release.release_id)
+        if approval is None:
+            raise SkillGovernanceGateError(
+                "人工审批证据不存在", ["approval_evidence_missing"]
+            )
+        if (
+            approval.artifact_hash != release.artifact_hash
+            or approval.eval_run_id != release.eval_run_id
+            or approval.config_hash != release.config_hash
+            or approval.baseline_release_id != release.baseline_release_id
+        ):
+            raise SkillGovernanceGateError(
+                "人工审批证据已过期", ["approval_evidence_changed"]
+            )
+        active = self.resolve_shadow(skill_id, release.environment)
+        active_id = active.release_id if active is not None else None
+        if active_id != release.baseline_release_id:
+            raise SkillGovernanceGateError(
+                "活动基线已变化，需要重新评测和审批", ["baseline_changed"]
+            )
+        return self._storage.activate_release(
+            release.release_id, expected_revision=expected_revision
+        )
+
+    def list_releases(
+        self,
+        skill_id: str,
+        environment: SkillReleaseEnvironment | str | None = None,
+    ) -> list[SkillRelease]:
+        return self._storage.list_releases(skill_id, environment)
+
+    def resolve_shadow(
+        self,
+        skill_id: str,
+        environment: SkillReleaseEnvironment | str,
+    ) -> SkillRelease | None:
+        active = self._storage.list_active_releases(skill_id, environment)
+        if len(active) > 1:
+            raise SkillGovernanceConflictError(
+                "同一 Skill 和环境存在多个 active release"
+            )
+        return active[0] if active else None
+
+    def _require_version(self, skill_id: str, version_id: str) -> SkillVersion:
+        version = self._version_storage.get_version(skill_id, version_id)
+        if version is None:
+            raise SkillGovernanceNotFoundError(f"Skill 版本不存在: {version_id}")
+        return version
+
+    def _require_release(self, skill_id: str, release_id: str) -> SkillRelease:
+        release = self._storage.get_release(release_id)
+        if release is None or release.skill_id != skill_id:
+            raise SkillGovernanceNotFoundError(f"Skill 发布不存在: {release_id}")
+        return release
+
+    @staticmethod
+    def _require_revision(release: SkillRelease, expected_revision: int) -> None:
+        if release.revision != expected_revision:
+            raise SkillGovernanceConflictError("发布 revision 已变化")
+
+    def _resolve_baseline_version(
+        self, skill_id: str, baseline_version_id: str | None
+    ) -> SkillVersion | None:
+        if baseline_version_id is not None:
+            return self._require_version(skill_id, baseline_version_id)
+        active = self.resolve_shadow(skill_id, SkillReleaseEnvironment.TEST)
+        if active is None:
+            return None
+        return self._require_version(skill_id, active.version_id)
+
+    def _runtime_manifests(self) -> list[dict[str, Any]]:
+        return [dict(skill.manifest) for skill in self._loader.get_all().values()]
+
+    def _manifests_with_version(self, version: SkillVersion) -> list[dict[str, Any]]:
+        manifests = self._runtime_manifests()
+        replacement = dict(version.manifest_snapshot)
+        replaced = False
+        for index, manifest in enumerate(manifests):
+            if str(manifest.get("skill_id")) == version.skill_id:
+                manifests[index] = replacement
+                replaced = True
+                break
+        if not replaced:
+            manifests.append(replacement)
+        return manifests
+
+    def _config_hash(self, suite_version: int) -> str:
+        payload = {**self._GATE_CONFIG, "suite_version": suite_version}
+        serialized = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def _validate_frozen_evidence(self, release: SkillRelease) -> None:
+        version = self._require_version(release.skill_id, release.version_id)
+        run = self.get_eval_run(release.skill_id, release.eval_run_id)
+        failures: list[str] = []
+        if version.artifact_hash != release.artifact_hash:
+            failures.append("artifact_changed")
+        if run.version_id != release.version_id:
+            failures.append("evaluation_version_mismatch")
+        if run.status != SkillEvalRunStatus.PASSED or not run.metrics.gate_passed:
+            failures.append("evaluation_failed")
+        if run.config_hash != release.config_hash:
+            failures.append("config_changed")
+        latest_suite = max(
+            (case.suite_version for case in self._storage.list_cases(enabled_only=True)),
+            default=0,
+        )
+        if run.suite_version != latest_suite:
+            failures.append("eval_suite_changed")
+        if failures:
+            raise SkillGovernanceGateError("发布证据已变化", failures)
