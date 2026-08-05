@@ -360,6 +360,36 @@ class TestPolicyQAStreamEndpoint:
 
 class TestSettlementExplanationEndpoint:
     @pytest.mark.parametrize(
+        ("params", "expected_code", "expected_message"),
+        [
+            (
+                {"settlement_id": ""},
+                "POLICY_QA_INVALID_REQUEST",
+                "settlement_id 不能为空。",
+            ),
+            (
+                {"settlement_id": "S001", "compare_with": "S001"},
+                "POLICY_QA_INVALID_COMPARISON",
+                "对比结算单号不能与主结算单号相同。",
+            ),
+        ],
+    )
+    def test_rest_explicit_400_uses_standard_error_model(
+        self, client, params, expected_code, expected_message
+    ):
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params=params,
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert set(detail) == {"error_code", "message", "audit_event"}
+        assert detail["error_code"] == expected_code
+        assert detail["message"] == expected_message
+        assert detail["audit_event"] == {"operation": "settlement_explanation"}
+
+    @pytest.mark.parametrize(
         ("unsafe_text", "forbidden_token"),
         [
             ("来源zyfdxx.bdgryf。", "zyfdxx.bdgryf"),

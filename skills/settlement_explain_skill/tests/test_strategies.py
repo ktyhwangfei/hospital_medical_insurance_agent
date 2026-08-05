@@ -228,6 +228,56 @@ def test_prompt_requires_single_conclusion_only():
     assert "面向当前院端经办角色的单一自然语言解释" in prompt_config["user_prompt"]
 
 
+@pytest.mark.parametrize(
+    ("strategy_name", "amount_field"),
+    [
+        ("deductible", "deductible"),
+        ("pooling_self_pay", "basic_pooling_self_pay"),
+        ("pooling_payment", "basic_pooling_payment"),
+        ("large_amount_self_pay", "large_amount_self_pay"),
+        ("personal_total_pay", "personal_total_pay"),
+        ("out_of_scope", "out_of_scope"),
+    ],
+)
+def test_zero_amount_from_queried_context_is_real_data(
+    strategy_name, amount_field, mock_evidence
+):
+    context_values = {
+        "deductible": 0.0,
+        "basic_pooling_self_pay": 0.0,
+        "basic_pooling_payment": 0.0,
+        "large_amount_self_pay": 0.0,
+        "personal_total_pay": 0.0,
+        "out_of_scope": 0.0,
+        "tables_queried": ["yb_zyfdxx"],
+    }
+    context_values[amount_field] = 0.0
+    context = SimpleNamespace(**context_values)
+
+    completeness = get_strategy(strategy_name).build_completeness(
+        context,
+        mock_evidence,
+    )
+
+    assert completeness["has_real_data"] is True
+    assert completeness["level"] != "incomplete"
+
+
+def test_default_unqueried_settlement_context_is_not_real_data():
+    from src.runtime.policy_qa.settlement_data_provider import SettlementContext
+
+    completeness = get_strategy("pooling_self_pay").build_completeness(
+        SettlementContext(),
+        [],
+    )
+
+    assert completeness["has_real_data"] is False
+
+
+def test_zero_amount_formats_as_zero_not_missing():
+    assert get_strategy("pooling_self_pay")._fmt_money(0.0) == "0.00"
+
+
 def test_pooling_self_pay_missing_conclusion_uses_safe_fallback(
     monkeypatch, settlement_context, mock_evidence
 ):

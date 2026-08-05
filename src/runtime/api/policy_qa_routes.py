@@ -13,6 +13,7 @@ import math
 import re
 import time as _time
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from typing import Any
 
 import asyncio
@@ -183,8 +184,17 @@ _INTERNAL_IDENTIFIER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SQL_STATEMENT_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])(?:select|insert|update|delete|merge|drop|alter|create|"
-    r"truncate|exec(?:ute)?|call)(?![A-Za-z0-9_])",
+    r"(?<![A-Za-z0-9_])(?:"
+    r"select(?![A-Za-z0-9_])[\s\S]{0,500}?\s+from(?![A-Za-z0-9_])|"
+    r"insert(?![A-Za-z0-9_])\s+into(?![A-Za-z0-9_])|"
+    r"update(?![A-Za-z0-9_])\s+[A-Za-z_][A-Za-z0-9_.]*\s+set(?![A-Za-z0-9_])|"
+    r"delete(?![A-Za-z0-9_])\s+from(?![A-Za-z0-9_])|"
+    r"merge(?![A-Za-z0-9_])\s+into(?![A-Za-z0-9_])|"
+    r"(?:create|drop|alter|truncate)(?![A-Za-z0-9_])\s+"
+    r"(?:table|schema|database|db|index|view)(?![A-Za-z0-9_])|"
+    r"exec(?:ute)?(?![A-Za-z0-9_])\s+[A-Za-z_][A-Za-z0-9_.]*|"
+    r"call(?![A-Za-z0-9_])\s+[A-Za-z_][A-Za-z0-9_.]*\s*\("
+    r")",
     re.IGNORECASE,
 )
 _CREDENTIAL_PATTERN = re.compile(
@@ -192,6 +202,22 @@ _CREDENTIAL_PATTERN = re.compile(
     r"connection[_-]?string)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
+_SENSITIVE_CONNECTION_URI_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:postgres(?:ql)?|redis(?:s)?|milvus|mysql|mssql)://"
+    r"[^\s<>'\"]+",
+    re.IGNORECASE,
+)
+_STORAGE_IMPLEMENTATION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:milvus|policy_rules|redis|postgresql|postgres|"
+    r"sql[_ -]?server)(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class _SanitizedPublicText:
+    text: str
+    is_publicly_meaningful: bool
 
 
 def _contains_internal_implementation(value: Any) -> bool:
@@ -201,6 +227,8 @@ def _contains_internal_implementation(value: Any) -> bool:
         for pattern in (
             _SQL_STATEMENT_PATTERN,
             _CREDENTIAL_PATTERN,
+            _SENSITIVE_CONNECTION_URI_PATTERN,
+            _STORAGE_IMPLEMENTATION_PATTERN,
             _INTERNAL_TABLE_PATTERN,
             _SEMANTIC_OBJECT_FIELD_PATTERN,
             _INTERNAL_IDENTIFIER_PATTERN,
@@ -208,22 +236,52 @@ def _contains_internal_implementation(value: Any) -> bool:
     )
 
 
-def _public_text(value: Any) -> str:
-    """移除公开文案中的内部表名和存储实现名称。"""
+def _sanitize_public_text(value: Any) -> _SanitizedPublicText:
+    """清理公开文案，并区分安全占位与可支撑业务结论的内容。"""
     text = str(value or "").strip()
-    if _CREDENTIAL_PATTERN.search(text):
-        return "内部连接细节已隐藏。"
+    if not text:
+        return _SanitizedPublicText(text="", is_publicly_meaningful=False)
+    if _CREDENTIAL_PATTERN.search(text) or _SENSITIVE_CONNECTION_URI_PATTERN.search(text):
+        return _SanitizedPublicText(
+            text="内部连接细节已隐藏。",
+            is_publicly_meaningful=False,
+        )
+    if _STORAGE_IMPLEMENTATION_PATTERN.search(text):
+        return _SanitizedPublicText(
+            text="内部存储实现已隐藏。",
+            is_publicly_meaningful=False,
+        )
     if _SQL_STATEMENT_PATTERN.search(text):
-        return "内部查询细节已隐藏。"
+        return _SanitizedPublicText(
+            text="内部查询细节已隐藏。",
+            is_publicly_meaningful=False,
+        )
+    meaningful_source = text
+    for pattern in (
+        _INTERNAL_TABLE_PATTERN,
+        _SEMANTIC_OBJECT_FIELD_PATTERN,
+        _INTERNAL_IDENTIFIER_PATTERN,
+    ):
+        meaningful_source = pattern.sub("", meaningful_source)
     text = _INTERNAL_TABLE_PATTERN.sub("结算数据字段", text)
     text = _SEMANTIC_OBJECT_FIELD_PATTERN.sub("结算数据字段", text)
     text = _INTERNAL_IDENTIFIER_PATTERN.sub("内部字段", text)
-    return re.sub(
+    text = re.sub(
         r"(?<![A-Za-z0-9_])Milvus\s+policy_rules(?![A-Za-z0-9_])",
         "政策知识库",
         text,
         flags=re.IGNORECASE,
     )
+    is_meaningful = bool(re.search(r"[A-Za-z0-9\u4e00-\u9fff]", meaningful_source))
+    return _SanitizedPublicText(
+        text=text,
+        is_publicly_meaningful=is_meaningful,
+    )
+
+
+def _public_text(value: Any) -> str:
+    """返回适合公开展示的安全文本。"""
+    return _sanitize_public_text(value).text
 
 
 def _answerability_from_completeness(
@@ -270,15 +328,22 @@ def _build_public_result(
         safe_context = safe_context or None
 
     safe_steps: list[dict[str, str]] = []
+    calculation_content_fields = frozenset({
+        "description", "formula", "result", "calculation", "note",
+    })
     for step in calculation_steps or []:
         if not isinstance(step, dict):
             continue
-        safe_step = {
-            key: _public_text(value)
-            for key, value in step.items()
-            if key in _PUBLIC_CALCULATION_FIELDS and value is not None
-        }
-        if safe_step:
+        safe_step: dict[str, str] = {}
+        has_meaningful_content = False
+        for key, value in step.items():
+            if key not in _PUBLIC_CALCULATION_FIELDS or value is None:
+                continue
+            sanitized = _sanitize_public_text(value)
+            safe_step[key] = sanitized.text
+            if key in calculation_content_fields and sanitized.is_publicly_meaningful:
+                has_meaningful_content = True
+        if safe_step and has_meaningful_content:
             safe_steps.append(safe_step)
 
     safe_definition = None
@@ -330,7 +395,9 @@ def _build_public_result(
         citations.append(PolicyCitation(title=title, excerpt=excerpt))
         seen_citations.add(citation_key)
 
-    safe_answer = _public_text(answer)
+    answer_text = _sanitize_public_text(answer)
+    safe_answer = answer_text.text
+    has_meaningful_answer = answer_text.is_publicly_meaningful
     has_real_amount = bool(safe_context) and any(
         key in safe_context
         and isinstance(safe_context[key], (int, float))
@@ -339,10 +406,10 @@ def _build_public_result(
     )
     calculation_checked = bool(safe_steps)
     policy_count = len(safe_evidence)
-    if is_overview and safe_answer and can_answer and has_real_amount:
+    if is_overview and has_meaningful_answer and can_answer and has_real_amount:
         answer_status = "complete"
     elif (
-        safe_answer
+        has_meaningful_answer
         and can_answer
         and has_real_amount
         and calculation_checked
@@ -350,13 +417,15 @@ def _build_public_result(
         and policy_count > 0
     ):
         answer_status = "complete"
-    elif safe_answer and (partial_answer or (can_answer and has_real_amount)):
+    elif has_meaningful_answer and (partial_answer or (can_answer and has_real_amount)):
         answer_status = "partial"
     else:
         answer_status = "unavailable"
         safe_answer = safe_answer or "当前信息不足，无法可靠回答该问题。"
 
     uncertainties: list[str] = []
+    if not has_meaningful_answer:
+        uncertainties.append("公开回答未包含可核验的业务内容。")
     if is_overview:
         uncertainties.append("费用总览不涉及单项政策匹配或单项计算过程核验。")
     elif not citations:
@@ -1359,12 +1428,23 @@ async def get_settlement_explanation(
         HTTPException 503: DB connection/query failure
     """
     if not settlement_id:
-        raise HTTPException(status_code=400, detail="settlement_id is required")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "POLICY_QA_INVALID_REQUEST",
+                "settlement_id 不能为空。",
+                {"operation": "settlement_explanation"},
+            ),
+        )
 
     if compare_with and compare_with == settlement_id:
         raise HTTPException(
             status_code=400,
-            detail="对比结算单号不能与主结算单号相同",
+            detail=error_detail(
+                "POLICY_QA_INVALID_COMPARISON",
+                "对比结算单号不能与主结算单号相同。",
+                {"operation": "settlement_explanation"},
+            ),
         )
 
     try:

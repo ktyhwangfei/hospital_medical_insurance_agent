@@ -264,7 +264,7 @@ class OutOfScopeStrategy(BaseFeeStrategy):
     # ── completeness ───────────────────────────────────────────
 
     def build_completeness(self, ctx: Any, evidence: list[dict]) -> dict:
-        has_amount = bool(getattr(ctx, "out_of_scope", 0))
+        has_amount = self._has_real_field(ctx, "out_of_scope")
         has_policy = len(evidence) > 0
 
         if has_amount and has_policy:

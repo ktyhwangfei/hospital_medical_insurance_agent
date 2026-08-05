@@ -150,7 +150,7 @@ class LargeAmountSelfPayStrategy(BaseFeeStrategy):
     # ── completeness ───────────────────────────────────────────
 
     def build_completeness(self, ctx: Any, evidence: list[dict]) -> dict:
-        has_data = bool(getattr(ctx, "large_amount_self_pay", 0))
+        has_data = self._has_real_field(ctx, "large_amount_self_pay")
         has_policy = len(evidence) > 0
         if has_data and has_policy:
             level = "full_policy_matched"

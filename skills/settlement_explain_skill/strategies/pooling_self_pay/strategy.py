@@ -196,7 +196,7 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
 
     def build_completeness(self, ctx: Any, evidence: list[dict]) -> dict:
         seg = self._extract_segment_ratios(evidence)
-        has_data = bool(getattr(ctx, "basic_pooling_self_pay", 0))
+        has_data = self._has_real_field(ctx, "basic_pooling_self_pay")
         has_segs = seg.get("has_complete", False) or len(seg.get("employee", [])) >= 3
         has_retiree = seg.get("retiree") is not None
         if has_data and has_segs and has_retiree:

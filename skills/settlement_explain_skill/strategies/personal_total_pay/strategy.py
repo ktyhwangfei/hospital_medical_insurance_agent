@@ -203,11 +203,11 @@ class PersonalTotalPayStrategy(BaseFeeStrategy):
     # ── completeness ───────────────────────────────────────────
 
     def build_completeness(self, ctx: Any, evidence: list[dict]) -> dict:
-        has_data = bool(getattr(ctx, "personal_total_pay", 0))
+        has_data = self._has_real_field(ctx, "personal_total_pay")
         has_components = (
-            bool(getattr(ctx, "deductible", 0))
-            or bool(getattr(ctx, "basic_pooling_self_pay", 0))
-            or bool(getattr(ctx, "large_amount_self_pay", 0))
+            self._has_real_field(ctx, "deductible")
+            or self._has_real_field(ctx, "basic_pooling_self_pay")
+            or self._has_real_field(ctx, "large_amount_self_pay")
         )
         has_policy = len(evidence) > 0
 

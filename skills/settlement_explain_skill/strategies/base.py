@@ -150,12 +150,34 @@ class BaseFeeStrategy(ABC):
 
     @staticmethod
     def _fmt_money(value: Any) -> str:
-        if value is None or value == "" or (isinstance(value, (int, float)) and value == 0):
+        if value is None or value == "":
             return "未获取"
         try:
             return f"{float(value):,.2f}"
         except (ValueError, TypeError):
             return "未获取"
+
+    @staticmethod
+    def _has_real_field(ctx: Any, field_name: str) -> bool:
+        """字段已由当前上下文提供时，零金额仍属于真实结算数据。"""
+        if isinstance(ctx, dict):
+            if field_name not in ctx:
+                return False
+            value = ctx[field_name]
+            has_query_marker = "tables_queried" in ctx
+            tables_queried = ctx.get("tables_queried")
+        else:
+            if not hasattr(ctx, field_name):
+                return False
+            value = getattr(ctx, field_name)
+            has_query_marker = hasattr(ctx, "tables_queried")
+            tables_queried = getattr(ctx, "tables_queried", None)
+
+        if value is None or value == "":
+            return False
+        if has_query_marker and not tables_queried:
+            return False
+        return True
 
     @staticmethod
     def _clean_policy_excerpt(text: str) -> str:

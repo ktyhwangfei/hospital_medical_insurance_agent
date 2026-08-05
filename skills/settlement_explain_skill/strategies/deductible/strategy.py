@@ -97,7 +97,7 @@ class DeductibleStrategy(BaseFeeStrategy):
         ]
 
     def build_completeness(self, ctx: Any, evidence: list[dict]) -> dict:
-        has_data = bool(getattr(ctx, "deductible", 0))
+        has_data = self._has_real_field(ctx, "deductible")
         has_policy = len(evidence) > 0
         if has_data and has_policy:
             level = "full_policy_matched"

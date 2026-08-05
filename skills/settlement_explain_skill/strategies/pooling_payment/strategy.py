@@ -356,7 +356,7 @@ class PoolingPaymentStrategy(BaseFeeStrategy):
         self, ctx: Any, evidence: list[dict]
     ) -> dict:
         seg = self._extract_fund_ratios(evidence)
-        has_data = bool(getattr(ctx, "basic_pooling_payment", 0))
+        has_data = self._has_real_field(ctx, "basic_pooling_payment")
         has_segs = seg.get("has_complete", False)
         if has_data and has_segs:
             level = "full_policy_ratio_matched"
