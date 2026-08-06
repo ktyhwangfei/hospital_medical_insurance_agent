@@ -166,6 +166,41 @@
 | M6 前端重构完成 | 5 tab 上线 | P9 | ✅ |
 | M7 生产切换 | 政策问答跑在新模型，旧路径下线 | P10 | ✅ 完成（未上线直接切换，无灰度） |
 
+### 2.4 V4.1 AI 原生阶段一（迭代 14，最小可信闭环）
+
+> **设计**：`docs/steering/政策知识治理-知识页前端改造设计-V4.1.md`（V4.0 全文 + §26–§31 现状落地对齐，决策按推荐项确认）。
+> **路线**：知识页从三栏流水线升级为 AI 原生四工作空间（变更集/待决策/已发布/驾驶舱）；底层沿用 V3.2 PolicyRuleUnit 契约。
+
+| 步骤 | 内容 | 状态 |
+|------|------|:--:|
+| S1 | PolicyRuleUnit 契约：KnowledgeItem + rule_group_id/topic_concept/rule_type_enum/validity/evidences/semantic_bindings，服务组装派生 | ✅ 含测试 |
+| S2 | 知识变更集：模型 + 存储（PG+内存）+ 按文档批次聚合服务（启发式风险分级/质量报告） | ✅ 含测试 |
+| S3 | 已发布快照：published_snapshots 表 + promote 登记不可变快照 | ✅ 含测试 |
+| S4 | API：`/change-sets`(列表/详情/build-from-doc) + `/published`(列表/active) | ✅ 含测试 |
+| S5 | 前端：变更集列表页 + 知识 tab 工作空间导航 | ✅ 页面 200 |
+| S6 | 前端：变更集审核页（AI 结论/分类 Tab/证据/风险/语义 Diff/通过驳回） | ✅ 页面 200 |
+| S7 | 前端：已发布知识页（快照列表/活动版本） | ✅ 页面 200 |
+| S8a | 变更集状态流转 API（submit-review/approve/reject/reprocess，状态机校验） | ✅ 含测试 |
+| S8b | 规则详情 API（GET /rules/{rule_id}：规则+原文+证据+变更集归属） | ✅ 含测试 |
+| S8c | 待决策队列（DecisionTask 模型+存储+从变更集生成+resolve；排除描述字段误报） | ✅ 含测试 |
+| S8d | AI 治理驾驶舱聚合 API（/governance/dashboard） | ✅ 含测试 |
+| S9a | 规则详情页（原文×规则双栏 + 高亮联动 + 语义映射抽屉三 Tab） | ✅ 页面 200 |
+| S9b | 待决策队列页（决策卡片：问题/推荐/候选/影响/接受/跳过/看上下文） | ✅ 页面 200 |
+| S9c | 驾驶舱页 + 工作空间导航（驾驶舱/工作台/变更集/待决策/已发布） | ✅ 页面 200 |
+| S10 | 收尾：全量测试 + 端到端验证 | ✅ 后端 31 + 前端 39 |
+| S11 | 待决策队列阶段二增强（批量决策/联动重校验） / 语义映射状态机后端化 | ⚪ 后置 |
+
+**端到端验证**（2026-08）：doc_466953309ccf 构建变更集 CS_f8283d5c7747cdfd（111 条 additions、PENDING_REVIEW、质量报告+风险分级）；两张新表已落 PG；三个前端路由 200。
+
+**迭代 14 阶段一·S8–S10（2026-08，V4.0 四工作空间全量落地）**：
+- 变更集状态流转（submit-review/approve/reject/reprocess，状态机 409 拦截）；
+- 规则详情 API（GET /rules/{rule_id}）+ 规则详情页（原文×规则双栏 + 高亮联动 + 语义映射抽屉三 Tab）；
+- 待决策队列：DecisionTask 落库（PG 表 policy_knowledge_decision_tasks），从变更集生成（证据不足/值域未映射/低置信，排除描述字段误报），前端决策卡片（接受推荐/跳过/看上下文）；
+- AI 治理驾驶舱：聚合 API + 前端页（处理进度/人工任务/风险/质量 + 快捷入口）；
+- 工作空间导航 5 项（驾驶舱/工作台/变更集/待决策/已发布）；
+- 端到端验证：CS_f8283d5c7747cdfd 状态机流转（approve→409→reprocess→approve）、500 决策任务生成与 resolve、dashboard 聚合、7 个前端路由 200；
+- 测试：后端 31 通过（变更集流转/决策任务/规则详情/驾驶舱）、前端 39 通过（预存在 test_service.py Milvus 失败除外）。
+
 ---
 
 ## 3. Runtime 建设（开发主线）
@@ -258,6 +293,7 @@
 | 2026-07-29 | **P10 完成（直接切换，未上线）**：读路径全量切纯 v2，删所有旧 schema 兼容代码（开关/适配层/LEGACY）；删旧 publish 通路 + 旧 schema 文件（policy_rules_schema/data_model1_loader）；drop 旧 policy_rules collection。scalar retrieval 标 xfail（v2 数据 gap：hosp_lv 政策简写 + med_type 低填充，精确结构化检索失效），待数据标准化 | §2 P10/M7 |
 | 2026-07-29 | **v2 维度值标准化**：hosp_lv/med_type 对齐 seed.py 业务字典（社区→一级、住院→住院-普通住院等），rule_to_entity 入库标准化 + 批量 upsert 88 条；scalar retrieval baseline 从 xfail 转 pass（支付比例组 0→3 命中）。剩余 gap：退休人员 60%折算公式是 v2 提取遗漏（rule_type 无"计算公式"），待数据补充 | §2 数据质量 |
 | 2026-07-31 | **Runtime 建设阶段三（全面验证）完成**：补 63 个新模块单元测试 + 3 个性能基准全绿；三层回归与 HEAD 基线零新增失败（顺带修复 `unit/shared/__init__.py` 缺失的 3 个收集错误）；USE_MEMORY_STORAGE=1 灰度零功能回归；`src/domain/AGENTS.md` 新增 §13.5 Runtime 上下文；架构设计.md 会话上下文服务域补充 Runtime 定位 | §3 Runtime 建设 |
+| 2026-08-06 | **迭代 16：知识页功能优化**：①构建页性能（eligible-units ~2s→~0.7s：store 批量 claims/get_many 消除 N+1、workbench 单遍 `list_document_ids` 枚举 + `get_document(include_knowledge=False)` 跳过 KnowledgeItem 构建；前端独立并行加载 + 骨架屏，任务表首屏即时渲染）②新建任务抽屉新增全选 + 按来源文档筛选 ③审核详情页改表格化（每行一条候选知识：指标字段/单元原文/置信度/操作），表头按单元筛选，行级 通过/拒绝/退回/查看详情（行级走 `reviewKnowledge` 落库留痕，退回以 `[退回重提取]` 前缀 note 落库）；操作按钮用途与交互细节见迭代记录迭代 16 | §2 迭代 16；知识页三页 + wizard + 审核详情；后端 build/workbench 性能链路 |
 
 ---
 

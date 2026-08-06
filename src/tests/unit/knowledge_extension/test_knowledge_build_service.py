@@ -93,7 +93,12 @@ class _Workbench:
         ]
         return WorkbenchDocumentList(items=items, total=len(items))
 
-    def get_document(self, doc_id: str) -> KnowledgeWorkbenchDocument:
+    def list_document_ids(self) -> list[str]:
+        return list(self.documents.keys())
+
+    def get_document(
+        self, doc_id: str, *, include_knowledge: bool = True
+    ) -> KnowledgeWorkbenchDocument:
         self.get_document_calls += 1
         return self.documents[doc_id].model_copy(deep=True)
 
@@ -234,6 +239,12 @@ class _RecordingStore:
 
     def get_claim(self, doc_id: str, unit_id: str) -> Any:
         return self.inner.get_claim(doc_id, unit_id)
+
+    def list_claims(self) -> Any:
+        return self.inner.list_claims()
+
+    def get_many(self, task_ids: list[str]) -> Any:
+        return self.inner.get_many(task_ids)
 
     def release_claims(self, task_id: str) -> None:
         self.inner.release_claims(task_id)

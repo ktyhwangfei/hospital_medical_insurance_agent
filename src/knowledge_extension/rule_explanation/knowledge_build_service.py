@@ -95,12 +95,19 @@ class KnowledgeBuildService:
         self._task_id_factory = task_id_factory
 
     def list_eligible_units(self) -> list[EligibleKnowledgeUnit]:
-        """列出全部审核通过单元及当前占用/重建状态。"""
+        """列出全部审核通过单元及当前占用/重建状态（批量加载，避免 N+1）。"""
+        claims_by_logical = {
+            (claim.doc_id, claim.unit_id): claim
+            for claim in self._store.list_claims()
+        }
+        tasks_by_id = self._store.get_many(
+            [claim.task_id for claim in claims_by_logical.values()]
+        )
         eligible: list[tuple[int, EligibleKnowledgeUnit]] = []
         for document in self._load_documents():
             for unit in document.units:
-                claim = self._store.get_claim(unit.doc_id, unit.unit_id)
-                task = self._store.get(claim.task_id) if claim is not None else None
+                claim = claims_by_logical.get((unit.doc_id, unit.unit_id))
+                task = tasks_by_id.get(claim.task_id) if claim is not None else None
                 availability = (
                     "CLAIMED"
                     if claim is not None
@@ -440,10 +447,11 @@ class KnowledgeBuildService:
         return current
 
     def _load_documents(self) -> list[KnowledgeWorkbenchDocument]:
-        summaries = self._workbench.list_documents()
+        # 单遍加载：直接枚举文档 id 再逐篇读取，避免 list_documents 内部
+        # 已逐篇 get_document 后又重复加载一遍（性能瓶颈，迭代 16 修复）。
         return [
-            self._workbench.get_document(summary.doc_id)
-            for summary in summaries.items
+            self._workbench.get_document(doc_id, include_knowledge=False)
+            for doc_id in self._workbench.list_document_ids()
         ]
 
     @staticmethod

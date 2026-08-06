@@ -131,6 +131,10 @@ class KnowledgeBuildStore(Protocol):
 
     def get_claim(self, doc_id: str, unit_id: str) -> UnitBuildClaim | None: ...
 
+    def list_claims(self) -> list[UnitBuildClaim]: ...
+
+    def get_many(self, task_ids: list[str]) -> dict[str, KnowledgeBuildTask]: ...
+
     def release_claims(self, task_id: str) -> None: ...
 
     def fail_and_release(
@@ -342,6 +346,18 @@ class InMemoryKnowledgeBuildStore:
         with self._lock:
             claim = self._claims_by_logical.get((doc_id, unit_id))
             return claim.model_copy(deep=True) if claim is not None else None
+
+    def list_claims(self) -> list[UnitBuildClaim]:
+        with self._lock:
+            return [claim.model_copy(deep=True) for claim in self._claims_by_logical.values()]
+
+    def get_many(self, task_ids: list[str]) -> dict[str, KnowledgeBuildTask]:
+        with self._lock:
+            return {
+                task_id: self._tasks[task_id].model_copy(deep=True)
+                for task_id in task_ids
+                if task_id in self._tasks
+            }
 
     def release_claims(self, task_id: str) -> None:
         with self._lock:
@@ -583,6 +599,36 @@ class PostgreSQLKnowledgeBuildStore:
                 (doc_id, unit_id),
             )
             return UnitBuildClaim.model_validate(rows[0]) if rows else None
+
+    def list_claims(self) -> list[UnitBuildClaim]:
+        with self._lock:
+            rows = self._get_client().execute(
+                """
+                SELECT doc_id, unit_id, unit_revision_id, task_id, claimed_at
+                FROM policy_knowledge_unit_claims
+                """
+            )
+            return [UnitBuildClaim.model_validate(row) for row in rows]
+
+    def get_many(self, task_ids: list[str]) -> dict[str, KnowledgeBuildTask]:
+        if not task_ids:
+            return {}
+        unique_ids = list(dict.fromkeys(task_ids))
+        placeholders = ",".join(["%s"] * len(unique_ids))
+        with self._lock:
+            rows = self._get_client().execute(
+                f"""
+                SELECT payload
+                FROM policy_knowledge_build_tasks
+                WHERE task_id IN ({placeholders})
+                """,
+                tuple(unique_ids),
+            )
+            result: dict[str, KnowledgeBuildTask] = {}
+            for row in rows:
+                task = self._task_from_payload(row["payload"])
+                result[task.task_id] = task
+            return result
 
     def release_claims(self, task_id: str) -> None:
         with self._lock:

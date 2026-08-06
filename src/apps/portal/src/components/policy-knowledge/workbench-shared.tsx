@@ -101,6 +101,51 @@ export function unitHasStructuredValue(knowledgeList: KnowledgeItem[]): boolean 
   return knowledgeList.some(knowledgeHasStructuredValue)
 }
 
+// ── 价值评分与覆盖比例（迭代13：单元排序与结构化覆盖）─────────────────
+// “价值”= 含数字且数字多；用于单元倒序排序与“无价值默认隐藏”。
+const NUMERIC_TOKEN_PATTERN = /\d+(?:\.\d+)?/g
+
+/** 统计文本/值中数字 token 的个数（价值信号）。 */
+export function countNumbers(value: unknown): number {
+  const text = typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value)
+  return (text.match(NUMERIC_TOKEN_PATTERN) || []).length
+}
+
+/** 单元价值评分：对其知识业务句与结构化字段中的数字计数求和。 */
+export function unitValueScore(knowledgeList: KnowledgeItem[]): number {
+  let score = 0
+  for (const knowledge of knowledgeList) {
+    score += countNumbers(knowledge.business_sentence)
+    for (const field of knowledge.fields) score += countNumbers(readableValue(field.raw_value))
+  }
+  return score
+}
+
+/** 单元结构化覆盖：含结构化价值的知识条数 / 知识总条数。 */
+export function unitCoverage(knowledgeList: KnowledgeItem[]): { covered: number; total: number } {
+  const total = knowledgeList.length
+  const covered = knowledgeList.filter(knowledgeHasStructuredValue).length
+  return { covered, total }
+}
+
+/** 原文高亮渲染：将 token（字段值/证据片段）在原文中全部标记，便于跨栏定位。 */
+export function HighlightText({ text, token }: { text: string; token?: string | null }) {
+  if (!text) return null
+  if (!token || token.trim().length < 2) return <>{text}</>
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(escaped, 'gi')
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  for (const match of text.matchAll(re)) {
+    const index = match.index ?? 0
+    if (index > lastIndex) parts.push(text.slice(lastIndex, index))
+    parts.push(<mark key={index} className="rounded bg-yellow-200 px-0.5 font-semibold text-slate-900">{text.slice(index, index + match[0].length)}</mark>)
+    lastIndex = index + match[0].length
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+  return <>{parts}</>
+}
+
 /** 列容器：统一样式（圆角卡片 + 标题 + 滚动区），min-w-0 防止 grid 子项被长内容撑破 */
 export function Column({ id, className = '', title, subtitle, children }: {
   id?: string

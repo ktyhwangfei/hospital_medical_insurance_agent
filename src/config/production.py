@@ -7,11 +7,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# 仅用于迁移期兼容无来源 release；生产默认必须关闭。
+ALLOW_LEGACY_POLICY_RELEASES = os.getenv(
+    "ALLOW_LEGACY_POLICY_RELEASES", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
+
 # PostgreSQL 配置
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "hospital_mcp")
 
 DATABASE_URL = os.getenv(

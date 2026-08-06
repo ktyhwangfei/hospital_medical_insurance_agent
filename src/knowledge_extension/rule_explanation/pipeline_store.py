@@ -160,6 +160,14 @@ class PipelineStore:
 
     # ── Policy Documents ──────────────────────────────────────────
 
+    def list_document_ids(self) -> list[str]:
+        """廉价枚举文档 id（不构建 _unit_stats 详情），供只读批次扫描使用。"""
+        client = self._get_client()
+        rows = client.execute(
+            "SELECT doc_id FROM policy_documents ORDER BY created_at DESC"
+        )
+        return [str(row["doc_id"]) for row in rows if row.get("doc_id")]
+
     def list_documents(
         self,
         page: int = 1,

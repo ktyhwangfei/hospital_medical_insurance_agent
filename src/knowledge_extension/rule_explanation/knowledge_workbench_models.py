@@ -17,6 +17,48 @@ class KnowledgeCitation(BaseModel):
     evidence: str
 
 
+class KnowledgeEvidence(BaseModel):
+    """字段级多证据锚点（V4.1 §4.6/§14.1：一条规则可关联多个证据）。"""
+
+    evidence_id: str
+    document_version_id: str
+    unit_id: str
+    clause_path: str | None = None
+    page_no: int | None = None
+    exact_quote: str
+    start_offset: int | None = None
+    end_offset: int | None = None
+    evidence_role: str = "主结论证据"
+
+
+class RuleValidity(BaseModel):
+    """规则生效范围（V4.1 §4.2：参与政策匹配，非纯展示）。"""
+
+    region: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    policy_version: str | None = None
+
+
+class RuleVariant(BaseModel):
+    """决策表分支：分级/分档/区间规则的一个分支（V4.1 §4.3）。"""
+
+    variant_id: str
+    conditions: list[dict[str, Any]] = Field(default_factory=list)
+    result_value: Any = None
+    result_unit: str | None = None
+
+
+class SemanticBinding(BaseModel):
+    """政策字段到统一语义字段/值域/指标的对齐状态（V4.1 §8.5）。"""
+
+    policy_field: str
+    semantic_field: str | None = None
+    concept: str | None = None
+    value_domain: str | None = None
+    status: str = "UNMAPPED"  # UNMAPPED / SUGGESTED / CONFIRMED / CONFLICT / INVALID
+
+
 class KnowledgeField(BaseModel):
     """结构化知识中的一个来源字段。"""
 
@@ -63,6 +105,18 @@ class KnowledgeItem(BaseModel):
     standardized_fields: list[StandardizedField] = Field(default_factory=list)
     confidence: KnowledgeConfidence
     citations: list[KnowledgeCitation]
+    # 人工评审结论（中栏评审 → 通过后进入第三栏标化）；默认待评审。
+    review_status: Literal["pending", "approved", "rejected"] = "pending"
+    review_note: str | None = None
+    # —— V4.1 政策规则单元契约（S1）——
+    rule_group_id: str | None = None          # 同源规则组（同一 unit+extraction 的规则共享）
+    topic_concept: str | None = None          # 业务主题概念编码，如 DEDUCTIBLE / PAYMENT_RATIO / CAP
+    rule_type_enum: str | None = None         # FIXED_STANDARD / RATIO / TIERED / DECISION_TABLE / ELIGIBILITY / ...
+    rule_type_label: str | None = None        # 中文类型（固定标准/资格条件/...）
+    validity: RuleValidity | None = None      # 生效范围（未识别时 None → 前端显示“尚未识别”）
+    variants: list[RuleVariant] = Field(default_factory=list)          # 决策表分支（阶段一为空）
+    evidences: list[KnowledgeEvidence] = Field(default_factory=list)    # 多证据锚点（由 citations 派生）
+    semantic_bindings: list[SemanticBinding] = Field(default_factory=list)  # 由 standardized_fields 派生
 
 
 class ApprovedUnit(BaseModel):

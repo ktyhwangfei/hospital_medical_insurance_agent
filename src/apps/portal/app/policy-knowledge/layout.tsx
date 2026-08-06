@@ -34,20 +34,23 @@ export default function PolicyKnowledgeLayout({ children }: { children: React.Re
 
   return (
     <div className="relative min-h-screen">
-      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(37,99,235,0.12),transparent_55%),radial-gradient(ellipse_at_bottom,rgba(14,165,233,0.08),transparent_50%)]" />
-        <div className="absolute inset-0 opacity-[0.35] [background-image:linear-gradient(to_right,rgba(15,23,42,0.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(15,23,42,0.05)_1px,transparent_1px)] [background-size:44px_44px]" />
+      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden bg-slate-50">
+        <div className="absolute inset-x-0 top-0 h-72 bg-[radial-gradient(ellipse_70%_100%_at_50%_0%,rgba(16,185,129,0.05),transparent_70%)]" />
       </div>
 
-      <main className="mx-auto w-full max-w-[1440px] p-6">
+      <main className="mx-auto w-full max-w-[1480px] p-6">
         {/* 治理平台标题 + Tab Navigation */}
         <div className="mb-4 flex items-center gap-2">
-          <span className="inline-flex h-7 items-center rounded-full bg-white/70 px-3 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 backdrop-blur">
+          <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-white/80 px-3 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 backdrop-blur">
+            <span className="relative flex size-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+              <span className="relative inline-flex size-1.5 rounded-full bg-emerald-500" />
+            </span>
             政策知识治理
           </span>
           <span className="text-xs text-slate-400">质量 · 版本 · 审核 · 发布 · 追踪 · 影响分析</span>
         </div>
-        <nav className="flex w-full items-center gap-1 border-b border-slate-200 mb-6">
+        <nav className="mb-6 flex w-full items-center gap-1 border-b border-slate-200">
           {NAV_TABS.map((tab) => {
             const Icon = tab.icon
             const active = currentTab === tab.href
@@ -57,10 +60,10 @@ export default function PolicyKnowledgeLayout({ children }: { children: React.Re
                 type="button"
                 onClick={() => router.push(tab.href)}
                 className={
-                  "flex items-center gap-2 rounded-none px-4 py-2.5 text-sm font-medium transition-colors " +
+                  "flex items-center gap-2 rounded-none px-4 py-2.5 text-sm transition-colors " +
                   (active
-                    ? "border-b-2 border-blue-600 text-blue-600"
-                    : "text-slate-500 hover:text-slate-700")
+                    ? "border-b-2 border-emerald-600 font-semibold text-emerald-700"
+                    : "border-b-2 border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800")
                 }
               >
                 <Icon className="size-4" />

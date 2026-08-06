@@ -11,6 +11,7 @@ from src.knowledge_extension.rule_explanation.quality_models import (
     QualityCaseResult,
     QualityRun,
 )
+from src.knowledge_extension.rule_explanation.quality_store import DEFAULT_TEST_CASES
 
 
 QUALITY_SCHEMA = """
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS policy_knowledge_releases (
     case_set_version INTEGER NOT NULL,
     config_hash VARCHAR(128) NOT NULL,
     source_change_set_id VARCHAR(64),
+    quality_run_id VARCHAR(64),
     quality_score DOUBLE PRECISION,
     consistency_score DOUBLE PRECISION,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -44,8 +46,11 @@ CREATE TABLE IF NOT EXISTS policy_knowledge_releases (
     promoted_by VARCHAR(128)
 );
 
+CREATE SEQUENCE IF NOT EXISTS policy_quality_run_sequence_seq;
+
 CREATE TABLE IF NOT EXISTS policy_quality_runs (
     run_id VARCHAR(64) PRIMARY KEY,
+    run_sequence BIGINT NOT NULL DEFAULT nextval('policy_quality_run_sequence_seq'),
     release_id VARCHAR(64) NOT NULL REFERENCES policy_knowledge_releases(release_id),
     baseline_release_id VARCHAR(64),
     case_set_version INTEGER NOT NULL,
@@ -77,6 +82,7 @@ CREATE TABLE IF NOT EXISTS policy_active_release (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by VARCHAR(128)
 );
+
 """
 
 RELEASE_SOURCE_LINEAGE_COLUMN_QUERY = """
@@ -94,6 +100,117 @@ ALTER TABLE policy_knowledge_releases
 ADD COLUMN IF NOT EXISTS source_change_set_id VARCHAR(64)
 """
 
+RELEASE_QUALITY_RUN_ID_COLUMN_QUERY = """
+SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'policy_knowledge_releases'
+      AND column_name = 'quality_run_id'
+) AS exists
+"""
+
+RELEASE_QUALITY_RUN_ID_MIGRATION_SQL = """
+ALTER TABLE policy_knowledge_releases
+ADD COLUMN IF NOT EXISTS quality_run_id VARCHAR(64)
+"""
+
+QUALITY_RUN_SEQUENCE_COLUMN_QUERY = """
+SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'policy_quality_runs'
+      AND column_name = 'run_sequence'
+) AS exists
+"""
+
+QUALITY_RUN_SEQUENCE_UNIQUE_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_policy_quality_runs_run_sequence
+ON policy_quality_runs(run_sequence)
+"""
+
+QUALITY_RUN_SEQUENCE_MIGRATION_STATEMENTS = (
+    "CREATE SEQUENCE IF NOT EXISTS policy_quality_run_sequence_seq",
+    """ALTER TABLE policy_quality_runs
+       ADD COLUMN IF NOT EXISTS run_sequence BIGINT""",
+    """WITH ordered_runs AS (
+           SELECT run_id,
+                  COALESCE((
+                      SELECT MAX(run_sequence)
+                      FROM policy_quality_runs
+                      WHERE run_sequence IS NOT NULL
+                  ), 0) + ROW_NUMBER() OVER (ORDER BY created_at ASC, run_id ASC)
+                      AS stable_sequence
+           FROM policy_quality_runs
+           WHERE run_sequence IS NULL
+       )
+       UPDATE policy_quality_runs AS runs
+       SET run_sequence = ordered_runs.stable_sequence
+       FROM ordered_runs
+       WHERE runs.run_id = ordered_runs.run_id
+         AND runs.run_sequence IS NULL""",
+    """SELECT setval(
+           'policy_quality_run_sequence_seq',
+           GREATEST(
+               COALESCE((SELECT MAX(run_sequence) FROM policy_quality_runs), 0) + 1,
+               (
+                   SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END
+                   FROM policy_quality_run_sequence_seq
+               )
+           ),
+           FALSE
+       )""",
+    """ALTER TABLE policy_quality_runs
+       ALTER COLUMN run_sequence
+       SET DEFAULT nextval('policy_quality_run_sequence_seq')""",
+    """ALTER TABLE policy_quality_runs
+       ALTER COLUMN run_sequence SET NOT NULL""",
+    """ALTER SEQUENCE policy_quality_run_sequence_seq
+       OWNED BY policy_quality_runs.run_sequence""",
+    QUALITY_RUN_SEQUENCE_UNIQUE_INDEX_SQL,
+)
+QUALITY_RUN_SEQUENCE_MIGRATION_SQL = ";\n".join(
+    QUALITY_RUN_SEQUENCE_MIGRATION_STATEMENTS
+)
+
+
+def _run_bounded_column_migration(
+    client: PostgreSQLClient,
+    column_query: str,
+    migration_sql: str,
+) -> None:
+    column_rows = client.execute(column_query)
+    if column_rows[0]["exists"]:
+        return
+    client.execute("SET lock_timeout = '5s'")
+    migration_error: BaseException | None = None
+    try:
+        client.execute(migration_sql)
+    except BaseException as exc:
+        migration_error = exc
+        raise
+    finally:
+        try:
+            client.execute("RESET lock_timeout")
+        except BaseException:
+            if migration_error is None:
+                raise
+
+
+def _migrate_quality_run_sequence(client: PostgreSQLClient) -> None:
+    with client.transaction() as connection:
+        with connection.cursor() as cursor:
+            # SET LOCAL 随事务提交或回滚自动复位，迁移失败不会污染连接会话。
+            cursor.execute("SET LOCAL lock_timeout = '5s'")
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock("
+                "hashtext('policy_quality_runs_run_sequence_migration'))"
+            )
+            # 历史同时间戳已无真实先后，只能以 run_id 作为稳定次键。
+            for statement in QUALITY_RUN_SEQUENCE_MIGRATION_STATEMENTS:
+                cursor.execute(statement)
+
 
 class PostgresPolicyQualityStore:
     """PolicyQualityStore 的 PostgreSQL adapter。"""
@@ -110,21 +227,17 @@ class PostgresPolicyQualityStore:
             for statement in QUALITY_SCHEMA.split(";"):
                 if statement.strip():
                     client.execute(statement)
-            column_rows = client.execute(RELEASE_SOURCE_LINEAGE_COLUMN_QUERY)
-            if not column_rows[0]["exists"]:
-                client.execute("SET lock_timeout = '5s'")
-                migration_error: BaseException | None = None
-                try:
-                    client.execute(RELEASE_SOURCE_LINEAGE_MIGRATION_SQL)
-                except BaseException as exc:
-                    migration_error = exc
-                    raise
-                finally:
-                    try:
-                        client.execute("RESET lock_timeout")
-                    except BaseException:
-                        if migration_error is None:
-                            raise
+            _run_bounded_column_migration(
+                client,
+                RELEASE_SOURCE_LINEAGE_COLUMN_QUERY,
+                RELEASE_SOURCE_LINEAGE_MIGRATION_SQL,
+            )
+            _run_bounded_column_migration(
+                client,
+                RELEASE_QUALITY_RUN_ID_COLUMN_QUERY,
+                RELEASE_QUALITY_RUN_ID_MIGRATION_SQL,
+            )
+            _migrate_quality_run_sequence(client)
         except BaseException:
             try:
                 client.close()
@@ -133,6 +246,22 @@ class PostgresPolicyQualityStore:
             raise
         self._client = client
         return client
+
+    def ensure_default_test_cases(self) -> None:
+        """表内无任何用例时内置一批经典医保政策用例（case_set_version=0，兼容存量候选）。"""
+        client = self._get_client()
+        rows = client.execute("SELECT COUNT(*) AS c FROM policy_qa_test_cases")
+        if int(rows[0]["c"]) > 0:
+            return
+        for case in DEFAULT_TEST_CASES:
+            client.execute(
+                """INSERT INTO policy_qa_test_cases
+                   (case_id,name,query,mode,expected_knowledge_ids,filters,required,active,case_set_version,updated_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (case.case_id, case.name, case.query, case.mode,
+                 json.dumps(case.expected_knowledge_ids), json.dumps(case.filters),
+                 case.required, case.active, case.case_set_version, case.updated_at),
+            )
 
     def save_test_case(self, case: PolicyQATestCase) -> PolicyQATestCase:
         client = self._get_client()
@@ -168,10 +297,11 @@ class PostgresPolicyQualityStore:
         rows = self._get_client().execute(
             """INSERT INTO policy_knowledge_releases
                (release_id,status,facts_collection,rules_collection,contract_version,
-                case_set_version,config_hash,source_change_set_id,quality_score,
+                case_set_version,config_hash,source_change_set_id,quality_run_id,quality_score,
                 consistency_score,created_at,promoted_at,promoted_by)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (release_id) DO UPDATE SET status=EXCLUDED.status,
+               quality_run_id=EXCLUDED.quality_run_id,
                quality_score=EXCLUDED.quality_score,consistency_score=EXCLUDED.consistency_score,
                promoted_at=EXCLUDED.promoted_at,promoted_by=EXCLUDED.promoted_by
                WHERE policy_knowledge_releases.facts_collection = EXCLUDED.facts_collection
@@ -186,7 +316,8 @@ class PostgresPolicyQualityStore:
                 release.release_id, release.status, release.facts_collection,
                 release.rules_collection, release.contract_version,
                 release.case_set_version, release.config_hash,
-                release.source_change_set_id, release.quality_score,
+                release.source_change_set_id, release.quality_run_id,
+                release.quality_score,
                 release.consistency_score, release.created_at,
                 release.promoted_at, release.promoted_by,
             ),
@@ -199,15 +330,16 @@ class PostgresPolicyQualityStore:
         rows = self._get_client().execute(
             """INSERT INTO policy_knowledge_releases
                (release_id,status,facts_collection,rules_collection,contract_version,
-                case_set_version,config_hash,source_change_set_id,quality_score,
+                case_set_version,config_hash,source_change_set_id,quality_run_id,quality_score,
                 consistency_score,created_at,promoted_at,promoted_by)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (release_id) DO NOTHING RETURNING *""",
             (
                 release.release_id, release.status, release.facts_collection,
                 release.rules_collection, release.contract_version,
                 release.case_set_version, release.config_hash,
-                release.source_change_set_id, release.quality_score,
+                release.source_change_set_id, release.quality_run_id,
+                release.quality_score,
                 release.consistency_score, release.created_at,
                 release.promoted_at, release.promoted_by,
             ),
@@ -235,6 +367,67 @@ class PostgresPolicyQualityStore:
                WHERE a.singleton_id=TRUE"""
         )
         return KnowledgeRelease(**rows[0]) if rows else None
+
+    def claim_quality_run(self, release_id: str, run_id: str) -> str:
+        rows = self._get_client().execute(
+            """WITH candidate AS (
+                   SELECT release_id,status AS previous_status,
+                          %s::VARCHAR(64) AS claimed_run_id
+                   FROM policy_knowledge_releases
+                   WHERE release_id=%s
+                     AND status IN ('ready','failed')
+                     AND quality_run_id IS NULL
+                   FOR UPDATE
+               )
+               UPDATE policy_knowledge_releases AS releases
+               SET status='testing',quality_run_id=candidate.claimed_run_id
+               FROM candidate
+               WHERE releases.release_id=candidate.release_id
+               RETURNING candidate.previous_status""",
+            (run_id, release_id),
+        )
+        if not rows:
+            raise ValueError(f"release {release_id} 已有质量运行或状态不可运行")
+        return str(rows[0]["previous_status"])
+
+    def complete_quality_run(
+        self,
+        release_id: str,
+        run_id: str,
+        *,
+        status: str,
+        quality_score: float,
+        consistency_score: float,
+    ) -> KnowledgeRelease:
+        if status not in {"passed", "failed"}:
+            raise ValueError(f"不支持的质量运行终态: {status}")
+        rows = self._get_client().execute(
+            """UPDATE policy_knowledge_releases
+               SET status=%s,quality_run_id=NULL,quality_score=%s,
+                   consistency_score=%s
+               WHERE release_id=%s AND quality_run_id=%s AND status='testing'
+               RETURNING *""",
+            (status, quality_score, consistency_score, release_id, run_id),
+        )
+        if not rows:
+            raise ValueError(f"release {release_id} 的质量运行所有权不匹配")
+        return KnowledgeRelease(**rows[0])
+
+    def restore_quality_run(
+        self, release_id: str, run_id: str, original_status: str
+    ) -> KnowledgeRelease:
+        if original_status not in {"ready", "failed"}:
+            raise ValueError(f"不支持恢复到状态: {original_status}")
+        rows = self._get_client().execute(
+            """UPDATE policy_knowledge_releases
+               SET status=%s,quality_run_id=NULL
+               WHERE release_id=%s AND quality_run_id=%s AND status='testing'
+               RETURNING *""",
+            (original_status, release_id, run_id),
+        )
+        if not rows:
+            raise ValueError(f"release {release_id} 的质量运行所有权不匹配")
+        return KnowledgeRelease(**rows[0])
 
     def promote_release(self, release_id: str, promoted_by: str) -> KnowledgeRelease:
         return self._switch_release(release_id, promoted_by, allow_retired=False)
@@ -274,7 +467,7 @@ class PostgresPolicyQualityStore:
                     cursor.execute(
                         """SELECT status,case_set_version,config_hash,baseline_release_id
                            FROM policy_quality_runs WHERE release_id=%s
-                           ORDER BY created_at DESC LIMIT 1 FOR UPDATE""",
+                           ORDER BY run_sequence DESC LIMIT 1 FOR UPDATE""",
                         (release_id,),
                     )
                     latest_run = cursor.fetchone()
@@ -328,7 +521,7 @@ class PostgresPolicyQualityStore:
 
     def get_latest_run(self, release_id: str) -> QualityRun | None:
         rows = self._get_client().execute(
-            "SELECT * FROM policy_quality_runs WHERE release_id=%s ORDER BY created_at DESC LIMIT 1",
+            "SELECT * FROM policy_quality_runs WHERE release_id=%s ORDER BY run_sequence DESC LIMIT 1",
             (release_id,),
         )
         return QualityRun(**rows[0]) if rows else None

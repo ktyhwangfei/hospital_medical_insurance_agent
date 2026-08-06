@@ -19,6 +19,7 @@ const document: WorkbenchDocument = {
         relationship_source: 'persisted',
         business_sentence: '在职职工住院时，统筹基金支付比例为80%。',
         source_text: '在职职工住院政策原文',
+        review_status: 'approved',
         fields: [{ field_code: 'payment_ratio', field_name: '支付比例', raw_value: '80%' }],
         standardized_fields: [{
           source_field: 'payment_ratio', source_value: { min: 0.8, max: 1 }, status: 'unmapped',
@@ -45,8 +46,19 @@ const document: WorkbenchDocument = {
 describe('KnowledgeWorkbench', () => {
   afterEach(cleanup)
 
+  function renderWorkbench(overrides: Record<string, unknown> = {}) {
+    return render(<KnowledgeWorkbench
+      document={document}
+      metrics={[]}
+      onBindExisting={vi.fn()}
+      onCreateMetricDrafts={vi.fn()}
+      onProposeValue={vi.fn()}
+      onReviewKnowledge={vi.fn()}
+      {...(overrides as object)} />)
+  }
+
   it('shows approved units, coherent knowledge, and standardized projection in three columns', () => {
-    render(<KnowledgeWorkbench document={document} metrics={[]} onBindExisting={vi.fn()} onCreateMetricDrafts={vi.fn()} onProposeValue={vi.fn()} />)
+    renderWorkbench()
 
     expect(screen.getByRole('heading', { name: '审核通过的单元' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '结构化知识' })).toBeInTheDocument()
@@ -72,7 +84,7 @@ describe('KnowledgeWorkbench', () => {
 
   it('requires a human click to create selected metric drafts', () => {
     const onCreate = vi.fn()
-    render(<KnowledgeWorkbench document={document} metrics={[]} onBindExisting={vi.fn()} onCreateMetricDrafts={onCreate} onProposeValue={vi.fn()} />)
+    renderWorkbench({ onCreateMetricDrafts: onCreate })
 
     fireEvent.click(screen.getByRole('checkbox', { name: '选择支付比例' }))
     fireEvent.click(screen.getByRole('button', { name: '批量生成指标草稿 (1)' }))
@@ -84,7 +96,7 @@ describe('KnowledgeWorkbench', () => {
 
   it('prefers binding an existing metric and advances through the mobile stages', () => {
     const onBind = vi.fn()
-    render(<KnowledgeWorkbench document={document} metrics={[{ metric_code: 'zcgz.payment_ratio', name: '支付比例', object_code: 'zcgz', metric_type: 'Atomic', status: 'published' }]} onBindExisting={onBind} onCreateMetricDrafts={vi.fn()} onProposeValue={vi.fn()} />)
+    renderWorkbench({ metrics: [{ metric_code: 'zcgz.payment_ratio', name: '支付比例', object_code: 'zcgz', metric_type: 'Atomic', status: 'published' }], onBindExisting: onBind })
 
     expect(screen.getByRole('button', { name: '绑定已有指标' })).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('支付比例已有指标'), { target: { value: 'zcgz.payment_ratio' } })
@@ -99,7 +111,7 @@ describe('KnowledgeWorkbench', () => {
   })
 
   it('resets selections when switching documents', () => {
-    const { rerender } = render(<KnowledgeWorkbench document={document} metrics={[]} onBindExisting={vi.fn()} onCreateMetricDrafts={vi.fn()} onProposeValue={vi.fn()} />)
+    const { rerender } = renderWorkbench()
     fireEvent.click(screen.getByRole('checkbox', { name: '选择支付比例' }))
     const nextDocument: WorkbenchDocument = {
       ...document,
@@ -107,7 +119,7 @@ describe('KnowledgeWorkbench', () => {
       units: [{ ...document.units[0], doc_id: 'doc_2', unit_id: 'unit_3', path: ['第三条'], knowledge: [] }],
     }
 
-    rerender(<KnowledgeWorkbench document={nextDocument} metrics={[]} onBindExisting={vi.fn()} onCreateMetricDrafts={vi.fn()} onProposeValue={vi.fn()} />)
+    rerender(<KnowledgeWorkbench document={nextDocument} metrics={[]} onBindExisting={vi.fn()} onCreateMetricDrafts={vi.fn()} onProposeValue={vi.fn()} onReviewKnowledge={vi.fn()} />)
 
     expect(screen.getByRole('option', { name: /第三条/ })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByRole('button', { name: /批量生成指标草稿 \(1\)/ })).not.toBeInTheDocument()
