@@ -13,20 +13,11 @@ interface PolicyAgentAnswerProps {
   onFollowUp?: (question: string) => void
 }
 
-const STATUS_LABELS: Record<NonNullable<PolicyQAChatMessage['answerStatus']>, string> = {
-  complete: '已完成核验',
-  partial: '部分信息待核对',
-  unavailable: '暂无法可靠回答',
-}
-
 export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAnswerProps) {
   if (!message.content) return null
 
   return (
     <article className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      {message.answerStatus ? (
-        <p className="text-xs font-medium text-slate-500">{STATUS_LABELS[message.answerStatus]}</p>
-      ) : null}
       <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-900">{message.content}</p>
 
       <VerificationSummary summary={message.verificationSummary} />

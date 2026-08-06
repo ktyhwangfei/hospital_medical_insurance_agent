@@ -36,7 +36,9 @@ describe('PolicyAgentAnswer', () => {
   it('renders one answer with progressive disclosure', () => {
     render(<PolicyAgentAnswer message={completeMessage} />)
 
-    expect(screen.getByText('本次统筹自付为 4,962.67 元。')).toBeInTheDocument()
+    const answer = screen.getByText('本次统筹自付为 4,962.67 元。')
+    expect(answer).toBeInTheDocument()
+    expect(answer.closest('article')?.firstElementChild).toBe(answer)
     expect(screen.getByText('已核对当前结算单与 2 条政策依据。')).toBeInTheDocument()
     expect(screen.queryByText('本轮执行链路')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '查看 2 条政策来源' })).toBeInTheDocument()
