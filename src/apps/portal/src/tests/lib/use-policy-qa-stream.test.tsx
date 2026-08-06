@@ -297,4 +297,36 @@ describe('usePolicyQAStream', () => {
       policyCount: 0,
     })
   })
+
+  it.each([
+    [
+      'result JSON 损坏',
+      'event: result\ndata: {broken\n\nevent: done\ndata: {}\n\n',
+    ],
+    [
+      '流结束前没有 result',
+      sseText([
+        ['step', { status: 'done', public_message: '处理结束' }],
+        ['done', {}],
+      ]),
+    ],
+  ])('%s 时把 assistant 占位消息统一降级为安全 unavailable', async (_name, stream) => {
+    streamQueue = [stream]
+    const { result } = renderHook(() => usePolicyQAStream())
+
+    await act(async () => {
+      await result.current.send('查询住院费用', { settlementId: '1671213' })
+    })
+
+    const last = result.current.messages.at(-1)!
+    expect(last.content).not.toBe('')
+    expect(last.answerStatus).toBe('unavailable')
+    expect(last.uncertainties).not.toHaveLength(0)
+    expect(last.verificationSummary).toEqual({
+      settlementChecked: false,
+      calculationChecked: false,
+      policyCount: 0,
+      message: '公开结果不完整，未展示未经核验的内容。',
+    })
+  })
 })

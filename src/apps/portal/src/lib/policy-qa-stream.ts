@@ -98,6 +98,8 @@ export function toPolicyQAResult(raw: unknown): PolicyQAResult {
   const answer = typeof raw.answer === 'string' ? raw.answer.trim() : ''
   const answerStatus = raw.answer_status
   const verification = raw.verification_summary
+  const citations = toCitations(raw.citations)
+  const uncertainties = strictStringArray(raw.uncertainties)
   if (
     !answer ||
     !isAnswerStatus(answerStatus) ||
@@ -107,7 +109,14 @@ export function toPolicyQAResult(raw: unknown): PolicyQAResult {
     typeof verification.policy_count !== 'number' ||
     !Number.isInteger(verification.policy_count) ||
     verification.policy_count < 0 ||
-    typeof verification.message !== 'string'
+    typeof verification.message !== 'string' ||
+    citations === undefined ||
+    uncertainties === undefined ||
+    (citations.length === 0 && uncertainties.length === 0) ||
+    (answerStatus === 'complete' &&
+      !verification.settlement_checked &&
+      !verification.calculation_checked &&
+      verification.policy_count === 0)
   ) {
     return unavailableResult()
   }
@@ -119,8 +128,8 @@ export function toPolicyQAResult(raw: unknown): PolicyQAResult {
     calculationSteps: toCalculationSteps(raw.calculation_steps),
     definition: toDefinition(raw.definition),
     warnings: stringArray(raw.warnings),
-    citations: toCitations(raw.citations),
-    uncertainties: stringArray(raw.uncertainties),
+    citations,
+    uncertainties,
     verificationSummary: {
       settlementChecked: verification.settlement_checked,
       calculationChecked: verification.calculation_checked,
@@ -157,6 +166,12 @@ function isAnswerStatus(value: unknown): value is PolicyQAResult['answerStatus']
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function strictStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+    ? value
+    : undefined
 }
 
 function nullableString(value: unknown): string | null | undefined {
@@ -202,11 +217,20 @@ function toDefinition(value: unknown): PolicyQAResult['definition'] {
   }
 }
 
-function toCitations(value: unknown): PolicyQAResult['citations'] {
-  if (!Array.isArray(value)) return []
-  return value.filter(isRecord).flatMap((citation) =>
-    typeof citation.title === 'string' && typeof citation.excerpt === 'string'
-      ? [{ title: citation.title, excerpt: citation.excerpt }]
-      : [],
-  )
+function toCitations(value: unknown): PolicyQAResult['citations'] | undefined {
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (citation) =>
+        isRecord(citation) &&
+        typeof citation.title === 'string' &&
+        typeof citation.excerpt === 'string',
+    )
+  ) {
+    return undefined
+  }
+  return value.map((citation) => ({
+    title: citation.title as string,
+    excerpt: citation.excerpt as string,
+  }))
 }

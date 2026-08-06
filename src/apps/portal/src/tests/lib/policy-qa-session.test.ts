@@ -18,7 +18,11 @@ import {
   upsertMemory,
   type MemoryCard,
 } from '@/lib/policy-qa-session'
-import { parseSseBlock, sanitizePublicPayload } from '@/lib/policy-qa-stream'
+import {
+  parseSseBlock,
+  sanitizePublicPayload,
+  toPolicyQAResult,
+} from '@/lib/policy-qa-stream'
 
 // ── snake → camel 转换 ─────────────────────────────────────────
 
@@ -236,5 +240,52 @@ describe('sanitizePublicPayload', () => {
         },
       }),
     ).toEqual({ answer: '安全答案', nested: { title: '政策依据' } })
+  })
+})
+
+describe('toPolicyQAResult', () => {
+  const validResult = {
+    answer: '已完成核对。',
+    answer_status: 'complete',
+    citations: [{ title: '政策依据', excerpt: '按规定支付。' }],
+    uncertainties: [],
+    verification_summary: {
+      settlement_checked: true,
+      calculation_checked: true,
+      policy_count: 1,
+      message: '已完成核对',
+    },
+  }
+
+  it.each([
+    ['citations 不是数组', { ...validResult, citations: '政策依据' }],
+    ['uncertainties 不是数组', { ...validResult, citations: [], uncertainties: '尚待核验' }],
+    ['citations 含非法成员', { ...validResult, citations: [{ title: '缺少 excerpt' }] }],
+    ['citations 与 uncertainties 均为空', { ...validResult, citations: [], uncertainties: [] }],
+  ])('%s 时拒绝结果并安全降级', (_name, raw) => {
+    const result = toPolicyQAResult(raw)
+
+    expect(result.answerStatus).toBe('unavailable')
+    expect(result.answer).not.toBe(raw.answer)
+    expect(result.uncertainties).not.toHaveLength(0)
+  })
+
+  it('complete 但所有核验指标均为空时拒绝结果并安全降级', () => {
+    const result = toPolicyQAResult({
+      ...validResult,
+      verification_summary: {
+        settlement_checked: false,
+        calculation_checked: false,
+        policy_count: 0,
+        message: '未执行核验',
+      },
+    })
+
+    expect(result.answerStatus).toBe('unavailable')
+    expect(result.verificationSummary).toMatchObject({
+      settlementChecked: false,
+      calculationChecked: false,
+      policyCount: 0,
+    })
   })
 })
