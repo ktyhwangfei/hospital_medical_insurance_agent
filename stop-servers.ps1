@@ -1,68 +1,71 @@
-# stop-servers.ps1 - Stop hospital medical insurance platform servers
-# Improvements (based on --reload orphan worker issue):
-#   1. Match backend by command line (create_app / src.runtime.api.app), not just port PID
-#   2. Detect multiprocessing orphan workers: spawn_main with dead parent
-#      (uvicorn --reload master killed -> worker orphaned, holds port + stale code)
-#   3. taskkill /F /T kills process tree (incl. children)
-#   4. Verify not just ports but backend process residue + orphans
-#
-# Background: netstat LISTENING PID can be a stale entry (process dead, PID recycled,
-#   TCP table not updated); killing it reports "process not found". The real port holder
-#   is the orphan worker (command line spawn_main, no "uvicorn"), never caught by port PID.
+# stop-servers.ps1 - Stop THIS worktree's servers only.
+# Scope discipline (per git worktree):
+#   Only the ports persisted in .server-ports.json (backend_port / frontend_port) are
+#   considered. The listening PID on each port is cross-checked against our process
+#   signatures (backend: create_app/src.runtime.api.app; frontend: src/apps/portal)
+#   before killing, so a port that has been taken over by an EXTERNAL process is
+#   never touched. Ports owned by other worktrees or manual instances are left alone.
 # Usage: .\stop-servers.ps1
+# Exit codes: 0 = stopped (or nothing to do); 2 = residual listeners remain
 # NOTE: keep comments ASCII-only. Non-ASCII (CJK) bytes in UTF-8-no-BOM files get
 #   mis-decoded by PowerShell 5.x (GBK), which can swallow newlines and break parsing.
 
 $ErrorActionPreference = "SilentlyContinue"
 
-$BACKEND_PORT = 8000
-$FRONTEND_PORT = 3000
-$WATCH_PORTS = @(8000, 3000, 3001, 3002)
+$WORKDIR = Split-Path -Parent $MyInvocation.MyCommand.Path
+$STATE_FILE = Join-Path $WORKDIR ".server-ports.json"
 
-# All alive process IDs (to detect orphans: parent already dead)
-$alivePids = [System.Collections.Generic.HashSet[int]]::new()
-foreach ($p in (Get-Process)) { $null = $alivePids.Add([int]$p.Id) }
-
-# 1) Backend master: python whose command line has create_app / src.runtime.api.app
-$backendMain = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
-    Where-Object { $_.CommandLine -and $_.CommandLine -match 'create_app|src\.runtime\.api\.app' }
-$backendMainIds = [System.Collections.Generic.HashSet[int]]::new()
-foreach ($m in $backendMain) { $null = $backendMainIds.Add([int]$m.ProcessId) }
-
-# 2) Backend multiprocessing workers (incl. orphans): command line has spawn_main
-$backendWorkers = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-    Where-Object { $_.CommandLine -and $_.CommandLine -match 'spawn_main' }
-
-# 3) Frontend: node whose command line has this project path src/apps/portal
-#    Covers next dev / start-server / postcss build children; avoids killing VSCode/MCP nodes
-$frontend = Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-    Where-Object { $_.CommandLine -and $_.CommandLine -match 'src[/\\]apps[/\\]portal' }
-
-# 4) Port LISTENING PIDs (fallback, incl. stale entries' real holders)
-$portPids = @()
-foreach ($p in $WATCH_PORTS) {
-    $portPids += ((netstat -ano | Select-String ":$p\s.*LISTENING") |
-        ForEach-Object { ($_ -replace '.*\s(\d+)\s*$', '$1').Trim() })
+# Resolve ports: persisted pair only. Without state file there is nothing scoped to stop.
+$backendPort = $null
+$frontendPort = $null
+if (Test-Path $STATE_FILE) {
+    try {
+        $state = Get-Content $STATE_FILE -Raw | ConvertFrom-Json
+        if ($state.backend_port) { $backendPort = [int]$state.backend_port }
+        if ($state.frontend_port) { $frontendPort = [int]$state.frontend_port }
+    } catch {}
 }
-$portPids = $portPids | Sort-Object -Unique
+if (-not $backendPort -and -not $frontendPort) {
+    Write-Host "No .server-ports.json found; nothing scoped to stop." -ForegroundColor Gray
+    exit 0
+}
+Write-Host "Scoped ports: backend=$backendPort frontend=$frontendPort" -ForegroundColor DarkGray
 
-# Collect PIDs to kill
+function Get-ListeningPids([int]$port) {
+    @((netstat -ano | Select-String ":$port\s.*LISTENING") |
+        ForEach-Object { ($_ -replace '.*\s(\d+)\s*$', '$1').Trim() }) | Sort-Object -Unique
+}
+
 $toKill = [System.Collections.Generic.HashSet[int]]::new()
-foreach ($id in $backendMainIds) { $null = $toKill.Add([int]$id) }
-foreach ($f in $frontend) { $null = $toKill.Add([int]$f.ProcessId) }
-foreach ($id in $portPids) { $null = $toKill.Add([int]$id) }
-foreach ($w in $backendWorkers) {
-    # parse spawn_main(parent_pid=XXXX, ...)
-    $m = [regex]::Match($w.CommandLine, 'parent_pid=(\d+)')
-    $parentPid = if ($m.Success) { [int]$m.Groups[1].Value } else { 0 }
-    # worker belongs to this backend: parent is backend master, or parent already dead (orphan)
-    if ($backendMainIds.Contains($parentPid) -or -not $alivePids.Contains($parentPid)) {
-        $null = $toKill.Add([int]$w.ProcessId)
+$note = @()
+
+# Backend: listening PID on our backend port must match our uvicorn signature.
+if ($backendPort) {
+    foreach ($pidStr in (Get-ListeningPids $backendPort)) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$pidStr" -ErrorAction SilentlyContinue
+        if ($proc -and $proc.CommandLine -match 'create_app|src\.runtime\.api\.app') {
+            $null = $toKill.Add([int]$proc.ProcessId)
+        } else {
+            $note += "backend port $backendPort held by PID $pidStr (not ours, skipped)"
+        }
+    }
+}
+
+# Frontend: listening PID on our frontend port must be a node serving this portal.
+if ($frontendPort) {
+    foreach ($pidStr in (Get-ListeningPids $frontendPort)) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$pidStr" -ErrorAction SilentlyContinue
+        if ($proc -and $proc.CommandLine -match 'src[/\\]apps[/\\]portal') {
+            $null = $toKill.Add([int]$proc.ProcessId)
+        } else {
+            $note += "frontend port $frontendPort held by PID $pidStr (not ours, skipped)"
+        }
     }
 }
 
 if ($toKill.Count -eq 0) {
-    Write-Host "No running server processes found" -ForegroundColor Gray
+    Write-Host "No matching processes on scoped ports." -ForegroundColor Gray
+    foreach ($n in $note) { Write-Host "  $n" -ForegroundColor Yellow }
     exit 0
 }
 
@@ -70,22 +73,22 @@ Write-Host "Stopping $($toKill.Count) process(es)..." -ForegroundColor Cyan
 foreach ($procId in $toKill) {
     $procName = try { (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch { "(dead/stale)" }
     Write-Host "  PID $procId ($procName)" -ForegroundColor Yellow
-    # /T recursively kills child processes (multiprocessing worker tree)
+    # /T recursively kills child processes (next dev worker tree)
     taskkill /F /T /PID $procId 2>$null | Out-Null
-    # fallback
     Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
 }
 
 Start-Sleep -Seconds 3
 
-# Verify: ports free + no backend residue
-$stillBackend = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
-    Where-Object { $_.CommandLine -and ($_.CommandLine -match 'create_app|src\.runtime\.api\.app') }).Count
-$stillPort = (netstat -ano | Select-String ":$BACKEND_PORT\s.*LISTENING|:$FRONTEND_PORT\s.*LISTENING").Count
-
-if ($stillBackend -gt 0 -or $stillPort -gt 0) {
-    Write-Warning "Residual: backend_procs=$stillBackend port_listeners=$stillPort. Orphan workers may persist; reboot if needed."
+# Verify: our scoped ports are free.
+$still = 0
+foreach ($p in @($backendPort, $frontendPort)) {
+    if ($p) { $still += @(Get-ListeningPids $p).Count }
+}
+if ($still -gt 0) {
+    Write-Warning "Residual listeners remain on scoped ports (count=$still). Check netstat -ano." 
     exit 2
 } else {
-    Write-Host "All server processes stopped (incl. orphan workers)" -ForegroundColor Green
+    Write-Host "All this worktree's server processes stopped. Ports remain reserved in .server-ports.json." -ForegroundColor Green
+    Write-Host "Restart: .\start-servers.ps1 (reuses the same ports)" -ForegroundColor DarkGray
 }
