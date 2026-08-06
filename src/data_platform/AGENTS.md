@@ -56,6 +56,6 @@ data_platform/
 ## 注意事项
 
 - 所有表通过 `CREATE TABLE IF NOT EXISTS` 自动建表
-- `PostgreSQLClient` 非线程安全，各存储实例独立客户端
+- `PostgreSQLClient` 通过可重入锁串行化共享连接操作；事务锁覆盖 `BEGIN` 到 `COMMIT/ROLLBACK`，禁止其他线程的 SQL 穿插
 - `UnavailableDatabaseExecutor` 用于驱动未安装时的优雅降级
 - 建表 SQL 定义有重复：`models.py`（SQLAlchemy）和 `*_store.py`（原始 SQL）需同步维护

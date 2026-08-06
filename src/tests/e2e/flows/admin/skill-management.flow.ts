@@ -32,4 +32,13 @@ test.describe('技能管理流程', () => {
     const count = await skillsPage.getSkillCount();
     expect(count).toBeGreaterThanOrEqual(0);
   });
+  test('route preview to execution result', async () => {
+    await skillsPage.openRouteTest();
+    await skillsPage.submitRouteQuestion('统筹自付怎么算？');
+    await expect(skillsPage.routeResult).toBeVisible();
+
+    await skillsPage.openExecutionTest();
+    await skillsPage.submitExecutionQuestion('解释这笔费用');
+    await expect(skillsPage.executionResult).toBeVisible();
+  });
 });

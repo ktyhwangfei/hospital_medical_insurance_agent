@@ -307,6 +307,227 @@ export interface InfraSkillItem {
   excluded_intents: string[]
 }
 
+export interface SkillValidationIssueResponse {
+  code: string
+  message: string
+  path?: string | null
+}
+
+export interface SkillVersionResponse {
+  version_id: string
+  skill_id: string
+  semantic_version: string
+  source_commit: string
+  source_path: string
+  artifact_hash: string
+  manifest_snapshot: Record<string, unknown>
+  dependency_snapshot: Record<string, unknown>
+  file_count: number
+  validation_status: 'pending' | 'passed' | 'failed'
+  validation_issues: SkillValidationIssueResponse[]
+  created_by: string
+  created_at: string
+}
+
+export interface InfraSkillCatalogItem extends InfraSkillItem {
+  semantic_version: string
+  artifact_hash: string
+  artifact_status: 'registered' | 'changed' | 'unregistered'
+  file_count: number
+  registered_version?: SkillVersionResponse | null
+}
+
+export interface InfraSkillCatalogResponse {
+  items: InfraSkillCatalogItem[]
+  page: number
+  page_size: number
+  total: number
+}
+
+export type SkillGovernanceStatus =
+  | 'gate_failed'
+  | 'pending_approval'
+  | 'needs_evaluation'
+  | 'artifact_changed'
+  | 'healthy'
+
+export type SkillWorkbenchTab =
+  | 'overview'
+  | 'versions'
+  | 'evaluation'
+  | 'release'
+  | 'development'
+
+export interface SkillWorkbenchSummary {
+  total: number
+  healthy: number
+  needs_evaluation: number
+  pending_approval: number
+  test_active: number
+  updated_at: string
+}
+
+export interface SkillWorkbenchItem {
+  skill_id: string
+  skill_name: string
+  business_action: string
+  business_object: string
+  semantic_version: string
+  artifact_status: 'registered' | 'changed' | 'unregistered'
+  validation_status: 'pending' | 'passed' | 'failed'
+  latest_eval_status: SkillEvalRunResponse['status'] | null
+  test_release_status: SkillReleaseResponse['status'] | null
+  test_active_version: string | null
+  governance_status: SkillGovernanceStatus
+  attention_reason: string | null
+}
+
+export interface SkillWorkbenchResponse {
+  summary: SkillWorkbenchSummary
+  items: SkillWorkbenchItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface SkillVersionSyncRequest {
+  source_commit?: string
+  created_by: string
+}
+
+export interface SkillEvalCaseResponse {
+  case_id: string
+  suite_version: number
+  question_template: string
+  expected_skill_id?: string | null
+  required: boolean
+  risk_tags: string[]
+  business_tags: string[]
+  source_type: string
+  source_ref: string
+  contains_sensitive_data: boolean
+  enabled: boolean
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillEvalCaseListResponse {
+  items: SkillEvalCaseResponse[]
+  suite_version: number
+  total: number
+}
+
+export interface SkillEvalCaseCreateRequest {
+  question_template: string
+  expected_skill_id?: string | null
+  required?: boolean
+  risk_tags?: string[]
+  business_tags?: string[]
+  source_type?: string
+  source_ref?: string
+  contains_sensitive_data?: false
+}
+
+export interface SkillEvalMetricsResponse {
+  total: number
+  passed: number
+  required_total: number
+  required_passed: number
+  top1_accuracy: number
+  baseline_top1_accuracy: number
+  regression_count: number
+  new_false_takeover_count: number
+  gate_passed: boolean
+}
+
+export interface SkillEvalResultResponse {
+  case_id: string
+  expected_skill_id?: string | null
+  candidate_skill_id?: string | null
+  baseline_skill_id?: string | null
+  candidate_confidence: number
+  baseline_confidence: number
+  candidate_passed: boolean
+  baseline_passed: boolean
+  required: boolean
+  diff: 'unchanged_pass' | 'unchanged_fail' | 'new_pass' | 'new_failure' | 'route_changed'
+  candidate_keywords: string[]
+  baseline_keywords: string[]
+}
+
+export interface SkillEvalRunResponse {
+  run_id: string
+  skill_id: string
+  version_id: string
+  baseline_version_id?: string | null
+  suite_version: number
+  config_hash: string
+  routing_manifest_hash: string
+  status: 'running' | 'passed' | 'failed' | 'cancelled' | 'error'
+  metrics: SkillEvalMetricsResponse
+  results: SkillEvalResultResponse[]
+  case_snapshots: SkillEvalCaseResponse[]
+  created_by: string
+  created_at: string
+  completed_at?: string | null
+}
+
+export interface SkillEvalRunListResponse {
+  items: SkillEvalRunResponse[]
+  total: number
+}
+
+export interface SkillEvalRunCreateRequest {
+  version_id: string
+  baseline_version_id?: string | null
+}
+
+export interface SkillReleaseResponse {
+  release_id: string
+  skill_id: string
+  version_id: string
+  environment: 'dev' | 'test'
+  status: 'candidate' | 'approval_pending' | 'approved' | 'active' | 'retired'
+  baseline_release_id?: string | null
+  eval_run_id: string
+  artifact_hash: string
+  config_hash: string
+  rollout_percent: 0 | 100
+  runtime_mode: 'shadow'
+  revision: number
+  created_by: string
+  created_at: string
+  activated_at?: string | null
+  retired_at?: string | null
+  approval?: SkillReleaseApprovalSummary | null
+}
+
+export interface SkillReleaseApprovalSummary {
+  approved_by: string
+  approver_role: string
+  approved_at: string
+}
+
+export interface SkillReleaseListResponse {
+  items: SkillReleaseResponse[]
+  total: number
+}
+
+export interface SkillReleaseCreateRequest {
+  version_id: string
+  eval_run_id: string
+  environment: 'dev' | 'test'
+}
+
+export interface SkillReleaseTransitionRequest {
+  expected_revision: number
+}
+
+export interface SkillReleaseApproveRequest extends SkillReleaseTransitionRequest {
+  reason: string
+}
+
 export interface InfraSkillFilesStructure {
   agents: string[]
   schemas: string[]
@@ -349,6 +570,17 @@ export interface SkillRouteTestRequest {
 export interface SkillRouteTestResponse {
   question: string
   matched_skill_id?: string | null
+  confidence: number
+  match_method: string
+  matched_keywords: string[]
+  excluded_keywords: string[]
+  candidates: Array<{
+    skill_id: string
+    skill_name: string
+    confidence: number
+    matched_keywords: string[]
+    match_method: string
+  }>
 }
 
 export interface SkillExecuteTestRequest {
@@ -363,6 +595,30 @@ export interface SkillExecuteTestResponse {
   skill_id: string
   status: string
   result: unknown
+  warnings: string[]
+  citations: Array<Record<string, unknown>>
+  uncertainties: string[]
+  trace: Array<Record<string, unknown>>
+  input_summary: Record<string, unknown>
+  latency_ms?: number | null
+}
+
+export interface InfraSkillOverviewItem {
+  skill_id: string
+  skill_name: string
+  business_action: string
+  business_object: string
+  loaded: boolean
+  manifest_valid: boolean
+  field_mapping_configured: boolean
+  metric_count: number
+  last_test_status?: string | null
+  warnings: string[]
+}
+
+export interface InfraSkillOverviewResponse {
+  skill_count: number
+  skills: InfraSkillOverviewItem[]
 }
 
 // ── 语义层（最新）：技能↔指标关系 ─────────────────────────────────
@@ -501,3 +757,176 @@ export interface QAHistoryResponse {
 }
 
 
+
+// ── Skill 草稿与生命周期（P7/P8）──────────────────────────────────
+
+export type SkillDraftStatus = 'editing' | 'validated' | 'materialized' | 'deleted'
+export type SkillDraftSourceType = 'template' | 'copy' | 'import'
+export type SkillLifecycleStatus = 'enabled' | 'disabled' | 'archived'
+
+export interface SkillBusinessMounting {
+  business_action: string
+  business_object: string
+  keywords?: string[]
+  excluded_intents?: string[]
+}
+
+export interface SkillInputSpec {
+  metric_code: string
+  alias?: string
+  required: boolean
+  purpose?: string
+}
+
+export interface SkillStructuredConfig {
+  description?: string
+  owner?: string
+  business_mounting: SkillBusinessMounting
+  inputs?: SkillInputSpec[]
+  input_schema?: Record<string, unknown>
+  output_schema?: Record<string, unknown>
+}
+
+export interface SkillDraftResponse {
+  draft_id: string
+  skill_id: string
+  skill_name: string
+  status: SkillDraftStatus
+  source_type: SkillDraftSourceType
+  structured_config: SkillStructuredConfig
+  raw_files?: Record<string, string>
+  validation_report?: { blocking: unknown[]; warnings: unknown[] }
+  validation_blocking_ok: boolean
+  revision: number
+  etag: string
+  created_at: string
+  updated_at: string
+  created_by: string
+}
+
+export interface SkillDraftListResponse {
+  items: SkillDraftResponse[]
+  total: number
+}
+
+export interface SkillDraftCreateRequest {
+  skill_id: string
+  skill_name: string
+  description?: string
+  owner?: string
+  business_action?: string
+  business_object?: string
+}
+
+export interface SkillDraftCopyRequest {
+  source_skill_id: string
+  new_skill_id: string
+}
+
+export interface SkillDraftSaveRequest {
+  structured_config: SkillStructuredConfig
+  expected_revision: number
+  etag?: string
+}
+
+export interface SkillValidationIssue {
+  field: string
+  code: string
+  message: string
+}
+
+export type SkillValidationSeverity = 'blocking' | 'warning'
+
+export interface SkillValidationResponse {
+  draft_id: string
+  report: {
+    blocking: SkillValidationIssue[]
+    warnings: SkillValidationIssue[]
+  }
+  blocking_ok: boolean
+}
+
+export interface SkillPackageFile {
+  path: string
+  content: string
+}
+
+export interface SkillPackagePreviewResponse {
+  draft_id: string
+  files: SkillPackageFile[]
+}
+
+export interface SkillMaterializeRequest {
+  draft_id: string
+  expected_revision: number
+  reason: string
+}
+
+export interface SkillMaterializeResponse {
+  skill_id: string
+  version_id: string
+  artifact_written: boolean
+  draft_revision: number
+}
+
+export interface SkillDefinitionResponse {
+  skill_id: string
+  skill_name: string
+  business_action: string
+  business_object: string
+  lifecycle_status: SkillLifecycleStatus
+  semantic_dependency_changed: boolean
+  current_version_id: string | null
+  revision: number
+  disabled_at: string | null
+  archived_at: string | null
+}
+
+export interface SkillLifecycleTransitionRequest {
+  expected_revision: number
+  reason: string
+}
+
+// ── 语义层输入指标（P4）──────────────────────────────────────────
+
+export interface SkillInputSelectorNode {
+  domain_code: string
+  domain_name: string
+  objects: {
+    object_code: string
+    object_name: string
+    source_type: string
+    metrics: {
+      metric_code: string
+      metric_name: string
+      definition: string
+      source_type: string
+      published: boolean
+      quality_score: number | null
+    }[]
+  }[]
+}
+
+export interface SkillInputSelectorResponse {
+  tree: SkillInputSelectorNode[]
+}
+
+export interface SkillInputValidationIssue {
+  metric_code: string
+  code: string
+  message: string
+}
+
+export interface SkillInputValidationResponse {
+  ok: boolean
+  issues: SkillInputValidationIssue[]
+}
+
+export interface SkillQueryPlanResponse {
+  metric_codes: string[]
+  plan: {
+    object_code: string
+    query_implementation: string
+    fields: { field: string; metric_code: string }[]
+  }[]
+}

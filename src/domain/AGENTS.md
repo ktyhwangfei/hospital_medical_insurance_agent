@@ -551,6 +551,21 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 技能 | `Skill` | **Entity** (Aggregate Root) | Pydantic `BaseModel` | 可编排的 AI 能力单元，含多步骤和工具调用 |
 | 技能步骤 | `SkillStep` | **Entity** | Pydantic `BaseModel` | 技能中的一个执行步骤，绑定特定工具 |
 | 技能元数据 | `SkillMetadata` | **Value Object** | Pydantic `BaseModel` | 技能的版本、标签、作者等描述信息 |
+| 技能版本 | `SkillVersion` | **Entity** | Pydantic `BaseModel`（frozen） | 由 Git 提交与制品哈希唯一追溯的不可变技能版本 |
+| 技能制品快照 | `SkillArtifactSnapshot` | **Value Object** | Pydantic `BaseModel`（frozen） | Skill 目录规范化后的 Manifest、依赖、文件清单与 SHA-256 |
+| 技能校验状态 | `SkillValidationStatus` | **Value Object** | `StrEnum` | pending / passed / failed |
+| 技能评测用例 | `SkillEvalCase` | **Entity** | Pydantic `BaseModel`（frozen） | 固定、脱敏且可追溯的路由回归问题模板 |
+| 技能评测运行 | `SkillEvalRun` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 绑定候选版本、基线、测试集和配置哈希的批量评测证据 |
+| 技能评测结果 | `SkillEvalResult` | **Entity** | Pydantic `BaseModel`（frozen） | 单条用例的候选/基线路由结果与差异分类 |
+| 技能评测指标 | `SkillEvalMetrics` | **Value Object** | Pydantic `BaseModel`（frozen） | 发布门禁使用的必测通过率、准确率和回归数量 |
+| 技能发布 | `SkillRelease` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | dev/test 环境中带 revision 的候选、审批和活动版本指针 |
+| 技能发布审批 | `SkillReleaseApproval` | **Entity** | Pydantic `BaseModel`（frozen） | 冻结制品、评测、配置和基线的人工审批证据 |
+| 技能发布状态 | `SkillReleaseStatus` | **Value Object** | `StrEnum` | candidate / approval_pending / approved / active / retired |
+| 技能草稿 | `SkillDraft` | **Entity** | Pydantic `BaseModel`（frozen） | 创建/导入/复制/编辑中的过渡态草稿，带乐观锁 revision，校验通过并确认后才物化为正式定义 |
+| 技能草稿状态 | `SkillDraftStatus` | **Value Object** | `StrEnum` | editing / validated / materialized |
+| 技能草稿来源 | `SkillDraftSourceType` | **Value Object** | `StrEnum` | template / import / copy |
+| 技能定义 | `SkillDefinition` | **Entity** | Pydantic `BaseModel`（frozen） | 正式目录中可加载定义的治理生命周期状态（enabled/disabled/archived），与不可变 `SkillVersion` 区分 |
+| 技能生命周期状态 | `SkillLifecycleStatus` | **Value Object** | `StrEnum` | enabled / disabled / archived |
 | 技能拥有者 | `ToolOwner` | **Value Object** | `StrEnum` | 技能/工具的归属角色（与 `Role` 一致但缺少 CLINICIAN） |
 | MCP 服务器 | `McpServer` | **Entity** | Pydantic `BaseModel` | 通过 MCP 协议注册的外部能力服务器 |
 | MCP 能力 | `McpCapability` | **Entity** | Pydantic `BaseModel` | MCP 服务器暴露的具体能力点（工具/资源/提示） |
@@ -566,6 +581,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - `Skill.skill_id` 必须使用 kebab-case 或 snake_case
 - `McpCapability.requires_human_confirmation` 为 `True` 时（高风险或有外部副作用），必须等待人工确认
 - `ToolOwner` 与 `Role` 枚举部分重复但缺少 `CLINICIAN`，使用时需注意
+- Skill 评测用例禁止保存患者原始上下文或含敏感信息的样本
+- test 发布必须绑定通过的评测与人工审批；同一 Skill 和环境只能有一个 active release
+- 阶段 2 的 `SkillRelease` 仅支持 dev/test 且为 shadow，不改变真实运行时版本选择
 - `domain/tool/` 目录完全为空（无 `__init__.py`）— **不要 import**
 
 #### 生命周期

@@ -1,35 +1,51 @@
 'use client'
 
-import InfraSkillManagement from '@/components/infra-skill-management'
+import { useRouter } from 'next/navigation'
+import { Plus, Upload } from 'lucide-react'
+import SkillGovernanceWorkbench from '@/components/skills/skill-governance-workbench'
 
-export default function SkillsPage() {
+// /skills 管理列表页：正式 Skill 治理工作台（设计 §3.2）
+// 顶部提供新建/导入入口，主体复用现有治理工作台
+export default function SkillsManagementPage() {
+  const router = useRouter()
+
   return (
-    <div className="relative min-h-screen">
-      {/* 背景氛围：与政策问答保持一致的“医疗控制台”质感 */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(37,99,235,0.12),transparent_55%),radial-gradient(ellipse_at_bottom,rgba(14,165,233,0.08),transparent_50%)]" />
-        <div className="absolute inset-0 opacity-[0.35] [background-image:linear-gradient(to_right,rgba(15,23,42,0.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(15,23,42,0.05)_1px,transparent_1px)] [background-size:44px_44px]" />
-        <div className="absolute -left-24 -top-24 size-[340px] rounded-full bg-blue-500/10 blur-3xl" />
-        <div className="absolute -bottom-32 -right-24 size-[420px] rounded-full bg-sky-400/10 blur-3xl" />
-      </div>
-
-      <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-6 p-6">
-        <header className="space-y-1">
+    <div className="mt-4 space-y-4">
+      <header className="flex items-center justify-between">
+        <div className="space-y-1">
           <div className="flex items-center gap-2">
             <span className="inline-flex h-7 items-center rounded-full bg-white/70 px-2.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 backdrop-blur">
-              Skills
+              Skill 管理工作台
             </span>
-            <span className="text-xs text-slate-500">技能研发 / 详情 / 路由测试</span>
           </div>
-          <h2 className="text-xl font-semibold tracking-tight text-slate-900">技能包管理</h2>
-        </header>
-
-        {/* 直接挂载研发技能组件 */}
-        <div className="rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm backdrop-blur">
-          <InfraSkillManagement />
+          <h2 className="text-xl font-semibold tracking-tight text-slate-900">
+            正式 Skill 管理列表
+          </h2>
+          <p className="text-sm text-slate-600">
+            管理 Skill 生命周期：草稿编辑、校验、物化、发布、停用与归档。
+          </p>
         </div>
-      </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => router.push('/skills/import')}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            <Upload className="h-4 w-4" />
+            导入 Skill
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push('/skills/new')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700"
+          >
+            <Plus className="h-4 w-4" />
+            新建 Skill
+          </button>
+        </div>
+      </header>
+
+      <SkillGovernanceWorkbench />
     </div>
   )
 }
-

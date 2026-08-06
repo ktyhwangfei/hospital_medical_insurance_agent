@@ -48,6 +48,11 @@ export default defineConfig({
       reuseExistingServer: true,
       timeout: 30000,
       cwd: '../../..',
+      env: {
+        ...process.env,
+        SKILL_CONTROL_DEV_MODE: '1',
+        USE_MEMORY_STORAGE: '1',
+      },
     },
     {
       command: 'npm run dev',

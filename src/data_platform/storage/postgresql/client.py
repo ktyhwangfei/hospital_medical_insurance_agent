@@ -1,5 +1,6 @@
 import os
 from contextlib import contextmanager
+from threading import RLock
 from typing import Any
 
 
@@ -19,6 +20,8 @@ class PostgreSQLClient:
             or self._build_url_from_postgres_env()
         )
         self._conn = None
+        # 单连接会被 FastAPI 的工作线程共享；锁必须覆盖完整事务，避免语句串入。
+        self._operation_lock = RLock()
 
     @staticmethod
     def _build_url_from_postgres_env() -> str | None:
@@ -71,51 +74,56 @@ class PostgreSQLClient:
     @contextmanager
     def transaction(self):
         """Transaction context manager. Commits on success, rolls back on error."""
-        self._ensure_connected()
-        self._conn.execute("BEGIN")
-        try:
-            yield self._conn
-            self._conn.execute("COMMIT")
-        except BaseException:
-            if self._conn is not None:
-                self._conn.execute("ROLLBACK")
-            raise
+        with self._operation_lock:
+            self._ensure_connected()
+            self._conn.execute("BEGIN")
+            try:
+                yield self._conn
+                self._conn.execute("COMMIT")
+            except BaseException:
+                if self._conn is not None:
+                    self._conn.execute("ROLLBACK")
+                raise
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         """Execute a SQL statement and return rows as dicts (if any)."""
-        self._ensure_connected()
-        with self._conn.cursor() as cur:
-            cur.execute(sql, params)
-            if cur.description is None:
-                return []
-            columns = [col.name for col in cur.description]
-            return [dict(zip(columns, row)) for row in cur.fetchall()]
+        with self._operation_lock:
+            self._ensure_connected()
+            with self._conn.cursor() as cur:
+                cur.execute(sql, params)
+                if cur.description is None:
+                    return []
+                columns = [col.name for col in cur.description]
+                return [dict(zip(columns, row)) for row in cur.fetchall()]
 
     def execute_many(self, sql: str, params_list: list[tuple[Any, ...]]) -> None:
         """Execute the same SQL with multiple parameter sets."""
-        self._ensure_connected()
-        with self._conn.cursor() as cur:
-            for params in params_list:
-                cur.execute(sql, params)
+        with self._operation_lock:
+            self._ensure_connected()
+            with self._conn.cursor() as cur:
+                for params in params_list:
+                    cur.execute(sql, params)
 
     def health(self) -> bool:
         """Check if the database connection is healthy."""
         try:
-            self._ensure_connected()
-            with self._conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                return True
+            with self._operation_lock:
+                self._ensure_connected()
+                with self._conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    return True
         except Exception:
             return False
 
     def close(self) -> None:
         """Close the underlying connection if open."""
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
+        with self._operation_lock:
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
 
     @property
     def is_connected(self) -> bool:
