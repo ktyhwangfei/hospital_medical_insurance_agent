@@ -20,7 +20,10 @@ export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAn
     <article className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-900">{message.content}</p>
 
-      <VerificationSummary summary={message.verificationSummary} />
+      <VerificationSummary
+        summary={message.verificationSummary}
+        answerStatus={message.answerStatus}
+      />
       <CalculationDisclosure message={message} />
       <PolicySourcesDialog citations={message.citations ?? []} />
 

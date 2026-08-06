@@ -64,4 +64,50 @@ describe('PolicyAgentAnswer', () => {
     fireEvent.click(screen.getByRole('button', { name: '请用更通俗的话解释' }))
     expect(onFollowUp).toHaveBeenCalledWith('请用更通俗的语言解释刚才的回答')
   })
+
+  it('uses warning semantics instead of a verified badge for partial answers', () => {
+    render(
+      <PolicyAgentAnswer
+        message={{
+          ...completeMessage,
+          answerStatus: 'partial',
+          verificationSummary: {
+            settlementChecked: true,
+            calculationChecked: false,
+            policyCount: 1,
+            message: '已核对结算单，部分政策依据仍待确认。',
+          },
+        }}
+      />,
+    )
+
+    const summary = screen.getByLabelText('核验摘要')
+    expect(summary).toHaveAttribute('data-status', 'partial')
+    expect(summary).toHaveClass('border-amber-200/70')
+    expect(summary.querySelector('.lucide-badge-check')).not.toBeInTheDocument()
+    expect(summary.querySelector('.lucide-triangle-alert')).toBeInTheDocument()
+  })
+
+  it('uses neutral alert semantics instead of a verified badge for unavailable answers', () => {
+    render(
+      <PolicyAgentAnswer
+        message={{
+          ...completeMessage,
+          answerStatus: 'unavailable',
+          verificationSummary: {
+            settlementChecked: false,
+            calculationChecked: false,
+            policyCount: 0,
+            message: '当前结果未完成核验。',
+          },
+        }}
+      />,
+    )
+
+    const summary = screen.getByLabelText('核验摘要')
+    expect(summary).toHaveAttribute('data-status', 'unavailable')
+    expect(summary).toHaveClass('border-slate-200')
+    expect(summary.querySelector('.lucide-badge-check')).not.toBeInTheDocument()
+    expect(summary.querySelector('.lucide-circle-alert')).toBeInTheDocument()
+  })
 })

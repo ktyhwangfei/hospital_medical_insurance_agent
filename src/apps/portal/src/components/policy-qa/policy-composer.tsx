@@ -32,10 +32,11 @@ export default function PolicyComposer({
       ) : null}
       <div className="flex items-end gap-2">
         <Textarea
+          aria-label="政策问题"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault()
               if (canSend) onSend()
             }
@@ -47,7 +48,7 @@ export default function PolicyComposer({
               : '首次请提供结算单号，例如：查询住院费用，结算单 1671213'
           }
           rows={2}
-          className="min-h-20 resize-none border-0 px-2 shadow-none focus-visible:ring-0"
+          className="min-h-20 resize-none border-0 px-2 shadow-none focus-visible:ring-2 focus-visible:ring-blue-500/25"
         />
         <Button type="button" onClick={onSend} disabled={!canSend} aria-label="发送">
           <SendHorizontal aria-hidden />

@@ -20,6 +20,34 @@ describe('PolicyComposer', () => {
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', '继续追问当前结算单…')
   })
 
+  it('gives the question textarea an accessible name', () => {
+    render(
+      <PolicyComposer
+        settlementId={null}
+        value=""
+        onChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('textbox', { name: '政策问题' })).toBeInTheDocument()
+  })
+
+  it('keeps a visible keyboard focus ring on the textarea', () => {
+    render(
+      <PolicyComposer
+        settlementId={null}
+        value=""
+        onChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+    const textbox = screen.getByRole('textbox')
+
+    expect(textbox.className).not.toContain('focus-visible:ring-0')
+    expect(textbox.className).toContain('focus-visible:ring-2')
+  })
+
   it('submits with Enter but keeps Shift+Enter for a new line', () => {
     const onSend = vi.fn()
     render(
@@ -37,6 +65,22 @@ describe('PolicyComposer', () => {
 
     fireEvent.keyDown(textbox, { key: 'Enter' })
     expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not submit Enter while an IME composition is active', () => {
+    const onSend = vi.fn()
+    render(
+      <PolicyComposer
+        settlementId="1671213"
+        value="统筹自付"
+        onChange={vi.fn()}
+        onSend={onSend}
+      />,
+    )
+
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', isComposing: true })
+
+    expect(onSend).not.toHaveBeenCalled()
   })
 
   it('disables sending empty input or while streaming', () => {

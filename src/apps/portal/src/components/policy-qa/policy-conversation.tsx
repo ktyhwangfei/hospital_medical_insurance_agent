@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
 
 import PolicyComposer from '@/components/policy-qa/policy-composer'
@@ -18,7 +18,12 @@ interface PolicyConversationProps {
 
 export default function PolicyConversation({ stream }: PolicyConversationProps) {
   const [input, setInput] = useState('')
+  const conversationEndRef = useRef<HTMLDivElement>(null)
   const currentPublicMessage = stream.steps.at(-1)?.publicMessage
+
+  useEffect(() => {
+    conversationEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [stream.messages, currentPublicMessage, stream.isStreaming])
 
   const appendPromptForSettlement = () => {
     stream.appendLocalMessage({
@@ -95,6 +100,8 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
           <span>{currentPublicMessage}</span>
         </div>
       ) : null}
+
+      <div ref={conversationEndRef} aria-hidden />
 
       <PolicyComposer
         settlementId={stream.anchor.settlementId}
