@@ -44,7 +44,7 @@ Agent 编码时根据以下映射定位代码位置：
 
 | 目录 | 职责 | 当前状态 |
 |------|------|----------|
-| `runtime/` | Agent 核心运行时：API 入口、会话上下文、意图识别、澄清、编排（含 LangGraph）、调度、响应（含 SSE 流式）、任务闭环、事件日志、技能注册、政策问答 | 已实现（api/context/intent/clarification/planning/orchestration/scheduling/task_closure/runtime_state/event_log/capability_nodes/skill_registry/langgraph/policy_qa） |
+| `runtime/` | Agent 核心运行时：API 入口、会话上下文、意图识别、澄清、编排（含 LangGraph）、调度、响应（含 SSE 流式）、任务闭环、事件日志、技能注册、政策问答 | 已实现（api/context/intent/clarification/planning/orchestration/scheduling/task_closure/runtime_state/event_log/capability_nodes/skill_registry/langgraph/policy_qa/**skill_management**：草稿 CRUD/校验/包生成/导入/输入指标/物化/生命周期） |
 | `business_scenarios/` | 医保业务场景：结算异常导办、出院前联合质控 | 场景代码已实现（settlement_exception_guide、pre_discharge_joint_qc），运行时入口整合至 runtime/scenario_executor |
 | `model_service/` | 模型服务网关：统一调用入口、路由策略、OpenAI 兼容 Provider、流式生成、异常分类、模型配置管理、Provider 管理 | 已实现（gateway/router/providers/openai_compatible/exceptions/models/ports） |
 | `knowledge_extension/` | 知识与扩展：规则解释（含 Milvus 政策检索+SQL Server 数据源）、MCP 注册中心、扩展注册 | 已实现（common/extension_registry/mcp_registry/rule_explanation + policy_retrieval 含 Milvus/SQLServer/语义映射；原 knowledge/rag/assets/prompt_templates 已删除，由 stub 提供兼容） |
@@ -199,6 +199,12 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - `domain/tool/` 和 `data_platform/storage/tool/` 是完全空目录（无 `__init__.py`），import 会报错 — 不要使用
 - `runtime/orchestration/service.py` 和 `runtime/planning/service.py` 已 DEPRECATED，使用 `scenario_executor.py` 代替
 - boulder continuation 活跃时，`task(run_in_background=true)` 的通知与 system-reminder 互扰，导致后台任务结果丢失。串行多任务时用 `run_in_background=false`
+- `infra_skill_routes.py` 中草稿/物化/生命周期端点通过依赖注入（`get_skill_draft_service` / `get_skill_materializer` / `get_skill_lifecycle_service`）获取服务。API 测试中 override 这些依赖函数才能注入内存存储；直接调用 `get_skill_draft_service()` 的端点（如 P1 时期的 import 占位）不会响应 override，已全部改为依赖注入
+- `SkillDraftValidator` 校验 `structured_config.basic.skill_id` 和 `basic.skill_name`，保存草稿时必须包含 `basic` 段（模板生成的初始配置已包含）
+- `delete_skill_draft` 端点需要 `?expected_revision=N` 查询参数，返回 200（非 204）
+- `materialize` 端点成功返回 201，未校验草稿物化返回 409（`SKILL_MATERIALIZE_FAILED`）
+- 前端 `@/app/...` 路径在 Vitest 中无法解析，组件测试改用相对路径 `../../app/...`；`@/lib/...` 和 `@/components/...` 正常工作
+- pytest_asyncio 插件与当前 pytest 版本不兼容，启动即报 `ImportError: cannot import name 'FixtureDef' from 'pytest'`。运行 pytest 时加 `-p no:asyncio` 禁用该插件。
 
 ### 陷阱模板
 
