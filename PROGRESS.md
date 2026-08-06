@@ -53,7 +53,7 @@
 | 1.3 | 费用项目自动检测 | B | — | `fee_item_detector.py` | — | impl_done |
 | 1.4 | 医保政策规则语义匹配 | B | — | `semantic_mapping.py` | SQLServer | impl_done |
 | 1.5 | 历史问答记录查询 | F+B+S | `qa-history/page.tsx` | `history_service.py` | PostgreSQL | impl_done |
-| 1.6 | 院端经办通过 Chat-first 连续问答获取单一、安全且可追溯的政策解释 | F+B+S | `PolicyQAWorkspace` → `PolicyConversation` | `policy_qa_routes.py` → `PolicyQAPublicResult` | PostgreSQL 审计 + SQL Server + Milvus | impl_done |
+| 1.6 | 院端经办通过 Chat-first 连续问答获取单一、安全且可追溯的政策解释 | F+B+S | `PolicyQAWorkspace` → `PolicyConversation` | `policy_qa_routes.py` → `PolicyQAPublicResult` | 任务/工作流记录 + SQL Server + Milvus | impl_done |
 
 > **1.6 最小可验证单元成功标准**：Portal 通过 `/policy-qa/stream` 展示单一 `answer`，按 `complete/partial/unavailable` 表达可信度；确定性政策结论携带可展示引用，证据不足时明确列出不确定性；公开响应与 UI 不含内部推理、SQL、表字段或已删除的双视角/结算来源字段。核心单元、API、Flow 与 Portal 构建已通过，R4 性能和 E2E 证据完成后再转为 `verified`。
 
@@ -116,8 +116,9 @@
 ## 2. 政策知识管线重构（开发主线）
 
 > **依据**：`docs/steering/政策知识管线开发计划.md`（本节对应其 P0-P10 + 里程碑 M1-M7）。
-> **策略**：「平行建新通路 → 最后一把切换」（P10 灰度）。P0-P9 全程在新 collection（`*_v2`）上建，
-> **生产政策问答始终读旧的 `policy_rules`**，直到 P10 切换。所以切换前用户侧无感知——这是策略决定。
+> **实施策略（P10 前）**：「平行建新通路 → 最后一把切换」。P0-P9 在新 collection（`*_v2`）上建设，
+> 当时政策问答继续读取旧 `policy_rules`。P10 已在未上线阶段直接切换为纯 v2 读路径并下线旧 collection；
+> 当前 Chat-first 单答案链路已使用新模型。R4 性能与 E2E 仍待完成，属于本次交付验收，不影响 P10/M7 已完成状态。
 
 ### 2.1 价值矩阵（P0-P10 + M1-M7）
 
@@ -132,7 +133,7 @@
 | 多源数据 + 自助发现 | P7 | M4 | ✅ 达成（多源验证+发现 tab 候选回写上线） |
 | 现有数据进新模型 | P8 | M5 | ✅ 达成（8.1-8.4 全完成；全量重提取 8 篇 + 干净重建 337 rules） |
 | 运营自助操作（前端 5 tab） | P9 | M6 | ✅ 达成（5 tab 全上线，4 旧路由下线） |
-| **生产真正用上新模型** | **P10** | **M7** | ⚪ 未开始（**价值兑现点**） |
+| **政策问答切换到新模型** | **P10** | **M7** | ✅ 完成（纯 v2 读路径，旧 collection/旧 schema/旧发布通路已下线；Chat-first 单答案已实现，R4 性能/E2E 待验收） |
 
 ### 2.2 各阶段子任务进度
 

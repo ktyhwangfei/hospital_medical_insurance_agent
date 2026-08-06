@@ -7,9 +7,9 @@
 
 ## 1. 背景
 
-当前 `policy-qa` 页面把查询表单、执行步骤、双视角答案、结算来源、费用分解和政策证据同时铺在页面上。主要问题不是功能不足，而是产品模型混杂：页面既像业务查询看板，又像 Agent 运行监控，还试图承担患者沟通界面。
+重构前的 `policy-qa` 页面把查询表单、执行步骤、双视角答案、结算来源、费用分解和政策证据同时铺在页面上。主要问题不是功能不足，而是产品模型混杂：页面既像业务查询看板，又像 Agent 运行监控，还试图承担患者沟通界面。
 
-当前生效链路是 `PolicyQAWorkspace` → `usePolicyQAStream` → `parseSseBlock`，已经按空行切分并解析完整 SSE 帧；未启用的旧 `PolicyQAChat` 仍集中维护大量分散状态、单行 SSE 解析、字段映射和展示分支。本次重构应先用回归测试固定现有完整帧解析行为，再迁移结果契约与展示组件，并删除旧组件，避免把已解决的问题重新引入。
+最终实现链路是 `PolicyQAWorkspace` → `PolicyConversation` / `usePolicyQAStream` → `parseSseBlock`；Hook 按空行缓冲完整 SSE 帧，再进行递归安全过滤和运行时结果映射。旧 `PolicyQAChat`、双视角组件及其测试已删除。
 
 本次设计将页面重新定位为院端专业 Chat-first 产品：Agent 在后台自动完成结算核对与政策检索，前台优先呈现答案、政策引用和连续追问。执行细节采用渐进披露，不再作为主视觉。
 
@@ -38,7 +38,7 @@ Policy QA 是高频、短时、可连续追问的专业咨询，不是后台长�
 2. 建立浅色医疗专业内容区，同时保留 Portal 现有深色全局导航。
 3. 将会话状态、SSE 解析、安全过滤和展示组件拆分为清晰边界。
 4. 将双视角输出统一为面向当前院端角色的单一答案。
-5. 从公开响应和 UI 删除结算数据表名、字段名和来源明细，内部审计追溯保留。
+5. 从公开响应和 UI 删除结算数据表名、字段名和来源明细；保留现有任务、工作流与内部运行标识追溯。
 6. 保留结构化费用、计算过程、政策证据、引用和不确定性。
 
 ### 3.2 成功标准
@@ -105,7 +105,7 @@ Policy QA 是高频、短时、可连续追问的专业咨询，不是后台长�
 ### 5.4 完成状态
 
 - 先展示结论，再展示解释。
-- “已核对当前结算单与 6 条政策依据”作为轻量摘要，可按需展开公开、可审计的步骤摘要。
+- “已核对当前结算单与 6 条政策依据”作为轻量摘要，可按需展开公开、可追溯的步骤摘要。
 - 金额结构使用简洁列表或表格，不使用多指标仪表盘。
 - 计算过程和费用明细使用折叠区。
 - 政策引用进入正文或答案尾部；完整来源通过临时 Dialog 打开，不形成常驻分栏。
@@ -125,19 +125,20 @@ Policy QA 是高频、短时、可连续追问的专业咨询，不是后台长�
 ```text
 policy-qa/page.tsx
 └─ PolicyQAWorkspace
-   ├─ PolicyQAEmptyState
-   ├─ PolicyMessageList
-   │  ├─ UserMessage
-   │  └─ PolicyAgentAnswer
-   │     ├─ VerificationSummary
-   │     ├─ CalculationDisclosure
-   │     └─ PolicySourcesDialog
-   └─ PolicyComposer
+   └─ PolicyConversation
+      ├─ PolicyQAEmptyState
+      ├─ PolicyMessageList
+      │  ├─ UserMessage
+      │  └─ PolicyAgentAnswer
+      │     ├─ VerificationSummary
+      │     ├─ CalculationDisclosure
+      │     └─ PolicySourcesDialog
+      └─ PolicyComposer
 
-usePolicyQASession
-├─ session reducer
-├─ submit / retry
-└─ SessionViewModel
+usePolicyQAStream
+├─ 会话状态与请求生命周期
+├─ send / resetSession
+└─ policy-qa-session 辅助映射
 
 policy-qa-stream
 ├─ SSE frame parser
@@ -148,8 +149,9 @@ policy-qa-stream
 
 ### 6.1 职责边界
 
-- `PolicyQAWorkspace` 只负责页面编排。
-- `usePolicyQASession` 管理查询生命周期和 reducer，不包含视觉代码。
+- `PolicyQAWorkspace` 创建流式会话状态并把页面编排交给 `PolicyConversation`。
+- `PolicyConversation` 组合空闲态、消息列表和 Composer，不解析网络数据。
+- `usePolicyQAStream` 管理查询生命周期、完整 SSE 帧缓冲和会话状态，不包含视觉代码。
 - `policy-qa-stream` 是纯逻辑模块，负责完整 SSE 帧解析、安全过滤和类型映射。
 - `PolicyAgentAnswer` 组合现有结构化金额、费用和政策展示能力，不解析网络数据。
 - `PolicySourcesDialog` 仅展示政策依据，不展示结算表名和字段名。
@@ -202,14 +204,14 @@ Policy QA result
 - 金额结论已通过内部结算数据核对。
 - 政策结论包含可展示引用。
 - 无法可靠回答时包含 `uncertainties`，且不输出伪确定结论。
-- Trace 和内部数据来源完整写入审计，不进入公开答案。
+- 完整 SQL、检索轨迹和内部来源明细不进入公开答案；当前持久化范围是公开步骤，以及任务摘要 `answer_excerpt`、`answer_status`、`evidence_count`、`internal_run_id`，不声称完整内部轨迹已审计落库。
 - `answer_status=unavailable` 时不得用旧字段或内部载荷兜底生成答案。
 
 ## 8. 数据流
 
 ```text
 Composer submit
-→ usePolicyQASession.start
+→ usePolicyQAStream.send
 → POST /policy-qa/stream
 → parse complete SSE frames
 → strip forbidden fields
@@ -225,12 +227,12 @@ SSE 解析以空行作为帧边界，正确关联 `event:` 与随后的一个或
 
 - 所有流式数据先过滤禁止字段，再进入前端状态。
 - 禁止展示 reasoning、chain-of-thought、prompt、raw response、tool calls 和 agent trace。
-- 数据库表名、字段名和查询链路只进入内部审计事件。
+- SQL、数据库表名、字段名和完整检索轨迹不得进入公开响应或前端状态；当前不声称这些完整内部轨迹已写入审计库。
 - 前端递归删除禁止键，后端公开模型对白名单外字段和嵌套额外字段拒绝输出；两层边界互为纵深防御。
 - `step` 事件只消费最新一条 `public_message`，`reasoning_step` 与内部运行标识不得进入会话状态或 UI。
-- 内部审计遵循现有权限与脱敏边界。
+- 现有追溯使用工作流公开步骤、任务摘要和 `internal_run_id`；后续如扩展完整内部审计，仍须遵循权限与脱敏边界。
 - 用户答案必须携带政策引用或不确定性。
-- 页面固定显示“结果仅供经办参考，以正式医保系统和政策原文为准”。
+- 页面固定显示“回答仅供解释参考，不作为报销或结算依据”。
 
 ## 10. 测试与验证
 
@@ -312,14 +314,14 @@ API 响应结构发生变化，执行流式端点性能验证。E2E 覆盖：
 - 布局：桌面端单列居中，无常驻左右栏。
 - Agent 表达：自动查证、引用、连续追问；执行过程弱化并按需展开。
 - 回答：单一院端答案，不保留双视角。
-- 数据来源：公开 UI 不展示结算表名和字段名，内部审计保留。
+- 数据来源：公开 UI 不展示 SQL、结算表名、字段名或完整检索轨迹；当前通过任务/工作流摘要与内部运行标识追溯。
 - 架构：完整组件化重构，但避免无价值的细粒度抽象。
 - 验证：R4，严格执行全链路验证。
 
 ## 14. 最终实现同步
 
-- 后端以 `PolicyQAPublicResult` 作为流式与兼容入口的唯一公开结果模型；内部 Skill、结算查询、检索轨迹和审计载荷在公开映射前收敛。
+- 后端以 `PolicyQAPublicResult` 作为流式与兼容入口的唯一公开结果模型；内部 Skill、结算查询和检索结果在公开映射前收敛为白名单字段。
 - Portal 以 `policy-qa-stream.ts` 完成整帧 SSE 解析、递归过滤和运行时校验，再由会话 reducer 驱动 Chat-first 组件；畸形或不完整 `result` 安全降级为 `unavailable`。
 - 页面采用最大 840px 单列阅读轴，无左右业务分栏和常驻步骤链；结算单号位于 Composer context chip，查证摘要、计算过程和政策来源按渐进披露展示。
 - 旧双视角组件、字段映射和测试已删除；公开结果仍保留可核对的结构化金额、计算步骤、政策证据、引用和不确定性。
-- 内部运行标识只进入任务持久化与审计，公开回答不包含 SQL、表名、字段名、原始工具响应、推理内容或内部来源明细。
+- 当前任务持久化仅记录 `answer_excerpt`、`answer_status`、`evidence_count`、`internal_run_id`，工作流保存公开步骤；公开回答不包含 SQL、表名、字段名、原始工具响应、推理内容或内部来源明细，且本文不声称完整 SQL/检索轨迹已审计落库。
