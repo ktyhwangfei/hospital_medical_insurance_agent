@@ -393,6 +393,74 @@ def test_public_text_sanitizer_preserves_legal_natural_language(safe_text):
     assert _public_text(safe_text) == safe_text
 
 
+@pytest.mark.parametrize(
+    "sql_text",
+    [
+        "SELECT 1",
+        "SELECT @@VERSION",
+        "INSERT claims VALUES (1)",
+        "CREATE PROCEDURE claim_proc AS BEGIN RETURN END",
+    ],
+)
+@pytest.mark.parametrize("location", ["answer", "calculation", "evidence"])
+def test_sql_statement_variants_are_rejected_at_public_contract_boundaries(
+    sql_text, location
+):
+    from src.runtime.api.policy_qa_routes import _build_public_result
+
+    kwargs = {
+        "answer": "The settlement result can be explained.",
+        "can_answer": True,
+        "partial_answer": False,
+        "policy_status": "full_policy_matched",
+        "policy_evidence": [
+            {
+                "title": "Published insurance policy",
+                "clause": "The deductible is 650 yuan.",
+                "score": 0.9,
+            },
+        ],
+        "calculation_steps": [
+            {"step_name": "Check", "description": "Apply the published percentage."},
+        ],
+        "definition": {
+            "name": "Pooling self-pay",
+            "plain_text": "The amount paid by the insured person.",
+        },
+        "warnings": [],
+        "case_context": {"basic_pooling_self_pay": 123.45},
+    }
+    if location == "answer":
+        kwargs["answer"] = sql_text
+    elif location == "calculation":
+        kwargs["calculation_steps"] = [
+            {"step_name": "Check", "description": sql_text},
+        ]
+    else:
+        kwargs["policy_evidence"] = [
+            {
+                "title": "Published insurance policy",
+                "clause": sql_text,
+                "score": 0.9,
+            },
+        ]
+
+    result = _build_public_result(**kwargs)
+
+    if location == "answer":
+        assert result.answer_status == "unavailable"
+        assert result.uncertainties
+    elif location == "calculation":
+        assert result.calculation_steps == []
+        assert result.verification_summary.calculation_checked is False
+        assert result.answer_status == "partial"
+    else:
+        assert result.policy_evidence == []
+        assert result.citations == []
+        assert result.verification_summary.policy_count == 0
+        assert result.answer_status == "partial"
+
+
 def test_internal_only_evidence_is_dropped_instead_of_becoming_placeholder_citation():
     from src.runtime.api.policy_qa_routes import _build_public_result
 
