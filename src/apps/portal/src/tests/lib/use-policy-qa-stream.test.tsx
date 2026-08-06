@@ -34,7 +34,7 @@ function sseResponse(text: string): Response {
   } as unknown as Response
 }
 
-// ── 基础事件序列（首轮：锚定结算 + 沉淀记忆 + 推理）──────────────
+// ── 基础事件序列（首轮：锚定结算 + 沉淀记忆 + 安全单答案）────────
 
 function firstTurnEvents() {
   return [
@@ -52,11 +52,25 @@ function firstTurnEvents() {
     ],
     ['step', { step: 'settlement_query', status: 'running', public_message: '查询结算数据…' }],
     ['memory_update', { action: 'upsert', memory: { memory_id: 'm-settle', type: 'settlement', ref_id: '1671213', importance: 0.9, expire_policy: 'topic', snapshot_keys: ['settlement_id', 'total_fee'], snapshot: { settlement_id: '1671213', total_fee: 189085.85 } } }],
-    ['reasoning_step', { step_id: 'step-1', claim: '已获取结算单 1671213 的结算数据', kind: 'fact', depends_on: [], confidence: 0.95, citations: [], source_memory_ids: ['m-settle'] }],
+    ['reasoning_step', { step_id: 'step-1', claim: '不得进入前端状态', kind: 'fact', depends_on: [], confidence: 0.95, citations: [], source_memory_ids: ['m-settle'] }],
     ['step', { step: 'settlement_query', status: 'done', public_message: '结算数据获取完成' }],
     ['step', { step: 'answer_assembly', status: 'running', public_message: '生成回答…' }],
     ['step', { step: 'answer_assembly', status: 'done', public_message: '回答生成完成' }],
-    ['result', { result: { patient_view: '本次住院统筹自付 4962.67 元。', office_view: '本次结算统筹自付金额为 4962.67 元。', can_answer: true, reasoning_steps: [{ step_id: 'step-1', claim: '已获取结算单 1671213 的结算数据', kind: 'fact', depends_on: [], confidence: 0.95, citations: [], source_memory_ids: ['m-settle'] }], memory_count: 2 } }],
+    ['result', { result: {
+      answer: '本次住院统筹自付 4962.67 元。',
+      answer_status: 'complete',
+      case_context: { person_type: '在职', deductible: 1300 },
+      calculation_steps: [{ step_name: '核对结算', description: '已核对结算数据' }],
+      definition: { name: '统筹自付', plain_text: '统筹范围内个人承担金额', excludes: ['全自费'] },
+      warnings: ['本回答仅供参考'],
+      policy_evidence: [{ title: '原始政策证据', excerpt: '不存入消息', score: 0.98 }],
+      citations: [{ title: '基本医疗保险政策', excerpt: '统筹支付后个人按规定承担。' }],
+      uncertainties: [],
+      verification_summary: { settlement_checked: true, calculation_checked: true, policy_count: 1, message: '已完成核对' },
+      office_view: '不得回退的旧字段',
+      reasoning_steps: [{ step_id: 'step-1', claim: '不得进入前端状态' }],
+      query_trace: { tables: ['yb_zyfdxx'] },
+    } }],
     ['done', {}],
   ] as Array<[string, unknown]>
 }
@@ -131,7 +145,7 @@ describe('usePolicyQAStream', () => {
     expect(bodies[1].settlement_id).toBe('1671213')
   })
 
-  it('consumes context_need / memory_update / reasoning_step / result 并映射到状态', async () => {
+  it('consumes context_need / memory_update / result 并只映射安全单答案状态', async () => {
     streamQueue = [sseText(firstTurnEvents())]
     const { result } = renderHook(() => usePolicyQAStream())
     await act(async () => {
@@ -160,12 +174,24 @@ describe('usePolicyQAStream', () => {
       snapshot: { settlement_id: '1671213', total_fee: 189085.85 },
     })
 
-    // 最后一条 assistant 消息：内容 + 推理链
+    // 最后一条 assistant 消息：只保留公开结果，不接收推理/院端视角
     const last = result.current.messages[result.current.messages.length - 1]
     expect(last.role).toBe('assistant')
     expect(last.content).toContain('本次住院统筹自付 4962.67 元')
-    expect(last.reasoning).toHaveLength(1)
-    expect(last.reasoning![0]).toMatchObject({ stepId: 'step-1', kind: 'fact', claim: '已获取结算单 1671213 的结算数据' })
+    expect(last).toMatchObject({
+      answerStatus: 'complete',
+      citations: [{ title: '基本医疗保险政策', excerpt: '统筹支付后个人按规定承担。' }],
+      uncertainties: [],
+      verificationSummary: {
+        settlementChecked: true,
+        calculationChecked: true,
+        policyCount: 1,
+        message: '已完成核对',
+      },
+    })
+    expect(last).not.toHaveProperty('officeView')
+    expect(last).not.toHaveProperty('reasoning')
+    expect(last).not.toHaveProperty('policyEvidence')
   })
 
   it('流式结束后 isStreaming=false', async () => {
@@ -190,7 +216,13 @@ describe('usePolicyQAStream', () => {
       sseText([
         ['context_need', { session_id: 'sess-1', object_types: ['Settlement'], memory_ids: ['m-policy'], must_query_semantic: true, topic_changed: false, subject_changed: true }],
         ['memory_update', { action: 'upsert', memory: { memory_id: 'm-policy', type: 'policy', ref_id: null, importance: 0.8, expire_policy: 'sticky', snapshot_keys: ['rules_count'] } }],
-        ['result', { result: { patient_view: '已切换到新结算。', can_answer: true, memory_count: 1 } }],
+        ['result', { result: {
+          answer: '已切换到新结算。',
+          answer_status: 'complete',
+          citations: [],
+          uncertainties: ['本轮未检索政策'],
+          verification_summary: { settlement_checked: true, calculation_checked: false, policy_count: 0, message: '已核对结算' },
+        } }],
         ['done', {}],
       ]),
     ]
@@ -237,5 +269,32 @@ describe('usePolicyQAStream', () => {
     expect(result.current.messages).toHaveLength(0)
     expect(result.current.memories).toHaveLength(0)
     expect(result.current.anchor.settlementId).toBeNull()
+  })
+
+  it('结果契约缺失必填字段时生成安全 unavailable，不回退旧字段', async () => {
+    streamQueue = [sseText([
+      ['context_need', { session_id: 'sess-1', settlement_id: '1671213' }],
+      ['result', { result: {
+        patient_view: '旧患者答案不得展示',
+        office_view: '旧院端答案不得展示',
+        answer_status: 'complete',
+      } }],
+      ['done', {}],
+    ])]
+    const { result } = renderHook(() => usePolicyQAStream())
+
+    await act(async () => {
+      await result.current.send('查询住院费用', { settlementId: '1671213' })
+    })
+
+    const last = result.current.messages.at(-1)!
+    expect(last.answerStatus).toBe('unavailable')
+    expect(last.content).not.toContain('旧患者答案')
+    expect(last.content).not.toContain('旧院端答案')
+    expect(last.verificationSummary).toMatchObject({
+      settlementChecked: false,
+      calculationChecked: false,
+      policyCount: 0,
+    })
   })
 })

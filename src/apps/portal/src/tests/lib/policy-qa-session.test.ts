@@ -2,8 +2,8 @@
  * policy-qa-session 纯函数单元测试
  *
  * 覆盖设计文档 §6.3 跨层一致性（snake→camel 转换）与 §6.1 事件→状态映射：
- * - toContextNeed / toMemoryCard / toReasoningStep 字段转换
- * - upsertMemory / applyContextNeed（主体切换清 TOPIC 留 STICKY）/ mergeReasoningSteps
+ * - toContextNeed / toMemoryCard 字段转换
+ * - upsertMemory / applyContextNeed（主体切换清 TOPIC 留 STICKY）
  * - parsePolicyQACommand / extractSettlementId / parseSseBlock
  */
 
@@ -11,17 +11,14 @@ import { describe, it, expect } from 'vitest'
 import {
   applyContextNeed,
   extractSettlementId,
-  mergeReasoningSteps,
   parsePolicyQACommand,
-  parseSseBlock,
   resetTurnFlags,
   toContextNeed,
   toMemoryCard,
-  toReasoningStep,
   upsertMemory,
   type MemoryCard,
-  type ReasoningStep,
 } from '@/lib/policy-qa-session'
+import { parseSseBlock, sanitizePublicPayload } from '@/lib/policy-qa-stream'
 
 // ── snake → camel 转换 ─────────────────────────────────────────
 
@@ -78,24 +75,6 @@ describe('toMemoryCard', () => {
     expect(card.snapshot).toEqual({ settlement_id: '1671213', total_fee: 189085.85 })
     expect(card.isNewThisTurn).toBe(true)
     expect(card.hitThisTurn).toBe(false)
-  })
-})
-
-describe('toReasoningStep', () => {
-  it('转换 reasoning_step 事件', () => {
-    const step = toReasoningStep({
-      step_id: 'step-0-abc',
-      claim: '已获取结算单 1671213 的结算数据',
-      kind: 'fact',
-      depends_on: [],
-      confidence: 0.95,
-      citations: [],
-      source_memory_ids: ['m-abc'],
-    })
-    expect(step.stepId).toBe('step-0-abc')
-    expect(step.kind).toBe('fact')
-    expect(step.sourceMemoryIds).toEqual(['m-abc'])
-    expect(step.confidence).toBe(0.95)
   })
 })
 
@@ -179,31 +158,6 @@ describe('resetTurnFlags', () => {
   })
 })
 
-describe('mergeReasoningSteps', () => {
-  const s = (id: string, claim: string): ReasoningStep => ({
-    stepId: id,
-    claim,
-    kind: 'fact',
-    dependsOn: [],
-    confidence: 0.9,
-    citations: [],
-    sourceMemoryIds: [],
-  })
-
-  it('定稿步骤优先，流式累积去重追加', () => {
-    const accumulated = [s('a', '流式A'), s('b', '流式B')]
-    const finalSteps = [s('b', '定稿B'), s('c', '定稿C')]
-    const merged = mergeReasoningSteps(accumulated, finalSteps)
-    expect(merged.map((x) => x.stepId)).toEqual(['b', 'c', 'a'])
-    expect(merged[0].claim).toBe('定稿B')
-  })
-
-  it('定稿为空时保留流式累积', () => {
-    const merged = mergeReasoningSteps([s('a', 'A')], [])
-    expect(merged).toHaveLength(1)
-  })
-})
-
 // ── @ 指令解析 ─────────────────────────────────────────────────
 
 describe('parsePolicyQACommand', () => {
@@ -261,5 +215,26 @@ describe('parseSseBlock', () => {
 
   it('data JSON 损坏返回 null（降级）', () => {
     expect(parseSseBlock('event: result\ndata: {broken')).toBeNull()
+  })
+
+  it('拼接完整 SSE 帧中的多行 data 后再解析 JSON', () => {
+    expect(
+      parseSseBlock('event: result\ndata: {"result":\ndata: {"answer":"已核对"}}'),
+    ).toEqual({ event: 'result', data: { result: { answer: '已核对' } } })
+  })
+})
+
+describe('sanitizePublicPayload', () => {
+  it('递归移除内部字段并保留安全业务字段', () => {
+    expect(
+      sanitizePublicPayload({
+        answer: '安全答案',
+        patient_view: '旧字段',
+        nested: {
+          query_trace: { tables: ['yb_zyfdxx'] },
+          title: '政策依据',
+        },
+      }),
+    ).toEqual({ answer: '安全答案', nested: { title: '政策依据' } })
   })
 })
