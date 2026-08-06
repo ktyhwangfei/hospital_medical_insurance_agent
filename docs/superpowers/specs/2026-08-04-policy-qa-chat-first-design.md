@@ -1,7 +1,8 @@
 # Policy QA Chat-first 重构设计
 
-日期：2026-08-04  
-状态：已完成交互评审，待实施计划  
+日期：2026-08-04
+实施同步：2026-08-05
+状态：核心实现完成，R4 性能与 E2E 证据待补充
 风险等级：R4（修改 Policy QA 核心响应契约与结算解释链路）
 
 ## 1. 背景
@@ -75,7 +76,7 @@ Policy QA 是高频、短时、可连续追问的专业咨询，不是后台长�
 
 ### 5.1 页面结构
 
-页面保留深色全局导航，内容区使用浅色背景。主内容最大宽度约 760–840px，沿单一阅读轴排列：
+页面保留深色全局导航，内容区使用浅色背景。主内容最大宽度 840px，沿单一阅读轴排列：
 
 1. 页面标题和轻量会话操作。
 2. 用户消息。
@@ -119,7 +120,7 @@ Policy QA 是高频、短时、可连续追问的专业咨询，不是后台长�
 
 ## 6. 前端架构
 
-建议结构：
+已实现结构：
 
 ```text
 policy-qa/page.tsx
@@ -163,14 +164,17 @@ policy-qa-stream
 Policy QA result
 ├─ answer
 ├─ answer_status             complete / partial / unavailable
-├─ treatments
-├─ fee_breakdown
+├─ case_context
 ├─ calculation_steps
+├─ definition
+├─ warnings
 ├─ policy_evidence
 ├─ citations
 ├─ uncertainties
 └─ verification_summary
 ```
+
+`verification_summary` 是结算、计算与政策核对摘要，包含 `settlement_checked`、`calculation_checked`、`policy_count` 和公开说明。`citations` 是可展示政策依据；无法形成可靠结论时，`uncertainties` 必须明确说明缺失信息或证据限制。公开模型及其嵌套对象采用严格白名单，拒绝额外字段。
 
 ### 7.1 删除字段
 
@@ -179,6 +183,8 @@ Policy QA result
 - `settlement_evidence`
 
 不保留兼容字段。当前唯一前端消费者 Portal 与后端在同一变更中同步升级。
+
+`patient_view`、`office_view`、`settlement_evidence` 的删除是破坏性契约升级，后端与 Portal 必须同步发布、同步回滚。`GET /policy-qa/settlement-explanation` 仅作为路径兼容入口保留，返回与流式主入口相同的安全公开契约；Portal 不再调用该路径。
 
 ### 7.2 单答案生成
 
@@ -197,6 +203,7 @@ Policy QA result
 - 政策结论包含可展示引用。
 - 无法可靠回答时包含 `uncertainties`，且不输出伪确定结论。
 - Trace 和内部数据来源完整写入审计，不进入公开答案。
+- `answer_status=unavailable` 时不得用旧字段或内部载荷兜底生成答案。
 
 ## 8. 数据流
 
@@ -219,6 +226,8 @@ SSE 解析以空行作为帧边界，正确关联 `event:` 与随后的一个或
 - 所有流式数据先过滤禁止字段，再进入前端状态。
 - 禁止展示 reasoning、chain-of-thought、prompt、raw response、tool calls 和 agent trace。
 - 数据库表名、字段名和查询链路只进入内部审计事件。
+- 前端递归删除禁止键，后端公开模型对白名单外字段和嵌套额外字段拒绝输出；两层边界互为纵深防御。
+- `step` 事件只消费最新一条 `public_message`，`reasoning_step` 与内部运行标识不得进入会话状态或 UI。
 - 内部审计遵循现有权限与脱敏边界。
 - 用户答案必须携带政策引用或不确定性。
 - 页面固定显示“结果仅供经办参考，以正式医保系统和政策原文为准”。
@@ -275,11 +284,15 @@ API 响应结构发生变化，执行流式端点性能验证。E2E 覆盖：
 
 验证顺序严格为：单元测试 → API 测试 → Flow 测试；三者通过后执行性能与 E2E。
 
+截至 2026-08-05 的核心实现验证：后端按 T1 → T2a → T2b 顺序分别通过 130、39、99 项；Portal 流契约聚焦测试通过 37 项，Chat-first 组件完成时全量 Vitest 通过 112 项，删除旧双视角测试后通过 94 项，`tsc --noEmit` 与 `next build` 通过。以上不等同于 R4 最终验收，也不声称全仓 lint 已通过；性能与 E2E 证据仍按本节要求补充。
+
 ## 11. 迁移与回滚
 
 ### 11.1 迁移
 
 前后端在同一分支、同一交付单元中更新。先通过契约测试固定新响应，再切换 Portal 消费逻辑，最后删除旧字段和旧组件。
+
+兼容策略仅保留 `GET /policy-qa/settlement-explanation` 路径；该入口同样返回 `PolicyQAPublicResult`，不返回任何旧字段，也不再由 Portal 调用。
 
 ### 11.2 回滚
 
@@ -302,3 +315,11 @@ API 响应结构发生变化，执行流式端点性能验证。E2E 覆盖：
 - 数据来源：公开 UI 不展示结算表名和字段名，内部审计保留。
 - 架构：完整组件化重构，但避免无价值的细粒度抽象。
 - 验证：R4，严格执行全链路验证。
+
+## 14. 最终实现同步
+
+- 后端以 `PolicyQAPublicResult` 作为流式与兼容入口的唯一公开结果模型；内部 Skill、结算查询、检索轨迹和审计载荷在公开映射前收敛。
+- Portal 以 `policy-qa-stream.ts` 完成整帧 SSE 解析、递归过滤和运行时校验，再由会话 reducer 驱动 Chat-first 组件；畸形或不完整 `result` 安全降级为 `unavailable`。
+- 页面采用最大 840px 单列阅读轴，无左右业务分栏和常驻步骤链；结算单号位于 Composer context chip，查证摘要、计算过程和政策来源按渐进披露展示。
+- 旧双视角组件、字段映射和测试已删除；公开结果仍保留可核对的结构化金额、计算步骤、政策证据、引用和不确定性。
+- 内部运行标识只进入任务持久化与审计，公开回答不包含 SQL、表名、字段名、原始工具响应、推理内容或内部来源明细。

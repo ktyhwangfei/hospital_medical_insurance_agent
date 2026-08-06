@@ -10,13 +10,13 @@
 
 ## 0. 当前焦点
 
-**当前领域**：政策知识管线重构（§2）
+**当前领域**：政策问答 Chat-first 单答案重构（§1.1 单元 1.6）
 
-**当前阶段**：P10（灰度切换）— P8.4 全量重提取已完成（M5 达成）
+**当前阶段**：核心实现与聚焦验证已完成；R4 性能、E2E 与最终全链路验证收口中
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
-| P10 灰度切换 | P0.3 开关已落地，P8.4 已完成（M5 达成） | P0 回归基线全绿后可切换 |
+| Policy QA R4 最终验收 | 性能与 E2E 证据尚待补充 | 完成 Task 8 性能/E2E 资产与 Task 9 严格验证 |
 | §10.1/10.2 安全审计 | 需对接医院 SSO / 外部系统 | 获取医院 SSO 文档 |
 | §11.1/11.2 适配器 | 需真实医保 / DRG 系统 API | 获取系统 API 文档和测试环境 |
 
@@ -26,7 +26,7 @@
 
 | 领域 | 单元数 | ✅ verified | 🟢 impl_done | 🔴 blocked | ⚪ pending | 备注 |
 |------|:--:|:--:|:--:|:--:|:--:|---|
-| 政策问答 | 5 | 0 | 5 | 0 | 0 | §2 重构进行中（读旧 policy_rules，待 P10 切换） |
+| 政策问答 | 6 | 0 | 6 | 0 | 0 | P10 已切换；Chat-first 单答案最小单元已实现，待 R4 性能/E2E 收口 |
 | 结算异常导办 | 4 | 0 | 4 | 0 | 0 | — |
 | 出院前质控 | 3 | 0 | 3 | 0 | 0 | — |
 | 模型服务与管理 | 4 | 0 | 4 | 0 | 0 | — |
@@ -37,11 +37,11 @@
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **32** | **0** | **28** | **2** | **2** | — |
+| **合计** | **33** | **0** | **29** | **2** | **2** | — |
 
 > **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
-> 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。**政策问答/知识库管理两领域的"真实最新进度"
-> 在 §2 政策知识管线重构中**——本表状态滞后于 §2，以 §2 为准。
+> 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6 和 §4 为准；
+> 知识库管理最新进度以 §2 政策知识管线重构为准。
 
 ### 1.1 各领域详情
 
@@ -53,6 +53,9 @@
 | 1.3 | 费用项目自动检测 | B | — | `fee_item_detector.py` | — | impl_done |
 | 1.4 | 医保政策规则语义匹配 | B | — | `semantic_mapping.py` | SQLServer | impl_done |
 | 1.5 | 历史问答记录查询 | F+B+S | `qa-history/page.tsx` | `history_service.py` | PostgreSQL | impl_done |
+| 1.6 | 院端经办通过 Chat-first 连续问答获取单一、安全且可追溯的政策解释 | F+B+S | `PolicyQAWorkspace` → `PolicyConversation` | `policy_qa_routes.py` → `PolicyQAPublicResult` | PostgreSQL 审计 + SQL Server + Milvus | impl_done |
+
+> **1.6 最小可验证单元成功标准**：Portal 通过 `/policy-qa/stream` 展示单一 `answer`，按 `complete/partial/unavailable` 表达可信度；确定性政策结论携带可展示引用，证据不足时明确列出不确定性；公开响应与 UI 不含内部推理、SQL、表字段或已删除的双视角/结算来源字段。核心单元、API、Flow 与 Portal 构建已通过，R4 性能和 E2E 证据完成后再转为 `verified`。
 
 #### 结算异常导办（Settlement Exception Guide）
 | # | 单元 | 后端 | 状态 |
@@ -218,7 +221,8 @@
 | 前端 policy-knowledge 5 tab | ✅ dev 编译 200 + 内容渲染 | tsc 5 页面零错误；`next dev` 烟测通过 |
 | Runtime 新模块单元（memory/composer/reasoning/planner/storage） | ✅ 全绿 | 63 passed（§3.3） |
 | Runtime 性能基准 | ✅ 全绿 | 3 passed：Memory ≤ 0.005ms、Composer 0.244ms（§3.2） |
-| 前端政策问答持续对话（usePolicyQAStream + 三区工作区 + 可视化组件） | ✅ 全绿 | vitest 69 passed（含本次新增 20 项）；`next build` EXIT=0（§3.5） |
+| Policy QA Chat-first 后端契约 | ✅ 聚焦验证通过 | 严格按 T1 单元 → T2a API → T2b Flow：130 passed → 39 passed → 99 passed |
+| Policy QA Chat-first Portal | ✅ 聚焦验证通过 | Task 4 流契约 37 passed；Task 5 完成时全量 Vitest 112 passed；Task 6 删除旧测试后 94 passed；`tsc --noEmit` 与 `next build` 通过。未执行或声明全仓 lint 通过 |
 | 全量回归 | ⚠️ 单元 26F/894P、API 66F/43P、Flow 42F/9P（预存债务） | 2026-07-31 与 HEAD 基线对比零新增失败，见 §5 测试债务 |
 
 ### 3.1 已知预存技术债（非当前任务引入，治理时优先级参考）
@@ -261,6 +265,7 @@
 | 2026-07-31 | **Runtime 建设阶段三（全面验证）完成**：补 63 个新模块单元测试 + 3 个性能基准全绿；三层回归与 HEAD 基线零新增失败（顺带修复 `unit/shared/__init__.py` 缺失的 3 个收集错误）；USE_MEMORY_STORAGE=1 灰度零功能回归；`src/domain/AGENTS.md` 新增 §13.5 Runtime 上下文；架构设计.md 会话上下文服务域补充 Runtime 定位 | §3 Runtime 建设 |
 | 2026-08-03 | **政策问答前端持续对话改造（阶段一+阶段二）**：①`usePolicyQAStream` hook（session_id 跨轮复用 + 自解析 SSE 的 context_need/memory_update/reasoning_step/result，snake→camel 在 hook 层统一转换）②三区工作区（顶栏 SessionAnchorBar 锚点带 + 主体切换横幅、左栏 MemoryPanel 会话记忆、主区 ChatStream 持续对话）③结算单号降级为「首帧锚定 + @换结算/@换患者/@新会话」④首轮 richResult 费用分解保留（复用 SettlementExplanationPage）⑤推理链可折叠（ReasoningChainCollapsible）。前端 vitest 69 passed（含本次新增 20 项）、`next build` EXIT=0。顺手修复预存 build 阻塞：settlement-explanation-page TS 类型 + 3 页 useSearchParams 预渲染 | §3.5（前端政策问答） |
 | 2026-08-04 | **政策问答质量修复 + Skill 驱动迁移**：①修复链路三连（MSSQL 环境变量注入→查询无结果；POSTGRES_PASSWORD 默认值→记忆不沉淀；subject_changed 误判→横幅误弹）②P0/P1/P2 优化（dummy 降级真实数据模板 + answer_mode 来源徽标 + 记忆业务键值 + 话题锚点 + 推理链业务化 + error 事件契约）③严肃化 + 回答价值门控（未获取/分段不完整拒绝，引导咨询医保办）④**SSE 对话流迁移 Skill 驱动执行**（旧编排器 PolicyQAOrchestrator 退役；skill dummy 降级 + strategy 单例缓存串答案修复；`DATA_SOURCE_MODE=real_db` 注入；响应 30s+→1.3s）。落地记录见 `docs/steering/医保Agent-政策问答前端改造-落地记录-V1.0.md` | §3.5（前端政策问答）/ §3（Runtime） |
+| 2026-08-05 | **Policy QA Chat-first 单答案重构（最小可验证单元 1.6）**：后端 Skill、Runtime、SSE/REST 统一为严格白名单单答案契约；删除 `patient_view`、`office_view`、`settlement_evidence`；Portal 改为最大 840px 单列 Chat-first、Composer 结算上下文标签、查证摘要与计算/来源渐进披露；旧三栏、双视角与推理链展示删除。当前已通过后端 T1/T2a/T2b 130/39/99、Portal 37/112/94、TypeScript 与构建验证；R4 性能/E2E 待收口，未声称全仓 lint 通过 | §1.1 单元 1.6；接口/原型/设计 spec |
 
 ---
 
