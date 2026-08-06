@@ -11,6 +11,7 @@ from scenarios.business_api import BusinessAPIUser
 from scenarios.knowledge_api import KnowledgeAPIUser
 from scenarios.mcp_api import McpAPIUser
 from scenarios.model_api import ModelAPIUser
+from scenarios.policy_qa_api import PolicyQAAPIUser
 from scenarios.skill_api import SkillAPIUser
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "KnowledgeAPIUser",
     "McpAPIUser",
     "ModelAPIUser",
+    "PolicyQAAPIUser",
     "SkillAPIUser",
 ]
 

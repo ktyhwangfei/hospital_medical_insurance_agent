@@ -23,7 +23,15 @@ export default function PolicyComposer({
   const canSend = value.trim().length > 0 && !isStreaming
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+    <div
+      data-testid="policy-qa-composer"
+      className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"
+    >
+      {!isStreaming ? (
+        <span data-testid="policy-qa-stream-done" className="sr-only" aria-hidden="true">
+          回答生成完成
+        </span>
+      ) : null}
       {settlementId ? (
         <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
           <ReceiptText className="size-3.5" aria-hidden />

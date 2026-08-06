@@ -17,13 +17,23 @@ export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAn
   if (!message.content) return null
 
   return (
-    <article className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <article
+      data-testid="policy-qa-answer"
+      className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+    >
       <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-900">{message.content}</p>
 
-      <VerificationSummary
-        summary={message.verificationSummary}
-        answerStatus={message.answerStatus}
-      />
+      {message.verificationSummary ? (
+        <div
+          data-testid="policy-qa-verification"
+          data-status={message.answerStatus ?? 'unavailable'}
+        >
+          <VerificationSummary
+            summary={message.verificationSummary}
+            answerStatus={message.answerStatus}
+          />
+        </div>
+      ) : null}
       <CalculationDisclosure message={message} />
       <PolicySourcesDialog citations={message.citations ?? []} />
 

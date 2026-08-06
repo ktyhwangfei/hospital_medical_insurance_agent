@@ -3,6 +3,7 @@ import { ChatPage } from '../pages/portal/chat.page';
 import { SettlementPage } from '../pages/portal/settlement.page';
 import { QCPage } from '../pages/portal/qc.page';
 import { DashboardPage } from '../pages/portal/dashboard.page';
+import { PolicyQAPage } from '../pages/portal/policy-qa.page';
 import { waitForAPIReady } from '../utils/wait-strategies';
 
 test.describe('Portal 冒烟测试', () => {
@@ -13,6 +14,13 @@ test.describe('Portal 冒烟测试', () => {
   test('Chat 导办页面加载', async ({ page }) => {
     const chatPage = new ChatPage(page);
     await chatPage.goto();
+    await expect(page).not.toHaveTitle(/error/i);
+  });
+
+  test('政策问答页面加载', async ({ page }) => {
+    const policyQAPage = new PolicyQAPage(page);
+    await policyQAPage.goto();
+    await expect(policyQAPage.composer).toBeVisible();
     await expect(page).not.toHaveTitle(/error/i);
   });
 

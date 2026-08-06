@@ -28,7 +28,10 @@ export default function PolicySourcesDialog({ citations }: PolicySourcesDialogPr
         查看 {citations.length} 条政策来源
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-xl">
+        <DialogContent
+          data-testid="policy-qa-sources"
+          className="max-h-[80vh] overflow-y-auto sm:max-w-xl"
+        >
           <DialogHeader>
             <DialogTitle>政策来源</DialogTitle>
             <DialogDescription>以下仅展示可公开核验的政策标题与相关摘录。</DialogDescription>
