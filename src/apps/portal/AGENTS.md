@@ -190,7 +190,7 @@ portal/
 
 | 路由 | 组件 | API 端点 |
 |------|------|----------|
-| `/policy-qa` | PolicyQAChat | `POST /policy-qa/ask` + `GET /policy-qa/suggestions` |
+| `/policy-qa` | PolicyQAWorkspace | `POST /policy-qa/stream` + `GET /policy-qa/suggestions` |
 | `/` | SettlementChat | `POST /chat/stream` + `GET /patient-context` + `POST /tasks/confirm` |
 | `/settlement` | SettlementExceptionList | `GET /workflows?scenario=settlement_exception` |
 | `/qc` | DischargeQC | `GET /workflows?scenario=pre_discharge_qc` + `POST /tasks/confirm` |

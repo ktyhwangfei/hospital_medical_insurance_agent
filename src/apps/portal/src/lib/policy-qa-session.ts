@@ -18,7 +18,7 @@ import type {
 
 // ── 前端会话级状态类型（camelCase，组件层只见这一套）──────────────
 
-/** 业务主体锚点（顶栏 SessionAnchorBar） */
+/** 业务主体锚点。 */
 export interface SessionAnchor {
   patientId: string | null
   patientName: string | null
@@ -32,7 +32,7 @@ export interface SessionAnchor {
   subjectChangeMsg: string | null
 }
 
-/** 会话记忆卡（左栏 MemoryPanel） */
+/** 会话记忆卡。 */
 export interface MemoryCard {
   memoryId: string
   type: string
