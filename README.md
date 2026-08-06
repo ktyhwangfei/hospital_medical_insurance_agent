@@ -125,16 +125,16 @@ docker compose ps          # 全部 healthy
 
 | 服务 | 容器名 | 端口 | 凭据（见 `deploy/docker/.env`） |
 |------|--------|------|------|
-| PostgreSQL | medical-postgres | 5432 | `postgres` / `postgres`，库 `hospital_mcp` |
-| Redis | medical-redis | 6379 | 密码 `REDACTED` |
-| SQL Server | sql2022 | 1433 | `sa` / `REDACTED` |
+| PostgreSQL | medical-postgres | 5432 | `postgres` / 密码见 `deploy/docker/.env`，库 `hospital_mcp` |
+| Redis | medical-redis | 6379 | 密码见 `deploy/docker/.env` |
+| SQL Server | sql2022 | 1433 | `sa` / 密码见 `deploy/docker/.env` |
 | Milvus | milvus-standalone | 19530 | — |
-| MinIO | milvus-minio | 9000 / 9001 | `minioadmin` / `REDACTED` |
+| MinIO | milvus-minio | 9000 / 9001 | `minioadmin` / 密码见 `deploy/docker/.env` |
 | Attu（Milvus 管理台） | attu | http://127.0.0.1:8010 | — |
 | RedisInsight | redisinsight | http://127.0.0.1:5540 | — |
 | Ollama / Open WebUI | ollama | 11434 / 3005 | 可选（本地模型） |
 
-> ⚠️ 若使用 docker-compose 的 Redis（带密码），需在环境变量中设置 `REDIS_PASSWORD=REDACTED`；未设置时缓存层自动降级为内存实现（`CACHE_FAIL_OPEN=1`），不影响启动。
+> ⚠️ 若使用 docker-compose 的 Redis（带密码），需在环境变量中设置 `REDIS_PASSWORD`（值见本地 `deploy/docker/.env`，该文件已被 gitignore，不会入库）；未设置时缓存层自动降级为内存实现（`CACHE_FAIL_OPEN=1`），不影响启动。
 
 ### 第 2 步：初始化数据库（首次）
 
@@ -229,7 +229,7 @@ npm run dev
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `POSTGRES_HOST/PORT/USER/PASSWORD/DB` | `127.0.0.1:5432` / `postgres` / `postgres` / `hospital_mcp` | PostgreSQL（**密码是 `postgres`，不是历史文档误记的 `123456`**） |
-| `REDIS_HOST/PORT/PASSWORD` | `127.0.0.1:6379` / 空 | Redis（docker-compose 里密码为 `REDACTED`） |
+| `REDIS_HOST/PORT/PASSWORD` | `127.0.0.1:6379` / 空 | Redis（docker-compose 密码见 `deploy/docker/.env`，已被 gitignore） |
 | `MILVUS_HOST/PORT` | `127.0.0.1:19530` | Milvus 向量库（**端口是 `19530`，不是历史文档误记的 `19121`**） |
 | `SKILLS_DIR` | 项目根 `skills/` | Skill 包目录 |
 | `MODEL_BASE_URL` / `MODEL_API_KEY` | — | OpenAI 兼容模型端点与 Key |
@@ -244,7 +244,7 @@ npm run dev
 |------|--------|
 | `MSSQL_HOST/PORT` | `localhost:1433` |
 | `MSSQL_DATABASE` | `bjybdb` |
-| `MSSQL_USER/PASSWORD` | `sa` / `REDACTED` |
+| `MSSQL_USER/PASSWORD` | `sa` / 密码见 `deploy/docker/.env`（已被 gitignore） |
 | `MSSQL_DRIVER` | `SQL Server` |
 
 ### 前端（`src/apps/portal/next.config.ts`）

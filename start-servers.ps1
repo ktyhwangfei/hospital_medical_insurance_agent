@@ -92,13 +92,23 @@ if (Test-Path $envFile) {
     Write-Host "  Loaded .env" -ForegroundColor DarkGray
 }
 # Inject MSSQL connection env vars for the backend process (SqlServerBusinessDataClient
-# requires MSSQL_DATABASE/USER/PASSWORD). Pre-set env vars win; defaults match the local
-# docker SQL Server (bjybdb, see deploy/docker/init_sqlserver.sh).
+# requires MSSQL_DATABASE/USER/PASSWORD). Pre-set env vars win; the password is NOT
+# hardcoded here - it is read from the gitignored deploy/docker/.env (SA_PASSWORD).
+# See deploy/docker/init_sqlserver.sh for the local docker SQL Server (bjybdb).
 if (-not $env:MSSQL_HOST) { $env:MSSQL_HOST = "localhost" }
 if (-not $env:MSSQL_PORT) { $env:MSSQL_PORT = "1433" }
 if (-not $env:MSSQL_DATABASE) { $env:MSSQL_DATABASE = "bjybdb" }
 if (-not $env:MSSQL_USER) { $env:MSSQL_USER = "sa" }
-if (-not $env:MSSQL_PASSWORD) { $env:MSSQL_PASSWORD = "REDACTED" }
+if (-not $env:MSSQL_PASSWORD) {
+    $dockerEnv = Join-Path $WORKDIR "deploy\docker\.env"
+    if (Test-Path $dockerEnv) {
+        $saPass = (Get-Content $dockerEnv | Where-Object { $_ -match '^SA_PASSWORD=' }) -replace '^SA_PASSWORD=', ''
+        if ($saPass) { $env:MSSQL_PASSWORD = $saPass.Trim() }
+    }
+    if (-not $env:MSSQL_PASSWORD) {
+        Write-Warning "MSSQL_PASSWORD not set; set env var or add SA_PASSWORD to deploy/docker/.env"
+    }
+}
 if (-not $env:MSSQL_DRIVER) { $env:MSSQL_DRIVER = "SQL Server" }
 # Enable real-DB data source so the skill path (settlement_data_provider) can query
 # the SQL Server settlement context (REST + SSE skill execution require real_db mode).

@@ -105,7 +105,7 @@ app/policy-qa/page.tsx → components/policy-qa/
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| `MSSQL_HOST/PORT/DATABASE/USER/PASSWORD` | `localhost/1433/bjybdb/sa/REDACTED` | 结算数据源（`start-servers.ps1` 注入） |
+| `MSSQL_HOST/PORT/DATABASE/USER/PASSWORD` | `localhost/1433/bjybdb/sa/<密码见 deploy/docker/.env，已 gitignore>` | 结算数据源（`start-servers.ps1` 注入） |
 | `POSTGRES_PASSWORD` | `postgres` | 记忆/持久化（`production.py` 默认值已修正） |
 | `DATA_SOURCE_MODE` | `mock`（生产代码默认） | **skill 路径要求 `real_db`**（`start-servers.ps1` 注入） |
 | `MODEL_BASE_URL` / `MODEL_API_KEY` | `dummy` | 未配置时走 dummy 降级（真实数据模板）；配置后走真实 LLM |
