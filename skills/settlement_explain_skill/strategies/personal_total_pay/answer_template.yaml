@@ -1,4 +1,4 @@
-# 个人总支付患者视角模板
+# 个人总支付单一答案模板
 conclusion_header: 【本次结论】
 conclusion_template: '本次结算中，您的"个人总支付"为 {amount} 元，包含以下费用构成明细。'
 

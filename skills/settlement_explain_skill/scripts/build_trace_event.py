@@ -2,7 +2,7 @@
 build_trace_event.py — 执行链路事件构建器
 
 skill 执行过程中的每个步骤生成一个 trace_event。
-14 个步骤对应 14 个 trace_event，按顺序生成。
+13 个步骤对应 13 个 trace_event，按顺序生成。
 
 用法：
     builder = TraceEventBuilder()
@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
-
 from typing import Any
 
 
@@ -46,10 +44,9 @@ _STEP_DEFINITIONS = [
     (8, "policy_evidence_assembly", "政策证据组装"),
     (9, "completeness_judgment", "政策完整性判断"),
     (10, "answerability_judgment", "可回答性判断"),
-    (11, "patient_view_generation", "患者视角生成"),
-    (12, "office_view_generation", "医保办视角生成"),
-    (13, "output_validation", "输出校验"),
-    (14, "return_result", "返回结果"),
+    (11, "answer_generation", "答案生成"),
+    (12, "output_validation", "输出校验"),
+    (13, "return_result", "返回结果"),
 ]
 
 
@@ -88,10 +85,14 @@ class TraceEventBuilder:
 
     def skip(self, step_id: str, step_name: str, reason: str = "") -> TraceEvent:
         """跳过一个步骤。"""
+        step_def = next(
+            (s for s in _STEP_DEFINITIONS if s[1] == step_id),
+            (len(self._events) + 1, step_id, step_name),
+        )
         event = TraceEvent(
-            step_id=step_id,
-            step_name=step_name,
-            step_number=len(self._events) + 1,
+            step_id=step_def[1],
+            step_name=step_def[2],
+            step_number=step_def[0],
             status="skipped",
             detail=reason,
         )

@@ -183,7 +183,7 @@ class PolicyQARuntimeBridge:
                 events.extend(self._on_policy_search(session_id, detail))
             elif step == "calculate_explanation":
                 events.extend(self._on_calculate(session_id, detail))
-            elif step in ("answer_assembly", "patient_view_generation", "generate_explanation"):
+            elif step == "answer_generation":
                 events.extend(self._on_answer(session_id))
         except Exception as e:
             logger.warning(f"[RUNTIME-BRIDGE] record_step({step}) 降级: {e}")
@@ -283,13 +283,13 @@ class PolicyQARuntimeBridge:
         return [("reasoning_step", step.model_dump())]
 
     def _on_answer(self, session_id: str) -> list[tuple[str, dict[str, Any]]]:
-        """答案组装完成：记录结论性 inference 推理步。"""
+        """答案生成完成：记录结论性 inference 推理步。"""
         settlement_memories = self._memory.get_by_session_and_type(session_id, MemoryType.SETTLEMENT)
         policy_memories = self._memory.get_by_session_and_type(session_id, MemoryType.POLICY)
         source_ids = [m.memory_id for m in (settlement_memories[:1] + policy_memories[:1])]
         step = self._reasoning.add_step(
             session_id,
-            claim="已生成结算解释（患者/院端双视角）",
+            claim="已生成结算政策解释",
             kind="inference",
             confidence=0.8,
             source_memory_ids=source_ids,

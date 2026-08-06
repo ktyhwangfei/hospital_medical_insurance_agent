@@ -1,7 +1,7 @@
 """
 DeductibleStrategy — 起付线解释策略。
 
-负责：起付线定义、起付线政策查询、起付线患者/医保办视角。
+负责：起付线定义、起付线政策查询、单一答案。
 """
 
 from __future__ import annotations
@@ -45,10 +45,10 @@ class DeductibleStrategy(BaseFeeStrategy):
             ))
         return queries
 
-    def build_patient_answer(
+    def build_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
-        cfg = self._load_yaml("patient_template.yaml")
+        cfg = self._load_yaml("answer_template.yaml")
         amt = self._fmt_money(getattr(ctx, "deductible", 0))
 
         lines = []
@@ -79,26 +79,6 @@ class DeductibleStrategy(BaseFeeStrategy):
 
         return "\n".join(lines)
 
-    def build_office_answer(
-        self, ctx: Any, evidence: list[dict], policy_status: str
-    ) -> str:
-        amt = self._fmt_money(getattr(ctx, "deductible", 0))
-        lines = [
-            f'本次解释对象为"起付线"，金额为 {amt} 元。',
-            "",
-            "一、结算上下文",
-            f'- 参保体系：{getattr(ctx, "insurance_type", "") or "未获取"}',
-            f'- 人员类别：{getattr(ctx, "person_type", "") or "未获取"}',
-            f'- 医疗类别：{getattr(ctx, "service_type", "") or "未获取"}',
-            f"- 起付线：{amt} 元（来源于真实结算数据 yb_dyxxzy.bcqfje）",
-            "",
-            "二、金额口径",
-            "起付线是医保开始报销前需先由个人承担的固定金额。",
-            "起付线以下费用不纳入统筹段，不计入分段比例计算。",
-            "起付线与统筹自付、大额自付互不包含。",
-        ]
-        return "\n".join(lines)
-
     def build_calculation_trace(self, ctx: Any, evidence: list[dict]) -> dict:
         amt = self._fmt_money(getattr(ctx, "deductible", 0))
         return {
@@ -117,7 +97,7 @@ class DeductibleStrategy(BaseFeeStrategy):
         ]
 
     def build_completeness(self, ctx: Any, evidence: list[dict]) -> dict:
-        has_data = bool(getattr(ctx, "deductible", 0))
+        has_data = self._has_real_field(ctx, "deductible")
         has_policy = len(evidence) > 0
         if has_data and has_policy:
             level = "full_policy_matched"

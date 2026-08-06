@@ -3,9 +3,9 @@
 #
 # 规则类型:
 #   - forbidden_text: 任何模式(LLM/模板)都禁止出现的文本片段
-#   - required_patient_answer_contains: 模板模式必须包含的文本片段
+#   - required_answer_contains: 模板模式必须包含的文本片段
 #     (LLM 模式跳过: skip_for_llm: true)
-#   - required_patient_answer_contains_when_complete: 完整匹配时额外要求
+#   - required_answer_contains_when_complete: 完整匹配时额外要求
 #   - llm_output_checks: LLM 模式特有检查
 
 # 禁止出现在任何输出字段中的文本片段
@@ -19,14 +19,50 @@ forbidden_text:
   - '{"ratio"'
   - "embedding_text"
   - "Milvus score"
-  - "yb_zyfdxx"
-  - "yb_dyxxzy"
+  # SQL 表、语义对象与原始字段
+  - "yb_"
+  - "zydyxx."
+  - "zyfdxx."
+  - "zyjyxx."
+  - "djxx."
+  - "bcqfje"
+  - "bcybnje"
+  - "bdtczfje"
+  - "bdtczf"
+  - "bddegwyzfje"
+  - "bddegwyzf"
+  - "bddezfje"
+  - "bddezf"
+  - "bdgryf"
+  - "fund_type"
+  - "per_type"
+  - "rylb"
+  - "yllb"
+  # Skill 标准化内部字段
+  - "medical_insurance_inner_amount"
+  - "basic_pooling_payment"
+  - "basic_pooling_self_pay"
+  - "large_amount_payment"
+  - "large_amount_self_pay"
+  - "personal_total_pay"
+  - "person_type"
+  - "insurance_type"
+  - "service_type"
+  - "hospital_level"
+  # 查询、证据与规则实现细节
+  - "sql_profile"
+  - "tables_queried"
   - "rule_id"
   - "clause_id"
+  - "metric_code"
+  - "object_code"
+  - "source_text"
+  - "applied_reason"
+  - "fact_json"
 
-# 患者视角答案必须包含的文本片段（模板模式）
+# 单一答案必须包含的文本片段（模板模式）
 # skip_for_llm: true 表示 LLM 模式下跳过此项检查
-required_patient_answer_contains:
+required_answer_contains:
   - text: "统筹自付"
     skip_for_llm: true
   - text: "三级医院"
@@ -48,7 +84,7 @@ required_patient_answer_contains:
 
 # 完整匹配时额外必须包含的文本片段（模板模式）
 # skip_for_llm: true 表示 LLM 模式下跳过此项检查
-required_patient_answer_contains_when_complete:
+required_answer_contains_when_complete:
   - text: "9%"
     skip_for_llm: true
   - text: "6%"

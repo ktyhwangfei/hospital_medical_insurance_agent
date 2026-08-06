@@ -9,22 +9,28 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
 import time as _time
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from typing import Any
 
 import asyncio
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from src.model_service.gateway import ModelGateway
-from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
 from src.runtime.policy_qa.explanation_mode import (
     ExplanationMode,
     detect_explanation_mode,
     fee_item_label,
 )
 from src.runtime.policy_qa.models import PolicyQARequest, PolicyQAResponse
+from src.runtime.policy_qa.public_contract import (
+    PolicyCitation,
+    PolicyQAPublicResult,
+    VerificationSummary,
+)
 from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
 from src.runtime.policy_qa.settlement_data_provider import (
     SettlementNotFoundError,
@@ -42,6 +48,7 @@ from src.runtime.policy_qa.persistence import (
     finalize_workflow,
 )
 from src.runtime.infra_event.context import set_infra_context
+from src.shared.schemas.responses import error_detail
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +99,379 @@ def _sanitize(obj: dict) -> dict:
         else:
             result[key] = value
     return result
+
+
+_PUBLIC_CONTEXT_FIELDS = frozenset({
+    "person_type",
+    "insurance_type",
+    "service_type",
+    "hospital_level",
+    "deductible",
+    "yearly_cycle_count",
+    "basic_pooling_payment",
+    "basic_pooling_self_pay",
+    "large_amount_payment",
+    "large_amount_self_pay",
+    "personal_total_pay",
+    "total_amount",
+})
+_PUBLIC_CALCULATION_FIELDS = frozenset({
+    "step_name", "description", "label", "formula", "result", "calculation", "note",
+})
+_PUBLIC_DEFINITION_FIELDS = frozenset({"name", "plain_text", "includes", "excludes"})
+_PUBLIC_AMOUNT_FIELDS = frozenset({
+    "deductible",
+    "basic_pooling_payment",
+    "basic_pooling_self_pay",
+    "large_amount_payment",
+    "large_amount_self_pay",
+    "personal_total_pay",
+    "total_amount",
+})
+_INTERNAL_TABLE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])yb_[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_SEMANTIC_OBJECT_FIELD_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:zydyxx|zyfdxx|zyjyxx|djxx)\."
+    r"[A-Za-z0-9_]+(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_INTERNAL_BARE_IDENTIFIERS = frozenset({
+    # settlement_field_mapping 与 assembler._FACT_FIELD_MAP 的原始字段。
+    "bcqfje",
+    "bcybnje",
+    "bctcje",
+    "bczfje",
+    "bdtczf",
+    "bdtczfje",
+    "bddegwyzf",
+    "bddegwyzfje",
+    "bddezf",
+    "bddezfje",
+    "bdgryf",
+    "debxbxje",
+    "dezfje",
+    "grzfje",
+    "fund_type",
+    "per_type",
+    "yllb",
+    "rylb",
+    # 标准化字段；deductible 是合法医保术语，刻意保留为公开自然语言。
+    "medical_insurance_inner_amount",
+    "basic_pooling_payment",
+    "basic_pooling_self_pay",
+    "large_amount_payment",
+    "large_amount_self_pay",
+    "personal_total_pay",
+    "person_type",
+    "insurance_type",
+    "service_type",
+    "hospital_level",
+    # 内部查询与追踪字段。
+    "sql_profile",
+    "tables_queried",
+    "query_trace",
+    "raw_sql",
+})
+_INTERNAL_IDENTIFIER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:"
+    + "|".join(
+        re.escape(identifier)
+        for identifier in sorted(_INTERNAL_BARE_IDENTIFIERS, key=len, reverse=True)
+    )
+    + r")(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_SQL_STATEMENT_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:"
+    r"select(?![A-Za-z0-9_])[\s\S]{0,500}?\s+from(?![A-Za-z0-9_])|"
+    r"select(?![A-Za-z0-9_])\s+(?:"
+    r"@@[A-Za-z_][A-Za-z0-9_]*|"
+    r"\(?\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
+    r"(?:\s*[+*/%-]\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+))*\s*\)?"
+    r")(?![A-Za-z0-9_])|"
+    r"insert(?![A-Za-z0-9_])\s+(?:into(?![A-Za-z0-9_])\s+)?"
+    r"[A-Za-z_][A-Za-z0-9_.]*(?:\s*\([^)]{0,500}\))?\s+"
+    r"values(?![A-Za-z0-9_])\s*\(|"
+    r"update(?![A-Za-z0-9_])\s+[A-Za-z_][A-Za-z0-9_.]*\s+set(?![A-Za-z0-9_])|"
+    r"delete(?![A-Za-z0-9_])\s+from(?![A-Za-z0-9_])|"
+    r"merge(?![A-Za-z0-9_])\s+into(?![A-Za-z0-9_])|"
+    r"(?:create|drop|alter)(?![A-Za-z0-9_])\s+"
+    r"(?:or(?![A-Za-z0-9_])\s+replace(?![A-Za-z0-9_])\s+)?"
+    r"(?:table|schema|database|db|index|view|procedure|function|trigger)"
+    r"(?![A-Za-z0-9_])|"
+    r"truncate(?![A-Za-z0-9_])\s+"
+    r"(?:table|schema|database|db|index|view)(?![A-Za-z0-9_])|"
+    r"exec(?:ute)?(?![A-Za-z0-9_])\s+[A-Za-z_][A-Za-z0-9_.]*|"
+    r"call(?![A-Za-z0-9_])\s+[A-Za-z_][A-Za-z0-9_.]*\s*\("
+    r")",
+    re.IGNORECASE,
+)
+_CREDENTIAL_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:dsn|password|passwd|pwd|token|api[_-]?key|secret|"
+    r"connection[_-]?string)(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_SENSITIVE_CONNECTION_URI_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:postgres(?:ql)?|redis(?:s)?|milvus|mysql|mssql)://"
+    r"[^\s<>'\"]+",
+    re.IGNORECASE,
+)
+_STORAGE_IMPLEMENTATION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:milvus|policy_rules|redis|postgresql|postgres|"
+    r"sql[_ -]?server)(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class _SanitizedPublicText:
+    text: str
+    is_publicly_meaningful: bool
+
+
+def _contains_internal_implementation(value: Any) -> bool:
+    text = str(value or "")
+    return any(
+        pattern.search(text)
+        for pattern in (
+            _SQL_STATEMENT_PATTERN,
+            _CREDENTIAL_PATTERN,
+            _SENSITIVE_CONNECTION_URI_PATTERN,
+            _STORAGE_IMPLEMENTATION_PATTERN,
+            _INTERNAL_TABLE_PATTERN,
+            _SEMANTIC_OBJECT_FIELD_PATTERN,
+            _INTERNAL_IDENTIFIER_PATTERN,
+        )
+    )
+
+
+def _sanitize_public_text(value: Any) -> _SanitizedPublicText:
+    """清理公开文案，并区分安全占位与可支撑业务结论的内容。"""
+    text = str(value or "").strip()
+    if not text:
+        return _SanitizedPublicText(text="", is_publicly_meaningful=False)
+    if _CREDENTIAL_PATTERN.search(text) or _SENSITIVE_CONNECTION_URI_PATTERN.search(text):
+        return _SanitizedPublicText(
+            text="内部连接细节已隐藏。",
+            is_publicly_meaningful=False,
+        )
+    if _STORAGE_IMPLEMENTATION_PATTERN.search(text):
+        return _SanitizedPublicText(
+            text="内部存储实现已隐藏。",
+            is_publicly_meaningful=False,
+        )
+    if _SQL_STATEMENT_PATTERN.search(text):
+        return _SanitizedPublicText(
+            text="内部查询细节已隐藏。",
+            is_publicly_meaningful=False,
+        )
+    meaningful_source = text
+    for pattern in (
+        _INTERNAL_TABLE_PATTERN,
+        _SEMANTIC_OBJECT_FIELD_PATTERN,
+        _INTERNAL_IDENTIFIER_PATTERN,
+    ):
+        meaningful_source = pattern.sub("", meaningful_source)
+    text = _INTERNAL_TABLE_PATTERN.sub("结算数据字段", text)
+    text = _SEMANTIC_OBJECT_FIELD_PATTERN.sub("结算数据字段", text)
+    text = _INTERNAL_IDENTIFIER_PATTERN.sub("内部字段", text)
+    text = re.sub(
+        r"(?<![A-Za-z0-9_])Milvus\s+policy_rules(?![A-Za-z0-9_])",
+        "政策知识库",
+        text,
+        flags=re.IGNORECASE,
+    )
+    is_meaningful = bool(re.search(r"[A-Za-z0-9\u4e00-\u9fff]", meaningful_source))
+    return _SanitizedPublicText(
+        text=text,
+        is_publicly_meaningful=is_meaningful,
+    )
+
+
+def _public_text(value: Any) -> str:
+    """返回适合公开展示的安全文本。"""
+    return _sanitize_public_text(value).text
+
+
+def _answerability_from_completeness(
+    completeness: dict | None,
+    warnings: list[str] | None,
+) -> tuple[bool, bool]:
+    """只依据策略执行元数据判断是否可回答，避免把非空文案当作事实状态。"""
+    completeness = completeness if isinstance(completeness, dict) else {}
+    level = str(completeness.get("level") or "")
+    has_real_data = completeness.get("has_real_data") is True
+    safety_fallback = any(
+        "未通过安全校验" in str(warning)
+        for warning in warnings or []
+    )
+    can_answer = has_real_data and not safety_fallback
+    partial_answer = can_answer and not level.startswith("full_policy")
+    return can_answer, partial_answer
+
+
+def _build_public_result(
+    *,
+    answer: str,
+    can_answer: bool,
+    partial_answer: bool,
+    policy_status: str,
+    policy_evidence: list[dict],
+    calculation_steps: list[dict],
+    definition: dict | None,
+    warnings: list[str],
+    case_context: dict | None,
+    is_overview: bool = False,
+) -> PolicyQAPublicResult:
+    """用字段白名单把内部执行结果重建为唯一公开回答契约。"""
+    safe_context = None
+    if isinstance(case_context, dict):
+        safe_context = {}
+        for key, value in case_context.items():
+            if key not in _PUBLIC_CONTEXT_FIELDS:
+                continue
+            if isinstance(value, str):
+                safe_context[key] = _public_text(value)
+            elif value is None or isinstance(value, (int, float, bool)):
+                safe_context[key] = value
+        safe_context = safe_context or None
+
+    safe_steps: list[dict[str, str]] = []
+    calculation_content_fields = frozenset({
+        "description", "formula", "result", "calculation", "note",
+    })
+    for step in calculation_steps or []:
+        if not isinstance(step, dict):
+            continue
+        safe_step: dict[str, str] = {}
+        has_meaningful_content = False
+        for key, value in step.items():
+            if key not in _PUBLIC_CALCULATION_FIELDS or value is None:
+                continue
+            sanitized = _sanitize_public_text(value)
+            safe_step[key] = sanitized.text
+            if key in calculation_content_fields and sanitized.is_publicly_meaningful:
+                has_meaningful_content = True
+        if safe_step and has_meaningful_content:
+            safe_steps.append(safe_step)
+
+    safe_definition = None
+    if isinstance(definition, dict):
+        safe_definition = {}
+        for key, value in definition.items():
+            if key not in _PUBLIC_DEFINITION_FIELDS:
+                continue
+            if isinstance(value, str):
+                safe_definition[key] = _public_text(value)
+            elif isinstance(value, list):
+                safe_definition[key] = [_public_text(item) for item in value if isinstance(item, str)]
+        safe_definition = safe_definition or None
+
+    safe_evidence: list[dict[str, str | float | None]] = []
+    citations: list[PolicyCitation] = []
+    seen_citations: set[tuple[str, str]] = set()
+    for evidence in policy_evidence or []:
+        if not isinstance(evidence, dict):
+            continue
+        raw_excerpt = (
+            evidence.get("excerpt")
+            or evidence.get("clause")
+            or evidence.get("clause_text")
+            or evidence.get("evidence_text")
+            or evidence.get("source_text")
+        )
+        raw_title = evidence.get("title") or evidence.get("policy_title") or "政策依据"
+        if (
+            _contains_internal_implementation(raw_excerpt)
+            or _contains_internal_implementation(raw_title)
+        ):
+            continue
+        excerpt = _public_text(raw_excerpt)
+        if not excerpt:
+            continue
+        title = _public_text(raw_title)
+        citation_key = (title, excerpt)
+        if citation_key in seen_citations:
+            continue
+        score = evidence.get("score")
+        try:
+            public_score = float(score) if score is not None and not isinstance(score, bool) else None
+        except (TypeError, ValueError):
+            public_score = None
+        if public_score is not None and not math.isfinite(public_score):
+            public_score = None
+        safe_evidence.append({"title": title, "excerpt": excerpt, "score": public_score})
+        citations.append(PolicyCitation(title=title, excerpt=excerpt))
+        seen_citations.add(citation_key)
+
+    answer_text = _sanitize_public_text(answer)
+    safe_answer = answer_text.text
+    has_meaningful_answer = answer_text.is_publicly_meaningful
+    has_real_amount = bool(safe_context) and any(
+        key in safe_context
+        and isinstance(safe_context[key], (int, float))
+        and not isinstance(safe_context[key], bool)
+        for key in _PUBLIC_AMOUNT_FIELDS
+    )
+    calculation_checked = bool(safe_steps)
+    policy_count = len(safe_evidence)
+    if is_overview and has_meaningful_answer and can_answer and has_real_amount:
+        answer_status = "complete"
+    elif (
+        has_meaningful_answer
+        and can_answer
+        and has_real_amount
+        and calculation_checked
+        and policy_status == "full_policy_matched"
+        and policy_count > 0
+    ):
+        answer_status = "complete"
+    elif has_meaningful_answer and (partial_answer or (can_answer and has_real_amount)):
+        answer_status = "partial"
+    else:
+        answer_status = "unavailable"
+        safe_answer = safe_answer or "当前信息不足，无法可靠回答该问题。"
+
+    uncertainties: list[str] = []
+    if not has_meaningful_answer:
+        uncertainties.append("公开回答未包含可核验的业务内容。")
+    if is_overview:
+        uncertainties.append("费用总览不涉及单项政策匹配或单项计算过程核验。")
+    elif not citations:
+        uncertainties.append("未检索到可展示的政策依据。")
+    if answer_status == "partial":
+        uncertainties.append("政策依据不完整，当前回答仅供核对真实结算金额。")
+    elif answer_status == "unavailable":
+        uncertainties.append("现有结算数据和政策依据不足以形成可靠结论。")
+
+    verification_messages = {
+        "complete": (
+            "真实结算金额已完成核对；费用总览不涉及单项政策或计算过程核验。"
+            if is_overview
+            else "结算金额、计算过程和政策依据已完成核对。"
+        ),
+        "partial": "已核对结算金额，但政策依据或计算过程仍不完整。",
+        "unavailable": "现有信息不足，未形成可靠核对结论。",
+    }
+    return PolicyQAPublicResult(
+        answer=safe_answer,
+        answer_status=answer_status,
+        case_context=safe_context,
+        calculation_steps=safe_steps,
+        definition=safe_definition,
+        warnings=[_public_text(item) for item in warnings or [] if str(item or "").strip()],
+        policy_evidence=safe_evidence,
+        citations=citations,
+        uncertainties=uncertainties,
+        verification_summary=VerificationSummary(
+            settlement_checked=has_real_amount,
+            calculation_checked=calculation_checked,
+            policy_count=policy_count,
+            message=verification_messages[answer_status],
+        ),
+    )
 
 
 async def _policy_qa_stream(
@@ -153,30 +533,16 @@ async def _policy_qa_stream(
         # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
         # 旧编排器（PolicyQAOrchestrator）已退役：政策检索/计算/回答统一走 skill 策略引擎。
         provider = create_settlement_data_provider()
-        model_gateway = None
-        try:
-            model_gateway = ModelGateway()
-        except Exception as e:
-            logger.warning(f'Model gateway init failed: {e}')
-        explanation_generator = ExplanationGenerator(model_gateway=model_gateway)
-
         # 处理请求并 yield SSE 事件（Skill 驱动：五步流程）
-        step_count = 0
         public_steps: list[dict] = []          # 累积公开步骤
-        result_patient_view = ""               # 最终结果：患者视角
-        result_office_view = ""                # 最终结果：院端视角
+        result_answer = ""                     # 最终公开回答
         result_policy_evidence: list[dict] = [] # 最终结果：政策依据（RAG）
-        result_settlement_evidence: list[dict] = []  # 最终结果：结算数据溯源证据
-        result_calculation_steps: list[dict] = []    # 最终结果：分段计算步骤
         import asyncio
 
         # v2 trace result tracking
-        trace_run_id: str = ""
+        trace_run_id: str = workflow_id
         trace_can_answer: bool = False
         trace_partial_answer: bool = False
-        trace_can_answer_reason: str = ""
-        trace_events_list: list[dict] = []
-        trace_selected_skill_id: str = ""
 
         _loop = asyncio.get_event_loop()
 
@@ -184,9 +550,8 @@ async def _policy_qa_stream(
             step_name: str,
             status: str,
             public_message: str = "",
-            step_number: int = 0,
         ) -> AsyncGenerator[str, None]:
-            """发送 step + trace_event（前端执行链路展示）。"""
+            """发送公开步骤事件；内部执行轨迹仅保留在服务端。"""
             step_evt: dict[str, Any] = {"step": step_name, "status": status}
             if public_message:
                 step_evt["public_message"] = public_message
@@ -194,23 +559,16 @@ async def _policy_qa_stream(
             accumulated_steps.append(step_evt)
             yield _sse_event("step", _sanitize(step_evt))
             await asyncio.sleep(0)
-            yield _sse_event("trace_event", _sanitize({
-                "step_id": step_name,
-                "step_name": step_name,
-                "step_number": step_number,
-                "status": status,
-            }))
-            await asyncio.sleep(0)
 
         # ═══ Step 1: intent_detection（统一解释模式识别，C 方案）═══
         # overview（费用构成总览）/ single_item（单项），消除「默认 pooling_self_pay」有毒默认
         _explanation_mode, _detected_fee_item = detect_explanation_mode(request.question or "")
         _is_overview = _explanation_mode == ExplanationMode.OVERVIEW
         target_fee_item = _detected_fee_item or "pooling_self_pay"
-        async for _ev in _yield_step("intent_detection", "running", "识别问题意图…", 1):
+        async for _ev in _yield_step("intent_detection", "running", "识别问题意图…"):
             yield _ev
         _intent_label = "费用构成总览" if _is_overview else f"{fee_item_label(target_fee_item)}费用解释"
-        async for _ev in _yield_step("intent_detection", "done", f"识别为「{_intent_label}」", 1):
+        async for _ev in _yield_step("intent_detection", "done", f"识别为「{_intent_label}」"):
             yield _ev
 
         # ═══ Step 2: skill_routing（SkillRouter 路由到技能）═══
@@ -218,14 +576,13 @@ async def _policy_qa_stream(
         assembler = get_assembler(skill_id)
         if assembler is None:
             raise RuntimeError(f"Skill '{skill_id}' 未加载")
-        trace_selected_skill_id = skill_id
-        async for _ev in _yield_step("skill_routing", "running", "匹配技能…", 2):
+        async for _ev in _yield_step("skill_routing", "running", "匹配技能…"):
             yield _ev
-        async for _ev in _yield_step("skill_routing", "done", f"匹配技能: {skill_id}", 2):
+        async for _ev in _yield_step("skill_routing", "done", "已匹配费用解释技能"):
             yield _ev
 
         # ═══ Step 3: settlement_query（真实结算数据）═══
-        async for _ev in _yield_step("settlement_query", "running", "查询真实结算数据…", 3):
+        async for _ev in _yield_step("settlement_query", "running", "查询真实结算数据…"):
             yield _ev
         settlement_context = await provider.get_settlement_context(request.settlement_id)
         for _evt_type, _evt_payload in runtime_bridge.record_step(
@@ -239,13 +596,14 @@ async def _policy_qa_stream(
             },
             settlement_id=request.settlement_id,
         ):
-            yield _sse_event(_evt_type, _sanitize(_evt_payload))
-            await asyncio.sleep(0)
-        async for _ev in _yield_step("settlement_query", "done", "结算数据获取完成", 3):
+            if _evt_type == "memory_update":
+                yield _sse_event(_evt_type, _sanitize(_evt_payload))
+                await asyncio.sleep(0)
+        async for _ev in _yield_step("settlement_query", "done", "结算数据获取完成"):
             yield _ev
 
         # ═══ Step 4: policy_rule_search（skill 查询计划 + 结构化检索）═══
-        async for _ev in _yield_step("policy_rule_search", "running", "检索政策规则…", 4):
+        async for _ev in _yield_step("policy_rule_search", "running", "检索政策规则…"):
             yield _ev
         policy_evidence: list[dict] = []
         policy_status = "no_policy_matched"
@@ -292,33 +650,29 @@ async def _policy_qa_stream(
                 step="policy_rule_search",
                 detail={"rules_count": len(policy_evidence), "policy_filters": []},
             ):
-                yield _sse_event(_evt_type, _sanitize(_evt_payload))
-                await asyncio.sleep(0)
+                if _evt_type == "memory_update":
+                    yield _sse_event(_evt_type, _sanitize(_evt_payload))
+                    await asyncio.sleep(0)
         async for _ev in _yield_step(
             "policy_rule_search", "done",
             f"检索到 {len(policy_evidence)} 条政策规则" if policy_evidence else "未检索到匹配的政策规则",
-            4,
         ):
             yield _ev
 
         # ═══ Step 5: skill_execution（skill 策略引擎执行 / overview 总览生成）═══
         _exec_msg = "生成费用构成总览…" if _is_overview else "生成费用解释…"
-        async for _ev in _yield_step("skill_execution", "running", _exec_msg, 5):
+        async for _ev in _yield_step("skill_execution", "running", _exec_msg):
             yield _ev
         # overview → 费用构成总表（纯数据，不检索单项政策）；single_item → assembler 单项解释
         overview_payload: dict | None = None
-        result_patient_view = ""
-        result_office_view = ""
-        trace_can_answer_reason = ""
+        result_answer = ""
         _single_skill_result = None
         if _is_overview:
             overview_payload = await _loop.run_in_executor(
                 None,
                 lambda: _build_overview_payload(settlement_context, request.question, skill_id, assembler),
             )
-            result_patient_view = overview_payload["patient_answer"]
-            result_office_view = overview_payload["office_answer"]
-            trace_can_answer_reason = overview_payload["policy_warning"]
+            result_answer = overview_payload["answer"]
         else:
             _single_skill_result = await _loop.run_in_executor(
                 None,
@@ -329,22 +683,20 @@ async def _policy_qa_stream(
                     target_fee_item=target_fee_item,
                 ),
             )
-            result_patient_view = _single_skill_result.patient_answer or ""
-            result_office_view = _single_skill_result.office_answer or ""
-            trace_can_answer_reason = _single_skill_result.policy_status_message
+            result_answer = _single_skill_result.answer or ""
         for _evt_type, _evt_payload in runtime_bridge.record_step(
             session_id=session_id, step="answer_assembly", detail={},
         ):
-            yield _sse_event(_evt_type, _sanitize(_evt_payload))
-            await asyncio.sleep(0)
+            if _evt_type == "memory_update":
+                yield _sse_event(_evt_type, _sanitize(_evt_payload))
+                await asyncio.sleep(0)
         _exec_done_msg = "费用构成总览生成完成" if _is_overview else "费用解释生成完成"
-        async for _ev in _yield_step("skill_execution", "done", _exec_done_msg, 5):
+        async for _ev in _yield_step("skill_execution", "done", _exec_done_msg):
             yield _ev
 
         # ── 结果捕获（供 result 事件组装）──
         result_policy_evidence = policy_evidence
-        result_settlement_evidence = []
-        trace_can_answer = bool(result_patient_view)
+        trace_can_answer = bool(result_answer)
         trace_partial_answer = False
 
         # single_item 的结构化计算依据（overview 模式留空）——此前被丢弃，
@@ -352,14 +704,17 @@ async def _policy_qa_stream(
         _calc_steps: list[dict] = []
         _definition: dict | None = None
         _warnings: list[str] = []
-        _completeness: dict | None = None
         _case_context: dict | None = None
         if _single_skill_result is not None:
+            policy_status = _single_skill_result.policy_status or policy_status
+            trace_can_answer, trace_partial_answer = _answerability_from_completeness(
+                _single_skill_result.explanation_completeness,
+                _single_skill_result.warnings,
+            )
             _trace = _single_skill_result.calculation_trace or {}
             _calc_steps = _trace.get("steps", []) if isinstance(_trace, dict) else []
             _definition = _single_skill_result.definition or None
             _warnings = _single_skill_result.warnings or []
-            _completeness = _single_skill_result.explanation_completeness or None
             _case_context = {
                 "person_type": getattr(settlement_context, "person_type", None),
                 "insurance_type": getattr(settlement_context, "insurance_type", None),
@@ -372,51 +727,35 @@ async def _policy_qa_stream(
                 "large_amount_self_pay": getattr(settlement_context, "large_amount_self_pay", None),
                 "personal_total_pay": getattr(settlement_context, "personal_total_pay", None),
             }
+        elif overview_payload is not None:
+            trace_can_answer = True
+            trace_partial_answer = False
+            _trace = overview_payload.get("calculation_trace") or {}
+            _calc_steps = _trace.get("steps", []) if isinstance(_trace, dict) else []
+            _definition = overview_payload.get("definition") or None
+            _warnings = overview_payload.get("warnings") or []
+            _case_context = overview_payload.get("case_context") or None
 
         # ── 所有步骤完成：发送合并结果 ──
         logger.info(f'[POLICY-QA] 处理完成，发送 result 事件（共 {len(public_steps)} 个步骤）')
 
-        # v2: 根据可回答性门控患者/院端视角
-        if trace_can_answer or trace_partial_answer:
-            result_views = {
-                "patient_view": result_patient_view,
-                "office_view": result_office_view,
-            }
-        else:
-            result_views = {
-                "patient_view": "",
-                "office_view": "",
-            }
-
-        consolidated_result = _sanitize({
-            "public_steps": public_steps,
-            "result": {
-                **result_views,
-                "policy_evidence": result_policy_evidence,
-                "settlement_evidence": result_settlement_evidence,
-                "calculation_steps": _calc_steps,
-                "definition": _definition,
-                "warnings": _warnings,
-                "explanation_completeness": _completeness,
-                "case_context": _case_context,
-                "can_answer": trace_can_answer,
-                "partial_answer": trace_partial_answer,
-                "can_answer_reason": trace_can_answer_reason,
-                "trace_events": trace_events_list,
-                "run_id": trace_run_id,
-                "selected_skill_id": trace_selected_skill_id,
-                # 回答来源（前端据此标注真实性）：llm（模型生成）/ dummy（降级模板）/ fallback
-                "answer_mode": getattr(explanation_generator, "mode", "fallback"),
-            },
-        })
-        # ── Runtime 增强：推理链与记忆计数附加到 result（在 _sanitize 之后，
-        #    避免 reasoning_* 键被防泄漏过滤；该数据为策划后的公开契约）──
-        runtime_extra = runtime_bridge.finalize_turn(
+        public_result = _build_public_result(
+            answer=result_answer,
+            can_answer=trace_can_answer,
+            partial_answer=trace_partial_answer,
+            policy_status=policy_status,
+            policy_evidence=result_policy_evidence,
+            calculation_steps=_calc_steps,
+            definition=_definition,
+            warnings=_warnings,
+            case_context=_case_context,
+            is_overview=_is_overview,
+        )
+        # Runtime 仍在服务端维护推理链与对话记忆，但不把内部推理快照并入公开结果。
+        runtime_bridge.finalize_turn(
             session_id=session_id, question=request.question,
         )
-        if runtime_extra and isinstance(consolidated_result.get("result"), dict):
-            consolidated_result["result"].update(runtime_extra)
-        yield _sse_event("result", consolidated_result)
+        yield _sse_event("result", {"result": public_result.model_dump(mode="json")})
 
         # ── 持久化：记录 task 并完成 workflow ──
         duration_ms = int((_time.time() - start_time) * 1000)
@@ -430,14 +769,10 @@ async def _policy_qa_stream(
                 settlement_id=request.settlement_id,
                 status="completed",
                 output_data={
-                    "can_answer": trace_can_answer,
-                    "partial_answer": trace_partial_answer,
-                    "patient_view": result_patient_view[:500] if result_patient_view else "",
-                    "office_view": result_office_view[:500] if result_office_view else "",
-                    "policy_evidence_count": len(result_policy_evidence),
-                    "steps_count": len(public_steps),
-                    "selected_skill_id": trace_selected_skill_id,
-                    "run_id": trace_run_id,
+                    "answer_excerpt": public_result.answer[:500],
+                    "answer_status": public_result.answer_status,
+                    "evidence_count": len(public_result.policy_evidence),
+                    "internal_run_id": trace_run_id,
                 },
                 duration_ms=duration_ms,
             )
@@ -445,7 +780,10 @@ async def _policy_qa_stream(
         except Exception as e:
             logger.warning(f"Failed to persist QA result: {e}")
 
-        yield _sse_event("done", {"can_answer": trace_can_answer})
+        yield _sse_event(
+            "done",
+            {"answer_status": public_result.answer_status, "success": True},
+        )
 
     except Exception as e:
         print(f'[POLICY-QA] 处理异常: {e}', flush=True)
@@ -470,8 +808,22 @@ async def _policy_qa_stream(
         except Exception as pe:
             logger.warning(f"Failed to persist error state: {pe}")
 
-        yield _sse_event("error", {"message": str(e)})
-        yield _sse_event("done", {})
+        error_code = "POLICY_QA_FAILED"
+        yield _sse_event(
+            "error",
+            {
+                "error_code": error_code,
+                "message": "政策问答处理失败，请稍后重试或联系医保办。",
+            },
+        )
+        yield _sse_event(
+            "done",
+            {
+                "answer_status": "unavailable",
+                "success": False,
+                "error_code": error_code,
+            },
+        )
 
 
 @router.post("/stream")
@@ -772,7 +1124,7 @@ def _build_overview_payload(context: Any, question: str, skill_id: str, assemble
 
     Returns:
         兼容 _process_single_settlement 返回结构的 dict，关键字段：
-        - patient_view / office_view: 总览文本（自然语言汇总 + 结构化字段）
+        - answer: 总览文本（自然语言汇总 + 结构化字段）
         - case_context / profile / output_groups: 结构化构成数据
         - target_fee_item="overview" / target_field="total_amount"
     """
@@ -786,7 +1138,7 @@ def _build_overview_payload(context: Any, question: str, skill_id: str, assemble
     large_self_pay = _fmt_money(context.large_amount_self_pay)
     personal_total = _fmt_money(context.personal_total_pay)
 
-    patient_view = (
+    answer = (
         f"本次住院总费用 {total} 元。\n\n"
         f"【医保支付】统筹基金支付 {pooling_payment} 元，大额基金支付 {large_payment} 元。\n"
         f"【个人承担】起付线 {deductible} 元、统筹自付 {pooling_self_pay} 元、"
@@ -794,16 +1146,6 @@ def _build_overview_payload(context: Any, question: str, skill_id: str, assemble
         f"如需了解某一项的详细计算，可以直接追问"
         f"（例如「统筹自付为什么是 {pooling_self_pay} 元」）。\n\n"
         f"本回答基于真实结算数据，仅供参考，不作为报销或结算依据。"
-    )
-
-    office_view = (
-        f"结算单 {context.settlement_id} 费用构成（来源：yb_zyfdxx / yb_dyxxzy）：\n"
-        f"- 总费用 {total}\n"
-        f"- 统筹支付 {pooling_payment} / 统筹自付 {pooling_self_pay}\n"
-        f"- 大额支付 {large_payment} / 大额自付 {large_self_pay}\n"
-        f"- 起付线 {deductible}\n"
-        f"- 个人总支付 {personal_total}\n"
-        f"参保：{context.person_type} / {context.insurance_type} / {context.service_type}"
     )
 
     return {
@@ -841,14 +1183,16 @@ def _build_overview_payload(context: Any, question: str, skill_id: str, assemble
         "policy_status": "no_policy_matched",
         "policy_warning": "费用构成总览不依赖单项政策规则；如需单项计算过程，请针对该单项提问。",
         "calculation_trace": {"method": "汇总真实结算字段", "steps": []},
-        "patient_answer": patient_view,
-        "office_answer": office_view,
+        "answer": answer,
         "ratio_explanation": {},
         "explanation_completeness": {
             "level": "real_data_only",
             "message": "总览基于真实结算字段汇总。",
             "has_real_data": True,
         },
+        "can_answer": True,
+        "partial_answer": False,
+        "is_overview": True,
         "warnings": [
             "本结果来自真实数据库查询。",
             "如需某一项的详细政策计算过程，请针对该单项提问。",
@@ -991,6 +1335,10 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
     output_groups = _display["output_groups"]
     display_config = _display["display_config"]
 
+    can_answer, partial_answer = _answerability_from_completeness(
+        skill_result.explanation_completeness,
+        skill_result.warnings,
+    )
     return {
         "question": question or f'{assembler._get_fee_label(target_fee_item)}为什么是{_fmt_money(assembler._get_fee_amount(context, target_fee_item))}？',
         "answer_type": "benefit_calculation_explanation",
@@ -1022,10 +1370,12 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
         "policy_status": skill_result.policy_status,
         "policy_warning": skill_result.policy_status_message,
         "calculation_trace": skill_result.calculation_trace,
-        "patient_answer": skill_result.patient_answer,
-        "office_answer": skill_result.office_answer,
+        "answer": skill_result.answer,
         "ratio_explanation": skill_result.ratio_explanation,
         "explanation_completeness": skill_result.explanation_completeness,
+        "can_answer": can_answer,
+        "partial_answer": partial_answer,
+        "is_overview": False,
         "warnings": skill_result.warnings,
         "mode": "single",
         "profile": profile,
@@ -1034,20 +1384,46 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
     }
 
 
-@router.get("/settlement-explanation")
+def _public_result_from_internal_payload(payload: dict) -> PolicyQAPublicResult:
+    """把 settlement explanation 内部载荷收敛为公开契约。"""
+    trace = payload.get("calculation_trace") or {}
+    steps = trace.get("steps", []) if isinstance(trace, dict) else []
+    answer = str(payload.get("answer") or "")
+    if "can_answer" in payload or "partial_answer" in payload:
+        can_answer = payload.get("can_answer") is True
+        partial_answer = payload.get("partial_answer") is True
+    else:
+        can_answer, partial_answer = _answerability_from_completeness(
+            payload.get("explanation_completeness"),
+            payload.get("warnings"),
+        )
+    return _build_public_result(
+        answer=answer,
+        can_answer=can_answer,
+        partial_answer=partial_answer,
+        policy_status=str(payload.get("policy_status") or "no_policy_matched"),
+        policy_evidence=payload.get("policy_evidence") or [],
+        calculation_steps=steps,
+        definition=payload.get("definition"),
+        warnings=payload.get("warnings") or [],
+        case_context=payload.get("case_context"),
+        is_overview=payload.get("is_overview") is True,
+    )
+
+
+@router.get("/settlement-explanation", response_model=PolicyQAPublicResult)
 async def get_settlement_explanation(
     settlement_id: str,
     question: str = "",
     compare_with: str = "",
-) -> dict:
+) -> PolicyQAPublicResult:
     """
     GET settlement explanation from REAL DATABASE.
 
     Query real SQL Server for settlement context using the existing
     settlement_context SQL.  Never uses mock data — errors propagate clearly.
 
-    When `compare_with` is provided, returns a comparison between two
-    settlement explanations side by side.
+    When `compare_with` is provided, returns one consolidated public answer.
 
     Args:
         settlement_id: 登记号 from the settlement system (required)
@@ -1055,18 +1431,7 @@ async def get_settlement_explanation(
         compare_with: 对比结算单号 — when provided, returns comparison mode
 
     Returns:
-        Structured explanation result with:
-          - data_source: always "REAL_DB"
-          - mock_used: always False
-          - query_trace: settlement_id, tables queried, SQL profile name
-          - case_context: all normalized settlement fields
-          - policy_evidence: (empty, for future RAG integration)
-          - calculation_trace: (empty, for future calculation steps)
-          - patient_answer / office_answer: (empty, for future LLM generation)
-          - warnings: data quality notes
-          When compare_with is set:
-          - mode: "compare"
-          - comparison: { primary: {...}, secondary: {...} }
+        PolicyQAPublicResult: 单一回答、公开证据和核验摘要。
 
     Raises:
         HTTPException 400: missing settlement_id or compare_with equals settlement_id
@@ -1074,40 +1439,93 @@ async def get_settlement_explanation(
         HTTPException 503: DB connection/query failure
     """
     if not settlement_id:
-        raise HTTPException(status_code=400, detail="settlement_id is required")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "POLICY_QA_INVALID_REQUEST",
+                "settlement_id 不能为空。",
+                {"operation": "settlement_explanation"},
+            ),
+        )
 
     if compare_with and compare_with == settlement_id:
         raise HTTPException(
             status_code=400,
-            detail="对比结算单号不能与主结算单号相同",
+            detail=error_detail(
+                "POLICY_QA_INVALID_COMPARISON",
+                "对比结算单号不能与主结算单号相同。",
+                {"operation": "settlement_explanation"},
+            ),
         )
 
     try:
         # ── Single settlement mode (original behavior) ──
         if not compare_with:
-            return await _process_single_settlement(settlement_id, question)
+            internal_payload = await _process_single_settlement(settlement_id, question)
+            return _public_result_from_internal_payload(internal_payload)
 
         # ── Comparison mode ──
         primary = await _process_single_settlement(settlement_id, question)
         secondary = await _process_single_settlement(compare_with, question)
-
-        return {
-            **primary,
-            "mode": "compare",
-            "comparison": {
-                "primary": primary,
-                "secondary": secondary,
-            },
+        primary_answer = str(primary.get("answer") or "")
+        secondary_answer = str(secondary.get("answer") or "")
+        policy_statuses = {primary.get("policy_status"), secondary.get("policy_status")}
+        if policy_statuses == {"full_policy_matched"}:
+            combined_policy_status = "full_policy_matched"
+        elif policy_statuses.intersection({"full_policy_matched", "partial_policy_matched"}):
+            combined_policy_status = "partial_policy_matched"
+        else:
+            combined_policy_status = "no_policy_matched"
+        combined = {
+            "answer": f"主结算：{primary_answer}\n\n对比结算：{secondary_answer}",
+            "policy_status": combined_policy_status,
+            "policy_evidence": (primary.get("policy_evidence") or [])
+            + (secondary.get("policy_evidence") or []),
+            "calculation_trace": primary.get("calculation_trace") or {},
+            "definition": primary.get("definition"),
+            "case_context": primary.get("case_context"),
+            "warnings": (primary.get("warnings") or [])
+            + (secondary.get("warnings") or [])
+            + ["对比结果已合并为单一公开回答。"],
+            "can_answer": primary.get("can_answer") is True
+            and secondary.get("can_answer") is True,
+            "partial_answer": primary.get("partial_answer") is True
+            or secondary.get("partial_answer") is True,
+            "is_overview": primary.get("is_overview") is True
+            and secondary.get("is_overview") is True,
         }
+        return _public_result_from_internal_payload(combined)
 
-    except SettlementNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except RuntimeError as e:
+    except SettlementNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "POLICY_QA_SETTLEMENT_NOT_FOUND",
+                "未找到对应的结算记录。",
+                {"operation": "settlement_explanation"},
+            ),
+        )
+    except RuntimeError:
         # Raised when DATA_SOURCE_MODE != "real_db"
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
+        logger.exception("Settlement explanation runtime failure")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_UNAVAILABLE",
+                "政策问答服务暂时不可用，请稍后重试。",
+                {"operation": "settlement_explanation"},
+            ),
+        )
+    except Exception:
         logger.exception("Settlement explanation query failed")
-        raise HTTPException(status_code=503, detail=f'真实数据库查询失败: {str(e)}')
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_UNAVAILABLE",
+                "政策问答服务暂时不可用，请稍后重试。",
+                {"operation": "settlement_explanation"},
+            ),
+        )
 
 
 # ── 问答历史端点 ──────────────────────────────────────────────

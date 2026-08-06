@@ -5,9 +5,8 @@ validate_skill_result.py — 输出校验脚本
 
 校验项：
 1. 禁止文本扫描 — 任何输出不得包含 forbidden_text 列表中的内容
-2. 必须文本检查 — 根据模式(模板/LLM)检查 patient_answer 是否包含关键内容
+2. 必须文本检查 — 根据模式(模板/LLM)检查 answer 是否包含关键内容
 3. LLM 输出检查 — 验证 LLM 模式下的结构完整性
-4. 金额一致性 — patient_answer 和 office_answer 中的金额引用必须一致
 
 规则来源: validators.yaml (技能目录下)
 """
@@ -33,15 +32,15 @@ def _load_validators() -> dict[str, Any]:
 
 _VALIDATORS = _load_validators()
 
-# 导出规则（保持兼容性）
+# 导出规则
 FORBIDDEN_TEXT: list[str] = _VALIDATORS.get("forbidden_text", [])
-REQUIRED_CONTAINS: list = _VALIDATORS.get("required_patient_answer_contains", [])
+REQUIRED_CONTAINS: list = _VALIDATORS.get("required_answer_contains", [])
 REQUIRED_CONTAINS_COMPLETE: list = _VALIDATORS.get(
-    "required_patient_answer_contains_when_complete", []
+    "required_answer_contains_when_complete", []
 )
 LLM_CHECKS: list = _VALIDATORS.get("llm_output_checks", [])
 
-# 兼容旧代码：导出纯文本列表（包含所有 required 文本，过滤 skip_for_llm 标记）
+# 导出纯文本列表（包含所有 required 文本，过滤 skip_for_llm 标记）
 REQUIRED_CONTAINS_POOLING_SELF_PAY: list[str] = [
     item["text"] if isinstance(item, dict) else item for item in REQUIRED_CONTAINS
 ]
@@ -63,6 +62,38 @@ class ValidationResult:
 
 
 # ── 内部工具 ──────────────────────────────────────────────────
+
+
+_ASCII_IDENTIFIER = re.compile(r"[A-Za-z0-9_]+")
+_ASCII_IDENTIFIER_CHARS = "A-Za-z0-9_"
+
+
+def _contains_forbidden(text: str, forbidden: str) -> bool:
+    """按内部标识符语义匹配禁止项，避免误伤合法英文子串。"""
+    normalized_text = text.casefold()
+    token = str(forbidden).casefold()
+    if not token:
+        return False
+
+    if token == "yb_":
+        pattern = rf"(?<![{_ASCII_IDENTIFIER_CHARS}])yb_[A-Za-z0-9_]+"
+        return re.search(pattern, normalized_text) is not None
+
+    if token.endswith(".") and _ASCII_IDENTIFIER.fullmatch(token[:-1]):
+        pattern = (
+            rf"(?<![{_ASCII_IDENTIFIER_CHARS}]){re.escape(token)}"
+            r"[A-Za-z0-9_]+"
+        )
+        return re.search(pattern, normalized_text) is not None
+
+    if _ASCII_IDENTIFIER.fullmatch(token):
+        pattern = (
+            rf"(?<![{_ASCII_IDENTIFIER_CHARS}]){re.escape(token)}"
+            rf"(?![{_ASCII_IDENTIFIER_CHARS}])"
+        )
+        return re.search(pattern, normalized_text) is not None
+
+    return token in normalized_text
 
 
 def _get_required(
@@ -102,17 +133,17 @@ def _get_required(
 # ── 校验函数 ──────────────────────────────────────────────────
 
 
-def validate_patient_answer(
-    patient_answer: str,
+def validate_answer(
+    answer: str,
     target_fee_item: str,
     is_complete: bool = False,
     skip_for_llm: bool = False,
 ) -> ValidationResult:
     """
-    校验患者视角输出。
+    校验单一答案输出。
 
     Args:
-        patient_answer: 患者视角文本
+        answer: 面向当前院端经办角色的单一答案
         target_fee_item: 目标费用项
         is_complete: 政策是否完整匹配
         skip_for_llm: 是否跳过 skip_for_llm 标记的规则（LLM 模式使用）
@@ -121,18 +152,23 @@ def validate_patient_answer(
         ValidationResult
     """
     result = ValidationResult()
+    answer_text = answer if isinstance(answer, str) else ""
+
+    if not answer_text.strip():
+        result.errors.append("答案不能为空")
+        result.passed = False
 
     # 1. 禁止文本扫描（无论模式都执行）
     for fb in FORBIDDEN_TEXT:
-        if fb and fb in patient_answer:
-            result.errors.append(f"患者视角包含禁止文本: {repr(fb)}")
+        if _contains_forbidden(answer_text, fb):
+            result.errors.append(f"答案包含禁止文本: {repr(fb)}")
             result.passed = False
 
     # 2. 必须文本检查
     required = _get_required(target_fee_item, is_complete, skip_for_llm)
     for req in required:
-        if req not in patient_answer:
-            result.warnings.append(f"患者视角缺少必须文本: {req}")
+        if req not in answer_text:
+            result.warnings.append(f"答案缺少必须文本: {req}")
 
     return result
 
@@ -153,7 +189,7 @@ def validate_llm_output(output: str) -> ValidationResult:
 
     # 1. 禁止文本扫描
     for fb in FORBIDDEN_TEXT:
-        if fb and fb in output:
+        if _contains_forbidden(output, fb):
             result.errors.append(f"LLM 输出包含禁止文本: {repr(fb)}")
             result.passed = False
 
@@ -177,7 +213,7 @@ def validate_llm_output(output: str) -> ValidationResult:
     return result
 
 
-# ── 兼容入口 ──────────────────────────────────────────────────
+# ── 完整输出入口 ──────────────────────────────────────────────
 
 
 def validate_skill_output(
@@ -188,7 +224,7 @@ def validate_skill_output(
     校验完整的 skill 输出。
 
     Args:
-        result: skill 输出字典（需含 patient_answer, office_answer, target_fee_item 等）
+        result: skill 输出字典（需含 answer、target_fee_item 等）
         skip_for_llm: 是否跳过 skip_for_llm 标记的规则
 
     Returns:
@@ -196,30 +232,19 @@ def validate_skill_output(
     """
     vr = ValidationResult()
 
-    patient_answer = str(result.get("patient_answer", ""))
-    office_answer = str(result.get("office_answer", ""))
+    answer = str(result.get("answer", ""))
     target_fee_item = str(result.get("target_fee_item", "pooling_self_pay"))
     completeness = result.get("evidence_completeness", {})
     is_complete = completeness.get("level") == "full_policy_ratio_matched"
 
-    # 校验患者视角
-    pr = validate_patient_answer(
-        patient_answer, target_fee_item, is_complete, skip_for_llm
+    # 校验单一答案
+    ar = validate_answer(
+        answer, target_fee_item, is_complete, skip_for_llm
     )
-    vr.warnings.extend(pr.warnings)
-    vr.errors.extend(pr.errors)
-    if not pr.passed:
+    vr.warnings.extend(ar.warnings)
+    vr.errors.extend(ar.errors)
+    if not ar.passed:
         vr.passed = False
-
-    # 校验医保办视角
-    for fb in FORBIDDEN_TEXT:
-        if fb and fb in office_answer:
-            vr.errors.append(f"医保办视角包含禁止文本: {repr(fb)}")
-            vr.passed = False
-
-    # 金额一致性检查
-    if "4,962.67" in patient_answer and "4,962.67" not in office_answer:
-        vr.warnings.append("患者和医保办视角金额不一致")
 
     return vr
 
@@ -230,8 +255,7 @@ if __name__ == "__main__":
     # 模拟 skill 输出（模板模式）
     mock_output = {
         "target_fee_item": "pooling_self_pay",
-        "patient_answer": "本次结算中，您的统筹自付为 4,962.67 元。三级医院...",
-        "office_answer": "统筹自付 4,962.67 元...",
+        "answer": "本次结算中，您的统筹自付为 4,962.67 元。三级医院...",
         "evidence_completeness": {"level": "full_policy_ratio_matched"},
     }
     vr = validate_skill_output(mock_output)

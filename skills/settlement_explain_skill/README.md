@@ -12,7 +12,7 @@ result = assembler.execute(
     question="我的统筹自付为什么这么多",
     settlement_id="1671213",
 )
-print(result.patient_answer)
+print(result.answer)
 ```
 
 ## 前置条件
@@ -25,7 +25,7 @@ print(result.patient_answer)
 
 ```
 settlement_explain_skill/
-├── SKILL.md                     ← 技能规范（14步执行流程）
+├── SKILL.md                     ← 技能规范（13步执行流程）
 ├── README.md                    ← 本文件
 ├── agents/openai.yaml           ← MCP 依赖声明
 ├── references/                  ← 参考文档
@@ -39,8 +39,7 @@ settlement_explain_skill/
 │   ├── trace_event.schema.json
 │   └── policy_evidence.schema.json
 ├── templates/                   ← 解释模板
-│   ├── patient_view.md
-│   ├── office_view.md
+│   ├── answer.md
 │   ├── cannot_answer.md
 │   └── partial_answer.md
 ├── scripts/                     ← 执行脚本

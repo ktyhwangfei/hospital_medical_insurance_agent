@@ -2,7 +2,7 @@
 BaseStrategy — 费用解释策略抽象基类。
 
 每个费用项（统筹自付、起付线、大额自付等）拥有独立的 Strategy 子类。
-Strategy 负责：definition、policy_queries、patient_answer、office_answer、
+Strategy 负责：definition、policy_queries、answer、
 calculation_trace、warnings、completeness。
 
 assembler.py 不再包含解释逻辑，仅做分发。
@@ -15,6 +15,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from skills.settlement_explain_skill.scripts.validate_skill_result import (
+    validate_answer,
+)
+
 # 延迟导入避免启动时依赖未就绪
 _MAKE_LLM_READABLE = None
 
@@ -23,8 +27,7 @@ _MAKE_LLM_READABLE = None
 class StrategyResult:
     """Strategy 执行的标准输出。"""
     definition: dict
-    patient_answer: str
-    office_answer: str
+    answer: str
     calculation_trace: dict
     policy_queries: list[Any]
     warnings: list[str]
@@ -69,17 +72,10 @@ class BaseFeeStrategy(ABC):
         ...
 
     @abstractmethod
-    def build_patient_answer(
+    def build_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
-        """生成患者视角解释。"""
-        ...
-
-    @abstractmethod
-    def build_office_answer(
-        self, ctx: Any, evidence: list[dict], policy_status: str
-    ) -> str:
-        """生成医保办视角解释。"""
+        """生成面向当前院端经办角色的单一解释。"""
         ...
 
     @abstractmethod
@@ -116,27 +112,72 @@ class BaseFeeStrategy(ABC):
         """
         # YAML 结构化查询（语义层动态查询路径已退役，统一走 YAML）
         policy_queries = self.build_policy_queries()
+        completeness = self.build_completeness(ctx, evidence)
+        warnings = self.build_warnings(ctx, policy_status)
+        answer = str(self.build_answer(ctx, evidence, policy_status) or "").strip()
+        validation = validate_answer(
+            answer,
+            target_fee_item=self.fee_item,
+            is_complete=str(completeness.get("level", "")).startswith(
+                "full_policy"
+            ),
+            skip_for_llm=True,
+        )
+        if not validation.passed:
+            answer = self._build_safe_answer()
+            warnings = [
+                *warnings,
+                "原始答案未通过安全校验，已返回安全降级解释。",
+            ]
 
         return StrategyResult(
             definition=self.build_definition(),
-            patient_answer=self.build_patient_answer(ctx, evidence, policy_status),
-            office_answer=self.build_office_answer(ctx, evidence, policy_status),
+            answer=answer,
             calculation_trace=self.build_calculation_trace(ctx, evidence),
             policy_queries=policy_queries,
-            warnings=self.build_warnings(ctx, policy_status),
-            completeness=self.build_completeness(ctx, evidence),
+            warnings=warnings,
+            completeness=completeness,
             target_fee_item=self.fee_item,
             target_field=self.fee_field,
         )
 
+    def _build_safe_answer(self) -> str:
+        fee_label = self.fee_label or "该费用项"
+        return (
+            f"当前无法提供可靠的{fee_label}解释。"
+            "请核对结算数据后重试，或联系医院医保办进一步确认。"
+        )
+
     @staticmethod
     def _fmt_money(value: Any) -> str:
-        if value is None or value == "" or (isinstance(value, (int, float)) and value == 0):
+        if value is None or value == "":
             return "未获取"
         try:
             return f"{float(value):,.2f}"
         except (ValueError, TypeError):
             return "未获取"
+
+    @staticmethod
+    def _has_real_field(ctx: Any, field_name: str) -> bool:
+        """字段已由当前上下文提供时，零金额仍属于真实结算数据。"""
+        if isinstance(ctx, dict):
+            if field_name not in ctx:
+                return False
+            value = ctx[field_name]
+            has_query_marker = "tables_queried" in ctx
+            tables_queried = ctx.get("tables_queried")
+        else:
+            if not hasattr(ctx, field_name):
+                return False
+            value = getattr(ctx, field_name)
+            has_query_marker = hasattr(ctx, "tables_queried")
+            tables_queried = getattr(ctx, "tables_queried", None)
+
+        if value is None or value == "":
+            return False
+        if has_query_marker and not tables_queried:
+            return False
+        return True
 
     @staticmethod
     def _clean_policy_excerpt(text: str) -> str:

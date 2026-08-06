@@ -6,7 +6,7 @@
 
 ### 禁止模板代码泄漏
 
-以下内容不得出现在 patient_answer 或 office_answer 中：
+以下内容不得出现在 `answer` 中：
 
 - `if t.` — Python 条件表达式
 - `else` — 模板分支代码
@@ -17,7 +17,7 @@
 - `rule_id` / `clause_id` — 内部 ID
 - `embedding_text` — 向量检索中间产物
 - `Milvus score` — 检索得分
-- `结构化政策规则库` — 内部数据源名（患者视角禁用）
+- `结构化政策规则库` — 内部数据源名
 
 ### 禁止模糊引用
 
@@ -57,5 +57,4 @@
 
 1. 扫描 forbidden_text 列表 — 任一命中则标记 validation.passed = false
 2. 检查 required_contains 列表 — 缺失则标记 warning
-3. 检查金额是否一致 — patient_answer 和 office_answer 的金额必须一致
-4. 检查溯源完整性 — trace_events 必须包含 14 个步骤
+3. 检查溯源完整性 — trace_events 必须覆盖完整执行链路

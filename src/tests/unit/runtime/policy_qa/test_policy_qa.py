@@ -14,6 +14,20 @@ os.environ["USE_MEMORY_STORAGE"] = "1"
 class TestPolicyQAModels:
     """测试policy_qa模型"""
 
+    def test_policy_qa_response_has_single_answer(self):
+        from src.runtime.policy_qa.models import PolicyQAResponse
+
+        response = PolicyQAResponse(
+            step="answer_generation",
+            status="done",
+            answer="已完成解释",
+            answer_status="complete",
+        )
+        assert response.answer == "已完成解释"
+        assert response.answer_status == "complete"
+        assert not hasattr(response, "patient_view")
+        assert not hasattr(response, "office_view")
+
     def test_policy_qa_intent_enum(self):
         """测试PolicyQAIntent枚举"""
         from src.runtime.policy_qa.models import PolicyQAIntent
@@ -512,6 +526,26 @@ class TestIntentDetector:
 class TestExplanationGenerator:
     """测试解释生成器"""
 
+    def test_safe_money_formats_zero_but_preserves_missing_values(self):
+        from src.runtime.policy_qa.explanation_generator import _safe_money
+
+        assert _safe_money(0) == "0.00"
+        assert _safe_money(0.0) == "0.00"
+        assert _safe_money(None) == "未获取"
+        assert _safe_money("") == "未获取"
+
+    def test_explanation_generator_returns_one_answer(self):
+        import asyncio
+
+        from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
+        from src.runtime.policy_qa.models import ExplanationContext
+
+        generator = ExplanationGenerator(model_gateway=None)
+        answer = asyncio.run(generator.generate_answer(ExplanationContext()))
+        assert isinstance(answer, str)
+        assert answer
+        assert not hasattr(generator, "generate_dual_views")
+
     def test_generator_import(self):
         """测试生成器是否可以导入"""
         try:
@@ -682,6 +716,130 @@ class TestExplanationGenerator:
 
 class TestPolicyQAOrchestrator:
     """测试政策问答编排器"""
+
+    def test_validate_output_rejects_deterministic_answer_without_source(self):
+        """普通业务词不能冒充政策来源。"""
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+
+        result = PolicyQAOrchestrator._validate_output(
+            "统筹支付金额为100元。",
+            [],
+        )
+
+        assert result["passed"] is False
+        assert result["answer_has_policy_reference"] is False
+
+    def test_validate_output_accepts_real_policy_source_or_uncertainty(self):
+        """真实政策证据或明确不确定性声明满足来源安全约束。"""
+        from src.runtime.policy_qa.models import PolicyRule
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+
+        with_source = PolicyQAOrchestrator._validate_output(
+            "本次金额为100元。",
+            [PolicyRule(source_text="根据本市医保办法第十条执行。")],
+        )
+        with_uncertainty = PolicyQAOrchestrator._validate_output(
+            "未检索到可核验的政策依据，无法可靠确认，请建议核对医保结算单。",
+            [],
+        )
+
+        assert with_source["passed"] is True
+        assert with_source["answer_has_policy_reference"] is True
+        assert with_uncertainty["passed"] is True
+        assert with_uncertainty["answer_has_uncertainty"] is True
+
+    def test_unsafe_generated_answer_is_not_yielded(self, monkeypatch):
+        """来源校验失败时，原始确定性答案不得对外发送。"""
+        import asyncio
+
+        import src.runtime.policy_qa.orchestrator as orchestrator_module
+        from src.runtime.policy_qa.models import (
+            PolicyQAIntent,
+            PolicyQAIntentResult,
+            PolicyQARequest,
+            SQLQueryResult,
+        )
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+
+        unsafe_answer = "本次统筹支付金额确定为100元。"
+
+        class FakeSQLFetcher:
+            async def fetch_all_tables(self, settlement_id):
+                return SQLQueryResult(
+                    yb_brdjxx={
+                        "fund_type": "城镇职工",
+                        "PER_TYPE": "退休",
+                        "yllb": "普通住院",
+                    },
+                    yb_dyxxnd={"fynd": "2025"},
+                    yb_dyxxzy={"bcqfje": 650.0, "bcybnje": 10000.0},
+                    yb_zyfdxx={
+                        "bdfyzje": 12000.0,
+                        "bdybnzje": 10000.0,
+                        "bdtczf": 100.0,
+                        "bdtczfje": 8000.0,
+                        "bddegwyzf": 50.0,
+                        "bddegwyzfje": 500.0,
+                        "bdgryf": 3500.0,
+                    },
+                )
+
+        class EmptySearchEngine:
+            def search(self, question, top_k=10, expr=None):
+                return []
+
+            def search_with_context(self, **kwargs):
+                return []
+
+        class UnsafeGenerator:
+            async def generate_answer(self, context):
+                return unsafe_answer
+
+        class FakeIntentDetector:
+            async def detect(self, question):
+                return PolicyQAIntentResult(
+                    intent=PolicyQAIntent.TREATMENT_DECOMPOSITION,
+                    settlement_id="",
+                    need_patient_data=True,
+                    query_type="统筹自付解释",
+                    target_fee_item="pooling_self_pay",
+                    target_fee_label="统筹自付",
+                    confidence=1.0,
+                )
+
+        orchestrator = PolicyQAOrchestrator(
+            model_gateway=None,
+            sql_fetcher=FakeSQLFetcher(),
+            search_engine=EmptySearchEngine(),
+            explanation_generator=UnsafeGenerator(),
+        )
+        orchestrator.intent_detector = FakeIntentDetector()
+        monkeypatch.setattr(
+            orchestrator_module,
+            "route_question",
+            lambda question: "settlement_explain_skill",
+        )
+
+        async def collect_events():
+            return [
+                event
+                async for event in orchestrator.process(
+                    PolicyQARequest(
+                        question="为什么我这次统筹自付这么多？",
+                        settlement_id="1671213",
+                    )
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        answer_events = [event for event in events if event.answer]
+        final_event = next(event for event in events if event.step == "trace_result")
+
+        assert answer_events
+        assert all(event.answer != unsafe_answer for event in answer_events)
+        assert all(event.answer_status == "unavailable" for event in answer_events)
+        assert "建议" in answer_events[0].answer
+        assert final_event.detail["status"] == "failed"
 
     def test_orchestrator_import(self):
         """测试编排器是否可以导入"""

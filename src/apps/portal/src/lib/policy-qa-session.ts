@@ -5,15 +5,20 @@
  *
  * 本模块只做纯数据处理，不依赖 React：
  * - 后端 SSE payload（snake_case）→ 前端 camelCase 类型转换（§6.3 跨层一致性）
- * - 会话记忆 / 推理链 / 锚点 的事件应用逻辑（可单测）
+ * - 会话记忆 / 锚点 的事件应用逻辑（可单测）
  * - @ 指令解析（@换结算 / @换患者 / @新会话）
  */
 
 import type { ChatMessage } from '@/components/chat/helpers'
+import type {
+  PolicyQACaseContext,
+  PolicyQAResult,
+  PolicyQAVerificationSummary,
+} from '@/lib/policy-qa-stream'
 
 // ── 前端会话级状态类型（camelCase，组件层只见这一套）──────────────
 
-/** 业务主体锚点（顶栏 SessionAnchorBar） */
+/** 业务主体锚点。 */
 export interface SessionAnchor {
   patientId: string | null
   patientName: string | null
@@ -27,7 +32,7 @@ export interface SessionAnchor {
   subjectChangeMsg: string | null
 }
 
-/** 会话记忆卡（左栏 MemoryPanel） */
+/** 会话记忆卡。 */
 export interface MemoryCard {
   memoryId: string
   type: string
@@ -56,44 +61,18 @@ export interface ContextNeedSnapshot {
   topic?: string | null
 }
 
-/** 推理链步骤（reasoning_step 事件 / result.reasoning_steps） */
-export interface ReasoningStep {
-  stepId: string
-  claim: string
-  kind: 'fact' | 'inference' | 'hypothesis' | 'verified' | string
-  dependsOn: string[]
-  confidence: number
-  citations: string[]
-  sourceMemoryIds: string[]
-}
-
-/** 扩展 ChatMessage（向后兼容：新增字段均可选） */
+/** Policy QA 对话仅持有安全公开结果；不保存院端视角或推理轨迹。 */
 export interface PolicyQAChatMessage extends ChatMessage {
-  /** 本轮推理链（reasoning_step 累积 + result.reasoning_steps 定稿） */
-  reasoning?: ReasoningStep[]
   /** 本轮上下文规划（仅 assistant 消息） */
   contextNeed?: ContextNeedSnapshot
-  /** 院端视角文本（result.office_view） */
-  officeView?: string
-  /** 单项解释的计算步骤（result.calculation_steps，single_item 模式） */
-  calculationSteps?: Array<{ step_name: string; description: string }>
-  /** 费用项定义（result.definition） */
-  definition?: { name: string; plain_text: string; excludes?: string[] }
-  /** 重要提醒（result.warnings） */
+  answerStatus?: PolicyQAResult['answerStatus']
+  citations?: PolicyQAResult['citations']
+  uncertainties?: string[]
+  verificationSummary?: PolicyQAVerificationSummary
+  calculationSteps?: PolicyQAResult['calculationSteps']
+  definition?: PolicyQAResult['definition']
   warnings?: string[]
-  /** 本次结算各指标真实值（result.case_context） */
-  caseContext?: {
-    person_type?: string | null
-    insurance_type?: string | null
-    service_type?: string | null
-    hospital_level?: string | null
-    deductible?: number | null
-    basic_pooling_payment?: number | null
-    basic_pooling_self_pay?: number | null
-    large_amount_payment?: number | null
-    large_amount_self_pay?: number | null
-    personal_total_pay?: number | null
-  }
+  caseContext?: PolicyQACaseContext
 }
 
 // ── 后端 SSE payload 类型（snake_case，与 runtime_bridge.py 对齐）──
@@ -125,22 +104,6 @@ export interface RawMemoryUpdate {
   memory?: RawMemoryCard
 }
 
-export interface RawReasoningStep {
-  step_id?: string
-  claim?: string
-  kind?: string
-  depends_on?: string[]
-  confidence?: number
-  citations?: string[]
-  source_memory_ids?: string[]
-}
-
-/** SSE 事件（保留后端原始事件名） */
-export interface PolicyQASseEvent {
-  event: string
-  data: unknown
-}
-
 // ── snake → camel 转换（§6.3：统一在 hook 层完成）────────────────
 
 export function toContextNeed(raw: RawContextNeed): ContextNeedSnapshot {
@@ -166,18 +129,6 @@ export function toMemoryCard(raw: RawMemoryCard): MemoryCard {
     snapshot: raw.snapshot,
     hitThisTurn: false,
     isNewThisTurn: true,
-  }
-}
-
-export function toReasoningStep(raw: RawReasoningStep): ReasoningStep {
-  return {
-    stepId: String(raw.step_id ?? ''),
-    claim: String(raw.claim ?? ''),
-    kind: String(raw.kind ?? 'fact'),
-    dependsOn: Array.isArray(raw.depends_on) ? raw.depends_on : [],
-    confidence: typeof raw.confidence === 'number' ? raw.confidence : 0,
-    citations: Array.isArray(raw.citations) ? raw.citations : [],
-    sourceMemoryIds: Array.isArray(raw.source_memory_ids) ? raw.source_memory_ids : [],
   }
 }
 
@@ -216,20 +167,6 @@ export function applyContextNeed(
 /** 新一轮开始时清除所有「本轮」标记 */
 export function resetTurnFlags(memories: MemoryCard[]): MemoryCard[] {
   return memories.map((m) => ({ ...m, hitThisTurn: false, isNewThisTurn: false }))
-}
-
-/**
- * 合并推理链：流式累积的 reasoning_step 与 result.reasoning_steps 定稿去重。
- * 定稿步骤优先（后端 finalize_turn 返回完整链）。
- */
-export function mergeReasoningSteps(
-  accumulated: ReasoningStep[],
-  finalSteps: ReasoningStep[],
-): ReasoningStep[] {
-  if (finalSteps.length === 0) return accumulated
-  const seen = new Set(finalSteps.map((s) => s.stepId))
-  const extra = accumulated.filter((s) => s.stepId && !seen.has(s.stepId))
-  return [...finalSteps, ...extra]
 }
 
 // ── @ 指令解析（§八：结算单号从必填降级）─────────────────────────
@@ -282,31 +219,5 @@ export function emptyAnchor(): SessionAnchor {
     topic: null,
     subjectChanged: false,
     subjectChangeMsg: null,
-  }
-}
-
-// ── SSE 解析（保留后端原始事件名；readSseStream 的 SseEventType 白名单
-//    不含 context_need 等 Runtime 事件，故此处自解析）────────────────
-
-/** 解析单个 SSE 块（event: + data: 行） */
-export function parseSseBlock(block: string): PolicyQASseEvent | null {
-  const lines = block.replace(/\r\n/g, '\n').split('\n')
-  let event = ''
-  const dataLines: string[] = []
-  for (const line of lines) {
-    if (!line || line.startsWith(':')) continue
-    if (line.startsWith('event:')) {
-      event = line.slice('event:'.length).trim()
-    } else if (line.startsWith('data:')) {
-      dataLines.push(line.slice('data:'.length).trimStart())
-    }
-  }
-  if (!event || dataLines.length === 0) return null
-  const raw = dataLines.join('\n').trim()
-  if (!raw) return { event, data: {} }
-  try {
-    return { event, data: JSON.parse(raw) as unknown }
-  } catch {
-    return null
   }
 }

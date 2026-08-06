@@ -5,7 +5,7 @@ Tests cover:
 - Each strategy's execute() method with proper evidence
 - Edge cases (no evidence, missing fields)
 - Registry loading and fallback behavior
-- All 7 abstract methods are implemented
+- All 6 abstract methods are implemented
 """
 
 import pytest
@@ -124,40 +124,263 @@ class TestRegistry:
         assert strategy.fee_label == "统筹自付"
         assert strategy.fee_field == "basic_pooling_self_pay"
 
-    def test_all_strategies_have_7_methods(self):
-        """Verify each strategy implements all 7 abstract methods."""
-        abstract_methods = [
+    def test_all_strategies_have_single_answer_contract(self):
+        """Verify each strategy exposes only the single-answer contract."""
+        required_methods = [
             "build_definition",
             "build_policy_queries",
-            "build_patient_answer",
-            "build_office_answer",
+            "build_answer",
             "build_calculation_trace",
             "build_warnings",
             "build_completeness",
         ]
         for name in list_strategies():
             strategy = get_strategy(name)
-            for method in abstract_methods:
-                assert hasattr(strategy, method), (
-                    f"{name} is missing method {method}"
-                )
-                assert callable(getattr(strategy, method)), (
-                    f"{name}.{method} is not callable"
-                )
+            for method in required_methods:
+                assert callable(getattr(strategy, method))
+            assert not hasattr(strategy, "build_patient_answer")
+            assert not hasattr(strategy, "build_office_answer")
 
-    def test_all_strategies_execute_smoke(self, settlement_context, mock_evidence):
-        """Smoke test: execute() does not crash for any strategy."""
+    def test_all_strategies_execute_with_one_answer(
+        self, settlement_context, mock_evidence
+    ):
+        """Verify every strategy returns exactly one answer field."""
         for name in list_strategies():
-            strategy = get_strategy(name)
-            result = strategy.execute(
-                settlement_context, mock_evidence, "policy_matched"
+            result = get_strategy(name).execute(
+                settlement_context,
+                mock_evidence,
+                "full_policy_matched",
             )
-            assert result.patient_answer, (
-                f"{name}: patient_answer should not be empty"
-            )
-            assert result.office_answer, (
-                f"{name}: office_answer should not be empty"
-            )
+            assert result.answer
+            assert not hasattr(result, "patient_answer")
+            assert not hasattr(result, "office_answer")
+
+
+def test_output_schema_requires_answer_only():
+    import json
+    from pathlib import Path
+
+    schema_path = Path(__file__).parents[1] / "schemas" / "output.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    required = set(schema["required"])
+    properties = set(schema["properties"])
+    assert "answer" in required
+    assert "patient_answer" not in required | properties
+    assert "office_answer" not in required | properties
+
+
+def test_output_schema_accepts_answer_and_rejects_legacy_fields():
+    import json
+    from pathlib import Path
+
+    from jsonschema import Draft202012Validator, ValidationError
+
+    schema_path = Path(__file__).parents[1] / "schemas" / "output.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema)
+    payload = {
+        "skill_id": "policy-fee-explanation",
+        "target_fee_item": "pooling_self_pay",
+        "target_field": "basic_pooling_self_pay",
+        "target_amount": 4962.67,
+        "data_source": "REAL_DB",
+        "mock_used": False,
+        "can_answer": True,
+        "partial_answer": False,
+        "case_context": {},
+        "policy_evidence": [],
+        "evidence_completeness": {},
+        "recalculation_completeness": {},
+        "answer": "本次结算的统筹自付金额已确认。",
+        "calculation_trace": {},
+        "ratio_explanation": {},
+        "explanation_completeness": {},
+        "definition": {},
+        "policy_status": "full_policy_matched",
+        "policy_status_message": "已匹配完整政策依据。",
+        "llm_readable_context": "当前结算上下文。",
+        "warnings": [],
+        "trace_events": [],
+        "validation": {"passed": True, "checks": []},
+    }
+
+    validator.validate(payload)
+    with pytest.raises(ValidationError):
+        validator.validate(
+            {
+                **payload,
+                "patient_answer": "旧患者答案",
+                "office_answer": "旧医保办答案",
+            }
+        )
+
+
+def test_prompt_requires_single_conclusion_only():
+    import yaml
+    from pathlib import Path
+
+    prompt_path = Path(__file__).parents[1] / "prompt_template.yaml"
+    prompt_config = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
+    prompt = prompt_config["system_prompt"] + prompt_config["user_prompt"]
+    assert "[CONCLUSION]" in prompt
+    assert "[OFFICE_NOTE]" not in prompt
+    assert "院端备注" not in prompt
+    assert "面向当前院端经办角色的单一自然语言解释" in prompt_config["user_prompt"]
+
+
+@pytest.mark.parametrize(
+    ("strategy_name", "amount_field"),
+    [
+        ("deductible", "deductible"),
+        ("pooling_self_pay", "basic_pooling_self_pay"),
+        ("pooling_payment", "basic_pooling_payment"),
+        ("large_amount_self_pay", "large_amount_self_pay"),
+        ("personal_total_pay", "personal_total_pay"),
+        ("out_of_scope", "out_of_scope"),
+    ],
+)
+def test_zero_amount_from_queried_context_is_real_data(
+    strategy_name, amount_field, mock_evidence
+):
+    context_values = {
+        "deductible": 0.0,
+        "basic_pooling_self_pay": 0.0,
+        "basic_pooling_payment": 0.0,
+        "large_amount_self_pay": 0.0,
+        "personal_total_pay": 0.0,
+        "out_of_scope": 0.0,
+        "tables_queried": ["yb_zyfdxx"],
+    }
+    context_values[amount_field] = 0.0
+    context = SimpleNamespace(**context_values)
+
+    completeness = get_strategy(strategy_name).build_completeness(
+        context,
+        mock_evidence,
+    )
+
+    assert completeness["has_real_data"] is True
+    assert completeness["level"] != "incomplete"
+
+
+def test_default_unqueried_settlement_context_is_not_real_data():
+    from src.runtime.policy_qa.settlement_data_provider import SettlementContext
+
+    completeness = get_strategy("pooling_self_pay").build_completeness(
+        SettlementContext(),
+        [],
+    )
+
+    assert completeness["has_real_data"] is False
+
+
+def test_zero_amount_formats_as_zero_not_missing():
+    assert get_strategy("pooling_self_pay")._fmt_money(0.0) == "0.00"
+
+
+def test_pooling_self_pay_missing_conclusion_uses_safe_fallback(
+    monkeypatch, settlement_context, mock_evidence
+):
+    from skills.settlement_explain_skill.output_parser import OutputParser
+
+    strategy = get_strategy("pooling_self_pay")
+    monkeypatch.setattr(
+        strategy,
+        "_generate_via_llm",
+        lambda *_args: OutputParser.parse("模型未返回结论标记"),
+    )
+
+    result = strategy.execute(
+        settlement_context, mock_evidence, "full_policy_matched"
+    )
+
+    assert result.answer.strip()
+    assert "统筹自付" in result.answer
+
+
+def test_all_strategies_filter_forbidden_tokens_from_evidence(settlement_context):
+    malicious_evidence = [
+        {
+            "source_text": "内部来源 yb_zyfdxx，规则编号 rule_id",
+            "applied_reason": "按 rule_id 命中内部字段 yb_zyfdxx",
+        }
+    ]
+
+    for name in list_strategies():
+        result = get_strategy(name).execute(
+            settlement_context,
+            malicious_evidence,
+            "partial_policy_matched",
+        )
+        assert result.answer.strip()
+        assert "yb_zyfdxx" not in result.answer
+        assert "rule_id" not in result.answer
+
+
+@pytest.mark.parametrize(
+    "internal_identifier",
+    [
+        "yb_brdjxx",
+        "bdtczf",
+        "basic_pooling_self_pay",
+        "RuLe_Id",
+        "SQL_PROFILE",
+        "tables_queried",
+        "Clause_ID",
+    ],
+)
+def test_strategy_filters_internal_identifiers_case_insensitively(
+    internal_identifier, settlement_context
+):
+    evidence = [
+        {
+            "source_text": f"内部实现标识{internal_identifier}字段",
+            "applied_reason": f"通过{internal_identifier}命中",
+        }
+    ]
+
+    result = get_strategy("deductible").execute(
+        settlement_context,
+        evidence,
+        "partial_policy_matched",
+    )
+
+    assert result.answer.strip()
+    assert internal_identifier.casefold() not in result.answer.casefold()
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Your deductible is 650 yuan.",
+        "We provide financial assistance.",
+        "Nonetheless, the result is confirmed.",
+    ],
+)
+def test_validator_and_strategy_allow_legal_english(
+    answer, monkeypatch, settlement_context
+):
+    from skills.settlement_explain_skill.scripts.validate_skill_result import (
+        validate_answer,
+    )
+
+    validation = validate_answer(
+        answer,
+        target_fee_item="deductible",
+        skip_for_llm=True,
+    )
+    assert validation.passed
+
+    strategy = get_strategy("deductible")
+    monkeypatch.setattr(strategy, "build_answer", lambda *_args: answer)
+    result = strategy.execute(
+        settlement_context,
+        [],
+        "no_policy_matched",
+    )
+
+    assert result.answer == answer
+    assert not any("安全降级" in warning for warning in result.warnings)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -169,25 +392,24 @@ class TestPoolingSelfPay:
     """Tests for PoolingSelfPayStrategy."""
 
     def test_execute(self, settlement_context, mock_evidence):
-        """Verify patient_answer contains amount and conclusion section."""
+        """Verify answer contains amount and conclusion section."""
         strategy = get_strategy("pooling_self_pay")
         result = strategy.execute(
             settlement_context, mock_evidence, "policy_matched"
         )
 
         # Structural checks: non-empty output
-        assert result.patient_answer
-        assert result.office_answer
+        assert result.answer
 
         # Correct fee item identification
         assert result.target_fee_item == "pooling_self_pay"
         assert result.target_field == "basic_pooling_self_pay"
 
         # Amount presence (flexible format)
-        assert "4962" in result.patient_answer or "4,962" in result.patient_answer
+        assert "4962" in result.answer or "4,962" in result.answer
 
         # Conclusion section — text after [CONCLUSION] marker; no longer includes header
-        assert len(result.patient_answer) > 20
+        assert len(result.answer) > 20
 
     def test_no_evidence(self, settlement_context):
         """Verify graceful handling when no policy evidence is available."""
@@ -197,13 +419,13 @@ class TestPoolingSelfPay:
         )
 
         # Structural check: non-empty output
-        assert result.patient_answer
+        assert result.answer
 
         # Amount presence (flexible format)
-        assert "4962" in result.patient_answer or "4,962" in result.patient_answer
+        assert "4962" in result.answer or "4,962" in result.answer
 
         # Should not contain ratio details without evidence
-        assert "85%" not in result.patient_answer
+        assert "85%" not in result.answer
         assert result.warnings
         assert result.completeness["level"] == "real_data_only"
 
@@ -234,14 +456,14 @@ class TestDeductible:
     """Tests for DeductibleStrategy."""
 
     def test_execute(self, settlement_context, mock_evidence):
-        """Verify patient_answer contains 起付线 with amount."""
+        """Verify answer contains 起付线 with amount."""
         strategy = get_strategy("deductible")
         result = strategy.execute(
             settlement_context, mock_evidence, "policy_matched"
         )
 
-        assert "起付线" in result.patient_answer
-        assert "650.00" in result.patient_answer
+        assert "起付线" in result.answer
+        assert "650.00" in result.answer
         assert result.target_fee_item == "deductible"
         assert result.target_field == "deductible"
 
@@ -283,19 +505,19 @@ class TestLargeAmountSelfPay:
     """Tests for LargeAmountSelfPayStrategy."""
 
     def test_execute(self, settlement_context, mock_evidence):
-        """Verify patient_answer contains 大额自付 with amount."""
+        """Verify answer contains 大额自付 with amount."""
         strategy = get_strategy("large_amount_self_pay")
         result = strategy.execute(
             settlement_context, mock_evidence, "policy_matched"
         )
 
-        assert "大额自付" in result.patient_answer
-        assert "1,500.00" in result.patient_answer
+        assert "大额自付" in result.answer
+        assert "1,500.00" in result.answer
         assert result.target_fee_item == "large_amount_self_pay"
         assert result.target_field == "large_amount_self_pay"
 
     def test_all_methods(self, settlement_context, mock_evidence):
-        """Call all 7 methods directly and verify non-empty results."""
+        """Call all 6 methods directly and verify non-empty results."""
         strategy = get_strategy("large_amount_self_pay")
 
         definition = strategy.build_definition()
@@ -305,15 +527,10 @@ class TestLargeAmountSelfPay:
         queries = strategy.build_policy_queries()
         assert isinstance(queries, list)
 
-        patient = strategy.build_patient_answer(
+        answer = strategy.build_answer(
             settlement_context, mock_evidence, "policy_matched"
         )
-        assert len(patient) > 50
-
-        office = strategy.build_office_answer(
-            settlement_context, mock_evidence, "policy_matched"
-        )
-        assert len(office) > 50
+        assert len(answer) > 50
 
         trace = strategy.build_calculation_trace(
             settlement_context, mock_evidence
@@ -339,8 +556,8 @@ class TestLargeAmountSelfPay:
             settlement_context, [], "no_policy_matched"
         )
 
-        assert "大额自付" in result.patient_answer
-        assert "1,500.00" in result.patient_answer
+        assert "大额自付" in result.answer
+        assert "1,500.00" in result.answer
         assert result.completeness["level"] == "real_data_only"
 
 
@@ -353,18 +570,18 @@ class TestPoolingPayment:
     """Tests for PoolingPaymentStrategy."""
 
     def test_execute(self, settlement_context, mock_evidence):
-        """Verify patient_answer contains 统筹支付 with amount and fund ratios."""
+        """Verify answer contains 统筹支付 with amount and fund ratios."""
         strategy = get_strategy("pooling_payment")
         result = strategy.execute(
             settlement_context, mock_evidence, "policy_matched"
         )
 
-        assert "统筹支付" in result.patient_answer
-        assert "35,000.00" in result.patient_answer
-        assert "85%" in result.patient_answer
-        assert "90%" in result.patient_answer
-        assert "95%" in result.patient_answer
-        assert "退休人员" in result.patient_answer
+        assert "统筹支付" in result.answer
+        assert "35,000.00" in result.answer
+        assert "85%" in result.answer
+        assert "90%" in result.answer
+        assert "95%" in result.answer
+        assert "退休人员" in result.answer
         assert result.target_fee_item == "pooling_payment"
         assert result.target_field == "basic_pooling_payment"
 
@@ -393,7 +610,7 @@ class TestPoolingPayment:
             settlement_context, mock_evidence, "policy_matched"
         )
 
-        answer = result.patient_answer
+        answer = result.answer
         # Should mention related fee items
         assert "起付线" in answer
         assert "统筹自付" in answer
@@ -409,15 +626,15 @@ class TestPersonalTotalPay:
     """Tests for PersonalTotalPayStrategy."""
 
     def test_execute(self, settlement_context, mock_evidence):
-        """Verify patient_answer contains 个人总支付 with amount and composition."""
+        """Verify answer contains 个人总支付 with amount and composition."""
         strategy = get_strategy("personal_total_pay")
         result = strategy.execute(
             settlement_context, mock_evidence, "policy_matched"
         )
 
-        assert "个人总支付" in result.patient_answer
-        assert "7,112.67" in result.patient_answer
-        assert "起付线" in result.patient_answer
+        assert "个人总支付" in result.answer
+        assert "7,112.67" in result.answer
+        assert "起付线" in result.answer
         assert result.target_fee_item == "personal_total_pay"
         assert result.target_field == "personal_total_pay"
 
@@ -428,7 +645,7 @@ class TestPersonalTotalPay:
             settlement_context, mock_evidence, "policy_matched"
         )
 
-        answer = result.patient_answer
+        answer = result.answer
         assert "650.00" in answer
         assert "4,962.67" in answer
         assert "1,500.00" in answer
@@ -475,10 +692,10 @@ class TestOutOfScope:
             settlement_context, mock_evidence, "policy_matched"
         )
 
-        assert "医保外费用" in result.patient_answer
+        assert "医保外费用" in result.answer
         assert result.target_fee_item == "out_of_scope"
         assert result.target_field == "out_of_scope"
-        assert len(result.patient_answer) > 50
+        assert len(result.answer) > 50
 
     def test_no_amount_field(self, ctx_no_out_of_scope):
         """Verify graceful handling when ctx has no out_of_scope field."""
@@ -487,9 +704,9 @@ class TestOutOfScope:
             ctx_no_out_of_scope, [], "no_policy_matched"
         )
 
-        assert "医保外费用" in result.patient_answer
+        assert "医保外费用" in result.answer
         # Should still produce concept-level explanation
-        assert len(result.patient_answer) > 50
+        assert len(result.answer) > 50
         assert result.completeness["level"] == "incomplete"
         assert result.completeness["has_real_data"] is False
 

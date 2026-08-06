@@ -6,7 +6,7 @@
 1. SQL 查询 via adapter (MCP类型)
 2. 政策检索 via adapter (KNOWLEDGE类型)
 3. 计算 via config.yaml 路由 (SKILL类型)
-4. 双视角解释生成 (患者视角 + 院端/医保办视角)
+4. 单答案解释生成
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def _load_calculators() -> dict:
 
 
 def _build_decomposition_from_dict(data: dict) -> "FeeDecompositionResult":
-    """从计算器返回的 dict 构建 FeeDecompositionResult（供 generate_dual_views 使用）。"""
+    """从计算器返回的 dict 构建 FeeDecompositionResult（供 generate_answer 使用）。"""
     treatment_data = data.get("treatment", {})
     treatment = TreatmentDecomposition(
         total_fee=TreatmentItem(value=float(treatment_data.get("total_fee", 0))),
@@ -343,87 +343,65 @@ class PolicyQAOrchestrator:
 
     @staticmethod
     def _validate_output(
-        patient_view: str,
-        office_view: str,
+        answer: str,
         policy_rules: list[Any],
     ) -> dict[str, Any]:
         """
-        输出校验（v2: 8项检查，区分 fatal error 和 warning）
-
-        检查:
-        1. no_mock_data: 输出不包含模拟数据标记
-        2. no_raw_json_in_patient_view: 患者视角不含原始 JSON
-        3. no_template_leak: 输出不含未替换模板变量
-        4. no_undefined_null_nan: 输出不含 undefined/null/NaN
-        5. patient_answer_has_policy_evidence: 患者视角引用了政策依据
-        6. office_answer_has_data_source: 院端视角引用了数据来源
-        7. policy_evidence_has_source_text: 政策规则有来源文本
-        8. trace_events_complete: 链路事件完整
+        校验单答案的禁止内容，以及政策引用或不确定性声明。
         """
         import re
-        errors: list[str] = []  # fatal errors
-        warnings_list: list[str] = []  # non-fatal warnings
-        fatal = False
+        errors: list[str] = []
+        warnings_list: list[str] = []
+        text = answer or ""
 
-        combined = (patient_view or "") + (office_view or "")
+        if not text.strip():
+            errors.append("答案为空")
 
-        # 1. 模拟数据标记 → fatal
+        # 禁止内容：模拟数据、原始 JSON、未替换模板和无效字面量。
         mock_indicators = ["模拟数据", "mock", "示例数据", "仅供演示"]
-        has_mock = any(i in combined for i in mock_indicators)
+        has_mock = any(i in text for i in mock_indicators)
         if has_mock:
             errors.append("输出包含模拟数据标记")
 
-        # 2. 原始 JSON 泄漏 → warning（可能只是代码块示例）
-        stripped = combined.strip()
+        stripped = text.strip()
         json_like_chars = sum(1 for c in stripped[:300] if c in ('"', "'", ":", ","))
-        if stripped.startswith("{") and json_like_chars > 25:
-            warnings_list.append("输出疑似包含原始 JSON 数据")
+        has_raw_json = stripped.startswith("{") and json_like_chars > 25
+        if has_raw_json:
+            errors.append("输出疑似包含原始 JSON 数据")
 
-        # 3. 模板变量泄漏 → warning
-        template_patterns = re.findall(r'\$\{[^}]+\}|{{[^}]+}}', combined)
+        template_patterns = re.findall(r'\$\{[^}]+\}|{{[^}]+}}', text)
         has_template_leak = len(template_patterns) > 0
         if has_template_leak:
-            warnings_list.append(f"输出包含 {len(template_patterns)} 个未替换模板变量")
+            errors.append(f"输出包含 {len(template_patterns)} 个未替换模板变量")
 
-        # 4. undefined/null/NaN → warning
-        undefined_patterns = re.findall(r'\b(undefined|null|NaN)\b', combined, re.IGNORECASE)
+        undefined_patterns = re.findall(r'\b(undefined|null|NaN)\b', text, re.IGNORECASE)
         has_undefined = len(undefined_patterns) > 0
         if has_undefined:
-            warnings_list.append(f"输出包含 undefined/null/NaN")
+            errors.append("输出包含 undefined/null/NaN")
 
-        # 5. 患者视角政策引用 → warning if missing
-        if patient_view and len(patient_view) > 20:
-            has_policy_ref = any(
-                kw in patient_view for kw in ["政策", "规定", "比例", "职工", "退休", "统筹", "支付"]
-            )
-            if not has_policy_ref:
-                warnings_list.append("患者视角未引用政策依据")
-
-        # 6. 院端视角数据来源 → warning if missing
-        if office_view and len(office_view) > 20:
-            has_data_ref = any(
-                kw in office_view for kw in ["结算", "数据", "字段", "yb_", "表", "金额"]
-            )
-            if not has_data_ref:
-                warnings_list.append("院端视角未引用数据来源")
-
-        # 7. 政策规则来源文本
         policy_evidence_used = len(policy_rules or []) > 0
-        if policy_evidence_used:
-            has_source = any(
-                getattr(r, 'source_text', '') or getattr(r, 'evidence_text', '')
-                for r in (policy_rules or [])
-            )
-            if not has_source:
-                warnings_list.append("政策规则缺少来源文本")
+        has_policy_reference = any(
+            getattr(rule, "source_text", "") or getattr(rule, "evidence_text", "")
+            for rule in (policy_rules or [])
+        )
+        uncertainty_keywords = [
+            "不确定性",
+            "未检索到",
+            "无法可靠确认",
+            "无法基于",
+            "建议核对",
+            "建议咨询",
+            "仅供参考，不作为",
+        ]
+        has_uncertainty = any(kw in text for kw in uncertainty_keywords)
+        if text and not (has_policy_reference or has_uncertainty):
+            errors.append("答案缺少可核验政策来源或明确不确定性声明")
 
-        # 8. trace_events 完整性（由调用方保证，此处做标记）
-        trace_events_complete = True
+        if policy_evidence_used and not has_policy_reference:
+            warnings_list.append("政策规则缺少来源文本")
 
-        # 汇总
         fatal = len(errors) > 0
-        passed = not fatal and len(warnings_list) == 0
-        all_warnings = errors + warnings_list
+        passed = not fatal
 
         return {
             "passed": passed,
@@ -435,10 +413,9 @@ class PolicyQAOrchestrator:
             "has_mock_data": has_mock,
             "has_template_leak": has_template_leak,
             "has_undefined": has_undefined,
-            "trace_events_complete": trace_events_complete,
-            "no_raw_json_in_patient_view": not (stripped.startswith("{") and json_like_chars > 25),
-            "patient_answer_has_policy_evidence": not (patient_view and len(patient_view) > 20 and not any(kw in patient_view for kw in ["政策", "规定", "比例", "职工", "退休", "统筹", "支付"])),
-            "office_answer_has_data_source": not (office_view and len(office_view) > 20 and not any(kw in office_view for kw in ["结算", "数据", "字段", "yb_", "表", "金额"])),
+            "no_raw_json": not has_raw_json,
+            "answer_has_policy_reference": has_policy_reference,
+            "answer_has_uncertainty": has_uncertainty,
         }
 
     # ── v2: TraceEvent 转换 ───────────────────────────────────────
@@ -484,8 +461,8 @@ class PolicyQAOrchestrator:
         skill_policy_rules: list[Any] = []
         route_config: dict[str, Any] = {}
         policy_filters: list[str] = []
-        patient_view: str = ""
-        office_view: str = ""
+        answer: str = ""
+        answer_status: str = "unavailable"
         answerability: AnswerabilityResult | None = None
         sub_flow: str = ""
 
@@ -578,7 +555,7 @@ class PolicyQAOrchestrator:
                         "结构化政策查询",
                         "证据完整性判断",
                         "可回答性判断",
-                        "双视角解释生成",
+                        "单答案解释生成",
                         "输出校验",
                     ],
                 },
@@ -806,15 +783,15 @@ class PolicyQAOrchestrator:
             )
 
             # ═══════════════════════════════════════════════════════════
-            # Step 7: answer_assembly（解释生成 — 受 answerability 门控）
+            # Step 7: answer_generation（解释生成 — 受 answerability 门控）
             # ═══════════════════════════════════════════════════════════
             should_generate = answerability.can_answer or answerability.partial_answer
 
             if should_generate:
-                _evt = builder.start("patient_view_generation", "解释生成")
+                _evt = builder.start("answer_generation", "答案生成")
                 yield PolicyQAResponse(
-                    step="answer_assembly", status="running",
-                    public_message="正在生成双视角解释（患者 + 院端）",
+                    step="answer_generation", status="running",
+                    public_message="正在生成政策解释",
                     trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
                 )
 
@@ -831,27 +808,21 @@ class PolicyQAOrchestrator:
                 # ★ 子流程路由：根据 target_field 选择不同的解释生成方式
                 target_field = intent_result.target_fee_item or ""
                 if target_field == "deductible":
-                    # 起付线子流程：基于真实结算数据的模板化解释
-                    patient_view = self._build_deductible_patient_view(
-                        sql_data, skill_policy_rules, intent_result
-                    )
-                    office_view = self._build_deductible_office_view(
+                    answer = self._build_deductible_answer(
                         sql_data, skill_policy_rules, intent_result
                     )
                 elif target_field == "large_amount_self_pay":
                     # 大额自付子流程（占位，后续可扩展）
-                    patient_view = self._build_generic_answer(
+                    answer = self._build_generic_answer(
                         sql_data, skill_policy_rules, intent_result, "large_amount_self_pay"
                     )
-                    office_view = patient_view
                 elif target_field == "personal_total_pay":
                     # 个人总支付子流程（占位，后续可扩展）
-                    patient_view = self._build_generic_answer(
+                    answer = self._build_generic_answer(
                         sql_data, skill_policy_rules, intent_result, "personal_total_pay"
                     )
-                    office_view = patient_view
                 else:
-                    # 默认：统筹自付等 → 使用 LLM 生成双视角解释
+                    # 默认：统筹自付等 → 使用 LLM 生成单一解释
                     explain_ctx = ExplanationContext(
                         question=request.question,
                         intent=intent_result,
@@ -863,47 +834,80 @@ class PolicyQAOrchestrator:
                         explain_ctx.decomposition = _build_decomposition_from_dict(calculation_result)
 
                     if self.explanation_generator:
-                        patient_view, office_view = await self.explanation_generator.generate_dual_views(explain_ctx)
+                        answer = await self.explanation_generator.generate_answer(explain_ctx)
                     else:
-                        patient_view = self._generate_placeholder_explanation(explain_ctx)
-                        office_view = patient_view
+                        answer = self._generate_placeholder_explanation(explain_ctx)
 
-                _evt = builder.done(
-                    detail="已生成患者视角和医保办视角",
-                    data={
-                        "views": ["patient", "office"],
-                        "patient_answer_ready": bool(patient_view),
-                        "office_answer_ready": bool(office_view),
-                        "patient_view_length": len(patient_view),
-                        "office_view_length": len(office_view),
-                    },
+                answer_status = (
+                    "unavailable"
+                    if answer.startswith("当前无法基于已有结算数据")
+                    else "complete"
                 )
-                yield PolicyQAResponse(
-                    step="answer_assembly", status="done",
-                    public_message="双视角解释生成完成（患者版 + 院端版）",
-                    patient_view=patient_view,
-                    office_view=office_view,
-                    trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "duration_ms": _evt.duration_ms, "detail": _evt.detail},
-                )
+
             else:
                 # 无法可靠回答：不生成猜测性内容，直接给出引导（用户咨询医保办/医保局）
-                _evt = builder.skip("patient_view_generation", "双视角解释生成", reason=answerability.reason)
-                unavailable_reply = (
-                    "当前无法基于已有结算数据给出准确、可靠的费用解释。\n\n"
-                    "为避免误导，本系统不生成猜测性回答。建议您：\n"
-                    "- 携带医保结算单前往医院医保办（收费窗口）咨询；\n"
-                    "- 或拨打当地医保局服务热线 / 咨询当地医保经办机构。\n\n"
-                    "本回答仅供参考，不作为报销或结算依据。"
+                answer = ExplanationGenerator._refusal_reply()
+
+            # 安全校验必须发生在任何携带 answer 的响应对外发送之前。
+            validation_result = self._validate_output(answer, skill_policy_rules)
+            if should_generate and validation_result["passed"] and answer_status == "complete":
+                _answer_evt = builder.done(
+                    detail="已生成政策解释",
+                    data={
+                        "answer_ready": True,
+                        "answer_length": len(answer),
+                        "answer_status": answer_status,
+                    },
                 )
-                yield PolicyQAResponse(
-                    step="answer_assembly", status="skipped",
-                    public_message=f"无法回答: {answerability.reason}",
-                    detail={"reason": answerability.reason, "can_answer": False, "missing_items": answerability.missing_items},
-                    public_detail={"summary": f"无法回答: {answerability.reason}", "can_answer": False},
-                    patient_view=unavailable_reply,
-                    office_view=unavailable_reply,
-                    trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": _evt.status, "detail": _evt.detail},
+                answer_event_status = "done"
+                answer_message = "政策解释生成完成"
+                answer_detail: dict[str, Any] = {}
+            elif should_generate:
+                if not validation_result["passed"]:
+                    answer = ExplanationGenerator._refusal_reply()
+                answer_status = "unavailable"
+                _answer_evt = builder.error(
+                    detail="答案因来源校验失败或不可用，已替换为安全提示"
                 )
+                answer_event_status = "skipped"
+                answer_message = "无法生成可核验的政策解释"
+                answer_detail = {
+                    "reason": "source_validation_failed",
+                    "can_answer": False,
+                    "validation_errors": validation_result["errors"],
+                }
+            else:
+                _answer_evt = builder.skip(
+                    "answer_generation", "答案生成", reason=answerability.reason
+                )
+                answer_event_status = "skipped"
+                answer_message = f"无法回答: {answerability.reason}"
+                answer_detail = {
+                    "reason": answerability.reason,
+                    "can_answer": False,
+                    "missing_items": answerability.missing_items,
+                }
+
+            yield PolicyQAResponse(
+                step="answer_generation",
+                status=answer_event_status,
+                public_message=answer_message,
+                detail=answer_detail,
+                public_detail={
+                    "summary": answer_message,
+                    "can_answer": answer_status == "complete",
+                },
+                answer=answer,
+                answer_status=answer_status,
+                trace_event={
+                    "step_id": _answer_evt.step_id,
+                    "step_name": _answer_evt.step_name,
+                    "step_number": _answer_evt.step_number,
+                    "status": _answer_evt.status,
+                    "duration_ms": _answer_evt.duration_ms,
+                    "detail": _answer_evt.detail,
+                },
+            )
 
             # ═══════════════════════════════════════════════════════════
             # Step 8: output_validation（输出校验）
@@ -915,13 +919,12 @@ class PolicyQAOrchestrator:
                 trace_event={"step_id": _evt.step_id, "step_name": _evt.step_name, "step_number": _evt.step_number, "status": "running"},
             )
 
-            validation_result = self._validate_output(patient_view, office_view, skill_policy_rules)
             has_warnings = len(validation_result.get("warnings", [])) > 0
 
             if not validation_result["passed"]:
                 # 存在致命错误 → failed
                 _evt = builder.error(
-                    detail=f"输出校验失败: {validation_result['warnings']}",
+                    detail=f"输出校验失败: {validation_result['errors']}",
                 )
                 output_status = "failed"
                 output_summary = "输出校验失败"
@@ -964,17 +967,22 @@ class PolicyQAOrchestrator:
             # Final: yield trace_result（完整链路结果）
             # ═══════════════════════════════════════════════════════════
             answerability = answerability or make_answerability(can_answer=False, reason="未执行可回答性判断")
+            answer_succeeded = answer_status == "complete" and validation_result["passed"]
             trace_events = self._convert_trace_events(builder.to_list())
             trace_response = PolicyQATraceResponse(
-                status=PolicyQARunStatus.SUCCESS.value,
-                can_answer=answerability.can_answer,
-                partial_answer=answerability.partial_answer,
+                status=(
+                    PolicyQARunStatus.SUCCESS.value
+                    if answer_succeeded
+                    else PolicyQARunStatus.FAILED.value
+                ),
+                can_answer=answerability.can_answer and answer_succeeded,
+                partial_answer=answerability.partial_answer and answer_succeeded,
                 selected_skill_id=skill_id or "",
                 trace_events=trace_events,
                 result={
-                    "patient_view": patient_view,
-                    "office_view": office_view,
-                } if should_generate else {},
+                    "answer": answer,
+                    "answer_status": answer_status,
+                },
             )
             yield PolicyQAResponse(
                 step="trace_result", status="done",
@@ -995,8 +1003,8 @@ class PolicyQAOrchestrator:
                     "partial_answer": trace_response.partial_answer,
                 },
                 public_message="问答完成" if trace_response.can_answer else "无法回答此问题",
-                patient_view=patient_view if should_generate else "",
-                office_view=office_view if should_generate else "",
+                answer=answer,
+                answer_status=answer_status,
             )
 
         except Exception as e:
@@ -1398,15 +1406,15 @@ class PolicyQAOrchestrator:
             "evidence_count": len(decomposition.evidence),
         }
 
-    # ── 起付线子流程：模板化双视角解释 ────────────────────────────
+    # ── 起付线子流程：模板化单答案解释 ────────────────────────────
 
-    def _build_deductible_patient_view(
+    def _build_deductible_answer(
         self,
         sql_data: Any,
         skill_policy_rules: list[Any],
         intent_result: PolicyQAIntentResult,
     ) -> str:
-        """生成起付线患者视角解释（基于真实结算数据 + 政策规则）"""
+        """生成起付线解释（基于真实结算数据 + 政策规则）。"""
         treatment = getattr(sql_data, 'treatment', {}) or {}
         patient_info = getattr(sql_data, 'patient_info', {}) or {}
         admission = getattr(sql_data, 'admission', {}) or {}
@@ -1479,79 +1487,6 @@ class PolicyQAOrchestrator:
 
         lines.append("")
         lines.append('> 起付线不同于统筹自付。起付线是进入统筹报销前的"门槛"，超过起付线后的合规费用才按比例报销。')
-
-        return "\n".join(lines)
-
-    def _build_deductible_office_view(
-        self,
-        sql_data: Any,
-        skill_policy_rules: list[Any],
-        intent_result: PolicyQAIntentResult,
-    ) -> str:
-        """生成起付线院端/医保办视角解释（数据溯源 + 政策匹配）"""
-        treatment = getattr(sql_data, 'treatment', {}) or {}
-        patient_info = getattr(sql_data, 'patient_info', {}) or {}
-        admission = getattr(sql_data, 'admission', {}) or {}
-
-        deductible_amount = treatment.get("deductible", 0)
-        pooling_self_pay = treatment.get("pooling_self_pay", 0)
-        fund_type = patient_info.get("fund_type", "")
-        person_type = patient_info.get("person_type", "")
-        medical_type = patient_info.get("medical_type", "")
-
-        lines = []
-        lines.append("## 起付线（院端视图）")
-        lines.append("")
-        lines.append("### 目标字段")
-        lines.append("- target_field: **deductible**")
-        lines.append("- 中文名称: **起付线**")
-        lines.append("")
-        lines.append("### 数据来源")
-        lines.append("- 数据源表: yb_dyxxzy（住院信息表）")
-        lines.append("- 数据源字段: bcqfje（本次起付金额）")
-        lines.append(f"- 金额: **{deductible_amount:,.2f}** 元")
-        lines.append("")
-        lines.append("### 患者上下文")
-        lines.append(f"- 险种: {fund_type}")
-        lines.append(f"- 人员类型: {person_type}")
-        lines.append(f"- 医疗类别: {medical_type}")
-        lines.append(f"- 医院级别: {admission.get('hosp_lv', '未获取')}")
-        lines.append("")
-        lines.append("### 关联数据")
-        lines.append(f"- 统筹自付: {pooling_self_pay:,.2f} 元（来源: yb_zyfdxx.bdtczf）")
-        if admission:
-            lines.append(f"- 住院天数: {admission.get('zyts', '未获取')} 天")
-            lines.append(f"- 出院科室: {admission.get('cyks', '未获取')}")
-        lines.append("")
-
-        # 匹配的政策规则
-        matched_rules = []
-        for r in (skill_policy_rules or []):
-            rule_type = getattr(r, 'rule_type', '') or ''
-            title = getattr(r, 'title', '') or ''
-            evidence = getattr(r, 'evidence_text', '') or ''
-            matched_reason = getattr(r, 'matched_reason', '') or ''
-            deductible_amt = getattr(r, 'deductible_amount', '') or ''
-            if '起付' in rule_type or deductible_amt:
-                matched_rules.append(f"  - {title or rule_type}（起付金额: {deductible_amt} 元）")
-                if evidence:
-                    matched_rules.append(f"    依据: {evidence[:150]}")
-                if matched_reason:
-                    matched_rules.append(f"    匹配: {matched_reason}")
-
-        if matched_rules:
-            lines.append("### 匹配的政策规则")
-            lines.extend(matched_rules)
-        elif skill_policy_rules:
-            lines.append("### 匹配的政策规则（通用）")
-            for r in skill_policy_rules[:5]:
-                lines.append(f"  - {getattr(r, 'title', '') or getattr(r, 'rule_type', '')}")
-
-        lines.append("")
-        lines.append("### 计算说明")
-        lines.append("起付线不由计算产生，而是由医保政策规定的固定标准。")
-        lines.append("起付线标准根据险种、人员类型、医院级别等因素确定，每年可能调整。")
-        lines.append("起付线金额直接从结算系统读取，无需复杂分段计算。")
 
         return "\n".join(lines)
 

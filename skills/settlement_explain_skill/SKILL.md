@@ -103,19 +103,14 @@ version: "2.0.0"
   - 无真实数据 → `can_answer = false`
 - 输出：can_answer, partial_answer
 
-### 11. 患者视角生成（Patient View Generation）
-- 模板：`templates/patient_view.md`
+### 11. 单一答案生成（Answer Generation）
+- 模板：`templates/answer.md`
 - 输入：SettlementContext + policy_evidence + extracted_ratios
-- 生成：患者可理解的自然语言解释，包含政策依据引用
+- 生成：面向当前院端经办角色的单一自然语言解释，包含政策依据引用
 - 如果 can_answer=false：使用 `templates/cannot_answer.md`
 - 如果 partial_answer：使用 `templates/partial_answer.md`
 
-### 12. 医保办视角生成（Office View Generation）
-- 模板：`templates/office_view.md`
-- 输入：SettlementContext + policy_evidence + extracted_ratios
-- 生成：专业口径的解释，包含字段来源、政策规则、比例推导
-
-### 13. 输出校验（Output Validation）
+### 12. 输出校验（Output Validation）
 - 脚本：`scripts/validate_skill_result.py`
 - 校验规则（来自 answer_quality_standard.md）：
   - 禁止模板代码泄漏（if t., undefined, null, NaN）
@@ -123,11 +118,11 @@ version: "2.0.0"
   - 必须包含政策依据引用
   - 必须说明金额与起付线/大额自付的区别
 
-### 14. 返回结果（Return Result）
+### 13. 返回结果（Return Result）
 - 格式：`schemas/output.schema.json`
 - 包含：skill_id, target_fee_item, target_field, data_source,
   can_answer, partial_answer, case_context, policy_evidence,
-  evidence_completeness, patient_answer, office_answer,
+  evidence_completeness, answer,
   warnings, trace_events, validation
 
 ## 输入 Schema
@@ -154,8 +149,7 @@ version: "2.0.0"
 | `policy_evidence` | array | 政策证据列表 |
 | `evidence_completeness` | object | 证据完整性 |
 | `recalculation_completeness` | object | 逐分段复算完整性 |
-| `patient_answer` | string | 患者视角解释 |
-| `office_answer` | string | 医保办视角解释 |
+| `answer` | string | 面向当前院端经办角色的单一自然语言解释 |
 | `warnings` | array | 警告信息 |
 | `trace_events` | array | 执行链路事件 |
 | `validation` | object | 校验结果 |
@@ -175,7 +169,7 @@ result = assembler.execute(
     question="我的统筹自付为什么这么多",
     settlement_id="1671213",
 )
-# result 包含 patient_answer, office_answer, policy_evidence, trace_events, ...
+# result 包含 answer、policy_evidence、trace_events 等字段
 ```
 
 ## 约束

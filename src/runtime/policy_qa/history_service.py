@@ -48,7 +48,7 @@ def _sanitize_task(task: dict[str, Any]) -> dict[str, Any]:
     }
 
     # 需要完整保留的字段（不截断）
-    _FULL_FIELDS = {"SQL语句", "SQL参数", "返回样例", "返回字段", "patient_view", "office_view"}
+    _FULL_FIELDS = {"SQL语句", "SQL参数", "返回样例", "返回字段", "answer"}
 
     def _smart_truncate(k: str, v: Any) -> Any:
         if k in _FULL_FIELDS:

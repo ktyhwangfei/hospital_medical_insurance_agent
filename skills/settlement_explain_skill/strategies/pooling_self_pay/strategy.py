@@ -1,7 +1,7 @@
 """
 PoolingSelfPayStrategy — 统筹自付解释策略。
 
-负责：统筹段分段比例、退休人员60%折算、统筹自付患者/医保办视角。
+负责：统筹段分段比例、退休人员60%折算、统筹自付单一答案。
 """
 
 from __future__ import annotations
@@ -10,12 +10,11 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ..base import BaseFeeStrategy, StrategyResult
+from ..base import BaseFeeStrategy
 from src.model_service.gateway import ModelGateway
 from src.model_service.models import Message
 from skills.settlement_explain_skill.fact_builder import FactBuilder
 from skills.settlement_explain_skill.output_parser import OutputParser, ParsedOutput
-from skills.settlement_explain_skill.scripts.validate_skill_result import validate_patient_answer
 
 class PoolingSelfPayStrategy(BaseFeeStrategy):
     """统筹自付解释策略。"""
@@ -55,21 +54,13 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
             ))
         return queries
 
-    # ── patient answer ─────────────────────────────────────────
+    # ── answer ─────────────────────────────────────────────────
 
-    def build_patient_answer(
+    def build_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
         # 不缓存：strategy 为单例，缓存会跨请求/跨结算单串答案（生产 bug）
         return self._generate_via_llm(ctx, evidence, policy_status).conclusion
-
-    # ── office answer ──────────────────────────────────────────
-
-    def build_office_answer(
-        self, ctx: Any, evidence: list[dict], policy_status: str
-    ) -> str:
-        # 不缓存：同上
-        return self._generate_via_llm(ctx, evidence, policy_status).office_note
 
     # ── LLM generation ─────────────────────────────────────────
 
@@ -83,7 +74,7 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
         Step 3: 加载 prompt_template.yaml 并注入事实 JSON
         Step 4: 调用 ModelGateway.generate()
         Step 5: 使用 OutputParser 解析 LLM 输出
-        Step 6: 使用 skip_for_llm=True 运行校验
+        Step 6: 由 BaseFeeStrategy.execute 的单一出口统一校验
 
         Returns:
             ParsedOutput (conclusion + office_note)
@@ -125,17 +116,7 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
         )
 
         # Step 5: 解析 LLM 输出
-        parsed = OutputParser.parse(response.content)
-
-        # Step 6: 校验（skip_for_llm=True 跳过模板特有检查）
-        validate_patient_answer(
-            parsed.conclusion,
-            target_fee_item=self.fee_item,
-            is_complete=segment_ratios.get("has_complete", False),
-            skip_for_llm=True,
-        )
-
-        return parsed
+        return OutputParser.parse(response.content)
 
     # ── dummy 调试模式降级 ─────────────────────────────────────
 
@@ -215,7 +196,7 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
 
     def build_completeness(self, ctx: Any, evidence: list[dict]) -> dict:
         seg = self._extract_segment_ratios(evidence)
-        has_data = bool(getattr(ctx, "basic_pooling_self_pay", 0))
+        has_data = self._has_real_field(ctx, "basic_pooling_self_pay")
         has_segs = seg.get("has_complete", False) or len(seg.get("employee", [])) >= 3
         has_retiree = seg.get("retiree") is not None
         if has_data and has_segs and has_retiree:

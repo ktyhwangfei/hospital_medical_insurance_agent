@@ -10,10 +10,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from collections.abc import AsyncGenerator
-from typing import Any
 
 from src.model_service.gateway import ModelGateway
 from src.model_service.models import Message
@@ -23,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 
 def _safe_money(value) -> str:
-    """安全格式化金额：null/0/空 → '未获取'。"""
-    if value is None or value == '' or (isinstance(value, (int, float)) and value == 0):
+    """安全格式化金额：null/空 → '未获取'。"""
+    if value is None or value == '':
         return '未获取'
     try:
         return f'{float(value):,.2f}'
@@ -64,66 +61,6 @@ EXPLANATION_PROMPTS = {
 - 介绍医保报销流程
 - 超出用户问题的解释""",
 
-    "收费员": """你是医保政策解释助手。面向医保办/收费员，专业精确。
-
-【铁律】
-1. 只回答用户问题，不要展开无关费用项。
-2. 展示结算字段来源、RAG政策依据、计算口径。
-3. 如果政策规则不足以精确还原计算结果，必须明确写"需继续追溯"，禁止编造公式。
-
-用户问题: {question}
-
-结算数据与政策依据:
-{decomposition_text}
-
-RAG政策依据:
-{policy_text}
-
-{RAG_MISS_NOTE}
-
-请按以下结构回答（共 3 个区块）:
-
-### 1. 结算字段
-列出与问题直接相关的结算字段（表名、字段名、值）。只列相关的，不超过 5 条。
-
-### 2. 政策依据
-逐条列出 RAG 命中的政策规则（条文编号 + 关键内容摘要）。
-
-### 3. 计算口径
-- 说明当前使用的计算方式
-- 如果分段规则完整：列出每段计算（金额 × 比例 × 系数 = 结果）
-- 如果分段规则不完整：写"当前命中 N 条规则，不足以精确还原。需继续追溯 [缺失的规则类型]。"
-- 如有对账差异：写明差异金额和可能原因
-
-禁止：
-- 介绍医保报销全流程
-- 展开与问题无关的费用项
-- 在规则不全时编造公式""",
-
-    # ★ 优化：合并双视角 prompt — 一次 LLM 调用生成两个视角
-    "dual": """你是医保政策解释助手。请同时生成两个视角的解释，用分隔符隔开。
-
-用户问题: {question}
-
-费用数据:
-{decomposition_text}
-
-政策依据:
-{policy_text}
-
-{RAG_MISS_NOTE}
-
-请严格按以下格式输出：
-
-===PATIENT===
-（面向患者的解释，简短通俗，3 段以内。直接回答金额和原因，不要介绍流程。）
-===PATIENT_END===
-
-===OFFICE===
-（面向医保办/收费员的解释，专业精确。包含结算字段来源、政策依据、计算口径。）
-===OFFICE_END===
-
-禁止在分隔符之外输出任何内容。""",
 }
 
 
@@ -135,12 +72,11 @@ class ExplanationGenerator:
     形成"金额→政策条文→计算过程"的因果解释链。
 
     【输出契约（P2 说明）】
-    - 唯一出口：orchestrator 的 answer_assembly 步骤通过 `generate_dual_views` 获取
-      (patient_view, office_view)，经 PolicyQAResponse 透出，routes 汇总进 result。
+    - 唯一出口：orchestrator 的 answer_generation 步骤通过 `generate_answer` 获取
+      单一 answer，经 PolicyQAResponse 透出。
     - 模式（mode 属性，供前端标注回答来源）：llm（真实模型）/ dummy（调试降级模板，
       基于真实结算数据）/ fallback（无网关占位）。
-    - 任何模式下输出必须是自然语言文本；模型输出结构化 JSON 时 `_parse_dual_response`
-      兜底回退占位模板（防止前端展示原始 JSON）。
+    - 任何模式下输出必须是自然语言文本；异常时兜底回退占位模板。
     """
 
     def __init__(self, model_gateway: ModelGateway | None = None):
@@ -148,7 +84,7 @@ class ExplanationGenerator:
         # 解释生成模式（供前端标注回答来源）：
         # - "llm"    ：接入真实 LLM，回答由模型生成（需人工核对）
         # - "dummy"  ：调试模式（MODEL_BASE_URL=dummy），固定 mock 不可用 →
-        #              统一降级为基于真实结算数据的模板解释（见 generate_dual_views）
+        #              统一降级为基于真实结算数据的模板解释（见 generate_answer）
         # - "fallback"：无模型网关，仅占位模板
         if model_gateway is None:
             self.mode = "fallback"
@@ -394,7 +330,7 @@ class ExplanationGenerator:
         生成占位符解释（根据用户问题生成个性化回答）
 
         核心改进: 基于实际分段计算结果和政策规则生成解释，
-        而不是硬编码文本。输出单视角自然语言（前端已移除双视角切换）。
+        而不是硬编码文本。输出单一自然语言答案。
         """
         if context.intent.target_fee_item == "pooling_self_pay":
             return self._generate_pooling_self_pay_placeholder(context)
@@ -589,29 +525,24 @@ class ExplanationGenerator:
                 return rule
         return None
 
-    async def generate_dual_views(
+    async def generate_answer(
         self,
         context: ExplanationContext,
-    ) -> tuple[str, str]:
-        """生成双视角解释 — ★ 一次 LLM 调用同时生成患者+院端两个视角。
+    ) -> str:
+        """生成单一政策解释答案。
 
         价值门控：当结算数据不足以给出可靠回答（金额缺失/为 0）时，
         不生成无价值解释，改为明确的「建议咨询医保办/当地医保局」引导回复。
-
-        Returns:
-            (patient_view, office_view)
         """
         # 价值门控：数据不足 → 直接引导咨询，不生成含糊回答
         if not self._has_valuable_data(context):
-            refusal = self._refusal_reply()
-            return refusal, refusal
+            return self._refusal_reply()
 
-        def _quality_gated(placeholder: str) -> tuple[str, str]:
+        def _quality_gated(candidate: str) -> str:
             """生成后质量检查：含"未获取/待定"等缺失标记 → 拒绝回答。"""
-            if self._text_has_missing_markers(placeholder):
-                refusal = self._refusal_reply()
-                return refusal, refusal
-            return placeholder, placeholder
+            if not candidate.strip() or self._text_has_missing_markers(candidate):
+                return self._refusal_reply()
+            return candidate
 
         if self.model_gateway is None:
             return _quality_gated(self._generate_placeholder(context))
@@ -633,7 +564,7 @@ class ExplanationGenerator:
                 "不要编造政策条文。"
             ) if context.rag_miss else ""
 
-            prompt = EXPLANATION_PROMPTS["dual"].format(
+            prompt = EXPLANATION_PROMPTS["患者"].format(
                 question=context.question,
                 decomposition_text=decomposition_text,
                 policy_text=policy_text,
@@ -645,11 +576,13 @@ class ExplanationGenerator:
                 scene="policy_qa",
             )
 
-            patient_view, office_view = self._parse_dual_response(result.content, context)
-            return patient_view, office_view
+            content = result.content.strip()
+            if content.startswith("{"):
+                return _quality_gated(self._generate_placeholder(context))
+            return _quality_gated(content)
 
-        except Exception as e:
-            logger.exception("Dual view generation failed, falling back to placeholder")
+        except Exception:
+            logger.exception("Answer generation failed, falling back to placeholder")
             return _quality_gated(self._generate_placeholder(context))
 
     # ── 回答价值门控 ─────────────────────────────────────────────
@@ -704,43 +637,3 @@ class ExplanationGenerator:
             "- 或拨打当地医保局服务热线 / 咨询当地医保经办机构。\n\n"
             "本回答仅供参考，不作为报销或结算依据。"
         )
-
-    def _parse_dual_response(self, content: str, context: ExplanationContext) -> tuple[str, str]:
-        """解析合并 prompt 的双视角输出。
-
-        若模型返回结构化 JSON（如调试 dummy 模式的遗留输出）而非自然语言，
-        则回退到基于结算数据的占位解释，避免前端展示原始 JSON。
-        """
-        import re
-
-        patient_view = ""
-        office_view = ""
-
-        patient_match = re.search(
-            r"===PATIENT===\s*\n(.*?)===PATIENT_END===",
-            content, re.DOTALL
-        )
-        if patient_match:
-            patient_view = patient_match.group(1).strip()
-
-        office_match = re.search(
-            r"===OFFICE===\s*\n(.*?)===OFFICE_END===",
-            content, re.DOTALL
-        )
-        if office_match:
-            office_view = office_match.group(1).strip()
-
-        if not patient_view:
-            # 防止模型输出结构化 JSON（rule_type/rule_name...）而非自然语言
-            try:
-                parsed = json.loads(content)
-                if isinstance(parsed, dict):
-                    placeholder = self._generate_placeholder(context)
-                    return placeholder, placeholder
-            except Exception:
-                pass
-            patient_view = content
-        if not office_view:
-            office_view = patient_view
-
-        return patient_view, office_view

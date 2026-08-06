@@ -17,23 +17,24 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   applyContextNeed,
   emptyAnchor,
-  mergeReasoningSteps,
   newSessionId,
-  parseSseBlock,
   resetTurnFlags,
   toContextNeed,
   toMemoryCard,
-  toReasoningStep,
   upsertMemory,
   type ContextNeedSnapshot,
   type MemoryCard,
   type PolicyQAChatMessage,
   type RawContextNeed,
   type RawMemoryUpdate,
-  type RawReasoningStep,
-  type ReasoningStep,
   type SessionAnchor,
 } from '@/lib/policy-qa-session'
+import {
+  parseSseBlock,
+  sanitizePublicPayload,
+  toPolicyQAResult,
+  type PolicyQAResult,
+} from '@/lib/policy-qa-stream'
 
 // ── 本轮执行步骤（对话流顶部的轻量 trace）─────────────────────────
 
@@ -71,6 +72,16 @@ export interface UsePolicyQAStreamReturn {
 
 const STREAM_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/stream'
 
+function isTurnStepStatus(value: unknown): value is PolicyQATurnStep['status'] {
+  return (
+    value === 'pending' ||
+    value === 'running' ||
+    value === 'done' ||
+    value === 'error' ||
+    value === 'streaming'
+  )
+}
+
 /** 更新最后一条 assistant 消息（本轮 in-flight 消息） */
 function updateLastAssistant(
   setMessages: React.Dispatch<React.SetStateAction<PolicyQAChatMessage[]>>,
@@ -86,6 +97,26 @@ function updateLastAssistant(
     }
     return prev
   })
+}
+
+function applyPublicResult(
+  msg: PolicyQAChatMessage,
+  result: PolicyQAResult,
+  contextNeed: ContextNeedSnapshot | null,
+): PolicyQAChatMessage {
+  return {
+    ...msg,
+    content: result.answer,
+    answerStatus: result.answerStatus,
+    contextNeed: contextNeed ?? undefined,
+    calculationSteps: result.calculationSteps,
+    definition: result.definition,
+    warnings: result.warnings,
+    caseContext: result.caseContext,
+    citations: result.citations,
+    uncertainties: result.uncertainties,
+    verificationSummary: result.verificationSummary,
+  }
 }
 
 export function usePolicyQAStream(): UsePolicyQAStreamReturn {
@@ -113,7 +144,12 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
 
   // ── SSE 事件分发（每个事件独立 try/catch，失败不阻塞主流程）────
   const dispatchEvent = useCallback(
-    (event: string, data: unknown, turnContextNeed: { current: ContextNeedSnapshot | null }) => {
+    (
+      event: string,
+      data: unknown,
+      turnContextNeed: { current: ContextNeedSnapshot | null },
+      turnResultReceived: { current: boolean },
+    ) => {
       try {
         switch (event) {
           case 'context_need': {
@@ -144,83 +180,25 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
             break
           }
           case 'reasoning_step': {
-            const step = toReasoningStep((data ?? {}) as RawReasoningStep)
-            if (step.stepId) {
-              updateLastAssistant(setMessages, (msg) => ({
-                ...msg,
-                reasoning: [...(msg.reasoning ?? []), step],
-              }))
-            }
+            // Policy QA 不向 UI 暴露或保存模型推理轨迹。
             break
           }
           case 'step': {
             const d = (data ?? {}) as Record<string, unknown>
-            const stepName = typeof d.step === 'string' ? d.step : ''
-            if (!stepName) break
-            const status = String(d.status ?? 'running') as PolicyQATurnStep['status']
             const publicMessage = typeof d.public_message === 'string' ? d.public_message : undefined
-            setSteps((prev) => {
-              const idx = prev.findIndex((s) => s.step === stepName)
-              if (idx >= 0) {
-                const next = [...prev]
-                next[idx] = { ...next[idx], status, publicMessage: publicMessage ?? next[idx].publicMessage }
-                return next
-              }
-              return [...prev, { step: stepName, status, publicMessage }]
-            })
-            // 流式文本 chunk 累积到当前 assistant 消息
-            if (typeof d.chunk === 'string' && d.chunk) {
-              updateLastAssistant(setMessages, (msg) => ({ ...msg, content: msg.content + d.chunk }))
-            }
+            if (!publicMessage) break
+            const status = isTurnStepStatus(d.status) ? d.status : 'running'
+            // 只保留当前公开进度文案，不保存内部步骤名或历史执行轨迹。
+            setSteps([{ step: 'progress', status, publicMessage }])
             break
           }
           case 'result': {
             const payload = (data ?? {}) as Record<string, unknown>
-            const result = (payload.result ?? payload) as Record<string, unknown>
-            const patientView = typeof result.patient_view === 'string' ? result.patient_view : ''
-            const officeView = typeof result.office_view === 'string' ? result.office_view : ''
-            const canAnswerReason =
-              typeof result.can_answer_reason === 'string' ? result.can_answer_reason : ''
-            const finalSteps = Array.isArray(result.reasoning_steps)
-              ? (result.reasoning_steps as RawReasoningStep[]).map(toReasoningStep)
-              : []
-            updateLastAssistant(setMessages, (msg) => {
-              const merged: ReasoningStep[] = mergeReasoningSteps(msg.reasoning ?? [], finalSteps)
-              // 无有效回答时的兜底：引导用户咨询医保办/当地医保局（不生成猜测内容）
-              const unavailableReply =
-                '当前无法基于已有结算数据给出准确、可靠的费用解释。\n\n' +
-                '为避免误导，本系统不生成猜测性回答。建议您携带医保结算单前往医院医保办（收费窗口）咨询，' +
-                '或拨打当地医保局服务热线咨询。\n\n本回答仅供参考，不作为报销或结算依据。'
-              return {
-                ...msg,
-                content:
-                  msg.content ||
-                  patientView ||
-                  officeView ||
-                  canAnswerReason ||
-                  unavailableReply,
-                reasoning: merged,
-                contextNeed: turnContextNeed.current ?? undefined,
-                calculationSteps: Array.isArray(result.calculation_steps)
-                  ? (result.calculation_steps as Array<{ step_name: string; description: string }>)
-                  : undefined,
-                definition: (result.definition ?? undefined) as
-                  | { name: string; plain_text: string; excludes?: string[] }
-                  | undefined,
-                warnings: Array.isArray(result.warnings)
-                  ? (result.warnings as string[])
-                  : undefined,
-                caseContext: (result.case_context ?? undefined) as {
-                  person_type?: string | null
-                  deductible?: number | null
-                  basic_pooling_payment?: number | null
-                  basic_pooling_self_pay?: number | null
-                  large_amount_payment?: number | null
-                  large_amount_self_pay?: number | null
-                  personal_total_pay?: number | null
-                } | undefined,
-              }
-            })
+            const result = toPolicyQAResult(payload.result)
+            turnResultReceived.current = true
+            updateLastAssistant(setMessages, (msg) =>
+              applyPublicResult(msg, result, turnContextNeed.current),
+            )
             break
           }
           case 'error': {
@@ -278,6 +256,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
       ])
 
       const turnContextNeed: { current: ContextNeedSnapshot | null } = { current: null }
+      const turnResultReceived = { current: false }
 
       try {
         const response = await fetch(STREAM_URL, {
@@ -311,7 +290,12 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
             for (const block of blocks) {
               const evt = parseSseBlock(block)
               if (evt) {
-                dispatchEvent(evt.event, evt.data, turnContextNeed)
+                dispatchEvent(
+                  evt.event,
+                  sanitizePublicPayload(evt.data),
+                  turnContextNeed,
+                  turnResultReceived,
+                )
                 // 出让微任务队列给 React 渲染（与 readSseStream 相同理由）
                 await new Promise<void>((resolve) => setTimeout(resolve, 0))
               }
@@ -319,7 +303,14 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
           }
           // 处理尾部残留
           const tail = parseSseBlock(buffer)
-          if (tail) dispatchEvent(tail.event, tail.data, turnContextNeed)
+          if (tail) {
+            dispatchEvent(
+              tail.event,
+              sanitizePublicPayload(tail.data),
+              turnContextNeed,
+              turnResultReceived,
+            )
+          }
         } finally {
           reader.releaseLock()
         }
@@ -335,6 +326,13 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
               `服务暂时不可用，请稍后重试。\n\n如持续异常，请联系医院信息科或携带结算单前往医保办咨询。\n\n本回答仅供参考，不作为报销或结算依据。`,
           }))
         }
+      }
+
+      if (!controller.signal.aborted && !turnResultReceived.current) {
+        const unavailable = toPolicyQAResult(undefined)
+        updateLastAssistant(setMessages, (msg) =>
+          applyPublicResult(msg, unavailable, turnContextNeed.current),
+        )
       }
 
       setIsStreaming(false)

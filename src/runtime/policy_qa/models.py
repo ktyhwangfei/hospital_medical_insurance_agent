@@ -207,8 +207,8 @@ class PolicyQAResponse:
     detail: 完整内部数据（含调试信息，用于下游计算）— 前端禁止渲染
     public_detail: 结构化公共数据（前端渲染用，可程序化消费）
     public_message: 人性化步骤描述字符串（优先展示）
-    patient_view: 患者视角解释文本
-    office_view: 院端视角解释文本
+    answer: 单一政策解释文本
+    answer_status: 回答状态（complete/unavailable）
     policy_cards: RAG 政策卡片列表，每项含 title/clause/evidence_text/matched_reason
     """
     step: str = ""
@@ -217,12 +217,10 @@ class PolicyQAResponse:
     public_detail: dict[str, Any] = field(default_factory=dict)
     chunk: str = ""
     error: str = ""
-    # ★ 新增字段
-    public_message: str = ""                           # 人性化步骤摘要
-    patient_view: str = ""                             # 患者视角最终解释
-    office_view: str = ""                              # 院端视角最终解释
+    public_message: str = ""
+    answer: str = ""
+    answer_status: str = "unavailable"
     policy_cards: list[dict[str, Any]] = field(default_factory=list)  # RAG 政策卡片
-    # ★ 当前步骤的 trace_event 数据
     trace_event: dict[str, Any] | None = None
 
 

@@ -1,7 +1,7 @@
 """
 PoolingPaymentStrategy — 统筹支付解释策略。
 
-负责：统筹基金支付比例解读、统筹支付定义、患者/医保办视角。
+负责：统筹基金支付比例解读、统筹支付定义、单一答案。
 统筹支付即基本医保统筹基金按政策比例为患者支付的金额。
 """
 
@@ -62,12 +62,12 @@ class PoolingPaymentStrategy(BaseFeeStrategy):
             )
         return queries
 
-    # ── patient answer ─────────────────────────────────────────
+    # ── answer ─────────────────────────────────────────────────
 
-    def build_patient_answer(
+    def build_answer(
         self, ctx: Any, evidence: list[dict], policy_status: str
     ) -> str:
-        cfg = self._load_yaml("patient_template.yaml")
+        cfg = self._load_yaml("answer_template.yaml")
         seg = self._extract_fund_ratios(evidence)
         emp = seg.get("employee", [])
         ret = seg.get("retiree")
@@ -265,45 +265,6 @@ class PoolingPaymentStrategy(BaseFeeStrategy):
 
         return "\n".join(lines)
 
-    # ── office answer ──────────────────────────────────────────
-
-    def build_office_answer(
-        self, ctx: Any, evidence: list[dict], policy_status: str
-    ) -> str:
-        target_amt = self._fmt_money(getattr(ctx, "basic_pooling_payment", 0))
-        deductible = self._fmt_money(getattr(ctx, "deductible", 0))
-        inner = self._fmt_money(getattr(ctx, "medical_insurance_inner_amount", 0))
-        pool_self = self._fmt_money(getattr(ctx, "basic_pooling_self_pay", 0))
-        large_pay = self._fmt_money(getattr(ctx, "large_amount_payment", 0))
-        large_self = self._fmt_money(getattr(ctx, "large_amount_self_pay", 0))
-        personal = self._fmt_money(getattr(ctx, "personal_total_pay", 0))
-
-        lines = [
-            f'本次解释对象为"{self.fee_label}"，金额为 {target_amt} 元。',
-            "",
-            "一、结算上下文",
-            f'- 参保体系：{getattr(ctx, "insurance_type", "") or "未获取"}',
-            f'- 人员类别：{getattr(ctx, "person_type", "") or "未获取"}',
-            f'- 医疗类别：{getattr(ctx, "service_type", "") or "未获取"}',
-            f'- 医院等级：{getattr(ctx, "hospital_level", "") or "未查询"}',
-            f"- 起付线：{deductible} 元",
-            f"- 医保内费用：{inner} 元",
-            f"- 基本统筹支付：{target_amt} 元",
-            f"- 基本统筹自付：{pool_self} 元",
-            f"- 大额支付：{large_pay} 元",
-            f"- 大额自付：{large_self} 元",
-            f"- 个人总支付：{personal} 元",
-            "",
-            "二、金额口径说明",
-            f"{target_amt} 元是结算系统根据起付线扣减、统筹段归集、"
-            "分段比例计算和封顶线控制后，写入基本统筹支付字段的结果。",
-            "统筹支付是统筹基金为患者支付的金额，不是患者个人出的钱。",
-            "统筹支付 = 医保内费用 - 起付线 - 统筹自付 - 大额自付"
-            "（进入大额段前），但该公式仅为口径关系，"
-            "实际由结算系统逐段计算生成。",
-        ]
-        return "\n".join(lines)
-
     # ── calculation trace ──────────────────────────────────────
 
     def build_calculation_trace(
@@ -395,7 +356,7 @@ class PoolingPaymentStrategy(BaseFeeStrategy):
         self, ctx: Any, evidence: list[dict]
     ) -> dict:
         seg = self._extract_fund_ratios(evidence)
-        has_data = bool(getattr(ctx, "basic_pooling_payment", 0))
+        has_data = self._has_real_field(ctx, "basic_pooling_payment")
         has_segs = seg.get("has_complete", False)
         if has_data and has_segs:
             level = "full_policy_ratio_matched"
