@@ -757,3 +757,176 @@ export interface QAHistoryResponse {
 }
 
 
+
+// ── Skill 草稿与生命周期（P7/P8）──────────────────────────────────
+
+export type SkillDraftStatus = 'editing' | 'validated' | 'materialized' | 'deleted'
+export type SkillDraftSourceType = 'template' | 'copy' | 'import'
+export type SkillLifecycleStatus = 'enabled' | 'disabled' | 'archived'
+
+export interface SkillBusinessMounting {
+  business_action: string
+  business_object: string
+  keywords?: string[]
+  excluded_intents?: string[]
+}
+
+export interface SkillInputSpec {
+  metric_code: string
+  alias?: string
+  required: boolean
+  purpose?: string
+}
+
+export interface SkillStructuredConfig {
+  description?: string
+  owner?: string
+  business_mounting: SkillBusinessMounting
+  inputs?: SkillInputSpec[]
+  input_schema?: Record<string, unknown>
+  output_schema?: Record<string, unknown>
+}
+
+export interface SkillDraftResponse {
+  draft_id: string
+  skill_id: string
+  skill_name: string
+  status: SkillDraftStatus
+  source_type: SkillDraftSourceType
+  structured_config: SkillStructuredConfig
+  raw_files?: Record<string, string>
+  validation_report?: { blocking: unknown[]; warnings: unknown[] }
+  validation_blocking_ok: boolean
+  revision: number
+  etag: string
+  created_at: string
+  updated_at: string
+  created_by: string
+}
+
+export interface SkillDraftListResponse {
+  items: SkillDraftResponse[]
+  total: number
+}
+
+export interface SkillDraftCreateRequest {
+  skill_id: string
+  skill_name: string
+  description?: string
+  owner?: string
+  business_action?: string
+  business_object?: string
+}
+
+export interface SkillDraftCopyRequest {
+  source_skill_id: string
+  new_skill_id: string
+}
+
+export interface SkillDraftSaveRequest {
+  structured_config: SkillStructuredConfig
+  expected_revision: number
+  etag?: string
+}
+
+export interface SkillValidationIssue {
+  field: string
+  code: string
+  message: string
+}
+
+export type SkillValidationSeverity = 'blocking' | 'warning'
+
+export interface SkillValidationResponse {
+  draft_id: string
+  report: {
+    blocking: SkillValidationIssue[]
+    warnings: SkillValidationIssue[]
+  }
+  blocking_ok: boolean
+}
+
+export interface SkillPackageFile {
+  path: string
+  content: string
+}
+
+export interface SkillPackagePreviewResponse {
+  draft_id: string
+  files: SkillPackageFile[]
+}
+
+export interface SkillMaterializeRequest {
+  draft_id: string
+  expected_revision: number
+  reason: string
+}
+
+export interface SkillMaterializeResponse {
+  skill_id: string
+  version_id: string
+  artifact_written: boolean
+  draft_revision: number
+}
+
+export interface SkillDefinitionResponse {
+  skill_id: string
+  skill_name: string
+  business_action: string
+  business_object: string
+  lifecycle_status: SkillLifecycleStatus
+  semantic_dependency_changed: boolean
+  current_version_id: string | null
+  revision: number
+  disabled_at: string | null
+  archived_at: string | null
+}
+
+export interface SkillLifecycleTransitionRequest {
+  expected_revision: number
+  reason: string
+}
+
+// ── 语义层输入指标（P4）──────────────────────────────────────────
+
+export interface SkillInputSelectorNode {
+  domain_code: string
+  domain_name: string
+  objects: {
+    object_code: string
+    object_name: string
+    source_type: string
+    metrics: {
+      metric_code: string
+      metric_name: string
+      definition: string
+      source_type: string
+      published: boolean
+      quality_score: number | null
+    }[]
+  }[]
+}
+
+export interface SkillInputSelectorResponse {
+  tree: SkillInputSelectorNode[]
+}
+
+export interface SkillInputValidationIssue {
+  metric_code: string
+  code: string
+  message: string
+}
+
+export interface SkillInputValidationResponse {
+  ok: boolean
+  issues: SkillInputValidationIssue[]
+}
+
+export interface SkillQueryPlanResponse {
+  metric_codes: string[]
+  plan: {
+    object_code: string
+    query_implementation: string
+    fields: { field: string; metric_code: string }[]
+  }[]
+}
