@@ -10,11 +10,15 @@ from pathlib import Path
 from typing import Annotated, Protocol, cast
 
 import yaml
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.config.production import SKILLS_DIR
 from src.data_platform.storage.skill.version_factory import get_skill_version_storage
 from src.data_platform.storage.skill.version_ports import SkillVersionConflictError
+from src.data_platform.storage.skill.draft_ports import (
+    SkillDraftConflictError,
+    SkillDraftNotFoundError,
+)
 from src.data_platform.storage.skill.governance_factory import (
     get_skill_governance_storage,
 )
@@ -55,8 +59,24 @@ from src.runtime.skill_management.workbench_service import (
     SkillGovernanceStatus,
     SkillWorkbenchService,
 )
+from src.runtime.skill_management.draft_service import SkillDraftService
+from src.runtime.skill_management.draft_validator import SkillDraftValidator
+from src.runtime.skill_management.package_generator import SkillPackageGenerator
 from src.domain.skill.governance_models import SkillRelease
 from src.runtime.api.skill_schemas import (
+    SkillDraftCreateRequest,
+    SkillDraftCopyRequest,
+    SkillDraftListResponse,
+    SkillDraftResponse,
+    SkillDraftSaveRequest,
+    SkillDraftValidationResponse,
+    SkillMaterializeRequest,
+    SkillMaterializeResponse,
+    SkillDefinitionResponse,
+    SkillLifecycleTransitionRequest,
+    SkillPackageFileResponse,
+    SkillPackagePreviewResponse,
+    SkillValidationIssueResponse,
     SkillEvalCaseCreateRequest,
     SkillEvalCaseListResponse,
     SkillEvalCaseResponse,
@@ -810,6 +830,518 @@ def _read_field_mapping(skill_dir: Path) -> FieldMappingResponse | None:
     except Exception:
         logger.exception("Failed to parse field_mapping.yaml for skill: %s", skill_dir.name)
         return None
+
+
+
+
+
+# ── Skill 草稿管理（P1+）──────────────────────────────────────────
+
+
+def get_skill_draft_service() -> SkillDraftService:
+    from src.data_platform.storage.skill.draft_factory import get_skill_draft_storage
+
+    return SkillDraftService(
+        storage=get_skill_draft_storage(),
+        loader=get_loader(),
+        skills_root=SKILLS_DIR,
+    )
+
+
+SkillDraftServiceDependency = Annotated[
+    SkillDraftService, Depends(get_skill_draft_service)
+]
+
+
+def get_skill_materializer() -> "SkillMaterializer":
+    from src.data_platform.storage.skill.draft_factory import (
+        get_skill_draft_storage,
+    )
+    from src.runtime.skill_management.materializer import SkillMaterializer
+    from src.skill_infra.skill_loader import get_loader
+
+    draft_storage = get_skill_draft_storage()
+    return SkillMaterializer(
+        draft_service=get_skill_draft_service(),
+        draft_storage=draft_storage,
+        version_service=get_skill_version_service(),
+        skills_root=SKILLS_DIR,
+        loader=get_loader(),
+    )
+
+
+SkillMaterializerDependency = Annotated[
+    "SkillMaterializer", Depends(get_skill_materializer)
+]
+
+
+def get_skill_lifecycle_service() -> "SkillLifecycleService":
+    from src.data_platform.storage.skill.draft_factory import (
+        get_skill_draft_storage,
+    )
+    from src.runtime.skill_management.lifecycle_service import SkillLifecycleService
+
+    return SkillLifecycleService(
+        definition_storage=get_skill_draft_storage(),
+        governance_service=get_skill_governance_service(),
+    )
+
+
+SkillLifecycleServiceDependency = Annotated[
+    "SkillLifecycleService", Depends(get_skill_lifecycle_service)
+]
+
+
+def get_skill_draft_validator() -> SkillDraftValidator:
+    return SkillDraftValidator()
+
+
+SkillDraftValidatorDependency = Annotated[
+    SkillDraftValidator, Depends(get_skill_draft_validator)
+]
+
+
+def get_skill_package_generator() -> SkillPackageGenerator:
+    return SkillPackageGenerator()
+
+
+SkillPackageGeneratorDependency = Annotated[
+    SkillPackageGenerator, Depends(get_skill_package_generator)
+]
+
+
+@router.post(
+    "/infra-skills/drafts",
+    response_model=SkillDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_skill_draft(
+    request: SkillDraftCreateRequest,
+    service: SkillDraftServiceDependency,
+    principal: SkillControlPrincipalDependency,
+) -> SkillDraftResponse:
+    try:
+        draft = service.create_from_template(
+            skill_id=request.skill_id,
+            skill_name=request.skill_name,
+            created_by=principal.user_id,
+            description=request.description,
+            owner=request.owner,
+            business_action=request.business_action,
+            business_object=request.business_object,
+            include_keywords=request.include_keywords,
+            excluded_intents=request.excluded_intents,
+        )
+    except SkillDraftConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail("SKILL_DRAFT_CONFLICT", str(exc)),
+        ) from exc
+    return SkillDraftResponse.from_model(draft)
+
+
+@router.post(
+    "/infra-skills/drafts/import",
+    response_model=SkillDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_skill_draft(
+    request: Request,
+    principal: SkillControlPrincipalDependency,
+    draft_service: SkillDraftServiceDependency,
+    source: str = Query(default="zip", pattern=r"^(zip|git|dir)$"),
+    git_url: str = Query(default=""),
+    dir_path: str = Query(default=""),
+) -> SkillDraftResponse:
+    from src.runtime.skill_management.import_service import (
+        SkillImportError,
+        SkillImportService,
+    )
+
+    service = SkillImportService(draft_service=draft_service)
+    try:
+        if source == "zip":
+            upload = await request.body()
+            draft = service.import_from_zip(
+                upload_bytes=upload,
+                filename=request.headers.get("filename", "upload.zip"),
+                created_by=principal.user_id,
+            )
+        elif source == "git":
+            if not git_url:
+                raise HTTPException(
+                    status_code=422,
+                    detail=error_detail("MISSING_GIT_URL", "git 导入需要 git_url 参数"),
+                )
+            draft = service.import_from_git(
+                url=git_url, created_by=principal.user_id
+            )
+        else:
+            if not dir_path:
+                raise HTTPException(
+                    status_code=422,
+                    detail=error_detail("MISSING_DIR_PATH", "dir 导入需要 dir_path 参数"),
+                )
+            draft = service.import_from_controlled_dir(
+                relative_path=dir_path, created_by=principal.user_id
+            )
+    except SkillImportError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail("SKILL_IMPORT_REJECTED", str(exc)),
+        ) from exc
+    return SkillDraftResponse.from_model(draft)
+
+
+@router.post(
+    "/infra-skills/{skill_id}/copy",
+    response_model=SkillDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def copy_skill_to_draft(
+    skill_id: str,
+    request: SkillDraftCopyRequest,
+    service: SkillDraftServiceDependency,
+    principal: SkillControlPrincipalDependency,
+) -> SkillDraftResponse:
+    try:
+        draft = service.copy_skill(
+            source_skill_id=skill_id,
+            new_skill_id=request.new_skill_id,
+            created_by=principal.user_id,
+        )
+    except SkillDraftNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_SOURCE_NOT_FOUND", str(exc)),
+        ) from exc
+    except SkillDraftConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail("SKILL_DRAFT_CONFLICT", str(exc)),
+        ) from exc
+    return SkillDraftResponse.from_model(draft)
+
+
+@router.get("/infra-skills/drafts", response_model=SkillDraftListResponse)
+def list_skill_drafts(
+    service: SkillDraftServiceDependency,
+    include_deleted: bool = Query(default=False),
+    skill_id: str = Query(default=""),
+    status_filter: str = Query(default="", alias="status"),
+) -> SkillDraftListResponse:
+    from src.domain.skill.draft_models import SkillDraftStatus
+
+    status_enum = None
+    if status_filter:
+        try:
+            status_enum = SkillDraftStatus(status_filter)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=error_detail(
+                    "INVALID_STATUS", f"非法草稿状态: {status_filter}"
+                ),
+            )
+    drafts = service.list_drafts(
+        include_deleted=include_deleted,
+        skill_id=skill_id or None,
+        status=status_enum,
+    )
+    return SkillDraftListResponse(
+        items=[SkillDraftResponse.from_model(d) for d in drafts],
+        total=len(drafts),
+    )
+
+
+@router.get(
+    "/infra-skills/drafts/{draft_id}", response_model=SkillDraftResponse
+)
+def get_skill_draft(
+    draft_id: str,
+    service: SkillDraftServiceDependency,
+) -> SkillDraftResponse:
+    draft = service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", f"草稿不存在: {draft_id}"),
+        )
+    return SkillDraftResponse.from_model(draft)
+
+
+@router.patch(
+    "/infra-skills/drafts/{draft_id}", response_model=SkillDraftResponse
+)
+def save_skill_draft(
+    draft_id: str,
+    request: SkillDraftSaveRequest,
+    service: SkillDraftServiceDependency,
+    principal: SkillControlPrincipalDependency,
+) -> SkillDraftResponse:
+    from src.domain.skill.draft_models import SkillDraftStatus
+
+    status_enum = None
+    if request.status:
+        try:
+            status_enum = SkillDraftStatus(request.status)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=error_detail(
+                    "INVALID_STATUS", f"非法草稿状态: {request.status}"
+                ),
+            )
+    try:
+        draft = service.save_draft(
+            draft_id=draft_id,
+            structured_config=request.structured_config,
+            expected_revision=request.expected_revision,
+            raw_files=request.raw_files,
+            status=status_enum,
+        )
+    except SkillDraftNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", str(exc)),
+        ) from exc
+    except SkillDraftConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail("SKILL_DRAFT_CONFLICT", str(exc)),
+        ) from exc
+    return SkillDraftResponse.from_model(draft)
+
+
+@router.delete(
+    "/infra-skills/drafts/{draft_id}", response_model=SkillDraftResponse
+)
+def delete_skill_draft(
+    draft_id: str,
+    service: SkillDraftServiceDependency,
+    principal: SkillControlPrincipalDependency,
+    expected_revision: int = Query(..., ge=1, alias="expected_revision"),
+) -> SkillDraftResponse:
+    try:
+        draft = service.delete_draft(
+            draft_id=draft_id, expected_revision=expected_revision
+        )
+    except SkillDraftNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", str(exc)),
+        ) from exc
+    except SkillDraftConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail("SKILL_DRAFT_CONFLICT", str(exc)),
+        ) from exc
+    return SkillDraftResponse.from_model(draft)
+
+
+@router.post(
+    "/infra-skills/drafts/{draft_id}/validate",
+    response_model=SkillDraftValidationResponse,
+)
+def validate_skill_draft(
+    draft_id: str,
+    service: SkillDraftServiceDependency,
+    validator: SkillDraftValidatorDependency,
+    principal: SkillControlPrincipalDependency,
+) -> SkillDraftValidationResponse:
+    draft = service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", f"草稿不存在: {draft_id}"),
+        )
+    report = validator.validate(draft)
+    # 记录校验结果到草稿（状态随 blocking_ok 推进）
+    updated = service.record_validation(
+        draft_id=draft_id,
+        validation_report=report.model_dump(mode="json"),
+        expected_revision=draft.revision,
+        blocking_ok=report.blocking_ok,
+    )
+    return SkillDraftValidationResponse(
+        draft_id=draft_id,
+        issues=[
+            SkillValidationIssueResponse(**issue.model_dump())
+            for issue in report.issues
+        ],
+        has_blocking=report.has_blocking,
+        blocking_ok=report.blocking_ok,
+        revision=updated.revision,
+    )
+
+
+@router.get(
+    "/infra-skills/drafts/{draft_id}/package-preview",
+    response_model=SkillPackagePreviewResponse,
+)
+def preview_skill_draft_package(
+    draft_id: str,
+    service: SkillDraftServiceDependency,
+    generator: SkillPackageGeneratorDependency,
+) -> SkillPackagePreviewResponse:
+    draft = service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", f"草稿不存在: {draft_id}"),
+        )
+    package = generator.generate(draft)
+    return SkillPackagePreviewResponse(
+        draft_id=draft_id,
+        files=[
+            SkillPackageFileResponse(path=p, content=c)
+            for p, c in package.files.items()
+        ],
+        file_count=len(package.files),
+        revision=draft.revision,
+    )
+
+
+@router.post(
+    "/infra-skills/drafts/{draft_id}/materialize",
+    response_model=SkillMaterializeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def materialize_skill_draft(
+    draft_id: str,
+    request: SkillMaterializeRequest,
+    materializer: SkillMaterializerDependency,
+    service: SkillDraftServiceDependency,
+    principal: SkillControlPrincipalDependency,
+) -> SkillMaterializeResponse:
+    from src.runtime.skill_management.materializer import SkillMaterializeError
+
+    try:
+        result = materializer.materialize(
+            draft_id=draft_id,
+            expected_revision=request.expected_revision,
+            created_by=principal.user_id,
+            reason=request.reason,
+            source_commit=request.source_commit,
+        )
+    except SkillMaterializeError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail("SKILL_MATERIALIZE_FAILED", str(exc)),
+        ) from exc
+    updated_draft = service.get_draft(draft_id)
+    return SkillMaterializeResponse(
+        skill_id=result.skill_id,
+        version_id=result.version_id,
+        semantic_version=result.semantic_version,
+        lifecycle_status=result.definition.lifecycle_status.value,
+        artifact_written=result.artifact_written,
+        draft_revision=updated_draft.revision if updated_draft else 0,
+    )
+
+
+@router.get(
+    "/infra-skills/definitions/{skill_id}",
+    response_model=SkillDefinitionResponse,
+)
+def get_skill_definition(
+    skill_id: str,
+    service: SkillLifecycleServiceDependency,
+) -> SkillDefinitionResponse:
+    from src.data_platform.storage.skill.draft_ports import (
+        SkillDefinitionNotFoundError,
+    )
+    try:
+        definition = service._storage.get_definition(skill_id)  # noqa: SLF001
+    except SkillDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=error_detail("SKILL_DEFINITION_NOT_FOUND", str(exc))) from exc
+    if definition is None:
+        raise HTTPException(status_code=404, detail=error_detail("SKILL_DEFINITION_NOT_FOUND", f"定义不存在: {skill_id}"))
+    return SkillDefinitionResponse.from_model(definition)
+
+
+@router.post(
+    "/infra-skills/{skill_id}/disable",
+    response_model=SkillDefinitionResponse,
+)
+def disable_skill(
+    skill_id: str,
+    request: SkillLifecycleTransitionRequest,
+    service: SkillLifecycleServiceDependency,
+    principal: SkillControlPrincipalDependency,
+) -> SkillDefinitionResponse:
+    from src.data_platform.storage.skill.draft_ports import (
+        SkillDefinitionNotFoundError,
+    )
+    from src.runtime.skill_management.lifecycle_service import SkillLifecycleError
+    try:
+        definition = service.disable(
+            skill_id=skill_id,
+            reason=request.reason,
+            actor=principal.user_id,
+            expected_revision=request.expected_revision,
+        )
+    except SkillDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=error_detail("SKILL_DEFINITION_NOT_FOUND", str(exc))) from exc
+    except SkillLifecycleError as exc:
+        raise HTTPException(status_code=409, detail=error_detail("SKILL_LIFECYCLE_CONFLICT", str(exc))) from exc
+    return SkillDefinitionResponse.from_model(definition)
+
+
+@router.post(
+    "/infra-skills/{skill_id}/restore",
+    response_model=SkillDefinitionResponse,
+)
+def restore_skill(
+    skill_id: str,
+    request: SkillLifecycleTransitionRequest,
+    service: SkillLifecycleServiceDependency,
+    principal: SkillControlPrincipalDependency,
+) -> SkillDefinitionResponse:
+    from src.data_platform.storage.skill.draft_ports import (
+        SkillDefinitionNotFoundError,
+    )
+    from src.runtime.skill_management.lifecycle_service import SkillLifecycleError
+    try:
+        definition = service.restore(
+            skill_id=skill_id,
+            reason=request.reason,
+            actor=principal.user_id,
+            expected_revision=request.expected_revision,
+        )
+    except SkillDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=error_detail("SKILL_DEFINITION_NOT_FOUND", str(exc))) from exc
+    except SkillLifecycleError as exc:
+        raise HTTPException(status_code=409, detail=error_detail("SKILL_LIFECYCLE_CONFLICT", str(exc))) from exc
+    return SkillDefinitionResponse.from_model(definition)
+
+
+@router.post(
+    "/infra-skills/{skill_id}/archive",
+    response_model=SkillDefinitionResponse,
+)
+def archive_skill(
+    skill_id: str,
+    request: SkillLifecycleTransitionRequest,
+    service: SkillLifecycleServiceDependency,
+    principal: SkillControlPrincipalDependency,
+) -> SkillDefinitionResponse:
+    from src.data_platform.storage.skill.draft_ports import (
+        SkillDefinitionNotFoundError,
+    )
+    from src.runtime.skill_management.lifecycle_service import SkillLifecycleError
+    try:
+        definition = service.archive(
+            skill_id=skill_id,
+            reason=request.reason,
+            actor=principal.user_id,
+            expected_revision=request.expected_revision,
+        )
+    except SkillDefinitionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=error_detail("SKILL_DEFINITION_NOT_FOUND", str(exc))) from exc
+    except SkillLifecycleError as exc:
+        raise HTTPException(status_code=409, detail=error_detail("SKILL_LIFECYCLE_CONFLICT", str(exc))) from exc
+    return SkillDefinitionResponse.from_model(definition)
 
 
 @router.get("/infra-skills/overview", response_model=InfraSkillOverviewResponse)

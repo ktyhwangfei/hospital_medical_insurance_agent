@@ -7,6 +7,7 @@ import logging
 import time
 import uuid
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -2341,3 +2342,86 @@ def toggle_datasource(ds_id: str, req: DatasourceToggleRequest):
         raise HTTPException(status_code=404, detail=f"数据源 '{ds_id}' 不存在")
     _get_meta_store().toggle_datasource(ds_id, req.enabled)
     return _get_meta_store().get_datasource(ds_id)
+
+
+# ── Skill 输入指标语义预览（P4，设计 §7.3）──────────────────────
+
+
+from src.semantic_layer.registry import get_semantic_registry
+from src.runtime.skill_management.skill_input_service import SkillInputService
+
+
+def _input_service() -> SkillInputService:
+    return SkillInputService(get_semantic_registry())
+
+
+class InputSpecItem(BaseModel):
+    metric_code: str
+    alias: str = ""
+    required: bool = True
+    purpose: str = ""
+
+
+class SkillInputsRequest(BaseModel):
+    inputs: list[InputSpecItem]
+    context: dict[str, Any] | None = None
+
+
+class SkillInputsValidateResponse(BaseModel):
+    issues: list[dict]
+    has_blocking: bool
+    blocking_ok: bool
+
+
+@router.post(
+    "/skill-inputs/validate",
+    response_model=SkillInputsValidateResponse,
+    tags=["skill-inputs"],
+)
+def validate_skill_inputs(request: SkillInputsRequest) -> SkillInputsValidateResponse:
+    from src.domain.skill.draft_models import InputSpec
+
+    report = _input_service().validate_inputs(
+        [InputSpec(**item.model_dump()) for item in request.inputs]
+    )
+    return SkillInputsValidateResponse(
+        issues=[i.model_dump(mode="json") for i in report.issues],
+        has_blocking=report.has_blocking,
+        blocking_ok=report.blocking_ok,
+    )
+
+
+@router.post(
+    "/skill-inputs/query-plan",
+    tags=["skill-inputs"],
+)
+def skill_inputs_query_plan(request: SkillInputsRequest):
+    from src.domain.skill.draft_models import InputSpec
+
+    plan = _input_service().build_query_plan(
+        [InputSpec(**item.model_dump()) for item in request.inputs]
+    )
+    return {"groups": plan}
+
+
+@router.post(
+    "/skill-inputs/test-query",
+    tags=["skill-inputs"],
+)
+def skill_inputs_test_query(request: SkillInputsRequest):
+    from src.domain.skill.draft_models import InputSpec
+
+    result = _input_service().test_query(
+        [InputSpec(**item.model_dump()) for item in request.inputs],
+        context=request.context,
+    )
+    return result
+
+
+@router.get(
+    "/skill-inputs/selector",
+    tags=["skill-inputs"],
+)
+def skill_inputs_selector():
+    """输入指标级联选择器数据（业务域→语义对象→指标）。"""
+    return {"tree": _input_service().input_selector_tree()}
