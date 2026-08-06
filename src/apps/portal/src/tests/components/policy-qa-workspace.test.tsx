@@ -99,6 +99,15 @@ describe('PolicyQAWorkspace', () => {
     expect(scrollIntoViewMock).toHaveBeenCalledTimes(1)
   })
 
+  it('places the scroll anchor after the composer and reference disclaimer', () => {
+    render(<PolicyConversation stream={makeStream()} />)
+
+    const composer = screen.getByRole('textbox', { name: '政策问题' })
+    const disclaimer = screen.getByText('回答仅供解释参考，不作为报销或结算依据。')
+    expect(composer.compareDocumentPosition(disclaimer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(disclaimer.nextElementSibling).toHaveAttribute('aria-hidden', 'true')
+  })
+
   it('switches settlement with @换结算 and sends the default question', () => {
     const stream = makeStream()
     render(<PolicyConversation stream={stream} />)

@@ -101,8 +101,6 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
         </div>
       ) : null}
 
-      <div ref={conversationEndRef} aria-hidden />
-
       <PolicyComposer
         settlementId={stream.anchor.settlementId}
         value={input}
@@ -114,6 +112,8 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
       <p className="text-center text-xs leading-5 text-slate-400">
         回答仅供解释参考，不作为报销或结算依据。
       </p>
+
+      <div ref={conversationEndRef} aria-hidden />
     </section>
   )
 }
