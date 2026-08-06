@@ -7,6 +7,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# 仅用于迁移期兼容无来源 release；生产默认必须关闭。
+ALLOW_LEGACY_POLICY_RELEASES = os.getenv(
+    "ALLOW_LEGACY_POLICY_RELEASES", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
+
 # PostgreSQL 配置
 # 注：默认密码 postgres（见 AGENTS.md 生产环境配置；可用 POSTGRES_PASSWORD 覆盖）
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")

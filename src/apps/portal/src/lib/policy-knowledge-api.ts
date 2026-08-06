@@ -21,6 +21,33 @@ export interface StandardizedField {
   binding_id: string | null
 }
 
+export interface KnowledgeEvidence {
+  evidence_id: string
+  document_version_id: string
+  unit_id: string
+  clause_path: string | null
+  page_no: number | null
+  exact_quote: string
+  start_offset: number | null
+  end_offset: number | null
+  evidence_role: string
+}
+
+export interface SemanticBinding {
+  policy_field: string
+  semantic_field: string | null
+  concept: string | null
+  value_domain: string | null
+  status: string
+}
+
+export interface RuleValidity {
+  region: string | null
+  start_date: string | null
+  end_date: string | null
+  policy_version: string | null
+}
+
 export interface KnowledgeItem {
   knowledge_id: string
   unit_id: string
@@ -40,6 +67,17 @@ export interface KnowledgeItem {
     uncertainties: string[]
   }
   citations: Array<{ evidence: string; title: string }>
+  review_status?: 'pending' | 'approved' | 'rejected'
+  review_note?: string | null
+  // —— V4.1 政策规则单元契约 ——
+  rule_group_id?: string | null
+  topic_concept?: string | null
+  rule_type_enum?: string | null
+  rule_type_label?: string | null
+  validity?: RuleValidity | null
+  variants?: Array<Record<string, unknown>>
+  evidences?: KnowledgeEvidence[]
+  semantic_bindings?: SemanticBinding[]
 }
 
 export interface ApprovedUnit {
@@ -114,8 +152,12 @@ export interface KnowledgeRelease {
   contract_version: string
   case_set_version: number
   config_hash: string
+  source_change_set_id?: string | null
   quality_score: number | null
   consistency_score: number | null
+  created_at?: string
+  promoted_at?: string | null
+  promoted_by?: string | null
 }
 
 export interface QualityRun {
@@ -132,6 +174,18 @@ export interface QualityRun {
   config_hash: string
 }
 
+/** Read-only gate snapshot for display; the promote POST always revalidates server-side. */
+export interface ReleaseGateStatus {
+  release_id: string
+  can_promote: boolean
+  current_case_set_version: number
+  active_release_id: string | null
+  latest_run: QualityRun | null
+  blocked_reasons: string[]
+  sync_pending: boolean
+  sync_pending_reasons: string[]
+}
+
 export const QUALITY_RUN_CONFIG = {
   repeat_count: 3,
   minimum_quality: 0.8,
@@ -139,11 +193,62 @@ export const QUALITY_RUN_CONFIG = {
 } as const
 export const QUALITY_CONFIG_HASH = '197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22'
 
+export interface PolicyKnowledgeApiAuditEvent {
+  task_id?: string | null
+  unit_revision_id?: string | null
+  target_href?: string | null
+  release_id?: string | null
+  source_change_set_id?: string | null
+  [key: string]: unknown
+}
+
+export class PolicyKnowledgeApiError extends Error {
+  readonly status: number
+  readonly errorCode: string | null
+  readonly auditEvent: PolicyKnowledgeApiAuditEvent
+
+  constructor(
+    message: string,
+    status: number,
+    errorCode: string | null,
+    auditEvent: PolicyKnowledgeApiAuditEvent,
+  ) {
+    super(message)
+    this.name = 'PolicyKnowledgeApiError'
+    this.status = status
+    this.errorCode = errorCode
+    this.auditEvent = auditEvent
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function policyKnowledgeApiError(response: Response, body: unknown): PolicyKnowledgeApiError {
+  const detail = isObject(body) ? body.detail : undefined
+  if (!isObject(detail)) {
+    return new PolicyKnowledgeApiError(
+      typeof detail === 'string' && detail ? detail : `请求失败 (${response.status})`,
+      response.status,
+      null,
+      {},
+    )
+  }
+
+  const message = typeof detail.message === 'string' && detail.message
+    ? detail.message
+    : `请求失败 (${response.status})`
+  const errorCode = typeof detail.error_code === 'string' ? detail.error_code : null
+  const auditEvent = isObject(detail.audit_event) ? detail.audit_event : {}
+  return new PolicyKnowledgeApiError(message, response.status, errorCode, auditEvent)
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    throw new Error(body.detail?.message || body.detail || `请求失败 (${response.status})`)
+    const body: unknown = await response.json().catch(() => null)
+    throw policyKnowledgeApiError(response, body)
   }
   return response.json() as Promise<T>
 }
@@ -164,6 +269,323 @@ export const getWorkbenchDocument = (docId: string) =>
 
 export const listSemanticMetrics = () =>
   request<SemanticMetricSummary[]>('/api/v1/medical-insurance-ai-agent/semantic/metrics?object_code=zcgz')
+
+export interface KnowledgeReviewPayload {
+  doc_id: string
+  unit_id: string
+  knowledge_id: string
+  extraction_id?: string | null
+  status: 'approved' | 'rejected'
+  reviewed_by: string
+  note?: string | null
+}
+
+/** 记录一组知识的评审结论（通过/驳回），后端落库。 */
+export const reviewKnowledge = (knowledgeId: string, payload: KnowledgeReviewPayload) =>
+  request<KnowledgeReviewResult>(
+    `${WORKBENCH_API}/knowledge/${encodeURIComponent(knowledgeId)}/review`,
+    json('POST', payload),
+  )
+
+export interface KnowledgeReviewResult {
+  review_id: string
+  doc_id: string
+  unit_id: string
+  knowledge_id: string
+  status: 'approved' | 'rejected'
+  reviewed_by: string
+  reviewed_at: string
+  note: string | null
+}
+
+// —— V4.1 知识变更集 / 已发布快照 ——
+
+export type ChangeItemType = 'ADD' | 'MODIFY' | 'REPLACE' | 'EXPIRE' | 'SEMANTIC_CHANGE'
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+export type KnowledgeBuildTaskStatus =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'WAITING_REVIEW'
+  | 'APPROVED_PENDING_RELEASE'
+  | 'PUBLISHED'
+  | 'RETURNED'
+  | 'REJECTED'
+  | 'FAILED'
+  | 'CANCELLED'
+
+export interface KnowledgeBuildUnitRevision {
+  doc_id: string
+  unit_id: string
+  unit_revision_id: string
+}
+
+export interface CreateKnowledgeBuildTaskRequest {
+  name: string
+  created_by: string
+  build_mode: 'INITIAL' | 'REBUILD'
+  rebuild_reason?: string | null
+  unit_revisions: KnowledgeBuildUnitRevision[]
+}
+
+export interface EligibleKnowledgeUnit {
+  doc_id: string
+  doc_title: string
+  unit_id: string
+  unit_revision_id: string
+  path: string[]
+  source_preview: string
+  status: 'reviewed' | 'published'
+  knowledge_count: number
+  availability: 'AVAILABLE' | 'CLAIMED' | 'REBUILD_REQUIRED'
+  occupied_by: string | null
+  target_href: string | null
+}
+
+export interface KnowledgeBuildBlocker {
+  code:
+    | 'UNIT_NOT_APPROVED'
+    | 'UNIT_REVISION_CHANGED'
+    | 'UNIT_ALREADY_CLAIMED'
+    | 'SEMANTIC_CONTRACT_MISMATCH'
+    | 'REBUILD_MODE_REQUIRED'
+    | 'REBUILD_REASON_REQUIRED'
+  message: string
+  doc_id: string | null
+  unit_id: string | null
+  unit_revision_id: string | null
+  task_id: string | null
+  target_href: string | null
+}
+
+export interface KnowledgeBuildWarning {
+  code: 'REBUILDING_PUBLISHED_UNIT'
+  message: string
+  doc_id: string
+  unit_id: string
+}
+
+export interface KnowledgeBuildPreflight {
+  selected_count: number
+  buildable_count: number
+  blocking_count: number
+  rebuild_count: number
+  can_submit: boolean
+  semantic_contract_version: string | null
+  blockers: KnowledgeBuildBlocker[]
+  warnings: KnowledgeBuildWarning[]
+}
+
+export interface KnowledgeBuildTaskUnit {
+  doc_id: string
+  doc_title: string
+  unit_id: string
+  unit_revision_id: string
+  path: string[]
+  status: 'PENDING' | 'BUILT' | 'FAILED'
+  candidate_result_ids: string[]
+  error_code: string | null
+  error_message: string | null
+}
+
+export interface KnowledgeBuildResultSummary {
+  additions: number
+  modifications: number
+  replacements: number
+  expirations: number
+  unchanged: number
+}
+
+export interface KnowledgeBuildTask {
+  task_id: string
+  name: string
+  status: KnowledgeBuildTaskStatus
+  build_mode: 'INITIAL' | 'REBUILD'
+  semantic_contract_version: string
+  pipeline_version: string
+  model_scene: string
+  config_hash: string
+  rebuild_reason: string | null
+  created_by: string
+  units: KnowledgeBuildTaskUnit[]
+  processed_units: number
+  result_change_set_id: string | null
+  result_summary: Partial<KnowledgeBuildResultSummary>
+  issue_count: number
+  created_at: string
+  updated_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface ChangeSetItem {
+  item_id: string
+  change_type: ChangeItemType
+  rule_id: string
+  unit_id: string
+  doc_id: string
+  before: Record<string, unknown> | null
+  after: Record<string, unknown> | null
+  ai_recommendation: string
+  reason: string
+  evidence_ids: string[]
+  quality_checks: string[]
+  risk_level: RiskLevel
+  impact_scope: Record<string, unknown>
+  needs_human: boolean
+}
+
+export interface SourceUnitRevision {
+  doc_id: string
+  doc_title: string
+  unit_id: string
+  unit_revision_id: string
+  path: string[]
+}
+
+export interface KnowledgeChangeSet {
+  change_set_id: string
+  source_document_version_id: string
+  doc_id: string
+  doc_title: string
+  build_task_id: string | null
+  source_units: SourceUnitRevision[]
+  semantic_contract_version: string | null
+  supersedes_candidate_id: string | null
+  status: 'DRAFT' | 'NEEDS_DECISION' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'RETURNED' | 'PUBLISHED' | 'FAILED'
+  summary: { additions: number; modifications: number; replacements: number; expirations: number; unchanged: number }
+  items: ChangeSetItem[]
+  quality_report: {
+    source_fidelity: number | null
+    structural_completeness: number | null
+    semantic_consistency: number | null
+    rule_consistency: number | null
+  }
+  risk_summary: Record<string, number>
+  blockers: Array<Record<string, unknown>>
+  review_decision: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PublishedSnapshot {
+  snapshot_id: string
+  doc_id: string | null
+  policy_scope: Record<string, unknown>
+  semantic_contract_version: string | null
+  rules_collection: string
+  facts_collection: string
+  source_change_set_id: string | null
+  immutable: boolean
+  published_at: string
+  published_by: string
+  rollback_of: string | null
+  replaced_by: string | null
+}
+
+export const listChangeSets = (docId = '') =>
+  request<KnowledgeChangeSet[]>(`${WORKBENCH_API}/change-sets${docId ? `?doc_id=${encodeURIComponent(docId)}` : ''}`)
+
+export const getChangeSet = (changeSetId: string) =>
+  request<KnowledgeChangeSet>(`${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}`)
+
+export const listEligibleKnowledgeUnits = () =>
+  request<EligibleKnowledgeUnit[]>(`${WORKBENCH_API}/knowledge-build/eligible-units`)
+
+export const preflightKnowledgeBuild = (body: CreateKnowledgeBuildTaskRequest) =>
+  request<KnowledgeBuildPreflight>(`${WORKBENCH_API}/knowledge-build/preflight`, json('POST', body))
+
+export const listKnowledgeBuildTasks = () =>
+  request<KnowledgeBuildTask[]>(`${WORKBENCH_API}/knowledge-build/tasks`)
+
+export const getKnowledgeBuildTask = (taskId: string) =>
+  request<KnowledgeBuildTask>(`${WORKBENCH_API}/knowledge-build/tasks/${encodeURIComponent(taskId)}`)
+
+export const createKnowledgeBuildTask = (body: CreateKnowledgeBuildTaskRequest) =>
+  request<KnowledgeBuildTask>(`${WORKBENCH_API}/knowledge-build/tasks`, json('POST', body))
+
+/** @deprecated Use createKnowledgeBuildTask() with exact unit revisions instead. */
+export const buildChangeSet = (docId: string) =>
+  request<KnowledgeChangeSet>(`${WORKBENCH_API}/change-sets/build-from-doc`, json('POST', { doc_id: docId }))
+
+export const submitChangeSetReview = (changeSetId: string, reviewer: string, note?: string | null) =>
+  request<KnowledgeChangeSet>(`${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}/submit-review`, json('POST', { reviewer, note }))
+
+export const approveChangeSet = (changeSetId: string, reviewer: string, note?: string | null) =>
+  request<KnowledgeChangeSet>(`${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}/approve`, json('POST', { reviewer, note }))
+
+export const returnKnowledgeReview = (changeSetId: string, reviewer: string, note?: string | null) =>
+  request<KnowledgeChangeSet>(`${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}/return`, json('POST', { reviewer, note }))
+
+export const rejectChangeSet = (changeSetId: string, reviewer: string, note?: string | null) =>
+  request<KnowledgeChangeSet>(`${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}/reject`, json('POST', { reviewer, note }))
+
+export const reprocessChangeSet = (changeSetId: string) =>
+  request<KnowledgeChangeSet>(`${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}/reprocess`, { method: 'POST' })
+
+export interface RuleDetail {
+  rule: KnowledgeItem
+  unit: { unit_id: string; path: string[]; source_text: string; status: string }
+  document: { doc_id: string; doc_title: string; contract_version: string | null }
+  change_set_id: string | null
+  review_status: string | null
+}
+
+export const getRuleDetail = (ruleId: string) =>
+  request<RuleDetail>(`${WORKBENCH_API}/rules/${encodeURIComponent(ruleId)}`)
+
+export interface DecisionTask {
+  task_id: string
+  task_type: string
+  question: string
+  recommended_option: Record<string, unknown>
+  alternatives: Array<Record<string, unknown>>
+  evidence: Record<string, unknown>
+  risk_level: RiskLevel
+  affected_items: Record<string, unknown>
+  blocking_scope: string | null
+  status: 'PENDING' | 'RESOLVED' | 'SKIPPED'
+  decision: Record<string, unknown> | null
+  created_at: string
+  resolved_at: string | null
+}
+
+export const listDecisionTasks = (status = '', taskType = '', scope = '') => {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  if (taskType) params.set('task_type', taskType)
+  if (scope) params.set('scope', scope)
+  const query = params.toString()
+  return request<DecisionTask[]>(`${WORKBENCH_API}/decision-tasks${query ? `?${query}` : ''}`)
+}
+
+export const generateDecisionTasks = (changeSetId: string) =>
+  request<DecisionTask[]>(`${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}/generate-tasks`, { method: 'POST' })
+
+export const resolveDecisionTask = (taskId: string, decision: Record<string, unknown>) =>
+  request<DecisionTask>(`${WORKBENCH_API}/decision-tasks/${encodeURIComponent(taskId)}/resolve`, json('POST', { decision }))
+
+export interface GovernanceDashboard {
+  documents_total: number
+  change_sets_total: number
+  rules_total: number
+  rules_pending_review: number
+  rules_approved: number
+  tasks_pending: number
+  tasks_by_type: Record<string, number>
+  change_sets_by_status: Record<string, number>
+  risk_summary: Record<string, number>
+  avg_source_fidelity: number | null
+  avg_completeness: number | null
+}
+
+export const getGovernanceDashboard = () =>
+  request<GovernanceDashboard>(`${WORKBENCH_API}/governance/dashboard`)
+
+export const listPublishedSnapshots = () =>
+  request<PublishedSnapshot[]>(`${WORKBENCH_API}/published`)
+
+export const getActiveSnapshot = () =>
+  request<PublishedSnapshot>(`${WORKBENCH_API}/published/active`)
 
 export const bindExistingMetric = (source: MetricDraftSource, metricCode: string) =>
   request(`${ALIGNMENT_API}/bindings`, json('POST', {
@@ -206,7 +628,7 @@ export const proposeStandardValue = (source: MetricDraftSource, domainCode: stri
 export const listTestCases = () => request<PolicyTestCase[]>(`${WORKBENCH_API}/test-cases`)
 export const saveTestCase = (testCase: Partial<PolicyTestCase>) =>
   request<PolicyTestCase>(`${WORKBENCH_API}/test-cases`, json('POST', testCase))
-export const createRelease = (body: { release_id: string; contract_version: string; config_hash: string }) =>
+export const createRelease = (body: { release_id: string; contract_version: string; config_hash: string; source_change_set_id?: string | null }) =>
   request<KnowledgeRelease>(`${WORKBENCH_API}/releases`, json('POST', body))
 export const listReleases = () => request<KnowledgeRelease[]>(`${WORKBENCH_API}/releases`)
 export const buildRelease = (releaseId: string) =>
@@ -214,7 +636,10 @@ export const buildRelease = (releaseId: string) =>
 export const runQuality = (releaseId: string) =>
   request<QualityRun>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/test`, json('POST', QUALITY_RUN_CONFIG))
 export const getActiveRelease = () => request<KnowledgeRelease>(`${WORKBENCH_API}/releases/active`)
+/** @deprecated Legacy compatibility for the unchanged policy test page; governed releases must use promoteGovernedRelease(). */
 export const promoteRelease = (releaseId: string, reviewedBy: string) =>
+  request<KnowledgeRelease>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/promote-legacy`, json('POST', { reviewed_by: reviewedBy }))
+export const promoteGovernedRelease = (releaseId: string, reviewedBy: string) =>
   request<KnowledgeRelease>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/promote`, json('POST', { reviewed_by: reviewedBy }))
 export const rollbackRelease = (releaseId: string, reviewedBy: string) =>
   request<KnowledgeRelease>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/rollback`, json('POST', { reviewed_by: reviewedBy }))
@@ -239,6 +664,9 @@ export interface QualityRunReport {
 
 export const getLatestReleaseQuality = (releaseId: string) =>
   request<QualityRunReport>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/quality/latest`)
+
+export const getReleaseGateStatus = (releaseId: string) =>
+  request<ReleaseGateStatus>(`${WORKBENCH_API}/releases/${encodeURIComponent(releaseId)}/gate-status`)
 
 export const searchPolicyKnowledge = (body: Record<string, unknown>) =>
   request<{ groups: Array<Record<string, unknown>>; total_groups: number }>(

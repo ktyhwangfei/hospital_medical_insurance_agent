@@ -69,7 +69,10 @@ class PostgreSQLClient:
             print("[STARTUP] PostgreSQLClient: 使用 psycopg2 连接成功", flush=True)
         except Exception as e:
             print(f"[STARTUP] PostgreSQLClient: 连接失败 (超时={self._CONNECT_TIMEOUT}s) — {e}", flush=True)
-            raise
+            host_hint = self._database_url.split("@")[-1] if "@" in self._database_url else self._database_url
+            raise RuntimeError(
+                f"知识库数据源(PostgreSQL)不可达：{e}。请确认 PostgreSQL 服务已启动（{host_hint}）。"
+            ) from e
 
     @contextmanager
     def transaction(self):

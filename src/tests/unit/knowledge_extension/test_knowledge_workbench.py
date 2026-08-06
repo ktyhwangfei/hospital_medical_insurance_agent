@@ -63,6 +63,9 @@ class FakePipelineStore:
     ) -> dict[str, Any]:
         return {"items": [self.document], "total": 1, "page": page, "page_size": page_size}
 
+    def list_document_ids(self) -> list[str]:
+        return [self.document["doc_id"]] if self.document else []
+
 
 def _leaf_ids() -> list[str]:
     _root, _by_id, _all_leaves, kept = parse_kept_leaves(
@@ -525,3 +528,80 @@ def test_document_selector_only_lists_documents_with_approved_units() -> None:
     assert result.items[0].doc_id == "doc_1"
     assert result.items[0].approved_unit_count == 1
     assert result.items[0].knowledge_count == 1
+
+
+def test_review_status_is_joined_into_knowledge_from_store() -> None:
+    """评审结论落库后，工作台读取应把 review_status 合并进每条知识（需求4）。"""
+    from src.knowledge_extension.rule_explanation.knowledge_review_store import (
+        InMemoryKnowledgeReviewStore,
+        KnowledgeReview,
+        stable_review_id,
+    )
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        KnowledgeWorkbenchService,
+    )
+
+    first = _leaf_ids()[0]
+    review_store = InMemoryKnowledgeReviewStore()
+    service = KnowledgeWorkbenchService(
+        FakePipelineStore([_extraction(first, _rules())]),
+        review_store=review_store,
+    )
+
+    # 默认全部待评审
+    first_doc = service.get_document("doc_1")
+    knowledge_id = first_doc.units[0].knowledge[0].knowledge_id
+    assert all(item.review_status == "pending" for item in first_doc.units[0].knowledge)
+
+    # 写入一条「通过」评审并落库
+    review_store.save(KnowledgeReview(
+        review_id=stable_review_id("doc_1", knowledge_id),
+        doc_id="doc_1",
+        unit_id=first,
+        knowledge_id=knowledge_id,
+        status="approved",
+        reviewed_by="alice",
+    ))
+
+    second_doc = service.get_document("doc_1")
+    by_id = {item.knowledge_id: item.review_status for item in second_doc.units[0].knowledge}
+    assert by_id[knowledge_id] == "approved"
+    # 未评审的其它知识仍为 pending
+    pending = [kid for kid, status in by_id.items() if kid != knowledge_id]
+    assert pending and all(by_id[kid] == "pending" for kid in pending)
+
+
+def test_rule_unit_contract_fields_are_assembled() -> None:
+    """V4.1 S1：知识项应携带政策规则单元契约字段（rule_group/topic/type/evidences/bindings）。"""
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        KnowledgeWorkbenchService,
+    )
+
+    first = _leaf_ids()[0]
+    result = KnowledgeWorkbenchService(
+        FakePipelineStore([_extraction(first, _rules())])
+    ).get_document("doc_1")
+
+    unit = result.units[0]
+    by_type = {item.rule_type_enum: item for item in unit.knowledge}
+    # 规则组：同一 extraction 的规则共享 rule_group_id
+    groups = {item.rule_group_id for item in unit.knowledge}
+    assert len(groups) == 1
+    assert groups.pop().startswith("KG_")
+    # 类型映射：payment_ratio → 固定标准（支付比例）；eligibility → 资格条件
+    assert by_type["FIXED_STANDARD"].topic_concept == "PAYMENT_RATIO"
+    assert by_type["FIXED_STANDARD"].rule_type_label == "固定标准（支付比例）"
+    assert by_type["ELIGIBILITY"].topic_concept == "ELIGIBILITY"
+    assert by_type["ELIGIBILITY"].rule_type_label == "资格条件"
+    # 多证据锚点派生
+    item = by_type["FIXED_STANDARD"]
+    assert len(item.evidences) == 1
+    evidence = item.evidences[0]
+    assert evidence.evidence_id.startswith("ev_")
+    assert evidence.document_version_id == "doc_1"
+    assert evidence.clause_path == "/".join(unit.path)
+    assert evidence.exact_quote == item.source_text
+    assert evidence.evidence_role == "主结论证据"
+    # 语义绑定派生：payment_ratio 无值域（registry 未注入）→ 空列表；validity 未识别
+    assert item.validity is None
+    assert item.variants == []

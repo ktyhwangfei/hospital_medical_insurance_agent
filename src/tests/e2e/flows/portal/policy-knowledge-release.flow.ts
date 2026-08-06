@@ -6,23 +6,23 @@ const qualityConfigHash = '197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e
 const activeCase = { case_id: 'case_1', name: '住院支付比例', query: '职工住院支付比例', mode: 'semantic', expected_knowledge_ids: ['kn_1'], filters: {}, required: true, active: true, case_set_version: 1 };
 
 test.describe('政策知识工作台与整批发布门禁', () => {
-  test('导航顺序固定且 Unit 与 Knowledge 双向保持选中关系', async ({ page }) => {
-    await page.route(`${prefix}/semantic/metrics?object_code=zcgz`, (route) => route.fulfill({ json: [] }));
-    await page.route(`${prefix}/policy-workbench/documents`, (route) => route.fulfill({ json: { items: [{ doc_id: 'doc_1', doc_title: '职工医保', approved_unit_count: 1, knowledge_count: 1 }] } }));
-    await page.route(`${prefix}/policy-workbench/documents/doc_1`, (route) => route.fulfill({ json: {
-      doc_id: 'doc_1', doc_title: '职工医保', contract_version: '2', units: [{
-        unit_id: 'unit_1', doc_id: 'doc_1', doc_title: '职工医保', path: ['第一条'], source_text: '原文', order_no: 1, status: 'reviewed', knowledge_count: 1,
-        knowledge: [{ knowledge_id: 'kn_1', unit_id: 'unit_1', extraction_id: 'ext_1', relationship_source: 'persisted', business_sentence: '支付比例为80%', source_text: '原文', fields: [], standardized_fields: [], confidence: { completeness: 1, accuracy: null, source_fidelity: 1, model_confidence: 0.9, value_domain_compliance: null, overall: 0.9, uncertainties: ['待验证'] }, citations: [{ title: '政策原文', evidence: '第一条' }] }],
-      }],
-    } }));
+  test('知识页进入构建主页并仅展示新的三级工作区', async ({ page }) => {
+    await page.route(`${prefix}/policy-workbench/knowledge-build/eligible-units`, (route) => route.fulfill({ json: [] }));
+    await page.route(`${prefix}/policy-workbench/knowledge-build/tasks`, (route) => route.fulfill({ json: [] }));
     const policy = new PolicyKnowledgePage(page);
     await policy.gotoKnowledge();
 
+    await expect(page).toHaveURL(/\/policy-knowledge\/knowledge\/build$/);
     expect((await policy.navLabels()).map((item) => item.trim())).toEqual(['概览', '文档', '单元', '知识', '测试']);
-    await expect(policy.unit('unit_1')).toHaveAttribute('aria-selected', 'true');
-    await policy.selectKnowledge('kn_1');
-    await expect(policy.unit('unit_1')).toHaveAttribute('aria-selected', 'true');
-    await expect(policy.knowledge('kn_1')).toHaveAttribute('aria-selected', 'true');
+    expect((await policy.workspaceLabels()).map((item) => item.trim())).toEqual(['知识构建', '知识审核', '发布管理']);
+    await expect(policy.buildTitle).toBeVisible();
+    await expect(policy.newBuildTaskButton).toHaveCount(1);
+    for (const legacyWorkspace of ['驾驶舱', '工作台', '变更集', '待决策', '已发布']) {
+      await expect(policy.knowledgeWorkspaceNavigation.getByRole('link', {
+        name: legacyWorkspace,
+        exact: true,
+      })).toHaveCount(0);
+    }
   });
 
   test('候选版只能整批测试并在人工发布后切换活动版本', async ({ page }) => {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 
@@ -287,17 +289,12 @@ def test_search_failure_records_failed_run_and_restores_ready_release() -> None:
     assert store.get_release("candidate").status == "ready"  # type: ignore[union-attr]
 
 
-def test_initial_testing_state_failure_marks_persisted_run_failed_and_restores_ready() -> None:
+def test_initial_quality_claim_failure_does_not_create_run_or_change_release() -> None:
     from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
 
     class FailingTestingStore(InMemoryPolicyQualityStore):
-        failed_once = False
-
-        def save_release(self, release):
-            if release.status == "testing" and not self.failed_once:
-                self.failed_once = True
-                raise RuntimeError("testing state unavailable")
-            return super().save_release(release)
+        def claim_quality_run(self, release_id, run_id):
+            raise RuntimeError("testing state unavailable")
 
     store = _store_with_case_and_baseline(FailingTestingStore())
 
@@ -308,7 +305,117 @@ def test_initial_testing_state_failure_marks_persisted_run_failed_and_restores_r
         ).run_release("candidate")
 
     run = store.get_latest_run("candidate")
-    assert run is not None
-    assert run.status == "failed"
-    assert run.blocked_reasons == ["质量运行异常: RuntimeError"]
+    assert run is None
     assert store.get_release("candidate").status == "ready"  # type: ignore[union-attr]
+
+
+def test_failed_candidate_can_be_retested_to_pass() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    class RecordingStore(InMemoryPolicyQualityStore):
+        candidate_statuses: list[str]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.candidate_statuses = []
+
+        def claim_quality_run(self, release_id, run_id):
+            status = super().claim_quality_run(release_id, run_id)
+            if release_id == "candidate":
+                self.candidate_statuses.append("testing")
+            return status
+
+        def complete_quality_run(self, release_id, run_id, **kwargs):
+            release = super().complete_quality_run(release_id, run_id, **kwargs)
+            if release_id == "candidate":
+                self.candidate_statuses.append(release.status)
+            return release
+
+    store = _store_with_case_and_baseline(RecordingStore())
+    candidate = store.get_release("candidate")
+    assert candidate is not None
+    store.save_release(candidate.model_copy(update={"status": "failed"}))
+    store.candidate_statuses.clear()
+
+    run = PolicyQualityService(
+        store,
+        SequenceSearcher({"baseline": [[]], "candidate": [["kn_expected"]]}),
+    ).run_release("candidate")
+
+    assert run.status == "passed"
+    assert store.candidate_statuses == ["testing", "passed"]
+    assert store.get_release("candidate").status == "passed"  # type: ignore[union-attr]
+
+
+def test_failed_candidate_retest_exception_restores_failed_status() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    class FailingSearcher:
+        def search(self, release, case):
+            raise RuntimeError("backend unavailable")
+
+    store = _store_with_case_and_baseline()
+    candidate = store.get_release("candidate")
+    assert candidate is not None
+    store.save_release(candidate.model_copy(update={"status": "failed"}))
+
+    with pytest.raises(RuntimeError, match="backend unavailable"):
+        PolicyQualityService(store, FailingSearcher()).run_release("candidate")
+
+    run = store.get_latest_run("candidate")
+    assert run is not None and run.status == "failed"
+    assert store.get_release("candidate").status == "failed"  # type: ignore[union-attr]
+
+
+def test_concurrent_quality_runs_claim_one_owner_and_cannot_overwrite_success() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
+
+    class RacingStore(InMemoryPolicyQualityStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ready_reads = Barrier(2)
+
+        def get_release(self, release_id: str):
+            release = super().get_release(release_id)
+            if release_id == "candidate" and release is not None and release.status == "ready":
+                self.ready_reads.wait(timeout=5)
+            return release
+
+    store = RacingStore()
+    store.save_test_case(PolicyQATestCase(
+        case_id="case_concurrent",
+        name="并发质量运行",
+        query="职工住院支付比例",
+        mode="semantic",
+        expected_knowledge_ids=["kn_expected"],
+    ))
+    store.save_release(KnowledgeRelease(
+        release_id="candidate",
+        status="ready",
+        facts_collection="policy_facts_candidate",
+        rules_collection="policy_rules_candidate",
+        contract_version="2",
+        case_set_version=1,
+        config_hash=QUALITY_CONFIG_HASH,
+    ))
+    service = PolicyQualityService(
+        store,
+        SequenceSearcher({"candidate": [["kn_expected"]]}),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(service.run_release, "candidate") for _ in range(2)]
+    outcomes = []
+    for future in futures:
+        try:
+            outcomes.append(future.result())
+        except ValueError as exc:
+            outcomes.append(exc)
+
+    assert sum(isinstance(item, QualityRun) for item in outcomes) == 1
+    assert sum(isinstance(item, ValueError) for item in outcomes) == 1
+    release = store.get_release("candidate")
+    assert release is not None
+    assert release.status == "passed"
+    assert release.quality_run_id is None
+    assert len(store.runs) == 1

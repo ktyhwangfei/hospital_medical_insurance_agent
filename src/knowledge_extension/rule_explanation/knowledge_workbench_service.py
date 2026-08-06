@@ -10,12 +10,17 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_models import 
     ApprovedUnit,
     KnowledgeCitation,
     KnowledgeConfidence,
+    KnowledgeEvidence,
     KnowledgeField,
     KnowledgeItem,
     KnowledgeWorkbenchDocument,
+    SemanticBinding,
     StandardizedField,
     WorkbenchDocumentList,
     WorkbenchDocumentSummary,
+)
+from src.knowledge_extension.rule_explanation.knowledge_review_store import (
+    KnowledgeReviewStore,
 )
 from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import (
     match_leaves,
@@ -81,6 +86,22 @@ _NON_BUSINESS_FIELDS = {
     "approved_case_accuracy",
     "source_span",
 }
+
+# V4.1 S1：rule_type → 业务主题概念 / 规则类型枚举 / 中文标签（阶段一映射，抽取枚举扩展后置）
+_RULE_TYPE_META: dict[str, tuple[str, str, str]] = {
+    "payment_ratio": ("PAYMENT_RATIO", "FIXED_STANDARD", "固定标准（支付比例）"),
+    "deductible": ("DEDUCTIBLE", "FIXED_STANDARD", "固定标准（起付）"),
+    "deductible_line": ("DEDUCTIBLE", "FIXED_STANDARD", "固定标准（起付线）"),
+    "cap": ("CAP", "FIXED_STANDARD", "固定标准（封顶）"),
+    "cap_amount": ("CAP", "FIXED_STANDARD", "固定标准（封顶额）"),
+    "eligibility": ("ELIGIBILITY", "ELIGIBILITY", "资格条件"),
+    "eligibility_rule": ("ELIGIBILITY", "ELIGIBILITY", "资格条件"),
+}
+
+
+def _short_hash(*parts: str) -> str:
+    raw = "|".join(parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 _APPLICABLE_FIELDS = {
     "payment_ratio": ("psn_type", "med_type", "payment_ratio"),
@@ -205,10 +226,12 @@ class KnowledgeWorkbenchService:
         pipeline_store: PipelineReadPort,
         registry: "SemanticRegistry | None" = None,
         alignment_service: "SemanticAlignmentService | None" = None,
+        review_store: KnowledgeReviewStore | None = None,
     ) -> None:
         self._pipeline_store = pipeline_store
         self._registry = registry
         self._alignment_service = alignment_service
+        self._review_store = review_store
 
     def list_documents(self) -> WorkbenchDocumentList:
         """只列出至少含一个审核通过 Unit 的政策文档。"""
@@ -226,12 +249,23 @@ class KnowledgeWorkbenchService:
             ))
         return WorkbenchDocumentList(items=items, total=len(items))
 
-    def get_document(self, doc_id: str) -> KnowledgeWorkbenchDocument:
+    def list_document_ids(self) -> list[str]:
+        """廉价枚举全部文档 id（不构建工作台详情），供只读批次扫描使用。"""
+        return self._pipeline_store.list_document_ids()
+
+    def get_document(
+        self,
+        doc_id: str,
+        *,
+        include_knowledge: bool = True,
+    ) -> KnowledgeWorkbenchDocument:
         document = self._pipeline_store.get_document(doc_id)
         if document is None:
             raise ValueError(f"政策文档不存在: {doc_id}")
 
         contract_version, published_metrics = self._load_contract()
+
+        review_map = self._load_review_map(doc_id)
 
         _root, _by_id, _all_leaves, kept = parse_kept_leaves(
             str(document.get("content_text") or ""),
@@ -267,20 +301,35 @@ class KnowledgeWorkbenchService:
             if status not in {"reviewed", "published"}:
                 continue
             knowledge: list[KnowledgeItem] = []
-            for extraction, relationship_source in relations:
-                fields = extraction.get("extracted_fields") or {}
-                for rule in fields.get("rules") or []:
-                    knowledge.append(
-                        self._knowledge_item(
-                            document=document,
-                            unit_id=leaf.node_id,
-                            extraction=extraction,
-                            relationship_source=relationship_source,
-                            rule=rule,
-                            contract_version=contract_version,
-                            published_metrics=published_metrics,
+            clause_path = "/".join(getattr(leaf, "path", []) or [])
+            knowledge_count = 0
+            if include_knowledge:
+                for extraction, relationship_source in relations:
+                    fields = extraction.get("extracted_fields") or {}
+                    extraction_id = str(extraction.get("extraction_id") or "")
+                    for rule in fields.get("rules") or []:
+                        knowledge_id = _knowledge_id(extraction_id, rule)
+                        review = review_map.get(knowledge_id)
+                        knowledge.append(
+                            self._knowledge_item(
+                                document=document,
+                                unit_id=leaf.node_id,
+                                extraction=extraction,
+                                relationship_source=relationship_source,
+                                rule=rule,
+                                contract_version=contract_version,
+                                published_metrics=published_metrics,
+                                review_status=review.status if review else "pending",
+                                review_note=review.note if review else None,
+                                clause_path=clause_path,
+                            )
                         )
-                    )
+                knowledge_count = len(knowledge)
+            else:
+                # 只读批次扫描：跳过 KnowledgeItem 构建，仅统计规则数。
+                for extraction, _relationship_source in relations:
+                    fields = extraction.get("extracted_fields") or {}
+                    knowledge_count += len(fields.get("rules") or [])
             units.append(
                 ApprovedUnit(
                     unit_id=leaf.node_id,
@@ -290,7 +339,7 @@ class KnowledgeWorkbenchService:
                     source_text=str(getattr(leaf, "text", "") or ""),
                     order_no=int(getattr(leaf, "order_no", 0) or 0),
                     status=status,
-                    knowledge_count=len(knowledge),
+                    knowledge_count=knowledge_count,
                     knowledge=knowledge,
                 )
             )
@@ -329,10 +378,18 @@ class KnowledgeWorkbenchService:
         rule: dict[str, Any],
         contract_version: str | None,
         published_metrics: dict[str, "Metric"],
+        review_status: str = "pending",
+        review_note: str | None = None,
+        clause_path: str = "",
     ) -> KnowledgeItem:
         extraction_id = str(extraction.get("extraction_id") or "")
         knowledge_id = _knowledge_id(extraction_id, rule)
+        doc_id = str(document.get("doc_id") or "")
         source_text = str(rule.get("source_text") or extraction.get("source_text") or "")
+        rule_type = str(rule.get("rule_type") or "")
+        _topic, _enum, _label = _RULE_TYPE_META.get(
+            rule_type, ("UNCLASSIFIED", "UNCLASSIFIED", "未分类")
+        )
         structured_fields = [
             KnowledgeField(
                 field_code=key,
@@ -389,7 +446,45 @@ class KnowledgeWorkbenchService:
                     evidence=source_text,
                 )
             ],
+            review_status=review_status,
+            review_note=review_note,
+            # —— V4.1 S1 政策规则单元契约字段 ——
+            rule_group_id=f"KG_{_short_hash(unit_id, extraction_id)}",
+            topic_concept=_topic,
+            rule_type_enum=_enum,
+            rule_type_label=_label,
+            validity=None,
+            variants=[],
+            evidences=[
+                KnowledgeEvidence(
+                    evidence_id=f"ev_{_short_hash(doc_id, unit_id, source_text)}",
+                    document_version_id=doc_id,
+                    unit_id=unit_id,
+                    clause_path=clause_path or None,
+                    exact_quote=source_text,
+                    evidence_role="主结论证据",
+                )
+            ] if source_text else [],
+            semantic_bindings=[
+                SemanticBinding(
+                    policy_field=sf.source_field,
+                    value_domain=sf.value_domain,
+                    status={
+                        "mapped": "CONFIRMED",
+                        "unmapped": "UNMAPPED",
+                        "invalid": "INVALID",
+                        "not_applicable": "NOT_APPLICABLE",
+                    }.get(sf.status, "UNMAPPED"),
+                )
+                for sf in standardized_fields
+            ],
         )
+
+    def _load_review_map(self, doc_id: str) -> dict[str, "object"]:
+        """加载文档下所有知识的最新评审状态，映射 knowledge_id → KnowledgeReview。"""
+        if self._review_store is None:
+            return {}
+        return {item.knowledge_id: item for item in self._review_store.list_for_document(doc_id)}
 
     def _standardize_fields(
         self,

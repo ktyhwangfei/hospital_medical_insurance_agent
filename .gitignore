@@ -27,6 +27,8 @@ node_modules/
 out/
 dist/
 build/
+!src/apps/portal/app/policy-knowledge/knowledge/build/
+!src/apps/portal/app/policy-knowledge/knowledge/build/**
 *.tsbuildinfo
 .npm/
 .pnpm-store/

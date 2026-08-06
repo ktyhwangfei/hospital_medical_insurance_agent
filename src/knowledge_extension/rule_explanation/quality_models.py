@@ -37,6 +37,8 @@ class KnowledgeRelease(BaseModel):
     contract_version: str
     case_set_version: int
     config_hash: str
+    source_change_set_id: str | None = None
+    quality_run_id: str | None = None
     quality_score: float | None = Field(default=None, ge=0, le=1)
     consistency_score: float | None = Field(default=None, ge=0, le=1)
     created_at: datetime = Field(default_factory=utc_now)

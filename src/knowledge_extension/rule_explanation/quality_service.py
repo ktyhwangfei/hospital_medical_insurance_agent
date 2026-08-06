@@ -89,8 +89,6 @@ class PolicyQualityService:
         config_hash = quality_config_hash(
             repeat_count, minimum_quality, minimum_consistency
         )
-        self._validate_comparison(candidate, case_set_version, config_hash, cases)
-
         run = QualityRun(
             run_id=f"run_{uuid4().hex}",
             release_id=candidate.release_id,
@@ -100,9 +98,12 @@ class PolicyQualityService:
             repeat_count=repeat_count,
             status="running",
         )
+        original_status = self._store.claim_quality_run(
+            candidate.release_id, run.run_id
+        )
         try:
+            self._validate_comparison(candidate, case_set_version, config_hash, cases)
             self._store.save_run(run)
-            self._store.save_release(candidate.model_copy(update={"status": "testing"}))
             candidate_results = self._evaluate(run, "candidate", candidate, cases)
             baseline_results = (
                 self._evaluate(run, "baseline", baseline, cases) if baseline else []
@@ -130,11 +131,13 @@ class PolicyQualityService:
                 "blocked_reasons": blocked_reasons,
             })
             self._store.save_run(finished)
-            self._store.save_release(candidate.model_copy(update={
-                "status": status,
-                "quality_score": candidate_score,
-                "consistency_score": consistency,
-            }))
+            self._store.complete_quality_run(
+                candidate.release_id,
+                run.run_id,
+                status=status,
+                quality_score=candidate_score,
+                consistency_score=consistency,
+            )
             return finished
         except Exception as exc:
             failed = run.model_copy(update={
@@ -143,16 +146,22 @@ class PolicyQualityService:
             })
             try:
                 self._store.save_run(failed)
-            finally:
-                self._store.save_release(candidate.model_copy(update={"status": "ready"}))
+            except Exception:
+                pass
+            try:
+                self._store.restore_quality_run(
+                    candidate.release_id, run.run_id, original_status
+                )
+            except Exception:
+                pass
             raise
 
     def _require_candidate(self, release_id: str) -> KnowledgeRelease:
         release = self._store.get_release(release_id)
         if release is None:
             raise ValueError(f"候选版本不存在: {release_id}")
-        if release.status != "ready":
-            raise ValueError(f"候选版本必须处于 ready 状态: {release.status}")
+        if release.status not in {"ready", "failed"}:
+            raise ValueError(f"候选版本必须处于 ready 或 failed 状态: {release.status}")
         return release
 
     @staticmethod
@@ -225,8 +234,9 @@ def _score_result(
     result = set(result_ids)
     expected = set(expected_ids)
     if not expected:
-        score = 1.0 if not result else 0.0
-        return score, not result, {"precision": score, "recall": 1.0, "f1": score}
+        # 无期望知识 ID 的用例视为“检索性校验”：检索到内容即通过。
+        score = 1.0 if result else 0.0
+        return score, bool(result), {"precision": 1.0 if result else 0.0, "recall": 1.0, "f1": score}
     matched = result & expected
     precision = len(matched) / len(result) if result else 0.0
     recall = len(matched) / len(expected)

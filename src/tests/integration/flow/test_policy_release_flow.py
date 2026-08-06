@@ -1,5 +1,23 @@
 from __future__ import annotations
 
+import pytest
+from fastapi.testclient import TestClient
+
+from src.knowledge_extension.rule_explanation.change_set_models import (
+    KnowledgeChangeSet,
+)
+from src.knowledge_extension.rule_explanation.change_set_service import ChangeSetService
+from src.knowledge_extension.rule_explanation.change_set_store import InMemoryChangeSetStore
+from src.knowledge_extension.rule_explanation.knowledge_build_models import (
+    KnowledgeBuildTask,
+    KnowledgeBuildTaskUnit,
+)
+from src.knowledge_extension.rule_explanation.knowledge_build_store import (
+    InMemoryKnowledgeBuildStore,
+)
+from src.knowledge_extension.rule_explanation.published_snapshot_store import (
+    InMemoryPublishedSnapshotStore,
+)
 from src.knowledge_extension.rule_explanation.quality_models import (
     KnowledgeRelease,
     PolicyQATestCase,
@@ -8,9 +26,11 @@ from src.knowledge_extension.rule_explanation.quality_models import (
 from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
 from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
 from src.knowledge_extension.rule_explanation.release_index import ReleaseIndexBuilder
+from src.runtime.api.app import create_app
 
 
 QUALITY_CONFIG_HASH = "197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22"
+PREFIX = "/api/v1/medical-insurance-ai-agent/policy-workbench"
 
 
 class HealthyBackend:
@@ -30,6 +50,11 @@ class HealthyBackend:
 class ReleaseSearcher:
     def search(self, release: KnowledgeRelease, case: PolicyQATestCase) -> list[str]:
         return ["kn_expected"] if release.release_id == "candidate" else []
+
+
+class LifecycleReleaseSearcher:
+    def search(self, release: KnowledgeRelease, case: PolicyQATestCase) -> list[str]:
+        return [] if release.release_id == "baseline" else ["kn_expected"]
 
 
 def test_candidate_build_test_and_manual_atomic_promotion_flow() -> None:
@@ -80,3 +105,452 @@ def test_candidate_build_test_and_manual_atomic_promotion_flow() -> None:
     assert promoted.status == "active"
     assert store.get_active_release().release_id == "candidate"  # type: ignore[union-attr]
     assert store.get_release("baseline").status == "retired"  # type: ignore[union-attr]
+
+
+class FailOncePublishedTaskStore(InMemoryKnowledgeBuildStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_publish = True
+
+    def save(self, task: KnowledgeBuildTask) -> KnowledgeBuildTask:
+        if task.status == "PUBLISHED" and self.fail_next_publish:
+            self.fail_next_publish = False
+            raise RuntimeError("transient task synchronization failure")
+        return super().save(task)
+
+
+class FailOncePublishedTaskValueStore(InMemoryKnowledgeBuildStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_publish = True
+
+    def save(self, task: KnowledgeBuildTask) -> KnowledgeBuildTask:
+        if task.status == "PUBLISHED" and self.fail_next_publish:
+            self.fail_next_publish = False
+            raise ValueError("lineage compare-and-set conflict")
+        return super().save(task)
+
+
+class FailOnceSnapshotStore(InMemoryPublishedSnapshotStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_save = True
+
+    def save(self, snapshot):
+        if self.fail_next_save:
+            self.fail_next_save = False
+            raise OSError("transient snapshot storage failure")
+        return super().save(snapshot)
+
+
+class FailingSourceChangeSetStore(InMemoryChangeSetStore):
+    fail_source_reads = False
+
+    def get(self, change_set_id: str) -> KnowledgeChangeSet | None:
+        if self.fail_source_reads:
+            raise RuntimeError("change-set store unavailable")
+        return super().get(change_set_id)
+
+
+class FailingSourceBuildTaskStore(InMemoryKnowledgeBuildStore):
+    fail_source_reads = False
+
+    def get(self, task_id: str) -> KnowledgeBuildTask | None:
+        if self.fail_source_reads:
+            raise RuntimeError("build-task store unavailable")
+        return super().get(task_id)
+
+
+def _lifecycle_client(
+    monkeypatch,
+    *,
+    change_set_store: InMemoryChangeSetStore | None = None,
+    build_store: InMemoryKnowledgeBuildStore | None = None,
+    snapshot_store: InMemoryPublishedSnapshotStore | None = None,
+) -> tuple[
+    TestClient,
+    InMemoryPolicyQualityStore,
+    InMemoryChangeSetStore,
+    InMemoryKnowledgeBuildStore,
+    InMemoryPublishedSnapshotStore,
+]:
+    from src.runtime.api import policy_workbench_routes
+
+    selected_change_set_store = change_set_store or InMemoryChangeSetStore()
+    selected_change_set_store.save(KnowledgeChangeSet(
+        change_set_id="CS_task_1",
+        source_document_version_id="doc_1",
+        doc_id="doc_1",
+        doc_title="职工医保待遇政策",
+        build_task_id="KB_task_1",
+        semantic_contract_version="2",
+        status="PENDING_REVIEW",
+    ))
+    change_set_service = ChangeSetService(object(), selected_change_set_store)
+    selected_build_store = build_store or InMemoryKnowledgeBuildStore()
+    selected_build_store.create_with_claims(KnowledgeBuildTask(
+        task_id="KB_task_1",
+        name="职工医保待遇知识构建",
+        status="WAITING_REVIEW",
+        build_mode="INITIAL",
+        semantic_contract_version="2",
+        pipeline_version="pipeline-v1",
+        model_scene="policy-knowledge-build",
+        config_hash="cfg_1",
+        created_by="policy-editor",
+        units=[KnowledgeBuildTaskUnit(
+            doc_id="doc_1",
+            doc_title="职工医保待遇政策",
+            unit_id="unit_1",
+            unit_revision_id="UR_1",
+            status="BUILT",
+            candidate_result_ids=["CS_task_1"],
+        )],
+        processed_units=1,
+        result_change_set_id="CS_task_1",
+    ))
+    quality_store = InMemoryPolicyQualityStore()
+    quality_service = PolicyQualityService(
+        quality_store,
+        LifecycleReleaseSearcher(),
+    )
+    selected_snapshot_store = snapshot_store or InMemoryPublishedSnapshotStore()
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_change_set_service",
+        lambda: change_set_service,
+    )
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_knowledge_build_store",
+        lambda: selected_build_store,
+    )
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_quality_store",
+        lambda: quality_store,
+    )
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_quality_service",
+        lambda: quality_service,
+    )
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_snapshot_store",
+        lambda: selected_snapshot_store,
+    )
+    return (
+        TestClient(create_app(), raise_server_exceptions=False),
+        quality_store,
+        selected_change_set_store,
+        selected_build_store,
+        selected_snapshot_store,
+    )
+
+
+def _approve_and_prepare_release(
+    client: TestClient,
+    quality_store: InMemoryPolicyQualityStore,
+) -> None:
+    approved = client.post(
+        f"{PREFIX}/change-sets/CS_task_1/approve",
+        json={"reviewer": "reviewer_a", "note": "通过"},
+    )
+    assert approved.status_code == 200
+    test_case = client.post(f"{PREFIX}/test-cases", json={
+        "case_id": "case_lifecycle",
+        "name": "发布生命周期经典用例",
+        "query": "职工住院支付比例",
+        "mode": "semantic",
+        "expected_knowledge_ids": ["kn_expected"],
+    })
+    assert test_case.status_code == 201
+    created = client.post(f"{PREFIX}/releases", json={
+        "release_id": "candidate_task_1",
+        "contract_version": "2",
+        "config_hash": QUALITY_CONFIG_HASH,
+        "source_change_set_id": "CS_task_1",
+    })
+    assert created.status_code == 201
+    release = quality_store.get_release("candidate_task_1")
+    assert release is not None
+    quality_store.save_release(release.model_copy(update={"status": "ready"}))
+    tested = client.post(
+        f"{PREFIX}/releases/candidate_task_1/test",
+        json={"repeat_count": 3},
+    )
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "passed"
+
+
+def test_task_backed_release_promotion_publishes_lineage_and_releases_claim(
+    monkeypatch,
+) -> None:
+    client, quality_store, change_sets, build_tasks, snapshots = _lifecycle_client(
+        monkeypatch
+    )
+    _approve_and_prepare_release(client, quality_store)
+
+    returned = client.post(
+        f"{PREFIX}/change-sets/CS_task_1/return",
+        json={"reviewer": "reviewer_b", "note": "不得改写已批准结果"},
+    )
+    assert returned.status_code == 409
+    assert change_sets.get("CS_task_1").status == "APPROVED"
+    assert build_tasks.get("KB_task_1").status == "APPROVED_PENDING_RELEASE"
+    assert build_tasks.get_claim("doc_1", "unit_1") is not None
+
+    promoted = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+
+    assert promoted.status_code == 200
+    snapshot = snapshots.get("candidate_task_1")
+    assert snapshot is not None
+    assert snapshot.source_change_set_id == "CS_task_1"
+    assert change_sets.get("CS_task_1").status == "PUBLISHED"
+    assert build_tasks.get("KB_task_1").status == "PUBLISHED"
+    assert build_tasks.get_claim("doc_1", "unit_1") is None
+
+
+def test_promotion_retry_finishes_lineage_after_task_sync_failure(
+    monkeypatch,
+) -> None:
+    failing_store = FailOncePublishedTaskStore()
+    client, quality_store, change_sets, build_tasks, snapshots = _lifecycle_client(
+        monkeypatch,
+        build_store=failing_store,
+    )
+    _approve_and_prepare_release(client, quality_store)
+
+    first = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+
+    assert first.status_code == 503
+    assert first.json()["detail"]["error_code"] == "POLICY_RELEASE_SYNC_PENDING"
+    assert quality_store.get_release("candidate_task_1").status == "active"
+    assert snapshots.get("candidate_task_1").source_change_set_id == "CS_task_1"
+    assert change_sets.get("CS_task_1").status == "PUBLISHED"
+    assert build_tasks.get("KB_task_1").status == "APPROVED_PENDING_RELEASE"
+    assert build_tasks.get_claim("doc_1", "unit_1") is not None
+    pending_gate = client.get(
+        f"{PREFIX}/releases/candidate_task_1/gate-status"
+    )
+    assert pending_gate.status_code == 200
+    assert pending_gate.json()["sync_pending"] is True
+    assert any(
+        "构建任务" in reason
+        for reason in pending_gate.json()["sync_pending_reasons"]
+    )
+    active_fallback = client.get(f"{PREFIX}/published/active")
+    assert active_fallback.status_code == 200
+    assert active_fallback.json()["source_change_set_id"] == "CS_task_1"
+
+    retried = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+
+    assert retried.status_code == 200
+    assert build_tasks.get("KB_task_1").status == "PUBLISHED"
+    assert build_tasks.get_claim("doc_1", "unit_1") is None
+    completed_gate = client.get(
+        f"{PREFIX}/releases/candidate_task_1/gate-status"
+    )
+    assert completed_gate.json()["sync_pending"] is False
+    assert completed_gate.json()["sync_pending_reasons"] == []
+
+
+def test_post_active_lineage_value_error_is_sync_pending_and_retryable(
+    monkeypatch,
+) -> None:
+    failing_store = FailOncePublishedTaskValueStore()
+    client, quality_store, change_sets, build_tasks, _snapshots = _lifecycle_client(
+        monkeypatch,
+        build_store=failing_store,
+    )
+    _approve_and_prepare_release(client, quality_store)
+
+    first = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+
+    assert first.status_code == 503
+    assert first.json()["detail"]["error_code"] == "POLICY_RELEASE_SYNC_PENDING"
+    assert quality_store.get_active_release().release_id == "candidate_task_1"  # type: ignore[union-attr]
+    assert change_sets.get("CS_task_1").status == "PUBLISHED"
+    assert build_tasks.get("KB_task_1").status == "APPROVED_PENDING_RELEASE"
+
+    retried = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+
+    assert retried.status_code == 200
+    assert build_tasks.get("KB_task_1").status == "PUBLISHED"
+    assert build_tasks.get_claim("doc_1", "unit_1") is None
+
+
+def test_tampered_source_does_not_replace_existing_active_release(
+    monkeypatch,
+) -> None:
+    client, quality_store, change_sets, _build_tasks, snapshots = _lifecycle_client(
+        monkeypatch
+    )
+    quality_store.save_release(KnowledgeRelease(
+        release_id="baseline",
+        status="passed",
+        facts_collection="policy_facts_baseline",
+        rules_collection="policy_rules_baseline",
+        contract_version="1",
+        case_set_version=0,
+        config_hash=QUALITY_CONFIG_HASH,
+    ))
+    quality_store.save_run(QualityRun(
+        run_id="run_baseline",
+        release_id="baseline",
+        case_set_version=0,
+        config_hash=QUALITY_CONFIG_HASH,
+        status="passed",
+    ))
+    quality_store.promote_release("baseline", "publisher")
+    _approve_and_prepare_release(client, quality_store)
+    change_sets.update_status("CS_task_1", "REJECTED")
+
+    response = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_code"] == (
+        "POLICY_RELEASE_LINEAGE_INVALID"
+    )
+    assert quality_store.get_active_release().release_id == "baseline"
+    assert quality_store.get_release("baseline").status == "active"
+    assert quality_store.get_release("candidate_task_1").status == "passed"
+    assert snapshots.get("candidate_task_1") is None
+
+
+@pytest.mark.parametrize("unavailable_store", ["change_set", "build_task"])
+def test_source_store_failure_blocks_promotion_before_active_switch(
+    monkeypatch,
+    unavailable_store: str,
+) -> None:
+    failing_change_sets = FailingSourceChangeSetStore()
+    failing_build_tasks = FailingSourceBuildTaskStore()
+    client, quality_store, change_sets, build_tasks, snapshots = _lifecycle_client(
+        monkeypatch,
+        change_set_store=failing_change_sets,
+        build_store=failing_build_tasks,
+    )
+    _approve_and_prepare_release(client, quality_store)
+    failing_change_sets.fail_source_reads = unavailable_store == "change_set"
+    failing_build_tasks.fail_source_reads = unavailable_store == "build_task"
+
+    response = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "POLICY_RELEASE_SOURCE_UNAVAILABLE"
+    assert detail["audit_event"] == {
+        "release_id": "candidate_task_1",
+        "source_change_set_id": "CS_task_1",
+    }
+    assert quality_store.get_release("candidate_task_1").status == "passed"
+    assert quality_store.get_active_release() is None
+    assert snapshots.get("candidate_task_1") is None
+    failing_change_sets.fail_source_reads = False
+    failing_build_tasks.fail_source_reads = False
+    assert change_sets.get("CS_task_1").status == "APPROVED"
+    assert build_tasks.get("KB_task_1").status == "APPROVED_PENDING_RELEASE"
+    assert build_tasks.get_claim("doc_1", "unit_1") is not None
+
+
+def test_promotion_retry_finishes_after_arbitrary_snapshot_store_failure(
+    monkeypatch,
+) -> None:
+    failing_snapshots = FailOnceSnapshotStore()
+    client, quality_store, change_sets, build_tasks, snapshots = _lifecycle_client(
+        monkeypatch,
+        snapshot_store=failing_snapshots,
+    )
+    _approve_and_prepare_release(client, quality_store)
+
+    first = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+
+    assert first.status_code == 503
+    assert first.json()["detail"]["error_code"] == "POLICY_RELEASE_SYNC_PENDING"
+    assert quality_store.get_release("candidate_task_1").status == "active"
+    assert snapshots.get("candidate_task_1") is None
+    assert change_sets.get("CS_task_1").status == "APPROVED"
+    assert build_tasks.get("KB_task_1").status == "APPROVED_PENDING_RELEASE"
+    assert build_tasks.get_claim("doc_1", "unit_1") is not None
+    pending_gate = client.get(
+        f"{PREFIX}/releases/candidate_task_1/gate-status"
+    )
+    assert pending_gate.status_code == 200
+    assert pending_gate.json()["sync_pending"] is True
+    assert any(
+        "快照" in reason
+        for reason in pending_gate.json()["sync_pending_reasons"]
+    )
+    active_fallback = client.get(f"{PREFIX}/published/active")
+    assert active_fallback.status_code == 200
+    assert active_fallback.json()["source_change_set_id"] == "CS_task_1"
+
+    retried = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+
+    assert retried.status_code == 200
+    assert snapshots.get("candidate_task_1").source_change_set_id == "CS_task_1"
+    assert change_sets.get("CS_task_1").status == "PUBLISHED"
+    assert build_tasks.get("KB_task_1").status == "PUBLISHED"
+    assert build_tasks.get_claim("doc_1", "unit_1") is None
+    assert client.get(
+        f"{PREFIX}/releases/candidate_task_1/gate-status"
+    ).json()["sync_pending"] is False
+
+
+def test_formal_release_gate_is_true_before_promotion_and_false_after_activation(
+    monkeypatch,
+) -> None:
+    client, quality_store, _change_sets, _build_tasks, _snapshots = (
+        _lifecycle_client(monkeypatch)
+    )
+    _approve_and_prepare_release(client, quality_store)
+
+    before = client.get(
+        f"{PREFIX}/releases/candidate_task_1/gate-status"
+    )
+    promoted = client.post(
+        f"{PREFIX}/releases/candidate_task_1/promote",
+        json={"reviewed_by": "publisher"},
+    )
+    after = client.get(
+        f"{PREFIX}/releases/candidate_task_1/gate-status"
+    )
+
+    assert before.status_code == 200
+    assert before.json()["can_promote"] is True
+    assert before.json()["blocked_reasons"] == []
+    assert promoted.status_code == 200
+    assert after.status_code == 200
+    assert after.json()["can_promote"] is False
+    assert after.json()["active_release_id"] == "candidate_task_1"
+    assert any("活动版本" in reason for reason in after.json()["blocked_reasons"])
+    assert after.json()["sync_pending"] is False
+    assert after.json()["sync_pending_reasons"] == []
