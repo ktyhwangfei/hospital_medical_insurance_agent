@@ -207,6 +207,8 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - pytest_asyncio 插件与当前 pytest 版本不兼容，启动即报 `ImportError: cannot import name 'FixtureDef' from 'pytest'`。运行 pytest 时加 `-p no:asyncio` 禁用该插件。
 - 构建索引/质量检查连不上 PostgreSQL/Milvus：服务在 WSL2 Docker 内，Windows 侧 `127.0.0.1` 不通（WSL2 NAT 默认不转发），报 `ConnectionTimeout`。在 `C:\Users\<用户>\.wslconfig` 加 `[wsl2] networkingMode=mirrored` 后 `wsl --shutdown` 重启，`127.0.0.1` 直通 WSL 容器；临时方案用 `wsl -e hostname -I` 拿 WSL IP 设 `POSTGRES_HOST`/`MILVUS_HOST`（IP 重启会变，不推荐持久）。
 - `production.py` 的 `POSTGRES_PASSWORD` 默认曾为空，连库报 `fe_sendauth: no password supplied`。已改默认 `'postgres'`（与 AGENTS.md、docker-compose 一致）；若遇认证失败先检查该环境变量是否被显式设为空。
+- 部分工作区（codex-policy-compare-v2、pi-policy-knowledge-optimize 等独立副本）的启停脚本曾是写死 8000/3000 的旧版，多工作区会端口互斥。运行 `..\ws.ps1 sync` 同步新版脚本（按工作区名确定性分配 8100+/3100+）。
+- 多工作区同时验证时逐个猜端口很费时。用 `..\ws.ps1 list` 并行探测所有工作区端口与健康状态，`..\ws.ps1 up/down` 并行启停（详见下方多工作区章节）。
 
 ### 陷阱模板
 
@@ -232,6 +234,25 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 ```
 
 脚本自动处理：端口冲突检测、旧进程清理、启动验证、前端编译等待。
+
+#### 多工作区（Orca workspaces）并行启停
+
+> 多个工作区同时开发时，不要逐个跑上面的脚本，用中央管理脚本 `ws.ps1`。
+
+`ws.ps1` 位于 orca 工作区父目录（`C:\Users\于金宝\orca\workspaces\hospital_medical_insurance_agent\ws.ps1`），在 git 之外、不受分支影响，任何工作区内都可调用（`..\ws.ps1`）：
+
+```bash
+..\ws.ps1 list          # 列出所有工作区 + 端口 + 实时健康状态（并行探测，秒级）
+..\ws.ps1 up            # 并行启动全部工作区（也可 ..\ws.ps1 up <name> 启动指定）
+..\ws.ps1 down          # 并行停止全部工作区（含清理旧版写死 3000/8000 的实例）
+..\ws.ps1 url all       # 打印各工作区验证 URL（后端 /health + portal 首页）
+..\ws.ps1 ports         # 查看按工作区名推导的确定性端口
+..\ws.ps1 sync          # 把新版启停脚本同步到仍写死 3000/8000 的旧工作区
+```
+
+- 端口按工作区名确定性分配：后端 `8100+slot` / 前端 `3100+slot`（与启动顺序无关、跨机器稳定），验证 URL 可长期记忆；与旧脚本的 8000/3000 扫描区间不重叠。
+- `up` 前自动把端口写入该工作区 `.server-ports.json`；启动日志在 `.server-start.log` / `.server-start.err.log`。
+- 只管理含 `src/` 的目录；空目录（如 hermes-test-research）自动跳过。
 
 ## 排障零步骤
 
