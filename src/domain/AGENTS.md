@@ -561,6 +561,11 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 技能发布 | `SkillRelease` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | dev/test 环境中带 revision 的候选、审批和活动版本指针 |
 | 技能发布审批 | `SkillReleaseApproval` | **Entity** | Pydantic `BaseModel`（frozen） | 冻结制品、评测、配置和基线的人工审批证据 |
 | 技能发布状态 | `SkillReleaseStatus` | **Value Object** | `StrEnum` | candidate / approval_pending / approved / active / retired |
+| 技能草稿 | `SkillDraft` | **Entity** | Pydantic `BaseModel`（frozen） | 创建/导入/复制/编辑中的过渡态草稿，带乐观锁 revision，校验通过并确认后才物化为正式定义 |
+| 技能草稿状态 | `SkillDraftStatus` | **Value Object** | `StrEnum` | editing / validated / materialized |
+| 技能草稿来源 | `SkillDraftSourceType` | **Value Object** | `StrEnum` | template / import / copy |
+| 技能定义 | `SkillDefinition` | **Entity** | Pydantic `BaseModel`（frozen） | 正式目录中可加载定义的治理生命周期状态（enabled/disabled/archived），与不可变 `SkillVersion` 区分 |
+| 技能生命周期状态 | `SkillLifecycleStatus` | **Value Object** | `StrEnum` | enabled / disabled / archived |
 | 技能拥有者 | `ToolOwner` | **Value Object** | `StrEnum` | 技能/工具的归属角色（与 `Role` 一致但缺少 CLINICIAN） |
 | MCP 服务器 | `McpServer` | **Entity** | Pydantic `BaseModel` | 通过 MCP 协议注册的外部能力服务器 |
 | MCP 能力 | `McpCapability` | **Entity** | Pydantic `BaseModel` | MCP 服务器暴露的具体能力点（工具/资源/提示） |
