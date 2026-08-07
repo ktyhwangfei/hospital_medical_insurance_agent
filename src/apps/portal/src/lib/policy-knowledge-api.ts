@@ -581,6 +581,49 @@ export interface GovernanceDashboard {
 export const getGovernanceDashboard = () =>
   request<GovernanceDashboard>(`${WORKBENCH_API}/governance/dashboard`)
 
+// —— 治理概览聚合（概览页专用，见 政策知识治理-概览页丰富设计-V1.0 §6）——
+
+export interface PipelineSummary {
+  documents_count: number
+  documents_raw: number
+  extractions_count: number
+  extractions_draft: number
+  extractions_reviewed: number
+  extractions_published: number
+}
+
+export const getPipelineSummary = () =>
+  request<PipelineSummary>(`${PIPELINE_API}/summary`)
+
+export interface PipelineExtractionItem {
+  confidence?: number | null
+}
+
+export interface PipelineExtractionPage {
+  items: PipelineExtractionItem[]
+  total: number
+}
+
+export const listPipelineExtractions = (page = 1, pageSize = 100) =>
+  request<PipelineExtractionPage>(`${PIPELINE_API}/extractions?page=${page}&page_size=${pageSize}`)
+
+export interface PolicyKnowledgeStats {
+  total: number
+}
+
+export const getPolicyKnowledgeStats = () =>
+  request<PolicyKnowledgeStats>('/api/v1/medical-insurance-ai-agent/policy-knowledge/stats')
+
+export interface SemanticSummary {
+  metrics_count: number
+  mapped_count: number
+  unmapped_count: number
+  mapping_rate: number
+}
+
+export const getSemanticSummary = () =>
+  request<SemanticSummary>('/api/v1/medical-insurance-ai-agent/semantic/summary')
+
 export const listPublishedSnapshots = () =>
   request<PublishedSnapshot[]>(`${WORKBENCH_API}/published`)
 
