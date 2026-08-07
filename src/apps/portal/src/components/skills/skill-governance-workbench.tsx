@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { getSkillGovernanceWorkbench, listInfraSkillCatalog } from '@/lib/api-client'
 import type {
@@ -111,6 +111,11 @@ export default function SkillGovernanceWorkbench() {
   const [routeDrawerOpen, setRouteDrawerOpen] = useState(false)
   const [executionDrawerOpen, setExecutionDrawerOpen] = useState(false)
   const [mobileDetailOpen, setMobileDetailOpen] = useState(initialState.skillId !== null)
+  // 选中项单次查找并记忆，避免每次渲染对 items 做多次 O(n) 扫描，同时稳定下传给 SkillWorkspace 的 prop 引用
+  const selectedItem = useMemo(
+    () => items.find((item) => item.skill_id === selectedSkillId) ?? null,
+    [items, selectedSkillId],
+  )
 
   const prepareCatalogReload = useCallback(() => {
     setLoading(true)
@@ -232,10 +237,10 @@ export default function SkillGovernanceWorkbench() {
           >
             返回 Skill 目录
           </button>
-          {selectedSkillId && items.find((item) => item.skill_id === selectedSkillId) ? (
+          {selectedItem ? (
             <SkillWorkspace
               key={selectedSkillId}
-              item={items.find((item) => item.skill_id === selectedSkillId)!}
+              item={selectedItem}
               activeTab={activeTab}
               environment={environment}
               onTabChange={setActiveTab}

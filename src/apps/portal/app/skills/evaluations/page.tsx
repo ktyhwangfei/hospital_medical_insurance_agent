@@ -2,14 +2,16 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, FlaskConical } from 'lucide-react'
-import { listSkillEvalCases, listSkillEvalRuns } from '@/lib/api-client'
+import { listSkillEvalCases } from '@/lib/api-client'
 import { ApiClientError } from '@/lib/types'
 import type { SkillEvalCaseListResponse, SkillEvalRunListResponse } from '@/lib/types'
 
 // /skills/evaluations 评测记录页：浏览评测用例与运行记录（设计 §3.1）
 export default function SkillEvaluationsPage() {
   const [cases, setCases] = useState<SkillEvalCaseListResponse | null>(null)
-  const [runs, setRuns] = useState<SkillEvalRunListResponse | null>(null)
+  // 跨 Skill 的评测运行汇总需要后端 /infra-skills/eval-runs 端点；当前仅有按 skill 的端点，
+  // 旧代码用 listSkillEvalRuns('') 取全部会稳定 404（每次加载浪费一次请求）。暂置空，待后端补端点。
+  const [runs] = useState<SkillEvalRunListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -17,12 +19,8 @@ export default function SkillEvaluationsPage() {
     setLoading(true)
     setError(null)
     try {
-      const [c, r] = await Promise.all([
-        listSkillEvalCases(),
-        listSkillEvalRuns('').catch(() => ({ items: [], total: 0 }) as SkillEvalRunListResponse),
-      ])
+      const c = await listSkillEvalCases()
       setCases(c)
-      setRuns(r)
     } catch (err) {
       setError(err instanceof ApiClientError ? err.detail.message : '加载评测记录失败')
     } finally {
