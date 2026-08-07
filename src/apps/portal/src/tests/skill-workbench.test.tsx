@@ -190,13 +190,13 @@ describe('Skill governance workbench', () => {
     expect(window.location.search).toContain('tab=evaluation')
   })
 
-  it('shows exactly one primary release action for approval pending', async () => {
+  it('surfaces the approval action at the workspace top for approval pending', async () => {
     mockListSkillReleases.mockResolvedValue(releasePage('approval_pending'))
     render(<SkillGovernanceWorkbench />)
 
-    await userEvent.click(await screen.findByRole('tab', { name: '发布' }))
-
+    // 不进入发布 Tab，主动作已直达工作台顶层（解决"操作过深"）
     expect(await screen.findByRole('button', { name: '人工审批通过' })).toBeEnabled()
+    // 发布 Tab 此时未挂载，不会出现冲突动作
     expect(screen.queryByRole('button', { name: '申请审批' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '激活 Test Shadow' })).not.toBeInTheDocument()
   })
@@ -204,17 +204,25 @@ describe('Skill governance workbench', () => {
   it('refreshes catalog and lifecycle after activation', async () => {
     let releaseStatus: 'approved' | 'active' = 'approved'
     mockListSkillReleases.mockImplementation(async () => releasePage(releaseStatus))
+    mockGetSkillGovernanceWorkbench.mockImplementation(async () => ({
+      ...workbenchResponse,
+      summary: { ...workbenchResponse.summary, test_active: releaseStatus === 'active' ? 1 : 0 },
+      items: [{
+        ...workbenchResponse.items[0],
+        test_release_status: releaseStatus === 'active' ? 'active' : null,
+      }],
+    }))
     mockActivateSkillRelease.mockImplementation(async () => {
       releaseStatus = 'active'
       return releasePage('active').items[0]
     })
     render(<SkillGovernanceWorkbench />)
 
-    await userEvent.click(await screen.findByRole('tab', { name: '发布' }))
+    // 直接点顶层主动作按钮，无需进入发布 Tab
     await userEvent.click(await screen.findByRole('button', { name: '激活 Test Shadow' }))
 
     await waitFor(() => expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(2))
-    expect(await screen.findByText('Test Shadow 已激活')).toBeVisible()
+    expect((await screen.findAllByText('Test Shadow 已激活'))[0]).toBeVisible()
   })
 
   it('keeps selected skill and tab after closing route diagnostics', async () => {

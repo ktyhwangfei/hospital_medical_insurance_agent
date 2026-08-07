@@ -1,13 +1,18 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
+  approveSkillRelease,
+  activateSkillRelease,
+  createSkillEvalRun,
+  createSkillRelease,
   getInfraSkillDetail,
   listInfraSkillVersions,
   listSkillEvalRuns,
   listSkillReleases,
+  requestSkillReleaseApproval,
 } from '@/lib/api-client'
 import type {
   InfraSkillDetailResponse,
@@ -22,8 +27,14 @@ import SkillDevelopmentTab from './skill-development-tab'
 import SkillEvaluationSuite from './skill-evaluation-suite'
 import SkillLifecycleStepper from './skill-lifecycle-stepper'
 import SkillOverviewTab from './skill-overview-tab'
+import SkillPrimaryActionBar from './skill-primary-action-bar'
 import SkillReleasePanel from './skill-release-panel'
 import SkillVersionsTab from './skill-versions-tab'
+import {
+  computePrimaryAction,
+  eligibleEvalRun,
+  latestActiveRelease,
+} from './skill-primary-action'
 
 interface SkillWorkspaceProps {
   item: SkillWorkbenchItem
@@ -66,6 +77,20 @@ export default function SkillWorkspace({
   const [releases, setReleases] = useState<SkillReleaseResponse[]>([])
   const [errors, setErrors] = useState<EvidenceErrors>(emptyErrors)
   const [reloadToken, setReloadToken] = useState(0)
+  const [actionBusy, setActionBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  // 下一个主治理动作：依据已加载证据推导，提到顶层一键执行，避免钻 Tab
+  const primaryAction = useMemo(
+    () => computePrimaryAction(item, versions, evalRuns, releases),
+    [item, versions, evalRuns, releases],
+  )
+
+  // 切换 Skill 时清掉上一次动作的残留状态
+  useEffect(() => {
+    setActionError(null)
+    setActionBusy(false)
+  }, [item.skill_id])
 
   const loadEvidence = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -96,6 +121,81 @@ export default function SkillWorkspace({
     onChanged()
   }
 
+  // 顶层主动作执行：写操作直接调 API 后刷新证据；navigate 仅切 Tab；none 无操作
+  async function runPrimary(): Promise<void> {
+    const action = primaryAction
+    setActionError(null)
+    if (action.kind === 'none') return
+    if (action.kind === 'navigate') {
+      if (action.targetTab) onTabChange(action.targetTab)
+      return
+    }
+    setActionBusy(true)
+    try {
+      const key = `${item.skill_id}:${action.kind}:${Date.now()}`
+      switch (action.kind) {
+        case 'run_evaluation': {
+          const version =
+            versions.find((candidate) => candidate.validation_status === 'passed') ?? versions[0]
+          if (!version) throw new Error('没有可评测的已登记版本')
+          await createSkillEvalRun(item.skill_id, { version_id: version.version_id })
+          break
+        }
+        case 'create_candidate': {
+          const eligible = eligibleEvalRun(evalRuns, versions)
+          if (!eligible) throw new Error('没有通过门禁的评测')
+          await createSkillRelease(
+            item.skill_id,
+            { version_id: eligible.version_id, eval_run_id: eligible.run_id, environment: 'test' },
+            key,
+          )
+          break
+        }
+        case 'request_approval': {
+          const target = latestActiveRelease(releases)
+          if (!target) throw new Error('没有可推进的候选发布')
+          await requestSkillReleaseApproval(
+            item.skill_id,
+            target.release_id,
+            { expected_revision: target.revision },
+            key,
+          )
+          break
+        }
+        case 'approve': {
+          const target = latestActiveRelease(releases)
+          if (!target) throw new Error('没有待审批的发布')
+          await approveSkillRelease(
+            item.skill_id,
+            target.release_id,
+            {
+              expected_revision: target.revision,
+              reason: '固定评测门禁通过，同意 Test Shadow 激活',
+            },
+            key,
+          )
+          break
+        }
+        case 'activate': {
+          const target = latestActiveRelease(releases)
+          if (!target) throw new Error('没有可激活的发布')
+          await activateSkillRelease(
+            item.skill_id,
+            target.release_id,
+            { expected_revision: target.revision },
+            key,
+          )
+          break
+        }
+      }
+      handleChanged()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '操作失败，请重试')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
   return (
     <section data-testid={`skill-workspace-${item.skill_id}`} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
@@ -109,6 +209,13 @@ export default function SkillWorkspace({
           <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">{item.test_release_status === 'active' ? 'Test Active' : 'Test 未激活'}</span>
         </div>
       </div>
+      <SkillPrimaryActionBar
+        action={primaryAction}
+        busy={actionBusy}
+        readOnly={environment === 'dev'}
+        error={actionError}
+        onRun={() => void runPrimary()}
+      />
       <SkillLifecycleStepper item={item} onNavigate={onTabChange} />
       <Tabs
         data-testid="skill-workspace-tabs"
