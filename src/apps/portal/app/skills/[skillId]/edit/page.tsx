@@ -330,20 +330,20 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
           <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-800">
             <ShieldCheck className="h-4 w-4" /> 校验结果 {validation.blocking_ok ? '✓ 通过' : '✗ 有阻塞'}
           </h3>
-          {validation.report.blocking.length > 0 && (
+          {validation.issues.some((i) => i.severity === 'blocking') && (
             <div className="space-y-1">
-              {validation.report.blocking.map((issue, i) => (
-                <div key={i} className="flex items-center gap-2 rounded bg-red-50 px-3 py-1.5 text-xs text-red-700">
-                  <XCircle className="h-3.5 w-3.5 shrink-0" /> [{issue.code}] {issue.field}: {issue.message}
+              {validation.issues.filter((i) => i.severity === 'blocking').map((issue, i) => (
+                <div key={`b-${i}`} className="flex items-center gap-2 rounded bg-red-50 px-3 py-1.5 text-xs text-red-700">
+                  <XCircle className="h-3.5 w-3.5 shrink-0" /> [{issue.code}] {issue.path ?? '—'}: {issue.message}
                 </div>
               ))}
             </div>
           )}
-          {validation.report.warnings.length > 0 && (
+          {validation.issues.some((i) => i.severity === 'warning') && (
             <div className="mt-1 space-y-1">
-              {validation.report.warnings.map((issue, i) => (
-                <div key={i} className="flex items-center gap-2 rounded bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
-                  <AlertCircle className="h-3.5 w-3.5 shrink-0" /> [{issue.code}] {issue.field}: {issue.message}
+              {validation.issues.filter((i) => i.severity === 'warning').map((issue, i) => (
+                <div key={`w-${i}`} className="flex items-center gap-2 rounded bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" /> [{issue.code}] {issue.path ?? '—'}: {issue.message}
                 </div>
               ))}
             </div>

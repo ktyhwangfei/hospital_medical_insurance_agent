@@ -46,7 +46,7 @@ export default function SkillDraftsPage() {
     if (!deleteTarget) return
     setDeleting(true)
     try {
-      await deleteSkillDraft(deleteTarget.draft_id)
+      await deleteSkillDraft(deleteTarget.draft_id, deleteTarget.revision)
       setDeleteTarget(null)
       await load()
     } catch (err) {

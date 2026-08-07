@@ -829,21 +829,21 @@ export interface SkillDraftSaveRequest {
   etag?: string
 }
 
+export type SkillValidationSeverity = 'blocking' | 'warning'
+
 export interface SkillValidationIssue {
-  field: string
   code: string
   message: string
+  severity: SkillValidationSeverity
+  path: string | null
 }
-
-export type SkillValidationSeverity = 'blocking' | 'warning'
 
 export interface SkillValidationResponse {
   draft_id: string
-  report: {
-    blocking: SkillValidationIssue[]
-    warnings: SkillValidationIssue[]
-  }
+  issues: SkillValidationIssue[]
+  has_blocking: boolean
   blocking_ok: boolean
+  revision: number
 }
 
 export interface SkillPackageFile {

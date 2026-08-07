@@ -64,14 +64,17 @@ export async function saveSkillDraft(
 ): Promise<SkillDraftResponse> {
   return requestJson<SkillDraftResponse>(
     `/infra-skills/drafts/${encodeURIComponent(draftId)}`,
-    { method: 'PATCH', body: JSON.stringify(request) },
+    { method: 'PATCH', headers: skillControlHeaders(), body: JSON.stringify(request) },
   )
 }
 
-export async function deleteSkillDraft(draftId: string): Promise<void> {
+export async function deleteSkillDraft(
+  draftId: string,
+  expectedRevision: number,
+): Promise<void> {
   await requestJson<void>(
-    `/infra-skills/drafts/${encodeURIComponent(draftId)}`,
-    { method: 'DELETE' },
+    `/infra-skills/drafts/${encodeURIComponent(draftId)}?expected_revision=${expectedRevision}`,
+    { method: 'DELETE', headers: skillControlHeaders() },
   )
 }
 
@@ -111,7 +114,7 @@ export async function importSkillZip(
 export async function validateSkillDraft(draftId: string): Promise<SkillValidationResponse> {
   return requestJson<SkillValidationResponse>(
     `/infra-skills/drafts/${encodeURIComponent(draftId)}/validate`,
-    { method: 'POST' },
+    { method: 'POST', headers: skillControlHeaders() },
   )
 }
 
@@ -152,7 +155,7 @@ export async function disableSkill(
 ): Promise<SkillDefinitionResponse> {
   return requestJson<SkillDefinitionResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/disable`,
-    { method: 'POST', body: JSON.stringify(request) },
+    { method: 'POST', headers: skillControlHeaders(), body: JSON.stringify(request) },
   )
 }
 
@@ -162,7 +165,7 @@ export async function restoreSkill(
 ): Promise<SkillDefinitionResponse> {
   return requestJson<SkillDefinitionResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/restore`,
-    { method: 'POST', body: JSON.stringify(request) },
+    { method: 'POST', headers: skillControlHeaders(), body: JSON.stringify(request) },
   )
 }
 
@@ -172,7 +175,7 @@ export async function archiveSkill(
 ): Promise<SkillDefinitionResponse> {
   return requestJson<SkillDefinitionResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/archive`,
-    { method: 'POST', body: JSON.stringify(request) },
+    { method: 'POST', headers: skillControlHeaders(), body: JSON.stringify(request) },
   )
 }
 

@@ -9,6 +9,8 @@ import {
   validateSkillDraft,
   materializeSkill,
   disableSkill,
+  restoreSkill,
+  archiveSkill,
   importSkillZip,
 } from '@/lib/skill-draft-api'
 
@@ -75,17 +77,23 @@ describe('skill-draft-api client', () => {
     })
     expect(result.revision).toBe(2)
     const init = fetchMock.mock.calls[0][1] as RequestInit
+    const headers = new Headers(init.headers)
     expect(init.method).toBe('PATCH')
+    expect(headers.get('Authorization')).toMatch(/^Bearer /)
     expect(fetchMock.mock.calls[0][0]).toContain('/infra-skills/drafts/d-1')
   })
 
-  it('deletes a draft', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+  it('deletes a draft with expected_revision and auth header', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...DRAFT, status: 'deleted' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await deleteSkillDraft('d-1')
+    await deleteSkillDraft('d-1', 3)
     const init = fetchMock.mock.calls[0][1] as RequestInit
+    const headers = new Headers(init.headers)
     expect(init.method).toBe('DELETE')
+    expect(fetchMock.mock.calls[0][0]).toContain('/infra-skills/drafts/d-1')
+    expect(fetchMock.mock.calls[0][0]).toContain('expected_revision=3')
+    expect(headers.get('Authorization')).toMatch(/^Bearer /)
   })
 
   it('copies a skill', async () => {
@@ -98,14 +106,26 @@ describe('skill-draft-api client', () => {
     expect(body.new_skill_id).toBe('demo_skill')
   })
 
-  it('validates a draft', async () => {
+  it('validates a draft with auth header and parses issues', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({ draft_id: 'd-1', report: { blocking: [], warnings: [] }, blocking_ok: true }),
+      jsonResponse({
+        draft_id: 'd-1',
+        issues: [
+          { code: 'MISSING_SKILL_ID', message: '缺少 skill_id', severity: 'blocking', path: 'basic.skill_id' },
+        ],
+        has_blocking: true,
+        blocking_ok: false,
+        revision: 2,
+      }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await validateSkillDraft('d-1')
-    expect(result.blocking_ok).toBe(true)
+    expect(result.blocking_ok).toBe(false)
+    expect(result.issues[0].severity).toBe('blocking')
+    expect(result.issues[0].path).toBe('basic.skill_id')
+    const headers = new Headers((fetchMock.mock.calls[0][1] as RequestInit).headers)
+    expect(headers.get('Authorization')).toMatch(/^Bearer /)
   })
 
   it('materializes a draft with reason', async () => {
@@ -131,8 +151,35 @@ describe('skill-draft-api client', () => {
 
     await disableSkill('demo_skill', { expected_revision: 1, reason: '停用测试' })
     expect(fetchMock.mock.calls[0][0]).toContain('/infra-skills/demo_skill/disable')
-    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    const headers = new Headers(init.headers)
+    expect(headers.get('Authorization')).toMatch(/^Bearer /)
+    const body = JSON.parse(String(init.body))
     expect(body.expected_revision).toBe(1)
+  })
+
+  it('restores a skill with auth header', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ ...DRAFT, lifecycle_status: 'enabled', revision: 3 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await restoreSkill('demo_skill', { expected_revision: 2, reason: '恢复' })
+    expect(fetchMock.mock.calls[0][0]).toContain('/infra-skills/demo_skill/restore')
+    const headers = new Headers((fetchMock.mock.calls[0][1] as RequestInit).headers)
+    expect(headers.get('Authorization')).toMatch(/^Bearer /)
+  })
+
+  it('archives a skill with auth header', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ ...DRAFT, lifecycle_status: 'archived', revision: 4 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await archiveSkill('demo_skill', { expected_revision: 3, reason: '归档' })
+    expect(fetchMock.mock.calls[0][0]).toContain('/infra-skills/demo_skill/archive')
+    const headers = new Headers((fetchMock.mock.calls[0][1] as RequestInit).headers)
+    expect(headers.get('Authorization')).toMatch(/^Bearer /)
   })
 
   it('imports a zip file as binary body', async () => {
