@@ -532,7 +532,11 @@ async def _policy_qa_stream(
     try:
         # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
         # 旧编排器（PolicyQAOrchestrator）已退役：政策检索/计算/回答统一走 skill 策略引擎。
-        provider = create_settlement_data_provider()
+        # allow_mock=True：默认 DATA_SOURCE_MODE=mock 时降级到内置样例数据，
+        # 保证「直接问费用情况」不因数据源未配置而整体报错（issue-10）。
+        # /settlement-explanation 等真实数据专用端点保持严格语义，不受影响。
+        provider = create_settlement_data_provider(allow_mock=True)
+        is_mock_provider = bool(getattr(provider, "is_mock", False))
         # 处理请求并 yield SSE 事件（Skill 驱动：五步流程）
         public_steps: list[dict] = []          # 累积公开步骤
         result_answer = ""                     # 最终公开回答
@@ -670,7 +674,10 @@ async def _policy_qa_stream(
         if _is_overview:
             overview_payload = await _loop.run_in_executor(
                 None,
-                lambda: _build_overview_payload(settlement_context, request.question, skill_id, assembler),
+                lambda: _build_overview_payload(
+                    settlement_context, request.question, skill_id, assembler,
+                    is_mock=is_mock_provider,
+                ),
             )
             result_answer = overview_payload["answer"]
         else:
@@ -1115,12 +1122,17 @@ def _assemble_display_payload(context: Any, skill_id: str, assembler: Any) -> di
     return {"profile": profile, "output_groups": output_groups, "display_config": display_config}
 
 
-def _build_overview_payload(context: Any, question: str, skill_id: str, assembler: Any) -> dict:
-    """overview 模式：从真实结算数据组装「费用构成总览」。
+def _build_overview_payload(context: Any, question: str, skill_id: str, assembler: Any,
+                           is_mock: bool = False) -> dict:
+    """overview 模式：从结算数据组装「费用构成总览」。
 
     不依赖政策检索（总览是纯数据展示，避免无依据的逐段复算）；
     直接复用 skill manifest 的 display 配置生成 profile/output_groups，
     与 SettlementExplanationData 契约兼容，前端可用同一组件渲染。
+
+    Args:
+        is_mock: True 时数据来自内置样例（DATA_SOURCE_MODE=mock 降级），
+            输出中诚实标注为演示数据，避免误导为真实结算。
 
     Returns:
         兼容 _process_single_settlement 返回结构的 dict，关键字段：
@@ -1138,15 +1150,34 @@ def _build_overview_payload(context: Any, question: str, skill_id: str, assemble
     large_self_pay = _fmt_money(context.large_amount_self_pay)
     personal_total = _fmt_money(context.personal_total_pay)
 
-    answer = (
-        f"本次住院总费用 {total} 元。\n\n"
-        f"【医保支付】统筹基金支付 {pooling_payment} 元，大额基金支付 {large_payment} 元。\n"
-        f"【个人承担】起付线 {deductible} 元、统筹自付 {pooling_self_pay} 元、"
-        f"大额自付 {large_self_pay} 元，个人总支付合计 {personal_total} 元。\n\n"
-        f"如需了解某一项的详细计算，可以直接追问"
-        f"（例如「统筹自付为什么是 {pooling_self_pay} 元」）。\n\n"
-        f"本回答基于真实结算数据，仅供参考，不作为报销或结算依据。"
-    )
+    if is_mock:
+        data_source = "MOCK_DEMO"
+        mock_used = True
+        data_note = "当前为内置演示数据（未配置真实结算数据源），金额仅供功能演示。"
+        warning_text = "本结果来自内置演示数据，非真实结算；如需真实数据请配置 real_db 数据源。"
+        answer = (
+            f"本次住院总费用 {total} 元（演示数据）。\n\n"
+            f"【医保支付】统筹基金支付 {pooling_payment} 元，大额基金支付 {large_payment} 元。\n"
+            f"【个人承担】起付线 {deductible} 元、统筹自付 {pooling_self_pay} 元、"
+            f"大额自付 {large_self_pay} 元，个人总支付合计 {personal_total} 元。\n\n"
+            f"{data_note}\n"
+            f"如需了解某一项的详细计算，可以直接追问"
+            f"（例如「统筹自付为什么是 {pooling_self_pay} 元」）。\n\n"
+            f"本回答仅供演示参考，不作为报销或结算依据。"
+        )
+    else:
+        data_source = "REAL_DB"
+        mock_used = False
+        warning_text = "本结果来自真实数据库查询。"
+        answer = (
+            f"本次住院总费用 {total} 元。\n\n"
+            f"【医保支付】统筹基金支付 {pooling_payment} 元，大额基金支付 {large_payment} 元。\n"
+            f"【个人承担】起付线 {deductible} 元、统筹自付 {pooling_self_pay} 元、"
+            f"大额自付 {large_self_pay} 元，个人总支付合计 {personal_total} 元。\n\n"
+            f"如需了解某一项的详细计算，可以直接追问"
+            f"（例如「统筹自付为什么是 {pooling_self_pay} 元」）。\n\n"
+            f"本回答基于真实结算数据，仅供参考，不作为报销或结算依据。"
+        )
 
     return {
         "question": question or "查询住院费用构成",
@@ -1154,8 +1185,8 @@ def _build_overview_payload(context: Any, question: str, skill_id: str, assemble
         "target_fee_item": "overview",
         "target_field": "total_amount",
         "target_amount": context.total_amount,
-        "data_source": "REAL_DB",
-        "mock_used": False,
+        "data_source": data_source,
+        "mock_used": mock_used,
         "query_trace": {
             "settlement_id": context.settlement_id,
             "tables": context.tables_queried,
@@ -1182,19 +1213,19 @@ def _build_overview_payload(context: Any, question: str, skill_id: str, assemble
         "policy_evidence": [],
         "policy_status": "no_policy_matched",
         "policy_warning": "费用构成总览不依赖单项政策规则；如需单项计算过程，请针对该单项提问。",
-        "calculation_trace": {"method": "汇总真实结算字段", "steps": []},
+        "calculation_trace": {"method": "汇总结算字段", "steps": []},
         "answer": answer,
         "ratio_explanation": {},
         "explanation_completeness": {
-            "level": "real_data_only",
-            "message": "总览基于真实结算字段汇总。",
-            "has_real_data": True,
+            "level": "real_data_only" if not is_mock else "mock_demo",
+            "message": "总览基于结算字段汇总。",
+            "has_real_data": not is_mock,
         },
         "can_answer": True,
         "partial_answer": False,
         "is_overview": True,
         "warnings": [
-            "本结果来自真实数据库查询。",
+            warning_text,
             "如需某一项的详细政策计算过程，请针对该单项提问。",
         ],
         "mode": "single",

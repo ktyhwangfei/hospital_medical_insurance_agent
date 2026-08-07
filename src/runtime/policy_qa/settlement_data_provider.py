@@ -162,23 +162,79 @@ class SettlementNotFoundError(Exception):
     pass
 
 
+# ── Mock Implementation（演示/默认配置降级）────────────────────
+
+class MockSettlementDataProvider:
+    """内置样例结算数据的降级 provider。
+
+    仅在 allow_mock=True 的调用方（政策问答 stream 端点）中使用：
+    DATA_SOURCE_MODE 未配置为 real_db 时返回样例数据，保证默认配置下
+    「直接问费用情况」可用，而不是整体报错。
+
+    样例数据与集成测试 fixture 一致（1671213 真实结算单的标准化结果），
+    返回时保留调用方传入的 settlement_id，便于追踪。
+    """
+
+    is_mock = True
+
+    _SAMPLE = SettlementContext(
+        settlement_id="1671213",
+        person_type="退休人员",
+        insurance_type="城镇职工基本医疗保险",
+        service_type="普通住院",
+        hospital_level="三级医院",
+        deductible=650.0,
+        medical_insurance_inner_amount=164411.81,
+        basic_pooling_payment=91759.51,
+        basic_pooling_self_pay=4962.67,
+        large_amount_payment=53631.71,
+        large_amount_self_pay=13407.93,
+        personal_total_pay=43694.67,
+        total_amount=189085.85,
+        settlement_date="",
+        yearly_cycle_count=3,
+        cycle_no="1",
+        tables_queried=["mock_sample"],
+        query_profile="mock_settlement",
+    )
+
+    async def get_settlement_context(self, settlement_id: str) -> SettlementContext:
+        """返回内置样例数据（演示用途），保留请求的 settlement_id。"""
+        from dataclasses import replace
+
+        logger.info("[SETTLEMENT] MockSettlementDataProvider used (DATA_SOURCE_MODE != real_db)")
+        return replace(self._SAMPLE, settlement_id=settlement_id or self._SAMPLE.settlement_id)
+
+
 # ── Factory ───────────────────────────────────────────────────
 
-def create_settlement_data_provider() -> SettlementDataProvider:
+def create_settlement_data_provider(*, allow_mock: bool = False) -> SettlementDataProvider:
     """Create provider based on DATA_SOURCE_MODE config.
 
-    Returns a RealDbSettlementDataProvider when DATA_SOURCE_MODE=real_db.
-    In any other mode, raises RuntimeError — this endpoint is designed for
-    real database queries only and never falls back to mock.
+    Args:
+        allow_mock: True 时，DATA_SOURCE_MODE != "real_db" 返回 MockSettlementDataProvider
+            （内置样例数据），而非抛 RuntimeError。默认 False 保持严格语义——
+            供 /settlement-explanation 等「真实数据库专用」端点使用，绝不静默降级。
+
+    Returns:
+        RealDbSettlementDataProvider when DATA_SOURCE_MODE=real_db.
+        MockSettlementDataProvider when allow_mock=True and DATA_SOURCE_MODE != "real_db".
 
     Raises:
-        RuntimeError: if DATA_SOURCE_MODE != "real_db"
+        RuntimeError: if DATA_SOURCE_MODE != "real_db" and allow_mock=False
     """
     from src.config.production import DATA_SOURCE_MODE
 
     if DATA_SOURCE_MODE == "real_db":
         logger.info("[SETTLEMENT] Using RealDbSettlementDataProvider (REAL_DB mode)")
         return RealDbSettlementDataProvider()
+
+    if allow_mock:
+        logger.info(
+            "[SETTLEMENT] DATA_SOURCE_MODE=%s — using MockSettlementDataProvider (demo data).",
+            DATA_SOURCE_MODE,
+        )
+        return MockSettlementDataProvider()
 
     logger.info(
         "[SETTLEMENT] DATA_SOURCE_MODE=%s — real DB endpoint not available. "

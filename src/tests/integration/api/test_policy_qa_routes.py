@@ -145,7 +145,7 @@ def safe_policy_qa_dependencies(monkeypatch):
     monkeypatch.setattr(
         policy_qa_routes,
         "create_settlement_data_provider",
-        lambda: FakeSettlementDataProvider(),
+        lambda **_kwargs: FakeSettlementDataProvider(),
     )
     monkeypatch.setattr(
         policy_qa_routes,
@@ -316,6 +316,69 @@ class TestPolicyQAStreamEndpoint:
         }
         assert output_data["evidence_count"] == 1
 
+    def test_stream_mock_mode_returns_result_instead_of_error(self, client, monkeypatch):
+        """issue-10 回归测试：默认 mock 配置下「直接问费用情况」应返回 result 而非 error。
+
+        根因：_policy_qa_stream 无条件调用 create_settlement_data_provider()，
+        而 DATA_SOURCE_MODE != real_db（默认 mock）时该函数直接抛 RuntimeError。
+        修复后 allow_mock=True 降级到内置样例数据，总览模式（overview）应正常出结果。
+        """
+        from types import SimpleNamespace
+
+        import src.config.production as production
+        from src.runtime.api import policy_qa_routes
+
+        # 模拟默认配置：DATA_SOURCE_MODE=mock → 真实工厂经 allow_mock=True 返回 Mock provider
+        monkeypatch.setattr(production, "DATA_SOURCE_MODE", "mock")
+
+        class FakeAssembler:
+            _FACT_FIELD_MAP = {}
+
+            @staticmethod
+            def _get_fee_field(_target_fee_item: str) -> str:
+                return "basic_pooling_self_pay"
+
+            @staticmethod
+            def _get_fee_amount(context, _target_fee_item: str) -> float:
+                return context.basic_pooling_self_pay
+
+            @staticmethod
+            def build_policy_queries(_target_fee_item: str) -> list:
+                return []
+
+            @staticmethod
+            def execute(**_kwargs):
+                return SimpleNamespace(
+                    answer="统筹自付为 4,962.67 元。",
+                    policy_status="full_policy_matched",
+                    calculation_trace={"steps": []},
+                    definition=None,
+                    warnings=[],
+                    explanation_completeness={"level": "full_policy_matched", "has_real_data": True},
+                )
+
+        monkeypatch.setattr(policy_qa_routes, "get_assembler", lambda _skill_id: FakeAssembler())
+        monkeypatch.setattr(policy_qa_routes, "get_skill_manifest", lambda _skill_id: {})
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "retrieve_policy_evidence",
+            lambda **_kwargs: SimpleNamespace(selected_evidence=[], missing_required_rules=[]),
+        )
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "查询住院费用", "settlement_id": "1671213"},
+        )
+
+        assert response.status_code == 200
+        events = _sse_events(response.text)
+        assert sum(name == "error" for name, _payload in events) == 0, f"不应有 error 事件: {events}"
+        assert sum(name == "result" for name, _payload in events) == 1, f"应有 result 事件: {events}"
+        result_event = next(payload["result"] for name, payload in events if name == "result")
+        assert result_event["answer"]
+        assert result_event["answer_status"] in {"complete", "partial"}
+        assert sum(name == "done" for name, _payload in events) == 1
+
     def test_stream_failure_has_safe_terminal_contract(self, client, monkeypatch):
         from src.runtime.api import policy_qa_routes
 
@@ -326,7 +389,7 @@ class TestPolicyQAStreamEndpoint:
         monkeypatch.setattr(
             policy_qa_routes,
             "create_settlement_data_provider",
-            lambda: FailingProvider(),
+            lambda **_kwargs: FailingProvider(),
         )
         monkeypatch.setattr(policy_qa_routes, "get_assembler", lambda _skill_id: object())
 

@@ -1103,3 +1103,63 @@ class TestExtractSegmentRatios:
         seg = _strat._extract_segment_ratios([])
         assert seg["has_complete"] is False
         assert seg["retiree"] is None
+
+
+class TestSettlementDataProviderMockFallback:
+    """issue-10：默认 mock 配置下「直接问费用情况」不再整体报错。
+
+    回归根因：_policy_qa_stream 无条件调用 create_settlement_data_provider()，
+    而 DATA_SOURCE_MODE != real_db（默认 mock）时该函数直接抛 RuntimeError，
+    导致政策问答页任何费用问题都失败。修复：增加 allow_mock 参数，
+    mock 模式降级到内置样例数据；真实数据专用端点保持严格语义。
+    """
+
+    def test_create_provider_with_allow_mock_returns_mock_in_mock_mode(self, monkeypatch):
+        """mock 模式 + allow_mock=True → MockSettlementDataProvider。"""
+        import src.config.production as production
+        from src.runtime.policy_qa import settlement_data_provider as sdp
+
+        monkeypatch.setattr(production, "DATA_SOURCE_MODE", "mock")
+        provider = sdp.create_settlement_data_provider(allow_mock=True)
+        assert isinstance(provider, sdp.MockSettlementDataProvider)
+        assert provider.is_mock is True
+
+    def test_create_provider_without_allow_mock_raises_in_mock_mode(self, monkeypatch):
+        """mock 模式 + allow_mock=False（默认）→ 保持抛 RuntimeError（严格语义）。"""
+        import src.config.production as production
+        from src.runtime.policy_qa import settlement_data_provider as sdp
+
+        monkeypatch.setattr(production, "DATA_SOURCE_MODE", "mock")
+        with pytest.raises(RuntimeError):
+            sdp.create_settlement_data_provider()
+
+    def test_create_provider_real_db_returns_real_provider(self, monkeypatch):
+        """real_db 模式 → RealDbSettlementDataProvider（无论 allow_mock）。"""
+        import src.config.production as production
+        from src.runtime.policy_qa import settlement_data_provider as sdp
+
+        monkeypatch.setattr(production, "DATA_SOURCE_MODE", "real_db")
+        provider = sdp.create_settlement_data_provider(allow_mock=True)
+        assert isinstance(provider, sdp.RealDbSettlementDataProvider)
+        assert not getattr(provider, "is_mock", False)
+
+    def test_mock_provider_returns_sample_context(self):
+        """MockSettlementDataProvider.get_settlement_context 返回内置样例数据并保留 settlement_id。"""
+        import asyncio
+        from src.runtime.policy_qa import settlement_data_provider as sdp
+
+        provider = sdp.MockSettlementDataProvider()
+        ctx = asyncio.run(provider.get_settlement_context("1671213"))
+        assert ctx.settlement_id == "1671213"
+        assert ctx.total_amount > 0
+        assert ctx.person_type  # 样例数据包含人员类别
+        assert ctx.insurance_type  # 样例数据包含险种
+
+    def test_mock_provider_empty_id_falls_back_to_sample(self):
+        """空 settlement_id 时返回样例内置 id，不抛异常。"""
+        import asyncio
+        from src.runtime.policy_qa import settlement_data_provider as sdp
+
+        provider = sdp.MockSettlementDataProvider()
+        ctx = asyncio.run(provider.get_settlement_context(""))
+        assert ctx.settlement_id == sdp.MockSettlementDataProvider._SAMPLE.settlement_id
