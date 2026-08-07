@@ -209,6 +209,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - `production.py` 的 `POSTGRES_PASSWORD` 默认曾为空，连库报 `fe_sendauth: no password supplied`。已改默认 `'postgres'`（与 AGENTS.md、docker-compose 一致）；若遇认证失败先检查该环境变量是否被显式设为空。
 - 部分工作区（codex-policy-compare-v2、pi-policy-knowledge-optimize 等独立副本）的启停脚本曾是写死 8000/3000 的旧版，多工作区会端口互斥。运行 `..\ws.ps1 sync` 同步新版脚本（按工作区名确定性分配 8100+/3100+）。
 - 多工作区同时验证时逐个猜端口很费时。用 `..\ws.ps1 list` 并行探测所有工作区端口与健康状态，`..\ws.ps1 up/down` 并行启停（详见下方多工作区章节）。
+- 前端 dev 进程复用旧实例时不纠正 `NEXT_PUBLIC_API_BASE_URL`。`start-servers.ps1` 见前端端口已监听即 `Nothing to start` 退出，多工作区下若旧进程曾用 `next.config.ts` 默认值 8000，前端 API 代理会持续转发到错误后端实例、`/skills` 工作台目录与所有 skill 列表全空（summary 全 0）。诊断：经前端代理 `curl 127.0.0.1:<前端端口>/api/v1/medical-insurance-ai-agent/infra-skills/workbench` 的 total 与直连本工作区后端端口不一致（代理 0、后端 >0）。正确做法：`Stop-Process` 杀前端进程后带 `$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:<后端端口>'` 重启 `npm run dev`。
 
 ### 陷阱模板
 

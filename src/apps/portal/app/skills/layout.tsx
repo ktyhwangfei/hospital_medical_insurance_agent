@@ -8,9 +8,19 @@ interface NavTab {
   match: (pathname: string) => boolean
 }
 
+// 顶部保留子路径：不能被当成 Skill 详情页
+const RESERVED_SEGS = new Set(['drafts', 'evaluations', 'releases', 'new', 'import'])
+
+// /skills/<skillId> 或 /skills/<skillId>/edit（排除保留路径，否则 /skills/drafts 等会被误判为 Skill 详情）
+function isSkillDetailPath(pathname: string): boolean {
+  if (!pathname.startsWith('/skills/')) return false
+  const firstSeg = pathname.slice('/skills/'.length).split('/')[0]
+  return !RESERVED_SEGS.has(firstSeg)
+}
+
 // /skills 页签：对齐语义层/政策知识的扁平骨架（设计 §3.1）
 const NAV_TABS: NavTab[] = [
-  { label: 'Skill', href: '/skills', match: (p) => p === '/skills' || p.startsWith('/skills/new') || p.startsWith('/skills/import') || /\/skills\/[^/]+(\/edit)?$/.test(p) },
+  { label: 'Skill', href: '/skills', match: (p) => p === '/skills' || p.startsWith('/skills/new') || p.startsWith('/skills/import') || isSkillDetailPath(p) },
   { label: '草稿', href: '/skills/drafts', match: (p) => p.startsWith('/skills/drafts') },
   { label: '评测记录', href: '/skills/evaluations', match: (p) => p.startsWith('/skills/evaluations') },
   { label: '发布记录', href: '/skills/releases', match: (p) => p.startsWith('/skills/releases') },
