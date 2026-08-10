@@ -22,7 +22,7 @@ def _valid_structured_config() -> dict[str, object]:
         "business_mounting": {
             "business_action": "explain",
             "business_object": "settlement",
-            "keywords": ["起付线"],
+            "include_keywords": ["起付线"],
             "excluded_intents": [],
         },
         "inputs": [

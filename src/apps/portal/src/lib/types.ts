@@ -761,8 +761,39 @@ export interface QAHistoryResponse {
 // ── Skill 草稿与生命周期（P7/P8）──────────────────────────────────
 
 export type SkillDraftStatus = 'editing' | 'validated' | 'materialized' | 'deleted'
-export type SkillDraftSourceType = 'template' | 'copy' | 'import'
+export type SkillDraftSourceType = 'template' | 'copy' | 'import' | 'ai_generated'
 export type SkillLifecycleStatus = 'enabled' | 'disabled' | 'archived'
+
+export interface SkillAIStructuredBasic {
+  skill_id: string
+  skill_name: string
+  description: string
+  owner: string
+}
+
+export interface SkillAIStructuredBusinessMounting {
+  business_action: string
+  business_object: string
+  include_keywords: string[]
+  excluded_intents: string[]
+}
+
+export interface SkillAIStructuredInput {
+  metric_code: string
+  alias: string
+  required: boolean
+  purpose: string
+}
+
+export interface SkillAIStructuredConfig {
+  basic: SkillAIStructuredBasic
+  business_mounting: SkillAIStructuredBusinessMounting
+  inputs: SkillAIStructuredInput[]
+  schemas: {
+    input: Record<string, unknown>
+    output: Record<string, unknown>
+  }
+}
 
 export interface SkillBusinessMounting {
   business_action: string
@@ -785,6 +816,53 @@ export interface SkillStructuredConfig {
   inputs?: SkillInputSpec[]
   input_schema?: Record<string, unknown>
   output_schema?: Record<string, unknown>
+}
+
+export interface SkillMetricVersionRef {
+  metric_code: string
+  object_code: string
+  object_version: number
+  status: 'published'
+}
+
+export interface SkillAIGenerationProvenance {
+  model_type: string
+  scene: 'skill_authoring'
+  prompt_version: string
+  metric_versions: SkillMetricVersionRef[]
+  generated_at: string
+  content_hash: string
+}
+
+export interface SkillAIValidationPreview {
+  issues: SkillValidationIssue[]
+  has_blocking: boolean
+  blocking_ok: boolean
+}
+
+export interface SkillAIGenerationProposal {
+  generation_id: string
+  proposal_hash: string
+  structured_config: SkillAIStructuredConfig
+  raw_files: Record<string, string>
+  validation_preview: SkillAIValidationPreview
+  provenance: SkillAIGenerationProvenance
+  citations: Citation[]
+  uncertainties: string[]
+}
+
+export interface SkillAIGenerateRequest {
+  description: string
+  metric_codes: string[]
+}
+
+export interface SkillAIAcceptRequest {
+  generation_id: string
+  proposal_hash: string
+  skill_id: string
+  skill_name: string
+  structured_config: SkillAIStructuredConfig
+  raw_files: Record<string, string>
 }
 
 export interface SkillDraftResponse {

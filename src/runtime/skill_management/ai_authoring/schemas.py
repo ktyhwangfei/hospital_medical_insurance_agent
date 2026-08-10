@@ -24,7 +24,7 @@ class SkillStructuredBasic(_StrictFrozenModel):
 class SkillStructuredBusinessMounting(_StrictFrozenModel):
     business_action: str = Field(min_length=1, max_length=128)
     business_object: str = Field(min_length=1, max_length=128)
-    keywords: tuple[str, ...] = ()
+    include_keywords: tuple[str, ...] = ()
     excluded_intents: tuple[str, ...] = ()
 
 
