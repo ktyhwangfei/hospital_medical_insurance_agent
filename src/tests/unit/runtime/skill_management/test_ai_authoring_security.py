@@ -59,9 +59,8 @@ def test_scan_ai_files_rejects_absolute_paths(path: str) -> None:
 
 def test_scan_ai_files_measures_single_file_limit_in_utf8_bytes() -> None:
     encoded_width = len("医".encode("utf-8"))
-    at_limit = (
-        "医" * (MAX_AI_FILE_BYTES // encoded_width)
-        + "x" * (MAX_AI_FILE_BYTES % encoded_width)
+    at_limit = "医" * (MAX_AI_FILE_BYTES // encoded_width) + "x" * (
+        MAX_AI_FILE_BYTES % encoded_width
     )
     accepted = scan_ai_generated_files({"prompt_template.yaml": at_limit})
     rejected = scan_ai_generated_files({"prompt_template.yaml": at_limit + "医"})
@@ -118,6 +117,55 @@ def test_scan_ai_files_rejects_attribute_calls() -> None:
         {"assembler.py": "def load(config):\n    return config.get('value')\n"}
     )
     assert "AI_CALL_FORBIDDEN" in {issue.code for issue in result.issues}
+
+
+@pytest.mark.parametrize("dangerous_name", ["eval", "open"])
+def test_scan_ai_files_rejects_dangerous_call_aliases(
+    dangerous_name: str,
+) -> None:
+    assembler = f"""\
+len = {dangerous_name}
+def load(config):
+    return len(config)
+"""
+    result = scan_ai_generated_files({"assembler.py": assembler})
+
+    assert "AI_CALL_FORBIDDEN" in {issue.code for issue in result.issues}
+    assert result.passed is False
+
+
+def test_scan_ai_files_rejects_allowed_call_name_parameter_shadowing() -> None:
+    assembler = """\
+def load(len):
+    return len([])
+"""
+    result = scan_ai_generated_files({"assembler.py": assembler})
+
+    assert "AI_CALL_FORBIDDEN" in {issue.code for issue in result.issues}
+
+
+def test_scan_ai_files_rejects_dynamic_builtins_access() -> None:
+    result = scan_ai_generated_files(
+        {"assembler.py": ("def load(config):\n    return __builtins__['open']\n")}
+    )
+
+    assert "AI_CALL_FORBIDDEN" in {issue.code for issue in result.issues}
+
+
+def test_scan_ai_files_accepts_safe_local_function_calls() -> None:
+    assembler = """\
+def normalize(value):
+    if value:
+        return str(value)
+    return ""
+
+def load(config):
+    value = config["value"]
+    return normalize(value)
+"""
+    result = scan_ai_generated_files({"assembler.py": assembler})
+
+    assert result.passed is True
 
 
 def test_scan_ai_files_rejects_non_whitelisted_ast_nodes() -> None:

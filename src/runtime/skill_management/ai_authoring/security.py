@@ -49,6 +49,7 @@ _ALLOWED_CALLS = frozenset(
         "tuple",
     }
 )
+_DYNAMIC_BUILTIN_NAMES = frozenset({"__builtins__", "builtins"})
 _ALLOWED_AST_NODES = (
     ast.Module,
     ast.FunctionDef,
@@ -192,15 +193,73 @@ def _scan_python(content: str, path: str) -> list[SkillAISecurityIssue]:
             )
         ]
 
+    nodes = tuple(ast.walk(tree))
+    local_functions = {node.name for node in nodes if isinstance(node, ast.FunctionDef)}
+    assigned_names = {
+        node.id
+        for node in nodes
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    }
+    parameter_names = {node.arg for node in nodes if isinstance(node, ast.arg)}
+
+    protected_names = FORBIDDEN_CALLS | _ALLOWED_CALLS | _DYNAMIC_BUILTIN_NAMES
     issues: list[SkillAISecurityIssue] = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             issues.append(_issue("AI_IMPORT_FORBIDDEN", "AI 生成脚本禁止 import", path))
             continue
 
+        if isinstance(node, ast.FunctionDef) and node.name in protected_names:
+            issues.append(
+                _issue(
+                    "AI_CALL_FORBIDDEN",
+                    f"AI 生成脚本禁止重定义 {node.name}",
+                    path,
+                )
+            )
+
+        if isinstance(node, ast.arg) and node.arg in protected_names:
+            issues.append(
+                _issue(
+                    "AI_CALL_FORBIDDEN",
+                    f"AI 生成脚本禁止参数遮蔽 {node.arg}",
+                    path,
+                )
+            )
+
+        if isinstance(node, ast.Name):
+            if node.id in FORBIDDEN_CALLS | _DYNAMIC_BUILTIN_NAMES:
+                issues.append(
+                    _issue(
+                        "AI_CALL_FORBIDDEN",
+                        f"AI 生成脚本禁止引用 {node.id}",
+                        path,
+                    )
+                )
+            elif isinstance(node.ctx, ast.Store) and node.id in _ALLOWED_CALLS:
+                issues.append(
+                    _issue(
+                        "AI_CALL_FORBIDDEN",
+                        f"AI 生成脚本禁止重绑定 {node.id}",
+                        path,
+                    )
+                )
+
         if isinstance(node, ast.Call):
             call_name = node.func.id if isinstance(node.func, ast.Name) else None
-            if call_name in FORBIDDEN_CALLS or call_name not in _ALLOWED_CALLS:
+            allowed_builtin = (
+                call_name in _ALLOWED_CALLS
+                and call_name not in assigned_names
+                and call_name not in parameter_names
+                and call_name not in local_functions
+            )
+            allowed_local_function = (
+                call_name in local_functions
+                and call_name not in assigned_names
+                and call_name not in parameter_names
+                and call_name not in _ALLOWED_CALLS
+            )
+            if not allowed_builtin and not allowed_local_function:
                 issues.append(
                     _issue(
                         "AI_CALL_FORBIDDEN",
