@@ -7,6 +7,7 @@ import pytest
 from src.domain.skill.draft_models import (
     SkillDraft,
     SkillDraftSourceType,
+    SkillDraftStatus,
     ValidationSeverity,
 )
 from src.runtime.skill_management.draft_validator import SkillDraftValidator
@@ -166,6 +167,64 @@ class TestSkillDraftValidator:
         )
 
         assert report.blocking_ok
+
+    @pytest.mark.parametrize(
+        "raw_files, expected_code",
+        [
+            (
+                {"assembler.py": "def load(:\n    pass\n"},
+                "AI_PYTHON_SYNTAX_ERROR",
+            ),
+            (
+                {"prompt_template.yaml": "patient: 110101199003071234\n"},
+                "AI_SENSITIVE_CONTENT",
+            ),
+            (
+                {"prompt_template.yaml": "api_key: AKIAIOSFODNN7EXAMPLE\n"},
+                "AI_SENSITIVE_CONTENT",
+            ),
+            (
+                {
+                    "assembler.py": (
+                        "def load(config):\n    return open('secret.txt')\n"
+                    )
+                },
+                "AI_CALL_FORBIDDEN",
+            ),
+        ],
+    )
+    def test_ai_generated_draft_uses_only_integrated_security_gate(
+        self,
+        raw_files: dict[str, str],
+        expected_code: str,
+    ) -> None:
+        draft = _draft(
+            raw_files=raw_files,
+            source_type=SkillDraftSourceType.AI_GENERATED,
+        )
+
+        report = self.validator.validate(draft)
+
+        assert _codes(report, ValidationSeverity.BLOCKING) == [expected_code]
+        assert report.blocking_ok is False
+        assert draft.status == SkillDraftStatus.EDITING
+
+    @pytest.mark.parametrize(
+        "source_type",
+        [SkillDraftSourceType.TEMPLATE, SkillDraftSourceType.IMPORT],
+    )
+    def test_non_ai_drafts_keep_legacy_security_codes(
+        self,
+        source_type: SkillDraftSourceType,
+    ) -> None:
+        report = self.validator.validate(
+            _draft(
+                raw_files={"scripts/bad.py": "def load(:\n    pass\n"},
+                source_type=source_type,
+            )
+        )
+
+        assert _codes(report, ValidationSeverity.BLOCKING) == ["SCRIPT_SYNTAX_ERROR"]
 
     def test_template_draft_does_not_apply_ai_file_whitelist(self):
         report = self.validator.validate(

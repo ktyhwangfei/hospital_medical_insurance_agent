@@ -168,11 +168,127 @@ def load(config):
     assert result.passed is True
 
 
+def test_scan_ai_files_rejects_nested_function_shadowing() -> None:
+    assembler = """\
+def outer():
+    def breakpoint():
+        return None
+    return breakpoint
+
+def load(config):
+    return breakpoint()
+"""
+    result = scan_ai_generated_files({"assembler.py": assembler})
+
+    assert [issue.code for issue in result.issues] == [
+        "AI_AST_NODE_FORBIDDEN",
+        "AI_CALL_FORBIDDEN",
+    ]
+
+
+def test_scan_ai_files_rejects_decorators_without_resolving_them() -> None:
+    assembler = """\
+@breakpoint
+def load(config):
+    return config
+"""
+    result = scan_ai_generated_files({"assembler.py": assembler})
+
+    assert [issue.code for issue in result.issues] == ["AI_AST_NODE_FORBIDDEN"]
+
+
+def test_scan_ai_files_rejects_module_level_calls() -> None:
+    result = scan_ai_generated_files(
+        {"assembler.py": "value = len([])\ndef load(config):\n    return config\n"}
+    )
+
+    assert [issue.code for issue in result.issues] == ["AI_AST_NODE_FORBIDDEN"]
+
+
+def test_cross_scope_assignment_does_not_shadow_safe_top_level_helper() -> None:
+    assembler = """\
+def normalize(value):
+    return str(value)
+
+def unrelated(value):
+    normalize = value
+    return normalize
+
+def load(config):
+    return normalize(config["value"])
+"""
+    result = scan_ai_generated_files({"assembler.py": assembler})
+
+    assert result.passed is True
+
+
 def test_scan_ai_files_rejects_non_whitelisted_ast_nodes() -> None:
     result = scan_ai_generated_files(
         {"assembler.py": "handler = lambda value: value\n"}
     )
     assert "AI_AST_NODE_FORBIDDEN" in {issue.code for issue in result.issues}
+
+
+@pytest.mark.parametrize(
+    "raw_files",
+    [
+        {"\ud800": "safe"},
+        {"prompt_template.yaml": "\ud800"},
+    ],
+)
+def test_scan_ai_files_returns_stable_issue_for_unencodable_text(
+    raw_files: dict[str, str],
+) -> None:
+    result = scan_ai_generated_files(raw_files)
+    repeated = scan_ai_generated_files(raw_files)
+
+    assert [issue.code for issue in result.issues] == ["AI_TEXT_ENCODING_INVALID"]
+    assert re.fullmatch(r"[0-9a-f]{64}", result.content_hash)
+    assert repeated.content_hash == result.content_hash
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "system: [unterminated\n",
+        "!!python/object/apply:os.system ['whoami']\n",
+    ],
+)
+def test_scan_ai_files_rejects_invalid_or_unsafe_prompt_yaml(content: str) -> None:
+    result = scan_ai_generated_files({"prompt_template.yaml": content})
+
+    assert [issue.code for issue in result.issues] == ["AI_YAML_INVALID"]
+
+
+def test_scan_ai_files_accepts_safe_prompt_yaml() -> None:
+    result = scan_ai_generated_files(
+        {
+            "prompt_template.yaml": (
+                "system: explain with citations\n"
+                "messages:\n"
+                "  - role: user\n"
+                "    content: explain this item\n"
+            )
+        }
+    )
+
+    assert result.issues == ()
+
+
+def test_scan_ai_files_reports_direct_open_once() -> None:
+    result = scan_ai_generated_files(
+        {"assembler.py": "def load(config):\n    return open('secret.txt')\n"}
+    )
+
+    assert [issue.code for issue in result.issues] == ["AI_CALL_FORBIDDEN"]
+
+
+def test_scan_ai_files_reports_secret_once() -> None:
+    result = scan_ai_generated_files(
+        {"prompt_template.yaml": "api_key: AKIAIOSFODNN7EXAMPLE\n"}
+    )
+
+    assert [issue.code for issue in result.issues] == ["AI_SENSITIVE_CONTENT"]
 
 
 def test_security_result_is_strict_and_frozen() -> None:

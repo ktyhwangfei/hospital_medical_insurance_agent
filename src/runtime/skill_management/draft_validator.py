@@ -66,9 +66,10 @@ class SkillDraftValidator:
         issues.extend(self._validate_basic(draft))
         issues.extend(self._validate_business_mounting(draft))
         issues.extend(self._validate_schemas(draft))
-        issues.extend(self._validate_raw_files_safety(draft))
         if draft.source_type == SkillDraftSourceType.AI_GENERATED:
             issues.extend(self._validate_ai_generated_files(draft))
+        else:
+            issues.extend(self._validate_raw_files_safety(draft))
         return ValidationReport(issues=issues)
 
     def validate_files(self, raw_files: dict[str, str]) -> ValidationReport:
