@@ -45,6 +45,7 @@ export default function EvalCasePoolTable() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 服务端数据加载的标准模式
     void load()
   }, [load])
 

@@ -107,6 +107,95 @@ export async function createSkillEvalCase(
   })
 }
 
+// ── 错误案例池：转换 / 确认 / 拒绝（仅 skill:evaluate）──
+
+export interface EvalCasePoolTransformResponse {
+  pool_id: string
+  transformed_dimension: string
+  case_proposal: Record<string, unknown> | null
+  root_cause: string | null
+  citations: Record<string, unknown>[]
+  uncertainties: string[]
+  revision: number
+}
+
+export interface EvalCasePoolConfirmRequest {
+  expected_revision: number
+  error_dimension: string
+  target_skill_id: string | null
+  case_proposal: Record<string, unknown> | null
+}
+
+export interface EvalCasePoolConfirmResponse {
+  pool_id: string
+  case_type: string
+  case_id: string
+  revision: number
+}
+
+export async function transformEvalCasePoolItem(
+  poolId: string,
+  expectedRevision: number,
+): Promise<EvalCasePoolTransformResponse> {
+  return requestJson<EvalCasePoolTransformResponse>(
+    `/infra-skills/eval-case-pool/${encodeURIComponent(poolId)}/transform`,
+    {
+      method: 'POST',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    },
+  )
+}
+
+export async function confirmEvalCasePoolItem(
+  poolId: string,
+  request: EvalCasePoolConfirmRequest,
+): Promise<EvalCasePoolConfirmResponse> {
+  return requestJson<EvalCasePoolConfirmResponse>(
+    `/infra-skills/eval-case-pool/${encodeURIComponent(poolId)}/confirm`,
+    {
+      method: 'POST',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify(request),
+    },
+  )
+}
+
+export interface EvalCasePoolItemResponse {
+  pool_id: string
+  tenant_id: string
+  source_qa_turn_id: string
+  source_user_id: string
+  reason_code: string
+  error_dimension: string
+  initial_dimension: string
+  transformed_dimension: string | null
+  target_skill_id: string | null
+  status: string
+  revision: number
+  rejection_reason: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function rejectEvalCasePoolItem(
+  poolId: string,
+  expectedRevision: number,
+  rejectionReason: string,
+): Promise<EvalCasePoolItemResponse> {
+  return requestJson<EvalCasePoolItemResponse>(
+    `/infra-skills/eval-case-pool/${encodeURIComponent(poolId)}/reject`,
+    {
+      method: 'POST',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify({
+        expected_revision: expectedRevision,
+        rejection_reason: rejectionReason,
+      }),
+    },
+  )
+}
+
 export async function listSkillEvalRuns(skillId: string): Promise<SkillEvalRunListResponse> {
   return requestJson<SkillEvalRunListResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/eval-runs`,

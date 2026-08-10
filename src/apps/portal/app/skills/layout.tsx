@@ -9,7 +9,7 @@ interface NavTab {
 }
 
 // 顶部保留子路径：不能被当成 Skill 详情页
-const RESERVED_SEGS = new Set(['drafts', 'evaluations', 'releases', 'new', 'import'])
+const RESERVED_SEGS = new Set(['drafts', 'evaluations', 'releases', 'new', 'import', 'eval-case-pool', 'eval-mining'])
 
 // /skills/<skillId> 或 /skills/<skillId>/edit（排除保留路径，否则 /skills/drafts 等会被误判为 Skill 详情）
 function isSkillDetailPath(pathname: string): boolean {
@@ -24,6 +24,7 @@ const NAV_TABS: NavTab[] = [
   { label: '草稿', href: '/skills/drafts', match: (p) => p.startsWith('/skills/drafts') },
   { label: '评测记录', href: '/skills/evaluations', match: (p) => p.startsWith('/skills/evaluations') },
   { label: '错误案例池', href: '/skills/eval-case-pool', match: (p) => p.startsWith('/skills/eval-case-pool') },
+  { label: '案例挖掘', href: '/skills/eval-mining', match: (p) => p.startsWith('/skills/eval-mining') },
   { label: '发布记录', href: '/skills/releases', match: (p) => p.startsWith('/skills/releases') },
 ]
 
