@@ -889,6 +889,7 @@ export interface SkillAIAcceptRequest {
   skill_name: string
   structured_config: SkillAIStructuredConfig
   raw_files: Record<string, string>
+  provenance: SkillAIGenerationProvenance
 }
 
 export interface SkillDraftResponse {

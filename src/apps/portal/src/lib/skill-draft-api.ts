@@ -18,6 +18,9 @@ import type {
   SkillInputSelectorResponse,
   SkillInputValidationResponse,
   SkillQueryPlanResponse,
+  SkillAIGenerateRequest,
+  SkillAIGenerationProposal,
+  SkillAIAcceptRequest,
 } from './types'
 
 const DEV_SKILL_CONTROL_TOKEN =
@@ -36,6 +39,36 @@ function skillControlHeaders(idempotencyKey?: string): HeadersInit {
 }
 
 // ── 草稿 CRUD ──────────────────────────────────────────────────
+
+export async function generateSkillAIProposal(
+  request: SkillAIGenerateRequest,
+): Promise<SkillAIGenerationProposal> {
+  return requestJson<SkillAIGenerationProposal>('/infra-skills/ai-generate', {
+    method: 'POST',
+    headers: skillControlHeaders(),
+    body: JSON.stringify(request),
+  })
+}
+
+export async function acceptSkillAIProposal(
+  proposal: SkillAIGenerationProposal,
+  idempotencyKey: string,
+): Promise<SkillDraftResponse> {
+  const request: SkillAIAcceptRequest = {
+    generation_id: proposal.generation_id,
+    proposal_hash: proposal.proposal_hash,
+    skill_id: proposal.structured_config.basic.skill_id,
+    skill_name: proposal.structured_config.basic.skill_name,
+    structured_config: proposal.structured_config,
+    raw_files: proposal.raw_files,
+    provenance: proposal.provenance,
+  }
+  return requestJson<SkillDraftResponse>('/infra-skills/drafts/from-ai', {
+    method: 'POST',
+    headers: skillControlHeaders(idempotencyKey),
+    body: JSON.stringify(request),
+  })
+}
 
 export async function listSkillDrafts(): Promise<SkillDraftListResponse> {
   return requestJson<SkillDraftListResponse>('/infra-skills/drafts')

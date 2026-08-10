@@ -12,6 +12,8 @@ import {
   restoreSkill,
   archiveSkill,
   importSkillZip,
+  generateSkillAIProposal,
+  acceptSkillAIProposal,
 } from '@/lib/skill-draft-api'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -65,6 +67,46 @@ describe('skill-draft-api client', () => {
     expect(headers.get('Idempotency-Key')).toBe('idem-key-1')
     expect(headers.get('Authorization')).toMatch(/^Bearer /)
     expect(init.method).toBe('POST')
+  })
+
+  it('generates a typed AI proposal and accepts it with an idempotency key', async () => {
+    const proposal = {
+      generation_id: 'gen_abc_1',
+      proposal_hash: 'a'.repeat(64),
+      structured_config: {
+        basic: { skill_id: 'ai_skill', skill_name: 'AI Skill', description: 'demo', owner: 'it' },
+        business_mounting: { business_action: 'explain', business_object: 'settlement', include_keywords: [], excluded_intents: [] },
+        inputs: [{ metric_code: 'Settlement.amount', alias: 'amount', required: true, purpose: 'explain' }],
+        schemas: { input: { type: 'object' }, output: { type: 'object' } },
+      },
+      raw_files: { 'assembler.py': 'def assemble(data): return data', 'prompt_template.yaml': 'system: explain' },
+      validation_preview: { issues: [], has_blocking: false, blocking_ok: true },
+      provenance: {
+        model_type: 'test-model', scene: 'skill_authoring', prompt_version: 'v1',
+        metric_versions: [{ metric_code: 'Settlement.amount', object_code: 'Settlement', object_version: 2, status: 'published' }],
+        generated_at: '2026-08-10T00:00:00Z', content_hash: 'b'.repeat(64),
+      },
+      citations: [{ source_type: 'metric_registry', source_id: 'Settlement.amount@2', summary: 'published snapshot' }],
+      uncertainties: ['人工确认政策范围'],
+    } as const
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(proposal))
+      .mockResolvedValueOnce(jsonResponse({ ...DRAFT, draft_id: 'd-ai', source_type: 'ai_generated' }, 201))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const generated = await generateSkillAIProposal({
+      description: '解释结算金额',
+      metric_codes: ['Settlement.amount'],
+    })
+    await acceptSkillAIProposal(generated, 'accept-ai-1')
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/infra-skills/ai-generate')
+    expect(fetchMock.mock.calls[1][0]).toContain('/infra-skills/drafts/from-ai')
+    const acceptInit = fetchMock.mock.calls[1][1] as RequestInit
+    expect(new Headers(acceptInit.headers).get('Idempotency-Key')).toBe('accept-ai-1')
+    const body = JSON.parse(String(acceptInit.body))
+    expect(body.provenance).toEqual(proposal.provenance)
+    expect(body.proposal_hash).toBe(proposal.proposal_hash)
   })
 
   it('saves draft via PATCH with optimistic lock', async () => {
