@@ -432,3 +432,123 @@ def test_release_transition_rejects_missing_idempotency_key(
     )
 
     assert response.status_code == 422
+
+
+class TestEvalCasePool:
+    """案例池查询与历史批量入池端点。"""
+
+    PREFIX = "/api/v1/medical-insurance-ai-agent/infra-skills"
+
+    def _client_with_overrides(self, monkeypatch, storage):
+        from src.runtime.api.app import create_app
+        from src.runtime.api import infra_skill_routes as infra
+
+        monkeypatch.setenv("SKILL_CONTROL_DEV_MODE", "1")
+        app = create_app()
+        app.dependency_overrides[infra.get_skill_regression_storage_dep] = (
+            lambda: storage
+        )
+        return TestClient(app)
+
+    def test_list_pool_requires_skill_evaluate(self, monkeypatch):
+        from src.data_platform.storage.skill.regression_in_memory import (
+            InMemorySkillRegressionStorage,
+        )
+
+        client = self._client_with_overrides(monkeypatch, InMemorySkillRegressionStorage())
+        # 无 skill:evaluate 权限 → 403
+        response = client.get(
+            f"{self.PREFIX}/eval-case-pool",
+            headers={
+                "Authorization": f"Bearer {_control_token('noperm', ['quality'])}"
+            },
+        )
+        assert response.status_code == 403
+
+    def test_list_pool_returns_items(self, monkeypatch):
+        from src.data_platform.storage.skill.regression_in_memory import (
+            InMemorySkillRegressionStorage,
+        )
+        from src.domain.skill.regression_models import (
+            SkillErrorDimension,
+            SkillEvalCasePoolItem,
+            SkillEvalCasePoolStatus,
+            SkillFeedbackReasonCode,
+        )
+
+        storage = InMemorySkillRegressionStorage()
+        storage.create_pool_item(
+            SkillEvalCasePoolItem.model_validate(
+                {
+                    "pool_id": "pool-1",
+                    "tenant_id": "default",
+                    "source_qa_turn_id": "qat_1",
+                    "source_user_id": "user-1",
+                    "reason_code": SkillFeedbackReasonCode.WRONG_CALCULATION,
+                    "error_dimension": SkillErrorDimension.CALCULATION,
+                    "question_excerpt": "起付线",
+                    "answer_excerpt": "累计",
+                    "source_selected_skill_id": "deductible",
+                    "status": SkillEvalCasePoolStatus.PENDING_TRIAGE,
+                    "source_hash": "a" * 64,
+                    "created_by": "user-1",
+                }
+            )
+        )
+        client = self._client_with_overrides(monkeypatch, storage)
+        response = client.get(
+            f"{self.PREFIX}/eval-case-pool",
+            headers={
+                "Authorization": f"Bearer {_control_token('quality-user', ['quality'], ['skill:evaluate'])}"
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] >= 1
+        assert body["items"][0]["pool_id"] == "pool-1"
+        assert body["items"][0]["error_dimension"] == "calculation"
+
+    def test_from_history_returns_outcomes(self, monkeypatch):
+        from src.data_platform.storage.skill.regression_in_memory import (
+            InMemorySkillRegressionStorage,
+        )
+        from src.runtime.task_closure.service import create_task
+        from src.domain.skill.regression_models import SkillFeedbackReasonCode
+
+        # 预置两条任务
+        for tid, q in (("qat_h1", "起付线"), ("qat_h2", "大额自付")):
+            create_task(
+                task_id=tid,
+                task_type="policy_qa",
+                description="历史",
+                responsible_role="cashier",
+                workflow_id="wf-h",
+                executor_type="skill",
+                input_data={
+                    "question_excerpt": q,
+                    "user_id": "quality-user",
+                    "tenant_id": "default",
+                    "role": "cashier",
+                    "session_id": "sess-h",
+                },
+                output_data={"answer_excerpt": "回答", "answer_status": "complete"},
+                status="completed",
+            )
+        client = self._client_with_overrides(
+            monkeypatch, InMemorySkillRegressionStorage()
+        )
+        response = client.post(
+            f"{self.PREFIX}/eval-case-pool/from-history",
+            headers={
+                "Authorization": f"Bearer {_control_token('quality-user', ['quality'], ['skill:evaluate'])}"
+            },
+            json={
+                "qa_turn_ids": ["qat_h1", "qat_h2", "qat_missing"],
+                "reason_code": "wrong_calculation",
+            },
+        )
+        assert response.status_code == 200
+        outcomes = {o["qa_turn_id"]: o["status"] for o in response.json()["outcomes"]}
+        assert outcomes["qat_h1"] == "created"
+        assert outcomes["qat_h2"] == "created"
+        assert outcomes["qat_missing"] == "forbidden"

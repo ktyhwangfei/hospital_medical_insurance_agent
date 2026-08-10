@@ -98,6 +98,21 @@ from src.skill_infra.artifact import SkillArtifactError
 from src.skill_infra.skill_loader import get_loader, refresh_loader
 from src.skill_infra.skill_router import get_assembler
 from src.skill_infra.unified_router import route_question_ranked
+from src.data_platform.storage.skill.regression_factory import (
+    get_skill_regression_storage as _get_skill_regression_storage_factory,
+)
+from src.data_platform.storage.skill.regression_ports import SkillRegressionStorage
+from src.runtime.api.policy_qa_routes import TaskBackedQASourceReader
+from src.runtime.skill_management.regression_mining_service import (
+    RegressionMiningService,
+)
+from src.runtime.api.skill_schemas import (
+    EvalCasePoolFromHistoryRequest,
+    EvalCasePoolFromHistoryResponse,
+    EvalCasePoolItemResponse,
+    EvalCasePoolListResponse,
+    HistoryMiningOutcomeResponse,
+)
 
 router = APIRouter()
 
@@ -137,6 +152,28 @@ def get_skill_workbench_service(
 
 SkillWorkbenchServiceDependency = Annotated[
     SkillWorkbenchService, Depends(get_skill_workbench_service)
+]
+
+
+def get_skill_regression_storage_dep() -> SkillRegressionStorage:
+    return _get_skill_regression_storage_factory()
+
+
+SkillRegressionStorageDependency = Annotated[
+    SkillRegressionStorage, Depends(get_skill_regression_storage_dep)
+]
+
+
+def get_regression_mining_service(
+    storage: SkillRegressionStorageDependency,
+) -> RegressionMiningService:
+    return RegressionMiningService(
+        storage=storage, qa_source_reader=TaskBackedQASourceReader()
+    )
+
+
+RegressionMiningServiceDependency = Annotated[
+    RegressionMiningService, Depends(get_regression_mining_service)
 ]
 
 
@@ -1347,6 +1384,103 @@ def archive_skill(
 @router.get("/infra-skills/overview", response_model=InfraSkillOverviewResponse)
 def get_infra_skills_overview_early() -> InfraSkillOverviewResponse:
     return get_infra_skills_overview()
+
+
+# ── Skill 错误挖掘：案例池查询与历史批量入池 ──────────────────────
+
+
+@router.get(
+    "/infra-skills/eval-case-pool",
+    response_model=EvalCasePoolListResponse,
+)
+def list_eval_case_pool(
+    principal: SkillEvaluationPrincipalDependency,
+    storage: SkillRegressionStorageDependency,
+    status: str | None = Query(default=None),
+    error_dimension: str | None = Query(default=None),
+    target_skill_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> EvalCasePoolListResponse:
+    """查询案例池（仅 skill:evaluate）。始终附加调用方租户条件。"""
+    tenant_id = getattr(principal, "tenant_id", None)
+    items = storage.list_pool_items(
+        tenant_id=tenant_id,
+        status=status,
+        error_dimension=error_dimension,
+        target_skill_id=target_skill_id,
+        limit=limit,
+        offset=offset,
+    )
+    responses = [_pool_item_to_response(item) for item in items]
+    return EvalCasePoolListResponse(
+        items=responses,
+        total=len(responses),
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _pool_item_to_response(item) -> EvalCasePoolItemResponse:
+    return EvalCasePoolItemResponse(
+        pool_id=item.pool_id,
+        tenant_id=item.tenant_id,
+        source_qa_turn_id=item.source_qa_turn_id,
+        source_user_id=item.source_user_id,
+        reason_code=item.reason_code.value,
+        error_dimension=item.error_dimension.value,
+        initial_dimension=item.error_dimension.value,
+        transformed_dimension=(
+            item.transformed_dimension.value if item.transformed_dimension else None
+        ),
+        target_skill_id=item.source_selected_skill_id,
+        status=item.status.value,
+        revision=item.revision,
+        eval_case_ref=(
+            item.eval_case_ref.model_dump() if item.eval_case_ref else None
+        ),
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+@router.post(
+    "/infra-skills/eval-case-pool/from-history",
+    response_model=EvalCasePoolFromHistoryResponse,
+)
+def create_eval_case_pool_from_history(
+    request: EvalCasePoolFromHistoryRequest,
+    principal: SkillEvaluationPrincipalDependency,
+    service: RegressionMiningServiceDependency,
+) -> EvalCasePoolFromHistoryResponse:
+    """评测者从历史批量入池（仅 skill:evaluate）。逐项返回结果。"""
+    mining_principal = _to_mining_principal(principal)
+    results = service.collect_from_history(
+        principal=mining_principal,
+        qa_turn_ids=request.qa_turn_ids,
+        reason_code=request.reason_code,
+        comment=request.comment,
+    )
+    return EvalCasePoolFromHistoryResponse(
+        outcomes=[
+            HistoryMiningOutcomeResponse(
+                qa_turn_id=r.qa_turn_id, status=r.status.value, pool_id=r.pool_id
+            )
+            for r in results
+        ]
+    )
+
+
+def _to_mining_principal(principal: SkillControlPrincipal):
+    from src.runtime.skill_management.regression_mining_service import (
+        RegressionPrincipal as _RegressionPrincipal,
+    )
+
+    return _RegressionPrincipal(
+        user_id=principal.user_id,
+        tenant_id=getattr(principal, "tenant_id", None) or "default",
+        roles=principal.roles,
+    )
 
 
 @router.get("/infra-skills/{skill_id}", response_model=InfraSkillDetailResponse)

@@ -543,6 +543,118 @@ class TestSettlementExplanationEndpoint:
         assert all(token not in public_body for token in ("select", "password", "yb_zyfdxx", "secret"))
 
 
+class TestPolicyQAFeedback:
+    """「回答有误」反馈端点：客户端不能伪造来源，服务端按 ID 读取并鉴权。"""
+
+    def _seed_qa_turn(
+        self,
+        *,
+        qa_turn_id="qat_feedback_1",
+        user_id="user-1",
+        tenant_id="default",
+        selected_skill_id="deductible",
+    ) -> None:
+        from src.runtime.task_closure.service import create_task
+
+        create_task(
+            task_id=qa_turn_id,
+            task_type="policy_qa",
+            description="政策问答",
+            responsible_role="cashier",
+            workflow_id="wf-fb",
+            executor_type="skill",
+            input_data={
+                "question_excerpt": "起付线怎么计算",
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "role": "cashier",
+                "session_id": "sess-fb",
+            },
+            output_data={
+                "answer_excerpt": "按年度累计计算",
+                "answer_status": "complete",
+                "selected_skill_id": selected_skill_id,
+            },
+            status="completed",
+        )
+
+    def _client_with_principal(self, principal):
+        from src.runtime.api.app import create_app
+        from src.runtime.api import policy_qa_routes
+
+        app = create_app()
+        app.dependency_overrides[policy_qa_routes.get_policy_qa_feedback_principal] = (
+            lambda: principal
+        )
+        return TestClient(app)
+
+    def test_feedback_rejects_client_supplied_source_fields(self):
+        from src.runtime.skill_management.regression_mining_service import (
+            RegressionPrincipal,
+        )
+
+        # 客户端不得携带 question/answer/selected_skill_id（鉴权通过后仍拒绝）
+        client = self._client_with_principal(
+            RegressionPrincipal(user_id="user-1", tenant_id="default")
+        )
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/feedback",
+            json={
+                "qa_turn_id": "qat_feedback_1",
+                "reason_code": "wrong_calculation",
+                "question": "伪造问题",
+                "selected_skill_id": "fake",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_feedback_returns_pool_id_and_dedups(self):
+        from src.runtime.skill_management.regression_mining_service import (
+            RegressionPrincipal,
+        )
+
+        self._seed_qa_turn()
+        client = self._client_with_principal(
+            RegressionPrincipal(user_id="user-1", tenant_id="default")
+        )
+        body = {
+            "qa_turn_id": "qat_feedback_1",
+            "reason_code": "wrong_calculation",
+            "comment": "计算口径不对",
+        }
+        first = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/feedback",
+            json=body,
+        )
+        second = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/feedback",
+            json=body,
+        )
+        assert first.status_code == 200
+        assert first.json()["pool_id"] == second.json()["pool_id"]
+        assert first.json()["error_dimension"] == "calculation"
+
+    def test_feedback_cross_user_returns_404_without_disclosure(self):
+        from src.runtime.skill_management.regression_mining_service import (
+            RegressionPrincipal,
+        )
+
+        self._seed_qa_turn(user_id="user-1", tenant_id="default")
+        client = self._client_with_principal(
+            RegressionPrincipal(user_id="intruder", tenant_id="default")
+        )
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/feedback",
+            json={
+                "qa_turn_id": "qat_feedback_1",
+                "reason_code": "wrong_routing",
+            },
+        )
+        assert response.status_code == 404
+        # 不泄露存在性：错误体不包含内部细节
+        assert "detail" in response.json()
+
+
 class TestPolicyQATestEndpoint:
     """测试政策问答测试端点"""
 

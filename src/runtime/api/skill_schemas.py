@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from src.domain.skill.draft_models import SkillDraft
+from src.domain.skill.regression_models import SkillFeedbackReasonCode
 from src.runtime.skill_management.ai_authoring.schemas import SkillStructuredConfig
 
 
@@ -360,3 +361,65 @@ class SkillDefinitionResponse(BaseModel):
             disabled_at=d.disabled_at,
             archived_at=d.archived_at,
         )
+
+
+# ── Skill 错误挖掘：反馈、案例池、历史批量入池 ──────────────────────
+
+
+class PolicyQAFeedbackRequest(BaseModel):
+    """「回答有误」反馈请求：客户端只能提交 ID + 原因码，不得伪造正文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    qa_turn_id: str = Field(min_length=1, max_length=80)
+    reason_code: SkillFeedbackReasonCode
+    comment: str | None = Field(default=None, max_length=500)
+
+
+class PolicyQAFeedbackResponse(BaseModel):
+    pool_id: str
+    status: str
+    error_dimension: str
+    source_selected_skill_id: str | None = None
+
+
+class EvalCasePoolItemResponse(BaseModel):
+    pool_id: str
+    tenant_id: str
+    source_qa_turn_id: str
+    source_user_id: str
+    reason_code: str
+    error_dimension: str
+    initial_dimension: str
+    transformed_dimension: str | None = None
+    target_skill_id: str | None = None
+    status: str
+    revision: int
+    eval_case_ref: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EvalCasePoolListResponse(BaseModel):
+    items: list[EvalCasePoolItemResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class EvalCasePoolFromHistoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    qa_turn_ids: list[str] = Field(min_length=1, max_length=100)
+    reason_code: SkillFeedbackReasonCode
+    comment: str | None = Field(default=None, max_length=500)
+
+
+class HistoryMiningOutcomeResponse(BaseModel):
+    qa_turn_id: str
+    status: str
+    pool_id: str | None = None
+
+
+class EvalCasePoolFromHistoryResponse(BaseModel):
+    outcomes: list[HistoryMiningOutcomeResponse]

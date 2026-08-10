@@ -15,10 +15,10 @@ import time as _time
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 import asyncio
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from src.runtime.policy_qa.explanation_mode import (
@@ -50,6 +50,32 @@ from src.runtime.policy_qa.persistence import (
 )
 from src.runtime.infra_event.context import set_infra_context
 from src.shared.schemas.responses import error_detail
+from src.data_platform.storage.skill.regression_factory import (
+    get_skill_regression_storage,
+)
+from src.data_platform.storage.skill.regression_ports import (
+    SkillRegressionConflictError,
+    SkillRegressionNotFoundError,
+)
+from src.domain.skill.regression_models import SkillFeedbackReasonCode
+from src.runtime.api.skill_schemas import (
+    EvalCasePoolFromHistoryRequest,
+    EvalCasePoolFromHistoryResponse,
+    EvalCasePoolItemResponse,
+    EvalCasePoolListResponse,
+    HistoryMiningOutcomeResponse,
+    PolicyQAFeedbackRequest,
+    PolicyQAFeedbackResponse,
+)
+from src.runtime.skill_management.regression_mining_service import (
+    QASourceReader,
+    QATurnNotAccessibleError,
+    QATurnSource,
+    RegressionMiningService,
+    RegressionPrincipal,
+    SensitiveFeedbackRejectedError,
+)
+from src.runtime.task_closure.service import get_task
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +106,69 @@ def _resolve_tenant_id(request: PolicyQARequest) -> str:
     供案例池去重与所有权校验使用。
     """
     return getattr(request, "tenant_id", None) or "default"
+
+
+class TaskBackedQASourceReader(QASourceReader):
+    """按 qa_turn_id 从 task 闭包读取脱敏前来源快照。"""
+
+    def get_qa_turn(self, qa_turn_id: str) -> QATurnSource | None:
+        if not qa_turn_id.startswith("qat_"):
+            return None
+        task = get_task(qa_turn_id)
+        if task is None:
+            return None
+        input_data = task.get("input_data") or {}
+        output_data = task.get("output_data") or {}
+        return QATurnSource(
+            qa_turn_id=qa_turn_id,
+            user_id=str(input_data.get("user_id") or ""),
+            tenant_id=str(input_data.get("tenant_id") or ""),
+            question=str(input_data.get("question_excerpt") or ""),
+            answer=str(output_data.get("answer_excerpt") or ""),
+            selected_skill_id=output_data.get("selected_skill_id"),
+        )
+
+
+def get_policy_qa_feedback_principal(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> RegressionPrincipal:
+    """反馈调用方身份来自认证上下文（非查询参数）。"""
+    from src.gateway.auth import authenticator
+
+    if authorization is None:
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("AUTHENTICATION_REQUIRED", "反馈需要登录凭证"),
+        )
+    auth_result = authenticator.validate_token(authorization)
+    if not auth_result.is_success or not auth_result.user_id.strip():
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("INVALID_AUTHENTICATION", auth_result.error_message),
+        )
+    tenant_id = str(auth_result.metadata.get("tenant_id") or "default")
+    return RegressionPrincipal(
+        user_id=auth_result.user_id.strip(),
+        tenant_id=tenant_id,
+        roles=tuple(auth_result.roles),
+    )
+
+
+PolicyQAFeedbackPrincipalDependency = Annotated[
+    RegressionPrincipal, Depends(get_policy_qa_feedback_principal)
+]
+
+
+def get_policy_qa_regression_mining_service() -> RegressionMiningService:
+    return RegressionMiningService(
+        storage=get_skill_regression_storage(),
+        qa_source_reader=TaskBackedQASourceReader(),
+    )
+
+
+PolicyQARegressionMiningDependency = Annotated[
+    RegressionMiningService, Depends(get_policy_qa_regression_mining_service)
+]
 
 
 # ── 防泄漏：禁止返回前端的字段 ────────────────────────────────────
@@ -1573,4 +1662,45 @@ async def get_qa_history(
     except Exception as e:
         logger.exception("Failed to get QA history")
         raise HTTPException(status_code=500, detail=f"获取历史记录失败: {str(e)}")
+
+
+@router.post("/feedback")
+def submit_policy_qa_feedback(
+    request: PolicyQAFeedbackRequest,
+    principal: PolicyQAFeedbackPrincipalDependency,
+    service: PolicyQARegressionMiningDependency,
+) -> PolicyQAFeedbackResponse:
+    """提交「回答有误」反馈。
+
+    客户端只能提交 qa_turn_id + reason_code + comment；正文与路由由服务端按 ID 读取。
+    """
+    try:
+        item = service.collect_feedback(
+            principal=principal,
+            qa_turn_id=request.qa_turn_id,
+            reason_code=request.reason_code,
+            comment=request.comment,
+            idempotency_key=request.qa_turn_id,
+        )
+    except QATurnNotAccessibleError:
+        # 统一返回 404，不泄露存在性
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "POLICY_QA_TURN_NOT_FOUND", "问答轮次不存在或无权访问"
+            ),
+        )
+    except SensitiveFeedbackRejectedError:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "POLICY_QA_FEEDBACK_SENSITIVE", "反馈包含敏感信息，已拒绝"
+            ),
+        )
+    return PolicyQAFeedbackResponse(
+        pool_id=item.pool_id,
+        status=item.status.value,
+        error_dimension=item.error_dimension.value,
+        source_selected_skill_id=item.source_selected_skill_id,
+    )
 

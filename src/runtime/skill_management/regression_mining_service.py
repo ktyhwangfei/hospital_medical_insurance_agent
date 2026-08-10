@@ -147,7 +147,7 @@ class RegressionMiningService:
         results: list[HistoryMiningOutcome] = []
         for qa_turn_id in qa_turn_ids:
             source = self._reader.get_qa_turn(qa_turn_id)
-            if source is None or not self._is_owner(principal, source):
+            if source is None or not self._same_tenant(principal, source):
                 results.append(
                     HistoryMiningOutcome(qa_turn_id=qa_turn_id, status=HistoryMiningStatus.FORBIDDEN)
                 )
@@ -212,6 +212,11 @@ class RegressionMiningService:
             source.user_id == principal.user_id
             and source.tenant_id == principal.tenant_id
         )
+
+    @staticmethod
+    def _same_tenant(principal: RegressionPrincipal, source: QATurnSource) -> bool:
+        # 评测者批量入池路径：同一租户即可（skill:evaluate 权限在 API 层校验）
+        return source.tenant_id == principal.tenant_id
 
     def _block_if_residual_sensitive(self, snapshot) -> None:
         residual = detect_residual_sensitive(_snapshot_text(snapshot))
