@@ -197,6 +197,35 @@ def load(config):
     assert [issue.code for issue in result.issues] == ["AI_AST_NODE_FORBIDDEN"]
 
 
+@pytest.mark.parametrize(
+    "assembler",
+    [
+        ("def load(config) -> __import__('os').system('whoami'):\n    return config\n"),
+        ("def load(config: open('pwned.txt', 'w')):\n    return config\n"),
+        "value: __import__('os').system('whoami') = 1\n",
+        "__builtins__['open'] = None\n",
+    ],
+)
+def test_scan_ai_files_rejects_definition_time_execution_and_unsafe_targets(
+    assembler: str,
+) -> None:
+    result = scan_ai_generated_files({"assembler.py": assembler})
+
+    assert [issue.code for issue in result.issues] == ["AI_AST_NODE_FORBIDDEN"]
+
+
+def test_scan_ai_files_keeps_simple_name_and_destructuring_assignments() -> None:
+    assembler = """\
+def load(config):
+    value = config["value"]
+    left, right = [value, 1]
+    return {"left": left, "right": right}
+"""
+    result = scan_ai_generated_files({"assembler.py": assembler})
+
+    assert result.passed is True
+
+
 def test_scan_ai_files_rejects_module_level_calls() -> None:
     result = scan_ai_generated_files(
         {"assembler.py": "value = len([])\ndef load(config):\n    return config\n"}
@@ -273,6 +302,14 @@ def test_scan_ai_files_accepts_safe_prompt_yaml() -> None:
     )
 
     assert result.issues == ()
+
+
+def test_scan_ai_files_maps_deep_yaml_resource_failure_to_stable_issue() -> None:
+    deeply_nested_yaml = "value: " + ("[" * 500) + "0" + ("]" * 500)
+
+    result = scan_ai_generated_files({"prompt_template.yaml": deeply_nested_yaml})
+
+    assert [issue.code for issue in result.issues] == ["AI_YAML_INVALID"]
 
 
 def test_scan_ai_files_reports_direct_open_once() -> None:

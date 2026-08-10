@@ -52,11 +52,37 @@ _ALLOWED_CALLS = frozenset(
     }
 )
 _DYNAMIC_BUILTIN_NAMES = frozenset({"__builtins__", "builtins"})
+_MAX_YAML_DEPTH = 64
+_MAX_YAML_NODES = 4096
 _SECRET_PATTERNS = (
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"(?i)(?:password|passwd|pwd|api[_-]?key|secret)\s*[=:]\s*\S+"),
 )
+
+
+class _BoundedSafeLoader(yaml.SafeLoader):
+    """SafeLoader 加资源上限，防止深度/节点耗尽。"""
+
+    def __init__(self, stream: str) -> None:
+        super().__init__(stream)
+        self._compose_depth = 0
+        self._composed_nodes = 0
+
+    def compose_node(self, parent, index):
+        self._compose_depth += 1
+        self._composed_nodes += 1
+        try:
+            if (
+                self._compose_depth > _MAX_YAML_DEPTH
+                or self._composed_nodes > _MAX_YAML_NODES
+            ):
+                raise yaml.YAMLError("YAML resource limit exceeded")
+            return super().compose_node(parent, index)
+        finally:
+            self._compose_depth -= 1
+
+
 _ALLOWED_AST_NODES = (
     ast.Module,
     ast.FunctionDef,
@@ -247,6 +273,15 @@ def _scan_python(content: str, path: str) -> list[SkillAISecurityIssue]:
                         path,
                     )
                 )
+            # 参数/返回注解会在函数定义时求值，生成脚本全部禁用。
+            if _function_has_annotations(node):
+                issues.append(
+                    _issue(
+                        "AI_AST_NODE_FORBIDDEN",
+                        "AI 生成脚本禁止函数注解",
+                        path,
+                    )
+                )
             if node.name in protected_names:
                 issues.append(
                     _issue(
@@ -265,7 +300,28 @@ def _scan_python(content: str, path: str) -> list[SkillAISecurityIssue]:
             )
             continue
 
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        if isinstance(node, ast.AnnAssign):
+            issues.append(
+                _issue(
+                    "AI_AST_NODE_FORBIDDEN",
+                    "AI 生成脚本禁止注解赋值",
+                    path,
+                )
+            )
+            continue
+
+        if isinstance(node, ast.Assign):
+            if not all(
+                _is_allowed_assignment_target(target) for target in node.targets
+            ):
+                issues.append(
+                    _issue(
+                        "AI_AST_NODE_FORBIDDEN",
+                        "AI 生成脚本赋值目标只允许变量或变量解构",
+                        path,
+                    )
+                )
+                continue
             target_names = _assignment_names(node)
             value = node.value
             has_forbidden_reference = value is not None and any(
@@ -366,6 +422,41 @@ def _scan_top_level_function(
             )
             continue
 
+        # 禁止属性/下标/星号赋值，避免赋值阶段触发外部能力。
+        if isinstance(node, ast.AnnAssign):
+            issues.append(
+                _issue(
+                    "AI_AST_NODE_FORBIDDEN",
+                    "AI 生成脚本禁止注解赋值",
+                    path,
+                )
+            )
+            continue
+
+        if isinstance(node, ast.Assign) and not all(
+            _is_allowed_assignment_target(target) for target in node.targets
+        ):
+            issues.append(
+                _issue(
+                    "AI_AST_NODE_FORBIDDEN",
+                    "AI 生成脚本赋值目标只允许变量或变量解构",
+                    path,
+                )
+            )
+            continue
+
+        if isinstance(node, ast.AugAssign) and not _is_allowed_assignment_target(
+            node.target
+        ):
+            issues.append(
+                _issue(
+                    "AI_AST_NODE_FORBIDDEN",
+                    "AI 生成脚本复合赋值目标只允许变量或变量解构",
+                    path,
+                )
+            )
+            continue
+
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             issues.append(_issue("AI_IMPORT_FORBIDDEN", "AI 生成脚本禁止 import", path))
             continue
@@ -439,7 +530,17 @@ def _walk_function_scope(function: ast.FunctionDef):
 
 def _walk_without_nested_bodies(node: ast.AST):
     yield node
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+    if isinstance(
+        node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.AnnAssign)
+    ):
+        return
+    if isinstance(node, ast.Assign) and not all(
+        _is_allowed_assignment_target(target) for target in node.targets
+    ):
+        return
+    if isinstance(node, ast.AugAssign) and not _is_allowed_assignment_target(
+        node.target
+    ):
         return
     for child in ast.iter_child_nodes(node):
         yield from _walk_without_nested_bodies(child)
@@ -453,6 +554,24 @@ def _assignment_names(node: ast.Assign | ast.AnnAssign) -> set[str]:
         for child in ast.walk(target)
         if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
     }
+
+
+def _function_has_annotations(function: ast.FunctionDef) -> bool:
+    if function.returns is not None:
+        return True
+    return any(
+        argument.annotation is not None
+        for argument in ast.walk(function.args)
+        if isinstance(argument, ast.arg)
+    )
+
+
+def _is_allowed_assignment_target(target: ast.expr) -> bool:
+    if isinstance(target, ast.Name):
+        return True
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return all(_is_allowed_assignment_target(item) for item in target.elts)
+    return False
 
 
 def _is_static_expression(node: ast.AST) -> bool:
@@ -480,8 +599,8 @@ def _contains_forbidden_module_call(node: ast.AST) -> bool:
 
 def _scan_prompt_yaml(content: str, path: str) -> list[SkillAISecurityIssue]:
     try:
-        yaml.safe_load(content)
-    except yaml.YAMLError:
+        yaml.load(content, Loader=_BoundedSafeLoader)
+    except (yaml.YAMLError, RecursionError, MemoryError):
         return [_issue("AI_YAML_INVALID", "AI 生成提示词 YAML 无效", path)]
     return []
 

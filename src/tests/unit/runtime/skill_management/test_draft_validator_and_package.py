@@ -211,7 +211,11 @@ class TestSkillDraftValidator:
 
     @pytest.mark.parametrize(
         "source_type",
-        [SkillDraftSourceType.TEMPLATE, SkillDraftSourceType.IMPORT],
+        [
+            SkillDraftSourceType.TEMPLATE,
+            SkillDraftSourceType.IMPORT,
+            SkillDraftSourceType.COPY,
+        ],
     )
     def test_non_ai_drafts_keep_legacy_security_codes(
         self,
