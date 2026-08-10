@@ -4,6 +4,7 @@
 """
 import os
 import logging
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,26 @@ MILVUS_URI = os.getenv("MILVUS_URI", f"tcp://{MILVUS_HOST}:{MILVUS_PORT}")
 
 # Skills 存储目录
 SKILLS_DIR = os.getenv("SKILLS_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "skills"))
+
+# 候选 Skill 仅写入隔离区；默认不启用行为执行 sandbox。
+SKILL_CANDIDATE_ROOT = os.getenv(
+    "SKILL_CANDIDATE_ROOT",
+    os.path.join(tempfile.gettempdir(), "hospital-skill-candidates"),
+)
+SKILL_CANDIDATE_SANDBOX_ENABLED = os.getenv(
+    "SKILL_CANDIDATE_SANDBOX_ENABLED", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
+SKILL_CANDIDATE_RUNNER_IMAGE = os.getenv(
+    "SKILL_CANDIDATE_RUNNER_IMAGE", "hospital-skill-candidate-runner:local"
+)
+SKILL_CANDIDATE_TIMEOUT_SECONDS = int(
+    os.getenv("SKILL_CANDIDATE_TIMEOUT_SECONDS", "10")
+)
+SKILL_CANDIDATE_MEMORY_LIMIT = os.getenv(
+    "SKILL_CANDIDATE_MEMORY_LIMIT", "128m"
+)
+SKILL_CANDIDATE_CPU_LIMIT = os.getenv("SKILL_CANDIDATE_CPU_LIMIT", "0.5")
+SKILL_CANDIDATE_PIDS_LIMIT = int(os.getenv("SKILL_CANDIDATE_PIDS_LIMIT", "32"))
 
 # 日志配置
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

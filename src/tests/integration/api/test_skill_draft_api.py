@@ -19,9 +19,18 @@ from src.data_platform.storage.skill.draft_in_memory import (
 from src.data_platform.cache.in_memory import InMemoryCacheClient
 from src.runtime.api.app import create_app
 from src.runtime.api.infra_skill_routes import (
+    get_skill_candidate_evaluation_service,
     get_skill_ai_authoring_service,
     get_skill_draft_service,
+    get_skill_governance_service,
     get_skill_idempotency_store,
+    get_skill_regression_storage_dep,
+)
+from src.runtime.skill_management.ai_authoring.candidate_evaluation import (
+    SkillCandidateEvaluationService,
+)
+from src.runtime.skill_management.ai_authoring.candidate_execution_ports import (
+    DisabledCandidateExecutionAdapter,
 )
 from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationResponse,
@@ -35,6 +44,16 @@ from src.runtime.skill_management.ai_authoring.service import (
     SkillAISecurityRejectedError,
 )
 from src.runtime.skill_management.draft_service import SkillDraftService
+from src.runtime.skill_management.package_generator import SkillPackageGenerator
+from src.data_platform.storage.skill.regression_in_memory import (
+    InMemorySkillRegressionStorage,
+)
+from src.domain.skill.governance_models import SkillEvalCase
+from src.domain.skill.regression_models import (
+    CalculationAssertions,
+    SkillErrorDimension,
+    SkillRegressionCase,
+)
 
 PREFIX = "/api/v1/medical-insurance-ai-agent"
 
@@ -187,8 +206,16 @@ class _FakeAIAuthoringService:
         )
 
 
+class _FakeGovernanceService:
+    def __init__(self) -> None:
+        self.cases: list[SkillEvalCase] = []
+
+    def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]:
+        return [case for case in self.cases if not enabled_only or case.enabled]
+
+
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
     monkeypatch.setenv("SKILL_CONTROL_DEV_MODE", "1")
     app = create_app()
     loader = _FakeLoader()
@@ -199,14 +226,31 @@ def client(monkeypatch):
         skills_root="/nonexistent-skills-root",
     )
     ai_service = _FakeAIAuthoringService()
+    governance_service = _FakeGovernanceService()
+    regression_storage = InMemorySkillRegressionStorage()
+    candidate_service = SkillCandidateEvaluationService(
+        package_generator=SkillPackageGenerator(),
+        candidate_root=tmp_path / "candidate-quarantine",
+        runtime_skills_root=tmp_path / "runtime-skills",
+        executor=DisabledCandidateExecutionAdapter("sandbox_unavailable"),
+    )
     cache = InMemoryCacheClient()
     app.dependency_overrides[get_skill_draft_service] = lambda: service
     app.dependency_overrides[get_skill_ai_authoring_service] = lambda: ai_service
+    app.dependency_overrides[get_skill_governance_service] = lambda: governance_service
+    app.dependency_overrides[get_skill_regression_storage_dep] = (
+        lambda: regression_storage
+    )
+    app.dependency_overrides[get_skill_candidate_evaluation_service] = (
+        lambda: candidate_service
+    )
     app.dependency_overrides[get_skill_idempotency_store] = lambda: cache
     client = TestClient(app)
     client._loader = loader  # type: ignore[attr-defined]
     client._draft_storage = storage  # type: ignore[attr-defined]
     client._ai_service = ai_service  # type: ignore[attr-defined]
+    client._governance_service = governance_service  # type: ignore[attr-defined]
+    client._regression_storage = regression_storage  # type: ignore[attr-defined]
     client._cache = cache  # type: ignore[attr-defined]
     return client
 
@@ -416,6 +460,92 @@ def test_accept_ai_proposal_uses_one_draft_across_different_idempotency_keys(cli
     assert second.status_code == 201, second.text
     assert second.json()["draft_id"] == first.json()["draft_id"]
     assert len(client._draft_storage.list_drafts()) == 1  # type: ignore[attr-defined]
+
+
+def _accepted_candidate_draft(client) -> dict[str, object]:
+    response = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai",
+        json=_generate_and_accept_payload(client),
+        headers={**_auth_headers(), "Idempotency-Key": "candidate-draft"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _evaluation_headers() -> dict[str, str]:
+    return _auth_headers(
+        _control_token(
+            "quality-user", ["quality"], permissions=["skill:evaluate"]
+        )
+    )
+
+
+def test_candidate_route_evaluation_requires_skill_evaluate(client):
+    draft = _accepted_candidate_draft(client)
+
+    response = client.post(
+        f"{PREFIX}/infra-skills/drafts/{draft['draft_id']}/candidate-evaluations/routes",
+        json={"case_ids": []},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 403
+
+
+def test_candidate_route_evaluation_uses_server_side_cases(client):
+    draft = _accepted_candidate_draft(client)
+    client._governance_service.cases.append(  # type: ignore[attr-defined]
+        SkillEvalCase(
+            case_id="route-candidate-api",
+            suite_version=1,
+            question_template="\u8bf7\u89e3\u91ca\u8d77\u4ed8\u7ebf",
+            expected_skill_id="deductible_explain",
+            created_by="quality-user",
+        )
+    )
+
+    response = client.post(
+        f"{PREFIX}/infra-skills/drafts/{draft['draft_id']}/candidate-evaluations/routes",
+        json={"case_ids": ["route-candidate-api"]},
+        headers=_evaluation_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["metrics"]["gate_passed"] is True
+    assert body["results"][0]["case_id"] == "route-candidate-api"
+    assert len(body["artifact_hash"]) == 64
+    assert len(body["case_snapshot_hash"]) == 64
+    assert "def assemble" not in response.text
+
+
+def test_candidate_behavior_evaluation_fails_closed_without_sandbox(client):
+    draft = _accepted_candidate_draft(client)
+    client._regression_storage.create_case(  # type: ignore[attr-defined]
+        SkillRegressionCase(
+            case_id="behavior-candidate-api",
+            target_skill_id="deductible_explain",
+            case_type=SkillErrorDimension.CALCULATION,
+            input_template={"amount": 100.0},
+            expected_assertions=CalculationAssertions(expected_value=100.0),
+            source_ref="qa-turn-api",
+            source_hash="b" * 64,
+            confirmed_by="quality-user",
+        )
+    )
+
+    response = client.post(
+        f"{PREFIX}/infra-skills/drafts/{draft['draft_id']}/candidate-evaluations/behavior",
+        json={"case_ids": ["behavior-candidate-api"]},
+        headers=_evaluation_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "blocked_by_evaluator"
+    assert body["blocked_reason"] == "sandbox_unavailable"
+    assert body["results"][0]["output"] is None
 
 
 def test_accept_ai_proposal_replays_completed_result_after_evidence_is_deleted(client):

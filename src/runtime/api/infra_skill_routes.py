@@ -13,7 +13,16 @@ import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ValidationError
 
-from src.config.production import SKILLS_DIR
+from src.config.production import (
+    SKILLS_DIR,
+    SKILL_CANDIDATE_CPU_LIMIT,
+    SKILL_CANDIDATE_MEMORY_LIMIT,
+    SKILL_CANDIDATE_PIDS_LIMIT,
+    SKILL_CANDIDATE_ROOT,
+    SKILL_CANDIDATE_RUNNER_IMAGE,
+    SKILL_CANDIDATE_SANDBOX_ENABLED,
+    SKILL_CANDIDATE_TIMEOUT_SECONDS,
+)
 from src.data_platform.storage.skill.version_factory import get_skill_version_storage
 from src.data_platform.storage.skill.version_ports import SkillVersionConflictError
 from src.data_platform.storage.skill.draft_ports import (
@@ -78,6 +87,14 @@ from src.runtime.skill_management.ai_authoring.service import (
 )
 from src.runtime.skill_management.draft_validator import SkillDraftValidator
 from src.runtime.skill_management.package_generator import SkillPackageGenerator
+from src.runtime.skill_management.ai_authoring.candidate_evaluation import (
+    SkillCandidateArtifactError,
+    SkillCandidateEvaluationService,
+)
+from src.runtime.skill_management.ai_authoring.candidate_execution_ports import (
+    CandidateExecutionPort,
+    DisabledCandidateExecutionAdapter,
+)
 from src.domain.skill.governance_models import SkillRelease
 from src.runtime.api.skill_schemas import (
     SkillAIAcceptRequest,
@@ -95,6 +112,9 @@ from src.runtime.api.skill_schemas import (
     SkillLifecycleTransitionRequest,
     SkillPackageFileResponse,
     SkillPackagePreviewResponse,
+    SkillCandidateBehaviorEvaluationResponse,
+    SkillCandidateEvaluationRequest,
+    SkillCandidateRouteEvaluationResponse,
     SkillValidationIssueResponse,
     SkillEvalCaseCreateRequest,
     SkillEvalCaseListResponse,
@@ -1020,6 +1040,38 @@ SkillPackageGeneratorDependency = Annotated[
 ]
 
 
+def get_skill_candidate_evaluation_service(
+    generator: SkillPackageGeneratorDependency,
+) -> SkillCandidateEvaluationService:
+    executor: CandidateExecutionPort = DisabledCandidateExecutionAdapter(
+        "sandbox_unavailable"
+    )
+    if SKILL_CANDIDATE_SANDBOX_ENABLED:
+        from src.runtime.skill_management.ai_authoring.candidate_execution_docker import (
+            DockerCandidateExecutionAdapter,
+        )
+
+        executor = DockerCandidateExecutionAdapter(
+            image=SKILL_CANDIDATE_RUNNER_IMAGE,
+            timeout_seconds=SKILL_CANDIDATE_TIMEOUT_SECONDS,
+            memory_limit=SKILL_CANDIDATE_MEMORY_LIMIT,
+            cpu_limit=SKILL_CANDIDATE_CPU_LIMIT,
+            pids_limit=SKILL_CANDIDATE_PIDS_LIMIT,
+        )
+    return SkillCandidateEvaluationService(
+        package_generator=generator,
+        candidate_root=SKILL_CANDIDATE_ROOT,
+        runtime_skills_root=SKILLS_DIR,
+        executor=executor,
+    )
+
+
+SkillCandidateEvaluationServiceDependency = Annotated[
+    SkillCandidateEvaluationService,
+    Depends(get_skill_candidate_evaluation_service),
+]
+
+
 def get_skill_ai_authoring_service() -> SkillAIAuthoringService:
     """AI 编写服务组装点；模型与指标注册表均显式注入。"""
 
@@ -1577,6 +1629,104 @@ def preview_skill_draft_package(
         ],
         file_count=len(package.files),
         revision=draft.revision,
+    )
+
+
+def _candidate_case_selection[T](
+    cases: list[T], case_ids: list[str]
+) -> list[T]:
+    by_id = {getattr(case, "case_id"): case for case in cases}
+    if case_ids:
+        unknown = sorted(set(case_ids).difference(by_id))
+        if unknown:
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "SKILL_CANDIDATE_CASE_NOT_FOUND",
+                    f"候选评测用例不存在: {', '.join(unknown)}",
+                ),
+            )
+        selected = [by_id[case_id] for case_id in dict.fromkeys(case_ids)]
+    else:
+        selected = list(cases)
+    if not selected:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "SKILL_CANDIDATE_CASES_EMPTY", "没有可执行的候选评测用例"
+            ),
+        )
+    return selected
+
+
+@router.post(
+    "/infra-skills/drafts/{draft_id}/candidate-evaluations/routes",
+    response_model=SkillCandidateRouteEvaluationResponse,
+)
+def evaluate_skill_candidate_routes(
+    draft_id: str,
+    request: SkillCandidateEvaluationRequest,
+    draft_service: SkillDraftServiceDependency,
+    governance_service: SkillGovernanceServiceDependency,
+    candidate_service: SkillCandidateEvaluationServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillCandidateRouteEvaluationResponse:
+    del principal
+    draft = draft_service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", f"草稿不存在: {draft_id}"),
+        )
+    cases = _candidate_case_selection(
+        governance_service.list_cases(enabled_only=True), request.case_ids
+    )
+    try:
+        result = candidate_service.evaluate_routes(draft, cases)
+    except SkillCandidateArtifactError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail("SKILL_CANDIDATE_REJECTED", str(exc)),
+        ) from exc
+    return SkillCandidateRouteEvaluationResponse.model_validate(
+        result.model_dump(mode="json")
+    )
+
+
+@router.post(
+    "/infra-skills/drafts/{draft_id}/candidate-evaluations/behavior",
+    response_model=SkillCandidateBehaviorEvaluationResponse,
+)
+def evaluate_skill_candidate_behavior(
+    draft_id: str,
+    request: SkillCandidateEvaluationRequest,
+    draft_service: SkillDraftServiceDependency,
+    regression_storage: SkillRegressionStorageDependency,
+    candidate_service: SkillCandidateEvaluationServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillCandidateBehaviorEvaluationResponse:
+    del principal
+    draft = draft_service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", f"草稿不存在: {draft_id}"),
+        )
+    cases = _candidate_case_selection(
+        regression_storage.list_cases(
+            target_skill_id=draft.skill_id, enabled_only=True
+        ),
+        request.case_ids,
+    )
+    try:
+        result = candidate_service.evaluate_behavior(draft, cases)
+    except SkillCandidateArtifactError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail("SKILL_CANDIDATE_REJECTED", str(exc)),
+        ) from exc
+    return SkillCandidateBehaviorEvaluationResponse.model_validate(
+        result.model_dump(mode="json")
     )
 
 

@@ -319,6 +319,35 @@ class SkillPackagePreviewResponse(BaseModel):
     revision: int
 
 
+class SkillCandidateEvaluationRequest(BaseModel):
+    case_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+class SkillCandidateRouteEvaluationResponse(BaseModel):
+    artifact_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    case_snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["completed", "failed", "blocked_by_evaluator"]
+    metrics: SkillEvalMetricsResponse | None = None
+    results: list[SkillEvalResultResponse] = Field(default_factory=list)
+    blocked_reason: str | None = None
+
+
+class SkillCandidateBehaviorResultResponse(BaseModel):
+    case_id: str
+    status: Literal["passed", "failed", "blocked_by_evaluator"]
+    passed: bool
+    output: dict[str, Any] | None = None
+    blocked_reason: str | None = None
+
+
+class SkillCandidateBehaviorEvaluationResponse(BaseModel):
+    artifact_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    case_snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["completed", "failed", "blocked_by_evaluator"]
+    results: list[SkillCandidateBehaviorResultResponse] = Field(default_factory=list)
+    blocked_reason: str | None = None
+
+
 class SkillMaterializeRequest(BaseModel):
     expected_revision: int = Field(ge=1)
     reason: str = Field(min_length=1, max_length=500)
