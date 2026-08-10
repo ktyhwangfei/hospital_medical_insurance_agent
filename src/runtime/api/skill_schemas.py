@@ -3,9 +3,10 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.domain.skill.draft_models import SkillDraft
+from src.runtime.skill_management.ai_authoring.schemas import SkillStructuredConfig
 
 
 class SkillEvalCaseCreateRequest(BaseModel):
@@ -186,6 +187,28 @@ class SkillReleaseListResponse(BaseModel):
 
 
 # ── Skill 草稿管理（P1+）──────────────────────────────────────────
+
+
+class SkillAIGenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str
+    metric_codes: list[str]
+
+
+class SkillAIOptimizeRequest(SkillAIGenerateRequest):
+    expected_revision: int = Field(ge=1)
+
+
+class SkillAIAcceptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generation_id: str = Field(min_length=1, max_length=80)
+    proposal_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    skill_id: str = Field(min_length=1, max_length=128)
+    skill_name: str = Field(min_length=1, max_length=256)
+    structured_config: SkillStructuredConfig
+    raw_files: dict[str, str]
 
 
 class SkillDraftCreateRequest(BaseModel):

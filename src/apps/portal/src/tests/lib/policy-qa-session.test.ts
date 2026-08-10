@@ -241,6 +241,16 @@ describe('sanitizePublicPayload', () => {
       }),
     ).toEqual({ answer: '安全答案', nested: { title: '政策依据' } })
   })
+
+  it('保留 qa_turn_id（反馈入口需要），仍丢弃 selected_skill_id', () => {
+    expect(
+      sanitizePublicPayload({
+        qa_turn_id: 'qat-1',
+        selected_skill_id: 'deductible',
+        result: { answer: '安全答案' },
+      }),
+    ).toEqual({ qa_turn_id: 'qat-1', result: { answer: '安全答案' } })
+  })
 })
 
 describe('toPolicyQAResult', () => {
