@@ -22,14 +22,17 @@
 
 ## 启动命令
 
+> ⛔ 任何 orca worktree 启停服务一律走中央脚本 `ws.ps1`（工作区父目录、git 外，`..\ws.ps1`）。
+> **不要**直接跑本工作区的 `start-servers.ps1`（它是 ws.ps1 的执行层，直接用会绕过确定性端口分配、并行启停、旧实例清理），更不要手动 `uvicorn`/`npm run dev`（端口会和多工作区端口策略冲突）。
+
 ```bash
-# 启动开发服务器（--factory 必须指定，因为 create_app 是工厂函数）
-uvicorn src.runtime.api.app:create_app --host 127.0.0.1 --port 8000 --factory --reload
-
-# 前端开发服务器（Next.js 16 应用）
-cd src/apps/portal && npm run dev    # 业务应用入口（默认端口 3000）
-
+..\ws.ps1 up            # 启动当前工作区（无参数=全部工作区）
+..\ws.ps1 down          # 停止
+..\ws.ps1 list          # 端口 + 实时健康（并行探测，秒级）
+..\ws.ps1 url all       # 各工作区验证 URL（后端 /health + portal 首页）
 ```
+
+端口按工作区名确定性分配（后端 `8100+slot` / 前端 `3100+slot`），写入 `.server-ports.json`，跨机器稳定、不与旧脚本的 8000/3000 重叠。仅当 ws.ps1 不可用、需手动调试单进程时，才用 `uvicorn src.runtime.api.app:create_app --factory --reload`（`--factory` 必填）+ `cd src/apps/portal && npm run dev`，端口以 `.server-ports.json` 为准。
 ## 架构
 
 完整架构定义见 `docs/steering/架构设计.md`，采用四层体系：SaaS 应用产品层 → PaaS 平台支撑层 → DaaS 数据与知识服务层 → 系统接入与基础设施层。
@@ -224,21 +227,11 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 
 ### 启动服务器陷阱（PowerShell）
 
-> ⛔ 直接用 `start-servers.ps1` 和 `stop-servers.ps1`，不要手动启动。
-
-```bash
-# 启动
-.\start-servers.ps1
-
-# 停止
-.\stop-servers.ps1
-```
-
-脚本自动处理：端口冲突检测、旧进程清理、启动验证、前端编译等待。
+> ⛔ 启停一律用 `ws.ps1`（见上方「启动命令」），修复半启动状态用 `..\ws.ps1 restart`。**不要**直接调用本工作区的 `start-servers.ps1`/`stop-servers.ps1`——它们是 ws.ps1 的执行层，直接用会绕过：确定性端口分配、Stop-Legacy 旧版实例清理、pre-flight（node_modules 缺失）检查，且复用旧进程时不纠正前端 `NEXT_PUBLIC_API_BASE_URL`（见下方已知陷阱），导致列表全空。
 
 #### 多工作区（Orca workspaces）并行启停
 
-> 多个工作区同时开发时，不要逐个跑上面的脚本，用中央管理脚本 `ws.ps1`。
+`ws.ps1` 同时管理所有 orca worktree（含本工作区）；即使只开发单个 worktree 也用它（上方命令已适用单工作区）。以下命令用于多工作区场景：
 
 `ws.ps1` 位于 orca 工作区父目录（`C:\Users\于金宝\orca\workspaces\hospital_medical_insurance_agent\ws.ps1`），在 git 之外、不受分支影响，任何工作区内都可调用（`..\ws.ps1`）：
 
