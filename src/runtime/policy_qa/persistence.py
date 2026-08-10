@@ -16,7 +16,7 @@ from src.runtime.runtime_state.models import StepState, WorkflowInstance
 from src.data_platform.storage.postgresql.workflow_store import PostgreSQLWorkflowStore
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
 from src.config.production import DATABASE_URL
-from src.runtime.task_closure.service import create_task, save_task, get_task
+from src.runtime.task_closure.service import create_task
 
 logger = logging.getLogger(__name__)
 
@@ -84,42 +84,53 @@ def ensure_session_and_workflow(
 
 
 def record_qa_task(
+    *,
+    qa_turn_id: str,
     workflow_id: str,
     session_id: str,
     user_id: str,
-    role: str,
+    tenant_id: str,
     question: str,
-    settlement_id: str,
-    status: str,
-    output_data: dict[str, Any] | None = None,
+    output: dict[str, Any] | None = None,
+    role: str = "system",
+    settlement_id: str = "",
+    status: str = "completed",
     error_message: str | None = None,
     duration_ms: int | None = None,
 ) -> str:
     """
     记录一次 Policy QA 交互为一个 task。
 
+    服务端在请求开始时生成稳定的 qa_turn_id，贯穿 persistence、result、done 和
+    异常 done；task 以 qa_turn_id 作为主键，不再根据问题正文计算 task ID。
+
     Args:
+        qa_turn_id: 服务端生成的稳定问答轮次 ID（task 主键）
         workflow_id: 工作流 ID
         session_id: 会话 ID
         user_id: 用户 ID
+        tenant_id: 租户 ID（用于后续案例池去重与所有权校验）
+        question: 用户问题（仅保存脱敏摘要，不保存原始患者正文）
+        output: 输出数据（含内部 selected_skill_id、answer_excerpt 等供后续挖掘使用）
         role: 用户角色
-        question: 用户问题
         settlement_id: 结算 ID
         status: 执行状态
-        output_data: 输出数据
         error_message: 错误信息
         duration_ms: 执行耗时（毫秒）
 
     Returns:
-        task_id
+        qa_turn_id（与 task 主键一致）
     """
-    task_id = _generate_id("task", f"{workflow_id}:{question}")
+    task_id = qa_turn_id
+    # 仅保存脱敏摘要，不保存原始患者问题正文
+    question_excerpt = (question or "")[:500]
 
-    # input_data 包含用户问题
+    # input_data 仅保留脱敏摘要与所有权/租户字段，供反馈与历史选取按 ID 读取
     input_data = {
-        "question": question,
+        "question_excerpt": question_excerpt,
         "settlement_id": settlement_id,
         "user_id": user_id,
+        "tenant_id": tenant_id,
         "role": role,
         "session_id": session_id,
     }
@@ -128,18 +139,16 @@ def record_qa_task(
         create_task(
             task_id=task_id,
             task_type="policy_qa",
-            description=question[:200] if question else "政策问答",
+            description=question_excerpt[:200] if question_excerpt else "政策问答",
             responsible_role=role,
             workflow_id=workflow_id,
             executor_type="skill",
             input_data=input_data,
-            output_data=output_data or {},
+            output_data=output or {},
+            error_message=error_message,
+            duration_ms=duration_ms,
+            status=status if status in ("completed", "failed") else "completed",
         )
-        if status in ("completed", "failed"):
-            existing = get_task(task_id)
-            if existing:
-                existing["status"] = status
-                save_task(existing)
         logger.debug(f"Task recorded: {task_id}")
         return task_id
     except Exception as e:

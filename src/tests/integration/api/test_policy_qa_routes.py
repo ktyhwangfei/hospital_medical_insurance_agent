@@ -285,16 +285,37 @@ class TestPolicyQAStreamEndpoint:
         assert "yb_" not in json.dumps(result_event, ensure_ascii=False).lower()
         assert result_event["citations"] or result_event["uncertainties"]
 
-    def test_stream_task_persistence_uses_public_evidence_count_key(
+    def test_stream_result_and_done_share_qa_turn_id(
+        self, client, safe_policy_qa_dependencies
+    ):
+        """result 与 done 事件必须携带同一服务端 qa_turn_id，且以 qat_ 前缀生成。"""
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={
+                "question": "统筹自付为什么这么多？",
+                "settlement_id": "1671213",
+            },
+        )
+
+        assert response.status_code == 200
+        events = _sse_events(response.text)
+        result_payload = next(payload for name, payload in events if name == "result")
+        done_payload = next(payload for name, payload in events if name == "done")
+        assert result_payload["qa_turn_id"] == done_payload["qa_turn_id"]
+        assert result_payload["qa_turn_id"].startswith("qat_")
+        # 公开 result 内部仍不泄露内部路由字段
+        assert "selected_skill_id" not in _nested_keys(result_payload["result"])
+
+    def test_stream_task_persistence_uses_server_turn_id_and_internal_fields(
         self, client, safe_policy_qa_dependencies, monkeypatch
     ):
         from src.runtime.api import policy_qa_routes
 
-        persisted_outputs = []
+        persisted = []
         monkeypatch.setattr(
             policy_qa_routes,
             "record_qa_task",
-            lambda **kwargs: persisted_outputs.append(kwargs["output_data"]),
+            lambda **kwargs: persisted.append(kwargs),
         )
 
         response = client.post(
@@ -306,13 +327,17 @@ class TestPolicyQAStreamEndpoint:
         )
 
         assert response.status_code == 200
-        assert persisted_outputs
-        output_data = persisted_outputs[-1]
+        assert persisted
+        call = persisted[-1]
+        assert call["qa_turn_id"].startswith("qat_")
+        output_data = call["output"]
         assert set(output_data) == {
             "answer_excerpt",
             "answer_status",
             "evidence_count",
             "internal_run_id",
+            "selected_skill_id",
+            "question_excerpt",
         }
         assert output_data["evidence_count"] == 1
 
@@ -342,6 +367,8 @@ class TestPolicyQAStreamEndpoint:
         assert sum(name == "done" for name, _payload in events) == 1
         error_payload = next(payload for name, payload in events if name == "error")
         done_payload = next(payload for name, payload in events if name == "done")
+        assert error_payload.pop("qa_turn_id").startswith("qat_")
+        assert done_payload.pop("qa_turn_id").startswith("qat_")
         assert error_payload == {
             "error_code": "POLICY_QA_FAILED",
             "message": "政策问答处理失败，请稍后重试或联系医保办。",

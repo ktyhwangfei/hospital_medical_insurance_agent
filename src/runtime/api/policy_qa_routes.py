@@ -12,6 +12,7 @@ import logging
 import math
 import re
 import time as _time
+import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
@@ -70,6 +71,15 @@ def _sse_event(event_type: str, data: dict | str) -> str:
     else:
         data_str = data
     return f'event: {event_type}\ndata: {data_str}\n\n'
+
+
+def _resolve_tenant_id(request: PolicyQARequest) -> str:
+    """从请求上下文解析租户 ID。
+
+    当前未接入生产认证；后续由认证上下文提供，这里提供稳定默认值，
+    供案例池去重与所有权校验使用。
+    """
+    return getattr(request, "tenant_id", None) or "default"
 
 
 # ── 防泄漏：禁止返回前端的字段 ────────────────────────────────────
@@ -488,12 +498,16 @@ async def _policy_qa_stream(
     """
     print(f'[POLICY-QA] 开始处理请求: question={request.question[:30]}..., settlement_id={request.settlement_id}', flush=True)
 
+    # 服务端在请求开始时生成一次稳定的 qa_turn_id，贯穿 persistence、result、done 与异常 done
+    qa_turn_id = f"qat_{uuid.uuid4().hex}"
+
     # ── 持久化：创建 session + workflow（失败不影响流式响应）──
     start_time = _time.time()
     user_id = request.user_id or "demo"
     role = request.role or "cashier"
     session_id = request.session_id or f"sess-{id(request)}"
     workflow_id = f"wf-{id(request)}"
+    tenant_id = _resolve_tenant_id(request)
     try:
         session_id, workflow_id = ensure_session_and_workflow(
             session_id=session_id,
@@ -755,24 +769,28 @@ async def _policy_qa_stream(
         runtime_bridge.finalize_turn(
             session_id=session_id, question=request.question,
         )
-        yield _sse_event("result", {"result": public_result.model_dump(mode="json")})
+        yield _sse_event("result", {"qa_turn_id": qa_turn_id, "result": public_result.model_dump(mode="json")})
 
         # ── 持久化：记录 task 并完成 workflow ──
         duration_ms = int((_time.time() - start_time) * 1000)
         try:
             record_qa_task(
+                qa_turn_id=qa_turn_id,
                 workflow_id=workflow_id,
                 session_id=session_id,
                 user_id=user_id,
+                tenant_id=tenant_id,
                 role=role,
                 question=request.question,
                 settlement_id=request.settlement_id,
                 status="completed",
-                output_data={
+                output={
                     "answer_excerpt": public_result.answer[:500],
                     "answer_status": public_result.answer_status,
                     "evidence_count": len(public_result.policy_evidence),
                     "internal_run_id": trace_run_id,
+                    "selected_skill_id": skill_id,
+                    "question_excerpt": (request.question or "")[:500],
                 },
                 duration_ms=duration_ms,
             )
@@ -782,7 +800,11 @@ async def _policy_qa_stream(
 
         yield _sse_event(
             "done",
-            {"answer_status": public_result.answer_status, "success": True},
+            {
+                "qa_turn_id": qa_turn_id,
+                "answer_status": public_result.answer_status,
+                "success": True,
+            },
         )
 
     except Exception as e:
@@ -793,14 +815,16 @@ async def _policy_qa_stream(
         try:
             duration_ms = int((_time.time() - start_time) * 1000)
             record_qa_task(
+                qa_turn_id=qa_turn_id,
                 workflow_id=workflow_id,
                 session_id=session_id,
                 user_id=user_id,
+                tenant_id=tenant_id,
                 role=role,
                 question=request.question,
                 settlement_id=request.settlement_id,
                 status="failed",
-                output_data={},
+                output={},
                 error_message=str(e),
                 duration_ms=duration_ms,
             )
@@ -812,6 +836,7 @@ async def _policy_qa_stream(
         yield _sse_event(
             "error",
             {
+                "qa_turn_id": qa_turn_id,
                 "error_code": error_code,
                 "message": "政策问答处理失败，请稍后重试或联系医保办。",
             },
@@ -819,6 +844,7 @@ async def _policy_qa_stream(
         yield _sse_event(
             "done",
             {
+                "qa_turn_id": qa_turn_id,
                 "answer_status": "unavailable",
                 "success": False,
                 "error_code": error_code,

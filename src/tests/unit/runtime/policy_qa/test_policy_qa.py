@@ -1103,3 +1103,59 @@ class TestExtractSegmentRatios:
         seg = _strat._extract_segment_ratios([])
         assert seg["has_complete"] is False
         assert seg["retiree"] is None
+
+
+class TestPolicyQATurnId:
+    """服务端 qa_turn_id 全链路：task 主键、result、done、history 共享同一服务端 ID。"""
+
+    def test_record_qa_task_uses_server_qa_turn_id(self):
+        """record_qa_task 必须以服务端 qa_turn_id 作为 task 主键，不再根据问题正文计算。"""
+        from src.runtime.policy_qa.persistence import record_qa_task
+        from src.runtime.task_closure.service import get_task
+
+        qa_turn_id = "qat_01JTEST000000000000000001"
+        saved = record_qa_task(
+            qa_turn_id=qa_turn_id,
+            workflow_id="wf-1",
+            session_id="session-1",
+            user_id="user-1",
+            tenant_id="tenant-1",
+            question="起付线怎么计算",
+            output={
+                "answer_excerpt": "按年度累计计算",
+                "selected_skill_id": "deductible",
+            },
+        )
+        assert saved == qa_turn_id
+        task = get_task(qa_turn_id)
+        assert task is not None
+        assert task["task_id"] == qa_turn_id
+        assert task["output_data"]["selected_skill_id"] == "deductible"
+        # 内部 input 不再保存原始患者问题正文，仅保留脱敏摘要
+        assert "question" not in task["input_data"]
+        assert task["input_data"]["question_excerpt"]
+        assert task["input_data"]["tenant_id"] == "tenant-1"
+
+    def test_record_qa_task_is_idempotent_on_same_turn_id(self):
+        """同一 qa_turn_id 重复记录不会产生第二个主键。"""
+        from src.runtime.policy_qa.persistence import record_qa_task
+
+        first = record_qa_task(
+            qa_turn_id="qat_idem_1",
+            workflow_id="wf-idem",
+            session_id="sess-idem",
+            user_id="user-1",
+            tenant_id="tenant-1",
+            question="统筹自付怎么算",
+            output={"answer_excerpt": "分段计算", "selected_skill_id": "settlement_explain_skill"},
+        )
+        second = record_qa_task(
+            qa_turn_id="qat_idem_1",
+            workflow_id="wf-idem",
+            session_id="sess-idem",
+            user_id="user-1",
+            tenant_id="tenant-1",
+            question="统筹自付怎么算",
+            output={"answer_excerpt": "分段计算", "selected_skill_id": "settlement_explain_skill"},
+        )
+        assert first == second == "qat_idem_1"
