@@ -172,7 +172,10 @@ class TestSkillDraftValidator:
     def test_ai_generated_draft_appends_blocking_ai_security_issues(self):
         report = self.validator.validate(
             _draft(
-                raw_files={"assembler.py": "import socket\n"},
+                raw_files={
+                    "assembler.py": "import socket\n",
+                    "__generation_meta__.json": _generation_meta(),
+                },
                 source_type=SkillDraftSourceType.AI_GENERATED,
             )
         )
@@ -188,6 +191,7 @@ class TestSkillDraftValidator:
                 raw_files={
                     "assembler.py": "def load(config):\n    return config\n",
                     "prompt_template.yaml": "system: explain with citations\n",
+                    "__generation_meta__.json": _generation_meta(),
                 },
                 source_type=SkillDraftSourceType.AI_GENERATED,
             )
@@ -209,6 +213,22 @@ class TestSkillDraftValidator:
 
         assert report.blocking_ok
         assert "AI_FILE_PATH_FORBIDDEN" not in _codes(report)
+
+    def test_ai_generated_draft_requires_generation_metadata(self):
+        report = self.validator.validate(
+            _draft(
+                raw_files={
+                    "assembler.py": "def load(config):\n    return config\n",
+                    "prompt_template.yaml": "system: explain with citations\n",
+                },
+                source_type=SkillDraftSourceType.AI_GENERATED,
+            )
+        )
+
+        assert "AI_GENERATION_META_REQUIRED" in _codes(
+            report, ValidationSeverity.BLOCKING
+        )
+        assert report.blocking_ok is False
 
     @pytest.mark.parametrize(
         ("internal_files", "expected_code"),
@@ -245,6 +265,7 @@ class TestSkillDraftValidator:
                 raw_files={
                     "assembler.py": "def load(config):\n    return config\n",
                     "prompt_template.yaml": "system: explain with citations\n",
+                    "__generation_meta__.json": _generation_meta(),
                     **internal_files,
                 },
                 source_type=SkillDraftSourceType.AI_GENERATED,
@@ -285,7 +306,10 @@ class TestSkillDraftValidator:
         expected_code: str,
     ) -> None:
         draft = _draft(
-            raw_files=raw_files,
+            raw_files={
+                **raw_files,
+                "__generation_meta__.json": _generation_meta(),
+            },
             source_type=SkillDraftSourceType.AI_GENERATED,
         )
 

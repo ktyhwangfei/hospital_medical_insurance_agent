@@ -215,6 +215,14 @@ class SkillDraftValidator:
     def _validate_ai_generated_files(self, draft: SkillDraft) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         model_files: dict[str, str] = {}
+        if _GENERATION_META_PATH not in draft.raw_files:
+            issues.append(
+                self._blocking(
+                    "AI_GENERATION_META_REQUIRED",
+                    "AI 草稿必须保留生成证据元数据",
+                    f"raw_files.{_GENERATION_META_PATH}",
+                )
+            )
         for path, content in draft.raw_files.items():
             if not path.startswith("__"):
                 model_files[path] = content

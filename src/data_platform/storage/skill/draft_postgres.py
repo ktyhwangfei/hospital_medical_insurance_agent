@@ -101,19 +101,15 @@ class PostgresSkillDraftStorage:
 
     def save_draft(self, draft: SkillDraft) -> SkillDraft:
         client = self._get_client()
-        existing = client.execute(
-            "SELECT draft_id FROM skill_drafts WHERE draft_id = %s",
-            (draft.draft_id,),
-        )
-        if existing:
-            raise SkillDraftConflictError(f"草稿已存在: {draft.draft_id}")
-        client.execute(
+        rows = client.execute(
             """
             INSERT INTO skill_drafts (
                 draft_id, skill_id, skill_name, source_type, source_skill_id,
                 structured_config, raw_files, validation_report, status, revision,
                 created_by, created_at, updated_at, deleted_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (draft_id) DO NOTHING
+            RETURNING *
             """,
             (
                 draft.draft_id,
@@ -134,7 +130,9 @@ class PostgresSkillDraftStorage:
                 None,
             ),
         )
-        return draft.model_copy(deep=True)
+        if not rows:
+            raise SkillDraftConflictError(f"草稿已存在: {draft.draft_id}")
+        return self._row_to_draft(rows[0])
 
     def update_draft(
         self, draft: SkillDraft, *, expected_revision: int
