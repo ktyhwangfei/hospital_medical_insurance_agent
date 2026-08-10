@@ -16,8 +16,22 @@ from fastapi.testclient import TestClient
 from src.data_platform.storage.skill.draft_in_memory import (
     InMemorySkillDraftStorage,
 )
+from src.data_platform.cache.in_memory import InMemoryCacheClient
 from src.runtime.api.app import create_app
-from src.runtime.api.infra_skill_routes import get_skill_draft_service
+from src.runtime.api.infra_skill_routes import (
+    get_skill_ai_authoring_service,
+    get_skill_draft_service,
+    get_skill_idempotency_store,
+)
+from src.runtime.skill_management.ai_authoring.schemas import (
+    SkillAIGenerationResponse,
+)
+from src.runtime.skill_management.ai_authoring.security import SkillAISecurityIssue
+from src.runtime.skill_management.ai_authoring.service import (
+    SkillAIModelError,
+    SkillAIMetricNotPublishedError,
+    SkillAISecurityRejectedError,
+)
 from src.runtime.skill_management.draft_service import SkillDraftService
 
 PREFIX = "/api/v1/medical-insurance-ai-agent"
@@ -50,19 +64,110 @@ class _FakeLoader:
         return self.skills.get(skill_id)
 
 
+def _proposal() -> SkillAIGenerationResponse:
+    return SkillAIGenerationResponse.model_validate(
+        {
+            "generation_id": "gen-api-1",
+            "proposal_hash": "a" * 64,
+            "structured_config": {
+                "basic": {
+                    "skill_id": "deductible_explain",
+                    "skill_name": "起付线解释",
+                    "description": "解释医保结算起付线",
+                    "owner": "medical_office",
+                },
+                "business_mounting": {
+                    "business_action": "explain",
+                    "business_object": "settlement",
+                    "include_keywords": ["起付线"],
+                    "excluded_intents": [],
+                },
+                "inputs": [
+                    {
+                        "metric_code": "settlement.total_amount",
+                        "alias": "total_amount",
+                        "required": True,
+                        "purpose": "计算起付线",
+                    }
+                ],
+                "schemas": {
+                    "input": {"type": "object"},
+                    "output": {"type": "object"},
+                },
+            },
+            "raw_files": {
+                "assembler.py": "def assemble(data):\n    return dict(data)\n",
+                "prompt_template.yaml": "system: explain settlement\n",
+            },
+            "validation_preview": {
+                "issues": [],
+                "has_blocking": False,
+                "blocking_ok": True,
+            },
+            "provenance": {
+                "model_type": "test-model",
+                "scene": "skill_authoring",
+                "prompt_version": "skill-authoring-v1",
+                "metric_versions": [
+                    {
+                        "metric_code": "settlement.total_amount",
+                        "object_code": "Settlement",
+                        "object_version": 3,
+                        "status": "published",
+                    }
+                ],
+                "generated_at": "2026-08-10T00:00:00Z",
+                "content_hash": "b" * 64,
+            },
+            "citations": [
+                {
+                    "source_type": "metric_registry",
+                    "source_id": "settlement.total_amount@3",
+                    "summary": "已发布指标快照",
+                }
+            ],
+            "uncertainties": ["政策适用范围需人工确认"],
+        }
+    )
+
+
+class _FakeAIAuthoringService:
+    def __init__(self) -> None:
+        self.proposal = _proposal()
+        self.generate_error: Exception | None = None
+        self.verify_error: Exception | None = None
+
+    def generate(self, _request):
+        if self.generate_error:
+            raise self.generate_error
+        return self.proposal
+
+    def verify_for_accept(self, _proposal):
+        if self.verify_error:
+            raise self.verify_error
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("SKILL_CONTROL_DEV_MODE", "1")
     app = create_app()
     loader = _FakeLoader()
+    storage = InMemorySkillDraftStorage()
     service = SkillDraftService(
-        storage=InMemorySkillDraftStorage(),
+        storage=storage,
         loader=loader,
         skills_root="/nonexistent-skills-root",
     )
+    ai_service = _FakeAIAuthoringService()
+    cache = InMemoryCacheClient()
     app.dependency_overrides[get_skill_draft_service] = lambda: service
+    app.dependency_overrides[get_skill_ai_authoring_service] = lambda: ai_service
+    app.dependency_overrides[get_skill_idempotency_store] = lambda: cache
     client = TestClient(app)
     client._loader = loader  # type: ignore[attr-defined]
+    client._draft_storage = storage  # type: ignore[attr-defined]
+    client._ai_service = ai_service  # type: ignore[attr-defined]
+    client._cache = cache  # type: ignore[attr-defined]
     return client
 
 
@@ -107,6 +212,147 @@ def test_create_draft_disabled_without_dev_mode(client, monkeypatch):
     )
     assert resp.status_code == 403
     assert resp.json()["detail"]["error_code"] == "SKILL_CONTROL_DISABLED"
+
+
+def test_ai_generate_endpoint_returns_proposal(client):
+    resp = client.post(
+        f"{PREFIX}/infra-skills/ai-generate",
+        json={
+            "description": "生成一个医保结算费用解释技能",
+            "metric_codes": ["settlement.total_amount"],
+        },
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert set(data) == {
+        "generation_id",
+        "proposal_hash",
+        "structured_config",
+        "raw_files",
+        "validation_preview",
+        "provenance",
+        "citations",
+        "uncertainties",
+    }
+    assert data["provenance"]["metric_versions"][0]["status"] == "published"
+
+
+def test_ai_generate_requires_release_test_permission(client):
+    resp = client.post(
+        f"{PREFIX}/infra-skills/ai-generate",
+        json={"description": "生成解释技能", "metric_codes": ["m1"]},
+        headers=_auth_headers(_control_token(permissions=["skill:evaluate"])),
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error_code"] == "SKILL_CONTROL_FORBIDDEN"
+
+
+def test_ai_generate_rejects_dangerous_code_with_standard_error(client):
+    client._ai_service.generate_error = SkillAISecurityRejectedError(  # type: ignore[attr-defined]
+        [SkillAISecurityIssue(code="FORBIDDEN_CALL", message="exec forbidden")]
+    )
+    resp = client.post(
+        f"{PREFIX}/infra-skills/ai-generate",
+        json={"description": "生成解释技能", "metric_codes": ["m1"]},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 422
+    assert set(resp.json()["detail"]) == {"error_code", "message", "audit_event"}
+    assert resp.json()["detail"]["error_code"] == "SKILL_AI_SECURITY_REJECTED"
+
+
+def test_ai_model_failure_does_not_create_draft(client):
+    client._ai_service.generate_error = SkillAIModelError(category="timeout")  # type: ignore[attr-defined]
+    resp = client.post(
+        f"{PREFIX}/infra-skills/ai-generate",
+        json={"description": "生成解释技能", "metric_codes": ["m1"]},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 503
+    assert client._draft_storage.list_drafts() == []  # type: ignore[attr-defined]
+
+
+def _generate_and_accept_payload(client) -> dict[str, object]:
+    proposal = client.post(
+        f"{PREFIX}/infra-skills/ai-generate",
+        json={
+            "description": "生成解释技能",
+            "metric_codes": ["settlement.total_amount"],
+        },
+        headers=_auth_headers(),
+    ).json()
+    return {
+        "generation_id": proposal["generation_id"],
+        "proposal_hash": proposal["proposal_hash"],
+        "skill_id": proposal["structured_config"]["basic"]["skill_id"],
+        "skill_name": proposal["structured_config"]["basic"]["skill_name"],
+        "structured_config": proposal["structured_config"],
+        "raw_files": proposal["raw_files"],
+        "provenance": proposal["provenance"],
+    }
+
+
+def test_accept_ai_proposal_creates_one_ai_generated_draft_idempotently(client):
+    payload = _generate_and_accept_payload(client)
+    headers = {**_auth_headers(), "Idempotency-Key": "accept-1"}
+    first = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai", json=payload, headers=headers
+    )
+    second = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai", json=payload, headers=headers
+    )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["draft_id"] == second.json()["draft_id"]
+    assert first.json()["source_type"] == "ai_generated"
+    assert first.json()["created_by"] == "information-admin"
+    drafts = client._draft_storage.list_drafts()  # type: ignore[attr-defined]
+    assert len(drafts) == 1
+    assert "__generation_meta__.json" in drafts[0].raw_files
+
+
+@pytest.mark.parametrize("tamper", ["proposal_hash", "provenance"])
+def test_accept_ai_proposal_rejects_client_tampering(client, tamper):
+    payload = _generate_and_accept_payload(client)
+    if tamper == "proposal_hash":
+        payload["proposal_hash"] = "c" * 64
+    else:
+        payload["provenance"]["prompt_version"] = "forged"  # type: ignore[index]
+    resp = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai",
+        json=payload,
+        headers={**_auth_headers(), "Idempotency-Key": f"tamper-{tamper}"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error_code"] == "SKILL_AI_EVIDENCE_CONFLICT"
+    assert client._draft_storage.list_drafts() == []  # type: ignore[attr-defined]
+
+
+def test_accept_ai_proposal_rejects_expired_evidence(client):
+    payload = _generate_and_accept_payload(client)
+    client._cache.delete_state("skill-ai-authoring", payload["generation_id"])  # type: ignore[attr-defined]
+    resp = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai",
+        json=payload,
+        headers={**_auth_headers(), "Idempotency-Key": "expired"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error_code"] == "SKILL_AI_EVIDENCE_INVALID"
+
+
+def test_accept_ai_proposal_rechecks_published_metric_snapshot(client):
+    payload = _generate_and_accept_payload(client)
+    client._ai_service.verify_error = SkillAIMetricNotPublishedError(  # type: ignore[attr-defined]
+        "settlement.total_amount"
+    )
+    resp = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai",
+        json=payload,
+        headers={**_auth_headers(), "Idempotency-Key": "stale-metric"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error_code"] == "SKILL_AI_EVIDENCE_STALE"
 
 
 # ── 复制 ──────────────────────────────────────────────────────────

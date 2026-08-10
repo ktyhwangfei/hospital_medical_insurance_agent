@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Protocol, cast
+from typing import Annotated, Protocol, TypeVar, cast
 
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from pydantic import BaseModel, ValidationError
 
 from src.config.production import SKILLS_DIR
 from src.data_platform.storage.skill.version_factory import get_skill_version_storage
@@ -27,7 +28,7 @@ from src.data_platform.storage.skill.governance_ports import (
     SkillGovernanceNotFoundError,
 )
 from src.data_platform.cache import create_cache_client
-from src.data_platform.cache.ports import IdempotencyStore
+from src.data_platform.cache.ports import IdempotencyStore, ShortStateStore
 
 logger = logging.getLogger(__name__)
 from src.runtime.api.schemas import (
@@ -60,10 +61,23 @@ from src.runtime.skill_management.workbench_service import (
     SkillWorkbenchService,
 )
 from src.runtime.skill_management.draft_service import SkillDraftService
+from src.runtime.skill_management.ai_authoring.schemas import SkillAIGenerationResponse
+from src.runtime.skill_management.ai_authoring.service import (
+    SkillAIAuthoringError,
+    SkillAIAuthoringService,
+    SkillAIInputInvalidError,
+    SkillAIMetricNotFoundError,
+    SkillAIMetricNotPublishedError,
+    SkillAIModelError,
+    SkillAIOutputInvalidError,
+    SkillAISecurityRejectedError,
+)
 from src.runtime.skill_management.draft_validator import SkillDraftValidator
 from src.runtime.skill_management.package_generator import SkillPackageGenerator
 from src.domain.skill.governance_models import SkillRelease
 from src.runtime.api.skill_schemas import (
+    SkillAIAcceptRequest,
+    SkillAIGenerateRequest,
     SkillDraftCreateRequest,
     SkillDraftCopyRequest,
     SkillDraftListResponse,
@@ -274,7 +288,7 @@ IdempotencyKey = Annotated[
 ]
 
 
-class SkillIdempotencyStore(IdempotencyStore, Protocol):
+class SkillIdempotencyStore(IdempotencyStore, ShortStateStore, Protocol):
     def get_json(self, key: str) -> dict[str, object] | None: ...
 
     def set_json(
@@ -299,16 +313,19 @@ SkillIdempotencyStoreDependency = Annotated[
     SkillIdempotencyStore, Depends(get_skill_idempotency_store)
 ]
 
+_TResponse = TypeVar("_TResponse", bound=BaseModel)
 
-def _idempotent_release_mutation(
+
+def _idempotent_mutation(
     *,
     store: SkillIdempotencyStore,
     scope: str,
     idempotency_key: str,
     request_payload: dict[str, object],
-    operation: Callable[[], SkillRelease],
-    recovery: Callable[[], SkillRelease | None] | None = None,
-) -> SkillReleaseResponse:
+    operation: Callable[[], object],
+    response_model: type[_TResponse],
+    recovery: Callable[[], object | None] | None = None,
+) -> _TResponse:
     scoped_key = f"skill-governance:{scope}:{idempotency_key}"
     serialized = json.dumps(
         request_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -325,7 +342,7 @@ def _idempotent_release_mutation(
                         "Idempotency-Key 已用于不同请求",
                     ),
                 )
-            return SkillReleaseResponse.model_validate(existing)
+            return response_model.model_validate(existing)
         cache_key = f"idempotency:{scoped_key}"
         reservation = store.get_json(cache_key)
         if (
@@ -342,7 +359,7 @@ def _idempotent_release_mutation(
         if reservation is not None and recovery is not None:
             recovered = recovery()
             if recovered is not None:
-                response = SkillReleaseResponse.model_validate(recovered.model_dump())
+                response = response_model.model_validate(recovered.model_dump())
                 stored = {
                     **response.model_dump(mode="json"),
                     "_request_hash": request_hash,
@@ -377,7 +394,7 @@ def _idempotent_release_mutation(
         ) from exc
 
     try:
-        response = SkillReleaseResponse.model_validate(operation().model_dump())
+        response = response_model.model_validate(operation().model_dump())
     except Exception:
         try:
             store.delete(f"idempotency:{scoped_key}")
@@ -667,7 +684,7 @@ def create_skill_release(
     scope = f"{skill_id}:candidate"
     release_id = _idempotent_release_id(scope, idempotency_key)
     try:
-        release = _idempotent_release_mutation(
+        release = _idempotent_mutation(
             store=idempotency_store,
             scope=scope,
             idempotency_key=idempotency_key,
@@ -675,6 +692,7 @@ def create_skill_release(
                 **request.model_dump(mode="json"),
                 "created_by": principal.user_id,
             },
+            response_model=SkillReleaseResponse,
             operation=lambda: service.create_candidate(
                 skill_id,
                 **request.model_dump(),
@@ -711,11 +729,12 @@ def request_skill_release_approval(
     idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        release = _idempotent_release_mutation(
+        release = _idempotent_mutation(
             store=idempotency_store,
             scope=f"{skill_id}:{release_id}:request-approval",
             idempotency_key=idempotency_key,
             request_payload=request.model_dump(mode="json"),
+            response_model=SkillReleaseResponse,
             operation=lambda: service.request_approval(
                 skill_id, release_id, expected_revision=request.expected_revision
             ),
@@ -750,7 +769,7 @@ def approve_skill_release(
     idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        release = _idempotent_release_mutation(
+        release = _idempotent_mutation(
             store=idempotency_store,
             scope=f"{skill_id}:{release_id}:approve",
             idempotency_key=idempotency_key,
@@ -758,6 +777,7 @@ def approve_skill_release(
                 **request.model_dump(mode="json"),
                 "approved_by": principal.user_id,
             },
+            response_model=SkillReleaseResponse,
             operation=lambda: service.approve_release(
                 skill_id,
                 release_id,
@@ -797,11 +817,12 @@ def activate_skill_release(
     idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        release = _idempotent_release_mutation(
+        release = _idempotent_mutation(
             store=idempotency_store,
             scope=f"{skill_id}:{release_id}:activate",
             idempotency_key=idempotency_key,
             request_payload=request.model_dump(mode="json"),
+            response_model=SkillReleaseResponse,
             operation=lambda: service.activate_release(
                 skill_id, release_id, expected_revision=request.expected_revision
             ),
@@ -950,6 +971,213 @@ def get_skill_package_generator() -> SkillPackageGenerator:
 SkillPackageGeneratorDependency = Annotated[
     SkillPackageGenerator, Depends(get_skill_package_generator)
 ]
+
+
+def get_skill_ai_authoring_service() -> SkillAIAuthoringService:
+    """AI 编写服务组装点；模型与指标注册表均显式注入。"""
+
+    from src.model_service.gateway import ModelGateway
+    from src.runtime.skill_management.skill_input_service import SkillInputService
+    from src.semantic_layer.registry import get_semantic_registry
+
+    registry = get_semantic_registry()
+    return SkillAIAuthoringService(
+        gateway=ModelGateway(),
+        input_service=SkillInputService(registry),
+        metric_registry=registry,
+    )
+
+
+SkillAIAuthoringServiceDependency = Annotated[
+    SkillAIAuthoringService, Depends(get_skill_ai_authoring_service)
+]
+
+_AI_EVIDENCE_NAMESPACE = "skill-ai-authoring"
+_AI_EVIDENCE_TTL_SECONDS = 15 * 60
+
+
+def _ai_authoring_error(exc: SkillAIAuthoringError) -> HTTPException:
+    if isinstance(exc, SkillAIModelError):
+        status_code = 503 if exc.category in {
+            "timeout",
+            "rate_limit",
+            "exhausted",
+        } else 502
+        return HTTPException(
+            status_code=status_code,
+            detail=error_detail(
+                "SKILL_AI_MODEL_FAILED",
+                "Skill AI 模型生成失败",
+                {"category": exc.category, "error_hash": exc.error_hash},
+            ),
+        )
+    if isinstance(exc, SkillAISecurityRejectedError):
+        return HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "SKILL_AI_SECURITY_REJECTED",
+                str(exc),
+                {
+                    "issues": [
+                        {
+                            "code": issue.code,
+                            "message": issue.message,
+                            "path": issue.path,
+                        }
+                        for issue in exc.issues
+                    ]
+                },
+            ),
+        )
+    if isinstance(exc, SkillAIMetricNotFoundError):
+        code = "SKILL_AI_METRIC_NOT_FOUND"
+    elif isinstance(exc, SkillAIMetricNotPublishedError):
+        code = "SKILL_AI_METRIC_NOT_PUBLISHED"
+    elif isinstance(exc, SkillAIInputInvalidError):
+        code = "SKILL_AI_INPUT_INVALID"
+    else:
+        code = "SKILL_AI_OUTPUT_INVALID"
+    return HTTPException(status_code=422, detail=error_detail(code, str(exc)))
+
+
+@router.post(
+    "/infra-skills/ai-generate",
+    response_model=SkillAIGenerationResponse,
+)
+def generate_skill_ai_proposal(
+    request: SkillAIGenerateRequest,
+    service: SkillAIAuthoringServiceDependency,
+    _principal: SkillControlPrincipalDependency,
+    evidence_store: SkillIdempotencyStoreDependency,
+) -> SkillAIGenerationResponse:
+    try:
+        proposal = service.generate(request)
+        evidence_store.save_state(
+            _AI_EVIDENCE_NAMESPACE,
+            proposal.generation_id,
+            {"proposal": proposal.model_dump(mode="json")},
+            _AI_EVIDENCE_TTL_SECONDS,
+        )
+        return proposal
+    except SkillAIAuthoringError as exc:
+        raise _ai_authoring_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "SKILL_AI_EVIDENCE_STORE_UNAVAILABLE", "AI proposal 证据存储不可用"
+            ),
+        ) from exc
+
+
+def _ai_evidence_conflict(message: str, *, code: str) -> HTTPException:
+    return HTTPException(status_code=409, detail=error_detail(code, message))
+
+
+@router.post(
+    "/infra-skills/drafts/from-ai",
+    response_model=SkillDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def accept_skill_ai_proposal(
+    request: SkillAIAcceptRequest,
+    authoring_service: SkillAIAuthoringServiceDependency,
+    draft_service: SkillDraftServiceDependency,
+    principal: SkillControlPrincipalDependency,
+    idempotency_key: IdempotencyKey,
+    evidence_store: SkillIdempotencyStoreDependency,
+) -> SkillDraftResponse:
+    try:
+        state = evidence_store.load_state(
+            _AI_EVIDENCE_NAMESPACE, request.generation_id
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "SKILL_AI_EVIDENCE_STORE_UNAVAILABLE", "AI proposal 证据存储不可用"
+            ),
+        ) from exc
+    if state is None or not isinstance(state.get("proposal"), dict):
+        raise _ai_evidence_conflict(
+            "AI proposal 证据已过期或不存在",
+            code="SKILL_AI_EVIDENCE_INVALID",
+        )
+    try:
+        proposal = SkillAIGenerationResponse.model_validate(state["proposal"])
+    except (ValidationError, ValueError) as exc:
+        raise _ai_evidence_conflict(
+            "AI proposal 服务端证据无效",
+            code="SKILL_AI_EVIDENCE_INVALID",
+        ) from exc
+
+    request_provenance = (
+        request.provenance.model_dump(mode="json")
+        if request.provenance is not None
+        else proposal.provenance.model_dump(mode="json")
+    )
+    basic = proposal.structured_config.basic
+    if (
+        request.proposal_hash != proposal.proposal_hash
+        or request.skill_id != basic.skill_id
+        or request.skill_name != basic.skill_name
+        or request.structured_config.model_dump(mode="json")
+        != proposal.structured_config.model_dump(mode="json")
+        or request.raw_files != dict(proposal.raw_files)
+        or request_provenance != proposal.provenance.model_dump(mode="json")
+    ):
+        raise _ai_evidence_conflict(
+            "客户端 proposal 与服务端证据不一致",
+            code="SKILL_AI_EVIDENCE_CONFLICT",
+        )
+    try:
+        authoring_service.verify_for_accept(proposal)
+    except SkillAIMetricNotPublishedError as exc:
+        raise _ai_evidence_conflict(
+            str(exc), code="SKILL_AI_EVIDENCE_STALE"
+        ) from exc
+    except (SkillAIOutputInvalidError, SkillAISecurityRejectedError) as exc:
+        raise _ai_evidence_conflict(
+            str(exc), code="SKILL_AI_EVIDENCE_CONFLICT"
+        ) from exc
+
+    canonical_client = json.dumps(
+        {
+            "structured_config": request.structured_config.model_dump(mode="json"),
+            "raw_files": request.raw_files,
+            "provenance": request_provenance,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    content_hash = hashlib.sha256(canonical_client.encode("utf-8")).hexdigest()
+    scope = f"ai-draft:{request.generation_id}"
+    draft_id = f"draft-{_idempotent_release_id(scope, idempotency_key)[:12]}"
+    try:
+        return _idempotent_mutation(
+            store=evidence_store,
+            scope=scope,
+            idempotency_key=idempotency_key,
+            request_payload={
+                "generation_id": request.generation_id,
+                "proposal_hash": request.proposal_hash,
+                "content_hash": content_hash,
+                "created_by": principal.user_id,
+            },
+            response_model=SkillDraftResponse,
+            operation=lambda: draft_service.create_from_ai(
+                proposal=proposal,
+                created_by=principal.user_id,
+                draft_id=draft_id,
+            ),
+            recovery=lambda: draft_service.get_draft(draft_id),
+        )
+    except SkillDraftConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail("SKILL_DRAFT_CONFLICT", str(exc)),
+        ) from exc
 
 
 @router.post(

@@ -19,6 +19,7 @@ structured_config 约定结构（随 P2/P4 扩展）::
 from __future__ import annotations
 
 import uuid
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -32,6 +33,9 @@ from src.domain.skill.draft_models import (
     SkillDraft,
     SkillDraftSourceType,
     SkillDraftStatus,
+)
+from src.runtime.skill_management.ai_authoring.schemas import (
+    SkillAIGenerationResponse,
 )
 
 # 复制源 Skill 时纳入 raw_files 的文件扩展名/文件名（排除脚本/缓存/敏感内容）
@@ -142,6 +146,48 @@ class SkillDraftService:
             raw_files=raw_files,
         )
 
+    def create_from_ai(
+        self,
+        *,
+        proposal: SkillAIGenerationResponse,
+        created_by: str,
+        draft_id: str | None = None,
+    ) -> SkillDraft:
+        """人工接受后单次原子保存 AI_GENERATED 草稿。"""
+
+        config = proposal.structured_config.model_dump(mode="json")
+        basic = config["basic"]
+        generation_meta = {
+            "generation_id": proposal.generation_id,
+            "proposal_hash": proposal.proposal_hash,
+            "provenance": proposal.provenance.model_dump(mode="json"),
+            "citations": [
+                {
+                    "source_type": item.source_type,
+                    "source_id": item.source_id,
+                    "summary": item.summary,
+                }
+                for item in proposal.citations
+            ],
+            "uncertainties": list(proposal.uncertainties),
+        }
+        raw_files = dict(proposal.raw_files)
+        raw_files["__generation_meta__.json"] = json.dumps(
+            generation_meta,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return self._persist_new(
+            skill_id=str(basic["skill_id"]),
+            skill_name=str(basic["skill_name"]),
+            source_type=SkillDraftSourceType.AI_GENERATED,
+            created_by=created_by,
+            structured_config=config,
+            raw_files=raw_files,
+            draft_id=draft_id,
+        )
+
     # ── 读写 ──────────────────────────────────────────────────────
 
     def get_draft(self, draft_id: str) -> SkillDraft | None:
@@ -247,10 +293,11 @@ class SkillDraftService:
         structured_config: dict[str, Any],
         source_skill_id: str | None = None,
         raw_files: dict[str, str] | None = None,
+        draft_id: str | None = None,
     ) -> SkillDraft:
         now = datetime.now(timezone.utc)
         draft = SkillDraft(
-            draft_id=f"draft-{uuid.uuid4().hex[:12]}",
+            draft_id=draft_id or f"draft-{uuid.uuid4().hex[:12]}",
             skill_id=skill_id,
             skill_name=skill_name,
             source_type=source_type,

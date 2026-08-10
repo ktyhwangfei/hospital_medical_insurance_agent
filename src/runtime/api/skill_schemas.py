@@ -7,7 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from src.domain.skill.draft_models import SkillDraft
 from src.domain.skill.regression_models import SkillFeedbackReasonCode
-from src.runtime.skill_management.ai_authoring.schemas import SkillStructuredConfig
+from src.runtime.skill_management.ai_authoring.schemas import (
+    SkillAIGenerationProvenance,
+    SkillStructuredConfig,
+)
 
 
 class SkillEvalCaseCreateRequest(BaseModel):
@@ -220,6 +223,7 @@ class SkillAIAcceptRequest(BaseModel):
     skill_name: str = Field(min_length=1, max_length=256)
     structured_config: SkillStructuredConfig
     raw_files: dict[str, str]
+    provenance: SkillAIGenerationProvenance | None = None
 
 
 class SkillDraftCreateRequest(BaseModel):

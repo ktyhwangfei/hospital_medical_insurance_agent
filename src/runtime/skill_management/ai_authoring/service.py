@@ -46,7 +46,6 @@ from src.runtime.skill_management.ai_authoring.security import (
     SkillAISecurityIssue,
     scan_ai_generated_files,
 )
-from src.runtime.skill_management.skill_input_service import SkillInputService
 from src.security.desensitization.detection import detect_sensitive_patterns
 from src.security.desensitization.service import sanitize_regression_snapshot
 
@@ -138,6 +137,22 @@ class _Gateway(Protocol):
     ) -> ModelResponse: ...
 
 
+class SkillMetricRegistryPort(Protocol):
+    """只读指标版本窄端口，用于生成与接受时冻结同一证据。"""
+
+    def get_metric(self, metric_code: str) -> Any | None: ...
+
+    def get_object(self, object_code: str) -> Any | None: ...
+
+    def get_object_version(
+        self, object_code: str, version: str
+    ) -> Any | None: ...
+
+
+class SkillInputValidationPort(Protocol):
+    def validate_inputs(self, specs: list[InputSpec]) -> Any: ...
+
+
 class SkillAIAuthoringService:
     """执行描述校验、指标冻结、模型生成、修复、安全扫描与哈希。"""
 
@@ -145,7 +160,8 @@ class SkillAIAuthoringService:
         self,
         *,
         gateway: _Gateway,
-        input_service: SkillInputService,
+        input_service: SkillInputValidationPort,
+        metric_registry: SkillMetricRegistryPort | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
         max_tokens: int = 4096,
@@ -154,6 +170,10 @@ class SkillAIAuthoringService:
             raise ValueError("max_tokens 必须位于 1..8192")
         self._gateway = gateway
         self._input_service = input_service
+        # 旧调用方未显式注入时仅做兼容适配；新组装点必须传入窄端口。
+        self._metric_registry = metric_registry or getattr(
+            input_service, "_registry", None
+        )
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._id_factory = id_factory or (lambda: uuid.uuid4().hex)
         self._max_tokens = max_tokens
@@ -215,25 +235,14 @@ class SkillAIAuthoringService:
             generated_at=generated_at,
             content_hash=security.content_hash,
         )
-        proposal_hash = _canonical_hash(
-            {
-                "citations": [
-                    {
-                        "source_type": citation.source_type,
-                        "source_id": citation.source_id,
-                        "summary": citation.summary,
-                    }
-                    for citation in model_output.citations
-                ],
-                "input_hash": input_hash,
-                "provenance": provenance.model_dump(mode="json"),
-                "raw_files": dict(model_output.raw_files),
-                "structured_config": model_output.structured_config.model_dump(
-                    mode="json"
-                ),
-                "uncertainties": list(model_output.uncertainties),
-                "validation_preview": validation_preview.model_dump(mode="json"),
-            }
+        proposal_hash = _proposal_hash(
+            evidence_hash=input_hash[:12],
+            structured_config=model_output.structured_config.model_dump(mode="json"),
+            raw_files=dict(model_output.raw_files),
+            validation_preview=validation_preview.model_dump(mode="json"),
+            provenance=provenance.model_dump(mode="json"),
+            citations=model_output.citations,
+            uncertainties=model_output.uncertainties,
         )
         generation_id = self._generation_id(input_hash)
         return SkillAIGenerationResponse(
@@ -246,6 +255,40 @@ class SkillAIAuthoringService:
             citations=model_output.citations,
             uncertainties=model_output.uncertainties,
         )
+
+    def verify_for_accept(self, proposal: SkillAIGenerationResponse) -> None:
+        """接受前重算哈希、复验已发布指标快照并重跑安全扫描。"""
+
+        expected_hash = _proposal_hash(
+            evidence_hash=_generation_evidence_hash(proposal.generation_id),
+            structured_config=proposal.structured_config.model_dump(mode="json"),
+            raw_files=dict(proposal.raw_files),
+            validation_preview=proposal.validation_preview.model_dump(mode="json"),
+            provenance=proposal.provenance.model_dump(mode="json"),
+            citations=proposal.citations,
+            uncertainties=proposal.uncertainties,
+        )
+        if expected_hash != proposal.proposal_hash:
+            raise SkillAIOutputInvalidError("proposal hash 校验失败")
+        metric_codes = tuple(
+            item.metric_code for item in proposal.provenance.metric_versions
+        )
+        current_versions, _ = self._freeze_metric_versions(metric_codes)
+        if current_versions != proposal.provenance.metric_versions:
+            stale_code = metric_codes[0] if metric_codes else "unknown"
+            raise SkillAIMetricNotPublishedError(stale_code)
+        security = scan_ai_generated_files(proposal.raw_files)
+        if not security.passed:
+            raise SkillAISecurityRejectedError(security.issues)
+        if security.content_hash != proposal.provenance.content_hash:
+            raise SkillAISecurityRejectedError(
+                (
+                    SkillAISecurityIssue(
+                        code="CONTENT_HASH_MISMATCH",
+                        message="AI 生成文件内容哈希不匹配",
+                    ),
+                )
+            )
 
     def _validate_request(
         self, request: _GenerationRequest
@@ -269,8 +312,9 @@ class SkillAIAuthoringService:
     def _freeze_metric_versions(
         self, metric_codes: tuple[str, ...]
     ) -> tuple[tuple[SkillMetricVersionRef, ...], tuple[Mapping[str, object], ...]]:
-        # Task 4 将把快照读取提升为公开依赖；此处先对现有私有注册表做能力校验。
-        registry = self._input_service._registry  # noqa: SLF001
+        registry = self._metric_registry
+        if registry is None:
+            raise SkillAIInputInvalidError("未注入指标版本注册表")
         if any(
             not callable(getattr(registry, method_name, None))
             for method_name in ("get_metric", "get_object", "get_object_version")
@@ -529,6 +573,43 @@ def _canonical_hash(value: Any) -> str:
         separators=(",", ":"),
     ).encode("ascii")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _proposal_hash(
+    *,
+    evidence_hash: str,
+    structured_config: Mapping[str, Any],
+    raw_files: Mapping[str, str],
+    validation_preview: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+    citations: Sequence[Any],
+    uncertainties: Sequence[str],
+) -> str:
+    return _canonical_hash(
+        {
+            "citations": [
+                {
+                    "source_type": citation.source_type,
+                    "source_id": citation.source_id,
+                    "summary": citation.summary,
+                }
+                for citation in citations
+            ],
+            "evidence_hash": evidence_hash,
+            "provenance": dict(provenance),
+            "raw_files": dict(raw_files),
+            "structured_config": dict(structured_config),
+            "uncertainties": list(uncertainties),
+            "validation_preview": dict(validation_preview),
+        }
+    )
+
+
+def _generation_evidence_hash(generation_id: str) -> str:
+    parts = generation_id.split("_", 2)
+    if len(parts) != 3 or parts[0] != "gen":
+        raise SkillAIOutputInvalidError("generation_id 缺少生成证据哈希")
+    return parts[1]
 
 
 def _contains_sensitive_content(text: str) -> bool:
