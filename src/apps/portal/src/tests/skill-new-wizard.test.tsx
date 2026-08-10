@@ -40,17 +40,31 @@ const AI_PROPOSAL = {
 const SELECTOR_RESPONSE = {
   tree: [{
     domain_code: 'settlement',
-    domain_name: '结算域',
-    objects: [{
-      object_code: 'Settlement',
-      object_name: '结算',
-      source_type: 'adapter',
-      metrics: [
-        { metric_code: 'Settlement.amount', metric_name: '结算金额', definition: '本次结算金额', source_type: 'adapter', published: true, quality_score: 0.98 },
-        { metric_code: 'Settlement.deductible', metric_name: '起付线', definition: '本次结算起付线', source_type: 'adapter', published: true, quality_score: 0.95 },
-        { metric_code: 'Settlement.internal', metric_name: '内部草稿指标', definition: '未发布', source_type: 'adapter', published: false, quality_score: null },
-      ],
-    }],
+    name: '结算域',
+    objects: [
+      {
+        object_code: 'Settlement',
+        name: '结算',
+        definition: '医保结算对象',
+        status: 'published',
+        current_version: '3',
+        metrics: [
+          { metric_code: 'Settlement.amount', name: '结算金额', definition: '本次结算金额', source_type: 'structured', status: 'published', current_version: '3', quality_score: 0.98 },
+          { metric_code: 'Settlement.deductible', name: '起付线', definition: '本次结算起付线', source_type: 'structured', status: 'published', current_version: '3', quality_score: 0.95 },
+          { metric_code: 'Settlement.internal', name: '内部草稿指标', definition: '未发布', source_type: 'structured', status: 'draft', current_version: '3', quality_score: null },
+        ],
+      },
+      {
+        object_code: 'DraftObject',
+        name: '未发布对象',
+        definition: '尚未发布的对象',
+        status: 'draft',
+        current_version: '1',
+        metrics: [
+          { metric_code: 'DraftObject.metric', name: '未发布对象指标', definition: '对象未发布', source_type: 'structured', status: 'published', current_version: '1', quality_score: 0.8 },
+        ],
+      },
+    ],
   }],
 }
 
@@ -157,6 +171,7 @@ describe('NewSkillWizardPage', () => {
     await user.click(await screen.findByRole('checkbox', { name: '结算金额 (Settlement.amount)' }))
     await user.click(screen.getByRole('checkbox', { name: '起付线 (Settlement.deductible)' }))
     expect(screen.queryByText('内部草稿指标')).not.toBeInTheDocument()
+    expect(screen.queryByText('未发布对象指标')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '生成候选' }))
 
     expect(await screen.findByText('尚未进入运行时')).toBeInTheDocument()

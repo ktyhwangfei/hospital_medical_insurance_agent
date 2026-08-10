@@ -996,17 +996,20 @@ export interface SkillLifecycleTransitionRequest {
 
 export interface SkillInputSelectorNode {
   domain_code: string
-  domain_name: string
+  name: string
   objects: {
     object_code: string
-    object_name: string
-    source_type: string
+    name: string
+    definition: string
+    status: string
+    current_version: string | null
     metrics: {
       metric_code: string
-      metric_name: string
+      name: string
       definition: string
       source_type: string
-      published: boolean
+      status: string
+      current_version: string | null
       quality_score: number | null
     }[]
   }[]

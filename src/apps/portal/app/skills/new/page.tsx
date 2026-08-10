@@ -137,15 +137,17 @@ export default function NewSkillWizardPage() {
     try {
       const selector = await getSkillInputSelector()
       const metrics = selector.tree.flatMap((domain) =>
-        domain.objects.flatMap((object) =>
-          object.metrics
-            .filter((metric) => metric.published)
-            .map((metric) => ({
-              metric_code: metric.metric_code,
-              metric_name: metric.metric_name,
-              definition: metric.definition,
-            })),
-        ),
+        domain.objects
+          .filter((object) => object.status === 'published' && object.current_version !== null)
+          .flatMap((object) =>
+            object.metrics
+              .filter((metric) => metric.status === 'published' && metric.current_version !== null)
+              .map((metric) => ({
+                metric_code: metric.metric_code,
+                metric_name: metric.name,
+                definition: metric.definition,
+              })),
+          ),
       )
       setMetricSelector(metrics.length > 0 ? { status: 'ready', metrics } : { status: 'empty' })
     } catch (err) {

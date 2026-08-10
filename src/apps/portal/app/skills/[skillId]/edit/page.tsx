@@ -60,6 +60,8 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
   }, [draftId])
 
   useEffect(() => {
+    // 页面进入时加载服务端草稿；load 内的状态更新发生在异步请求完成后。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
   }, [load])
 
@@ -294,11 +296,11 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
               <div className="mt-2 max-h-60 space-y-1 overflow-auto">
                 {selector.tree.map((domain) => (
                   <div key={domain.domain_code}>
-                    <div className="text-xs font-semibold text-slate-700">{domain.domain_name}</div>
-                    {domain.objects.map((obj) => (
+                    <div className="text-xs font-semibold text-slate-700">{domain.name}</div>
+                    {domain.objects.filter((obj) => obj.status === 'published' && obj.current_version !== null).map((obj) => (
                       <div key={obj.object_code} className="ml-3">
-                        <div className="text-xs text-slate-500">{obj.object_name} ({obj.source_type})</div>
-                        {obj.metrics.filter((m) => m.published).map((m) => (
+                        <div className="text-xs text-slate-500">{obj.name}</div>
+                        {obj.metrics.filter((m) => m.status === 'published' && m.current_version !== null).map((m) => (
                           <button
                             key={m.metric_code}
                             type="button"
@@ -311,7 +313,7 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
                             }}
                             className="ml-3 block w-full text-left text-xs text-blue-600 hover:underline"
                           >
-                            + {m.metric_code} — {m.metric_name}
+                            + {m.metric_code} — {m.name}
                           </button>
                         ))}
                       </div>
