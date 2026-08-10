@@ -8,6 +8,7 @@ import {
   acceptSkillAIProposal,
   createSkillDraft,
   generateSkillAIProposal,
+  getSkillInputSelector,
   ApiClientError,
 } from '@/lib/skill-draft-api'
 import type { SkillAIGenerationProposal, SkillDraftResponse } from '@/lib/types'
@@ -19,6 +20,16 @@ type WizardState =
   | { mode: 'ai_generating' }
   | { mode: 'ai_preview'; proposal: SkillAIGenerationProposal }
   | { mode: 'ai_error'; message: string }
+type MetricSelectorState =
+  | { status: 'idle' | 'loading' }
+  | { status: 'ready'; metrics: PublishedMetric[] }
+  | { status: 'empty' }
+  | { status: 'error'; message: string }
+type PublishedMetric = {
+  metric_code: string
+  metric_name: string
+  definition: string
+}
 
 const BUSINESS_ACTIONS = [
   'explain', 'query', 'guide', 'verify', 'compare', 'evaluate', 'analyze',
@@ -39,7 +50,8 @@ export default function NewSkillWizardPage() {
   const [wizardState, setWizardState] = useState<WizardState>({ mode: 'manual' })
   const [acceptingAI, setAcceptingAI] = useState(false)
   const [aiDescription, setAIDescription] = useState('')
-  const [aiMetrics, setAIMetrics] = useState('')
+  const [selectedMetricCodes, setSelectedMetricCodes] = useState<string[]>([])
+  const [metricSelector, setMetricSelector] = useState<MetricSelectorState>({ status: 'idle' })
 
   // Step 0: 基本信息
   const [skillId, setSkillId] = useState('')
@@ -97,8 +109,7 @@ export default function NewSkillWizardPage() {
 
   async function generateAIProposal() {
     if (wizardState.mode === 'ai_generating') return
-    const metricCodes = aiMetrics.split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean)
-    if (!aiDescription.trim() || metricCodes.length === 0) {
+    if (!aiDescription.trim() || selectedMetricCodes.length === 0) {
       setWizardState({ mode: 'ai_error', message: '请填写能力说明并至少选择一个已发布指标' })
       return
     }
@@ -107,7 +118,7 @@ export default function NewSkillWizardPage() {
     try {
       const proposal = await generateSkillAIProposal({
         description: aiDescription.trim(),
-        metric_codes: metricCodes,
+        metric_codes: selectedMetricCodes,
       })
       setWizardState({ mode: 'ai_preview', proposal })
     } catch (err) {
@@ -116,6 +127,41 @@ export default function NewSkillWizardPage() {
         message: err instanceof ApiClientError ? err.detail.message : 'AI 生成失败，请稍后重试',
       })
     }
+  }
+
+  async function openAICreation() {
+    setWizardState({ mode: 'ai_input' })
+    setError(null)
+    if (metricSelector.status !== 'idle') return
+    setMetricSelector({ status: 'loading' })
+    try {
+      const selector = await getSkillInputSelector()
+      const metrics = selector.tree.flatMap((domain) =>
+        domain.objects.flatMap((object) =>
+          object.metrics
+            .filter((metric) => metric.published)
+            .map((metric) => ({
+              metric_code: metric.metric_code,
+              metric_name: metric.metric_name,
+              definition: metric.definition,
+            })),
+        ),
+      )
+      setMetricSelector(metrics.length > 0 ? { status: 'ready', metrics } : { status: 'empty' })
+    } catch (err) {
+      setMetricSelector({
+        status: 'error',
+        message: err instanceof ApiClientError ? err.detail.message : '已发布指标加载失败',
+      })
+    }
+  }
+
+  function toggleMetric(metricCode: string) {
+    setSelectedMetricCodes((current) =>
+      current.includes(metricCode)
+        ? current.filter((code) => code !== metricCode)
+        : [...current, metricCode],
+    )
   }
 
   async function acceptAIProposal(proposal: SkillAIGenerationProposal) {
@@ -189,11 +235,43 @@ export default function NewSkillWizardPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700">已发布输入指标</label>
-              <input value={aiMetrics} onChange={(event) => setAIMetrics(event.target.value)} placeholder="输入已发布 metric_code，逗号分隔" disabled={wizardState.mode === 'ai_generating'} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50" />
+              {metricSelector.status === 'loading' ? (
+                <p className="mt-2 text-sm text-slate-500">正在加载已发布指标…</p>
+              ) : null}
+              {metricSelector.status === 'empty' ? (
+                <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">暂无可用的已发布指标。</p>
+              ) : null}
+              {metricSelector.status === 'error' ? (
+                <div className="mt-2 space-y-2">
+                  <ErrorNotice message={metricSelector.message} />
+                  <p className="text-xs text-slate-600">无法加载已发布指标，不能使用自由文本指标。</p>
+                </div>
+              ) : null}
+              {metricSelector.status === 'ready' ? (
+                <div className="mt-2 max-h-64 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
+                  {metricSelector.metrics.map((metric) => (
+                    <label key={metric.metric_code} className="flex cursor-pointer items-start gap-3 rounded-md px-2 py-2 hover:bg-slate-50">
+                      <input
+                        type="checkbox"
+                        checked={selectedMetricCodes.includes(metric.metric_code)}
+                        onChange={() => toggleMetric(metric.metric_code)}
+                        disabled={wizardState.mode === 'ai_generating'}
+                        aria-label={`${metric.metric_name} (${metric.metric_code})`}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-slate-800">{metric.metric_name}</span>
+                        <span className="block font-mono text-xs text-slate-500">{metric.metric_code}</span>
+                        {metric.definition ? <span className="mt-0.5 block text-xs text-slate-500">{metric.definition}</span> : null}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : null}
               <p className="mt-1 text-xs text-slate-500">生成时会冻结指标对象版本，接受前再次复验发布状态。</p>
             </div>
             <div className="flex justify-end">
-              <button type="button" onClick={() => void generateAIProposal()} disabled={wizardState.mode === 'ai_generating' || !aiDescription.trim() || !aiMetrics.trim()} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+              <button type="button" onClick={() => void generateAIProposal()} disabled={wizardState.mode === 'ai_generating' || metricSelector.status !== 'ready' || !aiDescription.trim() || selectedMetricCodes.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                 {wizardState.mode === 'ai_generating' ? <><Loader2 className="h-4 w-4 animate-spin" />正在生成</> : <><Sparkles className="h-4 w-4" />生成候选</>}
               </button>
             </div>
@@ -247,7 +325,7 @@ export default function NewSkillWizardPage() {
           <h2 className="text-xl font-semibold tracking-tight text-slate-900">新建 Skill 向导</h2>
           <p className="text-sm text-slate-600">通过模板创建 Skill 草稿，完成后进入编辑器完善细节。</p>
         </div>
-        <button type="button" onClick={() => { setWizardState({ mode: 'ai_input' }); setError(null) }} className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100">
+        <button type="button" onClick={() => void openAICreation()} className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100">
           <Sparkles className="h-4 w-4" />AI 创建
         </button>
       </header>

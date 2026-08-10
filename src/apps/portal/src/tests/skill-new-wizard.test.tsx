@@ -37,6 +37,23 @@ const AI_PROPOSAL = {
   uncertainties: ['人工确认政策范围'],
 }
 
+const SELECTOR_RESPONSE = {
+  tree: [{
+    domain_code: 'settlement',
+    domain_name: '结算域',
+    objects: [{
+      object_code: 'Settlement',
+      object_name: '结算',
+      source_type: 'adapter',
+      metrics: [
+        { metric_code: 'Settlement.amount', metric_name: '结算金额', definition: '本次结算金额', source_type: 'adapter', published: true, quality_score: 0.98 },
+        { metric_code: 'Settlement.deductible', metric_name: '起付线', definition: '本次结算起付线', source_type: 'adapter', published: true, quality_score: 0.95 },
+        { metric_code: 'Settlement.internal', metric_name: '内部草稿指标', definition: '未发布', source_type: 'adapter', published: false, quality_score: null },
+      ],
+    }],
+  }],
+}
+
 describe('NewSkillWizardPage', () => {
   afterEach(() => {
     cleanup()
@@ -125,6 +142,7 @@ describe('NewSkillWizardPage', () => {
   it('generates, previews and accepts an AI proposal before navigating to edit', async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(SELECTOR_RESPONSE))
       .mockResolvedValueOnce(jsonResponse(AI_PROPOSAL))
       .mockResolvedValueOnce(jsonResponse({
         draft_id: 'd-ai', skill_id: 'ai_skill', skill_name: 'AI Skill', status: 'editing',
@@ -136,7 +154,9 @@ describe('NewSkillWizardPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'AI 创建' }))
     await user.type(screen.getByPlaceholderText('描述你希望 Skill 完成的能力'), '解释医保结算金额')
-    await user.type(screen.getByPlaceholderText('输入已发布 metric_code，逗号分隔'), 'Settlement.amount')
+    await user.click(await screen.findByRole('checkbox', { name: '结算金额 (Settlement.amount)' }))
+    await user.click(screen.getByRole('checkbox', { name: '起付线 (Settlement.deductible)' }))
+    expect(screen.queryByText('内部草稿指标')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '生成候选' }))
 
     expect(await screen.findByText('尚未进入运行时')).toBeInTheDocument()
@@ -144,29 +164,33 @@ describe('NewSkillWizardPage', () => {
     await user.click(screen.getByRole('button', { name: '接受为草稿' }))
 
     expect(routerPush).toHaveBeenCalledWith('/skills/ai_skill/edit?draft=d-ai')
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock.mock.calls[0][0]).toContain('/semantic/skill-inputs/selector')
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      description: '解释医保结算金额',
+      metric_codes: ['Settlement.amount', 'Settlement.deductible'],
+    })
   })
 
-  it('keeps AI input after generation failure and can fall back to manual creation', async () => {
+  it('keeps AI input after selector loading failure and can fall back to manual creation', async () => {
     const user = userEvent.setup()
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-      jsonResponse({ detail: { error_code: 'SKILL_AI_MODEL_FAILED', message: '模型暂不可用', audit_event: {} } }, 503),
+      jsonResponse({ detail: { error_code: 'SELECTOR_FAILED', message: '指标服务暂不可用', audit_event: {} } }, 503),
     ))
     render(<NewSkillWizardPage />)
 
     await user.click(screen.getByRole('button', { name: 'AI 创建' }))
     const description = screen.getByPlaceholderText('描述你希望 Skill 完成的能力')
     await user.type(description, '解释医保结算金额')
-    await user.type(screen.getByPlaceholderText('输入已发布 metric_code，逗号分隔'), 'Settlement.amount')
-    await user.click(screen.getByRole('button', { name: '生成候选' }))
 
-    expect(await screen.findByText('模型暂不可用')).toBeInTheDocument()
+    expect(await screen.findByText('指标服务暂不可用')).toBeInTheDocument()
+    expect(screen.getByText('无法加载已发布指标，不能使用自由文本指标。')).toBeInTheDocument()
     expect(description).toHaveValue('解释医保结算金额')
     await user.click(screen.getByRole('button', { name: '切换到手工创建' }))
     expect(screen.getByText('第一步 · 基本信息')).toBeInTheDocument()
   })
 
-  it('disables duplicate AI generation while loading', async () => {
+  it('shows explicit loading and empty states for the published metric selector', async () => {
     const user = userEvent.setup()
     let resolveFetch: ((value: Response) => void) | undefined
     const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { resolveFetch = resolve }))
@@ -174,12 +198,37 @@ describe('NewSkillWizardPage', () => {
     render(<NewSkillWizardPage />)
 
     await user.click(screen.getByRole('button', { name: 'AI 创建' }))
+    expect(screen.getByText('正在加载已发布指标…')).toBeInTheDocument()
+    resolveFetch?.(jsonResponse({
+      tree: [{
+        ...SELECTOR_RESPONSE.tree[0],
+        objects: [{
+          ...SELECTOR_RESPONSE.tree[0].objects[0],
+          metrics: [SELECTOR_RESPONSE.tree[0].objects[0].metrics[2]],
+        }],
+      }],
+    }))
+
+    expect(await screen.findByText('暂无可用的已发布指标。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '生成候选' })).toBeDisabled()
+  })
+
+  it('disables duplicate AI generation while loading', async () => {
+    const user = userEvent.setup()
+    let resolveFetch: ((value: Response) => void) | undefined
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(SELECTOR_RESPONSE))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveFetch = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<NewSkillWizardPage />)
+
+    await user.click(screen.getByRole('button', { name: 'AI 创建' }))
     await user.type(screen.getByPlaceholderText('描述你希望 Skill 完成的能力'), '解释医保结算金额')
-    await user.type(screen.getByPlaceholderText('输入已发布 metric_code，逗号分隔'), 'Settlement.amount')
+    await user.click(await screen.findByRole('checkbox', { name: '结算金额 (Settlement.amount)' }))
     const generate = screen.getByRole('button', { name: '生成候选' })
     await user.click(generate)
     expect(screen.getByRole('button', { name: '正在生成' })).toBeDisabled()
-    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     resolveFetch?.(jsonResponse(AI_PROPOSAL))
   })
 })
