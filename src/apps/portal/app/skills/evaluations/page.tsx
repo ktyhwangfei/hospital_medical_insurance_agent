@@ -3,11 +3,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, FlaskConical } from 'lucide-react'
 import { listSkillEvalCases } from '@/lib/api-client'
+import { useSkillNameMap } from '@/lib/use-skill-name-map'
 import { ApiClientError } from '@/lib/types'
 import type { SkillEvalCaseListResponse, SkillEvalRunListResponse } from '@/lib/types'
 
 // /skills/evaluations 评测记录页：浏览评测用例与运行记录（设计 §3.1）
 export default function SkillEvaluationsPage() {
+  const skillNameMap = useSkillNameMap()
+  // 评测用例/运行只有 skill_id，统一映射为中文名；未就绪或未命中时回退 ID
+  const displayName = (id: string | null | undefined) =>
+    id ? (skillNameMap.get(id) ?? id) : '通用'
   const [cases, setCases] = useState<SkillEvalCaseListResponse | null>(null)
   // 跨 Skill 的评测运行汇总需要后端 /infra-skills/eval-runs 端点；当前仅有按 skill 的端点，
   // 旧代码用 listSkillEvalRuns('') 取全部会稳定 404（每次加载浪费一次请求）。暂置空，待后端补端点。
@@ -66,7 +71,7 @@ export default function SkillEvaluationsPage() {
             <ul className="space-y-2 text-sm">
               {cases.items.map((c) => (
                 <li key={c.case_id} className="rounded-lg border border-slate-100 p-2">
-                  <div className="font-medium text-slate-800">{c.expected_skill_id ?? '通用'}</div>
+                  <div className="font-medium text-slate-800">{displayName(c.expected_skill_id)}</div>
                   <div className="text-xs text-slate-500">{c.question_template}</div>
                 </li>
               ))}
@@ -88,7 +93,7 @@ export default function SkillEvaluationsPage() {
               {runs.items.map((r) => (
                 <li key={r.run_id} className="rounded-lg border border-slate-100 p-2">
                   <div className="flex items-center justify-between">
-                    <span className="font-medium text-slate-800">{r.skill_id}</span>
+                    <span className="font-medium text-slate-800">{displayName(r.skill_id)}</span>
                     <span className="text-xs text-slate-500">
                       {new Date(r.created_at).toLocaleString('zh-CN')}
                     </span>
