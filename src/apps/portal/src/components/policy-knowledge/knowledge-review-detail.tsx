@@ -43,6 +43,7 @@ import {
   type KnowledgeItem,
   type RiskLevel,
 } from '@/lib/policy-knowledge-api'
+import { ReextractConfigDialog, type ReextractScope } from './reextract-config-dialog'
 
 type ReasonAction = 'return' | 'reject'
 
@@ -55,6 +56,7 @@ type TableColumn = { code: string; label: string; kind: 'id' | 'dimension' | 'nu
 const RULE_OBJECT_ORDER: string[] = [
   'policy_id',
   'fact_id',
+  'unit',
   'rule_id',
   'insu_type',
   'med_type',
@@ -62,6 +64,7 @@ const RULE_OBJECT_ORDER: string[] = [
   'psn_type',
   'setl_type',
   'payment_ratio',
+  'personal_payment_ratio',
   'deductible_amount',
   'cap_amount',
   'amount_band',
@@ -70,6 +73,7 @@ const RULE_OBJECT_ORDER: string[] = [
   'priority',
   'rule_type',
   'rule_value',
+  'business_sentence',
   'source_text',
   'clause_id',
 ]
@@ -77,6 +81,7 @@ const RULE_OBJECT_ORDER: string[] = [
 const RULE_OBJECT_DEFAULT_LABELS: Record<string, string> = {
   policy_id: '政策文件ID',
   fact_id: '单元ID',
+  unit: '所属单元',
   rule_id: '规则ID',
   insu_type: '险种类别',
   med_type: '医疗类别',
@@ -84,6 +89,7 @@ const RULE_OBJECT_DEFAULT_LABELS: Record<string, string> = {
   psn_type: '人群标签',
   setl_type: '结算方式',
   payment_ratio: '支付比例',
+  personal_payment_ratio: '个人支付比例',
   deductible_amount: '起付金额',
   cap_amount: '封顶金额',
   amount_band: '金额分段',
@@ -92,40 +98,48 @@ const RULE_OBJECT_DEFAULT_LABELS: Record<string, string> = {
   priority: '规则优先级',
   rule_type: '规则类型',
   rule_value: '规则值',
+  business_sentence: '业务描述',
   source_text: '原始政策文本',
   clause_id: '条款ID',
 }
 
-// 默认展示列：rule_value（规则值描述）与数值字段语义重复、价值有限，默认不展示；
-// 仍可在"列设置"勾选查看。后端政策问答检索仍保留 rule_value 数据，此处仅控制审核表格展示。
-const DEFAULT_VISIBLE_COLUMNS: string[] = RULE_OBJECT_ORDER.filter(
-  (code) => code !== 'rule_value',
-)
+// 默认展示列：业务核心列——规则类型、人群/等级/分段维度、数值、规则值、原文。
+// 所属单元由分组标题行展示（见表格 tbody 分组渲染）；内部 ID 列默认隐藏，可在"列设置"勾选。
+const DEFAULT_VISIBLE_COLUMNS: string[] = [
+  'rule_type',
+  'psn_type',
+  'hosp_lv',
+  'amount_band',
+  'payment_ratio',
+  'personal_payment_ratio',
+  'rule_value',
+  'source_text',
+]
 
 function columnKind(code: string): TableColumn['kind'] {
   if (['policy_id', 'fact_id', 'rule_id', 'clause_id'].includes(code)) return 'id'
-  if (['payment_ratio', 'deductible_amount', 'cap_amount', 'amount_band', 'admission_order'].includes(code)) return 'number'
-  if (['rule_value', 'source_text'].includes(code)) return 'long'
+  if (['payment_ratio', 'personal_payment_ratio', 'deductible_amount', 'cap_amount', 'amount_band', 'admission_order'].includes(code)) return 'number'
+  if (['unit', 'rule_value', 'business_sentence', 'source_text'].includes(code)) return 'long'
   return 'dimension'
 }
 
-// 按规则类型预设默认展示列：维度列常显，数值列按类型挂载。
+// 按规则类型预设默认展示列：业务列为主，数值列按类型挂载。
 const RULE_TYPE_PRESETS: Array<{ type: string; columns: string[] }> = [
   {
     type: '支付比例',
-    columns: ['policy_id', 'fact_id', 'rule_id', 'insu_type', 'med_type', 'hosp_lv', 'psn_type', 'setl_type', 'payment_ratio', 'rule_type'],
+    columns: ['rule_type', 'psn_type', 'hosp_lv', 'amount_band', 'payment_ratio', 'personal_payment_ratio', 'rule_value', 'source_text'],
   },
   {
     type: '起付',
-    columns: ['policy_id', 'fact_id', 'rule_id', 'insu_type', 'med_type', 'hosp_lv', 'psn_type', 'setl_type', 'deductible_amount', 'rule_type'],
+    columns: ['rule_type', 'psn_type', 'hosp_lv', 'amount_band', 'deductible_amount', 'rule_value', 'source_text'],
   },
   {
     type: '封顶',
-    columns: ['policy_id', 'fact_id', 'rule_id', 'insu_type', 'med_type', 'hosp_lv', 'psn_type', 'setl_type', 'cap_amount', 'rule_type'],
+    columns: ['rule_type', 'psn_type', 'hosp_lv', 'cap_amount', 'rule_value', 'source_text'],
   },
   {
     type: '资格',
-    columns: ['policy_id', 'fact_id', 'rule_id', 'insu_type', 'med_type', 'hosp_lv', 'psn_type', 'setl_type', 'rule_type'],
+    columns: ['rule_type', 'psn_type', 'hosp_lv', 'rule_value', 'source_text'],
   },
 ]
 
@@ -146,7 +160,7 @@ function matchedPresetType(visibleCodes: string[] | null): string {
   return ''
 }
 
-const COLUMN_STORAGE_KEY = 'policy-review-table-columns-v1'
+const COLUMN_STORAGE_KEY = 'policy-review-table-columns-v2'
 
 export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) {
   const { userId } = useApiContext()
@@ -174,6 +188,7 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
   const [metricLabels, setMetricLabels] = useState<Record<string, string>>({})
   const [visibleCodes, setVisibleCodes] = useState<string[] | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
+  const [reextractScope, setReextractScope] = useState<ReextractScope | null>(null)
   const loadSequence = useRef(0)
   const actionInFlight = useRef(false)
 
@@ -338,6 +353,36 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
       return true
     })
   }, [changeSet, unitFilter, typeFilter, changeTypeFilter, riskFilter, reviewFilter, itemReviews])
+
+  // 按单元分组：每组 { key, title=完整条款路径, subtitle=叶子原文, items }。
+  // 纯按单元归属，不做人群重定向（分段比例原文即在职职工，退休仅（四）公式）。
+  const unitGroups = useMemo(() => {
+    if (!changeSet) return []
+    const groups = new Map<string, { key: string; title: string; subtitle: string; items: ChangeSetItem[] }>()
+    const ensureGroup = (key: string) => {
+      const existing = groups.get(key)
+      if (existing) return existing
+      const unit = changeSet.source_units.find((candidate) => candidate.unit_id === key)
+      const path = unit?.path ?? [key]
+      const group = {
+        key,
+        title: path.join(' / '),
+        subtitle: path[path.length - 1] ?? '',
+        items: [] as ChangeSetItem[],
+      }
+      groups.set(key, group)
+      return group
+    }
+    // 第一遍：按条款出现顺序建组（保证（四）公式单元按原文位置靠后，不被提前插入）
+    for (const item of visibleItems) {
+      ensureGroup(item.unit_id)
+    }
+    // 第二遍：填入规则
+    for (const item of visibleItems) {
+      groups.get(item.unit_id)?.items.push(item)
+    }
+    return [...groups.values()]
+  }, [changeSet, visibleItems])
 
   // 仅"有效候选 + 未审核"的行可勾选，用于批量通过。
   const selectableIds = useMemo(
@@ -749,6 +794,18 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
                 {batchSubmitting ? '批量审核中…' : `批量通过 ${effectiveSelectedIds.size} 条`}
               </button>
             )}
+            {effectiveSelectedIds.size > 0 && approveEligible && (
+              <button
+                type="button"
+                onClick={() => setReextractScope({ kind: 'batch', itemIds: [...effectiveSelectedIds] })}
+                disabled={batchSubmitting || submitting}
+                title="用不同提示词或大模型对选中条目重新提取"
+                className={`${effectiveSelectedIds.size > 0 ? '' : 'ml-auto '}inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40`}
+              >
+                <RefreshCw className="size-3.5" />
+                批量重新提取 {effectiveSelectedIds.size} 条
+              </button>
+            )}
           </div>
         </div>
 
@@ -759,8 +816,8 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
         ) : visibleItems.length === 0 ? (
           <p className="px-4 py-12 text-center text-xs text-slate-400">当前筛选下没有候选知识</p>
         ) : (
-          <div className="w-full overflow-x-auto">
-            <table className="w-full min-w-[1900px] border-collapse text-left text-xs">
+          <div className="w-full overflow-auto max-h-[62vh]">
+            <table className="w-full min-w-[1250px] border-collapse text-left text-xs">
               <thead className="sticky top-0 z-10 bg-white text-[11px] font-medium uppercase tracking-wider text-slate-400">
                 <tr className="border-b border-slate-200">
                   <th scope="col" className="w-10 whitespace-nowrap px-3 py-2.5 text-left font-medium">
@@ -790,22 +847,51 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {visibleItems.map((item) => (
-                  <ReviewTableRow
-                    key={item.item_id}
-                    item={item}
-                    columns={tableColumns}
-                    unitPath={unitPathOf(changeSet, item.unit_id)}
-                    review={itemReviews[item.item_id] ?? null}
-                    reviewing={reviewingItemId === item.item_id}
-                    selectable={selectableIds.has(item.item_id)}
-                    selected={effectiveSelectedIds.has(item.item_id)}
-                    batchSubmitting={batchSubmitting}
-                    onToggleSelect={() => toggleSelect(item.item_id)}
-                    onApprove={() => void reviewItem(item, 'approved')}
-                    onReject={() => openItemReason(item, 'reject')}
-                    onReturn={() => openItemReason(item, 'return')}
-                  />
+                {unitGroups.map((group) => (
+                  <>
+                    {/* 分组标题行：按人群=人群名；按单元=条款路径+叶子原文 */}
+                    <tr className="bg-slate-50/90">
+                      <td colSpan={tableColumns.length + 3} className="px-4 py-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 ring-1 ring-slate-200">
+                            <FileText className="size-3 text-emerald-600" />
+                            {group.items.length} 条候选
+                          </span>
+                          <span className="truncate text-[11px] font-medium text-slate-500" title={group.title}>
+                            {group.title}
+                          </span>
+                        </div>
+                        {group.subtitle && (
+                          <p className="mt-1 text-[12px] leading-5 text-slate-800">
+                            {group.subtitle}
+                          </p>
+                        )}
+                      </td>
+                    </tr>
+                    {group.items.map((item) => (
+                      <ReviewTableRow
+                        key={item.item_id}
+                        item={item}
+                        columns={tableColumns}
+                        unitPath={unitPathOf(changeSet, item.unit_id)}
+                        review={itemReviews[item.item_id] ?? null}
+                        reviewing={reviewingItemId === item.item_id}
+                        selectable={selectableIds.has(item.item_id)}
+                        selected={effectiveSelectedIds.has(item.item_id)}
+                        batchSubmitting={batchSubmitting}
+                        canReextract={approveEligible}
+                        onToggleSelect={() => toggleSelect(item.item_id)}
+                        onApprove={() => void reviewItem(item, 'approved')}
+                        onReject={() => openItemReason(item, 'reject')}
+                        onReturn={() => openItemReason(item, 'return')}
+                        onReextract={() => setReextractScope({
+                          kind: 'single',
+                          itemId: item.item_id,
+                          extractedFields: extractCandidateFieldCodes(item.after),
+                        })}
+                      />
+                    ))}
+                  </>
                 ))}
               </tbody>
             </table>
@@ -889,6 +975,19 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
           if (reasonAction) void performLifecycle(reasonAction)
         }}
       />
+
+      {reextractScope && (
+        <ReextractConfigDialog
+          changeSetId={changeSetId}
+          scope={reextractScope}
+          onClose={() => setReextractScope(null)}
+          onComplete={() => {
+            setReextractScope(null)
+            setSelectedIds(new Set())
+            void load()
+          }}
+        />
+      )}
     </section>
   )
 }
@@ -896,6 +995,12 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
 function unitPathOf(changeSet: KnowledgeChangeSet, unitId: string): string {
   const unit = changeSet.source_units.find((candidate) => candidate.unit_id === unitId)
   return unit ? unit.path.join(' / ') : unitId
+}
+
+function extractCandidateFieldCodes(after: Record<string, unknown> | null): string[] {
+  // 从候选快照的 fields（field_code）提取已提取字段，供重提取诊断对比契约指标
+  const fields = (after?.fields ?? []) as Array<{ field_code?: string; field_name?: string }>
+  return fields.map((field) => field.field_code).filter((code): code is string => Boolean(code))
 }
 
 function ReviewTableRow({
@@ -907,10 +1012,12 @@ function ReviewTableRow({
   selectable,
   selected,
   batchSubmitting,
+  canReextract,
   onToggleSelect,
   onApprove,
   onReject,
   onReturn,
+  onReextract,
 }: {
   item: ChangeSetItem
   columns: TableColumn[]
@@ -920,10 +1027,12 @@ function ReviewTableRow({
   selectable: boolean
   selected: boolean
   batchSubmitting: boolean
+  canReextract: boolean
   onToggleSelect: () => void
   onApprove: () => void
   onReject: () => void
   onReturn: () => void
+  onReextract: () => void
 }) {
   const candidate = parseCandidateKnowledge(item)
   const invalid = candidate === null
@@ -939,8 +1048,10 @@ function ReviewTableRow({
     fieldValues.rule_id = fieldValues.rule_id ?? item.rule_id
     fieldValues.policy_id = fieldValues.policy_id ?? item.doc_id
     fieldValues.fact_id = fieldValues.fact_id ?? candidate.unit_id
+    fieldValues.unit = fieldValues.unit ?? unitPath
     fieldValues.clause_id = fieldValues.clause_id ?? unitPath
     fieldValues.source_text = fieldValues.source_text ?? candidate.source_text
+    fieldValues.business_sentence = fieldValues.business_sentence ?? candidate.business_sentence
   }
 
   return (
@@ -1001,10 +1112,10 @@ function ReviewTableRow({
         ) : (
           <div className="min-w-28">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold tabular-nums text-slate-700">置信度 {Math.round(confidence * 100)}%</span>
+              <span className={`font-semibold tabular-nums ${confidence < 0.3 ? 'text-red-600' : confidence < 0.6 ? 'text-amber-600' : 'text-slate-700'}`}>置信度 {Math.round(confidence * 100)}%</span>
             </div>
             <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.round(confidence * 100)}%` }} />
+              <div className={`h-full rounded-full ${confidence < 0.3 ? 'bg-red-400' : confidence < 0.6 ? 'bg-amber-400' : 'bg-emerald-500'}`} style={{ width: `${Math.round(confidence * 100)}%` }} />
             </div>
             <p className="mt-1 text-[10px] tabular-nums text-slate-400">原文一致 {formatScore(candidate?.confidence.source_fidelity ?? null)}</p>
             {uncertainties.length > 0 && (
@@ -1050,6 +1161,17 @@ function ReviewTableRow({
             >
               退回
             </button>
+            {canReextract && (
+              <button
+                type="button"
+                disabled={reviewing}
+                onClick={onReextract}
+                title="重新提取：换提示词或大模型重提本条，重提后需重新审核"
+                className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              >
+                <RefreshCw className="size-3" />重提取
+              </button>
+            )}
           </div>
         )}
       </td>

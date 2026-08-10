@@ -304,6 +304,12 @@ def _seed_metrics(store: RegistryStore) -> None:
         # 数值指标
         _m("zcgz.payment_ratio", "zcgz", "支付比例", "医保基金支付比例", "Amount",
            unit="%", source_field="zcgz.payment_ratio", source_object="policy_extractions"),
+        # 个人支付比例（自付一）：与基金支付比例互补，退休人员=职工个人支付比例×系数
+        _m("zcgz.personal_payment_ratio", "zcgz", "个人支付比例",
+           "参保人个人承担的支付比例（自付一），与基金支付比例互补；退休人员等折算时由系数×基数得出",
+           "Amount", unit="%",
+           source_field="zcgz.personal_payment_ratio", source_object="policy_extractions",
+           extraction_hint="原文「职工支付X%」「个人支付X%」时的个人承担比例；退休等折算时由系数×基数得出"),
         _m("zcgz.deductible_amount", "zcgz", "起付金额", "起付标准金额", "Amount",
            unit="元", source_field="zcgz.deductible_amount", source_object="policy_extractions"),
         _m("zcgz.cap_amount", "zcgz", "封顶金额", "最高支付限额金额", "Amount",
@@ -321,6 +327,15 @@ def _seed_metrics(store: RegistryStore) -> None:
            indexed=True, extraction_hint="规则的业务类别，如 起付线/报销比例/封顶线/分段比例"),
         _m("zcgz.rule_value", "zcgz", "规则值", "动态规则值（嵌套字段）", "String",
            source_field="zcgz.rule_value", source_object="policy_extractions"),
+        # 迭代 19 修改5：相对比例与跨单元引用（退休人员案例缺失项）
+        _m("zcgz.personal_payment_coefficient", "zcgz", "个人支付比例系数",
+           "相对支付比例：以职工支付比例等为基数的乘数系数，如「为职工支付比例的60%」→ 0.6", "Ratio",
+           source_field="zcgz.personal_payment_coefficient", source_object="policy_extractions",
+           extraction_hint="原文相对表达「为…的X%」时提取系数 X（如60%→0.6），并保留基数引用（如职工支付比例）"),
+        _m("zcgz.referenced_clause", "zcgz", "跨单元引用条款",
+           "本单元引用的前文条款/单元标识（如「上述比例」「按前款」→ 被引用的条款或单元）", "String",
+           source_field="zcgz.referenced_clause", source_object="policy_extractions",
+           extraction_hint="原文出现「上述/前款/按第X条」等引用时，提取被引用的条款标识或单元路径"),
     ]
     for metric in metrics:
         store.save_metric(metric)

@@ -152,21 +152,21 @@ class StructuredPolicyRuleRetriever:
                 ],
             ))
 
-            # 查询2: 退休人员60%折算公式
-            # ★ 这个必须限定 psn_type=退休人员
+            # 查询2: 退休人员个人支付比例（折算物化后的绝对值规则 + 折算公式规则）
+            # ★ U3：去掉硬编码 rule_type=计算公式（提取端不产出该类型），改 rule_type=支付比例；
+            # ★ 命中 U3 折算展开的退休 personal_payment_ratio 规则（source_text 含「个人支付比例/60%」）
             query2_filters = {
                 "insu_type": ctx.insu_type,
                 "med_type": ctx.med_type,
                 "psn_type": ctx.psn_type,
-                "rule_type": "计算公式",
+                "rule_type": "支付比例",
             }
 
             queries.append(StructuredPolicyQuery(
-                query_name="retiree_personal_ratio_formula",
+                query_name="retiree_personal_ratio",
                 required=True,
                 filters=query2_filters,
-                text_must_include_all=[
-                    "退休人员",
+                text_must_include_any=[
                     "个人支付比例",
                     "60%",
                 ],
@@ -444,8 +444,8 @@ class StructuredPolicyRuleRetriever:
         """构建人性化匹配原因。"""
         if query_name == "employee_inpatient_tertiary_segment_ratio":
             return "本次为城镇职工退休人员三级医院普通住院，统筹自付需先取得三级医院职工住院分段支付比例。"
-        elif query_name == "retiree_personal_ratio_formula":
-            return "本次结算人员为退休人员，需要将职工个人支付比例乘以60%得到退休人员个人支付比例。"
+        elif query_name == "retiree_personal_ratio":
+            return "本次结算人员为退休人员，退休人员个人支付比例为职工个人支付比例的60%。"
         # 通用 fallback
         parts = []
         if entity.get("insu_type"):

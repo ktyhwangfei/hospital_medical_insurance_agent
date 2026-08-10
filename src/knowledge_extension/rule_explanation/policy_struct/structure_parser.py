@@ -55,7 +55,25 @@ LEVEL_ORDER = {
     "subparagraph": 4,   # （一）/(一)
     "item": 5,           # 1. / 1、
     "subitem": 6,        # （1）/(1)
+    "proviso": 4,        # 条款直属无编号补充句（但书/本条…），与子项同级，不入栈
 }
+
+# 子项级叶子：句号收尾后，后续非编号直属补充句应独立成 proviso，不并入。
+# 用结构性信号（句号收尾）判断，不靠「但/本条」关键词启发式（脆弱）。
+_LEAF_LEVELS_FOR_PROVISO = frozenset({"subparagraph", "item", "subitem"})
+_PROVISO_SENTENCE_END = re.compile(r"[。！？]\s*$")
+
+
+def _clause_ancestor_in_stack(stack: List[ClauseNode]) -> Optional[ClauseNode]:
+    """从栈顶往栈底找最近的条款级节点（article/paragraph），用于挂直属补充句。
+
+    补充句逻辑上属于其所在「条」或「段」，不属于最后一个子项。
+    找不到条款级祖先时返回 None（退化到原归入栈顶行为，保持安全）。
+    """
+    for node in reversed(stack):
+        if node.level in {"article", "paragraph"}:
+            return node
+    return None
 
 PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("chapter", re.compile(rf"^(第[{CN_NUM}]+章)\s*(.*)$")),
@@ -290,10 +308,36 @@ def parse_policy_structure(
             parent.children.append(node)
             stack.append(node)
         else:
-            # 非编号正文归入当前节点。若当前是 root，避免把网页标题/通知元信息误并入结构正文。
-            if stack and stack[-1] is not root:
-                current = stack[-1]
-                current.text = f"{current.text}\n{line}".strip()
+            # 非编号正文行。若当前是 root，丢弃（网页标题/通知元信息不并入正文）。
+            if not stack or stack[-1] is root:
+                continue
+            top = stack[-1]
+            top_text = (top.text or "").strip()
+            # 子项级叶子句号收尾后，本行是条款直属补充（如「但…」「本条第一款…」），
+            # 不并入该子项，独立成 proviso 叶子挂到所属条款 → 避免污染子项单元内容
+            # （否则 leaf_match 子串包含会把补充句的提取记录误挂到该子项）。
+            if (
+                top.level in _LEAF_LEVELS_FOR_PROVISO
+                and _PROVISO_SENTENCE_END.search(top_text)
+            ):
+                clause = _clause_ancestor_in_stack(stack)
+                if clause is not None and clause is not root:
+                    global_order += 1
+                    raw_pid = f"{clause.node_id}|proviso||{global_order}|{line[:32]}"
+                    proviso = ClauseNode(
+                        node_id=short_secure_id(raw_pid),
+                        level="proviso",
+                        marker="",
+                        title=line,
+                        text=line,
+                        parent_id=clause.node_id,
+                        order_no=global_order,
+                        policy_meta=policy_meta,
+                    )
+                    clause.children.append(proviso)
+                    continue  # proviso 不入栈：后续直属补充句各自独立成叶
+            # 续句（子项未收尾，或栈顶是条款级本身）：归入栈顶
+            top.text = f"{top_text}\n{line}".strip()
 
     enrich_paths_and_context(root)
     return root

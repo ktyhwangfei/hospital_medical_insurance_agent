@@ -226,6 +226,22 @@ describe('knowledge review detail', () => {
     expect(screen.queryByRole('button', { name: /绑定指标|创建指标|新增标准值/ })).not.toBeInTheDocument()
   })
 
+  it('exposes row-level and batch re-extract entry points for a reviewable change set', async () => {
+    const user = userEvent.setup()
+    const page = await KnowledgeReviewDetailRoute({
+      params: Promise.resolve({ changeSetId: 'CS_REVIEW' }),
+    })
+    render(page)
+
+    await screen.findByText('结构化知识列表')
+    // 行级「重提取」按钮在 PENDING_REVIEW 下可见
+    expect(screen.getAllByRole('button', { name: /重提取/ }).length).toBeGreaterThan(0)
+
+    // 选中可审核项 → 工具栏出现「批量重新提取」
+    await user.click(screen.getByLabelText('全选可审核项'))
+    expect(screen.getByRole('button', { name: /批量重新提取/ })).toBeInTheDocument()
+  })
+
   it('treats the build candidate snapshot as authoritative instead of live rule content', async () => {
     const candidateRule = {
       ...ruleDetail.rule,
@@ -754,7 +770,17 @@ describe('knowledge review detail', () => {
     render(page)
 
     expect(await screen.findByText('结构化知识列表')).toBeInTheDocument()
-    for (const header of ['政策文件ID', '单元ID', '规则ID', '险种类别', '医疗类别', '医疗机构等级', '人群标签', '结算方式', '支付比例', '起付金额', '封顶金额', '金额分段', '时间周期', '住院次数', '规则优先级', '规则类型', '原始政策文本', '条款ID']) {
+    // 默认只展示业务核心列（所属单元由分组标题行提供；ID 列隐藏）
+    for (const header of ['规则类型', '人群标签', '医疗机构等级', '金额分段', '支付比例', '个人支付比例', '规则值', '原始政策文本']) {
+      expect(screen.getByRole('columnheader', { name: header })).toBeInTheDocument()
+    }
+    expect(screen.queryByRole('columnheader', { name: '政策文件ID' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: '条款ID' })).not.toBeInTheDocument()
+    // 打开列设置并全部显示：全部 rule-object 字段均可展开为列
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: '表格列设置' }))
+    await user.click(screen.getByRole('button', { name: '全部显示' }))
+    for (const header of ['政策文件ID', '单元ID', '所属单元', '规则ID', '险种类别', '医疗类别', '医疗机构等级', '人群标签', '结算方式', '支付比例', '个人支付比例', '起付金额', '封顶金额', '金额分段', '时间周期', '住院次数', '规则优先级', '规则类型', '规则值', '业务描述', '原始政策文本', '条款ID']) {
       expect(screen.getByRole('columnheader', { name: header })).toBeInTheDocument()
     }
     expect(screen.queryByRole('columnheader', { name: '实体' })).not.toBeInTheDocument()
@@ -762,7 +788,7 @@ describe('knowledge review detail', () => {
     expect(screen.queryByRole('columnheader', { name: '单元原文' })).not.toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: '变更/结论' })).not.toBeInTheDocument()
     expect(screen.getByText('三级')).toBeInTheDocument()
-    expect(screen.getByText('在职职工、退休人员')).toBeInTheDocument()
+    expect(screen.getAllByText('在职职工、退休人员').length).toBeGreaterThan(0)
     expect(screen.queryByText(/"name"|"subject"|\[\{/)).not.toBeInTheDocument()
   })
 
@@ -779,9 +805,10 @@ describe('knowledge review detail', () => {
 
     await user.click(screen.getByRole('button', { name: '表格列设置' }))
     const presetSelect = screen.getByRole('combobox', { name: '按规则类型预设列' })
-    expect(presetSelect).toHaveValue('')
-    await user.selectOptions(presetSelect, '支付比例')
+    // 默认列布局与"支付比例"预设一致，回显该预设
     expect(presetSelect).toHaveValue('支付比例')
+    await user.selectOptions(presetSelect, '资格')
+    expect(presetSelect).toHaveValue('资格')
   })
 
   it('shows a 409 current-state message and never fakes navigation success', async () => {

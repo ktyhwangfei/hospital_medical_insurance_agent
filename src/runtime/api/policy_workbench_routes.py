@@ -20,8 +20,11 @@ from src.knowledge_extension.rule_explanation.knowledge_build_models import (
     BuildTaskStatus,
     CreateKnowledgeBuildTaskRequest,
     EligibleKnowledgeUnit,
+    ExtractionOverride,
     KnowledgeBuildPreflight,
     KnowledgeBuildTask,
+    PromptMode,
+    ReextractReport,
 )
 from src.knowledge_extension.rule_explanation.knowledge_build_service import (
     KnowledgeBuildPreflightBlocked,
@@ -70,6 +73,7 @@ from src.knowledge_extension.rule_explanation.semantic_alignment import (
     get_semantic_alignment_service,
 )
 from src.semantic_layer.registry import get_semantic_registry
+from src.config.model_routing import MODEL_PARAMS, ROUTING_TABLE
 from src.shared.schemas.responses import error_detail
 
 if TYPE_CHECKING:
@@ -666,6 +670,196 @@ def reprocess_change_set(change_set_id: str) -> KnowledgeChangeSet:
         return _get_change_set_service().reprocess(change_set_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=error_detail("CHANGE_SET_STATE_INVALID", str(exc), {})) from exc
+
+
+# ── 迭代 18：变更集重新提取（修改提示词 / 换大模型 / 单条·批量）──────────
+
+class ReextractRequest(BaseModel):
+    item_ids: list[str] | None = None
+    override: ExtractionOverride | None = None
+
+
+@router.post(
+    "/change-sets/{change_set_id}/reextract",
+    response_model=ReextractReport,
+)
+def reextract_change_set(change_set_id: str, request: ReextractRequest) -> ReextractReport:
+    """对变更集重新提取（单条/批量统一入口，迭代 18）。"""
+    try:
+        return _get_change_set_service().reextract(
+            change_set_id, request.item_ids, request.override
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "CHANGE_SET_REEXTRACT_INVALID",
+                str(exc),
+                {"change_set_id": change_set_id},
+            ),
+        ) from exc
+
+
+class TestExtractRequest(BaseModel):
+    item_id: str
+    override: ExtractionOverride | None = None
+
+
+@router.post("/change-sets/{change_set_id}/test-extract")
+def test_extract_change_set_item(
+    change_set_id: str, request: TestExtractRequest
+) -> dict[str, Any]:
+    """重提取前测试（迭代 19 修改2）：用当前单元 + 动态指标 + 所选提示词/模型
+    跑一次提取并预览，**不写任何存储**；满意后再提交正式重提取。"""
+    try:
+        return _get_change_set_service().test_extract(
+            change_set_id, request.item_id, request.override
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "CHANGE_SET_TEST_EXTRACT_INVALID",
+                str(exc),
+                {"change_set_id": change_set_id, "item_id": request.item_id},
+            ),
+        ) from exc
+
+
+class MetricContractSummary(BaseModel):
+    code: str
+    name: str
+    kind: str
+    extraction_hint: str | None = None
+    value_domain: str | None = None
+
+
+class ExtractionConfigResponse(BaseModel):
+    default_prompt_mode: PromptMode = "schema"
+    default_model: str
+    default_max_tokens: int = 8192
+    schema_version: int
+    metrics: list[MetricContractSummary]
+    note: str
+
+
+class ModelOption(BaseModel):
+    model_name: str
+    display_name: str
+    available: bool
+
+
+class PromptPreviewResponse(BaseModel):
+    prompt: str
+    schema_version: int
+    field_count: int
+
+
+def _build_extraction_metrics() -> tuple[int, list[MetricContractSummary]]:
+    """读当前 published 指标契约，返回 (schema_version, metrics)。"""
+    from src.semantic_layer.extraction_contract import build_extraction_schema
+    from src.semantic_layer.registry import create_registry
+
+    try:
+        schema = build_extraction_schema(create_registry(), "zcgz")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail("SEMANTIC_CONTRACT_UNAVAILABLE", str(exc), {}),
+        ) from exc
+    metrics: list[MetricContractSummary] = []
+    for f in schema.fields:
+        metrics.append(MetricContractSummary(
+            code=f.code, name=f.name, kind=f.kind,
+            extraction_hint=f.extraction_hint, value_domain=f.value_domain,
+        ))
+    for e in schema.entities:
+        metrics.append(MetricContractSummary(
+            code=e.code, name=e.name, kind=e.kind,
+            extraction_hint=e.extraction_hint, value_domain=e.value_domain,
+        ))
+    for r in schema.relations:
+        hint = " / ".join(p for p in (r.subject_hint, r.predicate_hint, r.object_hint) if p)
+        metrics.append(MetricContractSummary(
+            code=r.code, name=r.name, kind=r.kind, extraction_hint=hint or None,
+        ))
+    return schema.schema_version, metrics
+
+
+@router.get("/extraction-config", response_model=ExtractionConfigResponse)
+def get_extraction_config() -> ExtractionConfigResponse:
+    """查询当前提取配置：默认提示词模式、可用指标、契约版本、默认模型。"""
+    schema_version, metrics = _build_extraction_metrics()
+    return ExtractionConfigResponse(
+        default_prompt_mode="schema",
+        default_model=ROUTING_TABLE.get(("default", "llm"), ""),
+        default_max_tokens=8192,
+        schema_version=schema_version,
+        metrics=metrics,
+        note="schema 模式实时读语义层 published 指标；在语义层发布新指标后下次重提取立即生效。",
+    )
+
+
+@router.get("/extraction-config/models", response_model=list[ModelOption])
+def list_extraction_models() -> list[ModelOption]:
+    """列出可选 LLM 模型（排除 embedding）。"""
+    embedding_models = {
+        v for (scene, mt), v in ROUTING_TABLE.items() if mt == "embedding"
+    }
+    return [
+        ModelOption(model_name=name, display_name=name, available=True)
+        for name in MODEL_PARAMS
+        if name not in embedding_models
+    ]
+
+
+@router.get(
+    "/extraction-config/prompt-preview",
+    response_model=PromptPreviewResponse,
+)
+def preview_extraction_prompt(
+    prompt_mode: PromptMode = "schema",
+    custom_prompt: str | None = None,
+) -> PromptPreviewResponse:
+    """实时预览最终提示词（schema 模式含指标注入，让用户看到指标确实生效）。"""
+    from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+        PipelineOrchestrator,
+    )
+    from src.semantic_layer.extraction_contract import build_extraction_schema
+    from src.semantic_layer.registry import create_registry
+
+    try:
+        schema = build_extraction_schema(create_registry(), "zcgz")
+        schema_version = schema.schema_version
+        field_count = len(schema.fields) + len(schema.entities) + len(schema.relations)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail("SEMANTIC_CONTRACT_UNAVAILABLE", str(exc), {}),
+        ) from exc
+
+    override: ExtractionOverride | None
+    if prompt_mode == "custom":
+        if not (custom_prompt and custom_prompt.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "PROMPT_PREVIEW_INVALID",
+                    "custom 模式需提供 custom_prompt",
+                    {"prompt_mode": prompt_mode},
+                ),
+            )
+        override = ExtractionOverride(prompt_mode="custom", custom_prompt=custom_prompt)
+    else:
+        override = ExtractionOverride(prompt_mode=prompt_mode)
+
+    orch = PipelineOrchestrator()
+    prompt = orch._build_fact_extraction_prompt(
+        "（政策原文）", "（政策标题）", override
+    )
+    return PromptPreviewResponse(
+        prompt=prompt, schema_version=schema_version, field_count=field_count
+    )
 
 
 class RuleDetail(BaseModel):

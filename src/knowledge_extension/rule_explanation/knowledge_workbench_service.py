@@ -85,6 +85,14 @@ _NON_BUSINESS_FIELDS = {
     "confidence",
     "approved_case_accuracy",
     "source_span",
+    # 迭代 19 反思：LLM 提取的结构化字段，不是可连读的业务句子成分
+    "entities",
+    "relations",
+    "priority",
+    "time_period",
+    "admission_order",
+    "setl_type",
+    "insu_type",
 }
 
 # V4.1 S1：rule_type → 业务主题概念 / 规则类型枚举 / 中文标签（阶段一映射，抽取枚举扩展后置）
@@ -125,6 +133,25 @@ def _clamp(value: Any) -> float:
         return 0.0
 
 
+def _compact_clause_path(path: list[str]) -> str:
+    """精简条款路径：只保留每级条款标识，不存整段条款原文（迭代 19 反思）。
+
+    原实现把完整 path（含整段条款文本）拼进 clause_path，每条 knowledge 重复
+    存储长文本，冗余浪费。此处每级取条款号/子项号：
+      「第三十六条 在一个结算期内职工和退休人员…」→「第三十六条」
+      「（四） 退休人员个人支付比例为职工支付比例的60%」→「（四）」
+    匹配规则：开头的「第X条」「第X章」「第X节」「（X）」「X.」「X、」等。
+    """
+    import re
+
+    labels: list[str] = []
+    for part in path:
+        text = (part or "").strip()
+        m = re.match(r"^(第[一二三四五六七八九十百千0-9]+[章节条款]|（[一二三四五六七八九十0-9]+）|\d+[.、])", text)
+        labels.append(m.group(1) if m else text[:20])
+    return "/".join(labels)
+
+
 def _knowledge_id(extraction_id: str, rule: dict[str, Any]) -> str:
     persisted = str(rule.get("knowledge_id") or rule.get("rule_id") or "").strip()
     if persisted:
@@ -152,10 +179,18 @@ def _sentence(rule: dict[str, Any]) -> str:
         return f"{person}{medical}时，最高支付限额为{rule['cap_amount']}。"
     if rule_type in {"eligibility", "eligibility_rule"}:
         return f"{person}适用于{medical}待遇。"
+    # 兜底：优先 rule_value（LLM 生成的自然业务描述）
+    rule_value = rule.get("rule_value")
+    if isinstance(rule_value, str) and rule_value.strip():
+        return rule_value.strip().rstrip("。") + "。"
+    # 否则拼业务标量字段（排除数组/对象等结构化字段）
     parts = [
         f"{_FIELD_NAMES.get(key, key)}为{value}"
         for key, value in rule.items()
-        if key not in _NON_BUSINESS_FIELDS and key != "rule_type" and _present(value)
+        if key not in _NON_BUSINESS_FIELDS
+        and key != "rule_type"
+        and isinstance(value, (str, int, float))
+        and _present(value)
     ]
     return "，".join(parts) + "。" if parts else "该政策知识尚无可连读的结构化字段。"
 
@@ -301,7 +336,7 @@ class KnowledgeWorkbenchService:
             if status not in {"reviewed", "published"}:
                 continue
             knowledge: list[KnowledgeItem] = []
-            clause_path = "/".join(getattr(leaf, "path", []) or [])
+            clause_path = _compact_clause_path(getattr(leaf, "path", []) or [])
             knowledge_count = 0
             if include_knowledge:
                 for extraction, relationship_source in relations:

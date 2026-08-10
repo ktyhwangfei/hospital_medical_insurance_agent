@@ -70,8 +70,15 @@ class ModelGateway:
         model_type: str,
         scene: str,
         max_tokens: int | None = None,
+        model_override: str | None = None,
     ) -> ModelResponse:
-        model_name, fallbacks = self._router.resolve(scene, model_type)
+        # model_override 非空时绕过 router 直接用指定模型，并关闭 fallback
+        # （用户显式选了某模型，失败应明确报错而非偷偷换模型）。
+        if model_override:
+            model_name = model_override
+            fallbacks: list[str] = []
+        else:
+            model_name, fallbacks = self._router.resolve(scene, model_type)
         chain = [model_name] + fallbacks
         failures = []
         overall_start = time.time()  # 记录总耗时用于 all-failed 事件
@@ -79,7 +86,31 @@ class ModelGateway:
         # 调试模式: 如果配置了特殊的 dummy LLM，直接返回以绕过 API 报错
         if self._config.base_url == "dummy":
             # 按 scene 返回不同结构的示例数据
-            if scene == "fee_explanation":
+            if scene == "policy_qa":
+                # 政策提取/重提取场景：必须返回合法 JSON 数组（facts），否则
+                # _extract_policy_facts 解析失败 → 重提取为空（迭代19 修改2 修复）。
+                # 从提示词中动态提取关键比例数字与人群词填入示例规则，
+                # 让调试/未配置模型环境也能验证「该单元关键内容被提取」（修改1 反思）。
+                # 注意：仅取原文中的安全片段（数字/短词），避免控制字符破坏 JSON。
+                user_text = messages[-1].content if messages else ""
+                import re as _re
+                # 仅从「原文」段（## 原文 之后）提取关键比例与人群，
+                # 避免匹配提示词模板自身的人群枚举（如 legacy 的 19 字段说明）。
+                body = user_text.rsplit("## 原文", 1)[-1] if "## 原文" in user_text else user_text
+                # 原文段在「## 原文」之后、下一个「## 」段（输出格式/提取质量约束）之前
+                body = body.split("\n## ", 1)[0]
+                ratios = _re.findall(r"\d+(?:\.\d+)?%", body)
+                people = _re.findall(r"退休人员|在职职工|城乡居民|学生儿童|灵活就业", body)
+                ratio = ratios[-1] if ratios else "85%"
+                person = people[-1] if people else "在职职工"
+                content = (
+                    '[{"fact_text": "示例提取结果（dummy 模式，未配置真实模型）", '
+                    '"rules": [{"payment_ratio": "' + ratio + '", '
+                    '"psn_type": "' + person + '", '
+                    '"source_text": "dummy source", '
+                    '"confidence": 0.9}]}]'
+                )
+            elif scene == "fee_explanation":
                 content = (
                     "【本次结论】\n"
                     "[CONCLUSION]\n"
