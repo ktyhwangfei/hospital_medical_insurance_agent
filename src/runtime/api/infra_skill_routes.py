@@ -107,10 +107,15 @@ from src.runtime.skill_management.regression_mining_service import (
     RegressionMiningService,
 )
 from src.runtime.api.skill_schemas import (
+    EvalCasePoolConfirmRequest,
+    EvalCasePoolConfirmResponse,
     EvalCasePoolFromHistoryRequest,
     EvalCasePoolFromHistoryResponse,
     EvalCasePoolItemResponse,
     EvalCasePoolListResponse,
+    EvalCasePoolRejectRequest,
+    EvalCasePoolTransformRequest,
+    EvalCasePoolTransformResponse,
     HistoryMiningOutcomeResponse,
 )
 
@@ -1481,6 +1486,157 @@ def _to_mining_principal(principal: SkillControlPrincipal):
         tenant_id=getattr(principal, "tenant_id", None) or "default",
         roles=principal.roles,
     )
+
+
+def get_regression_transform_service(
+    storage: SkillRegressionStorageDependency,
+) -> "RegressionTransformService":
+    from src.runtime.skill_management.regression_transform_service import (
+        RegressionTransformService,
+        GatewayTransformModelProvider,
+    )
+
+    return RegressionTransformService(
+        storage=storage, model_provider=GatewayTransformModelProvider()
+    )
+
+
+RegressionTransformServiceDependency = Annotated[
+    "RegressionTransformService", Depends(get_regression_transform_service)
+]
+
+
+@router.post(
+    "/infra-skills/eval-case-pool/{pool_id}/transform",
+    response_model=EvalCasePoolTransformResponse,
+)
+def transform_eval_case_pool_item(
+    pool_id: str,
+    request: EvalCasePoolTransformRequest,
+    principal: SkillEvaluationPrincipalDependency,
+    service: RegressionTransformServiceDependency,
+) -> EvalCasePoolTransformResponse:
+    """AI 转换案例池条目为类型化 proposal（仅 skill:evaluate）。失败不改状态。"""
+    from src.data_platform.storage.skill.regression_ports import (
+        SkillRegressionConflictError,
+        SkillRegressionNotFoundError,
+    )
+    from src.runtime.skill_management.regression_transform_service import (
+        SkillRegressionTransformError,
+    )
+
+    tenant_id = getattr(principal, "tenant_id", None) or "default"
+    try:
+        result = service.transform(
+            pool_id,
+            expected_revision=request.expected_revision,
+            tenant_id=tenant_id,
+        )
+    except SkillRegressionNotFoundError:
+        raise HTTPException(status_code=404, detail=error_detail("EVAL_CASE_POOL_NOT_FOUND", "案例不存在"))
+    except SkillRegressionConflictError:
+        raise HTTPException(status_code=409, detail=error_detail("EVAL_CASE_POOL_REVISION_CONFLICT", "案例已被修改，请刷新"))
+    except SkillRegressionTransformError as exc:
+        raise HTTPException(status_code=422, detail=error_detail("EVAL_CASE_TRANSFORM_INVALID", str(exc)))
+    return EvalCasePoolTransformResponse(
+        pool_id=result.pool_id,
+        transformed_dimension=result.transformed_dimension.value,
+        case_proposal=result.case_proposal.model_dump() if result.case_proposal else None,
+        root_cause=result.root_cause,
+        citations=result.citations,
+        uncertainties=result.uncertainties,
+        revision=result.revision,
+    )
+
+
+def get_regression_confirm_service(
+    storage: SkillRegressionStorageDependency,
+):
+    from src.runtime.skill_management.regression_confirm_service import (
+        RegressionConfirmService,
+    )
+
+    return RegressionConfirmService(
+        regression_storage=storage,
+        governance_storage=get_skill_governance_storage(),
+    )
+
+
+RegressionConfirmServiceDependency = Annotated[
+    "RegressionConfirmService", Depends(get_regression_confirm_service)
+]
+
+
+@router.post(
+    "/infra-skills/eval-case-pool/{pool_id}/confirm",
+    response_model=EvalCasePoolConfirmResponse,
+)
+def confirm_eval_case_pool_item(
+    pool_id: str,
+    request: EvalCasePoolConfirmRequest,
+    principal: SkillEvaluationPrincipalDependency,
+    service: RegressionConfirmServiceDependency,
+) -> EvalCasePoolConfirmResponse:
+    """人工确认案例，投影到对应评测资产（仅 skill:evaluate）。重复请求返回同一资产。"""
+    from src.runtime.skill_management.regression_confirm_service import (
+        SkillRegressionCaseNotExecutableError,
+    )
+    from src.data_platform.storage.skill.regression_ports import (
+        SkillRegressionConflictError,
+        SkillRegressionNotFoundError,
+    )
+
+    confirm_principal = _to_mining_principal(principal)
+    try:
+        result = service.confirm(
+            pool_id,
+            request=request,
+            confirmed_by=confirm_principal.user_id,
+            tenant_id=confirm_principal.tenant_id,
+        )
+    except SkillRegressionNotFoundError:
+        raise HTTPException(status_code=404, detail=error_detail("EVAL_CASE_POOL_NOT_FOUND", "案例不存在"))
+    except SkillRegressionConflictError:
+        raise HTTPException(status_code=409, detail=error_detail("EVAL_CASE_POOL_REVISION_CONFLICT", "案例已被修改，请刷新"))
+    except SkillRegressionCaseNotExecutableError:
+        raise HTTPException(status_code=422, detail=error_detail("EVAL_CASE_NOT_EXECUTABLE", "该维度不可确认，请重新分型或拒绝"))
+    return EvalCasePoolConfirmResponse(
+        pool_id=result.pool_id,
+        case_type=result.case_type,
+        case_id=result.case_id,
+        revision=result.revision,
+    )
+
+
+@router.post(
+    "/infra-skills/eval-case-pool/{pool_id}/reject",
+    response_model=EvalCasePoolItemResponse,
+)
+def reject_eval_case_pool_item(
+    pool_id: str,
+    request: EvalCasePoolRejectRequest,
+    principal: SkillEvaluationPrincipalDependency,
+    storage: SkillRegressionStorageDependency,
+) -> EvalCasePoolItemResponse:
+    """拒绝案例（仅 skill:evaluate）。"""
+    from src.data_platform.storage.skill.regression_ports import (
+        SkillRegressionConflictError,
+        SkillRegressionNotFoundError,
+    )
+
+    tenant_id = getattr(principal, "tenant_id", None) or "default"
+    try:
+        updated = storage.reject_pool_item(
+            pool_id,
+            tenant_id=tenant_id,
+            reason=request.rejection_reason,
+            expected_revision=request.expected_revision,
+        )
+    except SkillRegressionNotFoundError:
+        raise HTTPException(status_code=404, detail=error_detail("EVAL_CASE_POOL_NOT_FOUND", "案例不存在"))
+    except SkillRegressionConflictError:
+        raise HTTPException(status_code=409, detail=error_detail("EVAL_CASE_POOL_REVISION_CONFLICT", "案例已被修改，请刷新"))
+    return _pool_item_to_response(updated)
 
 
 @router.get("/infra-skills/{skill_id}", response_model=InfraSkillDetailResponse)

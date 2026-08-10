@@ -423,3 +423,42 @@ class HistoryMiningOutcomeResponse(BaseModel):
 
 class EvalCasePoolFromHistoryResponse(BaseModel):
     outcomes: list[HistoryMiningOutcomeResponse]
+
+
+class EvalCasePoolTransformRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+
+
+class EvalCasePoolTransformResponse(BaseModel):
+    pool_id: str
+    transformed_dimension: str
+    case_proposal: dict[str, Any] | None = None
+    root_cause: str | None = None
+    citations: list[dict[str, Any]] = []
+    uncertainties: list[str] = []
+    revision: int
+
+
+class EvalCasePoolConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    error_dimension: str
+    target_skill_id: str | None = None
+    case_proposal: dict[str, Any] | None = None
+
+
+class EvalCasePoolConfirmResponse(BaseModel):
+    pool_id: str
+    case_type: str
+    case_id: str
+    revision: int
+
+
+class EvalCasePoolRejectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    rejection_reason: str = Field(min_length=1, max_length=500)

@@ -552,3 +552,242 @@ class TestEvalCasePool:
         assert outcomes["qat_h1"] == "created"
         assert outcomes["qat_h2"] == "created"
         assert outcomes["qat_missing"] == "forbidden"
+
+
+class TestEvalCasePoolTransformConfirm:
+    """AI 转换、人工确认、拒绝端点。"""
+
+    PREFIX = "/api/v1/medical-insurance-ai-agent/infra-skills"
+
+    def _eval_headers(self):
+        return {
+            "Authorization": f"Bearer {_control_token('quality-user', ['quality'], ['skill:evaluate'])}"
+        }
+
+    def _client(self, monkeypatch, *, regression_storage, governance_storage, transform_service=None):
+        from src.runtime.api.app import create_app
+        from src.runtime.api import infra_skill_routes as infra
+
+        monkeypatch.setenv("SKILL_CONTROL_DEV_MODE", "1")
+        app = create_app()
+        app.dependency_overrides[infra.get_skill_regression_storage_dep] = (
+            lambda: regression_storage
+        )
+        app.dependency_overrides[infra.get_skill_governance_storage] = (
+            lambda: governance_storage
+        )
+        if transform_service is not None:
+            app.dependency_overrides[infra.get_regression_transform_service] = (
+                lambda: transform_service
+            )
+        return TestClient(app)
+
+    def _seed_pool(self, storage, pool_id="pool-t", status=None):
+        from src.domain.skill.regression_models import (
+            SkillEvalCasePoolItem,
+            SkillEvalCasePoolStatus,
+            SkillFeedbackReasonCode,
+        )
+        from src.data_platform.storage.skill.regression_in_memory import (
+            InMemorySkillRegressionStorage,
+        )
+
+        return storage.create_pool_item(
+            SkillEvalCasePoolItem.model_validate(
+                {
+                    "pool_id": pool_id,
+                    "tenant_id": "default",
+                    "source_qa_turn_id": "qat_t1",
+                    "source_user_id": "user-1",
+                    "reason_code": SkillFeedbackReasonCode.WRONG_CALCULATION,
+                    "question_excerpt": "起付线",
+                    "answer_excerpt": "累计",
+                    "source_selected_skill_id": "deductible",
+                    "source_hash": "a" * 64,
+                    "status": status or SkillEvalCasePoolStatus.PENDING_TRIAGE,
+                    "created_by": "user-1",
+                }
+            )
+        )
+
+    def test_transform_returns_typed_proposal(self, monkeypatch):
+        from src.data_platform.storage.skill.regression_in_memory import (
+            InMemorySkillRegressionStorage,
+        )
+        from src.data_platform.storage.skill.governance_in_memory import (
+            InMemorySkillGovernanceStorage,
+        )
+        from src.runtime.skill_management.regression_transform_service import (
+            RawTransformOutput,
+            RegressionTransformService,
+        )
+        from src.domain.skill.regression_models import SkillErrorDimension
+
+        regression = InMemorySkillRegressionStorage()
+        self._seed_pool(regression)
+        raw = RawTransformOutput.model_validate(
+            {
+                "error_dimension": "calculation",
+                "root_cause": "口径错误",
+                "target_skill_id": "deductible",
+                "case_proposal": {
+                    "case_type": "calculation",
+                    "target_skill_id": "deductible",
+                    "input_template": {"amount": 1000},
+                    "assertions": {
+                        "case_type": "calculation",
+                        "expected_value": 100.0,
+                        "tolerance": 0.01,
+                    },
+                },
+                "citations": [],
+                "uncertainties": [],
+            }
+        )
+        service = RegressionTransformService(
+            storage=regression, model_provider=lambda ctx: raw
+        )
+        client = self._client(
+            monkeypatch,
+            regression_storage=regression,
+            governance_storage=InMemorySkillGovernanceStorage(),
+            transform_service=service,
+        )
+        response = client.post(
+            f"{self.PREFIX}/eval-case-pool/pool-t/transform",
+            headers=self._eval_headers(),
+            json={"expected_revision": 1},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["transformed_dimension"] == "calculation"
+        assert body["case_proposal"]["case_type"] == "calculation"
+        assert body["revision"] == 2
+
+    def test_confirm_calculation_creates_regression_case(self, monkeypatch):
+        from src.data_platform.storage.skill.regression_in_memory import (
+            InMemorySkillRegressionStorage,
+        )
+        from src.data_platform.storage.skill.governance_in_memory import (
+            InMemorySkillGovernanceStorage,
+        )
+
+        regression = InMemorySkillRegressionStorage()
+        self._seed_pool(regression, pool_id="pool-c")
+        client = self._client(
+            monkeypatch,
+            regression_storage=regression,
+            governance_storage=InMemorySkillGovernanceStorage(),
+        )
+        response = client.post(
+            f"{self.PREFIX}/eval-case-pool/pool-c/confirm",
+            headers=self._eval_headers(),
+            json={
+                "expected_revision": 1,
+                "error_dimension": "calculation",
+                "target_skill_id": "deductible",
+                "case_proposal": {
+                    "case_type": "calculation",
+                    "target_skill_id": "deductible",
+                    "input_template": {"amount": 1000},
+                    "assertions": {
+                        "case_type": "calculation",
+                        "expected_value": 100.0,
+                        "tolerance": 0.01,
+                    },
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["case_type"] == "calculation"
+        assert body["case_id"].startswith("regcase_")
+
+    def test_confirm_routing_projects_to_route_case(self, monkeypatch):
+        from src.data_platform.storage.skill.regression_in_memory import (
+            InMemorySkillRegressionStorage,
+        )
+        from src.data_platform.storage.skill.governance_in_memory import (
+            InMemorySkillGovernanceStorage,
+        )
+
+        regression = InMemorySkillRegressionStorage()
+        self._seed_pool(regression, pool_id="pool-r")
+        client = self._client(
+            monkeypatch,
+            regression_storage=regression,
+            governance_storage=InMemorySkillGovernanceStorage(),
+        )
+        response = client.post(
+            f"{self.PREFIX}/eval-case-pool/pool-r/confirm",
+            headers=self._eval_headers(),
+            json={
+                "expected_revision": 1,
+                "error_dimension": "routing",
+                "target_skill_id": "deductible",
+                "case_proposal": {
+                    "case_type": "routing",
+                    "question_template": "起付线怎么算",
+                    "expected_skill_id": "deductible",
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["case_type"] == "route"
+
+    def test_reject_sets_rejected_status(self, monkeypatch):
+        from src.data_platform.storage.skill.regression_in_memory import (
+            InMemorySkillRegressionStorage,
+        )
+        from src.data_platform.storage.skill.governance_in_memory import (
+            InMemorySkillGovernanceStorage,
+        )
+
+        regression = InMemorySkillRegressionStorage()
+        self._seed_pool(regression, pool_id="pool-rj")
+        client = self._client(
+            monkeypatch,
+            regression_storage=regression,
+            governance_storage=InMemorySkillGovernanceStorage(),
+        )
+        response = client.post(
+            f"{self.PREFIX}/eval-case-pool/pool-rj/reject",
+            headers=self._eval_headers(),
+            json={"expected_revision": 1, "rejection_reason": "误报"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "rejected"
+
+
+    def test_confirm_stale_revision_returns_409(self, monkeypatch):
+        from src.data_platform.storage.skill.regression_in_memory import (
+            InMemorySkillRegressionStorage,
+        )
+        from src.data_platform.storage.skill.governance_in_memory import (
+            InMemorySkillGovernanceStorage,
+        )
+
+        regression = InMemorySkillRegressionStorage()
+        self._seed_pool(regression, pool_id="pool-stale")
+        client = self._client(
+            monkeypatch,
+            regression_storage=regression,
+            governance_storage=InMemorySkillGovernanceStorage(),
+        )
+        response = client.post(
+            f"{self.PREFIX}/eval-case-pool/pool-stale/confirm",
+            headers=self._eval_headers(),
+            json={
+                "expected_revision": 99,
+                "error_dimension": "calculation",
+                "target_skill_id": "deductible",
+                "case_proposal": {
+                    "case_type": "calculation",
+                    "target_skill_id": "deductible",
+                    "input_template": {},
+                    "assertions": {"case_type": "calculation", "expected_value": 1.0},
+                },
+            },
+        )
+        assert response.status_code == 409
