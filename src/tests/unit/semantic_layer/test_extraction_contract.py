@@ -99,6 +99,31 @@ def test_entity_kind_routed_to_entities():
     assert schema.fields == []
 
 
+def test_seed_includes_reextract_quality_metrics_and_publish_exposes_them():
+    """迭代19 修改5：seed 后 zcgz 含新指标（相对比例系数/跨单元引用）；发布后进契约。"""
+    from src.semantic_layer.registry import InMemoryRegistryStore as SeedRegistryStore
+
+    store = SeedRegistryStore()
+    reg = SemanticRegistry(store)
+    seed_semantic_layer(store)
+
+    metrics = {m.metric_code: m for m in store.list_metrics("zcgz")}
+    coeff = metrics.get("zcgz.personal_payment_coefficient")
+    ref = metrics.get("zcgz.referenced_clause")
+    assert coeff is not None, "seed 应包含个人支付比例系数指标"
+    assert coeff.status == "draft"
+    assert "60%" in (coeff.extraction_hint or ""), "系数指标应带相对比例提取提示"
+    assert ref is not None, "seed 应包含跨单元引用条款指标"
+
+    # 发布 zcgz → 新指标进提取契约（解锁 schema 模式）
+    reg.publish_object("zcgz")
+    schema = build_extraction_schema(reg, "zcgz")
+    codes = {f.code for f in schema.fields}
+    assert "personal_payment_coefficient" in codes
+    assert "referenced_clause" in codes
+    assert "payment_ratio" in codes
+
+
 def test_publish_object_unlocks_extraction_schema():
     """publish_object 发布后，build_extraction_schema 应返回该对象指标（解锁 §3.1）。
 
@@ -164,14 +189,17 @@ def test_seed_publish_unlocks_full_zcgz_contract():
     assert build_extraction_schema(reg, "zcgz").fields == []
     publish_seed_policy_object(reg)
     schema = build_extraction_schema(reg, "zcgz")
-    # 19 字段全部进契约
-    assert len(schema.fields) == 19, f"期望 19 字段，实际 {len(schema.fields)}"
+    # 22 字段全部进契约（19 原始 + 迭代19 修改5 新增 2：个人支付比例系数/跨单元引用
+    # + U2 新增 1：个人支付比例 personal_payment_ratio）
+    assert len(schema.fields) == 22, f"期望 22 字段，实际 {len(schema.fields)}"
     codes = {f.code for f in schema.fields}
     assert codes == {
         "rule_id", "fact_id", "policy_id", "clause_id", "source_text",
         "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
-        "admission_order", "payment_ratio", "deductible_amount", "cap_amount",
+        "admission_order", "payment_ratio", "personal_payment_ratio",
+        "deductible_amount", "cap_amount",
         "amount_band", "time_period", "priority", "rule_type", "rule_value",
+        "personal_payment_coefficient", "referenced_clause",
     }
     # 核心检索维度 indexed + value_domain
     insu = next(f for f in schema.fields if f.code == "insu_type")

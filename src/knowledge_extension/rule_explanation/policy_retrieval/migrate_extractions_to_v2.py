@@ -117,10 +117,19 @@ def migrate(drop: bool = False, dry_run: bool = False) -> dict:
         all_facts += fact_records
         all_rules += rule_entities
 
+    # U3 折算展开：退休人员个人支付比例 = 职工个人支付比例 × 系数，物化多条退休绝对值规则
+    # （跨 extraction：折算规则与基数规则同 doc，故在全量累积后展开）
+    from src.knowledge_extension.rule_explanation.policy_retrieval.rule_derivation import (
+        derive_personal_payment_ratios,
+    )
+    derived_rules = derive_personal_payment_ratios(all_rules)
+    all_rules += derived_rules
+
     stats = {
         "extractions": len(exts),
         "facts": len(all_facts),
         "rules": len(all_rules),
+        "derived_rules": len(derived_rules),
     }
 
     if dry_run:

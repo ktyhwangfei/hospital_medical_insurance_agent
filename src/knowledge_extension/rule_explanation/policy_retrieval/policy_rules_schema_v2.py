@@ -123,7 +123,8 @@ def drop_policy_rules_v2_collection(
 # 详情字段集合：这些字段不进固定 schema，作为 FieldTrace 落 dynamic field。
 # 核心维度（CORE_DIM_FIELDS）外的字段都视为详情字段。
 DETAIL_FIELDS = (
-    "payment_ratio", "deductible_amount", "cap_amount", "amount_band",
+    "payment_ratio", "personal_payment_ratio",
+    "deductible_amount", "cap_amount", "amount_band",
     "time_period", "admission_order", "priority", "rule_value", "source_text",
     "entities", "relations",
 )

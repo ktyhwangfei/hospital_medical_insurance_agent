@@ -599,7 +599,7 @@ def test_rule_unit_contract_fields_are_assembled() -> None:
     evidence = item.evidences[0]
     assert evidence.evidence_id.startswith("ev_")
     assert evidence.document_version_id == "doc_1"
-    assert evidence.clause_path == "/".join(unit.path)
+    assert evidence.clause_path == "第一条/（一）"  # 迭代19反思：精简为条款级标识
     assert evidence.exact_quote == item.source_text
     assert evidence.evidence_role == "主结论证据"
     # 语义绑定派生：payment_ratio 无值域（registry 未注入）→ 空列表；validity 未识别

@@ -522,6 +522,110 @@ export const rejectChangeSet = (changeSetId: string, reviewer: string, note?: st
 export const reprocessChangeSet = (changeSetId: string) =>
   request<KnowledgeChangeSet>(`${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}/reprocess`, { method: 'POST' })
 
+// —— 迭代 18：知识审核重新提取（修改提示词 / 换大模型 / 单条·批量）——
+
+export type PromptMode = 'schema' | 'legacy' | 'custom'
+
+export interface ExtractionOverride {
+  prompt_mode?: PromptMode
+  custom_prompt?: string | null
+  model_name?: string | null
+  max_tokens?: number | null
+  operator?: string | null
+}
+
+export interface ExtractionMetricSummary {
+  code: string
+  name: string
+  kind: string
+  extraction_hint?: string | null
+  value_domain?: string | null
+}
+
+export interface ExtractionConfig {
+  default_prompt_mode: PromptMode
+  default_model: string
+  default_max_tokens: number
+  schema_version: number
+  metrics: ExtractionMetricSummary[]
+  note: string
+}
+
+export interface ModelOption {
+  model_name: string
+  display_name: string
+  available: boolean
+}
+
+export interface PromptPreview {
+  prompt: string
+  schema_version: number
+  field_count: number
+}
+
+export interface ReextractItemResult {
+  extraction_id: string
+  item_ids: string[]
+  success: boolean
+  error?: string | null
+  model_used?: PromptMode | null
+  prompt_mode_used?: PromptMode | null
+  new_knowledge_count: number
+}
+
+export interface ReextractReport {
+  change_set_id: string
+  total: number
+  succeeded: number
+  failed: number
+  items: ReextractItemResult[]
+  override_applied: ExtractionOverride | null
+}
+
+export const getExtractionConfig = () =>
+  request<ExtractionConfig>(`${WORKBENCH_API}/extraction-config`)
+
+export const listExtractionModels = () =>
+  request<ModelOption[]>(`${WORKBENCH_API}/extraction-config/models`)
+
+export const getPromptPreview = (params: { prompt_mode: PromptMode; custom_prompt?: string }) => {
+  const search = new URLSearchParams({ prompt_mode: params.prompt_mode })
+  if (params.custom_prompt) search.set('custom_prompt', params.custom_prompt)
+  return request<PromptPreview>(`${WORKBENCH_API}/extraction-config/prompt-preview?${search.toString()}`)
+}
+
+export const reextractChangeSet = (
+  changeSetId: string,
+  body: { item_ids?: string[]; override?: ExtractionOverride },
+) =>
+  request<ReextractReport>(
+    `${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}/reextract`,
+    json('POST', body),
+  )
+
+export interface TestExtractResult {
+  change_set_id: string
+  item_id: string
+  extraction_id: string
+  fact_count: number
+  rule_count: number
+  fields_extracted: string[]
+  facts: Array<{
+    fact_text: string
+    rules?: Record<string, unknown>[]
+  }>
+  override_applied: ExtractionOverride | null
+}
+
+export const testExtractChangeSetItem = (
+  changeSetId: string,
+  body: { item_id: string; override?: ExtractionOverride },
+) =>
+  request<TestExtractResult>(
+    `${WORKBENCH_API}/change-sets/${encodeURIComponent(changeSetId)}/test-extract`,
+    json('POST', body),
+  )
+
 export interface RuleDetail {
   rule: KnowledgeItem
   unit: { unit_id: string; path: string[]; source_text: string; status: string }

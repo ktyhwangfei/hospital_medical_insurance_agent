@@ -13,6 +13,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from src.knowledge_extension.rule_explanation.knowledge_build_models import (
+    ExtractionOverride,
+)
 from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
 from src.model_service.gateway import ModelGateway
 from src.model_service.models import Message
@@ -81,6 +84,8 @@ class PipelineOrchestrator:
 
             # ── 每个事实 → 一条提取记录 ──
             from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import (
+                _is_main_text_path,
+                _path_text_parts,
                 match_leaves,
                 parse_kept_leaves,
             )
@@ -95,6 +100,17 @@ class PipelineOrchestrator:
                 fact_rules = fact.get("rules", [])
                 total_rules += len(fact_rules)
                 matched_units = match_leaves(fact.get("fact_text", ""), kept_leaves)
+                # 多匹配时优先正文段（修改决定 vs 正文重复），避免 unit_id 留空
+                # （迭代 19 反思：重复单元导致全部 extraction 无归属）
+                if len(matched_units) > 1:
+                    _main = [
+                        uid for uid in matched_units
+                        if _is_main_text_path(
+                            _path_text_parts(_by_id.get(uid), _by_id)
+                        )
+                    ]
+                    if _main:
+                        matched_units = _main[:1]
                 unit_id = matched_units[0] if len(matched_units) == 1 else ""
 
                 confidences = [r.get("confidence", 0.7) for r in fact_rules]
@@ -208,6 +224,7 @@ class PipelineOrchestrator:
         self,
         document_text: str,
         document_title: str = "",
+        override: ExtractionOverride | None = None,
     ) -> list[dict[str, Any]]:
         """LLM 全文提取政策事实、规则、实体和关系。
 
@@ -216,23 +233,27 @@ class PipelineOrchestrator:
         2. 从每个事实抽取结构化规则
         3. 标注实体和关系
 
+        ``override`` 非空时按其覆盖提示词模式 / 模型 / max_tokens（迭代 18）。
         失败时返回空列表（由调用方处理）。
         """
         if not document_text.strip():
             return []
 
-        prompt = self._build_fact_extraction_prompt(document_text, document_title)
+        prompt = self._build_fact_extraction_prompt(document_text, document_title, override)
 
         try:
             gateway = ModelGateway()
             messages = [Message(role="user", content=prompt)]
             # 长文档提取的 JSON 输出常超 router 默认 max_tokens 被截断，
-            # 这里显式放大输出空间（P8.4 迁移后重提取所需）
+            # 这里显式放大输出空间（P8.4 迁移后重提取所需）。
+            # override.max_tokens 可覆盖默认 8192（迭代 18）。
+            max_tokens = override.max_tokens if override and override.max_tokens else 8192
             response = gateway.generate(
                 messages=messages,
                 model_type="llm",
                 scene="policy_qa",
-                max_tokens=8192,
+                max_tokens=max_tokens,
+                model_override=override.model_name if override else None,
             )
 
             content = response.content.strip()
@@ -272,26 +293,48 @@ class PipelineOrchestrator:
             logger.warning("Policy fact extraction failed: %s", e)
             return []
 
-    def _build_fact_extraction_prompt(self, text: str, title: str) -> str:
+    def _build_fact_extraction_prompt(
+        self,
+        text: str,
+        title: str,
+        override: ExtractionOverride | None = None,
+    ) -> str:
         """构建事实提取 prompt（schema-driven，§3.1）。
 
-        从语义层读 zcgz 对象的 published 指标契约，动态拼提示词（加维度不改代码）。
-        回退：registry 不可用或契约空时用硬编码 legacy prompt（保证提取不中断）。
+        提示词模式（迭代 18）：
+        - ``custom``：用 ``override.custom_prompt``，替换 ``{title}``/``{text}`` 占位符，
+          不自动注入指标（由用户自行包含）。
+        - ``schema``（默认）：从语义层读 zcgz 对象的 published 指标契约，动态拼提示词
+          （加维度不改代码）。registry 不可用或契约空时用硬编码 legacy prompt。
+        - ``legacy``：跳过 schema 契约，直接用硬编码 19 字段 prompt。
         """
-        from src.semantic_layer.registry import create_registry
-        from src.semantic_layer.extraction_contract import (
-            build_extraction_schema, build_prompt_from_schema,
-        )
-        try:
-            schema = build_extraction_schema(create_registry(), "zcgz")
-            if schema.fields or schema.entities or schema.relations:
-                return build_prompt_from_schema(text, title, schema)
-        except Exception:
-            pass
+        mode = override.prompt_mode if override and override.prompt_mode else "schema"
+
+        if mode == "custom" and override and override.custom_prompt:
+            return (
+                override.custom_prompt
+                .replace("{title}", title)
+                .replace("{text}", text)
+            )
+
+        if mode == "schema":
+            from src.semantic_layer.registry import create_registry
+            from src.semantic_layer.extraction_contract import (
+                build_extraction_schema, build_prompt_from_schema,
+            )
+            try:
+                schema = build_extraction_schema(create_registry(), "zcgz")
+                if schema.fields or schema.entities or schema.relations:
+                    return build_prompt_from_schema(text, title, schema)
+            except Exception:
+                pass
+
         return self._legacy_fact_extraction_prompt(text, title)
 
     def _legacy_fact_extraction_prompt(self, text: str, title: str) -> str:
         """[legacy] 硬编码 19 字段 prompt（registry 不可用时的回退）。"""
+        from src.semantic_layer.extraction_contract import EXTRACTION_QUALITY_GUIDANCE
+
         return f"""你是一个医保政策分析专家。请从以下政策文本中提取所有"政策事实"，并从每个事实中提取结构化的"政策规则"。
 
 ## 定义
@@ -375,7 +418,9 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
 1. 尽可能多地提取事实，**覆盖原文中所有蕴含政策含义的语句**
 2. 每个事实可包含多条规则，每条规则必须填满全部 19 个字段
 3. 未提及的字段填空字符串 ""
-4. 只返回 JSON 数组，不要任何其他内容"""
+4. 只返回 JSON 数组，不要任何其他内容
+
+{EXTRACTION_QUALITY_GUIDANCE}"""
 
     # ═══════════════ Coverage ═══════════════
 
@@ -504,11 +549,23 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
 
     # ═══════════════ Single-unit Re-extraction (LLM) ═══════════════
 
-    def reextract_unit(self, extraction_id: str) -> dict[str, Any]:
+    def reextract_unit(
+        self,
+        extraction_id: str,
+        override: ExtractionOverride | None = None,
+        reset_status: str = "draft",
+    ) -> dict[str, Any]:
         """对单个单元重新调用 LLM 提取（人工审核不通过后触发）。
 
         复用 _extract_policy_facts：用单元 source_text 作为输入，取首条事实覆盖
-        extracted_fields，置信度回填规则均值，状态重置为 draft（需重新审核）。
+        extracted_fields，置信度回填规则均值，状态重置为 ``reset_status``。
+
+        - ``reset_status="draft"``（默认，体系 A 单元审核）：重提取后需重新走单元审核。
+        - ``reset_status="reviewed"``（体系 B 变更集重提取）：保持单元在工作台可见，
+          新内容进入 PENDING_REVIEW 变更集接受审核（变更集状态即"需重新审核"信号）。
+
+        ``override`` 非空时按其覆盖提示词模式 / 模型（迭代 18），并将覆盖配置
+        写入 ``last_override`` 审计字段（来源可追溯）。
         """
         ext = self._store.get_extraction(extraction_id)
         if not ext:
@@ -519,7 +576,7 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
         if not source.strip():
             return {"success": False, "error": "单元无源文本，无法重提取"}
 
-        facts = self._extract_policy_facts(source, title)
+        facts = self._extract_policy_facts(source, title, override=override)
         if not facts:
             return {"success": False, "error": "LLM 未返回结果（请检查 MODEL_API_KEY 与模型配置）"}
 
@@ -534,9 +591,20 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
         merged_fields["total_rules"] = len(rules)
         merged_fields.pop("audit_reason", None)  # 重提取清除上次驳回原因
 
-        updated = self._store.update_extraction(extraction_id, {
+        update = {
             "extracted_fields": merged_fields,
             "confidence": avg_conf,
-            "status": "draft",  # 重提取后需重新审核
-        })
-        return {"success": True, "extraction_id": extraction_id, "extraction": updated}
+            "status": reset_status,  # 体系 A=draft / 体系 B=reviewed（保持可见）
+        }
+        override_dump = override.model_dump() if override else None
+        if override_dump is not None:
+            # 审计字段：记录本次重提取用的提示词 / 模型覆盖（来源可追溯）
+            update["last_override"] = override_dump
+
+        updated = self._store.update_extraction(extraction_id, update)
+        return {
+            "success": True,
+            "extraction_id": extraction_id,
+            "extraction": updated,
+            "override_applied": override_dump,
+        }

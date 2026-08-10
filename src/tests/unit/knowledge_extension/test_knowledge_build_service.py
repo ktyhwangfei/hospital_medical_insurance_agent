@@ -1073,7 +1073,7 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
             "error_message": None,
         },
     ]
-    assert workbench.get_document_calls == 2
+    assert workbench.get_document_calls == 4  # 预检 2 + 聚合前重新加载 2（含 knowledge）
     assert len(builder.calls) == 1
     call = builder.calls[0]
     assert call["task_id"] == queued.task_id

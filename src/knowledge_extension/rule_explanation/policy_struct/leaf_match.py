@@ -97,10 +97,26 @@ def _path_hash(leaf: Any, by_id: dict) -> str:
     return _fnv1a("|".join(_path_text_parts(leaf, by_id)))
 
 
+def _is_main_text_path(parts: list[str]) -> bool:
+    """path 是否为「正文」段（而非「修改决定」段）。
+
+    正文章节形如「第四章 基本医疗保险待遇」「第三十六条 …」；
+    修改决定段形如「二、第三十六条修改为」「一、第X条修改为」等。
+    以 path 中是否出现「第X章」作为正文标志（修改决定通常不引入新章）。
+    """
+    return any("第" in p and "章" in p for p in parts)
+
+
 def parse_kept_leaves(content_text: str, title: str):
     """解析结构 → (root, by_id, all_leaves, kept_leaves)。
 
     kept_leaves 为 pathHash 去重后的叶子，与前端 derived 单元口径一致。
+
+    迭代 19 反思修复：额外做 body 级去重——政策文档常含「修改决定 + 修改后
+    正文」两段逐字重复文本（如《关于修改…的决定》正文末尾附修改后全文），
+    两个不同 path 的叶子 body 完全相同，导致 match_leaves 对同一 fact 返回
+    多个 node_id → unit_id 留空。此处相同 body 只保留一个，优先保留正文段
+    （path 含「第X章」）而非修改决定段。
     """
     root = parse_policy_structure(content_text or "", document_title=title or "")
     by_id = flatten_by_id(root)
@@ -108,11 +124,30 @@ def parse_kept_leaves(content_text: str, title: str):
     all_leaves.sort(key=lambda n: getattr(n, "order_no", 0) or 0)
     seen: set[str] = set()
     kept: list = []
+    kept_body: dict[str, int] = {}  # body → kept 索引，用于 body 级去重
     for lf in all_leaves:
         h = _path_hash(lf, by_id)
+        body = norm_text(_leaf_body(lf))
         if h in seen:
             continue
         seen.add(h)
+        if body in kept_body:
+            existing_idx = kept_body[body]
+            existing = kept[existing_idx]
+            existing_main = _is_main_text_path(_path_text_parts(existing, by_id))
+            current_main = _is_main_text_path(_path_text_parts(lf, by_id))
+            if existing_main and current_main:
+                # 两个都是正文段（如不同医院等级下相同比例文本）：合法内容，不去重。
+                # kept_body 更新指向本版，后续修改决定段仍能正确判定为「跳过」。
+                kept_body[body] = len(kept)
+                kept.append(lf)
+                continue
+            if existing_main:
+                continue  # 已保留正文版，跳过本（可能是修改决定）版
+            # 本版更可能是正文 → 用本版替换（修改决定版让位）
+            kept[existing_idx] = lf
+            continue
+        kept_body[body] = len(kept)
         kept.append(lf)
     return root, by_id, all_leaves, kept
 

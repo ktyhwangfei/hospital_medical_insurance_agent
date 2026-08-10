@@ -11,13 +11,13 @@ def router():
 
 def test_resolve_known_scene(router):
     model_name, fallbacks = router.resolve("settlement_exception_guidance", ModelType.LLM)
-    assert model_name == "deepseek-chat"
+    assert model_name == ROUTING_TABLE[("default", "llm")]
     assert fallbacks == []
 
 
 def test_resolve_unknown_scene_defaults(router):
     model_name, fallbacks = router.resolve("unknown_scene", ModelType.LLM)
-    assert model_name == "deepseek-chat"
+    assert model_name == ROUTING_TABLE[("default", "llm")]
 
 
 def test_resolve_embedding(router):

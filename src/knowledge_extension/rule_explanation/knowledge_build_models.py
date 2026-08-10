@@ -34,6 +34,63 @@ BuildTaskStatus = Literal[
 BuildMode = Literal["INITIAL", "REBUILD"]
 UnitBuildStatus = Literal["PENDING", "BUILT", "FAILED"]
 
+# ── 迭代 18：知识审核重提取覆盖配置 ──────────────────────────────
+# 单次重新提取的提示词 / 模型覆盖。未提供（None）时全部走默认
+# （schema 提示词 + 默认模型路由）。
+PromptMode = Literal["schema", "legacy", "custom"]
+
+
+class ExtractionOverride(BaseModel):
+    """单次重新提取的提示词 / 模型覆盖配置。
+
+    - ``prompt_mode="custom"`` 时 ``custom_prompt`` 必填，且指标不会被自动注入
+      （由调用方在 ``custom_prompt`` 中自行包含需要的指标口径）。
+    - ``model_name`` 非空时绕过 ``ModelRouter`` 直接用该模型（关闭 fallback）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    prompt_mode: PromptMode | None = None
+    custom_prompt: str | None = None
+    model_name: str | None = None
+    max_tokens: int | None = None
+    operator: str | None = None
+
+    @model_validator(mode="after")
+    def _require_custom_prompt(self) -> "ExtractionOverride":
+        if self.prompt_mode == "custom" and not (
+            self.custom_prompt and self.custom_prompt.strip()
+        ):
+            raise ValueError("prompt_mode=custom 时 custom_prompt 不能为空")
+        return self
+
+
+class ReextractItemResult(BaseModel):
+    """单次重新提取中一个提取单元（extraction）的结果。
+
+    多个变更项可能共享同一 extraction（knowledge_id = hash(extraction_id, rule)），
+    故按 extraction 聚合，``item_ids`` 记录触发本次重提取的原始变更项。
+    """
+
+    extraction_id: str
+    item_ids: list[str] = Field(default_factory=list)
+    success: bool
+    error: str | None = None
+    model_used: str | None = None
+    prompt_mode_used: PromptMode | None = None
+    new_knowledge_count: int = 0
+
+
+class ReextractReport(BaseModel):
+    """变更集重新提取报告（迭代 18 S2，原地刷新策略）。"""
+
+    change_set_id: str
+    total: int
+    succeeded: int
+    failed: int
+    items: list[ReextractItemResult] = Field(default_factory=list)
+    override_applied: dict | None = None
+
 
 class KnowledgeBuildUnitRevision(BaseModel):
     model_config = ConfigDict(frozen=True)

@@ -97,6 +97,7 @@ CREATE INDEX IF NOT EXISTS idx_ext_hash ON policy_extractions(source_text_hash);
 EXTRACTIONS_MIGRATION = """
 ALTER TABLE policy_extractions ADD COLUMN IF NOT EXISTS unit_id VARCHAR(64);
 CREATE INDEX IF NOT EXISTS idx_ext_unit_id ON policy_extractions(unit_id);
+ALTER TABLE policy_extractions ADD COLUMN IF NOT EXISTS last_override JSONB;
 """
 
 LINEAGE_TABLE = """
@@ -525,6 +526,8 @@ class PipelineStore:
         status = data.get("status", existing["status"])
         confidence = data.get("confidence", existing["confidence"])
         reviewed_by = data.get("reviewed_by")
+        last_override = data.get("last_override")
+        unit_id = data.get("unit_id")
 
         if fields is not None:
             client.execute(
@@ -535,6 +538,18 @@ class PipelineStore:
             client.execute(
                 "UPDATE policy_extractions SET status=%s, confidence=%s, reviewed_by=%s, reviewed_at=%s, updated_at=%s WHERE extraction_id=%s",
                 (status, confidence, reviewed_by, now if status in ("reviewed", "rejected") else None, now, extraction_id),
+            )
+        # 归属修复（迭代 19）：回填 unit_id（匹配修复后的正文叶子）
+        if unit_id is not None and unit_id != existing.get("unit_id"):
+            client.execute(
+                "UPDATE policy_extractions SET unit_id=%s, updated_at=%s WHERE extraction_id=%s",
+                (unit_id or None, now, extraction_id),
+            )
+        # 审计字段 last_override（迭代 18）：单独更新，与上面互不影响
+        if last_override is not None:
+            client.execute(
+                "UPDATE policy_extractions SET last_override=%s WHERE extraction_id=%s",
+                (json.dumps(last_override), extraction_id),
             )
         return self.get_extraction(extraction_id)
 
@@ -563,6 +578,7 @@ class PipelineStore:
             "status": row["status"],
             "reviewed_by": row.get("reviewed_by", ""),
             "reviewed_at": str(row["reviewed_at"]) if row.get("reviewed_at") else "",
+            "last_override": self._json_field(row.get("last_override")) if row.get("last_override") else None,
             "created_at": str(row["created_at"]) if row.get("created_at") else "",
             "updated_at": str(row.get("updated_at")) if row.get("updated_at") else "",
         }

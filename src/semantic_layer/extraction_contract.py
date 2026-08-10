@@ -117,6 +117,17 @@ def build_extraction_schema(
     )
 
 
+# ── 提取质量约束（迭代 19 修改5：相对比例 / 跨单元引用 / 关键人群 / 多条件）──
+
+EXTRACTION_QUALITY_GUIDANCE = """## 提取质量约束（必须遵守）
+1. **相对比例与系数**：原文出现「…的60%」「为职工支付比例的60%」等相对表达时，必须提取比例数字（60%）并保留其与基数的引用关系（rule_value 描述计算逻辑，如“个人支付比例 = 职工支付比例 × 60%”），不得因非绝对数值而漏提。
+2. **跨单元引用**：出现「上述比例」「按前款」「职工支付比例」等对前文条款的引用时，视为与本单元关联的约束条件，必须在 rule_value / relation 中体现该引用关系（subject=本单元主体, predicate=引用, object=被引用条款或数值）。
+3. **关键人群强调**：psn_type 等人群标签（退休人员/在职职工/学生儿童等）只要在原文出现一次就必须提取，不得因句子简短而遗漏。
+4. **多条件拆条**：一段文本含多个并列条件（医院等级 × 金额分段 × 人群 × 时间），每个条件组合拆成独立规则（一条规则 = 一个完整条件组合），不得合并或只取其一。
+5. **比例规则形态统一（必须）**：一段原文（如「统筹基金支付85%，职工支付15%」）提取为**一条规则**，payment_ratio（基金）与 personal_payment_ratio（职工个人）作为该规则的字段同时填写，不得拆成两条；psn_type 按原文人群标注（原文写「职工」就标在职职工），不得按在职/退休重复提取；原文出现「退休人员个人支付比例为职工支付比例的60%」这类相对表达时，只提取该公式本身（rule_value 描述「个人支付比例 = 职工支付比例 × 60%」），不展开成各级医院、各费用段的绝对数值；禁止跨单元拼凑推导。
+"""
+
+
 def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) -> str:
     """从提取契约动态拼 LLM 提示词（schema-driven，加维度不改此函数）。
 
@@ -173,4 +184,6 @@ def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) ->
     "rules": [{{ {fields_json_example} }}]
   }}
 ]
+
+{EXTRACTION_QUALITY_GUIDANCE}
 """

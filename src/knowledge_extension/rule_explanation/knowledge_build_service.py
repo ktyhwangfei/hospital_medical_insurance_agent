@@ -30,6 +30,7 @@ from src.knowledge_extension.rule_explanation.knowledge_build_store import (
     KnowledgeBuildStore,
 )
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
+    ApprovedUnit,
     KnowledgeWorkbenchDocument,
 )
 from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
@@ -215,7 +216,7 @@ class KnowledgeBuildService:
             change_set = self._change_set_service.build_for_units(
                 task_id=task_id,
                 task_name=request.name,
-                units=list(resolved),
+                units=self._units_with_knowledge(list(resolved)),
                 semantic_contract_version=preflight.semantic_contract_version,
                 supersedes_candidate_id=None,
             )
@@ -453,6 +454,38 @@ class KnowledgeBuildService:
             self._workbench.get_document(doc_id, include_knowledge=False)
             for doc_id in self._workbench.list_document_ids()
         ]
+
+    def _units_with_knowledge(
+        self,
+        resolved: list[SelectedKnowledgeUnit],
+    ) -> list[SelectedKnowledgeUnit]:
+        """重新加载所选单元的完整 knowledge，供变更集聚合使用。
+
+        ``_load_documents`` 为性能只做轻量加载（include_knowledge=False），
+        此时单元 knowledge 为空；聚合候选必须重新读取完整 knowledge，
+        否则变更集 items 为空（审核页无候选可审）。
+        """
+        by_key: dict[tuple[str, str], ApprovedUnit] = {}
+        for doc_id in {unit.unit.doc_id for unit in resolved}:
+            document = self._workbench.get_document(doc_id, include_knowledge=True)
+            by_key.update(
+                {(unit.doc_id, unit.unit_id): unit for unit in document.units}
+            )
+        refreshed: list[SelectedKnowledgeUnit] = []
+        for selected in resolved:
+            unit = by_key.get((selected.unit.doc_id, selected.unit.unit_id))
+            if unit is not None and unit.knowledge:
+                # 重新加载的完整单元（含 knowledge）优先，供聚合使用
+                refreshed.append(
+                    SelectedKnowledgeUnit(
+                        unit=unit, source_revision=selected.source_revision
+                    )
+                )
+            else:
+                # 回退：重新加载后仍无 knowledge（如测试替身）时保持原单元，
+                # 由 build_for_units 按既有行为处理。
+                refreshed.append(selected)
+        return refreshed
 
     @staticmethod
     def _semantic_contract_version(
