@@ -237,7 +237,6 @@ class SkillRegressionEvaluatorRegistry:
             SafetyEvaluator(),
         ):
             self._evaluators[evaluator.case_type] = evaluator
-
     def evaluate(
         self,
         case: SkillRegressionCase,
@@ -258,3 +257,89 @@ class SkillRegressionEvaluatorRegistry:
                 ],
             )
         return evaluator.evaluate(case, output)
+
+
+# ── 评测运行集成：把回归用例跑成冻结记录 + 汇总 ──────────────────────
+
+import hashlib
+from src.domain.skill.governance_models import (
+    SkillRegressionEvalRecord,
+    SkillRegressionSummary,
+)
+
+
+def _case_snapshot_hash(case: SkillRegressionCase) -> str:
+    payload = (
+        f"{case.case_id}|{case.target_skill_id}|{case.case_type.value}|"
+        f"{case.expected_assertions.model_dump_json()}|{case.required}"
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def build_regression_records(
+    cases: list[SkillRegressionCase],
+    candidate_outputs: dict[str, dict[str, Any]],
+    candidate_version_id: str,
+    *,
+    registry: SkillRegressionEvaluatorRegistry | None = None,
+) -> tuple[list[SkillRegressionEvalRecord], SkillRegressionSummary]:
+    """对一批回归用例跑评测器，产出冻结记录 + 汇总（独立于路由 top1）。
+
+    candidate gate 当前纳入 safety/calculation 的 required=true 用例；
+    policy_content/citation 待证据版本冻结后纳入；answer_quality 待 rubric
+    稳定性达标后纳入。任何缺失 evaluator 返回 blocked，绝不生成 passed。
+    """
+    reg = registry or SkillRegressionEvaluatorRegistry()
+    records: list[SkillRegressionEvalRecord] = []
+    for case in cases:
+        output = candidate_outputs.get(case.case_id, {})
+        result = reg.evaluate(case, output)
+        records.append(
+            SkillRegressionEvalRecord(
+                case_id=case.case_id,
+                case_type=str(case.case_type.value),
+                candidate_version_id=candidate_version_id,
+                case_snapshot_hash=_case_snapshot_hash(case),
+                evaluator_version=result.evaluator_version,
+                passed=result.passed,
+                status=result.status,
+                failure_codes=list(result.failure_codes),
+                required=case.required,
+            )
+        )
+    return records, _summarize(records)
+
+
+_GATING_DIMENSIONS = frozenset(
+    {str(SkillErrorDimension.SAFETY.value), str(SkillErrorDimension.CALCULATION.value)}
+)
+
+
+def _summarize(
+    records: list[SkillRegressionEvalRecord],
+) -> SkillRegressionSummary:
+    total = len(records)
+    passed = sum(1 for r in records if r.passed)
+    failed = sum(1 for r in records if r.status == "failed")
+    blocked = sum(1 for r in records if r.status == "blocked_by_evaluator")
+    required_total = sum(1 for r in records if r.required)
+    required_passed = sum(1 for r in records if r.required and r.passed)
+    required_blocked = sum(
+        1 for r in records if r.required and r.status == "blocked_by_evaluator"
+    )
+    # gate：safety/calculation 的 required 用例必须全部通过
+    gating = [
+        r for r in records
+        if r.required and r.case_type in _GATING_DIMENSIONS
+    ]
+    gate_passed = all(r.passed for r in gating) if gating else True
+    return SkillRegressionSummary(
+        total=total,
+        passed=passed,
+        failed=failed,
+        blocked=blocked,
+        required_total=required_total,
+        required_passed=required_passed,
+        required_blocked=required_blocked,
+        gate_passed=gate_passed,
+    )

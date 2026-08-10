@@ -183,3 +183,59 @@ def test_activation_rechecks_suite_version_inside_storage_boundary() -> None:
             expected_revision=1,
             expected_suite_version=0,
         )
+
+
+def test_eval_run_round_trips_regression_results_and_summary() -> None:
+    """SkillEvalRun 新增的 regression_results/regression_summary 经存储原样往返。"""
+    from src.domain.skill.governance_models import (
+        SkillEvalRun,
+        SkillEvalRunStatus,
+        SkillRegressionEvalRecord,
+        SkillRegressionSummary,
+        SkillEvalMetrics,
+    )
+
+    storage = InMemorySkillGovernanceStorage()
+    run = SkillEvalRun(
+        run_id="run-1",
+        skill_id="demo-skill",
+        version_id="version-1",
+        baseline_version_id=None,
+        suite_version=1,
+        config_hash="a" * 64,
+        routing_manifest_hash="b" * 64,
+        status=SkillEvalRunStatus.PASSED,
+        metrics=SkillEvalMetrics(
+            total=1, passed=1, required_total=1, required_passed=1,
+            top1_accuracy=1.0, baseline_top1_accuracy=1.0,
+            regression_count=0, new_false_takeover_count=0, gate_passed=True,
+        ),
+        regression_results=[
+            SkillRegressionEvalRecord(
+                case_id="case-c",
+                case_type="calculation",
+                candidate_version_id="version-1",
+                case_snapshot_hash="c" * 64,
+                evaluator_version="1.0.0",
+                passed=True,
+                status="passed",
+                failure_codes=[],
+                required=True,
+            )
+        ],
+        regression_summary=SkillRegressionSummary(
+            total=1, passed=1, failed=0, blocked=0,
+            required_total=1, required_passed=1, required_blocked=0,
+            gate_passed=True,
+        ),
+        created_by="quality-user",
+    )
+    saved = storage.save_run(run)
+    fetched = storage.get_run("demo-skill", "run-1")
+    assert fetched is not None
+    assert len(fetched.regression_results) == 1
+    assert fetched.regression_results[0].case_id == "case-c"
+    assert fetched.regression_summary is not None
+    assert fetched.regression_summary.gate_passed is True
+    # 深拷贝：修改返回值不影响存储
+    assert saved is not fetched
