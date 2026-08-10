@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -160,6 +162,7 @@ def _snapshot_metric(
     definition: str = "发布时冻结的本次结算起付线金额",
     unit: str = "CNY",
     semantic_type: str = "Amount",
+    default_value: object = None,
 ) -> ObjectVersionMetric:
     return ObjectVersionMetric(
         metric_code=code,
@@ -173,6 +176,7 @@ def _snapshot_metric(
         source_field="settlement.deductible",
         source_adapter_port="InsuranceInterfacePort",
         importance="core",
+        default_value=default_value,
     )
 
 
@@ -480,8 +484,39 @@ def test_generate_does_not_send_sensitive_invalid_output_for_repair() -> None:
     assert "13800138000" not in str(captured.value)
 
 
+@pytest.mark.parametrize(
+    ("field", "secret"),
+    [
+        ("structured_description", "患者手机 13800138000"),
+        ("citation_summary", "身份证号 110101199001011234"),
+        ("uncertainty", "住院号 ZY12345"),
+        ("structured_owner", "api_key=proposal-secret"),
+    ],
+)
+def test_generate_rejects_sensitive_complete_model_output(
+    field: str, secret: str
+) -> None:
+    payload = _valid_model_payload()
+    if field == "structured_description":
+        payload["structured_config"]["basic"]["description"] = secret
+    elif field == "structured_owner":
+        payload["structured_config"]["basic"]["owner"] = secret
+    elif field == "citation_summary":
+        payload["citations"][0]["summary"] = secret
+    else:
+        payload["uncertainties"] = [secret]
+    gateway = FakeModelGateway([json.dumps(payload, ensure_ascii=False)])
+
+    with pytest.raises(SkillAISecurityRejectedError) as captured:
+        _service(gateway).generate(_request())
+
+    assert len(gateway.calls) == 1
+    assert secret not in str(captured.value)
+
+
 def test_generate_classifies_gateway_error_and_produces_no_proposal() -> None:
-    gateway_error = ModelTimeoutError("timeout", model_name="deepseek-reasoner")
+    secret = "provider echoed patient/script secret"
+    gateway_error = ModelTimeoutError(secret, model_name="deepseek-reasoner")
     gateway = FakeModelGateway([gateway_error])
 
     with pytest.raises(SkillAIModelError) as captured:
@@ -489,7 +524,12 @@ def test_generate_classifies_gateway_error_and_produces_no_proposal() -> None:
 
     assert captured.value.category == "timeout"
     assert captured.value.model_name == "deepseek-reasoner"
-    assert captured.value.__cause__ is gateway_error
+    assert captured.value.error_type == "ModelTimeoutError"
+    assert captured.value.error_hash == hashlib.sha256(secret.encode()).hexdigest()
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert secret not in str(captured.value)
+    assert secret not in repr(vars(captured.value))
     assert len(gateway.calls) == 1
 
 
@@ -558,6 +598,135 @@ def test_generate_hashes_ignore_live_metadata_but_cover_full_snapshot() -> None:
         "_"
     )[1]
     assert first.proposal_hash != changed_snapshot.proposal_hash
+
+
+def test_generate_proposal_hash_covers_validation_preview() -> None:
+    valid_registry = _registry()
+    blocking_registry = _registry()
+    blocking_registry._metrics["Settlement.deductible"].source_field = ""
+
+    valid = _service(
+        FakeModelGateway([_valid_model_json()]), registry=valid_registry
+    ).generate(_request())
+    blocking = _service(
+        FakeModelGateway([_valid_model_json()]), registry=blocking_registry
+    ).generate(_request())
+
+    assert valid.validation_preview.blocking_ok is True
+    assert blocking.validation_preview.blocking_ok is False
+    assert valid.proposal_hash != blocking.proposal_hash
+
+
+def test_generate_repairs_invalid_business_action_object_pair_once() -> None:
+    invalid = _valid_model_payload()
+    invalid["structured_config"]["business_mounting"]["business_action"] = "guide"
+    gateway = FakeModelGateway(
+        [json.dumps(invalid, ensure_ascii=False), _valid_model_json()]
+    )
+
+    proposal = _service(gateway).generate(_request())
+
+    assert proposal.structured_config.business_mounting.business_action == "explain"
+    assert len(gateway.calls) == 2
+
+
+def test_generate_rejects_invalid_business_pair_after_one_repair() -> None:
+    invalid = _valid_model_payload()
+    invalid["structured_config"]["business_mounting"]["business_action"] = "guide"
+    invalid_json = json.dumps(invalid, ensure_ascii=False)
+    gateway = FakeModelGateway([invalid_json, invalid_json])
+
+    with pytest.raises(SkillAIOutputInvalidError):
+        _service(gateway).generate(_request())
+
+    assert len(gateway.calls) == 2
+
+
+MODEL_RESPONSE_LIMIT = (384 + 256) * 1024
+
+
+@pytest.mark.parametrize(
+    ("character", "repeat_count"),
+    [
+        ("x", MODEL_RESPONSE_LIMIT + 1),
+        ("医", MODEL_RESPONSE_LIMIT // 3 + 1),
+    ],
+    ids=["ascii", "unicode"],
+)
+def test_generate_rejects_oversized_first_response_without_repair(
+    character: str,
+    repeat_count: int,
+) -> None:
+    oversized = character * repeat_count
+    gateway = FakeModelGateway([oversized, _valid_model_json()])
+
+    with pytest.raises(SkillAIOutputInvalidError) as captured:
+        _service(gateway).generate(_request())
+
+    assert "大小" in str(captured.value)
+    assert len(gateway.calls) == 1
+
+
+def test_generate_rejects_unencodable_first_response_without_repair() -> None:
+    gateway = FakeModelGateway(["\ud800", _valid_model_json()])
+
+    with pytest.raises(SkillAIOutputInvalidError):
+        _service(gateway).generate(_request())
+
+    assert len(gateway.calls) == 1
+
+
+def test_generate_rejects_oversized_repair_response() -> None:
+    gateway = FakeModelGateway(
+        ["not-json", "x" * (MODEL_RESPONSE_LIMIT + 1)]
+    )
+
+    with pytest.raises(SkillAIOutputInvalidError) as captured:
+        _service(gateway).generate(_request())
+
+    assert "大小" in str(captured.value)
+    assert len(gateway.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "invalid_json_value",
+    [
+        {"unordered"},
+        b"bytes",
+        math.nan,
+        math.inf,
+        -math.inf,
+    ],
+)
+def test_generate_rejects_non_strict_json_metric_snapshot(
+    invalid_json_value: object,
+) -> None:
+    registry = _registry(
+        snapshot_metrics=[
+            _snapshot_metric(
+                "Settlement.deductible", default_value=invalid_json_value
+            )
+        ]
+    )
+    gateway = FakeModelGateway([_valid_model_json()])
+
+    with pytest.raises(SkillAIInputInvalidError):
+        _service(gateway, registry=registry).generate(_request())
+
+    assert gateway.calls == []
+
+
+def test_generate_rejects_overly_deep_object_snapshot() -> None:
+    nested: dict[str, object] = {"leaf": "value"}
+    for _ in range(40):
+        nested = {"nested": nested}
+    registry = _registry(object_snapshot=nested)
+    gateway = FakeModelGateway([_valid_model_json()])
+
+    with pytest.raises(SkillAIInputInvalidError):
+        _service(gateway, registry=registry).generate(_request())
+
+    assert gateway.calls == []
 
 
 @pytest.mark.parametrize(

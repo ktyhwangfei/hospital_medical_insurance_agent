@@ -213,7 +213,9 @@ def test_skill_authoring_retry_log_redacts_provider_error(gateway, caplog):
     assert retry_record.error.startswith("ModelServerError:sha256:")
     assert prompt_secret not in str(retry_record.__dict__)
     assert provider_secret not in str(retry_record.__dict__)
-    assert captured.value.failures[0]["error_message"] == provider_secret
+    failure_summary = captured.value.failures[0]["error_message"]
+    assert failure_summary.startswith("ModelServerError:sha256:")
+    assert provider_secret not in failure_summary
 
 
 def test_non_authoring_retry_log_keeps_existing_error_text(gateway, caplog):
@@ -227,7 +229,7 @@ def test_non_authoring_retry_log_keeps_existing_error_text(gateway, caplog):
             "_call_provider",
             side_effect=ModelServerError(provider_error),
         ),
-        pytest.raises(ModelExhaustedError),
+        pytest.raises(ModelExhaustedError) as captured,
     ):
         gateway.generate(
             [Message(role="user", content="ordinary prompt")], "llm", "test"
@@ -237,6 +239,7 @@ def test_non_authoring_retry_log_keeps_existing_error_text(gateway, caplog):
         record for record in caplog.records if record.getMessage() == "model_retry"
     )
     assert retry_record.error == provider_error
+    assert captured.value.failures[0]["error_message"] == provider_error
 
 
 def test_skill_authoring_stream_redacts_error_but_reraises_same_object(
@@ -340,3 +343,37 @@ def test_generate_fills_empty_provider_model_name_from_route(gateway):
         result = gateway.generate(messages, "reasoning", "skill_authoring")
 
     assert result.model_name == routed_model
+
+
+def test_dummy_skill_authoring_records_hash_only_success_event(gateway):
+    gateway._config.base_url = "dummy"
+    prompt_secret = "PRIVATE DUMMY AUTHORING DESCRIPTION"
+    context_patch, recorder_patch = _recording_patches()
+
+    with context_patch, recorder_patch as recorder:
+        result = gateway.generate(
+            [Message(role="user", content=prompt_secret)],
+            "reasoning",
+            "skill_authoring",
+        )
+
+    event = recorder.call_args.kwargs
+    assert event["prompt_summary"].startswith("sha256:")
+    assert event["response_summary"].startswith("sha256:")
+    assert prompt_secret not in str(event)
+    assert result.content not in str(event)
+
+
+def test_dummy_non_authoring_records_existing_plaintext_summary(gateway):
+    gateway._config.base_url = "dummy"
+    prompt = "ordinary dummy prompt"
+    context_patch, recorder_patch = _recording_patches()
+
+    with context_patch, recorder_patch as recorder:
+        result = gateway.generate(
+            [Message(role="user", content=prompt)], "llm", "test"
+        )
+
+    event = recorder.call_args.kwargs
+    assert event["prompt_summary"] == prompt
+    assert event["response_summary"] == result.content

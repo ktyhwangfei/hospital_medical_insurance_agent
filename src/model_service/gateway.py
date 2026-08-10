@@ -132,12 +132,24 @@ class ModelGateway:
                     "===OFFICE_END===\n"
                 )
 
-            return ModelResponse(
+            result = ModelResponse(
                 content=content,
                 model_name="dummy_llm",
                 usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
                 finish_reason="stop"
             )
+            _record_llm_event(
+                model_name=result.model_name,
+                scene=scene,
+                prompt_summary=_audit_content_summary(
+                    messages[-1].content if messages else "", scene
+                ),
+                response_summary=_audit_content_summary(result.content, scene),
+                token_usage=result.usage,
+                latency_ms=0,
+                status="completed",
+            )
+            return result
 
         for current_model in chain:
             params = self._router.get_model_params(current_model)
@@ -207,7 +219,7 @@ class ModelGateway:
                     logger.warning("model_retry", extra={"model_name": current_model, "scene": scene, "attempt": attempt + 1, "error": _audit_error_summary(e, scene)})
                     if attempt < self._config.max_retries - 1:
                         continue
-                    failures.append({"model_name": current_model, "error_type": type(e).__name__, "error_message": str(e)})
+                    failures.append({"model_name": current_model, "error_type": type(e).__name__, "error_message": _audit_error_summary(e, scene)})
                     model_failed = True
                     break
 

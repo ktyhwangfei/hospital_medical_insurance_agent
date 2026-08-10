@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -12,6 +13,11 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from src.domain.common.actions import (
+    BusinessAction,
+    BusinessObject,
+    VALID_ACTION_OBJECT_PAIRS,
+)
 from src.domain.skill.draft_models import InputSpec
 from src.model_service.exceptions import (
     ModelAuthError,
@@ -49,6 +55,9 @@ _MODEL_TYPE = "reasoning"
 _SCENE = "skill_authoring"
 _MAX_DESCRIPTION_LENGTH = 4000
 _MAX_METRIC_CODES = 100
+# 384 KiB 原始文件总预算 + 256 KiB 结构化 DTO/溯源预算。
+_MAX_MODEL_RESPONSE_BYTES = (384 + 256) * 1024
+_MAX_STRICT_JSON_DEPTH = 32
 _CREDENTIAL_PATTERN = re.compile(
     r"(?i)(?:password|passwd|pwd|api[_-]?key|secret)\s*[=:]\s*\S+"
 )
@@ -99,10 +108,19 @@ class SkillAISecurityRejectedError(SkillAIAuthoringError):
 class SkillAIModelError(SkillAIAuthoringError):
     """保留 ModelGateway 分类信息的稳定服务边界错误。"""
 
-    def __init__(self, *, category: str, model_name: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        category: str,
+        model_name: str = "",
+        error_type: str = "",
+        error_hash: str = "",
+    ) -> None:
         super().__init__(f"Skill AI 模型调用失败（{category}）")
         self.category = category
         self.model_name = model_name
+        self.error_type = error_type
+        self.error_hash = error_hash
 
 
 class _GenerationRequest(Protocol):
@@ -188,6 +206,15 @@ class SkillAIAuthoringService:
             raise SkillAISecurityRejectedError(security.issues)
 
         validation_preview = self._validation_preview(model_output)
+        generated_at = self._clock()
+        provenance = SkillAIGenerationProvenance(
+            model_type=model_name,
+            scene=_SCENE,
+            prompt_version=SKILL_AUTHORING_PROMPT_VERSION,
+            metric_versions=metric_versions,
+            generated_at=generated_at,
+            content_hash=security.content_hash,
+        )
         proposal_hash = _canonical_hash(
             {
                 "citations": [
@@ -198,28 +225,15 @@ class SkillAIAuthoringService:
                     }
                     for citation in model_output.citations
                 ],
-                "content_hash": security.content_hash,
                 "input_hash": input_hash,
-                "metric_versions": [
-                    item.model_dump(mode="json") for item in metric_versions
-                ],
-                "model_type": model_name,
-                "prompt_version": SKILL_AUTHORING_PROMPT_VERSION,
+                "provenance": provenance.model_dump(mode="json"),
                 "raw_files": dict(model_output.raw_files),
                 "structured_config": model_output.structured_config.model_dump(
                     mode="json"
                 ),
                 "uncertainties": list(model_output.uncertainties),
+                "validation_preview": validation_preview.model_dump(mode="json"),
             }
-        )
-        generated_at = self._clock()
-        provenance = SkillAIGenerationProvenance(
-            model_type=model_name,
-            scene=_SCENE,
-            prompt_version=SKILL_AUTHORING_PROMPT_VERSION,
-            metric_versions=metric_versions,
-            generated_at=generated_at,
-            content_hash=security.content_hash,
         )
         generation_id = self._generation_id(input_hash)
         return SkillAIGenerationResponse(
@@ -255,7 +269,13 @@ class SkillAIAuthoringService:
     def _freeze_metric_versions(
         self, metric_codes: tuple[str, ...]
     ) -> tuple[tuple[SkillMetricVersionRef, ...], tuple[Mapping[str, object], ...]]:
+        # Task 4 将把快照读取提升为公开依赖；此处先对现有私有注册表做能力校验。
         registry = self._input_service._registry  # noqa: SLF001
+        if any(
+            not callable(getattr(registry, method_name, None))
+            for method_name in ("get_metric", "get_object", "get_object_version")
+        ):
+            raise SkillAIInputInvalidError("指标注册表不支持不可变版本快照")
         versions: list[SkillMetricVersionRef] = []
         prompt_snapshots: list[Mapping[str, object]] = []
         for metric_code in metric_codes:
@@ -289,6 +309,10 @@ class SkillAIAuthoringService:
                 raise SkillAIMetricNotPublishedError(metric_code) from exc
             if object_version < 1:
                 raise SkillAIMetricNotPublishedError(metric_code)
+            metric_snapshot = snapshot_metric.model_dump(mode="python")
+            object_snapshot = object_version_record.snapshot
+            _validate_strict_json(metric_snapshot)
+            _validate_strict_json(object_snapshot)
             versions.append(
                 SkillMetricVersionRef(
                     metric_code=metric_code,
@@ -299,9 +323,9 @@ class SkillAIAuthoringService:
             )
             prompt_snapshots.append(
                 {
-                    "metric": snapshot_metric.model_dump(mode="json"),
+                    "metric": metric_snapshot,
                     "object_code": object_version_record.object_code,
-                    "object_snapshot": object_version_record.snapshot,
+                    "object_snapshot": object_snapshot,
                     "object_version": object_version,
                     "snapshot_id": object_version_record.version_id,
                     "status": "published",
@@ -310,6 +334,7 @@ class SkillAIAuthoringService:
         return tuple(versions), tuple(prompt_snapshots)
 
     def _call_gateway(self, messages: list[Message]) -> ModelResponse:
+        safe_error: SkillAIModelError | None = None
         try:
             return self._gateway.generate(
                 messages,
@@ -318,31 +343,45 @@ class SkillAIAuthoringService:
                 max_tokens=self._max_tokens,
             )
         except Exception as exc:
-            raise _model_error(exc) from exc
+            safe_error = _model_error(exc)
+        # 在 except 作用域外抛出，避免 provider 原始异常进入 cause/context 链。
+        raise safe_error from None
 
     def _parse_or_repair(
         self, response: ModelResponse
     ) -> tuple[SkillAIModelOutput, ModelResponse]:
+        _validate_model_response_content(response.content)
         try:
-            return SkillAIModelOutput.model_validate_json(response.content), response
+            output = SkillAIModelOutput.model_validate_json(response.content)
         except (ValidationError, ValueError):
             if _contains_sensitive_content(response.content):
                 raise SkillAIOutputInvalidError(
                     "模型输出包含敏感信息，拒绝结构修复"
                 ) from None
-            repair_messages = [
-                Message(role="system", content=build_system_prompt(operation="repair")),
-                Message(role="user", content=build_repair_prompt(response.content)),
-            ]
-            repaired = self._call_gateway(repair_messages)
+        else:
+            _ensure_complete_output_safe(output)
             try:
-                return SkillAIModelOutput.model_validate_json(
-                    repaired.content
-                ), repaired
-            except (ValidationError, ValueError) as final_error:
-                raise SkillAIOutputInvalidError(
-                    "模型输出在一次结构修复后仍不符合严格 DTO"
-                ) from final_error
+                _validate_business_pair(output)
+            except SkillAIOutputInvalidError:
+                pass
+            else:
+                return output, response
+
+        repair_messages = [
+            Message(role="system", content=build_system_prompt(operation="repair")),
+            Message(role="user", content=build_repair_prompt(response.content)),
+        ]
+        repaired = self._call_gateway(repair_messages)
+        _validate_model_response_content(repaired.content)
+        try:
+            repaired_output = SkillAIModelOutput.model_validate_json(repaired.content)
+        except (ValidationError, ValueError) as final_error:
+            raise SkillAIOutputInvalidError(
+                "模型输出在一次结构修复后仍不符合严格 DTO"
+            ) from final_error
+        _ensure_complete_output_safe(repaired_output)
+        _validate_business_pair(repaired_output)
+        return repaired_output, repaired
 
     @staticmethod
     def _require_requested_metrics(
@@ -402,10 +441,84 @@ def _model_error(exc: Exception) -> SkillAIModelError:
         (label for error_type, label in categories if isinstance(exc, error_type)),
         "unexpected",
     )
+    error_text = str(exc)
     return SkillAIModelError(
         category=category,
         model_name=str(getattr(exc, "model_name", "")),
+        error_type=type(exc).__name__,
+        error_hash=hashlib.sha256(
+            error_text.encode("utf-8", errors="replace")
+        ).hexdigest(),
     )
+
+
+def _validate_model_response_content(content: str) -> None:
+    try:
+        encoded = content.encode("utf-8")
+    except UnicodeEncodeError:
+        raise SkillAIOutputInvalidError("模型响应不是可编码的 UTF-8 文本") from None
+    if len(encoded) > _MAX_MODEL_RESPONSE_BYTES:
+        raise SkillAIOutputInvalidError("模型响应大小超过 640 KiB 上限")
+
+
+def _ensure_complete_output_safe(output: SkillAIModelOutput) -> None:
+    canonical_output = json.dumps(
+        output.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if _contains_sensitive_content(canonical_output):
+        raise SkillAISecurityRejectedError(
+            (
+                SkillAISecurityIssue(
+                    code="AI_SENSITIVE_CONTENT",
+                    message="AI 生成提案包含不允许输出的敏感信息",
+                    path="model_output",
+                ),
+            )
+        )
+
+
+def _validate_business_pair(output: SkillAIModelOutput) -> None:
+    mounting = output.structured_config.business_mounting
+    try:
+        pair = (
+            BusinessAction(mounting.business_action),
+            BusinessObject(mounting.business_object),
+        )
+    except ValueError:
+        raise SkillAIOutputInvalidError("业务动作与业务对象不在平台能力矩阵中") from None
+    if pair not in VALID_ACTION_OBJECT_PAIRS:
+        raise SkillAIOutputInvalidError("业务动作与业务对象不在平台能力矩阵中")
+
+
+def _validate_strict_json(value: object, *, depth: int = 0) -> None:
+    if depth > _MAX_STRICT_JSON_DEPTH:
+        raise SkillAIInputInvalidError("指标快照超过允许的 JSON 嵌套深度")
+    if value is None or isinstance(value, (bool, int)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise SkillAIInputInvalidError("指标快照包含非有限浮点数")
+        return
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise SkillAIInputInvalidError("指标快照包含不可编码文本") from None
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_strict_json(item, depth=depth + 1)
+        return
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise SkillAIInputInvalidError("指标快照 JSON 对象键必须为字符串")
+        for item in value.values():
+            _validate_strict_json(item, depth=depth + 1)
+        return
+    raise SkillAIInputInvalidError("指标快照仅允许严格 JSON 数据类型")
 
 
 def _canonical_hash(value: Any) -> str:
