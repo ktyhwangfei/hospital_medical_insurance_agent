@@ -1,0 +1,100 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-10T06:24:56.064Z",
+  "phase": "skill-ai-authoring",
+  "phase_name": "Skill AI 编写与候选隔离",
+  "phase_dir": "",
+  "plan": 1,
+  "task": 4,
+  "total_tasks": 9,
+  "status": "paused",
+  "completed_tasks": [
+    {
+      "id": 1,
+      "name": "冻结 AI 编写领域契约与跨层 DTO",
+      "status": "done",
+      "commit": "7cbaa6f,0ba8014,9de3920"
+    },
+    {
+      "id": 2,
+      "name": "建立生成文件、AST、敏感信息和大小门禁",
+      "status": "done",
+      "commit": "161318f,4f4d3c5,95bb651,d7956f0,93302c0"
+    },
+    {
+      "id": 3,
+      "name": "通过 ModelGateway 生成可追溯 proposal",
+      "status": "done",
+      "commit": "536c13e,93aafb6,c49b3ee,983b803"
+    },
+    {
+      "id": 4,
+      "name": "提供生成与原子接受 API",
+      "status": "in_progress",
+      "progress": "仅完成只读调查；未写 Task 4 文件，未运行 RED。已确认 ShortStateStore 可作 evidence 底层，幂等 helper 可泛型复用，package generator 已忽略 __ 元数据文件。"
+    }
+  ],
+  "remaining_tasks": [
+    {
+      "id": 5,
+      "name": "在新建向导接入 AI 生成与手工降级",
+      "status": "not_started"
+    },
+    {
+      "id": 6,
+      "name": "基于 revision 生成优化 diff",
+      "status": "not_started"
+    },
+    {
+      "id": 7,
+      "name": "在编辑页展示并接受优化 diff",
+      "status": "not_started"
+    },
+    {
+      "id": 8,
+      "name": "构建不导入运行时的候选制品与隔离评测",
+      "status": "not_started"
+    },
+    {
+      "id": 9,
+      "name": "完成端到端验收、可观测性和进度记录",
+      "status": "not_started"
+    }
+  ],
+  "blockers": [],
+  "human_actions_pending": [],
+  "decisions": [
+    {
+      "decision": "Task 4 proposal evidence 使用受控 ShortStateStore/cache 适配，禁止 route 全局裸 dict",
+      "rationale": "现有 Redis/内存实现可注入、可设 TTL，且可与 API 测试 dependency override 配合。",
+      "phase": "skill-ai-authoring"
+    },
+    {
+      "decision": "完整 proposal 可存 evidence state，audit/log 只记录 ID、hash、model、prompt version 与 metric refs",
+      "rationale": "满足 accept 的服务端证据比对，同时避免 description/script 进入日志和审计正文。",
+      "phase": "skill-ai-authoring"
+    },
+    {
+      "decision": "将现有幂等 helper 的 reserve/get/complete/conflict 逻辑最小泛型化，不另造幂等规则",
+      "rationale": "保持 release 与 AI accept 的冲突、恢复和 TTL 语义一致。",
+      "phase": "skill-ai-authoring"
+    },
+    {
+      "decision": "Task 4 收敛 Task 3 私有 registry 访问，通过显式窄 Protocol/DI 读不可变 metric snapshot",
+      "rationale": "避免继续依赖 SkillInputService._registry 私有字段。",
+      "phase": "skill-ai-authoring"
+    },
+    {
+      "decision": "服务启停只能使用 ..\\ws.ps1",
+      "rationale": "项目 AGENTS.md 的硬性多工作区端口约束。",
+      "phase": "skill-ai-authoring"
+    }
+  ],
+  "uncommitted_files": [
+    "src/domain/skill/governance_models.py",
+    "src/runtime/skill_management/regression_evaluators.py",
+    "src/tests/unit/runtime/skill_management/test_regression_run_integration.py"
+  ],
+  "next_action": "先确认并避开外部 Portal 未提交文件；然后在 test_skill_draft_api.py 中增加 generate/accept 的最小 API、权限、篡改、evidence 失效和幂等测试，用 dependency_overrides 注入 fake gateway/registry/evidence store，运行测试确认新端点 404 RED。",
+  "context_notes": "计划文件为 docs/superpowers/plans/2026-08-10-skill-ai-authoring.md。Task 1-3 已按 TDD + 规格审查 + 质量审查完成。Task 4 子代理已停止，没有写代码。当前没有服务器/监视进程由本工作流启动。共享 HEAD 在暂停期间由其他代理前进到 429503d；Task 3 最终提交仍为 983b803。共享工作区曾多次发生其他代理的 commit 误带本任务新建文件，恢复后必须显式按文件/分块暂存并检查 git diff --cached。"
+}
