@@ -87,6 +87,12 @@ def _source_hash(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _coerce_reason_code(reason_code: SkillFeedbackReasonCode) -> SkillFeedbackReasonCode:
+    if isinstance(reason_code, SkillFeedbackReasonCode):
+        return reason_code
+    return SkillFeedbackReasonCode(str(reason_code))
+
+
 class RegressionMiningService:
     def __init__(
         self,
@@ -108,6 +114,7 @@ class RegressionMiningService:
         comment: str | None,
         idempotency_key: str,
     ) -> SkillEvalCasePoolItem:
+        reason_code = _coerce_reason_code(reason_code)
         source = self._load_and_authorize(principal, qa_turn_id)
         dimension = reason_code_to_dimension(reason_code)
         snapshot = sanitize_regression_snapshot(
@@ -143,6 +150,7 @@ class RegressionMiningService:
     ) -> list[HistoryMiningOutcome]:
         if len(qa_turn_ids) > _BATCH_LIMIT:
             raise ValueError(f"批量入池上限为 {_BATCH_LIMIT} 条")
+        reason_code = _coerce_reason_code(reason_code)
         dimension = reason_code_to_dimension(reason_code)
         results: list[HistoryMiningOutcome] = []
         for qa_turn_id in qa_turn_ids:
