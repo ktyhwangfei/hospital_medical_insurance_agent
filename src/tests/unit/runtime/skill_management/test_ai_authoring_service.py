@@ -600,6 +600,39 @@ def test_generate_hashes_ignore_live_metadata_but_cover_full_snapshot() -> None:
     assert first.proposal_hash != changed_snapshot.proposal_hash
 
 
+def test_accept_rejects_changed_metric_snapshot_with_same_version() -> None:
+    registry = _registry()
+    service = _service(
+        FakeModelGateway([_valid_model_json()]), registry=registry
+    )
+    evidence = service.generate_with_evidence(_request())
+    registry._versions[("Settlement", "3")] = BusinessObjectVersion(
+        version_id="snapshot-v3",
+        object_code="Settlement",
+        version="3",
+        snapshot={
+            "object_code": "Settlement",
+            "name": "结算快照",
+            "definition": "同版本内容被替换",
+            "domain_code": "settlement",
+        },
+        metrics=[
+            _snapshot_metric(
+                "Settlement.deductible",
+                definition="同版本指标定义被替换",
+            )
+        ],
+        published_by="snapshot-publisher",
+        changelog="same version replacement",
+    )
+
+    with pytest.raises(SkillAIMetricNotPublishedError):
+        service.verify_for_accept(
+            evidence.proposal,
+            metric_snapshot_hash=evidence.metric_snapshot_hash,
+        )
+
+
 def test_generate_proposal_hash_covers_validation_preview() -> None:
     valid_registry = _registry()
     blocking_registry = _registry()

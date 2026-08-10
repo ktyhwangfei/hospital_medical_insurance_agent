@@ -325,6 +325,8 @@ def _idempotent_mutation(
     operation: Callable[[], object],
     response_model: type[_TResponse],
     recovery: Callable[[], object | None] | None = None,
+    result_metadata: Callable[[_TResponse], dict[str, object]] | None = None,
+    replay: Callable[[dict[str, object]], object | None] | None = None,
 ) -> _TResponse:
     scoped_key = f"skill-governance:{scope}:{idempotency_key}"
     serialized = json.dumps(
@@ -342,6 +344,17 @@ def _idempotent_mutation(
                         "Idempotency-Key 已用于不同请求",
                     ),
                 )
+            if replay is not None:
+                replayed = replay(existing)
+                if replayed is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=error_detail(
+                            "IDEMPOTENCY_RESULT_UNAVAILABLE",
+                            "幂等结果关联资源不存在",
+                        ),
+                    )
+                return response_model.model_validate(replayed.model_dump())
             return response_model.model_validate(existing)
         cache_key = f"idempotency:{scoped_key}"
         reservation = store.get_json(cache_key)
@@ -361,7 +374,11 @@ def _idempotent_mutation(
             if recovered is not None:
                 response = response_model.model_validate(recovered.model_dump())
                 stored = {
-                    **response.model_dump(mode="json"),
+                    **(
+                        result_metadata(response)
+                        if result_metadata is not None
+                        else response.model_dump(mode="json")
+                    ),
                     "_request_hash": request_hash,
                 }
                 try:
@@ -401,7 +418,14 @@ def _idempotent_mutation(
         except Exception:
             logger.exception("Failed to release Skill idempotency key: %s", scoped_key)
         raise
-    stored = {**response.model_dump(mode="json"), "_request_hash": request_hash}
+    stored = {
+        **(
+            result_metadata(response)
+            if result_metadata is not None
+            else response.model_dump(mode="json")
+        ),
+        "_request_hash": request_hash,
+    }
     try:
         store.complete(scoped_key, stored, ttl_seconds=86400)
     except Exception:
@@ -1051,11 +1075,15 @@ def generate_skill_ai_proposal(
     evidence_store: SkillIdempotencyStoreDependency,
 ) -> SkillAIGenerationResponse:
     try:
-        proposal = service.generate(request)
+        generated = service.generate_with_evidence(request)
+        proposal = generated.proposal
         evidence_store.save_state(
             _AI_EVIDENCE_NAMESPACE,
             proposal.generation_id,
-            {"proposal": proposal.model_dump(mode="json")},
+            {
+                "proposal": proposal.model_dump(mode="json"),
+                "metric_snapshot_hash": generated.metric_snapshot_hash,
+            },
             _AI_EVIDENCE_TTL_SECONDS,
         )
         return proposal
@@ -1087,65 +1115,15 @@ def accept_skill_ai_proposal(
     idempotency_key: IdempotencyKey,
     evidence_store: SkillIdempotencyStoreDependency,
 ) -> SkillDraftResponse:
-    try:
-        state = evidence_store.load_state(
-            _AI_EVIDENCE_NAMESPACE, request.generation_id
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=error_detail(
-                "SKILL_AI_EVIDENCE_STORE_UNAVAILABLE", "AI proposal 证据存储不可用"
-            ),
-        ) from exc
-    if state is None or not isinstance(state.get("proposal"), dict):
-        raise _ai_evidence_conflict(
-            "AI proposal 证据已过期或不存在",
-            code="SKILL_AI_EVIDENCE_INVALID",
-        )
-    try:
-        proposal = SkillAIGenerationResponse.model_validate(state["proposal"])
-    except (ValidationError, ValueError) as exc:
-        raise _ai_evidence_conflict(
-            "AI proposal 服务端证据无效",
-            code="SKILL_AI_EVIDENCE_INVALID",
-        ) from exc
-
-    request_provenance = (
-        request.provenance.model_dump(mode="json")
-        if request.provenance is not None
-        else proposal.provenance.model_dump(mode="json")
-    )
-    basic = proposal.structured_config.basic
-    if (
-        request.proposal_hash != proposal.proposal_hash
-        or request.skill_id != basic.skill_id
-        or request.skill_name != basic.skill_name
-        or request.structured_config.model_dump(mode="json")
-        != proposal.structured_config.model_dump(mode="json")
-        or request.raw_files != dict(proposal.raw_files)
-        or request_provenance != proposal.provenance.model_dump(mode="json")
-    ):
-        raise _ai_evidence_conflict(
-            "客户端 proposal 与服务端证据不一致",
-            code="SKILL_AI_EVIDENCE_CONFLICT",
-        )
-    try:
-        authoring_service.verify_for_accept(proposal)
-    except SkillAIMetricNotPublishedError as exc:
-        raise _ai_evidence_conflict(
-            str(exc), code="SKILL_AI_EVIDENCE_STALE"
-        ) from exc
-    except (SkillAIOutputInvalidError, SkillAISecurityRejectedError) as exc:
-        raise _ai_evidence_conflict(
-            str(exc), code="SKILL_AI_EVIDENCE_CONFLICT"
-        ) from exc
-
     canonical_client = json.dumps(
         {
             "structured_config": request.structured_config.model_dump(mode="json"),
             "raw_files": request.raw_files,
-            "provenance": request_provenance,
+            "provenance": (
+                request.provenance.model_dump(mode="json")
+                if request.provenance is not None
+                else None
+            ),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1154,6 +1132,77 @@ def accept_skill_ai_proposal(
     content_hash = hashlib.sha256(canonical_client.encode("utf-8")).hexdigest()
     scope = f"ai-draft:{request.generation_id}"
     draft_id = f"draft-{_idempotent_release_id(scope, idempotency_key)[:12]}"
+
+    def create_first_draft() -> SkillDraftResponse:
+        try:
+            state = evidence_store.load_state(
+                _AI_EVIDENCE_NAMESPACE, request.generation_id
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=error_detail(
+                    "SKILL_AI_EVIDENCE_STORE_UNAVAILABLE",
+                    "AI proposal 证据存储不可用",
+                ),
+            ) from exc
+        if state is None or not isinstance(state.get("proposal"), dict):
+            raise _ai_evidence_conflict(
+                "AI proposal 证据已过期或不存在",
+                code="SKILL_AI_EVIDENCE_INVALID",
+            )
+        metric_snapshot_hash = state.get("metric_snapshot_hash")
+        if not isinstance(metric_snapshot_hash, str) or len(metric_snapshot_hash) != 64:
+            raise _ai_evidence_conflict(
+                "AI proposal 服务端证据无效",
+                code="SKILL_AI_EVIDENCE_INVALID",
+            )
+        try:
+            proposal = SkillAIGenerationResponse.model_validate(state["proposal"])
+        except (ValidationError, ValueError) as exc:
+            raise _ai_evidence_conflict(
+                "AI proposal 服务端证据无效",
+                code="SKILL_AI_EVIDENCE_INVALID",
+            ) from exc
+
+        request_provenance = (
+            request.provenance.model_dump(mode="json")
+            if request.provenance is not None
+            else proposal.provenance.model_dump(mode="json")
+        )
+        basic = proposal.structured_config.basic
+        if (
+            request.proposal_hash != proposal.proposal_hash
+            or request.skill_id != basic.skill_id
+            or request.skill_name != basic.skill_name
+            or request.structured_config.model_dump(mode="json")
+            != proposal.structured_config.model_dump(mode="json")
+            or request.raw_files != dict(proposal.raw_files)
+            or request_provenance != proposal.provenance.model_dump(mode="json")
+        ):
+            raise _ai_evidence_conflict(
+                "客户端 proposal 与服务端证据不一致",
+                code="SKILL_AI_EVIDENCE_CONFLICT",
+            )
+        try:
+            authoring_service.verify_for_accept(
+                proposal,
+                metric_snapshot_hash=metric_snapshot_hash,
+            )
+        except (SkillAIMetricNotFoundError, SkillAIMetricNotPublishedError) as exc:
+            raise _ai_evidence_conflict(
+                str(exc), code="SKILL_AI_EVIDENCE_STALE"
+            ) from exc
+        except (SkillAIOutputInvalidError, SkillAISecurityRejectedError) as exc:
+            raise _ai_evidence_conflict(
+                str(exc), code="SKILL_AI_EVIDENCE_CONFLICT"
+            ) from exc
+        return draft_service.create_from_ai(
+            proposal=proposal,
+            created_by=principal.user_id,
+            draft_id=draft_id,
+        )
+
     try:
         return _idempotent_mutation(
             store=evidence_store,
@@ -1166,12 +1215,12 @@ def accept_skill_ai_proposal(
                 "created_by": principal.user_id,
             },
             response_model=SkillDraftResponse,
-            operation=lambda: draft_service.create_from_ai(
-                proposal=proposal,
-                created_by=principal.user_id,
-                draft_id=draft_id,
-            ),
+            operation=create_first_draft,
             recovery=lambda: draft_service.get_draft(draft_id),
+            result_metadata=lambda response: {"draft_id": response.draft_id},
+            replay=lambda stored: draft_service.get_draft(
+                str(stored.get("draft_id", ""))
+            ),
         )
     except SkillDraftConflictError as exc:
         raise HTTPException(

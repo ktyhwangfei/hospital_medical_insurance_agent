@@ -29,6 +29,7 @@ from src.runtime.skill_management.ai_authoring.schemas import (
 from src.runtime.skill_management.ai_authoring.security import SkillAISecurityIssue
 from src.runtime.skill_management.ai_authoring.service import (
     SkillAIModelError,
+    SkillAIMetricNotFoundError,
     SkillAIMetricNotPublishedError,
     SkillAISecurityRejectedError,
 )
@@ -136,15 +137,30 @@ class _FakeAIAuthoringService:
         self.proposal = _proposal()
         self.generate_error: Exception | None = None
         self.verify_error: Exception | None = None
+        self.metric_snapshot_hash = "c" * 64
+        self.current_metric_snapshot_hash = self.metric_snapshot_hash
 
     def generate(self, _request):
         if self.generate_error:
             raise self.generate_error
         return self.proposal
 
-    def verify_for_accept(self, _proposal):
+    def generate_with_evidence(self, _request):
+        if self.generate_error:
+            raise self.generate_error
+        return SimpleNamespace(
+            proposal=self.proposal,
+            metric_snapshot_hash=self.metric_snapshot_hash,
+        )
+
+    def verify_for_accept(self, _proposal, *, metric_snapshot_hash=None):
         if self.verify_error:
             raise self.verify_error
+        if (
+            metric_snapshot_hash is not None
+            and metric_snapshot_hash != self.current_metric_snapshot_hash
+        ):
+            raise SkillAIMetricNotPublishedError("settlement.total_amount")
 
 
 @pytest.fixture
@@ -312,6 +328,28 @@ def test_accept_ai_proposal_creates_one_ai_generated_draft_idempotently(client):
     assert "__generation_meta__.json" in drafts[0].raw_files
 
 
+def test_accept_ai_proposal_replays_completed_result_after_evidence_is_deleted(client):
+    payload = _generate_and_accept_payload(client)
+    headers = {**_auth_headers(), "Idempotency-Key": "accept-replay-expired"}
+    first = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai", json=payload, headers=headers
+    )
+    assert first.status_code == 201, first.text
+    stored = client._cache.get_result(  # type: ignore[attr-defined]
+        "skill-governance:ai-draft:gen-api-1:accept-replay-expired"
+    )
+    assert set(stored or {}) == {"draft_id", "_request_hash"}
+
+    client._cache.delete_state("skill-ai-authoring", payload["generation_id"])  # type: ignore[attr-defined]
+    second = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai", json=payload, headers=headers
+    )
+
+    assert second.status_code == 201, second.text
+    assert second.json()["draft_id"] == first.json()["draft_id"]
+    assert len(client._draft_storage.list_drafts()) == 1  # type: ignore[attr-defined]
+
+
 @pytest.mark.parametrize("tamper", ["proposal_hash", "provenance"])
 def test_accept_ai_proposal_rejects_client_tampering(client, tamper):
     payload = _generate_and_accept_payload(client)
@@ -353,6 +391,38 @@ def test_accept_ai_proposal_rechecks_published_metric_snapshot(client):
     )
     assert resp.status_code == 409
     assert resp.json()["detail"]["error_code"] == "SKILL_AI_EVIDENCE_STALE"
+
+
+def test_accept_ai_proposal_maps_deleted_metric_to_stale_evidence(client):
+    payload = _generate_and_accept_payload(client)
+    client._ai_service.verify_error = SkillAIMetricNotFoundError(  # type: ignore[attr-defined]
+        "settlement.total_amount"
+    )
+
+    resp = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai",
+        json=payload,
+        headers={**_auth_headers(), "Idempotency-Key": "deleted-metric"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error_code"] == "SKILL_AI_EVIDENCE_STALE"
+    assert client._draft_storage.list_drafts() == []  # type: ignore[attr-defined]
+
+
+def test_accept_ai_proposal_rejects_changed_snapshot_with_same_version(client):
+    payload = _generate_and_accept_payload(client)
+    client._ai_service.current_metric_snapshot_hash = "d" * 64  # type: ignore[attr-defined]
+
+    resp = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai",
+        json=payload,
+        headers={**_auth_headers(), "Idempotency-Key": "changed-snapshot"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error_code"] == "SKILL_AI_EVIDENCE_STALE"
+    assert client._draft_storage.list_drafts() == []  # type: ignore[attr-defined]
 
 
 # ── 复制 ──────────────────────────────────────────────────────────

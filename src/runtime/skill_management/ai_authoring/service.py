@@ -8,6 +8,7 @@ import math
 import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -137,6 +138,12 @@ class _Gateway(Protocol):
     ) -> ModelResponse: ...
 
 
+@dataclass(frozen=True)
+class _SkillAIGenerationEvidence:
+    proposal: SkillAIGenerationResponse
+    metric_snapshot_hash: str
+
+
 class SkillMetricRegistryPort(Protocol):
     """只读指标版本窄端口，用于生成与接受时冻结同一证据。"""
 
@@ -181,8 +188,16 @@ class SkillAIAuthoringService:
     def generate(self, request: _GenerationRequest) -> SkillAIGenerationResponse:
         """生成 proposal；任何失败都不会写草稿、文件或 proposal 存储。"""
 
+        return self.generate_with_evidence(request).proposal
+
+    def generate_with_evidence(
+        self, request: _GenerationRequest
+    ) -> _SkillAIGenerationEvidence:
+        """生成公开 proposal 及仅供短期服务端证据使用的指标快照指纹。"""
+
         description, metric_codes = self._validate_request(request)
         metric_versions, prompt_snapshots = self._freeze_metric_versions(metric_codes)
+        metric_snapshot_hash = _canonical_hash(list(prompt_snapshots))
         input_hash = _canonical_hash(
             {
                 "description": description,
@@ -245,7 +260,7 @@ class SkillAIAuthoringService:
             uncertainties=model_output.uncertainties,
         )
         generation_id = self._generation_id(input_hash)
-        return SkillAIGenerationResponse(
+        proposal = SkillAIGenerationResponse(
             generation_id=generation_id,
             proposal_hash=proposal_hash,
             structured_config=model_output.structured_config,
@@ -255,8 +270,17 @@ class SkillAIAuthoringService:
             citations=model_output.citations,
             uncertainties=model_output.uncertainties,
         )
+        return _SkillAIGenerationEvidence(
+            proposal=proposal,
+            metric_snapshot_hash=metric_snapshot_hash,
+        )
 
-    def verify_for_accept(self, proposal: SkillAIGenerationResponse) -> None:
+    def verify_for_accept(
+        self,
+        proposal: SkillAIGenerationResponse,
+        *,
+        metric_snapshot_hash: str | None = None,
+    ) -> None:
         """接受前重算哈希、复验已发布指标快照并重跑安全扫描。"""
 
         expected_hash = _proposal_hash(
@@ -273,8 +297,14 @@ class SkillAIAuthoringService:
         metric_codes = tuple(
             item.metric_code for item in proposal.provenance.metric_versions
         )
-        current_versions, _ = self._freeze_metric_versions(metric_codes)
+        current_versions, current_snapshots = self._freeze_metric_versions(metric_codes)
         if current_versions != proposal.provenance.metric_versions:
+            stale_code = metric_codes[0] if metric_codes else "unknown"
+            raise SkillAIMetricNotPublishedError(stale_code)
+        if (
+            metric_snapshot_hash is not None
+            and _canonical_hash(list(current_snapshots)) != metric_snapshot_hash
+        ):
             stale_code = metric_codes[0] if metric_codes else "unknown"
             raise SkillAIMetricNotPublishedError(stale_code)
         security = scan_ai_generated_files(proposal.raw_files)
