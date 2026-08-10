@@ -328,6 +328,25 @@ def test_accept_ai_proposal_creates_one_ai_generated_draft_idempotently(client):
     assert "__generation_meta__.json" in drafts[0].raw_files
 
 
+def test_accept_ai_proposal_uses_one_draft_across_different_idempotency_keys(client):
+    payload = _generate_and_accept_payload(client)
+    first = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai",
+        json=payload,
+        headers={**_auth_headers(), "Idempotency-Key": "proposal-key-1"},
+    )
+    second = client.post(
+        f"{PREFIX}/infra-skills/drafts/from-ai",
+        json=payload,
+        headers={**_auth_headers(), "Idempotency-Key": "proposal-key-2"},
+    )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert second.json()["draft_id"] == first.json()["draft_id"]
+    assert len(client._draft_storage.list_drafts()) == 1  # type: ignore[attr-defined]
+
+
 def test_accept_ai_proposal_replays_completed_result_after_evidence_is_deleted(client):
     payload = _generate_and_accept_payload(client)
     headers = {**_auth_headers(), "Idempotency-Key": "accept-replay-expired"}

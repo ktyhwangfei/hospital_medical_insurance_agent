@@ -18,8 +18,9 @@ structured_config 约定结构（随 P2/P4 扩展）::
 
 from __future__ import annotations
 
-import uuid
+import hashlib
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -155,6 +156,9 @@ class SkillDraftService:
     ) -> SkillDraft:
         """人工接受后单次原子保存 AI_GENERATED 草稿。"""
 
+        deterministic_draft_id = self.ai_draft_id(proposal.generation_id)
+        if draft_id is not None and draft_id != deterministic_draft_id:
+            raise SkillDraftConflictError("AI 草稿 ID 与 generation_id 不一致")
         config = proposal.structured_config.model_dump(mode="json")
         basic = config["basic"]
         generation_meta = {
@@ -178,14 +182,54 @@ class SkillDraftService:
             sort_keys=True,
             separators=(",", ":"),
         )
-        return self._persist_new(
-            skill_id=str(basic["skill_id"]),
-            skill_name=str(basic["skill_name"]),
-            source_type=SkillDraftSourceType.AI_GENERATED,
-            created_by=created_by,
-            structured_config=config,
-            raw_files=raw_files,
-            draft_id=draft_id,
+        try:
+            return self._persist_new(
+                skill_id=str(basic["skill_id"]),
+                skill_name=str(basic["skill_name"]),
+                source_type=SkillDraftSourceType.AI_GENERATED,
+                created_by=created_by,
+                structured_config=config,
+                raw_files=raw_files,
+                draft_id=deterministic_draft_id,
+            )
+        except SkillDraftConflictError as exc:
+            existing = self._storage.get_draft(deterministic_draft_id)
+            if existing is not None and self._matches_ai_proposal(existing, proposal):
+                return existing
+            raise SkillDraftConflictError(
+                "generation_id 已关联不同的 AI proposal 草稿"
+            ) from exc
+
+    @staticmethod
+    def ai_draft_id(generation_id: str) -> str:
+        digest = hashlib.sha256(generation_id.encode("utf-8")).hexdigest()
+        return f"draft-{digest[:12]}"
+
+    @staticmethod
+    def _matches_ai_proposal(
+        draft: SkillDraft, proposal: SkillAIGenerationResponse
+    ) -> bool:
+        if draft.source_type != SkillDraftSourceType.AI_GENERATED:
+            return False
+        raw_metadata = draft.raw_files.get("__generation_meta__.json")
+        if not isinstance(raw_metadata, str):
+            return False
+        try:
+            metadata = json.loads(raw_metadata)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        return (
+            isinstance(metadata, dict)
+            and set(metadata)
+            == {
+                "generation_id",
+                "proposal_hash",
+                "provenance",
+                "citations",
+                "uncertainties",
+            }
+            and metadata.get("generation_id") == proposal.generation_id
+            and metadata.get("proposal_hash") == proposal.proposal_hash
         )
 
     # ── 读写 ──────────────────────────────────────────────────────

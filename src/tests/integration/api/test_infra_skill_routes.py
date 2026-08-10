@@ -12,13 +12,14 @@ from src.data_platform.storage.skill.governance_in_memory import InMemorySkillGo
 from src.data_platform.cache.in_memory import InMemoryCacheClient
 from src.runtime.api.app import create_app
 from src.runtime.api.infra_skill_routes import (
-    _idempotent_release_mutation,
+    _idempotent_mutation,
     get_skill_control_principal,
     get_skill_evaluation_principal,
     get_skill_governance_service,
     get_skill_idempotency_store,
     get_skill_version_service,
 )
+from src.runtime.api.skill_schemas import SkillReleaseResponse
 from src.runtime.skill_management.governance_service import SkillGovernanceService
 from src.domain.skill.governance_models import SkillRelease, SkillReleaseStatus
 from src.runtime.skill_management.version_service import SkillVersionService
@@ -69,20 +70,22 @@ def test_idempotent_mutation_recovers_after_result_cache_failure() -> None:
         persisted = release
         return release
 
-    first = _idempotent_release_mutation(
+    first = _idempotent_mutation(
         store=store,
         scope="demo:candidate",
         idempotency_key="stable-key",
         request_payload={"version_id": "version-1"},
         operation=operation,
+        response_model=SkillReleaseResponse,
         recovery=lambda: persisted,
     )
-    second = _idempotent_release_mutation(
+    second = _idempotent_mutation(
         store=store,
         scope="demo:candidate",
         idempotency_key="stable-key",
         request_payload={"version_id": "version-1"},
         operation=operation,
+        response_model=SkillReleaseResponse,
         recovery=lambda: persisted,
     )
 
@@ -90,15 +93,71 @@ def test_idempotent_mutation_recovers_after_result_cache_failure() -> None:
     assert calls == 1
 
     with pytest.raises(HTTPException) as exc_info:
-        _idempotent_release_mutation(
+        _idempotent_mutation(
             store=store,
             scope="demo:candidate",
             idempotency_key="stable-key",
             request_payload={"version_id": "different-version"},
             operation=operation,
+            response_model=SkillReleaseResponse,
             recovery=lambda: persisted,
         )
     assert exc_info.value.status_code == 409
+
+
+def test_idempotent_mutation_cleans_reservation_when_request_hash_init_fails() -> None:
+    class _FailingRequestHashStore(InMemoryCacheClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_request_hash_once = True
+
+        def set_json(self, key, value, ttl_seconds):
+            if self.fail_request_hash_once and "request_hash" in value:
+                self.fail_request_hash_once = False
+                raise RuntimeError("request hash init failed")
+            return super().set_json(key, value, ttl_seconds)
+
+    store = _FailingRequestHashStore()
+    release = SkillRelease(
+        release_id="retry-release",
+        skill_id="demo-skill",
+        version_id="version-1",
+        environment="test",
+        status=SkillReleaseStatus.CANDIDATE,
+        eval_run_id="run-1",
+        artifact_hash="a" * 64,
+        config_hash="b" * 64,
+        created_by="developer",
+    )
+    calls = 0
+
+    def operation() -> SkillRelease:
+        nonlocal calls
+        calls += 1
+        return release
+
+    with pytest.raises(HTTPException) as exc_info:
+        _idempotent_mutation(
+            store=store,
+            scope="demo:reservation-cleanup",
+            idempotency_key="retry-key",
+            request_payload={"version_id": "version-1"},
+            operation=operation,
+            response_model=SkillReleaseResponse,
+        )
+    assert exc_info.value.status_code == 503
+
+    retried = _idempotent_mutation(
+        store=store,
+        scope="demo:reservation-cleanup",
+        idempotency_key="retry-key",
+        request_payload={"version_id": "version-1"},
+        operation=operation,
+        response_model=SkillReleaseResponse,
+    )
+
+    assert retried.release_id == "retry-release"
+    assert calls == 1
 
 
 def test_skill_release_controls_are_disabled_without_explicit_dev_mode(

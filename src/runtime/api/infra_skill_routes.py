@@ -329,6 +329,8 @@ def _idempotent_mutation(
     replay: Callable[[dict[str, object]], object | None] | None = None,
 ) -> _TResponse:
     scoped_key = f"skill-governance:{scope}:{idempotency_key}"
+    cache_key = f"idempotency:{scoped_key}"
+    reservation_acquired = False
     serialized = json.dumps(
         request_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
@@ -356,7 +358,6 @@ def _idempotent_mutation(
                     )
                 return response_model.model_validate(replayed.model_dump())
             return response_model.model_validate(existing)
-        cache_key = f"idempotency:{scoped_key}"
         reservation = store.get_json(cache_key)
         if (
             reservation is not None
@@ -397,14 +398,31 @@ def _idempotent_mutation(
                     "相同 Idempotency-Key 的请求正在处理中",
                 ),
             )
+        reservation_acquired = True
         store.set_json(
             cache_key,
             {"status": "reserved", "request_hash": request_hash},
             ttl_seconds=86400,
         )
     except HTTPException:
+        if reservation_acquired:
+            try:
+                store.delete(cache_key)
+            except Exception:
+                logger.exception(
+                    "Failed to release initialized Skill idempotency key: %s",
+                    scoped_key,
+                )
         raise
     except Exception as exc:
+        if reservation_acquired:
+            try:
+                store.delete(cache_key)
+            except Exception:
+                logger.exception(
+                    "Failed to release initialized Skill idempotency key: %s",
+                    scoped_key,
+                )
         raise HTTPException(
             status_code=503,
             detail=error_detail("IDEMPOTENCY_STORE_UNAVAILABLE", "幂等存储不可用"),
@@ -1131,7 +1149,7 @@ def accept_skill_ai_proposal(
     )
     content_hash = hashlib.sha256(canonical_client.encode("utf-8")).hexdigest()
     scope = f"ai-draft:{request.generation_id}"
-    draft_id = f"draft-{_idempotent_release_id(scope, idempotency_key)[:12]}"
+    draft_id = draft_service.ai_draft_id(request.generation_id)
 
     def create_first_draft() -> SkillDraftResponse:
         try:
