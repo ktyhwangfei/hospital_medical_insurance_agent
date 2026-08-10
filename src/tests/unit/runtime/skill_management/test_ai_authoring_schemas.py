@@ -204,6 +204,38 @@ def test_ai_output_allows_uncertainty_without_citation() -> None:
     assert proposal.citations == ()
 
 
+@pytest.mark.parametrize(
+    "citation",
+    [
+        {"source_type": "", "source_id": "", "summary": ""},
+        {
+            "source_type": "   ",
+            "source_id": "Settlement.deductible@3",
+            "summary": "已发布指标快照",
+        },
+        {
+            "source_type": "metric_registry",
+            "source_id": "   ",
+            "summary": "已发布指标快照",
+        },
+        {
+            "source_type": "metric_registry",
+            "source_id": "Settlement.deductible@3",
+            "summary": "   ",
+        },
+    ],
+)
+def test_ai_output_rejects_blank_citation_without_uncertainty(
+    citation: dict[str, str],
+) -> None:
+    payload = _valid_ai_response().model_dump()
+    payload["citations"] = [citation]
+    payload["uncertainties"] = []
+
+    with pytest.raises(ValidationError):
+        SkillAIGenerationResponse.model_validate(payload)
+
+
 def test_ai_proposal_rejects_invalid_hashes_and_nested_unknown_fields() -> None:
     payload = _valid_ai_response().model_dump()
     payload["proposal_hash"] = "A" * 64

@@ -136,6 +136,13 @@ class _TraceableAIOutput(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _require_traceability(self) -> "_TraceableAIOutput":
+        if any(
+            not citation.source_type.strip()
+            or not citation.source_id.strip()
+            or not citation.summary.strip()
+            for citation in self.citations
+        ):
+            raise ValueError("citation 的 source_type/source_id/summary 不得为空")
         if not self.citations and not self.uncertainties:
             raise ValueError("AI 输出必须携带 citation 或声明 uncertainty")
         return self
