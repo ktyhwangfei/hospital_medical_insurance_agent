@@ -23,6 +23,8 @@ import type {
   SkillAIAcceptRequest,
   SkillAIOptimizeRequest,
   SkillAIOptimizationProposal,
+  SkillCandidateRouteEvaluationResponse,
+  SkillCandidateBehaviorEvaluationResponse,
 } from './types'
 
 const DEV_SKILL_CONTROL_TOKEN =
@@ -173,6 +175,34 @@ export async function previewSkillPackage(
   return requestJson<SkillPackagePreviewResponse>(
     `/infra-skills/drafts/${encodeURIComponent(draftId)}/package-preview`,
     { method: 'POST' },
+  )
+}
+
+export async function evaluateSkillCandidateRoutes(
+  draftId: string,
+  caseIds: string[] = [],
+): Promise<SkillCandidateRouteEvaluationResponse> {
+  return requestJson<SkillCandidateRouteEvaluationResponse>(
+    `/infra-skills/drafts/${encodeURIComponent(draftId)}/candidate-evaluations/routes`,
+    {
+      method: 'POST',
+      headers: skillControlHeaders(),
+      body: JSON.stringify({ case_ids: caseIds }),
+    },
+  )
+}
+
+export async function evaluateSkillCandidateBehavior(
+  draftId: string,
+  caseIds: string[] = [],
+): Promise<SkillCandidateBehaviorEvaluationResponse> {
+  return requestJson<SkillCandidateBehaviorEvaluationResponse>(
+    `/infra-skills/drafts/${encodeURIComponent(draftId)}/candidate-evaluations/behavior`,
+    {
+      method: 'POST',
+      headers: skillControlHeaders(),
+      body: JSON.stringify({ case_ids: caseIds }),
+    },
   )
 }
 

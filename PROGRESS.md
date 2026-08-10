@@ -32,12 +32,12 @@
 | 模型服务与管理 | 4 | 0 | 4 | 0 | 0 | — |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 | 知识库管理 | 3 | 0 | 3 | 0 | 0 | §2 P9 5 tab 已上线，详见 §2 |
-| 技能管理 | 5 | 2 | 3 | 0 | 0 | 阶段 2 批量评测与 test 发布门禁已验证 |
+| 技能管理 | 8 | 5 | 3 | 0 | 0 | Skill AI 创作、候选隔离评测与人工物化主链已验证 |
 | 运营看板 | 2 | 0 | 2 | 0 | 0 | — |
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **35** | **2** | **29** | **2** | **2** | — |
+| **合计** | **38** | **5** | **29** | **2** | **2** | — |
 
 > **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6 和 §4 为准；
@@ -104,6 +104,7 @@
 | 7.5 | 固定路由评测与 test 发布门禁：候选/基线差异、人工审批、唯一 active 与 shadow resolver | `skill_infra/route_evaluator.py` → `runtime/skill_management/governance_service.py` → `infra_skill_routes.py` → Portal `/skills` | verified |
 | 7.6 | Skill 治理工作台方案 2：聚合读模型、双栏目录、生命周期证据、单主动作发布与调试抽屉 | `runtime/skill_management/workbench_service.py` → `/infra-skills/workbench` → Portal `/skills` | verified |
 | 7.7 | Skill 管理工作台（草稿生命周期）：草稿 CRUD/复制（乐观锁）、校验/包生成、导入（ZIP/Git/受控目录）、输入指标契约与语义层交互、物化+版本登记+loader 热重载、停用/恢复/归档 | `domain/skill/draft_models.py` → `data_platform/storage/skill/draft_*` → `runtime/skill_management/{draft_service,draft_validator,package_generator,import_service,skill_input_service,materializer,lifecycle_service}.py` → `infra_skill_routes.py` → Portal `/skills`（四页签） | verified |
+| 7.8 | Skill AI 创作与候选评测：已发布指标生成、人工接受、差异优化、草稿校验、隔离路由/行为评测、人工物化 | `runtime/skill_management/ai_authoring` → `candidate_evaluation.py` → `infra_skill_routes.py` → Portal `/skills/new` 与草稿编辑器 | verified |
 
 7.4 验证证据（2026-08-05）：T1 新功能相关测试 18 passed；T2a Skill API 10 passed；T2b 版本目录 Flow 1 passed；Portal Vitest 3 passed、变更文件 ESLint 通过、Next.js build 通过；Chromium E2E 1 passed。旧 `test_skill_mention.py` / `test_skill_intent_matching.py` 中 8 个请求已下线路由的 404 为预存测试债务，不计入 7.4 通过证据。
 
@@ -114,6 +115,8 @@
 兼容与回滚：运行时仍由 `SkillLoader` / `SkillRouter` 选择当前文件系统 Skill；test active 仅由 Release Resolver 以 shadow 模式解析，不切换真实流量。需要回滚控制面时停止调用 eval/release 端点即可，已登记版本、评测与发布证据不会影响现有业务执行。
 
 7.7 验证证据（2026-08-06）：按 T1 → T2a → T2b 顺序分别为 138 passed（单元：存储 35/草稿 14/校验包 18/导入 17/输入指标 12/物化 8/生命周期 10/回归 24）、20 passed（API：草稿 14 + 端到端流程 5 + 导入 1）、5 passed（Flow：创建→保存→校验→物化→停用→恢复→归档）；Portal Vitest 118 passed（含 API client 10 + 新建向导 4）、Next.js build 通过。真实浏览器验证：经前端代理全链路 2xx（物化 201 + 版本登记）。物化写盘后 loader 热重载（`rediscover()`），占位 assembler 提供 `load()` 入口。
+
+7.8 验证证据（2026-08-10）：Task 8 完成候选制品隔离目录、固定路由快照、Docker 行为执行适配器与 fail-closed 策略（提交 `1775779`）；Task 9 补齐六个低基数 AI 创作指标、Portal 候选评测面板和完整 Flow。按 T1 → T2a → T2b 顺序为 104/56/1 passed；Portal Vitest 31 文件 268 passed，变更范围 ESLint 零错误，Next.js 16.2.12 生产构建通过，`skill` 工作区 3173 端口 Chromium E2E 1 passed（含 390px 横向溢出门禁）。当前 Windows 环境未安装 Docker CLI，候选 runner 镜像需在部署环境构建并配置；镜像不可用时行为评测会阻断，不会回退到宿主机执行。
 
 #### 运营看板 / 嵌入式 / 安全与审计 / 适配器接入
 | # | 单元 | 状态 | 备注 |
@@ -320,6 +323,7 @@
 | 2026-08-07 | **Skill 管理页功能错误修复（GitHub issue #12）**：修复 `/skills` 草稿编辑/生命周期工作流的前端缺陷——①`skill-draft-api.ts` 6 个写操作（save/validate/delete/disable/restore/archive）漏带 `Authorization` 头，后端 dev 模式鉴权一律 401；②`deleteSkillDraft` 漏传必填 `expected_revision` 查询参数（额外 422，与 AGENTS.md 已知陷阱一致）；③校验结果响应契约错配：前端类型声明 `report:{blocking,warnings}` 而后端返回扁平 `issues`（+`has_blocking`/`revision`），编辑页读 `validation.report.blocking` 触发 TypeError 崩页，`issue.field` 应为 `issue.path`+`severity`。修复后 create→save→validate→delete 全链路经 dev token 2xx；Portal Vitest 224 passed（skill 子集 33）、tsc EXIT=0、next build 通过 | §7 Skill 管理；`infra_skill_routes` 草稿/生命周期端点 |
 | 2026-08-07 | **Skill 工作台“操作过深”重构（issue #12 体验）**：治理动作从 5 Tab 钻取（选中→总览→Tab→找按钮，3-4 层）降为工作台顶层一键执行。新增纯函数 `computePrimaryAction` 依据已加载证据（item/versions/evalRuns/releases）推导唯一下一步（运行评测/创建候选/申请审批/人工审批/激活/查看证据/已激活），由顶层 `SkillPrimaryActionBar` 直接执行写操作并刷新证据，navigate 态仅切 Tab，dev 环境只读禁用。复用既有 api-client 动作函数与 Token 体系，不引入新依赖；色彩沿用蓝/琥珀/翠绿 tint 与 portal 一致。Portal Vitest 235 passed（新增 `skill-primary-action` 11 例、改写 workbench 2 例验证“不进 Tab 即见主动作”）、tsc EXIT=0、next build 通过、设计反模式检测 [] | §7.6 Skill 工作台；Portal `/skills` 工作区 |
 | 2026-08-07 | **Skill 页面两个 bug 修复**：①`/skills` 顶部页签（Skill/草稿/评测记录/发布记录）active 态错乱——“Skill” tab 正则 `/\/skills\/[^/]+(\/edit)?$/` 误匹配 drafts/evaluations/releases，导致无论在哪个子页都高亮“Skill”；改为显式排除保留路径段（`RESERVED_SEGS`）。②`/skills` 工作台目录与所有 skill 列表全空（“没有符合条件的 Skill”）——前端 dev 进程复用旧实例、`NEXT_PUBLIC_API_BASE_URL` 仍指向 next.config 默认 8000，API 代理转发到错误后端实例（空数据）；重启前端指向本工作区后端 8173 修复，并记录陷阱到 AGENTS.md。Portal Vitest 235 passed、tsc EXIT=0、Orca 浏览器验证目录显示 settlement_explain_skill 与页签高亮均正确 | §7 Skill 管理；Portal `/skills` layout + 工作台 |
+| 2026-08-10 | **Skill AI 创作与候选隔离评测完成**：已发布指标→AI 候选→人工接受→差异优化→校验→固定路由/隔离行为评测→人工物化全链路通过；补齐低基数观测指标与 fail-closed 部署约束 | §7.8 Skill AI 创作 |
 
 ---
 

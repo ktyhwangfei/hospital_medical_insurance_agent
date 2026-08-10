@@ -483,6 +483,36 @@ export interface SkillEvalRunCreateRequest {
   baseline_version_id?: string | null
 }
 
+export type SkillCandidateEvaluationStatus =
+  | 'completed'
+  | 'failed'
+  | 'blocked_by_evaluator'
+
+export interface SkillCandidateRouteEvaluationResponse {
+  artifact_hash: string
+  case_snapshot_hash: string
+  status: SkillCandidateEvaluationStatus
+  metrics: SkillEvalMetricsResponse | null
+  results: SkillEvalResultResponse[]
+  blocked_reason: string | null
+}
+
+export interface SkillCandidateBehaviorResultResponse {
+  case_id: string
+  status: 'passed' | 'failed' | 'blocked_by_evaluator'
+  passed: boolean
+  output: Record<string, unknown> | null
+  blocked_reason: string | null
+}
+
+export interface SkillCandidateBehaviorEvaluationResponse {
+  artifact_hash: string
+  case_snapshot_hash: string
+  status: SkillCandidateEvaluationStatus
+  results: SkillCandidateBehaviorResultResponse[]
+  blocked_reason: string | null
+}
+
 export interface SkillReleaseResponse {
   release_id: string
   skill_id: string

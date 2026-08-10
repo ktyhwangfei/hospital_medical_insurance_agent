@@ -11,4 +11,11 @@ METRICS = {
     'skill_eval_confirm_total': '人工确认总数',
     'skill_eval_blocked_total': '评测阻断总数',
     'skill_eval_dimension_total': '按错误维度的案例计数',
+    # Skill AI 编写仅允许 scene/status/reason_code 低基数标签，禁止内容与业务 ID。
+    'skill_ai_generation_total': 'Skill AI 生成请求总数',
+    'skill_ai_generation_success_total': 'Skill AI 生成成功总数',
+    'skill_ai_generation_rejected_total': 'Skill AI 生成拒绝总数',
+    'skill_ai_output_parse_failure_total': 'Skill AI 输出解析失败总数',
+    'skill_ai_unsafe_code_total': 'Skill AI 不安全代码拒绝总数',
+    'skill_ai_manual_accept_total': 'Skill AI 提案人工接受总数',
 }

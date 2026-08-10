@@ -12,6 +12,7 @@ import {
   ApiClientError,
 } from '@/lib/skill-draft-api'
 import { SkillGenerationDiff } from '@/components/skills/skill-generation-diff'
+import { SkillCandidateEvaluationPanel } from '@/components/skills/skill-candidate-evaluation-panel'
 import type {
   SkillDraftResponse, SkillStructuredConfig, SkillValidationResponse,
   SkillPackagePreviewResponse, SkillInputSelectorResponse, SkillInputValidationResponse,
@@ -147,6 +148,11 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
     try {
       const result = await validateSkillDraft(draft.draft_id)
       setValidation(result)
+      setDraft((current) => current ? {
+        ...current,
+        status: result.blocking_ok ? 'validated' : 'editing',
+        revision: result.revision,
+      } : current)
     } catch (err) {
       setError(err instanceof ApiClientError ? err.detail.message : '校验失败')
     } finally {
@@ -229,7 +235,7 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
         <ArrowLeft className="h-4 w-4" /> 返回草稿列表
       </button>
 
-      <header className="flex items-center justify-between">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold tracking-tight text-slate-900">
             编辑草稿：{draft.skill_name}
@@ -239,7 +245,7 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
             {' · '}状态: {draft.status} · revision: {draft.revision}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button onClick={() => void handleSave()} disabled={busy === 'save'} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
             {busy === 'save' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} 保存
           </button>
@@ -317,6 +323,11 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
           }}
         />
       )}
+
+      <SkillCandidateEvaluationPanel
+        draftId={draft.draft_id}
+        disabled={draft.status !== 'validated'}
+      />
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* 结构化编辑 */}

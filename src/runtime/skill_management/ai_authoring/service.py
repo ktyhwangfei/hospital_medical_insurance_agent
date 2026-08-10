@@ -99,6 +99,10 @@ class SkillAIMetricNotPublishedError(SkillAIAuthoringError):
 class SkillAIOutputInvalidError(SkillAIAuthoringError):
     """模型在最多一次结构修复后仍不满足严格 DTO。"""
 
+    def __init__(self, message: str, *, reason_code: str = "output_invalid") -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
 
 class SkillAIRevisionConflictError(SkillAIAuthoringError):
     """优化请求基于过期草稿 revision。"""
@@ -560,7 +564,8 @@ class SkillAIAuthoringService:
             repaired_output = SkillAIModelOutput.model_validate_json(repaired.content)
         except (ValidationError, ValueError) as final_error:
             raise SkillAIOutputInvalidError(
-                "模型输出在一次结构修复后仍不符合严格 DTO"
+                "模型输出在一次结构修复后仍不符合严格 DTO",
+                reason_code="output_parse_failure",
             ) from final_error
         _ensure_complete_output_safe(repaired_output)
         _validate_business_pair(repaired_output)
@@ -709,7 +714,10 @@ def _validate_model_response_content(content: str) -> None:
     try:
         encoded = content.encode("utf-8")
     except UnicodeEncodeError:
-        raise SkillAIOutputInvalidError("模型响应不是可编码的 UTF-8 文本") from None
+        raise SkillAIOutputInvalidError(
+            "模型响应不是可编码的 UTF-8 文本",
+            reason_code="output_parse_failure",
+        ) from None
     if len(encoded) > _MAX_MODEL_RESPONSE_BYTES:
         raise SkillAIOutputInvalidError("模型响应大小超过 640 KiB 上限")
 

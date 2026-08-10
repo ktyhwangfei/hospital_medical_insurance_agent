@@ -15,6 +15,8 @@ import {
   generateSkillAIProposal,
   acceptSkillAIProposal,
   optimizeSkillAIDraft,
+  evaluateSkillCandidateRoutes,
+  evaluateSkillCandidateBehavior,
 } from '@/lib/skill-draft-api'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -161,6 +163,40 @@ describe('skill-draft-api client', () => {
     const init = fetchMock.mock.calls[0][1] as RequestInit
     expect(init.method).toBe('POST')
     expect(JSON.parse(String(init.body)).expected_revision).toBe(3)
+  })
+
+  it('runs typed candidate route and behavior evaluations with auth', async () => {
+    const routeResult = {
+      artifact_hash: 'a'.repeat(64),
+      case_snapshot_hash: 'b'.repeat(64),
+      status: 'completed',
+      metrics: { total: 1, passed: 1, required_total: 1, required_passed: 1, top1_accuracy: 1, baseline_top1_accuracy: 0, regression_count: 0, new_false_takeover_count: 0, gate_passed: true },
+      results: [],
+      blocked_reason: null,
+    }
+    const behaviorResult = {
+      artifact_hash: 'a'.repeat(64),
+      case_snapshot_hash: 'c'.repeat(64),
+      status: 'blocked_by_evaluator',
+      results: [],
+      blocked_reason: 'sandbox_unavailable',
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(routeResult))
+      .mockResolvedValueOnce(jsonResponse(behaviorResult))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await evaluateSkillCandidateRoutes('d-1')
+    await evaluateSkillCandidateBehavior('d-1')
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/drafts/d-1/candidate-evaluations/routes')
+    expect(fetchMock.mock.calls[1][0]).toContain('/drafts/d-1/candidate-evaluations/behavior')
+    for (const call of fetchMock.mock.calls) {
+      const init = call[1] as RequestInit
+      expect(init.method).toBe('POST')
+      expect(new Headers(init.headers).get('Authorization')).toMatch(/^Bearer /)
+      expect(JSON.parse(String(init.body))).toEqual({ case_ids: [] })
+    }
   })
 
   it('deletes a draft with expected_revision and auth header', async () => {

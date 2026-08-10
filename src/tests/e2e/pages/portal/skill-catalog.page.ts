@@ -13,7 +13,7 @@ export class SkillCatalogPage extends BasePage {
   readonly releasePanel: Locator;
 
   constructor(page: Page) {
-    super(page, 'http://127.0.0.1:3000');
+    super(page, (process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3000').replace(/\/$/, ''));
     this.title = page.getByRole('heading', { name: 'Skill 管理' });
     this.workspace = page.getByTestId('skill-governance-workbench');
     this.lifecycle = page.getByLabel('Skill 生命周期');
@@ -25,6 +25,34 @@ export class SkillCatalogPage extends BasePage {
   async goto(): Promise<void> {
     await super.goto('/skills');
     await this.title.waitFor({ state: 'visible' });
+  }
+
+  async gotoAIAuthoring(): Promise<void> {
+    await super.goto('/skills/new');
+    await this.page.getByRole('button', { name: 'AI 创建' }).click();
+    await this.page.getByRole('heading', { name: 'AI 创建 Skill 草稿' }).waitFor({ state: 'visible' });
+  }
+
+  async generateAndAcceptAIDraft(metricName: string, description: string): Promise<void> {
+    await this.page.getByPlaceholder('描述你希望 Skill 完成的能力').fill(description);
+    await this.page.getByLabel(metricName).check();
+    await this.page.getByRole('button', { name: '生成候选' }).click();
+    await this.page.getByText('尚未进入运行时').waitFor({ state: 'visible' });
+    await this.page.getByRole('button', { name: '接受为草稿' }).click();
+    await this.page.getByRole('heading', { name: /\u7f16\u8f91\u8349\u7a3f/ }).waitFor({ state: 'visible' });
+  }
+
+  async optimizeValidateAndEvaluateCandidate(): Promise<void> {
+    await this.page.getByLabel('AI 优化要求').fill('简化解释并补充收费员提示');
+    await this.page.getByRole('button', { name: '生成优化提案' }).click();
+    await this.page.getByRole('region', { name: 'AI 优化差异' }).waitFor({ state: 'visible' });
+    await this.page.getByRole('button', { name: '接受优化' }).click();
+    await this.page.getByText('优化已接受并保存').waitFor({ state: 'visible' });
+    await this.page.getByRole('button', { name: '校验' }).click();
+    await this.page.getByRole('button', { name: '运行候选路由评测' }).click();
+    await this.page.getByText('路由评测：已完成').waitFor({ state: 'visible' });
+    await this.page.getByRole('button', { name: '运行候选行为评测' }).click();
+    await this.page.getByText('行为评测：已完成').waitFor({ state: 'visible' });
   }
 
   catalogItem(skillId: string): Locator {

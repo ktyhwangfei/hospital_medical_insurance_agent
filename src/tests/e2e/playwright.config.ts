@@ -41,7 +41,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
-  webServer: [
+  webServer: process.env.PLAYWRIGHT_EXTERNAL_SERVERS ? undefined : [
     {
       command: 'uvicorn src.runtime.api.app:create_app --host 127.0.0.1 --port 8000 --factory',
       port: 8000,

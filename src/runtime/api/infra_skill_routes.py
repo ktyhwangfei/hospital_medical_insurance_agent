@@ -38,6 +38,7 @@ from src.data_platform.storage.skill.governance_ports import (
 )
 from src.data_platform.cache import create_cache_client
 from src.data_platform.cache.ports import IdempotencyStore, ShortStateStore
+from src.observability import metrics as observability_metrics
 
 logger = logging.getLogger(__name__)
 from src.runtime.api.schemas import (
@@ -1139,6 +1140,24 @@ def _ai_authoring_error(exc: SkillAIAuthoringError) -> HTTPException:
     return HTTPException(status_code=422, detail=error_detail(code, str(exc)))
 
 
+def _skill_ai_metric_reason(exc: SkillAIAuthoringError) -> str:
+    if isinstance(exc, SkillAISecurityRejectedError):
+        return "unsafe_code"
+    if isinstance(exc, SkillAIOutputInvalidError):
+        return exc.reason_code
+    if isinstance(exc, SkillAIInputInvalidError):
+        return "input_invalid"
+    if isinstance(exc, SkillAIMetricNotFoundError):
+        return "metric_not_found"
+    if isinstance(exc, SkillAIMetricNotPublishedError):
+        return "metric_not_published"
+    if isinstance(exc, SkillAIRevisionConflictError):
+        return "revision_conflict"
+    if isinstance(exc, SkillAIModelError):
+        return "model_error"
+    return "other"
+
+
 @router.post(
     "/infra-skills/ai-generate",
     response_model=SkillAIGenerationResponse,
@@ -1149,6 +1168,7 @@ def generate_skill_ai_proposal(
     _principal: SkillControlPrincipalDependency,
     evidence_store: SkillIdempotencyStoreDependency,
 ) -> SkillAIGenerationResponse:
+    observability_metrics.record_skill_ai_generation_started()
     try:
         generated = service.generate_with_evidence(request)
         proposal = generated.proposal
@@ -1161,10 +1181,17 @@ def generate_skill_ai_proposal(
             },
             _AI_EVIDENCE_TTL_SECONDS,
         )
+        observability_metrics.record_skill_ai_generation_success()
         return proposal
     except SkillAIAuthoringError as exc:
+        observability_metrics.record_skill_ai_generation_rejected(
+            _skill_ai_metric_reason(exc)
+        )
         raise _ai_authoring_error(exc) from exc
     except Exception as exc:
+        observability_metrics.record_skill_ai_generation_rejected(
+            "evidence_unavailable"
+        )
         raise HTTPException(
             status_code=503,
             detail=error_detail(
@@ -1198,14 +1225,23 @@ def optimize_skill_ai_draft(
                 f"草稿 revision 冲突: expected={request.expected_revision}, actual={draft.revision}",
             ),
         )
+    observability_metrics.record_skill_ai_generation_started()
     try:
-        return authoring_service.optimize(draft, request)
+        proposal = authoring_service.optimize(draft, request)
+        observability_metrics.record_skill_ai_generation_success()
+        return proposal
     except SkillAIRevisionConflictError as exc:
+        observability_metrics.record_skill_ai_generation_rejected(
+            "revision_conflict"
+        )
         raise HTTPException(
             status_code=409,
             detail=error_detail("SKILL_DRAFT_CONFLICT", str(exc)),
         ) from exc
     except SkillAIAuthoringError as exc:
+        observability_metrics.record_skill_ai_generation_rejected(
+            _skill_ai_metric_reason(exc)
+        )
         raise _ai_authoring_error(exc) from exc
 
 
@@ -1308,11 +1344,13 @@ def accept_skill_ai_proposal(
             raise _ai_evidence_conflict(
                 str(exc), code="SKILL_AI_EVIDENCE_CONFLICT"
             ) from exc
-        return draft_service.create_from_ai(
+        created = draft_service.create_from_ai(
             proposal=proposal,
             created_by=principal.user_id,
             draft_id=draft_id,
         )
+        observability_metrics.record_skill_ai_manual_accept()
+        return created
 
     try:
         return _idempotent_mutation(
