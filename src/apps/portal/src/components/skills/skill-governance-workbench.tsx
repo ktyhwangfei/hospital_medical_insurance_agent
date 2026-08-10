@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 import { getSkillGovernanceWorkbench, listInfraSkillCatalog } from '@/lib/api-client'
 import type {
@@ -21,8 +22,6 @@ import SkillWorkspace from './skill-workspace'
 const VALID_TABS = new Set<SkillWorkbenchTab>([
   'overview',
   'versions',
-  'evaluation',
-  'release',
   'development',
 ])
 const VALID_STATUSES = new Set<SkillGovernanceStatus>([
@@ -95,6 +94,7 @@ function catalogFallback(item: InfraSkillCatalogItem): SkillWorkbenchItem {
 }
 
 export default function SkillGovernanceWorkbench() {
+  const router = useRouter()
   const [initialState] = useState(readWorkbenchUrl)
   const [items, setItems] = useState<SkillWorkbenchItem[]>([])
   const [summary, setSummary] = useState<SkillWorkbenchSummary | null>(null)
@@ -244,6 +244,7 @@ export default function SkillGovernanceWorkbench() {
               activeTab={activeTab}
               environment={environment}
               onTabChange={setActiveTab}
+              onOpenTopPage={(page) => router.push(`/skills/${page}?skill=${selectedItem.skill_id}`)}
               onOpenExecution={() => setExecutionDrawerOpen(true)}
               onChanged={() => {
                 prepareCatalogReload()

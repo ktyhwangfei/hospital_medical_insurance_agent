@@ -24,11 +24,9 @@ import type {
 } from '@/lib/types'
 
 import SkillDevelopmentTab from './skill-development-tab'
-import SkillEvaluationSuite from './skill-evaluation-suite'
 import SkillLifecycleStepper from './skill-lifecycle-stepper'
 import SkillOverviewTab from './skill-overview-tab'
 import SkillPrimaryActionBar from './skill-primary-action-bar'
-import SkillReleasePanel from './skill-release-panel'
 import SkillVersionsTab from './skill-versions-tab'
 import {
   computePrimaryAction,
@@ -41,6 +39,8 @@ interface SkillWorkspaceProps {
   activeTab: SkillWorkbenchTab
   environment: 'dev' | 'test'
   onTabChange: (tab: SkillWorkbenchTab) => void
+  // 评测/发布已上移到顶层列表页（意见4 方案A）：工作区内点击相关导航时跳转过去（带 skill 筛选）
+  onOpenTopPage: (page: 'evaluations' | 'releases') => void
   onChanged: () => void
   onOpenExecution: () => void
 }
@@ -68,6 +68,7 @@ export default function SkillWorkspace({
   activeTab,
   environment,
   onTabChange,
+  onOpenTopPage,
   onChanged,
   onOpenExecution,
 }: SkillWorkspaceProps) {
@@ -84,6 +85,17 @@ export default function SkillWorkspace({
   const primaryAction = useMemo(
     () => computePrimaryAction(item, versions, evalRuns, releases),
     [item, versions, evalRuns, releases],
+  )
+
+  // 评测/发布 Tab 已上移顶层列表页（意见4 方案A）：原 navigate('evaluation'|'release')
+  // 统一重定向到对应顶层页（带 skill 筛选），其余 Tab 仍走 onTabChange
+  const handleNavigate = useCallback(
+    (tab: SkillWorkbenchTab) => {
+      if (tab === 'evaluation') onOpenTopPage('evaluations')
+      else if (tab === 'release') onOpenTopPage('releases')
+      else onTabChange(tab)
+    },
+    [onTabChange, onOpenTopPage],
   )
 
   // 切换 Skill 时清掉上一次动作的残留状态
@@ -127,7 +139,7 @@ export default function SkillWorkspace({
     setActionError(null)
     if (action.kind === 'none') return
     if (action.kind === 'navigate') {
-      if (action.targetTab) onTabChange(action.targetTab)
+      if (action.targetTab) handleNavigate(action.targetTab)
       return
     }
     setActionBusy(true)
@@ -216,7 +228,7 @@ export default function SkillWorkspace({
         error={actionError}
         onRun={() => void runPrimary()}
       />
-      <SkillLifecycleStepper item={item} onNavigate={onTabChange} />
+      <SkillLifecycleStepper item={item} onNavigate={handleNavigate} />
       <Tabs
         data-testid="skill-workspace-tabs"
         value={activeTab}
@@ -227,8 +239,6 @@ export default function SkillWorkspace({
           <TabsList aria-label="Skill 治理视图" variant="line" className="h-11 gap-2">
             <TabsTrigger value="overview">总览</TabsTrigger>
             <TabsTrigger value="versions">版本</TabsTrigger>
-            <TabsTrigger value="evaluation">评测</TabsTrigger>
-            <TabsTrigger value="release">发布</TabsTrigger>
             <TabsTrigger value="development">开发详情</TabsTrigger>
           </TabsList>
         </div>
@@ -239,7 +249,7 @@ export default function SkillWorkspace({
               versions={versions}
               evalRuns={evalRuns}
               releases={releases}
-              onNavigate={onTabChange}
+              onNavigate={handleNavigate}
               onOpenExecution={onOpenExecution}
             />
           </TabsContent>
@@ -251,27 +261,6 @@ export default function SkillWorkspace({
               readOnly={environment === 'dev'}
               onChanged={handleChanged}
             />
-          </TabsContent>
-          <TabsContent value="evaluation">
-            {errors.evaluations ? <p role="alert" className="text-sm text-red-700">{errors.evaluations}</p> : (
-              <SkillEvaluationSuite
-                skillId={item.skill_id}
-                versions={versions}
-                readOnly={environment === 'dev'}
-                onChanged={handleChanged}
-              />
-            )}
-          </TabsContent>
-          <TabsContent value="release">
-            {errors.releases ? <p role="alert" className="text-sm text-red-700">{errors.releases}</p> : (
-              <SkillReleasePanel
-                skillId={item.skill_id}
-                versions={versions}
-                environment={environment}
-                readOnly={environment === 'dev'}
-                onChanged={handleChanged}
-              />
-            )}
           </TabsContent>
           <TabsContent value="development">
             <SkillDevelopmentTab detail={detail} error={errors.detail} onOpenExecution={onOpenExecution} />

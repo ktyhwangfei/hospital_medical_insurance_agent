@@ -33,6 +33,13 @@ vi.mock('@/lib/api-client', () => ({
   testInfraSkillExecution: (...args: unknown[]) => mockTestInfraSkillExecution(...args),
 }))
 
+// 意见4 方案A：工作区点击评测/发布 lifecycle 步骤会 router.push 到顶层列表页（带 skill 筛选）
+const { mockRouterPush } = vi.hoisted(() => ({ mockRouterPush: vi.fn() }))
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: mockRouterPush, replace: vi.fn(), refresh: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}))
+
 function releasePage(status: 'approval_pending' | 'approved' | 'active') {
   return {
     items: [{
@@ -146,12 +153,13 @@ describe('Skill governance workbench', () => {
   })
 
   it('restores selected skill and tab from the URL', async () => {
-    window.history.replaceState({}, '', '/skills?skill=settlement_explain_skill&tab=evaluation')
+    // 意见4 方案A：评测/发布 tab 已上移顶层页，工作区只剩 总览/版本/开发详情
+    window.history.replaceState({}, '', '/skills?skill=settlement_explain_skill&tab=versions')
 
     render(<SkillGovernanceWorkbench />)
 
     expect(await screen.findByTestId('skill-workspace-settlement_explain_skill')).toBeVisible()
-    expect(screen.getByRole('tab', { name: '评测' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: '版本' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('keeps the catalog visible when the selected detail fails', async () => {
@@ -163,31 +171,32 @@ describe('Skill governance workbench', () => {
     expect(await screen.findByText('SKILL_DETAIL_FAILED')).toBeVisible()
   })
 
-  it('shows server-backed lifecycle steps and five tabs', async () => {
+  it('shows server-backed lifecycle steps and three tabs', async () => {
     render(<SkillGovernanceWorkbench />)
 
     expect(await screen.findByText('版本登记')).toBeVisible()
     expect(screen.getByText('批量评测')).toBeVisible()
     expect(screen.getByText('人工审批')).toBeVisible()
     expect(screen.getByText('Test 激活')).toBeVisible()
+    // 意见4 方案A：评测/发布 tab 上移顶层列表页，工作区只剩 总览/版本/开发详情
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       '总览',
       '版本',
-      '评测',
-      '发布',
       '开发详情',
     ])
     expect(screen.getByTestId('skill-workspace-tabs')).toHaveClass('flex-col')
   })
 
-  it('navigates a blocked step to its evidence tab', async () => {
+  it('navigates a blocked step to its top-level page', async () => {
     const user = userEvent.setup()
     render(<SkillGovernanceWorkbench />)
 
     await user.click(await screen.findByRole('button', { name: /批量评测/ }))
 
-    expect(screen.getByRole('tab', { name: '评测' })).toHaveAttribute('aria-selected', 'true')
-    expect(window.location.search).toContain('tab=evaluation')
+    // 意见4 方案A：评测 tab 已上移，lifecycle 评测步骤改为 router.push 到顶层评测页（带 skill 筛选）
+    expect(mockRouterPush).toHaveBeenCalledWith(
+      expect.stringMatching(/\/skills\/evaluations\?skill=settlement_explain_skill/),
+    )
   })
 
   it('surfaces the approval action at the workspace top for approval pending', async () => {
