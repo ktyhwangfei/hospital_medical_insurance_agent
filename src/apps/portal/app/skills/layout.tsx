@@ -23,6 +23,7 @@ const NAV_TABS: NavTab[] = [
   { label: 'Skill', href: '/skills', match: (p) => p === '/skills' || p.startsWith('/skills/new') || p.startsWith('/skills/import') || isSkillDetailPath(p) },
   { label: '草稿', href: '/skills/drafts', match: (p) => p.startsWith('/skills/drafts') },
   { label: '评测记录', href: '/skills/evaluations', match: (p) => p.startsWith('/skills/evaluations') },
+  { label: '错误案例池', href: '/skills/eval-case-pool', match: (p) => p.startsWith('/skills/eval-case-pool') },
   { label: '发布记录', href: '/skills/releases', match: (p) => p.startsWith('/skills/releases') },
 ]
 
