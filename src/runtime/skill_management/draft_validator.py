@@ -20,9 +20,13 @@ from src.domain.common.actions import (
 )
 from src.domain.skill.draft_models import (
     SkillDraft,
+    SkillDraftSourceType,
     ValidationIssue,
     ValidationReport,
     ValidationSeverity,
+)
+from src.runtime.skill_management.ai_authoring.security import (
+    scan_ai_generated_files,
 )
 
 # 脚本危险调用（AST 名称匹配）
@@ -63,6 +67,8 @@ class SkillDraftValidator:
         issues.extend(self._validate_business_mounting(draft))
         issues.extend(self._validate_schemas(draft))
         issues.extend(self._validate_raw_files_safety(draft))
+        if draft.source_type == SkillDraftSourceType.AI_GENERATED:
+            issues.extend(self._validate_ai_generated_files(draft))
         return ValidationReport(issues=issues)
 
     def validate_files(self, raw_files: dict[str, str]) -> ValidationReport:
@@ -185,6 +191,19 @@ class SkillDraftValidator:
             if path.endswith(".py"):
                 issues.extend(self._check_python_safety(path, content))
         return issues
+
+    @staticmethod
+    def _validate_ai_generated_files(draft: SkillDraft) -> list[ValidationIssue]:
+        result = scan_ai_generated_files(draft.raw_files)
+        return [
+            ValidationIssue(
+                code=issue.code,
+                message=issue.message,
+                severity=ValidationSeverity.BLOCKING,
+                path=f"raw_files.{issue.path}" if issue.path else "raw_files",
+            )
+            for issue in result.issues
+        ]
 
     def _check_python_safety(
         self, path: str, content: str

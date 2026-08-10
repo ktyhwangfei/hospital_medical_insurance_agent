@@ -17,6 +17,7 @@ def _draft(
     *,
     structured_config: dict | None = None,
     raw_files: dict | None = None,
+    source_type: SkillDraftSourceType = SkillDraftSourceType.TEMPLATE,
 ) -> SkillDraft:
     cfg = structured_config or {
         "basic": {"skill_id": "my_skill", "skill_name": "My Skill"},
@@ -33,7 +34,7 @@ def _draft(
         draft_id="d1",
         skill_id="my_skill",
         skill_name="My Skill",
-        source_type=SkillDraftSourceType.TEMPLATE,
+        source_type=source_type,
         structured_config=cfg,
         raw_files=raw_files or {},
         created_by="u",
@@ -139,6 +140,40 @@ class TestSkillDraftValidator:
         raw = {"scripts/bad.py": "def (:\n"}
         report = self.validator.validate(_draft(raw_files=raw))
         assert "SCRIPT_SYNTAX_ERROR" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_ai_generated_draft_appends_blocking_ai_security_issues(self):
+        report = self.validator.validate(
+            _draft(
+                raw_files={"assembler.py": "import socket\n"},
+                source_type=SkillDraftSourceType.AI_GENERATED,
+            )
+        )
+
+        assert "AI_IMPORT_FORBIDDEN" in _codes(
+            report, ValidationSeverity.BLOCKING
+        )
+        assert report.blocking_ok is False
+
+    def test_ai_generated_safe_draft_passes_ai_security_gate(self):
+        report = self.validator.validate(
+            _draft(
+                raw_files={
+                    "assembler.py": "def load(config):\n    return config\n",
+                    "prompt_template.yaml": "system: explain with citations\n",
+                },
+                source_type=SkillDraftSourceType.AI_GENERATED,
+            )
+        )
+
+        assert report.blocking_ok
+
+    def test_template_draft_does_not_apply_ai_file_whitelist(self):
+        report = self.validator.validate(
+            _draft(raw_files={"templates/custom.md": "# custom"})
+        )
+
+        assert "AI_FILE_PATH_FORBIDDEN" not in _codes(report)
+        assert report.blocking_ok
 
 
 # ── 包生成器 ──────────────────────────────────────────────────────
