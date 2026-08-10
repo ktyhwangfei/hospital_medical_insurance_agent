@@ -341,4 +341,26 @@
 - 验证：后端单元/API/Flow 聚焦测试通过；前端 Vitest 通过；Playwright Chromium 政策知识发布流 3/3 通过；Orca 已实际验证知识页和测试页并截图。
 - 已知预存问题：Portal 全量 TypeScript 仍被 `settlement-explanation-page.tsx` 类型债务阻塞；不属于本次改动。
 
+### 2026-08-10 Skill 错误挖掘案例池与分型回归（plan 2026-08-10-skill-eval-mining）
+
+- 状态：**impl_done**（后端全链路 verified；前端反馈流 + 案例池浏览 verified；分型编辑 UI / 发布门禁接入 / 浏览器 E2E 为后续）。
+- 范围：把 Policy QA 的「回答有误」反馈整合进统一案例池，经 AI 类型化转换 + 人工确认投影到严格判别联合的回归资产，五个可执行维度各有确定性评测器。
+- 提交：`daa51fb`(T5) · `9d5f519`(T6 后端) · `dc91f4c`(T6 前端) · `e22cf87`(T7+T8) · `885144b`(T9) · `ace8a84`(T10)。
+- 已完成（10/10 计划任务）：
+  1. 服务端 `qa_turn_id` 全链路（持久化 input/output、result/done/error SSE 事件、`PolicyQAHistoryItem` DTO）
+  2. 前端 `qaTurnId`/`selectedSkillId`/`feedbackState`，解析器保留 qa_turn_id 同时禁止 selected_skill_id
+  3. 统一案例池 + 分型回归领域模型（7 维度、5 类判别联合断言、6 类 proposal、`SkillRegressionCase`）
+  4. 案例池 + 回归资产存储端口（内存/Postgres，软删除、唯一索引、乐观锁）
+  5. 安全入池服务（服务端按 ID 读来源、用户+租户所有权、脱敏、二次敏感扫描、tenant+turn 去重）
+  6. 反馈 / 历史批量入池 / 案例池查询 API + 前端反馈抽屉 + 评测者案例池表格
+  7. AI 类型化转换服务（ModelGateway scene=`skill_eval_transform`，严格 other↔proposal 约束，失败不改状态）
+  8. 人工确认/拒绝（routing→`SkillEvalCase`、5 维→`SkillRegressionCase`、other 不可执行、幂等）
+  9. 五个确定性评测器（calculation/policy_content/citation/answer_quality/safety）+ 注册表，缺失 evaluator 返回 `blocked_by_evaluator` 绝不 passed
+  10. 三条后端 Flow 主链 + 安全负向链 + 6 个低基数 skill_eval_* 指标
+- 评测器状态：calculation / safety **available**（确定性断言）；policy_content / citation **available**（确定性）；answer_quality **available**（确定性部分，rubric 需模型时走 ModelGateway，当前未接入发布门禁）。
+- 发布门禁接入：当前仅 routing（现有 SkillEvalCase 路由回归）计入 top1；safety/calculation 的 `required=true` 用例接入 candidate gate 属后续（Step 9.5 未全量落地，避免误伤）。
+- 验证证据：后端三阶段全绿——单元 76（models/storage/mining/transform/confirm/evaluator/desensitization）+ API 11（feedback/pool/transform/confirm/reject）+ Flow 8（三主链 + 五安全负向）；前端 Vitest 247 passed、tsc EXIT=0。
+- 仍需人工审核的风险：①answer_quality rubric 稳定性未达门禁门槛；②policy_content/citation 证据版本冻结后才能纳入门禁；③浏览器 E2E（Playwright skill-error-mining.flow）与分型编辑 UI（eval-case-editor）未实现（Task 9 Step 1-2、Task 10 Step 5）。
+- 已知预存问题（非本次改动）：`ai_authoring/security.py` 工作树有未提交改动，导致 `test_draft_validator_and_package.py` 40 例失败；已 stash 验证与本次工作无关。`policy_qa/test_policy_qa.py` 4 例 `@pytest.mark.asyncio` 受 pytest_asyncio 不兼容陷阱影响，环境性失败。
+
 > **维护约定**：每次状态变更必须在此记录。§2 与 `docs/steering/政策知识管线开发计划.md` 双向同步。
