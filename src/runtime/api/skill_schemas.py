@@ -1,9 +1,9 @@
 """Skill 评测与发布控制面的显式 API DTO。"""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from src.domain.skill.draft_models import SkillDraft
 from src.runtime.skill_management.ai_authoring.schemas import SkillStructuredConfig
@@ -189,11 +189,21 @@ class SkillReleaseListResponse(BaseModel):
 # ── Skill 草稿管理（P1+）──────────────────────────────────────────
 
 
+_SkillAIDescription = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=4000),
+]
+_SkillAIMetricCode = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=256),
+]
+
+
 class SkillAIGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    description: str
-    metric_codes: list[str]
+    description: _SkillAIDescription
+    metric_codes: list[_SkillAIMetricCode] = Field(min_length=1, max_length=100)
 
 
 class SkillAIOptimizeRequest(SkillAIGenerateRequest):

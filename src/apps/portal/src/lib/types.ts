@@ -798,6 +798,7 @@ export interface SkillAIStructuredConfig {
 export interface SkillBusinessMounting {
   business_action: string
   business_object: string
+  include_keywords?: string[]
   keywords?: string[]
   excluded_intents?: string[]
 }
@@ -810,13 +811,34 @@ export interface SkillInputSpec {
 }
 
 export interface SkillStructuredConfig {
+  basic?: SkillAIStructuredBasic
   description?: string
   owner?: string
   business_mounting: SkillBusinessMounting
   inputs?: SkillInputSpec[]
+  schemas?: {
+    input: Record<string, unknown>
+    output: Record<string, unknown>
+  }
   input_schema?: Record<string, unknown>
   output_schema?: Record<string, unknown>
 }
+
+export function isSkillAIStructuredConfig(
+  config: SkillStructuredConfig,
+): config is SkillAIStructuredConfig {
+  return Boolean(
+    config.basic &&
+    config.schemas &&
+    Array.isArray(config.business_mounting.include_keywords),
+  )
+}
+
+// 编译期契约：AI 提案被接受后的配置必须可直接作为草稿配置。
+type AssertTrue<T extends true> = T
+export type SkillAIConfigDraftCompatibility = AssertTrue<
+  SkillAIStructuredConfig extends SkillStructuredConfig ? true : false
+>
 
 export interface SkillMetricVersionRef {
   metric_code: string
@@ -854,6 +876,10 @@ export interface SkillAIGenerationProposal {
 export interface SkillAIGenerateRequest {
   description: string
   metric_codes: string[]
+}
+
+export interface SkillAIOptimizeRequest extends SkillAIGenerateRequest {
+  expected_revision: number
 }
 
 export interface SkillAIAcceptRequest {
