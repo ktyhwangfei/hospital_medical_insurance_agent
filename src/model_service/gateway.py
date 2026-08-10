@@ -1,5 +1,7 @@
+import hashlib
 import logging
 import time
+from dataclasses import replace
 from typing import Iterator
 
 from src.config.model_service import ModelServiceConfig
@@ -24,6 +26,14 @@ def _truncate_content(content: str, max_len: int = 500) -> str:
     if len(content) <= max_len:
         return content
     return content[:max_len] + "..."
+
+
+def _audit_content_summary(content: str, scene: str) -> str:
+    """AI 编写场景只记录内容哈希，其他场景保持原有截断摘要。"""
+    if scene == "skill_authoring":
+        digest = hashlib.sha256((content or "").encode("utf-8")).hexdigest()
+        return f"sha256:{digest}"
+    return _truncate_content(content)
 
 def _record_llm_event(
     model_name: str,
@@ -137,6 +147,8 @@ class ModelGateway:
                 try:
                     start = time.time()
                     result = self._call_provider(request, current_model)
+                    if not str(result.model_name or "").strip():
+                        result = replace(result, model_name=current_model)
                     latency_ms = int((time.time() - start) * 1000)
                     logger.info(
                         "model_call_success",
@@ -151,8 +163,10 @@ class ModelGateway:
                     _record_llm_event(
                         model_name=current_model,
                         scene=scene,
-                        prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                        response_summary=_truncate_content(result.content),
+                        prompt_summary=_audit_content_summary(
+                            messages[-1].content if messages else "", scene
+                        ),
+                        response_summary=_audit_content_summary(result.content, scene),
                         token_usage=result.usage,
                         latency_ms=latency_ms,
                         status="completed",
@@ -164,8 +178,10 @@ class ModelGateway:
                     _record_llm_event(
                         model_name=current_model,
                         scene=scene,
-                        prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                        response_summary="",
+                        prompt_summary=_audit_content_summary(
+                            messages[-1].content if messages else "", scene
+                        ),
+                        response_summary=_audit_content_summary("", scene),
                         latency_ms=int((time.time() - overall_start) * 1000),
                         status="failed",
                         error_message=f"Auth error for {current_model}",
@@ -192,8 +208,10 @@ class ModelGateway:
                 _record_llm_event(
                     model_name=current_model,
                     scene=scene,
-                    prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                    response_summary="",
+                    prompt_summary=_audit_content_summary(
+                        messages[-1].content if messages else "", scene
+                    ),
+                    response_summary=_audit_content_summary("", scene),
                     latency_ms=int((time.time() - overall_start) * 1000),
                     status="failed",
                     error_message=f"Model {current_model} exhausted after {self._config.max_retries} attempts",
@@ -204,8 +222,10 @@ class ModelGateway:
         _record_llm_event(
             model_name="(all_failed)",
             scene=scene,
-            prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-            response_summary="",
+            prompt_summary=_audit_content_summary(
+                messages[-1].content if messages else "", scene
+            ),
+            response_summary=_audit_content_summary("", scene),
             latency_ms=cumulative_ms,
             status="failed",
             error_message=f"All models in fallback chain [{', '.join(f['model_name'] for f in failures)}] failed after {cumulative_ms}ms",
@@ -236,8 +256,12 @@ class ModelGateway:
             _record_llm_event(
                 model_name=model_name,
                 scene=scene,
-                prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                response_summary=f"(stream, {total_chunks} chunks)",
+                prompt_summary=_audit_content_summary(
+                    messages[-1].content if messages else "", scene
+                ),
+                response_summary=_audit_content_summary(
+                    f"(stream, {total_chunks} chunks)", scene
+                ),
                 latency_ms=latency_ms,
                 status="completed",
             )
@@ -248,8 +272,10 @@ class ModelGateway:
             _record_llm_event(
                 model_name=model_name,
                 scene=scene,
-                prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                response_summary="",
+                prompt_summary=_audit_content_summary(
+                    messages[-1].content if messages else "", scene
+                ),
+                response_summary=_audit_content_summary("", scene),
                 latency_ms=latency_ms,
                 status="failed",
                 error_message=str(e),

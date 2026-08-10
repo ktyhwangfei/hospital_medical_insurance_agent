@@ -1,22 +1,23 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-from typing import Iterator
 
 import pytest
 
 from src.model_service.exceptions import (
     ModelAuthError,
     ModelExhaustedError,
-    ModelRateLimitError,
     ModelServerError,
     ModelTimeoutError,
 )
 from src.model_service.gateway import ModelGateway
-from src.model_service.models import Message, ModelResponse, StreamChunk, TokenUsage
+from src.model_service.models import Message, ModelResponse, TokenUsage
 
 
 @pytest.fixture
 def gateway():
-    return ModelGateway()
+    instance = ModelGateway()
+    instance._config.base_url = "https://model.test.invalid"
+    return instance
 
 
 def _make_response(content="ok", model="gpt-4o-mini"):
@@ -129,3 +130,92 @@ def test_generate_default_max_tokens_unchanged(gateway):
         gateway.generate(messages, "llm", "test")
 
     assert captured["max_tokens"] == expected
+
+
+def _recording_patches():
+    return (
+        patch(
+            "src.runtime.infra_event.context.infra_context",
+            return_value=SimpleNamespace(workflow_id=None),
+        ),
+        patch("src.runtime.infra_event.recorder.record_llm_call"),
+    )
+
+
+def test_skill_authoring_success_event_hashes_prompt_and_response(gateway):
+    messages = [Message(role="user", content="PRIVATE AUTHORING DESCRIPTION")]
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(
+            gateway,
+            "_call_provider",
+            return_value=_make_response("PRIVATE GENERATED SCRIPT"),
+        ),
+    ):
+        gateway.generate(messages, "reasoning", "skill_authoring")
+
+    event = recorder.call_args.kwargs
+    assert event["prompt_summary"].startswith("sha256:")
+    assert event["response_summary"].startswith("sha256:")
+    assert "PRIVATE" not in event["prompt_summary"]
+    assert "PRIVATE" not in event["response_summary"]
+
+
+def test_skill_authoring_all_failure_events_hash_prompt_and_response(gateway):
+    messages = [Message(role="user", content="PRIVATE AUTHORING DESCRIPTION")]
+    gateway._config.max_retries = 1
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(
+            gateway,
+            "_call_provider",
+            side_effect=ModelServerError("provider failed"),
+        ),
+        pytest.raises(ModelExhaustedError),
+    ):
+        gateway.generate(messages, "reasoning", "skill_authoring")
+
+    assert recorder.call_count == 2
+    for call in recorder.call_args_list:
+        event = call.kwargs
+        assert event["prompt_summary"].startswith("sha256:")
+        assert event["response_summary"].startswith("sha256:")
+        assert "PRIVATE" not in event["prompt_summary"]
+
+
+def test_non_authoring_event_keeps_existing_plaintext_summary(gateway):
+    messages = [Message(role="user", content="ordinary prompt")]
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(
+            gateway,
+            "_call_provider",
+            return_value=_make_response("ordinary response"),
+        ),
+    ):
+        gateway.generate(messages, "llm", "test")
+
+    event = recorder.call_args.kwargs
+    assert event["prompt_summary"] == "ordinary prompt"
+    assert event["response_summary"] == "ordinary response"
+
+
+def test_generate_fills_empty_provider_model_name_from_route(gateway):
+    messages = [Message(role="user", content="Hello")]
+    routed_model, _ = gateway._router.resolve("skill_authoring", "reasoning")
+
+    with patch.object(
+        gateway, "_call_provider", return_value=_make_response(model="")
+    ):
+        result = gateway.generate(messages, "reasoning", "skill_authoring")
+
+    assert result.model_name == routed_model

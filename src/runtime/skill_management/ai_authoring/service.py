@@ -42,6 +42,7 @@ from src.runtime.skill_management.ai_authoring.security import (
 )
 from src.runtime.skill_management.skill_input_service import SkillInputService
 from src.security.desensitization.detection import detect_sensitive_patterns
+from src.security.desensitization.service import sanitize_regression_snapshot
 
 
 _MODEL_TYPE = "reasoning"
@@ -51,7 +52,12 @@ _MAX_METRIC_CODES = 100
 _CREDENTIAL_PATTERN = re.compile(
     r"(?i)(?:password|passwd|pwd|api[_-]?key|secret)\s*[=:]\s*\S+"
 )
+_SECRET_PATTERNS = (
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+)
 _SAFE_ID_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
+_REQUIRED_RAW_FILES = frozenset({"assembler.py", "prompt_template.yaml"})
 
 
 class SkillAIAuthoringError(ValueError):
@@ -142,13 +148,20 @@ class SkillAIAuthoringService:
         input_hash = _canonical_hash(
             {
                 "description": description,
-                "metric_versions": [
-                    item.model_dump(mode="json") for item in metric_versions
-                ],
+                "metric_snapshots": list(prompt_snapshots),
                 "operation": "generate",
                 "prompt_version": SKILL_AUTHORING_PROMPT_VERSION,
             }
         )
+        if _contains_sensitive_content(
+            json.dumps(
+                list(prompt_snapshots),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        ):
+            raise SkillAIInputInvalidError("指标快照包含不允许发送给模型的信息")
         user_prompt = build_generation_prompt(
             description=description,
             metric_snapshots=prompt_snapshots,
@@ -162,13 +175,19 @@ class SkillAIAuthoringService:
         response = self._call_gateway(messages)
         model_output, final_response = self._parse_or_repair(response)
         self._require_requested_metrics(model_output, metric_codes)
+        if frozenset(model_output.raw_files) != _REQUIRED_RAW_FILES:
+            raise SkillAIOutputInvalidError(
+                "模型输出必须同时且仅包含 assembler.py 与 prompt_template.yaml"
+            )
+        model_name = str(getattr(final_response, "model_name", "") or "").strip()
+        if not model_name:
+            raise SkillAIModelError(category="identity_missing")
 
         security = scan_ai_generated_files(model_output.raw_files)
         if not security.passed:
             raise SkillAISecurityRejectedError(security.issues)
 
         validation_preview = self._validation_preview(model_output)
-        model_name = final_response.model_name.strip() or _MODEL_TYPE
         proposal_hash = _canonical_hash(
             {
                 "citations": [
@@ -245,14 +264,27 @@ class SkillAIAuthoringService:
                 raise SkillAIMetricNotFoundError(metric_code)
             obj = registry.get_object(metric.object_code)
             if (
-                metric.status != "published"
-                or obj is None
-                or obj.status != "published"
+                obj is None
                 or obj.current_version is None
             ):
                 raise SkillAIMetricNotPublishedError(metric_code)
+            object_version_record = registry.get_object_version(
+                metric.object_code, str(obj.current_version)
+            )
+            if object_version_record is None:
+                raise SkillAIMetricNotPublishedError(metric_code)
+            snapshot_metric = next(
+                (
+                    item
+                    for item in object_version_record.metrics
+                    if item.metric_code == metric_code
+                ),
+                None,
+            )
+            if snapshot_metric is None:
+                raise SkillAIMetricNotPublishedError(metric_code)
             try:
-                object_version = int(obj.current_version)
+                object_version = int(object_version_record.version)
             except (TypeError, ValueError) as exc:
                 raise SkillAIMetricNotPublishedError(metric_code) from exc
             if object_version < 1:
@@ -267,14 +299,12 @@ class SkillAIAuthoringService:
             )
             prompt_snapshots.append(
                 {
-                    "definition": str(metric.definition),
-                    "metric_code": metric_code,
-                    "name": str(metric.name),
-                    "object_code": metric.object_code,
+                    "metric": snapshot_metric.model_dump(mode="json"),
+                    "object_code": object_version_record.object_code,
+                    "object_snapshot": object_version_record.snapshot,
                     "object_version": object_version,
-                    "semantic_type": str(metric.semantic_type or ""),
+                    "snapshot_id": object_version_record.version_id,
                     "status": "published",
-                    "unit": str(metric.unit or ""),
                 }
             )
         return tuple(versions), tuple(prompt_snapshots)
@@ -296,6 +326,10 @@ class SkillAIAuthoringService:
         try:
             return SkillAIModelOutput.model_validate_json(response.content), response
         except (ValidationError, ValueError):
+            if _contains_sensitive_content(response.content):
+                raise SkillAIOutputInvalidError(
+                    "模型输出包含敏感信息，拒绝结构修复"
+                ) from None
             repair_messages = [
                 Message(role="system", content=build_system_prompt(operation="repair")),
                 Message(role="user", content=build_repair_prompt(response.content)),
@@ -385,4 +419,14 @@ def _canonical_hash(value: Any) -> str:
 
 
 def _contains_sensitive_content(text: str) -> bool:
-    return bool(detect_sensitive_patterns(text) or _CREDENTIAL_PATTERN.search(text))
+    sanitized = sanitize_regression_snapshot(
+        question=text,
+        answer="",
+        comment="",
+    )
+    return bool(
+        sanitized.masked_patterns
+        or detect_sensitive_patterns(text)
+        or _CREDENTIAL_PATTERN.search(text)
+        or any(pattern.search(text) for pattern in _SECRET_PATTERNS)
+    )
