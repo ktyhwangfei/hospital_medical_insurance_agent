@@ -14,6 +14,7 @@ import {
   importSkillZip,
   generateSkillAIProposal,
   acceptSkillAIProposal,
+  optimizeSkillAIDraft,
 } from '@/lib/skill-draft-api'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -123,6 +124,43 @@ describe('skill-draft-api client', () => {
     expect(init.method).toBe('PATCH')
     expect(headers.get('Authorization')).toMatch(/^Bearer /)
     expect(fetchMock.mock.calls[0][0]).toContain('/infra-skills/drafts/d-1')
+  })
+
+  it('requests a typed read-only AI optimization proposal', async () => {
+    const proposal = {
+      base_revision: 3,
+      proposal_hash: 'e'.repeat(64),
+      structured_config: {
+        basic: { skill_id: 'demo_skill', skill_name: 'Demo', description: 'optimized', owner: 'it' },
+        business_mounting: { business_action: 'explain', business_object: 'settlement', include_keywords: [], excluded_intents: [] },
+        inputs: [{ metric_code: 'Settlement.amount', alias: 'amount', required: true, purpose: 'explain' }],
+        schemas: { input: { type: 'object' }, output: { type: 'object' } },
+      },
+      raw_files: { 'assembler.py': 'def assemble(data): return data' },
+      validation_preview: { issues: [], has_blocking: false, blocking_ok: true },
+      provenance: {
+        model_type: 'test-model', scene: 'skill_authoring', prompt_version: 'v1',
+        metric_versions: [{ metric_code: 'Settlement.amount', object_code: 'Settlement', object_version: 2, status: 'published' }],
+        generated_at: '2026-08-10T00:00:00Z', content_hash: 'b'.repeat(64),
+      },
+      diff: [{ scope: 'field', change_type: 'changed', path: 'structured_config.basic.description', before: 'old', after: 'optimized' }],
+      citations: [],
+      uncertainties: ['人工确认'],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(proposal))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await optimizeSkillAIDraft('d-1', {
+      description: '优化说明',
+      metric_codes: ['Settlement.amount'],
+      expected_revision: 3,
+    })
+
+    expect(result.base_revision).toBe(3)
+    expect(fetchMock.mock.calls[0][0]).toContain('/infra-skills/drafts/d-1/ai-optimize')
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body)).expected_revision).toBe(3)
   })
 
   it('deletes a draft with expected_revision and auth header', async () => {

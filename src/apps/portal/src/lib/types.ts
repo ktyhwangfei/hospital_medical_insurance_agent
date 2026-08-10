@@ -882,6 +882,26 @@ export interface SkillAIOptimizeRequest extends SkillAIGenerateRequest {
   expected_revision: number
 }
 
+export interface SkillAIOptimizationDiff {
+  scope: 'field' | 'file'
+  change_type: 'added' | 'changed' | 'removed'
+  path: string
+  before: string | null
+  after: string | null
+}
+
+export interface SkillAIOptimizationProposal {
+  base_revision: number
+  proposal_hash: string
+  structured_config: SkillAIStructuredConfig
+  raw_files: Record<string, string>
+  validation_preview: SkillAIValidationPreview
+  provenance: SkillAIGenerationProvenance
+  diff: SkillAIOptimizationDiff[]
+  citations: Citation[]
+  uncertainties: string[]
+}
+
 export interface SkillAIAcceptRequest {
   generation_id: string
   proposal_hash: string
@@ -930,6 +950,7 @@ export interface SkillDraftCopyRequest {
 
 export interface SkillDraftSaveRequest {
   structured_config: SkillStructuredConfig
+  raw_files?: Record<string, string>
   expected_revision: number
   etag?: string
 }

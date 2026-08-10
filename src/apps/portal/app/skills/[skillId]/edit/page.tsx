@@ -4,16 +4,18 @@ import { use, useCallback, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   ArrowLeft, Save, ShieldCheck, Package, Rocket, AlertCircle,
-  Loader2, CheckCircle2, XCircle,
+  Loader2, CheckCircle2, XCircle, Sparkles,
 } from 'lucide-react'
 import {
   getSkillDraft, saveSkillDraft, validateSkillDraft, previewSkillPackage, materializeSkill,
-  getSkillInputSelector, validateSkillInputs,
+  getSkillInputSelector, validateSkillInputs, optimizeSkillAIDraft,
   ApiClientError,
 } from '@/lib/skill-draft-api'
+import { SkillGenerationDiff } from '@/components/skills/skill-generation-diff'
 import type {
   SkillDraftResponse, SkillStructuredConfig, SkillValidationResponse,
   SkillPackagePreviewResponse, SkillInputSelectorResponse, SkillInputValidationResponse,
+  SkillAIOptimizationProposal,
 } from '@/lib/types'
 
 // /skills/[skillId]/edit 草稿编辑器（设计 §4.3 §5）：
@@ -35,6 +37,9 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
   const [packagePreview, setPackagePreview] = useState<SkillPackagePreviewResponse | null>(null)
   const [selector, setSelector] = useState<SkillInputSelectorResponse | null>(null)
   const [inputValidation, setInputValidation] = useState<SkillInputValidationResponse | null>(null)
+  const [optimizationRequest, setOptimizationRequest] = useState('')
+  const [optimizationProposal, setOptimizationProposal] = useState<SkillAIOptimizationProposal | null>(null)
+  const [optimizationError, setOptimizationError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!draftId) {
@@ -79,6 +84,58 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
       setSaveMsg('保存成功')
     } catch (err) {
       setSaveMsg(err instanceof ApiClientError ? err.detail.message : '保存失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function handleOptimize() {
+    if (!draft || !config || !optimizationRequest.trim()) return
+    const metricCodes = (config.inputs ?? []).map((input) => input.metric_code)
+    if (metricCodes.length === 0) {
+      setOptimizationError('请先为草稿选择至少一个输入指标。')
+      return
+    }
+    setBusy('optimize')
+    setOptimizationError(null)
+    try {
+      const proposal = await optimizeSkillAIDraft(draft.draft_id, {
+        description: optimizationRequest.trim(),
+        metric_codes: metricCodes,
+        expected_revision: draft.revision,
+      })
+      setOptimizationProposal(proposal)
+    } catch (err) {
+      setOptimizationError(
+        err instanceof ApiClientError ? err.detail.message : 'AI 优化失败，请稍后重试。',
+      )
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function handleAcceptOptimization(proposal: SkillAIOptimizationProposal) {
+    if (!draft) return
+    setBusy('accept-optimize')
+    setOptimizationError(null)
+    try {
+      const updated = await saveSkillDraft(draft.draft_id, {
+        structured_config: proposal.structured_config,
+        raw_files: proposal.raw_files,
+        expected_revision: proposal.base_revision,
+      })
+      setDraft(updated)
+      setConfig(updated.structured_config)
+      setOptimizationProposal(null)
+      setSaveMsg('优化已接受并保存')
+    } catch (err) {
+      if (err instanceof ApiClientError && err.status === 409) {
+        setOptimizationError('草稿已被其他操作更新。差异提案已保留，请重新加载草稿后再生成。')
+      } else {
+        setOptimizationError(
+          err instanceof ApiClientError ? err.detail.message : '接受优化失败，当前草稿未改变。',
+        )
+      }
     } finally {
       setBusy(null)
     }
@@ -207,6 +264,58 @@ export default function SkillEditorPage({ params }: { params: Promise<{ skillId:
         <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <AlertCircle className="h-4 w-4 shrink-0" /> {error}
         </div>
+      )}
+
+      <section className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/40 p-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+            <Sparkles className="h-4 w-4 text-violet-600" /> AI 优化草稿
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">先生成只读差异提案；只有点击“接受优化”后才会保存。</p>
+        </div>
+        <textarea
+          value={optimizationRequest}
+          onChange={(event) => setOptimizationRequest(event.target.value)}
+          rows={2}
+          maxLength={4000}
+          placeholder="例如：补充面向收费员的解释示例，并简化输出措辞"
+          aria-label="AI 优化要求"
+          className="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-slate-500">使用当前 revision {draft.revision} 与已选输入指标生成提案。</p>
+          <button
+            type="button"
+            onClick={() => void handleOptimize()}
+            disabled={!!busy || !optimizationRequest.trim()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {busy === 'optimize' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            生成优化提案
+          </button>
+        </div>
+        {optimizationError && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="alert">
+            <span>{optimizationError}</span>
+            {optimizationError.includes('重新加载') && (
+              <button type="button" onClick={() => void load()} className="shrink-0 font-medium underline">
+                重新加载草稿
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+
+      {optimizationProposal && (
+        <SkillGenerationDiff
+          proposal={optimizationProposal}
+          accepting={busy === 'accept-optimize'}
+          onAccept={handleAcceptOptimization}
+          onDismiss={() => {
+            setOptimizationProposal(null)
+            setOptimizationError(null)
+          }}
+        />
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">

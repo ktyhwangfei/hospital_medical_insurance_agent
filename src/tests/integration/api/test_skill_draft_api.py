@@ -25,6 +25,7 @@ from src.runtime.api.infra_skill_routes import (
 )
 from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationResponse,
+    SkillAIOptimizationResponse,
 )
 from src.runtime.skill_management.ai_authoring.security import SkillAISecurityIssue
 from src.runtime.skill_management.ai_authoring.service import (
@@ -139,6 +140,7 @@ class _FakeAIAuthoringService:
         self.verify_error: Exception | None = None
         self.metric_snapshot_hash = "c" * 64
         self.current_metric_snapshot_hash = self.metric_snapshot_hash
+        self.optimize_calls = []
 
     def generate(self, _request):
         if self.generate_error:
@@ -161,6 +163,28 @@ class _FakeAIAuthoringService:
             and metric_snapshot_hash != self.current_metric_snapshot_hash
         ):
             raise SkillAIMetricNotPublishedError("settlement.total_amount")
+
+    def optimize(self, draft, request):
+        self.optimize_calls.append((draft, request))
+        proposal = self.proposal
+        config = proposal.structured_config.model_copy(
+            update={
+                "basic": proposal.structured_config.basic.model_copy(
+                    update={"skill_id": draft.skill_id, "skill_name": draft.skill_name}
+                )
+            }
+        )
+        return SkillAIOptimizationResponse(
+            base_revision=draft.revision,
+            proposal_hash="d" * 64,
+            structured_config=config,
+            raw_files=draft.raw_files,
+            validation_preview=proposal.validation_preview,
+            provenance=proposal.provenance,
+            diff=(),
+            citations=proposal.citations,
+            uncertainties=proposal.uncertainties,
+        )
 
 
 @pytest.fixture
@@ -252,6 +276,53 @@ def test_ai_generate_endpoint_returns_proposal(client):
         "uncertainties",
     }
     assert data["provenance"]["metric_versions"][0]["status"] == "published"
+
+
+def test_ai_optimize_endpoint_returns_read_only_proposal(client):
+    created = client.post(
+        f"{PREFIX}/infra-skills/drafts",
+        json={"skill_id": "optimize_me", "skill_name": "Optimize Me"},
+        headers=_auth_headers(),
+    ).json()
+
+    resp = client.post(
+        f"{PREFIX}/infra-skills/drafts/{created['draft_id']}/ai-optimize",
+        json={
+            "description": "优化说明",
+            "metric_codes": ["settlement.total_amount"],
+            "expected_revision": 1,
+        },
+        headers=_auth_headers(),
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["base_revision"] == 1
+    stored = client._draft_storage.get_draft(created["draft_id"])  # type: ignore[attr-defined]
+    assert stored.revision == 1
+    assert stored.structured_config == created["structured_config"]
+
+
+def test_ai_optimize_rejects_stale_revision_with_standard_conflict(client):
+    created = client.post(
+        f"{PREFIX}/infra-skills/drafts",
+        json={"skill_id": "stale_optimize", "skill_name": "Stale Optimize"},
+        headers=_auth_headers(),
+    ).json()
+
+    resp = client.post(
+        f"{PREFIX}/infra-skills/drafts/{created['draft_id']}/ai-optimize",
+        json={
+            "description": "优化说明",
+            "metric_codes": ["settlement.total_amount"],
+            "expected_revision": 99,
+        },
+        headers=_auth_headers(),
+    )
+
+    assert resp.status_code == 409
+    assert set(resp.json()["detail"]) == {"error_code", "message", "audit_event"}
+    assert resp.json()["detail"]["error_code"] == "SKILL_DRAFT_CONFLICT"
+    assert client._ai_service.optimize_calls == []  # type: ignore[attr-defined]
 
 
 def test_ai_generate_requires_release_test_permission(client):

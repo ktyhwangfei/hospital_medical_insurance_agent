@@ -3,6 +3,8 @@
 from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationProvenance,
     SkillAIGenerationResponse,
+    SkillAIOptimizationDiff,
+    SkillAIOptimizationResponse,
     SkillAIModelOutput,
     SkillMetricVersionRef,
     SkillStructuredConfig,
@@ -12,6 +14,8 @@ from src.runtime.skill_management.ai_authoring.schemas import (
 __all__ = [
     "SkillAIGenerationProvenance",
     "SkillAIGenerationResponse",
+    "SkillAIOptimizationDiff",
+    "SkillAIOptimizationResponse",
     "SkillAIModelOutput",
     "SkillMetricVersionRef",
     "SkillStructuredConfig",

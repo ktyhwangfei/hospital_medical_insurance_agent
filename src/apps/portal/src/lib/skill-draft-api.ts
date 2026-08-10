@@ -21,6 +21,8 @@ import type {
   SkillAIGenerateRequest,
   SkillAIGenerationProposal,
   SkillAIAcceptRequest,
+  SkillAIOptimizeRequest,
+  SkillAIOptimizationProposal,
 } from './types'
 
 const DEV_SKILL_CONTROL_TOKEN =
@@ -68,6 +70,20 @@ export async function acceptSkillAIProposal(
     headers: skillControlHeaders(idempotencyKey),
     body: JSON.stringify(request),
   })
+}
+
+export async function optimizeSkillAIDraft(
+  draftId: string,
+  request: SkillAIOptimizeRequest,
+): Promise<SkillAIOptimizationProposal> {
+  return requestJson<SkillAIOptimizationProposal>(
+    `/infra-skills/drafts/${encodeURIComponent(draftId)}/ai-optimize`,
+    {
+      method: 'POST',
+      headers: skillControlHeaders(),
+      body: JSON.stringify(request),
+    },
+  )
 }
 
 export async function listSkillDrafts(): Promise<SkillDraftListResponse> {

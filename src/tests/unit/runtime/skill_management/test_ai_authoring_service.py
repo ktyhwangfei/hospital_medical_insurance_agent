@@ -13,7 +13,8 @@ import pytest
 
 from src.model_service.exceptions import ModelTimeoutError
 from src.model_service.models import Message, ModelResponse, TokenUsage
-from src.runtime.api.skill_schemas import SkillAIGenerateRequest
+from src.domain.skill.draft_models import SkillDraft, SkillDraftSourceType
+from src.runtime.api.skill_schemas import SkillAIGenerateRequest, SkillAIOptimizeRequest
 from src.runtime.skill_management.ai_authoring.service import (
     SkillAIAuthoringService,
     SkillAIInputInvalidError,
@@ -21,6 +22,7 @@ from src.runtime.skill_management.ai_authoring.service import (
     SkillAIMetricNotPublishedError,
     SkillAIModelError,
     SkillAIOutputInvalidError,
+    SkillAIRevisionConflictError,
     SkillAISecurityRejectedError,
 )
 from src.runtime.skill_management.skill_input_service import SkillInputService
@@ -296,6 +298,78 @@ def test_generate_freezes_only_published_metric_versions() -> None:
     assert gateway.calls[0].scene == "skill_authoring"
     assert gateway.calls[0].model_type == "reasoning"
     assert gateway.calls[0].max_tokens == 2048
+
+
+def test_optimize_returns_diff_without_mutating_draft() -> None:
+    current_payload = _valid_model_payload()
+    optimized_payload = _valid_model_payload()
+    optimized_payload["structured_config"]["basic"]["description"] = (  # type: ignore[index]
+        "优化后的起付线解释"
+    )
+    optimized_payload["raw_files"]["prompt_template.yaml"] = (  # type: ignore[index]
+        "system: explain deductible with examples\n"
+    )
+    draft = SkillDraft(
+        draft_id="draft-1",
+        skill_id="deductible_explain",
+        skill_name="起付线解释",
+        source_type=SkillDraftSourceType.AI_GENERATED,
+        structured_config=current_payload["structured_config"],
+        raw_files={
+            **current_payload["raw_files"],  # type: ignore[arg-type]
+            "__generation_meta__.json": '{"generation_id":"gen-1"}',
+        },
+        revision=4,
+        created_by="tester",
+    )
+    before = draft.model_dump(mode="json")
+    gateway = FakeModelGateway([json.dumps(optimized_payload, ensure_ascii=False)])
+
+    proposal = _service(gateway).optimize(
+        draft,
+        SkillAIOptimizeRequest(
+            description="补充示例并优化说明",
+            metric_codes=["Settlement.deductible"],
+            expected_revision=4,
+        ),
+    )
+
+    assert proposal.base_revision == 4
+    assert proposal.structured_config.basic.description == "优化后的起付线解释"
+    assert proposal.raw_files["__generation_meta__.json"] == '{"generation_id":"gen-1"}'
+    assert {(item.scope, item.change_type, item.path) for item in proposal.diff} >= {
+        ("field", "changed", "structured_config.basic.description"),
+        ("file", "changed", "raw_files.prompt_template.yaml"),
+    }
+    assert draft.model_dump(mode="json") == before
+    assert "operation=optimize" in gateway.calls[0].messages[0].content
+
+
+def test_optimize_rejects_stale_revision_before_model_call() -> None:
+    payload = _valid_model_payload()
+    draft = SkillDraft(
+        draft_id="draft-stale",
+        skill_id="deductible_explain",
+        skill_name="起付线解释",
+        source_type=SkillDraftSourceType.AI_GENERATED,
+        structured_config=payload["structured_config"],
+        raw_files=payload["raw_files"],
+        revision=2,
+        created_by="tester",
+    )
+    gateway = FakeModelGateway([_valid_model_json()])
+
+    with pytest.raises(SkillAIRevisionConflictError):
+        _service(gateway).optimize(
+            draft,
+            SkillAIOptimizeRequest(
+                description="优化说明",
+                metric_codes=["Settlement.deductible"],
+                expected_revision=1,
+            ),
+        )
+
+    assert gateway.calls == []
 
 
 def test_generate_repairs_invalid_json_once_then_stops() -> None:

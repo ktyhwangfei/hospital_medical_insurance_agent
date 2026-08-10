@@ -19,6 +19,8 @@ from src.runtime.api.infra_skill_routes import (
 )
 from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationResponse,
+    SkillAIOptimizationDiff,
+    SkillAIOptimizationResponse,
 )
 from src.runtime.skill_management.draft_service import SkillDraftService
 
@@ -107,6 +109,36 @@ class _ControlledAuthoringService:
     def verify_for_accept(self, _proposal, *, metric_snapshot_hash):
         assert metric_snapshot_hash == "c" * 64
 
+    def optimize(self, draft, _request):
+        config = self.proposal.structured_config.model_copy(
+            update={
+                "basic": self.proposal.structured_config.basic.model_copy(
+                    update={"description": "优化后的结算金额解释"}
+                )
+            }
+        )
+        raw_files = dict(draft.raw_files)
+        raw_files["prompt_template.yaml"] = "system: explain with concise examples\n"
+        return SkillAIOptimizationResponse(
+            base_revision=draft.revision,
+            proposal_hash="d" * 64,
+            structured_config=config,
+            raw_files=raw_files,
+            validation_preview=self.proposal.validation_preview,
+            provenance=self.proposal.provenance,
+            diff=(
+                SkillAIOptimizationDiff(
+                    scope="field",
+                    change_type="changed",
+                    path="structured_config.basic.description",
+                    before="解释医保结算金额",
+                    after="优化后的结算金额解释",
+                ),
+            ),
+            citations=self.proposal.citations,
+            uncertainties=self.proposal.uncertainties,
+        )
+
 
 def _auth_headers() -> dict[str, str]:
     payload = {
@@ -160,6 +192,35 @@ def test_skill_ai_generate_accept_validate_and_preview_package(monkeypatch) -> N
     )
     assert accepted.status_code == 201, accepted.text
     draft_id = accepted.json()["draft_id"]
+
+    optimized = client.post(
+        f"{PREFIX}/infra-skills/drafts/{draft_id}/ai-optimize",
+        json={
+            "description": "补充简明示例",
+            "metric_codes": ["settlement.total_amount"],
+            "expected_revision": accepted.json()["revision"],
+        },
+        headers=_auth_headers(),
+    )
+    assert optimized.status_code == 200, optimized.text
+    optimization = optimized.json()
+    assert storage.get_draft(draft_id).revision == accepted.json()["revision"]
+
+    saved = client.patch(
+        f"{PREFIX}/infra-skills/drafts/{draft_id}",
+        json={
+            "structured_config": optimization["structured_config"],
+            "raw_files": optimization["raw_files"],
+            "expected_revision": optimization["base_revision"],
+        },
+        headers=_auth_headers(),
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["revision"] == optimization["base_revision"] + 1
+    assert (
+        saved.json()["structured_config"]["basic"]["description"]
+        == "优化后的结算金额解释"
+    )
 
     validated = client.post(
         f"{PREFIX}/infra-skills/drafts/{draft_id}/validate",

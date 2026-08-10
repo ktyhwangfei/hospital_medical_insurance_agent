@@ -61,7 +61,10 @@ from src.runtime.skill_management.workbench_service import (
     SkillWorkbenchService,
 )
 from src.runtime.skill_management.draft_service import SkillDraftService
-from src.runtime.skill_management.ai_authoring.schemas import SkillAIGenerationResponse
+from src.runtime.skill_management.ai_authoring.schemas import (
+    SkillAIGenerationResponse,
+    SkillAIOptimizationResponse,
+)
 from src.runtime.skill_management.ai_authoring.service import (
     SkillAIAuthoringError,
     SkillAIAuthoringService,
@@ -70,6 +73,7 @@ from src.runtime.skill_management.ai_authoring.service import (
     SkillAIMetricNotPublishedError,
     SkillAIModelError,
     SkillAIOutputInvalidError,
+    SkillAIRevisionConflictError,
     SkillAISecurityRejectedError,
 )
 from src.runtime.skill_management.draft_validator import SkillDraftValidator
@@ -78,6 +82,7 @@ from src.domain.skill.governance_models import SkillRelease
 from src.runtime.api.skill_schemas import (
     SkillAIAcceptRequest,
     SkillAIGenerateRequest,
+    SkillAIOptimizeRequest,
     SkillDraftCreateRequest,
     SkillDraftCopyRequest,
     SkillDraftListResponse,
@@ -1114,6 +1119,42 @@ def generate_skill_ai_proposal(
                 "SKILL_AI_EVIDENCE_STORE_UNAVAILABLE", "AI proposal 证据存储不可用"
             ),
         ) from exc
+
+
+@router.post(
+    "/infra-skills/drafts/{draft_id}/ai-optimize",
+    response_model=SkillAIOptimizationResponse,
+)
+def optimize_skill_ai_draft(
+    draft_id: str,
+    request: SkillAIOptimizeRequest,
+    authoring_service: SkillAIAuthoringServiceDependency,
+    draft_service: SkillDraftServiceDependency,
+    _principal: SkillControlPrincipalDependency,
+) -> SkillAIOptimizationResponse:
+    draft = draft_service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", f"草稿不存在: {draft_id}"),
+        )
+    if request.expected_revision != draft.revision:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "SKILL_DRAFT_CONFLICT",
+                f"草稿 revision 冲突: expected={request.expected_revision}, actual={draft.revision}",
+            ),
+        )
+    try:
+        return authoring_service.optimize(draft, request)
+    except SkillAIRevisionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail("SKILL_DRAFT_CONFLICT", str(exc)),
+        ) from exc
+    except SkillAIAuthoringError as exc:
+        raise _ai_authoring_error(exc) from exc
 
 
 def _ai_evidence_conflict(message: str, *, code: str) -> HTTPException:

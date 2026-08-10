@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import ValidationError
 
@@ -19,7 +19,7 @@ from src.domain.common.actions import (
     BusinessObject,
     VALID_ACTION_OBJECT_PAIRS,
 )
-from src.domain.skill.draft_models import InputSpec
+from src.domain.skill.draft_models import InputSpec, SkillDraft
 from src.model_service.exceptions import (
     ModelAuthError,
     ModelError,
@@ -32,12 +32,15 @@ from src.model_service.models import Message, ModelResponse
 from src.runtime.skill_management.ai_authoring.prompts import (
     SKILL_AUTHORING_PROMPT_VERSION,
     build_generation_prompt,
+    build_optimization_prompt,
     build_repair_prompt,
     build_system_prompt,
 )
 from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationProvenance,
     SkillAIGenerationResponse,
+    SkillAIOptimizationDiff,
+    SkillAIOptimizationResponse,
     SkillAIModelOutput,
     SkillMetricVersionRef,
     SkillValidationIssueResponse,
@@ -95,6 +98,10 @@ class SkillAIMetricNotPublishedError(SkillAIAuthoringError):
 
 class SkillAIOutputInvalidError(SkillAIAuthoringError):
     """模型在最多一次结构修复后仍不满足严格 DTO。"""
+
+
+class SkillAIRevisionConflictError(SkillAIAuthoringError):
+    """优化请求基于过期草稿 revision。"""
 
 
 class SkillAISecurityRejectedError(SkillAIAuthoringError):
@@ -189,6 +196,108 @@ class SkillAIAuthoringService:
         """生成 proposal；任何失败都不会写草稿、文件或 proposal 存储。"""
 
         return self.generate_with_evidence(request).proposal
+
+    def optimize(
+        self,
+        draft: SkillDraft,
+        request: _GenerationRequest,
+    ) -> SkillAIOptimizationResponse:
+        """生成只读优化提案；不修改传入草稿，也不写任何存储。"""
+
+        expected_revision = getattr(request, "expected_revision", None)
+        if expected_revision != draft.revision:
+            raise SkillAIRevisionConflictError(
+                f"草稿 revision 冲突: expected={expected_revision}, actual={draft.revision}"
+            )
+        description, metric_codes = self._validate_request(request)
+        metric_versions, prompt_snapshots = self._freeze_metric_versions(metric_codes)
+        current_config = dict(draft.structured_config)
+        current_model_files = {
+            path: content
+            for path, content in draft.raw_files.items()
+            if path in _REQUIRED_RAW_FILES
+        }
+        prompt = build_optimization_prompt(
+            description=description,
+            metric_snapshots=prompt_snapshots,
+            current_structured_config=current_config,
+            current_raw_files=current_model_files,
+        )
+        if _contains_sensitive_content(prompt):
+            raise SkillAIInputInvalidError(
+                "优化输入包含不允许发送给模型的信息"
+            )
+        response = self._call_gateway(
+            [
+                Message(
+                    role="system",
+                    content=build_system_prompt(operation="optimize"),
+                ),
+                Message(role="user", content=prompt),
+            ]
+        )
+        model_output, final_response = self._parse_or_repair(response)
+        self._require_requested_metrics(model_output, metric_codes)
+        if frozenset(model_output.raw_files) != _REQUIRED_RAW_FILES:
+            raise SkillAIOutputInvalidError(
+                "模型输出必须同时且仅包含 assembler.py 与 prompt_template.yaml"
+            )
+        if model_output.structured_config.basic.skill_id != draft.skill_id:
+            raise SkillAIOutputInvalidError("优化不得修改 skill_id")
+
+        model_name = str(getattr(final_response, "model_name", "") or "").strip()
+        if not model_name:
+            raise SkillAIModelError(category="identity_missing")
+        security = scan_ai_generated_files(model_output.raw_files)
+        if not security.passed:
+            raise SkillAISecurityRejectedError(security.issues)
+
+        validation_preview = self._validation_preview(model_output)
+        provenance = SkillAIGenerationProvenance(
+            model_type=model_name,
+            scene=_SCENE,
+            prompt_version=SKILL_AUTHORING_PROMPT_VERSION,
+            metric_versions=metric_versions,
+            generated_at=self._clock(),
+            content_hash=security.content_hash,
+        )
+        proposed_config = model_output.structured_config.model_dump(mode="json")
+        proposed_files = dict(draft.raw_files)
+        proposed_files.update(model_output.raw_files)
+        diff = _optimization_diff(
+            current_config=current_config,
+            proposed_config=proposed_config,
+            current_files=draft.raw_files,
+            proposed_files=proposed_files,
+        )
+        hash_payload = {
+            "base_revision": draft.revision,
+            "citations": [
+                {
+                    "source_type": item.source_type,
+                    "source_id": item.source_id,
+                    "summary": item.summary,
+                }
+                for item in model_output.citations
+            ],
+            "diff": [item.model_dump(mode="json") for item in diff],
+            "provenance": provenance.model_dump(mode="json"),
+            "raw_files": proposed_files,
+            "structured_config": proposed_config,
+            "uncertainties": list(model_output.uncertainties),
+            "validation_preview": validation_preview.model_dump(mode="json"),
+        }
+        return SkillAIOptimizationResponse(
+            base_revision=draft.revision,
+            proposal_hash=_canonical_hash(hash_payload),
+            structured_config=model_output.structured_config,
+            raw_files=proposed_files,
+            validation_preview=validation_preview,
+            provenance=provenance,
+            diff=diff,
+            citations=model_output.citations,
+            uncertainties=model_output.uncertainties,
+        )
 
     def generate_with_evidence(
         self, request: _GenerationRequest
@@ -500,6 +609,76 @@ class SkillAIAuthoringService:
         if not unique_part:
             unique_part = uuid.uuid4().hex
         return f"gen_{input_hash[:12]}_{unique_part}"
+
+
+def _optimization_diff(
+    *,
+    current_config: Mapping[str, Any],
+    proposed_config: Mapping[str, Any],
+    current_files: Mapping[str, str],
+    proposed_files: Mapping[str, str],
+) -> tuple[SkillAIOptimizationDiff, ...]:
+    changes: list[SkillAIOptimizationDiff] = []
+    current_fields = _flatten_json(current_config)
+    proposed_fields = _flatten_json(proposed_config)
+    for path in sorted(set(current_fields) | set(proposed_fields)):
+        before = current_fields.get(path)
+        after = proposed_fields.get(path)
+        if before == after:
+            continue
+        changes.append(
+            SkillAIOptimizationDiff(
+                scope="field",
+                change_type=_change_type(path, current_fields, proposed_fields),
+                path=f"structured_config.{path}",
+                before=_display_diff_value(before) if path in current_fields else None,
+                after=_display_diff_value(after) if path in proposed_fields else None,
+            )
+        )
+    for path in sorted(set(current_files) | set(proposed_files)):
+        before = current_files.get(path)
+        after = proposed_files.get(path)
+        if before == after:
+            continue
+        changes.append(
+            SkillAIOptimizationDiff(
+                scope="file",
+                change_type=_change_type(path, current_files, proposed_files),
+                path=f"raw_files.{path}",
+                before=before,
+                after=after,
+            )
+        )
+    return tuple(changes)
+
+
+def _flatten_json(value: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
+    flattened: dict[str, Any] = {}
+    for key, item in value.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(item, Mapping):
+            flattened.update(_flatten_json(item, path))
+        else:
+            flattened[path] = item
+    return flattened
+
+
+def _change_type(
+    path: str,
+    current: Mapping[str, Any],
+    proposed: Mapping[str, Any],
+) -> Literal["added", "changed", "removed"]:
+    if path not in current:
+        return "added"
+    if path not in proposed:
+        return "removed"
+    return "changed"
+
+
+def _display_diff_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _model_error(exc: Exception) -> SkillAIModelError:

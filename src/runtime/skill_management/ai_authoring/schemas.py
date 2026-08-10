@@ -180,3 +180,25 @@ class SkillAIGenerationResponse(_TraceableAIOutput):
     raw_files: FrozenStringMapping
     validation_preview: SkillValidationReportResponse
     provenance: SkillAIGenerationProvenance
+
+
+class SkillAIOptimizationDiff(_StrictFrozenModel):
+    """AI 优化提案中的单项字段或文件变更。"""
+
+    scope: Literal["field", "file"]
+    change_type: Literal["added", "changed", "removed"]
+    path: str = Field(min_length=1, max_length=512)
+    before: str | None = None
+    after: str | None = None
+
+
+class SkillAIOptimizationResponse(_TraceableAIOutput):
+    """不写草稿的 AI 优化提案，由现有 PATCH 接口原子接受。"""
+
+    base_revision: int = Field(ge=1)
+    proposal_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    structured_config: SkillStructuredConfig
+    raw_files: FrozenStringMapping
+    validation_preview: SkillValidationReportResponse
+    provenance: SkillAIGenerationProvenance
+    diff: tuple[SkillAIOptimizationDiff, ...]

@@ -108,6 +108,42 @@ def build_generation_prompt(
     )
 
 
+def build_optimization_prompt(
+    *,
+    description: str,
+    metric_snapshots: Sequence[Mapping[str, object]],
+    current_structured_config: Mapping[str, object],
+    current_raw_files: Mapping[str, str],
+) -> str:
+    """将当前草稿和优化要求放入明确的不可信数据边界。"""
+
+    request = {
+        "description": description,
+        "metric_snapshots": list(metric_snapshots),
+    }
+    current = {
+        "structured_config": dict(current_structured_config),
+        "raw_files": dict(current_raw_files),
+    }
+    contract_json = json.dumps(
+        _OUTPUT_CONTRACT,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        "<UNTRUSTED_OPTIMIZATION_REQUEST_JSON>\n"
+        f"{json.dumps(request, ensure_ascii=True, sort_keys=True, separators=(',', ':'))}\n"
+        "</UNTRUSTED_OPTIMIZATION_REQUEST_JSON>\n"
+        "<CURRENT_DRAFT_JSON>\n"
+        f"{json.dumps(current, ensure_ascii=True, sort_keys=True, separators=(',', ':'))}\n"
+        "</CURRENT_DRAFT_JSON>\n"
+        "<STRICT_OUTPUT_CONTRACT_JSON>\n"
+        f"{contract_json}\n"
+        "</STRICT_OUTPUT_CONTRACT_JSON>"
+    )
+
+
 def build_repair_prompt(invalid_output: str) -> str:
     """构造一次性结构修复请求；原输出始终处于不可信数据边界。"""
 
