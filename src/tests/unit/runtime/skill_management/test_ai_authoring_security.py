@@ -214,6 +214,22 @@ def test_scan_ai_files_rejects_definition_time_execution_and_unsafe_targets(
     assert [issue.code for issue in result.issues] == ["AI_AST_NODE_FORBIDDEN"]
 
 
+@pytest.mark.parametrize(
+    "assembler",
+    [
+        (
+            "def load[T: __import__('os').system('whoami')](config):\n"
+            "    return config\n"
+        ),
+        "def load[T](config):\n    return config\n",
+    ],
+)
+def test_scan_ai_files_rejects_function_type_parameters(assembler: str) -> None:
+    result = scan_ai_generated_files({"assembler.py": assembler})
+
+    assert [issue.code for issue in result.issues] == ["AI_AST_NODE_FORBIDDEN"]
+
+
 def test_scan_ai_files_keeps_simple_name_and_destructuring_assignments() -> None:
     assembler = """\
 def load(config):
@@ -310,6 +326,25 @@ def test_scan_ai_files_maps_deep_yaml_resource_failure_to_stable_issue() -> None
     result = scan_ai_generated_files({"prompt_template.yaml": deeply_nested_yaml})
 
     assert [issue.code for issue in result.issues] == ["AI_YAML_INVALID"]
+
+
+def test_scan_ai_files_enforces_yaml_node_limit() -> None:
+    too_many_nodes = "items:\n" + ("  - 0\n" * 4097)
+
+    result = scan_ai_generated_files({"prompt_template.yaml": too_many_nodes})
+
+    assert [issue.code for issue in result.issues] == ["AI_YAML_INVALID"]
+
+
+def test_yaml_resource_failure_does_not_poison_next_scan() -> None:
+    deeply_nested_yaml = "value: " + ("[" * 500) + "0" + ("]" * 500)
+    failed = scan_ai_generated_files({"prompt_template.yaml": deeply_nested_yaml})
+    recovered = scan_ai_generated_files(
+        {"prompt_template.yaml": "system: explain with citations\n"}
+    )
+
+    assert [issue.code for issue in failed.issues] == ["AI_YAML_INVALID"]
+    assert recovered.issues == ()
 
 
 def test_scan_ai_files_reports_direct_open_once() -> None:

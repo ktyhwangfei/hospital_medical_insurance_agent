@@ -557,7 +557,7 @@ def _assignment_names(node: ast.Assign | ast.AnnAssign) -> set[str]:
 
 
 def _function_has_annotations(function: ast.FunctionDef) -> bool:
-    if function.returns is not None:
+    if function.returns is not None or getattr(function, "type_params", ()):
         return True
     return any(
         argument.annotation is not None
