@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -187,6 +188,126 @@ def test_skill_authoring_all_failure_events_hash_prompt_and_response(gateway):
         assert event["prompt_summary"].startswith("sha256:")
         assert event["response_summary"].startswith("sha256:")
         assert "PRIVATE" not in event["prompt_summary"]
+
+
+def test_skill_authoring_retry_log_redacts_provider_error(gateway, caplog):
+    prompt_secret = "PRIVATE AUTHORING PROMPT"
+    provider_secret = "provider echoed PRIVATE SCRIPT response body"
+    error = ModelServerError(provider_secret, model_name="provider-model")
+    gateway._config.max_retries = 1
+
+    with (
+        caplog.at_level(logging.WARNING, logger="src.model_service.gateway"),
+        patch.object(gateway, "_call_provider", side_effect=error),
+        pytest.raises(ModelExhaustedError) as captured,
+    ):
+        gateway.generate(
+            [Message(role="user", content=prompt_secret)],
+            "reasoning",
+            "skill_authoring",
+        )
+
+    retry_record = next(
+        record for record in caplog.records if record.getMessage() == "model_retry"
+    )
+    assert retry_record.error.startswith("ModelServerError:sha256:")
+    assert prompt_secret not in str(retry_record.__dict__)
+    assert provider_secret not in str(retry_record.__dict__)
+    assert captured.value.failures[0]["error_message"] == provider_secret
+
+
+def test_non_authoring_retry_log_keeps_existing_error_text(gateway, caplog):
+    provider_error = "ordinary provider failure body"
+    gateway._config.max_retries = 1
+
+    with (
+        caplog.at_level(logging.WARNING, logger="src.model_service.gateway"),
+        patch.object(
+            gateway,
+            "_call_provider",
+            side_effect=ModelServerError(provider_error),
+        ),
+        pytest.raises(ModelExhaustedError),
+    ):
+        gateway.generate(
+            [Message(role="user", content="ordinary prompt")], "llm", "test"
+        )
+
+    retry_record = next(
+        record for record in caplog.records if record.getMessage() == "model_retry"
+    )
+    assert retry_record.error == provider_error
+
+
+def test_skill_authoring_stream_redacts_error_but_reraises_same_object(
+    gateway, caplog
+):
+    prompt_secret = "PRIVATE AUTHORING PROMPT"
+    provider_secret = "provider echoed PRIVATE SCRIPT response body"
+    error = ModelServerError(provider_secret, model_name="provider-model")
+    provider = MagicMock()
+    provider.invoke_stream.side_effect = error
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        caplog.at_level(logging.ERROR, logger="src.model_service.gateway"),
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(gateway, "_get_provider", return_value=provider),
+        pytest.raises(ModelServerError) as captured,
+    ):
+        list(
+            gateway.generate_stream(
+                [Message(role="user", content=prompt_secret)],
+                "reasoning",
+                "skill_authoring",
+            )
+        )
+
+    assert captured.value is error
+    log_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "model_stream_interrupted"
+    )
+    assert log_record.error.startswith("ModelServerError:sha256:")
+    assert prompt_secret not in str(log_record.__dict__)
+    assert provider_secret not in str(log_record.__dict__)
+    event = recorder.call_args.kwargs
+    assert event["error_message"].startswith("ModelServerError:sha256:")
+    assert provider_secret not in event["error_message"]
+
+
+def test_non_authoring_stream_keeps_existing_error_text(gateway, caplog):
+    provider_error = "ordinary stream provider failure body"
+    error = ModelServerError(provider_error, model_name="provider-model")
+    provider = MagicMock()
+    provider.invoke_stream.side_effect = error
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        caplog.at_level(logging.ERROR, logger="src.model_service.gateway"),
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(gateway, "_get_provider", return_value=provider),
+        pytest.raises(ModelServerError) as captured,
+    ):
+        list(
+            gateway.generate_stream(
+                [Message(role="user", content="ordinary prompt")],
+                "llm",
+                "default",
+            )
+        )
+
+    assert captured.value is error
+    log_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "model_stream_interrupted"
+    )
+    assert log_record.error == provider_error
+    assert recorder.call_args.kwargs["error_message"] == provider_error
 
 
 def test_non_authoring_event_keeps_existing_plaintext_summary(gateway):

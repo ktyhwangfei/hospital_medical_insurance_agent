@@ -35,6 +35,14 @@ def _audit_content_summary(content: str, scene: str) -> str:
         return f"sha256:{digest}"
     return _truncate_content(content)
 
+
+def _audit_error_summary(error: Exception, scene: str) -> str:
+    """AI 编写场景只暴露异常类型与正文哈希，不改变原异常对象。"""
+    if scene == "skill_authoring":
+        digest = hashlib.sha256(str(error).encode("utf-8")).hexdigest()
+        return f"{type(error).__name__}:sha256:{digest}"
+    return str(error)
+
 def _record_llm_event(
     model_name: str,
     scene: str,
@@ -196,7 +204,7 @@ class ModelGateway:
                     model_failed = True
                     break
                 except (ModelTimeoutError, ModelServerError) as e:
-                    logger.warning("model_retry", extra={"model_name": current_model, "scene": scene, "attempt": attempt + 1, "error": str(e)})
+                    logger.warning("model_retry", extra={"model_name": current_model, "scene": scene, "attempt": attempt + 1, "error": _audit_error_summary(e, scene)})
                     if attempt < self._config.max_retries - 1:
                         continue
                     failures.append({"model_name": current_model, "error_type": type(e).__name__, "error_message": str(e)})
@@ -267,7 +275,7 @@ class ModelGateway:
             )
         except Exception as e:
             latency_ms = int((time.time() - start) * 1000)
-            logger.error("model_stream_interrupted", extra={"model_name": model_name, "scene": scene, "total_chunks": total_chunks, "latency_ms": latency_ms, "error": str(e)})
+            logger.error("model_stream_interrupted", extra={"model_name": model_name, "scene": scene, "total_chunks": total_chunks, "latency_ms": latency_ms, "error": _audit_error_summary(e, scene)})
             # 记录基础设施事件（失败）
             _record_llm_event(
                 model_name=model_name,
@@ -278,7 +286,7 @@ class ModelGateway:
                 response_summary=_audit_content_summary("", scene),
                 latency_ms=latency_ms,
                 status="failed",
-                error_message=str(e),
+                error_message=_audit_error_summary(e, scene),
             )
             raise
 
