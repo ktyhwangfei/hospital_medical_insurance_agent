@@ -114,6 +114,12 @@ class FakePostgreSQLClient:
         if "from policy_compile_runs where run_id" in normalized:
             row = self.runs.get(params[0])
             return [dict(row)] if row else []
+        if "from policy_compile_runs where extraction_id" in normalized:
+            return [
+                {"exists": 1}
+                for row in self.runs.values()
+                if row["extraction_id"] == params[0]
+            ][:1]
         if "from policy_compile_steps where run_id" in normalized:
             return sorted(
                 [dict(item) for item in self.steps if item["run_id"] == params[0]],
@@ -197,6 +203,14 @@ def test_failed_run_remains_queryable(store) -> None:
 
     assert store.get_run("run_failed") == failed
     assert failed.error == {"code": "TRACE_WRITE_FAILED"}
+
+
+def test_extraction_run_marker_supports_idempotent_backfill(store) -> None:
+    assert not store.has_extraction_run("ext_run_1")
+
+    store.create_run(run("run_1"))
+
+    assert store.has_extraction_run("ext_run_1")
 
 
 def test_release_lineage_requires_every_rule(store) -> None:

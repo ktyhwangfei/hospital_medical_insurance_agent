@@ -29,6 +29,7 @@ class CompilationTraceStore(Protocol):
         error: dict[str, Any] | None = None,
     ) -> CompileRun: ...
     def get_run(self, run_id: str) -> CompileRun | None: ...
+    def has_extraction_run(self, extraction_id: str) -> bool: ...
     def save_lineage(
         self,
         *,
@@ -86,6 +87,9 @@ class InMemoryCompilationTraceStore:
     def get_run(self, run_id: str) -> CompileRun | None:
         run = self._runs.get(run_id)
         return run.model_copy(deep=True) if run else None
+
+    def has_extraction_run(self, extraction_id: str) -> bool:
+        return any(run.extraction_id == extraction_id for run in self._runs.values())
 
     def save_lineage(
         self,
@@ -278,6 +282,12 @@ class PostgresCompilationTraceStore:
             "SELECT * FROM policy_compile_runs WHERE run_id=%s", (run_id,)
         )
         return self._run_row(rows[0]) if rows else None
+
+    def has_extraction_run(self, extraction_id: str) -> bool:
+        return bool(self._get_client().execute(
+            "SELECT 1 FROM policy_compile_runs WHERE extraction_id=%s LIMIT 1",
+            (extraction_id,),
+        ))
 
     def save_lineage(
         self,

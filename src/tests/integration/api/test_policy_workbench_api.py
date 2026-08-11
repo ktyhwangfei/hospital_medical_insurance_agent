@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 from threading import Barrier
 
 import pytest
@@ -19,6 +20,80 @@ from src.runtime.api.app import create_app
 
 
 PREFIX = "/api/v1/medical-insurance-ai-agent/policy-workbench"
+
+
+def _add_rule_trace(
+    store,
+    *,
+    rule_id: str,
+    version: int = 1,
+    status: str = "PASS",
+    source_type: str = "DIRECT",
+    stage: str = "VALIDATE",
+) -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler.models import (
+        CanonicalRule,
+        CompileRun,
+        CompileStep,
+        PolicyExpression,
+        ValidationIssue,
+    )
+
+    run_id = f"run_{rule_id}_{version}"
+    issue = None if status == "PASS" else ValidationIssue(
+        issue_id=f"issue_{run_id}",
+        severity=status,
+        code="LEGACY_HISTORY_MISSING" if stage == "LEGACY_IMPORT" else "REFERENCE_NOT_FOUND",
+        stage=stage,
+        rule_id=rule_id,
+        message="编译历史不完整",
+        recommended_action="人工核验原始政策依据",
+    )
+    run = CompileRun(
+        run_id=run_id,
+        document_id="doc_trace",
+        unit_id="unit_trace",
+        extraction_id=f"ext_{version}",
+        raw_input={"source_text": "政策原文快照"},
+        llm_output={"facts": [{"fact_id": f"fact_{version}"}]},
+    )
+    store.create_run(run)
+    store.append_step(run_id, CompileStep(
+        step_id=f"step_{run_id}_2",
+        run_id=run_id,
+        sequence_no=2,
+        stage=stage,
+        status=status,
+        issues=[issue] if issue else [],
+    ))
+    store.append_step(run_id, CompileStep(
+        step_id=f"step_{run_id}_1",
+        run_id=run_id,
+        sequence_no=1,
+        stage="INPUT_SNAPSHOT",
+        status="PASS",
+    ))
+    store.finish_run(run_id, status=status, metrics={"rule_count": 1})
+    rule = CanonicalRule(
+        rule_id=rule_id,
+        subject="住院待遇",
+        result={"ratio": Decimal("0.8")},
+        source_type=source_type,
+        evidence=["doc_trace:unit_trace"],
+        dependencies=["rule_base"] if source_type == "DERIVED" else [],
+        formula=PolicyExpression(
+            operator="COMPLEMENT", reference={"rule_id": "rule_base"}
+        ) if source_type == "DERIVED" else None,
+        rule_version=version,
+        status=status,
+    )
+    store.save_lineage(
+        rule=rule,
+        run_id=run_id,
+        extraction_id=run.extraction_id,
+        document_id=run.document_id,
+        release_id=f"release_{version}",
+    )
 
 
 def _document() -> KnowledgeWorkbenchDocument:
@@ -1140,3 +1215,131 @@ def test_knowledge_build_wiring_uses_one_memory_store(monkeypatch) -> None:
     assert policy_workbench_routes._get_knowledge_build_store() is store
     assert policy_workbench_routes._get_knowledge_build_service() is service
     assert service._store is store
+
+
+@pytest.mark.parametrize(
+    ("rule_id", "source_type", "status", "stage"),
+    [
+        ("rule_direct", "DIRECT", "PASS", "VALIDATE"),
+        ("rule_derived", "DERIVED", "PASS", "DERIVE"),
+        ("rule_review", "DIRECT", "REVIEW", "VALIDATE"),
+        ("rule_failed", "DIRECT", "FAIL", "VALIDATE"),
+        ("rule_legacy", "DIRECT", "REVIEW", "LEGACY_IMPORT"),
+    ],
+)
+def test_rule_compilation_trace_returns_typed_audit_chain(
+    monkeypatch, rule_id, source_type, status, stage
+) -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+        InMemoryCompilationTraceStore,
+    )
+    from src.runtime.api import policy_workbench_routes
+
+    store = InMemoryCompilationTraceStore()
+    _add_rule_trace(
+        store,
+        rule_id=rule_id,
+        source_type=source_type,
+        status=status,
+        stage=stage,
+    )
+    monkeypatch.setattr(
+        policy_workbench_routes, "_get_compilation_trace_store", lambda: store
+    )
+
+    response = TestClient(create_app()).get(f"{PREFIX}/rules/{rule_id}/trace")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["rule"]["source_type"] == source_type
+    assert payload["raw_input"] == {"source_text": "政策原文快照"}
+    assert payload["llm_output"]["facts"][0]["fact_id"] == "fact_1"
+    assert [step["sequence_no"] for step in payload["steps"]] == [1, 2]
+    assert payload["run"]["status"] == status
+    assert payload["publication"]["release_id"] == "release_1"
+    assert payload["history"][0]["rule_version"] == 1
+    assert bool(payload["issues"]) is (status != "PASS")
+    if source_type == "DERIVED":
+        assert payload["rule"]["dependencies"] == ["rule_base"]
+        assert payload["rule"]["formula"]["operator"] == "COMPLEMENT"
+
+
+def test_rule_compilation_trace_returns_newest_version_and_history(monkeypatch) -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+        InMemoryCompilationTraceStore,
+    )
+    from src.runtime.api import policy_workbench_routes
+
+    store = InMemoryCompilationTraceStore()
+    _add_rule_trace(store, rule_id="rule_history", version=1)
+    _add_rule_trace(store, rule_id="rule_history", version=2)
+    monkeypatch.setattr(
+        policy_workbench_routes, "_get_compilation_trace_store", lambda: store
+    )
+
+    payload = TestClient(create_app()).get(
+        f"{PREFIX}/rules/rule_history/trace"
+    ).json()
+
+    assert payload["rule"]["rule_version"] == 2
+    assert [item["rule_version"] for item in payload["history"]] == [2, 1]
+
+
+def test_rule_compilation_trace_returns_typed_not_found(monkeypatch) -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+        InMemoryCompilationTraceStore,
+    )
+    from src.runtime.api import policy_workbench_routes
+
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_compilation_trace_store",
+        lambda: InMemoryCompilationTraceStore(),
+    )
+
+    response = TestClient(create_app()).get(f"{PREFIX}/rules/rule_missing/trace")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "error_code": "RULE_TRACE_NOT_FOUND",
+        "message": "规则编译轨迹不存在",
+        "audit_event": {"rule_id": "rule_missing"},
+    }
+
+
+def test_rule_trace_backfill_uses_legacy_import_once_when_extraction_is_missing() -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler.backfill import (
+        backfill_rules,
+    )
+    from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+        InMemoryCompilationTraceStore,
+    )
+
+    document = _document()
+
+    class Workbench:
+        def list_documents(self):
+            return type("Documents", (), {"items": [type("Summary", (), {"doc_id": document.doc_id})()]})()
+
+        def get_document(self, _doc_id):
+            return document
+
+    class MissingExtraction:
+        def get_extraction(self, _extraction_id):
+            return None
+
+    class UnexpectedCompiler:
+        def compile_units(self, _units):
+            raise AssertionError("missing extraction must use LEGACY_IMPORT")
+
+    traces = InMemoryCompilationTraceStore()
+
+    first = backfill_rules(Workbench(), UnexpectedCompiler(), MissingExtraction(), traces)
+    second = backfill_rules(Workbench(), UnexpectedCompiler(), MissingExtraction(), traces)
+    trace = traces.get_rule_trace("kn_1")
+
+    assert first.legacy_imported == 1
+    assert second.skipped == 1
+    assert trace is not None
+    assert [step.stage for step in trace.steps] == ["LEGACY_IMPORT"]
+    assert trace.issues[0].code == "LEGACY_HISTORY_MISSING"

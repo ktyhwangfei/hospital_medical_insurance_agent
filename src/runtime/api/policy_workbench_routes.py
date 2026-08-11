@@ -53,6 +53,9 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_service import
     SemanticContractUnavailable,
 )
 from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
+from src.knowledge_extension.rule_explanation.policy_compiler.models import (
+    RuleCompilationTraceResponse,
+)
 from src.knowledge_extension.rule_explanation.quality_models import (
     KnowledgeRelease,
     PolicyQATestCase,
@@ -901,6 +904,24 @@ class RuleDetail(BaseModel):
     document: dict[str, Any]
     change_set_id: str | None = None
     review_status: str | None = None
+
+
+@router.get(
+    "/rules/{rule_id}/trace",
+    response_model=RuleCompilationTraceResponse,
+)
+def get_rule_compilation_trace(rule_id: str) -> RuleCompilationTraceResponse:
+    trace = _get_compilation_trace_store().get_rule_trace(rule_id)
+    if trace is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "RULE_TRACE_NOT_FOUND",
+                "规则编译轨迹不存在",
+                {"rule_id": rule_id},
+            ),
+        )
+    return trace
 
 
 @router.get("/rules/{rule_id}", response_model=RuleDetail)
