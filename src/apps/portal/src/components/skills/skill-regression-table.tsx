@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { SkillEvalResultResponse, SkillEvalRunResponse } from '@/lib/types'
 
@@ -10,7 +9,7 @@ type RegressionView = 'regressions' | 'improvements' | 'all'
 
 interface SkillRegressionTableProps {
   latest: SkillEvalRunResponse | null
-  onViewEvidence: (caseId: string) => void
+  state?: 'loading' | 'ready' | 'unavailable'
 }
 
 const regressionDiffs = new Set<SkillEvalResultResponse['diff']>([
@@ -31,7 +30,7 @@ function resultLabel(skillId: string | null | undefined, confidence: number): st
   return `${skillId ?? '未命中'} · ${Math.round(confidence * 100)}%`
 }
 
-export default function SkillRegressionTable({ latest, onViewEvidence }: SkillRegressionTableProps) {
+export default function SkillRegressionTable({ latest, state = 'ready' }: SkillRegressionTableProps) {
   const [view, setView] = useState<RegressionView>('regressions')
   const [mobile, setMobile] = useState(false)
   const snapshots = useMemo(
@@ -82,7 +81,11 @@ export default function SkillRegressionTable({ latest, onViewEvidence }: SkillRe
           ))}
         </div>
       </div>
-      {!results.length ? (
+      {state === 'loading' ? (
+        <p className="border-t border-slate-200 px-4 py-8 text-center text-sm text-slate-500">正在加载差异案例…</p>
+      ) : state === 'unavailable' ? (
+        <p className="border-t border-amber-200 bg-amber-50 px-4 py-8 text-center text-sm text-amber-800">评测证据不可用，请刷新重试</p>
+      ) : !results.length ? (
         <p className="border-t border-slate-200 px-4 py-8 text-center text-sm text-slate-500">当前视图没有差异案例</p>
       ) : mobile ? (
         <ul aria-label="评测差异案例" className="divide-y divide-slate-200 border-t border-slate-200">
@@ -92,7 +95,6 @@ export default function SkillRegressionTable({ latest, onViewEvidence }: SkillRe
               <p className="text-slate-600">候选：{resultLabel(result.candidate_skill_id, result.candidate_confidence)}</p>
               <p className="text-slate-600">基线：{resultLabel(result.baseline_skill_id, result.baseline_confidence)}</p>
               <p className="text-slate-600">{diffLabels[result.diff]} · 失败码不可用</p>
-              <Button variant="outline" className="min-h-11 w-full" onClick={() => onViewEvidence(result.case_id)}>查看脱敏证据</Button>
             </li>
           ))}
         </ul>
@@ -101,7 +103,7 @@ export default function SkillRegressionTable({ latest, onViewEvidence }: SkillRe
           <table aria-label="评测差异案例" className="w-full min-w-[780px] text-left text-xs">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                {['案例', '风险', '候选结果', '基线结果', '差异', '失败码', '操作'].map((label) => <th key={label} scope="col" className="px-3 py-2.5 font-medium">{label}</th>)}
+                {['案例', '风险', '候选结果', '基线结果', '差异', '失败码'].map((label) => <th key={label} scope="col" className="px-3 py-2.5 font-medium">{label}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
@@ -113,7 +115,6 @@ export default function SkillRegressionTable({ latest, onViewEvidence }: SkillRe
                   <td className="px-3 py-3 text-slate-600">{resultLabel(result.baseline_skill_id, result.baseline_confidence)}</td>
                   <td className="px-3 py-3 text-slate-600">{diffLabels[result.diff]}</td>
                   <td className="px-3 py-3 text-slate-500">失败码不可用</td>
-                  <td className="px-3 py-3"><button type="button" onClick={() => onViewEvidence(result.case_id)} className="min-h-9 whitespace-nowrap font-medium text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">查看证据</button></td>
                 </tr>
               ))}
             </tbody>

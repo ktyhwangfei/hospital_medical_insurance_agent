@@ -297,7 +297,7 @@ export default function SkillGovernanceWorkbench() {
             onClearFilters={clearFilters}
             onSelect={handleSelect}
           />
-          <section aria-label="治理决策区" className={`${mobileDetailOpen ? 'block' : 'hidden'} min-w-0 overflow-y-auto bg-slate-50/50 p-3 md:block md:p-6`}>
+          <section aria-label="治理决策区" className={`${mobileDetailOpen ? 'block' : 'hidden'} min-w-0 bg-slate-50/50 p-3 md:block md:p-6`}>
             {mobileDetailOpen && (
               <button
                 ref={mobileBackButtonRef}

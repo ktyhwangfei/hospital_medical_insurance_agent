@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -97,15 +97,15 @@ const workbenchResponse: SkillWorkbenchResponse = {
     semantic_version: '1.0.0',
     artifact_status: 'registered',
     validation_status: 'passed',
-    latest_eval_status: null,
+    latest_eval_status: 'failed',
     test_release_status: null,
     test_active_version: null,
     governance_status: 'needs_evaluation',
     attention_reason: 'passed_evaluation_required',
     current_stage: 'evaluate',
     priority: 'normal',
-    latest_eval_run_id: null,
-    candidate_version: null,
+    latest_eval_run_id: 'run-1',
+    candidate_version: '1.1.0',
     baseline_version: null,
     regression_count: 0,
     required_failure_count: 0,
@@ -235,6 +235,16 @@ const evaluationRun = {
   created_by: 'portal-user',
   created_at: '2026-08-05T06:10:00Z',
   completed_at: '2026-08-05T06:11:00Z',
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve
+    reject = onReject
+  })
+  return { promise, resolve, reject }
 }
 
 describe('Skill governance workbench', () => {
@@ -613,6 +623,92 @@ describe('Skill governance workbench', () => {
     expect(screen.getByRole('table', { name: '评测差异案例' })).toBeVisible()
   })
 
+  it('binds current metrics, cases, and frozen evidence to the canonical evaluation run', async () => {
+    const staleVersion = {
+      ...version,
+      version_id: 'version-stale',
+      semantic_version: '0.9.0',
+      artifact_hash: 'staleartifact123456hash',
+      source_commit: 'stale-source-commit',
+    }
+    const staleRun = {
+      ...evaluationRun,
+      run_id: 'run-stale',
+      version_id: staleVersion.version_id,
+      status: 'passed' as const,
+      metrics: {
+        ...evaluationRun.metrics,
+        passed: 10,
+        regression_count: 0,
+        gate_passed: true,
+      },
+      results: [{
+        ...evaluationRun.results[0],
+        case_id: 'case-stale',
+        diff: 'new_failure' as const,
+      }],
+      case_snapshots: [],
+      created_at: '2026-08-05T07:10:00Z',
+      completed_at: '2026-08-05T07:11:00Z',
+    }
+    const currentRelease = releasePage('approved').items[0]
+    const staleRelease = {
+      ...currentRelease,
+      release_id: 'release-stale',
+      version_id: staleVersion.version_id,
+      eval_run_id: staleRun.run_id,
+      created_by: 'stale-release-operator',
+      created_at: '2026-08-05T07:20:00Z',
+    }
+    mockListInfraSkillVersions.mockResolvedValue([staleVersion, version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [staleRun, evaluationRun], total: 2 })
+    mockListSkillReleases.mockResolvedValue({ items: [staleRelease, currentRelease], total: 2 })
+
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText('80%')).toBeVisible()
+    expect(screen.queryByText('100%')).not.toBeInTheDocument()
+    expect(screen.getByText('case-new-failure')).toBeVisible()
+    expect(screen.queryByText('case-stale')).not.toBeInTheDocument()
+    const evidence = screen.getByRole('complementary', { name: '治理证据' })
+    expect(evidence).toHaveTextContent('run-1')
+    expect(evidence).toHaveTextContent('abcdef…uvwxyz')
+    expect(evidence).not.toHaveTextContent('stale-release-operator')
+  })
+
+  it('shows evaluation loading before the evidence batch settles', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        latest_eval_run_id: null,
+        latest_eval_status: null,
+        candidate_version: null,
+      }],
+    })
+    const pendingEvaluations = deferred<{ items: Array<typeof evaluationRun>; total: number }>()
+    mockListSkillEvalRuns.mockReturnValue(pendingEvaluations.promise)
+
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByRole('status', { name: '正在加载评测证据' })).toBeVisible()
+    expect(screen.queryByText('当前视图没有差异案例')).not.toBeInTheDocument()
+
+    await act(async () => pendingEvaluations.resolve({ items: [], total: 0 }))
+    expect(await screen.findByText('当前视图没有差异案例')).toBeVisible()
+    expect(screen.queryByRole('status', { name: '正在加载评测证据' })).not.toBeInTheDocument()
+  })
+
+  it('shows evaluation evidence as unavailable after its request fails', async () => {
+    mockListSkillEvalRuns.mockRejectedValue(new Error('evaluation unavailable'))
+
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText('评测证据不可用，请刷新重试')).toBeVisible()
+    expect(screen.queryByText('当前视图没有差异案例')).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('evaluation unavailable')
+  })
+
   it('keeps the queue and loaded evaluation evidence when releases fail', async () => {
     mockListInfraSkillVersions.mockResolvedValue([version])
     mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
@@ -676,6 +772,7 @@ describe('Skill governance workbench', () => {
   })
 
   it('shows no active baseline instead of inventing zero percent', async () => {
+    mockListInfraSkillVersions.mockResolvedValue([version])
     mockListSkillEvalRuns.mockResolvedValue({
       items: [{ ...evaluationRun, baseline_version_id: null }],
       total: 1,
@@ -715,6 +812,50 @@ describe('Skill governance workbench', () => {
     expect(screen.queryByText(version.artifact_hash)).not.toBeInTheDocument()
     expect(screen.queryByText(evaluationRun.config_hash)).not.toBeInTheDocument()
     expect(screen.queryByText(/P001|P002|绝密内容|审批理由/)).not.toBeInTheDocument()
+  })
+
+  it('uses the truthful global governance evidence action without case-specific claims', async () => {
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
+    const user = userEvent.setup()
+    render(<SkillGovernanceWorkbench />)
+
+    const table = await screen.findByRole('table', { name: '评测差异案例' })
+    expect(within(table).queryByRole('button', { name: '查看脱敏证据' })).not.toBeInTheDocument()
+    expect(within(table).queryByRole('button', { name: '查看治理证据' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '查看治理证据' }))
+
+    const dialog = screen.getByRole('dialog', { name: '治理证据' })
+    expect(dialog).toHaveTextContent('当前 Skill 的门禁与冻结记录')
+    expect(dialog).not.toHaveTextContent('案例 case-new-failure')
+    expect(screen.queryByRole('button', { name: '查看脱敏证据' })).not.toBeInTheDocument()
+  })
+
+  it('keeps inline evidence at 2xl and lets the outer decision region own scrolling', async () => {
+    render(<SkillGovernanceWorkbench />)
+
+    const evidence = await screen.findByRole('complementary', { name: '治理证据' })
+    expect(evidence).toHaveClass('hidden', '2xl:block')
+    expect(evidence).not.toHaveClass('xl:block', 'min-[1120px]:block')
+    expect(screen.getByRole('region', { name: '治理决策区' })).not.toHaveClass('overflow-y-auto')
+    expect(screen.getByLabelText('下一步治理动作')).toHaveClass('sticky', 'bottom-0')
+  })
+
+  it('offers an immediate drawer-header close action and restores evidence-trigger focus', async () => {
+    const user = userEvent.setup()
+    render(<SkillGovernanceWorkbench />)
+    const trigger = await screen.findByRole('button', { name: '查看治理证据' })
+
+    await user.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: '治理证据' })
+    const header = dialog.querySelector('[data-slot="dialog-header"]')
+    expect(header).not.toBeNull()
+    const close = within(header as HTMLElement).getByRole('button', { name: '关闭治理证据' })
+    expect(close).toBeVisible()
+
+    await user.click(close)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '治理证据' })).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
   })
 
   it('keeps evidence accessible and unavailable actions neutral', async () => {

@@ -98,15 +98,40 @@ export default function SkillWorkspace({
   const [actionBusy, setActionBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
-  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null)
+  const [evidenceLoading, setEvidenceLoading] = useState(true)
 
   const primaryAction = useMemo(
     () => computePrimaryAction(item, versions, evalRuns, releases),
     [item, versions, evalRuns, releases],
   )
-  const latestRun = evalRuns[0] ?? null
   const latestRelease = latestActiveRelease(releases) ?? null
-  const latestVersion = versions[0] ?? null
+  const canonicalRun = item.latest_eval_run_id
+    ? evalRuns.find((run) => run.run_id === item.latest_eval_run_id) ?? null
+    : null
+  const canonicalVersion = canonicalRun
+    ? versions.find((version) => version.version_id === canonicalRun.version_id) ?? null
+    : null
+  const canonicalFactsMatch = Boolean(
+    canonicalRun
+    && canonicalVersion
+    && item.latest_eval_status === canonicalRun.status
+    && item.artifact_status === 'registered'
+    && item.validation_status === canonicalVersion.validation_status
+    && canonicalVersion.validation_status === 'passed'
+    && (!item.candidate_version || item.candidate_version === canonicalVersion.semantic_version),
+  )
+  const evidenceState = evidenceLoading
+    ? 'loading'
+    : errors.evaluations || errors.versions || (item.latest_eval_run_id ? !canonicalFactsMatch : evalRuns.length > 0)
+      ? 'unavailable'
+      : 'ready'
+  const latestRun = evidenceState === 'ready' && canonicalFactsMatch ? canonicalRun : null
+  const latestVersion = evidenceState === 'ready' && canonicalFactsMatch ? canonicalVersion : null
+  const evidenceRelease = latestRun && latestVersion
+    ? latestActiveRelease(releases.filter((release) => (
+        release.eval_run_id === latestRun.run_id && release.version_id === latestVersion.version_id
+      ))) ?? null
+    : null
   const localTab = activeTab === 'versions' || activeTab === 'development' ? activeTab : 'overview'
 
   const handleNavigate = useCallback(
@@ -119,6 +144,7 @@ export default function SkillWorkspace({
   )
 
   const loadEvidence = useCallback(async () => {
+    setEvidenceLoading(true)
     const results = await Promise.allSettled([
       getInfraSkillDetail(item.skill_id),
       listInfraSkillVersions(item.skill_id),
@@ -135,6 +161,7 @@ export default function SkillWorkspace({
     if (results[3].status === 'fulfilled') setReleases(results[3].value.items)
     else nextErrors.releases = errorMessage(results[3].reason)
     setErrors(nextErrors)
+    setEvidenceLoading(false)
   }, [item.skill_id])
 
   useEffect(() => {
@@ -147,8 +174,7 @@ export default function SkillWorkspace({
     onChanged()
   }
 
-  function openEvidence(caseId?: string): void {
-    setSelectedCaseId(caseId ?? null)
+  function openEvidence(): void {
     setEvidenceOpen(true)
   }
 
@@ -241,7 +267,7 @@ export default function SkillWorkspace({
         </div>
       </header>
 
-      <div className="grid min-h-0 min-[1120px]:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid min-h-0 2xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-h-0 min-w-0 flex-col">
           {errorEntries.map(([source, message]) => (
             <p key={source} role="alert" className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
@@ -249,8 +275,8 @@ export default function SkillWorkspace({
             </p>
           ))}
           <SkillLifecycleStepper item={item} onNavigate={handleNavigate} />
-          <SkillEvalMetricStrip latest={latestRun} />
-          <SkillRegressionTable latest={latestRun} onViewEvidence={(caseId) => openEvidence(caseId)} />
+          <SkillEvalMetricStrip latest={latestRun} state={evidenceState} />
+          <SkillRegressionTable latest={latestRun} state={evidenceState} />
 
           <Tabs data-testid="skill-workspace-tabs" value={localTab} onValueChange={(value) => onTabChange(value as SkillWorkbenchTab)} className="flex-col gap-0">
             <div className="overflow-x-auto border-b border-slate-200 px-4">
@@ -281,20 +307,39 @@ export default function SkillWorkspace({
             readOnly={environment === 'dev'}
             error={actionError}
             onRun={() => void runPrimary()}
-            onViewEvidence={() => openEvidence()}
+            onViewEvidence={openEvidence}
           />
         </div>
-        <SkillEvidenceRail item={item} latestRun={latestRun} latestRelease={latestRelease} latestVersion={latestVersion} />
+        <SkillEvidenceRail
+          item={item}
+          latestRun={latestRun}
+          latestRelease={evidenceRelease}
+          latestVersion={latestVersion}
+          historicalRuns={evalRuns}
+          state={evidenceState}
+        />
       </div>
 
       <Dialog open={evidenceOpen} onOpenChange={setEvidenceOpen}>
         <DialogContent showCloseButton={false} className="inset-y-0 left-auto right-0 top-0 h-dvh w-full max-w-none translate-x-0 translate-y-0 content-start overflow-y-auto rounded-none p-0 sm:max-w-none md:max-w-xl">
           <DialogHeader className="border-b border-slate-200 p-4">
-            <DialogTitle>治理证据</DialogTitle>
-            <DialogDescription>{selectedCaseId ? `案例 ${selectedCaseId} 的脱敏冻结证据` : '当前 Skill 的门禁与冻结记录'}</DialogDescription>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <DialogTitle>治理证据</DialogTitle>
+                <DialogDescription className="mt-2">当前 Skill 的门禁与冻结记录</DialogDescription>
+              </div>
+              <DialogClose render={<Button variant="outline" className="min-h-11 shrink-0" aria-label="关闭治理证据" />}>关闭</DialogClose>
+            </div>
           </DialogHeader>
-          <SkillEvidenceRail variant="drawer" item={item} latestRun={latestRun} latestRelease={latestRelease} latestVersion={latestVersion} />
-          <div className="p-4"><DialogClose render={<Button variant="outline" className="min-h-11 w-full" aria-label="关闭治理证据" />}>关闭</DialogClose></div>
+          <SkillEvidenceRail
+            variant="drawer"
+            item={item}
+            latestRun={latestRun}
+            latestRelease={evidenceRelease}
+            latestVersion={latestVersion}
+            historicalRuns={evalRuns}
+            state={evidenceState}
+          />
         </DialogContent>
       </Dialog>
     </section>
