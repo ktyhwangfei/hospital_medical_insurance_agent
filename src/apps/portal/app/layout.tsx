@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, createContext, useContext, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, createContext, useContext, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -82,13 +82,17 @@ function ConnectionBadge() {
 
 export function LayoutShell({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
   const hasSidebarPreference = useRef(false)
+  const openSidebarButtonRef = useRef<HTMLButtonElement>(null)
+  const closeSidebarButtonRef = useRef<HTMLButtonElement>(null)
   const [currentRole, setCurrentRole] = useState<RoleId>('cashier')
   const pathname = usePathname()
 
   useEffect(() => {
     const mobileViewport = window.matchMedia('(max-width: 767px)')
     const syncMobileDefault = () => {
+      setIsMobile(mobileViewport.matches)
       if (!hasSidebarPreference.current) setSidebarCollapsed(mobileViewport.matches)
     }
     syncMobileDefault()
@@ -101,10 +105,28 @@ export function LayoutShell({ children }: { children: ReactNode }) {
     setSidebarCollapsed((value) => !value)
   }
 
-  const closeSidebar = () => {
+  const openSidebar = () => {
+    hasSidebarPreference.current = true
+    setSidebarCollapsed(false)
+    requestAnimationFrame(() => closeSidebarButtonRef.current?.focus())
+  }
+
+  const closeSidebar = useCallback(() => {
     hasSidebarPreference.current = true
     setSidebarCollapsed(true)
-  }
+    requestAnimationFrame(() => openSidebarButtonRef.current?.focus())
+  }, [])
+
+  useEffect(() => {
+    if (!isMobile || sidebarCollapsed) return
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeSidebar()
+    }
+    document.addEventListener('keydown', handleEscape)
+    return () => document.removeEventListener('keydown', handleEscape)
+  }, [closeSidebar, isMobile, sidebarCollapsed])
+
+  const mobileSidebarHidden = isMobile && sidebarCollapsed
 
   return (
     <RoleContext.Provider value={{ currentRole, setCurrentRole }}>
@@ -119,6 +141,8 @@ export function LayoutShell({ children }: { children: ReactNode }) {
         )}
         {/* Sidebar */}
         <aside
+          inert={mobileSidebarHidden ? true : undefined}
+          aria-hidden={mobileSidebarHidden ? true : undefined}
           className={`fixed inset-y-0 left-0 z-50 flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white transition-[width,transform] duration-300 md:relative md:inset-auto md:z-auto md:translate-x-0 ${
             sidebarCollapsed ? '-translate-x-full md:w-16' : 'translate-x-0 md:w-56'
           }`}
@@ -140,6 +164,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
             </button>
             {!sidebarCollapsed && (
               <button
+                ref={closeSidebarButtonRef}
                 type="button"
                 onClick={closeSidebar}
                 className="flex size-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 md:hidden"
@@ -193,8 +218,9 @@ export function LayoutShell({ children }: { children: ReactNode }) {
             <div className="flex items-center gap-3">
               {sidebarCollapsed && (
                 <button
+                  ref={openSidebarButtonRef}
                   type="button"
-                  onClick={toggleSidebar}
+                  onClick={openSidebar}
                   className="flex size-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 md:hidden"
                   aria-label="打开导航菜单"
                 >

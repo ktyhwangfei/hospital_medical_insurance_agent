@@ -88,6 +88,7 @@ test.describe('Skill 日常治理工作台', () => {
     await workbench.mockFailedEvaluation({ next_action: 'run_evaluation', current_stage: 'evaluate' });
     await page.setViewportSize({ width: 390, height: 844 });
     await workbench.goto();
+    await workbench.assertMobileNavigationAccessibility();
     await expect(workbench.queue).toBeVisible();
     await workbench.selectSkill(SKILL_ID);
 

@@ -321,6 +321,33 @@ export class SkillCatalogPage extends BasePage {
     expect(detail!.width).toBeGreaterThanOrEqual(viewportWidth * 0.78);
   }
 
+  async assertMobileNavigationAccessibility(): Promise<void> {
+    const sidebar = this.page.locator('aside').filter({ has: this.page.locator('nav') });
+    const open = this.page.getByRole('button', { name: '打开导航菜单' });
+    await expect(sidebar).toHaveAttribute('inert', '');
+    await expect(sidebar).toHaveAttribute('aria-hidden', 'true');
+    await expect(this.page.getByRole('link', { name: '技能' })).toHaveCount(0);
+
+    await open.focus();
+    await this.page.keyboard.press('Enter');
+    const close = this.page.getByRole('button', { name: '关闭导航菜单', exact: true });
+    await expect(close).toBeFocused();
+    await expect(sidebar).not.toHaveAttribute('inert');
+    await this.page.keyboard.press('Escape');
+    await expect(open).toBeFocused();
+    await expect(sidebar).toHaveAttribute('inert', '');
+
+    await this.page.keyboard.press('Enter');
+    await expect(close).toBeFocused();
+    await close.click();
+    await expect(open).toBeFocused();
+
+    await this.page.keyboard.press('Enter');
+    await expect(close).toBeFocused();
+    await this.page.getByRole('button', { name: '关闭导航菜单遮罩' }).click({ position: { x: 380, y: 800 } });
+    await expect(open).toBeFocused();
+  }
+
   async assertNoSensitiveOrFullHash(): Promise<void> {
     const body = await this.page.locator('body').innerText();
     expect(body).not.toContain(this.fullHash());
