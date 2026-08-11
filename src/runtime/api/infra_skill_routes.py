@@ -67,7 +67,9 @@ from src.runtime.skill_management.governance_service import (
     SkillGovernanceService,
 )
 from src.runtime.skill_management.workbench_service import (
+    SkillGovernancePriority,
     SkillGovernanceStatus,
+    SkillWorkbenchPage,
     SkillWorkbenchService,
 )
 from src.runtime.skill_management.draft_service import SkillDraftService
@@ -130,7 +132,6 @@ from src.runtime.api.skill_schemas import (
     SkillReleaseListResponse,
     SkillReleaseResponse,
     SkillReleaseTransitionRequest,
-    SkillWorkbenchResponse,
 )
 from src.shared.schemas.responses import error_detail
 from src.gateway.auth import AuthStatus, authenticator
@@ -188,11 +189,31 @@ SkillGovernanceServiceDependency = Annotated[
 ]
 
 
+def get_skill_draft_service() -> SkillDraftService:
+    from src.data_platform.storage.skill.draft_factory import get_skill_draft_storage
+
+    return SkillDraftService(
+        storage=get_skill_draft_storage(),
+        loader=get_loader(),
+        skills_root=SKILLS_DIR,
+    )
+
+
+SkillDraftServiceDependency = Annotated[
+    SkillDraftService, Depends(get_skill_draft_service)
+]
+
+
 def get_skill_workbench_service(
     version_service: SkillVersionServiceDependency,
     governance_service: SkillGovernanceServiceDependency,
+    draft_service: SkillDraftServiceDependency,
 ) -> SkillWorkbenchService:
-    return SkillWorkbenchService(version_service, governance_service)
+    return SkillWorkbenchService(
+        version_service,
+        governance_service,
+        draft_service=draft_service,
+    )
 
 
 SkillWorkbenchServiceDependency = Annotated[
@@ -546,7 +567,7 @@ def list_infra_skill_catalog(
     return InfraSkillCatalogResponse.model_validate(catalog.model_dump())
 
 
-@router.get("/infra-skills/workbench", response_model=SkillWorkbenchResponse)
+@router.get("/infra-skills/workbench", response_model=SkillWorkbenchPage)
 def get_infra_skill_workbench(
     service: SkillWorkbenchServiceDependency,
     page: int = Query(default=1, ge=1),
@@ -555,18 +576,30 @@ def get_infra_skill_workbench(
     business_object: str = Query(default=""),
     artifact_status: str = Query(default=""),
     governance_status: SkillGovernanceStatus | None = Query(default=None),
+    priority: SkillGovernancePriority | None = Query(default=None),
     query: str = Query(default="", max_length=128),
-) -> SkillWorkbenchResponse:
+) -> SkillWorkbenchPage:
     workbench = service.list_workbench(
-        page=page,
-        page_size=page_size,
+        page=1 if priority is not None else page,
+        page_size=10_000 if priority is not None else page_size,
         business_action=business_action,
         business_object=business_object,
         artifact_status=artifact_status,
         governance_status=governance_status,
         query=query,
     )
-    return SkillWorkbenchResponse.model_validate(workbench.model_dump())
+    if priority is not None:
+        filtered = [item for item in workbench.items if item.priority == priority]
+        start = (page - 1) * page_size
+        workbench = workbench.model_copy(
+            update={
+                "items": filtered[start : start + page_size],
+                "total": len(filtered),
+                "page": page,
+                "page_size": page_size,
+            }
+        )
+    return workbench
 
 
 def _governance_error(exc: Exception) -> HTTPException:
@@ -967,21 +1000,6 @@ def _read_field_mapping(skill_dir: Path) -> FieldMappingResponse | None:
 
 
 # ── Skill 草稿管理（P1+）──────────────────────────────────────────
-
-
-def get_skill_draft_service() -> SkillDraftService:
-    from src.data_platform.storage.skill.draft_factory import get_skill_draft_storage
-
-    return SkillDraftService(
-        storage=get_skill_draft_storage(),
-        loader=get_loader(),
-        skills_root=SKILLS_DIR,
-    )
-
-
-SkillDraftServiceDependency = Annotated[
-    SkillDraftService, Depends(get_skill_draft_service)
-]
 
 
 def get_skill_materializer() -> "SkillMaterializer":
