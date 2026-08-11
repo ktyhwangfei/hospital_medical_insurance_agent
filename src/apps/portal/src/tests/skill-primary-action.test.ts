@@ -116,7 +116,7 @@ describe('computePrimaryAction', () => {
     ['materialize_draft', { kind: 'navigate', label: '人工物化', hint: '草稿已校验，需要人工确认物化', targetTab: 'development' }],
     ['create_candidate', { kind: 'create_candidate', label: '创建发布候选', hint: '固定评测已通过', targetTab: 'release' }],
     ['request_approval', { kind: 'request_approval', label: '申请复审', hint: '发布候选已就绪', targetTab: 'release' }],
-    ['review_approval', { kind: 'approve', label: '进入人工复审', hint: '禁止创建人自审', targetTab: 'release' }],
+    ['review_approval', { kind: 'navigate', label: '进入人工复审', hint: '禁止创建人自审', targetTab: 'release' }],
     ['activate_test_shadow', { kind: 'activate', label: '激活 Test Shadow', hint: '复审已通过', targetTab: 'release' }],
     ['view_evidence', { kind: 'none', label: '查看运行证据', hint: 'Test Shadow 已激活', targetTab: 'overview' }],
   ])('服务端动作 %s 映射为唯一主动作', (nextAction, expected) => {
@@ -126,6 +126,17 @@ describe('computePrimaryAction', () => {
       [passedRun],
       [release('approved')],
     )).toEqual(expected)
+  })
+
+  it.each([undefined, 'future_action'])('对缺失或未知服务端动作 %s 只读降级', (nextAction) => {
+    const malformedItem = { ...baseItem, next_action: nextAction } as unknown as SkillWorkbenchItem
+
+    expect(computePrimaryAction(malformedItem, [], [], [])).toEqual({
+      kind: 'none',
+      label: '治理状态暂不可用',
+      hint: '无法识别下一步治理动作，请刷新后重试',
+      targetTab: 'overview',
+    })
   })
 })
 

@@ -26,6 +26,13 @@ export interface PrimaryAction {
   targetTab?: SkillWorkbenchTab
 }
 
+const UNAVAILABLE_ACTION: Readonly<PrimaryAction> = Object.freeze({
+  kind: 'none',
+  label: '治理状态暂不可用',
+  hint: '无法识别下一步治理动作，请刷新后重试',
+  targetTab: 'overview',
+})
+
 const PRIMARY_ACTIONS: Record<SkillNextAction, PrimaryAction> = {
   register_version: {
     kind: 'navigate',
@@ -70,7 +77,7 @@ const PRIMARY_ACTIONS: Record<SkillNextAction, PrimaryAction> = {
     targetTab: 'release',
   },
   review_approval: {
-    kind: 'approve',
+    kind: 'navigate',
     label: '进入人工复审',
     hint: '禁止创建人自审',
     targetTab: 'release',
@@ -116,5 +123,5 @@ export function computePrimaryAction(
   _releases: SkillReleaseResponse[],
 ): PrimaryAction {
   void _versions; void _evalRuns; void _releases
-  return PRIMARY_ACTIONS[item.next_action]
+  return PRIMARY_ACTIONS[item.next_action] ?? UNAVAILABLE_ACTION
 }

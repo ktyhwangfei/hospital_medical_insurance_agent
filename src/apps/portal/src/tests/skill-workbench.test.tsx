@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SkillGovernanceWorkbench, { readWorkbenchUrl } from '@/components/skills/skill-governance-workbench'
+import type { SkillWorkbenchResponse } from '@/lib/types'
 
 const mockGetSkillGovernanceWorkbench = vi.fn()
 const mockListInfraSkillCatalog = vi.fn()
@@ -10,6 +11,7 @@ const mockGetInfraSkillDetail = vi.fn()
 const mockListInfraSkillVersions = vi.fn()
 const mockListSkillEvalRuns = vi.fn()
 const mockListSkillReleases = vi.fn()
+const mockApproveSkillRelease = vi.fn()
 const mockActivateSkillRelease = vi.fn()
 const mockTestInfraSkillRouting = vi.fn()
 const mockTestInfraSkillExecution = vi.fn()
@@ -27,7 +29,7 @@ vi.mock('@/lib/api-client', () => ({
   createSkillEvalRun: vi.fn(),
   createSkillRelease: vi.fn(),
   requestSkillReleaseApproval: vi.fn(),
-  approveSkillRelease: vi.fn(),
+  approveSkillRelease: (...args: unknown[]) => mockApproveSkillRelease(...args),
   activateSkillRelease: (...args: unknown[]) => mockActivateSkillRelease(...args),
   testInfraSkillRouting: (...args: unknown[]) => mockTestInfraSkillRouting(...args),
   testInfraSkillExecution: (...args: unknown[]) => mockTestInfraSkillExecution(...args),
@@ -69,7 +71,7 @@ function releasePage(status: 'approval_pending' | 'approved' | 'active') {
   }
 }
 
-const workbenchResponse = {
+const workbenchResponse: SkillWorkbenchResponse = {
   summary: {
     total: 1,
     healthy: 0,
@@ -91,6 +93,18 @@ const workbenchResponse = {
     test_active_version: null,
     governance_status: 'needs_evaluation',
     attention_reason: 'passed_evaluation_required',
+    current_stage: 'evaluate',
+    priority: 'normal',
+    latest_eval_run_id: null,
+    candidate_version: null,
+    baseline_version: null,
+    regression_count: 0,
+    required_failure_count: 0,
+    linked_draft_id: null,
+    linked_draft_status: null,
+    waiting_since: '2026-08-05T06:00:00Z',
+    next_action: 'run_evaluation',
+    next_action_reason: '当前版本尚未完成评测',
   }],
   total: 1,
   page: 1,
@@ -117,6 +131,7 @@ describe('Skill governance workbench', () => {
     mockListInfraSkillVersions.mockResolvedValue([])
     mockListSkillEvalRuns.mockResolvedValue({ items: [], total: 0 })
     mockListSkillReleases.mockResolvedValue({ items: [], total: 0 })
+    mockApproveSkillRelease.mockResolvedValue({ status: 'approved' })
     mockActivateSkillRelease.mockResolvedValue({ status: 'active' })
     mockTestInfraSkillRouting.mockResolvedValue({ candidates: [] })
     mockTestInfraSkillExecution.mockResolvedValue({ status: 'completed' })
@@ -199,15 +214,53 @@ describe('Skill governance workbench', () => {
     )
   })
 
-  it('surfaces the approval action at the workspace top for approval pending', async () => {
+  it('navigates to the release review surface without approving immediately', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        current_stage: 'review',
+        priority: 'high',
+        next_action: 'review_approval',
+      }],
+    })
     mockListSkillReleases.mockResolvedValue(releasePage('approval_pending'))
     render(<SkillGovernanceWorkbench />)
 
-    // 不进入发布 Tab，主动作已直达工作台顶层（解决"操作过深"）
-    expect(await screen.findByRole('button', { name: '人工审批通过' })).toBeEnabled()
-    // 发布 Tab 此时未挂载，不会出现冲突动作
-    expect(screen.queryByRole('button', { name: '申请审批' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '激活 Test Shadow' })).not.toBeInTheDocument()
+    expect(await screen.findByText('进入人工复审')).toBeVisible()
+    await userEvent.click(screen.getByTestId('skill-primary-action'))
+
+    expect(mockRouterPush).toHaveBeenCalledWith(
+      expect.stringMatching(/\/skills\/releases\?skill=settlement_explain_skill/),
+    )
+    expect(mockApproveSkillRelease).not.toHaveBeenCalled()
+  })
+
+  it('keeps catalog fallback read-only when governance aggregation fails', async () => {
+    mockGetSkillGovernanceWorkbench.mockRejectedValueOnce(new Error('WORKBENCH_UNAVAILABLE'))
+    mockListInfraSkillCatalog.mockResolvedValueOnce({
+      items: [{
+        skill_id: 'settlement_explain_skill',
+        skill_name: '结算费用解释',
+        business_action: 'explain',
+        business_object: 'settlement',
+        include_keywords: [],
+        excluded_intents: [],
+        semantic_version: '1.0.0',
+        artifact_hash: 'a'.repeat(64),
+        artifact_status: 'registered',
+        file_count: 1,
+        registered_version: null,
+      }],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    })
+
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText('查看运行证据')).toBeVisible()
+    expect(screen.queryByTestId('skill-primary-action')).not.toBeInTheDocument()
   })
 
   it('refreshes catalog and lifecycle after activation', async () => {
@@ -219,6 +272,7 @@ describe('Skill governance workbench', () => {
       items: [{
         ...workbenchResponse.items[0],
         test_release_status: releaseStatus === 'active' ? 'active' : null,
+        next_action: releaseStatus === 'active' ? 'view_evidence' : 'activate_test_shadow',
       }],
     }))
     mockActivateSkillRelease.mockImplementation(async () => {

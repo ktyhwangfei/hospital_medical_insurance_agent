@@ -100,8 +100,8 @@ function catalogFallback(item: InfraSkillCatalogItem): SkillWorkbenchItem {
     linked_draft_id: null,
     linked_draft_status: null,
     waiting_since: item.registered_version?.created_at ?? new Date().toISOString(),
-    next_action: item.artifact_status === 'registered' ? 'run_evaluation' : 'register_version',
-    next_action_reason: 'governance_summary_unavailable',
+    next_action: 'view_evidence',
+    next_action_reason: '治理聚合暂不可用，仅展示资产信息',
   }
 }
 
