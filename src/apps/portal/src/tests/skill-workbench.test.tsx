@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SkillsLayout from '../../app/skills/layout'
 import SkillGovernanceWorkbench, * as workbenchModule from '@/components/skills/skill-governance-workbench'
-import type { SkillWorkbenchResponse } from '@/lib/types'
+import type { InfraSkillCatalogResponse, SkillWorkbenchResponse } from '@/lib/types'
 
 const { readWorkbenchUrl } = workbenchModule
 
@@ -120,6 +120,18 @@ const workbenchResponse: SkillWorkbenchResponse = {
 
 describe('Skill governance workbench', () => {
   beforeEach(() => {
+    ;[
+      mockGetSkillGovernanceWorkbench,
+      mockListInfraSkillCatalog,
+      mockGetInfraSkillDetail,
+      mockListInfraSkillVersions,
+      mockListSkillEvalRuns,
+      mockListSkillReleases,
+      mockApproveSkillRelease,
+      mockActivateSkillRelease,
+      mockTestInfraSkillRouting,
+      mockTestInfraSkillExecution,
+    ].forEach((mock) => mock.mockReset())
     window.history.replaceState({}, '', '/skills')
     navigationState.pathname = '/skills'
     mockGetSkillGovernanceWorkbench.mockResolvedValue(workbenchResponse)
@@ -172,7 +184,7 @@ describe('Skill governance workbench', () => {
 
     expect(await screen.findByRole('heading', { name: 'Skill 日常治理' })).toBeVisible()
     expect(screen.getAllByRole('heading', { name: 'Skill 日常治理' })).toHaveLength(1)
-    expect(screen.getByRole('navigation', { name: '治理待办' })).toBeVisible()
+    expect(screen.getAllByRole('navigation', { name: '治理待办' })).toHaveLength(1)
     expect(screen.getAllByText('待评测')[0]).toBeVisible()
     expect(await screen.findByTestId('skill-catalog-item-settlement_explain_skill')).toBeVisible()
     expect(screen.queryByText('包含关键词')).not.toBeInTheDocument()
@@ -200,10 +212,49 @@ describe('Skill governance workbench', () => {
     await user.click(item)
     const backButton = await screen.findByRole('button', { name: '返回治理待办' })
     expect(backButton).toHaveFocus()
+    let queueWasVisibleWhenFocusReturned = false
+    item.addEventListener('focus', () => {
+      queueWasVisibleWhenFocusReturned = !item.closest('aside')?.classList.contains('hidden')
+    })
+    queueWasVisibleWhenFocusReturned = false
     await user.click(backButton)
 
     expect(screen.getByRole('navigation', { name: '治理待办' })).toBeVisible()
-    expect(item).toHaveFocus()
+    await waitFor(() => expect(item).toHaveFocus())
+    expect(queueWasVisibleWhenFocusReturned).toBe(true)
+  })
+
+  it('uses arrow keys for roving focus and Enter for explicit queue activation', async () => {
+    const secondItem = {
+      ...workbenchResponse.items[0],
+      skill_id: 'benefit_query_skill',
+      skill_name: '待遇查询',
+    }
+    mockGetSkillGovernanceWorkbench.mockResolvedValueOnce({
+      ...workbenchResponse,
+      items: [workbenchResponse.items[0], secondItem],
+      total: 2,
+    })
+    const user = userEvent.setup()
+    render(<SkillGovernanceWorkbench />)
+    const first = await screen.findByTestId('skill-catalog-item-settlement_explain_skill')
+    const second = screen.getByTestId('skill-catalog-item-benefit_query_skill')
+
+    first.focus()
+    await user.keyboard('{ArrowDown}')
+
+    expect(second).toHaveFocus()
+    expect(first).toHaveAttribute('aria-current', 'true')
+    expect(second).not.toHaveAttribute('aria-current')
+    expect(screen.queryByRole('button', { name: '返回治理待办' })).not.toBeInTheDocument()
+
+    await user.keyboard('{ArrowUp}')
+    expect(first).toHaveFocus()
+    expect(screen.queryByRole('button', { name: '返回治理待办' })).not.toBeInTheDocument()
+    await user.keyboard('{ArrowDown}')
+    await user.keyboard('{Enter}')
+
+    expect(await screen.findByRole('button', { name: '返回治理待办' })).toHaveFocus()
   })
 
   it('marks governance and asset routes as separate active tabs', () => {
@@ -249,6 +300,79 @@ describe('Skill governance workbench', () => {
       '/skills/settlement_explain_skill',
     )
     expect(screen.queryByRole('button', { name: /发布|审批|激活/ })).not.toBeInTheDocument()
+  })
+
+  it('loads additional asset pages without duplicating assets', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => ({
+      skill_id: `skill-${index + 1}`,
+      skill_name: `Skill ${index + 1}`,
+      business_action: 'explain',
+      business_object: 'settlement',
+      include_keywords: [],
+      excluded_intents: [],
+      semantic_version: '1.0.0',
+      artifact_hash: 'a'.repeat(64),
+      artifact_status: 'registered' as const,
+      file_count: 1,
+      registered_version: null,
+    }))
+    let resolveNextPage!: (value: InfraSkillCatalogResponse) => void
+    const nextPage = new Promise<InfraSkillCatalogResponse>((resolve) => { resolveNextPage = resolve })
+    mockListInfraSkillCatalog
+      .mockResolvedValueOnce({ items: firstPage, total: 51, page: 1, page_size: 50 })
+      .mockReturnValueOnce(nextPage)
+    const assetPagePath = '../../app/skills/assets/page'
+    const { default: SkillAssetsPage } = await import(/* @vite-ignore */ assetPagePath)
+    const user = userEvent.setup()
+    render(<SkillAssetsPage />)
+    const loadMore = await screen.findByRole('button', { name: '加载更多' })
+
+    await user.click(loadMore)
+    expect(loadMore).toBeDisabled()
+    expect(loadMore).toHaveTextContent('正在加载…')
+    resolveNextPage({
+      items: [firstPage[0], { ...firstPage[0], skill_id: 'skill-51', skill_name: 'Skill 51' }],
+      total: 51,
+      page: 2,
+      page_size: 50,
+    })
+
+    expect(await screen.findByRole('link', { name: /Skill 51/ })).toBeVisible()
+    expect(screen.getAllByRole('link').filter((link) => link.getAttribute('href') === '/skills/skill-1')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: '加载更多' })).not.toBeInTheDocument()
+  })
+
+  it('shows an asset request error without also showing the empty state', async () => {
+    mockListInfraSkillCatalog.mockRejectedValueOnce(new Error('ASSET_LIST_FAILED'))
+    const assetPagePath = '../../app/skills/assets/page'
+    const { default: SkillAssetsPage } = await import(/* @vite-ignore */ assetPagePath)
+
+    render(<SkillAssetsPage />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('ASSET_LIST_FAILED')
+    expect(screen.queryByText('暂无 Skill 资产')).not.toBeInTheDocument()
+    expect(screen.queryByText('正在加载 Skill 资产…')).not.toBeInTheDocument()
+  })
+
+  it('distinguishes filtered no-results and clears every queue filter coherently', async () => {
+    window.history.replaceState({}, '', '/skills?q=missing&priority=blocked&status=needs_evaluation&action=explain&object=settlement')
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [],
+      total: 0,
+    })
+    const user = userEvent.setup()
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText('没有符合筛选条件的 Skill')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '清除筛选' }))
+
+    await waitFor(() => expect(window.location.search).not.toMatch(/q=|priority=|status=|action=|object=/))
+    expect(screen.getByLabelText('待办优先级')).toHaveValue('')
+    expect(screen.getByLabelText('搜索 Skill')).toHaveValue('')
+    expect(mockGetSkillGovernanceWorkbench).toHaveBeenLastCalledWith({ page: 1, page_size: 50 })
+    expect(await screen.findByText('当前没有需要处理的 Skill')).toBeVisible()
+    expect(screen.getByRole('link', { name: '查看全部资产' })).toHaveAttribute('href', '/skills/assets')
   })
 
   it('formats queue wait time at deterministic boundaries', () => {
@@ -361,6 +485,36 @@ describe('Skill governance workbench', () => {
     expect(screen.getAllByText('治理聚合暂不可用，仅展示资产信息')[0]).toBeVisible()
     expect(screen.queryByText('Test Shadow 已激活')).not.toBeInTheDocument()
     expect(screen.queryByTestId('skill-primary-action')).not.toBeInTheDocument()
+  })
+
+  it('clears a governance-only priority before showing catalog fallback assets', async () => {
+    window.history.replaceState({}, '', '/skills?priority=blocked')
+    mockGetSkillGovernanceWorkbench.mockRejectedValue(new Error('WORKBENCH_UNAVAILABLE'))
+    mockListInfraSkillCatalog.mockResolvedValue({
+      items: [{
+        skill_id: 'settlement_explain_skill',
+        skill_name: '结算费用解释',
+        business_action: 'explain',
+        business_object: 'settlement',
+        include_keywords: [],
+        excluded_intents: [],
+        semantic_version: '1.0.0',
+        artifact_hash: 'a'.repeat(64),
+        artifact_status: 'registered',
+        file_count: 1,
+        registered_version: null,
+      }],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    })
+
+    render(<SkillGovernanceWorkbench />)
+
+    await waitFor(() => expect(screen.getByLabelText('待办优先级')).toHaveValue(''))
+    expect(window.location.search).not.toContain('priority=')
+    expect(screen.getAllByText('治理聚合暂不可用，仅展示资产信息')[0]).toBeVisible()
+    await waitFor(() => expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(2))
   })
 
   it('refreshes catalog and lifecycle after activation', async () => {

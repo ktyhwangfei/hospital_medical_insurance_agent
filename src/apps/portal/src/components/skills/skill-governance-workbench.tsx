@@ -133,6 +133,7 @@ export default function SkillGovernanceWorkbench() {
   const [executionDrawerOpen, setExecutionDrawerOpen] = useState(false)
   const [mobileDetailOpen, setMobileDetailOpen] = useState(initialState.skillId !== null)
   const mobileBackButtonRef = useRef<HTMLButtonElement>(null)
+  const restoreQueueFocusRef = useRef(false)
   // 选中项单次查找并记忆，避免每次渲染对 items 做多次 O(n) 扫描，同时稳定下传给 SkillWorkspace 的 prop 引用
   const selectedItem = useMemo(
     () => items.find((item) => item.skill_id === selectedSkillId) ?? null,
@@ -175,6 +176,14 @@ export default function SkillGovernanceWorkbench() {
   }, [mobileDetailOpen])
 
   useEffect(() => {
+    if (mobileDetailOpen || !restoreQueueFocusRef.current) return
+    restoreQueueFocusRef.current = false
+    Array.from(document.querySelectorAll<HTMLButtonElement>('[data-skill-catalog-button]'))
+      .find((button) => button.dataset.skillId === selectedSkillId)
+      ?.focus()
+  }, [mobileDetailOpen, selectedSkillId])
+
+  useEffect(() => {
     let current = true
     getSkillGovernanceWorkbench({
       page: 1,
@@ -194,6 +203,7 @@ export default function SkillGovernanceWorkbench() {
     }).catch(async (error: unknown) => {
       if (!current) return
       setSummary(null)
+      if (priority !== null) setPriority(null)
       try {
         const fallback = await listInfraSkillCatalog({
           page: 1,
@@ -233,11 +243,20 @@ export default function SkillGovernanceWorkbench() {
   }, [activeTab, businessAction, businessObject, environment, governanceStatus, priority, query, selectedSkillId])
 
   const returnToQueue = useCallback(() => {
+    restoreQueueFocusRef.current = true
     setMobileDetailOpen(false)
-    Array.from(document.querySelectorAll<HTMLButtonElement>('[data-skill-catalog-button]'))
-      .find((button) => button.dataset.skillId === selectedSkillId)
-      ?.focus()
-  }, [selectedSkillId])
+  }, [])
+
+  const clearFilters = useCallback(() => {
+    prepareCatalogReload()
+    setQuery('')
+    setGovernanceStatus(null)
+    setPriority(null)
+    setBusinessAction('')
+    setBusinessObject('')
+  }, [prepareCatalogReload])
+
+  const hasActiveFilters = Boolean(query.trim() || governanceStatus || priority || businessAction || businessObject)
 
   return (
     <section aria-label="Skill 日常治理" data-testid="skill-governance-workbench" className="flex w-full min-w-0 flex-col gap-6 py-6">
@@ -267,10 +286,12 @@ export default function SkillGovernanceWorkbench() {
             businessAction={businessAction}
             businessObject={businessObject}
             loading={loading}
+            hasActiveFilters={hasActiveFilters}
             hiddenOnMobile={mobileDetailOpen}
             onQueryChange={handleQueryChange}
             onBusinessActionChange={handleBusinessActionChange}
             onBusinessObjectChange={handleBusinessObjectChange}
+            onClearFilters={clearFilters}
             onSelect={handleSelect}
           />
           <section aria-label="治理决策区" className={`${mobileDetailOpen ? 'block' : 'hidden'} min-w-0 overflow-y-auto bg-slate-50/50 p-3 md:block md:p-6`}>

@@ -13,10 +13,12 @@ interface SkillCatalogPanelProps {
   businessAction: string
   businessObject: string
   loading: boolean
+  hasActiveFilters: boolean
   hiddenOnMobile?: boolean
   onQueryChange: (query: string) => void
   onBusinessActionChange: (action: string) => void
   onBusinessObjectChange: (object: string) => void
+  onClearFilters: () => void
   onSelect: (skillId: string) => void
 }
 
@@ -56,10 +58,12 @@ export default function SkillCatalogPanel({
   businessAction,
   businessObject,
   loading,
+  hasActiveFilters,
   hiddenOnMobile = false,
   onQueryChange,
   onBusinessActionChange,
   onBusinessObjectChange,
+  onClearFilters,
   onSelect,
 }: SkillCatalogPanelProps) {
   const [search, setSearch] = useState(query)
@@ -79,13 +83,12 @@ export default function SkillCatalogPanel({
     const nextIndex = Math.min(Math.max(currentIndex + delta, 0), buttons.length - 1)
     if (buttons[nextIndex]) {
       event.preventDefault()
-      buttons[nextIndex].click()
       buttons[nextIndex].focus()
     }
   }
 
   return (
-    <aside className={cn('min-h-0 flex-col border-r border-slate-200 bg-white md:flex', hiddenOnMobile ? 'hidden' : 'flex')} aria-label="治理待办">
+    <aside className={cn('min-h-0 flex-col border-r border-slate-200 bg-white md:flex', hiddenOnMobile ? 'hidden' : 'flex')}>
       <div className="space-y-3 border-b border-slate-200 p-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-2 h-4 w-4 text-slate-400" />
@@ -132,6 +135,20 @@ export default function SkillCatalogPanel({
       <nav aria-label="治理待办" className="min-h-0 flex-1 overflow-y-auto" onKeyDown={moveFocus}>
         {loading && items.length === 0 ? (
           <p className="p-4 text-sm text-slate-500">正在加载 Skill…</p>
+        ) : items.length === 0 && hasActiveFilters ? (
+          <div className="space-y-3 p-4 text-sm text-slate-500">
+            <p>没有符合筛选条件的 Skill</p>
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('')
+                onClearFilters()
+              }}
+              className="min-h-11 font-medium text-blue-600 hover:text-blue-700"
+            >
+              清除筛选
+            </button>
+          </div>
         ) : items.length === 0 ? (
           <div className="space-y-3 p-4 text-sm text-slate-500">
             <p>当前没有需要处理的 Skill</p>
