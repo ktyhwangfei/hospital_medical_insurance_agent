@@ -106,6 +106,10 @@ export default function SkillWorkspace({
     () => computePrimaryAction(item, versions, evalRuns, releases),
     [item, versions, evalRuns, releases],
   )
+  const repairDraftReadOnly = environment === 'dev' && item.next_action === 'create_fix_draft'
+  const displayedPrimaryAction = repairDraftReadOnly
+    ? { ...primaryAction, kind: 'create_candidate' as const, hint: 'dev 环境在本工作台只读' }
+    : primaryAction
   const canonicalRun = item.latest_eval_run_id
     ? evalRuns.find((run) => run.run_id === item.latest_eval_run_id) ?? null
     : null
@@ -221,6 +225,10 @@ export default function SkillWorkspace({
     const action = primaryAction
     setActionError(null)
     if (action.kind === 'none') return
+    if (repairDraftReadOnly) {
+      setActionError('dev 环境在本工作台只读')
+      return
+    }
     if (item.next_action === 'continue_draft' || item.next_action === 'materialize_draft') {
       if (!item.linked_draft_id) {
         setActionError('关联草稿不存在，请刷新治理待办')
@@ -368,8 +376,8 @@ export default function SkillWorkspace({
           </Tabs>
 
           <SkillNextActionBar
-            action={primaryAction}
-            reason={item.next_action_reason}
+            action={displayedPrimaryAction}
+            reason={repairDraftReadOnly ? 'dev 环境在本工作台只读' : item.next_action_reason}
             busy={actionBusy}
             readOnly={environment === 'dev'}
             error={actionError}

@@ -694,6 +694,32 @@ describe('Skill governance workbench', () => {
     expect(mockRouterPush).not.toHaveBeenCalled()
   })
 
+  it('keeps repair draft creation read-only in dev even if invocation is attempted', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        next_action: 'create_fix_draft',
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
+    render(<SkillGovernanceWorkbench />)
+
+    const table = await screen.findByRole('table', { name: '评测差异案例' })
+    await userEvent.selectOptions(screen.getByLabelText('Skill 环境'), 'dev')
+    const primary = screen.getByTestId('skill-primary-action')
+
+    expect(primary).toBeDisabled()
+    expect(screen.getByText('dev 环境在本工作台只读')).toBeVisible()
+    await userEvent.click(primary)
+
+    expect(table).toBeVisible()
+    expect(screen.getByText('case-new-failure')).toBeVisible()
+    expect(mockCopySkill).not.toHaveBeenCalled()
+    expect(mockRouterPush).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['continue_draft', '继续修改'],
     ['materialize_draft', '人工物化'],
@@ -710,6 +736,7 @@ describe('Skill governance workbench', () => {
     render(<SkillGovernanceWorkbench />)
 
     expect(await screen.findByText(label)).toBeVisible()
+    await userEvent.selectOptions(screen.getByLabelText('Skill 环境'), 'dev')
     await userEvent.click(screen.getByTestId('skill-primary-action'))
 
     expect(mockRouterPush).toHaveBeenCalledWith(
