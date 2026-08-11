@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS policy_rule_lineage (
     rule_version INTEGER,
     canonical_rule JSONB,
     release_id VARCHAR(64),
+    published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_lineage_rule ON policy_rule_lineage(rule_id);
@@ -127,6 +128,7 @@ ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS compile_run_id VARCHAR(
 ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS rule_version INTEGER;
 ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS canonical_rule JSONB;
 ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS release_id VARCHAR(64);
+ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_lineage_rule_version ON policy_rule_lineage(rule_id, rule_version);
 CREATE INDEX IF NOT EXISTS idx_lineage_compile_run ON policy_rule_lineage(compile_run_id);
 CREATE INDEX IF NOT EXISTS idx_lineage_release ON policy_rule_lineage(release_id);

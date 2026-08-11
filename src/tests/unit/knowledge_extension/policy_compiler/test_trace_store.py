@@ -16,7 +16,12 @@ from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import
 )
 
 
-def run(run_id: str, *, status: str = "RUNNING") -> CompileRun:
+def run(
+    run_id: str,
+    *,
+    status: str = "RUNNING",
+    started_at: datetime | None = None,
+) -> CompileRun:
     return CompileRun(
         run_id=run_id,
         document_id="doc_x",
@@ -28,6 +33,7 @@ def run(run_id: str, *, status: str = "RUNNING") -> CompileRun:
         prompt_version="prompt-v1",
         schema_version="schema-v1",
         status=status,
+        **({"started_at": started_at} if started_at else {}),
     )
 
 
@@ -117,10 +123,11 @@ class FakePostgreSQLClient:
         if normalized.startswith("insert into policy_rule_lineage"):
             keys = (
                 "lineage_id", "rule_id", "extraction_id", "doc_id", "compile_run_id",
-                "rule_version", "canonical_rule", "release_id", "created_at",
+                "rule_version", "canonical_rule", "release_id", "published_at",
+                "created_at",
             )
             if "do nothing" in normalized:
-                values = (*params[:7], None, params[7])
+                values = (*params[:7], None, None, params[7])
             else:
                 values = params
             row = dict(zip(keys, values))
@@ -142,6 +149,8 @@ class FakePostgreSQLClient:
                     or existing["canonical_rule"] != row["canonical_rule"]
                 ):
                     return []
+                if existing["release_id"] is None:
+                    existing["published_at"] = row["published_at"]
                 existing["release_id"] = row["release_id"]
                 return [dict(existing)]
             self.lineages.append(row)
@@ -179,12 +188,11 @@ class FakePostgreSQLClient:
                 [dict(item) for item in self.steps if item["run_id"] == params[0]],
                 key=lambda item: item["sequence_no"],
             )
-        if "from policy_rule_lineage where rule_id" in normalized:
+        if "from policy_rule_lineage as lineage" in normalized:
             return sorted(
                 [dict(item) for item in self.lineages if item["rule_id"] == params[0]],
                 key=lambda item: (
-                    item["canonical_rule"] is not None,
-                    item["rule_version"] if item["rule_version"] is not None else -1,
+                    self.runs[item["compile_run_id"]]["started_at"],
                     item["created_at"],
                 ),
                 reverse=True,
@@ -269,6 +277,52 @@ def test_failed_run_remains_queryable(store) -> None:
 
     assert store.get_run("run_failed") == failed
     assert failed.error == {"code": "TRACE_WRITE_FAILED"}
+
+
+def test_latest_failed_attempt_is_current_even_without_canonical_rule(store) -> None:
+    earlier = datetime(2026, 8, 11, 8, 0, tzinfo=timezone.utc)
+    later = datetime(2026, 8, 11, 9, 0, tzinfo=timezone.utc)
+    store.create_run(run("run_pass", started_at=earlier))
+    store.finish_run("run_pass", status="PASS", metrics={})
+    store.save_candidate_lineage(
+        rule_id="rule_x",
+        rule=rule(1),
+        run_id="run_pass",
+        extraction_id="ext_pass",
+        document_id="doc_x",
+    )
+    issue = ValidationIssue(
+        issue_id="issue_latest_fail",
+        severity="FAIL",
+        code="LATEST_COMPILATION_FAILED",
+        stage="VALIDATE",
+        fact_id="rule_x",
+        message="最新编译失败",
+        recommended_action="修复后重试",
+    )
+    store.create_run(run("run_fail", started_at=later))
+    store.append_step(
+        "run_fail",
+        step("run_fail", 1, "VALIDATE").model_copy(
+            update={"status": "FAIL", "issues": [issue]}
+        ),
+    )
+    store.finish_run("run_fail", status="FAIL", metrics={"issues": 1})
+    store.save_candidate_lineage(
+        rule_id="rule_x",
+        rule=None,
+        run_id="run_fail",
+        extraction_id="ext_fail",
+        document_id="doc_x",
+    )
+
+    trace = store.get_rule_trace("rule_x")
+
+    assert trace is not None
+    assert trace.run.run_id == "run_fail"
+    assert trace.rule is None
+    assert trace.issues == [issue]
+    assert [item.run_id for item in trace.history] == ["run_fail", "run_pass"]
 
 
 def test_extraction_run_marker_supports_idempotent_backfill(store) -> None:
@@ -429,6 +483,7 @@ def test_identical_publish_step_is_idempotent_but_changed_payload_conflicts(stor
 
 def test_postgres_candidate_write_uses_unique_conflict_safe_sql() -> None:
     from src.knowledge_extension.rule_explanation.pipeline_store import (
+        LINEAGE_TABLE,
         LINEAGE_MIGRATION,
     )
     from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
@@ -469,6 +524,15 @@ def test_postgres_candidate_write_uses_unique_conflict_safe_sql() -> None:
     assert "policy_rule_lineage.doc_id=excluded.doc_id" in publication_upsert
     assert "canonical_rule is not distinct from excluded.canonical_rule" in publication_upsert
     assert "created_at=excluded.created_at" not in publication_upsert
+    assert "when policy_rule_lineage.release_id is null" in publication_upsert
+    assert "else policy_rule_lineage.published_at" in publication_upsert
+    assert "published_at timestamptz" in LINEAGE_TABLE.lower()
+    assert "add column if not exists published_at timestamptz" in LINEAGE_MIGRATION.lower()
+    assert "published_at timestamptz default" not in LINEAGE_MIGRATION.lower()
+    assert "add column if not exists published_at timestamptz" in _SCHEMA.lower()
+    assert _SCHEMA.lower().index("add column if not exists published_at") < (
+        _SCHEMA.lower().index("unique index")
+    )
     assert "unique index" in LINEAGE_MIGRATION.lower()
     assert "unique index" in _SCHEMA.lower()
 
@@ -531,13 +595,13 @@ def test_pipeline_schema_adds_lineage_columns_before_unique_index() -> None:
     assert client.unique_index_created
 
 
-def test_history_prefers_canonical_version_and_leaves_null_candidate_last(store) -> None:
-    for run_id, candidate_rule in (
-        ("run_v2", rule(2)),
-        ("run_v1", rule(1)),
-        ("run_null", None),
+def test_history_uses_attempt_time_and_old_publication_does_not_reorder(store) -> None:
+    for run_id, candidate_rule, started_at in (
+        ("run_v2", rule(2), datetime(2026, 8, 11, 10, 0, tzinfo=timezone.utc)),
+        ("run_v1", rule(1), datetime(2026, 8, 11, 9, 0, tzinfo=timezone.utc)),
+        ("run_null", None, datetime(2026, 8, 11, 8, 0, tzinfo=timezone.utc)),
     ):
-        store.create_run(run(run_id))
+        store.create_run(run(run_id, started_at=started_at))
         store.finish_run(run_id, status="PASS", metrics={})
         store.save_candidate_lineage(
             rule_id="rule_x",
@@ -564,11 +628,95 @@ def test_history_prefers_canonical_version_and_leaves_null_candidate_last(store)
     if isinstance(store, PostgresCompilationTraceStore):
         history_sql = next(
             sql for sql in store._client.executed_sql
-            if "from policy_rule_lineage where rule_id" in sql
+            if "from policy_rule_lineage as lineage" in sql
         )
-        assert "(canonical_rule is null) asc" in history_sql
-        assert "rule_version desc nulls last" in history_sql
-        assert "created_at desc" in history_sql
+        assert "run.started_at desc" in history_sql
+        assert "lineage.created_at desc" in history_sql
+
+
+def test_publication_uses_first_publish_time_not_candidate_time(store, monkeypatch) -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler import trace_store
+
+    candidate_time = datetime(2026, 8, 11, 8, 0, tzinfo=timezone.utc)
+    publish_time = datetime(2026, 8, 11, 9, 0, tzinfo=timezone.utc)
+    retry_time = datetime(2026, 8, 11, 10, 0, tzinfo=timezone.utc)
+    moments = iter((candidate_time, publish_time, retry_time))
+
+    class Clock:
+        @classmethod
+        def now(cls, tz):
+            return next(moments)
+
+    store.create_run(run("run_1"))
+    store.finish_run("run_1", status="PASS", metrics={})
+    monkeypatch.setattr(trace_store, "datetime", Clock)
+    store.save_candidate_lineage(
+        rule_id="rule_x",
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+    )
+    store.save_lineage(
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+        release_id="release_1",
+    )
+
+    first = store.get_rule_trace("rule_x")
+    assert first is not None
+    assert first.publication is not None
+    assert first.publication.published_at == publish_time
+
+    store.save_lineage(
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+        release_id="release_1",
+    )
+    retried = store.get_rule_trace("rule_x")
+    assert retried is not None
+    assert retried.publication == first.publication
+
+
+def test_legacy_release_without_publish_time_does_not_invent_one(store) -> None:
+    store.create_run(run("run_legacy"))
+    store.finish_run("run_legacy", status="PASS", metrics={})
+    store.save_candidate_lineage(
+        rule_id="rule_x",
+        rule=rule(1),
+        run_id="run_legacy",
+        extraction_id="ext_legacy",
+        document_id="doc_x",
+    )
+    lineages = (
+        store._lineages
+        if isinstance(store, InMemoryCompilationTraceStore)
+        else store._client.lineages
+    )
+    lineages[0]["release_id"] = "release_legacy"
+
+    trace = store.get_rule_trace("rule_x")
+
+    assert trace is not None
+    assert trace.publication is not None
+    assert trace.publication.release_id == "release_legacy"
+    assert trace.publication.published_at is None
+
+    store.save_lineage(
+        rule=rule(1),
+        run_id="run_legacy",
+        extraction_id="ext_legacy",
+        document_id="doc_x",
+        release_id="release_legacy",
+    )
+    retried = store.get_rule_trace("rule_x")
+    assert retried is not None
+    assert retried.publication is not None
+    assert retried.publication.published_at is None
 
 
 @pytest.mark.parametrize(

@@ -125,6 +125,7 @@ class InMemoryCompilationTraceStore:
             and item["run_id"] == run_id
         ), None)
         if candidate is not None:
+            first_publication = candidate["release_id"] is None
             if candidate["release_id"] not in {None, release_id}:
                 raise ValueError(
                     f"编译运行 {run_id} 已关联其他发布: "
@@ -136,8 +137,11 @@ class InMemoryCompilationTraceStore:
                 or candidate["document_id"] != document_id
             ):
                 raise ValueError(f"编译运行 {run_id} 血缘快照冲突")
+            if first_publication:
+                candidate["published_at"] = datetime.now(timezone.utc)
             candidate["release_id"] = release_id
             return
+        now = datetime.now(timezone.utc)
         self._lineages.append({
             "rule_id": rule.rule_id,
             "rule": rule.model_copy(deep=True),
@@ -145,7 +149,8 @@ class InMemoryCompilationTraceStore:
             "extraction_id": extraction_id,
             "document_id": document_id,
             "release_id": release_id,
-            "created_at": datetime.now(timezone.utc),
+            "published_at": now,
+            "created_at": now,
         })
 
     def save_candidate_lineage(
@@ -171,6 +176,7 @@ class InMemoryCompilationTraceStore:
             "extraction_id": extraction_id,
             "document_id": document_id,
             "release_id": None,
+            "published_at": None,
             "created_at": datetime.now(timezone.utc),
         })
 
@@ -178,8 +184,7 @@ class InMemoryCompilationTraceStore:
         lineages = sorted(
             (item for item in self._lineages if item["rule_id"] == rule_id),
             key=lambda item: (
-                item["rule"] is not None,
-                item["rule"].rule_version if item["rule"] else -1,
+                self._runs[item["run_id"]].started_at,
                 item["created_at"],
             ),
             reverse=True,
@@ -218,7 +223,7 @@ class InMemoryCompilationTraceStore:
             publication=(
                 RulePublication(
                     release_id=current["release_id"],
-                    published_at=current["created_at"],
+                    published_at=current["published_at"],
                 )
                 if current["release_id"] else None
             ),
@@ -276,6 +281,8 @@ CREATE TABLE IF NOT EXISTS policy_compile_steps (
 );
 CREATE INDEX IF NOT EXISTS idx_policy_compile_steps_run
     ON policy_compile_steps(run_id, sequence_no);
+ALTER TABLE policy_rule_lineage
+    ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_lineage_rule_compile_run
     ON policy_rule_lineage(rule_id, compile_run_id);
 """
@@ -382,13 +389,19 @@ class PostgresCompilationTraceStore:
         release_id: str,
     ) -> None:
         # 候选发布只补 release_id，编译时固化的审计快照与时间不得覆盖。
+        now = datetime.now(timezone.utc)
         rows = self._get_client().execute(
             """INSERT INTO policy_rule_lineage
                (lineage_id, rule_id, extraction_id, doc_id, compile_run_id,
-                rule_version, canonical_rule, release_id, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                rule_version, canonical_rule, release_id, published_at, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (rule_id, compile_run_id) DO UPDATE SET
-                 release_id=EXCLUDED.release_id
+                 release_id=EXCLUDED.release_id,
+                 published_at=CASE
+                     WHEN policy_rule_lineage.release_id IS NULL
+                     THEN EXCLUDED.published_at
+                     ELSE policy_rule_lineage.published_at
+                 END
                WHERE (policy_rule_lineage.release_id IS NULL
                   OR policy_rule_lineage.release_id=EXCLUDED.release_id)
                  AND policy_rule_lineage.extraction_id=EXCLUDED.extraction_id
@@ -400,7 +413,7 @@ class PostgresCompilationTraceStore:
                 f"lin_{uuid.uuid4().hex[:16]}", rule.rule_id, extraction_id,
                 document_id, run_id, rule.rule_version,
                 self._json(rule.model_dump(mode="json")), release_id,
-                datetime.now(timezone.utc),
+                now, now,
             ),
         )
         if not rows:
@@ -418,8 +431,8 @@ class PostgresCompilationTraceStore:
         self._get_client().execute(
             """INSERT INTO policy_rule_lineage
                (lineage_id, rule_id, extraction_id, doc_id, compile_run_id,
-                rule_version, canonical_rule, release_id, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s)
+                rule_version, canonical_rule, release_id, published_at, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s)
                ON CONFLICT (rule_id, compile_run_id) DO NOTHING""",
             (
                 f"lin_{uuid.uuid4().hex[:16]}", rule_id, extraction_id, document_id,
@@ -431,11 +444,12 @@ class PostgresCompilationTraceStore:
 
     def get_rule_trace(self, rule_id: str) -> RuleCompilationTraceResponse | None:
         rows = self._get_client().execute(
-            """SELECT * FROM policy_rule_lineage WHERE rule_id=%s
-               AND compile_run_id IS NOT NULL
-               ORDER BY (canonical_rule IS NULL) ASC,
-                        rule_version DESC NULLS LAST,
-                        created_at DESC""",
+            """SELECT lineage.* FROM policy_rule_lineage AS lineage
+               JOIN policy_compile_runs AS run
+                 ON run.run_id=lineage.compile_run_id
+               WHERE lineage.rule_id=%s AND lineage.compile_run_id IS NOT NULL
+               ORDER BY run.started_at DESC,
+                        lineage.created_at DESC""",
             (rule_id,),
         )
         if not rows:
@@ -475,7 +489,7 @@ class PostgresCompilationTraceStore:
             publication=(
                 RulePublication(
                     release_id=current["release_id"],
-                    published_at=current.get("created_at"),
+                    published_at=current.get("published_at"),
                 )
                 if current.get("release_id") else None
             ),
