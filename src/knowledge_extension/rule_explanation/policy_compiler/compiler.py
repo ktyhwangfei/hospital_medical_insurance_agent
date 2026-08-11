@@ -131,7 +131,14 @@ class PolicyRuleCompiler:
                 continue
             value = dict(fact.value)
             if "ratio" in value:
-                ratio = normalize_ratio(value["ratio"])
+                raw_ratio = value["ratio"]
+                if isinstance(raw_ratio, str) and raw_ratio.strip().endswith("%"):
+                    try:
+                        ratio = float(Decimal(raw_ratio.strip()[:-1]) / Decimal("100"))
+                    except InvalidOperation:
+                        ratio = None
+                else:
+                    ratio = normalize_ratio(raw_ratio)
                 if ratio is None:
                     issues.append(self._issue(
                         "FAIL", "RATIO_INVALID", "CANONICALIZE", fact_id=fact.fact_id,

@@ -101,6 +101,22 @@ _change_set_service: "ChangeSetService | None" = None
 _decision_task_service: "DecisionTaskService | None" = None
 _knowledge_build_store: KnowledgeBuildStore | None = None
 _knowledge_build_service: KnowledgeBuildService | None = None
+_compilation_trace_store: Any | None = None
+
+
+def _get_compilation_trace_store():
+    global _compilation_trace_store
+    if _compilation_trace_store is None:
+        from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+            InMemoryCompilationTraceStore,
+            PostgresCompilationTraceStore,
+        )
+        _compilation_trace_store = (
+            InMemoryCompilationTraceStore()
+            if os.environ.get("USE_MEMORY_STORAGE") == "1"
+            else PostgresCompilationTraceStore()
+        )
+    return _compilation_trace_store
 
 
 def _get_knowledge_build_store() -> KnowledgeBuildStore:
@@ -154,12 +170,27 @@ def _get_change_set_service() -> "ChangeSetService":
             InMemoryChangeSetStore,
             PostgresChangeSetStore,
         )
+        from src.knowledge_extension.rule_explanation.policy_compiler.compiler import (
+            PolicyRuleCompiler,
+        )
+        from src.knowledge_extension.rule_explanation.policy_compiler.service import (
+            PolicyCompilationService,
+        )
         store = (
             InMemoryChangeSetStore()
             if os.environ.get("USE_MEMORY_STORAGE") == "1"
             else PostgresChangeSetStore()
         )
-        _change_set_service = ChangeSetService(_get_service(), store)
+        pipeline_store = PipelineStore()
+        _change_set_service = ChangeSetService(
+            _get_service(),
+            store,
+            compilation_service=PolicyCompilationService(
+                pipeline_store,
+                PolicyRuleCompiler(),
+                _get_compilation_trace_store(),
+            ),
+        )
     return _change_set_service
 
 

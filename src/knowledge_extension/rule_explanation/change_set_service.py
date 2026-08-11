@@ -107,10 +107,12 @@ class ChangeSetService:
         workbench_service: KnowledgeWorkbenchService,
         store: ChangeSetStore,
         orchestrator: "PipelineOrchestrator | None" = None,
+        compilation_service: "PolicyCompilationService | None" = None,
     ) -> None:
         self._workbench = workbench_service
         self._store = store
         self._orchestrator = orchestrator
+        self._compilation_service = compilation_service
 
     def _get_orchestrator(self) -> "PipelineOrchestrator":
         """获取提取编排器（未注入时懒创建默认实例）。"""
@@ -125,18 +127,20 @@ class ChangeSetService:
         """基于当前文档审核通过的单元/知识，构建（或重建）该文档的变更集。"""
         document = self._workbench.get_document(doc_id)
         items, quality_report, risk_counts = _aggregate_units(document.units)
+        items, blockers, compilation_blocked = self._compile_items(document.units, items)
 
         change_set = KnowledgeChangeSet(
             change_set_id=change_set_id_for(doc_id),
             source_document_version_id=f"{doc_id}",
             doc_id=doc_id,
             doc_title=document.doc_title,
-            status="PENDING_REVIEW",
+            status="NEEDS_DECISION" if compilation_blocked else "PENDING_REVIEW",
             summary={"additions": len(items), "modifications": 0, "replacements": 0,
                      "expirations": 0, "unchanged": 0},
             items=items,
             quality_report=quality_report,
             risk_summary=risk_counts,
+            blockers=blockers,
         )
         return self._store.save(change_set)
 
@@ -163,6 +167,7 @@ class ChangeSetService:
         # 以入参选择为唯一聚合边界，不回查或补全整篇文档。
         selected_units = [selection.unit for selection in units]
         items, quality_report, risk_counts = _aggregate_units(selected_units)
+        items, blockers, compilation_blocked = self._compile_items(selected_units, items)
         source_units = [selection.source_revision for selection in units]
         source_doc_ids = {source.doc_id for source in source_units}
         doc_id = next(iter(source_doc_ids)) if len(source_doc_ids) == 1 else "MULTI"
@@ -175,17 +180,53 @@ class ChangeSetService:
             source_units=source_units,
             semantic_contract_version=semantic_contract_version,
             supersedes_candidate_id=supersedes_candidate_id,
-            status="PENDING_REVIEW",
+            status="NEEDS_DECISION" if compilation_blocked else "PENDING_REVIEW",
             summary={"additions": len(items), "modifications": 0, "replacements": 0,
                      "expirations": 0, "unchanged": 0},
             items=items,
             quality_report=quality_report,
             risk_summary=risk_counts,
+            blockers=blockers,
         )
         return self._store.save(change_set)
 
     def list_change_sets(self, doc_id: str = "") -> list[KnowledgeChangeSet]:
         return self._store.list(doc_id)
+
+    def _compile_items(
+        self,
+        units: list[ApprovedUnit],
+        items: list[ChangeSetItem],
+    ) -> tuple[list[ChangeSetItem], list[dict[str, Any]], bool]:
+        if self._compilation_service is None:
+            return items, [], False
+        compiled = self._compilation_service.compile_units(units)
+        output: list[ChangeSetItem] = []
+        blockers: dict[str, dict[str, Any]] = {}
+        blocked = False
+        for item in items:
+            candidate = compiled[item.rule_id]
+            blocked = blocked or candidate.status in {"REVIEW", "FAIL"}
+            for issue in candidate.issues:
+                blockers[issue.issue_id] = issue.model_dump(mode="json")
+            if candidate.canonical_rules:
+                for rule in candidate.canonical_rules:
+                    output.append(item.model_copy(update={
+                        "item_id": f"ci_{rule.rule_id}",
+                        "rule_id": rule.rule_id,
+                        "compile_run_id": candidate.compile_run_id,
+                        "compilation_status": candidate.status,
+                        "canonical_rule": rule,
+                        "needs_human": item.needs_human or blocked,
+                    }))
+            else:
+                output.append(item.model_copy(update={
+                    "compile_run_id": candidate.compile_run_id,
+                    "compilation_status": candidate.status,
+                    "canonical_rule": None,
+                    "needs_human": True,
+                }))
+        return output, list(blockers.values()), blocked
 
     def get_change_set(self, change_set_id: str) -> KnowledgeChangeSet | None:
         return self._store.get(change_set_id)

@@ -20,6 +20,15 @@ from src.knowledge_extension.rule_explanation.change_set_store import (
 from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
     KnowledgeWorkbenchService,
 )
+from src.knowledge_extension.rule_explanation.policy_compiler.compiler import (
+    PolicyRuleCompiler,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.service import (
+    PolicyCompilationService,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+    InMemoryCompilationTraceStore,
+)
 from src.tests.unit.knowledge_extension.test_knowledge_workbench import (
     FakePipelineStore,
     _extraction,
@@ -58,6 +67,116 @@ def test_build_change_set_for_document() -> None:
     # 落库可查
     assert service.get_change_set(change_set.change_set_id) is not None
     assert len(service.list_change_sets("doc_1")) == 1
+
+
+def test_build_change_set_compiles_items_and_snapshots_extraction() -> None:
+    first = _leaf_ids()[0]
+    extraction = _extraction(first, _rules())
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda extraction_id: (
+        extraction if extraction_id == extraction["extraction_id"] else None
+    )
+    traces = InMemoryCompilationTraceStore()
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(pipeline),
+        InMemoryChangeSetStore(),
+        compilation_service=PolicyCompilationService(
+            pipeline, PolicyRuleCompiler(), traces
+        ),
+    )
+
+    change_set = service.build_for_document("doc_1")
+
+    assert change_set.status == "PENDING_REVIEW"
+    assert all(item.compile_run_id for item in change_set.items)
+    assert all(item.compilation_status == "PASS" for item in change_set.items)
+    assert all(item.canonical_rule is not None for item in change_set.items)
+    first_run = traces.get_run(change_set.items[0].compile_run_id)
+    assert first_run.raw_input["source_text"] == extraction["source_text"]
+    assert first_run.llm_output == extraction["extracted_fields"]
+
+
+def test_review_compilation_persists_run_and_blocks_candidate() -> None:
+    first = _leaf_ids()[0]
+    relation_rule = {
+        "rule_id": "relative_only",
+        "rule_type": "payment_ratio",
+        "psn_type": "retiree",
+        "expression": {
+            "operator": "MULTIPLY",
+            "reference": {"population": "employee"},
+            "factor": "0.6",
+        },
+        "source_text": "退休人员按在职人员比例折算。",
+        "confidence": 0.9,
+    }
+    extraction = _extraction(first, [relation_rule])
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda extraction_id: extraction
+    traces = InMemoryCompilationTraceStore()
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(pipeline),
+        InMemoryChangeSetStore(),
+        compilation_service=PolicyCompilationService(
+            pipeline, PolicyRuleCompiler(), traces
+        ),
+    )
+
+    change_set = service.build_for_document("doc_1")
+
+    assert change_set.status == "NEEDS_DECISION"
+    assert change_set.items[0].compilation_status == "REVIEW"
+    assert change_set.items[0].canonical_rule is None
+    assert {blocker["code"] for blocker in change_set.blockers} == {"NOT_FOUND"}
+    assert traces.get_run(change_set.items[0].compile_run_id).status == "REVIEW"
+
+
+def test_legacy_change_set_items_remain_uncompiled() -> None:
+    first = _leaf_ids()[0]
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(FakePipelineStore([_extraction(first, _rules())])),
+        InMemoryChangeSetStore(),
+    )
+
+    change_set = service.build_for_document("doc_1")
+
+    assert all(item.compile_run_id is None for item in change_set.items)
+    assert all(item.canonical_rule is None for item in change_set.items)
+
+
+def test_trace_write_failure_finishes_started_run_before_raising() -> None:
+    first = _leaf_ids()[0]
+    extraction = _extraction(first, _rules()[:1])
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda extraction_id: extraction
+
+    class FailingTraceStore(InMemoryCompilationTraceStore):
+        last_run_id = ""
+        failed_once = False
+
+        def create_run(self, run):
+            self.last_run_id = run.run_id
+            return super().create_run(run)
+
+        def append_step(self, run_id, step):
+            if not self.failed_once:
+                self.failed_once = True
+                raise RuntimeError("trace unavailable")
+            return super().append_step(run_id, step)
+
+    traces = FailingTraceStore()
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(pipeline),
+        InMemoryChangeSetStore(),
+        compilation_service=PolicyCompilationService(
+            pipeline, PolicyRuleCompiler(), traces
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="trace unavailable"):
+        service.build_for_document("doc_1")
+
+    assert traces.get_run(traces.last_run_id).status == "FAIL"
 
 
 def test_build_change_set_is_idempotent_upsert() -> None:

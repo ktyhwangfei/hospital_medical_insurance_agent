@@ -12,6 +12,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from src.knowledge_extension.rule_explanation.policy_compiler.models import (
+    CanonicalRule,
+    CompileStatus,
+)
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -42,6 +47,9 @@ class ChangeSetItem(BaseModel):
     risk_level: RiskLevel = "LOW"
     impact_scope: dict[str, Any] = Field(default_factory=dict)
     needs_human: bool = True
+    compile_run_id: str | None = None
+    compilation_status: CompileStatus | None = None
+    canonical_rule: CanonicalRule | None = None
 
 
 class ChangeSetQualityReport(BaseModel):
