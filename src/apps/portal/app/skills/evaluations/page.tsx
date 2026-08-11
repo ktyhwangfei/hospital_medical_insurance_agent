@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { AlertCircle, FlaskConical, Plus } from 'lucide-react'
 import { createSkillEvalCase, listSkillEvalCases } from '@/lib/api-client'
@@ -42,7 +43,7 @@ function EvaluationsContent() {
   }, [])
 
   useEffect(() => {
-    void load()
+    void Promise.resolve().then(load)
   }, [load])
 
   async function addCase(): Promise<void> {
@@ -81,7 +82,7 @@ function EvaluationsContent() {
           <p className="text-xs text-slate-500">
             筛选中：<span className="font-medium text-slate-700">{displayName(skillFilter)}</span>
             （<code className="font-mono">{skillFilter}</code>）
-            <a href="/skills/evaluations" className="ml-2 text-blue-700 hover:underline">清除筛选</a>
+            <Link href="/skills/evaluations" className="ml-2 text-blue-700 hover:underline">清除筛选</Link>
           </p>
         )}
       </header>

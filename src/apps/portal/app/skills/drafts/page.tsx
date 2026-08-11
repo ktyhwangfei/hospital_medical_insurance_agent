@@ -39,7 +39,7 @@ export default function SkillDraftsPage() {
   }, [])
 
   useEffect(() => {
-    void load()
+    void Promise.resolve().then(load)
   }, [load])
 
   async function confirmDelete() {
