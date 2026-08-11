@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SkillsLayout from '../../app/skills/layout'
 import SkillGovernanceWorkbench, * as workbenchModule from '@/components/skills/skill-governance-workbench'
+import { lifecycleSteps } from '@/components/skills/skill-lifecycle-stepper'
 import type { InfraSkillCatalogResponse, SkillWorkbenchResponse } from '@/lib/types'
 
 const { readWorkbenchUrl } = workbenchModule
@@ -116,6 +117,123 @@ const workbenchResponse: SkillWorkbenchResponse = {
   total: 1,
   page: 1,
   page_size: 50,
+}
+
+const version = {
+  version_id: 'version-1',
+  skill_id: 'settlement_explain_skill',
+  semantic_version: '1.1.0',
+  source_commit: 'short-hash',
+  source_path: 'skills/settlement_explain_skill',
+  artifact_hash: 'abcdef123456uvwxyz',
+  manifest_snapshot: {},
+  dependency_snapshot: {},
+  file_count: 5,
+  validation_status: 'passed',
+  validation_issues: [],
+  created_by: 'portal-user',
+  created_at: '2026-08-05T06:00:00Z',
+}
+
+const evaluationRun = {
+  run_id: 'run-1',
+  skill_id: 'settlement_explain_skill',
+  version_id: 'version-1',
+  baseline_version_id: 'baseline-1',
+  suite_version: 7,
+  config_hash: 'config1234567890hash',
+  routing_manifest_hash: 'routing123456789hash',
+  status: 'failed',
+  metrics: {
+    total: 10,
+    passed: 8,
+    required_total: 5,
+    required_passed: 4,
+    top1_accuracy: 0.8,
+    baseline_top1_accuracy: 0.7,
+    regression_count: 3,
+    new_false_takeover_count: 1,
+    gate_passed: false,
+  },
+  results: [
+    {
+      case_id: 'case-new-failure',
+      expected_skill_id: 'settlement_explain_skill',
+      candidate_skill_id: null,
+      baseline_skill_id: 'settlement_explain_skill',
+      candidate_confidence: 0.2,
+      baseline_confidence: 0.9,
+      candidate_passed: false,
+      baseline_passed: true,
+      required: true,
+      diff: 'new_failure',
+      candidate_keywords: [],
+      baseline_keywords: [],
+    },
+    {
+      case_id: 'case-route-changed',
+      expected_skill_id: 'settlement_explain_skill',
+      candidate_skill_id: 'other_skill',
+      baseline_skill_id: 'settlement_explain_skill',
+      candidate_confidence: 0.75,
+      baseline_confidence: 0.8,
+      candidate_passed: false,
+      baseline_passed: true,
+      required: false,
+      diff: 'route_changed',
+      candidate_keywords: [],
+      baseline_keywords: [],
+    },
+    {
+      case_id: 'case-unchanged-fail',
+      expected_skill_id: 'settlement_explain_skill',
+      candidate_skill_id: null,
+      baseline_skill_id: null,
+      candidate_confidence: 0,
+      baseline_confidence: 0,
+      candidate_passed: false,
+      baseline_passed: false,
+      required: false,
+      diff: 'unchanged_fail',
+      candidate_keywords: [],
+      baseline_keywords: [],
+    },
+    {
+      case_id: 'case-new-pass',
+      expected_skill_id: 'settlement_explain_skill',
+      candidate_skill_id: 'settlement_explain_skill',
+      baseline_skill_id: null,
+      candidate_confidence: 0.95,
+      baseline_confidence: 0.1,
+      candidate_passed: true,
+      baseline_passed: false,
+      required: false,
+      diff: 'new_pass',
+      candidate_keywords: [],
+      baseline_keywords: [],
+    },
+  ],
+  case_snapshots: [
+    {
+      case_id: 'case-new-failure',
+      suite_version: 7,
+      question_template: '患者 P001 的审批理由是绝密内容',
+      expected_skill_id: 'settlement_explain_skill',
+      required: true,
+      risk_tags: ['HIGH'],
+      business_tags: [],
+      source_type: 'feedback',
+      source_ref: 'sensitive-source',
+      contains_sensitive_data: true,
+      enabled: true,
+      created_by: 'portal-user',
+      created_at: '2026-08-05T06:00:00Z',
+      updated_at: '2026-08-05T06:00:00Z',
+    },
+  ],
+  created_by: 'portal-user',
+  created_at: '2026-08-05T06:10:00Z',
+  completed_at: '2026-08-05T06:11:00Z',
 }
 
 describe('Skill governance workbench', () => {
@@ -433,10 +551,11 @@ describe('Skill governance workbench', () => {
   it('shows server-backed lifecycle steps and three tabs', async () => {
     render(<SkillGovernanceWorkbench />)
 
-    expect(await screen.findByText('版本登记')).toBeVisible()
-    expect(screen.getByText('批量评测')).toBeVisible()
-    expect(screen.getByText('人工审批')).toBeVisible()
-    expect(screen.getByText('Test 激活')).toBeVisible()
+    expect(await screen.findByText('评测')).toBeVisible()
+    expect(screen.getByText('定位问题')).toBeVisible()
+    expect(screen.getByText('修改')).toBeVisible()
+    expect(screen.getByText('复审')).toBeVisible()
+    expect(screen.getByText('发布')).toBeVisible()
     // 意见4 方案A：评测/发布 tab 上移顶层列表页，工作区只剩 总览/版本/开发详情
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       '总览',
@@ -450,7 +569,7 @@ describe('Skill governance workbench', () => {
     const user = userEvent.setup()
     render(<SkillGovernanceWorkbench />)
 
-    await user.click(await screen.findByRole('button', { name: /批量评测/ }))
+    await user.click(await screen.findByRole('button', { name: /^评测/ }))
 
     // 意见4 方案A：评测 tab 已上移，lifecycle 评测步骤改为 router.push 到顶层评测页（带 skill 筛选）
     expect(mockRouterPush).toHaveBeenCalledWith(
@@ -478,6 +597,142 @@ describe('Skill governance workbench', () => {
       expect.stringMatching(/\/skills\/releases\?skill=settlement_explain_skill/),
     )
     expect(mockApproveSkillRelease).not.toHaveBeenCalled()
+  })
+
+  it('shows the fixed evaluation metrics and regression comparison surface', async () => {
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
+
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText('候选通过率')).toBeVisible()
+    expect(screen.getByText('活动基线通过率')).toBeVisible()
+    expect(screen.getByText('新增回归')).toBeVisible()
+    expect(screen.getByText('必测通过数')).toBeVisible()
+    expect(screen.getByRole('table', { name: '评测差异案例' })).toBeVisible()
+  })
+
+  it('keeps the queue and loaded evaluation evidence when releases fail', async () => {
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
+    mockListSkillReleases.mockRejectedValue(new Error('release unavailable'))
+
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByTestId('skill-catalog-item-settlement_explain_skill')).toBeVisible()
+    expect(await screen.findByText('80%')).toBeVisible()
+    expect(screen.getByRole('alert')).toHaveTextContent('release unavailable')
+    expect(screen.getByRole('alert')).toHaveTextContent('刷新')
+  })
+
+  it('renders the service reason with one primary control and a read-only evidence control', async () => {
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
+
+    render(<SkillGovernanceWorkbench />)
+
+    expect((await screen.findAllByText('当前版本尚未完成评测'))[0]).toBeVisible()
+    expect(screen.getAllByTestId('skill-primary-action')).toHaveLength(1)
+    const evidence = screen.getByRole('button', { name: '查看治理证据' })
+    expect(evidence).not.toHaveAttribute('data-testid', 'skill-primary-action')
+    await userEvent.click(evidence)
+    expect(screen.getByRole('dialog', { name: '治理证据' })).toBeVisible()
+  })
+
+  it('maps the five governance stages and fails closed for an unknown stage', () => {
+    expect(lifecycleSteps({ ...workbenchResponse.items[0], current_stage: 'diagnose' }).map((step) => [step.label, step.state])).toEqual([
+      ['评测', 'completed'],
+      ['定位问题', 'current'],
+      ['修改', 'pending'],
+      ['复审', 'pending'],
+      ['发布', 'pending'],
+    ])
+    expect(lifecycleSteps({ ...workbenchResponse.items[0], current_stage: 'healthy' }).map((step) => step.state)).toEqual([
+      'completed', 'completed', 'completed', 'completed', 'completed',
+    ])
+    expect(lifecycleSteps({
+      ...workbenchResponse.items[0],
+      current_stage: 'unexpected',
+    } as unknown as SkillWorkbenchResponse['items'][number]).map((step) => step.state)).toEqual([
+      'pending', 'pending', 'pending', 'pending', 'pending',
+    ])
+  })
+
+  it('renders an accessible ordered lifecycle with visible state text', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{ ...workbenchResponse.items[0], current_stage: 'healthy', governance_status: 'healthy' }],
+    })
+    render(<SkillGovernanceWorkbench />)
+
+    const lifecycle = await screen.findByRole('list', { name: 'Skill 治理阶段' })
+    expect(lifecycle).toHaveTextContent('评测')
+    expect(lifecycle).toHaveTextContent('定位问题')
+    expect(lifecycle).toHaveTextContent('修改')
+    expect(lifecycle).toHaveTextContent('复审')
+    expect(lifecycle).toHaveTextContent('发布')
+    expect(lifecycle).toHaveTextContent('已完成')
+  })
+
+  it('shows no active baseline instead of inventing zero percent', async () => {
+    mockListSkillEvalRuns.mockResolvedValue({
+      items: [{ ...evaluationRun, baseline_version_id: null }],
+      total: 1,
+    })
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText('无活动基线')).toBeVisible()
+    expect(screen.queryByText('0%')).not.toBeInTheDocument()
+  })
+
+  it('filters regression cases and exposes only shortened, non-sensitive evidence', async () => {
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
+    const releaseWithPrivateReason = {
+      ...releasePage('approved').items[0],
+      approval_reason: '包含患者 P002 的审批理由',
+    }
+    mockListSkillReleases.mockResolvedValue({ items: [releaseWithPrivateReason], total: 1 })
+    const user = userEvent.setup()
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText('case-new-failure')).toBeVisible()
+    expect(screen.getByText('case-route-changed')).toBeVisible()
+    expect(screen.getByText('case-unchanged-fail')).toBeVisible()
+    expect(screen.queryByText('case-new-pass')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '改善' }))
+    expect(screen.getByText('case-new-pass')).toBeVisible()
+    expect(screen.queryByText('case-new-failure')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '全部' }))
+    expect(screen.getByText('case-new-failure')).toBeVisible()
+    expect(screen.getByText('case-new-pass')).toBeVisible()
+    expect(screen.getAllByText('失败码不可用')[0]).toBeVisible()
+    expect(screen.getByText('abcdef…uvwxyz')).toBeVisible()
+    expect(screen.getByText('short-hash')).toBeVisible()
+    expect(screen.queryByText(version.artifact_hash)).not.toBeInTheDocument()
+    expect(screen.queryByText(evaluationRun.config_hash)).not.toBeInTheDocument()
+    expect(screen.queryByText(/P001|P002|绝密内容|审批理由/)).not.toBeInTheDocument()
+  })
+
+  it('keeps evidence accessible and unavailable actions neutral', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        next_action: 'view_evidence',
+        next_action_reason: '治理证据暂不可用',
+        test_release_status: null,
+      }],
+    })
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByRole('complementary', { name: '治理证据' })).toBeInTheDocument()
+    const nextAction = screen.getByLabelText('下一步治理动作')
+    expect(nextAction).toHaveAttribute('data-status', 'unavailable')
+    expect(nextAction).not.toHaveClass('bg-emerald-50')
+    expect(screen.queryByTestId('skill-primary-action')).not.toBeInTheDocument()
   })
 
   it('keeps catalog fallback read-only when governance aggregation fails', async () => {
@@ -588,7 +843,7 @@ describe('Skill governance workbench', () => {
     await userEvent.click(await screen.findByRole('button', { name: '激活 Test Shadow' }))
 
     await waitFor(() => expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(2))
-    expect((await screen.findAllByText('Test Shadow 已激活'))[0]).toBeVisible()
+    expect((await screen.findAllByText('Test Active'))[0]).toBeVisible()
   })
 
   it('keeps selected skill and tab after closing route diagnostics', async () => {

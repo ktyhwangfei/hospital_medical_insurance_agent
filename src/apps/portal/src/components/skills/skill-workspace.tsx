@@ -2,6 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   approveSkillRelease,
@@ -24,9 +33,11 @@ import type {
 } from '@/lib/types'
 
 import SkillDevelopmentTab from './skill-development-tab'
+import SkillEvalMetricStrip from './skill-eval-metric-strip'
+import SkillEvidenceRail from './skill-evidence-rail'
 import SkillLifecycleStepper from './skill-lifecycle-stepper'
-import SkillOverviewTab from './skill-overview-tab'
-import SkillPrimaryActionBar from './skill-primary-action-bar'
+import SkillNextActionBar from './skill-next-action-bar'
+import SkillRegressionTable from './skill-regression-table'
 import SkillVersionsTab from './skill-versions-tab'
 import {
   computePrimaryAction,
@@ -39,7 +50,6 @@ interface SkillWorkspaceProps {
   activeTab: SkillWorkbenchTab
   environment: 'dev' | 'test'
   onTabChange: (tab: SkillWorkbenchTab) => void
-  // 评测/发布已上移到顶层列表页（意见4 方案A）：工作区内点击相关导航时跳转过去（带 skill 筛选）
   onOpenTopPage: (page: 'evaluations' | 'releases') => void
   onChanged: () => void
   onOpenExecution: () => void
@@ -57,6 +67,13 @@ const emptyErrors: EvidenceErrors = {
   versions: null,
   evaluations: null,
   releases: null,
+}
+
+const errorLabels: Record<keyof EvidenceErrors, string> = {
+  detail: 'Skill 详情',
+  versions: '版本证据',
+  evaluations: '评测证据',
+  releases: '发布记录',
 }
 
 function errorMessage(reason: unknown): string {
@@ -80,15 +97,18 @@ export default function SkillWorkspace({
   const [reloadToken, setReloadToken] = useState(0)
   const [actionBusy, setActionBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [evidenceOpen, setEvidenceOpen] = useState(false)
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null)
 
-  // 下一个主治理动作：依据已加载证据推导，提到顶层一键执行，避免钻 Tab
   const primaryAction = useMemo(
     () => computePrimaryAction(item, versions, evalRuns, releases),
     [item, versions, evalRuns, releases],
   )
+  const latestRun = evalRuns[0] ?? null
+  const latestRelease = latestActiveRelease(releases) ?? null
+  const latestVersion = versions[0] ?? null
+  const localTab = activeTab === 'versions' || activeTab === 'development' ? activeTab : 'overview'
 
-  // 评测/发布 Tab 已上移顶层列表页（意见4 方案A）：原 navigate('evaluation'|'release')
-  // 统一重定向到对应顶层页（带 skill 筛选），其余 Tab 仍走 onTabChange
   const handleNavigate = useCallback(
     (tab: SkillWorkbenchTab) => {
       if (tab === 'evaluation') onOpenTopPage('evaluations')
@@ -97,12 +117,6 @@ export default function SkillWorkspace({
     },
     [onTabChange, onOpenTopPage],
   )
-
-  // 切换 Skill 时清掉上一次动作的残留状态
-  useEffect(() => {
-    setActionError(null)
-    setActionBusy(false)
-  }, [item.skill_id])
 
   const loadEvidence = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -133,7 +147,11 @@ export default function SkillWorkspace({
     onChanged()
   }
 
-  // 顶层主动作执行：写操作直接调 API 后刷新证据；navigate 仅切 Tab；none 无操作
+  function openEvidence(caseId?: string): void {
+    setSelectedCaseId(caseId ?? null)
+    setEvidenceOpen(true)
+  }
+
   async function runPrimary(): Promise<void> {
     const action = primaryAction
     setActionError(null)
@@ -147,8 +165,7 @@ export default function SkillWorkspace({
       const key = `${item.skill_id}:${action.kind}:${Date.now()}`
       switch (action.kind) {
         case 'run_evaluation': {
-          const version =
-            versions.find((candidate) => candidate.validation_status === 'passed') ?? versions[0]
+          const version = versions.find((candidate) => candidate.validation_status === 'passed') ?? versions[0]
           if (!version) throw new Error('没有可评测的已登记版本')
           await createSkillEvalRun(item.skill_id, { version_id: version.version_id })
           break
@@ -164,37 +181,31 @@ export default function SkillWorkspace({
           break
         }
         case 'request_approval': {
-          const target = latestActiveRelease(releases)
-          if (!target) throw new Error('没有可推进的候选发布')
+          if (!latestRelease) throw new Error('没有可推进的候选发布')
           await requestSkillReleaseApproval(
             item.skill_id,
-            target.release_id,
-            { expected_revision: target.revision },
+            latestRelease.release_id,
+            { expected_revision: latestRelease.revision },
             key,
           )
           break
         }
         case 'approve': {
-          const target = latestActiveRelease(releases)
-          if (!target) throw new Error('没有待审批的发布')
+          if (!latestRelease) throw new Error('没有待审批的发布')
           await approveSkillRelease(
             item.skill_id,
-            target.release_id,
-            {
-              expected_revision: target.revision,
-              reason: '固定评测门禁通过，同意 Test Shadow 激活',
-            },
+            latestRelease.release_id,
+            { expected_revision: latestRelease.revision, reason: '固定评测门禁通过，同意 Test Shadow 激活' },
             key,
           )
           break
         }
         case 'activate': {
-          const target = latestActiveRelease(releases)
-          if (!target) throw new Error('没有可激活的发布')
+          if (!latestRelease) throw new Error('没有可激活的发布')
           await activateSkillRelease(
             item.skill_id,
-            target.release_id,
-            { expected_revision: target.revision },
+            latestRelease.release_id,
+            { expected_revision: latestRelease.revision },
             key,
           )
           break
@@ -208,68 +219,84 @@ export default function SkillWorkspace({
     }
   }
 
+  const errorEntries = Object.entries(errors).filter((entry): entry is [keyof EvidenceErrors, string] => Boolean(entry[1]))
+  const releaseTone = item.test_release_status === 'active'
+    ? 'bg-emerald-50 text-emerald-700'
+    : item.governance_status === 'gate_failed'
+      ? 'bg-red-50 text-red-700'
+      : 'bg-slate-100 text-slate-700'
+
   return (
-    <section data-testid={`skill-workspace-${item.skill_id}`} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+    <section data-testid={`skill-workspace-${item.skill_id}`} className="min-h-0 bg-white">
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-4 py-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-950">{detail?.skill_name ?? item.skill_name}</h2>
           <p className="mt-1 font-mono text-xs text-slate-500">{item.skill_id}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-700">v{item.semantic_version}</span>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-700">候选 v{item.candidate_version ?? item.semantic_version}</span>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-700">基线 {item.baseline_version ?? '无'}</span>
           <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700">{item.business_action} · {item.business_object}</span>
-          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">{item.test_release_status === 'active' ? 'Test Active' : 'Test 未激活'}</span>
+          <span className={`rounded-full px-2.5 py-1 ${releaseTone}`}>{item.test_release_status === 'active' ? 'Test Active' : 'Test 未激活'}</span>
         </div>
+      </header>
+
+      <div className="grid min-h-0 min-[1120px]:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="flex min-h-0 min-w-0 flex-col">
+          {errorEntries.map(([source, message]) => (
+            <p key={source} role="alert" className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+              {errorLabels[source]}加载失败：<span>{message}</span>。请刷新重试。
+            </p>
+          ))}
+          <SkillLifecycleStepper item={item} onNavigate={handleNavigate} />
+          <SkillEvalMetricStrip latest={latestRun} />
+          <SkillRegressionTable latest={latestRun} onViewEvidence={(caseId) => openEvidence(caseId)} />
+
+          <Tabs data-testid="skill-workspace-tabs" value={localTab} onValueChange={(value) => onTabChange(value as SkillWorkbenchTab)} className="flex-col gap-0">
+            <div className="overflow-x-auto border-b border-slate-200 px-4">
+              <TabsList aria-label="Skill 治理视图" variant="line" className="h-11 gap-2">
+                <TabsTrigger value="overview">总览</TabsTrigger>
+                <TabsTrigger value="versions">版本</TabsTrigger>
+                <TabsTrigger value="development">开发详情</TabsTrigger>
+              </TabsList>
+            </div>
+            <div className="p-4">
+              <TabsContent value="overview" className="flex flex-wrap gap-4 text-sm">
+                <button type="button" onClick={onOpenExecution} className="min-h-11 font-medium text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 sm:min-h-9">执行调试</button>
+                <button type="button" onClick={() => onTabChange('development')} className="min-h-11 font-medium text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 sm:min-h-9">查看开发详情</button>
+              </TabsContent>
+              <TabsContent value="versions">
+                <SkillVersionsTab item={item} versions={versions} error={null} readOnly={environment === 'dev'} onChanged={handleChanged} />
+              </TabsContent>
+              <TabsContent value="development">
+                <SkillDevelopmentTab detail={detail} error={null} onOpenExecution={onOpenExecution} />
+              </TabsContent>
+            </div>
+          </Tabs>
+
+          <SkillNextActionBar
+            action={primaryAction}
+            reason={item.next_action_reason}
+            busy={actionBusy}
+            readOnly={environment === 'dev'}
+            error={actionError}
+            onRun={() => void runPrimary()}
+            onViewEvidence={() => openEvidence()}
+          />
+        </div>
+        <SkillEvidenceRail item={item} latestRun={latestRun} latestRelease={latestRelease} latestVersion={latestVersion} />
       </div>
-      <SkillPrimaryActionBar
-        action={primaryAction}
-        busy={actionBusy}
-        readOnly={environment === 'dev'}
-        error={actionError}
-        onRun={() => void runPrimary()}
-      />
-      <SkillLifecycleStepper item={item} onNavigate={handleNavigate} />
-      <Tabs
-        data-testid="skill-workspace-tabs"
-        value={activeTab}
-        onValueChange={(value) => onTabChange(value as SkillWorkbenchTab)}
-        className="flex-col gap-0"
-      >
-        <div className="overflow-x-auto border-b border-slate-200 px-4">
-          <TabsList aria-label="Skill 治理视图" variant="line" className="h-11 gap-2">
-            <TabsTrigger value="overview">总览</TabsTrigger>
-            <TabsTrigger value="versions">版本</TabsTrigger>
-            <TabsTrigger value="development">开发详情</TabsTrigger>
-          </TabsList>
-        </div>
-        <div className="min-h-[360px] p-5">
-          <TabsContent value="overview">
-            <SkillOverviewTab
-              item={item}
-              versions={versions}
-              evalRuns={evalRuns}
-              releases={releases}
-              onNavigate={handleNavigate}
-              onOpenExecution={onOpenExecution}
-            />
-          </TabsContent>
-          <TabsContent value="versions">
-            <SkillVersionsTab
-              item={item}
-              versions={versions}
-              error={errors.versions}
-              readOnly={environment === 'dev'}
-              onChanged={handleChanged}
-            />
-          </TabsContent>
-          <TabsContent value="development">
-            <SkillDevelopmentTab detail={detail} error={errors.detail} onOpenExecution={onOpenExecution} />
-          </TabsContent>
-          {activeTab !== 'development' && errors.detail && (
-            <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{errors.detail}</p>
-          )}
-        </div>
-      </Tabs>
+
+      <Dialog open={evidenceOpen} onOpenChange={setEvidenceOpen}>
+        <DialogContent showCloseButton={false} className="inset-y-0 left-auto right-0 top-0 h-dvh w-full max-w-none translate-x-0 translate-y-0 content-start overflow-y-auto rounded-none p-0 sm:max-w-none md:max-w-xl">
+          <DialogHeader className="border-b border-slate-200 p-4">
+            <DialogTitle>治理证据</DialogTitle>
+            <DialogDescription>{selectedCaseId ? `案例 ${selectedCaseId} 的脱敏冻结证据` : '当前 Skill 的门禁与冻结记录'}</DialogDescription>
+          </DialogHeader>
+          <SkillEvidenceRail variant="drawer" item={item} latestRun={latestRun} latestRelease={latestRelease} latestVersion={latestVersion} />
+          <div className="p-4"><DialogClose render={<Button variant="outline" className="min-h-11 w-full" aria-label="关闭治理证据" />}>关闭</DialogClose></div>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }
