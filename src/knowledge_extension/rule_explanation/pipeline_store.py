@@ -117,6 +117,11 @@ CREATE INDEX IF NOT EXISTS idx_lineage_doc ON policy_rule_lineage(doc_id);
 CREATE INDEX IF NOT EXISTS idx_lineage_ext ON policy_rule_lineage(extraction_id);
 """
 
+LINEAGE_UNIQUE_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lineage_rule_compile_run
+    ON policy_rule_lineage(rule_id, compile_run_id)
+"""
+
 LINEAGE_MIGRATION = """
 ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS compile_run_id VARCHAR(64);
 ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS rule_version INTEGER;
@@ -125,6 +130,8 @@ ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS release_id VARCHAR(64);
 CREATE INDEX IF NOT EXISTS idx_lineage_rule_version ON policy_rule_lineage(rule_id, rule_version);
 CREATE INDEX IF NOT EXISTS idx_lineage_compile_run ON policy_rule_lineage(compile_run_id);
 CREATE INDEX IF NOT EXISTS idx_lineage_release ON policy_rule_lineage(release_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lineage_rule_compile_run
+    ON policy_rule_lineage(rule_id, compile_run_id);
 """
 
 
@@ -179,6 +186,8 @@ class PipelineStore:
                     client.execute(stmt)
                 except Exception:
                     pass
+        # 唯一索引是候选/发布血缘并发安全的前提，迁移后必须成功建立。
+        client.execute(LINEAGE_UNIQUE_INDEX)
 
     # ── Policy Documents ──────────────────────────────────────────
 

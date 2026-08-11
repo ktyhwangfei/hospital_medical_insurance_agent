@@ -68,7 +68,13 @@ class InMemoryCompilationTraceStore:
         if run_id not in self._runs or step.run_id != run_id:
             raise ValueError(f"编译运行不存在或步骤不匹配: {run_id}")
         items = self._steps.setdefault(run_id, [])
-        if any(item.step_id == step.step_id or item.sequence_no == step.sequence_no for item in items):
+        existing = next((
+            item for item in items
+            if item.step_id == step.step_id or item.sequence_no == step.sequence_no
+        ), None)
+        if existing is not None and existing.stage == "PUBLISH" and existing == step:
+            return existing.model_copy(deep=True)
+        if existing is not None:
             raise ValueError(f"编译步骤已存在: {step.step_id}")
         items.append(step.model_copy(deep=True))
         return step.model_copy(deep=True)
@@ -115,9 +121,13 @@ class InMemoryCompilationTraceStore:
             item for item in self._lineages
             if item["rule_id"] == rule.rule_id
             and item["run_id"] == run_id
-            and item["release_id"] in {None, release_id}
         ), None)
         if candidate is not None:
+            if candidate["release_id"] not in {None, release_id}:
+                raise ValueError(
+                    f"编译运行 {run_id} 已关联其他发布: "
+                    f"{candidate['release_id']}"
+                )
             candidate.update({
                 "rule": rule.model_copy(deep=True),
                 "release_id": release_id,
@@ -256,6 +266,8 @@ CREATE TABLE IF NOT EXISTS policy_compile_steps (
 );
 CREATE INDEX IF NOT EXISTS idx_policy_compile_steps_run
     ON policy_compile_steps(run_id, sequence_no);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lineage_rule_compile_run
+    ON policy_rule_lineage(rule_id, compile_run_id);
 """
 
 
@@ -296,10 +308,13 @@ class PostgresCompilationTraceStore:
     def append_step(self, run_id: str, step: CompileStep) -> CompileStep:
         if self.get_run(run_id) is None or step.run_id != run_id:
             raise ValueError(f"编译运行不存在或步骤不匹配: {run_id}")
-        if any(
-            item.step_id == step.step_id or item.sequence_no == step.sequence_no
-            for item in self._get_steps(run_id)
-        ):
+        existing = next((
+            item for item in self._get_steps(run_id)
+            if item.step_id == step.step_id or item.sequence_no == step.sequence_no
+        ), None)
+        if existing is not None and existing.stage == "PUBLISH" and existing == step:
+            return existing
+        if existing is not None:
             raise ValueError(f"编译步骤已存在: {step.step_id}")
         self._get_client().execute(
             """INSERT INTO policy_compile_steps
@@ -354,28 +369,30 @@ class PostgresCompilationTraceStore:
         document_id: str,
         release_id: str,
     ) -> None:
-        updated = self._get_client().execute(
-            """UPDATE policy_rule_lineage
-               SET canonical_rule=%s, release_id=%s, rule_version=%s, created_at=%s
-               WHERE rule_id=%s AND compile_run_id=%s
-               AND (release_id IS NULL OR release_id=%s)
+        rows = self._get_client().execute(
+            """INSERT INTO policy_rule_lineage
+               (lineage_id, rule_id, extraction_id, doc_id, compile_run_id,
+                rule_version, canonical_rule, release_id, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (rule_id, compile_run_id) DO UPDATE SET
+                 extraction_id=EXCLUDED.extraction_id,
+                 doc_id=EXCLUDED.doc_id,
+                 rule_version=EXCLUDED.rule_version,
+                 canonical_rule=EXCLUDED.canonical_rule,
+                 release_id=EXCLUDED.release_id,
+                 created_at=EXCLUDED.created_at
+               WHERE policy_rule_lineage.release_id IS NULL
+                  OR policy_rule_lineage.release_id=EXCLUDED.release_id
                RETURNING *""",
             (
+                f"lin_{uuid.uuid4().hex[:16]}", rule.rule_id, extraction_id,
+                document_id, run_id, rule.rule_version,
                 self._json(rule.model_dump(mode="json")), release_id,
-                rule.rule_version, datetime.now(timezone.utc), rule.rule_id, run_id,
-                release_id,
+                datetime.now(timezone.utc),
             ),
         )
-        if updated:
-            return
-        self._insert_lineage(
-            rule_id=rule.rule_id,
-            rule=rule,
-            run_id=run_id,
-            extraction_id=extraction_id,
-            document_id=document_id,
-            release_id=release_id,
-        )
+        if not rows:
+            raise ValueError(f"编译运行 {run_id} 已关联其他发布")
 
     def save_candidate_lineage(
         self,
@@ -386,35 +403,17 @@ class PostgresCompilationTraceStore:
         extraction_id: str,
         document_id: str,
     ) -> None:
-        self._insert_lineage(
-            rule_id=rule_id,
-            rule=rule,
-            run_id=run_id,
-            extraction_id=extraction_id,
-            document_id=document_id,
-            release_id=None,
-        )
-
-    def _insert_lineage(
-        self,
-        *,
-        rule_id: str,
-        rule: CanonicalRule | None,
-        run_id: str,
-        extraction_id: str,
-        document_id: str,
-        release_id: str | None,
-    ) -> None:
         self._get_client().execute(
             """INSERT INTO policy_rule_lineage
                (lineage_id, rule_id, extraction_id, doc_id, compile_run_id,
                 rule_version, canonical_rule, release_id, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s)
+               ON CONFLICT (rule_id, compile_run_id) DO NOTHING""",
             (
                 f"lin_{uuid.uuid4().hex[:16]}", rule_id, extraction_id, document_id,
                 run_id, rule.rule_version if rule else None,
                 self._json(rule.model_dump(mode="json")) if rule else None,
-                release_id, datetime.now(timezone.utc),
+                datetime.now(timezone.utc),
             ),
         )
 

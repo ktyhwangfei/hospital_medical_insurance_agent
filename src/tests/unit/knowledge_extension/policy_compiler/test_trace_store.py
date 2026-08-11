@@ -59,9 +59,11 @@ class FakePostgreSQLClient:
         self.runs: dict[str, dict] = {}
         self.steps: list[dict] = []
         self.lineages: list[dict] = []
+        self.executed_sql: list[str] = []
 
     def execute(self, sql: str, params=()):
         normalized = " ".join(sql.lower().split())
+        self.executed_sql.append(normalized)
         if normalized.startswith("insert into policy_compile_runs"):
             if params[0] in self.runs:
                 raise ValueError("duplicate run")
@@ -108,12 +110,33 @@ class FakePostgreSQLClient:
                 "lineage_id", "rule_id", "extraction_id", "doc_id", "compile_run_id",
                 "rule_version", "canonical_rule", "release_id", "created_at",
             )
-            row = dict(zip(keys, params))
-            row["canonical_rule"] = (
-                json.loads(row["canonical_rule"]) if row["canonical_rule"] else None
-            )
+            if "do nothing" in normalized:
+                values = (*params[:7], None, params[7])
+            else:
+                values = params
+            row = dict(zip(keys, values))
+            if row["canonical_rule"]:
+                row["canonical_rule"] = json.loads(row["canonical_rule"])
+            existing = next((
+                item for item in self.lineages
+                if item["rule_id"] == row["rule_id"]
+                and item["compile_run_id"] == row["compile_run_id"]
+            ), None)
+            if existing is not None and "do nothing" in normalized:
+                return []
+            if existing is not None and "do update" in normalized:
+                if existing["release_id"] not in {None, row["release_id"]}:
+                    return []
+                existing.update({
+                    name: row[name]
+                    for name in (
+                        "extraction_id", "doc_id", "rule_version", "canonical_rule",
+                        "release_id", "created_at",
+                    )
+                })
+                return [dict(existing)]
             self.lineages.append(row)
-            return []
+            return [dict(row)] if "returning" in normalized else []
         if normalized.startswith("update policy_rule_lineage"):
             (
                 canonical_rule, release_id, rule_version, created_at,
@@ -326,3 +349,142 @@ def test_candidate_without_canonical_rule_keeps_failed_run_and_issues_queryable(
     assert [item.sequence_no for item in trace.steps] == [1]
     assert trace.issues == [issue]
     assert trace.publication is None
+
+
+def test_candidate_lineage_duplicate_write_is_idempotent(store) -> None:
+    store.create_run(run("run_1"))
+    store.finish_run("run_1", status="PASS", metrics={})
+
+    for _ in range(2):
+        store.save_candidate_lineage(
+            rule_id="rule_x",
+            rule=rule(1),
+            run_id="run_1",
+            extraction_id="ext_1",
+            document_id="doc_x",
+        )
+
+    trace = store.get_rule_trace("rule_x")
+
+    assert trace is not None
+    assert len(trace.history) == 1
+
+
+def test_identical_publish_step_is_idempotent_but_changed_payload_conflicts(store) -> None:
+    store.create_run(run("run_1"))
+    publish = step("run_1", 8, "PUBLISH").model_copy(update={
+        "step_id": "run_1_publish_release_1",
+        "input_payload": {"release_id": "release_1", "rule_id": "rule_x"},
+        "output_payload": {"rules_collection": "rules_release_1"},
+    })
+
+    store.append_step("run_1", publish)
+    store.append_step("run_1", publish)
+
+    with pytest.raises(ValueError, match="编译步骤已存在"):
+        store.append_step(
+            "run_1",
+            publish.model_copy(update={
+                "output_payload": {"rules_collection": "rules_other"}
+            }),
+        )
+
+
+def test_postgres_candidate_write_uses_unique_conflict_safe_sql() -> None:
+    from src.knowledge_extension.rule_explanation.pipeline_store import (
+        LINEAGE_MIGRATION,
+    )
+    from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+        _SCHEMA,
+    )
+
+    postgres = PostgresCompilationTraceStore("postgresql://test")
+    fake = FakePostgreSQLClient()
+    postgres._client = fake
+    postgres.create_run(run("run_1"))
+    postgres.save_candidate_lineage(
+        rule_id="rule_x",
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+    )
+    postgres.save_lineage(
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+        release_id="release_1",
+    )
+
+    candidate_insert = next(
+        sql for sql in fake.executed_sql
+        if sql.startswith("insert into policy_rule_lineage")
+    )
+    publication_upsert = next(
+        sql for sql in reversed(fake.executed_sql)
+        if sql.startswith("insert into policy_rule_lineage")
+    )
+    assert "on conflict (rule_id, compile_run_id) do nothing" in candidate_insert
+    assert "on conflict (rule_id, compile_run_id) do update" in publication_upsert
+    assert "policy_rule_lineage.release_id is null" in publication_upsert
+    assert "unique index" in LINEAGE_MIGRATION.lower()
+    assert "unique index" in _SCHEMA.lower()
+
+
+def test_compile_run_cannot_be_reassociated_to_another_release(store) -> None:
+    store.create_run(run("run_1"))
+    store.finish_run("run_1", status="PASS", metrics={})
+    store.save_candidate_lineage(
+        rule_id="rule_x",
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+    )
+    store.save_lineage(
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+        release_id="release_1",
+    )
+
+    with pytest.raises(ValueError, match="已关联其他发布"):
+        store.save_lineage(
+            rule=rule(1),
+            run_id="run_1",
+            extraction_id="ext_1",
+            document_id="doc_x",
+            release_id="release_2",
+        )
+
+    assert store.has_release_lineage("release_1", ["rule_x"])
+    assert not store.has_release_lineage("release_2", ["rule_x"])
+
+
+def test_pipeline_schema_adds_lineage_columns_before_unique_index() -> None:
+    from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
+
+    class SchemaClient:
+        def __init__(self) -> None:
+            self.compile_run_column_exists = False
+            self.unique_index_created = False
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(sql.lower().split())
+            if "add column if not exists compile_run_id" in normalized:
+                self.compile_run_column_exists = True
+            if "unique index" in normalized:
+                if not self.compile_run_column_exists:
+                    raise AssertionError("unique index created before compile_run_id migration")
+                self.unique_index_created = True
+            return []
+
+    client = SchemaClient()
+    pipeline = PipelineStore()
+    pipeline._client = client
+
+    pipeline._ensure_schema()
+
+    assert client.unique_index_created

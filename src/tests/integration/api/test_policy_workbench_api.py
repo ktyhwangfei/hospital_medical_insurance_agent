@@ -1435,12 +1435,26 @@ def test_rule_trace_backfill_repairs_orphan_extraction_run_and_then_skips() -> N
     )
 
     document = _document()
+    first_knowledge = document.units[0].knowledge[0]
+    second_knowledge = first_knowledge.model_copy(update={
+        "knowledge_id": "kn_2",
+        "business_sentence": "退休人员住院时执行另一待遇规则。",
+    })
+    document = document.model_copy(update={
+        "units": [document.units[0].model_copy(update={
+            "knowledge_count": 2,
+            "knowledge": [first_knowledge, second_knowledge],
+        })],
+    })
     extraction = {
         "extraction_id": "ext_1",
         "doc_id": "doc_1",
         "unit_id": "unit_1",
         "source_text": "政策原文",
-        "extracted_fields": {"rules": [{"knowledge_id": "kn_1"}]},
+        "extracted_fields": {"rules": [
+            {"knowledge_id": "kn_1"},
+            {"knowledge_id": "kn_2"},
+        ]},
     }
 
     class Workbench:
@@ -1469,13 +1483,17 @@ def test_rule_trace_backfill_repairs_orphan_extraction_run_and_then_skips() -> N
 
     first = backfill_rules(Workbench(), compiler, Extractions(), traces)
     second = backfill_rules(Workbench(), compiler, Extractions(), traces)
-    trace = traces.get_rule_trace("kn_1")
+    first_trace = traces.get_rule_trace("kn_1")
+    second_trace = traces.get_rule_trace("kn_2")
 
-    assert first.compiled == 1
-    assert second.skipped == 1
-    assert trace is not None
-    assert trace.run.run_id != "run_orphan"
+    assert first.compiled == 2
+    assert second.skipped == 2
+    assert first_trace is not None
+    assert second_trace is not None
+    assert first_trace.run.run_id != "run_orphan"
+    assert second_trace.run.run_id != "run_orphan"
     assert traces.get_run("run_orphan") is not None
-    assert [step.sequence_no for step in trace.steps] == sorted(
-        step.sequence_no for step in trace.steps
-    )
+    for trace in (first_trace, second_trace):
+        assert [step.sequence_no for step in trace.steps] == sorted(
+            step.sequence_no for step in trace.steps
+        )

@@ -666,6 +666,18 @@ class FailPublishTraceStore(InMemoryCompilationTraceStore):
         return super().append_step(run_id, step)
 
 
+class FailFirstLineageTraceStore(InMemoryCompilationTraceStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed_once = False
+
+    def save_lineage(self, **kwargs):
+        if not self.failed_once:
+            self.failed_once = True
+            raise RuntimeError("lineage persistence unavailable")
+        return super().save_lineage(**kwargs)
+
+
 def _compile_trace_flow_client(monkeypatch, traces=None):
     from src.runtime.api import policy_workbench_routes
 
@@ -891,3 +903,32 @@ def test_compile_trace_persistence_failure_keeps_active_release_and_run(
     assert quality.get_active_release().release_id == "baseline"  # type: ignore[union-attr]
     assert quality.get_release("candidate_compile_trace").status == "building"  # type: ignore[union-attr]
     assert traces.get_run(run_id).status == "PASS"  # type: ignore[union-attr]
+
+
+def test_release_build_retry_after_lineage_failure_is_idempotent(monkeypatch) -> None:
+    traces = FailFirstLineageTraceStore()
+    client, quality, _traces, _run_id, rule_id = _compile_trace_flow_client(
+        monkeypatch, traces
+    )
+    assert client.post(
+        f"{PREFIX}/change-sets/CS_compile_trace/approve",
+        json={"reviewer": "reviewer", "note": "核验通过"},
+    ).status_code == 200
+    assert client.post(f"{PREFIX}/releases", json={
+        "release_id": "candidate_compile_trace",
+        "contract_version": "2",
+        "config_hash": QUALITY_CONFIG_HASH,
+        "source_change_set_id": "CS_compile_trace",
+    }).status_code == 201
+
+    first = client.post(f"{PREFIX}/releases/candidate_compile_trace/build")
+    retried = client.post(f"{PREFIX}/releases/candidate_compile_trace/build")
+    trace = traces.get_rule_trace(rule_id)
+
+    assert first.status_code == 503
+    assert retried.status_code == 200
+    assert retried.json()["status"] == "ready"
+    assert quality.get_release("candidate_compile_trace").status == "ready"  # type: ignore[union-attr]
+    assert trace is not None
+    assert [step.stage for step in trace.steps].count("PUBLISH") == 1
+    assert len(trace.history) == 1

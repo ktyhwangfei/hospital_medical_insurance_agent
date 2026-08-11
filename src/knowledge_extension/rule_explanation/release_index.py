@@ -173,7 +173,8 @@ class ReleaseIndexBuilder:
                     "facts_collection": release.facts_collection,
                     "rules_collection": release.rules_collection,
                 },
-                finished_at=datetime.now(timezone.utc),
+                started_at=release.created_at,
+                finished_at=release.created_at,
             ))
             self._traces.save_lineage(
                 rule=rule,
