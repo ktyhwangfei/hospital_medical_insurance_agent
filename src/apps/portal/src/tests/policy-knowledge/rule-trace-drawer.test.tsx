@@ -1,0 +1,104 @@
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import RuleTraceDrawer from '../../components/policy-knowledge/rule-trace-drawer'
+import {
+  getRuleCompilationTrace,
+  type RuleCompilationTrace,
+} from '@/lib/policy-knowledge-api'
+
+vi.mock('@/lib/policy-knowledge-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/policy-knowledge-api')>()),
+  getRuleCompilationTrace: vi.fn(),
+}))
+
+const trace = {
+  rule: {
+    rule_id: 'rule_1',
+    subject: '住院待遇',
+    population: null,
+    conditions: {},
+    result: { ratio: '0.8' },
+    source_type: 'DERIVED',
+    evidence: ['evidence_1'],
+    dependencies: ['rule_base'],
+    formula: { operator: 'COMPLEMENT', reference: { rule_id: 'rule_base' }, factor: null, total: null },
+    compiler_version: '1.0',
+    rule_version: 2,
+    status: 'WARN',
+  },
+  run: {
+    run_id: 'run_1',
+    document_id: 'doc_1',
+    unit_id: 'unit_1',
+    extraction_id: 'ext_1',
+    raw_input: { source_text: '政策原文' },
+    llm_output: { facts: [{ fact_id: 'fact_1' }] },
+    compiler_version: '1.0',
+    status: 'WARN',
+    metrics: {},
+    error: null,
+    started_at: '2026-08-11T00:00:00Z',
+    finished_at: '2026-08-11T00:00:01Z',
+  },
+  raw_input: { source_text: '政策原文' },
+  llm_output: { facts: [{ fact_id: 'fact_1' }] },
+  steps: [
+    { step_id: 'step_2', run_id: 'run_1', sequence_no: 2, stage: 'VALIDATE', status: 'WARN', input_payload: {}, output_payload: {}, issues: [{ issue_id: 'issue_1', severity: 'WARN', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_1', message: '范围重叠', recommended_action: '人工核验' }], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    { step_id: 'step_1', run_id: 'run_1', sequence_no: 1, stage: 'CANONICALIZE', status: 'PASS', input_payload: { fact: 1 }, output_payload: { rule: 1 }, issues: [], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+  ],
+  issues: [{ issue_id: 'issue_1', severity: 'WARN', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_1', message: '范围重叠', recommended_action: '人工核验' }],
+  publication: { release_id: 'release_1', status: 'published', published_at: '2026-08-11T00:00:02Z' },
+  history: [{ run_id: 'run_1', rule_version: 2, status: 'WARN', compiler_version: '1.0', started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' }],
+} satisfies RuleCompilationTrace
+
+beforeEach(() => {
+  vi.mocked(getRuleCompilationTrace).mockReset().mockResolvedValue(trace)
+})
+
+afterEach(cleanup)
+
+describe('rule trace drawer', () => {
+  it('fetches lazily and renders the ordered, expandable audit chain', async () => {
+    const user = userEvent.setup()
+    const onOpenChange = vi.fn()
+    const view = render(
+      <RuleTraceDrawer open={false} ruleId="rule_1" onOpenChange={onOpenChange} />,
+    )
+
+    expect(getRuleCompilationTrace).not.toHaveBeenCalled()
+    view.rerender(
+      <RuleTraceDrawer open ruleId="rule_1" onOpenChange={onOpenChange} />,
+    )
+
+    expect(await screen.findByRole('heading', { name: '规则编译溯源' })).toBeInTheDocument()
+    await waitFor(() => expect(getRuleCompilationTrace).toHaveBeenCalledWith('rule_1'))
+    expect(screen.getByText('原始输入')).toBeInTheDocument()
+    expect(screen.getByText('LLM 提取')).toBeInTheDocument()
+    const stages = screen.getAllByTestId('trace-stage').map((node) => node.textContent)
+    expect(stages[0]).toContain('CANONICALIZE')
+    expect(stages[1]).toContain('VALIDATE')
+    expect(screen.getByText('OVERLAPPING_RANGE')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '查看完整 JSON' }))
+    expect(screen.getByRole('heading', { name: '完整编译轨迹 JSON' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '关闭完整 JSON' }))
+    await user.click(screen.getByRole('button', { name: '关闭溯源' }))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('shows an error and retries the same rule', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getRuleCompilationTrace)
+      .mockRejectedValueOnce(new Error('轨迹加载失败'))
+      .mockResolvedValueOnce(trace)
+
+    render(<RuleTraceDrawer open ruleId="rule_1" onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('轨迹加载失败')
+    await user.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByText('原始输入')).toBeInTheDocument()
+    expect(getRuleCompilationTrace).toHaveBeenCalledTimes(2)
+  })
+})

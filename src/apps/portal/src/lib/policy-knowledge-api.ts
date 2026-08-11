@@ -637,6 +637,97 @@ export interface RuleDetail {
 export const getRuleDetail = (ruleId: string) =>
   request<RuleDetail>(`${WORKBENCH_API}/rules/${encodeURIComponent(ruleId)}`)
 
+export type CompileStage =
+  | 'INPUT_SNAPSHOT'
+  | 'LLM_EXTRACTION'
+  | 'CANONICALIZE'
+  | 'COMPOSE'
+  | 'RESOLVE'
+  | 'DERIVE'
+  | 'VALIDATE'
+  | 'PUBLISH'
+  | 'LEGACY_IMPORT'
+
+export type CompileStatus = 'RUNNING' | 'PASS' | 'WARN' | 'REVIEW' | 'FAIL'
+
+export interface ValidationIssue {
+  issue_id: string
+  severity: 'WARN' | 'REVIEW' | 'FAIL'
+  code: string
+  stage: CompileStage
+  fact_id: string | null
+  rule_id: string | null
+  message: string
+  recommended_action: string
+}
+
+export interface CompileStep {
+  step_id: string
+  run_id: string
+  sequence_no: number
+  stage: CompileStage
+  status: CompileStatus
+  input_payload: Record<string, unknown>
+  output_payload: Record<string, unknown>
+  issues: ValidationIssue[]
+  error: Record<string, unknown> | null
+  duration_ms: number
+  started_at: string
+  finished_at: string | null
+}
+
+export interface RuleCompilationTrace {
+  rule: {
+    rule_id: string
+    subject: string
+    population: string | null
+    conditions: Record<string, unknown>
+    result: Record<string, unknown>
+    source_type: 'DIRECT' | 'DERIVED'
+    evidence: string[]
+    dependencies: string[]
+    formula: Record<string, unknown> | null
+    compiler_version: string
+    rule_version: number
+    status: CompileStatus
+  }
+  run: {
+    run_id: string
+    document_id: string
+    unit_id: string
+    extraction_id: string
+    raw_input: Record<string, unknown>
+    llm_output: Record<string, unknown>
+    model_name?: string | null
+    prompt_version?: string | null
+    schema_version?: string | null
+    compiler_version: string
+    status: CompileStatus
+    metrics: Record<string, unknown>
+    error: Record<string, unknown> | null
+    started_at: string
+    finished_at: string | null
+  }
+  raw_input: Record<string, unknown>
+  llm_output: Record<string, unknown>
+  steps: CompileStep[]
+  issues: ValidationIssue[]
+  publication: { release_id: string; status: string; published_at: string | null } | null
+  history: Array<{
+    run_id: string
+    rule_version: number
+    status: CompileStatus
+    compiler_version: string
+    started_at: string
+    finished_at: string | null
+  }>
+}
+
+export const getRuleCompilationTrace = (ruleId: string) =>
+  request<RuleCompilationTrace>(
+    `${WORKBENCH_API}/rules/${encodeURIComponent(ruleId)}/trace`,
+  )
+
 export interface DecisionTask {
   task_id: string
   task_type: string

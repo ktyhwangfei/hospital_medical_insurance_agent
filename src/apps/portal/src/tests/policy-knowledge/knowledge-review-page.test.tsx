@@ -8,6 +8,7 @@ import KnowledgeReviewDetailRoute from '../../../app/policy-knowledge/knowledge/
 import {
   approveChangeSet,
   getChangeSet,
+  getRuleCompilationTrace,
   getRuleDetail,
   listChangeSets,
   listDecisionTasks,
@@ -38,6 +39,7 @@ vi.mock('@/lib/policy-knowledge-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/policy-knowledge-api')>()),
   approveChangeSet: vi.fn(),
   getChangeSet: vi.fn(),
+  getRuleCompilationTrace: vi.fn(),
   getRuleDetail: vi.fn(),
   listChangeSets: vi.fn(),
   listDecisionTasks: vi.fn(),
@@ -150,6 +152,16 @@ beforeEach(() => {
   vi.mocked(listChangeSets).mockReset().mockResolvedValue([pendingChangeSet, completedChangeSet])
   vi.mocked(listDecisionTasks).mockReset().mockResolvedValue(pendingTasks)
   vi.mocked(getChangeSet).mockReset().mockResolvedValue(pendingChangeSet)
+  vi.mocked(getRuleCompilationTrace).mockReset().mockResolvedValue({
+    rule: { rule_id: 'RULE_001', subject: '住院待遇', population: null, conditions: {}, result: { ratio: '0.85' }, source_type: 'DIRECT', evidence: ['EVID_001'], dependencies: [], formula: null, compiler_version: '1.0', rule_version: 1, status: 'PASS' },
+    run: { run_id: 'RUN_001', document_id: 'DOC_001', unit_id: 'UNIT_001', extraction_id: 'EXT_001', raw_input: {}, llm_output: {}, model_name: null, prompt_version: null, schema_version: null, compiler_version: '1.0', status: 'PASS', metrics: {}, error: null, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    raw_input: { source_text: '政策原文' },
+    llm_output: { facts: [] },
+    steps: [],
+    issues: [],
+    publication: null,
+    history: [],
+  })
   vi.mocked(getRuleDetail).mockReset().mockResolvedValue(ruleDetail)
   vi.mocked(resolveDecisionTask).mockReset().mockImplementation(async (taskId, decision) => ({
     ...pendingTasks.find((task) => task.task_id === taskId)!,
@@ -224,6 +236,23 @@ describe('knowledge review detail', () => {
     expect(screen.getByText('需人工确认的风险项')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '整批通过审核' })).toBeDisabled()
     expect(screen.queryByRole('button', { name: /绑定指标|创建指标|新增标准值/ })).not.toBeInTheDocument()
+  })
+
+  it('offers one lazy trace action for every rule row', async () => {
+    const user = userEvent.setup()
+    const page = await KnowledgeReviewDetailRoute({
+      params: Promise.resolve({ changeSetId: 'CS_REVIEW' }),
+    })
+    render(page)
+
+    const actions = await screen.findAllByRole('button', { name: '查看溯源' })
+    expect(actions).toHaveLength(pendingChangeSet.items.length)
+    expect(getRuleCompilationTrace).not.toHaveBeenCalled()
+
+    await user.click(actions[0])
+
+    await waitFor(() => expect(getRuleCompilationTrace).toHaveBeenCalledWith('RULE_001'))
+    expect(screen.getByRole('heading', { name: '规则编译溯源' })).toBeInTheDocument()
   })
 
   it('exposes row-level and batch re-extract entry points for a reviewable change set', async () => {

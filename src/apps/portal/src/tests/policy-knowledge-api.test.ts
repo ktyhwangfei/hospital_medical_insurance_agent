@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createKnowledgeBuildTask,
   createRelease,
+  getRuleCompilationTrace,
   getReleaseGateStatus,
   getKnowledgeBuildTask,
   getWorkbenchDocuments,
@@ -340,6 +341,19 @@ describe('policy knowledge api', () => {
     expect(result).toEqual(gate)
     expect(fetchMock).toHaveBeenCalledWith(
       `${WORKBENCH_API}/releases/release%2F1/gate-status`,
+      undefined,
+    )
+  })
+
+  it('loads an encoded rule compilation trace', async () => {
+    const trace = { rule: { rule_id: 'rule/1' }, steps: [] }
+    const fetchMock = stubFetchJson(trace)
+
+    const result = await getRuleCompilationTrace('rule/1')
+
+    expect(result).toEqual(trace)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${WORKBENCH_API}/rules/rule%2F1/trace`,
       undefined,
     )
   })
