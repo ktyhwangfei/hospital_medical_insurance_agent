@@ -89,10 +89,10 @@ export default function RuleTraceDrawer({ open, ruleId, onOpenChange }: RuleTrac
           {trace && (
             <div className="space-y-5">
               <div className="flex flex-wrap gap-2 text-xs">
-                <Badge>{trace.rule.source_type}</Badge>
+                {trace.rule ? <Badge>{trace.rule.source_type}</Badge> : <Badge>未生成规范规则</Badge>}
                 <Badge>{trace.run.status}</Badge>
-                <Badge>规则版本 {trace.rule.rule_version}</Badge>
-                <Badge>编译器 {trace.rule.compiler_version}</Badge>
+                {trace.rule && <Badge>规则版本 {trace.rule.rule_version}</Badge>}
+                <Badge>编译器 {trace.rule?.compiler_version ?? trace.run.compiler_version}</Badge>
                 {trace.publication && <Badge>发布 {trace.publication.release_id}</Badge>}
               </div>
 

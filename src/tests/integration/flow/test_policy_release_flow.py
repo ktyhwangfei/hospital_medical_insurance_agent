@@ -824,6 +824,13 @@ def test_compile_trace_governed_release_flow_is_queryable_after_activation(
 ) -> None:
     client, quality, traces, run_id, rule_id = _compile_trace_flow_client(monkeypatch)
 
+    candidate_trace = client.get(f"{PREFIX}/rules/{rule_id}/trace")
+
+    assert candidate_trace.status_code == 200
+    assert candidate_trace.json()["rule_id"] == rule_id
+    assert candidate_trace.json()["run"]["run_id"] == run_id
+    assert candidate_trace.json()["publication"] is None
+
     assert client.post(
         f"{PREFIX}/change-sets/CS_compile_trace/approve",
         json={"reviewer": "reviewer", "note": "核验通过"},

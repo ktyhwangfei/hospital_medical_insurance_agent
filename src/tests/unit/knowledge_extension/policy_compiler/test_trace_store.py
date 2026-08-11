@@ -8,6 +8,7 @@ from src.knowledge_extension.rule_explanation.policy_compiler.models import (
     CanonicalRule,
     CompileRun,
     CompileStep,
+    ValidationIssue,
 )
 from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
     InMemoryCompilationTraceStore,
@@ -108,8 +109,29 @@ class FakePostgreSQLClient:
                 "rule_version", "canonical_rule", "release_id", "created_at",
             )
             row = dict(zip(keys, params))
-            row["canonical_rule"] = json.loads(row["canonical_rule"])
+            row["canonical_rule"] = (
+                json.loads(row["canonical_rule"]) if row["canonical_rule"] else None
+            )
             self.lineages.append(row)
+            return []
+        if normalized.startswith("update policy_rule_lineage"):
+            (
+                canonical_rule, release_id, rule_version, created_at,
+                rule_id, run_id, expected_release_id,
+            ) = params
+            for row in self.lineages:
+                if (
+                    row["rule_id"] == rule_id
+                    and row["compile_run_id"] == run_id
+                    and row["release_id"] in {None, expected_release_id}
+                ):
+                    row.update(
+                        canonical_rule=json.loads(canonical_rule),
+                        release_id=release_id,
+                        rule_version=rule_version,
+                        created_at=created_at,
+                    )
+                    return [dict(row)]
             return []
         if "from policy_compile_runs where run_id" in normalized:
             row = self.runs.get(params[0])
@@ -226,3 +248,81 @@ def test_release_lineage_requires_every_rule(store) -> None:
 
     assert store.has_release_lineage("release_1", ["rule_x"])
     assert not store.has_release_lineage("release_1", ["rule_x", "rule_missing"])
+
+
+def test_candidate_lineage_is_queryable_and_publication_fills_same_history(store) -> None:
+    store.create_run(run("run_1"))
+    store.append_step("run_1", step("run_1", 1, "CANONICALIZE"))
+    store.finish_run("run_1", status="PASS", metrics={})
+    store.save_candidate_lineage(
+        rule_id="rule_x",
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+    )
+
+    candidate = store.get_rule_trace("rule_x")
+
+    assert candidate is not None
+    assert candidate.rule_id == "rule_x"
+    assert candidate.rule == rule(1)
+    assert candidate.publication is None
+    assert len(candidate.history) == 1
+
+    store.save_lineage(
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+        release_id="release_1",
+    )
+    store.save_lineage(
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+        release_id="release_1",
+    )
+    published = store.get_rule_trace("rule_x")
+
+    assert published is not None
+    assert published.publication is not None
+    assert published.publication.release_id == "release_1"
+    assert len(published.history) == 1
+    assert store.has_release_lineage("release_1", ["rule_x"])
+
+
+def test_candidate_without_canonical_rule_keeps_failed_run_and_issues_queryable(store) -> None:
+    issue = ValidationIssue(
+        issue_id="issue_1",
+        severity="FAIL",
+        code="RATIO_INVALID",
+        stage="CANONICALIZE",
+        fact_id="knowledge_failed",
+        message="比例不是有效数值",
+        recommended_action="提供结构化数值",
+    )
+    store.create_run(run("run_failed"))
+    failed_step = step("run_failed", 1, "CANONICALIZE").model_copy(
+        update={"status": "FAIL", "issues": [issue]}
+    )
+    store.append_step("run_failed", failed_step)
+    store.finish_run("run_failed", status="FAIL", metrics={"issues": 1})
+    store.save_candidate_lineage(
+        rule_id="knowledge_failed",
+        rule=None,
+        run_id="run_failed",
+        extraction_id="ext_run_failed",
+        document_id="doc_x",
+    )
+
+    trace = store.get_rule_trace("knowledge_failed")
+
+    assert trace is not None
+    assert trace.rule_id == "knowledge_failed"
+    assert trace.rule is None
+    assert trace.run.status == "FAIL"
+    assert [item.sequence_no for item in trace.steps] == [1]
+    assert trace.issues == [issue]
+    assert trace.publication is None

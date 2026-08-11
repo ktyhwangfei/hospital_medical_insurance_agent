@@ -163,7 +163,7 @@ class RuleTraceHistorySummary(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     run_id: str
-    rule_version: int
+    rule_version: int | None = None
     status: CompileStatus
     compiler_version: str
     started_at: datetime
@@ -173,7 +173,8 @@ class RuleTraceHistorySummary(BaseModel):
 class RuleCompilationTraceResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    rule: CanonicalRule
+    rule_id: str
+    rule: CanonicalRule | None = None
     run: CompileRun
     raw_input: dict[str, Any]
     llm_output: dict[str, Any]

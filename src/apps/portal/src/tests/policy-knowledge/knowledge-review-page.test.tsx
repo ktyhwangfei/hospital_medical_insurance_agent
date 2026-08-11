@@ -153,6 +153,7 @@ beforeEach(() => {
   vi.mocked(listDecisionTasks).mockReset().mockResolvedValue(pendingTasks)
   vi.mocked(getChangeSet).mockReset().mockResolvedValue(pendingChangeSet)
   vi.mocked(getRuleCompilationTrace).mockReset().mockResolvedValue({
+    rule_id: 'RULE_001',
     rule: { rule_id: 'RULE_001', subject: '住院待遇', population: null, conditions: {}, result: { ratio: '0.85' }, source_type: 'DIRECT', evidence: ['EVID_001'], dependencies: [], formula: null, compiler_version: '1.0', rule_version: 1, status: 'PASS' },
     run: { run_id: 'RUN_001', document_id: 'DOC_001', unit_id: 'UNIT_001', extraction_id: 'EXT_001', raw_input: {}, llm_output: {}, model_name: null, prompt_version: null, schema_version: null, compiler_version: '1.0', status: 'PASS', metrics: {}, error: null, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
     raw_input: { source_text: '政策原文' },

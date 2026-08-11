@@ -677,6 +677,7 @@ export interface CompileStep {
 }
 
 export interface RuleCompilationTrace {
+  rule_id: string
   rule: {
     rule_id: string
     subject: string
@@ -690,7 +691,7 @@ export interface RuleCompilationTrace {
     compiler_version: string
     rule_version: number
     status: CompileStatus
-  }
+  } | null
   run: {
     run_id: string
     document_id: string
@@ -715,7 +716,7 @@ export interface RuleCompilationTrace {
   publication: { release_id: string; status: string; published_at: string | null } | null
   history: Array<{
     run_id: string
-    rule_version: number
+    rule_version: number | null
     status: CompileStatus
     compiler_version: string
     started_at: string

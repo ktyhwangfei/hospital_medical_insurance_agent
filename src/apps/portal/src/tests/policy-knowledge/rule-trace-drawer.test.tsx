@@ -14,6 +14,7 @@ vi.mock('@/lib/policy-knowledge-api', async (importOriginal) => ({
 }))
 
 const trace = {
+  rule_id: 'rule_1',
   rule: {
     rule_id: 'rule_1',
     subject: '住院待遇',
@@ -100,5 +101,39 @@ describe('rule trace drawer', () => {
     await user.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByText('原始输入')).toBeInTheDocument()
     expect(getRuleCompilationTrace).toHaveBeenCalledTimes(2)
+  })
+
+  it('renders failed candidate trace without a canonical rule', async () => {
+    vi.mocked(getRuleCompilationTrace).mockResolvedValue({
+      ...trace,
+      rule_id: 'rule_failed',
+      rule: null,
+      run: { ...trace.run, status: 'FAIL' },
+      publication: null,
+      steps: [{
+        ...trace.steps[0],
+        status: 'FAIL',
+        issues: [{
+          ...trace.issues[0],
+          severity: 'FAIL',
+          code: 'RATIO_INVALID',
+          message: '比例不是有效数值',
+        }],
+      }],
+      issues: [{
+        ...trace.issues[0],
+        severity: 'FAIL',
+        code: 'RATIO_INVALID',
+        message: '比例不是有效数值',
+      }],
+      history: [{ ...trace.history[0], status: 'FAIL', rule_version: null }],
+    })
+
+    render(<RuleTraceDrawer open ruleId="rule_failed" onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByText('未生成规范规则')).toBeInTheDocument()
+    expect(screen.getByText('FAIL')).toBeInTheDocument()
+    expect(screen.getByText('RATIO_INVALID')).toBeInTheDocument()
+    expect(screen.getByText('比例不是有效数值')).toBeInTheDocument()
   })
 })

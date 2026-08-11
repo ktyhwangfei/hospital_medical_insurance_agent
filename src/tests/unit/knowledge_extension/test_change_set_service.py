@@ -94,6 +94,13 @@ def test_build_change_set_compiles_items_and_snapshots_extraction() -> None:
     first_run = traces.get_run(change_set.items[0].compile_run_id)
     assert first_run.raw_input["source_text"] == extraction["source_text"]
     assert first_run.llm_output == extraction["extracted_fields"]
+    for item in change_set.items:
+        trace = traces.get_rule_trace(item.rule_id)
+        assert trace is not None
+        assert trace.rule_id == item.rule_id
+        assert trace.rule == item.canonical_rule
+        assert trace.run.run_id == item.compile_run_id
+        assert trace.publication is None
 
 
 def test_review_compilation_persists_run_and_blocks_candidate() -> None:
@@ -129,6 +136,12 @@ def test_review_compilation_persists_run_and_blocks_candidate() -> None:
     assert change_set.items[0].canonical_rule is None
     assert {blocker["code"] for blocker in change_set.blockers} == {"NOT_FOUND"}
     assert traces.get_run(change_set.items[0].compile_run_id).status == "REVIEW"
+    trace = traces.get_rule_trace(change_set.items[0].rule_id)
+    assert trace is not None
+    assert trace.rule_id == change_set.items[0].rule_id
+    assert trace.rule is None
+    assert trace.run.status == "REVIEW"
+    assert {issue.code for issue in trace.issues} == {"NOT_FOUND"}
 
 
 def test_legacy_change_set_items_remain_uncompiled() -> None:

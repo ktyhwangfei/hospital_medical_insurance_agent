@@ -1307,6 +1307,80 @@ def test_rule_compilation_trace_returns_typed_not_found(monkeypatch) -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("raw_rule", "expected_status", "expected_issue"),
+    [
+        (
+            {
+                "knowledge_id": "kn_1",
+                "subject": "payment_ratio",
+                "expression": {
+                    "operator": "MULTIPLY",
+                    "reference": {"population": "employee"},
+                    "factor": "0.6",
+                },
+            },
+            "REVIEW",
+            "NOT_FOUND",
+        ),
+        (
+            {
+                "knowledge_id": "kn_1",
+                "subject": "payment_ratio",
+                "result": {"ratio": "not-a-ratio"},
+            },
+            "FAIL",
+            "RATIO_INVALID",
+        ),
+    ],
+)
+def test_candidate_without_canonical_rule_is_queryable_via_api(
+    monkeypatch, raw_rule, expected_status, expected_issue
+) -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler.compiler import (
+        PolicyRuleCompiler,
+    )
+    from src.knowledge_extension.rule_explanation.policy_compiler.service import (
+        PolicyCompilationService,
+    )
+    from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+        InMemoryCompilationTraceStore,
+    )
+    from src.runtime.api import policy_workbench_routes
+
+    extraction = {
+        "extraction_id": "ext_1",
+        "doc_id": "doc_1",
+        "unit_id": "unit_1",
+        "source_text": "政策原文",
+        "extracted_fields": {"rules": [raw_rule]},
+    }
+
+    class Pipeline:
+        def get_extraction(self, extraction_id):
+            return extraction if extraction_id == "ext_1" else None
+
+    traces = InMemoryCompilationTraceStore()
+    candidate = PolicyCompilationService(
+        Pipeline(), PolicyRuleCompiler(), traces
+    ).compile_units(_document().units)["kn_1"]
+    monkeypatch.setattr(
+        policy_workbench_routes, "_get_compilation_trace_store", lambda: traces
+    )
+
+    response = TestClient(create_app()).get(f"{PREFIX}/rules/kn_1/trace")
+
+    assert candidate.status == expected_status
+    assert candidate.canonical_rules == []
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["rule_id"] == "kn_1"
+    assert payload["rule"] is None
+    assert payload["run"]["status"] == expected_status
+    assert expected_issue in {issue["code"] for issue in payload["issues"]}
+    assert payload["publication"] is None
+
+
 def test_rule_trace_backfill_uses_legacy_import_once_when_extraction_is_missing() -> None:
     from src.knowledge_extension.rule_explanation.policy_compiler.backfill import (
         backfill_rules,
@@ -1343,3 +1417,65 @@ def test_rule_trace_backfill_uses_legacy_import_once_when_extraction_is_missing(
     assert trace is not None
     assert [step.stage for step in trace.steps] == ["LEGACY_IMPORT"]
     assert trace.issues[0].code == "LEGACY_HISTORY_MISSING"
+
+
+def test_rule_trace_backfill_repairs_orphan_extraction_run_and_then_skips() -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler.backfill import (
+        backfill_rules,
+    )
+    from src.knowledge_extension.rule_explanation.policy_compiler.compiler import (
+        PolicyRuleCompiler,
+    )
+    from src.knowledge_extension.rule_explanation.policy_compiler.models import CompileRun
+    from src.knowledge_extension.rule_explanation.policy_compiler.service import (
+        PolicyCompilationService,
+    )
+    from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+        InMemoryCompilationTraceStore,
+    )
+
+    document = _document()
+    extraction = {
+        "extraction_id": "ext_1",
+        "doc_id": "doc_1",
+        "unit_id": "unit_1",
+        "source_text": "政策原文",
+        "extracted_fields": {"rules": [{"knowledge_id": "kn_1"}]},
+    }
+
+    class Workbench:
+        def list_documents(self):
+            summary = type("Summary", (), {"doc_id": document.doc_id})()
+            return type("Documents", (), {"items": [summary]})()
+
+        def get_document(self, _doc_id):
+            return document
+
+    class Extractions:
+        def get_extraction(self, extraction_id):
+            return extraction if extraction_id == "ext_1" else None
+
+    traces = InMemoryCompilationTraceStore()
+    traces.create_run(CompileRun(
+        run_id="run_orphan",
+        document_id="doc_1",
+        unit_id="unit_1",
+        extraction_id="ext_1",
+        raw_input={},
+        llm_output={},
+    ))
+    traces.finish_run("run_orphan", status="PASS", metrics={})
+    compiler = PolicyCompilationService(Extractions(), PolicyRuleCompiler(), traces)
+
+    first = backfill_rules(Workbench(), compiler, Extractions(), traces)
+    second = backfill_rules(Workbench(), compiler, Extractions(), traces)
+    trace = traces.get_rule_trace("kn_1")
+
+    assert first.compiled == 1
+    assert second.skipped == 1
+    assert trace is not None
+    assert trace.run.run_id != "run_orphan"
+    assert traces.get_run("run_orphan") is not None
+    assert [step.sequence_no for step in trace.steps] == sorted(
+        step.sequence_no for step in trace.steps
+    )

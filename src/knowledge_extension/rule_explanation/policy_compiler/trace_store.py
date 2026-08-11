@@ -30,6 +30,15 @@ class CompilationTraceStore(Protocol):
     ) -> CompileRun: ...
     def get_run(self, run_id: str) -> CompileRun | None: ...
     def has_extraction_run(self, extraction_id: str) -> bool: ...
+    def save_candidate_lineage(
+        self,
+        *,
+        rule_id: str,
+        rule: CanonicalRule | None,
+        run_id: str,
+        extraction_id: str,
+        document_id: str,
+    ) -> None: ...
     def save_lineage(
         self,
         *,
@@ -102,7 +111,21 @@ class InMemoryCompilationTraceStore:
     ) -> None:
         if run_id not in self._runs:
             raise ValueError(f"编译运行不存在: {run_id}")
+        candidate = next((
+            item for item in self._lineages
+            if item["rule_id"] == rule.rule_id
+            and item["run_id"] == run_id
+            and item["release_id"] in {None, release_id}
+        ), None)
+        if candidate is not None:
+            candidate.update({
+                "rule": rule.model_copy(deep=True),
+                "release_id": release_id,
+                "created_at": datetime.now(timezone.utc),
+            })
+            return
         self._lineages.append({
+            "rule_id": rule.rule_id,
             "rule": rule.model_copy(deep=True),
             "run_id": run_id,
             "extraction_id": extraction_id,
@@ -111,10 +134,36 @@ class InMemoryCompilationTraceStore:
             "created_at": datetime.now(timezone.utc),
         })
 
+    def save_candidate_lineage(
+        self,
+        *,
+        rule_id: str,
+        rule: CanonicalRule | None,
+        run_id: str,
+        extraction_id: str,
+        document_id: str,
+    ) -> None:
+        if run_id not in self._runs:
+            raise ValueError(f"编译运行不存在: {run_id}")
+        if any(
+            item["rule_id"] == rule_id and item["run_id"] == run_id
+            for item in self._lineages
+        ):
+            return
+        self._lineages.append({
+            "rule_id": rule_id,
+            "rule": rule.model_copy(deep=True) if rule else None,
+            "run_id": run_id,
+            "extraction_id": extraction_id,
+            "document_id": document_id,
+            "release_id": None,
+            "created_at": datetime.now(timezone.utc),
+        })
+
     def get_rule_trace(self, rule_id: str) -> RuleCompilationTraceResponse | None:
         lineages = sorted(
-            (item for item in self._lineages if item["rule"].rule_id == rule_id),
-            key=lambda item: item["rule"].rule_version,
+            (item for item in self._lineages if item["rule_id"] == rule_id),
+            key=lambda item: item["created_at"],
             reverse=True,
         )
         if not lineages:
@@ -126,8 +175,8 @@ class InMemoryCompilationTraceStore:
 
     def has_release_lineage(self, release_id: str, rule_ids: list[str]) -> bool:
         traced = {
-            item["rule"].rule_id for item in self._lineages
-            if item["release_id"] == release_id
+            item["rule_id"] for item in self._lineages
+            if item["release_id"] == release_id and item["rule"] is not None
         }
         return set(rule_ids).issubset(traced)
 
@@ -139,22 +188,29 @@ class InMemoryCompilationTraceStore:
         lineages: list[dict[str, Any]],
     ) -> RuleCompilationTraceResponse:
         return RuleCompilationTraceResponse(
+            rule_id=current["rule_id"],
             rule=current["rule"],
             run=run,
             raw_input=run.raw_input,
             llm_output=run.llm_output,
             steps=steps,
             issues=[issue for step in steps for issue in step.issues],
-            publication=RulePublication(
-                release_id=current["release_id"],
-                published_at=current["created_at"],
+            publication=(
+                RulePublication(
+                    release_id=current["release_id"],
+                    published_at=current["created_at"],
+                )
+                if current["release_id"] else None
             ),
             history=[
                 RuleTraceHistorySummary(
                     run_id=item["run_id"],
-                    rule_version=item["rule"].rule_version,
+                    rule_version=(item["rule"].rule_version if item["rule"] else None),
                     status=self._runs[item["run_id"]].status,
-                    compiler_version=item["rule"].compiler_version,
+                    compiler_version=(
+                        item["rule"].compiler_version
+                        if item["rule"] else self._runs[item["run_id"]].compiler_version
+                    ),
                     started_at=self._runs[item["run_id"]].started_at,
                     finished_at=self._runs[item["run_id"]].finished_at,
                 )
@@ -298,14 +354,66 @@ class PostgresCompilationTraceStore:
         document_id: str,
         release_id: str,
     ) -> None:
+        updated = self._get_client().execute(
+            """UPDATE policy_rule_lineage
+               SET canonical_rule=%s, release_id=%s, rule_version=%s, created_at=%s
+               WHERE rule_id=%s AND compile_run_id=%s
+               AND (release_id IS NULL OR release_id=%s)
+               RETURNING *""",
+            (
+                self._json(rule.model_dump(mode="json")), release_id,
+                rule.rule_version, datetime.now(timezone.utc), rule.rule_id, run_id,
+                release_id,
+            ),
+        )
+        if updated:
+            return
+        self._insert_lineage(
+            rule_id=rule.rule_id,
+            rule=rule,
+            run_id=run_id,
+            extraction_id=extraction_id,
+            document_id=document_id,
+            release_id=release_id,
+        )
+
+    def save_candidate_lineage(
+        self,
+        *,
+        rule_id: str,
+        rule: CanonicalRule | None,
+        run_id: str,
+        extraction_id: str,
+        document_id: str,
+    ) -> None:
+        self._insert_lineage(
+            rule_id=rule_id,
+            rule=rule,
+            run_id=run_id,
+            extraction_id=extraction_id,
+            document_id=document_id,
+            release_id=None,
+        )
+
+    def _insert_lineage(
+        self,
+        *,
+        rule_id: str,
+        rule: CanonicalRule | None,
+        run_id: str,
+        extraction_id: str,
+        document_id: str,
+        release_id: str | None,
+    ) -> None:
         self._get_client().execute(
             """INSERT INTO policy_rule_lineage
                (lineage_id, rule_id, extraction_id, doc_id, compile_run_id,
                 rule_version, canonical_rule, release_id, created_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
-                f"lin_{uuid.uuid4().hex[:16]}", rule.rule_id, extraction_id, document_id,
-                run_id, rule.rule_version, self._json(rule.model_dump(mode="json")),
+                f"lin_{uuid.uuid4().hex[:16]}", rule_id, extraction_id, document_id,
+                run_id, rule.rule_version if rule else None,
+                self._json(rule.model_dump(mode="json")) if rule else None,
                 release_id, datetime.now(timezone.utc),
             ),
         )
@@ -313,8 +421,8 @@ class PostgresCompilationTraceStore:
     def get_rule_trace(self, rule_id: str) -> RuleCompilationTraceResponse | None:
         rows = self._get_client().execute(
             """SELECT * FROM policy_rule_lineage WHERE rule_id=%s
-               AND compile_run_id IS NOT NULL AND canonical_rule IS NOT NULL
-               ORDER BY rule_version DESC, created_at DESC""",
+               AND compile_run_id IS NOT NULL
+               ORDER BY created_at DESC""",
             (rule_id,),
         )
         if not rows:
@@ -329,32 +437,43 @@ class PostgresCompilationTraceStore:
             historical_run = self.get_run(row["compile_run_id"])
             if historical_run is None:
                 continue
-            historical_rule = CanonicalRule(**self._load(row["canonical_rule"], {}))
+            raw_rule = self._load(row.get("canonical_rule"), None)
+            historical_rule = CanonicalRule(**raw_rule) if raw_rule else None
             history.append(RuleTraceHistorySummary(
                 run_id=historical_run.run_id,
-                rule_version=historical_rule.rule_version,
+                rule_version=historical_rule.rule_version if historical_rule else None,
                 status=historical_run.status,
-                compiler_version=historical_rule.compiler_version,
+                compiler_version=(
+                    historical_rule.compiler_version
+                    if historical_rule else historical_run.compiler_version
+                ),
                 started_at=historical_run.started_at,
                 finished_at=historical_run.finished_at,
             ))
+        raw_current_rule = self._load(current.get("canonical_rule"), None)
         return RuleCompilationTraceResponse(
-            rule=CanonicalRule(**self._load(current["canonical_rule"], {})),
+            rule_id=str(current["rule_id"]),
+            rule=CanonicalRule(**raw_current_rule) if raw_current_rule else None,
             run=run,
             raw_input=run.raw_input,
             llm_output=run.llm_output,
             steps=steps,
             issues=[issue for item in steps for issue in item.issues],
-            publication=RulePublication(
-                release_id=current["release_id"],
-                published_at=current.get("created_at"),
+            publication=(
+                RulePublication(
+                    release_id=current["release_id"],
+                    published_at=current.get("created_at"),
+                )
+                if current.get("release_id") else None
             ),
             history=history,
         )
 
     def has_release_lineage(self, release_id: str, rule_ids: list[str]) -> bool:
         rows = self._get_client().execute(
-            "SELECT rule_id FROM policy_rule_lineage WHERE release_id=%s",
+            """SELECT rule_id FROM policy_rule_lineage
+               WHERE release_id=%s AND compile_run_id IS NOT NULL
+               AND canonical_rule IS NOT NULL""",
             (release_id,),
         )
         return set(rule_ids).issubset({str(row["rule_id"]) for row in rows})

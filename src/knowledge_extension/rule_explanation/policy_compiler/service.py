@@ -101,6 +101,24 @@ class PolicyCompilationService:
                     status=status,
                     metrics={"rules": len(owned), "issues": len(issues)},
                 )
+                associated_rule_ids: set[str] = set()
+                for rule in owned:
+                    self._traces.save_candidate_lineage(
+                        rule_id=rule.rule_id,
+                        rule=rule,
+                        run_id=run.run_id,
+                        extraction_id=knowledge.extraction_id,
+                        document_id=unit.doc_id,
+                    )
+                    associated_rule_ids.add(rule.rule_id)
+                if knowledge.knowledge_id not in associated_rule_ids:
+                    self._traces.save_candidate_lineage(
+                        rule_id=knowledge.knowledge_id,
+                        rule=owned[0] if len(owned) == 1 else None,
+                        run_id=run.run_id,
+                        extraction_id=knowledge.extraction_id,
+                        document_id=unit.doc_id,
+                    )
                 candidates[knowledge.knowledge_id] = CompiledCandidate(
                     knowledge_id=knowledge.knowledge_id,
                     compile_run_id=run.run_id,

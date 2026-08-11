@@ -54,10 +54,7 @@ def backfill_rules(
             if unit.status not in {"reviewed", "published"}:
                 continue
             for knowledge in unit.knowledge:
-                if (
-                    traces.get_rule_trace(knowledge.knowledge_id) is not None
-                    or traces.has_extraction_run(knowledge.extraction_id)
-                ):
+                if traces.get_rule_trace(knowledge.knowledge_id) is not None:
                     skipped += 1
                     continue
                 single = unit.model_copy(update={
