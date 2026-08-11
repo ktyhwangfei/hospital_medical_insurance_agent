@@ -181,6 +181,44 @@ describe('Skill release review page', () => {
     )
   })
 
+  it('uses the canonical run even when the legacy latest evaluation status disagrees', async () => {
+    mocks.getWorkbench.mockResolvedValue({
+      ...workbench,
+      items: [{ ...workbench.items[0], latest_eval_status: 'failed' }],
+    })
+
+    render(<SkillReleasesPage />)
+
+    await userEvent.click(await screen.findByRole('button', { name: '人工审批通过' }))
+    await waitFor(() => expect(mocks.approve).toHaveBeenCalledWith(
+      'settlement_explain_skill',
+      'release-current',
+      expect.objectContaining({ expected_revision: 2 }),
+      expect.any(String),
+    ))
+  })
+
+  it('chooses the version bound by the canonical run when semantic versions are duplicated', async () => {
+    mocks.listVersions.mockResolvedValue([
+      currentVersion,
+      {
+        ...currentVersion,
+        version_id: 'version-duplicate',
+        created_at: '2026-08-11T07:00:00Z',
+      },
+    ])
+
+    render(<SkillReleasesPage />)
+
+    await userEvent.click(await screen.findByRole('button', { name: '人工审批通过' }))
+    await waitFor(() => expect(mocks.approve).toHaveBeenCalledWith(
+      'settlement_explain_skill',
+      'release-current',
+      expect.objectContaining({ expected_revision: 2 }),
+      expect.any(String),
+    ))
+  })
+
   it('fails closed when the workbench has no current evaluation fact', async () => {
     mocks.getWorkbench.mockResolvedValue({
       ...workbench,

@@ -216,13 +216,6 @@ export class SkillCatalogPage extends BasePage {
     }
   }
 
-  async triggerLiveVersionConflict(skillId: string): Promise<void> {
-    await this.selectSkill(skillId);
-    await expect(this.primaryAction).toContainText('登记当前版本');
-    await this.primaryAction.click();
-    await this.page.getByTestId('register-skill-version').click();
-  }
-
   async assertSelectedSkillInURL(skillId: string): Promise<void> {
     await expect(this.page).toHaveURL(new RegExp(`[?&]skill=${skillId}(?:&|$)`));
   }
@@ -321,8 +314,25 @@ export class SkillCatalogPage extends BasePage {
     expect(detail!.width).toBeGreaterThanOrEqual(viewportWidth * 0.78);
   }
 
+  async assertMobileHeaderBounds(viewportWidth: number): Promise<void> {
+    const header = this.page.locator('header').first();
+    const headerBox = await header.boundingBox();
+    expect(headerBox).not.toBeNull();
+    await expect(header.getByText('医保AI导办平台')).toBeHidden();
+    await expect(header.getByText('已连接')).toBeHidden();
+    const controls = header.locator('button:visible, [role="combobox"]:visible');
+    for (let index = 0; index < await controls.count(); index += 1) {
+      const box = await controls.nth(index).boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(headerBox!.x);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(Math.min(viewportWidth, headerBox!.x + headerBox!.width) + 1);
+      expect(box!.height).toBeLessThanOrEqual(headerBox!.height + 1);
+    }
+  }
+
   async assertMobileNavigationAccessibility(): Promise<void> {
     const sidebar = this.page.locator('aside').filter({ has: this.page.locator('nav') });
+    const mainArea = this.page.locator('main').first().locator('..');
     const open = this.page.getByRole('button', { name: '打开导航菜单' });
     await expect(sidebar).toHaveAttribute('inert', '');
     await expect(sidebar).toHaveAttribute('aria-hidden', 'true');
@@ -333,9 +343,17 @@ export class SkillCatalogPage extends BasePage {
     const close = this.page.getByRole('button', { name: '关闭导航菜单', exact: true });
     await expect(close).toBeFocused();
     await expect(sidebar).not.toHaveAttribute('inert');
+    await expect(mainArea).toHaveAttribute('inert', '');
+    await expect(mainArea).toHaveAttribute('aria-hidden', 'true');
+    await expect(this.page.getByRole('button', { name: '关闭导航菜单遮罩' })).toHaveAttribute('tabindex', '-1');
+    await this.page.keyboard.press('Shift+Tab');
+    await expect(this.page.getByRole('link', { name: '问答历史' })).toBeFocused();
+    await this.page.keyboard.press('Tab');
+    await expect(close).toBeFocused();
     await this.page.keyboard.press('Escape');
     await expect(open).toBeFocused();
     await expect(sidebar).toHaveAttribute('inert', '');
+    await expect(mainArea).not.toHaveAttribute('inert');
 
     await this.page.keyboard.press('Enter');
     await expect(close).toBeFocused();
@@ -346,6 +364,12 @@ export class SkillCatalogPage extends BasePage {
     await expect(close).toBeFocused();
     await this.page.getByRole('button', { name: '关闭导航菜单遮罩' }).click({ position: { x: 380, y: 800 } });
     await expect(open).toBeFocused();
+
+    await this.page.keyboard.press('Enter');
+    await expect(close).toBeFocused();
+    await this.page.getByRole('link', { name: '技能' }).click();
+    await expect(sidebar).toHaveAttribute('inert', '');
+    await expect(mainArea).not.toHaveAttribute('aria-hidden');
   }
 
   async assertNoSensitiveOrFullHash(): Promise<void> {

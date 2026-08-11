@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, createContext, useContext, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, createContext, useContext, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -64,7 +64,7 @@ function ConnectionBadge() {
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 ${ring} ${
+      className={`hidden items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 sm:inline-flex ${ring} ${
         connectionStatus === 'connected'
           ? 'bg-emerald-50 text-emerald-700'
           : connectionStatus === 'fallback'
@@ -86,6 +86,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   const hasSidebarPreference = useRef(false)
   const openSidebarButtonRef = useRef<HTMLButtonElement>(null)
   const closeSidebarButtonRef = useRef<HTMLButtonElement>(null)
+  const sidebarRef = useRef<HTMLElement>(null)
   const [currentRole, setCurrentRole] = useState<RoleId>('cashier')
   const pathname = usePathname()
 
@@ -127,13 +128,31 @@ export function LayoutShell({ children }: { children: ReactNode }) {
   }, [closeSidebar, isMobile, sidebarCollapsed])
 
   const mobileSidebarHidden = isMobile && sidebarCollapsed
+  const mobileMainHidden = isMobile && !sidebarCollapsed
+
+  const handleSidebarKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (!isMobile || event.key !== 'Tab') return
+    const focusable = Array.from(
+      sidebarRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]') ?? [],
+    )
+    const first = focusable[0]
+    const last = focusable.at(-1)
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last?.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first?.focus()
+    }
+  }
 
   return (
     <RoleContext.Provider value={{ currentRole, setCurrentRole }}>
       <div className="relative flex h-screen overflow-hidden bg-slate-50">
-        {!sidebarCollapsed && (
+        {isMobile && !sidebarCollapsed && (
           <button
             type="button"
+            tabIndex={-1}
             aria-label="关闭导航菜单遮罩"
             className="fixed inset-0 z-40 bg-slate-950/30 md:hidden"
             onClick={closeSidebar}
@@ -141,8 +160,10 @@ export function LayoutShell({ children }: { children: ReactNode }) {
         )}
         {/* Sidebar */}
         <aside
+          ref={sidebarRef}
           inert={mobileSidebarHidden ? true : undefined}
           aria-hidden={mobileSidebarHidden ? true : undefined}
+          onKeyDown={handleSidebarKeyDown}
           className={`fixed inset-y-0 left-0 z-50 flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white transition-[width,transform] duration-300 md:relative md:inset-auto md:z-auto md:translate-x-0 ${
             sidebarCollapsed ? '-translate-x-full md:w-16' : 'translate-x-0 md:w-56'
           }`}
@@ -154,15 +175,17 @@ export function LayoutShell({ children }: { children: ReactNode }) {
                 导航菜单
               </span>
             )}
-            <button
-              type="button"
-              onClick={toggleSidebar}
-              className="hidden size-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 md:flex"
-              aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
-            >
-              {sidebarCollapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
-            </button>
-            {!sidebarCollapsed && (
+            {!isMobile && (
+              <button
+                type="button"
+                onClick={toggleSidebar}
+                className="flex size-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+              >
+                {sidebarCollapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+              </button>
+            )}
+            {isMobile && !sidebarCollapsed && (
               <button
                 ref={closeSidebarButtonRef}
                 type="button"
@@ -193,6 +216,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
                   } ${sidebarCollapsed ? 'justify-center px-2' : ''}`}
                   aria-label={sidebarCollapsed ? item.label : undefined}
                   title={sidebarCollapsed ? item.label : undefined}
+                  onClick={isMobile ? closeSidebar : undefined}
                 >
                   <span className="shrink-0">{item.icon}</span>
                   {!sidebarCollapsed && <span>{item.label}</span>}
@@ -212,11 +236,15 @@ export function LayoutShell({ children }: { children: ReactNode }) {
         </aside>
 
         {/* Main area */}
-        <div className="flex flex-1 flex-col min-w-0">
+        <div
+          inert={mobileMainHidden ? true : undefined}
+          aria-hidden={mobileMainHidden ? true : undefined}
+          className="flex min-w-0 flex-1 flex-col"
+        >
           {/* Header */}
           <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-3 sm:px-6">
-            <div className="flex items-center gap-3">
-              {sidebarCollapsed && (
+            <div className="flex min-w-0 items-center gap-3">
+              {isMobile && sidebarCollapsed && (
                 <button
                   ref={openSidebarButtonRef}
                   type="button"
@@ -227,14 +255,14 @@ export function LayoutShell({ children }: { children: ReactNode }) {
                   <ChevronRight className="size-4" />
                 </button>
               )}
-              <div className="flex items-center gap-2">
-                <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 shadow-sm">
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 shadow-sm">
                   <Activity className="size-4 text-white" />
                 </div>
-                <div className="text-base font-semibold text-slate-800">医保AI导办平台</div>
+                <div className="hidden whitespace-nowrap text-base font-semibold text-slate-800 sm:block">医保AI导办平台</div>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex shrink-0 items-center gap-2 sm:gap-3">
               <ConnectionBadge />
               <RoleSwitcher currentRole={currentRole} onRoleChange={setCurrentRole} />
             </div>

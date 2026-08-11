@@ -89,6 +89,7 @@ test.describe('Skill 日常治理工作台', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await workbench.goto();
     await workbench.assertMobileNavigationAccessibility();
+    await workbench.assertMobileHeaderBounds(390);
     await expect(workbench.queue).toBeVisible();
     await workbench.selectSkill(SKILL_ID);
 
@@ -104,7 +105,7 @@ test.describe('Skill 日常治理工作台', () => {
     await workbench.assertMobileReturnRestoresFocus(SKILL_ID);
   });
 
-  test('200% 缩放等价下核心任务仍可操作', async ({ page }) => {
+  test('CSS zoom 2× stress check 下核心任务仍可操作', async ({ page }) => {
     const workbench = new SkillCatalogPage(page);
     await page.setViewportSize({ width: 720, height: 500 });
     await workbench.goto();
@@ -162,7 +163,7 @@ test.describe('Skill 日常治理工作台', () => {
     await workbench.assertNoPageOverflow();
   });
 
-  test('403 只读与 409 证据变化均保留当前上下文', async ({ page }) => {
+  test('403 只读与确定性 409 证据变化均保留当前上下文', async ({ page }) => {
     const workbench = new SkillCatalogPage(page);
     await workbench.mockFailedEvaluation({ next_action: 'run_evaluation', current_stage: 'evaluate' });
     await workbench.goto('?env=dev');
@@ -180,9 +181,11 @@ test.describe('Skill 日常治理工作台', () => {
     await expect(workbench.lifecycle).toBeVisible();
 
     await page.unrouteAll({ behavior: 'wait' });
+    await workbench.mockMutationError(409, '发布证据已变化，请刷新后重试');
     await workbench.goto(`?skill=${SKILL_ID}`);
-    await workbench.triggerLiveVersionConflict(SKILL_ID);
-    await expect(workbench.alertWithText('已绑定其他制品')).toBeVisible();
+    await workbench.selectSkill(SKILL_ID);
+    await workbench.primaryAction.click();
+    await expect(workbench.alertWithText('发布证据已变化，请刷新后重试')).toBeVisible();
     await expect(workbench.queue).toBeVisible();
     await expect(workbench.lifecycle).toBeVisible();
     await workbench.assertSelectedSkillInURL(SKILL_ID);

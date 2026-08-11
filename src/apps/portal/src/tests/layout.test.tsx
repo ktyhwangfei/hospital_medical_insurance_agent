@@ -1,12 +1,16 @@
-import type { ReactNode } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/skills' }))
 vi.mock('next/link', () => ({
-  default: ({ children, href, ...props }: { children: ReactNode; href: string }) => (
-    <a href={href} {...props}>{children}</a>
+  default: ({ children, href, onClick, ...props }: {
+    children: ReactNode
+    href: string
+    onClick?: (event: MouseEvent<HTMLAnchorElement>) => void
+  }) => (
+    <a href={href} {...props} onClick={(event) => { event.preventDefault(); onClick?.(event) }}>{children}</a>
   ),
 }))
 vi.mock('@/lib/api-context', () => ({
@@ -78,6 +82,38 @@ describe('LayoutShell responsive sidebar', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '关闭导航菜单' })).toHaveFocus())
     await user.click(screen.getByRole('button', { name: '关闭导航菜单遮罩' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '打开导航菜单' })).toHaveFocus())
+  })
+
+  it('keeps the mobile header compact and prevents product or connection labels from character wrapping', async () => {
+    const { container } = render(<LayoutShell><h1>Skill 日常治理</h1></LayoutShell>)
+
+    await screen.findByRole('button', { name: '打开导航菜单' })
+    const header = container.querySelector('header')!
+    expect(within(header).getByText('医保AI导办平台')).toHaveClass('hidden', 'whitespace-nowrap', 'sm:block')
+    expect(within(header).getByText('已连接')).toHaveClass('hidden', 'whitespace-nowrap', 'sm:inline-flex')
+  })
+
+  it('makes the main area inert, loops drawer focus, and closes the drawer from navigation', async () => {
+    const user = userEvent.setup()
+    render(<LayoutShell><h1>Skill 日常治理</h1></LayoutShell>)
+
+    const mainArea = screen.getByRole('main').parentElement!
+    await user.click(await screen.findByRole('button', { name: '打开导航菜单' }))
+    const close = screen.getByRole('button', { name: '关闭导航菜单' })
+    await waitFor(() => expect(close).toHaveFocus())
+    expect(mainArea).toHaveAttribute('inert')
+    expect(mainArea).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByRole('button', { name: '关闭导航菜单遮罩' })).toHaveAttribute('tabindex', '-1')
+
+    await user.tab({ shift: true })
+    expect(screen.getByRole('link', { name: '问答历史' })).toHaveFocus()
+    await user.tab()
+    expect(close).toHaveFocus()
+
+    await user.click(screen.getByRole('link', { name: '技能' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '打开导航菜单' })).toHaveFocus())
+    expect(mainArea).not.toHaveAttribute('inert')
+    expect(mainArea).not.toHaveAttribute('aria-hidden')
   })
 
   it('keeps desktop collapsed icon navigation in the keyboard accessibility tree', async () => {

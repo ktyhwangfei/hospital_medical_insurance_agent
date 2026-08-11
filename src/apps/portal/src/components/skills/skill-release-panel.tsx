@@ -130,23 +130,16 @@ export default function SkillReleasePanel({
     return () => window.clearTimeout(timer)
   }, [load])
 
-  const currentVersion = useMemo(() => workbenchItem
-    ? versions
-      .filter((version) => (
-          version.semantic_version === workbenchItem.candidate_version
-          && version.validation_status === 'passed'
-        ))
-      .sort((left, right) => (
-        right.created_at.localeCompare(left.created_at) || right.version_id.localeCompare(left.version_id)
-      ))[0]
-    : undefined, [versions, workbenchItem])
-  const currentRun = useMemo(() => workbenchItem?.latest_eval_run_id && currentVersion
-    ? runs.find((run) => (
-        run.run_id === workbenchItem.latest_eval_run_id
-        && run.version_id === currentVersion.version_id
-        && run.status === workbenchItem.latest_eval_status
+  const currentRun = useMemo(() => workbenchItem?.latest_eval_run_id
+    ? runs.find((run) => run.run_id === workbenchItem.latest_eval_run_id)
+    : undefined, [runs, workbenchItem])
+  const currentVersion = useMemo(() => workbenchItem && currentRun
+    ? versions.find((version) => (
+        version.version_id === currentRun.version_id
+        && version.semantic_version === workbenchItem.candidate_version
+        && version.validation_status === 'passed'
       ))
-    : undefined, [currentVersion, runs, workbenchItem])
+    : undefined, [currentRun, versions, workbenchItem])
   const eligible = workbenchItem
     ? currentRun?.status === 'passed' && currentRun.metrics.gate_passed ? currentRun : undefined
     : runs.find((run) => (
