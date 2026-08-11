@@ -259,7 +259,9 @@ describe('Skill governance workbench', () => {
 
     render(<SkillGovernanceWorkbench />)
 
-    expect(await screen.findByText('查看运行证据')).toBeVisible()
+    expect(await screen.findByText('治理状态暂不可用')).toBeVisible()
+    expect(screen.getByText('治理聚合暂不可用，仅展示资产信息')).toBeVisible()
+    expect(screen.queryByText('Test Shadow 已激活')).not.toBeInTheDocument()
     expect(screen.queryByTestId('skill-primary-action')).not.toBeInTheDocument()
   })
 

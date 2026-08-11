@@ -118,7 +118,6 @@ describe('computePrimaryAction', () => {
     ['request_approval', { kind: 'request_approval', label: '申请复审', hint: '发布候选已就绪', targetTab: 'release' }],
     ['review_approval', { kind: 'navigate', label: '进入人工复审', hint: '禁止创建人自审', targetTab: 'release' }],
     ['activate_test_shadow', { kind: 'activate', label: '激活 Test Shadow', hint: '复审已通过', targetTab: 'release' }],
-    ['view_evidence', { kind: 'none', label: '查看运行证据', hint: 'Test Shadow 已激活', targetTab: 'overview' }],
   ])('服务端动作 %s 映射为唯一主动作', (nextAction, expected) => {
     expect(computePrimaryAction(
       { ...baseItem, next_action: nextAction },
@@ -135,6 +134,32 @@ describe('computePrimaryAction', () => {
       kind: 'none',
       label: '治理状态暂不可用',
       hint: '无法识别下一步治理动作，请刷新后重试',
+      targetTab: 'overview',
+    })
+  })
+
+  it('无 active 证据的 view_evidence 保留服务端降级原因', () => {
+    expect(computePrimaryAction({
+      ...baseItem,
+      next_action: 'view_evidence',
+      next_action_reason: '治理聚合暂不可用，仅展示资产信息',
+    }, [], [], [])).toEqual({
+      kind: 'none',
+      label: '治理状态暂不可用',
+      hint: '治理聚合暂不可用，仅展示资产信息',
+      targetTab: 'overview',
+    })
+  })
+
+  it('有 active 证据的 view_evidence 展示运行证据', () => {
+    expect(computePrimaryAction({
+      ...baseItem,
+      test_release_status: 'active',
+      next_action: 'view_evidence',
+    }, [], [], [])).toEqual({
+      kind: 'none',
+      label: '查看运行证据',
+      hint: 'Test Shadow 已激活',
       targetTab: 'overview',
     })
   })

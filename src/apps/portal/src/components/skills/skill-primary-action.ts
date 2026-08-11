@@ -123,5 +123,10 @@ export function computePrimaryAction(
   _releases: SkillReleaseResponse[],
 ): PrimaryAction {
   void _versions; void _evalRuns; void _releases
+  if (item.next_action === 'view_evidence' && item.test_release_status !== 'active') {
+    return item.next_action_reason
+      ? Object.freeze({ ...UNAVAILABLE_ACTION, hint: item.next_action_reason })
+      : UNAVAILABLE_ACTION
+  }
   return PRIMARY_ACTIONS[item.next_action] ?? UNAVAILABLE_ACTION
 }
