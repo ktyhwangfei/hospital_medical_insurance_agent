@@ -1505,8 +1505,16 @@ def test_rule_trace_backfill_uses_legacy_import_once_when_extraction_is_missing(
     assert first.legacy_imported == 1
     assert second.skipped == 1
     assert trace is not None
+    assert trace.raw_input == {
+        "source_text": "在职职工住院费用",
+        "path": ["第一条", "（一）"],
+    }
+    assert trace.llm_output["legacy_rule"]["knowledge_id"] == "kn_1"
     assert [step.stage for step in trace.steps] == ["LEGACY_IMPORT"]
+    assert trace.steps[0].status == "REVIEW"
     assert trace.issues[0].code == "LEGACY_HISTORY_MISSING"
+    assert trace.rule is None
+    assert trace.publication is None
 
 
 def test_rule_trace_backfill_repairs_orphan_extraction_run_and_then_skips() -> None:

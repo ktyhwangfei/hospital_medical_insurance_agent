@@ -13,7 +13,6 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_models import 
     KnowledgeItem,
 )
 from src.knowledge_extension.rule_explanation.policy_compiler.models import (
-    CanonicalRule,
     CompileRun,
     CompileStep,
     ValidationIssue,
@@ -170,22 +169,12 @@ def _import_legacy(
         issues=[issue],
     ))
     traces.finish_run(run_id, status="REVIEW", metrics={"issues": 1})
-    fields = {item.field_code: item.raw_value for item in knowledge.fields}
-    evidence = [item.evidence_id for item in knowledge.evidences]
-    evidence.extend(item.evidence for item in knowledge.citations if item.evidence)
-    rule = CanonicalRule(
+    traces.save_candidate_lineage(
         rule_id=knowledge.knowledge_id,
-        subject=knowledge.topic_concept or knowledge.rule_type_enum or knowledge.knowledge_id,
-        result=fields or {"value": knowledge.business_sentence},
-        evidence=list(dict.fromkeys(evidence)) or [f"knowledge:{knowledge.knowledge_id}"],
-        status="REVIEW",
-    )
-    traces.save_lineage(
-        rule=rule,
+        rule=None,
         run_id=run_id,
         extraction_id=knowledge.extraction_id,
         document_id=unit.doc_id,
-        release_id="LEGACY_IMPORT",
     )
 
 
