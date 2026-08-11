@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
@@ -79,6 +79,14 @@ class CanonicalRule(BaseModel):
     compiler_version: str = "1.0"
     rule_version: int = Field(default=1, ge=1)
     status: CompileStatus = "PASS"
+
+    @field_validator("result", mode="before")
+    @classmethod
+    def normalize_result_ratio(cls, value: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(value)
+        if normalized.get("ratio") is not None:
+            normalized["ratio"] = Decimal(str(normalized["ratio"]))
+        return normalized
 
     @model_validator(mode="after")
     def validate_rule(self) -> "CanonicalRule":

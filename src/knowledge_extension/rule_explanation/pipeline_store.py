@@ -106,11 +106,25 @@ CREATE TABLE IF NOT EXISTS policy_rule_lineage (
     rule_id VARCHAR(128) NOT NULL,
     extraction_id VARCHAR(64) REFERENCES policy_extractions(extraction_id) ON DELETE SET NULL,
     doc_id VARCHAR(64) NOT NULL REFERENCES policy_documents(doc_id) ON DELETE CASCADE,
+    compile_run_id VARCHAR(64),
+    rule_version INTEGER,
+    canonical_rule JSONB,
+    release_id VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_lineage_rule ON policy_rule_lineage(rule_id);
 CREATE INDEX IF NOT EXISTS idx_lineage_doc ON policy_rule_lineage(doc_id);
 CREATE INDEX IF NOT EXISTS idx_lineage_ext ON policy_rule_lineage(extraction_id);
+"""
+
+LINEAGE_MIGRATION = """
+ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS compile_run_id VARCHAR(64);
+ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS rule_version INTEGER;
+ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS canonical_rule JSONB;
+ALTER TABLE policy_rule_lineage ADD COLUMN IF NOT EXISTS release_id VARCHAR(64);
+CREATE INDEX IF NOT EXISTS idx_lineage_rule_version ON policy_rule_lineage(rule_id, rule_version);
+CREATE INDEX IF NOT EXISTS idx_lineage_compile_run ON policy_rule_lineage(compile_run_id);
+CREATE INDEX IF NOT EXISTS idx_lineage_release ON policy_rule_lineage(release_id);
 """
 
 
@@ -152,6 +166,13 @@ class PipelineStore:
                 except Exception:
                     pass  # 表不存在时静默跳过
         for stmt in EXTRACTIONS_MIGRATION.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                try:
+                    client.execute(stmt)
+                except Exception:
+                    pass
+        for stmt in LINEAGE_MIGRATION.strip().split(";"):
             stmt = stmt.strip()
             if stmt:
                 try:
