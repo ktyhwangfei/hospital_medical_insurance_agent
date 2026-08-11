@@ -324,30 +324,23 @@ class SkillWorkbenchService:
             else now,
         )
 
-    def _build_item(self, entry) -> tuple[SkillWorkbenchItem, bool]:
+    def _build_item(
+        self,
+        entry,
+        linked_draft: SkillDraft | None,
+    ) -> tuple[SkillWorkbenchItem, bool]:
         registered_version = entry.registered_version
-        version_id = registered_version.version_id if registered_version is not None else None
+        version_id = (
+            registered_version.version_id
+            if registered_version is not None and entry.artifact_status == "registered"
+            else None
+        )
         runs = [
             run
             for run in self._governance_service.list_eval_runs(entry.skill_id)
             if version_id is not None and run.version_id == version_id
         ]
         latest_run = max(runs, key=lambda run: run.created_at, default=None)
-
-        drafts = (
-            self._draft_service.list_drafts(skill_id=entry.skill_id)
-            if self._draft_service is not None
-            else []
-        )
-        linked_draft = max(
-            (
-                draft
-                for draft in drafts
-                if draft.status in (SkillDraftStatus.EDITING, SkillDraftStatus.VALIDATED)
-            ),
-            key=lambda draft: draft.updated_at,
-            default=None,
-        )
 
         releases = self._governance_service.list_releases(
             entry.skill_id,
@@ -356,7 +349,9 @@ class SkillWorkbenchService:
         current_releases = [
             release
             for release in releases
-            if release.status != SkillReleaseStatus.RETIRED
+            if version_id is not None
+            and release.version_id == version_id
+            and release.status != SkillReleaseStatus.RETIRED
         ]
         latest_release = max(
             current_releases,
@@ -421,9 +416,10 @@ class SkillWorkbenchService:
                     if registered_version is not None
                     else None
                 ),
-                baseline_version=self._semantic_version(
-                    entry.skill_id,
-                    latest_run.baseline_version_id if latest_run is not None else None,
+                baseline_version=(
+                    latest_run.baseline_version_id
+                    if latest_run is not None
+                    else None
                 ),
                 regression_count=(metrics.regression_count if metrics is not None else 0),
                 required_failure_count=(
@@ -463,7 +459,19 @@ class SkillWorkbenchService:
             artifact_status=artifact_status,
             query=query,
         )
-        projected = [self._build_item(entry) for entry in catalog.items]
+        linked_drafts: dict[str, SkillDraft] = {}
+        if self._draft_service is not None:
+            for draft in self._draft_service.list_drafts():
+                current = linked_drafts.get(draft.skill_id)
+                if draft.status in (
+                    SkillDraftStatus.EDITING,
+                    SkillDraftStatus.VALIDATED,
+                ) and (current is None or draft.updated_at > current.updated_at):
+                    linked_drafts[draft.skill_id] = draft
+        projected = [
+            self._build_item(entry, linked_drafts.get(entry.skill_id))
+            for entry in catalog.items
+        ]
         all_items = [item for item, _ in projected]
         requested_status = (
             SkillGovernanceStatus(governance_status)

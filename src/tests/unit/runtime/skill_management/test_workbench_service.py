@@ -201,6 +201,7 @@ class _GovernanceView:
 class _DraftView:
     def __init__(self, drafts: dict[str, list[SkillDraft]]) -> None:
         self.drafts = drafts
+        self.list_calls = 0
 
     def list_drafts(
         self,
@@ -209,8 +210,13 @@ class _DraftView:
         skill_id: str | None = None,
         status: SkillDraftStatus | None = None,
     ) -> list[SkillDraft]:
+        self.list_calls += 1
         assert include_deleted is False
-        drafts = self.drafts.get(skill_id or "", [])
+        drafts = (
+            self.drafts.get(skill_id, [])
+            if skill_id is not None
+            else [draft for items in self.drafts.values() for draft in items]
+        )
         return [draft for draft in drafts if status is None or draft.status == status]
 
 
@@ -484,11 +490,16 @@ def test_required_failure_sorts_before_other_failure_and_approval() -> None:
 
 def test_workbench_projection_has_no_sensitive_evidence() -> None:
     version = _version("safe-skill", "version-safe", "1.0.0")
+    case_text = "SENTINEL_CASE_BODY_DO_NOT_EXPOSE"
+    approval_reason = "SENTINEL_APPROVAL_REASON_DO_NOT_EXPOSE"
+    patient_id = "SENTINEL_PATIENT_ID_DO_NOT_EXPOSE"
+    evidence_hash = "b" * 64
     sensitive_case = SkillEvalCase(
         case_id="case-1",
         suite_version=1,
-        question_template="patient_id=P001",
+        question_template=case_text,
         expected_skill_id="safe-skill",
+        source_ref=evidence_hash,
         created_by="quality-user",
     )
     service = _service(
@@ -509,8 +520,8 @@ def test_workbench_projection_has_no_sensitive_evidence() -> None:
                 _draft("draft-safe", "safe-skill", SkillDraftStatus.EDITING).model_copy(
                     update={
                         "structured_config": {
-                            "approval_reason": "sensitive",
-                            "patient_id": "P001",
+                            "approval_reason": approval_reason,
+                            "patient_id": patient_id,
                         }
                     }
                 )
@@ -523,3 +534,197 @@ def test_workbench_projection_has_no_sensitive_evidence() -> None:
     assert "question_template" not in payload
     assert "approval_reason" not in payload
     assert "patient_id" not in payload
+    assert case_text not in payload
+    assert approval_reason not in payload
+    assert patient_id not in payload
+    assert evidence_hash not in payload
+
+
+def test_old_active_release_does_not_override_newer_current_passed_version() -> None:
+    current = _version("current-skill", "version-current", "2.0.0")
+    service = _service(
+        [_entry("current-skill", current)],
+        runs={
+            "current-skill": [
+                _run(
+                    "current-skill",
+                    current.version_id,
+                    SkillEvalRunStatus.PASSED,
+                )
+            ]
+        },
+        releases={
+            "current-skill": [
+                _release(
+                    "current-skill",
+                    "version-old",
+                    SkillReleaseStatus.ACTIVE,
+                )
+            ]
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "release"
+    assert item.next_action == "create_candidate"
+    assert item.test_active_version == "version-old"
+
+
+def test_changed_artifact_ignores_old_active_release() -> None:
+    old = _version("changed-skill", "version-old", "1.0.0")
+    service = _service(
+        [_entry("changed-skill", old, artifact_status="changed")],
+        runs={
+            "changed-skill": [
+                _run(
+                    "changed-skill",
+                    old.version_id,
+                    SkillEvalRunStatus.PASSED,
+                )
+            ]
+        },
+        releases={
+            "changed-skill": [
+                _release(
+                    "changed-skill",
+                    old.version_id,
+                    SkillReleaseStatus.ACTIVE,
+                )
+            ]
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "modify"
+    assert item.next_action == "register_version"
+
+
+def test_drafts_are_loaded_once_for_multiple_catalog_items() -> None:
+    first = _version("first", "version-first", "1.0.0")
+    second = _version("second", "version-second", "1.0.0")
+    entries = [_entry("first", first), _entry("second", second)]
+    draft_view = _DraftView(
+        {
+            "first": [_draft("draft-first", "first", SkillDraftStatus.EDITING)],
+            "second": [_draft("draft-second", "second", SkillDraftStatus.VALIDATED)],
+        }
+    )
+    service = SkillWorkbenchService(
+        version_service=_VersionCatalogService(entries),
+        governance_service=_GovernanceView(
+            runs={
+                "first": [_run("first", first.version_id, SkillEvalRunStatus.FAILED)],
+                "second": [
+                    _run("second", second.version_id, SkillEvalRunStatus.FAILED)
+                ],
+            },
+            releases={},
+        ),
+        draft_service=draft_view,
+        now=lambda: NOW,
+    )
+
+    items = service.list_workbench(page=1, page_size=20).items
+
+    assert draft_view.list_calls == 1
+    assert {item.linked_draft_id for item in items} == {"draft-first", "draft-second"}
+
+
+def test_baseline_projection_uses_run_version_id_without_catalog_lookup() -> None:
+    candidate = _version("baseline-skill", "version-candidate", "2.0.0")
+    baseline = _version("baseline-skill", "version-baseline", "1.0.0")
+    entry = _entry("baseline-skill", candidate)
+    version_service = _VersionCatalogService([entry])
+    version_service.versions[baseline.version_id] = baseline
+    run = _run(
+        "baseline-skill",
+        candidate.version_id,
+        SkillEvalRunStatus.PASSED,
+    ).model_copy(update={"baseline_version_id": baseline.version_id})
+    service = SkillWorkbenchService(
+        version_service=version_service,
+        governance_service=_GovernanceView(
+            runs={"baseline-skill": [run]},
+            releases={},
+        ),
+        now=lambda: NOW,
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.baseline_version == "version-baseline"
+
+
+@pytest.mark.parametrize(
+    ("artifact_status", "eval_status", "release_status", "stage", "action"),
+    [
+        (
+            "registered",
+            None,
+            SkillReleaseStatus.APPROVED,
+            "release",
+            "activate_test_shadow",
+        ),
+        (
+            "registered",
+            None,
+            SkillReleaseStatus.CANDIDATE,
+            "review",
+            "request_approval",
+        ),
+        (
+            "registered",
+            None,
+            SkillReleaseStatus.ACTIVE,
+            "healthy",
+            "view_evidence",
+        ),
+        (
+            "registered",
+            SkillEvalRunStatus.PASSED,
+            None,
+            "release",
+            "create_candidate",
+        ),
+        (
+            "changed",
+            SkillEvalRunStatus.PASSED,
+            SkillReleaseStatus.ACTIVE,
+            "modify",
+            "register_version",
+        ),
+        ("registered", None, None, "evaluate", "run_evaluation"),
+    ],
+)
+def test_workflow_precedence_matrix(
+    artifact_status: str,
+    eval_status: SkillEvalRunStatus | None,
+    release_status: SkillReleaseStatus | None,
+    stage: str,
+    action: str,
+) -> None:
+    version = _version("matrix-skill", "version-current", "1.0.0")
+    service = _service(
+        [_entry("matrix-skill", version, artifact_status=artifact_status)],
+        runs={
+            "matrix-skill": (
+                [_run("matrix-skill", version.version_id, eval_status)]
+                if eval_status is not None
+                else []
+            )
+        },
+        releases={
+            "matrix-skill": (
+                [_release("matrix-skill", version.version_id, release_status)]
+                if release_status is not None
+                else []
+            )
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == stage
+    assert item.next_action == action

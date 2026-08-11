@@ -578,6 +578,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | Skill 候选制品 | `SkillCandidateArtifact` | **Value Object** | Pydantic `BaseModel`（frozen） | 由已接受草稿生成、仅供隔离评测的不可变制品；存放于运行时 `skills/` 之外 |
 | 技能定义 | `SkillDefinition` | **Entity** | Pydantic `BaseModel`（frozen） | 正式目录中可加载定义的治理生命周期状态（enabled/disabled/archived），与不可变 `SkillVersion` 区分 |
 | 技能生命周期状态 | `SkillLifecycleStatus` | **Value Object** | `StrEnum` | enabled / disabled / archived |
+| 技能治理阶段 | `SkillGovernanceStage` | **Value Object** | `StrEnum` | 工作台只读投影的 evaluate / diagnose / modify / review / release / healthy 阶段 |
+| 技能治理优先级 | `SkillGovernancePriority` | **Value Object** | `StrEnum` | 工作台只读投影的 blocked / high / normal 优先级 |
+| 技能下一步动作 | `SkillNextAction` | **Value Object** | `StrEnum` | 由版本、评测、草稿和发布事实派生的唯一下一步，不单独持久化 |
 | 技能拥有者 | `ToolOwner` | **Value Object** | `StrEnum` | 技能/工具的归属角色（与 `Role` 一致但缺少 CLINICIAN） |
 | MCP 服务器 | `McpServer` | **Entity** | Pydantic `BaseModel` | 通过 MCP 协议注册的外部能力服务器 |
 | MCP 能力 | `McpCapability` | **Entity** | Pydantic `BaseModel` | MCP 服务器暴露的具体能力点（工具/资源/提示） |
@@ -967,7 +970,10 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `SkillCandidateArtifact` | Skill 候选制品 | SkillTool | Value Object |
 | `SkillDraft(source_type=AI_GENERATED)` | AI 草稿 | SkillTool | Entity |
 | `SkillExecutionEngine` | 技能执行引擎 | SkillTool | Domain Service |
+| `SkillGovernancePriority` | 技能治理优先级 | SkillTool | Value Object |
+| `SkillGovernanceStage` | 技能治理阶段 | SkillTool | Value Object |
 | `SkillMetadata` | 技能元数据 | SkillTool | Value Object |
+| `SkillNextAction` | 技能下一步动作 | SkillTool | Value Object |
 | `SkillStep` | 技能步骤 | SkillTool | Entity |
 | `StreamChunk` | 流式块 | ModelService | DTO |
 | `Surgery` | 手术记录 | MedicalRecord | Entity |
