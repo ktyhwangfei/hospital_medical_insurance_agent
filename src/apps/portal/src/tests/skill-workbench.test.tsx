@@ -1,9 +1,10 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SkillsLayout from '../../app/skills/layout'
 import SkillGovernanceWorkbench, * as workbenchModule from '@/components/skills/skill-governance-workbench'
+import { shortHash } from '@/components/skills/skill-evidence-rail'
 import { lifecycleSteps } from '@/components/skills/skill-lifecycle-stepper'
 import type { InfraSkillCatalogResponse, SkillWorkbenchResponse } from '@/lib/types'
 
@@ -733,6 +734,46 @@ describe('Skill governance workbench', () => {
     expect(nextAction).toHaveAttribute('data-status', 'unavailable')
     expect(nextAction).not.toHaveClass('bg-emerald-50')
     expect(screen.queryByTestId('skill-primary-action')).not.toBeInTheDocument()
+  })
+
+  it('fails closed when a passed run is stale for the current queue facts', async () => {
+    const reason = '当前制品已变化，需要重新登记'
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        artifact_status: 'changed',
+        latest_eval_status: 'passed',
+        latest_eval_run_id: 'new-run',
+        candidate_version: '1.2.0',
+        next_action: 'register_version',
+        next_action_reason: reason,
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({
+      items: [{
+        ...evaluationRun,
+        status: 'passed',
+        metrics: { ...evaluationRun.metrics, gate_passed: true },
+      }],
+      total: 1,
+    })
+
+    render(<SkillGovernanceWorkbench />)
+
+    const evidence = await screen.findByRole('complementary', { name: '治理证据' })
+    expect(within(evidence).queryByText('固定评测门禁通过')).not.toBeInTheDocument()
+    expect(evidence).toHaveTextContent(reason)
+    expect(evidence).toHaveTextContent('run-1')
+  })
+
+  it('shortens hashes only above the twelve-character boundary', () => {
+    expect(shortHash(null)).toBe('—')
+    expect(shortHash(undefined)).toBe('—')
+    expect(shortHash('')).toBe('')
+    expect(shortHash('123456789012')).toBe('123456789012')
+    expect(shortHash('1234567890123')).toBe('123456…890123')
   })
 
   it('keeps catalog fallback read-only when governance aggregation fails', async () => {

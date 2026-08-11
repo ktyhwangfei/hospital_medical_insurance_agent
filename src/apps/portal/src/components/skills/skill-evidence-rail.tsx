@@ -14,12 +14,22 @@ interface SkillEvidenceRailProps {
 }
 
 export function shortHash(value?: string | null): string {
-  if (!value) return '—'
+  if (value == null) return '—'
   return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-6)}` : value
 }
 
 function EvidenceContent({ item, latestRun, latestRelease, latestVersion }: Omit<SkillEvidenceRailProps, 'variant'>) {
-  const gatePassed = Boolean(latestRun?.metrics.gate_passed && latestRun.status === 'passed')
+  const currentGateEvidence = Boolean(
+    latestRun
+    && latestVersion
+    && item.latest_eval_run_id === latestRun.run_id
+    && item.latest_eval_status === latestRun.status
+    && item.artifact_status === 'registered'
+    && item.validation_status === 'passed'
+    && latestRun.version_id === latestVersion.version_id
+    && (!item.candidate_version || item.candidate_version === latestVersion.semantic_version),
+  )
+  const gatePassed = Boolean(currentGateEvidence && latestRun?.metrics.gate_passed && latestRun.status === 'passed')
   const records = [
     latestVersion && ['版本登记', latestVersion.created_by, latestVersion.created_at],
     latestRun && ['固定评测', latestRun.created_by, latestRun.completed_at ?? latestRun.created_at],
@@ -33,10 +43,12 @@ function EvidenceContent({ item, latestRun, latestRelease, latestVersion }: Omit
       <section className="p-4">
         <h3 className="text-sm font-semibold text-slate-950">门禁结论</h3>
         <p className={`mt-2 text-sm font-medium ${gatePassed ? 'text-emerald-700' : 'text-amber-700'}`}>
-          {gatePassed ? '固定评测门禁通过' : latestRun ? '暂不可进入下一阶段' : '尚无评测结论'}
+          {gatePassed ? '固定评测门禁通过' : currentGateEvidence ? '暂不可进入下一阶段' : '当前门禁证据待刷新'}
         </p>
         <p className="mt-1 break-words text-xs leading-5 text-slate-600">
-          {gatePassed
+          {!currentGateEvidence
+            ? item.next_action_reason ?? '当前队列事实与已加载评测不一致，请刷新。'
+            : gatePassed
             ? '评测运行与冻结证据完整。'
             : latestRun
               ? `新增回归 ${latestRun.metrics.regression_count}，必测通过 ${latestRun.metrics.required_passed}/${latestRun.metrics.required_total}。`
