@@ -601,6 +601,100 @@ def test_changed_artifact_ignores_old_active_release() -> None:
     assert item.next_action == "register_version"
 
 
+def test_changed_artifact_preserves_legacy_passed_evaluation_fields() -> None:
+    old = _version("legacy-skill", "version-old", "1.0.0")
+    service = _service(
+        [_entry("legacy-skill", old, artifact_status="changed")],
+        runs={
+            "legacy-skill": [
+                _run(
+                    "legacy-skill",
+                    old.version_id,
+                    SkillEvalRunStatus.PASSED,
+                )
+            ]
+        },
+        releases={
+            "legacy-skill": [
+                _release(
+                    "legacy-skill",
+                    old.version_id,
+                    SkillReleaseStatus.ACTIVE,
+                )
+            ]
+        },
+    )
+
+    page = service.list_workbench(
+        page=1,
+        page_size=20,
+        governance_status=SkillGovernanceStatus.ARTIFACT_CHANGED,
+    )
+    item = page.items[0]
+
+    assert page.total == 1
+    assert page.summary.needs_evaluation == 0
+    assert item.governance_status == SkillGovernanceStatus.ARTIFACT_CHANGED
+    assert item.latest_eval_status == SkillEvalRunStatus.PASSED
+    assert item.attention_reason == "artifact_not_registered"
+    assert item.current_stage == "modify"
+    assert item.next_action == "register_version"
+
+
+def test_standalone_approval_pending_requires_review() -> None:
+    version = _version("approval-skill", "version-approval", "1.0.0")
+    service = _service(
+        [_entry("approval-skill", version)],
+        runs={},
+        releases={
+            "approval-skill": [
+                _release(
+                    "approval-skill",
+                    version.version_id,
+                    SkillReleaseStatus.APPROVAL_PENDING,
+                )
+            ]
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "review"
+    assert item.next_action == "review_approval"
+
+
+def test_failed_evaluation_with_validated_draft_requires_materialization() -> None:
+    version = _version("validated-skill", "version-validated", "1.0.0")
+    service = _service(
+        [_entry("validated-skill", version)],
+        runs={
+            "validated-skill": [
+                _run(
+                    "validated-skill",
+                    version.version_id,
+                    SkillEvalRunStatus.FAILED,
+                )
+            ]
+        },
+        releases={},
+        drafts={
+            "validated-skill": [
+                _draft(
+                    "draft-validated",
+                    "validated-skill",
+                    SkillDraftStatus.VALIDATED,
+                )
+            ]
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "modify"
+    assert item.linked_draft_status == "validated"
+    assert item.next_action == "materialize_draft"
+
+
 def test_drafts_are_loaded_once_for_multiple_catalog_items() -> None:
     first = _version("first", "version-first", "1.0.0")
     second = _version("second", "version-second", "1.0.0")

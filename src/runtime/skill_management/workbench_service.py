@@ -330,27 +330,45 @@ class SkillWorkbenchService:
         linked_draft: SkillDraft | None,
     ) -> tuple[SkillWorkbenchItem, bool]:
         registered_version = entry.registered_version
-        version_id = (
+        legacy_version_id = (
+            registered_version.version_id if registered_version is not None else None
+        )
+        workflow_version_id = (
             registered_version.version_id
             if registered_version is not None and entry.artifact_status == "registered"
             else None
         )
-        runs = [
+        legacy_runs = [
             run
             for run in self._governance_service.list_eval_runs(entry.skill_id)
-            if version_id is not None and run.version_id == version_id
+            if legacy_version_id is not None and run.version_id == legacy_version_id
         ]
-        latest_run = max(runs, key=lambda run: run.created_at, default=None)
+        legacy_latest_run = max(
+            legacy_runs,
+            key=lambda run: run.created_at,
+            default=None,
+        )
+        latest_run = legacy_latest_run if workflow_version_id is not None else None
 
         releases = self._governance_service.list_releases(
             entry.skill_id,
             SkillReleaseEnvironment.TEST,
         )
+        legacy_releases = [
+            release
+            for release in releases
+            if release.status != SkillReleaseStatus.RETIRED
+        ]
+        legacy_latest_release = max(
+            legacy_releases,
+            key=lambda release: release.created_at,
+            default=None,
+        )
         current_releases = [
             release
             for release in releases
-            if version_id is not None
-            and release.version_id == version_id
+            if workflow_version_id is not None
+            and release.version_id == workflow_version_id
             and release.status != SkillReleaseStatus.RETIRED
         ]
         latest_release = max(
@@ -367,14 +385,16 @@ class SkillWorkbenchService:
             key=lambda release: release.activated_at or release.created_at,
             default=None,
         )
-        latest_eval_status = latest_run.status if latest_run is not None else None
-        latest_release_status = (
-            latest_release.status if latest_release is not None else None
+        legacy_eval_status = (
+            legacy_latest_run.status if legacy_latest_run is not None else None
+        )
+        legacy_release_status = (
+            legacy_latest_release.status if legacy_latest_release is not None else None
         )
         governance_status, attention_reason = _resolve_status(
             artifact_status=entry.artifact_status,
-            latest_eval_status=latest_eval_status,
-            latest_release_status=latest_release_status,
+            latest_eval_status=legacy_eval_status,
+            latest_release_status=legacy_release_status,
         )
         validation_status = (
             registered_version.validation_status
@@ -400,8 +420,8 @@ class SkillWorkbenchService:
                 semantic_version=entry.semantic_version,
                 artifact_status=entry.artifact_status,
                 validation_status=validation_status,
-                latest_eval_status=latest_eval_status,
-                test_release_status=latest_release_status,
+                latest_eval_status=legacy_eval_status,
+                test_release_status=legacy_release_status,
                 test_active_version=self._active_semantic_version(
                     entry.skill_id,
                     active_release,
