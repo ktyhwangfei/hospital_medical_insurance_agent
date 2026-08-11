@@ -39,6 +39,7 @@ function EvidenceContent({
     && latestRun.version_id === latestVersion.version_id
     && (!item.candidate_version || item.candidate_version === latestVersion.semantic_version),
   )
+  const emptyEvaluation = state === 'ready' && !item.latest_eval_run_id && historicalRuns.length === 0
   const gatePassed = Boolean(currentGateEvidence && latestRun?.metrics.gate_passed && latestRun.status === 'passed')
   const records = [
     latestVersion && ['版本登记', latestVersion.created_by, latestVersion.created_at],
@@ -59,11 +60,13 @@ function EvidenceContent({
         <p className={`mt-2 text-sm font-medium ${gatePassed ? 'text-emerald-700' : 'text-amber-700'}`}>
           {state === 'loading'
             ? '正在加载当前门禁证据'
-            : gatePassed
-              ? '固定评测门禁通过'
-              : currentGateEvidence
-                ? '暂不可进入下一阶段'
-                : '当前门禁证据不可用'}
+            : emptyEvaluation
+              ? '尚无评测结论'
+              : gatePassed
+                ? '固定评测门禁通过'
+                : currentGateEvidence
+                  ? '暂不可进入下一阶段'
+                  : '当前门禁证据不可用'}
         </p>
         <p className="mt-1 break-words text-xs leading-5 text-slate-600">
           {!currentGateEvidence

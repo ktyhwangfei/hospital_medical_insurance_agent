@@ -692,11 +692,15 @@ describe('Skill governance workbench', () => {
     render(<SkillGovernanceWorkbench />)
 
     expect(await screen.findByRole('status', { name: '正在加载评测证据' })).toBeVisible()
+    expect(screen.getByRole('complementary', { name: '治理证据' })).toHaveTextContent('正在加载当前门禁证据')
     expect(screen.queryByText('当前视图没有差异案例')).not.toBeInTheDocument()
 
     await act(async () => pendingEvaluations.resolve({ items: [], total: 0 }))
     expect(await screen.findByText('当前视图没有差异案例')).toBeVisible()
     expect(screen.queryByRole('status', { name: '正在加载评测证据' })).not.toBeInTheDocument()
+    const evidence = screen.getByRole('complementary', { name: '治理证据' })
+    expect(evidence).toHaveTextContent('尚无评测结论')
+    expect(evidence).not.toHaveTextContent('当前门禁证据不可用')
   })
 
   it('shows evaluation evidence as unavailable after its request fails', async () => {
@@ -707,6 +711,7 @@ describe('Skill governance workbench', () => {
     expect(await screen.findByText('评测证据不可用，请刷新重试')).toBeVisible()
     expect(screen.queryByText('当前视图没有差异案例')).not.toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('evaluation unavailable')
+    expect(screen.getByRole('complementary', { name: '治理证据' })).toHaveTextContent('当前门禁证据不可用')
   })
 
   it('keeps the queue and loaded evaluation evidence when releases fail', async () => {
@@ -905,6 +910,7 @@ describe('Skill governance workbench', () => {
 
     const evidence = await screen.findByRole('complementary', { name: '治理证据' })
     expect(within(evidence).queryByText('固定评测门禁通过')).not.toBeInTheDocument()
+    expect(evidence).toHaveTextContent('当前门禁证据不可用')
     expect(evidence).toHaveTextContent(reason)
     expect(evidence).toHaveTextContent('run-1')
   })
