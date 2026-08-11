@@ -349,11 +349,11 @@ describe('policy knowledge api', () => {
     const trace = { rule: { rule_id: 'rule/1' }, steps: [] }
     const fetchMock = stubFetchJson(trace)
 
-    const result = await getRuleCompilationTrace('rule/1')
+    const result = await getRuleCompilationTrace('rule/1', 'run/1')
 
     expect(result).toEqual(trace)
     expect(fetchMock).toHaveBeenCalledWith(
-      `${WORKBENCH_API}/rules/rule%2F1/trace`,
+      `${WORKBENCH_API}/rules/rule%2F1/trace?run_id=run%2F1`,
       undefined,
     )
   })

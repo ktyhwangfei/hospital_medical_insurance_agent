@@ -5,6 +5,7 @@ from decimal import Decimal
 from threading import Barrier
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
@@ -1283,6 +1284,42 @@ def test_rule_compilation_trace_returns_newest_version_and_history(monkeypatch) 
 
     assert payload["rule"]["rule_version"] == 2
     assert [item["rule_version"] for item in payload["history"]] == [2, 1]
+
+
+def test_rule_compilation_trace_can_select_exact_run(monkeypatch) -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+        InMemoryCompilationTraceStore,
+    )
+    from src.runtime.api import policy_workbench_routes
+
+    store = InMemoryCompilationTraceStore()
+    _add_rule_trace(store, rule_id="rule_shared", version=1)
+    _add_rule_trace(store, rule_id="rule_shared", version=2)
+    monkeypatch.setattr(
+        policy_workbench_routes, "_get_compilation_trace_store", lambda: store
+    )
+    app = FastAPI()
+    app.include_router(policy_workbench_routes.router)
+    client = TestClient(app)
+
+    latest = client.get(f"{PREFIX}/rules/rule_shared/trace")
+    exact = client.get(
+        f"{PREFIX}/rules/rule_shared/trace", params={"run_id": "run_rule_shared_1"}
+    )
+    wrong = client.get(
+        f"{PREFIX}/rules/rule_shared/trace", params={"run_id": "run_wrong"}
+    )
+
+    assert latest.status_code == 200
+    assert latest.json()["run"]["run_id"] == "run_rule_shared_2"
+    assert exact.status_code == 200
+    assert exact.json()["run"]["run_id"] == "run_rule_shared_1"
+    assert wrong.status_code == 404
+    assert wrong.json()["detail"]["error_code"] == "RULE_TRACE_NOT_FOUND"
+    assert wrong.json()["detail"]["audit_event"] == {
+        "rule_id": "rule_shared",
+        "run_id": "run_wrong",
+    }
 
 
 def test_rule_compilation_trace_returns_typed_not_found(monkeypatch) -> None:

@@ -910,15 +910,21 @@ class RuleDetail(BaseModel):
     "/rules/{rule_id}/trace",
     response_model=RuleCompilationTraceResponse,
 )
-def get_rule_compilation_trace(rule_id: str) -> RuleCompilationTraceResponse:
-    trace = _get_compilation_trace_store().get_rule_trace(rule_id)
+def get_rule_compilation_trace(
+    rule_id: str,
+    run_id: str | None = None,
+) -> RuleCompilationTraceResponse:
+    trace = _get_compilation_trace_store().get_rule_trace(rule_id, run_id=run_id)
     if trace is None:
+        audit_event = {"rule_id": rule_id}
+        if run_id is not None:
+            audit_event["run_id"] = run_id
         raise HTTPException(
             status_code=404,
             detail=error_detail(
                 "RULE_TRACE_NOT_FOUND",
                 "规则编译轨迹不存在",
-                {"rule_id": rule_id},
+                audit_event,
             ),
         )
     return trace

@@ -432,6 +432,7 @@ export interface ChangeSetItem {
   risk_level: RiskLevel
   impact_scope: Record<string, unknown>
   needs_human: boolean
+  compile_run_id?: string | null
   canonical_rule?: { rule_id: string } | null
 }
 
@@ -725,9 +726,11 @@ export interface RuleCompilationTrace {
   }>
 }
 
-export const getRuleCompilationTrace = (ruleId: string) =>
+export const getRuleCompilationTrace = (ruleId: string, runId?: string | null) =>
   request<RuleCompilationTrace>(
-    `${WORKBENCH_API}/rules/${encodeURIComponent(ruleId)}/trace`,
+    `${WORKBENCH_API}/rules/${encodeURIComponent(ruleId)}/trace${
+      runId ? `?run_id=${encodeURIComponent(runId)}` : ''
+    }`,
   )
 
 export interface DecisionTask {

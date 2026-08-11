@@ -48,7 +48,9 @@ class CompilationTraceStore(Protocol):
         document_id: str,
         release_id: str,
     ) -> None: ...
-    def get_rule_trace(self, rule_id: str) -> RuleCompilationTraceResponse | None: ...
+    def get_rule_trace(
+        self, rule_id: str, run_id: str | None = None
+    ) -> RuleCompilationTraceResponse | None: ...
     def has_release_lineage(
         self, release_id: str, rule_runs: list[tuple[str, str]]
     ) -> bool: ...
@@ -180,9 +182,15 @@ class InMemoryCompilationTraceStore:
             "created_at": datetime.now(timezone.utc),
         })
 
-    def get_rule_trace(self, rule_id: str) -> RuleCompilationTraceResponse | None:
+    def get_rule_trace(
+        self, rule_id: str, run_id: str | None = None
+    ) -> RuleCompilationTraceResponse | None:
         lineages = sorted(
-            (item for item in self._lineages if item["rule_id"] == rule_id),
+            (
+                item for item in self._lineages
+                if item["rule_id"] == rule_id
+                and (run_id is None or item["run_id"] == run_id)
+            ),
             key=lambda item: (
                 self._runs[item["run_id"]].started_at,
                 item["created_at"],
@@ -442,15 +450,18 @@ class PostgresCompilationTraceStore:
             ),
         )
 
-    def get_rule_trace(self, rule_id: str) -> RuleCompilationTraceResponse | None:
+    def get_rule_trace(
+        self, rule_id: str, run_id: str | None = None
+    ) -> RuleCompilationTraceResponse | None:
         rows = self._get_client().execute(
             """SELECT lineage.* FROM policy_rule_lineage AS lineage
                JOIN policy_compile_runs AS run
                  ON run.run_id=lineage.compile_run_id
                WHERE lineage.rule_id=%s AND lineage.compile_run_id IS NOT NULL
+                 AND (%s::VARCHAR IS NULL OR lineage.compile_run_id=%s)
                ORDER BY run.started_at DESC,
                         lineage.created_at DESC""",
-            (rule_id,),
+            (rule_id, run_id, run_id),
         )
         if not rows:
             return None

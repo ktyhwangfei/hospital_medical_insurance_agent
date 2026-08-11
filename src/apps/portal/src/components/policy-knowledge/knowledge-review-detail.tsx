@@ -190,7 +190,10 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
   const [visibleCodes, setVisibleCodes] = useState<string[] | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [reextractScope, setReextractScope] = useState<ReextractScope | null>(null)
-  const [traceRuleId, setTraceRuleId] = useState<string | null>(null)
+  const [traceTarget, setTraceTarget] = useState<{
+    ruleId: string
+    runId: string | null
+  } | null>(null)
   const loadSequence = useRef(0)
   const actionInFlight = useRef(false)
 
@@ -891,9 +894,10 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
                           itemId: item.item_id,
                           extractedFields: extractCandidateFieldCodes(item.after),
                         })}
-                        onViewTrace={() => setTraceRuleId(
-                          item.canonical_rule?.rule_id ?? item.rule_id
-                        )}
+                        onViewTrace={() => setTraceTarget({
+                          ruleId: item.canonical_rule?.rule_id ?? item.rule_id,
+                          runId: item.compile_run_id ?? null,
+                        })}
                       />
                     ))}
                   </>
@@ -995,9 +999,10 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
       )}
 
       <RuleTraceDrawer
-        open={traceRuleId !== null}
-        ruleId={traceRuleId}
-        onOpenChange={(open) => { if (!open) setTraceRuleId(null) }}
+        open={traceTarget !== null}
+        ruleId={traceTarget?.ruleId ?? null}
+        runId={traceTarget?.runId ?? null}
+        onOpenChange={(open) => { if (!open) setTraceTarget(null) }}
       />
     </section>
   )

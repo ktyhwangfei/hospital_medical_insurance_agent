@@ -18,10 +18,11 @@ import {
 interface RuleTraceDrawerProps {
   open: boolean
   ruleId: string | null
+  runId?: string | null
   onOpenChange: (open: boolean) => void
 }
 
-export default function RuleTraceDrawer({ open, ruleId, onOpenChange }: RuleTraceDrawerProps) {
+export default function RuleTraceDrawer({ open, ruleId, runId, onOpenChange }: RuleTraceDrawerProps) {
   const [trace, setTrace] = useState<RuleCompilationTrace | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -34,7 +35,7 @@ export default function RuleTraceDrawer({ open, ruleId, onOpenChange }: RuleTrac
     setLoading(true)
     setError('')
     setTrace(null)
-    void getRuleCompilationTrace(ruleId)
+    void getRuleCompilationTrace(ruleId, runId)
       .then((result) => {
         if (active) setTrace(result)
       })
@@ -47,7 +48,7 @@ export default function RuleTraceDrawer({ open, ruleId, onOpenChange }: RuleTrac
     return () => {
       active = false
     }
-  }, [open, ruleId, retry])
+  }, [open, ruleId, runId, retry])
 
   const close = () => {
     setFullPayload(null)

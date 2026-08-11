@@ -190,7 +190,11 @@ class FakePostgreSQLClient:
             )
         if "from policy_rule_lineage as lineage" in normalized:
             return sorted(
-                [dict(item) for item in self.lineages if item["rule_id"] == params[0]],
+                [
+                    dict(item) for item in self.lineages
+                    if item["rule_id"] == params[0]
+                    and (params[1] is None or item["compile_run_id"] == params[2])
+                ],
                 key=lambda item: (
                     self.runs[item["compile_run_id"]]["started_at"],
                     item["created_at"],
@@ -323,6 +327,24 @@ def test_latest_failed_attempt_is_current_even_without_canonical_rule(store) -> 
     assert trace.rule is None
     assert trace.issues == [issue]
     assert [item.run_id for item in trace.history] == ["run_fail", "run_pass"]
+
+    passed = store.get_rule_trace("rule_x", run_id="run_pass")
+    failed = store.get_rule_trace("rule_x", run_id="run_fail")
+    assert passed is not None
+    assert passed.run.run_id == "run_pass"
+    assert passed.rule == rule(1)
+    assert [item.run_id for item in passed.history] == ["run_pass"]
+    assert failed is not None
+    assert failed.run.run_id == "run_fail"
+    assert failed.rule is None
+    assert [item.run_id for item in failed.history] == ["run_fail"]
+    assert store.get_rule_trace("rule_x", run_id="run_wrong") is None
+    if isinstance(store, PostgresCompilationTraceStore):
+        exact_query = next(
+            sql for sql in reversed(store._client.executed_sql)
+            if "from policy_rule_lineage as lineage" in sql
+        )
+        assert "lineage.compile_run_id=%s" in exact_query
 
 
 def test_extraction_run_marker_supports_idempotent_backfill(store) -> None:

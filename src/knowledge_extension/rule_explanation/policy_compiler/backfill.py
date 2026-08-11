@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from src.knowledge_extension.rule_explanation.change_set_store import ChangeSetStore
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
     ApprovedUnit,
     KnowledgeItem,
@@ -39,6 +40,40 @@ class BackfillReport(BaseModel):
     compiled: int = 0
     legacy_imported: int = 0
     skipped: int = 0
+    linked: int = 0
+    link_skipped: int = 0
+
+
+class CandidateLinkReport(BaseModel):
+    linked: int = 0
+    link_skipped: int = 0
+
+
+def link_change_set_candidates(
+    change_sets: ChangeSetStore,
+    traces: CompilationTraceStore,
+) -> CandidateLinkReport:
+    """仅为持久化变更项补齐其既有编译运行关联。"""
+    linked = link_skipped = 0
+    for change_set in change_sets.list():
+        for item in change_set.items:
+            run_id = item.compile_run_id
+            run = traces.get_run(run_id) if run_id else None
+            if (
+                run is None
+                or traces.get_rule_trace(item.rule_id, run_id=run_id) is not None
+            ):
+                link_skipped += 1
+                continue
+            traces.save_candidate_lineage(
+                rule_id=item.rule_id,
+                rule=item.canonical_rule,
+                run_id=run_id,
+                extraction_id=run.extraction_id,
+                document_id=run.document_id,
+            )
+            linked += 1
+    return CandidateLinkReport(linked=linked, link_skipped=link_skipped)
 
 
 def backfill_rules(
@@ -130,6 +165,9 @@ def _import_legacy(
 
 
 def main() -> None:
+    from src.knowledge_extension.rule_explanation.change_set_store import (
+        PostgresChangeSetStore,
+    )
     from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
         KnowledgeWorkbenchService,
     )
@@ -152,6 +190,8 @@ def main() -> None:
         pipeline,
         traces,
     )
+    link_report = link_change_set_candidates(PostgresChangeSetStore(), traces)
+    report = report.model_copy(update=link_report.model_dump())
     print(json.dumps(report.model_dump(), ensure_ascii=False))
 
 

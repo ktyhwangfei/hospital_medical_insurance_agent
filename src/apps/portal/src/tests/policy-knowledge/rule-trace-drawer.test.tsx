@@ -65,16 +65,24 @@ describe('rule trace drawer', () => {
     const user = userEvent.setup()
     const onOpenChange = vi.fn()
     const view = render(
-      <RuleTraceDrawer open={false} ruleId="rule_1" onOpenChange={onOpenChange} />,
+      <RuleTraceDrawer
+        open={false}
+        ruleId="rule_1"
+        runId="run_1"
+        onOpenChange={onOpenChange}
+      />,
     )
 
     expect(getRuleCompilationTrace).not.toHaveBeenCalled()
     view.rerender(
-      <RuleTraceDrawer open ruleId="rule_1" onOpenChange={onOpenChange} />,
+      <RuleTraceDrawer open ruleId="rule_1" runId="run_1" onOpenChange={onOpenChange} />,
     )
 
     expect(await screen.findByRole('heading', { name: '规则编译溯源' })).toBeInTheDocument()
-    await waitFor(() => expect(getRuleCompilationTrace).toHaveBeenCalledWith('rule_1'))
+    await waitFor(() => expect(getRuleCompilationTrace).toHaveBeenCalledWith(
+      'rule_1',
+      'run_1',
+    ))
     expect(screen.getByText('原始输入')).toBeInTheDocument()
     expect(screen.getByText('LLM 提取')).toBeInTheDocument()
     const stages = screen.getAllByTestId('trace-stage').map((node) => node.textContent)
