@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -88,6 +89,7 @@ export default function SkillWorkspace({
   onChanged,
   onOpenExecution,
 }: SkillWorkspaceProps) {
+  const router = useRouter()
   const [detail, setDetail] = useState<InfraSkillDetailResponse | null>(null)
   const [versions, setVersions] = useState<SkillVersionResponse[]>([])
   const [evalRuns, setEvalRuns] = useState<SkillEvalRunResponse[]>([])
@@ -218,6 +220,18 @@ export default function SkillWorkspace({
     const action = primaryAction
     setActionError(null)
     if (action.kind === 'none') return
+    if (item.next_action === 'create_fix_draft') {
+      router.push(`/skills/new?source=${encodeURIComponent(item.skill_id)}`)
+      return
+    }
+    if (item.next_action === 'continue_draft' || item.next_action === 'materialize_draft') {
+      if (!item.linked_draft_id) {
+        setActionError('关联草稿不存在，请刷新治理待办')
+        return
+      }
+      router.push(`/skills/drafts?draft=${encodeURIComponent(item.linked_draft_id)}`)
+      return
+    }
     if (action.kind === 'navigate') {
       if (action.targetTab) handleNavigate(action.targetTab)
       return

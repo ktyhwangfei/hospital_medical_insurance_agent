@@ -640,6 +640,75 @@ describe('Skill governance workbench', () => {
     expect(mockApproveSkillRelease).not.toHaveBeenCalled()
   })
 
+  it('opens a new fix draft from the failed Skill', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        next_action: 'create_fix_draft',
+      }],
+    })
+    render(<SkillGovernanceWorkbench />)
+
+    await userEvent.click(await screen.findByTestId('skill-primary-action'))
+
+    expect(mockRouterPush).toHaveBeenCalledWith('/skills/new?source=settlement_explain_skill')
+  })
+
+  it.each([
+    ['continue_draft', '继续修改'],
+    ['materialize_draft', '人工物化'],
+  ] as const)('opens the linked draft for %s', async (nextAction, label) => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        linked_draft_id: 'draft-1',
+        linked_draft_status: nextAction === 'continue_draft' ? 'editing' : 'validated',
+        next_action: nextAction,
+      }],
+    })
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText(label)).toBeVisible()
+    await userEvent.click(screen.getByTestId('skill-primary-action'))
+
+    expect(mockRouterPush).toHaveBeenCalledWith('/skills/drafts?draft=draft-1')
+  })
+
+  it.each(['continue_draft', 'materialize_draft'] as const)(
+    'fails closed when %s has no linked draft and preserves evidence',
+    async (nextAction) => {
+      mockGetSkillGovernanceWorkbench.mockResolvedValue({
+        ...workbenchResponse,
+        items: [{
+          ...workbenchResponse.items[0],
+          linked_draft_id: null,
+          linked_draft_status: null,
+          next_action: nextAction,
+        }],
+      })
+      mockListInfraSkillVersions.mockResolvedValue([version])
+      mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
+      render(<SkillGovernanceWorkbench />)
+
+      const table = await screen.findByRole('table', { name: '评测差异案例' })
+      await userEvent.click(screen.getByTestId('skill-primary-action'))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('关联草稿不存在，请刷新治理待办')
+      expect(table).toBeVisible()
+      expect(screen.getByText('case-new-failure')).toBeVisible()
+      expect(screen.getByRole('complementary', { name: '治理证据' })).toHaveTextContent('run-1')
+      expect(screen.getByTestId('skill-workspace-settlement_explain_skill')).toBeVisible()
+      expect(mockRouterPush).not.toHaveBeenCalled()
+      expect(mockCreateSkillEvalRun).not.toHaveBeenCalled()
+      expect(mockCreateSkillRelease).not.toHaveBeenCalled()
+      expect(mockRequestSkillReleaseApproval).not.toHaveBeenCalled()
+      expect(mockApproveSkillRelease).not.toHaveBeenCalled()
+      expect(mockActivateSkillRelease).not.toHaveBeenCalled()
+    },
+  )
+
   it('shows the fixed evaluation metrics and regression comparison surface', async () => {
     mockListInfraSkillVersions.mockResolvedValue([version])
     mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
@@ -910,6 +979,36 @@ describe('Skill governance workbench', () => {
       { expected_revision: currentRelease.revision },
       expect.stringContaining('settlement_explain_skill:activate:'),
     ))
+  })
+
+  it('keeps the current evidence and selection visible when activation evidence changes', async () => {
+    window.history.replaceState({}, '', '/skills?skill=settlement_explain_skill&tab=overview')
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        latest_eval_run_id: passedCurrentRun.run_id,
+        latest_eval_status: 'passed',
+        candidate_version: version.semantic_version,
+        next_action: 'activate_test_shadow',
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [passedCurrentRun], total: 1 })
+    mockListSkillReleases.mockResolvedValue(releasePage('approved'))
+    mockActivateSkillRelease.mockRejectedValue(new Error('证据已变化，请重新评测'))
+    render(<SkillGovernanceWorkbench />)
+
+    const table = await screen.findByRole('table', { name: '评测差异案例' })
+    await userEvent.click(screen.getByTestId('skill-primary-action'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('证据已变化，请重新评测')
+    expect(table).toBeVisible()
+    expect(screen.getByText('case-new-failure')).toBeVisible()
+    expect(screen.getByRole('complementary', { name: '治理证据' })).toHaveTextContent('run-1')
+    expect(screen.getByTestId('skill-workspace-settlement_explain_skill')).toBeVisible()
+    expect(window.location.search).toContain('skill=settlement_explain_skill')
+    expect(mockRouterPush).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -1238,7 +1337,13 @@ describe('Skill governance workbench', () => {
     await userEvent.click(await screen.findByRole('button', { name: '激活 Test Shadow' }))
 
     await waitFor(() => expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(mockListSkillReleases).toHaveBeenCalledTimes(2))
+    expect(mockGetInfraSkillDetail).toHaveBeenCalledTimes(2)
+    expect(mockListInfraSkillVersions).toHaveBeenCalledTimes(2)
+    expect(mockListSkillEvalRuns).toHaveBeenCalledTimes(2)
     expect((await screen.findAllByText('Test Active'))[0]).toBeVisible()
+    expect(mockRouterPush).not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe('/skills')
   })
 
   it('keeps selected skill and tab after closing route diagnostics', async () => {
