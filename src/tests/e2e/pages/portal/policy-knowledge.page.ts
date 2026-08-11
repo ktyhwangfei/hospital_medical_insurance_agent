@@ -17,7 +17,7 @@ export class PolicyKnowledgePage extends BasePage {
   readonly activeReleaseCard: Locator;
 
   constructor(page: Page) {
-    super(page, 'http://127.0.0.1:3000');
+    super(page, `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? 3000}`);
     this.navigation = page.getByRole('navigation').filter({
       has: page.getByRole('button', { name: '概览', exact: true }),
     });

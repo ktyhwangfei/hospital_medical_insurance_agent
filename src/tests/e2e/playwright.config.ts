@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const backendPort = Number(process.env.E2E_BACKEND_PORT ?? 8000);
+const frontendPort = Number(process.env.E2E_FRONTEND_PORT ?? 3000);
+
 export default defineConfig({
   testDir: './',
   testMatch: ['**/*.spec.ts', '**/*.flow.ts'],
@@ -43,8 +46,8 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'uvicorn src.runtime.api.app:create_app --host 127.0.0.1 --port 8000 --factory',
-      port: 8000,
+      command: `uvicorn src.runtime.api.app:create_app --host 127.0.0.1 --port ${backendPort} --factory`,
+      port: backendPort,
       reuseExistingServer: true,
       timeout: 30000,
       cwd: '../../..',
@@ -55,8 +58,8 @@ export default defineConfig({
       },
     },
     {
-      command: 'npm run dev',
-      port: 3000,
+      command: `npm run dev -- -p ${frontendPort}`,
+      port: frontendPort,
       cwd: '../../apps/portal',
       reuseExistingServer: true,
     },

@@ -4,7 +4,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.knowledge_extension.rule_explanation.change_set_models import (
+    ChangeSetItem,
     KnowledgeChangeSet,
+    SourceUnitRevision,
 )
 from src.knowledge_extension.rule_explanation.change_set_service import ChangeSetService
 from src.knowledge_extension.rule_explanation.change_set_store import InMemoryChangeSetStore
@@ -14,6 +16,24 @@ from src.knowledge_extension.rule_explanation.knowledge_build_models import (
 )
 from src.knowledge_extension.rule_explanation.knowledge_build_store import (
     InMemoryKnowledgeBuildStore,
+)
+from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
+    ApprovedUnit,
+    KnowledgeConfidence,
+    KnowledgeItem,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.compiler import (
+    PolicyRuleCompiler,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.models import (
+    CanonicalRule,
+    CompileRun,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.service import (
+    PolicyCompilationService,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+    InMemoryCompilationTraceStore,
 )
 from src.knowledge_extension.rule_explanation.published_snapshot_store import (
     InMemoryPublishedSnapshotStore,
@@ -25,7 +45,10 @@ from src.knowledge_extension.rule_explanation.quality_models import (
 )
 from src.knowledge_extension.rule_explanation.quality_service import PolicyQualityService
 from src.knowledge_extension.rule_explanation.quality_store import InMemoryPolicyQualityStore
-from src.knowledge_extension.rule_explanation.release_index import ReleaseIndexBuilder
+from src.knowledge_extension.rule_explanation.release_index import (
+    KnowledgeWorkbenchReleaseSource,
+    ReleaseIndexBuilder,
+)
 from src.runtime.api.app import create_app
 
 
@@ -176,6 +199,23 @@ def _lifecycle_client(
 ]:
     from src.runtime.api import policy_workbench_routes
 
+    trace_store = InMemoryCompilationTraceStore()
+    compile_run = CompileRun(
+        run_id="run_task_1",
+        document_id="doc_1",
+        unit_id="unit_1",
+        extraction_id="ext_task_1",
+        raw_input={"source_text": "candidate source"},
+        llm_output={"facts": []},
+    )
+    trace_store.create_run(compile_run)
+    trace_store.finish_run(compile_run.run_id, status="PASS", metrics={"rules": 1})
+    canonical_rule = CanonicalRule(
+        rule_id="rule_task_1",
+        subject="benefit_rule",
+        result={"value": "candidate"},
+        evidence=["evidence_task_1"],
+    )
     selected_change_set_store = change_set_store or InMemoryChangeSetStore()
     selected_change_set_store.save(KnowledgeChangeSet(
         change_set_id="CS_task_1",
@@ -185,6 +225,20 @@ def _lifecycle_client(
         build_task_id="KB_task_1",
         semantic_contract_version="2",
         status="PENDING_REVIEW",
+        items=[ChangeSetItem(
+            item_id="ITEM_task_1",
+            change_type="ADD",
+            rule_id=canonical_rule.rule_id,
+            unit_id="unit_1",
+            doc_id="doc_1",
+            after={
+                "extraction_id": compile_run.extraction_id,
+                "business_sentence": "candidate",
+            },
+            compile_run_id=compile_run.run_id,
+            compilation_status="PASS",
+            canonical_rule=canonical_rule,
+        )],
     ))
     change_set_service = ChangeSetService(object(), selected_change_set_store)
     selected_build_store = build_store or InMemoryKnowledgeBuildStore()
@@ -240,6 +294,11 @@ def _lifecycle_client(
         "_get_snapshot_store",
         lambda: selected_snapshot_store,
     )
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_compilation_trace_store",
+        lambda: trace_store,
+    )
     return (
         TestClient(create_app(), raise_server_exceptions=False),
         quality_store,
@@ -253,6 +312,8 @@ def _approve_and_prepare_release(
     client: TestClient,
     quality_store: InMemoryPolicyQualityStore,
 ) -> None:
+    from src.runtime.api import policy_workbench_routes
+
     approved = client.post(
         f"{PREFIX}/change-sets/CS_task_1/approve",
         json={"reviewer": "reviewer_a", "note": "通过"},
@@ -273,6 +334,20 @@ def _approve_and_prepare_release(
         "source_change_set_id": "CS_task_1",
     })
     assert created.status_code == 201
+    change_set = policy_workbench_routes._get_change_set_service().get_change_set(
+        "CS_task_1"
+    )
+    assert change_set is not None
+    item = change_set.items[0]
+    assert item.canonical_rule is not None
+    assert item.compile_run_id is not None
+    policy_workbench_routes._get_compilation_trace_store().save_lineage(
+        rule=item.canonical_rule,
+        run_id=item.compile_run_id,
+        extraction_id=str((item.after or {}).get("extraction_id")),
+        document_id=item.doc_id,
+        release_id="candidate_task_1",
+    )
     release = quality_store.get_release("candidate_task_1")
     assert release is not None
     quality_store.save_release(release.model_copy(update={"status": "ready"}))
@@ -554,3 +629,258 @@ def test_formal_release_gate_is_true_before_promotion_and_false_after_activation
     assert any("活动版本" in reason for reason in after.json()["blocked_reasons"])
     assert after.json()["sync_pending"] is False
     assert after.json()["sync_pending_reasons"] == []
+
+
+class TraceFlowPipeline:
+    def get_extraction(self, extraction_id: str):
+        if extraction_id != "ext_trace":
+            return None
+        return {
+            "extraction_id": extraction_id,
+            "doc_id": "doc_trace",
+            "unit_id": "unit_trace",
+            "source_text": "政策原文快照",
+            "extracted_fields": {
+                "schema_version": "1",
+                "rules": [{
+                    "knowledge_id": "kn_trace",
+                    "subject": "payment_ratio",
+                    "population": "employee",
+                    "result": {"ratio": "0.8"},
+                }],
+            },
+        }
+
+
+class TraceFlowEmbedding:
+    dim = 2
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        return [[0.1, 0.2] for _ in texts]
+
+
+class FailPublishTraceStore(InMemoryCompilationTraceStore):
+    def append_step(self, run_id, step):
+        if step.stage == "PUBLISH":
+            raise RuntimeError("trace persistence unavailable")
+        return super().append_step(run_id, step)
+
+
+def _compile_trace_flow_client(monkeypatch, traces=None):
+    from src.runtime.api import policy_workbench_routes
+
+    trace_store = traces or InMemoryCompilationTraceStore()
+    unit = ApprovedUnit(
+        unit_id="unit_trace",
+        doc_id="doc_trace",
+        doc_title="测试政策",
+        path=["测试条款"],
+        source_text="政策原文快照",
+        order_no=1,
+        status="reviewed",
+        knowledge_count=1,
+        knowledge=[KnowledgeItem(
+            knowledge_id="kn_trace",
+            unit_id="unit_trace",
+            extraction_id="ext_trace",
+            relationship_source="persisted",
+            business_sentence="在适用条件下执行对应待遇规则",
+            source_text="政策原文快照",
+            fields=[],
+            confidence=KnowledgeConfidence(
+                completeness=1,
+                accuracy=1,
+                source_fidelity=1,
+                model_confidence=1,
+                value_domain_compliance=1,
+                overall=1,
+            ),
+            citations=[],
+        )],
+    )
+    compiled = PolicyCompilationService(
+        TraceFlowPipeline(), PolicyRuleCompiler(), trace_store
+    ).compile_units([unit])["kn_trace"]
+    canonical = compiled.canonical_rules[0]
+
+    change_sets = InMemoryChangeSetStore()
+    change_sets.save(KnowledgeChangeSet(
+        change_set_id="CS_compile_trace",
+        source_document_version_id="doc_trace_v1",
+        doc_id="doc_trace",
+        doc_title="测试政策",
+        build_task_id="KB_compile_trace",
+        source_units=[SourceUnitRevision(
+            doc_id="doc_trace",
+            doc_title="测试政策",
+            unit_id="unit_trace",
+            unit_revision_id="unit_trace_v1",
+            path=["测试条款"],
+        )],
+        semantic_contract_version="2",
+        status="PENDING_REVIEW",
+        items=[ChangeSetItem(
+            item_id="ITEM_compile_trace",
+            change_type="ADD",
+            rule_id=canonical.rule_id,
+            unit_id="unit_trace",
+            doc_id="doc_trace",
+            after={
+                "knowledge_id": "kn_trace",
+                "extraction_id": "ext_trace",
+                "business_sentence": "在适用条件下执行对应待遇规则",
+            },
+            evidence_ids=list(canonical.evidence),
+            risk_level="LOW",
+            needs_human=False,
+            compile_run_id=compiled.compile_run_id,
+            compilation_status=compiled.status,
+            canonical_rule=canonical,
+        )],
+    ))
+    change_set_service = ChangeSetService(object(), change_sets)
+
+    build_tasks = InMemoryKnowledgeBuildStore()
+    build_tasks.create_with_claims(KnowledgeBuildTask(
+        task_id="KB_compile_trace",
+        name="规则编译治理流",
+        status="WAITING_REVIEW",
+        build_mode="INITIAL",
+        semantic_contract_version="2",
+        pipeline_version="pipeline-v1",
+        model_scene="policy-knowledge-build",
+        config_hash="cfg_trace",
+        created_by="policy-editor",
+        units=[KnowledgeBuildTaskUnit(
+            doc_id="doc_trace",
+            doc_title="测试政策",
+            unit_id="unit_trace",
+            unit_revision_id="unit_trace_v1",
+            status="BUILT",
+            candidate_result_ids=["CS_compile_trace"],
+        )],
+        processed_units=1,
+        result_change_set_id="CS_compile_trace",
+    ))
+
+    quality = InMemoryPolicyQualityStore()
+    quality.save_test_case(PolicyQATestCase(
+        case_id="case_compile_trace",
+        name="规则编译治理流用例",
+        query="待遇规则",
+        mode="semantic",
+        expected_knowledge_ids=["kn_expected"],
+    ))
+    quality.save_release(KnowledgeRelease(
+        release_id="baseline",
+        status="passed",
+        facts_collection="policy_facts_baseline",
+        rules_collection="policy_rules_baseline",
+        contract_version="1",
+        case_set_version=1,
+        config_hash=QUALITY_CONFIG_HASH,
+    ))
+    quality.save_run(QualityRun(
+        run_id="run_baseline_trace",
+        release_id="baseline",
+        case_set_version=1,
+        config_hash=QUALITY_CONFIG_HASH,
+        status="passed",
+    ))
+    quality.promote_release("baseline", "publisher")
+    snapshots = InMemoryPublishedSnapshotStore()
+
+    monkeypatch.setattr(policy_workbench_routes, "_get_change_set_service", lambda: change_set_service)
+    monkeypatch.setattr(policy_workbench_routes, "_get_knowledge_build_store", lambda: build_tasks)
+    monkeypatch.setattr(policy_workbench_routes, "_get_quality_store", lambda: quality)
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_quality_service",
+        lambda: PolicyQualityService(quality, LifecycleReleaseSearcher()),
+    )
+    monkeypatch.setattr(policy_workbench_routes, "_get_snapshot_store", lambda: snapshots)
+    monkeypatch.setattr(policy_workbench_routes, "_get_compilation_trace_store", lambda: trace_store)
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_release_content_source",
+        lambda: KnowledgeWorkbenchReleaseSource(object(), TraceFlowEmbedding()),
+    )
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_get_release_index_builder",
+        lambda: ReleaseIndexBuilder(quality, HealthyBackend(), trace_store),
+    )
+    return (
+        TestClient(create_app(), raise_server_exceptions=False),
+        quality,
+        trace_store,
+        compiled.compile_run_id,
+        canonical.rule_id,
+    )
+
+
+def test_compile_trace_governed_release_flow_is_queryable_after_activation(
+    monkeypatch,
+) -> None:
+    client, quality, traces, run_id, rule_id = _compile_trace_flow_client(monkeypatch)
+
+    assert client.post(
+        f"{PREFIX}/change-sets/CS_compile_trace/approve",
+        json={"reviewer": "reviewer", "note": "核验通过"},
+    ).status_code == 200
+    assert client.post(f"{PREFIX}/releases", json={
+        "release_id": "candidate_compile_trace",
+        "contract_version": "2",
+        "config_hash": QUALITY_CONFIG_HASH,
+        "source_change_set_id": "CS_compile_trace",
+    }).status_code == 201
+    assert client.post(
+        f"{PREFIX}/releases/candidate_compile_trace/build"
+    ).status_code == 200
+    tested = client.post(
+        f"{PREFIX}/releases/candidate_compile_trace/test",
+        json={"repeat_count": 3},
+    )
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "passed"
+    promoted = client.post(
+        f"{PREFIX}/releases/candidate_compile_trace/promote",
+        json={"reviewed_by": "publisher"},
+    )
+    trace = client.get(f"{PREFIX}/rules/{rule_id}/trace")
+
+    assert promoted.status_code == 200
+    assert quality.get_active_release().release_id == "candidate_compile_trace"  # type: ignore[union-attr]
+    assert trace.status_code == 200
+    assert trace.json()["run"]["run_id"] == run_id
+    assert [step["stage"] for step in trace.json()["steps"]] == [
+        "INPUT_SNAPSHOT", "LLM_EXTRACTION", "CANONICALIZE", "COMPOSE",
+        "RESOLVE", "DERIVE", "VALIDATE", "PUBLISH",
+    ]
+    assert traces.has_release_lineage("candidate_compile_trace", [rule_id])
+
+
+def test_compile_trace_persistence_failure_keeps_active_release_and_run(
+    monkeypatch,
+) -> None:
+    traces = FailPublishTraceStore()
+    client, quality, _traces, run_id, _rule_id = _compile_trace_flow_client(
+        monkeypatch, traces
+    )
+    assert client.post(
+        f"{PREFIX}/change-sets/CS_compile_trace/approve",
+        json={"reviewer": "reviewer", "note": "核验通过"},
+    ).status_code == 200
+    assert client.post(f"{PREFIX}/releases", json={
+        "release_id": "candidate_compile_trace",
+        "contract_version": "2",
+        "config_hash": QUALITY_CONFIG_HASH,
+        "source_change_set_id": "CS_compile_trace",
+    }).status_code == 201
+
+    failed = client.post(f"{PREFIX}/releases/candidate_compile_trace/build")
+
+    assert failed.status_code == 503
+    assert quality.get_active_release().release_id == "baseline"  # type: ignore[union-attr]
+    assert quality.get_release("candidate_compile_trace").status == "building"  # type: ignore[union-attr]
+    assert traces.get_run(run_id).status == "PASS"  # type: ignore[union-attr]
