@@ -10,15 +10,20 @@ from src.data_platform.storage.skill.governance_in_memory import (
     InMemorySkillGovernanceStorage,
 )
 from src.data_platform.cache.in_memory import InMemoryCacheClient
+from src.data_platform.storage.skill.draft_in_memory import (
+    InMemorySkillDraftStorage,
+)
 from src.data_platform.storage.skill.version_in_memory import (
     InMemorySkillVersionStorage,
 )
 from src.runtime.api.app import create_app
 from src.runtime.api.infra_skill_routes import (
+    get_skill_draft_service,
     get_skill_governance_service,
     get_skill_idempotency_store,
     get_skill_version_service,
 )
+from src.runtime.skill_management.draft_service import SkillDraftService
 from src.runtime.skill_management.governance_service import SkillGovernanceService
 from src.runtime.skill_management.version_service import SkillVersionService
 from src.skill_infra.skill_loader import get_loader
@@ -50,9 +55,10 @@ def _control_token(
     return f"test.{encoded}.signature"
 
 
-def test_fixed_suite_to_test_shadow_active_flow(monkeypatch) -> None:
+def test_fixed_suite_to_test_shadow_active_flow(monkeypatch, request) -> None:
     monkeypatch.setenv("SKILL_CONTROL_DEV_MODE", "1")
     app = create_app()
+    request.addfinalizer(app.dependency_overrides.clear)
     versions = InMemorySkillVersionStorage()
     governance = InMemorySkillGovernanceStorage()
     version_service = SkillVersionService(
@@ -66,11 +72,14 @@ def test_fixed_suite_to_test_shadow_active_flow(monkeypatch) -> None:
         version_storage=versions,
         loader=get_loader(),
     )
+    draft_service = SkillDraftService(InMemorySkillDraftStorage())
     app.dependency_overrides[get_skill_version_service] = lambda: version_service
     app.dependency_overrides[get_skill_governance_service] = lambda: governance_service
+    app.dependency_overrides[get_skill_draft_service] = lambda: draft_service
     idempotency_store = InMemoryCacheClient()
     app.dependency_overrides[get_skill_idempotency_store] = lambda: idempotency_store
     client = TestClient(app)
+    request.addfinalizer(client.close)
 
     catalog_item = client.get(f"{PREFIX}/infra-skills/catalog").json()["items"][0]
     skill_id = catalog_item["skill_id"]

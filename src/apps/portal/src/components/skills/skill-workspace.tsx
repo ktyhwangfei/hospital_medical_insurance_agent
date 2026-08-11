@@ -24,6 +24,7 @@ import {
   listSkillReleases,
   requestSkillReleaseApproval,
 } from '@/lib/api-client'
+import { copySkill } from '@/lib/skill-draft-api'
 import type {
   InfraSkillDetailResponse,
   SkillEvalRunResponse,
@@ -220,19 +221,15 @@ export default function SkillWorkspace({
     const action = primaryAction
     setActionError(null)
     if (action.kind === 'none') return
-    if (item.next_action === 'create_fix_draft') {
-      router.push(`/skills/new?source=${encodeURIComponent(item.skill_id)}`)
-      return
-    }
     if (item.next_action === 'continue_draft' || item.next_action === 'materialize_draft') {
       if (!item.linked_draft_id) {
         setActionError('关联草稿不存在，请刷新治理待办')
         return
       }
-      router.push(`/skills/drafts?draft=${encodeURIComponent(item.linked_draft_id)}`)
+      router.push(`/skills/${encodeURIComponent(item.skill_id)}/edit?draft=${encodeURIComponent(item.linked_draft_id)}`)
       return
     }
-    if (action.kind === 'navigate') {
+    if (action.kind === 'navigate' && item.next_action !== 'create_fix_draft') {
       if (action.targetTab) handleNavigate(action.targetTab)
       return
     }
@@ -240,6 +237,14 @@ export default function SkillWorkspace({
     try {
       const key = `${item.skill_id}:${action.kind}:${Date.now()}`
       switch (action.kind) {
+        case 'navigate': {
+          const draft = await copySkill(
+            { source_skill_id: item.skill_id, new_skill_id: item.skill_id },
+            `${item.skill_id}:create_fix_draft:${Date.now()}`,
+          )
+          router.push(`/skills/${encodeURIComponent(item.skill_id)}/edit?draft=${encodeURIComponent(draft.draft_id)}`)
+          return
+        }
         case 'run_evaluation': {
           const version = currentWriteVersion()
           if (!version) throw new Error('当前候选版本证据不一致，请刷新后重试')

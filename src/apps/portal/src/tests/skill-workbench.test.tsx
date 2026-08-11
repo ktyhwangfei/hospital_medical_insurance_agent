@@ -21,6 +21,7 @@ const mockCreateSkillRelease = vi.fn()
 const mockRequestSkillReleaseApproval = vi.fn()
 const mockApproveSkillRelease = vi.fn()
 const mockActivateSkillRelease = vi.fn()
+const mockCopySkill = vi.fn()
 const mockTestInfraSkillRouting = vi.fn()
 const mockTestInfraSkillExecution = vi.fn()
 
@@ -47,6 +48,10 @@ vi.mock('@/lib/api-client', () => ({
 const { mockRouterPush, navigationState } = vi.hoisted(() => ({
   mockRouterPush: vi.fn(),
   navigationState: { pathname: '/skills' },
+}))
+
+vi.mock('@/lib/skill-draft-api', () => ({
+  copySkill: (...args: unknown[]) => mockCopySkill(...args),
 }))
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockRouterPush, replace: vi.fn(), refresh: vi.fn() }),
@@ -285,6 +290,7 @@ describe('Skill governance workbench', () => {
       mockRequestSkillReleaseApproval,
       mockApproveSkillRelease,
       mockActivateSkillRelease,
+      mockCopySkill,
       mockTestInfraSkillRouting,
       mockTestInfraSkillExecution,
     ].forEach((mock) => mock.mockReset())
@@ -312,6 +318,7 @@ describe('Skill governance workbench', () => {
     mockRequestSkillReleaseApproval.mockResolvedValue(releasePage('approval_pending').items[0])
     mockApproveSkillRelease.mockResolvedValue({ status: 'approved' })
     mockActivateSkillRelease.mockResolvedValue({ status: 'active' })
+    mockCopySkill.mockResolvedValue({ draft_id: 'draft-fix-1' })
     mockTestInfraSkillRouting.mockResolvedValue({ candidates: [] })
     mockTestInfraSkillExecution.mockResolvedValue({ status: 'completed' })
   })
@@ -640,7 +647,7 @@ describe('Skill governance workbench', () => {
     expect(mockApproveSkillRelease).not.toHaveBeenCalled()
   })
 
-  it('opens a new fix draft from the failed Skill', async () => {
+  it('copies the failed Skill into a repair draft and opens its editor', async () => {
     mockGetSkillGovernanceWorkbench.mockResolvedValue({
       ...workbenchResponse,
       items: [{
@@ -652,7 +659,39 @@ describe('Skill governance workbench', () => {
 
     await userEvent.click(await screen.findByTestId('skill-primary-action'))
 
-    expect(mockRouterPush).toHaveBeenCalledWith('/skills/new?source=settlement_explain_skill')
+    await waitFor(() => expect(mockCopySkill).toHaveBeenCalledWith(
+      {
+        source_skill_id: 'settlement_explain_skill',
+        new_skill_id: 'settlement_explain_skill',
+      },
+      expect.stringContaining('settlement_explain_skill:create_fix_draft:'),
+    ))
+    expect(mockRouterPush).toHaveBeenCalledWith(
+      '/skills/settlement_explain_skill/edit?draft=draft-fix-1',
+    )
+  })
+
+  it('keeps failed evaluation evidence visible when repair draft creation fails', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        next_action: 'create_fix_draft',
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [evaluationRun], total: 1 })
+    mockCopySkill.mockRejectedValue(new Error('修复草稿创建失败'))
+    render(<SkillGovernanceWorkbench />)
+
+    const table = await screen.findByRole('table', { name: '评测差异案例' })
+    await userEvent.click(screen.getByTestId('skill-primary-action'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('修复草稿创建失败')
+    expect(table).toBeVisible()
+    expect(screen.getByText('case-new-failure')).toBeVisible()
+    expect(screen.getByRole('complementary', { name: '治理证据' })).toHaveTextContent('run-1')
+    expect(mockRouterPush).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -673,7 +712,9 @@ describe('Skill governance workbench', () => {
     expect(await screen.findByText(label)).toBeVisible()
     await userEvent.click(screen.getByTestId('skill-primary-action'))
 
-    expect(mockRouterPush).toHaveBeenCalledWith('/skills/drafts?draft=draft-1')
+    expect(mockRouterPush).toHaveBeenCalledWith(
+      '/skills/settlement_explain_skill/edit?draft=draft-1',
+    )
   })
 
   it.each(['continue_draft', 'materialize_draft'] as const)(
@@ -719,7 +760,7 @@ describe('Skill governance workbench', () => {
     expect(screen.getByText('活动基线通过率')).toBeVisible()
     expect(screen.getByText('新增回归')).toBeVisible()
     expect(screen.getByText('必测通过数')).toBeVisible()
-    expect(screen.getByRole('table', { name: '评测差异案例' })).toBeVisible()
+    expect(await screen.findByRole('table', { name: '评测差异案例' })).toBeVisible()
   })
 
   it('binds current metrics, cases, and frozen evidence to the canonical evaluation run', async () => {
