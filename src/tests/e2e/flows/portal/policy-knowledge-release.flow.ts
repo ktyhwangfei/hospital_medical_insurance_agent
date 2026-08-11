@@ -96,7 +96,7 @@ test.describe('政策知识工作台与整批发布门禁', () => {
       source_units: [{ doc_id: 'DOC_TRACE', doc_title: '测试政策', unit_id: 'UNIT_TRACE', unit_revision_id: 'UNIT_TRACE_V1', path: ['测试条款'] }],
       semantic_contract_version: '2', supersedes_candidate_id: null, status: 'PENDING_REVIEW',
       summary: { additions: 1, modifications: 0, replacements: 0, expirations: 0, unchanged: 0 },
-      items: [{ item_id: 'ITEM_TRACE', change_type: 'ADD', rule_id: 'RULE_TRACE', unit_id: 'UNIT_TRACE', doc_id: 'DOC_TRACE', before: null, after: candidate, ai_recommendation: '核验后通过', reason: '编译完成', evidence_ids: ['EVID_TRACE'], quality_checks: [], risk_level: 'LOW', impact_scope: {}, needs_human: false }],
+      items: [{ item_id: 'ITEM_TRACE', change_type: 'ADD', rule_id: 'RULE_TRACE', compile_run_id: 'RUN_TRACE', unit_id: 'UNIT_TRACE', doc_id: 'DOC_TRACE', before: null, after: candidate, ai_recommendation: '核验后通过', reason: '编译完成', evidence_ids: ['EVID_TRACE'], quality_checks: [], risk_level: 'LOW', impact_scope: {}, needs_human: false }],
       quality_report: { source_fidelity: 1, structural_completeness: 1, semantic_consistency: 1, rule_consistency: 1 },
       risk_summary: { LOW: 1 }, blockers: [], review_decision: null,
       created_at: '2026-08-11T00:00:00Z', updated_at: '2026-08-11T00:00:01Z',
@@ -115,7 +115,7 @@ test.describe('政策知识工作台与整批发布门禁', () => {
       const url = route.request().url();
       if (url.includes('/decision-tasks')) return route.fulfill({ json: [] });
       if (url.endsWith('/change-sets/CS_TRACE')) return route.fulfill({ json: changeSet });
-      if (url.endsWith('/rules/RULE_TRACE/trace')) return route.fulfill({ json: trace });
+      if (url.endsWith('/rules/RULE_TRACE/trace?run_id=RUN_TRACE')) return route.fulfill({ json: trace });
       return route.fulfill({ status: 404, json: { detail: 'not mocked' } });
     });
 
