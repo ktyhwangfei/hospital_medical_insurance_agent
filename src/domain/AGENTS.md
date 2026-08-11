@@ -626,6 +626,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 指标来源绑定 | `MetricSourceBinding` | **Entity** | Pydantic `BaseModel` | 将结构化字段或政策 Knowledge 字段绑定到统一标准指标，保留来源版本和证据 |
 | 来源值映射 | `SourceValueMapping` | **Entity** | Pydantic `BaseModel` | 将某个来源字段的原始值映射到标准指标的统一标准值 |
 | 标准值提案 | `StandardValueProposal` | **Entity** | Pydantic `BaseModel` | 现有标准值域无法承接来源值时提交的人工审核草稿 |
+| 政策事实 | `PolicyFact` | **Value Object** | Pydantic `BaseModel`（frozen） | LLM 提取后、业务推导前的最小政策事实 |
+| 政策表达式 | `PolicyExpression` | **Value Object** | Pydantic `BaseModel`（frozen） | 确定性规则关系及运算符、引用和参数 |
+| 规范规则 | `CanonicalRule` | **Entity** | Pydantic `BaseModel`（frozen） | 编译后可审核、发布且具有稳定规则标识的规则 |
+| 编译运行 | `CompileRun` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 一次不可变政策规则编译运行及其输入输出快照 |
+| 编译步骤 | `CompileStep` | **Entity** | Pydantic `BaseModel`（frozen） | 编译运行中按序追加的阶段输入、输出和状态 |
+| 校验问题 | `ValidationIssue` | **Value Object** | Pydantic `BaseModel`（frozen） | 带稳定错误码、阶段、严重度和处理建议的编译问题 |
 
 #### 业务规则
 
@@ -888,7 +894,10 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ClosureTask` | 闭环任务 | TaskClosure | Entity |
 | `Coding` | 编码信息 | MedicalRecord | Value Object |
 | `ComplianceScore` | 合规评分 | AuditRisk | Value Object |
+| `CompileRun` | 编译运行 | Knowledge | Aggregate Root |
+| `CompileStep` | 编译步骤 | Knowledge | Entity |
 | `Consumable` | 耗材 | OrderFee | Value Object |
+| `CanonicalRule` | 规范规则 | Knowledge | Entity |
 | `ContextComposer` | 上下文编排器 | Runtime | Domain Service |
 | `ContextNeed` | 上下文需求 | Runtime | Value Object |
 | `ContextPlanner` | 上下文规划器 | Runtime | Domain Service |
@@ -931,6 +940,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Order` | 医嘱 | OrderFee | Aggregate Root |
 | `Patient` | 患者 | Patient | Entity |
 | `PaymentRate` | 支付费率 | DrgDip | Value Object |
+| `PolicyExpression` | 政策表达式 | Knowledge | Value Object |
+| `PolicyFact` | 政策事实 | Knowledge | Value Object |
 | `PreAuditPort` | 事前审核适配器端口 | AuditRisk | Domain Service |
 | `ProfitLoss` | 盈亏分析 | DrgDip | Value Object |
 | `PromptTemplate` | 提示模板 | Knowledge | Entity |
@@ -956,6 +967,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ToolOwner` | 技能拥有者 | SkillTool | Value Object |
 | `Treatment` | 诊疗项目 | OrderFee | Value Object |
 | `VisibilityScope` | 可见性范围 | Knowledge | Value Object |
+| `ValidationIssue` | 校验问题 | Knowledge | Value Object |
 
 ---
 
