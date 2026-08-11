@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from src.domain.skill.draft_models import SkillDraft, SkillDraftStatus
 from src.domain.skill.governance_models import (
     SkillEvalRun,
     SkillEvalRunStatus,
@@ -28,6 +29,34 @@ class SkillGovernanceStatus(StrEnum):
     NEEDS_EVALUATION = "needs_evaluation"
     ARTIFACT_CHANGED = "artifact_changed"
     HEALTHY = "healthy"
+
+
+class SkillGovernanceStage(StrEnum):
+    EVALUATE = "evaluate"
+    DIAGNOSE = "diagnose"
+    MODIFY = "modify"
+    REVIEW = "review"
+    RELEASE = "release"
+    HEALTHY = "healthy"
+
+
+class SkillGovernancePriority(StrEnum):
+    BLOCKED = "blocked"
+    HIGH = "high"
+    NORMAL = "normal"
+
+
+class SkillNextAction(StrEnum):
+    REGISTER_VERSION = "register_version"
+    RUN_EVALUATION = "run_evaluation"
+    CREATE_FIX_DRAFT = "create_fix_draft"
+    CONTINUE_DRAFT = "continue_draft"
+    MATERIALIZE_DRAFT = "materialize_draft"
+    CREATE_CANDIDATE = "create_candidate"
+    REQUEST_APPROVAL = "request_approval"
+    REVIEW_APPROVAL = "review_approval"
+    ACTIVATE_TEST_SHADOW = "activate_test_shadow"
+    VIEW_EVIDENCE = "view_evidence"
 
 
 class SkillWorkbenchSummary(BaseModel):
@@ -60,6 +89,20 @@ class SkillWorkbenchItem(BaseModel):
     test_active_version: str | None = None
     governance_status: SkillGovernanceStatus
     attention_reason: str | None = None
+    current_stage: SkillGovernanceStage = SkillGovernanceStage.EVALUATE
+    priority: SkillGovernancePriority = SkillGovernancePriority.NORMAL
+    latest_eval_run_id: str | None = None
+    candidate_version: str | None = None
+    baseline_version: str | None = None
+    regression_count: int = 0
+    required_failure_count: int = 0
+    linked_draft_id: str | None = None
+    linked_draft_status: str | None = None
+    waiting_since: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    next_action: SkillNextAction = SkillNextAction.RUN_EVALUATION
+    next_action_reason: str | None = None
 
 
 class SkillWorkbenchPage(BaseModel):
@@ -99,12 +142,27 @@ class _GovernanceView(Protocol):
     ) -> list[SkillRelease]: ...
 
 
-_STATUS_ORDER = {
-    SkillGovernanceStatus.GATE_FAILED: 0,
-    SkillGovernanceStatus.PENDING_APPROVAL: 1,
-    SkillGovernanceStatus.NEEDS_EVALUATION: 2,
-    SkillGovernanceStatus.ARTIFACT_CHANGED: 3,
-    SkillGovernanceStatus.HEALTHY: 4,
+class _DraftView(Protocol):
+    def list_drafts(
+        self,
+        *,
+        include_deleted: bool = False,
+        skill_id: str | None = None,
+        status: SkillDraftStatus | None = None,
+    ) -> list[SkillDraft]: ...
+
+
+_ACTION_ORDER = {
+    SkillNextAction.CREATE_FIX_DRAFT: 0,
+    SkillNextAction.CONTINUE_DRAFT: 0,
+    SkillNextAction.MATERIALIZE_DRAFT: 0,
+    SkillNextAction.REVIEW_APPROVAL: 1,
+    SkillNextAction.ACTIVATE_TEST_SHADOW: 1,
+    SkillNextAction.REQUEST_APPROVAL: 1,
+    SkillNextAction.CREATE_CANDIDATE: 2,
+    SkillNextAction.RUN_EVALUATION: 2,
+    SkillNextAction.REGISTER_VERSION: 3,
+    SkillNextAction.VIEW_EVIDENCE: 4,
 }
 
 
@@ -135,11 +193,24 @@ class SkillWorkbenchService:
         version_service: _VersionCatalogView,
         governance_service: _GovernanceView,
         *,
+        draft_service: _DraftView | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._version_service = version_service
         self._governance_service = governance_service
+        self._draft_service = draft_service
         self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def _semantic_version(self, skill_id: str, version_id: str | None) -> str | None:
+        if version_id is None:
+            return None
+        try:
+            return self._version_service.get_version(
+                skill_id,
+                version_id,
+            ).semantic_version
+        except (LookupError, ValueError):
+            return version_id
 
     def _active_semantic_version(
         self,
@@ -148,13 +219,110 @@ class SkillWorkbenchService:
     ) -> str | None:
         if active_release is None:
             return None
-        try:
-            return self._version_service.get_version(
-                skill_id,
-                active_release.version_id,
-            ).semantic_version
-        except (LookupError, ValueError):
-            return active_release.version_id
+        return self._semantic_version(skill_id, active_release.version_id)
+
+    def _derive_workflow(
+        self,
+        *,
+        artifact_status: str,
+        registered_version: SkillVersion | None,
+        latest_run: SkillEvalRun | None,
+        latest_release: SkillRelease | None,
+        linked_draft: SkillDraft | None,
+    ) -> tuple[
+        SkillGovernanceStage,
+        SkillGovernancePriority,
+        SkillNextAction,
+        str | None,
+        datetime,
+    ]:
+        now = self._now()
+        evaluation_failed = latest_run is not None and (
+            latest_run.status in (SkillEvalRunStatus.FAILED, SkillEvalRunStatus.ERROR)
+            or latest_run.metrics.required_passed < latest_run.metrics.required_total
+        )
+        if evaluation_failed and linked_draft is not None:
+            action = (
+                SkillNextAction.CONTINUE_DRAFT
+                if linked_draft.status == SkillDraftStatus.EDITING
+                else SkillNextAction.MATERIALIZE_DRAFT
+            )
+            return (
+                SkillGovernanceStage.MODIFY,
+                SkillGovernancePriority.HIGH,
+                action,
+                "评测门禁未通过，已有修复草稿",
+                linked_draft.updated_at,
+            )
+        if evaluation_failed:
+            return (
+                SkillGovernanceStage.DIAGNOSE,
+                SkillGovernancePriority.BLOCKED,
+                SkillNextAction.CREATE_FIX_DRAFT,
+                "评测门禁未通过，需要先定位回归案例",
+                latest_run.completed_at or latest_run.created_at,
+            )
+
+        release_status = latest_release.status if latest_release is not None else None
+        if release_status == SkillReleaseStatus.APPROVAL_PENDING:
+            return (
+                SkillGovernanceStage.REVIEW,
+                SkillGovernancePriority.HIGH,
+                SkillNextAction.REVIEW_APPROVAL,
+                "候选版本等待人工复审",
+                latest_release.created_at,
+            )
+        if release_status == SkillReleaseStatus.APPROVED:
+            return (
+                SkillGovernanceStage.RELEASE,
+                SkillGovernancePriority.HIGH,
+                SkillNextAction.ACTIVATE_TEST_SHADOW,
+                "人工复审已通过，等待激活 Test Shadow",
+                latest_release.created_at,
+            )
+        if release_status == SkillReleaseStatus.CANDIDATE:
+            return (
+                SkillGovernanceStage.REVIEW,
+                SkillGovernancePriority.HIGH,
+                SkillNextAction.REQUEST_APPROVAL,
+                "候选版本等待发起审批",
+                latest_release.created_at,
+            )
+        if release_status == SkillReleaseStatus.ACTIVE:
+            return (
+                SkillGovernanceStage.HEALTHY,
+                SkillGovernancePriority.NORMAL,
+                SkillNextAction.VIEW_EVIDENCE,
+                None,
+                latest_release.activated_at or latest_release.created_at,
+            )
+        if latest_run is not None and latest_run.status == SkillEvalRunStatus.PASSED:
+            return (
+                SkillGovernanceStage.RELEASE,
+                SkillGovernancePriority.HIGH,
+                SkillNextAction.CREATE_CANDIDATE,
+                "评测已通过，等待创建候选版本",
+                latest_run.completed_at or latest_run.created_at,
+            )
+        if artifact_status != "registered":
+            return (
+                SkillGovernanceStage.MODIFY,
+                SkillGovernancePriority.HIGH,
+                SkillNextAction.REGISTER_VERSION,
+                "当前制品尚未登记或已发生变更",
+                registered_version.created_at if registered_version is not None else now,
+            )
+        return (
+            SkillGovernanceStage.EVALUATE,
+            SkillGovernancePriority.NORMAL,
+            SkillNextAction.RUN_EVALUATION,
+            "当前版本尚未完成评测",
+            latest_run.created_at
+            if latest_run is not None
+            else registered_version.created_at
+            if registered_version is not None
+            else now,
+        )
 
     def _build_item(self, entry) -> tuple[SkillWorkbenchItem, bool]:
         registered_version = entry.registered_version
@@ -165,6 +333,21 @@ class SkillWorkbenchService:
             if version_id is not None and run.version_id == version_id
         ]
         latest_run = max(runs, key=lambda run: run.created_at, default=None)
+
+        drafts = (
+            self._draft_service.list_drafts(skill_id=entry.skill_id)
+            if self._draft_service is not None
+            else []
+        )
+        linked_draft = max(
+            (
+                draft
+                for draft in drafts
+                if draft.status in (SkillDraftStatus.EDITING, SkillDraftStatus.VALIDATED)
+            ),
+            key=lambda draft: draft.updated_at,
+            default=None,
+        )
 
         releases = self._governance_service.list_releases(
             entry.skill_id,
@@ -203,6 +386,16 @@ class SkillWorkbenchService:
             if registered_version is not None
             else SkillValidationStatus.PENDING
         )
+        current_stage, priority, next_action, next_action_reason, waiting_since = (
+            self._derive_workflow(
+                artifact_status=entry.artifact_status,
+                registered_version=registered_version,
+                latest_run=latest_run,
+                latest_release=latest_release,
+                linked_draft=linked_draft,
+            )
+        )
+        metrics = latest_run.metrics if latest_run is not None else None
         return (
             SkillWorkbenchItem(
                 skill_id=entry.skill_id,
@@ -220,6 +413,33 @@ class SkillWorkbenchService:
                 ),
                 governance_status=governance_status,
                 attention_reason=attention_reason,
+                current_stage=current_stage,
+                priority=priority,
+                latest_eval_run_id=(latest_run.run_id if latest_run is not None else None),
+                candidate_version=(
+                    registered_version.semantic_version
+                    if registered_version is not None
+                    else None
+                ),
+                baseline_version=self._semantic_version(
+                    entry.skill_id,
+                    latest_run.baseline_version_id if latest_run is not None else None,
+                ),
+                regression_count=(metrics.regression_count if metrics is not None else 0),
+                required_failure_count=(
+                    max(0, metrics.required_total - metrics.required_passed)
+                    if metrics is not None
+                    else 0
+                ),
+                linked_draft_id=(
+                    linked_draft.draft_id if linked_draft is not None else None
+                ),
+                linked_draft_status=(
+                    linked_draft.status if linked_draft is not None else None
+                ),
+                waiting_since=waiting_since,
+                next_action=next_action,
+                next_action_reason=next_action_reason,
             ),
             active_release is not None,
         )
@@ -257,8 +477,9 @@ class SkillWorkbenchService:
         ]
         filtered_items.sort(
             key=lambda item: (
-                _STATUS_ORDER[item.governance_status],
-                item.skill_name,
+                _ACTION_ORDER[item.next_action],
+                0 if item.required_failure_count > 0 else 1,
+                item.waiting_since,
                 item.skill_id,
             )
         )
