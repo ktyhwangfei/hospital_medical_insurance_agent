@@ -30,20 +30,28 @@ describe('LayoutShell responsive sidebar', () => {
     })
   })
 
-  it('defaults to an accessible collapsed sidebar on mobile and keeps the keyboard toggle usable', async () => {
+  it('uses a zero-width mobile drawer, keyboard controls, and leaves the page with one H1', async () => {
     const user = userEvent.setup()
-    render(<LayoutShell><div>页面内容</div></LayoutShell>)
+    render(<LayoutShell><h1>Skill 日常治理</h1></LayoutShell>)
 
     const sidebar = screen.getByRole('complementary')
-    const toggle = await screen.findByRole('button', { name: '展开侧栏' })
-    expect(sidebar).toHaveClass('w-16')
+    const toggle = await screen.findByRole('button', { name: '打开导航菜单' })
+    expect(sidebar).toHaveClass('-translate-x-full')
+    expect(sidebar).toHaveClass('fixed')
     expect(screen.getByRole('link', { name: '技能' })).toBeVisible()
-    expect(screen.queryByText('导航菜单')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
 
     toggle.focus()
     await user.keyboard('{Enter}')
-    expect(screen.getByRole('button', { name: '收起侧栏' })).toBeVisible()
+    const close = screen.getByRole('button', { name: '关闭导航菜单' })
+    expect(close).toBeVisible()
     expect(sidebar).toHaveClass('w-56')
     expect(screen.getByText('导航菜单')).toBeVisible()
+    expect(screen.getByRole('button', { name: '关闭导航菜单遮罩' })).toBeVisible()
+
+    close.focus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('button', { name: '打开导航菜单' })).toBeVisible()
+    expect(sidebar).toHaveClass('-translate-x-full')
   })
 })

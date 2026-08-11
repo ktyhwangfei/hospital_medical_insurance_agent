@@ -42,22 +42,21 @@ test.describe('Skill 日常治理工作台', () => {
   test('待办键盘方向键只移动焦点，Enter 才打开', async ({ page }) => {
     const workbench = new SkillCatalogPage(page);
     await workbench.mockTwoItemQueue();
+    await page.setViewportSize({ width: 1024, height: 900 });
     await workbench.goto();
 
     await workbench.assertQueueKeyboardSemantics();
   });
 
-  test('宽屏与 2xl 三区布局可读且无页面溢出', async ({ page }) => {
+  test('1440 与更宽视口均以内联三区布局展示证据', async ({ page }) => {
     const workbench = new SkillCatalogPage(page);
     await page.setViewportSize({ width: 1440, height: 1000 });
     await workbench.goto();
     await workbench.selectSkill(SKILL_ID);
     await expect(workbench.queue).toBeVisible();
     await expect(workbench.decision).toBeVisible();
-    await expect(workbench.evidence).toBeHidden();
-    await workbench.openEvidenceDrawer();
-    await expect(workbench.evidenceDrawer).toContainText('门禁结论');
-    await workbench.button('关闭治理证据').click();
+    await expect(workbench.evidence).toBeVisible();
+    await expect(workbench.evidenceButton).toBeHidden();
     await workbench.assertNoPageOverflow();
     await workbench.capture('skill-governance-1440');
 
@@ -96,7 +95,9 @@ test.describe('Skill 日常治理工作台', () => {
     await expect(workbench.primaryAction).toBeVisible();
     await workbench.primaryAction.focus();
     await expect(workbench.primaryAction).toBeFocused();
+    await workbench.assertSinglePageH1();
     await workbench.assertTitleDoesNotBreakPerCharacter();
+    await workbench.assertMobileDetailUsesViewport(390);
     await workbench.assertNoPageOverflow();
     await workbench.capture('skill-governance-390');
     await workbench.assertMobileReturnRestoresFocus(SKILL_ID);

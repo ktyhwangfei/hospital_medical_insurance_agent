@@ -101,13 +101,26 @@ export function LayoutShell({ children }: { children: ReactNode }) {
     setSidebarCollapsed((value) => !value)
   }
 
+  const closeSidebar = () => {
+    hasSidebarPreference.current = true
+    setSidebarCollapsed(true)
+  }
+
   return (
     <RoleContext.Provider value={{ currentRole, setCurrentRole }}>
-      <div className="flex h-screen overflow-hidden bg-slate-50">
+      <div className="relative flex h-screen overflow-hidden bg-slate-50">
+        {!sidebarCollapsed && (
+          <button
+            type="button"
+            aria-label="关闭导航菜单遮罩"
+            className="fixed inset-0 z-40 bg-slate-950/30 md:hidden"
+            onClick={closeSidebar}
+          />
+        )}
         {/* Sidebar */}
         <aside
-          className={`flex flex-col border-r border-slate-200 bg-white transition-all duration-300 ${
-            sidebarCollapsed ? 'w-16' : 'w-56'
+          className={`fixed inset-y-0 left-0 z-50 flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white transition-[width,transform] duration-300 md:relative md:inset-auto md:z-auto md:translate-x-0 ${
+            sidebarCollapsed ? '-translate-x-full md:w-16' : 'translate-x-0 md:w-56'
           }`}
         >
           {/* Sidebar header */}
@@ -120,11 +133,21 @@ export function LayoutShell({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={toggleSidebar}
-              className="flex size-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+              className="hidden size-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 md:flex"
               aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
             >
               {sidebarCollapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
             </button>
+            {!sidebarCollapsed && (
+              <button
+                type="button"
+                onClick={closeSidebar}
+                className="flex size-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 md:hidden"
+                aria-label="关闭导航菜单"
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+            )}
           </div>
 
           {/* Navigation */}
@@ -166,13 +189,23 @@ export function LayoutShell({ children }: { children: ReactNode }) {
         {/* Main area */}
         <div className="flex flex-1 flex-col min-w-0">
           {/* Header */}
-          <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-6">
+          <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-3 sm:px-6">
             <div className="flex items-center gap-3">
+              {sidebarCollapsed && (
+                <button
+                  type="button"
+                  onClick={toggleSidebar}
+                  className="flex size-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 md:hidden"
+                  aria-label="打开导航菜单"
+                >
+                  <ChevronRight className="size-4" />
+                </button>
+              )}
               <div className="flex items-center gap-2">
                 <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 shadow-sm">
                   <Activity className="size-4 text-white" />
                 </div>
-                <h1 className="text-base font-semibold text-slate-800">医保AI导办平台</h1>
+                <div className="text-base font-semibold text-slate-800">医保AI导办平台</div>
               </div>
             </div>
             <div className="flex items-center gap-3">

@@ -307,6 +307,20 @@ export class SkillCatalogPage extends BasePage {
     expect(box!.height).toBeLessThan(60);
   }
 
+  async assertSinglePageH1(): Promise<void> {
+    await expect(this.page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  }
+
+  async assertMobileDetailUsesViewport(viewportWidth: number): Promise<void> {
+    const main = await this.page.getByRole('main').boundingBox();
+    const detail = await this.decision.boundingBox();
+    expect(main).not.toBeNull();
+    expect(detail).not.toBeNull();
+    expect(main!.x).toBeLessThanOrEqual(1);
+    expect(main!.width).toBeGreaterThanOrEqual(viewportWidth - 1);
+    expect(detail!.width).toBeGreaterThanOrEqual(viewportWidth * 0.78);
+  }
+
   async assertNoSensitiveOrFullHash(): Promise<void> {
     const body = await this.page.locator('body').innerText();
     expect(body).not.toContain(this.fullHash());
@@ -316,6 +330,11 @@ export class SkillCatalogPage extends BasePage {
   }
 
   async assertQueueKeyboardSemantics(): Promise<void> {
+    await this.primaryAction.focus();
+    await expect(this.primaryAction).toBeFocused();
+    await this.evidenceButton.focus();
+    await expect(this.evidenceButton).toBeFocused();
+
     const items = this.queueButtons();
     const first = items.first();
     const second = items.nth(1);
@@ -324,6 +343,11 @@ export class SkillCatalogPage extends BasePage {
     await expect(second).toBeFocused();
     await expect(first).toHaveAttribute('aria-current', 'true');
     await expect(second).not.toHaveAttribute('aria-current', 'true');
+    await this.page.keyboard.press('ArrowUp');
+    await expect(first).toBeFocused();
+    await expect(first).toHaveAttribute('aria-current', 'true');
+    await expect(second).not.toHaveAttribute('aria-current', 'true');
+    await this.page.keyboard.press('ArrowDown');
     await this.page.keyboard.press('Enter');
     await expect(second).toHaveAttribute('aria-current', 'true');
   }

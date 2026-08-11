@@ -110,7 +110,7 @@ function EvidenceContent({
 export default function SkillEvidenceRail(props: SkillEvidenceRailProps) {
   const { variant = 'rail', ...contentProps } = props
   return variant === 'rail' ? (
-    <aside aria-label="治理证据" className="hidden min-h-0 overflow-y-auto border-l border-slate-200 bg-slate-50/60 2xl:block">
+    <aside aria-label="治理证据" className="hidden min-h-0 overflow-y-auto border-l border-slate-200 bg-slate-50/60 xl:block">
       <EvidenceContent {...contentProps} />
     </aside>
   ) : <EvidenceContent {...contentProps} />

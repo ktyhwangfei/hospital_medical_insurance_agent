@@ -41,7 +41,7 @@ export default function SkillNextActionBar({
         {error && <p role="alert" className="mt-1 whitespace-normal break-words text-xs leading-5 text-red-600">{error}</p>}
       </div>
       <div className="flex shrink-0 flex-col-reverse gap-2 sm:flex-row">
-        <Button variant="outline" className="min-h-11 sm:min-h-9 2xl:hidden" onClick={onViewEvidence}>
+        <Button variant="outline" className="min-h-11 sm:min-h-9 xl:hidden" onClick={onViewEvidence}>
           <Search aria-hidden /> 查看治理证据
         </Button>
         {!unavailable && (

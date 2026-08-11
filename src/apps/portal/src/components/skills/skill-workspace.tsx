@@ -342,7 +342,7 @@ export default function SkillWorkspace({
         </div>
       </header>
 
-      <div className="grid min-h-0 2xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-h-0 min-w-0 flex-col">
           {errorEntries.map(([source, message]) => (
             <p key={source} role="alert" className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">

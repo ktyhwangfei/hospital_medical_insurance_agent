@@ -1215,12 +1215,12 @@ describe('Skill governance workbench', () => {
     expect(screen.queryByRole('button', { name: '查看脱敏证据' })).not.toBeInTheDocument()
   })
 
-  it('keeps inline evidence at 2xl and lets the outer decision region own scrolling', async () => {
+  it('keeps inline evidence at xl and lets the outer decision region own scrolling', async () => {
     render(<SkillGovernanceWorkbench />)
 
     const evidence = await screen.findByRole('complementary', { name: '治理证据' })
-    expect(evidence).toHaveClass('hidden', '2xl:block')
-    expect(evidence).not.toHaveClass('xl:block', 'min-[1120px]:block')
+    expect(evidence).toHaveClass('hidden', 'xl:block')
+    expect(evidence).not.toHaveClass('2xl:block', 'min-[1120px]:block')
     const decisionRegion = screen.getByRole('region', { name: '治理决策区' })
     expect(decisionRegion).not.toHaveClass('overflow-y-auto')
     expect(decisionRegion.parentElement?.parentElement).toHaveClass('overflow-clip')
