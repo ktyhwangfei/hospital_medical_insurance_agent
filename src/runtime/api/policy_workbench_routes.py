@@ -256,7 +256,9 @@ def _get_release_index_builder() -> ReleaseIndexBuilder:
     global _release_index_builder
     if _release_index_builder is None:
         _release_index_builder = ReleaseIndexBuilder(
-            _get_quality_store(), MilvusReleaseIndexBackend()
+            _get_quality_store(),
+            MilvusReleaseIndexBackend(),
+            _get_compilation_trace_store(),
         )
     return _release_index_builder
 
@@ -1095,6 +1097,7 @@ def create_candidate_release(request: CreateReleaseRequest) -> KnowledgeRelease:
             _validate_governed_release_source_before_promote(
                 release,
                 active_retry=False,
+                require_lineage=False,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -1132,9 +1135,24 @@ def list_releases() -> list[KnowledgeRelease]:
 @router.post("/releases/{release_id}/build", response_model=KnowledgeRelease)
 def build_candidate_release(release_id: str) -> KnowledgeRelease:
     try:
-        facts, rules = _get_release_content_source().records()
+        release = _get_quality_store().get_release(release_id)
+        if release is None:
+            raise ValueError(f"候选版本不存在: {release_id}")
+        if release.source_change_set_id is None:
+            raise ValueError("候选版本缺少来源知识变更集")
+        change_set = _get_change_set_service().get_change_set(
+            release.source_change_set_id
+        )
+        if change_set is None:
+            raise ValueError(
+                f"来源知识变更集不存在: {release.source_change_set_id}"
+            )
+        facts, rules, publications = _get_release_content_source().records(change_set)
         return _get_release_index_builder().build(
-            release_id, facts=facts, rules=rules
+            release_id,
+            facts=facts,
+            rules=rules,
+            publications=publications,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1352,6 +1370,7 @@ def _validate_governed_release_source_before_promote(
     release: KnowledgeRelease,
     *,
     active_retry: bool,
+    require_lineage: bool = True,
 ) -> None:
     if release.source_change_set_id is None:
         raise ValueError("缺少正式来源知识变更集")
@@ -1359,6 +1378,20 @@ def _validate_governed_release_source_before_promote(
         release,
         active_retry=active_retry,
     )
+    change_set = _get_change_set_service().get_change_set(
+        release.source_change_set_id
+    )
+    if change_set is None:
+        raise ValueError(f"来源知识变更集不存在: {release.source_change_set_id}")
+    expected_rule_ids: list[str] = []
+    for item in change_set.items:
+        if item.canonical_rule is None or item.compilation_status not in {"PASS", "WARN"}:
+            raise ValueError(f"变更项 {item.item_id} 缺少可发布规范规则")
+        expected_rule_ids.append(item.canonical_rule.rule_id)
+    if require_lineage and not _get_compilation_trace_store().has_release_lineage(
+        release.release_id, expected_rule_ids
+    ):
+        raise ValueError(f"release {release.release_id} 编译血缘不完整")
 
 
 def _release_sync_pending_reasons(release: KnowledgeRelease) -> list[str]:
