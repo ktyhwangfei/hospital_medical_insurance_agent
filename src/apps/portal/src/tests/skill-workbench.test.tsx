@@ -16,6 +16,9 @@ const mockGetInfraSkillDetail = vi.fn()
 const mockListInfraSkillVersions = vi.fn()
 const mockListSkillEvalRuns = vi.fn()
 const mockListSkillReleases = vi.fn()
+const mockCreateSkillEvalRun = vi.fn()
+const mockCreateSkillRelease = vi.fn()
+const mockRequestSkillReleaseApproval = vi.fn()
 const mockApproveSkillRelease = vi.fn()
 const mockActivateSkillRelease = vi.fn()
 const mockTestInfraSkillRouting = vi.fn()
@@ -31,9 +34,9 @@ vi.mock('@/lib/api-client', () => ({
   syncInfraSkillVersion: vi.fn(),
   listSkillEvalCases: vi.fn().mockResolvedValue({ items: [], total: 0, suite_version: 1 }),
   createSkillEvalCase: vi.fn(),
-  createSkillEvalRun: vi.fn(),
-  createSkillRelease: vi.fn(),
-  requestSkillReleaseApproval: vi.fn(),
+  createSkillEvalRun: (...args: unknown[]) => mockCreateSkillEvalRun(...args),
+  createSkillRelease: (...args: unknown[]) => mockCreateSkillRelease(...args),
+  requestSkillReleaseApproval: (...args: unknown[]) => mockRequestSkillReleaseApproval(...args),
   approveSkillRelease: (...args: unknown[]) => mockApproveSkillRelease(...args),
   activateSkillRelease: (...args: unknown[]) => mockActivateSkillRelease(...args),
   testInfraSkillRouting: (...args: unknown[]) => mockTestInfraSkillRouting(...args),
@@ -51,7 +54,7 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }))
 
-function releasePage(status: 'approval_pending' | 'approved' | 'active') {
+function releasePage(status: 'candidate' | 'approval_pending' | 'approved' | 'active') {
   return {
     items: [{
       release_id: 'release-1',
@@ -70,11 +73,11 @@ function releasePage(status: 'approval_pending' | 'approved' | 'active') {
       created_at: '2026-08-05T06:00:00Z',
       activated_at: status === 'active' ? '2026-08-05T06:30:00Z' : null,
       retired_at: null,
-      approval: status === 'approval_pending' ? null : {
+      approval: status === 'approved' || status === 'active' ? {
         approved_by: 'information-admin',
         approver_role: 'information_department',
         approved_at: '2026-08-05T06:20:00Z',
-      },
+      } : null,
     }],
     total: 1,
   }
@@ -237,6 +240,27 @@ const evaluationRun = {
   completed_at: '2026-08-05T06:11:00Z',
 }
 
+const historicalVersion = {
+  ...version,
+  version_id: 'version-historical',
+  semantic_version: '0.9.0',
+  artifact_hash: 'historical-artifact-hash',
+}
+
+const passedCurrentRun = {
+  ...evaluationRun,
+  status: 'passed' as const,
+  metrics: { ...evaluationRun.metrics, gate_passed: true, passed: 10 },
+}
+
+const historicalPassedRun = {
+  ...passedCurrentRun,
+  run_id: 'run-historical',
+  version_id: historicalVersion.version_id,
+  created_at: '2026-08-05T05:00:00Z',
+  completed_at: '2026-08-05T05:01:00Z',
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -256,6 +280,9 @@ describe('Skill governance workbench', () => {
       mockListInfraSkillVersions,
       mockListSkillEvalRuns,
       mockListSkillReleases,
+      mockCreateSkillEvalRun,
+      mockCreateSkillRelease,
+      mockRequestSkillReleaseApproval,
       mockApproveSkillRelease,
       mockActivateSkillRelease,
       mockTestInfraSkillRouting,
@@ -280,6 +307,9 @@ describe('Skill governance workbench', () => {
     mockListInfraSkillVersions.mockResolvedValue([])
     mockListSkillEvalRuns.mockResolvedValue({ items: [], total: 0 })
     mockListSkillReleases.mockResolvedValue({ items: [], total: 0 })
+    mockCreateSkillEvalRun.mockResolvedValue(evaluationRun)
+    mockCreateSkillRelease.mockResolvedValue(releasePage('candidate').items[0])
+    mockRequestSkillReleaseApproval.mockResolvedValue(releasePage('approval_pending').items[0])
     mockApproveSkillRelease.mockResolvedValue({ status: 'approved' })
     mockActivateSkillRelease.mockResolvedValue({ status: 'active' })
     mockTestInfraSkillRouting.mockResolvedValue({ candidates: [] })
@@ -703,6 +733,28 @@ describe('Skill governance workbench', () => {
     expect(evidence).not.toHaveTextContent('当前门禁证据不可用')
   })
 
+  it('shows ready-empty for an unevaluated current version even when historical runs exist', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        latest_eval_run_id: null,
+        latest_eval_status: null,
+        candidate_version: version.semantic_version,
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([historicalVersion, version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [historicalPassedRun], total: 1 })
+
+    render(<SkillGovernanceWorkbench />)
+
+    const evidence = await screen.findByRole('complementary', { name: '治理证据' })
+    await waitFor(() => expect(evidence).toHaveTextContent('尚无评测结论'))
+    expect(evidence).toHaveTextContent(shortHash(historicalPassedRun.run_id))
+    expect(evidence).not.toHaveTextContent('当前门禁证据不可用')
+    expect(screen.getByText('当前视图没有差异案例')).toBeVisible()
+  })
+
   it('shows evaluation evidence as unavailable after its request fails', async () => {
     mockListSkillEvalRuns.mockRejectedValue(new Error('evaluation unavailable'))
 
@@ -739,6 +791,155 @@ describe('Skill governance workbench', () => {
     expect(evidence).not.toHaveAttribute('data-testid', 'skill-primary-action')
     await userEvent.click(evidence)
     expect(screen.getByRole('dialog', { name: '治理证据' })).toBeVisible()
+  })
+
+  it('runs evaluation against the canonical candidate version rather than array order', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        latest_eval_run_id: null,
+        latest_eval_status: null,
+        candidate_version: version.semantic_version,
+        next_action: 'run_evaluation',
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([historicalVersion, version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [historicalPassedRun], total: 1 })
+
+    render(<SkillGovernanceWorkbench />)
+    await userEvent.click(await screen.findByTestId('skill-primary-action'))
+
+    await waitFor(() => expect(mockCreateSkillEvalRun).toHaveBeenCalledWith(
+      'settlement_explain_skill',
+      { version_id: version.version_id },
+    ))
+  })
+
+  it('creates a candidate from the canonical current run rather than historical passed runs', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        latest_eval_run_id: passedCurrentRun.run_id,
+        latest_eval_status: 'passed',
+        candidate_version: version.semantic_version,
+        next_action: 'create_candidate',
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([historicalVersion, version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [historicalPassedRun, passedCurrentRun], total: 2 })
+
+    render(<SkillGovernanceWorkbench />)
+    await userEvent.click(await screen.findByTestId('skill-primary-action'))
+
+    await waitFor(() => expect(mockCreateSkillRelease).toHaveBeenCalledWith(
+      'settlement_explain_skill',
+      {
+        version_id: version.version_id,
+        eval_run_id: passedCurrentRun.run_id,
+        environment: 'test',
+      },
+      expect.stringContaining('settlement_explain_skill:create_candidate:'),
+    ))
+  })
+
+  it('requests approval for the current candidate relationship rather than the first release', async () => {
+    const currentRelease = releasePage('candidate').items[0]
+    const historicalRelease = {
+      ...currentRelease,
+      release_id: 'release-historical',
+      version_id: historicalVersion.version_id,
+      eval_run_id: historicalPassedRun.run_id,
+      revision: 9,
+    }
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        latest_eval_run_id: passedCurrentRun.run_id,
+        latest_eval_status: 'passed',
+        candidate_version: version.semantic_version,
+        next_action: 'request_approval',
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([historicalVersion, version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [historicalPassedRun, passedCurrentRun], total: 2 })
+    mockListSkillReleases.mockResolvedValue({ items: [historicalRelease, currentRelease], total: 2 })
+
+    render(<SkillGovernanceWorkbench />)
+    await userEvent.click(await screen.findByTestId('skill-primary-action'))
+
+    await waitFor(() => expect(mockRequestSkillReleaseApproval).toHaveBeenCalledWith(
+      'settlement_explain_skill',
+      currentRelease.release_id,
+      { expected_revision: currentRelease.revision },
+      expect.stringContaining('settlement_explain_skill:request_approval:'),
+    ))
+  })
+
+  it('activates the approved release bound to the current run rather than the first release', async () => {
+    const currentRelease = releasePage('approved').items[0]
+    const historicalRelease = {
+      ...currentRelease,
+      release_id: 'release-historical',
+      version_id: historicalVersion.version_id,
+      eval_run_id: historicalPassedRun.run_id,
+      revision: 9,
+    }
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        latest_eval_run_id: passedCurrentRun.run_id,
+        latest_eval_status: 'passed',
+        candidate_version: version.semantic_version,
+        next_action: 'activate_test_shadow',
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([historicalVersion, version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [historicalPassedRun, passedCurrentRun], total: 2 })
+    mockListSkillReleases.mockResolvedValue({ items: [historicalRelease, currentRelease], total: 2 })
+
+    render(<SkillGovernanceWorkbench />)
+    await userEvent.click(await screen.findByTestId('skill-primary-action'))
+
+    await waitFor(() => expect(mockActivateSkillRelease).toHaveBeenCalledWith(
+      'settlement_explain_skill',
+      currentRelease.release_id,
+      { expected_revision: currentRelease.revision },
+      expect.stringContaining('settlement_explain_skill:activate:'),
+    ))
+  })
+
+  it.each([
+    ['run_evaluation', '2.0.0', null, '当前候选版本证据不一致，请刷新后重试'],
+    ['create_candidate', version.semantic_version, 'missing-run', '当前评测证据不一致，请刷新或重新评测'],
+    ['request_approval', version.semantic_version, passedCurrentRun.run_id, '当前候选发布证据不一致，请刷新后重试'],
+    ['activate_test_shadow', version.semantic_version, passedCurrentRun.run_id, '当前已审批发布证据不一致，请刷新后重试'],
+  ] as const)('fails closed when %s lacks a canonical write target', async (nextAction, candidateVersion, runId, error) => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValue({
+      ...workbenchResponse,
+      items: [{
+        ...workbenchResponse.items[0],
+        latest_eval_run_id: runId,
+        latest_eval_status: runId ? 'passed' : null,
+        candidate_version: candidateVersion,
+        next_action: nextAction,
+      }],
+    })
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [passedCurrentRun], total: 1 })
+    mockListSkillReleases.mockResolvedValue({ items: [releasePage(nextAction === 'activate_test_shadow' ? 'candidate' : 'approved').items[0]], total: 1 })
+
+    render(<SkillGovernanceWorkbench />)
+    await userEvent.click(await screen.findByTestId('skill-primary-action'))
+
+    expect(await screen.findByText(error)).toBeVisible()
+    expect(mockCreateSkillEvalRun).not.toHaveBeenCalled()
+    expect(mockCreateSkillRelease).not.toHaveBeenCalled()
+    expect(mockRequestSkillReleaseApproval).not.toHaveBeenCalled()
+    expect(mockActivateSkillRelease).not.toHaveBeenCalled()
   })
 
   it('maps the five governance stages and fails closed for an unknown stage', () => {
@@ -842,7 +1043,10 @@ describe('Skill governance workbench', () => {
     const evidence = await screen.findByRole('complementary', { name: '治理证据' })
     expect(evidence).toHaveClass('hidden', '2xl:block')
     expect(evidence).not.toHaveClass('xl:block', 'min-[1120px]:block')
-    expect(screen.getByRole('region', { name: '治理决策区' })).not.toHaveClass('overflow-y-auto')
+    const decisionRegion = screen.getByRole('region', { name: '治理决策区' })
+    expect(decisionRegion).not.toHaveClass('overflow-y-auto')
+    expect(decisionRegion.parentElement?.parentElement).toHaveClass('overflow-clip')
+    expect(decisionRegion.parentElement?.parentElement).not.toHaveClass('overflow-hidden')
     expect(screen.getByLabelText('下一步治理动作')).toHaveClass('sticky', 'bottom-0')
   })
 
@@ -979,7 +1183,7 @@ describe('Skill governance workbench', () => {
     await waitFor(() => expect(screen.getByLabelText('待办优先级')).toBeDisabled())
     expect(screen.getByLabelText('待办优先级')).toHaveValue('blocked')
     expect(window.location.search).toContain('priority=blocked')
-    expect(screen.getByRole('status')).toHaveTextContent('目录降级未应用治理优先级')
+    expect(screen.getByText('目录降级未应用治理优先级')).toBeVisible()
     expect(screen.getAllByText('治理聚合暂不可用，仅展示资产信息')[0]).toBeVisible()
     expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(1)
     expect(mockListInfraSkillCatalog).toHaveBeenCalledTimes(1)
@@ -1011,12 +1215,15 @@ describe('Skill governance workbench', () => {
 
   it('refreshes catalog and lifecycle after activation', async () => {
     let releaseStatus: 'approved' | 'active' = 'approved'
+    mockListInfraSkillVersions.mockResolvedValue([version])
+    mockListSkillEvalRuns.mockResolvedValue({ items: [passedCurrentRun], total: 1 })
     mockListSkillReleases.mockImplementation(async () => releasePage(releaseStatus))
     mockGetSkillGovernanceWorkbench.mockImplementation(async () => ({
       ...workbenchResponse,
       summary: { ...workbenchResponse.summary, test_active: releaseStatus === 'active' ? 1 : 0 },
       items: [{
         ...workbenchResponse.items[0],
+        latest_eval_status: 'passed',
         test_release_status: releaseStatus === 'active' ? 'active' : null,
         next_action: releaseStatus === 'active' ? 'view_evidence' : 'activate_test_shadow',
       }],

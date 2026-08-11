@@ -39,7 +39,7 @@ function EvidenceContent({
     && latestRun.version_id === latestVersion.version_id
     && (!item.candidate_version || item.candidate_version === latestVersion.semantic_version),
   )
-  const emptyEvaluation = state === 'ready' && !item.latest_eval_run_id && historicalRuns.length === 0
+  const emptyEvaluation = state === 'ready' && !item.latest_eval_run_id
   const gatePassed = Boolean(currentGateEvidence && latestRun?.metrics.gate_passed && latestRun.status === 'passed')
   const records = [
     latestVersion && ['版本登记', latestVersion.created_by, latestVersion.created_at],

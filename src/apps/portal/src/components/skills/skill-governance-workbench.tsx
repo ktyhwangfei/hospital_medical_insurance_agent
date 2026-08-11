@@ -275,7 +275,7 @@ export default function SkillGovernanceWorkbench() {
         }}
       />
       {catalogError && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{catalogError}</p>}
-      <div className="min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="min-w-0 flex-1 overflow-clip rounded-xl border border-slate-200 bg-white shadow-sm">
         <SkillGovernanceSummary
           summary={summary}
           activeStatus={governanceStatus}

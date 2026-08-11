@@ -41,7 +41,6 @@ import SkillRegressionTable from './skill-regression-table'
 import SkillVersionsTab from './skill-versions-tab'
 import {
   computePrimaryAction,
-  eligibleEvalRun,
   latestActiveRelease,
 } from './skill-primary-action'
 
@@ -104,7 +103,6 @@ export default function SkillWorkspace({
     () => computePrimaryAction(item, versions, evalRuns, releases),
     [item, versions, evalRuns, releases],
   )
-  const latestRelease = latestActiveRelease(releases) ?? null
   const canonicalRun = item.latest_eval_run_id
     ? evalRuns.find((run) => run.run_id === item.latest_eval_run_id) ?? null
     : null
@@ -122,7 +120,7 @@ export default function SkillWorkspace({
   )
   const evidenceState = evidenceLoading
     ? 'loading'
-    : errors.evaluations || errors.versions || (item.latest_eval_run_id ? !canonicalFactsMatch : evalRuns.length > 0)
+    : errors.evaluations || errors.versions || (item.latest_eval_run_id ? !canonicalFactsMatch : false)
       ? 'unavailable'
       : 'ready'
   const latestRun = evidenceState === 'ready' && canonicalFactsMatch ? canonicalRun : null
@@ -178,6 +176,44 @@ export default function SkillWorkspace({
     setEvidenceOpen(true)
   }
 
+  function currentWriteVersion(): SkillVersionResponse | null {
+    const versionName = item.candidate_version ?? item.semantic_version
+    if (item.artifact_status !== 'registered' || item.validation_status !== 'passed') return null
+    return versions
+      .filter((version) => (
+        version.skill_id === item.skill_id
+        && version.semantic_version === versionName
+        && version.validation_status === 'passed'
+      ))
+      .sort((left, right) => (
+        right.created_at.localeCompare(left.created_at) || right.version_id.localeCompare(left.version_id)
+      ))[0] ?? null
+  }
+
+  function currentWriteRun(version: SkillVersionResponse): SkillEvalRunResponse | null {
+    if (!item.latest_eval_run_id) return null
+    const run = evalRuns.find((candidate) => candidate.run_id === item.latest_eval_run_id) ?? null
+    if (!run || run.version_id !== version.version_id || run.status !== item.latest_eval_status) return null
+    return run
+  }
+
+  function currentWriteRelease(
+    version: SkillVersionResponse,
+    run: SkillEvalRunResponse,
+    status: SkillReleaseResponse['status'],
+  ): SkillReleaseResponse | null {
+    return releases
+      .filter((release) => (
+        release.environment === 'test'
+        && release.version_id === version.version_id
+        && release.eval_run_id === run.run_id
+        && release.status === status
+      ))
+      .sort((left, right) => (
+        right.created_at.localeCompare(left.created_at) || right.release_id.localeCompare(left.release_id)
+      ))[0] ?? null
+  }
+
   async function runPrimary(): Promise<void> {
     const action = primaryAction
     setActionError(null)
@@ -191,47 +227,59 @@ export default function SkillWorkspace({
       const key = `${item.skill_id}:${action.kind}:${Date.now()}`
       switch (action.kind) {
         case 'run_evaluation': {
-          const version = versions.find((candidate) => candidate.validation_status === 'passed') ?? versions[0]
-          if (!version) throw new Error('没有可评测的已登记版本')
+          const version = currentWriteVersion()
+          if (!version) throw new Error('当前候选版本证据不一致，请刷新后重试')
           await createSkillEvalRun(item.skill_id, { version_id: version.version_id })
           break
         }
         case 'create_candidate': {
-          const eligible = eligibleEvalRun(evalRuns, versions)
-          if (!eligible) throw new Error('没有通过门禁的评测')
+          const version = currentWriteVersion()
+          const run = version ? currentWriteRun(version) : null
+          if (!version || !run || run.status !== 'passed' || !run.metrics.gate_passed) {
+            throw new Error('当前评测证据不一致，请刷新或重新评测')
+          }
           await createSkillRelease(
             item.skill_id,
-            { version_id: eligible.version_id, eval_run_id: eligible.run_id, environment: 'test' },
+            { version_id: version.version_id, eval_run_id: run.run_id, environment: 'test' },
             key,
           )
           break
         }
         case 'request_approval': {
-          if (!latestRelease) throw new Error('没有可推进的候选发布')
+          const version = currentWriteVersion()
+          const run = version ? currentWriteRun(version) : null
+          const release = version && run ? currentWriteRelease(version, run, 'candidate') : null
+          if (!release) throw new Error('当前候选发布证据不一致，请刷新后重试')
           await requestSkillReleaseApproval(
             item.skill_id,
-            latestRelease.release_id,
-            { expected_revision: latestRelease.revision },
+            release.release_id,
+            { expected_revision: release.revision },
             key,
           )
           break
         }
         case 'approve': {
-          if (!latestRelease) throw new Error('没有待审批的发布')
+          const version = currentWriteVersion()
+          const run = version ? currentWriteRun(version) : null
+          const release = version && run ? currentWriteRelease(version, run, 'approval_pending') : null
+          if (!release) throw new Error('当前待审批发布证据不一致，请刷新后重试')
           await approveSkillRelease(
             item.skill_id,
-            latestRelease.release_id,
-            { expected_revision: latestRelease.revision, reason: '固定评测门禁通过，同意 Test Shadow 激活' },
+            release.release_id,
+            { expected_revision: release.revision, reason: '固定评测门禁通过，同意 Test Shadow 激活' },
             key,
           )
           break
         }
         case 'activate': {
-          if (!latestRelease) throw new Error('没有可激活的发布')
+          const version = currentWriteVersion()
+          const run = version ? currentWriteRun(version) : null
+          const release = version && run ? currentWriteRelease(version, run, 'approved') : null
+          if (!release) throw new Error('当前已审批发布证据不一致，请刷新后重试')
           await activateSkillRelease(
             item.skill_id,
-            latestRelease.release_id,
-            { expected_revision: latestRelease.revision },
+            release.release_id,
+            { expected_revision: release.revision },
             key,
           )
           break
