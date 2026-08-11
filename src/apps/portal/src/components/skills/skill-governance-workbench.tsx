@@ -120,6 +120,7 @@ export default function SkillGovernanceWorkbench() {
   const [summary, setSummary] = useState<SkillWorkbenchSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [catalogError, setCatalogError] = useState<string | null>(null)
+  const [catalogFallbackActive, setCatalogFallbackActive] = useState(false)
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(initialState.skillId)
   const [activeTab, setActiveTab] = useState<SkillWorkbenchTab>(initialState.tab)
   const [environment, setEnvironment] = useState<'dev' | 'test'>(initialState.env)
@@ -178,9 +179,10 @@ export default function SkillGovernanceWorkbench() {
   useEffect(() => {
     if (mobileDetailOpen || !restoreQueueFocusRef.current) return
     restoreQueueFocusRef.current = false
-    Array.from(document.querySelectorAll<HTMLButtonElement>('[data-skill-catalog-button]'))
+    const selectedButton = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-skill-catalog-button]'))
       .find((button) => button.dataset.skillId === selectedSkillId)
-      ?.focus()
+    const focusTarget = selectedButton ?? document.getElementById('skill-queue-search')
+    focusTarget?.focus()
   }, [mobileDetailOpen, selectedSkillId])
 
   useEffect(() => {
@@ -197,13 +199,13 @@ export default function SkillGovernanceWorkbench() {
       if (!current) return
       setItems(response.items)
       setSummary(response.summary)
+      setCatalogFallbackActive(false)
       setSelectedSkillId((selected) => response.items.some((item) => item.skill_id === selected)
         ? selected
         : response.items[0]?.skill_id ?? null)
     }).catch(async (error: unknown) => {
       if (!current) return
       setSummary(null)
-      if (priority !== null) setPriority(null)
       try {
         const fallback = await listInfraSkillCatalog({
           page: 1,
@@ -214,13 +216,13 @@ export default function SkillGovernanceWorkbench() {
         })
         if (!current) return
         const fallbackItems = fallback.items.map(catalogFallback)
+        setCatalogFallbackActive(true)
         setItems(fallbackItems)
         setSelectedSkillId((selected) => fallbackItems.some((item) => item.skill_id === selected)
           ? selected
           : fallbackItems[0]?.skill_id ?? null)
       } catch {
         if (!current) return
-        setItems([])
         setCatalogError(error instanceof Error ? error.message : '无法加载 Skill 目录')
       }
     }).finally(() => {
@@ -263,6 +265,7 @@ export default function SkillGovernanceWorkbench() {
       <SkillWorkbenchHeader
         environment={environment}
         priority={priority}
+        prioritySuspended={catalogFallbackActive}
         onEnvironmentChange={setEnvironment}
         onPriorityChange={handlePriorityChange}
         onOpenRouteTest={() => setRouteDrawerOpen(true)}

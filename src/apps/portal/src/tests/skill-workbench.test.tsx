@@ -214,7 +214,7 @@ describe('Skill governance workbench', () => {
     expect(backButton).toHaveFocus()
     let queueWasVisibleWhenFocusReturned = false
     item.addEventListener('focus', () => {
-      queueWasVisibleWhenFocusReturned = !item.closest('aside')?.classList.contains('hidden')
+      queueWasVisibleWhenFocusReturned = !item.closest('[data-skill-queue]')?.classList.contains('hidden')
     })
     queueWasVisibleWhenFocusReturned = false
     await user.click(backButton)
@@ -222,6 +222,24 @@ describe('Skill governance workbench', () => {
     expect(screen.getByRole('navigation', { name: '治理待办' })).toBeVisible()
     await waitFor(() => expect(item).toHaveFocus())
     expect(queueWasVisibleWhenFocusReturned).toBe(true)
+  })
+
+  it('focuses queue search when the selected item disappears before mobile return', async () => {
+    const user = userEvent.setup()
+    render(<SkillGovernanceWorkbench />)
+    await user.click(await screen.findByTestId('skill-catalog-item-settlement_explain_skill'))
+    const backButton = await screen.findByRole('button', { name: '返回治理待办' })
+    mockGetSkillGovernanceWorkbench.mockResolvedValueOnce({
+      ...workbenchResponse,
+      items: [],
+      total: 0,
+    })
+
+    await user.click(screen.getByRole('button', { name: '同步状态' }))
+    await waitFor(() => expect(screen.queryByTestId('skill-catalog-item-settlement_explain_skill')).not.toBeInTheDocument())
+    await user.click(backButton)
+
+    await waitFor(() => expect(screen.getByLabelText('搜索 Skill')).toHaveFocus())
   })
 
   it('uses arrow keys for roving focus and Enter for explicit queue activation', async () => {
@@ -328,7 +346,7 @@ describe('Skill governance workbench', () => {
     const loadMore = await screen.findByRole('button', { name: '加载更多' })
 
     await user.click(loadMore)
-    expect(loadMore).toBeDisabled()
+    expect(loadMore).toHaveAttribute('aria-disabled', 'true')
     expect(loadMore).toHaveTextContent('正在加载…')
     resolveNextPage({
       items: [firstPage[0], { ...firstPage[0], skill_id: 'skill-51', skill_name: 'Skill 51' }],
@@ -339,7 +357,11 @@ describe('Skill governance workbench', () => {
 
     expect(await screen.findByRole('link', { name: /Skill 51/ })).toBeVisible()
     expect(screen.getAllByRole('link').filter((link) => link.getAttribute('href') === '/skills/skill-1')).toHaveLength(1)
-    expect(screen.queryByRole('button', { name: '加载更多' })).not.toBeInTheDocument()
+    const completed = screen.getByRole('button', { name: '已加载全部 Skill 资产' })
+    expect(completed).toBe(loadMore)
+    expect(completed).toHaveFocus()
+    await user.click(completed)
+    expect(mockListInfraSkillCatalog).toHaveBeenCalledTimes(2)
   })
 
   it('shows an asset request error without also showing the empty state', async () => {
@@ -487,9 +509,9 @@ describe('Skill governance workbench', () => {
     expect(screen.queryByTestId('skill-primary-action')).not.toBeInTheDocument()
   })
 
-  it('clears a governance-only priority before showing catalog fallback assets', async () => {
+  it('suspends but preserves governance priority while catalog fallback is active', async () => {
     window.history.replaceState({}, '', '/skills?priority=blocked')
-    mockGetSkillGovernanceWorkbench.mockRejectedValue(new Error('WORKBENCH_UNAVAILABLE'))
+    mockGetSkillGovernanceWorkbench.mockRejectedValueOnce(new Error('WORKBENCH_UNAVAILABLE'))
     mockListInfraSkillCatalog.mockResolvedValue({
       items: [{
         skill_id: 'settlement_explain_skill',
@@ -511,10 +533,37 @@ describe('Skill governance workbench', () => {
 
     render(<SkillGovernanceWorkbench />)
 
-    await waitFor(() => expect(screen.getByLabelText('待办优先级')).toHaveValue(''))
-    expect(window.location.search).not.toContain('priority=')
+    await waitFor(() => expect(screen.getByLabelText('待办优先级')).toBeDisabled())
+    expect(screen.getByLabelText('待办优先级')).toHaveValue('blocked')
+    expect(window.location.search).toContain('priority=blocked')
+    expect(screen.getByRole('status')).toHaveTextContent('目录降级未应用治理优先级')
     expect(screen.getAllByText('治理聚合暂不可用，仅展示资产信息')[0]).toBeVisible()
-    await waitFor(() => expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(2))
+    expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(1)
+    expect(mockListInfraSkillCatalog).toHaveBeenCalledTimes(1)
+
+    mockGetSkillGovernanceWorkbench.mockResolvedValueOnce(workbenchResponse)
+    await userEvent.click(screen.getByRole('button', { name: '同步状态' }))
+
+    await waitFor(() => expect(screen.getByLabelText('待办优先级')).toBeEnabled())
+    expect(screen.queryByText('目录降级未应用治理优先级')).not.toBeInTheDocument()
+    expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(2)
+    expect(mockListInfraSkillCatalog).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps priority selected when governance and catalog fallback both fail', async () => {
+    window.history.replaceState({}, '', '/skills?priority=blocked')
+    mockGetSkillGovernanceWorkbench.mockRejectedValueOnce(new Error('WORKBENCH_UNAVAILABLE'))
+    mockListInfraSkillCatalog.mockRejectedValueOnce(new Error('CATALOG_UNAVAILABLE'))
+
+    render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('WORKBENCH_UNAVAILABLE')
+    expect(screen.getByLabelText('待办优先级')).toHaveValue('blocked')
+    expect(screen.getByLabelText('待办优先级')).toBeEnabled()
+    expect(window.location.search).toContain('priority=blocked')
+    expect(screen.queryByText('目录降级未应用治理优先级')).not.toBeInTheDocument()
+    expect(mockGetSkillGovernanceWorkbench).toHaveBeenCalledTimes(1)
+    expect(mockListInfraSkillCatalog).toHaveBeenCalledTimes(1)
   })
 
   it('refreshes catalog and lifecycle after activation', async () => {

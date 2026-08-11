@@ -6,6 +6,7 @@ import type { SkillGovernancePriority } from '@/lib/types'
 interface SkillWorkbenchHeaderProps {
   environment: 'dev' | 'test'
   priority: SkillGovernancePriority | null
+  prioritySuspended: boolean
   onEnvironmentChange: (environment: 'dev' | 'test') => void
   onPriorityChange: (priority: SkillGovernancePriority | null) => void
   onOpenRouteTest: () => void
@@ -15,6 +16,7 @@ interface SkillWorkbenchHeaderProps {
 export default function SkillWorkbenchHeader({
   environment,
   priority,
+  prioritySuspended,
   onEnvironmentChange,
   onPriorityChange,
   onOpenRouteTest,
@@ -26,7 +28,7 @@ export default function SkillWorkbenchHeader({
         <h1 className="text-xl font-semibold tracking-tight text-slate-950 md:text-2xl">Skill 日常治理</h1>
         <p className="mt-1 text-sm text-slate-500">按优先级处理评测、复审与发布待办</p>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
         <label htmlFor="skill-environment" className="sr-only">Skill 环境</label>
         <select
           id="skill-environment"
@@ -41,6 +43,7 @@ export default function SkillWorkbenchHeader({
         <select
           id="skill-priority"
           value={priority ?? ''}
+          disabled={prioritySuspended}
           onChange={(event) => onPriorityChange((event.target.value || null) as SkillGovernancePriority | null)}
           className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 sm:h-9"
         >
@@ -53,6 +56,11 @@ export default function SkillWorkbenchHeader({
         <Button variant="ghost" size="icon" className="size-11 sm:size-9" aria-label="同步状态" onClick={onRefresh}>
           <RefreshCw className="h-4 w-4" />
         </Button>
+        {prioritySuspended && (
+          <p role="status" className="col-span-2 text-xs text-amber-700 sm:basis-full sm:text-right">
+            目录降级未应用治理优先级
+          </p>
+        )}
       </div>
     </header>
   )

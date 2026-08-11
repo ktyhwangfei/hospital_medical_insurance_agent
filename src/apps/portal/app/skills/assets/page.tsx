@@ -20,6 +20,7 @@ export default function SkillAssetsPage() {
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  const [hasPagination, setHasPagination] = useState(false)
 
   useEffect(() => {
     let current = true
@@ -29,6 +30,7 @@ export default function SkillAssetsPage() {
         setItems(appendUnique([], response.items))
         setPage(response.page)
         setTotal(response.total)
+        setHasPagination(response.total > response.items.length)
       })
       .catch((reason: unknown) => {
         if (current) setError(reason instanceof Error ? reason.message : '无法加载 Skill 资产')
@@ -40,6 +42,7 @@ export default function SkillAssetsPage() {
   }, [])
 
   async function loadMore(): Promise<void> {
+    if (loadingMore || items.length >= total) return
     setLoadingMore(true)
     setError(null)
     try {
@@ -86,15 +89,16 @@ export default function SkillAssetsPage() {
             ))}
           </ul>
         )}
-        {!loading && items.length < total && (
+        {!loading && hasPagination && (
           <div className="border-t border-slate-200 p-3 text-center">
             <button
               type="button"
-              disabled={loadingMore}
+              aria-disabled={loadingMore || items.length >= total}
+              aria-live="polite"
               onClick={() => void loadMore()}
-              className="min-h-11 rounded-lg px-4 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:text-slate-400"
+              className="min-h-11 rounded-lg px-4 text-sm font-medium text-blue-600 hover:bg-blue-50 aria-disabled:text-slate-400"
             >
-              {loadingMore ? '正在加载…' : '加载更多'}
+              {loadingMore ? '正在加载…' : items.length >= total ? '已加载全部 Skill 资产' : '加载更多'}
             </button>
           </div>
         )}

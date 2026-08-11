@@ -88,11 +88,12 @@ export default function SkillCatalogPanel({
   }
 
   return (
-    <aside className={cn('min-h-0 flex-col border-r border-slate-200 bg-white md:flex', hiddenOnMobile ? 'hidden' : 'flex')}>
+    <div data-skill-queue className={cn('min-h-0 flex-col border-r border-slate-200 bg-white md:flex', hiddenOnMobile ? 'hidden' : 'flex')}>
       <div className="space-y-3 border-b border-slate-200 p-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-2 h-4 w-4 text-slate-400" />
           <Input
+            id="skill-queue-search"
             aria-label="搜索 Skill"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
@@ -191,6 +192,6 @@ export default function SkillCatalogPanel({
           )
         })}
       </nav>
-    </aside>
+    </div>
   )
 }
