@@ -7,6 +7,7 @@ import {
 } from '@/components/skills/skill-primary-action'
 import type {
   SkillEvalRunResponse,
+  SkillNextAction,
   SkillReleaseResponse,
   SkillVersionResponse,
   SkillWorkbenchItem,
@@ -25,6 +26,18 @@ const baseItem: SkillWorkbenchItem = {
   test_active_version: null,
   governance_status: 'needs_evaluation',
   attention_reason: 'passed_evaluation_required',
+  current_stage: 'evaluate',
+  priority: 'normal',
+  latest_eval_run_id: null,
+  candidate_version: null,
+  baseline_version: null,
+  regression_count: 0,
+  required_failure_count: 0,
+  linked_draft_id: null,
+  linked_draft_status: null,
+  waiting_since: '2026-08-05T06:00:00Z',
+  next_action: 'run_evaluation',
+  next_action_reason: null,
 }
 
 const version: SkillVersionResponse = {
@@ -92,69 +105,27 @@ function release(status: SkillReleaseResponse['status']): SkillReleaseResponse {
 }
 
 describe('computePrimaryAction', () => {
-  it('已激活 → 完成（无按钮）', () => {
-    const action = computePrimaryAction(
-      { ...baseItem, test_release_status: 'active' },
+  it.each<[
+    SkillNextAction,
+    ReturnType<typeof computePrimaryAction>,
+  ]>([
+    ['register_version', { kind: 'navigate', label: '登记当前版本', hint: '当前制品尚未登记或已发生变更', targetTab: 'versions' }],
+    ['run_evaluation', { kind: 'run_evaluation', label: '运行候选评测', hint: '使用当前登记版本运行固定评测', targetTab: 'evaluation' }],
+    ['create_fix_draft', { kind: 'navigate', label: '创建修复草稿', hint: '从失败证据进入可审阅修改', targetTab: 'development' }],
+    ['continue_draft', { kind: 'navigate', label: '继续修改', hint: '打开已关联修复草稿', targetTab: 'development' }],
+    ['materialize_draft', { kind: 'navigate', label: '人工物化', hint: '草稿已校验，需要人工确认物化', targetTab: 'development' }],
+    ['create_candidate', { kind: 'create_candidate', label: '创建发布候选', hint: '固定评测已通过', targetTab: 'release' }],
+    ['request_approval', { kind: 'request_approval', label: '申请复审', hint: '发布候选已就绪', targetTab: 'release' }],
+    ['review_approval', { kind: 'approve', label: '进入人工复审', hint: '禁止创建人自审', targetTab: 'release' }],
+    ['activate_test_shadow', { kind: 'activate', label: '激活 Test Shadow', hint: '复审已通过', targetTab: 'release' }],
+    ['view_evidence', { kind: 'none', label: '查看运行证据', hint: 'Test Shadow 已激活', targetTab: 'overview' }],
+  ])('服务端动作 %s 映射为唯一主动作', (nextAction, expected) => {
+    expect(computePrimaryAction(
+      { ...baseItem, next_action: nextAction },
       [version],
       [passedRun],
-      [release('active')],
-    )
-    expect(action.kind).toBe('none')
-    expect(action.label).toBe('Test Shadow 已激活')
-  })
-
-  it('已登记、未评测 → 运行候选评测', () => {
-    const action = computePrimaryAction(baseItem, [version], [], [])
-    expect(action.kind).toBe('run_evaluation')
-    expect(action.targetTab).toBe('evaluation')
-  })
-
-  it('有通过门禁的评测、无候选 → 创建候选', () => {
-    const action = computePrimaryAction(baseItem, [version], [passedRun], [])
-    expect(action.kind).toBe('create_candidate')
-  })
-
-  it('候选版 → 申请审批（发布状态机优先）', () => {
-    const action = computePrimaryAction(baseItem, [version], [passedRun], [release('candidate')])
-    expect(action.kind).toBe('request_approval')
-  })
-
-  it('待审批 → 人工审批通过', () => {
-    const action = computePrimaryAction(baseItem, [version], [passedRun], [release('approval_pending')])
-    expect(action.kind).toBe('approve')
-    expect(action.label).toBe('人工审批通过')
-  })
-
-  it('审批通过 → 激活 Test Shadow', () => {
-    const action = computePrimaryAction(baseItem, [version], [passedRun], [release('approved')])
-    expect(action.kind).toBe('activate')
-  })
-
-  it('门禁失败 → 跳转看证据', () => {
-    const action = computePrimaryAction(
-      { ...baseItem, governance_status: 'gate_failed' },
-      [version],
-      [],
-      [],
-    )
-    expect(action.kind).toBe('navigate')
-    expect(action.targetTab).toBe('evaluation')
-  })
-
-  it('未登记制品 → 去版本页', () => {
-    const action = computePrimaryAction(
-      { ...baseItem, artifact_status: 'changed', validation_status: 'pending' },
-      [],
-      [],
-      [],
-    )
-    expect(action.kind).toBe('navigate')
-    expect(action.targetTab).toBe('versions')
-  })
-
-  it('退役发布不参与状态机（视为无候选）', () => {
-    const action = computePrimaryAction(baseItem, [version], [passedRun], [release('retired')])
-    expect(action.kind).toBe('create_candidate')
+      [release('approved')],
+    )).toEqual(expected)
   })
 })
 

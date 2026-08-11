@@ -90,6 +90,18 @@ function catalogFallback(item: InfraSkillCatalogItem): SkillWorkbenchItem {
     test_active_version: null,
     governance_status: item.artifact_status === 'registered' ? 'needs_evaluation' : 'artifact_changed',
     attention_reason: 'governance_summary_unavailable',
+    current_stage: item.artifact_status === 'registered' ? 'evaluate' : 'modify',
+    priority: item.artifact_status === 'registered' ? 'normal' : 'high',
+    latest_eval_run_id: null,
+    candidate_version: null,
+    baseline_version: null,
+    regression_count: 0,
+    required_failure_count: 0,
+    linked_draft_id: null,
+    linked_draft_status: null,
+    waiting_since: item.registered_version?.created_at ?? new Date().toISOString(),
+    next_action: item.artifact_status === 'registered' ? 'run_evaluation' : 'register_version',
+    next_action_reason: 'governance_summary_unavailable',
   }
 }
 

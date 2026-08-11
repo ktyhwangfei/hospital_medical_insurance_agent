@@ -351,6 +351,28 @@ export type SkillGovernanceStatus =
   | 'artifact_changed'
   | 'healthy'
 
+export type SkillGovernanceStage =
+  | 'evaluate'
+  | 'diagnose'
+  | 'modify'
+  | 'review'
+  | 'release'
+  | 'healthy'
+
+export type SkillGovernancePriority = 'blocked' | 'high' | 'normal'
+
+export type SkillNextAction =
+  | 'register_version'
+  | 'run_evaluation'
+  | 'create_fix_draft'
+  | 'continue_draft'
+  | 'materialize_draft'
+  | 'create_candidate'
+  | 'request_approval'
+  | 'review_approval'
+  | 'activate_test_shadow'
+  | 'view_evidence'
+
 export type SkillWorkbenchTab =
   | 'overview'
   | 'versions'
@@ -380,6 +402,29 @@ export interface SkillWorkbenchItem {
   test_active_version: string | null
   governance_status: SkillGovernanceStatus
   attention_reason: string | null
+  current_stage: SkillGovernanceStage
+  priority: SkillGovernancePriority
+  latest_eval_run_id: string | null
+  candidate_version: string | null
+  baseline_version: string | null
+  regression_count: number
+  required_failure_count: number
+  linked_draft_id: string | null
+  linked_draft_status: string | null
+  waiting_since: string
+  next_action: SkillNextAction
+  next_action_reason: string | null
+}
+
+export interface SkillWorkbenchFilter {
+  page?: number
+  page_size?: number
+  business_action?: string
+  business_object?: string
+  artifact_status?: string
+  governance_status?: SkillGovernanceStatus
+  priority?: SkillGovernancePriority
+  query?: string
 }
 
 export interface SkillWorkbenchResponse {

@@ -1,13 +1,13 @@
 import type {
   SkillEvalRunResponse,
+  SkillNextAction,
   SkillReleaseResponse,
   SkillVersionResponse,
   SkillWorkbenchItem,
   SkillWorkbenchTab,
 } from '@/lib/types'
 
-// 把"下一个治理动作"从发布/评测 Tab 里提出来，作为工作台顶层一键操作。
-// 纯函数：只依据已加载的证据数据推导，无副作用，便于单测。
+// 把服务端给出的"下一个治理动作"映射为工作台顶层一键操作。
 
 export type PrimaryActionKind =
   | 'run_evaluation' // 运行候选评测
@@ -26,10 +26,67 @@ export interface PrimaryAction {
   targetTab?: SkillWorkbenchTab
 }
 
-const DONE: PrimaryAction = {
-  kind: 'none',
-  label: 'Test Shadow 已激活',
-  hint: '当前版本已在 Test 环境激活，可用于治理验证',
+const PRIMARY_ACTIONS: Record<SkillNextAction, PrimaryAction> = {
+  register_version: {
+    kind: 'navigate',
+    label: '登记当前版本',
+    hint: '当前制品尚未登记或已发生变更',
+    targetTab: 'versions',
+  },
+  run_evaluation: {
+    kind: 'run_evaluation',
+    label: '运行候选评测',
+    hint: '使用当前登记版本运行固定评测',
+    targetTab: 'evaluation',
+  },
+  create_fix_draft: {
+    kind: 'navigate',
+    label: '创建修复草稿',
+    hint: '从失败证据进入可审阅修改',
+    targetTab: 'development',
+  },
+  continue_draft: {
+    kind: 'navigate',
+    label: '继续修改',
+    hint: '打开已关联修复草稿',
+    targetTab: 'development',
+  },
+  materialize_draft: {
+    kind: 'navigate',
+    label: '人工物化',
+    hint: '草稿已校验，需要人工确认物化',
+    targetTab: 'development',
+  },
+  create_candidate: {
+    kind: 'create_candidate',
+    label: '创建发布候选',
+    hint: '固定评测已通过',
+    targetTab: 'release',
+  },
+  request_approval: {
+    kind: 'request_approval',
+    label: '申请复审',
+    hint: '发布候选已就绪',
+    targetTab: 'release',
+  },
+  review_approval: {
+    kind: 'approve',
+    label: '进入人工复审',
+    hint: '禁止创建人自审',
+    targetTab: 'release',
+  },
+  activate_test_shadow: {
+    kind: 'activate',
+    label: '激活 Test Shadow',
+    hint: '复审已通过',
+    targetTab: 'release',
+  },
+  view_evidence: {
+    kind: 'none',
+    label: '查看运行证据',
+    hint: 'Test Shadow 已激活',
+    targetTab: 'overview',
+  },
 }
 
 /** 最新一条未退役的发布记录（发布状态机的当前态） */
@@ -52,87 +109,12 @@ export function eligibleEvalRun(
   )
 }
 
-/**
- * 推导当前 Skill 的下一个主治理动作。
- * 优先级：已激活(完成) → 发布状态机(候选/待审批/审批通过) → 门禁失败(看证据)
- *        → 有通过评测(创建候选) → 已登记(运行评测) → 未登记(去版本页)
- */
 export function computePrimaryAction(
   item: SkillWorkbenchItem,
-  versions: SkillVersionResponse[],
-  evalRuns: SkillEvalRunResponse[],
-  releases: SkillReleaseResponse[],
+  _versions: SkillVersionResponse[],
+  _evalRuns: SkillEvalRunResponse[],
+  _releases: SkillReleaseResponse[],
 ): PrimaryAction {
-  if (item.test_release_status === 'active') return DONE
-
-  const registered =
-    item.artifact_status === 'registered' && item.validation_status === 'passed'
-  const release = latestActiveRelease(releases)
-
-  // 发布状态机优先：已有候选在流，沿状态推进
-  if (release) {
-    if (release.status === 'candidate') {
-      return {
-        kind: 'request_approval',
-        label: '申请审批',
-        hint: '候选版已就绪，提交信息科审批后即可激活',
-        targetTab: 'release',
-      }
-    }
-    if (release.status === 'approval_pending') {
-      return {
-        kind: 'approve',
-        label: '人工审批通过',
-        hint: '等待信息科角色审批',
-        targetTab: 'release',
-      }
-    }
-    if (release.status === 'approved') {
-      return {
-        kind: 'activate',
-        label: '激活 Test Shadow',
-        hint: '审批通过，可激活到 Test 影子流量',
-        targetTab: 'release',
-      }
-    }
-    // active 已在上方返回；retired 被 latestActiveRelease 过滤
-  }
-
-  // 门禁失败 → 先看回归证据
-  if (item.governance_status === 'gate_failed') {
-    return {
-      kind: 'navigate',
-      label: '查看评测回归证据',
-      hint: '最近评测未通过门禁，请检查回归用例',
-      targetTab: 'evaluation',
-    }
-  }
-
-  // 有通过门禁的评测、尚无候选 → 创建候选
-  if (eligibleEvalRun(evalRuns, versions)) {
-    return {
-      kind: 'create_candidate',
-      label: '从通过评测创建候选',
-      hint: '评测已通过门禁，可创建 Test 发布候选',
-      targetTab: 'release',
-    }
-  }
-
-  // 已登记但未评测 → 运行评测
-  if (registered) {
-    return {
-      kind: 'run_evaluation',
-      label: '运行候选评测',
-      hint: '需要先通过当前版本的固定评测门禁',
-      targetTab: 'evaluation',
-    }
-  }
-
-  // 未登记 → 去版本页登记制品
-  return {
-    kind: 'navigate',
-    label: '登记制品版本',
-    hint: '当前制品未登记或未通过校验，先在「版本」页登记',
-    targetTab: 'versions',
-  }
+  void _versions; void _evalRuns; void _releases
+  return PRIMARY_ACTIONS[item.next_action]
 }
