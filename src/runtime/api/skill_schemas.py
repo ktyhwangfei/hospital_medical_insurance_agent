@@ -11,6 +11,11 @@ from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationProvenance,
     SkillStructuredConfig,
 )
+from src.runtime.skill_management.workbench_service import (
+    SkillGovernancePriority,
+    SkillGovernanceStage,
+    SkillNextAction,
+)
 
 
 class SkillEvalCaseCreateRequest(BaseModel):
@@ -149,6 +154,18 @@ class SkillWorkbenchItemResponse(BaseModel):
     test_active_version: str | None
     governance_status: str
     attention_reason: str | None
+    current_stage: SkillGovernanceStage
+    priority: SkillGovernancePriority
+    latest_eval_run_id: str | None
+    candidate_version: str | None
+    baseline_version: str | None
+    regression_count: int
+    required_failure_count: int
+    linked_draft_id: str | None
+    linked_draft_status: str | None
+    waiting_since: datetime
+    next_action: SkillNextAction
+    next_action_reason: str | None
 
 
 class SkillWorkbenchResponse(BaseModel):

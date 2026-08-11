@@ -69,7 +69,6 @@ from src.runtime.skill_management.governance_service import (
 from src.runtime.skill_management.workbench_service import (
     SkillGovernancePriority,
     SkillGovernanceStatus,
-    SkillWorkbenchPage,
     SkillWorkbenchService,
 )
 from src.runtime.skill_management.draft_service import SkillDraftService
@@ -132,6 +131,7 @@ from src.runtime.api.skill_schemas import (
     SkillReleaseListResponse,
     SkillReleaseResponse,
     SkillReleaseTransitionRequest,
+    SkillWorkbenchResponse,
 )
 from src.shared.schemas.responses import error_detail
 from src.gateway.auth import AuthStatus, authenticator
@@ -567,7 +567,7 @@ def list_infra_skill_catalog(
     return InfraSkillCatalogResponse.model_validate(catalog.model_dump())
 
 
-@router.get("/infra-skills/workbench", response_model=SkillWorkbenchPage)
+@router.get("/infra-skills/workbench", response_model=SkillWorkbenchResponse)
 def get_infra_skill_workbench(
     service: SkillWorkbenchServiceDependency,
     page: int = Query(default=1, ge=1),
@@ -578,7 +578,7 @@ def get_infra_skill_workbench(
     governance_status: SkillGovernanceStatus | None = Query(default=None),
     priority: SkillGovernancePriority | None = Query(default=None),
     query: str = Query(default="", max_length=128),
-) -> SkillWorkbenchPage:
+) -> SkillWorkbenchResponse:
     workbench = service.list_workbench(
         page=1 if priority is not None else page,
         page_size=10_000 if priority is not None else page_size,
@@ -599,7 +599,7 @@ def get_infra_skill_workbench(
                 "page_size": page_size,
             }
         )
-    return workbench
+    return SkillWorkbenchResponse.model_validate(workbench.model_dump())
 
 
 def _governance_error(exc: Exception) -> HTTPException:

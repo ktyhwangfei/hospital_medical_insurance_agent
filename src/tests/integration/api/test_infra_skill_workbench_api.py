@@ -262,6 +262,34 @@ def test_skill_workbench_rejects_invalid_priority():
     assert response.status_code == 422
 
 
+def test_skill_workbench_openapi_keeps_public_schema_with_projection_fields():
+    schema = create_app().openapi()
+    response_schema = schema["paths"][f"{PREFIX}/infra-skills/workbench"]["get"][
+        "responses"
+    ]["200"]["content"]["application/json"]["schema"]
+
+    assert response_schema["$ref"].endswith("/SkillWorkbenchResponse")
+    public_response = schema["components"]["schemas"]["SkillWorkbenchResponse"]
+    assert public_response["properties"]["items"]["items"]["$ref"].endswith(
+        "/SkillWorkbenchItemResponse"
+    )
+    public_item = schema["components"]["schemas"]["SkillWorkbenchItemResponse"]
+    assert {
+        "current_stage",
+        "priority",
+        "latest_eval_run_id",
+        "candidate_version",
+        "baseline_version",
+        "regression_count",
+        "required_failure_count",
+        "linked_draft_id",
+        "linked_draft_status",
+        "waiting_since",
+        "next_action",
+        "next_action_reason",
+    }.issubset(public_item["properties"])
+
+
 def test_route_test_response_keeps_legacy_fields_and_adds_explanation():
     with patch("psycopg.connect", side_effect=Exception("No PostgreSQL available in test")):
         response = TestClient(create_app()).post(
