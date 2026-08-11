@@ -23,7 +23,15 @@ interface RuleTraceDrawerProps {
 }
 
 export default function RuleTraceDrawer({ open, ruleId, runId, onOpenChange }: RuleTraceDrawerProps) {
-  const [trace, setTrace] = useState<RuleCompilationTrace | null>(null)
+  const targetRunId = runId ?? null
+  const [loadedTrace, setLoadedTrace] = useState<{
+    ruleId: string
+    runId: string | null
+    trace: RuleCompilationTrace
+  } | null>(null)
+  const trace = loadedTrace?.ruleId === ruleId && loadedTrace.runId === targetRunId
+    ? loadedTrace.trace
+    : null
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
@@ -34,10 +42,10 @@ export default function RuleTraceDrawer({ open, ruleId, runId, onOpenChange }: R
     let active = true
     setLoading(true)
     setError('')
-    setTrace(null)
-    void getRuleCompilationTrace(ruleId, runId)
+    setLoadedTrace(null)
+    void getRuleCompilationTrace(ruleId, targetRunId)
       .then((result) => {
-        if (active) setTrace(result)
+        if (active) setLoadedTrace({ ruleId, runId: targetRunId, trace: result })
       })
       .catch((reason) => {
         if (active) setError(reason instanceof Error ? reason.message : '轨迹加载失败')
@@ -48,7 +56,7 @@ export default function RuleTraceDrawer({ open, ruleId, runId, onOpenChange }: R
     return () => {
       active = false
     }
-  }, [open, ruleId, runId, retry])
+  }, [open, ruleId, targetRunId, retry])
 
   const close = () => {
     setFullPayload(null)

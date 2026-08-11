@@ -999,6 +999,7 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
       )}
 
       <RuleTraceDrawer
+        key={`${traceTarget?.ruleId ?? ''}:${traceTarget?.runId ?? ''}`}
         open={traceTarget !== null}
         ruleId={traceTarget?.ruleId ?? null}
         runId={traceTarget?.runId ?? null}

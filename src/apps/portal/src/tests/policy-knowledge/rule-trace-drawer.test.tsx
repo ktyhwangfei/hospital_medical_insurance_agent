@@ -144,4 +144,44 @@ describe('rule trace drawer', () => {
     expect(screen.getByText('RATIO_INVALID')).toBeInTheDocument()
     expect(screen.getByText('比例不是有效数值')).toBeInTheDocument()
   })
+
+  it('hides the previous run evidence as soon as the target changes', async () => {
+    let resolveSecond: ((value: RuleCompilationTrace) => void) | undefined
+    const committedFrames: string[] = []
+    const Harness = ({ runId }: { runId: string }) => (
+      <>
+        <RuleTraceDrawer
+          open
+          ruleId="rule_1"
+          runId={runId}
+          onOpenChange={vi.fn()}
+        />
+        <span ref={(node) => {
+          if (node) committedFrames.push(document.body.textContent ?? '')
+        }} />
+      </>
+    )
+    vi.mocked(getRuleCompilationTrace)
+      .mockResolvedValueOnce(trace)
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSecond = resolve
+      }))
+    const view = render(
+      <Harness runId="run_1" />,
+    )
+    expect(await screen.findByText('OVERLAPPING_RANGE')).toBeInTheDocument()
+    committedFrames.length = 0
+
+    view.rerender(<Harness runId="run_2" />)
+
+    expect(committedFrames.at(-1)).not.toContain('OVERLAPPING_RANGE')
+    expect(screen.queryByText('OVERLAPPING_RANGE')).not.toBeInTheDocument()
+    expect(screen.getByText('正在加载编译轨迹…')).toBeInTheDocument()
+    resolveSecond?.({
+      ...trace,
+      run: { ...trace.run, run_id: 'run_2' },
+      issues: [],
+      steps: [],
+    })
+  })
 })

@@ -5,7 +5,7 @@ import json
 from typing import Any, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.knowledge_extension.rule_explanation.change_set_store import ChangeSetStore
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
@@ -36,17 +36,26 @@ class ExtractionPort(Protocol):
     def get_extraction(self, extraction_id: str) -> dict[str, Any] | None: ...
 
 
+class MissingCandidateRun(BaseModel):
+    change_set_id: str
+    item_id: str
+    target_rule_id: str
+    compile_run_id: str
+
+
 class BackfillReport(BaseModel):
     compiled: int = 0
     legacy_imported: int = 0
     skipped: int = 0
     linked: int = 0
     link_skipped: int = 0
+    missing: list[MissingCandidateRun] = Field(default_factory=list)
 
 
 class CandidateLinkReport(BaseModel):
     linked: int = 0
     link_skipped: int = 0
+    missing: list[MissingCandidateRun] = Field(default_factory=list)
 
 
 def link_change_set_candidates(
@@ -55,25 +64,41 @@ def link_change_set_candidates(
 ) -> CandidateLinkReport:
     """仅为持久化变更项补齐其既有编译运行关联。"""
     linked = link_skipped = 0
+    missing: list[MissingCandidateRun] = []
     for change_set in change_sets.list():
         for item in change_set.items:
             run_id = item.compile_run_id
-            run = traces.get_run(run_id) if run_id else None
-            if (
-                run is None
-                or traces.get_rule_trace(item.rule_id, run_id=run_id) is not None
-            ):
+            target_rule_id = (
+                item.canonical_rule.rule_id if item.canonical_rule else item.rule_id
+            )
+            if not run_id:
+                link_skipped += 1
+                continue
+            run = traces.get_run(run_id)
+            if run is None:
+                missing.append(MissingCandidateRun(
+                    change_set_id=change_set.change_set_id,
+                    item_id=item.item_id,
+                    target_rule_id=target_rule_id,
+                    compile_run_id=run_id,
+                ))
+                continue
+            if traces.get_rule_trace(target_rule_id, run_id=run_id) is not None:
                 link_skipped += 1
                 continue
             traces.save_candidate_lineage(
-                rule_id=item.rule_id,
+                rule_id=target_rule_id,
                 rule=item.canonical_rule,
                 run_id=run_id,
                 extraction_id=run.extraction_id,
                 document_id=run.document_id,
             )
             linked += 1
-    return CandidateLinkReport(linked=linked, link_skipped=link_skipped)
+    return CandidateLinkReport(
+        linked=linked,
+        link_skipped=link_skipped,
+        missing=missing,
+    )
 
 
 def backfill_rules(
@@ -191,8 +216,14 @@ def main() -> None:
         traces,
     )
     link_report = link_change_set_candidates(PostgresChangeSetStore(), traces)
-    report = report.model_copy(update=link_report.model_dump())
+    report = report.model_copy(update={
+        "linked": link_report.linked,
+        "link_skipped": link_report.link_skipped,
+        "missing": link_report.missing,
+    })
     print(json.dumps(report.model_dump(), ensure_ascii=False))
+    if report.missing:
+        raise RuntimeError(f"{len(report.missing)} 个变更项的编译运行不存在")
 
 
 if __name__ == "__main__":
