@@ -2,14 +2,18 @@
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
 import { AlertCircle, GitBranch } from 'lucide-react'
+import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { getSkillGovernanceWorkbench } from '@/lib/api-client'
+import SkillReleasePanel from '@/components/skills/skill-release-panel'
+import { getSkillGovernanceWorkbench, listInfraSkillVersions } from '@/lib/api-client'
 import { ApiClientError } from '@/lib/types'
+import type { SkillVersionResponse, SkillWorkbenchItem } from '@/lib/types'
 
 // /skills/releases 发布记录页：Test 发布、确认、停用、恢复、归档（设计 §3.1 §6）
 function ReleasesContent() {
   const skillFilter = useSearchParams().get('skill')
-  const [items, setItems] = useState<{ skill_id: string; skill_name: string; test_release_status: string | null; governance_status: string }[]>([])
+  const [items, setItems] = useState<SkillWorkbenchItem[]>([])
+  const [versions, setVersions] = useState<SkillVersionResponse[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -17,22 +21,29 @@ function ReleasesContent() {
     setLoading(true)
     setError(null)
     try {
-      const data = await getSkillGovernanceWorkbench({ page: 1, page_size: 50 })
+      const [data, selectedVersions] = await Promise.all([
+        getSkillGovernanceWorkbench({ page: 1, page_size: 50 }),
+        skillFilter ? listInfraSkillVersions(skillFilter) : Promise.resolve([]),
+      ])
       setItems(data.items ?? [])
+      setVersions(selectedVersions)
     } catch (err) {
       setError(err instanceof ApiClientError ? err.detail.message : '加载发布记录失败')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [skillFilter])
 
   useEffect(() => {
-    void load()
+    void Promise.resolve().then(load)
   }, [load])
 
   const filteredItems = skillFilter
     ? items.filter((i) => i.skill_id === skillFilter)
     : items
+  const selectedItem = skillFilter
+    ? items.find((item) => item.skill_id === skillFilter) ?? null
+    : null
 
   return (
     <div className="mt-4 space-y-4">
@@ -51,7 +62,7 @@ function ReleasesContent() {
           <p className="text-xs text-slate-500">
             筛选中：<span className="font-medium text-slate-700">{items.find((i) => i.skill_id === skillFilter)?.skill_name ?? skillFilter}</span>
             （<code className="font-mono">{skillFilter}</code>）
-            <a href="/skills/releases" className="ml-2 text-blue-700 hover:underline">清除筛选</a>
+            <Link href="/skills/releases" className="ml-2 text-blue-700 hover:underline">清除筛选</Link>
           </p>
         )}
       </header>
@@ -61,6 +72,17 @@ function ReleasesContent() {
           <AlertCircle className="h-4 w-4 shrink-0" />
           {error}
         </div>
+      )}
+
+      {selectedItem && (
+        <section aria-label="当前 Skill 人工复审" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <SkillReleasePanel
+            skillId={selectedItem.skill_id}
+            versions={versions}
+            workbenchItem={selectedItem}
+            onChanged={load}
+          />
+        </section>
       )}
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">

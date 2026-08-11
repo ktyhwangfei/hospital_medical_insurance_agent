@@ -52,7 +52,7 @@ export default function SkillVersionsTab({ item, versions, error, readOnly, onCh
               <strong className="text-sm text-slate-900">v{version.semantic_version}</strong>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{version.validation_status}</span>
             </div>
-            <p className="mt-1 font-mono text-xs text-slate-500">{version.artifact_hash.slice(0, 12)} · {version.source_commit || '无提交信息'}</p>
+            <p className="mt-1 font-mono text-xs text-slate-500">{version.artifact_hash.slice(0, 12)} · {version.source_commit?.slice(0, 12) || '无提交信息'}</p>
             <time className="mt-1 block text-xs text-slate-400">{new Date(version.created_at).toLocaleString('zh-CN')}</time>
           </li>
         ))}

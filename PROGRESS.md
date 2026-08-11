@@ -32,12 +32,12 @@
 | 模型服务与管理 | 4 | 0 | 4 | 0 | 0 | — |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 | 知识库管理 | 3 | 0 | 3 | 0 | 0 | §2 P9 5 tab 已上线，详见 §2 |
-| 技能管理 | 8 | 5 | 3 | 0 | 0 | Skill AI 创作、候选隔离评测与人工物化主链已验证 |
+| 技能管理 | 9 | 6 | 3 | 0 | 0 | Skill AI 创作、候选隔离评测、人工物化与日常治理主链已验证 |
 | 运营看板 | 2 | 0 | 2 | 0 | 0 | — |
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **38** | **5** | **29** | **2** | **2** | — |
+| **合计** | **39** | **6** | **29** | **2** | **2** | — |
 
 > **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6 和 §4 为准；
@@ -105,6 +105,7 @@
 | 7.6 | Skill 治理工作台方案 2：聚合读模型、双栏目录、生命周期证据、单主动作发布与调试抽屉 | `runtime/skill_management/workbench_service.py` → `/infra-skills/workbench` → Portal `/skills` | verified |
 | 7.7 | Skill 管理工作台（草稿生命周期）：草稿 CRUD/复制（乐观锁）、校验/包生成、导入（ZIP/Git/受控目录）、输入指标契约与语义层交互、物化+版本登记+loader 热重载、停用/恢复/归档 | `domain/skill/draft_models.py` → `data_platform/storage/skill/draft_*` → `runtime/skill_management/{draft_service,draft_validator,package_generator,import_service,skill_input_service,materializer,lifecycle_service}.py` → `infra_skill_routes.py` → Portal `/skills`（四页签） | verified |
 | 7.8 | Skill AI 创作与候选评测：已发布指标生成、人工接受、差异优化、草稿校验、隔离路由/行为评测、人工物化 | `runtime/skill_management/ai_authoring` → `candidate_evaluation.py` → `infra_skill_routes.py` → Portal `/skills/new` 与草稿编辑器 | verified |
+| 7.9 | Skill 日常治理工作台：由既有版本、评测、Release 和草稿事实派生治理待办，默认主链为评测→定位问题→修改→复审→Test Shadow 发布；无第二套可变状态机。 | `/infra-skills/workbench` → Portal `/skills`、`/skills/releases` | verified |
 
 7.4 验证证据（2026-08-05）：T1 新功能相关测试 18 passed；T2a Skill API 10 passed；T2b 版本目录 Flow 1 passed；Portal Vitest 3 passed、变更文件 ESLint 通过、Next.js build 通过；Chromium E2E 1 passed。旧 `test_skill_mention.py` / `test_skill_intent_matching.py` 中 8 个请求已下线路由的 404 为预存测试债务，不计入 7.4 通过证据。
 
@@ -117,6 +118,8 @@
 7.7 验证证据（2026-08-06）：按 T1 → T2a → T2b 顺序分别为 138 passed（单元：存储 35/草稿 14/校验包 18/导入 17/输入指标 12/物化 8/生命周期 10/回归 24）、20 passed（API：草稿 14 + 端到端流程 5 + 导入 1）、5 passed（Flow：创建→保存→校验→物化→停用→恢复→归档）；Portal Vitest 118 passed（含 API client 10 + 新建向导 4）、Next.js build 通过。真实浏览器验证：经前端代理全链路 2xx（物化 201 + 版本登记）。物化写盘后 loader 热重载（`rediscover()`），占位 assembler 提供 `load()` 入口。
 
 7.8 验证证据（2026-08-10）：Task 8 完成候选制品隔离目录、固定路由快照、Docker 行为执行适配器与 fail-closed 策略（提交 `1775779`）；Task 9 补齐六个低基数 AI 创作指标、Portal 候选评测面板和完整 Flow。按 T1 → T2a → T2b 顺序为 104/56/1 passed；Portal Vitest 31 文件 268 passed，变更范围 ESLint 零错误，Next.js 16.2.12 生产构建通过，`skill` 工作区 3173 端口 Chromium E2E 1 passed（含 390px 横向溢出门禁）。当前 Windows 环境未安装 Docker CLI，候选 runner 镜像需在部署环境构建并配置；镜像不可用时行为评测会阻断，不会回退到宿主机执行。
+
+7.9 验证证据（2026-08-11）：严格按 T1 → T2a → T2b 为 25/31/1 passed，其中 T2b 是真实后端固定评测到 Release 的领域闭环；Portal 全量 Vitest 33 文件 322 passed，最终相关 3 文件 60 passed，变更范围 scoped ESLint 0 errors/0 warnings，Next.js 16.2.12 生产构建通过（36/36 静态页生成）。全仓 `npm run lint` 仍有范围外历史基线 109 errors/66 warnings，集中于 policy-knowledge、dashboard、settlement、thinking-chain、sse-hooks 等，未扩大本任务修复。中央 `skill` 工作区后端/前端为 8173/3173，代理与直连 workbench total 均为 1；最终 Chromium E2E 11 passed。浏览器治理主链使用 stateful route interception 验证同一 API 契约及 creator/reviewer token 分离，不声明真实持久化闭环；当前持久态 `settlement_explain_skill` 的语义版本 2.0.0 已绑定旧 artifact hash，真实 `/versions/sync` 返回 409，E2E 保留 live 409 场景并验证待办、生命周期、选中 URL 不丢失，完整 source commit 不展示，此持久数据冲突未在本任务修复。响应式视觉矩阵覆盖 1440×1000 决策区+证据抽屉、1600×1000 内联三栏、1024×900 证据抽屉、390×844 全宽详情/返回聚焦，以及 200% 缩放等价操作；均无页面横向溢出，H1、主操作和证据入口可达。Impeccable detector 对最终四个生产 UI 目标执行一次，结果 `[]`。回滚边界：恢复旧 `/skills` 编排或停止消费新增只读字段；既有 version/eval/draft/release 证据不受影响。
 
 #### 运营看板 / 嵌入式 / 安全与审计 / 适配器接入
 | # | 单元 | 状态 | 备注 |

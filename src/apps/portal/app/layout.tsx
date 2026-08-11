@@ -1,9 +1,8 @@
 'use client'
 
-import { useState, createContext, useContext, type ReactNode } from 'react'
+import { useEffect, useRef, useState, createContext, useContext, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
-import { Noto_Sans_SC } from 'next/font/google'
 import {
   FileText,
   Wand2,
@@ -33,15 +32,6 @@ export function useRoleContext(): RoleContextValue {
   if (!ctx) throw new Error('useRoleContext must be used within LayoutShell')
   return ctx
 }
-
-// --- Font ---
-
-const notoSansSC = Noto_Sans_SC({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  display: 'swap',
-  variable: '--font-noto-sans-sc',
-})
 
 // --- Nav items ---
 
@@ -90,10 +80,26 @@ function ConnectionBadge() {
 
 // --- Layout Shell ---
 
-function LayoutShell({ children }: { children: ReactNode }) {
+export function LayoutShell({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const hasSidebarPreference = useRef(false)
   const [currentRole, setCurrentRole] = useState<RoleId>('cashier')
   const pathname = usePathname()
+
+  useEffect(() => {
+    const mobileViewport = window.matchMedia('(max-width: 767px)')
+    const syncMobileDefault = () => {
+      if (!hasSidebarPreference.current) setSidebarCollapsed(mobileViewport.matches)
+    }
+    syncMobileDefault()
+    mobileViewport.addEventListener('change', syncMobileDefault)
+    return () => mobileViewport.removeEventListener('change', syncMobileDefault)
+  }, [])
+
+  const toggleSidebar = () => {
+    hasSidebarPreference.current = true
+    setSidebarCollapsed((value) => !value)
+  }
 
   return (
     <RoleContext.Provider value={{ currentRole, setCurrentRole }}>
@@ -113,7 +119,7 @@ function LayoutShell({ children }: { children: ReactNode }) {
             )}
             <button
               type="button"
-              onClick={() => setSidebarCollapsed((v) => !v)}
+              onClick={toggleSidebar}
               className="flex size-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
               aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
             >
@@ -137,6 +143,7 @@ function LayoutShell({ children }: { children: ReactNode }) {
                       ? 'bg-blue-50 text-blue-700'
                       : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                   } ${sidebarCollapsed ? 'justify-center px-2' : ''}`}
+                  aria-label={sidebarCollapsed ? item.label : undefined}
                   title={sidebarCollapsed ? item.label : undefined}
                 >
                   <span className="shrink-0">{item.icon}</span>
@@ -186,7 +193,7 @@ function LayoutShell({ children }: { children: ReactNode }) {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="zh-CN" className={`${notoSansSC.variable}`}>
+    <html lang="zh-CN">
       <body className="antialiased">
         <ApiProvider>
           <LayoutShell>{children}</LayoutShell>

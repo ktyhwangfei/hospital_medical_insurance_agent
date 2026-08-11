@@ -587,6 +587,17 @@ describe('Skill governance workbench', () => {
     expect(screen.getByRole('tab', { name: '版本' })).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('truncates the source commit in version evidence', async () => {
+    const fullCommit = '86be7643ef53a97a5ee68538e95b56f23ea70e6a'
+    window.history.replaceState({}, '', '/skills?skill=settlement_explain_skill&tab=versions')
+    mockListInfraSkillVersions.mockResolvedValue([{ ...version, source_commit: fullCommit }])
+
+    const { container } = render(<SkillGovernanceWorkbench />)
+
+    expect(await screen.findByText(/86be7643ef53/)).toBeVisible()
+    expect(container).not.toHaveTextContent(fullCommit)
+  })
+
   it('keeps the catalog visible when the selected detail fails', async () => {
     mockGetInfraSkillDetail.mockRejectedValueOnce(new Error('SKILL_DETAIL_FAILED'))
 
