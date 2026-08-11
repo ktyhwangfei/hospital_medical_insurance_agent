@@ -319,6 +319,25 @@ describe('knowledge build page', () => {
     )
   })
 
+  it('shows extraction failure without misclassifying it as a semantic outage', async () => {
+    const user = userEvent.setup()
+    vi.mocked(createKnowledgeBuildTask).mockRejectedValue(new PolicyKnowledgeApiError(
+      '模型未返回可构建的政策事实',
+      503,
+      'KNOWLEDGE_EXTRACTION_FAILED',
+      { task_id: 'KB_FAILED', doc_id: 'DOC_001', unit_id: 'UNIT_001' },
+    ))
+
+    render(<KnowledgeBuildRoute />)
+    await openBuildablePreflight(user)
+    await user.click(screen.getByRole('button', { name: '创建构建任务' }))
+
+    const drawer = screen.getByRole('dialog', { name: '新建构建任务' })
+    expect(within(drawer).getByText('模型未返回可构建的政策事实')).toBeInTheDocument()
+    expect(within(drawer).queryByRole('link', { name: '前往语义层查看' })).not.toBeInTheDocument()
+    expect(within(drawer).getByRole('button', { name: '创建构建任务' })).toBeEnabled()
+  })
+
   it('disables creation and links to the semantic layer when the contract is unavailable', async () => {
     const user = userEvent.setup()
     vi.mocked(preflightKnowledgeBuild).mockRejectedValue(new PolicyKnowledgeApiError(

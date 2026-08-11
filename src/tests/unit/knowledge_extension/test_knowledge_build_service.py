@@ -26,9 +26,20 @@ from src.knowledge_extension.rule_explanation.knowledge_build_store import (
 )
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
     ApprovedUnit,
+    KnowledgeConfidence,
+    KnowledgeItem,
     KnowledgeWorkbenchDocument,
     WorkbenchDocumentList,
     WorkbenchDocumentSummary,
+)
+from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+    KnowledgeWorkbenchService,
+)
+from src.tests.unit.knowledge_extension.test_knowledge_workbench import (
+    FakePipelineStore,
+    _extraction,
+    _leaf_ids,
+    _rules,
 )
 
 
@@ -47,7 +58,26 @@ def _unit(
     order_no: int = 1,
     path: list[str] | None = None,
     status: str = "reviewed",
+    with_candidate: bool = False,
 ) -> ApprovedUnit:
+    knowledge = [
+        KnowledgeItem(
+            knowledge_id=f"kn-{unit_id}",
+            unit_id=unit_id,
+            extraction_id=f"ext-{unit_id}",
+            relationship_source="persisted",
+            business_sentence=source_text,
+            source_text=source_text,
+            fields=[],
+            confidence=KnowledgeConfidence(
+                completeness=1,
+                source_fidelity=1,
+                model_confidence=1,
+                overall=1,
+            ),
+            citations=[],
+        )
+    ] if with_candidate else []
     return ApprovedUnit(
         unit_id=unit_id,
         doc_id=doc_id,
@@ -56,8 +86,8 @@ def _unit(
         source_text=source_text,
         order_no=order_no,
         status=status,
-        knowledge_count=0,
-        knowledge=[],
+        knowledge_count=len(knowledge),
+        knowledge=knowledge,
     )
 
 
@@ -1116,6 +1146,138 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
     assert store.get_claim("doc-a", "unit-excluded") is None
 
 
+def test_create_task_extracts_zero_knowledge_unit_before_building_candidate() -> None:
+    unit_id = _leaf_ids()[0]
+    populated = KnowledgeWorkbenchService(
+        FakePipelineStore([_extraction(unit_id, _rules()[:1])])
+    ).get_document("doc_1").units[0]
+    empty = populated.model_copy(update={"knowledge_count": 0, "knowledge": []})
+    workbench = _Workbench([_document("doc_1", "Policy", [empty])])
+
+    class Extractor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, str, str]] = []
+
+        def extract_single(
+            self,
+            doc_id: str,
+            source_text: str,
+            unit_id: str = "",
+            reset_status: str = "draft",
+        ) -> dict[str, Any]:
+            self.calls.append((doc_id, source_text, unit_id, reset_status))
+            workbench.documents[doc_id] = _document(doc_id, "Policy", [populated])
+            return {
+                "success": True,
+                "doc_id": doc_id,
+                "unit_id": unit_id,
+                "extractions_created": 1,
+                "total_rules": 1,
+            }
+
+    extractor = Extractor()
+    store = InMemoryKnowledgeBuildStore()
+    change_sets = InMemoryChangeSetStore()
+    service = _build_service_module().KnowledgeBuildService(
+        workbench_service=workbench,
+        change_set_service=ChangeSetService(workbench, change_sets),
+        store=store,
+        orchestrator=extractor,
+        task_id_factory=lambda: "KB_ZERO_KNOWLEDGE",
+    )
+
+    result = service.create_task(
+        _request([_selection("doc_1", unit_id, empty.source_text)])
+    )
+
+    assert extractor.calls == [
+        ("doc_1", empty.source_text, unit_id, "reviewed")
+    ]
+    assert result.status == "WAITING_REVIEW"
+    assert result.units[0].status == "BUILT"
+    assert len(result.units[0].candidate_result_ids) == 1
+    candidate = change_sets.get(result.result_change_set_id or "")
+    assert candidate is not None
+    assert len(candidate.items) == 1
+
+
+def test_create_task_extraction_failure_is_typed_and_releases_claim() -> None:
+    unit_id = _leaf_ids()[0]
+    populated = KnowledgeWorkbenchService(
+        FakePipelineStore([_extraction(unit_id, _rules()[:1])])
+    ).get_document("doc_1").units[0]
+    empty = populated.model_copy(update={"knowledge_count": 0, "knowledge": []})
+    workbench = _Workbench([_document("doc_1", "Policy", [empty])])
+
+    class FailingExtractor:
+        def extract_single(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return {"success": False, "error": "model unavailable"}
+
+    store = InMemoryKnowledgeBuildStore()
+    change_sets = InMemoryChangeSetStore()
+    service = _build_service_module().KnowledgeBuildService(
+        workbench_service=workbench,
+        change_set_service=ChangeSetService(workbench, change_sets),
+        store=store,
+        orchestrator=FailingExtractor(),
+        task_id_factory=lambda: "KB_ZERO_FAILURE",
+    )
+
+    with pytest.raises(RuntimeError, match="model unavailable") as exc_info:
+        service.create_task(
+            _request([_selection("doc_1", unit_id, empty.source_text)])
+        )
+
+    assert exc_info.value.doc_id == "doc_1"  # type: ignore[attr-defined]
+    assert exc_info.value.unit_id == unit_id  # type: ignore[attr-defined]
+    assert exc_info.value.task_id == "KB_ZERO_FAILURE"  # type: ignore[attr-defined]
+    failed = store.get("KB_ZERO_FAILURE")
+    assert failed is not None
+    assert failed.status == "FAILED"
+    assert failed.units[0].status == "FAILED"
+    assert failed.units[0].error_code == "KnowledgeExtractionFailed"
+    assert failed.units[0].error_message == "model unavailable"
+    assert store.get_claim("doc_1", unit_id) is None
+    assert change_sets.list() == []
+
+
+def test_create_task_rejects_successful_extraction_without_candidate_rules() -> None:
+    unit_id = _leaf_ids()[0]
+    populated = KnowledgeWorkbenchService(
+        FakePipelineStore([_extraction(unit_id, _rules()[:1])])
+    ).get_document("doc_1").units[0]
+    empty = populated.model_copy(update={"knowledge_count": 0, "knowledge": []})
+    workbench = _Workbench([_document("doc_1", "Policy", [empty])])
+
+    class EmptyExtractor:
+        def extract_single(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return {"success": True, "total_rules": 0}
+
+    store = InMemoryKnowledgeBuildStore()
+    change_sets = InMemoryChangeSetStore()
+    service = _build_service_module().KnowledgeBuildService(
+        workbench_service=workbench,
+        change_set_service=ChangeSetService(workbench, change_sets),
+        store=store,
+        orchestrator=EmptyExtractor(),
+        task_id_factory=lambda: "KB_EMPTY_EXTRACTION",
+    )
+
+    with pytest.raises(RuntimeError, match="未生成候选规则") as exc_info:
+        service.create_task(
+            _request([_selection("doc_1", unit_id, empty.source_text)])
+        )
+
+    assert exc_info.value.doc_id == "doc_1"  # type: ignore[attr-defined]
+    assert exc_info.value.unit_id == unit_id  # type: ignore[attr-defined]
+    failed = store.get("KB_EMPTY_EXTRACTION")
+    assert failed is not None
+    assert failed.status == "FAILED"
+    assert failed.units[0].error_code == "KnowledgeExtractionFailed"
+    assert store.get_claim("doc_1", unit_id) is None
+    assert change_sets.list() == []
+
+
 def test_create_task_default_id_uses_utc_date_and_lowercase_uuid_prefix() -> None:
     source = _unit(
         doc_id="doc-1",
@@ -1331,6 +1493,7 @@ def test_create_task_final_save_failure_attempts_failed_cleanup() -> None:
         doc_title="Policy",
         unit_id="unit-1",
         source_text="source",
+        with_candidate=True,
     )
     failure = RuntimeError("final save failed")
     store = _RecordingStore(final_save_failure=failure)
@@ -1484,6 +1647,7 @@ def test_candidate_invalidation_failure_preserves_original_exception_with_note()
         doc_title="Policy",
         unit_id="unit-1",
         source_text="source",
+        with_candidate=True,
     )
     original = RuntimeError("final task save failed")
     invalidation = RuntimeError("candidate invalidation failed")
@@ -1554,6 +1718,7 @@ def test_candidate_save_commit_then_raise_recovers_and_invalidates_candidate() -
         doc_title="Policy",
         unit_id="unit-1",
         source_text="source",
+        with_candidate=True,
     )
     original = RuntimeError("candidate save response lost")
     candidate_store = _CommitThenRaiseChangeSetStore(original)
@@ -1587,6 +1752,7 @@ def test_final_task_save_commit_then_raise_preserves_review_state_and_claim() ->
         doc_title="Policy",
         unit_id="unit-1",
         source_text="source",
+        with_candidate=True,
     )
     original = RuntimeError("final task save response lost")
     store = _CommitThenRaiseFinalSaveStore(original)

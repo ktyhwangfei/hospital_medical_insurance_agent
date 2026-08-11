@@ -234,7 +234,9 @@ export function KnowledgeBuildWizard({ eligibleUnits, userId, onClose, onCreated
           targetHref: typeof error.auditEvent.target_href === 'string' ? error.auditEvent.target_href : null,
         })
       }
-      if (error instanceof PolicyKnowledgeApiError && error.status === 503) setSemanticUnavailable(true)
+      if (error instanceof PolicyKnowledgeApiError && error.errorCode === 'SEMANTIC_CONTRACT_UNAVAILABLE') {
+        setSemanticUnavailable(true)
+      }
     } finally {
       if (isCurrentRequest(requestGeneration)) {
         setBusy(false)

@@ -825,6 +825,53 @@ def test_create_build_task_maps_semantic_contract_unavailable_to_503(
     _assert_semantic_contract_unavailable(response)
 
 
+def test_create_build_task_maps_extraction_failure_to_typed_503(
+    monkeypatch,
+) -> None:
+    from src.knowledge_extension.rule_explanation.knowledge_build_service import (
+        KnowledgeExtractionFailed,
+    )
+    from src.runtime.api import policy_workbench_routes
+
+    failure = KnowledgeExtractionFailed(
+        doc_id="doc_1",
+        unit_id="unit_1",
+        message="model unavailable",
+    )
+    failure.task_id = "KB_FAILED_EXTRACTION"
+
+    class FailingBuildService:
+        def create_task(self, request):
+            raise failure
+
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_knowledge_build_service",
+        FailingBuildService(),
+    )
+    client = TestClient(create_app(), raise_server_exceptions=False)
+
+    response = client.post(
+        f"{PREFIX}/knowledge-build/tasks",
+        json=_build_request({
+            "doc_id": "doc_1",
+            "unit_id": "unit_1",
+            "unit_revision_id": "UR_1",
+        }),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "error_code": "KNOWLEDGE_EXTRACTION_FAILED",
+        "message": "model unavailable",
+        "audit_event": {
+            "task_id": "KB_FAILED_EXTRACTION",
+            "doc_id": "doc_1",
+            "unit_id": "unit_1",
+        },
+    }
+
+
 def test_knowledge_build_api_maps_input_blockers_to_422(monkeypatch) -> None:
     published = _document().model_copy(
         update={
@@ -1199,6 +1246,9 @@ def test_knowledge_build_wiring_uses_one_memory_store(monkeypatch) -> None:
     from src.knowledge_extension.rule_explanation.knowledge_build_store import (
         InMemoryKnowledgeBuildStore,
     )
+    from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+        PipelineOrchestrator,
+    )
     from src.runtime.api import policy_workbench_routes
 
     monkeypatch.setenv("USE_MEMORY_STORAGE", "1")
@@ -1216,6 +1266,7 @@ def test_knowledge_build_wiring_uses_one_memory_store(monkeypatch) -> None:
     assert policy_workbench_routes._get_knowledge_build_store() is store
     assert policy_workbench_routes._get_knowledge_build_service() is service
     assert service._store is store
+    assert isinstance(service._orchestrator, PipelineOrchestrator)
 
 
 @pytest.mark.parametrize(

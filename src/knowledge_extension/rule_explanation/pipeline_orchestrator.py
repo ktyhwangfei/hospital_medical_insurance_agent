@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -178,7 +177,13 @@ class PipelineOrchestrator:
             chunks.append("\n".join(cur))
         return chunks
 
-    def extract_single(self, doc_id: str, source_text: str, unit_id: str = "") -> dict[str, Any]:
+    def extract_single(
+        self,
+        doc_id: str,
+        source_text: str,
+        unit_id: str = "",
+        reset_status: str = "draft",
+    ) -> dict[str, Any]:
         """对单段文本提取政策事实并创建一条提取记录（用于无提取记录的单元）。"""
         doc = self._store.get_document(doc_id)
         if not doc:
@@ -186,17 +191,22 @@ class PipelineOrchestrator:
         try:
             facts = self._extract_policy_facts(source_text, document_title=doc.get("title", ""))
             if not facts:
-                # LLM 未提取出事实 → 创建一条占位记录（source_text 原样保留，状态 draft）
-                extraction_item = {
-                    "extraction_id": f"ext_{uuid.uuid4().hex[:12]}",
+                return {
+                    "success": False,
+                    "error": "LLM 未返回可构建的政策事实",
                     "doc_id": doc_id,
                     "unit_id": unit_id,
-                    "source_text": source_text,
-                    "extracted_fields": {"fact_text": source_text, "rules": [], "total_rules": 0},
-                    "confidence": 0.5,
                 }
-                self._store.batch_create_extractions([extraction_item])
-                return {"success": True, "doc_id": doc_id, "extractions_created": 1, "facts": 0}
+            total_rules = sum(
+                len(fact.get("rules", []) or []) for fact in facts
+            )
+            if total_rules == 0:
+                return {
+                    "success": False,
+                    "error": "LLM 未返回可构建的政策规则",
+                    "doc_id": doc_id,
+                    "unit_id": unit_id,
+                }
             extraction_items = []
             for fact in facts:
                 fact_rules = fact.get("rules", [])
@@ -215,7 +225,22 @@ class PipelineOrchestrator:
                     "confidence": round(avg_conf, 2),
                 })
             count = self._store.batch_create_extractions(extraction_items)
-            return {"success": True, "doc_id": doc_id, "extractions_created": count, "facts": len(facts)}
+            if reset_status != "draft":
+                for item in extraction_items:
+                    self._store.update_extraction(
+                        item["extraction_id"], {"status": reset_status}
+                    )
+            return {
+                "success": True,
+                "doc_id": doc_id,
+                "unit_id": unit_id,
+                "extractions_created": count,
+                "extraction_ids": [
+                    item["extraction_id"] for item in extraction_items
+                ],
+                "facts": len(facts),
+                "total_rules": total_rules,
+            }
         except Exception as e:
             logger.error("单条提取失败 doc_id=%s: %s", doc_id, e)
             return {"success": False, "error": str(e), "doc_id": doc_id}

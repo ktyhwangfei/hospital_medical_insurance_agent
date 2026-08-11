@@ -8,7 +8,15 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+        PipelineOrchestrator,
+    )
+    from src.knowledge_extension.rule_explanation.policy_compiler.service import (
+        PolicyCompilationService,
+    )
 
 from src.knowledge_extension.rule_explanation.change_set_models import (
     ChangeSetItem,
@@ -167,6 +175,8 @@ class ChangeSetService:
         # 以入参选择为唯一聚合边界，不回查或补全整篇文档。
         selected_units = [selection.unit for selection in units]
         items, quality_report, risk_counts = _aggregate_units(selected_units)
+        if not items:
+            raise ValueError("构建结果未生成候选知识")
         items, blockers, compilation_blocked = self._compile_items(selected_units, items)
         source_units = [selection.source_revision for selection in units]
         source_doc_ids = {source.doc_id for source in source_units}

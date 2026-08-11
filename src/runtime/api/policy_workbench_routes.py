@@ -28,6 +28,7 @@ from src.knowledge_extension.rule_explanation.knowledge_build_models import (
 )
 from src.knowledge_extension.rule_explanation.knowledge_build_service import (
     KnowledgeBuildPreflightBlocked,
+    KnowledgeExtractionFailed,
     KnowledgeBuildService,
 )
 from src.knowledge_extension.rule_explanation.knowledge_build_store import (
@@ -53,6 +54,9 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_service import
     SemanticContractUnavailable,
 )
 from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
+from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+    PipelineOrchestrator,
+)
 from src.knowledge_extension.rule_explanation.policy_compiler.models import (
     RuleCompilationTraceResponse,
 )
@@ -140,6 +144,7 @@ def _get_knowledge_build_service() -> KnowledgeBuildService:
             _get_service(),
             _get_change_set_service(),
             _get_knowledge_build_store(),
+            orchestrator=PipelineOrchestrator(PipelineStore()),
         )
     return _knowledge_build_service
 
@@ -494,6 +499,19 @@ def create_knowledge_build_task(
         raise HTTPException(
             status_code=503,
             detail=error_detail("SEMANTIC_CONTRACT_UNAVAILABLE", str(exc), {}),
+        ) from exc
+    except KnowledgeExtractionFailed as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "KNOWLEDGE_EXTRACTION_FAILED",
+                str(exc),
+                {
+                    "task_id": exc.task_id,
+                    "doc_id": exc.doc_id,
+                    "unit_id": exc.unit_id,
+                },
+            ),
         ) from exc
     except KnowledgeBuildPreflightBlocked as exc:
         _raise_build_preflight_error(exc.result)

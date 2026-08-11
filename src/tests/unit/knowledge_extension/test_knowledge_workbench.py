@@ -260,7 +260,7 @@ def test_pipeline_store_keeps_persisted_unit_id_in_read_model() -> None:
     assert result["unit_id"] == "unit_1"
 
 
-def test_extract_single_persists_explicit_unit_id() -> None:
+def test_extract_single_fails_closed_when_model_returns_no_facts() -> None:
     from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
         PipelineOrchestrator,
     )
@@ -282,8 +282,86 @@ def test_extract_single_persists_explicit_unit_id() -> None:
 
     result = orchestrator.extract_single("doc_1", "政策单元原文", unit_id="unit_1")
 
+    assert result == {
+        "success": False,
+        "error": "LLM 未返回可构建的政策事实",
+        "doc_id": "doc_1",
+        "unit_id": "unit_1",
+    }
+    assert store.created == []
+
+
+def test_extract_single_fails_closed_when_facts_have_no_rules() -> None:
+    from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+        PipelineOrchestrator,
+    )
+
+    class RecordingStore:
+        def __init__(self) -> None:
+            self.created: list[dict[str, Any]] = []
+
+        def get_document(self, doc_id: str) -> dict[str, str]:
+            return {"doc_id": doc_id, "title": "职工医保待遇政策"}
+
+        def batch_create_extractions(self, items: list[dict[str, Any]]) -> int:
+            self.created.extend(items)
+            return len(items)
+
+    store = RecordingStore()
+    orchestrator = PipelineOrchestrator(store)  # type: ignore[arg-type]
+    orchestrator._extract_policy_facts = lambda *_args, **_kwargs: [  # type: ignore[method-assign]
+        {"fact_text": "政策单元原文", "rules": []}
+    ]
+
+    result = orchestrator.extract_single("doc_1", "政策单元原文", unit_id="unit_1")
+
+    assert result["success"] is False
+    assert result["error"] == "LLM 未返回可构建的政策规则"
+    assert store.created == []
+
+
+def test_extract_single_can_keep_build_candidates_visible_for_change_set_review() -> None:
+    from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+        PipelineOrchestrator,
+    )
+
+    class RecordingStore:
+        def __init__(self) -> None:
+            self.created: list[dict[str, Any]] = []
+            self.updated: list[tuple[str, dict[str, Any]]] = []
+
+        def get_document(self, doc_id: str) -> dict[str, str]:
+            return {"doc_id": doc_id, "title": "职工医保待遇政策"}
+
+        def batch_create_extractions(self, items: list[dict[str, Any]]) -> int:
+            self.created.extend(items)
+            return len(items)
+
+        def update_extraction(
+            self, extraction_id: str, data: dict[str, Any]
+        ) -> dict[str, Any]:
+            self.updated.append((extraction_id, data))
+            return {"extraction_id": extraction_id, **data}
+
+    store = RecordingStore()
+    orchestrator = PipelineOrchestrator(store)  # type: ignore[arg-type]
+    orchestrator._extract_policy_facts = lambda *_args, **_kwargs: [  # type: ignore[method-assign]
+        {"fact_text": "政策单元原文", "rules": _rules()[:1]}
+    ]
+
+    result = orchestrator.extract_single(
+        "doc_1",
+        "政策单元原文",
+        unit_id="unit_1",
+        reset_status="reviewed",
+    )
+
     assert result["success"] is True
+    assert result["total_rules"] == 1
     assert store.created[0]["unit_id"] == "unit_1"
+    assert store.updated == [
+        (store.created[0]["extraction_id"], {"status": "reviewed"})
+    ]
 
 
 def test_extract_leaf_request_requires_unit_id() -> None:

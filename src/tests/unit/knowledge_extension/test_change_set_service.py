@@ -517,6 +517,38 @@ def test_build_for_units_rejects_empty_selection() -> None:
         )
 
 
+def test_build_for_units_rejects_selected_units_without_candidate_knowledge() -> None:
+    first = _leaf_ids()[0]
+    workbench = KnowledgeWorkbenchService(
+        FakePipelineStore([_extraction(first, _rules()[:1])])
+    )
+    unit = workbench.get_document("doc_1").units[0].model_copy(
+        update={"knowledge_count": 0, "knowledge": []}
+    )
+    selected = change_set_service.SelectedKnowledgeUnit(
+        unit=unit,
+        source_revision=change_set_models.SourceUnitRevision(
+            doc_id=unit.doc_id,
+            doc_title=unit.doc_title,
+            unit_id=unit.unit_id,
+            unit_revision_id="UR_EMPTY_KNOWLEDGE",
+            path=unit.path,
+        ),
+    )
+    store = InMemoryChangeSetStore()
+    service = ChangeSetService(workbench, store)
+
+    with pytest.raises(ValueError, match="构建结果未生成候选知识"):
+        service.build_for_units(
+            task_id="KB_EMPTY_KNOWLEDGE",
+            task_name="零候选任务",
+            units=[selected],
+            semantic_contract_version="v1.0",
+        )
+
+    assert store.list() == []
+
+
 def test_legacy_change_set_json_without_candidate_context_still_validates() -> None:
     legacy = change_set_models.KnowledgeChangeSet.model_validate({
         "change_set_id": "CS_legacy",

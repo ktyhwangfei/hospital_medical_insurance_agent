@@ -36,6 +36,9 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_models import 
 from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
     KnowledgeWorkbenchService,
 )
+from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+    PipelineOrchestrator,
+)
 
 _PIPELINE_VERSION = "policy-workbench-v1"
 _MODEL_SCENE = "policy_structuring"
@@ -50,6 +53,16 @@ class KnowledgeBuildPreflightBlocked(ValueError):
     def __init__(self, result: KnowledgeBuildPreflight) -> None:
         self.result = result
         super().__init__("知识构建任务预检未通过")
+
+
+class KnowledgeExtractionFailed(RuntimeError):
+    """所选单元未能生成可供构建的提取结果。"""
+
+    def __init__(self, *, doc_id: str, unit_id: str, message: str) -> None:
+        self.doc_id = doc_id
+        self.unit_id = unit_id
+        self.task_id: str | None = None
+        super().__init__(message)
 
 
 def unit_revision_id_for(*, doc_id: str, unit_id: str, source_text: str) -> str:
@@ -86,12 +99,14 @@ class KnowledgeBuildService:
         change_set_service: "ChangeSetService",
         store: KnowledgeBuildStore,
         *,
+        orchestrator: PipelineOrchestrator | None = None,
         clock: Callable[[], datetime] = utc_now,
         task_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._workbench = workbench_service
         self._change_set_service = change_set_service
         self._store = store
+        self._orchestrator = orchestrator
         self._clock = clock
         self._task_id_factory = task_id_factory
 
@@ -252,6 +267,8 @@ class KnowledgeBuildService:
                 )
             )
         except Exception as error:
+            if isinstance(error, KnowledgeExtractionFailed):
+                error.task_id = created.task_id
             if result_change_set_id is None:
                 try:
                     persisted = self._change_set_service.get_change_set(
@@ -471,6 +488,37 @@ class KnowledgeBuildService:
             by_key.update(
                 {(unit.doc_id, unit.unit_id): unit for unit in document.units}
             )
+        extracted = False
+        if self._orchestrator is not None:
+            for selected in resolved:
+                unit = by_key.get((selected.unit.doc_id, selected.unit.unit_id))
+                if unit is not None and unit.knowledge:
+                    continue
+                result = self._orchestrator.extract_single(
+                    selected.unit.doc_id,
+                    selected.unit.source_text,
+                    unit_id=selected.unit.unit_id,
+                    reset_status="reviewed",
+                )
+                if not result.get("success"):
+                    raise KnowledgeExtractionFailed(
+                        doc_id=selected.unit.doc_id,
+                        unit_id=selected.unit.unit_id,
+                        message=(
+                            result.get("error") or "知识构建未生成提取结果"
+                        ),
+                    )
+                extracted = True
+
+        if extracted:
+            by_key.clear()
+            for doc_id in {unit.unit.doc_id for unit in resolved}:
+                document = self._workbench.get_document(
+                    doc_id, include_knowledge=True
+                )
+                by_key.update(
+                    {(unit.doc_id, unit.unit_id): unit for unit in document.units}
+                )
         refreshed: list[SelectedKnowledgeUnit] = []
         for selected in resolved:
             unit = by_key.get((selected.unit.doc_id, selected.unit.unit_id))
@@ -480,6 +528,12 @@ class KnowledgeBuildService:
                     SelectedKnowledgeUnit(
                         unit=unit, source_revision=selected.source_revision
                     )
+                )
+            elif self._orchestrator is not None:
+                raise KnowledgeExtractionFailed(
+                    doc_id=selected.unit.doc_id,
+                    unit_id=selected.unit.unit_id,
+                    message="知识提取未生成候选规则",
                 )
             else:
                 # 回退：重新加载后仍无 knowledge（如测试替身）时保持原单元，
