@@ -192,6 +192,30 @@ def test_trace_write_failure_finishes_started_run_before_raising() -> None:
     assert traces.get_run(traces.last_run_id).status == "FAIL"
 
 
+def test_trace_failure_during_compiler_exception_does_not_mask_original() -> None:
+    first = _leaf_ids()[0]
+    extraction = _extraction(first, _rules()[:1])
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda _extraction_id: extraction
+
+    class RaisingCompiler:
+        compiler_version = "test"
+
+        def compile(self, _facts, *, run_id):
+            raise RuntimeError("compiler exploded")
+
+    class UnavailableTraceStore(InMemoryCompilationTraceStore):
+        def save_candidate_lineage(self, **kwargs):
+            raise RuntimeError("trace unavailable")
+
+    with pytest.raises(RuntimeError, match="compiler exploded"):
+        PolicyCompilationService(
+            pipeline, RaisingCompiler(), UnavailableTraceStore()
+        ).compile_units(
+            KnowledgeWorkbenchService(pipeline).get_document("doc_1").units
+        )
+
+
 def test_build_change_set_is_idempotent_upsert() -> None:
     first = _leaf_ids()[0]
     store = InMemoryChangeSetStore()

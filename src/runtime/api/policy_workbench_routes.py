@@ -1404,13 +1404,18 @@ def _validate_governed_release_source_before_promote(
     )
     if change_set is None:
         raise ValueError(f"来源知识变更集不存在: {release.source_change_set_id}")
-    expected_rule_ids: list[str] = []
+    # 发布门禁必须精确匹配本变更集的规则与编译运行，旧运行不能顶替。
+    expected_rule_runs: list[tuple[str, str]] = []
     for item in change_set.items:
-        if item.canonical_rule is None or item.compilation_status not in {"PASS", "WARN"}:
+        if (
+            item.canonical_rule is None
+            or item.compile_run_id is None
+            or item.compilation_status not in {"PASS", "WARN"}
+        ):
             raise ValueError(f"变更项 {item.item_id} 缺少可发布规范规则")
-        expected_rule_ids.append(item.canonical_rule.rule_id)
+        expected_rule_runs.append((item.canonical_rule.rule_id, item.compile_run_id))
     if require_lineage and not _get_compilation_trace_store().has_release_lineage(
-        release.release_id, expected_rule_ids
+        release.release_id, expected_rule_runs
     ):
         raise ValueError(f"release {release.release_id} 编译血缘不完整")
 

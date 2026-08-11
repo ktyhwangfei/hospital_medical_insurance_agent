@@ -891,7 +891,9 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
                           itemId: item.item_id,
                           extractedFields: extractCandidateFieldCodes(item.after),
                         })}
-                        onViewTrace={() => setTraceRuleId(item.rule_id)}
+                        onViewTrace={() => setTraceRuleId(
+                          item.canonical_rule?.rule_id ?? item.rule_id
+                        )}
                       />
                     ))}
                   </>

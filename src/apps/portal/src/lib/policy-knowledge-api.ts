@@ -432,6 +432,7 @@ export interface ChangeSetItem {
   risk_level: RiskLevel
   impact_scope: Record<string, unknown>
   needs_human: boolean
+  canonical_rule?: { rule_id: string } | null
 }
 
 export interface SourceUnitRevision {

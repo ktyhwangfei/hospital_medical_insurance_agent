@@ -1381,6 +1381,59 @@ def test_candidate_without_canonical_rule_is_queryable_via_api(
     assert payload["publication"] is None
 
 
+def test_compiler_exception_keeps_every_started_knowledge_trace_queryable(
+    monkeypatch,
+) -> None:
+    from src.knowledge_extension.rule_explanation.policy_compiler.service import (
+        PolicyCompilationService,
+    )
+    from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+        InMemoryCompilationTraceStore,
+    )
+    from src.runtime.api import policy_workbench_routes
+
+    document = _document()
+    first = document.units[0].knowledge[0]
+    second = first.model_copy(update={"knowledge_id": "kn_2"})
+    unit = document.units[0].model_copy(update={
+        "knowledge_count": 2,
+        "knowledge": [first, second],
+    })
+    extraction = {
+        "doc_id": "doc_1",
+        "source_text": "政策原文",
+        "extracted_fields": {"rules": []},
+    }
+
+    class Pipeline:
+        def get_extraction(self, _extraction_id):
+            return extraction
+
+    class RaisingCompiler:
+        compiler_version = "test"
+
+        def compile(self, _facts, *, run_id):
+            raise RuntimeError("compiler exploded")
+
+    traces = InMemoryCompilationTraceStore()
+    with pytest.raises(RuntimeError, match="compiler exploded"):
+        PolicyCompilationService(Pipeline(), RaisingCompiler(), traces).compile_units([unit])
+    monkeypatch.setattr(
+        policy_workbench_routes, "_get_compilation_trace_store", lambda: traces
+    )
+    client = TestClient(create_app())
+
+    for knowledge_id in ("kn_1", "kn_2"):
+        response = client.get(f"{PREFIX}/rules/{knowledge_id}/trace")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["rule"] is None
+        assert payload["run"]["status"] == "FAIL"
+        assert payload["run"]["error"]["message"] == "compiler exploded"
+        assert payload["issues"][0]["code"] == "COMPILATION_EXCEPTION"
+        assert payload["steps"][-1]["error"]["message"] == "compiler exploded"
+
+
 def test_rule_trace_backfill_uses_legacy_import_once_when_extraction_is_missing() -> None:
     from src.knowledge_extension.rule_explanation.policy_compiler.backfill import (
         backfill_rules,

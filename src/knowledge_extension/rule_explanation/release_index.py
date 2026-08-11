@@ -161,14 +161,20 @@ class ReleaseIndexBuilder:
         publications = publications or []
         if publications and self._traces is None:
             raise RuntimeError("候选版本缺少编译轨迹存储")
-        for run_id, extraction_id, document_id, rule in publications:
+        # 同一编译运行只记录一个确定性的发布步骤，逐规则血缘可安全续写。
+        publications_by_run: dict[str, list[PublicationRecord]] = {}
+        for publication in publications:
+            publications_by_run.setdefault(publication[0], []).append(publication)
+        for run_id in sorted(publications_by_run):
+            run_publications = publications_by_run[run_id]
+            rule_ids = sorted({record[3].rule_id for record in run_publications})
             self._traces.append_step(run_id, CompileStep(
                 step_id=f"{run_id}_publish_{release_id}",
                 run_id=run_id,
                 sequence_no=8,
                 stage="PUBLISH",
                 status="PASS",
-                input_payload={"release_id": release_id, "rule_id": rule.rule_id},
+                input_payload={"release_id": release_id, "rule_ids": rule_ids},
                 output_payload={
                     "facts_collection": release.facts_collection,
                     "rules_collection": release.rules_collection,
@@ -176,13 +182,16 @@ class ReleaseIndexBuilder:
                 started_at=release.created_at,
                 finished_at=release.created_at,
             ))
-            self._traces.save_lineage(
-                rule=rule,
-                run_id=run_id,
-                extraction_id=extraction_id,
-                document_id=document_id,
-                release_id=release_id,
-            )
+            for _, extraction_id, document_id, rule in sorted(
+                run_publications, key=lambda record: record[3].rule_id
+            ):
+                self._traces.save_lineage(
+                    rule=rule,
+                    run_id=run_id,
+                    extraction_id=extraction_id,
+                    document_id=document_id,
+                    release_id=release_id,
+                )
         return self._store.save_release(release.model_copy(update={"status": "ready"}))
 
 

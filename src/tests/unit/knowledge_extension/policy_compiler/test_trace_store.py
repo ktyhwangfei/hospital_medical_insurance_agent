@@ -80,8 +80,6 @@ class FakePostgreSQLClient:
             self.runs[row["run_id"]] = row
             return []
         if normalized.startswith("insert into policy_compile_steps"):
-            if any(item["step_id"] == params[0] for item in self.steps):
-                raise ValueError("duplicate step")
             keys = (
                 "step_id", "run_id", "sequence_no", "stage", "status",
                 "input_payload", "output_payload", "issues", "error", "duration_ms",
@@ -91,8 +89,19 @@ class FakePostgreSQLClient:
             for name in ("input_payload", "output_payload", "issues", "error"):
                 if isinstance(row[name], str):
                     row[name] = json.loads(row[name])
+            if any(
+                item["step_id"] == row["step_id"]
+                or (
+                    item["run_id"] == row["run_id"]
+                    and item["sequence_no"] == row["sequence_no"]
+                )
+                for item in self.steps
+            ):
+                if "on conflict do nothing" in normalized:
+                    return []
+                raise ValueError("duplicate step")
             self.steps.append(row)
-            return []
+            return [dict(row)] if "returning" in normalized else []
         if normalized.startswith("update policy_compile_runs"):
             status, metrics, error, finished_at, run_id = params
             row = self.runs.get(run_id)
@@ -125,15 +134,15 @@ class FakePostgreSQLClient:
             if existing is not None and "do nothing" in normalized:
                 return []
             if existing is not None and "do update" in normalized:
-                if existing["release_id"] not in {None, row["release_id"]}:
+                if (
+                    existing["release_id"] not in {None, row["release_id"]}
+                    or existing["extraction_id"] != row["extraction_id"]
+                    or existing["doc_id"] != row["doc_id"]
+                    or existing["rule_version"] != row["rule_version"]
+                    or existing["canonical_rule"] != row["canonical_rule"]
+                ):
                     return []
-                existing.update({
-                    name: row[name]
-                    for name in (
-                        "extraction_id", "doc_id", "rule_version", "canonical_rule",
-                        "release_id", "created_at",
-                    )
-                })
+                existing["release_id"] = row["release_id"]
                 return [dict(existing)]
             self.lineages.append(row)
             return [dict(row)] if "returning" in normalized else []
@@ -173,14 +182,26 @@ class FakePostgreSQLClient:
         if "from policy_rule_lineage where rule_id" in normalized:
             return sorted(
                 [dict(item) for item in self.lineages if item["rule_id"] == params[0]],
-                key=lambda item: item["rule_version"],
+                key=lambda item: (
+                    item["canonical_rule"] is not None,
+                    item["rule_version"] if item["rule_version"] is not None else -1,
+                    item["created_at"],
+                ),
                 reverse=True,
             )
-        if "select rule_id from policy_rule_lineage where release_id" in normalized:
+        if (
+            "select rule_id, compile_run_id from policy_rule_lineage where release_id"
+            in normalized
+        ):
             return [
-                {"rule_id": item["rule_id"]}
+                {
+                    "rule_id": item["rule_id"],
+                    "compile_run_id": item["compile_run_id"],
+                }
                 for item in self.lineages
                 if item["release_id"] == params[0]
+                and item["compile_run_id"] is not None
+                and item["canonical_rule"] is not None
             ]
         return []
 
@@ -269,8 +290,22 @@ def test_release_lineage_requires_every_rule(store) -> None:
         release_id="release_1",
     )
 
-    assert store.has_release_lineage("release_1", ["rule_x"])
-    assert not store.has_release_lineage("release_1", ["rule_x", "rule_missing"])
+    assert store.has_release_lineage("release_1", [("rule_x", "run_1")])
+    assert not store.has_release_lineage("release_1", [("rule_x", "run_other")])
+    assert not store.has_release_lineage(
+        "release_1", [("rule_x", "run_1"), ("rule_missing", "run_2")]
+    )
+
+    store.create_run(run("run_extra"))
+    store.finish_run("run_extra", status="PASS", metrics={})
+    store.save_lineage(
+        rule=rule(1).model_copy(update={"rule_id": "rule_extra"}),
+        run_id="run_extra",
+        extraction_id="ext_extra",
+        document_id="doc_x",
+        release_id="release_1",
+    )
+    assert not store.has_release_lineage("release_1", [("rule_x", "run_1")])
 
 
 def test_candidate_lineage_is_queryable_and_publication_fills_same_history(store) -> None:
@@ -300,6 +335,7 @@ def test_candidate_lineage_is_queryable_and_publication_fills_same_history(store
         document_id="doc_x",
         release_id="release_1",
     )
+    first_publication = store.get_rule_trace("rule_x").publication
     store.save_lineage(
         rule=rule(1),
         run_id="run_1",
@@ -312,8 +348,9 @@ def test_candidate_lineage_is_queryable_and_publication_fills_same_history(store
     assert published is not None
     assert published.publication is not None
     assert published.publication.release_id == "release_1"
+    assert published.publication == first_publication
     assert len(published.history) == 1
-    assert store.has_release_lineage("release_1", ["rule_x"])
+    assert store.has_release_lineage("release_1", [("rule_x", "run_1")])
 
 
 def test_candidate_without_canonical_rule_keeps_failed_run_and_issues_queryable(store) -> None:
@@ -428,6 +465,10 @@ def test_postgres_candidate_write_uses_unique_conflict_safe_sql() -> None:
     assert "on conflict (rule_id, compile_run_id) do nothing" in candidate_insert
     assert "on conflict (rule_id, compile_run_id) do update" in publication_upsert
     assert "policy_rule_lineage.release_id is null" in publication_upsert
+    assert "policy_rule_lineage.extraction_id=excluded.extraction_id" in publication_upsert
+    assert "policy_rule_lineage.doc_id=excluded.doc_id" in publication_upsert
+    assert "canonical_rule is not distinct from excluded.canonical_rule" in publication_upsert
+    assert "created_at=excluded.created_at" not in publication_upsert
     assert "unique index" in LINEAGE_MIGRATION.lower()
     assert "unique index" in _SCHEMA.lower()
 
@@ -459,8 +500,8 @@ def test_compile_run_cannot_be_reassociated_to_another_release(store) -> None:
             release_id="release_2",
         )
 
-    assert store.has_release_lineage("release_1", ["rule_x"])
-    assert not store.has_release_lineage("release_2", ["rule_x"])
+    assert store.has_release_lineage("release_1", [("rule_x", "run_1")])
+    assert not store.has_release_lineage("release_2", [("rule_x", "run_1")])
 
 
 def test_pipeline_schema_adds_lineage_columns_before_unique_index() -> None:
@@ -488,3 +529,128 @@ def test_pipeline_schema_adds_lineage_columns_before_unique_index() -> None:
     pipeline._ensure_schema()
 
     assert client.unique_index_created
+
+
+def test_history_prefers_canonical_version_and_leaves_null_candidate_last(store) -> None:
+    for run_id, candidate_rule in (
+        ("run_v2", rule(2)),
+        ("run_v1", rule(1)),
+        ("run_null", None),
+    ):
+        store.create_run(run(run_id))
+        store.finish_run(run_id, status="PASS", metrics={})
+        store.save_candidate_lineage(
+            rule_id="rule_x",
+            rule=candidate_rule,
+            run_id=run_id,
+            extraction_id=f"ext_{run_id}",
+            document_id="doc_x",
+        )
+
+    store.save_lineage(
+        rule=rule(1),
+        run_id="run_v1",
+        extraction_id="ext_run_v1",
+        document_id="doc_x",
+        release_id="release_old",
+    )
+    trace = store.get_rule_trace("rule_x")
+
+    assert trace is not None
+    assert trace.rule == rule(2)
+    assert [item.rule_version for item in trace.history] == [2, 1, None]
+    assert trace.publication is None
+
+    if isinstance(store, PostgresCompilationTraceStore):
+        history_sql = next(
+            sql for sql in store._client.executed_sql
+            if "from policy_rule_lineage where rule_id" in sql
+        )
+        assert "(canonical_rule is null) asc" in history_sql
+        assert "rule_version desc nulls last" in history_sql
+        assert "created_at desc" in history_sql
+
+
+@pytest.mark.parametrize(
+    ("published_rule", "extraction_id", "document_id"),
+    [
+        (rule(1).model_copy(update={"result": {"ratio": Decimal("0.2")}}), "ext_1", "doc_x"),
+        (rule(2), "ext_1", "doc_x"),
+        (rule(1), "ext_changed", "doc_x"),
+        (rule(1), "ext_1", "doc_changed"),
+    ],
+)
+def test_candidate_snapshot_must_match_before_publication(
+    store, published_rule, extraction_id, document_id
+) -> None:
+    store.create_run(run("run_1"))
+    store.finish_run("run_1", status="PASS", metrics={})
+    store.save_candidate_lineage(
+        rule_id="rule_x",
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+    )
+
+    with pytest.raises(ValueError, match="快照冲突"):
+        store.save_lineage(
+            rule=published_rule,
+            run_id="run_1",
+            extraction_id=extraction_id,
+            document_id=document_id,
+            release_id="release_1",
+        )
+
+    trace = store.get_rule_trace("rule_x")
+    assert trace is not None
+    assert trace.rule == rule(1)
+    assert trace.publication is None
+
+
+def test_same_release_retry_rejects_changed_snapshot(store) -> None:
+    store.create_run(run("run_1"))
+    store.finish_run("run_1", status="PASS", metrics={})
+    store.save_candidate_lineage(
+        rule_id="rule_x",
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+    )
+    store.save_lineage(
+        rule=rule(1),
+        run_id="run_1",
+        extraction_id="ext_1",
+        document_id="doc_x",
+        release_id="release_1",
+    )
+    before = store.get_rule_trace("rule_x")
+
+    with pytest.raises(ValueError, match="快照冲突"):
+        store.save_lineage(
+            rule=rule(2),
+            run_id="run_1",
+            extraction_id="ext_1",
+            document_id="doc_x",
+            release_id="release_1",
+        )
+
+    assert store.get_rule_trace("rule_x") == before
+
+
+def test_postgres_step_insert_is_conflict_safe() -> None:
+    postgres = PostgresCompilationTraceStore("postgresql://test")
+    fake = FakePostgreSQLClient()
+    postgres._client = fake
+    postgres.create_run(run("run_1"))
+    publish = step("run_1", 8, "PUBLISH")
+
+    postgres.append_step("run_1", publish)
+
+    insert_sql = next(
+        sql for sql in fake.executed_sql
+        if sql.startswith("insert into policy_compile_steps")
+    )
+    assert "on conflict do nothing" in insert_sql
+    assert "returning" in insert_sql

@@ -284,16 +284,55 @@ class PolicyCompilationService:
         return "PASS"
 
     def _finish_failed_runs(self, runs: dict[str, CompileRun], exc: Exception) -> None:
-        for run in runs.values():
-            current = self._traces.get_run(run.run_id)
+        # 编译器异常不能留下 RUNNING 孤儿；轨迹写入失败也不能遮蔽原始异常。
+        error = {"type": type(exc).__name__, "message": str(exc)}
+        for knowledge_id, run in runs.items():
+            try:
+                current = self._traces.get_run(run.run_id)
+            except Exception:
+                continue
             if current is None or current.status != "RUNNING":
                 continue
+            issue = ValidationIssue(
+                issue_id=f"{run.run_id}_exception",
+                severity="FAIL",
+                code="COMPILATION_EXCEPTION",
+                stage="VALIDATE",
+                fact_id=knowledge_id,
+                message=str(exc),
+                recommended_action="修复编译异常后重新生成变更集",
+            )
+            now = datetime.now(timezone.utc)
+            try:
+                self._traces.append_step(run.run_id, CompileStep(
+                    step_id=f"{run.run_id}_3",
+                    run_id=run.run_id,
+                    sequence_no=3,
+                    stage="VALIDATE",
+                    status="FAIL",
+                    issues=[issue],
+                    error=error,
+                    started_at=now,
+                    finished_at=now,
+                ))
+            except Exception:
+                pass
             try:
                 self._traces.finish_run(
                     run.run_id,
                     status="FAIL",
-                    metrics={},
-                    error={"type": type(exc).__name__, "message": str(exc)},
+                    metrics={"rules": 0, "issues": 1},
+                    error=error,
+                )
+            except Exception:
+                pass
+            try:
+                self._traces.save_candidate_lineage(
+                    rule_id=knowledge_id,
+                    rule=None,
+                    run_id=run.run_id,
+                    extraction_id=run.extraction_id,
+                    document_id=run.document_id,
                 )
             except Exception:
                 pass

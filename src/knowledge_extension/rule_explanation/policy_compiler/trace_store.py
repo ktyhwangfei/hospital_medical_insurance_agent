@@ -49,7 +49,9 @@ class CompilationTraceStore(Protocol):
         release_id: str,
     ) -> None: ...
     def get_rule_trace(self, rule_id: str) -> RuleCompilationTraceResponse | None: ...
-    def has_release_lineage(self, release_id: str, rule_ids: list[str]) -> bool: ...
+    def has_release_lineage(
+        self, release_id: str, rule_runs: list[tuple[str, str]]
+    ) -> bool: ...
 
 
 class InMemoryCompilationTraceStore:
@@ -128,11 +130,13 @@ class InMemoryCompilationTraceStore:
                     f"编译运行 {run_id} 已关联其他发布: "
                     f"{candidate['release_id']}"
                 )
-            candidate.update({
-                "rule": rule.model_copy(deep=True),
-                "release_id": release_id,
-                "created_at": datetime.now(timezone.utc),
-            })
+            if (
+                candidate["rule"] != rule
+                or candidate["extraction_id"] != extraction_id
+                or candidate["document_id"] != document_id
+            ):
+                raise ValueError(f"编译运行 {run_id} 血缘快照冲突")
+            candidate["release_id"] = release_id
             return
         self._lineages.append({
             "rule_id": rule.rule_id,
@@ -173,7 +177,11 @@ class InMemoryCompilationTraceStore:
     def get_rule_trace(self, rule_id: str) -> RuleCompilationTraceResponse | None:
         lineages = sorted(
             (item for item in self._lineages if item["rule_id"] == rule_id),
-            key=lambda item: item["created_at"],
+            key=lambda item: (
+                item["rule"] is not None,
+                item["rule"].rule_version if item["rule"] else -1,
+                item["created_at"],
+            ),
             reverse=True,
         )
         if not lineages:
@@ -183,12 +191,14 @@ class InMemoryCompilationTraceStore:
         steps = sorted(self._steps.get(run.run_id, []), key=lambda item: item.sequence_no)
         return self._trace(current, run, steps, lineages)
 
-    def has_release_lineage(self, release_id: str, rule_ids: list[str]) -> bool:
+    def has_release_lineage(
+        self, release_id: str, rule_runs: list[tuple[str, str]]
+    ) -> bool:
         traced = {
-            item["rule_id"] for item in self._lineages
+            (item["rule_id"], item["run_id"]) for item in self._lineages
             if item["release_id"] == release_id and item["rule"] is not None
         }
-        return set(rule_ids).issubset(traced)
+        return set(rule_runs) == traced
 
     def _trace(
         self,
@@ -308,19 +318,13 @@ class PostgresCompilationTraceStore:
     def append_step(self, run_id: str, step: CompileStep) -> CompileStep:
         if self.get_run(run_id) is None or step.run_id != run_id:
             raise ValueError(f"编译运行不存在或步骤不匹配: {run_id}")
-        existing = next((
-            item for item in self._get_steps(run_id)
-            if item.step_id == step.step_id or item.sequence_no == step.sequence_no
-        ), None)
-        if existing is not None and existing.stage == "PUBLISH" and existing == step:
-            return existing
-        if existing is not None:
-            raise ValueError(f"编译步骤已存在: {step.step_id}")
-        self._get_client().execute(
+        # 先依赖唯一约束竞争写入，再重读判定是否为完全相同的发布重试。
+        rows = self._get_client().execute(
             """INSERT INTO policy_compile_steps
                (step_id, run_id, sequence_no, stage, status, input_payload,
                 output_payload, issues, error, duration_ms, started_at, finished_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT DO NOTHING RETURNING *""",
             (
                 step.step_id, run_id, step.sequence_no, step.stage, step.status,
                 self._json(step.input_payload), self._json(step.output_payload),
@@ -328,7 +332,15 @@ class PostgresCompilationTraceStore:
                 self._json(step.error), step.duration_ms, step.started_at, step.finished_at,
             ),
         )
-        return step
+        if rows:
+            return step
+        existing = next((
+            item for item in self._get_steps(run_id)
+            if item.step_id == step.step_id or item.sequence_no == step.sequence_no
+        ), None)
+        if existing is not None and existing.stage == "PUBLISH" and existing == step:
+            return existing
+        raise ValueError(f"编译步骤已存在: {step.step_id}")
 
     def finish_run(
         self,
@@ -369,20 +381,20 @@ class PostgresCompilationTraceStore:
         document_id: str,
         release_id: str,
     ) -> None:
+        # 候选发布只补 release_id，编译时固化的审计快照与时间不得覆盖。
         rows = self._get_client().execute(
             """INSERT INTO policy_rule_lineage
                (lineage_id, rule_id, extraction_id, doc_id, compile_run_id,
                 rule_version, canonical_rule, release_id, created_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (rule_id, compile_run_id) DO UPDATE SET
-                 extraction_id=EXCLUDED.extraction_id,
-                 doc_id=EXCLUDED.doc_id,
-                 rule_version=EXCLUDED.rule_version,
-                 canonical_rule=EXCLUDED.canonical_rule,
-                 release_id=EXCLUDED.release_id,
-                 created_at=EXCLUDED.created_at
-               WHERE policy_rule_lineage.release_id IS NULL
-                  OR policy_rule_lineage.release_id=EXCLUDED.release_id
+                 release_id=EXCLUDED.release_id
+               WHERE (policy_rule_lineage.release_id IS NULL
+                  OR policy_rule_lineage.release_id=EXCLUDED.release_id)
+                 AND policy_rule_lineage.extraction_id=EXCLUDED.extraction_id
+                 AND policy_rule_lineage.doc_id=EXCLUDED.doc_id
+                 AND policy_rule_lineage.rule_version IS NOT DISTINCT FROM EXCLUDED.rule_version
+                 AND policy_rule_lineage.canonical_rule IS NOT DISTINCT FROM EXCLUDED.canonical_rule
                RETURNING *""",
             (
                 f"lin_{uuid.uuid4().hex[:16]}", rule.rule_id, extraction_id,
@@ -392,7 +404,7 @@ class PostgresCompilationTraceStore:
             ),
         )
         if not rows:
-            raise ValueError(f"编译运行 {run_id} 已关联其他发布")
+            raise ValueError(f"编译运行 {run_id} 血缘快照冲突或已关联其他发布")
 
     def save_candidate_lineage(
         self,
@@ -421,7 +433,9 @@ class PostgresCompilationTraceStore:
         rows = self._get_client().execute(
             """SELECT * FROM policy_rule_lineage WHERE rule_id=%s
                AND compile_run_id IS NOT NULL
-               ORDER BY created_at DESC""",
+               ORDER BY (canonical_rule IS NULL) ASC,
+                        rule_version DESC NULLS LAST,
+                        created_at DESC""",
             (rule_id,),
         )
         if not rows:
@@ -468,14 +482,19 @@ class PostgresCompilationTraceStore:
             history=history,
         )
 
-    def has_release_lineage(self, release_id: str, rule_ids: list[str]) -> bool:
+    def has_release_lineage(
+        self, release_id: str, rule_runs: list[tuple[str, str]]
+    ) -> bool:
         rows = self._get_client().execute(
-            """SELECT rule_id FROM policy_rule_lineage
+            """SELECT rule_id, compile_run_id FROM policy_rule_lineage
                WHERE release_id=%s AND compile_run_id IS NOT NULL
                AND canonical_rule IS NOT NULL""",
             (release_id,),
         )
-        return set(rule_ids).issubset({str(row["rule_id"]) for row in rows})
+        traced = {
+            (str(row["rule_id"]), str(row["compile_run_id"])) for row in rows
+        }
+        return set(rule_runs) == traced
 
     def _get_steps(self, run_id: str) -> list[CompileStep]:
         rows = self._get_client().execute(

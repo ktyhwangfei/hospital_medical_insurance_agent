@@ -876,7 +876,9 @@ def test_compile_trace_governed_release_flow_is_queryable_after_activation(
         "INPUT_SNAPSHOT", "LLM_EXTRACTION", "CANONICALIZE", "COMPOSE",
         "RESOLVE", "DERIVE", "VALIDATE", "PUBLISH",
     ]
-    assert traces.has_release_lineage("candidate_compile_trace", [rule_id])
+    assert traces.has_release_lineage(
+        "candidate_compile_trace", [(rule_id, run_id)]
+    )
 
 
 def test_compile_trace_persistence_failure_keeps_active_release_and_run(

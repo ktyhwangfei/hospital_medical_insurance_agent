@@ -190,6 +190,78 @@ def test_trace_failure_keeps_release_building() -> None:
     assert store.get_release(release.release_id).status == "building"
 
 
+def test_multi_rule_run_writes_one_publish_step_and_retries_partial_lineage() -> None:
+    from src.knowledge_extension.rule_explanation.release_index import ReleaseIndexBuilder
+
+    class FailSecondLineageOnce(InMemoryCompilationTraceStore):
+        failed = False
+
+        def save_lineage(self, **kwargs):
+            if kwargs["rule"].rule_id == "rule_b" and not self.failed:
+                self.failed = True
+                raise RuntimeError("second lineage unavailable")
+            return super().save_lineage(**kwargs)
+
+    traces = FailSecondLineageOnce()
+    base_run = CompileRun(
+        run_id="run_multi",
+        document_id="doc_1",
+        unit_id="unit_1",
+        extraction_id="ext_1",
+        raw_input={},
+        llm_output={},
+    )
+    traces.create_run(base_run)
+    traces.finish_run("run_multi", status="PASS", metrics={})
+    rules = [
+        CanonicalRule(
+            rule_id=rule_id,
+            subject="payment_ratio",
+            result={"ratio": ratio},
+            evidence=[f"evidence_{rule_id}"],
+        )
+        for rule_id, ratio in (("rule_b", "0.7"), ("rule_a", "0.8"))
+    ]
+    for item in rules:
+        traces.save_candidate_lineage(
+            rule_id=item.rule_id,
+            rule=item,
+            run_id="run_multi",
+            extraction_id="ext_1",
+            document_id="doc_1",
+        )
+    publications = [
+        ("run_multi", "ext_1", "doc_1", item) for item in rules
+    ]
+    store = InMemoryPolicyQualityStore()
+    release = _building_release("CS_compiled")
+    store.save_release(release)
+    builder = ReleaseIndexBuilder(store, FakeIndexBackend(), traces)
+
+    with pytest.raises(RuntimeError, match="second lineage unavailable"):
+        builder.build(
+            release.release_id,
+            facts=[{"fact_id": "fact_1"}],
+            rules=[{"rule_id": "rule_a"}, {"rule_id": "rule_b"}],
+            publications=publications,
+        )
+    ready = builder.build(
+        release.release_id,
+        facts=[{"fact_id": "fact_1"}],
+        rules=[{"rule_id": "rule_a"}, {"rule_id": "rule_b"}],
+        publications=publications,
+    )
+
+    assert ready.status == "ready"
+    for rule_id in ("rule_a", "rule_b"):
+        trace = traces.get_rule_trace(rule_id)
+        assert trace is not None
+        publish_steps = [item for item in trace.steps if item.stage == "PUBLISH"]
+        assert len(publish_steps) == 1
+        assert publish_steps[0].input_payload["rule_ids"] == ["rule_a", "rule_b"]
+        assert len(trace.history) == 1
+
+
 def test_unhealthy_collection_pair_never_becomes_ready() -> None:
     from src.knowledge_extension.rule_explanation.release_index import ReleaseIndexBuilder
 
@@ -298,6 +370,50 @@ def test_promote_gate_rejects_missing_release_lineage(monkeypatch) -> None:
         policy_workbench_routes,
         "_get_compilation_trace_store",
         lambda: InMemoryCompilationTraceStore(),
+    )
+
+    with pytest.raises(ValueError, match="编译血缘"):
+        policy_workbench_routes._validate_governed_release_source_before_promote(
+            _building_release(change_set.change_set_id), active_retry=False
+        )
+
+
+def test_promote_gate_rejects_same_rule_lineage_from_old_run(monkeypatch) -> None:
+    from src.runtime.api import policy_workbench_routes
+
+    change_set = _change_set()
+
+    class ChangeSets:
+        def get_change_set(self, _change_set_id: str):
+            return change_set
+
+    traces = InMemoryCompilationTraceStore()
+    traces.create_run(CompileRun(
+        run_id="run_old",
+        document_id="doc_1",
+        unit_id="unit_1",
+        extraction_id="ext_old",
+        raw_input={},
+        llm_output={},
+    ))
+    traces.finish_run("run_old", status="PASS", metrics={})
+    traces.save_lineage(
+        rule=change_set.items[0].canonical_rule,
+        run_id="run_old",
+        extraction_id="ext_old",
+        document_id="doc_1",
+        release_id="rel_20260803_01",
+    )
+    monkeypatch.setattr(
+        policy_workbench_routes,
+        "_validate_release_source_before_promote",
+        lambda release, active_retry: None,
+    )
+    monkeypatch.setattr(
+        policy_workbench_routes, "_get_change_set_service", lambda: ChangeSets()
+    )
+    monkeypatch.setattr(
+        policy_workbench_routes, "_get_compilation_trace_store", lambda: traces
     )
 
     with pytest.raises(ValueError, match="编译血缘"):

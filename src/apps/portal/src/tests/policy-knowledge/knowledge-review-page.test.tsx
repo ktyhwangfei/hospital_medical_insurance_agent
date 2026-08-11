@@ -895,7 +895,8 @@ function makeChangeSet(overrides: Partial<KnowledgeChangeSet> = {}): KnowledgeCh
     items: [{
       item_id: 'ITEM_001',
       change_type: 'MODIFY',
-      rule_id: 'RULE_001',
+      rule_id: 'KNOWLEDGE_001',
+      canonical_rule: { rule_id: 'RULE_001' },
       unit_id: 'UNIT_001',
       doc_id: 'DOC_001',
       before: { payment_ratio: 0.8, hospital_level: '三级' },
