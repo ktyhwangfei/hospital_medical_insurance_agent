@@ -12,6 +12,8 @@ export class PolicyQAPage extends BasePage {
   readonly sourcesButton: Locator;
   readonly sourcesDialog: Locator;
   readonly doneIndicator: Locator;
+  readonly feedbackDrawer: Locator;
+  readonly feedbackSubmitted: Locator;
 
   constructor(page: Page) {
     super(page, 'http://127.0.0.1:3000');
@@ -23,6 +25,8 @@ export class PolicyQAPage extends BasePage {
     this.sourcesButton = page.getByRole('button', { name: /查看 \d+ 条政策来源/ });
     this.sourcesDialog = page.locator('[data-testid="policy-qa-sources"]');
     this.doneIndicator = page.locator('[data-testid="policy-qa-stream-done"]');
+    this.feedbackDrawer = page.locator('[data-testid="policy-qa-feedback-drawer"]');
+    this.feedbackSubmitted = page.locator('[data-testid="policy-qa-feedback-submitted"]');
   }
 
   async goto(): Promise<void> {
@@ -48,5 +52,13 @@ export class PolicyQAPage extends BasePage {
 
   async readAnswer(): Promise<string> {
     return this.answer.last().innerText();
+  }
+
+  /** 点击某条「回答有误」原因码提交反馈。 */
+  async submitFeedback(reasonCode: string): Promise<void> {
+    await this.feedbackDrawer
+      .getByTestId(`policy-qa-feedback-reason-${reasonCode}`)
+      .click();
+    await this.feedbackSubmitted.waitFor({ state: 'visible' });
   }
 }

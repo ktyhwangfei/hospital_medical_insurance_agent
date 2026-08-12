@@ -566,6 +566,9 @@ class TestEvalCasePool:
         assert body["total"] >= 1
         assert body["items"][0]["pool_id"] == "pool-1"
         assert body["items"][0]["error_dimension"] == "calculation"
+        # 脱敏摘要必须随响应返回，否则表格只能按维度/技能区分，多条记录视觉重复
+        assert body["items"][0]["question_excerpt"] == "起付线"
+        assert body["items"][0]["answer_excerpt"] == "累计"
 
     def test_from_history_returns_outcomes(self, monkeypatch):
         from src.data_platform.storage.skill.regression_in_memory import (
@@ -850,3 +853,161 @@ class TestEvalCasePoolTransformConfirm:
             },
         )
         assert response.status_code == 409
+
+
+class TestEvalRunsCrossSkill:
+    """GET /infra-skills/eval-runs 跨 Skill 汇总（评测中心首页）。"""
+
+    @staticmethod
+    def _make_run(run_id: str, skill_id: str, *, passed: bool = True):
+        from src.domain.skill.governance_models import (
+            SkillEvalMetrics,
+            SkillEvalRun,
+            SkillEvalRunStatus,
+        )
+
+        return SkillEvalRun(
+            run_id=run_id,
+            skill_id=skill_id,
+            version_id="v1",
+            baseline_version_id=None,
+            suite_version=1,
+            config_hash="a" * 64,
+            routing_manifest_hash="b" * 64,
+            status=SkillEvalRunStatus.PASSED if passed else SkillEvalRunStatus.FAILED,
+            metrics=SkillEvalMetrics(
+                total=2,
+                passed=2 if passed else 1,
+                required_total=2,
+                required_passed=2 if passed else 1,
+                top1_accuracy=1.0 if passed else 0.5,
+                baseline_top1_accuracy=1.0,
+                regression_count=0,
+                new_false_takeover_count=0,
+                gate_passed=passed,
+            ),
+            results=[],
+            case_snapshots=[],
+            regression_results=[],
+            regression_summary=None,
+            created_by="tester",
+        )
+
+    def _client(self, monkeypatch, governance_storage):
+        monkeypatch.setenv("SKILL_CONTROL_DEV_MODE", "1")
+        app = create_app()
+        version_storage = InMemorySkillVersionStorage()
+        app.dependency_overrides[get_skill_version_service] = lambda: SkillVersionService(
+            storage=version_storage,
+            loader=get_loader(),
+            skills_root=SKILLS_DIR,
+            source_commit_resolver=lambda: "abc1234",
+        )
+        app.dependency_overrides[get_skill_governance_service] = lambda: SkillGovernanceService(
+            storage=governance_storage,
+            version_storage=version_storage,
+            loader=get_loader(),
+        )
+        app.dependency_overrides[get_skill_idempotency_store] = lambda: InMemoryCacheClient()
+        return TestClient(app)
+
+    def test_list_all_returns_every_skill(self, monkeypatch):
+        storage = InMemorySkillGovernanceStorage()
+        storage.save_run(self._make_run("run-a", "skill-a"))
+        storage.save_run(self._make_run("run-b", "skill-b", passed=False))
+        client = self._client(monkeypatch, storage)
+
+        response = client.get(f"{PREFIX}/infra-skills/eval-runs")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 2
+        assert {item["skill_id"] for item in body["items"]} == {"skill-a", "skill-b"}
+        assert {item["run_id"] for item in body["items"]} == {"run-a", "run-b"}
+
+    def test_filter_by_skill_id(self, monkeypatch):
+        storage = InMemorySkillGovernanceStorage()
+        storage.save_run(self._make_run("run-a", "skill-a"))
+        storage.save_run(self._make_run("run-b", "skill-b"))
+        client = self._client(monkeypatch, storage)
+
+        response = client.get(f"{PREFIX}/infra-skills/eval-runs?skill_id=skill-a")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert body["items"][0]["skill_id"] == "skill-a"
+
+    def test_limit_caps_results(self, monkeypatch):
+        storage = InMemorySkillGovernanceStorage()
+        storage.save_run(self._make_run("run-a", "skill-a"))
+        storage.save_run(self._make_run("run-b", "skill-b"))
+        client = self._client(monkeypatch, storage)
+
+        response = client.get(f"{PREFIX}/infra-skills/eval-runs?limit=1")
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+
+
+def _eval_case_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {_control_token('quality-user', ['quality'], ['skill:evaluate'])}"
+    }
+
+
+def test_create_eval_case_dedupes_same_template(client: TestClient) -> None:
+    """同 (question_template, expected_skill_id) 重复创建返回同一 case_id。"""
+    headers = _eval_case_headers()
+    payload = {
+        "question_template": "起付线测试去重唯一",
+        "expected_skill_id": "settlement_explain_skill",
+        "required": True,
+        "risk_tags": [],
+        "business_tags": ["settlement"],
+        "source_type": "manual",
+        "source_ref": "dedupe-test",
+        "contains_sensitive_data": False,
+    }
+    r1 = client.post(f"{PREFIX}/infra-skills/eval-cases", headers=headers, json=payload)
+    r2 = client.post(f"{PREFIX}/infra-skills/eval-cases", headers=headers, json=payload)
+    assert r1.status_code == 201
+    assert r2.status_code == 201
+    assert r1.json()["case_id"] == r2.json()["case_id"]
+
+
+def test_delete_eval_case(client: TestClient) -> None:
+    headers = _eval_case_headers()
+    create = client.post(
+        f"{PREFIX}/infra-skills/eval-cases",
+        headers=headers,
+        json={
+            "question_template": "删除测试唯一用例",
+            "expected_skill_id": "settlement_explain_skill",
+            "required": True,
+            "risk_tags": [],
+            "business_tags": ["settlement"],
+            "source_type": "manual",
+            "source_ref": "del-test",
+            "contains_sensitive_data": False,
+        },
+    )
+    case_id = create.json()["case_id"]
+
+    dele = client.delete(
+        f"{PREFIX}/infra-skills/eval-cases/{case_id}", headers=headers
+    )
+    assert dele.status_code == 204
+
+    after = client.get(f"{PREFIX}/infra-skills/eval-cases").json()
+    assert case_id not in {c["case_id"] for c in after["items"]}
+
+
+def test_seed_golden_eval_cases_idempotent(client: TestClient) -> None:
+    headers = _eval_case_headers()
+    r1 = client.post(f"{PREFIX}/infra-skills/eval-cases/seed-golden", headers=headers)
+    r2 = client.post(f"{PREFIX}/infra-skills/eval-cases/seed-golden", headers=headers)
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    # 幂等：重复灌入不增长
+    assert r1.json()["total"] == r2.json()["total"]
+    assert r1.json()["total"] >= 8
+    golden = [i for i in r1.json()["items"] if i.get("source_type") == "golden_seed"]
+    assert len(golden) >= 8

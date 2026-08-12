@@ -135,6 +135,14 @@ class RegressionConfirmService:
         proposal = RoutingCaseProposal.model_validate(
             proposal_dict or {"case_type": "routing", "question_template": pool.question_excerpt}
         )
+        # 去重：同 (question_template, expected_skill_id) 已存在则复用，避免重复投影
+        normalized_q = proposal.question_template.strip()
+        for existing in self._governance_storage.list_cases():
+            if (
+                existing.question_template.strip() == normalized_q
+                and existing.expected_skill_id == proposal.expected_skill_id
+            ):
+                return "route", existing.case_id
         case = SkillEvalCase(
             case_id=f"route_{uuid.uuid4().hex}",
             suite_version=self._governance_storage.next_suite_version(),

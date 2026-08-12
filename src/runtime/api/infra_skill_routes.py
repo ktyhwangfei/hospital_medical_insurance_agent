@@ -683,6 +683,73 @@ def update_skill_eval_case(
     return SkillEvalCaseResponse.model_validate(case.model_dump())
 
 
+@router.delete(
+    "/infra-skills/eval-cases/{case_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_skill_eval_case(
+    case_id: str,
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> None:
+    try:
+        service.delete_case(case_id)
+    except SkillGovernanceNotFoundError as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.post(
+    "/infra-skills/eval-cases/dedupe",
+    response_model=SkillEvalCaseListResponse,
+)
+def dedupe_skill_eval_cases(
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalCaseListResponse:
+    service.dedupe_cases()
+    cases = service.list_cases()
+    return SkillEvalCaseListResponse(
+        items=[SkillEvalCaseResponse.model_validate(case.model_dump()) for case in cases],
+        suite_version=service.current_suite_version(),
+        total=len(cases),
+    )
+
+
+@router.post(
+    "/infra-skills/eval-cases/seed-golden",
+    response_model=SkillEvalCaseListResponse,
+)
+def seed_golden_skill_eval_cases(
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalCaseListResponse:
+    """灌入预置黄金 routing 用例（幂等：自动去重）。"""
+    service.seed_golden_cases()
+    cases = service.list_cases()
+    return SkillEvalCaseListResponse(
+        items=[SkillEvalCaseResponse.model_validate(case.model_dump()) for case in cases],
+        suite_version=service.current_suite_version(),
+        total=len(cases),
+    )
+
+
+@router.get(
+    "/infra-skills/eval-runs",
+    response_model=SkillEvalRunListResponse,
+)
+def list_all_skill_eval_runs(
+    service: SkillGovernanceServiceDependency,
+    skill_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> SkillEvalRunListResponse:
+    """跨 Skill 汇总评测运行（评测中心首页）。可选 skill_id 过滤。"""
+    runs = service.list_eval_runs(skill_id)[:limit]
+    return SkillEvalRunListResponse(
+        items=[SkillEvalRunResponse.model_validate(run.model_dump()) for run in runs],
+        total=len(runs),
+    )
+
+
 @router.get(
     "/infra-skills/{skill_id}/eval-runs",
     response_model=SkillEvalRunListResponse,
@@ -1981,6 +2048,9 @@ def _pool_item_to_response(item) -> EvalCasePoolItemResponse:
             item.transformed_dimension.value if item.transformed_dimension else None
         ),
         target_skill_id=item.source_selected_skill_id,
+        question_excerpt=item.question_excerpt,
+        answer_excerpt=item.answer_excerpt,
+        comment=item.comment,
         status=item.status.value,
         revision=item.revision,
         eval_case_ref=(

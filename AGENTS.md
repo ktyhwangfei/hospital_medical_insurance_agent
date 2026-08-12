@@ -213,6 +213,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - 部分工作区（codex-policy-compare-v2、pi-policy-knowledge-optimize 等独立副本）的启停脚本曾是写死 8000/3000 的旧版，多工作区会端口互斥。运行 `..\ws.ps1 sync` 同步新版脚本（按工作区名确定性分配 8100+/3100+）。
 - 多工作区同时验证时逐个猜端口很费时。用 `..\ws.ps1 list` 并行探测所有工作区端口与健康状态，`..\ws.ps1 up/down` 并行启停（详见下方多工作区章节）。
 - 前端 dev 进程复用旧实例时不纠正 `NEXT_PUBLIC_API_BASE_URL`。`start-servers.ps1` 见前端端口已监听即 `Nothing to start` 退出，多工作区下若旧进程曾用 `next.config.ts` 默认值 8000，前端 API 代理会持续转发到错误后端实例、`/skills` 工作台目录与所有 skill 列表全空（summary 全 0）。诊断：经前端代理 `curl 127.0.0.1:<前端端口>/api/v1/medical-insurance-ai-agent/infra-skills/workbench` 的 total 与直连本工作区后端端口不一致（代理 0、后端 >0）。正确做法：`Stop-Process` 杀前端进程后带 `$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:<后端端口>'` 重启 `npm run dev`。
+- Postgres 表加列只在 `CREATE TABLE` 写、漏配 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，旧库因 `CREATE TABLE IF NOT EXISTS` 不重建导致 INSERT 报 `UndefinedColumn` 500（发起评测曾因 `regression_results`/`regression_summary` 漏配 ALTER 而崩）。模型加字段必须 CREATE + ALTER 双写；防回归测试 `test_skill_eval_runs_insert_columns_covered_by_ddl` 校验 INSERT 列 ⊆ DDL 列。
 
 ### 陷阱模板
 

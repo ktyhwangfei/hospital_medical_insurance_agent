@@ -370,4 +370,12 @@
 - 仍需人工审核的风险：①answer_quality rubric 稳定性未达门禁门槛；②policy_content/citation 证据版本冻结后才能纳入门禁；③浏览器 E2E（Playwright skill-error-mining.flow）与分型编辑 UI（eval-case-editor）未实现（Task 9 Step 1-2、Task 10 Step 5）。
 - 已知预存问题（非本次改动）：`ai_authoring/security.py` 工作树有未提交改动，导致 `test_draft_validator_and_package.py` 40 例失败；已 stash 验证与本次工作无关。`policy_qa/test_policy_qa.py` 4 例 `@pytest.mark.asyncio` 受 pytest_asyncio 不兼容陷阱影响，环境性失败。
 
+### 2026-08-11 Skill 评测收尾与治理工作台增量（分支 ktyhwangfei/skill）
+
+- 状态：**impl_done，本工作区已提交并合并 main**。
+- 范围：skill-eval-mining 收尾（评测启动面板 skill-eval-launch-panel、运行详情 skill-eval-run-detail、案例池分型编辑 UI 增强、错误挖掘 E2E flow）+ governance 存储加固（`regression_results`/`regression_summary` CREATE+ALTER 双写）+ 工作台边角（evaluations 页重组、目录面板、布局导航）。
+- 验证证据：后端 governance/eval 聚焦 42 passed、全量 111 passed；前端 Vitest 37 files / 342 passed；tsc EXIT=0。
+- E2E 说明：新增 `skill-error-mining.flow.ts` 未在本环境运行——`playwright.config` 写死 3000/8000，当前 3000 被主工作区 D:/project（main 分支）前端占用，不含本工作区新代码（已知陷阱：多工作区端口互斥）。flow 组件交互逻辑已由 Vitest（eval-case-pool-table / eval-launch / eval-run-detail / layout-tabs 共 71 例）覆盖，合并后可在干净端口环境补跑。
+- 新增文档：`docs/steering/skill草稿-指标选择与多意图输入契约-设计.md`（草稿第三步改造设计，待评审）。
+
 > **维护约定**：每次状态变更必须在此记录。§2 与 `docs/steering/政策知识管线开发计划.md` 双向同步。

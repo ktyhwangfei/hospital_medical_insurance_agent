@@ -239,3 +239,47 @@ def test_eval_run_round_trips_regression_results_and_summary() -> None:
     assert fetched.regression_summary.gate_passed is True
     # 深拷贝：修改返回值不影响存储
     assert saved is not fetched
+
+
+def test_skill_eval_runs_insert_columns_covered_by_ddl() -> None:
+    """防回归：save_run INSERT 列必须 ⊆ DDL 列（CREATE + ALTER ADD COLUMN）。
+
+    旧库已建表时 CREATE TABLE IF NOT EXISTS 不补列，必须配 ALTER ADD COLUMN IF NOT EXISTS。
+    （发起评测曾因 regression_results/regression_summary 漏配 ALTER 报 UndefinedColumn 500）
+    """
+    import inspect
+    import re
+
+    from src.data_platform.storage.skill.governance_postgres import (
+        PostgresSkillGovernanceStorage,
+    )
+
+    ddl = SKILL_GOVERNANCE_TABLE_SCHEMA
+    create_block = re.search(
+        r"CREATE TABLE IF NOT EXISTS skill_eval_runs \((.*?)\)\s*;", ddl, re.DOTALL
+    )
+    assert create_block, "未找到 skill_eval_runs CREATE TABLE 块"
+    create_cols = set()
+    for line in create_block.group(1).splitlines():
+        token = line.strip().split()[0] if line.strip() else ""
+        if token.isidentifier():
+            create_cols.add(token)
+    alter_cols = set(
+        re.findall(
+            r"ALTER TABLE skill_eval_runs\s+ADD COLUMN IF NOT EXISTS (\w+)", ddl
+        )
+    )
+    ddl_cols = create_cols | alter_cols
+
+    src = inspect.getsource(PostgresSkillGovernanceStorage.save_run)
+    insert_match = re.search(r"INSERT INTO skill_eval_runs \(([^)]*)\)", src, re.DOTALL)
+    assert insert_match, "未找到 save_run INSERT 语句"
+    insert_cols = {
+        c.strip().split()[0] for c in insert_match.group(1).split(",") if c.strip()
+    }
+
+    missing = insert_cols - ddl_cols
+    assert not missing, (
+        f"save_run INSERT 列未在 DDL（CREATE+ALTER）定义: {missing}。"
+        "旧库 CREATE IF NOT EXISTS 不补列，必须配 ALTER ADD COLUMN IF NOT EXISTS。"
+    )

@@ -73,6 +73,10 @@ class InMemorySkillGovernanceStorage:
         case = self._cases.get(case_id)
         return None if case is None else self._copy(case)
 
+    def delete_case(self, case_id: str) -> bool:
+        with self._suite_version_lock:
+            return self._cases.pop(case_id, None) is not None
+
     def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]:
         cases = [
             self._copy(case)
@@ -94,11 +98,11 @@ class InMemorySkillGovernanceStorage:
             return None
         return self._copy(run)
 
-    def list_runs(self, skill_id: str) -> list[SkillEvalRun]:
+    def list_runs(self, skill_id: str | None = None) -> list[SkillEvalRun]:
         runs = [
             self._copy(run)
             for run in self._runs.values()
-            if run.skill_id == skill_id
+            if skill_id is None or run.skill_id == skill_id
         ]
         return sorted(runs, key=lambda item: item.created_at, reverse=True)
 

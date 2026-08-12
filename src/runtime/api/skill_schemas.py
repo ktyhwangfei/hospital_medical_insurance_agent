@@ -443,6 +443,10 @@ class EvalCasePoolItemResponse(BaseModel):
     initial_dimension: str
     transformed_dimension: str | None = None
     target_skill_id: str | None = None
+    # 脱敏后的文本摘要（已过 sanitize_regression_snapshot），用于前端区分条目
+    question_excerpt: str = ""
+    answer_excerpt: str = ""
+    comment: str = ""
     status: str
     revision: int
     eval_case_ref: dict[str, Any] | None = None

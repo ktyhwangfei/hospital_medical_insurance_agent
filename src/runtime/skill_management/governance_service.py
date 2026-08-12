@@ -27,6 +27,19 @@ from src.domain.skill.version_models import SkillValidationStatus, SkillVersion
 from src.security.desensitization.detection import detect_sensitive_patterns
 from src.skill_infra.route_evaluator import evaluate_route_suite
 
+# 预置黄金 routing 用例：覆盖 settlement_explain_skill 核心关键词，作为路由回归基线。
+# expected_skill_id 必须是已物化 skill（当前仅 settlement_explain_skill）。
+GOLDEN_ROUTING_CASES: list[tuple[str, str, list[str]]] = [
+    ("起付线怎么算", "settlement_explain_skill", ["settlement"]),
+    ("起付线是多少", "settlement_explain_skill", ["settlement"]),
+    ("统筹自付为什么这么多", "settlement_explain_skill", ["settlement"]),
+    ("门槛费是什么意思", "settlement_explain_skill", ["settlement"]),
+    ("报销比例是多少", "settlement_explain_skill", ["settlement"]),
+    ("大额自付怎么算", "settlement_explain_skill", ["settlement"]),
+    ("医保报销比例", "settlement_explain_skill", ["settlement"]),
+    ("住院起付线多少", "settlement_explain_skill", ["settlement"]),
+]
+
 
 class SkillGovernanceGateError(ValueError):
     """评测、审批或基线门禁未通过。"""
@@ -88,6 +101,14 @@ class SkillGovernanceService:
                 "评测用例包含敏感信息，必须脱敏后再保存",
                 ["sensitive_data_detected"],
             )
+        # 去重：同 (question_template, expected_skill_id) 已存在则复用，避免反馈/投影重复入池
+        normalized_q = question_template.strip()
+        for existing in self._storage.list_cases():
+            if (
+                existing.question_template.strip() == normalized_q
+                and existing.expected_skill_id == expected_skill_id
+            ):
+                return existing
         return self._storage.save_case_with_new_suite_version(
             SkillEvalCase(
                 case_id=uuid4().hex,
@@ -145,6 +166,48 @@ class SkillGovernanceService:
             SkillEvalCase.model_validate(updated.model_dump())
         )
 
+    def delete_case(self, case_id: str) -> None:
+        if not self._storage.delete_case(case_id):
+            raise SkillGovernanceNotFoundError(f"评测用例不存在: {case_id}")
+
+    def dedupe_cases(self) -> int:
+        """合并重复用例：同 (question_template, expected_skill_id) 仅保留最新一条，返回删除数。"""
+        # ponytail: O(n) 分组扫描，用例规模小；上万条改 SQL GROUP BY
+        groups: dict[tuple[str, str | None], list[SkillEvalCase]] = {}
+        for c in self._storage.list_cases():
+            groups.setdefault(
+                (c.question_template.strip(), c.expected_skill_id), []
+            ).append(c)
+        removed = 0
+        for group in groups.values():
+            if len(group) <= 1:
+                continue
+            group.sort(key=lambda c: c.suite_version, reverse=True)
+            for dup in group[1:]:
+                self._storage.delete_case(dup.case_id)
+                removed += 1
+        return removed
+
+    def seed_golden_cases(self) -> list[SkillEvalCase]:
+        """灌入预置黄金 routing 用例（覆盖核心关键词），幂等。"""
+        self.dedupe_cases()
+        seeded: list[SkillEvalCase] = []
+        for template, skill_id, tags in GOLDEN_ROUTING_CASES:
+            seeded.append(
+                self.create_case(
+                    question_template=template,
+                    expected_skill_id=skill_id,
+                    required=True,
+                    risk_tags=[],
+                    business_tags=tags,
+                    source_type="golden_seed",
+                    source_ref="golden-seed-v1",
+                    contains_sensitive_data=False,
+                    created_by="system",
+                )
+            )
+        return seeded
+
     def create_eval_run(
         self,
         skill_id: str,
@@ -201,7 +264,7 @@ class SkillGovernanceService:
         )
         return self._storage.save_run(run)
 
-    def list_eval_runs(self, skill_id: str) -> list[SkillEvalRun]:
+    def list_eval_runs(self, skill_id: str | None = None) -> list[SkillEvalRun]:
         return self._storage.list_runs(skill_id)
 
     def get_eval_run(self, skill_id: str, run_id: str) -> SkillEvalRun:

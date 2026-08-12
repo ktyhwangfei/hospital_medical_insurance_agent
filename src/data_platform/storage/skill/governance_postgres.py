@@ -84,6 +84,10 @@ ALTER TABLE skill_eval_runs
     ADD COLUMN IF NOT EXISTS case_snapshots JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE skill_eval_runs
     ADD COLUMN IF NOT EXISTS routing_manifest_hash VARCHAR(64) NOT NULL DEFAULT repeat('0', 64);
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS regression_results JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS regression_summary JSONB;
 
 CREATE TABLE IF NOT EXISTS skill_releases (
     release_id VARCHAR(64) PRIMARY KEY,
@@ -249,6 +253,13 @@ class PostgresSkillGovernanceStorage:
         )
         return None if not rows else self._row_to_case(rows[0])
 
+    def delete_case(self, case_id: str) -> bool:
+        rows = self._get_client().execute(
+            "DELETE FROM skill_eval_cases WHERE case_id = %s RETURNING case_id",
+            (case_id,),
+        )
+        return bool(rows)
+
     def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]:
         where = "WHERE enabled = TRUE" if enabled_only else ""
         rows = self._get_client().execute(
@@ -297,11 +308,16 @@ class PostgresSkillGovernanceStorage:
         )
         return None if not rows else self._row_to_run(rows[0])
 
-    def list_runs(self, skill_id: str) -> list[SkillEvalRun]:
-        rows = self._get_client().execute(
-            "SELECT * FROM skill_eval_runs WHERE skill_id = %s ORDER BY created_at DESC",
-            (skill_id,),
-        )
+    def list_runs(self, skill_id: str | None = None) -> list[SkillEvalRun]:
+        if skill_id is not None:
+            rows = self._get_client().execute(
+                "SELECT * FROM skill_eval_runs WHERE skill_id = %s ORDER BY created_at DESC",
+                (skill_id,),
+            )
+        else:
+            rows = self._get_client().execute(
+                "SELECT * FROM skill_eval_runs ORDER BY created_at DESC",
+            )
         return [self._row_to_run(row) for row in rows]
 
     def save_release(self, release: SkillRelease) -> SkillRelease:
