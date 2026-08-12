@@ -2,11 +2,10 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import SkillsLayout from '../../app/skills/layout'
 import SkillGovernanceWorkbench, * as workbenchModule from '@/components/skills/skill-governance-workbench'
 import { shortHash } from '@/components/skills/skill-evidence-rail'
 import { lifecycleSteps } from '@/components/skills/skill-lifecycle-stepper'
-import type { InfraSkillCatalogResponse, SkillWorkbenchResponse } from '@/lib/types'
+import type { SkillWorkbenchResponse } from '@/lib/types'
 
 const { readWorkbenchUrl } = workbenchModule
 
@@ -441,107 +440,6 @@ describe('Skill governance workbench', () => {
     expect(await screen.findByRole('button', { name: '返回治理待办' })).toHaveFocus()
   })
 
-  it('marks governance and asset routes as separate active tabs', () => {
-    const { rerender } = render(<SkillsLayout><p>content</p></SkillsLayout>)
-
-    expect(screen.getByRole('button', { name: '治理待办' })).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('button', { name: 'Skill 资产' })).not.toHaveAttribute('aria-current')
-
-    navigationState.pathname = '/skills/assets'
-    rerender(<SkillsLayout><p>content</p></SkillsLayout>)
-
-    expect(screen.getByRole('button', { name: 'Skill 资产' })).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('button', { name: '治理待办' })).not.toHaveAttribute('aria-current')
-  })
-
-  it('loads the formal asset list without governance write actions', async () => {
-    mockListInfraSkillCatalog.mockResolvedValueOnce({
-      items: [{
-        skill_id: 'settlement_explain_skill',
-        skill_name: '结算费用解释',
-        business_action: 'explain',
-        business_object: 'settlement',
-        include_keywords: [],
-        excluded_intents: [],
-        semantic_version: '1.0.0',
-        artifact_hash: 'a'.repeat(64),
-        artifact_status: 'registered',
-        file_count: 1,
-        registered_version: null,
-      }],
-      total: 1,
-      page: 1,
-      page_size: 50,
-    })
-    const assetPagePath = '../../app/skills/assets/page'
-    const { default: SkillAssetsPage } = await import(/* @vite-ignore */ assetPagePath)
-
-    render(<SkillAssetsPage />)
-
-    expect(await screen.findByRole('heading', { name: 'Skill 资产', level: 2 })).toBeVisible()
-    expect(screen.getByRole('link', { name: /结算费用解释/ })).toHaveAttribute(
-      'href',
-      '/skills/settlement_explain_skill',
-    )
-    expect(screen.queryByRole('button', { name: /发布|审批|激活/ })).not.toBeInTheDocument()
-  })
-
-  it('loads additional asset pages without duplicating assets', async () => {
-    const firstPage = Array.from({ length: 50 }, (_, index) => ({
-      skill_id: `skill-${index + 1}`,
-      skill_name: `Skill ${index + 1}`,
-      business_action: 'explain',
-      business_object: 'settlement',
-      include_keywords: [],
-      excluded_intents: [],
-      semantic_version: '1.0.0',
-      artifact_hash: 'a'.repeat(64),
-      artifact_status: 'registered' as const,
-      file_count: 1,
-      registered_version: null,
-    }))
-    let resolveNextPage!: (value: InfraSkillCatalogResponse) => void
-    const nextPage = new Promise<InfraSkillCatalogResponse>((resolve) => { resolveNextPage = resolve })
-    mockListInfraSkillCatalog
-      .mockResolvedValueOnce({ items: firstPage, total: 51, page: 1, page_size: 50 })
-      .mockReturnValueOnce(nextPage)
-    const assetPagePath = '../../app/skills/assets/page'
-    const { default: SkillAssetsPage } = await import(/* @vite-ignore */ assetPagePath)
-    const user = userEvent.setup()
-    render(<SkillAssetsPage />)
-    const loadMore = await screen.findByRole('button', { name: '加载更多' })
-
-    await user.click(loadMore)
-    expect(loadMore).toHaveAttribute('aria-disabled', 'true')
-    expect(loadMore).toHaveTextContent('正在加载…')
-    resolveNextPage({
-      items: [firstPage[0], { ...firstPage[0], skill_id: 'skill-51', skill_name: 'Skill 51' }],
-      total: 51,
-      page: 2,
-      page_size: 50,
-    })
-
-    expect(await screen.findByRole('link', { name: /Skill 51/ })).toBeVisible()
-    expect(screen.getAllByRole('link').filter((link) => link.getAttribute('href') === '/skills/skill-1')).toHaveLength(1)
-    const completed = screen.getByRole('button', { name: '已加载全部 Skill 资产' })
-    expect(completed).toBe(loadMore)
-    expect(completed).toHaveFocus()
-    await user.click(completed)
-    expect(mockListInfraSkillCatalog).toHaveBeenCalledTimes(2)
-  })
-
-  it('shows an asset request error without also showing the empty state', async () => {
-    mockListInfraSkillCatalog.mockRejectedValueOnce(new Error('ASSET_LIST_FAILED'))
-    const assetPagePath = '../../app/skills/assets/page'
-    const { default: SkillAssetsPage } = await import(/* @vite-ignore */ assetPagePath)
-
-    render(<SkillAssetsPage />)
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('ASSET_LIST_FAILED')
-    expect(screen.queryByText('暂无 Skill 资产')).not.toBeInTheDocument()
-    expect(screen.queryByText('正在加载 Skill 资产…')).not.toBeInTheDocument()
-  })
-
   it('distinguishes filtered no-results and clears every queue filter coherently', async () => {
     window.history.replaceState({}, '', '/skills?q=missing&priority=blocked&status=needs_evaluation&action=explain&object=settlement')
     mockGetSkillGovernanceWorkbench.mockResolvedValue({
@@ -560,7 +458,6 @@ describe('Skill governance workbench', () => {
     expect(screen.getByLabelText('搜索 Skill')).toHaveValue('')
     expect(mockGetSkillGovernanceWorkbench).toHaveBeenLastCalledWith({ page: 1, page_size: 50 })
     expect(await screen.findByText('当前没有需要处理的 Skill')).toBeVisible()
-    expect(screen.getByRole('link', { name: '查看全部资产' })).toHaveAttribute('href', '/skills/assets')
   })
 
   it('formats queue wait time at deterministic boundaries', () => {

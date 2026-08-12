@@ -20,9 +20,8 @@ function isSkillDetailPath(pathname: string): boolean {
 
 // /skills 页签：对齐语义层/政策知识的扁平骨架（设计 §3.1）
 const NAV_TABS: NavTab[] = [
-  { label: '治理待办', href: '/skills', match: (p) => p === '/skills' },
-  { label: 'Skill 资产', href: '/skills/assets', match: (p) => p.startsWith('/skills/assets') || p.startsWith('/skills/new') || p.startsWith('/skills/import') || isSkillDetailPath(p) },
-  { label: '草稿', href: '/skills/drafts', match: (p) => p.startsWith('/skills/drafts') },
+  { label: '治理待办', href: '/skills', match: (p) => p === '/skills' || isSkillDetailPath(p) },
+  { label: '草稿', href: '/skills/drafts', match: (p) => p.startsWith('/skills/drafts') || p.startsWith('/skills/new') || p.startsWith('/skills/import') },
   { label: '评测中心', href: '/skills/evaluations', match: (p) => p.startsWith('/skills/evaluations') || p.startsWith('/skills/eval-') },
   { label: '发布记录', href: '/skills/releases', match: (p) => p.startsWith('/skills/releases') },
 ]

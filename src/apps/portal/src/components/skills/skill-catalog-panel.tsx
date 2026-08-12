@@ -1,5 +1,4 @@
 import { useEffect, useState, type KeyboardEvent } from 'react'
-import Link from 'next/link'
 import { Search } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
@@ -153,9 +152,6 @@ export default function SkillCatalogPanel({
         ) : items.length === 0 ? (
           <div className="space-y-3 p-4 text-sm text-slate-500">
             <p>当前没有需要处理的 Skill</p>
-            <Link href="/skills/assets" className="inline-flex min-h-11 items-center font-medium text-blue-600 hover:text-blue-700">
-              查看全部资产
-            </Link>
           </div>
         ) : items.map((item) => {
           const selected = item.skill_id === selectedSkillId

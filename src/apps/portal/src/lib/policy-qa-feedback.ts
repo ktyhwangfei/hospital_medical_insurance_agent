@@ -46,6 +46,9 @@ export interface EvalCasePoolItem {
   initialDimension: string
   transformedDimension: string | null
   targetSkillId: string | null
+  questionExcerpt: string
+  answerExcerpt: string
+  comment: string
   status: string
   revision: number
   evalCaseRef: Record<string, unknown> | null
@@ -70,6 +73,9 @@ interface RawEvalCasePoolItem {
   initial_dimension: string
   transformed_dimension: string | null
   target_skill_id: string | null
+  question_excerpt: string
+  answer_excerpt: string
+  comment: string
   status: string
   revision: number
   eval_case_ref: Record<string, unknown> | null
@@ -138,6 +144,9 @@ export async function listEvalCasePool(
       initialDimension: item.initial_dimension,
       transformedDimension: item.transformed_dimension,
       targetSkillId: item.target_skill_id,
+      questionExcerpt: item.question_excerpt,
+      answerExcerpt: item.answer_excerpt,
+      comment: item.comment,
       status: item.status,
       revision: item.revision,
       evalCaseRef: item.eval_case_ref,

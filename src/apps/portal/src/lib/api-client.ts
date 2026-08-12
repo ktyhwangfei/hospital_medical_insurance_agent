@@ -100,6 +100,27 @@ export async function createSkillEvalCase(
   })
 }
 
+export async function deleteSkillEvalCase(caseId: string): Promise<void> {
+  await requestJson<void>(
+    `/infra-skills/eval-cases/${encodeURIComponent(caseId)}`,
+    { method: 'DELETE', headers: skillEvaluationHeaders() },
+  )
+}
+
+export async function dedupeSkillEvalCases(): Promise<SkillEvalCaseListResponse> {
+  return requestJson<SkillEvalCaseListResponse>('/infra-skills/eval-cases/dedupe', {
+    method: 'POST',
+    headers: skillEvaluationHeaders(),
+  })
+}
+
+export async function seedGoldenSkillEvalCases(): Promise<SkillEvalCaseListResponse> {
+  return requestJson<SkillEvalCaseListResponse>('/infra-skills/eval-cases/seed-golden', {
+    method: 'POST',
+    headers: skillEvaluationHeaders(),
+  })
+}
+
 // ── 错误案例池：转换 / 确认 / 拒绝（仅 skill:evaluate）──
 
 export interface EvalCasePoolTransformResponse {
@@ -193,6 +214,16 @@ export async function listSkillEvalRuns(skillId: string): Promise<SkillEvalRunLi
   return requestJson<SkillEvalRunListResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/eval-runs`,
   )
+}
+
+export async function listAllSkillEvalRuns(
+  filter?: { skillId?: string; limit?: number },
+): Promise<SkillEvalRunListResponse> {
+  const params = new URLSearchParams()
+  if (filter?.skillId) params.set('skill_id', filter.skillId)
+  if (filter?.limit) params.set('limit', String(filter.limit))
+  const query = params.toString() ? `?${params.toString()}` : ''
+  return requestJson<SkillEvalRunListResponse>(`/infra-skills/eval-runs${query}`)
 }
 
 export async function createSkillEvalRun(
