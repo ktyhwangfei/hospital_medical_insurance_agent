@@ -4,6 +4,16 @@ from src.runtime.skill_management.version_service import (
     SkillNotFoundError,
     SkillVersionService,
 )
+from src.runtime.skill_management.ai_authoring.service import (
+    SkillAIAuthoringError,
+    SkillAIAuthoringService,
+    SkillAIInputInvalidError,
+    SkillAIMetricNotFoundError,
+    SkillAIMetricNotPublishedError,
+    SkillAIModelError,
+    SkillAIOutputInvalidError,
+    SkillAISecurityRejectedError,
+)
 from src.runtime.skill_management.workbench_service import (
     SkillGovernanceStatus,
     SkillWorkbenchItem,
@@ -13,6 +23,14 @@ from src.runtime.skill_management.workbench_service import (
 )
 
 __all__ = [
+    "SkillAIAuthoringError",
+    "SkillAIAuthoringService",
+    "SkillAIInputInvalidError",
+    "SkillAIMetricNotFoundError",
+    "SkillAIMetricNotPublishedError",
+    "SkillAIModelError",
+    "SkillAIOutputInvalidError",
+    "SkillAISecurityRejectedError",
     "SkillCatalogEntry",
     "SkillCatalogPage",
     "SkillNotFoundError",

@@ -1,13 +1,13 @@
-﻿"""模型路由配置 — 门户运行时所需，管理 CRUD 已移除。
+"""模型路由配置 — 门户运行时所需，管理 CRUD 已移除。
 
 路由解析顺序（见 router.py::ModelRouter.resolve）：
   1. 精确匹配 (scene, model_type) → model_name
   2. 回退到 (default, model_type) → model_name
   3. 全部未命中 → 抛 ModelRouteError
 
-所有现有生产调用均使用 model_type="llm"，
-通过默认路由 ("default", "llm") 解析到默认模型。
+通用生产调用使用 model_type="llm"，通过默认路由 ("default", "llm") 解析，
 默认模型可由环境变量 MODEL_NAME 覆盖（如本地 Ollama：MODEL_NAME=qwen2.5:1.5b）。
+Skill AI 编写使用受控的 model_type="reasoning"，固定解析到 deepseek-chat。
 """
 
 import os
@@ -15,6 +15,7 @@ import os
 
 class ModelType:
     """模型类型常量，供 router 测试使用。"""
+
     LLM = "llm"
     EMBEDDING = "embedding"
 
@@ -38,4 +39,6 @@ ROUTING_TABLE: dict = {
     ("default", "embedding"): "text-embedding-3-small",
     # fee_explanation 场景显式路由（PoolingSelfPayStrategy._generate_via_llm 使用）
     ("fee_explanation", "llm"): _DEFAULT_LLM,
+    # Skill AI 编写、结构修复和优化共用受控 reasoning 路由。
+    ("skill_authoring", "reasoning"): "deepseek-chat",
 }

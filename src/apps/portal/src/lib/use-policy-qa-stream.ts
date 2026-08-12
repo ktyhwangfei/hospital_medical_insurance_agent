@@ -103,6 +103,7 @@ function applyPublicResult(
   msg: PolicyQAChatMessage,
   result: PolicyQAResult,
   contextNeed: ContextNeedSnapshot | null,
+  qaTurnId?: string,
 ): PolicyQAChatMessage {
   return {
     ...msg,
@@ -116,6 +117,8 @@ function applyPublicResult(
     citations: result.citations,
     uncertainties: result.uncertainties,
     verificationSummary: result.verificationSummary,
+    // 仅在消息尚未锁定 ID 时写入；result 与 done 不一致时以首轮锁定的为准
+    qaTurnId: msg.qaTurnId ?? qaTurnId,
   }
 }
 
@@ -149,6 +152,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
       data: unknown,
       turnContextNeed: { current: ContextNeedSnapshot | null },
       turnResultReceived: { current: boolean },
+      turnQaTurnId: { current: string | undefined },
     ) => {
       try {
         switch (event) {
@@ -194,11 +198,28 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
           }
           case 'result': {
             const payload = (data ?? {}) as Record<string, unknown>
+            const rawQaTurnId = payload.qa_turn_id
+            const eventQaTurnId = typeof rawQaTurnId === 'string' ? rawQaTurnId : undefined
             const result = toPolicyQAResult(payload.result)
             turnResultReceived.current = true
+            if (eventQaTurnId) {
+              turnQaTurnId.current = eventQaTurnId
+            }
             updateLastAssistant(setMessages, (msg) =>
-              applyPublicResult(msg, result, turnContextNeed.current),
+              applyPublicResult(msg, result, turnContextNeed.current, eventQaTurnId),
             )
+            break
+          }
+          case 'done': {
+            // done 与 result 必须共享同一 qa_turn_id；不一致视为流契约错误，不覆盖消息
+            const payload = (data ?? {}) as Record<string, unknown>
+            const doneQaTurnId =
+              typeof payload.qa_turn_id === 'string' ? payload.qa_turn_id : undefined
+            if (doneQaTurnId && doneQaTurnId !== turnQaTurnId.current) {
+              console.warn(
+                `[usePolicyQAStream] qa_turn_id 契约不一致: result=${turnQaTurnId.current} done=${doneQaTurnId}，保留首轮 ID`,
+              )
+            }
             break
           }
           case 'error': {
@@ -257,6 +278,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
 
       const turnContextNeed: { current: ContextNeedSnapshot | null } = { current: null }
       const turnResultReceived = { current: false }
+      const turnQaTurnId: { current: string | undefined } = { current: undefined }
 
       try {
         const response = await fetch(STREAM_URL, {
@@ -295,6 +317,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
                   sanitizePublicPayload(evt.data),
                   turnContextNeed,
                   turnResultReceived,
+                  turnQaTurnId,
                 )
                 // 出让微任务队列给 React 渲染（与 readSseStream 相同理由）
                 await new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -309,6 +332,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
               sanitizePublicPayload(tail.data),
               turnContextNeed,
               turnResultReceived,
+              turnQaTurnId,
             )
           }
         } finally {

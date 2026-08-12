@@ -329,4 +329,58 @@ describe('usePolicyQAStream', () => {
       message: '公开结果不完整，未展示未经核验的内容。',
     })
   })
+
+  /** 构造一份通过公开契约校验的完整 result */
+  function validCompleteResult() {
+    return {
+      answer: '本次住院统筹自付 4962.67 元。',
+      answer_status: 'complete',
+      calculation_steps: [{ step_name: '核对结算', description: '已核对结算数据' }],
+      definition: { name: '统筹自付', plain_text: '统筹范围内个人承担金额', excludes: [] },
+      warnings: [],
+      citations: [{ title: '基本医疗保险政策', excerpt: '统筹支付后个人按规定承担。' }],
+      uncertainties: [],
+      verification_summary: {
+        settlement_checked: true,
+        calculation_checked: true,
+        policy_count: 1,
+        message: '已完成核对',
+      },
+    }
+  }
+
+  it('result 与 done 携带同一 qa_turn_id 并保留到 assistant 消息', async () => {
+    streamQueue = [
+      sseText([
+        ['context_need', { session_id: 'sess-1', settlement_id: '1671213' }],
+        ['result', { qa_turn_id: 'qat-1', result: validCompleteResult() }],
+        ['done', { qa_turn_id: 'qat-1', answer_status: 'complete', success: true }],
+      ]),
+    ]
+    const { result } = renderHook(() => usePolicyQAStream())
+    await act(async () => {
+      await result.current.send('查询住院费用', { settlementId: '1671213' })
+    })
+
+    expect(result.current.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      qaTurnId: 'qat-1',
+    })
+  })
+
+  it('result 与 done 的 qa_turn_id 不一致时不覆盖消息已锁定的 qaTurnId', async () => {
+    streamQueue = [
+      sseText([
+        ['context_need', { session_id: 'sess-1', settlement_id: '1671213' }],
+        ['result', { qa_turn_id: 'qat-locked', result: validCompleteResult() }],
+        ['done', { qa_turn_id: 'qat-other', answer_status: 'complete', success: true }],
+      ]),
+    ]
+    const { result } = renderHook(() => usePolicyQAStream())
+    await act(async () => {
+      await result.current.send('查询住院费用', { settlementId: '1671213' })
+    })
+
+    expect(result.current.messages.at(-1)?.qaTurnId).toBe('qat-locked')
+  })
 })

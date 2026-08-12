@@ -351,6 +351,28 @@ export type SkillGovernanceStatus =
   | 'artifact_changed'
   | 'healthy'
 
+export type SkillGovernanceStage =
+  | 'evaluate'
+  | 'diagnose'
+  | 'modify'
+  | 'review'
+  | 'release'
+  | 'healthy'
+
+export type SkillGovernancePriority = 'blocked' | 'high' | 'normal'
+
+export type SkillNextAction =
+  | 'register_version'
+  | 'run_evaluation'
+  | 'create_fix_draft'
+  | 'continue_draft'
+  | 'materialize_draft'
+  | 'create_candidate'
+  | 'request_approval'
+  | 'review_approval'
+  | 'activate_test_shadow'
+  | 'view_evidence'
+
 export type SkillWorkbenchTab =
   | 'overview'
   | 'versions'
@@ -380,6 +402,29 @@ export interface SkillWorkbenchItem {
   test_active_version: string | null
   governance_status: SkillGovernanceStatus
   attention_reason: string | null
+  current_stage: SkillGovernanceStage
+  priority: SkillGovernancePriority
+  latest_eval_run_id: string | null
+  candidate_version: string | null
+  baseline_version: string | null
+  regression_count: number
+  required_failure_count: number
+  linked_draft_id: string | null
+  linked_draft_status: string | null
+  waiting_since: string
+  next_action: SkillNextAction
+  next_action_reason: string | null
+}
+
+export interface SkillWorkbenchFilter {
+  page?: number
+  page_size?: number
+  business_action?: string
+  business_object?: string
+  artifact_status?: string
+  governance_status?: SkillGovernanceStatus
+  priority?: SkillGovernancePriority
+  query?: string
 }
 
 export interface SkillWorkbenchResponse {
@@ -481,6 +526,36 @@ export interface SkillEvalRunListResponse {
 export interface SkillEvalRunCreateRequest {
   version_id: string
   baseline_version_id?: string | null
+}
+
+export type SkillCandidateEvaluationStatus =
+  | 'completed'
+  | 'failed'
+  | 'blocked_by_evaluator'
+
+export interface SkillCandidateRouteEvaluationResponse {
+  artifact_hash: string
+  case_snapshot_hash: string
+  status: SkillCandidateEvaluationStatus
+  metrics: SkillEvalMetricsResponse | null
+  results: SkillEvalResultResponse[]
+  blocked_reason: string | null
+}
+
+export interface SkillCandidateBehaviorResultResponse {
+  case_id: string
+  status: 'passed' | 'failed' | 'blocked_by_evaluator'
+  passed: boolean
+  output: Record<string, unknown> | null
+  blocked_reason: string | null
+}
+
+export interface SkillCandidateBehaviorEvaluationResponse {
+  artifact_hash: string
+  case_snapshot_hash: string
+  status: SkillCandidateEvaluationStatus
+  results: SkillCandidateBehaviorResultResponse[]
+  blocked_reason: string | null
 }
 
 export interface SkillReleaseResponse {
@@ -761,12 +836,44 @@ export interface QAHistoryResponse {
 // ── Skill 草稿与生命周期（P7/P8）──────────────────────────────────
 
 export type SkillDraftStatus = 'editing' | 'validated' | 'materialized' | 'deleted'
-export type SkillDraftSourceType = 'template' | 'copy' | 'import'
+export type SkillDraftSourceType = 'template' | 'copy' | 'import' | 'ai_generated'
 export type SkillLifecycleStatus = 'enabled' | 'disabled' | 'archived'
+
+export interface SkillAIStructuredBasic {
+  skill_id: string
+  skill_name: string
+  description: string
+  owner: string
+}
+
+export interface SkillAIStructuredBusinessMounting {
+  business_action: string
+  business_object: string
+  include_keywords: string[]
+  excluded_intents: string[]
+}
+
+export interface SkillAIStructuredInput {
+  metric_code: string
+  alias: string
+  required: boolean
+  purpose: string
+}
+
+export interface SkillAIStructuredConfig {
+  basic: SkillAIStructuredBasic
+  business_mounting: SkillAIStructuredBusinessMounting
+  inputs: SkillAIStructuredInput[]
+  schemas: {
+    input: Record<string, unknown>
+    output: Record<string, unknown>
+  }
+}
 
 export interface SkillBusinessMounting {
   business_action: string
   business_object: string
+  include_keywords?: string[]
   keywords?: string[]
   excluded_intents?: string[]
 }
@@ -779,12 +886,105 @@ export interface SkillInputSpec {
 }
 
 export interface SkillStructuredConfig {
+  basic?: SkillAIStructuredBasic
   description?: string
   owner?: string
   business_mounting: SkillBusinessMounting
   inputs?: SkillInputSpec[]
+  schemas?: {
+    input: Record<string, unknown>
+    output: Record<string, unknown>
+  }
   input_schema?: Record<string, unknown>
   output_schema?: Record<string, unknown>
+}
+
+export function isSkillAIStructuredConfig(
+  config: SkillStructuredConfig,
+): config is SkillAIStructuredConfig {
+  return Boolean(
+    config.basic &&
+    config.schemas &&
+    Array.isArray(config.business_mounting.include_keywords),
+  )
+}
+
+// 编译期契约：AI 提案被接受后的配置必须可直接作为草稿配置。
+type AssertTrue<T extends true> = T
+export type SkillAIConfigDraftCompatibility = AssertTrue<
+  SkillAIStructuredConfig extends SkillStructuredConfig ? true : false
+>
+
+export interface SkillMetricVersionRef {
+  metric_code: string
+  object_code: string
+  object_version: number
+  status: 'published'
+}
+
+export interface SkillAIGenerationProvenance {
+  model_type: string
+  scene: 'skill_authoring'
+  prompt_version: string
+  metric_versions: SkillMetricVersionRef[]
+  generated_at: string
+  content_hash: string
+}
+
+export interface SkillAIValidationPreview {
+  issues: SkillValidationIssue[]
+  has_blocking: boolean
+  blocking_ok: boolean
+}
+
+export interface SkillAIGenerationProposal {
+  generation_id: string
+  proposal_hash: string
+  structured_config: SkillAIStructuredConfig
+  raw_files: Record<string, string>
+  validation_preview: SkillAIValidationPreview
+  provenance: SkillAIGenerationProvenance
+  citations: Citation[]
+  uncertainties: string[]
+}
+
+export interface SkillAIGenerateRequest {
+  description: string
+  metric_codes: string[]
+}
+
+export interface SkillAIOptimizeRequest extends SkillAIGenerateRequest {
+  expected_revision: number
+}
+
+export interface SkillAIOptimizationDiff {
+  scope: 'field' | 'file'
+  change_type: 'added' | 'changed' | 'removed'
+  path: string
+  before: string | null
+  after: string | null
+}
+
+export interface SkillAIOptimizationProposal {
+  base_revision: number
+  proposal_hash: string
+  structured_config: SkillAIStructuredConfig
+  raw_files: Record<string, string>
+  validation_preview: SkillAIValidationPreview
+  provenance: SkillAIGenerationProvenance
+  diff: SkillAIOptimizationDiff[]
+  citations: Citation[]
+  uncertainties: string[]
+}
+
+export interface SkillAIAcceptRequest {
+  generation_id: string
+  proposal_hash: string
+  skill_id: string
+  skill_name: string
+  structured_config: SkillAIStructuredConfig
+  raw_files: Record<string, string>
+  provenance: SkillAIGenerationProvenance
 }
 
 export interface SkillDraftResponse {
@@ -825,25 +1025,26 @@ export interface SkillDraftCopyRequest {
 
 export interface SkillDraftSaveRequest {
   structured_config: SkillStructuredConfig
+  raw_files?: Record<string, string>
   expected_revision: number
   etag?: string
 }
 
+export type SkillValidationSeverity = 'blocking' | 'warning'
+
 export interface SkillValidationIssue {
-  field: string
   code: string
   message: string
+  severity: SkillValidationSeverity
+  path: string | null
 }
-
-export type SkillValidationSeverity = 'blocking' | 'warning'
 
 export interface SkillValidationResponse {
   draft_id: string
-  report: {
-    blocking: SkillValidationIssue[]
-    warnings: SkillValidationIssue[]
-  }
+  issues: SkillValidationIssue[]
+  has_blocking: boolean
   blocking_ok: boolean
+  revision: number
 }
 
 export interface SkillPackageFile {
@@ -891,17 +1092,20 @@ export interface SkillLifecycleTransitionRequest {
 
 export interface SkillInputSelectorNode {
   domain_code: string
-  domain_name: string
+  name: string
   objects: {
     object_code: string
-    object_name: string
-    source_type: string
+    name: string
+    definition: string
+    status: string
+    current_version: string | null
     metrics: {
       metric_code: string
-      metric_name: string
+      name: string
       definition: string
       source_type: string
-      published: boolean
+      status: string
+      current_version: string | null
       quality_score: number | null
     }[]
   }[]

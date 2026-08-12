@@ -22,14 +22,17 @@
 
 ## 启动命令
 
+> ⛔ 任何 orca worktree 启停服务一律走中央脚本 `ws.ps1`（工作区父目录、git 外，`..\ws.ps1`）。
+> **不要**直接跑本工作区的 `start-servers.ps1`（它是 ws.ps1 的执行层，直接用会绕过确定性端口分配、并行启停、旧实例清理），更不要手动 `uvicorn`/`npm run dev`（端口会和多工作区端口策略冲突）。
+
 ```bash
-# 启动开发服务器（--factory 必须指定，因为 create_app 是工厂函数）
-uvicorn src.runtime.api.app:create_app --host 127.0.0.1 --port 8000 --factory --reload
-
-# 前端开发服务器（Next.js 16 应用）
-cd src/apps/portal && npm run dev    # 业务应用入口（默认端口 3000）
-
+..\ws.ps1 up            # 启动当前工作区（无参数=全部工作区）
+..\ws.ps1 down          # 停止
+..\ws.ps1 list          # 端口 + 实时健康（并行探测，秒级）
+..\ws.ps1 url all       # 各工作区验证 URL（后端 /health + portal 首页）
 ```
+
+端口按工作区名确定性分配（后端 `8100+slot` / 前端 `3100+slot`），写入 `.server-ports.json`，跨机器稳定、不与旧脚本的 8000/3000 重叠。仅当 ws.ps1 不可用、需手动调试单进程时，才用 `uvicorn src.runtime.api.app:create_app --factory --reload`（`--factory` 必填）+ `cd src/apps/portal && npm run dev`，端口以 `.server-ports.json` 为准。
 ## 架构
 
 完整架构定义见 `docs/steering/架构设计.md`，采用四层体系：SaaS 应用产品层 → PaaS 平台支撑层 → DaaS 数据与知识服务层 → 系统接入与基础设施层。
@@ -209,6 +212,8 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - `production.py` 的 `POSTGRES_PASSWORD` 默认曾为空，连库报 `fe_sendauth: no password supplied`。已改默认 `'postgres'`（与 AGENTS.md、docker-compose 一致）；若遇认证失败先检查该环境变量是否被显式设为空。
 - 部分工作区（codex-policy-compare-v2、pi-policy-knowledge-optimize 等独立副本）的启停脚本曾是写死 8000/3000 的旧版，多工作区会端口互斥。运行 `..\ws.ps1 sync` 同步新版脚本（按工作区名确定性分配 8100+/3100+）。
 - 多工作区同时验证时逐个猜端口很费时。用 `..\ws.ps1 list` 并行探测所有工作区端口与健康状态，`..\ws.ps1 up/down` 并行启停（详见下方多工作区章节）。
+- 前端 dev 进程复用旧实例时不纠正 `NEXT_PUBLIC_API_BASE_URL`。`start-servers.ps1` 见前端端口已监听即 `Nothing to start` 退出，多工作区下若旧进程曾用 `next.config.ts` 默认值 8000，前端 API 代理会持续转发到错误后端实例、`/skills` 工作台目录与所有 skill 列表全空（summary 全 0）。诊断：经前端代理 `curl 127.0.0.1:<前端端口>/api/v1/medical-insurance-ai-agent/infra-skills/workbench` 的 total 与直连本工作区后端端口不一致（代理 0、后端 >0）。正确做法：`Stop-Process` 杀前端进程后带 `$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:<后端端口>'` 重启 `npm run dev`。
+- Postgres 表加列只在 `CREATE TABLE` 写、漏配 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，旧库因 `CREATE TABLE IF NOT EXISTS` 不重建导致 INSERT 报 `UndefinedColumn` 500（发起评测曾因 `regression_results`/`regression_summary` 漏配 ALTER 而崩）。模型加字段必须 CREATE + ALTER 双写；防回归测试 `test_skill_eval_runs_insert_columns_covered_by_ddl` 校验 INSERT 列 ⊆ DDL 列。
 
 ### 陷阱模板
 
@@ -223,21 +228,11 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 
 ### 启动服务器陷阱（PowerShell）
 
-> ⛔ 直接用 `start-servers.ps1` 和 `stop-servers.ps1`，不要手动启动。
-
-```bash
-# 启动
-.\start-servers.ps1
-
-# 停止
-.\stop-servers.ps1
-```
-
-脚本自动处理：端口冲突检测、旧进程清理、启动验证、前端编译等待。
+> ⛔ 启停一律用 `ws.ps1`（见上方「启动命令」），修复半启动状态用 `..\ws.ps1 restart`。**不要**直接调用本工作区的 `start-servers.ps1`/`stop-servers.ps1`——它们是 ws.ps1 的执行层，直接用会绕过：确定性端口分配、Stop-Legacy 旧版实例清理、pre-flight（node_modules 缺失）检查，且复用旧进程时不纠正前端 `NEXT_PUBLIC_API_BASE_URL`（见下方已知陷阱），导致列表全空。
 
 #### 多工作区（Orca workspaces）并行启停
 
-> 多个工作区同时开发时，不要逐个跑上面的脚本，用中央管理脚本 `ws.ps1`。
+`ws.ps1` 同时管理所有 orca worktree（含本工作区）；即使只开发单个 worktree 也用它（上方命令已适用单工作区）。以下命令用于多工作区场景：
 
 `ws.ps1` 位于 orca 工作区父目录（`C:\Users\于金宝\orca\workspaces\hospital_medical_insurance_agent\ws.ps1`），在 git 之外、不受分支影响，任何工作区内都可调用（`..\ws.ps1`）：
 

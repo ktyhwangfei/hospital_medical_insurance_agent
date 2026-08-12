@@ -39,14 +39,14 @@ export default function SkillDraftsPage() {
   }, [])
 
   useEffect(() => {
-    void load()
+    void Promise.resolve().then(load)
   }, [load])
 
   async function confirmDelete() {
     if (!deleteTarget) return
     setDeleting(true)
     try {
-      await deleteSkillDraft(deleteTarget.draft_id)
+      await deleteSkillDraft(deleteTarget.draft_id, deleteTarget.revision)
       setDeleteTarget(null)
       await load()
     } catch (err) {

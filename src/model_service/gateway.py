@@ -1,5 +1,7 @@
+import hashlib
 import logging
 import time
+from dataclasses import replace
 from typing import Iterator
 
 from src.config.model_service import ModelServiceConfig
@@ -24,6 +26,22 @@ def _truncate_content(content: str, max_len: int = 500) -> str:
     if len(content) <= max_len:
         return content
     return content[:max_len] + "..."
+
+
+def _audit_content_summary(content: str, scene: str) -> str:
+    """AI 编写场景只记录内容哈希，其他场景保持原有截断摘要。"""
+    if scene == "skill_authoring":
+        digest = hashlib.sha256((content or "").encode("utf-8")).hexdigest()
+        return f"sha256:{digest}"
+    return _truncate_content(content)
+
+
+def _audit_error_summary(error: Exception, scene: str) -> str:
+    """AI 编写场景只暴露异常类型与正文哈希，不改变原异常对象。"""
+    if scene == "skill_authoring":
+        digest = hashlib.sha256(str(error).encode("utf-8")).hexdigest()
+        return f"{type(error).__name__}:sha256:{digest}"
+    return str(error)
 
 def _record_llm_event(
     model_name: str,
@@ -145,12 +163,24 @@ class ModelGateway:
                     "===OFFICE_END===\n"
                 )
 
-            return ModelResponse(
+            result = ModelResponse(
                 content=content,
                 model_name="dummy_llm",
                 usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
                 finish_reason="stop"
             )
+            _record_llm_event(
+                model_name=result.model_name,
+                scene=scene,
+                prompt_summary=_audit_content_summary(
+                    messages[-1].content if messages else "", scene
+                ),
+                response_summary=_audit_content_summary(result.content, scene),
+                token_usage=result.usage,
+                latency_ms=0,
+                status="completed",
+            )
+            return result
 
         for current_model in chain:
             params = self._router.get_model_params(current_model)
@@ -168,6 +198,8 @@ class ModelGateway:
                 try:
                     start = time.time()
                     result = self._call_provider(request, current_model)
+                    if not str(result.model_name or "").strip():
+                        result = replace(result, model_name=current_model)
                     latency_ms = int((time.time() - start) * 1000)
                     logger.info(
                         "model_call_success",
@@ -182,8 +214,10 @@ class ModelGateway:
                     _record_llm_event(
                         model_name=current_model,
                         scene=scene,
-                        prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                        response_summary=_truncate_content(result.content),
+                        prompt_summary=_audit_content_summary(
+                            messages[-1].content if messages else "", scene
+                        ),
+                        response_summary=_audit_content_summary(result.content, scene),
                         token_usage=result.usage,
                         latency_ms=latency_ms,
                         status="completed",
@@ -195,8 +229,10 @@ class ModelGateway:
                     _record_llm_event(
                         model_name=current_model,
                         scene=scene,
-                        prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                        response_summary="",
+                        prompt_summary=_audit_content_summary(
+                            messages[-1].content if messages else "", scene
+                        ),
+                        response_summary=_audit_content_summary("", scene),
                         latency_ms=int((time.time() - overall_start) * 1000),
                         status="failed",
                         error_message=f"Auth error for {current_model}",
@@ -211,10 +247,10 @@ class ModelGateway:
                     model_failed = True
                     break
                 except (ModelTimeoutError, ModelServerError) as e:
-                    logger.warning("model_retry", extra={"model_name": current_model, "scene": scene, "attempt": attempt + 1, "error": str(e)})
+                    logger.warning("model_retry", extra={"model_name": current_model, "scene": scene, "attempt": attempt + 1, "error": _audit_error_summary(e, scene)})
                     if attempt < self._config.max_retries - 1:
                         continue
-                    failures.append({"model_name": current_model, "error_type": type(e).__name__, "error_message": str(e)})
+                    failures.append({"model_name": current_model, "error_type": type(e).__name__, "error_message": _audit_error_summary(e, scene)})
                     model_failed = True
                     break
 
@@ -223,8 +259,10 @@ class ModelGateway:
                 _record_llm_event(
                     model_name=current_model,
                     scene=scene,
-                    prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                    response_summary="",
+                    prompt_summary=_audit_content_summary(
+                        messages[-1].content if messages else "", scene
+                    ),
+                    response_summary=_audit_content_summary("", scene),
                     latency_ms=int((time.time() - overall_start) * 1000),
                     status="failed",
                     error_message=f"Model {current_model} exhausted after {self._config.max_retries} attempts",
@@ -235,8 +273,10 @@ class ModelGateway:
         _record_llm_event(
             model_name="(all_failed)",
             scene=scene,
-            prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-            response_summary="",
+            prompt_summary=_audit_content_summary(
+                messages[-1].content if messages else "", scene
+            ),
+            response_summary=_audit_content_summary("", scene),
             latency_ms=cumulative_ms,
             status="failed",
             error_message=f"All models in fallback chain [{', '.join(f['model_name'] for f in failures)}] failed after {cumulative_ms}ms",
@@ -267,23 +307,29 @@ class ModelGateway:
             _record_llm_event(
                 model_name=model_name,
                 scene=scene,
-                prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                response_summary=f"(stream, {total_chunks} chunks)",
+                prompt_summary=_audit_content_summary(
+                    messages[-1].content if messages else "", scene
+                ),
+                response_summary=_audit_content_summary(
+                    f"(stream, {total_chunks} chunks)", scene
+                ),
                 latency_ms=latency_ms,
                 status="completed",
             )
         except Exception as e:
             latency_ms = int((time.time() - start) * 1000)
-            logger.error("model_stream_interrupted", extra={"model_name": model_name, "scene": scene, "total_chunks": total_chunks, "latency_ms": latency_ms, "error": str(e)})
+            logger.error("model_stream_interrupted", extra={"model_name": model_name, "scene": scene, "total_chunks": total_chunks, "latency_ms": latency_ms, "error": _audit_error_summary(e, scene)})
             # 记录基础设施事件（失败）
             _record_llm_event(
                 model_name=model_name,
                 scene=scene,
-                prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                response_summary="",
+                prompt_summary=_audit_content_summary(
+                    messages[-1].content if messages else "", scene
+                ),
+                response_summary=_audit_content_summary("", scene),
                 latency_ms=latency_ms,
                 status="failed",
-                error_message=str(e),
+                error_message=_audit_error_summary(e, scene),
             )
             raise
 

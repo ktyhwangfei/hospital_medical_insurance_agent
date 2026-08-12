@@ -18,6 +18,13 @@ import type {
   SkillInputSelectorResponse,
   SkillInputValidationResponse,
   SkillQueryPlanResponse,
+  SkillAIGenerateRequest,
+  SkillAIGenerationProposal,
+  SkillAIAcceptRequest,
+  SkillAIOptimizeRequest,
+  SkillAIOptimizationProposal,
+  SkillCandidateRouteEvaluationResponse,
+  SkillCandidateBehaviorEvaluationResponse,
 } from './types'
 
 const DEV_SKILL_CONTROL_TOKEN =
@@ -36,6 +43,50 @@ function skillControlHeaders(idempotencyKey?: string): HeadersInit {
 }
 
 // ── 草稿 CRUD ──────────────────────────────────────────────────
+
+export async function generateSkillAIProposal(
+  request: SkillAIGenerateRequest,
+): Promise<SkillAIGenerationProposal> {
+  return requestJson<SkillAIGenerationProposal>('/infra-skills/ai-generate', {
+    method: 'POST',
+    headers: skillControlHeaders(),
+    body: JSON.stringify(request),
+  })
+}
+
+export async function acceptSkillAIProposal(
+  proposal: SkillAIGenerationProposal,
+  idempotencyKey: string,
+): Promise<SkillDraftResponse> {
+  const request: SkillAIAcceptRequest = {
+    generation_id: proposal.generation_id,
+    proposal_hash: proposal.proposal_hash,
+    skill_id: proposal.structured_config.basic.skill_id,
+    skill_name: proposal.structured_config.basic.skill_name,
+    structured_config: proposal.structured_config,
+    raw_files: proposal.raw_files,
+    provenance: proposal.provenance,
+  }
+  return requestJson<SkillDraftResponse>('/infra-skills/drafts/from-ai', {
+    method: 'POST',
+    headers: skillControlHeaders(idempotencyKey),
+    body: JSON.stringify(request),
+  })
+}
+
+export async function optimizeSkillAIDraft(
+  draftId: string,
+  request: SkillAIOptimizeRequest,
+): Promise<SkillAIOptimizationProposal> {
+  return requestJson<SkillAIOptimizationProposal>(
+    `/infra-skills/drafts/${encodeURIComponent(draftId)}/ai-optimize`,
+    {
+      method: 'POST',
+      headers: skillControlHeaders(),
+      body: JSON.stringify(request),
+    },
+  )
+}
 
 export async function listSkillDrafts(): Promise<SkillDraftListResponse> {
   return requestJson<SkillDraftListResponse>('/infra-skills/drafts')
@@ -64,14 +115,17 @@ export async function saveSkillDraft(
 ): Promise<SkillDraftResponse> {
   return requestJson<SkillDraftResponse>(
     `/infra-skills/drafts/${encodeURIComponent(draftId)}`,
-    { method: 'PATCH', body: JSON.stringify(request) },
+    { method: 'PATCH', headers: skillControlHeaders(), body: JSON.stringify(request) },
   )
 }
 
-export async function deleteSkillDraft(draftId: string): Promise<void> {
+export async function deleteSkillDraft(
+  draftId: string,
+  expectedRevision: number,
+): Promise<void> {
   await requestJson<void>(
-    `/infra-skills/drafts/${encodeURIComponent(draftId)}`,
-    { method: 'DELETE' },
+    `/infra-skills/drafts/${encodeURIComponent(draftId)}?expected_revision=${expectedRevision}`,
+    { method: 'DELETE', headers: skillControlHeaders() },
   )
 }
 
@@ -111,7 +165,7 @@ export async function importSkillZip(
 export async function validateSkillDraft(draftId: string): Promise<SkillValidationResponse> {
   return requestJson<SkillValidationResponse>(
     `/infra-skills/drafts/${encodeURIComponent(draftId)}/validate`,
-    { method: 'POST' },
+    { method: 'POST', headers: skillControlHeaders() },
   )
 }
 
@@ -121,6 +175,34 @@ export async function previewSkillPackage(
   return requestJson<SkillPackagePreviewResponse>(
     `/infra-skills/drafts/${encodeURIComponent(draftId)}/package-preview`,
     { method: 'POST' },
+  )
+}
+
+export async function evaluateSkillCandidateRoutes(
+  draftId: string,
+  caseIds: string[] = [],
+): Promise<SkillCandidateRouteEvaluationResponse> {
+  return requestJson<SkillCandidateRouteEvaluationResponse>(
+    `/infra-skills/drafts/${encodeURIComponent(draftId)}/candidate-evaluations/routes`,
+    {
+      method: 'POST',
+      headers: skillControlHeaders(),
+      body: JSON.stringify({ case_ids: caseIds }),
+    },
+  )
+}
+
+export async function evaluateSkillCandidateBehavior(
+  draftId: string,
+  caseIds: string[] = [],
+): Promise<SkillCandidateBehaviorEvaluationResponse> {
+  return requestJson<SkillCandidateBehaviorEvaluationResponse>(
+    `/infra-skills/drafts/${encodeURIComponent(draftId)}/candidate-evaluations/behavior`,
+    {
+      method: 'POST',
+      headers: skillControlHeaders(),
+      body: JSON.stringify({ case_ids: caseIds }),
+    },
   )
 }
 
@@ -152,7 +234,7 @@ export async function disableSkill(
 ): Promise<SkillDefinitionResponse> {
   return requestJson<SkillDefinitionResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/disable`,
-    { method: 'POST', body: JSON.stringify(request) },
+    { method: 'POST', headers: skillControlHeaders(), body: JSON.stringify(request) },
   )
 }
 
@@ -162,7 +244,7 @@ export async function restoreSkill(
 ): Promise<SkillDefinitionResponse> {
   return requestJson<SkillDefinitionResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/restore`,
-    { method: 'POST', body: JSON.stringify(request) },
+    { method: 'POST', headers: skillControlHeaders(), body: JSON.stringify(request) },
   )
 }
 
@@ -172,7 +254,7 @@ export async function archiveSkill(
 ): Promise<SkillDefinitionResponse> {
   return requestJson<SkillDefinitionResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/archive`,
-    { method: 'POST', body: JSON.stringify(request) },
+    { method: 'POST', headers: skillControlHeaders(), body: JSON.stringify(request) },
   )
 }
 

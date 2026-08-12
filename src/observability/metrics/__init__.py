@@ -20,6 +20,12 @@ active_requests: Any = None
 
 workflow_executions_total: Any = None
 adapter_calls_total: Any = None
+skill_ai_generation_total: Any = None
+skill_ai_generation_success_total: Any = None
+skill_ai_generation_rejected_total: Any = None
+skill_ai_output_parse_failure_total: Any = None
+skill_ai_unsafe_code_total: Any = None
+skill_ai_manual_accept_total: Any = None
 
 _METRICS_INITIALIZED = False
 
@@ -33,6 +39,9 @@ def setup_metrics() -> bool:
     """
     global http_requests_total, http_request_duration_seconds, active_requests
     global workflow_executions_total, adapter_calls_total, _METRICS_INITIALIZED
+    global skill_ai_generation_total, skill_ai_generation_success_total
+    global skill_ai_generation_rejected_total, skill_ai_output_parse_failure_total
+    global skill_ai_unsafe_code_total, skill_ai_manual_accept_total
 
     if not _PROMETHEUS_AVAILABLE:
         return False
@@ -70,5 +79,91 @@ def setup_metrics() -> bool:
         ['adapter', 'operation', 'status'],
     )
 
+    skill_ai_generation_total = Counter(
+        'skill_ai_generation_total',
+        'Total number of Skill AI generation attempts',
+        ['scene', 'status'],
+    )
+    skill_ai_generation_success_total = Counter(
+        'skill_ai_generation_success_total',
+        'Total number of successful Skill AI generations',
+        ['scene', 'status'],
+    )
+    skill_ai_generation_rejected_total = Counter(
+        'skill_ai_generation_rejected_total',
+        'Total number of rejected Skill AI generations',
+        ['scene', 'reason_code'],
+    )
+    skill_ai_output_parse_failure_total = Counter(
+        'skill_ai_output_parse_failure_total',
+        'Total number of invalid Skill AI output payloads',
+        ['scene', 'reason_code'],
+    )
+    skill_ai_unsafe_code_total = Counter(
+        'skill_ai_unsafe_code_total',
+        'Total number of unsafe Skill AI code rejections',
+        ['scene', 'reason_code'],
+    )
+    skill_ai_manual_accept_total = Counter(
+        'skill_ai_manual_accept_total',
+        'Total number of manually accepted Skill AI proposals',
+        ['scene', 'status'],
+    )
+
     _METRICS_INITIALIZED = True
     return True
+
+
+_SKILL_AI_SCENE = 'skill_authoring'
+_SKILL_AI_REASON_CODES = frozenset(
+    {
+        'evidence_unavailable',
+        'input_invalid',
+        'metric_not_found',
+        'metric_not_published',
+        'model_error',
+        'output_invalid',
+        'output_parse_failure',
+        'revision_conflict',
+        'unsafe_code',
+    }
+)
+
+
+def _increment(counter: Any, **labels: str) -> None:
+    if counter is not None:
+        counter.labels(**labels).inc()
+
+
+def record_skill_ai_generation_started() -> None:
+    _increment(
+        skill_ai_generation_total,
+        scene=_SKILL_AI_SCENE,
+        status='started',
+    )
+
+
+def record_skill_ai_generation_success() -> None:
+    _increment(
+        skill_ai_generation_success_total,
+        scene=_SKILL_AI_SCENE,
+        status='success',
+    )
+
+
+def record_skill_ai_generation_rejected(reason_code: str) -> None:
+    safe_reason = reason_code if reason_code in _SKILL_AI_REASON_CODES else 'other'
+    labels = {'scene': _SKILL_AI_SCENE, 'reason_code': safe_reason}
+    _increment(skill_ai_generation_rejected_total, **labels)
+    if safe_reason == 'output_parse_failure':
+        _increment(skill_ai_output_parse_failure_total, **labels)
+    elif safe_reason == 'unsafe_code':
+        _increment(skill_ai_unsafe_code_total, **labels)
+
+
+def record_skill_ai_manual_accept() -> None:
+    _increment(
+        skill_ai_manual_accept_total,
+        scene=_SKILL_AI_SCENE,
+        status='accepted',
+    )

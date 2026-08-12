@@ -285,16 +285,37 @@ class TestPolicyQAStreamEndpoint:
         assert "yb_" not in json.dumps(result_event, ensure_ascii=False).lower()
         assert result_event["citations"] or result_event["uncertainties"]
 
-    def test_stream_task_persistence_uses_public_evidence_count_key(
+    def test_stream_result_and_done_share_qa_turn_id(
+        self, client, safe_policy_qa_dependencies
+    ):
+        """result 与 done 事件必须携带同一服务端 qa_turn_id，且以 qat_ 前缀生成。"""
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={
+                "question": "统筹自付为什么这么多？",
+                "settlement_id": "1671213",
+            },
+        )
+
+        assert response.status_code == 200
+        events = _sse_events(response.text)
+        result_payload = next(payload for name, payload in events if name == "result")
+        done_payload = next(payload for name, payload in events if name == "done")
+        assert result_payload["qa_turn_id"] == done_payload["qa_turn_id"]
+        assert result_payload["qa_turn_id"].startswith("qat_")
+        # 公开 result 内部仍不泄露内部路由字段
+        assert "selected_skill_id" not in _nested_keys(result_payload["result"])
+
+    def test_stream_task_persistence_uses_server_turn_id_and_internal_fields(
         self, client, safe_policy_qa_dependencies, monkeypatch
     ):
         from src.runtime.api import policy_qa_routes
 
-        persisted_outputs = []
+        persisted = []
         monkeypatch.setattr(
             policy_qa_routes,
             "record_qa_task",
-            lambda **kwargs: persisted_outputs.append(kwargs["output_data"]),
+            lambda **kwargs: persisted.append(kwargs),
         )
 
         response = client.post(
@@ -306,13 +327,17 @@ class TestPolicyQAStreamEndpoint:
         )
 
         assert response.status_code == 200
-        assert persisted_outputs
-        output_data = persisted_outputs[-1]
+        assert persisted
+        call = persisted[-1]
+        assert call["qa_turn_id"].startswith("qat_")
+        output_data = call["output"]
         assert set(output_data) == {
             "answer_excerpt",
             "answer_status",
             "evidence_count",
             "internal_run_id",
+            "selected_skill_id",
+            "question_excerpt",
         }
         assert output_data["evidence_count"] == 1
 
@@ -342,6 +367,8 @@ class TestPolicyQAStreamEndpoint:
         assert sum(name == "done" for name, _payload in events) == 1
         error_payload = next(payload for name, payload in events if name == "error")
         done_payload = next(payload for name, payload in events if name == "done")
+        assert error_payload.pop("qa_turn_id").startswith("qat_")
+        assert done_payload.pop("qa_turn_id").startswith("qat_")
         assert error_payload == {
             "error_code": "POLICY_QA_FAILED",
             "message": "政策问答处理失败，请稍后重试或联系医保办。",
@@ -514,6 +541,118 @@ class TestSettlementExplanationEndpoint:
         assert detail["message"] == "政策问答服务暂时不可用，请稍后重试。"
         public_body = response.text.casefold()
         assert all(token not in public_body for token in ("select", "password", "yb_zyfdxx", "secret"))
+
+
+class TestPolicyQAFeedback:
+    """「回答有误」反馈端点：客户端不能伪造来源，服务端按 ID 读取并鉴权。"""
+
+    def _seed_qa_turn(
+        self,
+        *,
+        qa_turn_id="qat_feedback_1",
+        user_id="user-1",
+        tenant_id="default",
+        selected_skill_id="deductible",
+    ) -> None:
+        from src.runtime.task_closure.service import create_task
+
+        create_task(
+            task_id=qa_turn_id,
+            task_type="policy_qa",
+            description="政策问答",
+            responsible_role="cashier",
+            workflow_id="wf-fb",
+            executor_type="skill",
+            input_data={
+                "question_excerpt": "起付线怎么计算",
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "role": "cashier",
+                "session_id": "sess-fb",
+            },
+            output_data={
+                "answer_excerpt": "按年度累计计算",
+                "answer_status": "complete",
+                "selected_skill_id": selected_skill_id,
+            },
+            status="completed",
+        )
+
+    def _client_with_principal(self, principal):
+        from src.runtime.api.app import create_app
+        from src.runtime.api import policy_qa_routes
+
+        app = create_app()
+        app.dependency_overrides[policy_qa_routes.get_policy_qa_feedback_principal] = (
+            lambda: principal
+        )
+        return TestClient(app)
+
+    def test_feedback_rejects_client_supplied_source_fields(self):
+        from src.runtime.skill_management.regression_mining_service import (
+            RegressionPrincipal,
+        )
+
+        # 客户端不得携带 question/answer/selected_skill_id（鉴权通过后仍拒绝）
+        client = self._client_with_principal(
+            RegressionPrincipal(user_id="user-1", tenant_id="default")
+        )
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/feedback",
+            json={
+                "qa_turn_id": "qat_feedback_1",
+                "reason_code": "wrong_calculation",
+                "question": "伪造问题",
+                "selected_skill_id": "fake",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_feedback_returns_pool_id_and_dedups(self):
+        from src.runtime.skill_management.regression_mining_service import (
+            RegressionPrincipal,
+        )
+
+        self._seed_qa_turn()
+        client = self._client_with_principal(
+            RegressionPrincipal(user_id="user-1", tenant_id="default")
+        )
+        body = {
+            "qa_turn_id": "qat_feedback_1",
+            "reason_code": "wrong_calculation",
+            "comment": "计算口径不对",
+        }
+        first = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/feedback",
+            json=body,
+        )
+        second = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/feedback",
+            json=body,
+        )
+        assert first.status_code == 200
+        assert first.json()["pool_id"] == second.json()["pool_id"]
+        assert first.json()["error_dimension"] == "calculation"
+
+    def test_feedback_cross_user_returns_404_without_disclosure(self):
+        from src.runtime.skill_management.regression_mining_service import (
+            RegressionPrincipal,
+        )
+
+        self._seed_qa_turn(user_id="user-1", tenant_id="default")
+        client = self._client_with_principal(
+            RegressionPrincipal(user_id="intruder", tenant_id="default")
+        )
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/feedback",
+            json={
+                "qa_turn_id": "qat_feedback_1",
+                "reason_code": "wrong_routing",
+            },
+        )
+        assert response.status_code == 404
+        # 不泄露存在性：错误体不包含内部细节
+        assert "detail" in response.json()
 
 
 class TestPolicyQATestEndpoint:

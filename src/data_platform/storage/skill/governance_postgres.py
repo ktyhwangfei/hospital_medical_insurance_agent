@@ -21,6 +21,8 @@ from src.domain.skill.governance_models import (
     SkillEvalMetrics,
     SkillEvalResult,
     SkillEvalRun,
+    SkillRegressionEvalRecord,
+    SkillRegressionSummary,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
@@ -70,6 +72,8 @@ CREATE TABLE IF NOT EXISTS skill_eval_runs (
     metrics JSONB NOT NULL,
     results JSONB NOT NULL DEFAULT '[]',
     case_snapshots JSONB NOT NULL DEFAULT '[]',
+    regression_results JSONB NOT NULL DEFAULT '[]',
+    regression_summary JSONB,
     created_by VARCHAR(128) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ
@@ -80,6 +84,10 @@ ALTER TABLE skill_eval_runs
     ADD COLUMN IF NOT EXISTS case_snapshots JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE skill_eval_runs
     ADD COLUMN IF NOT EXISTS routing_manifest_hash VARCHAR(64) NOT NULL DEFAULT repeat('0', 64);
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS regression_results JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS regression_summary JSONB;
 
 CREATE TABLE IF NOT EXISTS skill_releases (
     release_id VARCHAR(64) PRIMARY KEY,
@@ -245,6 +253,13 @@ class PostgresSkillGovernanceStorage:
         )
         return None if not rows else self._row_to_case(rows[0])
 
+    def delete_case(self, case_id: str) -> bool:
+        rows = self._get_client().execute(
+            "DELETE FROM skill_eval_cases WHERE case_id = %s RETURNING case_id",
+            (case_id,),
+        )
+        return bool(rows)
+
     def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]:
         where = "WHERE enabled = TRUE" if enabled_only else ""
         rows = self._get_client().execute(
@@ -258,8 +273,9 @@ class PostgresSkillGovernanceStorage:
             INSERT INTO skill_eval_runs (
                 run_id, skill_id, version_id, baseline_version_id, suite_version,
                 config_hash, routing_manifest_hash, status, metrics, results,
-                case_snapshots, created_by, created_at, completed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                case_snapshots, regression_results, regression_summary,
+                created_by, created_at, completed_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
@@ -274,6 +290,10 @@ class PostgresSkillGovernanceStorage:
                 self._json(run.metrics.model_dump(mode="json")),
                 self._json([result.model_dump(mode="json") for result in run.results]),
                 self._json([case.model_dump(mode="json") for case in run.case_snapshots]),
+                self._json([r.model_dump(mode="json") for r in run.regression_results]),
+                self._json(run.regression_summary.model_dump(mode="json"))
+                if run.regression_summary
+                else None,
                 run.created_by,
                 run.created_at,
                 run.completed_at,
@@ -288,11 +308,16 @@ class PostgresSkillGovernanceStorage:
         )
         return None if not rows else self._row_to_run(rows[0])
 
-    def list_runs(self, skill_id: str) -> list[SkillEvalRun]:
-        rows = self._get_client().execute(
-            "SELECT * FROM skill_eval_runs WHERE skill_id = %s ORDER BY created_at DESC",
-            (skill_id,),
-        )
+    def list_runs(self, skill_id: str | None = None) -> list[SkillEvalRun]:
+        if skill_id is not None:
+            rows = self._get_client().execute(
+                "SELECT * FROM skill_eval_runs WHERE skill_id = %s ORDER BY created_at DESC",
+                (skill_id,),
+            )
+        else:
+            rows = self._get_client().execute(
+                "SELECT * FROM skill_eval_runs ORDER BY created_at DESC",
+            )
         return [self._row_to_run(row) for row in rows]
 
     def save_release(self, release: SkillRelease) -> SkillRelease:
@@ -584,6 +609,8 @@ class PostgresSkillGovernanceStorage:
         metrics = cls._json_value(row.get("metrics"), {})
         results = cls._json_value(row.get("results"), [])
         case_snapshots = cls._json_value(row.get("case_snapshots"), [])
+        regression_results_raw = cls._json_value(row.get("regression_results"), [])
+        regression_summary_raw = row.get("regression_summary")
         return SkillEvalRun(
             run_id=row["run_id"],
             skill_id=row["skill_id"],
@@ -598,6 +625,15 @@ class PostgresSkillGovernanceStorage:
             case_snapshots=[
                 SkillEvalCase.model_validate(case) for case in case_snapshots
             ],
+            regression_results=[
+                SkillRegressionEvalRecord.model_validate(r)
+                for r in regression_results_raw
+            ],
+            regression_summary=SkillRegressionSummary.model_validate(
+                cls._json_value(regression_summary_raw, {})
+            )
+            if regression_summary_raw
+            else None,
             created_by=row["created_by"],
             created_at=row["created_at"],
             completed_at=row.get("completed_at"),

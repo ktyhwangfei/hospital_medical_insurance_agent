@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src.domain.skill.draft_models import (
     SkillDraft,
     SkillDraftSourceType,
+    SkillDraftStatus,
     ValidationSeverity,
 )
 from src.runtime.skill_management.draft_validator import SkillDraftValidator
@@ -17,6 +20,7 @@ def _draft(
     *,
     structured_config: dict | None = None,
     raw_files: dict | None = None,
+    source_type: SkillDraftSourceType = SkillDraftSourceType.TEMPLATE,
 ) -> SkillDraft:
     cfg = structured_config or {
         "basic": {"skill_id": "my_skill", "skill_name": "My Skill"},
@@ -33,7 +37,7 @@ def _draft(
         draft_id="d1",
         skill_id="my_skill",
         skill_name="My Skill",
-        source_type=SkillDraftSourceType.TEMPLATE,
+        source_type=source_type,
         structured_config=cfg,
         raw_files=raw_files or {},
         created_by="u",
@@ -46,6 +50,31 @@ def _codes(report, severity=None):
         for i in report.issues
         if severity is None or i.severity == severity
     ]
+
+
+def _generation_meta(**overrides: object) -> str:
+    payload: dict[str, object] = {
+        "generation_id": "gen_abcdef123456_unit",
+        "proposal_hash": "a" * 64,
+        "provenance": {
+            "model_type": "test-model",
+            "scene": "skill_authoring",
+            "prompt_version": "skill-authoring-v1",
+            "metric_versions": [],
+            "generated_at": "2026-08-10T00:00:00Z",
+            "content_hash": "b" * 64,
+        },
+        "citations": [
+            {
+                "source_type": "metric_registry",
+                "source_id": "settlement.total_amount@3",
+                "summary": "已发布指标快照",
+            }
+        ],
+        "uncertainties": ["政策适用范围需人工确认"],
+    }
+    payload.update(overrides)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # ── 校验器 ────────────────────────────────────────────────────────
@@ -139,6 +168,185 @@ class TestSkillDraftValidator:
         raw = {"scripts/bad.py": "def (:\n"}
         report = self.validator.validate(_draft(raw_files=raw))
         assert "SCRIPT_SYNTAX_ERROR" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_ai_generated_draft_appends_blocking_ai_security_issues(self):
+        report = self.validator.validate(
+            _draft(
+                raw_files={
+                    "assembler.py": "import socket\n",
+                    "__generation_meta__.json": _generation_meta(),
+                },
+                source_type=SkillDraftSourceType.AI_GENERATED,
+            )
+        )
+
+        assert "AI_IMPORT_FORBIDDEN" in _codes(
+            report, ValidationSeverity.BLOCKING
+        )
+        assert report.blocking_ok is False
+
+    def test_ai_generated_safe_draft_passes_ai_security_gate(self):
+        report = self.validator.validate(
+            _draft(
+                raw_files={
+                    "assembler.py": "def load(config):\n    return config\n",
+                    "prompt_template.yaml": "system: explain with citations\n",
+                    "__generation_meta__.json": _generation_meta(),
+                },
+                source_type=SkillDraftSourceType.AI_GENERATED,
+            )
+        )
+
+        assert report.blocking_ok
+
+    def test_ai_generated_strict_generation_metadata_is_not_model_scanned(self):
+        report = self.validator.validate(
+            _draft(
+                raw_files={
+                    "assembler.py": "def load(config):\n    return config\n",
+                    "prompt_template.yaml": "system: explain with citations\n",
+                    "__generation_meta__.json": _generation_meta(),
+                },
+                source_type=SkillDraftSourceType.AI_GENERATED,
+            )
+        )
+
+        assert report.blocking_ok
+        assert "AI_FILE_PATH_FORBIDDEN" not in _codes(report)
+
+    def test_ai_generated_draft_requires_generation_metadata(self):
+        report = self.validator.validate(
+            _draft(
+                raw_files={
+                    "assembler.py": "def load(config):\n    return config\n",
+                    "prompt_template.yaml": "system: explain with citations\n",
+                },
+                source_type=SkillDraftSourceType.AI_GENERATED,
+            )
+        )
+
+        assert "AI_GENERATION_META_REQUIRED" in _codes(
+            report, ValidationSeverity.BLOCKING
+        )
+        assert report.blocking_ok is False
+
+    @pytest.mark.parametrize(
+        ("internal_files", "expected_code"),
+        [
+            ({"__unexpected__.json": "{}"}, "AI_RESERVED_FILE_FORBIDDEN"),
+            ({"__generation_meta__.json": "not-json"}, "AI_GENERATION_META_INVALID"),
+            ({"__generation_meta__.json": "[]"}, "AI_GENERATION_META_INVALID"),
+            ({"__generation_meta__.json": "{}"}, "AI_GENERATION_META_INVALID"),
+            (
+                {
+                    "__generation_meta__.json": _generation_meta(
+                        uncertainties=["患者身份证号 110101199003071234"]
+                    )
+                },
+                "AI_GENERATION_META_SENSITIVE",
+            ),
+            (
+                {
+                    "__generation_meta__.json": _generation_meta(
+                        uncertainties=["api_key=secret-value"]
+                    )
+                },
+                "AI_GENERATION_META_SENSITIVE",
+            ),
+        ],
+    )
+    def test_ai_generated_internal_files_are_strictly_validated(
+        self,
+        internal_files: dict[str, str],
+        expected_code: str,
+    ) -> None:
+        report = self.validator.validate(
+            _draft(
+                raw_files={
+                    "assembler.py": "def load(config):\n    return config\n",
+                    "prompt_template.yaml": "system: explain with citations\n",
+                    "__generation_meta__.json": _generation_meta(),
+                    **internal_files,
+                },
+                source_type=SkillDraftSourceType.AI_GENERATED,
+            )
+        )
+
+        assert expected_code in _codes(report, ValidationSeverity.BLOCKING)
+        assert report.blocking_ok is False
+
+    @pytest.mark.parametrize(
+        "raw_files, expected_code",
+        [
+            (
+                {"assembler.py": "def load(:\n    pass\n"},
+                "AI_PYTHON_SYNTAX_ERROR",
+            ),
+            (
+                {"prompt_template.yaml": "patient: 110101199003071234\n"},
+                "AI_SENSITIVE_CONTENT",
+            ),
+            (
+                {"prompt_template.yaml": "api_key: AKIAIOSFODNN7EXAMPLE\n"},
+                "AI_SENSITIVE_CONTENT",
+            ),
+            (
+                {
+                    "assembler.py": (
+                        "def load(config):\n    return open('secret.txt')\n"
+                    )
+                },
+                "AI_CALL_FORBIDDEN",
+            ),
+        ],
+    )
+    def test_ai_generated_draft_uses_only_integrated_security_gate(
+        self,
+        raw_files: dict[str, str],
+        expected_code: str,
+    ) -> None:
+        draft = _draft(
+            raw_files={
+                **raw_files,
+                "__generation_meta__.json": _generation_meta(),
+            },
+            source_type=SkillDraftSourceType.AI_GENERATED,
+        )
+
+        report = self.validator.validate(draft)
+
+        assert _codes(report, ValidationSeverity.BLOCKING) == [expected_code]
+        assert report.blocking_ok is False
+        assert draft.status == SkillDraftStatus.EDITING
+
+    @pytest.mark.parametrize(
+        "source_type",
+        [
+            SkillDraftSourceType.TEMPLATE,
+            SkillDraftSourceType.IMPORT,
+            SkillDraftSourceType.COPY,
+        ],
+    )
+    def test_non_ai_drafts_keep_legacy_security_codes(
+        self,
+        source_type: SkillDraftSourceType,
+    ) -> None:
+        report = self.validator.validate(
+            _draft(
+                raw_files={"scripts/bad.py": "def load(:\n    pass\n"},
+                source_type=source_type,
+            )
+        )
+
+        assert _codes(report, ValidationSeverity.BLOCKING) == ["SCRIPT_SYNTAX_ERROR"]
+
+    def test_template_draft_does_not_apply_ai_file_whitelist(self):
+        report = self.validator.validate(
+            _draft(raw_files={"templates/custom.md": "# custom"})
+        )
+
+        assert "AI_FILE_PATH_FORBIDDEN" not in _codes(report)
+        assert report.blocking_ok
 
 
 # ── 包生成器 ──────────────────────────────────────────────────────

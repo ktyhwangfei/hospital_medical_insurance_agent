@@ -183,3 +183,103 @@ def test_activation_rechecks_suite_version_inside_storage_boundary() -> None:
             expected_revision=1,
             expected_suite_version=0,
         )
+
+
+def test_eval_run_round_trips_regression_results_and_summary() -> None:
+    """SkillEvalRun 新增的 regression_results/regression_summary 经存储原样往返。"""
+    from src.domain.skill.governance_models import (
+        SkillEvalRun,
+        SkillEvalRunStatus,
+        SkillRegressionEvalRecord,
+        SkillRegressionSummary,
+        SkillEvalMetrics,
+    )
+
+    storage = InMemorySkillGovernanceStorage()
+    run = SkillEvalRun(
+        run_id="run-1",
+        skill_id="demo-skill",
+        version_id="version-1",
+        baseline_version_id=None,
+        suite_version=1,
+        config_hash="a" * 64,
+        routing_manifest_hash="b" * 64,
+        status=SkillEvalRunStatus.PASSED,
+        metrics=SkillEvalMetrics(
+            total=1, passed=1, required_total=1, required_passed=1,
+            top1_accuracy=1.0, baseline_top1_accuracy=1.0,
+            regression_count=0, new_false_takeover_count=0, gate_passed=True,
+        ),
+        regression_results=[
+            SkillRegressionEvalRecord(
+                case_id="case-c",
+                case_type="calculation",
+                candidate_version_id="version-1",
+                case_snapshot_hash="c" * 64,
+                evaluator_version="1.0.0",
+                passed=True,
+                status="passed",
+                failure_codes=[],
+                required=True,
+            )
+        ],
+        regression_summary=SkillRegressionSummary(
+            total=1, passed=1, failed=0, blocked=0,
+            required_total=1, required_passed=1, required_blocked=0,
+            gate_passed=True,
+        ),
+        created_by="quality-user",
+    )
+    saved = storage.save_run(run)
+    fetched = storage.get_run("demo-skill", "run-1")
+    assert fetched is not None
+    assert len(fetched.regression_results) == 1
+    assert fetched.regression_results[0].case_id == "case-c"
+    assert fetched.regression_summary is not None
+    assert fetched.regression_summary.gate_passed is True
+    # 深拷贝：修改返回值不影响存储
+    assert saved is not fetched
+
+
+def test_skill_eval_runs_insert_columns_covered_by_ddl() -> None:
+    """防回归：save_run INSERT 列必须 ⊆ DDL 列（CREATE + ALTER ADD COLUMN）。
+
+    旧库已建表时 CREATE TABLE IF NOT EXISTS 不补列，必须配 ALTER ADD COLUMN IF NOT EXISTS。
+    （发起评测曾因 regression_results/regression_summary 漏配 ALTER 报 UndefinedColumn 500）
+    """
+    import inspect
+    import re
+
+    from src.data_platform.storage.skill.governance_postgres import (
+        PostgresSkillGovernanceStorage,
+    )
+
+    ddl = SKILL_GOVERNANCE_TABLE_SCHEMA
+    create_block = re.search(
+        r"CREATE TABLE IF NOT EXISTS skill_eval_runs \((.*?)\)\s*;", ddl, re.DOTALL
+    )
+    assert create_block, "未找到 skill_eval_runs CREATE TABLE 块"
+    create_cols = set()
+    for line in create_block.group(1).splitlines():
+        token = line.strip().split()[0] if line.strip() else ""
+        if token.isidentifier():
+            create_cols.add(token)
+    alter_cols = set(
+        re.findall(
+            r"ALTER TABLE skill_eval_runs\s+ADD COLUMN IF NOT EXISTS (\w+)", ddl
+        )
+    )
+    ddl_cols = create_cols | alter_cols
+
+    src = inspect.getsource(PostgresSkillGovernanceStorage.save_run)
+    insert_match = re.search(r"INSERT INTO skill_eval_runs \(([^)]*)\)", src, re.DOTALL)
+    assert insert_match, "未找到 save_run INSERT 语句"
+    insert_cols = {
+        c.strip().split()[0] for c in insert_match.group(1).split(",") if c.strip()
+    }
+
+    missing = insert_cols - ddl_cols
+    assert not missing, (
+        f"save_run INSERT 列未在 DDL（CREATE+ALTER）定义: {missing}。"
+        "旧库 CREATE IF NOT EXISTS 不补列，必须配 ALTER ADD COLUMN IF NOT EXISTS。"
+    )

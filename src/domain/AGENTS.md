@@ -561,11 +561,26 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 技能发布 | `SkillRelease` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | dev/test 环境中带 revision 的候选、审批和活动版本指针 |
 | 技能发布审批 | `SkillReleaseApproval` | **Entity** | Pydantic `BaseModel`（frozen） | 冻结制品、评测、配置和基线的人工审批证据 |
 | 技能发布状态 | `SkillReleaseStatus` | **Value Object** | `StrEnum` | candidate / approval_pending / approved / active / retired |
+| Skill 错误维度 | `SkillErrorDimension` | **Value Object** | `StrEnum` | routing / calculation / policy_content / citation / answer_quality / safety / other |
+| 反馈原因码 | `SkillFeedbackReasonCode` | **Value Object** | `StrEnum` | 「回答有误」反馈原因码，映射到初始错误维度 |
+| 评测案例池条目 | `SkillEvalCasePoolItem` | **Entity** | Pydantic `BaseModel`（frozen） | 统一沉淀所有 Skill 错误，带租户去重、revision、状态机和脱敏来源 |
+| 评测案例池状态 | `SkillEvalCasePoolStatus` | **Value Object** | `StrEnum` | pending_triage / transformed / confirmed / rejected |
+| 评测资产引用 | `EvalCaseRef` | **Value Object** | Pydantic `BaseModel`（frozen） | 池条目确认后指向的路由用例或回归用例 |
+| 分型回归用例 | `SkillRegressionCase` | **Entity** | Pydantic `BaseModel`（frozen） | 人工确认后的五类可执行维度回归用例，expected_assertions 为判别联合 |
+| 回归断言（判别联合） | `RegressionAssertions` | **Value Object** | 判别联合 | Calculation/PolicyContent/Citation/AnswerQuality/SafetyAssertions，禁止自然语言裸 expected |
+| 评测器状态 | `SkillRegressionEvaluatorStatus` | **Value Object** | `StrEnum` | available / blocked_by_evaluator / passed / failed / not_applicable |
+| 类型化 proposal | `CaseProposal` | **DTO** | 判别联合 | AI 转换生成的六类候选（含 routing），人工确认前不形成资产 |
 | 技能草稿 | `SkillDraft` | **Entity** | Pydantic `BaseModel`（frozen） | 创建/导入/复制/编辑中的过渡态草稿，带乐观锁 revision，校验通过并确认后才物化为正式定义 |
+| AI 草稿 | `SkillDraft(source_type=AI_GENERATED)` | **Entity** | Pydantic `BaseModel`（frozen） | 人工接受 AI proposal 后创建的过渡态草稿；不直接进入运行时或正式 Skill 目录 |
 | 技能草稿状态 | `SkillDraftStatus` | **Value Object** | `StrEnum` | editing / validated / materialized |
-| 技能草稿来源 | `SkillDraftSourceType` | **Value Object** | `StrEnum` | template / import / copy |
+| 技能草稿来源 | `SkillDraftSourceType` | **Value Object** | `StrEnum` | template / import / copy / ai_generated |
+| AI 生成提案 | `SkillAIGenerationResponse` | **DTO** | Pydantic `BaseModel`（frozen） | 模型输出经服务端校验、哈希和溯源封装后的候选 proposal；未被接受前不产生草稿 |
+| Skill 候选制品 | `SkillCandidateArtifact` | **Value Object** | Pydantic `BaseModel`（frozen） | 由已接受草稿生成、仅供隔离评测的不可变制品；存放于运行时 `skills/` 之外 |
 | 技能定义 | `SkillDefinition` | **Entity** | Pydantic `BaseModel`（frozen） | 正式目录中可加载定义的治理生命周期状态（enabled/disabled/archived），与不可变 `SkillVersion` 区分 |
 | 技能生命周期状态 | `SkillLifecycleStatus` | **Value Object** | `StrEnum` | enabled / disabled / archived |
+| 技能治理阶段 | `SkillGovernanceStage` | **Value Object** | `StrEnum` | 工作台只读投影的 evaluate / diagnose / modify / review / release / healthy 阶段 |
+| 技能治理优先级 | `SkillGovernancePriority` | **Value Object** | `StrEnum` | 工作台只读投影的 blocked / high / normal 优先级 |
+| 技能下一步动作 | `SkillNextAction` | **Value Object** | `StrEnum` | 由版本、评测、草稿和发布事实派生的唯一下一步，不单独持久化 |
 | 技能拥有者 | `ToolOwner` | **Value Object** | `StrEnum` | 技能/工具的归属角色（与 `Role` 一致但缺少 CLINICIAN） |
 | MCP 服务器 | `McpServer` | **Entity** | Pydantic `BaseModel` | 通过 MCP 协议注册的外部能力服务器 |
 | MCP 能力 | `McpCapability` | **Entity** | Pydantic `BaseModel` | MCP 服务器暴露的具体能力点（工具/资源/提示） |
@@ -582,8 +597,13 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - `McpCapability.requires_human_confirmation` 为 `True` 时（高风险或有外部副作用），必须等待人工确认
 - `ToolOwner` 与 `Role` 枚举部分重复但缺少 `CLINICIAN`，使用时需注意
 - Skill 评测用例禁止保存患者原始上下文或含敏感信息的样本
+- Skill 错误统一先进 `SkillEvalCasePoolItem`；routing 投影到现有 `SkillEvalCase`，其余五类写入 `SkillRegressionCase`；`other` 仅表示尚未完成分型，不生成可执行资产
+- 回归用例的 `expected_assertions` 必须是判别联合结构化断言，禁止保存自然语言裸 expected；历史回答不直接成为 expected
+- 评测器缺失时回归用例状态为 `blocked_by_evaluator`，不会显示通过或放行发布；非路由结果不污染 top1 accuracy
 - test 发布必须绑定通过的评测与人工审批；同一 Skill 和环境只能有一个 active release
 - 阶段 2 的 `SkillRelease` 仅支持 dev/test 且为 shadow，不改变真实运行时版本选择
+- AI proposal 只是候选；必须经人工接受才能创建 `AI_GENERATED` 草稿，禁止直接写入正式 Skill 目录
+- Skill 候选制品必须在运行时 `skills/` 之外隔离构建与评测，未通过门禁和人工确认不得物化
 - `domain/tool/` 目录完全为空（无 `__init__.py`）— **不要 import**
 
 #### 生命周期
@@ -946,8 +966,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `RuleHit` | 规则命中 | AuditRisk | Value Object |
 | `RuntimeTask` | 运行时任务 | Shared | DTO |
 | `Skill` | 技能 | SkillTool | Aggregate Root |
+| `SkillAIGenerationResponse` | AI 生成提案 | SkillTool | DTO |
+| `SkillCandidateArtifact` | Skill 候选制品 | SkillTool | Value Object |
+| `SkillDraft(source_type=AI_GENERATED)` | AI 草稿 | SkillTool | Entity |
 | `SkillExecutionEngine` | 技能执行引擎 | SkillTool | Domain Service |
+| `SkillGovernancePriority` | 技能治理优先级 | SkillTool | Value Object |
+| `SkillGovernanceStage` | 技能治理阶段 | SkillTool | Value Object |
 | `SkillMetadata` | 技能元数据 | SkillTool | Value Object |
+| `SkillNextAction` | 技能下一步动作 | SkillTool | Value Object |
 | `SkillStep` | 技能步骤 | SkillTool | Entity |
 | `StreamChunk` | 流式块 | ModelService | DTO |
 | `Surgery` | 手术记录 | MedicalRecord | Entity |

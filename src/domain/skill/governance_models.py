@@ -96,6 +96,37 @@ class SkillEvalMetrics(BaseModel):
     gate_passed: bool
 
 
+class SkillRegressionEvalRecord(BaseModel):
+    """单条分型回归用例在一次评测运行中的冻结结果。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    case_id: str
+    case_type: str
+    candidate_version_id: str
+    case_snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evaluator_version: str
+    passed: bool
+    status: str  # passed | failed | blocked_by_evaluator
+    failure_codes: list[str] = Field(default_factory=list)
+    required: bool = True
+
+
+class SkillRegressionSummary(BaseModel):
+    """回归用例发布门禁汇总（独立于路由 top1 accuracy）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    total: int = Field(default=0, ge=0)
+    passed: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    blocked: int = Field(default=0, ge=0)
+    required_total: int = Field(default=0, ge=0)
+    required_passed: int = Field(default=0, ge=0)
+    required_blocked: int = Field(default=0, ge=0)
+    gate_passed: bool
+
+
 class SkillEvalRun(BaseModel):
     """绑定候选版本、基线和测试集快照的评测运行。"""
 
@@ -112,6 +143,8 @@ class SkillEvalRun(BaseModel):
     metrics: SkillEvalMetrics
     results: list[SkillEvalResult] = Field(default_factory=list)
     case_snapshots: list[SkillEvalCase] = Field(default_factory=list)
+    regression_results: list[SkillRegressionEvalRecord] = Field(default_factory=list)
+    regression_summary: SkillRegressionSummary | None = None
     created_by: str = Field(min_length=1, max_length=128)
     created_at: datetime = Field(default_factory=_utc_now)
     completed_at: datetime | None = None

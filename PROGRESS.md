@@ -32,12 +32,12 @@
 | 模型服务与管理 | 4 | 0 | 4 | 0 | 0 | — |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 | 知识库管理 | 3 | 0 | 3 | 0 | 0 | §2 P9 5 tab 已上线，详见 §2 |
-| 技能管理 | 5 | 2 | 3 | 0 | 0 | 阶段 2 批量评测与 test 发布门禁已验证 |
+| 技能管理 | 9 | 6 | 3 | 0 | 0 | Skill AI 创作、候选隔离评测、人工物化与日常治理主链已验证 |
 | 运营看板 | 2 | 0 | 2 | 0 | 0 | — |
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **35** | **2** | **29** | **2** | **2** | — |
+| **合计** | **39** | **6** | **29** | **2** | **2** | — |
 
 > **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6 和 §4 为准；
@@ -104,6 +104,8 @@
 | 7.5 | 固定路由评测与 test 发布门禁：候选/基线差异、人工审批、唯一 active 与 shadow resolver | `skill_infra/route_evaluator.py` → `runtime/skill_management/governance_service.py` → `infra_skill_routes.py` → Portal `/skills` | verified |
 | 7.6 | Skill 治理工作台方案 2：聚合读模型、双栏目录、生命周期证据、单主动作发布与调试抽屉 | `runtime/skill_management/workbench_service.py` → `/infra-skills/workbench` → Portal `/skills` | verified |
 | 7.7 | Skill 管理工作台（草稿生命周期）：草稿 CRUD/复制（乐观锁）、校验/包生成、导入（ZIP/Git/受控目录）、输入指标契约与语义层交互、物化+版本登记+loader 热重载、停用/恢复/归档 | `domain/skill/draft_models.py` → `data_platform/storage/skill/draft_*` → `runtime/skill_management/{draft_service,draft_validator,package_generator,import_service,skill_input_service,materializer,lifecycle_service}.py` → `infra_skill_routes.py` → Portal `/skills`（四页签） | verified |
+| 7.8 | Skill AI 创作与候选评测：已发布指标生成、人工接受、差异优化、草稿校验、隔离路由/行为评测、人工物化 | `runtime/skill_management/ai_authoring` → `candidate_evaluation.py` → `infra_skill_routes.py` → Portal `/skills/new` 与草稿编辑器 | verified |
+| 7.9 | Skill 日常治理工作台：由既有版本、评测、Release 和草稿事实派生治理待办，默认主链为评测→定位问题→修改→复审→Test Shadow 发布；无第二套可变状态机。 | `/infra-skills/workbench` → Portal `/skills`、`/skills/releases` | verified |
 
 7.4 验证证据（2026-08-05）：T1 新功能相关测试 18 passed；T2a Skill API 10 passed；T2b 版本目录 Flow 1 passed；Portal Vitest 3 passed、变更文件 ESLint 通过、Next.js build 通过；Chromium E2E 1 passed。旧 `test_skill_mention.py` / `test_skill_intent_matching.py` 中 8 个请求已下线路由的 404 为预存测试债务，不计入 7.4 通过证据。
 
@@ -114,6 +116,10 @@
 兼容与回滚：运行时仍由 `SkillLoader` / `SkillRouter` 选择当前文件系统 Skill；test active 仅由 Release Resolver 以 shadow 模式解析，不切换真实流量。需要回滚控制面时停止调用 eval/release 端点即可，已登记版本、评测与发布证据不会影响现有业务执行。
 
 7.7 验证证据（2026-08-06）：按 T1 → T2a → T2b 顺序分别为 138 passed（单元：存储 35/草稿 14/校验包 18/导入 17/输入指标 12/物化 8/生命周期 10/回归 24）、20 passed（API：草稿 14 + 端到端流程 5 + 导入 1）、5 passed（Flow：创建→保存→校验→物化→停用→恢复→归档）；Portal Vitest 118 passed（含 API client 10 + 新建向导 4）、Next.js build 通过。真实浏览器验证：经前端代理全链路 2xx（物化 201 + 版本登记）。物化写盘后 loader 热重载（`rediscover()`），占位 assembler 提供 `load()` 入口。
+
+7.8 验证证据（2026-08-10）：Task 8 完成候选制品隔离目录、固定路由快照、Docker 行为执行适配器与 fail-closed 策略（提交 `1775779`）；Task 9 补齐六个低基数 AI 创作指标、Portal 候选评测面板和完整 Flow。按 T1 → T2a → T2b 顺序为 104/56/1 passed；Portal Vitest 31 文件 268 passed，变更范围 ESLint 零错误，Next.js 16.2.12 生产构建通过，`skill` 工作区 3173 端口 Chromium E2E 1 passed（含 390px 横向溢出门禁）。当前 Windows 环境未安装 Docker CLI，候选 runner 镜像需在部署环境构建并配置；镜像不可用时行为评测会阻断，不会回退到宿主机执行。
+
+7.9 验证证据（2026-08-11）：严格按 T1 → T2a → T2b 为 25/31/1 passed，其中 T2b 是真实后端固定评测到 Release 的领域闭环；Portal 全量 Vitest 33 文件 328 passed，最终相关 3 文件 66 passed，全分支 57 个 Portal 改动文件 scoped ESLint 0 errors/0 warnings，Next.js 16.2.12 生产构建通过（36/36 静态页生成）。全仓 `npm run lint` 仍有范围外历史基线 107 errors/66 warnings，集中于 policy-knowledge、dashboard、settlement、thinking-chain、sse-hooks 等，未扩大本任务修复。中央 `skill` 工作区后端/前端为 8173/3173，代理与直连 workbench total 均为 1；最终 Chromium E2E 11 passed。浏览器治理主链使用 stateful route interception 验证同一 API 契约及 creator/reviewer token 分离，不声明真实持久化闭环；自动化 409 使用确定性 route interception 并验证待办、生命周期、选中 URL 不丢失，当前持久态 `settlement_explain_skill` 的语义版本 2.0.0 绑定旧 artifact hash、真实 `/versions/sync` 返回 409 仅作为现场观察的已知边界，不作为自动化证明，完整 source commit 不展示，此持久数据冲突未在本任务修复。响应式视觉矩阵覆盖 1440×1000 与 1600×1000 内联待办/决策/证据三栏、1024×900 证据抽屉、390×844 零占位移动导航及占满可用视口的详情/返回聚焦，以及 CSS zoom 2× stress check；均无页面横向溢出，全页仅一个 Skill H1，390px 产品/连接标签隐藏且角色切换控件不裁切，移动抽屉打开时主区退出可访问树，Tab/Shift+Tab 焦点循环、导航 Link 关闭及打开/关闭/Escape/遮罩焦点交接经真实浏览器验证，ArrowDown/ArrowUp 只移动焦点、Enter 打开，主操作和证据入口可聚焦。Impeccable detector 按 Task 7 一次性规则执行一次，结果 `[]`；规格复核修正未重复执行。构建稳定性偏差：未恢复 Google `next/font`，因构建端请求曾返回 101×404 且仓库无本地 Noto 字体资产，继续使用 `globals.css` 的 `Noto Sans SC, system-ui, sans-serif` 字体栈。回滚边界：恢复旧 `/skills` 编排或停止消费新增只读字段；既有 version/eval/draft/release 证据不受影响。
 
 #### 运营看板 / 嵌入式 / 安全与审计 / 适配器接入
 | # | 单元 | 状态 | 备注 |
@@ -319,6 +325,11 @@
 | 2026-08-06 | **迭代 16：知识页功能优化**：①构建页性能（eligible-units ~2s→~0.7s：store 批量 claims/get_many 消除 N+1、workbench 单遍 `list_document_ids` 枚举 + `get_document(include_knowledge=False)` 跳过 KnowledgeItem 构建；前端独立并行加载 + 骨架屏，任务表首屏即时渲染）②新建任务抽屉新增全选 + 按来源文档筛选 ③审核详情页改表格化（每行一条候选知识：指标字段/单元原文/置信度/操作），表头按单元筛选，行级 通过/拒绝/退回/查看详情（行级走 `reviewKnowledge` 落库留痕，退回以 `[退回重提取]` 前缀 note 落库）；操作按钮用途与交互细节见迭代记录迭代 16 | §2 迭代 16；知识页三页 + wizard + 审核详情；后端 build/workbench 性能链路 |
 | 2026-08 | **issue-9：问题1+问题2 根因修复（U1-U3）**：①U1 parse 单元边界——`structure_parser` 新增 proviso 叶子（句号收尾结构性信号），`doc_1d44e2e1db0c` 的 `n_hI9sUrj0uvBe` 收敛为仅（四）一句；②U2 指标——seed 增 `zcgz.personal_payment_ratio`（个人支付比例，draft）+ schema DETAIL_FIELDS；③U3 折算展开——新增 `rule_derivation.derive_personal_payment_ratios`（退休×系数规则 × 在职基数反解析 → 退休 personal_payment_ratio 绝对值规则，接入 migrate），检索端去掉硬编码 `rule_type=计算公式`；端到端 dry-run：273 extractions → 368 rules（含 6 derived_rules）；回归 530 passed（唯一失败为预存 test_service）。待办：U4 提取契约双值、U5 psn_type 数组化、U6 准入治理、上线（publish_object + 重跑 migrate） | §2 迭代记录；政策知识治理-需求迭代记录.md（issue-9 节） |
 
+| 2026-08-07 | **Skill 管理页功能错误修复（GitHub issue #12）**：修复 `/skills` 草稿编辑/生命周期工作流的前端缺陷——①`skill-draft-api.ts` 6 个写操作（save/validate/delete/disable/restore/archive）漏带 `Authorization` 头，后端 dev 模式鉴权一律 401；②`deleteSkillDraft` 漏传必填 `expected_revision` 查询参数（额外 422，与 AGENTS.md 已知陷阱一致）；③校验结果响应契约错配：前端类型声明 `report:{blocking,warnings}` 而后端返回扁平 `issues`（+`has_blocking`/`revision`），编辑页读 `validation.report.blocking` 触发 TypeError 崩页，`issue.field` 应为 `issue.path`+`severity`。修复后 create→save→validate→delete 全链路经 dev token 2xx；Portal Vitest 224 passed（skill 子集 33）、tsc EXIT=0、next build 通过 | §7 Skill 管理；`infra_skill_routes` 草稿/生命周期端点 |
+| 2026-08-07 | **Skill 工作台“操作过深”重构（issue #12 体验）**：治理动作从 5 Tab 钻取（选中→总览→Tab→找按钮，3-4 层）降为工作台顶层一键执行。新增纯函数 `computePrimaryAction` 依据已加载证据（item/versions/evalRuns/releases）推导唯一下一步（运行评测/创建候选/申请审批/人工审批/激活/查看证据/已激活），由顶层 `SkillPrimaryActionBar` 直接执行写操作并刷新证据，navigate 态仅切 Tab，dev 环境只读禁用。复用既有 api-client 动作函数与 Token 体系，不引入新依赖；色彩沿用蓝/琥珀/翠绿 tint 与 portal 一致。Portal Vitest 235 passed（新增 `skill-primary-action` 11 例、改写 workbench 2 例验证“不进 Tab 即见主动作”）、tsc EXIT=0、next build 通过、设计反模式检测 [] | §7.6 Skill 工作台；Portal `/skills` 工作区 |
+| 2026-08-07 | **Skill 页面两个 bug 修复**：①`/skills` 顶部页签（Skill/草稿/评测记录/发布记录）active 态错乱——“Skill” tab 正则 `/\/skills\/[^/]+(\/edit)?$/` 误匹配 drafts/evaluations/releases，导致无论在哪个子页都高亮“Skill”；改为显式排除保留路径段（`RESERVED_SEGS`）。②`/skills` 工作台目录与所有 skill 列表全空（“没有符合条件的 Skill”）——前端 dev 进程复用旧实例、`NEXT_PUBLIC_API_BASE_URL` 仍指向 next.config 默认 8000，API 代理转发到错误后端实例（空数据）；重启前端指向本工作区后端 8173 修复，并记录陷阱到 AGENTS.md。Portal Vitest 235 passed、tsc EXIT=0、Orca 浏览器验证目录显示 settlement_explain_skill 与页签高亮均正确 | §7 Skill 管理；Portal `/skills` layout + 工作台 |
+| 2026-08-10 | **Skill AI 创作与候选隔离评测完成**：已发布指标→AI 候选→人工接受→差异优化→校验→固定路由/隔离行为评测→人工物化全链路通过；补齐低基数观测指标与 fail-closed 部署约束 | §7.8 Skill AI 创作 |
+
 ---
 
 ## 7. 状态定义
@@ -338,5 +349,35 @@
 - 实现提交：`f494fb9` 、`f3bbc73` 、`23c4890` 、`f2d5cb8` 、`0d71738` 、`8b9bb77` 、`8c36381`。
 - 验证：后端单元/API/Flow 聚焦测试通过；前端 Vitest 通过；Playwright Chromium 政策知识发布流 3/3 通过；Orca 已实际验证知识页和测试页并截图。
 - 已知预存问题：Portal 全量 TypeScript 仍被 `settlement-explanation-page.tsx` 类型债务阻塞；不属于本次改动。
+
+### 2026-08-10 Skill 错误挖掘案例池与分型回归（plan 2026-08-10-skill-eval-mining）
+
+- 状态：**impl_done**（后端全链路 verified；前端反馈流 + 案例池浏览 verified；分型编辑 UI / 发布门禁接入 / 浏览器 E2E 为后续）。
+- 范围：把 Policy QA 的「回答有误」反馈整合进统一案例池，经 AI 类型化转换 + 人工确认投影到严格判别联合的回归资产，五个可执行维度各有确定性评测器。
+- 提交：`daa51fb`(T5) · `9d5f519`(T6 后端) · `dc91f4c`(T6 前端) · `e22cf87`(T7+T8) · `885144b`(T9) · `ace8a84`(T10)。
+- 已完成（10/10 计划任务）：
+  1. 服务端 `qa_turn_id` 全链路（持久化 input/output、result/done/error SSE 事件、`PolicyQAHistoryItem` DTO）
+  2. 前端 `qaTurnId`/`selectedSkillId`/`feedbackState`，解析器保留 qa_turn_id 同时禁止 selected_skill_id
+  3. 统一案例池 + 分型回归领域模型（7 维度、5 类判别联合断言、6 类 proposal、`SkillRegressionCase`）
+  4. 案例池 + 回归资产存储端口（内存/Postgres，软删除、唯一索引、乐观锁）
+  5. 安全入池服务（服务端按 ID 读来源、用户+租户所有权、脱敏、二次敏感扫描、tenant+turn 去重）
+  6. 反馈 / 历史批量入池 / 案例池查询 API + 前端反馈抽屉 + 评测者案例池表格
+  7. AI 类型化转换服务（ModelGateway scene=`skill_eval_transform`，严格 other↔proposal 约束，失败不改状态）
+  8. 人工确认/拒绝（routing→`SkillEvalCase`、5 维→`SkillRegressionCase`、other 不可执行、幂等）
+  9. 五个确定性评测器（calculation/policy_content/citation/answer_quality/safety）+ 注册表，缺失 evaluator 返回 `blocked_by_evaluator` 绝不 passed
+  10. 三条后端 Flow 主链 + 安全负向链 + 6 个低基数 skill_eval_* 指标
+- 评测器状态：calculation / safety **available**（确定性断言）；policy_content / citation **available**（确定性）；answer_quality **available**（确定性部分，rubric 需模型时走 ModelGateway，当前未接入发布门禁）。
+- 发布门禁接入：当前仅 routing（现有 SkillEvalCase 路由回归）计入 top1；safety/calculation 的 `required=true` 用例接入 candidate gate 属后续（Step 9.5 未全量落地，避免误伤）。
+- 验证证据：后端三阶段全绿——单元 76（models/storage/mining/transform/confirm/evaluator/desensitization）+ API 11（feedback/pool/transform/confirm/reject）+ Flow 8（三主链 + 五安全负向）；前端 Vitest 247 passed、tsc EXIT=0。
+- 仍需人工审核的风险：①answer_quality rubric 稳定性未达门禁门槛；②policy_content/citation 证据版本冻结后才能纳入门禁；③浏览器 E2E（Playwright skill-error-mining.flow）与分型编辑 UI（eval-case-editor）未实现（Task 9 Step 1-2、Task 10 Step 5）。
+- 已知预存问题（非本次改动）：`ai_authoring/security.py` 工作树有未提交改动，导致 `test_draft_validator_and_package.py` 40 例失败；已 stash 验证与本次工作无关。`policy_qa/test_policy_qa.py` 4 例 `@pytest.mark.asyncio` 受 pytest_asyncio 不兼容陷阱影响，环境性失败。
+
+### 2026-08-11 Skill 评测收尾与治理工作台增量（分支 ktyhwangfei/skill）
+
+- 状态：**impl_done，本工作区已提交并合并 main**。
+- 范围：skill-eval-mining 收尾（评测启动面板 skill-eval-launch-panel、运行详情 skill-eval-run-detail、案例池分型编辑 UI 增强、错误挖掘 E2E flow）+ governance 存储加固（`regression_results`/`regression_summary` CREATE+ALTER 双写）+ 工作台边角（evaluations 页重组、目录面板、布局导航）。
+- 验证证据：后端 governance/eval 聚焦 42 passed、全量 111 passed；前端 Vitest 37 files / 342 passed；tsc EXIT=0。
+- E2E 说明：新增 `skill-error-mining.flow.ts` 未在本环境运行——`playwright.config` 写死 3000/8000，当前 3000 被主工作区 D:/project（main 分支）前端占用，不含本工作区新代码（已知陷阱：多工作区端口互斥）。flow 组件交互逻辑已由 Vitest（eval-case-pool-table / eval-launch / eval-run-detail / layout-tabs 共 71 例）覆盖，合并后可在干净端口环境补跑。
+- 新增文档：`docs/steering/skill草稿-指标选择与多意图输入契约-设计.md`（草稿第三步改造设计，待评审）。
 
 > **维护约定**：每次状态变更必须在此记录。§2 与 `docs/steering/政策知识管线开发计划.md` 双向同步。

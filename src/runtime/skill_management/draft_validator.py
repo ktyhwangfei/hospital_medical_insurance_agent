@@ -13,6 +13,8 @@ import json
 import re
 from typing import Any
 
+from pydantic import ValidationError
+
 from src.domain.common.actions import (
     BusinessAction,
     BusinessObject,
@@ -20,10 +22,18 @@ from src.domain.common.actions import (
 )
 from src.domain.skill.draft_models import (
     SkillDraft,
+    SkillDraftSourceType,
     ValidationIssue,
     ValidationReport,
     ValidationSeverity,
 )
+from src.runtime.skill_management.ai_authoring.security import (
+    scan_ai_generated_files,
+)
+from src.runtime.skill_management.ai_authoring.schemas import (
+    SkillAIGenerationProvenance,
+)
+from src.security.desensitization.detection import detect_sensitive_patterns
 
 # 脚本危险调用（AST 名称匹配）
 _DANGEROUS_NAMES = {
@@ -52,6 +62,19 @@ _AWS_KEY = re.compile(r"AKIA[0-9A-Z]{16}")
 _PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 _ID_CARD = re.compile(r"\b\d{17}[\dXx]\b")
 _DB_PASSWORD = re.compile(r"(?i)(password|passwd|pwd)\s*[=:]\s*\S+")
+_CREDENTIAL_SECRET = re.compile(
+    r"(?i)(?:password|passwd|pwd|api[_-]?key|secret)\s*[=:]\s*\S+"
+)
+_GENERATION_META_PATH = "__generation_meta__.json"
+_GENERATION_META_KEYS = {
+    "generation_id",
+    "proposal_hash",
+    "provenance",
+    "citations",
+    "uncertainties",
+}
+_GENERATION_ID = re.compile(r"^gen_[0-9a-f]{12}_[A-Za-z0-9_-]+$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class SkillDraftValidator:
@@ -62,7 +85,10 @@ class SkillDraftValidator:
         issues.extend(self._validate_basic(draft))
         issues.extend(self._validate_business_mounting(draft))
         issues.extend(self._validate_schemas(draft))
-        issues.extend(self._validate_raw_files_safety(draft))
+        if draft.source_type == SkillDraftSourceType.AI_GENERATED:
+            issues.extend(self._validate_ai_generated_files(draft))
+        else:
+            issues.extend(self._validate_raw_files_safety(draft))
         return ValidationReport(issues=issues)
 
     def validate_files(self, raw_files: dict[str, str]) -> ValidationReport:
@@ -185,6 +211,103 @@ class SkillDraftValidator:
             if path.endswith(".py"):
                 issues.extend(self._check_python_safety(path, content))
         return issues
+
+    def _validate_ai_generated_files(self, draft: SkillDraft) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        model_files: dict[str, str] = {}
+        if _GENERATION_META_PATH not in draft.raw_files:
+            issues.append(
+                self._blocking(
+                    "AI_GENERATION_META_REQUIRED",
+                    "AI 草稿必须保留生成证据元数据",
+                    f"raw_files.{_GENERATION_META_PATH}",
+                )
+            )
+        for path, content in draft.raw_files.items():
+            if not path.startswith("__"):
+                model_files[path] = content
+                continue
+            if path != _GENERATION_META_PATH:
+                issues.append(
+                    self._blocking(
+                        "AI_RESERVED_FILE_FORBIDDEN",
+                        "AI 草稿包含不允许的内部保留文件",
+                        f"raw_files.{path}",
+                    )
+                )
+                continue
+            issues.extend(self._validate_generation_metadata(content))
+
+        result = scan_ai_generated_files(model_files)
+        issues.extend(
+            ValidationIssue(
+                code=issue.code,
+                message=issue.message,
+                severity=ValidationSeverity.BLOCKING,
+                path=f"raw_files.{issue.path}" if issue.path else "raw_files",
+            )
+            for issue in result.issues
+        )
+        return issues
+
+    def _validate_generation_metadata(self, content: str) -> list[ValidationIssue]:
+        path = f"raw_files.{_GENERATION_META_PATH}"
+        if (
+            detect_sensitive_patterns(content)
+            or _AWS_KEY.search(content)
+            or _PRIVATE_KEY.search(content)
+            or _CREDENTIAL_SECRET.search(content)
+        ):
+            return [
+                self._blocking(
+                    "AI_GENERATION_META_SENSITIVE",
+                    "AI 生成内部证据包含敏感内容",
+                    path,
+                )
+            ]
+        try:
+            payload = json.loads(content)
+            if not isinstance(payload, dict) or set(payload) != _GENERATION_META_KEYS:
+                raise ValueError("metadata keys invalid")
+            generation_id = payload["generation_id"]
+            proposal_hash = payload["proposal_hash"]
+            if not isinstance(generation_id, str) or not _GENERATION_ID.fullmatch(
+                generation_id
+            ):
+                raise ValueError("generation_id invalid")
+            if not isinstance(proposal_hash, str) or not _SHA256.fullmatch(
+                proposal_hash
+            ):
+                raise ValueError("proposal_hash invalid")
+            SkillAIGenerationProvenance.model_validate(payload["provenance"])
+            citations = payload["citations"]
+            if not isinstance(citations, list) or any(
+                not isinstance(item, dict)
+                or set(item) != {"source_type", "source_id", "summary"}
+                or any(
+                    not isinstance(item[key], str) or not item[key].strip()
+                    for key in item
+                )
+                for item in citations
+            ):
+                raise ValueError("citations invalid")
+            uncertainties = payload["uncertainties"]
+            if not isinstance(uncertainties, list) or any(
+                not isinstance(item, str) or not item.strip()
+                for item in uncertainties
+            ):
+                raise ValueError("uncertainties invalid")
+            if not citations and not uncertainties:
+                raise ValueError("traceability missing")
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError, ValidationError):
+            return [
+                self._blocking(
+                    "AI_GENERATION_META_INVALID",
+                    "AI 生成内部证据不是合法的严格 JSON 对象",
+                    path,
+                )
+            ]
+        return []
 
     def _check_python_safety(
         self, path: str, content: str

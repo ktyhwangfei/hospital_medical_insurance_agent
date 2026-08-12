@@ -93,10 +93,11 @@ describe('Skill catalog API client', () => {
       query: '结算 skill',
       governance_status: 'needs_evaluation',
       business_action: 'explain',
+      priority: 'blocked',
     })
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      '/api/v1/medical-insurance-ai-agent/infra-skills/workbench?business_action=explain&governance_status=needs_evaluation&query=%E7%BB%93%E7%AE%97+skill',
+      '/api/v1/medical-insurance-ai-agent/infra-skills/workbench?business_action=explain&governance_status=needs_evaluation&priority=blocked&query=%E7%BB%93%E7%AE%97+skill',
     )
   })
 })

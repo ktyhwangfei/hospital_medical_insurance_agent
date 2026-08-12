@@ -18,6 +18,7 @@ import type {
   SkillEvalRunResponse,
   SkillReleaseResponse,
   SkillVersionResponse,
+  SkillWorkbenchItem,
 } from '@/lib/types'
 
 interface SkillReleasePanelProps {
@@ -25,6 +26,7 @@ interface SkillReleasePanelProps {
   versions: SkillVersionResponse[]
   environment?: 'dev' | 'test'
   readOnly?: boolean
+  workbenchItem?: SkillWorkbenchItem
   onChanged?: () => Promise<void> | void
 }
 
@@ -35,6 +37,14 @@ const ACTION_LABELS: Record<Exclude<ReleaseAction, 'none'>, string> = {
   request_approval: '申请审批',
   approve: '人工审批通过',
   activate: '激活 Test Shadow',
+}
+
+const WORKBENCH_RELEASE_ACTIONS: Partial<Record<SkillWorkbenchItem['next_action'], ReleaseAction>> = {
+  create_candidate: 'create_candidate',
+  request_approval: 'request_approval',
+  review_approval: 'approve',
+  activate_test_shadow: 'activate',
+  view_evidence: 'none',
 }
 
 const STATUS_LABELS: Record<SkillReleaseResponse['status'], string> = {
@@ -87,6 +97,7 @@ export default function SkillReleasePanel({
   versions,
   environment = 'test',
   readOnly = false,
+  workbenchItem,
   onChanged,
 }: SkillReleasePanelProps) {
   const [runs, setRuns] = useState<SkillEvalRunResponse[]>([])
@@ -119,13 +130,36 @@ export default function SkillReleasePanel({
     return () => window.clearTimeout(timer)
   }, [load])
 
-  const eligible = useMemo(() => runs.find((run) => (
-    run.status === 'passed'
-    && run.metrics.gate_passed
-    && versions.some((version) => version.version_id === run.version_id)
-  )), [runs, versions])
-  const latestRelease = releases.find((release) => release.status !== 'retired')
-  const action = nextReleaseAction(latestRelease)
+  const currentRun = useMemo(() => workbenchItem?.latest_eval_run_id
+    ? runs.find((run) => run.run_id === workbenchItem.latest_eval_run_id)
+    : undefined, [runs, workbenchItem])
+  const currentVersion = useMemo(() => workbenchItem && currentRun
+    ? versions.find((version) => (
+        version.version_id === currentRun.version_id
+        && version.semantic_version === workbenchItem.candidate_version
+        && version.validation_status === 'passed'
+      ))
+    : undefined, [currentRun, versions, workbenchItem])
+  const eligible = workbenchItem
+    ? currentRun?.status === 'passed' && currentRun.metrics.gate_passed ? currentRun : undefined
+    : runs.find((run) => (
+        run.status === 'passed'
+        && run.metrics.gate_passed
+        && versions.some((version) => version.version_id === run.version_id)
+      ))
+  const latestRelease = workbenchItem && currentRun && currentVersion
+    ? releases.find((release) => (
+        release.status !== 'retired'
+        && release.version_id === currentVersion.version_id
+        && release.eval_run_id === currentRun.run_id
+      ))
+    : workbenchItem ? undefined : releases.find((release) => release.status !== 'retired')
+  const derivedAction = nextReleaseAction(latestRelease)
+  const expectedAction: ReleaseAction | null = workbenchItem
+    ? WORKBENCH_RELEASE_ACTIONS[workbenchItem.next_action] ?? null
+    : derivedAction
+  const bindingReady = !workbenchItem || Boolean(currentVersion && currentRun && expectedAction === derivedAction)
+  const action = bindingReady ? derivedAction : 'none'
 
   async function mutate(operation: () => Promise<unknown>): Promise<void> {
     setMutating(true)
@@ -182,6 +216,11 @@ export default function SkillReleasePanel({
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">dev 环境在本工作台只读</div>
       )}
       {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+      {!bindingReady && (
+        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          当前候选发布事实不完整，请返回治理待办刷新
+        </div>
+      )}
       {gateFailures.length > 0 && (
         <ul className="list-disc space-y-1 rounded-lg bg-amber-50 px-8 py-3 text-sm text-amber-800">
           {gateFailures.map((failure) => <li key={failure}>{failure}</li>)}

@@ -329,28 +329,53 @@ def _flatten_sql(sql: str) -> str:
     return " ".join(sql.split()).lower()
 
 
-def test_pg_save_draft_emits_insert_with_jsonb_fields():
+def _persisted_draft_row() -> dict[str, Any]:
+    return {
+        "draft_id": "draft-1",
+        "skill_id": "demo_skill",
+        "skill_name": "Demo Skill",
+        "source_type": "template",
+        "source_skill_id": None,
+        "structured_config": '{"basic": {"name": "Demo Skill"}}',
+        "raw_files": '{"scripts/x.py": "print(1)"}',
+        "validation_report": None,
+        "status": "editing",
+        "revision": 1,
+        "created_by": "u-admin",
+        "created_at": "2026-08-06T00:00:00+00:00",
+        "updated_at": "2026-08-06T00:00:00+00:00",
+        "deleted_at": None,
+    }
+
+
+def test_pg_save_draft_uses_atomic_insert_and_returns_persisted_row():
     from src.data_platform.storage.skill.draft_postgres import PostgresSkillDraftStorage
 
-    client = _FakeClient()
+    client = _FakeClient(return_rows=[_persisted_draft_row()])
     storage = PostgresSkillDraftStorage(client=client)
-    storage.save_draft(_make_draft(raw_files={"scripts/x.py": "print(1)"}))
+    saved = storage.save_draft(_make_draft(raw_files={"scripts/x.py": "print(1)"}))
+
     inserts = [c for c in client.calls if _flatten_sql(c[0]).startswith("insert into skill_drafts")]
     assert len(inserts) == 1
     sql, params = inserts[0]
-    assert "structured_config" in sql.lower()
-    assert "raw_files" in sql.lower()
+    flattened = _flatten_sql(sql)
+    assert "on conflict (draft_id) do nothing" in flattened
+    assert "returning *" in flattened
+    assert not any(_flatten_sql(call[0]).startswith("select") for call in client.calls)
     # JSONB 字段以 JSON 字符串写入
     assert any(isinstance(p, str) and "scripts/x.py" in p for p in params)
+    assert saved.draft_id == "draft-1"
+    assert saved.raw_files == {"scripts/x.py": "print(1)"}
 
 
-def test_pg_save_draft_rejects_existing_id():
+def test_pg_save_draft_normalizes_empty_atomic_insert_as_conflict():
     from src.data_platform.storage.skill.draft_postgres import PostgresSkillDraftStorage
 
-    client = _FakeClient(return_rows=[{"draft_id": "draft-1"}])  # 预存查询命中
+    client = _FakeClient(return_rows=[])
     storage = PostgresSkillDraftStorage(client=client)
     with pytest.raises(SkillDraftConflictError):
         storage.save_draft(_make_draft())
+    assert not any(_flatten_sql(call[0]).startswith("select") for call in client.calls)
 
 
 def test_pg_update_draft_uses_optimistic_lock_where_clause():

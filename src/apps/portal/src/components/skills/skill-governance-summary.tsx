@@ -10,12 +10,13 @@ const summaryItems: Array<{
   label: string
   field: keyof Pick<SkillWorkbenchSummary, 'total' | 'healthy' | 'needs_evaluation' | 'pending_approval' | 'test_active'>
   status: SkillGovernanceStatus | null
+  filterable: boolean
 }> = [
-  { label: '全部', field: 'total', status: null },
-  { label: '健康', field: 'healthy', status: 'healthy' },
-  { label: '待评测', field: 'needs_evaluation', status: 'needs_evaluation' },
-  { label: '待审批', field: 'pending_approval', status: 'pending_approval' },
-  { label: 'Test Active', field: 'test_active', status: null },
+  { label: '全部待办', field: 'total', status: null, filterable: true },
+  { label: '待评测', field: 'needs_evaluation', status: 'needs_evaluation', filterable: true },
+  { label: '待审批', field: 'pending_approval', status: 'pending_approval', filterable: true },
+  { label: '健康', field: 'healthy', status: 'healthy', filterable: true },
+  { label: 'Test Active', field: 'test_active', status: null, filterable: false },
 ]
 
 export default function SkillGovernanceSummary({
@@ -24,22 +25,29 @@ export default function SkillGovernanceSummary({
   onStatusChange,
 }: SkillGovernanceSummaryProps) {
   return (
-    <section aria-label="治理摘要" className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 md:grid-cols-3 xl:grid-cols-5">
+    <section aria-label="待办分组" className="flex min-h-10 overflow-x-auto border-b border-slate-200 bg-white">
       {summaryItems.map((item) => {
-        const selected = item.status !== null && activeStatus === item.status
-        return (
+        const selected = item.filterable && activeStatus === item.status
+        const content = (
+          <>
+            <span>{item.label}</span>
+            <span className="font-semibold tabular-nums text-slate-900">{summary ? summary[item.field] : '—'}</span>
+          </>
+        )
+        return item.filterable ? (
           <button
             key={item.field}
             type="button"
             aria-pressed={selected}
             onClick={() => onStatusChange(selected ? null : item.status)}
-            className="min-h-20 bg-white px-4 py-3 text-left transition-colors hover:bg-slate-50 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 aria-pressed:bg-blue-50"
+            className="flex min-h-11 shrink-0 items-center gap-2 border-r border-slate-200 px-3 text-sm text-slate-600 transition-colors hover:bg-slate-50 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 aria-pressed:bg-blue-50 aria-pressed:text-blue-700 sm:min-h-10"
           >
-            <span className="block text-xs font-medium text-slate-500">{item.label}</span>
-            <span className="mt-1 block text-2xl font-semibold tabular-nums text-slate-950">
-              {summary ? summary[item.field] : '—'}
-            </span>
+            {content}
           </button>
+        ) : (
+          <div key={item.field} className="flex min-h-11 shrink-0 items-center gap-2 px-3 text-sm text-slate-500 sm:min-h-10">
+            {content}
+          </div>
         )
       })}
     </section>

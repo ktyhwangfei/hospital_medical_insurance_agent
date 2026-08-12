@@ -1,22 +1,24 @@
+import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-from typing import Iterator
 
 import pytest
 
 from src.model_service.exceptions import (
     ModelAuthError,
     ModelExhaustedError,
-    ModelRateLimitError,
     ModelServerError,
     ModelTimeoutError,
 )
 from src.model_service.gateway import ModelGateway
-from src.model_service.models import Message, ModelResponse, StreamChunk, TokenUsage
+from src.model_service.models import Message, ModelResponse, TokenUsage
 
 
 @pytest.fixture
 def gateway():
-    return ModelGateway()
+    instance = ModelGateway()
+    instance._config.base_url = "https://model.test.invalid"
+    return instance
 
 
 def _make_response(content="ok", model="gpt-4o-mini"):
@@ -225,3 +227,248 @@ def test_dummy_generate_policy_qa_returns_extraction_json(gateway, monkeypatch):
         first = parsed[0]
         assert "fact_text" in first
         assert isinstance(first.get("rules"), list)
+
+def _recording_patches():
+    return (
+        patch(
+            "src.runtime.infra_event.context.infra_context",
+            return_value=SimpleNamespace(workflow_id=None),
+        ),
+        patch("src.runtime.infra_event.recorder.record_llm_call"),
+    )
+
+
+def test_skill_authoring_success_event_hashes_prompt_and_response(gateway):
+    messages = [Message(role="user", content="PRIVATE AUTHORING DESCRIPTION")]
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(
+            gateway,
+            "_call_provider",
+            return_value=_make_response("PRIVATE GENERATED SCRIPT"),
+        ),
+    ):
+        gateway.generate(messages, "reasoning", "skill_authoring")
+
+    event = recorder.call_args.kwargs
+    assert event["prompt_summary"].startswith("sha256:")
+    assert event["response_summary"].startswith("sha256:")
+    assert "PRIVATE" not in event["prompt_summary"]
+    assert "PRIVATE" not in event["response_summary"]
+
+
+def test_skill_authoring_all_failure_events_hash_prompt_and_response(gateway):
+    messages = [Message(role="user", content="PRIVATE AUTHORING DESCRIPTION")]
+    gateway._config.max_retries = 1
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(
+            gateway,
+            "_call_provider",
+            side_effect=ModelServerError("provider failed"),
+        ),
+        pytest.raises(ModelExhaustedError),
+    ):
+        gateway.generate(messages, "reasoning", "skill_authoring")
+
+    assert recorder.call_count == 2
+    for call in recorder.call_args_list:
+        event = call.kwargs
+        assert event["prompt_summary"].startswith("sha256:")
+        assert event["response_summary"].startswith("sha256:")
+        assert "PRIVATE" not in event["prompt_summary"]
+
+
+def test_skill_authoring_retry_log_redacts_provider_error(gateway, caplog):
+    prompt_secret = "PRIVATE AUTHORING PROMPT"
+    provider_secret = "provider echoed PRIVATE SCRIPT response body"
+    error = ModelServerError(provider_secret, model_name="provider-model")
+    gateway._config.max_retries = 1
+
+    with (
+        caplog.at_level(logging.WARNING, logger="src.model_service.gateway"),
+        patch.object(gateway, "_call_provider", side_effect=error),
+        pytest.raises(ModelExhaustedError) as captured,
+    ):
+        gateway.generate(
+            [Message(role="user", content=prompt_secret)],
+            "reasoning",
+            "skill_authoring",
+        )
+
+    retry_record = next(
+        record for record in caplog.records if record.getMessage() == "model_retry"
+    )
+    assert retry_record.error.startswith("ModelServerError:sha256:")
+    assert prompt_secret not in str(retry_record.__dict__)
+    assert provider_secret not in str(retry_record.__dict__)
+    failure_summary = captured.value.failures[0]["error_message"]
+    assert failure_summary.startswith("ModelServerError:sha256:")
+    assert provider_secret not in failure_summary
+
+
+def test_non_authoring_retry_log_keeps_existing_error_text(gateway, caplog):
+    provider_error = "ordinary provider failure body"
+    gateway._config.max_retries = 1
+
+    with (
+        caplog.at_level(logging.WARNING, logger="src.model_service.gateway"),
+        patch.object(
+            gateway,
+            "_call_provider",
+            side_effect=ModelServerError(provider_error),
+        ),
+        pytest.raises(ModelExhaustedError) as captured,
+    ):
+        gateway.generate(
+            [Message(role="user", content="ordinary prompt")], "llm", "test"
+        )
+
+    retry_record = next(
+        record for record in caplog.records if record.getMessage() == "model_retry"
+    )
+    assert retry_record.error == provider_error
+    assert captured.value.failures[0]["error_message"] == provider_error
+
+
+def test_skill_authoring_stream_redacts_error_but_reraises_same_object(
+    gateway, caplog
+):
+    prompt_secret = "PRIVATE AUTHORING PROMPT"
+    provider_secret = "provider echoed PRIVATE SCRIPT response body"
+    error = ModelServerError(provider_secret, model_name="provider-model")
+    provider = MagicMock()
+    provider.invoke_stream.side_effect = error
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        caplog.at_level(logging.ERROR, logger="src.model_service.gateway"),
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(gateway, "_get_provider", return_value=provider),
+        pytest.raises(ModelServerError) as captured,
+    ):
+        list(
+            gateway.generate_stream(
+                [Message(role="user", content=prompt_secret)],
+                "reasoning",
+                "skill_authoring",
+            )
+        )
+
+    assert captured.value is error
+    log_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "model_stream_interrupted"
+    )
+    assert log_record.error.startswith("ModelServerError:sha256:")
+    assert prompt_secret not in str(log_record.__dict__)
+    assert provider_secret not in str(log_record.__dict__)
+    event = recorder.call_args.kwargs
+    assert event["error_message"].startswith("ModelServerError:sha256:")
+    assert provider_secret not in event["error_message"]
+
+
+def test_non_authoring_stream_keeps_existing_error_text(gateway, caplog):
+    provider_error = "ordinary stream provider failure body"
+    error = ModelServerError(provider_error, model_name="provider-model")
+    provider = MagicMock()
+    provider.invoke_stream.side_effect = error
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        caplog.at_level(logging.ERROR, logger="src.model_service.gateway"),
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(gateway, "_get_provider", return_value=provider),
+        pytest.raises(ModelServerError) as captured,
+    ):
+        list(
+            gateway.generate_stream(
+                [Message(role="user", content="ordinary prompt")],
+                "llm",
+                "default",
+            )
+        )
+
+    assert captured.value is error
+    log_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "model_stream_interrupted"
+    )
+    assert log_record.error == provider_error
+    assert recorder.call_args.kwargs["error_message"] == provider_error
+
+
+def test_non_authoring_event_keeps_existing_plaintext_summary(gateway):
+    messages = [Message(role="user", content="ordinary prompt")]
+    context_patch, recorder_patch = _recording_patches()
+
+    with (
+        context_patch,
+        recorder_patch as recorder,
+        patch.object(
+            gateway,
+            "_call_provider",
+            return_value=_make_response("ordinary response"),
+        ),
+    ):
+        gateway.generate(messages, "llm", "test")
+
+    event = recorder.call_args.kwargs
+    assert event["prompt_summary"] == "ordinary prompt"
+    assert event["response_summary"] == "ordinary response"
+
+
+def test_generate_fills_empty_provider_model_name_from_route(gateway):
+    messages = [Message(role="user", content="Hello")]
+    routed_model, _ = gateway._router.resolve("skill_authoring", "reasoning")
+
+    with patch.object(
+        gateway, "_call_provider", return_value=_make_response(model="")
+    ):
+        result = gateway.generate(messages, "reasoning", "skill_authoring")
+
+    assert result.model_name == routed_model
+
+
+def test_dummy_skill_authoring_records_hash_only_success_event(gateway):
+    gateway._config.base_url = "dummy"
+    prompt_secret = "PRIVATE DUMMY AUTHORING DESCRIPTION"
+    context_patch, recorder_patch = _recording_patches()
+
+    with context_patch, recorder_patch as recorder:
+        result = gateway.generate(
+            [Message(role="user", content=prompt_secret)],
+            "reasoning",
+            "skill_authoring",
+        )
+
+    event = recorder.call_args.kwargs
+    assert event["prompt_summary"].startswith("sha256:")
+    assert event["response_summary"].startswith("sha256:")
+    assert prompt_secret not in str(event)
+    assert result.content not in str(event)
+
+
+def test_dummy_non_authoring_records_existing_plaintext_summary(gateway):
+    gateway._config.base_url = "dummy"
+    prompt = "ordinary dummy prompt"
+    context_patch, recorder_patch = _recording_patches()
+
+    with context_patch, recorder_patch as recorder:
+        result = gateway.generate(
+            [Message(role="user", content=prompt)], "llm", "test"
+        )
+
+    event = recorder.call_args.kwargs
+    assert event["prompt_summary"] == prompt
+    assert event["response_summary"] == result.content

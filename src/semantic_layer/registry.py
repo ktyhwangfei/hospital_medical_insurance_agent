@@ -152,6 +152,10 @@ class SemanticRegistry:
     def __init__(self, store: RegistryStore):
         self._store = store
 
+    # Domain queries
+    def list_domains(self) -> list[BusinessDomain]:
+        return self._store.list_domains()
+
     # Object queries
     def get_object(self, object_code: str) -> Optional[BusinessObject]:
         return self._store.get_object(object_code)

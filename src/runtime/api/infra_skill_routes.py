@@ -7,12 +7,22 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Protocol, cast
+from typing import Annotated, Protocol, TypeVar, cast
 
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from pydantic import BaseModel, ValidationError
 
-from src.config.production import SKILLS_DIR
+from src.config.production import (
+    SKILLS_DIR,
+    SKILL_CANDIDATE_CPU_LIMIT,
+    SKILL_CANDIDATE_MEMORY_LIMIT,
+    SKILL_CANDIDATE_PIDS_LIMIT,
+    SKILL_CANDIDATE_ROOT,
+    SKILL_CANDIDATE_RUNNER_IMAGE,
+    SKILL_CANDIDATE_SANDBOX_ENABLED,
+    SKILL_CANDIDATE_TIMEOUT_SECONDS,
+)
 from src.data_platform.storage.skill.version_factory import get_skill_version_storage
 from src.data_platform.storage.skill.version_ports import SkillVersionConflictError
 from src.data_platform.storage.skill.draft_ports import (
@@ -27,7 +37,8 @@ from src.data_platform.storage.skill.governance_ports import (
     SkillGovernanceNotFoundError,
 )
 from src.data_platform.cache import create_cache_client
-from src.data_platform.cache.ports import IdempotencyStore
+from src.data_platform.cache.ports import IdempotencyStore, ShortStateStore
+from src.observability import metrics as observability_metrics
 
 logger = logging.getLogger(__name__)
 from src.runtime.api.schemas import (
@@ -56,14 +67,41 @@ from src.runtime.skill_management.governance_service import (
     SkillGovernanceService,
 )
 from src.runtime.skill_management.workbench_service import (
+    SkillGovernancePriority,
     SkillGovernanceStatus,
     SkillWorkbenchService,
 )
 from src.runtime.skill_management.draft_service import SkillDraftService
+from src.runtime.skill_management.ai_authoring.schemas import (
+    SkillAIGenerationResponse,
+    SkillAIOptimizationResponse,
+)
+from src.runtime.skill_management.ai_authoring.service import (
+    SkillAIAuthoringError,
+    SkillAIAuthoringService,
+    SkillAIInputInvalidError,
+    SkillAIMetricNotFoundError,
+    SkillAIMetricNotPublishedError,
+    SkillAIModelError,
+    SkillAIOutputInvalidError,
+    SkillAIRevisionConflictError,
+    SkillAISecurityRejectedError,
+)
 from src.runtime.skill_management.draft_validator import SkillDraftValidator
 from src.runtime.skill_management.package_generator import SkillPackageGenerator
+from src.runtime.skill_management.ai_authoring.candidate_evaluation import (
+    SkillCandidateArtifactError,
+    SkillCandidateEvaluationService,
+)
+from src.runtime.skill_management.ai_authoring.candidate_execution_ports import (
+    CandidateExecutionPort,
+    DisabledCandidateExecutionAdapter,
+)
 from src.domain.skill.governance_models import SkillRelease
 from src.runtime.api.skill_schemas import (
+    SkillAIAcceptRequest,
+    SkillAIGenerateRequest,
+    SkillAIOptimizeRequest,
     SkillDraftCreateRequest,
     SkillDraftCopyRequest,
     SkillDraftListResponse,
@@ -76,6 +114,9 @@ from src.runtime.api.skill_schemas import (
     SkillLifecycleTransitionRequest,
     SkillPackageFileResponse,
     SkillPackagePreviewResponse,
+    SkillCandidateBehaviorEvaluationResponse,
+    SkillCandidateEvaluationRequest,
+    SkillCandidateRouteEvaluationResponse,
     SkillValidationIssueResponse,
     SkillEvalCaseCreateRequest,
     SkillEvalCaseListResponse,
@@ -98,6 +139,26 @@ from src.skill_infra.artifact import SkillArtifactError
 from src.skill_infra.skill_loader import get_loader, refresh_loader
 from src.skill_infra.skill_router import get_assembler
 from src.skill_infra.unified_router import route_question_ranked
+from src.data_platform.storage.skill.regression_factory import (
+    get_skill_regression_storage as _get_skill_regression_storage_factory,
+)
+from src.data_platform.storage.skill.regression_ports import SkillRegressionStorage
+from src.runtime.api.policy_qa_routes import TaskBackedQASourceReader
+from src.runtime.skill_management.regression_mining_service import (
+    RegressionMiningService,
+)
+from src.runtime.api.skill_schemas import (
+    EvalCasePoolConfirmRequest,
+    EvalCasePoolConfirmResponse,
+    EvalCasePoolFromHistoryRequest,
+    EvalCasePoolFromHistoryResponse,
+    EvalCasePoolItemResponse,
+    EvalCasePoolListResponse,
+    EvalCasePoolRejectRequest,
+    EvalCasePoolTransformRequest,
+    EvalCasePoolTransformResponse,
+    HistoryMiningOutcomeResponse,
+)
 
 router = APIRouter()
 
@@ -128,15 +189,57 @@ SkillGovernanceServiceDependency = Annotated[
 ]
 
 
+def get_skill_draft_service() -> SkillDraftService:
+    from src.data_platform.storage.skill.draft_factory import get_skill_draft_storage
+
+    return SkillDraftService(
+        storage=get_skill_draft_storage(),
+        loader=get_loader(),
+        skills_root=SKILLS_DIR,
+    )
+
+
+SkillDraftServiceDependency = Annotated[
+    SkillDraftService, Depends(get_skill_draft_service)
+]
+
+
 def get_skill_workbench_service(
     version_service: SkillVersionServiceDependency,
     governance_service: SkillGovernanceServiceDependency,
+    draft_service: SkillDraftServiceDependency,
 ) -> SkillWorkbenchService:
-    return SkillWorkbenchService(version_service, governance_service)
+    return SkillWorkbenchService(
+        version_service,
+        governance_service,
+        draft_service=draft_service,
+    )
 
 
 SkillWorkbenchServiceDependency = Annotated[
     SkillWorkbenchService, Depends(get_skill_workbench_service)
+]
+
+
+def get_skill_regression_storage_dep() -> SkillRegressionStorage:
+    return _get_skill_regression_storage_factory()
+
+
+SkillRegressionStorageDependency = Annotated[
+    SkillRegressionStorage, Depends(get_skill_regression_storage_dep)
+]
+
+
+def get_regression_mining_service(
+    storage: SkillRegressionStorageDependency,
+) -> RegressionMiningService:
+    return RegressionMiningService(
+        storage=storage, qa_source_reader=TaskBackedQASourceReader()
+    )
+
+
+RegressionMiningServiceDependency = Annotated[
+    RegressionMiningService, Depends(get_regression_mining_service)
 ]
 
 
@@ -232,7 +335,7 @@ IdempotencyKey = Annotated[
 ]
 
 
-class SkillIdempotencyStore(IdempotencyStore, Protocol):
+class SkillIdempotencyStore(IdempotencyStore, ShortStateStore, Protocol):
     def get_json(self, key: str) -> dict[str, object] | None: ...
 
     def set_json(
@@ -257,17 +360,24 @@ SkillIdempotencyStoreDependency = Annotated[
     SkillIdempotencyStore, Depends(get_skill_idempotency_store)
 ]
 
+_TResponse = TypeVar("_TResponse", bound=BaseModel)
 
-def _idempotent_release_mutation(
+
+def _idempotent_mutation(
     *,
     store: SkillIdempotencyStore,
     scope: str,
     idempotency_key: str,
     request_payload: dict[str, object],
-    operation: Callable[[], SkillRelease],
-    recovery: Callable[[], SkillRelease | None] | None = None,
-) -> SkillReleaseResponse:
+    operation: Callable[[], object],
+    response_model: type[_TResponse],
+    recovery: Callable[[], object | None] | None = None,
+    result_metadata: Callable[[_TResponse], dict[str, object]] | None = None,
+    replay: Callable[[dict[str, object]], object | None] | None = None,
+) -> _TResponse:
     scoped_key = f"skill-governance:{scope}:{idempotency_key}"
+    cache_key = f"idempotency:{scoped_key}"
+    reservation_acquired = False
     serialized = json.dumps(
         request_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
@@ -283,8 +393,18 @@ def _idempotent_release_mutation(
                         "Idempotency-Key 已用于不同请求",
                     ),
                 )
-            return SkillReleaseResponse.model_validate(existing)
-        cache_key = f"idempotency:{scoped_key}"
+            if replay is not None:
+                replayed = replay(existing)
+                if replayed is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=error_detail(
+                            "IDEMPOTENCY_RESULT_UNAVAILABLE",
+                            "幂等结果关联资源不存在",
+                        ),
+                    )
+                return response_model.model_validate(replayed.model_dump())
+            return response_model.model_validate(existing)
         reservation = store.get_json(cache_key)
         if (
             reservation is not None
@@ -300,9 +420,13 @@ def _idempotent_release_mutation(
         if reservation is not None and recovery is not None:
             recovered = recovery()
             if recovered is not None:
-                response = SkillReleaseResponse.model_validate(recovered.model_dump())
+                response = response_model.model_validate(recovered.model_dump())
                 stored = {
-                    **response.model_dump(mode="json"),
+                    **(
+                        result_metadata(response)
+                        if result_metadata is not None
+                        else response.model_dump(mode="json")
+                    ),
                     "_request_hash": request_hash,
                 }
                 try:
@@ -321,28 +445,52 @@ def _idempotent_release_mutation(
                     "相同 Idempotency-Key 的请求正在处理中",
                 ),
             )
+        reservation_acquired = True
         store.set_json(
             cache_key,
             {"status": "reserved", "request_hash": request_hash},
             ttl_seconds=86400,
         )
     except HTTPException:
+        if reservation_acquired:
+            try:
+                store.delete(cache_key)
+            except Exception:
+                logger.exception(
+                    "Failed to release initialized Skill idempotency key: %s",
+                    scoped_key,
+                )
         raise
     except Exception as exc:
+        if reservation_acquired:
+            try:
+                store.delete(cache_key)
+            except Exception:
+                logger.exception(
+                    "Failed to release initialized Skill idempotency key: %s",
+                    scoped_key,
+                )
         raise HTTPException(
             status_code=503,
             detail=error_detail("IDEMPOTENCY_STORE_UNAVAILABLE", "幂等存储不可用"),
         ) from exc
 
     try:
-        response = SkillReleaseResponse.model_validate(operation().model_dump())
+        response = response_model.model_validate(operation().model_dump())
     except Exception:
         try:
             store.delete(f"idempotency:{scoped_key}")
         except Exception:
             logger.exception("Failed to release Skill idempotency key: %s", scoped_key)
         raise
-    stored = {**response.model_dump(mode="json"), "_request_hash": request_hash}
+    stored = {
+        **(
+            result_metadata(response)
+            if result_metadata is not None
+            else response.model_dump(mode="json")
+        ),
+        "_request_hash": request_hash,
+    }
     try:
         store.complete(scoped_key, stored, ttl_seconds=86400)
     except Exception:
@@ -428,17 +576,29 @@ def get_infra_skill_workbench(
     business_object: str = Query(default=""),
     artifact_status: str = Query(default=""),
     governance_status: SkillGovernanceStatus | None = Query(default=None),
+    priority: SkillGovernancePriority | None = Query(default=None),
     query: str = Query(default="", max_length=128),
 ) -> SkillWorkbenchResponse:
     workbench = service.list_workbench(
-        page=page,
-        page_size=page_size,
+        page=1 if priority is not None else page,
+        page_size=10_000 if priority is not None else page_size,
         business_action=business_action,
         business_object=business_object,
         artifact_status=artifact_status,
         governance_status=governance_status,
         query=query,
     )
+    if priority is not None:
+        filtered = [item for item in workbench.items if item.priority == priority]
+        start = (page - 1) * page_size
+        workbench = workbench.model_copy(
+            update={
+                "items": filtered[start : start + page_size],
+                "total": len(filtered),
+                "page": page,
+                "page_size": page_size,
+            }
+        )
     return SkillWorkbenchResponse.model_validate(workbench.model_dump())
 
 
@@ -521,6 +681,73 @@ def update_skill_eval_case(
     ) as exc:
         raise _governance_error(exc) from exc
     return SkillEvalCaseResponse.model_validate(case.model_dump())
+
+
+@router.delete(
+    "/infra-skills/eval-cases/{case_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_skill_eval_case(
+    case_id: str,
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> None:
+    try:
+        service.delete_case(case_id)
+    except SkillGovernanceNotFoundError as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.post(
+    "/infra-skills/eval-cases/dedupe",
+    response_model=SkillEvalCaseListResponse,
+)
+def dedupe_skill_eval_cases(
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalCaseListResponse:
+    service.dedupe_cases()
+    cases = service.list_cases()
+    return SkillEvalCaseListResponse(
+        items=[SkillEvalCaseResponse.model_validate(case.model_dump()) for case in cases],
+        suite_version=service.current_suite_version(),
+        total=len(cases),
+    )
+
+
+@router.post(
+    "/infra-skills/eval-cases/seed-golden",
+    response_model=SkillEvalCaseListResponse,
+)
+def seed_golden_skill_eval_cases(
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalCaseListResponse:
+    """灌入预置黄金 routing 用例（幂等：自动去重）。"""
+    service.seed_golden_cases()
+    cases = service.list_cases()
+    return SkillEvalCaseListResponse(
+        items=[SkillEvalCaseResponse.model_validate(case.model_dump()) for case in cases],
+        suite_version=service.current_suite_version(),
+        total=len(cases),
+    )
+
+
+@router.get(
+    "/infra-skills/eval-runs",
+    response_model=SkillEvalRunListResponse,
+)
+def list_all_skill_eval_runs(
+    service: SkillGovernanceServiceDependency,
+    skill_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> SkillEvalRunListResponse:
+    """跨 Skill 汇总评测运行（评测中心首页）。可选 skill_id 过滤。"""
+    runs = service.list_eval_runs(skill_id)[:limit]
+    return SkillEvalRunListResponse(
+        items=[SkillEvalRunResponse.model_validate(run.model_dump()) for run in runs],
+        total=len(runs),
+    )
 
 
 @router.get(
@@ -625,7 +852,7 @@ def create_skill_release(
     scope = f"{skill_id}:candidate"
     release_id = _idempotent_release_id(scope, idempotency_key)
     try:
-        release = _idempotent_release_mutation(
+        release = _idempotent_mutation(
             store=idempotency_store,
             scope=scope,
             idempotency_key=idempotency_key,
@@ -633,6 +860,7 @@ def create_skill_release(
                 **request.model_dump(mode="json"),
                 "created_by": principal.user_id,
             },
+            response_model=SkillReleaseResponse,
             operation=lambda: service.create_candidate(
                 skill_id,
                 **request.model_dump(),
@@ -669,11 +897,12 @@ def request_skill_release_approval(
     idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        release = _idempotent_release_mutation(
+        release = _idempotent_mutation(
             store=idempotency_store,
             scope=f"{skill_id}:{release_id}:request-approval",
             idempotency_key=idempotency_key,
             request_payload=request.model_dump(mode="json"),
+            response_model=SkillReleaseResponse,
             operation=lambda: service.request_approval(
                 skill_id, release_id, expected_revision=request.expected_revision
             ),
@@ -708,7 +937,7 @@ def approve_skill_release(
     idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        release = _idempotent_release_mutation(
+        release = _idempotent_mutation(
             store=idempotency_store,
             scope=f"{skill_id}:{release_id}:approve",
             idempotency_key=idempotency_key,
@@ -716,6 +945,7 @@ def approve_skill_release(
                 **request.model_dump(mode="json"),
                 "approved_by": principal.user_id,
             },
+            response_model=SkillReleaseResponse,
             operation=lambda: service.approve_release(
                 skill_id,
                 release_id,
@@ -755,11 +985,12 @@ def activate_skill_release(
     idempotency_store: SkillIdempotencyStoreDependency,
 ) -> SkillReleaseResponse:
     try:
-        release = _idempotent_release_mutation(
+        release = _idempotent_mutation(
             store=idempotency_store,
             scope=f"{skill_id}:{release_id}:activate",
             idempotency_key=idempotency_key,
             request_payload=request.model_dump(mode="json"),
+            response_model=SkillReleaseResponse,
             operation=lambda: service.activate_release(
                 skill_id, release_id, expected_revision=request.expected_revision
             ),
@@ -838,21 +1069,6 @@ def _read_field_mapping(skill_dir: Path) -> FieldMappingResponse | None:
 # ── Skill 草稿管理（P1+）──────────────────────────────────────────
 
 
-def get_skill_draft_service() -> SkillDraftService:
-    from src.data_platform.storage.skill.draft_factory import get_skill_draft_storage
-
-    return SkillDraftService(
-        storage=get_skill_draft_storage(),
-        loader=get_loader(),
-        skills_root=SKILLS_DIR,
-    )
-
-
-SkillDraftServiceDependency = Annotated[
-    SkillDraftService, Depends(get_skill_draft_service)
-]
-
-
 def get_skill_materializer() -> "SkillMaterializer":
     from src.data_platform.storage.skill.draft_factory import (
         get_skill_draft_storage,
@@ -908,6 +1124,343 @@ def get_skill_package_generator() -> SkillPackageGenerator:
 SkillPackageGeneratorDependency = Annotated[
     SkillPackageGenerator, Depends(get_skill_package_generator)
 ]
+
+
+def get_skill_candidate_evaluation_service(
+    generator: SkillPackageGeneratorDependency,
+) -> SkillCandidateEvaluationService:
+    executor: CandidateExecutionPort = DisabledCandidateExecutionAdapter(
+        "sandbox_unavailable"
+    )
+    if SKILL_CANDIDATE_SANDBOX_ENABLED:
+        from src.runtime.skill_management.ai_authoring.candidate_execution_docker import (
+            DockerCandidateExecutionAdapter,
+        )
+
+        executor = DockerCandidateExecutionAdapter(
+            image=SKILL_CANDIDATE_RUNNER_IMAGE,
+            timeout_seconds=SKILL_CANDIDATE_TIMEOUT_SECONDS,
+            memory_limit=SKILL_CANDIDATE_MEMORY_LIMIT,
+            cpu_limit=SKILL_CANDIDATE_CPU_LIMIT,
+            pids_limit=SKILL_CANDIDATE_PIDS_LIMIT,
+        )
+    return SkillCandidateEvaluationService(
+        package_generator=generator,
+        candidate_root=SKILL_CANDIDATE_ROOT,
+        runtime_skills_root=SKILLS_DIR,
+        executor=executor,
+    )
+
+
+SkillCandidateEvaluationServiceDependency = Annotated[
+    SkillCandidateEvaluationService,
+    Depends(get_skill_candidate_evaluation_service),
+]
+
+
+def get_skill_ai_authoring_service() -> SkillAIAuthoringService:
+    """AI 编写服务组装点；模型与指标注册表均显式注入。"""
+
+    from src.model_service.gateway import ModelGateway
+    from src.runtime.skill_management.skill_input_service import SkillInputService
+    from src.semantic_layer.registry import get_semantic_registry
+
+    registry = get_semantic_registry()
+    return SkillAIAuthoringService(
+        gateway=ModelGateway(),
+        input_service=SkillInputService(registry),
+        metric_registry=registry,
+    )
+
+
+SkillAIAuthoringServiceDependency = Annotated[
+    SkillAIAuthoringService, Depends(get_skill_ai_authoring_service)
+]
+
+_AI_EVIDENCE_NAMESPACE = "skill-ai-authoring"
+_AI_EVIDENCE_TTL_SECONDS = 15 * 60
+
+
+def _ai_authoring_error(exc: SkillAIAuthoringError) -> HTTPException:
+    if isinstance(exc, SkillAIModelError):
+        status_code = 503 if exc.category in {
+            "timeout",
+            "rate_limit",
+            "exhausted",
+        } else 502
+        return HTTPException(
+            status_code=status_code,
+            detail=error_detail(
+                "SKILL_AI_MODEL_FAILED",
+                "Skill AI 模型生成失败",
+                {"category": exc.category, "error_hash": exc.error_hash},
+            ),
+        )
+    if isinstance(exc, SkillAISecurityRejectedError):
+        return HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "SKILL_AI_SECURITY_REJECTED",
+                str(exc),
+                {
+                    "issues": [
+                        {
+                            "code": issue.code,
+                            "message": issue.message,
+                            "path": issue.path,
+                        }
+                        for issue in exc.issues
+                    ]
+                },
+            ),
+        )
+    if isinstance(exc, SkillAIMetricNotFoundError):
+        code = "SKILL_AI_METRIC_NOT_FOUND"
+    elif isinstance(exc, SkillAIMetricNotPublishedError):
+        code = "SKILL_AI_METRIC_NOT_PUBLISHED"
+    elif isinstance(exc, SkillAIInputInvalidError):
+        code = "SKILL_AI_INPUT_INVALID"
+    else:
+        code = "SKILL_AI_OUTPUT_INVALID"
+    return HTTPException(status_code=422, detail=error_detail(code, str(exc)))
+
+
+def _skill_ai_metric_reason(exc: SkillAIAuthoringError) -> str:
+    if isinstance(exc, SkillAISecurityRejectedError):
+        return "unsafe_code"
+    if isinstance(exc, SkillAIOutputInvalidError):
+        return exc.reason_code
+    if isinstance(exc, SkillAIInputInvalidError):
+        return "input_invalid"
+    if isinstance(exc, SkillAIMetricNotFoundError):
+        return "metric_not_found"
+    if isinstance(exc, SkillAIMetricNotPublishedError):
+        return "metric_not_published"
+    if isinstance(exc, SkillAIRevisionConflictError):
+        return "revision_conflict"
+    if isinstance(exc, SkillAIModelError):
+        return "model_error"
+    return "other"
+
+
+@router.post(
+    "/infra-skills/ai-generate",
+    response_model=SkillAIGenerationResponse,
+)
+def generate_skill_ai_proposal(
+    request: SkillAIGenerateRequest,
+    service: SkillAIAuthoringServiceDependency,
+    _principal: SkillControlPrincipalDependency,
+    evidence_store: SkillIdempotencyStoreDependency,
+) -> SkillAIGenerationResponse:
+    observability_metrics.record_skill_ai_generation_started()
+    try:
+        generated = service.generate_with_evidence(request)
+        proposal = generated.proposal
+        evidence_store.save_state(
+            _AI_EVIDENCE_NAMESPACE,
+            proposal.generation_id,
+            {
+                "proposal": proposal.model_dump(mode="json"),
+                "metric_snapshot_hash": generated.metric_snapshot_hash,
+            },
+            _AI_EVIDENCE_TTL_SECONDS,
+        )
+        observability_metrics.record_skill_ai_generation_success()
+        return proposal
+    except SkillAIAuthoringError as exc:
+        observability_metrics.record_skill_ai_generation_rejected(
+            _skill_ai_metric_reason(exc)
+        )
+        raise _ai_authoring_error(exc) from exc
+    except Exception as exc:
+        observability_metrics.record_skill_ai_generation_rejected(
+            "evidence_unavailable"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "SKILL_AI_EVIDENCE_STORE_UNAVAILABLE", "AI proposal 证据存储不可用"
+            ),
+        ) from exc
+
+
+@router.post(
+    "/infra-skills/drafts/{draft_id}/ai-optimize",
+    response_model=SkillAIOptimizationResponse,
+)
+def optimize_skill_ai_draft(
+    draft_id: str,
+    request: SkillAIOptimizeRequest,
+    authoring_service: SkillAIAuthoringServiceDependency,
+    draft_service: SkillDraftServiceDependency,
+    _principal: SkillControlPrincipalDependency,
+) -> SkillAIOptimizationResponse:
+    draft = draft_service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", f"草稿不存在: {draft_id}"),
+        )
+    if request.expected_revision != draft.revision:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "SKILL_DRAFT_CONFLICT",
+                f"草稿 revision 冲突: expected={request.expected_revision}, actual={draft.revision}",
+            ),
+        )
+    observability_metrics.record_skill_ai_generation_started()
+    try:
+        proposal = authoring_service.optimize(draft, request)
+        observability_metrics.record_skill_ai_generation_success()
+        return proposal
+    except SkillAIRevisionConflictError as exc:
+        observability_metrics.record_skill_ai_generation_rejected(
+            "revision_conflict"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail("SKILL_DRAFT_CONFLICT", str(exc)),
+        ) from exc
+    except SkillAIAuthoringError as exc:
+        observability_metrics.record_skill_ai_generation_rejected(
+            _skill_ai_metric_reason(exc)
+        )
+        raise _ai_authoring_error(exc) from exc
+
+
+def _ai_evidence_conflict(message: str, *, code: str) -> HTTPException:
+    return HTTPException(status_code=409, detail=error_detail(code, message))
+
+
+@router.post(
+    "/infra-skills/drafts/from-ai",
+    response_model=SkillDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def accept_skill_ai_proposal(
+    request: SkillAIAcceptRequest,
+    authoring_service: SkillAIAuthoringServiceDependency,
+    draft_service: SkillDraftServiceDependency,
+    principal: SkillControlPrincipalDependency,
+    idempotency_key: IdempotencyKey,
+    evidence_store: SkillIdempotencyStoreDependency,
+) -> SkillDraftResponse:
+    canonical_client = json.dumps(
+        {
+            "structured_config": request.structured_config.model_dump(mode="json"),
+            "raw_files": request.raw_files,
+            "provenance": (
+                request.provenance.model_dump(mode="json")
+                if request.provenance is not None
+                else None
+            ),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    content_hash = hashlib.sha256(canonical_client.encode("utf-8")).hexdigest()
+    scope = f"ai-draft:{request.generation_id}"
+    draft_id = draft_service.ai_draft_id(request.generation_id)
+
+    def create_first_draft() -> SkillDraftResponse:
+        try:
+            state = evidence_store.load_state(
+                _AI_EVIDENCE_NAMESPACE, request.generation_id
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=error_detail(
+                    "SKILL_AI_EVIDENCE_STORE_UNAVAILABLE",
+                    "AI proposal 证据存储不可用",
+                ),
+            ) from exc
+        if state is None or not isinstance(state.get("proposal"), dict):
+            raise _ai_evidence_conflict(
+                "AI proposal 证据已过期或不存在",
+                code="SKILL_AI_EVIDENCE_INVALID",
+            )
+        metric_snapshot_hash = state.get("metric_snapshot_hash")
+        if not isinstance(metric_snapshot_hash, str) or len(metric_snapshot_hash) != 64:
+            raise _ai_evidence_conflict(
+                "AI proposal 服务端证据无效",
+                code="SKILL_AI_EVIDENCE_INVALID",
+            )
+        try:
+            proposal = SkillAIGenerationResponse.model_validate(state["proposal"])
+        except (ValidationError, ValueError) as exc:
+            raise _ai_evidence_conflict(
+                "AI proposal 服务端证据无效",
+                code="SKILL_AI_EVIDENCE_INVALID",
+            ) from exc
+
+        request_provenance = (
+            request.provenance.model_dump(mode="json")
+            if request.provenance is not None
+            else proposal.provenance.model_dump(mode="json")
+        )
+        basic = proposal.structured_config.basic
+        if (
+            request.proposal_hash != proposal.proposal_hash
+            or request.skill_id != basic.skill_id
+            or request.skill_name != basic.skill_name
+            or request.structured_config.model_dump(mode="json")
+            != proposal.structured_config.model_dump(mode="json")
+            or request.raw_files != dict(proposal.raw_files)
+            or request_provenance != proposal.provenance.model_dump(mode="json")
+        ):
+            raise _ai_evidence_conflict(
+                "客户端 proposal 与服务端证据不一致",
+                code="SKILL_AI_EVIDENCE_CONFLICT",
+            )
+        try:
+            authoring_service.verify_for_accept(
+                proposal,
+                metric_snapshot_hash=metric_snapshot_hash,
+            )
+        except (SkillAIMetricNotFoundError, SkillAIMetricNotPublishedError) as exc:
+            raise _ai_evidence_conflict(
+                str(exc), code="SKILL_AI_EVIDENCE_STALE"
+            ) from exc
+        except (SkillAIOutputInvalidError, SkillAISecurityRejectedError) as exc:
+            raise _ai_evidence_conflict(
+                str(exc), code="SKILL_AI_EVIDENCE_CONFLICT"
+            ) from exc
+        created = draft_service.create_from_ai(
+            proposal=proposal,
+            created_by=principal.user_id,
+            draft_id=draft_id,
+        )
+        observability_metrics.record_skill_ai_manual_accept()
+        return created
+
+    try:
+        return _idempotent_mutation(
+            store=evidence_store,
+            scope=scope,
+            idempotency_key=idempotency_key,
+            request_payload={
+                "generation_id": request.generation_id,
+                "proposal_hash": request.proposal_hash,
+                "content_hash": content_hash,
+                "created_by": principal.user_id,
+            },
+            response_model=SkillDraftResponse,
+            operation=create_first_draft,
+            recovery=lambda: draft_service.get_draft(draft_id),
+            result_metadata=lambda response: {"draft_id": response.draft_id},
+            replay=lambda stored: draft_service.get_draft(
+                str(stored.get("draft_id", ""))
+            ),
+        )
+    except SkillDraftConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail("SKILL_DRAFT_CONFLICT", str(exc)),
+        ) from exc
 
 
 @router.post(
@@ -1202,6 +1755,104 @@ def preview_skill_draft_package(
     )
 
 
+def _candidate_case_selection[T](
+    cases: list[T], case_ids: list[str]
+) -> list[T]:
+    by_id = {getattr(case, "case_id"): case for case in cases}
+    if case_ids:
+        unknown = sorted(set(case_ids).difference(by_id))
+        if unknown:
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "SKILL_CANDIDATE_CASE_NOT_FOUND",
+                    f"候选评测用例不存在: {', '.join(unknown)}",
+                ),
+            )
+        selected = [by_id[case_id] for case_id in dict.fromkeys(case_ids)]
+    else:
+        selected = list(cases)
+    if not selected:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "SKILL_CANDIDATE_CASES_EMPTY", "没有可执行的候选评测用例"
+            ),
+        )
+    return selected
+
+
+@router.post(
+    "/infra-skills/drafts/{draft_id}/candidate-evaluations/routes",
+    response_model=SkillCandidateRouteEvaluationResponse,
+)
+def evaluate_skill_candidate_routes(
+    draft_id: str,
+    request: SkillCandidateEvaluationRequest,
+    draft_service: SkillDraftServiceDependency,
+    governance_service: SkillGovernanceServiceDependency,
+    candidate_service: SkillCandidateEvaluationServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillCandidateRouteEvaluationResponse:
+    del principal
+    draft = draft_service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", f"草稿不存在: {draft_id}"),
+        )
+    cases = _candidate_case_selection(
+        governance_service.list_cases(enabled_only=True), request.case_ids
+    )
+    try:
+        result = candidate_service.evaluate_routes(draft, cases)
+    except SkillCandidateArtifactError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail("SKILL_CANDIDATE_REJECTED", str(exc)),
+        ) from exc
+    return SkillCandidateRouteEvaluationResponse.model_validate(
+        result.model_dump(mode="json")
+    )
+
+
+@router.post(
+    "/infra-skills/drafts/{draft_id}/candidate-evaluations/behavior",
+    response_model=SkillCandidateBehaviorEvaluationResponse,
+)
+def evaluate_skill_candidate_behavior(
+    draft_id: str,
+    request: SkillCandidateEvaluationRequest,
+    draft_service: SkillDraftServiceDependency,
+    regression_storage: SkillRegressionStorageDependency,
+    candidate_service: SkillCandidateEvaluationServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillCandidateBehaviorEvaluationResponse:
+    del principal
+    draft = draft_service.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SKILL_DRAFT_NOT_FOUND", f"草稿不存在: {draft_id}"),
+        )
+    cases = _candidate_case_selection(
+        regression_storage.list_cases(
+            target_skill_id=draft.skill_id, enabled_only=True
+        ),
+        request.case_ids,
+    )
+    try:
+        result = candidate_service.evaluate_behavior(draft, cases)
+    except SkillCandidateArtifactError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail("SKILL_CANDIDATE_REJECTED", str(exc)),
+        ) from exc
+    return SkillCandidateBehaviorEvaluationResponse.model_validate(
+        result.model_dump(mode="json")
+    )
+
+
 @router.post(
     "/infra-skills/drafts/{draft_id}/materialize",
     response_model=SkillMaterializeResponse,
@@ -1347,6 +1998,257 @@ def archive_skill(
 @router.get("/infra-skills/overview", response_model=InfraSkillOverviewResponse)
 def get_infra_skills_overview_early() -> InfraSkillOverviewResponse:
     return get_infra_skills_overview()
+
+
+# ── Skill 错误挖掘：案例池查询与历史批量入池 ──────────────────────
+
+
+@router.get(
+    "/infra-skills/eval-case-pool",
+    response_model=EvalCasePoolListResponse,
+)
+def list_eval_case_pool(
+    principal: SkillEvaluationPrincipalDependency,
+    storage: SkillRegressionStorageDependency,
+    status: str | None = Query(default=None),
+    error_dimension: str | None = Query(default=None),
+    target_skill_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> EvalCasePoolListResponse:
+    """查询案例池（仅 skill:evaluate）。始终附加调用方租户条件。"""
+    tenant_id = getattr(principal, "tenant_id", None)
+    items = storage.list_pool_items(
+        tenant_id=tenant_id,
+        status=status,
+        error_dimension=error_dimension,
+        target_skill_id=target_skill_id,
+        limit=limit,
+        offset=offset,
+    )
+    responses = [_pool_item_to_response(item) for item in items]
+    return EvalCasePoolListResponse(
+        items=responses,
+        total=len(responses),
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _pool_item_to_response(item) -> EvalCasePoolItemResponse:
+    return EvalCasePoolItemResponse(
+        pool_id=item.pool_id,
+        tenant_id=item.tenant_id,
+        source_qa_turn_id=item.source_qa_turn_id,
+        source_user_id=item.source_user_id,
+        reason_code=item.reason_code.value,
+        error_dimension=item.error_dimension.value,
+        initial_dimension=item.error_dimension.value,
+        transformed_dimension=(
+            item.transformed_dimension.value if item.transformed_dimension else None
+        ),
+        target_skill_id=item.source_selected_skill_id,
+        question_excerpt=item.question_excerpt,
+        answer_excerpt=item.answer_excerpt,
+        comment=item.comment,
+        status=item.status.value,
+        revision=item.revision,
+        eval_case_ref=(
+            item.eval_case_ref.model_dump() if item.eval_case_ref else None
+        ),
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+@router.post(
+    "/infra-skills/eval-case-pool/from-history",
+    response_model=EvalCasePoolFromHistoryResponse,
+)
+def create_eval_case_pool_from_history(
+    request: EvalCasePoolFromHistoryRequest,
+    principal: SkillEvaluationPrincipalDependency,
+    service: RegressionMiningServiceDependency,
+) -> EvalCasePoolFromHistoryResponse:
+    """评测者从历史批量入池（仅 skill:evaluate）。逐项返回结果。"""
+    mining_principal = _to_mining_principal(principal)
+    results = service.collect_from_history(
+        principal=mining_principal,
+        qa_turn_ids=request.qa_turn_ids,
+        reason_code=request.reason_code,
+        comment=request.comment,
+    )
+    return EvalCasePoolFromHistoryResponse(
+        outcomes=[
+            HistoryMiningOutcomeResponse(
+                qa_turn_id=r.qa_turn_id, status=r.status.value, pool_id=r.pool_id
+            )
+            for r in results
+        ]
+    )
+
+
+def _to_mining_principal(principal: SkillControlPrincipal):
+    from src.runtime.skill_management.regression_mining_service import (
+        RegressionPrincipal as _RegressionPrincipal,
+    )
+
+    return _RegressionPrincipal(
+        user_id=principal.user_id,
+        tenant_id=getattr(principal, "tenant_id", None) or "default",
+        roles=principal.roles,
+    )
+
+
+def get_regression_transform_service(
+    storage: SkillRegressionStorageDependency,
+) -> "RegressionTransformService":
+    from src.runtime.skill_management.regression_transform_service import (
+        RegressionTransformService,
+        GatewayTransformModelProvider,
+    )
+
+    return RegressionTransformService(
+        storage=storage, model_provider=GatewayTransformModelProvider()
+    )
+
+
+RegressionTransformServiceDependency = Annotated[
+    "RegressionTransformService", Depends(get_regression_transform_service)
+]
+
+
+@router.post(
+    "/infra-skills/eval-case-pool/{pool_id}/transform",
+    response_model=EvalCasePoolTransformResponse,
+)
+def transform_eval_case_pool_item(
+    pool_id: str,
+    request: EvalCasePoolTransformRequest,
+    principal: SkillEvaluationPrincipalDependency,
+    service: RegressionTransformServiceDependency,
+) -> EvalCasePoolTransformResponse:
+    """AI 转换案例池条目为类型化 proposal（仅 skill:evaluate）。失败不改状态。"""
+    from src.data_platform.storage.skill.regression_ports import (
+        SkillRegressionConflictError,
+        SkillRegressionNotFoundError,
+    )
+    from src.runtime.skill_management.regression_transform_service import (
+        SkillRegressionTransformError,
+    )
+
+    tenant_id = getattr(principal, "tenant_id", None) or "default"
+    try:
+        result = service.transform(
+            pool_id,
+            expected_revision=request.expected_revision,
+            tenant_id=tenant_id,
+        )
+    except SkillRegressionNotFoundError:
+        raise HTTPException(status_code=404, detail=error_detail("EVAL_CASE_POOL_NOT_FOUND", "案例不存在"))
+    except SkillRegressionConflictError:
+        raise HTTPException(status_code=409, detail=error_detail("EVAL_CASE_POOL_REVISION_CONFLICT", "案例已被修改，请刷新"))
+    except SkillRegressionTransformError as exc:
+        raise HTTPException(status_code=422, detail=error_detail("EVAL_CASE_TRANSFORM_INVALID", str(exc)))
+    return EvalCasePoolTransformResponse(
+        pool_id=result.pool_id,
+        transformed_dimension=result.transformed_dimension.value,
+        case_proposal=result.case_proposal.model_dump() if result.case_proposal else None,
+        root_cause=result.root_cause,
+        citations=result.citations,
+        uncertainties=result.uncertainties,
+        revision=result.revision,
+    )
+
+
+def get_regression_confirm_service(
+    storage: SkillRegressionStorageDependency,
+):
+    from src.runtime.skill_management.regression_confirm_service import (
+        RegressionConfirmService,
+    )
+
+    return RegressionConfirmService(
+        regression_storage=storage,
+        governance_storage=get_skill_governance_storage(),
+    )
+
+
+RegressionConfirmServiceDependency = Annotated[
+    "RegressionConfirmService", Depends(get_regression_confirm_service)
+]
+
+
+@router.post(
+    "/infra-skills/eval-case-pool/{pool_id}/confirm",
+    response_model=EvalCasePoolConfirmResponse,
+)
+def confirm_eval_case_pool_item(
+    pool_id: str,
+    request: EvalCasePoolConfirmRequest,
+    principal: SkillEvaluationPrincipalDependency,
+    service: RegressionConfirmServiceDependency,
+) -> EvalCasePoolConfirmResponse:
+    """人工确认案例，投影到对应评测资产（仅 skill:evaluate）。重复请求返回同一资产。"""
+    from src.runtime.skill_management.regression_confirm_service import (
+        SkillRegressionCaseNotExecutableError,
+    )
+    from src.data_platform.storage.skill.regression_ports import (
+        SkillRegressionConflictError,
+        SkillRegressionNotFoundError,
+    )
+
+    confirm_principal = _to_mining_principal(principal)
+    try:
+        result = service.confirm(
+            pool_id,
+            request=request,
+            confirmed_by=confirm_principal.user_id,
+            tenant_id=confirm_principal.tenant_id,
+        )
+    except SkillRegressionNotFoundError:
+        raise HTTPException(status_code=404, detail=error_detail("EVAL_CASE_POOL_NOT_FOUND", "案例不存在"))
+    except SkillRegressionConflictError:
+        raise HTTPException(status_code=409, detail=error_detail("EVAL_CASE_POOL_REVISION_CONFLICT", "案例已被修改，请刷新"))
+    except SkillRegressionCaseNotExecutableError:
+        raise HTTPException(status_code=422, detail=error_detail("EVAL_CASE_NOT_EXECUTABLE", "该维度不可确认，请重新分型或拒绝"))
+    return EvalCasePoolConfirmResponse(
+        pool_id=result.pool_id,
+        case_type=result.case_type,
+        case_id=result.case_id,
+        revision=result.revision,
+    )
+
+
+@router.post(
+    "/infra-skills/eval-case-pool/{pool_id}/reject",
+    response_model=EvalCasePoolItemResponse,
+)
+def reject_eval_case_pool_item(
+    pool_id: str,
+    request: EvalCasePoolRejectRequest,
+    principal: SkillEvaluationPrincipalDependency,
+    storage: SkillRegressionStorageDependency,
+) -> EvalCasePoolItemResponse:
+    """拒绝案例（仅 skill:evaluate）。"""
+    from src.data_platform.storage.skill.regression_ports import (
+        SkillRegressionConflictError,
+        SkillRegressionNotFoundError,
+    )
+
+    tenant_id = getattr(principal, "tenant_id", None) or "default"
+    try:
+        updated = storage.reject_pool_item(
+            pool_id,
+            tenant_id=tenant_id,
+            reason=request.rejection_reason,
+            expected_revision=request.expected_revision,
+        )
+    except SkillRegressionNotFoundError:
+        raise HTTPException(status_code=404, detail=error_detail("EVAL_CASE_POOL_NOT_FOUND", "案例不存在"))
+    except SkillRegressionConflictError:
+        raise HTTPException(status_code=409, detail=error_detail("EVAL_CASE_POOL_REVISION_CONFLICT", "案例已被修改，请刷新"))
+    return _pool_item_to_response(updated)
 
 
 @router.get("/infra-skills/{skill_id}", response_model=InfraSkillDetailResponse)

@@ -3,6 +3,7 @@
 import { AlertTriangle, Sparkles } from 'lucide-react'
 
 import CalculationDisclosure from '@/components/policy-qa/calculation-disclosure'
+import FeedbackDrawer from '@/components/policy-qa/feedback-drawer'
 import PolicySourcesDialog from '@/components/policy-qa/policy-sources-dialog'
 import VerificationSummary from '@/components/policy-qa/verification-summary'
 import { Button } from '@/components/ui/button'
@@ -49,6 +50,10 @@ export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAn
             ))}
           </ul>
         </section>
+      ) : null}
+
+      {message.qaTurnId ? (
+        <FeedbackDrawer qaTurnId={message.qaTurnId} />
       ) : null}
 
       {onFollowUp ? (

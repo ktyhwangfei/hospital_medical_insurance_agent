@@ -2,7 +2,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from src.domain.skill.draft_models import SkillDraft, SkillDraftSourceType, SkillDraftStatus
 from src.domain.skill.governance_models import (
+    SkillEvalCase,
     SkillEvalMetrics,
     SkillEvalRun,
     SkillEvalRunStatus,
@@ -68,8 +70,14 @@ def _run(
     status: SkillEvalRunStatus,
     *,
     created_at: datetime = NOW,
+    regression_count: int | None = None,
+    required_total: int | None = None,
+    required_passed: int | None = None,
+    case_snapshots: list[SkillEvalCase] | None = None,
 ) -> SkillEvalRun:
     passed = status == SkillEvalRunStatus.PASSED
+    required_total = 1 if required_total is None else required_total
+    required_passed = int(passed) if required_passed is None else required_passed
     return SkillEvalRun(
         run_id=f"run-{skill_id}-{status}",
         skill_id=skill_id,
@@ -81,17 +89,41 @@ def _run(
         metrics=SkillEvalMetrics(
             total=1,
             passed=int(passed),
-            required_total=1,
-            required_passed=int(passed),
+            required_total=required_total,
+            required_passed=required_passed,
             top1_accuracy=float(passed),
             baseline_top1_accuracy=0.0,
-            regression_count=int(not passed),
+            regression_count=(
+                int(not passed) if regression_count is None else regression_count
+            ),
             new_false_takeover_count=0,
             gate_passed=passed,
         ),
+        case_snapshots=case_snapshots or [],
         created_by="quality-user",
         created_at=created_at,
         completed_at=created_at,
+    )
+
+
+def _draft(
+    draft_id: str,
+    skill_id: str,
+    status: SkillDraftStatus,
+    *,
+    updated_at: datetime = NOW,
+) -> SkillDraft:
+    return SkillDraft(
+        draft_id=draft_id,
+        skill_id=skill_id,
+        skill_name=f"{skill_id} draft",
+        source_type=SkillDraftSourceType.COPY,
+        source_skill_id=skill_id,
+        structured_config={},
+        status=status,
+        created_by="developer",
+        created_at=updated_at,
+        updated_at=updated_at,
     )
 
 
@@ -166,15 +198,39 @@ class _GovernanceView:
         return self.releases.get(skill_id, [])
 
 
+class _DraftView:
+    def __init__(self, drafts: dict[str, list[SkillDraft]]) -> None:
+        self.drafts = drafts
+        self.list_calls = 0
+
+    def list_drafts(
+        self,
+        *,
+        include_deleted: bool = False,
+        skill_id: str | None = None,
+        status: SkillDraftStatus | None = None,
+    ) -> list[SkillDraft]:
+        self.list_calls += 1
+        assert include_deleted is False
+        drafts = (
+            self.drafts.get(skill_id, [])
+            if skill_id is not None
+            else [draft for items in self.drafts.values() for draft in items]
+        )
+        return [draft for draft in drafts if status is None or draft.status == status]
+
+
 def _service(
     entries: list[SkillCatalogEntry],
     *,
     runs: dict[str, list[SkillEvalRun]],
     releases: dict[str, list[SkillRelease]],
+    drafts: dict[str, list[SkillDraft]] | None = None,
 ) -> SkillWorkbenchService:
     return SkillWorkbenchService(
         version_service=_VersionCatalogService(entries),
         governance_service=_GovernanceView(runs=runs, releases=releases),
+        draft_service=_DraftView(drafts or {}),
         now=lambda: NOW,
     )
 
@@ -314,3 +370,455 @@ def test_resolve_status_uses_fixed_priority(
     )
 
     assert status == expected
+
+
+def test_failed_evaluation_is_a_blocked_diagnosis() -> None:
+    version = _version("failed-skill", "version-failed", "2.0.0")
+    service = _service(
+        [_entry("failed-skill", version)],
+        runs={
+            "failed-skill": [
+                _run(
+                    "failed-skill",
+                    version.version_id,
+                    SkillEvalRunStatus.FAILED,
+                    regression_count=2,
+                    required_total=3,
+                    required_passed=2,
+                )
+            ]
+        },
+        releases={},
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "diagnose"
+    assert item.priority == "blocked"
+    assert item.next_action == "create_fix_draft"
+    assert item.regression_count == 2
+    assert item.required_failure_count == 1
+    assert item.next_action_reason == "评测门禁未通过，需要先定位回归案例"
+
+
+def test_linked_newest_editing_draft_moves_failure_to_modify() -> None:
+    version = _version("editing-skill", "version-editing", "2.0.0")
+    service = _service(
+        [_entry("editing-skill", version)],
+        runs={
+            "editing-skill": [
+                _run(
+                    "editing-skill",
+                    version.version_id,
+                    SkillEvalRunStatus.FAILED,
+                )
+            ]
+        },
+        releases={},
+        drafts={
+            "editing-skill": [
+                _draft(
+                    "draft-validated",
+                    "editing-skill",
+                    SkillDraftStatus.VALIDATED,
+                    updated_at=NOW - timedelta(minutes=1),
+                ),
+                _draft(
+                    "draft-editing",
+                    "editing-skill",
+                    SkillDraftStatus.EDITING,
+                ),
+            ]
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "modify"
+    assert item.linked_draft_id == "draft-editing"
+    assert item.linked_draft_status == "editing"
+    assert item.next_action == "continue_draft"
+
+
+def test_required_failure_sorts_before_other_failure_and_approval() -> None:
+    versions = {
+        skill_id: _version(skill_id, f"version-{skill_id}", "1.0.0")
+        for skill_id in ("normal-failure", "required-failure", "approval")
+    }
+    entries = [_entry(skill_id, version) for skill_id, version in versions.items()]
+    service = _service(
+        entries,
+        runs={
+            "normal-failure": [
+                _run(
+                    "normal-failure",
+                    versions["normal-failure"].version_id,
+                    SkillEvalRunStatus.FAILED,
+                    required_total=0,
+                    required_passed=0,
+                )
+            ],
+            "required-failure": [
+                _run(
+                    "required-failure",
+                    versions["required-failure"].version_id,
+                    SkillEvalRunStatus.FAILED,
+                    required_total=2,
+                    required_passed=1,
+                )
+            ],
+        },
+        releases={
+            "approval": [
+                _release(
+                    "approval",
+                    versions["approval"].version_id,
+                    SkillReleaseStatus.APPROVAL_PENDING,
+                )
+            ]
+        },
+    )
+
+    page = service.list_workbench(page=1, page_size=20)
+
+    assert [item.skill_id for item in page.items] == [
+        "required-failure",
+        "normal-failure",
+        "approval",
+    ]
+
+
+def test_workbench_projection_has_no_sensitive_evidence() -> None:
+    version = _version("safe-skill", "version-safe", "1.0.0")
+    case_text = "SENTINEL_CASE_BODY_DO_NOT_EXPOSE"
+    approval_reason = "SENTINEL_APPROVAL_REASON_DO_NOT_EXPOSE"
+    patient_id = "SENTINEL_PATIENT_ID_DO_NOT_EXPOSE"
+    evidence_hash = "b" * 64
+    sensitive_case = SkillEvalCase(
+        case_id="case-1",
+        suite_version=1,
+        question_template=case_text,
+        expected_skill_id="safe-skill",
+        source_ref=evidence_hash,
+        created_by="quality-user",
+    )
+    service = _service(
+        [_entry("safe-skill", version)],
+        runs={
+            "safe-skill": [
+                _run(
+                    "safe-skill",
+                    version.version_id,
+                    SkillEvalRunStatus.FAILED,
+                    case_snapshots=[sensitive_case],
+                )
+            ]
+        },
+        releases={},
+        drafts={
+            "safe-skill": [
+                _draft("draft-safe", "safe-skill", SkillDraftStatus.EDITING).model_copy(
+                    update={
+                        "structured_config": {
+                            "approval_reason": approval_reason,
+                            "patient_id": patient_id,
+                        }
+                    }
+                )
+            ]
+        },
+    )
+
+    payload = service.list_workbench(page=1, page_size=20).model_dump_json()
+
+    assert "question_template" not in payload
+    assert "approval_reason" not in payload
+    assert "patient_id" not in payload
+    assert case_text not in payload
+    assert approval_reason not in payload
+    assert patient_id not in payload
+    assert evidence_hash not in payload
+
+
+def test_old_active_release_does_not_override_newer_current_passed_version() -> None:
+    current = _version("current-skill", "version-current", "2.0.0")
+    service = _service(
+        [_entry("current-skill", current)],
+        runs={
+            "current-skill": [
+                _run(
+                    "current-skill",
+                    current.version_id,
+                    SkillEvalRunStatus.PASSED,
+                )
+            ]
+        },
+        releases={
+            "current-skill": [
+                _release(
+                    "current-skill",
+                    "version-old",
+                    SkillReleaseStatus.ACTIVE,
+                )
+            ]
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "release"
+    assert item.next_action == "create_candidate"
+    assert item.test_active_version == "version-old"
+
+
+def test_changed_artifact_ignores_old_active_release() -> None:
+    old = _version("changed-skill", "version-old", "1.0.0")
+    service = _service(
+        [_entry("changed-skill", old, artifact_status="changed")],
+        runs={
+            "changed-skill": [
+                _run(
+                    "changed-skill",
+                    old.version_id,
+                    SkillEvalRunStatus.PASSED,
+                )
+            ]
+        },
+        releases={
+            "changed-skill": [
+                _release(
+                    "changed-skill",
+                    old.version_id,
+                    SkillReleaseStatus.ACTIVE,
+                )
+            ]
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "modify"
+    assert item.next_action == "register_version"
+
+
+def test_changed_artifact_preserves_legacy_passed_evaluation_fields() -> None:
+    old = _version("legacy-skill", "version-old", "1.0.0")
+    service = _service(
+        [_entry("legacy-skill", old, artifact_status="changed")],
+        runs={
+            "legacy-skill": [
+                _run(
+                    "legacy-skill",
+                    old.version_id,
+                    SkillEvalRunStatus.PASSED,
+                )
+            ]
+        },
+        releases={
+            "legacy-skill": [
+                _release(
+                    "legacy-skill",
+                    old.version_id,
+                    SkillReleaseStatus.ACTIVE,
+                )
+            ]
+        },
+    )
+
+    page = service.list_workbench(
+        page=1,
+        page_size=20,
+        governance_status=SkillGovernanceStatus.ARTIFACT_CHANGED,
+    )
+    item = page.items[0]
+
+    assert page.total == 1
+    assert page.summary.needs_evaluation == 0
+    assert item.governance_status == SkillGovernanceStatus.ARTIFACT_CHANGED
+    assert item.latest_eval_status == SkillEvalRunStatus.PASSED
+    assert item.attention_reason == "artifact_not_registered"
+    assert item.current_stage == "modify"
+    assert item.next_action == "register_version"
+
+
+def test_standalone_approval_pending_requires_review() -> None:
+    version = _version("approval-skill", "version-approval", "1.0.0")
+    service = _service(
+        [_entry("approval-skill", version)],
+        runs={},
+        releases={
+            "approval-skill": [
+                _release(
+                    "approval-skill",
+                    version.version_id,
+                    SkillReleaseStatus.APPROVAL_PENDING,
+                )
+            ]
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "review"
+    assert item.next_action == "review_approval"
+
+
+def test_failed_evaluation_with_validated_draft_requires_materialization() -> None:
+    version = _version("validated-skill", "version-validated", "1.0.0")
+    service = _service(
+        [_entry("validated-skill", version)],
+        runs={
+            "validated-skill": [
+                _run(
+                    "validated-skill",
+                    version.version_id,
+                    SkillEvalRunStatus.FAILED,
+                )
+            ]
+        },
+        releases={},
+        drafts={
+            "validated-skill": [
+                _draft(
+                    "draft-validated",
+                    "validated-skill",
+                    SkillDraftStatus.VALIDATED,
+                )
+            ]
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == "modify"
+    assert item.linked_draft_status == "validated"
+    assert item.next_action == "materialize_draft"
+
+
+def test_drafts_are_loaded_once_for_multiple_catalog_items() -> None:
+    first = _version("first", "version-first", "1.0.0")
+    second = _version("second", "version-second", "1.0.0")
+    entries = [_entry("first", first), _entry("second", second)]
+    draft_view = _DraftView(
+        {
+            "first": [_draft("draft-first", "first", SkillDraftStatus.EDITING)],
+            "second": [_draft("draft-second", "second", SkillDraftStatus.VALIDATED)],
+        }
+    )
+    service = SkillWorkbenchService(
+        version_service=_VersionCatalogService(entries),
+        governance_service=_GovernanceView(
+            runs={
+                "first": [_run("first", first.version_id, SkillEvalRunStatus.FAILED)],
+                "second": [
+                    _run("second", second.version_id, SkillEvalRunStatus.FAILED)
+                ],
+            },
+            releases={},
+        ),
+        draft_service=draft_view,
+        now=lambda: NOW,
+    )
+
+    items = service.list_workbench(page=1, page_size=20).items
+
+    assert draft_view.list_calls == 1
+    assert {item.linked_draft_id for item in items} == {"draft-first", "draft-second"}
+
+
+def test_baseline_projection_uses_run_version_id_without_catalog_lookup() -> None:
+    candidate = _version("baseline-skill", "version-candidate", "2.0.0")
+    baseline = _version("baseline-skill", "version-baseline", "1.0.0")
+    entry = _entry("baseline-skill", candidate)
+    version_service = _VersionCatalogService([entry])
+    version_service.versions[baseline.version_id] = baseline
+    run = _run(
+        "baseline-skill",
+        candidate.version_id,
+        SkillEvalRunStatus.PASSED,
+    ).model_copy(update={"baseline_version_id": baseline.version_id})
+    service = SkillWorkbenchService(
+        version_service=version_service,
+        governance_service=_GovernanceView(
+            runs={"baseline-skill": [run]},
+            releases={},
+        ),
+        now=lambda: NOW,
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.baseline_version == "version-baseline"
+
+
+@pytest.mark.parametrize(
+    ("artifact_status", "eval_status", "release_status", "stage", "action"),
+    [
+        (
+            "registered",
+            None,
+            SkillReleaseStatus.APPROVED,
+            "release",
+            "activate_test_shadow",
+        ),
+        (
+            "registered",
+            None,
+            SkillReleaseStatus.CANDIDATE,
+            "review",
+            "request_approval",
+        ),
+        (
+            "registered",
+            None,
+            SkillReleaseStatus.ACTIVE,
+            "healthy",
+            "view_evidence",
+        ),
+        (
+            "registered",
+            SkillEvalRunStatus.PASSED,
+            None,
+            "release",
+            "create_candidate",
+        ),
+        (
+            "changed",
+            SkillEvalRunStatus.PASSED,
+            SkillReleaseStatus.ACTIVE,
+            "modify",
+            "register_version",
+        ),
+        ("registered", None, None, "evaluate", "run_evaluation"),
+    ],
+)
+def test_workflow_precedence_matrix(
+    artifact_status: str,
+    eval_status: SkillEvalRunStatus | None,
+    release_status: SkillReleaseStatus | None,
+    stage: str,
+    action: str,
+) -> None:
+    version = _version("matrix-skill", "version-current", "1.0.0")
+    service = _service(
+        [_entry("matrix-skill", version, artifact_status=artifact_status)],
+        runs={
+            "matrix-skill": (
+                [_run("matrix-skill", version.version_id, eval_status)]
+                if eval_status is not None
+                else []
+            )
+        },
+        releases={
+            "matrix-skill": (
+                [_release("matrix-skill", version.version_id, release_status)]
+                if release_status is not None
+                else []
+            )
+        },
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.current_stage == stage
+    assert item.next_action == action

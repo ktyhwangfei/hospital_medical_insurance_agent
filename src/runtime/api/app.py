@@ -6,7 +6,7 @@ load_dotenv()
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.gateway.api_gateway.audit_middleware import GatewayAuditMiddleware
@@ -50,6 +50,12 @@ def create_app() -> FastAPI:
 
     @app.get('/health')
     def health() -> dict[str, str]:
+        # 就绪判定：真实数据源（PostgreSQL）必须连通。本地/生产均不使用内存模式，
+        # 故 DATA_SOURCE_READY 为 False（连不上 PG 而回退内存）时返回 503，让
+        # 启动脚本（ws.ps1 / start-servers.ps1）据 /health 判定真实就绪状态。
+        from src.data_platform.data_access.factory import DATA_SOURCE_READY
+        if not DATA_SOURCE_READY:
+            raise HTTPException(status_code=503, detail='data source not ready')
         return {'status': 'ok'}
 
     print("[STARTUP] create_app: 注册路由模块", flush=True)

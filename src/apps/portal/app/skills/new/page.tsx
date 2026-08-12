@@ -2,11 +2,34 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, ArrowRight, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
-import { createSkillDraft, ApiClientError } from '@/lib/skill-draft-api'
-import type { SkillDraftResponse } from '@/lib/types'
+import { ArrowLeft, ArrowRight, CheckCircle2, AlertCircle, Loader2, Sparkles } from 'lucide-react'
+import SkillDraftPreview from '@/components/skills/skill-draft-preview'
+import {
+  acceptSkillAIProposal,
+  createSkillDraft,
+  generateSkillAIProposal,
+  getSkillInputSelector,
+  ApiClientError,
+} from '@/lib/skill-draft-api'
+import type { SkillAIGenerationProposal, SkillDraftResponse } from '@/lib/types'
 
 type Step = 0 | 1 | 2 | 3
+type WizardState =
+  | { mode: 'manual' }
+  | { mode: 'ai_input' }
+  | { mode: 'ai_generating' }
+  | { mode: 'ai_preview'; proposal: SkillAIGenerationProposal }
+  | { mode: 'ai_error'; message: string }
+type MetricSelectorState =
+  | { status: 'idle' | 'loading' }
+  | { status: 'ready'; metrics: PublishedMetric[] }
+  | { status: 'empty' }
+  | { status: 'error'; message: string }
+type PublishedMetric = {
+  metric_code: string
+  metric_name: string
+  definition: string
+}
 
 const BUSINESS_ACTIONS = [
   'explain', 'query', 'guide', 'verify', 'compare', 'evaluate', 'analyze',
@@ -24,6 +47,11 @@ export default function NewSkillWizardPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [created, setCreated] = useState<SkillDraftResponse | null>(null)
+  const [wizardState, setWizardState] = useState<WizardState>({ mode: 'manual' })
+  const [acceptingAI, setAcceptingAI] = useState(false)
+  const [aiDescription, setAIDescription] = useState('')
+  const [selectedMetricCodes, setSelectedMetricCodes] = useState<string[]>([])
+  const [metricSelector, setMetricSelector] = useState<MetricSelectorState>({ status: 'idle' })
 
   // Step 0: 基本信息
   const [skillId, setSkillId] = useState('')
@@ -79,6 +107,82 @@ export default function NewSkillWizardPage() {
     }
   }
 
+  async function generateAIProposal() {
+    if (wizardState.mode === 'ai_generating') return
+    if (!aiDescription.trim() || selectedMetricCodes.length === 0) {
+      setWizardState({ mode: 'ai_error', message: '请填写能力说明并至少选择一个已发布指标' })
+      return
+    }
+    setError(null)
+    setWizardState({ mode: 'ai_generating' })
+    try {
+      const proposal = await generateSkillAIProposal({
+        description: aiDescription.trim(),
+        metric_codes: selectedMetricCodes,
+      })
+      setWizardState({ mode: 'ai_preview', proposal })
+    } catch (err) {
+      setWizardState({
+        mode: 'ai_error',
+        message: err instanceof ApiClientError ? err.detail.message : 'AI 生成失败，请稍后重试',
+      })
+    }
+  }
+
+  async function openAICreation() {
+    setWizardState({ mode: 'ai_input' })
+    setError(null)
+    if (metricSelector.status !== 'idle') return
+    setMetricSelector({ status: 'loading' })
+    try {
+      const selector = await getSkillInputSelector()
+      const metrics = selector.tree.flatMap((domain) =>
+        domain.objects
+          .filter((object) => object.status === 'published' && object.current_version !== null)
+          .flatMap((object) =>
+            object.metrics
+              .filter((metric) => metric.status === 'published' && metric.current_version !== null)
+              .map((metric) => ({
+                metric_code: metric.metric_code,
+                metric_name: metric.name,
+                definition: metric.definition,
+              })),
+          ),
+      )
+      setMetricSelector(metrics.length > 0 ? { status: 'ready', metrics } : { status: 'empty' })
+    } catch (err) {
+      setMetricSelector({
+        status: 'error',
+        message: err instanceof ApiClientError ? err.detail.message : '已发布指标加载失败',
+      })
+    }
+  }
+
+  function toggleMetric(metricCode: string) {
+    setSelectedMetricCodes((current) =>
+      current.includes(metricCode)
+        ? current.filter((code) => code !== metricCode)
+        : [...current, metricCode],
+    )
+  }
+
+  async function acceptAIProposal(proposal: SkillAIGenerationProposal) {
+    if (acceptingAI) return
+    setAcceptingAI(true)
+    setError(null)
+    try {
+      const draft = await acceptSkillAIProposal(
+        proposal,
+        `accept-ai-${proposal.generation_id}`,
+      )
+      router.push(`/skills/${encodeURIComponent(draft.skill_id)}/edit?draft=${draft.draft_id}`)
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.detail.message : '接受 AI 候选失败')
+    } finally {
+      setAcceptingAI(false)
+    }
+  }
+
   function buildPreview(): string {
     const kw = keywords.split(/[,，\s]+/).filter(Boolean)
     return [
@@ -106,6 +210,86 @@ export default function NewSkillWizardPage() {
       `business_object: ${businessObject}`,
       '```',
     ].join('\n')
+  }
+
+  if (wizardState.mode !== 'manual') {
+    const isInput = wizardState.mode === 'ai_input' || wizardState.mode === 'ai_generating' || wizardState.mode === 'ai_error'
+    return (
+      <div className="mt-4 mx-auto max-w-4xl space-y-6">
+        <header className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold tracking-tight text-slate-900">AI 创建 Skill 草稿</h2>
+            <p className="mt-1 text-sm text-slate-600">描述目标能力并选择已发布指标，AI 只生成待人工确认的候选。</p>
+          </div>
+          <button type="button" onClick={() => { setWizardState({ mode: 'manual' }); setError(null) }} disabled={wizardState.mode === 'ai_generating' || acceptingAI} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+            切换到手工创建
+          </button>
+        </header>
+
+        {error ? <ErrorNotice message={error} /> : null}
+        {wizardState.mode === 'ai_error' ? <ErrorNotice message={wizardState.message} /> : null}
+
+        {isInput ? (
+          <div className="space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div>
+              <label className="block text-sm font-medium text-slate-700">能力说明</label>
+              <textarea value={aiDescription} onChange={(event) => setAIDescription(event.target.value)} rows={5} placeholder="描述你希望 Skill 完成的能力" disabled={wizardState.mode === 'ai_generating'} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700">已发布输入指标</label>
+              {metricSelector.status === 'loading' ? (
+                <p className="mt-2 text-sm text-slate-500">正在加载已发布指标…</p>
+              ) : null}
+              {metricSelector.status === 'empty' ? (
+                <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">暂无可用的已发布指标。</p>
+              ) : null}
+              {metricSelector.status === 'error' ? (
+                <div className="mt-2 space-y-2">
+                  <ErrorNotice message={metricSelector.message} />
+                  <p className="text-xs text-slate-600">无法加载已发布指标，不能使用自由文本指标。</p>
+                </div>
+              ) : null}
+              {metricSelector.status === 'ready' ? (
+                <div className="mt-2 max-h-64 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
+                  {metricSelector.metrics.map((metric) => (
+                    <label key={metric.metric_code} className="flex cursor-pointer items-start gap-3 rounded-md px-2 py-2 hover:bg-slate-50">
+                      <input
+                        type="checkbox"
+                        checked={selectedMetricCodes.includes(metric.metric_code)}
+                        onChange={() => toggleMetric(metric.metric_code)}
+                        disabled={wizardState.mode === 'ai_generating'}
+                        aria-label={`${metric.metric_name} (${metric.metric_code})`}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-slate-800">{metric.metric_name}</span>
+                        <span className="block font-mono text-xs text-slate-500">{metric.metric_code}</span>
+                        {metric.definition ? <span className="mt-0.5 block text-xs text-slate-500">{metric.definition}</span> : null}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+              <p className="mt-1 text-xs text-slate-500">生成时会冻结指标对象版本，接受前再次复验发布状态。</p>
+            </div>
+            <div className="flex justify-end">
+              <button type="button" onClick={() => void generateAIProposal()} disabled={wizardState.mode === 'ai_generating' || metricSelector.status !== 'ready' || !aiDescription.trim() || selectedMetricCodes.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                {wizardState.mode === 'ai_generating' ? <><Loader2 className="h-4 w-4 animate-spin" />正在生成</> : <><Sparkles className="h-4 w-4" />生成候选</>}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {wizardState.mode === 'ai_preview' ? (
+          <SkillDraftPreview
+            proposal={wizardState.proposal}
+            accepting={acceptingAI}
+            onBack={() => setWizardState({ mode: 'ai_input' })}
+            onAccept={() => void acceptAIProposal(wizardState.proposal)}
+          />
+        ) : null}
+      </div>
+    )
   }
 
   if (created) {
@@ -138,9 +322,14 @@ export default function NewSkillWizardPage() {
 
   return (
     <div className="mt-4 mx-auto max-w-3xl space-y-6">
-      <header className="space-y-1">
-        <h2 className="text-xl font-semibold tracking-tight text-slate-900">新建 Skill 向导</h2>
-        <p className="text-sm text-slate-600">通过模板创建 Skill 草稿，完成后进入编辑器完善细节。</p>
+      <header className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h2 className="text-xl font-semibold tracking-tight text-slate-900">新建 Skill 向导</h2>
+          <p className="text-sm text-slate-600">通过模板创建 Skill 草稿，完成后进入编辑器完善细节。</p>
+        </div>
+        <button type="button" onClick={() => void openAICreation()} className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100">
+          <Sparkles className="h-4 w-4" />AI 创建
+        </button>
       </header>
 
       {/* 步骤指示器 */}
@@ -333,6 +522,15 @@ export default function NewSkillWizardPage() {
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+function ErrorNotice({ message }: { message: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+      <AlertCircle className="h-4 w-4 shrink-0" />
+      {message}
     </div>
   )
 }

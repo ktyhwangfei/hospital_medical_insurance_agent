@@ -28,14 +28,6 @@ export interface InfraSkillCatalogFilter extends InfraSkillsFilter {
   query?: string
 }
 
-export interface SkillWorkbenchFilter extends InfraSkillsFilter {
-  page?: number
-  page_size?: number
-  artifact_status?: string
-  governance_status?: SkillGovernanceStatus
-  query?: string
-}
-
 export async function getInfraSkillsOverview(): Promise<InfraSkillOverviewResponse> {
   return requestJson<InfraSkillOverviewResponse>('/infra-skills/overview')
 }
@@ -70,6 +62,7 @@ export async function getSkillGovernanceWorkbench(
   if (filter.business_object) params.set('business_object', filter.business_object)
   if (filter.artifact_status) params.set('artifact_status', filter.artifact_status)
   if (filter.governance_status) params.set('governance_status', filter.governance_status)
+  if (filter.priority) params.set('priority', filter.priority)
   if (filter.query) params.set('query', filter.query)
   const query = params.toString()
   return requestJson<SkillWorkbenchResponse>(
@@ -107,10 +100,130 @@ export async function createSkillEvalCase(
   })
 }
 
+export async function deleteSkillEvalCase(caseId: string): Promise<void> {
+  await requestJson<void>(
+    `/infra-skills/eval-cases/${encodeURIComponent(caseId)}`,
+    { method: 'DELETE', headers: skillEvaluationHeaders() },
+  )
+}
+
+export async function dedupeSkillEvalCases(): Promise<SkillEvalCaseListResponse> {
+  return requestJson<SkillEvalCaseListResponse>('/infra-skills/eval-cases/dedupe', {
+    method: 'POST',
+    headers: skillEvaluationHeaders(),
+  })
+}
+
+export async function seedGoldenSkillEvalCases(): Promise<SkillEvalCaseListResponse> {
+  return requestJson<SkillEvalCaseListResponse>('/infra-skills/eval-cases/seed-golden', {
+    method: 'POST',
+    headers: skillEvaluationHeaders(),
+  })
+}
+
+// ── 错误案例池：转换 / 确认 / 拒绝（仅 skill:evaluate）──
+
+export interface EvalCasePoolTransformResponse {
+  pool_id: string
+  transformed_dimension: string
+  case_proposal: Record<string, unknown> | null
+  root_cause: string | null
+  citations: Record<string, unknown>[]
+  uncertainties: string[]
+  revision: number
+}
+
+export interface EvalCasePoolConfirmRequest {
+  expected_revision: number
+  error_dimension: string
+  target_skill_id: string | null
+  case_proposal: Record<string, unknown> | null
+}
+
+export interface EvalCasePoolConfirmResponse {
+  pool_id: string
+  case_type: string
+  case_id: string
+  revision: number
+}
+
+export async function transformEvalCasePoolItem(
+  poolId: string,
+  expectedRevision: number,
+): Promise<EvalCasePoolTransformResponse> {
+  return requestJson<EvalCasePoolTransformResponse>(
+    `/infra-skills/eval-case-pool/${encodeURIComponent(poolId)}/transform`,
+    {
+      method: 'POST',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    },
+  )
+}
+
+export async function confirmEvalCasePoolItem(
+  poolId: string,
+  request: EvalCasePoolConfirmRequest,
+): Promise<EvalCasePoolConfirmResponse> {
+  return requestJson<EvalCasePoolConfirmResponse>(
+    `/infra-skills/eval-case-pool/${encodeURIComponent(poolId)}/confirm`,
+    {
+      method: 'POST',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify(request),
+    },
+  )
+}
+
+export interface EvalCasePoolItemResponse {
+  pool_id: string
+  tenant_id: string
+  source_qa_turn_id: string
+  source_user_id: string
+  reason_code: string
+  error_dimension: string
+  initial_dimension: string
+  transformed_dimension: string | null
+  target_skill_id: string | null
+  status: string
+  revision: number
+  rejection_reason: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function rejectEvalCasePoolItem(
+  poolId: string,
+  expectedRevision: number,
+  rejectionReason: string,
+): Promise<EvalCasePoolItemResponse> {
+  return requestJson<EvalCasePoolItemResponse>(
+    `/infra-skills/eval-case-pool/${encodeURIComponent(poolId)}/reject`,
+    {
+      method: 'POST',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify({
+        expected_revision: expectedRevision,
+        rejection_reason: rejectionReason,
+      }),
+    },
+  )
+}
+
 export async function listSkillEvalRuns(skillId: string): Promise<SkillEvalRunListResponse> {
   return requestJson<SkillEvalRunListResponse>(
     `/infra-skills/${encodeURIComponent(skillId)}/eval-runs`,
   )
+}
+
+export async function listAllSkillEvalRuns(
+  filter?: { skillId?: string; limit?: number },
+): Promise<SkillEvalRunListResponse> {
+  const params = new URLSearchParams()
+  if (filter?.skillId) params.set('skill_id', filter.skillId)
+  if (filter?.limit) params.set('limit', String(filter.limit))
+  const query = params.toString() ? `?${params.toString()}` : ''
+  return requestJson<SkillEvalRunListResponse>(`/infra-skills/eval-runs${query}`)
 }
 
 export async function createSkillEvalRun(
@@ -305,7 +418,7 @@ import type {
   SkillEvalRunCreateRequest,
   SkillEvalRunListResponse,
   SkillEvalRunResponse,
-  SkillGovernanceStatus,
+  SkillWorkbenchFilter,
   SkillReleaseApproveRequest,
   SkillReleaseCreateRequest,
   SkillReleaseListResponse,

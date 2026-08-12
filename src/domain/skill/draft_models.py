@@ -35,6 +35,7 @@ class SkillDraftSourceType(StrEnum):
     TEMPLATE = "template"
     IMPORT = "import"
     COPY = "copy"
+    AI_GENERATED = "ai_generated"
 
 
 class SkillDraftStatus(StrEnum):

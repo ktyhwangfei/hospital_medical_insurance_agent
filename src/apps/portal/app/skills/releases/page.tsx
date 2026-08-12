@@ -1,13 +1,19 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { AlertCircle, GitBranch } from 'lucide-react'
-import { getSkillGovernanceWorkbench } from '@/lib/api-client'
+import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
+import SkillReleasePanel from '@/components/skills/skill-release-panel'
+import { getSkillGovernanceWorkbench, listInfraSkillVersions } from '@/lib/api-client'
 import { ApiClientError } from '@/lib/types'
+import type { SkillVersionResponse, SkillWorkbenchItem } from '@/lib/types'
 
 // /skills/releases 发布记录页：Test 发布、确认、停用、恢复、归档（设计 §3.1 §6）
-export default function SkillReleasesPage() {
-  const [items, setItems] = useState<{ skill_id: string; skill_name: string; test_release_status: string | null; governance_status: string }[]>([])
+function ReleasesContent() {
+  const skillFilter = useSearchParams().get('skill')
+  const [items, setItems] = useState<SkillWorkbenchItem[]>([])
+  const [versions, setVersions] = useState<SkillVersionResponse[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -15,18 +21,29 @@ export default function SkillReleasesPage() {
     setLoading(true)
     setError(null)
     try {
-      const data = await getSkillGovernanceWorkbench({ page: 1, page_size: 50 })
+      const [data, selectedVersions] = await Promise.all([
+        getSkillGovernanceWorkbench({ page: 1, page_size: 50 }),
+        skillFilter ? listInfraSkillVersions(skillFilter) : Promise.resolve([]),
+      ])
       setItems(data.items ?? [])
+      setVersions(selectedVersions)
     } catch (err) {
       setError(err instanceof ApiClientError ? err.detail.message : '加载发布记录失败')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [skillFilter])
 
   useEffect(() => {
-    void load()
+    void Promise.resolve().then(load)
   }, [load])
+
+  const filteredItems = skillFilter
+    ? items.filter((i) => i.skill_id === skillFilter)
+    : items
+  const selectedItem = skillFilter
+    ? items.find((item) => item.skill_id === skillFilter) ?? null
+    : null
 
   return (
     <div className="mt-4 space-y-4">
@@ -41,6 +58,13 @@ export default function SkillReleasesPage() {
         <p className="text-sm text-slate-600">
           Skill 版本的 Test 发布、确认、激活、停用、恢复与归档记录。
         </p>
+        {skillFilter && (
+          <p className="text-xs text-slate-500">
+            筛选中：<span className="font-medium text-slate-700">{items.find((i) => i.skill_id === skillFilter)?.skill_name ?? skillFilter}</span>
+            （<code className="font-mono">{skillFilter}</code>）
+            <Link href="/skills/releases" className="ml-2 text-blue-700 hover:underline">清除筛选</Link>
+          </p>
+        )}
       </header>
 
       {error && (
@@ -48,6 +72,17 @@ export default function SkillReleasesPage() {
           <AlertCircle className="h-4 w-4 shrink-0" />
           {error}
         </div>
+      )}
+
+      {selectedItem && (
+        <section aria-label="当前 Skill 人工复审" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <SkillReleasePanel
+            skillId={selectedItem.skill_id}
+            versions={versions}
+            workbenchItem={selectedItem}
+            onChanged={load}
+          />
+        </section>
       )}
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -65,12 +100,14 @@ export default function SkillReleasesPage() {
                 <td colSpan={3} className="px-4 py-12 text-center text-slate-400">加载中…</td>
               </tr>
             )}
-            {!loading && items.length === 0 && (
+            {!loading && filteredItems.length === 0 && (
               <tr>
-                <td colSpan={3} className="px-4 py-12 text-center text-slate-400">暂无发布记录</td>
+                <td colSpan={3} className="px-4 py-12 text-center text-slate-400">
+                  {skillFilter ? '该 Skill 暂无发布记录' : '暂无发布记录'}
+                </td>
               </tr>
             )}
-            {items.map((item) => (
+            {filteredItems.map((item) => (
               <tr key={item.skill_id} className="hover:bg-slate-50">
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2 font-medium text-slate-900">
@@ -95,5 +132,13 @@ export default function SkillReleasesPage() {
         </table>
       </div>
     </div>
+  )
+}
+
+export default function SkillReleasesPage() {
+  return (
+    <Suspense fallback={<div className="mt-4 text-sm text-slate-400">加载中…</div>}>
+      <ReleasesContent />
+    </Suspense>
   )
 }

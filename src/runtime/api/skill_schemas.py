@@ -1,11 +1,21 @@
 """Skill 评测与发布控制面的显式 API DTO。"""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from src.domain.skill.draft_models import SkillDraft
+from src.domain.skill.regression_models import SkillFeedbackReasonCode
+from src.runtime.skill_management.ai_authoring.schemas import (
+    SkillAIGenerationProvenance,
+    SkillStructuredConfig,
+)
+from src.runtime.skill_management.workbench_service import (
+    SkillGovernancePriority,
+    SkillGovernanceStage,
+    SkillNextAction,
+)
 
 
 class SkillEvalCaseCreateRequest(BaseModel):
@@ -144,6 +154,18 @@ class SkillWorkbenchItemResponse(BaseModel):
     test_active_version: str | None
     governance_status: str
     attention_reason: str | None
+    current_stage: SkillGovernanceStage
+    priority: SkillGovernancePriority
+    latest_eval_run_id: str | None
+    candidate_version: str | None
+    baseline_version: str | None
+    regression_count: int
+    required_failure_count: int
+    linked_draft_id: str | None
+    linked_draft_status: str | None
+    waiting_since: datetime
+    next_action: SkillNextAction
+    next_action_reason: str | None
 
 
 class SkillWorkbenchResponse(BaseModel):
@@ -186,6 +208,39 @@ class SkillReleaseListResponse(BaseModel):
 
 
 # ── Skill 草稿管理（P1+）──────────────────────────────────────────
+
+
+_SkillAIDescription = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=4000),
+]
+_SkillAIMetricCode = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=256),
+]
+
+
+class SkillAIGenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: _SkillAIDescription
+    metric_codes: list[_SkillAIMetricCode] = Field(min_length=1, max_length=100)
+
+
+class SkillAIOptimizeRequest(SkillAIGenerateRequest):
+    expected_revision: int = Field(ge=1)
+
+
+class SkillAIAcceptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generation_id: str = Field(min_length=1, max_length=80)
+    proposal_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    skill_id: str = Field(min_length=1, max_length=128)
+    skill_name: str = Field(min_length=1, max_length=256)
+    structured_config: SkillStructuredConfig
+    raw_files: dict[str, str]
+    provenance: SkillAIGenerationProvenance | None = None
 
 
 class SkillDraftCreateRequest(BaseModel):
@@ -281,6 +336,35 @@ class SkillPackagePreviewResponse(BaseModel):
     revision: int
 
 
+class SkillCandidateEvaluationRequest(BaseModel):
+    case_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+class SkillCandidateRouteEvaluationResponse(BaseModel):
+    artifact_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    case_snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["completed", "failed", "blocked_by_evaluator"]
+    metrics: SkillEvalMetricsResponse | None = None
+    results: list[SkillEvalResultResponse] = Field(default_factory=list)
+    blocked_reason: str | None = None
+
+
+class SkillCandidateBehaviorResultResponse(BaseModel):
+    case_id: str
+    status: Literal["passed", "failed", "blocked_by_evaluator"]
+    passed: bool
+    output: dict[str, Any] | None = None
+    blocked_reason: str | None = None
+
+
+class SkillCandidateBehaviorEvaluationResponse(BaseModel):
+    artifact_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    case_snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["completed", "failed", "blocked_by_evaluator"]
+    results: list[SkillCandidateBehaviorResultResponse] = Field(default_factory=list)
+    blocked_reason: str | None = None
+
+
 class SkillMaterializeRequest(BaseModel):
     expected_revision: int = Field(ge=1)
     reason: str = Field(min_length=1, max_length=500)
@@ -327,3 +411,108 @@ class SkillDefinitionResponse(BaseModel):
             disabled_at=d.disabled_at,
             archived_at=d.archived_at,
         )
+
+
+# ── Skill 错误挖掘：反馈、案例池、历史批量入池 ──────────────────────
+
+
+class PolicyQAFeedbackRequest(BaseModel):
+    """「回答有误」反馈请求：客户端只能提交 ID + 原因码，不得伪造正文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    qa_turn_id: str = Field(min_length=1, max_length=80)
+    reason_code: SkillFeedbackReasonCode
+    comment: str | None = Field(default=None, max_length=500)
+
+
+class PolicyQAFeedbackResponse(BaseModel):
+    pool_id: str
+    status: str
+    error_dimension: str
+    source_selected_skill_id: str | None = None
+
+
+class EvalCasePoolItemResponse(BaseModel):
+    pool_id: str
+    tenant_id: str
+    source_qa_turn_id: str
+    source_user_id: str
+    reason_code: str
+    error_dimension: str
+    initial_dimension: str
+    transformed_dimension: str | None = None
+    target_skill_id: str | None = None
+    # 脱敏后的文本摘要（已过 sanitize_regression_snapshot），用于前端区分条目
+    question_excerpt: str = ""
+    answer_excerpt: str = ""
+    comment: str = ""
+    status: str
+    revision: int
+    eval_case_ref: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EvalCasePoolListResponse(BaseModel):
+    items: list[EvalCasePoolItemResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class EvalCasePoolFromHistoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    qa_turn_ids: list[str] = Field(min_length=1, max_length=100)
+    reason_code: SkillFeedbackReasonCode
+    comment: str | None = Field(default=None, max_length=500)
+
+
+class HistoryMiningOutcomeResponse(BaseModel):
+    qa_turn_id: str
+    status: str
+    pool_id: str | None = None
+
+
+class EvalCasePoolFromHistoryResponse(BaseModel):
+    outcomes: list[HistoryMiningOutcomeResponse]
+
+
+class EvalCasePoolTransformRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+
+
+class EvalCasePoolTransformResponse(BaseModel):
+    pool_id: str
+    transformed_dimension: str
+    case_proposal: dict[str, Any] | None = None
+    root_cause: str | None = None
+    citations: list[dict[str, Any]] = []
+    uncertainties: list[str] = []
+    revision: int
+
+
+class EvalCasePoolConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    error_dimension: str
+    target_skill_id: str | None = None
+    case_proposal: dict[str, Any] | None = None
+
+
+class EvalCasePoolConfirmResponse(BaseModel):
+    pool_id: str
+    case_type: str
+    case_id: str
+    revision: int
+
+
+class EvalCasePoolRejectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    rejection_reason: str = Field(min_length=1, max_length=500)

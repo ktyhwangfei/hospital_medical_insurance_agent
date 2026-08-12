@@ -3,7 +3,7 @@ import { Search } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import type { SkillGovernanceStatus, SkillWorkbenchItem } from '@/lib/types'
+import type { SkillGovernanceStage, SkillWorkbenchItem } from '@/lib/types'
 
 interface SkillCatalogPanelProps {
   items: SkillWorkbenchItem[]
@@ -12,37 +12,42 @@ interface SkillCatalogPanelProps {
   businessAction: string
   businessObject: string
   loading: boolean
+  hasActiveFilters: boolean
   hiddenOnMobile?: boolean
   onQueryChange: (query: string) => void
   onBusinessActionChange: (action: string) => void
   onBusinessObjectChange: (object: string) => void
+  onClearFilters: () => void
   onSelect: (skillId: string) => void
 }
 
-const statusLabels: Record<SkillGovernanceStatus, string> = {
-  gate_failed: '门禁失败',
-  pending_approval: '待审批',
-  needs_evaluation: '需评测',
-  artifact_changed: '制品变更',
+const stageLabels: Record<SkillGovernanceStage, string> = {
+  evaluate: '待评测',
+  diagnose: '待定位',
+  modify: '待修改',
+  review: '待复审',
+  release: '待发布',
   healthy: '健康',
 }
 
-function GovernanceStatusBadge({ status }: { status: SkillGovernanceStatus }) {
-  const tone = status === 'healthy'
-    ? 'bg-emerald-50 text-emerald-700'
-    : status === 'gate_failed'
-      ? 'bg-red-50 text-red-700'
-      : status === 'pending_approval'
-        ? 'bg-amber-50 text-amber-700'
-        : 'bg-blue-50 text-blue-700'
-  return <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', tone)}>{statusLabels[status]}</span>
+export function waitingLabel(waitingSince: string, now = Date.now()): string {
+  const parsed = Date.parse(waitingSince)
+  if (Number.isNaN(parsed)) return '刚刚进入待办'
+  const hours = Math.max(Math.floor((now - parsed) / 3_600_000), 0)
+  if (hours < 1) return '刚刚进入待办'
+  if (hours < 24) return `等待 ${hours} 小时`
+  return `等待 ${Math.floor(hours / 24)} 天`
 }
 
-function statusHint(item: SkillWorkbenchItem): string {
-  if (item.latest_eval_status === 'passed') return '评测通过'
-  if (item.artifact_status !== 'registered') return '待登记'
-  if (item.governance_status === 'needs_evaluation') return '尚未评测'
-  return statusLabels[item.governance_status]
+function StageBadge({ stage }: { stage: SkillGovernanceStage }) {
+  const tone = stage === 'healthy'
+    ? 'bg-emerald-50 text-emerald-700'
+    : stage === 'diagnose'
+      ? 'bg-red-50 text-red-700'
+      : stage === 'review' || stage === 'release'
+        ? 'bg-amber-50 text-amber-700'
+        : 'bg-blue-50 text-blue-700'
+  return <span className={cn('shrink-0 rounded px-2 py-0.5 text-[11px] font-medium', tone)}>{stageLabels[stage]}</span>
 }
 
 export default function SkillCatalogPanel({
@@ -52,10 +57,12 @@ export default function SkillCatalogPanel({
   businessAction,
   businessObject,
   loading,
+  hasActiveFilters,
   hiddenOnMobile = false,
   onQueryChange,
   onBusinessActionChange,
   onBusinessObjectChange,
+  onClearFilters,
   onSelect,
 }: SkillCatalogPanelProps) {
   const [search, setSearch] = useState(query)
@@ -75,31 +82,31 @@ export default function SkillCatalogPanel({
     const nextIndex = Math.min(Math.max(currentIndex + delta, 0), buttons.length - 1)
     if (buttons[nextIndex]) {
       event.preventDefault()
-      buttons[nextIndex].click()
       buttons[nextIndex].focus()
     }
   }
 
   return (
-    <aside className={cn('min-h-0 flex-col border-r border-slate-200 bg-white md:flex', hiddenOnMobile ? 'hidden' : 'flex')} aria-label="Skill 目录">
+    <div data-skill-queue className={cn('min-h-0 flex-col border-r border-slate-200 bg-white md:flex', hiddenOnMobile ? 'hidden' : 'flex')}>
       <div className="space-y-3 border-b border-slate-200 p-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-2 h-4 w-4 text-slate-400" />
           <Input
+            id="skill-queue-search"
             aria-label="搜索 Skill"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="搜索名称或 ID"
-            className="pl-8"
+            className="h-11 pl-8 sm:h-9"
           />
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <label className="sr-only" htmlFor="skill-action-filter">业务动作</label>
           <select
             id="skill-action-filter"
             value={businessAction}
             onChange={(event) => onBusinessActionChange(event.target.value)}
-            className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-600"
+            className="h-11 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-600 sm:h-9 sm:text-xs"
           >
             <option value="">全部动作</option>
             <option value="explain">解释</option>
@@ -115,7 +122,7 @@ export default function SkillCatalogPanel({
             id="skill-object-filter"
             value={businessObject}
             onChange={(event) => onBusinessObjectChange(event.target.value)}
-            className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-600"
+            className="h-11 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-600 sm:h-9 sm:text-xs"
           >
             <option value="">全部对象</option>
             <option value="settlement">结算</option>
@@ -125,11 +132,27 @@ export default function SkillCatalogPanel({
           </select>
         </div>
       </div>
-      <nav className="min-h-0 flex-1 overflow-y-auto" onKeyDown={moveFocus}>
+      <nav aria-label="治理待办" className="min-h-0 flex-1 overflow-y-auto" onKeyDown={moveFocus}>
         {loading && items.length === 0 ? (
           <p className="p-4 text-sm text-slate-500">正在加载 Skill…</p>
+        ) : items.length === 0 && hasActiveFilters ? (
+          <div className="space-y-3 p-4 text-sm text-slate-500">
+            <p>没有符合筛选条件的 Skill</p>
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('')
+                onClearFilters()
+              }}
+              className="min-h-11 font-medium text-blue-600 hover:text-blue-700"
+            >
+              清除筛选
+            </button>
+          </div>
         ) : items.length === 0 ? (
-          <p className="p-4 text-sm text-slate-500">没有符合条件的 Skill</p>
+          <div className="space-y-3 p-4 text-sm text-slate-500">
+            <p>当前没有需要处理的 Skill</p>
+          </div>
         ) : items.map((item) => {
           const selected = item.skill_id === selectedSkillId
           return (
@@ -137,6 +160,7 @@ export default function SkillCatalogPanel({
               key={item.skill_id}
               type="button"
               data-skill-catalog-button
+              data-skill-id={item.skill_id}
               data-testid={`skill-catalog-item-${item.skill_id}`}
               aria-current={selected ? 'true' : undefined}
               onClick={() => onSelect(item.skill_id)}
@@ -146,18 +170,24 @@ export default function SkillCatalogPanel({
               )}
             >
               <div className="flex items-start justify-between gap-2">
-                <span className="truncate text-sm font-medium text-slate-900">{item.skill_name}</span>
-                <GovernanceStatusBadge status={item.governance_status} />
+                <span className="min-w-0 break-words text-sm font-medium text-slate-900">{item.skill_name}</span>
+                <StageBadge stage={item.current_stage} />
               </div>
-              <div className="mt-1 truncate font-mono text-xs text-slate-500">{item.skill_id}</div>
-              <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                <span>v{item.semantic_version}</span>
-                <span>{item.test_release_status === 'active' ? 'Test Active' : statusHint(item)}</span>
+              {item.next_action_reason && (
+                <p className="mt-2 line-clamp-2 break-words text-xs leading-5 text-slate-600">{item.next_action_reason}</p>
+              )}
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-slate-500">
+                {item.candidate_version ? (
+                  <span>候选 v{item.candidate_version}</span>
+                ) : item.linked_draft_status ? (
+                  <span>草稿 {item.linked_draft_status}</span>
+                ) : <span />}
+                <span>{waitingLabel(item.waiting_since)}</span>
               </div>
             </button>
           )
         })}
       </nav>
-    </aside>
+    </div>
   )
 }
