@@ -6,7 +6,9 @@ import json
 import logging
 import time
 import uuid
+from contextlib import nullcontext
 from datetime import datetime
+from threading import RLock
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile
@@ -14,7 +16,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.data_platform.storage.postgresql.policy_meta_store import PolicyMetaStore
+from src.runtime.api.semantic_alignment_routes import SemanticReviewPrincipalDependency
 from src.semantic_layer.extraction_contract import ExtractionSchema, build_extraction_schema
+from src.shared.schemas.responses import error_detail
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +71,8 @@ class MetricDetail(BaseModel):
     object_code: str
     metric_type: str
     semantic_type: str | None
+    indexed: bool
+    schema_version: int
     unit: str | None
     required: bool
     importance: str
@@ -78,6 +84,15 @@ class MetricDetail(BaseModel):
     quality_score: float
     version: str
     status: str
+
+
+class UpdateMetricResponse(BaseModel):
+    status: str
+    metric_code: str
+    schema_version: int
+    requires_reextract: bool
+    task_id: str | None = None
+    task_status: str | None = None
 
 
 class DomainProgress(BaseModel):
@@ -524,6 +539,7 @@ def get_metric(metric_code: str):
         metric_code=metric.metric_code, name=metric.name, definition=metric.definition,
         object_code=metric.object_code, metric_type=metric.metric_type,
         semantic_type=metric.semantic_type, unit=metric.unit, required=metric.required,
+        indexed=metric.indexed, schema_version=metric.schema_version,
         importance=metric.importance, value_domain=metric.value_domain,
         source_object=metric.source_object, source_field=metric.source_field,
         source_adapter_port=metric.source_adapter_port,
@@ -560,8 +576,9 @@ class BatchCreateMetricResult(BaseModel):
 
 
 @router.post("/metrics")
-def create_metric(req: CreateMetricRequest):
+def create_metric(req: CreateMetricRequest, principal: SemanticReviewPrincipalDependency):
     """创建新的业务指标。metric_code 自动生成为 {object_code}.{name_pascal}。"""
+    del principal
     from src.semantic_layer.models import Metric
     reg = get_registry()
     store = reg._store
@@ -602,8 +619,9 @@ def create_metric(req: CreateMetricRequest):
 
 
 @router.post("/metrics/batch", response_model=list[BatchCreateMetricResult])
-def create_metrics_batch(req: BatchCreateMetricsRequest):
+def create_metrics_batch(req: BatchCreateMetricsRequest, principal: SemanticReviewPrincipalDependency):
     """批量创建业务指标。返回每个 item 的结果（创建/跳过/错误）。"""
+    del principal
     from src.semantic_layer.models import Metric
     reg = get_registry()
     store = reg._store
@@ -660,69 +678,124 @@ def create_metrics_batch(req: BatchCreateMetricsRequest):
     return results
 
 
-@router.put("/metrics/{metric_code:path}")
-def update_metric(metric_code: str, req: UpdateMetricRequest):
+@router.put("/metrics/{metric_code:path}", response_model=UpdateMetricResponse)
+def update_metric(
+    metric_code: str,
+    req: UpdateMetricRequest,
+    principal: SemanticReviewPrincipalDependency,
+) -> UpdateMetricResponse:
     """更新业务指标（名称、描述、类型、编码、映射等）。"""
+    del principal
     reg = get_registry()
     store = reg._store
-    metric = store.get_metric(metric_code)
-    if not metric:
-        raise HTTPException(status_code=404, detail=f"指标 '{metric_code}' 不存在")
+    meta_store = _get_meta_store()
+    if hasattr(meta_store, "registry_transaction") and hasattr(store, "_get_client"):
+        transaction = meta_store.registry_transaction(store)
+    elif hasattr(store, "transaction"):
+        transaction = store.transaction()
+    else:
+        transaction = nullcontext()
 
-    # Handle metric_code rename: delete old, insert new
-    if req.metric_code is not None and req.metric_code != metric_code:
-        if store.get_metric(req.metric_code):
-            raise HTTPException(status_code=409, detail=f"指标 '{req.metric_code}' 已存在")
-        store.delete_metric(metric_code)
-        metric.metric_code = req.metric_code
-        metric_code = req.metric_code
+    with transaction:
+        if hasattr(store, "lock_metric"):
+            store.lock_metric(metric_code)
+        stored_metric = store.get_metric(metric_code)
+        if not stored_metric:
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "SEMANTIC_METRIC_NOT_FOUND",
+                    f"指标 '{metric_code}' 不存在",
+                    {"metric_code": metric_code},
+                ),
+            )
+        if (
+            req.metric_code is not None and req.metric_code != stored_metric.metric_code
+        ) or (
+            req.object_code is not None and req.object_code != stored_metric.object_code
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "SEMANTIC_METRIC_MIGRATION_REQUIRED",
+                    "指标改名或跨对象迁移暂不支持，请使用专用迁移流程",
+                    {"metric_code": metric_code},
+                ),
+            )
 
-    if req.object_code is not None and req.object_code != metric.object_code:
-        if not store.get_object(req.object_code):
-            raise HTTPException(status_code=400, detail=f"对象 '{req.object_code}' 不存在")
-        # Sync metric_code prefix with new object_code
-        old_code = metric.metric_code
-        old_prefix = metric.object_code
-        suffix = old_code[len(old_prefix):] if old_code.startswith(old_prefix + ".") else old_code.split(".", 1)[-1] if "." in old_code else old_code
-        new_code = f"{req.object_code}.{suffix}"
-        if new_code != old_code and store.get_metric(new_code):
-            raise HTTPException(status_code=409, detail=f"指标 '{new_code}' 已存在")
-        store.delete_metric(old_code)
-        metric.object_code = req.object_code
-        metric.metric_code = new_code
+        metric = stored_metric.model_copy(deep=True)
+        requires_reextract = (
+            req.semantic_type is not None and req.semantic_type != metric.semantic_type
+        ) or (
+            req.indexed is not None and req.indexed != metric.indexed
+        )
+        if requires_reextract and req.expected_schema_version != metric.schema_version:
+            raise HTTPException(
+                status_code=409,
+                detail=error_detail(
+                    "SEMANTIC_SCHEMA_VERSION_CONFLICT",
+                    "突破性指标变更需提供与当前值一致的 expected_schema_version",
+                    {
+                        "metric_code": metric_code,
+                        "expected_schema_version": req.expected_schema_version,
+                        "current_schema_version": metric.schema_version,
+                    },
+                ),
+            )
 
-    if req.name is not None:
-        metric.name = req.name
-    if req.definition is not None:
-        metric.definition = req.definition
-    if req.metric_type is not None:
-        metric.metric_type = req.metric_type
-    if req.semantic_type is not None:
-        metric.semantic_type = req.semantic_type
-    if req.unit is not None:
-        metric.unit = req.unit
-    if req.importance is not None:
-        metric.importance = req.importance
-    if req.source_field is not None:
-        metric.source_field = req.source_field
-        # Auto-calculate quality_score from discovery field metadata
-        metric.quality_score = _calc_quality_from_discovery(req.source_field, metric.source_object)
-    if req.source_object is not None:
-        metric.source_object = req.source_object
-    if req.source_adapter is not None:
-        metric.source_adapter_port = req.source_adapter
-    if req.value_domain is not None:
-        metric.value_domain = req.value_domain
-    if req.required is not None:
-        metric.required = req.required
+        if req.name is not None:
+            metric.name = req.name
+        if req.definition is not None:
+            metric.definition = req.definition
+        if req.metric_type is not None:
+            metric.metric_type = req.metric_type
+        if req.semantic_type is not None:
+            metric.semantic_type = req.semantic_type
+        if req.indexed is not None:
+            metric.indexed = req.indexed
+        if req.unit is not None:
+            metric.unit = req.unit
+        if req.importance is not None:
+            metric.importance = req.importance
+        if req.source_field is not None:
+            metric.source_field = req.source_field
+            metric.quality_score = _calc_quality_from_discovery(
+                req.source_field, metric.source_object,
+            )
+        if req.source_object is not None:
+            metric.source_object = req.source_object
+        if req.source_adapter is not None:
+            metric.source_adapter_port = req.source_adapter
+        if req.value_domain is not None:
+            metric.value_domain = req.value_domain
+        if req.required is not None:
+            metric.required = req.required
 
-    store.save_metric(metric)
-    return {"status": "ok", "metric_code": metric.metric_code}
+        task = None
+        if requires_reextract:
+            metric.schema_version = stored_metric.schema_version + 1
+        store.save_metric(metric)
+        if requires_reextract:
+            task = meta_store.create_task(
+                metric_code=metric.metric_code,
+                change_type="modify",
+                strategy="full",
+                schema_version=metric.schema_version,
+            )
+    return UpdateMetricResponse(
+        status="ok",
+        metric_code=metric.metric_code,
+        schema_version=metric.schema_version,
+        requires_reextract=requires_reextract,
+        task_id=task["task_id"] if task else None,
+        task_status=task["status"] if task else None,
+    )
 
 
 @router.delete("/metrics/{metric_code:path}")
-def delete_metric(metric_code: str):
+def delete_metric(metric_code: str, principal: SemanticReviewPrincipalDependency):
     """删除业务指标。"""
+    del principal
     reg = get_registry()
     store = reg._store
     metric = store.get_metric(metric_code)
@@ -733,12 +806,13 @@ def delete_metric(metric_code: str):
 
 
 @router.post("/metrics/refresh-quality-scores")
-def refresh_quality_scores():
+def refresh_quality_scores(principal: SemanticReviewPrincipalDependency):
     """按最新发现扫描结果，重新计算并回填所有已映射指标的质量分。
 
     适用于「指标先建、扫描后到」导致 quality_score 滞留为 0 的场景，
     无需重跑全量扫描即可拉取最新质量分。
     """
+    del principal
     store = _get_discovery_store()
     latest = store.get_latest_result()
     if not latest:
@@ -775,6 +849,8 @@ class UpdateMetricRequest(BaseModel):
     definition: str | None = None
     metric_type: str | None = None
     semantic_type: str | None = None
+    indexed: bool | None = None
+    expected_schema_version: int | None = None
     unit: str | None = None
     importance: str | None = None
     source_field: str | None = None
@@ -1192,8 +1268,7 @@ def _refresh_quality_scores_from_scan(result_fields: list[dict]) -> int:
                 field_meta = by_full.get(f"{m.source_object.lower()}.{sf}")
         qs = calc_field_value_score(field_meta).total if field_meta else 0.0
         if qs != m.quality_score:
-            m.quality_score = qs
-            store.save_metric(m)
+            store.update_metric_quality(m.metric_code, qs)
             updated += 1
     if updated:
         logger.info("_refresh_quality_scores_from_scan: 刷新 %d 个指标质量分", updated)
@@ -1368,8 +1443,9 @@ class CreateValueDomainRequest(BaseModel):
 
 
 @router.post("/value-domains")
-def create_value_domain(req: CreateValueDomainRequest):
+def create_value_domain(req: CreateValueDomainRequest, principal: SemanticReviewPrincipalDependency):
     """创建新的值域。"""
+    del principal
     from src.semantic_layer.models import ValueDomain
     reg = get_registry()
     store = reg._store
@@ -1381,8 +1457,9 @@ def create_value_domain(req: CreateValueDomainRequest):
 
 
 @router.delete("/value-domains/{domain_code}")
-def delete_value_domain(domain_code: str):
+def delete_value_domain(domain_code: str, principal: SemanticReviewPrincipalDependency):
     """删除值域及其所有映射。"""
+    del principal
     reg = get_registry()
     store = reg._store
     if not store.get_value_domain(domain_code):
@@ -1403,8 +1480,13 @@ def get_standard_values(domain_code: str):
 
 
 @router.put("/value-domains/{domain_code}/standard-values")
-def update_standard_values(domain_code: str, req: StandardValuesRequest):
+def update_standard_values(
+    domain_code: str,
+    req: StandardValuesRequest,
+    principal: SemanticReviewPrincipalDependency,
+):
     """更新值域的标准值列表（全量替换）。"""
+    del principal
     reg = get_registry()
     store = reg._store
     vd = store.get_value_domain(domain_code)
@@ -1431,8 +1513,9 @@ def get_value_domain_mappings(domain_code: str):
 
 
 @router.post("/value-domain/mapping", response_model=ValueMappingResponse)
-def save_value_mapping(req: ValueMappingRequest):
+def save_value_mapping(req: ValueMappingRequest, principal: SemanticReviewPrincipalDependency):
     """Save a source_value → standard_value mapping."""
+    del principal
     reg = get_registry()
     store = reg._store
     from src.semantic_layer.models import ValueDomainMapping
@@ -1453,8 +1536,13 @@ def save_value_mapping(req: ValueMappingRequest):
 
 
 @router.delete("/value-domains/{domain_code}/mappings/{source_value:path}")
-def delete_value_mapping(domain_code: str, source_value: str):
+def delete_value_mapping(
+    domain_code: str,
+    source_value: str,
+    principal: SemanticReviewPrincipalDependency,
+):
     """删除单个值域映射。"""
+    del principal
     reg = get_registry()
     store = reg._store
     if not store.get_value_domain(domain_code):
@@ -1492,9 +1580,8 @@ def track_metric_usage(metric_code: str):
     metric = store.get_metric(metric_code)
     if not metric:
         raise HTTPException(status_code=404, detail=f"指标 '{metric_code}' 不存在")
-    metric.usage_count = (metric.usage_count or 0) + 1
-    store.save_metric(metric)
-    return TrackUsageResponse(metric_code=metric_code, usage_count=metric.usage_count)
+    usage_count = store.increment_metric_usage(metric_code)
+    return TrackUsageResponse(metric_code=metric_code, usage_count=usage_count)
 
 
 @router.get("/metrics/usage-stats", response_model=UsageStatsResponse)
@@ -2290,13 +2377,16 @@ def update_field_description(req: FieldDescriptionUpdateRequest):
 # 多源注册表：SQL Server ×N + Milvus ×1，供 discovery 扫描与语义层取数路由。
 
 _meta_store: PolicyMetaStore | None = None
+_meta_store_lock = RLock()
 
 
 def _get_meta_store() -> PolicyMetaStore:
     """PolicyMetaStore 单例工厂（测试可通过 monkeypatch 替换为内存假对象）。"""
     global _meta_store
     if _meta_store is None:
-        _meta_store = PolicyMetaStore()
+        with _meta_store_lock:
+            if _meta_store is None:
+                _meta_store = PolicyMetaStore()
     return _meta_store
 
 

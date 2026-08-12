@@ -24,6 +24,7 @@ import {
   Upload,
   Tag,
 } from 'lucide-react'
+import { semanticReviewJson } from '@/lib/policy-knowledge-api'
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -419,10 +420,7 @@ function QuickMetricForm({
     setSubmitting(true)
     setError(null)
     try {
-      const res = await fetch(`${API_BASE}/metrics`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await semanticReviewJson(`${API_BASE}/metrics`, 'POST', {
           name: form.name,
           metric_type: form.metric_type,
           semantic_type: form.semantic_type || null,
@@ -431,9 +429,7 @@ function QuickMetricForm({
           object_code: form.object_code,
           source_table: field.table_name,
           source_field: field.field_name,
-        }),
-      })
-      if (!res.ok) throw new Error(`创建失败 (${res.status})`)
+        })
       setSuccess(true)
       setTimeout(() => onSuccess(), 1500)
     } catch (err: unknown) {
@@ -1572,12 +1568,7 @@ export default function DiscoveryCenterPage() {
                     setBatchSubmitting(true)
                     setBatchResult(null)
                     try {
-                      const res = await fetch(`${API_BASE}/metrics/batch`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ items }),
-                      })
-                      const data = await res.json() as Array<{ index: number; metric_code: string; name: string; status: string; error: string | null }>
+                      const data = await semanticReviewJson<Array<{ index: number; metric_code: string; name: string; status: string; error: string | null }>>(`${API_BASE}/metrics/batch`, 'POST', { items })
                       setBatchResult(data)
                       if (data.some(d => d.status === 'created')) {
                         // Mark created fields as done locally

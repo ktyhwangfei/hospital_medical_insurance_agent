@@ -10,11 +10,12 @@ import {
   Pencil, Check, X, Plus, Trash2, Search, Settings2,
 } from 'lucide-react'
 import ValueDomainConfigModal from '../value-domain-config-modal'
+import { semanticReviewJson, updateSemanticMetric } from '@/lib/policy-knowledge-api'
 
 // ── Types ───────────────────────────────────────────────────────
 
 interface ObjectSummary { object_code: string; name: string; domain_code: string; status: string }
-interface MetricDetail { metric_code: string; name: string; definition: string | null; object_code: string; metric_type: string; semantic_type: string | null; unit: string | null; required: boolean; importance: string; value_domain: string | null; source_object: string | null; source_field: string | null; source_adapter_port: string | null; usage_count: number; quality_score: number; version: string; status: string }
+interface MetricDetail { metric_code: string; name: string; definition: string | null; object_code: string; metric_type: string; semantic_type: string | null; indexed: boolean; schema_version: number; unit: string | null; required: boolean; importance: string; value_domain: string | null; source_object: string | null; source_field: string | null; source_adapter_port: string | null; usage_count: number; quality_score: number; version: string; status: string }
 interface SemanticSummary { domains_count: number; objects_count: number; metrics_count: number; mapped_count: number; unmapped_count: number; value_missing_count: number; mapping_rate: number; skill_references: number }
 interface ValueDomainInfo { domain_code: string; name: string; description?: string; mapping_count: number; standard_values?: string[] }
 interface ValueMappingItem { status: string; domain_code: string; source_value: string; standard_value: string }
@@ -43,7 +44,7 @@ interface FieldOption { label: string; value: string; table: string }
 
 // ── Field Mapping Row ──────────────────────────────────────────
 
-function FieldMappingRow({ metric, fieldOptions, fieldSamples, onFieldSave, onOpenVD }: { metric: EnrichedMetric; fieldOptions: FieldOption[]; fieldSamples: Map<string, string[]>; onFieldSave: (code: string, field: string | null, table: string | null) => void; onOpenVD: (m: EnrichedMetric) => void }) {
+function FieldMappingRow({ metric, fieldOptions, fieldSamples, onFieldSave, onOpenVD }: { metric: EnrichedMetric; fieldOptions: FieldOption[]; fieldSamples: Map<string, string[]>; onFieldSave: (code: string, field: string | null, table: string | null, schemaVersion: number) => void; onOpenVD: (m: EnrichedMetric) => void }) {
   const [editing, setEditing] = useState(false)
   const [tableSearch, setTableSearch] = useState('')
   const [fieldSearch, setFieldSearch] = useState('')
@@ -77,8 +78,8 @@ function FieldMappingRow({ metric, fieldOptions, fieldSamples, onFieldSave, onOp
     setSaving(true)
     const val = selectedTable && selectedField ? `${selectedTable}.${selectedField}` : (selectedField || null)
     try {
-      await fetchJson(`${SEMANTIC_API}/metrics/${encodeURIComponent(metric.metric_code)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_field: val }) })
-      onFieldSave(metric.metric_code, val, selectedTable)
+      const response = await updateSemanticMetric(metric.metric_code, metric, { source_field: val })
+      onFieldSave(metric.metric_code, val, selectedTable, response.schema_version)
       setEditing(false)
     } catch (err: any) { alert(err.message) }
     setSaving(false)
@@ -214,7 +215,7 @@ function ValueDomainCard({ vd, onDelete, onRefresh }: { vd: ValueDomainInfo; onD
     if (!newSource.trim() || !newStandard.trim()) return
     setSaving(true)
     try {
-      await fetchJson(`${SEMANTIC_API}/value-domain/mapping`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain_code: vd.domain_code, source_value: newSource.trim(), standard_value: newStandard.trim() }) })
+      await semanticReviewJson(`${SEMANTIC_API}/value-domain/mapping`, 'POST', { domain_code: vd.domain_code, source_value: newSource.trim(), standard_value: newStandard.trim() })
       setNewSource(''); setNewStandard('')
       loadMappings(); onRefresh()
     } catch (err: any) { alert(err.message) }
@@ -236,7 +237,7 @@ function ValueDomainCard({ vd, onDelete, onRefresh }: { vd: ValueDomainInfo; onD
             <table className="w-full text-left text-xs">
               <thead><tr className="border-b border-slate-100 text-[10px] text-slate-400"><th className="py-1 font-medium">源值</th><th className="py-1 font-medium"></th><th className="py-1 font-medium">标准值</th><th className="py-1"></th></tr></thead>
               <tbody>{mappings.map((m) => (
-                <tr key={m.source_value} className="border-b border-slate-50"><td className="py-1.5 font-mono text-slate-700">{m.source_value}</td><td className="py-1.5 text-center text-slate-400">→</td><td className="py-1.5 text-slate-700">{m.standard_value}</td><td className="py-1.5 text-right"><button onClick={async () => { try { await fetch(`${SEMANTIC_API}/value-domains/${encodeURIComponent(vd.domain_code)}/mappings/${encodeURIComponent(m.source_value)}`, { method: 'DELETE' }); loadMappings(); onRefresh() } catch (err: any) { alert(err.message) } }} className="text-red-400 hover:text-red-600"><X className="h-3 w-3" /></button></td></tr>
+                <tr key={m.source_value} className="border-b border-slate-50"><td className="py-1.5 font-mono text-slate-700">{m.source_value}</td><td className="py-1.5 text-center text-slate-400">→</td><td className="py-1.5 text-slate-700">{m.standard_value}</td><td className="py-1.5 text-right"><button onClick={async () => { try { await semanticReviewJson(`${SEMANTIC_API}/value-domains/${encodeURIComponent(vd.domain_code)}/mappings/${encodeURIComponent(m.source_value)}`, 'DELETE'); loadMappings(); onRefresh() } catch (err: any) { alert(err.message) } }} className="text-red-400 hover:text-red-600"><X className="h-3 w-3" /></button></td></tr>
               ))}</tbody>
             </table>
           )}
@@ -290,9 +291,9 @@ export default function MappingCenterPage() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const handleFieldSave = useCallback((code: string, field: string | null, _table: string | null) => { setMetrics((prev) => prev.map((m) => m.metric_code === code ? { ...m, source_field: field, mapping_status: determineMappingStatus({ ...m, source_field: field }) } : m)) }, [])
-  const handleDeleteVD = useCallback(async (code: string) => { try { await fetchJson(`${SEMANTIC_API}/value-domains/${encodeURIComponent(code)}`, { method: 'DELETE' }); setValueDomains((prev) => prev.filter((v) => v.domain_code !== code)) } catch (err: any) { alert(err.message) } }, [])
-  const handleCreateVD = useCallback(async () => { if (!newVDCode.trim() || !newVDName.trim()) return; setSavingVD(true); try { await fetchJson(`${SEMANTIC_API}/value-domains`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain_code: newVDCode.trim(), name: newVDName.trim() }) }); setNewVDCode(''); setNewVDName(''); setShowAddVD(false); fetchData() } catch (err: any) { alert(err.message) }; setSavingVD(false) }, [newVDCode, newVDName, fetchData])
+  const handleFieldSave = useCallback((code: string, field: string | null, _table: string | null, schemaVersion: number) => { setMetrics((prev) => prev.map((m) => m.metric_code === code ? { ...m, source_field: field, schema_version: schemaVersion, mapping_status: determineMappingStatus({ ...m, source_field: field }) } : m)) }, [])
+  const handleDeleteVD = useCallback(async (code: string) => { try { await semanticReviewJson(`${SEMANTIC_API}/value-domains/${encodeURIComponent(code)}`, 'DELETE'); setValueDomains((prev) => prev.filter((v) => v.domain_code !== code)) } catch (err: any) { alert(err.message) } }, [])
+  const handleCreateVD = useCallback(async () => { if (!newVDCode.trim() || !newVDName.trim()) return; setSavingVD(true); try { await semanticReviewJson(`${SEMANTIC_API}/value-domains`, 'POST', { domain_code: newVDCode.trim(), name: newVDName.trim() }); setNewVDCode(''); setNewVDName(''); setShowAddVD(false); fetchData() } catch (err: any) { alert(err.message) }; setSavingVD(false) }, [newVDCode, newVDName, fetchData])
 
   const filteredMetrics = useMemo(() => { let list = metrics; if (showUnmappedOnly) list = list.filter((m) => m.mapping_status !== 'mapped'); if (searchText.trim()) { const q = searchText.trim().toLowerCase(); list = list.filter((m) => m.name.toLowerCase().includes(q) || m.metric_code.toLowerCase().includes(q) || (m.source_field || '').toLowerCase().includes(q)) } return list }, [metrics, showUnmappedOnly, searchText])
 

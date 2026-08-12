@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import {
   Loader2, X, Plus, Trash2,
 } from 'lucide-react'
+import { semanticReviewJson } from '@/lib/policy-knowledge-api'
 
 const SEMANTIC_API = '/api/v1/medical-insurance-ai-agent/semantic'
 
@@ -49,11 +50,7 @@ export default function StandardValuesModal({ valueDomainCode, onClose, onSaved 
   const handleSave = useCallback(async () => {
     setSaving(true)
     try {
-      await fetch(`${SEMANTIC_API}/value-domains/${encodeURIComponent(valueDomainCode)}/standard-values`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ standard_values: values }),
-      })
+      await semanticReviewJson(`${SEMANTIC_API}/value-domains/${encodeURIComponent(valueDomainCode)}/standard-values`, 'PUT', { standard_values: values })
       onSaved()
       onClose()
     } catch (err: any) { alert(err.message) }
@@ -82,11 +79,7 @@ export default function StandardValuesModal({ valueDomainCode, onClose, onSaved 
                 onClick={async () => {
                   setCreating(true)
                   try {
-                    await fetch(`${SEMANTIC_API}/value-domains`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ domain_code: valueDomainCode, name: valueDomainCode }),
-                    })
+                    await semanticReviewJson(`${SEMANTIC_API}/value-domains`, 'POST', { domain_code: valueDomainCode, name: valueDomainCode })
                     setNotFound(false)
                     loadValues()
                   } catch (err: any) { alert(err.message || '创建失败') }

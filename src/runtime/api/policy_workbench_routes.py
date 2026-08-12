@@ -28,6 +28,7 @@ from src.knowledge_extension.rule_explanation.knowledge_build_models import (
 )
 from src.knowledge_extension.rule_explanation.knowledge_build_service import (
     KnowledgeBuildPreflightBlocked,
+    KnowledgeExtractionFailed,
     KnowledgeBuildService,
 )
 from src.knowledge_extension.rule_explanation.knowledge_build_store import (
@@ -53,6 +54,12 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_service import
     SemanticContractUnavailable,
 )
 from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
+from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+    PipelineOrchestrator,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.models import (
+    RuleCompilationTraceResponse,
+)
 from src.knowledge_extension.rule_explanation.quality_models import (
     KnowledgeRelease,
     PolicyQATestCase,
@@ -101,6 +108,22 @@ _change_set_service: "ChangeSetService | None" = None
 _decision_task_service: "DecisionTaskService | None" = None
 _knowledge_build_store: KnowledgeBuildStore | None = None
 _knowledge_build_service: KnowledgeBuildService | None = None
+_compilation_trace_store: Any | None = None
+
+
+def _get_compilation_trace_store():
+    global _compilation_trace_store
+    if _compilation_trace_store is None:
+        from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+            InMemoryCompilationTraceStore,
+            PostgresCompilationTraceStore,
+        )
+        _compilation_trace_store = (
+            InMemoryCompilationTraceStore()
+            if os.environ.get("USE_MEMORY_STORAGE") == "1"
+            else PostgresCompilationTraceStore()
+        )
+    return _compilation_trace_store
 
 
 def _get_knowledge_build_store() -> KnowledgeBuildStore:
@@ -121,6 +144,7 @@ def _get_knowledge_build_service() -> KnowledgeBuildService:
             _get_service(),
             _get_change_set_service(),
             _get_knowledge_build_store(),
+            orchestrator=PipelineOrchestrator(PipelineStore()),
         )
     return _knowledge_build_service
 
@@ -154,12 +178,27 @@ def _get_change_set_service() -> "ChangeSetService":
             InMemoryChangeSetStore,
             PostgresChangeSetStore,
         )
+        from src.knowledge_extension.rule_explanation.policy_compiler.compiler import (
+            PolicyRuleCompiler,
+        )
+        from src.knowledge_extension.rule_explanation.policy_compiler.service import (
+            PolicyCompilationService,
+        )
         store = (
             InMemoryChangeSetStore()
             if os.environ.get("USE_MEMORY_STORAGE") == "1"
             else PostgresChangeSetStore()
         )
-        _change_set_service = ChangeSetService(_get_service(), store)
+        pipeline_store = PipelineStore()
+        _change_set_service = ChangeSetService(
+            _get_service(),
+            store,
+            compilation_service=PolicyCompilationService(
+                pipeline_store,
+                PolicyRuleCompiler(),
+                _get_compilation_trace_store(),
+            ),
+        )
     return _change_set_service
 
 
@@ -225,7 +264,9 @@ def _get_release_index_builder() -> ReleaseIndexBuilder:
     global _release_index_builder
     if _release_index_builder is None:
         _release_index_builder = ReleaseIndexBuilder(
-            _get_quality_store(), MilvusReleaseIndexBackend()
+            _get_quality_store(),
+            MilvusReleaseIndexBackend(),
+            _get_compilation_trace_store(),
         )
     return _release_index_builder
 
@@ -459,6 +500,19 @@ def create_knowledge_build_task(
             status_code=503,
             detail=error_detail("SEMANTIC_CONTRACT_UNAVAILABLE", str(exc), {}),
         ) from exc
+    except KnowledgeExtractionFailed as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "KNOWLEDGE_EXTRACTION_FAILED",
+                str(exc),
+                {
+                    "task_id": exc.task_id,
+                    "doc_id": exc.doc_id,
+                    "unit_id": exc.unit_id,
+                },
+            ),
+        ) from exc
     except KnowledgeBuildPreflightBlocked as exc:
         _raise_build_preflight_error(exc.result)
     except UnitRevisionClaimed as exc:
@@ -630,7 +684,7 @@ def return_change_set(change_set_id: str, request: ChangeSetActionRequest) -> Kn
         return _apply_change_set_action(
             change_set_id,
             target_status="RETURNED",
-            allowed_change_set_statuses={"PENDING_REVIEW"},
+            allowed_change_set_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
             target_task_status="RETURNED",
             allowed_task_statuses={"WAITING_REVIEW"},
             action=lambda: service.return_for_rebuild(
@@ -650,7 +704,7 @@ def reject_change_set(change_set_id: str, request: ChangeSetActionRequest) -> Kn
         return _apply_change_set_action(
             change_set_id,
             target_status="REJECTED",
-            allowed_change_set_statuses={"PENDING_REVIEW"},
+            allowed_change_set_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
             target_task_status="REJECTED",
             allowed_task_statuses={"WAITING_REVIEW"},
             action=lambda: service.reject(
@@ -870,6 +924,30 @@ class RuleDetail(BaseModel):
     review_status: str | None = None
 
 
+@router.get(
+    "/rules/{rule_id}/trace",
+    response_model=RuleCompilationTraceResponse,
+)
+def get_rule_compilation_trace(
+    rule_id: str,
+    run_id: str | None = None,
+) -> RuleCompilationTraceResponse:
+    trace = _get_compilation_trace_store().get_rule_trace(rule_id, run_id=run_id)
+    if trace is None:
+        audit_event = {"rule_id": rule_id}
+        if run_id is not None:
+            audit_event["run_id"] = run_id
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "RULE_TRACE_NOT_FOUND",
+                "规则编译轨迹不存在",
+                audit_event,
+            ),
+        )
+    return trace
+
+
 @router.get("/rules/{rule_id}", response_model=RuleDetail)
 def get_rule_detail(rule_id: str) -> RuleDetail:
     """按 rule_id 定位规则详情：规则 + 所属单元原文 + 文档上下文 + 变更集归属。"""
@@ -1064,6 +1142,7 @@ def create_candidate_release(request: CreateReleaseRequest) -> KnowledgeRelease:
             _validate_governed_release_source_before_promote(
                 release,
                 active_retry=False,
+                require_lineage=False,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -1101,9 +1180,24 @@ def list_releases() -> list[KnowledgeRelease]:
 @router.post("/releases/{release_id}/build", response_model=KnowledgeRelease)
 def build_candidate_release(release_id: str) -> KnowledgeRelease:
     try:
-        facts, rules = _get_release_content_source().records()
+        release = _get_quality_store().get_release(release_id)
+        if release is None:
+            raise ValueError(f"候选版本不存在: {release_id}")
+        if release.source_change_set_id is None:
+            raise ValueError("候选版本缺少来源知识变更集")
+        change_set = _get_change_set_service().get_change_set(
+            release.source_change_set_id
+        )
+        if change_set is None:
+            raise ValueError(
+                f"来源知识变更集不存在: {release.source_change_set_id}"
+            )
+        facts, rules, publications = _get_release_content_source().records(change_set)
         return _get_release_index_builder().build(
-            release_id, facts=facts, rules=rules
+            release_id,
+            facts=facts,
+            rules=rules,
+            publications=publications,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1321,6 +1415,7 @@ def _validate_governed_release_source_before_promote(
     release: KnowledgeRelease,
     *,
     active_retry: bool,
+    require_lineage: bool = True,
 ) -> None:
     if release.source_change_set_id is None:
         raise ValueError("缺少正式来源知识变更集")
@@ -1328,6 +1423,25 @@ def _validate_governed_release_source_before_promote(
         release,
         active_retry=active_retry,
     )
+    change_set = _get_change_set_service().get_change_set(
+        release.source_change_set_id
+    )
+    if change_set is None:
+        raise ValueError(f"来源知识变更集不存在: {release.source_change_set_id}")
+    # 发布门禁必须精确匹配本变更集的规则与编译运行，旧运行不能顶替。
+    expected_rule_runs: list[tuple[str, str]] = []
+    for item in change_set.items:
+        if (
+            item.canonical_rule is None
+            or item.compile_run_id is None
+            or item.compilation_status not in {"PASS", "WARN"}
+        ):
+            raise ValueError(f"变更项 {item.item_id} 缺少可发布规范规则")
+        expected_rule_runs.append((item.canonical_rule.rule_id, item.compile_run_id))
+    if require_lineage and not _get_compilation_trace_store().has_release_lineage(
+        release.release_id, expected_rule_runs
+    ):
+        raise ValueError(f"release {release.release_id} 编译血缘不完整")
 
 
 def _release_sync_pending_reasons(release: KnowledgeRelease) -> list[str]:

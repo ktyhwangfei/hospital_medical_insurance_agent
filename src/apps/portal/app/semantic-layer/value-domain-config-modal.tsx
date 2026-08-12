@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import {
   Loader2, X, Plus, Trash2,
 } from 'lucide-react'
+import { semanticReviewJson } from '@/lib/policy-knowledge-api'
 
 const SEMANTIC_API = '/api/v1/medical-insurance-ai-agent/semantic'
 
@@ -55,12 +56,11 @@ export default function ValueDomainConfigModal({ valueDomainCode, sourceValues, 
     if (!newSource.trim() || !newStandard.trim()) return
     setSaving(true)
     try {
-      const res = await fetch(`${SEMANTIC_API}/value-domain/mapping`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain_code: valueDomainCode, source_value: newSource.trim(), standard_value: newStandard.trim() }),
+      await semanticReviewJson(`${SEMANTIC_API}/value-domain/mapping`, 'POST', {
+        domain_code: valueDomainCode,
+        source_value: newSource.trim(),
+        standard_value: newStandard.trim(),
       })
-      if (!res.ok) throw new Error((await res.json().catch(() => ({ detail: 'failed' })) as any).detail)
       setNewSource(''); setNewStandard('')
       loadData(); onSaved()
     } catch (err: any) { alert(err.message) }
@@ -69,7 +69,7 @@ export default function ValueDomainConfigModal({ valueDomainCode, sourceValues, 
 
   const handleDelete = useCallback(async (sourceValue: string) => {
     try {
-      await fetch(`${SEMANTIC_API}/value-domains/${encodeURIComponent(valueDomainCode)}/mappings/${encodeURIComponent(sourceValue)}`, { method: 'DELETE' })
+      await semanticReviewJson(`${SEMANTIC_API}/value-domains/${encodeURIComponent(valueDomainCode)}/mappings/${encodeURIComponent(sourceValue)}`, 'DELETE')
       loadData(); onSaved()
     } catch (err: any) { alert(err.message) }
   }, [valueDomainCode, loadData, onSaved])

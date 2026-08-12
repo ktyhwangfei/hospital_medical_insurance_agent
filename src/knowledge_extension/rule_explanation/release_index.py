@@ -4,10 +4,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
+from src.knowledge_extension.rule_explanation.change_set_models import KnowledgeChangeSet
+from src.knowledge_extension.rule_explanation.policy_compiler.models import (
+    CanonicalRule,
+    CompileStep,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+    CompilationTraceStore,
+)
 from src.knowledge_extension.rule_explanation.quality_models import KnowledgeRelease
 from src.knowledge_extension.rule_explanation.quality_store import PolicyQualityStore
 
 CollectionKind = Literal["facts", "rules"]
+PublicationRecord = tuple[str, str, str, CanonicalRule]
 
 
 class ReleaseIndexBackend(Protocol):
@@ -37,45 +46,91 @@ class KnowledgeWorkbenchReleaseSource:
         self._workbench = workbench
         self._provider = provider
 
-    def records(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def records(
+        self, change_set: KnowledgeChangeSet
+    ) -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[PublicationRecord],
+    ]:
         from src.knowledge_extension.rule_explanation.policy_retrieval.policy_ingestion import (
             build_ingest_records,
         )
 
         facts: list[dict[str, Any]] = []
         rules: list[dict[str, Any]] = []
+        publications: list[PublicationRecord] = []
         extracted_at = datetime.now(timezone.utc).isoformat()
-        for summary in self._workbench.list_documents().items:
-            document = self._workbench.get_document(summary.doc_id)
-            for unit in document.units:
-                for knowledge in unit.knowledge:
-                    rule = {
-                        field.field_code: field.raw_value for field in knowledge.fields
-                    }
-                    rule.update({
-                        "rule_id": knowledge.knowledge_id,
-                        "source_text": knowledge.source_text,
-                        "confidence": knowledge.confidence.overall,
-                    })
-                    fact_records, rule_records = build_ingest_records(
-                        [{"fact_text": knowledge.business_sentence, "rules": [rule]}],
-                        doc_id=document.doc_id,
-                        provider=self._provider,
-                        extracted_at=extracted_at,
-                    )
-                    facts.extend(fact_records)
-                    rules.extend(rule_records)
+        for item in change_set.items:
+            canonical = item.canonical_rule
+            if canonical is None or item.compile_run_id is None:
+                raise ValueError(f"变更项 {item.item_id} 缺少规范规则或编译运行")
+            if item.compilation_status not in {"PASS", "WARN"}:
+                raise ValueError(
+                    f"变更项 {item.item_id} 编译状态为 {item.compilation_status}，不可发布"
+                )
+            source_text = str((item.after or {}).get("business_sentence") or "")
+            rule = self._runtime_rule(canonical, source_text)
+            fact_records, rule_records = build_ingest_records(
+                [{"fact_text": source_text, "rules": [rule]}],
+                doc_id=item.doc_id,
+                provider=self._provider,
+                extracted_at=extracted_at,
+            )
+            facts.extend(fact_records)
+            rules.extend(rule_records)
+            publications.append((
+                item.compile_run_id,
+                str((item.after or {}).get("extraction_id") or "")
+                or self._extraction_id(canonical),
+                item.doc_id,
+                canonical,
+            ))
         if not facts or not rules:
             raise ValueError("没有可构建候选版本的审核通过知识")
-        return facts, rules
+        return facts, rules, publications
+
+    @staticmethod
+    def _runtime_rule(rule: CanonicalRule, source_text: str) -> dict[str, Any]:
+        payload = dict(rule.conditions)
+        if "hospital_level" in payload:
+            payload["hosp_lv"] = payload.pop("hospital_level")
+        payload.update({
+            "rule_id": rule.rule_id,
+            "rule_type": rule.subject,
+            "psn_type": rule.population or "",
+            "source_text": source_text,
+        })
+        for name, value in rule.result.items():
+            if name == "ratio":
+                payload[rule.subject] = value
+            elif name == "amount":
+                field = rule.subject if rule.subject.endswith("_amount") else f"{rule.subject}_amount"
+                payload[field] = value
+            else:
+                payload[name] = value
+        return payload
+
+    @staticmethod
+    def _extraction_id(rule: CanonicalRule) -> str:
+        for evidence in rule.evidence:
+            if evidence.startswith("extraction:"):
+                return evidence.removeprefix("extraction:")
+        raise ValueError(f"规范规则 {rule.rule_id} 缺少 extraction_id")
 
 
 class ReleaseIndexBuilder:
     """必须把 facts/rules 作为不可拆分的一对完成构建和健康检查。"""
 
-    def __init__(self, store: PolicyQualityStore, backend: ReleaseIndexBackend) -> None:
+    def __init__(
+        self,
+        store: PolicyQualityStore,
+        backend: ReleaseIndexBackend,
+        trace_store: CompilationTraceStore | None = None,
+    ) -> None:
         self._store = store
         self._backend = backend
+        self._traces = trace_store
 
     def build(
         self,
@@ -83,6 +138,7 @@ class ReleaseIndexBuilder:
         *,
         facts: list[dict[str, Any]],
         rules: list[dict[str, Any]],
+        publications: list[PublicationRecord] | None = None,
     ) -> KnowledgeRelease:
         release = self._store.get_release(release_id)
         if release is None:
@@ -102,6 +158,40 @@ class ReleaseIndexBuilder:
         ))
         if not healthy:
             raise RuntimeError("候选版本 collection 对健康检查失败")
+        publications = publications or []
+        if publications and self._traces is None:
+            raise RuntimeError("候选版本缺少编译轨迹存储")
+        # 同一编译运行只记录一个确定性的发布步骤，逐规则血缘可安全续写。
+        publications_by_run: dict[str, list[PublicationRecord]] = {}
+        for publication in publications:
+            publications_by_run.setdefault(publication[0], []).append(publication)
+        for run_id in sorted(publications_by_run):
+            run_publications = publications_by_run[run_id]
+            rule_ids = sorted({record[3].rule_id for record in run_publications})
+            self._traces.append_step(run_id, CompileStep(
+                step_id=f"{run_id}_publish_{release_id}",
+                run_id=run_id,
+                sequence_no=8,
+                stage="PUBLISH",
+                status="PASS",
+                input_payload={"release_id": release_id, "rule_ids": rule_ids},
+                output_payload={
+                    "facts_collection": release.facts_collection,
+                    "rules_collection": release.rules_collection,
+                },
+                started_at=release.created_at,
+                finished_at=release.created_at,
+            ))
+            for _, extraction_id, document_id, rule in sorted(
+                run_publications, key=lambda record: record[3].rule_id
+            ):
+                self._traces.save_lineage(
+                    rule=rule,
+                    run_id=run_id,
+                    extraction_id=extraction_id,
+                    document_id=document_id,
+                    release_id=release_id,
+                )
         return self._store.save_release(release.model_copy(update={"status": "ready"}))
 
 

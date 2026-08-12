@@ -13,10 +13,14 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
+from src.data_platform.storage.postgresql.semantic_registry_store import (
+    SEMANTIC_REGISTRY_TRANSACTION_LOCK,
+)
 
 _SCHEMA = """
 -- 重新结构化任务（加/改/删指标后，批量更新 policy_rules 的异步任务）
@@ -77,6 +81,18 @@ class PolicyMetaStore:
 
     def _ensure_schema(self) -> None:
         self._client.execute(_SCHEMA)
+
+    @contextmanager
+    def registry_transaction(self, registry_store: object):
+        """让 schema 更新任务与语义指标共用同一 PostgreSQL 事务。"""
+        with SEMANTIC_REGISTRY_TRANSACTION_LOCK:
+            original_client = getattr(registry_store, "_client", None)
+            setattr(registry_store, "_client", self._client)
+            try:
+                with self._client.transaction():
+                    yield
+            finally:
+                setattr(registry_store, "_client", original_client)
 
     # ════════════════════ schema_update_task ════════════════════
 

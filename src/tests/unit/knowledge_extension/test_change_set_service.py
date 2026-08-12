@@ -20,6 +20,15 @@ from src.knowledge_extension.rule_explanation.change_set_store import (
 from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
     KnowledgeWorkbenchService,
 )
+from src.knowledge_extension.rule_explanation.policy_compiler.compiler import (
+    PolicyRuleCompiler,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.service import (
+    PolicyCompilationService,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+    InMemoryCompilationTraceStore,
+)
 from src.tests.unit.knowledge_extension.test_knowledge_workbench import (
     FakePipelineStore,
     _extraction,
@@ -58,6 +67,153 @@ def test_build_change_set_for_document() -> None:
     # 落库可查
     assert service.get_change_set(change_set.change_set_id) is not None
     assert len(service.list_change_sets("doc_1")) == 1
+
+
+def test_build_change_set_compiles_items_and_snapshots_extraction() -> None:
+    first = _leaf_ids()[0]
+    extraction = _extraction(first, _rules())
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda extraction_id: (
+        extraction if extraction_id == extraction["extraction_id"] else None
+    )
+    traces = InMemoryCompilationTraceStore()
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(pipeline),
+        InMemoryChangeSetStore(),
+        compilation_service=PolicyCompilationService(
+            pipeline, PolicyRuleCompiler(), traces
+        ),
+    )
+
+    change_set = service.build_for_document("doc_1")
+
+    assert change_set.status == "PENDING_REVIEW"
+    assert all(item.compile_run_id for item in change_set.items)
+    assert all(item.compilation_status == "PASS" for item in change_set.items)
+    assert all(item.canonical_rule is not None for item in change_set.items)
+    first_run = traces.get_run(change_set.items[0].compile_run_id)
+    assert first_run.raw_input["source_text"] == extraction["source_text"]
+    assert first_run.llm_output == extraction["extracted_fields"]
+    for item in change_set.items:
+        trace = traces.get_rule_trace(item.rule_id)
+        assert trace is not None
+        assert trace.rule_id == item.rule_id
+        assert trace.rule == item.canonical_rule
+        assert trace.run.run_id == item.compile_run_id
+        assert trace.publication is None
+
+
+def test_review_compilation_persists_run_and_blocks_candidate() -> None:
+    first = _leaf_ids()[0]
+    relation_rule = {
+        "rule_id": "relative_only",
+        "rule_type": "payment_ratio",
+        "psn_type": "retiree",
+        "expression": {
+            "operator": "MULTIPLY",
+            "reference": {"population": "employee"},
+            "factor": "0.6",
+        },
+        "source_text": "退休人员按在职人员比例折算。",
+        "confidence": 0.9,
+    }
+    extraction = _extraction(first, [relation_rule])
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda extraction_id: extraction
+    traces = InMemoryCompilationTraceStore()
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(pipeline),
+        InMemoryChangeSetStore(),
+        compilation_service=PolicyCompilationService(
+            pipeline, PolicyRuleCompiler(), traces
+        ),
+    )
+
+    change_set = service.build_for_document("doc_1")
+
+    assert change_set.status == "NEEDS_DECISION"
+    assert change_set.items[0].compilation_status == "REVIEW"
+    assert change_set.items[0].canonical_rule is None
+    assert {blocker["code"] for blocker in change_set.blockers} == {"NOT_FOUND"}
+    assert traces.get_run(change_set.items[0].compile_run_id).status == "REVIEW"
+    trace = traces.get_rule_trace(change_set.items[0].rule_id)
+    assert trace is not None
+    assert trace.rule_id == change_set.items[0].rule_id
+    assert trace.rule is None
+    assert trace.run.status == "REVIEW"
+    assert {issue.code for issue in trace.issues} == {"NOT_FOUND"}
+
+
+def test_legacy_change_set_items_remain_uncompiled() -> None:
+    first = _leaf_ids()[0]
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(FakePipelineStore([_extraction(first, _rules())])),
+        InMemoryChangeSetStore(),
+    )
+
+    change_set = service.build_for_document("doc_1")
+
+    assert all(item.compile_run_id is None for item in change_set.items)
+    assert all(item.canonical_rule is None for item in change_set.items)
+
+
+def test_trace_write_failure_finishes_started_run_before_raising() -> None:
+    first = _leaf_ids()[0]
+    extraction = _extraction(first, _rules()[:1])
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda extraction_id: extraction
+
+    class FailingTraceStore(InMemoryCompilationTraceStore):
+        last_run_id = ""
+        failed_once = False
+
+        def create_run(self, run):
+            self.last_run_id = run.run_id
+            return super().create_run(run)
+
+        def append_step(self, run_id, step):
+            if not self.failed_once:
+                self.failed_once = True
+                raise RuntimeError("trace unavailable")
+            return super().append_step(run_id, step)
+
+    traces = FailingTraceStore()
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(pipeline),
+        InMemoryChangeSetStore(),
+        compilation_service=PolicyCompilationService(
+            pipeline, PolicyRuleCompiler(), traces
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="trace unavailable"):
+        service.build_for_document("doc_1")
+
+    assert traces.get_run(traces.last_run_id).status == "FAIL"
+
+
+def test_trace_failure_during_compiler_exception_does_not_mask_original() -> None:
+    first = _leaf_ids()[0]
+    extraction = _extraction(first, _rules()[:1])
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda _extraction_id: extraction
+
+    class RaisingCompiler:
+        compiler_version = "test"
+
+        def compile(self, _facts, *, run_id):
+            raise RuntimeError("compiler exploded")
+
+    class UnavailableTraceStore(InMemoryCompilationTraceStore):
+        def save_candidate_lineage(self, **kwargs):
+            raise RuntimeError("trace unavailable")
+
+    with pytest.raises(RuntimeError, match="compiler exploded"):
+        PolicyCompilationService(
+            pipeline, RaisingCompiler(), UnavailableTraceStore()
+        ).compile_units(
+            KnowledgeWorkbenchService(pipeline).get_document("doc_1").units
+        )
 
 
 def test_build_change_set_is_idempotent_upsert() -> None:
@@ -361,6 +517,38 @@ def test_build_for_units_rejects_empty_selection() -> None:
         )
 
 
+def test_build_for_units_rejects_selected_units_without_candidate_knowledge() -> None:
+    first = _leaf_ids()[0]
+    workbench = KnowledgeWorkbenchService(
+        FakePipelineStore([_extraction(first, _rules()[:1])])
+    )
+    unit = workbench.get_document("doc_1").units[0].model_copy(
+        update={"knowledge_count": 0, "knowledge": []}
+    )
+    selected = change_set_service.SelectedKnowledgeUnit(
+        unit=unit,
+        source_revision=change_set_models.SourceUnitRevision(
+            doc_id=unit.doc_id,
+            doc_title=unit.doc_title,
+            unit_id=unit.unit_id,
+            unit_revision_id="UR_EMPTY_KNOWLEDGE",
+            path=unit.path,
+        ),
+    )
+    store = InMemoryChangeSetStore()
+    service = ChangeSetService(workbench, store)
+
+    with pytest.raises(ValueError, match="构建结果未生成候选知识"):
+        service.build_for_units(
+            task_id="KB_EMPTY_KNOWLEDGE",
+            task_name="零候选任务",
+            units=[selected],
+            semantic_contract_version="v1.0",
+        )
+
+    assert store.list() == []
+
+
 def test_legacy_change_set_json_without_candidate_context_still_validates() -> None:
     legacy = change_set_models.KnowledgeChangeSet.model_validate({
         "change_set_id": "CS_legacy",
@@ -408,6 +596,31 @@ def test_return_for_rebuild_records_terminal_review_decision() -> None:
         "reviewed_by": "bob",
         "reason": "证据需要补充",
     }
+
+
+def test_needs_decision_change_set_can_be_returned_or_rejected() -> None:
+    """NEEDS_DECISION（编译有 blocker）也允许退回重新构建/拒绝。
+
+    复现前端 bug：退回重新构建按钮 disabled，因为变更集状态是 NEEDS_DECISION
+    而非 PENDING_REVIEW。后端 return_for_rebuild/reject 必须接受 NEEDS_DECISION。
+    """
+    first = _leaf_ids()[0]
+    store = InMemoryChangeSetStore()
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(FakePipelineStore([_extraction(first, _rules())])),
+        store,
+    )
+    change_set = service.build_for_document("doc_1")
+    # 手动置为 NEEDS_DECISION（模拟编译有 blocker 的场景）
+    store.update_status(change_set.change_set_id, "NEEDS_DECISION")
+
+    returned = service.return_for_rebuild(change_set.change_set_id, "bob", "退回重建")
+    assert returned.status == "RETURNED"
+
+    # 重置回 NEEDS_DECISION 测 reject
+    store.update_status(change_set.change_set_id, "NEEDS_DECISION")
+    rejected = service.reject(change_set.change_set_id, "bob", "拒绝")
+    assert rejected.status == "REJECTED"
 
 
 def test_approved_change_set_cannot_be_returned_or_rejected() -> None:

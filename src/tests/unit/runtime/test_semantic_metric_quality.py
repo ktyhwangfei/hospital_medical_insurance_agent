@@ -31,7 +31,7 @@ def test_create_metric_with_source_field_computes_quality(fresh_registry, monkey
     sr.create_metric(CreateMetricRequest(
         object_code="zyfymx", name="测试质量分指标",
         source_field="yb_zyfymx.foo", source_table="yb_zyfymx",
-    ))
+    ), object())
     detail = sr.get_metric("zyfymx.测试质量分指标")
     assert detail.quality_score == 42.0
 
@@ -45,7 +45,7 @@ def test_create_metric_without_source_field_keeps_zero(fresh_registry, monkeypat
         return 99.0
 
     monkeypatch.setattr(sr, "_calc_quality_from_discovery", _fake)
-    sr.create_metric(CreateMetricRequest(object_code="zyfymx", name="无映射指标"))
+    sr.create_metric(CreateMetricRequest(object_code="zyfymx", name="无映射指标"), object())
     detail = sr.get_metric("zyfymx.无映射指标")
     assert detail.quality_score == 0.0
     assert calls["n"] == 0
@@ -58,7 +58,7 @@ def test_refresh_quality_scores_pulls_latest_discovery(fresh_registry, monkeypat
     sr.create_metric(CreateMetricRequest(
         object_code="zyfymx", name="待刷新指标",
         source_field="yb_zyfymx.bar", source_table="yb_zyfymx",
-    ))
+    ), object())
     assert sr.get_metric("zyfymx.待刷新指标").quality_score == 0.0
 
     # 发现扫描完成：注入包含该字段的最新结果
@@ -69,7 +69,7 @@ def test_refresh_quality_scores_pulls_latest_discovery(fresh_registry, monkeypat
     stub_store = type("Stub", (), {"get_latest_result": lambda self: {"fields": [field]}})()
     monkeypatch.setattr(sr, "_get_discovery_store", lambda: stub_store)
 
-    result = sr.refresh_quality_scores()
+    result = sr.refresh_quality_scores(object())
     assert result["status"] == "ok"
     assert result["updated"] >= 1
     assert sr.get_metric("zyfymx.待刷新指标").quality_score > 0.0
@@ -80,5 +80,5 @@ def test_refresh_quality_scores_without_scan_returns_409(fresh_registry, monkeyp
     stub_store = type("Stub", (), {"get_latest_result": lambda self: None})()
     monkeypatch.setattr(sr, "_get_discovery_store", lambda: stub_store)
     with pytest.raises(sr.HTTPException) as exc:
-        sr.refresh_quality_scores()
+        sr.refresh_quality_scores(object())
     assert exc.value.status_code == 409

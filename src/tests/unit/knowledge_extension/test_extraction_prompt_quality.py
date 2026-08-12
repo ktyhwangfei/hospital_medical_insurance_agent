@@ -72,3 +72,30 @@ def test_custom_prompt_is_not_mutated_by_quality_constraints() -> None:
     ov = ExtractionOverride(prompt_mode="custom", custom_prompt="请提取 {title} {text}")
     prompt = orch._build_fact_extraction_prompt("正文", "标题", ov)
     assert prompt == "请提取 标题 正文"
+
+
+def test_schema_and_legacy_prompts_request_structured_unknown_concepts(monkeypatch) -> None:
+    """默认两路提示词都必须回传可路由的新指标、新值、新别名元数据。"""
+    from src.semantic_layer import extraction_contract as ec
+    from src.semantic_layer import registry as reg
+    from src.semantic_layer.extraction_contract import ExtractionSchema, FieldContract
+
+    schema = ExtractionSchema(
+        fields=[FieldContract(code="psn_type", name="人群", value_domain="psn_type")],
+        dictionaries={"psn_type": ["在职职工", "退休人员"]},
+    )
+    monkeypatch.setattr(reg, "create_registry", lambda: object())
+    monkeypatch.setattr(ec, "build_extraction_schema", lambda r, code: schema)
+
+    orch = PipelineOrchestrator()
+    prompts = [
+        orch._build_fact_extraction_prompt("正文", "标题", ExtractionOverride(prompt_mode="schema")),
+        orch._legacy_fact_extraction_prompt("正文", "标题"),
+    ]
+    for prompt in prompts:
+        assert '"unknown_concepts"' in prompt
+        assert '"concept_type": "new_metric | new_enum_value | enum_alias"' in prompt
+        assert '"axis_metric_code"' in prompt
+        assert '"alias_target"' in prompt
+        assert "完全新指标" in prompt
+        assert "枚举新取值或新别名" in prompt

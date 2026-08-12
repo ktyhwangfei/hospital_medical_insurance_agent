@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Compass, Loader2, RefreshCw, Zap, Search, Database, CheckCircle2,
 } from 'lucide-react'
+import { semanticReviewJson } from '@/lib/policy-knowledge-api'
 
 const SEMANTIC_API = '/api/v1/medical-insurance-ai-agent/semantic'
 
@@ -176,15 +177,7 @@ export default function DiscoveryPage() {
         source_field: f.field_name,
         importance: 'optional',
       }))
-      const r = await fetch(`${SEMANTIC_API}/metrics/batch`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items }),
-      })
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}))
-        throw new Error(d.detail?.message || d.detail || `HTTP ${r.status}`)
-      }
-      const res: BatchResult[] = await r.json()
+      const res = await semanticReviewJson<BatchResult[]>(`${SEMANTIC_API}/metrics/batch`, 'POST', { items })
       setWriteResults(res)
       const created = res.filter(x => x.status === 'created').length
       if (created > 0) {

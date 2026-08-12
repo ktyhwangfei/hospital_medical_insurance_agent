@@ -44,6 +44,7 @@ import {
   type RiskLevel,
 } from '@/lib/policy-knowledge-api'
 import { ReextractConfigDialog, type ReextractScope } from './reextract-config-dialog'
+import RuleTraceDrawer from './rule-trace-drawer'
 
 type ReasonAction = 'return' | 'reject'
 
@@ -189,6 +190,10 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
   const [visibleCodes, setVisibleCodes] = useState<string[] | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [reextractScope, setReextractScope] = useState<ReextractScope | null>(null)
+  const [traceTarget, setTraceTarget] = useState<{
+    ruleId: string
+    runId: string | null
+  } | null>(null)
   const loadSequence = useRef(0)
   const actionInFlight = useRef(false)
 
@@ -419,7 +424,7 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
       || changeSet?.items.some((item) => item.risk_level === 'HIGH' || item.risk_level === 'CRITICAL'),
   )
   const approveEligible = changeSet?.status === 'PENDING_REVIEW' || changeSet?.status === 'NEEDS_DECISION'
-  const returnOrRejectEligible = changeSet?.status === 'PENDING_REVIEW'
+  const returnOrRejectEligible = changeSet?.status === 'PENDING_REVIEW' || changeSet?.status === 'NEEDS_DECISION'
   const invalidCandidateCount = changeSet?.items.filter((item) => !parseCandidateKnowledge(item)).length ?? 0
   const candidateSetEmpty = changeSet?.items.length === 0
   const allCandidateSnapshotsValid = Boolean(
@@ -889,6 +894,10 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
                           itemId: item.item_id,
                           extractedFields: extractCandidateFieldCodes(item.after),
                         })}
+                        onViewTrace={() => setTraceTarget({
+                          ruleId: item.canonical_rule?.rule_id ?? item.rule_id,
+                          runId: item.compile_run_id ?? null,
+                        })}
                       />
                     ))}
                   </>
@@ -988,6 +997,14 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
           }}
         />
       )}
+
+      <RuleTraceDrawer
+        key={`${traceTarget?.ruleId ?? ''}:${traceTarget?.runId ?? ''}`}
+        open={traceTarget !== null}
+        ruleId={traceTarget?.ruleId ?? null}
+        runId={traceTarget?.runId ?? null}
+        onOpenChange={(open) => { if (!open) setTraceTarget(null) }}
+      />
     </section>
   )
 }
@@ -1018,6 +1035,7 @@ function ReviewTableRow({
   onReject,
   onReturn,
   onReextract,
+  onViewTrace,
 }: {
   item: ChangeSetItem
   columns: TableColumn[]
@@ -1033,6 +1051,7 @@ function ReviewTableRow({
   onReject: () => void
   onReturn: () => void
   onReextract: () => void
+  onViewTrace: () => void
 }) {
   const candidate = parseCandidateKnowledge(item)
   const invalid = candidate === null
@@ -1127,6 +1146,7 @@ function ReviewTableRow({
         )}
       </td>
       <td className="px-3 py-3">
+        <div className="flex flex-wrap items-center gap-1.5">
         {review ? (
           <span className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-semibold ${reviewStyle(review)}`}>
             <Check className="size-3" />
@@ -1174,6 +1194,14 @@ function ReviewTableRow({
             )}
           </div>
         )}
+        <button
+          type="button"
+          onClick={onViewTrace}
+          className="rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+        >
+          查看溯源
+        </button>
+        </div>
       </td>
     </tr>
   )

@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from threading import RLock
+from typing import Optional
 
 from src.config.production import DATABASE_URL
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
@@ -25,6 +26,9 @@ from src.semantic_layer.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ponytail: 全局锁优先保证跨协调器 client swap 正确；吞吐成为瓶颈时再改每 registry 锁。
+SEMANTIC_REGISTRY_TRANSACTION_LOCK = RLock()
 
 _SCHEMA = """
 -- 业务域
@@ -444,28 +448,28 @@ class PostgresRegistryStore:
                 created_at, updated_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (metric_code) DO UPDATE SET
-                   object_code = EXCLUDED.object_code,
-                   name = EXCLUDED.name,
-                   definition = EXCLUDED.definition,
-                   metric_type = EXCLUDED.metric_type,
-                   semantic_type = EXCLUDED.semantic_type,
-                   unit = EXCLUDED.unit,
-                   required = EXCLUDED.required,
-                   default_value = EXCLUDED.default_value,
-                   source_object = EXCLUDED.source_object,
-                   source_field = EXCLUDED.source_field,
-                   source_adapter_port = EXCLUDED.source_adapter_port,
-                   transformation = EXCLUDED.transformation,
-                   value_domain = EXCLUDED.value_domain,
-                   importance = EXCLUDED.importance,
+                   object_code = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.object_code ELSE semantic_metrics.object_code END,
+                   name = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.name ELSE semantic_metrics.name END,
+                   definition = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.definition ELSE semantic_metrics.definition END,
+                   metric_type = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.metric_type ELSE semantic_metrics.metric_type END,
+                   semantic_type = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.semantic_type ELSE semantic_metrics.semantic_type END,
+                   unit = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.unit ELSE semantic_metrics.unit END,
+                   required = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.required ELSE semantic_metrics.required END,
+                   default_value = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.default_value ELSE semantic_metrics.default_value END,
+                   source_object = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.source_object ELSE semantic_metrics.source_object END,
+                   source_field = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.source_field ELSE semantic_metrics.source_field END,
+                   source_adapter_port = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.source_adapter_port ELSE semantic_metrics.source_adapter_port END,
+                   transformation = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.transformation ELSE semantic_metrics.transformation END,
+                   value_domain = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.value_domain ELSE semantic_metrics.value_domain END,
+                   importance = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.importance ELSE semantic_metrics.importance END,
                    usage_count = EXCLUDED.usage_count,
                    quality_score = EXCLUDED.quality_score,
-                   version = EXCLUDED.version,
-                   status = EXCLUDED.status,
-                   metric_kind = EXCLUDED.metric_kind,
-                   indexed = EXCLUDED.indexed,
-                   extraction_hint = EXCLUDED.extraction_hint,
-                   schema_version = EXCLUDED.schema_version,
+                   version = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.version ELSE semantic_metrics.version END,
+                   status = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.status ELSE semantic_metrics.status END,
+                   metric_kind = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.metric_kind ELSE semantic_metrics.metric_kind END,
+                   indexed = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.indexed ELSE semantic_metrics.indexed END,
+                   extraction_hint = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.extraction_hint ELSE semantic_metrics.extraction_hint END,
+                   schema_version = GREATEST(semantic_metrics.schema_version, EXCLUDED.schema_version),
                    updated_at = EXCLUDED.updated_at""",
             (metric.metric_code, metric.object_code, metric.name, metric.definition,
              metric.metric_type, metric.semantic_type, metric.unit, metric.required,
@@ -477,12 +481,39 @@ class PostgresRegistryStore:
              metric.created_at, metric.updated_at),
         )
 
+    def increment_metric_usage(self, metric_code: str, delta: int = 1) -> int:
+        rows = self._get_client().execute(
+            """UPDATE semantic_metrics
+               SET usage_count = usage_count + %s, updated_at = CURRENT_TIMESTAMP
+               WHERE metric_code = %s
+               RETURNING usage_count""",
+            (delta, metric_code),
+        )
+        if not rows:
+            raise ValueError(f"指标 '{metric_code}' 不存在")
+        return int(rows[0]["usage_count"])
+
+    def update_metric_quality(self, metric_code: str, score: float) -> None:
+        self._get_client().execute(
+            """UPDATE semantic_metrics
+               SET quality_score = %s, updated_at = CURRENT_TIMESTAMP
+               WHERE metric_code = %s""",
+            (score, metric_code),
+        )
+
     def get_metric(self, metric_code: str) -> Optional[Metric]:
         client = self._get_client()
         rows = client.execute(
             "SELECT * FROM semantic_metrics WHERE metric_code = %s", (metric_code,)
         )
         return _row_to_metric(rows[0]) if rows else None
+
+    def lock_metric(self, metric_code: str) -> None:
+        """在当前事务内锁定指标，防止 schema_version 并发丢失更新。"""
+        self._get_client().execute(
+            "SELECT metric_code FROM semantic_metrics WHERE metric_code = %s FOR UPDATE",
+            (metric_code,),
+        )
 
     def list_metrics(self, object_code: Optional[str] = None) -> list[Metric]:
         client = self._get_client()

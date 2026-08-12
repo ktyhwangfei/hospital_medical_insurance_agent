@@ -13,7 +13,10 @@ get_registry() 单例，服务于已退役的 IndicatorContext 增强路径。�
 """
 import os
 from collections import defaultdict
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Optional, Protocol
 
 from src.semantic_layer.models import (
@@ -34,6 +37,8 @@ class RegistryStore(Protocol):
     def list_objects(self, domain_code: Optional[str] = None) -> list[BusinessObject]: ...
     def delete_object(self, object_code: str) -> None: ...
     def save_metric(self, metric: Metric) -> None: ...
+    def increment_metric_usage(self, metric_code: str, delta: int = 1) -> int: ...
+    def update_metric_quality(self, metric_code: str, score: float) -> None: ...
     def get_metric(self, metric_code: str) -> Optional[Metric]: ...
     def list_metrics(self, object_code: Optional[str] = None) -> list[Metric]: ...
     def delete_metric(self, metric_code: str) -> None: ...
@@ -60,6 +65,32 @@ class InMemoryRegistryStore:
     _value_mappings: dict[str, list[ValueDomainMapping]] = field(default_factory=lambda: defaultdict(list))
     _object_versions: dict[str, list[BusinessObjectVersion]] = field(
         default_factory=lambda: defaultdict(list))
+    _transaction_lock: RLock = field(default_factory=RLock, repr=False)
+
+    @contextmanager
+    def transaction(self):
+        """为内存发布提供与 PostgreSQL 一致的失败回滚语义。"""
+        with self._transaction_lock:
+            snapshot = deepcopy((
+                self._domains,
+                self._objects,
+                self._metrics,
+                self._value_domains,
+                self._value_mappings,
+                self._object_versions,
+            ))
+            try:
+                yield
+            except Exception:
+                (
+                    self._domains,
+                    self._objects,
+                    self._metrics,
+                    self._value_domains,
+                    self._value_mappings,
+                    self._object_versions,
+                ) = snapshot
+                raise
 
     # Domain
     def save_domain(self, domain: BusinessDomain) -> None:
@@ -92,7 +123,29 @@ class InMemoryRegistryStore:
 
     # Metric
     def save_metric(self, metric: Metric) -> None:
+        current = self._metrics.get(metric.metric_code)
+        if current is not None and metric.schema_version < current.schema_version:
+            metric = current.model_copy(update={
+                "usage_count": metric.usage_count,
+                "quality_score": metric.quality_score,
+                "updated_at": metric.updated_at,
+            })
         self._metrics[metric.metric_code] = metric
+
+    def increment_metric_usage(self, metric_code: str, delta: int = 1) -> int:
+        with self._transaction_lock:
+            metric = self._metrics.get(metric_code)
+            if metric is None:
+                raise ValueError(f"指标 '{metric_code}' 不存在")
+            metric.usage_count += delta
+            return metric.usage_count
+
+    def update_metric_quality(self, metric_code: str, score: float) -> None:
+        with self._transaction_lock:
+            metric = self._metrics.get(metric_code)
+            if metric is None:
+                raise ValueError(f"指标 '{metric_code}' 不存在")
+            metric.quality_score = score
 
     def get_metric(self, metric_code: str) -> Optional[Metric]:
         return self._metrics.get(metric_code)
@@ -114,7 +167,10 @@ class InMemoryRegistryStore:
         return self._value_domains.get(domain_code)
 
     def save_value_mapping(self, vm: ValueDomainMapping) -> None:
-        self._value_mappings[vm.domain_code].append(vm)
+        mappings = self._value_mappings[vm.domain_code]
+        self._value_mappings[vm.domain_code] = [
+            item for item in mappings if item.source_value != vm.source_value
+        ] + [vm]
 
     def get_value_mappings(self, domain_code: str) -> list[ValueDomainMapping]:
         return self._value_mappings.get(domain_code, [])
@@ -182,6 +238,14 @@ class SemanticRegistry:
             raise ValueError(f"对象 '{metric.object_code}' 不存在")
         self._store.save_metric(metric)
 
+    def save_published_metric(self, metric: Metric) -> None:
+        """保存已通过人工审核的指标，供提议发布路径使用。"""
+        if metric.status != "published":
+            raise ValueError("发布指标状态必须为 published")
+        if self._store.get_object(metric.object_code) is None:
+            raise ValueError(f"对象 '{metric.object_code}' 不存在")
+        self._store.save_metric(metric)
+
     def get_value_domain(self, domain_code: str) -> Optional[ValueDomain]:
         return self._store.get_value_domain(domain_code)
 
@@ -190,6 +254,10 @@ class SemanticRegistry:
 
     def save_value_mapping(self, mapping: ValueDomainMapping) -> None:
         self._store.save_value_mapping(mapping)
+
+    def get_value_mappings(self, domain_code: str) -> list[ValueDomainMapping]:
+        """只读获取值域全局映射，供发布冲突校验。"""
+        return self._store.get_value_mappings(domain_code)
 
     def get_metric_mapping(
         self, object_code: str, metric_codes: list[str],

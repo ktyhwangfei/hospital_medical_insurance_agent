@@ -23,6 +23,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+READ_EXTRACTIONS_SQL = (
+    "SELECT extraction_id, doc_id, source_text, extracted_fields, status "
+    "FROM policy_extractions "
+    "WHERE extracted_fields IS NOT NULL AND status <> 'archived'"
+)
+
 
 def to_ingest_input(ext: dict) -> dict:
     """单条 extraction → build_ingest_records 输入 {fact_text, rules}。
@@ -71,10 +77,7 @@ def read_extractions() -> list[dict]:
 
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT extraction_id, doc_id, source_text, extracted_fields, status "
-                "FROM policy_extractions WHERE extracted_fields IS NOT NULL"
-            )
+            cur.execute(READ_EXTRACTIONS_SQL)
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
 

@@ -6,6 +6,13 @@ const nextConfig: NextConfig = {
   // 支持多实例 dev：默认 .next，可用 NEXT_DIST_DIR 覆盖（避免同目录双开 dev 的锁冲突）
   distDir: process.env.NEXT_DIST_DIR || '.next',
   allowedDevOrigins: ['127.0.0.1', '192.168.43.190'],
+  async redirects() {
+    return [{
+      source: '/semantic-layer/proposals',
+      destination: '/policy-knowledge/knowledge/semantic-discovery',
+      permanent: false,
+    }]
+  },
   async rewrites() {
     return [
       {

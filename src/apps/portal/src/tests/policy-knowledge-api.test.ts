@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createKnowledgeBuildTask,
   createRelease,
+  getRuleCompilationTrace,
   getReleaseGateStatus,
   getKnowledgeBuildTask,
   getWorkbenchDocuments,
@@ -15,6 +16,9 @@ import {
   promoteGovernedRelease,
   promoteRelease,
   returnKnowledgeReview,
+  semanticReviewJson,
+  semanticReviewRequest,
+  updateSemanticMetric,
   type CreateKnowledgeBuildTaskRequest,
   type KnowledgeChangeSet,
 } from '@/lib/policy-knowledge-api'
@@ -112,7 +116,69 @@ function stubFetchJson(body: unknown) {
 
 
 describe('policy knowledge api', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    window.sessionStorage.clear()
+  })
+
+  it('uses the configured local review token when the browser session has none', async () => {
+    window.sessionStorage.removeItem('semantic-review-token')
+    vi.stubEnv('NODE_ENV', 'development')
+    vi.stubEnv('NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN', 'signed-local-review-token')
+
+    const init = await semanticReviewRequest()
+
+    expect(init.headers).toEqual({ Authorization: 'Bearer signed-local-review-token' })
+  })
+
+  it('authenticates semantic metric updates and adds the expected version only for contract changes', async () => {
+    window.sessionStorage.setItem('semantic-review-token', 'review-token')
+    const fetchMock = stubFetchJson({
+      status: 'ok', metric_code: 'zcgz.payment_amount', schema_version: 5,
+      requires_reextract: true, task_id: 'task-1', task_status: 'pending',
+    })
+    const current = { semantic_type: 'Amount', indexed: false, schema_version: 4 }
+
+    await updateSemanticMetric('zcgz.payment_amount', current, { semantic_type: 'Ratio', indexed: true })
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v1/medical-insurance-ai-agent/semantic/metrics/zcgz.payment_amount',
+      {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer review-token', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ semantic_type: 'Ratio', indexed: true, expected_schema_version: 4 }),
+      },
+    )
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      status: 'ok', metric_code: 'zcgz.payment_amount', schema_version: 4,
+      requires_reextract: false, task_id: null, task_status: null,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    await updateSemanticMetric('zcgz.payment_amount', current, { source_field: 'claims.amount' })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v1/medical-insurance-ai-agent/semantic/metrics/zcgz.payment_amount',
+      {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer review-token', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_field: 'claims.amount' }),
+      },
+    )
+  })
+
+  it('rejects governed semantic writes when the backend returns forbidden', async () => {
+    window.sessionStorage.setItem('semantic-review-token', 'review-token')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        error_code: 'SEMANTIC_REVIEW_PERMISSION_REQUIRED',
+        message: '缺少语义审核权限',
+        audit_event: {},
+      },
+    }), { status: 403, headers: { 'Content-Type': 'application/json' } })))
+
+    await expect(semanticReviewJson('/semantic/write', 'POST', { value: 1 }))
+      .rejects.toMatchObject({ status: 403, message: '缺少语义审核权限' })
+  })
 
   it('surfaces typed backend error messages', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -340,6 +406,19 @@ describe('policy knowledge api', () => {
     expect(result).toEqual(gate)
     expect(fetchMock).toHaveBeenCalledWith(
       `${WORKBENCH_API}/releases/release%2F1/gate-status`,
+      undefined,
+    )
+  })
+
+  it('loads an encoded rule compilation trace', async () => {
+    const trace = { rule: { rule_id: 'rule/1' }, steps: [] }
+    const fetchMock = stubFetchJson(trace)
+
+    const result = await getRuleCompilationTrace('rule/1', 'run/1')
+
+    expect(result).toEqual(trace)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${WORKBENCH_API}/rules/rule%2F1/trace?run_id=run%2F1`,
       undefined,
     )
   })
