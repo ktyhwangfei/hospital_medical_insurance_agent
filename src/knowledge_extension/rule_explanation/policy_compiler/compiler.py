@@ -33,6 +33,9 @@ RULE_KEY_FIELDS = (
     "additional_conditions",
 )
 _SEGMENT_FIELDS = {"segment", "amount_band"}
+# 身份无法确定时的哨兵值：必须 fail-closed，否则语义不同的规则会塌缩进同一 rule_id。
+# ponytail: 哨兵集合是封闭枚举，新增适配器产生的未知身份值时需同步扩充。
+SUBJECT_SENTINELS = frozenset({"", "unclassified", "unknown", "未分类", "none"})
 
 
 def freeze(value: Any) -> Any:
@@ -46,10 +49,12 @@ def freeze(value: Any) -> Any:
 
 
 def rule_key(fact: PolicyFact) -> tuple[object, ...]:
+    # value.keys() 必须参与身份：否则同 subject/population 的“比例规则”与“金额规则”会算出同一 rule_id。
     return (
         fact.subject,
         fact.population,
         *(freeze(fact.conditions.get(name)) for name in RULE_KEY_FIELDS),
+        freeze(sorted(fact.value.keys())),
     )
 
 
@@ -73,8 +78,6 @@ class PolicyRuleCompiler:
             lambda: self._canonicalize(facts),
         )
         all_issues.extend(issues)
-        if self._has_fail(issues):
-            return self._result([], all_issues, steps)
 
         direct_rules, relations, issues = self._stage(
             steps,
@@ -123,6 +126,13 @@ class PolicyRuleCompiler:
         normalized: list[PolicyFact] = []
         issues: list[ValidationIssue] = []
         for fact in facts:
+            if (fact.subject or "").strip().lower() in SUBJECT_SENTINELS:
+                issues.append(self._issue(
+                    "FAIL", "SUBJECT_MISSING", "CANONICALIZE", fact_id=fact.fact_id,
+                    message="政策事实缺少可识别的业务主体",
+                    action="补充结构化 subject（如 personal_payment_ratio）",
+                ))
+                continue
             if not fact.evidence:
                 issues.append(self._issue(
                     "FAIL", "EVIDENCE_REQUIRED", "CANONICALIZE", fact_id=fact.fact_id,
@@ -183,10 +193,11 @@ class PolicyRuleCompiler:
         for key, group in grouped.items():
             distinct_values = {freeze(fact.value) for fact in group}
             if len(distinct_values) > 1:
-                issues.append(self._issue(
-                    "REVIEW", "CONFLICT", "COMPOSE", fact_id=group[0].fact_id,
-                    message="相同规则身份存在冲突结果", action="人工确认唯一结果",
-                ))
+                for fact in group:
+                    issues.append(self._issue(
+                        "REVIEW", "CONFLICT", "COMPOSE", fact_id=fact.fact_id,
+                        message="相同规则身份存在冲突结果", action="人工确认唯一结果",
+                    ))
                 continue
             first = group[0]
             evidence = list(dict.fromkeys(item for fact in group for item in fact.evidence))
@@ -411,10 +422,6 @@ class PolicyRuleCompiler:
         if "WARN" in severities:
             return "WARN"
         return "PASS"
-
-    @staticmethod
-    def _has_fail(issues: Iterable[ValidationIssue]) -> bool:
-        return any(issue.severity == "FAIL" for issue in issues)
 
     @staticmethod
     def _issue(

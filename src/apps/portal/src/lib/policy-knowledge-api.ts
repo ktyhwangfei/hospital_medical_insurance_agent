@@ -1,5 +1,6 @@
 const WORKBENCH_API = '/api/v1/medical-insurance-ai-agent/policy-workbench'
 const ALIGNMENT_API = '/api/v1/medical-insurance-ai-agent/semantic/alignment'
+const SEMANTIC_PROPOSALS_API = `${ALIGNMENT_API}/proposals`
 const PIPELINE_API = '/api/v1/medical-insurance-ai-agent/policy-pipeline'
 
 export type MappingStatus = 'mapped' | 'unmapped' | 'not_applicable' | 'invalid'
@@ -259,6 +260,106 @@ const json = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 })
 
+export async function semanticReviewRequest(method = 'GET', body?: unknown): Promise<RequestInit> {
+  const sessionToken = typeof window === 'undefined'
+    ? null
+    : window.sessionStorage.getItem('semantic-review-token')?.trim()
+  const token = sessionToken || (process.env.NODE_ENV !== 'production'
+    ? process.env.NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN?.trim()
+    : null)
+  if (!token) {
+    throw new PolicyKnowledgeApiError('缺少语义审核登录凭证', 401, 'AUTHENTICATION_REQUIRED', {})
+  }
+  const headers: Record<string, string> = {
+    Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+  }
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  return {
+    method,
+    headers,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }
+}
+
+export async function semanticReviewJson<T>(
+  url: string,
+  method = 'GET',
+  body?: unknown,
+): Promise<T> {
+  return request<T>(url, await semanticReviewRequest(method, body))
+}
+
+export interface SemanticMetricContract {
+  semantic_type: string | null
+  indexed: boolean
+  schema_version: number
+}
+
+export interface UpdateSemanticMetricResponse {
+  status: string
+  metric_code: string
+  schema_version: number
+  requires_reextract: boolean
+  task_id: string | null
+  task_status: string | null
+}
+
+export async function updateSemanticMetric(
+  metricCode: string,
+  current: SemanticMetricContract,
+  changes: Record<string, unknown>,
+): Promise<UpdateSemanticMetricResponse> {
+  const changesContract = (
+    Object.hasOwn(changes, 'semantic_type') && changes.semantic_type !== current.semantic_type
+  ) || (
+    Object.hasOwn(changes, 'indexed') && changes.indexed !== current.indexed
+  )
+  const payload = changesContract
+    ? { ...changes, expected_schema_version: current.schema_version }
+    : changes
+  return semanticReviewJson<UpdateSemanticMetricResponse>(
+    `/api/v1/medical-insurance-ai-agent/semantic/metrics/${encodeURIComponent(metricCode)}`,
+    'PUT',
+    payload,
+  )
+}
+
+export const listSemanticProposals = async (proposalType: SemanticProposalType) =>
+  request<SemanticProposal[]>(
+    `${SEMANTIC_PROPOSALS_API}?proposal_type=${encodeURIComponent(proposalType)}`,
+    await semanticReviewRequest(),
+  )
+
+export const getSemanticProposal = async (proposalId: string) =>
+  request<SemanticProposal>(
+    `${SEMANTIC_PROPOSALS_API}/${encodeURIComponent(proposalId)}`,
+    await semanticReviewRequest(),
+  )
+
+export const reviewSemanticProposal = async (proposalId: string) =>
+  request<SemanticProposal>(
+    `${SEMANTIC_PROPOSALS_API}/${encodeURIComponent(proposalId)}/review`,
+    await semanticReviewRequest('POST'),
+  )
+
+export const acceptSemanticProposal = async (proposalId: string) =>
+  request<SemanticProposal>(
+    `${SEMANTIC_PROPOSALS_API}/${encodeURIComponent(proposalId)}/accept`,
+    await semanticReviewRequest('POST'),
+  )
+
+export const publishSemanticProposal = async (proposalId: string) =>
+  request<SemanticProposal>(
+    `${SEMANTIC_PROPOSALS_API}/${encodeURIComponent(proposalId)}/publish`,
+    await semanticReviewRequest('POST'),
+  )
+
+export const rejectSemanticProposal = async (proposalId: string, reason: string) =>
+  request<SemanticProposal>(
+    `${SEMANTIC_PROPOSALS_API}/${encodeURIComponent(proposalId)}/reject`,
+    await semanticReviewRequest('POST', { reason: reason.trim() }),
+  )
+
 export async function getWorkbenchDocuments(): Promise<WorkbenchDocumentSummary[]> {
   const result = await request<{ items: WorkbenchDocumentSummary[] }>(`${WORKBENCH_API}/documents`)
   return result.items
@@ -434,6 +535,80 @@ export interface ChangeSetItem {
   needs_human: boolean
   compile_run_id?: string | null
   canonical_rule?: { rule_id: string } | null
+}
+
+export type SemanticProposalType = 'metric' | 'value'
+export type SemanticProposalStatus = 'proposed' | 'reviewing' | 'accepted' | 'published' | 'rejected'
+export type SemanticProposalTrigger = 'EXTRACTION_UNKNOWN' | 'DEMAND_GAP' | 'DATA_SCAN' | 'DERIVATION_PATTERN'
+
+export interface SemanticProposalEvidence {
+  source_ref: string
+  excerpt?: string | null
+  doc_id?: string | null
+  unit_id?: string | null
+  extraction_id?: string | null
+  occurrence_count: number
+  gap_signature?: string | null
+  representative_questions?: string[]
+  table_name?: string | null
+  field_name?: string | null
+  sample_values?: string[]
+  non_null_rate?: number | null
+  distinct_count?: number | null
+  base_metric_code?: string | null
+  operator?: string | null
+  observations?: string[]
+  rule_ids?: string[]
+}
+
+export interface SemanticProposalMapping {
+  metric_code: string
+  domain_code: string
+  binding_id: string
+  source_value: string
+  standard_value: string
+}
+
+export interface SemanticProposal {
+  proposal_id: string
+  fingerprint: string
+  proposal_type: SemanticProposalType
+  trigger_source: SemanticProposalTrigger
+  status: SemanticProposalStatus
+  concept: string
+  object_code: string
+  axis_metric_code: string | null
+  metric_draft: {
+    metric_code: string
+    object_code: string
+    name: string
+    definition: string | null
+    metric_type: string
+    semantic_type: string | null
+    unit: string | null
+    value_domain: string | null
+    metric_kind: string
+    indexed: boolean
+    extraction_hint: string | null
+    schema_version: number
+  } | null
+  value_draft: {
+    domain_code: string
+    standard_value: string
+    evidence: string
+    source_ref: string
+  } | null
+  suggested_mappings: SemanticProposalMapping[]
+  mapping_only: boolean
+  formula: Record<string, unknown> | null
+  evidence: SemanticProposalEvidence[]
+  confidence: number
+  occurrence_count: number
+  reviewed_by: string | null
+  reviewed_at: string | null
+  review_note: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface SourceUnitRevision {

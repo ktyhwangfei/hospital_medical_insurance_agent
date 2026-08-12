@@ -8,8 +8,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 from src.config.production import DATABASE_URL
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS policy_documents (
     status VARCHAR(32) NOT NULL DEFAULT 'raw',
     coverage_ratio FLOAT DEFAULT 0,
     coverage_detail JSONB DEFAULT '{}',
+    extraction_run_token VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -69,6 +71,7 @@ ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS crawl_time TIMESTAMPTZ;
 ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS coverage_ratio FLOAT DEFAULT 0;
 ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS coverage_detail JSONB DEFAULT '{}';
 ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS dup_state JSONB DEFAULT '{}';
+ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS extraction_run_token VARCHAR(64);
 CREATE INDEX IF NOT EXISTS idx_docs_category ON policy_documents(category);
 CREATE INDEX IF NOT EXISTS idx_docs_region ON policy_documents(policy_region);
 """
@@ -270,7 +273,8 @@ class PipelineStore:
         if not kept:
             return {"total": 0, "audited": 0, "pending": 0}
         rows = self._get_client().execute(
-            "SELECT source_text, extracted_fields, status FROM policy_extractions WHERE doc_id = %s",
+            """SELECT source_text, extracted_fields, status FROM policy_extractions
+               WHERE doc_id = %s AND status <> 'archived'""",
             (doc_id,),
         )
         # 每个 kept 叶子关联的提取状态列表（复刻前端 leafStatus 聚合）
@@ -425,6 +429,71 @@ class PipelineStore:
         )
         return self.get_document(doc_id)
 
+    def claim_extraction_run(self, doc_id: str, run_token: str) -> bool:
+        """原子声明最新全文提取代次；LLM 调用期间不持有数据库事务。"""
+        client = self._get_client()
+        with client.transaction():
+            client.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"policy-extraction-run:{doc_id}",),
+            )
+            rows = client.execute(
+                """UPDATE policy_documents
+                   SET extraction_run_token=%s, status='processing', updated_at=%s
+                   WHERE doc_id=%s RETURNING doc_id""",
+                (run_token, datetime.now(timezone.utc), doc_id),
+            )
+        return bool(rows)
+
+    @contextmanager
+    def commit_extraction_run(
+        self, doc_id: str, run_token: str
+    ) -> Iterator[bool]:
+        """锁住文档提交窗口，阻止新代次穿过 proposal intake 与状态提交。"""
+        client = self._get_client()
+        with client.transaction():
+            client.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"policy-extraction-run:{doc_id}",),
+            )
+            current = client.execute(
+                """SELECT 1 FROM policy_documents
+                   WHERE doc_id=%s AND extraction_run_token=%s FOR UPDATE""",
+                (doc_id, run_token),
+            )
+            yield bool(current)
+
+    def is_extraction_run_current(self, doc_id: str, run_token: str) -> bool:
+        rows = self._get_client().execute(
+            """SELECT 1 FROM policy_documents
+               WHERE doc_id=%s AND extraction_run_token=%s""",
+            (doc_id, run_token),
+        )
+        return bool(rows)
+
+    def finish_extraction_run(
+        self, doc_id: str, run_token: str, data: dict[str, Any]
+    ) -> bool:
+        """仅当前代次可提交文档状态与覆盖率。"""
+        coverage_detail = (
+            json.dumps(data["coverage_detail"])
+            if "coverage_detail" in data else None
+        )
+        rows = self._get_client().execute(
+            """UPDATE policy_documents SET
+                 status=%s,
+                 coverage_ratio=COALESCE(%s, coverage_ratio),
+                 coverage_detail=COALESCE(%s::jsonb, coverage_detail),
+                 updated_at=%s
+               WHERE doc_id=%s AND extraction_run_token=%s
+               RETURNING doc_id""",
+            (
+                data["status"], data.get("coverage_ratio"), coverage_detail,
+                datetime.now(timezone.utc), doc_id, run_token,
+            ),
+        )
+        return bool(rows)
+
     def delete_document(self, doc_id: str) -> bool:
         rows = self._get_client().execute(
             "DELETE FROM policy_documents WHERE doc_id = %s RETURNING doc_id", (doc_id,)
@@ -463,6 +532,7 @@ class PipelineStore:
             "status": row["status"],
             "coverage_ratio": float(row.get("coverage_ratio", 0)),
             "coverage_detail": self._json_field(row.get("coverage_detail")),
+            "extraction_run_token": row.get("extraction_run_token", ""),
             "dup_state": self._json_field(row.get("dup_state")),
             "pending_count": int(row.get("pending_count", 0)) if row.get("pending_count") is not None else 0,
             "created_at": str(row["created_at"]) if row.get("created_at") else "",
@@ -488,6 +558,8 @@ class PipelineStore:
         if status:
             conditions.append("e.status = %s")
             params.append(status)
+        else:
+            conditions.append("e.status <> 'archived'")
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         offset = (page - 1) * page_size
 
@@ -538,6 +610,19 @@ class PipelineStore:
                     (doc_id, source_text_hash),
                 )
             if existing:
+                existing_id = str(existing[0]["extraction_id"])
+                item["extraction_id"] = existing_id
+                client.execute(
+                    """UPDATE policy_extractions SET
+                         unit_id=%s, source_text=%s, source_text_hash=%s,
+                         extracted_fields=%s, confidence=%s, status='draft',
+                         reviewed_by=NULL, reviewed_at=NULL, updated_at=%s
+                       WHERE extraction_id=%s""",
+                    (
+                        unit_id, source_text, source_text_hash,
+                        json.dumps(extracted_fields), confidence, now, existing_id,
+                    ),
+                )
                 continue
 
             client.execute(
@@ -547,6 +632,83 @@ class PipelineStore:
             )
             count += 1
         return count
+
+    def reconcile_extractions(
+        self, doc_id: str, items: list[dict[str, Any]], run_token: str | None = None
+    ) -> int | None:
+        """单事务写入本轮全文提取并归档差集，保留历史证据外键。"""
+        import hashlib
+
+        if any(item.get("doc_id") != doc_id for item in items):
+            raise ValueError("reconcile_extractions 仅接受同一 doc_id 的记录")
+        client = self._get_client()
+        current_ids: list[str] = []
+        now = datetime.now(timezone.utc)
+        with client.transaction():
+            client.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"policy-extractions:{doc_id}",),
+            )
+            if run_token:
+                current = client.execute(
+                    """SELECT 1 FROM policy_documents
+                       WHERE doc_id=%s AND extraction_run_token=%s FOR UPDATE""",
+                    (doc_id, run_token),
+                )
+                if not current:
+                    return None
+            for item in items:
+                extraction_id = str(item["extraction_id"])
+                unit_id = item.get("unit_id") or None
+                source_text = str(item.get("source_text") or "")
+                source_text_hash = hashlib.sha256(source_text.encode()).hexdigest()[:16]
+                if unit_id:
+                    existing = client.execute(
+                        """SELECT extraction_id FROM policy_extractions
+                           WHERE doc_id=%s AND unit_id=%s AND source_text_hash=%s""",
+                        (doc_id, unit_id, source_text_hash),
+                    )
+                else:
+                    existing = client.execute(
+                        """SELECT extraction_id FROM policy_extractions
+                           WHERE doc_id=%s AND source_text_hash=%s""",
+                        (doc_id, source_text_hash),
+                    )
+                if existing:
+                    extraction_id = str(existing[0]["extraction_id"])
+                    item["extraction_id"] = extraction_id
+                current_ids.append(extraction_id)
+                client.execute(
+                    """INSERT INTO policy_extractions
+                       (extraction_id, doc_id, unit_id, source_text, source_text_hash,
+                        extracted_fields, confidence, status, created_at, updated_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, 'draft', %s, %s)
+                       ON CONFLICT (extraction_id) DO UPDATE SET
+                         unit_id=EXCLUDED.unit_id, source_text=EXCLUDED.source_text,
+                         source_text_hash=EXCLUDED.source_text_hash,
+                         extracted_fields=EXCLUDED.extracted_fields,
+                         confidence=EXCLUDED.confidence, status='draft',
+                         reviewed_by=NULL, reviewed_at=NULL, updated_at=EXCLUDED.updated_at""",
+                    (
+                        extraction_id, doc_id, unit_id, source_text, source_text_hash,
+                        json.dumps(item.get("extracted_fields", {})),
+                        item.get("confidence", 0.0), now, now,
+                    ),
+                )
+            if current_ids:
+                client.execute(
+                    """UPDATE policy_extractions SET status='archived', updated_at=%s
+                       WHERE doc_id=%s AND status <> 'archived'
+                         AND NOT (extraction_id = ANY(%s))""",
+                    (now, doc_id, current_ids),
+                )
+            else:
+                client.execute(
+                    """UPDATE policy_extractions SET status='archived', updated_at=%s
+                       WHERE doc_id=%s AND status <> 'archived'""",
+                    (now, doc_id),
+                )
+        return len(items)
 
     def update_extraction(self, extraction_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         existing = self.get_extraction(extraction_id)
@@ -652,7 +814,7 @@ class PipelineStore:
     def get_summary(self) -> dict[str, Any]:
         client = self._get_client()
         docs = client.execute("SELECT COUNT(*) as cnt, COUNT(CASE WHEN status='raw' THEN 1 END) as raw_cnt FROM policy_documents")
-        exts = client.execute("SELECT COUNT(*) as cnt, COUNT(CASE WHEN status='draft' THEN 1 END) as draft_cnt, COUNT(CASE WHEN status='reviewed' THEN 1 END) as reviewed_cnt, COUNT(CASE WHEN status='published' THEN 1 END) as published_cnt FROM policy_extractions")
+        exts = client.execute("SELECT COUNT(*) as cnt, COUNT(CASE WHEN status='draft' THEN 1 END) as draft_cnt, COUNT(CASE WHEN status='reviewed' THEN 1 END) as reviewed_cnt, COUNT(CASE WHEN status='published' THEN 1 END) as published_cnt FROM policy_extractions WHERE status <> 'archived'")
         return {
             "documents_count": docs[0]["cnt"] if docs else 0,
             "documents_raw": docs[0]["raw_cnt"] if docs else 0,

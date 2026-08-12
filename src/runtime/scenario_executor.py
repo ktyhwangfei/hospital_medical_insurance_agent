@@ -95,8 +95,7 @@ def _track_skill_metrics(skill_id: str) -> None:
                 full_code = f"{obj_code}.{mc}"
                 metric = store.get_metric(full_code)
                 if metric:
-                    metric.usage_count = (metric.usage_count or 0) + 1
-                    store.save_metric(metric)
+                    store.increment_metric_usage(full_code)
                     count += 1
         if count:
             logger.info("tracked usage for skill '%s': %d metrics", skill_id, count)

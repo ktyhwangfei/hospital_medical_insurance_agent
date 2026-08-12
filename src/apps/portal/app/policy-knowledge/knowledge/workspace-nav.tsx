@@ -7,6 +7,7 @@ const WORKSPACES = [
   { label: '知识构建', href: '/policy-knowledge/knowledge/build' },
   { label: '知识审核', href: '/policy-knowledge/knowledge/review' },
   { label: '发布管理', href: '/policy-knowledge/knowledge/releases' },
+  { label: '语义发现', href: '/policy-knowledge/knowledge/semantic-discovery' },
 ] as const
 
 export function WorkspaceNav() {

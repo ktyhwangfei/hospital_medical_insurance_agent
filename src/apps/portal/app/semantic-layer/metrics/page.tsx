@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import ValueDomainConfigModal from '../value-domain-config-modal'
 import StandardValuesModal from '../standard-values-modal'
+import { semanticReviewJson, updateSemanticMetric } from '@/lib/policy-knowledge-api'
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ interface ObjectSummary {
 interface MetricDetail {
   metric_code: string; name: string; definition: string | null; object_code: string
   metric_type: string; semantic_type: string | null; unit: string | null
+  indexed: boolean; schema_version: number
   required: boolean; importance: string; value_domain: string | null
   source_object: string | null; source_field: string | null
   source_adapter_port: string | null; usage_count: number; quality_score: number
@@ -79,7 +81,8 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
     setEditDraft({
       metric_code: metric.metric_code, object_code: metric.object_code, name: metric.name,
       definition: metric.definition || '', metric_type: metric.metric_type,
-      semantic_type: metric.semantic_type || 'Amount', unit: metric.unit || '',
+      semantic_type: metric.semantic_type ?? '', unit: metric.unit || '',
+      indexed: metric.indexed,
       value_domain: metric.value_domain || '', importance: metric.importance || 'optional',
       required: metric.required,
     })
@@ -95,13 +98,14 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
     if (editDraft.definition !== (metric.definition || '')) body.definition = editDraft.definition
     if (editDraft.metric_type !== metric.metric_type) body.metric_type = editDraft.metric_type
     if (editDraft.semantic_type !== (metric.semantic_type || '')) body.semantic_type = editDraft.semantic_type
+    if (editDraft.indexed !== metric.indexed) body.indexed = editDraft.indexed
     if (editDraft.unit !== (metric.unit || '')) body.unit = editDraft.unit
     if (editDraft.value_domain !== (metric.value_domain || '')) body.value_domain = editDraft.value_domain
     if (editDraft.importance !== (metric.importance || '')) body.importance = editDraft.importance
     if (editDraft.required !== metric.required) body.required = editDraft.required
     try {
-      await fetchJson(`${SEMANTIC_API}/metrics/${encodeURIComponent(metric.metric_code)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      onSave({ ...metric, ...editDraft })
+      const response = await updateSemanticMetric(metric.metric_code, metric, body)
+      onSave({ ...metric, ...editDraft, semantic_type: editDraft.semantic_type || null, schema_version: response.schema_version })
       setEditDraft(null)
     } catch (err: any) { alert(err.message) }
     setSaving(false)
@@ -167,12 +171,13 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
               <div><label className="mb-1 block text-[11px] text-slate-500">中文名称</label><Input value={editDraft.name} onChange={(e) => setEditDraft((p) => p ? { ...p, name: e.target.value } : p)} className="h-8 text-xs" /></div>
               <div className="col-span-2"><label className="mb-1 block text-[11px] text-slate-500">指标描述</label><Input value={editDraft.definition} onChange={(e) => setEditDraft((p) => p ? { ...p, definition: e.target.value } : p)} placeholder="标准业务定义" className="h-8 text-xs" /></div>
               <div><label className="mb-1 block text-[11px] text-slate-500">指标类型</label><select value={editDraft.metric_type} onChange={(e) => setEditDraft((p) => p ? { ...p, metric_type: e.target.value } : p)} className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs"><option value="Atomic">Atomic（原子）</option><option value="Derived">Derived（派生）</option></select></div>
-              <div><label className="mb-1 block text-[11px] text-slate-500">语义类型</label><select value={editDraft.semantic_type} onChange={(e) => setEditDraft((p) => p ? { ...p, semantic_type: e.target.value } : p)} className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs"><option value="Amount">Amount（金额）</option><option value="Ratio">Ratio（比率）</option><option value="Enum">Enum（枚举）</option><option value="Date">Date（日期）</option><option value="Count">Count（计数）</option><option value="String">String（字符串）</option></select></div>
+              <div><label className="mb-1 block text-[11px] text-slate-500">语义类型</label><select value={editDraft.semantic_type} onChange={(e) => setEditDraft((p) => p ? { ...p, semantic_type: e.target.value } : p)} className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs"><option value="">未设置</option><option value="Amount">Amount（金额）</option><option value="Ratio">Ratio（比率）</option><option value="Enum">Enum（枚举）</option><option value="Date">Date（日期）</option><option value="Count">Count（计数）</option><option value="String">String（字符串）</option></select></div>
               {editDraft.semantic_type === 'Amount' && <div><label className="mb-1 block text-[11px] text-slate-500">单位</label><Input value={editDraft.unit} onChange={(e) => setEditDraft((p) => p ? { ...p, unit: e.target.value } : p)} placeholder="如：元" className="h-8 text-xs" /></div>}
               {editDraft.semantic_type === 'Enum' && <div><label className="mb-1 block text-[11px] text-slate-500">值域编码</label><Input value={editDraft.value_domain} onChange={(e) => setEditDraft((p) => p ? { ...p, value_domain: e.target.value } : p)} placeholder="如：HOSPITAL_LEVEL" className="h-8 text-xs font-mono" /></div>}
               {(editDraft.semantic_type !== 'Amount' && editDraft.semantic_type !== 'Enum') && <div />}
               <div><label className="mb-1 block text-[11px] text-slate-500">重要性</label><select value={editDraft.importance} onChange={(e) => setEditDraft((p) => p ? { ...p, importance: e.target.value } : p)} className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs"><option value="core">core（核心）</option><option value="optional">optional（可选）</option></select></div>
               <div className="flex items-end pb-1"><label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-600"><input type="checkbox" checked={editDraft.required} onChange={(e) => setEditDraft((p) => p ? { ...p, required: e.target.checked } : p)} className="h-3.5 w-3.5 rounded border-slate-300" />必填指标</label></div>
+              <div className="flex items-end pb-1"><label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-600"><input type="checkbox" checked={editDraft.indexed} onChange={(e) => setEditDraft((p) => p ? { ...p, indexed: e.target.checked } : p)} className="h-3.5 w-3.5 rounded border-slate-300" />参与索引</label></div>
             </div>
             <div className="mt-3 flex justify-end gap-2">
               <button onClick={() => setEditDraft(null)} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50">取消</button>
@@ -203,7 +208,7 @@ function AddMetricForm({ objects, onAdded, onCancel }: { objects: ObjectSummary[
   const handleSubmit = useCallback(async () => {
     if (!name.trim() || !objectCode || !metricCode.trim()) return; setSaving(true)
     try {
-      await fetchJson(`${SEMANTIC_API}/metrics`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ object_code: objectCode, name: name.trim(), metric_type: metricType, semantic_type: semanticType, definition: definition.trim() || null, unit: unit.trim() || null, importance, value_domain: valueDomain.trim() || null, required }) })
+      await semanticReviewJson(`${SEMANTIC_API}/metrics`, 'POST', { object_code: objectCode, name: name.trim(), metric_type: metricType, semantic_type: semanticType, definition: definition.trim() || null, unit: unit.trim() || null, importance, value_domain: valueDomain.trim() || null, required })
       onAdded()
     } catch (err: any) { alert(err.message) }
     setSaving(false)
@@ -301,13 +306,13 @@ export default function MetricsCenterPage() {
   const handleRefreshQuality = useCallback(async () => {
     setRefreshing(true)
     try {
-      const res = await fetchJson<{ updated: number }>(`${SEMANTIC_API}/metrics/refresh-quality-scores`, { method: 'POST' })
+      const res = await semanticReviewJson<{ updated: number }>(`${SEMANTIC_API}/metrics/refresh-quality-scores`, 'POST')
       await fetchData()
       alert(`已按最新发现扫描刷新 ${res.updated} 个指标的质量分`)
     } catch (err: any) { alert(err.message) }
     setRefreshing(false)
   }, [fetchData])
-  const handleDeleteConfirm = useCallback(async () => { if (!deleteTarget) return; try { await fetch(`${SEMANTIC_API}/metrics/${encodeURIComponent(deleteTarget.metric_code)}`, { method: 'DELETE' }) } catch (err: any) { alert(err.message) }; setDeleteTarget(null); setMetrics((prev) => prev.filter((m) => m.metric_code !== deleteTarget.metric_code)) }, [deleteTarget])
+  const handleDeleteConfirm = useCallback(async () => { if (!deleteTarget) return; try { await semanticReviewJson(`${SEMANTIC_API}/metrics/${encodeURIComponent(deleteTarget.metric_code)}`, 'DELETE'); setMetrics((prev) => prev.filter((m) => m.metric_code !== deleteTarget.metric_code)); setDeleteTarget(null) } catch (err: any) { alert(err.message) } }, [deleteTarget])
 
   if (loading) return <div className="flex flex-col gap-6"><div className="grid grid-cols-2 gap-4 lg:grid-cols-4">{Array.from({ length: 4 }).map((_, i) => (<Card key={i}><CardHeader className="pb-2"><div className="h-3 w-16 animate-pulse rounded bg-slate-200" /></CardHeader><CardContent><div className="h-8 w-20 animate-pulse rounded bg-slate-200" /></CardContent></Card>))}</div><div className="flex flex-wrap gap-3">{Array.from({ length: 4 }).map((_, i) => (<div key={i} className="h-8 w-28 animate-pulse rounded-md bg-slate-200" />))}</div><div className="rounded-lg border border-slate-200"><div className="border-b border-slate-200 bg-slate-50 px-3 py-2.5"><div className="h-3 w-48 animate-pulse rounded bg-slate-200" /></div><div className="divide-y divide-slate-200">{Array.from({ length: 8 }).map((_, i) => (<div key={i} className="flex items-center gap-4 px-3 py-3"><div className="h-4 w-32 animate-pulse rounded bg-slate-200" /><div className="h-3 w-20 animate-pulse rounded bg-slate-200" /><div className="h-3 w-16 animate-pulse rounded bg-slate-200" /><div className="h-5 w-14 animate-pulse rounded-full bg-slate-200" /><div className="h-3 w-10 animate-pulse rounded bg-slate-200" /><div className="h-4 w-12 animate-pulse rounded bg-slate-200" /></div>))}</div></div></div>
   if (error) return <Alert variant="destructive" className="border-red-200 bg-red-50"><AlertTitle className="text-red-600">数据加载失败</AlertTitle><AlertDescription className="text-red-500">{error}</AlertDescription></Alert>

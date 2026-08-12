@@ -278,7 +278,7 @@ class ChangeSetService:
     def reject(self, change_set_id: str, reviewer: str, reason: str) -> KnowledgeChangeSet:
         return self._transition_status(
             change_set_id,
-            allowed_statuses={"PENDING_REVIEW"},
+            allowed_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
             target_status="REJECTED",
             invalid_action="驳回",
             decision={
@@ -295,7 +295,7 @@ class ChangeSetService:
         """将待审或已通过候选退回，等待新的构建任务重新生成。"""
         return self._transition_status(
             change_set_id,
-            allowed_statuses={"PENDING_REVIEW"},
+            allowed_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
             target_status="RETURNED",
             invalid_action="退回",
             decision={

@@ -3,6 +3,12 @@
 提供 Token 验证、权限校验、角色识别等认证鉴权功能。
 """
 import logging
+import base64
+import hashlib
+import hmac
+import json
+import math
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -104,9 +110,29 @@ class Authenticator:
                 error_message="Token 解析失败",
             )
 
+        sub = payload.get("sub")
+        exp = payload.get("exp")
+        roles = payload.get("roles")
+        permissions = payload.get("permissions")
+        valid_claims = (
+            isinstance(sub, str)
+            and bool(sub.strip())
+            and isinstance(exp, (int, float))
+            and not isinstance(exp, bool)
+            and math.isfinite(exp)
+            and isinstance(roles, list)
+            and all(isinstance(role, str) for role in roles)
+            and isinstance(permissions, list)
+            and all(isinstance(permission, str) for permission in permissions)
+        )
+        if not valid_claims:
+            return AuthResult(
+                status=AuthStatus.INVALID_TOKEN,
+                error_message="Token claims 格式无效",
+            )
+
         # 检查过期
-        exp = payload.get("exp", 0)
-        if isinstance(exp, (int, float)) and exp < datetime.now(timezone.utc).timestamp():
+        if exp <= datetime.now(timezone.utc).timestamp():
             return AuthResult(
                 status=AuthStatus.EXPIRED_TOKEN,
                 error_message="Token 已过期",
@@ -114,11 +140,51 @@ class Authenticator:
 
         return AuthResult(
             status=AuthStatus.SUCCESS,
-            user_id=payload.get("sub", ""),
-            roles=payload.get("roles", []),
-            permissions=payload.get("permissions", []),
+            user_id=sub,
+            roles=roles,
+            permissions=permissions,
             metadata={"payload": payload},
         )
+
+    def validate_signed_token(self, token: str) -> AuthResult:
+        """校验治理接口使用的 HS256 JWT；密钥缺失时关闭访问。"""
+        raw_token = self._strip_prefix(token)
+        secret = os.getenv("AUTH_JWT_SECRET", "")
+        if not secret or raw_token in self._token_blacklist:
+            return AuthResult(
+                status=AuthStatus.INVALID_TOKEN,
+                error_message="JWT 验签配置缺失或 Token 已失效",
+            )
+        parts = raw_token.split(".")
+        if len(parts) != 3:
+            return AuthResult(
+                status=AuthStatus.INVALID_TOKEN,
+                error_message="治理接口仅接受已签名 JWT",
+            )
+        try:
+            header = json.loads(self._decode_base64url(parts[0]))
+            signature = self._decode_base64url(parts[2])
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+            return AuthResult(
+                status=AuthStatus.INVALID_TOKEN,
+                error_message="JWT 格式无效",
+            )
+        if not isinstance(header, dict):
+            return AuthResult(
+                status=AuthStatus.INVALID_TOKEN,
+                error_message="JWT header 格式无效",
+            )
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            f"{parts[0]}.{parts[1]}".encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        if header.get("alg") != "HS256" or not hmac.compare_digest(signature, expected):
+            return AuthResult(
+                status=AuthStatus.INVALID_TOKEN,
+                error_message="JWT 签名无效",
+            )
+        return self.validate_token(raw_token)
 
     def check_permission(self, auth_result: AuthResult, required_permission: str) -> AuthResult:
         """检查权限
@@ -203,9 +269,6 @@ class Authenticator:
         Raises:
             ValueError: Token 格式异常
         """
-        import json
-        import base64
-
         parts = token.split(".")
         if len(parts) != 3:
             # 非 JWT 格式，尝试作为简单 Token 处理
@@ -224,10 +287,16 @@ class Authenticator:
                 payload_b64 += "=" * padding
 
             decoded = base64.urlsafe_b64decode(payload_b64)
-            payload: dict[str, Any] = json.loads(decoded)
+            payload = json.loads(decoded)
+            if not isinstance(payload, dict):
+                raise ValueError("JWT payload must be an object")
             return payload
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as e:
             raise ValueError(f"Invalid token payload: {e}")
+
+    @staticmethod
+    def _decode_base64url(value: str) -> bytes:
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
 # 全局单例

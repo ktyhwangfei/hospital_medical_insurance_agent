@@ -128,6 +128,33 @@ EXTRACTION_QUALITY_GUIDANCE = """## 提取质量约束（必须遵守）
 """
 
 
+UNKNOWN_CONCEPT_GUIDANCE = """## 未知概念（必须结构化返回）
+每个事实都必须包含 `unknown_concepts` 数组；没有未知概念时返回空数组。只报告以下两类：
+1. **完全新指标**：语义上无法归入上述任何字段（不是已有字段的细分取值）。
+2. **枚举新取值或新别名**：能归入某个已有枚举字段，但不在其值域中，或只是已有标准值的新说法。
+
+每项格式如下；不适用字段填 null。`excerpt` 必须逐字摘自原文；出现次数由系统按输入原文精确计数，无需输出：
+{
+  "concept": "原始概念串",
+  "concept_type": "new_metric | new_enum_value | enum_alias",
+  "metric_code": "新指标建议代码（完全新指标时填写，如 zcgz.xxx）",
+  "metric_name": "新指标中文名",
+  "definition": "新指标定义",
+  "metric_type": "Atomic",
+  "semantic_type": "Amount | Ratio | Enum | Date | Count | String",
+  "unit": "单位或 null",
+  "value_domain": "新 Enum 指标建议值域代码，否则 null",
+  "indexed": false,
+  "extraction_hint": "后续抽取提示",
+  "axis_metric_code": "已有枚举指标完整代码（枚举新取值/别名时填写）",
+  "domain_code": "已有枚举值域代码（枚举新取值/别名时填写）",
+  "alias_target": "若为别名，填写已有标准值；否则 null",
+  "excerpt": "原文精确片段",
+  "confidence": 0.0
+}
+"""
+
+
 def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) -> str:
     """从提取契约动态拼 LLM 提示词（schema-driven，加维度不改此函数）。
 
@@ -181,9 +208,11 @@ def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) ->
 [
   {{
     "fact_text": "完整事实描述",
-    "rules": [{{ {fields_json_example} }}]
+    "rules": [{{ {fields_json_example} }}],
+    "unknown_concepts": []
   }}
 ]
 
 {EXTRACTION_QUALITY_GUIDANCE}
+{UNKNOWN_CONCEPT_GUIDANCE}
 """

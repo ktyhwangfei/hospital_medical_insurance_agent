@@ -683,3 +683,54 @@ def test_rule_unit_contract_fields_are_assembled() -> None:
     # 语义绑定派生：payment_ratio 无值域（registry 未注入）→ 空列表；validity 未识别
     assert item.validity is None
     assert item.variants == []
+
+
+@pytest.mark.parametrize(
+    ("rule_type", "topic", "enum"),
+    [
+        ("支付比例", "PAYMENT_RATIO", "FIXED_STANDARD"),
+        ("起付线", "DEDUCTIBLE", "FIXED_STANDARD"),
+        ("封顶线", "CAP", "FIXED_STANDARD"),
+        ("适用范围", "ELIGIBILITY", "ELIGIBILITY"),
+    ],
+)
+def test_chinese_rule_type_resolves_to_canonical_topic_concept(
+    rule_type: str, topic: str, enum: str
+) -> None:
+    """模型实际输出中文 rule_type（如“支付比例”），必须映射到标准 topic_concept。
+
+    复现 rule_8f94f240d5da7fb6：_RULE_TYPE_META 仅有英文 key，中文 rule_type
+    全部落 UNCLASSIFIED → subject 塌缩 → rule_id 碰撞（影响全部 361 条 REAL 提取）。
+    """
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        KnowledgeWorkbenchService,
+    )
+
+    first = _leaf_ids()[0]
+    rules = [{
+        "rule_type": rule_type,
+        "psn_type": "退休人员",
+        "payment_ratio": "60%",
+        "source_text": "退休人员个人支付比例为职工的60%",
+        "confidence": 0.9,
+    }]
+    result = KnowledgeWorkbenchService(
+        FakePipelineStore([_extraction(first, rules)])
+    ).get_document("doc_1")
+
+    knowledge = result.units[0].knowledge[0]
+    assert knowledge.topic_concept == topic
+    assert knowledge.rule_type_enum == enum
+
+
+@pytest.mark.parametrize("rule_type", ["通用规则", "排除规则"])
+def test_ambiguous_rule_type_stays_unclassified(rule_type: str) -> None:
+    """语义模糊的 rule_type 不强行映射，保持 UNCLASSIFIED，交 fail-closed 拦截。
+
+    强行映射会让数百条异质规则（“通用规则”338 条）塌缩进同一 subject，制造新碰撞。
+    """
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        _RULE_TYPE_META,
+    )
+
+    assert rule_type not in _RULE_TYPE_META

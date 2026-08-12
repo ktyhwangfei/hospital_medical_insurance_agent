@@ -104,6 +104,14 @@ _RULE_TYPE_META: dict[str, tuple[str, str, str]] = {
     "cap_amount": ("CAP", "FIXED_STANDARD", "固定标准（封顶额）"),
     "eligibility": ("ELIGIBILITY", "ELIGIBILITY", "资格条件"),
     "eligibility_rule": ("ELIGIBILITY", "ELIGIBILITY", "资格条件"),
+    # 模型实际输出的中文 rule_type 别名（数据驱动：见 policy_compile_runs.llm_output
+    # 的 rule_type 分布）。补全中文别名是修复 rule_id 塌缩的最小入口，
+    # 见 docs/superpowers/specs/2026-08-11-policy-rule-compiler-trace-design.md 成功标准。
+    # ponytail: “通用规则”/“排除规则”语义模糊不映射，保持 UNCLASSIFIED 交 fail-closed。
+    "支付比例": ("PAYMENT_RATIO", "FIXED_STANDARD", "固定标准（支付比例）"),
+    "起付线": ("DEDUCTIBLE", "FIXED_STANDARD", "固定标准（起付线）"),
+    "封顶线": ("CAP", "FIXED_STANDARD", "固定标准（封顶）"),
+    "适用范围": ("ELIGIBILITY", "ELIGIBILITY", "资格条件"),
 }
 
 

@@ -119,6 +119,13 @@ class KnowledgeBuildService:
         tasks_by_id = self._store.get_many(
             [claim.task_id for claim in claims_by_logical.values()]
         )
+        # 被退回变更集覆盖的单元需要重建（重新抽取），而非直接复用旧 knowledge。
+        returned_units = {
+            (item.doc_id, item.unit_id)
+            for change_set in self._change_set_service.list_change_sets()
+            if change_set.status == "RETURNED"
+            for item in change_set.items
+        }
         eligible: list[tuple[int, EligibleKnowledgeUnit]] = []
         for document in self._load_documents():
             for unit in document.units:
@@ -129,6 +136,7 @@ class KnowledgeBuildService:
                     if claim is not None
                     else "REBUILD_REQUIRED"
                     if unit.status == "published"
+                    or (unit.doc_id, unit.unit_id) in returned_units
                     else "AVAILABLE"
                 )
                 eligible.append(
@@ -231,7 +239,10 @@ class KnowledgeBuildService:
             change_set = self._change_set_service.build_for_units(
                 task_id=task_id,
                 task_name=request.name,
-                units=self._units_with_knowledge(list(resolved)),
+                units=self._units_with_knowledge(
+                    list(resolved),
+                    force_reextract=(request.build_mode == "REBUILD"),
+                ),
                 semantic_contract_version=preflight.semantic_contract_version,
                 supersedes_candidate_id=None,
             )
@@ -475,12 +486,18 @@ class KnowledgeBuildService:
     def _units_with_knowledge(
         self,
         resolved: list[SelectedKnowledgeUnit],
+        *,
+        force_reextract: bool = False,
     ) -> list[SelectedKnowledgeUnit]:
         """重新加载所选单元的完整 knowledge，供变更集聚合使用。
 
         ``_load_documents`` 为性能只做轻量加载（include_knowledge=False），
         此时单元 knowledge 为空；聚合候选必须重新读取完整 knowledge，
         否则变更集 items 为空（审核页无候选可审）。
+
+        ``force_reextract=True``（REBUILD 模式）时忽略已有 knowledge，
+        强制重新 LLM 抽取——否则退回重跑结构化会复用旧提取结果，
+        重新生成的 unknown_concepts 永远进不了发现提议。
         """
         by_key: dict[tuple[str, str], ApprovedUnit] = {}
         for doc_id in {unit.unit.doc_id for unit in resolved}:
@@ -492,7 +509,7 @@ class KnowledgeBuildService:
         if self._orchestrator is not None:
             for selected in resolved:
                 unit = by_key.get((selected.unit.doc_id, selected.unit.unit_id))
-                if unit is not None and unit.knowledge:
+                if unit is not None and unit.knowledge and not force_reextract:
                     continue
                 result = self._orchestrator.extract_single(
                     selected.unit.doc_id,

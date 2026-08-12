@@ -5,12 +5,14 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import uuid
+from contextlib import AbstractContextManager, nullcontext
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.knowledge_extension.rule_explanation.knowledge_build_models import (
     ExtractionOverride,
@@ -19,7 +21,16 @@ from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStor
 from src.model_service.gateway import ModelGateway
 from src.model_service.models import Message
 
+if TYPE_CHECKING:
+    from src.knowledge_extension.rule_explanation.semantic_alignment import (
+        SemanticAlignmentService,
+    )
+
 logger = logging.getLogger(__name__)
+
+
+class PolicyFactExtractionError(RuntimeError):
+    """模型调用或返回契约失败；与合法空事实列表区分。"""
 
 
 def _now_iso() -> str:
@@ -30,8 +41,13 @@ def _now_iso() -> str:
 class PipelineOrchestrator:
     """管线编排器：从政策原文中提取事实→规则→实体→关系"""
 
-    def __init__(self, store: PipelineStore | None = None):
+    def __init__(
+        self,
+        store: PipelineStore | None = None,
+        alignment_service: "SemanticAlignmentService | None" = None,
+    ):
         self._store = store or PipelineStore()
+        self._alignment_service = alignment_service
 
     @property
     def store(self) -> PipelineStore:
@@ -53,7 +69,9 @@ class PipelineOrchestrator:
         if not content.strip():
             return {"success": False, "error": "文档内容为空", "doc_id": doc_id}
 
-        self._store.update_document(doc_id, {"status": "processing"})
+        run_token = uuid.uuid4().hex
+        if not self._claim_extraction_run(doc_id, run_token):
+            return {"success": False, "error": "无法声明提取任务", "doc_id": doc_id}
 
         try:
             # ── LLM 提取政策事实（长文档分片，避免 JSON 输出超 max_tokens 截断）──
@@ -61,14 +79,24 @@ class PipelineOrchestrator:
             chunks = self._split_text(content, max_len=1000)
             facts: list[dict[str, Any]] = []
             for chunk in chunks:
-                facts.extend(
-                    self._extract_policy_facts(
-                        chunk, document_title=doc.get("title", "")
-                    )
+                chunk_facts = self._extract_policy_facts(
+                    chunk, document_title=doc.get("title", "")
                 )
+                for fact in chunk_facts:
+                    grounded_fact = dict(fact)
+                    # 内部来源由编排器覆盖，模型无法伪造；持久化契约不会写入该字段。
+                    grounded_fact["_source_context"] = chunk
+                    facts.append(grounded_fact)
 
             if not facts:
-                self._store.update_document(doc_id, {"status": "extracted"})
+                count = self._reconcile_extractions(doc_id, [], run_token=run_token)
+                if count is None:
+                    return self._stale_run_result(doc_id)
+                with self._commit_extraction_run(doc_id, run_token) as current:
+                    if not current or not self._finish_extraction_run(
+                        doc_id, run_token, {"status": "extracted"}
+                    ):
+                        return self._stale_run_result(doc_id)
                 return {
                     "success": True,
                     "doc_id": doc_id,
@@ -94,6 +122,7 @@ class PipelineOrchestrator:
                 doc.get("title", ""),
             )
             extraction_items: list[dict[str, Any]] = []
+            grounding_texts: list[str] = []
             total_rules = 0
             for fact in facts:
                 fact_rules = fact.get("rules", [])
@@ -111,12 +140,24 @@ class PipelineOrchestrator:
                     if _main:
                         matched_units = _main[:1]
                 unit_id = matched_units[0] if len(matched_units) == 1 else ""
+                fact_text = str(fact.get("fact_text") or "")
+                raw_context = str(fact.get("_source_context") or "")
+                unit_node = _by_id.get(unit_id) if unit_id else None
+                unit_text = str(getattr(unit_node, "text", "") or "")
+                if fact_text and fact_text in raw_context:
+                    grounding_text = fact_text
+                elif unit_text and unit_text in raw_context:
+                    grounding_text = unit_text
+                else:
+                    grounding_text = raw_context
 
                 confidences = [r.get("confidence", 0.7) for r in fact_rules]
                 avg_conf = sum(confidences) / len(confidences) if confidences else 0.7
 
                 extraction_items.append({
-                    "extraction_id": f"ext_{uuid.uuid4().hex[:12]}",
+                    "extraction_id": self._stable_extraction_id(
+                        doc_id, unit_id, fact.get("fact_text", "")
+                    ),
                     "doc_id": doc_id,
                     "unit_id": unit_id,
                     "source_text": fact.get("fact_text", ""),
@@ -127,19 +168,38 @@ class PipelineOrchestrator:
                     },
                     "confidence": round(avg_conf, 2),
                 })
+                grounding_texts.append(grounding_text)
 
-            # ── 持久化（先清空旧提取记录，避免重提取时 LLM 漂移堆积近似重复）──
-            wiped = self._store.delete_extractions_by_doc(doc_id)
-            if wiped:
-                logger.info("重提取 doc_id=%s：清空旧提取记录 %d 条", doc_id, wiped)
-            count = self._store.batch_create_extractions(extraction_items)
-
-            # ── 更新文档状态 + 覆盖率 ──
-            self._store.update_document(doc_id, {
-                "status": "extracted",
-                "coverage_ratio": coverage["ratio"],
-                "coverage_detail": json.dumps(coverage),
-            })
+            # ── 单事务 upsert 当前结果并归档差集，历史证据引用始终可查 ──
+            count = self._reconcile_extractions(
+                doc_id, extraction_items, run_token=run_token
+            )
+            if count is None:
+                return self._stale_run_result(doc_id)
+            with self._commit_extraction_run(doc_id, run_token) as current:
+                if not current:
+                    return self._stale_run_result(doc_id)
+                for fact, item, grounding_text in zip(
+                    facts, extraction_items, grounding_texts
+                ):
+                    self._intake_unknown_concepts(
+                        fact,
+                        doc_id=doc_id,
+                        unit_id=item["unit_id"],
+                        extraction_id=item["extraction_id"],
+                        document_text=grounding_text,
+                        run_token=run_token,
+                    )
+                if not self._finish_extraction_run(
+                    doc_id,
+                    run_token,
+                    {
+                        "status": "extracted",
+                        "coverage_ratio": coverage["ratio"],
+                        "coverage_detail": coverage,
+                    },
+                ):
+                    return self._stale_run_result(doc_id)
 
             return {
                 "success": True,
@@ -151,7 +211,7 @@ class PipelineOrchestrator:
             }
         except Exception as e:
             logger.error("提取失败 doc_id=%s: %s", doc_id, e)
-            self._store.update_document(doc_id, {"status": "raw"})
+            self._finish_extraction_run(doc_id, run_token, {"status": "raw"})
             return {"success": False, "error": str(e), "doc_id": doc_id}
 
     # ═══════════════ Policy Fact Extraction (LLM) ═══════════════
@@ -213,7 +273,9 @@ class PipelineOrchestrator:
                 confidences = [r.get("confidence", 0.7) for r in fact_rules]
                 avg_conf = sum(confidences) / len(confidences) if confidences else 0.7
                 extraction_items.append({
-                    "extraction_id": f"ext_{uuid.uuid4().hex[:12]}",
+                    "extraction_id": self._stable_extraction_id(
+                        doc_id, unit_id, fact.get("fact_text", source_text)
+                    ),
                     "doc_id": doc_id,
                     "unit_id": unit_id,
                     "source_text": fact.get("fact_text", source_text),
@@ -225,6 +287,14 @@ class PipelineOrchestrator:
                     "confidence": round(avg_conf, 2),
                 })
             count = self._store.batch_create_extractions(extraction_items)
+            for fact, item in zip(facts, extraction_items):
+                self._intake_unknown_concepts(
+                    fact,
+                    doc_id=doc_id,
+                    unit_id=item["unit_id"],
+                    extraction_id=item["extraction_id"],
+                    document_text=source_text,
+                )
             if reset_status != "draft":
                 for item in extraction_items:
                     self._store.update_extraction(
@@ -291,6 +361,8 @@ class PipelineOrchestrator:
 
             facts = json.loads(content)
             if isinstance(facts, list):
+                if not all(isinstance(item, dict) for item in facts):
+                    raise ValueError("facts 数组元素必须是对象")
                 logger.info(
                     "Extracted %d policy facts from %r",
                     len(facts), document_title,
@@ -299,6 +371,10 @@ class PipelineOrchestrator:
             if isinstance(facts, dict):
                 if "facts" in facts:
                     facts_list = facts["facts"]
+                    if not isinstance(facts_list, list) or not all(
+                        isinstance(item, dict) for item in facts_list
+                    ):
+                        raise ValueError("facts 字段必须是对象数组")
                     logger.info(
                         "Extracted %d policy facts from %r (nested)",
                         len(facts_list), document_title,
@@ -312,11 +388,10 @@ class PipelineOrchestrator:
                     logger.info("LLM returned single rule dict, wrapping as fact")
                     return [{"fact_text": facts.get("source_text", ""), "rules": [facts]}]
 
-            logger.warning("Unexpected LLM response type: %s", type(facts).__name__)
-            return []
+            raise ValueError(f"Unexpected LLM response type: {type(facts).__name__}")
         except Exception as e:
             logger.warning("Policy fact extraction failed: %s", e)
-            return []
+            raise PolicyFactExtractionError("政策事实提取失败") from e
 
     def _build_fact_extraction_prompt(
         self,
@@ -358,7 +433,10 @@ class PipelineOrchestrator:
 
     def _legacy_fact_extraction_prompt(self, text: str, title: str) -> str:
         """[legacy] 硬编码 19 字段 prompt（registry 不可用时的回退）。"""
-        from src.semantic_layer.extraction_contract import EXTRACTION_QUALITY_GUIDANCE
+        from src.semantic_layer.extraction_contract import (
+            EXTRACTION_QUALITY_GUIDANCE,
+            UNKNOWN_CONCEPT_GUIDANCE,
+        )
 
         return f"""你是一个医保政策分析专家。请从以下政策文本中提取所有"政策事实"，并从每个事实中提取结构化的"政策规则"。
 
@@ -431,7 +509,8 @@ class PipelineOrchestrator:
           {{"subject": "参保人员", "predicate": "起付标准", "object": "1300元"}}
         ]
       }}
-    ]
+    ],
+    "unknown_concepts": []
   }}
 ]
 
@@ -445,7 +524,168 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
 3. 未提及的字段填空字符串 ""
 4. 只返回 JSON 数组，不要任何其他内容
 
-{EXTRACTION_QUALITY_GUIDANCE}"""
+{EXTRACTION_QUALITY_GUIDANCE}
+{UNKNOWN_CONCEPT_GUIDANCE}"""
+
+    def _intake_unknown_concepts(
+        self,
+        fact: dict[str, Any],
+        *,
+        doc_id: str,
+        unit_id: str,
+        extraction_id: str,
+        document_text: str,
+        run_token: str | None = None,
+    ) -> None:
+        """把 LLM 未知概念转为带原文证据的 S1 信号；失败不阻断主提取。"""
+        unknowns = fact.get("unknown_concepts")
+        if not isinstance(unknowns, list):
+            return
+        for item in unknowns:
+            try:
+                if run_token and not self._is_extraction_run_current(doc_id, run_token):
+                    logger.info(
+                        "全文提取运行已过期，停止未知概念入队 doc_id=%s extraction_id=%s",
+                        doc_id,
+                        extraction_id,
+                    )
+                    return
+                if not isinstance(item, dict):
+                    raise ValueError("unknown_concepts 项必须是对象")
+                concept = str(item.get("concept") or "").strip()
+                if not concept:
+                    raise ValueError("未知概念串不能为空")
+                excerpt = self._verified_excerpt(document_text, concept)
+                if excerpt is None:
+                    logger.warning(
+                        "未知概念证据未在输入原文定位，已跳过 doc_id=%s unit_id=%s extraction_id=%s",
+                        doc_id,
+                        unit_id,
+                        extraction_id,
+                    )
+                    continue
+                occurrence_count = document_text.count(concept)
+
+                from src.knowledge_extension.rule_explanation.semantic_alignment import (
+                    DiscoveryEvidence,
+                    DiscoverySignal,
+                    TriggerSource,
+                    get_semantic_alignment_service,
+                )
+
+                alignment_service = (
+                    self._alignment_service or get_semantic_alignment_service()
+                )
+                signal_fields = {
+                    key: item[key]
+                    for key in (
+                        "object_code", "metric_code", "metric_name", "definition",
+                        "metric_type", "semantic_type", "unit", "value_domain",
+                        "metric_kind", "indexed", "extraction_hint", "schema_version",
+                        "axis_metric_code", "domain_code", "alias_target", "confidence",
+                    )
+                    if item.get(key) is not None
+                }
+                concept_identity = hashlib.sha256(
+                    " ".join(concept.casefold().split()).encode("utf-8")
+                ).hexdigest()[:16]
+                alignment_service.intake_signal(DiscoverySignal(
+                    trigger_source=TriggerSource.EXTRACTION_UNKNOWN,
+                    concept=concept,
+                    evidence=DiscoveryEvidence(
+                        source_ref=(
+                            f"policy-extraction:{doc_id}:{unit_id}:{concept_identity}"
+                        ),
+                        doc_id=doc_id,
+                        unit_id=unit_id,
+                        extraction_id=extraction_id,
+                        excerpt=excerpt,
+                        occurrence_count=occurrence_count,
+                    ),
+                    **signal_fields,
+                ))
+            except Exception:
+                logger.exception(
+                    "未知概念提议入队失败 doc_id=%s unit_id=%s extraction_id=%s",
+                    doc_id,
+                    unit_id,
+                    extraction_id,
+                )
+
+    @staticmethod
+    def _verified_excerpt(document_text: str, concept: str) -> str | None:
+        """仅从原始概念的实际位置截取证据，禁止无关 excerpt 绕过。"""
+        position = document_text.find(concept)
+        if position >= 0:
+            return document_text[max(0, position - 100):position + len(concept) + 100]
+        return None
+
+    @staticmethod
+    def _stable_extraction_id(doc_id: str, unit_id: str, source_text: str) -> str:
+        """相同文档、单元和事实重跑复用 ID，使提议证据不会指向已删记录。"""
+        identity = "\0".join((doc_id, unit_id, source_text))
+        return f"ext_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:12]}"
+
+    def _reconcile_extractions(
+        self,
+        doc_id: str,
+        extraction_items: list[dict[str, Any]],
+        run_token: str | None = None,
+    ) -> int | None:
+        """生产存储单事务对账；极简 fake 沿用批量创建接口。"""
+        reconcile = getattr(self._store, "reconcile_extractions", None)
+        if callable(reconcile):
+            if run_token is not None:
+                return reconcile(doc_id, extraction_items, run_token=run_token)
+            return reconcile(doc_id, extraction_items)
+        if run_token and not self._is_extraction_run_current(doc_id, run_token):
+            return None
+        return self._store.batch_create_extractions(extraction_items)
+
+    def _claim_extraction_run(self, doc_id: str, run_token: str) -> bool:
+        claim = getattr(self._store, "claim_extraction_run", None)
+        if callable(claim):
+            return bool(claim(doc_id, run_token))
+        self._store.update_document(doc_id, {
+            "status": "processing",
+            "extraction_run_token": run_token,
+        })
+        return True
+
+    def _is_extraction_run_current(self, doc_id: str, run_token: str) -> bool:
+        check = getattr(self._store, "is_extraction_run_current", None)
+        if callable(check):
+            return bool(check(doc_id, run_token))
+        doc = self._store.get_document(doc_id)
+        stored_token = doc.get("extraction_run_token") if doc else None
+        return bool(doc and (stored_token is None or stored_token == run_token))
+
+    def _finish_extraction_run(
+        self, doc_id: str, run_token: str, data: dict[str, Any]
+    ) -> bool:
+        finish = getattr(self._store, "finish_extraction_run", None)
+        if callable(finish):
+            return bool(finish(doc_id, run_token, data))
+        if not self._is_extraction_run_current(doc_id, run_token):
+            return False
+        self._store.update_document(doc_id, data)
+        return True
+
+    def _commit_extraction_run(
+        self, doc_id: str, run_token: str
+    ) -> AbstractContextManager[bool]:
+        commit = getattr(self._store, "commit_extraction_run", None)
+        if callable(commit):
+            return commit(doc_id, run_token)
+        return nullcontext(self._is_extraction_run_current(doc_id, run_token))
+
+    @staticmethod
+    def _stale_run_result(doc_id: str) -> dict[str, Any]:
+        return {
+            "success": False,
+            "error": "提取任务已被更新运行取代",
+            "doc_id": doc_id,
+        }
 
     # ═══════════════ Coverage ═══════════════
 
@@ -601,7 +841,10 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
         if not source.strip():
             return {"success": False, "error": "单元无源文本，无法重提取"}
 
-        facts = self._extract_policy_facts(source, title, override=override)
+        try:
+            facts = self._extract_policy_facts(source, title, override=override)
+        except PolicyFactExtractionError as exc:
+            return {"success": False, "error": str(exc), "extraction_id": extraction_id}
         if not facts:
             return {"success": False, "error": "LLM 未返回结果（请检查 MODEL_API_KEY 与模型配置）"}
 
@@ -614,6 +857,7 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
         merged_fields["fact_text"] = fact.get("fact_text", source)
         merged_fields["rules"] = rules
         merged_fields["total_rules"] = len(rules)
+        merged_fields.pop("unknown_concepts", None)
         merged_fields.pop("audit_reason", None)  # 重提取清除上次驳回原因
 
         update = {
@@ -627,6 +871,14 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
             update["last_override"] = override_dump
 
         updated = self._store.update_extraction(extraction_id, update)
+        for extracted_fact in facts:
+            self._intake_unknown_concepts(
+                extracted_fact,
+                doc_id=ext["doc_id"],
+                unit_id=ext.get("unit_id", ""),
+                extraction_id=extraction_id,
+                document_text=source,
+            )
         return {
             "success": True,
             "extraction_id": extraction_id,

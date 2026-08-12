@@ -598,6 +598,31 @@ def test_return_for_rebuild_records_terminal_review_decision() -> None:
     }
 
 
+def test_needs_decision_change_set_can_be_returned_or_rejected() -> None:
+    """NEEDS_DECISION（编译有 blocker）也允许退回重新构建/拒绝。
+
+    复现前端 bug：退回重新构建按钮 disabled，因为变更集状态是 NEEDS_DECISION
+    而非 PENDING_REVIEW。后端 return_for_rebuild/reject 必须接受 NEEDS_DECISION。
+    """
+    first = _leaf_ids()[0]
+    store = InMemoryChangeSetStore()
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(FakePipelineStore([_extraction(first, _rules())])),
+        store,
+    )
+    change_set = service.build_for_document("doc_1")
+    # 手动置为 NEEDS_DECISION（模拟编译有 blocker 的场景）
+    store.update_status(change_set.change_set_id, "NEEDS_DECISION")
+
+    returned = service.return_for_rebuild(change_set.change_set_id, "bob", "退回重建")
+    assert returned.status == "RETURNED"
+
+    # 重置回 NEEDS_DECISION 测 reject
+    store.update_status(change_set.change_set_id, "NEEDS_DECISION")
+    rejected = service.reject(change_set.change_set_id, "bob", "拒绝")
+    assert rejected.status == "REJECTED"
+
+
 def test_approved_change_set_cannot_be_returned_or_rejected() -> None:
     first = _leaf_ids()[0]
     store = InMemoryChangeSetStore()

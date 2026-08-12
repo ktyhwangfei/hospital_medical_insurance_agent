@@ -288,3 +288,37 @@ def test_compile_steps_are_ordered_and_capture_snapshots() -> None:
     assert [step.sequence_no for step in result.steps] == [1, 2, 3, 4, 5]
     assert all(step.run_id == "run_x" for step in result.steps)
     assert all(step.input_payload or step.output_payload for step in result.steps)
+
+
+@pytest.mark.parametrize(
+    "subject",
+    ["unclassified", "unknown", "未分类", " ", "UNCLASSIFIED", "none"],
+)
+def test_compiler_rejects_subject_sentinel(subject: str) -> None:
+    """身份无法确定的规则必须 fail-closed，禁止塌缩进同一条 rule_id。
+
+    复现 rule_8f94f240d5da7fb6：dummy 提取产出 subject=unclassified，导致 25 条
+    语义不同的规则算出同一 rule_id。哨兵值必须在 Canonicalize 阶段直接拦截。
+    """
+    result = PolicyRuleCompiler().compile([fact("k", subject=subject, ratio="0.3")])
+
+    assert "SUBJECT_MISSING" in {issue.code for issue in result.issues}
+    assert result.status == "FAIL"
+    assert result.rules == []
+
+
+def test_rule_key_distinguishes_result_dimensions() -> None:
+    """同 subject/population 但结果维度不同（比例 vs 金额）必须产生独立 rule_id。
+
+    rule_key 此前不含 result 维度，导致“退休人员的比例”与“退休人员的金额”
+    在 subject 撞名时塌缩。补 value.keys() 后必须分离。
+    """
+    facts = [
+        fact("ratio_rule", population="retiree", ratio="0.3"),
+        fact("amount_rule", population="retiree", amount="1200"),
+    ]
+
+    result = PolicyRuleCompiler().compile(facts)
+
+    assert result.status == "PASS"
+    assert len({rule.rule_id for rule in result.rules}) == 2

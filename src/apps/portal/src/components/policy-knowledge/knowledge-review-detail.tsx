@@ -424,7 +424,7 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
       || changeSet?.items.some((item) => item.risk_level === 'HIGH' || item.risk_level === 'CRITICAL'),
   )
   const approveEligible = changeSet?.status === 'PENDING_REVIEW' || changeSet?.status === 'NEEDS_DECISION'
-  const returnOrRejectEligible = changeSet?.status === 'PENDING_REVIEW'
+  const returnOrRejectEligible = changeSet?.status === 'PENDING_REVIEW' || changeSet?.status === 'NEEDS_DECISION'
   const invalidCandidateCount = changeSet?.items.filter((item) => !parseCandidateKnowledge(item)).length ?? 0
   const candidateSetEmpty = changeSet?.items.length === 0
   const allCandidateSnapshotsValid = Boolean(

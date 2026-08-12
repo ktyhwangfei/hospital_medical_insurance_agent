@@ -14,6 +14,7 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_models import 
 )
 from src.knowledge_extension.rule_explanation.policy_compiler.compiler import (
     PolicyRuleCompiler,
+    SUBJECT_SENTINELS,
 )
 from src.knowledge_extension.rule_explanation.policy_compiler.models import (
     CanonicalRule,
@@ -82,8 +83,16 @@ class PolicyCompilationService:
                     if issue.fact_id == fact.fact_id
                     or issue.rule_id in {rule.rule_id for rule in owned}
                 ]
-                if not owned and result.status in {"REVIEW", "FAIL"} and not issues:
-                    issues = list(result.issues)
+                if not owned and not issues:
+                    issues = [ValidationIssue(
+                        issue_id=f"{fact.fact_id}_no_rule",
+                        severity="REVIEW",
+                        code="NO_RULE_PRODUCED",
+                        stage="COMPOSE",
+                        fact_id=fact.fact_id,
+                        message="规则未产出：身份与其它规则相同但结果不同，或缺少必要结果维度",
+                        recommended_action="人工确认是否需补充区分维度（适用人群/条件）或修正结果",
+                    )]
                 status = self._status(issues)
                 if not owned and status == "PASS":
                     status = "REVIEW"
@@ -188,13 +197,23 @@ class PolicyCompilationService:
         raw_rule = self._find_raw_rule(knowledge, extraction)
         fields = {field.field_code: field.raw_value for field in knowledge.fields}
         expression = raw_rule.get("expression") or fields.pop("expression", None)
-        subject = str(
+        raw_subject = (
             raw_rule.get("subject")
             or knowledge.topic_concept
             or raw_rule.get("rule_type")
             or knowledge.rule_type_enum
-            or knowledge.knowledge_id
-        ).lower()
+        )
+        # 解析不到合法身份时显式落哨兵，交由 compiler FAIL；禁止用 knowledge_id 伪造身份
+        # （伪身份会让语义不同的规则各自算出唯一但无意义的 rule_id，掩盖提取缺陷）。
+        subject = (
+            str(raw_subject).lower()
+            if raw_subject and str(raw_subject).strip().lower() not in SUBJECT_SENTINELS
+            else "unclassified"
+        )
+        # rule_type 模糊（通用规则/未分类）时，用结构化数值字段 + 原文推断业务主体，
+        # 救回提取质量不足但实际有明确数值语义的规则（如 rule_type=通用规则 但 payment_ratio=30%）
+        if subject == "unclassified":
+            subject = self._infer_subject(fields, raw_rule, knowledge)
         population = (
             raw_rule.get("population")
             or raw_rule.get("person_type")
@@ -240,6 +259,39 @@ class PolicyCompilationService:
             extraction_id=knowledge.extraction_id,
             confidence=Decimal(str(knowledge.confidence.overall)),
         )
+
+    @staticmethod
+    def _infer_subject(
+        fields: dict[str, Any], raw_rule: dict[str, Any], knowledge: KnowledgeItem
+    ) -> str:
+        """rule_type 模糊时用结构化数值字段 + 原文推断业务主体。
+
+        提取常把含明确数值的规则归为「通用规则」（rule_type 字段不精确），
+        导致 subject 落哨兵 FAIL。这里按数值字段 / 原文特征补足身份。
+        """
+        import re
+
+        # 1. 结构化数值字段优先（payment_ratio='30%' 等）
+        if str(fields.get("payment_ratio") or "").strip():
+            return "payment_ratio"
+        if str(fields.get("deductible_amount") or "").strip():
+            return "deductible"
+        if str(fields.get("cap_amount") or "").strip():
+            return "cap"
+        # 2. 原文数值特征回退（rule_value/source_text 含「85% 且 支付/划入」等）
+        text = " ".join(filter(None, [
+            str(raw_rule.get("rule_value") or ""),
+            str(raw_rule.get("source_text") or ""),
+            getattr(knowledge, "source_text", "") or "",
+            knowledge.business_sentence or "",
+        ]))
+        if re.search(r"\d+(?:\.\d+)?\s*%", text) and re.search(r"划入|支付|报销|比例", text):
+            return "payment_ratio"
+        if re.search(r"起付", text):
+            return "deductible"
+        if re.search(r"封顶|最高支付限额|上限", text):
+            return "cap"
+        return "unclassified"
 
     @staticmethod
     def _find_raw_rule(

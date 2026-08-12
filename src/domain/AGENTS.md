@@ -626,6 +626,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 指标来源绑定 | `MetricSourceBinding` | **Entity** | Pydantic `BaseModel` | 将结构化字段或政策 Knowledge 字段绑定到统一标准指标，保留来源版本和证据 |
 | 来源值映射 | `SourceValueMapping` | **Entity** | Pydantic `BaseModel` | 将某个来源字段的原始值映射到标准指标的统一标准值 |
 | 标准值提案 | `StandardValueProposal` | **Entity** | Pydantic `BaseModel` | 现有标准值域无法承接来源值时提交的人工审核草稿 |
+| 语义提议 | `SemanticProposal` | **Aggregate Root** | Pydantic `BaseModel` | 系统从抽取等运行信号主动发现指标或值域缺口后形成的统一审核对象，必须经人工审核后才能发布 |
+| 发现信号 | `DiscoverySignal` | **Value Object** | Pydantic `BaseModel` | 携带触发来源、结构化证据与建议落地字段的主动发现输入 |
+| 发现证据 | `DiscoveryEvidence` | **Value Object** | Pydantic `BaseModel` | 可追溯到政策文档、单元与提取记录的结构化证据；同一来源重复观测需幂等合并 |
 | 政策事实 | `PolicyFact` | **Value Object** | Pydantic `BaseModel`（frozen） | LLM 提取后、业务推导前的最小政策事实 |
 | 政策表达式 | `PolicyExpression` | **Value Object** | Pydantic `BaseModel`（frozen） | 确定性规则关系及运算符、引用和参数 |
 | 规范规则 | `CanonicalRule` | **Entity** | Pydantic `BaseModel`（frozen） | 编译后可审核、发布且具有稳定规则标识的规则 |

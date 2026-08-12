@@ -392,7 +392,7 @@ def _service(
     build_store = store or InMemoryKnowledgeBuildStore()
     service = module.KnowledgeBuildService(
         workbench_service=workbench,
-        change_set_service=object(),
+        change_set_service=ChangeSetService(workbench, InMemoryChangeSetStore()),
         store=build_store,
     )
     return service, workbench, build_store
@@ -724,6 +724,43 @@ def test_list_eligible_units_sorts_previews_and_builds_claim_targets() -> None:
     assert by_id["unit-running"].target_href == (
         "/policy-knowledge/knowledge/build?task_id=task-running"
     )
+
+
+def test_list_eligible_units_marks_returned_change_set_units_rebuild_required() -> None:
+    unit = _unit(
+        doc_id="doc_1",
+        doc_title="Policy",
+        unit_id="unit-returned",
+        source_text="retiree rule",
+    )
+    workbench = _Workbench([_document("doc_1", "Policy", [unit])])
+    change_sets = InMemoryChangeSetStore()
+    change_sets.save(KnowledgeChangeSet(
+        change_set_id="CS_TASK_returned",
+        source_document_version_id="v1",
+        doc_id="doc_1",
+        doc_title="Policy",
+        status="RETURNED",
+        items=[
+            ChangeSetItem(
+                item_id="item-1",
+                change_type="ADD",
+                rule_id="rule-1",
+                unit_id="unit-returned",
+                doc_id="doc_1",
+            )
+        ],
+    ))
+    service = _build_service_module().KnowledgeBuildService(
+        workbench_service=workbench,
+        change_set_service=ChangeSetService(workbench, change_sets),
+        store=InMemoryKnowledgeBuildStore(),
+    )
+
+    eligible = service.list_eligible_units()
+    by_id = {item.unit_id: item for item in eligible}
+
+    assert by_id["unit-returned"].availability == "REBUILD_REQUIRED"
 
 
 def test_preflight_blocks_unknown_stale_and_claimed_units() -> None:
@@ -1199,6 +1236,111 @@ def test_create_task_extracts_zero_knowledge_unit_before_building_candidate() ->
     candidate = change_sets.get(result.result_change_set_id or "")
     assert candidate is not None
     assert len(candidate.items) == 1
+
+
+def test_create_task_rebuild_mode_reextracts_unit_with_existing_knowledge() -> None:
+    unit = _unit(
+        doc_id="doc_1",
+        doc_title="Policy",
+        unit_id="unit-rebuild",
+        source_text="retiree rule",
+        with_candidate=True,
+    )
+    workbench = _Workbench([_document("doc_1", "Policy", [unit])])
+
+    class Extractor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, str, str]] = []
+
+        def extract_single(
+            self,
+            doc_id: str,
+            source_text: str,
+            unit_id: str = "",
+            reset_status: str = "draft",
+        ) -> dict[str, Any]:
+            self.calls.append((doc_id, source_text, unit_id, reset_status))
+            return {
+                "success": True,
+                "doc_id": doc_id,
+                "unit_id": unit_id,
+                "extractions_created": 1,
+                "total_rules": 1,
+            }
+
+    extractor = Extractor()
+    store = InMemoryKnowledgeBuildStore()
+    change_sets = InMemoryChangeSetStore()
+    service = _build_service_module().KnowledgeBuildService(
+        workbench_service=workbench,
+        change_set_service=ChangeSetService(workbench, change_sets),
+        store=store,
+        orchestrator=extractor,
+        task_id_factory=lambda: "KB_REBUILD_REEKTRACT",
+    )
+
+    result = service.create_task(
+        _request(
+            [_selection("doc_1", "unit-rebuild", unit.source_text)],
+            build_mode="REBUILD",
+            rebuild_reason="审核退回重新抽取",
+        )
+    )
+
+    assert extractor.calls == [
+        ("doc_1", unit.source_text, "unit-rebuild", "reviewed")
+    ]
+    assert result.status == "WAITING_REVIEW"
+    assert result.units[0].status == "BUILT"
+
+
+def test_create_task_initial_mode_reuses_existing_knowledge_without_extraction() -> None:
+    unit = _unit(
+        doc_id="doc_1",
+        doc_title="Policy",
+        unit_id="unit-reuse",
+        source_text="retiree rule",
+        with_candidate=True,
+    )
+    workbench = _Workbench([_document("doc_1", "Policy", [unit])])
+
+    class Extractor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, str, str]] = []
+
+        def extract_single(
+            self,
+            doc_id: str,
+            source_text: str,
+            unit_id: str = "",
+            reset_status: str = "draft",
+        ) -> dict[str, Any]:
+            self.calls.append((doc_id, source_text, unit_id, reset_status))
+            return {
+                "success": True,
+                "doc_id": doc_id,
+                "unit_id": unit_id,
+                "extractions_created": 1,
+                "total_rules": 1,
+            }
+
+    extractor = Extractor()
+    store = InMemoryKnowledgeBuildStore()
+    change_sets = InMemoryChangeSetStore()
+    service = _build_service_module().KnowledgeBuildService(
+        workbench_service=workbench,
+        change_set_service=ChangeSetService(workbench, change_sets),
+        store=store,
+        orchestrator=extractor,
+        task_id_factory=lambda: "KB_INITIAL_REUSE",
+    )
+
+    result = service.create_task(
+        _request([_selection("doc_1", "unit-reuse", unit.source_text)])
+    )
+
+    assert extractor.calls == []
+    assert result.status == "WAITING_REVIEW"
 
 
 def test_create_task_extraction_failure_is_typed_and_releases_claim() -> None:

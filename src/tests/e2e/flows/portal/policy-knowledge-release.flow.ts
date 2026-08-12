@@ -14,7 +14,7 @@ test.describe('政策知识工作台与整批发布门禁', () => {
 
     await expect(page).toHaveURL(/\/policy-knowledge\/knowledge\/build$/);
     expect((await policy.navLabels()).map((item) => item.trim())).toEqual(['概览', '文档', '单元', '知识', '测试']);
-    expect((await policy.workspaceLabels()).map((item) => item.trim())).toEqual(['知识构建', '知识审核', '发布管理']);
+    expect((await policy.workspaceLabels()).map((item) => item.trim())).toEqual(['知识构建', '知识审核', '发布管理', '语义发现']);
     await expect(policy.buildTitle).toBeVisible();
     await expect(policy.newBuildTaskButton).toHaveCount(1);
     for (const legacyWorkspace of ['驾驶舱', '工作台', '变更集', '待决策', '已发布']) {

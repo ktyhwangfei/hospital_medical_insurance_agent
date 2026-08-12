@@ -3,6 +3,7 @@
 仅测纯函数 to_ingest_input（不依赖 PG/Milvus），覆盖 93 条扁平 + 12 条 rules 两种形态。
 """
 from src.knowledge_extension.rule_explanation.policy_retrieval.migrate_extractions_to_v2 import (
+    READ_EXTRACTIONS_SQL,
     to_ingest_input,
 )
 
@@ -73,3 +74,7 @@ def test_extracted_fields_json_string():
     out = to_ingest_input(ext)
     assert out["rules"][0]["rule_type"] == "封顶线"
     assert out["fact_text"] == "片段"
+
+
+def test_default_migration_query_excludes_archived_history():
+    assert "status <> 'archived'" in READ_EXTRACTIONS_SQL

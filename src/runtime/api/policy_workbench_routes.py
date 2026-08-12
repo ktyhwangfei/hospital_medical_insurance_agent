@@ -684,7 +684,7 @@ def return_change_set(change_set_id: str, request: ChangeSetActionRequest) -> Kn
         return _apply_change_set_action(
             change_set_id,
             target_status="RETURNED",
-            allowed_change_set_statuses={"PENDING_REVIEW"},
+            allowed_change_set_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
             target_task_status="RETURNED",
             allowed_task_statuses={"WAITING_REVIEW"},
             action=lambda: service.return_for_rebuild(
@@ -704,7 +704,7 @@ def reject_change_set(change_set_id: str, request: ChangeSetActionRequest) -> Kn
         return _apply_change_set_action(
             change_set_id,
             target_status="REJECTED",
-            allowed_change_set_statuses={"PENDING_REVIEW"},
+            allowed_change_set_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
             target_task_status="REJECTED",
             allowed_task_statuses={"WAITING_REVIEW"},
             action=lambda: service.reject(
