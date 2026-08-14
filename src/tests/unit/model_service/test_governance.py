@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from src.config.model_service import ModelServiceConfig
 from src.config.model_routing import FALLBACK_CHAINS, MODEL_PARAMS, ROUTING_TABLE
@@ -22,6 +23,10 @@ def test_snapshot_has_complete_prompt_assets_and_stable_config_projection():
     for model_name, params in MODEL_PARAMS.items():
         assert projected[model_name].temperature == params["temperature"]
         assert projected[model_name].max_tokens == params["max_tokens"]
+    for prompt in snapshot.prompts:
+        assert Path(prompt.source_path).is_file()
+        for related_source_path in prompt.related_source_paths:
+            assert Path(related_source_path).is_file()
 
 
 def test_implicit_and_explicit_routes_are_distinguished_without_direct_fabrication():
@@ -64,3 +69,49 @@ def test_exact_empty_route_is_not_replaced_by_default(monkeypatch):
 def test_endpoint_preserves_port_zero_and_rejects_invalid_port():
     assert build_governance_snapshot(ModelServiceConfig(base_url="http://unit.invalid:0/path")).providers[0].endpoint == "http://unit.invalid:0"
     assert build_governance_snapshot(ModelServiceConfig(base_url="http://unit.invalid:99999")).providers[0].endpoint == "invalid"
+
+
+def test_dummy_provider_is_typed_as_development_fixture_without_credentials():
+    provider = build_governance_snapshot(
+        ModelServiceConfig(base_url="dummy", api_key="ignored-secret")
+    ).providers[0]
+
+    assert provider.provider_id == "dummy"
+    assert provider.type == "development_fixture"
+    assert provider.credential_status == "not_applicable"
+
+
+def test_prompt_parameters_distinguish_declared_route_override_and_effective_values():
+    snapshot = build_governance_snapshot()
+    prompts = {prompt.prompt_id: prompt for prompt in snapshot.prompts}
+
+    for prompt_id in ("policy.extract.schema", "policy.extract.legacy"):
+        prompt = prompts[prompt_id]
+        assert prompt.route_defaults.temperature == 0.1
+        assert prompt.route_defaults.max_tokens == 4096
+        assert prompt.call_overrides.temperature is None
+        assert prompt.call_overrides.max_tokens == 8192
+        assert prompt.effective_parameters.temperature == 0.1
+        assert prompt.effective_parameters.max_tokens == 8192
+
+    skill = prompts["skill.settlement_explain"]
+    assert skill.declared_parameters.temperature == 0.3
+    assert skill.declared_parameters.max_tokens == 1024
+    assert skill.route_defaults.temperature == 0.1
+    assert skill.route_defaults.max_tokens == 4096
+    assert skill.effective_parameters.temperature == 0.1
+    assert skill.effective_parameters.max_tokens == 4096
+    assert any("声明参数" in warning and "实际生效" in warning for warning in skill.warnings)
+
+
+def test_policy_fact_extract_lists_client_side_system_constraint_source():
+    prompt = next(
+        prompt
+        for prompt in build_governance_snapshot().prompts
+        if prompt.prompt_id == "policy.fact_extract"
+    )
+
+    assert (
+        "src/knowledge_extension/rule_explanation/policy_fact/deepseek_llm_client.py"
+        in prompt.related_source_paths
+    )

@@ -2,13 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { AlertTriangle, BookOpenCheck, Cpu, Route, Server } from 'lucide-react'
+import { useRoleContext } from '../layout'
 import {
   getModelGovernanceSnapshot,
   type CredentialStatus,
   type GatewayStatus,
   type ManagementStatus,
   type ModelGovernanceSnapshot,
+  type PromptParameters,
   type PromptSourceKind,
+  type ProviderType,
 } from '@/lib/model-governance-api'
 
 const sourceKindLabel: Record<PromptSourceKind, string> = {
@@ -32,6 +35,12 @@ const managementStatusLabel: Record<ManagementStatus, string> = {
 const credentialStatusLabel: Record<CredentialStatus, string> = {
   configured: '凭据已配置',
   missing: '未配置凭据',
+  not_applicable: '凭据不适用',
+}
+
+const providerTypeLabel: Record<ProviderType, string> = {
+  openai_compatible: 'OpenAI 兼容 Provider',
+  development_fixture: '开发夹具',
 }
 
 function promptStatus(gatewayStatus: GatewayStatus, managementStatus: ManagementStatus): string {
@@ -51,13 +60,29 @@ function redactedEndpoint(endpoint: string): string {
   }
 }
 
+function parameterText(label: string, parameters: PromptParameters): string {
+  if (parameters.temperature === null && parameters.max_tokens === null) {
+    const emptyText = label === '声明'
+      ? '未声明'
+      : label === '调用覆盖'
+        ? '未覆盖'
+        : '未解析'
+    return `${label}：${emptyText}`
+  }
+  return `${label}：温度 ${parameters.temperature ?? '—'}，最大 ${parameters.max_tokens ?? '—'}`
+}
+
 export default function ModelGovernancePage() {
+  const { currentRole } = useRoleContext()
   const [snapshot, setSnapshot] = useState<ModelGovernanceSnapshot | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
 
   useEffect(() => {
+    if (currentRole !== 'information_department') return
     let active = true
 
+    setSnapshot(null)
+    setLoadFailed(false)
     void getModelGovernanceSnapshot()
       .then((data) => {
         if (active) setSnapshot(data)
@@ -67,11 +92,23 @@ export default function ModelGovernancePage() {
       })
 
     return () => { active = false }
-  }, [])
+  }, [currentRole])
+
+  if (currentRole !== 'information_department') {
+    return (
+      <section role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800">
+        <div className="flex items-center gap-2 font-medium">
+          <AlertTriangle className="size-4" />
+          无权查看模型治理台账
+        </div>
+        <p className="mt-1 text-xs text-amber-700">仅信息部门角色可读取此页面。</p>
+      </section>
+    )
+  }
 
   if (loadFailed) {
     return (
-      <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800">
+      <section role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800">
         <div className="flex items-center gap-2 font-medium">
           <AlertTriangle className="size-4" />
           治理快照暂不可用
@@ -82,7 +119,7 @@ export default function ModelGovernancePage() {
   }
 
   if (!snapshot) {
-    return <p className="text-sm text-slate-500">正在加载治理快照</p>
+    return <p role="status" aria-live="polite" className="text-sm text-slate-500">正在加载治理快照</p>
   }
 
   const summary = [
@@ -120,7 +157,7 @@ export default function ModelGovernancePage() {
           <table className="min-w-full text-left text-sm">
             <caption className="sr-only">提示词台账</caption>
             <thead className="bg-slate-50 text-xs text-slate-500">
-              <tr><th className="px-5 py-3 font-medium">提示词</th><th className="px-5 py-3 font-medium">来源</th><th className="px-5 py-3 font-medium">场景</th><th className="px-5 py-3 font-medium">状态</th></tr>
+              <tr><th className="px-5 py-3 font-medium">提示词</th><th className="px-5 py-3 font-medium">来源</th><th className="px-5 py-3 font-medium">场景</th><th className="px-5 py-3 font-medium">参数</th><th className="px-5 py-3 font-medium">状态</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {snapshot.prompts.map((prompt) => (
@@ -128,6 +165,7 @@ export default function ModelGovernancePage() {
                   <td className="px-5 py-3"><p className="font-medium">{prompt.name}</p><p className="mt-0.5 font-mono text-xs text-slate-400">{prompt.prompt_id}</p></td>
                   <td className="max-w-72 px-5 py-3"><p className="break-all font-mono text-xs text-slate-600">{prompt.source_path}</p><p className="mt-1 text-xs text-slate-400">{sourceKindLabel[prompt.source_kind]}</p></td>
                   <td className="px-5 py-3 text-xs text-slate-600">{prompt.scene ?? '未登记场景'}</td>
+                  <td className="min-w-56 px-5 py-3 text-xs text-slate-600"><p>{parameterText('声明', prompt.declared_parameters)}</p><p className="mt-1">{parameterText('路由默认', prompt.route_defaults)}</p><p className="mt-1">{parameterText('调用覆盖', prompt.call_overrides)}</p><p className="mt-1 font-medium text-slate-700">{parameterText('实际', prompt.effective_parameters)}</p></td>
                   <td className="px-5 py-3"><span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700">{promptStatus(prompt.gateway_status, prompt.management_status)}</span>{prompt.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-700">{warning}</p>)}</td>
                 </tr>
               ))}
@@ -140,13 +178,13 @@ export default function ModelGovernancePage() {
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-sm font-semibold text-slate-700">模型概览</h3>
           <div className="mt-4 space-y-3">
-            {snapshot.models.map((model) => <div key={model.model_name} className="flex items-center justify-between border-b border-slate-100 pb-3 text-sm last:border-0 last:pb-0"><span className="font-mono text-slate-700">{model.model_name}</span><span className="text-xs text-slate-500">温度 {model.temperature}，最大 {model.max_tokens} tokens</span></div>)}
+            {snapshot.models.map((model) => <div key={model.model_name} className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 text-sm last:border-0 last:pb-0"><span className="min-w-0 break-all font-mono text-slate-700">{model.model_name}</span><span className="shrink-0 text-xs text-slate-500">温度 {model.temperature}，最大 {model.max_tokens} tokens</span></div>)}
           </div>
         </section>
         <section aria-label="Provider 概览" className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-sm font-semibold text-slate-700">Provider 概览</h3>
           <div className="mt-4 space-y-3">
-            {snapshot.providers.map((provider) => <div key={provider.provider_id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 text-sm last:border-0 last:pb-0"><span className="break-all font-mono text-slate-700">{redactedEndpoint(provider.endpoint)}</span><span className={`rounded px-2 py-1 text-xs ${provider.credential_status === 'configured' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{credentialStatusLabel[provider.credential_status]}</span></div>)}
+            {snapshot.providers.map((provider) => <div key={provider.provider_id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 text-sm last:border-0 last:pb-0"><div className="min-w-0"><span className="break-all font-mono text-slate-700">{redactedEndpoint(provider.endpoint)}</span><p className="mt-1 text-xs text-slate-500">{providerTypeLabel[provider.type]}</p></div><span className={`rounded px-2 py-1 text-xs ${provider.credential_status === 'configured' ? 'bg-emerald-50 text-emerald-700' : provider.credential_status === 'missing' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{credentialStatusLabel[provider.credential_status]}</span></div>)}
           </div>
         </section>
       </div>
@@ -158,7 +196,7 @@ export default function ModelGovernancePage() {
             <caption className="sr-only">模型路由台账</caption>
             <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-5 py-3 font-medium">场景</th><th className="px-5 py-3 font-medium">模型类型</th><th className="px-5 py-3 font-medium">生效模型</th><th className="px-5 py-3 font-medium">路由状态</th><th className="px-5 py-3 font-medium">备用模型</th></tr></thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
-              {snapshot.routes.map((route) => <tr key={`${route.scene}:${route.model_type}`}><td className="px-5 py-3 font-mono text-xs">{route.scene}</td><td className="px-5 py-3">{route.model_type}</td><td className="px-5 py-3 font-mono text-xs">{route.effective_model ?? '未解析'}</td><td className="px-5 py-3"><span className="rounded bg-blue-50 px-2 py-1 text-xs text-blue-700">{route.explicit ? '显式路由' : '默认路由'}</span>{route.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-700">{warning}</p>)}</td><td className="px-5 py-3 font-mono text-xs text-slate-500">{route.fallbacks.length ? route.fallbacks.join('，') : '无'}</td></tr>)}
+              {snapshot.routes.map((route) => <tr key={`${route.scene}:${route.model_type}`}><td className="break-all px-5 py-3 font-mono text-xs">{route.scene}</td><td className="break-all px-5 py-3">{route.model_type}</td><td className="break-all px-5 py-3 font-mono text-xs">{route.effective_model ?? '未解析'}</td><td className="px-5 py-3"><span className="rounded bg-blue-50 px-2 py-1 text-xs text-blue-700">{route.explicit ? '显式路由' : '默认路由'}</span>{route.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-700">{warning}</p>)}</td><td className="break-all px-5 py-3 font-mono text-xs text-slate-500">{route.fallbacks.length ? route.fallbacks.join('，') : '无'}</td></tr>)}
             </tbody>
           </table>
         </div>

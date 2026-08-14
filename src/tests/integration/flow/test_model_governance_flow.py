@@ -1,12 +1,27 @@
+import base64
+import json
+
 from fastapi.testclient import TestClient
 
 from src.model_service.gateway import ModelGateway
 from src.model_service.models import Message, ModelResponse, TokenUsage
 from src.model_service.router import ModelRouter
-from src.runtime.api.app import create_app
 
 
 SNAPSHOT_PATH = "/api/v1/medical-insurance-ai-agent/model-governance/snapshot"
+
+
+def _authorization() -> dict[str, str]:
+    payload = {
+        "sub": "governance-flow-reader",
+        "roles": ["information_department"],
+        "permissions": ["model_governance:read"],
+        "exp": 4102444800,
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
+    return {"Authorization": f"Bearer test.{encoded}.signature"}
 
 
 def test_model_governance_snapshot_drives_gateway_route(monkeypatch):
@@ -25,13 +40,16 @@ def test_model_governance_snapshot_drives_gateway_route(monkeypatch):
         no_op_audit,
     )
     monkeypatch.setattr("src.model_service.gateway._record_llm_event", lambda **kwargs: None)
+    monkeypatch.setenv("USE_MEMORY_STORAGE", "1")
     monkeypatch.setenv("MODEL_API_KEY", "governance-test-key")
     monkeypatch.setenv("MODEL_BASE_URL", "https://example.test/v1")
 
+    from src.runtime.api.app import create_app
+
     client = TestClient(create_app())
-    response = client.get(SNAPSHOT_PATH)
+    response = client.get(SNAPSHOT_PATH, headers=_authorization())
     assert response.status_code == 200
-    snapshot = response.json()
+    snapshot = response.json()["result"]
 
     fee_route = next(
         route
