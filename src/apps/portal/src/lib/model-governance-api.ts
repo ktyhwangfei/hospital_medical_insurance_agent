@@ -181,6 +181,17 @@ export interface GovernanceAssetsResult {
   published: PublishedGovernanceAsset[]
 }
 
+export interface GovernanceImportResult {
+  drafts: GovernanceDraft[]
+  created_count: number
+  skipped_count: number
+  counts: {
+    prompt: number
+    model_profile: number
+    route_rule: number
+  }
+}
+
 export interface PublishedGovernanceSnapshot {
   environment: GovernanceEnvironment
   assets: PublishedGovernanceAsset[]
@@ -268,6 +279,10 @@ export function createGovernanceDraft(
   })
 }
 
+export function importCurrentGovernanceAssets(): Promise<GovernanceImportResult> {
+  return governanceRequest('/model-governance/import-current', { method: 'POST' })
+}
+
 export function updateGovernanceDraft(
   draftId: string,
   content: GovernanceAssetContent,
@@ -277,6 +292,16 @@ export function updateGovernanceDraft(
     method: 'PATCH',
     body: JSON.stringify({ content, expected_revision: expectedRevision }),
   })
+}
+
+export function deleteGovernanceDraft(
+  draftId: string,
+  expectedRevision: number,
+): Promise<GovernanceDraft> {
+  return governanceRequest(
+    `/model-governance/drafts/${encodeURIComponent(draftId)}?expected_revision=${expectedRevision}`,
+    { method: 'DELETE' },
+  )
 }
 
 export function validateGovernanceDraft(

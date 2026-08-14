@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createGovernanceDraft,
+  deleteGovernanceDraft,
   getModelGovernanceSnapshot,
+  importCurrentGovernanceAssets,
 } from '@/lib/model-governance-api'
 
 const result = {
@@ -82,5 +84,21 @@ describe('模型治理 API 客户端', () => {
     expect(url).toContain('/model-governance/drafts')
     expect(init?.method).toBe('POST')
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer writer-token')
+  })
+
+  it('导入当前配置并按 revision 删除草稿', async () => {
+    window.sessionStorage.setItem('model-governance-token', 'writer-token')
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseEnvelope({ created_count: 1 }))
+      .mockResolvedValueOnce(responseEnvelope({ draft_id: 'draft-1', revision: 2 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await importCurrentGovernanceAssets()
+    await deleteGovernanceDraft('draft/1', 2)
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/model-governance/import-current')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST')
+    expect(fetchMock.mock.calls[1][0]).toContain('/model-governance/drafts/draft%2F1?expected_revision=2')
+    expect(fetchMock.mock.calls[1][1]?.method).toBe('DELETE')
   })
 })

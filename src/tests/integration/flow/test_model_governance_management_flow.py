@@ -81,6 +81,29 @@ def test_model_governance_management_publish_snapshot_and_rollback(monkeypatch):
     app.dependency_overrides[get_model_governance_service] = lambda: service
     client = TestClient(app)
 
+    imported_response = client.post(
+        f"{PREFIX}/import-current",
+        headers=_headers("editor", "model_governance:write"),
+    )
+    assert imported_response.status_code == 201
+    imported = imported_response.json()["result"]
+    imported_prompt = next(
+        item for item in imported["drafts"] if item["asset_id"] == "intent.classify"
+    )
+    edited_response = client.patch(
+        f"{PREFIX}/drafts/{imported_prompt['draft_id']}",
+        json={
+            "expected_revision": imported_prompt["revision"],
+            "content": {
+                **imported_prompt["content"],
+                "name": "意图分类（已纳管）",
+            },
+        },
+        headers=_headers("editor", "model_governance:write"),
+    )
+    assert edited_response.status_code == 200
+    assert edited_response.json()["result"]["revision"] == 2
+
     _publish(
         client,
         {

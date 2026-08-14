@@ -158,6 +158,22 @@ class PostgresModelGovernanceStorage:
             raise ModelGovernanceNotFoundError("草稿不存在")
         return self._draft(rows[0])
 
+    def delete_draft(
+        self, draft_id: str, *, expected_revision: int
+    ) -> GovernanceDraft:
+        rows = self._get_client().execute(
+            "DELETE FROM model_governance_drafts WHERE draft_id=%s AND revision=%s RETURNING *",
+            (draft_id, expected_revision),
+        )
+        if rows:
+            return self._draft(rows[0])
+        exists = self._get_client().execute(
+            "SELECT revision FROM model_governance_drafts WHERE draft_id=%s", (draft_id,)
+        )
+        if exists:
+            raise ModelGovernanceConflictError("草稿 revision 已变化")
+        raise ModelGovernanceNotFoundError("草稿不存在")
+
     def list_drafts(self, asset_type: GovernanceAssetType | None = None) -> list[GovernanceDraft]:
         if asset_type is None:
             rows = self._get_client().execute(

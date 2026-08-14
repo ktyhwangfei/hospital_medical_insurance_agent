@@ -4,7 +4,7 @@ import os
 from functools import lru_cache
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from src.data_platform.storage.model_governance.factory import (
     get_model_governance_storage,
@@ -26,6 +26,7 @@ from src.runtime.api.model_governance_schemas import (
     GovernanceAssetsResponse,
     GovernanceAssetsResult,
     GovernanceDraftResponse,
+    GovernanceImportResponse,
     GovernancePreviewResponse,
     GovernanceReleaseResponse,
     GovernanceReleasesResponse,
@@ -214,6 +215,24 @@ def create_governance_draft(
     )
 
 
+@router.post(
+    "/import-current", response_model=GovernanceImportResponse, status_code=201
+)
+def import_current_governance_assets(
+    principal: ModelGovernancePrincipal = Depends(require_model_governance_write),
+    service: ModelGovernanceService = Depends(get_model_governance_service),
+) -> GovernanceImportResponse:
+    try:
+        result = service.import_current_assets(actor=principal.user_id)
+    except (ModelGovernanceConflictError, ModelGovernanceGateError) as exc:
+        _raise_domain_error(exc)
+    return GovernanceImportResponse(
+        result=result,
+        uncertainties=_PENDING_RUNTIME,
+        audit=_audit(principal, "import_current_assets"),
+    )
+
+
 @router.patch("/drafts/{draft_id}", response_model=GovernanceDraftResponse)
 def update_governance_draft(
     draft_id: str,
@@ -232,6 +251,30 @@ def update_governance_draft(
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
         result=draft, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "update_draft")
+    )
+
+
+@router.delete("/drafts/{draft_id}", response_model=GovernanceDraftResponse)
+def delete_governance_draft(
+    draft_id: str,
+    expected_revision: int = Query(ge=1),
+    principal: ModelGovernancePrincipal = Depends(require_model_governance_write),
+    service: ModelGovernanceService = Depends(get_model_governance_service),
+) -> GovernanceDraftResponse:
+    try:
+        draft = service.delete_draft(
+            draft_id, expected_revision=expected_revision
+        )
+    except (
+        ModelGovernanceConflictError,
+        ModelGovernanceNotFoundError,
+        ModelGovernanceGateError,
+    ) as exc:
+        _raise_domain_error(exc)
+    return GovernanceDraftResponse(
+        result=draft,
+        uncertainties=_PENDING_RUNTIME,
+        audit=_audit(principal, "delete_draft"),
     )
 
 

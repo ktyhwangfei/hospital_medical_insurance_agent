@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 _ASSET_ID_PATTERN = r"^[a-z0-9][a-z0-9._-]{2,127}$"
-_VARIABLE_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
+_VARIABLE_PATTERN = r"^[A-Za-z][A-Za-z0-9_]{0,63}$"
 _CREDENTIAL_REF_PATTERN = r"^[A-Z][A-Z0-9_]{2,127}$"
 _SAFE_FIELD = re.compile(_VARIABLE_PATTERN)
 
@@ -67,7 +67,7 @@ class PromptAssetContent(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     scene: str = Field(min_length=1, max_length=64)
     model_type: str = Field(default="llm", min_length=1, max_length=32)
-    system_prompt: str = Field(min_length=1, max_length=20_000)
+    system_prompt: str = Field(default="", max_length=20_000)
     user_prompt_template: str = Field(min_length=1, max_length=20_000)
     variables: list[PromptVariable] = Field(default_factory=list)
     output_mode: Literal["text", "json"] = "text"
@@ -211,6 +211,23 @@ class PublishedGovernanceSnapshot(BaseModel):
     environment: GovernanceEnvironment
     assets: list[PublishedGovernanceAsset] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=_utc_now)
+
+
+class GovernanceImportCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    prompt: int = Field(default=0, ge=0)
+    model_profile: int = Field(default=0, ge=0)
+    route_rule: int = Field(default=0, ge=0)
+
+
+class GovernanceImportResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    drafts: list[GovernanceDraft] = Field(default_factory=list)
+    created_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    counts: GovernanceImportCounts
 
 
 def content_hash(content: GovernanceAssetContent) -> str:

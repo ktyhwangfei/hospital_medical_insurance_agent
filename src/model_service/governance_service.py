@@ -15,6 +15,8 @@ from src.model_service.governance_assets import (
     GovernanceDraft,
     GovernanceDraftStatus,
     GovernanceEnvironment,
+    GovernanceImportCounts,
+    GovernanceImportResult,
     GovernanceRelease,
     GovernanceReleaseStatus,
     GovernanceRuntimeStatus,
@@ -170,6 +172,39 @@ class ModelGovernanceService:
         environment: GovernanceEnvironment | None = None,
     ) -> list[GovernanceRelease]:
         return self._storage.list_releases(asset_id, environment)
+
+    def import_current_assets(self, *, actor: str) -> GovernanceImportResult:
+        from src.model_service.governance_import import build_current_governance_assets
+
+        existing = {draft.asset_id for draft in self._storage.list_drafts()}
+        assets = build_current_governance_assets()
+        created: list[GovernanceDraft] = []
+        counts = {asset_type.value: 0 for asset_type in GovernanceAssetType}
+        for content in assets:
+            if content.asset_id in existing:
+                continue
+            draft = self.create_draft(content, actor=actor)
+            created.append(draft)
+            existing.add(content.asset_id)
+            counts[draft.asset_type.value] += 1
+        return GovernanceImportResult(
+            drafts=created,
+            created_count=len(created),
+            skipped_count=len(assets) - len(created),
+            counts=GovernanceImportCounts(**counts),
+        )
+
+    def delete_draft(
+        self, draft_id: str, *, expected_revision: int
+    ) -> GovernanceDraft:
+        draft = self._current(draft_id, expected_revision)
+        if draft.status == GovernanceDraftStatus.APPROVED:
+            raise ModelGovernanceGateError("已审核草稿不能删除")
+        if self._storage.list_versions(draft.asset_id):
+            raise ModelGovernanceGateError("已有版本的草稿不能删除")
+        return self._storage.delete_draft(
+            draft_id, expected_revision=expected_revision
+        )
 
     def request_review(
         self,

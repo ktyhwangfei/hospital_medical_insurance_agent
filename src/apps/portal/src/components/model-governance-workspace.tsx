@@ -5,8 +5,10 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   approveGovernanceDraft,
   createGovernanceDraft,
+  deleteGovernanceDraft,
   getGovernanceAssets,
   getGovernanceReleases,
+  importCurrentGovernanceAssets,
   previewGovernanceDraft,
   publishGovernanceDraft,
   requestGovernanceReview,
@@ -46,6 +48,7 @@ interface FormState {
   systemPrompt: string
   userPrompt: string
   variables: string
+  outputMode: 'text' | 'json'
   providerId: string
   modelName: string
   credentialRef: string
@@ -53,6 +56,7 @@ interface FormState {
   maxTokens: string
   profileId: string
   fallbacks: string
+  enabled: boolean
 }
 
 function emptyForm(type: GovernanceAssetType): FormState {
@@ -62,7 +66,8 @@ function emptyForm(type: GovernanceAssetType): FormState {
     scene: type === 'route_rule' ? '' : 'policy_qa',
     systemPrompt: '只输出可追溯事实',
     userPrompt: '',
-    variables: 'question',
+    variables: 'question|必填|用户问题',
+    outputMode: 'text',
     providerId: 'openai-compatible',
     modelName: '',
     credentialRef: 'MODEL_API_KEY',
@@ -70,6 +75,7 @@ function emptyForm(type: GovernanceAssetType): FormState {
     maxTokens: '4096',
     profileId: '',
     fallbacks: '',
+    enabled: true,
   }
 }
 
@@ -83,9 +89,16 @@ function formContent(type: GovernanceAssetType, form: FormState): GovernanceAsse
       model_type: 'llm',
       system_prompt: form.systemPrompt,
       user_prompt_template: form.userPrompt,
-      variables: form.variables.split(',').map((name) => name.trim()).filter(Boolean)
-        .map((name) => ({ name, required: true, description: '' })),
-      output_mode: 'text',
+      variables: form.variables.split('\n').map((line) => line.trim()).filter(Boolean)
+        .map((line) => {
+          const [name, required = '必填', ...description] = line.split('|')
+          return {
+            name: name.trim(),
+            required: required.trim() !== '可选',
+            description: description.join('|').trim(),
+          }
+        }),
+      output_mode: form.outputMode,
     }
   }
   if (type === 'model_profile') {
@@ -98,7 +111,7 @@ function formContent(type: GovernanceAssetType, form: FormState): GovernanceAsse
       credential_ref: form.credentialRef,
       temperature: Number(form.temperature),
       max_tokens: Number(form.maxTokens),
-      enabled: true,
+      enabled: form.enabled,
     }
   }
   return {
@@ -109,7 +122,7 @@ function formContent(type: GovernanceAssetType, form: FormState): GovernanceAsse
     model_type: 'llm',
     profile_id: form.profileId,
     fallback_profile_ids: form.fallbacks.split(',').map((item) => item.trim()).filter(Boolean),
-    enabled: true,
+    enabled: form.enabled,
   }
 }
 
@@ -122,17 +135,22 @@ function formFromDraft(draft: GovernanceDraft): FormState {
     form.scene = content.scene
     form.systemPrompt = content.system_prompt
     form.userPrompt = content.user_prompt_template
-    form.variables = content.variables.map((item) => item.name).join(',')
+    form.variables = content.variables
+      .map((item) => `${item.name}|${item.required ? '必填' : '可选'}|${item.description}`)
+      .join('\n')
+    form.outputMode = content.output_mode
   } else if (content.asset_type === 'model_profile') {
     form.providerId = content.provider_id
     form.modelName = content.model_name
     form.credentialRef = content.credential_ref
     form.temperature = String(content.temperature)
     form.maxTokens = String(content.max_tokens)
+    form.enabled = content.enabled
   } else {
     form.scene = content.scene
     form.profileId = content.profile_id
     form.fallbacks = content.fallback_profile_ids.join(',')
+    form.enabled = content.enabled
   }
   return form
 }
@@ -172,6 +190,7 @@ export function ModelGovernanceWorkspace({ codeSnapshot }: { codeSnapshot: Model
   const [preview, setPreview] = useState<GovernanceAssetPreview | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
 
   const refresh = useCallback(async () => {
     const [assets, releaseItems] = await Promise.all([
@@ -223,6 +242,43 @@ export function ModelGovernanceWorkspace({ codeSnapshot }: { codeSnapshot: Model
       setDrafts((items) => [saved, ...items.filter((item) => item.draft_id !== saved.draft_id)])
       setFormOpen(false)
       setEditingDraft(null)
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function importCurrent() {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const result = await importCurrentGovernanceAssets()
+      setDrafts((items) => [
+        ...result.drafts,
+        ...items.filter((item) => !result.drafts.some((draft) => draft.draft_id === item.draft_id)),
+      ])
+      setNotice(
+        result.created_count === 0
+          ? `现有配置已全部纳管，本次跳过 ${result.skipped_count} 项`
+          : `已导入 ${result.counts.prompt} 个提示词、${result.counts.model_profile} 个模型档案、${result.counts.route_rule} 条路由规则`,
+      )
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removeDraft(draft: GovernanceDraft) {
+    if (!window.confirm(`确认删除草稿“${draft.content.name}”？`)) return
+    setBusy(true)
+    setError('')
+    try {
+      await deleteGovernanceDraft(draft.draft_id, draft.revision)
+      setDrafts((items) => items.filter((item) => item.draft_id !== draft.draft_id))
+      setNotice(`已删除草稿：${draft.content.name}`)
     } catch (reason) {
       setError(errorText(reason))
     } finally {
@@ -299,23 +355,31 @@ export function ModelGovernanceWorkspace({ codeSnapshot }: { codeSnapshot: Model
           <h3 id="governance-workspace-title" className="text-sm font-semibold text-slate-800">治理库管理</h3>
           <p className="mt-1 text-xs text-slate-500">发布内容尚未接入运行时，不会改变当前业务调用。</p>
         </div>
-        {process.env.NODE_ENV !== 'production' && (
-          <label className="text-xs text-slate-600">
-            开发身份
-            <select
-              className="ml-2 rounded border border-slate-300 bg-white px-2 py-1"
-              value={identity}
-              onChange={(event) => {
-                const next = event.target.value as GovernanceDevIdentity
-                setIdentity(next)
-                selectGovernanceDevIdentity(next)
-              }}
-            >
-              <option value="editor">编辑/发布人</option>
-              <option value="reviewer">审核人</option>
-            </select>
-          </label>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void importCurrent()}
+            disabled={busy || identity !== 'editor'}
+            className="rounded border border-blue-300 px-3 py-2 text-xs font-medium text-blue-700 disabled:opacity-50"
+          >导入现有配置</button>
+          {process.env.NODE_ENV !== 'production' && (
+            <label className="text-xs text-slate-600">
+              开发身份
+              <select
+                className="ml-2 rounded border border-slate-300 bg-white px-2 py-1"
+                value={identity}
+                onChange={(event) => {
+                  const next = event.target.value as GovernanceDevIdentity
+                  setIdentity(next)
+                  selectGovernanceDevIdentity(next)
+                }}
+              >
+                <option value="editor">编辑/发布人</option>
+                <option value="reviewer">审核人</option>
+              </select>
+            </label>
+          )}
+        </div>
       </div>
 
       <div role="tablist" aria-label="治理工作区" className="flex overflow-x-auto border-b border-slate-100 px-3">
@@ -343,6 +407,7 @@ export function ModelGovernanceWorkspace({ codeSnapshot }: { codeSnapshot: Model
         aria-busy={busy}
       >
         {error && <p role="alert" className="mb-4 rounded bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+        {notice && <p role="status" className="mb-4 rounded bg-emerald-50 p-3 text-sm text-emerald-700">{notice}</p>}
 
         {activeTab !== 'releases' && (
           <>
@@ -363,7 +428,8 @@ export function ModelGovernanceWorkspace({ codeSnapshot }: { codeSnapshot: Model
                 </label>
                 {activeTab === 'prompt' && <>
                   <label className="text-xs text-slate-600">场景<input value={form.scene} onChange={(e) => setForm({ ...form, scene: e.target.value })} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
-                  <label className="text-xs text-slate-600">变量（逗号分隔）<input value={form.variables} onChange={(e) => setForm({ ...form, variables: e.target.value })} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
+                  <label className="text-xs text-slate-600">输出模式<select value={form.outputMode} onChange={(e) => setForm({ ...form, outputMode: e.target.value as 'text' | 'json' })} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm"><option value="text">文本</option><option value="json">JSON</option></select></label>
+                  <label className="text-xs text-slate-600 md:col-span-2">提示词变量（每行：名称|必填/可选|说明）<textarea value={form.variables} onChange={(e) => setForm({ ...form, variables: e.target.value })} className="mt-1 min-h-20 w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-sm" /></label>
                   <label className="text-xs text-slate-600 md:col-span-2">系统提示词<textarea value={form.systemPrompt} onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })} className="mt-1 min-h-20 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
                   <label className="text-xs text-slate-600 md:col-span-2">用户提示词模板<textarea value={form.userPrompt} onChange={(e) => setForm({ ...form, userPrompt: e.target.value })} className="mt-1 min-h-20 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
                 </>}
@@ -373,11 +439,13 @@ export function ModelGovernanceWorkspace({ codeSnapshot }: { codeSnapshot: Model
                   <label className="text-xs text-slate-600">凭据引用<input value={form.credentialRef} onChange={(e) => setForm({ ...form, credentialRef: e.target.value })} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
                   <label className="text-xs text-slate-600">温度<input type="number" step="0.1" value={form.temperature} onChange={(e) => setForm({ ...form, temperature: e.target.value })} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
                   <label className="text-xs text-slate-600">最大 tokens<input type="number" value={form.maxTokens} onChange={(e) => setForm({ ...form, maxTokens: e.target.value })} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
+                  <label className="flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />启用模型档案</label>
                 </>}
                 {activeTab === 'route_rule' && <>
                   <label className="text-xs text-slate-600">场景<input value={form.scene} onChange={(e) => setForm({ ...form, scene: e.target.value })} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
                   <label className="text-xs text-slate-600">主模型档案<input value={form.profileId} onChange={(e) => setForm({ ...form, profileId: e.target.value })} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
                   <label className="text-xs text-slate-600 md:col-span-2">备用档案（逗号分隔）<input value={form.fallbacks} onChange={(e) => setForm({ ...form, fallbacks: e.target.value })} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
+                  <label className="flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />启用路由规则</label>
                 </>}
                 <div className="flex gap-2 md:col-span-2">
                   <button type="button" disabled={busy || !form.assetId} onClick={() => void submitDraft()} className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">保存草稿</button>
@@ -398,6 +466,7 @@ export function ModelGovernanceWorkspace({ codeSnapshot }: { codeSnapshot: Model
                   {draft.validation_issues.map((issue) => <p key={`${issue.code}:${issue.path}`} className="mt-2 text-xs text-rose-700">{issue.message}</p>)}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button type="button" disabled={busy} onClick={() => openEdit(draft)} className="rounded border border-slate-300 px-2.5 py-1.5 text-xs">编辑</button>
+                    {draft.status !== 'approved' && !publishedIds.has(draft.asset_id) && <button type="button" disabled={busy} onClick={() => void removeDraft(draft)} className="rounded border border-rose-300 px-2.5 py-1.5 text-xs text-rose-700">删除草稿</button>}
                     {draft.status === 'editing' && <button type="button" disabled={busy} onClick={() => void changeDraft(draft, () => validateGovernanceDraft(draft.draft_id, draft.revision))} className="rounded bg-blue-50 px-2.5 py-1.5 text-xs text-blue-700">校验</button>}
                     {draft.status === 'validated' && <><button type="button" disabled={busy} onClick={() => void showPreview(draft)} className="rounded border border-blue-200 px-2.5 py-1.5 text-xs text-blue-700">预览</button><button type="button" disabled={busy || identity !== 'editor'} onClick={() => void changeDraft(draft, () => requestGovernanceReview(draft.draft_id, draft.revision))} className="rounded bg-blue-600 px-2.5 py-1.5 text-xs text-white">申请审核</button></>}
                     {draft.status === 'review_pending' && identity === 'reviewer' && <button type="button" disabled={busy} onClick={() => void changeDraft(draft, () => approveGovernanceDraft(draft.draft_id, draft.revision, '开发环境审核通过'))} className="rounded bg-emerald-600 px-2.5 py-1.5 text-xs text-white">审核通过</button>}

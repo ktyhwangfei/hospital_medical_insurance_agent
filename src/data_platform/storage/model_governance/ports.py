@@ -29,6 +29,10 @@ class ModelGovernanceStorage(Protocol):
 
     def get_draft(self, draft_id: str) -> GovernanceDraft: ...
 
+    def delete_draft(
+        self, draft_id: str, *, expected_revision: int
+    ) -> GovernanceDraft: ...
+
     def list_drafts(
         self, asset_type: GovernanceAssetType | None = None
     ) -> list[GovernanceDraft]: ...

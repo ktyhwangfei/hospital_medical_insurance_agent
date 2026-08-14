@@ -57,6 +57,13 @@ def _management_client(monkeypatch) -> TestClient:
         no_op_audit,
     )
     from src.runtime.api.app import create_app
+    from src.data_platform.storage.model_governance.factory import (
+        get_model_governance_storage,
+    )
+    from src.runtime.api.model_governance_routes import get_model_governance_service
+
+    get_model_governance_storage.cache_clear()
+    get_model_governance_service.cache_clear()
 
     return TestClient(create_app())
 
@@ -199,3 +206,42 @@ def test_governance_rejects_missing_permission_and_stale_revision(monkeypatch):
     )
     assert stale.status_code == 409
     assert stale.json()["detail"]["error_code"] == "MODEL_GOVERNANCE_CONFLICT"
+
+
+def test_governance_imports_current_assets_once_and_deletes_by_revision(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    client = _management_client(monkeypatch)
+    prefix = "/api/v1/medical-insurance-ai-agent/model-governance"
+    write_headers = _headers("model_governance:write")
+
+    forbidden = client.post(
+        f"{prefix}/import-current",
+        headers=_headers("model_governance:read"),
+    )
+    assert forbidden.status_code == 403
+
+    first = client.post(f"{prefix}/import-current", headers=write_headers)
+    assert first.status_code == 201
+    imported = first.json()["result"]
+    assert imported["created_count"] > 0
+    assert imported["counts"]["prompt"] == 11
+    assert imported["counts"]["model_profile"] > 0
+    assert imported["counts"]["route_rule"] > 0
+
+    repeated = client.post(f"{prefix}/import-current", headers=write_headers)
+    assert repeated.status_code == 201
+    assert repeated.json()["result"]["created_count"] == 0
+    assert repeated.json()["result"]["skipped_count"] == imported["created_count"]
+
+    draft = imported["drafts"][0]
+    stale = client.delete(
+        f"{prefix}/drafts/{draft['draft_id']}?expected_revision=2",
+        headers=write_headers,
+    )
+    assert stale.status_code == 409
+    deleted = client.delete(
+        f"{prefix}/drafts/{draft['draft_id']}?expected_revision=1",
+        headers=write_headers,
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["result"]["draft_id"] == draft["draft_id"]

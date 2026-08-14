@@ -156,3 +156,33 @@ def test_rollback_creates_new_release_for_immutable_old_version():
         "prompt.demo", GovernanceEnvironment.DEV
     ) == rollback
 
+
+def test_import_current_assets_is_idempotent_by_asset_id():
+    service = ModelGovernanceService(InMemoryModelGovernanceStorage())
+
+    first = service.import_current_assets(actor="editor")
+    second = service.import_current_assets(actor="editor")
+
+    assert first.created_count > 0
+    assert first.counts.prompt > 0
+    assert first.counts.model_profile > 0
+    assert first.counts.route_rule > 0
+    assert second.created_count == 0
+    assert second.skipped_count == first.created_count
+
+
+def test_delete_draft_allows_editing_but_rejects_approved():
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
+    editing = service.create_draft(_prompt(), actor="editor")
+
+    deleted = service.delete_draft(
+        editing.draft_id, expected_revision=editing.revision
+    )
+
+    assert deleted == editing
+    approved = _complete_review(service, _prompt("另一份提示词"))
+    with pytest.raises(ModelGovernanceGateError, match="已审核"):
+        service.delete_draft(
+            approved.draft_id, expected_revision=approved.revision
+        )

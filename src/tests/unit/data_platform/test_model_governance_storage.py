@@ -105,6 +105,25 @@ def test_in_memory_storage_rejects_stale_revision_and_returns_copies():
         )
 
 
+def test_in_memory_storage_deletes_only_matching_revision():
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+    from src.data_platform.storage.model_governance.ports import (
+        ModelGovernanceConflictError,
+        ModelGovernanceNotFoundError,
+    )
+
+    storage = InMemoryModelGovernanceStorage()
+    draft = storage.create_draft(_draft())
+
+    with pytest.raises(ModelGovernanceConflictError, match="revision"):
+        storage.delete_draft(draft.draft_id, expected_revision=2)
+    assert storage.delete_draft(draft.draft_id, expected_revision=1) == draft
+    with pytest.raises(ModelGovernanceNotFoundError):
+        storage.get_draft(draft.draft_id)
+
+
 def test_in_memory_storage_versions_are_idempotent_by_asset_and_hash():
     from src.data_platform.storage.model_governance.in_memory import (
         InMemoryModelGovernanceStorage,

@@ -58,6 +58,18 @@ class InMemoryModelGovernanceStorage:
             except KeyError as exc:
                 raise ModelGovernanceNotFoundError("草稿不存在") from exc
 
+    def delete_draft(
+        self, draft_id: str, *, expected_revision: int
+    ) -> GovernanceDraft:
+        with self._lock:
+            current = self._drafts.get(draft_id)
+            if current is None:
+                raise ModelGovernanceNotFoundError("草稿不存在")
+            if current.revision != expected_revision:
+                raise ModelGovernanceConflictError("草稿 revision 已变化")
+            del self._drafts[draft_id]
+            return self._copy(current)
+
     def list_drafts(
         self, asset_type: GovernanceAssetType | None = None
     ) -> list[GovernanceDraft]:

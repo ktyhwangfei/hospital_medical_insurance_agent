@@ -8,9 +8,11 @@ import ModelGovernancePage from '../../../app/model-governance/page'
 import { useRoleContext } from '../../../app/layout'
 import {
   createGovernanceDraft,
+  deleteGovernanceDraft,
   getGovernanceAssets,
   getGovernanceReleases,
   getModelGovernanceSnapshot,
+  importCurrentGovernanceAssets,
   type ModelGovernanceSnapshot,
 } from '@/lib/model-governance-api'
 
@@ -21,6 +23,8 @@ vi.mock('@/lib/model-governance-api', async (importOriginal) => ({
   getGovernanceAssets: vi.fn(),
   getGovernanceReleases: vi.fn(),
   createGovernanceDraft: vi.fn(),
+  deleteGovernanceDraft: vi.fn(),
+  importCurrentGovernanceAssets: vi.fn(),
 }))
 
 const emptyParameters = { temperature: null, max_tokens: null }
@@ -103,6 +107,8 @@ beforeEach(() => {
   vi.mocked(getGovernanceAssets).mockReset()
   vi.mocked(getGovernanceReleases).mockReset()
   vi.mocked(createGovernanceDraft).mockReset()
+  vi.mocked(deleteGovernanceDraft).mockReset()
+  vi.mocked(importCurrentGovernanceAssets).mockReset()
   vi.mocked(getModelGovernanceSnapshot).mockResolvedValue(snapshotFixture)
   vi.mocked(getGovernanceAssets).mockResolvedValue({ drafts: [], published: [] })
   vi.mocked(getGovernanceReleases).mockResolvedValue([])
@@ -183,6 +189,91 @@ describe('模型治理页', () => {
 
     expect(await screen.findByText('编辑中')).toBeInTheDocument()
     expect(screen.getByText('尚未发布')).toBeInTheDocument()
+  })
+
+  it('显式导入现有配置后展示可编辑提示词和导入统计', async () => {
+    const user = userEvent.setup()
+    const draft = {
+      draft_id: 'imported-prompt',
+      asset_id: 'intent.classify',
+      asset_type: 'prompt' as const,
+      content: {
+        asset_type: 'prompt' as const,
+        asset_id: 'intent.classify',
+        name: '意图分类',
+        scene: 'intent_recognition',
+        model_type: 'llm',
+        system_prompt: '',
+        user_prompt_template: '用户消息：{message}',
+        variables: [{ name: 'message', required: true, description: '用户消息' }],
+        output_mode: 'json' as const,
+      },
+      status: 'editing' as const,
+      revision: 1,
+      validation_issues: [],
+      created_by: 'editor',
+      last_edited_by: 'editor',
+      created_at: '2026-08-14T00:00:00Z',
+      updated_at: '2026-08-14T00:00:00Z',
+    }
+    vi.mocked(importCurrentGovernanceAssets).mockResolvedValue({
+      drafts: [draft],
+      created_count: 18,
+      skipped_count: 0,
+      counts: { prompt: 11, model_profile: 2, route_rule: 5 },
+    })
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('button', { name: '导入现有配置' }))
+
+    const panel = screen.getByRole('tabpanel')
+    expect(await within(panel).findByText('intent.classify')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('已导入 11 个提示词、2 个模型档案、5 条路由规则')
+    await user.click(within(panel).getByRole('button', { name: '编辑' }))
+    expect(screen.getByLabelText('输出模式')).toHaveValue('json')
+    expect(screen.getByLabelText(/提示词变量/)).toHaveValue('message|必填|用户消息')
+  })
+
+  it('模型档案可编辑启用状态，未发布草稿可删除', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    vi.mocked(createGovernanceDraft).mockImplementation(async (content) => ({
+      draft_id: 'model-draft',
+      asset_id: content.asset_id,
+      asset_type: content.asset_type,
+      content,
+      status: 'editing',
+      revision: 1,
+      validation_issues: [],
+      created_by: 'editor',
+      last_edited_by: 'editor',
+      created_at: '2026-08-14T00:00:00Z',
+      updated_at: '2026-08-14T00:00:00Z',
+    }))
+    vi.mocked(deleteGovernanceDraft).mockImplementation(async () => ({
+      draft_id: 'model-draft',
+      asset_id: 'model.demo',
+      asset_type: 'model_profile',
+      content: {
+        asset_type: 'model_profile', asset_id: 'model.demo', name: '演示模型',
+        provider_id: 'default', model_name: 'demo', credential_ref: 'MODEL_API_KEY',
+        temperature: 0.1, max_tokens: 4096, enabled: false,
+      },
+      status: 'editing', revision: 1, validation_issues: [], created_by: 'editor',
+      last_edited_by: 'editor', created_at: '2026-08-14T00:00:00Z', updated_at: '2026-08-14T00:00:00Z',
+    }))
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '模型档案' }))
+    await user.click(screen.getByRole('button', { name: '新建模型档案' }))
+    await user.type(screen.getByLabelText('资产标识'), 'model.demo')
+    await user.type(screen.getByLabelText('模型名'), 'demo')
+    await user.click(screen.getByRole('checkbox', { name: '启用模型档案' }))
+    await user.click(screen.getByRole('button', { name: '保存草稿' }))
+
+    expect(createGovernanceDraft).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }))
+    await user.click(screen.getByRole('button', { name: '删除草稿' }))
+    await waitFor(() => expect(screen.queryByText('model.demo')).not.toBeInTheDocument())
   })
 
   it('非信息部门直接显示无权限且不发起快照请求', () => {

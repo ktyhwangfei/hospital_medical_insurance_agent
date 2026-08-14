@@ -10,6 +10,7 @@ from src.model_service.governance_assets import (
     GovernanceAssetType,
     GovernanceDraft,
     GovernanceEnvironment,
+    GovernanceImportResult,
     GovernanceRelease,
     PublishedGovernanceAsset,
     PublishedGovernanceSnapshot,
@@ -82,6 +83,10 @@ class GovernanceReleasesResponse(_GovernanceResponse):
     result: GovernanceReleasesResult
 
 
+class GovernanceImportResponse(_GovernanceResponse):
+    result: GovernanceImportResult
+
+
 class PublishedGovernanceSnapshotResponse(_GovernanceResponse):
     result: PublishedGovernanceSnapshot
 
@@ -94,6 +99,7 @@ __all__ = [
     "GovernanceAssetType",
     "GovernanceDraftResponse",
     "GovernanceEnvironment",
+    "GovernanceImportResponse",
     "GovernancePreviewResponse",
     "GovernanceReleaseResponse",
     "GovernanceReleasesResponse",
@@ -105,4 +111,3 @@ __all__ = [
     "PublishGovernanceDraftRequest",
     "UpdateGovernanceDraftRequest",
 ]
-
