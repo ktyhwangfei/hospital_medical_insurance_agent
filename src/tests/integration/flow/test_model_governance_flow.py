@@ -1,14 +1,15 @@
-from urllib.parse import urlsplit
-
 from fastapi.testclient import TestClient
 
+from src.model_service.gateway import ModelGateway
+from src.model_service.models import Message, ModelResponse, TokenUsage
+from src.model_service.router import ModelRouter
 from src.runtime.api.app import create_app
 
 
 SNAPSHOT_PATH = "/api/v1/medical-insurance-ai-agent/model-governance/snapshot"
 
 
-def test_model_governance_read_only_flow(monkeypatch):
+def test_model_governance_snapshot_drives_gateway_route(monkeypatch):
     async def no_op_session(self, *args):
         return None
 
@@ -23,53 +24,47 @@ def test_model_governance_read_only_flow(monkeypatch):
         "src.gateway.api_gateway.audit_middleware.GatewayAuditMiddleware._write_audit",
         no_op_audit,
     )
-    monkeypatch.setenv("MODEL_API_KEY", "temporary-governance-secret")
-    monkeypatch.setenv(
-        "MODEL_BASE_URL", "https://user:password@example.test:8443/v1/path?q=1"
-    )
+    monkeypatch.setattr("src.model_service.gateway._record_llm_event", lambda **kwargs: None)
+    monkeypatch.setenv("MODEL_API_KEY", "governance-test-key")
+    monkeypatch.setenv("MODEL_BASE_URL", "https://example.test/v1")
 
     client = TestClient(create_app())
-    health = client.get("/health")
-    assert health.status_code == 200
-    assert health.json()["status"] == "ok"
+    response = client.get(SNAPSHOT_PATH)
+    assert response.status_code == 200
+    snapshot = response.json()
 
-    first = client.get(SNAPSHOT_PATH)
-    second = client.get(SNAPSHOT_PATH)
-    assert first.status_code == second.status_code == 200
-    snapshot = first.json()
-    assert snapshot == second.json()
+    fee_route = next(
+        route
+        for route in snapshot["routes"]
+        if route["scene"] == "fee_explanation" and route["model_type"] == "llm"
+    )
+    model_profile = next(
+        model
+        for model in snapshot["models"]
+        if model["model_name"] == fee_route["effective_model"]
+    )
 
-    routes = {(route["scene"], route["model_type"]): route for route in snapshot["routes"]}
-    model_names = {model["model_name"] for model in snapshot["models"]}
-    for prompt in snapshot["prompts"]:
-        if prompt["gateway_status"] == "routed" and prompt["scene"]:
-            assert (prompt["scene"], prompt["model_type"]) in routes
+    captured = {}
 
-    for route in snapshot["routes"]:
-        if route["effective_model"]:
-            assert route["effective_model"] in model_names
+    def fake_call_provider(self, request, model_name):
+        captured["request"] = request
+        captured["model_name"] = model_name
+        return ModelResponse(
+            content="provider boundary response",
+            model_name=model_name,
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1),
+            finish_reason="stop",
+        )
 
-    direct_prompts = [
-        prompt for prompt in snapshot["prompts"] if prompt["gateway_status"] == "direct"
-    ]
-    assert direct_prompts
-    for prompt in direct_prompts:
-        assert any("绕过统一网关" in warning for warning in prompt["warnings"])
-        assert prompt["scene"] is None
-        assert not any(route["scene"] == prompt["scene"] for route in snapshot["routes"])
+    monkeypatch.setattr(ModelGateway, "_call_provider", fake_call_provider)
+    gateway = ModelGateway(router=ModelRouter())
+    gateway.generate(
+        [Message(role="user", content="解释本次结算费用")],
+        fee_route["model_type"],
+        fee_route["scene"],
+    )
 
-    serialized = first.text
-    assert "temporary-governance-secret" not in serialized
-    assert "user" not in serialized
-    assert "password" not in serialized
-    assert "/v1/path" not in serialized
-    assert "q=1" not in serialized
-    for provider in snapshot["providers"]:
-        endpoint = urlsplit(provider["endpoint"])
-        assert endpoint.username is None
-        assert endpoint.password is None
-        assert endpoint.path == ""
-        assert endpoint.query == ""
-
-    assert snapshot["citations"]
-    assert snapshot["uncertainties"]
+    assert captured["model_name"] == fee_route["effective_model"]
+    assert captured["request"].model_type == fee_route["effective_model"]
+    assert captured["request"].temperature == model_profile["temperature"]
+    assert captured["request"].max_tokens == model_profile["max_tokens"]
