@@ -815,6 +815,7 @@ class PipelineStore:
         client = self._get_client()
         docs = client.execute("SELECT COUNT(*) as cnt, COUNT(CASE WHEN status='raw' THEN 1 END) as raw_cnt FROM policy_documents")
         exts = client.execute("SELECT COUNT(*) as cnt, COUNT(CASE WHEN status='draft' THEN 1 END) as draft_cnt, COUNT(CASE WHEN status='reviewed' THEN 1 END) as reviewed_cnt, COUNT(CASE WHEN status='published' THEN 1 END) as published_cnt FROM policy_extractions WHERE status <> 'archived'")
+        document_items = self.list_documents(page=1, page_size=1000).get("items", [])
         return {
             "documents_count": docs[0]["cnt"] if docs else 0,
             "documents_raw": docs[0]["raw_cnt"] if docs else 0,
@@ -822,4 +823,7 @@ class PipelineStore:
             "extractions_draft": exts[0]["draft_cnt"] if exts else 0,
             "extractions_reviewed": exts[0]["reviewed_cnt"] if exts else 0,
             "extractions_published": exts[0]["published_cnt"] if exts else 0,
+            "units_count": sum(int(item.get("unit_total") or 0) for item in document_items),
+            "units_audited": sum(int(item.get("unit_audited") or 0) for item in document_items),
+            "units_pending": sum(int(item.get("pending_count") or 0) for item in document_items),
         }

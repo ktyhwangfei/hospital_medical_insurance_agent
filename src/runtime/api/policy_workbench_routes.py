@@ -1000,9 +1000,11 @@ def list_decision_tasks(status: str = "", task_type: str = "", scope: str = "") 
 class GovernanceDashboard(BaseModel):
     documents_total: int
     change_sets_total: int
+    knowledge_total: int
     rules_total: int
     rules_pending_review: int
     rules_approved: int
+    compilation_by_status: dict[str, int]
     tasks_pending: int
     tasks_by_type: dict[str, int]
     change_sets_by_status: dict[str, int]
@@ -1015,18 +1017,24 @@ class GovernanceDashboard(BaseModel):
 def get_governance_dashboard() -> GovernanceDashboard:
     """AI 治理驾驶舱聚合（V4.1 §9）。"""
     service = _get_service()
+    documents = service.list_documents()
     change_sets = _get_change_set_service().list_change_sets()
     rules_total = 0
     rules_pending = 0
     rules_approved = 0
     fidelity: list[float] = []
     completeness: list[float] = []
+    compilation_by_status: dict[str, int] = {}
     risk: dict[str, int] = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "CRITICAL": 0}
     for change_set in change_sets:
         for key, value in (change_set.risk_summary or {}).items():
             risk[key] = risk.get(key, 0) + value
         for item in change_set.items:
             rules_total += 1
+            if item.compilation_status:
+                compilation_by_status[item.compilation_status] = (
+                    compilation_by_status.get(item.compilation_status, 0) + 1
+                )
             after = item.after or {}
             confidence = after.get("confidence") or {}
             if confidence.get("overall"):
@@ -1042,11 +1050,13 @@ def get_governance_dashboard() -> GovernanceDashboard:
     for task in tasks:
         tasks_by_type[task.task_type] = tasks_by_type.get(task.task_type, 0) + 1
     return GovernanceDashboard(
-        documents_total=service.list_documents().total,
+        documents_total=documents.total,
         change_sets_total=len(change_sets),
+        knowledge_total=sum(item.knowledge_count for item in documents.items),
         rules_total=rules_total,
         rules_pending_review=rules_pending,
         rules_approved=rules_approved,
+        compilation_by_status=compilation_by_status,
         tasks_pending=len(tasks),
         tasks_by_type=tasks_by_type,
         change_sets_by_status={status: sum(1 for cs in change_sets if cs.status == status) for status in {cs.status for cs in change_sets}},
