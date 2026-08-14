@@ -51,6 +51,7 @@ export default defineConfig({
       env: {
         ...process.env,
         SKILL_CONTROL_DEV_MODE: '1',
+        MODEL_GOVERNANCE_DEV_MODE: '1',
         USE_MEMORY_STORAGE: '1',
       },
     },
