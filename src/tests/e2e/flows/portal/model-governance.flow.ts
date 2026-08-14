@@ -15,7 +15,7 @@ test('信息科管理模型、路由和提示词并回滚发布', async ({ page 
   const snapshotResponse = await governance.openAndWaitForSnapshot();
   expect(snapshotResponse.status()).toBe(200);
   await expect(governance.title).toBeVisible();
-  await expect(governance.promptLedgerTitle).toBeVisible();
+  await governance.verifyCurrentAssetInventories();
 
   const suffix = Date.now().toString();
   const profileId = `profile.e2e-${suffix}`;

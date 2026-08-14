@@ -7,15 +7,13 @@ export class ModelGovernancePage extends BasePage {
   readonly roleSwitcher: Locator;
   readonly modelGovernanceLink: Locator;
   readonly title: Locator;
-  readonly promptLedgerTitle: Locator;
   readonly developerIdentity: Locator;
 
   constructor(page: Page) {
     super(page, process.env.PORTAL_BASE_URL ?? 'http://127.0.0.1:3000');
     this.roleSwitcher = page.locator('header').getByRole('combobox');
-    this.modelGovernanceLink = page.getByRole('link', { name: '模型治理', exact: true });
-    this.title = page.getByRole('heading', { name: '模型与提示词治理', exact: true });
-    this.promptLedgerTitle = page.getByRole('heading', { name: '提示词台账', exact: true });
+    this.modelGovernanceLink = page.getByRole('link', { name: '后台管理', exact: true });
+    this.title = page.getByRole('heading', { name: '后台管理', exact: true });
     this.developerIdentity = page.getByLabel('开发身份');
   }
 
@@ -53,6 +51,17 @@ export class ModelGovernancePage extends BasePage {
 
   private async selectTab(name: '提示词' | '模型档案' | '路由规则' | '发布记录'): Promise<void> {
     await this.page.getByRole('tab', { name, exact: true }).click();
+  }
+
+  async verifyCurrentAssetInventories(): Promise<void> {
+    await this.selectTab('提示词');
+    await expect(this.page.getByRole('heading', { name: '当前提示词', exact: true })).toBeVisible();
+    await expect(this.page.getByRole('table', { name: '提示词台账' }).locator('tbody tr').first()).toBeVisible();
+    await this.selectTab('模型档案');
+    const modelSection = this.page.getByRole('heading', { name: '当前模型', exact: true }).locator('..');
+    await expect(modelSection.locator('.font-mono').first()).toBeVisible();
+    await this.selectTab('路由规则');
+    await expect(this.page.getByRole('table', { name: '模型路由台账' }).locator('tbody tr').first()).toBeVisible();
   }
 
   private async saveDraft(): Promise<Response> {

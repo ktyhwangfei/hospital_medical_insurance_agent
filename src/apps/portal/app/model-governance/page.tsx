@@ -140,6 +140,16 @@ export default function ModelGovernancePage() {
     { label: '路由', value: snapshot.routes.length, icon: Route },
     { label: 'Provider', value: snapshot.providers.length, icon: Server },
   ]
+  const warnings = [
+    ...snapshot.prompts.flatMap((prompt) => prompt.warnings.map((message, index) => ({
+      key: `prompt:${prompt.prompt_id}:${index}`,
+      text: `${prompt.name}：${message}`,
+    }))),
+    ...snapshot.routes.flatMap((route) => route.warnings.map((message, index) => ({
+      key: `route:${route.scene}:${route.model_type}:${index}`,
+      text: `${route.scene}：${message}`,
+    }))),
+  ]
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -151,79 +161,89 @@ export default function ModelGovernancePage() {
         <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">信息科专属</span>
       </header>
 
-      <ModelGovernanceWorkspace codeSnapshot={snapshot}>
-
-      <section aria-label="治理摘要" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {summary.map(({ label, value, icon: Icon }) => (
-          <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-xs text-slate-500"><Icon className="size-4 text-blue-600" />{label}</div>
-            <p className="mt-2 text-2xl font-semibold text-slate-800">{value}</p>
+      <ModelGovernanceWorkspace
+        codeSnapshot={snapshot}
+        overview={<>
+          <section aria-label="治理摘要" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {summary.map(({ label, value, icon: Icon }) => (
+              <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-xs text-slate-500"><Icon className="size-4 text-blue-600" />{label}</div>
+                <p className="mt-2 text-2xl font-semibold text-slate-800">{value}</p>
+              </div>
+            ))}
+          </section>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-700">治理告警</h3>
+              <div className="mt-3 space-y-2 text-xs text-amber-700">
+                {warnings.length ? warnings.map((warning) => <p key={warning.key}>{warning.text}</p>) : <p className="text-slate-500">暂无告警</p>}
+              </div>
+            </section>
+            <section aria-label="Provider 凭据状态" className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-700">Provider 凭据状态</h3>
+              <div className="mt-3 space-y-2">
+                {snapshot.providers.map((provider) => <div key={provider.provider_id} className="flex flex-wrap items-center justify-between gap-3 text-xs"><div className="min-w-0"><p className="break-all font-mono text-slate-600">{provider.provider_id}</p><p className="mt-1 break-all text-slate-500">{providerTypeLabel[provider.type]} · {redactedEndpoint(provider.endpoint)}</p></div><span className={`shrink-0 rounded px-2 py-1 ${provider.credential_status === 'configured' ? 'bg-emerald-50 text-emerald-700' : provider.credential_status === 'missing' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{credentialStatusLabel[provider.credential_status]}</span></div>)}
+              </div>
+            </section>
           </div>
-        ))}
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-5 py-4">
-          <h3 className="text-sm font-semibold text-slate-700">提示词台账</h3>
-          <p className="mt-1 text-xs text-slate-500">提示词来源、调用入口与治理状态</p>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <caption className="sr-only">提示词台账</caption>
-            <thead className="bg-slate-50 text-xs text-slate-500">
-              <tr><th className="px-5 py-3 font-medium">提示词</th><th className="px-5 py-3 font-medium">来源</th><th className="px-5 py-3 font-medium">场景</th><th className="px-5 py-3 font-medium">参数</th><th className="px-5 py-3 font-medium">状态</th></tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700">
-              {snapshot.prompts.map((prompt) => (
-                <tr key={prompt.prompt_id}>
-                  <td className="px-5 py-3"><p className="font-medium">{prompt.name}</p><p className="mt-0.5 font-mono text-xs text-slate-400">{prompt.prompt_id}</p></td>
-                  <td className="max-w-72 px-5 py-3"><p className="break-all font-mono text-xs text-slate-600">{prompt.source_path}</p><p className="mt-1 text-xs text-slate-400">{sourceKindLabel[prompt.source_kind]}</p>{prompt.related_source_paths.map((relatedSource) => <p key={relatedSource} className="mt-1 break-all font-mono text-xs text-slate-500">关联来源：{relatedSource}</p>)}</td>
-                  <td className="px-5 py-3 text-xs text-slate-600">{prompt.scene ?? '未登记场景'}</td>
-                  <td className="min-w-56 px-5 py-3 text-xs text-slate-600"><p>{parameterText('声明', prompt.declared_parameters)}</p><p className="mt-1">{parameterText('路由默认', prompt.route_defaults)}</p><p className="mt-1">{parameterText('调用覆盖', prompt.call_overrides)}</p><p className="mt-1 font-medium text-slate-700">{parameterText('实际', prompt.effective_parameters)}</p></td>
-                  <td className="px-5 py-3"><span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700">{promptStatus(prompt.gateway_status, prompt.management_status)}</span>{prompt.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-700">{warning}</p>)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-slate-700">模型概览</h3>
-          <div className="mt-4 space-y-3">
-            {snapshot.models.map((model) => <div key={model.model_name} className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 text-sm last:border-0 last:pb-0"><span className="min-w-0 break-all font-mono text-slate-700">{model.model_name}</span><span className="shrink-0 text-xs text-slate-500">温度 {model.temperature}，最大 {model.max_tokens} tokens</span></div>)}
-          </div>
-        </section>
-        <section aria-label="Provider 概览" className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-slate-700">Provider 概览</h3>
-          <div className="mt-4 space-y-3">
-            {snapshot.providers.map((provider) => <div key={provider.provider_id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 text-sm last:border-0 last:pb-0"><div className="min-w-0"><span className="break-all font-mono text-slate-700">{redactedEndpoint(provider.endpoint)}</span><p className="mt-1 text-xs text-slate-500">{providerTypeLabel[provider.type]}</p></div><span className={`rounded px-2 py-1 text-xs ${provider.credential_status === 'configured' ? 'bg-emerald-50 text-emerald-700' : provider.credential_status === 'missing' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{credentialStatusLabel[provider.credential_status]}</span></div>)}
-          </div>
-        </section>
-      </div>
-
-      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-5 py-4"><h3 className="text-sm font-semibold text-slate-700">路由台账</h3></div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <caption className="sr-only">模型路由台账</caption>
-            <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-5 py-3 font-medium">场景</th><th className="px-5 py-3 font-medium">模型类型</th><th className="px-5 py-3 font-medium">生效模型</th><th className="px-5 py-3 font-medium">路由状态</th><th className="px-5 py-3 font-medium">备用模型</th></tr></thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700">
-              {snapshot.routes.map((route) => <tr key={`${route.scene}:${route.model_type}`}><td className="break-all px-5 py-3 font-mono text-xs">{route.scene}</td><td className="break-all px-5 py-3">{route.model_type}</td><td className="break-all px-5 py-3 font-mono text-xs">{route.effective_model ?? '未解析'}</td><td className="px-5 py-3"><span className="rounded bg-blue-50 px-2 py-1 text-xs text-blue-700">{route.explicit ? '显式路由' : '默认路由'}</span>{route.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-700">{warning}</p>)}</td><td className="break-all px-5 py-3 font-mono text-xs text-slate-500">{route.fallbacks.length ? route.fallbacks.join('，') : '无'}</td></tr>)}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="text-sm font-semibold text-slate-700">来源与待核验说明</h3>
-        <div className="mt-3 grid gap-4 md:grid-cols-2">
-          <div><p className="text-xs font-medium text-slate-500">来源</p><ul className="mt-2 space-y-1 text-xs text-slate-600">{snapshot.citations.map((citation) => <li key={citation} className="break-all font-mono">{citation}</li>)}</ul></div>
-          <div><p className="text-xs font-medium text-slate-500">待核验</p><ul className="mt-2 space-y-1 text-xs text-amber-700">{snapshot.uncertainties.map((uncertainty) => <li key={uncertainty}>{uncertainty}</li>)}</ul></div>
-        </div>
-      </section>
-      </ModelGovernanceWorkspace>
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-sm font-semibold text-slate-700">来源与待核验说明</h3>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              <div><p className="text-xs font-medium text-slate-500">来源</p><ul className="mt-2 space-y-1 text-xs text-slate-600">{snapshot.citations.map((citation) => <li key={citation} className="break-all font-mono">{citation}</li>)}</ul></div>
+              <div><p className="text-xs font-medium text-slate-500">待核验</p><ul className="mt-2 space-y-1 text-xs text-amber-700">{snapshot.uncertainties.map((uncertainty) => <li key={uncertainty}>{uncertainty}</li>)}</ul></div>
+            </div>
+          </section>
+        </>}
+        promptInventory={
+          <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 px-5 py-4">
+              <h3 className="text-sm font-semibold text-slate-700">当前提示词</h3>
+              <p className="mt-1 text-xs text-slate-500">代码当前值只读；如需编辑，请先在概览导入现有配置。</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <caption className="sr-only">提示词台账</caption>
+                <thead className="bg-slate-50 text-xs text-slate-500">
+                  <tr><th className="px-5 py-3 font-medium">提示词</th><th className="px-5 py-3 font-medium">来源</th><th className="px-5 py-3 font-medium">场景</th><th className="px-5 py-3 font-medium">参数</th><th className="px-5 py-3 font-medium">状态</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {snapshot.prompts.map((prompt) => (
+                    <tr key={prompt.prompt_id}>
+                      <td className="px-5 py-3"><p className="font-medium">{prompt.name}</p><p className="mt-0.5 font-mono text-xs text-slate-400">{prompt.prompt_id}</p></td>
+                      <td className="max-w-72 px-5 py-3"><p className="break-all font-mono text-xs text-slate-600">{prompt.source_path}</p><p className="mt-1 text-xs text-slate-400">{sourceKindLabel[prompt.source_kind]}</p>{prompt.related_source_paths.map((relatedSource) => <p key={relatedSource} className="mt-1 break-all font-mono text-xs text-slate-500">关联来源：{relatedSource}</p>)}</td>
+                      <td className="px-5 py-3 text-xs text-slate-600">{prompt.scene ?? '未登记场景'}</td>
+                      <td className="min-w-56 px-5 py-3 text-xs text-slate-600"><p>{parameterText('声明', prompt.declared_parameters)}</p><p className="mt-1">{parameterText('路由默认', prompt.route_defaults)}</p><p className="mt-1">{parameterText('调用覆盖', prompt.call_overrides)}</p><p className="mt-1 font-medium text-slate-700">{parameterText('实际', prompt.effective_parameters)}</p></td>
+                      <td className="px-5 py-3"><span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700">{promptStatus(prompt.gateway_status, prompt.management_status)}</span>{prompt.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-700">{warning}</p>)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        }
+        modelInventory={
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-sm font-semibold text-slate-700">当前模型</h3>
+            <div className="mt-4 space-y-3">
+              {snapshot.models.map((model) => <div key={model.model_name} className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 text-sm last:border-0 last:pb-0"><span className="min-w-0 break-all font-mono text-slate-700">{model.model_name}</span><span className="shrink-0 text-xs text-slate-500">温度 {model.temperature}，最大 {model.max_tokens} tokens</span></div>)}
+            </div>
+          </section>
+        }
+        routeInventory={
+          <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 px-5 py-4"><h3 className="text-sm font-semibold text-slate-700">当前路由</h3></div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <caption className="sr-only">模型路由台账</caption>
+                <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="px-5 py-3 font-medium">场景</th><th className="px-5 py-3 font-medium">模型类型</th><th className="px-5 py-3 font-medium">生效模型</th><th className="px-5 py-3 font-medium">路由状态</th><th className="px-5 py-3 font-medium">备用模型</th></tr></thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {snapshot.routes.map((route) => <tr key={`${route.scene}:${route.model_type}`}><td className="break-all px-5 py-3 font-mono text-xs">{route.scene}</td><td className="break-all px-5 py-3">{route.model_type}</td><td className="break-all px-5 py-3 font-mono text-xs">{route.effective_model ?? '未解析'}</td><td className="px-5 py-3"><span className="rounded bg-blue-50 px-2 py-1 text-xs text-blue-700">{route.explicit ? '显式路由' : '默认路由'}</span>{route.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-700">{warning}</p>)}</td><td className="break-all px-5 py-3 font-mono text-xs text-slate-500">{route.fallbacks.length ? route.fallbacks.join('，') : '无'}</td></tr>)}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        }
+      />
     </div>
   )
 }

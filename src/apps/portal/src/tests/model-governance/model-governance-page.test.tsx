@@ -161,7 +161,7 @@ afterEach(() => {
 })
 
 describe('模型治理页', () => {
-  it('默认展示后台管理概览、治理状态和现有台账', async () => {
+  it('默认概览集中展示治理状态、告警和来源，不展开资产明细', async () => {
     render(<ModelGovernancePage />)
 
     expect(await screen.findByRole('heading', { name: '后台管理' })).toBeInTheDocument()
@@ -174,32 +174,16 @@ describe('模型治理页', () => {
     const governanceSummary = screen.getByLabelText('治理摘要')
     await waitFor(() => expect(within(governanceSummary).getByText('11')).toBeInTheDocument())
 
-    const promptTable = screen.getByRole('table', { name: '提示词台账' })
-    expect(within(promptTable).getByText('意图分类')).toBeInTheDocument()
-    expect(within(promptTable).getByText('直连待迁移')).toBeInTheDocument()
-    expect(within(promptTable).getByText(/deepseek_llm_client\.py/)).toBeInTheDocument()
-    const skillRow = within(promptTable).getByText('结算解释技能').closest('tr')
-    expect(skillRow).not.toBeNull()
-    expect(within(skillRow!).getByText('声明：温度 0.3，最大 1024')).toBeInTheDocument()
-    expect(within(skillRow!).getByText('路由默认：温度 0.1，最大 4096')).toBeInTheDocument()
-    expect(within(skillRow!).getByText('调用覆盖：未覆盖')).toBeInTheDocument()
-    expect(within(skillRow!).getByText('实际：温度 0.1，最大 4096')).toBeInTheDocument()
-    expect(within(skillRow!).getByText(/声明参数.*实际生效/)).toBeInTheDocument()
-
-    const routeTable = screen.getByRole('table', { name: '模型路由台账' })
-    expect(within(routeTable).getByText('默认路由')).toBeInTheDocument()
-    expect(within(routeTable).getByText('显式路由')).toBeInTheDocument()
-    expect(within(routeTable).getAllByText('gpt-4.1-mini-with-a-very-long-model-name')[0]).toHaveClass('break-all')
-
-    const providerOverview = screen.getByLabelText('Provider 概览')
-    expect(within(providerOverview).getByText('开发夹具')).toBeInTheDocument()
-    expect(within(providerOverview).getByText('凭据不适用')).toBeInTheDocument()
-    expect(within(providerOverview).getByText('dummy')).toHaveClass('break-all')
+    expect(screen.queryByRole('table', { name: '提示词台账' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: '模型路由台账' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Provider 概览')).not.toBeInTheDocument()
+    expect(screen.getByText(/声明参数.*实际生效/)).toBeInTheDocument()
+    expect(screen.getByText('凭据不适用')).toBeInTheDocument()
     expect(screen.getByText('遗留提示词调用可达性仍待核验')).toBeInTheDocument()
     expect(screen.getByText('src/config/model_service.py')).toBeInTheDocument()
   })
 
-  it('按顺序展示五个工作区，资产页不重复概览台账', async () => {
+  it('提示词、模型和路由页在治理草稿为空时仍展示当前代码资产', async () => {
     const user = userEvent.setup()
     render(<ModelGovernancePage />)
 
@@ -210,9 +194,21 @@ describe('模型治理页', () => {
 
     await user.click(screen.getByRole('tab', { name: '提示词' }))
     expect(screen.queryByLabelText('治理摘要')).not.toBeInTheDocument()
-    expect(screen.queryByRole('table', { name: '提示词台账' })).not.toBeInTheDocument()
+    const promptTable = screen.getByRole('table', { name: '提示词台账' })
+    expect(within(promptTable).getByText('意图分类')).toBeInTheDocument()
+    expect(within(promptTable).getByText('直连待迁移')).toBeInTheDocument()
+    expect(within(promptTable).getByText(/deepseek_llm_client\.py/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '导入现有配置' })).not.toBeInTheDocument()
     expect(screen.getByText('暂无提示词草稿')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '模型档案' }))
+    expect(screen.getByText('gpt-4.1-mini-with-a-very-long-model-name')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Provider 概览')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '路由规则' }))
+    const routeTable = screen.getByRole('table', { name: '模型路由台账' })
+    expect(within(routeTable).getByText('默认路由')).toBeInTheDocument()
+    expect(within(routeTable).getByText('显式路由')).toBeInTheDocument()
   })
 
   it('发布记录页不重复概览台账', async () => {
@@ -347,7 +343,7 @@ describe('模型治理页', () => {
     expect(screen.getByRole('status')).toHaveTextContent('已导入 11 个提示词、2 个模型档案、5 条路由规则')
     await user.click(screen.getByRole('tab', { name: '提示词' }))
     const panel = screen.getByRole('tabpanel')
-    expect(await within(panel).findByText('intent.classify')).toBeInTheDocument()
+    expect((await within(panel).findAllByText('intent.classify')).length).toBeGreaterThanOrEqual(2)
     await user.click(within(panel).getByRole('button', { name: '编辑' }))
     expect(screen.getByLabelText('输出模式')).toHaveValue('json')
     expect(screen.getByLabelText(/提示词变量/)).toHaveValue('message|必填|用户消息')
@@ -452,7 +448,7 @@ describe('模型治理页', () => {
     vi.mocked(getModelGovernanceSnapshot).mockResolvedValue({
       ...snapshotFixture,
       providers: [{
-        provider_id: 'default',
+        provider_id: 'provider-with-a-very-long-identifier-that-must-wrap-on-mobile',
         type: 'openai_compatible',
         endpoint: 'https://provider.example:8443',
         credential_status: 'missing',
@@ -464,6 +460,7 @@ describe('模型治理页', () => {
     const credentialStatus = await screen.findByText('未配置凭据')
     expect(credentialStatus).toHaveClass('bg-amber-50')
     expect(credentialStatus).not.toHaveClass('bg-emerald-50')
+    expect(screen.getByText('provider-with-a-very-long-identifier-that-must-wrap-on-mobile')).toHaveClass('break-all')
   })
 
   it('侧栏仅向信息部门角色提供底部后台管理入口', async () => {

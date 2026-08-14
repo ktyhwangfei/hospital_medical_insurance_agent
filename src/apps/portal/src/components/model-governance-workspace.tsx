@@ -191,10 +191,16 @@ function codeSource(snapshot: ModelGovernanceSnapshot, draft: GovernanceDraft): 
 
 export function ModelGovernanceWorkspace({
   codeSnapshot,
-  children,
+  overview,
+  promptInventory,
+  modelInventory,
+  routeInventory,
 }: {
   codeSnapshot: ModelGovernanceSnapshot
-  children: ReactNode
+  overview: ReactNode
+  promptInventory: ReactNode
+  modelInventory: ReactNode
+  routeInventory: ReactNode
 }) {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('overview')
   const [identity, setIdentity] = useState<GovernanceDevIdentity>('editor')
@@ -457,15 +463,18 @@ export function ModelGovernanceWorkspace({
                 className="rounded border border-blue-300 bg-white px-3 py-2 text-xs font-medium text-blue-700 disabled:opacity-50"
               >导入现有配置</button>
             </div>
-            {children}
+            {overview}
           </div>
         )}
 
         {activeTab !== 'overview' && activeTab !== 'releases' && (
           <>
+            {activeTab === 'prompt' && promptInventory}
+            {activeTab === 'model_profile' && modelInventory}
+            {activeTab === 'route_rule' && routeInventory}
             <button
               type="button"
-              className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+              className="mt-6 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
               onClick={(event) => openNew(activeTab, event.currentTarget)}
               disabled={busy}
             >新建{typeLabel}</button>
