@@ -1,6 +1,7 @@
 import json
 
 from src.config.model_service import ModelServiceConfig
+from src.config.model_routing import MODEL_PARAMS, ROUTING_TABLE
 from src.model_service.governance import build_governance_snapshot
 
 
@@ -15,8 +16,11 @@ def test_snapshot_has_complete_prompt_assets_and_stable_config_projection():
     assert snapshot.providers[0].endpoint == "https://example.test:8443"
     dumped = json.dumps(snapshot.model_dump(), ensure_ascii=False)
     assert "top-secret" not in dumped and "secret" not in dumped
-    assert snapshot.models[0].temperature == 0.0 or snapshot.models[0].temperature == 0.1
-    assert next(model for model in snapshot.models if model.model_name == "deepseek-chat").max_tokens == 4096
+    projected = {model.model_name: model for model in snapshot.models}
+    assert set(projected) >= set(MODEL_PARAMS)
+    for model_name, params in MODEL_PARAMS.items():
+        assert projected[model_name].temperature == params["temperature"]
+        assert projected[model_name].max_tokens == params["max_tokens"]
 
 
 def test_implicit_and_explicit_routes_are_distinguished_without_direct_fabrication():
@@ -29,5 +33,12 @@ def test_implicit_and_explicit_routes_are_distinguished_without_direct_fabricati
     assert fee.effective_model == "deepseek-chat"
     direct = next(prompt for prompt in snapshot.prompts if prompt.prompt_id == "policy.fact_extract")
     assert direct.gateway_status == "direct"
-    assert not any(route.scene == "policy_fact_extraction" for route in snapshot.routes)
+    assert direct.scene is None
+    expected_route_keys = set(ROUTING_TABLE)
+    expected_route_keys.update(
+        (prompt.scene, prompt.model_type)
+        for prompt in snapshot.prompts
+        if prompt.gateway_status == "routed" and prompt.scene
+    )
+    assert {(route.scene, route.model_type) for route in snapshot.routes} == expected_route_keys
     assert any("遗留" in uncertainty for uncertainty in snapshot.uncertainties)
