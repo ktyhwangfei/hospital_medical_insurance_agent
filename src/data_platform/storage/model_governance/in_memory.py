@@ -105,6 +105,27 @@ class InMemoryModelGovernanceStorage:
             self._approvals[approval.approval_id] = self._copy(approval)
             return self._copy(approval)
 
+    def approve_draft(
+        self,
+        draft: GovernanceDraft,
+        approval: GovernanceApproval,
+        *,
+        expected_revision: int,
+    ) -> GovernanceDraft:
+        with self._lock:
+            current = self._drafts.get(draft.draft_id)
+            if current is None:
+                raise ModelGovernanceNotFoundError("草稿不存在")
+            if current.revision != expected_revision:
+                raise ModelGovernanceConflictError("草稿 revision 已变化")
+            if draft.revision != expected_revision + 1:
+                raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
+            if approval.approval_id in self._approvals:
+                raise ModelGovernanceConflictError("审批记录已存在")
+            self._approvals[approval.approval_id] = self._copy(approval)
+            self._drafts[draft.draft_id] = self._copy(draft)
+            return self._copy(draft)
+
     def get_approval(self, approval_id: str) -> GovernanceApproval:
         with self._lock:
             try:
@@ -174,4 +195,3 @@ class InMemoryModelGovernanceStorage:
                 ):
                     return self._copy(item)
             return None
-

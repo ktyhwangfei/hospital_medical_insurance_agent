@@ -215,8 +215,7 @@ class ModelGovernanceService:
             approved_by=actor,
             reason=reason,
         )
-        self._storage.save_approval(approval)
-        return self._storage.update_draft(
+        return self._storage.approve_draft(
             draft.model_copy(
                 update={
                     "status": GovernanceDraftStatus.APPROVED,
@@ -225,6 +224,7 @@ class ModelGovernanceService:
                 },
                 deep=True,
             ),
+            approval,
             expected_revision=expected_revision,
         )
 

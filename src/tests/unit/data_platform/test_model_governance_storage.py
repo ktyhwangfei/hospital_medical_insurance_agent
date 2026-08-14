@@ -179,6 +179,37 @@ def test_storage_keeps_approval_and_lists_releases_newest_first():
     ]
 
 
+def test_approval_and_draft_transition_are_atomic_on_revision_conflict():
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+    from src.data_platform.storage.model_governance.ports import (
+        ModelGovernanceConflictError,
+        ModelGovernanceNotFoundError,
+    )
+
+    storage = InMemoryModelGovernanceStorage()
+    current = storage.create_draft(_draft())
+    approval = GovernanceApproval(
+        approval_id="approval-atomic",
+        draft_id=current.draft_id,
+        asset_id=current.asset_id,
+        content_hash="b" * 64,
+        approved_by="reviewer",
+        reason="审核通过",
+        approved_at=NOW,
+    )
+
+    with pytest.raises(ModelGovernanceConflictError, match="revision"):
+        storage.approve_draft(
+            current.model_copy(update={"revision": 2}),
+            approval,
+            expected_revision=2,
+        )
+    with pytest.raises(ModelGovernanceNotFoundError):
+        storage.get_approval(approval.approval_id)
+
+
 def test_postgres_schema_has_revision_and_unique_active_release():
     from src.data_platform.storage.model_governance.postgres import (
         MODEL_GOVERNANCE_TABLE_SCHEMA,

@@ -219,6 +219,42 @@ class PostgresModelGovernanceStorage:
             raise ModelGovernanceConflictError("审批记录已存在") from exc
         return self._approval(rows[0])
 
+    def approve_draft(
+        self,
+        draft: GovernanceDraft,
+        approval: GovernanceApproval,
+        *,
+        expected_revision: int,
+    ) -> GovernanceDraft:
+        if draft.revision != expected_revision + 1:
+            raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
+        client = self._get_client()
+        try:
+            with client.transaction():
+                client.execute(
+                    """INSERT INTO model_governance_approvals
+                       (approval_id, draft_id, asset_id, content_hash, approved_by, reason, approved_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                    (approval.approval_id, approval.draft_id, approval.asset_id,
+                     approval.content_hash, approval.approved_by, approval.reason,
+                     approval.approved_at),
+                )
+                rows = client.execute(
+                    """UPDATE model_governance_drafts SET content=%s, status=%s, revision=%s,
+                       validation_issues=%s, last_edited_by=%s, updated_at=%s
+                       WHERE draft_id=%s AND revision=%s RETURNING *""",
+                    (_json(draft.content), draft.status.value, draft.revision,
+                     _json(draft.validation_issues), draft.last_edited_by, draft.updated_at,
+                     draft.draft_id, expected_revision),
+                )
+                if not rows:
+                    raise ModelGovernanceConflictError("草稿 revision 已变化或草稿不存在")
+        except ModelGovernanceConflictError:
+            raise
+        except Exception as exc:
+            raise ModelGovernanceConflictError("审批记录已存在") from exc
+        return self._draft(rows[0])
+
     def get_approval(self, approval_id: str) -> GovernanceApproval:
         rows = self._get_client().execute(
             "SELECT * FROM model_governance_approvals WHERE approval_id=%s", (approval_id,)

@@ -41,6 +41,14 @@ class ModelGovernanceStorage(Protocol):
 
     def save_approval(self, approval: GovernanceApproval) -> GovernanceApproval: ...
 
+    def approve_draft(
+        self,
+        draft: GovernanceDraft,
+        approval: GovernanceApproval,
+        *,
+        expected_revision: int,
+    ) -> GovernanceDraft: ...
+
     def get_approval(self, approval_id: str) -> GovernanceApproval: ...
 
     def publish(self, release: GovernanceRelease) -> GovernanceRelease: ...
@@ -56,4 +64,3 @@ class ModelGovernanceStorage(Protocol):
     def get_active_release(
         self, asset_id: str, environment: GovernanceEnvironment
     ) -> GovernanceRelease | None: ...
-
