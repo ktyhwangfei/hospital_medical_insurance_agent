@@ -1,6 +1,12 @@
+import os
+
 from fastapi.testclient import TestClient
 
 from src.runtime.api.app import create_app
+
+
+def test_test_environment_defaults_to_memory_storage():
+    assert os.environ.get("USE_MEMORY_STORAGE") == "1"
 
 
 def test_model_governance_snapshot_is_read_only_and_redacted(monkeypatch):
