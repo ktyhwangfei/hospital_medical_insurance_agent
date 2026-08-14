@@ -1,5 +1,6 @@
 """模型与提示词治理只读接口。"""
 
+import os
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -24,6 +25,18 @@ class ModelGovernanceResponse(AgentResponse):
 def require_model_governance_read(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> None:
+    if os.getenv("MODEL_GOVERNANCE_DEV_MODE", "").lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        raise HTTPException(
+            status_code=403,
+            detail=error_detail(
+                "MODEL_GOVERNANCE_DISABLED",
+                "生产真实认证未接入，模型治理端点默认关闭；仅可在显式开发模式下启用",
+            ),
+        )
     if not authorization:
         raise HTTPException(
             status_code=401,

@@ -41,6 +41,7 @@ def test_model_governance_snapshot_drives_gateway_route(monkeypatch):
     )
     monkeypatch.setattr("src.model_service.gateway._record_llm_event", lambda **kwargs: None)
     monkeypatch.setenv("USE_MEMORY_STORAGE", "1")
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
     monkeypatch.setenv("MODEL_API_KEY", "governance-test-key")
     monkeypatch.setenv("MODEL_BASE_URL", "https://example.test/v1")
 

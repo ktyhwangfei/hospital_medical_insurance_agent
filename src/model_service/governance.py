@@ -229,5 +229,8 @@ def build_governance_snapshot(config: ModelServiceConfig | None = None) -> Model
         routes=routes,
         providers=[provider],
         citations=["src/config/model_service.py", "src/config/model_routing.py", "docs/superpowers/specs/2026-08-14-提示词与模型统一治理设计.md"],
-        uncertainties=["遗留提示词调用可达性仍待核验"],
+        uncertainties=[
+            "遗留提示词调用可达性仍待核验",
+            "生产认证未接入，模型治理端点默认关闭",
+        ],
     )

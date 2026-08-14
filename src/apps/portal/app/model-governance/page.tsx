@@ -163,7 +163,7 @@ export default function ModelGovernancePage() {
               {snapshot.prompts.map((prompt) => (
                 <tr key={prompt.prompt_id}>
                   <td className="px-5 py-3"><p className="font-medium">{prompt.name}</p><p className="mt-0.5 font-mono text-xs text-slate-400">{prompt.prompt_id}</p></td>
-                  <td className="max-w-72 px-5 py-3"><p className="break-all font-mono text-xs text-slate-600">{prompt.source_path}</p><p className="mt-1 text-xs text-slate-400">{sourceKindLabel[prompt.source_kind]}</p></td>
+                  <td className="max-w-72 px-5 py-3"><p className="break-all font-mono text-xs text-slate-600">{prompt.source_path}</p><p className="mt-1 text-xs text-slate-400">{sourceKindLabel[prompt.source_kind]}</p>{prompt.related_source_paths.map((relatedSource) => <p key={relatedSource} className="mt-1 break-all font-mono text-xs text-slate-500">关联来源：{relatedSource}</p>)}</td>
                   <td className="px-5 py-3 text-xs text-slate-600">{prompt.scene ?? '未登记场景'}</td>
                   <td className="min-w-56 px-5 py-3 text-xs text-slate-600"><p>{parameterText('声明', prompt.declared_parameters)}</p><p className="mt-1">{parameterText('路由默认', prompt.route_defaults)}</p><p className="mt-1">{parameterText('调用覆盖', prompt.call_overrides)}</p><p className="mt-1 font-medium text-slate-700">{parameterText('实际', prompt.effective_parameters)}</p></td>
                   <td className="px-5 py-3"><span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700">{promptStatus(prompt.gateway_status, prompt.management_status)}</span>{prompt.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-700">{warning}</p>)}</td>

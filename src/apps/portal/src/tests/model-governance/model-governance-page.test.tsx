@@ -28,7 +28,9 @@ const promptFixture: ModelGovernanceSnapshot['prompts'] = Array.from({ length: 1
       : isSkill
         ? 'skills/settlement_explain_skill/templates/prompt_template.yaml'
         : `src/prompts/${index}.py`,
-    related_source_paths: [],
+    related_source_paths: index === 3
+      ? ['src/knowledge_extension/rule_explanation/policy_fact/deepseek_llm_client.py']
+      : [],
     source_kind: isSkill ? 'yaml' : 'code',
     scene: index === 0 ? 'intent_recognition' : isSkill ? 'fee_explanation' : null,
     model_type: 'llm',
@@ -112,6 +114,7 @@ describe('模型治理页', () => {
     const promptTable = screen.getByRole('table', { name: '提示词台账' })
     expect(within(promptTable).getByText('意图分类')).toBeInTheDocument()
     expect(within(promptTable).getByText('直连待迁移')).toBeInTheDocument()
+    expect(within(promptTable).getByText(/deepseek_llm_client\.py/)).toBeInTheDocument()
     const skillRow = within(promptTable).getByText('结算解释技能').closest('tr')
     expect(skillRow).not.toBeNull()
     expect(within(skillRow!).getByText('声明：温度 0.3，最大 1024')).toBeInTheDocument()

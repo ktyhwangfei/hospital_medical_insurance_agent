@@ -48,6 +48,10 @@ def test_implicit_and_explicit_routes_are_distinguished_without_direct_fabricati
     )
     assert {(route.scene, route.model_type) for route in snapshot.routes} == expected_route_keys
     assert any("遗留" in uncertainty for uncertainty in snapshot.uncertainties)
+    assert any(
+        "生产认证未接入" in uncertainty and "默认关闭" in uncertainty
+        for uncertainty in snapshot.uncertainties
+    )
 
 
 def test_fallback_only_models_are_projected_with_router_defaults(monkeypatch):

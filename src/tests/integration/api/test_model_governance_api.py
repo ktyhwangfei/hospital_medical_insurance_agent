@@ -30,6 +30,7 @@ def test_model_governance_snapshot_requires_permission_and_returns_typed_envelop
         return None
 
     monkeypatch.setenv("USE_MEMORY_STORAGE", "1")
+    monkeypatch.delenv("MODEL_GOVERNANCE_DEV_MODE", raising=False)
     monkeypatch.setenv("MODEL_API_KEY", "temporary-secret-key")
     monkeypatch.setenv(
         "MODEL_BASE_URL", "https://user:password@example.test:8443/v1?q=1"
@@ -46,6 +47,12 @@ def test_model_governance_snapshot_requires_permission_and_returns_typed_envelop
     from src.runtime.api.app import create_app
 
     client = TestClient(create_app())
+    disabled = client.get(SNAPSHOT_PATH)
+    assert disabled.status_code == 403
+    assert disabled.json()["detail"]["error_code"] == "MODEL_GOVERNANCE_DISABLED"
+    assert "真实认证未接入" in disabled.json()["detail"]["message"]
+
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "true")
     assert client.get(SNAPSHOT_PATH).status_code == 401
     forbidden = client.get(
         SNAPSHOT_PATH,
