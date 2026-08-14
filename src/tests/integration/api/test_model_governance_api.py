@@ -4,12 +4,27 @@ from src.runtime.api.app import create_app
 
 
 def test_model_governance_snapshot_is_read_only_and_redacted(monkeypatch):
+    async def no_op_session(self, *args):
+        return None
+
+    async def no_op_audit(self, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "src.gateway.api_gateway.audit_middleware.GatewayAuditMiddleware._write_session",
+        no_op_session,
+    )
+    monkeypatch.setattr(
+        "src.gateway.api_gateway.audit_middleware.GatewayAuditMiddleware._write_audit",
+        no_op_audit,
+    )
     monkeypatch.setenv("MODEL_API_KEY", "temporary-secret-key")
     monkeypatch.setenv(
         "MODEL_BASE_URL", "https://user:password@example.test:8443/v1?q=1"
     )
 
-    response = TestClient(create_app()).get(
+    client = TestClient(create_app())
+    response = client.get(
         "/api/v1/medical-insurance-ai-agent/model-governance/snapshot"
     )
 
@@ -28,6 +43,6 @@ def test_model_governance_snapshot_is_read_only_and_redacted(monkeypatch):
     assert "user:password" not in serialized
     assert "/v1" not in serialized
     assert "q=1" not in serialized
-    assert TestClient(create_app()).post(
+    assert client.post(
         "/api/v1/medical-insurance-ai-agent/model-governance/snapshot"
     ).status_code == 405
