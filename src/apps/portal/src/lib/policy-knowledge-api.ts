@@ -942,9 +942,11 @@ export const resolveDecisionTask = (taskId: string, decision: Record<string, unk
 export interface GovernanceDashboard {
   documents_total: number
   change_sets_total: number
+  knowledge_total: number
   rules_total: number
   rules_pending_review: number
   rules_approved: number
+  compilation_by_status: Record<string, number>
   tasks_pending: number
   tasks_by_type: Record<string, number>
   change_sets_by_status: Record<string, number>
@@ -961,6 +963,9 @@ export const getGovernanceDashboard = () =>
 export interface PipelineSummary {
   documents_count: number
   documents_raw: number
+  units_count: number
+  units_audited: number
+  units_pending: number
   extractions_count: number
   extractions_draft: number
   extractions_reviewed: number
