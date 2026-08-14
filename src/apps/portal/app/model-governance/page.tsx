@@ -104,7 +104,7 @@ export default function ModelGovernancePage() {
       <section role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800">
         <div className="flex items-center gap-2 font-medium">
           <AlertTriangle className="size-4" />
-          无权查看模型治理台账
+          无权查看后台管理
         </div>
         <p className="mt-1 text-xs text-amber-700">仅信息科角色可读取此页面。</p>
         <button
@@ -145,13 +145,13 @@ export default function ModelGovernancePage() {
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <header className="flex flex-wrap items-start gap-3">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight text-slate-800">模型与提示词治理</h2>
-          <p className="mt-1 text-sm text-slate-500">在开发/测试环境管理治理库，并对照当前代码配置</p>
+          <h2 className="text-xl font-semibold tracking-tight text-slate-800">后台管理</h2>
+          <p className="mt-1 text-sm text-slate-500">管理提示词、模型档案、路由规则和发布记录，并对照当前代码配置</p>
         </div>
-        <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">只读台账</span>
+        <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">信息科专属</span>
       </header>
 
-      <ModelGovernanceWorkspace codeSnapshot={snapshot} />
+      <ModelGovernanceWorkspace codeSnapshot={snapshot}>
 
       <section aria-label="治理摘要" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {summary.map(({ label, value, icon: Icon }) => (
@@ -223,6 +223,7 @@ export default function ModelGovernancePage() {
           <div><p className="text-xs font-medium text-slate-500">待核验</p><ul className="mt-2 space-y-1 text-xs text-amber-700">{snapshot.uncertainties.map((uncertainty) => <li key={uncertainty}>{uncertainty}</li>)}</ul></div>
         </div>
       </section>
+      </ModelGovernanceWorkspace>
     </div>
   )
 }

@@ -1,11 +1,10 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import type { ReactNode } from 'react'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ModelGovernancePage from '../../../app/model-governance/page'
-import { useRoleContext } from '../../../app/layout'
+import { LayoutShell, useRoleContext } from '../../../app/layout'
 import {
   createGovernanceDraft,
   deleteGovernanceDraft,
@@ -13,10 +12,26 @@ import {
   getGovernanceReleases,
   getModelGovernanceSnapshot,
   importCurrentGovernanceAssets,
+  updateGovernanceDraft,
+  type GovernanceDraft,
   type ModelGovernanceSnapshot,
 } from '@/lib/model-governance-api'
 
-vi.mock('../../../app/layout', () => ({ useRoleContext: vi.fn() }))
+vi.mock('next/navigation', () => ({ usePathname: () => '/policy-qa' }))
+vi.mock('next/font/google', () => ({ Noto_Sans_SC: () => ({ variable: '' }) }))
+vi.mock('@/lib/api-context', () => ({
+  ApiProvider: ({ children }: { children: ReactNode }) => children,
+  useApiContext: () => ({ connectionStatus: 'unknown' }),
+}))
+vi.mock('@/components/role-switcher', () => ({
+  default: ({ onRoleChange }: { onRoleChange: (role: 'information_department') => void }) => (
+    <button type="button" onClick={() => onRoleChange('information_department')}>切换信息科角色</button>
+  ),
+}))
+vi.mock('../../../app/layout', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../app/layout')>()),
+  useRoleContext: vi.fn(),
+}))
 vi.mock('@/lib/model-governance-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/model-governance-api')>()),
   getModelGovernanceSnapshot: vi.fn(),
@@ -25,6 +40,7 @@ vi.mock('@/lib/model-governance-api', async (importOriginal) => ({
   createGovernanceDraft: vi.fn(),
   deleteGovernanceDraft: vi.fn(),
   importCurrentGovernanceAssets: vi.fn(),
+  updateGovernanceDraft: vi.fn(),
 }))
 
 const emptyParameters = { temperature: null, max_tokens: null }
@@ -98,6 +114,30 @@ const snapshotFixture: ModelGovernanceSnapshot = {
   uncertainties: ['遗留提示词调用可达性仍待核验'],
 }
 
+const draftFixture: GovernanceDraft = {
+  draft_id: 'draft-1',
+  asset_id: 'prompt.demo',
+  asset_type: 'prompt',
+  content: {
+    asset_type: 'prompt',
+    asset_id: 'prompt.demo',
+    name: '演示提示词',
+    scene: 'policy_qa',
+    model_type: 'llm',
+    system_prompt: '只输出事实',
+    user_prompt_template: '问题：{question}',
+    variables: [{ name: 'question', required: true, description: '' }],
+    output_mode: 'text',
+  },
+  status: 'editing',
+  revision: 1,
+  validation_issues: [],
+  created_by: 'editor',
+  last_edited_by: 'editor',
+  created_at: '2026-08-14T00:00:00Z',
+  updated_at: '2026-08-14T00:00:00Z',
+}
+
 beforeEach(() => {
   vi.mocked(useRoleContext).mockReturnValue({
     currentRole: 'information_department',
@@ -109,6 +149,7 @@ beforeEach(() => {
   vi.mocked(createGovernanceDraft).mockReset()
   vi.mocked(deleteGovernanceDraft).mockReset()
   vi.mocked(importCurrentGovernanceAssets).mockReset()
+  vi.mocked(updateGovernanceDraft).mockReset()
   vi.mocked(getModelGovernanceSnapshot).mockResolvedValue(snapshotFixture)
   vi.mocked(getGovernanceAssets).mockResolvedValue({ drafts: [], published: [] })
   vi.mocked(getGovernanceReleases).mockResolvedValue([])
@@ -120,12 +161,16 @@ afterEach(() => {
 })
 
 describe('模型治理页', () => {
-  it('信息部门可读取只读台账，并看到参数来源、不一致告警和开发夹具', async () => {
+  it('默认展示后台管理概览、治理状态和现有台账', async () => {
     render(<ModelGovernancePage />)
 
-    expect(await screen.findByRole('heading', { name: '模型与提示词治理' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '后台管理' })).toBeInTheDocument()
+    expect(screen.getByText(/提示词、模型档案、路由规则和发布记录/)).toBeInTheDocument()
     expect(getModelGovernanceSnapshot).toHaveBeenCalledOnce()
-    expect(screen.getByText('只读台账')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '概览' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText('发布内容尚未接入运行时，不会改变当前业务调用。')).toBeInTheDocument()
+    expect(screen.getByText('运行时接入')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '导入现有配置' })).toBeInTheDocument()
     const governanceSummary = screen.getByLabelText('治理摘要')
     await waitFor(() => expect(within(governanceSummary).getByText('11')).toBeInTheDocument())
 
@@ -154,41 +199,114 @@ describe('模型治理页', () => {
     expect(screen.getByText('src/config/model_service.py')).toBeInTheDocument()
   })
 
+  it('按顺序展示五个工作区，资产页不重复概览台账', async () => {
+    const user = userEvent.setup()
+    render(<ModelGovernancePage />)
+
+    await screen.findByRole('tab', { name: '概览' })
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      '概览', '提示词', '模型档案', '路由规则', '发布记录',
+    ])
+
+    await user.click(screen.getByRole('tab', { name: '提示词' }))
+    expect(screen.queryByLabelText('治理摘要')).not.toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: '提示词台账' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '导入现有配置' })).not.toBeInTheDocument()
+    expect(screen.getByText('暂无提示词草稿')).toBeInTheDocument()
+  })
+
+  it('发布记录页不重复概览台账', async () => {
+    const user = userEvent.setup()
+    render(<ModelGovernancePage />)
+
+    await user.click(await screen.findByRole('tab', { name: '发布记录' }))
+    const panel = screen.getByRole('tabpanel')
+    expect(within(panel).getByText('暂无发布记录')).toBeInTheDocument()
+    expect(within(panel).queryByLabelText('治理摘要')).not.toBeInTheDocument()
+    expect(within(panel).queryByRole('table', { name: '提示词台账' })).not.toBeInTheDocument()
+    expect(within(panel).queryByRole('button', { name: '导入现有配置' })).not.toBeInTheDocument()
+  })
+
   it('创建提示词草稿并明确展示尚未发布', async () => {
     const user = userEvent.setup()
-    vi.mocked(createGovernanceDraft).mockResolvedValue({
-      draft_id: 'draft-1',
-      asset_id: 'prompt.demo',
-      asset_type: 'prompt',
-      content: {
-        asset_type: 'prompt',
-        asset_id: 'prompt.demo',
-        name: '演示提示词',
-        scene: 'policy_qa',
-        model_type: 'llm',
-        system_prompt: '只输出事实',
-        user_prompt_template: '问题：{question}',
-        variables: [{ name: 'question', required: true, description: '' }],
-        output_mode: 'text',
-      },
-      status: 'editing',
-      revision: 1,
-      validation_issues: [],
-      created_by: 'editor',
-      last_edited_by: 'editor',
-      created_at: '2026-08-14T00:00:00Z',
-      updated_at: '2026-08-14T00:00:00Z',
-    })
+    vi.mocked(createGovernanceDraft).mockResolvedValue(draftFixture)
 
     render(<ModelGovernancePage />)
     await user.click(await screen.findByRole('tab', { name: '提示词' }))
-    await user.click(screen.getByRole('button', { name: '新建提示词' }))
+    const trigger = screen.getByRole('button', { name: '新建提示词' })
+    await user.click(trigger)
+    const drawer = screen.getByRole('dialog', { name: '新建提示词' })
+    expect(drawer).toHaveAttribute('aria-modal', 'true')
+    expect(drawer).toHaveClass('w-full', 'md:max-w-[560px]')
+    expect(drawer).not.toHaveClass('max-w-[560px]')
+    expect(within(drawer).getByText(/资产 ID：尚未分配.*尚未保存/)).toBeInTheDocument()
+    await waitFor(() => expect(drawer).toContainElement(document.activeElement as HTMLElement))
+    await user.tab({ shift: true })
+    expect(
+      drawer.contains(document.activeElement)
+      || document.activeElement?.hasAttribute('data-base-ui-focus-guard'),
+    ).toBe(true)
+    expect(trigger).not.toHaveFocus()
+    await user.tab()
+    expect(
+      drawer.contains(document.activeElement)
+      || document.activeElement?.hasAttribute('data-base-ui-focus-guard'),
+    ).toBe(true)
+    expect(trigger).not.toHaveFocus()
     await user.type(screen.getByLabelText('提示词标识'), 'prompt.demo')
+    await user.type(screen.getByLabelText('显示名称'), '演示提示词')
+    expect(screen.getByRole('dialog', { name: '新建提示词 · 演示提示词' })).toBeInTheDocument()
     await user.type(screen.getByLabelText('用户提示词模板'), '问题：{question}')
     await user.click(screen.getByRole('button', { name: '保存草稿' }))
 
     expect(await screen.findByText('编辑中')).toBeInTheDocument()
     expect(screen.getByText('尚未发布')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('编辑抽屉展示资产元数据，Escape 关闭并恢复触发按钮焦点', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getGovernanceAssets).mockResolvedValue({
+      drafts: [{ ...draftFixture, revision: 3 }],
+      published: [],
+    })
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '提示词' }))
+    const editButton = await screen.findByRole('button', { name: '编辑' })
+    await user.click(editButton)
+
+    const drawer = screen.getByRole('dialog', { name: '编辑提示词 · 演示提示词' })
+    expect(within(drawer).getByText(/资产 ID：prompt\.demo.*revision 3/)).toBeInTheDocument()
+    await waitFor(() => expect(drawer).toContainElement(document.activeElement as HTMLElement))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(editButton).toHaveFocus()
+  })
+
+  it('保存失败时保留抽屉和输入，在请求期间禁止重复保存', async () => {
+    const user = userEvent.setup()
+    let rejectSave!: (reason: Error) => void
+    vi.mocked(createGovernanceDraft).mockReturnValue(new Promise((_, reject) => {
+      rejectSave = reject
+    }))
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '提示词' }))
+    await user.click(screen.getByRole('button', { name: '新建提示词' }))
+    await user.type(screen.getByLabelText('提示词标识'), 'prompt.failed')
+    await user.type(screen.getByLabelText('用户提示词模板'), '保留这段输入')
+    const saveButton = screen.getByRole('button', { name: '保存草稿' })
+    await user.click(saveButton)
+
+    expect(saveButton).toBeDisabled()
+    rejectSave(new Error('保存失败'))
+    const drawer = screen.getByRole('dialog')
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent('保存失败')
+    expect(within(drawer).getByLabelText('用户提示词模板')).toHaveValue('保留这段输入')
+    expect(drawer).toBeInTheDocument()
+    expect(createGovernanceDraft).toHaveBeenCalledOnce()
   })
 
   it('显式导入现有配置后展示可编辑提示词和导入统计', async () => {
@@ -226,9 +344,10 @@ describe('模型治理页', () => {
     render(<ModelGovernancePage />)
     await user.click(await screen.findByRole('button', { name: '导入现有配置' }))
 
+    expect(screen.getByRole('status')).toHaveTextContent('已导入 11 个提示词、2 个模型档案、5 条路由规则')
+    await user.click(screen.getByRole('tab', { name: '提示词' }))
     const panel = screen.getByRole('tabpanel')
     expect(await within(panel).findByText('intent.classify')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('已导入 11 个提示词、2 个模型档案、5 条路由规则')
     await user.click(within(panel).getByRole('button', { name: '编辑' }))
     expect(screen.getByLabelText('输出模式')).toHaveValue('json')
     expect(screen.getByLabelText(/提示词变量/)).toHaveValue('message|必填|用户消息')
@@ -286,7 +405,7 @@ describe('模型治理页', () => {
 
     render(<ModelGovernancePage />)
 
-    expect(screen.getByRole('alert')).toHaveTextContent('无权查看模型治理台账')
+    expect(screen.getByRole('alert')).toHaveTextContent('无权查看后台管理')
     expect(getModelGovernanceSnapshot).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: '切换到信息科' }))
     expect(setCurrentRole).toHaveBeenCalledWith('information_department')
@@ -311,6 +430,24 @@ describe('模型治理页', () => {
     expect(screen.queryByText('提示词台账')).not.toBeInTheDocument()
   })
 
+  it('治理资产初始加载失败在切换页签后仍持续提示', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getGovernanceAssets).mockRejectedValue(new Error('资产服务不可用'))
+
+    render(<ModelGovernancePage />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('治理资产与发布记录加载失败：资产服务不可用')
+    expect(within(screen.getByText('草稿').parentElement!).getByText('—')).toBeInTheDocument()
+    expect(within(screen.getByText('待审核').parentElement!).getByText('—')).toBeInTheDocument()
+    expect(within(screen.getByText('已发布').parentElement!).getByText('—')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: '提示词' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('治理资产与发布记录加载失败：资产服务不可用')
+    expect(screen.queryByText('暂无提示词草稿')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: '发布记录' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('治理资产与发布记录加载失败：资产服务不可用')
+    expect(screen.queryByText('暂无发布记录')).not.toBeInTheDocument()
+  })
+
   it('真实 Provider 未配置凭据时使用警告样式', async () => {
     vi.mocked(getModelGovernanceSnapshot).mockResolvedValue({
       ...snapshotFixture,
@@ -329,11 +466,18 @@ describe('模型治理页', () => {
     expect(credentialStatus).not.toHaveClass('bg-emerald-50')
   })
 
-  it('侧栏仅向信息部门角色提供模型治理入口', () => {
-    const layout = readFileSync(resolve(process.cwd(), 'app/layout.tsx'), 'utf8')
+  it('侧栏仅向信息部门角色提供底部后台管理入口', async () => {
+    const user = userEvent.setup()
+    render(<LayoutShell><div>页面内容</div></LayoutShell>)
 
-    expect(layout).toContain("label: '模型治理'")
-    expect(layout).toContain("href: '/model-governance'")
-    expect(layout).toContain("currentRole === 'information_department'")
+    expect(screen.queryByRole('link', { name: '后台管理' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '切换信息科角色' }))
+
+    const adminLink = screen.getByRole('link', { name: '后台管理' })
+    expect(adminLink).toHaveAttribute('href', '/model-governance')
+    const adminNav = adminLink.closest('nav')
+    const sidebarFooter = screen.getByRole('contentinfo', { name: '侧栏页脚' })
+    expect(adminNav).toHaveAccessibleName('后台管理')
+    expect(adminNav?.nextElementSibling).toBe(sidebarFooter)
   })
 })

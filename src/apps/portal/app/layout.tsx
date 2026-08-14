@@ -56,10 +56,15 @@ const NAV_ITEMS: NavItem[] = [
   { label: '政策问答', href: '/policy-qa', icon: <FileText className="size-4" /> },
   { label: '技能', href: '/skills', icon: <Wand2 className="size-4" /> },
   { label: '语义层', href: '/semantic-layer', icon: <Brain className="size-4" /> },
-  { label: '模型治理', href: '/model-governance', icon: <SlidersHorizontal className="size-4" /> },
   { label: '政策知识', href: '/policy-knowledge', icon: <BookOpen className="size-4" /> },
   { label: '问答历史', href: '/qa-history', icon: <History className="size-4" /> },
 ]
+
+const ADMIN_NAV_ITEM: NavItem = {
+  label: '后台管理',
+  href: '/model-governance',
+  icon: <SlidersHorizontal className="size-4" />,
+}
 
 // --- Connection Status Badge ---
 
@@ -92,7 +97,7 @@ function ConnectionBadge() {
 
 // --- Layout Shell ---
 
-function LayoutShell({ children }: { children: ReactNode }) {
+export function LayoutShell({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [currentRole, setCurrentRole] = useState<RoleId>('cashier')
   const pathname = usePathname()
@@ -125,9 +130,7 @@ function LayoutShell({ children }: { children: ReactNode }) {
 
           {/* Navigation */}
           <nav className="flex-1 space-y-1 px-2 py-4">
-            {NAV_ITEMS.filter(
-              (item) => item.href !== '/model-governance' || currentRole === 'information_department'
-            ).map((item) => {
+            {NAV_ITEMS.map((item) => {
               const isActive =
                 item.href === '/'
                   ? pathname === '/'
@@ -150,14 +153,32 @@ function LayoutShell({ children }: { children: ReactNode }) {
             })}
           </nav>
 
+          {/* Admin navigation */}
+          {currentRole === 'information_department' && (
+            <nav aria-label="后台管理" className="border-t border-slate-100 px-2 py-2">
+              <Link
+                href={ADMIN_NAV_ITEM.href}
+                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  pathname.startsWith(ADMIN_NAV_ITEM.href)
+                    ? 'bg-blue-50 text-blue-700'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                } ${sidebarCollapsed ? 'justify-center px-2' : ''}`}
+                title={sidebarCollapsed ? ADMIN_NAV_ITEM.label : undefined}
+              >
+                <span className="shrink-0">{ADMIN_NAV_ITEM.icon}</span>
+                {!sidebarCollapsed && <span>{ADMIN_NAV_ITEM.label}</span>}
+              </Link>
+            </nav>
+          )}
+
           {/* Sidebar footer */}
-          <div className="border-t border-slate-100 p-3">
+          <footer aria-label="侧栏页脚" className="border-t border-slate-100 p-3">
             {!sidebarCollapsed && (
               <p className="text-[10px] text-slate-400 leading-relaxed">
                 医保AI导办平台 v0.1
               </p>
             )}
-          </div>
+          </footer>
         </aside>
 
         {/* Main area */}
