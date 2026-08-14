@@ -1,7 +1,10 @@
 import { Buffer } from 'node:buffer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { getModelGovernanceSnapshot } from '@/lib/model-governance-api'
+import {
+  createGovernanceDraft,
+  getModelGovernanceSnapshot,
+} from '@/lib/model-governance-api'
 
 const result = {
   prompts: [],
@@ -12,11 +15,11 @@ const result = {
   uncertainties: [],
 }
 
-function responseEnvelope() {
+function responseEnvelope(payload: unknown = result) {
   return new Response(JSON.stringify({
     scenario: 'model_governance',
     status: 'success',
-    result,
+    result: payload,
     citations: [],
     tasks: [],
     missing_fields: [],
@@ -55,5 +58,29 @@ describe('模型治理 API 客户端', () => {
     ) as { roles: string[]; permissions: string[] }
     expect(payload.roles).toContain('information_department')
     expect(payload.permissions).toContain('model_governance:read')
+  })
+
+  it('创建草稿时发送写权限令牌并解包结果', async () => {
+    window.sessionStorage.setItem('model-governance-token', 'writer-token')
+    const draft = { draft_id: 'draft-1', revision: 1 }
+    const fetchMock = vi.fn().mockResolvedValue(responseEnvelope(draft))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createGovernanceDraft({
+      asset_type: 'prompt',
+      asset_id: 'prompt.demo',
+      name: '演示提示词',
+      scene: 'policy_qa',
+      model_type: 'llm',
+      system_prompt: '只输出事实',
+      user_prompt_template: '问题：{question}',
+      variables: [{ name: 'question', required: true, description: '' }],
+      output_mode: 'text',
+    })).resolves.toEqual(draft)
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toContain('/model-governance/drafts')
+    expect(init?.method).toBe('POST')
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer writer-token')
   })
 })

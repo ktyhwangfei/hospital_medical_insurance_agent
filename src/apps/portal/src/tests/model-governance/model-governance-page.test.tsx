@@ -1,11 +1,15 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ModelGovernancePage from '../../../app/model-governance/page'
 import { useRoleContext } from '../../../app/layout'
 import {
+  createGovernanceDraft,
+  getGovernanceAssets,
+  getGovernanceReleases,
   getModelGovernanceSnapshot,
   type ModelGovernanceSnapshot,
 } from '@/lib/model-governance-api'
@@ -14,6 +18,9 @@ vi.mock('../../../app/layout', () => ({ useRoleContext: vi.fn() }))
 vi.mock('@/lib/model-governance-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/model-governance-api')>()),
   getModelGovernanceSnapshot: vi.fn(),
+  getGovernanceAssets: vi.fn(),
+  getGovernanceReleases: vi.fn(),
+  createGovernanceDraft: vi.fn(),
 }))
 
 const emptyParameters = { temperature: null, max_tokens: null }
@@ -93,7 +100,12 @@ beforeEach(() => {
     setCurrentRole: vi.fn(),
   })
   vi.mocked(getModelGovernanceSnapshot).mockReset()
+  vi.mocked(getGovernanceAssets).mockReset()
+  vi.mocked(getGovernanceReleases).mockReset()
+  vi.mocked(createGovernanceDraft).mockReset()
   vi.mocked(getModelGovernanceSnapshot).mockResolvedValue(snapshotFixture)
+  vi.mocked(getGovernanceAssets).mockResolvedValue({ drafts: [], published: [] })
+  vi.mocked(getGovernanceReleases).mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -134,6 +146,43 @@ describe('模型治理页', () => {
     expect(within(providerOverview).getByText('dummy')).toHaveClass('break-all')
     expect(screen.getByText('遗留提示词调用可达性仍待核验')).toBeInTheDocument()
     expect(screen.getByText('src/config/model_service.py')).toBeInTheDocument()
+  })
+
+  it('创建提示词草稿并明确展示尚未发布', async () => {
+    const user = userEvent.setup()
+    vi.mocked(createGovernanceDraft).mockResolvedValue({
+      draft_id: 'draft-1',
+      asset_id: 'prompt.demo',
+      asset_type: 'prompt',
+      content: {
+        asset_type: 'prompt',
+        asset_id: 'prompt.demo',
+        name: '演示提示词',
+        scene: 'policy_qa',
+        model_type: 'llm',
+        system_prompt: '只输出事实',
+        user_prompt_template: '问题：{question}',
+        variables: [{ name: 'question', required: true, description: '' }],
+        output_mode: 'text',
+      },
+      status: 'editing',
+      revision: 1,
+      validation_issues: [],
+      created_by: 'editor',
+      last_edited_by: 'editor',
+      created_at: '2026-08-14T00:00:00Z',
+      updated_at: '2026-08-14T00:00:00Z',
+    })
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '提示词' }))
+    await user.click(screen.getByRole('button', { name: '新建提示词' }))
+    await user.type(screen.getByLabelText('提示词标识'), 'prompt.demo')
+    await user.type(screen.getByLabelText('用户提示词模板'), '问题：{question}')
+    await user.click(screen.getByRole('button', { name: '保存草稿' }))
+
+    expect(await screen.findByText('编辑中')).toBeInTheDocument()
+    expect(screen.getByText('尚未发布')).toBeInTheDocument()
   })
 
   it('非信息部门直接显示无权限且不发起快照请求', () => {

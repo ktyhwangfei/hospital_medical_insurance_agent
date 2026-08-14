@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, BookOpenCheck, Cpu, Route, Server } from 'lucide-react'
 import { useRoleContext } from '../layout'
+import { ModelGovernanceWorkspace } from '@/components/model-governance-workspace'
 import {
   getModelGovernanceSnapshot,
   type CredentialStatus,
@@ -80,18 +81,22 @@ export default function ModelGovernancePage() {
   useEffect(() => {
     if (currentRole !== 'information_department') return
     let active = true
+    const timer = window.setTimeout(() => {
+      setSnapshot(null)
+      setLoadFailed(false)
+      void getModelGovernanceSnapshot()
+        .then((data) => {
+          if (active) setSnapshot(data)
+        })
+        .catch(() => {
+          if (active) setLoadFailed(true)
+        })
+    }, 0)
 
-    setSnapshot(null)
-    setLoadFailed(false)
-    void getModelGovernanceSnapshot()
-      .then((data) => {
-        if (active) setSnapshot(data)
-      })
-      .catch(() => {
-        if (active) setLoadFailed(true)
-      })
-
-    return () => { active = false }
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
   }, [currentRole])
 
   if (currentRole !== 'information_department') {
@@ -134,10 +139,12 @@ export default function ModelGovernancePage() {
       <header className="flex flex-wrap items-start gap-3">
         <div>
           <h2 className="text-xl font-semibold tracking-tight text-slate-800">模型与提示词治理</h2>
-          <p className="mt-1 text-sm text-slate-500">统一网关、路由和提示词来源的只读台账</p>
+          <p className="mt-1 text-sm text-slate-500">在开发/测试环境管理治理库，并对照当前代码配置</p>
         </div>
         <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">只读台账</span>
       </header>
+
+      <ModelGovernanceWorkspace codeSnapshot={snapshot} />
 
       <section aria-label="治理摘要" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {summary.map(({ label, value, icon: Icon }) => (

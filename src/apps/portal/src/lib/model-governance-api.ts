@@ -71,13 +71,165 @@ interface ModelGovernanceResponse {
   audit: Record<string, unknown>
 }
 
-const DEV_MODEL_GOVERNANCE_TOKEN = 'test.eyJzdWIiOiJwb3J0YWwtbW9kZWwtZ292ZXJuYW5jZS1yZWFkZXIiLCJyb2xlcyI6WyJpbmZvcm1hdGlvbl9kZXBhcnRtZW50Il0sInBlcm1pc3Npb25zIjpbIm1vZGVsX2dvdmVybmFuY2U6cmVhZCJdLCJleHAiOjQxMDI0NDQ4MDB9.signature'
+export type GovernanceAssetType = 'prompt' | 'model_profile' | 'route_rule'
+export type GovernanceDraftStatus = 'editing' | 'validated' | 'review_pending' | 'approved'
+export type GovernanceEnvironment = 'dev' | 'test'
+export type GovernanceReleaseStatus = 'active' | 'retired'
+
+export interface PromptVariable {
+  name: string
+  required: boolean
+  description: string
+}
+
+export interface PromptAssetContent {
+  asset_type: 'prompt'
+  asset_id: string
+  name: string
+  scene: string
+  model_type: string
+  system_prompt: string
+  user_prompt_template: string
+  variables: PromptVariable[]
+  output_mode: 'text' | 'json'
+}
+
+export interface ModelProfileAssetContent {
+  asset_type: 'model_profile'
+  asset_id: string
+  name: string
+  provider_id: string
+  model_name: string
+  credential_ref: string
+  temperature: number
+  max_tokens: number
+  enabled: boolean
+}
+
+export interface RouteRuleAssetContent {
+  asset_type: 'route_rule'
+  asset_id: string
+  name: string
+  scene: string
+  model_type: string
+  profile_id: string
+  fallback_profile_ids: string[]
+  enabled: boolean
+}
+
+export type GovernanceAssetContent =
+  | PromptAssetContent
+  | ModelProfileAssetContent
+  | RouteRuleAssetContent
+
+export interface GovernanceValidationIssue {
+  code: string
+  message: string
+  path: string
+}
+
+export interface GovernanceDraft {
+  draft_id: string
+  asset_id: string
+  asset_type: GovernanceAssetType
+  content: GovernanceAssetContent
+  status: GovernanceDraftStatus
+  revision: number
+  validation_issues: GovernanceValidationIssue[]
+  created_by: string
+  last_edited_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface GovernanceAssetPreview {
+  asset_type: GovernanceAssetType
+  asset_id: string
+  rendered_system_prompt: string | null
+  rendered_user_prompt: string | null
+  profile_id: string | null
+  fallback_profile_ids: string[]
+  temperature: number | null
+  max_tokens: number | null
+}
+
+export interface GovernanceRelease {
+  release_id: string
+  asset_id: string
+  asset_type: GovernanceAssetType
+  version_id: string
+  environment: GovernanceEnvironment
+  status: GovernanceReleaseStatus
+  previous_release_id: string | null
+  created_by: string
+  created_at: string
+  retired_at: string | null
+}
+
+export interface PublishedGovernanceAsset {
+  asset_id: string
+  asset_type: GovernanceAssetType
+  version_id: string
+  release_id: string
+  content_hash: string
+  content: GovernanceAssetContent
+  runtime_status: 'not_connected' | 'static_source'
+}
+
+export interface GovernanceAssetsResult {
+  drafts: GovernanceDraft[]
+  published: PublishedGovernanceAsset[]
+}
+
+export interface PublishedGovernanceSnapshot {
+  environment: GovernanceEnvironment
+  assets: PublishedGovernanceAsset[]
+  generated_at: string
+}
+
+interface GovernanceEnvelope<T> {
+  scenario: 'model_governance'
+  status: 'success'
+  result: T
+}
+
+export const governanceDevIdentities = {
+  editor: {
+    userId: 'portal-governance-editor',
+    permissions: [
+      'model_governance:read',
+      'model_governance:write',
+      'model_governance:publish',
+    ],
+  },
+  reviewer: {
+    userId: 'portal-governance-reviewer',
+    permissions: ['model_governance:read', 'model_governance:review'],
+  },
+} as const
+
+export type GovernanceDevIdentity = keyof typeof governanceDevIdentities
+
+function devToken(identity: GovernanceDevIdentity): string {
+  const fixture = governanceDevIdentities[identity]
+  const payload = window.btoa(JSON.stringify({
+    sub: fixture.userId,
+    roles: ['information_department'],
+    permissions: fixture.permissions,
+    exp: 4102444800,
+  })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+  return `test.${payload}.signature`
+}
+
+export function selectGovernanceDevIdentity(identity: GovernanceDevIdentity): void {
+  window.sessionStorage.setItem('model-governance-token', devToken(identity))
+}
 
 function modelGovernanceHeaders(): HeadersInit {
   const headers: Record<string, string> = {}
   if (typeof window !== 'undefined') {
     const token = window.sessionStorage.getItem('model-governance-token')
-      ?? (process.env.NODE_ENV !== 'production' ? DEV_MODEL_GOVERNANCE_TOKEN : null)
+      ?? (process.env.NODE_ENV !== 'production' ? devToken('editor') : null)
     if (token) headers.Authorization = `Bearer ${token}`
   }
   return headers
@@ -88,4 +240,114 @@ export async function getModelGovernanceSnapshot(): Promise<ModelGovernanceSnaps
     headers: modelGovernanceHeaders(),
   })
   return response.result
+}
+
+async function governanceRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await requestJson<GovernanceEnvelope<T>>(path, {
+    ...init,
+    headers: modelGovernanceHeaders(),
+  })
+  return response.result
+}
+
+export function getGovernanceAssets(
+  environment: GovernanceEnvironment = 'dev',
+  assetType?: GovernanceAssetType,
+): Promise<GovernanceAssetsResult> {
+  const params = new URLSearchParams({ environment })
+  if (assetType) params.set('asset_type', assetType)
+  return governanceRequest(`/model-governance/assets?${params}`)
+}
+
+export function createGovernanceDraft(
+  content: GovernanceAssetContent,
+): Promise<GovernanceDraft> {
+  return governanceRequest('/model-governance/drafts', {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  })
+}
+
+export function updateGovernanceDraft(
+  draftId: string,
+  content: GovernanceAssetContent,
+  expectedRevision: number,
+): Promise<GovernanceDraft> {
+  return governanceRequest(`/model-governance/drafts/${encodeURIComponent(draftId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ content, expected_revision: expectedRevision }),
+  })
+}
+
+export function validateGovernanceDraft(
+  draftId: string,
+  expectedRevision: number,
+): Promise<GovernanceDraft> {
+  return governanceRequest(`/model-governance/drafts/${encodeURIComponent(draftId)}/validate`, {
+    method: 'POST',
+    body: JSON.stringify({ expected_revision: expectedRevision }),
+  })
+}
+
+export function previewGovernanceDraft(
+  draftId: string,
+  variables: Record<string, string>,
+): Promise<GovernanceAssetPreview> {
+  return governanceRequest(`/model-governance/drafts/${encodeURIComponent(draftId)}/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ variables }),
+  })
+}
+
+export function requestGovernanceReview(
+  draftId: string,
+  expectedRevision: number,
+): Promise<GovernanceDraft> {
+  return governanceRequest(`/model-governance/drafts/${encodeURIComponent(draftId)}/request-review`, {
+    method: 'POST',
+    body: JSON.stringify({ expected_revision: expectedRevision }),
+  })
+}
+
+export function approveGovernanceDraft(
+  draftId: string,
+  expectedRevision: number,
+  reason: string,
+): Promise<GovernanceDraft> {
+  return governanceRequest(`/model-governance/drafts/${encodeURIComponent(draftId)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ expected_revision: expectedRevision, reason }),
+  })
+}
+
+export function publishGovernanceDraft(
+  draftId: string,
+  expectedRevision: number,
+  environment: GovernanceEnvironment,
+): Promise<GovernanceRelease> {
+  return governanceRequest(`/model-governance/drafts/${encodeURIComponent(draftId)}/publish`, {
+    method: 'POST',
+    body: JSON.stringify({ expected_revision: expectedRevision, environment }),
+  })
+}
+
+export async function getGovernanceReleases(
+  environment: GovernanceEnvironment = 'dev',
+): Promise<GovernanceRelease[]> {
+  const result = await governanceRequest<{ releases: GovernanceRelease[] }>(
+    `/model-governance/releases?environment=${environment}`,
+  )
+  return result.releases
+}
+
+export function rollbackGovernanceRelease(releaseId: string): Promise<GovernanceRelease> {
+  return governanceRequest(`/model-governance/releases/${encodeURIComponent(releaseId)}/rollback`, {
+    method: 'POST',
+  })
+}
+
+export function getPublishedGovernanceSnapshot(
+  environment: GovernanceEnvironment = 'dev',
+): Promise<PublishedGovernanceSnapshot> {
+  return governanceRequest(`/model-governance/published-snapshot?environment=${environment}`)
 }
