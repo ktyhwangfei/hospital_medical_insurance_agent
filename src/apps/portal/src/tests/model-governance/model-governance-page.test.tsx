@@ -113,6 +113,22 @@ describe('模型治理页', () => {
     expect(screen.queryByText('0')).not.toBeInTheDocument()
   })
 
+  it('Provider 未配置凭据时使用警告样式', async () => {
+    vi.mocked(getModelGovernanceSnapshot).mockResolvedValue({
+      ...snapshotFixture,
+      providers: [{
+        ...snapshotFixture.providers[0],
+        credential_status: 'missing',
+      }],
+    })
+
+    render(<ModelGovernancePage />)
+
+    const credentialStatus = await screen.findByText('未配置凭据')
+    expect(credentialStatus).toHaveClass('bg-amber-50')
+    expect(credentialStatus).not.toHaveClass('bg-emerald-50')
+  })
+
   it('侧栏提供模型治理入口', () => {
     const layout = readFileSync(resolve(process.cwd(), 'app/layout.tsx'), 'utf8')
 

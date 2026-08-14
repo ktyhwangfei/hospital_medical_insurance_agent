@@ -146,7 +146,7 @@ export default function ModelGovernancePage() {
         <section aria-label="Provider 概览" className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-sm font-semibold text-slate-700">Provider 概览</h3>
           <div className="mt-4 space-y-3">
-            {snapshot.providers.map((provider) => <div key={provider.provider_id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 text-sm last:border-0 last:pb-0"><span className="break-all font-mono text-slate-700">{redactedEndpoint(provider.endpoint)}</span><span className="rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-700">{credentialStatusLabel[provider.credential_status]}</span></div>)}
+            {snapshot.providers.map((provider) => <div key={provider.provider_id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 text-sm last:border-0 last:pb-0"><span className="break-all font-mono text-slate-700">{redactedEndpoint(provider.endpoint)}</span><span className={`rounded px-2 py-1 text-xs ${provider.credential_status === 'configured' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{credentialStatusLabel[provider.credential_status]}</span></div>)}
           </div>
         </section>
       </div>
