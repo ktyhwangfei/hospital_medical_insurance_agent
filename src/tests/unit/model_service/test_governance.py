@@ -1,8 +1,9 @@
 import json
 
 from src.config.model_service import ModelServiceConfig
-from src.config.model_routing import MODEL_PARAMS, ROUTING_TABLE
+from src.config.model_routing import FALLBACK_CHAINS, MODEL_PARAMS, ROUTING_TABLE
 from src.model_service.governance import build_governance_snapshot
+from src.model_service.router import ModelRouter
 
 
 def test_snapshot_has_complete_prompt_assets_and_stable_config_projection():
@@ -42,3 +43,24 @@ def test_implicit_and_explicit_routes_are_distinguished_without_direct_fabricati
     )
     assert {(route.scene, route.model_type) for route in snapshot.routes} == expected_route_keys
     assert any("遗留" in uncertainty for uncertainty in snapshot.uncertainties)
+
+
+def test_fallback_only_models_are_projected_with_router_defaults(monkeypatch):
+    monkeypatch.setitem(FALLBACK_CHAINS, "deepseek-chat", ["fallback-only-model"])
+    snapshot = build_governance_snapshot()
+    profile = next(model for model in snapshot.models if model.model_name == "fallback-only-model")
+    expected = ModelRouter().get_model_params("fallback-only-model")
+    assert profile.temperature == expected["temperature"]
+    assert profile.max_tokens == expected["max_tokens"]
+
+
+def test_exact_empty_route_is_not_replaced_by_default(monkeypatch):
+    monkeypatch.setitem(ROUTING_TABLE, ("empty_scene", "llm"), "")
+    route = next(route for route in build_governance_snapshot().routes if route.scene == "empty_scene")
+    assert route.explicit is True
+    assert route.effective_model == ""
+
+
+def test_endpoint_preserves_port_zero_and_rejects_invalid_port():
+    assert build_governance_snapshot(ModelServiceConfig(base_url="http://unit.invalid:0/path")).providers[0].endpoint == "http://unit.invalid:0"
+    assert build_governance_snapshot(ModelServiceConfig(base_url="http://unit.invalid:99999")).providers[0].endpoint == "invalid"

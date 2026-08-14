@@ -1,22 +1,29 @@
 """只读模型与提示词治理快照。"""
 
 from urllib.parse import urlsplit
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from src.config.model_routing import FALLBACK_CHAINS, MODEL_PARAMS, ROUTING_TABLE
 from src.config.model_service import ModelServiceConfig
 
+SourceKind = Literal["code", "yaml", "dynamic"]
+GatewayStatus = Literal["routed", "direct", "unknown"]
+ManagementStatus = Literal["source_managed", "needs_migration", "needs_verification"]
+ProviderType = Literal["openai_compatible"]
+CredentialStatus = Literal["configured", "missing"]
+
 
 class PromptAsset(BaseModel):
     prompt_id: str
     name: str
     source_path: str
-    source_kind: str
+    source_kind: SourceKind
     scene: str | None = None
     model_type: str = "llm"
-    gateway_status: str
-    management_status: str
+    gateway_status: GatewayStatus
+    management_status: ManagementStatus
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -37,9 +44,9 @@ class ModelRouteSnapshot(BaseModel):
 
 class ProviderSnapshot(BaseModel):
     provider_id: str
-    type: str
+    type: ProviderType
     endpoint: str
-    credential_status: str
+    credential_status: CredentialStatus
 
 
 class ModelGovernanceSnapshot(BaseModel):
@@ -74,9 +81,10 @@ def _endpoint(value: str) -> str:
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             return "invalid"
         host = parsed.hostname
+        port = parsed.port
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
-        return f"{parsed.scheme}://{host}{f':{parsed.port}' if parsed.port else ''}"
+        return f"{parsed.scheme}://{host}{f':{port}' if port is not None else ''}"
     except ValueError:
         return "invalid"
 
@@ -94,7 +102,9 @@ def build_governance_snapshot(config: ModelServiceConfig | None = None) -> Model
             warnings.append("使用 default 路由")
         prompts.append(PromptAsset(prompt_id=prompt_id, name=name, source_path=source, source_kind=kind, scene=scene, gateway_status=gateway, management_status=management, warnings=warnings))
 
-    model_names = sorted({str(model) for model in MODEL_PARAMS} | {str(model) for model in ROUTING_TABLE.values()})
+    fallback_models = {str(model) for model in FALLBACK_CHAINS}
+    fallback_models.update(str(model) for chain in FALLBACK_CHAINS.values() for model in chain)
+    model_names = sorted({str(model) for model in MODEL_PARAMS} | {str(model) for model in ROUTING_TABLE.values()} | fallback_models)
     models = [ModelProfileSnapshot(model_name=name, temperature=MODEL_PARAMS.get(name, {}).get("temperature", 0.7), max_tokens=MODEL_PARAMS.get(name, {}).get("max_tokens", 2048)) for name in model_names]
 
     route_keys = set(ROUTING_TABLE)
@@ -104,7 +114,9 @@ def build_governance_snapshot(config: ModelServiceConfig | None = None) -> Model
     routes = []
     for scene, model_type in sorted(route_keys):
         explicit = (scene, model_type) in ROUTING_TABLE
-        model = ROUTING_TABLE.get((scene, model_type)) or ROUTING_TABLE.get(("default", model_type))
+        model = ROUTING_TABLE.get((scene, model_type))
+        if model is None:
+            model = ROUTING_TABLE.get(("default", model_type))
         warnings = [] if explicit else ["未显式登记，解析为 default 路由"]
         routes.append(ModelRouteSnapshot(scene=scene, model_type=model_type, effective_model=model, explicit=explicit, fallbacks=list(FALLBACK_CHAINS.get(model, [])) if model else [], warnings=warnings))
 
