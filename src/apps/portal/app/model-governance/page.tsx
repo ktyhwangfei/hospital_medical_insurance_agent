@@ -74,7 +74,7 @@ function parameterText(label: string, parameters: PromptParameters): string {
 }
 
 export default function ModelGovernancePage() {
-  const { currentRole } = useRoleContext()
+  const { currentRole, setCurrentRole } = useRoleContext()
   const [snapshot, setSnapshot] = useState<ModelGovernanceSnapshot | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
 
@@ -106,7 +106,14 @@ export default function ModelGovernancePage() {
           <AlertTriangle className="size-4" />
           无权查看模型治理台账
         </div>
-        <p className="mt-1 text-xs text-amber-700">仅信息部门角色可读取此页面。</p>
+        <p className="mt-1 text-xs text-amber-700">仅信息科角色可读取此页面。</p>
+        <button
+          type="button"
+          onClick={() => setCurrentRole('information_department')}
+          className="mt-3 rounded bg-amber-700 px-3 py-2 text-xs font-medium text-white"
+        >
+          切换到信息科
+        </button>
       </section>
     )
   }

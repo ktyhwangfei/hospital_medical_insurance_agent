@@ -276,16 +276,20 @@ describe('模型治理页', () => {
     await waitFor(() => expect(screen.queryByText('model.demo')).not.toBeInTheDocument())
   })
 
-  it('非信息部门直接显示无权限且不发起快照请求', () => {
+  it('非信息部门可从无权限提示切换到信息科且不提前发起请求', async () => {
+    const user = userEvent.setup()
+    const setCurrentRole = vi.fn()
     vi.mocked(useRoleContext).mockReturnValue({
       currentRole: 'cashier',
-      setCurrentRole: vi.fn(),
+      setCurrentRole,
     })
 
     render(<ModelGovernancePage />)
 
     expect(screen.getByRole('alert')).toHaveTextContent('无权查看模型治理台账')
     expect(getModelGovernanceSnapshot).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '切换到信息科' }))
+    expect(setCurrentRole).toHaveBeenCalledWith('information_department')
   })
 
   it('加载状态可被辅助技术感知', () => {
