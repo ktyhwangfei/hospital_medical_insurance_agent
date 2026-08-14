@@ -159,6 +159,18 @@ class ModelGovernanceService:
             raise GovernanceValidationError("；".join(issue.message for issue in issues))
         return preview_asset(draft.content, variables)
 
+    def list_drafts(
+        self, asset_type: GovernanceAssetType | None = None
+    ) -> list[GovernanceDraft]:
+        return self._storage.list_drafts(asset_type)
+
+    def list_releases(
+        self,
+        asset_id: str | None = None,
+        environment: GovernanceEnvironment | None = None,
+    ) -> list[GovernanceRelease]:
+        return self._storage.list_releases(asset_id, environment)
+
     def request_review(
         self,
         draft_id: str,
@@ -311,4 +323,3 @@ class ModelGovernanceService:
                 )
             )
         return PublishedGovernanceSnapshot(environment=environment, assets=assets)
-
