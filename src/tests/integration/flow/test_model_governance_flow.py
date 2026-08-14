@@ -52,15 +52,15 @@ def test_model_governance_snapshot_drives_gateway_route(monkeypatch):
     assert response.status_code == 200
     snapshot = response.json()["result"]
 
-    fee_route = next(
+    prompt = next(
+        prompt
+        for prompt in snapshot["prompts"]
+        if prompt["prompt_id"] == "policy.extract.schema"
+    )
+    extraction_route = next(
         route
         for route in snapshot["routes"]
-        if route["scene"] == "fee_explanation" and route["model_type"] == "llm"
-    )
-    model_profile = next(
-        model
-        for model in snapshot["models"]
-        if model["model_name"] == fee_route["effective_model"]
+        if route["scene"] == prompt["scene"] and route["model_type"] == prompt["model_type"]
     )
 
     captured = {}
@@ -78,12 +78,13 @@ def test_model_governance_snapshot_drives_gateway_route(monkeypatch):
     monkeypatch.setattr(ModelGateway, "_call_provider", fake_call_provider)
     gateway = ModelGateway(router=ModelRouter())
     gateway.generate(
-        [Message(role="user", content="解释本次结算费用")],
-        fee_route["model_type"],
-        fee_route["scene"],
+        [Message(role="user", content="提取政策事实")],
+        extraction_route["model_type"],
+        extraction_route["scene"],
+        max_tokens=prompt["call_overrides"]["max_tokens"],
     )
 
-    assert captured["model_name"] == fee_route["effective_model"]
-    assert captured["request"].model_type == fee_route["effective_model"]
-    assert captured["request"].temperature == model_profile["temperature"]
-    assert captured["request"].max_tokens == model_profile["max_tokens"]
+    assert captured["model_name"] == extraction_route["effective_model"]
+    assert captured["request"].model_type == extraction_route["effective_model"]
+    assert captured["request"].temperature == prompt["effective_parameters"]["temperature"]
+    assert captured["request"].max_tokens == prompt["effective_parameters"]["max_tokens"]

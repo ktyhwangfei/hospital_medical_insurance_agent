@@ -231,7 +231,7 @@ class PipelineOrchestrator:
             response = gateway.generate(
                 messages=messages,
                 model_type="llm",
-                scene="policy_qa",
+                scene="policy_fact_extraction",
                 max_tokens=8192,
             )
 

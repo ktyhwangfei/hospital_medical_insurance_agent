@@ -29,14 +29,24 @@ def test_snapshot_has_complete_prompt_assets_and_stable_config_projection():
             assert Path(related_source_path).is_file()
 
 
-def test_implicit_and_explicit_routes_are_distinguished_without_direct_fabrication():
+def test_active_routes_are_explicit_without_direct_fabrication():
     snapshot = build_governance_snapshot()
-    intent = next(route for route in snapshot.routes if route.scene == "intent_recognition")
-    assert intent.explicit is False
-    assert any("default" in warning for warning in intent.warnings)
-    fee = next(route for route in snapshot.routes if route.scene == "fee_explanation")
-    assert fee.explicit is True
-    assert fee.effective_model == "deepseek-chat"
+    routes = {(route.scene, route.model_type): route for route in snapshot.routes}
+    for scene in {
+        "intent_recognition",
+        "skill_routing",
+        "policy_qa",
+        "fee_explanation",
+        "policy_fact_extraction",
+    }:
+        route = routes[(scene, "llm")]
+        assert route.explicit is True
+        assert route.effective_model == "deepseek-chat"
+        assert not any("default" in warning for warning in route.warnings)
+
+    prompts = {prompt.prompt_id: prompt for prompt in snapshot.prompts}
+    assert prompts["policy.extract.schema"].scene == "policy_fact_extraction"
+    assert prompts["policy.extract.legacy"].scene == "policy_fact_extraction"
     direct = next(prompt for prompt in snapshot.prompts if prompt.prompt_id == "policy.fact_extract")
     assert direct.gateway_status == "direct"
     assert direct.scene is None

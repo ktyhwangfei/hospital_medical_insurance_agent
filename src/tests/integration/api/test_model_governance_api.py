@@ -82,8 +82,9 @@ def test_model_governance_snapshot_requires_permission_and_returns_typed_envelop
         (route["scene"], route["model_type"]): route
         for route in payload["result"]["routes"]
     }
-    assert routes[("intent_recognition", "llm")]["explicit"] is False
+    assert routes[("intent_recognition", "llm")]["explicit"] is True
     assert routes[("fee_explanation", "llm")]["explicit"] is True
+    assert routes[("policy_fact_extraction", "llm")]["explicit"] is True
     serialized = response.text
     assert "temporary-secret-key" not in serialized
     assert "user:password" not in serialized

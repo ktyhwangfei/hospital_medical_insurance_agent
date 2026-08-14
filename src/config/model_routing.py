@@ -5,8 +5,8 @@
   2. 回退到 (default, model_type) → model_name
   3. 全部未命中 → 抛 ModelRouteError
 
-所有现有生产调用均使用 model_type="llm"，
-通过默认路由 ("default", "llm") 解析到 deepseek-chat。
+所有现有生产调用均使用 model_type="llm"，活跃场景显式路由到 deepseek-chat；
+默认路由仅兼容未知场景。
 """
 
 
@@ -29,6 +29,9 @@ MODEL_PARAMS: dict = {
 ROUTING_TABLE: dict = {
     ("default", "llm"): "deepseek-chat",
     ("default", "embedding"): "text-embedding-3-small",
-    # fee_explanation 场景显式路由（PoolingSelfPayStrategy._generate_via_llm 使用）
+    ("intent_recognition", "llm"): "deepseek-chat",
+    ("skill_routing", "llm"): "deepseek-chat",
+    ("policy_qa", "llm"): "deepseek-chat",
     ("fee_explanation", "llm"): "deepseek-chat",
+    ("policy_fact_extraction", "llm"): "deepseek-chat",
 }
