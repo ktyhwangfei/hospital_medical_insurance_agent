@@ -3,9 +3,12 @@ import json
 
 from fastapi.testclient import TestClient
 
+from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+    PipelineOrchestrator,
+)
 from src.model_service.gateway import ModelGateway
-from src.model_service.models import Message, ModelResponse, TokenUsage
-from src.model_service.router import ModelRouter
+from src.model_service.models import ModelResponse, TokenUsage
+from src.semantic_layer.extraction_contract import ExtractionSchema, FieldContract
 
 
 SNAPSHOT_PATH = "/api/v1/medical-insurance-ai-agent/model-governance/snapshot"
@@ -62,6 +65,11 @@ def test_model_governance_snapshot_drives_gateway_route(monkeypatch):
         for route in snapshot["routes"]
         if route["scene"] == prompt["scene"] and route["model_type"] == prompt["model_type"]
     )
+    model_profile = next(
+        model
+        for model in snapshot["models"]
+        if model["model_name"] == extraction_route["effective_model"]
+    )
 
     captured = {}
 
@@ -69,22 +77,34 @@ def test_model_governance_snapshot_drives_gateway_route(monkeypatch):
         captured["request"] = request
         captured["model_name"] = model_name
         return ModelResponse(
-            content="provider boundary response",
+            content='[{"fact_text":"测试政策事实","rules":[]}]',
             model_name=model_name,
             usage=TokenUsage(prompt_tokens=1, completion_tokens=1),
             finish_reason="stop",
         )
 
     monkeypatch.setattr(ModelGateway, "_call_provider", fake_call_provider)
-    gateway = ModelGateway(router=ModelRouter())
-    gateway.generate(
-        [Message(role="user", content="提取政策事实")],
-        extraction_route["model_type"],
-        extraction_route["scene"],
-        max_tokens=prompt["call_overrides"]["max_tokens"],
+    monkeypatch.setattr(
+        "src.semantic_layer.extraction_contract.build_extraction_schema",
+        lambda *_args, **_kwargs: ExtractionSchema(
+            fields=[FieldContract(code="rule_type", name="规则类型")]
+        ),
     )
 
+    facts = PipelineOrchestrator()._extract_policy_facts(
+        "参保人员符合条件时享受医保待遇。",
+        document_title="测试医保政策",
+    )
+
+    assert facts == [{"fact_text": "测试政策事实", "rules": []}]
+    assert extraction_route["model_type"] == prompt["model_type"] == "llm"
     assert captured["model_name"] == extraction_route["effective_model"]
     assert captured["request"].model_type == extraction_route["effective_model"]
+    assert captured["request"].scene == prompt["scene"] == "policy_fact_extraction"
+    assert captured["request"].temperature == model_profile["temperature"]
     assert captured["request"].temperature == prompt["effective_parameters"]["temperature"]
-    assert captured["request"].max_tokens == prompt["effective_parameters"]["max_tokens"]
+    assert (
+        captured["request"].max_tokens
+        == prompt["call_overrides"]["max_tokens"]
+        == prompt["effective_parameters"]["max_tokens"]
+    )
