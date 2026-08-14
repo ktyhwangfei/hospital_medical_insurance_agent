@@ -60,6 +60,10 @@ def test_model_governance_read_only_flow(monkeypatch):
 
     serialized = first.text
     assert "temporary-governance-secret" not in serialized
+    assert "user" not in serialized
+    assert "password" not in serialized
+    assert "/v1/path" not in serialized
+    assert "q=1" not in serialized
     for provider in snapshot["providers"]:
         endpoint = urlsplit(provider["endpoint"])
         assert endpoint.username is None
