@@ -1,6 +1,7 @@
 import base64
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -88,6 +89,38 @@ def _management_client(monkeypatch) -> TestClient:
     get_model_governance_service.cache_clear()
 
     return TestClient(create_app())
+
+
+def _assert_validation_does_not_echo_secret(
+    client: TestClient,
+    *,
+    method: str,
+    path: str,
+    body: dict,
+    secret: str,
+) -> None:
+    response = client.request(
+        method,
+        path,
+        json=body,
+        headers=_headers("model_governance:write"),
+    )
+    assert response.status_code == 422
+    assert secret not in response.text
+    assert all("input" not in error for error in response.json()["detail"])
+
+    from src.gateway.access_log import AccessLogger
+
+    logger = AccessLogger()
+    logger.log(
+        request_id="validation-secret",
+        method=method,
+        path=path,
+        status_code=422,
+        duration_ms=1,
+        request_body=body,
+    )
+    assert secret not in logger.get_entries()[0].request_body
 
 
 def test_model_governance_snapshot_requires_identity_and_returns_typed_envelope(
@@ -544,3 +577,55 @@ def test_failed_credential_create_rolls_back_new_draft_when_asset_has_history(
 
     assert response.status_code == 422
     assert service.list_drafts() == drafts_before
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body_factory"),
+    [
+        pytest.param(
+            "POST",
+            "/api/v1/medical-insurance-ai-agent/model-governance/drafts",
+            lambda secret: {
+                "credential": {
+                    "credential_id": "credential.api-demo",
+                    "api_key": secret,
+                }
+            },
+            id="create_missing_content",
+        ),
+        pytest.param(
+            "POST",
+            "/api/v1/medical-insurance-ai-agent/model-governance/drafts",
+            lambda secret: {
+                **_model_payload(secret),
+                "credential": {"api_key": secret},
+            },
+            id="credential_missing_id",
+        ),
+        pytest.param(
+            "PATCH",
+            "/api/v1/medical-insurance-ai-agent/model-governance/drafts/missing",
+            lambda secret: _model_payload(secret),
+            id="patch_missing_revision",
+        ),
+        pytest.param(
+            "PATCH",
+            "/api/v1/medical-insurance-ai-agent/model-governance/drafts/missing",
+            lambda secret: {**_model_payload(secret), "expected_revision": "wrong"},
+            id="patch_wrong_revision_type",
+        ),
+    ],
+)
+def test_default_validation_errors_never_echo_api_key(
+    monkeypatch, method, path, body_factory
+):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    client = _management_client(monkeypatch)
+    secret = "validation-" + "secret-value"
+    _assert_validation_does_not_echo_secret(
+        client,
+        method=method,
+        path=path,
+        body=body_factory(secret),
+        secret=secret,
+    )

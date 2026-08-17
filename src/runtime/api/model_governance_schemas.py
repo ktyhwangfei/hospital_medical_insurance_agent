@@ -27,7 +27,7 @@ class ModelGovernancePrincipal(BaseModel):
 
 class ModelCredentialInput(BaseModel):
     credential_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{2,127}$")
-    api_key: SecretStr
+    api_key: SecretStr = Field(min_length=1, max_length=4096)
 
 
 class _GovernanceDraftContentRequest(BaseModel):

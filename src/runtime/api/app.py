@@ -5,9 +5,13 @@ load_dotenv()
 
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.gateway.api_gateway.audit_middleware import GatewayAuditMiddleware
 from src.runtime.api.infra_skill_routes import router as infra_skill_router
@@ -22,6 +26,27 @@ from src.runtime.api.model_governance_routes import router as model_governance_r
 logger = logging.getLogger(__name__)
 
 
+def _without_validation_inputs(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_validation_inputs(item)
+            for key, item in value.items()
+            if key != "input"
+        }
+    if isinstance(value, list):
+        return [_without_validation_inputs(item) for item in value]
+    return value
+
+
+async def _request_validation_error_handler(
+    _: Request, exc: RequestValidationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": jsonable_encoder(_without_validation_inputs(exc.errors()))},
+    )
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     print("[STARTUP] lifespan: 加载数据存储", flush=True)
@@ -34,6 +59,10 @@ async def _lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     print("[STARTUP] create_app: 开始创建 FastAPI 应用", flush=True)
     app = FastAPI(title='medical-insurance-ai-agent', lifespan=_lifespan)
+    app.add_exception_handler(
+        RequestValidationError,
+        _request_validation_error_handler,
+    )
 
     print("[STARTUP] create_app: 添加中间件", flush=True)
     app.add_middleware(GatewayAuditMiddleware)
