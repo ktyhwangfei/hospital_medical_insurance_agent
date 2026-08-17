@@ -5,6 +5,7 @@
   "description": "E2E tests for hospital medical insurance AI agent system",
   "scripts": {
     "test": "npx playwright test",
+    "test:model-governance": "npx playwright test --config=model-governance.playwright.config.ts",
     "test:smoke": "npx playwright test smoke/",
     "test:portal": "npx playwright test flows/portal/",
     "test:admin": "npx playwright test flows/admin/",

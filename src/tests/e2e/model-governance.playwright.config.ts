@@ -9,6 +9,7 @@ const E2E_PORTAL_URL = 'http://127.0.0.1:3000';
 export default defineConfig({
   ...baseConfig,
   testMatch: ['flows/portal/model-governance.flow.ts'],
+  testIgnore: [],
   retries: process.env.CI ? 2 : 1,
   use: {
     ...baseConfig.use,

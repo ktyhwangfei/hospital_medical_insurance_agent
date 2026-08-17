@@ -3,6 +3,7 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './',
   testMatch: ['**/*.spec.ts', '**/*.flow.ts'],
+  testIgnore: ['flows/portal/model-governance.flow.ts'],
   timeout: 60000,
   expect: {
     timeout: 15000,
