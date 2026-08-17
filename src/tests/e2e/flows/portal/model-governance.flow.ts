@@ -7,19 +7,63 @@ import { ModelGovernancePage } from '../../pages/portal/model-governance.page';
 const apiKey = 'e2e-api-key-value';
 let provider: Server;
 let providerBaseUrl: string;
+let capturedProviderRequest: {
+  method?: string;
+  path?: string;
+  authorization?: string;
+  payload: Record<string, unknown>;
+} | undefined;
 
 test.beforeAll(async () => {
-  provider = createServer((request, response) => {
-    const authorized = request.headers.authorization === `Bearer ${apiKey}`;
-    response.writeHead(authorized ? 200 : 401, { 'content-type': 'application/json' });
-    response.end(authorized
+  capturedProviderRequest = undefined;
+  provider = createServer(async (request, response) => {
+    let rawBody = '';
+    for await (const chunk of request) rawBody += chunk;
+    let payload: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(rawBody);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        payload = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // 严格 mock 在下面以 422 拒绝非 JSON 请求。
+    }
+    capturedProviderRequest = {
+      method: request.method,
+      path: request.url,
+      authorization: request.headers.authorization,
+      payload,
+    };
+
+    let status = 200;
+    if (request.method !== 'POST') status = 405;
+    else if (request.url !== '/v1/chat/completions') status = 404;
+    else if (request.headers.authorization !== `Bearer ${apiKey}`) status = 401;
+    else if (
+      payload.model !== 'e2e-chat'
+      || !Object.prototype.hasOwnProperty.call(payload, 'max_tokens')
+      || !Object.prototype.hasOwnProperty.call(payload, 'temperature')
+    ) status = 422;
+
+    response.writeHead(status, { 'content-type': 'application/json' });
+    response.end(status === 200
       ? JSON.stringify({ model: 'e2e-chat', choices: [{ message: { content: 'pong' }, finish_reason: 'stop' }] })
-      : JSON.stringify({ error: 'unauthorized' }));
+      : JSON.stringify({ error: 'invalid e2e provider request' }));
   });
   await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve));
   const address = provider.address();
   if (!address || typeof address === 'string') throw new Error('测试 Provider 启动失败');
   providerBaseUrl = `http://127.0.0.1:${address.port}/v1`;
+  const post = (path: string, payload: Record<string, unknown>, authorization = `Bearer ${apiKey}`) => fetch(
+    `${providerBaseUrl}${path}`,
+    { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(payload) },
+  );
+  const validPayload = { model: 'e2e-chat', max_tokens: 1, temperature: 0 };
+  expect((await fetch(`${providerBaseUrl}/chat/completions`)).status).toBe(405);
+  expect((await post('/wrong', validPayload)).status).toBe(404);
+  expect((await post('/chat/completions', validPayload, 'Bearer wrong')).status).toBe(401);
+  expect((await post('/chat/completions', { model: 'e2e-chat', max_tokens: 1 })).status).toBe(422);
+  capturedProviderRequest = undefined;
 });
 
 test.afterAll(async () => {
@@ -70,6 +114,12 @@ test('收费员管理真实模型、路由与提示词版本且密钥不泄漏',
   expect(await createModelResponse.text()).not.toContain(apiKey);
   const connectionResponse = await governance.testModelConnection();
   expect(await connectionResponse.text()).not.toContain(apiKey);
+  expect(capturedProviderRequest).toEqual({
+    method: 'POST',
+    path: '/v1/chat/completions',
+    authorization: `Bearer ${apiKey}`,
+    payload: expect.objectContaining({ model: 'e2e-chat', max_tokens: 1, temperature: 0 }),
+  });
   await governance.completeReviewAndPublish(profileId);
 
   await governance.createRouteRule(routeId, `e2e-${suffix}`, profileId);

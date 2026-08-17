@@ -47,7 +47,7 @@ export default defineConfig({
     {
       command: 'uvicorn src.runtime.api.app:create_app --host 127.0.0.1 --port 8000 --factory',
       port: 8000,
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 30000,
       cwd: '../../..',
       env: {
@@ -64,7 +64,7 @@ export default defineConfig({
       command: 'npm run dev',
       port: 3000,
       cwd: '../../apps/portal',
-      reuseExistingServer: true,
+      reuseExistingServer: false,
     },
   ],
 });
