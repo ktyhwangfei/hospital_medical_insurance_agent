@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from threading import RLock
 
 from src.data_platform.storage.model_governance.ports import (
+    GovernanceCredentialPrecondition,
     ModelGovernanceConflictError,
     ModelGovernanceNotFoundError,
 )
@@ -242,8 +243,27 @@ class InMemoryModelGovernanceStorage:
             except KeyError as exc:
                 raise ModelGovernanceNotFoundError("审批记录不存在") from exc
 
-    def publish(self, release: GovernanceRelease) -> GovernanceRelease:
+    def _check_credential_precondition(
+        self, precondition: GovernanceCredentialPrecondition | None
+    ) -> None:
+        if precondition is None:
+            return
+        current = self._credentials.get(precondition.credential_id)
+        if (
+            current is None
+            or current.secret_fingerprint != precondition.expected_fingerprint
+            or current.revision != precondition.expected_revision
+        ):
+            raise ModelGovernanceConflictError("模型凭据已变化")
+
+    def publish(
+        self,
+        release: GovernanceRelease,
+        *,
+        credential_precondition: GovernanceCredentialPrecondition | None = None,
+    ) -> GovernanceRelease:
         with self._lock:
+            self._check_credential_precondition(credential_precondition)
             if release.release_id in self._releases:
                 raise ModelGovernanceConflictError("发布记录已存在")
             active = next(
@@ -277,6 +297,7 @@ class InMemoryModelGovernanceStorage:
         release: GovernanceRelease,
         *,
         expected_revision: int,
+        credential_precondition: GovernanceCredentialPrecondition | None = None,
     ) -> GovernanceRelease:
         with self._lock:
             current = self._drafts.get(draft.draft_id)
@@ -284,6 +305,7 @@ class InMemoryModelGovernanceStorage:
                 raise ModelGovernanceConflictError("草稿 revision 已变化或草稿不存在")
             if draft.revision != expected_revision + 1:
                 raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
+            self._check_credential_precondition(credential_precondition)
             if release.release_id in self._releases:
                 raise ModelGovernanceConflictError("发布记录已存在")
 

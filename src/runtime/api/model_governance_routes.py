@@ -495,7 +495,12 @@ def publish_governance_draft(
             actor=principal.user_id,
             environment=request.environment,
         )
-    except (ModelGovernanceConflictError, ModelGovernanceNotFoundError, ModelGovernanceGateError) as exc:
+    except (
+        ModelGovernanceConflictError,
+        ModelGovernanceNotFoundError,
+        ModelGovernanceGateError,
+        GovernanceSecretError,
+    ) as exc:
         _raise_domain_error(exc)
     return GovernanceReleaseResponse(
         result=release, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "publish_draft")
@@ -526,7 +531,12 @@ def rollback_governance_release(
 ) -> GovernanceReleaseResponse:
     try:
         release = service.rollback(release_id, actor=principal.user_id)
-    except (ModelGovernanceConflictError, ModelGovernanceNotFoundError, ModelGovernanceGateError) as exc:
+    except (
+        ModelGovernanceConflictError,
+        ModelGovernanceNotFoundError,
+        ModelGovernanceGateError,
+        GovernanceSecretError,
+    ) as exc:
         _raise_domain_error(exc)
     return GovernanceReleaseResponse(
         result=release, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "rollback_release")

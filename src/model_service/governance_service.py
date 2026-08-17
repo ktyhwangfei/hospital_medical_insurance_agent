@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.data_platform.storage.model_governance.ports import (
+    GovernanceCredentialPrecondition,
     ModelGovernanceConflictError,
     ModelGovernanceNotFoundError,
     ModelGovernanceStorage,
@@ -187,6 +188,44 @@ class ModelGovernanceService:
             if isinstance(content, ModelProfileAssetContent) and content.enabled:
                 return True
         return False
+
+    def _target_credential_precondition(
+        self,
+        content: GovernanceAssetContent,
+        environment: GovernanceEnvironment,
+    ) -> GovernanceCredentialPrecondition | None:
+        if isinstance(content, ModelProfileAssetContent) and content.enabled:
+            try:
+                credential = self._storage.get_credential(content.credential_ref)
+            except ModelGovernanceNotFoundError as exc:
+                raise ModelGovernanceGateError(
+                    "模型必须先通过当前配置的连接测试"
+                ) from exc
+            GovernanceCredentialVault(self._storage).reveal_credential(credential)
+            tested = self._storage.find_successful_connection_test(
+                content.asset_id,
+                content_hash(content),
+                credential.secret_fingerprint,
+            )
+            if tested is None:
+                raise ModelGovernanceGateError(
+                    "模型必须先通过当前配置的连接测试"
+                )
+            return GovernanceCredentialPrecondition(
+                credential_id=credential.credential_id,
+                expected_fingerprint=credential.secret_fingerprint,
+                expected_revision=credential.revision,
+            )
+        if isinstance(content, RouteRuleAssetContent):
+            profile_ids = [content.profile_id, *content.fallback_profile_ids]
+            if any(
+                not self._profile_is_published(profile_id, environment)
+                for profile_id in profile_ids
+            ):
+                raise ModelGovernanceGateError(
+                    "路由引用的模型档案未在目标环境发布"
+                )
+        return None
 
     def _validation_issues(
         self, content: GovernanceAssetContent
@@ -422,31 +461,9 @@ class ModelGovernanceService:
         if draft.status != GovernanceDraftStatus.APPROVED:
             raise ModelGovernanceGateError("草稿必须先完成审核")
         digest = content_hash(draft.content)
-        if isinstance(draft.content, ModelProfileAssetContent) and draft.content.enabled:
-            try:
-                credential = self._storage.get_credential(
-                    draft.content.credential_ref
-                )
-            except ModelGovernanceNotFoundError as exc:
-                raise ModelGovernanceGateError(
-                    "模型必须先通过当前配置的连接测试"
-                ) from exc
-            tested = self._storage.find_successful_connection_test(
-                draft.asset_id,
-                digest,
-                credential.secret_fingerprint,
-            )
-            if tested is None:
-                raise ModelGovernanceGateError(
-                    "模型必须先通过当前配置的连接测试"
-                )
-        if isinstance(draft.content, RouteRuleAssetContent):
-            profile_ids = [draft.content.profile_id, *draft.content.fallback_profile_ids]
-            if any(
-                not self._profile_is_published(profile_id, environment)
-                for profile_id in profile_ids
-            ):
-                raise ModelGovernanceGateError("路由引用的模型档案未在目标环境发布")
+        credential_precondition = self._target_credential_precondition(
+            draft.content, environment
+        )
 
         approval_id = str(uuid5(NAMESPACE_URL, f"{draft.draft_id}:{digest}"))
         approval = self._storage.get_approval(approval_id)
@@ -488,6 +505,7 @@ class ModelGovernanceService:
             version,
             release,
             expected_revision=expected_revision,
+            credential_precondition=credential_precondition,
         )
 
     def rollback(self, release_id: str, *, actor: str) -> GovernanceRelease:
@@ -497,6 +515,10 @@ class ModelGovernanceService:
             raise ModelGovernanceGateError("该资产当前没有活动发布")
         if active.version_id == target.version_id:
             raise ModelGovernanceGateError("目标版本已是当前活动版本")
+        target_content = self._storage.get_version(target.version_id).content
+        credential_precondition = self._target_credential_precondition(
+            target_content, target.environment
+        )
         return self._storage.publish(
             GovernanceRelease(
                 release_id=str(uuid4()),
@@ -506,7 +528,8 @@ class ModelGovernanceService:
                 environment=target.environment,
                 previous_release_id=active.release_id,
                 created_by=actor,
-            )
+            ),
+            credential_precondition=credential_precondition,
         )
 
     def published_snapshot(

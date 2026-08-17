@@ -12,8 +12,10 @@ from src.model_service.governance_assets import (
     GovernanceAssetContent,
     GovernanceDraftStatus,
     GovernanceEnvironment,
+    GovernanceRelease,
     GovernanceReleaseStatus,
     GovernanceRuntimeStatus,
+    GovernanceVersion,
     ModelProfileAssetContent,
     PromptAssetContent,
     PromptVariable,
@@ -217,6 +219,51 @@ def test_model_secret_change_invalidates_connection_test(monkeypatch):
         )
 
 
+def test_model_publish_rejects_key_rotated_after_gate_before_atomic_commit(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+
+    class RotateBeforeCommitStorage(InMemoryModelGovernanceStorage):
+        rotate_once = None
+
+        def publish_draft_version(self, *args, **kwargs):
+            callback, self.rotate_once = self.rotate_once, None
+            if callback is not None:
+                callback()
+            return super().publish_draft_version(*args, **kwargs)
+
+    storage = RotateBeforeCommitStorage()
+    service = ModelGovernanceService(storage)
+    approved = _approved_model(service, _model_profile())
+    service.record_connection_test(
+        draft_id=approved.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=8,
+        safe_message="连接成功",
+    )
+    from src.model_service.governance_secrets import GovernanceCredentialVault
+
+    storage.rotate_once = lambda: GovernanceCredentialVault(storage).put(
+        "credential.demo", "sk-raced", actor="editor"
+    )
+
+    with pytest.raises(ModelGovernanceConflictError, match="凭据"):
+        service.publish(
+            approved.draft_id,
+            expected_revision=approved.revision,
+            actor="publisher",
+            environment=GovernanceEnvironment.DEV,
+        )
+    assert storage.get_active_release(
+        approved.asset_id, GovernanceEnvironment.DEV
+    ) is None
+
+
 def test_disabled_model_can_publish_without_connection_test(monkeypatch):
     monkeypatch.setenv(
         "MODEL_GOVERNANCE_MASTER_KEY",
@@ -232,6 +279,140 @@ def test_disabled_model_can_publish_without_connection_test(monkeypatch):
         environment=GovernanceEnvironment.DEV,
     )
     assert release.status == GovernanceReleaseStatus.ACTIVE
+
+
+def test_model_publish_fails_closed_when_master_key_cannot_decrypt(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    service = ModelGovernanceService(InMemoryModelGovernanceStorage())
+    approved = _approved_model(service, _model_profile())
+    service.record_connection_test(
+        draft_id=approved.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=8,
+        safe_message="连接成功",
+    )
+    monkeypatch.setenv("MODEL_GOVERNANCE_MASTER_KEY", "invalid-key")
+    from src.model_service.governance_secrets import GovernanceSecretError
+
+    with pytest.raises(GovernanceSecretError):
+        service.publish(
+            approved.draft_id,
+            expected_revision=approved.revision,
+            actor="publisher",
+            environment=GovernanceEnvironment.DEV,
+        )
+
+
+def _seed_version(
+    storage: InMemoryModelGovernanceStorage,
+    content: GovernanceAssetContent,
+    *,
+    number: int,
+) -> GovernanceVersion:
+    version = GovernanceVersion(
+        version_id=f"version-{content.asset_id}-{number}",
+        asset_id=content.asset_id,
+        asset_type=content.asset_type,
+        version_number=number,
+        content=content,
+        content_hash=content_hash(content),
+        approval_id=f"approval-{content.asset_id}-{number}",
+        created_by="publisher",
+    )
+    return storage.save_version(version)
+
+
+def _seed_release(
+    storage: InMemoryModelGovernanceStorage,
+    version: GovernanceVersion,
+    *,
+    previous_release_id: str | None = None,
+) -> GovernanceRelease:
+    return storage.publish(
+        GovernanceRelease(
+            release_id=f"release-{version.version_id}",
+            asset_id=version.asset_id,
+            asset_type=version.asset_type,
+            version_id=version.version_id,
+            environment=GovernanceEnvironment.DEV,
+            previous_release_id=previous_release_id,
+            created_by="publisher",
+        )
+    )
+
+
+def test_rollback_enabled_model_rechecks_current_key_and_connection_evidence(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
+    from src.model_service.governance_secrets import GovernanceCredentialVault
+
+    vault = GovernanceCredentialVault(storage)
+    old_credential = vault.put("credential.demo", "sk-old", actor="editor")
+    target_version = _seed_version(storage, _model_profile(), number=1)
+    target_release = _seed_release(storage, target_version)
+    disabled_version = _seed_version(
+        storage, _model_profile(enabled=False), number=2
+    )
+    _seed_release(
+        storage,
+        disabled_version,
+        previous_release_id=target_release.release_id,
+    )
+    from src.model_service.governance_assets import GovernanceConnectionTest
+
+    storage.save_connection_test(
+        GovernanceConnectionTest(
+            test_id="00000000-0000-0000-0000-000000000099",
+            asset_id=target_version.asset_id,
+            content_hash=target_version.content_hash,
+            credential_fingerprint=old_credential.secret_fingerprint,
+            succeeded=True,
+            latency_ms=7,
+            safe_message="连接成功",
+            tested_by="editor",
+        )
+    )
+    vault.put("credential.demo", "sk-new", actor="editor")
+
+    with pytest.raises(ModelGovernanceGateError, match="连接测试"):
+        service.rollback(target_release.release_id, actor="publisher")
+
+
+def test_rollback_route_rechecks_enabled_models_in_target_environment():
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
+    disabled_model = _model_profile(enabled=False)
+    model_version = _seed_version(storage, disabled_model, number=1)
+    _seed_release(storage, model_version)
+    target_route = RouteRuleAssetContent(
+        asset_id="route.demo",
+        name="旧路由",
+        scene="policy_qa",
+        profile_id=disabled_model.asset_id,
+    )
+    target_version = _seed_version(storage, target_route, number=1)
+    target_release = _seed_release(storage, target_version)
+    active_version = _seed_version(
+        storage,
+        target_route.model_copy(update={"name": "当前路由"}),
+        number=2,
+    )
+    _seed_release(
+        storage,
+        active_version,
+        previous_release_id=target_release.release_id,
+    )
+
+    with pytest.raises(ModelGovernanceGateError, match="未在目标环境发布"):
+        service.rollback(target_release.release_id, actor="publisher")
 
 
 def test_publish_requires_validation_and_different_reviewer():

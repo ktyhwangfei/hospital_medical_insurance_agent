@@ -1,5 +1,6 @@
 """模型治理存储契约。"""
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from src.model_service.governance_assets import (
@@ -20,6 +21,13 @@ class ModelGovernanceConflictError(ValueError):
 
 class ModelGovernanceNotFoundError(LookupError):
     """治理资产不存在。"""
+
+
+@dataclass(frozen=True)
+class GovernanceCredentialPrecondition:
+    credential_id: str
+    expected_fingerprint: str
+    expected_revision: int
 
 
 class ModelGovernanceStorage(Protocol):
@@ -88,7 +96,12 @@ class ModelGovernanceStorage(Protocol):
 
     def get_approval(self, approval_id: str) -> GovernanceApproval: ...
 
-    def publish(self, release: GovernanceRelease) -> GovernanceRelease: ...
+    def publish(
+        self,
+        release: GovernanceRelease,
+        *,
+        credential_precondition: GovernanceCredentialPrecondition | None = None,
+    ) -> GovernanceRelease: ...
 
     def publish_draft_version(
         self,
@@ -97,6 +110,7 @@ class ModelGovernanceStorage(Protocol):
         release: GovernanceRelease,
         *,
         expected_revision: int,
+        credential_precondition: GovernanceCredentialPrecondition | None = None,
     ) -> GovernanceRelease: ...
 
     def get_release(self, release_id: str) -> GovernanceRelease: ...

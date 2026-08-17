@@ -260,6 +260,57 @@ def test_publish_draft_version_is_atomic_on_revision_conflict():
         storage.get_release(release.release_id)
 
 
+def test_in_memory_publish_checks_credential_precondition_inside_lock():
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+    from src.data_platform.storage.model_governance.ports import (
+        GovernanceCredentialPrecondition,
+        ModelGovernanceConflictError,
+        ModelGovernanceNotFoundError,
+    )
+
+    precondition = GovernanceCredentialPrecondition(
+        credential_id="credential.demo",
+        expected_fingerprint="a" * 64,
+        expected_revision=1,
+    )
+    changed = GovernanceCredential(
+        credential_id=precondition.credential_id,
+        encrypted_api_key="encrypted-changed",
+        secret_fingerprint="b" * 64,
+        revision=2,
+        updated_by="editor",
+        updated_at=NOW,
+    )
+
+    rollback_storage = InMemoryModelGovernanceStorage()
+    rollback_storage.put_credential(
+        changed.model_copy(update={"revision": 1})
+    )
+    with pytest.raises(ModelGovernanceConflictError, match="凭据"):
+        rollback_storage.publish(
+            _release("release-credential-race", "version-1"),
+            credential_precondition=precondition,
+        )
+    with pytest.raises(ModelGovernanceNotFoundError):
+        rollback_storage.get_release("release-credential-race")
+
+    publish_storage = InMemoryModelGovernanceStorage()
+    draft = publish_storage.create_draft(_draft())
+    publish_storage.put_credential(changed.model_copy(update={"revision": 1}))
+    with pytest.raises(ModelGovernanceConflictError, match="凭据"):
+        publish_storage.publish_draft_version(
+            draft.model_copy(update={"revision": 2}),
+            _version("version-credential-race", 1),
+            _release("release-credential-race", "version-credential-race"),
+            expected_revision=1,
+            credential_precondition=precondition,
+        )
+    assert publish_storage.get_draft(draft.draft_id) == draft
+    assert publish_storage.list_versions(draft.asset_id) == []
+
+
 def test_postgres_atomic_publish_preserves_infrastructure_errors():
     from src.data_platform.storage.model_governance.postgres import (
         PostgresModelGovernanceStorage,
@@ -318,6 +369,63 @@ def test_postgres_atomic_publish_maps_constraint_errors_to_conflict():
             _release("release-1", "version-1"),
             expected_revision=1,
         )
+
+
+def test_postgres_publish_locks_and_checks_credential_precondition():
+    from src.data_platform.storage.model_governance.ports import (
+        GovernanceCredentialPrecondition,
+        ModelGovernanceConflictError,
+    )
+    from src.data_platform.storage.model_governance.postgres import (
+        PostgresModelGovernanceStorage,
+    )
+
+    class ChangedCredentialClient:
+        is_connected = True
+
+        def __init__(self, *, draft_revision=None):
+            self.draft_revision = draft_revision
+            self.statements = []
+
+        @contextmanager
+        def transaction(self):
+            yield
+
+        def execute(self, sql, params=()):
+            self.statements.append(sql)
+            if "FROM model_governance_drafts" in sql:
+                return [{"revision": self.draft_revision}]
+            if "FROM model_governance_credentials" in sql:
+                return [{"secret_fingerprint": "b" * 64, "revision": 2}]
+            raise AssertionError("credential precondition must run before release writes")
+
+    precondition = GovernanceCredentialPrecondition(
+        credential_id="credential.demo",
+        expected_fingerprint="a" * 64,
+        expected_revision=1,
+    )
+    rollback_client = ChangedCredentialClient()
+    rollback_storage = PostgresModelGovernanceStorage("postgresql://unused")
+    rollback_storage._client = rollback_client
+    with pytest.raises(ModelGovernanceConflictError, match="凭据"):
+        rollback_storage.publish(
+            _release("release-race", "version-1"),
+            credential_precondition=precondition,
+        )
+    assert "FOR UPDATE" in rollback_client.statements[0]
+
+    publish_client = ChangedCredentialClient(draft_revision=1)
+    publish_storage = PostgresModelGovernanceStorage("postgresql://unused")
+    publish_storage._client = publish_client
+    with pytest.raises(ModelGovernanceConflictError, match="凭据"):
+        publish_storage.publish_draft_version(
+            _draft(revision=2),
+            _version("version-race", 1),
+            _release("release-race", "version-race"),
+            expected_revision=1,
+            credential_precondition=precondition,
+        )
+    assert "FOR UPDATE" in publish_client.statements[1]
 
 
 def test_postgres_schema_has_revision_and_unique_active_release():

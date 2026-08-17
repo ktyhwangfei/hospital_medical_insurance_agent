@@ -532,12 +532,22 @@ def test_model_connection_test_sanitizes_provider_failures(
     )
     client = _management_client(monkeypatch)
     secret = "failure-secret-value"
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
     from src.model_service.exceptions import (
         ModelAuthError,
         ModelServerError,
         ModelTimeoutError,
     )
     from src.model_service.providers.openai_compatible import OpenAICompatibleProvider
+    from src.model_service.governance_service import ModelGovernanceService
+    from src.runtime.api.model_governance_routes import get_model_governance_service
+
+    storage = InMemoryModelGovernanceStorage()
+    client.app.dependency_overrides[get_model_governance_service] = lambda: (
+        ModelGovernanceService(storage)
+    )
 
     errors = {
         "auth": ModelAuthError(f"upstream leaked {secret}"),
@@ -565,6 +575,14 @@ def test_model_connection_test_sanitizes_provider_failures(
     assert response.json()["result"]["status"] == "failure"
     assert response.json()["result"]["safe_message"] == safe_message
     assert secret not in response.text
+    assert len(storage._connection_tests) == 1
+    failed = next(iter(storage._connection_tests.values()))
+    assert failed.succeeded is False
+    assert storage.find_successful_connection_test(
+        failed.asset_id,
+        failed.content_hash,
+        failed.credential_fingerprint,
+    ) is None
 
 
 def test_connection_test_rejects_non_model_draft(monkeypatch):

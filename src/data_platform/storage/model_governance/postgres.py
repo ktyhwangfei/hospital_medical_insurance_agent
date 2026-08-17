@@ -6,6 +6,7 @@ from typing import Any
 
 from src.config.production import DATABASE_URL
 from src.data_platform.storage.model_governance.ports import (
+    GovernanceCredentialPrecondition,
     ModelGovernanceConflictError,
     ModelGovernanceNotFoundError,
 )
@@ -468,9 +469,35 @@ class PostgresModelGovernanceStorage:
             raise ModelGovernanceNotFoundError("审批记录不存在")
         return self._approval(rows[0])
 
-    def publish(self, release: GovernanceRelease) -> GovernanceRelease:
+    @staticmethod
+    def _check_credential_precondition(
+        client: PostgreSQLClient,
+        precondition: GovernanceCredentialPrecondition | None,
+    ) -> None:
+        if precondition is None:
+            return
+        rows = client.execute(
+            """SELECT secret_fingerprint, revision
+               FROM model_governance_credentials
+               WHERE credential_id=%s FOR UPDATE""",
+            (precondition.credential_id,),
+        )
+        if (
+            not rows
+            or rows[0]["secret_fingerprint"] != precondition.expected_fingerprint
+            or rows[0]["revision"] != precondition.expected_revision
+        ):
+            raise ModelGovernanceConflictError("模型凭据已变化")
+
+    def publish(
+        self,
+        release: GovernanceRelease,
+        *,
+        credential_precondition: GovernanceCredentialPrecondition | None = None,
+    ) -> GovernanceRelease:
         client = self._get_client()
         with client.transaction():
+            self._check_credential_precondition(client, credential_precondition)
             active_rows = client.execute(
                 """SELECT * FROM model_governance_releases
                    WHERE asset_id=%s AND environment=%s AND status='active' FOR UPDATE""",
@@ -507,6 +534,7 @@ class PostgresModelGovernanceStorage:
         release: GovernanceRelease,
         *,
         expected_revision: int,
+        credential_precondition: GovernanceCredentialPrecondition | None = None,
     ) -> GovernanceRelease:
         if draft.revision != expected_revision + 1:
             raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
@@ -525,6 +553,9 @@ class PostgresModelGovernanceStorage:
                     raise ModelGovernanceConflictError(
                         "草稿 revision 已变化或草稿不存在"
                     )
+                self._check_credential_precondition(
+                    client, credential_precondition
+                )
 
                 active_rows = client.execute(
                     """SELECT * FROM model_governance_releases
