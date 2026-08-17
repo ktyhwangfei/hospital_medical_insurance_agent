@@ -29,7 +29,7 @@
 | 政策问答 | 6 | 0 | 6 | 0 | 0 | P10 已切换；Chat-first 单答案最小单元已实现，待 R4 性能/E2E 收口 |
 | 结算异常导办 | 4 | 0 | 4 | 0 | 0 | — |
 | 出院前质控 | 3 | 0 | 3 | 0 | 0 | — |
-| 模型服务与管理 | 4 | 0 | 4 | 0 | 0 | — |
+| 模型服务与管理 | 5 | 1 | 4 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证 |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 | 知识库管理 | 3 | 0 | 3 | 0 | 0 | §2 P9 5 tab 已上线，详见 §2 |
 | 技能管理 | 5 | 2 | 3 | 0 | 0 | 阶段 2 批量评测与 test 发布门禁已验证 |
@@ -37,7 +37,7 @@
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **35** | **2** | **29** | **2** | **2** | — |
+| **合计** | **36** | **3** | **29** | **2** | **2** | — |
 
 > **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6 和 §4 为准；
@@ -79,6 +79,9 @@
 | 4.2 | 模型在线测试（流式 SSE） | `model_routes.py` → SSE | impl_done |
 | 4.3 | 模型路由（type+scene 策略） | `model_service/gateway/` → `router/` | impl_done |
 | 4.4 | 模型异常分类处理 | `model_service/exceptions/` | impl_done |
+| 4.5 | 提示词/模型/路由真实资产版本治理并驱动 dev/test 运行时 | `model_service/governance_*` → `ModelGateway` → Portal `/model-governance` | verified |
+
+4.5 验证证据（2026-08-17）：治理发布后的提示词、模型与路由成为 dev/test 真实运行时来源，无活动发布时才使用代码/静态配置回退；配置损坏失败关闭。API Key 通过 Fernet 密文保存，凭据以 endpoint fingerprint 和 revision 绑定，响应、日志与页面不回显明文；模型发布要求内容哈希与当前密钥指纹完全匹配的成功连接测试。按 T1 → T2a → T2b → T3 → Portal → T4 顺序分别为 89 passed、23 passed、2 passed、4 passed（20 条治理路由解析均值 0.876ms）、Vitest 21 passed + `tsc --noEmit` + Next.js build、Chromium E2E 1 passed（本机 OpenAI-compatible 测试 Provider），覆盖收费员直入、真实提示词全文、模型连接/审核/发布、下拉路由、提示词新版本生效/回滚、390px 无横向溢出及 API Key 页面/响应无泄漏。权限管理页尚未实现，当前仍沿用开发身份写/审/发门禁，是下一阶段工作。
 
 #### MCP 工具管理
 | # | 单元 | 后端 | 状态 |
@@ -273,6 +276,7 @@
 | Runtime 性能基准 | ✅ 全绿 | 3 passed：Memory ≤ 0.005ms、Composer 0.244ms（§3.2） |
 | Policy QA Chat-first 后端契约 | ✅ 聚焦验证通过 | 严格按 T1 单元 → T2a API → T2b Flow：130 passed → 39 passed → 99 passed |
 | Policy QA Chat-first Portal | ✅ 聚焦验证通过 | Task 4 流契约 37 passed；Task 5 完成时全量 Vitest 112 passed；Task 6 删除旧测试后 94 passed；`tsc --noEmit` 与 `next build` 通过。未执行或声明全仓 lint 通过 |
+| 模型治理真实资产运行时 | ✅ 全链路验证通过 | T1 89、T2a 23、T2b 2、T3 4、Portal Vitest 21、TypeScript/build、Chromium E2E 1 均通过 |
 | 全量回归 | ⚠️ 单元 26F/894P、API 66F/43P、Flow 42F/9P（预存债务） | 2026-07-31 与 HEAD 基线对比零新增失败，见 §5 测试债务 |
 
 ### 3.1 已知预存技术债（非当前任务引入，治理时优先级参考）
@@ -317,6 +321,7 @@
 | 2026-08-04 | **政策问答质量修复 + Skill 驱动迁移**：①修复链路三连（MSSQL 环境变量注入→查询无结果；POSTGRES_PASSWORD 默认值→记忆不沉淀；subject_changed 误判→横幅误弹）②P0/P1/P2 优化（dummy 降级真实数据模板 + answer_mode 来源徽标 + 记忆业务键值 + 话题锚点 + 推理链业务化 + error 事件契约）③严肃化 + 回答价值门控（未获取/分段不完整拒绝，引导咨询医保办）④**SSE 对话流迁移 Skill 驱动执行**（旧编排器 PolicyQAOrchestrator 退役；skill dummy 降级 + strategy 单例缓存串答案修复；`DATA_SOURCE_MODE=real_db` 注入；响应 30s+→1.3s）。落地记录见 `docs/steering/医保Agent-政策问答前端改造-落地记录-V1.0.md` | §3.5（前端政策问答）/ §3（Runtime） |
 | 2026-08-05 | **Policy QA Chat-first 单答案重构（最小可验证单元 1.6）**：后端 Skill、Runtime、SSE/REST 统一为严格白名单单答案契约；删除 `patient_view`、`office_view`、`settlement_evidence`；Portal 改为最大 840px 单列 Chat-first、Composer 结算上下文标签、查证摘要与计算/来源渐进披露；旧三栏、双视角与推理链展示删除。当前已通过后端 T1/T2a/T2b 130/39/99、Portal 37/112/94、TypeScript 与构建验证；R4 性能/E2E 待收口，未声称全仓 lint 通过 | §1.1 单元 1.6；接口/原型/设计 spec |
 | 2026-08-06 | **迭代 16：知识页功能优化**：①构建页性能（eligible-units ~2s→~0.7s：store 批量 claims/get_many 消除 N+1、workbench 单遍 `list_document_ids` 枚举 + `get_document(include_knowledge=False)` 跳过 KnowledgeItem 构建；前端独立并行加载 + 骨架屏，任务表首屏即时渲染）②新建任务抽屉新增全选 + 按来源文档筛选 ③审核详情页改表格化（每行一条候选知识：指标字段/单元原文/置信度/操作），表头按单元筛选，行级 通过/拒绝/退回/查看详情（行级走 `reviewKnowledge` 落库留痕，退回以 `[退回重提取]` 前缀 note 落库）；操作按钮用途与交互细节见迭代记录迭代 16 | §2 迭代 16；知识页三页 + wizard + 审核详情；后端 build/workbench 性能链路 |
+| 2026-08-17 | **后台管理真实资产版本与模型接入**：真实提示词/模型/路由发布接入 dev/test 运行时；Fernet 凭据、连接测试发布门槛、版本只读/新建/回滚与资产中心 E2E 完成 | §1 模型服务与管理 4.5；§4 验证证据 |
 
 ---
 

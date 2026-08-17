@@ -71,9 +71,10 @@ def test_model_profile_accepts_secret_reference_not_secret_value():
     content = api["ModelProfileAssetContent"](
         asset_id="model.deepseek-chat",
         name="DeepSeek Chat",
-        provider_id="default",
+        provider_id="openai_compatible",
+        base_url="https://model.example/v1",
         model_name="deepseek-chat",
-        credential_ref="MODEL_API_KEY",
+        credential_ref="credential.model.deepseek-chat",
         temperature=0.1,
         max_tokens=4096,
     )
@@ -83,9 +84,10 @@ def test_model_profile_accepts_secret_reference_not_secret_value():
         api["ModelProfileAssetContent"](
             asset_id="model.invalid",
             name="非法模型",
-            provider_id="default",
+            provider_id="openai_compatible",
+            base_url="https://model.example/v1",
             model_name="deepseek-chat",
-            credential_ref="sk-secret-value",
+            credential_ref="sk_SECRET_value",
             temperature=0.1,
             max_tokens=4096,
         )

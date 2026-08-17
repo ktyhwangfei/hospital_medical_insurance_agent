@@ -2,12 +2,13 @@ import { expect, type Locator, type Page, type Response } from '@playwright/test
 
 import { BasePage } from '../base.page';
 
-/** Portal 模型治理台账与开发管理 Page Object。 */
+/** Portal 模型治理资产中心 Page Object。 */
 export class ModelGovernancePage extends BasePage {
   readonly roleSwitcher: Locator;
   readonly modelGovernanceLink: Locator;
   readonly title: Locator;
   readonly developerIdentity: Locator;
+  private readonly governanceResponseBodies: Promise<string>[] = [];
 
   constructor(page: Page) {
     super(page, process.env.PORTAL_BASE_URL ?? 'http://127.0.0.1:3000');
@@ -15,6 +16,11 @@ export class ModelGovernancePage extends BasePage {
     this.modelGovernanceLink = page.getByRole('link', { name: '后台管理', exact: true });
     this.title = page.getByRole('heading', { name: '后台管理', exact: true });
     this.developerIdentity = page.getByLabel('开发身份');
+    page.on('response', (response) => {
+      if (response.url().includes('/model-governance/')) {
+        this.governanceResponseBodies.push(response.text().catch(() => ''));
+      }
+    });
   }
 
   async goto(): Promise<void> {
@@ -25,15 +31,10 @@ export class ModelGovernancePage extends BasePage {
     await this.page.setViewportSize({ width: 390, height: 844 });
   }
 
-  async switchToInformationDepartment(): Promise<void> {
-    await this.roleSwitcher.click();
-    await this.page.getByRole('option', { name: /信息科/ }).click();
-  }
-
-  async openAndWaitForSnapshot(): Promise<Response> {
+  async openAndWaitForAssets(): Promise<Response> {
     const responsePromise = this.page.waitForResponse((response) =>
       response.request().method() === 'GET'
-      && response.url().includes('/model-governance/snapshot'),
+      && response.url().includes('/model-governance/assets?'),
     );
     await this.modelGovernanceLink.click();
     return responsePromise;
@@ -45,121 +46,160 @@ export class ModelGovernancePage extends BasePage {
     );
   }
 
-  assetCard(assetId: string): Locator {
-    return this.page.locator('article').filter({ hasText: assetId });
+  async assertSecretAbsent(secret: string): Promise<void> {
+    await expect(this.page.locator('body')).not.toContainText(secret);
+    for (const body of await Promise.all(this.governanceResponseBodies)) {
+      expect(body).not.toContain(secret);
+    }
   }
 
-  private async selectTab(name: '提示词' | '模型档案' | '路由规则' | '发布记录'): Promise<void> {
+  assetRow(assetId: string): Locator {
+    return this.page.locator('tbody tr').filter({ hasText: assetId });
+  }
+
+  async selectTab(name: '提示词' | '模型' | '路由规则' | '发布记录'): Promise<void> {
     await this.page.getByRole('tab', { name, exact: true }).click();
   }
 
-  async verifyCurrentAssetInventories(): Promise<void> {
-    await this.selectTab('提示词');
-    await expect(this.page.getByRole('heading', { name: '当前提示词', exact: true })).toBeVisible();
-    await expect(this.page.getByRole('table', { name: '提示词台账' }).locator('tbody tr').first()).toBeVisible();
-    await this.selectTab('模型档案');
-    const modelSection = this.page.getByRole('heading', { name: '当前模型', exact: true }).locator('..');
-    await expect(modelSection.locator('.font-mono').first()).toBeVisible();
-    await this.selectTab('路由规则');
-    await expect(this.page.getByRole('table', { name: '模型路由台账' }).locator('tbody tr').first()).toBeVisible();
+  async openAsset(assetId: string): Promise<void> {
+    await this.assetRow(assetId).getByRole('button', { name: `查看 ${assetId}` }).click();
+    await expect(this.page.getByRole('dialog')).toBeVisible();
   }
 
-  private async saveDraft(): Promise<Response> {
-    const responsePromise = this.page.waitForResponse((response) =>
-      response.request().method() === 'POST'
-      && response.url().endsWith('/model-governance/drafts'),
-    );
-    await this.page.getByRole('button', { name: '保存草稿', exact: true }).click();
-    return responsePromise;
+  async closeDrawer(): Promise<void> {
+    await this.page.getByRole('button', { name: '关闭详情抽屉' }).click();
+  }
+
+  async expectCurrentPrompt(systemPrompt: string, userPrompt: string): Promise<void> {
+    const current = this.page.locator('section[aria-labelledby="current-version-title"]');
+    await expect(current.getByText(systemPrompt || '（空）', { exact: true })).toBeVisible();
+    await expect(current.getByText(userPrompt, { exact: true })).toBeVisible();
   }
 
   async selectDeveloperIdentity(identity: 'editor' | 'reviewer'): Promise<void> {
     await this.developerIdentity.selectOption(identity);
   }
 
-  async createModelProfile(assetId: string, modelName: string): Promise<void> {
-    await this.selectTab('模型档案');
-    await this.page.getByRole('button', { name: '新建模型档案', exact: true }).click();
-    const panel = this.page.getByRole('tabpanel');
-    await panel.getByLabel('资产标识').fill(assetId);
-    await panel.getByLabel('显示名称').fill(`E2E ${assetId}`);
-    await panel.getByLabel('模型名').fill(modelName);
-    expect((await this.saveDraft()).status()).toBe(201);
-    await expect(this.assetCard(assetId).first()).toContainText('编辑中');
+  private async saveWorkingVersion(method: 'POST' | 'PATCH'): Promise<Response> {
+    const responsePromise = this.page.waitForResponse((response) =>
+      response.request().method() === method
+      && response.url().includes('/model-governance/drafts'),
+    );
+    await this.page.getByRole('button', { name: '保存工作版本', exact: true }).click();
+    return responsePromise;
   }
 
-  async createRouteRule(assetId: string, scene: string, profileId: string): Promise<void> {
+  async createModelProfile(input: {
+    assetId: string;
+    baseUrl: string;
+    modelName: string;
+    credentialId: string;
+    apiKey: string;
+  }): Promise<Response> {
+    await this.selectTab('模型');
+    await this.page.getByRole('button', { name: '新建模型', exact: true }).click();
+    await expect(this.page.getByLabel('Provider')).toHaveValue('OpenAI-compatible');
+    await this.page.getByLabel('资产 ID').fill(input.assetId);
+    await this.page.getByLabel('显示名称').fill(`E2E ${input.assetId}`);
+    await this.page.getByLabel('API 访问地址').fill(input.baseUrl);
+    await this.page.getByLabel('模型名').fill(input.modelName);
+    await this.page.getByLabel('Credential ID').fill(input.credentialId);
+    await this.page.getByLabel('API Key').fill(input.apiKey);
+    await this.page.getByLabel('超时（秒）').fill('5');
+    await this.page.getByLabel('温度').fill('0');
+    await this.page.getByLabel('最大 tokens').fill('16');
+    await this.page.getByLabel('启用模型').check();
+    const response = await this.saveWorkingVersion('POST');
+    expect(response.status()).toBe(201);
+    await expect(this.page.getByLabel('API Key')).toHaveValue('');
+    return response;
+  }
+
+  async testModelConnection(): Promise<Response> {
+    const responsePromise = this.page.waitForResponse((response) =>
+      response.request().method() === 'POST'
+      && response.url().endsWith('/test-connection'),
+    );
+    await this.page.getByRole('button', { name: '测试连接', exact: true }).click();
+    const response = await responsePromise;
+    expect(response.status()).toBe(200);
+    await expect(this.page.getByText(/连接成功/)).toBeVisible();
+    return response;
+  }
+
+  async createRouteRule(assetId: string, scene: string, profileId: string): Promise<Response> {
     await this.selectTab('路由规则');
     await this.page.getByRole('button', { name: '新建路由规则', exact: true }).click();
-    const panel = this.page.getByRole('tabpanel');
-    await panel.getByLabel('资产标识').fill(assetId);
-    await panel.getByLabel('显示名称').fill(`E2E ${assetId}`);
-    await panel.getByLabel('场景').fill(scene);
-    await panel.getByLabel('主模型档案').fill(profileId);
-    expect((await this.saveDraft()).status()).toBe(201);
-    await expect(this.assetCard(assetId).first()).toContainText('编辑中');
+    await this.page.getByLabel('资产 ID').fill(assetId);
+    await this.page.getByLabel('显示名称').fill(`E2E ${assetId}`);
+    await this.page.getByLabel('场景').fill(scene);
+    const profileSelect = this.page.getByLabel('主模型');
+    await expect(profileSelect).toHaveJSProperty('tagName', 'SELECT');
+    await profileSelect.selectOption(profileId);
+    const response = await this.saveWorkingVersion('POST');
+    expect(response.status()).toBe(201);
+    return response;
   }
 
-  async createPromptDraft(assetId: string, template: string): Promise<void> {
+  async activateBaselinePrompt(assetId: string): Promise<void> {
     await this.selectTab('提示词');
-    await this.page.getByRole('button', { name: '新建提示词', exact: true }).click();
-    const panel = this.page.getByRole('tabpanel');
-    await panel.getByLabel('提示词标识').fill(assetId);
-    await panel.getByLabel('显示名称').fill(`E2E ${assetId}`);
-    await panel.getByLabel('用户提示词模板').fill(template);
-    expect((await this.saveDraft()).status()).toBe(201);
-    await expect(this.assetCard(assetId).first()).toContainText('编辑中');
+    await this.openAsset(assetId);
+    const responsePromise = this.page.waitForResponse((response) =>
+      response.request().method() === 'POST'
+      && response.url().endsWith('/model-governance/drafts'),
+    );
+    await this.page.getByRole('button', { name: '创建首个草稿' }).click();
+    expect((await responsePromise).status()).toBe(201);
+  }
+
+  async createPromptVersion(assetId: string, userPrompt: string): Promise<void> {
+    await this.selectTab('提示词');
+    await this.openAsset(assetId);
+    const versionPromise = this.page.waitForResponse((response) =>
+      response.request().method() === 'POST'
+      && response.url().includes(`/model-governance/assets/${assetId}/versions`),
+    );
+    await this.page.getByRole('button', { name: '新建版本' }).click();
+    expect((await versionPromise).status()).toBe(201);
+    await this.page.getByLabel('用户提示词模板').fill(userPrompt);
+    expect((await this.saveWorkingVersion('PATCH')).status()).toBe(200);
   }
 
   async completeReviewAndPublish(assetId: string): Promise<void> {
-    const card = this.assetCard(assetId).first();
     let responsePromise = this.page.waitForResponse((response) =>
-      response.request().method() === 'POST'
-      && response.url().includes('/validate'),
+      response.request().method() === 'POST' && response.url().endsWith('/validate'),
     );
-    await card.getByRole('button', { name: '校验', exact: true }).click();
+    await this.page.getByRole('button', { name: '校验', exact: true }).click();
     expect((await responsePromise).status()).toBe(200);
-    await expect(card).toContainText('已校验');
 
     responsePromise = this.page.waitForResponse((response) =>
-      response.request().method() === 'POST'
-      && response.url().includes('/request-review'),
+      response.request().method() === 'POST' && response.url().endsWith('/request-review'),
     );
-    await card.getByRole('button', { name: '申请审核', exact: true }).click();
+    await this.page.getByRole('button', { name: '申请审核', exact: true }).click();
     expect((await responsePromise).status()).toBe(200);
-    await expect(card).toContainText('待审核');
 
     await this.selectDeveloperIdentity('reviewer');
     responsePromise = this.page.waitForResponse((response) =>
-      response.request().method() === 'POST'
-      && response.url().includes('/approve'),
+      response.request().method() === 'POST' && response.url().endsWith('/approve'),
     );
-    await card.getByRole('button', { name: '审核通过', exact: true }).click();
+    await this.page.getByRole('button', { name: '审核通过', exact: true }).click();
     expect((await responsePromise).status()).toBe(200);
-    await expect(card).toContainText('已审核');
 
     await this.selectDeveloperIdentity('editor');
     responsePromise = this.page.waitForResponse((response) =>
-      response.request().method() === 'POST'
-      && response.url().includes('/publish'),
+      response.request().method() === 'POST' && response.url().endsWith('/publish'),
     );
-    await card.getByRole('button', { name: '发布到开发环境', exact: true }).click();
+    await this.page.getByRole('button', { name: '发布到dev环境', exact: true }).click();
     expect((await responsePromise).status()).toBe(200);
-    await expect(this.assetCard(assetId).first()).toContainText('已发布，待接入');
+    await expect(this.assetRow(assetId)).toContainText('dev 活动版本');
   }
 
-  async rollbackToPreviousRelease(assetId: string): Promise<void> {
-    await this.selectTab('发布记录');
-    const historical = this.page.locator('article')
-      .filter({ hasText: assetId })
-      .filter({ hasText: '历史版本' })
-      .first();
+  async rollbackPromptToPrevious(systemPrompt: string, userPrompt: string): Promise<void> {
     const responsePromise = this.page.waitForResponse((response) =>
-      response.request().method() === 'POST'
-      && response.url().includes('/rollback'),
+      response.request().method() === 'POST' && response.url().endsWith('/rollback'),
     );
-    await historical.getByRole('button', { name: '回滚至此版本', exact: true }).click();
+    await this.page.getByRole('button', { name: '回滚至此版本' }).first().click();
     expect((await responsePromise).status()).toBe(200);
-    await this.selectTab('提示词');
+    await this.expectCurrentPrompt(systemPrompt, userPrompt);
   }
 }
