@@ -48,8 +48,8 @@ class GovernanceReleaseStatus(StrEnum):
 
 
 class GovernanceRuntimeStatus(StrEnum):
-    NOT_CONNECTED = "not_connected"
-    STATIC_SOURCE = "static_source"
+    GOVERNED_ACTIVE = "governed_active"
+    FALLBACK_STATIC = "fallback_static"
 
 
 class PromptVariable(BaseModel):
@@ -262,7 +262,7 @@ class PublishedGovernanceAsset(BaseModel):
     release_id: str
     content_hash: str
     content: GovernanceAssetContent
-    runtime_status: GovernanceRuntimeStatus = GovernanceRuntimeStatus.NOT_CONNECTED
+    runtime_status: GovernanceRuntimeStatus = GovernanceRuntimeStatus.GOVERNED_ACTIVE
 
 
 class PublishedGovernanceSnapshot(BaseModel):

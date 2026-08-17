@@ -173,7 +173,7 @@ export interface PublishedGovernanceAsset {
   release_id: string
   content_hash: string
   content: GovernanceAssetContent
-  runtime_status: 'not_connected' | 'static_source'
+  runtime_status: 'governed_active' | 'fallback_static'
 }
 
 export interface GovernanceAssetsResult {

@@ -767,7 +767,7 @@ def test_publish_requires_validation_and_different_reviewer():
 
     assert release.status == GovernanceReleaseStatus.ACTIVE
     snapshot = service.published_snapshot(GovernanceEnvironment.DEV)
-    assert snapshot.assets[0].runtime_status == GovernanceRuntimeStatus.NOT_CONNECTED
+    assert snapshot.assets[0].runtime_status == GovernanceRuntimeStatus.GOVERNED_ACTIVE
     assert snapshot.assets[0].content == _prompt()
 
 
@@ -789,6 +789,34 @@ def test_route_validation_requires_published_enabled_model_profile():
 
     assert result.status == GovernanceDraftStatus.EDITING
     assert result.validation_issues[0].code == "MODEL_PROFILE_NOT_PUBLISHED"
+
+
+def test_storage_rejects_duplicate_active_route_key():
+    storage = InMemoryModelGovernanceStorage()
+    first = _seed_version(
+        storage,
+        RouteRuleAssetContent(
+            asset_id="route.first",
+            name="first",
+            scene="policy_qa",
+            profile_id="model.demo",
+        ),
+        number=1,
+    )
+    second = _seed_version(
+        storage,
+        RouteRuleAssetContent(
+            asset_id="route.second",
+            name="second",
+            scene="policy_qa",
+            profile_id="model.demo",
+        ),
+        number=1,
+    )
+    _seed_release(storage, first)
+
+    with pytest.raises(ModelGovernanceConflictError, match="路由"):
+        _seed_release(storage, second)
 
 
 def test_save_resets_validation_and_publish_rejects_changed_content():

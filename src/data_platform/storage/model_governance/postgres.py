@@ -22,6 +22,7 @@ from src.model_service.governance_assets import (
     GovernanceRelease,
     GovernanceReleaseCredentialBinding,
     GovernanceVersion,
+    RouteRuleAssetContent,
 )
 
 
@@ -700,6 +701,48 @@ class PostgresModelGovernanceStorage:
             ),
         )
 
+    @staticmethod
+    def _check_route_uniqueness(
+        client: PostgreSQLClient,
+        release: GovernanceRelease,
+        content: RouteRuleAssetContent | None = None,
+    ) -> None:
+        if release.asset_type != GovernanceAssetType.ROUTE_RULE:
+            return
+        if content is None:
+            rows = client.execute(
+                "SELECT content FROM model_governance_versions WHERE version_id=%s",
+                (release.version_id,),
+            )
+            if not rows:
+                return
+            parsed = _decoded(rows[0]["content"])
+            content = RouteRuleAssetContent.model_validate(parsed)
+        lock_key = (
+            f"model-governance-route:{release.environment.value}:"
+            f"{content.scene}:{content.model_type}"
+        )
+        client.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,))
+        conflicts = client.execute(
+            """SELECT release.asset_id
+               FROM model_governance_releases AS release
+               JOIN model_governance_versions AS version
+                 ON version.version_id = release.version_id
+               WHERE release.environment=%s AND release.status='active'
+                 AND release.asset_type='route_rule' AND release.asset_id<>%s
+                 AND version.content->>'scene'=%s
+                 AND version.content->>'model_type'=%s
+               LIMIT 1""",
+            (
+                release.environment.value,
+                release.asset_id,
+                content.scene,
+                content.model_type,
+            ),
+        )
+        if conflicts:
+            raise ModelGovernanceConflictError("同环境治理路由键已存在")
+
     def publish(
         self,
         release: GovernanceRelease,
@@ -717,6 +760,7 @@ class PostgresModelGovernanceStorage:
                 client, referenced_release_preconditions
             )
             self._check_credential_binding(client, release, credential_binding)
+            self._check_route_uniqueness(client, release)
             active_rows = client.execute(
                 """SELECT * FROM model_governance_releases
                    WHERE asset_id=%s AND environment=%s AND status='active' FOR UPDATE""",
@@ -792,6 +836,13 @@ class PostgresModelGovernanceStorage:
                 )
                 self._check_credential_binding(
                     client, release, credential_binding
+                )
+                self._check_route_uniqueness(
+                    client,
+                    release,
+                    version.content
+                    if isinstance(version.content, RouteRuleAssetContent)
+                    else None,
                 )
 
                 active_rows = client.execute(

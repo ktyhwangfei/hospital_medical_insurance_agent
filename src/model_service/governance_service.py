@@ -284,6 +284,20 @@ class ModelGovernanceService:
                 credential_precondition=credential_precondition,
             )
         if isinstance(content, RouteRuleAssetContent):
+            for release in self._storage.list_releases(environment=environment):
+                if (
+                    release.status != GovernanceReleaseStatus.ACTIVE
+                    or release.asset_type != GovernanceAssetType.ROUTE_RULE
+                    or release.asset_id == content.asset_id
+                ):
+                    continue
+                active_route = self._storage.get_version(release.version_id).content
+                if (
+                    isinstance(active_route, RouteRuleAssetContent)
+                    and active_route.scene == content.scene
+                    and active_route.model_type == content.model_type
+                ):
+                    raise ModelGovernanceGateError("同环境治理路由键已存在")
             referenced: list[GovernanceReleasePrecondition] = []
             for profile_id in dict.fromkeys(
                 [content.profile_id, *content.fallback_profile_ids]
@@ -667,7 +681,7 @@ class ModelGovernanceService:
                     release_id=release.release_id,
                     content_hash=version.content_hash,
                     content=version.content,
-                    runtime_status=GovernanceRuntimeStatus.NOT_CONNECTED,
+                    runtime_status=GovernanceRuntimeStatus.GOVERNED_ACTIVE,
                 )
             )
         return PublishedGovernanceSnapshot(environment=environment, assets=assets)

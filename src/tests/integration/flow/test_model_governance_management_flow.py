@@ -234,7 +234,7 @@ def test_model_governance_management_publish_snapshot_and_rollback(
         "route_rule",
     }
     assert {item["runtime_status"] for item in result["assets"]} == {
-        "not_connected"
+        "governed_active"
     }
     active_prompt = next(
         item for item in result["assets"] if item["asset_id"] == "prompt.flow"

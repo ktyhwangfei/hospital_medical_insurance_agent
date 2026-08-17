@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import logging
 import time
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 from src.config.model_service import ModelServiceConfig
 from src.model_service.exceptions import (
@@ -13,6 +15,9 @@ from src.model_service.exceptions import (
 from src.model_service.models import Message, ModelRequest, ModelResponse, StreamChunk
 from src.model_service.providers.openai_compatible import OpenAICompatibleProvider
 from src.model_service.router import ModelRouter
+
+if TYPE_CHECKING:
+    from src.model_service.governance_runtime import RuntimeModelProfile, RuntimeModelRoute
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,13 @@ def _record_llm_event(
 RATE_LIMIT_DELAY = 10
 
 
+def resolve_governed_route(scene: str, model_type: str) -> RuntimeModelRoute | None:
+    # 延迟导入，避免存储协议加载模型包时循环导入。
+    from src.model_service.governance_runtime import resolve_governed_route as resolve
+
+    return resolve(scene, model_type)
+
+
 class ModelGateway:
     def __init__(self, router: ModelRouter | None = None):
         self._router = router or ModelRouter()
@@ -71,13 +83,22 @@ class ModelGateway:
         scene: str,
         max_tokens: int | None = None,
     ) -> ModelResponse:
-        model_name, fallbacks = self._router.resolve(scene, model_type)
-        chain = [model_name] + fallbacks
+        governed = resolve_governed_route(scene, model_type)
+        if governed is None:
+            model_name, fallbacks = self._router.resolve(scene, model_type)
+            chain: list[tuple[str, RuntimeModelProfile | None]] = [
+                (name, None) for name in [model_name, *fallbacks]
+            ]
+        else:
+            chain = [
+                (profile.model_name, profile)
+                for profile in [governed.primary, *governed.fallbacks]
+            ]
         failures = []
         overall_start = time.time()  # 记录总耗时用于 all-failed 事件
         
         # 调试模式: 如果配置了特殊的 dummy LLM，直接返回以绕过 API 报错
-        if self._config.base_url == "dummy":
+        if governed is None and self._config.base_url == "dummy":
             # 按 scene 返回不同结构的示例数据
             if scene == "fee_explanation":
                 content = (
@@ -121,22 +142,37 @@ class ModelGateway:
                 finish_reason="stop"
             )
 
-        for current_model in chain:
-            params = self._router.get_model_params(current_model)
+        for current_model, profile in chain:
+            params = (
+                {
+                    "temperature": profile.temperature,
+                    "max_tokens": profile.max_tokens,
+                }
+                if profile is not None
+                else self._router.get_model_params(current_model)
+            )
             request = ModelRequest(
                 messages=messages,
                 model_type=current_model,
                 scene=scene,
                 temperature=params["temperature"],
                 # 调用方可传 max_tokens 覆盖 router 默认（长文档提取需更大输出空间）
-                max_tokens=params["max_tokens"] if max_tokens is None else max_tokens,
+                max_tokens=(
+                    params["max_tokens"]
+                    if profile is not None or max_tokens is None
+                    else max_tokens
+                ),
             )
 
             model_failed = False
             for attempt in range(self._config.max_retries):
                 try:
                     start = time.time()
-                    result = self._call_provider(request, current_model)
+                    result = (
+                        self._call_provider(request, current_model, profile)
+                        if profile is not None
+                        else self._call_provider(request, current_model)
+                    )
                     latency_ms = int((time.time() - start) * 1000)
                     logger.info(
                         "model_call_success",
@@ -213,8 +249,17 @@ class ModelGateway:
         raise ModelExhaustedError("All models in fallback chain failed", failures=failures)
 
     def generate_stream(self, messages: list[Message], model_type: str, scene: str) -> Iterator[StreamChunk]:
-        model_name, _ = self._router.resolve(scene, model_type)
-        params = self._router.get_model_params(model_name)
+        governed = resolve_governed_route(scene, model_type)
+        profile = governed.primary if governed is not None else None
+        if profile is None:
+            model_name, _ = self._router.resolve(scene, model_type)
+            params = self._router.get_model_params(model_name)
+        else:
+            model_name = profile.model_name
+            params = {
+                "temperature": profile.temperature,
+                "max_tokens": profile.max_tokens,
+            }
         request = ModelRequest(
             messages=messages,
             model_type=model_name,
@@ -226,7 +271,11 @@ class ModelGateway:
         start = time.time()
         total_chunks = 0
         try:
-            provider = self._get_provider(model_name)
+            provider = (
+                self._get_provider(model_name, profile)
+                if profile is not None
+                else self._get_provider(model_name)
+            )
             for chunk in provider.invoke_stream(request):
                 total_chunks += 1
                 yield chunk
@@ -256,11 +305,30 @@ class ModelGateway:
             )
             raise
 
-    def _call_provider(self, request: ModelRequest, model_name: str) -> ModelResponse:
-        provider = self._get_provider(model_name)
+    def _call_provider(
+        self,
+        request: ModelRequest,
+        model_name: str,
+        runtime_profile: RuntimeModelProfile | None = None,
+    ) -> ModelResponse:
+        provider = (
+            self._get_provider(model_name, runtime_profile)
+            if runtime_profile is not None
+            else self._get_provider(model_name)
+        )
         return provider.invoke(request)
 
-    def _get_provider(self, model_name: str) -> OpenAICompatibleProvider:
+    def _get_provider(
+        self,
+        model_name: str,
+        runtime_profile: RuntimeModelProfile | None = None,
+    ) -> OpenAICompatibleProvider:
+        if runtime_profile is not None:
+            return OpenAICompatibleProvider(
+                base_url=runtime_profile.base_url,
+                api_key=runtime_profile.api_key.get_secret_value(),
+                timeout=runtime_profile.timeout_seconds,
+            )
         return OpenAICompatibleProvider(
             base_url=self._config.base_url,
             api_key=self._config.api_key,

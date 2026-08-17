@@ -20,6 +20,7 @@ from src.model_service.governance_assets import (
     GovernanceReleaseCredentialBinding,
     GovernanceReleaseStatus,
     GovernanceVersion,
+    RouteRuleAssetContent,
 )
 
 
@@ -311,6 +312,35 @@ class InMemoryModelGovernanceStorage:
         ):
             raise ModelGovernanceConflictError("发布凭据绑定无效")
 
+    def _check_route_uniqueness(
+        self,
+        release: GovernanceRelease,
+        content: RouteRuleAssetContent | None = None,
+    ) -> None:
+        if release.asset_type != GovernanceAssetType.ROUTE_RULE:
+            return
+        if content is None:
+            version = self._versions.get(release.version_id)
+            if version is None or not isinstance(version.content, RouteRuleAssetContent):
+                return
+            content = version.content
+        for active in self._releases.values():
+            if (
+                active.asset_id == release.asset_id
+                or active.environment != release.environment
+                or active.status != GovernanceReleaseStatus.ACTIVE
+                or active.asset_type != GovernanceAssetType.ROUTE_RULE
+            ):
+                continue
+            version = self._versions.get(active.version_id)
+            if version is None or not isinstance(version.content, RouteRuleAssetContent):
+                continue
+            if (
+                version.content.scene == content.scene
+                and version.content.model_type == content.model_type
+            ):
+                raise ModelGovernanceConflictError("同环境治理路由键已存在")
+
     def publish(
         self,
         release: GovernanceRelease,
@@ -325,6 +355,7 @@ class InMemoryModelGovernanceStorage:
             self._check_credential_precondition(credential_precondition)
             self._check_release_preconditions(referenced_release_preconditions)
             self._check_credential_binding(release, credential_binding)
+            self._check_route_uniqueness(release)
             if release.release_id in self._releases:
                 raise ModelGovernanceConflictError("发布记录已存在")
             active = next(
@@ -387,6 +418,12 @@ class InMemoryModelGovernanceStorage:
             self._check_credential_precondition(credential_precondition)
             self._check_release_preconditions(referenced_release_preconditions)
             self._check_credential_binding(release, credential_binding)
+            self._check_route_uniqueness(
+                release,
+                version.content
+                if isinstance(version.content, RouteRuleAssetContent)
+                else None,
+            )
             if release.release_id in self._releases:
                 raise ModelGovernanceConflictError("发布记录已存在")
 

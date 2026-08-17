@@ -1,22 +1,28 @@
 from unittest.mock import MagicMock, patch
-from typing import Iterator
 
 import pytest
+from pydantic import SecretStr
 
 from src.model_service.exceptions import (
     ModelAuthError,
     ModelExhaustedError,
-    ModelRateLimitError,
     ModelServerError,
     ModelTimeoutError,
 )
 from src.model_service.gateway import ModelGateway
+from src.model_service.governance_runtime import RuntimeModelProfile, RuntimeModelRoute
 from src.model_service.models import Message, ModelResponse, StreamChunk, TokenUsage
 
 
 @pytest.fixture
-def gateway():
-    return ModelGateway()
+def gateway(monkeypatch):
+    monkeypatch.setattr(
+        "src.model_service.gateway.resolve_governed_route",
+        lambda scene, model_type: None,
+    )
+    instance = ModelGateway()
+    instance._config.base_url = "https://static.example.test/v1"
+    return instance
 
 
 def _make_response(content="ok", model="gpt-4o-mini"):
@@ -129,3 +135,51 @@ def test_generate_default_max_tokens_unchanged(gateway):
         gateway.generate(messages, "llm", "test")
 
     assert captured["max_tokens"] == expected
+
+
+def test_generate_and_stream_share_governed_route_resolution(monkeypatch, gateway):
+    from src.model_service import gateway as gateway_module
+
+    profile = RuntimeModelProfile(
+        asset_id="model.governed",
+        model_name="governed-model",
+        base_url="https://governed.example.test/v1",
+        api_key=SecretStr("sk-governed"),
+        timeout_seconds=19,
+        temperature=0.15,
+        max_tokens=333,
+    )
+    route = RuntimeModelRoute(primary=profile)
+    resolved = []
+    monkeypatch.setattr(
+        gateway_module,
+        "resolve_governed_route",
+        lambda scene, model_type: resolved.append((scene, model_type)) or route,
+    )
+    calls = []
+
+    class Provider:
+        def invoke(self, request):
+            calls.append(("generate", request))
+            return _make_response(model=request.model_type)
+
+        def invoke_stream(self, request):
+            calls.append(("stream", request))
+            yield StreamChunk(content="ok", finish_reason="stop")
+
+    monkeypatch.setattr(
+        gateway,
+        "_get_provider",
+        lambda model_name, runtime_profile=None: Provider(),
+    )
+
+    gateway.generate([Message(role="user", content="Q")], "llm", "policy_qa")
+    list(gateway.generate_stream([Message(role="user", content="Q")], "llm", "policy_qa"))
+
+    assert resolved == [("policy_qa", "llm"), ("policy_qa", "llm")]
+    assert [request.model_type for _, request in calls] == [
+        "governed-model",
+        "governed-model",
+    ]
+    assert all(request.temperature == 0.15 for _, request in calls)
+    assert all(request.max_tokens == 333 for _, request in calls)
