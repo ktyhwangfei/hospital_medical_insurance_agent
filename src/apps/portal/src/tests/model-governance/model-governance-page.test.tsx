@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -404,6 +404,35 @@ describe('模型治理资产中心', () => {
 
     await waitFor(() => expect(getGovernanceAssets).toHaveBeenCalledTimes(2))
     expect(getGovernanceVersions).toHaveBeenCalledTimes(1)
+  })
+
+  it('旧 dev 回滚完成后不能覆盖已经切换成功的 test 资产', async () => {
+    const user = userEvent.setup()
+    const retiredRelease = versionHistory(promptContent, 1, 'retired').releases[0]
+    const testContent = { ...promptContent, asset_id: 'test.prompt', name: '测试环境提示词' }
+    const rollbackRequest = deferred<GovernanceRelease>()
+    vi.mocked(getGovernanceAssets).mockImplementation(async (requestEnvironment) => requestEnvironment === 'test'
+      ? { baselines: [], drafts: [draft(testContent)], published: [] }
+      : { baselines: [], drafts: [], published: [published(promptContent)] })
+    vi.mocked(getGovernanceReleases).mockImplementation(async (requestEnvironment) => requestEnvironment === 'test' ? [] : [retiredRelease])
+    vi.mocked(rollbackGovernanceRelease).mockReturnValue(rollbackRequest.promise)
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '发布记录' }))
+    await user.click(await screen.findByRole('button', { name: '回滚' }))
+    const environmentSelect = screen.getByLabelText('环境')
+    expect(environmentSelect).toBeDisabled()
+
+    fireEvent.change(environmentSelect, { target: { value: 'test' } })
+    expect(await screen.findByText('治理发布已接入运行时 · 当前 test 环境')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: '提示词' }))
+    expect(screen.getByText('test.prompt')).toBeInTheDocument()
+
+    rollbackRequest.resolve({ ...retiredRelease, status: 'active', retired_at: null })
+    await waitFor(() => expect(environmentSelect).toBeEnabled())
+    expect(vi.mocked(getGovernanceAssets).mock.calls.map(([requestEnvironment]) => requestEnvironment)).toEqual(['dev', 'test'])
+    expect(screen.getByText('test.prompt')).toBeInTheDocument()
+    expect(screen.queryByText('intent.classify')).not.toBeInTheDocument()
   })
 
   it('关闭详情或切换环境会立即清空未保存 API Key', async () => {

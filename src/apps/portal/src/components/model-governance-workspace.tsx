@@ -261,11 +261,14 @@ export function ModelGovernanceWorkspace() {
   const [notice, setNotice] = useState('')
   const closeRef = useRef<HTMLButtonElement>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const environmentRef = useRef<GovernanceEnvironment>('dev')
   const refreshRequestRef = useRef(0)
   const versionsRequestRef = useRef(0)
   const drawerContextRef = useRef<DrawerContext>({ open: false, assetId: null, environment: 'dev' })
 
   const refresh = useCallback(async () => {
+    const targetEnvironment = environment
+    if (environmentRef.current !== targetEnvironment) return
     const requestId = ++refreshRequestRef.current
     setLoading(true)
     setAssets(emptyAssets)
@@ -273,18 +276,18 @@ export function ModelGovernanceWorkspace() {
     setError('')
     try {
       const [nextAssets, nextReleases] = await Promise.all([
-        getGovernanceAssets(environment), getGovernanceReleases(environment),
+        getGovernanceAssets(targetEnvironment), getGovernanceReleases(targetEnvironment),
       ])
-      if (requestId !== refreshRequestRef.current) return
+      if (requestId !== refreshRequestRef.current || environmentRef.current !== targetEnvironment) return
       setAssets(nextAssets)
       setReleases(nextReleases)
     } catch (reason) {
-      if (requestId !== refreshRequestRef.current) return
+      if (requestId !== refreshRequestRef.current || environmentRef.current !== targetEnvironment) return
       setAssets(emptyAssets)
       setReleases([])
       setError(`治理资产与发布记录加载失败：${errorText(reason)}`)
     } finally {
-      if (requestId === refreshRequestRef.current) setLoading(false)
+      if (requestId === refreshRequestRef.current && environmentRef.current === targetEnvironment) setLoading(false)
     }
   }, [environment])
 
@@ -372,6 +375,7 @@ export function ModelGovernanceWorkspace() {
 
   function changeEnvironment(next: GovernanceEnvironment) {
     if (next === environment) return
+    environmentRef.current = next
     refreshRequestRef.current += 1
     setEnvironment(next)
     setLoading(true)
@@ -541,7 +545,7 @@ export function ModelGovernanceWorkspace() {
       </div>
       <div className="flex flex-wrap gap-2 text-xs">
         <label className="text-slate-600">环境
-          <select aria-label="环境" className="ml-2 rounded border border-slate-300 bg-white px-2 py-1.5" value={environment} onChange={(event) => changeEnvironment(event.target.value as GovernanceEnvironment)}>
+          <select aria-label="环境" disabled={busy} className="ml-2 rounded border border-slate-300 bg-white px-2 py-1.5 disabled:opacity-50" value={environment} onChange={(event) => changeEnvironment(event.target.value as GovernanceEnvironment)}>
             <option value="dev">dev</option><option value="test">test</option>
           </select>
         </label>
