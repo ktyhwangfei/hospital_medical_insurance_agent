@@ -1,5 +1,6 @@
 """模型治理 API 契约。"""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, SecretStr
@@ -74,6 +75,14 @@ class GovernanceVersionsResult(BaseModel):
     releases: list[GovernanceRelease] = Field(default_factory=list)
 
 
+class GovernanceConnectionTestResult(BaseModel):
+    status: Literal["success", "failure"]
+    latency_ms: int = Field(ge=0)
+    safe_message: str
+    tested_at: datetime
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class _GovernanceResponse(AgentResponse):
     scenario: Literal["model_governance"] = "model_governance"
     status: Literal["success"] = "success"
@@ -103,6 +112,10 @@ class GovernanceVersionsResponse(_GovernanceResponse):
     result: GovernanceVersionsResult
 
 
+class GovernanceConnectionTestResponse(_GovernanceResponse):
+    result: GovernanceConnectionTestResult
+
+
 class GovernanceImportResponse(_GovernanceResponse):
     result: GovernanceImportResult
 
@@ -118,6 +131,8 @@ __all__ = [
     "GovernanceAssetsResult",
     "GovernanceAssetType",
     "GovernanceDraftResponse",
+    "GovernanceConnectionTestResponse",
+    "GovernanceConnectionTestResult",
     "GovernanceEnvironment",
     "GovernanceImportResponse",
     "GovernancePreviewResponse",

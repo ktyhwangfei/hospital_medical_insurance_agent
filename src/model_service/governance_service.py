@@ -5,6 +5,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.data_platform.storage.model_governance.ports import (
     ModelGovernanceConflictError,
+    ModelGovernanceNotFoundError,
     ModelGovernanceStorage,
 )
 from src.model_service.governance_assets import (
@@ -12,6 +13,7 @@ from src.model_service.governance_assets import (
     GovernanceAssetContent,
     GovernanceAssetPreview,
     GovernanceAssetType,
+    GovernanceConnectionTest,
     GovernanceDraft,
     GovernanceDraftStatus,
     GovernanceEnvironment,
@@ -31,7 +33,10 @@ from src.model_service.governance_assets import (
     preview_asset,
     validate_asset,
 )
-from src.model_service.governance_secrets import GovernanceCredentialVault
+from src.model_service.governance_secrets import (
+    GovernanceCredentialVault,
+    probe_model_connection,
+)
 
 
 class ModelGovernanceGateError(ValueError):
@@ -232,6 +237,57 @@ class ModelGovernanceService:
             raise GovernanceValidationError("；".join(issue.message for issue in issues))
         return preview_asset(draft.content, variables)
 
+    def record_connection_test(
+        self,
+        *,
+        draft_id: str,
+        actor: str,
+        succeeded: bool,
+        latency_ms: int,
+        safe_message: str,
+        content_digest: str | None = None,
+        credential_fingerprint: str | None = None,
+    ) -> GovernanceConnectionTest:
+        draft = self._storage.get_draft(draft_id)
+        if not isinstance(draft.content, ModelProfileAssetContent):
+            raise ModelGovernanceGateError("连接测试仅支持模型草稿")
+        credential = self._storage.get_credential(draft.content.credential_ref)
+        return self._storage.save_connection_test(
+            GovernanceConnectionTest(
+                test_id=uuid4(),
+                asset_id=draft.asset_id,
+                content_hash=content_digest or content_hash(draft.content),
+                credential_fingerprint=(
+                    credential_fingerprint or credential.secret_fingerprint
+                ),
+                succeeded=succeeded,
+                latency_ms=latency_ms,
+                safe_message=safe_message,
+                tested_by=actor,
+            )
+        )
+
+    def test_connection(
+        self, draft_id: str, *, actor: str
+    ) -> GovernanceConnectionTest:
+        draft = self._storage.get_draft(draft_id)
+        if not isinstance(draft.content, ModelProfileAssetContent):
+            raise ModelGovernanceGateError("连接测试仅支持模型草稿")
+        credential = self._storage.get_credential(draft.content.credential_ref)
+        api_key = GovernanceCredentialVault(self._storage).reveal_credential(
+            credential
+        )
+        probe = probe_model_connection(draft.content, api_key)
+        return self.record_connection_test(
+            draft_id=draft_id,
+            actor=actor,
+            succeeded=probe.succeeded,
+            latency_ms=probe.latency_ms,
+            safe_message=probe.safe_message,
+            content_digest=content_hash(draft.content),
+            credential_fingerprint=credential.secret_fingerprint,
+        )
+
     def list_drafts(
         self, asset_type: GovernanceAssetType | None = None
     ) -> list[GovernanceDraft]:
@@ -365,6 +421,25 @@ class ModelGovernanceService:
         draft = self._current(draft_id, expected_revision)
         if draft.status != GovernanceDraftStatus.APPROVED:
             raise ModelGovernanceGateError("草稿必须先完成审核")
+        digest = content_hash(draft.content)
+        if isinstance(draft.content, ModelProfileAssetContent) and draft.content.enabled:
+            try:
+                credential = self._storage.get_credential(
+                    draft.content.credential_ref
+                )
+            except ModelGovernanceNotFoundError as exc:
+                raise ModelGovernanceGateError(
+                    "模型必须先通过当前配置的连接测试"
+                ) from exc
+            tested = self._storage.find_successful_connection_test(
+                draft.asset_id,
+                digest,
+                credential.secret_fingerprint,
+            )
+            if tested is None:
+                raise ModelGovernanceGateError(
+                    "模型必须先通过当前配置的连接测试"
+                )
         if isinstance(draft.content, RouteRuleAssetContent):
             profile_ids = [draft.content.profile_id, *draft.content.fallback_profile_ids]
             if any(
@@ -373,7 +448,6 @@ class ModelGovernanceService:
             ):
                 raise ModelGovernanceGateError("路由引用的模型档案未在目标环境发布")
 
-        digest = content_hash(draft.content)
         approval_id = str(uuid5(NAMESPACE_URL, f"{draft.draft_id}:{digest}"))
         approval = self._storage.get_approval(approval_id)
         if approval.content_hash != digest:

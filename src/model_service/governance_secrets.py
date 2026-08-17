@@ -3,6 +3,8 @@
 import hashlib
 import os
 from datetime import datetime, timezone
+from time import perf_counter
+from typing import NamedTuple
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -10,11 +12,58 @@ from src.data_platform.storage.model_governance.ports import (
     ModelGovernanceNotFoundError,
     ModelGovernanceStorage,
 )
-from src.model_service.governance_assets import GovernanceCredential
+from src.model_service.governance_assets import (
+    GovernanceCredential,
+    ModelProfileAssetContent,
+)
+from src.model_service.exceptions import ModelAuthError, ModelTimeoutError
+from src.model_service.models import Message, ModelRequest
+from src.model_service.providers.openai_compatible import OpenAICompatibleProvider
 
 
 class GovernanceSecretError(RuntimeError):
     """治理密钥未安全配置或凭据无法解密。"""
+
+
+class GovernanceConnectionProbe(NamedTuple):
+    succeeded: bool
+    latency_ms: int
+    safe_message: str
+
+
+def probe_model_connection(
+    content: ModelProfileAssetContent,
+    api_key: str,
+) -> GovernanceConnectionProbe:
+    """发送不含业务数据的最小模型请求，只返回安全结果。"""
+    started = perf_counter()
+    try:
+        OpenAICompatibleProvider(
+            content.base_url,
+            api_key,
+            timeout=content.timeout_seconds,
+        ).invoke(
+            ModelRequest(
+                messages=[Message(role="user", content="ping")],
+                model_type=content.model_name,
+                scene="model_governance_connection_test",
+                max_tokens=1,
+                temperature=0,
+            )
+        )
+    except ModelAuthError:
+        succeeded, safe_message = False, "认证失败"
+    except ModelTimeoutError:
+        succeeded, safe_message = False, "连接超时"
+    except Exception:
+        succeeded, safe_message = False, "连接失败"
+    else:
+        succeeded, safe_message = True, "连接成功"
+    return GovernanceConnectionProbe(
+        succeeded,
+        max(0, round((perf_counter() - started) * 1000)),
+        safe_message,
+    )
 
 
 class GovernanceCredentialVault:
@@ -64,7 +113,9 @@ class GovernanceCredentialVault:
         )
 
     def reveal(self, credential_id: str) -> str:
-        credential = self._storage.get_credential(credential_id)
+        return self.reveal_credential(self._storage.get_credential(credential_id))
+
+    def reveal_credential(self, credential: GovernanceCredential) -> str:
         try:
             return self._fernet.decrypt(
                 credential.encrypted_api_key.encode("ascii")

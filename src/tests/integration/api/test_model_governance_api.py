@@ -418,6 +418,174 @@ def test_model_credential_is_encrypted_and_never_echoed_by_api(monkeypatch, capl
     assert secret not in stored.model_dump_json()
 
 
+def test_model_connection_test_uses_draft_config_and_unlocks_publish(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    client = _management_client(monkeypatch)
+    prefix = "/api/v1/medical-insurance-ai-agent/model-governance"
+    secret = "connection-secret-value"
+    payload = _model_payload(secret)
+    payload["content"]["timeout_seconds"] = 17
+    captured = {}
+
+    from src.model_service.models import ModelResponse, TokenUsage
+    from src.model_service.providers.openai_compatible import OpenAICompatibleProvider
+
+    def invoke(provider, request):
+        captured.update(
+            base_url=provider._base_url,
+            api_key=provider._api_key,
+            timeout=provider._timeout,
+            request=request,
+        )
+        return ModelResponse(
+            content="raw-provider-body-must-not-leak",
+            model_name="demo-model",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1),
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "invoke", invoke)
+    created = client.post(
+        f"{prefix}/drafts",
+        json=payload,
+        headers=_headers("model_governance:write"),
+    ).json()["result"]
+    validated = client.post(
+        f"{prefix}/drafts/{created['draft_id']}/validate",
+        json={"expected_revision": created["revision"]},
+        headers=_headers("model_governance:write"),
+    ).json()["result"]
+    pending = client.post(
+        f"{prefix}/drafts/{created['draft_id']}/request-review",
+        json={"expected_revision": validated["revision"]},
+        headers=_headers("model_governance:write"),
+    ).json()["result"]
+    approved = client.post(
+        f"{prefix}/drafts/{created['draft_id']}/approve",
+        json={"expected_revision": pending["revision"], "reason": "通过"},
+        headers=_headers("model_governance:review", subject="reviewer"),
+    ).json()["result"]
+    publish_body = {"expected_revision": approved["revision"], "environment": "dev"}
+
+    blocked = client.post(
+        f"{prefix}/drafts/{created['draft_id']}/publish",
+        json=publish_body,
+        headers=_headers("model_governance:publish"),
+    )
+    assert blocked.status_code == 422
+    assert "连接测试" in blocked.text
+
+    tested = client.post(
+        f"{prefix}/drafts/{created['draft_id']}/test-connection",
+        headers=_headers("model_governance:write"),
+    )
+    assert tested.status_code == 200
+    result = tested.json()["result"]
+    assert set(result) == {
+        "status",
+        "latency_ms",
+        "safe_message",
+        "tested_at",
+        "content_hash",
+    }
+    assert result["status"] == "success"
+    assert result["safe_message"] == "连接成功"
+    assert len(result["content_hash"]) == 64
+    assert captured["base_url"] == "https://models.example.test/v1"
+    assert captured["api_key"] == secret
+    assert captured["timeout"] == 17
+    assert captured["request"].model_type == "demo-model"
+    assert captured["request"].max_tokens == 1
+    assert captured["request"].temperature == 0
+    assert secret not in tested.text
+    assert "models.example.test" not in tested.text
+    assert "demo-model" not in tested.text
+    assert "raw-provider-body-must-not-leak" not in tested.text
+
+    published = client.post(
+        f"{prefix}/drafts/{created['draft_id']}/publish",
+        json=publish_body,
+        headers=_headers("model_governance:publish"),
+    )
+    assert published.status_code == 200, published.text
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "safe_message"),
+    [
+        ("auth", "认证失败"),
+        ("timeout", "连接超时"),
+        ("other", "连接失败"),
+    ],
+)
+def test_model_connection_test_sanitizes_provider_failures(
+    monkeypatch, provider_error, safe_message
+):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    client = _management_client(monkeypatch)
+    secret = "failure-secret-value"
+    from src.model_service.exceptions import (
+        ModelAuthError,
+        ModelServerError,
+        ModelTimeoutError,
+    )
+    from src.model_service.providers.openai_compatible import OpenAICompatibleProvider
+
+    errors = {
+        "auth": ModelAuthError(f"upstream leaked {secret}"),
+        "timeout": ModelTimeoutError(f"upstream leaked {secret}"),
+        "other": ModelServerError(f"upstream leaked {secret}"),
+    }
+
+    def fail(_provider, _request):
+        raise errors[provider_error]
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "invoke", fail)
+    created = client.post(
+        "/api/v1/medical-insurance-ai-agent/model-governance/drafts",
+        json=_model_payload(secret),
+        headers=_headers("model_governance:write"),
+    ).json()["result"]
+
+    response = client.post(
+        "/api/v1/medical-insurance-ai-agent/model-governance/"
+        f"drafts/{created['draft_id']}/test-connection",
+        headers=_headers("model_governance:write"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["status"] == "failure"
+    assert response.json()["result"]["safe_message"] == safe_message
+    assert secret not in response.text
+
+
+def test_connection_test_rejects_non_model_draft(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    client = _management_client(monkeypatch)
+    created = client.post(
+        "/api/v1/medical-insurance-ai-agent/model-governance/drafts",
+        json=_prompt_payload(),
+        headers=_headers("model_governance:write"),
+    ).json()["result"]
+
+    response = client.post(
+        "/api/v1/medical-insurance-ai-agent/model-governance/"
+        f"drafts/{created['draft_id']}/test-connection",
+        headers=_headers("model_governance:write"),
+    )
+
+    assert response.status_code == 422
+    assert "模型草稿" in response.text
+
+
 def test_model_credential_writes_follow_injected_service_storage(monkeypatch):
     monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
     monkeypatch.setenv(
@@ -603,7 +771,9 @@ def test_failed_credential_create_rolls_back_new_draft_when_asset_has_history(
     from src.runtime.api.model_governance_routes import get_model_governance_service
 
     service = get_model_governance_service()
-    content = ModelProfileAssetContent.model_validate(_model_payload()["content"])
+    content = ModelProfileAssetContent.model_validate(
+        {**_model_payload()["content"], "enabled": False}
+    )
     draft = service.create_draft(content, actor="editor")
     validated = service.validate_draft(draft.draft_id, expected_revision=draft.revision)
     pending = service.request_review(

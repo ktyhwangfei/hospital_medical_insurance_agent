@@ -37,13 +37,26 @@ def _headers(subject: str, permission: str) -> dict[str, str]:
 
 
 def _publish(client: TestClient, content: dict) -> dict:
+    body = {"content": content}
+    if content["asset_type"] == "model_profile":
+        body["credential"] = {
+            "credential_id": content["credential_ref"],
+            "api_key": "flow-test-secret",
+        }
     created = client.post(
         f"{PREFIX}/drafts",
-        json={"content": content},
+        json=body,
         headers=_headers("editor", "model_governance:write"),
     )
     assert created.status_code == 201
     draft = created.json()["result"]
+    if content["asset_type"] == "model_profile":
+        tested = client.post(
+            f"{PREFIX}/drafts/{draft['draft_id']}/test-connection",
+            headers=_headers("editor", "model_governance:write"),
+        )
+        assert tested.status_code == 200
+        assert tested.json()["result"]["status"] == "success"
     validated = client.post(
         f"{PREFIX}/drafts/{draft['draft_id']}/validate",
         json={"expected_revision": draft["revision"]},
@@ -80,6 +93,10 @@ def test_model_governance_management_publish_snapshot_and_rollback(
 
     monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
     monkeypatch.setenv("MODEL_GOVERNANCE_ENV", "dev")
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
     monkeypatch.setenv("USE_MEMORY_STORAGE", "1")
     monkeypatch.setattr(
         "src.gateway.api_gateway.audit_middleware.GatewayAuditMiddleware._write_session",
@@ -93,6 +110,19 @@ def test_model_governance_management_publish_snapshot_and_rollback(
     from src.runtime.api.model_governance_routes import get_model_governance_service
     from src.runtime.intent.prompts import build_intent_prompt
     from src.runtime.intent.registry import get_intent_registry
+    from src.model_service.models import ModelResponse, TokenUsage
+    from src.model_service.providers.openai_compatible import OpenAICompatibleProvider
+
+    monkeypatch.setattr(
+        OpenAICompatibleProvider,
+        "invoke",
+        lambda _provider, _request: ModelResponse(
+            content="ok",
+            model_name="flow-model",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1),
+            finish_reason="stop",
+        ),
+    )
 
     app = create_app()
     service = ModelGovernanceService(governance_storage_factory())
@@ -128,9 +158,11 @@ def test_model_governance_management_publish_snapshot_and_rollback(
             "asset_type": "model_profile",
             "asset_id": "profile.flow",
             "name": "流程模型",
-            "provider_id": "openai-compatible",
+            "provider_id": "openai_compatible",
+            "base_url": "https://models.example.test/v1",
             "model_name": "flow-model",
-            "credential_ref": "MODEL_API_KEY",
+            "credential_ref": "credential.flow",
+            "timeout_seconds": 30,
             "temperature": 0.1,
             "max_tokens": 4096,
             "enabled": True,
@@ -170,7 +202,7 @@ def test_model_governance_management_publish_snapshot_and_rollback(
         "variables": [{"name": "intents_text"}, {"name": "message"}],
     }
     old_intent = _publish(client, governed_prompt)
-    new_intent = _publish(
+    _publish(
         client,
         {**governed_prompt, "user_prompt_template": "FLOW_INTENT_V2 {message}"},
     )

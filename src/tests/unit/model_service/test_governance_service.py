@@ -9,13 +9,16 @@ from src.data_platform.storage.model_governance.ports import (
     ModelGovernanceConflictError,
 )
 from src.model_service.governance_assets import (
+    GovernanceAssetContent,
     GovernanceDraftStatus,
     GovernanceEnvironment,
     GovernanceReleaseStatus,
     GovernanceRuntimeStatus,
+    ModelProfileAssetContent,
     PromptAssetContent,
     PromptVariable,
     RouteRuleAssetContent,
+    content_hash,
 )
 from src.model_service.governance_service import (
     ModelGovernanceGateError,
@@ -34,9 +37,7 @@ def _prompt(system_prompt: str = "只输出事实") -> PromptAssetContent:
     )
 
 
-def _complete_review(
-    service: ModelGovernanceService, content: PromptAssetContent
-):
+def _complete_review(service: ModelGovernanceService, content: GovernanceAssetContent):
     draft = service.create_draft(content, actor="editor")
     validated = service.validate_draft(draft.draft_id, expected_revision=draft.revision)
     pending = service.request_review(
@@ -48,6 +49,189 @@ def _complete_review(
         actor="reviewer",
         reason="审核通过",
     )
+
+
+def _model_profile(**changes) -> ModelProfileAssetContent:
+    values = {
+        "asset_id": "model.demo",
+        "name": "演示模型",
+        "base_url": "https://models.example.test/v1",
+        "model_name": "demo-model",
+        "credential_ref": "credential.demo",
+        "temperature": 0.2,
+        "max_tokens": 1024,
+    }
+    values.update(changes)
+    return ModelProfileAssetContent(**values)
+
+
+def _approved_model(service: ModelGovernanceService, content: ModelProfileAssetContent):
+    draft = service.create_draft_with_credential(
+        content,
+        content.credential_ref,
+        "sk-current",
+        actor="editor",
+    )
+    validated = service.validate_draft(draft.draft_id, expected_revision=draft.revision)
+    pending = service.request_review(
+        draft.draft_id, expected_revision=validated.revision, actor="editor"
+    )
+    return service.approve(
+        draft.draft_id,
+        expected_revision=pending.revision,
+        actor="reviewer",
+        reason="审核通过",
+    )
+
+
+def test_model_publish_requires_matching_successful_connection_test(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
+    approved = _approved_model(service, _model_profile())
+
+    with pytest.raises(ModelGovernanceGateError, match="连接测试"):
+        service.publish(
+            approved.draft_id,
+            expected_revision=approved.revision,
+            actor="publisher",
+            environment=GovernanceEnvironment.DEV,
+        )
+
+    failed = service.record_connection_test(
+        draft_id=approved.draft_id,
+        actor="editor",
+        succeeded=False,
+        latency_ms=12,
+        safe_message="认证失败",
+    )
+    assert failed.succeeded is False
+    with pytest.raises(ModelGovernanceGateError, match="连接测试"):
+        service.publish(
+            approved.draft_id,
+            expected_revision=approved.revision,
+            actor="publisher",
+            environment=GovernanceEnvironment.DEV,
+        )
+
+    tested = service.record_connection_test(
+        draft_id=approved.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=9,
+        safe_message="连接成功",
+    )
+    assert tested.content_hash == content_hash(approved.content)
+    assert tested.credential_fingerprint == storage.get_credential(
+        approved.content.credential_ref
+    ).secret_fingerprint
+
+    release = service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    assert release.status == GovernanceReleaseStatus.ACTIVE
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"base_url": "https://other.example.test/v1"},
+        {"model_name": "other-model"},
+    ],
+)
+def test_model_content_change_invalidates_connection_test(monkeypatch, change):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    service = ModelGovernanceService(InMemoryModelGovernanceStorage())
+    approved = _approved_model(service, _model_profile())
+    service.record_connection_test(
+        draft_id=approved.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=8,
+        safe_message="连接成功",
+    )
+    edited = service.save_draft(
+        approved.draft_id,
+        approved.content.model_copy(update=change),
+        expected_revision=approved.revision,
+        actor="editor",
+    )
+    validated = service.validate_draft(edited.draft_id, expected_revision=edited.revision)
+    pending = service.request_review(
+        edited.draft_id, expected_revision=validated.revision, actor="editor"
+    )
+    reapproved = service.approve(
+        edited.draft_id,
+        expected_revision=pending.revision,
+        actor="reviewer",
+        reason="再次审核",
+    )
+
+    with pytest.raises(ModelGovernanceGateError, match="连接测试"):
+        service.publish(
+            reapproved.draft_id,
+            expected_revision=reapproved.revision,
+            actor="publisher",
+            environment=GovernanceEnvironment.DEV,
+        )
+
+
+def test_model_secret_change_invalidates_connection_test(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
+    approved = _approved_model(service, _model_profile())
+    service.record_connection_test(
+        draft_id=approved.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=8,
+        safe_message="连接成功",
+    )
+    from src.model_service.governance_secrets import GovernanceCredentialVault
+
+    GovernanceCredentialVault(storage).put(
+        approved.content.credential_ref,
+        "sk-replaced",
+        actor="editor",
+    )
+
+    with pytest.raises(ModelGovernanceGateError, match="连接测试"):
+        service.publish(
+            approved.draft_id,
+            expected_revision=approved.revision,
+            actor="publisher",
+            environment=GovernanceEnvironment.DEV,
+        )
+
+
+def test_disabled_model_can_publish_without_connection_test(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    service = ModelGovernanceService(InMemoryModelGovernanceStorage())
+    approved = _approved_model(service, _model_profile(enabled=False))
+
+    release = service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    assert release.status == GovernanceReleaseStatus.ACTIVE
 
 
 def test_publish_requires_validation_and_different_reviewer():

@@ -28,6 +28,8 @@ from src.runtime.api.model_governance_schemas import (
     CreateGovernanceDraftRequest,
     GovernanceAssetsResponse,
     GovernanceAssetsResult,
+    GovernanceConnectionTestResponse,
+    GovernanceConnectionTestResult,
     GovernanceDraftResponse,
     GovernanceImportResponse,
     GovernancePreviewResponse,
@@ -404,6 +406,37 @@ def preview_governance_draft(
         _raise_domain_error(exc)
     return GovernancePreviewResponse(
         result=preview, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "preview_draft")
+    )
+
+
+@router.post(
+    "/drafts/{draft_id}/test-connection",
+    response_model=GovernanceConnectionTestResponse,
+)
+def test_governance_model_connection(
+    draft_id: str,
+    principal: ModelGovernancePrincipal = Depends(require_model_governance_write),
+    service: ModelGovernanceService = Depends(get_model_governance_service),
+) -> GovernanceConnectionTestResponse:
+    try:
+        tested = service.test_connection(draft_id, actor=principal.user_id)
+    except (
+        ModelGovernanceConflictError,
+        ModelGovernanceNotFoundError,
+        ModelGovernanceGateError,
+        GovernanceSecretError,
+    ) as exc:
+        _raise_domain_error(exc)
+    return GovernanceConnectionTestResponse(
+        result=GovernanceConnectionTestResult(
+            status="success" if tested.succeeded else "failure",
+            latency_ms=tested.latency_ms,
+            safe_message=tested.safe_message,
+            tested_at=tested.tested_at,
+            content_hash=tested.content_hash,
+        ),
+        uncertainties=_PENDING_RUNTIME,
+        audit=_audit(principal, "test_connection"),
     )
 
 
