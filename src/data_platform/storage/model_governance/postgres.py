@@ -268,6 +268,39 @@ class PostgresModelGovernanceStorage:
             raise ModelGovernanceConflictError("草稿 revision 已变化或草稿不存在")
         return self._draft(rows[0])
 
+    def update_draft_with_credential(
+        self,
+        draft: GovernanceDraft,
+        credential: GovernanceCredential,
+        *,
+        expected_revision: int,
+    ) -> GovernanceDraft:
+        if draft.revision != expected_revision + 1:
+            raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
+        client = self._get_client()
+        with client.transaction():
+            rows = client.execute(
+                """UPDATE model_governance_drafts SET content=%s, status=%s, revision=%s,
+                   validation_issues=%s, last_edited_by=%s, updated_at=%s
+                   WHERE draft_id=%s AND revision=%s RETURNING *""",
+                (
+                    _json(draft.content),
+                    draft.status.value,
+                    draft.revision,
+                    _json(draft.validation_issues),
+                    draft.last_edited_by,
+                    draft.updated_at,
+                    draft.draft_id,
+                    expected_revision,
+                ),
+            )
+            if not rows:
+                raise ModelGovernanceConflictError(
+                    "草稿 revision 已变化或草稿不存在"
+                )
+            self.put_credential(credential)
+        return self._draft(rows[0])
+
     def get_draft(self, draft_id: str) -> GovernanceDraft:
         rows = self._get_client().execute(
             "SELECT * FROM model_governance_drafts WHERE draft_id=%s", (draft_id,)

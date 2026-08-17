@@ -15,7 +15,11 @@ from src.data_platform.storage.model_governance.ports import (
 )
 from src.gateway.auth import authenticator
 from src.model_service.governance import ModelGovernanceSnapshot, build_governance_snapshot
-from src.model_service.governance_assets import GovernanceAssetType, GovernanceEnvironment
+from src.model_service.governance_assets import (
+    GovernanceAssetType,
+    GovernanceEnvironment,
+    ModelProfileAssetContent,
+)
 from src.model_service.governance_import import build_current_governance_assets
 from src.model_service.governance_secrets import (
     GovernanceCredentialVault,
@@ -161,7 +165,25 @@ def _audit(principal: ModelGovernancePrincipal, action: str) -> dict[str, str]:
     return {"actor": principal.user_id, "action": action, "mode": "development"}
 
 
-def _put_credential(request, *, actor: str) -> None:
+def _validate_credential_reference(
+    request: CreateGovernanceDraftRequest | UpdateGovernanceDraftRequest,
+) -> None:
+    if request.credential is None:
+        return
+    if not isinstance(request.content, ModelProfileAssetContent):
+        raise ModelGovernanceGateError("只有模型资产可以提交凭据")
+    if request.content.credential_ref != request.credential.credential_id:
+        raise ModelGovernanceGateError(
+            "credential_ref 必须与 credential_id 一致"
+        )
+    api_key_length = len(request.credential.api_key.get_secret_value())
+    if not 1 <= api_key_length <= 4096:
+        raise ModelGovernanceGateError("API Key 长度必须在 1 到 4096 之间")
+
+
+def _put_credential(
+    request: CreateGovernanceDraftRequest, *, actor: str
+) -> None:
     if request.credential is None:
         return
     GovernanceCredentialVault(get_model_governance_storage()).put(
@@ -274,6 +296,7 @@ def create_governance_draft(
     service: ModelGovernanceService = Depends(get_model_governance_service),
 ) -> GovernanceDraftResponse:
     try:
+        _validate_credential_reference(request)
         draft = service.create_draft(request.content, actor=principal.user_id)
         try:
             _put_credential(request, actor=principal.user_id)
@@ -317,13 +340,28 @@ def update_governance_draft(
     service: ModelGovernanceService = Depends(get_model_governance_service),
 ) -> GovernanceDraftResponse:
     try:
-        draft = service.save_draft(
-            draft_id,
-            request.content,
-            expected_revision=request.expected_revision,
-            actor=principal.user_id,
-        )
-        _put_credential(request, actor=principal.user_id)
+        _validate_credential_reference(request)
+        if request.credential is None:
+            draft = service.save_draft(
+                draft_id,
+                request.content,
+                expected_revision=request.expected_revision,
+                actor=principal.user_id,
+            )
+        else:
+            vault = GovernanceCredentialVault(get_model_governance_storage())
+            credential = vault.seal(
+                request.credential.credential_id,
+                request.credential.api_key.get_secret_value(),
+                actor=principal.user_id,
+            )
+            draft = service.save_draft_with_credential(
+                draft_id,
+                request.content,
+                credential,
+                expected_revision=request.expected_revision,
+                actor=principal.user_id,
+            )
     except (
         ModelGovernanceConflictError,
         ModelGovernanceNotFoundError,

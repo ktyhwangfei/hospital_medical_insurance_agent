@@ -101,6 +101,29 @@ class InMemoryModelGovernanceStorage:
             self._drafts[draft.draft_id] = self._copy(draft)
             return self._copy(draft)
 
+    def update_draft_with_credential(
+        self,
+        draft: GovernanceDraft,
+        credential: GovernanceCredential,
+        *,
+        expected_revision: int,
+    ) -> GovernanceDraft:
+        with self._lock:
+            current_draft = self._drafts.get(draft.draft_id)
+            if current_draft is None or current_draft.revision != expected_revision:
+                raise ModelGovernanceConflictError("草稿 revision 已变化或草稿不存在")
+            if draft.revision != expected_revision + 1:
+                raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
+            current_credential = self._credentials.get(credential.credential_id)
+            credential_revision = (
+                1 if current_credential is None else current_credential.revision + 1
+            )
+            if credential.revision != credential_revision:
+                raise ModelGovernanceConflictError("凭据 revision 已变化")
+            self._drafts[draft.draft_id] = self._copy(draft)
+            self._credentials[credential.credential_id] = self._copy(credential)
+            return self._copy(draft)
+
     def get_draft(self, draft_id: str) -> GovernanceDraft:
         with self._lock:
             try:

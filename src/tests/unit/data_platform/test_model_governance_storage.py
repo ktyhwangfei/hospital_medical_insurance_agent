@@ -384,6 +384,43 @@ def test_in_memory_storage_keeps_credentials_and_matching_successful_tests():
     ) is None
 
 
+def test_in_memory_atomic_credential_update_leaves_both_records_unchanged_on_conflict():
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+    from src.data_platform.storage.model_governance.ports import (
+        ModelGovernanceConflictError,
+    )
+
+    storage = InMemoryModelGovernanceStorage()
+    draft = storage.create_draft(_draft())
+    original = GovernanceCredential(
+        credential_id="credential.demo",
+        encrypted_api_key="encrypted-original",
+        secret_fingerprint="a" * 64,
+        revision=1,
+        updated_by="editor",
+        updated_at=NOW,
+    )
+    storage.put_credential(original)
+    changed_draft = draft.model_copy(
+        update={"revision": 2, "content": _content("changed")}
+    )
+    stale_credential = original.model_copy(
+        update={"encrypted_api_key": "encrypted-changed"}
+    )
+
+    with pytest.raises(ModelGovernanceConflictError, match="credential|revision|凭据"):
+        storage.update_draft_with_credential(
+            changed_draft,
+            stale_credential,
+            expected_revision=1,
+        )
+
+    assert storage.get_draft(draft.draft_id) == draft
+    assert storage.get_credential(original.credential_id) == original
+
+
 def test_factory_uses_explicit_memory_and_defaults_to_lazy_postgres(monkeypatch):
     from src.data_platform.storage.model_governance.factory import (
         get_model_governance_storage,

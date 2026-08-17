@@ -62,7 +62,7 @@ _SENSITIVE_FIELDS: set[str] = {
 }
 
 
-def _mask_sensitive(data: dict[str, Any], parent_key: str = "") -> dict[str, Any]:
+def _mask_sensitive(data: Any, parent_key: str = "") -> Any:
     """脱敏敏感数据
 
     Args:
@@ -72,15 +72,23 @@ def _mask_sensitive(data: dict[str, Any], parent_key: str = "") -> dict[str, Any
     Returns:
         脱敏后的数据
     """
+    if isinstance(data, list):
+        return [_mask_sensitive(item, parent_key) for item in data]
+    if not isinstance(data, dict):
+        return data
+
     masked: dict[str, Any] = {}
     for key, value in data.items():
         full_key = f"{parent_key}.{key}" if parent_key else key
 
-        if isinstance(value, dict):
-            masked[key] = _mask_sensitive(value, full_key)
-        elif any(s in full_key.lower() for s in _SENSITIVE_FIELDS):
+        if any(s in full_key.lower() for s in _SENSITIVE_FIELDS):
+            if "api_key" in full_key.lower():
+                masked[key] = "******"
+                continue
             s = str(value)
             masked[key] = s[:3] + "***" + s[-3:] if len(s) > 6 else "******"
+        elif isinstance(value, (dict, list)):
+            masked[key] = _mask_sensitive(value, full_key)
         else:
             masked[key] = value
 

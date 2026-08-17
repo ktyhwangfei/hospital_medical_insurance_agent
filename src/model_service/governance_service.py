@@ -12,6 +12,7 @@ from src.model_service.governance_assets import (
     GovernanceAssetContent,
     GovernanceAssetPreview,
     GovernanceAssetType,
+    GovernanceCredential,
     GovernanceDraft,
     GovernanceDraftStatus,
     GovernanceEnvironment,
@@ -80,6 +81,46 @@ class ModelGovernanceService:
         expected_revision: int,
         actor: str,
     ) -> GovernanceDraft:
+        draft = self._changed_draft(
+            draft_id,
+            content,
+            expected_revision=expected_revision,
+            actor=actor,
+        )
+        return self._storage.update_draft(
+            draft,
+            expected_revision=expected_revision,
+        )
+
+    def save_draft_with_credential(
+        self,
+        draft_id: str,
+        content: GovernanceAssetContent,
+        credential: GovernanceCredential,
+        *,
+        expected_revision: int,
+        actor: str,
+    ) -> GovernanceDraft:
+        draft = self._changed_draft(
+            draft_id,
+            content,
+            expected_revision=expected_revision,
+            actor=actor,
+        )
+        return self._storage.update_draft_with_credential(
+            draft,
+            credential,
+            expected_revision=expected_revision,
+        )
+
+    def _changed_draft(
+        self,
+        draft_id: str,
+        content: GovernanceAssetContent,
+        *,
+        expected_revision: int,
+        actor: str,
+    ) -> GovernanceDraft:
         draft = self._current(draft_id, expected_revision)
         if content.asset_id != draft.asset_id or self._asset_type(content) != draft.asset_type:
             raise ModelGovernanceGateError("草稿不能变更资产标识或类型")
@@ -91,19 +132,16 @@ class ModelGovernanceService:
             approval = self._storage.get_approval(version.approval_id)
             if version.content_hash == digest and approval.draft_id == draft.draft_id:
                 raise ModelGovernanceGateError("活动版本不可编辑，请新建版本")
-        return self._storage.update_draft(
-            draft.model_copy(
-                update={
-                    "content": content,
-                    "status": GovernanceDraftStatus.EDITING,
-                    "revision": draft.revision + 1,
-                    "validation_issues": [],
-                    "last_edited_by": actor,
-                    "updated_at": self._now(),
-                },
-                deep=True,
-            ),
-            expected_revision=expected_revision,
+        return draft.model_copy(
+            update={
+                "content": content,
+                "status": GovernanceDraftStatus.EDITING,
+                "revision": draft.revision + 1,
+                "validation_issues": [],
+                "last_edited_by": actor,
+                "updated_at": self._now(),
+            },
+            deep=True,
         )
 
     def _profile_is_published(
@@ -226,8 +264,10 @@ class ModelGovernanceService:
         draft = self._current(draft_id, expected_revision)
         if draft.status == GovernanceDraftStatus.APPROVED:
             raise ModelGovernanceGateError("已审核草稿不能删除")
-        if self._storage.list_versions(draft.asset_id):
-            raise ModelGovernanceGateError("已有版本的草稿不能删除")
+        for version in self._storage.list_versions(draft.asset_id):
+            approval = self._storage.get_approval(version.approval_id)
+            if approval.draft_id == draft.draft_id:
+                raise ModelGovernanceGateError("已产出版本的草稿不能删除")
         return self._storage.delete_draft(
             draft_id, expected_revision=expected_revision
         )

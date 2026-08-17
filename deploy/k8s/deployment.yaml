@@ -35,7 +35,10 @@ spec:
                 name: medical-insurance-ai-agent-secret
           env:
             - name: MODEL_GOVERNANCE_ENV
-              value: dev
+              valueFrom:
+                configMapKeyRef:
+                  name: medical-insurance-ai-agent-config
+                  key: MODEL_GOVERNANCE_ENV
             - name: MODEL_GOVERNANCE_MASTER_KEY
               valueFrom:
                 secretKeyRef:

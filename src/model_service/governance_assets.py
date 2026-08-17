@@ -10,6 +10,7 @@ from enum import StrEnum
 from string import Formatter
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -100,12 +101,15 @@ class ModelProfileAssetContent(BaseModel):
     def validate_base_url(cls, value: str) -> str:
         try:
             parsed = urlsplit(value)
+            hostname = parsed.hostname
+            parsed.port
         except ValueError as exc:
             raise ValueError("base_url 必须是有效 HTTP(S) URL") from exc
         if (
             value != value.strip()
+            or any(character.isspace() for character in value)
             or parsed.scheme not in {"http", "https"}
-            or not parsed.hostname
+            or not hostname
             or parsed.username is not None
             or parsed.password is not None
         ):
@@ -199,7 +203,7 @@ class GovernanceCredential(BaseModel):
 class GovernanceConnectionTest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    test_id: str = Field(min_length=1, max_length=64)
+    test_id: UUID
     asset_id: str = Field(pattern=_ASSET_ID_PATTERN)
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     credential_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")

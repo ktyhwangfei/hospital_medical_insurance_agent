@@ -37,13 +37,24 @@ class GovernanceCredentialVault:
         *,
         actor: str,
     ) -> GovernanceCredential:
+        return self._storage.put_credential(
+            self.seal(credential_id, api_key, actor=actor)
+        )
+
+    def seal(
+        self,
+        credential_id: str,
+        api_key: str,
+        *,
+        actor: str,
+    ) -> GovernanceCredential:
         if not api_key:
             raise GovernanceSecretError("API Key 不能为空")
         try:
             revision = self._storage.get_credential(credential_id).revision + 1
         except ModelGovernanceNotFoundError:
             revision = 1
-        credential = GovernanceCredential(
+        return GovernanceCredential(
             credential_id=credential_id,
             encrypted_api_key=self._fernet.encrypt(api_key.encode("utf-8")).decode("ascii"),
             secret_fingerprint=hashlib.sha256(api_key.encode("utf-8")).hexdigest(),
@@ -51,7 +62,6 @@ class GovernanceCredentialVault:
             updated_by=actor,
             updated_at=datetime.now(timezone.utc),
         )
-        return self._storage.put_credential(credential)
 
     def reveal(self, credential_id: str) -> str:
         credential = self._storage.get_credential(credential_id)

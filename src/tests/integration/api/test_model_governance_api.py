@@ -415,3 +415,132 @@ def test_model_credential_ref_must_match_and_failed_encryption_removes_new_draft
     )
     assert drafts.status_code == 200
     assert drafts.json()["result"]["drafts"] == []
+
+
+def test_mismatched_credential_422_and_access_log_never_expose_api_key(
+    monkeypatch, caplog
+):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    client = _management_client(monkeypatch)
+    secret = "mismatch-" + "secret-value"
+    payload = _model_payload(secret)
+    payload["credential"]["credential_id"] = "credential.other"
+
+    response = client.post(
+        "/api/v1/medical-insurance-ai-agent/model-governance/drafts",
+        json=payload,
+        headers=_headers("model_governance:write"),
+    )
+
+    assert response.status_code == 422
+    assert secret not in response.text
+    assert secret not in caplog.text
+
+    from src.gateway.access_log import AccessLogger
+
+    logger = AccessLogger()
+    logger.log(
+        request_id="nested-secret",
+        method="POST",
+        path="/model-governance/drafts",
+        status_code=422,
+        duration_ms=1,
+        request_body={"items": [payload]},
+    )
+    assert secret not in logger.get_entries()[0].request_body
+    assert "mismatch-***alue" not in logger.get_entries()[0].request_body
+
+    oversized_secret = "x" * 4097
+    oversized = client.post(
+        "/api/v1/medical-insurance-ai-agent/model-governance/drafts",
+        json=_model_payload(oversized_secret),
+        headers=_headers("model_governance:write"),
+    )
+    assert oversized.status_code == 422
+    assert oversized_secret not in oversized.text
+
+
+def test_patch_bad_key_keeps_draft_and_credential_unchanged(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    valid_master_key = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    monkeypatch.setenv("MODEL_GOVERNANCE_MASTER_KEY", valid_master_key)
+    client = _management_client(monkeypatch)
+    prefix = "/api/v1/medical-insurance-ai-agent/model-governance/drafts"
+    created_response = client.post(
+        prefix,
+        json=_model_payload("original-key"),
+        headers=_headers("model_governance:write"),
+    )
+    assert created_response.status_code == 201
+    created = created_response.json()["result"]
+
+    from src.data_platform.storage.model_governance.factory import (
+        get_model_governance_storage,
+    )
+
+    storage = get_model_governance_storage()
+    original_draft = storage.get_draft(created["draft_id"])
+    original_credential = storage.get_credential("credential.api-demo")
+    changed = _model_payload("replacement-key")
+    changed["content"]["model_name"] = "changed-model"
+    changed["expected_revision"] = created["revision"]
+    monkeypatch.setenv("MODEL_GOVERNANCE_MASTER_KEY", "invalid-key")
+
+    response = client.patch(
+        f"{prefix}/{created['draft_id']}",
+        json=changed,
+        headers=_headers("model_governance:write"),
+    )
+
+    assert response.status_code == 422
+    assert storage.get_draft(created["draft_id"]) == original_draft
+    assert storage.get_credential("credential.api-demo") == original_credential
+
+
+def test_failed_credential_create_rolls_back_new_draft_when_asset_has_history(
+    monkeypatch,
+):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv("MODEL_GOVERNANCE_MASTER_KEY", "invalid-key")
+    client = _management_client(monkeypatch)
+    from src.model_service.governance_assets import (
+        GovernanceEnvironment,
+        ModelProfileAssetContent,
+    )
+    from src.runtime.api.model_governance_routes import get_model_governance_service
+
+    service = get_model_governance_service()
+    content = ModelProfileAssetContent.model_validate(_model_payload()["content"])
+    draft = service.create_draft(content, actor="editor")
+    validated = service.validate_draft(draft.draft_id, expected_revision=draft.revision)
+    pending = service.request_review(
+        draft.draft_id, expected_revision=validated.revision, actor="editor"
+    )
+    approved = service.approve(
+        draft.draft_id,
+        expected_revision=pending.revision,
+        actor="reviewer",
+        reason="审核通过",
+    )
+    service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    drafts_before = service.list_drafts()
+    payload = _model_payload("new-key")
+    payload["content"]["model_name"] = "next-model"
+
+    response = client.post(
+        "/api/v1/medical-insurance-ai-agent/model-governance/drafts",
+        json=payload,
+        headers=_headers("model_governance:write"),
+    )
+
+    assert response.status_code == 422
+    assert service.list_drafts() == drafts_before

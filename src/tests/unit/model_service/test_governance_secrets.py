@@ -1,4 +1,5 @@
 import hashlib
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -6,7 +7,10 @@ from pydantic import ValidationError
 from src.data_platform.storage.model_governance.in_memory import (
     InMemoryModelGovernanceStorage,
 )
-from src.model_service.governance_assets import ModelProfileAssetContent
+from src.model_service.governance_assets import (
+    GovernanceConnectionTest,
+    ModelProfileAssetContent,
+)
 
 
 MASTER_KEY = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
@@ -64,6 +68,10 @@ def test_model_profile_accepts_only_safe_openai_compatible_url():
     for unsafe_url in (
         "ftp://models.example.test/v1",
         "https://user:password@models.example.test/v1",
+        "https://models.example.test:bad/v1",
+        "https://models.example.test:65536/v1",
+        "https://models .example.test/v1",
+        "https:///v1",
     ):
         with pytest.raises(ValidationError):
             ModelProfileAssetContent(
@@ -75,3 +83,31 @@ def test_model_profile_accepts_only_safe_openai_compatible_url():
                 temperature=0.2,
                 max_tokens=1024,
             )
+
+
+def test_connection_test_id_is_a_uuid():
+    with pytest.raises(ValidationError):
+        GovernanceConnectionTest(
+            test_id="not-a-uuid",
+            asset_id="model.demo",
+            content_hash="a" * 64,
+            credential_fingerprint="b" * 64,
+            succeeded=True,
+            latency_ms=1,
+            safe_message="连接成功",
+            tested_by="editor",
+        )
+
+
+def test_k8s_governance_environment_comes_from_existing_configmap():
+    root = Path(__file__).resolve().parents[4]
+    deployment = (root / "deploy/k8s/deployment.yaml").read_text(encoding="utf-8")
+    configmap = (root / "deploy/k8s/configmap.yaml").read_text(encoding="utf-8")
+
+    env_block = deployment.split("- name: MODEL_GOVERNANCE_ENV", 1)[1].split(
+        "- name: MODEL_GOVERNANCE_MASTER_KEY", 1
+    )[0]
+    assert "configMapKeyRef:" in env_block
+    assert "name: medical-insurance-ai-agent-config" in env_block
+    assert "key: MODEL_GOVERNANCE_ENV" in env_block
+    assert "MODEL_GOVERNANCE_ENV:" in configmap
