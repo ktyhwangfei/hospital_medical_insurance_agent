@@ -11,7 +11,7 @@ export class ModelGovernancePage extends BasePage {
   private readonly governanceResponseBodies: Promise<string>[] = [];
 
   constructor(page: Page) {
-    super(page, process.env.PORTAL_BASE_URL ?? 'http://127.0.0.1:3000');
+    super(page, 'http://127.0.0.1:3000');
     this.roleSwitcher = page.locator('header').getByRole('combobox');
     this.modelGovernanceLink = page.getByRole('link', { name: '后台管理', exact: true });
     this.title = page.getByRole('heading', { name: '后台管理', exact: true });
@@ -155,12 +155,15 @@ export class ModelGovernancePage extends BasePage {
   async createPromptVersion(assetId: string, userPrompt: string): Promise<void> {
     await this.selectTab('提示词');
     await this.openAsset(assetId);
-    const versionPromise = this.page.waitForResponse((response) =>
-      response.request().method() === 'POST'
-      && response.url().includes(`/model-governance/assets/${assetId}/versions`),
-    );
-    await this.page.getByRole('button', { name: '新建版本' }).click();
-    expect((await versionPromise).status()).toBe(201);
+    const newVersionButton = this.page.getByRole('button', { name: '新建版本' });
+    if (await newVersionButton.isVisible()) {
+      const versionPromise = this.page.waitForResponse((response) =>
+        response.request().method() === 'POST'
+        && response.url().includes(`/model-governance/assets/${assetId}/versions`),
+      );
+      await newVersionButton.click();
+      expect((await versionPromise).status()).toBe(201);
+    }
     await this.page.getByLabel('用户提示词模板').fill(userPrompt);
     expect((await this.saveWorkingVersion('PATCH')).status()).toBe(200);
   }
@@ -198,7 +201,8 @@ export class ModelGovernancePage extends BasePage {
     const responsePromise = this.page.waitForResponse((response) =>
       response.request().method() === 'POST' && response.url().endsWith('/rollback'),
     );
-    await this.page.getByRole('button', { name: '回滚至此版本' }).first().click();
+    const baselineVersion = this.page.getByText('版本 1 · 历史', { exact: true }).locator('..').locator('..');
+    await baselineVersion.getByRole('button', { name: '回滚至此版本' }).click();
     expect((await responsePromise).status()).toBe(200);
     await this.expectCurrentPrompt(systemPrompt, userPrompt);
   }

@@ -5,7 +5,21 @@ import { expect, test } from '@playwright/test';
 import { ModelGovernancePage } from '../../pages/portal/model-governance.page';
 
 const apiKey = 'e2e-api-key-value';
-let provider: Server;
+const governanceApi = 'http://127.0.0.1:8000/api/v1/medical-insurance-ai-agent/model-governance';
+const editorTokenPayload = {
+  sub: 'portal-governance-editor',
+  roles: ['information_department'],
+  permissions: [
+    'model_governance:read',
+    'model_governance:write',
+    'model_governance:publish',
+  ],
+  exp: 4102444800,
+};
+const governanceHeaders = {
+  Authorization: `Bearer test.${Buffer.from(JSON.stringify(editorTokenPayload)).toString('base64url')}.signature`,
+};
+let provider: Server | undefined;
 let providerBaseUrl: string;
 let capturedProviderRequest: {
   method?: string;
@@ -67,7 +81,60 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await new Promise<void>((resolve, reject) => provider.close((error) => error ? reject(error) : resolve()));
+  if (!provider?.listening) return;
+  await new Promise<void>((resolve, reject) => provider!.close((error) => error ? reject(error) : resolve()));
+});
+
+test.afterEach(async ({ request }) => {
+  try {
+    const assetsResponse = await request.get(
+      `${governanceApi}/assets?environment=dev&asset_type=prompt`,
+      { headers: governanceHeaders },
+    );
+    if (!assetsResponse.ok()) return;
+    const assets = await assetsResponse.json() as {
+      result: {
+        baselines: Array<{ asset_id: string; system_prompt: string; user_prompt_template: string }>;
+        published: Array<{
+          asset_id: string;
+          content: { system_prompt: string; user_prompt_template: string };
+        }>;
+      };
+    };
+    const baseline = assets.result.baselines.find((item) => item.asset_id === 'intent.classify');
+    const active = assets.result.published.find((item) => item.asset_id === 'intent.classify');
+    if (!baseline || !active || (
+      active.content.system_prompt === baseline.system_prompt
+      && active.content.user_prompt_template === baseline.user_prompt_template
+    )) return;
+
+    const versionsResponse = await request.get(
+      `${governanceApi}/assets/intent.classify/versions?environment=dev`,
+      { headers: governanceHeaders },
+    );
+    if (!versionsResponse.ok()) return;
+    const history = await versionsResponse.json() as {
+      result: {
+        versions: Array<{
+          version_id: string;
+          content: { system_prompt: string; user_prompt_template: string };
+        }>;
+        releases: Array<{ release_id: string; version_id: string; status: string }>;
+      };
+    };
+    const baselineVersion = history.result.versions.find((item) =>
+      item.content.system_prompt === baseline.system_prompt
+      && item.content.user_prompt_template === baseline.user_prompt_template);
+    const retiredBaseline = history.result.releases.find((item) =>
+      item.version_id === baselineVersion?.version_id && item.status === 'retired');
+    if (retiredBaseline) {
+      await request.post(`${governanceApi}/releases/${retiredBaseline.release_id}/rollback`, {
+        headers: governanceHeaders,
+      });
+    }
+  } catch {
+    // Best effort: preserve the original E2E failure while avoiding a polluted retry.
+  }
 });
 
 test('收费员管理真实模型、路由与提示词版本且密钥不泄漏', async ({ page, browserName }, testInfo) => {
@@ -83,18 +150,29 @@ test('收费员管理真实模型、路由与提示词版本且密钥不泄漏',
   expect(assetsResponse.status()).toBe(200);
   await expect(governance.title).toBeVisible();
   const assets = await assetsResponse.json() as {
-    result: { baselines: Array<{
-      asset_id: string;
-      asset_type: string;
-      system_prompt: string;
-      user_prompt_template: string;
-    }> };
+    result: {
+      baselines: Array<{
+        asset_id: string;
+        asset_type: string;
+        system_prompt: string;
+        user_prompt_template: string;
+      }>;
+      published: Array<{
+        asset_id: string;
+        content: { system_prompt: string; user_prompt_template: string };
+      }>;
+    };
   };
   const baseline = assets.result.baselines.find((item) =>
     item.asset_type === 'prompt' && item.asset_id === 'intent.classify');
   expect(baseline).toBeTruthy();
   expect(baseline!.user_prompt_template.length).toBeGreaterThan(0);
   expect(baseline!.user_prompt_template).toContain('用户消息');
+  const activePrompt = assets.result.published.find((item) => item.asset_id === 'intent.classify');
+  if (activePrompt) {
+    expect(activePrompt.content.system_prompt).toBe(baseline!.system_prompt);
+    expect(activePrompt.content.user_prompt_template).toBe(baseline!.user_prompt_template);
+  }
 
   await governance.selectTab('提示词');
   await governance.openAsset('intent.classify');
@@ -125,8 +203,10 @@ test('收费员管理真实模型、路由与提示词版本且密钥不泄漏',
   await governance.createRouteRule(routeId, `e2e-${suffix}`, profileId);
   await governance.completeReviewAndPublish(routeId);
 
-  await governance.activateBaselinePrompt('intent.classify');
-  await governance.completeReviewAndPublish('intent.classify');
+  if (!activePrompt) {
+    await governance.activateBaselinePrompt('intent.classify');
+    await governance.completeReviewAndPublish('intent.classify');
+  }
   const nextPrompt = `${baseline!.user_prompt_template}\nE2E_ACTIVE_${suffix}`;
   await governance.createPromptVersion('intent.classify', nextPrompt);
   await governance.completeReviewAndPublish('intent.classify');
@@ -134,6 +214,9 @@ test('收费员管理真实模型、路由与提示词版本且密钥不泄漏',
   await governance.selectTab('提示词');
   await governance.openAsset('intent.classify');
   await governance.expectCurrentPrompt(baseline!.system_prompt, nextPrompt);
+  if (process.env.MODEL_GOVERNANCE_E2E_FORCE_RETRY === '1' && testInfo.retry === 0) {
+    throw new Error('E2E retry recovery probe');
+  }
   await governance.rollbackPromptToPrevious(baseline!.system_prompt, baseline!.user_prompt_template);
   await governance.closeDrawer();
 
