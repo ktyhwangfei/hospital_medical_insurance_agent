@@ -642,6 +642,9 @@ def test_credential_migration_is_repeatable_and_has_versioned_release_binding():
     assert "add column if not exists endpoint_fingerprint" in migration
     assert "create table if not exists model_governance_credential_versions" in migration
     assert "create table if not exists model_governance_release_credentials" in migration
+    assert "from model_governance_drafts" not in migration
+    assert "from model_governance_releases" in migration
+    assert "connection_test.succeeded = true" in migration
     assert "encode( sha256(convert_to(" in normalized
     assert "count(distinct normalized_base_url) = 1" in normalized
     assert "insert into model_governance_credential_versions" in normalized

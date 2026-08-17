@@ -40,18 +40,27 @@ CREATE TABLE model_governance_connection_tests (
 
 INSERT INTO model_governance_credentials VALUES
     ('credential.unique', 'encrypted-unique', repeat('a', 64), 3, 'legacy', now()),
-    ('credential.ambiguous', 'encrypted-ambiguous', repeat('b', 64), 2, 'legacy', now()),
-    ('credential.orphan', 'encrypted-orphan', repeat('c', 64), 1, 'legacy', now());
+    ('credential.draft-only', 'encrypted-draft', repeat('b', 64), 2, 'legacy', now()),
+    ('credential.untested', 'encrypted-untested', repeat('c', 64), 2, 'legacy', now()),
+    ('credential.ambiguous', 'encrypted-ambiguous', repeat('e', 64), 2, 'legacy', now()),
+    ('credential.orphan', 'encrypted-orphan', repeat('f', 64), 1, 'legacy', now());
 INSERT INTO model_governance_drafts VALUES
-    ('draft-unique', '{"asset_type":"model_profile","credential_ref":"credential.unique","base_url":"https://models.example.test/v1///"}'),
-    ('draft-ambiguous-a', '{"asset_type":"model_profile","credential_ref":"credential.ambiguous","base_url":"https://a.example.test/v1"}'),
-    ('draft-ambiguous-b', '{"asset_type":"model_profile","credential_ref":"credential.ambiguous","base_url":"https://b.example.test/v1"}');
+    ('draft-malicious', '{"asset_type":"model_profile","credential_ref":"credential.draft-only","base_url":"https://attacker.example.test/v1"}');
 INSERT INTO model_governance_versions VALUES
-    ('version-unique', 'model.unique', '{"asset_type":"model_profile","credential_ref":"credential.unique","base_url":"https://models.example.test/v1/"}', repeat('d', 64));
+    ('version-unique', 'model.unique', '{"asset_type":"model_profile","credential_ref":"credential.unique","base_url":"https://models.example.test/v1/"}', repeat('1', 64)),
+    ('version-untested', 'model.untested', '{"asset_type":"model_profile","credential_ref":"credential.untested","base_url":"https://untested.example.test/v1"}', repeat('2', 64)),
+    ('version-ambiguous-a', 'model.ambiguous-a', '{"asset_type":"model_profile","credential_ref":"credential.ambiguous","base_url":"https://a.example.test/v1"}', repeat('3', 64)),
+    ('version-ambiguous-b', 'model.ambiguous-b', '{"asset_type":"model_profile","credential_ref":"credential.ambiguous","base_url":"https://b.example.test/v1"}', repeat('4', 64));
 INSERT INTO model_governance_releases VALUES
-    ('release-unique', 'version-unique');
+    ('release-unique', 'version-unique'),
+    ('release-untested', 'version-untested'),
+    ('release-ambiguous-a', 'version-ambiguous-a'),
+    ('release-ambiguous-b', 'version-ambiguous-b');
 INSERT INTO model_governance_connection_tests VALUES
-    ('00000000-0000-0000-0000-000000000001', 'model.unique', repeat('d', 64), repeat('a', 64), TRUE, 1, '连接成功', 'legacy', now());
+    ('00000000-0000-0000-0000-000000000001', 'model.unique', repeat('1', 64), repeat('a', 64), TRUE, 1, '连接成功', 'legacy', now()),
+    ('00000000-0000-0000-0000-000000000002', 'model.untested', repeat('2', 64), repeat('c', 64), FALSE, 1, '连接失败', 'legacy', now()),
+    ('00000000-0000-0000-0000-000000000003', 'model.ambiguous-a', repeat('3', 64), repeat('e', 64), TRUE, 1, '连接成功', 'legacy', now()),
+    ('00000000-0000-0000-0000-000000000004', 'model.ambiguous-b', repeat('4', 64), repeat('e', 64), TRUE, 1, '连接成功', 'legacy', now());
 
 \ir model_governance_credentials_migration.sql
 
@@ -66,10 +75,13 @@ BEGIN
     END IF;
     IF EXISTS (
         SELECT 1 FROM model_governance_credentials
-        WHERE credential_id IN ('credential.ambiguous', 'credential.orphan')
+        WHERE credential_id IN (
+            'credential.draft-only', 'credential.untested',
+            'credential.ambiguous', 'credential.orphan'
+        )
           AND endpoint_fingerprint IS NOT NULL
     ) THEN
-        RAISE EXCEPTION 'ambiguous or orphan endpoint must stay unbound';
+        RAISE EXCEPTION 'untrusted, ambiguous, or orphan endpoint must stay unbound';
     END IF;
     IF (SELECT count(*) FROM model_governance_credential_versions) <> 1 THEN
         RAISE EXCEPTION 'only the uniquely bound credential should be snapshotted';
