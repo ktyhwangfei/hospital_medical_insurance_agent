@@ -83,14 +83,13 @@ class ModelGovernanceService:
         draft = self._current(draft_id, expected_revision)
         if content.asset_id != draft.asset_id or self._asset_type(content) != draft.asset_type:
             raise ModelGovernanceGateError("草稿不能变更资产标识或类型")
-        if draft.status == GovernanceDraftStatus.APPROVED:
-            active_hashes = {
-                self._storage.get_version(release.version_id).content_hash
-                for release in self._storage.list_releases(draft.asset_id)
-                if release.status == GovernanceReleaseStatus.ACTIVE
-            }
-            if content_hash(draft.content) in active_hashes:
-                raise ModelGovernanceGateError("活动版本不可编辑，请新建版本")
+        active_hashes = {
+            self._storage.get_version(release.version_id).content_hash
+            for release in self._storage.list_releases(draft.asset_id)
+            if release.status == GovernanceReleaseStatus.ACTIVE
+        }
+        if content_hash(draft.content) in active_hashes:
+            raise ModelGovernanceGateError("活动版本不可编辑，请新建版本")
         return self._storage.update_draft(
             draft.model_copy(
                 update={
