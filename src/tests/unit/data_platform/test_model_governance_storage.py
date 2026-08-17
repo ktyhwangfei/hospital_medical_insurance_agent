@@ -229,6 +229,34 @@ def test_approval_and_draft_transition_are_atomic_on_revision_conflict():
         storage.get_approval(approval.approval_id)
 
 
+def test_publish_draft_version_is_atomic_on_revision_conflict():
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+    from src.data_platform.storage.model_governance.ports import (
+        ModelGovernanceConflictError,
+        ModelGovernanceNotFoundError,
+    )
+
+    storage = InMemoryModelGovernanceStorage()
+    current = storage.create_draft(_draft())
+    version = _version("version-1", 1)
+    release = _release("release-1", version.version_id)
+
+    with pytest.raises(ModelGovernanceConflictError, match="revision"):
+        storage.publish_draft_version(
+            current.model_copy(update={"revision": 2}),
+            version,
+            release,
+            expected_revision=2,
+        )
+
+    assert storage.get_draft(current.draft_id) == current
+    assert storage.list_versions(current.asset_id) == []
+    with pytest.raises(ModelGovernanceNotFoundError):
+        storage.get_release(release.release_id)
+
+
 def test_postgres_schema_has_revision_and_unique_active_release():
     from src.data_platform.storage.model_governance.postgres import (
         MODEL_GOVERNANCE_TABLE_SCHEMA,

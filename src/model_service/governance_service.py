@@ -317,41 +317,38 @@ class ModelGovernanceService:
         active = self._storage.get_active_release(draft.asset_id, environment)
         if active and active.version_id == version_id:
             return active
-        draft = self._storage.update_draft(
-            draft.model_copy(
-                update={
-                    "revision": draft.revision + 1,
-                    "updated_at": self._now(),
-                },
-                deep=True,
-            ),
-            expected_revision=expected_revision,
-        )
         versions = self._storage.list_versions(draft.asset_id)
-        self._storage.save_version(
-            GovernanceVersion(
-                version_id=version_id,
-                asset_id=draft.asset_id,
-                asset_type=draft.asset_type,
-                version_number=max((item.version_number for item in versions), default=0)
-                + 1,
-                content=draft.content,
-                content_hash=digest,
-                approval_id=approval.approval_id,
-                created_by=actor,
-            )
+        version = GovernanceVersion(
+            version_id=version_id,
+            asset_id=draft.asset_id,
+            asset_type=draft.asset_type,
+            version_number=max((item.version_number for item in versions), default=0) + 1,
+            content=draft.content,
+            content_hash=digest,
+            approval_id=approval.approval_id,
+            created_by=actor,
         )
-        active = self._storage.get_active_release(draft.asset_id, environment)
-        return self._storage.publish(
-            GovernanceRelease(
-                release_id=str(uuid4()),
-                asset_id=draft.asset_id,
-                asset_type=draft.asset_type,
-                version_id=version_id,
-                environment=environment,
-                previous_release_id=active.release_id if active else None,
-                created_by=actor,
-            )
+        release = GovernanceRelease(
+            release_id=str(uuid4()),
+            asset_id=draft.asset_id,
+            asset_type=draft.asset_type,
+            version_id=version_id,
+            environment=environment,
+            previous_release_id=active.release_id if active else None,
+            created_by=actor,
+        )
+        published_draft = draft.model_copy(
+            update={
+                "revision": draft.revision + 1,
+                "updated_at": self._now(),
+            },
+            deep=True,
+        )
+        return self._storage.publish_draft_version(
+            published_draft,
+            version,
+            release,
+            expected_revision=expected_revision,
         )
 
     def rollback(self, release_id: str, *, actor: str) -> GovernanceRelease:

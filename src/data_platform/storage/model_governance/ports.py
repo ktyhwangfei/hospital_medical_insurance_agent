@@ -57,6 +57,15 @@ class ModelGovernanceStorage(Protocol):
 
     def publish(self, release: GovernanceRelease) -> GovernanceRelease: ...
 
+    def publish_draft_version(
+        self,
+        draft: GovernanceDraft,
+        version: GovernanceVersion,
+        release: GovernanceRelease,
+        *,
+        expected_revision: int,
+    ) -> GovernanceRelease: ...
+
     def get_release(self, release_id: str) -> GovernanceRelease: ...
 
     def list_releases(

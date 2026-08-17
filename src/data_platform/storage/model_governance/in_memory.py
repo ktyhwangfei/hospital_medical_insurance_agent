@@ -173,6 +173,81 @@ class InMemoryModelGovernanceStorage:
             self._releases[release.release_id] = self._copy(release)
             return self._copy(release)
 
+    def publish_draft_version(
+        self,
+        draft: GovernanceDraft,
+        version: GovernanceVersion,
+        release: GovernanceRelease,
+        *,
+        expected_revision: int,
+    ) -> GovernanceRelease:
+        with self._lock:
+            current = self._drafts.get(draft.draft_id)
+            if current is None or current.revision != expected_revision:
+                raise ModelGovernanceConflictError("草稿 revision 已变化或草稿不存在")
+            if draft.revision != expected_revision + 1:
+                raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
+            if release.release_id in self._releases:
+                raise ModelGovernanceConflictError("发布记录已存在")
+
+            existing_version = next(
+                (
+                    item
+                    for item in self._versions.values()
+                    if item.asset_id == version.asset_id
+                    and item.content_hash == version.content_hash
+                ),
+                None,
+            )
+            if existing_version is None and (
+                version.version_id in self._versions
+                or any(
+                    item.asset_id == version.asset_id
+                    and item.version_number == version.version_number
+                    for item in self._versions.values()
+                )
+            ):
+                raise ModelGovernanceConflictError("版本已存在")
+            stored_version = existing_version or version
+            if release.version_id != stored_version.version_id:
+                raise ModelGovernanceConflictError("发布引用的版本已变化")
+
+            active = next(
+                (
+                    item
+                    for item in self._releases.values()
+                    if item.asset_id == release.asset_id
+                    and item.environment == release.environment
+                    and item.status == GovernanceReleaseStatus.ACTIVE
+                ),
+                None,
+            )
+            active_id = active.release_id if active else None
+            if active_id != release.previous_release_id:
+                raise ModelGovernanceConflictError("发布基线已变化")
+
+            next_draft = self._copy(draft)
+            next_version = self._copy(version) if existing_version is None else None
+            next_release = self._copy(release)
+            retired = (
+                active.model_copy(
+                    update={
+                        "status": GovernanceReleaseStatus.RETIRED,
+                        "retired_at": datetime.now(timezone.utc),
+                    },
+                    deep=True,
+                )
+                if active
+                else None
+            )
+            self._drafts[draft.draft_id] = next_draft
+            if next_version is not None:
+                self._versions[version.version_id] = next_version
+            if retired is not None:
+                self._releases[active.release_id] = retired
+            self._releases[release.release_id] = next_release
+            return self._copy(next_release)
+
     def get_release(self, release_id: str) -> GovernanceRelease:
         with self._lock:
             try:

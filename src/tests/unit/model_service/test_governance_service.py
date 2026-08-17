@@ -224,6 +224,36 @@ def test_publish_revision_gate_wins_over_interleaved_save():
     assert storage.get_draft(approved.draft_id).content.system_prompt == "当前生效"
 
 
+def test_publish_is_atomic_when_save_arrives_after_old_revision_fence():
+    class SaveDuringVersionWriteStorage(InMemoryModelGovernanceStorage):
+        save_once = None
+
+        def save_version(self, version):
+            callback, self.save_once = self.save_once, None
+            if callback is not None:
+                callback()
+            return super().save_version(version)
+
+    storage = SaveDuringVersionWriteStorage()
+    service = ModelGovernanceService(storage)
+    approved = _complete_review(service, _prompt("当前生效"))
+    storage.save_once = lambda: service.save_draft(
+        approved.draft_id,
+        _prompt("fence 后修改"),
+        expected_revision=storage.get_draft(approved.draft_id).revision,
+        actor="editor",
+    )
+
+    service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+
+    assert storage.get_draft(approved.draft_id).content.system_prompt == "当前生效"
+
+
 def test_create_next_version_requires_active_release():
     service = ModelGovernanceService(InMemoryModelGovernanceStorage())
 

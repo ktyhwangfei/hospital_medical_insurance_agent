@@ -311,6 +311,134 @@ class PostgresModelGovernanceStorage:
                 raise ModelGovernanceConflictError("发布记录已存在") from exc
         return self._release(rows[0])
 
+    def publish_draft_version(
+        self,
+        draft: GovernanceDraft,
+        version: GovernanceVersion,
+        release: GovernanceRelease,
+        *,
+        expected_revision: int,
+    ) -> GovernanceRelease:
+        if draft.revision != expected_revision + 1:
+            raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
+        client = self._get_client()
+        try:
+            with client.transaction():
+                draft_rows = client.execute(
+                    """SELECT revision FROM model_governance_drafts
+                       WHERE draft_id=%s FOR UPDATE""",
+                    (draft.draft_id,),
+                )
+                if (
+                    not draft_rows
+                    or draft_rows[0]["revision"] != expected_revision
+                ):
+                    raise ModelGovernanceConflictError(
+                        "草稿 revision 已变化或草稿不存在"
+                    )
+
+                active_rows = client.execute(
+                    """SELECT * FROM model_governance_releases
+                       WHERE asset_id=%s AND environment=%s AND status='active'
+                       FOR UPDATE""",
+                    (release.asset_id, release.environment.value),
+                )
+                active_id = active_rows[0]["release_id"] if active_rows else None
+                if active_id != release.previous_release_id:
+                    raise ModelGovernanceConflictError("发布基线已变化")
+
+                existing_versions = client.execute(
+                    """SELECT * FROM model_governance_versions
+                       WHERE asset_id=%s AND content_hash=%s FOR UPDATE""",
+                    (version.asset_id, version.content_hash),
+                )
+                if existing_versions:
+                    if existing_versions[0]["version_id"] != release.version_id:
+                        raise ModelGovernanceConflictError(
+                            "发布引用的版本已变化"
+                        )
+                else:
+                    version_conflicts = client.execute(
+                        """SELECT version_id FROM model_governance_versions
+                           WHERE version_id=%s OR (asset_id=%s AND version_number=%s)
+                           FOR UPDATE""",
+                        (
+                            version.version_id,
+                            version.asset_id,
+                            version.version_number,
+                        ),
+                    )
+                    if version_conflicts:
+                        raise ModelGovernanceConflictError("版本已存在")
+
+                updated_rows = client.execute(
+                    """UPDATE model_governance_drafts SET content=%s, status=%s,
+                       revision=%s, validation_issues=%s, last_edited_by=%s,
+                       updated_at=%s WHERE draft_id=%s AND revision=%s RETURNING *""",
+                    (
+                        _json(draft.content),
+                        draft.status.value,
+                        draft.revision,
+                        _json(draft.validation_issues),
+                        draft.last_edited_by,
+                        draft.updated_at,
+                        draft.draft_id,
+                        expected_revision,
+                    ),
+                )
+                if not updated_rows:
+                    raise ModelGovernanceConflictError(
+                        "草稿 revision 已变化或草稿不存在"
+                    )
+
+                if not existing_versions:
+                    client.execute(
+                        """INSERT INTO model_governance_versions
+                           (version_id, asset_id, asset_type, version_number, content,
+                            content_hash, approval_id, created_by, created_at)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (
+                            version.version_id,
+                            version.asset_id,
+                            version.asset_type.value,
+                            version.version_number,
+                            _json(version.content),
+                            version.content_hash,
+                            version.approval_id,
+                            version.created_by,
+                            version.created_at,
+                        ),
+                    )
+                if active_id:
+                    client.execute(
+                        """UPDATE model_governance_releases
+                           SET status='retired', retired_at=%s WHERE release_id=%s""",
+                        (datetime.now(timezone.utc), active_id),
+                    )
+                release_rows = client.execute(
+                    """INSERT INTO model_governance_releases
+                       (release_id, asset_id, asset_type, version_id, environment, status,
+                        previous_release_id, created_by, created_at, retired_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                    (
+                        release.release_id,
+                        release.asset_id,
+                        release.asset_type.value,
+                        release.version_id,
+                        release.environment.value,
+                        release.status.value,
+                        release.previous_release_id,
+                        release.created_by,
+                        release.created_at,
+                        release.retired_at,
+                    ),
+                )
+        except ModelGovernanceConflictError:
+            raise
+        except Exception as exc:
+            raise ModelGovernanceConflictError("发布记录或版本已存在") from exc
+        return self._release(release_rows[0])
+
     def get_release(self, release_id: str) -> GovernanceRelease:
         rows = self._get_client().execute(
             "SELECT * FROM model_governance_releases WHERE release_id=%s", (release_id,)
