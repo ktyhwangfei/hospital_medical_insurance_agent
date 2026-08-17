@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -255,6 +256,66 @@ def test_publish_draft_version_is_atomic_on_revision_conflict():
     assert storage.list_versions(current.asset_id) == []
     with pytest.raises(ModelGovernanceNotFoundError):
         storage.get_release(release.release_id)
+
+
+def test_postgres_atomic_publish_preserves_infrastructure_errors():
+    from src.data_platform.storage.model_governance.postgres import (
+        PostgresModelGovernanceStorage,
+    )
+
+    class FailingClient:
+        is_connected = True
+
+        @contextmanager
+        def transaction(self):
+            yield
+
+        def execute(self, sql, params=()):
+            raise RuntimeError("database offline")
+
+    storage = PostgresModelGovernanceStorage("postgresql://unused")
+    storage._client = FailingClient()
+
+    with pytest.raises(RuntimeError, match="database offline"):
+        storage.publish_draft_version(
+            _draft(revision=2),
+            _version("version-1", 1),
+            _release("release-1", "version-1"),
+            expected_revision=1,
+        )
+
+
+def test_postgres_atomic_publish_maps_constraint_errors_to_conflict():
+    from src.data_platform.storage.model_governance.ports import (
+        ModelGovernanceConflictError,
+    )
+    from src.data_platform.storage.model_governance.postgres import (
+        PostgresModelGovernanceStorage,
+    )
+
+    class ConstraintError(RuntimeError):
+        sqlstate = "23505"
+
+    class FailingClient:
+        is_connected = True
+
+        @contextmanager
+        def transaction(self):
+            yield
+
+        def execute(self, sql, params=()):
+            raise ConstraintError("duplicate key")
+
+    storage = PostgresModelGovernanceStorage("postgresql://unused")
+    storage._client = FailingClient()
+
+    with pytest.raises(ModelGovernanceConflictError, match="发布记录或版本已存在"):
+        storage.publish_draft_version(
+            _draft(revision=2),
+            _version("version-1", 1),
+            _release("release-1", "version-1"),
+            expected_revision=1,
+        )
 
 
 def test_postgres_schema_has_revision_and_unique_active_release():

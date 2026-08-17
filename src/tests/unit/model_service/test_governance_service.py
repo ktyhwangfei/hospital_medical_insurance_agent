@@ -1,3 +1,5 @@
+from threading import Event, Thread
+
 import pytest
 
 from src.data_platform.storage.model_governance.in_memory import (
@@ -225,32 +227,71 @@ def test_publish_revision_gate_wins_over_interleaved_save():
 
 
 def test_publish_is_atomic_when_save_arrives_after_old_revision_fence():
-    class SaveDuringVersionWriteStorage(InMemoryModelGovernanceStorage):
-        save_once = None
+    class PausingAtomicPublishStorage(InMemoryModelGovernanceStorage):
+        pause_revision = None
+        paused = Event()
+        resume = Event()
 
-        def save_version(self, version):
-            callback, self.save_once = self.save_once, None
-            if callback is not None:
-                callback()
-            return super().save_version(version)
+        def _copy(self, value):
+            if self.pause_revision is not None and self.pause_revision == getattr(
+                value, "revision", None
+            ):
+                self.pause_revision = None
+                self.paused.set()
+                assert self.resume.wait(2)
+            return super()._copy(value)
 
-    storage = SaveDuringVersionWriteStorage()
+    storage = PausingAtomicPublishStorage()
     service = ModelGovernanceService(storage)
     approved = _complete_review(service, _prompt("当前生效"))
-    storage.save_once = lambda: service.save_draft(
-        approved.draft_id,
-        _prompt("fence 后修改"),
-        expected_revision=storage.get_draft(approved.draft_id).revision,
-        actor="editor",
-    )
+    storage.pause_revision = approved.revision + 1
+    publish_errors = []
+    save_errors = []
+    save_started = Event()
+    save_finished = Event()
 
-    service.publish(
-        approved.draft_id,
-        expected_revision=approved.revision,
-        actor="publisher",
-        environment=GovernanceEnvironment.DEV,
-    )
+    def publish():
+        try:
+            service.publish(
+                approved.draft_id,
+                expected_revision=approved.revision,
+                actor="publisher",
+                environment=GovernanceEnvironment.DEV,
+            )
+        except Exception as exc:
+            publish_errors.append(exc)
 
+    def save():
+        save_started.set()
+        try:
+            current = storage.get_draft(approved.draft_id)
+            service.save_draft(
+                approved.draft_id,
+                _prompt("fence 后修改"),
+                expected_revision=current.revision,
+                actor="editor",
+            )
+        except Exception as exc:
+            save_errors.append(exc)
+        finally:
+            save_finished.set()
+
+    publish_thread = Thread(target=publish)
+    publish_thread.start()
+    assert storage.paused.wait(2)
+    save_thread = Thread(target=save)
+    save_thread.start()
+    assert save_started.wait(2)
+    assert not save_finished.wait(0.05)
+    storage.resume.set()
+    publish_thread.join(2)
+    save_thread.join(2)
+
+    assert not publish_thread.is_alive()
+    assert not save_thread.is_alive()
+    assert publish_errors == []
+    assert len(save_errors) == 1
+    assert isinstance(save_errors[0], ModelGovernanceGateError)
     assert storage.get_draft(approved.draft_id).content.system_prompt == "当前生效"
 
 

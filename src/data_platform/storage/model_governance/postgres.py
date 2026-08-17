@@ -436,7 +436,12 @@ class PostgresModelGovernanceStorage:
         except ModelGovernanceConflictError:
             raise
         except Exception as exc:
-            raise ModelGovernanceConflictError("发布记录或版本已存在") from exc
+            sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+            if sqlstate and str(sqlstate).startswith("23"):
+                raise ModelGovernanceConflictError(
+                    "发布记录或版本已存在"
+                ) from exc
+            raise
         return self._release(release_rows[0])
 
     def get_release(self, release_id: str) -> GovernanceRelease:
