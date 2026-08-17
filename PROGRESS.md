@@ -81,7 +81,7 @@
 | 4.4 | 模型异常分类处理 | `model_service/exceptions/` | impl_done |
 | 4.5 | 提示词/模型/路由真实资产版本治理并驱动 dev/test 运行时 | `model_service/governance_*` → `ModelGateway` → Portal `/model-governance` | verified |
 
-4.5 验证证据（2026-08-17）：治理发布后的提示词、模型与路由成为 dev/test 真实运行时来源，无活动发布时才使用代码/静态配置回退；配置损坏失败关闭。API Key 通过 Fernet 密文保存，凭据以 endpoint fingerprint 和 revision 绑定，响应、日志与页面不回显明文；模型发布要求内容哈希与当前密钥指纹完全匹配的成功连接测试。按 T1 → T2a → T2b → T3 → Portal → T4 顺序分别为 89 passed、23 passed、2 passed、4 passed（20 条治理路由解析均值 0.876ms）、Vitest 21 passed + `tsc --noEmit` + Next.js build、Chromium E2E 1 passed（本机 OpenAI-compatible 测试 Provider），覆盖收费员直入、真实提示词全文、模型连接/审核/发布、下拉路由、提示词新版本生效/回滚、390px 无横向溢出及 API Key 页面/响应无泄漏。权限管理页尚未实现，当前仍沿用开发身份写/审/发门禁，是下一阶段工作。
+4.5 验证证据（2026-08-17）：治理发布后的提示词、模型与路由成为 dev/test 真实运行时来源，无活动发布时才使用代码/静态配置回退；配置损坏失败关闭。API Key 通过 Fernet 密文保存，凭据以 endpoint fingerprint 和 revision 绑定，响应、日志与页面不回显明文；模型发布要求内容哈希与当前密钥指纹完全匹配的成功连接测试。按 T1 → T2a → T2b → T3 → Portal → T4 顺序分别为 89 passed、23 passed、2 passed、4 passed（20 条治理路由解析均值 0.876ms）、Vitest 21 passed + `tsc --noEmit` + Next.js build、Chromium E2E 1 passed（清空外部主密钥后由 Playwright E2E 专用 Fernet key 自启动后端，并使用本机 OpenAI-compatible 测试 Provider），覆盖收费员直入、真实提示词全文、模型连接/审核/发布、下拉路由、提示词新版本生效/回滚、390px 无横向溢出及 API Key 页面/响应无泄漏。权限管理页尚未实现，当前仍沿用开发身份写/审/发门禁，是下一阶段工作。
 
 #### MCP 工具管理
 | # | 单元 | 后端 | 状态 |

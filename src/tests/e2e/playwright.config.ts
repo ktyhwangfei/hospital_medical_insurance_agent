@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const E2E_MODEL_GOVERNANCE_MASTER_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=';
+
 export default defineConfig({
   testDir: './',
   testMatch: ['**/*.spec.ts', '**/*.flow.ts'],
@@ -52,6 +54,9 @@ export default defineConfig({
         ...process.env,
         SKILL_CONTROL_DEV_MODE: '1',
         MODEL_GOVERNANCE_DEV_MODE: '1',
+        MODEL_GOVERNANCE_ENV: 'dev',
+        // 仅供本地 E2E 加密临时治理凭据；外部显式配置始终优先。
+        MODEL_GOVERNANCE_MASTER_KEY: process.env.MODEL_GOVERNANCE_MASTER_KEY ?? E2E_MODEL_GOVERNANCE_MASTER_KEY,
         USE_MEMORY_STORAGE: '1',
       },
     },
