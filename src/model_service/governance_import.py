@@ -171,14 +171,17 @@ def build_current_governance_assets(
     """读取当前静态配置并转换为不影响运行时的治理资产。"""
     snapshot = snapshot or build_governance_snapshot()
     profile_ids = _profile_ids([item.model_name for item in snapshot.models])
-    provider_id = snapshot.providers[0].provider_id if snapshot.providers else "default"
+    endpoint = snapshot.providers[0].endpoint if snapshot.providers else "invalid"
+    base_url = endpoint if endpoint.startswith(("http://", "https://")) else "http://127.0.0.1"
     models = [
         ModelProfileAssetContent(
             asset_id=profile_ids[item.model_name],
             name=item.model_name,
-            provider_id=provider_id,
+            provider_id="openai_compatible",
+            base_url=base_url,
             model_name=item.model_name,
-            credential_ref="MODEL_API_KEY",
+            credential_ref="credential.default",
+            timeout_seconds=30,
             temperature=item.temperature,
             max_tokens=item.max_tokens,
         )

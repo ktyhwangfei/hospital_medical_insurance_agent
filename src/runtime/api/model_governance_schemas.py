@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from src.model_service.governance_assets import (
     GovernanceAssetContent,
@@ -13,6 +13,7 @@ from src.model_service.governance_assets import (
     GovernanceImportResult,
     GovernanceRelease,
     GovernanceVersion,
+    ModelProfileAssetContent,
     PublishedGovernanceAsset,
     PublishedGovernanceSnapshot,
 )
@@ -25,12 +26,31 @@ class ModelGovernancePrincipal(BaseModel):
     permissions: list[str] = Field(default_factory=list)
 
 
-class CreateGovernanceDraftRequest(BaseModel):
-    content: GovernanceAssetContent
+class ModelCredentialInput(BaseModel):
+    credential_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{2,127}$")
+    api_key: SecretStr = Field(min_length=1, max_length=4096)
 
 
-class UpdateGovernanceDraftRequest(BaseModel):
+class _GovernanceDraftContentRequest(BaseModel):
     content: GovernanceAssetContent
+    credential: ModelCredentialInput | None = None
+
+    @model_validator(mode="after")
+    def credential_matches_model(self):
+        if self.credential is None:
+            return self
+        if not isinstance(self.content, ModelProfileAssetContent):
+            raise ValueError("只有模型资产可以提交凭据")
+        if self.content.credential_ref != self.credential.credential_id:
+            raise ValueError("credential_ref 必须与 credential_id 一致")
+        return self
+
+
+class CreateGovernanceDraftRequest(_GovernanceDraftContentRequest):
+    pass
+
+
+class UpdateGovernanceDraftRequest(_GovernanceDraftContentRequest):
     expected_revision: int = Field(ge=1)
 
 
@@ -119,6 +139,7 @@ __all__ = [
     "GovernanceVersionsResponse",
     "GovernanceVersionsResult",
     "ModelGovernancePrincipal",
+    "ModelCredentialInput",
     "PreviewGovernanceDraftRequest",
     "PublishedGovernanceSnapshotResponse",
     "PublishGovernanceDraftRequest",

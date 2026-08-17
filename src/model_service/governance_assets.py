@@ -9,13 +9,13 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from string import Formatter
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 _ASSET_ID_PATTERN = r"^[a-z0-9][a-z0-9._-]{2,127}$"
 _VARIABLE_PATTERN = r"^[A-Za-z][A-Za-z0-9_]{0,63}$"
-_CREDENTIAL_REF_PATTERN = r"^[A-Z][A-Z0-9_]{2,127}$"
 _SAFE_FIELD = re.compile(_VARIABLE_PATTERN)
 
 
@@ -86,12 +86,31 @@ class ModelProfileAssetContent(BaseModel):
     asset_type: Literal["model_profile"] = "model_profile"
     asset_id: str = Field(pattern=_ASSET_ID_PATTERN)
     name: str = Field(min_length=1, max_length=128)
-    provider_id: str = Field(min_length=1, max_length=128)
+    provider_id: Literal["openai_compatible"] = "openai_compatible"
+    base_url: str = Field(min_length=1, max_length=2048)
     model_name: str = Field(min_length=1, max_length=256)
-    credential_ref: str = Field(pattern=_CREDENTIAL_REF_PATTERN)
+    credential_ref: str = Field(pattern=_ASSET_ID_PATTERN)
+    timeout_seconds: float = Field(default=30, gt=0, le=300)
     temperature: float = Field(ge=0.0, le=2.0)
     max_tokens: int = Field(ge=1, le=65_536)
     enabled: bool = True
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        try:
+            parsed = urlsplit(value)
+        except ValueError as exc:
+            raise ValueError("base_url 必须是有效 HTTP(S) URL") from exc
+        if (
+            value != value.strip()
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("base_url 仅允许不含用户信息的 HTTP(S) URL")
+        return value.rstrip("/")
 
 
 class RouteRuleAssetContent(BaseModel):
@@ -164,6 +183,31 @@ class GovernanceVersion(BaseModel):
     approval_id: str
     created_by: str = Field(min_length=1, max_length=128)
     created_at: datetime = Field(default_factory=_utc_now)
+
+
+class GovernanceCredential(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    credential_id: str = Field(pattern=_ASSET_ID_PATTERN)
+    encrypted_api_key: str = Field(min_length=1)
+    secret_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    revision: int = Field(default=1, ge=1)
+    updated_by: str = Field(min_length=1, max_length=128)
+    updated_at: datetime = Field(default_factory=_utc_now)
+
+
+class GovernanceConnectionTest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    test_id: str = Field(min_length=1, max_length=64)
+    asset_id: str = Field(pattern=_ASSET_ID_PATTERN)
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    credential_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    succeeded: bool
+    latency_ms: int = Field(ge=0)
+    safe_message: str = Field(max_length=500)
+    tested_by: str = Field(min_length=1, max_length=128)
+    tested_at: datetime = Field(default_factory=_utc_now)
 
 
 class GovernanceApproval(BaseModel):

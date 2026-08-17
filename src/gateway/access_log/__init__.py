@@ -57,7 +57,7 @@ class AccessLogEntry:
 
 # 敏感字段，记录日志前自动脱敏
 _SENSITIVE_FIELDS: set[str] = {
-    "password", "secret", "token", "authorization",
+    "password", "secret", "token", "authorization", "api_key",
     "id_card", "phone", "mobile", "bank_card",
 }
 

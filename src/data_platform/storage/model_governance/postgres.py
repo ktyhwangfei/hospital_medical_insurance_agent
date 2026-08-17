@@ -13,6 +13,8 @@ from src.data_platform.storage.postgresql.client import PostgreSQLClient
 from src.model_service.governance_assets import (
     GovernanceApproval,
     GovernanceAssetType,
+    GovernanceConnectionTest,
+    GovernanceCredential,
     GovernanceDraft,
     GovernanceEnvironment,
     GovernanceRelease,
@@ -75,6 +77,31 @@ CREATE TABLE IF NOT EXISTS model_governance_releases (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_model_governance_active_release
     ON model_governance_releases(asset_id, environment) WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS model_governance_credentials (
+    credential_id VARCHAR(128) PRIMARY KEY,
+    encrypted_api_key TEXT NOT NULL,
+    secret_fingerprint CHAR(64) NOT NULL,
+    revision INTEGER NOT NULL,
+    updated_by VARCHAR(128) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS model_governance_connection_tests (
+    test_id UUID PRIMARY KEY,
+    asset_id VARCHAR(128) NOT NULL,
+    content_hash CHAR(64) NOT NULL,
+    credential_fingerprint CHAR(64) NOT NULL,
+    succeeded BOOLEAN NOT NULL,
+    latency_ms INTEGER NOT NULL,
+    safe_message VARCHAR(500) NOT NULL,
+    tested_by VARCHAR(128) NOT NULL,
+    tested_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_governance_connection_success
+ON model_governance_connection_tests
+    (asset_id, content_hash, credential_fingerprint, tested_at DESC)
+WHERE succeeded = TRUE;
 """
 
 
@@ -120,6 +147,97 @@ class PostgresModelGovernanceStorage:
     @staticmethod
     def _release(row: dict[str, Any]) -> GovernanceRelease:
         return GovernanceRelease.model_validate(row)
+
+    @staticmethod
+    def _credential(row: dict[str, Any]) -> GovernanceCredential:
+        return GovernanceCredential.model_validate(row)
+
+    @staticmethod
+    def _connection_test(row: dict[str, Any]) -> GovernanceConnectionTest:
+        return GovernanceConnectionTest.model_validate(row)
+
+    def put_credential(
+        self, credential: GovernanceCredential
+    ) -> GovernanceCredential:
+        rows = self._get_client().execute(
+            """INSERT INTO model_governance_credentials
+               (credential_id, encrypted_api_key, secret_fingerprint, revision,
+                updated_by, updated_at)
+               VALUES (%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (credential_id) DO UPDATE SET
+                 encrypted_api_key=EXCLUDED.encrypted_api_key,
+                 secret_fingerprint=EXCLUDED.secret_fingerprint,
+                 revision=EXCLUDED.revision,
+                 updated_by=EXCLUDED.updated_by,
+                 updated_at=EXCLUDED.updated_at
+               WHERE model_governance_credentials.revision = EXCLUDED.revision - 1
+               RETURNING *""",
+            (
+                credential.credential_id,
+                credential.encrypted_api_key,
+                credential.secret_fingerprint,
+                credential.revision,
+                credential.updated_by,
+                credential.updated_at,
+            ),
+        )
+        if not rows:
+            raise ModelGovernanceConflictError("凭据 revision 已变化")
+        return self._credential(rows[0])
+
+    def get_credential(self, credential_id: str) -> GovernanceCredential:
+        rows = self._get_client().execute(
+            "SELECT * FROM model_governance_credentials WHERE credential_id=%s",
+            (credential_id,),
+        )
+        if not rows:
+            raise ModelGovernanceNotFoundError("凭据不存在")
+        return self._credential(rows[0])
+
+    def save_connection_test(
+        self, result: GovernanceConnectionTest
+    ) -> GovernanceConnectionTest:
+        try:
+            rows = self._get_client().execute(
+                """INSERT INTO model_governance_connection_tests
+                   (test_id, asset_id, content_hash, credential_fingerprint, succeeded,
+                    latency_ms, safe_message, tested_by, tested_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                (
+                    result.test_id,
+                    result.asset_id,
+                    result.content_hash,
+                    result.credential_fingerprint,
+                    result.succeeded,
+                    result.latency_ms,
+                    result.safe_message,
+                    result.tested_by,
+                    result.tested_at,
+                ),
+            )
+        except Exception as exc:
+            sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+            if sqlstate and str(sqlstate).startswith("23"):
+                raise ModelGovernanceConflictError(
+                    "连接测试记录已存在"
+                ) from exc
+            raise
+        return self._connection_test(rows[0])
+
+    def find_successful_connection_test(
+        self,
+        asset_id: str,
+        content_hash: str,
+        credential_fingerprint: str,
+    ) -> GovernanceConnectionTest | None:
+        rows = self._get_client().execute(
+            """SELECT * FROM model_governance_connection_tests
+               WHERE asset_id=%s AND content_hash=%s AND credential_fingerprint=%s
+                 AND succeeded=TRUE
+               ORDER BY tested_at DESC, test_id DESC LIMIT 1""",
+            (asset_id, content_hash, credential_fingerprint),
+        )
+        return self._connection_test(rows[0]) if rows else None
 
     def create_draft(self, draft: GovernanceDraft) -> GovernanceDraft:
         sql = """INSERT INTO model_governance_drafts

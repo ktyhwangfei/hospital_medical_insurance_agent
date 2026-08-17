@@ -5,6 +5,8 @@ from typing import Protocol
 from src.model_service.governance_assets import (
     GovernanceApproval,
     GovernanceAssetType,
+    GovernanceConnectionTest,
+    GovernanceCredential,
     GovernanceDraft,
     GovernanceEnvironment,
     GovernanceRelease,
@@ -21,6 +23,23 @@ class ModelGovernanceNotFoundError(LookupError):
 
 
 class ModelGovernanceStorage(Protocol):
+    def put_credential(
+        self, credential: GovernanceCredential
+    ) -> GovernanceCredential: ...
+
+    def get_credential(self, credential_id: str) -> GovernanceCredential: ...
+
+    def save_connection_test(
+        self, result: GovernanceConnectionTest
+    ) -> GovernanceConnectionTest: ...
+
+    def find_successful_connection_test(
+        self,
+        asset_id: str,
+        content_hash: str,
+        credential_fingerprint: str,
+    ) -> GovernanceConnectionTest | None: ...
+
     def create_draft(self, draft: GovernanceDraft) -> GovernanceDraft: ...
 
     def update_draft(

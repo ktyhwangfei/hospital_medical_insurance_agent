@@ -10,6 +10,8 @@ from src.data_platform.storage.model_governance.ports import (
 from src.model_service.governance_assets import (
     GovernanceApproval,
     GovernanceAssetType,
+    GovernanceConnectionTest,
+    GovernanceCredential,
     GovernanceDraft,
     GovernanceEnvironment,
     GovernanceRelease,
@@ -24,11 +26,59 @@ class InMemoryModelGovernanceStorage:
         self._versions: dict[str, GovernanceVersion] = {}
         self._approvals: dict[str, GovernanceApproval] = {}
         self._releases: dict[str, GovernanceRelease] = {}
+        self._credentials: dict[str, GovernanceCredential] = {}
+        self._connection_tests: dict[str, GovernanceConnectionTest] = {}
         self._lock = RLock()
 
     @staticmethod
     def _copy(value):
         return value.model_copy(deep=True)
+
+    def put_credential(
+        self, credential: GovernanceCredential
+    ) -> GovernanceCredential:
+        with self._lock:
+            current = self._credentials.get(credential.credential_id)
+            expected_revision = 1 if current is None else current.revision + 1
+            if credential.revision != expected_revision:
+                raise ModelGovernanceConflictError("凭据 revision 已变化")
+            self._credentials[credential.credential_id] = self._copy(credential)
+            return self._copy(credential)
+
+    def get_credential(self, credential_id: str) -> GovernanceCredential:
+        with self._lock:
+            try:
+                return self._copy(self._credentials[credential_id])
+            except KeyError as exc:
+                raise ModelGovernanceNotFoundError("凭据不存在") from exc
+
+    def save_connection_test(
+        self, result: GovernanceConnectionTest
+    ) -> GovernanceConnectionTest:
+        with self._lock:
+            if result.test_id in self._connection_tests:
+                raise ModelGovernanceConflictError("连接测试记录已存在")
+            self._connection_tests[result.test_id] = self._copy(result)
+            return self._copy(result)
+
+    def find_successful_connection_test(
+        self,
+        asset_id: str,
+        content_hash: str,
+        credential_fingerprint: str,
+    ) -> GovernanceConnectionTest | None:
+        with self._lock:
+            matches = [
+                item
+                for item in self._connection_tests.values()
+                if item.asset_id == asset_id
+                and item.content_hash == content_hash
+                and item.credential_fingerprint == credential_fingerprint
+                and item.succeeded
+            ]
+            if not matches:
+                return None
+            return self._copy(max(matches, key=lambda item: (item.tested_at, item.test_id)))
 
     def create_draft(self, draft: GovernanceDraft) -> GovernanceDraft:
         with self._lock:

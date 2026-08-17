@@ -7,6 +7,8 @@ from src.model_service.governance_assets import (
     GovernanceApproval,
     GovernanceAssetType,
     GovernanceDraft,
+    GovernanceCredential,
+    GovernanceConnectionTest,
     GovernanceEnvironment,
     GovernanceRelease,
     GovernanceReleaseStatus,
@@ -329,7 +331,57 @@ def test_postgres_schema_has_revision_and_unique_active_release():
     assert "model_governance_versions" in normalized
     assert "model_governance_approvals" in normalized
     assert "model_governance_releases" in normalized
+    assert "model_governance_credentials" in normalized
+    assert "model_governance_connection_tests" in normalized
+    assert "idx_governance_connection_success" in normalized
     assert "where status = 'active'" in normalized
+
+
+def test_in_memory_storage_keeps_credentials_and_matching_successful_tests():
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+
+    storage = InMemoryModelGovernanceStorage()
+    credential = GovernanceCredential(
+        credential_id="credential.demo",
+        encrypted_api_key="encrypted-value",
+        secret_fingerprint="a" * 64,
+        revision=1,
+        updated_by="editor",
+        updated_at=NOW,
+    )
+    failed = GovernanceConnectionTest(
+        test_id="00000000-0000-0000-0000-000000000001",
+        asset_id="model.demo",
+        content_hash="b" * 64,
+        credential_fingerprint=credential.secret_fingerprint,
+        succeeded=False,
+        latency_ms=10,
+        safe_message="认证失败",
+        tested_by="editor",
+        tested_at=NOW,
+    )
+    succeeded = failed.model_copy(
+        update={
+            "test_id": "00000000-0000-0000-0000-000000000002",
+            "succeeded": True,
+            "safe_message": "连接成功",
+            "tested_at": NOW + timedelta(seconds=1),
+        }
+    )
+
+    assert storage.put_credential(credential) == credential
+    assert storage.get_credential(credential.credential_id) == credential
+    storage.save_connection_test(failed)
+    storage.save_connection_test(succeeded)
+
+    assert storage.find_successful_connection_test(
+        "model.demo", "b" * 64, "a" * 64
+    ) == succeeded
+    assert storage.find_successful_connection_test(
+        "model.demo", "c" * 64, "a" * 64
+    ) is None
 
 
 def test_factory_uses_explicit_memory_and_defaults_to_lazy_postgres(monkeypatch):

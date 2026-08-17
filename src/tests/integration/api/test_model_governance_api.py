@@ -40,6 +40,28 @@ def _prompt_payload() -> dict:
     }
 
 
+def _model_payload(api_key: str = "sk-api-plaintext") -> dict:
+    return {
+        "content": {
+            "asset_type": "model_profile",
+            "asset_id": "model.api-demo",
+            "name": "API 模型",
+            "provider_id": "openai_compatible",
+            "base_url": "https://models.example.test/v1/",
+            "model_name": "demo-model",
+            "credential_ref": "credential.api-demo",
+            "timeout_seconds": 30,
+            "temperature": 0.2,
+            "max_tokens": 1024,
+            "enabled": True,
+        },
+        "credential": {
+            "credential_id": "credential.api-demo",
+            "api_key": api_key,
+        },
+    }
+
+
 def _management_client(monkeypatch) -> TestClient:
     async def no_op_session(self, *args):
         return None
@@ -314,3 +336,82 @@ def test_governance_imports_current_assets_once_and_deletes_by_revision(monkeypa
     )
     assert deleted.status_code == 200
     assert deleted.json()["result"]["draft_id"] == draft["draft_id"]
+
+
+def test_model_credential_is_encrypted_and_never_echoed_by_api(monkeypatch, caplog):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    client = _management_client(monkeypatch)
+    prefix = "/api/v1/medical-insurance-ai-agent/model-governance"
+    secret = "sk-api-plaintext"
+
+    created = client.post(
+        f"{prefix}/drafts",
+        json=_model_payload(secret),
+        headers=_headers("model_governance:write"),
+    )
+    assets = client.get(
+        f"{prefix}/assets?environment=dev&asset_type=model_profile",
+        headers=_headers("model_governance:read"),
+    )
+
+    assert created.status_code == 201
+    assert assets.status_code == 200
+    assert secret not in created.text
+    assert secret not in assets.text
+    assert secret not in caplog.text
+    from src.gateway.access_log import AccessLogger, access_logger
+
+    assert all(secret not in entry.request_body for entry in access_logger.get_entries())
+    logger = AccessLogger()
+    logger.log(
+        request_id="credential-test",
+        method="POST",
+        path=f"{prefix}/drafts",
+        status_code=201,
+        duration_ms=1,
+        request_body=_model_payload(secret),
+    )
+    assert secret not in logger.get_entries()[0].request_body
+    from src.data_platform.storage.model_governance.factory import (
+        get_model_governance_storage,
+    )
+
+    stored = get_model_governance_storage().get_credential("credential.api-demo")
+    assert stored.encrypted_api_key != secret
+    assert secret not in stored.model_dump_json()
+
+
+def test_model_credential_ref_must_match_and_failed_encryption_removes_new_draft(
+    monkeypatch,
+):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv("MODEL_GOVERNANCE_MASTER_KEY", "invalid-key")
+    client = _management_client(monkeypatch)
+    prefix = "/api/v1/medical-insurance-ai-agent/model-governance"
+    payload = _model_payload()
+
+    mismatched = _model_payload()
+    mismatched["credential"]["credential_id"] = "credential.other"
+    response = client.post(
+        f"{prefix}/drafts",
+        json=mismatched,
+        headers=_headers("model_governance:write"),
+    )
+    assert response.status_code == 422
+
+    failed = client.post(
+        f"{prefix}/drafts",
+        json=payload,
+        headers=_headers("model_governance:write"),
+    )
+    assert failed.status_code == 422
+    drafts = client.get(
+        f"{prefix}/assets?environment=dev&asset_type=model_profile",
+        headers=_headers("model_governance:read"),
+    )
+    assert drafts.status_code == 200
+    assert drafts.json()["result"]["drafts"] == []

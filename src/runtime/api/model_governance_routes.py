@@ -17,6 +17,10 @@ from src.gateway.auth import authenticator
 from src.model_service.governance import ModelGovernanceSnapshot, build_governance_snapshot
 from src.model_service.governance_assets import GovernanceAssetType, GovernanceEnvironment
 from src.model_service.governance_import import build_current_governance_assets
+from src.model_service.governance_secrets import (
+    GovernanceCredentialVault,
+    GovernanceSecretError,
+)
 from src.model_service.governance_service import (
     ModelGovernanceGateError,
     ModelGovernanceService,
@@ -157,6 +161,16 @@ def _audit(principal: ModelGovernancePrincipal, action: str) -> dict[str, str]:
     return {"actor": principal.user_id, "action": action, "mode": "development"}
 
 
+def _put_credential(request, *, actor: str) -> None:
+    if request.credential is None:
+        return
+    GovernanceCredentialVault(get_model_governance_storage()).put(
+        request.credential.credential_id,
+        request.credential.api_key.get_secret_value(),
+        actor=actor,
+    )
+
+
 _PENDING_RUNTIME = ["治理库已发布配置尚未接入当前运行时"]
 
 
@@ -261,7 +275,16 @@ def create_governance_draft(
 ) -> GovernanceDraftResponse:
     try:
         draft = service.create_draft(request.content, actor=principal.user_id)
-    except (ModelGovernanceConflictError, ModelGovernanceGateError) as exc:
+        try:
+            _put_credential(request, actor=principal.user_id)
+        except Exception:
+            service.delete_draft(draft.draft_id, expected_revision=draft.revision)
+            raise
+    except (
+        ModelGovernanceConflictError,
+        ModelGovernanceGateError,
+        GovernanceSecretError,
+    ) as exc:
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
         result=draft, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "create_draft")
@@ -300,7 +323,13 @@ def update_governance_draft(
             expected_revision=request.expected_revision,
             actor=principal.user_id,
         )
-    except (ModelGovernanceConflictError, ModelGovernanceNotFoundError, ModelGovernanceGateError) as exc:
+        _put_credential(request, actor=principal.user_id)
+    except (
+        ModelGovernanceConflictError,
+        ModelGovernanceNotFoundError,
+        ModelGovernanceGateError,
+        GovernanceSecretError,
+    ) as exc:
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
         result=draft, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "update_draft")
