@@ -15,6 +15,10 @@ from typing import Any
 
 from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
 from src.model_service.gateway import ModelGateway
+from src.model_service.governance_runtime import (
+    GovernanceRuntimeError,
+    render_governed_prompt,
+)
 from src.model_service.models import Message
 
 logger = logging.getLogger(__name__)
@@ -354,6 +358,8 @@ class PipelineOrchestrator:
 
             logger.warning("Unexpected LLM response type: %s", type(facts).__name__)
             return []
+        except GovernanceRuntimeError:
+            raise
         except Exception as e:
             logger.warning("Policy fact extraction failed: %s", e)
             return []
@@ -372,13 +378,23 @@ class PipelineOrchestrator:
             schema = build_extraction_schema(create_registry(), "zcgz")
             if schema.fields or schema.entities or schema.relations:
                 return build_prompt_from_schema(text, title, schema)
+        except GovernanceRuntimeError:
+            raise
         except Exception:
             pass
         return self._legacy_fact_extraction_prompt(text, title)
 
     def _legacy_fact_extraction_prompt(self, text: str, title: str) -> str:
         """[legacy] 硬编码 19 字段 prompt（registry 不可用时的回退）。"""
-        return LEGACY_FACT_EXTRACTION_PROMPT_TEMPLATE.format(title=title, text=text)
+        rendered = render_governed_prompt(
+            "policy.extract.legacy",
+            variables={"title": title, "text": text},
+            fallback_system="",
+            fallback_user=LEGACY_FACT_EXTRACTION_PROMPT_TEMPLATE,
+        )
+        return "\n\n".join(
+            filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
+        )
 
     # ═══════════════ Coverage ═══════════════
 

@@ -3,9 +3,6 @@ import json
 
 from fastapi.testclient import TestClient
 
-from src.data_platform.storage.model_governance.in_memory import (
-    InMemoryModelGovernanceStorage,
-)
 from src.model_service.governance_service import ModelGovernanceService
 
 
@@ -65,6 +62,8 @@ def test_model_governance_management_publish_snapshot_and_rollback(monkeypatch):
         return None
 
     monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv("MODEL_GOVERNANCE_ENV", "dev")
+    monkeypatch.setenv("USE_MEMORY_STORAGE", "1")
     monkeypatch.setattr(
         "src.gateway.api_gateway.audit_middleware.GatewayAuditMiddleware._write_session",
         no_op_session,
@@ -75,9 +74,15 @@ def test_model_governance_management_publish_snapshot_and_rollback(monkeypatch):
     )
     from src.runtime.api.app import create_app
     from src.runtime.api.model_governance_routes import get_model_governance_service
+    from src.data_platform.storage.model_governance.factory import (
+        get_model_governance_storage,
+    )
+    from src.runtime.intent.prompts import build_intent_prompt
+    from src.runtime.intent.registry import get_intent_registry
 
+    get_model_governance_storage.cache_clear()
     app = create_app()
-    service = ModelGovernanceService(InMemoryModelGovernanceStorage())
+    service = ModelGovernanceService(get_model_governance_storage())
     app.dependency_overrides[get_model_governance_service] = lambda: service
     client = TestClient(app)
 
@@ -142,6 +147,29 @@ def test_model_governance_management_publish_snapshot_and_rollback(monkeypatch):
     second = _publish(client, {**prompt, "system_prompt": "只输出有引用的事实"})
     assert first["version_id"] != second["version_id"]
 
+    governed_prompt = {
+        "asset_type": "prompt",
+        "asset_id": "intent.classify",
+        "name": "意图分类",
+        "scene": "intent_recognition",
+        "system_prompt": "",
+        "user_prompt_template": "FLOW_INTENT_V1 {message}",
+        "variables": [{"name": "intents_text"}, {"name": "message"}],
+    }
+    old_intent = _publish(client, governed_prompt)
+    new_intent = _publish(
+        client,
+        {**governed_prompt, "user_prompt_template": "FLOW_INTENT_V2 {message}"},
+    )
+    assert "FLOW_INTENT_V2" in build_intent_prompt("Q", get_intent_registry())
+
+    intent_rollback = client.post(
+        f"{PREFIX}/releases/{old_intent['release_id']}/rollback",
+        headers=_headers("editor", "model_governance:publish"),
+    )
+    assert intent_rollback.status_code == 200
+    assert "FLOW_INTENT_V1" in build_intent_prompt("Q", get_intent_registry())
+
     rollback = client.post(
         f"{PREFIX}/releases/{first['release_id']}/rollback",
         headers=_headers("editor", "model_governance:publish"),
@@ -167,3 +195,4 @@ def test_model_governance_management_publish_snapshot_and_rollback(monkeypatch):
         item for item in result["assets"] if item["asset_id"] == "prompt.flow"
     )
     assert active_prompt["version_id"] == first["version_id"]
+    get_model_governance_storage.cache_clear()

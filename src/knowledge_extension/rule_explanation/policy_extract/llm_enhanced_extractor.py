@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Any
 
 from .domain_definitions import DomainConfig, ValueDefinition, VALUE_DOMAIN_RULES
 from .value_domain_extractor import ValueDomainExtractor, ValueOccurrence, DomainExtractionResult
+from src.model_service.governance_runtime import render_governed_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -232,12 +233,18 @@ class LLMEnhancedExtractor:
         
         known_values_text = '\n'.join(known_values_desc)
         
-        prompt = SYNONYM_DISCOVERY_PROMPT_TEMPLATE.format(
-            known_values_text=known_values_text,
-            text_sample=text_sample,
+        rendered = render_governed_prompt(
+            "policy.synonym_discovery",
+            variables={
+                "known_values_text": known_values_text,
+                "text_sample": text_sample,
+            },
+            fallback_system="",
+            fallback_user=SYNONYM_DISCOVERY_PROMPT_TEMPLATE,
         )
-        
-        return prompt
+        return "\n\n".join(
+            filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
+        )
     
     def _parse_synonym_response(self, response: str) -> List[SynonymSuggestion]:
         """
@@ -326,12 +333,18 @@ class LLMEnhancedExtractor:
         known_fields = list(self.rules.keys())
         known_fields_text = ', '.join(known_fields)
         
-        prompt = DOMAIN_DISCOVERY_PROMPT_TEMPLATE.format(
-            known_fields_text=known_fields_text,
-            text_sample=text_sample,
+        rendered = render_governed_prompt(
+            "policy.domain_discovery",
+            variables={
+                "known_fields_text": known_fields_text,
+                "text_sample": text_sample,
+            },
+            fallback_system="",
+            fallback_user=DOMAIN_DISCOVERY_PROMPT_TEMPLATE,
         )
-        
-        return prompt
+        return "\n\n".join(
+            filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
+        )
     
     def _parse_domain_response(self, response: str) -> List[DomainSuggestion]:
         """

@@ -1,4 +1,5 @@
 from src.runtime.intent.models import IntentCandidate
+from src.model_service.governance_runtime import render_governed_prompt
 
 
 INTENT_DISCRIMINATION_PROMPT_TEMPLATE = (
@@ -25,7 +26,12 @@ def build_discrimination_prompt(message: str, candidates: list[IntentCandidate])
         )
     candidates_text = '\n'.join(candidate_lines)
 
-    return INTENT_DISCRIMINATION_PROMPT_TEMPLATE.format(
-        candidates_text=candidates_text,
-        message=message,
+    rendered = render_governed_prompt(
+        "intent.discriminate",
+        variables={"candidates_text": candidates_text, "message": message},
+        fallback_system="",
+        fallback_user=INTENT_DISCRIMINATION_PROMPT_TEMPLATE,
+    )
+    return "\n\n".join(
+        filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
     )

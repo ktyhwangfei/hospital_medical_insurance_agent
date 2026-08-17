@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel, Field
+from src.model_service.governance_runtime import render_governed_prompt
 
 if TYPE_CHECKING:
     from src.semantic_layer.registry import SemanticRegistry
@@ -176,13 +177,21 @@ def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) ->
 
     field_codes = [f.code for f in schema.fields]
     fields_json_example = ", ".join(f'"{c}": ""' for c in field_codes)
-    return SCHEMA_EXTRACTION_PROMPT_TEMPLATE.format(
-        schema_version=schema.schema_version,
-        fields_desc=fields_desc,
-        entities_desc=entities_desc,
-        relations_desc=relations_desc,
-        title=title,
-        text=text,
-        field_codes=field_codes,
-        fields_json_example=fields_json_example,
+    rendered = render_governed_prompt(
+        "policy.extract.schema",
+        variables={
+            "schema_version": str(schema.schema_version),
+            "fields_desc": fields_desc,
+            "entities_desc": entities_desc,
+            "relations_desc": relations_desc,
+            "title": title,
+            "text": text,
+            "field_codes": str(field_codes),
+            "fields_json_example": fields_json_example,
+        },
+        fallback_system="",
+        fallback_user=SCHEMA_EXTRACTION_PROMPT_TEMPLATE,
+    )
+    return "\n\n".join(
+        filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
     )

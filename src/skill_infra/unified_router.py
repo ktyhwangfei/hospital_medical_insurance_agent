@@ -25,6 +25,10 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from src.skill_infra.skill_loader import get_loader, LoadedSkill
+from src.model_service.governance_runtime import (
+    GovernanceRuntimeError,
+    render_governed_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,9 +182,6 @@ def _build_skill_routing_prompt(question: str) -> str:
     loader = get_loader()
     skills = loader.get_all()
 
-    if not skills:
-        return f"用户问题：{question}\n\n无可用技能，返回 null。"
-
     skill_lines = []
     for skill_id, skill in skills.items():
         skill_lines.append(
@@ -190,10 +191,20 @@ def _build_skill_routing_prompt(question: str) -> str:
         )
 
     skills_text = "\n".join(skill_lines)
+    fallback_user = (
+        SKILL_ROUTING_PROMPT_TEMPLATE
+        if skills
+        else "用户问题：{question}\n\n无可用技能，返回 null。"
+    )
 
-    return SKILL_ROUTING_PROMPT_TEMPLATE.format(
-        skills_text=skills_text,
-        question=question,
+    rendered = render_governed_prompt(
+        "skill.route",
+        variables={"skills_text": skills_text, "question": question},
+        fallback_system="",
+        fallback_user=fallback_user,
+    )
+    return "\n\n".join(
+        filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
     )
 
 
@@ -252,6 +263,8 @@ def _route_via_llm(question: str) -> Optional[str]:
         )
         return skill_id
 
+    except GovernanceRuntimeError:
+        raise
     except (json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
         logger.warning(
             "[UnifiedRouter] LLM response parse failed for '%s': %s",

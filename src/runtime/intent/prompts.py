@@ -1,4 +1,5 @@
 from src.runtime.intent.registry import IntentEntry
+from src.model_service.governance_runtime import render_governed_prompt
 
 
 INTENT_CLASSIFICATION_PROMPT_TEMPLATE = (
@@ -21,7 +22,12 @@ def build_intent_prompt(message: str, registry: list[IntentEntry]) -> str:
         )
     intents_text = '\n'.join(intent_lines)
 
-    return INTENT_CLASSIFICATION_PROMPT_TEMPLATE.format(
-        intents_text=intents_text,
-        message=message,
+    rendered = render_governed_prompt(
+        "intent.classify",
+        variables={"intents_text": intents_text, "message": message},
+        fallback_system="",
+        fallback_user=INTENT_CLASSIFICATION_PROMPT_TEMPLATE,
+    )
+    return "\n\n".join(
+        filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
     )

@@ -14,6 +14,7 @@ import yaml
 
 from ..base import BaseFeeStrategy
 from src.model_service.gateway import ModelGateway
+from src.model_service.governance_runtime import render_governed_prompt
 from src.model_service.models import Message
 from skills.settlement_explain_skill.fact_builder import FactBuilder
 from skills.settlement_explain_skill.output_parser import OutputParser, ParsedOutput
@@ -111,13 +112,17 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
 
         # Step 3: 加载 prompt 模板并渲染
         system_template, user_template = load_settlement_explain_prompt_templates()
-        system_prompt = system_template.format()
-        user_prompt = user_template.format(fact_json=fact_json)
+        rendered = render_governed_prompt(
+            "skill.settlement_explain",
+            variables={"fact_json": fact_json},
+            fallback_system=system_template,
+            fallback_user=user_template,
+        )
 
         # Step 4: 调用 ModelGateway
         messages = [
-            Message(role="system", content=system_prompt),
-            Message(role="user", content=user_prompt),
+            Message(role="system", content=rendered.rendered_system_prompt or ""),
+            Message(role="user", content=rendered.rendered_user_prompt or ""),
         ]
         response = ModelGateway().generate(
             messages=messages,

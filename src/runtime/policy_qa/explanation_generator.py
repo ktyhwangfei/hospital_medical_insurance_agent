@@ -13,6 +13,10 @@ from __future__ import annotations
 import logging
 
 from src.model_service.gateway import ModelGateway
+from src.model_service.governance_runtime import (
+    GovernanceRuntimeError,
+    render_governed_prompt,
+)
 from src.model_service.models import Message
 from src.runtime.policy_qa.models import ExplanationContext, FeeDecompositionResult
 
@@ -129,6 +133,8 @@ class ExplanationGenerator:
                 if chunk.content:
                     yield chunk.content
 
+        except GovernanceRuntimeError:
+            raise
         except Exception as e:
             logger.exception("Explanation generation failed")
             yield f"生成解释时出错: {str(e)}"
@@ -164,14 +170,20 @@ class ExplanationGenerator:
             rag_miss_note = ""
 
         # 构建Prompt
-        prompt = EXPLANATION_PROMPTS[user_role].format(
-            question=context.question,
-            decomposition_text=decomposition_text,
-            policy_text=policy_text,
-            RAG_MISS_NOTE=rag_miss_note,
+        rendered = render_governed_prompt(
+            "policy_qa.patient_explain",
+            variables={
+                "question": context.question,
+                "decomposition_text": decomposition_text,
+                "policy_text": policy_text,
+                "RAG_MISS_NOTE": rag_miss_note,
+            },
+            fallback_system="",
+            fallback_user=EXPLANATION_PROMPTS[user_role],
         )
-
-        return prompt
+        return "\n\n".join(
+            filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
+        )
 
     def _format_decomposition(self, decomposition: FeeDecompositionResult) -> str:
         """
@@ -564,14 +576,23 @@ class ExplanationGenerator:
                 "不要编造政策条文。"
             ) if context.rag_miss else ""
 
-            prompt = EXPLANATION_PROMPTS["患者"].format(
-                question=context.question,
-                decomposition_text=decomposition_text,
-                policy_text=policy_text,
-                RAG_MISS_NOTE=rag_miss_note,
+            rendered = render_governed_prompt(
+                "policy_qa.patient_explain",
+                variables={
+                    "question": context.question,
+                    "decomposition_text": decomposition_text,
+                    "policy_text": policy_text,
+                    "RAG_MISS_NOTE": rag_miss_note,
+                },
+                fallback_system="",
+                fallback_user=EXPLANATION_PROMPTS["患者"],
             )
+            messages = []
+            if rendered.rendered_system_prompt:
+                messages.append(Message(role="system", content=rendered.rendered_system_prompt))
+            messages.append(Message(role="user", content=rendered.rendered_user_prompt or ""))
             result = self.model_gateway.generate(
-                messages=[Message(role="user", content=prompt)],
+                messages=messages,
                 model_type="llm",
                 scene="policy_qa",
             )
@@ -581,6 +602,8 @@ class ExplanationGenerator:
                 return _quality_gated(self._generate_placeholder(context))
             return _quality_gated(content)
 
+        except GovernanceRuntimeError:
+            raise
         except Exception:
             logger.exception("Answer generation failed, falling back to placeholder")
             return _quality_gated(self._generate_placeholder(context))
