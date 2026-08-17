@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from pydantic import SecretStr
 
@@ -274,3 +275,94 @@ def test_generate_stream_does_not_fallback_after_first_chunk(monkeypatch, gatewa
     with pytest.raises(ModelTimeoutError):
         next(stream)
     assert requested == ["primary"]
+
+
+def test_generate_provider_error_never_records_upstream_secret(
+    monkeypatch, caplog, gateway
+):
+    from src.model_service import gateway as gateway_module
+
+    secret = "sk-live-gateway-sync"
+    body = f"api_key={secret}; Authorization: Bearer {secret}"
+    events = []
+    gateway._config.api_key = secret
+    gateway._config.max_retries = 1
+    monkeypatch.setattr(gateway._router, "resolve", lambda *_: ("primary", []))
+    monkeypatch.setattr(
+        gateway._router,
+        "get_model_params",
+        lambda *_: {"temperature": 0.1, "max_tokens": 100},
+    )
+    monkeypatch.setattr(
+        httpx.Client,
+        "post",
+        lambda *args, **kwargs: httpx.Response(502, text=body),
+    )
+    monkeypatch.setattr(
+        gateway_module, "_record_llm_event", lambda **kwargs: events.append(kwargs)
+    )
+    caplog.set_level("WARNING", logger="src.model_service.gateway")
+
+    with pytest.raises(ModelExhaustedError) as exc_info:
+        gateway.generate([Message(role="user", content="Q")], "llm", "policy_qa")
+
+    recorded = "\n".join(
+        [
+            str(exc_info.value),
+            str(exc_info.value.failures),
+            str([record.__dict__ for record in caplog.records]),
+            str(events),
+        ]
+    )
+    assert secret not in recorded
+    assert body not in recorded
+
+
+def test_generate_stream_provider_error_never_records_upstream_secret(
+    monkeypatch, caplog, gateway
+):
+    from src.model_service import gateway as gateway_module
+
+    secret = "sk-live-gateway-stream"
+    body = f"api_key={secret}; Authorization: Bearer {secret}"
+    response = httpx.Response(503, text=body)
+    events = []
+    gateway._config.api_key = secret
+    monkeypatch.setattr(gateway._router, "resolve", lambda *_: ("primary", []))
+    monkeypatch.setattr(
+        gateway._router,
+        "get_model_params",
+        lambda *_: {"temperature": 0.1, "max_tokens": 100},
+    )
+
+    class StreamContext:
+        def __enter__(self):
+            return response
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(
+        httpx.Client, "stream", lambda self, *args, **kwargs: StreamContext()
+    )
+    monkeypatch.setattr(
+        gateway_module, "_record_llm_event", lambda **kwargs: events.append(kwargs)
+    )
+    caplog.set_level("ERROR", logger="src.model_service.gateway")
+
+    with pytest.raises(ModelServerError) as exc_info:
+        list(
+            gateway.generate_stream(
+                [Message(role="user", content="Q")], "llm", "policy_qa"
+            )
+        )
+
+    recorded = "\n".join(
+        [
+            str(exc_info.value),
+            str([record.__dict__ for record in caplog.records]),
+            str(events),
+        ]
+    )
+    assert secret not in recorded
+    assert body not in recorded

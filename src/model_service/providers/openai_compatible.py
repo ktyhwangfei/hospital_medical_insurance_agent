@@ -21,12 +21,18 @@ class OpenAICompatibleProvider:
                     json=payload,
                     headers=self._headers(),
                 )
-        except httpx.TimeoutException as exc:
-            raise ModelTimeoutError(f"Model provider timeout: {exc}", model_name=request.model_type) from exc
-        except httpx.NetworkError as exc:
-            raise ModelServerError(f"Model provider network error: {exc}", model_name=request.model_type) from exc
-        except httpx.HTTPError as exc:
-            raise ModelServerError(f"Model provider http error: {exc}", model_name=request.model_type) from exc
+        except httpx.TimeoutException:
+            raise ModelTimeoutError(
+                "Model provider request timed out", model_name=request.model_type
+            ) from None
+        except httpx.NetworkError:
+            raise ModelServerError(
+                "Model provider network error", model_name=request.model_type
+            ) from None
+        except httpx.HTTPError:
+            raise ModelServerError(
+                "Model provider HTTP error", model_name=request.model_type
+            ) from None
         return self._handle_response(response)
 
     def invoke_stream(self, request: ModelRequest) -> Iterator[StreamChunk]:
@@ -50,8 +56,11 @@ class OpenAICompatibleProvider:
                             break
                         try:
                             chunk = json.loads(data)
-                        except json.JSONDecodeError as exc:
-                            raise ModelServerError(f"Malformed stream JSON: {exc}", model_name=request.model_type) from exc
+                        except json.JSONDecodeError:
+                            raise ModelServerError(
+                                "Model provider returned malformed stream data",
+                                model_name=request.model_type,
+                            ) from None
                         delta = chunk["choices"][0].get("delta", {})
                         content = delta.get("content", "")
                         finish_reason = chunk["choices"][0].get("finish_reason")
@@ -66,12 +75,18 @@ class OpenAICompatibleProvider:
                             finish_reason=finish_reason,
                             usage=usage,
                         )
-        except httpx.TimeoutException as exc:
-            raise ModelTimeoutError(f"Model provider timeout: {exc}", model_name=request.model_type) from exc
-        except httpx.NetworkError as exc:
-            raise ModelServerError(f"Model provider network error: {exc}", model_name=request.model_type) from exc
-        except httpx.HTTPError as exc:
-            raise ModelServerError(f"Model provider http error: {exc}", model_name=request.model_type) from exc
+        except httpx.TimeoutException:
+            raise ModelTimeoutError(
+                "Model provider request timed out", model_name=request.model_type
+            ) from None
+        except httpx.NetworkError:
+            raise ModelServerError(
+                "Model provider network error", model_name=request.model_type
+            ) from None
+        except httpx.HTTPError:
+            raise ModelServerError(
+                "Model provider HTTP error", model_name=request.model_type
+            ) from None
 
     def invoke_embedding(self, text: str, model: str) -> ModelResponse:
         payload = {"input": text, "model": model}
@@ -82,12 +97,18 @@ class OpenAICompatibleProvider:
                     json=payload,
                     headers=self._headers(),
                 )
-        except httpx.TimeoutException as exc:
-            raise ModelTimeoutError(f"Model provider timeout: {exc}", model_name=model) from exc
-        except httpx.NetworkError as exc:
-            raise ModelServerError(f"Model provider network error: {exc}", model_name=model) from exc
-        except httpx.HTTPError as exc:
-            raise ModelServerError(f"Model provider http error: {exc}", model_name=model) from exc
+        except httpx.TimeoutException:
+            raise ModelTimeoutError(
+                "Model provider request timed out", model_name=model
+            ) from None
+        except httpx.NetworkError:
+            raise ModelServerError(
+                "Model provider network error", model_name=model
+            ) from None
+        except httpx.HTTPError:
+            raise ModelServerError(
+                "Model provider HTTP error", model_name=model
+            ) from None
         self._check_status(response)
         data = response.json()
         embedding = data["data"][0]["embedding"]
@@ -118,7 +139,12 @@ class OpenAICompatibleProvider:
 
     def _handle_response(self, response: httpx.Response) -> ModelResponse:
         self._check_status(response)
-        data = response.json()
+        try:
+            data = response.json()
+        except (json.JSONDecodeError, ValueError):
+            raise ModelServerError(
+                "Model provider returned invalid JSON", model_name=""
+            ) from None
         if "error" in data:
             raise ModelServerError(
                 "Model provider returned an error payload",
@@ -167,12 +193,26 @@ class OpenAICompatibleProvider:
 
     def _check_status(self, response: httpx.Response) -> None:
         if response.status_code == 401 or response.status_code == 403:
-            raise ModelAuthError(f"Auth error: {response.text}", model_name="")
+            raise ModelAuthError(
+                f"Model provider authentication failed (HTTP {response.status_code})",
+                model_name="",
+            )
         if response.status_code == 429:
-            raise ModelRateLimitError(f"Rate limited: {response.text}", model_name="")
-        if response.status_code == 400:
-            raise ModelServerError(f"Bad request: {response.text}", model_name="")
-        if 400 <= response.status_code < 500 and response.status_code not in (400, 401, 403, 429):
-            raise ModelServerError(f"Client error ({response.status_code}): {response.text}", model_name="")
+            raise ModelRateLimitError(
+                "Model provider rate limited request (HTTP 429)", model_name=""
+            )
+        if 400 <= response.status_code < 500:
+            raise ModelServerError(
+                f"Model provider rejected request (HTTP {response.status_code})",
+                model_name="",
+            )
         if response.status_code >= 500:
-            raise ModelServerError(f"Server error: {response.text}", model_name="")
+            raise ModelServerError(
+                f"Model provider server error (HTTP {response.status_code})",
+                model_name="",
+            )
+        if not 200 <= response.status_code < 300:
+            raise ModelServerError(
+                f"Model provider unexpected response (HTTP {response.status_code})",
+                model_name="",
+            )
