@@ -3,6 +3,9 @@ import pytest
 from src.data_platform.storage.model_governance.in_memory import (
     InMemoryModelGovernanceStorage,
 )
+from src.data_platform.storage.model_governance.ports import (
+    ModelGovernanceConflictError,
+)
 from src.model_service.governance_assets import (
     GovernanceDraftStatus,
     GovernanceEnvironment,
@@ -136,12 +139,13 @@ def test_published_draft_is_read_only_and_next_version_copies_active_content():
         actor="editor",
         environment=GovernanceEnvironment.DEV,
     )
+    published_draft = storage.get_draft(approved.draft_id)
 
     with pytest.raises(ModelGovernanceGateError, match="活动版本不可编辑"):
         service.save_draft(
             approved.draft_id,
             _prompt("被直接修改"),
-            expected_revision=approved.revision,
+            expected_revision=published_draft.revision,
             actor="editor",
         )
 
@@ -162,7 +166,8 @@ def test_published_draft_is_read_only_and_next_version_copies_active_content():
 
 
 def test_revalidating_published_draft_does_not_bypass_read_only_gate():
-    service = ModelGovernanceService(InMemoryModelGovernanceStorage())
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
     approved = _complete_review(service, _prompt("当前生效"))
     service.publish(
         approved.draft_id,
@@ -172,7 +177,7 @@ def test_revalidating_published_draft_does_not_bypass_read_only_gate():
     )
     revalidated = service.validate_draft(
         approved.draft_id,
-        expected_revision=approved.revision,
+        expected_revision=storage.get_draft(approved.draft_id).revision,
     )
 
     with pytest.raises(ModelGovernanceGateError, match="活动版本不可编辑"):
@@ -182,6 +187,41 @@ def test_revalidating_published_draft_does_not_bypass_read_only_gate():
             expected_revision=revalidated.revision,
             actor="editor",
         )
+
+
+def test_publish_revision_gate_wins_over_interleaved_save():
+    class PublishDuringReleaseCheckStorage(InMemoryModelGovernanceStorage):
+        publish_once = None
+
+        def list_releases(self, asset_id=None, environment=None):
+            releases = super().list_releases(asset_id, environment)
+            callback, self.publish_once = self.publish_once, None
+            if callback is not None:
+                callback()
+            return releases
+
+    storage = PublishDuringReleaseCheckStorage()
+    service = ModelGovernanceService(storage)
+    approved = _complete_review(service, _prompt("当前生效"))
+    storage.publish_once = lambda: service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+
+    with pytest.raises(ModelGovernanceConflictError, match="revision"):
+        service.save_draft(
+            approved.draft_id,
+            _prompt("并发修改"),
+            expected_revision=approved.revision,
+            actor="editor",
+        )
+
+    assert storage.get_active_release(
+        "prompt.demo", GovernanceEnvironment.DEV
+    ) is not None
+    assert storage.get_draft(approved.draft_id).content.system_prompt == "当前生效"
 
 
 def test_create_next_version_requires_active_release():

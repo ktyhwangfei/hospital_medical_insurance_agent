@@ -313,10 +313,24 @@ class ModelGovernanceService:
         approval = self._storage.get_approval(approval_id)
         if approval.content_hash != digest:
             raise ModelGovernanceGateError("草稿内容与审核记录不一致")
+        version_id = str(uuid5(NAMESPACE_URL, f"{draft.asset_id}:{digest}"))
+        active = self._storage.get_active_release(draft.asset_id, environment)
+        if active and active.version_id == version_id:
+            return active
+        draft = self._storage.update_draft(
+            draft.model_copy(
+                update={
+                    "revision": draft.revision + 1,
+                    "updated_at": self._now(),
+                },
+                deep=True,
+            ),
+            expected_revision=expected_revision,
+        )
         versions = self._storage.list_versions(draft.asset_id)
-        version = self._storage.save_version(
+        self._storage.save_version(
             GovernanceVersion(
-                version_id=str(uuid5(NAMESPACE_URL, f"{draft.asset_id}:{digest}")),
+                version_id=version_id,
                 asset_id=draft.asset_id,
                 asset_type=draft.asset_type,
                 version_number=max((item.version_number for item in versions), default=0)
@@ -328,14 +342,12 @@ class ModelGovernanceService:
             )
         )
         active = self._storage.get_active_release(draft.asset_id, environment)
-        if active and active.version_id == version.version_id:
-            return active
         return self._storage.publish(
             GovernanceRelease(
                 release_id=str(uuid4()),
                 asset_id=draft.asset_id,
                 asset_type=draft.asset_type,
-                version_id=version.version_id,
+                version_id=version_id,
                 environment=environment,
                 previous_release_id=active.release_id if active else None,
                 created_by=actor,
