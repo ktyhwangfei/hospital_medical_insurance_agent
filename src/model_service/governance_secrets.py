@@ -131,6 +131,8 @@ class GovernanceCredentialVault:
     def reveal_credential(
         self, credential: GovernanceCredential, *, base_url: str
     ) -> str:
+        if credential.endpoint_fingerprint is None:
+            raise GovernanceSecretError("旧凭据需重新绑定/重新发布")
         if credential.endpoint_fingerprint != endpoint_fingerprint(base_url):
             raise GovernanceSecretError("模型凭据未获准用于该端点")
         try:

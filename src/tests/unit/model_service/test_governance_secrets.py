@@ -9,6 +9,7 @@ from src.data_platform.storage.model_governance.in_memory import (
 )
 from src.model_service.governance_assets import (
     GovernanceConnectionTest,
+    GovernanceCredential,
     ModelProfileAssetContent,
 )
 
@@ -39,6 +40,46 @@ def test_vault_encrypts_secret_and_never_stores_plaintext(monkeypatch):
     assert vault.reveal(
         "credential.demo", base_url="https://models.example.test/v1"
     ) == api_key
+
+
+def test_vault_reseals_legacy_credential_with_missing_endpoint_binding(monkeypatch):
+    from datetime import datetime, timezone
+
+    from src.model_service.governance_secrets import (
+        GovernanceCredentialVault,
+        GovernanceSecretError,
+        endpoint_fingerprint,
+    )
+
+    monkeypatch.setenv("MODEL_GOVERNANCE_MASTER_KEY", MASTER_KEY)
+    storage = InMemoryModelGovernanceStorage()
+    legacy = GovernanceCredential(
+        credential_id="credential.legacy",
+        encrypted_api_key="legacy-encrypted-value",
+        secret_fingerprint="a" * 64,
+        endpoint_fingerprint=None,
+        revision=1,
+        updated_by="legacy",
+        updated_at=datetime.now(timezone.utc),
+    )
+    storage.put_credential(legacy)
+    vault = GovernanceCredentialVault(storage)
+
+    with pytest.raises(GovernanceSecretError, match="旧凭据需重新绑定"):
+        vault.reveal_credential(
+            legacy, base_url="https://models.example.test/v1"
+        )
+
+    resealed = vault.seal(
+        legacy.credential_id,
+        "sk-rebound",
+        base_url="https://models.example.test/v1/",
+        actor="editor",
+    )
+    assert resealed.revision == 2
+    assert resealed.endpoint_fingerprint == endpoint_fingerprint(
+        "https://models.example.test/v1"
+    )
 
 
 @pytest.mark.parametrize("master_key", [None, "not-a-fernet-key"])

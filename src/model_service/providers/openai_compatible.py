@@ -1,14 +1,10 @@
 import json
-import logging
 from typing import Iterator
 
 import httpx
 
 from src.model_service.exceptions import ModelAuthError, ModelRateLimitError, ModelServerError, ModelTimeoutError
 from src.model_service.models import ModelRequest, ModelResponse, StreamChunk, TokenUsage
-
-logger = logging.getLogger(__name__)
-
 
 class OpenAICompatibleProvider:
     def __init__(self, base_url: str, api_key: str, timeout: int = 30):
@@ -128,53 +124,46 @@ class OpenAICompatibleProvider:
                 "Model provider returned an error payload",
                 model_name="",
             )
-        
-        # 兼容不同的响应格式
-        if "choices" not in data:
-            # 尝试其他格式
-            if "result" in data:
-                # 某些 API 返回 {"result": "..."}
-                return ModelResponse(
-                    content=str(data["result"]),
-                    model_name=data.get("model", ""),
-                    usage=TokenUsage(prompt_tokens=0, completion_tokens=0),
-                    finish_reason="stop",
-                )
-            elif "response" in data:
-                return ModelResponse(
-                    content=str(data["response"]),
-                    model_name=data.get("model", ""),
-                    usage=TokenUsage(prompt_tokens=0, completion_tokens=0),
-                    finish_reason="stop",
-                )
-            elif "text" in data:
-                return ModelResponse(
-                    content=str(data["text"]),
-                    model_name=data.get("model", ""),
-                    usage=TokenUsage(prompt_tokens=0, completion_tokens=0),
-                    finish_reason="stop",
-                )
-            else:
-                # 兜底：返回整个响应作为内容
-                logger.warning(f"Unexpected model response format: {list(data.keys())}")
-                return ModelResponse(
-                    content=str(data),
+        if "choices" in data:
+            try:
+                choice = data["choices"][0]
+                content = self._valid_response_content(choice["message"]["content"])
+            except (IndexError, KeyError, TypeError) as exc:
+                raise ModelServerError(
+                    "Model provider returned an invalid choices payload",
                     model_name="",
+                ) from exc
+            usage = data.get("usage", {})
+            return ModelResponse(
+                content=content,
+                model_name=data.get("model", ""),
+                usage=TokenUsage(
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get("completion_tokens", 0),
+                ),
+                finish_reason=choice.get("finish_reason", "stop"),
+            )
+        for field in ("result", "response", "text"):
+            if field in data:
+                return ModelResponse(
+                    content=self._valid_response_content(data[field]),
+                    model_name=data.get("model", ""),
                     usage=TokenUsage(prompt_tokens=0, completion_tokens=0),
                     finish_reason="stop",
                 )
-        
-        choice = data["choices"][0]
-        usage = data.get("usage", {})
-        return ModelResponse(
-            content=choice["message"]["content"],
-            model_name=data.get("model", ""),
-            usage=TokenUsage(
-                prompt_tokens=usage.get("prompt_tokens", 0),
-                completion_tokens=usage.get("completion_tokens", 0),
-            ),
-            finish_reason=choice.get("finish_reason", "stop"),
+        raise ModelServerError(
+            "Model provider returned an unsupported response payload",
+            model_name="",
         )
+
+    @staticmethod
+    def _valid_response_content(value: object) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ModelServerError(
+                "Model provider returned empty or invalid content",
+                model_name="",
+            )
+        return value
 
     def _check_status(self, response: httpx.Response) -> None:
         if response.status_code == 401 or response.status_code == 403:

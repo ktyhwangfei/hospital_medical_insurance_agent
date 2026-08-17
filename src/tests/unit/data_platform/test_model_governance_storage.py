@@ -591,15 +591,61 @@ def test_postgres_publish_locks_referenced_model_release_preconditions():
     assert "FOR UPDATE" in client.statements[0]
 
 
+def test_postgres_publish_binding_preserves_non_constraint_errors():
+    from src.data_platform.storage.model_governance.postgres import (
+        PostgresModelGovernanceStorage,
+    )
+    from src.model_service.governance_assets import (
+        GovernanceReleaseCredentialBinding,
+    )
+
+    release = _release("release-binding-infra", "version-1")
+    binding = GovernanceReleaseCredentialBinding(
+        release_id=release.release_id,
+        credential_id="credential.demo",
+        credential_revision=1,
+        credential_fingerprint="a" * 64,
+    )
+
+    class BindingFailureClient:
+        is_connected = True
+
+        @contextmanager
+        def transaction(self):
+            yield
+
+        def execute(self, sql, params=()):
+            if "FROM model_governance_credential_versions" in sql:
+                return [{"secret_fingerprint": "a" * 64}]
+            if "status='active'" in sql:
+                return []
+            if "INSERT INTO model_governance_releases" in sql:
+                return [release.model_dump(mode="python")]
+            if "INSERT INTO model_governance_release_credentials" in sql:
+                raise RuntimeError("database connection lost")
+            raise AssertionError(sql)
+
+    storage = PostgresModelGovernanceStorage("postgresql://unused")
+    storage._client = BindingFailureClient()
+
+    with pytest.raises(RuntimeError, match="database connection lost"):
+        storage.publish(release, credential_binding=binding)
+
+
 def test_credential_migration_is_repeatable_and_has_versioned_release_binding():
     from pathlib import Path
 
     migration = Path("scripts/model_governance_credentials_migration.sql").read_text(
         encoding="utf-8"
     ).lower()
+    normalized = " ".join(migration.split())
     assert "add column if not exists endpoint_fingerprint" in migration
     assert "create table if not exists model_governance_credential_versions" in migration
     assert "create table if not exists model_governance_release_credentials" in migration
+    assert "encode( sha256(convert_to(" in normalized
+    assert "count(distinct normalized_base_url) = 1" in normalized
+    assert "insert into model_governance_credential_versions" in normalized
+    assert "insert into model_governance_release_credentials" in normalized
 
 
 def test_in_memory_atomic_credential_update_leaves_both_records_unchanged_on_conflict():

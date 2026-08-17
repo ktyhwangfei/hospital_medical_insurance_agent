@@ -93,6 +93,34 @@ CREATE TABLE IF NOT EXISTS model_governance_credentials (
 ALTER TABLE model_governance_credentials
     ADD COLUMN IF NOT EXISTS endpoint_fingerprint CHAR(64);
 
+WITH model_endpoint_candidates AS (
+    SELECT content->>'credential_ref' AS credential_id,
+           regexp_replace(content->>'base_url', '/+$', '') AS normalized_base_url
+    FROM model_governance_drafts
+    WHERE content->>'asset_type' = 'model_profile'
+      AND content->>'credential_ref' <> ''
+      AND content->>'base_url' <> ''
+    UNION ALL
+    SELECT content->>'credential_ref' AS credential_id,
+           regexp_replace(content->>'base_url', '/+$', '') AS normalized_base_url
+    FROM model_governance_versions
+    WHERE content->>'asset_type' = 'model_profile'
+      AND content->>'credential_ref' <> ''
+      AND content->>'base_url' <> ''
+), unique_model_endpoints AS (
+    SELECT credential_id, min(normalized_base_url) AS normalized_base_url
+    FROM model_endpoint_candidates
+    GROUP BY credential_id
+    HAVING count(DISTINCT normalized_base_url) = 1
+)
+UPDATE model_governance_credentials AS credential
+SET endpoint_fingerprint = encode(
+    sha256(convert_to(endpoint.normalized_base_url, 'UTF8')), 'hex'
+)
+FROM unique_model_endpoints AS endpoint
+WHERE credential.credential_id = endpoint.credential_id
+  AND credential.endpoint_fingerprint IS NULL;
+
 CREATE TABLE IF NOT EXISTS model_governance_credential_versions (
     credential_id VARCHAR(128) NOT NULL,
     revision INTEGER NOT NULL,
@@ -103,6 +131,14 @@ CREATE TABLE IF NOT EXISTS model_governance_credential_versions (
     updated_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (credential_id, revision)
 );
+INSERT INTO model_governance_credential_versions
+    (credential_id, revision, encrypted_api_key, secret_fingerprint,
+     endpoint_fingerprint, updated_by, updated_at)
+SELECT credential_id, revision, encrypted_api_key, secret_fingerprint,
+       endpoint_fingerprint, updated_by, updated_at
+FROM model_governance_credentials
+WHERE endpoint_fingerprint IS NOT NULL
+ON CONFLICT (credential_id, revision) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS model_governance_release_credentials (
     release_id VARCHAR(64) PRIMARY KEY
@@ -129,6 +165,35 @@ CREATE INDEX IF NOT EXISTS idx_governance_connection_success
 ON model_governance_connection_tests
     (asset_id, content_hash, credential_fingerprint, tested_at DESC)
 WHERE succeeded = TRUE;
+
+INSERT INTO model_governance_release_credentials
+    (release_id, credential_id, credential_revision, credential_fingerprint)
+SELECT release.release_id, credential.credential_id, credential.revision,
+       credential.secret_fingerprint
+FROM model_governance_releases AS release
+JOIN model_governance_versions AS version
+  ON version.version_id = release.version_id
+JOIN model_governance_credentials AS credential
+  ON credential.credential_id = version.content->>'credential_ref'
+JOIN model_governance_credential_versions AS credential_version
+  ON credential_version.credential_id = credential.credential_id
+ AND credential_version.revision = credential.revision
+ AND credential_version.secret_fingerprint = credential.secret_fingerprint
+WHERE version.content->>'asset_type' = 'model_profile'
+  AND credential.endpoint_fingerprint = encode(
+      sha256(convert_to(
+          regexp_replace(version.content->>'base_url', '/+$', ''), 'UTF8'
+      )), 'hex'
+  )
+  AND EXISTS (
+      SELECT 1
+      FROM model_governance_connection_tests AS connection_test
+      WHERE connection_test.asset_id = version.asset_id
+        AND connection_test.content_hash = version.content_hash
+        AND connection_test.credential_fingerprint = credential.secret_fingerprint
+        AND connection_test.succeeded = TRUE
+  )
+ON CONFLICT (release_id) DO NOTHING;
 """
 
 
@@ -677,7 +742,14 @@ class PostgresModelGovernanceStorage:
                 )
                 self._insert_credential_binding(client, credential_binding)
             except Exception as exc:
-                raise ModelGovernanceConflictError("发布记录已存在") from exc
+                sqlstate = getattr(exc, "sqlstate", None) or getattr(
+                    exc, "pgcode", None
+                )
+                if sqlstate and str(sqlstate).startswith("23"):
+                    raise ModelGovernanceConflictError(
+                        "发布记录已存在"
+                    ) from exc
+                raise
         return self._release(rows[0])
 
     def publish_draft_version(

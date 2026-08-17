@@ -173,6 +173,38 @@ def test_probe_rejects_error_shaped_http_200(monkeypatch):
     assert result.safe_message == "连接失败"
 
 
+def test_probe_rejects_unknown_http_200_payload(monkeypatch):
+    from src.model_service.governance_secrets import probe_model_connection
+
+    class UnknownResponse:
+        status_code = 200
+        text = '{"message":"invalid api key"}'
+
+        @staticmethod
+        def json():
+            return {"message": "invalid api key"}
+
+    class FakeClient:
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, *args, **kwargs):
+            return UnknownResponse()
+
+    monkeypatch.setattr("src.model_service.providers.openai_compatible.httpx.Client", FakeClient)
+
+    result = probe_model_connection(_model_profile(), "sk-test")
+
+    assert result.succeeded is False
+    assert result.safe_message == "连接失败"
+
+
 def test_model_publish_requires_matching_successful_connection_test(monkeypatch):
     monkeypatch.setenv(
         "MODEL_GOVERNANCE_MASTER_KEY",
