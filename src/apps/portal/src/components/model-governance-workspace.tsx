@@ -279,7 +279,10 @@ export function ModelGovernanceWorkspace() {
   }, [environment])
 
   useEffect(() => {
-    if (process.env.NODE_ENV !== 'production') selectGovernanceDevIdentity('editor')
+    if (process.env.NODE_ENV !== 'production') selectGovernanceDevIdentity(identity)
+  }, [identity])
+
+  useEffect(() => {
     void refresh()
   }, [refresh])
 
@@ -407,7 +410,7 @@ export function ModelGovernanceWorkspace() {
   }
 
   async function testConnection() {
-    if (!selected?.draft) return
+    if (!selected?.draft || selected.draft.content.asset_type !== 'model_profile' || modelFormDirty) return
     setBusy(true)
     setError('')
     try {
@@ -416,7 +419,7 @@ export function ModelGovernanceWorkspace() {
         ...current,
         [selected.draft!.draft_id]: {
           result,
-          contentSignature: JSON.stringify(formContent('model_profile', form)),
+          contentSignature: JSON.stringify(selected.draft!.content),
         },
       }))
     } catch (reason) {
@@ -454,10 +457,19 @@ export function ModelGovernanceWorkspace() {
   }
 
   const currentContent = selected?.published?.content ?? selected?.baseline
+  const savedModelSignature = selected?.draft?.content.asset_type === 'model_profile'
+    ? JSON.stringify(selected.draft.content)
+    : undefined
+  const currentModelSignature = drawerType === 'model_profile'
+    ? JSON.stringify(formContent('model_profile', form))
+    : undefined
+  const modelFormDirty = Boolean(savedModelSignature && (
+    savedModelSignature !== currentModelSignature || form.apiKey !== ''
+  ))
   const modelEvidence = selected?.draft ? connectionTests[selected.draft.draft_id] : undefined
   const modelTest = modelEvidence
-    && modelEvidence.contentSignature === JSON.stringify(formContent('model_profile', form))
-    && form.apiKey === ''
+    && modelEvidence.contentSignature === savedModelSignature
+    && !modelFormDirty
     ? modelEvidence.result
     : undefined
   const noPublishedModels = publishedModels.length === 0
@@ -478,7 +490,7 @@ export function ModelGovernanceWorkspace() {
         {process.env.NODE_ENV !== 'production' && <label className="text-slate-600">开发身份
           <select aria-label="开发身份" className="ml-2 rounded border border-slate-300 bg-white px-2 py-1.5" value={identity} onChange={(event) => {
             const next = event.target.value as GovernanceDevIdentity
-            setIdentity(next); selectGovernanceDevIdentity(next)
+            setIdentity(next)
           }}><option value="editor">编辑/发布人</option><option value="reviewer">审核人</option></select>
         </label>}
       </div>
@@ -550,9 +562,10 @@ export function ModelGovernanceWorkspace() {
               {selected?.draft?.status === 'editing' && <button type="button" disabled={busy} onClick={() => void changeDraft((draft) => validateGovernanceDraft(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">校验</button>}
               {selected?.draft?.status === 'validated' && <button type="button" disabled={busy || identity !== 'editor'} onClick={() => void changeDraft((draft) => requestGovernanceReview(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">申请审核</button>}
               {selected?.draft?.status === 'review_pending' && identity === 'reviewer' && <button type="button" disabled={busy} onClick={() => void changeDraft((draft) => approveGovernanceDraft(draft.draft_id, draft.revision, '开发环境审核通过'))} className="rounded bg-emerald-600 px-3 py-2 text-xs text-white">审核通过</button>}
-              {selected?.draft?.content.asset_type === 'model_profile' && <button type="button" disabled={busy} onClick={() => void testConnection()} className="rounded border border-slate-300 px-3 py-2 text-xs">测试连接</button>}
+              {selected?.draft?.content.asset_type === 'model_profile' && <button type="button" disabled={busy || modelFormDirty} onClick={() => void testConnection()} className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50">测试连接</button>}
               {selected?.draft?.status === 'approved' && <button type="button" disabled={busy || identity !== 'editor' || (selected.draft.content.asset_type === 'model_profile' && modelTest?.status !== 'success')} onClick={() => void publish()} className="rounded bg-indigo-600 px-3 py-2 text-xs text-white disabled:opacity-50">发布到{environment}环境</button>}
             </div>}
+            {selected?.draft?.content.asset_type === 'model_profile' && modelFormDirty && <p className="mt-3 text-xs text-amber-700">请先保存模型工作版本，再测试连接。</p>}
             {modelTest && <p role="status" className={`mt-3 rounded p-3 text-xs ${modelTest.status === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{modelTest.safe_message} · {new Date(modelTest.tested_at).toLocaleString('zh-CN')} · {modelTest.latency_ms}ms</p>}
           </section>
 

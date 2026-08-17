@@ -79,6 +79,7 @@ function published(content: GovernanceAssetContent) {
 }
 
 beforeEach(() => {
+  window.sessionStorage.clear()
   vi.mocked(useRoleContext).mockReturnValue({ currentRole: 'information_department', setCurrentRole: vi.fn() })
   vi.mocked(getModelGovernanceSnapshot).mockReset().mockResolvedValue(snapshotFixture)
   vi.mocked(getGovernanceAssets).mockReset().mockResolvedValue({ baselines: [], drafts: [], published: [] })
@@ -210,10 +211,12 @@ describe('模型治理资产中心', () => {
     expect(screen.getByText('留空表示不更换')).toBeInTheDocument()
   })
 
-  it('模型连接测试通过前发布禁用', async () => {
+  it('模型配置必须先保存再测试，测试通过后才能发布', async () => {
     const user = userEvent.setup()
     const approved = draft(modelContent, 'approved')
+    const savedContent = { ...modelContent, temperature: 0.2 }
     vi.mocked(getGovernanceAssets).mockResolvedValue({ baselines: [], drafts: [approved], published: [] })
+    vi.mocked(updateGovernanceDraft).mockResolvedValue({ ...approved, content: savedContent, revision: 2 })
     vi.mocked(testGovernanceConnection).mockResolvedValue({
       status: 'success', latency_ms: 18, safe_message: '连接成功', tested_at: '2026-08-17T01:00:00Z', content_hash: 'b'.repeat(64),
     })
@@ -222,26 +225,30 @@ describe('模型治理资产中心', () => {
     await user.click(await screen.findByRole('tab', { name: '模型' }))
     await user.click(screen.getByRole('button', { name: '查看 model.primary' }))
     const publishButton = screen.getByRole('button', { name: '发布到dev环境' })
+    const connectionButton = screen.getByRole('button', { name: '测试连接' })
     expect(publishButton).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: '测试连接' }))
-    expect(await screen.findByText(/连接成功/)).toBeInTheDocument()
-    expect(publishButton).toBeEnabled()
-
     await user.clear(screen.getByLabelText('温度'))
     await user.type(screen.getByLabelText('温度'), '0.2')
+    expect(connectionButton).toBeDisabled()
     expect(publishButton).toBeDisabled()
-    expect(screen.queryByText(/连接成功/)).not.toBeInTheDocument()
-    await user.clear(screen.getByLabelText('温度'))
-    await user.type(screen.getByLabelText('温度'), '0.1')
-    expect(publishButton).toBeDisabled()
-
-    await user.click(screen.getByRole('button', { name: '测试连接' }))
-    expect(publishButton).toBeEnabled()
+    expect(screen.getByText('请先保存模型工作版本，再测试连接。')).toBeInTheDocument()
     await user.type(screen.getByLabelText('API Key'), 'sk-replacement')
-    expect(publishButton).toBeDisabled()
-    expect(screen.queryByText(/连接成功/)).not.toBeInTheDocument()
-    await user.clear(screen.getByLabelText('API Key'))
-    expect(publishButton).toBeDisabled()
+    expect(connectionButton).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: '保存工作版本' }))
+    await waitFor(() => expect(updateGovernanceDraft).toHaveBeenCalledWith(
+      approved.draft_id,
+      savedContent,
+      approved.revision,
+      { credential_id: modelContent.credential_ref, api_key: 'sk-replacement' },
+    ))
+    expect(connectionButton).toBeEnabled()
+    expect(screen.queryByText('请先保存模型工作版本，再测试连接。')).not.toBeInTheDocument()
+    await user.click(connectionButton)
+
+    expect(await screen.findByText(/连接成功/)).toBeInTheDocument()
+    expect(testGovernanceConnection).toHaveBeenCalledWith(approved.draft_id)
+    expect(publishButton).toBeEnabled()
   })
 
   it('保存模型工作版本后必须重新测试连接', async () => {
@@ -343,6 +350,25 @@ describe('模型治理资产中心', () => {
     expect(screen.queryByText('intent.classify')).not.toBeInTheDocument()
     expect(screen.queryByText('暂无提示词资产')).not.toBeInTheDocument()
     expect(screen.queryByText('暂无发布记录')).not.toBeInTheDocument()
+  })
+
+  it('切换环境时保持 reviewer 身份与请求 token 同步', async () => {
+    const user = userEvent.setup()
+    render(<ModelGovernancePage />)
+    expect(await screen.findByText('当前环境：dev · 治理发布已接入运行时')).toBeInTheDocument()
+    const identitySelect = screen.getByLabelText('开发身份')
+    const editorToken = window.sessionStorage.getItem('model-governance-token')
+
+    await user.selectOptions(identitySelect, 'reviewer')
+    const reviewerToken = window.sessionStorage.getItem('model-governance-token')
+    expect(reviewerToken).toBeTruthy()
+    expect(reviewerToken).not.toBe(editorToken)
+    expect(identitySelect).toHaveValue('reviewer')
+
+    await user.selectOptions(screen.getByLabelText('环境'), 'test')
+    expect(await screen.findByText('当前环境：test · 治理发布已接入运行时')).toBeInTheDocument()
+    expect(identitySelect).toHaveValue('reviewer')
+    expect(window.sessionStorage.getItem('model-governance-token')).toBe(reviewerToken)
   })
 
   it('侧栏向所有角色提供底部后台管理入口', () => {
