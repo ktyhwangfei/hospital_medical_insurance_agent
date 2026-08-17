@@ -90,6 +90,11 @@ interface FormState {
   enabled: boolean
 }
 
+interface ConnectionEvidence {
+  result: GovernanceConnectionTest
+  contentSignature: string
+}
+
 const emptyAssets: GovernanceAssetsResult = { baselines: [], drafts: [], published: [] }
 
 function emptyForm(type: GovernanceAssetType): FormState {
@@ -188,6 +193,10 @@ function rowsFromAssets(assets: GovernanceAssetsResult): AssetRow[] {
   })
   assets.published.forEach((item) => merge(item.content, { published: item }))
   assets.drafts.forEach((draft) => {
+    const activeContent = rows.get(draft.asset_id)?.published?.content
+    if (draft.status === 'approved' && activeContent && JSON.stringify(draft.content) === JSON.stringify(activeContent)) {
+      return
+    }
     const existing = rows.get(draft.asset_id)?.draft
     if (!existing || Date.parse(draft.updated_at) > Date.parse(existing.updated_at)) {
       merge(draft.content, { draft })
@@ -214,6 +223,9 @@ function ReadOnlyContent({ content }: { content: GovernanceAssetContent }) {
       <div className="sm:col-span-2"><dt className="text-xs text-slate-500">API 访问地址</dt><dd className="break-all">{content.base_url}</dd></div>
       <div><dt className="text-xs text-slate-500">Credential ID</dt><dd className="break-all">{content.credential_ref}</dd></div>
       <div><dt className="text-xs text-slate-500">超时</dt><dd>{content.timeout_seconds} 秒</dd></div>
+      <div><dt className="text-xs text-slate-500">温度</dt><dd>{content.temperature}</dd></div>
+      <div><dt className="text-xs text-slate-500">最大 tokens</dt><dd>{content.max_tokens}</dd></div>
+      <div><dt className="text-xs text-slate-500">启用状态</dt><dd>{content.enabled ? '已启用' : '已停用'}</dd></div>
     </dl>
   }
   return <dl className="grid gap-2 text-sm sm:grid-cols-2">
@@ -234,27 +246,35 @@ export function ModelGovernanceWorkspace() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [form, setForm] = useState<FormState>(emptyForm('prompt'))
   const [versions, setVersions] = useState<GovernanceVersionsResult>({ versions: [], releases: [] })
-  const [connectionTests, setConnectionTests] = useState<Record<string, GovernanceConnectionTest>>({})
+  const [connectionTests, setConnectionTests] = useState<Record<string, ConnectionEvidence>>({})
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const closeRef = useRef<HTMLButtonElement>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const refreshRequestRef = useRef(0)
 
   const refresh = useCallback(async () => {
+    const requestId = ++refreshRequestRef.current
     setLoading(true)
+    setAssets(emptyAssets)
+    setReleases([])
+    setError('')
     try {
       const [nextAssets, nextReleases] = await Promise.all([
         getGovernanceAssets(environment), getGovernanceReleases(environment),
       ])
+      if (requestId !== refreshRequestRef.current) return
       setAssets(nextAssets)
       setReleases(nextReleases)
-      setError('')
     } catch (reason) {
+      if (requestId !== refreshRequestRef.current) return
+      setAssets(emptyAssets)
+      setReleases([])
       setError(`治理资产与发布记录加载失败：${errorText(reason)}`)
     } finally {
-      setLoading(false)
+      if (requestId === refreshRequestRef.current) setLoading(false)
     }
   }, [environment])
 
@@ -278,6 +298,39 @@ export function ModelGovernanceWorkspace() {
     }))
     setSelectedId(draft.asset_id)
     setForm(formFromContent(draft.content))
+  }
+
+  function invalidateConnectionTest(draftId: string) {
+    setConnectionTests((current) => {
+      if (!current[draftId]) return current
+      const next = { ...current }
+      delete next[draftId]
+      return next
+    })
+  }
+
+  function updateForm(next: FormState) {
+    if (drawerType === 'model_profile' && selected?.draft && (
+      JSON.stringify(formContent('model_profile', next)) !== JSON.stringify(formContent('model_profile', form))
+      || next.apiKey !== form.apiKey
+    )) {
+      invalidateConnectionTest(selected.draft.draft_id)
+    }
+    setForm(next)
+  }
+
+  function changeEnvironment(next: GovernanceEnvironment) {
+    if (next === environment) return
+    refreshRequestRef.current += 1
+    setEnvironment(next)
+    setLoading(true)
+    setAssets(emptyAssets)
+    setReleases([])
+    setError('')
+    setNotice('')
+    setConnectionTests({})
+    setDrawerOpen(false)
+    setSelectedId(null)
   }
 
   function openRow(row: AssetRow, trigger: HTMLButtonElement) {
@@ -312,6 +365,7 @@ export function ModelGovernanceWorkspace() {
       const saved = selected?.draft
         ? await updateGovernanceDraft(selected.draft.draft_id, content, selected.draft.revision, credential)
         : await createGovernanceDraft(content, credential)
+      if (selected?.draft && drawerType === 'model_profile') invalidateConnectionTest(selected.draft.draft_id)
       upsertDraft(saved)
       setForm((current) => ({ ...current, apiKey: '' }))
       setNotice('工作版本已保存')
@@ -358,7 +412,13 @@ export function ModelGovernanceWorkspace() {
     setError('')
     try {
       const result = await testGovernanceConnection(selected.draft.draft_id)
-      setConnectionTests((current) => ({ ...current, [selected.draft!.draft_id]: result }))
+      setConnectionTests((current) => ({
+        ...current,
+        [selected.draft!.draft_id]: {
+          result,
+          contentSignature: JSON.stringify(formContent('model_profile', form)),
+        },
+      }))
     } catch (reason) {
       setError(errorText(reason))
     } finally {
@@ -394,7 +454,12 @@ export function ModelGovernanceWorkspace() {
   }
 
   const currentContent = selected?.published?.content ?? selected?.baseline
-  const modelTest = selected?.draft ? connectionTests[selected.draft.draft_id] : undefined
+  const modelEvidence = selected?.draft ? connectionTests[selected.draft.draft_id] : undefined
+  const modelTest = modelEvidence
+    && modelEvidence.contentSignature === JSON.stringify(formContent('model_profile', form))
+    && form.apiKey === ''
+    ? modelEvidence.result
+    : undefined
   const noPublishedModels = publishedModels.length === 0
   const routeUnavailable = drawerType === 'route_rule' && noPublishedModels
 
@@ -402,11 +467,11 @@ export function ModelGovernanceWorkspace() {
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
       <div>
         <h3 id="governance-workspace-title" className="text-sm font-semibold text-slate-800">资产中心</h3>
-        <p className="mt-1 text-xs text-slate-500">治理发布已接入运行时 · 当前 {environment} 环境</p>
+        <p className="mt-1 text-xs text-slate-500">{loading ? `正在加载 ${environment} 环境` : error ? `${environment} 环境加载失败` : `治理发布已接入运行时 · 当前 ${environment} 环境`}</p>
       </div>
       <div className="flex flex-wrap gap-2 text-xs">
         <label className="text-slate-600">环境
-          <select aria-label="环境" className="ml-2 rounded border border-slate-300 bg-white px-2 py-1.5" value={environment} onChange={(event) => setEnvironment(event.target.value as GovernanceEnvironment)}>
+          <select aria-label="环境" className="ml-2 rounded border border-slate-300 bg-white px-2 py-1.5" value={environment} onChange={(event) => changeEnvironment(event.target.value as GovernanceEnvironment)}>
             <option value="dev">dev</option><option value="test">test</option>
           </select>
         </label>
@@ -425,21 +490,21 @@ export function ModelGovernanceWorkspace() {
 
     <div id={`governance-panel-${activeTab}`} role="tabpanel" aria-busy={busy || loading} className="min-w-0 p-4 sm:p-5">
       {error && !drawerOpen && <p role="alert" className="mb-4 rounded bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
-      {notice && <p role="status" className="mb-4 rounded bg-emerald-50 p-3 text-sm text-emerald-700">{notice}</p>}
+      {notice && !error && <p role="status" className="mb-4 rounded bg-emerald-50 p-3 text-sm text-emerald-700">{notice}</p>}
       {loading && <p role="status" aria-live="polite" className="text-sm text-slate-500">正在加载治理资产</p>}
 
-      {!loading && activeTab === 'overview' && <div className="space-y-5">
+      {!loading && !error && activeTab === 'overview' && <div className="space-y-5">
         <section aria-label="治理指标" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[
-            ['活动资产', assets.published.length], ['工作草稿', assets.drafts.length],
-            ['待审核', assets.drafts.filter((draft) => draft.status === 'review_pending').length],
-            ['连接异常', Object.values(connectionTests).filter((item) => item.status === 'failure').length],
+            ['活动资产', assets.published.length], ['工作草稿', rows.filter((row) => row.draft).length],
+            ['待审核', rows.filter((row) => row.draft?.status === 'review_pending').length],
+            ['连接异常', Object.values(connectionTests).filter((item) => item.result.status === 'failure').length],
           ].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold tabular-nums text-slate-800">{value}</p></div>)}
         </section>
         <p className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">当前环境：{environment} · 治理发布已接入运行时</p>
       </div>}
 
-      {!loading && activeTab !== 'overview' && activeTab !== 'releases' && <div className="min-w-0">
+      {!loading && !error && activeTab !== 'overview' && activeTab !== 'releases' && <div className="min-w-0">
         <div className="mb-4 flex items-center justify-between gap-3">
           <p className="text-sm text-slate-500">基线、工作版本与活动发布按资产合并展示。</p>
           <button type="button" disabled={busy || (activeTab === 'route_rule' && noPublishedModels)} onClick={(event) => openNew(activeTab, event.currentTarget)} className="shrink-0 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 active:translate-y-px disabled:opacity-50">新建{typeLabel[activeTab]}</button>
@@ -459,7 +524,7 @@ export function ModelGovernanceWorkspace() {
         </div>}
       </div>}
 
-      {!loading && activeTab === 'releases' && <div className="space-y-3">
+      {!loading && !error && activeTab === 'releases' && <div className="space-y-3">
         {releases.length === 0 ? <p className="text-sm text-slate-500">暂无发布记录</p> : releases.map((release) => <article key={release.release_id} className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-4 text-sm">
           <div className="min-w-0"><p className="break-all font-medium">{release.asset_id}</p><p className="break-all font-mono text-xs text-slate-500">{release.version_id}</p></div>
           <div className="flex items-center gap-2"><span className="text-xs">{release.status === 'active' ? '活动版本' : '历史版本'}</span>{release.status === 'retired' && <button type="button" disabled={busy || identity !== 'editor'} onClick={() => void rollback(release.release_id)} className="rounded border border-blue-300 px-2 py-1 text-xs text-blue-700 disabled:opacity-50">回滚</button>}</div>
@@ -479,7 +544,7 @@ export function ModelGovernanceWorkspace() {
 
           <section aria-labelledby="working-version-title" className="border-t border-slate-200 pt-5">
             <div className="mb-3 flex items-center justify-between gap-3"><h4 id="working-version-title" className="font-semibold text-slate-800">工作版本</h4>{selected?.draft && <span className="text-xs text-slate-500">{statusLabel[selected.draft.status]} · revision {selected.draft.revision}</span>}</div>
-            {selected && !selected.draft ? <button type="button" disabled={busy} onClick={() => void startVersion()} className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">{selected.published ? '新建版本' : '创建首个草稿'}</button> : <AssetForm type={drawerType} form={form} setForm={setForm} lockedId={Boolean(selected)} publishedModels={publishedModels} />}
+            {selected && !selected.draft ? <button type="button" disabled={busy} onClick={() => void startVersion()} className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">{selected.published ? '新建版本' : '创建首个草稿'}</button> : <AssetForm type={drawerType} form={form} setForm={updateForm} lockedId={Boolean(selected)} publishedModels={publishedModels} />}
             {(!selected || selected.draft) && <div className="mt-4 flex flex-wrap gap-2">
               <button type="button" disabled={busy || !form.assetId || routeUnavailable} onClick={() => void saveDraft()} className="rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">保存工作版本</button>
               {selected?.draft?.status === 'editing' && <button type="button" disabled={busy} onClick={() => void changeDraft((draft) => validateGovernanceDraft(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">校验</button>}

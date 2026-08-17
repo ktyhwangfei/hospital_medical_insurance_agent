@@ -16,6 +16,7 @@ import {
   type GovernanceAssetContent,
   type GovernanceDraft,
   type ModelGovernanceSnapshot,
+  updateGovernanceDraft,
 } from '@/lib/model-governance-api'
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/policy-qa' }))
@@ -39,6 +40,7 @@ vi.mock('@/lib/model-governance-api', async (importOriginal) => ({
   getGovernanceVersions: vi.fn(),
   createGovernanceDraft: vi.fn(),
   createGovernanceVersion: vi.fn(),
+  updateGovernanceDraft: vi.fn(),
   testGovernanceConnection: vi.fn(),
 }))
 
@@ -84,6 +86,7 @@ beforeEach(() => {
   vi.mocked(getGovernanceVersions).mockReset().mockResolvedValue({ versions: [], releases: [] })
   vi.mocked(createGovernanceDraft).mockReset()
   vi.mocked(createGovernanceVersion).mockReset()
+  vi.mocked(updateGovernanceDraft).mockReset()
   vi.mocked(testGovernanceConnection).mockReset()
 })
 
@@ -112,7 +115,7 @@ describe('模型治理资产中心', () => {
     const nextDraft = draft(promptContent)
     vi.mocked(getGovernanceAssets).mockResolvedValue({
       baselines: [{ ...promptContent, runtime_status: 'fallback_static' }],
-      drafts: [], published: [published(promptContent)],
+      drafts: [draft(promptContent, 'approved')], published: [published(promptContent)],
     })
     vi.mocked(getGovernanceVersions).mockResolvedValue({
       versions: [{ version_id: 'version-intent.classify', asset_id: 'intent.classify', asset_type: 'prompt', version_number: 1, content: promptContent, content_hash: 'a'.repeat(64), approval_id: 'approval-1', created_by: 'editor', created_at: '2026-08-17T00:00:00Z' }],
@@ -136,6 +139,26 @@ describe('模型治理资产中心', () => {
     expect(await within(drawer).findByRole('textbox', { name: '用户提示词模板' })).toBeEnabled()
     await user.keyboard('{Escape}')
     expect(trigger).toHaveFocus()
+  })
+
+  it('已发布来源草稿不覆盖内容不同的下一工作版本', async () => {
+    const user = userEvent.setup()
+    const nextContent = { ...promptContent, user_prompt_template: '下一版：{message}' }
+    const sourceDraft = draft(promptContent, 'approved')
+    const nextDraft = { ...draft(nextContent, 'approved'), draft_id: 'draft-intent-next', updated_at: '2026-08-17T01:00:00Z' }
+    vi.mocked(getGovernanceAssets).mockResolvedValue({
+      baselines: [{ ...promptContent, runtime_status: 'fallback_static' }],
+      drafts: [sourceDraft, nextDraft],
+      published: [published(promptContent)],
+    })
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '提示词' }))
+    await user.click(screen.getByRole('button', { name: '查看 intent.classify' }))
+
+    expect(screen.getByRole('textbox', { name: '用户提示词模板' })).toHaveValue('下一版：{message}')
+    expect(screen.getByRole('button', { name: '发布到dev环境' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: '新建版本' })).not.toBeInTheDocument()
   })
 
   it('无活动版本的代码基线可创建首个草稿', async () => {
@@ -203,6 +226,59 @@ describe('模型治理资产中心', () => {
     await user.click(screen.getByRole('button', { name: '测试连接' }))
     expect(await screen.findByText(/连接成功/)).toBeInTheDocument()
     expect(publishButton).toBeEnabled()
+
+    await user.clear(screen.getByLabelText('温度'))
+    await user.type(screen.getByLabelText('温度'), '0.2')
+    expect(publishButton).toBeDisabled()
+    expect(screen.queryByText(/连接成功/)).not.toBeInTheDocument()
+    await user.clear(screen.getByLabelText('温度'))
+    await user.type(screen.getByLabelText('温度'), '0.1')
+    expect(publishButton).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(publishButton).toBeEnabled()
+    await user.type(screen.getByLabelText('API Key'), 'sk-replacement')
+    expect(publishButton).toBeDisabled()
+    expect(screen.queryByText(/连接成功/)).not.toBeInTheDocument()
+    await user.clear(screen.getByLabelText('API Key'))
+    expect(publishButton).toBeDisabled()
+  })
+
+  it('保存模型工作版本后必须重新测试连接', async () => {
+    const user = userEvent.setup()
+    const approved = draft(modelContent, 'approved')
+    vi.mocked(getGovernanceAssets).mockResolvedValue({ baselines: [], drafts: [approved], published: [] })
+    vi.mocked(testGovernanceConnection).mockResolvedValue({
+      status: 'success', latency_ms: 18, safe_message: '连接成功', tested_at: '2026-08-17T01:00:00Z', content_hash: 'b'.repeat(64),
+    })
+    vi.mocked(updateGovernanceDraft).mockResolvedValue({ ...approved, revision: 2 })
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '模型' }))
+    await user.click(screen.getByRole('button', { name: '查看 model.primary' }))
+    await user.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(screen.getByRole('button', { name: '发布到dev环境' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: '保存工作版本' }))
+
+    await waitFor(() => expect(updateGovernanceDraft).toHaveBeenCalledOnce())
+    expect(screen.getByRole('button', { name: '发布到dev环境' })).toBeDisabled()
+    expect(screen.queryByText(/连接成功/)).not.toBeInTheDocument()
+  })
+
+  it('当前生效模型完整展示运行参数', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getGovernanceAssets).mockResolvedValue({ baselines: [], drafts: [], published: [published(modelContent)] })
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '模型' }))
+    await user.click(screen.getByRole('button', { name: '查看 model.primary' }))
+    const drawer = screen.getByRole('dialog', { name: '模型 · 主模型' })
+    expect(within(drawer).getByText('温度')).toBeInTheDocument()
+    expect(within(drawer).getByText('0.1')).toBeInTheDocument()
+    expect(within(drawer).getByText('最大 tokens')).toBeInTheDocument()
+    expect(within(drawer).getByText('4096')).toBeInTheDocument()
+    expect(within(drawer).getByText('启用状态')).toBeInTheDocument()
+    expect(within(drawer).getByText('已启用')).toBeInTheDocument()
   })
 
   it('路由主备模型只能从已发布 enabled 模型中选择', async () => {
@@ -245,7 +321,32 @@ describe('模型治理资产中心', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('治理快照暂不可用')
   })
 
+  it('切换环境失败时清空旧资产且错误不伪装为空数据', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getGovernanceAssets).mockImplementation(async (environment) => {
+      if (environment === 'test') throw new Error('test offline')
+      return { baselines: [], drafts: [], published: [published(promptContent)] }
+    })
+    vi.mocked(getGovernanceReleases).mockImplementation(async (environment) => {
+      if (environment === 'test') throw new Error('test offline')
+      return []
+    })
+
+    render(<ModelGovernancePage />)
+    expect(await screen.findByText('当前环境：dev · 治理发布已接入运行时')).toBeInTheDocument()
+    expect(within(screen.getByLabelText('治理指标')).getByText('1')).toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText('环境'), 'test')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('test offline')
+    expect(screen.queryByLabelText('治理指标')).not.toBeInTheDocument()
+    expect(screen.queryByText('当前环境：test · 治理发布已接入运行时')).not.toBeInTheDocument()
+    expect(screen.queryByText('intent.classify')).not.toBeInTheDocument()
+    expect(screen.queryByText('暂无提示词资产')).not.toBeInTheDocument()
+    expect(screen.queryByText('暂无发布记录')).not.toBeInTheDocument()
+  })
+
   it('侧栏向所有角色提供底部后台管理入口', () => {
+    vi.mocked(useRoleContext).mockReturnValue({ currentRole: 'cashier', setCurrentRole: vi.fn() })
     render(<LayoutShell><div>页面内容</div></LayoutShell>)
     const adminLink = screen.getByRole('link', { name: '后台管理' })
     expect(adminLink).toHaveAttribute('href', '/model-governance')
