@@ -574,28 +574,7 @@ class ExplanationGenerator:
             return _quality_gated(self._generate_placeholder(context))
 
         try:
-            decomposition_text = self._format_decomposition(context.decomposition)
-            policy_text = self._format_policy_rules_with_segments(
-                context.decomposition, context.policy_rules
-            )
-            rag_miss_note = (
-                "⚠️ 注意：本次检索未找到与用户问题直接匹配的政策规则。"
-                "请基于结算数据进行解释，并在回答中明确告知用户"
-                "「未检索到相关政策条文，以下解释基于系统已有结算数据」。"
-                "不要编造政策条文。"
-            ) if context.rag_miss else ""
-
-            rendered = render_governed_prompt(
-                "policy_qa.patient_explain",
-                variables={
-                    "question": context.question,
-                    "decomposition_text": decomposition_text,
-                    "policy_text": policy_text,
-                    "RAG_MISS_NOTE": rag_miss_note,
-                },
-                fallback_system="",
-                fallback_user=EXPLANATION_PROMPTS["患者"],
-            )
+            rendered = self._render_prompt(context)
             messages = []
             if rendered.rendered_system_prompt:
                 messages.append(Message(role="system", content=rendered.rendered_system_prompt))

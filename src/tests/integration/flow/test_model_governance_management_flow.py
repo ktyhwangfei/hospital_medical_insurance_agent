@@ -1,12 +1,26 @@
 import base64
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.model_service.governance_service import ModelGovernanceService
 
 
 PREFIX = "/api/v1/medical-insurance-ai-agent/model-governance"
+
+
+@pytest.fixture
+def governance_storage_factory():
+    from src.data_platform.storage.model_governance.factory import (
+        get_model_governance_storage,
+    )
+
+    get_model_governance_storage.cache_clear()
+    try:
+        yield get_model_governance_storage
+    finally:
+        get_model_governance_storage.cache_clear()
 
 
 def _headers(subject: str, permission: str) -> dict[str, str]:
@@ -54,7 +68,10 @@ def _publish(client: TestClient, content: dict) -> dict:
     return response.json()["result"]
 
 
-def test_model_governance_management_publish_snapshot_and_rollback(monkeypatch):
+def test_model_governance_management_publish_snapshot_and_rollback(
+    monkeypatch,
+    governance_storage_factory,
+):
     async def no_op_session(self, *args):
         return None
 
@@ -74,15 +91,11 @@ def test_model_governance_management_publish_snapshot_and_rollback(monkeypatch):
     )
     from src.runtime.api.app import create_app
     from src.runtime.api.model_governance_routes import get_model_governance_service
-    from src.data_platform.storage.model_governance.factory import (
-        get_model_governance_storage,
-    )
     from src.runtime.intent.prompts import build_intent_prompt
     from src.runtime.intent.registry import get_intent_registry
 
-    get_model_governance_storage.cache_clear()
     app = create_app()
-    service = ModelGovernanceService(get_model_governance_storage())
+    service = ModelGovernanceService(governance_storage_factory())
     app.dependency_overrides[get_model_governance_service] = lambda: service
     client = TestClient(app)
 
@@ -195,4 +208,3 @@ def test_model_governance_management_publish_snapshot_and_rollback(monkeypatch):
         item for item in result["assets"] if item["asset_id"] == "prompt.flow"
     )
     assert active_prompt["version_id"] == first["version_id"]
-    get_model_governance_storage.cache_clear()

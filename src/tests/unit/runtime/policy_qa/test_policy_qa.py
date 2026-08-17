@@ -762,6 +762,31 @@ class TestExplanationGenerator:
 class TestPolicyQAOrchestrator:
     """测试政策问答编排器"""
 
+    def test_detect_intent_propagates_governance_runtime_error(self, monkeypatch):
+        import asyncio
+
+        import src.runtime.policy_qa.intent_detector as intent_detector_module
+        from src.model_service.governance_runtime import GovernanceRuntimeError
+        from src.runtime.policy_qa.models import PolicyQARequest
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+
+        def raise_governance_error(*args, **kwargs):
+            raise GovernanceRuntimeError("active prompt is corrupt")
+
+        monkeypatch.setattr(
+            intent_detector_module,
+            "render_governed_prompt",
+            raise_governance_error,
+        )
+        orchestrator = PolicyQAOrchestrator(model_gateway=object())
+
+        with pytest.raises(GovernanceRuntimeError, match="active prompt is corrupt"):
+            asyncio.run(
+                orchestrator._detect_intent(
+                    PolicyQARequest(question="今天天气怎么样", settlement_id="S001")
+                )
+            )
+
     def test_validate_output_rejects_deterministic_answer_without_source(self):
         """普通业务词不能冒充政策来源。"""
         from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator

@@ -2,6 +2,7 @@ import json
 import logging
 
 from src.model_service import Message, ModelGateway
+from src.model_service.governance_runtime import GovernanceRuntimeError
 from src.runtime.intent.graph.config import IntentGraphConfig
 from src.runtime.intent.graph.prompts import build_discrimination_prompt
 from src.runtime.intent.graph.state import IntentGraphState
@@ -45,6 +46,8 @@ def discrimination(
 
     try:
         return _discriminate_via_llm(state, candidates, message, gateway)
+    except GovernanceRuntimeError:
+        raise
     except Exception:
         logger.warning('intent_llm_discrimination_failed', exc_info=True)
         if top.score > 0:

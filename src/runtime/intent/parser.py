@@ -2,6 +2,7 @@ import json
 import logging
 
 from src.model_service import Message, ModelGateway
+from src.model_service.governance_runtime import GovernanceRuntimeError
 from src.runtime.intent.models import IntentResult
 from src.runtime.intent.prompts import build_intent_prompt
 from src.runtime.intent.registry import get_intent_by_id, get_intent_registry
@@ -12,6 +13,8 @@ logger = logging.getLogger(__name__)
 def parse_intent(message: str) -> IntentResult:
     try:
         return _parse_via_llm(message)
+    except GovernanceRuntimeError:
+        raise
     except Exception:
         logger.warning('intent_llm_fallback', exc_info=True)
         return _parse_via_keywords(message)
