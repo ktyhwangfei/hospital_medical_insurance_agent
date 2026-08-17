@@ -142,9 +142,11 @@ class InMemoryModelGovernanceStorage:
             )
             if credential.revision != credential_revision:
                 raise ModelGovernanceConflictError("凭据 revision 已变化")
-            self._drafts[draft.draft_id] = self._copy(draft)
-            self._credentials[credential.credential_id] = self._copy(credential)
-            return self._copy(draft)
+            next_draft = self._copy(draft)
+            next_credential = self._copy(credential)
+            self._drafts[draft.draft_id] = next_draft
+            self._credentials[credential.credential_id] = next_credential
+            return self._copy(next_draft)
 
     def get_draft(self, draft_id: str) -> GovernanceDraft:
         with self._lock:

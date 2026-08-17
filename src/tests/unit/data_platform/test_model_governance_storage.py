@@ -421,6 +421,54 @@ def test_in_memory_atomic_credential_update_leaves_both_records_unchanged_on_con
     assert storage.get_credential(original.credential_id) == original
 
 
+def test_in_memory_atomic_credential_update_leaves_both_records_unchanged_on_copy_failure():
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+
+    class FailingCredentialCopyStorage(InMemoryModelGovernanceStorage):
+        fail_credential_copy = False
+
+        def _copy(self, value):
+            if self.fail_credential_copy and isinstance(value, GovernanceCredential):
+                self.fail_credential_copy = False
+                raise RuntimeError("credential storage failed")
+            return super()._copy(value)
+
+    storage = FailingCredentialCopyStorage()
+    draft = storage.create_draft(_draft())
+    original = GovernanceCredential(
+        credential_id="credential.demo",
+        encrypted_api_key="encrypted-original",
+        secret_fingerprint="a" * 64,
+        revision=1,
+        updated_by="editor",
+        updated_at=NOW,
+    )
+    storage.put_credential(original)
+    changed_draft = draft.model_copy(
+        update={"revision": 2, "content": _content("changed")}
+    )
+    changed_credential = original.model_copy(
+        update={
+            "encrypted_api_key": "encrypted-changed",
+            "secret_fingerprint": "b" * 64,
+            "revision": 2,
+        }
+    )
+    storage.fail_credential_copy = True
+
+    with pytest.raises(RuntimeError, match="credential storage failed"):
+        storage.update_draft_with_credential(
+            changed_draft,
+            changed_credential,
+            expected_revision=1,
+        )
+
+    assert storage.get_draft(draft.draft_id) == draft
+    assert storage.get_credential(original.credential_id) == original
+
+
 def test_in_memory_atomic_credential_create_leaves_neither_record_on_midway_failure():
     from src.data_platform.storage.model_governance.in_memory import (
         InMemoryModelGovernanceStorage,
