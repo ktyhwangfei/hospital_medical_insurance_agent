@@ -12,6 +12,7 @@ from src.model_service.governance_assets import (
     GovernanceEnvironment,
     GovernanceImportResult,
     GovernanceRelease,
+    GovernanceVersion,
     PublishedGovernanceAsset,
     PublishedGovernanceSnapshot,
 )
@@ -58,6 +59,11 @@ class GovernanceReleasesResult(BaseModel):
     releases: list[GovernanceRelease] = Field(default_factory=list)
 
 
+class GovernanceVersionsResult(BaseModel):
+    versions: list[GovernanceVersion] = Field(default_factory=list)
+    releases: list[GovernanceRelease] = Field(default_factory=list)
+
+
 class _GovernanceResponse(AgentResponse):
     scenario: Literal["model_governance"] = "model_governance"
     status: Literal["success"] = "success"
@@ -83,6 +89,10 @@ class GovernanceReleasesResponse(_GovernanceResponse):
     result: GovernanceReleasesResult
 
 
+class GovernanceVersionsResponse(_GovernanceResponse):
+    result: GovernanceVersionsResult
+
+
 class GovernanceImportResponse(_GovernanceResponse):
     result: GovernanceImportResult
 
@@ -105,6 +115,8 @@ __all__ = [
     "GovernanceReleasesResponse",
     "GovernanceReleasesResult",
     "GovernanceRevisionRequest",
+    "GovernanceVersionsResponse",
+    "GovernanceVersionsResult",
     "ModelGovernancePrincipal",
     "PreviewGovernanceDraftRequest",
     "PublishedGovernanceSnapshotResponse",

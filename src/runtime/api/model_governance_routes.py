@@ -32,6 +32,8 @@ from src.runtime.api.model_governance_schemas import (
     GovernanceReleasesResponse,
     GovernanceReleasesResult,
     GovernanceRevisionRequest,
+    GovernanceVersionsResponse,
+    GovernanceVersionsResult,
     ModelGovernancePrincipal,
     PreviewGovernanceDraftRequest,
     PublishedGovernanceSnapshotResponse,
@@ -59,7 +61,7 @@ def get_model_governance_service() -> ModelGovernanceService:
 
 
 def require_model_governance_permission(
-    required: str,
+    required: str | None,
     authorization: str | None,
 ) -> ModelGovernancePrincipal:
     """当前仅允许显式开启的开发模式使用模拟 Token。"""
@@ -91,14 +93,15 @@ def require_model_governance_permission(
             status_code=401,
             detail=error_detail("AUTH_INVALID", "凭据缺少用户标识"),
         )
-    permission_result = authenticator.check_permission(auth_result, required)
-    if not permission_result.is_success:
-        raise HTTPException(
-            status_code=403,
-            detail=error_detail(
-                "AUTH_FORBIDDEN", permission_result.error_message or "权限不足"
-            ),
-        )
+    if required:
+        permission_result = authenticator.check_permission(auth_result, required)
+        if not permission_result.is_success:
+            raise HTTPException(
+                status_code=403,
+                detail=error_detail(
+                    "AUTH_FORBIDDEN", permission_result.error_message or "权限不足"
+                ),
+            )
     return ModelGovernancePrincipal(
         user_id=auth_result.user_id,
         roles=auth_result.roles,
@@ -109,9 +112,7 @@ def require_model_governance_permission(
 def require_model_governance_read(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> ModelGovernancePrincipal:
-    return require_model_governance_permission(
-        "model_governance:read", authorization
-    )
+    return require_model_governance_permission(None, authorization)
 
 
 def require_model_governance_write(
@@ -197,6 +198,52 @@ def list_governance_assets(
         ),
         uncertainties=_PENDING_RUNTIME,
         audit=_audit(principal, "list_assets"),
+    )
+
+
+@router.get(
+    "/assets/{asset_id}/versions",
+    response_model=GovernanceVersionsResponse,
+)
+def list_governance_versions(
+    asset_id: str,
+    environment: GovernanceEnvironment = GovernanceEnvironment.DEV,
+    principal: ModelGovernancePrincipal = Depends(require_model_governance_read),
+    service: ModelGovernanceService = Depends(get_model_governance_service),
+) -> GovernanceVersionsResponse:
+    return GovernanceVersionsResponse(
+        result=GovernanceVersionsResult(
+            versions=service.list_versions(asset_id),
+            releases=service.list_releases(asset_id, environment),
+        ),
+        uncertainties=_PENDING_RUNTIME,
+        audit=_audit(principal, "list_versions"),
+    )
+
+
+@router.post(
+    "/assets/{asset_id}/versions",
+    response_model=GovernanceDraftResponse,
+    status_code=201,
+)
+def create_next_governance_version(
+    asset_id: str,
+    environment: GovernanceEnvironment = GovernanceEnvironment.DEV,
+    principal: ModelGovernancePrincipal = Depends(require_model_governance_write),
+    service: ModelGovernanceService = Depends(get_model_governance_service),
+) -> GovernanceDraftResponse:
+    try:
+        draft = service.create_next_version(
+            asset_id,
+            actor=principal.user_id,
+            environment=environment,
+        )
+    except (ModelGovernanceNotFoundError, ModelGovernanceGateError) as exc:
+        _raise_domain_error(exc)
+    return GovernanceDraftResponse(
+        result=draft,
+        uncertainties=_PENDING_RUNTIME,
+        audit=_audit(principal, "create_next_version"),
     )
 
 

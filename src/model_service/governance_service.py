@@ -83,6 +83,14 @@ class ModelGovernanceService:
         draft = self._current(draft_id, expected_revision)
         if content.asset_id != draft.asset_id or self._asset_type(content) != draft.asset_type:
             raise ModelGovernanceGateError("草稿不能变更资产标识或类型")
+        if draft.status == GovernanceDraftStatus.APPROVED:
+            active_hashes = {
+                self._storage.get_version(release.version_id).content_hash
+                for release in self._storage.list_releases(draft.asset_id)
+                if release.status == GovernanceReleaseStatus.ACTIVE
+            }
+            if content_hash(draft.content) in active_hashes:
+                raise ModelGovernanceGateError("活动版本不可编辑，请新建版本")
         return self._storage.update_draft(
             draft.model_copy(
                 update={
@@ -172,6 +180,24 @@ class ModelGovernanceService:
         environment: GovernanceEnvironment | None = None,
     ) -> list[GovernanceRelease]:
         return self._storage.list_releases(asset_id, environment)
+
+    def list_versions(self, asset_id: str) -> list[GovernanceVersion]:
+        return self._storage.list_versions(asset_id)
+
+    def create_next_version(
+        self,
+        asset_id: str,
+        *,
+        actor: str,
+        environment: GovernanceEnvironment,
+    ) -> GovernanceDraft:
+        active = self._storage.get_active_release(asset_id, environment)
+        if active is None:
+            raise ModelGovernanceGateError("资产没有可复制的活动版本")
+        return self.create_draft(
+            self._storage.get_version(active.version_id).content,
+            actor=actor,
+        )
 
     def import_current_assets(self, *, actor: str) -> GovernanceImportResult:
         from src.model_service.governance_import import build_current_governance_assets

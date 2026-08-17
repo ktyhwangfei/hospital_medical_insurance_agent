@@ -68,7 +68,7 @@ def _management_client(monkeypatch) -> TestClient:
     return TestClient(create_app())
 
 
-def test_model_governance_snapshot_requires_permission_and_returns_typed_envelope(
+def test_model_governance_snapshot_requires_identity_and_returns_typed_envelope(
     monkeypatch,
 ):
     async def no_op_session(self, *args):
@@ -102,11 +102,11 @@ def test_model_governance_snapshot_requires_permission_and_returns_typed_envelop
 
     monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "true")
     assert client.get(SNAPSHOT_PATH).status_code == 401
-    forbidden = client.get(
+    authenticated = client.get(
         SNAPSHOT_PATH,
         headers={"Authorization": f"Bearer {_token(permissions=[])}"},
     )
-    assert forbidden.status_code == 403
+    assert authenticated.status_code == 200
 
     authorization = {
         "Authorization": f"Bearer {_token(permissions=['model_governance:read'])}"
@@ -148,6 +148,55 @@ def test_model_governance_snapshot_requires_permission_and_returns_typed_envelop
     assert "/v1" not in serialized
     assert "q=1" not in serialized
     assert client.post(SNAPSHOT_PATH, headers=authorization).status_code == 405
+
+
+def test_governance_versions_can_be_read_by_any_authenticated_role_and_copied(
+    monkeypatch,
+):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    client = _management_client(monkeypatch)
+    from src.model_service.governance_assets import (
+        GovernanceEnvironment,
+        PromptAssetContent,
+    )
+    from src.runtime.api.model_governance_routes import get_model_governance_service
+
+    service = get_model_governance_service()
+    content = PromptAssetContent.model_validate(_prompt_payload()["content"])
+    draft = service.create_draft(content, actor="editor")
+    validated = service.validate_draft(draft.draft_id, expected_revision=draft.revision)
+    pending = service.request_review(
+        draft.draft_id, expected_revision=validated.revision, actor="editor"
+    )
+    approved = service.approve(
+        draft.draft_id,
+        expected_revision=pending.revision,
+        actor="reviewer",
+        reason="审核通过",
+    )
+    service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    path = (
+        "/api/v1/medical-insurance-ai-agent/model-governance/"
+        "assets/prompt.api-demo/versions?environment=dev"
+    )
+
+    details = client.get(
+        path,
+        headers={"Authorization": f"Bearer {_token(permissions=[], subject='cashier')}"},
+    )
+    assert details.status_code == 200
+    assert details.json()["result"]["versions"][0]["version_number"] == 1
+    assert details.json()["result"]["releases"][0]["environment"] == "dev"
+
+    copied = client.post(path, headers=_headers("model_governance:write"))
+    assert copied.status_code == 201
+    assert copied.json()["result"]["content"] == approved.content.model_dump(mode="json")
+    assert copied.json()["result"]["draft_id"] != approved.draft_id
 
 
 def test_governance_write_is_disabled_by_default(monkeypatch):

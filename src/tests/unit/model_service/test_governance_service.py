@@ -126,6 +126,50 @@ def test_save_resets_validation_and_publish_rejects_changed_content():
         )
 
 
+def test_published_draft_is_read_only_and_next_version_copies_active_content():
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
+    approved = _complete_review(service, _prompt("当前生效"))
+    service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="editor",
+        environment=GovernanceEnvironment.DEV,
+    )
+
+    with pytest.raises(ModelGovernanceGateError, match="活动版本不可编辑"):
+        service.save_draft(
+            approved.draft_id,
+            _prompt("被直接修改"),
+            expected_revision=approved.revision,
+            actor="editor",
+        )
+
+    next_draft = service.create_next_version(
+        "prompt.demo", actor="editor", environment=GovernanceEnvironment.DEV
+    )
+    assert next_draft.status == GovernanceDraftStatus.EDITING
+    assert next_draft.content.system_prompt == "当前生效"
+    assert next_draft.draft_id != approved.draft_id
+    assert service.list_versions("prompt.demo")[0].version_number == 1
+    edited = service.save_draft(
+        next_draft.draft_id,
+        _prompt("新版本可编辑"),
+        expected_revision=next_draft.revision,
+        actor="editor",
+    )
+    assert edited.content.system_prompt == "新版本可编辑"
+
+
+def test_create_next_version_requires_active_release():
+    service = ModelGovernanceService(InMemoryModelGovernanceStorage())
+
+    with pytest.raises(ModelGovernanceGateError, match="资产没有可复制的活动版本"):
+        service.create_next_version(
+            "prompt.demo", actor="editor", environment=GovernanceEnvironment.DEV
+        )
+
+
 def test_rollback_creates_new_release_for_immutable_old_version():
     storage = InMemoryModelGovernanceStorage()
     service = ModelGovernanceService(storage)
