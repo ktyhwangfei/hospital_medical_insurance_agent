@@ -19,17 +19,16 @@ from skills.settlement_explain_skill.fact_builder import FactBuilder
 from skills.settlement_explain_skill.output_parser import OutputParser, ParsedOutput
 
 
-_PROMPT_CONFIG = yaml.safe_load(
-    (Path(__file__).resolve().parents[2] / "prompt_template.yaml").read_text(
-        encoding="utf-8"
+_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompt_template.yaml"
+
+
+def load_settlement_explain_prompt_templates() -> tuple[str, str]:
+    """读取当前 Skill 模板，保留 rediscover 后的动态刷新行为。"""
+    prompt_config = yaml.safe_load(_PROMPT_PATH.read_text(encoding="utf-8"))
+    return (
+        prompt_config["system_prompt"].replace("{", "{{").replace("}", "}}"),
+        prompt_config["user_prompt"].replace("{{ fact_json }}", "{fact_json}"),
     )
-)
-SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE = _PROMPT_CONFIG["system_prompt"].replace(
-    "{", "{{"
-).replace("}", "}}")
-SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE = _PROMPT_CONFIG["user_prompt"].replace(
-    "{{ fact_json }}", "{fact_json}"
-)
 
 
 class PoolingSelfPayStrategy(BaseFeeStrategy):
@@ -111,8 +110,9 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
         fact_json = fact.model_dump_json(indent=2)
 
         # Step 3: 加载 prompt 模板并渲染
-        system_prompt = SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE.format()
-        user_prompt = SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE.format(fact_json=fact_json)
+        system_template, user_template = load_settlement_explain_prompt_templates()
+        system_prompt = system_template.format()
+        user_prompt = user_template.format(fact_json=fact_json)
 
         # Step 4: 调用 ModelGateway
         messages = [

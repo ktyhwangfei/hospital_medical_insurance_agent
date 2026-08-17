@@ -228,6 +228,44 @@ def test_prompt_requires_single_conclusion_only():
     assert "面向当前院端经办角色的单一自然语言解释" in prompt_config["user_prompt"]
 
 
+def test_pooling_prompt_is_reloaded_for_each_generation(
+    monkeypatch, settlement_context, mock_evidence
+):
+    from skills.settlement_explain_skill.strategies.pooling_self_pay import (
+        strategy as strategy_module,
+    )
+    from src.model_service import gateway as gateway_module
+
+    prompt_configs = iter(
+        [
+            {"system_prompt": "动态模板 A", "user_prompt": "{{ fact_json }}"},
+            {"system_prompt": "动态模板 B", "user_prompt": "{{ fact_json }}"},
+        ]
+    )
+    monkeypatch.setattr(strategy_module.yaml, "safe_load", lambda _text: next(prompt_configs))
+    captured_system_prompts = []
+
+    class FakeGateway:
+        _config = SimpleNamespace(base_url="https://model.test")
+
+        def generate(self, *, messages, **_kwargs):
+            captured_system_prompts.append(messages[0].content)
+            return SimpleNamespace(content="[CONCLUSION]\n模板已刷新")
+
+    monkeypatch.setattr(strategy_module, "ModelGateway", FakeGateway)
+    monkeypatch.setattr(gateway_module, "ModelGateway", FakeGateway)
+    strategy = get_strategy("pooling_self_pay")
+
+    strategy._generate_via_llm(
+        settlement_context, mock_evidence, "full_policy_matched"
+    )
+    strategy._generate_via_llm(
+        settlement_context, mock_evidence, "full_policy_matched"
+    )
+
+    assert captured_system_prompts == ["动态模板 A", "动态模板 B"]
+
+
 @pytest.mark.parametrize(
     ("strategy_name", "amount_field"),
     [

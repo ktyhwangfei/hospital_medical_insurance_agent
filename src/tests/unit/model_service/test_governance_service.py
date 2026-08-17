@@ -425,16 +425,7 @@ def test_current_prompt_projection_matches_all_runtime_templates():
             ),
         ),
         "skill.settlement_explain": (
-            getattr(
-                strategy,
-                "SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE",
-                missing,
-            ),
-            getattr(
-                strategy,
-                "SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE",
-                missing,
-            ),
+            *strategy.load_settlement_explain_prompt_templates(),
         ),
     }
     prompts = {

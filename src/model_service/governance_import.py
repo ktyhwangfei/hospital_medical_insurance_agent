@@ -61,11 +61,13 @@ def _prompt_assets(snapshot: ModelGovernanceSnapshot) -> list[PromptAssetContent
     )
     from src.skill_infra.unified_router import SKILL_ROUTING_PROMPT_TEMPLATE
     from skills.settlement_explain_skill.strategies.pooling_self_pay.strategy import (
-        SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE,
-        SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE,
+        load_settlement_explain_prompt_templates,
     )
 
     metadata = {item.prompt_id: item for item in snapshot.prompts}
+    settlement_system_prompt, settlement_user_prompt = (
+        load_settlement_explain_prompt_templates()
+    )
     templates: dict[str, tuple[str, str, tuple[str, ...]]] = {
         "intent.classify": (
             "",
@@ -127,8 +129,8 @@ def _prompt_assets(snapshot: ModelGovernanceSnapshot) -> list[PromptAssetContent
             ("known_fields_text", "text_sample"),
         ),
         "skill.settlement_explain": (
-            SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE,
-            SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE,
+            settlement_system_prompt,
+            settlement_user_prompt,
             ("fact_json",),
         ),
     }
