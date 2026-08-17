@@ -6,16 +6,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ModelGovernancePage from '../../../app/model-governance/page'
 import { LayoutShell, useRoleContext } from '../../../app/layout'
 import {
+  approveGovernanceDraft,
   createGovernanceDraft,
   createGovernanceVersion,
   getGovernanceAssets,
   getGovernanceReleases,
   getGovernanceVersions,
-  getModelGovernanceSnapshot,
+  publishGovernanceDraft,
+  requestGovernanceReview,
+  rollbackGovernanceRelease,
   testGovernanceConnection,
+  validateGovernanceDraft,
   type GovernanceAssetContent,
   type GovernanceDraft,
-  type ModelGovernanceSnapshot,
+  type GovernanceVersionsResult,
   updateGovernanceDraft,
 } from '@/lib/model-governance-api'
 
@@ -34,19 +38,19 @@ vi.mock('../../../app/layout', async (importOriginal) => ({
 }))
 vi.mock('@/lib/model-governance-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/model-governance-api')>()),
-  getModelGovernanceSnapshot: vi.fn(),
   getGovernanceAssets: vi.fn(),
   getGovernanceReleases: vi.fn(),
   getGovernanceVersions: vi.fn(),
   createGovernanceDraft: vi.fn(),
   createGovernanceVersion: vi.fn(),
   updateGovernanceDraft: vi.fn(),
+  validateGovernanceDraft: vi.fn(),
+  requestGovernanceReview: vi.fn(),
+  approveGovernanceDraft: vi.fn(),
+  publishGovernanceDraft: vi.fn(),
+  rollbackGovernanceRelease: vi.fn(),
   testGovernanceConnection: vi.fn(),
 }))
-
-const snapshotFixture: ModelGovernanceSnapshot = {
-  prompts: [], models: [], routes: [], providers: [], citations: [], uncertainties: [],
-}
 
 const promptContent: GovernanceAssetContent = {
   asset_type: 'prompt', asset_id: 'intent.classify', name: '意图分类',
@@ -78,16 +82,47 @@ function published(content: GovernanceAssetContent) {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
+}
+
+function versionHistory(content: GovernanceAssetContent, versionNumber: number, releaseStatus: 'active' | 'retired' = 'active'): GovernanceVersionsResult {
+  const versionId = `version-${content.asset_id}-${versionNumber}`
+  return {
+    versions: [{
+      version_id: versionId, asset_id: content.asset_id, asset_type: content.asset_type,
+      version_number: versionNumber, content, content_hash: 'c'.repeat(64), approval_id: 'approval-1',
+      created_by: 'editor', created_at: '2026-08-17T00:00:00Z',
+    }],
+    releases: [{
+      release_id: `release-${content.asset_id}-${versionNumber}`, asset_id: content.asset_id,
+      asset_type: content.asset_type, version_id: versionId, environment: 'dev', status: releaseStatus,
+      previous_release_id: null, created_by: 'editor', created_at: '2026-08-17T00:00:00Z',
+      retired_at: releaseStatus === 'retired' ? '2026-08-17T01:00:00Z' : null,
+    }],
+  }
+}
+
 beforeEach(() => {
   window.sessionStorage.clear()
   vi.mocked(useRoleContext).mockReturnValue({ currentRole: 'information_department', setCurrentRole: vi.fn() })
-  vi.mocked(getModelGovernanceSnapshot).mockReset().mockResolvedValue(snapshotFixture)
   vi.mocked(getGovernanceAssets).mockReset().mockResolvedValue({ baselines: [], drafts: [], published: [] })
   vi.mocked(getGovernanceReleases).mockReset().mockResolvedValue([])
   vi.mocked(getGovernanceVersions).mockReset().mockResolvedValue({ versions: [], releases: [] })
   vi.mocked(createGovernanceDraft).mockReset()
   vi.mocked(createGovernanceVersion).mockReset()
   vi.mocked(updateGovernanceDraft).mockReset()
+  vi.mocked(validateGovernanceDraft).mockReset()
+  vi.mocked(requestGovernanceReview).mockReset()
+  vi.mocked(approveGovernanceDraft).mockReset()
+  vi.mocked(publishGovernanceDraft).mockReset()
+  vi.mocked(rollbackGovernanceRelease).mockReset()
   vi.mocked(testGovernanceConnection).mockReset()
 })
 
@@ -97,7 +132,7 @@ describe('模型治理资产中心', () => {
   it('只展示一组运行时指标和确定的环境文案', async () => {
     render(<ModelGovernancePage />)
 
-    expect(await screen.findByRole('heading', { name: '后台管理' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '后台管理' })).toBeInTheDocument()
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       '概览', '提示词', '模型', '路由规则', '发布记录',
     ])
@@ -211,12 +246,23 @@ describe('模型治理资产中心', () => {
     expect(screen.getByText('留空表示不更换')).toBeInTheDocument()
   })
 
-  it('模型配置必须先保存再测试，测试通过后才能发布', async () => {
+  it('模型按真实生命周期审核，保存并连接成功后才允许发布', async () => {
     const user = userEvent.setup()
-    const approved = draft(modelContent, 'approved')
+    const editing = draft(modelContent)
     const savedContent = { ...modelContent, temperature: 0.2 }
-    vi.mocked(getGovernanceAssets).mockResolvedValue({ baselines: [], drafts: [approved], published: [] })
-    vi.mocked(updateGovernanceDraft).mockResolvedValue({ ...approved, content: savedContent, revision: 2 })
+    const saved = { ...editing, content: savedContent, revision: 2 }
+    const validated = { ...saved, status: 'validated' as const, revision: 3 }
+    const reviewPending = { ...saved, status: 'review_pending' as const, revision: 4 }
+    const approved = { ...saved, status: 'approved' as const, revision: 5 }
+    vi.mocked(getGovernanceAssets).mockResolvedValue({ baselines: [], drafts: [editing], published: [] })
+    vi.mocked(updateGovernanceDraft).mockResolvedValue(saved)
+    vi.mocked(validateGovernanceDraft).mockResolvedValue(validated)
+    vi.mocked(requestGovernanceReview).mockResolvedValue(reviewPending)
+    vi.mocked(approveGovernanceDraft).mockResolvedValue(approved)
+    vi.mocked(publishGovernanceDraft).mockResolvedValue({
+      version: versionHistory(savedContent, 1).versions[0],
+      release: versionHistory(savedContent, 1).releases[0],
+    })
     vi.mocked(testGovernanceConnection).mockResolvedValue({
       status: 'success', latency_ms: 18, safe_message: '连接成功', tested_at: '2026-08-17T01:00:00Z', content_hash: 'b'.repeat(64),
     })
@@ -237,9 +283,9 @@ describe('模型治理资产中心', () => {
 
     await user.click(screen.getByRole('button', { name: '保存工作版本' }))
     await waitFor(() => expect(updateGovernanceDraft).toHaveBeenCalledWith(
-      approved.draft_id,
+      editing.draft_id,
       savedContent,
-      approved.revision,
+      editing.revision,
       { credential_id: modelContent.credential_ref, api_key: 'sk-replacement' },
     ))
     expect(connectionButton).toBeEnabled()
@@ -247,29 +293,99 @@ describe('模型治理资产中心', () => {
     await user.click(connectionButton)
 
     expect(await screen.findByText(/连接成功/)).toBeInTheDocument()
-    expect(testGovernanceConnection).toHaveBeenCalledWith(approved.draft_id)
+    expect(testGovernanceConnection).toHaveBeenCalledWith(editing.draft_id)
+    expect(publishButton).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: '校验' }))
+    await user.click(await screen.findByRole('button', { name: '申请审核' }))
+    await user.selectOptions(screen.getByLabelText('开发身份'), 'reviewer')
+    await user.click(await screen.findByRole('button', { name: '审核通过' }))
+    expect(publishButton).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(testGovernanceConnection).toHaveBeenCalledTimes(2)
+    await user.selectOptions(screen.getByLabelText('开发身份'), 'editor')
     expect(publishButton).toBeEnabled()
+    await user.click(publishButton)
+    await waitFor(() => expect(publishGovernanceDraft).toHaveBeenCalledWith(editing.draft_id, 5, 'dev'))
   })
 
   it('保存模型工作版本后必须重新测试连接', async () => {
     const user = userEvent.setup()
-    const approved = draft(modelContent, 'approved')
-    vi.mocked(getGovernanceAssets).mockResolvedValue({ baselines: [], drafts: [approved], published: [] })
+    const editing = draft(modelContent)
+    vi.mocked(getGovernanceAssets).mockResolvedValue({ baselines: [], drafts: [editing], published: [] })
     vi.mocked(testGovernanceConnection).mockResolvedValue({
       status: 'success', latency_ms: 18, safe_message: '连接成功', tested_at: '2026-08-17T01:00:00Z', content_hash: 'b'.repeat(64),
     })
-    vi.mocked(updateGovernanceDraft).mockResolvedValue({ ...approved, revision: 2 })
+    vi.mocked(updateGovernanceDraft).mockResolvedValue({ ...editing, revision: 2 })
 
     render(<ModelGovernancePage />)
     await user.click(await screen.findByRole('tab', { name: '模型' }))
     await user.click(screen.getByRole('button', { name: '查看 model.primary' }))
     await user.click(screen.getByRole('button', { name: '测试连接' }))
-    expect(screen.getByRole('button', { name: '发布到dev环境' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '发布到dev环境' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: '保存工作版本' }))
 
     await waitFor(() => expect(updateGovernanceDraft).toHaveBeenCalledOnce())
     expect(screen.getByRole('button', { name: '发布到dev环境' })).toBeDisabled()
     expect(screen.queryByText(/连接成功/)).not.toBeInTheDocument()
+  })
+
+  it('A 资产慢版本请求不能覆盖后来打开的 B 资产', async () => {
+    const user = userEvent.setup()
+    const secondPrompt = { ...promptContent, asset_id: 'claim.explain', name: '理赔解释' }
+    const slowA = deferred<GovernanceVersionsResult>()
+    vi.mocked(getGovernanceAssets).mockResolvedValue({
+      baselines: [], drafts: [draft(promptContent), draft(secondPrompt)], published: [],
+    })
+    vi.mocked(getGovernanceVersions).mockImplementation((assetId) => assetId === 'intent.classify'
+      ? slowA.promise
+      : Promise.resolve(versionHistory(secondPrompt, 2)))
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '提示词' }))
+    await user.click(screen.getByRole('button', { name: '查看 intent.classify' }))
+    await user.click(screen.getByRole('button', { name: '关闭详情抽屉' }))
+    await user.click(screen.getByRole('button', { name: '查看 claim.explain' }))
+    expect(await screen.findByText('版本 2 · 活动')).toBeInTheDocument()
+
+    slowA.resolve(versionHistory(promptContent, 1))
+    await waitFor(() => expect(screen.queryByText('版本 1 · 活动')).not.toBeInTheDocument())
+    expect(screen.getByText('版本 2 · 活动')).toBeInTheDocument()
+  })
+
+  it('详情回滚后同时刷新当前版本历史与主资产', async () => {
+    const user = userEvent.setup()
+    const retiredHistory = versionHistory(promptContent, 1, 'retired')
+    const activeHistory = versionHistory(promptContent, 1, 'active')
+    vi.mocked(getGovernanceAssets).mockResolvedValue({ baselines: [], drafts: [], published: [published(promptContent)] })
+    vi.mocked(getGovernanceVersions).mockResolvedValueOnce(retiredHistory).mockResolvedValueOnce(activeHistory)
+    vi.mocked(rollbackGovernanceRelease).mockResolvedValue(activeHistory.releases[0])
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '提示词' }))
+    await user.click(screen.getByRole('button', { name: '查看 intent.classify' }))
+    await user.click(await screen.findByRole('button', { name: '回滚至此版本' }))
+
+    await waitFor(() => expect(getGovernanceVersions).toHaveBeenCalledTimes(2))
+    expect(getGovernanceVersions).toHaveBeenLastCalledWith('intent.classify', 'dev')
+    expect(getGovernanceAssets).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('版本 1 · 活动')).toBeInTheDocument()
+  })
+
+  it('关闭详情或切换环境会立即清空未保存 API Key', async () => {
+    const user = userEvent.setup()
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '模型' }))
+    await user.click(screen.getByRole('button', { name: '新建模型' }))
+    await user.type(screen.getByLabelText('API Key'), 'sk-close-secret')
+    await user.click(screen.getByRole('button', { name: '关闭详情抽屉' }))
+    await user.click(screen.getByRole('button', { name: '新建模型' }))
+    expect(screen.getByLabelText('API Key')).toHaveValue('')
+    await user.type(screen.getByLabelText('API Key'), 'sk-environment-secret')
+    await user.selectOptions(screen.getByLabelText('环境'), 'test')
+    await user.click(await screen.findByRole('tab', { name: '模型' }))
+    await user.click(screen.getByRole('button', { name: '新建模型' }))
+    expect(screen.getByLabelText('API Key')).toHaveValue('')
   })
 
   it('当前生效模型完整展示运行参数', async () => {
@@ -309,23 +425,26 @@ describe('模型治理资产中心', () => {
     expect(screen.getByText('请先发布并启用模型，再创建路由规则。')).toBeInTheDocument()
   })
 
-  it('非信息部门可直接查看后台管理并加载治理快照', async () => {
+  it('非信息部门可直接查看后台管理并加载治理资产', async () => {
     vi.mocked(useRoleContext).mockReturnValue({ currentRole: 'cashier', setCurrentRole: vi.fn() })
     render(<ModelGovernancePage />)
     expect(await screen.findByRole('heading', { name: '后台管理' })).toBeInTheDocument()
-    expect(getModelGovernanceSnapshot).toHaveBeenCalledOnce()
+    expect(getGovernanceAssets).toHaveBeenCalledOnce()
     expect(screen.queryByText('信息科专属')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '切换到信息科' })).not.toBeInTheDocument()
   })
 
-  it('加载与错误状态可被辅助技术感知', async () => {
-    vi.mocked(getModelGovernanceSnapshot).mockReturnValueOnce(new Promise(() => undefined))
+  it('工作区加载、错误和重试状态可被辅助技术感知', async () => {
+    vi.mocked(getGovernanceAssets).mockReturnValueOnce(new Promise(() => undefined))
     const { unmount } = render(<ModelGovernancePage />)
-    expect(screen.getByRole('status')).toHaveTextContent('正在加载治理快照')
+    expect(screen.getByRole('heading', { name: '后台管理' })).toBeInTheDocument()
+    expect(await screen.findByRole('status')).toHaveTextContent('正在加载治理资产')
     unmount()
-    vi.mocked(getModelGovernanceSnapshot).mockReset().mockRejectedValue(new Error('network down'))
+    vi.mocked(getGovernanceAssets).mockReset().mockRejectedValueOnce(new Error('network down')).mockResolvedValue({ baselines: [], drafts: [], published: [] })
     render(<ModelGovernancePage />)
-    expect(await screen.findByRole('alert')).toHaveTextContent('治理快照暂不可用')
+    expect(await screen.findByRole('alert')).toHaveTextContent('治理资产与发布记录加载失败')
+    await userEvent.setup().click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByLabelText('治理指标')).toBeInTheDocument()
   })
 
   it('切换环境失败时清空旧资产且错误不伪装为空数据', async () => {

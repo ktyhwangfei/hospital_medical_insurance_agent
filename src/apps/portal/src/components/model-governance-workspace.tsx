@@ -95,6 +95,12 @@ interface ConnectionEvidence {
   contentSignature: string
 }
 
+interface DrawerContext {
+  open: boolean
+  assetId: string | null
+  environment: GovernanceEnvironment
+}
+
 const emptyAssets: GovernanceAssetsResult = { baselines: [], drafts: [], published: [] }
 
 function emptyForm(type: GovernanceAssetType): FormState {
@@ -187,7 +193,9 @@ function rowsFromAssets(assets: GovernanceAssetsResult): AssetRow[] {
       ...extra,
     })
   }
-  assets.baselines.forEach(({ runtime_status: _, ...baseline }) => {
+  assets.baselines.forEach((item) => {
+    const { runtime_status, ...baseline } = item
+    void runtime_status
     const content = baseline as GovernanceAssetContent
     merge(content, { baseline: content })
   })
@@ -254,6 +262,8 @@ export function ModelGovernanceWorkspace() {
   const closeRef = useRef<HTMLButtonElement>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const refreshRequestRef = useRef(0)
+  const versionsRequestRef = useRef(0)
+  const drawerContextRef = useRef<DrawerContext>({ open: false, assetId: null, environment: 'dev' })
 
   const refresh = useCallback(async () => {
     const requestId = ++refreshRequestRef.current
@@ -283,7 +293,8 @@ export function ModelGovernanceWorkspace() {
   }, [identity])
 
   useEffect(() => {
-    void refresh()
+    const timer = window.setTimeout(() => { void refresh() }, 0)
+    return () => window.clearTimeout(timer)
   }, [refresh])
 
   const rows = useMemo(() => rowsFromAssets(assets), [assets])
@@ -322,6 +333,43 @@ export function ModelGovernanceWorkspace() {
     setForm(next)
   }
 
+  function invalidateVersions() {
+    versionsRequestRef.current += 1
+    setVersions({ versions: [], releases: [] })
+  }
+
+  async function loadVersions(assetId: string, requestEnvironment: GovernanceEnvironment) {
+    const requestId = ++versionsRequestRef.current
+    setVersions({ versions: [], releases: [] })
+    try {
+      const nextVersions = await getGovernanceVersions(assetId, requestEnvironment)
+      const context = drawerContextRef.current
+      if (requestId === versionsRequestRef.current
+        && context.open
+        && context.assetId === assetId
+        && context.environment === requestEnvironment) {
+        setVersions(nextVersions)
+      }
+    } catch (reason) {
+      const context = drawerContextRef.current
+      if (requestId === versionsRequestRef.current
+        && context.open
+        && context.assetId === assetId
+        && context.environment === requestEnvironment) {
+        setError(errorText(reason))
+      }
+    }
+  }
+
+  function closeDrawer() {
+    invalidateVersions()
+    drawerContextRef.current = { open: false, assetId: null, environment }
+    setDrawerOpen(false)
+    setSelectedId(null)
+    setForm(emptyForm(drawerType))
+    setError('')
+  }
+
   function changeEnvironment(next: GovernanceEnvironment) {
     if (next === environment) return
     refreshRequestRef.current += 1
@@ -332,8 +380,11 @@ export function ModelGovernanceWorkspace() {
     setError('')
     setNotice('')
     setConnectionTests({})
+    invalidateVersions()
+    drawerContextRef.current = { open: false, assetId: null, environment: next }
     setDrawerOpen(false)
     setSelectedId(null)
+    setForm(emptyForm(drawerType))
   }
 
   function openRow(row: AssetRow, trigger: HTMLButtonElement) {
@@ -343,8 +394,8 @@ export function ModelGovernanceWorkspace() {
     setForm(formFromContent(row.draft?.content ?? row.published?.content ?? row.baseline!))
     setDrawerOpen(true)
     setError('')
-    setVersions({ versions: [], releases: [] })
-    void getGovernanceVersions(row.assetId, environment).then(setVersions).catch((reason) => setError(errorText(reason)))
+    drawerContextRef.current = { open: true, assetId: row.assetId, environment }
+    void loadVersions(row.assetId, environment)
   }
 
   function openNew(type: GovernanceAssetType, trigger: HTMLButtonElement) {
@@ -352,7 +403,8 @@ export function ModelGovernanceWorkspace() {
     setSelectedId(null)
     setDrawerType(type)
     setForm(emptyForm(type))
-    setVersions({ versions: [], releases: [] })
+    invalidateVersions()
+    drawerContextRef.current = { open: true, assetId: null, environment }
     setDrawerOpen(true)
     setError('')
   }
@@ -435,7 +487,7 @@ export function ModelGovernanceWorkspace() {
     setError('')
     try {
       await publishGovernanceDraft(selected.draft.draft_id, selected.draft.revision, environment)
-      setDrawerOpen(false)
+      closeDrawer()
       await refresh()
     } catch (reason) {
       setError(errorText(reason))
@@ -445,10 +497,16 @@ export function ModelGovernanceWorkspace() {
   }
 
   async function rollback(releaseId: string) {
+    if (!selected) return
+    const assetId = selected.assetId
+    const requestEnvironment = environment
     setBusy(true)
     try {
       await rollbackGovernanceRelease(releaseId)
-      await refresh()
+      const context = drawerContextRef.current
+      if (context.open && context.assetId === assetId && context.environment === requestEnvironment) {
+        await Promise.all([refresh(), loadVersions(assetId, requestEnvironment)])
+      }
     } catch (reason) {
       setError(errorText(reason))
     } finally {
@@ -501,7 +559,7 @@ export function ModelGovernanceWorkspace() {
     </nav>
 
     <div id={`governance-panel-${activeTab}`} role="tabpanel" aria-busy={busy || loading} className="min-w-0 p-4 sm:p-5">
-      {error && !drawerOpen && <p role="alert" className="mb-4 rounded bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+      {error && !drawerOpen && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded bg-rose-50 p-3 text-sm text-rose-700"><span>{error}</span><button type="button" disabled={loading} onClick={() => void refresh()} className="rounded border border-rose-300 px-2.5 py-1.5 text-xs disabled:opacity-50">重试</button></div>}
       {notice && !error && <p role="status" className="mb-4 rounded bg-emerald-50 p-3 text-sm text-emerald-700">{notice}</p>}
       {loading && <p role="status" aria-live="polite" className="text-sm text-slate-500">正在加载治理资产</p>}
 
@@ -544,7 +602,7 @@ export function ModelGovernanceWorkspace() {
       </div>}
     </div>
 
-    <Dialog open={drawerOpen} onOpenChange={(open) => { setDrawerOpen(open); if (!open) setError('') }}>
+    <Dialog open={drawerOpen} onOpenChange={(open) => { if (!open) closeDrawer() }}>
       <DialogContent showCloseButton={false} aria-modal="true" initialFocus={closeRef} finalFocus={triggerRef} className="top-0! right-0! bottom-0! left-auto! flex! h-full! w-full flex-col gap-0! overflow-hidden rounded-none! p-0! shadow-2xl translate-x-0! translate-y-0! max-md:max-w-none! md:max-w-[640px]">
         <DialogHeader className="flex-row items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 sm:px-5">
           <div className="min-w-0"><DialogTitle className="break-words font-semibold text-slate-800">{selected ? `${typeLabel[drawerType]} · ${selected.name}` : `新建${typeLabel[drawerType]}`}</DialogTitle><DialogDescription className="mt-1 break-all font-mono text-xs">{selected?.assetId ?? '尚未保存'}</DialogDescription></div>
@@ -563,7 +621,7 @@ export function ModelGovernanceWorkspace() {
               {selected?.draft?.status === 'validated' && <button type="button" disabled={busy || identity !== 'editor'} onClick={() => void changeDraft((draft) => requestGovernanceReview(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">申请审核</button>}
               {selected?.draft?.status === 'review_pending' && identity === 'reviewer' && <button type="button" disabled={busy} onClick={() => void changeDraft((draft) => approveGovernanceDraft(draft.draft_id, draft.revision, '开发环境审核通过'))} className="rounded bg-emerald-600 px-3 py-2 text-xs text-white">审核通过</button>}
               {selected?.draft?.content.asset_type === 'model_profile' && <button type="button" disabled={busy || modelFormDirty} onClick={() => void testConnection()} className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50">测试连接</button>}
-              {selected?.draft?.status === 'approved' && <button type="button" disabled={busy || identity !== 'editor' || (selected.draft.content.asset_type === 'model_profile' && modelTest?.status !== 'success')} onClick={() => void publish()} className="rounded bg-indigo-600 px-3 py-2 text-xs text-white disabled:opacity-50">发布到{environment}环境</button>}
+              {selected?.draft && <button type="button" disabled={busy || selected.draft.status !== 'approved' || identity !== 'editor' || (selected.draft.content.asset_type === 'model_profile' && modelTest?.status !== 'success')} onClick={() => void publish()} className="rounded bg-indigo-600 px-3 py-2 text-xs text-white disabled:opacity-50">发布到{environment}环境</button>}
             </div>}
             {selected?.draft?.content.asset_type === 'model_profile' && modelFormDirty && <p className="mt-3 text-xs text-amber-700">请先保存模型工作版本，再测试连接。</p>}
             {modelTest && <p role="status" className={`mt-3 rounded p-3 text-xs ${modelTest.status === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{modelTest.safe_message} · {new Date(modelTest.tested_at).toLocaleString('zh-CN')} · {modelTest.latency_ms}ms</p>}
