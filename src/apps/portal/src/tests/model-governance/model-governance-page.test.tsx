@@ -19,6 +19,7 @@ import {
   validateGovernanceDraft,
   type GovernanceAssetContent,
   type GovernanceDraft,
+  type GovernanceRelease,
   type GovernanceVersionsResult,
   updateGovernanceDraft,
 } from '@/lib/model-governance-api'
@@ -259,10 +260,7 @@ describe('模型治理资产中心', () => {
     vi.mocked(validateGovernanceDraft).mockResolvedValue(validated)
     vi.mocked(requestGovernanceReview).mockResolvedValue(reviewPending)
     vi.mocked(approveGovernanceDraft).mockResolvedValue(approved)
-    vi.mocked(publishGovernanceDraft).mockResolvedValue({
-      version: versionHistory(savedContent, 1).versions[0],
-      release: versionHistory(savedContent, 1).releases[0],
-    })
+    vi.mocked(publishGovernanceDraft).mockResolvedValue(versionHistory(savedContent, 1).releases[0])
     vi.mocked(testGovernanceConnection).mockResolvedValue({
       status: 'success', latency_ms: 18, safe_message: '连接成功', tested_at: '2026-08-17T01:00:00Z', content_hash: 'b'.repeat(64),
     })
@@ -301,8 +299,10 @@ describe('模型治理资产中心', () => {
     await user.selectOptions(screen.getByLabelText('开发身份'), 'reviewer')
     await user.click(await screen.findByRole('button', { name: '审核通过' }))
     expect(publishButton).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: '测试连接' }))
-    expect(testGovernanceConnection).toHaveBeenCalledTimes(2)
+    const reviewerConnectionButton = screen.getByRole('button', { name: '测试连接' })
+    expect(reviewerConnectionButton).toBeDisabled()
+    await user.click(reviewerConnectionButton)
+    expect(testGovernanceConnection).toHaveBeenCalledTimes(1)
     await user.selectOptions(screen.getByLabelText('开发身份'), 'editor')
     expect(publishButton).toBeEnabled()
     await user.click(publishButton)
@@ -370,6 +370,40 @@ describe('模型治理资产中心', () => {
     expect(getGovernanceVersions).toHaveBeenLastCalledWith('intent.classify', 'dev')
     expect(getGovernanceAssets).toHaveBeenCalledTimes(2)
     expect(screen.getByText('版本 1 · 活动')).toBeInTheDocument()
+  })
+
+  it('发布记录页无需打开资产详情也能回滚并刷新主资产', async () => {
+    const user = userEvent.setup()
+    const retiredRelease = versionHistory(promptContent, 1, 'retired').releases[0]
+    const activeRelease = { ...retiredRelease, status: 'active' as const, retired_at: null }
+    vi.mocked(getGovernanceReleases).mockResolvedValue([retiredRelease])
+    vi.mocked(rollbackGovernanceRelease).mockResolvedValue(activeRelease)
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '发布记录' }))
+    await user.click(await screen.findByRole('button', { name: '回滚' }))
+
+    await waitFor(() => expect(rollbackGovernanceRelease).toHaveBeenCalledWith(retiredRelease.release_id))
+    expect(getGovernanceAssets).toHaveBeenCalledTimes(2)
+  })
+
+  it('回滚请求中关闭抽屉仍刷新主资产但不再刷新版本历史', async () => {
+    const user = userEvent.setup()
+    const retiredHistory = versionHistory(promptContent, 1, 'retired')
+    const rollbackRequest = deferred<GovernanceRelease>()
+    vi.mocked(getGovernanceAssets).mockResolvedValue({ baselines: [], drafts: [], published: [published(promptContent)] })
+    vi.mocked(getGovernanceVersions).mockResolvedValue(retiredHistory)
+    vi.mocked(rollbackGovernanceRelease).mockReturnValue(rollbackRequest.promise)
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '提示词' }))
+    await user.click(screen.getByRole('button', { name: '查看 intent.classify' }))
+    await user.click(await screen.findByRole('button', { name: '回滚至此版本' }))
+    await user.click(screen.getByRole('button', { name: '关闭详情抽屉' }))
+    rollbackRequest.resolve({ ...retiredHistory.releases[0], status: 'active', retired_at: null })
+
+    await waitFor(() => expect(getGovernanceAssets).toHaveBeenCalledTimes(2))
+    expect(getGovernanceVersions).toHaveBeenCalledTimes(1)
   })
 
   it('关闭详情或切换环境会立即清空未保存 API Key', async () => {
