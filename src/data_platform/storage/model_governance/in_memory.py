@@ -5,6 +5,7 @@ from threading import RLock
 
 from src.data_platform.storage.model_governance.ports import (
     GovernanceCredentialPrecondition,
+    GovernanceReleasePrecondition,
     ModelGovernanceConflictError,
     ModelGovernanceNotFoundError,
 )
@@ -16,6 +17,7 @@ from src.model_service.governance_assets import (
     GovernanceDraft,
     GovernanceEnvironment,
     GovernanceRelease,
+    GovernanceReleaseCredentialBinding,
     GovernanceReleaseStatus,
     GovernanceVersion,
 )
@@ -28,6 +30,8 @@ class InMemoryModelGovernanceStorage:
         self._approvals: dict[str, GovernanceApproval] = {}
         self._releases: dict[str, GovernanceRelease] = {}
         self._credentials: dict[str, GovernanceCredential] = {}
+        self._credential_versions: dict[tuple[str, int], GovernanceCredential] = {}
+        self._release_credentials: dict[str, GovernanceReleaseCredentialBinding] = {}
         self._connection_tests: dict[str, GovernanceConnectionTest] = {}
         self._lock = RLock()
 
@@ -39,12 +43,22 @@ class InMemoryModelGovernanceStorage:
         self, credential: GovernanceCredential
     ) -> GovernanceCredential:
         with self._lock:
-            current = self._credentials.get(credential.credential_id)
-            expected_revision = 1 if current is None else current.revision + 1
-            if credential.revision != expected_revision:
-                raise ModelGovernanceConflictError("凭据 revision 已变化")
-            self._credentials[credential.credential_id] = self._copy(credential)
+            self._store_credential(credential)
             return self._copy(credential)
+
+    def _store_credential(self, credential: GovernanceCredential) -> None:
+        current = self._credentials.get(credential.credential_id)
+        expected_revision = 1 if current is None else current.revision + 1
+        history_key = (credential.credential_id, credential.revision)
+        if (
+            credential.revision != expected_revision
+            or history_key in self._credential_versions
+        ):
+            raise ModelGovernanceConflictError("凭据 revision 已变化")
+        stored = self._copy(credential)
+        historical = self._copy(credential)
+        self._credentials[credential.credential_id] = stored
+        self._credential_versions[history_key] = historical
 
     def get_credential(self, credential_id: str) -> GovernanceCredential:
         with self._lock:
@@ -52,6 +66,24 @@ class InMemoryModelGovernanceStorage:
                 return self._copy(self._credentials[credential_id])
             except KeyError as exc:
                 raise ModelGovernanceNotFoundError("凭据不存在") from exc
+
+    def get_credential_revision(
+        self, credential_id: str, revision: int
+    ) -> GovernanceCredential:
+        with self._lock:
+            try:
+                return self._copy(self._credential_versions[(credential_id, revision)])
+            except KeyError as exc:
+                raise ModelGovernanceNotFoundError("凭据版本不存在") from exc
+
+    def get_release_credential_binding(
+        self, release_id: str
+    ) -> GovernanceReleaseCredentialBinding:
+        with self._lock:
+            try:
+                return self._copy(self._release_credentials[release_id])
+            except KeyError as exc:
+                raise ModelGovernanceNotFoundError("发布凭据绑定不存在") from exc
 
     def save_connection_test(
         self, result: GovernanceConnectionTest
@@ -96,18 +128,10 @@ class InMemoryModelGovernanceStorage:
         with self._lock:
             if draft.draft_id in self._drafts:
                 raise ModelGovernanceConflictError("草稿已存在")
-            current_credential = self._credentials.get(credential.credential_id)
-            credential_revision = (
-                1 if current_credential is None else current_credential.revision + 1
-            )
-            if credential.revision != credential_revision:
-                raise ModelGovernanceConflictError("凭据 revision 已变化")
-
             # 先构造全部副本，任一步失败都不更改已存状态。
             next_draft = self._copy(draft)
-            next_credential = self._copy(credential)
+            self._store_credential(credential)
             self._drafts[draft.draft_id] = next_draft
-            self._credentials[credential.credential_id] = next_credential
             return self._copy(next_draft)
 
     def update_draft(
@@ -137,16 +161,9 @@ class InMemoryModelGovernanceStorage:
                 raise ModelGovernanceConflictError("草稿 revision 已变化或草稿不存在")
             if draft.revision != expected_revision + 1:
                 raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
-            current_credential = self._credentials.get(credential.credential_id)
-            credential_revision = (
-                1 if current_credential is None else current_credential.revision + 1
-            )
-            if credential.revision != credential_revision:
-                raise ModelGovernanceConflictError("凭据 revision 已变化")
             next_draft = self._copy(draft)
-            next_credential = self._copy(credential)
+            self._store_credential(credential)
             self._drafts[draft.draft_id] = next_draft
-            self._credentials[credential.credential_id] = next_credential
             return self._copy(next_draft)
 
     def get_draft(self, draft_id: str) -> GovernanceDraft:
@@ -256,14 +273,58 @@ class InMemoryModelGovernanceStorage:
         ):
             raise ModelGovernanceConflictError("模型凭据已变化")
 
+    def _check_release_preconditions(
+        self, preconditions: tuple[GovernanceReleasePrecondition, ...]
+    ) -> None:
+        for precondition in preconditions:
+            active = next(
+                (
+                    item
+                    for item in self._releases.values()
+                    if item.asset_id == precondition.asset_id
+                    and item.environment == precondition.environment
+                    and item.status == GovernanceReleaseStatus.ACTIVE
+                ),
+                None,
+            )
+            if (
+                active is None
+                or active.release_id != precondition.expected_release_id
+                or active.version_id != precondition.expected_version_id
+            ):
+                raise ModelGovernanceConflictError("引用的模型发布已变化")
+
+    def _check_credential_binding(
+        self,
+        release: GovernanceRelease,
+        binding: GovernanceReleaseCredentialBinding | None,
+    ) -> None:
+        if binding is None:
+            return
+        credential = self._credential_versions.get(
+            (binding.credential_id, binding.credential_revision)
+        )
+        if (
+            binding.release_id != release.release_id
+            or credential is None
+            or credential.secret_fingerprint != binding.credential_fingerprint
+        ):
+            raise ModelGovernanceConflictError("发布凭据绑定无效")
+
     def publish(
         self,
         release: GovernanceRelease,
         *,
         credential_precondition: GovernanceCredentialPrecondition | None = None,
+        credential_binding: GovernanceReleaseCredentialBinding | None = None,
+        referenced_release_preconditions: tuple[
+            GovernanceReleasePrecondition, ...
+        ] = (),
     ) -> GovernanceRelease:
         with self._lock:
             self._check_credential_precondition(credential_precondition)
+            self._check_release_preconditions(referenced_release_preconditions)
+            self._check_credential_binding(release, credential_binding)
             if release.release_id in self._releases:
                 raise ModelGovernanceConflictError("发布记录已存在")
             active = next(
@@ -279,16 +340,30 @@ class InMemoryModelGovernanceStorage:
             active_id = active.release_id if active else None
             if active_id != release.previous_release_id:
                 raise ModelGovernanceConflictError("发布基线已变化")
-            if active:
-                self._releases[active.release_id] = active.model_copy(
+            next_release = self._copy(release)
+            next_binding = (
+                self._copy(credential_binding)
+                if credential_binding is not None
+                else None
+            )
+            result = self._copy(next_release)
+            retired = (
+                active.model_copy(
                     update={
                         "status": GovernanceReleaseStatus.RETIRED,
                         "retired_at": datetime.now(timezone.utc),
                     },
                     deep=True,
                 )
-            self._releases[release.release_id] = self._copy(release)
-            return self._copy(release)
+                if active
+                else None
+            )
+            if retired is not None:
+                self._releases[active.release_id] = retired
+            self._releases[release.release_id] = next_release
+            if next_binding is not None:
+                self._release_credentials[release.release_id] = next_binding
+            return result
 
     def publish_draft_version(
         self,
@@ -298,6 +373,10 @@ class InMemoryModelGovernanceStorage:
         *,
         expected_revision: int,
         credential_precondition: GovernanceCredentialPrecondition | None = None,
+        credential_binding: GovernanceReleaseCredentialBinding | None = None,
+        referenced_release_preconditions: tuple[
+            GovernanceReleasePrecondition, ...
+        ] = (),
     ) -> GovernanceRelease:
         with self._lock:
             current = self._drafts.get(draft.draft_id)
@@ -306,6 +385,8 @@ class InMemoryModelGovernanceStorage:
             if draft.revision != expected_revision + 1:
                 raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
             self._check_credential_precondition(credential_precondition)
+            self._check_release_preconditions(referenced_release_preconditions)
+            self._check_credential_binding(release, credential_binding)
             if release.release_id in self._releases:
                 raise ModelGovernanceConflictError("发布记录已存在")
 
@@ -348,6 +429,12 @@ class InMemoryModelGovernanceStorage:
             next_draft = self._copy(draft)
             next_version = self._copy(version) if existing_version is None else None
             next_release = self._copy(release)
+            next_binding = (
+                self._copy(credential_binding)
+                if credential_binding is not None
+                else None
+            )
+            result = self._copy(next_release)
             retired = (
                 active.model_copy(
                     update={
@@ -365,7 +452,9 @@ class InMemoryModelGovernanceStorage:
             if retired is not None:
                 self._releases[active.release_id] = retired
             self._releases[release.release_id] = next_release
-            return self._copy(next_release)
+            if next_binding is not None:
+                self._release_credentials[release.release_id] = next_binding
+            return result
 
     def get_release(self, release_id: str) -> GovernanceRelease:
         with self._lock:

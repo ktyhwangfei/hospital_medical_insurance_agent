@@ -418,6 +418,89 @@ def test_model_credential_is_encrypted_and_never_echoed_by_api(monkeypatch, capl
     assert secret not in stored.model_dump_json()
 
 
+def test_connection_test_rejects_credential_reuse_for_attacker_endpoint_without_leak(
+    monkeypatch,
+):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    client = _management_client(monkeypatch)
+    prefix = "/api/v1/medical-insurance-ai-agent/model-governance/drafts"
+    secret = "sk-existing-endpoint-bound"
+    assert client.post(
+        prefix,
+        json=_model_payload(secret),
+        headers=_headers("model_governance:write"),
+    ).status_code == 201
+    attack_payload = _model_payload()
+    attack_payload.pop("credential")
+    attack_payload["content"].update(
+        asset_id="model.attacker",
+        name="攻击草稿",
+        base_url="https://collector.attacker.test/v1",
+    )
+    attack = client.post(
+        prefix,
+        json=attack_payload,
+        headers=_headers("model_governance:write", subject="attacker"),
+    ).json()["result"]
+    calls = []
+    from src.model_service.models import ModelResponse, TokenUsage
+
+    class SpyProvider:
+        def __init__(self, base_url, api_key, *, timeout):
+            calls.append((base_url, api_key, timeout))
+
+        def invoke(self, request):
+            return ModelResponse(
+                content="ok",
+                model_name=request.model_type,
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1),
+                finish_reason="stop",
+            )
+
+    monkeypatch.setattr(
+        "src.model_service.governance_secrets.OpenAICompatibleProvider", SpyProvider
+    )
+
+    response = client.post(
+        f"{prefix}/{attack['draft_id']}/test-connection",
+        headers=_headers("model_governance:write", subject="attacker"),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error_code"] == (
+        "MODEL_GOVERNANCE_SECRET_UNAVAILABLE"
+    )
+    assert calls == []
+    assert secret not in response.text
+    assert "collector.attacker.test" not in response.text
+
+
+def test_governance_secret_errors_are_sanitized_as_503(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv("MODEL_GOVERNANCE_MASTER_KEY", "invalid-key")
+    client = _management_client(monkeypatch)
+    secret = "sk-must-not-leak-on-secret-error"
+
+    response = client.post(
+        "/api/v1/medical-insurance-ai-agent/model-governance/drafts",
+        json=_model_payload(secret),
+        headers=_headers("model_governance:write"),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "error_code": "MODEL_GOVERNANCE_SECRET_UNAVAILABLE",
+        "message": "模型治理凭据暂不可用",
+        "audit_event": {},
+    }
+    assert secret not in response.text
+    assert "invalid-key" not in response.text
+
+
 def test_model_connection_test_uses_draft_config_and_unlocks_publish(monkeypatch):
     monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
     monkeypatch.setenv(
@@ -683,7 +766,7 @@ def test_model_credential_ref_must_match_and_failed_encryption_removes_new_draft
         json=payload,
         headers=_headers("model_governance:write"),
     )
-    assert failed.status_code == 422
+    assert failed.status_code == 503
     drafts = client.get(
         f"{prefix}/assets?environment=dev&asset_type=model_profile",
         headers=_headers("model_governance:read"),
@@ -771,7 +854,7 @@ def test_patch_bad_key_keeps_draft_and_credential_unchanged(monkeypatch):
         headers=_headers("model_governance:write"),
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 503
     assert storage.get_draft(created["draft_id"]) == original_draft
     assert storage.get_credential("credential.api-demo") == original_credential
 
@@ -819,7 +902,7 @@ def test_failed_credential_create_rolls_back_new_draft_when_asset_has_history(
         headers=_headers("model_governance:write"),
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 503
     assert service.list_drafts() == drafts_before
 
 

@@ -7,6 +7,7 @@ from typing import Any
 from src.config.production import DATABASE_URL
 from src.data_platform.storage.model_governance.ports import (
     GovernanceCredentialPrecondition,
+    GovernanceReleasePrecondition,
     ModelGovernanceConflictError,
     ModelGovernanceNotFoundError,
 )
@@ -19,6 +20,7 @@ from src.model_service.governance_assets import (
     GovernanceDraft,
     GovernanceEnvironment,
     GovernanceRelease,
+    GovernanceReleaseCredentialBinding,
     GovernanceVersion,
 )
 
@@ -83,9 +85,33 @@ CREATE TABLE IF NOT EXISTS model_governance_credentials (
     credential_id VARCHAR(128) PRIMARY KEY,
     encrypted_api_key TEXT NOT NULL,
     secret_fingerprint CHAR(64) NOT NULL,
+    endpoint_fingerprint CHAR(64) NOT NULL,
     revision INTEGER NOT NULL,
     updated_by VARCHAR(128) NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
+);
+ALTER TABLE model_governance_credentials
+    ADD COLUMN IF NOT EXISTS endpoint_fingerprint CHAR(64);
+
+CREATE TABLE IF NOT EXISTS model_governance_credential_versions (
+    credential_id VARCHAR(128) NOT NULL,
+    revision INTEGER NOT NULL,
+    encrypted_api_key TEXT NOT NULL,
+    secret_fingerprint CHAR(64) NOT NULL,
+    endpoint_fingerprint CHAR(64) NOT NULL,
+    updated_by VARCHAR(128) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (credential_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS model_governance_release_credentials (
+    release_id VARCHAR(64) PRIMARY KEY
+        REFERENCES model_governance_releases(release_id),
+    credential_id VARCHAR(128) NOT NULL,
+    credential_revision INTEGER NOT NULL,
+    credential_fingerprint CHAR(64) NOT NULL,
+    FOREIGN KEY (credential_id, credential_revision)
+        REFERENCES model_governance_credential_versions(credential_id, revision)
 );
 
 CREATE TABLE IF NOT EXISTS model_governance_connection_tests (
@@ -157,17 +183,34 @@ class PostgresModelGovernanceStorage:
     def _connection_test(row: dict[str, Any]) -> GovernanceConnectionTest:
         return GovernanceConnectionTest.model_validate(row)
 
+    @staticmethod
+    def _release_credential_binding(
+        row: dict[str, Any],
+    ) -> GovernanceReleaseCredentialBinding:
+        return GovernanceReleaseCredentialBinding.model_validate(row)
+
     def put_credential(
         self, credential: GovernanceCredential
     ) -> GovernanceCredential:
-        rows = self._get_client().execute(
+        client = self._get_client()
+        with client.transaction():
+            saved = self._put_credential(client, credential)
+        return saved
+
+    def _put_credential(
+        self,
+        client: PostgreSQLClient,
+        credential: GovernanceCredential,
+    ) -> GovernanceCredential:
+        rows = client.execute(
             """INSERT INTO model_governance_credentials
-               (credential_id, encrypted_api_key, secret_fingerprint, revision,
-                updated_by, updated_at)
-               VALUES (%s,%s,%s,%s,%s,%s)
+               (credential_id, encrypted_api_key, secret_fingerprint,
+                endpoint_fingerprint, revision, updated_by, updated_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (credential_id) DO UPDATE SET
                  encrypted_api_key=EXCLUDED.encrypted_api_key,
                  secret_fingerprint=EXCLUDED.secret_fingerprint,
+                 endpoint_fingerprint=EXCLUDED.endpoint_fingerprint,
                  revision=EXCLUDED.revision,
                  updated_by=EXCLUDED.updated_by,
                  updated_at=EXCLUDED.updated_at
@@ -177,6 +220,7 @@ class PostgresModelGovernanceStorage:
                 credential.credential_id,
                 credential.encrypted_api_key,
                 credential.secret_fingerprint,
+                credential.endpoint_fingerprint,
                 credential.revision,
                 credential.updated_by,
                 credential.updated_at,
@@ -184,6 +228,21 @@ class PostgresModelGovernanceStorage:
         )
         if not rows:
             raise ModelGovernanceConflictError("凭据 revision 已变化")
+        client.execute(
+            """INSERT INTO model_governance_credential_versions
+               (credential_id, revision, encrypted_api_key, secret_fingerprint,
+                endpoint_fingerprint, updated_by, updated_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                credential.credential_id,
+                credential.revision,
+                credential.encrypted_api_key,
+                credential.secret_fingerprint,
+                credential.endpoint_fingerprint,
+                credential.updated_by,
+                credential.updated_at,
+            ),
+        )
         return self._credential(rows[0])
 
     def get_credential(self, credential_id: str) -> GovernanceCredential:
@@ -194,6 +253,30 @@ class PostgresModelGovernanceStorage:
         if not rows:
             raise ModelGovernanceNotFoundError("凭据不存在")
         return self._credential(rows[0])
+
+    def get_credential_revision(
+        self, credential_id: str, revision: int
+    ) -> GovernanceCredential:
+        rows = self._get_client().execute(
+            """SELECT * FROM model_governance_credential_versions
+               WHERE credential_id=%s AND revision=%s""",
+            (credential_id, revision),
+        )
+        if not rows:
+            raise ModelGovernanceNotFoundError("凭据版本不存在")
+        return self._credential(rows[0])
+
+    def get_release_credential_binding(
+        self, release_id: str
+    ) -> GovernanceReleaseCredentialBinding:
+        rows = self._get_client().execute(
+            """SELECT * FROM model_governance_release_credentials
+               WHERE release_id=%s""",
+            (release_id,),
+        )
+        if not rows:
+            raise ModelGovernanceNotFoundError("发布凭据绑定不存在")
+        return self._release_credential_binding(rows[0])
 
     def save_connection_test(
         self, result: GovernanceConnectionTest
@@ -290,7 +373,7 @@ class PostgresModelGovernanceStorage:
                 if sqlstate and str(sqlstate).startswith("23"):
                     raise ModelGovernanceConflictError("草稿已存在") from exc
                 raise
-            self.put_credential(credential)
+            self._put_credential(client, credential)
         return self._draft(rows[0])
 
     def update_draft(self, draft: GovernanceDraft, *, expected_revision: int) -> GovernanceDraft:
@@ -337,7 +420,7 @@ class PostgresModelGovernanceStorage:
                 raise ModelGovernanceConflictError(
                     "草稿 revision 已变化或草稿不存在"
                 )
-            self.put_credential(credential)
+            self._put_credential(client, credential)
         return self._draft(rows[0])
 
     def get_draft(self, draft_id: str) -> GovernanceDraft:
@@ -489,15 +572,84 @@ class PostgresModelGovernanceStorage:
         ):
             raise ModelGovernanceConflictError("模型凭据已变化")
 
+    @staticmethod
+    def _check_release_preconditions(
+        client: PostgreSQLClient,
+        preconditions: tuple[GovernanceReleasePrecondition, ...],
+    ) -> None:
+        for precondition in sorted(
+            preconditions, key=lambda item: (item.asset_id, item.environment.value)
+        ):
+            rows = client.execute(
+                """SELECT release_id, version_id FROM model_governance_releases
+                   WHERE asset_id=%s AND environment=%s AND status='active'
+                   FOR UPDATE""",
+                (precondition.asset_id, precondition.environment.value),
+            )
+            if (
+                not rows
+                or rows[0]["release_id"] != precondition.expected_release_id
+                or rows[0]["version_id"] != precondition.expected_version_id
+            ):
+                raise ModelGovernanceConflictError("引用的模型发布已变化")
+
+    @staticmethod
+    def _check_credential_binding(
+        client: PostgreSQLClient,
+        release: GovernanceRelease,
+        binding: GovernanceReleaseCredentialBinding | None,
+    ) -> None:
+        if binding is None:
+            return
+        rows = client.execute(
+            """SELECT secret_fingerprint
+               FROM model_governance_credential_versions
+               WHERE credential_id=%s AND revision=%s FOR SHARE""",
+            (binding.credential_id, binding.credential_revision),
+        )
+        if (
+            binding.release_id != release.release_id
+            or not rows
+            or rows[0]["secret_fingerprint"] != binding.credential_fingerprint
+        ):
+            raise ModelGovernanceConflictError("发布凭据绑定无效")
+
+    @staticmethod
+    def _insert_credential_binding(
+        client: PostgreSQLClient,
+        binding: GovernanceReleaseCredentialBinding | None,
+    ) -> None:
+        if binding is None:
+            return
+        client.execute(
+            """INSERT INTO model_governance_release_credentials
+               (release_id, credential_id, credential_revision,
+                credential_fingerprint) VALUES (%s,%s,%s,%s)""",
+            (
+                binding.release_id,
+                binding.credential_id,
+                binding.credential_revision,
+                binding.credential_fingerprint,
+            ),
+        )
+
     def publish(
         self,
         release: GovernanceRelease,
         *,
         credential_precondition: GovernanceCredentialPrecondition | None = None,
+        credential_binding: GovernanceReleaseCredentialBinding | None = None,
+        referenced_release_preconditions: tuple[
+            GovernanceReleasePrecondition, ...
+        ] = (),
     ) -> GovernanceRelease:
         client = self._get_client()
         with client.transaction():
             self._check_credential_precondition(client, credential_precondition)
+            self._check_release_preconditions(
+                client, referenced_release_preconditions
+            )
+            self._check_credential_binding(client, release, credential_binding)
             active_rows = client.execute(
                 """SELECT * FROM model_governance_releases
                    WHERE asset_id=%s AND environment=%s AND status='active' FOR UPDATE""",
@@ -523,6 +675,7 @@ class PostgresModelGovernanceStorage:
                      release.previous_release_id, release.created_by, release.created_at,
                      release.retired_at),
                 )
+                self._insert_credential_binding(client, credential_binding)
             except Exception as exc:
                 raise ModelGovernanceConflictError("发布记录已存在") from exc
         return self._release(rows[0])
@@ -535,6 +688,10 @@ class PostgresModelGovernanceStorage:
         *,
         expected_revision: int,
         credential_precondition: GovernanceCredentialPrecondition | None = None,
+        credential_binding: GovernanceReleaseCredentialBinding | None = None,
+        referenced_release_preconditions: tuple[
+            GovernanceReleasePrecondition, ...
+        ] = (),
     ) -> GovernanceRelease:
         if draft.revision != expected_revision + 1:
             raise ModelGovernanceConflictError("草稿 revision 必须递增 1")
@@ -555,6 +712,12 @@ class PostgresModelGovernanceStorage:
                     )
                 self._check_credential_precondition(
                     client, credential_precondition
+                )
+                self._check_release_preconditions(
+                    client, referenced_release_preconditions
+                )
+                self._check_credential_binding(
+                    client, release, credential_binding
                 )
 
                 active_rows = client.execute(
@@ -653,6 +816,7 @@ class PostgresModelGovernanceStorage:
                         release.retired_at,
                     ),
                 )
+                self._insert_credential_binding(client, credential_binding)
         except ModelGovernanceConflictError:
             raise
         except Exception as exc:

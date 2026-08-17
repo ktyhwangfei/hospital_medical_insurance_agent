@@ -1,10 +1,12 @@
 """提示词、模型档案与路由规则的治理生命周期。"""
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.data_platform.storage.model_governance.ports import (
     GovernanceCredentialPrecondition,
+    GovernanceReleasePrecondition,
     ModelGovernanceConflictError,
     ModelGovernanceNotFoundError,
     ModelGovernanceStorage,
@@ -15,12 +17,14 @@ from src.model_service.governance_assets import (
     GovernanceAssetPreview,
     GovernanceAssetType,
     GovernanceConnectionTest,
+    GovernanceCredential,
     GovernanceDraft,
     GovernanceDraftStatus,
     GovernanceEnvironment,
     GovernanceImportCounts,
     GovernanceImportResult,
     GovernanceRelease,
+    GovernanceReleaseCredentialBinding,
     GovernanceReleaseStatus,
     GovernanceRuntimeStatus,
     GovernanceValidationError,
@@ -42,6 +46,13 @@ from src.model_service.governance_secrets import (
 
 class ModelGovernanceGateError(ValueError):
     """治理生命周期前置条件未满足。"""
+
+
+@dataclass(frozen=True)
+class _PublishRequirements:
+    credential: GovernanceCredential | None = None
+    credential_precondition: GovernanceCredentialPrecondition | None = None
+    referenced_releases: tuple[GovernanceReleasePrecondition, ...] = ()
 
 
 class ModelGovernanceService:
@@ -75,10 +86,12 @@ class ModelGovernanceService:
         *,
         actor: str,
     ) -> GovernanceDraft:
+        self._require_matching_model_credential(content, credential_id)
         draft = self._new_draft(content, actor=actor)
         credential = GovernanceCredentialVault(self._storage).seal(
             credential_id,
             api_key,
+            base_url=content.base_url,
             actor=actor,
         )
         return self._storage.create_draft_with_credential(draft, credential)
@@ -97,6 +110,16 @@ class ModelGovernanceService:
             created_at=now,
             updated_at=now,
         )
+
+    @staticmethod
+    def _require_matching_model_credential(
+        content: GovernanceAssetContent, credential_id: str
+    ) -> None:
+        if (
+            not isinstance(content, ModelProfileAssetContent)
+            or content.credential_ref != credential_id
+        ):
+            raise ModelGovernanceGateError("凭据必须绑定匹配的模型资产")
 
     def save_draft(
         self,
@@ -127,6 +150,7 @@ class ModelGovernanceService:
         expected_revision: int,
         actor: str,
     ) -> GovernanceDraft:
+        self._require_matching_model_credential(content, credential_id)
         draft = self._changed_draft(
             draft_id,
             content,
@@ -136,6 +160,7 @@ class ModelGovernanceService:
         credential = GovernanceCredentialVault(self._storage).seal(
             credential_id,
             api_key,
+            base_url=content.base_url,
             actor=actor,
         )
         return self._storage.update_draft_with_credential(
@@ -189,19 +214,62 @@ class ModelGovernanceService:
                 return True
         return False
 
-    def _target_credential_precondition(
+    def _active_profile_precondition(
+        self,
+        profile_id: str,
+        environment: GovernanceEnvironment,
+    ) -> GovernanceReleasePrecondition | None:
+        release = self._storage.get_active_release(profile_id, environment)
+        if release is None:
+            return None
+        content = self._storage.get_version(release.version_id).content
+        if not isinstance(content, ModelProfileAssetContent) or not content.enabled:
+            return None
+        return GovernanceReleasePrecondition(
+            asset_id=profile_id,
+            environment=environment,
+            expected_release_id=release.release_id,
+            expected_version_id=release.version_id,
+        )
+
+    def _target_publish_requirements(
         self,
         content: GovernanceAssetContent,
         environment: GovernanceEnvironment,
-    ) -> GovernanceCredentialPrecondition | None:
+        *,
+        rollback_release_id: str | None = None,
+    ) -> _PublishRequirements:
         if isinstance(content, ModelProfileAssetContent) and content.enabled:
             try:
-                credential = self._storage.get_credential(content.credential_ref)
+                if rollback_release_id is None:
+                    credential = self._storage.get_credential(content.credential_ref)
+                    credential_precondition = GovernanceCredentialPrecondition(
+                        credential_id=credential.credential_id,
+                        expected_fingerprint=credential.secret_fingerprint,
+                        expected_revision=credential.revision,
+                    )
+                else:
+                    binding = self._storage.get_release_credential_binding(
+                        rollback_release_id
+                    )
+                    if binding.credential_id != content.credential_ref:
+                        raise ModelGovernanceNotFoundError("发布凭据绑定不匹配")
+                    credential = self._storage.get_credential_revision(
+                        binding.credential_id, binding.credential_revision
+                    )
+                    if (
+                        credential.secret_fingerprint
+                        != binding.credential_fingerprint
+                    ):
+                        raise ModelGovernanceNotFoundError("发布凭据版本不匹配")
+                    credential_precondition = None
             except ModelGovernanceNotFoundError as exc:
                 raise ModelGovernanceGateError(
                     "模型必须先通过当前配置的连接测试"
                 ) from exc
-            GovernanceCredentialVault(self._storage).reveal_credential(credential)
+            GovernanceCredentialVault(self._storage).reveal_credential(
+                credential, base_url=content.base_url
+            )
             tested = self._storage.find_successful_connection_test(
                 content.asset_id,
                 content_hash(content),
@@ -211,21 +279,25 @@ class ModelGovernanceService:
                 raise ModelGovernanceGateError(
                     "模型必须先通过当前配置的连接测试"
                 )
-            return GovernanceCredentialPrecondition(
-                credential_id=credential.credential_id,
-                expected_fingerprint=credential.secret_fingerprint,
-                expected_revision=credential.revision,
+            return _PublishRequirements(
+                credential=credential,
+                credential_precondition=credential_precondition,
             )
         if isinstance(content, RouteRuleAssetContent):
-            profile_ids = [content.profile_id, *content.fallback_profile_ids]
-            if any(
-                not self._profile_is_published(profile_id, environment)
-                for profile_id in profile_ids
+            referenced: list[GovernanceReleasePrecondition] = []
+            for profile_id in dict.fromkeys(
+                [content.profile_id, *content.fallback_profile_ids]
             ):
-                raise ModelGovernanceGateError(
-                    "路由引用的模型档案未在目标环境发布"
+                precondition = self._active_profile_precondition(
+                    profile_id, environment
                 )
-        return None
+                if precondition is None:
+                    raise ModelGovernanceGateError(
+                        "路由引用的模型档案未在目标环境发布"
+                    )
+                referenced.append(precondition)
+            return _PublishRequirements(referenced_releases=tuple(referenced))
+        return _PublishRequirements()
 
     def _validation_issues(
         self, content: GovernanceAssetContent
@@ -314,7 +386,7 @@ class ModelGovernanceService:
             raise ModelGovernanceGateError("连接测试仅支持模型草稿")
         credential = self._storage.get_credential(draft.content.credential_ref)
         api_key = GovernanceCredentialVault(self._storage).reveal_credential(
-            credential
+            credential, base_url=draft.content.base_url
         )
         probe = probe_model_connection(draft.content, api_key)
         return self.record_connection_test(
@@ -461,7 +533,7 @@ class ModelGovernanceService:
         if draft.status != GovernanceDraftStatus.APPROVED:
             raise ModelGovernanceGateError("草稿必须先完成审核")
         digest = content_hash(draft.content)
-        credential_precondition = self._target_credential_precondition(
+        requirements = self._target_publish_requirements(
             draft.content, environment
         )
 
@@ -472,7 +544,24 @@ class ModelGovernanceService:
         version_id = str(uuid5(NAMESPACE_URL, f"{draft.asset_id}:{digest}"))
         active = self._storage.get_active_release(draft.asset_id, environment)
         if active and active.version_id == version_id:
-            return active
+            if requirements.credential is None:
+                return active
+            try:
+                active_binding = self._storage.get_release_credential_binding(
+                    active.release_id
+                )
+            except ModelGovernanceNotFoundError:
+                active_binding = None
+            if (
+                active_binding is not None
+                and active_binding.credential_id
+                == requirements.credential.credential_id
+                and active_binding.credential_revision
+                == requirements.credential.revision
+                and active_binding.credential_fingerprint
+                == requirements.credential.secret_fingerprint
+            ):
+                return active
         versions = self._storage.list_versions(draft.asset_id)
         version = GovernanceVersion(
             version_id=version_id,
@@ -493,6 +582,16 @@ class ModelGovernanceService:
             previous_release_id=active.release_id if active else None,
             created_by=actor,
         )
+        credential_binding = (
+            GovernanceReleaseCredentialBinding(
+                release_id=release.release_id,
+                credential_id=requirements.credential.credential_id,
+                credential_revision=requirements.credential.revision,
+                credential_fingerprint=requirements.credential.secret_fingerprint,
+            )
+            if requirements.credential is not None
+            else None
+        )
         published_draft = draft.model_copy(
             update={
                 "revision": draft.revision + 1,
@@ -505,7 +604,9 @@ class ModelGovernanceService:
             version,
             release,
             expected_revision=expected_revision,
-            credential_precondition=credential_precondition,
+            credential_precondition=requirements.credential_precondition,
+            credential_binding=credential_binding,
+            referenced_release_preconditions=requirements.referenced_releases,
         )
 
     def rollback(self, release_id: str, *, actor: str) -> GovernanceRelease:
@@ -516,20 +617,35 @@ class ModelGovernanceService:
         if active.version_id == target.version_id:
             raise ModelGovernanceGateError("目标版本已是当前活动版本")
         target_content = self._storage.get_version(target.version_id).content
-        credential_precondition = self._target_credential_precondition(
-            target_content, target.environment
+        requirements = self._target_publish_requirements(
+            target_content,
+            target.environment,
+            rollback_release_id=target.release_id,
+        )
+        release = GovernanceRelease(
+            release_id=str(uuid4()),
+            asset_id=target.asset_id,
+            asset_type=target.asset_type,
+            version_id=target.version_id,
+            environment=target.environment,
+            previous_release_id=active.release_id,
+            created_by=actor,
+        )
+        credential_binding = (
+            GovernanceReleaseCredentialBinding(
+                release_id=release.release_id,
+                credential_id=requirements.credential.credential_id,
+                credential_revision=requirements.credential.revision,
+                credential_fingerprint=requirements.credential.secret_fingerprint,
+            )
+            if requirements.credential is not None
+            else None
         )
         return self._storage.publish(
-            GovernanceRelease(
-                release_id=str(uuid4()),
-                asset_id=target.asset_id,
-                asset_type=target.asset_type,
-                version_id=target.version_id,
-                environment=target.environment,
-                previous_release_id=active.release_id,
-                created_by=actor,
-            ),
-            credential_precondition=credential_precondition,
+            release,
+            credential_precondition=requirements.credential_precondition,
+            credential_binding=credential_binding,
+            referenced_release_preconditions=requirements.referenced_releases,
         )
 
     def published_snapshot(

@@ -195,9 +195,19 @@ class GovernanceCredential(BaseModel):
     credential_id: str = Field(pattern=_ASSET_ID_PATTERN)
     encrypted_api_key: str = Field(min_length=1)
     secret_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    endpoint_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     revision: int = Field(default=1, ge=1)
     updated_by: str = Field(min_length=1, max_length=128)
     updated_at: datetime = Field(default_factory=_utc_now)
+
+
+class GovernanceReleaseCredentialBinding(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    release_id: str
+    credential_id: str = Field(pattern=_ASSET_ID_PATTERN)
+    credential_revision: int = Field(ge=1)
+    credential_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class GovernanceConnectionTest(BaseModel):

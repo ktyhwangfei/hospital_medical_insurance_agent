@@ -279,6 +279,7 @@ def test_in_memory_publish_checks_credential_precondition_inside_lock():
         credential_id=precondition.credential_id,
         encrypted_api_key="encrypted-changed",
         secret_fingerprint="b" * 64,
+        endpoint_fingerprint="e" * 64,
         revision=2,
         updated_by="editor",
         updated_at=NOW,
@@ -440,6 +441,9 @@ def test_postgres_schema_has_revision_and_unique_active_release():
     assert "model_governance_approvals" in normalized
     assert "model_governance_releases" in normalized
     assert "model_governance_credentials" in normalized
+    assert "endpoint_fingerprint" in normalized
+    assert "model_governance_credential_versions" in normalized
+    assert "model_governance_release_credentials" in normalized
     assert "model_governance_connection_tests" in normalized
     assert "idx_governance_connection_success" in normalized
     assert "where status = 'active'" in normalized
@@ -455,6 +459,7 @@ def test_in_memory_storage_keeps_credentials_and_matching_successful_tests():
         credential_id="credential.demo",
         encrypted_api_key="encrypted-value",
         secret_fingerprint="a" * 64,
+        endpoint_fingerprint="e" * 64,
         revision=1,
         updated_by="editor",
         updated_at=NOW,
@@ -492,6 +497,111 @@ def test_in_memory_storage_keeps_credentials_and_matching_successful_tests():
     ) is None
 
 
+def test_in_memory_storage_keeps_immutable_credential_revisions_and_release_binding():
+    import src.model_service.governance_assets as assets
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+
+    assert hasattr(assets, "GovernanceReleaseCredentialBinding")
+    binding_type = assets.GovernanceReleaseCredentialBinding
+    storage = InMemoryModelGovernanceStorage()
+    first = GovernanceCredential(
+        credential_id="credential.demo",
+        encrypted_api_key="encrypted-first",
+        secret_fingerprint="a" * 64,
+        endpoint_fingerprint="e" * 64,
+        revision=1,
+        updated_by="editor",
+        updated_at=NOW,
+    )
+    second = first.model_copy(
+        update={
+            "encrypted_api_key": "encrypted-second",
+            "secret_fingerprint": "b" * 64,
+            "revision": 2,
+        }
+    )
+    storage.put_credential(first)
+    storage.put_credential(second)
+    release = _release("release-bound", "version-1")
+    binding = binding_type(
+        release_id=release.release_id,
+        credential_id=first.credential_id,
+        credential_revision=first.revision,
+        credential_fingerprint=first.secret_fingerprint,
+    )
+
+    storage.publish(release, credential_binding=binding)
+
+    assert storage.get_credential_revision(first.credential_id, 1) == first
+    assert storage.get_credential(first.credential_id) == second
+    assert storage.get_release_credential_binding(release.release_id) == binding
+    assert "encrypted" not in binding.model_dump_json()
+
+
+def test_postgres_publish_locks_referenced_model_release_preconditions():
+    import src.data_platform.storage.model_governance.ports as ports
+    from src.data_platform.storage.model_governance.postgres import (
+        PostgresModelGovernanceStorage,
+    )
+
+    assert hasattr(ports, "GovernanceReleasePrecondition")
+    precondition = ports.GovernanceReleasePrecondition(
+        asset_id="model.demo",
+        environment=GovernanceEnvironment.DEV,
+        expected_release_id="release-model-tested",
+        expected_version_id="version-model-tested",
+    )
+
+    class ChangedReleaseClient:
+        is_connected = True
+
+        def __init__(self):
+            self.statements = []
+
+        @contextmanager
+        def transaction(self):
+            yield
+
+        def execute(self, sql, params=()):
+            self.statements.append(sql)
+            if "model_governance_releases" in sql and params[0] == "model.demo":
+                return [
+                    {
+                        "release_id": "release-model-changed",
+                        "version_id": "version-model-disabled",
+                    }
+                ]
+            raise AssertionError("引用模型前置条件必须在任何发布写入前检查")
+
+    client = ChangedReleaseClient()
+    storage = PostgresModelGovernanceStorage("postgresql://unused")
+    storage._client = client
+
+    from src.data_platform.storage.model_governance.ports import (
+        ModelGovernanceConflictError,
+    )
+
+    with pytest.raises(ModelGovernanceConflictError, match="引用的模型"):
+        storage.publish(
+            _release("release-route", "version-route"),
+            referenced_release_preconditions=(precondition,),
+        )
+    assert "FOR UPDATE" in client.statements[0]
+
+
+def test_credential_migration_is_repeatable_and_has_versioned_release_binding():
+    from pathlib import Path
+
+    migration = Path("scripts/model_governance_credentials_migration.sql").read_text(
+        encoding="utf-8"
+    ).lower()
+    assert "add column if not exists endpoint_fingerprint" in migration
+    assert "create table if not exists model_governance_credential_versions" in migration
+    assert "create table if not exists model_governance_release_credentials" in migration
+
+
 def test_in_memory_atomic_credential_update_leaves_both_records_unchanged_on_conflict():
     from src.data_platform.storage.model_governance.in_memory import (
         InMemoryModelGovernanceStorage,
@@ -506,6 +616,7 @@ def test_in_memory_atomic_credential_update_leaves_both_records_unchanged_on_con
         credential_id="credential.demo",
         encrypted_api_key="encrypted-original",
         secret_fingerprint="a" * 64,
+        endpoint_fingerprint="e" * 64,
         revision=1,
         updated_by="editor",
         updated_at=NOW,
@@ -549,6 +660,7 @@ def test_in_memory_atomic_credential_update_leaves_both_records_unchanged_on_cop
         credential_id="credential.demo",
         encrypted_api_key="encrypted-original",
         secret_fingerprint="a" * 64,
+        endpoint_fingerprint="e" * 64,
         revision=1,
         updated_by="editor",
         updated_at=NOW,
@@ -600,6 +712,7 @@ def test_in_memory_atomic_credential_create_leaves_neither_record_on_midway_fail
         credential_id="credential.demo",
         encrypted_api_key="encrypted-value",
         secret_fingerprint="a" * 64,
+        endpoint_fingerprint="e" * 64,
         revision=1,
         updated_by="editor",
         updated_at=NOW,

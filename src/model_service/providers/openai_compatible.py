@@ -5,7 +5,7 @@ from typing import Iterator
 import httpx
 
 from src.model_service.exceptions import ModelAuthError, ModelRateLimitError, ModelServerError, ModelTimeoutError
-from src.model_service.models import Message, ModelRequest, ModelResponse, StreamChunk, TokenUsage
+from src.model_service.models import ModelRequest, ModelResponse, StreamChunk, TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,11 @@ class OpenAICompatibleProvider:
     def _handle_response(self, response: httpx.Response) -> ModelResponse:
         self._check_status(response)
         data = response.json()
+        if "error" in data:
+            raise ModelServerError(
+                "Model provider returned an error payload",
+                model_name="",
+            )
         
         # 兼容不同的响应格式
         if "choices" not in data:

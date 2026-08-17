@@ -31,6 +31,12 @@ class GovernanceConnectionProbe(NamedTuple):
     safe_message: str
 
 
+def endpoint_fingerprint(base_url: str) -> str:
+    """端点绑定使用模型配置已规范化的 URL，任何变更都要求重新提交密钥。"""
+    normalized = base_url.rstrip("/")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def probe_model_connection(
     content: ModelProfileAssetContent,
     api_key: str,
@@ -38,7 +44,7 @@ def probe_model_connection(
     """发送不含业务数据的最小模型请求，只返回安全结果。"""
     started = perf_counter()
     try:
-        OpenAICompatibleProvider(
+        response = OpenAICompatibleProvider(
             content.base_url,
             api_key,
             timeout=content.timeout_seconds,
@@ -51,6 +57,8 @@ def probe_model_connection(
                 temperature=0,
             )
         )
+        if not response.content.strip():
+            raise ValueError("模型响应为空")
     except ModelAuthError:
         succeeded, safe_message = False, "认证失败"
     except ModelTimeoutError:
@@ -84,10 +92,11 @@ class GovernanceCredentialVault:
         credential_id: str,
         api_key: str,
         *,
+        base_url: str,
         actor: str,
     ) -> GovernanceCredential:
         return self._storage.put_credential(
-            self.seal(credential_id, api_key, actor=actor)
+            self.seal(credential_id, api_key, base_url=base_url, actor=actor)
         )
 
     def seal(
@@ -95,6 +104,7 @@ class GovernanceCredentialVault:
         credential_id: str,
         api_key: str,
         *,
+        base_url: str,
         actor: str,
     ) -> GovernanceCredential:
         if not api_key:
@@ -107,15 +117,22 @@ class GovernanceCredentialVault:
             credential_id=credential_id,
             encrypted_api_key=self._fernet.encrypt(api_key.encode("utf-8")).decode("ascii"),
             secret_fingerprint=hashlib.sha256(api_key.encode("utf-8")).hexdigest(),
+            endpoint_fingerprint=endpoint_fingerprint(base_url),
             revision=revision,
             updated_by=actor,
             updated_at=datetime.now(timezone.utc),
         )
 
-    def reveal(self, credential_id: str) -> str:
-        return self.reveal_credential(self._storage.get_credential(credential_id))
+    def reveal(self, credential_id: str, *, base_url: str) -> str:
+        return self.reveal_credential(
+            self._storage.get_credential(credential_id), base_url=base_url
+        )
 
-    def reveal_credential(self, credential: GovernanceCredential) -> str:
+    def reveal_credential(
+        self, credential: GovernanceCredential, *, base_url: str
+    ) -> str:
+        if credential.endpoint_fingerprint != endpoint_fingerprint(base_url):
+            raise GovernanceSecretError("模型凭据未获准用于该端点")
         try:
             return self._fernet.decrypt(
                 credential.encrypted_api_key.encode("ascii")

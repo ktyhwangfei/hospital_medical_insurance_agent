@@ -24,14 +24,21 @@ def test_vault_encrypts_secret_and_never_stores_plaintext(monkeypatch):
     vault = GovernanceCredentialVault(storage)
     api_key = "sk-" + "plain-secret"
 
-    saved = vault.put("credential.demo", api_key, actor="editor")
+    saved = vault.put(
+        "credential.demo",
+        api_key,
+        base_url="https://models.example.test/v1",
+        actor="editor",
+    )
 
     stored = storage.get_credential("credential.demo")
     assert stored == saved
     assert stored.encrypted_api_key != api_key
     assert api_key not in stored.model_dump_json()
     assert stored.secret_fingerprint == hashlib.sha256(api_key.encode()).hexdigest()
-    assert vault.reveal("credential.demo") == api_key
+    assert vault.reveal(
+        "credential.demo", base_url="https://models.example.test/v1"
+    ) == api_key
 
 
 @pytest.mark.parametrize("master_key", [None, "not-a-fernet-key"])

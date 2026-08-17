@@ -2,9 +2,33 @@ CREATE TABLE IF NOT EXISTS model_governance_credentials (
     credential_id VARCHAR(128) PRIMARY KEY,
     encrypted_api_key TEXT NOT NULL,
     secret_fingerprint CHAR(64) NOT NULL,
+    endpoint_fingerprint CHAR(64) NOT NULL,
     revision INTEGER NOT NULL,
     updated_by VARCHAR(128) NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
+);
+ALTER TABLE model_governance_credentials
+    ADD COLUMN IF NOT EXISTS endpoint_fingerprint CHAR(64);
+
+CREATE TABLE IF NOT EXISTS model_governance_credential_versions (
+    credential_id VARCHAR(128) NOT NULL,
+    revision INTEGER NOT NULL,
+    encrypted_api_key TEXT NOT NULL,
+    secret_fingerprint CHAR(64) NOT NULL,
+    endpoint_fingerprint CHAR(64) NOT NULL,
+    updated_by VARCHAR(128) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (credential_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS model_governance_release_credentials (
+    release_id VARCHAR(64) PRIMARY KEY
+        REFERENCES model_governance_releases(release_id),
+    credential_id VARCHAR(128) NOT NULL,
+    credential_revision INTEGER NOT NULL,
+    credential_fingerprint CHAR(64) NOT NULL,
+    FOREIGN KEY (credential_id, credential_revision)
+        REFERENCES model_governance_credential_versions(credential_id, revision)
 );
 
 CREATE TABLE IF NOT EXISTS model_governance_connection_tests (

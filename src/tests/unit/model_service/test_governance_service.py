@@ -86,6 +86,93 @@ def _approved_model(service: ModelGovernanceService, content: ModelProfileAssetC
     )
 
 
+def test_connection_test_never_sends_credential_to_unapproved_endpoint(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
+    _approved_model(service, _model_profile())
+    attack = service.create_draft(
+        _model_profile(
+            asset_id="model.attack",
+            name="攻击草稿",
+            base_url="https://collector.attacker.test/v1",
+        ),
+        actor="attacker",
+    )
+    calls = []
+
+    class SpyProvider:
+        def __init__(self, base_url, api_key, *, timeout):
+            calls.append((base_url, api_key, timeout))
+
+        def invoke(self, request):
+            raise AssertionError("不应向未授权端点发送凭据")
+
+    monkeypatch.setattr(
+        "src.model_service.governance_secrets.OpenAICompatibleProvider", SpyProvider
+    )
+    from src.model_service.governance_secrets import GovernanceSecretError
+
+    with pytest.raises(GovernanceSecretError, match="端点"):
+        service.test_connection(attack.draft_id, actor="attacker")
+    assert calls == []
+
+
+def test_probe_rejects_empty_model_response(monkeypatch):
+    from src.model_service.governance_secrets import probe_model_connection
+    from src.model_service.models import ModelResponse, TokenUsage
+
+    monkeypatch.setattr(
+        "src.model_service.governance_secrets.OpenAICompatibleProvider.invoke",
+        lambda self, request: ModelResponse(
+            content="",
+            model_name=request.model_type,
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=0),
+            finish_reason="stop",
+        ),
+    )
+
+    result = probe_model_connection(_model_profile(), "sk-test")
+
+    assert result.succeeded is False
+    assert result.safe_message == "连接失败"
+
+
+def test_probe_rejects_error_shaped_http_200(monkeypatch):
+    from src.model_service.governance_secrets import probe_model_connection
+
+    class ErrorResponse:
+        status_code = 200
+        text = '{"error":{"message":"invalid key"}}'
+
+        @staticmethod
+        def json():
+            return {"error": {"message": "invalid key"}}
+
+    class FakeClient:
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, *args, **kwargs):
+            return ErrorResponse()
+
+    monkeypatch.setattr("src.model_service.providers.openai_compatible.httpx.Client", FakeClient)
+
+    result = probe_model_connection(_model_profile(), "sk-test")
+
+    assert result.succeeded is False
+    assert result.safe_message == "连接失败"
+
+
 def test_model_publish_requires_matching_successful_connection_test(monkeypatch):
     monkeypatch.setenv(
         "MODEL_GOVERNANCE_MASTER_KEY",
@@ -178,7 +265,11 @@ def test_model_content_change_invalidates_connection_test(monkeypatch, change):
         reason="再次审核",
     )
 
-    with pytest.raises(ModelGovernanceGateError, match="连接测试"):
+    from src.model_service.governance_secrets import GovernanceSecretError
+
+    expected_error = GovernanceSecretError if "base_url" in change else ModelGovernanceGateError
+    expected_message = "端点" if "base_url" in change else "连接测试"
+    with pytest.raises(expected_error, match=expected_message):
         service.publish(
             reapproved.draft_id,
             expected_revision=reapproved.revision,
@@ -207,6 +298,7 @@ def test_model_secret_change_invalidates_connection_test(monkeypatch):
     GovernanceCredentialVault(storage).put(
         approved.content.credential_ref,
         "sk-replaced",
+        base_url=approved.content.base_url,
         actor="editor",
     )
 
@@ -249,7 +341,10 @@ def test_model_publish_rejects_key_rotated_after_gate_before_atomic_commit(
     from src.model_service.governance_secrets import GovernanceCredentialVault
 
     storage.rotate_once = lambda: GovernanceCredentialVault(storage).put(
-        "credential.demo", "sk-raced", actor="editor"
+        "credential.demo",
+        "sk-raced",
+        base_url=approved.content.base_url,
+        actor="editor",
     )
 
     with pytest.raises(ModelGovernanceConflictError, match="凭据"):
@@ -262,6 +357,48 @@ def test_model_publish_rejects_key_rotated_after_gate_before_atomic_commit(
     assert storage.get_active_release(
         approved.asset_id, GovernanceEnvironment.DEV
     ) is None
+
+
+def test_model_release_keeps_tested_credential_revision_after_rotation(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
+    approved = _approved_model(service, _model_profile())
+    service.record_connection_test(
+        draft_id=approved.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=8,
+        safe_message="连接成功",
+    )
+    release = service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    from src.model_service.governance_secrets import GovernanceCredentialVault
+
+    vault = GovernanceCredentialVault(storage)
+    vault.put(
+        "credential.demo",
+        "sk-rotated-without-test",
+        base_url=approved.content.base_url,
+        actor="editor",
+    )
+
+    binding = storage.get_release_credential_binding(release.release_id)
+    historical = storage.get_credential_revision(
+        binding.credential_id, binding.credential_revision
+    )
+    assert binding.credential_fingerprint == historical.secret_fingerprint
+    assert vault.reveal_credential(
+        historical, base_url=approved.content.base_url
+    ) == "sk-current"
+    assert "encrypted_api_key" not in binding.model_dump_json()
 
 
 def test_disabled_model_can_publish_without_connection_test(monkeypatch):
@@ -345,45 +482,50 @@ def _seed_release(
     )
 
 
-def test_rollback_enabled_model_rechecks_current_key_and_connection_evidence(monkeypatch):
+def test_rollback_enabled_model_uses_target_release_credential_binding(monkeypatch):
     monkeypatch.setenv(
         "MODEL_GOVERNANCE_MASTER_KEY",
         "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
     )
     storage = InMemoryModelGovernanceStorage()
     service = ModelGovernanceService(storage)
+    approved = _approved_model(service, _model_profile())
+    service.record_connection_test(
+        draft_id=approved.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=7,
+        safe_message="连接成功",
+    )
+    target_release = service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    disabled = _complete_review(service, _model_profile(enabled=False))
+    service.publish(
+        disabled.draft_id,
+        expected_revision=disabled.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
     from src.model_service.governance_secrets import GovernanceCredentialVault
 
-    vault = GovernanceCredentialVault(storage)
-    old_credential = vault.put("credential.demo", "sk-old", actor="editor")
-    target_version = _seed_version(storage, _model_profile(), number=1)
-    target_release = _seed_release(storage, target_version)
-    disabled_version = _seed_version(
-        storage, _model_profile(enabled=False), number=2
+    GovernanceCredentialVault(storage).put(
+        "credential.demo",
+        "sk-new-untested",
+        base_url=approved.content.base_url,
+        actor="editor",
     )
-    _seed_release(
-        storage,
-        disabled_version,
-        previous_release_id=target_release.release_id,
-    )
-    from src.model_service.governance_assets import GovernanceConnectionTest
 
-    storage.save_connection_test(
-        GovernanceConnectionTest(
-            test_id="00000000-0000-0000-0000-000000000099",
-            asset_id=target_version.asset_id,
-            content_hash=target_version.content_hash,
-            credential_fingerprint=old_credential.secret_fingerprint,
-            succeeded=True,
-            latency_ms=7,
-            safe_message="连接成功",
-            tested_by="editor",
-        )
-    )
-    vault.put("credential.demo", "sk-new", actor="editor")
+    rollback = service.rollback(target_release.release_id, actor="publisher")
 
-    with pytest.raises(ModelGovernanceGateError, match="连接测试"):
-        service.rollback(target_release.release_id, actor="publisher")
+    assert storage.get_release_credential_binding(
+        rollback.release_id
+    ).model_dump(exclude={"release_id"}) == storage.get_release_credential_binding(
+        target_release.release_id
+    ).model_dump(exclude={"release_id"})
 
 
 def test_rollback_route_rechecks_enabled_models_in_target_environment():
@@ -413,6 +555,147 @@ def test_rollback_route_rechecks_enabled_models_in_target_environment():
 
     with pytest.raises(ModelGovernanceGateError, match="未在目标环境发布"):
         service.rollback(target_release.release_id, actor="publisher")
+
+
+def test_route_publish_rejects_referenced_model_changed_after_gate(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+
+    class ChangeModelBeforeCommitStorage(InMemoryModelGovernanceStorage):
+        change_once = None
+
+        def publish_draft_version(self, *args, **kwargs):
+            callback, self.change_once = self.change_once, None
+            if callback is not None:
+                callback()
+            return super().publish_draft_version(*args, **kwargs)
+
+    storage = ChangeModelBeforeCommitStorage()
+    service = ModelGovernanceService(storage)
+    model = _approved_model(service, _model_profile())
+    service.record_connection_test(
+        draft_id=model.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=5,
+        safe_message="连接成功",
+    )
+    model_release = service.publish(
+        model.draft_id,
+        expected_revision=model.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    route = _complete_review(
+        service,
+        RouteRuleAssetContent(
+            asset_id="route.race",
+            name="竞态路由",
+            scene="policy_qa",
+            profile_id=model.asset_id,
+        ),
+    )
+    disabled_version = _seed_version(
+        storage, _model_profile(enabled=False), number=2
+    )
+    storage.change_once = lambda: super(
+        ChangeModelBeforeCommitStorage, storage
+    ).publish(
+        GovernanceRelease(
+            release_id="release-disabled-race",
+            asset_id=model.asset_id,
+            asset_type=model.asset_type,
+            version_id=disabled_version.version_id,
+            environment=GovernanceEnvironment.DEV,
+            previous_release_id=model_release.release_id,
+            created_by="attacker",
+        )
+    )
+
+    with pytest.raises(ModelGovernanceConflictError, match="引用的模型"):
+        service.publish(
+            route.draft_id,
+            expected_revision=route.revision,
+            actor="publisher",
+            environment=GovernanceEnvironment.DEV,
+        )
+    assert storage.get_active_release("route.race", GovernanceEnvironment.DEV) is None
+
+
+def test_route_rollback_rejects_referenced_model_changed_after_gate(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+
+    class ChangeModelBeforeRollbackStorage(InMemoryModelGovernanceStorage):
+        change_once = None
+
+        def publish(self, *args, **kwargs):
+            callback, self.change_once = self.change_once, None
+            if callback is not None:
+                callback()
+            return super().publish(*args, **kwargs)
+
+    storage = ChangeModelBeforeRollbackStorage()
+    service = ModelGovernanceService(storage)
+    model = _approved_model(service, _model_profile())
+    service.record_connection_test(
+        draft_id=model.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=5,
+        safe_message="连接成功",
+    )
+    model_release = service.publish(
+        model.draft_id,
+        expected_revision=model.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    route_content = RouteRuleAssetContent(
+        asset_id="route.rollback-race",
+        name="旧路由",
+        scene="policy_qa",
+        profile_id=model.asset_id,
+    )
+    first = _complete_review(service, route_content)
+    first_release = service.publish(
+        first.draft_id,
+        expected_revision=first.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    second = _complete_review(
+        service, route_content.model_copy(update={"name": "当前路由"})
+    )
+    service.publish(
+        second.draft_id,
+        expected_revision=second.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+    disabled_version = _seed_version(
+        storage, _model_profile(enabled=False), number=2
+    )
+    storage.change_once = lambda: super(
+        ChangeModelBeforeRollbackStorage, storage
+    ).publish(
+        GovernanceRelease(
+            release_id="release-disabled-rollback-race",
+            asset_id=model.asset_id,
+            asset_type=model.asset_type,
+            version_id=disabled_version.version_id,
+            environment=GovernanceEnvironment.DEV,
+            previous_release_id=model_release.release_id,
+            created_by="attacker",
+        )
+    )
+
+    with pytest.raises(ModelGovernanceConflictError, match="引用的模型"):
+        service.rollback(first_release.release_id, actor="publisher")
 
 
 def test_publish_requires_validation_and_different_reviewer():

@@ -11,6 +11,7 @@ from src.model_service.governance_assets import (
     GovernanceDraft,
     GovernanceEnvironment,
     GovernanceRelease,
+    GovernanceReleaseCredentialBinding,
     GovernanceVersion,
 )
 
@@ -30,12 +31,28 @@ class GovernanceCredentialPrecondition:
     expected_revision: int
 
 
+@dataclass(frozen=True)
+class GovernanceReleasePrecondition:
+    asset_id: str
+    environment: GovernanceEnvironment
+    expected_release_id: str
+    expected_version_id: str
+
+
 class ModelGovernanceStorage(Protocol):
     def put_credential(
         self, credential: GovernanceCredential
     ) -> GovernanceCredential: ...
 
     def get_credential(self, credential_id: str) -> GovernanceCredential: ...
+
+    def get_credential_revision(
+        self, credential_id: str, revision: int
+    ) -> GovernanceCredential: ...
+
+    def get_release_credential_binding(
+        self, release_id: str
+    ) -> GovernanceReleaseCredentialBinding: ...
 
     def save_connection_test(
         self, result: GovernanceConnectionTest
@@ -101,6 +118,10 @@ class ModelGovernanceStorage(Protocol):
         release: GovernanceRelease,
         *,
         credential_precondition: GovernanceCredentialPrecondition | None = None,
+        credential_binding: GovernanceReleaseCredentialBinding | None = None,
+        referenced_release_preconditions: tuple[
+            GovernanceReleasePrecondition, ...
+        ] = (),
     ) -> GovernanceRelease: ...
 
     def publish_draft_version(
@@ -111,6 +132,10 @@ class ModelGovernanceStorage(Protocol):
         *,
         expected_revision: int,
         credential_precondition: GovernanceCredentialPrecondition | None = None,
+        credential_binding: GovernanceReleaseCredentialBinding | None = None,
+        referenced_release_preconditions: tuple[
+            GovernanceReleasePrecondition, ...
+        ] = (),
     ) -> GovernanceRelease: ...
 
     def get_release(self, release_id: str) -> GovernanceRelease: ...

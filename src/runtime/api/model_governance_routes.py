@@ -140,15 +140,21 @@ def require_model_governance_publish(
 
 
 def _raise_domain_error(exc: Exception) -> None:
-    if isinstance(exc, ModelGovernanceConflictError):
+    if isinstance(exc, GovernanceSecretError):
+        status_code, code = 503, "MODEL_GOVERNANCE_SECRET_UNAVAILABLE"
+        message = "模型治理凭据暂不可用"
+    elif isinstance(exc, ModelGovernanceConflictError):
         status_code, code = 409, "MODEL_GOVERNANCE_CONFLICT"
+        message = str(exc)
     elif isinstance(exc, ModelGovernanceNotFoundError):
         status_code, code = 404, "MODEL_GOVERNANCE_NOT_FOUND"
+        message = str(exc)
     else:
         status_code, code = 422, "MODEL_GOVERNANCE_VALIDATION_FAILED"
+        message = str(exc)
     raise HTTPException(
         status_code=status_code,
-        detail=error_detail(code, str(exc)),
+        detail=error_detail(code, message),
     ) from exc
 
 
