@@ -183,3 +183,94 @@ def test_generate_and_stream_share_governed_route_resolution(monkeypatch, gatewa
     ]
     assert all(request.temperature == 0.15 for _, request in calls)
     assert all(request.max_tokens == 333 for _, request in calls)
+
+
+def test_generate_stream_uses_governed_fallback_before_any_chunk(monkeypatch, gateway):
+    from src.model_service import gateway as gateway_module
+
+    def profile(asset_id, model_name):
+        return RuntimeModelProfile(
+            asset_id=asset_id,
+            model_name=model_name,
+            base_url=f"https://{asset_id}.example.test/v1",
+            api_key=SecretStr(f"sk-{asset_id}"),
+            timeout_seconds=9,
+            temperature=0.1,
+            max_tokens=100,
+        )
+
+    route = RuntimeModelRoute(
+        primary=profile("model.primary", "primary"),
+        fallbacks=[profile("model.backup", "backup")],
+    )
+    monkeypatch.setattr(gateway_module, "resolve_governed_route", lambda *_: route)
+    requested = []
+
+    class Provider:
+        def __init__(self, model_name):
+            self.model_name = model_name
+
+        def invoke_stream(self, request):
+            requested.append(request.model_type)
+            if self.model_name == "primary":
+                raise ModelServerError("primary failed", model_name="primary")
+            yield StreamChunk(content="backup", finish_reason="stop")
+
+    monkeypatch.setattr(
+        gateway,
+        "_get_provider",
+        lambda model_name, runtime_profile=None: Provider(model_name),
+    )
+
+    chunks = list(
+        gateway.generate_stream([Message(role="user", content="Q")], "llm", "policy_qa")
+    )
+
+    assert [chunk.content for chunk in chunks] == ["backup"]
+    assert requested == ["primary", "backup"]
+
+
+def test_generate_stream_does_not_fallback_after_first_chunk(monkeypatch, gateway):
+    from src.model_service import gateway as gateway_module
+
+    primary = RuntimeModelProfile(
+        asset_id="model.primary",
+        model_name="primary",
+        base_url="https://primary.example.test/v1",
+        api_key=SecretStr("sk-primary"),
+        timeout_seconds=9,
+        temperature=0.1,
+        max_tokens=100,
+    )
+    backup = primary.model_copy(
+        update={"asset_id": "model.backup", "model_name": "backup"}
+    )
+    monkeypatch.setattr(
+        gateway_module,
+        "resolve_governed_route",
+        lambda *_: RuntimeModelRoute(primary=primary, fallbacks=[backup]),
+    )
+    requested = []
+
+    class Provider:
+        def __init__(self, model_name):
+            self.model_name = model_name
+
+        def invoke_stream(self, request):
+            requested.append(request.model_type)
+            yield StreamChunk(content="partial")
+            raise ModelTimeoutError("interrupted", model_name=request.model_type)
+
+    monkeypatch.setattr(
+        gateway,
+        "_get_provider",
+        lambda model_name, runtime_profile=None: Provider(model_name),
+    )
+    stream = gateway.generate_stream(
+        [Message(role="user", content="Q")], "llm", "policy_qa"
+    )
+
+    assert next(stream).content == "partial"
+    with pytest.raises(ModelTimeoutError):
+        next(stream)
+    assert requested == ["primary"]

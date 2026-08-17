@@ -271,7 +271,18 @@ def test_assets_include_real_prompt_baselines_before_import(monkeypatch):
     )
     assert "可用意图" in prompt["user_prompt_template"]
     assert "用户消息：{message}" in prompt["user_prompt_template"]
+    assert prompt["runtime_status"] == "fallback_static"
     assert result["drafts"] == []
+
+    all_assets = client.get(
+        "/api/v1/medical-insurance-ai-agent/model-governance/assets?environment=dev",
+        headers=_headers("model_governance:read", subject="cashier"),
+    ).json()["result"]["baselines"]
+    by_type = {item["asset_type"]: item for item in all_assets}
+    assert set(by_type) == {"prompt", "model_profile", "route_rule"}
+    assert all(item["runtime_status"] == "fallback_static" for item in by_type.values())
+    assert "base_url" in by_type["model_profile"]
+    assert "profile_id" in by_type["route_rule"]
 
 
 def test_governance_write_is_disabled_by_default(monkeypatch):

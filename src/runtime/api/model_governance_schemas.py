@@ -1,7 +1,7 @@
 """模型治理 API 契约。"""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, SecretStr
 
@@ -14,8 +14,11 @@ from src.model_service.governance_assets import (
     GovernanceImportResult,
     GovernanceRelease,
     GovernanceVersion,
+    ModelProfileAssetContent,
+    PromptAssetContent,
     PublishedGovernanceAsset,
     PublishedGovernanceSnapshot,
+    RouteRuleAssetContent,
 )
 from src.runtime.api.schemas import AgentResponse
 
@@ -60,8 +63,28 @@ class PublishGovernanceDraftRequest(GovernanceRevisionRequest):
     environment: GovernanceEnvironment
 
 
+class PromptGovernanceBaseline(PromptAssetContent):
+    runtime_status: Literal["fallback_static"] = "fallback_static"
+
+
+class ModelProfileGovernanceBaseline(ModelProfileAssetContent):
+    runtime_status: Literal["fallback_static"] = "fallback_static"
+
+
+class RouteRuleGovernanceBaseline(RouteRuleAssetContent):
+    runtime_status: Literal["fallback_static"] = "fallback_static"
+
+
+GovernanceBaseline = Annotated[
+    PromptGovernanceBaseline
+    | ModelProfileGovernanceBaseline
+    | RouteRuleGovernanceBaseline,
+    Field(discriminator="asset_type"),
+]
+
+
 class GovernanceAssetsResult(BaseModel):
-    baselines: list[GovernanceAssetContent] = Field(default_factory=list)
+    baselines: list[GovernanceBaseline] = Field(default_factory=list)
     drafts: list[GovernanceDraft] = Field(default_factory=list)
     published: list[PublishedGovernanceAsset] = Field(default_factory=list)
 
@@ -129,6 +152,7 @@ __all__ = [
     "CreateGovernanceDraftRequest",
     "GovernanceAssetsResponse",
     "GovernanceAssetsResult",
+    "GovernanceBaseline",
     "GovernanceAssetType",
     "GovernanceDraftResponse",
     "GovernanceConnectionTestResponse",
@@ -144,8 +168,11 @@ __all__ = [
     "GovernanceVersionsResult",
     "ModelGovernancePrincipal",
     "ModelCredentialInput",
+    "ModelProfileGovernanceBaseline",
     "PreviewGovernanceDraftRequest",
+    "PromptGovernanceBaseline",
     "PublishedGovernanceSnapshotResponse",
     "PublishGovernanceDraftRequest",
+    "RouteRuleGovernanceBaseline",
     "UpdateGovernanceDraftRequest",
 ]

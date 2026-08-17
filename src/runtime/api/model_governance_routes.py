@@ -12,9 +12,12 @@ from src.data_platform.storage.model_governance.ports import (
 from src.gateway.auth import authenticator
 from src.model_service.governance import ModelGovernanceSnapshot, build_governance_snapshot
 from src.model_service.governance_assets import (
+    GovernanceAssetContent,
     GovernanceAssetType,
     GovernanceEnvironment,
     ModelProfileAssetContent,
+    PromptAssetContent,
+    RouteRuleAssetContent,
 )
 from src.model_service.governance_import import build_current_governance_assets
 from src.model_service.governance_factory import get_model_governance_service
@@ -28,6 +31,7 @@ from src.runtime.api.model_governance_schemas import (
     CreateGovernanceDraftRequest,
     GovernanceAssetsResponse,
     GovernanceAssetsResult,
+    GovernanceBaseline,
     GovernanceConnectionTestResponse,
     GovernanceConnectionTestResult,
     GovernanceDraftResponse,
@@ -40,9 +44,12 @@ from src.runtime.api.model_governance_schemas import (
     GovernanceVersionsResponse,
     GovernanceVersionsResult,
     ModelGovernancePrincipal,
+    ModelProfileGovernanceBaseline,
     PreviewGovernanceDraftRequest,
+    PromptGovernanceBaseline,
     PublishedGovernanceSnapshotResponse,
     PublishGovernanceDraftRequest,
+    RouteRuleGovernanceBaseline,
     UpdateGovernanceDraftRequest,
 )
 from src.runtime.api.schemas import AgentResponse
@@ -52,6 +59,16 @@ router = APIRouter(
     prefix="/api/v1/medical-insurance-ai-agent/model-governance",
     tags=["model-governance"],
 )
+
+
+def _baseline_projection(content: GovernanceAssetContent) -> GovernanceBaseline:
+    if isinstance(content, PromptAssetContent):
+        return PromptGovernanceBaseline.model_validate(content.model_dump())
+    if isinstance(content, ModelProfileAssetContent):
+        return ModelProfileGovernanceBaseline.model_validate(content.model_dump())
+    if isinstance(content, RouteRuleAssetContent):
+        return RouteRuleGovernanceBaseline.model_validate(content.model_dump())
+    raise TypeError(f"不支持的基线资产类型: {type(content).__name__}")
 
 
 class ModelGovernanceResponse(AgentResponse):
@@ -212,7 +229,7 @@ def list_governance_assets(
     return GovernanceAssetsResponse(
         result=GovernanceAssetsResult(
             baselines=[
-                item
+                _baseline_projection(item)
                 for item in build_current_governance_assets()
                 if asset_type is None or item.asset_type == asset_type
             ],

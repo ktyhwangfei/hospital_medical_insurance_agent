@@ -179,12 +179,14 @@ def _publish_route(
     *,
     profile_id: str,
     fallbacks: list[str] | None = None,
+    scene: str = "policy_qa",
+    asset_id: str = "route.demo",
 ) -> None:
     service = ModelGovernanceService(storage)
     content = RouteRuleAssetContent(
-        asset_id="route.demo",
+        asset_id=asset_id,
         name="demo route",
-        scene="policy_qa",
+        scene=scene,
         model_type="llm",
         profile_id=profile_id,
         fallback_profile_ids=fallbacks or [],
@@ -298,6 +300,167 @@ def test_governed_route_with_damaged_active_route_fails_closed(monkeypatch):
             created_by="test",
         )
     )
+
+    with pytest.raises(GovernanceRuntimeError, match="治理路由"):
+        governance_runtime.resolve_governed_route(
+            "policy_qa",
+            "llm",
+            storage=storage,
+            environment=GovernanceEnvironment.DEV,
+        )
+
+
+def test_governed_route_uses_active_default_when_exact_scene_is_absent(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    _publish_model(storage, asset_id="model.default", model_name="governed-default", api_key="sk-default")
+    _publish_route(storage, profile_id="model.default", scene="default")
+
+    route = governance_runtime.resolve_governed_route(
+        "unregistered_scene",
+        "llm",
+        storage=storage,
+        environment=GovernanceEnvironment.DEV,
+    )
+
+    assert route is not None
+    assert route.primary.model_name == "governed-default"
+
+
+def test_governed_route_prefers_exact_scene_over_active_default(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    _publish_model(storage, asset_id="model.exact", model_name="exact", api_key="sk-exact")
+    _publish_model(storage, asset_id="model.default", model_name="default", api_key="sk-default")
+    _publish_route(storage, profile_id="model.exact")
+    _publish_route(
+        storage,
+        profile_id="model.default",
+        scene="default",
+        asset_id="route.default",
+    )
+
+    route = governance_runtime.resolve_governed_route(
+        "policy_qa",
+        "llm",
+        storage=storage,
+        environment=GovernanceEnvironment.DEV,
+    )
+
+    assert route is not None
+    assert route.primary.model_name == "exact"
+
+
+@pytest.mark.parametrize(
+    ("route_scene", "requested_scene"),
+    [("policy_qa", "policy_qa"), ("default", "unregistered_scene")],
+)
+def test_governed_route_rejects_duplicate_exact_or_default_key(
+    monkeypatch, route_scene, requested_scene
+):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    _publish_model(storage, asset_id="model.primary", model_name="primary", api_key="sk-primary")
+    _publish_route(storage, profile_id="model.primary", scene=route_scene)
+    release = storage.get_active_release("route.demo", GovernanceEnvironment.DEV)
+    assert release is not None
+    version = storage._versions[release.version_id]
+    duplicate_content = version.content.model_copy(update={"asset_id": "route.duplicate"})
+    duplicate_version = version.model_copy(
+        update={
+            "version_id": "version-route-duplicate",
+            "asset_id": "route.duplicate",
+            "content": duplicate_content,
+        }
+    )
+    duplicate_release = release.model_copy(
+        update={
+            "release_id": "release-route-duplicate",
+            "asset_id": "route.duplicate",
+            "version_id": duplicate_version.version_id,
+        }
+    )
+    storage._versions[duplicate_version.version_id] = duplicate_version
+    storage._releases[duplicate_release.release_id] = duplicate_release
+
+    with pytest.raises(GovernanceRuntimeError, match="重复"):
+        governance_runtime.resolve_governed_route(
+            requested_scene,
+            "llm",
+            storage=storage,
+            environment=GovernanceEnvironment.DEV,
+        )
+
+
+@pytest.mark.parametrize("damaged_asset", ["route", "profile"])
+def test_governed_route_rejects_release_version_content_identity_mismatch(
+    monkeypatch, damaged_asset
+):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    _publish_model(storage, asset_id="model.primary", model_name="primary", api_key="sk-primary")
+    _publish_route(storage, profile_id="model.primary")
+    asset_id = "route.demo" if damaged_asset == "route" else "model.primary"
+    release = storage.get_active_release(asset_id, GovernanceEnvironment.DEV)
+    assert release is not None
+    version = storage._versions[release.version_id]
+    storage._versions[release.version_id] = version.model_copy(
+        update={"asset_id": f"{asset_id}.corrupt"}
+    )
+
+    with pytest.raises(GovernanceRuntimeError, match="治理路由"):
+        governance_runtime.resolve_governed_route(
+            "policy_qa",
+            "llm",
+            storage=storage,
+            environment=GovernanceEnvironment.DEV,
+        )
+
+
+def test_governed_route_rejects_release_type_identity_mismatch(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    _publish_model(storage, asset_id="model.primary", model_name="primary", api_key="sk-primary")
+    _publish_route(storage, profile_id="model.primary")
+    release = storage.get_active_release("route.demo", GovernanceEnvironment.DEV)
+    assert release is not None
+    storage._releases[release.release_id] = release.model_copy(
+        update={"asset_type": GovernanceAssetType.PROMPT}
+    )
+
+    with pytest.raises(GovernanceRuntimeError, match="治理路由"):
+        governance_runtime.resolve_governed_route(
+            "policy_qa",
+            "llm",
+            storage=storage,
+            environment=GovernanceEnvironment.DEV,
+        )
+
+
+def test_governed_route_wraps_missing_master_key_as_runtime_error(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    _publish_model(storage, asset_id="model.primary", model_name="primary", api_key="sk-primary")
+    _publish_route(storage, profile_id="model.primary")
+    monkeypatch.delenv("MODEL_GOVERNANCE_MASTER_KEY")
 
     with pytest.raises(GovernanceRuntimeError, match="治理路由"):
         governance_runtime.resolve_governed_route(

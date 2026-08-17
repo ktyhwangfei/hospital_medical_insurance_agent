@@ -101,7 +101,16 @@ def _runtime_profile(
     release = storage.get_active_release(profile_id, environment)
     if release is None:
         raise LookupError(f"模型未发布: {profile_id}")
-    content = storage.get_version(release.version_id).content
+    version = storage.get_version(release.version_id)
+    content = version.content
+    if (
+        release.asset_id != version.asset_id
+        or release.asset_type != GovernanceAssetType.MODEL_PROFILE
+        or version.asset_type != GovernanceAssetType.MODEL_PROFILE
+        or not isinstance(content, ModelProfileAssetContent)
+        or content.asset_id != version.asset_id
+    ):
+        raise TypeError(f"模型发布身份不一致: {profile_id}")
     if not isinstance(content, ModelProfileAssetContent) or not content.enabled:
         raise TypeError(f"模型已停用或类型错误: {profile_id}")
     binding = storage.get_release_credential_binding(release.release_id)
@@ -134,32 +143,53 @@ def resolve_governed_route(
 ) -> RuntimeModelRoute | None:
     store = storage if storage is not None else get_model_governance_storage()
     target_environment = environment or current_environment()
-    matches: list[RouteRuleAssetContent] = []
+    exact_matches: list[RouteRuleAssetContent] = []
+    default_matches: list[RouteRuleAssetContent] = []
     try:
         # ponytail: 活动路由为小规模 O(n) 扫描；实测成为网关瓶颈时再加 PostgreSQL 场景索引。
         releases = store.list_releases(environment=target_environment)
         for release in releases:
-            if (
-                release.status != GovernanceReleaseStatus.ACTIVE
-                or release.asset_type != GovernanceAssetType.ROUTE_RULE
-            ):
+            if release.status != GovernanceReleaseStatus.ACTIVE:
                 continue
-            content = store.get_version(release.version_id).content
-            if not isinstance(content, RouteRuleAssetContent):
-                raise TypeError(f"活动路由类型错误: {release.asset_id}")
-            if content.enabled and content.scene == scene and content.model_type == model_type:
-                matches.append(content)
+            version = store.get_version(release.version_id)
+            content = version.content
+            is_route_release = (
+                release.asset_type == GovernanceAssetType.ROUTE_RULE
+                or version.asset_type == GovernanceAssetType.ROUTE_RULE
+                or isinstance(content, RouteRuleAssetContent)
+            )
+            if not is_route_release:
+                continue
+            if (
+                release.asset_id != version.asset_id
+                or release.asset_type != GovernanceAssetType.ROUTE_RULE
+                or version.asset_type != GovernanceAssetType.ROUTE_RULE
+                or not isinstance(content, RouteRuleAssetContent)
+                or content.asset_id != version.asset_id
+            ):
+                raise TypeError(f"活动路由身份不一致: {release.asset_id}")
+            if not content.enabled or content.model_type != model_type:
+                continue
+            if content.scene == scene:
+                exact_matches.append(content)
+            elif content.scene == "default":
+                default_matches.append(content)
     except Exception as exc:
         raise GovernanceRuntimeError(f"读取治理路由失败: {scene}/{model_type}") from exc
 
-    if not matches:
-        return None
-    if len(matches) > 1:
+    if len(exact_matches) > 1:
         raise GovernanceRuntimeError(f"存在重复治理路由: {scene}/{model_type}")
+    if len(default_matches) > 1:
+        raise GovernanceRuntimeError(f"存在重复默认治理路由: {model_type}")
+    if exact_matches:
+        route = exact_matches[0]
+    elif default_matches:
+        route = default_matches[0]
+    else:
+        return None
 
-    route = matches[0]
-    credential_vault = vault or GovernanceCredentialVault(store)
     try:
+        credential_vault = vault if vault is not None else GovernanceCredentialVault(store)
         profiles = [
             _runtime_profile(
                 profile_id,

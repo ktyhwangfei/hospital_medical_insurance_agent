@@ -250,60 +250,79 @@ class ModelGateway:
 
     def generate_stream(self, messages: list[Message], model_type: str, scene: str) -> Iterator[StreamChunk]:
         governed = resolve_governed_route(scene, model_type)
-        profile = governed.primary if governed is not None else None
-        if profile is None:
+        if governed is None:
             model_name, _ = self._router.resolve(scene, model_type)
-            params = self._router.get_model_params(model_name)
+            targets: list[tuple[str, RuntimeModelProfile | None]] = [(model_name, None)]
         else:
-            model_name = profile.model_name
-            params = {
-                "temperature": profile.temperature,
-                "max_tokens": profile.max_tokens,
-            }
-        request = ModelRequest(
-            messages=messages,
-            model_type=model_name,
-            scene=scene,
-            temperature=params["temperature"],
-            max_tokens=params["max_tokens"],
-        )
+            targets = [
+                (profile.model_name, profile)
+                for profile in [governed.primary, *governed.fallbacks]
+            ]
 
-        start = time.time()
-        total_chunks = 0
-        try:
-            provider = (
-                self._get_provider(model_name, profile)
+        for index, (model_name, profile) in enumerate(targets):
+            params = (
+                {
+                    "temperature": profile.temperature,
+                    "max_tokens": profile.max_tokens,
+                }
                 if profile is not None
-                else self._get_provider(model_name)
+                else self._router.get_model_params(model_name)
             )
-            for chunk in provider.invoke_stream(request):
-                total_chunks += 1
-                yield chunk
-            latency_ms = int((time.time() - start) * 1000)
-            logger.info("model_stream_success", extra={"model_name": model_name, "scene": scene, "total_chunks": total_chunks, "latency_ms": latency_ms})
-            # 记录基础设施事件
-            _record_llm_event(
-                model_name=model_name,
+            request = ModelRequest(
+                messages=messages,
+                model_type=model_name,
                 scene=scene,
-                prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                response_summary=f"(stream, {total_chunks} chunks)",
-                latency_ms=latency_ms,
-                status="completed",
+                temperature=params["temperature"],
+                max_tokens=params["max_tokens"],
             )
-        except Exception as e:
-            latency_ms = int((time.time() - start) * 1000)
-            logger.error("model_stream_interrupted", extra={"model_name": model_name, "scene": scene, "total_chunks": total_chunks, "latency_ms": latency_ms, "error": str(e)})
-            # 记录基础设施事件（失败）
-            _record_llm_event(
-                model_name=model_name,
-                scene=scene,
-                prompt_summary=_truncate_content(messages[-1].content if messages else ""),
-                response_summary="",
-                latency_ms=latency_ms,
-                status="failed",
-                error_message=str(e),
-            )
-            raise
+
+            start = time.time()
+            total_chunks = 0
+            try:
+                provider = (
+                    self._get_provider(model_name, profile)
+                    if profile is not None
+                    else self._get_provider(model_name)
+                )
+                for chunk in provider.invoke_stream(request):
+                    total_chunks += 1
+                    yield chunk
+                latency_ms = int((time.time() - start) * 1000)
+                logger.info("model_stream_success", extra={"model_name": model_name, "scene": scene, "total_chunks": total_chunks, "latency_ms": latency_ms})
+                # 记录基础设施事件
+                _record_llm_event(
+                    model_name=model_name,
+                    scene=scene,
+                    prompt_summary=_truncate_content(messages[-1].content if messages else ""),
+                    response_summary=f"(stream, {total_chunks} chunks)",
+                    latency_ms=latency_ms,
+                    status="completed",
+                )
+                return
+            except Exception as e:
+                latency_ms = int((time.time() - start) * 1000)
+                logger.error("model_stream_interrupted", extra={"model_name": model_name, "scene": scene, "total_chunks": total_chunks, "latency_ms": latency_ms, "error": str(e)})
+                # 记录基础设施事件（失败）
+                _record_llm_event(
+                    model_name=model_name,
+                    scene=scene,
+                    prompt_summary=_truncate_content(messages[-1].content if messages else ""),
+                    response_summary="",
+                    latency_ms=latency_ms,
+                    status="failed",
+                    error_message=str(e),
+                )
+                retryable = isinstance(
+                    e, (ModelRateLimitError, ModelTimeoutError, ModelServerError)
+                )
+                if (
+                    governed is not None
+                    and total_chunks == 0
+                    and retryable
+                    and index < len(targets) - 1
+                ):
+                    continue
+                raise
 
     def _call_provider(
         self,
