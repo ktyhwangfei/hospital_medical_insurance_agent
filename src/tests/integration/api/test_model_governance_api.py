@@ -265,6 +265,7 @@ def test_assets_include_real_prompt_baselines_before_import(monkeypatch):
     )
 
     assert response.status_code == 200
+    assert response.json()["uncertainties"] == []
     result = response.json()["result"]
     prompt = next(
         item for item in result["baselines"] if item["asset_id"] == "intent.classify"

@@ -195,9 +195,6 @@ def _validate_credential_reference(
         raise ModelGovernanceGateError("API Key 长度必须在 1 到 4096 之间")
 
 
-_PENDING_RUNTIME = ["治理库已发布配置尚未接入当前运行时"]
-
-
 @router.get("/snapshot", response_model=ModelGovernanceResponse)
 def get_model_governance_snapshot(
     _: ModelGovernancePrincipal = Depends(require_model_governance_read),
@@ -240,7 +237,7 @@ def list_governance_assets(
                 if asset_type is None or item.asset_type == asset_type
             ],
         ),
-        uncertainties=_PENDING_RUNTIME,
+        uncertainties=[],
         audit=_audit(principal, "list_assets"),
     )
 
@@ -260,7 +257,7 @@ def list_governance_versions(
             versions=service.list_versions(asset_id),
             releases=service.list_releases(asset_id, environment),
         ),
-        uncertainties=_PENDING_RUNTIME,
+        uncertainties=[],
         audit=_audit(principal, "list_versions"),
     )
 
@@ -286,7 +283,7 @@ def create_next_governance_version(
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
         result=draft,
-        uncertainties=_PENDING_RUNTIME,
+        uncertainties=[],
         audit=_audit(principal, "create_next_version"),
     )
 
@@ -315,7 +312,7 @@ def create_governance_draft(
     ) as exc:
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
-        result=draft, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "create_draft")
+        result=draft, uncertainties=[], audit=_audit(principal, "create_draft")
     )
 
 
@@ -332,7 +329,7 @@ def import_current_governance_assets(
         _raise_domain_error(exc)
     return GovernanceImportResponse(
         result=result,
-        uncertainties=_PENDING_RUNTIME,
+        uncertainties=[],
         audit=_audit(principal, "import_current_assets"),
     )
 
@@ -370,7 +367,7 @@ def update_governance_draft(
     ) as exc:
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
-        result=draft, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "update_draft")
+        result=draft, uncertainties=[], audit=_audit(principal, "update_draft")
     )
 
 
@@ -393,7 +390,7 @@ def delete_governance_draft(
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
         result=draft,
-        uncertainties=_PENDING_RUNTIME,
+        uncertainties=[],
         audit=_audit(principal, "delete_draft"),
     )
 
@@ -412,7 +409,7 @@ def validate_governance_draft(
     except (ModelGovernanceConflictError, ModelGovernanceNotFoundError) as exc:
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
-        result=draft, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "validate_draft")
+        result=draft, uncertainties=[], audit=_audit(principal, "validate_draft")
     )
 
 
@@ -428,7 +425,7 @@ def preview_governance_draft(
     except (ModelGovernanceNotFoundError, ModelGovernanceGateError, ValueError) as exc:
         _raise_domain_error(exc)
     return GovernancePreviewResponse(
-        result=preview, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "preview_draft")
+        result=preview, uncertainties=[], audit=_audit(principal, "preview_draft")
     )
 
 
@@ -458,7 +455,7 @@ def test_governance_model_connection(
             tested_at=tested.tested_at,
             content_hash=tested.content_hash,
         ),
-        uncertainties=_PENDING_RUNTIME,
+        uncertainties=[],
         audit=_audit(principal, "test_connection"),
     )
 
@@ -479,7 +476,7 @@ def request_governance_review(
     except (ModelGovernanceConflictError, ModelGovernanceNotFoundError, ModelGovernanceGateError) as exc:
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
-        result=draft, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "request_review")
+        result=draft, uncertainties=[], audit=_audit(principal, "request_review")
     )
 
 
@@ -500,7 +497,7 @@ def approve_governance_draft(
     except (ModelGovernanceConflictError, ModelGovernanceNotFoundError, ModelGovernanceGateError) as exc:
         _raise_domain_error(exc)
     return GovernanceDraftResponse(
-        result=draft, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "approve_draft")
+        result=draft, uncertainties=[], audit=_audit(principal, "approve_draft")
     )
 
 
@@ -526,7 +523,7 @@ def publish_governance_draft(
     ) as exc:
         _raise_domain_error(exc)
     return GovernanceReleaseResponse(
-        result=release, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "publish_draft")
+        result=release, uncertainties=[], audit=_audit(principal, "publish_draft")
     )
 
 
@@ -541,7 +538,7 @@ def list_governance_releases(
         result=GovernanceReleasesResult(
             releases=service.list_releases(asset_id, environment)
         ),
-        uncertainties=_PENDING_RUNTIME,
+        uncertainties=[],
         audit=_audit(principal, "list_releases"),
     )
 
@@ -562,7 +559,7 @@ def rollback_governance_release(
     ) as exc:
         _raise_domain_error(exc)
     return GovernanceReleaseResponse(
-        result=release, uncertainties=_PENDING_RUNTIME, audit=_audit(principal, "rollback_release")
+        result=release, uncertainties=[], audit=_audit(principal, "rollback_release")
     )
 
 
@@ -574,6 +571,6 @@ def get_published_governance_snapshot(
 ) -> PublishedGovernanceSnapshotResponse:
     return PublishedGovernanceSnapshotResponse(
         result=service.published_snapshot(environment),
-        uncertainties=_PENDING_RUNTIME,
+        uncertainties=[],
         audit=_audit(principal, "published_snapshot"),
     )
