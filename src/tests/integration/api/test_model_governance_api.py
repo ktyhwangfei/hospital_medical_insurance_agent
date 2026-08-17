@@ -418,6 +418,62 @@ def test_model_credential_is_encrypted_and_never_echoed_by_api(monkeypatch, capl
     assert secret not in stored.model_dump_json()
 
 
+def test_model_credential_writes_follow_injected_service_storage(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    client = _management_client(monkeypatch)
+    from src.data_platform.storage.model_governance.factory import (
+        get_model_governance_storage,
+    )
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+    from src.data_platform.storage.model_governance.ports import (
+        ModelGovernanceNotFoundError,
+    )
+    from src.model_service.governance_service import ModelGovernanceService
+    from src.runtime.api.model_governance_routes import get_model_governance_service
+
+    injected_storage = InMemoryModelGovernanceStorage()
+    injected_service = ModelGovernanceService(injected_storage)
+    client.app.dependency_overrides[get_model_governance_service] = (
+        lambda: injected_service
+    )
+    global_storage = get_model_governance_storage()
+    prefix = "/api/v1/medical-insurance-ai-agent/model-governance/drafts"
+
+    created_response = client.post(
+        prefix,
+        json=_model_payload("injected-original-key"),
+        headers=_headers("model_governance:write"),
+    )
+
+    assert created_response.status_code == 201
+    created = created_response.json()["result"]
+    assert injected_storage.get_draft(created["draft_id"]).revision == 1
+    assert injected_storage.get_credential("credential.api-demo").revision == 1
+    with pytest.raises(ModelGovernanceNotFoundError):
+        global_storage.get_credential("credential.api-demo")
+
+    changed = _model_payload("injected-replacement-key")
+    changed["content"]["model_name"] = "replacement-model"
+    changed["expected_revision"] = created["revision"]
+    updated_response = client.patch(
+        f"{prefix}/{created['draft_id']}",
+        json=changed,
+        headers=_headers("model_governance:write"),
+    )
+
+    assert updated_response.status_code == 200
+    assert injected_storage.get_draft(created["draft_id"]).revision == 2
+    assert injected_storage.get_credential("credential.api-demo").revision == 2
+    with pytest.raises(ModelGovernanceNotFoundError):
+        global_storage.get_credential("credential.api-demo")
+
+
 def test_model_credential_ref_must_match_and_failed_encryption_removes_new_draft(
     monkeypatch,
 ):

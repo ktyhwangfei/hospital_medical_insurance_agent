@@ -12,7 +12,6 @@ from src.model_service.governance_assets import (
     GovernanceAssetContent,
     GovernanceAssetPreview,
     GovernanceAssetType,
-    GovernanceCredential,
     GovernanceDraft,
     GovernanceDraftStatus,
     GovernanceEnvironment,
@@ -32,6 +31,7 @@ from src.model_service.governance_assets import (
     preview_asset,
     validate_asset,
 )
+from src.model_service.governance_secrets import GovernanceCredentialVault
 
 
 class ModelGovernanceGateError(ValueError):
@@ -59,18 +59,37 @@ class ModelGovernanceService:
     def create_draft(
         self, content: GovernanceAssetContent, *, actor: str
     ) -> GovernanceDraft:
+        return self._storage.create_draft(self._new_draft(content, actor=actor))
+
+    def create_draft_with_credential(
+        self,
+        content: GovernanceAssetContent,
+        credential_id: str,
+        api_key: str,
+        *,
+        actor: str,
+    ) -> GovernanceDraft:
+        draft = self._new_draft(content, actor=actor)
+        credential = GovernanceCredentialVault(self._storage).seal(
+            credential_id,
+            api_key,
+            actor=actor,
+        )
+        return self._storage.create_draft_with_credential(draft, credential)
+
+    def _new_draft(
+        self, content: GovernanceAssetContent, *, actor: str
+    ) -> GovernanceDraft:
         now = self._now()
-        return self._storage.create_draft(
-            GovernanceDraft(
-                draft_id=str(uuid4()),
-                asset_id=content.asset_id,
-                asset_type=self._asset_type(content),
-                content=content,
-                created_by=actor,
-                last_edited_by=actor,
-                created_at=now,
-                updated_at=now,
-            )
+        return GovernanceDraft(
+            draft_id=str(uuid4()),
+            asset_id=content.asset_id,
+            asset_type=self._asset_type(content),
+            content=content,
+            created_by=actor,
+            last_edited_by=actor,
+            created_at=now,
+            updated_at=now,
         )
 
     def save_draft(
@@ -96,7 +115,8 @@ class ModelGovernanceService:
         self,
         draft_id: str,
         content: GovernanceAssetContent,
-        credential: GovernanceCredential,
+        credential_id: str,
+        api_key: str,
         *,
         expected_revision: int,
         actor: str,
@@ -105,6 +125,11 @@ class ModelGovernanceService:
             draft_id,
             content,
             expected_revision=expected_revision,
+            actor=actor,
+        )
+        credential = GovernanceCredentialVault(self._storage).seal(
+            credential_id,
+            api_key,
             actor=actor,
         )
         return self._storage.update_draft_with_credential(

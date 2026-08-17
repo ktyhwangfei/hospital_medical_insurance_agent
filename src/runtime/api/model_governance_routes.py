@@ -1,14 +1,10 @@
 """模型与提示词治理接口。"""
 
 import os
-from functools import lru_cache
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
-from src.data_platform.storage.model_governance.factory import (
-    get_model_governance_storage,
-)
 from src.data_platform.storage.model_governance.ports import (
     ModelGovernanceConflictError,
     ModelGovernanceNotFoundError,
@@ -21,10 +17,8 @@ from src.model_service.governance_assets import (
     ModelProfileAssetContent,
 )
 from src.model_service.governance_import import build_current_governance_assets
-from src.model_service.governance_secrets import (
-    GovernanceCredentialVault,
-    GovernanceSecretError,
-)
+from src.model_service.governance_factory import get_model_governance_service
+from src.model_service.governance_secrets import GovernanceSecretError
 from src.model_service.governance_service import (
     ModelGovernanceGateError,
     ModelGovernanceService,
@@ -62,11 +56,6 @@ class ModelGovernanceResponse(AgentResponse):
     scenario: Literal["model_governance"] = "model_governance"
     status: Literal["success"] = "success"
     result: ModelGovernanceSnapshot
-
-
-@lru_cache(maxsize=1)
-def get_model_governance_service() -> ModelGovernanceService:
-    return ModelGovernanceService(get_model_governance_storage())
 
 
 def require_model_governance_permission(
@@ -181,18 +170,6 @@ def _validate_credential_reference(
         raise ModelGovernanceGateError("API Key 长度必须在 1 到 4096 之间")
 
 
-def _put_credential(
-    request: CreateGovernanceDraftRequest, *, actor: str
-) -> None:
-    if request.credential is None:
-        return
-    GovernanceCredentialVault(get_model_governance_storage()).put(
-        request.credential.credential_id,
-        request.credential.api_key.get_secret_value(),
-        actor=actor,
-    )
-
-
 _PENDING_RUNTIME = ["治理库已发布配置尚未接入当前运行时"]
 
 
@@ -297,12 +274,15 @@ def create_governance_draft(
 ) -> GovernanceDraftResponse:
     try:
         _validate_credential_reference(request)
-        draft = service.create_draft(request.content, actor=principal.user_id)
-        try:
-            _put_credential(request, actor=principal.user_id)
-        except Exception:
-            service.delete_draft(draft.draft_id, expected_revision=draft.revision)
-            raise
+        if request.credential is None:
+            draft = service.create_draft(request.content, actor=principal.user_id)
+        else:
+            draft = service.create_draft_with_credential(
+                request.content,
+                request.credential.credential_id,
+                request.credential.api_key.get_secret_value(),
+                actor=principal.user_id,
+            )
     except (
         ModelGovernanceConflictError,
         ModelGovernanceGateError,
@@ -349,16 +329,11 @@ def update_governance_draft(
                 actor=principal.user_id,
             )
         else:
-            vault = GovernanceCredentialVault(get_model_governance_storage())
-            credential = vault.seal(
-                request.credential.credential_id,
-                request.credential.api_key.get_secret_value(),
-                actor=principal.user_id,
-            )
             draft = service.save_draft_with_credential(
                 draft_id,
                 request.content,
-                credential,
+                request.credential.credential_id,
+                request.credential.api_key.get_secret_value(),
                 expected_revision=request.expected_revision,
                 actor=principal.user_id,
             )

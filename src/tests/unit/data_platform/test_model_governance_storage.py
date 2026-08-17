@@ -421,6 +421,43 @@ def test_in_memory_atomic_credential_update_leaves_both_records_unchanged_on_con
     assert storage.get_credential(original.credential_id) == original
 
 
+def test_in_memory_atomic_credential_create_leaves_neither_record_on_midway_failure():
+    from src.data_platform.storage.model_governance.in_memory import (
+        InMemoryModelGovernanceStorage,
+    )
+    from src.data_platform.storage.model_governance.ports import (
+        ModelGovernanceNotFoundError,
+    )
+
+    class FailingCredentialCopyStorage(InMemoryModelGovernanceStorage):
+        fail_credential_copy = True
+
+        def _copy(self, value):
+            if self.fail_credential_copy and isinstance(value, GovernanceCredential):
+                self.fail_credential_copy = False
+                raise RuntimeError("credential storage failed")
+            return super()._copy(value)
+
+    storage = FailingCredentialCopyStorage()
+    draft = _draft()
+    credential = GovernanceCredential(
+        credential_id="credential.demo",
+        encrypted_api_key="encrypted-value",
+        secret_fingerprint="a" * 64,
+        revision=1,
+        updated_by="editor",
+        updated_at=NOW,
+    )
+
+    with pytest.raises(RuntimeError, match="credential storage failed"):
+        storage.create_draft_with_credential(draft, credential)
+
+    with pytest.raises(ModelGovernanceNotFoundError):
+        storage.get_draft(draft.draft_id)
+    with pytest.raises(ModelGovernanceNotFoundError):
+        storage.get_credential(credential.credential_id)
+
+
 def test_factory_uses_explicit_memory_and_defaults_to_lazy_postgres(monkeypatch):
     from src.data_platform.storage.model_governance.factory import (
         get_model_governance_storage,

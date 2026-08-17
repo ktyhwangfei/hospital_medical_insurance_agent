@@ -254,6 +254,44 @@ class PostgresModelGovernanceStorage:
             raise ModelGovernanceConflictError("草稿已存在") from exc
         return self._draft(rows[0])
 
+    def create_draft_with_credential(
+        self,
+        draft: GovernanceDraft,
+        credential: GovernanceCredential,
+    ) -> GovernanceDraft:
+        sql = """INSERT INTO model_governance_drafts
+            (draft_id, asset_id, asset_type, content, status, revision, validation_issues,
+             created_by, last_edited_by, created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *"""
+        client = self._get_client()
+        with client.transaction():
+            try:
+                rows = client.execute(
+                    sql,
+                    (
+                        draft.draft_id,
+                        draft.asset_id,
+                        draft.asset_type.value,
+                        _json(draft.content),
+                        draft.status.value,
+                        draft.revision,
+                        _json(draft.validation_issues),
+                        draft.created_by,
+                        draft.last_edited_by,
+                        draft.created_at,
+                        draft.updated_at,
+                    ),
+                )
+            except Exception as exc:
+                sqlstate = getattr(exc, "sqlstate", None) or getattr(
+                    exc, "pgcode", None
+                )
+                if sqlstate and str(sqlstate).startswith("23"):
+                    raise ModelGovernanceConflictError("草稿已存在") from exc
+                raise
+            self.put_credential(credential)
+        return self._draft(rows[0])
+
     def update_draft(self, draft: GovernanceDraft, *, expected_revision: int) -> GovernanceDraft:
         if draft.revision != expected_revision + 1:
             raise ModelGovernanceConflictError("草稿 revision 必须递增 1")

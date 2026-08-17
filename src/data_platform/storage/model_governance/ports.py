@@ -42,6 +42,12 @@ class ModelGovernanceStorage(Protocol):
 
     def create_draft(self, draft: GovernanceDraft) -> GovernanceDraft: ...
 
+    def create_draft_with_credential(
+        self,
+        draft: GovernanceDraft,
+        credential: GovernanceCredential,
+    ) -> GovernanceDraft: ...
+
     def update_draft(
         self, draft: GovernanceDraft, *, expected_revision: int
     ) -> GovernanceDraft: ...
