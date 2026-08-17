@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS model_governance_releases (
     asset_id VARCHAR(128) NOT NULL,
     asset_type VARCHAR(32) NOT NULL,
     version_id VARCHAR(64) NOT NULL REFERENCES model_governance_versions(version_id),
+    source_draft_id VARCHAR(64),
     environment VARCHAR(16) NOT NULL,
     status VARCHAR(16) NOT NULL,
     previous_release_id VARCHAR(64) REFERENCES model_governance_releases(release_id),
@@ -79,6 +80,15 @@ CREATE TABLE IF NOT EXISTS model_governance_releases (
     created_at TIMESTAMPTZ NOT NULL,
     retired_at TIMESTAMPTZ
 );
+ALTER TABLE model_governance_releases
+    ADD COLUMN IF NOT EXISTS source_draft_id VARCHAR(64);
+UPDATE model_governance_releases AS release
+SET source_draft_id = approval.draft_id
+FROM model_governance_versions AS version
+JOIN model_governance_approvals AS approval
+  ON approval.approval_id = version.approval_id
+WHERE release.version_id = version.version_id
+  AND release.source_draft_id IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_model_governance_active_release
     ON model_governance_releases(asset_id, environment) WHERE status = 'active';
 
@@ -778,13 +788,14 @@ class PostgresModelGovernanceStorage:
             try:
                 rows = client.execute(
                     """INSERT INTO model_governance_releases
-                       (release_id, asset_id, asset_type, version_id, environment, status,
-                        previous_release_id, created_by, created_at, retired_at)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                       (release_id, asset_id, asset_type, version_id, source_draft_id,
+                        environment, status, previous_release_id, created_by, created_at,
+                        retired_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
                     (release.release_id, release.asset_id, release.asset_type.value,
-                     release.version_id, release.environment.value, release.status.value,
-                     release.previous_release_id, release.created_by, release.created_at,
-                     release.retired_at),
+                     release.version_id, release.source_draft_id, release.environment.value,
+                     release.status.value, release.previous_release_id, release.created_by,
+                     release.created_at, release.retired_at),
                 )
                 self._insert_credential_binding(client, credential_binding)
             except Exception as exc:
@@ -925,14 +936,16 @@ class PostgresModelGovernanceStorage:
                     )
                 release_rows = client.execute(
                     """INSERT INTO model_governance_releases
-                       (release_id, asset_id, asset_type, version_id, environment, status,
-                        previous_release_id, created_by, created_at, retired_at)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                       (release_id, asset_id, asset_type, version_id, source_draft_id,
+                        environment, status, previous_release_id, created_by, created_at,
+                        retired_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
                     (
                         release.release_id,
                         release.asset_id,
                         release.asset_type.value,
                         release.version_id,
+                        release.source_draft_id,
                         release.environment.value,
                         release.status.value,
                         release.previous_release_id,

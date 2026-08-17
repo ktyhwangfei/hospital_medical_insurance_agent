@@ -169,6 +169,7 @@ export interface GovernanceRelease {
   asset_id: string
   asset_type: GovernanceAssetType
   version_id: string
+  source_draft_id: string | null
   environment: GovernanceEnvironment
   status: GovernanceReleaseStatus
   previous_release_id: string | null

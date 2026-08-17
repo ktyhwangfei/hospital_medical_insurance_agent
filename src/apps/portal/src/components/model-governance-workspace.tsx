@@ -182,8 +182,9 @@ function formContent(type: GovernanceAssetType, form: FormState): GovernanceAsse
   }
 }
 
-function rowsFromAssets(assets: GovernanceAssetsResult): AssetRow[] {
+function rowsFromAssets(assets: GovernanceAssetsResult, releases: GovernanceRelease[]): AssetRow[] {
   const rows = new Map<string, AssetRow>()
+  const publishedDraftIds = new Set(releases.flatMap((release) => release.source_draft_id ? [release.source_draft_id] : []))
   const merge = (content: GovernanceAssetContent, extra: Partial<AssetRow>) => {
     rows.set(content.asset_id, {
       ...rows.get(content.asset_id),
@@ -201,10 +202,7 @@ function rowsFromAssets(assets: GovernanceAssetsResult): AssetRow[] {
   })
   assets.published.forEach((item) => merge(item.content, { published: item }))
   assets.drafts.forEach((draft) => {
-    const activeContent = rows.get(draft.asset_id)?.published?.content
-    if (draft.status === 'approved' && activeContent && JSON.stringify(draft.content) === JSON.stringify(activeContent)) {
-      return
-    }
+    if (publishedDraftIds.has(draft.draft_id)) return
     const existing = rows.get(draft.asset_id)?.draft
     if (!existing || Date.parse(draft.updated_at) > Date.parse(existing.updated_at)) {
       merge(draft.content, { draft })
@@ -300,7 +298,7 @@ export function ModelGovernanceWorkspace() {
     return () => window.clearTimeout(timer)
   }, [refresh])
 
-  const rows = useMemo(() => rowsFromAssets(assets), [assets])
+  const rows = useMemo(() => rowsFromAssets(assets, releases), [assets, releases])
   const selected = selectedId ? rows.find((row) => row.assetId === selectedId) : undefined
   const publishedModels = assets.published
     .filter((item) => item.content.asset_type === 'model_profile' && item.content.enabled)

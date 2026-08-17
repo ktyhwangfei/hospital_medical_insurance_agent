@@ -433,6 +433,67 @@ def test_model_release_keeps_tested_credential_revision_after_rotation(monkeypat
     assert "encrypted_api_key" not in binding.model_dump_json()
 
 
+def test_same_content_credential_release_records_new_source_draft(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    service = ModelGovernanceService(storage)
+    first = _approved_model(service, _model_profile())
+    service.record_connection_test(
+        draft_id=first.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=8,
+        safe_message="连接成功",
+    )
+    first_release = service.publish(
+        first.draft_id,
+        expected_revision=first.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+
+    second_draft = service.create_draft_with_credential(
+        first.content,
+        first.content.credential_ref,
+        "sk-next",
+        actor="editor",
+    )
+    validated = service.validate_draft(
+        second_draft.draft_id, expected_revision=second_draft.revision
+    )
+    pending = service.request_review(
+        second_draft.draft_id,
+        expected_revision=validated.revision,
+        actor="editor",
+    )
+    approved = service.approve(
+        second_draft.draft_id,
+        expected_revision=pending.revision,
+        actor="reviewer",
+        reason="换用新凭据",
+    )
+    service.record_connection_test(
+        draft_id=approved.draft_id,
+        actor="editor",
+        succeeded=True,
+        latency_ms=7,
+        safe_message="连接成功",
+    )
+    second_release = service.publish(
+        approved.draft_id,
+        expected_revision=approved.revision,
+        actor="publisher",
+        environment=GovernanceEnvironment.DEV,
+    )
+
+    assert second_release.version_id == first_release.version_id
+    assert first_release.source_draft_id == first.draft_id
+    assert second_release.source_draft_id == approved.draft_id
+
+
 def test_disabled_model_can_publish_without_connection_test(monkeypatch):
     monkeypatch.setenv(
         "MODEL_GOVERNANCE_MASTER_KEY",

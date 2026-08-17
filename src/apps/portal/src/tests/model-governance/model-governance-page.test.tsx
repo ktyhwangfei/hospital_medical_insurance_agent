@@ -104,7 +104,7 @@ function versionHistory(content: GovernanceAssetContent, versionNumber: number, 
     releases: [{
       release_id: `release-${content.asset_id}-${versionNumber}`, asset_id: content.asset_id,
       asset_type: content.asset_type, version_id: versionId, environment: 'dev', status: releaseStatus,
-      previous_release_id: null, created_by: 'editor', created_at: '2026-08-17T00:00:00Z',
+      previous_release_id: null, source_draft_id: null, created_by: 'editor', created_at: '2026-08-17T00:00:00Z',
       retired_at: releaseStatus === 'retired' ? '2026-08-17T01:00:00Z' : null,
     }],
   }
@@ -149,14 +149,21 @@ describe('模型治理资产中心', () => {
 
   it('提示词按资产合并为一行，活动内容只读且只能新建版本编辑', async () => {
     const user = userEvent.setup()
-    const nextDraft = draft(promptContent)
+    const sourceDraft = draft(promptContent, 'approved')
+    const nextDraft = { ...draft(promptContent), draft_id: 'draft-intent-next' }
     vi.mocked(getGovernanceAssets).mockResolvedValue({
       baselines: [{ ...promptContent, runtime_status: 'fallback_static' }],
-      drafts: [draft(promptContent, 'approved')], published: [published(promptContent)],
+      drafts: [sourceDraft], published: [published(promptContent)],
     })
+    vi.mocked(getGovernanceReleases).mockResolvedValue([{
+      release_id: 'release-intent.classify', asset_id: 'intent.classify', asset_type: 'prompt',
+      version_id: 'version-intent.classify', source_draft_id: sourceDraft.draft_id,
+      environment: 'dev', status: 'active', previous_release_id: null, created_by: 'editor',
+      created_at: '2026-08-17T00:00:00Z', retired_at: null,
+    }])
     vi.mocked(getGovernanceVersions).mockResolvedValue({
       versions: [{ version_id: 'version-intent.classify', asset_id: 'intent.classify', asset_type: 'prompt', version_number: 1, content: promptContent, content_hash: 'a'.repeat(64), approval_id: 'approval-1', created_by: 'editor', created_at: '2026-08-17T00:00:00Z' }],
-      releases: [{ release_id: 'release-intent.classify', asset_id: 'intent.classify', asset_type: 'prompt', version_id: 'version-intent.classify', environment: 'dev', status: 'active', previous_release_id: null, created_by: 'editor', created_at: '2026-08-17T00:00:00Z', retired_at: null }],
+      releases: [{ release_id: 'release-intent.classify', asset_id: 'intent.classify', asset_type: 'prompt', version_id: 'version-intent.classify', source_draft_id: sourceDraft.draft_id, environment: 'dev', status: 'active', previous_release_id: null, created_by: 'editor', created_at: '2026-08-17T00:00:00Z', retired_at: null }],
     })
     vi.mocked(createGovernanceVersion).mockResolvedValue(nextDraft)
 
@@ -188,6 +195,12 @@ describe('模型治理资产中心', () => {
       drafts: [sourceDraft, nextDraft],
       published: [published(promptContent)],
     })
+    vi.mocked(getGovernanceReleases).mockResolvedValue([{
+      release_id: 'release-intent.classify', asset_id: 'intent.classify', asset_type: 'prompt',
+      version_id: 'version-intent.classify', source_draft_id: sourceDraft.draft_id,
+      environment: 'dev', status: 'active', previous_release_id: null, created_by: 'editor',
+      created_at: '2026-08-17T00:00:00Z', retired_at: null,
+    }])
 
     render(<ModelGovernancePage />)
     await user.click(await screen.findByRole('tab', { name: '提示词' }))
@@ -196,6 +209,73 @@ describe('模型治理资产中心', () => {
     expect(screen.getByRole('textbox', { name: '用户提示词模板' })).toHaveValue('下一版：{message}')
     expect(screen.getByRole('button', { name: '发布到dev环境' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: '新建版本' })).not.toBeInTheDocument()
+  })
+
+  it('v2 活动时 v1 发布来源草稿不会变成工作版本', async () => {
+    const user = userEvent.setup()
+    const v1Content = { ...promptContent, user_prompt_template: 'v1：{message}' }
+    const v2Content = { ...promptContent, user_prompt_template: 'v2：{message}' }
+    const v1Draft = { ...draft(v1Content, 'approved'), draft_id: 'draft-intent-v1', updated_at: '2026-08-17T02:00:00Z' }
+    const v2Draft = { ...draft(v2Content, 'approved'), draft_id: 'draft-intent-v2', updated_at: '2026-08-17T01:00:00Z' }
+    vi.mocked(getGovernanceAssets).mockResolvedValue({
+      baselines: [], drafts: [v1Draft, v2Draft], published: [published(v2Content)],
+    })
+    vi.mocked(getGovernanceReleases).mockResolvedValue([
+      {
+        release_id: 'release-intent-v2', asset_id: promptContent.asset_id, asset_type: 'prompt',
+        version_id: 'version-intent.classify', environment: 'dev', status: 'active',
+        previous_release_id: 'release-intent-v1', source_draft_id: v2Draft.draft_id,
+        created_by: 'editor', created_at: '2026-08-17T01:00:00Z', retired_at: null,
+      },
+      {
+        release_id: 'release-intent-v1', asset_id: promptContent.asset_id, asset_type: 'prompt',
+        version_id: 'version-intent-v1', environment: 'dev', status: 'retired',
+        previous_release_id: null, source_draft_id: v1Draft.draft_id,
+        created_by: 'editor', created_at: '2026-08-17T00:00:00Z', retired_at: '2026-08-17T01:00:00Z',
+      },
+    ])
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '提示词' }))
+    await user.click(screen.getByRole('button', { name: '查看 intent.classify' }))
+
+    expect(screen.getByRole('button', { name: '新建版本' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: '用户提示词模板' })).not.toBeInTheDocument()
+  })
+
+  it('内容相同但换了凭据的已审核草稿仍可测试并发布', async () => {
+    const user = userEvent.setup()
+    const sourceDraft = { ...draft(modelContent, 'approved'), draft_id: 'draft-model-v1' }
+    const credentialDraft = {
+      ...draft(modelContent, 'approved'), draft_id: 'draft-model-new-credential',
+      revision: 5, updated_at: '2026-08-17T01:00:00Z',
+    }
+    const activeRelease: GovernanceRelease = {
+      release_id: 'release-model-v1', asset_id: modelContent.asset_id, asset_type: 'model_profile',
+      version_id: 'version-model.primary', environment: 'dev', status: 'active',
+      previous_release_id: null, source_draft_id: sourceDraft.draft_id,
+      created_by: 'editor', created_at: '2026-08-17T00:00:00Z', retired_at: null,
+    }
+    vi.mocked(getGovernanceAssets).mockResolvedValue({
+      baselines: [], drafts: [sourceDraft, credentialDraft], published: [published(modelContent)],
+    })
+    vi.mocked(getGovernanceReleases).mockResolvedValue([activeRelease])
+    vi.mocked(testGovernanceConnection).mockResolvedValue({
+      status: 'success', latency_ms: 12, safe_message: '连接成功',
+      tested_at: '2026-08-17T02:00:00Z', content_hash: 'b'.repeat(64),
+    })
+    vi.mocked(publishGovernanceDraft).mockResolvedValue(activeRelease)
+
+    render(<ModelGovernancePage />)
+    await user.click(await screen.findByRole('tab', { name: '模型' }))
+    await user.click(screen.getByRole('button', { name: '查看 model.primary' }))
+
+    expect(screen.getByLabelText('API 访问地址')).toHaveValue(modelContent.base_url)
+    await user.click(screen.getByRole('button', { name: '测试连接' }))
+    const publishButton = screen.getByRole('button', { name: '发布到dev环境' })
+    expect(publishButton).toBeEnabled()
+    await user.click(publishButton)
+    await waitFor(() => expect(publishGovernanceDraft).toHaveBeenCalledWith(credentialDraft.draft_id, 5, 'dev'))
   })
 
   it('无活动版本的代码基线可创建首个草稿', async () => {

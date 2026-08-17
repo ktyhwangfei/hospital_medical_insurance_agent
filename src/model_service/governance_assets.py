@@ -245,6 +245,7 @@ class GovernanceRelease(BaseModel):
     asset_id: str
     asset_type: GovernanceAssetType
     version_id: str
+    source_draft_id: str | None = None
     environment: GovernanceEnvironment
     status: GovernanceReleaseStatus = GovernanceReleaseStatus.ACTIVE
     previous_release_id: str | None = None
