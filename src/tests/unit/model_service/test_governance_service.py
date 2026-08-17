@@ -152,6 +152,13 @@ def test_published_draft_is_read_only_and_next_version_copies_active_content():
     assert next_draft.content.system_prompt == "当前生效"
     assert next_draft.draft_id != approved.draft_id
     assert service.list_versions("prompt.demo")[0].version_number == 1
+    edited = service.save_draft(
+        next_draft.draft_id,
+        _prompt("新版本可编辑"),
+        expected_revision=next_draft.revision,
+        actor="editor",
+    )
+    assert edited.content.system_prompt == "新版本可编辑"
 
 
 def test_revalidating_published_draft_does_not_bypass_read_only_gate():
