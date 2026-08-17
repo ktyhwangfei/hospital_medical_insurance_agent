@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 
 from src.model_service.gateway import ModelGateway
+from src.model_service.governance_assets import GovernanceAssetPreview
 from src.model_service.governance_runtime import (
     GovernanceRuntimeError,
     render_governed_prompt,
@@ -121,10 +122,13 @@ class ExplanationGenerator:
                 return
 
             # 准备Prompt
-            prompt = self._build_prompt(context)
+            rendered = self._render_prompt(context)
 
             # 调用模型（流式）- generate_stream返回同步Iterator，用普通for遍历
-            messages = [Message(role="user", content=prompt)]
+            messages = []
+            if rendered.rendered_system_prompt:
+                messages.append(Message(role="system", content=rendered.rendered_system_prompt))
+            messages.append(Message(role="user", content=rendered.rendered_user_prompt or ""))
             for chunk in self.model_gateway.generate_stream(
                 messages=messages,
                 model_type="llm",
@@ -140,8 +144,15 @@ class ExplanationGenerator:
             yield f"生成解释时出错: {str(e)}"
 
     def _build_prompt(self, context: ExplanationContext) -> str:
+        """构建兼容旧调用方的单字符串 Prompt。"""
+        rendered = self._render_prompt(context)
+        return "\n\n".join(
+            filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
+        )
+
+    def _render_prompt(self, context: ExplanationContext) -> GovernanceAssetPreview:
         """
-        构建Prompt
+渲染保留 system/user 角色的 Prompt
 
         核心: 把分段计算中的每一段与对应的政策规则关联，形成因果链。
         """
@@ -181,9 +192,7 @@ class ExplanationGenerator:
             fallback_system="",
             fallback_user=EXPLANATION_PROMPTS[user_role],
         )
-        return "\n\n".join(
-            filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
-        )
+        return rendered
 
     def _format_decomposition(self, decomposition: FeeDecompositionResult) -> str:
         """
