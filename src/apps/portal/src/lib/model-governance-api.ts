@@ -98,9 +98,11 @@ export interface ModelProfileAssetContent {
   asset_type: 'model_profile'
   asset_id: string
   name: string
-  provider_id: string
+  provider_id: 'openai_compatible'
+  base_url: string
   model_name: string
   credential_ref: string
+  timeout_seconds: number
   temperature: number
   max_tokens: number
   enabled: boolean
@@ -121,6 +123,15 @@ export type GovernanceAssetContent =
   | PromptAssetContent
   | ModelProfileAssetContent
   | RouteRuleAssetContent
+
+export type GovernanceBaseline = GovernanceAssetContent & {
+  runtime_status: 'fallback_static'
+}
+
+export interface ModelCredentialInput {
+  credential_id: string
+  api_key: string
+}
 
 export interface GovernanceValidationIssue {
   code: string
@@ -166,6 +177,31 @@ export interface GovernanceRelease {
   retired_at: string | null
 }
 
+export interface GovernanceVersion {
+  version_id: string
+  asset_id: string
+  asset_type: GovernanceAssetType
+  version_number: number
+  content: GovernanceAssetContent
+  content_hash: string
+  approval_id: string
+  created_by: string
+  created_at: string
+}
+
+export interface GovernanceVersionsResult {
+  versions: GovernanceVersion[]
+  releases: GovernanceRelease[]
+}
+
+export interface GovernanceConnectionTest {
+  status: 'success' | 'failure'
+  latency_ms: number
+  safe_message: string
+  tested_at: string
+  content_hash: string
+}
+
 export interface PublishedGovernanceAsset {
   asset_id: string
   asset_type: GovernanceAssetType
@@ -177,6 +213,7 @@ export interface PublishedGovernanceAsset {
 }
 
 export interface GovernanceAssetsResult {
+  baselines: GovernanceBaseline[]
   drafts: GovernanceDraft[]
   published: PublishedGovernanceAsset[]
 }
@@ -272,10 +309,11 @@ export function getGovernanceAssets(
 
 export function createGovernanceDraft(
   content: GovernanceAssetContent,
+  credential?: ModelCredentialInput,
 ): Promise<GovernanceDraft> {
   return governanceRequest('/model-governance/drafts', {
     method: 'POST',
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, ...(credential ? { credential } : {}) }),
   })
 }
 
@@ -287,11 +325,42 @@ export function updateGovernanceDraft(
   draftId: string,
   content: GovernanceAssetContent,
   expectedRevision: number,
+  credential?: ModelCredentialInput,
 ): Promise<GovernanceDraft> {
   return governanceRequest(`/model-governance/drafts/${encodeURIComponent(draftId)}`, {
     method: 'PATCH',
-    body: JSON.stringify({ content, expected_revision: expectedRevision }),
+    body: JSON.stringify({
+      content,
+      expected_revision: expectedRevision,
+      ...(credential ? { credential } : {}),
+    }),
   })
+}
+
+export function createGovernanceVersion(
+  assetId: string,
+  environment: GovernanceEnvironment = 'dev',
+): Promise<GovernanceDraft> {
+  return governanceRequest(
+    `/model-governance/assets/${encodeURIComponent(assetId)}/versions?environment=${environment}`,
+    { method: 'POST' },
+  )
+}
+
+export function getGovernanceVersions(
+  assetId: string,
+  environment: GovernanceEnvironment = 'dev',
+): Promise<GovernanceVersionsResult> {
+  return governanceRequest(
+    `/model-governance/assets/${encodeURIComponent(assetId)}/versions?environment=${environment}`,
+  )
+}
+
+export function testGovernanceConnection(draftId: string): Promise<GovernanceConnectionTest> {
+  return governanceRequest(
+    `/model-governance/drafts/${encodeURIComponent(draftId)}/test-connection`,
+    { method: 'POST' },
+  )
 }
 
 export function deleteGovernanceDraft(
