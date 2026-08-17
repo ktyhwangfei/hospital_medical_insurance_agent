@@ -10,11 +10,27 @@ import re
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from ..base import BaseFeeStrategy
 from src.model_service.gateway import ModelGateway
 from src.model_service.models import Message
 from skills.settlement_explain_skill.fact_builder import FactBuilder
 from skills.settlement_explain_skill.output_parser import OutputParser, ParsedOutput
+
+
+_PROMPT_CONFIG = yaml.safe_load(
+    (Path(__file__).resolve().parents[2] / "prompt_template.yaml").read_text(
+        encoding="utf-8"
+    )
+)
+SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE = _PROMPT_CONFIG["system_prompt"].replace(
+    "{", "{{"
+).replace("}", "}}")
+SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE = _PROMPT_CONFIG["user_prompt"].replace(
+    "{{ fact_json }}", "{fact_json}"
+)
+
 
 class PoolingSelfPayStrategy(BaseFeeStrategy):
     """统筹自付解释策略。"""
@@ -79,8 +95,6 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
         Returns:
             ParsedOutput (conclusion + office_note)
         """
-        import yaml
-
         # Step 0: dummy 调试模式（MODEL_BASE_URL=dummy）→ 模型只返回固定 mock，
         # 不可作为回答。降级为基于真实结算数据的确定性模板（不写死金额）。
         from src.model_service.gateway import ModelGateway as _GatewayCls
@@ -97,12 +111,8 @@ class PoolingSelfPayStrategy(BaseFeeStrategy):
         fact_json = fact.model_dump_json(indent=2)
 
         # Step 3: 加载 prompt 模板并渲染
-        prompt_path = self.config_dir.parent.parent / "prompt_template.yaml"
-        with open(prompt_path, encoding="utf-8") as f:
-            prompt_cfg = yaml.safe_load(f)
-
-        system_prompt = prompt_cfg["system_prompt"]
-        user_prompt = prompt_cfg["user_prompt"].replace("{{ fact_json }}", fact_json)
+        system_prompt = SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE.format()
+        user_prompt = SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE.format(fact_json=fact_json)
 
         # Step 4: 调用 ModelGateway
         messages = [

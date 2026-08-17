@@ -57,6 +57,34 @@ class ExtractionSchema(BaseModel):
     dictionaries: dict[str, list[str]] = Field(default_factory=dict)
 
 
+SCHEMA_EXTRACTION_PROMPT_TEMPLATE = """你是一个医保政策分析专家。请从政策文本中提取所有"政策事实"，并从每个事实提取结构化规则。
+
+## 提取字段（来自语义层 published 指标，schema_version={schema_version}）
+{fields_desc}
+
+## 实体
+{entities_desc}
+
+## 关系
+{relations_desc}
+
+## 政策文件
+{title}
+
+## 原文
+{text}
+
+## 输出格式
+返回 JSON 数组，每个事实含 fact_text + rules（rules 含上述字段 {field_codes}，原文未提及填空字符串""）：
+[
+  {{
+    "fact_text": "完整事实描述",
+    "rules": [{{ {fields_json_example} }}]
+  }}
+]
+"""
+
+
 # ── 契约构建 ──────────────────────────────────────────────────
 
 def _short_code(metric_code: str) -> str:
@@ -148,29 +176,13 @@ def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) ->
 
     field_codes = [f.code for f in schema.fields]
     fields_json_example = ", ".join(f'"{c}": ""' for c in field_codes)
-    return f"""你是一个医保政策分析专家。请从政策文本中提取所有"政策事实"，并从每个事实提取结构化规则。
-
-## 提取字段（来自语义层 published 指标，schema_version={schema.schema_version}）
-{fields_desc}
-
-## 实体
-{entities_desc}
-
-## 关系
-{relations_desc}
-
-## 政策文件
-{title}
-
-## 原文
-{text}
-
-## 输出格式
-返回 JSON 数组，每个事实含 fact_text + rules（rules 含上述字段 {field_codes}，原文未提及填空字符串""）：
-[
-  {{
-    "fact_text": "完整事实描述",
-    "rules": [{{ {fields_json_example} }}]
-  }}
-]
-"""
+    return SCHEMA_EXTRACTION_PROMPT_TEMPLATE.format(
+        schema_version=schema.schema_version,
+        fields_desc=fields_desc,
+        entities_desc=entities_desc,
+        relations_desc=relations_desc,
+        title=title,
+        text=text,
+        field_codes=field_codes,
+        fields_json_example=fields_json_example,
+    )

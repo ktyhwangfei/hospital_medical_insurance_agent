@@ -16,6 +16,7 @@ from src.data_platform.storage.model_governance.ports import (
 from src.gateway.auth import authenticator
 from src.model_service.governance import ModelGovernanceSnapshot, build_governance_snapshot
 from src.model_service.governance_assets import GovernanceAssetType, GovernanceEnvironment
+from src.model_service.governance_import import build_current_governance_assets
 from src.model_service.governance_service import (
     ModelGovernanceGateError,
     ModelGovernanceService,
@@ -189,6 +190,11 @@ def list_governance_assets(
     snapshot = service.published_snapshot(environment)
     return GovernanceAssetsResponse(
         result=GovernanceAssetsResult(
+            baselines=[
+                item
+                for item in build_current_governance_assets()
+                if asset_type is None or item.asset_type == asset_type
+            ],
             drafts=service.list_drafts(asset_type),
             published=[
                 item

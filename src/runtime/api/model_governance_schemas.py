@@ -51,6 +51,7 @@ class PublishGovernanceDraftRequest(GovernanceRevisionRequest):
 
 
 class GovernanceAssetsResult(BaseModel):
+    baselines: list[GovernanceAssetContent] = Field(default_factory=list)
     drafts: list[GovernanceDraft] = Field(default_factory=list)
     published: list[PublishedGovernanceAsset] = Field(default_factory=list)
 

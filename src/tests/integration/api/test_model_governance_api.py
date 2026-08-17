@@ -199,6 +199,26 @@ def test_governance_versions_can_be_read_by_any_authenticated_role_and_copied(
     assert copied.json()["result"]["draft_id"] != approved.draft_id
 
 
+def test_assets_include_real_prompt_baselines_before_import(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    client = _management_client(monkeypatch)
+
+    response = client.get(
+        "/api/v1/medical-insurance-ai-agent/model-governance/assets"
+        "?environment=dev&asset_type=prompt",
+        headers=_headers("model_governance:write", subject="cashier"),
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    prompt = next(
+        item for item in result["baselines"] if item["asset_id"] == "intent.classify"
+    )
+    assert "可用意图" in prompt["user_prompt_template"]
+    assert "用户消息：{message}" in prompt["user_prompt_template"]
+    assert result["drafts"] == []
+
+
 def test_governance_write_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv("MODEL_GOVERNANCE_DEV_MODE", raising=False)
     client = _management_client(monkeypatch)

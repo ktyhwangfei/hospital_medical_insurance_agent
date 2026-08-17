@@ -349,6 +349,110 @@ def test_import_current_assets_is_idempotent_by_asset_id():
     assert second.skipped_count == first.created_count
 
 
+def test_current_prompt_projection_matches_all_runtime_templates():
+    from src.knowledge_extension.rule_explanation import pipeline_orchestrator
+    from src.knowledge_extension.rule_explanation.policy_extract import (
+        llm_enhanced_extractor,
+    )
+    from src.knowledge_extension.rule_explanation.policy_fact import (
+        run_policy_fact_extraction,
+    )
+    from src.model_service.governance_import import build_current_governance_assets
+    from src.runtime.intent import prompts as intent_prompts
+    from src.runtime.intent.graph import prompts as discrimination_prompts
+    from src.runtime.policy_qa import explanation_generator, intent_detector
+    from src.semantic_layer import extraction_contract
+    from src.skill_infra import unified_router
+    from skills.settlement_explain_skill.strategies.pooling_self_pay import strategy
+
+    missing = object()
+    expected = {
+        "intent.classify": (
+            "",
+            getattr(intent_prompts, "INTENT_CLASSIFICATION_PROMPT_TEMPLATE", missing),
+        ),
+        "intent.discriminate": (
+            "",
+            getattr(
+                discrimination_prompts,
+                "INTENT_DISCRIMINATION_PROMPT_TEMPLATE",
+                missing,
+            ),
+        ),
+        "skill.route": (
+            "",
+            getattr(unified_router, "SKILL_ROUTING_PROMPT_TEMPLATE", missing),
+        ),
+        "policy_qa.intent_detect": ("", intent_detector.INTENT_DETECTION_PROMPT),
+        "policy_qa.patient_explain": (
+            "",
+            explanation_generator.EXPLANATION_PROMPTS["患者"],
+        ),
+        "policy.extract.schema": (
+            "",
+            getattr(
+                extraction_contract,
+                "SCHEMA_EXTRACTION_PROMPT_TEMPLATE",
+                missing,
+            ),
+        ),
+        "policy.extract.legacy": (
+            "",
+            getattr(
+                pipeline_orchestrator,
+                "LEGACY_FACT_EXTRACTION_PROMPT_TEMPLATE",
+                missing,
+            ),
+        ),
+        "policy.fact_extract": (
+            run_policy_fact_extraction.SYSTEM_PROMPT,
+            run_policy_fact_extraction.USER_PROMPT_TEMPLATE,
+        ),
+        "policy.synonym_discovery": (
+            "",
+            getattr(
+                llm_enhanced_extractor,
+                "SYNONYM_DISCOVERY_PROMPT_TEMPLATE",
+                missing,
+            ),
+        ),
+        "policy.domain_discovery": (
+            "",
+            getattr(
+                llm_enhanced_extractor,
+                "DOMAIN_DISCOVERY_PROMPT_TEMPLATE",
+                missing,
+            ),
+        ),
+        "skill.settlement_explain": (
+            getattr(
+                strategy,
+                "SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE",
+                missing,
+            ),
+            getattr(
+                strategy,
+                "SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE",
+                missing,
+            ),
+        ),
+    }
+    prompts = {
+        item.asset_id: item
+        for item in build_current_governance_assets()
+        if isinstance(item, PromptAssetContent)
+    }
+
+    assert missing not in {
+        template for templates in expected.values() for template in templates
+    }
+    assert set(prompts) == set(expected)
+    for asset_id, (system_prompt, user_prompt) in expected.items():
+        assert prompts[asset_id].system_prompt == system_prompt
+        assert prompts[asset_id].user_prompt_template == user_prompt
+    assert "19 个必填字段" in prompts["policy.extract.legacy"].user_prompt_template
+
+
 def test_delete_draft_allows_editing_but_rejects_approved():
     storage = InMemoryModelGovernanceStorage()
     service = ModelGovernanceService(storage)

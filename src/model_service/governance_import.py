@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
-
-import yaml
 
 from src.model_service.governance import ModelGovernanceSnapshot, build_governance_snapshot
 from src.model_service.governance_assets import (
@@ -15,9 +12,6 @@ from src.model_service.governance_assets import (
     PromptVariable,
     RouteRuleAssetContent,
 )
-
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _variables(*names: str) -> list[PromptVariable]:
@@ -37,65 +31,55 @@ def _prompt(
         asset_id=asset_id,
         name=name,
         scene=scene or "unrouted",
-        system_prompt=system_prompt.strip(),
-        user_prompt_template=user_prompt.strip(),
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt,
         variables=_variables(*variables),
         output_mode="json" if "JSON" in user_prompt else "text",
     )
 
 
 def _prompt_assets(snapshot: ModelGovernanceSnapshot) -> list[PromptAssetContent]:
+    from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+        LEGACY_FACT_EXTRACTION_PROMPT_TEMPLATE,
+    )
+    from src.knowledge_extension.rule_explanation.policy_extract.llm_enhanced_extractor import (
+        DOMAIN_DISCOVERY_PROMPT_TEMPLATE,
+        SYNONYM_DISCOVERY_PROMPT_TEMPLATE,
+    )
     from src.knowledge_extension.rule_explanation.policy_fact.run_policy_fact_extraction import (
         SYSTEM_PROMPT,
         USER_PROMPT_TEMPLATE,
     )
+    from src.runtime.intent.graph.prompts import (
+        INTENT_DISCRIMINATION_PROMPT_TEMPLATE,
+    )
+    from src.runtime.intent.prompts import INTENT_CLASSIFICATION_PROMPT_TEMPLATE
     from src.runtime.policy_qa.explanation_generator import EXPLANATION_PROMPTS
     from src.runtime.policy_qa.intent_detector import INTENT_DETECTION_PROMPT
+    from src.semantic_layer.extraction_contract import (
+        SCHEMA_EXTRACTION_PROMPT_TEMPLATE,
+    )
+    from src.skill_infra.unified_router import SKILL_ROUTING_PROMPT_TEMPLATE
+    from skills.settlement_explain_skill.strategies.pooling_self_pay.strategy import (
+        SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE,
+        SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE,
+    )
 
     metadata = {item.prompt_id: item for item in snapshot.prompts}
     templates: dict[str, tuple[str, str, tuple[str, ...]]] = {
         "intent.classify": (
             "",
-            """你是医保智能体的意图识别模块。请分析用户消息，返回 JSON。
-
-可用意图：
-{intents_text}
-
-用户消息：{message}
-
-返回格式（仅返回 JSON，不要其他内容）：
-{{"intent": "<意图标识>", "confidence": <0-1>, "entities": {{}}, "citations": ["LLM意图推理"]}}""",
+            INTENT_CLASSIFICATION_PROMPT_TEMPLATE,
             ("intents_text", "message"),
         ),
         "intent.discriminate": (
             "",
-            """你是医保智能体的意图识别模块。请根据用户消息和候选意图列表，判断最可能的意图。
-
-候选意图：
-{candidates_text}
-
-用户消息：{message}
-
-请返回 JSON（仅返回 JSON，不要其他内容）：
-{{"intent": "<意图标识>", "confidence": <0-1的置信度>, "entities": {{}}, "citations": ["推理依据"]}}""",
+            INTENT_DISCRIMINATION_PROMPT_TEMPLATE,
             ("candidates_text", "message"),
         ),
         "skill.route": (
             "",
-            """你是医疗医保智能体的技能路由器。根据用户问题，判断是否需要交给某个技能处理。
-
-可用技能：
-{skills_text}
-
-用户问题：{question}
-
-判断规则：
-1. 如果用户问题与某个技能的能力范围高度相关，返回该技能的 skill_id
-2. 如果用户问题与任何技能都无关，返回 null
-3. 医保费用解释、报销计算、政策咨询优先匹配费用解释类技能
-
-仅返回 JSON：
-{{"skill_id": "<skill_id或null>", "confidence": 0.0, "reasoning": "简短理由"}}""",
+            SKILL_ROUTING_PROMPT_TEMPLATE,
             ("skills_text", "question"),
         ),
         "policy_qa.intent_detect": (
@@ -110,74 +94,44 @@ def _prompt_assets(snapshot: ModelGovernanceSnapshot) -> list[PromptAssetContent
         ),
         "policy.extract.schema": (
             "",
-            """你是一个医保政策分析专家。请根据发布态语义 schema，从政策文本中提取政策事实和结构化规则。
-
-## 提取契约
-{schema_description}
-
-## 政策文件
-{title}
-
-## 原文
-{text}
-
-只返回符合提取契约的 JSON 数组。""",
-            ("schema_description", "title", "text"),
+            SCHEMA_EXTRACTION_PROMPT_TEMPLATE,
+            (
+                "schema_version",
+                "fields_desc",
+                "entities_desc",
+                "relations_desc",
+                "title",
+                "text",
+                "field_codes",
+                "fields_json_example",
+            ),
         ),
         "policy.extract.legacy": (
             "",
-            """你是医保政策分析专家。请从政策文本中提取可独立理解的政策事实，并生成包含现有 19 个字段的结构化规则。
-
-政策文件：{title}
-
-政策原文：
-{text}
-
-只返回 JSON 数组；原文未提及的字段填空字符串，不得编造政策内容。""",
+            LEGACY_FACT_EXTRACTION_PROMPT_TEMPLATE,
             ("title", "text"),
         ),
         "policy.fact_extract": (
             SYSTEM_PROMPT,
-            USER_PROMPT_TEMPLATE.replace("{{ fact_json }}", "{fact_json}"),
+            USER_PROMPT_TEMPLATE,
             ("node_id", "policy_title", "policy_meta_json", "path_text", "text"),
         ),
         "policy.synonym_discovery": (
             "",
-            """你是医保政策专家。请分析政策原文，找出已知值域的同义词、简称和别称。
-
-当前已知值域：
-{known_values_text}
-
-政策原文片段：
-{text_sample}
-
-只返回包含 synonyms 和 new_values 的 JSON。""",
+            SYNONYM_DISCOVERY_PROMPT_TEMPLATE,
             ("known_values_text", "text_sample"),
         ),
         "policy.domain_discovery": (
             "",
-            """你是医保政策专家。请分析政策原文，发现需要新增的值域字段。
-
-当前已有字段：
-{known_fields_text}
-
-政策原文片段：
-{text_sample}
-
-只返回包含 new_domains 的 JSON。""",
+            DOMAIN_DISCOVERY_PROMPT_TEMPLATE,
             ("known_fields_text", "text_sample"),
         ),
+        "skill.settlement_explain": (
+            SETTLEMENT_EXPLAIN_SYSTEM_PROMPT_TEMPLATE,
+            SETTLEMENT_EXPLAIN_USER_PROMPT_TEMPLATE,
+            ("fact_json",),
+        ),
     }
-    skill = yaml.safe_load(
-        (_PROJECT_ROOT / "skills/settlement_explain_skill/prompt_template.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    templates["skill.settlement_explain"] = (
-        skill["system_prompt"].replace("{", "{{").replace("}", "}}"),
-        skill["user_prompt"].replace("{{ fact_json }}", "{fact_json}"),
-        ("fact_json",),
-    )
 
     return [
         _prompt(

@@ -20,6 +20,92 @@ from src.model_service.models import Message
 logger = logging.getLogger(__name__)
 
 
+LEGACY_FACT_EXTRACTION_PROMPT_TEMPLATE = """你是一个医保政策分析专家。请从以下政策文本中提取所有"政策事实"，并从每个事实中提取结构化的"政策规则"。
+
+## 定义
+- **政策事实**：一条完整的、可独立理解的政策规定。尽量覆盖原文中所有实质内容。
+- **政策规则**：从事实中抽取的完全结构化规则（一条事实可包含多条规则）。
+  每条规则必须包含以下全部 19 个字段（原文未提及则填空字符串""）。
+- **实体**：规则中涉及的主体（人员、机构、金额、比例等），标注 highlight 为原文中的精确文本。
+- **关系**：实体之间的语义关系，用三元组 (主体, 关系, 客体) 表示。
+
+## 19 个必填字段说明（来自数据模型1-政策规则表）
+1. rule_id: 规则唯一标识（留空，系统生成）
+2. fact_id: 来源事实标识（留空）
+3. policy_id: 政策文件标识（留空）
+4. clause_id: 条款标识（留空）
+5. source_text: 原始政策文本片段（填入原文精确内容，用于溯源）
+6. insu_type: 险种类别（城镇职工基本医疗保险/城乡居民基本医疗保险/大病保险/工伤保险/生育保险）
+7. med_type: 医疗类别（住院/门诊/门特/急诊/购药）
+8. hosp_lv: 医疗机构等级（三级/二级/一级/社区/未定级）
+9. psn_type: 人群标签（在职职工/退休人员/城乡居民/学生儿童/灵活就业/困难人群）— 可嵌套多个值
+10. setl_type: 结算方式（按项目/DRG/DIP/按病种/按人头/按床日）
+11. payment_ratio: 支付比例（如"85%"）
+12. deductible_amount: 起付金额（如"1300元"）
+13. cap_amount: 封顶金额（如"30万元"）
+14. time_period: 时间周期（年度/季度/月度/单次）
+15. admission_order: 住院次数（首次/二次及以上/不限）
+16. amount_band: 金额分段（如"30000-40000"）
+17. priority: 规则优先级（高/中/低）
+18. rule_type: 规则类型（起付线/支付比例/封顶线/排除规则/适用范围/通用规则）— 可嵌套
+19. rule_value: 规则值 — 可嵌套，描述规则的具体计算逻辑或条件
+
+## 政策文件
+{title}
+
+## 原文
+{text}
+
+## 输出格式
+返回 JSON 数组：
+[
+  {{
+    "fact_text": "完整的事实描述（含上下文，可独立理解）",
+    "rules": [
+      {{
+        "rule_id": "",
+        "fact_id": "",
+        "policy_id": "",
+        "clause_id": "",
+        "source_text": "原文精确片段",
+        "insu_type": "城镇职工基本医疗保险",
+        "med_type": "住院",
+        "hosp_lv": "三级",
+        "psn_type": "退休人员",
+        "setl_type": "按项目",
+        "payment_ratio": "85%",
+        "deductible_amount": "1300元",
+        "cap_amount": "",
+        "time_period": "年度",
+        "admission_order": "首次",
+        "amount_band": "1300-30000",
+        "priority": "高",
+        "rule_type": "支付比例",
+        "rule_value": "起付标准以上至3万元部分，统筹基金支付85%",
+        "confidence": 0.92,
+        "entities": [
+          {{"name": "参保人员", "type": "PERSON", "highlight": "参保人员"}},
+          {{"name": "1300元", "type": "AMOUNT", "highlight": "1300元"}}
+        ],
+        "relations": [
+          {{"subject": "参保人员", "predicate": "起付标准", "object": "1300元"}}
+        ]
+      }}
+    ]
+  }}
+]
+
+## 实体类型
+PERSON(人员), ORG(机构), SERVICE(医疗服务), AMOUNT(金额), RATIO(比例),
+DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
+
+## 注意
+1. 尽可能多地提取事实，**覆盖原文中所有蕴含政策含义的语句**
+2. 每个事实可包含多条规则，每条规则必须填满全部 19 个字段
+3. 未提及的字段填空字符串 ""
+4. 只返回 JSON 数组，不要任何其他内容"""
+
+
 def _now_iso() -> str:
     """当前 UTC 时间 ISO 字符串（用于字段级溯源 extracted_at）。"""
     return datetime.now(timezone.utc).isoformat()
@@ -292,90 +378,7 @@ class PipelineOrchestrator:
 
     def _legacy_fact_extraction_prompt(self, text: str, title: str) -> str:
         """[legacy] 硬编码 19 字段 prompt（registry 不可用时的回退）。"""
-        return f"""你是一个医保政策分析专家。请从以下政策文本中提取所有"政策事实"，并从每个事实中提取结构化的"政策规则"。
-
-## 定义
-- **政策事实**：一条完整的、可独立理解的政策规定。尽量覆盖原文中所有实质内容。
-- **政策规则**：从事实中抽取的完全结构化规则（一条事实可包含多条规则）。
-  每条规则必须包含以下全部 19 个字段（原文未提及则填空字符串""）。
-- **实体**：规则中涉及的主体（人员、机构、金额、比例等），标注 highlight 为原文中的精确文本。
-- **关系**：实体之间的语义关系，用三元组 (主体, 关系, 客体) 表示。
-
-## 19 个必填字段说明（来自数据模型1-政策规则表）
-1. rule_id: 规则唯一标识（留空，系统生成）
-2. fact_id: 来源事实标识（留空）
-3. policy_id: 政策文件标识（留空）
-4. clause_id: 条款标识（留空）
-5. source_text: 原始政策文本片段（填入原文精确内容，用于溯源）
-6. insu_type: 险种类别（城镇职工基本医疗保险/城乡居民基本医疗保险/大病保险/工伤保险/生育保险）
-7. med_type: 医疗类别（住院/门诊/门特/急诊/购药）
-8. hosp_lv: 医疗机构等级（三级/二级/一级/社区/未定级）
-9. psn_type: 人群标签（在职职工/退休人员/城乡居民/学生儿童/灵活就业/困难人群）— 可嵌套多个值
-10. setl_type: 结算方式（按项目/DRG/DIP/按病种/按人头/按床日）
-11. payment_ratio: 支付比例（如"85%"）
-12. deductible_amount: 起付金额（如"1300元"）
-13. cap_amount: 封顶金额（如"30万元"）
-14. time_period: 时间周期（年度/季度/月度/单次）
-15. admission_order: 住院次数（首次/二次及以上/不限）
-16. amount_band: 金额分段（如"30000-40000"）
-17. priority: 规则优先级（高/中/低）
-18. rule_type: 规则类型（起付线/支付比例/封顶线/排除规则/适用范围/通用规则）— 可嵌套
-19. rule_value: 规则值 — 可嵌套，描述规则的具体计算逻辑或条件
-
-## 政策文件
-{title}
-
-## 原文
-{text}
-
-## 输出格式
-返回 JSON 数组：
-[
-  {{
-    "fact_text": "完整的事实描述（含上下文，可独立理解）",
-    "rules": [
-      {{
-        "rule_id": "",
-        "fact_id": "",
-        "policy_id": "",
-        "clause_id": "",
-        "source_text": "原文精确片段",
-        "insu_type": "城镇职工基本医疗保险",
-        "med_type": "住院",
-        "hosp_lv": "三级",
-        "psn_type": "退休人员",
-        "setl_type": "按项目",
-        "payment_ratio": "85%",
-        "deductible_amount": "1300元",
-        "cap_amount": "",
-        "time_period": "年度",
-        "admission_order": "首次",
-        "amount_band": "1300-30000",
-        "priority": "高",
-        "rule_type": "支付比例",
-        "rule_value": "起付标准以上至3万元部分，统筹基金支付85%",
-        "confidence": 0.92,
-        "entities": [
-          {{"name": "参保人员", "type": "PERSON", "highlight": "参保人员"}},
-          {{"name": "1300元", "type": "AMOUNT", "highlight": "1300元"}}
-        ],
-        "relations": [
-          {{"subject": "参保人员", "predicate": "起付标准", "object": "1300元"}}
-        ]
-      }}
-    ]
-  }}
-]
-
-## 实体类型
-PERSON(人员), ORG(机构), SERVICE(医疗服务), AMOUNT(金额), RATIO(比例),
-DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
-
-## 注意
-1. 尽可能多地提取事实，**覆盖原文中所有蕴含政策含义的语句**
-2. 每个事实可包含多条规则，每条规则必须填满全部 19 个字段
-3. 未提及的字段填空字符串 ""
-4. 只返回 JSON 数组，不要任何其他内容"""
+        return LEGACY_FACT_EXTRACTION_PROMPT_TEMPLATE.format(title=title, text=text)
 
     # ═══════════════ Coverage ═══════════════
 
