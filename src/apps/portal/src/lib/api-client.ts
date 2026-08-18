@@ -28,10 +28,6 @@ export interface InfraSkillCatalogFilter extends InfraSkillsFilter {
   query?: string
 }
 
-export async function getInfraSkillsOverview(): Promise<InfraSkillOverviewResponse> {
-  return requestJson<InfraSkillOverviewResponse>('/infra-skills/overview')
-}
-
 export async function getInfraSkillDetail(skillId: string): Promise<InfraSkillDetailResponse> {
   return requestJson<InfraSkillDetailResponse>(`/infra-skills/${encodeURIComponent(skillId)}`)
 }
@@ -249,33 +245,7 @@ export async function listSkillReleases(
   )
 }
 
-const DEV_SKILL_CONTROL_TOKEN = 'test.eyJzdWIiOiJwb3J0YWwtZGV2ZWxvcGVyIiwicm9sZXMiOlsiZGV2ZWxvcGVyIl0sInBlcm1pc3Npb25zIjpbInNraWxsOnJlbGVhc2U6dGVzdCIsInNraWxsOmV2YWx1YXRlIl0sImV4cCI6NDEwMjQ0NDgwMH0.signature'
-const DEV_SKILL_APPROVAL_TOKEN = 'test.eyJzdWIiOiJwb3J0YWwtaW5mb3JtYXRpb24tYWRtaW4iLCJyb2xlcyI6WyJpbmZvcm1hdGlvbl9kZXBhcnRtZW50Il0sInBlcm1pc3Npb25zIjpbInNraWxsOnJlbGVhc2U6dGVzdCJdLCJleHAiOjQxMDI0NDQ4MDB9.signature'
 
-function skillEvaluationHeaders(): HeadersInit {
-  const headers: Record<string, string> = {}
-  if (typeof window !== 'undefined') {
-    const token = window.sessionStorage.getItem('skill-control-token')
-      ?? (process.env.NODE_ENV !== 'production' ? DEV_SKILL_CONTROL_TOKEN : null)
-    if (token) headers.Authorization = `Bearer ${token}`
-  }
-  return headers
-}
-
-function skillControlHeaders(
-  idempotencyKey: string,
-  approval = false,
-): HeadersInit {
-  const headers: Record<string, string> = { 'Idempotency-Key': idempotencyKey }
-  if (typeof window !== 'undefined') {
-    const storageKey = approval ? 'skill-approval-token' : 'skill-control-token'
-    const fallback = approval ? DEV_SKILL_APPROVAL_TOKEN : DEV_SKILL_CONTROL_TOKEN
-    const token = window.sessionStorage.getItem(storageKey)
-      ?? (process.env.NODE_ENV !== 'production' ? fallback : null)
-    if (token) headers.Authorization = `Bearer ${token}`
-  }
-  return headers
-}
 
 export async function createSkillRelease(
   skillId: string,
@@ -408,7 +378,6 @@ import type {
   WorkflowStatusResponse,
   InfraSkillItem,
   InfraSkillDetailResponse,
-  InfraSkillOverviewResponse,
   InfraSkillCatalogResponse,
   SkillVersionResponse,
   SkillVersionSyncRequest,
@@ -435,6 +404,7 @@ import type {
   SkillQueryExecuteResult,
   ConsistencyCheckResult,
 } from './types'
+import { skillControlHeaders, skillEvaluationHeaders } from './skill-auth'
 import { ApiClientError } from './types'
 
 export const API_PREFIX = '/api/v1/medical-insurance-ai-agent'

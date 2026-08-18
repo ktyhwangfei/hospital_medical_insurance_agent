@@ -48,6 +48,8 @@ class TestSettlementExceptionGraph:
         assert hasattr(settlement_exception_graph, "invoke")
 
     def test_normal_flow_returns_recommendation_with_citations(self):
+        # c4838b1 重构后 knowledge 模块替换为 stub（get_error_code 返回空），
+        # knowledge_error_code citation 不再生成；仅断言 insurance_interface 来源。
         memory = MemorySaver()
         graph = build_settlement_exception_graph(checkpointer=memory)
         inputs = _make_input(patient_id="P001", encounter_id="E001")
@@ -57,7 +59,6 @@ class TestSettlementExceptionGraph:
         assert len(result["citations"]) > 0
         source_types = {c["source_type"] for c in result["citations"]}
         assert "insurance_interface" in source_types
-        assert "knowledge_error_code" in source_types
         assert result["requires_confirmation"] is False
 
     def test_normal_flow_populates_claim_detail(self):

@@ -11,6 +11,13 @@ version: "2.0.0"
 business_action: explain       # 解释：为什么（面向患者，解释已发生的事实）
 business_object: settlement    # 结算：操作对象为医保结算数据
 
+# ── 能力说明（概览页卡片展示）──
+# 一句话描述本 Skill 做什么，供治理工作台概览页与目录展示。
+description: >-
+  医保住院结算费用逐项解释：按用户问到的费用项（统筹自付/起付线/大额自付/
+  统筹支付/个人总支付/医保外费用）查询真实结算数据与结构化政策规则，
+  生成带政策依据引用的自然语言解释。
+
 # ── 语义层声明 ─────────────────────────────────────────────────
 # 对齐语义层真实指标编码（Settlement 对象）。物理字段映射见各指标的
 # source_field，与 field_mapping.yaml 的 db_source 一致。
@@ -133,6 +140,113 @@ forbidden_output:
 
 test_cases:
   - tests/case_pooling_self_pay_1671213.yaml
+
+# ── 执行契约（Execution Contract，概览页场景/指标展示的唯一来源）──
+# version_service 从本字段原样读取并校验为 SkillExecutionContract；
+# 治理工作台概览页据此渲染 Skill 卡片、场景网格与依赖指标。
+# 按用户可能问到的费用项拆分 profiles，每项对齐一个 Strategy（见 strategies/）。
+execution_contract:
+  version: 2
+
+  # 公共输入：几乎所有费用项场景都需要的数据依赖。
+  # context_inputs 为运行时上下文（RuntimeContextCode 枚举）；
+  # metric_inputs 为决定「适用哪些政策规则」的基础结算字段。
+  common:
+    context_inputs:
+      - code: settlement_id
+        alias: 结算登记号
+        required: true
+        purpose: 定位单次住院结算，查询真实结算数据
+      - code: question
+        alias: 用户问题
+        required: true
+        purpose: 识别用户想了解的具体费用项
+    metric_inputs:
+      - metric_code: zyjyxx.rylb
+        alias: 人员类别
+        purpose: 区分在职/退休，决定适用的人群比例规则
+      - metric_code: djxx.fund_type
+        alias: 参保险种
+        purpose: 匹配险种政策（如城镇职工基本医疗保险）
+      - metric_code: djxx.yllb
+        alias: 医疗类别
+        purpose: 匹配就医类型（如住院-普通住院）
+      - metric_code: djxx.hospital_level
+        alias: 医院等级
+        purpose: 匹配医院级别政策（如三级医院）
+
+  # 执行场景：按费用项拆分，与 strategies/registry.py 一一对应。
+  profiles:
+    - profile_id: pooling-self-pay-explanation
+      name: 统筹自付解释
+      purpose: 解释基本医保统筹段内按政策比例由个人承担的金额（不含起付线/大额自付/目录外自费）
+      routing_hints:
+        - 统筹自付
+        - 统筹段自付
+      metric_inputs:
+        - metric_code: zyfdxx.bdtczf
+          alias: 统筹自付金额
+          purpose: 待解释的目标金额
+        - metric_code: zydyxx.bcqfje
+          alias: 起付线
+          purpose: 区分起付线与统筹自付
+
+    - profile_id: deductible-explanation
+      name: 起付线解释
+      purpose: 解释医保开始报销前需先由个人承担的固定金额，以及二次住院起付线减半等规则
+      routing_hints:
+        - 起付线
+        - 门槛费
+      metric_inputs:
+        - metric_code: zydyxx.bcqfje
+          alias: 起付线
+          purpose: 待解释的目标金额
+
+    - profile_id: large-amount-self-pay-explanation
+      name: 大额自付解释
+      purpose: 解释大额医疗互助基金段内按比例由个人承担的金额
+      routing_hints:
+        - 大额自付
+        - 大额段自付
+      metric_inputs:
+        - metric_code: zyfdxx.bddezf
+          alias: 大额自付金额
+          purpose: 待解释的目标金额
+
+    - profile_id: pooling-payment-explanation
+      name: 统筹支付解释
+      purpose: 解释基本医保统筹基金按政策比例为患者支付的金额（统筹基金帮您付的部分）
+      routing_hints:
+        - 统筹支付
+        - 统筹基金支付
+      metric_inputs:
+        - metric_code: zyfdxx.bdtczfje
+          alias: 统筹支付金额
+          purpose: 待解释的目标金额
+
+    - profile_id: personal-total-pay-explanation
+      name: 个人总支付解释
+      purpose: 解释本次住院个人承担的全部费用总和构成（起付线+统筹自付+大额自付+目录外自费等）
+      routing_hints:
+        - 个人总支付
+        - 个人一共花了多少
+        - 自费多少
+      metric_inputs:
+        - metric_code: zyfdxx.bdgryf
+          alias: 个人总支付
+          purpose: 待解释的目标金额（合计项）
+
+    - profile_id: out-of-scope-explanation
+      name: 医保外费用解释
+      purpose: 解释不在医保目录范围、需患者全额自费的费用（目录外药品/自费耗材/特需服务等）
+      routing_hints:
+        - 医保外
+        - 自费
+        - 目录外
+      metric_inputs:
+        - metric_code: zyfymx.ybwje
+          alias: 医保外金额
+          purpose: 待解释的目标金额（全额自费部分）
 
 # ── 前端展示配置 ──────────────────────────────────────────────
 

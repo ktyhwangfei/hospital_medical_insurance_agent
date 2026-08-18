@@ -12,7 +12,7 @@ import type { SkillDraftResponse } from '@/lib/types'
 
 const STATUS_LABELS: Record<string, { label: string; className: string }> = {
   editing: { label: '编辑中', className: 'bg-amber-100 text-amber-800' },
-  validated: { label: '已校验', className: 'bg-green-100 text-green-800' },
+  validated: { label: '已校验', className: 'bg-emerald-100 text-emerald-800' },
   materialized: { label: '已物化', className: 'bg-blue-100 text-blue-800' },
   deleted: { label: '已删除', className: 'bg-slate-200 text-slate-600' },
 }

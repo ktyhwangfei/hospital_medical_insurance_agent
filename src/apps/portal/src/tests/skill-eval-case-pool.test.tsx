@@ -15,6 +15,9 @@ const poolMocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/policy-qa-feedback', () => ({
   listEvalCasePool: (...a: unknown[]) => poolMocks.list(...a),
+}))
+
+vi.mock('@/lib/api-client', () => ({
   confirmEvalCasePoolItem: (...a: unknown[]) => poolMocks.confirm(...a),
   rejectEvalCasePoolItem: (...a: unknown[]) => poolMocks.reject(...a),
   transformEvalCasePoolItem: (...a: unknown[]) => poolMocks.transform(...a),

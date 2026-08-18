@@ -19,7 +19,7 @@ const CHANGE_LABELS = {
 } as const
 
 const CHANGE_STYLES = {
-  added: 'bg-green-50 text-green-700',
+  added: 'bg-emerald-50 text-emerald-700',
   changed: 'bg-blue-50 text-blue-700',
   removed: 'bg-red-50 text-red-700',
 } as const
@@ -79,7 +79,7 @@ export function SkillGenerationDiff({
                     </div>
                     <div>
                       <p className="mb-1 text-xs font-medium text-slate-500">修改后</p>
-                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-green-50 p-2 text-xs text-green-800">{item.after ?? '—'}</pre>
+                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-emerald-50 p-2 text-xs text-emerald-800">{item.after ?? '—'}</pre>
                     </div>
                   </div>
                 )}

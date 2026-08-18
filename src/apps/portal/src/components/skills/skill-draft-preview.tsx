@@ -67,7 +67,7 @@ export default function SkillDraftPreview({
       <div className="grid gap-4 md:grid-cols-2">
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            {validation.blocking_ok ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-amber-600" />}
+            {validation.blocking_ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <AlertTriangle className="h-4 w-4 text-amber-600" />}
             校验预览
           </h3>
           <p className="mt-2 text-xs text-slate-600">
@@ -77,11 +77,11 @@ export default function SkillDraftPreview({
             <p key={`${issue.code}-${issue.path ?? ''}`} className="mt-2 text-xs text-slate-700">{issue.code}: {issue.message}</p>
           ))}
         </section>
-        <section className="rounded-xl border border-green-200 bg-green-50 p-4">
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-green-900">
+        <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-emerald-900">
             <ShieldCheck className="h-4 w-4" />安全扫描通过
           </h3>
-          <p className="mt-2 break-all font-mono text-[11px] text-green-800">content hash: {provenance.content_hash}</p>
+          <p className="mt-2 break-all font-mono text-[11px] text-emerald-800">content hash: {provenance.content_hash}</p>
         </section>
       </div>
 

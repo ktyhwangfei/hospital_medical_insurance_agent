@@ -9,12 +9,11 @@ import { useSkillNameMap } from '@/lib/use-skill-name-map'
 import { ApiClientError } from '@/lib/types'
 import {
   confirmEvalCasePoolItem,
-  listEvalCasePool,
   rejectEvalCasePoolItem,
   transformEvalCasePoolItem,
   type EvalCasePoolConfirmRequest,
-  type EvalCasePoolItem,
-} from '@/lib/policy-qa-feedback'
+} from '@/lib/api-client'
+import { listEvalCasePool, type EvalCasePoolItem } from '@/lib/policy-qa-feedback'
 
 const DIMENSIONS = [
   'routing',

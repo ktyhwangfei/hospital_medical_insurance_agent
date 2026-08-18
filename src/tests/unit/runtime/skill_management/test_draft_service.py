@@ -90,6 +90,52 @@ def test_create_from_template_generates_unique_ids():
     assert d1.draft_id != d2.draft_id
 
 
+def test_create_from_template_persists_execution_contract():
+    """向导配的执行场景必须随创建一起落库（设计 §44）。
+
+    修复前 create_from_template 不接收 execution_contract，向导里配的执行场景
+    在点「创建草稿」时即丢失。
+    """
+    service = _service()
+    execution_contract = {
+        "version": 2,
+        "common": {
+            "context_inputs": [{"code": "question", "required": True}],
+            "metric_inputs": [
+                {"metric_code": "Settlement.amount", "required": True}
+            ],
+        },
+        "profiles": [
+            {
+                "profile_id": "verify-amount",
+                "name": "金额核验",
+                "metric_inputs": [
+                    {"metric_code": "Settlement.deductible", "required": True}
+                ],
+            }
+        ],
+    }
+    draft = service.create_from_template(
+        skill_id="verify_skill",
+        skill_name="核验 Skill",
+        created_by="u",
+        business_action="verify",
+        business_object="settlement",
+        execution_contract=execution_contract,
+    )
+    cfg = draft.structured_config
+    assert cfg["execution_contract"] == execution_contract
+
+
+def test_create_from_template_omits_execution_contract_when_none():
+    """不传 execution_contract 时 config 不含该键（旧草稿向后兼容）。"""
+    service = _service()
+    draft = service.create_from_template(
+        skill_id="plain_skill", skill_name="Plain", created_by="u"
+    )
+    assert "execution_contract" not in draft.structured_config
+
+
 # ── 复制 ──────────────────────────────────────────────────────────
 
 

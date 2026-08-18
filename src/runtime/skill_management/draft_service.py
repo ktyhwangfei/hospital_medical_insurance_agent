@@ -84,6 +84,7 @@ class SkillDraftService:
         business_object: str = "",
         include_keywords: list[str] | None = None,
         excluded_intents: list[str] | None = None,
+        execution_contract: dict[str, Any] | None = None,
     ) -> SkillDraft:
         """从空模板创建草稿。"""
         structured_config = self._build_template_config(
@@ -95,6 +96,7 @@ class SkillDraftService:
             business_object=business_object,
             include_keywords=include_keywords or [],
             excluded_intents=excluded_intents or [],
+            execution_contract=execution_contract,
         )
         return self._persist_new(
             skill_id=skill_id,
@@ -135,6 +137,7 @@ class SkillDraftService:
             business_object=getattr(source, "business_object", "") or "",
             include_keywords=list(getattr(source, "include_keywords", []) or []),
             excluded_intents=list(getattr(source, "excluded_intents", []) or []),
+            execution_contract=None,
         )
         raw_files = self._read_source_files(source_skill_id)
         return self._persist_new(
@@ -371,8 +374,9 @@ class SkillDraftService:
         business_object: str,
         include_keywords: list[str],
         excluded_intents: list[str],
+        execution_contract: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {
+        config: dict[str, Any] = {
             "basic": {
                 "skill_id": skill_id,
                 "skill_name": skill_name,
@@ -388,6 +392,10 @@ class SkillDraftService:
             "inputs": [],
             "schemas": {},
         }
+        # 执行契约仅在显式传入时落键，保持旧草稿向后兼容（不写入空键）。
+        if execution_contract is not None:
+            config["execution_contract"] = execution_contract
+        return config
 
     def _read_source_files(self, skill_id: str) -> dict[str, str]:
         """读取源 Skill 目录的关键文件为 raw_files（复制用）。"""

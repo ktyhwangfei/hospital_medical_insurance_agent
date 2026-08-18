@@ -3,6 +3,7 @@
 
 import { API_PREFIX, parseError, requestJson } from './api-client'
 import { ApiClientError } from './types'
+import { skillControlHeaders } from './skill-auth'
 import type {
   SkillDraftResponse,
   SkillDraftListResponse,
@@ -27,20 +28,7 @@ import type {
   SkillCandidateBehaviorEvaluationResponse,
 } from './types'
 
-const DEV_SKILL_CONTROL_TOKEN =
-  'test.eyJzdWIiOiJwb3J0YWwtZGV2ZWxvcGVyIiwicm9sZXMiOlsiZGV2ZWxvcGVyIl0sInBlcm1pc3Npb25zIjpbInNraWxsOnJlbGVhc2U6dGVzdCIsInNraWxsOmV2YWx1YXRlIl0sImV4cCI6NDEwMjQ0NDgwMH0.signature'
 
-function skillControlHeaders(idempotencyKey?: string): HeadersInit {
-  const headers: Record<string, string> = {}
-  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
-  if (typeof window !== 'undefined') {
-    const token =
-      window.sessionStorage.getItem('skill-control-token') ??
-      (process.env.NODE_ENV !== 'production' ? DEV_SKILL_CONTROL_TOKEN : null)
-    if (token) headers.Authorization = `Bearer ${token}`
-  }
-  return headers
-}
 
 // ── 草稿 CRUD ──────────────────────────────────────────────────
 

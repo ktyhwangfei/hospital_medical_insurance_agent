@@ -12,6 +12,7 @@ from src.domain.skill.draft_models import (
     SkillDraft,
     SkillDraftSourceType,
     SkillDraftStatus,
+    SkillExecutionContract,
 )
 from src.domain.skill.governance_models import (
     SkillEvalMetrics,
@@ -61,6 +62,23 @@ def _entry(skill_id: str) -> SkillCatalogEntry:
         skill_name=f"{skill_id} name",
         business_action="explain",
         business_object="settlement",
+        description="解释医保结算费用构成",
+        execution_contract=SkillExecutionContract.model_validate(
+            {
+                "profiles": [
+                    {
+                        "profile_id": "deductible-explanation",
+                        "name": "起付线解释",
+                        "metric_inputs": [
+                            {
+                                "metric_code": "settlement.deductible",
+                                "alias": "起付金额",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
         semantic_version=version.semantic_version,
         artifact_hash=version.artifact_hash,
         artifact_status="registered",
@@ -155,7 +173,50 @@ class _DraftService:
                 created_by="developer",
                 created_at=NOW,
                 updated_at=NOW,
-            )
+            ),
+            # 纯草稿：skill_id 不在 catalog 中（无物化制品），应作为 draft-only 项出现
+            SkillDraft(
+                draft_id="draft-only-1",
+                skill_id="d-draft-only",
+                skill_name="纯草稿技能",
+                source_type=SkillDraftSourceType.TEMPLATE,
+                structured_config={
+                    "basic": {
+                        "skill_id": "d-draft-only",
+                        "skill_name": "纯草稿技能",
+                        "description": "测试纯草稿",
+                    },
+                    "business_mounting": {
+                        "business_action": "explain",
+                        "business_object": "settlement",
+                    },
+                    "execution_contract": {
+                        "version": 2,
+                        "common": {
+                            "context_inputs": [],
+                            "metric_inputs": [
+                                {"metric_code": "common.metric_a", "alias": "公共指标A", "required": True},
+                            ],
+                        },
+                        "profiles": [
+                            {
+                                "profile_id": "scene-a",
+                                "name": "场景A",
+                                "purpose": "测试场景",
+                                "routing_hints": [],
+                                "context_inputs": [],
+                                "metric_inputs": [
+                                    {"metric_code": "scene.metric_b", "alias": "场景指标B", "required": False},
+                                ],
+                            },
+                        ],
+                    },
+                },
+                status=SkillDraftStatus.EDITING,
+                created_by="developer",
+                created_at=NOW,
+                updated_at=NOW,
+            ),
         ]
 
 
@@ -190,6 +251,8 @@ def test_skill_workbench_returns_daily_projection_and_filters_before_pagination(
     item = body["items"][0]
     assert item["skill_id"] == "b-blocked"
     assert item["priority"] == "blocked"
+    assert item["description"] == "解释医保结算费用构成"
+    assert item["execution_contract"]["profiles"][0]["name"] == "起付线解释"
     assert {
         "current_stage",
         "priority",
@@ -213,7 +276,7 @@ def test_skill_workbench_keeps_old_fields_and_hides_sensitive_draft_values():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["summary"]["total"] == 3
+    assert body["summary"]["total"] == 4
     assert {
         "healthy",
         "needs_evaluation",
@@ -248,10 +311,11 @@ def test_skill_workbench_without_priority_preserves_existing_pagination():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 3
+    assert body["total"] == 4
     assert body["page"] == 2
     assert body["page_size"] == 2
-    assert [item["skill_id"] for item in body["items"]] == ["c-normal"]
+    # 4 项 page_size=2：page 2 返回最后 2 项（排序后）
+    assert len(body["items"]) == 2
 
 
 def test_skill_workbench_rejects_invalid_priority():
@@ -287,6 +351,8 @@ def test_skill_workbench_openapi_keeps_public_schema_with_projection_fields():
         "waiting_since",
         "next_action",
         "next_action_reason",
+        "description",
+        "execution_contract",
     }.issubset(public_item["properties"])
 
 
@@ -315,3 +381,71 @@ def test_route_test_rejects_empty_question():
     assert response.status_code == 200
     assert response.json()["matched_skill_id"] is None
     assert response.json()["match_method"] == "none"
+
+
+def test_workbench_includes_draft_only_skill():
+    """纯草稿（无物化制品）应作为 draft-only 项出现在工作台列表中。"""
+    response = _client_with_in_memory_dependencies().get(
+        f"{PREFIX}/infra-skills/workbench"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # summary 中 draft_only 计数为 1
+    assert body["summary"]["draft_only"] == 1
+    # 列表中包含纯草稿项
+    draft_item = next(
+        (item for item in body["items"] if item["skill_id"] == "d-draft-only"),
+        None,
+    )
+    assert draft_item is not None
+    assert draft_item["artifact_status"] == "unregistered"
+    assert draft_item["linked_draft_id"] == "draft-only-1"
+    assert draft_item["linked_draft_status"] == "editing"
+    assert draft_item["attention_reason"] == "draft_only"
+    # EDITING 草稿 → next_action = continue_draft
+    assert draft_item["next_action"] == "continue_draft"
+    # execution_contract 应从草稿 structured_config 投影，让概览页能展示场景与指标
+    ec = draft_item["execution_contract"]
+    assert ec["profiles"][0]["name"] == "场景A"
+    assert ec["profiles"][0]["metric_inputs"][0]["metric_code"] == "scene.metric_b"
+    assert ec["common"]["metric_inputs"][0]["metric_code"] == "common.metric_a"
+
+
+def test_workbench_draft_only_validated_has_materialize_action():
+    """VALIDATED 状态的纯草稿 next_action 应为 materialize_draft。"""
+    # 临时覆盖 _DraftService，返回一个 validated 草稿
+    original = _DraftService.list_drafts
+
+    def validated_drafts(self, **_):
+        return [
+            SkillDraft(
+                draft_id="draft-validated",
+                skill_id="e-validated-draft",
+                skill_name="已校验草稿",
+                source_type=SkillDraftSourceType.TEMPLATE,
+                structured_config={
+                    "basic": {"skill_id": "e-validated-draft", "skill_name": "已校验草稿"},
+                    "business_mounting": {"business_action": "query", "business_object": "settlement"},
+                },
+                status=SkillDraftStatus.VALIDATED,
+                created_by="developer",
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        ]
+
+    _DraftService.list_drafts = validated_drafts
+    try:
+        response = _client_with_in_memory_dependencies().get(
+            f"{PREFIX}/infra-skills/workbench"
+        )
+        assert response.status_code == 200
+        body = response.json()
+        draft_item = next(
+            item for item in body["items"] if item["skill_id"] == "e-validated-draft"
+        )
+        assert draft_item["next_action"] == "materialize_draft"
+        assert draft_item["linked_draft_status"] == "validated"
+    finally:
+        _DraftService.list_drafts = original

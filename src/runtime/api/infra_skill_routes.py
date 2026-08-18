@@ -1109,7 +1109,12 @@ SkillLifecycleServiceDependency = Annotated[
 
 
 def get_skill_draft_validator() -> SkillDraftValidator:
-    return SkillDraftValidator()
+    """校验器组装点；注入语义层以启用执行契约的 runtime_resolvable 校验。"""
+
+    from src.runtime.skill_management.skill_input_service import SkillInputService
+    from src.semantic_layer.registry import get_semantic_registry
+
+    return SkillDraftValidator(SkillInputService(get_semantic_registry()))
 
 
 SkillDraftValidatorDependency = Annotated[
@@ -1484,6 +1489,8 @@ def create_skill_draft(
             business_object=request.business_object,
             include_keywords=request.include_keywords,
             excluded_intents=request.excluded_intents,
+            execution_contract=request.execution_contract,
+            output_schema=request.output_schema,
         )
     except SkillDraftConflictError as exc:
         raise HTTPException(

@@ -21,8 +21,10 @@ from src.domain.common.actions import (
     VALID_ACTION_OBJECT_PAIRS,
 )
 from src.domain.skill.draft_models import (
+    RuntimeContextCode,
     SkillDraft,
     SkillDraftSourceType,
+    SkillExecutionContract,
     ValidationIssue,
     ValidationReport,
     ValidationSeverity,
@@ -30,6 +32,7 @@ from src.domain.skill.draft_models import (
 from src.runtime.skill_management.ai_authoring.security import (
     scan_ai_generated_files,
 )
+from src.runtime.skill_management.skill_input_service import SkillInputService
 from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationProvenance,
 )
@@ -80,11 +83,17 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 class SkillDraftValidator:
     """校验草稿的结构化配置与原始文件。"""
 
+    def __init__(self, input_service: SkillInputService | None = None) -> None:
+        # 可选注入语义层输入服务，启用执行契约的 runtime_resolvable 校验。
+        # 默认 None 保持纯结构校验行为，不破坏现有无依赖构造点。
+        self._input_service = input_service
+
     def validate(self, draft: SkillDraft) -> ValidationReport:
         issues: list[ValidationIssue] = []
         issues.extend(self._validate_basic(draft))
         issues.extend(self._validate_business_mounting(draft))
         issues.extend(self._validate_schemas(draft))
+        issues.extend(self._validate_execution_contract(draft))
         if draft.source_type == SkillDraftSourceType.AI_GENERATED:
             issues.extend(self._validate_ai_generated_files(draft))
         else:
@@ -197,6 +206,179 @@ class SkillDraftValidator:
                         )
                     )
         return issues
+
+    # ── 执行契约校验（Skill Execution Contract，设计 §54）─────────
+    #
+    # execution_contract 为可选；不存在则完全跳过（旧 Skill 兼容，§64）。
+    # 存在时解析为 SkillExecutionContract，校验：版本/profile_id/重复/
+    # context code/metric runtime_resolvable。
+
+    _VALID_CONTEXT_CODES = frozenset(c.value for c in RuntimeContextCode)
+
+    def _validate_execution_contract(
+        self, draft: SkillDraft
+    ) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        ec = draft.structured_config.get("execution_contract")
+        if ec is None:
+            # 无执行契约（旧 Skill 或未配置）：跳过（§64）
+            return issues
+        if not isinstance(ec, dict):
+            issues.append(
+                self._blocking(
+                    "INVALID_EXECUTION_CONTRACT",
+                    "execution_contract 必须是对象",
+                    "execution_contract",
+                )
+            )
+            return issues
+        try:
+            contract = SkillExecutionContract.model_validate(ec)
+        except ValidationError as exc:
+            issues.append(
+                self._blocking(
+                    "INVALID_EXECUTION_CONTRACT",
+                    f"execution_contract 结构非法: {exc}",
+                    "execution_contract",
+                )
+            )
+            return issues
+
+        # §54.1 版本（model 默认 2；显式非 2 由解析拒绝，这里只兜底）
+        if contract.version != 2:
+            issues.append(
+                self._blocking(
+                    "UNSUPPORTED_CONTRACT_VERSION",
+                    f"仅支持 execution_contract.version=2，实际 {contract.version}",
+                    "execution_contract.version",
+                )
+            )
+
+        common_metric_codes = {
+            m.metric_code for m in contract.common.metric_inputs
+        }
+        common_context_codes = {
+            c.code for c in contract.common.context_inputs
+        }
+
+        # §54.2 + §54.4 + §54.5 + §54.6 逐 Profile 校验
+        seen_profile_ids: set[str] = set()
+        for profile in contract.profiles:
+            issues.extend(
+                self._validate_profile(
+                    profile,
+                    seen_profile_ids,
+                    common_metric_codes,
+                    common_context_codes,
+                )
+            )
+        return issues
+
+    def _validate_profile(
+        self,
+        profile: Any,
+        seen_profile_ids: set[str],
+        common_metric_codes: set[str],
+        common_context_codes: set[str],
+    ) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        pid = profile.profile_id
+        path = f"execution_contract.profiles.{pid}"
+
+        # §54.2 profile_id 唯一（kebab-case 已由模型校验，这里查重）
+        if pid in seen_profile_ids:
+            issues.append(
+                self._blocking(
+                    "PROFILE_ID_DUPLICATE",
+                    f"profile_id 重复: {pid}",
+                    path,
+                )
+            )
+        seen_profile_ids.add(pid)
+
+        # §54.4 Profile 内 metric 去重
+        seen_metrics: set[str] = set()
+        for m in profile.metric_inputs:
+            if m.metric_code in seen_metrics:
+                issues.append(
+                    self._blocking(
+                        "DUPLICATE_METRIC_INPUT",
+                        f"Profile「{pid}」内重复指标: {m.metric_code}",
+                        f"{path}.metric_inputs.{m.metric_code}",
+                    )
+                )
+                continue
+            seen_metrics.add(m.metric_code)
+
+            # §54.5 Common 已声明的 metric，Profile 不重复声明（V1 不支持 Override）
+            if m.metric_code in common_metric_codes:
+                issues.append(
+                    self._blocking(
+                        "COMMON_METRIC_REDECLARED",
+                        f"指标 {m.metric_code} 已在 common 声明，Profile「{pid}」不应重复",
+                        f"{path}.metric_inputs.{m.metric_code}",
+                    )
+                )
+
+            # §54.3 metric runtime_resolvable（需注入 input_service）
+            issues.extend(
+                self._validate_metric_resolvable(m.metric_code, f"{path}.metric_inputs")
+            )
+
+        # §54.6 context code 合法（model 已保证为枚举，这里只查 Common 重复）
+        for c in profile.context_inputs:
+            if c.code in common_context_codes:
+                issues.append(
+                    self._blocking(
+                        "COMMON_CONTEXT_REDECLARED",
+                        f"上下文 {c.code} 已在 common 声明，Profile「{pid}」不应重复",
+                        f"{path}.context_inputs.{c.code}",
+                    )
+                )
+
+        # Common.metric_inputs 也需逐个 runtime_resolvable 校验
+        # （common 与 profile 共用同一去重池，但 common 内部去重另查）
+        return issues
+
+    def _validate_metric_resolvable(
+        self, metric_code: str, base_path: str
+    ) -> list[ValidationIssue]:
+        """校验 metric_code 是否 runtime_resolvable（设计 §54.3）。
+
+        无 input_service 时降级为 WARNING（结构层无法判定运行时可解析性，
+        需在物化/发布时由注入了语义层的 Validator 复验）。
+        """
+        if self._input_service is None:
+            return [
+                self._warning(
+                    "METRIC_RESOLVABILITY_NOT_CHECKED",
+                    f"未注入语义层服务，无法校验 {metric_code} 的 runtime_resolvable",
+                    f"{base_path}.{metric_code}",
+                )
+            ]
+        metric = self._input_service._registry.get_metric(metric_code)  # noqa: SLF001
+        if metric is None:
+            return [
+                self._blocking(
+                    "METRIC_NOT_FOUND",
+                    f"指标不存在: {metric_code}",
+                    f"{base_path}.{metric_code}",
+                )
+            ]
+        obj = self._input_service._registry.get_object(metric.object_code)  # noqa: SLF001
+        cap = self._input_service.resolve_metric_capability(metric, obj)
+        if not cap.runtime_resolvable:
+            reason = (
+                cap.unavailable_reason.value if cap.unavailable_reason else "UNKNOWN"
+            )
+            return [
+                self._blocking(
+                    "METRIC_NOT_RUNTIME_RESOLVABLE",
+                    f"指标 {metric_code} 不可作为 Skill 输入（{reason}）",
+                    f"{base_path}.{metric_code}",
+                )
+            ]
+        return []
 
     # ── 脚本与敏感内容校验 ────────────────────────────────────────
 

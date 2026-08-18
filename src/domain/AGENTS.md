@@ -41,7 +41,7 @@ domain/
 ## 全局领域知识库 — 医院医保智能体系统
 
 > **文档版本**: 1.1
-> **更新日期**: 2026-07-31
+> **更新日期**: 2026-08-14
 > **维护说明**: 本文件为项目的 **通用语言（Ubiquitous Language）** 权威定义。所有代码中的类名、变量名、方法名必须严格遵循此字典。新增领域概念时，必须同步更新此文件。
 
 ---
@@ -574,6 +574,10 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | AI 草稿 | `SkillDraft(source_type=AI_GENERATED)` | **Entity** | Pydantic `BaseModel`（frozen） | 人工接受 AI proposal 后创建的过渡态草稿；不直接进入运行时或正式 Skill 目录 |
 | 技能草稿状态 | `SkillDraftStatus` | **Value Object** | `StrEnum` | editing / validated / materialized |
 | 技能草稿来源 | `SkillDraftSourceType` | **Value Object** | `StrEnum` | template / import / copy / ai_generated |
+| 技能执行契约 | `SkillExecutionContract` | **Value Object** | Pydantic `BaseModel`（frozen） | Skill 输入定义的唯一真相，声明公共输入与不同执行场景的数据依赖 |
+| 公共输入 | `CommonInputSpec` | **Value Object** | Pydantic `BaseModel`（frozen） | 绝大多数执行场景共享的上下文与业务指标依赖 |
+| 执行场景 | `ExecutionProfileSpec` | **Value Object** | Pydantic `BaseModel`（frozen） | 同一 Skill 核心能力不变、数据依赖不同的一种执行配置 |
+| 业务指标输入 | `MetricInputSpec` | **Value Object** | Pydantic `BaseModel`（frozen） | 执行契约中对语义层业务指标的依赖声明 |
 | AI 生成提案 | `SkillAIGenerationResponse` | **DTO** | Pydantic `BaseModel`（frozen） | 模型输出经服务端校验、哈希和溯源封装后的候选 proposal；未被接受前不产生草稿 |
 | Skill 候选制品 | `SkillCandidateArtifact` | **Value Object** | Pydantic `BaseModel`（frozen） | 由已接受草稿生成、仅供隔离评测的不可变制品；存放于运行时 `skills/` 之外 |
 | 技能定义 | `SkillDefinition` | **Entity** | Pydantic `BaseModel`（frozen） | 正式目录中可加载定义的治理生命周期状态（enabled/disabled/archived），与不可变 `SkillVersion` 区分 |
@@ -916,6 +920,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Citation` | 引用来源 | Shared / Knowledge | Value Object |
 | `ClosureTask` | 闭环任务 | TaskClosure | Entity |
 | `Coding` | 编码信息 | MedicalRecord | Value Object |
+| `CommonInputSpec` | 公共输入 | SkillTool | Value Object |
 | `ComplianceScore` | 合规评分 | AuditRisk | Value Object |
 | `CompileRun` | 编译运行 | Knowledge | Aggregate Root |
 | `CompileStep` | 编译步骤 | Knowledge | Entity |
@@ -937,6 +942,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ErrorCodeEntry` | 错误码知识条目 | Knowledge | Entity |
 | `ErrorDetail` | 错误详情 | Shared | DTO |
 | `Evidence` | 证据材料 | Appeal | Entity |
+| `ExecutionProfileSpec` | 执行场景 | SkillTool | Value Object |
 | `FeeItem` | 费用明细 | OrderFee | Entity |
 | `HisPort` | HIS 适配器端口 | Patient | Domain Service |
 | `Hypothesis` | 推理假设 | Runtime | Entity |
@@ -948,6 +954,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `KnowledgeEnhancementService` | 知识扩展服务 | Knowledge | Domain Service |
 | `KnowledgeExtensionStatus` | 知识扩展状态 | Knowledge | Value Object |
 | `LLMContext` | LLM 上下文 | Runtime | DTO |
+| `MetricInputSpec` | 业务指标输入 | SkillTool | Value Object |
 | `McpCapability` | MCP 能力 | SkillTool | Entity |
 | `McpRiskLevel` | MCP 风险等级 | SkillTool | Value Object |
 | `McpServer` | MCP 服务器 | SkillTool | Entity |
@@ -984,6 +991,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `SkillCandidateArtifact` | Skill 候选制品 | SkillTool | Value Object |
 | `SkillDraft(source_type=AI_GENERATED)` | AI 草稿 | SkillTool | Entity |
 | `SkillExecutionEngine` | 技能执行引擎 | SkillTool | Domain Service |
+| `SkillExecutionContract` | 技能执行契约 | SkillTool | Value Object |
 | `SkillGovernancePriority` | 技能治理优先级 | SkillTool | Value Object |
 | `SkillGovernanceStage` | 技能治理阶段 | SkillTool | Value Object |
 | `SkillMetadata` | 技能元数据 | SkillTool | Value Object |

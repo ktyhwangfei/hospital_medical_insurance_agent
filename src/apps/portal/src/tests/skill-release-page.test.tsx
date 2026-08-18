@@ -112,6 +112,7 @@ const workbench: SkillWorkbenchResponse = {
     needs_evaluation: 0,
     pending_approval: 1,
     test_active: 0,
+    draft_only: 0,
     updated_at: '2026-08-11T06:12:00Z',
   },
   items: [{

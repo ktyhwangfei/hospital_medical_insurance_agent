@@ -45,28 +45,34 @@ class CachedSkillStorage(CachedStorageBase):
     # ── Read operations (read-through) ────────────────────────────────
 
     def get_skill(self, skill_id: str) -> Skill | None:
-        return self._cached_read(
+        cached = self._cached_read(
             self._make_key("get", skill_id),
             lambda: self._store.get_skill(skill_id),
         )
+        if cached is None:
+            return None
+        if isinstance(cached, Skill):
+            return cached
+        # 缓存命中时反序列化回领域模型（缓存值由 _to_cache_value 转为 JSON dict）
+        return Skill.model_validate(cached)
 
     def list_skills(self) -> list[Skill]:
-        return self._cached_read(
-            self._make_key("list", "all"),
-            lambda: self._store.list_skills(),
-        )
+        return self._list_from_cache("list", "all", fetch_fn=lambda: self._store.list_skills())
 
     def list_skills_by_owner(self, owner: str) -> list[Skill]:
-        return self._cached_read(
-            self._make_key("by_owner", owner),
-            lambda: self._store.list_skills_by_owner(owner),
-        )
+        return self._list_from_cache("by_owner", owner, fetch_fn=lambda: self._store.list_skills_by_owner(owner))
 
     def list_skills_by_role(self, role: str) -> list[Skill]:
-        return self._cached_read(
-            self._make_key("by_role", role),
-            lambda: self._store.list_skills_by_role(role),
-        )
+        return self._list_from_cache("by_role", role, fetch_fn=lambda: self._store.list_skills_by_role(role))
+
+    def _list_from_cache(self, *key_parts: str, fetch_fn) -> list[Skill]:
+        """列表读穿透：缓存命中的 JSON 列表反序列化为 Skill 列表。"""
+        cached = self._cached_read(self._make_key(*key_parts), fetch_fn)
+        if not cached:
+            return []
+        if cached and isinstance(cached[0], Skill):
+            return cached
+        return [Skill.model_validate(item) for item in cached]
 
     # ── Write operations (write-through + invalidate) ─────────────────
 

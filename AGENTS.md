@@ -207,7 +207,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - `delete_skill_draft` 端点需要 `?expected_revision=N` 查询参数，返回 200（非 204）
 - `materialize` 端点成功返回 201，未校验草稿物化返回 409（`SKILL_MATERIALIZE_FAILED`）
 - 前端 `@/app/...` 路径在 Vitest 中无法解析，组件测试改用相对路径 `../../app/...`；`@/lib/...` 和 `@/components/...` 正常工作
-- pytest_asyncio 插件与当前 pytest 版本不兼容，启动即报 `ImportError: cannot import name 'FixtureDef' from 'pytest'`。运行 pytest 时加 `-p no:asyncio` 禁用该插件。
+- pytest_asyncio 旧版本与 pytest 9 不兼容（启动报 `ImportError: cannot import name 'FixtureDef' from 'pytest'`）。当前锁定的 pytest-asyncio 1.4.0 与 pytest 9.0.3 已兼容，**不要**加 `-p no:asyncio`（会禁用 async 测试导致 test_policy_qa 等 4 个用例失败）。若升级 pytest 后重现 ImportError，再升级 pytest-asyncio 或加该 flag。
 - 构建索引/质量检查连不上 PostgreSQL/Milvus：服务在 WSL2 Docker 内，Windows 侧 `127.0.0.1` 不通（WSL2 NAT 默认不转发），报 `ConnectionTimeout`。在 `C:\Users\<用户>\.wslconfig` 加 `[wsl2] networkingMode=mirrored` 后 `wsl --shutdown` 重启，`127.0.0.1` 直通 WSL 容器；临时方案用 `wsl -e hostname -I` 拿 WSL IP 设 `POSTGRES_HOST`/`MILVUS_HOST`（IP 重启会变，不推荐持久）。
 - `production.py` 的 `POSTGRES_PASSWORD` 默认曾为空，连库报 `fe_sendauth: no password supplied`。已改默认 `'postgres'`（与 AGENTS.md、docker-compose 一致）；若遇认证失败先检查该环境变量是否被显式设为空。
 - 部分工作区（codex-policy-compare-v2、pi-policy-knowledge-optimize 等独立副本）的启停脚本曾是写死 8000/3000 的旧版，多工作区会端口互斥。运行 `..\ws.ps1 sync` 同步新版脚本（按工作区名确定性分配 8100+/3100+）。

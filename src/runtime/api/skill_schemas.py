@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from src.domain.skill.draft_models import SkillDraft
+from src.domain.skill.draft_models import SkillDraft, SkillExecutionContract
 from src.domain.skill.regression_models import SkillFeedbackReasonCode
 from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationProvenance,
@@ -138,6 +138,7 @@ class SkillWorkbenchSummaryResponse(BaseModel):
     needs_evaluation: int
     pending_approval: int
     test_active: int
+    draft_only: int = 0
     updated_at: datetime
 
 
@@ -146,6 +147,8 @@ class SkillWorkbenchItemResponse(BaseModel):
     skill_name: str
     business_action: str
     business_object: str
+    description: str
+    execution_contract: SkillExecutionContract
     semantic_version: str
     artifact_status: str
     validation_status: str
@@ -253,6 +256,11 @@ class SkillDraftCreateRequest(BaseModel):
     business_object: str = ""
     include_keywords: list[str] = []
     excluded_intents: list[str] = []
+    # 执行契约（设计 §44）：向导第三步配的执行场景随创建一起落库，避免丢失。
+    # 可选且向后兼容——不传时 structured_config 不含 execution_contract 键。
+    execution_contract: dict[str, Any] | None = None
+    # 输出 Schema（JSON Schema）：向导第四步编辑的输出契约，落库到 schemas.output。
+    output_schema: dict[str, Any] | None = None
 
 
 class SkillDraftCopyRequest(BaseModel):

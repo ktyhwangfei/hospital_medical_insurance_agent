@@ -32,9 +32,23 @@ class TestSettlementCoreFunctions:
         assert "source_record_id" in result
 
     def test_get_error_detail_returns_dict_for_known_code(self):
+        from unittest.mock import patch
         from src.business_scenarios.settlement_exception_guide.service import get_error_detail
+        import src.business_scenarios.settlement_exception_guide.service as svc
 
-        result = get_error_detail("E-UPLOAD-001")
+        # c4838b1 重构后 knowledge 模块替换为 stub（返回空）。
+        # 用 mock store 注入知识数据，验证 get_error_detail 组装逻辑。
+        class _MockStore:
+            def get_error_code(self, error_code: str) -> dict:
+                return {
+                    "exception_type": "上传异常",
+                    "description": "结算单据上传失败",
+                    "responsible_role": "收费员",
+                    "recommendation": "请重新上传医保结算单据",
+                }
+
+        with patch.object(svc, "create_knowledge_store", return_value=_MockStore()):
+            result = get_error_detail("E-UPLOAD-001")
         assert isinstance(result, dict)
         assert result["error_code"] == "E-UPLOAD-001"
         assert "exception_type" in result
@@ -135,18 +149,42 @@ class TestSettlementNodeFunctions:
         assert not isinstance(result, AgentResponse)
 
     def test_get_error_detail_node_populates_error_detail(self):
+        from unittest.mock import patch
         from src.business_scenarios.settlement_exception_guide.settlement_nodes import get_error_detail_node
+        import src.business_scenarios.settlement_exception_guide.service as svc
 
-        state = self._make_state(error_code="E-UPLOAD-001")
-        result = get_error_detail_node(state)
+        class _MockStore:
+            def get_error_code(self, error_code: str) -> dict:
+                return {
+                    "exception_type": "上传异常",
+                    "description": "结算单据上传失败",
+                    "responsible_role": "收费员",
+                    "recommendation": "请重新上传医保结算单据",
+                }
+
+        with patch.object(svc, "create_knowledge_store", return_value=_MockStore()):
+            state = self._make_state(error_code="E-UPLOAD-001")
+            result = get_error_detail_node(state)
         assert "error_detail" in result
         assert result["error_detail"]["error_code"] == "E-UPLOAD-001"
 
     def test_get_error_detail_node_adds_citations(self):
+        from unittest.mock import patch
         from src.business_scenarios.settlement_exception_guide.settlement_nodes import get_error_detail_node
+        import src.business_scenarios.settlement_exception_guide.service as svc
 
-        state = self._make_state(error_code="E-UPLOAD-001")
-        result = get_error_detail_node(state)
+        class _MockStore:
+            def get_error_code(self, error_code: str) -> dict:
+                return {
+                    "exception_type": "上传异常",
+                    "description": "结算单据上传失败",
+                    "responsible_role": "收费员",
+                    "recommendation": "请重新上传医保结算单据",
+                }
+
+        with patch.object(svc, "create_knowledge_store", return_value=_MockStore()):
+            state = self._make_state(error_code="E-UPLOAD-001")
+            result = get_error_detail_node(state)
         assert len(result["citations"]) > 0
 
     def test_get_error_detail_node_handles_unknown_code(self):

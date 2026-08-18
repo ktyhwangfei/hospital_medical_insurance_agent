@@ -2,7 +2,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.domain.skill.draft_models import SkillDraft, SkillDraftSourceType, SkillDraftStatus
+from src.domain.skill.draft_models import (
+    SkillDraft,
+    SkillDraftSourceType,
+    SkillDraftStatus,
+    SkillExecutionContract,
+)
 from src.domain.skill.governance_models import (
     SkillEvalCase,
     SkillEvalMetrics,
@@ -50,12 +55,16 @@ def _entry(
     version: SkillVersion,
     *,
     artifact_status: str = "registered",
+    description: str = "",
+    execution_contract: SkillExecutionContract | None = None,
 ) -> SkillCatalogEntry:
     return SkillCatalogEntry(
         skill_id=skill_id,
         skill_name=f"{skill_id} name",
         business_action="explain",
         business_object="settlement",
+        description=description,
+        execution_contract=execution_contract or SkillExecutionContract(),
         semantic_version=version.semantic_version,
         artifact_hash=version.artifact_hash,
         artifact_status=artifact_status,
@@ -270,6 +279,40 @@ def test_workbench_prioritizes_gate_failure_and_counts_actionable_summary() -> N
     assert page.summary.pending_approval == 0
     assert page.summary.test_active == 1
     assert page.summary.updated_at == NOW
+
+
+def test_workbench_projects_capability_and_execution_contract() -> None:
+    version = _version("settlement", "version-current", "2.0.0")
+    contract = SkillExecutionContract.model_validate(
+        {
+            "profiles": [
+                {
+                    "profile_id": "deductible-explanation",
+                    "name": "起付线解释",
+                    "metric_inputs": [
+                        {"metric_code": "settlement.deductible", "alias": "起付金额"}
+                    ],
+                }
+            ]
+        }
+    )
+    service = _service(
+        [
+            _entry(
+                "settlement",
+                version,
+                description="解释医保结算费用构成",
+                execution_contract=contract,
+            )
+        ],
+        runs={},
+        releases={},
+    )
+
+    item = service.list_workbench(page=1, page_size=20).items[0]
+
+    assert item.description == "解释医保结算费用构成"
+    assert item.execution_contract == contract
 
 
 def test_workbench_filters_by_governance_status_before_pagination() -> None:

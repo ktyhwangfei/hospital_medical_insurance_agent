@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.data_platform.storage.skill.version_ports import SkillVersionStorage
+from src.domain.skill.draft_models import SkillExecutionContract
 from src.domain.skill.version_models import SkillValidationStatus, SkillVersion
 from src.skill_infra.artifact import SkillArtifactError, build_skill_artifact
 
@@ -34,6 +35,10 @@ class SkillCatalogEntry(BaseModel):
     skill_name: str
     business_action: str = ""
     business_object: str = ""
+    description: str = ""
+    execution_contract: SkillExecutionContract = Field(
+        default_factory=SkillExecutionContract
+    )
     include_keywords: list[str] = Field(default_factory=list)
     excluded_intents: list[str] = Field(default_factory=list)
     semantic_version: str
@@ -182,12 +187,22 @@ class SkillVersionService:
             )
             if artifact_status and current_status != artifact_status:
                 continue
+            try:
+                execution_contract = SkillExecutionContract.model_validate(
+                    snapshot.manifest_snapshot.get("execution_contract") or {}
+                )
+            except ValidationError:
+                execution_contract = SkillExecutionContract()
             entries.append(
                 SkillCatalogEntry(
                     skill_id=skill.skill_id,
                     skill_name=skill.skill_name,
                     business_action=skill.business_action,
                     business_object=skill.business_object,
+                    description=str(
+                        snapshot.manifest_snapshot.get("description") or ""
+                    ),
+                    execution_contract=execution_contract,
                     include_keywords=skill.include_keywords,
                     excluded_intents=skill.excluded_intents,
                     semantic_version=snapshot.semantic_version,

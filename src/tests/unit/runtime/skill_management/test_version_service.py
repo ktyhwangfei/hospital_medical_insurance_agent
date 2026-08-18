@@ -26,6 +26,7 @@ def _write_skill(
     skill_id: str = "demo_skill",
     *,
     business_action: str = "explain",
+    with_execution_contract: bool = False,
 ) -> SimpleNamespace:
     skill_dir = skills_root / skill_id
     skill_dir.mkdir()
@@ -38,9 +39,7 @@ def _write_skill(
         "supported_intents": ["费用"],
         "excluded_intents": [],
     }
-    (skill_dir / "skill_manifest.yaml").write_text(
-        "\n".join(
-            [
+    manifest_lines = [
                 f"skill_id: {skill_id}",
                 f"skill_name: {skill_id} name",
                 'version: "1.0.0"',
@@ -49,7 +48,24 @@ def _write_skill(
                 "supported_intents: [费用]",
                 "excluded_intents: []",
             ]
-        ),
+    if with_execution_contract:
+        manifest_lines.extend(
+            [
+                "description: 解释医保结算费用构成",
+                "execution_contract:",
+                "  version: 2",
+                "  common:",
+                "    context_inputs: []",
+                "    metric_inputs: []",
+                "  profiles:",
+                "    - profile_id: deductible-explanation",
+                "      name: 起付线解释",
+                "      metric_inputs:",
+                "        - metric_code: settlement.deductible",
+            ]
+        )
+    (skill_dir / "skill_manifest.yaml").write_text(
+        "\n".join(manifest_lines),
         encoding="utf-8",
     )
     (skill_dir / "assembler.py").write_text("def load():\n    return object()\n", encoding="utf-8")
@@ -115,6 +131,20 @@ def test_catalog_filters_before_paginating(tmp_path: Path) -> None:
 
     assert catalog.total == 1
     assert [item.skill_id for item in catalog.items] == ["query_skill"]
+
+
+def test_catalog_projects_capability_and_execution_contract(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, with_execution_contract=True)
+    service = _service(tmp_path, skill)
+
+    item = service.list_catalog(page=1, page_size=20).items[0]
+
+    assert item.description == "解释医保结算费用构成"
+    assert item.execution_contract.profiles[0].name == "起付线解释"
+    assert (
+        item.execution_contract.profiles[0].metric_inputs[0].metric_code
+        == "settlement.deductible"
+    )
 
 
 def test_sync_unknown_skill_raises_explicit_error(tmp_path: Path) -> None:

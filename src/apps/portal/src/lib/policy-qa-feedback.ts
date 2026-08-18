@@ -158,12 +158,3 @@ export async function listEvalCasePool(
     offset: raw.offset,
   }
 }
-
-// 评测者写操作（转换/确认/拒绝）由 api-client 统一携带 skill:evaluate 鉴权，集中再导出
-export {
-  confirmEvalCasePoolItem,
-  rejectEvalCasePoolItem,
-  transformEvalCasePoolItem,
-  type EvalCasePoolConfirmRequest,
-  type EvalCasePoolItemResponse,
-} from '@/lib/api-client'

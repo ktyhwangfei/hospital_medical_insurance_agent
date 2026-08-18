@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, ArrowRight, CheckCircle2, AlertCircle, Loader2, Sparkles } from 'lucide-react'
 import SkillDraftPreview from '@/components/skills/skill-draft-preview'
+import ExecutionContractEditor from '@/components/skills/execution-contract-editor'
 import {
   acceptSkillAIProposal,
   createSkillDraft,
@@ -11,7 +12,12 @@ import {
   getSkillInputSelector,
   ApiClientError,
 } from '@/lib/skill-draft-api'
-import type { SkillAIGenerationProposal, SkillDraftResponse } from '@/lib/types'
+import type {
+  SkillAIGenerationProposal,
+  SkillDraftResponse,
+  SkillExecutionContract,
+  SkillInputSelectorResponse,
+} from '@/lib/types'
 
 type Step = 0 | 1 | 2 | 3
 type WizardState =
@@ -64,15 +70,24 @@ export default function NewSkillWizardPage() {
   const [businessObject, setBusinessObject] = useState('settlement')
   const [keywords, setKeywords] = useState('')
 
-  // Step 2: 输入输出契约
-  const [inputMetrics, setInputMetrics] = useState('')
-  const [inputSchema, setInputSchema] = useState('{\n  "type": "object",\n  "properties": {}\n}')
+  // Step 2: 输入输出契约（执行契约编辑器，设计 §44）
+  const [executionContract, setExecutionContract] = useState<SkillExecutionContract | undefined>(undefined)
+  const [manualSelector, setManualSelector] = useState<SkillInputSelectorResponse | null>(null)
   const [outputSchema, setOutputSchema] = useState('{\n  "type": "object",\n  "properties": {}\n}')
 
   const canNext = (): boolean => {
     if (step === 0) return skillId.trim() !== '' && skillName.trim() !== ''
     return true
   }
+
+  // Step 2 进入时加载语义层选择器（供执行契约编辑器使用）
+  useEffect(() => {
+    if (step !== 2 || manualSelector !== null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void getSkillInputSelector()
+      .then((sel) => setManualSelector(sel))
+      .catch(() => setManualSelector(null))
+  }, [step, manualSelector])
 
   function next() {
     setError(null)
@@ -96,6 +111,9 @@ export default function NewSkillWizardPage() {
           owner: owner.trim() || undefined,
           business_action: businessAction,
           business_object: businessObject,
+          // 向导第一步/第二步配的触发词与第三步配的执行场景随创建一起落库（设计 §44）。
+          include_keywords: keywords.split(/[,，\s]+/).filter(Boolean),
+          execution_contract: executionContract,
         },
         key,
       )
@@ -199,8 +217,21 @@ export default function NewSkillWizardPage() {
       `- BusinessObject: \`${businessObject}\``,
       `- 关键词: ${kw.length ? kw.join(', ') : '—'}`,
       '',
-      '## 输入指标',
-      inputMetrics.trim() || '（暂无）',
+      '## 输入输出契约（执行契约）',
+      executionContract && (executionContract.profiles.length > 0 || executionContract.common.metric_inputs.length > 0)
+        ? [
+            `version: ${executionContract.version}`,
+            executionContract.common.metric_inputs.length > 0
+              ? `公共指标: ${executionContract.common.metric_inputs.map((m) => m.metric_code).join(', ')}`
+              : null,
+            ...executionContract.profiles.map(
+              (p) =>
+                `- ${p.profile_id}: ${(p.metric_inputs ?? []).map((m) => m.metric_code).join(', ') || '（无指标）'}`,
+            ),
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : '（暂未配置执行场景）',
       '',
       '## skill_manifest.yaml',
       '```yaml',
@@ -233,7 +264,7 @@ export default function NewSkillWizardPage() {
           <div className="space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div>
               <label className="block text-sm font-medium text-slate-700">能力说明</label>
-              <textarea value={aiDescription} onChange={(event) => setAIDescription(event.target.value)} rows={5} placeholder="描述你希望 Skill 完成的能力" disabled={wizardState.mode === 'ai_generating'} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50" />
+              <textarea value={aiDescription} onChange={(event) => setAIDescription(event.target.value)} rows={5} placeholder="描述你希望 Skill 完成的能力" disabled={wizardState.mode === 'ai_generating'} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ring focus:ring-1 focus:ring-ring disabled:bg-slate-50" />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700">已发布输入指标</label>
@@ -294,8 +325,8 @@ export default function NewSkillWizardPage() {
 
   if (created) {
     return (
-      <div className="mt-10 mx-auto max-w-lg rounded-xl border border-green-200 bg-white p-8 text-center shadow-sm">
-        <CheckCircle2 className="mx-auto h-12 w-12 text-green-600" />
+      <div className="mt-10 mx-auto max-w-lg rounded-xl border border-emerald-200 bg-white p-8 text-center shadow-sm">
+        <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-600" />
         <h2 className="mt-4 text-xl font-semibold text-slate-900">草稿已创建</h2>
         <p className="mt-2 text-sm text-slate-600">
           草稿「{created.skill_name}」已创建，可进入编辑器继续完善输入指标契约与校验。
@@ -339,7 +370,7 @@ export default function NewSkillWizardPage() {
             <div
               className={
                 'flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ' +
-                (i === step ? 'bg-blue-600 text-white' : i < step ? 'bg-green-600 text-white' : 'bg-slate-200 text-slate-500')
+                (i === step ? 'bg-blue-600 text-white' : i < step ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-500')
               }
             >
               {i < step ? '✓' : i + 1}
@@ -368,7 +399,7 @@ export default function NewSkillWizardPage() {
                 value={skillId}
                 onChange={(e) => setSkillId(e.target.value)}
                 placeholder="如 settlement_explain_skill"
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ring focus:ring-1 focus:ring-ring"
               />
               <p className="mt-1 text-xs text-slate-500">全局唯一标识，创建后不可修改</p>
             </div>
@@ -378,7 +409,7 @@ export default function NewSkillWizardPage() {
                 value={skillName}
                 onChange={(e) => setSkillName(e.target.value)}
                 placeholder="如 结算费用解释 Skill"
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ring focus:ring-1 focus:ring-ring"
               />
             </div>
             <div>
@@ -388,7 +419,7 @@ export default function NewSkillWizardPage() {
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
                 placeholder="简要描述该 Skill 的业务目标"
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ring focus:ring-1 focus:ring-ring"
               />
             </div>
             <div>
@@ -397,7 +428,7 @@ export default function NewSkillWizardPage() {
                 value={owner}
                 onChange={(e) => setOwner(e.target.value)}
                 placeholder="如 信息科-张三"
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ring focus:ring-1 focus:ring-ring"
               />
             </div>
           </div>
@@ -412,7 +443,7 @@ export default function NewSkillWizardPage() {
                 <select
                   value={businessAction}
                   onChange={(e) => setBusinessAction(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ring focus:ring-1 focus:ring-ring"
                 >
                   {BUSINESS_ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
                 </select>
@@ -422,7 +453,7 @@ export default function NewSkillWizardPage() {
                 <select
                   value={businessObject}
                   onChange={(e) => setBusinessObject(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ring focus:ring-1 focus:ring-ring"
                 >
                   {BUSINESS_OBJECTS.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
@@ -434,7 +465,7 @@ export default function NewSkillWizardPage() {
                 value={keywords}
                 onChange={(e) => setKeywords(e.target.value)}
                 placeholder="如 结算,费用,自付"
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ring focus:ring-1 focus:ring-ring"
               />
             </div>
           </div>
@@ -443,35 +474,22 @@ export default function NewSkillWizardPage() {
         {step === 2 && (
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-800">第三步 · 输入输出契约</h3>
+            <p className="text-xs text-slate-500">
+              定义执行场景与数据依赖；输入 Schema 由执行契约自动派生（设计 §30）。
+            </p>
+            <ExecutionContractEditor
+              contract={executionContract}
+              selector={manualSelector}
+              onChange={setExecutionContract}
+            />
             <div>
-              <label className="block text-sm font-medium text-slate-700">输入指标（metric_code，逗号分隔）</label>
-              <input
-                value={inputMetrics}
-                onChange={(e) => setInputMetrics(e.target.value)}
-                placeholder="如 zydyxx.bcqfje, policy.settlement_rule"
-                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              <label className="block text-sm font-medium text-slate-700">输出 Schema (JSON)</label>
+              <textarea
+                value={outputSchema}
+                onChange={(e) => setOutputSchema(e.target.value)}
+                rows={5}
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-ring focus:ring-1 focus:ring-ring"
               />
-              <p className="mt-1 text-xs text-slate-500">完整契约在编辑器中通过输入选择器配置</p>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700">输入 Schema (JSON)</label>
-                <textarea
-                  value={inputSchema}
-                  onChange={(e) => setInputSchema(e.target.value)}
-                  rows={5}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700">输出 Schema (JSON)</label>
-                <textarea
-                  value={outputSchema}
-                  onChange={(e) => setOutputSchema(e.target.value)}
-                  rows={5}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
             </div>
           </div>
         )}
@@ -515,7 +533,7 @@ export default function NewSkillWizardPage() {
             type="button"
             onClick={() => void submit()}
             disabled={submitting}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
           >
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
             创建草稿

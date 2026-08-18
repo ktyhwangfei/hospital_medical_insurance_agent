@@ -199,7 +199,7 @@ function EvaluationsContent() {
                 value={newQuestion}
                 onChange={(e) => setNewQuestion(e.target.value)}
                 placeholder="输入评测问题模板，新增到当前 Skill 的必测用例…"
-                className="w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                className="w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 rows={2}
               />
               <div className="mt-2 flex items-center justify-between">
@@ -249,7 +249,7 @@ function EvaluationsContent() {
 
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
-            <FlaskConical className="h-4 w-4 text-green-600" />
+            <FlaskConical className="h-4 w-4 text-emerald-600" />
             评测运行
           </h3>
           {loading ? (

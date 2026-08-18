@@ -68,6 +68,28 @@ const SELECTOR_RESPONSE = {
   }],
 }
 
+// 与 SELECTOR_RESPONSE 结构一致，但已发布指标补全 runtime_resolvable 字段
+// （真实 selector 接口返回该字段，编辑器据此判定是否可点选）。
+const SELECTOR_RESPONSE_RESOLVABLE = {
+  tree: [{
+    domain_code: 'settlement',
+    name: '结算域',
+    objects: [
+      {
+        object_code: 'Settlement',
+        name: '结算',
+        definition: '医保结算对象',
+        status: 'published',
+        current_version: '3',
+        metrics: [
+          { metric_code: 'Settlement.amount', name: '结算金额', definition: '本次结算金额', source_type: 'structured', status: 'published', current_version: '3', quality_score: 0.98, runtime_resolvable: true, resolution_type: 'SOURCE_FIELD', unavailable_reason: null },
+          { metric_code: 'Settlement.deductible', name: '起付线', definition: '本次结算起付线', source_type: 'structured', status: 'published', current_version: '3', quality_score: 0.95, runtime_resolvable: true, resolution_type: 'SOURCE_FIELD', unavailable_reason: null },
+        ],
+      },
+    ],
+  }],
+}
+
 describe('NewSkillWizardPage', () => {
   afterEach(() => {
     cleanup()
@@ -119,22 +141,28 @@ describe('NewSkillWizardPage', () => {
 
   it('creates draft on submit and shows success', async () => {
     const user = userEvent.setup()
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        draft_id: 'd-1',
-        skill_id: 'test_skill',
-        skill_name: 'Test',
-        status: 'editing',
-        source_type: 'template',
-        structured_config: { business_mounting: { business_action: 'explain', business_object: 'settlement' } },
-        validation_blocking_ok: false,
-        revision: 1,
-        etag: 'e-1',
-        created_at: '2026-01-01T00:00:00Z',
-        updated_at: '2026-01-01T00:00:00Z',
-        created_by: 'u',
-      }, 201),
-    )
+    // 进入第三步时加载语义层选择器；create 为 POST，selector 为 GET
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/skill-inputs/selector')) {
+        return Promise.resolve(jsonResponse(SELECTOR_RESPONSE))
+      }
+      return Promise.resolve(
+        jsonResponse({
+          draft_id: 'd-1',
+          skill_id: 'test_skill',
+          skill_name: 'Test',
+          status: 'editing',
+          source_type: 'template',
+          structured_config: { business_mounting: { business_action: 'explain', business_object: 'settlement' } },
+          validation_blocking_ok: false,
+          revision: 1,
+          etag: 'e-1',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          created_by: 'u',
+        }, 201),
+      )
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     render(<NewSkillWizardPage />)
@@ -150,7 +178,62 @@ describe('NewSkillWizardPage', () => {
     await user.click(screen.getByText('创建草稿'))
 
     expect(screen.getByText('草稿已创建')).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledOnce()
+    // create POST 至少被调用一次（selector GET 可能额外触发）
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/infra-skills/drafts'),
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('persists keywords and execution_contract when creating a draft', async () => {
+    const user = userEvent.setup()
+    // 修复前：submit() 只发 6 个字段，向导配的触发词与执行场景被丢弃。
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/skill-inputs/selector')) {
+        return Promise.resolve(jsonResponse(SELECTOR_RESPONSE_RESOLVABLE))
+      }
+      return Promise.resolve(
+        jsonResponse({
+          draft_id: 'd-2', skill_id: 'verify_skill', skill_name: '核验',
+          status: 'editing', source_type: 'template',
+          structured_config: { business_mounting: { business_action: 'verify', business_object: 'settlement' } },
+          validation_blocking_ok: false, revision: 1, etag: 'e-2',
+          created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', created_by: 'u',
+        }, 201),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<NewSkillWizardPage />)
+
+    // Step 1：基本信息
+    await user.type(screen.getByPlaceholderText('如 settlement_explain_skill'), 'verify_skill')
+    await user.type(screen.getByPlaceholderText('如 结算费用解释 Skill'), '核验')
+    await user.click(screen.getByText('下一步'))
+    // Step 2：触发词
+    await user.type(screen.getByPlaceholderText('如 结算,费用,自付'), '门诊结算对不对,核对门诊结算')
+    await user.click(screen.getByText('下一步'))
+    // Step 3：选一个 runtime_resolvable 指标，生成 execution_contract
+    await user.click(await screen.findByText('结算金额'))
+    await user.click(screen.getByText('下一步'))
+    // Step 4：提交
+    await user.click(screen.getByText('创建草稿'))
+
+    expect(screen.getByText('草稿已创建')).toBeInTheDocument()
+    // 断言 POST body：触发词和执行契约都已随创建发出
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        url.includes('/infra-skills/drafts') &&
+        (init as RequestInit | undefined)?.method === 'POST',
+    )
+    expect(createCall).toBeDefined()
+    const body = JSON.parse(String((createCall![1] as RequestInit).body))
+    expect(body.include_keywords).toEqual(['门诊结算对不对', '核对门诊结算'])
+    expect(body.execution_contract).toBeDefined()
+    expect(body.execution_contract.common.metric_inputs).toEqual([
+      expect.objectContaining({ metric_code: 'Settlement.amount' }),
+    ])
   })
 
   it('generates, previews and accepts an AI proposal before navigating to edit', async () => {

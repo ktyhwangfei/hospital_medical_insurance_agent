@@ -9,7 +9,11 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.domain.skill.draft_models import SkillDraft, SkillDraftStatus
+from src.domain.skill.draft_models import (
+    SkillDraft,
+    SkillDraftStatus,
+    SkillExecutionContract,
+)
 from src.domain.skill.governance_models import (
     SkillEvalRun,
     SkillEvalRunStatus,
@@ -69,6 +73,7 @@ class SkillWorkbenchSummary(BaseModel):
     needs_evaluation: int
     pending_approval: int
     test_active: int
+    draft_only: int = 0
     updated_at: datetime
 
 
@@ -81,6 +86,10 @@ class SkillWorkbenchItem(BaseModel):
     skill_name: str
     business_action: str
     business_object: str
+    description: str = ""
+    execution_contract: SkillExecutionContract = Field(
+        default_factory=SkillExecutionContract
+    )
     semantic_version: str
     artifact_status: str
     validation_status: str
@@ -417,6 +426,8 @@ class SkillWorkbenchService:
                 skill_name=entry.skill_name,
                 business_action=entry.business_action,
                 business_object=entry.business_object,
+                description=entry.description,
+                execution_contract=entry.execution_contract,
                 semantic_version=entry.semantic_version,
                 artifact_status=entry.artifact_status,
                 validation_status=validation_status,
@@ -460,6 +471,51 @@ class SkillWorkbenchService:
             active_release is not None,
         )
 
+    def _build_draft_only_item(self, draft: SkillDraft) -> SkillWorkbenchItem:
+        """从纯草稿（无物化制品）构造工作台投影项。
+
+        纯草稿没有版本/评测/发布记录，governance_status 复用 ARTIFACT_CHANGED，
+        current_stage 设为 MODIFY，next_action 按 draft 状态决定继续编辑或物化。
+        execution_contract 从草稿 structured_config 解析，让概览页展示已配置的场景与指标。
+        """
+        bm = draft.structured_config.get("business_mounting", {}) or {}
+        business_action = str(bm.get("business_action", "")) if isinstance(bm, dict) else ""
+        business_object = str(bm.get("business_object", "")) if isinstance(bm, dict) else ""
+        is_validated = draft.status == SkillDraftStatus.VALIDATED
+        ec_data = draft.structured_config.get("execution_contract", {}) or {}
+        try:
+            execution_contract = SkillExecutionContract.model_validate(ec_data)
+        except Exception:
+            execution_contract = SkillExecutionContract()
+        return SkillWorkbenchItem(
+            skill_id=draft.skill_id,
+            skill_name=draft.skill_name,
+            business_action=business_action,
+            business_object=business_object,
+            description=str(draft.structured_config.get("basic", {}).get("description", "")),
+            execution_contract=execution_contract,
+            semantic_version="",
+            artifact_status="unregistered",
+            validation_status=SkillValidationStatus.PENDING,
+            governance_status=SkillGovernanceStatus.ARTIFACT_CHANGED,
+            attention_reason="draft_only",
+            current_stage=SkillGovernanceStage.MODIFY,
+            priority=SkillGovernancePriority.HIGH,
+            next_action=(
+                SkillNextAction.MATERIALIZE_DRAFT
+                if is_validated
+                else SkillNextAction.CONTINUE_DRAFT
+            ),
+            next_action_reason=(
+                "草稿已校验，可物化为正式版本"
+                if is_validated
+                else "草稿编辑中，继续完善配置"
+            ),
+            linked_draft_id=draft.draft_id,
+            linked_draft_status=draft.status,
+            waiting_since=draft.updated_at,
+        )
+
     def list_workbench(
         self,
         *,
@@ -493,6 +549,14 @@ class SkillWorkbenchService:
             for entry in catalog.items
         ]
         all_items = [item for item, _ in projected]
+        # 纯草稿：有草稿但 catalog 中无对应制品的 skill_id，补充为工作台项
+        catalog_skill_ids = {entry.skill_id for entry in catalog.items}
+        draft_only_items: list[SkillWorkbenchItem] = []
+        if self._draft_service is not None:
+            for skill_id, draft in linked_drafts.items():
+                if skill_id not in catalog_skill_ids:
+                    draft_only_items.append(self._build_draft_only_item(draft))
+        all_items.extend(draft_only_items)
         requested_status = (
             SkillGovernanceStatus(governance_status)
             if governance_status
@@ -529,6 +593,7 @@ class SkillWorkbenchService:
                     for item in all_items
                 ),
                 test_active=sum(active for _, active in projected),
+                draft_only=len(draft_only_items),
                 updated_at=self._now(),
             ),
             items=filtered_items[start : start + page_size],

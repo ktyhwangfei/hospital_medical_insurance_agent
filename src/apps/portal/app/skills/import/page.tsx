@@ -32,8 +32,8 @@ export default function SkillImportPage() {
 
   if (result) {
     return (
-      <div className="mt-10 mx-auto max-w-lg rounded-xl border border-green-200 bg-white p-8 text-center shadow-sm">
-        <CheckCircle2 className="mx-auto h-12 w-12 text-green-600" />
+      <div className="mt-10 mx-auto max-w-lg rounded-xl border border-emerald-200 bg-white p-8 text-center shadow-sm">
+        <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-600" />
         <h2 className="mt-4 text-xl font-semibold text-slate-900">导入成功</h2>
         <p className="mt-2 text-sm text-slate-600">
           已从 ZIP 创建草稿「{result.skill_name}」，可在编辑器中校验后物化。

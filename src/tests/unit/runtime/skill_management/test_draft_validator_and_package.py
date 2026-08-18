@@ -370,6 +370,41 @@ class TestSkillPackageGenerator:
         assert manifest["business_action"] == "explain"
         assert manifest["business_object"] == "settlement"
 
+    def test_manifest_preserves_description_and_execution_contract(self):
+        contract = {
+            "version": 2,
+            "common": {
+                "context_inputs": [],
+                "metric_inputs": [{"metric_code": "settlement.total_amount"}],
+            },
+            "profiles": [
+                {
+                    "profile_id": "deductible-explanation",
+                    "name": "起付线解释",
+                    "metric_inputs": [{"metric_code": "settlement.deductible"}],
+                }
+            ],
+        }
+        cfg = {
+            "basic": {
+                "skill_id": "my_skill",
+                "skill_name": "My Skill",
+                "description": "解释医保结算费用构成",
+            },
+            "business_mounting": {
+                "business_action": "explain",
+                "business_object": "settlement",
+            },
+            "execution_contract": contract,
+        }
+
+        manifest = self.generator.generate(
+            _draft(structured_config=cfg)
+        ).manifest()
+
+        assert manifest["description"] == "解释医保结算费用构成"
+        assert manifest["execution_contract"] == contract
+
     def test_includes_schemas_when_configured(self):
         cfg = {
             "basic": {"skill_id": "s1", "skill_name": "X"},
@@ -396,3 +431,230 @@ class TestSkillPackageGenerator:
         }
         package = self.generator.generate(_draft(structured_config=cfg))
         assert "这是说明" in package.files["SKILL.md"]
+
+
+# ── 执行契约校验（Skill Execution Contract，设计 §54）─────────────
+
+from types import SimpleNamespace  # noqa: E402
+
+from src.runtime.skill_management.skill_input_service import (  # noqa: E402
+    SkillInputService,
+)
+
+
+def _ec_metric(code="zydyxx.bcqfje", **kw):
+    """构造一个 runtime_resolvable 的执行契约 metric input。"""
+    node = {"metric_code": code}
+    node.update(kw)
+    return node
+
+
+def _fake_registry_for_contract():
+    """复刻 test_skill_input_service 的 FakeRegistry 子集。"""
+    def _metric(code, *, status="published", adapter="InsuranceInterfacePort",
+                field="t.col", default=None):
+        return SimpleNamespace(
+            metric_code=code, object_code="zydyxx", name=code, definition="d",
+            status=status, source_adapter_port=adapter, source_field=field,
+            default_value=default, importance="core", quality_score=0.9,
+            usage_count=1, unit=None, semantic_type="Amount",
+        )
+
+    class _Reg:
+        def __init__(self):
+            self._metrics = {
+                "zydyxx.bcqfje": _metric("zydyxx.bcqfje"),
+                "zydyxx.constant": _metric("zydyxx.constant", adapter=None, field=None, default="X"),
+                "zydyxx.draft": _metric("zydyxx.draft", status="draft"),
+                "zydyxx.noimpl": _metric("zydyxx.noimpl", adapter=None, field=None, default=None),
+            }
+            self._objects = {"zydyxx": SimpleNamespace(
+                object_code="zydyxx", domain_code="settle", name="住院待遇",
+                definition="d", status="published", current_version="1",
+            )}
+
+        def get_metric(self, code):
+            return self._metrics.get(code)
+
+        def get_object(self, code):
+            return self._objects.get(code)
+
+    return _Reg()
+
+
+def _contract_cfg(**ec_overrides) -> dict:
+    """构造含 execution_contract 的 structured_config。"""
+    ec = {
+        "version": 2,
+        "common": {
+            "context_inputs": [
+                {"code": "settlement_id", "alias": "结算标识", "purpose": "定位结算"},
+            ],
+            "metric_inputs": [],
+        },
+        "profiles": [
+            {
+                "profile_id": "deductible-explanation",
+                "name": "起付线解释",
+                "purpose": "解释起付金额",
+                "routing_hints": ["起付线", "门槛费"],
+                "context_inputs": [],
+                "metric_inputs": [
+                    {"metric_code": "zydyxx.bcqfje", "required": True},
+                ],
+            }
+        ],
+    }
+    ec.update(ec_overrides)
+    return {
+        "basic": {"skill_id": "my_skill", "skill_name": "My Skill"},
+        "business_mounting": {
+            "business_action": "explain", "business_object": "settlement",
+            "include_keywords": [], "excluded_intents": [],
+        },
+        "inputs": [],
+        "schemas": {},
+        "execution_contract": ec,
+    }
+
+
+class TestExecutionContractValidation:
+    """执行契约校验门禁（§54.1-54.6）。"""
+
+    def setup_method(self):
+        self.validator_plain = SkillDraftValidator()
+        self.validator = SkillDraftValidator(
+            SkillInputService(_fake_registry_for_contract())
+        )
+
+    def test_no_execution_contract_skips(self):
+        # §64 无 execution_contract 时完全跳过（旧 Skill 兼容）
+        report = self.validator.validate(_draft())
+        assert "INVALID_EXECUTION_CONTRACT" not in _codes(report)
+        assert report.blocking_ok
+
+    def test_valid_contract_passes(self):
+        report = self.validator.validate(_draft(structured_config=_contract_cfg()))
+        ec_codes = [c for c in _codes(report) if "METRIC" in c or "PROFILE" in c
+                    or "CONTRACT" in c or "REDECLARED" in c or "DUPLICATE_METRIC" in c]
+        assert ec_codes == []
+        assert report.blocking_ok
+
+    def test_unsupported_version_blocking(self):
+        # §54.1 非支持版本
+        cfg = _contract_cfg(version=1)
+        report = self.validator.validate(_draft(structured_config=cfg))
+        # version=1 会触发 UNSUPPORTED_CONTRACT_VERSION（或解析失败）
+        assert not report.blocking_ok
+
+    def test_invalid_contract_structure_blocking(self):
+        cfg = _contract_cfg()
+        cfg["execution_contract"] = {"version": 2, "profiles": "not_a_list"}
+        report = self.validator.validate(_draft(structured_config=cfg))
+        assert "INVALID_EXECUTION_CONTRACT" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_profile_id_duplicate_blocking(self):
+        cfg = _contract_cfg(
+            profiles=[
+                {"profile_id": "dup", "name": "A", "metric_inputs": []},
+                {"profile_id": "dup", "name": "B", "metric_inputs": []},
+            ],
+            common={"context_inputs": [], "metric_inputs": []},
+        )
+        report = self.validator.validate(_draft(structured_config=cfg))
+        assert "PROFILE_ID_DUPLICATE" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_profile_id_invalid_kebab_case_blocking(self):
+        # profile_id 非 kebab-case → 模型解析失败 → INVALID_EXECUTION_CONTRACT
+        cfg = _contract_cfg(
+            profiles=[{"profile_id": "Bad_Case", "name": "A", "metric_inputs": []}],
+            common={"context_inputs": [], "metric_inputs": []},
+        )
+        report = self.validator.validate(_draft(structured_config=cfg))
+        assert "INVALID_EXECUTION_CONTRACT" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_duplicate_metric_in_profile_blocking(self):
+        cfg = _contract_cfg(
+            profiles=[
+                {
+                    "profile_id": "p1", "name": "A", "metric_inputs": [
+                        {"metric_code": "zydyxx.bcqfje"},
+                        {"metric_code": "zydyxx.bcqfje"},
+                    ],
+                }
+            ],
+            common={"context_inputs": [], "metric_inputs": []},
+        )
+        report = self.validator.validate(_draft(structured_config=cfg))
+        assert "DUPLICATE_METRIC_INPUT" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_common_metric_redeclared_in_profile_blocking(self):
+        # §54.5 Common 已声明的 metric，Profile 不重复声明
+        cfg = _contract_cfg(
+            common={"context_inputs": [], "metric_inputs": [
+                {"metric_code": "zydyxx.bcqfje"},
+            ]},
+            profiles=[
+                {"profile_id": "p1", "name": "A", "metric_inputs": [
+                    {"metric_code": "zydyxx.bcqfje"},
+                ]},
+            ],
+        )
+        report = self.validator.validate(_draft(structured_config=cfg))
+        assert "COMMON_METRIC_REDECLARED" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_metric_not_resolvable_blocking(self):
+        # §54.3 draft 指标不可解析
+        cfg = _contract_cfg(
+            profiles=[
+                {"profile_id": "p1", "name": "A", "metric_inputs": [
+                    {"metric_code": "zydyxx.draft"},
+                ]},
+            ],
+            common={"context_inputs": [], "metric_inputs": []},
+        )
+        report = self.validator.validate(_draft(structured_config=cfg))
+        assert "METRIC_NOT_RUNTIME_RESOLVABLE" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_metric_not_found_blocking(self):
+        cfg = _contract_cfg(
+            profiles=[
+                {"profile_id": "p1", "name": "A", "metric_inputs": [
+                    {"metric_code": "missing.x"},
+                ]},
+            ],
+            common={"context_inputs": [], "metric_inputs": []},
+        )
+        report = self.validator.validate(_draft(structured_config=cfg))
+        assert "METRIC_NOT_FOUND" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_invalid_context_code_blocking(self):
+        # context code 不在枚举 → 模型解析失败 → INVALID_EXECUTION_CONTRACT
+        cfg = _contract_cfg(
+            common={"context_inputs": [
+                {"code": "totally_unknown_context"},
+            ], "metric_inputs": []},
+            profiles=[],
+        )
+        report = self.validator.validate(_draft(structured_config=cfg))
+        assert "INVALID_EXECUTION_CONTRACT" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_common_context_redeclared_in_profile_blocking(self):
+        cfg = _contract_cfg(
+            common={"context_inputs": [
+                {"code": "settlement_id"},
+            ], "metric_inputs": []},
+            profiles=[
+                {"profile_id": "p1", "name": "A", "metric_inputs": [], "context_inputs": [
+                    {"code": "settlement_id"},
+                ]},
+            ],
+        )
+        report = self.validator.validate(_draft(structured_config=cfg))
+        assert "COMMON_CONTEXT_REDECLARED" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_plain_validator_without_service_warns_not_blocks(self):
+        # 无 input_service 时降级 WARNING，不阻塞
+        report = self.validator_plain.validate(_draft(structured_config=_contract_cfg()))
+        assert report.blocking_ok  # 无阻塞
+        assert "METRIC_RESOLVABILITY_NOT_CHECKED" in _codes(report, ValidationSeverity.WARNING)

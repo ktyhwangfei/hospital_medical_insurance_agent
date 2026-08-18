@@ -101,8 +101,13 @@ class SkillPackageGenerator:
             "required_mcp": [],
             "optional_mcp": [],
         }
+        if basic.get("description"):
+            manifest["description"] = str(basic["description"])
         if basic.get("owner"):
             manifest["owner"] = str(basic["owner"])
+        execution_contract = draft.structured_config.get("execution_contract")
+        if isinstance(execution_contract, dict):
+            manifest["execution_contract"] = execution_contract
         return yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False)
 
     def _render_config(

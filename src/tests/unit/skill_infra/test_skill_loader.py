@@ -177,7 +177,7 @@ class TestSkillLoaderManifestFields:
         loader = SkillLoader()
         loader.discover()
         skill = loader.get("settlement_explain_skill")
-        assert skill.skill_name == "医保费用解释"
+        assert skill.skill_name == "结算解释技能"
 
     def test_include_keywords_contains_expected(self):
         """包含 统筹自付、起付线、大额自付 等关键意图词。"""

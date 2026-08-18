@@ -386,6 +386,7 @@ export interface SkillWorkbenchSummary {
   needs_evaluation: number
   pending_approval: number
   test_active: number
+  draft_only: number
   updated_at: string
 }
 
@@ -394,6 +395,8 @@ export interface SkillWorkbenchItem {
   skill_name: string
   business_action: string
   business_object: string
+  description?: string
+  execution_contract?: SkillExecutionContract
   semantic_version: string
   artifact_status: 'registered' | 'changed' | 'unregistered'
   validation_status: 'pending' | 'passed' | 'failed'
@@ -678,24 +681,6 @@ export interface SkillExecuteTestResponse {
   latency_ms?: number | null
 }
 
-export interface InfraSkillOverviewItem {
-  skill_id: string
-  skill_name: string
-  business_action: string
-  business_object: string
-  loaded: boolean
-  manifest_valid: boolean
-  field_mapping_configured: boolean
-  metric_count: number
-  last_test_status?: string | null
-  warnings: string[]
-}
-
-export interface InfraSkillOverviewResponse {
-  skill_count: number
-  skills: InfraSkillOverviewItem[]
-}
-
 // ── 语义层（最新）：技能↔指标关系 ─────────────────────────────────
 
 /** GET /semantic/skills/{skill_id}/metrics —— 技能引用的语义指标 */
@@ -885,12 +870,59 @@ export interface SkillInputSpec {
   purpose?: string
 }
 
+// ── Skill 执行契约（设计 §17/§18，后端 Phase 1-3）──────────────
+// structured_config.execution_contract 取代旧平铺 inputs，是输入定义唯一真相。
+// 旧 inputs 保留做向后兼容（无 execution_contract 时按旧逻辑执行）。
+
+export type RuntimeContextCode =
+  | 'question'
+  | 'settlement_id'
+  | 'person_id'
+  | 'visit_id'
+  | 'hospital_id'
+
+export interface ContextInputSpec {
+  code: RuntimeContextCode
+  alias?: string
+  required: boolean
+  purpose?: string
+  description?: string
+}
+
+export interface MetricInputSpec {
+  metric_code: string
+  alias?: string
+  required: boolean
+  purpose?: string
+}
+
+export interface CommonInputSpec {
+  context_inputs: ContextInputSpec[]
+  metric_inputs: MetricInputSpec[]
+}
+
+export interface ExecutionProfileSpec {
+  profile_id: string
+  name: string
+  purpose?: string
+  routing_hints?: string[]
+  context_inputs?: ContextInputSpec[]
+  metric_inputs?: MetricInputSpec[]
+}
+
+export interface SkillExecutionContract {
+  version: number
+  common: CommonInputSpec
+  profiles: ExecutionProfileSpec[]
+}
+
 export interface SkillStructuredConfig {
   basic?: SkillAIStructuredBasic
   description?: string
   owner?: string
   business_mounting: SkillBusinessMounting
   inputs?: SkillInputSpec[]
+  execution_contract?: SkillExecutionContract
   schemas?: {
     input: Record<string, unknown>
     output: Record<string, unknown>
@@ -1016,6 +1048,8 @@ export interface SkillDraftCreateRequest {
   owner?: string
   business_action?: string
   business_object?: string
+  include_keywords?: string[]
+  execution_contract?: SkillExecutionContract
 }
 
 export interface SkillDraftCopyRequest {
@@ -1107,6 +1141,9 @@ export interface SkillInputSelectorNode {
       status: string
       current_version: string | null
       quality_score: number | null
+      runtime_resolvable?: boolean
+      resolution_type?: string | null
+      unavailable_reason?: string | null
     }[]
   }[]
 }

@@ -9,19 +9,27 @@ interface NavTab {
 }
 
 // 顶部保留子路径：不能被当成 Skill 详情页
-const RESERVED_SEGS = new Set(['assets', 'drafts', 'evaluations', 'releases', 'new', 'import', 'eval-case-pool', 'eval-mining'])
+const RESERVED_SEGS = new Set(['assets', 'drafts', 'evaluations', 'releases', 'eval-case-pool', 'eval-mining', 'new', 'import'])
 
-// /skills/<skillId> 或 /skills/<skillId>/edit（排除保留路径，否则 /skills/drafts 等会被误判为 Skill 详情）
+// 草稿编辑器路径：/skills/<skillId>/edit（属于「草稿」页签，而非治理详情）
+function isDraftEditPath(pathname: string): boolean {
+  if (!pathname.startsWith('/skills/')) return false
+  const segs = pathname.slice('/skills/'.length).split('/')
+  return segs.length >= 2 && segs[1] === 'edit'
+}
+
+// /skills/<skillId>（排除保留路径与 /edit 子路径，否则草稿编辑器会被误判为治理详情）
 function isSkillDetailPath(pathname: string): boolean {
   if (!pathname.startsWith('/skills/')) return false
-  const firstSeg = pathname.slice('/skills/'.length).split('/')[0]
-  return !RESERVED_SEGS.has(firstSeg)
+  const segs = pathname.slice('/skills/'.length).split('/')
+  const firstSeg = segs[0]
+  return !RESERVED_SEGS.has(firstSeg) && !isDraftEditPath(pathname)
 }
 
 // /skills 页签：对齐语义层/政策知识的扁平骨架（设计 §3.1）
 const NAV_TABS: NavTab[] = [
-  { label: '治理待办', href: '/skills', match: (p) => p === '/skills' || isSkillDetailPath(p) },
-  { label: '草稿', href: '/skills/drafts', match: (p) => p.startsWith('/skills/drafts') || p.startsWith('/skills/new') || p.startsWith('/skills/import') },
+  { label: '概览', href: '/skills', match: (p) => p === '/skills' || isSkillDetailPath(p) },
+  { label: '草稿', href: '/skills/drafts', match: (p) => p.startsWith('/skills/drafts') || p.startsWith('/skills/new') || p.startsWith('/skills/import') || isDraftEditPath(p) },
   { label: '评测中心', href: '/skills/evaluations', match: (p) => p.startsWith('/skills/evaluations') || p.startsWith('/skills/eval-') },
   { label: '发布记录', href: '/skills/releases', match: (p) => p.startsWith('/skills/releases') },
 ]

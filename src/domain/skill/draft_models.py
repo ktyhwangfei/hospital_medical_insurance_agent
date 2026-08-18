@@ -174,9 +174,168 @@ class InputSpec(BaseModel):
     """Skill 声明的单个输入指标契约（设计 §5.3）。
 
     Skill 只声明所需指标，查询方式由指标所属语义对象决定。
+    旧版平铺输入契约，保留做向后兼容；新执行契约使用 MetricInputSpec。
     """
 
     metric_code: str = Field(min_length=1, max_length=256)
     alias: str = Field(default="", max_length=128)
     required: bool = True
     purpose: str = Field(default="", max_length=512)
+
+
+# ── Skill 执行契约（Skill Execution Contract，设计 §4-§53）───────────
+#
+# 旧 ``inputs`` 平铺契约升级为：
+#   structured_config.execution_contract
+#     ├── common       （公共输入：几乎所有 Profile 都需要）
+#     │   ├── context_inputs   （运行时上下文：question/settlement_id…）
+#     │   └── metric_inputs    （业务指标依赖，必须 runtime_resolvable）
+#     └── profiles     （执行场景：同一能力、不同数据依赖）
+#         ├── profile_id（kebab-case，Skill 内唯一）
+#         ├── routing_hints（路由辅助线索，非决定性规则）
+#         ├── context_inputs / metric_inputs
+# 新代码禁止依赖旧 ``supported_intents`` 表达执行场景（§24）。
+
+
+class RuntimeContextCode(StrEnum):
+    """Runtime 已知的运行上下文编码（设计 §19）。
+
+    V1 为固定枚举；未来可由 RuntimeContextRegistry 提供动态集合。
+    """
+
+    QUESTION = "question"
+    SETTLEMENT_ID = "settlement_id"
+    PERSON_ID = "person_id"
+    VISIT_ID = "visit_id"
+    HOSPITAL_ID = "hospital_id"
+
+
+class MetricResolutionType(StrEnum):
+    """Metric 运行时解析方式（设计 §15）。
+
+    V1 仅正式支持 SOURCE_FIELD / DEFAULT_VALUE；其余为预留扩展。
+    """
+
+    SOURCE_FIELD = "SOURCE_FIELD"
+    DEFAULT_VALUE = "DEFAULT_VALUE"
+    SQL_EXPRESSION = "SQL_EXPRESSION"  # 预留
+    DERIVED = "DERIVED"  # 预留
+    API = "API"  # 预留
+    TOOL = "TOOL"  # 预留
+    UNKNOWN = "UNKNOWN"  # 预留
+
+
+class MetricUnavailableReason(StrEnum):
+    """Metric 不可作为 Skill 输入的标准化原因（设计 §37）。"""
+
+    NOT_PUBLISHED = "NOT_PUBLISHED"
+    OBJECT_NOT_PUBLISHED = "OBJECT_NOT_PUBLISHED"
+    NO_RUNTIME_RESOLVER = "NO_RUNTIME_RESOLVER"
+    INVALID_MAPPING = "INVALID_MAPPING"
+    RESOLVER_DISABLED = "RESOLVER_DISABLED"  # 预留
+    VERSION_UNAVAILABLE = "VERSION_UNAVAILABLE"  # 预留
+
+
+class ContextInputSpec(BaseModel):
+    """运行时上下文输入声明（设计 §8、§19）。
+
+    ``code`` 必须来自 RuntimeContextCode 枚举，而非任意自由文本。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: RuntimeContextCode
+    alias: str = Field(default="", max_length=128)
+    required: bool = True
+    purpose: str = Field(default="", max_length=512)
+    description: str = Field(default="", max_length=512)
+
+
+class MetricInputSpec(BaseModel):
+    """Metric 依赖声明（设计 §9、§20）。
+
+    ``metric_code`` 必须来自语义层且 runtime_resolvable=true。
+    与旧 InputSpec 同构但显式命名，避免与新执行契约语义混淆。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    metric_code: str = Field(min_length=1, max_length=256)
+    alias: str = Field(default="", max_length=128)
+    required: bool = True
+    purpose: str = Field(default="", max_length=512)
+
+
+class CommonInputSpec(BaseModel):
+    """公共输入：几乎所有执行场景都需要的数据依赖（设计 §25）。
+
+    必须克制使用——只有「绝大多数场景需要 AND 获取成本合理」才放 Common。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    context_inputs: list[ContextInputSpec] = Field(default_factory=list)
+    metric_inputs: list[MetricInputSpec] = Field(default_factory=list)
+
+
+# profile_id 规范：kebab-case，Skill 内唯一（设计 §22）
+_PROFILE_ID_PATTERN = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
+
+
+class ExecutionProfileSpec(BaseModel):
+    """执行场景（Execution Profile，设计 §5、§21）。
+
+    定义同一 Skill 内「核心能力与主要流程不变、仅数据依赖不同」的一种
+    运行配置。Profile 不是独立 Skill，其核心职责是声明该执行路径所需
+    的特定数据依赖。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    profile_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+    purpose: str = Field(default="", max_length=512)
+    routing_hints: list[str] = Field(default_factory=list)
+    context_inputs: list[ContextInputSpec] = Field(default_factory=list)
+    metric_inputs: list[MetricInputSpec] = Field(default_factory=list)
+
+    @field_validator("profile_id")
+    @classmethod
+    def _validate_profile_id(cls, value: str) -> str:
+        if not _PROFILE_ID_PATTERN.fullmatch(value):
+            raise ValueError(
+                "profile_id 必须使用 kebab-case 格式"
+                "（小写字母、数字、连字符）"
+            )
+        return value
+
+
+class SkillExecutionContract(BaseModel):
+    """Skill 执行契约（设计 §4、§16-§17）。
+
+    定义 Skill 在不同执行场景下需要哪些上下文、指标依赖，以及不同
+    场景之间数据依赖差异的结构化契约。是 Skill 输入定义的唯一
+    Source of Truth（§2.5、§29）；运行时 JSON Schema 自动由此派生（§30）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    version: int = Field(default=2, ge=1)
+    common: CommonInputSpec = Field(default_factory=CommonInputSpec)
+    profiles: list[ExecutionProfileSpec] = Field(default_factory=list)
+
+
+class MetricRuntimeCapability(BaseModel):
+    """Metric 运行时可解析能力（设计 §11-§14）。
+
+    由后端统一判定（SkillInputService），前端/AI/Validator/Runtime
+    复用同一结果，禁止四套规则各自判断（§14）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    metric_code: str
+    status: str
+    runtime_resolvable: bool
+    resolution_type: MetricResolutionType | None = None
+    unavailable_reason: MetricUnavailableReason | None = None
