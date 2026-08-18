@@ -70,6 +70,12 @@ class HealthyBackend:
         return True
 
 
+class InvalidRuleJsonBackend(HealthyBackend):
+    def insert(self, kind: str, collection_name: str, records: list[dict]) -> None:
+        if kind == "rules":
+            raise TypeError("规则索引字段类型不兼容")
+
+
 class ReleaseSearcher:
     def search(self, release: KnowledgeRelease, case: PolicyQATestCase) -> list[str]:
         return ["kn_expected"] if release.release_id == "candidate" else []
@@ -639,7 +645,7 @@ class TraceFlowPipeline:
             "extraction_id": extraction_id,
             "doc_id": "doc_trace",
             "unit_id": "unit_trace",
-            "source_text": "政策原文快照",
+            "source_text": "在职职工住院报销比例为80%",
             "extracted_fields": {
                 "schema_version": "1",
                 "rules": [{
@@ -678,7 +684,7 @@ class FailFirstLineageTraceStore(InMemoryCompilationTraceStore):
         return super().save_lineage(**kwargs)
 
 
-def _compile_trace_flow_client(monkeypatch, traces=None):
+def _compile_trace_flow_client(monkeypatch, traces=None, backend=None):
     from src.runtime.api import policy_workbench_routes
 
     trace_store = traces or InMemoryCompilationTraceStore()
@@ -687,7 +693,7 @@ def _compile_trace_flow_client(monkeypatch, traces=None):
         doc_id="doc_trace",
         doc_title="测试政策",
         path=["测试条款"],
-        source_text="政策原文快照",
+        source_text="在职职工住院报销比例为80%",
         order_no=1,
         status="reviewed",
         knowledge_count=1,
@@ -696,8 +702,8 @@ def _compile_trace_flow_client(monkeypatch, traces=None):
             unit_id="unit_trace",
             extraction_id="ext_trace",
             relationship_source="persisted",
-            business_sentence="在适用条件下执行对应待遇规则",
-            source_text="政策原文快照",
+            business_sentence="在职职工住院报销比例为80%",
+            source_text="在职职工住院报销比例为80%",
             fields=[],
             confidence=KnowledgeConfidence(
                 completeness=1,
@@ -712,7 +718,7 @@ def _compile_trace_flow_client(monkeypatch, traces=None):
     )
     compiled = PolicyCompilationService(
         TraceFlowPipeline(), PolicyRuleCompiler(), trace_store
-    ).compile_units([unit])["kn_trace"]
+    ).compile_units([unit])["unit_trace::kn_trace"]
     canonical = compiled.canonical_rules[0]
 
     change_sets = InMemoryChangeSetStore()
@@ -740,7 +746,7 @@ def _compile_trace_flow_client(monkeypatch, traces=None):
             after={
                 "knowledge_id": "kn_trace",
                 "extraction_id": "ext_trace",
-                "business_sentence": "在适用条件下执行对应待遇规则",
+                "business_sentence": "在职职工住院报销比例为80%",
             },
             evidence_ids=list(canonical.evidence),
             risk_level="LOW",
@@ -820,7 +826,7 @@ def _compile_trace_flow_client(monkeypatch, traces=None):
     monkeypatch.setattr(
         policy_workbench_routes,
         "_get_release_index_builder",
-        lambda: ReleaseIndexBuilder(quality, HealthyBackend(), trace_store),
+        lambda: ReleaseIndexBuilder(quality, backend or HealthyBackend(), trace_store),
     )
     return (
         TestClient(create_app(), raise_server_exceptions=False),
@@ -902,9 +908,33 @@ def test_compile_trace_persistence_failure_keeps_active_release_and_run(
     failed = client.post(f"{PREFIX}/releases/candidate_compile_trace/build")
 
     assert failed.status_code == 503
+    assert failed.json()["detail"]["message"] == "trace persistence unavailable"
     assert quality.get_active_release().release_id == "baseline"  # type: ignore[union-attr]
     assert quality.get_release("candidate_compile_trace").status == "building"  # type: ignore[union-attr]
+    assert quality.get_release("candidate_compile_trace").build_error == "trace persistence unavailable"  # type: ignore[union-attr]
     assert traces.get_run(run_id).status == "PASS"  # type: ignore[union-attr]
+
+
+def test_unexpected_index_failure_is_structured_and_persisted(monkeypatch) -> None:
+    client, quality, _traces, _run_id, _rule_id = _compile_trace_flow_client(
+        monkeypatch, backend=InvalidRuleJsonBackend()
+    )
+    assert client.post(
+        f"{PREFIX}/change-sets/CS_compile_trace/approve",
+        json={"reviewer": "reviewer", "note": "核验通过"},
+    ).status_code == 200
+    assert client.post(f"{PREFIX}/releases", json={
+        "release_id": "candidate_compile_trace",
+        "contract_version": "2",
+        "config_hash": QUALITY_CONFIG_HASH,
+        "source_change_set_id": "CS_compile_trace",
+    }).status_code == 201
+
+    failed = client.post(f"{PREFIX}/releases/candidate_compile_trace/build")
+
+    assert failed.status_code == 503
+    assert failed.json()["detail"]["message"] == "规则索引字段类型不兼容"
+    assert quality.get_release("candidate_compile_trace").build_error == "规则索引字段类型不兼容"  # type: ignore[union-attr]
 
 
 def test_release_build_retry_after_lineage_failure_is_idempotent(monkeypatch) -> None:
@@ -931,6 +961,7 @@ def test_release_build_retry_after_lineage_failure_is_idempotent(monkeypatch) ->
     assert retried.status_code == 200
     assert retried.json()["status"] == "ready"
     assert quality.get_release("candidate_compile_trace").status == "ready"  # type: ignore[union-attr]
+    assert quality.get_release("candidate_compile_trace").build_error is None  # type: ignore[union-attr]
     assert trace is not None
     assert [step.stage for step in trace.steps].count("PUBLISH") == 1
     assert len(trace.history) == 1

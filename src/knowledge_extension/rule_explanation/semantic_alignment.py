@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import re
 import uuid
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
@@ -12,6 +14,8 @@ from enum import StrEnum
 from threading import RLock
 from typing import Literal, Protocol
 
+logger = logging.getLogger(__name__)
+
 from pydantic import BaseModel, Field, model_validator
 
 from src.domain.indicator.models import MetricFormula
@@ -19,6 +23,19 @@ from src.security.desensitization.detection import detect_sensitive_patterns
 from src.semantic_layer.models import Metric
 from src.semantic_layer.models import ValueDomain, ValueDomainMapping
 from src.semantic_layer.registry import SemanticRegistry
+from src.knowledge_extension.rule_explanation.conflict_partition_discovery import (
+    AxisConceptRegistry,
+    ConflictUncertainty,
+    DimensionCandidateProposal,
+    DiscoveryReport,
+    MeasureConceptRegistry,
+)
+
+
+# 方案 C 同族概念聚合门禁：命中维度候选轴别名且不含度量核心的概念
+# （如「门诊大额医疗互助资金」），本质是缺失维度的候选取值而非新指标。
+_AXIS_CONCEPT_REGISTRY = AxisConceptRegistry()
+_MEASURE_CONCEPT_REGISTRY = MeasureConceptRegistry()
 
 
 AlignmentStatus = Literal["draft", "published", "rejected"]
@@ -105,6 +122,7 @@ class TriggerSource(StrEnum):
     DEMAND_GAP = "DEMAND_GAP"
     DATA_SCAN = "DATA_SCAN"
     DERIVATION_PATTERN = "DERIVATION_PATTERN"
+    CONFLICT_PARTITION = "CONFLICT_PARTITION"
 
 
 class ProposalStatus(StrEnum):
@@ -113,11 +131,24 @@ class ProposalStatus(StrEnum):
     ACCEPTED = "accepted"
     PUBLISHED = "published"
     REJECTED = "rejected"
+    STALE = "stale"
+    SUPERSEDED = "superseded"
 
 
 class ProposalType(StrEnum):
     METRIC = "metric"
     VALUE = "value"
+    DIMENSION = "dimension"
+
+
+class DimensionReviewConclusion(StrEnum):
+    NEW_DIMENSION = "new_dimension"
+    METRIC_SPLIT_REQUIRED = "metric_split_required"
+    TEMPORAL_VERSION = "temporal_version"
+    VALUE_NORMALIZATION = "value_normalization"
+    EXTRACTION_INCOMPLETE = "extraction_incomplete"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    REJECTED = "rejected"
 
 
 class DiscoveryEvidence(BaseModel):
@@ -202,6 +233,7 @@ class SemanticProposal(BaseModel):
     axis_metric_code: str | None = None
     metric_draft: CreateMetricDraft | None = None
     value_draft: StandardValueProposalDraft | None = None
+    dimension_candidate: DimensionCandidateProposal | None = None
     suggested_mappings: list[SourceValueMappingDraft] = Field(default_factory=list)
     mapping_only: bool = False
     formula: MetricFormula | None = None
@@ -211,6 +243,8 @@ class SemanticProposal(BaseModel):
     reviewed_by: str | None = None
     reviewed_at: datetime | None = None
     review_note: str | None = None
+    review_conclusion: DimensionReviewConclusion | None = None
+    last_observed_at: datetime | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -242,6 +276,9 @@ def _merge_semantic_proposals(
         item for item in incoming.suggested_mappings
         if (item.domain_code, item.binding_id, item.source_value) not in known_mappings
     )
+    if incoming.dimension_candidate is not None:
+        merged.dimension_candidate = incoming.dimension_candidate
+        merged.last_observed_at = incoming.last_observed_at
     merged.updated_at = incoming.updated_at
     return merged
 
@@ -250,6 +287,9 @@ def _landing_target_keys(proposal: SemanticProposal) -> list[str]:
     """一个正式落地目标只能由一个 proposal 声明。"""
     if proposal.proposal_type == ProposalType.METRIC:
         return [f"metric:{proposal.metric_draft.metric_code}"] if proposal.metric_draft else []
+    if proposal.proposal_type == ProposalType.DIMENSION:
+        code = proposal.dimension_candidate.suggested_code if proposal.dimension_candidate else None
+        return [f"metric:{code}", f"value-domain:{code}"] if code else []
     if proposal.value_draft is None:
         return []
     keys: set[str] = set()
@@ -293,6 +333,7 @@ class SemanticAlignmentStore(Protocol):
         self, proposal_type: ProposalType | None = None,
         status: ProposalStatus | None = None,
     ) -> list[SemanticProposal]: ...
+    def save_conflict_uncertainty(self, uncertainty: ConflictUncertainty) -> None: ...
 
 
 @dataclass
@@ -303,6 +344,7 @@ class InMemorySemanticAlignmentStore:
     value_mappings: dict[str, SourceValueMapping] = field(default_factory=dict)
     standard_value_proposals: dict[str, StandardValueProposal] = field(default_factory=dict)
     proposals: dict[str, SemanticProposal] = field(default_factory=dict)
+    conflict_uncertainties: dict[str, ConflictUncertainty] = field(default_factory=dict)
     landing_target_claims: dict[str, str] = field(default_factory=dict)
     _operation_lock: RLock = field(default_factory=RLock, repr=False)
 
@@ -367,6 +409,7 @@ class InMemorySemanticAlignmentStore:
                 self.value_mappings,
                 self.standard_value_proposals,
                 self.proposals,
+                self.conflict_uncertainties,
                 self.landing_target_claims,
             ))
             transaction = getattr(registry_store, "transaction", None)
@@ -380,6 +423,7 @@ class InMemorySemanticAlignmentStore:
                     self.value_mappings,
                     self.standard_value_proposals,
                     self.proposals,
+                    self.conflict_uncertainties,
                     self.landing_target_claims,
                 ) = snapshot
                 raise
@@ -419,6 +463,9 @@ class InMemorySemanticAlignmentStore:
             if (proposal_type is None or item.proposal_type == proposal_type)
             and (status is None or item.status == status)
         ]
+
+    def save_conflict_uncertainty(self, uncertainty: ConflictUncertainty) -> None:
+        self.conflict_uncertainties[uncertainty.fingerprint] = uncertainty.model_copy(deep=True)
 
 
 class SemanticAlignmentService:
@@ -486,8 +533,15 @@ class SemanticAlignmentService:
         self.bind_existing_metric(request.source_binding)
         return metric
 
-    def intake_signal(self, signal: DiscoverySignal) -> SemanticProposal:
-        """将主动信号路由为指标或值域提议，并合并同概念证据。"""
+    def intake_signal(self, signal: DiscoverySignal) -> SemanticProposal | None:
+        """将主动信号路由为指标或值域提议，并合并同概念证据。
+
+        S1 信号质量门禁（实测 2026-08-17 碎片化提议）：
+        - 空 code 且非枚举轴路径 → 丢弃（空壳提议无审核价值）；
+        - 建议 code 已在 registry published → 丢弃（已发布概念不再重复提议）；
+        - 自报 code 非小写字母数字下划线 → 丢弃（非法格式无法落库）。
+        丢弃时记日志，不阻断同批其他信号。
+        """
         if detect_sensitive_patterns(signal.model_dump_json()):
             raise ValueError("证据包含敏感信息，请脱敏后重试")
 
@@ -503,6 +557,30 @@ class SemanticAlignmentService:
             domain = self._registry.get_value_domain(metric.value_domain or "")
         is_value = metric is not None and metric.semantic_type == "Enum" and domain is not None
         proposal_type = ProposalType.VALUE if is_value else ProposalType.METRIC
+        if proposal_type == ProposalType.METRIC:
+            # 方案 C 同族概念聚合：命中维度候选轴别名且不含度量核心的概念
+            # （如「门诊大额医疗互助资金」）是缺失维度的候选取值，应由 S5 冲突
+            # 分区维度候选承接，禁止注册为 String 指标污染语义层。
+            if (
+                _AXIS_CONCEPT_REGISTRY.resolve(signal.concept) is not None
+                and _MEASURE_CONCEPT_REGISTRY.split(signal.concept) is None
+            ):
+                logger.info(
+                    "S1 信号丢弃：概念为维度候选轴取值，由冲突分区维度候选承接 concept=%r",
+                    signal.concept,
+                )
+                return None
+            raw_code = (signal.metric_code or "").strip()
+            code_ok = bool(re.fullmatch(r"[a-z0-9_]+(\.[a-z0-9_]+)*", raw_code))
+            if not code_ok:
+                logger.warning("S1 信号丢弃：metric_code 为空或非法格式 concept=%r code=%r",
+                               signal.concept, raw_code)
+                return None
+            existing = self._registry.get_metric(raw_code)
+            if existing is not None and existing.status == "published":
+                logger.info("S1 信号丢弃：指标已发布，不再重复提议 concept=%r code=%r",
+                            signal.concept, raw_code)
+                return None
         if is_value and signal.alias_target and signal.alias_target not in domain.standard_values:
             raise ValueError(f"别名目标不是已有标准值: {signal.alias_target}")
         target = signal.alias_target or signal.concept
@@ -529,6 +607,12 @@ class SemanticAlignmentService:
                 "updated_at": _now(),
             })
             return self._store.merge_proposal(delta)
+        rejected = next((
+            item for item in self._store.list_proposals(proposal_type)
+            if item.fingerprint == fingerprint and item.status == ProposalStatus.REJECTED
+        ), None)
+        if rejected is not None:
+            return rejected
 
         if proposal_type == ProposalType.VALUE:
             mappings = incoming_mappings
@@ -543,8 +627,14 @@ class SemanticAlignmentService:
             mapping_only = False
             mappings = []
             value_draft = None
+            # LLM 自报 code 前缀可能与对象不一致（实测 zcfg.dyylhzzj 挂在 zcgz 下），
+            # 创建即纠正为 object_code 前缀，避免发布后语义层展示错乱。
+            raw_code = (signal.metric_code or "").strip()
+            expected_prefix = f"{signal.object_code}."
+            if raw_code and not raw_code.startswith(expected_prefix):
+                raw_code = expected_prefix + raw_code.split(".")[-1]
             metric_draft = CreateMetricDraft(
-                metric_code=signal.metric_code or "",
+                metric_code=raw_code,
                 object_code=signal.object_code,
                 name=signal.metric_name or signal.concept,
                 definition=signal.definition,
@@ -575,6 +665,107 @@ class SemanticAlignmentService:
             confidence=signal.confidence,
             occurrence_count=signal.evidence.occurrence_count,
         ))
+
+    def intake_conflict_report(
+        self,
+        report: DiscoveryReport,
+        *,
+        document_id: str,
+        snapshot_id: str,
+        mark_missing_stale: bool = True,
+    ) -> list[SemanticProposal]:
+        """幂等保存 S5 报告，并把当前快照已消失的候选标记为 stale。"""
+        save_uncertainty = getattr(self._store, "save_conflict_uncertainty", None)
+        if callable(save_uncertainty):
+            for uncertainty in report.uncertainties:
+                save_uncertainty(uncertainty)
+
+        observed: set[str] = set()
+        saved: list[SemanticProposal] = []
+        now = _now()
+        for candidate in report.proposals:
+            if candidate.evidence.document_id != document_id:
+                raise ValueError("维度候选文档与报告文档不一致")
+            if candidate.suggested_name and any(
+                metric.status == "published"
+                and metric.semantic_type == "Enum"
+                and metric.name.strip() == candidate.suggested_name.strip()
+                for metric in self._registry.list_metrics("zcgz")
+            ):
+                continue
+            observed.add(candidate.fingerprint)
+            # ponytail: 提议量很小，线性检查保留 rejected 幂等；规模上千后再加专用索引查询。
+            matches = [
+                item for item in self._store.list_proposals(ProposalType.DIMENSION)
+                if item.fingerprint == candidate.fingerprint
+            ]
+            existing = next(
+                (item for item in matches if item.status in {
+                    ProposalStatus.PROPOSED,
+                    ProposalStatus.REVIEWING,
+                    ProposalStatus.ACCEPTED,
+                }),
+                matches[-1] if matches else None,
+            )
+            if existing is not None and existing.status in {
+                ProposalStatus.REJECTED,
+                ProposalStatus.PUBLISHED,
+            }:
+                saved.append(existing)
+                continue
+            if existing is not None and existing.status in {
+                ProposalStatus.STALE,
+                ProposalStatus.SUPERSEDED,
+            }:
+                existing = None
+            evidence = DiscoveryEvidence(
+                source_ref=f"conflict-partition:{document_id}:{candidate.fingerprint}",
+                excerpt="\n".join(candidate.evidence.evidence_texts),
+                doc_id=document_id,
+                extraction_id=snapshot_id,
+                occurrence_count=max(1, len(candidate.evidence.rule_ids)),
+                rule_ids=candidate.evidence.rule_ids,
+            )
+            incoming = SemanticProposal(
+                proposal_id=existing.proposal_id if existing else f"sp_{uuid.uuid4().hex}",
+                fingerprint=candidate.fingerprint,
+                proposal_type=ProposalType.DIMENSION,
+                trigger_source=TriggerSource.CONFLICT_PARTITION,
+                concept=candidate.suggested_name or " / ".join(
+                    value.label for value in candidate.candidate_values
+                ),
+                dimension_candidate=candidate,
+                evidence=[evidence],
+                confidence=0.0,
+                occurrence_count=evidence.occurrence_count,
+                last_observed_at=now,
+                created_at=existing.created_at if existing else now,
+                updated_at=now,
+            )
+            saved.append(self._store.merge_proposal(incoming))
+
+        for proposal in (
+            self._store.list_proposals(ProposalType.DIMENSION) if mark_missing_stale else []
+        ):
+            candidate = proposal.dimension_candidate
+            if (
+                candidate is None
+                or candidate.evidence.document_id != document_id
+                or proposal.fingerprint in observed
+                or proposal.status not in {
+                    ProposalStatus.PROPOSED,
+                    ProposalStatus.REVIEWING,
+                    ProposalStatus.ACCEPTED,
+                }
+            ):
+                continue
+            stale = proposal.model_copy(update={
+                "status": ProposalStatus.STALE,
+                "last_observed_at": now,
+                "updated_at": now,
+            }, deep=True)
+            self._store.compare_and_set_proposal(stale, proposal.status)
+        return saved
 
     def get_proposal(self, proposal_id: str) -> SemanticProposal | None:
         return self._store.get_proposal(proposal_id)
@@ -607,6 +798,8 @@ class SemanticAlignmentService:
             if status == ProposalStatus.REJECTED and not (review_note or "").strip():
                 raise ValueError("驳回原因 review_note 不能为空")
             if status == ProposalStatus.ACCEPTED:
+                if proposal.proposal_type == ProposalType.DIMENSION:
+                    raise ValueError("维度候选必须提交建模结论")
                 self._validate_acceptance(proposal)
             proposal.status = status
             proposal.reviewed_by = reviewed_by or proposal.reviewed_by
@@ -617,6 +810,93 @@ class SemanticAlignmentService:
             if saved is None:
                 raise ValueError("提议状态已被并发修改，请刷新后重试")
             return saved
+
+    def resolve_dimension_proposal(
+        self,
+        proposal_id: str,
+        conclusion: DimensionReviewConclusion,
+        *,
+        reviewed_by: str,
+        suggested_name: str | None = None,
+        suggested_code: str | None = None,
+        review_note: str | None = None,
+    ) -> SemanticProposal:
+        """保存人工建模裁决；只有新增维度结论会写正式语义契约。"""
+        with self._proposal_lock:
+            proposal = self._store.lock_proposal(proposal_id)
+            if proposal is None:
+                raise ValueError(f"语义提议不存在: {proposal_id}")
+            if proposal.proposal_type != ProposalType.DIMENSION or proposal.dimension_candidate is None:
+                raise ValueError("该提议不是维度候选")
+            if proposal.status == ProposalStatus.PUBLISHED:
+                return proposal
+            if proposal.status == ProposalStatus.PROPOSED:
+                reviewing = proposal.model_copy(update={
+                    "status": ProposalStatus.REVIEWING,
+                    "reviewed_by": reviewed_by,
+                    "reviewed_at": _now(),
+                    "updated_at": _now(),
+                }, deep=True)
+                proposal = self._store.compare_and_set_proposal(
+                    reviewing, ProposalStatus.PROPOSED
+                )
+                if proposal is None:
+                    raise ValueError("提议状态已被并发修改，请刷新后重试")
+            if proposal.status != ProposalStatus.REVIEWING:
+                raise ValueError(f"当前状态不能提交建模结论: {proposal.status}")
+
+            if conclusion != DimensionReviewConclusion.NEW_DIMENSION:
+                resolved = proposal.model_copy(update={
+                    "status": ProposalStatus.REJECTED,
+                    "review_conclusion": conclusion,
+                    "reviewed_by": reviewed_by,
+                    "reviewed_at": _now(),
+                    "review_note": (review_note or "").strip() or None,
+                    "updated_at": _now(),
+                }, deep=True)
+                saved = self._store.compare_and_set_proposal(
+                    resolved, ProposalStatus.REVIEWING
+                )
+                if saved is None:
+                    raise ValueError("提议状态已被并发修改，请刷新后重试")
+                return saved
+
+            candidate = proposal.dimension_candidate
+            name = (suggested_name or candidate.suggested_name or "").strip()
+            code = (suggested_code or candidate.suggested_code or "").strip()
+            if not name:
+                raise ValueError("新增维度必须填写名称")
+            if not re.fullmatch(r"[a-z][a-z0-9_]{2,127}", code):
+                raise ValueError("新增维度 code 必须为 snake_case")
+            candidate = candidate.model_copy(update={
+                "suggested_name": name,
+                "suggested_code": code,
+                "naming_status": "resolved",
+            }, deep=True)
+            proposal = proposal.model_copy(update={
+                "dimension_candidate": candidate,
+                "review_conclusion": conclusion,
+                "reviewed_by": reviewed_by,
+                "reviewed_at": _now(),
+                "review_note": (review_note or "").strip() or None,
+                "updated_at": _now(),
+            }, deep=True)
+
+            transaction = getattr(self._store, "registry_transaction", None)
+            context = transaction(self._registry._store) if transaction else nullcontext()
+            with context:
+                self._store.lock_and_claim_landing_targets(proposal)
+                self._publish_dimension_candidate(proposal)
+                published = proposal.model_copy(update={
+                    "status": ProposalStatus.PUBLISHED,
+                    "updated_at": _now(),
+                }, deep=True)
+                saved = self._store.compare_and_set_proposal(
+                    published, ProposalStatus.REVIEWING
+                )
+                if saved is None:
+                    raise ValueError("提议状态已被并发修改，发布已回滚")
+                return saved
 
     def publish_proposal(
         self, proposal_id: str, reviewed_by: str | None = None
@@ -635,8 +915,10 @@ class SemanticAlignmentService:
                 self._store.lock_and_claim_landing_targets(proposal)
                 if proposal.proposal_type == ProposalType.METRIC:
                     self._publish_metric_proposal(proposal)
-                else:
+                elif proposal.proposal_type == ProposalType.VALUE:
                     self._publish_value_proposal(proposal)
+                else:
+                    self._publish_dimension_candidate(proposal)
                 proposal.status = ProposalStatus.PUBLISHED
                 proposal.reviewed_by = reviewed_by or proposal.reviewed_by
                 proposal.reviewed_at = _now()
@@ -768,6 +1050,62 @@ class SemanticAlignmentService:
                     standard_value=mapping.standard_value,
                     description=f"语义提议 {proposal.proposal_id}",
                 ))
+
+    def _publish_dimension_candidate(self, proposal: SemanticProposal) -> None:
+        candidate = proposal.dimension_candidate
+        if candidate is None or not candidate.suggested_code or not candidate.suggested_name:
+            raise ValueError("维度候选缺少正式名称或 code")
+        code = candidate.suggested_code
+        # 指标 code 必须带对象前缀（zcgz.fund_type），裸码（fund_type）会让提取契约
+        # 字段风格与其它 zcgz.* 不一致、按对象检索失真（2026-08-18 实例：jjgs）。
+        metric_code = f"{proposal.object_code}.{code}"
+        labels = [value.label for value in candidate.candidate_values]
+        if len(labels) < 2 or len(set(labels)) != len(labels):
+            raise ValueError("维度候选值域必须包含至少两个不重复值")
+        existing_metric = self._registry.get_metric(metric_code)
+        if existing_metric is not None:
+            raise ValueError(f"指标 {metric_code} 已存在且不等价")
+        existing_domain = self._registry.get_value_domain(code)
+        if existing_domain is not None:
+            raise ValueError(f"值域 {code} 已存在且不等价")
+
+        self._registry.save_value_domain(ValueDomain(
+            domain_code=code,
+            name=candidate.suggested_name,
+            description=f"由维度候选 {proposal.proposal_id} 人工审核发布",
+            standard_values=labels,
+        ))
+        self._registry.save_published_metric(Metric(
+            metric_code=metric_code,
+            object_code=proposal.object_code,
+            name=candidate.suggested_name,
+            definition="由规则冲突严格分区发现并经人工建模审核",
+            semantic_type="Enum",
+            value_domain=code,
+            metric_kind="field",
+            indexed=True,
+            status="published",
+        ))
+        lineage = (
+            f"维度候选 {proposal.proposal_id}; rules={','.join(candidate.evidence.rule_ids)}; "
+            f"clauses={','.join(candidate.evidence.source_clause_ids)}; "
+            f"document={candidate.evidence.document_id}; "
+            f"snapshot={candidate.evidence.extraction_snapshot_id}"
+        )
+        for value in candidate.candidate_values:
+            for alias in dict.fromkeys(([value.code] if value.code else []) + value.aliases):
+                if alias and alias != value.label:
+                    self._registry.save_value_mapping(ValueDomainMapping(
+                        domain_code=code,
+                        source_value=alias,
+                        standard_value=value.label,
+                        description=lineage,
+                    ))
+        self._registry.publish_object(
+            proposal.object_code,
+            changelog=f"发布维度候选 {proposal.proposal_id}: {code}",
+            published_by=proposal.reviewed_by,
+        )
 
     def _require_proposal(self, proposal_id: str) -> SemanticProposal:
         proposal = self._store.get_proposal(proposal_id)

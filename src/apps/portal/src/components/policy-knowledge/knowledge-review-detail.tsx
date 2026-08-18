@@ -278,6 +278,25 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
     return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
   }, [changeSet])
 
+  // 动态字段：变更集 items 中出现的、不在固定规则字段清单里的新维度/新指标
+  // （如语义层新发布的基金归属 jjgs）。schema-driven：语义层加维度后审核表自动出现。
+  const dynamicFieldCodes = useMemo(() => {
+    if (!changeSet) return []
+    const seen = new Set<string>()
+    for (const item of changeSet.items) {
+      const candidate = parseCandidateKnowledge(item)
+      for (const field of candidate?.fields ?? []) {
+        if (field.field_code && !RULE_OBJECT_ORDER.includes(field.field_code)) seen.add(field.field_code)
+      }
+    }
+    return [...seen].sort()
+  }, [changeSet])
+
+  const allColumnCodes = useMemo(
+    () => [...RULE_OBJECT_ORDER, ...dynamicFieldCodes],
+    [dynamicFieldCodes],
+  )
+
   // 列可见性：优先沿用用户最近一次选择（localStorage），否则按规则类型预设。
   useEffect(() => {
     if (!changeSet) return
@@ -293,8 +312,9 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
     } catch {
       // 存储损坏时按预设回退。
     }
-    setVisibleCodes(presetForType(dominantRuleType))
-  }, [changeSet, dominantRuleType])
+    // 无历史选择时按规则类型预设展示，并追加动态字段（新发布维度默认可见）
+    setVisibleCodes([...new Set([...presetForType(dominantRuleType), ...dynamicFieldCodes])])
+  }, [changeSet, dominantRuleType, dynamicFieldCodes])
 
   function updateVisibleColumns(codes: string[]) {
     setVisibleCodes(codes)
@@ -411,11 +431,11 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
 
   // 表头列 = 固定顺序的 19 个政策规则对象字段，按用户可见性选择过滤。
   const tableColumns: TableColumn[] = useMemo(() => {
-    const codes = visibleCodes ?? RULE_OBJECT_ORDER
-    return RULE_OBJECT_ORDER
+    const codes = visibleCodes ?? allColumnCodes
+    return allColumnCodes
       .filter((code) => codes.includes(code))
       .map((code) => ({ code, label: columnLabel(code), kind: columnKind(code) }))
-  }, [visibleCodes, columnLabel])
+  }, [visibleCodes, allColumnCodes, columnLabel])
 
   const pendingTasks = decisionTasks.filter((task) => task.status === 'PENDING')
   const highRisk = Boolean(
@@ -711,8 +731,9 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
                   visibleCodes={visibleCodes ?? DEFAULT_VISIBLE_COLUMNS}
                   labels={metricLabels}
                   dominantRuleType={dominantRuleType}
+                  allColumnCodes={allColumnCodes}
                   onToggle={toggleColumn}
-                  onShowAll={() => updateVisibleColumns([...RULE_OBJECT_ORDER])}
+                  onShowAll={() => updateVisibleColumns([...allColumnCodes])}
                   onApplyPreset={applyPreset}
                 />
               )}
@@ -933,22 +954,35 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
                       : `已满足条件，点击「整批通过审核」将全部 ${changeSet.items.length} 条候选标记为通过，可进入发布管理创建正式版本`}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => openReasonDialog('reject')}
-          disabled={submitting || !returnOrRejectEligible}
-          className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
-        >
-          <X className="size-3.5" />拒绝
-        </button>
-        <button
-          type="button"
-          onClick={() => openReasonDialog('return')}
-          disabled={submitting || !returnOrRejectEligible}
-          className="inline-flex items-center gap-1 rounded-lg border border-amber-300 px-3 py-2 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-40"
-        >
-          <RotateCcw className="size-3.5" />退回重新构建
-        </button>
+        <details className="group relative">
+          <summary className="cursor-pointer list-none rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 [&::-webkit-details-marker]:hidden">
+            其他处理 <span aria-hidden="true" className="inline-block transition-transform group-open:rotate-180">⌄</span>
+          </summary>
+          <div className="absolute bottom-full right-0 z-30 mb-2 w-44 space-y-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.currentTarget.closest('details')?.removeAttribute('open')
+                openReasonDialog('return')
+              }}
+              disabled={submitting || !returnOrRejectEligible}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-40"
+            >
+              <RotateCcw className="size-3.5" />退回重新构建
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.currentTarget.closest('details')?.removeAttribute('open')
+                openReasonDialog('reject')
+              }}
+              disabled={submitting || !returnOrRejectEligible}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
+            >
+              <X className="size-3.5" />拒绝
+            </button>
+          </div>
+        </details>
         <button
           type="button"
           onClick={() => void performLifecycle('approve')}
@@ -1003,6 +1037,7 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
         open={traceTarget !== null}
         ruleId={traceTarget?.ruleId ?? null}
         runId={traceTarget?.runId ?? null}
+        fieldLabels={metricLabels}
         onOpenChange={(open) => { if (!open) setTraceTarget(null) }}
       />
     </section>
@@ -1155,7 +1190,7 @@ function ReviewTableRow({
         ) : invalid ? (
           <span className="text-[11px] text-slate-400">候选异常，仅可查看详情</span>
         ) : (
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-start gap-1.5">
             <button
               type="button"
               disabled={reviewing}
@@ -1167,40 +1202,65 @@ function ReviewTableRow({
             </button>
             <button
               type="button"
-              disabled={reviewing}
-              onClick={onReject}
-              className="rounded-md border border-red-200 px-2.5 py-1.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
+              onClick={onViewTrace}
+              className="rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
             >
-              拒绝
+              查看对照
             </button>
-            <button
-              type="button"
-              disabled={reviewing}
-              onClick={onReturn}
-              className="rounded-md border border-amber-300 px-2.5 py-1.5 text-[11px] font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-40"
-            >
-              退回
-            </button>
-            {canReextract && (
+            <details className="group relative">
+              <summary role="button" aria-label="更多操作" className="cursor-pointer list-none rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 [&::-webkit-details-marker]:hidden">
+                <span aria-hidden="true">•••</span>
+              </summary>
+              <div className="absolute right-0 z-30 mt-1 w-32 space-y-1 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                <button
+                  type="button"
+                  disabled={reviewing}
+                  onClick={(event) => {
+                    event.currentTarget.closest('details')?.removeAttribute('open')
+                    onReturn()
+                  }}
+                  className="w-full rounded-md px-2.5 py-2 text-left text-[11px] font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-40"
+                >
+                  退回
+                </button>
+                {canReextract && (
+                  <button
+                    type="button"
+                    disabled={reviewing}
+                    onClick={(event) => {
+                      event.currentTarget.closest('details')?.removeAttribute('open')
+                      onReextract()
+                    }}
+                    title="重新提取：换提示词或大模型重提本条，重提后需重新审核"
+                    className="flex w-full items-center gap-1 rounded-md px-2.5 py-2 text-left text-[11px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                  >
+                    <RefreshCw className="size-3" />重提取
+                  </button>
+                )}
               <button
                 type="button"
                 disabled={reviewing}
-                onClick={onReextract}
-                title="重新提取：换提示词或大模型重提本条，重提后需重新审核"
-                className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                onClick={(event) => {
+                  event.currentTarget.closest('details')?.removeAttribute('open')
+                  onReject()
+                }}
+                className="w-full rounded-md px-2.5 py-2 text-left text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
               >
-                <RefreshCw className="size-3" />重提取
+                拒绝
               </button>
-            )}
+              </div>
+            </details>
           </div>
         )}
-        <button
-          type="button"
-          onClick={onViewTrace}
-          className="rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
-        >
-          查看溯源
-        </button>
+        {(review || invalid) && (
+          <button
+            type="button"
+            onClick={onViewTrace}
+            className="rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+          >
+            查看对照
+          </button>
+        )}
         </div>
       </td>
     </tr>
@@ -1221,6 +1281,7 @@ function ColumnSettingsPanel({
   visibleCodes,
   labels,
   dominantRuleType,
+  allColumnCodes,
   onToggle,
   onShowAll,
   onApplyPreset,
@@ -1228,6 +1289,7 @@ function ColumnSettingsPanel({
   visibleCodes: string[]
   labels: Record<string, string>
   dominantRuleType: string | undefined
+  allColumnCodes: string[]
   onToggle: (code: string) => void
   onShowAll: () => void
   onApplyPreset: (ruleType: string) => void
@@ -1268,7 +1330,7 @@ function ColumnSettingsPanel({
         当前规则类型：{dominantRuleType ?? '未分类'}（无历史选择时按其预设展示）
       </p>
       <div className="mt-2 grid max-h-64 grid-cols-2 gap-x-2 gap-y-1 overflow-y-auto">
-        {RULE_OBJECT_ORDER.map((code) => (
+        {allColumnCodes.map((code) => (
           <label key={code} className="flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-600">
             <input
               type="checkbox"

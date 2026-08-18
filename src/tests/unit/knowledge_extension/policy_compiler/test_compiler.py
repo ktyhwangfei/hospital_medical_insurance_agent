@@ -322,3 +322,25 @@ def test_rule_key_distinguishes_result_dimensions() -> None:
 
     assert result.status == "PASS"
     assert len({rule.rule_id for rule in result.rules}) == 2
+
+
+def test_rule_key_distinguishes_dynamic_business_conditions() -> None:
+    result = PolicyRuleCompiler().compile([
+        fact("basic_cap", subject="cap", conditions={"jjgs": "统筹基金"}, amount="10万元"),
+        fact("large_cap", subject="cap", conditions={"jjgs": "大额医疗互助资金"}, amount="20万元"),
+    ])
+
+    assert result.status == "PASS"
+    assert {rule.conditions["jjgs"] for rule in result.rules} == {
+        "统筹基金", "大额医疗互助资金",
+    }
+
+
+def test_compiler_rejects_fact_without_structured_result() -> None:
+    result = PolicyRuleCompiler().compile([
+        fact("fund_only", subject="cap", conditions={"jjgs": "统筹基金"}),
+    ])
+
+    assert result.rules == []
+    assert "RESULT_MISSING" in {issue.code for issue in result.issues}
+    assert result.status == "REVIEW"

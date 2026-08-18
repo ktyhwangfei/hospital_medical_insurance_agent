@@ -68,15 +68,19 @@ class PolicyCompilationService:
                 if extraction is None:
                     raise ValueError(f"提取记录不存在: {knowledge.extraction_id}")
                 run = self._start_run(unit, knowledge, extraction)
-                runs[knowledge.knowledge_id] = run
+                # 复合键 unit::knowledge_id：即使不同单元出现同名 knowledge_id
+                # （历史 bug：LLM 每单元都编 rule_001），也不互相覆盖，避免第二遍
+                # 循环对同一 run 重复写步骤 →「编译步骤已存在」500。
+                scoped_id = f"{unit.unit_id}::{knowledge.knowledge_id}"
+                runs[scoped_id] = run
                 self._append_snapshot_steps(run)
-                facts[knowledge.knowledge_id] = self._to_fact(knowledge, extraction)
+                facts[scoped_id] = self._to_fact(knowledge, extraction)
 
             result = self._compiler.compile(list(facts.values()), run_id="compile_batch")
             candidates: dict[str, CompiledCandidate] = {}
             for unit, knowledge in entries:
-                run = runs[knowledge.knowledge_id]
-                fact = facts[knowledge.knowledge_id]
+                run = runs[f"{unit.unit_id}::{knowledge.knowledge_id}"]
+                fact = facts[f"{unit.unit_id}::{knowledge.knowledge_id}"]
                 owned = self._owned_rules(knowledge, fact, result.rules)
                 issues = [
                     issue for issue in result.issues
@@ -128,7 +132,7 @@ class PolicyCompilationService:
                         extraction_id=knowledge.extraction_id,
                         document_id=unit.doc_id,
                     )
-                candidates[knowledge.knowledge_id] = CompiledCandidate(
+                candidates[f"{unit.unit_id}::{knowledge.knowledge_id}"] = CompiledCandidate(
                     knowledge_id=knowledge.knowledge_id,
                     compile_run_id=run.run_id,
                     status=status,
@@ -212,8 +216,13 @@ class PolicyCompilationService:
         )
         # rule_type 模糊（通用规则/未分类）时，用结构化数值字段 + 原文推断业务主体，
         # 救回提取质量不足但实际有明确数值语义的规则（如 rule_type=通用规则 但 payment_ratio=30%）
-        if subject == "unclassified":
-            subject = self._infer_subject(fields, raw_rule, knowledge)
+        if subject in {"unclassified", "payment_ratio", "reimbursement_ratio"}:
+            inferred = self._infer_subject(fields, raw_rule, knowledge)
+            if inferred != "unclassified":
+                subject = inferred
+        # 综合报销比例包含多个支付来源，不得沿用模型从段落上下文复制的单一基金归属。
+        if subject == "overall_reimbursement_ratio":
+            fields.pop("jjgs", None)
         population = (
             raw_rule.get("population")
             or raw_rule.get("person_type")
@@ -231,7 +240,9 @@ class PolicyCompilationService:
                 elif name == "amount" or name.endswith("_amount"):
                     result["amount"] = value
             if not result and expression is None:
-                result = {"value": knowledge.business_sentence}
+                rule_value = raw_rule.get("rule_value") or fields.get("rule_value")
+                if rule_value not in (None, ""):
+                    result = {"value": rule_value}
         excluded = {
             "rule_id", "knowledge_id", "fact_id", "rule_type", "source_text",
             "confidence", "expression", "relations", "subject", "result", "value",
@@ -271,6 +282,17 @@ class PolicyCompilationService:
         """
         import re
 
+        text = " ".join(filter(None, [
+            str(raw_rule.get("source_text") or ""),
+            str(raw_rule.get("rule_value") or ""),
+            getattr(knowledge, "source_text", "") or "",
+            knowledge.business_sentence or "",
+        ]))
+        # 同一基础比例字段可以承载不同业务度量；主体由本规则精确原文确定。
+        if re.search(r"大额医疗互助资金[^，。；]*(?:报销|支付)比例", text):
+            return "large_medical_mutual_aid_payment_ratio"
+        if "报销比例" in text:
+            return "overall_reimbursement_ratio"
         # 1. 结构化数值字段优先（payment_ratio='30%' 等）
         if str(fields.get("payment_ratio") or "").strip():
             return "payment_ratio"
@@ -279,12 +301,6 @@ class PolicyCompilationService:
         if str(fields.get("cap_amount") or "").strip():
             return "cap"
         # 2. 原文数值特征回退（rule_value/source_text 含「85% 且 支付/划入」等）
-        text = " ".join(filter(None, [
-            str(raw_rule.get("rule_value") or ""),
-            str(raw_rule.get("source_text") or ""),
-            getattr(knowledge, "source_text", "") or "",
-            knowledge.business_sentence or "",
-        ]))
         if re.search(r"\d+(?:\.\d+)?\s*%", text) and re.search(r"划入|支付|报销|比例", text):
             return "payment_ratio"
         if re.search(r"起付", text):
@@ -338,7 +354,9 @@ class PolicyCompilationService:
     def _finish_failed_runs(self, runs: dict[str, CompileRun], exc: Exception) -> None:
         # 编译器异常不能留下 RUNNING 孤儿；轨迹写入失败也不能遮蔽原始异常。
         error = {"type": type(exc).__name__, "message": str(exc)}
-        for knowledge_id, run in runs.items():
+        for scoped_id, run in runs.items():
+            # scoped_id = unit::knowledge_id；对外（fact_id/血缘）仍用原始 knowledge_id
+            knowledge_id = scoped_id.split("::", 1)[-1]
             try:
                 current = self._traces.get_run(run.run_id)
             except Exception:

@@ -476,6 +476,7 @@ function CandidateCard({ release, report, qualityError, gate, gateError, busy, o
         <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-sm font-semibold text-slate-800">{release.release_id}</span><Status status={release.status} /></div>
         <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500"><span>语义契约 {versionLabel(release.contract_version)}</span><span className="tabular-nums">用例集 v{release.case_set_version}</span><span>{sourceCountLabel(release.source_change_set_id)}</span><span className="font-mono">血缘 {release.source_change_set_id || '暂无记录'}</span></p>
         <p className="mt-1 text-[11px] tabular-nums text-slate-500">质量 {percent(release.quality_score)} · 一致性 {percent(release.consistency_score)}</p>
+        {release.build_error && <div role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><p className="font-semibold">索引构建失败</p><p className="mt-1 break-words">{release.build_error}</p></div>}
         {qualityError && <p className="mt-2 text-xs text-amber-700">质量记录加载失败，请刷新后重试。</p>}
         {report?.run.blocked_reasons.map((reason) => <p key={reason} className="mt-2 text-xs text-red-700">{reason}</p>)}
         {gate?.blocked_reasons.map((reason) => <p key={`gate:${reason}`} className="mt-2 text-xs text-amber-700">{reason}</p>)}

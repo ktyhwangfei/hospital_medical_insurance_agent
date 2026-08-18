@@ -53,6 +53,27 @@ def test_published_field_has_short_code_and_attrs():
     assert schema.schema_version == 3      # 取已发布指标的 max schema_version
 
 
+def test_contract_reads_latest_object_version_instead_of_partial_live_status():
+    reg, store = _make_registry()
+    for code in ("rule_type", "rule_value", "cap_amount"):
+        store.save_metric(Metric(
+            metric_code=f"zcgz.{code}", object_code="zcgz", name=code,
+        ))
+    reg.publish_object("zcgz")
+
+    for metric in store.list_metrics("zcgz"):
+        store.save_metric(metric.model_copy(update={"status": "draft"}))
+    store.save_metric(Metric(
+        metric_code="jjgs", object_code="zcgz", name="基金归属", status="published",
+    ))
+
+    schema = build_extraction_schema(reg, "zcgz")
+
+    assert {field.code for field in schema.fields} == {
+        "rule_type", "rule_value", "cap_amount",
+    }
+
+
 def test_dictionary_resolved_from_value_domain():
     """value_domain 引用的字典，其 standard_values 应解析进 dictionaries。"""
     reg, store = _make_registry()
@@ -144,6 +165,38 @@ def test_publish_object_unlocks_extraction_schema():
     schema_after = build_extraction_schema(reg, "t_unlock")
     assert len(schema_after.fields) == 1, "发布后契约应有 1 个字段"
     assert schema_after.fields[0].code == "f1"
+
+
+def test_build_prompt_from_schema_requires_all_field_keys():
+    """LLM 常省略字段键——提示词必须硬性要求全部字段逐键输出（实测只回 4 字段）。"""
+    from src.semantic_layer.extraction_contract import (
+        build_prompt_from_schema, ExtractionSchema, FieldContract,
+    )
+    schema = ExtractionSchema(fields=[
+        FieldContract(code="f1", name="字段1"),
+        FieldContract(code="f2", name="字段2"),
+    ])
+    prompt = build_prompt_from_schema("原文", "标题", schema)
+    assert "共 2 个" in prompt, "应标注字段总数"
+    assert "禁止省略" in prompt, "应禁止省略字段键"
+    assert "键数量必须等于 2" in prompt, "应要求自检键数量"
+
+
+def test_build_prompt_from_schema_requires_entities_array():
+    """schema prompt 输出格式必须含 entities 字段要求（S5 冲突分区靠实体短语分区）。
+
+    实测 schema 模式 LLM 从不输出 entities → S5 分区判定无候选值，永远产不出维度候选。
+    """
+    from src.semantic_layer.extraction_contract import (
+        build_prompt_from_schema, ExtractionSchema, FieldContract,
+    )
+    schema = ExtractionSchema(fields=[FieldContract(code="f1", name="字段1")])
+    prompt = build_prompt_from_schema("原文", "标题", schema)
+    assert '"entities"' in prompt, "输出格式示例必须含 entities 数组"
+    assert '"entity_type"' in prompt, "实体项必须含类型键"
+    assert '"RATIO"' in prompt, "必须给出比例实体类型示例（S5 分区短语来源）"
+    assert "entities 不计入" in prompt, "字段键数自检必须排除 entities"
+    assert "统筹基金支付比例" in prompt, "比例实体必须带归属主体（不得只写支付比例）"
 
 
 def test_build_prompt_from_schema_is_field_agnostic():

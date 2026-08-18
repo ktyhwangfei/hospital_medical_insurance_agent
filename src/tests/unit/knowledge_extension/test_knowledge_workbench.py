@@ -133,6 +133,61 @@ def test_workbench_only_returns_approved_non_merged_units() -> None:
     assert len(result.units[0].knowledge) == 2
 
 
+def test_workbench_dedupes_knowledge_across_extraction_versions() -> None:
+    """同一单元多条 extraction 时，knowledge 按 knowledge_id 去重并保留最新版本。
+
+    复现缺陷（用户反馈）：REBUILD 重抽会追加新 extraction 而不清理旧的，
+    新旧 extraction 的 rules 带相同 rule_id 时 knowledge_id 重复，
+    导致 policy_compiler 同一 run 重复写步骤而 500。
+    """
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        KnowledgeWorkbenchService,
+    )
+
+    first = _leaf_ids()[0]
+    old = _extraction(
+        first,
+        [
+            dict(_rules()[0], rule_id="rule_001"),
+            dict(_rules()[1], rule_id="rule_002"),
+        ],
+        status="reviewed",
+    )
+    old["extraction_id"] = "ext_old"
+    old["updated_at"] = "2026-08-01T09:00:00+08:00"
+    new = _extraction(first, [dict(_rules()[0], rule_id="rule_001")], status="reviewed")
+    new["extraction_id"] = "ext_new"
+    new["updated_at"] = "2026-08-10T09:00:00+08:00"
+
+    result = KnowledgeWorkbenchService(
+        FakePipelineStore([old, new])
+    ).get_document("doc_1")
+
+    unit = result.units[0]
+    knowledge_ids = [item.knowledge_id for item in unit.knowledge]
+    # 命名空间化后：不同 extraction 的同名 rule_id 是不同 knowledge（不再撞名），
+    # 全部保留；去重兑底只防完全相同 id 重复。
+    assert len(knowledge_ids) == len(set(knowledge_ids)), "knowledge_id 不得重复（重复会导致编译 500）"
+    assert len(knowledge_ids) == 3
+    assert any(item.extraction_id == "ext_new" for item in unit.knowledge)
+
+
+def test_knowledge_id_scopes_persisted_rule_id_to_extraction() -> None:
+    """LLM 自报 rule_id 是单元内局部序号（每单元都从 rule_001 编号），
+    跨单元必撞名——多单元构建时 compile_units 的 runs 按 knowledge_id
+    覆盖，同一 run 重复写步骤 → 500「编译步骤已存在」（2026-08-17 实例）。
+    knowledge_id 必须绑定 extraction 命名空间。"""
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        _knowledge_id,
+    )
+
+    a1 = _knowledge_id("ext_a", {"rule_id": "rule_001"})
+    b1 = _knowledge_id("ext_b", {"rule_id": "rule_001"})
+    assert a1 != b1, "跨 extraction 的同名 rule_id 不得生成相同 knowledge_id"
+    assert _knowledge_id("ext_a", {"rule_id": "rule_001"}) == a1, "同 extraction 内必须稳定（review 跟随）"
+    assert _knowledge_id("ext_a", {"rule_id": "rule_002"}) != a1, "同 extraction 内不同 rule 仍区分"
+
+
 def test_rule_reordering_does_not_change_knowledge_identity() -> None:
     from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
         KnowledgeWorkbenchService,
@@ -179,6 +234,23 @@ def test_legacy_extraction_is_labeled_when_text_match_is_used() -> None:
     assert all(item.relationship_source == "legacy_match" for item in result.units[0].knowledge)
 
 
+def test_persisted_extraction_suppresses_legacy_match_for_same_unit() -> None:
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        KnowledgeWorkbenchService,
+    )
+
+    first = _leaf_ids()[0]
+    persisted = _extraction(first, [dict(_rules()[0], rule_id="rule_current")])
+    legacy = _extraction("", [dict(_rules()[0], rule_id="rule_legacy")])
+    legacy["extraction_id"] = "ext_legacy"
+
+    result = KnowledgeWorkbenchService(
+        FakePipelineStore([legacy, persisted])
+    ).get_document("doc_1")
+
+    assert [item.extraction_id for item in result.units[0].knowledge] == ["ext_1"]
+
+
 def test_business_sentence_and_confidence_are_explainable() -> None:
     from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
         KnowledgeWorkbenchService,
@@ -194,6 +266,18 @@ def test_business_sentence_and_confidence_are_explainable() -> None:
     assert knowledge.confidence.accuracy is None
     assert "准确性待已批准经典用例验证" in knowledge.confidence.uncertainties
     assert knowledge.citations[0].source_id == "doc_1"
+
+
+def test_business_sentence_keeps_fund_and_cap_semantics() -> None:
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import _sentence
+
+    assert _sentence({
+        "rule_type": "封顶线",
+        "jjgs": "统筹基金",
+        "psn_type": "在职职工",
+        "cap_amount": "100000",
+        "rule_value": "100000",
+    }) == "在职职工就医时，统筹基金最高支付限额为100000元。"
 
 
 def test_accuracy_ignores_untrusted_inline_approved_case_claim() -> None:
@@ -336,6 +420,11 @@ def test_extract_single_can_keep_build_candidates_visible_for_change_set_review(
         def batch_create_extractions(self, items: list[dict[str, Any]]) -> int:
             self.created.extend(items)
             return len(items)
+
+        def list_extractions(
+            self, page: int = 1, page_size: int = 1000, doc_id: str = "", status: str = ""
+        ) -> dict[str, Any]:
+            return {"items": [], "total": 0, "page": page, "page_size": page_size}
 
         def update_extraction(
             self, extraction_id: str, data: dict[str, Any]
@@ -498,7 +587,15 @@ def test_policy_field_maps_to_unified_metric_and_source_specific_standard_value(
     ))
     registry = SemanticRegistry(registry_store)
     alignment = SemanticAlignmentService(registry, InMemorySemanticAlignmentStore())
-    source_ref = f"doc_1/{first}/kn_policy_person"
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        _knowledge_id,
+    )
+    # knowledge_id 由 _knowledge_id 派生（persisted id 绑定 extraction 命名空间），
+    # binding 的 source_ref 必须用同一派生结果构造才能命中。
+    rules = _rules()[:1]
+    rules[0]["knowledge_id"] = "kn_policy_person"
+    rules[0]["psn_type"] = "城镇职工"
+    source_ref = f"doc_1/{first}/{_knowledge_id('ext_1', rules[0])}"
     binding = alignment.bind_existing_metric(MetricSourceBindingDraft(
         metric_code="zcgz.psn_type",
         source_type="policy_knowledge",
@@ -516,9 +613,6 @@ def test_policy_field_maps_to_unified_metric_and_source_specific_standard_value(
         standard_value="职工医保",
     ))
     alignment.approve_value_mapping(mapping.mapping_id, "semantic_reviewer")
-    rules = _rules()[:1]
-    rules[0]["knowledge_id"] = "kn_policy_person"
-    rules[0]["psn_type"] = "城镇职工"
 
     result = KnowledgeWorkbenchService(
         FakePipelineStore([_extraction(first, rules)]),
@@ -734,3 +828,24 @@ def test_ambiguous_rule_type_stays_unclassified(rule_type: str) -> None:
     )
 
     assert rule_type not in _RULE_TYPE_META
+
+
+
+def test_field_label_prefers_semantic_metric_name() -> None:
+    """字段中文名：语义层 published 指标名优先（如新维度 jjgs→基金归属），硬编码字典兜底。"""
+    from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+        _field_label,
+    )
+
+    published = {
+        "jjgs": Metric(
+            metric_code="jjgs", object_code="zcgz", name="基金归属",
+            semantic_type="Enum", status="published",
+        ),
+    }
+    # 语义层指标名优先
+    assert _field_label("jjgs", published) == "基金归属"
+    # 无指标时回退硬编码字典
+    assert _field_label("med_type", {}) == "医疗类别"
+    # 两者都无 → 原样返回
+    assert _field_label("custom_field", {}) == "custom_field"

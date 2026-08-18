@@ -276,6 +276,18 @@ describe('发布管理页', () => {
     expect(listReleases).toHaveBeenCalledTimes(2)
   })
 
+  it('在候选卡片展示最近一次索引构建失败原因', async () => {
+    vi.mocked(listReleases).mockResolvedValueOnce([
+      release('REL_BUILDING', 'building', { build_error: '规则索引字段类型不兼容' }),
+    ])
+
+    render(<KnowledgeReleasesPage />)
+
+    const card = (await screen.findByText('REL_BUILDING')).closest('article')
+    expect(card).toHaveTextContent('索引构建失败')
+    expect(card).toHaveTextContent('规则索引字段类型不兼容')
+  })
+
   it('按 building、ready、failed 和有效 passed 状态暴露严格门禁动作', async () => {
     const user = userEvent.setup()
     render(<KnowledgeReleasesPage />)

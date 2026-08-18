@@ -9,6 +9,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from src.knowledge_extension.rule_explanation.conflict_partition_discovery import (
+    ExtractionEntity,
+    ExtractionRule,
+    discover_conflict_partitions,
+)
 from src.knowledge_extension.rule_explanation.semantic_alignment import (
     DiscoveryEvidence,
     DiscoverySignal,
@@ -234,6 +239,36 @@ def _intake_value(service: SemanticAlignmentService):
     ))
 
 
+def _intake_dimension(service: SemanticAlignmentService):
+    report = discover_conflict_partitions([
+        ExtractionRule(
+            rule_id=f"rule-{index}",
+            document_id="doc-conflict",
+            snapshot_id="snapshot-conflict",
+            extraction_contract_version="contract-3",
+            rule_type="支付比例",
+            rule_value=value,
+            rule_unit="%",
+            insu_type="职工医保",
+            entities=[ExtractionEntity(
+                entity_id=f"entity-{index}",
+                name=phrase,
+                entity_type="AMOUNT",
+                binding_scope="rule",
+            )],
+            source_clause_id=f"clause-{index}",
+            evidence_text=phrase,
+        )
+        for index, (value, phrase) in enumerate((
+            ("90%", "基本医疗保险统筹基金支付比例"),
+            ("80%", "大额医疗互助资金支付比例"),
+        ), start=1)
+    ])
+    return service.intake_conflict_report(
+        report, document_id="doc-conflict", snapshot_id="snapshot-conflict"
+    )[0]
+
+
 def test_proposal_api_requires_semantic_review_permission(monkeypatch) -> None:
     from src.runtime.api import semantic_alignment_routes
 
@@ -300,6 +335,44 @@ def test_proposal_list_filters_metric_and_value_tabs(monkeypatch) -> None:
     assert metric_response.status_code == 200
     assert [item["proposal_id"] for item in metric_response.json()] == [metric.proposal_id]
     assert [item["proposal_id"] for item in value_response.json()] == [value.proposal_id]
+
+
+def test_dimension_proposal_lists_strong_evidence_and_resolves_modeling_conclusion(
+    monkeypatch,
+) -> None:
+    from src.runtime.api import semantic_alignment_routes
+
+    service, registry_store = _service()
+    monkeypatch.setattr(semantic_alignment_routes, "_get_service", lambda: service)
+    proposal = _intake_dimension(service)
+    client = TestClient(create_app())
+    headers = _review_headers(user_id="dimension-reviewer")
+
+    listed = client.get(
+        f"{PREFIX}/proposals",
+        params={"proposal_type": "dimension"},
+        headers=headers,
+    )
+    resolved = client.post(
+        f"{PREFIX}/proposals/{proposal.proposal_id}/resolve",
+        json={
+            "conclusion": "new_dimension",
+            "suggested_name": "基金归属",
+            "suggested_code": "fund_type",
+            "reason": "两条规则形成完整互斥分区",
+        },
+        headers=headers,
+    )
+
+    assert listed.status_code == 200
+    candidate = listed.json()[0]["dimension_candidate"]
+    assert candidate["evidence"]["coverage"] == "1"
+    assert candidate["evidence"]["rule_ids"] == ["rule-1", "rule-2"]
+    assert resolved.status_code == 200
+    assert resolved.json()["status"] == "published"
+    assert resolved.json()["review_conclusion"] == "new_dimension"
+    metric = registry_store.get_metric("zcgz.fund_type")
+    assert metric is not None and metric.semantic_type == "Enum"
 
 
 def test_metric_proposal_review_accept_publish_uses_token_principal(monkeypatch) -> None:

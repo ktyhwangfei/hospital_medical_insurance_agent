@@ -1,773 +1,714 @@
 'use client'
 
-// 政策知识治理 · 概览（治理看板）。
-// 治理流水线 + 待办队列 + 统计卡带 + 生命周期分布 + 标化概览 + 质量风险 + 影响分析占位。
-// [来源: docs/steering/政策知识治理-概览页丰富设计-V1.0.md]
-// [来源: docs/steering/政策知识治理平台设计-V2.1.md §5.2]
-//
-// 数据聚合（全部现有接口，Promise.allSettled 并发，单接口失败按区块降级）：
-//   policy-pipeline/summary + extractions（低置信扫描，≤100 条上限）
-//   policy-knowledge/stats（Milvus 已发布）
-//   policy-workbench/governance/dashboard + knowledge-build/tasks + eligible-units
-//   policy-workbench/releases/active + quality/latest（404 = 未发布/暂无，正常态）
-//   semantic/summary（标化四格）
-
-import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import {
-  FileText, Anchor, Lightbulb, ShieldCheck, AlertTriangle,
-  Activity, GitBranch, Gauge, Compass, Check, Hammer,
-  ClipboardCheck, Rocket, BadgeCheck, ListTodo, SlidersHorizontal,
+  AlertTriangle,
+  BadgeCheck,
+  BookOpenCheck,
+  ChevronRight,
+  Database,
+  FileText,
+  Network,
+  ScanText,
+  ShieldCheck,
 } from 'lucide-react'
+
 import {
   getActiveRelease,
   getGovernanceDashboard,
-  getLatestReleaseQuality,
   getPipelineSummary,
   getPolicyKnowledgeStats,
   getSemanticSummary,
-  listEligibleKnowledgeUnits,
   listKnowledgeBuildTasks,
-  listPipelineExtractions,
-  PolicyKnowledgeApiError,
   type GovernanceDashboard,
   type KnowledgeBuildTask,
   type KnowledgeRelease,
   type PipelineSummary,
-  type QualityRun,
   type SemanticSummary,
 } from '@/lib/policy-knowledge-api'
 
-// —— 设计令牌（设计.pen variables，见设计文档 §5）——
-const PRIMARY = '#1E5AA8'
-const SUCCESS = '#1C8A55'
-const WARNING = '#A16207'
-const DANGER = '#C0392B'
-const INDIGO = '#4F46E5'
-const MUTED = '#64748B'
-
-/** 区块加载三态：loading 骨架 / failed 暂不可用 / ready 渲染 */
 type BlockState<T> =
   | { kind: 'loading' }
-  | { kind: 'failed' }
   | { kind: 'ready'; data: T }
+  | { kind: 'failed' }
 
-const loadingBlock: BlockState<never> = { kind: 'loading' }
-const failedBlock: BlockState<never> = { kind: 'failed' }
-
-function toBlock<T>(result: PromiseSettledResult<T>): BlockState<T> {
-  return result.status === 'fulfilled' ? { kind: 'ready', data: result.value } : failedBlock
-}
-
-/** releases/active 404 是正常业务态（未发布），需与其他失败区分 */
 type ReleaseState =
   | { kind: 'loading' }
+  | { kind: 'active'; data: KnowledgeRelease }
   | { kind: 'none' }
   | { kind: 'failed' }
-  | { kind: 'active'; data: KnowledgeRelease }
 
-interface LowConfStats {
-  count: number
-  capped: boolean
+const loadingBlock = { kind: 'loading' } as const
+const failedBlock = { kind: 'failed' } as const
+const PIPELINE_STAGES = [
+  ['输入快照', 'INPUT_SNAPSHOT'],
+  ['LLM 提取', 'LLM_EXTRACTION'],
+  ['规范化', 'CANONICALIZE'],
+  ['规则组装', 'COMPOSE'],
+  ['引用解析', 'RESOLVE'],
+  ['规则派生', 'DERIVE'],
+  ['确定性校验', 'VALIDATE'],
+] as const
+
+function formatRate(value: number): string {
+  return `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`
+}
+
+/** 骨架屏占位块 */
+function Sk({ className }: { className: string }) {
+  return <span aria-hidden className={`block animate-pulse rounded bg-slate-200/80 ${className}`} />
+}
+
+/** 区块三态渲染：加载中显示骨架屏，失败显示占位文案 */
+function cell<T>(state: BlockState<T>, render: (data: T) => ReactNode, skClass = 'h-4 w-12'): ReactNode {
+  if (state.kind === 'loading') return <Sk className={skClass} />
+  if (state.kind === 'failed') return <span className="text-xs text-slate-400">暂不可用</span>
+  return render(state.data)
 }
 
 export default function GovernanceOverviewPage() {
   const [summary, setSummary] = useState<BlockState<PipelineSummary>>(loadingBlock)
-  const [milvusTotal, setMilvusTotal] = useState<BlockState<number>>(loadingBlock)
-  const [lowConf, setLowConf] = useState<BlockState<LowConfStats>>(loadingBlock)
+  const [publishedKnowledge, setPublishedKnowledge] = useState<BlockState<number>>(loadingBlock)
   const [dashboard, setDashboard] = useState<BlockState<GovernanceDashboard>>(loadingBlock)
   const [buildTasks, setBuildTasks] = useState<BlockState<KnowledgeBuildTask[]>>(loadingBlock)
-  const [release, setRelease] = useState<ReleaseState>({ kind: 'loading' })
-  const [qualityRun, setQualityRun] = useState<BlockState<QualityRun> | { kind: 'none' }>(loadingBlock)
   const [semantic, setSemantic] = useState<BlockState<SemanticSummary>>(loadingBlock)
-  const [eligibleCount, setEligibleCount] = useState<BlockState<number>>(loadingBlock)
+  const [release, setRelease] = useState<ReleaseState>({ kind: 'loading' })
 
   useEffect(() => {
     let cancelled = false
 
-    async function loadMain() {
-      const [summaryR, statsR, extractionsR, dashboardR, tasksR, releaseR, semanticR] =
-        await Promise.allSettled([
-          getPipelineSummary(),
-          getPolicyKnowledgeStats(),
-          listPipelineExtractions(1, 100),
-          getGovernanceDashboard(),
-          listKnowledgeBuildTasks(),
-          getActiveRelease(),
-          getSemanticSummary(),
-        ])
-      if (cancelled) return
-
-      setSummary(toBlock(summaryR))
-      setMilvusTotal(
-        statsR.status === 'fulfilled' ? { kind: 'ready', data: statsR.value.total ?? 0 } : failedBlock,
-      )
-      if (extractionsR.status === 'fulfilled') {
-        const items = extractionsR.value.items ?? []
-        setLowConf({
-          kind: 'ready',
-          data: {
-            count: items.filter((e) => (e.confidence ?? 1) < 0.8).length,
-            capped: (extractionsR.value.total ?? items.length) > items.length,
-          },
-        })
-      } else {
-        setLowConf(failedBlock)
-      }
-      setDashboard(toBlock(dashboardR))
-      setBuildTasks(toBlock(tasksR))
-      setSemantic(toBlock(semanticR))
-
-      // releases/active：404 = 未发布（正常态），其余失败按降级处理
-      if (releaseR.status === 'fulfilled') {
-        setRelease({ kind: 'active', data: releaseR.value })
-        // 有 active 才查质量门禁；404 = 暂无质量运行（正常态）
-        try {
-          const report = await getLatestReleaseQuality(releaseR.value.release_id)
-          if (!cancelled) setQualityRun({ kind: 'ready', data: report.run })
-        } catch (err) {
-          if (cancelled) return
-          if (err instanceof PolicyKnowledgeApiError && err.status === 404) {
-            setQualityRun({ kind: 'none' })
-          } else {
-            setQualityRun(failedBlock)
-          }
-        }
-      } else {
-        // 404 = 尚无活动版本（正常业务态）；用 status 属性判定，兼容任意错误类型
-        const status = (releaseR.reason as { status?: number } | null)?.status
-        if (status === 404) {
-          setRelease({ kind: 'none' })
-          setQualityRun({ kind: 'none' })
-        } else {
-          setRelease({ kind: 'failed' })
-          setQualityRun(failedBlock)
-        }
-      }
+    // 各区块独立加载：任一请求完成后立即渲染对应区块，不再等待全部请求
+    const settle = <T,>(promise: Promise<T>, apply: (state: BlockState<T>) => void) => {
+      promise
+        .then((data) => { if (!cancelled) apply({ kind: 'ready', data }) })
+        .catch(() => { if (!cancelled) apply(failedBlock) })
     }
 
-    async function loadEligible() {
-      // eligible-units ~2s 慢接口（迭代 16 已诊断）：独立加载，不阻塞首屏
-      try {
-        const units = await listEligibleKnowledgeUnits()
-        if (!cancelled) setEligibleCount({ kind: 'ready', data: units.length })
-      } catch {
-        if (!cancelled) setEligibleCount(failedBlock)
-      }
-    }
+    settle(getPipelineSummary(), setSummary)
+    settle(getGovernanceDashboard(), setDashboard)
+    settle(listKnowledgeBuildTasks(), setBuildTasks)
+    settle(getSemanticSummary(), setSemantic)
+    getPolicyKnowledgeStats()
+      .then((stats) => { if (!cancelled) setPublishedKnowledge({ kind: 'ready', data: stats.total ?? 0 }) })
+      .catch(() => { if (!cancelled) setPublishedKnowledge(failedBlock) })
+    getActiveRelease()
+      .then((data) => { if (!cancelled) setRelease({ kind: 'active', data }) })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        const status = (error as { status?: number } | null)?.status
+        setRelease(status === 404 ? { kind: 'none' } : { kind: 'failed' })
+      })
 
-    void loadMain()
-    void loadEligible()
     return () => { cancelled = true }
   }, [])
 
-  // —— 派生数据 ——
   const tasks = buildTasks.kind === 'ready' ? buildTasks.data : []
-  const buildingCount = tasks.filter((t) => t.status === 'QUEUED' || t.status === 'RUNNING').length
-  const waitingReviewCount = tasks.filter((t) => t.status === 'WAITING_REVIEW').length
-  const pendingReleaseCount = tasks.filter((t) => t.status === 'APPROVED_PENDING_RELEASE').length
-
+  const buildingCount = buildTasks.kind === 'ready'
+    ? tasks.filter((task) => task.status === 'QUEUED' || task.status === 'RUNNING').length
+    : null
+  const pendingReleaseCount = buildTasks.kind === 'ready'
+    ? tasks.filter((task) => task.status === 'APPROVED_PENDING_RELEASE').length
+    : null
   const dash = dashboard.kind === 'ready' ? dashboard.data : null
-  const pendingChangeSets = dash
-    ? (dash.change_sets_by_status?.PENDING_REVIEW ?? 0) + (dash.change_sets_by_status?.NEEDS_DECISION ?? 0)
-    : 0
-  const decisionTasksPending = dash?.tasks_pending ?? 0
-  const lowConfCount = lowConf.kind === 'ready' ? lowConf.data.count : 0
-
-  const allClear =
-    dashboard.kind === 'ready' && buildTasks.kind === 'ready' && lowConf.kind === 'ready' &&
-    pendingChangeSets === 0 && pendingReleaseCount === 0 && decisionTasksPending === 0 && lowConfCount === 0
-
-  const activeRelease = release.kind === 'active' ? release.data : null
-  const contractVersion = activeRelease?.contract_version ?? 'v2.1'
+  const reviewChangeSets = dash?.change_sets_by_status.PENDING_REVIEW ?? 0
+  const pendingChangeSets = reviewChangeSets + (dash?.change_sets_by_status.NEEDS_DECISION ?? 0)
+  const contractVersion = release.kind === 'active' ? release.data.contract_version : 'v2.1'
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Header + 契约/版本 chips */}
-      <header className="flex flex-wrap items-center gap-2">
-        <div className="space-y-1">
-          <h2 className="text-xl font-semibold tracking-tight text-slate-800">治理概览</h2>
-          <p className="text-xs text-slate-500">流水线 · 待办 · 质量 · 版本 · 影响分析</p>
+    <div className="space-y-5">
+      <header className="flex flex-wrap items-end gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold tracking-[-0.025em] text-slate-900">知识资产概览</h2>
+          <p className="mt-1 text-sm text-slate-500">先盘点可用资产，再查看治理状态与生产阻塞</p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 rounded-lg bg-[#E9F1FB] px-2.5 py-1 text-[11px] font-medium text-[#1E5AA8]">
-            <ShieldCheck className="size-3" />
-            语义契约 <span className="font-mono">{contractVersion}</span>
+        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1.5 font-medium text-blue-700">
+            <ShieldCheck className="size-3.5" />语义契约 {contractVersion}
           </span>
-          <span className="inline-flex items-center gap-1 rounded-lg bg-[#E5F6EC] px-2.5 py-1 text-[11px] font-medium text-[#1C8A55]">
-            <BadgeCheck className="size-3" />
-            生效版本 <span className="font-mono">{activeRelease?.release_id ?? '未发布'}</span>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 font-medium text-emerald-700">
+            <BadgeCheck className="size-3.5" />
+            生效版本 {release.kind === 'active' ? release.data.release_id : release.kind === 'none' ? '未发布' : release.kind === 'failed' ? '暂不可用' : '…'}
           </span>
         </div>
       </header>
 
-      {/* A. 治理流水线 */}
-      <PipelineFlow
-        documents={summary}
-        eligible={eligibleCount}
-        building={buildTasks.kind === 'ready' ? buildingCount : null}
-        buildingFailed={buildTasks.kind === 'failed'}
-        waitingReview={buildTasks.kind === 'ready' ? waitingReviewCount : null}
-        pendingRelease={buildTasks.kind === 'ready' ? pendingReleaseCount : null}
-        release={release}
-      />
+      <KpiStrip dashboard={dashboard} publishedKnowledge={publishedKnowledge} />
 
-      {/* B. 待办队列 */}
-      <WorkQueue
+      <AssetLedger
+        summary={summary}
         dashboard={dashboard}
-        pendingChangeSets={pendingChangeSets}
-        pendingRelease={buildTasks.kind === 'ready' ? pendingReleaseCount : null}
-        tasksFailed={buildTasks.kind === 'failed'}
-        lowConf={lowConf}
-        allClear={allClear}
+        semantic={semantic}
+        release={release}
+        buildingCount={buildingCount}
+        pendingReleaseCount={pendingReleaseCount}
       />
 
-      {/* C. 统计卡带 */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {summary.kind === 'ready' ? (
-          <StatCard href="/policy-knowledge/documents" icon={FileText} color={PRIMARY} label="文档" value={summary.data.documents_count} sub={summary.data.documents_raw > 0 ? `${summary.data.documents_raw} 待提取` : undefined} />
-        ) : (
-          <StatCardPlaceholder state={summary} label="文档" />
-        )}
-        {summary.kind === 'ready' ? (
-          <StatCard href="/policy-knowledge/units" icon={Anchor} color={INDIGO} label="单元 (Unit)" value={summary.data.extractions_count} />
-        ) : (
-          <StatCardPlaceholder state={summary} label="单元 (Unit)" />
-        )}
-        {milvusTotal.kind === 'ready' ? (
-          <StatCard href="/policy-knowledge/knowledge?sub=library" icon={Lightbulb} color={SUCCESS} label="已发布知识" value={milvusTotal.data} sub="进入检索池" />
-        ) : (
-          <StatCardPlaceholder state={milvusTotal} label="已发布知识" />
-        )}
-        {summary.kind === 'ready' ? (
-          <StatCard href="/policy-knowledge/knowledge/review" icon={ShieldCheck} color={WARNING} label="待审知识" value={summary.data.extractions_draft} sub={summary.data.extractions_draft > 0 ? '需人工审核' : undefined} />
-        ) : (
-          <StatCardPlaceholder state={summary} label="待审知识" />
-        )}
-      </div>
+      <KnowledgeAssetDetail
+        dashboard={dashboard}
+        semantic={semantic}
+        buildingCount={buildingCount}
+        pendingReleaseCount={pendingReleaseCount}
+        reviewChangeSets={reviewChangeSets}
+      />
 
-      {/* D. 生命周期分布 + E. 标化概览 */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <LifecycleBar summary={summary} />
-        <SemanticStrip semantic={semantic} />
-      </div>
-
-      {/* F. 质量与风险 + G. 影响分析占位 */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <QualityRiskPanel dashboard={dashboard} qualityRun={qualityRun} release={release} />
-        <ImpactPlaceholder />
-      </div>
-
-      {/* Quick Actions */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Link href="/policy-knowledge/documents" className="flex items-center gap-3 rounded-lg border border-[#DCE3EC] bg-[#E9F1FB]/50 px-4 py-3 text-sm font-medium text-[#1E5AA8] hover:bg-[#E9F1FB] transition-colors">
-          <FileText className="size-4" /> 管理文档 <span className="ml-auto text-slate-300">→</span>
-        </Link>
-        <Link href="/policy-knowledge/units" className="flex items-center gap-3 rounded-lg border border-[#DCE3EC] bg-[#EEF0FD]/50 px-4 py-3 text-sm font-medium text-[#4F46E5] hover:bg-[#EEF0FD] transition-colors">
-          <Anchor className="size-4" /> 浏览单元 <span className="ml-auto text-slate-300">→</span>
-        </Link>
-        <Link href="/policy-knowledge/knowledge?sub=audit" className="flex items-center gap-3 rounded-lg border border-[#DCE3EC] bg-[#FBF0DC]/50 px-4 py-3 text-sm font-medium text-[#A16207] hover:bg-[#FBF0DC] transition-colors">
-          <ShieldCheck className="size-4" /> 知识审核 <span className="ml-auto text-slate-300">→</span>
-        </Link>
-      </div>
-
-      {/* Discovery 入口（候选指标回写语义层）*/}
-      <Link href="/policy-knowledge/discovery" className="flex items-center gap-2 text-xs text-slate-400 hover:text-slate-600">
-        <Compass className="size-3.5" /> 发现（扫描高频实体/关系 → 候选指标回写语义层）→
-      </Link>
+      <GovernanceStatus
+        summary={summary}
+        dashboard={dashboard}
+        semantic={semantic}
+        release={release}
+        buildingCount={buildingCount}
+        reviewChangeSets={reviewChangeSets}
+        pendingChangeSets={pendingChangeSets}
+      />
     </div>
   )
 }
 
-// ═══════════════ A. 治理流水线（设计.pen 评审流引导）═══════════════════
+/* ---------------------------------- KPI 指标条 ---------------------------------- */
 
-interface PipelineStep {
-  key: string
-  label: string
-  href: string
-  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
-  /** null = 加载中/失败 */
-  count: number | null
-  countLabel: string
-  /** info = 中性信息态（恒蓝）；counter = 计数状态机（>0 待处理 / =0 已清空）；static = 静态文本 */
-  mode: 'info' | 'counter' | 'static'
-  staticText?: string
-}
+const KPI_TONES = {
+  blue: { box: 'bg-blue-50 text-blue-600', value: 'text-slate-900' },
+  emerald: { box: 'bg-emerald-50 text-emerald-600', value: 'text-emerald-700' },
+  amber: { box: 'bg-amber-50 text-amber-600', value: 'text-amber-700' },
+} as const
 
-function PipelineFlow({
-  documents, eligible, building, buildingFailed, waitingReview, pendingRelease, release,
+function KpiStrip({
+  dashboard,
+  publishedKnowledge,
 }: {
-  documents: BlockState<PipelineSummary>
-  eligible: BlockState<number>
-  building: number | null
-  buildingFailed: boolean
-  waitingReview: number | null
-  pendingRelease: number | null
-  release: ReleaseState
+  dashboard: BlockState<GovernanceDashboard>
+  publishedKnowledge: BlockState<number>
 }) {
-  const docReady = documents.kind === 'ready' ? documents.data : null
-  const steps: PipelineStep[] = [
-    {
-      key: 'documents', label: '文档', href: '/policy-knowledge/documents', icon: FileText,
-      count: docReady ? docReady.documents_count : null,
-      countLabel: docReady && docReady.documents_raw > 0 ? `导入 · ${docReady.documents_raw} 待解析` : '已导入',
-      mode: 'info',
-    },
-    {
-      key: 'units', label: '单元', href: '/policy-knowledge/units', icon: Anchor,
-      count: eligible.kind === 'ready' ? eligible.data : null,
-      countLabel: '可构建',
-      mode: 'info',
-    },
-    {
-      key: 'extract', label: '知识提取', href: '/policy-knowledge/knowledge/build', icon: Hammer,
-      count: building, countLabel: '待处理', mode: 'counter',
-    },
-    {
-      key: 'review', label: '知识审核', href: '/policy-knowledge/knowledge/review', icon: ClipboardCheck,
-      count: waitingReview, countLabel: '待处理', mode: 'counter',
-    },
-    {
-      key: 'release', label: '待发布', href: '/policy-knowledge/knowledge/releases', icon: Rocket,
-      count: pendingRelease, countLabel: '待处理', mode: 'counter',
-    },
-    {
-      key: 'active', label: '已生效', href: '/policy-knowledge/knowledge/published', icon: BadgeCheck,
-      count: null, countLabel: '', mode: 'static',
-      staticText: release.kind === 'active' ? release.data.release_id
-        : release.kind === 'none' ? '未发布'
-        : release.kind === 'failed' ? '暂不可用' : undefined,
-    },
-  ]
+  const approved = dashboard.kind === 'ready' ? dashboard.data.rules_approved : null
+  const pendingReview = dashboard.kind === 'ready' ? dashboard.data.rules_pending_review : null
+  const approvedIdle = approved === 0 && (pendingReview ?? 0) > 0
 
   return (
-    <section aria-label="治理流水线" className="rounded-xl border border-[#DCE3EC] bg-white p-5 shadow-sm">
-      <div className="mb-4 flex items-center gap-2">
-        <GitBranch className="size-4 text-[#1E5AA8]" />
-        <h3 className="text-sm font-semibold text-slate-700">治理流水线</h3>
-        <span className="ml-auto text-[11px] text-slate-400">文档 → 单元 → 知识 → 发布</span>
-      </div>
-      <ol className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-0">
-        {steps.map((step, i) => {
-          const isActive = step.mode === 'counter' && (step.count ?? 0) > 0
-          const isDone = step.mode === 'counter' && step.count === 0
-          const failed = step.count === null && step.mode !== 'static' &&
-            (step.key === 'documents' ? documents.kind === 'failed'
-              : step.key === 'units' ? eligible.kind === 'failed'
-              : buildingFailed)
-          return (
-            <li key={step.key} className="flex items-center lg:flex-1">
-              <Link href={step.href} className="group flex min-w-0 items-center gap-2.5">
-                <span
-                  className="flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
-                  style={
-                    isActive ? { backgroundColor: PRIMARY, color: '#fff' }
-                    : isDone || (step.mode === 'static' && release.kind === 'active') ? { backgroundColor: SUCCESS, color: '#fff' }
-                    : step.mode === 'info' ? { backgroundColor: '#E9F1FB', color: PRIMARY }
-                    : { backgroundColor: '#EEF1F5', color: MUTED }
-                  }
-                >
-                  {isDone || (step.mode === 'static' && release.kind === 'active') ? <Check className="size-3.5" /> : i + 1}
-                </span>
-                <span className="min-w-0">
-                  <span className="flex items-center gap-1.5 text-xs font-medium text-slate-600 group-hover:text-slate-800">
-                    <step.icon className="size-3.5" style={{ color: isActive ? PRIMARY : MUTED }} />
-                    {step.label}
-                  </span>
-                  <span className="mt-0.5 block text-[11px]">
-                    {step.mode === 'static' ? (
-                      <span className="font-mono font-semibold" style={{ color: release.kind === 'active' ? SUCCESS : MUTED }}>
-                        {step.staticText ?? '加载中'}
-                      </span>
-                    ) : step.count === null ? (
-                      <span className="text-slate-400">{failed ? '暂不可用' : '加载中'}</span>
-                    ) : step.mode === 'info' ? (
-                      <span className="font-mono font-semibold" style={{ color: MUTED }}>
-                        {step.count} {step.countLabel}
-                      </span>
-                    ) : (
-                      <span className="font-mono font-semibold" style={{ color: isActive ? PRIMARY : MUTED }}>
-                        {step.count} {isActive ? step.countLabel : '已清空'}
-                      </span>
-                    )}
-                  </span>
-                </span>
-              </Link>
-              {i < steps.length - 1 && (
-                <span aria-hidden className="mx-3 hidden h-px flex-1 bg-[#DCE3EC] lg:block" />
-              )}
-            </li>
-          )
-        })}
-      </ol>
+    <section aria-label="关键指标" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <KpiCard
+        icon={BookOpenCheck}
+        label="知识总量"
+        tone="blue"
+        state={dashboard}
+        pick={(data) => data.knowledge_total}
+        sub="政策规则单元"
+      />
+      <KpiCard
+        icon={BadgeCheck}
+        label="已批准变更规则"
+        tone={approvedIdle ? 'amber' : 'emerald'}
+        state={dashboard}
+        pick={(data) => data.rules_approved}
+        sub={approvedIdle ? (
+          <Link href="/policy-knowledge/knowledge/review" className="font-semibold text-amber-700 hover:underline">
+            {pendingReview} 条待审核，去处理 →
+          </Link>
+        ) : '变更规则'}
+      />
+      <KpiCard
+        icon={ScanText}
+        label="待审核规则"
+        tone={(pendingReview ?? 0) > 0 ? 'amber' : 'blue'}
+        state={dashboard}
+        pick={(data) => data.rules_pending_review}
+        sub="变更规则"
+      />
+      <KpiCard
+        icon={Database}
+        label="已进入检索池"
+        tone="blue"
+        state={publishedKnowledge}
+        pick={(total) => total}
+        sub="可供问答检索"
+      />
     </section>
   )
 }
 
-// ═══════════════ B. 待办队列 ═══════════════
-
-function WorkQueue({
-  dashboard, pendingChangeSets, pendingRelease, tasksFailed, lowConf, allClear,
+function KpiCard<T>({
+  icon: Icon,
+  label,
+  tone,
+  state,
+  pick,
+  sub,
 }: {
-  dashboard: BlockState<GovernanceDashboard>
-  pendingChangeSets: number
-  pendingRelease: number | null
-  tasksFailed: boolean
-  lowConf: BlockState<LowConfStats>
-  allClear: boolean
+  icon: ComponentType<{ className?: string }>
+  label: string
+  tone: keyof typeof KPI_TONES
+  state: BlockState<T>
+  pick: (data: T) => number
+  sub: ReactNode
 }) {
-  const dashReady = dashboard.kind === 'ready'
-  const tasksByType = dashReady ? dashboard.data.tasks_by_type ?? {} : {}
-  const decisionPending = dashReady ? dashboard.data.tasks_pending : null
+  const colors = KPI_TONES[tone]
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-center gap-2.5">
+        <span className={`grid size-9 shrink-0 place-items-center rounded-lg ${colors.box}`}>
+          <Icon className="size-4" />
+        </span>
+        <span className="text-xs text-slate-500">{label}</span>
+      </div>
+      <div className={`mt-3 font-mono text-2xl font-bold tabular-nums ${colors.value}`}>
+        {state.kind === 'loading' ? <Sk className="h-7 w-14" /> : state.kind === 'failed' ? <span className="text-sm font-normal text-slate-400">暂不可用</span> : pick(state.data)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">{sub}</div>
+    </div>
+  )
+}
 
-  if (allClear) {
+/* ---------------------------------- 资产台账 ---------------------------------- */
+
+function Pill({ tone, children }: { tone: 'good' | 'warn' | 'muted'; children: ReactNode }) {
+  const cls = tone === 'good'
+    ? 'bg-emerald-50 text-emerald-700'
+    : tone === 'warn'
+      ? 'bg-amber-50 text-amber-700'
+      : 'bg-slate-100 text-slate-500'
+  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`}>{children}</span>
+}
+
+function AssetLedger({
+  summary,
+  dashboard,
+  semantic,
+  release,
+  buildingCount,
+  pendingReleaseCount,
+}: {
+  summary: BlockState<PipelineSummary>
+  dashboard: BlockState<GovernanceDashboard>
+  semantic: BlockState<SemanticSummary>
+  release: ReleaseState
+  buildingCount: number | null
+  pendingReleaseCount: number | null
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white px-5 py-5 sm:px-6">
+      <div className="mb-3 flex items-baseline gap-3">
+        <h3 className="text-base font-semibold text-slate-900">资产台账</h3>
+        <p className="text-xs text-slate-500">数量、可用状态和治理缺口统一查看</p>
+      </div>
+
+      {/* 列宽自适应内容，不做 min-width，保证窄视口下"需关注"列始终可见 */}
+      <table aria-label="知识资产台账" className="w-full text-left text-sm text-slate-700">
+        <thead>
+          <tr className="border-b border-slate-200 text-[11px] font-medium text-slate-500">
+            <th className="px-3 py-2.5">资产类型</th>
+            <th className="px-3 py-2.5">当前规模</th>
+            <th className="px-3 py-2.5">可用资产</th>
+            <th className="px-3 py-2.5">治理中</th>
+            <th className="px-3 py-2.5">需关注</th>
+            <th className="px-3 py-2.5"><span className="sr-only">操作</span></th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          <AssetRow
+            icon={FileText}
+            label="政策文档"
+            href="/policy-knowledge/documents"
+            scale={cell(summary, (data) => <AssetNumber value={data.documents_count} />, 'h-5 w-8')}
+            available={cell(summary, (data) => <Pill tone="good">{Math.max(0, data.documents_count - data.documents_raw)} 已完成解析</Pill>, 'h-5 w-20')}
+            governing={cell(summary, (data) => `${data.documents_raw} 待解析`, 'h-4 w-14')}
+            attention={<span className="text-slate-300">—</span>}
+          />
+          <AssetRow
+            icon={ScanText}
+            label="政策单元"
+            href="/policy-knowledge/units"
+            scale={cell(summary, (data) => <AssetNumber value={data.units_count} />, 'h-5 w-8')}
+            available={cell(summary, (data) => <Pill tone="good">{data.units_audited} 已审核</Pill>, 'h-5 w-16')}
+            governing={<span className="text-slate-300">—</span>}
+            attention={cell(summary, (data) => data.units_pending > 0 ? <Pill tone="warn">{data.units_pending} 待审核</Pill> : <Pill tone="good">无积压</Pill>, 'h-5 w-14')}
+          />
+          <AssetRow
+            icon={BookOpenCheck}
+            label="结构化知识"
+            href="/policy-knowledge/knowledge/build"
+            selected
+            scale={cell(dashboard, (data) => <AssetNumber value={data.knowledge_total} sub="政策规则单元" />, 'h-5 w-10')}
+            available={cell(dashboard, (data) => data.rules_approved > 0 ? <Pill tone="good">{data.rules_approved} 已批准</Pill> : <Pill tone="warn">0 已批准</Pill>, 'h-5 w-16')}
+            governing={buildingCount === null ? <span className="text-xs text-slate-400">暂不可用</span> : `${buildingCount} 个构建任务`}
+            attention={cell(dashboard, (data) => data.rules_pending_review > 0 ? <Pill tone="warn">{data.rules_pending_review} 条待审核</Pill> : <Pill tone="good">无积压</Pill>, 'h-5 w-16')}
+            action="已展开"
+          />
+          <AssetRow
+            icon={Network}
+            label="语义资产"
+            href="/policy-knowledge/knowledge/semantic-discovery"
+            scale={cell(semantic, (data) => <AssetNumber value={data.metrics_count} sub="指标" />, 'h-5 w-10')}
+            available={cell(semantic, (data) => <Pill tone="good">{data.mapped_count} 已映射</Pill>, 'h-5 w-16')}
+            governing={cell(semantic, (data) => `映射率 ${formatRate(data.mapping_rate)}`, 'h-4 w-16')}
+            attention={cell(semantic, (data) => data.unmapped_count > 0 ? <Pill tone="warn">{data.unmapped_count} 未映射</Pill> : <Pill tone="good">全部映射</Pill>, 'h-5 w-14')}
+          />
+          <ReleaseRow release={release} pendingReleaseCount={pendingReleaseCount} />
+        </tbody>
+      </table>
+    </section>
+  )
+}
+
+/** 发布快照行：无活动版本时显示引导式空态，而不是一串 0 */
+function ReleaseRow({
+  release,
+  pendingReleaseCount,
+}: {
+  release: ReleaseState
+  pendingReleaseCount: number | null
+}) {
+  const href = '/policy-knowledge/knowledge/releases'
+
+  if (release.kind === 'none') {
     return (
-      <section aria-label="待办队列" className="rounded-xl border border-[#DCE3EC] bg-[#E5F6EC] px-5 py-4 shadow-sm">
-        <div className="flex items-center gap-2 text-sm font-medium text-[#1C8A55]">
-          <Check className="size-4" /> 暂无待办 · 流水线畅通
-        </div>
-      </section>
+      <tr className="transition-colors hover:bg-slate-50/70">
+        <td className="border-l-2 border-transparent px-3 py-3.5">
+          <Link href={href} className="inline-flex items-center gap-2.5 rounded-sm font-semibold text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+            <span className="grid size-7 place-items-center rounded-lg bg-slate-100 text-slate-600">
+              <BadgeCheck className="size-3.5" />
+            </span>
+            发布快照
+          </Link>
+        </td>
+        <td colSpan={4} className="px-3 py-3.5">
+          <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+            尚未发布版本，知识资产固化后才会生成快照
+            <Link href={href} className="font-semibold text-blue-700 hover:underline">前往发布管理 →</Link>
+          </span>
+        </td>
+        <td className="px-3 py-3.5 text-right">
+          <Link href={href} className="inline-flex items-center gap-1 rounded-sm text-xs font-semibold text-blue-700 outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+            去发布<ChevronRight className="size-3" />
+          </Link>
+        </td>
+      </tr>
     )
   }
 
   return (
-    <section aria-label="待办队列" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <TodoCard
-        href="/policy-knowledge/knowledge/review"
-        label="待审变更集"
-        value={dashReady ? pendingChangeSets : null}
-        failed={dashboard.kind === 'failed'}
-        sub="PENDING_REVIEW + NEEDS_DECISION"
-      />
-      <TodoCard
-        href="/policy-knowledge/knowledge/releases"
-        label="待发布"
-        value={pendingRelease}
-        failed={tasksFailed}
-        sub="审核通过待发布"
-      />
-      <TodoCard
-        href="/policy-knowledge/knowledge/decisions"
-        label="决策任务待处理"
-        value={decisionPending}
-        failed={dashboard.kind === 'failed'}
-        sub={
-          Object.keys(tasksByType).length > 0
-            ? Object.entries(tasksByType).map(([t, n]) => `${t} ${n}`).join(' · ')
-            : undefined
-        }
-      />
-      <TodoCard
-        href="/policy-knowledge/knowledge/review"
-        label="低置信预警"
-        value={lowConf.kind === 'ready' ? lowConf.data.count : null}
-        failed={lowConf.kind === 'failed'}
-        sub={lowConf.kind === 'ready' && lowConf.data.capped ? '<0.8 · 前 100 条中' : '置信度 <0.8'}
-      />
-    </section>
+    <AssetRow
+      icon={BadgeCheck}
+      label="发布快照"
+      href={href}
+      scale={release.kind === 'loading'
+        ? <Sk className="h-5 w-8" />
+        : release.kind === 'failed'
+          ? <span className="text-xs text-slate-400">暂不可用</span>
+          : <AssetNumber value={1} sub="活动版本" />}
+      available={release.kind === 'loading'
+        ? <Sk className="h-5 w-24" />
+        : release.kind === 'failed'
+          ? <span className="text-xs text-slate-400">暂不可用</span>
+          : <Pill tone="good"><span className="font-mono">{release.data.release_id}</span></Pill>}
+      governing={pendingReleaseCount === null ? <span className="text-xs text-slate-400">暂不可用</span> : `${pendingReleaseCount} 待发布`}
+      attention={<Pill tone="good">质量门禁正常</Pill>}
+    />
   )
 }
 
-function TodoCard({
-  href, label, value, sub, failed,
+function AssetRow({
+  icon: Icon,
+  label,
+  href,
+  scale,
+  available,
+  governing,
+  attention,
+  selected = false,
+  action = '查看',
 }: {
-  href: string
+  icon: ComponentType<{ className?: string }>
   label: string
-  value: number | null
-  sub?: string
-  failed: boolean
+  href: string
+  scale: ReactNode
+  available: ReactNode
+  governing: ReactNode
+  attention: ReactNode
+  selected?: boolean
+  action?: string
 }) {
-  const hot = (value ?? 0) > 0
+  const iconClass = selected
+    ? 'grid size-7 place-items-center rounded-lg bg-blue-600 text-white'
+    : 'grid size-7 place-items-center rounded-lg bg-slate-100 text-slate-600'
+
   return (
-    <Link href={href} className="block group" aria-label={`待办-${label}`}>
-      <div
-        className="rounded-xl border border-[#DCE3EC] bg-white px-4 py-3 shadow-sm transition-shadow hover:shadow-md"
-        style={{ borderLeft: `4px solid ${hot ? WARNING : '#DCE3EC'}` }}
-      >
-        <div className="flex items-center gap-2">
-          <ListTodo className="size-3.5" style={{ color: hot ? WARNING : MUTED }} />
-          <span className="text-xs text-slate-500">{label}</span>
-          <span className="ml-auto font-mono text-lg font-bold" style={{ color: hot ? WARNING : MUTED }}>
-            {value === null ? (failed ? '—' : '…') : value}
+    <tr className={`transition-colors ${selected ? 'bg-blue-50/90' : 'hover:bg-slate-50/70'}`}>
+      <td className={`px-3 py-3.5 ${selected ? 'border-l-2 border-blue-600' : 'border-l-2 border-transparent'}`}>
+        <Link href={href} className="inline-flex items-center gap-2.5 rounded-sm font-semibold text-slate-900 outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+          <span className={iconClass}>
+            <Icon className="size-3.5" />
           </span>
-        </div>
-        {failed && <div className="mt-1 text-[10px] text-slate-400">暂不可用</div>}
-        {!failed && sub && <div className="mt-1 truncate text-[10px] text-slate-400" title={sub}>{sub}</div>}
-      </div>
-    </Link>
+          {label}
+        </Link>
+      </td>
+      <td className="px-3 py-3.5">{scale}</td>
+      <td className="px-3 py-3.5">{available}</td>
+      <td className="px-3 py-3.5">{governing}</td>
+      <td className="px-3 py-3.5">{attention}</td>
+      <td className="px-3 py-3.5 text-right">
+        <Link href={href} className="inline-flex items-center gap-1 rounded-sm text-xs font-semibold text-blue-700 outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+          {action}<ChevronRight className={`size-3 ${selected ? 'rotate-90' : ''}`} />
+        </Link>
+      </td>
+    </tr>
   )
 }
 
-// ═══════════════ C. 统计卡 ═══════════════
-
-function StatCard({
-  href, icon: Icon, color, label, value, sub,
-}: {
-  href: string
-  icon: React.ComponentType<{ className?: string }>
-  color: string
-  label: string
-  value: number
-  sub?: string
-}) {
+function AssetNumber({ value, sub }: { value: number; sub?: string }) {
   return (
-    <Link href={href} className="block group">
-      <div className="rounded-xl border border-[#DCE3EC] bg-white px-5 py-4 shadow-sm transition-shadow hover:shadow-md">
-        <div className="mb-2 flex items-center gap-2" style={{ color }}>
-          <Icon className="size-4" />
-          <span className="text-xs text-slate-500">{label}</span>
-        </div>
-        <div className="font-mono text-2xl font-bold" style={{ color }}>{value}</div>
-        {sub && <div className="mt-1 text-xs text-slate-400">{sub}</div>}
-      </div>
-    </Link>
+    <span>
+      <strong className="font-mono text-lg font-bold tabular-nums text-slate-900">{value}</strong>
+      {sub && <small className="mt-0.5 block text-[10px] text-slate-500">{sub}</small>}
+    </span>
   )
 }
 
-function StatCardPlaceholder({ state, label }: { state: BlockState<unknown>; label: string }) {
-  return (
-    <div className="rounded-xl border border-[#DCE3EC] bg-white px-5 py-4 shadow-sm">
-      <div className="mb-2 text-xs text-slate-500">{label}</div>
-      <div className="text-sm text-slate-400">{state.kind === 'failed' ? '暂不可用' : '加载中'}</div>
-    </div>
-  )
-}
+/* ---------------------------------- 结构化知识 ---------------------------------- */
 
-// ═══════════════ D. 生命周期分布 ═══════════════
+const COMPILE_SEGMENTS = [
+  ['PASS', 'bg-emerald-500', 'bg-emerald-500'],
+  ['WARN', 'bg-amber-400', 'bg-amber-400'],
+  ['REVIEW', 'bg-orange-500', 'bg-orange-500'],
+  ['FAIL', 'bg-red-500', 'bg-red-500'],
+] as const
 
-const LC_BAR: { key: string; label: string; color: string }[] = [
-  { key: 'draft', label: '待审 Draft', color: '#94A3B8' },
-  { key: 'reviewed', label: '待发布 Review', color: WARNING },
-  { key: 'published', label: '已发布 Published', color: SUCCESS },
-  { key: 'rejected', label: '已驳回', color: DANGER },
-]
-
-function LifecycleBar({ summary }: { summary: BlockState<PipelineSummary> }) {
-  if (summary.kind === 'loading') {
-    return <BlockPending label="知识生命周期分布" icon={GitBranch} />
-  }
-  if (summary.kind === 'failed') {
-    return <BlockFailed label="知识生命周期分布" icon={GitBranch} />
-  }
-  const d = summary.data
-  const rejected = Math.max(0, d.extractions_count - d.extractions_draft - d.extractions_reviewed - d.extractions_published)
-  const lcCounts: Record<string, number> = {
-    draft: d.extractions_draft,
-    reviewed: d.extractions_reviewed,
-    published: d.extractions_published,
-    rejected,
-  }
-  const lcTotal = d.extractions_count || 1
-
-  return (
-    <section aria-label="知识生命周期分布" className="rounded-xl border border-[#DCE3EC] bg-white p-6 shadow-sm">
-      <div className="mb-4 flex items-center gap-2">
-        <GitBranch className="size-4 text-[#4F46E5]" />
-        <h3 className="text-sm font-semibold text-slate-700">知识生命周期分布</h3>
-        <span className="ml-auto text-xs text-slate-400">共 {d.extractions_count} 条</span>
-      </div>
-      <div className="mb-3 flex h-3 w-full overflow-hidden rounded-full bg-[#EEF1F5]">
-        {LC_BAR.map((b) => {
-          const cnt = lcCounts[b.key] || 0
-          const pct = (cnt / lcTotal) * 100
-          return pct > 0 ? (
-            <div key={b.key} style={{ width: `${pct}%`, backgroundColor: b.color }} title={`${b.label}: ${cnt}`} />
-          ) : null
-        })}
-      </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {LC_BAR.map((b) => (
-          <div key={b.key} className="flex items-center gap-1.5">
-            <span className="size-2.5 rounded-sm" style={{ backgroundColor: b.color }} />
-            <span className="text-[11px] text-slate-500">{b.label}</span>
-            <span className="ml-auto font-mono text-sm font-semibold text-slate-700">{lcCounts[b.key] || 0}</span>
-          </div>
-        ))}
-      </div>
-      <div className="mt-3 flex items-center gap-1.5 rounded-lg bg-[#F6F8FB] px-3 py-2 text-[11px] text-slate-500">
-        <span className="rounded bg-violet-100 px-1.5 py-0.5 text-violet-700">已替代</span>
-        <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-zinc-600">已废止</span>
-        两态随版本治理接入（V2.1 §3.1），当前数据暂未承载。
-      </div>
-    </section>
-  )
-}
-
-// ═══════════════ E. 标化概览（设计.pen 右栏四格）═══════════════════
-
-function SemanticStrip({ semantic }: { semantic: BlockState<SemanticSummary> }) {
-  if (semantic.kind === 'loading') {
-    return <BlockPending label="标化概览" icon={SlidersHorizontal} />
-  }
-  if (semantic.kind === 'failed') {
-    return <BlockFailed label="标化概览" icon={SlidersHorizontal} />
-  }
-  const s = semantic.data
-  const cells: { label: string; value: string; color: string }[] = [
-    { label: '已映射', value: String(s.mapped_count), color: SUCCESS },
-    { label: '未映射', value: String(s.unmapped_count), color: PRIMARY },
-    { label: '映射率', value: `${(s.mapping_rate ?? 0).toFixed(1)}%`, color: '#1F2A37' },
-    { label: '指标总数', value: String(s.metrics_count), color: MUTED },
-  ]
-  return (
-    <Link href="/semantic-layer" className="block group" aria-label="标化概览">
-      <section className="h-full rounded-xl border border-[#DCE3EC] bg-white p-6 shadow-sm transition-shadow group-hover:shadow-md">
-        <div className="mb-4 flex items-center gap-2">
-          <SlidersHorizontal className="size-4 text-[#1E5AA8]" />
-          <h3 className="text-sm font-semibold text-slate-700">标化概览</h3>
-          <span className="ml-auto text-[11px] text-slate-400">语义层 · 只读跨链 →</span>
-        </div>
-        <div className="flex overflow-hidden rounded-lg border border-[#DCE3EC]">
-          {cells.map((c, i) => (
-            <div
-              key={c.label}
-              className="flex-1 px-3 py-2.5"
-              style={i < cells.length - 1 ? { borderRight: '1px solid #DCE3EC' } : undefined}
-            >
-              <div className="text-[10px] text-slate-400">{c.label}</div>
-              <div className="mt-0.5 font-mono text-base font-bold" style={{ color: c.color }}>{c.value}</div>
-            </div>
-          ))}
-        </div>
-        <p className="mt-3 text-[11px] text-slate-400">映射管理在语义层进行，本页仅只读跨链（V2.1 §5.6）。</p>
-      </section>
-    </Link>
-  )
-}
-
-// ═══════════════ F. 质量与风险 ═══════════════
-
-const RISK_LEVELS: { key: string; label: string; color: string }[] = [
-  { key: 'LOW', label: '低', color: SUCCESS },
-  { key: 'MEDIUM', label: '中', color: WARNING },
-  { key: 'HIGH', label: '高', color: '#C2410C' },
-  { key: 'CRITICAL', label: '严重', color: DANGER },
-]
-
-function QualityRiskPanel({
-  dashboard, qualityRun, release,
+function KnowledgeAssetDetail({
+  dashboard,
+  semantic,
+  buildingCount,
+  pendingReleaseCount,
+  reviewChangeSets,
 }: {
   dashboard: BlockState<GovernanceDashboard>
-  qualityRun: BlockState<QualityRun> | { kind: 'none' }
-  release: ReleaseState
+  semantic: BlockState<SemanticSummary>
+  buildingCount: number | null
+  pendingReleaseCount: number | null
+  reviewChangeSets: number
 }) {
-  if (dashboard.kind === 'loading') {
-    return <BlockPending label="质量与风险" icon={Gauge} />
-  }
-  if (dashboard.kind === 'failed') {
-    return <BlockFailed label="质量与风险" icon={Gauge} />
-  }
-  const dash = dashboard.data
+  const data = dashboard.kind === 'ready' ? dashboard.data : null
+  const compile = data?.compilation_by_status ?? {}
+  const compileTotal = COMPILE_SEGMENTS.reduce((sum, [status]) => sum + (compile[status] ?? 0), 0)
+  const hasCompilerBlocker = (compile.REVIEW ?? 0) > 0 || (compile.FAIL ?? 0) > 0
+
   return (
-    <section aria-label="质量与风险" className="rounded-xl border border-[#DCE3EC] bg-white p-6 shadow-sm">
-      <div className="mb-4 flex items-center gap-2">
-        <Gauge className="size-4 text-[#1E5AA8]" />
-        <h3 className="text-sm font-semibold text-slate-700">质量与风险</h3>
+    <section aria-label="结构化知识详情" className="rounded-2xl border border-slate-200 bg-white px-5 py-5 sm:px-6">
+      <div className="mb-4 flex flex-wrap items-baseline gap-3">
+        <h3 className="text-base font-semibold text-slate-900">结构化知识</h3>
+        <p className="text-xs text-slate-500">选中资产的生产状态与工作入口</p>
+        <Link href="/policy-knowledge/knowledge/build" className="ml-auto inline-flex items-center gap-1 rounded-sm text-xs font-semibold text-blue-700 outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+          进入知识工作台<ChevronRight className="size-3" />
+        </Link>
       </div>
-      <div className="flex flex-col gap-4">
-        <MetricTrack label="平均来源保真度" value={dash.avg_source_fidelity} />
-        <MetricTrack label="平均完整度" value={dash.avg_completeness} />
-        <div className="flex items-center gap-2">
-          <AlertTriangle className="size-3.5 text-slate-400" />
-          <span className="text-xs text-slate-500">风险摘要</span>
-          <span className="ml-auto flex gap-1.5">
-            {RISK_LEVELS.map((r) => (
+
+      <div className="flex flex-wrap items-baseline gap-2">
+        <h4 className="text-sm font-semibold text-slate-800">知识编译管线</h4>
+        <p className="text-[11px] text-slate-500">七个实际阶段 · 状态按当前变更规则汇总</p>
+        <div className="ml-auto flex flex-wrap gap-3 font-mono text-[10px] font-semibold tabular-nums">
+          {dashboard.kind === 'loading' ? (
+            <Sk className="h-3 w-40" />
+          ) : dashboard.kind === 'failed' ? (
+            <span className="text-slate-400">暂不可用</span>
+          ) : compileTotal === 0 ? (
+            <span className="text-slate-400">暂无编译记录</span>
+          ) : (
+            COMPILE_SEGMENTS.map(([status, , dot]) => (
+              <span key={status} className="inline-flex items-center gap-1 text-slate-600">
+                <span aria-hidden className={`size-1.5 rounded-full ${dot}`} />
+                {status} {compile[status] ?? 0}
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* 编译状态分布条：一眼看出 REVIEW / FAIL 阻断面 */}
+      <div className="mt-3">
+        {dashboard.kind === 'loading' ? (
+          <Sk className="h-2 w-full rounded-full" />
+        ) : dashboard.kind === 'failed' || compileTotal === 0 ? (
+          <div className="h-2 rounded-full bg-slate-100" />
+        ) : (
+          <div className="flex h-2 overflow-hidden rounded-full bg-slate-100" role="img" aria-label="编译状态分布">
+            {COMPILE_SEGMENTS.filter(([status]) => (compile[status] ?? 0) > 0).map(([status, bar]) => (
               <span
-                key={r.key}
-                className="rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold"
-                style={{ backgroundColor: '#F6F8FB', color: r.color }}
-                title={r.key}
-              >
-                {r.label} {dash.risk_summary?.[r.key] ?? 0}
-              </span>
+                key={status}
+                className={bar}
+                style={{ width: `${((compile[status] ?? 0) / compileTotal) * 100}%` }}
+                title={`${status} ${compile[status] ?? 0}`}
+              />
             ))}
+          </div>
+        )}
+      </div>
+
+      <StageRail
+        className="mt-4"
+        stages={PIPELINE_STAGES.map(([label, code]) => ({ label, sub: code, tone: 'ok' as const }))}
+      />
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-dashed border-slate-200 pt-3 text-[11px] text-slate-500">
+        {dashboard.kind !== 'ready' ? (
+          <Sk className="h-3 w-48" />
+        ) : hasCompilerBlocker ? (
+          <span className="inline-flex items-center gap-1.5">
+            <AlertTriangle className="size-3.5 text-amber-600" />
+            <span><strong className="text-amber-700">REVIEW / FAIL 会阻断正式发布</strong>，请先在知识审核中处理。</span>
           </span>
+        ) : (
+          <span>当前没有编译阻断。</span>
+        )}
+        <Link href="/policy-knowledge/knowledge/review" className="ml-auto font-semibold text-blue-700">查看需复核项 →</Link>
+      </div>
+
+      <div className="mt-5 border-t border-slate-100 pt-4">
+        <h4 className="mb-3 text-sm font-semibold text-slate-800">知识工作域</h4>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <WorkspaceCard href="/policy-knowledge/knowledge/build" label="知识构建" description="从审核单元生成知识变更" state={buildingCount === null ? '暂不可用' : `${buildingCount} 运行中`} />
+          <WorkspaceCard href="/policy-knowledge/knowledge/review" label="知识审核" description="审查新增、修改、替代与失效" state={dashboard.kind === 'failed' ? '暂不可用' : `${reviewChangeSets} 变更集`} hot={reviewChangeSets > 0} />
+          <WorkspaceCard href="/policy-knowledge/knowledge/releases" label="发布管理" description="候选版本、质量门禁与快照" state={pendingReleaseCount === null ? '暂不可用' : `${pendingReleaseCount} 待发布`} hot={(pendingReleaseCount ?? 0) > 0} />
+          <WorkspaceCard href="/policy-knowledge/knowledge/semantic-discovery" label="语义发现" description="指标与值域候选治理" state={semantic.kind === 'ready' ? `${semantic.data.unmapped_count} 未映射` : semantic.kind === 'failed' ? '暂不可用' : '加载中'} hot={semantic.kind === 'ready' && semantic.data.unmapped_count > 0} />
         </div>
-        <div className="flex items-center gap-2 border-t border-[#F6F8FB] pt-3">
-          <ShieldCheck className="size-3.5 text-slate-400" />
-          <span className="text-xs text-slate-500">最近质量门禁</span>
-          <span className="ml-auto text-xs">
-            {qualityRun.kind === 'ready' ? (
-              <span className="font-mono font-semibold" style={{ color: qualityRun.data.status === 'passed' ? SUCCESS : qualityRun.data.status === 'failed' ? DANGER : WARNING }}>
-                {qualityRun.data.status}
-                {qualityRun.data.candidate_score !== null && ` · ${(qualityRun.data.candidate_score * 100).toFixed(0)}%`}
-              </span>
-            ) : qualityRun.kind === 'none' ? (
-              <span className="text-slate-400">{release.kind === 'none' ? '未发布' : '暂无'}</span>
-            ) : qualityRun.kind === 'failed' ? (
-              <span className="text-slate-400">暂不可用</span>
-            ) : (
-              <span className="text-slate-400">加载中</span>
-            )}
-          </span>
+      </div>
+    </section>
+  )
+}
+
+function WorkspaceCard({
+  href,
+  label,
+  description,
+  state,
+  hot = false,
+}: {
+  href: string
+  label: string
+  description: string
+  state: string
+  hot?: boolean
+}) {
+  return (
+    <Link
+      href={href}
+      className="group rounded-xl border border-slate-200 p-3.5 transition-all hover:border-blue-300 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+    >
+      <span className="flex items-center justify-between gap-2">
+        <strong className="text-xs font-semibold text-slate-800 group-hover:text-blue-700">{label}</strong>
+        <span className={`shrink-0 text-xs font-semibold ${hot ? 'text-amber-700' : 'text-blue-700'}`}>{state}</span>
+      </span>
+      <small className="mt-1 block text-[10px] text-slate-500">{description}</small>
+    </Link>
+  )
+}
+
+/* ---------------------------------- 治理进度 ---------------------------------- */
+
+type StageTone = 'ok' | 'done' | 'hot' | 'idle'
+
+const STAGE_DOT: Record<StageTone, string> = {
+  ok: 'border-[3px] border-blue-100 bg-blue-600',
+  done: 'border-2 border-emerald-600 bg-emerald-600 shadow-[inset_0_0_0_3px_white]',
+  hot: 'border-2 border-amber-600 bg-amber-50',
+  idle: 'border-2 border-slate-300 bg-white',
+}
+
+/** 阶段轨道：节点 flex-1 自适应收缩，不做 min-width，任何视口都不截断 */
+function StageRail({
+  stages,
+  className = '',
+}: {
+  stages: Array<{ label: string; sub?: ReactNode; tone: StageTone }>
+  className?: string
+}) {
+  return (
+    <ol className={`flex items-start ${className}`}>
+      {stages.map((stage, index) => (
+        <li key={stage.label} className="relative min-w-0 flex-1 text-center">
+          {index > 0 && <span aria-hidden className="absolute left-0 right-1/2 top-[7px] h-px bg-slate-200" />}
+          {index < stages.length - 1 && <span aria-hidden className="absolute left-1/2 right-0 top-[7px] h-px bg-slate-200" />}
+          <span className={`relative z-10 mx-auto block size-3.5 rounded-full ${STAGE_DOT[stage.tone]}`} />
+          <span className="mt-2 block truncate px-1 text-[11px] font-semibold text-slate-700">{stage.label}</span>
+          {stage.sub !== undefined && (
+            <span className="mt-0.5 block truncate px-1 font-mono text-[9px] text-slate-400">{stage.sub}</span>
+          )}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function GovernanceStatus({
+  summary,
+  dashboard,
+  semantic,
+  release,
+  buildingCount,
+  reviewChangeSets,
+  pendingChangeSets,
+}: {
+  summary: BlockState<PipelineSummary>
+  dashboard: BlockState<GovernanceDashboard>
+  semantic: BlockState<SemanticSummary>
+  release: ReleaseState
+  buildingCount: number | null
+  reviewChangeSets: number
+  pendingChangeSets: number
+}) {
+  const compilationReview = dashboard.kind === 'ready'
+    ? (dashboard.data.compilation_by_status.REVIEW ?? 0) + (dashboard.data.compilation_by_status.FAIL ?? 0)
+    : null
+
+  const stageOf = (backlog: number | null, text: string): { tone: StageTone; sub: ReactNode } => ({
+    tone: backlog !== null && backlog > 0 ? 'hot' : 'idle',
+    sub: <span className={backlog !== null && backlog > 0 ? 'font-semibold text-amber-700' : ''}>{text}</span>,
+  })
+
+  const stages = [
+    { label: '文档', ...stageOf(summary.kind === 'ready' ? summary.data.documents_raw : null, summary.kind === 'ready' ? `${summary.data.documents_raw} 待解析` : summary.kind === 'failed' ? '暂不可用' : '加载中') },
+    { label: '单元', ...stageOf(summary.kind === 'ready' ? summary.data.units_pending : null, summary.kind === 'ready' ? `${summary.data.units_pending} 待审核` : summary.kind === 'failed' ? '暂不可用' : '加载中') },
+    { label: '知识', ...stageOf(buildingCount, buildingCount === null ? '暂不可用' : `${buildingCount} 构建中`) },
+    { label: '审核', ...stageOf(dashboard.kind === 'ready' ? reviewChangeSets : null, dashboard.kind === 'failed' ? '暂不可用' : dashboard.kind === 'loading' ? '加载中' : `${reviewChangeSets} 变更集`) },
+    {
+      label: '发布',
+      tone: (release.kind === 'active' ? 'done' : 'idle') as StageTone,
+      sub: release.kind === 'active' ? '活动版本正常' : release.kind === 'none' ? '尚未发布' : release.kind === 'failed' ? '暂不可用' : '加载中',
+    },
+  ]
+
+  return (
+    <section aria-label="治理进度" className="rounded-2xl border border-slate-200 bg-white px-5 py-5 sm:px-6">
+      {/* min-w-0 防止子元素把 grid 列撑爆后与右栏重叠 */}
+      <div className="grid gap-7 lg:grid-cols-[minmax(0,1.8fr)_minmax(280px,.72fr)]">
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-3">
+            <h3 className="text-base font-semibold text-slate-900">治理进度</h3>
+            <p className="text-xs text-slate-500">只显示各阶段当前积压，不重复资产总量</p>
+          </div>
+          <StageRail className="mt-5" stages={stages} />
         </div>
+
+        <section aria-label="当前需要处理" className="min-w-0 border-t border-slate-200 pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+          <h4 className="mb-1 text-sm font-semibold text-slate-800">当前需要处理</h4>
+          <AttentionRow label="编译结果需人工复核" value={compilationReview} href="/policy-knowledge/knowledge/review" />
+          <AttentionRow label="待审核知识变更集" value={dashboard.kind === 'ready' ? pendingChangeSets : null} href="/policy-knowledge/knowledge/review" />
+          <AttentionRow label="语义指标尚未映射" value={semantic.kind === 'ready' ? semantic.data.unmapped_count : null} href="/policy-knowledge/knowledge/semantic-discovery" />
+        </section>
       </div>
     </section>
   )
 }
 
-function MetricTrack({ label, value }: { label: string; value: number | null }) {
+function AttentionRow({ label, value, href }: { label: string; value: number | null; href: string }) {
+  const hot = value !== null && value > 0
   return (
-    <div className="flex items-center gap-3">
-      <span className="w-28 shrink-0 text-xs text-slate-500">{label}</span>
-      {value === null || value === undefined ? (
-        <span className="text-xs text-slate-400">暂无数据</span>
-      ) : (
-        <>
-          <span className="h-[5px] flex-1 overflow-hidden rounded-full bg-[#EEF1F5]">
-            <span
-              className="block h-full rounded-full"
-              style={{ width: `${Math.round(value * 100)}%`, backgroundColor: value >= 0.8 ? SUCCESS : value >= 0.6 ? WARNING : DANGER }}
-            />
-          </span>
-          <span className="w-10 text-right font-mono text-xs font-semibold text-slate-700">
-            {(value * 100).toFixed(0)}%
-          </span>
-        </>
-      )}
-    </div>
-  )
-}
-
-// ═══════════════ G. 影响分析（占位）═══════════════
-
-function ImpactPlaceholder() {
-  return (
-    <section aria-label="影响分析" className="rounded-xl border border-dashed border-[#C3D0E2] bg-white p-6 shadow-sm">
-      <div className="mb-4 flex items-center gap-2">
-        <Activity className="size-4 text-[#4F46E5]" />
-        <h3 className="text-sm font-semibold text-slate-700">影响分析</h3>
-        <span className="ml-auto rounded bg-[#EEF1F5] px-1.5 py-0.5 text-[10px] text-slate-500">待接入</span>
-      </div>
-      <p className="text-xs leading-relaxed text-slate-500">
-        政策变更 → 定位受影响 Unit → 关联 Knowledge → 经提取契约反查 Metric（止于此，Skill/Agent 独立消费）。
-        影响链 <code className="rounded bg-[#F6F8FB] px-1 font-mono text-[10px]">Document → Unit → Knowledge → Metric</code>{' '}
-        随 <code className="rounded bg-[#F6F8FB] px-1 font-mono text-[10px]">policy-pipeline/impact/recent</code> 接口接入（Phase 2）。
-      </p>
-    </section>
-  )
-}
-
-// ═══════════════ 通用：区块降级 ═══════════════
-
-function BlockPending({ label, icon: Icon }: { label: string; icon: React.ComponentType<{ className?: string }> }) {
-  return (
-    <section aria-label={label} className="rounded-xl border border-[#DCE3EC] bg-white p-6 shadow-sm">
-      <div className="flex items-center gap-2 text-sm text-slate-400">
-        <Icon className="size-4 animate-pulse" />
-        {label} · 加载中
-      </div>
-    </section>
-  )
-}
-
-function BlockFailed({ label, icon: Icon }: { label: string; icon: React.ComponentType<{ className?: string }> }) {
-  return (
-    <section aria-label={label} className="rounded-xl border border-dashed border-[#C3D0E2] bg-white p-6 shadow-sm">
-      <div className="flex items-center gap-2 text-sm text-slate-400">
-        <Icon className="size-4" />
-        {label} · 暂不可用
-      </div>
-    </section>
+    <Link
+      href={href}
+      className="group flex min-h-11 items-center gap-3 rounded-lg border-b border-slate-100 px-2 transition-colors last:border-b-0 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+    >
+      <span className="text-xs text-slate-600 group-hover:text-slate-800">{label}</span>
+      <strong className={`ml-auto font-mono text-base tabular-nums ${hot ? 'text-amber-700' : 'text-slate-300'}`}>
+        {value === null ? '—' : value}
+      </strong>
+      <ChevronRight className="size-3.5 text-slate-300 transition-colors group-hover:text-blue-600" />
+    </Link>
   )
 }

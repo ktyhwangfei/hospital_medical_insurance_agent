@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS policy_knowledge_releases (
     quality_run_id VARCHAR(64),
     quality_score DOUBLE PRECISION,
     consistency_score DOUBLE PRECISION,
+    build_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     promoted_at TIMESTAMPTZ,
     promoted_by VARCHAR(128)
@@ -113,6 +114,21 @@ SELECT EXISTS (
 RELEASE_QUALITY_RUN_ID_MIGRATION_SQL = """
 ALTER TABLE policy_knowledge_releases
 ADD COLUMN IF NOT EXISTS quality_run_id VARCHAR(64)
+"""
+
+RELEASE_BUILD_ERROR_COLUMN_QUERY = """
+SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'policy_knowledge_releases'
+      AND column_name = 'build_error'
+) AS exists
+"""
+
+RELEASE_BUILD_ERROR_MIGRATION_SQL = """
+ALTER TABLE policy_knowledge_releases
+ADD COLUMN IF NOT EXISTS build_error TEXT
 """
 
 QUALITY_RUN_SEQUENCE_COLUMN_QUERY = """
@@ -237,6 +253,11 @@ class PostgresPolicyQualityStore:
                 RELEASE_QUALITY_RUN_ID_COLUMN_QUERY,
                 RELEASE_QUALITY_RUN_ID_MIGRATION_SQL,
             )
+            _run_bounded_column_migration(
+                client,
+                RELEASE_BUILD_ERROR_COLUMN_QUERY,
+                RELEASE_BUILD_ERROR_MIGRATION_SQL,
+            )
             _migrate_quality_run_sequence(client)
         except BaseException:
             try:
@@ -298,11 +319,12 @@ class PostgresPolicyQualityStore:
             """INSERT INTO policy_knowledge_releases
                (release_id,status,facts_collection,rules_collection,contract_version,
                 case_set_version,config_hash,source_change_set_id,quality_run_id,quality_score,
-                consistency_score,created_at,promoted_at,promoted_by)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                consistency_score,build_error,created_at,promoted_at,promoted_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (release_id) DO UPDATE SET status=EXCLUDED.status,
                quality_run_id=EXCLUDED.quality_run_id,
                quality_score=EXCLUDED.quality_score,consistency_score=EXCLUDED.consistency_score,
+               build_error=EXCLUDED.build_error,
                promoted_at=EXCLUDED.promoted_at,promoted_by=EXCLUDED.promoted_by
                WHERE policy_knowledge_releases.facts_collection = EXCLUDED.facts_collection
                AND policy_knowledge_releases.rules_collection = EXCLUDED.rules_collection
@@ -318,7 +340,7 @@ class PostgresPolicyQualityStore:
                 release.case_set_version, release.config_hash,
                 release.source_change_set_id, release.quality_run_id,
                 release.quality_score,
-                release.consistency_score, release.created_at,
+                release.consistency_score, release.build_error, release.created_at,
                 release.promoted_at, release.promoted_by,
             ),
         )
@@ -331,8 +353,8 @@ class PostgresPolicyQualityStore:
             """INSERT INTO policy_knowledge_releases
                (release_id,status,facts_collection,rules_collection,contract_version,
                 case_set_version,config_hash,source_change_set_id,quality_run_id,quality_score,
-                consistency_score,created_at,promoted_at,promoted_by)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                consistency_score,build_error,created_at,promoted_at,promoted_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (release_id) DO NOTHING RETURNING *""",
             (
                 release.release_id, release.status, release.facts_collection,
@@ -340,7 +362,7 @@ class PostgresPolicyQualityStore:
                 release.case_set_version, release.config_hash,
                 release.source_change_set_id, release.quality_run_id,
                 release.quality_score,
-                release.consistency_score, release.created_at,
+                release.consistency_score, release.build_error, release.created_at,
                 release.promoted_at, release.promoted_by,
             ),
         )

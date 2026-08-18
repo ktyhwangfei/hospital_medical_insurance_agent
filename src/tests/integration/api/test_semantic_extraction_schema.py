@@ -28,7 +28,7 @@ def test_unknown_object_returns_404(client):
 
 
 def test_zcgz_contract_returns_all_seed_fields_after_publish(client):
-    """P8.3：种子后 zcgz 自动发布，契约应返回全部 19 字段 + 5 政策字典。
+    """种子后 zcgz 自动发布，契约应返回当前完整字段 + 5 政策字典。
 
     [来源: docs/steering/政策知识管线设计计划.md Phase 8.3 — zcgz 指标 published + value_domain]
     收口标准：契约含全部字段。
@@ -36,9 +36,9 @@ def test_zcgz_contract_returns_all_seed_fields_after_publish(client):
     r = client.get(f"{BASE}/objects/zcgz/extraction-schema")
     assert r.status_code == 200
     data = r.json()
-    # 19 个 zcgz 字段全部进契约
     codes = {f["code"] for f in data["fields"]}
-    assert len(data["fields"]) == 19, f"期望 19 字段，实际 {len(data['fields'])}"
+    assert len(data["fields"]) == 22, f"期望 22 字段，实际 {len(data['fields'])}"
+    assert {"personal_payment_ratio", "personal_payment_coefficient", "referenced_clause"} <= codes
     # 核心检索维度带索引 + 值域
     insu = next(f for f in data["fields"] if f["code"] == "insu_type")
     assert insu["indexed"] is True
@@ -53,11 +53,8 @@ def test_zcgz_contract_returns_all_seed_fields_after_publish(client):
     assert data["relations"] == []
 
 
-def test_zcgz_contract_returns_published_field(client):
-    """手动覆盖一条 zcgz 指标的 extraction_hint，验证契约透传最新值。
-
-    P8.3 后 zcgz 种子即 published，此测试改为验证契约透传运行时覆写。
-    """
+def test_zcgz_contract_ignores_live_metric_changes_until_next_publish(client):
+    """运行时契约锁定最新发布快照，live metric 修改不能污染已发布版本。"""
     reg = reg_mod.get_semantic_registry()
     store = reg._store
     m = store.get_metric("zcgz.insu_type")
@@ -69,4 +66,4 @@ def test_zcgz_contract_returns_published_field(client):
     r = client.get(f"{BASE}/objects/zcgz/extraction-schema")
     assert r.status_code == 200
     insu = next(f for f in r.json()["fields"] if f["code"] == "insu_type")
-    assert insu["extraction_hint"] == "城镇职工/城乡居民"
+    assert insu["extraction_hint"] != "城镇职工/城乡居民"

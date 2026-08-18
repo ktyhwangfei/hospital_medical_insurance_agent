@@ -69,9 +69,15 @@ def test_build_prompt_schema_mode_uses_live_contract(monkeypatch):
     from src.semantic_layer import registry as reg
     from src.semantic_layer.extraction_contract import ExtractionSchema, FieldContract
 
-    fake_schema = ExtractionSchema(
-        fields=[FieldContract(code="payment_ratio", name="支付比例")]
-    )
+    base_codes = {
+        "rule_id", "fact_id", "policy_id", "clause_id", "source_text",
+        "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+        "payment_ratio", "deductible_amount", "cap_amount", "time_period",
+        "admission_order", "amount_band", "priority", "rule_type", "rule_value",
+    }
+    fake_schema = ExtractionSchema(fields=[
+        FieldContract(code=code, name=code) for code in base_codes
+    ])
     monkeypatch.setattr(reg, "create_registry", lambda: object())
     monkeypatch.setattr(ec, "build_extraction_schema", lambda r, code: fake_schema)
     monkeypatch.setattr(
@@ -83,6 +89,23 @@ def test_build_prompt_schema_mode_uses_live_contract(monkeypatch):
         "政策正文", "标题", ExtractionOverride(prompt_mode="schema")
     )
     assert prompt == "SCHEMA(标题)"
+
+
+def test_build_prompt_schema_falls_back_when_contract_only_has_dynamic_field(monkeypatch):
+    """单独发布 jjgs 不能把完整政策规则契约截断成单字段。"""
+    from src.semantic_layer import extraction_contract as ec
+    from src.semantic_layer import registry as reg
+
+    partial = ec.ExtractionSchema(fields=[
+        ec.FieldContract(code="jjgs", name="基金归属"),
+    ])
+    monkeypatch.setattr(reg, "create_registry", lambda: object())
+    monkeypatch.setattr(ec, "build_extraction_schema", lambda r, code: partial)
+
+    prompt = PipelineOrchestrator()._build_fact_extraction_prompt("最高支付限额10万元", "标题")
+
+    assert "19 个必填字段" in prompt
+    assert "cap_amount" in prompt
 
 
 def test_build_prompt_schema_falls_back_when_contract_empty(monkeypatch):

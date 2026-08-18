@@ -103,7 +103,15 @@ class KnowledgeWorkbenchReleaseSource:
         })
         for name, value in rule.result.items():
             if name == "ratio":
-                payload[rule.subject] = value
+                if rule.subject == "personal_payment_ratio":
+                    field = "personal_payment_ratio"
+                elif rule.subject == "payment_ratio" or rule.subject.endswith(
+                    ("_payment_ratio", "_reimbursement_ratio")
+                ):
+                    field = "payment_ratio"
+                else:
+                    field = rule.subject
+                payload[field] = value
             elif name == "amount":
                 field = rule.subject if rule.subject.endswith("_amount") else f"{rule.subject}_amount"
                 payload[field] = value
@@ -192,7 +200,10 @@ class ReleaseIndexBuilder:
                     document_id=document_id,
                     release_id=release_id,
                 )
-        return self._store.save_release(release.model_copy(update={"status": "ready"}))
+        return self._store.save_release(release.model_copy(update={
+            "status": "ready",
+            "build_error": None,
+        }))
 
 
 class MilvusReleaseIndexBackend:
@@ -209,7 +220,7 @@ class MilvusReleaseIndexBackend:
             )
 
             collection = create_policy_facts_collection(
-                alias=self._alias, collection_name=collection_name
+                alias=self._alias, collection_name=collection_name, drop_existing=True
             )
         else:
             from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
@@ -217,7 +228,7 @@ class MilvusReleaseIndexBackend:
             )
 
             collection = create_policy_rules_v2_collection(
-                alias=self._alias, collection_name=collection_name
+                alias=self._alias, collection_name=collection_name, drop_existing=True
             )
         self._collections[collection_name] = collection
 

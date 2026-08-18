@@ -379,7 +379,7 @@ def test_rules_detail_and_dashboard(monkeypatch) -> None:
                     item_id="ci_kn_1", change_type="ADD", rule_id="kn_1",
                     unit_id="unit_1", doc_id="doc_1",
                     after={"review_status": "pending", "confidence": {"overall": 0.9, "source_fidelity": 0.8, "completeness": 0.7}},
-                    risk_level="LOW",
+                    risk_level="LOW", compilation_status="REVIEW",
                 )],
                 risk_summary={"LOW": 1},
             )]
@@ -407,7 +407,9 @@ def test_rules_detail_and_dashboard(monkeypatch) -> None:
     assert dashboard.status_code == 200
     body = dashboard.json()
     assert body["documents_total"] == 1
+    assert body["knowledge_total"] == 1
     assert body["rules_total"] == 1
+    assert body["compilation_by_status"] == {"REVIEW": 1}
     assert body["tasks_pending"] == 0
     assert body["risk_summary"]["LOW"] == 1
 
@@ -1451,7 +1453,7 @@ def test_candidate_without_canonical_rule_is_queryable_via_api(
     traces = InMemoryCompilationTraceStore()
     candidate = PolicyCompilationService(
         Pipeline(), PolicyRuleCompiler(), traces
-    ).compile_units(_document().units)["kn_1"]
+    ).compile_units(_document().units)["unit_1::kn_1"]
     monkeypatch.setattr(
         policy_workbench_routes, "_get_compilation_trace_store", lambda: traces
     )

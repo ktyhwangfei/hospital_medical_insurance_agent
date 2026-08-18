@@ -2,7 +2,7 @@
 
 设计要点（[来源: docs/steering/政策知识管线设计文档.md §7.1 / §1.1]）：
 - 单向只读依赖语义层；本模块不修改语义层状态。
-- 只返回 status=published 的指标（draft 不进入契约）。
+- 优先读取最新对象发布快照；未发布对象才兼容读取 status=published 的指标。
 - 按 metric_kind 分流：field → fields / entity → entities / relation → relations。
 - 值域字典（value_domain）解析为标准值列表，供政策提取与数据取数统一口径（语义拉齐）。
 """
@@ -75,15 +75,26 @@ SCHEMA_EXTRACTION_PROMPT_TEMPLATE = """你是一个医保政策分析专家。�
 ## 原文
 {text}
 
-## 输出格式
-返回 JSON 数组，每个事实含 fact_text + rules（rules 含上述字段 {field_codes}，原文未提及填空字符串""）：
+## 输出格式（硬性要求，逐字遵守）
+返回 JSON 数组，每个事实含 fact_text + rules（每条 rule 附 entities 数组）：
 [
   {{
     "fact_text": "完整事实描述",
-    "rules": [{{ {fields_json_example} }}],
+    "rules": [
+      {{
+        {fields_json_example},
+        "entities": [
+          {{"name": "统筹基金支付比例", "entity_type": "RATIO", "highlight": "统筹基金支付85%"}}
+        ]
+      }}
+    ],
     "unknown_concepts": []
   }}
 ]
+
+**每条 rule 对象必须逐一包含上述全部字段作为键**（共 {field_count} 个），原文未提及的字段必须显式填空字符串 ""；**禁止省略任何字段键，禁止只输出部分字段**。输出前自检：每条 rule 的键数量必须等于 {field_count}（entities 不计入）。
+
+**entities 必须输出**：每条 rule 都要带 `entities` 数组（没有实体时返回 `[]`）。每项含 `name`（实体全称，比例类实体必须带上归属主体，如"统筹基金支付比例"/"大额医疗互助资金支付比例"，不得只写"支付比例"）、`entity_type`、`highlight`（原文精确片段）。`entity_type` 取值：PERSON(人员), ORG(机构), SERVICE(医疗服务), AMOUNT(金额), RATIO(比例), DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)。
 
 ## 提取质量约束（必须遵守）
 1. **相对比例与系数**：原文出现「…的60%」「为职工支付比例的60%」等相对表达时，必须提取比例数字（60%）并保留其与基数的引用关系（rule_value 描述计算逻辑，如“个人支付比例 = 职工支付比例 × 60%”），不得因非绝对数值而漏提。
@@ -131,11 +142,13 @@ def build_extraction_schema(
 ) -> ExtractionSchema:
     """从语义层只读构建提取契约。
 
-    只含 status=published 的指标；按 metric_kind 分组；解析值域字典。
+    优先使用最新不可变对象版本；未发布对象兼容使用 status=published 指标。
+    按 metric_kind 分组并解析值域字典。
     不修改语义层状态（单向只读依赖）。
     """
     store = registry._store
-    published = [
+    versions = registry.list_object_versions(object_code)
+    published = list(versions[-1].metrics) if versions else [
         m for m in store.list_metrics(object_code=object_code) if m.status == "published"
     ]
 
@@ -248,6 +261,7 @@ def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) ->
 
     field_codes = [f.code for f in schema.fields]
     fields_json_example = ", ".join(f'"{c}": ""' for c in field_codes)
+    field_count = len(field_codes)
     rendered = render_governed_prompt(
         "policy.extract.schema",
         variables={
@@ -258,6 +272,7 @@ def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) ->
             "title": title,
             "text": text,
             "field_codes": str(field_codes),
+            "field_count": str(field_count),
             "fields_json_example": fields_json_example,
         },
         fallback_system="",

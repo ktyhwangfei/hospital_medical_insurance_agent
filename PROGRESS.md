@@ -31,8 +31,10 @@
 | 出院前质控 | 3 | 0 | 3 | 0 | 0 | — |
 | 模型服务与管理 | 5 | 1 | 4 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证 |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
-| 知识库管理 | 4 | 1 | 3 | 0 | 0 | §2 P9 5 tab 已上线；语义提议 S1 已完成 R4 验证 |
-| 技能管理 | 9 | 6 | 3 | 0 | 0 | Skill AI 创作、候选隔离评测、人工物化与日常治理主链已验证 |
+
+| 知识库管理 | 4 | 1 | 3 | 0 | 0 | §2 P9 5 tab 已上线；语义提议 S1 已完成 R4，S5 冲突维度候选已完成聚焦验证 |
+| 技能管理 | 5 | 2 | 3 | 0 | 0 | 阶段 2 批量评测与 test 发布门禁已验证 |
+
 | 运营看板 | 2 | 0 | 2 | 0 | 0 | — |
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
@@ -96,9 +98,13 @@
 | 6.1 | 知识资产上传与管理 | admin knowledge 页 | `policy_knowledge_routes.py` | impl_done |
 | 6.2 | 知识检索（RAG） | — | `rule_explanation/` → `policy_retrieval/` | impl_done |
 | 6.3 | 政策知识浏览 | `policy-knowledge/*`（P9 已重构为 5 tab） | `policy_knowledge_routes.py` | impl_done |
-| 6.4 | 政策抽取未知概念生成可审核的指标/值域提议，发布后进入统一语义契约 | `/semantic-layer/proposals` | `pipeline_orchestrator.py` → `semantic_alignment.py` → `semantic_alignment_routes.py` | verified |
+| 6.4 | 政策抽取主动生成可审核的指标/值域提议与冲突维度候选，发布后进入统一语义契约 | `/semantic-layer/proposals` | `pipeline_orchestrator.py` → `semantic_alignment.py` → `semantic_alignment_routes.py` | verified |
 
 6.4 验证证据（2026-08-12，R4）：严格按 T1 → T2a → T2b → T3 → T4 执行。T1 聚焦回归 125 passed / 1 optional skipped，真实 PostgreSQL 事务节点另 1 passed；T2a 语义提议与指标变更门禁 API 37 passed；T2b 抽取未知概念→提议→审核→发布→契约可读 Flow 及相关知识流程 7 passed；Portal Vitest 24 passed、TypeScript 与 Next.js 生产构建通过；真实 PostgreSQL 后端的 Locust 50 用户运行 60 秒完成 12,683 次提议列表请求，0 失败、P95 29 ms；Chromium 提议审核发布流程 1 passed。V1 交付设计 §11–§12 规定的 S1 最小闭环，S2 需求缺口、S3 数据扫描、S4 派生模式保留为后续增量信号源。
+
+6.4 S5 验证证据（2026-08-14，聚焦）：规则值归一化、身份签名、严格分区、竞争分区降级、候选幂等/失效/再出现、七类人工建模结论、Enum 维度和值域发布及抽取快照接入已实现。T1 85 passed / 1 optional skipped；T2a 16 passed；T2b 1 passed；Portal Vitest 8 passed，TypeScript 与 Next.js build 通过。按本次需求未扩大到全量、性能或浏览器 E2E 测试。
+
+6.4 原子规则语义修复（2026-08-18，聚焦）：规范规则主体改为表达完整业务度量，综合报销比例与具体基金分项比例不再压扁为通用 `payment_ratio`；细化主体仍复用基础比例结果字段，不扩张语义层指标。相关单元 17 passed、API 1 passed、Flow 1 passed；真实任务 `CS_TASK_630837f92752b70d` 重建后 7/7 规范规则可发布，实时审核页返回 200。
 
 #### 技能管理（Skill）
 | # | 单元 | 后端 | 状态 |

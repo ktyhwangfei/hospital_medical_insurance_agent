@@ -1000,9 +1000,11 @@ def list_decision_tasks(status: str = "", task_type: str = "", scope: str = "") 
 class GovernanceDashboard(BaseModel):
     documents_total: int
     change_sets_total: int
+    knowledge_total: int
     rules_total: int
     rules_pending_review: int
     rules_approved: int
+    compilation_by_status: dict[str, int]
     tasks_pending: int
     tasks_by_type: dict[str, int]
     change_sets_by_status: dict[str, int]
@@ -1015,18 +1017,24 @@ class GovernanceDashboard(BaseModel):
 def get_governance_dashboard() -> GovernanceDashboard:
     """AI 治理驾驶舱聚合（V4.1 §9）。"""
     service = _get_service()
+    documents = service.list_documents()
     change_sets = _get_change_set_service().list_change_sets()
     rules_total = 0
     rules_pending = 0
     rules_approved = 0
     fidelity: list[float] = []
     completeness: list[float] = []
+    compilation_by_status: dict[str, int] = {}
     risk: dict[str, int] = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "CRITICAL": 0}
     for change_set in change_sets:
         for key, value in (change_set.risk_summary or {}).items():
             risk[key] = risk.get(key, 0) + value
         for item in change_set.items:
             rules_total += 1
+            if item.compilation_status:
+                compilation_by_status[item.compilation_status] = (
+                    compilation_by_status.get(item.compilation_status, 0) + 1
+                )
             after = item.after or {}
             confidence = after.get("confidence") or {}
             if confidence.get("overall"):
@@ -1042,11 +1050,13 @@ def get_governance_dashboard() -> GovernanceDashboard:
     for task in tasks:
         tasks_by_type[task.task_type] = tasks_by_type.get(task.task_type, 0) + 1
     return GovernanceDashboard(
-        documents_total=service.list_documents().total,
+        documents_total=documents.total,
         change_sets_total=len(change_sets),
+        knowledge_total=sum(item.knowledge_count for item in documents.items),
         rules_total=rules_total,
         rules_pending_review=rules_pending,
         rules_approved=rules_approved,
+        compilation_by_status=compilation_by_status,
         tasks_pending=len(tasks),
         tasks_by_type=tasks_by_type,
         change_sets_by_status={status: sum(1 for cs in change_sets if cs.status == status) for status in {cs.status for cs in change_sets}},
@@ -1179,8 +1189,10 @@ def list_releases() -> list[KnowledgeRelease]:
 
 @router.post("/releases/{release_id}/build", response_model=KnowledgeRelease)
 def build_candidate_release(release_id: str) -> KnowledgeRelease:
+    store = _get_quality_store()
+    release: KnowledgeRelease | None = None
     try:
-        release = _get_quality_store().get_release(release_id)
+        release = store.get_release(release_id)
         if release is None:
             raise ValueError(f"候选版本不存在: {release_id}")
         if release.source_change_set_id is None:
@@ -1199,18 +1211,19 @@ def build_candidate_release(release_id: str) -> KnowledgeRelease:
             rules=rules,
             publications=publications,
         )
-    except ValueError as exc:
+    except Exception as exc:
+        if release is not None:
+            try:
+                store.save_release(release.model_copy(update={"build_error": str(exc)}))
+            except Exception:
+                pass
+        blocked = isinstance(exc, ValueError)
         raise HTTPException(
-            status_code=409,
+            status_code=409 if blocked else 503,
             detail=error_detail(
-                "POLICY_RELEASE_BUILD_BLOCKED", str(exc), {"release_id": release_id}
-            ),
-        ) from exc
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=error_detail(
-                "POLICY_RELEASE_INDEX_UNAVAILABLE", str(exc), {"release_id": release_id}
+                "POLICY_RELEASE_BUILD_BLOCKED" if blocked else "POLICY_RELEASE_INDEX_UNAVAILABLE",
+                str(exc),
+                {"release_id": release_id},
             ),
         ) from exc
 

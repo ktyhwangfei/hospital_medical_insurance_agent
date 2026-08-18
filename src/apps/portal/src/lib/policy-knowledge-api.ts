@@ -156,6 +156,7 @@ export interface KnowledgeRelease {
   source_change_set_id?: string | null
   quality_score: number | null
   consistency_score: number | null
+  build_error?: string | null
   created_at?: string
   promoted_at?: string | null
   promoted_by?: string | null
@@ -360,6 +361,19 @@ export const rejectSemanticProposal = async (proposalId: string, reason: string)
     await semanticReviewRequest('POST', { reason: reason.trim() }),
   )
 
+export const resolveDimensionProposal = async (
+  proposalId: string,
+  payload: {
+    conclusion: DimensionReviewConclusion
+    suggested_name?: string
+    suggested_code?: string
+    reason?: string
+  },
+) => request<SemanticProposal>(
+  `${SEMANTIC_PROPOSALS_API}/${encodeURIComponent(proposalId)}/resolve`,
+  await semanticReviewRequest('POST', payload),
+)
+
 export async function getWorkbenchDocuments(): Promise<WorkbenchDocumentSummary[]> {
   const result = await request<{ items: WorkbenchDocumentSummary[] }>(`${WORKBENCH_API}/documents`)
   return result.items
@@ -537,9 +551,65 @@ export interface ChangeSetItem {
   canonical_rule?: { rule_id: string } | null
 }
 
-export type SemanticProposalType = 'metric' | 'value'
-export type SemanticProposalStatus = 'proposed' | 'reviewing' | 'accepted' | 'published' | 'rejected'
-export type SemanticProposalTrigger = 'EXTRACTION_UNKNOWN' | 'DEMAND_GAP' | 'DATA_SCAN' | 'DERIVATION_PATTERN'
+export type SemanticProposalType = 'metric' | 'value' | 'dimension'
+export type SemanticProposalStatus = 'proposed' | 'reviewing' | 'accepted' | 'published' | 'rejected' | 'stale' | 'superseded'
+export type SemanticProposalTrigger = 'EXTRACTION_UNKNOWN' | 'DEMAND_GAP' | 'DATA_SCAN' | 'DERIVATION_PATTERN' | 'CONFLICT_PARTITION'
+export type DimensionReviewConclusion =
+  | 'new_dimension'
+  | 'metric_split_required'
+  | 'temporal_version'
+  | 'value_normalization'
+  | 'extraction_incomplete'
+  | 'insufficient_evidence'
+  | 'rejected'
+
+export interface ConflictPartitionEvidence {
+  trigger_source: 'CONFLICT_PARTITION'
+  document_id: string
+  extraction_snapshot_id: string
+  extraction_contract_version: string
+  identity_signature: {
+    known_values: Record<string, string>
+    unknown_fields: string[]
+  }
+  conflict_values: Array<{
+    semantic_type: string
+    canonical_value: string
+    canonical_unit: string | null
+    raw_value: string
+  }>
+  partition_mappings: Array<{
+    canonical_phrase: string
+    display_phrase: string
+    canonical_value: string
+    rule_ids: string[]
+    source_entity_ids: string[]
+  }>
+  coverage: string | number
+  exclusivity: string | number
+  evidence_grade: 'single_observation' | 'repeated_within_document'
+  rule_ids: string[]
+  source_clause_ids: string[]
+  evidence_texts: string[]
+  unknown_identity_fields: string[]
+  competing_axis_candidates: string[]
+  diagnosis: string
+}
+
+export interface DimensionCandidateProposal {
+  fingerprint: string
+  proposal_kind: 'new_dimension'
+  trigger_source: 'CONFLICT_PARTITION'
+  suggested_name: string | null
+  suggested_code: string | null
+  semantic_type: 'Enum'
+  metric_role: 'dimension'
+  candidate_values: Array<{ code: string | null; label: string; aliases: string[] }>
+  evidence: ConflictPartitionEvidence
+  evidence_grade: 'single_observation' | 'repeated_within_document'
+  naming_status: 'resolved' | 'manual_required'
+  status: 'proposed'
+}
 
 export interface SemanticProposalEvidence {
   source_ref: string
@@ -601,6 +671,9 @@ export interface SemanticProposal {
   suggested_mappings: SemanticProposalMapping[]
   mapping_only: boolean
   formula: Record<string, unknown> | null
+  dimension_candidate?: DimensionCandidateProposal | null
+  review_conclusion?: DimensionReviewConclusion | null
+  last_observed_at?: string | null
   evidence: SemanticProposalEvidence[]
   confidence: number
   occurrence_count: number
@@ -942,9 +1015,11 @@ export const resolveDecisionTask = (taskId: string, decision: Record<string, unk
 export interface GovernanceDashboard {
   documents_total: number
   change_sets_total: number
+  knowledge_total: number
   rules_total: number
   rules_pending_review: number
   rules_approved: number
+  compilation_by_status: Record<string, number>
   tasks_pending: number
   tasks_by_type: Record<string, number>
   change_sets_by_status: Record<string, number>
@@ -961,6 +1036,9 @@ export const getGovernanceDashboard = () =>
 export interface PipelineSummary {
   documents_count: number
   documents_raw: number
+  units_count: number
+  units_audited: number
+  units_pending: number
   extractions_count: number
   extractions_draft: number
   extractions_reviewed: number

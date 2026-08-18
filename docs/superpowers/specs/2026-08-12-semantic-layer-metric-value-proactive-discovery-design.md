@@ -176,6 +176,8 @@
 
 ### 4.8 S5 · 冲突分区维度发现（`CONFLICT_PARTITION`）
 
+> ⚠️ **已被取代**：本节及 §5.3 / §12 中 S5 相关实施条款，以 `2026-08-14-s5-conflict-diagnosis-dimension-candidate-design.md` 为准（S5 调整为「冲突诊断 + 缺失维度候选生成 + 人工建模裁决」，不自动认定新轴）。以下内容仅作历史参考。
+
 **触发**：构建重抽后，对抽取规则按身份分组，发现**同一规则身份（`rule_type`/`insu_type`/`med_type`/`psn_type`/`hosp_lv`/`setl_type` 等）下存在多个不同数值结果**——规则塌缩冲突（compiler 现有 CONFLICT 检测的同一信号）。
 
 **分析（确定性，不依赖 LLM 自报）**：

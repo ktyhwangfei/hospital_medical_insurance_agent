@@ -653,7 +653,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 语义提议 | `SemanticProposal` | **Aggregate Root** | Pydantic `BaseModel` | 系统从抽取等运行信号主动发现指标或值域缺口后形成的统一审核对象，必须经人工审核后才能发布 |
 | 发现信号 | `DiscoverySignal` | **Value Object** | Pydantic `BaseModel` | 携带触发来源、结构化证据与建议落地字段的主动发现输入 |
 | 发现证据 | `DiscoveryEvidence` | **Value Object** | Pydantic `BaseModel` | 可追溯到政策文档、单元与提取记录的结构化证据；同一来源重复观测需幂等合并 |
+| 冲突诊断 | `ConflictDiagnosis` | **Value Object** | `StrEnum` | 规则值冲突的确定性分类；只有缺失维度且满足严格分区时可形成候选 |
+| 冲突分区证据 | `ConflictPartitionEvidence` | **Value Object** | Pydantic `BaseModel`（frozen） | 记录身份签名、冲突值、分区映射、覆盖率、排他性及 extraction snapshot 的强证据 |
+| 维度候选提议 | `DimensionCandidateProposal` | **Value Object** | Pydantic `BaseModel`（frozen） | S5 从冲突严格分区发现的候选维度和值域，仅能装入 `SemanticProposal` 等待人工建模审核 |
+| 维度建模结论 | `DimensionReviewConclusion` | **Value Object** | `StrEnum` | 人工判定新增维度、拆分指标、时间版本、值归一化、抽取不完整、证据不足或驳回 |
 | 政策事实 | `PolicyFact` | **Value Object** | Pydantic `BaseModel`（frozen） | LLM 提取后、业务推导前的最小政策事实 |
+| 规则主体 | `subject` | **Value Object** | `str` | 一条规则实际计算或约束的完整业务度量身份；与适用条件、结果、证据共同构成原子规则语义 |
+| 综合报销比例 | `overall_reimbursement_ratio` | **Value Object** | `subject` 标准值 | 多支付来源共同形成的总体报销比例，不归属于单一基金 |
+| 大额医疗互助资金支付比例 | `large_medical_mutual_aid_payment_ratio` | **Value Object** | `subject` 标准值 | 明确由大额医疗互助资金承担的分项支付比例 |
 | 政策表达式 | `PolicyExpression` | **Value Object** | Pydantic `BaseModel`（frozen） | 确定性规则关系及运算符、引用和参数 |
 | 规范规则 | `CanonicalRule` | **Entity** | Pydantic `BaseModel`（frozen） | 编译后可审核、发布且具有稳定规则标识的规则 |
 | 编译运行 | `CompileRun` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 一次不可变政策规则编译运行及其输入输出快照 |
@@ -668,6 +675,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - `Citation` 在 `src/domain/common/models.py` 和 `src/knowledge_extension/common/models.py` 各有一份，需要注意区分
 - 结构化字段与政策 Knowledge 字段是两类权威来源，通过 `MetricSourceBinding` 多对一汇聚到同一标准指标；不得分别建立平行指标体系
 - 新指标、来源值映射和标准值提案默认均为 `draft`，只有语义层独立审核动作可以发布
+- 一条规范规则必须由 `subject + conditions + result + evidence` 独立表达完整业务语义；规则主体细化不得自动扩张语义层指标，比例结果仍复用基础 `payment_ratio`
 
 #### 生命周期
 
@@ -922,6 +930,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Coding` | 编码信息 | MedicalRecord | Value Object |
 | `CommonInputSpec` | 公共输入 | SkillTool | Value Object |
 | `ComplianceScore` | 合规评分 | AuditRisk | Value Object |
+| `ConflictDiagnosis` | 冲突诊断 | Knowledge | Value Object |
+| `ConflictPartitionEvidence` | 冲突分区证据 | Knowledge | Value Object |
 | `CompileRun` | 编译运行 | Knowledge | Aggregate Root |
 | `CompileStep` | 编译步骤 | Knowledge | Entity |
 | `Consumable` | 耗材 | OrderFee | Value Object |
@@ -933,6 +943,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `DenialRecord` | 拒付记录 | Appeal | Entity |
 | `DesensitizationService` | 脱敏服务 | Security | Domain Service |
 | `Diagnosis` | 诊断记录 | MedicalRecord | Entity |
+| `DimensionCandidateProposal` | 维度候选提议 | Knowledge | Value Object |
+| `DimensionReviewConclusion` | 维度建模结论 | Knowledge | Value Object |
 | `DipGroupResult` | DIP 分组结果 | DrgDip | Value Object |
 | `DrgDipPort` | DRG/DIP 适配器端口 | DrgDip | Domain Service |
 | `DrgGroupResult` | DRG 分组结果 | DrgDip | Value Object |

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from src.gateway.auth import AuthStatus, authenticator
 from src.knowledge_extension.rule_explanation.semantic_alignment import (
     CreateMetricDraft,
+    DimensionReviewConclusion,
     MetricSourceBinding,
     MetricSourceBindingDraft,
     ProposalStatus,
@@ -63,6 +64,32 @@ def _redact_proposal(proposal: SemanticProposal) -> SemanticProposal:
         redacted.value_draft.evidence = redact_sensitive_text(
             redacted.value_draft.evidence
         )
+    if redacted.dimension_candidate is not None:
+        candidate = redacted.dimension_candidate
+        payload = candidate.model_dump(mode="python")
+        payload["suggested_name"] = (
+            redact_sensitive_text(payload["suggested_name"])
+            if payload["suggested_name"] else None
+        )
+        for value in payload["candidate_values"]:
+            value["label"] = redact_sensitive_text(value["label"])
+            value["aliases"] = [redact_sensitive_text(item) for item in value["aliases"]]
+        evidence = payload["evidence"]
+        evidence["identity_signature"]["known_values"] = {
+            key: redact_sensitive_text(value)
+            for key, value in evidence["identity_signature"]["known_values"].items()
+        }
+        for value in evidence["conflict_values"]:
+            value["raw_value"] = redact_sensitive_text(value["raw_value"])
+            value["canonical_value"] = redact_sensitive_text(value["canonical_value"])
+        evidence["evidence_texts"] = [
+            redact_sensitive_text(item) for item in evidence["evidence_texts"]
+        ]
+        for mapping in evidence["partition_mappings"]:
+            mapping["display_phrase"] = redact_sensitive_text(mapping["display_phrase"])
+            mapping["canonical_phrase"] = redact_sensitive_text(mapping["canonical_phrase"])
+            mapping["canonical_value"] = redact_sensitive_text(mapping["canonical_value"])
+        redacted.dimension_candidate = candidate.__class__(**payload)
     for mapping in redacted.suggested_mappings:
         mapping.source_value = redact_sensitive_text(mapping.source_value)
         mapping.standard_value = redact_sensitive_text(mapping.standard_value)
@@ -96,6 +123,7 @@ def _proposal_error(exc: ValueError) -> HTTPException:
     elif any(marker in message for marker in (
         "非法状态转换", "状态已被并发修改", "只有 accepted",
         "已被其他提议占用", "已存在且不等价", "映射冲突",
+        "当前状态不能提交",
     )):
         status_code = 409
     else:
@@ -161,6 +189,13 @@ class ReviewRequest(BaseModel):
 
 class RejectProposalRequest(BaseModel):
     reason: str
+
+
+class ResolveDimensionProposalRequest(BaseModel):
+    conclusion: DimensionReviewConclusion
+    suggested_name: str | None = None
+    suggested_code: str | None = None
+    reason: str | None = None
 
 
 @router.get("/proposals", response_model=list[SemanticProposal])
@@ -252,6 +287,25 @@ def reject_semantic_proposal(
             ProposalStatus.REJECTED,
             reviewed_by=principal.user_id,
             review_note=request.reason.strip(),
+        ))
+    except ValueError as exc:
+        raise _proposal_error(exc) from exc
+
+
+@router.post("/proposals/{proposal_id}/resolve", response_model=SemanticProposal)
+def resolve_dimension_proposal(
+    proposal_id: str,
+    request: ResolveDimensionProposalRequest,
+    principal: SemanticReviewPrincipalDependency,
+) -> SemanticProposal:
+    try:
+        return _redact_proposal(_get_service().resolve_dimension_proposal(
+            proposal_id,
+            request.conclusion,
+            reviewed_by=principal.user_id,
+            suggested_name=request.suggested_name,
+            suggested_code=request.suggested_code,
+            review_note=request.reason,
         ))
     except ValueError as exc:
         raise _proposal_error(exc) from exc
