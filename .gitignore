@@ -182,3 +182,15 @@ src/tests/report/
 .codegraph/
 .ua/
 /*.pen
+
+# ============================================================
+# PPT 汇报产物 + 本地工具配置（不入库）
+# ============================================================
+output/
+ppt_build/
+overview.md
+*.ndjson
+docs/product/
+docs/posters/
+.codebuddy/
+.zcode/
