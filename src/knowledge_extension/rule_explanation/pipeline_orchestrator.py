@@ -18,6 +18,10 @@ from src.knowledge_extension.rule_explanation.knowledge_build_models import (
     ExtractionOverride,
 )
 from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
+from src.knowledge_extension.rule_explanation.policy_extract.med_type_classifier import (
+    apply_unit_med_type,
+    classify_med_type,
+)
 from src.model_service.gateway import ModelGateway
 from src.model_service.models import Message
 
@@ -232,6 +236,14 @@ class PipelineOrchestrator:
                 confidences = [r.get("confidence", 0.7) for r in fact_rules]
                 avg_conf = sum(confidences) / len(confidences) if confidences else 0.7
 
+                # Issue #19：单元医疗类别确定性分类（单元原文优先，祖先语境兑底），
+                # 规则 med_type 归一 + 空值继承，保证按医疗类别结构化处理可分组
+                unit_med_type = classify_med_type(
+                    unit_text or fact_text,
+                    str(getattr(unit_node, "full_context_text", "") or ""),
+                )
+                apply_unit_med_type(fact_rules, unit_med_type)
+
                 extraction_items.append({
                     "extraction_id": self._stable_extraction_id(
                         doc_id, unit_id, fact.get("fact_text", "")
@@ -243,6 +255,7 @@ class PipelineOrchestrator:
                         "fact_text": fact.get("fact_text", ""),
                         "rules": fact_rules,
                         "total_rules": len(fact_rules),
+                        "unit_med_type": unit_med_type,
                     },
                     "confidence": round(avg_conf, 2),
                 })
@@ -348,11 +361,25 @@ class PipelineOrchestrator:
                     "doc_id": doc_id,
                     "unit_id": unit_id,
                 }
+            # Issue #19：单元医疗类别确定性分类（单元原文优先，祖先语境兑底）
+            unit_context = ""
+            if unit_id:
+                from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import (
+                    parse_kept_leaves,
+                )
+                _, by_id_single, _, _ = parse_kept_leaves(
+                    doc.get("content_text", "") or "", doc.get("title", ""),
+                )
+                unit_context = str(
+                    getattr(by_id_single.get(unit_id), "full_context_text", "") or ""
+                )
+            unit_med_type = classify_med_type(source_text, unit_context)
             extraction_items = []
             for fact in facts:
                 fact_rules = fact.get("rules", [])
                 confidences = [r.get("confidence", 0.7) for r in fact_rules]
                 avg_conf = sum(confidences) / len(confidences) if confidences else 0.7
+                apply_unit_med_type(fact_rules, unit_med_type)
                 extraction_items.append({
                     "extraction_id": self._stable_extraction_id(
                         doc_id, unit_id, fact.get("fact_text", source_text)
@@ -364,6 +391,7 @@ class PipelineOrchestrator:
                         "fact_text": fact.get("fact_text", ""),
                         "rules": fact_rules,
                         "total_rules": len(fact_rules),
+                        "unit_med_type": unit_med_type,
                     },
                     "confidence": round(avg_conf, 2),
                 })

@@ -170,6 +170,7 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
   const [decisionTasks, setDecisionTasks] = useState<DecisionTask[]>([])
   const [unitFilter, setUnitFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+  const [medTypeFilter, setMedTypeFilter] = useState('')
   const [changeTypeFilter, setChangeTypeFilter] = useState('')
   const [riskFilter, setRiskFilter] = useState('')
   const [reviewFilter, setReviewFilter] = useState('')
@@ -342,6 +343,7 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
   // 各筛选维度候选选项：基于全部 items 聚合，避免切换筛选时选项跳动。
   const filterOptions = useMemo(() => {
     const ruleTypes = new Set<string>()
+    const medTypes = new Set<string>()
     const changeTypes = new Set<ChangeItemType>()
     const riskLevels = new Set<RiskLevel>()
     for (const item of changeSet?.items ?? []) {
@@ -349,11 +351,15 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
       const ruleTypeField = candidate?.fields.find((field) => field.field_code === 'rule_type')
       const ruleTypeText = ruleTypeField ? structuredFieldValue(ruleTypeField.raw_value) : ''
       if (ruleTypeText && ruleTypeText !== '—') ruleTypes.add(ruleTypeText)
+      const medTypeField = candidate?.fields.find((field) => field.field_code === 'med_type')
+      const medTypeText = medTypeField ? structuredFieldValue(medTypeField.raw_value) : ''
+      if (medTypeText && medTypeText !== '—') medTypes.add(medTypeText)
       changeTypes.add(item.change_type)
       riskLevels.add(item.risk_level)
     }
     return {
       ruleTypes: [...ruleTypes].sort(),
+      medTypes: [...medTypes].sort(),
       changeTypes: [...changeTypes],
       riskLevels: [...riskLevels],
     }
@@ -371,13 +377,19 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
         const text = ruleTypeField ? structuredFieldValue(ruleTypeField.raw_value) : ''
         if ((text === '—' ? '' : text) !== typeFilter) return false
       }
+      if (medTypeFilter) {
+        const candidate = parseCandidateKnowledge(item)
+        const medTypeField = candidate?.fields.find((field) => field.field_code === 'med_type')
+        const text = medTypeField ? structuredFieldValue(medTypeField.raw_value) : ''
+        if ((text === '—' ? '' : text) !== medTypeFilter) return false
+      }
       if (reviewFilter) {
         const review = itemReviews[item.item_id] ?? 'pending'
         if (review !== reviewFilter) return false
       }
       return true
     })
-  }, [changeSet, unitFilter, typeFilter, changeTypeFilter, riskFilter, reviewFilter, itemReviews])
+  }, [changeSet, unitFilter, typeFilter, medTypeFilter, changeTypeFilter, riskFilter, reviewFilter, itemReviews])
 
   // 按单元分组：每组 { key, title=完整条款路径, subtitle=叶子原文, items }。
   // 纯按单元归属，不做人群重定向（分段比例原文即在职职工，退休仅（四）公式）。
@@ -426,7 +438,7 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
   const allSelectableChecked =
     selectableIds.size > 0 && [...selectableIds].every((id) => effectiveSelectedIds.has(id))
   const hasActiveFilter = Boolean(
-    unitFilter || typeFilter || changeTypeFilter || riskFilter || reviewFilter,
+    unitFilter || typeFilter || medTypeFilter || changeTypeFilter || riskFilter || reviewFilter,
   )
 
   // 表头列 = 固定顺序的 19 个政策规则对象字段，按用户可见性选择过滤。
@@ -602,6 +614,7 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
   function clearFilters() {
     setUnitFilter('')
     setTypeFilter('')
+    setMedTypeFilter('')
     setChangeTypeFilter('')
     setRiskFilter('')
     setReviewFilter('')
@@ -762,6 +775,17 @@ export function KnowledgeReviewDetail({ changeSetId }: { changeSetId: string }) 
               <option value="">全部规则类型</option>
               {filterOptions.ruleTypes.map((ruleType) => (
                 <option key={ruleType} value={ruleType}>{ruleType}</option>
+              ))}
+            </select>
+            <select
+              aria-label="按医疗类别筛选"
+              value={medTypeFilter}
+              onChange={(event) => setMedTypeFilter(event.target.value)}
+              className="h-8 max-w-[140px] shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 text-xs outline-none transition-colors focus:border-emerald-500"
+            >
+              <option value="">全部医疗类别</option>
+              {filterOptions.medTypes.map((medType) => (
+                <option key={medType} value={medType}>{medType}</option>
               ))}
             </select>
             <select

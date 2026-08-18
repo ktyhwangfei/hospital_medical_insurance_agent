@@ -646,6 +646,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 知识扩展状态 | `KnowledgeExtensionStatus` | **Value Object** | `StrEnum` | "success" / "no_hit" / "partial_degraded" 等 |
 | 引用来源 | `Citation` | **Value Object** | Pydantic `BaseModel` | 知识输出的来源追溯（**存在两份：domain 和 knowledge 各有一份**） |
 | 审核通过单元 | `ApprovedUnit` | **Value Object** | Pydantic `BaseModel` | 单元页审核通过、可进入知识结构化阶段的政策 Unit |
+| 单元医疗类别分类器 | `med_type_classifier` | **Domain Service** | 纯函数模块 | 就近原则（单元原文优先、祖先语境兑底）确定性识别医疗类别；无命中回退「通用」；规则空值继承单元分类（Issue #19） |
 | 政策知识项 | `KnowledgeItem` | **Entity** | Pydantic `BaseModel` | 从一个 Unit 提炼的独立结构化知识，以稳定 `knowledge_id` 标识 |
 | 指标来源绑定 | `MetricSourceBinding` | **Entity** | Pydantic `BaseModel` | 将结构化字段或政策 Knowledge 字段绑定到统一标准指标，保留来源版本和证据 |
 | 来源值映射 | `SourceValueMapping` | **Entity** | Pydantic `BaseModel` | 将某个来源字段的原始值映射到标准指标的统一标准值 |
@@ -972,6 +973,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `McpServer` | MCP 服务器 | SkillTool | Entity |
 | `McpTransportType` | MCP 传输类型 | SkillTool | Value Object |
 | `MedicalRecordHomepage` | 病案首页 | MedicalRecord | Aggregate Root |
+| `med_type_classifier` | 单元医疗类别分类器 | Knowledge | Domain Service |
 | `MedicalRecordPort` | 病案适配器端口 | MedicalRecord | Domain Service |
 | `MemoryManager` | 记忆管理器 | Runtime | Domain Service |
 | `MemoryStore` | 记忆存储端口 | Runtime | Domain Service |
