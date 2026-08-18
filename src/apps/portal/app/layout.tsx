@@ -154,22 +154,20 @@ export function LayoutShell({ children }: { children: ReactNode }) {
           </nav>
 
           {/* Admin navigation */}
-          {currentRole === 'information_department' && (
-            <nav aria-label="后台管理" className="border-t border-slate-100 px-2 py-2">
-              <Link
-                href={ADMIN_NAV_ITEM.href}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                  pathname.startsWith(ADMIN_NAV_ITEM.href)
-                    ? 'bg-blue-50 text-blue-700'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                } ${sidebarCollapsed ? 'justify-center px-2' : ''}`}
-                title={sidebarCollapsed ? ADMIN_NAV_ITEM.label : undefined}
-              >
-                <span className="shrink-0">{ADMIN_NAV_ITEM.icon}</span>
-                {!sidebarCollapsed && <span>{ADMIN_NAV_ITEM.label}</span>}
-              </Link>
-            </nav>
-          )}
+          <nav aria-label="后台管理" className="border-t border-slate-100 px-2 py-2">
+            <Link
+              href={ADMIN_NAV_ITEM.href}
+              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                pathname.startsWith(ADMIN_NAV_ITEM.href)
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              } ${sidebarCollapsed ? 'justify-center px-2' : ''}`}
+              title={sidebarCollapsed ? ADMIN_NAV_ITEM.label : undefined}
+            >
+              <span className="shrink-0">{ADMIN_NAV_ITEM.icon}</span>
+              {!sidebarCollapsed && <span>{ADMIN_NAV_ITEM.label}</span>}
+            </Link>
+          </nav>
 
           {/* Sidebar footer */}
           <footer aria-label="侧栏页脚" className="border-t border-slate-100 p-3">

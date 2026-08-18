@@ -115,6 +115,8 @@ if (-not $env:MSSQL_DRIVER) { $env:MSSQL_DRIVER = "SQL Server" }
 if (-not $env:DATA_SOURCE_MODE) { $env:DATA_SOURCE_MODE = "real_db" }
 # Local-only Skill release controls use the mock authenticator. Production remains disabled.
 if (-not $env:SKILL_CONTROL_DEV_MODE) { $env:SKILL_CONTROL_DEV_MODE = "1" }
+# Local-only model governance endpoints use the mock authenticator. Production remains disabled.
+if (-not $env:MODEL_GOVERNANCE_DEV_MODE) { $env:MODEL_GOVERNANCE_DEV_MODE = "1" }
 # NOTE: uvicorn --reload spawns multiprocessing workers; if the master dies the workers
 #   become orphans holding the port + stale code (see stop-servers.ps1). Use single process
 #   for daily dev; restart via .\stop-servers.ps1; .\start-servers.ps1 after backend edits.
