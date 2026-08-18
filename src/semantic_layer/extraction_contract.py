@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel, Field
+from src.model_service.governance_runtime import render_governed_prompt
 
 if TYPE_CHECKING:
     from src.semantic_layer.registry import SemanticRegistry
@@ -55,6 +56,67 @@ class ExtractionSchema(BaseModel):
     entities: list[EntityContract] = Field(default_factory=list)
     relations: list[RelationContract] = Field(default_factory=list)
     dictionaries: dict[str, list[str]] = Field(default_factory=dict)
+
+
+SCHEMA_EXTRACTION_PROMPT_TEMPLATE = """你是一个医保政策分析专家。请从政策文本中提取所有"政策事实"，并从每个事实提取结构化规则。
+
+## 提取字段（来自语义层 published 指标，schema_version={schema_version}）
+{fields_desc}
+
+## 实体
+{entities_desc}
+
+## 关系
+{relations_desc}
+
+## 政策文件
+{title}
+
+## 原文
+{text}
+
+## 输出格式
+返回 JSON 数组，每个事实含 fact_text + rules（rules 含上述字段 {field_codes}，原文未提及填空字符串""）：
+[
+  {{
+    "fact_text": "完整事实描述",
+    "rules": [{{ {fields_json_example} }}],
+    "unknown_concepts": []
+  }}
+]
+
+## 提取质量约束（必须遵守）
+1. **相对比例与系数**：原文出现「…的60%」「为职工支付比例的60%」等相对表达时，必须提取比例数字（60%）并保留其与基数的引用关系（rule_value 描述计算逻辑，如“个人支付比例 = 职工支付比例 × 60%”），不得因非绝对数值而漏提。
+2. **跨单元引用**：出现「上述比例」「按前款」「职工支付比例」等对前文条款的引用时，视为与本单元关联的约束条件，必须在 rule_value / relation 中体现该引用关系（subject=本单元主体, predicate=引用, object=被引用条款或数值）。
+3. **关键人群强调**：psn_type 等人群标签（退休人员/在职职工/学生儿童等）只要在原文出现一次就必须提取，不得因句子简短而遗漏。
+4. **多条件拆条**：一段文本含多个并列条件（医院等级 × 金额分段 × 人群 × 时间），每个条件组合拆成独立规则（一条规则 = 一个完整条件组合），不得合并或只取其一。
+5. **比例规则形态统一（必须）**：一段原文（如「统筹基金支付85%，职工支付15%」）提取为**一条规则**，payment_ratio（基金）与 personal_payment_ratio（职工个人）作为该规则的字段同时填写，不得拆成两条；psn_type 按原文人群标注（原文写「职工」就标在职职工），不得按在职/退休重复提取；原文出现「退休人员个人支付比例为职工支付比例的60%」这类相对表达时，只提取该公式本身（rule_value 描述「个人支付比例 = 职工支付比例 × 60%」），不展开成各级医院、各费用段的绝对数值；禁止跨单元拼凑推导。
+
+## 未知概念（必须结构化返回）
+每个事实都必须包含 `unknown_concepts` 数组；没有未知概念时返回空数组。只报告以下两类：
+1. **完全新指标**：语义上无法归入上述任何字段（不是已有字段的细分取值）。
+2. **枚举新取值或新别名**：能归入某个已有枚举字段，但不在其值域中，或只是已有标准值的新说法。
+
+每项格式如下；不适用字段填 null。`excerpt` 必须逐字摘自原文；出现次数由系统按输入原文精确计数，无需输出：
+{{
+  "concept": "原始概念串",
+  "concept_type": "new_metric | new_enum_value | enum_alias",
+  "metric_code": "新指标建议代码（完全新指标时填写，如 zcgz.xxx）",
+  "metric_name": "新指标中文名",
+  "definition": "新指标定义",
+  "metric_type": "Atomic",
+  "semantic_type": "Amount | Ratio | Enum | Date | Count | String",
+  "unit": "单位或 null",
+  "value_domain": "新 Enum 指标建议值域代码，否则 null",
+  "indexed": false,
+  "extraction_hint": "后续抽取提示",
+  "axis_metric_code": "已有枚举指标完整代码（枚举新取值/别名时填写）",
+  "domain_code": "已有枚举值域代码（枚举新取值/别名时填写）",
+  "alias_target": "若为别名，填写已有标准值；否则 null",
+  "excerpt": "原文精确片段",
+  "confidence": 0.0
+}}
+"""
 
 
 # ── 契约构建 ──────────────────────────────────────────────────
@@ -186,33 +248,21 @@ def build_prompt_from_schema(text: str, title: str, schema: ExtractionSchema) ->
 
     field_codes = [f.code for f in schema.fields]
     fields_json_example = ", ".join(f'"{c}": ""' for c in field_codes)
-    return f"""你是一个医保政策分析专家。请从政策文本中提取所有"政策事实"，并从每个事实提取结构化规则。
-
-## 提取字段（来自语义层 published 指标，schema_version={schema.schema_version}）
-{fields_desc}
-
-## 实体
-{entities_desc}
-
-## 关系
-{relations_desc}
-
-## 政策文件
-{title}
-
-## 原文
-{text}
-
-## 输出格式
-返回 JSON 数组，每个事实含 fact_text + rules（rules 含上述字段 {field_codes}，原文未提及填空字符串""）：
-[
-  {{
-    "fact_text": "完整事实描述",
-    "rules": [{{ {fields_json_example} }}],
-    "unknown_concepts": []
-  }}
-]
-
-{EXTRACTION_QUALITY_GUIDANCE}
-{UNKNOWN_CONCEPT_GUIDANCE}
-"""
+    rendered = render_governed_prompt(
+        "policy.extract.schema",
+        variables={
+            "schema_version": str(schema.schema_version),
+            "fields_desc": fields_desc,
+            "entities_desc": entities_desc,
+            "relations_desc": relations_desc,
+            "title": title,
+            "text": text,
+            "field_codes": str(field_codes),
+            "fields_json_example": fields_json_example,
+        },
+        fallback_system="",
+        fallback_user=SCHEMA_EXTRACTION_PROMPT_TEMPLATE,
+    )
+    return "\n\n".join(
+        filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
+    )

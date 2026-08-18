@@ -1,4 +1,3 @@
-import json
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -77,6 +76,46 @@ def test_invoke_server_error(provider, sample_request):
             provider.invoke(sample_request)
 
 
+def test_invoke_non_2xx_does_not_expose_upstream_body(provider, sample_request):
+    secret = "sk-live-sync-secret"
+    body = f"api_key={secret}; Authorization: Bearer {secret}"
+    response = httpx.Response(502, text=body)
+
+    with patch("httpx.Client.post", return_value=response):
+        with pytest.raises(ModelServerError) as exc_info:
+            provider.invoke(sample_request)
+
+    assert "502" in str(exc_info.value)
+    assert secret not in str(exc_info.value)
+    assert body not in str(exc_info.value)
+
+
+def test_invoke_stream_non_2xx_does_not_expose_upstream_body(
+    monkeypatch, provider, sample_request
+):
+    secret = "sk-live-stream-secret"
+    body = f"api_key={secret}; Authorization: Bearer {secret}"
+    response = httpx.Response(503, text=body)
+
+    class StreamContext:
+        def __enter__(self):
+            return response
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(
+        httpx.Client, "stream", lambda self, *args, **kwargs: StreamContext()
+    )
+
+    with pytest.raises(ModelServerError) as exc_info:
+        list(provider.invoke_stream(sample_request))
+
+    assert "503" in str(exc_info.value)
+    assert secret not in str(exc_info.value)
+    assert body not in str(exc_info.value)
+
+
 def test_invoke_converts_read_timeout_to_model_timeout(monkeypatch):
     def fake_post(self, url, json, headers):
         raise httpx.ReadTimeout("read timeout")
@@ -94,7 +133,7 @@ def test_invoke_converts_read_timeout_to_model_timeout(monkeypatch):
     with pytest.raises(ModelTimeoutError) as exc_info:
         provider.invoke(request)
 
-    assert "read timeout" in str(exc_info.value)
+    assert str(exc_info.value) == "Model provider request timed out"
 
 
 def test_invoke_converts_network_error_to_model_server_error(monkeypatch):
@@ -114,7 +153,7 @@ def test_invoke_converts_network_error_to_model_server_error(monkeypatch):
     with pytest.raises(ModelServerError) as exc_info:
         provider.invoke(request)
 
-    assert "connect failed" in str(exc_info.value)
+    assert str(exc_info.value) == "Model provider network error"
 
 
 def test_invoke_embedding_converts_timeout_to_model_timeout(monkeypatch):
@@ -127,4 +166,4 @@ def test_invoke_embedding_converts_timeout_to_model_timeout(monkeypatch):
     with pytest.raises(ModelTimeoutError) as exc_info:
         provider.invoke_embedding("医保政策", "embedding-test")
 
-    assert "embedding timeout" in str(exc_info.value)
+    assert str(exc_info.value) == "Model provider request timed out"

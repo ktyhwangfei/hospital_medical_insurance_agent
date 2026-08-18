@@ -1,0 +1,151 @@
+"""模型治理存储契约。"""
+
+from dataclasses import dataclass
+from typing import Protocol
+
+from src.model_service.governance_assets import (
+    GovernanceApproval,
+    GovernanceAssetType,
+    GovernanceConnectionTest,
+    GovernanceCredential,
+    GovernanceDraft,
+    GovernanceEnvironment,
+    GovernanceRelease,
+    GovernanceReleaseCredentialBinding,
+    GovernanceVersion,
+)
+
+
+class ModelGovernanceConflictError(ValueError):
+    """治理资产发生并发或唯一性冲突。"""
+
+
+class ModelGovernanceNotFoundError(LookupError):
+    """治理资产不存在。"""
+
+
+@dataclass(frozen=True)
+class GovernanceCredentialPrecondition:
+    credential_id: str
+    expected_fingerprint: str
+    expected_revision: int
+
+
+@dataclass(frozen=True)
+class GovernanceReleasePrecondition:
+    asset_id: str
+    environment: GovernanceEnvironment
+    expected_release_id: str
+    expected_version_id: str
+
+
+class ModelGovernanceStorage(Protocol):
+    def put_credential(
+        self, credential: GovernanceCredential
+    ) -> GovernanceCredential: ...
+
+    def get_credential(self, credential_id: str) -> GovernanceCredential: ...
+
+    def get_credential_revision(
+        self, credential_id: str, revision: int
+    ) -> GovernanceCredential: ...
+
+    def get_release_credential_binding(
+        self, release_id: str
+    ) -> GovernanceReleaseCredentialBinding: ...
+
+    def save_connection_test(
+        self, result: GovernanceConnectionTest
+    ) -> GovernanceConnectionTest: ...
+
+    def find_successful_connection_test(
+        self,
+        asset_id: str,
+        content_hash: str,
+        credential_fingerprint: str,
+    ) -> GovernanceConnectionTest | None: ...
+
+    def create_draft(self, draft: GovernanceDraft) -> GovernanceDraft: ...
+
+    def create_draft_with_credential(
+        self,
+        draft: GovernanceDraft,
+        credential: GovernanceCredential,
+    ) -> GovernanceDraft: ...
+
+    def update_draft(
+        self, draft: GovernanceDraft, *, expected_revision: int
+    ) -> GovernanceDraft: ...
+
+    def update_draft_with_credential(
+        self,
+        draft: GovernanceDraft,
+        credential: GovernanceCredential,
+        *,
+        expected_revision: int,
+    ) -> GovernanceDraft: ...
+
+    def get_draft(self, draft_id: str) -> GovernanceDraft: ...
+
+    def delete_draft(
+        self, draft_id: str, *, expected_revision: int
+    ) -> GovernanceDraft: ...
+
+    def list_drafts(
+        self, asset_type: GovernanceAssetType | None = None
+    ) -> list[GovernanceDraft]: ...
+
+    def save_version(self, version: GovernanceVersion) -> GovernanceVersion: ...
+
+    def get_version(self, version_id: str) -> GovernanceVersion: ...
+
+    def list_versions(self, asset_id: str) -> list[GovernanceVersion]: ...
+
+    def save_approval(self, approval: GovernanceApproval) -> GovernanceApproval: ...
+
+    def approve_draft(
+        self,
+        draft: GovernanceDraft,
+        approval: GovernanceApproval,
+        *,
+        expected_revision: int,
+    ) -> GovernanceDraft: ...
+
+    def get_approval(self, approval_id: str) -> GovernanceApproval: ...
+
+    def publish(
+        self,
+        release: GovernanceRelease,
+        *,
+        credential_precondition: GovernanceCredentialPrecondition | None = None,
+        credential_binding: GovernanceReleaseCredentialBinding | None = None,
+        referenced_release_preconditions: tuple[
+            GovernanceReleasePrecondition, ...
+        ] = (),
+    ) -> GovernanceRelease: ...
+
+    def publish_draft_version(
+        self,
+        draft: GovernanceDraft,
+        version: GovernanceVersion,
+        release: GovernanceRelease,
+        *,
+        expected_revision: int,
+        credential_precondition: GovernanceCredentialPrecondition | None = None,
+        credential_binding: GovernanceReleaseCredentialBinding | None = None,
+        referenced_release_preconditions: tuple[
+            GovernanceReleasePrecondition, ...
+        ] = (),
+    ) -> GovernanceRelease: ...
+
+    def get_release(self, release_id: str) -> GovernanceRelease: ...
+
+    def list_releases(
+        self,
+        asset_id: str | None = None,
+        environment: GovernanceEnvironment | None = None,
+    ) -> list[GovernanceRelease]: ...
+
+    def get_active_release(
+        self, asset_id: str, environment: GovernanceEnvironment
+    ) -> GovernanceRelease | None: ...

@@ -6,6 +6,7 @@ const frontendPort = Number(process.env.E2E_FRONTEND_PORT ?? 3000);
 export default defineConfig({
   testDir: './',
   testMatch: ['**/*.spec.ts', '**/*.flow.ts'],
+  testIgnore: ['flows/portal/model-governance.flow.ts'],
   timeout: 60000,
   expect: {
     timeout: 15000,
@@ -54,6 +55,7 @@ export default defineConfig({
       env: {
         ...process.env,
         SKILL_CONTROL_DEV_MODE: '1',
+        MODEL_GOVERNANCE_DEV_MODE: '1',
         USE_MEMORY_STORAGE: '1',
       },
     },

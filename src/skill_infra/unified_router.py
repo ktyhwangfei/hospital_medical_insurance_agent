@@ -25,6 +25,10 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from src.skill_infra.skill_loader import get_loader, LoadedSkill
+from src.model_service.governance_runtime import (
+    GovernanceRuntimeError,
+    render_governed_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,19 @@ assert _SKILL_ROUTING_MODE in ("keyword", "llm", "hybrid"), (
 
 # ── LLM 消歧阈值：关键词置信度低于此值时触发 LLM ──
 _LLM_CONFIDENCE_THRESHOLD = 0.3
+
+SKILL_ROUTING_PROMPT_TEMPLATE = (
+    "你是医疗医保智能体的技能路由器。根据用户问题，判断是否需要交给某个技能处理。\n\n"
+    "可用技能：\n"
+    "{skills_text}\n\n"
+    "用户问题：{question}\n\n"
+    "判断规则：\n"
+    "1. 如果用户问题与某个技能的能力范围高度相关 → 返回该技能的 skill_id\n"
+    "2. 如果用户问题与任何技能都无关（闲聊、问候、完全无关话题）→ 返回 null\n"
+    "3. 如果用户问题涉及医保费用解释、报销计算、政策咨询 → 优先匹配费用解释类技能\n\n"
+    "仅返回 JSON（不要其他内容）：\n"
+    '{{"skill_id": "<skill_id或null>", "confidence": 0.0-1.0, "reasoning": "简短理由"}}'
+)
 
 
 @dataclass
@@ -165,9 +182,6 @@ def _build_skill_routing_prompt(question: str) -> str:
     loader = get_loader()
     skills = loader.get_all()
 
-    if not skills:
-        return f"用户问题：{question}\n\n无可用技能，返回 null。"
-
     skill_lines = []
     for skill_id, skill in skills.items():
         skill_lines.append(
@@ -177,18 +191,20 @@ def _build_skill_routing_prompt(question: str) -> str:
         )
 
     skills_text = "\n".join(skill_lines)
+    fallback_user = (
+        SKILL_ROUTING_PROMPT_TEMPLATE
+        if skills
+        else "用户问题：{question}\n\n无可用技能，返回 null。"
+    )
 
-    return (
-        "你是医疗医保智能体的技能路由器。根据用户问题，判断是否需要交给某个技能处理。\n\n"
-        "可用技能：\n"
-        f"{skills_text}\n\n"
-        f"用户问题：{question}\n\n"
-        "判断规则：\n"
-        "1. 如果用户问题与某个技能的能力范围高度相关 → 返回该技能的 skill_id\n"
-        "2. 如果用户问题与任何技能都无关（闲聊、问候、完全无关话题）→ 返回 null\n"
-        "3. 如果用户问题涉及医保费用解释、报销计算、政策咨询 → 优先匹配费用解释类技能\n\n"
-        "仅返回 JSON（不要其他内容）：\n"
-        '{"skill_id": "<skill_id或null>", "confidence": 0.0-1.0, "reasoning": "简短理由"}'
+    rendered = render_governed_prompt(
+        "skill.route",
+        variables={"skills_text": skills_text, "question": question},
+        fallback_system="",
+        fallback_user=fallback_user,
+    )
+    return "\n\n".join(
+        filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
     )
 
 
@@ -247,6 +263,8 @@ def _route_via_llm(question: str) -> Optional[str]:
         )
         return skill_id
 
+    except GovernanceRuntimeError:
+        raise
     except (json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
         logger.warning(
             "[UnifiedRouter] LLM response parse failed for '%s': %s",

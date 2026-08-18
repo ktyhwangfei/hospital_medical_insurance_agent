@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Activity,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { ApiProvider, useApiContext } from '@/lib/api-context'
 import RoleSwitcher from '@/components/role-switcher'
@@ -48,6 +49,12 @@ const NAV_ITEMS: NavItem[] = [
   { label: '政策知识', href: '/policy-knowledge', icon: <BookOpen className="size-4" /> },
   { label: '问答历史', href: '/qa-history', icon: <History className="size-4" /> },
 ]
+
+const ADMIN_NAV_ITEM: NavItem = {
+  label: '后台管理',
+  href: '/model-governance',
+  icon: <SlidersHorizontal className="size-4" />,
+}
 
 // --- Connection Status Badge ---
 
@@ -225,14 +232,30 @@ export function LayoutShell({ children }: { children: ReactNode }) {
             })}
           </nav>
 
+          {/* Admin navigation */}
+          <nav aria-label="后台管理" className="border-t border-slate-100 px-2 py-2">
+            <Link
+              href={ADMIN_NAV_ITEM.href}
+              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                pathname.startsWith(ADMIN_NAV_ITEM.href)
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              } ${sidebarCollapsed ? 'justify-center px-2' : ''}`}
+              title={sidebarCollapsed ? ADMIN_NAV_ITEM.label : undefined}
+            >
+              <span className="shrink-0">{ADMIN_NAV_ITEM.icon}</span>
+              {!sidebarCollapsed && <span>{ADMIN_NAV_ITEM.label}</span>}
+            </Link>
+          </nav>
+
           {/* Sidebar footer */}
-          <div className="border-t border-slate-100 p-3">
+          <footer aria-label="侧栏页脚" className="border-t border-slate-100 p-3">
             {!sidebarCollapsed && (
               <p className="text-[10px] text-slate-400 leading-relaxed">
                 医保AI导办平台 v0.1
               </p>
             )}
-          </div>
+          </footer>
         </aside>
 
         {/* Main area */}

@@ -5,8 +5,8 @@
   2. 回退到 (default, model_type) → model_name
   3. 全部未命中 → 抛 ModelRouteError
 
-通用生产调用使用 model_type="llm"，通过默认路由 ("default", "llm") 解析，
-默认模型可由环境变量 MODEL_NAME 覆盖（如本地 Ollama：MODEL_NAME=qwen2.5:1.5b）。
+通用生产调用使用 model_type="llm"，活跃场景显式路由到 deepseek-chat；
+默认路由仅兼容未知场景，默认模型可由环境变量 MODEL_NAME 覆盖（如本地 Ollama：MODEL_NAME=qwen2.5:1.5b）。
 Skill AI 编写使用受控的 model_type="reasoning"，固定解析到 deepseek-chat。
 """
 
@@ -37,8 +37,12 @@ MODEL_PARAMS: dict = {
 ROUTING_TABLE: dict = {
     ("default", "llm"): _DEFAULT_LLM,
     ("default", "embedding"): "text-embedding-3-small",
-    # fee_explanation 场景显式路由（PoolingSelfPayStrategy._generate_via_llm 使用）
-    ("fee_explanation", "llm"): _DEFAULT_LLM,
     # Skill AI 编写、结构修复和优化共用受控 reasoning 路由。
     ("skill_authoring", "reasoning"): "deepseek-chat",
+    # 活跃业务场景显式路由（Policy QA / 意图 / 技能路由 / 费用解释 / 政策提取）
+    ("intent_recognition", "llm"): "deepseek-chat",
+    ("skill_routing", "llm"): "deepseek-chat",
+    ("policy_qa", "llm"): "deepseek-chat",
+    ("fee_explanation", "llm"): "deepseek-chat",
+    ("policy_fact_extraction", "llm"): "deepseek-chat",
 }

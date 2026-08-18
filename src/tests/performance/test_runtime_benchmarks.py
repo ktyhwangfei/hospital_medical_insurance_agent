@@ -16,6 +16,20 @@ from datetime import UTC, datetime
 from statistics import mean
 
 from src.data_platform.storage.memory.in_memory import InMemoryMemoryStore
+from src.data_platform.storage.model_governance.in_memory import (
+    InMemoryModelGovernanceStorage,
+)
+from src.model_service.governance_assets import (
+    GovernanceEnvironment,
+    GovernanceRelease,
+    GovernanceReleaseCredentialBinding,
+    GovernanceVersion,
+    ModelProfileAssetContent,
+    RouteRuleAssetContent,
+    content_hash,
+)
+from src.model_service.governance_runtime import resolve_governed_route
+from src.model_service.governance_secrets import GovernanceCredentialVault
 from src.runtime.context_composer.composer import ContextComposer
 from src.runtime.memory.manager import MemoryManager
 from src.runtime.memory.models import BusinessMemory, ExpirePolicy, MemoryType
@@ -119,3 +133,97 @@ def test_context_composer_under_50ms():
 
     print(f"\n[基准] Composer.compose(60条记忆+5步推理链)={avg:.3f}ms (阈值 {COMPOSER_THRESHOLD_MS}ms)")
     assert avg < COMPOSER_THRESHOLD_MS, f"compose 平均 {avg:.2f}ms ≥ {COMPOSER_THRESHOLD_MS}ms"
+
+
+def test_governed_model_route_resolution_under_10ms(monkeypatch):
+    monkeypatch.setenv(
+        "MODEL_GOVERNANCE_MASTER_KEY",
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+    )
+    storage = InMemoryModelGovernanceStorage()
+    vault = GovernanceCredentialVault(storage)
+
+    for index in range(20):
+        profile = ModelProfileAssetContent(
+            asset_id=f"model.bench.{index}",
+            name=f"bench model {index}",
+            base_url=f"https://bench-{index}.example.test/v1",
+            model_name=f"bench-model-{index}",
+            credential_ref=f"credential.bench.{index}",
+            temperature=0.1,
+            max_tokens=128,
+        )
+        credential = vault.put(
+            profile.credential_ref,
+            f"sk-bench-{index}",
+            base_url=profile.base_url,
+            actor="benchmark",
+        )
+        model_version = GovernanceVersion(
+            version_id=f"version-model-{index}",
+            asset_id=profile.asset_id,
+            asset_type=profile.asset_type,
+            version_number=1,
+            content=profile,
+            content_hash=content_hash(profile),
+            approval_id=f"approval-model-{index}",
+            created_by="benchmark",
+        )
+        storage.save_version(model_version)
+        model_release = GovernanceRelease(
+            release_id=f"release-model-{index}",
+            asset_id=profile.asset_id,
+            asset_type=profile.asset_type,
+            version_id=model_version.version_id,
+            environment=GovernanceEnvironment.DEV,
+            created_by="benchmark",
+        )
+        storage.publish(
+            model_release,
+            credential_binding=GovernanceReleaseCredentialBinding(
+                release_id=model_release.release_id,
+                credential_id=credential.credential_id,
+                credential_revision=credential.revision,
+                credential_fingerprint=credential.secret_fingerprint,
+            ),
+        )
+        route = RouteRuleAssetContent(
+            asset_id=f"route.bench.{index}",
+            name=f"bench route {index}",
+            scene=f"bench_scene_{index}",
+            profile_id=profile.asset_id,
+        )
+        route_version = GovernanceVersion(
+            version_id=f"version-route-{index}",
+            asset_id=route.asset_id,
+            asset_type=route.asset_type,
+            version_number=1,
+            content=route,
+            content_hash=content_hash(route),
+            approval_id=f"approval-route-{index}",
+            created_by="benchmark",
+        )
+        storage.save_version(route_version)
+        storage.publish(
+            GovernanceRelease(
+                release_id=f"release-route-{index}",
+                asset_id=route.asset_id,
+                asset_type=route.asset_type,
+                version_id=route_version.version_id,
+                environment=GovernanceEnvironment.DEV,
+                created_by="benchmark",
+            )
+        )
+
+    avg = _timed(
+        lambda: resolve_governed_route(
+            "bench_scene_19",
+            "llm",
+            storage=storage,
+            vault=vault,
+            environment=GovernanceEnvironment.DEV,
+        )
+    )
+
+    print(f"\n[基准] Governed route resolve(20条)={avg:.3f}ms (阈值 10ms)")
+    assert avg < 10, f"governed route resolve 平均 {avg:.2f}ms ≥ 10ms"

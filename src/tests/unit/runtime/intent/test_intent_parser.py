@@ -1,6 +1,9 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from src.model_service.governance_runtime import GovernanceRuntimeError
 from src.runtime.intent.models import IntentResult
 from src.runtime.intent.parser import parse_intent
 
@@ -117,3 +120,12 @@ def test_parse_intent_keyword_fallback_unknown():
         mock_cls.side_effect = Exception('model unavailable')
         result = parse_intent('今天天气')
         assert result.intent == 'unknown'
+
+
+def test_parse_intent_propagates_governance_runtime_error():
+    with patch(
+        'src.runtime.intent.parser.build_intent_prompt',
+        side_effect=GovernanceRuntimeError('active prompt is corrupt'),
+    ):
+        with pytest.raises(GovernanceRuntimeError, match='active prompt is corrupt'):
+            parse_intent('结算失败怎么办')

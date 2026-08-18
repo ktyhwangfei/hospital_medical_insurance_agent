@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 import pandas as pd
 from pydantic import BaseModel, Field, ValidationError
+from src.model_service.governance_runtime import render_governed_prompt
 
 from .deepseek_llm_client import DeepSeekLLMClient
 
@@ -705,12 +706,17 @@ def extract_one(
         full_context_text=full_context_text,
     )
 
-    user_prompt = USER_PROMPT_TEMPLATE.format(
-        node_id=node_id,
-        policy_title=policy_title,
-        path_text=path_text,
-        text=prompt_text,
-        policy_meta_json=json.dumps(policy_meta, ensure_ascii=False, indent=2),
+    rendered = render_governed_prompt(
+        "policy.fact_extract",
+        variables={
+            "node_id": node_id,
+            "policy_title": policy_title,
+            "path_text": path_text,
+            "text": prompt_text,
+            "policy_meta_json": json.dumps(policy_meta, ensure_ascii=False, indent=2),
+        },
+        fallback_system=SYSTEM_PROMPT,
+        fallback_user=USER_PROMPT_TEMPLATE,
     )
 
     logger.info(
@@ -723,8 +729,8 @@ def extract_one(
     llm_start = time.time()
 
     raw_result = llm.chat_json(
-        system_prompt=SYSTEM_PROMPT,
-        user_prompt=user_prompt,
+        system_prompt=rendered.rendered_system_prompt or "",
+        user_prompt=rendered.rendered_user_prompt or "",
         temperature=0.1,
     )
 

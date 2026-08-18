@@ -13,6 +13,11 @@ from __future__ import annotations
 import logging
 
 from src.model_service.gateway import ModelGateway
+from src.model_service.governance_assets import GovernanceAssetPreview
+from src.model_service.governance_runtime import (
+    GovernanceRuntimeError,
+    render_governed_prompt,
+)
 from src.model_service.models import Message
 from src.runtime.policy_qa.models import ExplanationContext, FeeDecompositionResult
 
@@ -117,10 +122,13 @@ class ExplanationGenerator:
                 return
 
             # 准备Prompt
-            prompt = self._build_prompt(context)
+            rendered = self._render_prompt(context)
 
             # 调用模型（流式）- generate_stream返回同步Iterator，用普通for遍历
-            messages = [Message(role="user", content=prompt)]
+            messages = []
+            if rendered.rendered_system_prompt:
+                messages.append(Message(role="system", content=rendered.rendered_system_prompt))
+            messages.append(Message(role="user", content=rendered.rendered_user_prompt or ""))
             for chunk in self.model_gateway.generate_stream(
                 messages=messages,
                 model_type="llm",
@@ -129,13 +137,22 @@ class ExplanationGenerator:
                 if chunk.content:
                     yield chunk.content
 
+        except GovernanceRuntimeError:
+            raise
         except Exception as e:
             logger.exception("Explanation generation failed")
             yield f"生成解释时出错: {str(e)}"
 
     def _build_prompt(self, context: ExplanationContext) -> str:
+        """构建兼容旧调用方的单字符串 Prompt。"""
+        rendered = self._render_prompt(context)
+        return "\n\n".join(
+            filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
+        )
+
+    def _render_prompt(self, context: ExplanationContext) -> GovernanceAssetPreview:
         """
-        构建Prompt
+渲染保留 system/user 角色的 Prompt
 
         核心: 把分段计算中的每一段与对应的政策规则关联，形成因果链。
         """
@@ -164,14 +181,18 @@ class ExplanationGenerator:
             rag_miss_note = ""
 
         # 构建Prompt
-        prompt = EXPLANATION_PROMPTS[user_role].format(
-            question=context.question,
-            decomposition_text=decomposition_text,
-            policy_text=policy_text,
-            RAG_MISS_NOTE=rag_miss_note,
+        rendered = render_governed_prompt(
+            "policy_qa.patient_explain",
+            variables={
+                "question": context.question,
+                "decomposition_text": decomposition_text,
+                "policy_text": policy_text,
+                "RAG_MISS_NOTE": rag_miss_note,
+            },
+            fallback_system="",
+            fallback_user=EXPLANATION_PROMPTS[user_role],
         )
-
-        return prompt
+        return rendered
 
     def _format_decomposition(self, decomposition: FeeDecompositionResult) -> str:
         """
@@ -553,25 +574,13 @@ class ExplanationGenerator:
             return _quality_gated(self._generate_placeholder(context))
 
         try:
-            decomposition_text = self._format_decomposition(context.decomposition)
-            policy_text = self._format_policy_rules_with_segments(
-                context.decomposition, context.policy_rules
-            )
-            rag_miss_note = (
-                "⚠️ 注意：本次检索未找到与用户问题直接匹配的政策规则。"
-                "请基于结算数据进行解释，并在回答中明确告知用户"
-                "「未检索到相关政策条文，以下解释基于系统已有结算数据」。"
-                "不要编造政策条文。"
-            ) if context.rag_miss else ""
-
-            prompt = EXPLANATION_PROMPTS["患者"].format(
-                question=context.question,
-                decomposition_text=decomposition_text,
-                policy_text=policy_text,
-                RAG_MISS_NOTE=rag_miss_note,
-            )
+            rendered = self._render_prompt(context)
+            messages = []
+            if rendered.rendered_system_prompt:
+                messages.append(Message(role="system", content=rendered.rendered_system_prompt))
+            messages.append(Message(role="user", content=rendered.rendered_user_prompt or ""))
             result = self.model_gateway.generate(
-                messages=[Message(role="user", content=prompt)],
+                messages=messages,
                 model_type="llm",
                 scene="policy_qa",
             )
@@ -581,6 +590,8 @@ class ExplanationGenerator:
                 return _quality_gated(self._generate_placeholder(context))
             return _quality_gated(content)
 
+        except GovernanceRuntimeError:
+            raise
         except Exception:
             logger.exception("Answer generation failed, falling back to placeholder")
             return _quality_gated(self._generate_placeholder(context))

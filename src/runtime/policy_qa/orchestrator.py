@@ -25,6 +25,7 @@ if str(_skill_dir) not in sys.path:
     sys.path.insert(0, str(_skill_dir))
 
 from src.model_service.gateway import ModelGateway
+from src.model_service.governance_runtime import GovernanceRuntimeError
 from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
 from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
 from src.runtime.policy_qa.intent_detector import IntentDetector
@@ -1031,6 +1032,8 @@ class PolicyQAOrchestrator:
             # 设置settlement_id
             result.settlement_id = request.settlement_id
             return result
+        except GovernanceRuntimeError:
+            raise
         except Exception as e:
             logger.warning(f"Intent detection failed, using default: {e}")
             return PolicyQAIntentResult(

@@ -546,6 +546,51 @@ class TestExplanationGenerator:
         assert answer
         assert not hasattr(generator, "generate_dual_views")
 
+    def test_streaming_generation_preserves_governed_system_role(self, monkeypatch):
+        import asyncio
+        from types import SimpleNamespace
+
+        from src.model_service.governance_assets import (
+            GovernanceAssetPreview,
+            GovernanceAssetType,
+        )
+        from src.runtime.policy_qa import explanation_generator as module
+        from src.runtime.policy_qa.models import ExplanationContext
+
+        captured = []
+
+        class FakeGateway:
+            _config = SimpleNamespace(base_url="https://model.test")
+
+            def generate_stream(self, *, messages, **_kwargs):
+                captured.extend(messages)
+                return iter([SimpleNamespace(content="ok")])
+
+        monkeypatch.setattr(
+            module,
+            "render_governed_prompt",
+            lambda *_args, **_kwargs: GovernanceAssetPreview(
+                asset_type=GovernanceAssetType.PROMPT,
+                asset_id="policy_qa.patient_explain",
+                rendered_system_prompt="governed system",
+                rendered_user_prompt="governed user",
+            ),
+        )
+
+        async def collect():
+            return [
+                chunk
+                async for chunk in module.ExplanationGenerator(FakeGateway()).generate(
+                    ExplanationContext()
+                )
+            ]
+
+        assert asyncio.run(collect()) == ["ok"]
+        assert [(message.role, message.content) for message in captured] == [
+            ("system", "governed system"),
+            ("user", "governed user"),
+        ]
+
     def test_generator_import(self):
         """测试生成器是否可以导入"""
         try:
@@ -716,6 +761,31 @@ class TestExplanationGenerator:
 
 class TestPolicyQAOrchestrator:
     """测试政策问答编排器"""
+
+    def test_detect_intent_propagates_governance_runtime_error(self, monkeypatch):
+        import asyncio
+
+        import src.runtime.policy_qa.intent_detector as intent_detector_module
+        from src.model_service.governance_runtime import GovernanceRuntimeError
+        from src.runtime.policy_qa.models import PolicyQARequest
+        from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
+
+        def raise_governance_error(*args, **kwargs):
+            raise GovernanceRuntimeError("active prompt is corrupt")
+
+        monkeypatch.setattr(
+            intent_detector_module,
+            "render_governed_prompt",
+            raise_governance_error,
+        )
+        orchestrator = PolicyQAOrchestrator(model_gateway=object())
+
+        with pytest.raises(GovernanceRuntimeError, match="active prompt is corrupt"):
+            asyncio.run(
+                orchestrator._detect_intent(
+                    PolicyQARequest(question="今天天气怎么样", settlement_id="S001")
+                )
+            )
 
     def test_validate_output_rejects_deterministic_answer_without_source(self):
         """普通业务词不能冒充政策来源。"""

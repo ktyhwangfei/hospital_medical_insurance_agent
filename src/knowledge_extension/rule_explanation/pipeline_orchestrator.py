@@ -29,6 +29,47 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+LEGACY_FACT_EXTRACTION_PROMPT_TEMPLATE = """你是一个医保政策分析专家。请从以下政策文本中提取所有"政策事实"，并从每个事实中提取结构化的"政策规则"。
+
+## 定义
+- **政策事实**：一条完整的、可独立理解的政策规定。尽量覆盖原文中所有实质内容。
+- **政策规则**：从事实中抽取的完全结构化规则（一条事实可包含多条规则），每条规则包含 19 个必填字段（原文未提及则填空字符串""）。
+- **实体**：规则中涉及的主体（人员、机构、金额、比例等）/ **关系**：实体间的三元组。
+
+## 19 个必填字段
+rule_id / fact_id / policy_id / clause_id / source_text / insu_type / med_type / hosp_lv / psn_type / setl_type / payment_ratio / deductible_amount / cap_amount / time_period / admission_order / amount_band / priority / rule_type / rule_value
+
+## 政策文件
+{title}
+
+## 原文
+{text}
+
+## 输出格式
+返回 JSON 数组：
+[
+  {{
+    "fact_text": "完整的事实描述",
+    "rules": [{{
+      "rule_id": "", "fact_id": "", "policy_id": "", "clause_id": "",
+      "source_text": "原文精确片段", "insu_type": "镇职工基本医疗保险", "med_type": "住院",
+      "hosp_lv": "三级", "psn_type": "退休人员", "setl_type": "按项目",
+      "payment_ratio": "85%", "deductible_amount": "1300元", "cap_amount": "",
+      "time_period": "年度", "admission_order": "首次", "amount_band": "1300-30000",
+      "priority": "高", "rule_type": "支付比例", "rule_value": "...",
+      "confidence": 0.92,
+      "entities": [],
+      "relations": []
+    }}]
+  }}
+]
+
+## 注意
+1. 尽可能多地提取事实，覆盖原文中所有蕴含政策含义的语句
+2. 每条规则填满全部 19 个字段，未提及填空字符串""
+3. 只返回 JSON 数组，不要任何其他内容"""
+
+
 class PolicyFactExtractionError(RuntimeError):
     """模型调用或返回契约失败；与合法空事实列表区分。"""
 
@@ -343,13 +384,16 @@ class PipelineOrchestrator:
             # 这里显式放大输出空间（P8.4 迁移后重提取所需）。
             # override.max_tokens 可覆盖默认 8192（迭代 18）。
             max_tokens = override.max_tokens if override and override.max_tokens else 8192
-            response = gateway.generate(
-                messages=messages,
-                model_type="llm",
-                scene="policy_qa",
-                max_tokens=max_tokens,
-                model_override=override.model_name if override else None,
-            )
+            generate_kwargs: dict[str, Any] = {
+                "messages": messages,
+                "model_type": "llm",
+                "scene": "policy_fact_extraction",
+                "max_tokens": max_tokens,
+            }
+            if override and override.model_name:
+                # 审核时显式换大模型：仅在用户指定时才传入，避免干扰默认路由
+                generate_kwargs["model_override"] = override.model_name
+            response = gateway.generate(**generate_kwargs)
 
             content = response.content.strip()
             if content.startswith("```"):

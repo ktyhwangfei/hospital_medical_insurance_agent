@@ -6,6 +6,7 @@ metadata:
     app: medical-insurance-ai-agent
 data:
   APP_ENV: production
+  MODEL_GOVERNANCE_ENV: dev
   LOG_LEVEL: info
   DATABASE_URL: "postgresql://user:password@postgres:5432/medical_insurance?sslmode=disable"
   MILVUS_URI: "http://milvus:19530"

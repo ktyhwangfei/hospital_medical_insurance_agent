@@ -29,7 +29,7 @@
 | 政策问答 | 6 | 0 | 6 | 0 | 0 | P10 已切换；Chat-first 单答案最小单元已实现，待 R4 性能/E2E 收口 |
 | 结算异常导办 | 4 | 0 | 4 | 0 | 0 | — |
 | 出院前质控 | 3 | 0 | 3 | 0 | 0 | — |
-| 模型服务与管理 | 4 | 0 | 4 | 0 | 0 | — |
+| 模型服务与管理 | 5 | 1 | 4 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证 |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 | 知识库管理 | 4 | 1 | 3 | 0 | 0 | §2 P9 5 tab 已上线；语义提议 S1 已完成 R4 验证 |
 | 技能管理 | 9 | 6 | 3 | 0 | 0 | Skill AI 创作、候选隔离评测、人工物化与日常治理主链已验证 |
@@ -37,7 +37,7 @@
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **40** | **7** | **29** | **2** | **2** | — |
+| **合计** | **41** | **8** | **29** | **2** | **2** | — |
 
 > **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6 和 §4 为准；
@@ -79,6 +79,9 @@
 | 4.2 | 模型在线测试（流式 SSE） | `model_routes.py` → SSE | impl_done |
 | 4.3 | 模型路由（type+scene 策略） | `model_service/gateway/` → `router/` | impl_done |
 | 4.4 | 模型异常分类处理 | `model_service/exceptions/` | impl_done |
+| 4.5 | 提示词/模型/路由真实资产版本治理并驱动 dev/test 运行时 | `model_service/governance_*` → `ModelGateway` → Portal `/model-governance` | verified |
+
+4.5 验证证据（2026-08-17）：治理发布后的提示词、模型与路由成为 dev/test 真实运行时来源，无活动发布时才使用代码/静态配置回退；配置损坏失败关闭。API Key 通过 Fernet 密文保存，凭据以 endpoint fingerprint 和 revision 绑定，响应、日志与页面不回显明文；模型发布要求内容哈希与当前密钥指纹完全匹配的成功连接测试。按 T1 → T2a → T2b → T3 → Portal → T4 顺序分别为 89 passed、23 passed、2 passed、4 passed（20 条治理路由解析均值 0.876ms）、Vitest 21 passed + `tsc --noEmit` + Next.js build、Chromium E2E 连续两次各 1 passed（清空外部主密钥，治理 flow 专用 Playwright 配置禁止复用 8000/3000 服务并以 dev + 内存存储 + E2E 专用 Fernet key 独立启动；OpenAI-compatible 测试 Provider 严格校验 method/path/auth/model/参数），覆盖收费员直入、真实提示词全文、模型连接/审核/发布、下拉路由、提示词新版本生效/回滚、390px 无横向溢出及 API Key 页面/响应无泄漏。显式运行计划原命令 `npm test -- flows/portal/model-governance.flow.ts --project=chromium` 或别名 `npm run test:model-governance -- --project=chromium` 时才进入专用配置，默认/全量 E2E 明确排除该写流程。补充独立性验证：父 shell 故意设置错误的 `PORTAL_BASE_URL` / `NEXT_PUBLIC_API_BASE_URL` / `PORT` 时 Chromium 仍 1 passed；发布新提示词后故意中断的首次执行由 afterEach 恢复基线，同一 Playwright 进程 retry #1 完整通过。权限管理页尚未实现，当前仍沿用开发身份写/审/发门禁，是下一阶段工作。
 
 #### MCP 工具管理
 | # | 单元 | 后端 | 状态 |
@@ -282,6 +285,7 @@
 | Runtime 性能基准 | ✅ 全绿 | 3 passed：Memory ≤ 0.005ms、Composer 0.244ms（§3.2） |
 | Policy QA Chat-first 后端契约 | ✅ 聚焦验证通过 | 严格按 T1 单元 → T2a API → T2b Flow：130 passed → 39 passed → 99 passed |
 | Policy QA Chat-first Portal | ✅ 聚焦验证通过 | Task 4 流契约 37 passed；Task 5 完成时全量 Vitest 112 passed；Task 6 删除旧测试后 94 passed；`tsc --noEmit` 与 `next build` 通过。未执行或声明全仓 lint 通过 |
+| 模型治理真实资产运行时 | ✅ 全链路验证通过 | T1 89、T2a 23、T2b 2、T3 4、Portal Vitest 21、TypeScript/build、Chromium E2E 1 均通过 |
 | 全量回归 | ⚠️ 单元 26F/894P、API 66F/43P、Flow 42F/9P（预存债务） | 2026-07-31 与 HEAD 基线对比零新增失败，见 §5 测试债务 |
 
 ### 3.1 已知预存技术债（非当前任务引入，治理时优先级参考）
@@ -332,6 +336,7 @@
 | 2026-08-07 | **Skill 工作台“操作过深”重构（issue #12 体验）**：治理动作从 5 Tab 钻取（选中→总览→Tab→找按钮，3-4 层）降为工作台顶层一键执行。新增纯函数 `computePrimaryAction` 依据已加载证据（item/versions/evalRuns/releases）推导唯一下一步（运行评测/创建候选/申请审批/人工审批/激活/查看证据/已激活），由顶层 `SkillPrimaryActionBar` 直接执行写操作并刷新证据，navigate 态仅切 Tab，dev 环境只读禁用。复用既有 api-client 动作函数与 Token 体系，不引入新依赖；色彩沿用蓝/琥珀/翠绿 tint 与 portal 一致。Portal Vitest 235 passed（新增 `skill-primary-action` 11 例、改写 workbench 2 例验证“不进 Tab 即见主动作”）、tsc EXIT=0、next build 通过、设计反模式检测 [] | §7.6 Skill 工作台；Portal `/skills` 工作区 |
 | 2026-08-07 | **Skill 页面两个 bug 修复**：①`/skills` 顶部页签（Skill/草稿/评测记录/发布记录）active 态错乱——“Skill” tab 正则 `/\/skills\/[^/]+(\/edit)?$/` 误匹配 drafts/evaluations/releases，导致无论在哪个子页都高亮“Skill”；改为显式排除保留路径段（`RESERVED_SEGS`）。②`/skills` 工作台目录与所有 skill 列表全空（“没有符合条件的 Skill”）——前端 dev 进程复用旧实例、`NEXT_PUBLIC_API_BASE_URL` 仍指向 next.config 默认 8000，API 代理转发到错误后端实例（空数据）；重启前端指向本工作区后端 8173 修复，并记录陷阱到 AGENTS.md。Portal Vitest 235 passed、tsc EXIT=0、Orca 浏览器验证目录显示 settlement_explain_skill 与页签高亮均正确 | §7 Skill 管理；Portal `/skills` layout + 工作台 |
 | 2026-08-10 | **Skill AI 创作与候选隔离评测完成**：已发布指标→AI 候选→人工接受→差异优化→校验→固定路由/隔离行为评测→人工物化全链路通过；补齐低基数观测指标与 fail-closed 部署约束 | §7.8 Skill AI 创作 |
+| 2026-08-17 | **后台管理真实资产版本与模型接入**：真实提示词/模型/路由发布接入 dev/test 运行时；Fernet 凭据、连接测试发布门槛、版本只读/新建/回滚与资产中心 E2E 完成 | §1 模型服务与管理 4.5；§4 验证证据 |
 
 ---
 

@@ -2,7 +2,9 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+from pydantic import SecretStr
 
 from src.model_service.exceptions import (
     ModelAuthError,
@@ -11,13 +13,18 @@ from src.model_service.exceptions import (
     ModelTimeoutError,
 )
 from src.model_service.gateway import ModelGateway
-from src.model_service.models import Message, ModelResponse, TokenUsage
+from src.model_service.governance_runtime import RuntimeModelProfile, RuntimeModelRoute
+from src.model_service.models import Message, ModelResponse, StreamChunk, TokenUsage
 
 
 @pytest.fixture
-def gateway():
+def gateway(monkeypatch):
+    monkeypatch.setattr(
+        "src.model_service.gateway.resolve_governed_route",
+        lambda scene, model_type: None,
+    )
     instance = ModelGateway()
-    instance._config.base_url = "https://model.test.invalid"
+    instance._config.base_url = "https://static.example.test/v1"
     return instance
 
 
@@ -133,7 +140,234 @@ def test_generate_default_max_tokens_unchanged(gateway):
     assert captured["max_tokens"] == expected
 
 
-# ── model_override（迭代 18：审核时换大模型）──────────────────────
+def test_generate_and_stream_share_governed_route_resolution(monkeypatch, gateway):
+    from src.model_service import gateway as gateway_module
+
+    profile = RuntimeModelProfile(
+        asset_id="model.governed",
+        model_name="governed-model",
+        base_url="https://governed.example.test/v1",
+        api_key=SecretStr("sk-governed"),
+        timeout_seconds=19,
+        temperature=0.15,
+        max_tokens=333,
+    )
+    route = RuntimeModelRoute(primary=profile)
+    resolved = []
+    monkeypatch.setattr(
+        gateway_module,
+        "resolve_governed_route",
+        lambda scene, model_type: resolved.append((scene, model_type)) or route,
+    )
+    calls = []
+
+    class Provider:
+        def invoke(self, request):
+            calls.append(("generate", request))
+            return _make_response(model=request.model_type)
+
+        def invoke_stream(self, request):
+            calls.append(("stream", request))
+            yield StreamChunk(content="ok", finish_reason="stop")
+
+    monkeypatch.setattr(
+        gateway,
+        "_get_provider",
+        lambda model_name, runtime_profile=None: Provider(),
+    )
+
+    gateway.generate([Message(role="user", content="Q")], "llm", "policy_qa")
+    list(gateway.generate_stream([Message(role="user", content="Q")], "llm", "policy_qa"))
+
+    assert resolved == [("policy_qa", "llm"), ("policy_qa", "llm")]
+    assert [request.model_type for _, request in calls] == [
+        "governed-model",
+        "governed-model",
+    ]
+    assert all(request.temperature == 0.15 for _, request in calls)
+    assert all(request.max_tokens == 333 for _, request in calls)
+
+
+def test_generate_stream_uses_governed_fallback_before_any_chunk(monkeypatch, gateway):
+    from src.model_service import gateway as gateway_module
+
+    def profile(asset_id, model_name):
+        return RuntimeModelProfile(
+            asset_id=asset_id,
+            model_name=model_name,
+            base_url=f"https://{asset_id}.example.test/v1",
+            api_key=SecretStr(f"sk-{asset_id}"),
+            timeout_seconds=9,
+            temperature=0.1,
+            max_tokens=100,
+        )
+
+    route = RuntimeModelRoute(
+        primary=profile("model.primary", "primary"),
+        fallbacks=[profile("model.backup", "backup")],
+    )
+    monkeypatch.setattr(gateway_module, "resolve_governed_route", lambda *_: route)
+    requested = []
+
+    class Provider:
+        def __init__(self, model_name):
+            self.model_name = model_name
+
+        def invoke_stream(self, request):
+            requested.append(request.model_type)
+            if self.model_name == "primary":
+                raise ModelServerError("primary failed", model_name="primary")
+            yield StreamChunk(content="backup", finish_reason="stop")
+
+    monkeypatch.setattr(
+        gateway,
+        "_get_provider",
+        lambda model_name, runtime_profile=None: Provider(model_name),
+    )
+
+    chunks = list(
+        gateway.generate_stream([Message(role="user", content="Q")], "llm", "policy_qa")
+    )
+
+    assert [chunk.content for chunk in chunks] == ["backup"]
+    assert requested == ["primary", "backup"]
+
+
+def test_generate_stream_does_not_fallback_after_first_chunk(monkeypatch, gateway):
+    from src.model_service import gateway as gateway_module
+
+    primary = RuntimeModelProfile(
+        asset_id="model.primary",
+        model_name="primary",
+        base_url="https://primary.example.test/v1",
+        api_key=SecretStr("sk-primary"),
+        timeout_seconds=9,
+        temperature=0.1,
+        max_tokens=100,
+    )
+    backup = primary.model_copy(
+        update={"asset_id": "model.backup", "model_name": "backup"}
+    )
+    monkeypatch.setattr(
+        gateway_module,
+        "resolve_governed_route",
+        lambda *_: RuntimeModelRoute(primary=primary, fallbacks=[backup]),
+    )
+    requested = []
+
+    class Provider:
+        def __init__(self, model_name):
+            self.model_name = model_name
+
+        def invoke_stream(self, request):
+            requested.append(request.model_type)
+            yield StreamChunk(content="partial")
+            raise ModelTimeoutError("interrupted", model_name=request.model_type)
+
+    monkeypatch.setattr(
+        gateway,
+        "_get_provider",
+        lambda model_name, runtime_profile=None: Provider(model_name),
+    )
+    stream = gateway.generate_stream(
+        [Message(role="user", content="Q")], "llm", "policy_qa"
+    )
+
+    assert next(stream).content == "partial"
+    with pytest.raises(ModelTimeoutError):
+        next(stream)
+    assert requested == ["primary"]
+
+
+def test_generate_provider_error_never_records_upstream_secret(
+    monkeypatch, caplog, gateway
+):
+    from src.model_service import gateway as gateway_module
+
+    secret = "sk-live-gateway-sync"
+    body = f"api_key={secret}; Authorization: Bearer {secret}"
+    events = []
+    gateway._config.api_key = secret
+    gateway._config.max_retries = 1
+    monkeypatch.setattr(gateway._router, "resolve", lambda *_: ("primary", []))
+    monkeypatch.setattr(
+        gateway._router,
+        "get_model_params",
+        lambda *_: {"temperature": 0.1, "max_tokens": 100},
+    )
+    monkeypatch.setattr(
+        httpx.Client,
+        "post",
+        lambda *args, **kwargs: httpx.Response(502, text=body),
+    )
+    monkeypatch.setattr(
+        gateway_module, "_record_llm_event", lambda **kwargs: events.append(kwargs)
+    )
+    caplog.set_level("WARNING", logger="src.model_service.gateway")
+
+    with pytest.raises(ModelExhaustedError) as exc_info:
+        gateway.generate([Message(role="user", content="Q")], "llm", "policy_qa")
+
+    recorded = "\n".join(
+        [
+            str(exc_info.value),
+            str(exc_info.value.failures),
+            str([record.__dict__ for record in caplog.records]),
+            str(events),
+        ]
+    )
+    assert secret not in recorded
+    assert body not in recorded
+
+
+def test_generate_stream_provider_error_never_records_upstream_secret(
+    monkeypatch, caplog, gateway
+):
+    from src.model_service import gateway as gateway_module
+
+    secret = "sk-live-gateway-stream"
+    body = f"api_key={secret}; Authorization: Bearer {secret}"
+    response = httpx.Response(503, text=body)
+    events = []
+    gateway._config.api_key = secret
+    monkeypatch.setattr(gateway._router, "resolve", lambda *_: ("primary", []))
+    monkeypatch.setattr(
+        gateway._router,
+        "get_model_params",
+        lambda *_: {"temperature": 0.1, "max_tokens": 100},
+    )
+
+    class StreamContext:
+        def __enter__(self):
+            return response
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(
+        httpx.Client, "stream", lambda self, *args, **kwargs: StreamContext()
+    )
+    monkeypatch.setattr(
+        gateway_module, "_record_llm_event", lambda **kwargs: events.append(kwargs)
+    )
+    caplog.set_level("ERROR", logger="src.model_service.gateway")
+
+    with pytest.raises(ModelServerError) as exc_info:
+        list(
+            gateway.generate_stream(
+                [Message(role="user", content="Q")], "llm", "policy_qa"
+            )
+        )
+
+    recorded = "\n".join(
+        [
+            str(exc_info.value),
+            str([record.__dict__ for record in caplog.records]),
+            str(events),
+        ]
+    )
+    assert secret not in recorded
+    assert body not in recorded
 
 def _nondummy(gateway):
     """把 base_url 从 dummy 改为非 dummy，让真实 chain 循环执行（不被 dummy 分支短路）。"""

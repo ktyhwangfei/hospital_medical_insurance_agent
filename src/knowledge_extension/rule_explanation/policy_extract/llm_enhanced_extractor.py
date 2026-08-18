@@ -13,8 +13,90 @@ from typing import Dict, List, Optional, Any
 
 from .domain_definitions import DomainConfig, ValueDefinition, VALUE_DOMAIN_RULES
 from .value_domain_extractor import ValueDomainExtractor, ValueOccurrence, DomainExtractionResult
+from src.model_service.governance_runtime import render_governed_prompt
 
 logger = logging.getLogger(__name__)
+
+
+SYNONYM_DISCOVERY_PROMPT_TEMPLATE = """你是一个医保政策专家。请分析以下政策原文，找出可能的同义词或简称。
+
+## 当前已知的值域
+{known_values_text}
+
+## 政策原文片段
+{text_sample}
+
+## 任务
+1. 识别政策原文中出现的同义词、简称、别称
+2. 将它们对应到已知的标准值域
+3. 如果发现新的值域，也请指出
+
+## 输出格式
+请以JSON格式输出，包含以下字段：
+```json
+{{
+  "synonyms": [
+    {{
+      "field_name": "字段名",
+      "standard_name": "标准名称",
+      "new_aliases": ["新发现的同义词1", "新发现的同义词2"],
+      "confidence": 0.9,
+      "evidence": "在原文中的依据"
+    }}
+  ],
+  "new_values": [
+    {{
+      "field_name": "字段名",
+      "standard_name": "标准名称",
+      "abbreviation": "简称",
+      "category": "分类",
+      "confidence": 0.8,
+      "evidence": "在原文中的依据"
+    }}
+  ]
+}}
+```
+
+请只输出JSON，不要其他内容。"""
+
+
+DOMAIN_DISCOVERY_PROMPT_TEMPLATE = """你是一个医保政策专家。请分析以下政策原文，发现可能需要新增的值域字段。
+
+## 当前已有的字段
+{known_fields_text}
+
+## 政策原文片段
+{text_sample}
+
+## 任务
+1. 识别政策原文中出现的重要分类维度
+2. 判断是否需要新增值域字段
+3. 如果需要，提供建议的字段名和值域
+
+## 输出格式
+请以JSON格式输出：
+```json
+{{
+  "new_domains": [
+    {{
+      "field_name": "建议的字段名（英文）",
+      "field_name_cn": "中文字段名",
+      "description": "字段描述",
+      "values": [
+        {{
+          "standard_name": "标准名称",
+          "abbreviation": "简称",
+          "category": "分类"
+        }}
+      ],
+      "confidence": 0.8,
+      "evidence": "在原文中的依据"
+    }}
+  ]
+}}
+```
+
+请只输出JSON，不要其他内容。"""
 
 
 @dataclass
@@ -151,48 +233,18 @@ class LLMEnhancedExtractor:
         
         known_values_text = '\n'.join(known_values_desc)
         
-        prompt = f"""你是一个医保政策专家。请分析以下政策原文，找出可能的同义词或简称。
-
-## 当前已知的值域
-{known_values_text}
-
-## 政策原文片段
-{text_sample}
-
-## 任务
-1. 识别政策原文中出现的同义词、简称、别称
-2. 将它们对应到已知的标准值域
-3. 如果发现新的值域，也请指出
-
-## 输出格式
-请以JSON格式输出，包含以下字段：
-```json
-{{
-  "synonyms": [
-    {{
-      "field_name": "字段名",
-      "standard_name": "标准名称",
-      "new_aliases": ["新发现的同义词1", "新发现的同义词2"],
-      "confidence": 0.9,
-      "evidence": "在原文中的依据"
-    }}
-  ],
-  "new_values": [
-    {{
-      "field_name": "字段名",
-      "standard_name": "标准名称",
-      "abbreviation": "简称",
-      "category": "分类",
-      "confidence": 0.8,
-      "evidence": "在原文中的依据"
-    }}
-  ]
-}}
-```
-
-请只输出JSON，不要其他内容。"""
-        
-        return prompt
+        rendered = render_governed_prompt(
+            "policy.synonym_discovery",
+            variables={
+                "known_values_text": known_values_text,
+                "text_sample": text_sample,
+            },
+            fallback_system="",
+            fallback_user=SYNONYM_DISCOVERY_PROMPT_TEMPLATE,
+        )
+        return "\n\n".join(
+            filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
+        )
     
     def _parse_synonym_response(self, response: str) -> List[SynonymSuggestion]:
         """
@@ -281,45 +333,18 @@ class LLMEnhancedExtractor:
         known_fields = list(self.rules.keys())
         known_fields_text = ', '.join(known_fields)
         
-        prompt = f"""你是一个医保政策专家。请分析以下政策原文，发现可能需要新增的值域字段。
-
-## 当前已有的字段
-{known_fields_text}
-
-## 政策原文片段
-{text_sample}
-
-## 任务
-1. 识别政策原文中出现的重要分类维度
-2. 判断是否需要新增值域字段
-3. 如果需要，提供建议的字段名和值域
-
-## 输出格式
-请以JSON格式输出：
-```json
-{{
-  "new_domains": [
-    {{
-      "field_name": "建议的字段名（英文）",
-      "field_name_cn": "中文字段名",
-      "description": "字段描述",
-      "values": [
-        {{
-          "standard_name": "标准名称",
-          "abbreviation": "简称",
-          "category": "分类"
-        }}
-      ],
-      "confidence": 0.8,
-      "evidence": "在原文中的依据"
-    }}
-  ]
-}}
-```
-
-请只输出JSON，不要其他内容。"""
-        
-        return prompt
+        rendered = render_governed_prompt(
+            "policy.domain_discovery",
+            variables={
+                "known_fields_text": known_fields_text,
+                "text_sample": text_sample,
+            },
+            fallback_system="",
+            fallback_user=DOMAIN_DISCOVERY_PROMPT_TEMPLATE,
+        )
+        return "\n\n".join(
+            filter(None, [rendered.rendered_system_prompt, rendered.rendered_user_prompt])
+        )
     
     def _parse_domain_response(self, response: str) -> List[DomainSuggestion]:
         """

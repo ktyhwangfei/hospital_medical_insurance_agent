@@ -20,6 +20,20 @@ def test_resolve_unknown_scene_defaults(router):
     assert model_name == ROUTING_TABLE[("default", "llm")]
 
 
+def test_active_llm_scenes_have_explicit_routes(router):
+    active_scenes = {
+        "intent_recognition",
+        "skill_routing",
+        "policy_qa",
+        "fee_explanation",
+        "policy_fact_extraction",
+    }
+
+    for scene in active_scenes:
+        assert ROUTING_TABLE[(scene, ModelType.LLM)] == "deepseek-chat"
+        assert router.resolve(scene, ModelType.LLM) == ("deepseek-chat", [])
+
+
 def test_resolve_embedding(router):
     model_name, fallbacks = router.resolve("any_scene", ModelType.EMBEDDING)
     assert model_name == "text-embedding-3-small"

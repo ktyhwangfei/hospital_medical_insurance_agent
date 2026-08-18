@@ -10,6 +10,10 @@ import logging
 from typing import Any
 
 from src.model_service.gateway import ModelGateway
+from src.model_service.governance_runtime import (
+    GovernanceRuntimeError,
+    render_governed_prompt,
+)
 from src.model_service.models import Message
 from src.runtime.policy_qa.models import PolicyQAIntent, PolicyQAIntentResult
 
@@ -86,8 +90,16 @@ class IntentDetector:
                 return keyword_result
 
             # 关键词不确信，调用 LLM
-            prompt = INTENT_DETECTION_PROMPT.format(question=question)
-            messages = [Message(role="user", content=prompt)]
+            rendered = render_governed_prompt(
+                "policy_qa.intent_detect",
+                variables={"question": question},
+                fallback_system="",
+                fallback_user=INTENT_DETECTION_PROMPT,
+            )
+            messages = []
+            if rendered.rendered_system_prompt:
+                messages.append(Message(role="system", content=rendered.rendered_system_prompt))
+            messages.append(Message(role="user", content=rendered.rendered_user_prompt or ""))
             response = await self.model_gateway.generate(
                 messages=messages,
                 model_type="llm",
@@ -98,6 +110,8 @@ class IntentDetector:
             result = self._parse_llm_response(response.content, question)
             return result
 
+        except GovernanceRuntimeError:
+            raise
         except Exception as e:
             logger.exception("Intent detection failed")
             # 降级到关键词匹配
