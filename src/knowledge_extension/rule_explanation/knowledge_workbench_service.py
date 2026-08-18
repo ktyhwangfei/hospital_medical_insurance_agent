@@ -75,8 +75,17 @@ _FIELD_NAMES = {
     "amount_band": "金额区间",
 }
 
-_NON_BUSINESS_FIELDS = {
-    "rule_id",
+def _field_label(key: str, published_metrics: dict[str, "Metric"]) -> str:
+    """字段中文名：语义层 published 指标名优先，硬编码字典兜底。
+
+    schema-driven 原则：新增维度（如基金归属）发布到语义层后，审核视图
+    自动显示中文名，无需改本字典。
+    """
+    metric = published_metrics.get(key)
+    return metric.name if metric is not None and metric.name else _FIELD_NAMES.get(key, key)
+
+
+_NON_BUSINESS_FIELDS = {    "rule_id",
     "knowledge_id",
     "fact_id",
     "policy_id",
@@ -94,6 +103,8 @@ _NON_BUSINESS_FIELDS = {
     "setl_type",
     "insu_type",
 }
+
+_STRUCTURED_METADATA_FIELDS = _NON_BUSINESS_FIELDS - {"insu_type", "setl_type"}
 
 # V4.1 S1：rule_type → 业务主题概念 / 规则类型枚举 / 中文标签（阶段一映射，抽取枚举扩展后置）
 _RULE_TYPE_META: dict[str, tuple[str, str, str]] = {
@@ -161,17 +172,22 @@ def _compact_clause_path(path: list[str]) -> str:
 
 
 def _knowledge_id(extraction_id: str, rule: dict[str, Any]) -> str:
+    # LLM 自报的 rule_id 是单元内局部序号（每单元都从 rule_001 编号），
+    # 跨单元必撞名 → 多单元构建时 compile_units 的 runs 按 knowledge_id
+    # 覆盖 → 同一 run 重复写步骤 → 500。故 persisted id 也绑定 extraction 命名空间。
+    def _digest(payload: str) -> str:
+        return f"kn_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
+
     persisted = str(rule.get("knowledge_id") or rule.get("rule_id") or "").strip()
     if persisted:
-        return persisted
+        return _digest(f"{extraction_id}|persisted|{persisted}")
     identity = {
         key: value
         for key, value in rule.items()
         if key not in {"knowledge_id", "rule_id", "confidence"}
     }
     canonical = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(f"{extraction_id}|{canonical}".encode("utf-8")).hexdigest()[:16]
-    return f"kn_{digest}"
+    return _digest(f"{extraction_id}|{canonical}")
 
 
 def _sentence(rule: dict[str, Any]) -> str:
@@ -179,12 +195,13 @@ def _sentence(rule: dict[str, Any]) -> str:
     rule_type = str(rule.get("rule_type") or "")
     person = str(rule.get("psn_type") or "参保人员")
     medical = str(rule.get("med_type") or "就医")
-    if rule_type == "payment_ratio" and _present(rule.get("payment_ratio")):
+    if rule_type in {"payment_ratio", "支付比例"} and _present(rule.get("payment_ratio")):
         return f"{person}{medical}时，统筹基金支付比例为{rule['payment_ratio']}。"
-    if rule_type in {"deductible", "deductible_line"} and _present(rule.get("deductible_amount")):
-        return f"{person}{medical}时，起付标准为{rule['deductible_amount']}。"
-    if rule_type in {"cap", "cap_amount"} and _present(rule.get("cap_amount")):
-        return f"{person}{medical}时，最高支付限额为{rule['cap_amount']}。"
+    if rule_type in {"deductible", "deductible_line", "起付线"} and _present(rule.get("deductible_amount")):
+        return f"{person}{medical}时，起付标准为{_amount_text(rule['deductible_amount'])}。"
+    if rule_type in {"cap", "cap_amount", "封顶线"} and _present(rule.get("cap_amount")):
+        fund = str(rule.get("jjgs") or "")
+        return f"{person}{medical}时，{fund}最高支付限额为{_amount_text(rule['cap_amount'])}。"
     if rule_type in {"eligibility", "eligibility_rule"}:
         return f"{person}适用于{medical}待遇。"
     # 兜底：优先 rule_value（LLM 生成的自然业务描述）
@@ -201,6 +218,11 @@ def _sentence(rule: dict[str, Any]) -> str:
         and _present(value)
     ]
     return "，".join(parts) + "。" if parts else "该政策知识尚无可连读的结构化字段。"
+
+
+def _amount_text(value: Any) -> str:
+    text = str(value)
+    return f"{text}元" if text.replace(".", "", 1).isdigit() else text
 
 
 def _confidence(rule: dict[str, Any], extraction: dict[str, Any]) -> KnowledgeConfidence:
@@ -307,6 +329,9 @@ class KnowledgeWorkbenchService:
             raise ValueError(f"政策文档不存在: {doc_id}")
 
         contract_version, published_metrics = self._load_contract()
+        # 预取 policy_knowledge 已发布绑定并建索引，避免 _standardize_fields
+        # 对每个字段×每个指标查库（N×M 次 PG 往返，大文档时秒级耗时）。
+        binding_index = self._policy_binding_index(published_metrics)
 
         review_map = self._load_review_map(doc_id)
 
@@ -330,6 +355,9 @@ class KnowledgeWorkbenchService:
             source = str(fields.get("fact_text") or extraction.get("source_text") or "")
             for matched_unit_id in match_leaves(source, kept):
                 linked[matched_unit_id].append((extraction, "legacy_match"))
+        for unit_id, relations in linked.items():
+            if any(source == "persisted" for _, source in relations):
+                linked[unit_id] = [item for item in relations if item[1] == "persisted"]
 
         dup_state = document.get("dup_state") or {}
         merged = set((dup_state.get("merged") or {}).keys())
@@ -347,11 +375,25 @@ class KnowledgeWorkbenchService:
             clause_path = _compact_clause_path(getattr(leaf, "path", []) or [])
             knowledge_count = 0
             if include_knowledge:
-                for extraction, relationship_source in relations:
+                # 按版本时间降序（新→旧），同 knowledge_id 保留最新 extraction 版本。
+                # REBUILD 重抽会追加新 extraction 而不清理旧的，旧记录的 rule_id 与新
+                # 相同导致 knowledge_id 重复，policy_compiler 同一 run 重复写步骤而 500。
+                relations_sorted = sorted(
+                    relations,
+                    key=lambda item: str(
+                        item[0].get("updated_at") or item[0].get("created_at") or ""
+                    ),
+                    reverse=True,
+                )
+                seen_knowledge: set[str] = set()
+                for extraction, relationship_source in relations_sorted:
                     fields = extraction.get("extracted_fields") or {}
                     extraction_id = str(extraction.get("extraction_id") or "")
                     for rule in fields.get("rules") or []:
                         knowledge_id = _knowledge_id(extraction_id, rule)
+                        if knowledge_id in seen_knowledge:
+                            continue
+                        seen_knowledge.add(knowledge_id)
                         review = review_map.get(knowledge_id)
                         knowledge.append(
                             self._knowledge_item(
@@ -365,6 +407,7 @@ class KnowledgeWorkbenchService:
                                 review_status=review.status if review else "pending",
                                 review_note=review.note if review else None,
                                 clause_path=clause_path,
+                                binding_index=binding_index,
                             )
                         )
                 knowledge_count = len(knowledge)
@@ -424,6 +467,7 @@ class KnowledgeWorkbenchService:
         review_status: str = "pending",
         review_note: str | None = None,
         clause_path: str = "",
+        binding_index: dict[tuple[str, str], tuple[str, "MetricSourceBinding"]] | None = None,
     ) -> KnowledgeItem:
         extraction_id = str(extraction.get("extraction_id") or "")
         knowledge_id = _knowledge_id(extraction_id, rule)
@@ -436,11 +480,11 @@ class KnowledgeWorkbenchService:
         structured_fields = [
             KnowledgeField(
                 field_code=key,
-                field_name=_FIELD_NAMES.get(key, key),
+                field_name=_field_label(key, published_metrics),
                 raw_value=value,
             )
             for key, value in rule.items()
-            if key not in _NON_BUSINESS_FIELDS and _present(value)
+            if key not in _STRUCTURED_METADATA_FIELDS and _present(value)
         ]
         standardized_fields = self._standardize_fields(
             doc_id=str(document.get("doc_id") or ""),
@@ -449,6 +493,7 @@ class KnowledgeWorkbenchService:
             contract_version=contract_version,
             fields=structured_fields,
             published_metrics=published_metrics,
+            binding_index=binding_index,
         )
         confidence = _confidence(rule, extraction)
         domain_results = [
@@ -529,6 +574,31 @@ class KnowledgeWorkbenchService:
             return {}
         return {item.knowledge_id: item for item in self._review_store.list_for_document(doc_id)}
 
+    def _policy_binding_index(
+        self, published_metrics: dict[str, "Metric"]
+    ) -> dict[tuple[str, str], tuple[str, "MetricSourceBinding"]]:
+        """预取 policy_knowledge 已发布绑定，按 (source_ref, source_field) 建索引。
+
+        绑定与具体 knowledge 无关，每次 get_document 只需取一轮；
+        原实现对每字段×每指标各查一次库，是概览页 12s 卡顿的热点。
+        """
+        if self._alignment_service is None:
+            return {}
+        index: dict[tuple[str, str], tuple[str, "MetricSourceBinding"]] = {}
+        for short_code, candidate in published_metrics.items():
+            for binding in self._alignment_service.list_metric_bindings(
+                candidate.metric_code
+            ):
+                if (
+                    binding.status == "published"
+                    and binding.source_type == "policy_knowledge"
+                ):
+                    index[(binding.source_ref, binding.source_field)] = (
+                        short_code,
+                        binding,
+                    )
+        return index
+
     def _standardize_fields(
         self,
         *,
@@ -538,6 +608,7 @@ class KnowledgeWorkbenchService:
         contract_version: str | None,
         fields: list[KnowledgeField],
         published_metrics: dict[str, "Metric"],
+        binding_index: dict[tuple[str, str], tuple[str, "MetricSourceBinding"]] | None = None,
     ) -> list[StandardizedField]:
         if self._registry is None:
             return []
@@ -546,19 +617,15 @@ class KnowledgeWorkbenchService:
         for field in fields:
             metric = published_metrics.get(field.field_code)
             binding = None
-            if self._alignment_service is not None:
-                for candidate in published_metrics.values():
-                    bindings = self._alignment_service.list_metric_bindings(candidate.metric_code)
-                    binding = next((item for item in bindings if (
-                        item.status == "published"
-                        and item.source_type == "policy_knowledge"
-                        and item.source_ref == source_ref
-                        and item.source_field == field.field_code
-                        and item.source_version == (contract_version or item.source_version)
-                    )), None)
-                    if binding is not None:
-                        metric = candidate
-                        break
+            if binding_index is not None and self._alignment_service is not None:
+                hit = binding_index.get((source_ref, field.field_code))
+                if hit is not None:
+                    short_code, hit_binding = hit
+                    if hit_binding.source_version == (
+                        contract_version or hit_binding.source_version
+                    ):
+                        binding = hit_binding
+                        metric = published_metrics.get(short_code) or metric
             if metric is None:
                 results.append(StandardizedField(
                     source_field=field.field_code,

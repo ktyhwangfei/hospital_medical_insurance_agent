@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from src.knowledge_extension.rule_explanation.change_set_models import (
@@ -156,6 +158,40 @@ def test_build_records_publish_step_and_lineage_only_after_health() -> None:
     assert trace is not None
     assert trace.steps[-1].stage == "PUBLISH"
     assert trace.publication.release_id == release.release_id
+
+
+def test_specific_ratio_subject_reuses_base_payment_ratio_field() -> None:
+    """规则主体可以细化，但发布结构不得为每个主体新增指标字段。"""
+    from src.knowledge_extension.rule_explanation.release_index import (
+        KnowledgeWorkbenchReleaseSource,
+    )
+
+    rule = CanonicalRule(
+        rule_id="rule_fund_ratio",
+        subject="large_medical_mutual_aid_payment_ratio",
+        population="退休人员",
+        result={"ratio": "0.8"},
+        evidence=["evidence_1"],
+    )
+
+    payload = KnowledgeWorkbenchReleaseSource._runtime_rule(rule, "原文")
+
+    assert payload["rule_type"] == "large_medical_mutual_aid_payment_ratio"
+    assert str(payload["payment_ratio"]) == "0.8"
+    assert "large_medical_mutual_aid_payment_ratio" not in payload
+
+
+def test_rule_entity_serializes_decimal_detail_for_milvus_dynamic_json() -> None:
+    from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
+        rule_to_entity,
+    )
+
+    entity = rule_to_entity(
+        {"rule_id": "rule_decimal", "payment_ratio": Decimal("0.8")},
+        [0.1, 0.2],
+    )
+
+    assert entity["payment_ratio"]["value"] == "0.8"
 
 
 def test_trace_failure_keeps_release_building() -> None:

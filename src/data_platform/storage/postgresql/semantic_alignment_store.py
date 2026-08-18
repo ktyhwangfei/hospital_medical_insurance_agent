@@ -10,6 +10,9 @@ from src.data_platform.storage.postgresql.client import PostgreSQLClient
 from src.data_platform.storage.postgresql.semantic_registry_store import (
     SEMANTIC_REGISTRY_TRANSACTION_LOCK,
 )
+from src.knowledge_extension.rule_explanation.conflict_partition_discovery import (
+    ConflictUncertainty,
+)
 from src.knowledge_extension.rule_explanation.semantic_alignment import (
     MetricSourceBinding,
     ProposalStatus,
@@ -99,6 +102,15 @@ CREATE TABLE IF NOT EXISTS semantic_proposal_landing_targets (
     proposal_id VARCHAR(64) NOT NULL REFERENCES semantic_proposals(proposal_id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS semantic_conflict_uncertainties (
+    fingerprint VARCHAR(64) PRIMARY KEY,
+    document_id VARCHAR(128) NOT NULL,
+    snapshot_id VARCHAR(128) NOT NULL,
+    diagnosis VARCHAR(64) NOT NULL,
+    payload JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -126,6 +138,17 @@ def _proposal_from_row(row: dict[str, Any]) -> SemanticProposal:
     })
     data["evidence"] = evidence
     return SemanticProposal(**data)
+
+
+def _proposal_payload(proposal: SemanticProposal) -> dict[str, Any]:
+    return proposal.model_dump(
+        mode="json",
+        exclude={
+            "proposal_id", "fingerprint", "proposal_type", "trigger_source",
+            "status", "confidence", "occurrence_count", "evidence",
+            "reviewed_by", "reviewed_at", "review_note", "created_at", "updated_at",
+        },
+    )
 
 
 class PostgresSemanticAlignmentStore:
@@ -277,14 +300,7 @@ class PostgresSemanticAlignmentStore:
         return StandardValueProposal(**_without_none_created_at(rows[0])) if rows else None
 
     def save_proposal(self, proposal: SemanticProposal) -> SemanticProposal:
-        payload = proposal.model_dump(
-            mode="json",
-            exclude={
-                "proposal_id", "fingerprint", "proposal_type", "trigger_source",
-                "status", "confidence", "occurrence_count", "evidence",
-                "reviewed_by", "reviewed_at", "review_note", "created_at", "updated_at",
-            },
-        )
+        payload = _proposal_payload(proposal)
         self._get_client().execute(
             """INSERT INTO semantic_proposals
                (proposal_id, fingerprint, proposal_type, trigger_source, status,
@@ -350,19 +366,45 @@ class PostgresSemanticAlignmentStore:
     def compare_and_set_proposal(
         self, proposal: SemanticProposal, expected_status: ProposalStatus,
     ) -> SemanticProposal | None:
+        payload = _proposal_payload(proposal)
         rows = self._get_client().execute(
             """UPDATE semantic_proposals SET
                  status=%s, reviewed_by=%s, reviewed_at=%s, review_note=%s,
+                 confidence=%s, occurrence_count=%s, payload=%s, evidence=%s,
                  updated_at=%s
                WHERE proposal_id=%s AND status=%s
                RETURNING *""",
             (
                 proposal.status, proposal.reviewed_by, proposal.reviewed_at,
-                proposal.review_note, proposal.updated_at, proposal.proposal_id,
+                proposal.review_note, proposal.confidence, proposal.occurrence_count,
+                json.dumps(payload, ensure_ascii=False),
+                json.dumps(
+                    [item.model_dump(mode="json") for item in proposal.evidence],
+                    ensure_ascii=False,
+                ),
+                proposal.updated_at, proposal.proposal_id,
                 expected_status,
             ),
         )
         return _proposal_from_row(rows[0]) if rows else None
+
+    def save_conflict_uncertainty(self, uncertainty: ConflictUncertainty) -> None:
+        self._get_client().execute(
+            """INSERT INTO semantic_conflict_uncertainties
+               (fingerprint, document_id, snapshot_id, diagnosis, payload)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (fingerprint) DO UPDATE SET
+                 document_id=EXCLUDED.document_id, snapshot_id=EXCLUDED.snapshot_id,
+                 diagnosis=EXCLUDED.diagnosis, payload=EXCLUDED.payload,
+                 updated_at=CURRENT_TIMESTAMP""",
+            (
+                uncertainty.fingerprint,
+                uncertainty.document_id,
+                uncertainty.extraction_snapshot_id,
+                uncertainty.diagnosis,
+                json.dumps(uncertainty.model_dump(mode="json"), ensure_ascii=False),
+            ),
+        )
 
     def get_proposal_by_fingerprint(self, fingerprint: str) -> SemanticProposal | None:
         rows = self._get_client().execute(

@@ -32,6 +32,7 @@ RULE_KEY_FIELDS = (
     "effective_period",
     "additional_conditions",
 )
+_NON_IDENTITY_CONDITION_FIELDS = {"rule_value"}
 _SEGMENT_FIELDS = {"segment", "amount_band"}
 # 身份无法确定时的哨兵值：必须 fail-closed，否则语义不同的规则会塌缩进同一 rule_id。
 # ponytail: 哨兵集合是封闭枚举，新增适配器产生的未知身份值时需同步扩充。
@@ -50,12 +51,17 @@ def freeze(value: Any) -> Any:
 
 def rule_key(fact: PolicyFact) -> tuple[object, ...]:
     # value.keys() 必须参与身份：否则同 subject/population 的“比例规则”与“金额规则”会算出同一 rule_id。
-    return (
+    key = (
         fact.subject,
         fact.population,
         *(freeze(fact.conditions.get(name)) for name in RULE_KEY_FIELDS),
         freeze(sorted(fact.value.keys())),
     )
+    dynamic_conditions = {
+        name: value for name, value in fact.conditions.items()
+        if name not in RULE_KEY_FIELDS and name not in _NON_IDENTITY_CONDITION_FIELDS
+    }
+    return (*key, freeze(dynamic_conditions)) if dynamic_conditions else key
 
 
 class PolicyRuleCompiler:
@@ -137,6 +143,14 @@ class PolicyRuleCompiler:
                 issues.append(self._issue(
                     "FAIL", "EVIDENCE_REQUIRED", "CANONICALIZE", fact_id=fact.fact_id,
                     message="政策事实缺少证据", action="补充原文证据后重试",
+                ))
+                continue
+            if not fact.value and (
+                fact.expression is None or fact.expression.operator == "ABSOLUTE"
+            ):
+                issues.append(self._issue(
+                    "REVIEW", "RESULT_MISSING", "CANONICALIZE", fact_id=fact.fact_id,
+                    message="政策事实缺少结构化结果", action="补充规则值或数值结果后重提取",
                 ))
                 continue
             value = dict(fact.value)

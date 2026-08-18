@@ -299,6 +299,201 @@ def _signal(**overrides: object):
     return DiscoverySignal(**data)
 
 
+def test_intake_rejects_shell_metric_signal() -> None:
+    """空壳 new_metric（code/semantic_type/definition 缺失）不生成提议（修1）。"""
+    from src.knowledge_extension.rule_explanation.semantic_alignment import (
+        InMemorySemanticAlignmentStore,
+        SemanticAlignmentService,
+    )
+
+    registry, _ = _registry()
+    service = SemanticAlignmentService(registry, InMemorySemanticAlignmentStore())
+
+    # 空 code + 空 semantic_type + 空 definition → 丢弃
+    dropped = service.intake_signal(_signal(
+        metric_code=None, metric_name=None, semantic_type=None,
+    ))
+    assert dropped is None
+    assert service.list_proposals() == []
+
+
+def test_intake_skips_concept_already_published() -> None:
+    """建议 code 已在 registry published → 不重复提议（修2，sp_73ac7 复现）。"""
+    from src.knowledge_extension.rule_explanation.semantic_alignment import (
+        InMemorySemanticAlignmentStore,
+        SemanticAlignmentService,
+    )
+
+    registry, store = _registry()
+    store.save_metric(Metric(
+        metric_code="zcgz.dyylhzzj", object_code="zcgz", name="大额医疗互助资金",
+        semantic_type="String", status="published",
+    ))
+    service = SemanticAlignmentService(registry, InMemorySemanticAlignmentStore())
+
+    result = service.intake_signal(_signal(
+        concept="大病医疗保险", metric_code="zcgz.dyylhzzj",
+    ))
+    assert result is None
+    assert service.list_proposals() == []
+
+
+def test_publish_dimension_creates_object_prefixed_metric() -> None:
+    """维度候选发布：指标 code 必须带对象前缀（zcgz.fund_type），
+    不能是裸码（jjgs）——否则提取契约字段风格不一致、按对象检索失真。"""
+    from src.knowledge_extension.rule_explanation.conflict_partition_discovery import (
+        CandidateDomainValue,
+        ConflictPartitionEvidence,
+        DimensionCandidateProposal,
+    )
+    from src.knowledge_extension.rule_explanation.semantic_alignment import (
+        DimensionReviewConclusion,
+        InMemorySemanticAlignmentStore,
+        ProposalStatus,
+        ProposalType,
+        SemanticAlignmentService,
+        SemanticProposal,
+        TriggerSource,
+    )
+
+    registry, _ = _registry()
+    service = SemanticAlignmentService(registry, InMemorySemanticAlignmentStore())
+    proposal = SemanticProposal(
+        proposal_id="sp_dim_test",
+        fingerprint="fp_dim_test",
+        proposal_type=ProposalType.DIMENSION,
+        trigger_source=TriggerSource.CONFLICT_PARTITION,
+        concept="基金归属",
+        object_code="zcgz",
+        dimension_candidate=DimensionCandidateProposal(
+            fingerprint="fp_dim_candidate",
+            suggested_code="fund_type",
+            suggested_name="基金归属",
+            semantic_type="Enum",
+            metric_role="dimension",
+            candidate_values=[
+                CandidateDomainValue(code="pooled_fund", label="统筹基金"),
+                CandidateDomainValue(code="large_mutual_aid_fund", label="大额医疗互助资金"),
+            ],
+            evidence_grade="single_observation",
+            naming_status="resolved",
+            evidence=ConflictPartitionEvidence(
+                trigger_source=TriggerSource.CONFLICT_PARTITION,
+                document_id="doc_1",
+                extraction_snapshot_id="snap_1",
+                extraction_contract_version="2",
+                identity_signature={"known_values": {}, "unknown_fields": []},
+                conflict_values=[],
+                partition_mappings=[],
+                coverage=1.0,
+                exclusivity=1.0,
+                evidence_grade="single_observation",
+                rule_ids=["r1"],
+                source_clause_ids=["c1"],
+                evidence_texts=["原文证据"],
+                unknown_identity_fields=[],
+                competing_axis_candidates=[],
+                diagnosis="missing_dimension",
+            ),
+            status="proposed",
+        ),
+        evidence=[],
+        confidence=0.0,
+        occurrence_count=1,
+    )
+    service._store.merge_proposal(proposal)
+    resolved = service.resolve_dimension_proposal(
+        "sp_dim_test",
+        DimensionReviewConclusion.NEW_DIMENSION,
+        reviewed_by="reviewer",
+        suggested_name="基金归属",
+        suggested_code="fund_type",
+    )
+
+    assert resolved.status == ProposalStatus.PUBLISHED
+    metric = registry.get_metric("zcgz.fund_type")
+    assert metric is not None, "应创建带对象前缀的指标 zcgz.fund_type"
+    assert metric.object_code == "zcgz"
+    assert metric.semantic_type == "Enum"
+    domain = registry.get_value_domain("fund_type")
+    assert domain is not None and len(domain.standard_values) == 2
+
+
+def test_intake_drops_dimension_value_family_concepts() -> None:
+    """方案 C：基金名同族概念是缺失维度的候选取值（由 S5 维度候选承接），
+    禁止注册为 String 指标（实测 sp_e813/sp_6def41f0 系列）。"""
+    from src.knowledge_extension.rule_explanation.semantic_alignment import (
+        InMemorySemanticAlignmentStore,
+        SemanticAlignmentService,
+    )
+
+    registry, _ = _registry()
+    service = SemanticAlignmentService(registry, InMemorySemanticAlignmentStore())
+
+    for concept in (
+        "大额医疗互助资金", "住院大额医疗互助资金",
+        "门诊大额医疗互助资金", "基本医疗保险统筹基金",
+    ):
+        dropped = service.intake_signal(_signal(
+            concept=concept, metric_code="zcgz.some_code",
+        ))
+        assert dropped is None, concept
+    assert service.list_proposals() == []
+
+    # 含度量核心的同族概念（如「大额医疗互助资金支付比例」）是真度量，不拦截
+    kept = service.intake_signal(_signal(
+        concept="大额医疗互助资金支付比例", metric_code="zcgz.mutual_aid_ratio",
+    ))
+    assert kept is not None
+
+
+def test_intake_requires_snake_case_metric_code() -> None:
+    """LLM 自报 code 非小写蛇形（中英混拼/大写/连字符）→ 丢弃而非入队（修3）。"""
+    import re
+    from src.knowledge_extension.rule_explanation.semantic_alignment import (
+        InMemorySemanticAlignmentStore,
+        SemanticAlignmentService,
+    )
+
+    registry, _ = _registry()
+    service = SemanticAlignmentService(registry, InMemorySemanticAlignmentStore())
+
+    bad = service.intake_signal(_signal(
+        concept="住院补充医疗保险",
+        metric_code="zcgz.hospital_large_medical_mutual_fund",
+    ))
+    # 英文全拼风格合法（仅小写字母数字下划线），但与语义层拼音风格并存——
+    # 本条只拦截非法字符；风格统一由命名审核把关。
+    assert bad is not None
+    result = service.intake_signal(_signal(
+        concept="门诊大额", metric_code="zcgz.Outpatient-大额",
+    ))
+    assert result is None
+    assert len(service.list_proposals()) == 1
+
+
+def test_intake_normalizes_mismatched_metric_code_prefix() -> None:
+    """LLM 自报 code 前缀与对象不一致时（实测 zcfg.dyylhzzj 挂在 zcgz 下），
+    提议创建即纠正为 object_code 前缀，避免发布后语义层展示错乱。"""
+    from src.knowledge_extension.rule_explanation.semantic_alignment import (
+        InMemorySemanticAlignmentStore,
+        SemanticAlignmentService,
+    )
+
+    registry, _ = _registry()
+    service = SemanticAlignmentService(registry, InMemorySemanticAlignmentStore())
+
+    proposal = service.intake_signal(_signal(metric_code="zcfg.dyylhzzj"))
+    assert proposal.metric_draft is not None
+    assert proposal.metric_draft.metric_code == "zcgz.dyylhzzj"
+
+    no_dot = service.intake_signal(_signal(
+        concept="门诊特殊病种", metric_code="plaincode",
+    ))
+    assert no_dot.metric_draft is not None
+    assert no_dot.metric_draft.metric_code == "zcgz.plaincode"
+
+
 def test_intake_routes_new_concept_new_enum_value_and_alias() -> None:
     from src.knowledge_extension.rule_explanation.semantic_alignment import (
         InMemorySemanticAlignmentStore,
@@ -795,6 +990,10 @@ def test_accept_metric_proposal_validates_required_review_fields(
     registry, _ = _registry()
     service = SemanticAlignmentService(registry, InMemorySemanticAlignmentStore())
     proposal = service.intake_signal(_signal(**signal_overrides))
+    if "metric_code" in signal_overrides and signal_overrides["metric_code"] is None:
+        # 空 code 在入队门禁即被拦截（不再产生空壳提议进入审核流）
+        assert proposal is None
+        return
     service.transition_proposal(proposal.proposal_id, ProposalStatus.REVIEWING)
     with pytest.raises(ValueError, match="指标提议"):
         service.transition_proposal(proposal.proposal_id, ProposalStatus.ACCEPTED)
@@ -810,11 +1009,16 @@ def test_metric_publish_rejects_conflict_but_accepts_equivalent_published_metric
     registry, registry_store = _registry()
     service = SemanticAlignmentService(registry, InMemorySemanticAlignmentStore())
     conflict = service.intake_signal(_signal(
-        concept="冲突人员类型", metric_code="zcgz.person_type",
+        concept="冲突人员类型", metric_code="zcgz.person_type_conflict",
         metric_name="不同名称", semantic_type="String",
     ))
     service.transition_proposal(conflict.proposal_id, ProposalStatus.REVIEWING)
     service.transition_proposal(conflict.proposal_id, ProposalStatus.ACCEPTED)
+    # 发布前指标才被另一个流程注册且不等价 → 发布拒绝（竞态防线）
+    registry_store.save_metric(Metric(
+        metric_code="zcgz.person_type_conflict", object_code="zcgz", name="另一含义",
+        metric_type="Atomic", semantic_type="String", status="published",
+    ))
     with pytest.raises(ValueError, match="已存在且不等价"):
         service.publish_proposal(conflict.proposal_id)
     assert service.get_proposal(conflict.proposal_id).status == ProposalStatus.ACCEPTED  # type: ignore[union-attr]
@@ -830,9 +1034,8 @@ def test_metric_publish_rejects_conflict_but_accepts_equivalent_published_metric
         metric_type="Atomic", semantic_type="Amount", unit="元",
         metric_kind="field", indexed=True, extraction_hint="提取金额", schema_version=2,
     ))
-    service.transition_proposal(equivalent.proposal_id, ProposalStatus.REVIEWING)
-    service.transition_proposal(equivalent.proposal_id, ProposalStatus.ACCEPTED)
-    assert service.publish_proposal(equivalent.proposal_id).status == ProposalStatus.PUBLISHED
+    # 新门禁：code 已发布 → 不再重复提议（发布幂等冲突防线仍在，但入队即拦）
+    assert equivalent is None
 
 
 def test_published_suggested_mappings_preserve_source_specific_resolution() -> None:
@@ -1214,7 +1417,7 @@ def test_in_memory_publish_failure_rolls_back_registry_and_landing_claims(
 
 
 @pytest.mark.parametrize("terminal_status", ["published", "rejected"])
-def test_terminal_metric_proposal_starts_a_new_review_generation(
+def test_terminal_metric_proposal_does_not_repeat_an_already_resolved_problem(
     terminal_status: str,
 ) -> None:
     from src.knowledge_extension.rule_explanation.semantic_alignment import (
@@ -1252,9 +1455,15 @@ def test_terminal_metric_proposal_starts_a_new_review_generation(
         },
     ))
 
-    assert rediscovered.proposal_id != first.proposal_id
-    assert rediscovered.status == ProposalStatus.PROPOSED
-    assert service.get_proposal(first.proposal_id).status == terminal_status  # type: ignore[union-attr]
+    if terminal_status == "published":
+        # 已发布指标的重复发现被入队门禁拦截（不再重复提议）
+        assert rediscovered is None
+        assert service.get_proposal(first.proposal_id).status == ProposalStatus.PUBLISHED
+    else:
+        assert rediscovered.proposal_id == first.proposal_id
+        assert rediscovered.status == ProposalStatus.REJECTED
+        assert service.get_proposal(first.proposal_id).status == ProposalStatus.REJECTED
+        assert len(service.list_proposals()) == 1
 
 
 def test_mapping_discovered_after_published_generation_is_reviewed_and_landed() -> None:

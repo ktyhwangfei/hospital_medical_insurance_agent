@@ -1189,8 +1189,10 @@ def list_releases() -> list[KnowledgeRelease]:
 
 @router.post("/releases/{release_id}/build", response_model=KnowledgeRelease)
 def build_candidate_release(release_id: str) -> KnowledgeRelease:
+    store = _get_quality_store()
+    release: KnowledgeRelease | None = None
     try:
-        release = _get_quality_store().get_release(release_id)
+        release = store.get_release(release_id)
         if release is None:
             raise ValueError(f"候选版本不存在: {release_id}")
         if release.source_change_set_id is None:
@@ -1209,18 +1211,19 @@ def build_candidate_release(release_id: str) -> KnowledgeRelease:
             rules=rules,
             publications=publications,
         )
-    except ValueError as exc:
+    except Exception as exc:
+        if release is not None:
+            try:
+                store.save_release(release.model_copy(update={"build_error": str(exc)}))
+            except Exception:
+                pass
+        blocked = isinstance(exc, ValueError)
         raise HTTPException(
-            status_code=409,
+            status_code=409 if blocked else 503,
             detail=error_detail(
-                "POLICY_RELEASE_BUILD_BLOCKED", str(exc), {"release_id": release_id}
-            ),
-        ) from exc
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=error_detail(
-                "POLICY_RELEASE_INDEX_UNAVAILABLE", str(exc), {"release_id": release_id}
+                "POLICY_RELEASE_BUILD_BLOCKED" if blocked else "POLICY_RELEASE_INDEX_UNAVAILABLE",
+                str(exc),
+                {"release_id": release_id},
             ),
         ) from exc
 

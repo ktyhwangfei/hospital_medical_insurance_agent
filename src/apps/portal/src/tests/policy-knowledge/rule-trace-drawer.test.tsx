@@ -27,7 +27,7 @@ const trace = {
     formula: { operator: 'COMPLEMENT', reference: { rule_id: 'rule_base' }, factor: null, total: null },
     compiler_version: '1.0',
     rule_version: 2,
-    status: 'WARN',
+    status: 'REVIEW',
   },
   run: {
     run_id: 'run_1',
@@ -37,7 +37,7 @@ const trace = {
     raw_input: { source_text: '政策原文' },
     llm_output: { facts: [{ fact_id: 'fact_1' }] },
     compiler_version: '1.0',
-    status: 'WARN',
+    status: 'REVIEW',
     metrics: {},
     error: null,
     started_at: '2026-08-11T00:00:00Z',
@@ -46,12 +46,17 @@ const trace = {
   raw_input: { source_text: '政策原文' },
   llm_output: { facts: [{ fact_id: 'fact_1' }] },
   steps: [
-    { step_id: 'step_2', run_id: 'run_1', sequence_no: 2, stage: 'VALIDATE', status: 'WARN', input_payload: {}, output_payload: {}, issues: [{ issue_id: 'issue_1', severity: 'WARN', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_1', message: '范围重叠', recommended_action: '人工核验' }], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
-    { step_id: 'step_1', run_id: 'run_1', sequence_no: 1, stage: 'CANONICALIZE', status: 'PASS', input_payload: { fact: 1 }, output_payload: { rule: 1 }, issues: [], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    { step_id: 'step_1', run_id: 'run_1', sequence_no: 1, stage: 'INPUT_SNAPSHOT', status: 'PASS', input_payload: { source_text: '退休人员个人支付比例为在职人员的60%' }, output_payload: { source_text: '退休人员个人支付比例为在职人员的60%' }, issues: [], error: null, duration_ms: 0, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:00Z' },
+    { step_id: 'step_2', run_id: 'run_1', sequence_no: 2, stage: 'LLM_EXTRACTION', status: 'PASS', input_payload: { source_text: '退休人员个人支付比例为在职人员的60%' }, output_payload: { facts: [{ fact_id: 'fact_relative', population: 'retiree', expression: { operator: 'MULTIPLY', factor: '0.60' } }] }, issues: [], error: null, duration_ms: 846, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    { step_id: 'step_3', run_id: 'run_1', sequence_no: 3, stage: 'CANONICALIZE', status: 'PASS', input_payload: { facts: [{ fact_id: 'fact_base', value: { ratio: '15%' } }] }, output_payload: { result: [{ fact_id: 'fact_base', value: { ratio: '0.15' } }] }, issues: [], error: null, duration_ms: 2, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    { step_id: 'step_4', run_id: 'run_1', sequence_no: 4, stage: 'COMPOSE', status: 'PASS', input_payload: { facts: [{ fact_id: 'fact_base', value: { ratio: '0.15' } }] }, output_payload: { result: [[{ rule_id: 'rule_base', population: 'employee', result: { ratio: '0.15' } }], []] }, issues: [], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    { step_id: 'step_5', run_id: 'run_1', sequence_no: 5, stage: 'RESOLVE', status: 'PASS', input_payload: { rules: [{ rule_id: 'rule_base' }], relations: [{ fact_id: 'fact_relative' }] }, output_payload: { result: { fact_relative: { rules: [{ rule_id: 'rule_base' }] } } }, issues: [], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    { step_id: 'step_6', run_id: 'run_1', sequence_no: 6, stage: 'DERIVE', status: 'PASS', input_payload: { resolutions: { fact_relative: { relation: { population: 'retiree', expression: { operator: 'MULTIPLY', factor: '0.60' } }, rules: [{ rule_id: 'rule_base', population: 'employee', result: { ratio: '0.15' } }] } } }, output_payload: { result: [{ rule_id: 'rule_derived', population: 'retiree', result: { ratio: '0.09' }, source_type: 'DERIVED', dependencies: ['rule_base'], formula: { operator: 'MULTIPLY', factor: '0.60' } }] }, issues: [], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    { step_id: 'step_7', run_id: 'run_1', sequence_no: 7, stage: 'VALIDATE', status: 'REVIEW', input_payload: { rules: [{ rule_id: 'rule_derived', conditions: { amount_band: '0-30000' } }] }, output_payload: { result: null }, issues: [{ issue_id: 'issue_1', severity: 'REVIEW', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_derived', message: '范围重叠', recommended_action: '人工核验' }], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
   ],
-  issues: [{ issue_id: 'issue_1', severity: 'WARN', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_1', message: '范围重叠', recommended_action: '人工核验' }],
-  publication: { release_id: 'release_1', status: 'published', published_at: '2026-08-11T00:00:02Z' },
-  history: [{ run_id: 'run_1', rule_version: 2, status: 'WARN', compiler_version: '1.0', started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' }],
+  issues: [{ issue_id: 'issue_1', severity: 'REVIEW', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_derived', message: '范围重叠', recommended_action: '人工核验' }],
+  publication: null,
+  history: [{ run_id: 'run_1', rule_version: 2, status: 'REVIEW', compiler_version: '1.0', started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' }],
 } satisfies RuleCompilationTrace
 
 beforeEach(() => {
@@ -61,7 +66,7 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('rule trace drawer', () => {
-  it('fetches lazily and renders the ordered, expandable audit chain', async () => {
+  it('shows three decision stages and keeps technical input out of the primary navigation', async () => {
     const user = userEvent.setup()
     const onOpenChange = vi.fn()
     const view = render(
@@ -78,17 +83,28 @@ describe('rule trace drawer', () => {
       <RuleTraceDrawer open ruleId="rule_1" runId="run_1" onOpenChange={onOpenChange} />,
     )
 
-    expect(await screen.findByRole('heading', { name: '规则编译溯源' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '规则审核决策' })).toBeInTheDocument()
     await waitFor(() => expect(getRuleCompilationTrace).toHaveBeenCalledWith(
       'rule_1',
       'run_1',
     ))
-    expect(screen.getByText('原始输入')).toBeInTheDocument()
-    expect(screen.getByText('LLM 提取')).toBeInTheDocument()
-    const stages = screen.getAllByTestId('trace-stage').map((node) => node.textContent)
-    expect(stages[0]).toContain('CANONICALIZE')
-    expect(stages[1]).toContain('VALIDATE')
+    const stageTabs = screen.getAllByRole('tab')
+    expect(stageTabs).toHaveLength(3)
+    expect(screen.getByRole('tab', { name: /模型识别/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /规范化与冲突/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /发布判定/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByRole('tab', { name: /原始输入/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /关系解析/ })).not.toBeInTheDocument()
     expect(screen.getByText('OVERLAPPING_RANGE')).toBeInTheDocument()
+    expect(screen.queryByText('rule: rule_derived')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /规范化与冲突/ }))
+    const normalizedFields = document.querySelectorAll('[data-change="changed"]')
+    expect(normalizedFields).toHaveLength(2)
+    expect(normalizedFields[0]).toHaveTextContent('15%')
+    expect(normalizedFields[1]).toHaveTextContent('0.15')
+    expect(document.querySelector('[data-change="derived"]')).toHaveTextContent('0.09')
+    expect(screen.getByText('规则依赖')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '查看完整 JSON' }))
     expect(screen.getByRole('heading', { name: '完整编译轨迹 JSON' })).toBeInTheDocument()
@@ -107,7 +123,7 @@ describe('rule trace drawer', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('轨迹加载失败')
     await user.click(screen.getByRole('button', { name: '重试' }))
-    expect(await screen.findByText('原始输入')).toBeInTheDocument()
+    expect(await screen.findByText('模型识别')).toBeInTheDocument()
     expect(getRuleCompilationTrace).toHaveBeenCalledTimes(2)
   })
 
@@ -116,22 +132,18 @@ describe('rule trace drawer', () => {
       ...trace,
       rule_id: 'rule_failed',
       rule: null,
-      run: { ...trace.run, status: 'FAIL' },
+      run: { ...trace.run, status: 'FAIL', error: { message: 'compiler failed' } },
       publication: null,
       steps: [{
         ...trace.steps[0],
         status: 'FAIL',
-        issues: [{
-          ...trace.issues[0],
-          severity: 'FAIL',
-          code: 'RATIO_INVALID',
-          message: '比例不是有效数值',
-        }],
+        issues: [],
       }],
       issues: [{
         ...trace.issues[0],
         severity: 'FAIL',
         code: 'RATIO_INVALID',
+        stage: 'INPUT_SNAPSHOT',
         message: '比例不是有效数值',
       }],
       history: [{ ...trace.history[0], status: 'FAIL', rule_version: null }],
@@ -140,12 +152,137 @@ describe('rule trace drawer', () => {
     render(<RuleTraceDrawer open ruleId="rule_failed" onOpenChange={vi.fn()} />)
 
     expect(await screen.findByText('未生成规范规则')).toBeInTheDocument()
-    expect(screen.getByText('FAIL')).toBeInTheDocument()
+    expect(screen.getAllByText('FAIL')).not.toHaveLength(0)
     expect(screen.getByText('RATIO_INVALID')).toBeInTheDocument()
     expect(screen.getByText('比例不是有效数值')).toBeInTheDocument()
+    expect(screen.getByText(/compiler failed/)).toBeInTheDocument()
+    expect(screen.getAllByText(/当前不可发布/)).not.toHaveLength(0)
+  })
+
+  it('shows only the current candidate instead of the repeated batch extraction', async () => {
+    const user = userEvent.setup()
+    const batchIssues = [
+      { ...trace.issues[0], issue_id: 'current_conflict', stage: 'COMPOSE' as const, fact_id: 'rule_1', rule_id: null, code: 'CURRENT_CONFLICT' },
+      { ...trace.issues[0], issue_id: 'other_conflict', stage: 'COMPOSE' as const, fact_id: 'rule_2', rule_id: null, code: 'OTHER_CONFLICT' },
+    ]
+    vi.mocked(getRuleCompilationTrace).mockResolvedValue({
+      ...trace,
+      steps: trace.steps.map((step) => {
+        if (step.stage === 'LLM_EXTRACTION') return {
+          ...step,
+          input_payload: { source_text: '在职职工基本医疗保险统筹基金最高支付限额调整为10万元。' },
+          output_payload: {
+            rules: [
+              { rule_id: 'rule_1', cap_amount: 100000, name: '当前规则' },
+              { rule_id: 'rule_2', cap_amount: 200000, name: '同批其他规则' },
+            ],
+          },
+        }
+        if (step.stage === 'CANONICALIZE') return {
+          ...step,
+          input_payload: { facts: [{ fact_id: 'rule_1', population: '在职职工', value: { amount: 100000 } }] },
+          output_payload: { result: [{ fact_id: 'rule_1', population: '在职职工', value: { amount: 100000 } }] },
+        }
+        if (step.stage === 'COMPOSE') return { ...step, status: 'REVIEW' as const, issues: batchIssues }
+        return step
+      }),
+      issues: [...trace.issues, ...batchIssues],
+    })
+
+    render(<RuleTraceDrawer open ruleId="rule_1" onOpenChange={vi.fn()} />)
+
+    await screen.findByRole('heading', { name: '规则审核决策' })
+    await user.click(screen.getByRole('tab', { name: /模型识别/ }))
+    expect(screen.getByRole('heading', { name: '单元原文' })).toBeInTheDocument()
+    expect(screen.getByText('10万元').closest('mark')).toBeInTheDocument()
+    expect(screen.getByText('100000').closest('[data-source-match="true"]')).toBeInTheDocument()
+    expect(screen.getByText('封顶金额')).toBeInTheDocument()
+    expect(screen.queryByText('rule_id')).not.toBeInTheDocument()
+    expect(screen.queryByText('同批其他规则')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /规范化与冲突/ }))
+    expect(screen.getByText('CURRENT_CONFLICT')).toBeInTheDocument()
+    expect(screen.queryByText('OTHER_CONFLICT')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '规范化输入' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /规范化输出/ })).toBeInTheDocument()
+    expect(screen.getAllByText('100000')).toHaveLength(2)
+  })
+
+  it('separates extracted fields from compiler inference and hides technical fields', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getRuleCompilationTrace).mockResolvedValue({
+      ...trace,
+      steps: trace.steps.map((step) => {
+        if (step.stage === 'LLM_EXTRACTION') return {
+          ...step,
+          input_payload: { source_text: '在职职工住院最高支付限额为10万元。' },
+          output_payload: {
+            rules: [{
+              rule_id: 'rule_1',
+              cap_amount: 100000,
+              med_type: '住院-普通住院',
+              psn_type: '在职职工',
+              rule_type: '封顶线',
+            }],
+          },
+        }
+        if (step.stage === 'CANONICALIZE') return {
+          ...step,
+          input_payload: {
+            facts: [{
+              fact_id: 'rule_1',
+              value: { amount: 100000 },
+              subject: 'cap',
+              confidence: 0.58,
+              conditions: { med_type: '住院-普通住院', psn_type: '在职职工' },
+              unit_id: 'unit_1',
+              document_id: 'doc_1',
+              extraction_id: 'ext_1',
+              evidence: ['evidence_1'],
+            }],
+          },
+          output_payload: {
+            result: [{
+              fact_id: 'rule_1',
+              value: { amount: 100000 },
+              subject: 'cap',
+              confidence: 0.58,
+              conditions: { med_type: '住院-普通住院', psn_type: '在职职工' },
+              unit_id: 'unit_1',
+              document_id: 'doc_1',
+              extraction_id: 'ext_1',
+              evidence: ['evidence_1'],
+            }],
+          },
+        }
+        return step
+      }),
+    })
+
+    render(<RuleTraceDrawer open ruleId="rule_1" onOpenChange={vi.fn()} />)
+    await screen.findByRole('heading', { name: '规则审核决策' })
+
+    await user.click(screen.getByRole('tab', { name: /模型识别/ }))
+    const extracted = screen.getByRole('heading', { name: '原文提取' }).closest('section')!
+    const inferred = screen.getByRole('heading', { name: '辅助推断' }).closest('section')!
+    expect(extracted).toHaveTextContent('封顶金额')
+    expect(extracted).toHaveTextContent('医疗类别')
+    expect(extracted).toHaveTextContent('人群标签')
+    expect(inferred).toHaveTextContent('规则主题')
+    expect(inferred).toHaveTextContent('综合置信度')
+    expect(document.body).not.toHaveTextContent('candidate.')
+
+    await user.click(screen.getByRole('tab', { name: /规范化与冲突/ }))
+    const normalizedInput = screen.getByRole('heading', { name: '规范化输入' }).closest('section')!
+    expect(normalizedInput).toHaveTextContent('规则金额')
+    expect(normalizedInput).toHaveTextContent('医疗类别')
+    expect(normalizedInput).toHaveTextContent('人群标签')
+    expect(normalizedInput).not.toHaveTextContent(/fact_id|unit_id|document_id|extraction_id|confidence|evidence/)
+    expect(screen.queryByText(/fact:/)).not.toBeInTheDocument()
   })
 
   it('hides the previous run evidence as soon as the target changes', async () => {
+    const user = userEvent.setup()
     let resolveSecond: ((value: RuleCompilationTrace) => void) | undefined
     const committedFrames: string[] = []
     const Harness = ({ runId }: { runId: string }) => (
@@ -166,14 +303,18 @@ describe('rule trace drawer', () => {
       .mockImplementationOnce(() => new Promise((resolve) => {
         resolveSecond = resolve
       }))
+      .mockResolvedValue(trace)
     const view = render(
       <Harness runId="run_1" />,
     )
     expect(await screen.findByText('OVERLAPPING_RANGE')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '查看完整 JSON' }))
+    expect(screen.getByRole('heading', { name: '完整编译轨迹 JSON' })).toBeInTheDocument()
     committedFrames.length = 0
 
     view.rerender(<Harness runId="run_2" />)
 
+    expect(screen.queryByRole('heading', { name: '完整编译轨迹 JSON' })).not.toBeInTheDocument()
     expect(committedFrames.at(-1)).not.toContain('OVERLAPPING_RANGE')
     expect(screen.queryByText('OVERLAPPING_RANGE')).not.toBeInTheDocument()
     expect(screen.getByText('正在加载编译轨迹…')).toBeInTheDocument()
@@ -183,5 +324,31 @@ describe('rule trace drawer', () => {
       issues: [],
       steps: [],
     })
+    await waitFor(() => expect(screen.queryByText('正在加载编译轨迹…')).not.toBeInTheDocument())
+
+    view.rerender(<Harness runId="run_1" />)
+    await waitFor(() => expect(getRuleCompilationTrace).toHaveBeenCalledTimes(3))
+    expect(screen.queryByRole('heading', { name: '完整编译轨迹 JSON' })).not.toBeInTheDocument()
+  })
+
+  it('keeps legacy import as a single honest stage', async () => {
+    vi.mocked(getRuleCompilationTrace).mockResolvedValue({
+      ...trace,
+      rule_id: 'legacy_rule',
+      steps: [{
+        ...trace.steps[0],
+        step_id: 'legacy_step',
+        sequence_no: 1,
+        stage: 'LEGACY_IMPORT',
+        status: 'REVIEW',
+      }],
+      issues: [],
+    })
+
+    render(<RuleTraceDrawer open ruleId="legacy_rule" onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByRole('tab', { name: /历史导入/ })).toBeInTheDocument()
+    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    expect(screen.getByText(/中间编译历史缺失/)).toBeInTheDocument()
   })
 })

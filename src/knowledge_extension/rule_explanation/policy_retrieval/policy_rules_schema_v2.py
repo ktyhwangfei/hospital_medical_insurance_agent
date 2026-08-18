@@ -213,7 +213,7 @@ def rule_to_entity(
                 schema_version=schema_version,
                 confidence=confidence,
             )
-            entity[detail] = trace.model_dump()
+            entity[detail] = trace.model_dump(mode="json")
 
     return entity
 

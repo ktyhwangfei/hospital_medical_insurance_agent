@@ -31,10 +31,16 @@ def _fact(concept: str = "大额互助起付标准") -> dict:
 class _Alignment:
     def __init__(self, fail: bool = False):
         self.signals = []
+        self.conflict_reports = []
         self.fail = fail
 
     def intake_signal(self, signal):
         self.signals.append(signal)
+        if self.fail:
+            raise RuntimeError("proposal store unavailable")
+
+    def intake_conflict_report(self, report, **context):
+        self.conflict_reports.append((report, context))
         if self.fail:
             raise RuntimeError("proposal store unavailable")
 
@@ -132,6 +138,29 @@ def _assert_signal(signal, extraction: dict) -> None:
     assert signal.evidence.occurrence_count == 1
 
 
+def test_extract_single_archives_prior_extractions_of_unit(monkeypatch) -> None:
+    """同一单元重抽时归档旧 extraction，避免 REBUILD 累积无限增长。"""
+    store = _Store()
+    alignment = _Alignment()
+    orch = PipelineOrchestrator(store=store, alignment_service=alignment)
+    monkeypatch.setattr(orch, "_extract_policy_facts", lambda *args, **kwargs: [_fact()])
+
+    first = orch.extract_single("doc_1", "大额互助起付标准为650元。", unit_id="unit_1")
+    second_fact = {
+        "fact_text": "门诊报销比例调整为90%。",
+        "rules": [{"confidence": 0.9}],
+    }
+    monkeypatch.setattr(
+        orch, "_extract_policy_facts", lambda *args, **kwargs: [second_fact]
+    )
+    second = orch.extract_single("doc_1", "门诊报销比例调整为90%。", unit_id="unit_1")
+
+    first_id = first["extraction_ids"][0]
+    assert store.extractions[first_id]["status"] == "archived"
+    active = store.list_extractions(doc_id="doc_1")["items"]
+    assert [e["extraction_id"] for e in active] == second["extraction_ids"]
+
+
 def test_extract_single_intakes_unknown_after_extraction_is_persisted(monkeypatch) -> None:
     store = _Store()
     alignment = _Alignment()
@@ -144,6 +173,50 @@ def test_extract_single_intakes_unknown_after_extraction_is_persisted(monkeypatc
     extraction = store.extractions[result["extraction_ids"][0]]
     assert "unknown_concepts" not in extraction["extracted_fields"]
     _assert_signal(alignment.signals[0], extraction)
+
+
+def test_extract_single_discovers_conflict_partition_from_persisted_snapshot(
+    monkeypatch,
+) -> None:
+    store = _Store()
+    alignment = _Alignment()
+    fact = {
+        "fact_text": "两类基金支付比例不同。",
+        "rules": [
+            {
+                "rule_id": "rule_1",
+                "rule_type": "支付比例",
+                "insu_type": "职工医保",
+                "payment_ratio": "90%",
+                "source_text": "基本医疗保险统筹基金支付比例为90%",
+                "entities": [{
+                    "name": "基本医疗保险统筹基金支付比例",
+                    "type": "AMOUNT",
+                }],
+            },
+            {
+                "rule_id": "rule_2",
+                "rule_type": "支付比例",
+                "insu_type": "职工医保",
+                "payment_ratio": "80%",
+                "source_text": "大额医疗互助资金支付比例为80%",
+                "entities": [{
+                    "name": "大额医疗互助资金支付比例",
+                    "type": "AMOUNT",
+                }],
+            },
+        ],
+    }
+    orch = PipelineOrchestrator(store=store, alignment_service=alignment)
+    monkeypatch.setattr(orch, "_extract_policy_facts", lambda *args, **kwargs: [fact])
+
+    result = orch.extract_single("doc_1", fact["fact_text"], unit_id="unit_1")
+
+    assert result["success"] is True
+    report, context = alignment.conflict_reports[0]
+    assert report.proposals[0].suggested_code == "fund_type"
+    assert context["document_id"] == "doc_1"
+    assert context["mark_missing_stale"] is False
 
 
 def test_extract_single_passes_enum_alias_routing_fields(monkeypatch) -> None:
@@ -820,3 +893,64 @@ def test_pipeline_store_claim_and_commit_share_document_advisory_lock() -> None:
     assert transactions == 2
     assert len(lock_calls) == 2
     assert lock_calls[0][1] == lock_calls[1][1]
+
+
+def test_run_conflict_partition_discovery_aggregates_across_units(monkeypatch) -> None:
+    """聚合视角 S5：跨单元、跨 rule_type 塌缩（统筹 85% vs 大额 80%）可见。
+
+    单 fact 快照内两条规则分属不同单元、rule_type 混标（报销比例/支付比例），
+    只有以文档为单位的聚合诊断才能产出 fund_type 维度候选（S5 设计 §十二）。
+    """
+    store = _Store()
+    alignment = _Alignment()
+    orch = PipelineOrchestrator(store=store, alignment_service=alignment)
+
+    def _persist(unit_id: str, fact: dict) -> None:
+        orch.extract_single("doc_1", fact["fact_text"], unit_id=unit_id)
+
+    monkeypatch.setattr(
+        orch,
+        "_extract_policy_facts",
+        lambda *args, **kwargs: [{
+            "fact_text": "统筹基金支付比例为85%。",
+            "rules": [{
+                "rule_id": "rule_1",
+                "rule_type": "报销比例",
+                "insu_type": "职工医保",
+                "payment_ratio": "85%",
+                "source_text": "基本医疗保险统筹基金支付比例为85%",
+                "entities": [{"name": "基本医疗保险统筹基金支付比例", "type": "AMOUNT"}],
+            }],
+        }],
+    )
+    _persist("unit_1", {"fact_text": "统筹基金支付比例为85%。"})
+    monkeypatch.setattr(
+        orch,
+        "_extract_policy_facts",
+        lambda *args, **kwargs: [{
+            "fact_text": "大额医疗互助资金支付比例为80%。",
+            "rules": [{
+                "rule_id": "rule_2",
+                "rule_type": "支付比例",
+                "insu_type": "职工医保",
+                "payment_ratio": "80%",
+                "source_text": "大额医疗互助资金支付比例为80%",
+                "entities": [{"name": "大额医疗互助资金支付比例", "type": "AMOUNT"}],
+            }],
+        }],
+    )
+    _persist("unit_2", {"fact_text": "大额医疗互助资金支付比例为80%。"})
+
+    # 单元级触发各只见一条规则，产不出候选
+    assert all(
+        report.proposals == [] for report, _context in alignment.conflict_reports
+    )
+
+    result = orch.run_conflict_partition_discovery("doc_1")
+
+    assert result["success"] is True
+    assert result["extractions"] == 2
+    report, context = alignment.conflict_reports[-1]
+    assert report.proposals[0].suggested_code == "fund_type"
+    assert context["document_id"] == "doc_1"
+    assert context["mark_missing_stale"] is True

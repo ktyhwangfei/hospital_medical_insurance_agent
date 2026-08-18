@@ -51,6 +51,7 @@ class _FakePolicyQualityClient:
         *,
         has_source_lineage_column: bool = True,
         has_quality_run_id_column: bool = True,
+        has_build_error_column: bool = True,
         has_run_sequence_column: bool = True,
         run_sequences: dict[str, int | None] | None = None,
         run_sequence_has_default: bool = True,
@@ -62,6 +63,7 @@ class _FakePolicyQualityClient:
         self.releases: dict[str, dict] = {}
         self.has_source_lineage_column = has_source_lineage_column
         self.has_quality_run_id_column = has_quality_run_id_column
+        self.has_build_error_column = has_build_error_column
         self.has_run_sequence_column = has_run_sequence_column
         self.run_sequences = dict(run_sequences or {})
         self.run_sequence_has_default = run_sequence_has_default
@@ -88,6 +90,9 @@ class _FakePolicyQualityClient:
             if "COLUMN_NAME = 'QUALITY_RUN_ID'" in upper:
                 assert "TABLE_NAME = 'POLICY_KNOWLEDGE_RELEASES'" in upper
                 return [{"exists": self.has_quality_run_id_column}]
+            if "COLUMN_NAME = 'BUILD_ERROR'" in upper:
+                assert "TABLE_NAME = 'POLICY_KNOWLEDGE_RELEASES'" in upper
+                return [{"exists": self.has_build_error_column}]
             assert "TABLE_NAME = 'POLICY_QUALITY_RUNS'" in upper
             assert "COLUMN_NAME = 'RUN_SEQUENCE'" in upper
             return [{"exists": self.has_run_sequence_column}]
@@ -98,6 +103,8 @@ class _FakePolicyQualityClient:
                 self.has_source_lineage_column = True
             if "QUALITY_RUN_ID" in upper:
                 self.has_quality_run_id_column = True
+            if "BUILD_ERROR" in upper:
+                self.has_build_error_column = True
             return []
         if upper.startswith("ALTER TABLE POLICY_QUALITY_RUNS"):
             if self.fail_run_sequence_migration:
@@ -351,6 +358,26 @@ def test_policy_quality_schema_migrates_release_source_lineage() -> None:
         "ALTER TABLE POLICY_KNOWLEDGE_RELEASES ADD COLUMN IF NOT EXISTS "
         "SOURCE_CHANGE_SET_ID VARCHAR(64)"
     ) in migration
+
+
+def test_missing_release_build_error_column_runs_bounded_migration(monkeypatch) -> None:
+    client = _FakePolicyQualityClient(has_build_error_column=False)
+
+    _initialize_postgres_store(monkeypatch, client)
+
+    upper_sql = [sql.upper() for sql in client.executed_sql]
+    query_index = next(
+        index for index, sql in enumerate(upper_sql)
+        if "COLUMN_NAME = 'BUILD_ERROR'" in sql
+    )
+    set_index = upper_sql.index("SET LOCK_TIMEOUT = '5S'", query_index)
+    alter_index = next(
+        index for index, sql in enumerate(upper_sql[set_index:], start=set_index)
+        if sql.startswith("ALTER TABLE POLICY_KNOWLEDGE_RELEASES")
+        and "BUILD_ERROR" in sql
+    )
+    reset_index = upper_sql.index("RESET LOCK_TIMEOUT", alter_index)
+    assert query_index < set_index < alter_index < reset_index
 
 
 def test_existing_release_source_column_skips_alter(monkeypatch) -> None:

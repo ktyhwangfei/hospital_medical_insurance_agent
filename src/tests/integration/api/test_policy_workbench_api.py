@@ -1453,7 +1453,7 @@ def test_candidate_without_canonical_rule_is_queryable_via_api(
     traces = InMemoryCompilationTraceStore()
     candidate = PolicyCompilationService(
         Pipeline(), PolicyRuleCompiler(), traces
-    ).compile_units(_document().units)["kn_1"]
+    ).compile_units(_document().units)["unit_1::kn_1"]
     monkeypatch.setattr(
         policy_workbench_routes, "_get_compilation_trace_store", lambda: traces
     )

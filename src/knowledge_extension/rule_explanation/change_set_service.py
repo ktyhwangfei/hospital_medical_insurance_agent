@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +35,8 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_models import 
 from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
     KnowledgeWorkbenchService,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def change_set_id_for(doc_id: str) -> str:
@@ -136,6 +139,9 @@ class ChangeSetService:
         document = self._workbench.get_document(doc_id)
         items, quality_report, risk_counts = _aggregate_units(document.units)
         items, blockers, compilation_blocked = self._compile_items(document.units, items)
+        # S5 聚合层触发：编译完成后以文档全量提取快照跑冲突分区（跨单元/
+        # 跨 rule_type 塌缩此时可见）；失败不阻断变更集构建。
+        self._run_conflict_partition_discovery(doc_id)
 
         change_set = KnowledgeChangeSet(
             change_set_id=change_set_id_for(doc_id),
@@ -180,6 +186,11 @@ class ChangeSetService:
         items, blockers, compilation_blocked = self._compile_items(selected_units, items)
         source_units = [selection.source_revision for selection in units]
         source_doc_ids = {source.doc_id for source in source_units}
+        # S5 聚合层触发：任务型变更集（CS_TASK_*）同样以文档全量提取快照跑
+        # 冲突分区（跨单元/跨 rule_type 塌缩此时可见）；按来源文档逐篇诊断，
+        # 失败不阻断变更集构建。
+        for source_doc_id in sorted(source_doc_ids):
+            self._run_conflict_partition_discovery(source_doc_id)
         doc_id = next(iter(source_doc_ids)) if len(source_doc_ids) == 1 else "MULTI"
         change_set = KnowledgeChangeSet(
             change_set_id=change_set_id_for_task(task_id),
@@ -203,6 +214,19 @@ class ChangeSetService:
     def list_change_sets(self, doc_id: str = "") -> list[KnowledgeChangeSet]:
         return self._store.list(doc_id)
 
+    def _run_conflict_partition_discovery(self, doc_id: str) -> None:
+        """聚合层 S5：变更集编译完成后对全文档提取快照做冲突分区诊断。
+
+        对齐 2026-08-14 S5 设计 §十二（挂在快照完成统一阶段，不只挂在
+        REBUILD 分支）。诊断失败只记日志，不影响变更集产出。
+        """
+        if doc_id in ("", "MULTI"):
+            return
+        try:
+            self._get_orchestrator().run_conflict_partition_discovery(doc_id)
+        except Exception:
+            logger.exception("S5 聚合层冲突分区诊断失败 doc_id=%s", doc_id)
+
     def _compile_items(
         self,
         units: list[ApprovedUnit],
@@ -215,7 +239,7 @@ class ChangeSetService:
         blockers: dict[str, dict[str, Any]] = {}
         blocked = False
         for item in items:
-            candidate = compiled[item.rule_id]
+            candidate = compiled[f"{item.unit_id}::{item.rule_id}"]
             blocked = blocked or candidate.status in {"REVIEW", "FAIL"}
             for issue in candidate.issues:
                 blockers[issue.issue_id] = issue.model_dump(mode="json")

@@ -87,10 +87,15 @@ def test_build_change_set_compiles_items_and_snapshots_extraction() -> None:
 
     change_set = service.build_for_document("doc_1")
 
-    assert change_set.status == "PENDING_REVIEW"
+    # compiler 新拦截：缺少结构化结果（无数值/金额字段）的资格类规则 → REVIEW（RESULT_MISSING），
+    # 而非静默 PASS——测试适配新语义，NEEDS_DECISION 属预期。
+    assert change_set.status == "NEEDS_DECISION"
     assert all(item.compile_run_id for item in change_set.items)
-    assert all(item.compilation_status == "PASS" for item in change_set.items)
-    assert all(item.canonical_rule is not None for item in change_set.items)
+    by_status: dict[str, int] = {}
+    for item in change_set.items:
+        by_status[item.compilation_status] = by_status.get(item.compilation_status, 0) + 1
+    assert by_status.get("PASS", 0) >= 1, "有数值结果的规则应 PASS"
+    assert by_status.get("REVIEW", 0) >= 1, "无结果的资格规则应 REVIEW"
     first_run = traces.get_run(change_set.items[0].compile_run_id)
     assert first_run.raw_input["source_text"] == extraction["source_text"]
     assert first_run.llm_output == extraction["extracted_fields"]
@@ -101,6 +106,34 @@ def test_build_change_set_compiles_items_and_snapshots_extraction() -> None:
         assert trace.rule == item.canonical_rule
         assert trace.run.run_id == item.compile_run_id
         assert trace.publication is None
+
+
+def test_business_dimensions_reach_candidate_and_canonical_conditions() -> None:
+    first = _leaf_ids()[0]
+    rule = dict(
+        _rules()[0],
+        insu_type="城镇职工基本医疗保险",
+        setl_type="按项目结算",
+    )
+    extraction = _extraction(first, [rule])
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda _extraction_id: extraction
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(pipeline),
+        InMemoryChangeSetStore(),
+        compilation_service=PolicyCompilationService(
+            pipeline, PolicyRuleCompiler(), InMemoryCompilationTraceStore()
+        ),
+    )
+
+    item = service.build_for_document("doc_1").items[0]
+
+    fields = {field["field_code"]: field["raw_value"] for field in item.after["fields"]}
+    assert fields["insu_type"] == "城镇职工基本医疗保险"
+    assert fields["setl_type"] == "按项目结算"
+    assert item.canonical_rule is not None
+    assert item.canonical_rule.conditions["insu_type"] == "城镇职工基本医疗保险"
+    assert item.canonical_rule.conditions["setl_type"] == "按项目结算"
 
 
 def test_review_compilation_persists_run_and_blocks_candidate() -> None:
@@ -785,3 +818,129 @@ def test_decision_tasks_generated_from_change_set() -> None:
         raise AssertionError("should raise")
     except ValueError:
         pass
+
+
+def test_build_for_document_triggers_aggregate_conflict_partition_discovery() -> None:
+    """变更集编译完成后必须触发聚合层 S5（跨单元塌缩此时才可见，S5 设计 §十二）。"""
+    first = _leaf_ids()[0]
+    extraction = _extraction(first, _rules())
+    pipeline = FakePipelineStore([extraction])
+    pipeline.get_extraction = lambda extraction_id: (
+        extraction if extraction_id == extraction["extraction_id"] else None
+    )
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(pipeline),
+        InMemoryChangeSetStore(),
+        compilation_service=PolicyCompilationService(
+            pipeline, PolicyRuleCompiler(), InMemoryCompilationTraceStore()
+        ),
+    )
+    triggered: list[str] = []
+    service._orchestrator = _RecordingOrchestrator(triggered)
+
+    change_set = service.build_for_document("doc_1")
+
+    assert change_set.change_set_id == change_set_id_for("doc_1")
+    assert triggered == ["doc_1"]
+
+
+class _RecordingOrchestrator:
+    def __init__(self, triggered: list[str]) -> None:
+        self._triggered = triggered
+
+    def run_conflict_partition_discovery(self, doc_id: str) -> dict[str, object]:
+        self._triggered.append(doc_id)
+        return {"success": True, "doc_id": doc_id, "extractions": 1}
+
+
+def test_aggregate_discovery_failure_does_not_block_change_set_build() -> None:
+    """S5 聚合诊断失败只记日志，不阻断变更集产出（降级原则）。"""
+    first = _leaf_ids()[0]
+    pipeline = FakePipelineStore([_extraction(first, _rules())])
+    service = ChangeSetService(
+        KnowledgeWorkbenchService(pipeline),
+        InMemoryChangeSetStore(),
+    )
+
+    class _BrokenOrchestrator:
+        def run_conflict_partition_discovery(self, doc_id: str) -> dict[str, object]:
+            raise RuntimeError("discovery unavailable")
+
+    service._orchestrator = _BrokenOrchestrator()
+
+    change_set = service.build_for_document("doc_1")
+
+    assert change_set.change_set_id == change_set_id_for("doc_1")
+
+
+def test_build_for_units_triggers_aggregate_conflict_partition_discovery() -> None:
+    """任务型变更集（CS_TASK_*）编译完成后也必须触发聚合层 S5（S5 设计 §十二）。"""
+    first = _leaf_ids()[0]
+    pipeline = FakePipelineStore([_extraction(first, _rules())])
+    workbench = KnowledgeWorkbenchService(pipeline)
+    unit = workbench.get_document("doc_1").units[0]
+    selected = change_set_service.SelectedKnowledgeUnit(
+        unit=unit,
+        source_revision=change_set_models.SourceUnitRevision(
+            doc_id=unit.doc_id,
+            doc_title=unit.doc_title,
+            unit_id=unit.unit_id,
+            unit_revision_id="UR_doc1_first_v3",
+            path=unit.path,
+        ),
+    )
+    service = ChangeSetService(workbench, InMemoryChangeSetStore())
+    triggered: list[str] = []
+    service._orchestrator = _RecordingOrchestrator(triggered)
+
+    result = service.build_for_units(
+        task_id="KB_20260815_S5",
+        task_name="基金归属知识构建",
+        units=[selected],
+        semantic_contract_version="v1.0",
+    )
+
+    assert result.change_set_id == change_set_id_for_task("KB_20260815_S5")
+    assert triggered == ["doc_1"]
+
+
+def test_build_for_units_triggers_discovery_for_each_source_document() -> None:
+    """跨文档任务按来源文档逐篇触发 S5，不再因 doc_id=MULTI 整组跳过。"""
+    first, second = _leaf_ids()
+    first_extraction = _extraction(first, _rules())
+    second_extraction = _extraction(second, [_rules()[0]])
+    second_extraction["extraction_id"] = "ext_2"
+    workbench = KnowledgeWorkbenchService(
+        FakePipelineStore([first_extraction, second_extraction])
+    )
+    source_units = workbench.get_document("doc_1").units
+    second_doc_unit = source_units[1].model_copy(update={
+        "doc_id": "doc_2",
+        "doc_title": "居民医保待遇政策",
+    })
+    selections = [
+        change_set_service.SelectedKnowledgeUnit(
+            unit=unit,
+            source_revision=change_set_models.SourceUnitRevision(
+                doc_id=unit.doc_id,
+                doc_title=unit.doc_title,
+                unit_id=unit.unit_id,
+                unit_revision_id=f"UR_{unit.doc_id}_{index}",
+                path=unit.path,
+            ),
+        )
+        for index, unit in enumerate([source_units[0], second_doc_unit], start=1)
+    ]
+    service = ChangeSetService(workbench, InMemoryChangeSetStore())
+    triggered: list[str] = []
+    service._orchestrator = _RecordingOrchestrator(triggered)
+
+    result = service.build_for_units(
+        task_id="KB_20260815_MULTI",
+        task_name="跨文档待遇知识构建",
+        units=selections,
+        semantic_contract_version="v1.0",
+    )
+
+    assert result.doc_id == "MULTI"
+    assert triggered == ["doc_1", "doc_2"]

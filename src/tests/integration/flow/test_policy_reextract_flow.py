@@ -255,6 +255,9 @@ def test_change_set_approvable_after_reextract(monkeypatch):
 
 
 def test_schema_mode_reextract_prompt_includes_live_metric(monkeypatch):
+    from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+        _BASE_POLICY_FIELD_CODES,
+    )
     from src.semantic_layer import extraction_contract as ec
     from src.semantic_layer import registry as reg
     from src.semantic_layer.extraction_contract import (
@@ -264,16 +267,22 @@ def test_schema_mode_reextract_prompt_includes_live_metric(monkeypatch):
 
     live_schema = ExtractionSchema(
         schema_version=3,
-        fields=[FieldContract(
-            code="deductible_amount", name="起付金额实时指标",
-            extraction_hint="起付标准", value_domain="金额",
-        )],
+        fields=[
+            *[
+                FieldContract(code=code, name=code)
+                for code in sorted(_BASE_POLICY_FIELD_CODES)
+            ],
+            FieldContract(
+                code="live_metric", name="起付金额实时指标",
+                extraction_hint="起付标准", value_domain="金额",
+            ),
+        ],
     )
     monkeypatch.setattr(reg, "create_registry", lambda: object())
     monkeypatch.setattr(ec, "build_extraction_schema", lambda r, code: live_schema)
     monkeypatch.setattr(
         ec, "build_prompt_from_schema",
-        lambda text, title, schema: f"PROMPT含{schema.fields[0].name}|{title}|{text}",
+        lambda text, title, schema: f"PROMPT含{schema.fields[-1].name}|{title}|{text}",
     )
 
     captured: dict[str, Any] = {}

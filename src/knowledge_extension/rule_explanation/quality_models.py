@@ -41,6 +41,7 @@ class KnowledgeRelease(BaseModel):
     quality_run_id: str | None = None
     quality_score: float | None = Field(default=None, ge=0, le=1)
     consistency_score: float | None = Field(default=None, ge=0, le=1)
+    build_error: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     promoted_at: datetime | None = None
     promoted_by: str | None = None

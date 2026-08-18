@@ -28,6 +28,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_BASE_POLICY_FIELD_CODES = frozenset({
+    "rule_id", "fact_id", "policy_id", "clause_id", "source_text",
+    "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+    "payment_ratio", "deductible_amount", "cap_amount", "time_period",
+    "admission_order", "amount_band", "priority", "rule_type", "rule_value",
+})
+
 
 class PolicyFactExtractionError(RuntimeError):
     """模型调用或返回契约失败；与合法空事实列表区分。"""
@@ -36,6 +43,35 @@ class PolicyFactExtractionError(RuntimeError):
 def _now_iso() -> str:
     """当前 UTC 时间 ISO 字符串（用于字段级溯源 extracted_at）。"""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _backfill_schema_fields(
+    facts: list[dict[str, Any]], field_codes: list[str]
+) -> list[dict[str, Any]]:
+    """按提取契约回填缺失字段，并将复合人群拆成原子规则。"""
+    if not field_codes:
+        return facts
+    for fact in facts:
+        expanded: list[Any] = []
+        for rule in fact.get("rules") or []:
+            if isinstance(rule, dict):
+                for code in field_codes:
+                    rule.setdefault(code, "")
+                populations = [
+                    item.strip()
+                    for item in re.split(r"[,，、]", str(rule.get("psn_type") or ""))
+                    if item.strip()
+                ]
+                if len(populations) > 1:
+                    base_id = str(rule.get("rule_id") or "rule").strip() or "rule"
+                    expanded.extend(
+                        {**rule, "rule_id": f"{base_id}_psn_{index}", "psn_type": population}
+                        for index, population in enumerate(populations, 1)
+                    )
+                    continue
+            expanded.append(rule)
+        fact["rules"] = expanded
+    return facts
 
 
 class PipelineOrchestrator:
@@ -97,6 +133,7 @@ class PipelineOrchestrator:
                         doc_id, run_token, {"status": "extracted"}
                     ):
                         return self._stale_run_result(doc_id)
+                self._intake_conflict_partitions(doc_id, [], mark_missing_stale=True)
                 return {
                     "success": True,
                     "doc_id": doc_id,
@@ -201,6 +238,9 @@ class PipelineOrchestrator:
                 ):
                     return self._stale_run_result(doc_id)
 
+            self._intake_conflict_partitions(
+                doc_id, extraction_items, mark_missing_stale=True
+            )
             return {
                 "success": True,
                 "doc_id": doc_id,
@@ -300,6 +340,27 @@ class PipelineOrchestrator:
                     self._store.update_extraction(
                         item["extraction_id"], {"status": reset_status}
                     )
+            # REBUILD 语义：单元级替换——归档该单元差集（保留外键，
+            # list_extractions 默认过滤 archived），避免重抽无限累积。
+            if unit_id:
+                list_extractions = getattr(self._store, "list_extractions", None)
+                if callable(list_extractions):
+                    kept = {item["extraction_id"] for item in extraction_items}
+                    stale = [
+                        e
+                        for e in list_extractions(
+                            page=1, page_size=1000, doc_id=doc_id
+                        ).get("items", [])
+                        if e.get("unit_id") == unit_id
+                        and e["extraction_id"] not in kept
+                    ]
+                    for stale_item in stale:
+                        self._store.update_extraction(
+                            stale_item["extraction_id"], {"status": "archived"}
+                        )
+            self._intake_conflict_partitions(
+                doc_id, extraction_items, mark_missing_stale=False
+            )
             return {
                 "success": True,
                 "doc_id": doc_id,
@@ -335,6 +396,9 @@ class PipelineOrchestrator:
             return []
 
         prompt = self._build_fact_extraction_prompt(document_text, document_title, override)
+        # schema 模式下按契约回填缺失字段键（LLM 常省略，实测只回 4/24 字段）
+        mode = override.prompt_mode if override and override.prompt_mode else "schema"
+        field_codes = self._schema_field_codes() if mode == "schema" else []
 
         try:
             gateway = ModelGateway()
@@ -367,7 +431,7 @@ class PipelineOrchestrator:
                     "Extracted %d policy facts from %r",
                     len(facts), document_title,
                 )
-                return facts
+                return _backfill_schema_fields(facts, field_codes)
             if isinstance(facts, dict):
                 if "facts" in facts:
                     facts_list = facts["facts"]
@@ -379,19 +443,34 @@ class PipelineOrchestrator:
                         "Extracted %d policy facts from %r (nested)",
                         len(facts_list), document_title,
                     )
-                    return facts_list
+                    return _backfill_schema_fields(facts_list, field_codes)
                 # 单条事实或单条规则包装为事实
                 if "fact_text" in facts:
                     logger.info("LLM returned single fact dict, wrapping as list")
-                    return [facts]
+                    return _backfill_schema_fields([facts], field_codes)
                 if "rule_type" in facts:
                     logger.info("LLM returned single rule dict, wrapping as fact")
-                    return [{"fact_text": facts.get("source_text", ""), "rules": [facts]}]
+                    return _backfill_schema_fields(
+                        [{"fact_text": facts.get("source_text", ""), "rules": [facts]}],
+                        field_codes,
+                    )
 
             raise ValueError(f"Unexpected LLM response type: {type(facts).__name__}")
         except Exception as e:
             logger.warning("Policy fact extraction failed: %s", e)
             raise PolicyFactExtractionError("政策事实提取失败") from e
+
+    def _schema_field_codes(self) -> list[str]:
+        """提取契约字段短码（schema 模式回填缺失字段用；失败返回空）。"""
+        try:
+            from src.semantic_layer.registry import create_registry
+            from src.semantic_layer.extraction_contract import build_extraction_schema
+            return [
+                f.code
+                for f in build_extraction_schema(create_registry(), "zcgz").fields
+            ]
+        except Exception:
+            return []
 
     def _build_fact_extraction_prompt(
         self,
@@ -424,7 +503,8 @@ class PipelineOrchestrator:
             )
             try:
                 schema = build_extraction_schema(create_registry(), "zcgz")
-                if schema.fields or schema.entities or schema.relations:
+                field_codes = {field.code for field in schema.fields}
+                if _BASE_POLICY_FIELD_CODES <= field_codes:
                     return build_prompt_from_schema(text, title, schema)
             except Exception:
                 pass
@@ -611,6 +691,175 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
                     unit_id,
                     extraction_id,
                 )
+
+    def run_conflict_partition_discovery(self, doc_id: str) -> dict[str, Any]:
+        """聚合视角运行 S5：以文档为单位读取当前全部提取记录做冲突分区诊断。
+
+        对齐 2026-08-14 S5 设计 §十二「抽取快照完成统一阶段」：塌缩常跨
+        单元/跨 rule_type（如统筹 85% vs 大额 80% 分属不同单元），单 fact
+        快照内不可见，需聚合后诊断。幂等：同快照内容产出同 fingerprint。
+        """
+        list_extractions = getattr(self._store, "list_extractions", None)
+        if not callable(list_extractions):
+            return {"success": False, "error": "存储不支持提取记录列举", "doc_id": doc_id}
+        result = list_extractions(page=1, page_size=1000, doc_id=doc_id)
+        items = result.get("items", []) if isinstance(result, dict) else []
+        self._intake_conflict_partitions(doc_id, items, mark_missing_stale=True)
+        return {"success": True, "doc_id": doc_id, "extractions": len(items)}
+
+    def _intake_conflict_partitions(
+        self,
+        doc_id: str,
+        extraction_items: list[dict[str, Any]],
+        *,
+        mark_missing_stale: bool,
+    ) -> None:
+        """基于已持久化的同一快照运行 S5；失败不影响主抽取结果。"""
+        try:
+            from src.knowledge_extension.rule_explanation.conflict_partition_discovery import (
+                ExtractionEntity,
+                ExtractionRelation,
+                ExtractionRule,
+                discover_conflict_partitions,
+            )
+            from src.knowledge_extension.rule_explanation.semantic_alignment import (
+                get_semantic_alignment_service,
+            )
+
+            snapshot_payload = [
+                {
+                    "extraction_id": item.get("extraction_id"),
+                    "unit_id": item.get("unit_id"),
+                    "rules": (item.get("extracted_fields") or {}).get("rules", []),
+                }
+                for item in sorted(
+                    extraction_items, key=lambda value: str(value.get("extraction_id") or "")
+                )
+            ]
+            snapshot_id = "snapshot_" + hashlib.sha256(json.dumps(
+                snapshot_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")).hexdigest()[:24]
+            rules: list[ExtractionRule] = []
+            for item in extraction_items:
+                fields = item.get("extracted_fields") or {}
+                for index, raw in enumerate(fields.get("rules") or []):
+                    if not isinstance(raw, dict):
+                        continue
+                    raw_rule_type = self._plain_value(raw.get("rule_type"))
+                    rule_type = str(raw_rule_type or "").strip()
+                    value, unit = self._conflict_rule_value(raw, rule_type)
+                    if value in (None, ""):
+                        continue
+                    rule_id = str(raw.get("rule_id") or "").strip() or (
+                        f"{item.get('extraction_id') or 'extraction'}_r{index + 1}"
+                    )
+                    entities = []
+                    raw_entities = self._plain_value(raw.get("entities"))
+                    for entity_index, entity in enumerate(
+                        raw_entities if isinstance(raw_entities, list) else []
+                    ):
+                        if not isinstance(entity, dict) or not str(entity.get("name") or "").strip():
+                            continue
+                        entities.append(ExtractionEntity(
+                            entity_id=str(entity.get("entity_id") or "").strip()
+                            or f"{rule_id}_e{entity_index + 1}",
+                            name=str(entity["name"]).strip(),
+                            entity_type=str(entity.get("entity_type") or entity.get("type") or ""),
+                            highlight=entity.get("highlight"),
+                            binding_scope=entity.get("binding_scope") or "rule",
+                        ))
+                    relations = []
+                    raw_relations = self._plain_value(raw.get("relations"))
+                    for relation in raw_relations if isinstance(raw_relations, list) else []:
+                        if not isinstance(relation, dict):
+                            continue
+                        subject = str(relation.get("subject") or "").strip()
+                        predicate = str(relation.get("predicate") or "").strip()
+                        object_value = str(
+                            relation.get("object_value") or relation.get("object") or ""
+                        ).strip()
+                        if subject and predicate and object_value:
+                            relations.append(ExtractionRelation(
+                                subject=subject,
+                                predicate=predicate,
+                                object_value=object_value,
+                                rule_id=rule_id,
+                                binding_scope=relation.get("binding_scope") or "rule",
+                            ))
+                    try:
+                        rules.append(ExtractionRule(
+                            rule_id=rule_id,
+                            document_id=doc_id,
+                            snapshot_id=snapshot_id,
+                            extraction_contract_version=str(
+                                fields.get("schema_version") or raw.get("schema_version") or "unknown"
+                            ),
+                            rule_type=rule_type,
+                            rule_value=value,
+                            rule_unit=unit,
+                            insu_type=self._optional_text(raw.get("insu_type")),
+                            med_type=self._optional_text(raw.get("med_type")),
+                            psn_type=self._optional_text(raw.get("psn_type")),
+                            hosp_lv=self._optional_text(raw.get("hosp_lv")),
+                            setl_type=self._optional_text(raw.get("setl_type")),
+                            effective_start=self._plain_value(raw.get("effective_start")) or None,
+                            effective_end=self._plain_value(raw.get("effective_end")) or None,
+                            region_code=self._optional_text(raw.get("region_code")),
+                            entities=entities,
+                            relations=relations,
+                            source_clause_id=str(
+                                raw.get("clause_id") or item.get("unit_id") or rule_id
+                            ),
+                            evidence_text=str(
+                                raw.get("source_text") or item.get("source_text") or ""
+                            ),
+                        ))
+                    except ValueError:
+                        logger.warning(
+                            "S5 跳过无效规则 doc_id=%s rule_id=%s", doc_id, rule_id
+                        )
+            report = discover_conflict_partitions(rules)
+            service = self._alignment_service or get_semantic_alignment_service()
+            intake = getattr(service, "intake_conflict_report", None)
+            if callable(intake):
+                intake(
+                    report,
+                    document_id=doc_id,
+                    snapshot_id=snapshot_id,
+                    mark_missing_stale=mark_missing_stale,
+                )
+        except Exception:
+            logger.exception("S5 冲突分区诊断失败 doc_id=%s", doc_id)
+
+    @staticmethod
+    def _plain_value(value: Any) -> Any:
+        return value.get("value") if isinstance(value, dict) and "value" in value else value
+
+    @classmethod
+    def _optional_text(cls, value: Any) -> str | None:
+        text = str(cls._plain_value(value) or "").strip()
+        return text or None
+
+    @classmethod
+    def _conflict_rule_value(
+        cls, raw: dict[str, Any], rule_type: str
+    ) -> tuple[Any, str | None]:
+        if "比例" in rule_type or "ratio" in rule_type.casefold():
+            keys, unit = ("payment_ratio", "personal_payment_ratio"), "%"
+        elif "起付" in rule_type or "deductible" in rule_type.casefold():
+            keys, unit = ("deductible_amount",), "元"
+        elif any(token in rule_type for token in ("封顶", "限额")) or "cap" in rule_type.casefold():
+            keys, unit = ("cap_amount",), "元"
+        else:
+            keys, unit = (), cls._optional_text(raw.get("rule_unit"))
+        for key in (*keys, "rule_value"):
+            value = cls._plain_value(raw.get(key))
+            if value not in (None, ""):
+                return value, unit
+        return None, unit
 
     @staticmethod
     def _verified_excerpt(document_text: str, concept: str) -> str | None:
@@ -879,6 +1128,15 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
                 extraction_id=extraction_id,
                 document_text=source,
             )
+        self._intake_conflict_partitions(
+            ext["doc_id"],
+            [{
+                **ext,
+                "source_text": source,
+                "extracted_fields": merged_fields,
+            }],
+            mark_missing_stale=False,
+        )
         return {
             "success": True,
             "extraction_id": extraction_id,

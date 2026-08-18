@@ -12,6 +12,7 @@ import {
   getRuleDetail,
   listChangeSets,
   listDecisionTasks,
+  listSemanticMetrics,
   PolicyKnowledgeApiError,
   rejectChangeSet,
   resolveDecisionTask,
@@ -243,14 +244,14 @@ describe('knowledge review detail', () => {
     expect(screen.queryByRole('button', { name: /绑定指标|创建指标|新增标准值/ })).not.toBeInTheDocument()
   })
 
-  it('offers one lazy trace action for every rule row', async () => {
+  it('offers one comparison action for every rule row', async () => {
     const user = userEvent.setup()
     const page = await KnowledgeReviewDetailRoute({
       params: Promise.resolve({ changeSetId: 'CS_REVIEW' }),
     })
     render(page)
 
-    const actions = await screen.findAllByRole('button', { name: '查看溯源' })
+    const actions = await screen.findAllByRole('button', { name: '查看对照' })
     expect(actions).toHaveLength(pendingChangeSet.items.length)
     expect(getRuleCompilationTrace).not.toHaveBeenCalled()
 
@@ -260,7 +261,7 @@ describe('knowledge review detail', () => {
       'RULE_001',
       'RUN_ITEM_001',
     ))
-    expect(screen.getByRole('heading', { name: '规则编译溯源' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '规则审核决策' })).toBeInTheDocument()
   })
 
   it('queries each shared rule row by its own compile run', async () => {
@@ -281,7 +282,7 @@ describe('knowledge review detail', () => {
     })
     render(page)
 
-    const actions = await screen.findAllByRole('button', { name: '查看溯源' })
+    const actions = await screen.findAllByRole('button', { name: '查看对照' })
     await user.click(actions[0])
     await waitFor(() => expect(getRuleCompilationTrace).toHaveBeenNthCalledWith(
       1,
@@ -290,7 +291,7 @@ describe('knowledge review detail', () => {
     ))
     await user.click(screen.getByRole('button', { name: '关闭溯源' }))
     await waitFor(() => expect(
-      screen.queryByRole('heading', { name: '规则编译溯源' }),
+      screen.queryByRole('heading', { name: '规则审核决策' }),
     ).not.toBeInTheDocument())
 
     await user.click(actions[1])
@@ -309,7 +310,8 @@ describe('knowledge review detail', () => {
     render(page)
 
     await screen.findByText('结构化知识列表')
-    // 行级「重提取」按钮在 PENDING_REVIEW 下可见
+    await user.click(screen.getAllByRole('button', { name: '更多操作' })[0])
+    // 行级「重提取」在 PENDING_REVIEW 下收纳到更多菜单
     expect(screen.getAllByRole('button', { name: /重提取/ }).length).toBeGreaterThan(0)
 
     // 选中可审核项 → 工具栏出现「批量重新提取」
@@ -574,6 +576,7 @@ describe('knowledge review detail', () => {
     await screen.findByRole('heading', { name: '知识审核详情' })
 
     expect(screen.getByRole('button', { name: '整批通过审核' })).toBeEnabled()
+    await user.click(screen.getByText('其他处理'))
     await user.click(screen.getByRole('button', { name: '退回重新构建' }))
     const dialog = screen.getByRole('dialog', { name: '退回重新构建' })
     expect(dialog).toHaveAttribute('data-slot', 'dialog-content')
@@ -629,7 +632,9 @@ describe('knowledge review detail', () => {
     render(page)
     await screen.findByText('结构化知识列表')
 
-    await user.click(screen.getAllByRole('button', { name: '拒绝' }).at(-1)!)
+    const batchActions = screen.getByText('其他处理').closest('details')!
+    await user.click(screen.getByText('其他处理'))
+    await user.click(within(batchActions).getByRole('button', { name: '拒绝' }))
     const dialog = screen.getByRole('dialog', { name: '拒绝' })
     expect(within(dialog).getByRole('button', { name: '确认拒绝' })).toBeDisabled()
     await user.type(within(dialog).getByRole('textbox', { name: '拒绝原因' }), '规则结论与原文冲突')
@@ -678,7 +683,9 @@ describe('knowledge review detail', () => {
     render(page)
     await screen.findByText('结构化知识列表')
 
-    await user.click(screen.getAllByRole('button', { name: '拒绝' })[0])
+    const rowActions = screen.getAllByRole('button', { name: '更多操作' })[0].closest('details')!
+    await user.click(screen.getAllByRole('button', { name: '更多操作' })[0])
+    await user.click(within(rowActions).getByRole('button', { name: '拒绝' }))
     const dialog = screen.getByRole('dialog', { name: '拒绝该条知识' })
     expect(dialog).toHaveAttribute('data-slot', 'dialog-content')
     expect(within(dialog).getByRole('button', { name: '确认拒绝' })).toBeDisabled()
@@ -706,7 +713,8 @@ describe('knowledge review detail', () => {
     render(page)
     await screen.findByText('结构化知识列表')
 
-    await user.click(screen.getAllByRole('button', { name: '退回' })[0])
+    await user.click(screen.getAllByRole('button', { name: '更多操作' })[0])
+    await user.click(screen.getByRole('button', { name: '退回' }))
     const dialog = screen.getByRole('dialog', { name: '退回该条知识' })
     await user.type(within(dialog).getByRole('textbox', { name: /退回原因/ }), '原文证据不足')
     await user.click(within(dialog).getByRole('button', { name: '确认退回' }))
@@ -865,6 +873,48 @@ describe('knowledge review detail', () => {
     expect(screen.getByText('三级')).toBeInTheDocument()
     expect(screen.getAllByText('在职职工、退休人员').length).toBeGreaterThan(0)
     expect(screen.queryByText(/"name"|"subject"|\[\{/)).not.toBeInTheDocument()
+  })
+
+  it('shows schema-driven dynamic columns for newly published dimensions', async () => {
+    window.localStorage.clear()
+    vi.mocked(listDecisionTasks).mockResolvedValue([])
+    // 语义层已发布新维度：指标名映射到表头（jjgs → 基金归属）
+    vi.mocked(listSemanticMetrics).mockResolvedValue([{
+      metric_code: 'jjgs',
+      name: '基金归属',
+      object_code: 'zcgz',
+      metric_type: 'Atomic',
+      status: 'published',
+    }])
+    vi.mocked(getChangeSet).mockResolvedValue(makeChangeSet({
+      items: [{
+        ...pendingChangeSet.items[0],
+        after: {
+          ...ruleDetail.rule,
+          fields: [
+            { field_code: 'jjgs', field_name: '基金归属', raw_value: '大额医疗互助资金' },
+            { field_code: 'rule_type', field_name: '知识类型', raw_value: '封顶线' },
+            { field_code: 'cap_amount', field_name: '最高支付限额', raw_value: '200000' },
+          ],
+        },
+      }],
+    }))
+    const page = await KnowledgeReviewDetailRoute({
+      params: Promise.resolve({ changeSetId: 'CS_REVIEW' }),
+    })
+    render(page)
+
+    // 无历史列选择时：预设 + 动态字段（新维度基金归属）默认可见
+    expect(await screen.findByRole('columnheader', { name: '基金归属' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '规则类型' })).toBeInTheDocument()
+    expect(screen.getByText('大额医疗互助资金')).toBeInTheDocument()
+    // 打开列设置：新维度也在可选列中，可手动关闭
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: '表格列设置' }))
+    const fundToggle = screen.getByRole('checkbox', { name: '基金归属' })
+    expect(fundToggle).toBeChecked()
+    await user.click(fundToggle)
+    expect(screen.queryByRole('columnheader', { name: '基金归属' })).not.toBeInTheDocument()
   })
 
   it('reflects the matched preset in the column settings dropdown', async () => {
