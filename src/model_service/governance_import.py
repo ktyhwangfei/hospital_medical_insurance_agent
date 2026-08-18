@@ -106,6 +106,7 @@ def _prompt_assets(snapshot: ModelGovernanceSnapshot) -> list[PromptAssetContent
                 "text",
                 "field_codes",
                 "fields_json_example",
+                "field_count",
             ),
         ),
         "policy.extract.legacy": (

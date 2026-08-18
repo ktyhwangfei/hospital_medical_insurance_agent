@@ -96,6 +96,7 @@ def test_published_model_route_and_prompt_drive_policy_extraction(monkeypatch):
         "text",
         "field_codes",
         "fields_json_example",
+        "field_count",
     ]
     prompt_draft = service.create_draft(
         PromptAssetContent(
@@ -130,7 +131,16 @@ def test_published_model_route_and_prompt_drive_policy_extraction(monkeypatch):
     monkeypatch.setattr(
         "src.semantic_layer.extraction_contract.build_extraction_schema",
         lambda *_args, **_kwargs: ExtractionSchema(
-            fields=[FieldContract(code="rule_type", name="规则类型")]
+            fields=[
+                FieldContract(code=code, name=f"字段 {code}")
+                for code in (
+                    "rule_id", "fact_id", "policy_id", "clause_id", "source_text",
+                    "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+                    "payment_ratio", "deductible_amount", "cap_amount", "time_period",
+                    "admission_order", "amount_band", "priority", "rule_type",
+                    "rule_value",
+                )
+            ]
         ),
     )
 
