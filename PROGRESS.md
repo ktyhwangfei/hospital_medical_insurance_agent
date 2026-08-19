@@ -343,6 +343,7 @@
 | 2026-08-07 | **Skill 页面两个 bug 修复**：①`/skills` 顶部页签（Skill/草稿/评测记录/发布记录）active 态错乱——“Skill” tab 正则 `/\/skills\/[^/]+(\/edit)?$/` 误匹配 drafts/evaluations/releases，导致无论在哪个子页都高亮“Skill”；改为显式排除保留路径段（`RESERVED_SEGS`）。②`/skills` 工作台目录与所有 skill 列表全空（“没有符合条件的 Skill”）——前端 dev 进程复用旧实例、`NEXT_PUBLIC_API_BASE_URL` 仍指向 next.config 默认 8000，API 代理转发到错误后端实例（空数据）；重启前端指向本工作区后端 8173 修复，并记录陷阱到 AGENTS.md。Portal Vitest 235 passed、tsc EXIT=0、Orca 浏览器验证目录显示 settlement_explain_skill 与页签高亮均正确 | §7 Skill 管理；Portal `/skills` layout + 工作台 |
 | 2026-08-10 | **Skill AI 创作与候选隔离评测完成**：已发布指标→AI 候选→人工接受→差异优化→校验→固定路由/隔离行为评测→人工物化全链路通过；补齐低基数观测指标与 fail-closed 部署约束 | §7.8 Skill AI 创作 |
 | 2026-08-17 | **后台管理真实资产版本与模型接入**：真实提示词/模型/路由发布接入 dev/test 运行时；Fernet 凭据、连接测试发布门槛、版本只读/新建/回滚与资产中心 E2E 完成 | §1 模型服务与管理 4.5；§4 验证证据 |
+| 2026-08-19 | **dummy 假数据模式移除**：ModelGateway 删除 dummy 分支，未配置模型直接抛 `ModelConfigError`（`.env` 从 main 检出拷贝，gitignored）；测试重写 3 组；真实 deepseek-chat 端到端验证第十九条提取 2 条规则逐字溯源。model_service 单元 115 passed | 模型服务；需求迭代记录 Issue 19 四轮节；AGENTS.md 陷阱更新 |
 | 2026-08-19 | **Issue #19 单元医疗类别区分（按用户设计重做）**：第一轮方向错误（提取回填+审核页筛选）已回退。现行实现：知识构建页新增「医疗类别分类」面板（执行分类→类别数量卡片→明细下钻→人工修正/恢复自动，PG 持久化 policy_unit_med_types）；新建构建任务向导按医疗类别筛选单元。T1 3+592、T2a 3+41、前端 2+17+139、tsc/build 通过；失败均为预存环境依赖。待用户验证 | 政策知识管线；需求迭代记录 Issue 19 节；领域字典新增 med_type_classifier/UnitMedTypeOverride |
 
 ---

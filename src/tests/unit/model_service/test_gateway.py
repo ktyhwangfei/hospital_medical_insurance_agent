@@ -439,28 +439,21 @@ def test_generate_model_override_max_tokens_propagates(gateway):
     assert captured["max_tokens"] == 4096
 
 
-def test_dummy_generate_policy_qa_returns_extraction_json(gateway, monkeypatch):
-    """迭代19 修改2：dummy 分支对 policy_qa（提取）场景必须返回合法 JSON 数组，
-    否则重提取在调试/未配置模型环境下必然为空（'LLM 未返回结果'）。"""
-    import json as jsonlib
-
-    # 显式固定 dummy 环境（本机 .env 可能配置了真实模型端点）
+def test_unconfigured_gateway_raises_clear_error(gateway, monkeypatch):
+    """Issue #19：dummy 假数据模式已移除——未配置真实模型必须明确报错，
+    绝不返回写死的示例响应（曾致假规则入库）。"""
+    # 显式固定未配置环境（本机 .env 可能配置了真实模型端点）
     monkeypatch.setattr(gateway._config, "base_url", "dummy")
+
+    from src.model_service.exceptions import ModelConfigError
 
     messages = [Message(role="user", content="请提取以下政策规则")]
 
-    result = gateway.generate(messages, "llm", "policy_qa")
+    with pytest.raises(ModelConfigError, match="模型服务未配置"):
+        gateway.generate(messages, "llm", "policy_qa")
 
-    # dummy 分支不应返回结算解释文本（===PATIENT===），应返回提取 JSON
-    assert result.model_name == "dummy_llm"
-    content = result.content.strip()
-    assert "===PATIENT===" not in content
-    parsed = jsonlib.loads(content)
-    assert isinstance(parsed, list), "dummy policy_qa 应返回 JSON 数组（facts）"
-    if parsed:
-        first = parsed[0]
-        assert "fact_text" in first
-        assert isinstance(first.get("rules"), list)
+    with pytest.raises(ModelConfigError, match="MODEL_BASE_URL"):
+        gateway.generate(messages, "llm", "policy_fact_extraction")
 
 def _recording_patches():
     return (
@@ -674,12 +667,16 @@ def test_generate_fills_empty_provider_model_name_from_route(gateway):
     assert result.model_name == routed_model
 
 
-def test_dummy_skill_authoring_records_hash_only_success_event(gateway):
-    gateway._config.base_url = "dummy"
+def test_skill_authoring_records_hash_only_success_event(gateway):
+    _nondummy(gateway)
     prompt_secret = "PRIVATE DUMMY AUTHORING DESCRIPTION"
     context_patch, recorder_patch = _recording_patches()
 
-    with context_patch, recorder_patch as recorder:
+    with context_patch, recorder_patch as recorder, patch.object(
+        gateway,
+        "_call_provider",
+        return_value=_make_response(content="AUTHORED RESPONSE BODY", model="authored"),
+    ):
         result = gateway.generate(
             [Message(role="user", content=prompt_secret)],
             "reasoning",
@@ -693,12 +690,14 @@ def test_dummy_skill_authoring_records_hash_only_success_event(gateway):
     assert result.content not in str(event)
 
 
-def test_dummy_non_authoring_records_existing_plaintext_summary(gateway):
-    gateway._config.base_url = "dummy"
+def test_non_authoring_records_existing_plaintext_summary(gateway):
+    _nondummy(gateway)
     prompt = "ordinary dummy prompt"
     context_patch, recorder_patch = _recording_patches()
 
-    with context_patch, recorder_patch as recorder:
+    with context_patch, recorder_patch as recorder, patch.object(
+        gateway, "_call_provider", return_value=_make_response(model="plain")
+    ):
         result = gateway.generate(
             [Message(role="user", content=prompt)], "llm", "test"
         )

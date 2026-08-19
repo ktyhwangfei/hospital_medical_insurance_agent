@@ -173,16 +173,15 @@ def test_classify_mixed_clause_first_occurrence_wins():
     assert classify_med_type("急诊留观费用按规定报销") == "急诊留观"
 
 
-def test_dummy_llm_response_rejected_before_persist(monkeypatch):
-    """信任边界防御：未配置真实模型时 dummy 示例假数据禁止写入提取库。
+def test_unconfigured_model_extraction_fails_without_persist(monkeypatch):
+    """信任边界防御：模型未配置时提取明确失败，不写任何提取记录。
 
-    用户验证发现（2026-08-19）：无 MODEL_API_KEY 的环境建构建任务，
-    dummy 网关返回写死的「在职职工 85%」示例，与单元原文无关却入库为规则。
+    用户验证发现（2026-08-19）：无 MODEL_API_KEY 的环境建构建任务曾写入
+    dummy 假规则；现网关对未配置直接抛 ModelConfigError，提取必须失败。
     """
-    import json as _json
     from unittest.mock import MagicMock
 
-    from src.model_service.models import ModelResponse, TokenUsage
+    from src.model_service.exceptions import ModelConfigError
     from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
         PipelineOrchestrator,
     )
@@ -218,22 +217,16 @@ def test_dummy_llm_response_rejected_before_persist(monkeypatch):
     store = _Store()
     orch = PipelineOrchestrator(store=store)
 
-    dummy_response = ModelResponse(
-        content=_json.dumps([{
-            "fact_text": "示例提取结果（dummy 模式，未配置真实模型）",
-            "rules": [{"psn_type": "在职职工", "payment_ratio": "85%",
-                        "source_text": "dummy source", "confidence": 0.9}],
-        }], ensure_ascii=False),
-        model_name="dummy_llm",
-        usage=TokenUsage(0, 0),
-        finish_reason="stop",
-    )
-
     from src.knowledge_extension.rule_explanation import pipeline_orchestrator as po
-    monkeypatch.setattr(po, "ModelGateway", lambda: MagicMock(generate=lambda **kw: dummy_response))
+    monkeypatch.setattr(
+        po, "ModelGateway",
+        lambda: MagicMock(generate=MagicMock(
+            side_effect=ModelConfigError("模型服务未配置：请设置 MODEL_BASE_URL 与 MODEL_API_KEY")
+        )),
+    )
 
     result = orch.run_extraction("doc_1")
     assert result["success"] is False
-    # dummy 拒绝错误沿 PolicyFactExtractionError 冒泡为提取失败
+    # 未配置错误沿 PolicyFactExtractionError 冒泡为提取失败，不入库
     assert result.get("error")
-    assert store.extractions == [], "dummy 假数据不得入库"
+    assert store.extractions == [], "未配置模型时不得写入任何提取记录"

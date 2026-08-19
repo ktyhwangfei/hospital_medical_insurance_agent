@@ -195,7 +195,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - 样例数据仅包含 `P001/E001`，`P002` 触发降级路径
 - 测试中 `HIGH_RISK_ACTIONS` 是 `set`，`detect_blocked_actions` 返回顺序不稳定，断言应使用 `set()` 比较
 - PowerShell 中 `&&` 和 `||` 无效，用 `;` 分隔命令
-- 模型服务需要配置 `MODEL_API_KEY` 环境变量，未配置时模型相关接口不可用
+- 模型服务需要配置 `MODEL_API_KEY` 环境变量，未配置时模型相关接口不可用；dummy 假数据模式已移除，未配置（无 `.env` 的 `MODEL_BASE_URL/MODEL_API_KEY` 且无已发布治理路由）时网关直接抛 `ModelConfigError`，绝不返回示例假数据（Issue #19 假规则入库事故后加固）。工作区 `.env` 从 main 检出目录拷贝（gitignored）
 - SSE 流式端点（`/api/v1/medical-insurance-ai-agent/policy-qa/stream`）的 `done` 事件标志流结束，前端需据此关闭 EventSource（原 `/chat/stream` 已迁移至 policy-qa）
 - LangGraph 人工确认通过 `interrupt()` 暂停图执行，`_checkpoint_registry` 维护 task_id → (graph, thread_id) 映射，用于恢复执行
 - `src/apps/portal/` 为 Next.js 16.x 应用，API 和约定可能与训练数据不同，编码前应先查阅 `node_modules/next/dist/docs/`
