@@ -15,11 +15,18 @@ from src.knowledge_extension.rule_explanation.policy_extract.domain_definitions 
 FALLBACK_MED_TYPE = "通用"
 
 # 别名 → 政策标准值；长别名优先匹配，避免「急诊」截断「急诊留观」等误判
-_ALIAS_TO_STANDARD: dict[str, str] = {}
+# 复合类别与政策常用变体（Issue #19 用户验证发现）：门（急）诊/门急诊 是北
+# 京政策的合并结算类别，归门诊；购药（定点零售药店购药费用）是独立医疗类别。
+_EXTRA_ALIASES: dict[str, str] = {
+    "门（急）诊": "门诊",
+    "门(急)诊": "门诊",
+    "门急诊": "门诊",
+    "购药": "购药",
+}
+_ALIAS_TO_STANDARD: dict[str, str] = dict(_EXTRA_ALIASES)
 for _value in MEDICAL_CATEGORY.values:
     for _alias in _value.aliases:
         _ALIAS_TO_STANDARD[_alias] = _value.standard_name
-_ALIAS_ORDER = sorted(_ALIAS_TO_STANDARD, key=len, reverse=True)
 
 
 def normalize_med_type_value(value: str) -> str:
@@ -46,11 +53,20 @@ def classify_med_type(*texts: str) -> str:
 
     传入文本按就近原则排序（单元原文在前，祖先语境在后）：
     更近的文本先匹配，单元内容覆盖上级章节的类别信号。
+    同一文本内多个类别信号时，取首次出现位置最前者（同位置取更长别名），
+    避免混合条款（如「门诊、急诊、住院…购药」）被字典序任意抢占。
     """
     for text in texts:
-        for alias in _ALIAS_ORDER:
-            if alias and alias in (text or ""):
-                return _ALIAS_TO_STANDARD[alias]
+        best: tuple[int, int, str] | None = None  # (位置, -别名长度, 标准值)
+        for alias in _ALIAS_TO_STANDARD:
+            position = (text or "").find(alias)
+            if position < 0:
+                continue
+            candidate = (position, -len(alias), _ALIAS_TO_STANDARD[alias])
+            if best is None or candidate < best:
+                best = candidate
+        if best is not None:
+            return best[2]
     return FALLBACK_MED_TYPE
 
 

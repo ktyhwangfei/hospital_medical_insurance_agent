@@ -108,7 +108,7 @@ async function renderPage() {
 }
 
 describe('med type classification panel', () => {
-  it('classifies units into category counts, drills down, and supports manual correction', async () => {
+  it('classifies units, opens detail drawer, fuzzy searches, and corrects manually', async () => {
     const user = userEvent.setup()
     await renderPage()
 
@@ -122,23 +122,40 @@ describe('med type classification panel', () => {
     expect(within(group).getByText('通用')).toBeInTheDocument()
     expect(within(group).getByText('门诊特殊病')).toBeInTheDocument()
 
-    // 点击类别下钻明细
-    await user.click(within(group).getByText('住院'))
-    expect(await screen.findByText(/「住院」1 个单元/)).toBeInTheDocument()
-    expect(screen.getByText('在职职工住院起付标准按医院等级确定。')).toBeInTheDocument()
-    expect(screen.getByText('自动')).toBeInTheDocument()
+    // 点击类别卡片 → 侧边抽屉展示明细（通用 1 个单元）
+    await user.click(within(group).getByText('通用'))
+    const drawer = await screen.findByRole('dialog', { name: /通用/ })
+    expect(within(drawer).queryByText('在职职工住院起付标准按医院等级确定。')).not.toBeInTheDocument()
+    expect(within(drawer).getByText('退休人员待遇调整需经人工复核。')).toBeInTheDocument()
+    expect(within(drawer).getByText('自动')).toBeInTheDocument()
+
+    // 模糊搜索：无命中时显示空态
+    const search = within(drawer).getByRole('searchbox', { name: '搜索单元' })
+    await user.type(search, '不存在的条款')
+    expect(within(drawer).getByText('没有匹配的单元')).toBeInTheDocument()
+    await user.clear(search)
+    await waitFor(() => expect(within(drawer).getByText('退休人员待遇调整需经人工复核。')).toBeInTheDocument())
+
+    // 抽屉内切换类别下拉：通用 → 住院
+    const categorySelect = within(drawer).getByRole('combobox', { name: '切换医疗类别' })
+    await user.selectOptions(categorySelect, '住院')
+    expect(within(drawer).getByText('在职职工住院起付标准按医院等级确定。')).toBeInTheDocument()
 
     // 人工修正：住院 → 急诊
-    await user.click(screen.getByRole('button', { name: /修改/ }))
-    const select = screen.getByRole('combobox', { name: '选择医疗类别' })
+    await user.click(within(drawer).getByRole('button', { name: /修改/ }))
+    const select = within(drawer).getByRole('combobox', { name: '选择医疗类别' })
     await user.selectOptions(select, '急诊')
-    await user.click(screen.getByRole('button', { name: '保存' }))
+    await user.click(within(drawer).getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(setUnitMedType).toHaveBeenCalledWith(
       'DOC_001', 'UNIT_001', '急诊', 'policy-user-42',
     ))
     // 修正后刷新单元列表
     await waitFor(() => expect(vi.mocked(listEligibleKnowledgeUnits).mock.calls.length).toBeGreaterThanOrEqual(3))
+
+    // 关闭抽屉
+    await user.click(within(drawer).getByRole('button', { name: '关闭单元明细抽屉' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /通用|住院/ })).not.toBeInTheDocument())
   })
 })
 

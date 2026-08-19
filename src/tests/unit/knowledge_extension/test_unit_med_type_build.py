@@ -147,3 +147,27 @@ def test_in_memory_store_roundtrip():
     assert store.delete("d", "u") is True
     assert store.get("d", "u") is None
     assert store.delete("d", "u") is False
+
+
+def test_classify_compound_and_purchase_aliases():
+    """用户验证发现的两类别名缺口：复合类别「门（急）诊」与「购药」。"""
+    from src.knowledge_extension.rule_explanation.policy_extract.med_type_classifier import (
+        classify_med_type,
+    )
+    # 门（急）诊：北京政策的合并结算类别，归门诊（用户人工修正印证）
+    assert classify_med_type("可享受门（急）诊医疗保险待遇") == "门诊"
+    assert classify_med_type("医保门(急)诊的起付标准为550元") == "门诊"
+    assert classify_med_type("门急诊起付标准为1800元") == "门诊"
+    # 购药：定点零售药店购药费用是独立医疗类别
+    assert classify_med_type("到定点零售药店购药的费用") == "购药"
+
+
+def test_classify_mixed_clause_first_occurrence_wins():
+    """混合条款（门诊、急诊、住院…购药同现）：首次出现的类别信号胜出，不被字典序抢占。"""
+    from src.knowledge_extension.rule_explanation.policy_extract.med_type_classifier import (
+        classify_med_type,
+    )
+    text = "第四十九条 门诊、急诊医疗费用和住院医疗费用中由个人支付的部分，以及在定点零售药店购药的费用，由个人直接结算"
+    assert classify_med_type(text) == "门诊"
+    # 长别名优先：同一起始位置时「急诊留观」胜过「急诊」
+    assert classify_med_type("急诊留观费用按规定报销") == "急诊留观"
