@@ -1126,6 +1126,7 @@ def test_current_prompt_projection_matches_all_runtime_templates():
     from src.knowledge_extension.rule_explanation.policy_fact import (
         run_policy_fact_extraction,
     )
+    from src.model_service.governance_assets import _prompt_fields
     from src.model_service.governance_import import build_current_governance_assets
     from src.runtime.intent import prompts as intent_prompts
     from src.runtime.intent.graph import prompts as discrimination_prompts
@@ -1211,6 +1212,16 @@ def test_current_prompt_projection_matches_all_runtime_templates():
         assert prompts[asset_id].system_prompt == system_prompt
         assert prompts[asset_id].user_prompt_template == user_prompt
     assert "19 个必填字段" in prompts["policy.extract.legacy"].user_prompt_template
+    # 声明的变量必须覆盖模板全部占位符，防止 UNDECLARED_TEMPLATE_VARIABLE 回归
+    for item in prompts.values():
+        fields, issues = _prompt_fields(
+            f"{item.system_prompt}\n{item.user_prompt_template}"
+        )
+        assert not issues, f"{item.asset_id} 模板含不安全字段: {issues}"
+        declared = {variable.name for variable in item.variables}
+        assert fields <= declared, (
+            f"{item.asset_id} 模板占位符 {sorted(fields - declared)} 未声明"
+        )
 
 
 def test_delete_draft_allows_editing_but_rejects_approved():
