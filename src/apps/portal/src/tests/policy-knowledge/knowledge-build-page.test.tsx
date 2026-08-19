@@ -45,6 +45,8 @@ const eligibleUnits: EligibleKnowledgeUnit[] = [
     availability: 'AVAILABLE',
     occupied_by: null,
     target_href: null,
+    med_type: '住院',
+    med_type_source: 'auto',
   },
   {
     doc_id: 'DOC_001',
@@ -58,6 +60,8 @@ const eligibleUnits: EligibleKnowledgeUnit[] = [
     availability: 'CLAIMED',
     occupied_by: 'TASK_CLAIMED',
     target_href: '/policy-knowledge/knowledge/review/CS_CLAIMED',
+    med_type: '通用',
+    med_type_source: 'auto',
   },
   {
     doc_id: 'DOC_002',
@@ -71,6 +75,8 @@ const eligibleUnits: EligibleKnowledgeUnit[] = [
     availability: 'REBUILD_REQUIRED',
     occupied_by: null,
     target_href: null,
+    med_type: '门诊特殊病',
+    med_type_source: 'auto',
   },
 ]
 
@@ -169,6 +175,7 @@ describe('knowledge build page', () => {
       'knowledge-build-section-context',
       'knowledge-build-section-flow',
       'knowledge-build-section-summary',
+      'knowledge-build-section-med-type',
       'knowledge-build-section-tasks',
     ])
 
@@ -691,6 +698,8 @@ function claimedUnit(unitId: string, taskId: string, targetHref: string): Eligib
     availability: 'CLAIMED',
     occupied_by: taskId,
     target_href: targetHref,
+    med_type: '住院',
+    med_type_source: 'auto',
   }
 }
 

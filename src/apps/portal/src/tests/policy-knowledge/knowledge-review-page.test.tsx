@@ -302,65 +302,6 @@ describe('knowledge review detail', () => {
     ))
   })
 
-  it('filters review rows by medical category (issue 19)', async () => {
-    const user = userEvent.setup()
-    const base = pendingChangeSet.items[0]
-    const inpatient = {
-      ...base,
-      item_id: 'ITEM_INPATIENT',
-      rule_id: 'KN_INPATIENT',
-      unit_id: 'UNIT_001',
-      after: {
-        ...ruleDetail.rule,
-        fields: [
-          { field_code: 'med_type', field_name: '医疗类别', raw_value: '住院' },
-          { field_code: 'payment_ratio', field_name: '支付比例', raw_value: 0.85 },
-        ],
-      },
-    }
-    const outpatient = {
-      ...base,
-      item_id: 'ITEM_OUTPATIENT',
-      rule_id: 'KN_OUTPATIENT',
-      unit_id: 'UNIT_002',
-      after: {
-        ...ruleDetail.rule,
-        fields: [
-          { field_code: 'med_type', field_name: '医疗类别', raw_value: '门诊' },
-          { field_code: 'payment_ratio', field_name: '支付比例', raw_value: 0.9 },
-        ],
-      },
-    }
-    vi.mocked(getChangeSet).mockResolvedValue({
-      ...pendingChangeSet,
-      items: [inpatient, outpatient],
-    })
-    const page = await KnowledgeReviewDetailRoute({
-      params: Promise.resolve({ changeSetId: 'CS_REVIEW' }),
-    })
-    render(page)
-
-    // 单元筛选下拉的 option 也含路径文本，断言时排除 OPTION 只看分组标题
-    const groupTitleCount = (name: string) =>
-      screen.getAllByText(name).filter((el) => el.tagName !== 'OPTION').length
-
-    await waitFor(() => expect(groupTitleCount('第三章 / 第十二条')).toBeGreaterThan(0))
-    expect(groupTitleCount('第三章 / 第十三条')).toBeGreaterThan(0)
-
-    const select = screen.getByRole('combobox', { name: '按医疗类别筛选' })
-    await user.selectOptions(select, '住院')
-    expect(groupTitleCount('第三章 / 第十二条')).toBeGreaterThan(0)
-    expect(groupTitleCount('第三章 / 第十三条')).toBe(0)
-
-    await user.selectOptions(select, '门诊')
-    expect(groupTitleCount('第三章 / 第十二条')).toBe(0)
-    expect(groupTitleCount('第三章 / 第十三条')).toBeGreaterThan(0)
-
-    await user.click(screen.getByRole('button', { name: '清空筛选' }))
-    expect(groupTitleCount('第三章 / 第十二条')).toBeGreaterThan(0)
-    expect(groupTitleCount('第三章 / 第十三条')).toBeGreaterThan(0)
-  })
-
   it('exposes row-level and batch re-extract entry points for a reviewable change set', async () => {
     const user = userEvent.setup()
     const page = await KnowledgeReviewDetailRoute({

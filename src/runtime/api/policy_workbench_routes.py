@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.config import production as production_config
 from src.data_platform.storage.postgresql.policy_quality_store import (
@@ -54,6 +54,9 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_service import
     SemanticContractUnavailable,
 )
 from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
+from src.knowledge_extension.rule_explanation.unit_med_type_store import (
+    UnitMedTypeOverride,
+)
 from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
     PipelineOrchestrator,
 )
@@ -108,6 +111,22 @@ _change_set_service: "ChangeSetService | None" = None
 _decision_task_service: "DecisionTaskService | None" = None
 _knowledge_build_store: KnowledgeBuildStore | None = None
 _knowledge_build_service: KnowledgeBuildService | None = None
+_unit_med_type_store: Any | None = None
+
+
+def _get_unit_med_type_store():
+    global _unit_med_type_store
+    if _unit_med_type_store is None:
+        from src.knowledge_extension.rule_explanation.unit_med_type_store import (
+            InMemoryUnitMedTypeStore,
+            PostgresUnitMedTypeStore,
+        )
+        _unit_med_type_store = (
+            InMemoryUnitMedTypeStore()
+            if os.environ.get("USE_MEMORY_STORAGE") == "1"
+            else PostgresUnitMedTypeStore()
+        )
+    return _unit_med_type_store
 _compilation_trace_store: Any | None = None
 
 
@@ -145,6 +164,7 @@ def _get_knowledge_build_service() -> KnowledgeBuildService:
             _get_change_set_service(),
             _get_knowledge_build_store(),
             orchestrator=PipelineOrchestrator(PipelineStore()),
+            med_type_store=_get_unit_med_type_store(),
         )
     return _knowledge_build_service
 
@@ -441,6 +461,41 @@ def list_eligible_knowledge_build_units() -> list[EligibleKnowledgeUnit]:
             status_code=503,
             detail=error_detail("SEMANTIC_CONTRACT_UNAVAILABLE", str(exc), {}),
         ) from exc
+
+
+class UnitMedTypeRequest(BaseModel):
+    """单元医疗类别人工修正请求。"""
+
+    doc_id: str = Field(min_length=1, max_length=64)
+    unit_id: str = Field(min_length=1, max_length=64)
+    med_type: str = Field(min_length=1, max_length=64)
+    updated_by: str = Field(default="", max_length=128)
+
+    @field_validator("med_type")
+    @classmethod
+    def _med_type_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("med_type 不能为空白")
+        return stripped
+
+
+@router.post("/knowledge-build/unit-med-types", response_model=UnitMedTypeOverride)
+def set_unit_med_type(request: UnitMedTypeRequest) -> UnitMedTypeOverride:
+    """人工修正单元医疗类别（覆盖自动分类；不影响其他单元）。"""
+    return _get_unit_med_type_store().set(UnitMedTypeOverride(
+        doc_id=request.doc_id,
+        unit_id=request.unit_id,
+        med_type=request.med_type,
+        updated_by=request.updated_by,
+    ))
+
+
+@router.delete("/knowledge-build/unit-med-types/{doc_id}/{unit_id}")
+def reset_unit_med_type(doc_id: str, unit_id: str) -> dict:
+    """重置单元医疗类别为自动分类。"""
+    reset = _get_unit_med_type_store().delete(doc_id, unit_id)
+    return {"reset": reset}
 
 
 @router.post(

@@ -15,6 +15,7 @@ import {
 import { useApiContext } from '@/lib/api-context'
 import { BuildContextBar, KnowledgeFlow } from './knowledge-governance-shared'
 import { KnowledgeBuildWizard } from './knowledge-build-wizard'
+import { MedTypeClassificationPanel } from './med-type-classification-panel'
 
 type KnowledgeBuildPageProps = {
   navigation: React.ReactNode
@@ -185,6 +186,17 @@ export function KnowledgeBuildPage({ navigation }: KnowledgeBuildPageProps) {
           <SummaryCard label="已发布" value={tasksReady ? tasks.filter((task) => task.status === 'PUBLISHED').length : null} loading={loadingTasks} icon={<CheckCircle2 className="size-4 text-emerald-600" />} />
         </div>
       </section>
+
+      {/* Issue #19：医疗类别分类面板（执行分类 / 类别数量 / 明细下钻 / 人工修正） */}
+      <div data-testid="knowledge-build-section-med-type">
+        <MedTypeClassificationPanel
+          units={units}
+          userId={userId}
+          ready={eligibleReady}
+          onClassify={() => loadEligible()}
+          onChanged={() => loadEligible()}
+        />
+      </div>
 
       <section
         aria-labelledby="knowledge-build-task-title"

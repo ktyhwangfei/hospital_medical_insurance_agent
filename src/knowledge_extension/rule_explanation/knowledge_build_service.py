@@ -39,6 +39,12 @@ from src.knowledge_extension.rule_explanation.knowledge_workbench_service import
 from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
     PipelineOrchestrator,
 )
+from src.knowledge_extension.rule_explanation.policy_extract.med_type_classifier import (
+    classify_med_type,
+)
+from src.knowledge_extension.rule_explanation.unit_med_type_store import (
+    UnitMedTypeStore,
+)
 
 _PIPELINE_VERSION = "policy-workbench-v1"
 _MODEL_SCENE = "policy_structuring"
@@ -100,6 +106,7 @@ class KnowledgeBuildService:
         store: KnowledgeBuildStore,
         *,
         orchestrator: PipelineOrchestrator | None = None,
+        med_type_store: UnitMedTypeStore | None = None,
         clock: Callable[[], datetime] = utc_now,
         task_id_factory: Callable[[], str] | None = None,
     ) -> None:
@@ -107,6 +114,7 @@ class KnowledgeBuildService:
         self._change_set_service = change_set_service
         self._store = store
         self._orchestrator = orchestrator
+        self._med_type_store = med_type_store
         self._clock = clock
         self._task_id_factory = task_id_factory
 
@@ -126,11 +134,25 @@ class KnowledgeBuildService:
             if change_set.status == "RETURNED"
             for item in change_set.items
         }
+        # Issue #19：人工修正 > 自动分类（单元原文→条款路径→文档标题，就近优先）
+        overrides = (
+            {(o.doc_id, o.unit_id): o.med_type
+             for o in self._med_type_store.list_all()}
+            if self._med_type_store is not None else {}
+        )
         eligible: list[tuple[int, EligibleKnowledgeUnit]] = []
         for document in self._load_documents():
             for unit in document.units:
                 claim = claims_by_logical.get((unit.doc_id, unit.unit_id))
                 task = tasks_by_id.get(claim.task_id) if claim is not None else None
+                override = overrides.get((unit.doc_id, unit.unit_id))
+                med_type = (
+                    override
+                    if override is not None
+                    else classify_med_type(
+                        unit.source_text, " / ".join(unit.path), unit.doc_title,
+                    )
+                )
                 availability = (
                     "CLAIMED"
                     if claim is not None
@@ -161,6 +183,10 @@ class KnowledgeBuildService:
                                 _claim_target(task, claim.task_id)
                                 if claim is not None
                                 else None
+                            ),
+                            med_type=med_type,
+                            med_type_source=(
+                                "manual" if override is not None else "auto"
                             ),
                         ),
                     )
