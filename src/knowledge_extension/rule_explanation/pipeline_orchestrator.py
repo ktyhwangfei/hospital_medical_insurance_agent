@@ -458,6 +458,14 @@ class PipelineOrchestrator:
                 # 审核时显式换大模型：仅在用户指定时才传入，避免干扰默认路由
                 generate_kwargs["model_override"] = override.model_name
             response = gateway.generate(**generate_kwargs)
+            # 信任边界防御：dummy 网关返回的示例假数据与原文无关（用户验证发现
+            # kn_2ee3446973a21fae 等假规则入库），未配置真实模型时必须报错，
+            # 不得静默写入知识管线。
+            if response.model_name == "dummy_llm":
+                raise ValueError(
+                    "模型未配置（MODEL_API_KEY 缺失且无已发布治理路由），"
+                    "已拒绝写入 dummy 示例数据；请配置 .env 后重试"
+                )
 
             content = response.content.strip()
             if content.startswith("```"):

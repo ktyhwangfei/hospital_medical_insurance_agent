@@ -171,3 +171,69 @@ def test_classify_mixed_clause_first_occurrence_wins():
     assert classify_med_type(text) == "门诊"
     # 长别名优先：同一起始位置时「急诊留观」胜过「急诊」
     assert classify_med_type("急诊留观费用按规定报销") == "急诊留观"
+
+
+def test_dummy_llm_response_rejected_before_persist(monkeypatch):
+    """信任边界防御：未配置真实模型时 dummy 示例假数据禁止写入提取库。
+
+    用户验证发现（2026-08-19）：无 MODEL_API_KEY 的环境建构建任务，
+    dummy 网关返回写死的「在职职工 85%」示例，与单元原文无关却入库为规则。
+    """
+    import json as _json
+    from unittest.mock import MagicMock
+
+    from src.model_service.models import ModelResponse, TokenUsage
+    from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
+        PipelineOrchestrator,
+    )
+
+    class _Store:
+        def __init__(self):
+            self.doc = {"doc_id": "doc_1", "title": "政策", "content_text": "第一条 住院费用。"}
+            self.extractions: list[dict] = []
+
+        def get_document(self, doc_id):
+            return self.doc if doc_id == "doc_1" else None
+
+        def list_extractions(self, **kwargs):
+            return {"items": list(self.extractions), "total": 0}
+
+        def batch_create_extractions(self, items):
+            self.extractions.extend(items)
+            return len(items)
+
+        def claim_extraction_run(self, doc_id, run_token):
+            return True
+
+        def commit_extraction_run(self, doc_id, run_token):
+            from contextlib import nullcontext
+            return nullcontext(True)
+
+        def is_extraction_run_current(self, doc_id, run_token):
+            return True
+
+        def finish_extraction_run(self, doc_id, run_token, data):
+            return True
+
+    store = _Store()
+    orch = PipelineOrchestrator(store=store)
+
+    dummy_response = ModelResponse(
+        content=_json.dumps([{
+            "fact_text": "示例提取结果（dummy 模式，未配置真实模型）",
+            "rules": [{"psn_type": "在职职工", "payment_ratio": "85%",
+                        "source_text": "dummy source", "confidence": 0.9}],
+        }], ensure_ascii=False),
+        model_name="dummy_llm",
+        usage=TokenUsage(0, 0),
+        finish_reason="stop",
+    )
+
+    from src.knowledge_extension.rule_explanation import pipeline_orchestrator as po
+    monkeypatch.setattr(po, "ModelGateway", lambda: MagicMock(generate=lambda **kw: dummy_response))
+
+    result = orch.run_extraction("doc_1")
+    assert result["success"] is False
+    # dummy 拒绝错误沿 PolicyFactExtractionError 冒泡为提取失败
+    assert result.get("error")
+    assert store.extractions == [], "dummy 假数据不得入库"
