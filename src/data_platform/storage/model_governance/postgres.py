@@ -213,7 +213,11 @@ ON CONFLICT (release_id) DO NOTHING;
 def _json(value: Any) -> str:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
-    return json.dumps(value, ensure_ascii=False)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        default=lambda item: item.model_dump(mode="json"),
+    )
 
 
 def _decoded(value: Any) -> Any:

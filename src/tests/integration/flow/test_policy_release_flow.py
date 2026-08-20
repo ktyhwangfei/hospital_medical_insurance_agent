@@ -136,28 +136,17 @@ def test_candidate_build_test_and_manual_atomic_promotion_flow() -> None:
     assert store.get_release("baseline").status == "retired"  # type: ignore[union-attr]
 
 
-class FailOncePublishedTaskStore(InMemoryKnowledgeBuildStore):
-    def __init__(self) -> None:
+class FailOncePublishedChangeSetStore(InMemoryChangeSetStore):
+    def __init__(self, failure: Exception) -> None:
         super().__init__()
+        self.failure = failure
         self.fail_next_publish = True
 
-    def save(self, task: KnowledgeBuildTask) -> KnowledgeBuildTask:
-        if task.status == "PUBLISHED" and self.fail_next_publish:
+    def transition_status_with_task(self, *args, **kwargs):
+        if kwargs["target_status"] == "PUBLISHED" and self.fail_next_publish:
             self.fail_next_publish = False
-            raise RuntimeError("transient task synchronization failure")
-        return super().save(task)
-
-
-class FailOncePublishedTaskValueStore(InMemoryKnowledgeBuildStore):
-    def __init__(self) -> None:
-        super().__init__()
-        self.fail_next_publish = True
-
-    def save(self, task: KnowledgeBuildTask) -> KnowledgeBuildTask:
-        if task.status == "PUBLISHED" and self.fail_next_publish:
-            self.fail_next_publish = False
-            raise ValueError("lineage compare-and-set conflict")
-        return super().save(task)
+            raise self.failure
+        return super().transition_status_with_task(*args, **kwargs)
 
 
 class FailOnceSnapshotStore(InMemoryPublishedSnapshotStore):
@@ -246,8 +235,10 @@ def _lifecycle_client(
             canonical_rule=canonical_rule,
         )],
     ))
-    change_set_service = ChangeSetService(object(), selected_change_set_store)
     selected_build_store = build_store or InMemoryKnowledgeBuildStore()
+    change_set_service = ChangeSetService(
+        object(), selected_change_set_store, build_store=selected_build_store
+    )
     selected_build_store.create_with_claims(KnowledgeBuildTask(
         task_id="KB_task_1",
         name="职工医保待遇知识构建",
@@ -399,10 +390,12 @@ def test_task_backed_release_promotion_publishes_lineage_and_releases_claim(
 def test_promotion_retry_finishes_lineage_after_task_sync_failure(
     monkeypatch,
 ) -> None:
-    failing_store = FailOncePublishedTaskStore()
+    failing_store = FailOncePublishedChangeSetStore(
+        RuntimeError("transient lineage transaction failure")
+    )
     client, quality_store, change_sets, build_tasks, snapshots = _lifecycle_client(
         monkeypatch,
-        build_store=failing_store,
+        change_set_store=failing_store,
     )
     _approve_and_prepare_release(client, quality_store)
 
@@ -415,7 +408,7 @@ def test_promotion_retry_finishes_lineage_after_task_sync_failure(
     assert first.json()["detail"]["error_code"] == "POLICY_RELEASE_SYNC_PENDING"
     assert quality_store.get_release("candidate_task_1").status == "active"
     assert snapshots.get("candidate_task_1").source_change_set_id == "CS_task_1"
-    assert change_sets.get("CS_task_1").status == "PUBLISHED"
+    assert change_sets.get("CS_task_1").status == "APPROVED"
     assert build_tasks.get("KB_task_1").status == "APPROVED_PENDING_RELEASE"
     assert build_tasks.get_claim("doc_1", "unit_1") is not None
     pending_gate = client.get(
@@ -424,7 +417,7 @@ def test_promotion_retry_finishes_lineage_after_task_sync_failure(
     assert pending_gate.status_code == 200
     assert pending_gate.json()["sync_pending"] is True
     assert any(
-        "构建任务" in reason
+        "知识变更集" in reason
         for reason in pending_gate.json()["sync_pending_reasons"]
     )
     active_fallback = client.get(f"{PREFIX}/published/active")
@@ -449,10 +442,12 @@ def test_promotion_retry_finishes_lineage_after_task_sync_failure(
 def test_post_active_lineage_value_error_is_sync_pending_and_retryable(
     monkeypatch,
 ) -> None:
-    failing_store = FailOncePublishedTaskValueStore()
+    failing_store = FailOncePublishedChangeSetStore(
+        ValueError("lineage compare-and-set conflict")
+    )
     client, quality_store, change_sets, build_tasks, _snapshots = _lifecycle_client(
         monkeypatch,
-        build_store=failing_store,
+        change_set_store=failing_store,
     )
     _approve_and_prepare_release(client, quality_store)
 
@@ -464,7 +459,7 @@ def test_post_active_lineage_value_error_is_sync_pending_and_retryable(
     assert first.status_code == 503
     assert first.json()["detail"]["error_code"] == "POLICY_RELEASE_SYNC_PENDING"
     assert quality_store.get_active_release().release_id == "candidate_task_1"  # type: ignore[union-attr]
-    assert change_sets.get("CS_task_1").status == "PUBLISHED"
+    assert change_sets.get("CS_task_1").status == "APPROVED"
     assert build_tasks.get("KB_task_1").status == "APPROVED_PENDING_RELEASE"
 
     retried = client.post(
@@ -756,9 +751,10 @@ def _compile_trace_flow_client(monkeypatch, traces=None, backend=None):
             canonical_rule=canonical,
         )],
     ))
-    change_set_service = ChangeSetService(object(), change_sets)
-
     build_tasks = InMemoryKnowledgeBuildStore()
+    change_set_service = ChangeSetService(
+        object(), change_sets, build_store=build_tasks
+    )
     build_tasks.create_with_claims(KnowledgeBuildTask(
         task_id="KB_compile_trace",
         name="规则编译治理流",

@@ -152,6 +152,9 @@ class EligibleKnowledgeUnit(BaseModel):
     availability: Literal["AVAILABLE", "CLAIMED", "REBUILD_REQUIRED"]
     occupied_by: str | None = None
     target_href: str | None = None
+    # Issue #19：单元医疗类别（人工修正 > 确定性自动分类），供构建页统计与筛选
+    med_type: str = ""
+    med_type_source: Literal["auto", "manual"] = "auto"
 
 
 class KnowledgeBuildBlocker(BaseModel):

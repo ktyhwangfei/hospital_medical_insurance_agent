@@ -4,9 +4,13 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from threading import RLock
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from src.knowledge_extension.rule_explanation.change_set_models import KnowledgeChangeSet
+
+if TYPE_CHECKING:
+    from src.knowledge_extension.rule_explanation.knowledge_build_models import KnowledgeBuildTask
+    from src.knowledge_extension.rule_explanation.knowledge_build_store import KnowledgeBuildStore
 
 
 class ChangeSetStore(Protocol):
@@ -23,6 +27,17 @@ class ChangeSetStore(Protocol):
         allowed_statuses: set[str],
         target_status: str,
         decision: dict | None = None,
+    ) -> KnowledgeChangeSet | None: ...
+
+    def transition_status_with_task(
+        self,
+        change_set_id: str,
+        *,
+        allowed_statuses: set[str],
+        target_status: str,
+        decision: dict | None,
+        build_store: "KnowledgeBuildStore",
+        task: "KnowledgeBuildTask",
     ) -> KnowledgeChangeSet | None: ...
 
 
@@ -72,6 +87,53 @@ class InMemoryChangeSetStore:
             if item is None or item.status not in allowed_statuses:
                 return None
             return self._save_status_unlocked(item, target_status, decision)
+
+    def transition_status_with_task(
+        self,
+        change_set_id: str,
+        *,
+        allowed_statuses: set[str],
+        target_status: str,
+        decision: dict | None,
+        build_store: "KnowledgeBuildStore",
+        task: "KnowledgeBuildTask",
+    ) -> KnowledgeChangeSet | None:
+        from src.knowledge_extension.rule_explanation.knowledge_build_store import (
+            InMemoryKnowledgeBuildStore,
+            _prepare_saved_task,
+            _TERMINAL_STATUSES,
+        )
+
+        if not isinstance(build_store, InMemoryKnowledgeBuildStore):
+            raise TypeError("内存变更集必须与内存构建任务存储配套使用")
+        with self._lock, build_store._lock:
+            item = self._items.get(change_set_id)
+            current_task = build_store._tasks.get(task.task_id)
+            if item is None or current_task is None:
+                return None
+            if item.status not in allowed_statuses and item.status != target_status:
+                return None
+            saved_task = (
+                current_task
+                if current_task.status == task.status
+                else _prepare_saved_task(current_task, task)
+            )
+            updated = (
+                item
+                if item.status == target_status
+                else item.model_copy(update={
+                    "status": target_status,
+                    "review_decision": (
+                        decision if decision is not None else item.review_decision
+                    ),
+                    "updated_at": datetime.now(timezone.utc),
+                })
+            )
+            self._items[change_set_id] = updated
+            build_store._tasks[saved_task.task_id] = saved_task
+            if saved_task.status in _TERMINAL_STATUSES:
+                build_store._release_claims_unlocked(saved_task.task_id)
+            return updated.model_copy(deep=True)
 
     def _save_status_unlocked(
         self,
@@ -206,6 +268,107 @@ class PostgresChangeSetStore:
             ),
         )
         return self._parse(rows[0]["payload"]) if rows else None
+
+    def transition_status_with_task(
+        self,
+        change_set_id: str,
+        *,
+        allowed_statuses: set[str],
+        target_status: str,
+        decision: dict | None,
+        build_store: "KnowledgeBuildStore",
+        task: "KnowledgeBuildTask",
+    ) -> KnowledgeChangeSet | None:
+        from src.knowledge_extension.rule_explanation.knowledge_build_store import (
+            PostgreSQLKnowledgeBuildStore,
+            _prepare_saved_task,
+            _TERMINAL_STATUSES,
+            _UPDATE_TASK,
+        )
+
+        if not isinstance(build_store, PostgreSQLKnowledgeBuildStore):
+            raise TypeError("PostgreSQL 变更集必须与 PostgreSQL 构建任务存储配套使用")
+        client = self._get_client()
+        build_client = build_store._get_client()
+        if client._database_url != build_client._database_url:
+            raise ValueError("变更集与构建任务必须使用同一 PostgreSQL 数据库")
+        with build_store._lock, client.transaction() as connection:
+            current_record = build_store._execute_transaction(
+                connection,
+                "SELECT payload FROM policy_knowledge_change_sets "
+                "WHERE change_set_id = %s FOR UPDATE",
+                (change_set_id,),
+                fetch_one=True,
+            )
+            task_record = build_store._execute_transaction(
+                connection,
+                "SELECT payload FROM policy_knowledge_build_tasks "
+                "WHERE task_id = %s FOR UPDATE",
+                (task.task_id,),
+                fetch_one=True,
+            )
+            if current_record is None or task_record is None:
+                return None
+            current = self._parse(build_store._record_value(current_record, "payload", 0))
+            if current.status not in allowed_statuses and current.status != target_status:
+                return None
+            current_task = build_store._task_from_payload(
+                build_store._record_value(task_record, "payload", 0)
+            )
+            saved_task = (
+                current_task
+                if current_task.status == task.status
+                else _prepare_saved_task(current_task, task)
+            )
+            updated = current
+            if current.status != target_status:
+                updated = current.model_copy(update={
+                    "status": target_status,
+                    "review_decision": (
+                        decision if decision is not None else current.review_decision
+                    ),
+                    "updated_at": datetime.now(timezone.utc),
+                })
+                changed_record = build_store._execute_transaction(
+                    connection,
+                    "UPDATE policy_knowledge_change_sets SET status=%s, payload=%s, "
+                    "updated_at=%s WHERE change_set_id=%s AND status=%s RETURNING payload",
+                    (
+                        updated.status,
+                        updated.model_dump_json(),
+                        updated.updated_at,
+                        updated.change_set_id,
+                        current.status,
+                    ),
+                    fetch_one=True,
+                )
+                if changed_record is None:
+                    raise RuntimeError("变更集状态并发更新失败")
+                updated = self._parse(
+                    build_store._record_value(changed_record, "payload", 0)
+                )
+            if current_task.status != saved_task.status:
+                saved_record = build_store._execute_transaction(
+                    connection,
+                    _UPDATE_TASK,
+                    (
+                        saved_task.status,
+                        saved_task.model_dump_json(),
+                        saved_task.updated_at,
+                        saved_task.task_id,
+                        task.updated_at,
+                    ),
+                    fetch_one=True,
+                )
+                if saved_record is None:
+                    raise RuntimeError("构建任务状态并发更新失败")
+            if saved_task.status in _TERMINAL_STATUSES:
+                build_store._execute_transaction(
+                    connection,
+                    "DELETE FROM policy_knowledge_unit_claims WHERE task_id = %s",
+                    (saved_task.task_id,),
+                )
+            return updated
 
     @staticmethod
     def _parse(payload) -> KnowledgeChangeSet:

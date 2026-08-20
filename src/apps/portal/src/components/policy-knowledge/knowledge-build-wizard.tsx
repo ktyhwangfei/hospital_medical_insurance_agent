@@ -27,6 +27,7 @@ export function KnowledgeBuildWizard({ eligibleUnits, userId, onClose, onCreated
   const [step, setStep] = useState<WizardStep>(1)
   const [search, setSearch] = useState('')
   const [docFilter, setDocFilter] = useState('')
+  const [medTypeFilter, setMedTypeFilter] = useState('')
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [taskName, setTaskName] = useState('')
   const [rebuildReason, setRebuildReason] = useState('')
@@ -66,10 +67,17 @@ export function KnowledgeBuildWizard({ eligibleUnits, userId, onClose, onCreated
       return false
     }
     if (docFilter && unit.doc_title !== docFilter) return false
+    // Issue #19：按医疗类别筛选单元（人工修正 > 自动分类的类别值）
+    if (medTypeFilter && (unit.med_type || '通用') !== medTypeFilter) return false
     return true
   })
   const docOptions = useMemo(
     () => Array.from(new Map(approvedUnits.map((unit) => [unit.doc_title, unit])).keys()).sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [approvedUnits],
+  )
+  const medTypeOptions = useMemo(
+    () => Array.from(new Set(approvedUnits.map((unit) => unit.med_type || '通用')))
+      .sort((a, b) => a.localeCompare(b, 'zh-CN')),
     [approvedUnits],
   )
   // 全选只作用于当前筛选结果中的可选单元（排除占用中 / 未开启重建的已发布单元）。
@@ -324,6 +332,18 @@ export function KnowledgeBuildWizard({ eligibleUnits, userId, onClose, onCreated
                     <option key={title} value={title}>{title}</option>
                   ))}
                 </select>
+                {/* Issue #19：按医疗类别筛选 */}
+                <select
+                  aria-label="按医疗类别筛选"
+                  value={medTypeFilter}
+                  onChange={(event) => setMedTypeFilter(event.target.value)}
+                  className="h-9 max-w-40 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-emerald-500"
+                >
+                  <option value="">全部医疗类别</option>
+                  {medTypeOptions.map((medType) => (
+                    <option key={medType} value={medType}>{medType}</option>
+                  ))}
+                </select>
               </div>
               <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
                 <div className="min-w-0 flex-1">
@@ -386,6 +406,14 @@ export function KnowledgeBuildWizard({ eligibleUnits, userId, onClose, onCreated
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-medium text-slate-900">{unit.doc_title}</p>
                             <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${claimed ? 'bg-amber-100 text-amber-700' : unit.status === 'published' ? 'bg-teal-100 text-teal-700' : 'bg-emerald-100 text-emerald-700'}`}>{statusLabel}</span>
+                            {unit.med_type && (
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${unit.med_type_source === 'manual' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}
+                                title={unit.med_type_source === 'manual' ? '人工修正的医疗类别' : '自动分类的医疗类别'}
+                              >
+                                {unit.med_type}
+                              </span>
+                            )}
                           </div>
                           <p className="mt-1 text-xs text-slate-600">{unit.path.join(' / ') || '未标注条款'}</p>
                           <p className="mt-1 font-mono text-[10px] text-slate-400">精确修订 {unit.unit_revision_id}</p>

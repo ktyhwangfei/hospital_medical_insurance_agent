@@ -29,7 +29,7 @@
 | 政策问答 | 6 | 0 | 6 | 0 | 0 | P10 已切换；Chat-first 单答案最小单元已实现，待 R4 性能/E2E 收口 |
 | 结算异常导办 | 4 | 0 | 4 | 0 | 0 | — |
 | 出院前质控 | 3 | 0 | 3 | 0 | 0 | — |
-| 模型服务与管理 | 5 | 1 | 4 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证 |
+| 模型服务与管理 | 6 | 1 | 5 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证；端点模型列表探测待页面验收 |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 
 | 知识库管理 | 4 | 1 | 3 | 0 | 0 | §2 P9 5 tab 已上线；语义提议 S1 已完成 R4，S5 冲突维度候选已完成聚焦验证 |
@@ -39,7 +39,7 @@
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **41** | **8** | **29** | **2** | **2** | — |
+| **合计** | **42** | **8** | **30** | **2** | **2** | — |
 
 > **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6 和 §4 为准；
@@ -82,6 +82,7 @@
 | 4.3 | 模型路由（type+scene 策略） | `model_service/gateway/` → `router/` | impl_done |
 | 4.4 | 模型异常分类处理 | `model_service/exceptions/` | impl_done |
 | 4.5 | 提示词/模型/路由真实资产版本治理并驱动 dev/test 运行时 | `model_service/governance_*` → `ModelGateway` → Portal `/model-governance` | verified |
+| 4.6 | OpenAI-compatible 端点模型列表探测与模型名可搜索选择/手填兜底 | `OpenAICompatibleProvider.list_models` → `/model-governance/models/probe-list` → Portal 模型表单 | impl_done |
 
 4.5 验证证据（2026-08-17）：治理发布后的提示词、模型与路由成为 dev/test 真实运行时来源，无活动发布时才使用代码/静态配置回退；配置损坏失败关闭。API Key 通过 Fernet 密文保存，凭据以 endpoint fingerprint 和 revision 绑定，响应、日志与页面不回显明文；模型发布要求内容哈希与当前密钥指纹完全匹配的成功连接测试。按 T1 → T2a → T2b → T3 → Portal → T4 顺序分别为 89 passed、23 passed、2 passed、4 passed（20 条治理路由解析均值 0.876ms）、Vitest 21 passed + `tsc --noEmit` + Next.js build、Chromium E2E 连续两次各 1 passed（清空外部主密钥，治理 flow 专用 Playwright 配置禁止复用 8000/3000 服务并以 dev + 内存存储 + E2E 专用 Fernet key 独立启动；OpenAI-compatible 测试 Provider 严格校验 method/path/auth/model/参数），覆盖收费员直入、真实提示词全文、模型连接/审核/发布、下拉路由、提示词新版本生效/回滚、390px 无横向溢出及 API Key 页面/响应无泄漏。显式运行计划原命令 `npm test -- flows/portal/model-governance.flow.ts --project=chromium` 或别名 `npm run test:model-governance -- --project=chromium` 时才进入专用配置，默认/全量 E2E 明确排除该写流程。补充独立性验证：父 shell 故意设置错误的 `PORTAL_BASE_URL` / `NEXT_PUBLIC_API_BASE_URL` / `PORT` 时 Chromium 仍 1 passed；发布新提示词后故意中断的首次执行由 afterEach 恢复基线，同一 Playwright 进程 retry #1 完整通过。权限管理页尚未实现，当前仍沿用开发身份写/审/发门禁，是下一阶段工作。
 
@@ -343,6 +344,9 @@
 | 2026-08-07 | **Skill 页面两个 bug 修复**：①`/skills` 顶部页签（Skill/草稿/评测记录/发布记录）active 态错乱——“Skill” tab 正则 `/\/skills\/[^/]+(\/edit)?$/` 误匹配 drafts/evaluations/releases，导致无论在哪个子页都高亮“Skill”；改为显式排除保留路径段（`RESERVED_SEGS`）。②`/skills` 工作台目录与所有 skill 列表全空（“没有符合条件的 Skill”）——前端 dev 进程复用旧实例、`NEXT_PUBLIC_API_BASE_URL` 仍指向 next.config 默认 8000，API 代理转发到错误后端实例（空数据）；重启前端指向本工作区后端 8173 修复，并记录陷阱到 AGENTS.md。Portal Vitest 235 passed、tsc EXIT=0、Orca 浏览器验证目录显示 settlement_explain_skill 与页签高亮均正确 | §7 Skill 管理；Portal `/skills` layout + 工作台 |
 | 2026-08-10 | **Skill AI 创作与候选隔离评测完成**：已发布指标→AI 候选→人工接受→差异优化→校验→固定路由/隔离行为评测→人工物化全链路通过；补齐低基数观测指标与 fail-closed 部署约束 | §7.8 Skill AI 创作 |
 | 2026-08-17 | **后台管理真实资产版本与模型接入**：真实提示词/模型/路由发布接入 dev/test 运行时；Fernet 凭据、连接测试发布门槛、版本只读/新建/回滚与资产中心 E2E 完成 | §1 模型服务与管理 4.5；§4 验证证据 |
+| 2026-08-19 | **dummy 假数据模式移除**：ModelGateway 删除 dummy 分支，未配置模型直接抛 `ModelConfigError`（`.env` 从 main 检出拷贝，gitignored）；测试重写 3 组；真实 deepseek-chat 端到端验证第十九条提取 2 条规则逐字溯源。model_service 单元 115 passed | 模型服务；需求迭代记录 Issue 19 四轮节；AGENTS.md 陷阱更新 |
+| 2026-08-19 | **Issue #19 单元医疗类别区分（按用户设计重做）**：第一轮方向错误（提取回填+审核页筛选）已回退。现行实现：知识构建页新增「医疗类别分类」面板（执行分类→类别数量卡片→明细下钻→人工修正/恢复自动，PG 持久化 policy_unit_med_types）；新建构建任务向导按医疗类别筛选单元。T1 3+592、T2a 3+41、前端 2+17+139、tsc/build 通过；失败均为预存环境依赖。待用户验证 | 政策知识管线；需求迭代记录 Issue 19 节；领域字典新增 med_type_classifier/UnitMedTypeOverride |
+| 2026-08-19 | **模型治理新模型接入辅助**：通用 OpenAI-compatible `/models` 探测、写权限与脱敏审计、安全失败提示；Portal 模型名支持可搜索列表和手填兜底，端点/密钥变更后列表失效。真实 OpenCode Go 匿名探测 28 个模型且含 `deepseek-v4-flash`，Portal tsc 通过，待用户页面验收 | 模型服务与管理 4.6；`/model-governance` |
 
 ---
 

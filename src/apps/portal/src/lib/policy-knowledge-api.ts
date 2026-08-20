@@ -255,10 +255,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
-const json = (method: string, body: unknown): RequestInit => ({
+const json = (method: string, body?: unknown): RequestInit => ({
   method,
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body),
+  ...(body === undefined ? {} : { body: JSON.stringify(body) }),
 })
 
 export async function semanticReviewRequest(method = 'GET', body?: unknown): Promise<RequestInit> {
@@ -454,6 +454,9 @@ export interface EligibleKnowledgeUnit {
   availability: 'AVAILABLE' | 'CLAIMED' | 'REBUILD_REQUIRED'
   occupied_by: string | null
   target_href: string | null
+  /** 单元医疗类别（人工修正 > 自动分类，Issue #19） */
+  med_type: string
+  med_type_source: 'auto' | 'manual'
 }
 
 export interface KnowledgeBuildBlocker {
@@ -740,6 +743,31 @@ export const getChangeSet = (changeSetId: string) =>
 
 export const listEligibleKnowledgeUnits = () =>
   request<EligibleKnowledgeUnit[]>(`${WORKBENCH_API}/knowledge-build/eligible-units`)
+
+export const setUnitMedType = async (
+  docId: string,
+  unitId: string,
+  medType: string,
+) =>
+  request<{
+    doc_id: string
+    unit_id: string
+    med_type: string
+    updated_by: string
+  }>(
+    `${WORKBENCH_API}/knowledge-build/unit-med-types`,
+    await semanticReviewRequest('POST', {
+      doc_id: docId,
+      unit_id: unitId,
+      med_type: medType,
+    }),
+  )
+
+export const resetUnitMedType = async (docId: string, unitId: string) =>
+  request<{ reset: boolean }>(
+    `${WORKBENCH_API}/knowledge-build/unit-med-types/${encodeURIComponent(docId)}/${encodeURIComponent(unitId)}`,
+    await semanticReviewRequest('DELETE'),
+  )
 
 export const preflightKnowledgeBuild = (body: CreateKnowledgeBuildTaskRequest) =>
   request<KnowledgeBuildPreflight>(`${WORKBENCH_API}/knowledge-build/preflight`, json('POST', body))

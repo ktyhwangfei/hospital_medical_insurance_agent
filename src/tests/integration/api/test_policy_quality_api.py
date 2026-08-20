@@ -216,8 +216,10 @@ def test_promote_validates_source_lineage_before_switching_active_release(
         semantic_contract_version=change_set_contract,
         status=change_set_status,
     ))
-    change_set_service = ChangeSetService(object(), change_sets)
     build_tasks = InMemoryKnowledgeBuildStore()
+    change_set_service = ChangeSetService(
+        object(), change_sets, build_store=build_tasks
+    )
     if task_status is not None:
         build_tasks.create_with_claims(KnowledgeBuildTask(
             task_id="KB_source",
@@ -584,8 +586,8 @@ def _install_approved_gate_source(monkeypatch, change_set_id: str):
         semantic_contract_version="2",
         status="APPROVED",
     ))
-    service = ChangeSetService(object(), source_store)
     build_store = InMemoryKnowledgeBuildStore()
+    service = ChangeSetService(object(), source_store, build_store=build_store)
     build_store.create_with_claims(KnowledgeBuildTask(
         task_id=task_id,
         name="职工医保待遇知识构建",

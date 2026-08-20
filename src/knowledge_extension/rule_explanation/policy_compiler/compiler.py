@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from time import perf_counter
 from typing import Any
 
+from src.knowledge_extension.rule_explanation.policy_extract import domain_definitions
 from src.knowledge_extension.rule_explanation.policy_compiler.models import (
     CanonicalRule,
     CompilationResult,
@@ -37,6 +39,56 @@ _SEGMENT_FIELDS = {"segment", "amount_band"}
 # 身份无法确定时的哨兵值：必须 fail-closed，否则语义不同的规则会塌缩进同一 rule_id。
 # ponytail: 哨兵集合是封闭枚举，新增适配器产生的未知身份值时需同步扩充。
 SUBJECT_SENTINELS = frozenset({"", "unclassified", "unknown", "未分类", "none"})
+
+
+def _domain_terms(domain) -> frozenset[str]:
+    """受控值域的全部合法表述（标准名 + 简称 + 别名）。"""
+    terms: set[str] = set()
+    for value in domain.values:
+        terms.update((value.standard_name, value.abbreviation, *value.aliases))
+    return frozenset(terms)
+
+
+# conditions 枚举字段的受控值域（来源：policy_extract/domain_definitions，单一事实源）。
+# 未命中不阻断编译，生成 REVIEW 级 VALUE_DOMAIN_UNMAPPED，交由语义映射/值域新增流程收敛。
+_CONDITION_VALUE_DOMAINS: dict[str, frozenset[str]] = {
+    "insu_type": _domain_terms(domain_definitions.INSURANCE_SYSTEM),
+    "med_type": _domain_terms(domain_definitions.MEDICAL_CATEGORY),
+    "hosp_lv": _domain_terms(domain_definitions.HOSPITAL_LEVEL),
+    "psn_type": _domain_terms(domain_definitions.POPULATION_TAGS),
+    "setl_type": _domain_terms(domain_definitions.SETTLEMENT_METHOD),
+}
+
+
+def _iter_condition_values(raw: object):
+    """枚举字段值可能是标量或嵌套多值列表，逐项展开。"""
+    if isinstance(raw, (list, tuple, set)):
+        for item in raw:
+            yield from _iter_condition_values(item)
+    elif isinstance(raw, str):
+        yield raw
+
+
+def _check_condition_value_domains(
+    fact: PolicyFact,
+) -> list[str]:
+    """校验枚举条件字段是否落在受控值域内，返回未映射值描述列表。
+
+    只校验含中文的值：受控值域均为中文表述，英文值（retiree/working 等内部语义键）
+    不在本校验范围，避免存量内部键误报。
+    """
+    unmapped: list[str] = []
+    for name, allowed in _CONDITION_VALUE_DOMAINS.items():
+        if name not in fact.conditions:
+            continue
+        for raw in _iter_condition_values(fact.conditions[name]):
+            stripped = raw.strip()
+            if stripped and _CJK_RE.search(stripped) and stripped not in allowed:
+                unmapped.append(f"{name}「{stripped}」")
+    return unmapped
+
+
+_CJK_RE = __import__("re").compile(r"[\u4e00-\u9fff]")
 
 
 def freeze(value: Any) -> Any:
@@ -177,6 +229,13 @@ class PolicyRuleCompiler:
                     ))
                     continue
                 value["ratio"] = decimal_ratio
+            # 枚举字段值域归属校验：未命中受控值域不阻断，标记 REVIEW 走值域新增/语义映射流程
+            for unmapped in _check_condition_value_domains(fact):
+                issues.append(self._issue(
+                    "REVIEW", "VALUE_DOMAIN_UNMAPPED", "CANONICALIZE", fact_id=fact.fact_id,
+                    message=f"条件值 {unmapped} 未映射到受控值域",
+                    action="在语义映射中绑定标准值域，或通过值域新增流程收录该值",
+                ))
             for name, raw in tuple(value.items()):
                 if name == "ratio" or isinstance(raw, (dict, list, bool)) or raw is None:
                     continue

@@ -1,7 +1,10 @@
 """模型与提示词治理接口。"""
 
+import ipaddress
 import os
+import socket
 from typing import Literal
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
@@ -26,6 +29,13 @@ from src.model_service.governance_service import (
     ModelGovernanceGateError,
     ModelGovernanceService,
 )
+from src.model_service.exceptions import (
+    ModelAuthError,
+    ModelRateLimitError,
+    ModelServerError,
+    ModelTimeoutError,
+)
+from src.model_service.providers.openai_compatible import OpenAICompatibleProvider
 from src.runtime.api.model_governance_schemas import (
     ApproveGovernanceDraftRequest,
     CreateGovernanceDraftRequest,
@@ -44,6 +54,9 @@ from src.runtime.api.model_governance_schemas import (
     GovernanceVersionsResponse,
     GovernanceVersionsResult,
     ModelGovernancePrincipal,
+    ModelListProbeRequest,
+    ModelListProbeResponse,
+    ModelListProbeResult,
     ModelProfileGovernanceBaseline,
     PreviewGovernanceDraftRequest,
     PromptGovernanceBaseline,
@@ -179,6 +192,54 @@ def _audit(principal: ModelGovernancePrincipal, action: str) -> dict[str, str]:
     return {"actor": principal.user_id, "action": action, "mode": "development"}
 
 
+def _model_probe_audit(
+    principal: ModelGovernancePrincipal, base_url: str, result: str
+) -> dict[str, str]:
+    return {
+        **_audit(principal, "model_list_probe"),
+        "endpoint_host": urlsplit(base_url).hostname or "",
+        "result": result,
+    }
+
+
+def _model_probe_connect_ip(
+    principal: ModelGovernancePrincipal, base_url: str
+) -> str:
+    """所有主机解析后固定 IP；内网主机还需服务端显式授权。"""
+    parsed = urlsplit(base_url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    allowed = {
+        item.strip().lower().rstrip(".")
+        for item in os.getenv("MODEL_GOVERNANCE_PROBE_ALLOWED_HOSTS", "").split(",")
+        if item.strip()
+    }
+    try:
+        addresses = list(dict.fromkeys(
+            item[4][0]
+            for item in socket.getaddrinfo(
+                host,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        ))
+    except OSError as exc:
+        raise ModelServerError("Model list network error") from exc
+    if (
+        not addresses
+        or not all(ipaddress.ip_address(address).is_global for address in addresses)
+        and host not in allowed
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=error_detail(
+                "MODEL_LIST_PROBE_HOST_FORBIDDEN",
+                "该模型主机不是可直接探测的公网地址",
+                _model_probe_audit(principal, base_url, "host_forbidden"),
+            ),
+        )
+    return addresses[0]
+
+
 def _validate_credential_reference(
     request: CreateGovernanceDraftRequest | UpdateGovernanceDraftRequest,
 ) -> None:
@@ -193,6 +254,76 @@ def _validate_credential_reference(
     api_key_length = len(request.credential.api_key.get_secret_value())
     if not 1 <= api_key_length <= 4096:
         raise ModelGovernanceGateError("API Key 长度必须在 1 到 4096 之间")
+
+
+@router.post("/models/probe-list", response_model=ModelListProbeResponse)
+def probe_model_list(
+    request: ModelListProbeRequest,
+    principal: ModelGovernancePrincipal = Depends(require_model_governance_write),
+) -> ModelListProbeResponse:
+    audit = _model_probe_audit(principal, request.base_url, "success")
+    try:
+        connect_ip = _model_probe_connect_ip(principal, request.base_url)
+        provider = OpenAICompatibleProvider(
+            request.base_url,
+            request.api_key.get_secret_value(),
+            timeout=request.timeout_seconds,
+        )
+        models = provider.list_models(connect_ip=connect_ip)
+    except ModelAuthError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail(
+                "MODEL_LIST_PROBE_AUTH_FAILED",
+                "认证失败：检查 API Key",
+                _model_probe_audit(principal, request.base_url, "auth_failed"),
+            ),
+        ) from exc
+    except ModelTimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=error_detail(
+                "MODEL_LIST_PROBE_TIMEOUT",
+                "连接超时：检查 API 访问地址",
+                _model_probe_audit(principal, request.base_url, "timeout"),
+            ),
+        ) from exc
+    except ModelRateLimitError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=error_detail(
+                "MODEL_LIST_PROBE_RATE_LIMITED",
+                "请求过于频繁，请稍后重试",
+                _model_probe_audit(principal, request.base_url, "rate_limited"),
+            ),
+        ) from exc
+    except ModelServerError as exc:
+        message = str(exc)
+        unsupported = "HTTP 404" in message or "HTTP 405" in message
+        safe_message = (
+            "该端点不支持模型列表接口，请手动输入模型名"
+            if unsupported
+            else "端点返回格式无法识别，请手动输入模型名"
+            if "invalid payload" in message or "no models" in message
+            else "获取模型列表失败：检查 API 访问地址"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail(
+                "MODEL_LIST_PROBE_UNSUPPORTED"
+                if unsupported
+                else "MODEL_LIST_PROBE_FAILED",
+                safe_message,
+                _model_probe_audit(principal, request.base_url, "failed"),
+            ),
+        ) from exc
+    return ModelListProbeResponse(
+        result=ModelListProbeResult(
+            models=models, safe_message=f"成功获取 {len(models)} 个模型"
+        ),
+        uncertainties=[],
+        audit=audit,
+    )
 
 
 @router.get("/snapshot", response_model=ModelGovernanceResponse)

@@ -414,7 +414,7 @@ def test_rules_detail_and_dashboard(monkeypatch) -> None:
     assert body["risk_summary"]["LOW"] == 1
 
 
-def _build_api_client(monkeypatch, documents):
+def _build_api_client(monkeypatch, documents, *, change_set_store=None):
     from src.knowledge_extension.rule_explanation.change_set_service import (
         ChangeSetService,
     )
@@ -460,9 +460,14 @@ def _build_api_client(monkeypatch, documents):
 
     workbench = WorkbenchService()
     store = InMemoryKnowledgeBuildStore()
+    change_set_store = change_set_store or InMemoryChangeSetStore()
     service = KnowledgeBuildService(
         workbench,
-        ChangeSetService(workbench, InMemoryChangeSetStore()),
+        ChangeSetService(
+            workbench,
+            change_set_store,
+            build_store=store,
+        ),
         store,
     )
     monkeypatch.setattr(policy_workbench_routes, "_knowledge_build_store", store)
@@ -497,7 +502,28 @@ def _create_build_task(client: TestClient) -> dict:
         json=_build_request(unit),
     )
     assert response.status_code == 201
-    return response.json()
+    queued = response.json()
+    detail = client.get(f"{PREFIX}/knowledge-build/tasks/{queued['task_id']}")
+    assert detail.status_code == 200
+    return detail.json()
+
+
+def test_create_build_task_responds_with_queued_task_before_background_run(
+    monkeypatch,
+) -> None:
+    client, store, _service, _workbench = _build_api_client(
+        monkeypatch, [_document()]
+    )
+    unit = client.get(f"{PREFIX}/knowledge-build/eligible-units").json()[0]
+
+    response = client.post(
+        f"{PREFIX}/knowledge-build/tasks",
+        json=_build_request(unit),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "QUEUED"
+    assert store.get(response.json()["task_id"]).status == "WAITING_REVIEW"
 
 
 def test_approve_task_backed_change_set_keeps_claim_and_is_idempotent(
@@ -575,6 +601,19 @@ def test_reject_task_backed_change_set_releases_claim_and_is_idempotent(
     assert store.get_claim("doc_1", "unit_1") is None
 
 
+def test_direct_change_set_service_action_keeps_build_task_in_sync(monkeypatch) -> None:
+    client, store, service, _workbench = _build_api_client(
+        monkeypatch, [_document()]
+    )
+    task = _create_build_task(client)
+
+    service._change_set_service.reject(
+        task["result_change_set_id"], "cleanup", "清理无效候选"
+    )
+
+    assert store.get(task["task_id"]).status == "REJECTED"
+
+
 @pytest.mark.parametrize(
     ("action", "change_set_status", "task_status", "claim_retained"),
     [
@@ -583,30 +622,32 @@ def test_reject_task_backed_change_set_releases_claim_and_is_idempotent(
         ("reject", "REJECTED", "REJECTED", False),
     ],
 )
-def test_change_set_action_retry_finishes_task_sync_after_transient_failure(
+def test_change_set_action_failure_rolls_back_both_states_before_retry(
     monkeypatch,
     action: str,
     change_set_status: str,
     task_status: str,
     claim_retained: bool,
 ) -> None:
+    from src.knowledge_extension.rule_explanation.change_set_store import InMemoryChangeSetStore
+
+    class FailOnceAtomicStore(InMemoryChangeSetStore):
+        fail_next = False
+
+        def transition_status_with_task(self, *args, **kwargs):
+            if self.fail_next:
+                self.fail_next = False
+                raise RuntimeError("transient task table failure")
+            return super().transition_status_with_task(*args, **kwargs)
+
+    change_set_store = FailOnceAtomicStore()
     _client, store, service, _workbench = _build_api_client(
-        monkeypatch, [_document()]
+        monkeypatch, [_document()], change_set_store=change_set_store
     )
     client = TestClient(create_app(), raise_server_exceptions=False)
     task = _create_build_task(client)
     change_set_id = task["result_change_set_id"]
-    original_save = store.save
-    failed = False
-
-    def fail_once(candidate):
-        nonlocal failed
-        if candidate.status == task_status and not failed:
-            failed = True
-            raise RuntimeError("transient task store failure")
-        return original_save(candidate)
-
-    monkeypatch.setattr(store, "save", fail_once)
+    change_set_store.fail_next = True
 
     first = client.post(
         f"{PREFIX}/change-sets/{change_set_id}/{action}",
@@ -616,14 +657,14 @@ def test_change_set_action_retry_finishes_task_sync_after_transient_failure(
     assert first.status_code == 503
     assert first.json()["detail"] == {
         "error_code": "CHANGE_SET_LIFECYCLE_SYNC_PENDING",
-        "message": "知识变更集动作已生效，构建任务状态尚待重试收口",
+        "message": "知识变更集与构建任务状态均未变更，可安全重试",
         "audit_event": {
             "change_set_id": change_set_id,
             "target_status": change_set_status,
         },
     }
     changed = service._change_set_service.get_change_set(change_set_id)
-    assert changed.status == change_set_status
+    assert changed.status == "PENDING_REVIEW"
     assert store.get(task["task_id"]).status == "WAITING_REVIEW"
     assert store.get_claim("doc_1", "unit_1") is not None
 
@@ -742,7 +783,11 @@ def test_knowledge_build_api_preflight_create_list_and_detail(monkeypatch) -> No
 
     created = client.post(f"{PREFIX}/knowledge-build/tasks", json=payload)
     assert created.status_code == 201
-    task = created.json()
+    queued = created.json()
+    assert queued["status"] == "QUEUED"
+    task = client.get(
+        f"{PREFIX}/knowledge-build/tasks/{queued['task_id']}"
+    ).json()
     assert task["status"] == "WAITING_REVIEW"
     assert [item["unit_id"] for item in task["units"]] == ["unit_1"]
 
@@ -765,7 +810,7 @@ def _semantic_contract_unavailable_client(monkeypatch) -> TestClient:
         def preflight(self, request):
             raise SemanticContractUnavailable("semantic registry unavailable")
 
-        def create_task(self, request):
+        def enqueue_task(self, request):
             raise SemanticContractUnavailable("semantic registry unavailable")
 
     monkeypatch.setattr(
@@ -827,9 +872,12 @@ def test_create_build_task_maps_semantic_contract_unavailable_to_503(
     _assert_semantic_contract_unavailable(response)
 
 
-def test_create_build_task_maps_extraction_failure_to_typed_503(
+def test_create_build_task_returns_queued_even_when_background_extraction_fails(
     monkeypatch,
 ) -> None:
+    from src.knowledge_extension.rule_explanation.knowledge_build_models import (
+        KnowledgeBuildTask,
+    )
     from src.knowledge_extension.rule_explanation.knowledge_build_service import (
         KnowledgeExtractionFailed,
     )
@@ -843,7 +891,21 @@ def test_create_build_task_maps_extraction_failure_to_typed_503(
     failure.task_id = "KB_FAILED_EXTRACTION"
 
     class FailingBuildService:
-        def create_task(self, request):
+        def enqueue_task(self, request):
+            return KnowledgeBuildTask(
+                task_id="KB_FAILED_EXTRACTION",
+                name="后台失败任务",
+                status="QUEUED",
+                build_mode="INITIAL",
+                semantic_contract_version="1.0",
+                pipeline_version="policy-workbench-v1",
+                model_scene="policy_structuring",
+                config_hash="cfg",
+                created_by="tester",
+                units=[],
+            )
+
+        def run_task(self, task_id):
             raise failure
 
     monkeypatch.setattr(
@@ -862,16 +924,9 @@ def test_create_build_task_maps_extraction_failure_to_typed_503(
         }),
     )
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == {
-        "error_code": "KNOWLEDGE_EXTRACTION_FAILED",
-        "message": "model unavailable",
-        "audit_event": {
-            "task_id": "KB_FAILED_EXTRACTION",
-            "doc_id": "doc_1",
-            "unit_id": "unit_1",
-        },
-    }
+    assert response.status_code == 201
+    assert response.json()["status"] == "QUEUED"
+    assert response.json()["task_id"] == "KB_FAILED_EXTRACTION"
 
 
 def test_knowledge_build_api_maps_input_blockers_to_422(monkeypatch) -> None:
@@ -955,8 +1010,11 @@ def test_knowledge_build_api_maps_revision_and_claim_conflicts_to_409(
         "unit_revision_id"
     ]
 
-    created = client.post(
+    queued = client.post(
         f"{PREFIX}/knowledge-build/tasks", json=_build_request(unit)
+    ).json()
+    created = client.get(
+        f"{PREFIX}/knowledge-build/tasks/{queued['task_id']}"
     ).json()
     claimed_preflight = client.post(
         f"{PREFIX}/knowledge-build/preflight", json=_build_request(unit)
@@ -1190,7 +1248,7 @@ def test_claim_race_keeps_409_when_target_lookup_fails(monkeypatch) -> None:
     from src.runtime.api import policy_workbench_routes
 
     class ClaimRaceService:
-        def create_task(self, request):
+        def enqueue_task(self, request):
             raise UnitRevisionClaimed(
                 doc_id="doc_1",
                 unit_id="unit_1",
