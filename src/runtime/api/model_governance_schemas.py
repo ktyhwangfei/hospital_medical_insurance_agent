@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from src.model_service.governance_assets import (
     GovernanceAssetContent,
@@ -135,6 +135,28 @@ class GovernanceVersionsResponse(_GovernanceResponse):
     result: GovernanceVersionsResult
 
 
+class ModelListProbeRequest(BaseModel):
+    """拉取指定 OpenAI-compatible 端点的模型列表（模型名下拉数据源）。"""
+
+    base_url: str = Field(min_length=1, max_length=512)
+    api_key: SecretStr = Field(default=SecretStr(""), max_length=4096)
+    timeout_seconds: int = Field(default=10, ge=1, le=30)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        return ModelProfileAssetContent.validate_base_url(value)
+
+
+class ModelListProbeResult(BaseModel):
+    models: list[str] = Field(default_factory=list, max_length=1000)
+    safe_message: str = ""
+
+
+class ModelListProbeResponse(_GovernanceResponse):
+    result: ModelListProbeResult
+
+
 class GovernanceConnectionTestResponse(_GovernanceResponse):
     result: GovernanceConnectionTestResult
 
@@ -150,6 +172,9 @@ class PublishedGovernanceSnapshotResponse(_GovernanceResponse):
 __all__ = [
     "ApproveGovernanceDraftRequest",
     "CreateGovernanceDraftRequest",
+    "ModelListProbeRequest",
+    "ModelListProbeResponse",
+    "ModelListProbeResult",
     "GovernanceAssetsResponse",
     "GovernanceAssetsResult",
     "GovernanceBaseline",

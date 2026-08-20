@@ -203,6 +203,11 @@ export interface GovernanceConnectionTest {
   content_hash: string
 }
 
+export interface ModelListProbeResult {
+  models: string[]
+  safe_message: string
+}
+
 export interface PublishedGovernanceAsset {
   asset_id: string
   asset_type: GovernanceAssetType
@@ -362,6 +367,21 @@ export function testGovernanceConnection(draftId: string): Promise<GovernanceCon
     `/model-governance/drafts/${encodeURIComponent(draftId)}/test-connection`,
     { method: 'POST' },
   )
+}
+
+export function probeModelList(
+  baseUrl: string,
+  apiKey: string,
+  timeoutSeconds = 10,
+): Promise<ModelListProbeResult> {
+  return governanceRequest('/model-governance/models/probe-list', {
+    method: 'POST',
+    body: JSON.stringify({
+      base_url: baseUrl,
+      api_key: apiKey,
+      timeout_seconds: timeoutSeconds,
+    }),
+  })
 }
 
 export function deleteGovernanceDraft(

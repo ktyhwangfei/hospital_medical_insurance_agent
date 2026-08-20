@@ -196,6 +196,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - 测试中 `HIGH_RISK_ACTIONS` 是 `set`，`detect_blocked_actions` 返回顺序不稳定，断言应使用 `set()` 比较
 - PowerShell 中 `&&` 和 `||` 无效，用 `;` 分隔命令
 - 模型服务需要配置 `MODEL_API_KEY` 环境变量，未配置时模型相关接口不可用；dummy 假数据模式已移除，未配置（无 `.env` 的 `MODEL_BASE_URL/MODEL_API_KEY` 且无已发布治理路由）时网关直接抛 `ModelConfigError`，绝不返回示例假数据（Issue #19 假规则入库事故后加固）。工作区 `.env` 从 main 检出目录拷贝（gitignored）
+- 模型列表探测默认只直连公网地址并固定 DNS 解析 IP。探测内网/本机模型服务时，将主机名加入逗号分隔的 `MODEL_GOVERNANCE_PROBE_ALLOWED_HOSTS`，否则返回 403。
 - SSE 流式端点（`/api/v1/medical-insurance-ai-agent/policy-qa/stream`）的 `done` 事件标志流结束，前端需据此关闭 EventSource（原 `/chat/stream` 已迁移至 policy-qa）
 - LangGraph 人工确认通过 `interrupt()` 暂停图执行，`_checkpoint_registry` 维护 task_id → (graph, thread_id) 映射，用于恢复执行
 - `src/apps/portal/` 为 Next.js 16.x 应用，API 和约定可能与训练数据不同，编码前应先查阅 `node_modules/next/dist/docs/`
@@ -212,6 +213,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - `production.py` 的 `POSTGRES_PASSWORD` 默认曾为空，连库报 `fe_sendauth: no password supplied`。已改默认 `'postgres'`（与 AGENTS.md、docker-compose 一致）；若遇认证失败先检查该环境变量是否被显式设为空。
 - 部分工作区（codex-policy-compare-v2、pi-policy-knowledge-optimize 等独立副本）的启停脚本曾是写死 8000/3000 的旧版，多工作区会端口互斥。运行 `..\ws.ps1 sync` 同步新版脚本（按工作区名确定性分配 8100+/3100+）。
 - 多工作区同时验证时逐个猜端口很费时。用 `..\ws.ps1 list` 并行探测所有工作区端口与健康状态，`..\ws.ps1 up/down` 并行启停（详见下方多工作区章节）。
+- 手动 `uvicorn`/`npm run dev` 绕过 `start-servers.ps1` 会丢一串环境注入：后端缺 `AUTH_JWT_SECRET`（语义对齐接口 401「JWT 验签配置缺失」）、前端缺 `NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN`（语义发现页报「缺少语义审核登录凭证」，且 sessionStorage 无登录入口，token 唯一来源就是启动脚本同密钥签发注入），还丢 `MODEL_GOVERNANCE_DEV_MODE`/`SKILL_CONTROL_DEV_MODE`/`DATA_SOURCE_MODE` 等。半启动/鉴权异常一律 `..\ws.ps1 restart` 修复。
 - 前端 dev 进程复用旧实例时不纠正 `NEXT_PUBLIC_API_BASE_URL`。`start-servers.ps1` 见前端端口已监听即 `Nothing to start` 退出，多工作区下若旧进程曾用 `next.config.ts` 默认值 8000，前端 API 代理会持续转发到错误后端实例、`/skills` 工作台目录与所有 skill 列表全空（summary 全 0）。诊断：经前端代理 `curl 127.0.0.1:<前端端口>/api/v1/medical-insurance-ai-agent/infra-skills/workbench` 的 total 与直连本工作区后端端口不一致（代理 0、后端 >0）。正确做法：`Stop-Process` 杀前端进程后带 `$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:<后端端口>'` 重启 `npm run dev`。
 - Postgres 表加列只在 `CREATE TABLE` 写、漏配 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，旧库因 `CREATE TABLE IF NOT EXISTS` 不重建导致 INSERT 报 `UndefinedColumn` 500（发起评测曾因 `regression_results`/`regression_summary` 漏配 ALTER 而崩）。模型加字段必须 CREATE + ALTER 双写；防回归测试 `test_skill_eval_runs_insert_columns_covered_by_ddl` 校验 INSERT 列 ⊆ DDL 列。
 

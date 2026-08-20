@@ -339,6 +339,31 @@ def test_postgres_atomic_publish_preserves_infrastructure_errors():
         )
 
 
+def test_postgres_json_serializes_validation_issue_lists():
+    import json
+
+    from src.data_platform.storage.model_governance.postgres import _json
+    from src.model_service.governance_assets import GovernanceValidationIssue
+
+    encoded = _json(
+        [
+            GovernanceValidationIssue(
+                code="MODEL_PROFILE_NOT_PUBLISHED",
+                message="模型档案未发布或已停用: model.primary",
+                path="profile_id",
+            )
+        ]
+    )
+
+    assert json.loads(encoded) == [
+        {
+            "code": "MODEL_PROFILE_NOT_PUBLISHED",
+            "message": "模型档案未发布或已停用: model.primary",
+            "path": "profile_id",
+        }
+    ]
+
+
 def test_postgres_atomic_publish_maps_constraint_errors_to_conflict():
     from src.data_platform.storage.model_governance.ports import (
         ModelGovernanceConflictError,

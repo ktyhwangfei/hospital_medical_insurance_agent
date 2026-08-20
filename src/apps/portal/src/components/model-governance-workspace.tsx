@@ -18,6 +18,7 @@ import {
   getGovernanceAssets,
   getGovernanceReleases,
   getGovernanceVersions,
+  probeModelList,
   publishGovernanceDraft,
   requestGovernanceReview,
   rollbackGovernanceRelease,
@@ -60,6 +61,8 @@ const statusLabel = {
   review_pending: '待审核',
   approved: '已审核',
 } as const
+
+const assetIdPattern = /^[a-z0-9][a-z0-9._-]{2,127}$/
 
 interface AssetRow {
   assetId: string
@@ -303,6 +306,15 @@ export function ModelGovernanceWorkspace() {
   const publishedModels = assets.published
     .filter((item) => item.content.asset_type === 'model_profile' && item.content.enabled)
     .map((item) => item.content.asset_id)
+  const routeModels = [...new Set([
+    ...publishedModels,
+    ...assets.drafts
+      .filter((item) => item.content.asset_type === 'model_profile' && item.content.enabled)
+      .map((item) => item.content.asset_id),
+    ...assets.baselines
+      .filter((item) => item.asset_type === 'model_profile' && item.enabled)
+      .map((item) => item.asset_id),
+  ])]
   const visibleRows = activeTab === 'overview' || activeTab === 'releases'
     ? [] : rows.filter((row) => row.assetType === activeTab)
 
@@ -532,8 +544,9 @@ export function ModelGovernanceWorkspace() {
     && !modelFormDirty
     ? modelEvidence.result
     : undefined
-  const noPublishedModels = publishedModels.length === 0
-  const routeUnavailable = drawerType === 'route_rule' && noPublishedModels
+  const noRouteModels = routeModels.length === 0
+  const routeUnavailable = drawerType === 'route_rule' && noRouteModels
+  const assetIdInvalid = Boolean(form.assetId && !assetIdPattern.test(form.assetId))
 
   return <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm" aria-labelledby="governance-workspace-title">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
@@ -579,9 +592,9 @@ export function ModelGovernanceWorkspace() {
       {!loading && !error && activeTab !== 'overview' && activeTab !== 'releases' && <div className="min-w-0">
         <div className="mb-4 flex items-center justify-between gap-3">
           <p className="text-sm text-slate-500">基线、工作版本与活动发布按资产合并展示。</p>
-          <button type="button" disabled={busy || (activeTab === 'route_rule' && noPublishedModels)} onClick={(event) => openNew(activeTab, event.currentTarget)} className="shrink-0 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 active:translate-y-px disabled:opacity-50">新建{typeLabel[activeTab]}</button>
+          <button type="button" disabled={busy || (activeTab === 'route_rule' && noRouteModels)} onClick={(event) => openNew(activeTab, event.currentTarget)} className="shrink-0 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 active:translate-y-px disabled:opacity-50">新建{typeLabel[activeTab]}</button>
         </div>
-        {activeTab === 'route_rule' && noPublishedModels && <p className="mb-4 text-sm text-amber-700">请先发布并启用模型，再创建路由规则。</p>}
+        {activeTab === 'route_rule' && noRouteModels && <p className="mb-4 text-sm text-amber-700">请先创建并启用模型，再创建路由规则。</p>}
         {visibleRows.length === 0 ? <p className="rounded bg-slate-50 p-6 text-center text-sm text-slate-500">暂无{typeLabel[activeTab]}资产</p> : <div className="overflow-hidden rounded-lg border border-slate-200">
           <table className="w-full table-fixed text-left text-sm">
             <caption className="sr-only">{typeLabel[activeTab]}资产</caption>
@@ -616,9 +629,9 @@ export function ModelGovernanceWorkspace() {
 
           <section aria-labelledby="working-version-title" className="border-t border-slate-200 pt-5">
             <div className="mb-3 flex items-center justify-between gap-3"><h4 id="working-version-title" className="font-semibold text-slate-800">工作版本</h4>{selected?.draft && <span className="text-xs text-slate-500">{statusLabel[selected.draft.status]} · revision {selected.draft.revision}</span>}</div>
-            {selected && !selected.draft ? <button type="button" disabled={busy} onClick={() => void startVersion()} className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">{selected.published ? '新建版本' : '创建首个草稿'}</button> : <AssetForm type={drawerType} form={form} setForm={updateForm} lockedId={Boolean(selected)} publishedModels={publishedModels} />}
+            {selected && !selected.draft ? <button type="button" disabled={busy} onClick={() => void startVersion()} className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">{selected.published ? '新建版本' : '创建首个草稿'}</button> : <AssetForm type={drawerType} form={form} setForm={updateForm} lockedId={Boolean(selected)} publishedModels={routeModels} canProbe={identity === 'editor' && !busy} />}
             {(!selected || selected.draft) && <div className="mt-4 flex flex-wrap gap-2">
-              <button type="button" disabled={busy || !form.assetId || routeUnavailable} onClick={() => void saveDraft()} className="rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">保存工作版本</button>
+              <button type="button" disabled={busy || !form.assetId || assetIdInvalid || routeUnavailable} onClick={() => void saveDraft()} className="rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">保存工作版本</button>
               {selected?.draft?.status === 'editing' && <button type="button" disabled={busy} onClick={() => void changeDraft((draft) => validateGovernanceDraft(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">校验</button>}
               {selected?.draft?.status === 'validated' && <button type="button" disabled={busy || identity !== 'editor'} onClick={() => void changeDraft((draft) => requestGovernanceReview(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">申请审核</button>}
               {selected?.draft?.status === 'review_pending' && identity === 'reviewer' && <button type="button" disabled={busy} onClick={() => void changeDraft((draft) => approveGovernanceDraft(draft.draft_id, draft.revision, '开发环境审核通过'))} className="rounded bg-emerald-600 px-3 py-2 text-xs text-white">审核通过</button>}
@@ -627,6 +640,8 @@ export function ModelGovernanceWorkspace() {
             </div>}
             {selected?.draft?.content.asset_type === 'model_profile' && modelFormDirty && <p className="mt-3 text-xs text-amber-700">请先保存模型工作版本，再测试连接。</p>}
             {modelTest && <p role="status" className={`mt-3 rounded p-3 text-xs ${modelTest.status === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{modelTest.safe_message} · {new Date(modelTest.tested_at).toLocaleString('zh-CN')} · {modelTest.latency_ms}ms</p>}
+            {drawerType === 'route_rule' && publishedModels.length === 0 && !noRouteModels && <p className="mt-3 text-xs text-amber-700">可先配置路由草稿；发布路由前需先发布并启用所引用的模型。</p>}
+            {selected?.draft?.validation_issues.length ? <ul role="alert" className="mt-3 space-y-1 rounded bg-rose-50 p-3 text-xs text-rose-700">{selected.draft.validation_issues.map((issue) => <li key={`${issue.code}:${issue.path}`}>{issue.message}</li>)}</ul> : null}
           </section>
 
           {selected && <section aria-labelledby="version-history-title" className="border-t border-slate-200 pt-5"><h4 id="version-history-title" className="mb-3 font-semibold text-slate-800">版本历史</h4>{versions.versions.length === 0 ? <p className="text-sm text-slate-500">暂无已发布版本</p> : <div className="space-y-2">{versions.versions.map((version) => {
@@ -640,16 +655,53 @@ export function ModelGovernanceWorkspace() {
   </section>
 }
 
-function AssetForm({ type, form, setForm, lockedId, publishedModels }: {
+function AssetForm({ type, form, setForm, lockedId, publishedModels, canProbe }: {
   type: GovernanceAssetType
   form: FormState
   setForm: (form: FormState) => void
   lockedId: boolean
   publishedModels: string[]
+  canProbe: boolean
 }) {
+  const [modelOptions, setModelOptions] = useState<string[]>([])
+  const [probeMessage, setProbeMessage] = useState('')
+  const [probing, setProbing] = useState(false)
+  const probeRequestRef = useRef(0)
   const inputClass = 'mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-blue-600 disabled:bg-slate-100'
+  const assetIdInvalid = Boolean(form.assetId && !assetIdPattern.test(form.assetId))
+
+  function invalidateModelOptions(next: FormState) {
+    probeRequestRef.current += 1
+    setProbing(false)
+    setProbeMessage(modelOptions.length ? '配置已变更，请重新获取' : '')
+    setModelOptions([])
+    setForm(next)
+  }
+
+  async function loadModelOptions() {
+    const requestId = ++probeRequestRef.current
+    setProbing(true)
+    setProbeMessage('')
+    try {
+      const result = await probeModelList(form.baseUrl, form.apiKey)
+      if (requestId !== probeRequestRef.current) return
+      setModelOptions(result.models)
+      setProbeMessage(result.safe_message)
+      setForm({
+        ...form,
+        modelName: result.models.includes(form.modelName) ? form.modelName : result.models[0],
+      })
+    } catch (reason) {
+      if (requestId !== probeRequestRef.current) return
+      setModelOptions([])
+      setProbeMessage(errorText(reason))
+    } finally {
+      if (requestId === probeRequestRef.current) setProbing(false)
+    }
+  }
+
   return <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-    <label className="min-w-0 text-xs text-slate-600">资产 ID<input required disabled={lockedId} value={form.assetId} onChange={(event) => setForm({ ...form, assetId: event.target.value })} className={inputClass} /></label>
+    <label className="min-w-0 text-xs text-slate-600">资产 ID<input aria-label="资产 ID" required minLength={3} maxLength={128} pattern="[a-z0-9][a-z0-9._-]{2,127}" placeholder="model.opencode.deepseek-v4-flash" disabled={lockedId} aria-invalid={assetIdInvalid} aria-describedby="governance-asset-id-help" value={form.assetId} onChange={(event) => setForm({ ...form, assetId: event.target.value })} className={inputClass} /><span id="governance-asset-id-help" role={assetIdInvalid ? 'alert' : undefined} className={`mt-1 block text-[11px] ${assetIdInvalid ? 'text-rose-700' : 'text-slate-500'}`}>仅支持小写字母、数字、点、下划线和短横线，且至少 3 个字符</span></label>
     <label className="min-w-0 text-xs text-slate-600">显示名称<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} className={inputClass} /></label>
     {type === 'prompt' && <>
       <label className="text-xs text-slate-600">场景<input value={form.scene} onChange={(event) => setForm({ ...form, scene: event.target.value })} className={inputClass} /></label>
@@ -660,10 +712,14 @@ function AssetForm({ type, form, setForm, lockedId, publishedModels }: {
     </>}
     {type === 'model_profile' && <>
       <label className="text-xs text-slate-600">Provider<input readOnly value="OpenAI-compatible" className={inputClass} /></label>
-      <label className="text-xs text-slate-600">模型名<input value={form.modelName} onChange={(event) => setForm({ ...form, modelName: event.target.value })} className={inputClass} /></label>
-      <label className="text-xs text-slate-600 sm:col-span-2">API 访问地址<input type="url" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} className={inputClass} /></label>
+      <label className="text-xs text-slate-600 sm:col-span-2">API 访问地址<input type="url" value={form.baseUrl} onChange={(event) => invalidateModelOptions({ ...form, baseUrl: event.target.value })} className={inputClass} /></label>
       <label className="text-xs text-slate-600">Credential ID<input value={form.credentialRef} onChange={(event) => setForm({ ...form, credentialRef: event.target.value })} className={inputClass} /></label>
-      <label className="text-xs text-slate-600">API Key<input aria-label="API Key" type="password" autoComplete="new-password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} className={inputClass} /><span className="mt-1 block text-[11px] text-slate-500">留空表示不更换</span></label>
+      <label className="text-xs text-slate-600">API Key<input aria-label="API Key" type="password" autoComplete="new-password" value={form.apiKey} onChange={(event) => invalidateModelOptions({ ...form, apiKey: event.target.value })} className={inputClass} /><span className="mt-1 block text-[11px] text-slate-500">留空表示不更换，支持匿名获取模型列表</span></label>
+      <div className="sm:col-span-2">
+        <button type="button" disabled={!canProbe || probing || !form.baseUrl} onClick={() => void loadModelOptions()} className="rounded border border-blue-300 px-3 py-2 text-xs font-medium text-blue-700 disabled:opacity-50">{probing ? '正在获取…' : '获取模型列表'}</button>
+        {probeMessage && <p role="status" className={`mt-2 text-xs ${modelOptions.length ? 'text-emerald-700' : 'text-amber-700'}`}>{probeMessage}</p>}
+      </div>
+      <label className="text-xs text-slate-600 sm:col-span-2">模型名<input aria-label="模型名" list={modelOptions.length ? 'governance-model-options' : undefined} value={form.modelName} onChange={(event) => setForm({ ...form, modelName: event.target.value })} className={inputClass} /><datalist id="governance-model-options">{modelOptions.map((model) => <option key={model} value={model} />)}</datalist><span className="mt-1 block text-[11px] text-slate-500">{modelOptions.length ? '可搜索选择，也可直接手动输入' : '未获取列表时可手动输入'}</span></label>
       <label className="text-xs text-slate-600">超时（秒）<input type="number" min="1" max="300" value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })} className={inputClass} /></label>
       <label className="text-xs text-slate-600">温度<input type="number" min="0" max="2" step="0.1" value={form.temperature} onChange={(event) => setForm({ ...form, temperature: event.target.value })} className={inputClass} /></label>
       <label className="text-xs text-slate-600">最大 tokens<input type="number" min="1" max="65536" value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} className={inputClass} /></label>
