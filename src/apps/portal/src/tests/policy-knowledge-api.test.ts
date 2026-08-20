@@ -16,8 +16,10 @@ import {
   promoteGovernedRelease,
   promoteRelease,
   returnKnowledgeReview,
+  resetUnitMedType,
   semanticReviewJson,
   semanticReviewRequest,
+  setUnitMedType,
   updateSemanticMetric,
   type CreateKnowledgeBuildTaskRequest,
   type KnowledgeChangeSet,
@@ -163,6 +165,31 @@ describe('policy knowledge api', () => {
         headers: { Authorization: 'Bearer review-token', 'Content-Type': 'application/json' },
         body: JSON.stringify({ source_field: 'claims.amount' }),
       },
+    )
+  })
+
+  it('authenticates medical category overrides without sending a client actor', async () => {
+    window.sessionStorage.setItem('semantic-review-token', 'review-token')
+    const fetchMock = stubFetchJson({ reset: true })
+
+    await setUnitMedType('doc/1', 'unit-1', '门诊')
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `${WORKBENCH_API}/knowledge-build/unit-med-types`,
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer review-token', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_id: 'doc/1', unit_id: 'unit-1', med_type: '门诊' }),
+      },
+    )
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ reset: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await resetUnitMedType('doc/1', 'unit-1')
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `${WORKBENCH_API}/knowledge-build/unit-med-types/doc%2F1/unit-1`,
+      { method: 'DELETE', headers: { Authorization: 'Bearer review-token' } },
     )
   })
 

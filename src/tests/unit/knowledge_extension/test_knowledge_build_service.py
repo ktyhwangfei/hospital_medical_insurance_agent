@@ -1048,6 +1048,34 @@ def test_service_exposes_deterministic_pipeline_configuration() -> None:
     int(service_a.config_hash, 16)
 
 
+def test_build_task_can_be_queued_before_expensive_execution() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    store = _RecordingStore()
+    service, _workbench, _store, builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        store=store,
+        task_id_factory=lambda: "KB_BACKGROUND",
+    )
+    enqueue_task = getattr(service, "enqueue_task", None)
+
+    assert enqueue_task is not None, "构建服务必须支持先入队、后执行"
+    queued = enqueue_task(
+        _request([_selection("doc-1", "unit-1", source.source_text)])
+    )
+    assert queued.status == "QUEUED"
+    assert store.transitions == ["QUEUED"]
+    assert builder.calls == []
+
+    completed = service.run_task(queued.task_id)
+    assert completed.status == "WAITING_REVIEW"
+    assert store.transitions == ["QUEUED", "RUNNING", "WAITING_REVIEW"]
+
+
 def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
     fixed_time = datetime(2026, 8, 5, 9, 30, tzinfo=timezone.utc)
     first = _unit(
@@ -1140,7 +1168,7 @@ def test_create_task_orchestrates_exact_selected_snapshot_to_review() -> None:
             "error_message": None,
         },
     ]
-    assert workbench.get_document_calls == 4  # 预检 2 + 聚合前重新加载 2（含 knowledge）
+    assert workbench.get_document_calls == 6  # 预检 2 + 领取后校验 2 + 聚合前重新加载 2
     assert len(builder.calls) == 1
     call = builder.calls[0]
     assert call["task_id"] == queued.task_id
@@ -1714,7 +1742,7 @@ def test_create_task_clock_failure_after_claim_uses_safe_failure_timestamp() -> 
     assert builder.calls == []
 
 
-def test_create_task_cas_conflict_uses_transactional_failure_cleanup() -> None:
+def test_create_task_cas_conflict_preserves_winning_runner_and_claim() -> None:
     source = _unit(
         doc_id="doc-1",
         doc_title="Policy",
@@ -1729,16 +1757,40 @@ def test_create_task_cas_conflict_uses_transactional_failure_cleanup() -> None:
         task_id_factory=lambda: "KB_cas_conflict",
     )
 
-    with pytest.raises(KnowledgeBuildTaskVersionConflict) as exc_info:
-        service.create_task(
-            _request([_selection("doc-1", "unit-1", "source")])
-        )
+    result = service.create_task(
+        _request([_selection("doc-1", "unit-1", "source")])
+    )
 
-    assert exc_info.value is failure
-    failed = store.inner.get("KB_cas_conflict")
+    assert result.status == "RUNNING"
+    assert store.inner.get("KB_cas_conflict") == result
+    assert store.fail_and_release_calls == 0
+    assert store.get_claim("doc-1", "unit-1") is not None
+    assert builder.calls == []
+
+
+def test_run_task_revision_change_fails_task_and_releases_claim() -> None:
+    source = _unit(
+        doc_id="doc-1",
+        doc_title="Policy",
+        unit_id="unit-1",
+        source_text="source",
+    )
+    service, workbench, store, builder = _create_service(
+        [_document("doc-1", "Policy", [source])],
+        task_id_factory=lambda: "KB_revision_changed",
+    )
+    service.enqueue_task(
+        _request([_selection("doc-1", "unit-1", "source")])
+    )
+    changed = source.model_copy(update={"source_text": "changed source"}, deep=True)
+    workbench.documents["doc-1"] = _document("doc-1", "Policy", [changed])
+
+    with pytest.raises(ValueError, match="政策单元修订已变化"):
+        service.run_task("KB_revision_changed")
+
+    failed = store.get("KB_revision_changed")
     assert failed is not None
     assert failed.status == "FAILED"
-    assert store.fail_and_release_calls == 1
     assert store.get_claim("doc-1", "unit-1") is None
     assert builder.calls == []
 

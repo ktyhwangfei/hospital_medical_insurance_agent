@@ -264,7 +264,7 @@ describe('knowledge build page', () => {
     await waitFor(() => expect(within(drawer).getByRole('button', { name: '创建构建任务' })).toBeEnabled())
     await user.click(within(drawer).getByRole('button', { name: '创建构建任务' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent('已生成待审知识')
+    expect(await screen.findByRole('status')).toHaveTextContent('构建任务已创建，正在后台处理')
     expect(screen.queryByRole('dialog', { name: '新建构建任务' })).not.toBeInTheDocument()
     expect(createKnowledgeBuildTask).toHaveBeenCalledWith({
       name: '医保政策精确构建',
@@ -621,7 +621,7 @@ describe('knowledge build page', () => {
       createRequest.resolve(makeTask({ task_id: 'TASK_DEFERRED', status: 'WAITING_REVIEW' }))
       await createRequest.promise
     })
-    expect(await screen.findByRole('status')).toHaveTextContent('已生成待审知识')
+    expect(await screen.findByRole('status')).toHaveTextContent('构建任务已创建，正在后台处理')
   })
 
   it('uses the shared dialog primitive for the accessible drawer contract', async () => {

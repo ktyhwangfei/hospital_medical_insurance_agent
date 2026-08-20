@@ -115,7 +115,7 @@ export function KnowledgeBuildPage({ navigation }: KnowledgeBuildPageProps) {
 
   async function handleCreated() {
     setWizardOpen(false)
-    setNotice('已生成待审知识')
+    setNotice('构建任务已创建，正在后台处理')
     await refresh()
   }
 
@@ -191,7 +191,6 @@ export function KnowledgeBuildPage({ navigation }: KnowledgeBuildPageProps) {
       <div data-testid="knowledge-build-section-med-type">
         <MedTypeClassificationPanel
           units={units}
-          userId={userId}
           ready={eligibleReady}
           onClassify={() => loadEligible()}
           onChanged={() => loadEligible()}

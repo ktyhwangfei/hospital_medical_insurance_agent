@@ -28,6 +28,7 @@ from src.knowledge_extension.rule_explanation.knowledge_build_models import (
 )
 from src.knowledge_extension.rule_explanation.knowledge_build_store import (
     KnowledgeBuildStore,
+    KnowledgeBuildTaskVersionConflict,
 )
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
     ApprovedUnit,
@@ -214,7 +215,22 @@ class KnowledgeBuildService:
         self,
         request: CreateKnowledgeBuildTaskRequest,
     ) -> KnowledgeBuildTask:
-        """从单次服务端快照校验、占用并构建待审核候选。"""
+        """同步兼容入口：入队后立即执行。"""
+        created, _resolved = self._enqueue_task(request)
+        return self._run_task(created)
+
+    def enqueue_task(
+        self,
+        request: CreateKnowledgeBuildTaskRequest,
+    ) -> KnowledgeBuildTask:
+        """完成预检和单元占用，持久化可立即响应的排队任务。"""
+        created, _resolved = self._enqueue_task(request)
+        return created
+
+    def _enqueue_task(
+        self,
+        request: CreateKnowledgeBuildTaskRequest,
+    ) -> tuple[KnowledgeBuildTask, tuple[SelectedKnowledgeUnit, ...]]:
         preflight, resolved = self._evaluate_preflight(request)
         if not preflight.can_submit or preflight.semantic_contract_version is None:
             raise KnowledgeBuildPreflightBlocked(preflight)
@@ -252,24 +268,45 @@ class KnowledgeBuildService:
             created_at=created_at,
             updated_at=created_at,
         )
-        created = self._store.create_with_claims(queued)
-        expected_change_set_id = change_set_id_for_task(task_id)
+        return self._store.create_with_claims(queued), resolved
+
+    def run_task(self, task_id: str) -> KnowledgeBuildTask:
+        """执行已入队任务；供同步兼容入口或 HTTP 响应后的后台任务调用。"""
+        created = self._store.get(task_id)
+        if created is None:
+            raise ValueError(f"知识构建任务不存在: {task_id}")
+        if created.status != "QUEUED":
+            return created
+        return self._run_task(created)
+
+    def _run_task(
+        self,
+        created: KnowledgeBuildTask,
+    ) -> KnowledgeBuildTask:
+        expected_change_set_id = change_set_id_for_task(created.task_id)
         result_change_set_id: str | None = None
         try:
-            running = self._store.save(
-                created.model_copy(
-                    update={"status": "RUNNING", "started_at": self._clock_now()},
-                    deep=True,
+            try:
+                running = self._store.save(
+                    created.model_copy(
+                        update={"status": "RUNNING", "started_at": self._clock_now()},
+                        deep=True,
+                    )
                 )
-            )
+            except KnowledgeBuildTaskVersionConflict:
+                persisted = self._store.get(created.task_id)
+                if persisted is None:
+                    raise
+                return persisted
+            resolved = self._resolve_task_units(running)
             change_set = self._change_set_service.build_for_units(
-                task_id=task_id,
-                task_name=request.name,
+                task_id=created.task_id,
+                task_name=created.name,
                 units=self._units_with_knowledge(
                     list(resolved),
-                    force_reextract=(request.build_mode == "REBUILD"),
+                    force_reextract=(created.build_mode == "REBUILD"),
                 ),
-                semantic_contract_version=preflight.semantic_contract_version,
+                semantic_contract_version=created.semantic_contract_version,
                 supersedes_candidate_id=None,
             )
             result_change_set_id = change_set.change_set_id
@@ -320,6 +357,42 @@ class KnowledgeBuildService:
                     )
             self._record_failure(created, error, result_change_set_id)
             raise
+
+    def _resolve_task_units(
+        self,
+        task: KnowledgeBuildTask,
+    ) -> tuple[SelectedKnowledgeUnit, ...]:
+        """按任务已持久化的来源修订恢复后台执行输入。"""
+        units_by_key = {
+            (unit.doc_id, unit.unit_id): unit
+            for document in self._load_documents()
+            for unit in document.units
+        }
+        resolved: list[SelectedKnowledgeUnit] = []
+        for source in task.units:
+            unit = units_by_key.get((source.doc_id, source.unit_id))
+            if unit is None:
+                raise ValueError(f"政策单元不存在: {source.doc_id}/{source.unit_id}")
+            current_revision_id = unit_revision_id_for(
+                doc_id=unit.doc_id,
+                unit_id=unit.unit_id,
+                source_text=unit.source_text,
+            )
+            if current_revision_id != source.unit_revision_id:
+                raise ValueError(
+                    f"政策单元修订已变化: {source.doc_id}/{source.unit_id}"
+                )
+            resolved.append(SelectedKnowledgeUnit(
+                unit=unit.model_copy(deep=True),
+                source_revision=SourceUnitRevision(
+                    doc_id=source.doc_id,
+                    doc_title=source.doc_title,
+                    unit_id=source.unit_id,
+                    unit_revision_id=source.unit_revision_id,
+                    path=list(source.path),
+                ),
+            ))
+        return tuple(resolved)
 
     def _record_failure(
         self,

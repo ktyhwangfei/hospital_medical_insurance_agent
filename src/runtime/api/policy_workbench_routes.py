@@ -1,12 +1,13 @@
 """政策知识 Unit×Knowledge 三栏工作台 API。"""
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from src.config import production as production_config
@@ -17,7 +18,6 @@ from src.data_platform.storage.postgresql.policy_quality_store import (
 from src.knowledge_extension.rule_explanation.change_set_models import KnowledgeChangeSet
 from src.knowledge_extension.rule_explanation.decision_task_models import DecisionTask
 from src.knowledge_extension.rule_explanation.knowledge_build_models import (
-    BuildTaskStatus,
     CreateKnowledgeBuildTaskRequest,
     EligibleKnowledgeUnit,
     ExtractionOverride,
@@ -63,6 +63,9 @@ from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
 from src.knowledge_extension.rule_explanation.policy_compiler.models import (
     RuleCompilationTraceResponse,
 )
+from src.knowledge_extension.rule_explanation.policy_extract.med_type_classifier import (
+    VALID_MED_TYPES,
+)
 from src.knowledge_extension.rule_explanation.quality_models import (
     KnowledgeRelease,
     PolicyQATestCase,
@@ -85,6 +88,8 @@ from src.knowledge_extension.rule_explanation.semantic_alignment import (
 from src.semantic_layer.registry import get_semantic_registry
 from src.config.model_routing import MODEL_PARAMS, ROUTING_TABLE
 from src.shared.schemas.responses import error_detail
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.knowledge_extension.rule_explanation.change_set_service import (
@@ -213,6 +218,7 @@ def _get_change_set_service() -> "ChangeSetService":
         _change_set_service = ChangeSetService(
             _get_service(),
             store,
+            build_store=_get_knowledge_build_store(),
             compilation_service=PolicyCompilationService(
                 pipeline_store,
                 PolicyRuleCompiler(),
@@ -469,7 +475,6 @@ class UnitMedTypeRequest(BaseModel):
     doc_id: str = Field(min_length=1, max_length=64)
     unit_id: str = Field(min_length=1, max_length=64)
     med_type: str = Field(min_length=1, max_length=64)
-    updated_by: str = Field(default="", max_length=128)
 
     @field_validator("med_type")
     @classmethod
@@ -477,25 +482,79 @@ class UnitMedTypeRequest(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("med_type 不能为空白")
+        if stripped not in VALID_MED_TYPES:
+            raise ValueError("med_type 不是受支持的医疗类别")
         return stripped
 
 
+class UnitMedTypeResetResponse(BaseModel):
+    reset: bool
+
+
+def _require_policy_knowledge_reviewer(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> str:
+    from src.gateway.auth import authenticator
+
+    if authorization is None:
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("AUTHENTICATION_REQUIRED", "人工修正医疗类别需要登录凭证"),
+        )
+    auth_result = authenticator.validate_token(authorization)
+    if not auth_result.is_success or not auth_result.user_id.strip():
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("INVALID_AUTHENTICATION", auth_result.error_message),
+        )
+    permission = authenticator.check_permission(auth_result, "semantic:review")
+    if not permission.is_success:
+        raise HTTPException(
+            status_code=403,
+            detail=error_detail("POLICY_KNOWLEDGE_REVIEW_FORBIDDEN", permission.error_message),
+        )
+    return auth_result.user_id.strip()
+
+
+def _require_eligible_unit(doc_id: str, unit_id: str) -> None:
+    if not any(
+        unit.doc_id == doc_id and unit.unit_id == unit_id
+        for unit in _get_knowledge_build_service().list_eligible_units()
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("KNOWLEDGE_UNIT_NOT_FOUND", "政策单元不存在"),
+        )
+
+
 @router.post("/knowledge-build/unit-med-types", response_model=UnitMedTypeOverride)
-def set_unit_med_type(request: UnitMedTypeRequest) -> UnitMedTypeOverride:
+def set_unit_med_type(
+    request: UnitMedTypeRequest,
+    actor: str = Depends(_require_policy_knowledge_reviewer),
+) -> UnitMedTypeOverride:
     """人工修正单元医疗类别（覆盖自动分类；不影响其他单元）。"""
+    _require_eligible_unit(request.doc_id, request.unit_id)
     return _get_unit_med_type_store().set(UnitMedTypeOverride(
         doc_id=request.doc_id,
         unit_id=request.unit_id,
         med_type=request.med_type,
-        updated_by=request.updated_by,
+        updated_by=actor,
     ))
 
 
-@router.delete("/knowledge-build/unit-med-types/{doc_id}/{unit_id}")
-def reset_unit_med_type(doc_id: str, unit_id: str) -> dict:
+@router.delete(
+    "/knowledge-build/unit-med-types/{doc_id}/{unit_id}",
+    response_model=UnitMedTypeResetResponse,
+)
+def reset_unit_med_type(
+    doc_id: str,
+    unit_id: str,
+    _: str = Depends(_require_policy_knowledge_reviewer),
+) -> UnitMedTypeResetResponse:
     """重置单元医疗类别为自动分类。"""
+    _require_eligible_unit(doc_id, unit_id)
     reset = _get_unit_med_type_store().delete(doc_id, unit_id)
-    return {"reset": reset}
+    return UnitMedTypeResetResponse(reset=reset)
 
 
 @router.post(
@@ -547,9 +606,17 @@ def get_knowledge_build_task(task_id: str) -> KnowledgeBuildTask:
 )
 def create_knowledge_build_task(
     request: CreateKnowledgeBuildTaskRequest,
+    background_tasks: BackgroundTasks,
 ) -> KnowledgeBuildTask:
     try:
-        return _get_knowledge_build_service().create_task(request)
+        service = _get_knowledge_build_service()
+        queued = service.enqueue_task(request)
+        background_tasks.add_task(
+            _run_knowledge_build_task,
+            service,
+            queued.task_id,
+        )
+        return queued
     except SemanticContractUnavailable as exc:
         raise HTTPException(
             status_code=503,
@@ -585,6 +652,14 @@ def create_knowledge_build_task(
         ) from exc
 
 
+def _run_knowledge_build_task(service: KnowledgeBuildService, task_id: str) -> None:
+    try:
+        service.run_task(task_id)
+    except Exception:
+        # run_task 已将失败原因写回任务；这里只保留服务端堆栈，避免后台异常污染响应。
+        logger.exception("知识构建后台任务失败 task_id=%s", task_id)
+
+
 @router.get("/change-sets", response_model=list[KnowledgeChangeSet])
 def list_change_sets(doc_id: str = "") -> list[KnowledgeChangeSet]:
     """知识变更集列表（V4.1 §11.1）；按文档批次聚合，可带 doc_id 过滤。"""
@@ -616,74 +691,25 @@ class ChangeSetActionRequest(BaseModel):
 
 
 class LifecycleSyncPending(RuntimeError):
-    """变更集动作可能已落库，但关联构建任务尚未完成同步。"""
+    """变更集与关联任务的原子迁移失败，可安全重试。"""
 
     def __init__(self, change_set_id: str, target_status: str) -> None:
         self.change_set_id = change_set_id
         self.target_status = target_status
         super().__init__(
-            f"变更集 {change_set_id} 已进入或可能进入 {target_status}，"
-            "关联构建任务尚待同步"
+            f"变更集 {change_set_id} 与关联任务迁移到 {target_status} 失败"
         )
-
-
-def _sync_change_set_build_task(
-    change_set: KnowledgeChangeSet,
-    *,
-    target_status: BuildTaskStatus,
-    allowed_statuses: set[BuildTaskStatus],
-) -> None:
-    """幂等同步候选来源任务；终态 save 由 store 原子释放 claim。"""
-    if change_set.build_task_id is None:
-        return
-    store = _get_knowledge_build_store()
-    task = store.get(change_set.build_task_id)
-    if task is None:
-        raise ValueError(f"构建任务不存在: {change_set.build_task_id}")
-    if task.result_change_set_id != change_set.change_set_id:
-        raise ValueError(
-            f"构建任务 {task.task_id} 的结果与变更集 {change_set.change_set_id} 不一致"
-        )
-    if task.status == target_status:
-        return
-    if task.status not in allowed_statuses:
-        raise ValueError(
-            f"构建任务 {task.task_id} 状态为 {task.status}，"
-            f"不可迁移到 {target_status}"
-        )
-    store.save(task.model_copy(update={"status": target_status}, deep=True))
 
 
 def _apply_change_set_action(
     change_set_id: str,
     *,
     target_status: str,
-    allowed_change_set_statuses: set[str],
-    target_task_status: BuildTaskStatus,
-    allowed_task_statuses: set[BuildTaskStatus],
     action: Callable[[], KnowledgeChangeSet],
 ) -> KnowledgeChangeSet:
-    """先写候选动作、再幂等收口任务，支持跨 store 失败后的安全重试。"""
+    """执行服务层的双状态原子迁移；失败时两边均保持原状态。"""
     try:
-        service = _get_change_set_service()
-        current = service.get_change_set(change_set_id)
-        if current is None:
-            raise ValueError(f"变更集不存在: {change_set_id}")
-        if current.status == target_status:
-            changed = current
-        elif current.status in allowed_change_set_statuses:
-            changed = action()
-        else:
-            raise ValueError(
-                f"变更集 {change_set_id} 状态为 {current.status}，"
-                f"不可迁移到 {target_status}"
-            )
-        _sync_change_set_build_task(
-            changed,
-            target_status=target_task_status,
-            allowed_statuses=allowed_task_statuses,
-        )
-        return changed
+        return action()
     except (HTTPException, ValueError, LifecycleSyncPending):
         raise
     except Exception as exc:
@@ -695,7 +721,7 @@ def _lifecycle_sync_pending_response(exc: LifecycleSyncPending) -> HTTPException
         status_code=503,
         detail=error_detail(
             "CHANGE_SET_LIFECYCLE_SYNC_PENDING",
-            "知识变更集动作已生效，构建任务状态尚待重试收口",
+            "知识变更集与构建任务状态均未变更，可安全重试",
             {
                 "change_set_id": exc.change_set_id,
                 "target_status": exc.target_status,
@@ -719,9 +745,6 @@ def approve_change_set(change_set_id: str, request: ChangeSetActionRequest) -> K
         return _apply_change_set_action(
             change_set_id,
             target_status="APPROVED",
-            allowed_change_set_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
-            target_task_status="APPROVED_PENDING_RELEASE",
-            allowed_task_statuses={"WAITING_REVIEW"},
             action=lambda: service.approve(
                 change_set_id, request.reviewer, request.note or ""
             ),
@@ -739,9 +762,6 @@ def return_change_set(change_set_id: str, request: ChangeSetActionRequest) -> Kn
         return _apply_change_set_action(
             change_set_id,
             target_status="RETURNED",
-            allowed_change_set_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
-            target_task_status="RETURNED",
-            allowed_task_statuses={"WAITING_REVIEW"},
             action=lambda: service.return_for_rebuild(
                 change_set_id, request.reviewer, request.note or ""
             ),
@@ -759,9 +779,6 @@ def reject_change_set(change_set_id: str, request: ChangeSetActionRequest) -> Kn
         return _apply_change_set_action(
             change_set_id,
             target_status="REJECTED",
-            allowed_change_set_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
-            target_task_status="REJECTED",
-            allowed_task_statuses={"WAITING_REVIEW"},
             action=lambda: service.reject(
                 change_set_id, request.reviewer, request.note or ""
             ),
@@ -1719,9 +1736,6 @@ def _promote_release(
             _apply_change_set_action(
                 release.source_change_set_id,
                 target_status="PUBLISHED",
-                allowed_change_set_statuses={"APPROVED"},
-                target_task_status="PUBLISHED",
-                allowed_task_statuses={"APPROVED_PENDING_RELEASE"},
                 action=lambda: service.mark_published(
                     release.source_change_set_id or ""
                 ),

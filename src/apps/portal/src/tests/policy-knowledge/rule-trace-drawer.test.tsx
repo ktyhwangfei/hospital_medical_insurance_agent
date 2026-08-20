@@ -22,7 +22,7 @@ const trace = {
     conditions: {},
     result: { ratio: '0.8' },
     source_type: 'DERIVED',
-    evidence: ['evidence_1'],
+    evidence: ['knowledge:fact_base'],
     dependencies: ['rule_base'],
     formula: { operator: 'COMPLEMENT', reference: { rule_id: 'rule_base' }, factor: null, total: null },
     compiler_version: '1.0',
@@ -51,10 +51,10 @@ const trace = {
     { step_id: 'step_3', run_id: 'run_1', sequence_no: 3, stage: 'CANONICALIZE', status: 'PASS', input_payload: { facts: [{ fact_id: 'fact_base', value: { ratio: '15%' } }] }, output_payload: { result: [{ fact_id: 'fact_base', value: { ratio: '0.15' } }] }, issues: [], error: null, duration_ms: 2, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
     { step_id: 'step_4', run_id: 'run_1', sequence_no: 4, stage: 'COMPOSE', status: 'PASS', input_payload: { facts: [{ fact_id: 'fact_base', value: { ratio: '0.15' } }] }, output_payload: { result: [[{ rule_id: 'rule_base', population: 'employee', result: { ratio: '0.15' } }], []] }, issues: [], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
     { step_id: 'step_5', run_id: 'run_1', sequence_no: 5, stage: 'RESOLVE', status: 'PASS', input_payload: { rules: [{ rule_id: 'rule_base' }], relations: [{ fact_id: 'fact_relative' }] }, output_payload: { result: { fact_relative: { rules: [{ rule_id: 'rule_base' }] } } }, issues: [], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
-    { step_id: 'step_6', run_id: 'run_1', sequence_no: 6, stage: 'DERIVE', status: 'PASS', input_payload: { resolutions: { fact_relative: { relation: { population: 'retiree', expression: { operator: 'MULTIPLY', factor: '0.60' } }, rules: [{ rule_id: 'rule_base', population: 'employee', result: { ratio: '0.15' } }] } } }, output_payload: { result: [{ rule_id: 'rule_derived', population: 'retiree', result: { ratio: '0.09' }, source_type: 'DERIVED', dependencies: ['rule_base'], formula: { operator: 'MULTIPLY', factor: '0.60' } }] }, issues: [], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
-    { step_id: 'step_7', run_id: 'run_1', sequence_no: 7, stage: 'VALIDATE', status: 'REVIEW', input_payload: { rules: [{ rule_id: 'rule_derived', conditions: { amount_band: '0-30000' } }] }, output_payload: { result: null }, issues: [{ issue_id: 'issue_1', severity: 'REVIEW', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_derived', message: '范围重叠', recommended_action: '人工核验' }], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    { step_id: 'step_6', run_id: 'run_1', sequence_no: 6, stage: 'DERIVE', status: 'PASS', input_payload: { resolutions: { fact_relative: { relation: { population: 'retiree', expression: { operator: 'MULTIPLY', factor: '0.60' } }, rules: [{ rule_id: 'rule_base', population: 'employee', result: { ratio: '0.15' } }] } } }, output_payload: { result: [{ rule_id: 'rule_1', population: 'retiree', result: { ratio: '0.09' }, source_type: 'DERIVED', dependencies: ['rule_base'], formula: { operator: 'MULTIPLY', factor: '0.60' } }] }, issues: [], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
+    { step_id: 'step_7', run_id: 'run_1', sequence_no: 7, stage: 'VALIDATE', status: 'REVIEW', input_payload: { rules: [{ rule_id: 'rule_1', conditions: { amount_band: '0-30000' } }] }, output_payload: { result: null }, issues: [{ issue_id: 'issue_1', severity: 'REVIEW', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_1', message: '范围重叠', recommended_action: '人工核验' }], error: null, duration_ms: 1, started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' },
   ],
-  issues: [{ issue_id: 'issue_1', severity: 'REVIEW', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_derived', message: '范围重叠', recommended_action: '人工核验' }],
+  issues: [{ issue_id: 'issue_1', severity: 'REVIEW', code: 'OVERLAPPING_RANGE', stage: 'VALIDATE', fact_id: null, rule_id: 'rule_1', message: '范围重叠', recommended_action: '人工核验' }],
   publication: null,
   history: [{ run_id: 'run_1', rule_version: 2, status: 'REVIEW', compiler_version: '1.0', started_at: '2026-08-11T00:00:00Z', finished_at: '2026-08-11T00:00:01Z' }],
 } satisfies RuleCompilationTrace
@@ -96,7 +96,7 @@ describe('rule trace drawer', () => {
     expect(screen.queryByRole('tab', { name: /原始输入/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: /关系解析/ })).not.toBeInTheDocument()
     expect(screen.getByText('OVERLAPPING_RANGE')).toBeInTheDocument()
-    expect(screen.queryByText('rule: rule_derived')).not.toBeInTheDocument()
+    expect(screen.queryByText('rule: rule_1')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('tab', { name: /规范化与冲突/ }))
     const normalizedFields = document.querySelectorAll('[data-change="changed"]')
@@ -144,6 +144,7 @@ describe('rule trace drawer', () => {
         severity: 'FAIL',
         code: 'RATIO_INVALID',
         stage: 'INPUT_SNAPSHOT',
+        rule_id: 'rule_failed',
         message: '比例不是有效数值',
       }],
       history: [{ ...trace.history[0], status: 'FAIL', rule_version: null }],
@@ -279,6 +280,69 @@ describe('rule trace drawer', () => {
     expect(normalizedInput).toHaveTextContent('人群标签')
     expect(normalizedInput).not.toHaveTextContent(/fact_id|unit_id|document_id|extraction_id|confidence|evidence/)
     expect(screen.queryByText(/fact:/)).not.toBeInTheDocument()
+  })
+
+  it('locates the candidate through the evidence chain when extraction ids are placeholders', async () => {
+    const user = userEvent.setup()
+    // 复刻真实批次场景：LLM 输出 id 是占位符，规范化 facts 用 kn_ 事实 id，
+    // 规则→事实链接只在 evidence（knowledge:kn_xxx）里；批次里还有其他 facts 的 issue。
+    vi.mocked(getRuleCompilationTrace).mockResolvedValue({
+      ...trace,
+      rule_id: 'rule_63e8',
+      rule: {
+        ...trace.rule!,
+        rule_id: 'rule_63e8',
+        source_type: 'DIRECT',
+        evidence: ['knowledge:kn_mine', 'ev_1'],
+        dependencies: [],
+        formula: null,
+        conditions: { hosp_lv: '社区' },
+      },
+      steps: [
+        trace.steps[0],
+        { ...trace.steps[1], input_payload: { source_text: '在职职工在本市社区卫生服务机构就医，门诊大额医疗互助资金报销比例为90%' }, output_payload: { rules: [{ rule_id: 'rule_001', fact_id: 'fact_001', rule_value: '门诊大额医疗互助资金报销比例为90%', hosp_lv: '社区' }] } },
+        { ...trace.steps[2], input_payload: { facts: [
+          { fact_id: 'kn_other', subject: 'other_subject_value', value: { ratio: '10%' }, evidence: ['evidence_x'] },
+          { fact_id: 'kn_mine', subject: 'large_medical_mutual_aid_payment_ratio', conditions: { hosp_lv: '社区' }, value: { ratio: '0.9' }, confidence: 0.9, evidence: ['evidence_y'] },
+        ] }, output_payload: { result: [
+          { fact_id: 'kn_mine', subject: 'large_medical_mutual_aid_payment_ratio', conditions: { hosp_lv: '社区' }, value: { ratio: 0.9 }, confidence: 0.9, evidence: ['evidence_y'] },
+        ] } },
+        { ...trace.steps[3], status: 'REVIEW' as const, input_payload: { facts: [
+          { fact_id: 'kn_mine', subject: 'large_medical_mutual_aid_payment_ratio', conditions: { hosp_lv: '社区' }, value: { ratio: 0.9 } },
+        ] }, output_payload: { result: [[
+          { rule_id: 'rule_63e8', conditions: { hosp_lv: '社区' }, result: { ratio: 0.9 }, evidence: ['knowledge:kn_mine', 'ev_1'] },
+          { rule_id: 'rule_other', subject: 'nested_other_marker', result: { ratio: 0.1 }, evidence: ['knowledge:kn_other'] },
+        ], []] } },
+        { ...trace.steps[4], input_payload: { rules: [
+          { rule_id: 'rule_63e8', conditions: { hosp_lv: '社区' }, result: { ratio: 0.9 }, evidence: ['knowledge:kn_mine', 'ev_1'] },
+          { rule_id: 'rule_other', result: { ratio: 0.1 }, evidence: ['knowledge:kn_other'] },
+        ], relations: [] }, output_payload: { result: {} } },
+        { ...trace.steps[5], input_payload: { resolutions: {} }, output_payload: { result: [] } },
+        { ...trace.steps[6], input_payload: { rules: [{ rule_id: 'rule_63e8', conditions: { hosp_lv: '社区' } }] }, output_payload: { result: null } },
+      ],
+      issues: [
+        { ...trace.issues[0], issue_id: 'issue_other', severity: 'FAIL', code: 'SUBJECT_MISSING', stage: 'CANONICALIZE' as const, fact_id: 'kn_other', rule_id: null, message: '政策事实缺少可识别的业务主体', recommended_action: '补充结构化 subject' },
+      ],
+    })
+
+    render(<RuleTraceDrawer open ruleId="rule_63e8" onOpenChange={vi.fn()} />)
+    await screen.findByRole('heading', { name: '规则审核决策' })
+
+    await user.click(screen.getByRole('tab', { name: /模型识别/ }))
+    const extracted = screen.getByRole('heading', { name: '原文提取' }).closest('section')!
+    const inferred = screen.getByRole('heading', { name: '辅助推断' }).closest('section')!
+    expect(extracted).toHaveTextContent('医疗机构等级')
+    expect(extracted).toHaveTextContent('社区')
+    expect(inferred).toHaveTextContent('规则主题')
+
+    await user.click(screen.getByRole('tab', { name: /规范化与冲突/ }))
+    expect(screen.queryByText('SUBJECT_MISSING')).not.toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('other_subject_value')
+    expect(document.body).not.toHaveTextContent('nested_other_marker')
+    const normalizedInput = screen.getByRole('heading', { name: '规范化输入' }).closest('section')!
+    expect(normalizedInput).toHaveTextContent('医疗机构等级')
+    await user.click(screen.getByRole('button', { name: 'JSON 对照' }))
+    expect(document.body).not.toHaveTextContent('nested_other_marker')
   })
 
   it('hides the previous run evidence as soon as the target changes', async () => {

@@ -112,12 +112,9 @@ describe('med type classification panel', () => {
     const user = userEvent.setup()
     await renderPage()
 
-    // 执行分类前不展示统计
-    expect(screen.queryByRole('group', { name: '医疗类别数量' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /执行分类/ }))
-
-    // 类别数量卡片（含计数）
+    // eligible-units 已携带分类，首次加载后直接展示，无需再点一次按钮
     const group = await screen.findByRole('group', { name: '医疗类别数量' })
+    expect(screen.getByRole('button', { name: /重新分类/ })).toBeInTheDocument()
     expect(within(group).getByText('住院')).toBeInTheDocument()
     expect(within(group).getByText('通用')).toBeInTheDocument()
     expect(within(group).getByText('门诊特殊病')).toBeInTheDocument()
@@ -148,7 +145,7 @@ describe('med type classification panel', () => {
     await user.click(within(drawer).getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(setUnitMedType).toHaveBeenCalledWith(
-      'DOC_001', 'UNIT_001', '急诊', 'policy-user-42',
+      'DOC_001', 'UNIT_001', '急诊',
     ))
     // 修正后刷新单元列表
     await waitFor(() => expect(vi.mocked(listEligibleKnowledgeUnits).mock.calls.length).toBeGreaterThanOrEqual(3))

@@ -28,6 +28,8 @@ for _value in MEDICAL_CATEGORY.values:
     for _alias in _value.aliases:
         _ALIAS_TO_STANDARD[_alias] = _value.standard_name
 
+VALID_MED_TYPES = frozenset(_ALIAS_TO_STANDARD.values()) | {FALLBACK_MED_TYPE}
+
 
 def normalize_med_type_value(value: str) -> str:
     """把 LLM/历史数据中的医疗类别原始值归一到政策标准值；未知名原样返回。"""

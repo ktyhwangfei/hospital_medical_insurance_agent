@@ -19,7 +19,6 @@ export const MED_TYPE_OPTIONS = [
 
 type MedTypeClassificationPanelProps = {
   units: EligibleKnowledgeUnit[]
-  userId: string
   ready: boolean
   /** 执行分类：重新拉取 eligible-units（服务端确定性分类） */
   onClassify: () => void | Promise<void>
@@ -32,10 +31,9 @@ type MedTypeClassificationPanelProps = {
  * 执行分类 → 类别数量卡片 → 点击下钻侧边抽屉（模糊搜索 + 类别切换 + 人工修正）。
  */
 export function MedTypeClassificationPanel({
-  units, userId, ready, onClassify, onChanged,
+  units, ready, onClassify, onChanged,
 }: MedTypeClassificationPanelProps) {
   const [classifying, setClassifying] = useState(false)
-  const [done, setDone] = useState(false)
   const [drawerCategory, setDrawerCategory] = useState('')
   const [error, setError] = useState('')
 
@@ -62,7 +60,6 @@ export function MedTypeClassificationPanel({
     setError('')
     try {
       await onClassify()
-      setDone(true)
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
@@ -97,7 +94,7 @@ export function MedTypeClassificationPanel({
           className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-emerald-700 px-3 text-xs font-semibold text-white transition-all hover:bg-emerald-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           {classifying ? <Loader2 className="size-3.5 animate-spin" /> : <Tag className="size-3.5" />}
-          {classifying ? '分类中…' : done ? '重新分类' : '执行分类'}
+          {classifying ? '分类中…' : '重新分类'}
         </button>
       </div>
 
@@ -105,9 +102,9 @@ export function MedTypeClassificationPanel({
         <p role="alert" className="border-b border-slate-100 px-4 py-2 text-xs font-medium text-red-700">{error}</p>
       )}
 
-      {!done ? (
+      {!ready ? (
         <p className="px-4 py-8 text-center text-sm text-slate-400">
-          点击「执行分类」对可构建单元按医疗类别归类。
+          正在加载医疗类别分类…
         </p>
       ) : (
         <div className="px-4 py-4">
@@ -139,7 +136,6 @@ export function MedTypeClassificationPanel({
           units={units}
           categories={categories}
           category={drawerCategory}
-          userId={userId}
           onCategoryChange={setDrawerCategory}
           onChanged={onChanged}
           onClose={() => setDrawerCategory('')}
@@ -151,12 +147,11 @@ export function MedTypeClassificationPanel({
 
 /** 类别明细侧边抽屉：模糊搜索 + 类别切换 + 行内人工修正。 */
 function MedTypeDetailDrawer({
-  units, categories, category, userId, onCategoryChange, onChanged, onClose,
+  units, categories, category, onCategoryChange, onChanged, onClose,
 }: {
   units: EligibleKnowledgeUnit[]
   categories: string[]
   category: string
-  userId: string
   onCategoryChange: (category: string) => void
   onChanged: () => void | Promise<void>
   onClose: () => void
@@ -193,7 +188,7 @@ function MedTypeDetailDrawer({
     setSaving(true)
     setError('')
     try {
-      await setUnitMedType(editing.docId, editing.unitId, editValue, userId)
+      await setUnitMedType(editing.docId, editing.unitId, editValue)
       setEditing(null)
       await onChanged()
     } catch (reason) {

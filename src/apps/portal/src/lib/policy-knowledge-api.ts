@@ -744,11 +744,10 @@ export const getChangeSet = (changeSetId: string) =>
 export const listEligibleKnowledgeUnits = () =>
   request<EligibleKnowledgeUnit[]>(`${WORKBENCH_API}/knowledge-build/eligible-units`)
 
-export const setUnitMedType = (
+export const setUnitMedType = async (
   docId: string,
   unitId: string,
   medType: string,
-  updatedBy = '',
 ) =>
   request<{
     doc_id: string
@@ -757,18 +756,17 @@ export const setUnitMedType = (
     updated_by: string
   }>(
     `${WORKBENCH_API}/knowledge-build/unit-med-types`,
-    json('POST', {
+    await semanticReviewRequest('POST', {
       doc_id: docId,
       unit_id: unitId,
       med_type: medType,
-      updated_by: updatedBy,
     }),
   )
 
-export const resetUnitMedType = (docId: string, unitId: string) =>
+export const resetUnitMedType = async (docId: string, unitId: string) =>
   request<{ reset: boolean }>(
     `${WORKBENCH_API}/knowledge-build/unit-med-types/${encodeURIComponent(docId)}/${encodeURIComponent(unitId)}`,
-    json('DELETE'),
+    await semanticReviewRequest('DELETE'),
   )
 
 export const preflightKnowledgeBuild = (body: CreateKnowledgeBuildTaskRequest) =>

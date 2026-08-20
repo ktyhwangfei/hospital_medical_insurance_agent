@@ -108,6 +108,10 @@ export default function RuleTraceDrawer({ open, ruleId, runId, fieldLabels = {},
   const [stageSelection, setStageSelection] = useState<{ traceKey: string; stage: CompileStage } | null>(null)
   const [viewOptions, setViewOptions] = useState<{ traceKey: string; showAll: boolean; jsonView: boolean } | null>(null)
   const stages = useMemo(() => trace ? buildStages(trace) : [], [trace])
+  const identityIds = useMemo(
+    () => trace ? traceIdentityIds(trace, [...trace.steps].sort((left, right) => left.sequence_no - right.sequence_no)) : null,
+    [trace],
+  )
   const traceKey = trace ? `${trace.rule_id}:${trace.run.run_id}` : ''
   const error = loadError?.ruleId === ruleId && loadError.runId === targetRunId ? loadError.message : ''
   const loading = open && Boolean(ruleId) && !trace && !error
@@ -115,10 +119,13 @@ export default function RuleTraceDrawer({ open, ruleId, runId, fieldLabels = {},
     ?? (stages.length > 0 ? defaultStage(stages) : undefined)
   const showAll = viewOptions?.traceKey === traceKey ? viewOptions.showAll : false
   const jsonView = viewOptions?.traceKey === traceKey ? viewOptions.jsonView : false
-  const visibleIssues = activeStage && trace
+  const visibleIssues = activeStage && trace && identityIds
     ? uniqueIssues([
       ...activeStage.issues,
-      ...trace.issues.filter((issue) => issue.stage === activeStage.key),
+      ...focusIssues(
+        trace.issues.filter((issue) => issue.stage === activeStage.key),
+        identityIds,
+      ),
     ])
     : []
   const hasStepError = trace?.steps.some((step) => step.error) ?? false
@@ -473,19 +480,20 @@ function buildStages(trace: RuleCompilationTrace): StageView[] {
     summary: '历史轨迹不完整',
     description: '该规则来自历史导入，只能展示已保存的快照，不能还原中间编译过程。',
   }]
+  const ids = traceIdentityIds(trace, sorted)
   return [
-    buildRecognitionStage(trace, sorted),
-    buildGovernanceStage(trace, sorted),
-    buildReleaseDecisionStage(trace, sorted),
+    buildRecognitionStage(trace, sorted, ids),
+    buildGovernanceStage(trace, sorted, ids),
+    buildReleaseDecisionStage(trace, sorted, ids),
   ]
 }
 
-function buildRecognitionStage(trace: RuleCompilationTrace, steps: CompileStep[]): StageView {
+function buildRecognitionStage(trace: RuleCompilationTrace, steps: CompileStep[], ids: ReadonlySet<string>): StageView {
   const snapshot = findStep(steps, 'INPUT_SNAPSHOT')
   const extraction = findStep(steps, 'LLM_EXTRACTION')
   const canonicalize = findStep(steps, 'CANONICALIZE')
-  const extracted = findCandidate(extraction?.output_payload, trace.rule_id)
-  const compilerCandidate = findCandidate(canonicalize?.input_payload, trace.rule_id)
+  const extracted = findCandidate(extraction?.output_payload, ids)
+  const compilerCandidate = findCandidate(canonicalize?.input_payload, ids)
   const candidate = extracted ?? compilerCandidate
   const inferred = compilerCandidate
     ? Object.fromEntries(['subject', 'confidence'].flatMap((key) => compilerCandidate[key] == null ? [] : [[key, compilerCandidate[key]]]))
@@ -503,7 +511,7 @@ function buildRecognitionStage(trace: RuleCompilationTrace, steps: CompileStep[]
     ...(extraction?.issues ?? []),
     ...focusIssues(
       trace.issues.filter((issue) => issue.stage === 'INPUT_SNAPSHOT' || issue.stage === 'LLM_EXTRACTION'),
-      trace.rule_id,
+      ids,
     ),
   ])
   const failed = trace.run.status === 'FAIL' || [snapshot, extraction].some((step) => step?.status === 'FAIL')
@@ -518,18 +526,18 @@ function buildRecognitionStage(trace: RuleCompilationTrace, steps: CompileStep[]
   }
 }
 
-function buildGovernanceStage(trace: RuleCompilationTrace, steps: CompileStep[]): StageView {
+function buildGovernanceStage(trace: RuleCompilationTrace, steps: CompileStep[], ids: ReadonlySet<string>): StageView {
   const views = [
-    buildStage('CANONICALIZE', '字段规范化', 'diff', scopeStep(findStep(steps, 'CANONICALIZE'), trace.rule_id)),
-    buildStage('COMPOSE', '规则组合', 'transform', scopeStep(findStep(steps, 'COMPOSE'), trace.rule_id)),
-    buildStage('RESOLVE', '关系解析', 'transform', scopeStep(findStep(steps, 'RESOLVE'), trace.rule_id)),
-    buildStage('DERIVE', '规则推导', 'derive', scopeStep(findStep(steps, 'DERIVE'), trace.rule_id)),
+    buildStage('CANONICALIZE', '字段规范化', 'diff', scopeStep(findStep(steps, 'CANONICALIZE'), ids)),
+    buildStage('COMPOSE', '规则组合', 'transform', scopeStep(findStep(steps, 'COMPOSE'), ids)),
+    buildStage('RESOLVE', '关系解析', 'transform', scopeStep(findStep(steps, 'RESOLVE'), ids)),
+    buildStage('DERIVE', '规则推导', 'derive', scopeStep(findStep(steps, 'DERIVE'), ids)),
   ]
   const issues = uniqueIssues([
     ...views.flatMap((view) => view.issues),
     ...focusIssues(
       trace.issues.filter((issue) => ['CANONICALIZE', 'COMPOSE', 'RESOLVE', 'DERIVE'].includes(issue.stage)),
-      trace.rule_id,
+      ids,
     ),
   ])
   const blocking = views.find((view) => view.step?.status === 'FAIL')
@@ -558,9 +566,9 @@ function buildGovernanceStage(trace: RuleCompilationTrace, steps: CompileStep[])
   }
 }
 
-function buildReleaseDecisionStage(trace: RuleCompilationTrace, steps: CompileStep[]): StageView {
-  const validate = buildStage('VALIDATE', '确定性校验', 'validate', scopeStep(findStep(steps, 'VALIDATE'), trace.rule_id))
-  const publish = buildStage('PUBLISH', '发布入库', 'publish', scopeStep(findStep(steps, 'PUBLISH'), trace.rule_id))
+function buildReleaseDecisionStage(trace: RuleCompilationTrace, steps: CompileStep[], ids: ReadonlySet<string>): StageView {
+  const validate = buildStage('VALIDATE', '确定性校验', 'validate', scopeStep(findStep(steps, 'VALIDATE'), ids))
+  const publish = buildStage('PUBLISH', '发布入库', 'publish', scopeStep(findStep(steps, 'PUBLISH'), ids))
   const published = Boolean(trace.publication)
   const hasRule = Boolean(trace.rule)
   const validationFailed = validate.step?.status === 'FAIL'
@@ -668,53 +676,104 @@ function defaultStage(stages: StageView[]) {
     ?? stages[0]
 }
 
+// 轨迹身份集合：只从目标规则沿 evidence/依赖链定向扩展，避免把同批其他 facts 纳入。
+function traceIdentityIds(trace: RuleCompilationTrace, steps: CompileStep[]): Set<string> {
+  const ids = new Set<string>([trace.rule_id])
+  const collectRefs = (value: Record<string, unknown>) => {
+    const before = ids.size
+    const evidence = value.evidence
+    if (Array.isArray(evidence)) {
+      for (const item of evidence) {
+        if (typeof item !== 'string') continue
+        ids.add(item.startsWith('knowledge:') ? item.slice('knowledge:'.length) : item)
+      }
+    }
+    const formulaRef = isRecord(value.formula) && isRecord(value.formula.reference)
+      ? value.formula.reference
+      : null
+    for (const dep of [value.dependencies, formulaRef?.rule_id]) {
+      if (Array.isArray(dep)) dep.forEach((id) => typeof id === 'string' && ids.add(id))
+      else if (typeof dep === 'string') ids.add(dep)
+    }
+    return ids.size !== before
+  }
+  if (trace.rule) collectRefs(trace.rule)
+  const scan = (value: unknown): boolean => {
+    let changed = false
+    if (Array.isArray(value)) {
+      value.forEach((item) => { changed = scan(item) || changed })
+      return changed
+    }
+    if (!isRecord(value)) return false
+    if (matchesCandidate(value, ids)) changed = collectRefs(value) || changed
+    Object.values(value).forEach((item) => { changed = scan(item) || changed })
+    return changed
+  }
+  while (steps.some((step) => scan(step.input_payload) || scan(step.output_payload))) {}
+  return ids
+}
+
 function findStep(steps: CompileStep[], stage: CompileStage) {
   return steps.find((step) => step.stage === stage)
 }
 
-function scopeStep(step: CompileStep | undefined, targetId: string): CompileStep | null {
+function scopeStep(step: CompileStep | undefined, targetIds: ReadonlySet<string>): CompileStep | null {
   if (!step) return null
   return {
     ...step,
-    input_payload: scopeValue(step.input_payload, targetId) as Record<string, unknown>,
-    output_payload: scopeValue(step.output_payload, targetId) as Record<string, unknown>,
-    issues: focusIssues(step.issues, targetId),
+    input_payload: scopeValue(step.input_payload, targetIds) as Record<string, unknown>,
+    output_payload: scopeValue(step.output_payload, targetIds) as Record<string, unknown>,
+    issues: focusIssues(step.issues, targetIds),
   }
 }
 
-function focusIssues(issues: ValidationIssue[], targetId: string) {
-  const matching = issues.filter((issue) => issue.fact_id === targetId || issue.rule_id === targetId)
-  return matching.length > 0 ? matching : issues
+// 只展示命中本规则的 issue；无归属（单元/运行级）issue 保留，明确属于其他 facts 的滤除，不回退全量。
+function focusIssues(issues: ValidationIssue[], targetIds: ReadonlySet<string>) {
+  return issues.filter((issue) => {
+    if (issue.fact_id == null && issue.rule_id == null) return true
+    return (issue.fact_id != null && targetIds.has(issue.fact_id))
+      || (issue.rule_id != null && targetIds.has(issue.rule_id))
+  })
 }
 
-function scopeValue(value: unknown, targetId: string): unknown {
+function scopeValue(value: unknown, targetIds: ReadonlySet<string>): unknown {
   if (Array.isArray(value)) {
-    const matches = value.filter((item) => matchesCandidate(item, targetId))
-    return (matches.length > 0 ? matches : value).map((item) => scopeValue(item, targetId))
+    // 标量数组（依赖/证据 id 列表）不是批次切片对象，原样保留；
+    // 嵌套批次数组递归切片，避免 [[目标, 他属], []] 的外层绕过过滤。
+    if (!value.some((item) => isRecord(item) || Array.isArray(item))) return value
+    return value
+      .filter((item) => !hasCandidateIdentity(item) || matchesCandidate(item, targetIds))
+      .map((item) => scopeValue(item, targetIds))
+      .filter((item) => !Array.isArray(item) || item.length > 0)
   }
   if (!isRecord(value)) return value
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scopeValue(item, targetId)]))
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scopeValue(item, targetIds)]))
 }
 
-function findCandidate(value: unknown, targetId: string): Record<string, unknown> | null {
-  if (matchesCandidate(value, targetId)) return value
+function findCandidate(value: unknown, targetIds: ReadonlySet<string>): Record<string, unknown> | null {
+  if (matchesCandidate(value, targetIds)) return value as Record<string, unknown>
   if (Array.isArray(value)) {
     for (const item of value) {
-      const match = findCandidate(item, targetId)
+      const match = findCandidate(item, targetIds)
       if (match) return match
     }
   } else if (isRecord(value)) {
     for (const item of Object.values(value)) {
-      const match = findCandidate(item, targetId)
+      const match = findCandidate(item, targetIds)
       if (match) return match
     }
   }
   return null
 }
 
-function matchesCandidate(value: unknown, targetId: string): value is Record<string, unknown> {
+function matchesCandidate(value: unknown, targetIds: ReadonlySet<string>): value is Record<string, unknown> {
   if (!isRecord(value)) return false
-  return ['fact_id', 'rule_id', 'knowledge_id', 'id'].some((key) => value[key] === targetId)
+  return ['fact_id', 'rule_id', 'knowledge_id', 'id'].some((key) =>
+    typeof value[key] === 'string' && targetIds.has(value[key] as string))
+}
+
+function hasCandidateIdentity(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && ['fact_id', 'rule_id', 'knowledge_id', 'id'].some((key) => typeof value[key] === 'string')
 }
 
 function inputFields(stage: StageView, showAll: boolean): FieldChange[] {

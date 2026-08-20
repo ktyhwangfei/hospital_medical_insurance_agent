@@ -7,12 +7,28 @@
 """
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
 from src.runtime.api.app import create_app
 
 PREFIX = "/api/v1/medical-insurance-ai-agent/policy-workbench"
+
+
+def _headers(*, permissions: list[str] | None = None, subject: str = "policy-reviewer"):
+    payload = {
+        "sub": subject,
+        "roles": ["information_department"],
+        "permissions": permissions or [],
+        "exp": 4102444800,
+    }
+    token = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
+    return {"Authorization": f"Bearer test.{token}.signature"}
 
 
 class _WorkbenchStub:
@@ -89,10 +105,11 @@ def test_manual_override_and_reset(client):
         "doc_id": "doc_1",
         "unit_id": "u_hosp",
         "med_type": "门诊特殊病",
-        "updated_by": "tester",
-    })
+        "updated_by": "forged-client-actor",
+    }, headers=_headers(permissions=["semantic:review"]))
     assert resp.status_code == 200, resp.text
     assert resp.json()["med_type"] == "门诊特殊病"
+    assert resp.json()["updated_by"] == "policy-reviewer"
 
     units = client.get(f"{PREFIX}/knowledge-build/eligible-units").json()
     assert units[0]["med_type"] == "门诊特殊病"
@@ -100,7 +117,8 @@ def test_manual_override_and_reset(client):
 
     # 重置：恢复自动分类
     reset = client.delete(
-        f"{PREFIX}/knowledge-build/unit-med-types/doc_1/u_hosp"
+        f"{PREFIX}/knowledge-build/unit-med-types/doc_1/u_hosp",
+        headers=_headers(permissions=["semantic:review"]),
     )
     assert reset.status_code == 200
     units = client.get(f"{PREFIX}/knowledge-build/eligible-units").json()
@@ -113,5 +131,30 @@ def test_override_rejects_blank_med_type(client):
         "doc_id": "doc_1",
         "unit_id": "u_hosp",
         "med_type": "   ",
-    })
+    }, headers=_headers(permissions=["semantic:review"]))
     assert resp.status_code == 422
+
+
+def test_override_requires_permission_and_rejects_unknown_target_or_category(client):
+    body = {"doc_id": "doc_1", "unit_id": "u_hosp", "med_type": "门诊"}
+    assert client.post(f"{PREFIX}/knowledge-build/unit-med-types", json=body).status_code == 401
+    forbidden = client.post(
+        f"{PREFIX}/knowledge-build/unit-med-types",
+        json=body,
+        headers=_headers(permissions=["policy:read"]),
+    )
+    assert forbidden.status_code == 403
+
+    invalid = client.post(
+        f"{PREFIX}/knowledge-build/unit-med-types",
+        json={**body, "med_type": "任意自造类别"},
+        headers=_headers(permissions=["semantic:review"]),
+    )
+    assert invalid.status_code == 422
+
+    missing = client.post(
+        f"{PREFIX}/knowledge-build/unit-med-types",
+        json={**body, "unit_id": "missing"},
+        headers=_headers(permissions=["semantic:review"]),
+    )
+    assert missing.status_code == 404
