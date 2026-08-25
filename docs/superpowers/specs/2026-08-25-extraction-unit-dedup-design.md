@@ -1,6 +1,6 @@
 # 政策提取单元去重设计（修订版）
 
-> 状态：设计稿 v2（替代初稿；初稿根因结论错误，见 §7）
+> 状态：已实施（2026-08-25；验证记录见 §4.4 备注）
 > 日期：2026-08-25
 > 背景：语义发现检测器修复（issue-20）后，跨单元一致性检测归零；复盘确认其诱因是
 > `policy_extractions` 活跃重复行。本设计在管线源头消除重复。
@@ -127,8 +127,12 @@ status='archived'` 清理，运维手动执行）。
 
 ## 8. 实施清单
 
-- [ ] `pipeline_store.py`：两处查重 SELECT 改造 + `COALESCE` 防 unit 倒退
-- [ ] `_SCHEMA` 增表达式部分唯一索引（CREATE 幂等，无 ALTER 对应物）
-- [ ] `scripts/migrate_dedup_extractions.py`（幂等）+ `scripts/purge_dummy_extractions.py`
-- [ ] §4.4 单测 6 项 + 迁移后 SQL 断言
-- [ ] 需求迭代记录登记
+- [x] `pipeline_store.py`：`_find_active_duplicate` 统一查重（两路径共用）+ `COALESCE` 防 unit 倒退
+- [x] `_SCHEMA` 增表达式部分唯一索引（CREATE 幂等）
+- [x] `scripts/migrate_dedup_extractions.py`（幂等+dry-run+rollback）+ `scripts/purge_dummy_extractions.py`
+- [x] §4.4 单测 6 项（test_extraction_unit_dedup.py）+ 真实库 SQL 断言（活跃重复组 0）+ 索引兜底实测（UniqueViolation）
+- [x] 需求迭代记录登记
+
+**实施备注**：真实库迁移归档 9 行（保留行全部带 unit）；单测 6 passed；相关回归 41 passed
+（trace_store 3 失败与 duplicate_unit_fix 1 失败为工作区预存：前者 HEAD 亦失败，后者依赖
+另一 worktree 的 8135 活服务）。dummy 清理脚本待运维执行。
