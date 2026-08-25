@@ -1324,6 +1324,12 @@ export interface PdscScore {
   explanations: string[]
 }
 
+export interface PdscViolationBreakdown {
+  value: string
+  cause: 'concatenated' | 'own_domain_substring' | 'cross_axis' | 'new_value' | string
+  detail: string
+}
+
 export interface PdscCluster {
   cluster_id: string
   normalized_concept: string
@@ -1339,6 +1345,7 @@ export interface PdscCluster {
   business_metric_code: string | null
   cross_validation: PdscCrossValidation | null
   value_alignment: PdscValueAlignment | null
+  violation_breakdown?: PdscViolationBreakdown[]
   score: PdscScore | null
   review_note: string | null
   updated_at: string
@@ -1365,6 +1372,12 @@ export interface PdscBusinessFieldProfile {
   sample_values: string[]
   has_description: boolean
   last_updated: string | null
+}
+
+export interface PdscViolationBreakdown {
+  value: string
+  cause: 'concatenated' | 'own_domain_substring' | 'cross_axis' | 'new_value' | string
+  detail: string
 }
 
 export interface PdscDecisionPackage {

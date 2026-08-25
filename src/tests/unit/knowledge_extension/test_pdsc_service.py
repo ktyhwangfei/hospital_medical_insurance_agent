@@ -259,8 +259,84 @@ def test_business_metric_candidates_by_name_and_value_overlap():
     assert candidates, "应至少给出 djxx.hosp_type 候选"
     top = candidates[0]
     assert top["metric_code"] == "djxx.hosp_type"
-    assert top["value_overlap"] == ["三级医院", "二级医院"]
+    assert top["value_overlap"] == ["三级医院", "二级医院", "一级医院"]  # 基准=政策维度全量合法值
     assert any("名称" in r or "值域" in r for r in top["match_reasons"])
+
+
+def test_candidates_require_real_signal_no_published_free_pass():
+    """published 加分不得成为无依据候选的通行证（线上「人群标签」对标「险种类型」根因）。"""
+    store = InMemoryRegistryStore()
+    store.save_object(BusinessObject(object_code="zcgz", domain_code="policy", name="政策规则"))
+    store.save_object(BusinessObject(object_code="djxx", domain_code="ybdy", name="参保人登记"))
+    store.save_value_domain(ValueDomain(domain_code="PSN", name="人员类别",
+                                        standard_values=["在职职工", "退休人员"]))
+    store.save_metric(Metric(metric_code="zcgz.psn_type", object_code="zcgz", name="人群标签",
+                             semantic_type="Enum", value_domain="PSN", status="published"))
+    # 名称零相似、无值域的 published 指标：不得出现在候选里
+    store.save_metric(Metric(metric_code="djxx.fund_type", object_code="djxx", name="险种类型",
+                             semantic_type="Enum", status="published"))
+    service = PdscService(SemanticRegistry(store), InMemoryPdscStore(), FakeCorpus([]))
+    cluster = service.intake_signal(
+        _policy_signal("t1", concept="人群标签"), policy_values=["在职职工,退休人员", "城乡居民"])
+    # 修正概念指向政策指标，值域重叠以政策维度合法值为基准
+    service.adjust_cluster(cluster.cluster_id, "r", "修正政策指标",
+                           policy_metric_code="zcgz.psn_type")
+    cluster = service.get_cluster(cluster.cluster_id)
+    candidates = service.suggest_business_metric_candidates(cluster)
+    assert all(c["metric_code"] != "djxx.fund_type" for c in candidates)
+    assert all(c["match_reasons"] for c in candidates), "候选必须携带真实依据"
+
+
+def test_candidates_overlap_against_policy_domain_not_violating_values():
+    """值域重合基准 = 政策维度合法值（在职/退休），不是越界值（城乡居民）。"""
+    store = InMemoryRegistryStore()
+    store.save_object(BusinessObject(object_code="zcgz", domain_code="policy", name="政策规则"))
+    store.save_object(BusinessObject(object_code="djxx", domain_code="ybdy", name="参保人登记"))
+    store.save_value_domain(ValueDomain(domain_code="PSN", name="人员类别",
+                                        standard_values=["在职职工", "退休人员"]))
+    store.save_metric(Metric(metric_code="zcgz.psn_type", object_code="zcgz", name="人群标签",
+                             semantic_type="Enum", value_domain="PSN", status="published"))
+    store.save_metric(Metric(metric_code="djxx.person_type", object_code="djxx", name="人员类别",
+                             semantic_type="Enum", value_domain="PSN", status="published"))
+    service = PdscService(SemanticRegistry(store), InMemoryPdscStore(), FakeCorpus([]))
+    cluster = service.intake_signal(
+        _policy_signal("t1", concept="人群标签"), policy_values=["在职职工,退休人员", "城乡居民"])
+    service.adjust_cluster(cluster.cluster_id, "r", "修正政策指标",
+                           policy_metric_code="zcgz.psn_type")
+    cluster = service.get_cluster(cluster.cluster_id)
+    candidates = service.suggest_business_metric_candidates(cluster)
+    assert candidates and candidates[0]["metric_code"] == "djxx.person_type"
+    assert set(candidates[0]["value_overlap"]) == {"在职职工", "退休人员"}
+
+
+def test_classify_violation_values_root_causes():
+    """逐值根因：拼接缺陷 / 跨轴值 / 粒度不符 / 新值。"""
+    store = InMemoryRegistryStore()
+    store.save_object(BusinessObject(object_code="zcgz", domain_code="policy", name="政策规则"))
+    store.save_value_domain(ValueDomain(domain_code="PSN", name="人群",
+                                        standard_values=["在职职工", "退休人员", "学生儿童"]))
+    store.save_value_domain(ValueDomain(domain_code="INSU", name="险种",
+                                        standard_values=["城镇职工基本医疗保险", "城乡居民基本医疗保险"]))
+    store.save_value_domain(ValueDomain(domain_code="MED", name="医疗类别",
+                                        standard_values=["门诊-普通门急诊", "住院-普通住院"]))
+    store.save_metric(Metric(metric_code="zcgz.psn_type", object_code="zcgz", name="人群标签",
+                             semantic_type="Enum", value_domain="PSN", status="published"))
+    store.save_metric(Metric(metric_code="zcgz.insu_type", object_code="zcgz", name="险种类别",
+                             semantic_type="Enum", value_domain="INSU", status="published"))
+    store.save_metric(Metric(metric_code="zcgz.med_type", object_code="zcgz", name="医疗类别",
+                             semantic_type="Enum", value_domain="MED", status="published"))
+    service = PdscService(SemanticRegistry(store), InMemoryPdscStore(), FakeCorpus([]))
+    cluster = service.intake_signal(
+        _policy_signal("t1", concept="人群标签"),
+        policy_values=["在职职工,退休人员", "城乡居民", "实习生"])
+    service.adjust_cluster(cluster.cluster_id, "r", "修正政策指标",
+                           policy_metric_code="zcgz.psn_type")
+    cluster = service.get_cluster(cluster.cluster_id)
+    breakdown = {b.value: b for b in service.classify_violation_values(cluster)}
+    assert breakdown["在职职工,退休人员"].cause == "concatenated"
+    assert breakdown["城乡居民"].cause == "cross_axis"
+    assert "险种类别" in breakdown["城乡居民"].detail
+    assert breakdown["实习生"].cause == "new_value"
 
 
 def test_score_penalizes_single_value_business_field():

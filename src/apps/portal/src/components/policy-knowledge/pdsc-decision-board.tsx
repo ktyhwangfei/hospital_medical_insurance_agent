@@ -39,6 +39,20 @@ const DB_VALUE_LABEL: Record<string, string> = {
   undecidable: '不可判断',
 }
 
+const CAUSE_LABEL: Record<string, string> = {
+  concatenated: '拼接缺陷',
+  own_domain_substring: '粒度不符',
+  cross_axis: '跨轴值',
+  new_value: '新值',
+}
+
+const CAUSE_STYLE: Record<string, string> = {
+  concatenated: 'bg-amber-50 text-amber-700',
+  own_domain_substring: 'bg-sky-50 text-sky-700',
+  cross_axis: 'bg-red-50 text-red-700',
+  new_value: 'bg-slate-100 text-slate-600',
+}
+
 function DecisionCard({
   cluster,
   onChanged,
@@ -146,6 +160,20 @@ function DecisionCard({
             <p className="mt-0.5 text-xs text-slate-600" aria-label="机器诊断">
               机器诊断：{c.diagnosis}
             </p>
+          )}
+          {/* 逐值根因：同簇不同值病因不同（拼接/跨轴/粒度/新值），处置也随之不同 */}
+          {(c.violation_breakdown ?? []).length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1" aria-label="逐值根因">
+              {(c.violation_breakdown ?? []).map((b) => (
+                <span
+                  key={b.value}
+                  title={b.detail}
+                  className={`rounded px-1.5 py-0.5 text-[11px] ${CAUSE_STYLE[b.cause] ?? 'bg-slate-100 text-slate-600'}`}
+                >
+                  「{b.value}」{CAUSE_LABEL[b.cause] ?? b.cause}
+                </span>
+              ))}
+            </div>
           )}
         </div>
         {c.score && (

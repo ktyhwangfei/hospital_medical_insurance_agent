@@ -157,6 +157,14 @@ class PolicyApplicabilityRelation(BaseModel):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class ViolationBreakdown(BaseModel):
+    """逐值根因：同簇不同值病因不同（拼接/跨轴/粒度/新值）。"""
+
+    value: str
+    cause: str  # concatenated / own_domain_substring / cross_axis / new_value
+    detail: str
+
+
 class SemanticDiscoveryCluster(BaseModel):
     """一卡一簇（设计 §6.2）：身份只含语义签名，证据附着其上。"""
 
@@ -175,6 +183,7 @@ class SemanticDiscoveryCluster(BaseModel):
     business_metric_code: str | None = None
     cross_validation: CrossValidationSummary | None = None
     value_alignment: ValueDomainAlignment | None = None
+    violation_breakdown: list[ViolationBreakdown] = Field(default_factory=list)
     score: GovernanceValueScore | None = None
     reviewed_by: str | None = None
     reviewed_at: datetime | None = None
@@ -776,6 +785,7 @@ class PdscService:
         if database_values is None and self._db_value_loader is not None:
             database_values = self._load_database_values(cluster)
         cluster.value_alignment = self._compute_alignment(cluster, database_values or [])
+        cluster.violation_breakdown = self.classify_violation_values(cluster)
         cluster.score = self._score(cluster)
         cluster.updated_at = _now()
         return self._store.save_cluster(cluster)
@@ -1064,6 +1074,7 @@ class PdscService:
             "updated_at": _now(),
             "cross_validation": None,
             "score": None,
+            "violation_breakdown": [],
         }
         if business_metric_code is not None:
             update["business_metric_code"] = business_metric_code
@@ -1415,12 +1426,26 @@ class PdscService:
     ) -> list[dict[str, Any]]:
         """候选业务指标：名称相似 + 值域重合打分（确定性，不调模型）。
 
-        取代手填编码：适用关系只对 Enum 维度有意义，只逃非 zcgz 的 Enum 指标。
+        值域重合基准 = 政策维度合法值（非越界值：越界值本身就是要修的对象）；
+        名称门槛 0.2 容纳中文同义词（人群标签↔人员类别仅共享 1 字）；
+        published 加分仅作用于已过门槛的候选——无真实依据的指标不入列。
         """
         import difflib
 
         concept = cluster.concept or ""
+        policy_metric = (
+            self._registry.get_metric(cluster.policy_metric_code)
+            if cluster.policy_metric_code else None
+        )
+        policy_domain_values: set[str] = set()
+        if policy_metric and policy_metric.value_domain:
+            domain = self._registry.get_value_domain(policy_metric.value_domain)
+            if domain:
+                policy_domain_values = set(domain.standard_values)
+        # 政策维度无值域时退回签名值（有依据可查即可）
         signature = set(cluster.policy_value_signature)
+        overlap_base = policy_domain_values or signature
+
         candidates: list[dict[str, Any]] = []
         for metric in self._registry.list_metrics():
             if metric.object_code == POLICY_OBJECT_CODE or metric.semantic_type != "Enum":
@@ -1430,14 +1455,13 @@ class PdscService:
             if metric.value_domain:
                 domain = self._registry.get_value_domain(metric.value_domain)
                 if domain:
-                    overlap = [v for v in domain.standard_values if v in signature]
-            # 相似度计入实分（并列时 80% 应胜 60%）；已发布微加成（免二次流转）
-            score = (2.0 * ratio if ratio >= 0.5 else 0.0) \
+                    overlap = [v for v in domain.standard_values if v in overlap_base]
+            if ratio < 0.2 and not overlap:
+                continue  # 无真实信号不入列（published 不是理由）
+            score = (2.0 * ratio if ratio >= 0.2 else 0.0) \
                 + min(3, len(overlap)) + (0.2 if metric.status == "published" else 0.0)
-            if score <= 0:
-                continue
             reasons: list[str] = []
-            if ratio >= 0.5:
+            if ratio >= 0.2:
                 reasons.append(f"名称匹配度 {ratio:.0%}")
             if overlap:
                 reasons.append(f"值域重合 {len(overlap)} 值（{'、'.join(overlap[:3])}）")
@@ -1456,6 +1480,77 @@ class PdscService:
         for item in candidates:
             item.pop("_score", None)
         return candidates[:limit]
+
+    _SPLIT_RE = re.compile(r"[,，、;；/]")
+
+    def classify_violation_values(
+        self, cluster: SemanticDiscoveryCluster,
+    ) -> list[dict[str, Any]]:
+        """逐值根因分类（确定性）：同簇不同值的病因不同，处置不同。
+
+        concatenated：逗号拼接的合法值（修提取/规范化）；
+        own_domain_substring：本维度标准值的子串（粒度不符，需映射）；
+        cross_axis：属于其他维度的值（修提取归字段）；
+        new_value：真新值（补值域或驳回）。
+        """
+        from src.knowledge_extension.rule_explanation.pdsc_detectors import (
+            _dimension_fields, _dimension_names,
+        )
+
+        policy_metric = (
+            self._registry.get_metric(cluster.policy_metric_code)
+            if cluster.policy_metric_code else None
+        )
+        own_values: list[str] = []
+        if policy_metric and policy_metric.value_domain:
+            domain = self._registry.get_value_domain(policy_metric.value_domain)
+            if domain:
+                own_values = list(domain.standard_values)
+        dims = _dimension_fields(self._registry)   # 字段后缀 -> 值域编码
+        names = _dimension_names(self._registry)   # 字段后缀 -> 中文名
+        other_domains: dict[str, list[str]] = {}
+        if policy_metric:
+            own_field = policy_metric.metric_code.split(".", 1)[-1]
+            for field, code in dims.items():
+                if field == own_field:
+                    continue
+                domain = self._registry.get_value_domain(code)
+                if domain:
+                    other_domains[field] = list(domain.standard_values)
+
+        result: list[dict[str, Any]] = []
+        for value in cluster.policy_value_signature:
+            parts = [p.strip() for p in self._SPLIT_RE.split(value) if p.strip()]
+            if len(parts) > 1 and own_values and all(p in own_values for p in parts):
+                result.append(ViolationBreakdown(
+                    value=value, cause="concatenated",
+                    detail=f"可拆分为合法值：{'、'.join(parts)}",
+                ))
+                continue
+            if any(value != v and (v.startswith(value) or value in v) for v in own_values):
+                matched = [v for v in own_values if v.startswith(value) or value in v][:3]
+                result.append(ViolationBreakdown(
+                    value=value, cause="own_domain_substring",
+                    detail=f"本维度标准值子串（如 {('、'.join(matched))}），粒度不符需映射",
+                ))
+                continue
+            cross_hits = [
+                (field, val) for field, values in other_domains.items()
+                for val in values if val == value or (len(value) >= 2 and val.startswith(value))
+            ]
+            if cross_hits:
+                fields = sorted({f for f, _ in cross_hits})
+                result.append(ViolationBreakdown(
+                    value=value, cause="cross_axis",
+                    detail="、".join(
+                        f"{names.get(f, f)}（{f}）" for f in fields
+                    ) + "的取值，提取写错了字段",
+                ))
+                continue
+            result.append(ViolationBreakdown(
+                value=value, cause="new_value", detail="不在任何已知维度值域",
+            ))
+        return result
 
     # ── 内部 ──
 

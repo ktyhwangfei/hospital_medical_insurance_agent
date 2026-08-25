@@ -74,6 +74,10 @@ const CLUSTER: PdscCluster = {
     explanations: ['可信度=0.7', '落地支持=0.4', '影响力=0.5'],
   },
   review_note: null,
+  violation_breakdown: [
+    { value: '在职职工,退休人员', cause: 'concatenated', detail: '可拆分为合法值：在职职工、退休人员' },
+    { value: '城乡居民', cause: 'cross_axis', detail: '险种类别（insu_type）的取值，提取写错了字段' },
+  ],
   updated_at: '2026-08-21T00:00:00Z',
 }
 
@@ -158,6 +162,10 @@ describe('PdscDecisionBoard 一屏多卡决策列表', () => {
 
     // 概念与诊断分离：首屏可见机器诊断句
     expect(screen.getByLabelText('机器诊断')).toHaveTextContent('作了明确区分')
+
+    // 逐值根因 chips：拼接/跨轴等病因可见（hover 可看处置说明）
+    expect(screen.getByLabelText('逐值根因')).toHaveTextContent('拼接缺陷')
+    expect(screen.getByLabelText('逐值根因')).toHaveTextContent('跨轴值')
 
     // 4. 全政策交叉验证：非零类展示（无关项 1 不出现在首屏）；冲突阻止提示
     expect(screen.getByLabelText('全政策交叉验证')).toBeInTheDocument()
