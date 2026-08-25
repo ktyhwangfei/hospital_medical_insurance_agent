@@ -408,13 +408,19 @@ def _normalized_concept(concept: str) -> str:
     return re.sub(r"\s+", "", concept).casefold()
 
 
+def _detector_kind(evidence: DiscoveryEvidence) -> str:
+    """从证据 observations 提取检测器种类（如 value_domain_violation）。"""
+    for obs in evidence.observations:
+        if obs.startswith("detector:"):
+            return obs.split(":", 1)[1]
+    return ""
+
+
 def _semantic_signature(
-    normalized_concept: str, role: SemanticRole, semantic_type: str, values: list[str],
+    normalized_concept: str, role: SemanticRole, semantic_type: str, kind: str,
 ) -> str:
-    return "|".join([
-        normalized_concept, role.value, semantic_type.casefold(),
-        ",".join(sorted(set(values))),
-    ])
+    """签名 = 概念+角色+类型+检测器（不含政策值：同维度同检测器的不同越界值是同一发现，合并展示）。"""
+    return "|".join([normalized_concept, role.value, semantic_type.casefold(), kind])
 
 
 def _default_role(signal: DiscoverySignal) -> SemanticRole:
@@ -601,7 +607,9 @@ class PdscService:
         role = semantic_role or _default_role(signal)
         semantic_type = signal.semantic_type or "String"
         values = sorted(set(policy_values or signal.evidence.sample_values))
-        signature = _semantic_signature(normalized, role, semantic_type, values)
+        signature = _semantic_signature(
+            normalized, role, semantic_type, _detector_kind(signal.evidence),
+        )
 
         # 同一来源（source_ref+类型）重报但内容变化 → 替换旧观察，不新增证据
         holder = self._cluster_holding_source(signal.evidence.source_ref, signal.evidence.evidence_kind)
@@ -628,6 +636,10 @@ class PdscService:
             merged.evidence_fingerprints.append(fingerprint)
             merged.concept = signal.concept
             merged.diagnosis = signal.diagnosis or merged.diagnosis
+            # 同检测器不同越界值并入：值域并集供交叉验证全量取词
+            merged.policy_value_signature = sorted(set(
+                merged.policy_value_signature + values
+            ))
             merged.cross_validation = None  # 证据变化后需重新验证
             merged.score = None
             merged.updated_at = _now()
@@ -1472,9 +1484,10 @@ class PdscService:
 
     @staticmethod
     def _signature_of(cluster: SemanticDiscoveryCluster) -> str:
+        kinds = sorted({_detector_kind(e) for e in cluster.evidence})
         return _semantic_signature(
             cluster.normalized_concept, cluster.semantic_role,
-            cluster.semantic_type, cluster.policy_value_signature,
+            cluster.semantic_type, kinds[0] if len(kinds) == 1 else ",".join(kinds),
         )
 
 

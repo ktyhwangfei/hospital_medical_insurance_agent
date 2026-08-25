@@ -1282,11 +1282,21 @@ export interface PdscEvidence {
   rule_ids: string[]
 }
 
+export interface PdscCrossValidationItem {
+  doc_id: string
+  doc_title?: string
+  unit_id?: string
+  excerpt?: string
+  found_values?: string[]
+  kind?: string | null
+}
+
 export interface PdscCrossValidation {
   counts: Record<string, number>
   extension_values: string[]
   blocked: boolean
   error: string | null
+  items?: PdscCrossValidationItem[]
 }
 
 export interface PdscDatabaseValue {

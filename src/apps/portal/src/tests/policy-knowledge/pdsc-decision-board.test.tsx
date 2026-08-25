@@ -50,6 +50,11 @@ const CLUSTER: PdscCluster = {
     extension_values: ['社区医院'],
     blocked: true,
     error: null,
+    items: [
+      { doc_id: 'doc_1', doc_title: '支持文档一', unit_id: 'unit_s', kind: 'supporting', found_values: ['三级医院'], excerpt: '报销比例调整通知' },
+      { doc_id: 'doc_2', doc_title: '扩展文档', unit_id: 'unit_e', kind: 'extending', found_values: ['社区医院'] },
+      { doc_id: 'doc_4', doc_title: '冲突文档', unit_id: 'unit_c', kind: 'conflicting' },
+    ],
   },
   value_alignment: {
     trigger_values: ['三级医院'],
@@ -141,8 +146,8 @@ describe('PdscDecisionBoard 一屏多卡决策列表', () => {
       expect(screen.getByLabelText('决策卡 医疗机构类别')).toBeInTheDocument()
     })
 
-    // 1. 系统假设 + 治理价值分（含三个子分，不可只显示总分）
-    expect(screen.getByText(/系统假设：医疗机构类别/)).toBeInTheDocument()
+    // 1. 簇标题（概念直接作标题，无冗余前缀）+ 治理价值分（含三个子分，不可只显示总分）
+    expect(screen.getByText('医疗机构类别')).toBeInTheDocument()
     expect(screen.getByLabelText('治理价值分')).toBeInTheDocument()
     expect(screen.getByText(/发现可信度 0.70/)).toBeInTheDocument()
     expect(screen.getByText(/落地支持 0.40/)).toBeInTheDocument()
@@ -154,9 +159,10 @@ describe('PdscDecisionBoard 一屏多卡决策列表', () => {
     // 概念与诊断分离：首屏可见机器诊断句
     expect(screen.getByLabelText('机器诊断')).toHaveTextContent('作了明确区分')
 
-    // 4. 全政策交叉验证五类计数 + 冲突阻止提示（首屏可见）
+    // 4. 全政策交叉验证：非零类展示（无关项 1 不出现在首屏）；冲突阻止提示
     expect(screen.getByLabelText('全政策交叉验证')).toBeInTheDocument()
     expect(screen.getByText('冲突 1')).toBeInTheDocument()
+    expect(screen.queryByText('无关 1')).not.toBeInTheDocument()
     expect(screen.getByText(/不能一键批准/)).toBeInTheDocument()
 
     // 裁决按钮首屏可见
@@ -221,6 +227,11 @@ describe('PdscDecisionBoard 一屏多卡决策列表', () => {
     // 8. 影响范围
     expect(screen.getByLabelText('影响范围')).toBeInTheDocument()
     expect(screen.getByText(/政策单元 1/)).toBeInTheDocument()
+
+    // 交叉验证证据出处：支持/扩展/冲突逐条可见，无关项不罗咥
+    expect(screen.getByLabelText('交叉验证证据出处')).toBeInTheDocument()
+    expect(screen.getByText(/支持文档一/)).toBeInTheDocument()
+    expect(screen.getByText(/冲突文档/)).toBeInTheDocument()
 
     // 5. 政策指标指向 Milvus 字段
     expect(screen.getByText('zcgz.hosp_type')).toBeInTheDocument()

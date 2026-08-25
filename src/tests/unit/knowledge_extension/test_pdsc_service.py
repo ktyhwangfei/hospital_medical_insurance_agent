@@ -81,6 +81,59 @@ def _policy_signal(
     )
 
 
+def test_same_detector_same_concept_merges_across_values():
+    """同维度同检测器的不同越界值是同一发现：合并为一张卡，值域并集。
+
+    线上4张「医疗类别」卡（购药/住院/急诊/门诊）即此根因。
+    """
+    service = _service()
+    sigs = [
+        DiscoverySignal(
+            trigger_source=TriggerSource.EXTRACTION_UNKNOWN,
+            evidence=DiscoveryEvidence(
+                source_ref=f"t_{v}", evidence_kind="policy",
+                doc_id="doc_1", unit_id=f"u_{v}", extraction_id=f"e_{v}",
+                excerpt=f"医疗类别出现值域外取值「{v}」", sample_values=[v],
+                observations=["detector:value_domain_violation"],
+            ),
+            concept="医疗类别", semantic_type="Enum", metric_code="zcgz.med_type",
+        )
+        for v in ("购药", "住院", "急诊", "门诊")
+    ]
+    first = service.intake_signal(sigs[0])
+    for s in sigs[1:]:
+        merged = service.intake_signal(s)
+        assert merged.cluster_id == first.cluster_id
+    cluster = service.get_cluster(first.cluster_id)
+    assert len(cluster.evidence) == 4
+    assert set(cluster.policy_value_signature) == {"购药", "住院", "急诊", "门诊"}
+
+
+def test_same_concept_different_detector_stays_separate():
+    """同维度不同检测器是不同发现：不自动合并，只建议合并。"""
+    service = _service()
+    a = service.intake_signal(DiscoverySignal(
+        trigger_source=TriggerSource.EXTRACTION_UNKNOWN,
+        evidence=DiscoveryEvidence(
+            source_ref="t1", evidence_kind="policy", doc_id="d", unit_id="u",
+            extraction_id="e1", excerpt="x",
+            observations=["detector:value_domain_violation"],
+        ),
+        concept="医疗类别", semantic_type="Enum",
+    ))
+    b = service.intake_signal(DiscoverySignal(
+        trigger_source=TriggerSource.EXTRACTION_UNKNOWN,
+        evidence=DiscoveryEvidence(
+            source_ref="t2", evidence_kind="policy", doc_id="d", unit_id="u2",
+            extraction_id="e2", excerpt="x",
+            observations=["detector:structure_compression"],
+        ),
+        concept="医疗类别", semantic_type="Enum",
+    ))
+    assert b.cluster_id != a.cluster_id
+    assert a.cluster_id in b.suggested_merge_cluster_ids
+
+
 # ── §13.1 证据精确去重 ──
 
 

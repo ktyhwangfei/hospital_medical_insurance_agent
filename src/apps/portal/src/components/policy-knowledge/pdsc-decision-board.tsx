@@ -130,7 +130,7 @@ function DecisionCard({
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold text-slate-900">
-            系统假设：{c.concept}
+            {c.concept}
             <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-normal text-slate-600">
               {STATUS_LABEL[c.status] ?? c.status}
             </span>
@@ -162,10 +162,12 @@ function DecisionCard({
         )}
       </header>
 
-      {/* 首屏：交叉验证摘要（冲突影响裁决，始终可见） */}
+      {/* 首屏：交叉验证摘要（只展示非零类；支持数恒可见——0 也是关键信号） */}
       {c.cross_validation && (
         <div aria-label="全政策交叉验证" className="flex flex-wrap items-center gap-1.5 text-xs">
-          {Object.entries(counts).map(([kind, count]) => (
+          {Object.entries(counts)
+            .filter(([kind, count]) => kind !== 'irrelevant' && (count > 0 || kind === 'supporting'))
+            .map(([kind, count]) => (
             <span
               key={kind}
               className={`rounded px-1.5 py-0.5 ${
@@ -368,6 +370,47 @@ function DecisionCard({
                       扩展值：{pkg.value_domain_extension_values.join('、')}
                     </p>
                   )}
+                  {/* 支持证据出处：计数有源可查，而非无出处的数字 */}
+                  {(() => {
+                    const items = (c.cross_validation?.items ?? [])
+                      .filter((it) => it.kind && it.kind !== 'irrelevant')
+                      .slice(0, 6)
+                    if (items.length === 0) {
+                      return (
+                        <p className="mt-1 text-xs text-slate-400">
+                          无支持/扩展/冲突单元（无关项已折叠）
+                        </p>
+                      )
+                    }
+                    return (
+                      <ul className="mt-1 space-y-1" aria-label="交叉验证证据出处">
+                        {items.map((it, i) => {
+                          const kind = it.kind ?? ''
+                          return (
+                          <li key={`${it.unit_id}-${i}`} className="rounded border border-slate-100 bg-white px-2 py-1 text-xs">
+                            <span className={`mr-1.5 rounded px-1 py-0.5 text-[10px] ${
+                              kind === 'conflicting' ? 'bg-red-50 text-red-700' : 'bg-sky-50 text-sky-700'
+                            }`}>
+                              {CROSS_KIND_LABEL[kind] ?? kind}
+                            </span>
+                            <span className="text-slate-600">
+                              {it.doc_title || it.doc_id}
+                              {it.unit_id && ` · ${it.unit_id}`}
+                            </span>
+                            {(it.found_values?.length ?? 0) > 0 && (
+                              <span className="ml-1 text-slate-500">（命中：{(it.found_values ?? []).slice(0, 4).join('、')}）</span>
+                            )}
+                            {it.excerpt && (
+                              <p className="mt-0.5 truncate text-slate-500" title={it.excerpt}>
+                                {it.excerpt.slice(0, 80)}
+                              </p>
+                            )}
+                          </li>
+                          )
+                        })}
+                      </ul>
+                    )
+                  })()}
                   {c.suggested_merge_cluster_ids.length > 0 && (
                     <p className="mt-1 text-xs text-slate-500">
                       建议合并的近似发现：
