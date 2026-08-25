@@ -116,8 +116,13 @@ class RealDbSettlementDataProvider:
             if "未查询到结算记录" in str(exc):
                 raise SettlementNotFoundError(str(exc)) from exc
             raise
-        except (ConnectionError, TimeoutError, pyodbc.Error) as exc:
+        except (ConnectionError, TimeoutError) as exc:
             raise SettlementDataUnavailableError(str(exc)) from exc
+        except pyodbc.Error as exc:
+            sqlstate = str(exc.args[0]) if exc.args else ""
+            if sqlstate.startswith("08") or sqlstate in {"HYT00", "HYT01"}:
+                raise SettlementDataUnavailableError(str(exc)) from exc
+            raise
 
         raw_data = raw_context.raw_data or {}
 

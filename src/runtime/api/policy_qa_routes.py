@@ -630,6 +630,7 @@ async def _policy_qa_stream(
     accumulated_steps: list[dict] = []
     attempt_count = 1
     halt_reason = "non_retryable_error"
+    last_retryable_failure: str | None = None
     
     try:
         # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
@@ -693,9 +694,15 @@ async def _policy_qa_stream(
                 )
                 break
             except SettlementDataUnavailableError:
+                failure_class = "settlement_data_unavailable"
                 if attempt_count >= MAX_POLICY_QA_ATTEMPTS:
-                    halt_reason = "max_attempts"
+                    halt_reason = (
+                        "stalled"
+                        if last_retryable_failure == failure_class
+                        else "max_attempts"
+                    )
                     raise
+                last_retryable_failure = failure_class
                 attempt_count += 1
                 async for _ev in _yield_step(
                     "recovery", "done", "结算数据源暂时不可用，正在重试…"
@@ -748,9 +755,15 @@ async def _policy_qa_stream(
                     )
                     break
                 except PolicyRetrievalUnavailableError:
+                    failure_class = "policy_retrieval_unavailable"
                     if attempt_count >= MAX_POLICY_QA_ATTEMPTS:
-                        halt_reason = "max_attempts"
+                        halt_reason = (
+                            "stalled"
+                            if last_retryable_failure == failure_class
+                            else "max_attempts"
+                        )
                         raise
+                    last_retryable_failure = failure_class
                     attempt_count += 1
                     async for _ev in _yield_step(
                         "recovery", "done", "政策数据源暂时不可用，正在重试…"
@@ -933,7 +946,7 @@ async def _policy_qa_stream(
         )
 
     except Exception as e:
-        if halt_reason != "max_attempts":
+        if halt_reason not in {"max_attempts", "stalled"}:
             halt_reason = "non_retryable_error"
         print(f'[POLICY-QA] 处理异常: {e}', flush=True)
         logger.exception("Policy QA stream failed")

@@ -179,7 +179,6 @@ def test_model_governance_snapshot_requires_identity_and_returns_typed_envelope(
         "prompts", "models", "routes", "providers", "citations", "uncertainties"
     }
     assert {prompt["prompt_id"] for prompt in payload["result"]["prompts"]} >= {
-        "intent.classify",
         "policy.fact_extract",
     }
     routes = {
@@ -187,7 +186,6 @@ def test_model_governance_snapshot_requires_identity_and_returns_typed_envelope(
         for route in payload["result"]["routes"]
     }
     active_scenes = {
-        "intent_recognition",
         "skill_routing",
         "policy_qa",
         "fee_explanation",
@@ -269,10 +267,10 @@ def test_assets_include_real_prompt_baselines_before_import(monkeypatch):
     assert response.json()["uncertainties"] == []
     result = response.json()["result"]
     prompt = next(
-        item for item in result["baselines"] if item["asset_id"] == "intent.classify"
+        item for item in result["baselines"] if item["asset_id"] == "policy.fact_extract"
     )
-    assert "可用意图" in prompt["user_prompt_template"]
-    assert "用户消息：{message}" in prompt["user_prompt_template"]
+    assert "【node_id】" in prompt["user_prompt_template"]
+    assert "{policy_title}" in prompt["user_prompt_template"]
     assert prompt["runtime_status"] == "fallback_static"
     assert result["drafts"] == []
 
@@ -508,7 +506,7 @@ def test_governance_imports_current_assets_once_and_deletes_by_revision(monkeypa
     assert first.status_code == 201
     imported = first.json()["result"]
     assert imported["created_count"] > 0
-    assert imported["counts"]["prompt"] == 11
+    assert imported["counts"]["prompt"] == 7
     assert imported["counts"]["model_profile"] > 0
     assert imported["counts"]["route_rule"] > 0
 

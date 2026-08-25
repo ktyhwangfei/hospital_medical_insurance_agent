@@ -6,11 +6,11 @@
   "scripts": {
     "test": "node run-playwright.mjs",
     "test:model-governance": "node run-playwright.mjs flows/portal/model-governance.flow.ts",
-    "test:smoke": "npx playwright test smoke/",
-    "test:portal": "npx playwright test flows/portal/",
-    "test:admin": "npx playwright test flows/admin/",
-    "test:cross": "npx playwright test flows/cross-app/",
-    "test:ui": "npx playwright test --ui",
+    "test:smoke": "node run-playwright.mjs smoke/",
+    "test:portal": "node run-playwright.mjs flows/portal/",
+    "test:admin": "node run-playwright.mjs flows/admin/",
+    "test:cross": "node run-playwright.mjs flows/cross-app/",
+    "test:ui": "node run-playwright.mjs --ui",
     "report": "npx playwright show-report"
   },
   "devDependencies": {

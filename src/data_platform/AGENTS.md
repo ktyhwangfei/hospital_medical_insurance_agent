@@ -12,7 +12,7 @@ data_platform/
 ├── cache/                # 缓存端口 + 内存/Redis 实现（redis_cache.py）
 ├── persistence/          # PostgreSQL 持久化层（dialects, executors, migrations）
 └── storage/              # 存储实现
-    ├── skill/            # 技能存储（ports + in_memory + postgres + factory + seed）
+    ├── skill/            # 技能存储（ports + in_memory + postgres + factory）
     ├── mcp/              # MCP 存储（ports + in_memory + postgres + redis_cache + factory）
     ├── postgresql/       # 共享 PostgreSQL 存储（client, models, audit/task/workflow store）
     ├── knowledge/        # 知识资产存储（postgres.py → knowledge_assets + knowledge_chunks）
@@ -51,7 +51,6 @@ data_platform/
 | `risk_control_events` | 风控事件记录 | `security/risk_control/storage/postgres.py` |
 | `appeal_templates` | 申诉模板 | `knowledge_extension/knowledge/appeal_postgres.py` |
 | `prompt_templates` | 提示词模板 | `knowledge_extension/prompt_templates/postgres.py` |
-| `checkpoints` | LangGraph 检查点 | `runtime/langgraph/postgresql_checkpointer.py` |
 
 ## 注意事项
 

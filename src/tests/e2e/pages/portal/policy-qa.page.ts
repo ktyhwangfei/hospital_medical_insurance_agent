@@ -1,6 +1,7 @@
 import { type Locator, type Page } from '@playwright/test';
 
 import { BasePage } from '../base.page';
+import { E2E_FRONTEND_URL } from '../../utils/workspace-ports';
 
 /** Policy QA chat-first page object. */
 export class PolicyQAPage extends BasePage {
@@ -16,12 +17,12 @@ export class PolicyQAPage extends BasePage {
   readonly feedbackSubmitted: Locator;
 
   constructor(page: Page) {
-    super(page, 'http://127.0.0.1:3000');
+    super(page, E2E_FRONTEND_URL);
     this.composer = page.locator('[data-testid="policy-qa-composer"] textarea');
     this.sendButton = page.getByRole('button', { name: '发送' });
     this.answer = page.locator('[data-testid="policy-qa-answer"]');
     this.verification = page.locator('[data-testid="policy-qa-verification"]');
-    this.settlementChip = page.getByText(/结算单 \d+/);
+    this.settlementChip = page.getByTestId('policy-qa-composer').getByText(/结算单 \d+/);
     this.sourcesButton = page.getByRole('button', { name: /查看 \d+ 条政策来源/ });
     this.sourcesDialog = page.locator('[data-testid="policy-qa-sources"]');
     this.doneIndicator = page.locator('[data-testid="policy-qa-stream-done"]');

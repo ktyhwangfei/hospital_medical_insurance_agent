@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page, type Response } from '@playwright/test';
 
 import { BasePage } from '../base.page';
+import { E2E_FRONTEND_URL } from '../../utils/workspace-ports';
 
 /** Portal 模型治理资产中心 Page Object。 */
 export class ModelGovernancePage extends BasePage {
@@ -11,7 +12,7 @@ export class ModelGovernancePage extends BasePage {
   private readonly governanceResponseBodies: Promise<string>[] = [];
 
   constructor(page: Page) {
-    super(page, 'http://127.0.0.1:3000');
+    super(page, E2E_FRONTEND_URL);
     this.roleSwitcher = page.locator('header').getByRole('combobox');
     this.modelGovernanceLink = page.getByRole('link', { name: '后台管理', exact: true });
     this.title = page.getByRole('heading', { name: '后台管理', exact: true });

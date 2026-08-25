@@ -3,9 +3,10 @@ import { createServer, type Server } from 'node:http';
 import { expect, test } from '@playwright/test';
 
 import { ModelGovernancePage } from '../../pages/portal/model-governance.page';
+import { E2E_BACKEND_URL } from '../../utils/workspace-ports';
 
 const apiKey = 'e2e-api-key-value';
-const governanceApi = 'http://127.0.0.1:8000/api/v1/medical-insurance-ai-agent/model-governance';
+const governanceApi = `${E2E_BACKEND_URL}/api/v1/medical-insurance-ai-agent/model-governance`;
 const editorTokenPayload = {
   sub: 'portal-governance-editor',
   roles: ['information_department'],
@@ -101,15 +102,15 @@ test.afterEach(async ({ request }) => {
         }>;
       };
     };
-    const baseline = assets.result.baselines.find((item) => item.asset_id === 'intent.classify');
-    const active = assets.result.published.find((item) => item.asset_id === 'intent.classify');
+    const baseline = assets.result.baselines.find((item) => item.asset_id === 'policy.fact_extract');
+    const active = assets.result.published.find((item) => item.asset_id === 'policy.fact_extract');
     if (!baseline || !active || (
       active.content.system_prompt === baseline.system_prompt
       && active.content.user_prompt_template === baseline.user_prompt_template
     )) return;
 
     const versionsResponse = await request.get(
-      `${governanceApi}/assets/intent.classify/versions?environment=dev`,
+      `${governanceApi}/assets/policy.fact_extract/versions?environment=dev`,
       { headers: governanceHeaders },
     );
     if (!versionsResponse.ok()) return;
@@ -164,18 +165,18 @@ test('收费员管理真实模型、路由与提示词版本且密钥不泄漏',
     };
   };
   const baseline = assets.result.baselines.find((item) =>
-    item.asset_type === 'prompt' && item.asset_id === 'intent.classify');
+    item.asset_type === 'prompt' && item.asset_id === 'policy.fact_extract');
   expect(baseline).toBeTruthy();
   expect(baseline!.user_prompt_template.length).toBeGreaterThan(0);
-  expect(baseline!.user_prompt_template).toContain('用户消息');
-  const activePrompt = assets.result.published.find((item) => item.asset_id === 'intent.classify');
+  expect(baseline!.user_prompt_template).toContain('政策标题');
+  const activePrompt = assets.result.published.find((item) => item.asset_id === 'policy.fact_extract');
   if (activePrompt) {
     expect(activePrompt.content.system_prompt).toBe(baseline!.system_prompt);
     expect(activePrompt.content.user_prompt_template).toBe(baseline!.user_prompt_template);
   }
 
   await governance.selectTab('提示词');
-  await governance.openAsset('intent.classify');
+  await governance.openAsset('policy.fact_extract');
   await governance.expectCurrentPrompt(baseline!.system_prompt, baseline!.user_prompt_template);
   await governance.closeDrawer();
 
@@ -204,15 +205,15 @@ test('收费员管理真实模型、路由与提示词版本且密钥不泄漏',
   await governance.completeReviewAndPublish(routeId);
 
   if (!activePrompt) {
-    await governance.activateBaselinePrompt('intent.classify');
-    await governance.completeReviewAndPublish('intent.classify');
+    await governance.activateBaselinePrompt('policy.fact_extract');
+    await governance.completeReviewAndPublish('policy.fact_extract');
   }
   const nextPrompt = `${baseline!.user_prompt_template}\nE2E_ACTIVE_${suffix}`;
-  await governance.createPromptVersion('intent.classify', nextPrompt);
-  await governance.completeReviewAndPublish('intent.classify');
+  await governance.createPromptVersion('policy.fact_extract', nextPrompt);
+  await governance.completeReviewAndPublish('policy.fact_extract');
 
   await governance.selectTab('提示词');
-  await governance.openAsset('intent.classify');
+  await governance.openAsset('policy.fact_extract');
   await governance.expectCurrentPrompt(baseline!.system_prompt, nextPrompt);
   if (process.env.MODEL_GOVERNANCE_E2E_FORCE_RETRY === '1' && testInfo.retry === 0) {
     throw new Error('E2E retry recovery probe');

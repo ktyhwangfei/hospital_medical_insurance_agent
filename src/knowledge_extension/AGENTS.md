@@ -4,7 +4,7 @@
 
 MCP 注册中心、规则解释服务（含 Milvus 政策检索、SQL Server 业务数据）、扩展注册表、共享模型（状态、引用溯源、可见性范围）。
 
-**已移除模块**：原 knowledge/（错误码知识库 CRUD）、assets/（知识资产+切片管理+向量化 CRUD）、rag/（RAG 管道+向量检索）、prompt_templates/（提示模板 CRUD+渲染引擎）、申诉模板 CRUD 均已删除。分别由 `knowledge_stub.py` 和 `service.py` 提供最小兼容接口。
+**已移除模块**：原 knowledge/（错误码知识库 CRUD）、assets/（知识资产+切片管理+向量化 CRUD）、rag/（RAG 管道+向量检索）、prompt_templates/（提示模板 CRUD+渲染引擎）、申诉模板 CRUD 均已删除；`service.py` 仅保留最小兼容接口。
 
 ## 结构
 
@@ -16,7 +16,6 @@ knowledge_extension/
 │   ├── models.py         # ExtensionType, ExtensionRiskLevel, ExtensionCapability, ExtensionSelectionRequest/Result
 │   ├── ports.py          # ExtensionRegistry Protocol（select 接口）
 │   └── in_memory.py      # 内存实现
-├── knowledge_stub.py     # ★ 知识存储 stub（原 knowledge/ 模块已删除，最小兼容接口）
 ├── mcp_registry/         # MCP 注册中心
 │   ├── __init__.py       # 导出 McpServer, McpCapability, McpRiskLevel, McpRegistryService 等
 │   ├── models.py         # McpServer, McpCapability, McpRiskLevel (HIGH/MEDIUM/LOW), McpCapabilityType, McpTransportType
@@ -65,7 +64,7 @@ knowledge_extension/
 
 ## 注意事项
 
-- `knowledge_stub.py` 和 `service.py` 均为 stub，所有方法返回空值/NO_HIT——原模块已整体移除
+- `service.py` 为兼容 stub，所有方法返回空值/NO_HIT——原模块已整体移除
 - MCP 注册中心端点定义见 `src/runtime/api/mcp_routes.py`（9 端点）
 - 政策知识 CRUD 端点定义见 `src/runtime/api/policy_knowledge_routes.py`（7 端点）
 - 政策问答 SSE 端点定义见 `src/runtime/api/policy_qa_routes.py`（5 端点）

@@ -42,12 +42,7 @@ Skill 基础设施的上层是 **Business Action**（业务动作分类），
 
 ### Action Router 与本模块的关系
 
-Action Router 是平台第一层路由（决定"做什么"），本模块（Skill Router）是第三层
-（决定"用哪个 Skill"）。中间层（Business Object Recognition）由场景执行器
-（`src/runtime/scenario_executor.py`）负责。
-
-当前实现中，三层路由未完全分离——关键词匹配同时隐含了 Action 和 Object 的识别。
-未来演进方向：规则识别（关键词→Action）→ LLM 消歧（Action+Object）→ Skill 匹配。
+当前唯一业务入口 `policy-qa` 只允许政策问答/费用解释动作；Runtime Planner 完成业务分类，本模块只选择并加载对应 Skill。已删除的 `scenario_executor` 不得作为中间路由层恢复。
 
 ## 文件
 

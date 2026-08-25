@@ -276,7 +276,7 @@ class TestPolicyQAStreamEndpoint:
         assert provider.calls == 2
         done = next(data for name, data in events if name == "done")
         assert done["attempt_count"] == 2
-        assert done["halt_reason"] == "max_attempts"
+        assert done["halt_reason"] == "stalled"
 
     def test_transient_policy_failure_recovers_once(
         self, client, safe_policy_qa_dependencies, monkeypatch
@@ -310,6 +310,50 @@ class TestPolicyQAStreamEndpoint:
         done = next(data for name, data in events if name == "done")
         assert done["attempt_count"] == 2
         assert done["halt_reason"] == "verified"
+
+    def test_retry_budget_exhaustion_across_different_sources_is_not_stalled(
+        self, client, safe_policy_qa_dependencies, monkeypatch
+    ):
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.settlement_data_provider import SettlementDataUnavailableError
+        from src.runtime.policy_qa.structured_policy_retriever import (
+            PolicyRetrievalUnavailableError,
+        )
+
+        stable_provider = policy_qa_routes.create_settlement_data_provider()
+
+        class FlakyProvider:
+            calls = 0
+
+            async def get_settlement_context(self, settlement_id: str):
+                self.calls += 1
+                if self.calls == 1:
+                    raise SettlementDataUnavailableError("temporary")
+                return await stable_provider.get_settlement_context(settlement_id)
+
+        provider = FlakyProvider()
+        policy_calls = 0
+
+        def broken_retrieval(**_kwargs):
+            nonlocal policy_calls
+            policy_calls += 1
+            raise PolicyRetrievalUnavailableError("temporary")
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: provider
+        )
+        monkeypatch.setattr(policy_qa_routes, "retrieve_policy_evidence", broken_retrieval)
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "统筹自付怎么算", "settlement_id": "S-1"},
+        )
+        done = next(data for name, data in _sse_events(response.text) if name == "done")
+
+        assert provider.calls == 2
+        assert policy_calls == 1
+        assert done["attempt_count"] == 2
+        assert done["halt_reason"] == "max_attempts"
 
     def test_verified_partial_result_does_not_retry(
         self, client, safe_policy_qa_dependencies, monkeypatch

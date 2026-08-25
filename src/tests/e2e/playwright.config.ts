@@ -1,7 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const backendPort = Number(process.env.E2E_BACKEND_PORT ?? 8000);
-const frontendPort = Number(process.env.E2E_FRONTEND_PORT ?? 3000);
+import { E2E_FRONTEND_URL } from './utils/workspace-ports';
 
 export default defineConfig({
   testDir: './',
@@ -41,29 +40,9 @@ export default defineConfig({
     },
   ],
   use: {
+    baseURL: E2E_FRONTEND_URL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
-  webServer: process.env.PLAYWRIGHT_EXTERNAL_SERVERS ? undefined : [
-    {
-      command: `uvicorn src.runtime.api.app:create_app --host 127.0.0.1 --port ${backendPort} --factory`,
-      port: backendPort,
-      reuseExistingServer: true,
-      timeout: 30000,
-      cwd: '../../..',
-      env: {
-        ...process.env,
-        SKILL_CONTROL_DEV_MODE: '1',
-        MODEL_GOVERNANCE_DEV_MODE: '1',
-        USE_MEMORY_STORAGE: '1',
-      },
-    },
-    {
-      command: `npm run dev -- -p ${frontendPort}`,
-      port: frontendPort,
-      cwd: '../../apps/portal',
-      reuseExistingServer: true,
-    },
-  ],
 });
