@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { PolicyQAPage } from '../../pages/portal/policy-qa.page';
+import { E2E_BACKEND_URL } from '../../utils/workspace-ports';
 import { waitForAPIReady } from '../../utils/wait-strategies';
 
 const STREAM_URL = '**/api/v1/medical-insurance-ai-agent/policy-qa/stream';
@@ -57,7 +58,7 @@ function sseBody(result: ReturnType<typeof publicResult>): string {
     `data: ${JSON.stringify({ result })}`,
     '',
     'event: done',
-    `data: ${JSON.stringify({ answer_status: result.answer_status, success: true })}`,
+    `data: ${JSON.stringify({ answer_status: result.answer_status, success: true, attempt_count: 1, halt_reason: 'verified' })}`,
     '',
     '',
   ].join('\n');
@@ -82,7 +83,7 @@ async function mockPolicyQAStream(
 
 test.describe('Policy QA chat-first 全链路', () => {
   test.beforeAll(async () => {
-    await waitForAPIReady('http://127.0.0.1:8000');
+    await waitForAPIReady(E2E_BACKEND_URL);
   });
 
   test('空态展示示例问题并可填入 Composer', async ({ page }) => {

@@ -7,8 +7,6 @@ ROLE_VISIBLE_FIELDS = {
 ALL_ROLES = frozenset({'cashier', 'medical_office', 'information_department', 'medical_record_staff', 'clinician'})
 
 SCENARIO_ALLOWED_ROLES = {
-    'settlement_exception_guidance': ALL_ROLES,
-    'pre_discharge_quality_control': ALL_ROLES,
     'mcp_tool_invocation': ALL_ROLES,
 }
 

@@ -2,13 +2,11 @@
 
 ## OVERVIEW
 
-Interaction layer contract defining 6 multi-modal interaction domains, all currently stub implementations — real backend logic lives in `runtime/api/routes.py` (POST /chat, POST /chat/stream).
+Interaction layer contract defining 6 multi-modal interaction domains, all currently stub implementations. The only active business interaction is Policy QA in `runtime/api/policy_qa_routes.py` (`POST /policy-qa/stream`).
 
 ## STRUCTURE
 
-- **chat/** — Chat dialogue interaction contract.
-  Stub only. Actual chat logic: `runtime/api/routes.py` → orchestrator → langgraph/scenario.
-  ChatController, Message models to be implemented.
+- **chat/** — Inactive Chat contract stub. It is not an API entry point; do not restore retired `/chat` or the old orchestrator/LangGraph flow.
 
 - **file/** — File upload handling contract.
   Stub only. Upload parsing, validation, temp storage to be implemented.

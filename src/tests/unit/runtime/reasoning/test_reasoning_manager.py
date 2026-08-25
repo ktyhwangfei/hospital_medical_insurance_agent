@@ -140,7 +140,7 @@ def test_workflow_instance_with_reasoning_state_roundtrip():
     """评估报告任务 1.6：WorkflowInstance 扩展 reasoning_state 后序列化/反序列化。"""
     instance = WorkflowInstance(
         workflow_id="wf-1",
-        scenario="settlement_exception_guidance",
+        scenario="policy_qa_fee_decomposition",
         status="running",
         steps=[StepState(
             step_id="s-1",

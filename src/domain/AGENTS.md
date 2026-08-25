@@ -259,7 +259,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 #### 概述
 
-管理医保交易信息，包括结算状态、费用上传状态和错误码。是结算异常导办场景的核心上下文。
+管理外部医保交易的只读信息，包括结算状态、费用上传状态和错误码。当前唯一 Policy QA 业务流只使用结算单上下文，不以错误码启动独立业务场景。
 
 #### 文件位置
 
@@ -278,15 +278,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 #### 业务规则
 
-- `settlement_status` 与 `error_code` 共同决定结算异常的类型和处理方式
-- 如果 `error_code` 非空，系统进入结算异常导办流程
+- `settlement_status` 与 `error_code` 仅描述外部医保交易结果
+- `error_code` 非空不会启动独立业务流程
 - 医保交易数据通过 `InsuranceInterfacePort` 获取，不直接调用医保接口
 
 #### 生命周期
 
 ```
-收费结算 → InsuranceInterfacePort → InsuranceTransaction → 结算异常导办
-                ↑ (错误码命中) → 错误码知识库
+外部医保系统 → InsuranceInterfacePort → InsuranceTransaction（只读记录）
 ```
 
 ---
@@ -646,6 +645,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 知识扩展状态 | `KnowledgeExtensionStatus` | **Value Object** | `StrEnum` | "success" / "no_hit" / "partial_degraded" 等 |
 | 引用来源 | `Citation` | **Value Object** | Pydantic `BaseModel` | 知识输出的来源追溯（**存在两份：domain 和 knowledge 各有一份**） |
 | 审核通过单元 | `ApprovedUnit` | **Value Object** | Pydantic `BaseModel` | 单元页审核通过、可进入知识结构化阶段的政策 Unit |
+| 单元医疗类别分类器 | `med_type_classifier` | **Domain Service** | 纯函数模块 | 就近原则（单元原文→条款路径→文档标题）确定性识别医疗类别；无命中回退「通用」（Issue #19） |
+| 单元医疗类别人工修正 | `UnitMedTypeOverride` | **Entity** | Pydantic `BaseModel` | 人工修正某单元的医疗类别，读取时覆盖自动分类；可删除以恢复自动 |
 | 政策知识项 | `KnowledgeItem` | **Entity** | Pydantic `BaseModel` | 从一个 Unit 提炼的独立结构化知识，以稳定 `knowledge_id` 标识 |
 | 指标来源绑定 | `MetricSourceBinding` | **Entity** | Pydantic `BaseModel` | 将结构化字段或政策 Knowledge 字段绑定到统一标准指标，保留来源版本和证据 |
 | 来源值映射 | `SourceValueMapping` | **Entity** | Pydantic `BaseModel` | 将某个来源字段的原始值映射到标准指标的统一标准值 |
@@ -753,7 +754,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 #### 概述
 
-管理 Agent 运行时的会话级业务记忆、上下文规划与编排、推理状态。是"智能管道"（意图解析 → 技能匹配 → 上下文规划）的核心支撑，让连续追问、话题切换、主体切换场景获得正确的上下文。设计决策见评估报告 ADR-007（RuntimeContext 演进而非新建 BusinessSession）、ADR-008（Context Planner 作为意图识别第三阶段）、ADR-009（Runtime 增强作为 scenario_executor 横切关注点）。
+管理 Policy QA 运行时的会话级业务记忆、上下文规划与推理状态，是“问题分类 → 技能匹配 → 上下文规划”的支撑。设计决策沿用 ADR-007（RuntimeContext 演进而非新建 BusinessSession）与 ADR-008（Context Planner 作为规划阶段）；ADR-009 的 `scenario_executor` 集成已随 Issue #21 退役。
 
 #### 文件位置
 
@@ -972,6 +973,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `McpServer` | MCP 服务器 | SkillTool | Entity |
 | `McpTransportType` | MCP 传输类型 | SkillTool | Value Object |
 | `MedicalRecordHomepage` | 病案首页 | MedicalRecord | Aggregate Root |
+| `UnitMedTypeOverride` | 单元医疗类别人工修正 | Knowledge | Entity |
+| `med_type_classifier` | 单元医疗类别分类器 | Knowledge | Domain Service |
 | `MedicalRecordPort` | 病案适配器端口 | MedicalRecord | Domain Service |
 | `MemoryManager` | 记忆管理器 | Runtime | Domain Service |
 | `MemoryStore` | 记忆存储端口 | Runtime | Domain Service |

@@ -12,6 +12,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from src.knowledge_extension.rule_explanation.knowledge_build_models import (
+        BuildTaskStatus,
+        KnowledgeBuildTask,
+    )
+    from src.knowledge_extension.rule_explanation.knowledge_build_store import (
+        KnowledgeBuildStore,
+    )
     from src.knowledge_extension.rule_explanation.pipeline_orchestrator import (
         PipelineOrchestrator,
     )
@@ -119,11 +126,13 @@ class ChangeSetService:
         store: ChangeSetStore,
         orchestrator: "PipelineOrchestrator | None" = None,
         compilation_service: "PolicyCompilationService | None" = None,
+        build_store: "KnowledgeBuildStore | None" = None,
     ) -> None:
         self._workbench = workbench_service
         self._store = store
         self._orchestrator = orchestrator
         self._compilation_service = compilation_service
+        self._build_store = build_store
 
     def _get_orchestrator(self) -> "PipelineOrchestrator":
         """获取提取编排器（未注入时懒创建默认实例）。"""
@@ -535,17 +544,69 @@ class ChangeSetService:
         invalid_action: str,
         decision: dict | None = None,
     ) -> KnowledgeChangeSet:
-        changed = self._store.transition_status(
-            change_set_id,
-            allowed_statuses=allowed_statuses,
-            target_status=target_status,
-            decision=decision,
-        )
-        if changed is not None:
-            return changed
         current = self._require(change_set_id)
-        if current.status == target_status:
-            return current
-        raise ValueError(
-            f"变更集 {change_set_id} 状态为 {current.status}，不可{invalid_action}"
-        )
+        if current.status not in allowed_statuses and current.status != target_status:
+            raise ValueError(
+                f"变更集 {change_set_id} 状态为 {current.status}，不可{invalid_action}"
+            )
+        task_transition = self._linked_task_transition(current, target_status)
+        if task_transition is None:
+            changed = self._store.transition_status(
+                change_set_id,
+                allowed_statuses=allowed_statuses,
+                target_status=target_status,
+                decision=decision,
+            )
+        else:
+            build_store, task, task_target_status = task_transition
+            changed = self._store.transition_status_with_task(
+                change_set_id,
+                allowed_statuses=allowed_statuses,
+                target_status=target_status,
+                decision=decision,
+                build_store=build_store,
+                task=task.model_copy(
+                    update={"status": task_target_status}, deep=True
+                ),
+            )
+        if changed is None:
+            changed = self._require(change_set_id)
+            if changed.status != target_status:
+                raise ValueError(
+                    f"变更集 {change_set_id} 状态为 {changed.status}，不可{invalid_action}"
+                )
+        return changed
+
+    def _linked_task_transition(
+        self,
+        change_set: KnowledgeChangeSet,
+        target_status: str,
+    ) -> tuple["KnowledgeBuildStore", "KnowledgeBuildTask", "BuildTaskStatus"] | None:
+        """审核落库前校验关联任务，避免任何单边状态写入。"""
+        transitions = {
+            "APPROVED": ("APPROVED_PENDING_RELEASE", {"WAITING_REVIEW"}),
+            "RETURNED": ("RETURNED", {"WAITING_REVIEW"}),
+            "REJECTED": ("REJECTED", {"WAITING_REVIEW"}),
+            "PUBLISHED": ("PUBLISHED", {"APPROVED_PENDING_RELEASE"}),
+        }
+        transition = transitions.get(target_status)
+        if change_set.build_task_id is None or transition is None:
+            return None
+        if self._build_store is None:
+            raise RuntimeError("任务型变更集未配置构建任务存储")
+        target_status, allowed_statuses = transition
+        task = self._build_store.get(change_set.build_task_id)
+        if task is None:
+            raise ValueError(f"构建任务不存在: {change_set.build_task_id}")
+        if task.result_change_set_id != change_set.change_set_id:
+            raise ValueError(
+                f"构建任务 {task.task_id} 的结果与变更集 {change_set.change_set_id} 不一致"
+            )
+        if task.status == target_status:
+            return self._build_store, task, target_status
+        if task.status not in allowed_statuses:
+            raise ValueError(
+                f"构建任务 {task.task_id} 状态为 {task.status}，"
+                f"不可迁移到 {target_status}"
+            )
+        return self._build_store, task, target_status

@@ -167,3 +167,75 @@ def test_invoke_embedding_converts_timeout_to_model_timeout(monkeypatch):
         provider.invoke_embedding("医保政策", "embedding-test")
 
     assert str(exc_info.value) == "Model provider request timed out"
+
+
+def test_list_models_sorts_unique_ids(provider):
+    response = httpx.Response(200, json={
+        "data": [{"id": "model-b"}, {"id": "model-a"}, {"id": "model-b"}]
+    })
+
+    class Context:
+        def __enter__(self):
+            return response
+
+        def __exit__(self, *_):
+            return False
+
+    with patch("httpx.Client.stream", return_value=Context()):
+        assert provider.list_models() == ["model-a", "model-b"]
+
+
+def test_list_models_connects_to_pinned_ip_with_original_https_host(monkeypatch, provider):
+    response = httpx.Response(200, json={"data": [{"id": "model-pinned"}]})
+
+    class Context:
+        def __enter__(self):
+            return response
+
+        def __exit__(self, *_):
+            return False
+
+    with patch("httpx.Client.stream", return_value=Context()) as stream:
+        assert provider.list_models(connect_ip="8.8.8.8") == ["model-pinned"]
+    stream.assert_called_once_with(
+        "GET",
+        "https://8.8.8.8/v1/models",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer test-key",
+            "Host": "api.example.com",
+        },
+        extensions={"sni_hostname": "api.example.com"},
+    )
+
+
+def test_list_models_rejects_unbounded_model_count(provider):
+    response = httpx.Response(200, json={
+        "data": [{"id": f"model-{index}"} for index in range(1001)]
+    })
+
+    class Context:
+        def __enter__(self):
+            return response
+
+        def __exit__(self, *_):
+            return False
+
+    with patch("httpx.Client.stream", return_value=Context()):
+        with pytest.raises(ModelServerError, match="too many models"):
+            provider.list_models()
+
+
+def test_list_models_rejects_oversized_response(provider):
+    response = httpx.Response(200, content=b"x" * (1024 * 1024 + 1))
+
+    class Context:
+        def __enter__(self):
+            return response
+
+        def __exit__(self, *_):
+            return False
+
+    with patch("httpx.Client.stream", return_value=Context()):
+        with pytest.raises(ModelServerError, match="response too large"):
+            provider.list_models()

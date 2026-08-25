@@ -15,7 +15,7 @@ from src.runtime.memory.models import BusinessMemory, ExpirePolicy, MemoryType
 from src.data_platform.storage.memory.in_memory import InMemoryMemoryStore
 
 
-def _make_intent(intent: str = "settlement_exception_guidance", message: str = "查询结算异常", entities: dict | None = None) -> IntentResult:
+def _make_intent(intent: str = "policy_qa_fee_decomposition", message: str = "解释统筹自付", entities: dict | None = None) -> IntentResult:
     return IntentResult(
         intent=intent,
         confidence=0.9,
@@ -25,8 +25,8 @@ def _make_intent(intent: str = "settlement_exception_guidance", message: str = "
 
 
 def _make_context(
-    message: str = "查询结算异常",
-    intent: str = "settlement_exception_guidance",
+    message: str = "解释统筹自付",
+    intent: str = "policy_qa_fee_decomposition",
     session_id: str | None = "sess-001",
     conversation_turns: list[Turn] | None = None,
 ) -> RuntimeContext:
@@ -70,9 +70,9 @@ def test_context_need_defaults():
 def test_plan_resolves_types_from_intent_map():
     """按 INTENT_OBJECT_MAP 解析所需业务对象类型。"""
     planner = ContextPlanner()
-    need = planner.plan(_make_intent("settlement_exception_guidance"), _make_context())
+    need = planner.plan(_make_intent("policy_qa_fee_decomposition"), _make_context())
 
-    assert set(need.object_types) == {"settlement", "patient", "visit"}
+    assert set(need.object_types) == {"settlement", "policy", "rule"}
 
 
 def test_plan_fee_keywords_add_settlement_and_policy():
@@ -90,8 +90,8 @@ def test_plan_fee_keywords_add_settlement_and_policy():
 def test_plan_entities_add_types():
     """实体中的 settlement_id / 消息中的"药"触发对应类型。"""
     planner = ContextPlanner()
-    intent = _make_intent("mcp_tool_invocation", entities={"settlement_id": "s-1"})
-    context = _make_context(message="这个药能报销吗", intent="mcp_tool_invocation")
+    intent = _make_intent("skill_execution", entities={"settlement_id": "s-1"})
+    context = _make_context(message="这个药能报销吗", intent="skill_execution")
 
     need = planner.plan(intent, context)
 
@@ -104,7 +104,7 @@ def test_plan_marks_must_query_semantic_when_memory_missing():
     manager = MemoryManager(InMemoryMemoryStore())
     planner = ContextPlanner(memory_manager=manager)
 
-    need = planner.plan(_make_intent("settlement_exception_guidance"), _make_context())
+    need = planner.plan(_make_intent("policy_qa_fee_decomposition"), _make_context())
 
     assert need.must_query_semantic is True
     assert need.memory_ids == []
@@ -114,11 +114,11 @@ def test_plan_hits_existing_memories():
     """Memory 已有所需类型时命中记忆，无需下探语义层。"""
     manager = MemoryManager(InMemoryMemoryStore())
     manager.upsert(_make_memory("m-1", "sess-001", MemoryType.SETTLEMENT))
-    manager.upsert(_make_memory("m-2", "sess-001", MemoryType.PATIENT))
-    manager.upsert(_make_memory("m-3", "sess-001", MemoryType.VISIT))
+    manager.upsert(_make_memory("m-2", "sess-001", MemoryType.POLICY))
+    manager.upsert(_make_memory("m-3", "sess-001", MemoryType.RULE))
     planner = ContextPlanner(memory_manager=manager)
 
-    need = planner.plan(_make_intent("settlement_exception_guidance"), _make_context())
+    need = planner.plan(_make_intent("policy_qa_fee_decomposition"), _make_context())
 
     assert need.must_query_semantic is False
     assert set(need.memory_ids) == {"m-1", "m-2", "m-3"}
@@ -128,7 +128,7 @@ def test_plan_without_memory_manager_skips_memory_check():
     """未注入 MemoryManager 时不做记忆检查（降级行为）。"""
     planner = ContextPlanner(memory_manager=None)
 
-    need = planner.plan(_make_intent("settlement_exception_guidance"), _make_context())
+    need = planner.plan(_make_intent("policy_qa_fee_decomposition"), _make_context())
 
     assert need.must_query_semantic is False
     assert need.memory_ids == []
@@ -167,9 +167,9 @@ def test_subject_change_requires_session():
 def test_topic_change_detected_on_intent_change():
     """意图变化判定为话题切换。"""
     planner = ContextPlanner()
-    turns = [Turn(role="human", message="查政策", intent="policy_qa_fee_decomposition")]
+    turns = [Turn(role="human", message="查政策", intent="other_policy_topic")]
     context = _make_context(
-        intent="settlement_exception_guidance",
+        intent="policy_qa_fee_decomposition",
         conversation_turns=turns,
     )
 
@@ -181,9 +181,9 @@ def test_topic_change_detected_on_intent_change():
 def test_topic_change_not_detected_on_same_intent():
     """同一意图的连续追问不算话题切换。"""
     planner = ContextPlanner()
-    turns = [Turn(role="human", message="查结算", intent="settlement_exception_guidance")]
+    turns = [Turn(role="human", message="解释统筹自付", intent="policy_qa_fee_decomposition")]
     context = _make_context(
-        intent="settlement_exception_guidance",
+        intent="policy_qa_fee_decomposition",
         conversation_turns=turns,
     )
 

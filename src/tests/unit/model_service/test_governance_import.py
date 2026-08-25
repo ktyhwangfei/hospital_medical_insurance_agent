@@ -27,7 +27,7 @@ def test_current_snapshot_converts_every_prompt_model_and_route_to_valid_assets(
     }
     assert all(validate_asset(item) == [] for item in prompts)
     assert next(item for item in prompts if item.asset_id == "policy.fact_extract").system_prompt
-    assert next(item for item in prompts if item.asset_id == "intent.classify").system_prompt == ""
+    assert next(item for item in prompts if item.asset_id == "skill.route").system_prompt == ""
 
 
 def test_routes_reference_the_imported_model_profile_ids():

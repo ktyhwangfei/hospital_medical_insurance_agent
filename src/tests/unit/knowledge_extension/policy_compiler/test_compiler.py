@@ -344,3 +344,44 @@ def test_compiler_rejects_fact_without_structured_result() -> None:
     assert result.rules == []
     assert "RESULT_MISSING" in {issue.code for issue in result.issues}
     assert result.status == "REVIEW"
+
+
+def test_condition_value_outside_domain_reports_review_issue() -> None:
+    """枚举字段值不在受控值域（如 hosp_lv="社区"）→ REVIEW 级 issue，规则仍生成。"""
+    result = PolicyRuleCompiler().compile([
+        fact("kn_1", conditions={"hosp_lv": "社区", "med_type": "门诊"}, ratio="0.9"),
+    ])
+    unmapped = [i for i in result.issues if i.code == "VALUE_DOMAIN_UNMAPPED"]
+    assert len(unmapped) == 1
+    assert unmapped[0].severity == "REVIEW"
+    assert unmapped[0].stage == "CANONICALIZE"
+    assert unmapped[0].fact_id == "kn_1"
+    assert "社区" in unmapped[0].message
+    assert len(result.rules) == 1
+
+
+def test_condition_value_standard_and_alias_pass_domain_check() -> None:
+    """标准值与别名（三级医院/住院/在职职工）均应通过值域校验。"""
+    result = PolicyRuleCompiler().compile([
+        fact("kn_1", conditions={"hosp_lv": "三级医院", "med_type": "住院", "psn_type": "在职职工"}, ratio="0.8"),
+    ])
+    assert not [i for i in result.issues if i.code == "VALUE_DOMAIN_UNMAPPED"]
+
+
+def test_nested_condition_values_each_checked_against_domain() -> None:
+    """psn_type 嵌套多值时逐项校验，仅未映射项生成 issue。"""
+    result = PolicyRuleCompiler().compile([
+        fact("kn_1", conditions={"psn_type": ["在职职工", "新业态从业人员"]}, ratio="0.8"),
+    ])
+    unmapped = [i for i in result.issues if i.code == "VALUE_DOMAIN_UNMAPPED"]
+    assert len(unmapped) == 1
+    assert "新业态从业人员" in unmapped[0].message
+
+
+def test_internal_english_keys_skip_domain_check() -> None:
+    """英文内部语义键（retiree/working 等）不是中文受控值域的校验对象。"""
+    result = PolicyRuleCompiler().compile([
+        fact("kn_1", conditions={"psn_type": "retiree"}, ratio="0.6",
+             expression={"operator": "MULTIPLY", "reference": {"population": "employee"}, "factor": "0.6"}),
+    ])
+    assert not [i for i in result.issues if i.code == "VALUE_DOMAIN_UNMAPPED"]

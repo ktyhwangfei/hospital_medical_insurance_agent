@@ -1,5 +1,7 @@
 """知识变更集聚合服务测试（V4.1 S2）。"""
 from __future__ import annotations
+from contextlib import contextmanager
+from copy import deepcopy
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
@@ -19,6 +21,17 @@ from src.knowledge_extension.rule_explanation.change_set_store import (
 )
 from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
     KnowledgeWorkbenchService,
+)
+from src.knowledge_extension.rule_explanation.knowledge_build_models import (
+    KnowledgeBuildTask,
+    KnowledgeBuildTaskUnit,
+)
+from src.knowledge_extension.rule_explanation.knowledge_build_store import (
+    InMemoryKnowledgeBuildStore,
+    PostgreSQLKnowledgeBuildStore,
+)
+from src.tests.unit.knowledge_extension.test_knowledge_build_store import (
+    _FakePostgreSQLClient,
 )
 from src.knowledge_extension.rule_explanation.policy_compiler.compiler import (
     PolicyRuleCompiler,
@@ -631,6 +644,53 @@ def test_return_for_rebuild_records_terminal_review_decision() -> None:
     }
 
 
+def test_task_backed_transition_failure_keeps_both_states_unchanged() -> None:
+    class FailingAtomicStore(InMemoryChangeSetStore):
+        def transition_status_with_task(self, *args, **kwargs):
+            raise RuntimeError("second table update failed")
+
+    change_sets = FailingAtomicStore()
+    build_tasks = InMemoryKnowledgeBuildStore()
+    created = build_tasks.create_with_claims(KnowledgeBuildTask(
+        task_id="KB_atomic",
+        name="原子审核任务",
+        status="QUEUED",
+        build_mode="INITIAL",
+        semantic_contract_version="1",
+        pipeline_version="pipeline-v1",
+        model_scene="policy_structuring",
+        config_hash="cfg",
+        created_by="editor",
+        units=[KnowledgeBuildTaskUnit(
+            doc_id="doc_1",
+            doc_title="政策",
+            unit_id="unit_1",
+            unit_revision_id="revision_1",
+        )],
+    ))
+    running = build_tasks.save(created.model_copy(update={"status": "RUNNING"}))
+    build_tasks.save(running.model_copy(update={
+        "status": "WAITING_REVIEW",
+        "result_change_set_id": "CS_atomic",
+    }))
+    change_sets.save(change_set_models.KnowledgeChangeSet(
+        change_set_id="CS_atomic",
+        source_document_version_id="doc_1",
+        doc_id="doc_1",
+        doc_title="政策",
+        build_task_id="KB_atomic",
+        status="PENDING_REVIEW",
+    ))
+    service = ChangeSetService(object(), change_sets, build_store=build_tasks)
+
+    with pytest.raises(RuntimeError, match="second table update failed"):
+        service.approve("CS_atomic", "reviewer")
+
+    assert change_sets.get("CS_atomic").status == "PENDING_REVIEW"
+    assert build_tasks.get("KB_atomic").status == "WAITING_REVIEW"
+    assert build_tasks.get_claim("doc_1", "unit_1") is not None
+
+
 def test_needs_decision_change_set_can_be_returned_or_rejected() -> None:
     """NEEDS_DECISION（编译有 blocker）也允许退回重新构建/拒绝。
 
@@ -736,6 +796,96 @@ def test_postgres_transition_uses_status_compare_and_swap() -> None:
     assert result is None
     assert "WHERE change_set_id=%s AND status=%s" in fake.update_sql
     assert fake.update_params[-1] == "PENDING_REVIEW"
+
+
+def test_postgres_task_transition_rolls_back_both_tables_on_second_update_failure() -> None:
+    class AtomicFakeClient(_FakePostgreSQLClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self._database_url = "postgresql://test"
+            self.change_sets: dict[str, dict[str, object]] = {}
+            self.fail_task_update = False
+
+        def execute_in_transaction(self, sql, params):
+            normalized = self._normalize(sql)
+            if (
+                normalized.startswith("SELECT PAYLOAD FROM POLICY_KNOWLEDGE_CHANGE_SETS")
+            ):
+                item = self.change_sets.get(str(params[0]))
+                return (item["payload"],) if item else None
+            if normalized.startswith("UPDATE POLICY_KNOWLEDGE_CHANGE_SETS"):
+                status, payload, updated_at, change_set_id, expected_status = params
+                item = self.change_sets.get(str(change_set_id))
+                if item is None or item["status"] != expected_status:
+                    return None
+                item.update(status=status, payload=payload, updated_at=updated_at)
+                return (payload,)
+            if normalized.startswith("UPDATE POLICY_KNOWLEDGE_BUILD_TASKS") and self.fail_task_update:
+                raise RuntimeError("injected second table update failure")
+            return super().execute_in_transaction(sql, params)
+
+        @contextmanager
+        def transaction(self):
+            change_set_snapshot = deepcopy(self.change_sets)
+            try:
+                with super().transaction() as connection:
+                    yield connection
+            except BaseException:
+                self.change_sets = change_set_snapshot
+                raise
+
+    fake = AtomicFakeClient()
+    build_store = PostgreSQLKnowledgeBuildStore("postgresql://test")
+    build_store._client = fake
+    created = build_store.create_with_claims(KnowledgeBuildTask(
+        task_id="KB_pg_atomic",
+        name="PostgreSQL 原子审核",
+        status="QUEUED",
+        build_mode="INITIAL",
+        semantic_contract_version="1",
+        pipeline_version="pipeline-v1",
+        model_scene="policy_structuring",
+        config_hash="cfg",
+        created_by="editor",
+        units=[KnowledgeBuildTaskUnit(
+            doc_id="doc_1", doc_title="政策", unit_id="unit_1",
+            unit_revision_id="revision_1",
+        )],
+    ))
+    running = build_store.save(created.model_copy(update={"status": "RUNNING"}))
+    waiting = build_store.save(running.model_copy(update={
+        "status": "WAITING_REVIEW", "result_change_set_id": "CS_pg_atomic",
+    }))
+    change_set = change_set_models.KnowledgeChangeSet(
+        change_set_id="CS_pg_atomic",
+        source_document_version_id="doc_1",
+        doc_id="doc_1",
+        doc_title="政策",
+        build_task_id=waiting.task_id,
+        status="PENDING_REVIEW",
+    )
+    fake.change_sets[change_set.change_set_id] = {
+        "status": change_set.status,
+        "payload": change_set.model_dump_json(),
+        "updated_at": change_set.updated_at,
+    }
+    change_store = PostgresChangeSetStore("postgresql://test")
+    change_store._client = fake
+    fake.fail_task_update = True
+
+    with pytest.raises(RuntimeError, match="second table update failure"):
+        change_store.transition_status_with_task(
+            change_set.change_set_id,
+            allowed_statuses={"PENDING_REVIEW"},
+            target_status="APPROVED",
+            decision={"action": "approved"},
+            build_store=build_store,
+            task=waiting.model_copy(update={"status": "APPROVED_PENDING_RELEASE"}),
+        )
+
+    assert change_store._parse(fake.change_sets[change_set.change_set_id]["payload"]).status == "PENDING_REVIEW"
+    assert build_store.get(waiting.task_id).status == "WAITING_REVIEW"
+    assert build_store.get_claim("doc_1", "unit_1") is not None
 
 
 def test_change_set_state_transitions() -> None:

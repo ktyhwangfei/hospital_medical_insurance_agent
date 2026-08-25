@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 
 SNAPSHOT_PATH = "/api/v1/medical-insurance-ai-agent/model-governance/snapshot"
+PROBE_PATH = "/api/v1/medical-insurance-ai-agent/model-governance/models/probe-list"
 
 
 def _token(*, permissions: list[str], subject: str = "governance-reader") -> str:
@@ -178,7 +179,6 @@ def test_model_governance_snapshot_requires_identity_and_returns_typed_envelope(
         "prompts", "models", "routes", "providers", "citations", "uncertainties"
     }
     assert {prompt["prompt_id"] for prompt in payload["result"]["prompts"]} >= {
-        "intent.classify",
         "policy.fact_extract",
     }
     routes = {
@@ -186,7 +186,6 @@ def test_model_governance_snapshot_requires_identity_and_returns_typed_envelope(
         for route in payload["result"]["routes"]
     }
     active_scenes = {
-        "intent_recognition",
         "skill_routing",
         "policy_qa",
         "fee_explanation",
@@ -268,10 +267,10 @@ def test_assets_include_real_prompt_baselines_before_import(monkeypatch):
     assert response.json()["uncertainties"] == []
     result = response.json()["result"]
     prompt = next(
-        item for item in result["baselines"] if item["asset_id"] == "intent.classify"
+        item for item in result["baselines"] if item["asset_id"] == "policy.fact_extract"
     )
-    assert "可用意图" in prompt["user_prompt_template"]
-    assert "用户消息：{message}" in prompt["user_prompt_template"]
+    assert "【node_id】" in prompt["user_prompt_template"]
+    assert "{policy_title}" in prompt["user_prompt_template"]
     assert prompt["runtime_status"] == "fallback_static"
     assert result["drafts"] == []
 
@@ -298,6 +297,153 @@ def test_governance_write_is_disabled_by_default(monkeypatch):
 
     assert response.status_code == 403
     assert response.json()["detail"]["error_code"] == "MODEL_GOVERNANCE_DISABLED"
+
+
+def test_model_list_probe_rejects_unapproved_host_before_network_access(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv("MODEL_GOVERNANCE_PROBE_ALLOWED_HOSTS", "models.example.test")
+    client = _management_client(monkeypatch)
+    calls = []
+
+    class UnexpectedProvider:
+        def __init__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    monkeypatch.setattr(
+        "src.runtime.api.model_governance_routes.OpenAICompatibleProvider",
+        UnexpectedProvider,
+    )
+
+    response = client.post(
+        PROBE_PATH,
+        json={"base_url": "http://127.0.0.1:8000/v1", "api_key": "secret"},
+        headers=_headers("model_governance:write"),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "MODEL_LIST_PROBE_HOST_FORBIDDEN"
+    assert calls == []
+    assert "secret" not in response.text
+
+
+def test_model_list_probe_allows_public_host_and_pins_resolved_ip(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.delenv("MODEL_GOVERNANCE_PROBE_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setenv("MODEL_BASE_URL", "https://models.public.example/v1")
+    monkeypatch.setattr(
+        "src.runtime.api.model_governance_routes.socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("8.8.8.8", 443))],
+    )
+    client = _management_client(monkeypatch)
+
+    class SuccessfulProvider:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def list_models(self, *, connect_ip):
+            assert connect_ip == "8.8.8.8"
+            return ["model-public"]
+
+    monkeypatch.setattr(
+        "src.runtime.api.model_governance_routes.OpenAICompatibleProvider",
+        SuccessfulProvider,
+    )
+
+    response = client.post(
+        PROBE_PATH,
+        json={"base_url": "https://models.public.example/v1", "api_key": "secret"},
+        headers=_headers("model_governance:write"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["models"] == ["model-public"]
+
+
+def test_model_list_probe_returns_bounded_models_and_sanitized_audit(monkeypatch):
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv("MODEL_GOVERNANCE_PROBE_ALLOWED_HOSTS", "127.0.0.1")
+    client = _management_client(monkeypatch)
+
+    class SuccessfulProvider:
+        def __init__(self, base_url, api_key, *, timeout):
+            assert (base_url, api_key, timeout) == (
+                "https://127.0.0.1/v1", "sk-probe-secret", 10
+            )
+
+        def list_models(self, *, connect_ip):
+            assert connect_ip == "127.0.0.1"
+            return ["model-a", "model-b"]
+
+    monkeypatch.setattr(
+        "src.runtime.api.model_governance_routes.OpenAICompatibleProvider",
+        SuccessfulProvider,
+    )
+    response = client.post(
+        PROBE_PATH,
+        json={
+            "base_url": "https://127.0.0.1/v1",
+            "api_key": "sk-probe-secret",
+        },
+        headers=_headers("model_governance:write", subject="model-editor"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["models"] == ["model-a", "model-b"]
+    assert response.json()["audit"] == {
+        "actor": "model-editor",
+        "action": "model_list_probe",
+        "mode": "development",
+        "endpoint_host": "127.0.0.1",
+        "result": "success",
+    }
+    assert "sk-probe-secret" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("failure", "status_code", "error_code"),
+    [
+        ("auth", 401, "MODEL_LIST_PROBE_AUTH_FAILED"),
+        ("timeout", 504, "MODEL_LIST_PROBE_TIMEOUT"),
+        ("unsupported", 502, "MODEL_LIST_PROBE_UNSUPPORTED"),
+        ("invalid", 502, "MODEL_LIST_PROBE_FAILED"),
+    ],
+)
+def test_model_list_probe_maps_provider_failures_without_leaking(
+    monkeypatch, failure, status_code, error_code
+):
+    from src.model_service.exceptions import ModelAuthError, ModelServerError, ModelTimeoutError
+
+    failures = {
+        "auth": ModelAuthError("upstream auth secret"),
+        "timeout": ModelTimeoutError("upstream timeout secret"),
+        "unsupported": ModelServerError("Model provider rejected request (HTTP 404)"),
+        "invalid": ModelServerError("Model list returned invalid payload"),
+    }
+    monkeypatch.setenv("MODEL_GOVERNANCE_DEV_MODE", "1")
+    monkeypatch.setenv("MODEL_GOVERNANCE_PROBE_ALLOWED_HOSTS", "127.0.0.1")
+    client = _management_client(monkeypatch)
+
+    class FailingProvider:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def list_models(self, *, connect_ip):
+            assert connect_ip == "127.0.0.1"
+            raise failures[failure]
+
+    monkeypatch.setattr(
+        "src.runtime.api.model_governance_routes.OpenAICompatibleProvider",
+        FailingProvider,
+    )
+    response = client.post(
+        PROBE_PATH,
+        json={"base_url": "https://127.0.0.1/v1", "api_key": "secret"},
+        headers=_headers("model_governance:write"),
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["detail"]["error_code"] == error_code
+    assert "secret" not in response.text
 
 
 def test_governance_rejects_missing_permission_and_stale_revision(monkeypatch):
@@ -360,7 +506,7 @@ def test_governance_imports_current_assets_once_and_deletes_by_revision(monkeypa
     assert first.status_code == 201
     imported = first.json()["result"]
     assert imported["created_count"] > 0
-    assert imported["counts"]["prompt"] == 11
+    assert imported["counts"]["prompt"] == 7
     assert imported["counts"]["model_profile"] > 0
     assert imported["counts"]["route_rule"] > 0
 

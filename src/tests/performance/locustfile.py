@@ -7,7 +7,6 @@ Provides event hooks for test lifecycle logging.
 
 from locust import events
 
-from scenarios.business_api import BusinessAPIUser
 from scenarios.knowledge_api import KnowledgeAPIUser
 from scenarios.mcp_api import McpAPIUser
 from scenarios.model_api import ModelAPIUser
@@ -16,7 +15,6 @@ from scenarios.semantic_alignment_api import SemanticAlignmentAPIUser
 from scenarios.skill_api import SkillAPIUser
 
 __all__ = [
-    "BusinessAPIUser",
     "KnowledgeAPIUser",
     "McpAPIUser",
     "ModelAPIUser",

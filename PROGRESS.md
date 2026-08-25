@@ -10,13 +10,12 @@
 
 ## 0. 当前焦点
 
-**当前领域**：政策问答 Chat-first 单答案重构（§1.1 单元 1.6）
+**当前领域**：Issue #21 — `policy-qa` 唯一业务入口与有界恢复循环（§1.1 单元 1.6–1.7）
 
-**当前阶段**：核心实现与聚焦验证已完成；R4 性能、E2E 与最终全链路验证收口中
+**当前阶段**：Issue #21 已完成分层验收；范围外存量失败见 §4–§5
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
-| Policy QA R4 最终验收 | 性能与 E2E 证据尚待补充 | 完成 Task 8 性能/E2E 资产与 Task 9 严格验证 |
 | §10.1/10.2 安全审计 | 需对接医院 SSO / 外部系统 | 获取医院 SSO 文档 |
 | §11.1/11.2 适配器 | 需真实医保 / DRG 系统 API | 获取系统 API 文档和测试环境 |
 
@@ -26,23 +25,18 @@
 
 | 领域 | 单元数 | ✅ verified | 🟢 impl_done | 🔴 blocked | ⚪ pending | 备注 |
 |------|:--:|:--:|:--:|:--:|:--:|---|
-| 政策问答 | 6 | 0 | 6 | 0 | 0 | P10 已切换；Chat-first 单答案最小单元已实现，待 R4 性能/E2E 收口 |
-| 结算异常导办 | 4 | 0 | 4 | 0 | 0 | — |
-| 出院前质控 | 3 | 0 | 3 | 0 | 0 | — |
-| 模型服务与管理 | 5 | 1 | 4 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证 |
+| 政策问答 | 7 | 2 | 5 | 0 | 0 | 单元 1.6–1.7 已验证；唯一业务入口，结算单是问答上下文 |
+| 模型服务与管理 | 6 | 1 | 5 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证；端点模型列表探测待页面验收 |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
-
 | 知识库管理 | 4 | 1 | 3 | 0 | 0 | §2 P9 5 tab 已上线；语义提议 S1 已完成 R4，S5 冲突维度候选已完成聚焦验证 |
-| 技能管理 | 5 | 2 | 3 | 0 | 0 | 阶段 2 批量评测与 test 发布门禁已验证 |
-
-| 运营看板 | 2 | 0 | 2 | 0 | 0 | — |
+| 技能管理 | 9 | 6 | 3 | 0 | 0 | 版本、治理、草稿、AI 创作与日常工作台已验证 |
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **41** | **8** | **29** | **2** | **2** | — |
+| **合计** | **34** | **10** | **20** | **2** | **2** | 已删除的结算异常、出院质控、运营看板不再计入现行业务能力 |
 
-> **现状**：现有功能代码均 `impl_done`（写完未走正式验证流程）。验证流程见 `src/tests/AGENTS.md`
-> 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6 和 §4 为准；
+> **现状**：现行业务流只有 `policy-qa`；结算单是政策问答的必填业务数据。`/settlement`、`/qc`、`/dashboard`、`/chat` 及其旧后端编排已退役，不得作为兼容入口恢复。验证流程见 `src/tests/AGENTS.md`
+> 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6–1.7 和 §4 为准；
 > 知识库管理最新进度以 §2 政策知识管线重构为准。
 
 ### 1.1 各领域详情
@@ -50,29 +44,17 @@
 #### 政策问答（Policy QA）
 | # | 单元 | 涉及层 | 前端 | 后端 | 存储 | 状态 |
 |---|------|:--:|------|------|------|:--:|
-| 1.1 | 用户通过 Chat 提交政策问题 | F+B+S | `policy-qa/page.tsx` | `policy_qa_routes.py` → `orchestrator.py` | Milvus + SQLServer | impl_done |
-| 1.2 | AI 检索政策知识库片段 | B+S | — | `policy_rules_search.py` → `structured_policy_retriever.py` | Milvus | impl_done |
-| 1.3 | 费用项目自动检测 | B | — | `fee_item_detector.py` | — | impl_done |
+| 1.1 | 用户携带结算单号提交政策问题 | F+B+S | `policy-qa/page.tsx` | `policy_qa_routes.py` | Milvus + SQL Server | impl_done |
+| 1.2 | AI 检索政策知识库片段 | B+S | — | `structured_policy_retriever.py` | Milvus | impl_done |
+| 1.3 | 问题路由到结算费用解释 Skill | B | — | `skill_router.py` → `settlement_explain_skill` | — | impl_done |
 | 1.4 | 医保政策规则语义匹配 | B | — | `semantic_mapping.py` | SQLServer | impl_done |
 | 1.5 | 历史问答记录查询 | F+B+S | `qa-history/page.tsx` | `history_service.py` | PostgreSQL | impl_done |
-| 1.6 | 院端经办通过 Chat-first 连续问答获取单一、安全且可追溯的政策解释 | F+B+S | `PolicyQAWorkspace` → `PolicyConversation` | `policy_qa_routes.py` → `PolicyQAPublicResult` | 任务/工作流记录 + SQL Server + Milvus | impl_done |
+| 1.6 | 院端经办通过 Chat-first 连续问答获取单一、安全且可追溯的政策解释 | F+B+S | `PolicyQAWorkspace` → `PolicyConversation` | `policy_qa_routes.py` → `PolicyQAPublicResult` | 任务/工作流记录 + SQL Server + Milvus | verified |
+| 1.7 | 瞬时结算/政策检索故障执行一次有界恢复，确定性缺失立即停止 | B+S | 恢复与查证步骤 | `policy_qa_routes.py` + 数据提供器/检索器错误分类 | SQL Server + Milvus | verified |
 
-> **1.6 最小可验证单元成功标准**：Portal 通过 `/policy-qa/stream` 展示单一 `answer`，按 `complete/partial/unavailable` 表达可信度；确定性政策结论携带可展示引用，证据不足时明确列出不确定性；公开响应与 UI 不含内部推理、SQL、表字段或已删除的双视角/结算来源字段。核心单元、API、Flow 与 Portal 构建已通过，R4 性能和 E2E 证据完成后再转为 `verified`。
+> **1.6–1.7 验收标准**：Portal 只通过 `/policy-qa/stream` 展示单一 `answer`，请求必须携带 `settlement_id`；`/settlement`、`/qc`、`/dashboard`、`/chat` 返回 404。确定性政策结论携带可展示引用，证据不足时明确不确定性。瞬时结算或政策检索故障全局最多执行 2 次尝试；结算不存在、配置错误和普通业务错误不重试；`done` 事件记录 `attempt_count` 与 `halt_reason`，公开步骤不泄露 SQL、表字段或内部推理。
 
-#### 结算异常导办（Settlement Exception Guide）
-| # | 单元 | 后端 | 状态 |
-|---|------|------|:--:|
-| 2.1 | 错误码 → AI 分析异常原因 | `settlement_exception_guide/service.py` → `settlement_nodes.py` | impl_done |
-| 2.2 | AI 查询医保交易详情 | adapters → `insurance_transactions` | impl_done |
-| 2.3 | AI 给出异常处理步骤（导办卡） | `settlement_nodes.py` → GuidanceCard | impl_done |
-| 2.4 | 高风险动作人工确认 | `security/risk_control/` → `langgraph/checkpoint.py` | impl_done |
-
-#### 出院前质控（Pre-Discharge QC）
-| # | 单元 | 后端 | 状态 |
-|---|------|------|:--:|
-| 3.1 | 用户触发质控 → 风险扫描 | `pre_discharge_joint_qc/service.py` → `qc_nodes.py` | impl_done |
-| 3.2 | 事前审核适配器获取结果 | adapters → `audit_risk` | impl_done |
-| 3.3 | DRG/DIP 分组分析 | adapters → `drg_dip` | impl_done |
+> **Issue #21 验证证据（2026-08-25）**：T1 聚焦单元 177 passed（全量 Unit 因缺 `fakeredis`/`mcp` 在收集期中止）；T2a Policy QA API 40 passed；T2b Flow 全覆盖 139 passed / 1 optional skipped；Portal 相关 Vitest 65 passed、TypeScript、scoped ESLint、Next.js build 与 `compileall` 通过；Chromium Policy QA + smoke 9 passed，真实确认 `/settlement`、`/qc`、`/dashboard` 为 404。Locust 在当前 Windows 环境因 `gevent` DLL 加载失败未运行，使用 5 并发 SSE 25 次等价烟压补证：0 失败、P95 406.32ms、`max_attempt_count=1`。全量 API、Portal 与 lint 的范围外存量失败如实记录在 §4–§5，不计作本单元通过证据。
 
 #### 模型服务与管理（Model Service）
 | # | 单元 | 后端 | 状态 |
@@ -82,6 +64,7 @@
 | 4.3 | 模型路由（type+scene 策略） | `model_service/gateway/` → `router/` | impl_done |
 | 4.4 | 模型异常分类处理 | `model_service/exceptions/` | impl_done |
 | 4.5 | 提示词/模型/路由真实资产版本治理并驱动 dev/test 运行时 | `model_service/governance_*` → `ModelGateway` → Portal `/model-governance` | verified |
+| 4.6 | OpenAI-compatible 端点模型列表探测与模型名可搜索选择/手填兜底 | `OpenAICompatibleProvider.list_models` → `/model-governance/models/probe-list` → Portal 模型表单 | impl_done |
 
 4.5 验证证据（2026-08-17）：治理发布后的提示词、模型与路由成为 dev/test 真实运行时来源，无活动发布时才使用代码/静态配置回退；配置损坏失败关闭。API Key 通过 Fernet 密文保存，凭据以 endpoint fingerprint 和 revision 绑定，响应、日志与页面不回显明文；模型发布要求内容哈希与当前密钥指纹完全匹配的成功连接测试。按 T1 → T2a → T2b → T3 → Portal → T4 顺序分别为 89 passed、23 passed、2 passed、4 passed（20 条治理路由解析均值 0.876ms）、Vitest 21 passed + `tsc --noEmit` + Next.js build、Chromium E2E 连续两次各 1 passed（清空外部主密钥，治理 flow 专用 Playwright 配置禁止复用 8000/3000 服务并以 dev + 内存存储 + E2E 专用 Fernet key 独立启动；OpenAI-compatible 测试 Provider 严格校验 method/path/auth/model/参数），覆盖收费员直入、真实提示词全文、模型连接/审核/发布、下拉路由、提示词新版本生效/回滚、390px 无横向溢出及 API Key 页面/响应无泄漏。显式运行计划原命令 `npm test -- flows/portal/model-governance.flow.ts --project=chromium` 或别名 `npm run test:model-governance -- --project=chromium` 时才进入专用配置，默认/全量 E2E 明确排除该写流程。补充独立性验证：父 shell 故意设置错误的 `PORTAL_BASE_URL` / `NEXT_PUBLIC_API_BASE_URL` / `PORT` 时 Chromium 仍 1 passed；发布新提示词后故意中断的首次执行由 afterEach 恢复基线，同一 Playwright 进程 retry #1 完整通过。权限管理页尚未实现，当前仍沿用开发身份写/审/发门禁，是下一阶段工作。
 
@@ -110,7 +93,7 @@
 | # | 单元 | 后端 | 状态 |
 |---|------|------|:--:|
 | 7.1 | 技能注册/加载/路由 | `skill_loader.py` → `skill_router.py` | impl_done |
-| 7.2 | 费用解释 Skill 执行 | `settlement_explain_skill/` → `skill_registry/engine.py` | impl_done |
+| 7.2 | 费用解释 Skill 执行 | `settlement_explain_skill/` → assembler | impl_done |
 | 7.3 | 技能列表与管理 | `infra_skill_routes.py` | impl_done |
 | 7.4 | 版本化 Skill 资产库：制品哈希、版本登记、证据查询与 Portal 展示 | `skill_infra/artifact.py` → `runtime/skill_management/version_service.py` → `infra_skill_routes.py` → Portal `/skills` | verified |
 | 7.5 | 固定路由评测与 test 发布门禁：候选/基线差异、人工审批、唯一 active 与 shadow resolver | `skill_infra/route_evaluator.py` → `runtime/skill_management/governance_service.py` → `infra_skill_routes.py` → Portal `/skills` | verified |
@@ -133,10 +116,9 @@
 
 7.9 验证证据（2026-08-11）：严格按 T1 → T2a → T2b 为 25/31/1 passed，其中 T2b 是真实后端固定评测到 Release 的领域闭环；Portal 全量 Vitest 33 文件 328 passed，最终相关 3 文件 66 passed，全分支 57 个 Portal 改动文件 scoped ESLint 0 errors/0 warnings，Next.js 16.2.12 生产构建通过（36/36 静态页生成）。全仓 `npm run lint` 仍有范围外历史基线 107 errors/66 warnings，集中于 policy-knowledge、dashboard、settlement、thinking-chain、sse-hooks 等，未扩大本任务修复。中央 `skill` 工作区后端/前端为 8173/3173，代理与直连 workbench total 均为 1；最终 Chromium E2E 11 passed。浏览器治理主链使用 stateful route interception 验证同一 API 契约及 creator/reviewer token 分离，不声明真实持久化闭环；自动化 409 使用确定性 route interception 并验证待办、生命周期、选中 URL 不丢失，当前持久态 `settlement_explain_skill` 的语义版本 2.0.0 绑定旧 artifact hash、真实 `/versions/sync` 返回 409 仅作为现场观察的已知边界，不作为自动化证明，完整 source commit 不展示，此持久数据冲突未在本任务修复。响应式视觉矩阵覆盖 1440×1000 与 1600×1000 内联待办/决策/证据三栏、1024×900 证据抽屉、390×844 零占位移动导航及占满可用视口的详情/返回聚焦，以及 CSS zoom 2× stress check；均无页面横向溢出，全页仅一个 Skill H1，390px 产品/连接标签隐藏且角色切换控件不裁切，移动抽屉打开时主区退出可访问树，Tab/Shift+Tab 焦点循环、导航 Link 关闭及打开/关闭/Escape/遮罩焦点交接经真实浏览器验证，ArrowDown/ArrowUp 只移动焦点、Enter 打开，主操作和证据入口可聚焦。Impeccable detector 按 Task 7 一次性规则执行一次，结果 `[]`；规格复核修正未重复执行。构建稳定性偏差：未恢复 Google `next/font`，因构建端请求曾返回 101×404 且仓库无本地 Noto 字体资产，继续使用 `globals.css` 的 `Noto Sans SC, system-ui, sans-serif` 字体栈。回滚边界：恢复旧 `/skills` 编排或停止消费新增只读字段；既有 version/eval/draft/release 证据不受影响。
 
-#### 运营看板 / 嵌入式 / 安全与审计 / 适配器接入
+#### 嵌入式 / 安全与审计 / 适配器接入
 | # | 单元 | 状态 | 备注 |
 |---|------|:--:|---|
-| 8.1-8.2 | 运营指标展示 + 工作流监控 | impl_done | `dashboard/page.tsx` |
 | 9.1 | 嵌入式 Chat Widget | impl_done | `src/apps/embed/` |
 | 10.1 | 用户认证鉴权（SSO/RBAC） | pending | 需对接医院 SSO |
 | 10.2 | 审计日志持久化与查询 | pending | `security/audit/postgresql_store.py` |
@@ -150,7 +132,7 @@
 > **依据**：`docs/steering/政策知识管线开发计划.md`（本节对应其 P0-P10 + 里程碑 M1-M7）。
 > **实施策略（P10 前）**：「平行建新通路 → 最后一把切换」。P0-P9 在新 collection（`*_v2`）上建设，
 > 当时政策问答继续读取旧 `policy_rules`。P10 已在未上线阶段直接切换为纯 v2 读路径并下线旧 collection；
-> 当前 Chat-first 单答案链路已使用新模型。R4 性能与 E2E 仍待完成，属于本次交付验收，不影响 P10/M7 已完成状态。
+> 当前 Chat-first 单答案链路已使用新模型；Issue #21 已完成唯一入口、有界恢复、并发 SSE 烟压与 E2E 验收。
 
 ### 2.1 价值矩阵（P0-P10 + M1-M7）
 
@@ -165,7 +147,7 @@
 | 多源数据 + 自助发现 | P7 | M4 | ✅ 达成（多源验证+发现 tab 候选回写上线） |
 | 现有数据进新模型 | P8 | M5 | ✅ 达成（8.1-8.4 全完成；全量重提取 8 篇 + 干净重建 337 rules） |
 | 运营自助操作（前端 5 tab） | P9 | M6 | ✅ 达成（5 tab 全上线，4 旧路由下线） |
-| **政策问答切换到新模型** | **P10** | **M7** | ✅ 完成（纯 v2 读路径，旧 collection/旧 schema/旧发布通路已下线；Chat-first 单答案已实现，R4 性能/E2E 待验收） |
+| **政策问答切换到新模型** | **P10** | **M7** | ✅ 完成（纯 v2 读路径，旧 collection/旧 schema/旧发布通路已下线；Issue #21 E2E 与 SSE 烟压已验收） |
 
 ### 2.2 各阶段子任务进度
 
@@ -242,15 +224,15 @@
 ## 3. Runtime 建设（开发主线）
 
 > **依据**：`docs/steering/医保Agent-Runtime设计-V1.0-评估报告.md`（三阶段路线图 + ADR-007/008/009）。
-> **架构决策**：RuntimeContext 演进而非新建 BusinessSession（ADR-007）；Context Planner 作为
-> `runtime/intent/planner.py` 第三阶段（ADR-008）；Runtime 增强作为 scenario_executor 横切关注点（ADR-009）。
+> **当前架构边界（Issue #21）**：保留 RuntimeContext、Memory、Context Planner 等通用支撑；现行业务只由
+> `runtime/api/policy_qa_routes.py` 编排。历史 `scenario_executor`、LangGraph、通用 orchestrator 及其结算异常/出院质控场景已删除。
 
 ### 3.1 三阶段路线图进度
 
 | 阶段 | 内容 | 状态 |
 |------|------|:--:|
 | 阶段一：地基建设（任务 1.1-1.7） | RuntimeContext 跨轮字段、BusinessMemory、MemoryStore/Manager、ContextComposer 骨架、WorkflowInstance 扩展 reasoning_state | ✅ 完成 |
-| 阶段二：智能增强（任务 2.1-2.6） | ContextPlanner、Token Budget + 摘要策略、scenario_executor 集成、ReasoningState 推理链、ExpirePolicy.TIME、主体切换检测 | ✅ 完成 |
+| 阶段二：智能增强（任务 2.1-2.6） | ContextPlanner、Token Budget + 摘要策略、ReasoningState、ExpirePolicy.TIME、主体切换检测 | ✅ 完成；旧 scenario_executor 集成已于 Issue #21 退役 |
 | 阶段三：全面验证（任务 3.1-3.6） | 全量回归、性能基准、灰度切换、文档同步 | ✅ 完成（2026-07-31） |
 
 ### 3.2 阶段三验证结果（2026-07-31）
@@ -274,6 +256,14 @@
 - 评估报告中的 `ReasoningKind` 枚举当前以 `ReasoningStep.kind: str` 字面量表示（fact/inference/hypothesis/verified），尚未抽为独立枚举，已在领域字典中标注，后续演进
 - 预存测试债务（§5）治理不在本主线范围，按需另行立项
 
+### 3.5 Issue #21 有界恢复循环
+
+- 依据：`docs/research/LoopEngineering.md`。
+- 边界：只包围 Policy QA 的结算数据读取与政策检索两个可恢复步骤，不恢复已退役业务编排。
+- 预算：一次请求全局最多 2 次尝试；只有连接、超时及数据库/向量服务瞬时异常可重试一次；Milvus SDK 内部重试已关闭，避免绕过全局预算。
+- 停止：结算记录不存在、配置错误、业务校验错误立即停止；相同瞬时失败再次出现记为 `stalled`，不同数据源耗尽共享预算记为 `max_attempts`，成功记为 `verified`。
+- 可观测：SSE `done` 与任务输出记录 `attempt_count`、`halt_reason`；只发布恢复/查证状态，不发布内部推理。
+
 ---
 
 ## 4. 测试套件状态
@@ -289,29 +279,31 @@
 | 前端 policy-knowledge 5 tab | ✅ dev 编译 200 + 内容渲染 | tsc 5 页面零错误；`next dev` 烟测通过 |
 | Runtime 新模块单元（memory/composer/reasoning/planner/storage） | ✅ 全绿 | 63 passed（§3.3） |
 | Runtime 性能基准 | ✅ 全绿 | 3 passed：Memory ≤ 0.005ms、Composer 0.244ms（§3.2） |
-| Policy QA Chat-first 后端契约 | ✅ 聚焦验证通过 | 严格按 T1 单元 → T2a API → T2b Flow：130 passed → 39 passed → 99 passed |
-| Policy QA Chat-first Portal | ✅ 聚焦验证通过 | Task 4 流契约 37 passed；Task 5 完成时全量 Vitest 112 passed；Task 6 删除旧测试后 94 passed；`tsc --noEmit` 与 `next build` 通过。未执行或声明全仓 lint 通过 |
+| Policy QA 唯一入口与有界恢复 | ✅ 全链路验证通过 | T1 177、T2a 40、T2b 139 passed / 1 skipped；并发 SSE 25/25、Chromium E2E/smoke 9/9，详见 §1.1 |
+| Policy QA Chat-first Portal | ✅ 聚焦验证通过 | 相关 Vitest 65 passed；`tsc --noEmit`、scoped ESLint、Next.js build 通过；全量 352 passed / 3 个范围外知识治理失败 |
 | 模型治理真实资产运行时 | ✅ 全链路验证通过 | T1 89、T2a 23、T2b 2、T3 4、Portal Vitest 21、TypeScript/build、Chromium E2E 1 均通过 |
-| 全量回归 | ⚠️ 单元 26F/894P、API 66F/43P、Flow 42F/9P（预存债务） | 2026-07-31 与 HEAD 基线对比零新增失败，见 §5 测试债务 |
+| 全量回归（2026-08-25） | ⚠️ 有范围外存量问题 | Unit：缺 `fakeredis`/`mcp` 导致 3 个收集错误；API：273 passed / 19 failed；Flow：139 passed / 1 optional skipped；Portal：352 passed / 3 failed，见 §5 |
 
-### 3.1 已知预存技术债（非当前任务引入，治理时优先级参考）
-- `src/components/settlement-explanation-page.tsx`：TS 类型错误（OutputItemValue.value 应为 number，传了 string|number）。**预先存在**，P9 之外。~~**已于 2026-08-03 修复**（政策问答前端改造 build 门禁所需：`Number()` 收窄 + ProfileCard items 运行时断言）。~~
-- `src/tests/e2e/settlement-explanation.spec.ts`：缺 `@playwright/test` 类型（dev 依赖）。**预先存在**。
-- `extractions/page.tsx` JSX 多根错误：**已消除**（P9.7 删除该路由）。
+### 4.1 已知验证环境约束
+
+- 全量单元测试收集依赖仓库当前未安装的可选测试包 `fakeredis`、`mcp`、`respx`；Issue #21 聚焦单元不依赖这些包。缺包结果必须单独记录，不得伪报为代码失败或跳过分层验证。
+- Locust 已安装，但当前 Windows Python 的 `gevent` 扩展 DLL 无法加载；本次用 5 并发、25 次真实 SSE 请求补证，不声称 Locust 正式压测通过。
+- Portal 全仓 lint 现有 92 errors / 62 warnings；Issue #21 变更的 Portal 文件 scoped ESLint 为 0。
 
 ---
 
 ## 5. 测试套件债务（已知失败）
 
-> 2026-07-31 口径：单元 26 failed、API 66 failed、Flow 42 failed（与 HEAD 基线完全一致，非 Runtime 主线引入）。分类如下，按需治理：
+> 历史失败口径已随 Issue #21 删除无效旧业务测试而失效。当前只保留下列仍存在的环境/模块债务：
 
 | 类别 | 数量 | 根因 | 治理方式 |
 |---|---|---|---|
-| 端点迁移 404 | ~46 | chat 端点迁移到 `/policy-qa/stream`(SSE)，flow/langgraph 测试 POST 旧 `/chat` 返回 404 | 迁移测试到新 SSE 契约（大工程） |
-| skill_infra | 33 | skill manifest name 改名，测试断言旧值 | 更新断言 |
-| error_code stub | 4 | knowledge 模块已删除，stub 返回 `{}`，测试断言旧数据 | skip（测试已失效） |
-| data_platform | 2 | `CachedSkillStorage.get_skill` 返回 dict，测试期望 Skill 对象 | 加 model reconstruction 或更新测试 |
-| test_service | 1 | Milvus E001 政策数据缺失 | skip（环境依赖） |
+| MCP API | 2 | 当前 `create_app()` 未注册 `/mcp/*`，测试期望 200 | 单独确认 MCP 管理面是否继续对外暴露 |
+| 政策知识 API | 3 | release build 409；编译 trace 最新版本选择不稳定 | 在政策知识治理任务修复 |
+| Skill 草稿/工作台 API | 14 | `create_from_template()` 与路由的 `output_schema` 参数不一致 | 在 Skill 治理任务统一契约 |
+| Portal 知识治理 | 3 | 导航工作域数量、region 语义和未发布快照断言与实现不一致 | 在政策知识前端任务修复 |
+| Portal 全仓 lint | 154 | 92 errors / 62 warnings，集中于政策知识、语义层和 Skill 历史页面 | 分模块治理；本次只要求变更范围零新增 |
+| 可选测试依赖 | 收集期 | `fakeredis`、`mcp`、`respx` 未安装 | 在完整测试环境安装仓库测试依赖后重跑；不为 Issue #21 增加运行时依赖 |
 
 ---
 
@@ -343,6 +335,10 @@
 | 2026-08-07 | **Skill 页面两个 bug 修复**：①`/skills` 顶部页签（Skill/草稿/评测记录/发布记录）active 态错乱——“Skill” tab 正则 `/\/skills\/[^/]+(\/edit)?$/` 误匹配 drafts/evaluations/releases，导致无论在哪个子页都高亮“Skill”；改为显式排除保留路径段（`RESERVED_SEGS`）。②`/skills` 工作台目录与所有 skill 列表全空（“没有符合条件的 Skill”）——前端 dev 进程复用旧实例、`NEXT_PUBLIC_API_BASE_URL` 仍指向 next.config 默认 8000，API 代理转发到错误后端实例（空数据）；重启前端指向本工作区后端 8173 修复，并记录陷阱到 AGENTS.md。Portal Vitest 235 passed、tsc EXIT=0、Orca 浏览器验证目录显示 settlement_explain_skill 与页签高亮均正确 | §7 Skill 管理；Portal `/skills` layout + 工作台 |
 | 2026-08-10 | **Skill AI 创作与候选隔离评测完成**：已发布指标→AI 候选→人工接受→差异优化→校验→固定路由/隔离行为评测→人工物化全链路通过；补齐低基数观测指标与 fail-closed 部署约束 | §7.8 Skill AI 创作 |
 | 2026-08-17 | **后台管理真实资产版本与模型接入**：真实提示词/模型/路由发布接入 dev/test 运行时；Fernet 凭据、连接测试发布门槛、版本只读/新建/回滚与资产中心 E2E 完成 | §1 模型服务与管理 4.5；§4 验证证据 |
+| 2026-08-19 | **dummy 假数据模式移除**：ModelGateway 删除 dummy 分支，未配置模型直接抛 `ModelConfigError`（`.env` 从 main 检出拷贝，gitignored）；测试重写 3 组；真实 deepseek-chat 端到端验证第十九条提取 2 条规则逐字溯源。model_service 单元 115 passed | 模型服务；需求迭代记录 Issue 19 四轮节；AGENTS.md 陷阱更新 |
+| 2026-08-19 | **Issue #19 单元医疗类别区分（按用户设计重做）**：第一轮方向错误（提取回填+审核页筛选）已回退。现行实现：知识构建页新增「医疗类别分类」面板（执行分类→类别数量卡片→明细下钻→人工修正/恢复自动，PG 持久化 policy_unit_med_types）；新建构建任务向导按医疗类别筛选单元。T1 3+592、T2a 3+41、前端 2+17+139、tsc/build 通过；失败均为预存环境依赖。待用户验证 | 政策知识管线；需求迭代记录 Issue 19 节；领域字典新增 med_type_classifier/UnitMedTypeOverride |
+| 2026-08-19 | **模型治理新模型接入辅助**：通用 OpenAI-compatible `/models` 探测、写权限与脱敏审计、安全失败提示；Portal 模型名支持可搜索列表和手填兜底，端点/密钥变更后列表失效。真实 OpenCode Go 匿名探测 28 个模型且含 `deepseek-v4-flash`，Portal tsc 通过，待用户页面验收 | 模型服务与管理 4.6；`/model-governance` |
+| 2026-08-25 | **Issue #21 完成并验证**：确认 `policy-qa` 为唯一业务入口，结算单作为必填问答上下文；删除结算异常、出院质控、运营看板、静态旧 Chat 原型及通用编排代码和测试，退役路径保持 404；按 Loop Engineering 为结算读取与政策检索增加全局最多 2 次的有界恢复、稳定停止原因及公开验证步骤。T1/T2a/T2b 177/40/139（另 1 optional skipped），Portal 相关 65、E2E/smoke 9、并发 SSE 25/25，TypeScript/build/compileall 通过 | §1.1 单元 1.6–1.7；§3.5；§4；核心 AGENTS/接口/原型文档 |
 
 ---
 

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Iterator
 from src.config.model_service import ModelServiceConfig
 from src.model_service.exceptions import (
     ModelAuthError,
+    ModelConfigError,
     ModelExhaustedError,
     ModelRateLimitError,
     ModelServerError,
@@ -120,84 +121,12 @@ class ModelGateway:
         failures = []
         overall_start = time.time()  # 记录总耗时用于 all-failed 事件
         
-        # 调试模式: 如果配置了特殊的 dummy LLM，直接返回以绕过 API 报错
+        # 未配置真实模型（无 MODEL_BASE_URL/MODEL_API_KEY 且无已发布治理路由）时
+        # 必须明确报错，绝不返回 dummy 示例假数据（Issue #19：假规则入库事故）。
         if governed is None and self._config.base_url == "dummy":
-            # 按 scene 返回不同结构的示例数据
-            if scene in ("policy_qa", "policy_fact_extraction"):
-                # 政策提取/重提取场景：必须返回合法 JSON 数组（facts），否则
-                # _extract_policy_facts 解析失败 → 重提取为空（迭代19 修改2 修复）。
-                # 从提示词中动态提取关键比例数字与人群词填入示例规则，
-                # 让调试/未配置模型环境也能验证「该单元关键内容被提取」（修改1 反思）。
-                # 注意：仅取原文中的安全片段（数字/短词），避免控制字符破坏 JSON。
-                user_text = messages[-1].content if messages else ""
-                import re as _re
-                # 仅从「原文」段（## 原文 之后）提取关键比例与人群，
-                # 避免匹配提示词模板自身的人群枚举（如 legacy 的 19 字段说明）。
-                body = user_text.rsplit("## 原文", 1)[-1] if "## 原文" in user_text else user_text
-                # 原文段在「## 原文」之后、下一个「## 」段（输出格式/提取质量约束）之前
-                body = body.split("\n## ", 1)[0]
-                ratios = _re.findall(r"\d+(?:\.\d+)?%", body)
-                people = _re.findall(r"退休人员|在职职工|城乡居民|学生儿童|灵活就业", body)
-                ratio = ratios[-1] if ratios else "85%"
-                person = people[-1] if people else "在职职工"
-                content = (
-                    '[{"fact_text": "示例提取结果（dummy 模式，未配置真实模型）", '
-                    '"rules": [{"payment_ratio": "' + ratio + '", '
-                    '"psn_type": "' + person + '", '
-                    '"source_text": "dummy source", '
-                    '"confidence": 0.9}]}]'
-                )
-            elif scene == "fee_explanation":
-                content = (
-                    "【本次结论】\n"
-                    "[CONCLUSION]\n"
-                    "本次结算中，您的统筹自付为 4,962.67 元。"
-                    "这笔费用是基本医保统筹段内按政策比例需要您个人承担的部分，"
-                    "不包含起付线、大额自付和医保外费用。\n\n"
-                    "[OFFICE_NOTE]\n"
-                    "本次解释基于费用项 [统筹自付]，数据来源为结算记录，"
-                    "仅供参考，不作为报销凭证。\n"
-                )
-            elif "结算周期" in messages[-1].content or "90天" in messages[-1].content:
-                content = (
-                    "===PATIENT===\n"
-                    "根据本次结算数据，住院治疗满 90 天将按医保政策进入新的结算周期。"
-                    "周期切换后起付线重新计算，超出部分的费用按对应政策比例报销。\n"
-                    "===PATIENT_END===\n"
-                    "===OFFICE===\n"
-                    "匹配规则：住院 90 天结算周期（period_rule）。"
-                    "数据来源：结算记录 + 政策规则检索。\n"
-                    "===OFFICE_END===\n"
-                )
-            else:
-                content = (
-                    "===PATIENT===\n"
-                    "根据本次结算数据，您的统筹自付金额为 4,962.67 元，"
-                    "这是基本医保统筹段内按政策比例需要您个人承担的部分，"
-                    "不包含起付线、大额自付和医保外费用。\n"
-                    "===PATIENT_END===\n"
-                    "===OFFICE===\n"
-                    "本次结算统筹自付 4,962.67 元（来源：yb_zyfdxx.bdtczf），"
-                    "为统筹段按政策比例自付部分，已匹配相关政策规则。\n"
-                    "===OFFICE_END===\n"
-                )
-
-            _record_llm_event(
-                model_name="dummy_llm",
-                scene=scene,
-                prompt_summary=_audit_content_summary(
-                    messages[-1].content if messages else "", scene
-                ),
-                response_summary=_audit_content_summary(content, scene),
-                token_usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
-                latency_ms=0,
-                status="completed",
-            )
-            return ModelResponse(
-                content=content,
-                model_name="dummy_llm",
-                usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
-                finish_reason="stop"
+            raise ModelConfigError(
+                "模型服务未配置：请在工作区根目录 .env 设置 MODEL_BASE_URL 与 "
+                "MODEL_API_KEY（或发布模型治理路由）后重启；系统已禁用 dummy 假数据模式"
             )
 
         for current_model, profile in chain:

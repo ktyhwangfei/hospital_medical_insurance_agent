@@ -106,7 +106,7 @@ describe('LayoutShell responsive sidebar', () => {
     expect(screen.getByRole('button', { name: '关闭导航菜单遮罩' })).toHaveAttribute('tabindex', '-1')
 
     await user.tab({ shift: true })
-    expect(screen.getByRole('link', { name: '问答历史' })).toHaveFocus()
+    expect(screen.getByRole('link', { name: '后台管理' })).toHaveFocus()
     await user.tab()
     expect(close).toHaveFocus()
 

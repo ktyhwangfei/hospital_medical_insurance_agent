@@ -6,13 +6,13 @@ from src.runtime.intent.models import IntentResult
 
 def test_intent_result_has_required_fields():
     result = IntentResult(
-        intent='settlement_exception_guidance',
+        intent='policy_qa_fee_decomposition',
         confidence=0.9,
         entities={'patient_id': 'P001'},
         citations=['LLM推理'],
         raw_message='结算失败',
     )
-    assert result.intent == 'settlement_exception_guidance'
+    assert result.intent == 'policy_qa_fee_decomposition'
     assert result.confidence == 0.9
     assert result.entities == {'patient_id': 'P001'}
     assert result.citations == ['LLM推理']
@@ -45,7 +45,7 @@ def test_intent_result_confidence_out_of_bounds():
 
 def test_intent_result_model_roundtrip():
     original = IntentResult(
-        intent='settlement_exception_guidance',
+        intent='policy_qa_fee_decomposition',
         confidence=0.9,
         entities={'patient_id': 'P001'},
         citations=['LLM推理'],

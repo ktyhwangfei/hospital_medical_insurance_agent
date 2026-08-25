@@ -1,24 +1,13 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
-## Getting Started
+## 启动
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```powershell
+..\ws.ps1 up issue21
+..\ws.ps1 url issue21
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+服务必须由工作区父目录的 `ws.ps1` 管理；不要直接运行 `npm run dev`。
 
 ## Learn More
 
@@ -35,18 +24,9 @@ The easiest way to deploy your Next.js app is to use the [Vercel Platform](https
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
 
-## 前端原型 API 集成
+## Portal
 
-### 新增文件
-
-| 文件 | 职责 |
-|------|------|
-| `src/lib/types.ts` | 后端接口类型定义与 ApiClientError |
-| `src/lib/api-context.tsx` | API 连接状态上下文（ApiProvider + useApiContext） |
-| `src/lib/api-client.ts` | 统一 API 客户端（11 个端点函数 + SSE 解析 + mock 降级） |
-| `src/components/mcp-management.tsx` | MCP 服务管理页面 |
-| `src/components/knowledge-explorer.tsx` | 知识扩展浏览页面 |
-| `src/components/model-test.tsx` | 模型测试页面 |
+当前唯一业务入口是 `/policy-qa`，请求必须提供结算单号。`/settlement`、`/qc`、`/dashboard` 及旧 Chat 页面已退役并返回 404。
 
 ### 环境变量
 
@@ -58,19 +38,4 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 `next.config.ts` 配置了 rewrite，将 `/api/v1/medical-insurance-ai-agent/*` 代理到后端。
 
-### 连接状态
-
-页面右上角显示连接状态 Badge：
-- 🟢 已连接：API 可达
-- 🟠 离线模式：使用 mock 数据降级
-- ⚪ 未检测：初始状态
-
-### Mock 降级策略
-
-- 网络错误自动降级为 mock 数据
-- HTTP 错误（4xx/5xx）抛出 ApiClientError，不降级
-- 降级响应包含 `fallback: true` 标识
-
-### 人工确认流程
-
-结算异常导办中，高风险动作会触发 `waiting_human_confirmation` 状态，弹出确认 Dialog。
+Policy QA 不使用 mock 数据降级；后端或数据源不可用时展示不可用状态与不确定性。

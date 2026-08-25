@@ -54,8 +54,6 @@ class AuthResult:
 _PUBLIC_API_PATHS: set[str] = {
     "/health",
     "/version",
-    "/api/v1/medical-insurance-ai-agent/chat",
-    "/api/v1/medical-insurance-ai-agent/chat/stream",
 }
 
 

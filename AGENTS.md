@@ -47,10 +47,9 @@ Agent 编码时根据以下映射定位代码位置：
 
 | 目录 | 职责 | 当前状态 |
 |------|------|----------|
-| `runtime/` | Agent 核心运行时：API 入口、会话上下文、意图识别、澄清、编排（含 LangGraph）、调度、响应（含 SSE 流式）、任务闭环、事件日志、技能注册、政策问答 | 已实现（api/context/intent/clarification/planning/orchestration/scheduling/task_closure/runtime_state/event_log/capability_nodes/skill_registry/langgraph/policy_qa/**skill_management**：草稿 CRUD/校验/包生成/导入/输入指标/物化/生命周期） |
-| `business_scenarios/` | 医保业务场景：结算异常导办、出院前联合质控 | 场景代码已实现（settlement_exception_guide、pre_discharge_joint_qc），运行时入口整合至 runtime/scenario_executor |
+| `runtime/` | Agent 核心运行时：Policy QA API、会话上下文、结算/政策检索、确定性验证、有界恢复、任务闭环、事件日志及 Skill 管理 | 已实现（`api/policy_qa_routes.py`、`policy_qa/`、context/memory/reasoning/task_closure/skill_management） |
 | `model_service/` | 模型服务网关：统一调用入口、路由策略、OpenAI 兼容 Provider、流式生成、异常分类、模型配置管理、Provider 管理 | 已实现（gateway/router/providers/openai_compatible/exceptions/models/ports） |
-| `knowledge_extension/` | 知识与扩展：规则解释（含 Milvus 政策检索+SQL Server 数据源）、MCP 注册中心、扩展注册 | 已实现（common/extension_registry/mcp_registry/rule_explanation + policy_retrieval 含 Milvus/SQLServer/语义映射；原 knowledge/rag/assets/prompt_templates 已删除，由 stub 提供兼容） |
+| `knowledge_extension/` | 知识与扩展：规则解释（含 Milvus 政策检索+SQL Server 数据源）、MCP 注册中心、扩展注册 | 已实现（common/extension_registry/mcp_registry/rule_explanation + policy_retrieval 含 Milvus/SQLServer/语义映射） |
 | `adapters/` | 外部系统防腐层：医保接口、事前审核、DRG/DIP、HIS、EMR、病案、收费 | 7 个内存适配器 + base 基类（models/service）+ ports 端口定义均已实现 |
 | `data_platform/` | DaaS 数据底座：数据访问、存储端口、缓存（含 Redis）、持久化（含 PostgreSQL 方言/迁移/执行器）、Skill/MCP/向量存储 | 已实现（data_access/cache/persistence/storage 含 skill/mcp/postgresql/vector 子目录） |
 | `domain/` | 领域模型：患者、医保、费用、审核风险、DRG/DIP、病案、任务、申诉、医嘱费用、技能 | 已实现（patient/insurance/task/common/drg_dip/medical_record/audit_risk/appeal/order_fee/skill） |
@@ -60,7 +59,7 @@ Agent 编码时根据以下映射定位代码位置：
 | `shared/` | 共享基础：异常模型、响应契约、Schema 契约、技能加载器/注册表 | 已实现（exceptions/schemas/skills） |
 | `gateway/` | 统一接入网关：API网关、渠道识别、认证鉴权、租户隔离、限流熔断、请求安全校验、接入日志 | 已实现（api_gateway/channel/auth/tenant/rate_limiter/request_guard/access_log） |
 | `interaction/` | 多模态交互层：Chat对话、文件上传、语音交互、页面上下文、消息提醒、知识上传 | 已实现（chat/file/voice/page_context/notification/knowledge_upload） |
-| `apps/` | SaaS 应用入口层：Next.js 16 应用 Portal（业务导办与政策问答） | 已实现（portal/ 含 policy-qa/semantic-layer/policy-knowledge/skills/qa-history 路由，及 settlement/qc/dashboard） |
+| `apps/` | SaaS 应用入口层：Next.js 16 Portal；`/policy-qa` 是唯一业务入口，其余页面是治理与支撑工作台 | 已实现（policy-qa/semantic-layer/policy-knowledge/skills/model-governance/qa-history） |
 | `skills/` | Skill 驱动架构：自包含的医保业务能力包（费用解释、起付线、大额自付等），通过 YAML 配置 + Python assembler 实现声明式业务逻辑。每个 Skill 通过 `business_action` + `business_object` 挂载到平台七类业务动作 | 已实现（settlement_explain_skill/ 含 SKILL.md + schemas + templates + scripts，已声明 `explain` + `settlement`） |
 | `src/skill_infra/` | Skill 基础设施：动态加载器（SkillLoader）、关键词路由器（SkillRouter），自动扫描 skills/ 目录发现和加载 skill 包 | 已实现（skill_loader.py, skill_router.py） |
 | `src/domain/common/actions.py` | Business Action 枚举：平台最高层业务分类（七类动作 + 十类对象 + 能力矩阵白名单） | 已实现（BusinessAction, BusinessObject, VALID_ACTION_OBJECT_PAIRS） |
@@ -69,21 +68,15 @@ Agent 编码时根据以下映射定位代码位置：
 ### 业务流向
 
 ```
-runtime/api (FastAPI 路由)
-  → runtime/intent (意图识别：关键词降级 / LLM 解析 / LangGraph 图式)
-  → src/domain/common/actions (Business Action 分类：Explain/Query/Guide/Verify/Compare/Evaluate/Analyze)
-  → security/risk_control (高风险拦截)
-  → security/authorization (权限校验)
-  → runtime/orchestrator (统一编排)
-      ├─ runtime/langgraph (LangGraph 图式执行：检查点 + 人工确认中断)
-      ├─ business_scenarios/{settlement_exception_guide, pre_discharge_joint_qc}
-      ├─ src/skill_infra/skill_router (SkillRouter：关键词路由)
-      │   └─ skills/settlement_explain_skill (Skill 驱动：YAML 配置 + assembler)
-      └─ runtime/skill_registry (技能/工具执行引擎)
-  → model_service/gateway (模型调用：路由 → Provider → 流式/非流式)
-  → adapters/* (外部系统防腐层，当前均为内存实现)
-  → knowledge_extension/* (政策知识库、规则解释、MCP 注册)
-  → 返回 AgentResponse 结构（或 SSE 流式事件）
+Portal `/policy-qa`
+  → POST `runtime/api/policy_qa_routes.py:/policy-qa/stream`
+  → 必填 `settlement_id` 查询真实结算单
+  → `skill_infra/skill_router` 选择 `settlement_explain_skill`
+  → `structured_policy_retriever` 检索政策证据
+  → Skill assembler 生成解释
+  → `_build_public_result` 确定性验证（complete/partial/unavailable）
+  → 瞬时数据源故障最多恢复一次；缺数据或证据不足不重试
+  → SSE `result` / `done`，并记录任务与终止原因
 ```
 
 ### 核心约定
@@ -109,7 +102,7 @@ runtime/api (FastAPI 路由)
 - 因你的修改而变成死代码的导入和变量，删除掉。
 - 发现预先存在的死代码时，提出来但不要删。
 
-**最小可验证单元** = 一条完整的用户故事，可独立测试、验证、回滚。例如："用户通过 Chat 查询结算异常"（前端 chat 组件 + 后端 service + DB 查询），或"修复 policy-qa 页面的渲染 bug"（仅前端页面，不涉及后端）。
+**最小可验证单元** = 一条完整的用户故事，可独立测试、验证、回滚。例如："用户携带结算单号通过 policy-qa 获取可追溯费用解释"，或"修复 policy-qa 页面的渲染 bug"。
 
 ## 目标驱动执行
 - 定义清晰的成功标准再开始。
@@ -132,7 +125,7 @@ runtime/api (FastAPI 路由)
 路由前缀: `/api/v1/medical-insurance-ai-agent`（除 `/health` 外）。完整接口清单见 `docs/steering/接口设计文档.md`。
 
 前端应用目录: `src/apps/portal/`（Next.js 16 应用，当前唯一前端入口）：
-- **portal/** — 业务应用入口，路由：`/policy-qa`（政策问答，主入口）、`/semantic-layer`（语义层）、`/policy-knowledge`（政策知识）、`/skills`（技能）、`/qa-history`（问答历史）、`/`（Chat 导办）、`/settlement`（结算异常）、`/qc`（出院前质控）、`/dashboard`（运营看板）
+- **portal/** — `/policy-qa` 是唯一业务入口；`/` 重定向到它。`/settlement`、`/qc`、`/dashboard` 已退役并返回 404。`/semantic-layer`、`/policy-knowledge`、`/skills`、`/model-governance`、`/qa-history` 是治理与支撑页面。
 
 应用独立构建运行，调用后端 API（`/api/v1/medical-insurance-ai-agent/*`）。
 
@@ -169,7 +162,6 @@ runtime/api (FastAPI 路由)
 ### 技术债务
 
 - `AgentResponse.result` 仍为 `dict[str, Any]`，后续需逐步 Pydantic 化为结构化场景结果
-- LangGraph 编排已实现基础图式执行，但完整 DAG 并行执行、断点续执仍需增强
 - 真实院内系统适配器尚未接入，当前仍为内存适配器
 - `observability/` 仅有中间件骨架，指标采集和链路追踪需对接实际后端
 - MCP 注册中心已有 stdio 传输实现，SSE 传输和远程 MCP 服务器连接待完善
@@ -195,12 +187,12 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - 样例数据仅包含 `P001/E001`，`P002` 触发降级路径
 - 测试中 `HIGH_RISK_ACTIONS` 是 `set`，`detect_blocked_actions` 返回顺序不稳定，断言应使用 `set()` 比较
 - PowerShell 中 `&&` 和 `||` 无效，用 `;` 分隔命令
-- 模型服务需要配置 `MODEL_API_KEY` 环境变量，未配置时模型相关接口不可用
-- SSE 流式端点（`/api/v1/medical-insurance-ai-agent/policy-qa/stream`）的 `done` 事件标志流结束，前端需据此关闭 EventSource（原 `/chat/stream` 已迁移至 policy-qa）
-- LangGraph 人工确认通过 `interrupt()` 暂停图执行，`_checkpoint_registry` 维护 task_id → (graph, thread_id) 映射，用于恢复执行
+- 模型服务需要配置 `MODEL_API_KEY` 环境变量，未配置时模型相关接口不可用；dummy 假数据模式已移除，未配置（无 `.env` 的 `MODEL_BASE_URL/MODEL_API_KEY` 且无已发布治理路由）时网关直接抛 `ModelConfigError`，绝不返回示例假数据（Issue #19 假规则入库事故后加固）。工作区 `.env` 从 main 检出目录拷贝（gitignored）
+- 模型列表探测默认只直连公网地址并固定 DNS 解析 IP。探测内网/本机模型服务时，将主机名加入逗号分隔的 `MODEL_GOVERNANCE_PROBE_ALLOWED_HOSTS`，否则返回 403。
+- SSE 流式端点（`/api/v1/medical-insurance-ai-agent/policy-qa/stream`）的 `done` 事件标志流结束，并携带 `attempt_count` 与 `halt_reason`；前端需据此关闭流。
 - `src/apps/portal/` 为 Next.js 16.x 应用，API 和约定可能与训练数据不同，编码前应先查阅 `node_modules/next/dist/docs/`
 - `domain/tool/` 和 `data_platform/storage/tool/` 是完全空目录（无 `__init__.py`），import 会报错 — 不要使用
-- `runtime/orchestration/service.py` 和 `runtime/planning/service.py` 已 DEPRECATED，使用 `scenario_executor.py` 代替
+- 旧 `/chat*`、`/workflows*`、`/tasks/confirm` 业务入口以及结算异常/出院质控编排已退役；禁止重新引用已删除的 `business_scenarios`、`scenario_executor`、`runtime/langgraph`。
 - boulder continuation 活跃时，`task(run_in_background=true)` 的通知与 system-reminder 互扰，导致后台任务结果丢失。串行多任务时用 `run_in_background=false`
 - `infra_skill_routes.py` 中草稿/物化/生命周期端点通过依赖注入（`get_skill_draft_service` / `get_skill_materializer` / `get_skill_lifecycle_service`）获取服务。API 测试中 override 这些依赖函数才能注入内存存储；直接调用 `get_skill_draft_service()` 的端点（如 P1 时期的 import 占位）不会响应 override，已全部改为依赖注入
 - `SkillDraftValidator` 校验 `structured_config.basic.skill_id` 和 `basic.skill_name`，保存草稿时必须包含 `basic` 段（模板生成的初始配置已包含）
@@ -212,6 +204,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - `production.py` 的 `POSTGRES_PASSWORD` 默认曾为空，连库报 `fe_sendauth: no password supplied`。已改默认 `'postgres'`（与 AGENTS.md、docker-compose 一致）；若遇认证失败先检查该环境变量是否被显式设为空。
 - 部分工作区（codex-policy-compare-v2、pi-policy-knowledge-optimize 等独立副本）的启停脚本曾是写死 8000/3000 的旧版，多工作区会端口互斥。运行 `..\ws.ps1 sync` 同步新版脚本（按工作区名确定性分配 8100+/3100+）。
 - 多工作区同时验证时逐个猜端口很费时。用 `..\ws.ps1 list` 并行探测所有工作区端口与健康状态，`..\ws.ps1 up/down` 并行启停（详见下方多工作区章节）。
+- 手动 `uvicorn`/`npm run dev` 绕过 `start-servers.ps1` 会丢一串环境注入：后端缺 `AUTH_JWT_SECRET`（语义对齐接口 401「JWT 验签配置缺失」）、前端缺 `NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN`（语义发现页报「缺少语义审核登录凭证」，且 sessionStorage 无登录入口，token 唯一来源就是启动脚本同密钥签发注入），还丢 `MODEL_GOVERNANCE_DEV_MODE`/`SKILL_CONTROL_DEV_MODE`/`DATA_SOURCE_MODE` 等。半启动/鉴权异常一律 `..\ws.ps1 restart` 修复。
 - 前端 dev 进程复用旧实例时不纠正 `NEXT_PUBLIC_API_BASE_URL`。`start-servers.ps1` 见前端端口已监听即 `Nothing to start` 退出，多工作区下若旧进程曾用 `next.config.ts` 默认值 8000，前端 API 代理会持续转发到错误后端实例、`/skills` 工作台目录与所有 skill 列表全空（summary 全 0）。诊断：经前端代理 `curl 127.0.0.1:<前端端口>/api/v1/medical-insurance-ai-agent/infra-skills/workbench` 的 total 与直连本工作区后端端口不一致（代理 0、后端 >0）。正确做法：`Stop-Process` 杀前端进程后带 `$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:<后端端口>'` 重启 `npm run dev`。
 - Postgres 表加列只在 `CREATE TABLE` 写、漏配 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，旧库因 `CREATE TABLE IF NOT EXISTS` 不重建导致 INSERT 报 `UndefinedColumn` 500（发起评测曾因 `regression_results`/`regression_summary` 漏配 ALTER 而崩）。模型加字段必须 CREATE + ALTER 双写；防回归测试 `test_skill_eval_runs_insert_columns_covered_by_ddl` 校验 INSERT 列 ⊆ DDL 列。
 

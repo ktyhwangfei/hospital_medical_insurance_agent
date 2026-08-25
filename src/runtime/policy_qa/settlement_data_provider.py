@@ -15,6 +15,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Protocol
 
+import pyodbc
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,10 +107,22 @@ class RealDbSettlementDataProvider:
 
         # get_case_context_raw is a synchronous method that opens a new connection
         # each time — wrap in executor to avoid blocking the event loop.
-        raw_context = await loop.run_in_executor(
-            None,
-            lambda: self.client.get_case_context_raw(settlement_id=settlement_id),
-        )
+        try:
+            raw_context = await loop.run_in_executor(
+                None,
+                lambda: self.client.get_case_context_raw(settlement_id=settlement_id),
+            )
+        except ValueError as exc:
+            if "未查询到结算记录" in str(exc):
+                raise SettlementNotFoundError(str(exc)) from exc
+            raise
+        except (ConnectionError, TimeoutError) as exc:
+            raise SettlementDataUnavailableError(str(exc)) from exc
+        except pyodbc.Error as exc:
+            sqlstate = str(exc.args[0]) if exc.args else ""
+            if sqlstate.startswith("08") or sqlstate in {"HYT00", "HYT01"}:
+                raise SettlementDataUnavailableError(str(exc)) from exc
+            raise
 
         raw_data = raw_context.raw_data or {}
 
@@ -159,6 +173,12 @@ class RealDbSettlementDataProvider:
 
 class SettlementNotFoundError(Exception):
     """Raised when settlement data cannot be found in real DB."""
+    pass
+
+
+class SettlementDataUnavailableError(Exception):
+    """Raised for retryable settlement source failures."""
+
     pass
 
 

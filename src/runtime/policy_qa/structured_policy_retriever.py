@@ -20,7 +20,15 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+import grpc
 from pymilvus import MilvusClient
+from pymilvus.exceptions import (
+    ConnectError,
+    ConnectionNotExistException,
+    ErrorCode,
+    MilvusException,
+    MilvusUnavailableException,
+)
 
 from src.runtime.policy_qa.policy_rules_search import (
     COLLECTION_NAME,
@@ -29,6 +37,42 @@ from src.runtime.policy_qa.policy_rules_search import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TRANSIENT_MILVUS_ERROR_TYPES = (
+    ConnectionError,
+    TimeoutError,
+    ConnectError,
+    ConnectionNotExistException,
+    MilvusUnavailableException,
+)
+_TRANSIENT_GRPC_CODES = {
+    grpc.StatusCode.ABORTED,
+    grpc.StatusCode.DEADLINE_EXCEEDED,
+    grpc.StatusCode.INTERNAL,
+    grpc.StatusCode.UNAVAILABLE,
+    grpc.StatusCode.UNKNOWN,
+}
+
+
+def _is_transient_milvus_error(exc: Exception) -> bool:
+    if isinstance(exc, _TRANSIENT_MILVUS_ERROR_TYPES):
+        return True
+    if isinstance(exc, grpc.RpcError):
+        return exc.code() in _TRANSIENT_GRPC_CODES
+    if isinstance(exc, MilvusException):
+        return (
+            exc.code in _TRANSIENT_GRPC_CODES
+            or exc.code == ErrorCode.RATE_LIMIT
+            or "Retry run out" in exc.message
+            or "Retry timeout" in exc.message
+        )
+    return False
+
+
+class PolicyRetrievalUnavailableError(Exception):
+    """政策数据源瞬时不可用，可由有界 Loop 重试。"""
+
+    pass
 
 
 # ── 标准化结算上下文 ──────────────────────────────────────────────
@@ -111,7 +155,12 @@ class StructuredPolicyRuleRetriever:
         collection_name: str | None = None,
     ):
         uri = f"http://{host}:{port}"
-        self.client = MilvusClient(uri=uri)
+        try:
+            self.client = MilvusClient(uri=uri)
+        except Exception as e:
+            if not _is_transient_milvus_error(e):
+                raise
+            raise PolicyRetrievalUnavailableError(str(e)) from e
         self.collection_name = collection_name or COLLECTION_NAME
         logger.info(f"StructuredPolicyRuleRetriever initialized: {uri}")
 
@@ -226,12 +275,15 @@ class StructuredPolicyRuleRetriever:
                 filter=expr,
                 output_fields=OUTPUT_FIELDS,
                 limit=top_k,
+                retry_times=0,
             )
             print(f"[MILVUS-QUERY] Scalar query returned {len(raw_results)} raw records", flush=True)
         except Exception as e:
+            if not _is_transient_milvus_error(e):
+                raise
             print(f"[MILVUS-QUERY] Scalar query FAILED: {e}", flush=True)
             logger.warning(f"[StructuredRetrieval] scalar query failed: {e}")
-            raw_results = []
+            raise PolicyRetrievalUnavailableError(str(e)) from e
 
         # 打印每条原始结果的关键字段
         if raw_results:
@@ -283,6 +335,7 @@ class StructuredPolicyRuleRetriever:
                         filter=like_expr,
                         output_fields=OUTPUT_FIELDS,
                         limit=top_k,
+                        retry_times=0,
                     )
                     print(f"[MILVUS-QUERY]   LIKE fallback returned {len(fallback)} records", flush=True)
                     for r in fallback:
@@ -292,7 +345,10 @@ class StructuredPolicyRuleRetriever:
                         if r not in results:
                             results.append(r)
                 except Exception as e:
+                    if not _is_transient_milvus_error(e):
+                        raise
                     print(f"[MILVUS-QUERY]   LIKE fallback FAILED: {e}", flush=True)
+                    raise PolicyRetrievalUnavailableError(str(e)) from e
 
         print(f"[MILVUS-QUERY] Final: {len(results)} records (after all filters)", flush=True)
         print(f"[MILVUS-QUERY] ====== 查询结束 ======\n", flush=True)

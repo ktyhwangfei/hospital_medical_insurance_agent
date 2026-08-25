@@ -45,6 +45,8 @@ const eligibleUnits: EligibleKnowledgeUnit[] = [
     availability: 'AVAILABLE',
     occupied_by: null,
     target_href: null,
+    med_type: '住院',
+    med_type_source: 'auto',
   },
   {
     doc_id: 'DOC_001',
@@ -58,6 +60,8 @@ const eligibleUnits: EligibleKnowledgeUnit[] = [
     availability: 'CLAIMED',
     occupied_by: 'TASK_CLAIMED',
     target_href: '/policy-knowledge/knowledge/review/CS_CLAIMED',
+    med_type: '通用',
+    med_type_source: 'auto',
   },
   {
     doc_id: 'DOC_002',
@@ -71,6 +75,8 @@ const eligibleUnits: EligibleKnowledgeUnit[] = [
     availability: 'REBUILD_REQUIRED',
     occupied_by: null,
     target_href: null,
+    med_type: '门诊特殊病',
+    med_type_source: 'auto',
   },
 ]
 
@@ -169,6 +175,7 @@ describe('knowledge build page', () => {
       'knowledge-build-section-context',
       'knowledge-build-section-flow',
       'knowledge-build-section-summary',
+      'knowledge-build-section-med-type',
       'knowledge-build-section-tasks',
     ])
 
@@ -257,7 +264,7 @@ describe('knowledge build page', () => {
     await waitFor(() => expect(within(drawer).getByRole('button', { name: '创建构建任务' })).toBeEnabled())
     await user.click(within(drawer).getByRole('button', { name: '创建构建任务' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent('已生成待审知识')
+    expect(await screen.findByRole('status')).toHaveTextContent('构建任务已创建，正在后台处理')
     expect(screen.queryByRole('dialog', { name: '新建构建任务' })).not.toBeInTheDocument()
     expect(createKnowledgeBuildTask).toHaveBeenCalledWith({
       name: '医保政策精确构建',
@@ -614,7 +621,7 @@ describe('knowledge build page', () => {
       createRequest.resolve(makeTask({ task_id: 'TASK_DEFERRED', status: 'WAITING_REVIEW' }))
       await createRequest.promise
     })
-    expect(await screen.findByRole('status')).toHaveTextContent('已生成待审知识')
+    expect(await screen.findByRole('status')).toHaveTextContent('构建任务已创建，正在后台处理')
   })
 
   it('uses the shared dialog primitive for the accessible drawer contract', async () => {
@@ -691,6 +698,8 @@ function claimedUnit(unitId: string, taskId: string, targetHref: string): Eligib
     availability: 'CLAIMED',
     occupied_by: taskId,
     target_href: targetHref,
+    med_type: '住院',
+    med_type_source: 'auto',
   }
 }
 
