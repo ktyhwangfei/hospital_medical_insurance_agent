@@ -170,6 +170,27 @@ def _detect_axis_value_conflict(
     return signals
 
 
+# 金额边界词：后接这些词的基金/资金类维度值是区间描述（如"统筹基金最高支付限额"），非规则轴取值
+_AMOUNT_BOUNDARY_WORDS = ("最高支付限额", "起付标准", "封顶线", "最高限额", "支付限额")
+_BOUNDARY_PRONE = ("基金", "资金", "保险")  # 仅此类长值易被误当轴值
+
+
+def _is_amount_boundary(text: str, value: str) -> bool:
+    """基金/资金类值后紧跟金额边界词 → 是区间边界描述，不算轴值。
+
+    等级/人员类值（一级医院、在职）后接"起付标准"是真轴值语境，不过滤。
+    """
+    if not any(w in value for w in _BOUNDARY_PRONE):
+        return False
+    pos = text.find(value)
+    while pos != -1:
+        window = text[pos + len(value):pos + len(value) + 8]
+        if any(window.startswith(w) for w in _AMOUNT_BOUNDARY_WORDS):
+            return True
+        pos = text.find(value, pos + 1)
+    return False
+
+
 def _detect_structure_compression(
     extractions: list[dict[str, Any]], registry: SemanticRegistry, dims: dict[str, str],
     names: dict[str, str],
@@ -186,7 +207,7 @@ def _detect_structure_compression(
         for field, domain_code in dims.items():
             mentioned = [
                 v for v in all_domain_values.get(domain_code, [])
-                if v and v in text
+                if v and v in text and not _is_amount_boundary(text, v)
             ]
             if len(mentioned) < 2:
                 continue
@@ -213,7 +234,8 @@ def _detect_structure_compression(
 
 
 def _normalized_excerpt_key(text: str) -> str:
-    return re.sub(r"\s+", "", text or "")[:80]
+    """近似键：去空白、去尾部标点后取前 80 字符（尾部差异通常是切句噪声）。"""
+    return re.sub(r"\s+", "", text or "").rstrip("。！；：，、")[:80]
 
 
 def _detect_cross_unit_inconsistency(
@@ -239,9 +261,19 @@ def _detect_cross_unit_inconsistency(
             continue
         distinct_sets = {frozenset(s) for s in used_fields_per_unit}
         if len(distinct_sets) > 1:
+            # 跨文档才报：字段集不一致需在不同文档间对照才构成语义映射分歧；
+            # 同文档近似重复单元是切片重复问题，不是跨条款不一致
+            doc_ids = {row.get("doc_id") for row, _ in group}
+            if len(doc_ids) < 2:
+                continue
             row, rules = group[0]
             differing = sorted(set().union(*distinct_sets))
             diff_labels = "、".join(_field_label(names, f) for f in differing[:5])
+            # 政策值签名取差异字段的实际取值，不再拿物理字段名充当
+            diff_values = sorted({
+                v for f in differing[:5]
+                for _, rs in group for v in _rule_values(rs, f)
+            })[:5]
             signals.append(_make_signal(
                 differing[0] if differing else "unknown",
                 source_ref=f"det:crossunit:{key[:40]}",
@@ -251,7 +283,7 @@ def _detect_cross_unit_inconsistency(
                 excerpt=row.get("source_text", "")[:300],
                 concept=names.get(differing[0]) or differing[0] if differing else "未知字段",
                 diagnosis=f"相同的政策表述在不同条款被映射到不同字段（涉及：{diff_labels}）",
-                values=differing[:5],
+                values=diff_values,
                 kind="cross_unit_inconsistency",
             ))
     return signals

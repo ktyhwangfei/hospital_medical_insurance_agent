@@ -44,12 +44,16 @@ def _registry() -> SemanticRegistry:
                                         standard_values=["三级医院", "社区卫生服务中心"]))
     store.save_value_domain(ValueDomain(domain_code="PSN_TYPE", name="人员类别",
                                         standard_values=["在职", "退休"]))
+    store.save_value_domain(ValueDomain(domain_code="JJGS", name="基金归属",
+                                        standard_values=["统筹基金", "大额医疗互助资金"]))
     store.save_metric(Metric(metric_code="zcgz.hosp_lv", object_code="zcgz", name="医院等级",
                              semantic_type="Enum", value_domain="HOSP_LV", status="published"))
     store.save_metric(Metric(metric_code="zcgz.inst_cat", object_code="zcgz", name="机构类别",
                              semantic_type="Enum", value_domain="INST_CAT", status="published"))
     store.save_metric(Metric(metric_code="zcgz.psn_type", object_code="zcgz", name="人员类别",
                              semantic_type="Enum", value_domain="PSN_TYPE", status="published"))
+    store.save_metric(Metric(metric_code="zcgz.jjgs", object_code="zcgz", name="基金归属",
+                             semantic_type="Enum", value_domain="JJGS", status="published"))
     store.save_metric(Metric(metric_code="djxx.hospital_level", object_code="djxx",
                              name="医院等级", semantic_type="Enum", value_domain="HOSP_LV",
                              source_object="Institution", source_field="bjybdb.m_institution.H_TYPE",
@@ -205,6 +209,42 @@ def test_detected_signals_flow_into_clusters_with_dedup():
         service.intake_signal(sig)
     assert len(service.list_clusters([ClusterStatus.PENDING])) == 1
     assert len(service.list_clusters([ClusterStatus.PENDING])[0].evidence) == 1
+
+
+def test_detector_structure_compression_ignores_amount_boundaries():
+    """金额边界短语不算轴值：'XX基金最高支付限额'是区间描述，非规则取值。
+
+    线上误报：jjgs 簇声称压缩丢失了统筹基金，实际该词只作为区间边界出现。
+    """
+    registry = _registry()
+    text = ("超过基本医疗保险统筹基金最高支付限额以上，大额医疗互助资金最高支付限额以下的"
+            "医疗费用，在职职工报销比例为85%。")
+    extractions = [
+        _ext("e1", "d1", "u1", text,
+             {"rules": [
+                 {"rule_id": "r1", "jjgs": "大额医疗互助资金", "psn_type": "在职"},
+             ]}),
+    ]
+    assert detect_signals(extractions, registry)["structure_compression"] == []
+
+
+def test_detector_cross_unit_limited_to_cross_document():
+    """同文档近似重复单元不是跨条款不一致；跨文档才报，且不拿字段名当政策值。"""
+    registry = _registry()
+    text = "三级医院住院报销比例为85%，二级医院为75%，在职人员起付线不同"
+    same_doc = [
+        _ext("e1", "d1", "u1", text, {"hosp_lv": "三级医院", "psn_type": "在职"}),
+        _ext("e2", "d1", "u2", text + "。", {"hosp_lv": "三级医院", "psn_type": "在职",
+                                             "setl_type": "按项目付费"}),
+    ]
+    assert detect_signals(same_doc, registry)["cross_unit_inconsistency"] == []
+
+    cross_doc = same_doc + [
+        _ext("e3", "d2", "u3", text + "！", {"hosp_lv": "三级医院"}),
+    ]
+    signals = detect_signals(cross_doc, registry)["cross_unit_inconsistency"]
+    assert len(signals) == 1
+    assert all(not v.startswith(("hosp_lv", "setl_type")) for v in signals[0].evidence.sample_values)
 
 
 # ── §6.1 拆分 ──
