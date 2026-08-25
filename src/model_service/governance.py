@@ -72,11 +72,7 @@ class ModelGovernanceSnapshot(BaseModel):
 
 
 _ASSETS = (
-    ("intent.classify", "意图分类", "src/runtime/intent/prompts.py", "code", "intent_recognition", "routed", "source_managed"),
-    ("intent.discriminate", "意图判别", "src/runtime/intent/graph/prompts.py", "code", "intent_recognition", "routed", "source_managed"),
     ("skill.route", "技能路由", "src/skill_infra/unified_router.py", "code", "skill_routing", "routed", "source_managed"),
-    ("policy_qa.intent_detect", "政策问答意图识别", "src/runtime/policy_qa/intent_detector.py", "code", "policy_qa", "routed", "needs_verification"),
-    ("policy_qa.patient_explain", "政策问答患者解释", "src/runtime/policy_qa/explanation_generator.py", "code", "policy_qa", "routed", "needs_verification"),
     ("policy.extract.schema", "政策结构化抽取", "src/semantic_layer/extraction_contract.py", "dynamic", "policy_fact_extraction", "routed", "source_managed"),
     ("policy.extract.legacy", "政策遗留抽取", "src/knowledge_extension/rule_explanation/pipeline_orchestrator.py", "code", "policy_fact_extraction", "routed", "needs_migration"),
     ("policy.fact_extract", "政策事实抽取", "src/knowledge_extension/rule_explanation/policy_fact/run_policy_fact_extraction.py", "code", None, "direct", "needs_migration"),

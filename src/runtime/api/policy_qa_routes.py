@@ -26,7 +26,7 @@ from src.runtime.policy_qa.explanation_mode import (
     detect_explanation_mode,
     fee_item_label,
 )
-from src.runtime.policy_qa.models import PolicyQARequest, PolicyQAResponse
+from src.runtime.policy_qa.models import PolicyQARequest
 from src.runtime.policy_qa.public_contract import (
     PolicyCitation,
     PolicyQAPublicResult,
@@ -80,13 +80,6 @@ from src.runtime.task_closure.service import get_task
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# 搜索引擎初始化超时（秒）：PolicyRulesSearchEngine 构造会加载 sentence-transformer
-# embedding 模型（本地约 19-32s，含首次下载），超时需能容纳该加载；Milvus 未就绪时
-# 快速降级不阻塞流式响应。失败后进入 120s 冷却，避免每轮重复等待。
-# （注：_init_search_engine 已随旧编排器退役删除；结构化政策检索走 skill 查询计划，
-#  由 structured_policy_retriever 直接连 Milvus，不加载 embedding 模型。）
-
 
 def _sse_event(event_type: str, data: dict | str) -> str:
     """格式化SSE事件

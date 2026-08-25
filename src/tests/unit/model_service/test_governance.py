@@ -10,8 +10,7 @@ from src.model_service.router import ModelRouter
 def test_snapshot_has_complete_prompt_assets_and_stable_config_projection():
     snapshot = build_governance_snapshot(ModelServiceConfig(base_url="https://user:secret@example.test:8443/v1/path?q=1", api_key="top-secret"))
     assert {item.prompt_id for item in snapshot.prompts} == {
-        "intent.classify", "intent.discriminate", "skill.route",
-        "policy_qa.intent_detect", "policy_qa.patient_explain",
+        "skill.route",
         "policy.extract.schema", "policy.extract.legacy", "policy.fact_extract",
         "policy.synonym_discovery", "policy.domain_discovery", "skill.settlement_explain",
     }
@@ -33,7 +32,6 @@ def test_active_routes_are_explicit_without_direct_fabrication():
     snapshot = build_governance_snapshot()
     routes = {(route.scene, route.model_type): route for route in snapshot.routes}
     for scene in {
-        "intent_recognition",
         "skill_routing",
         "policy_qa",
         "fee_explanation",

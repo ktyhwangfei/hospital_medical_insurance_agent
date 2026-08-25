@@ -10,7 +10,7 @@ def router():
 
 
 def test_resolve_known_scene(router):
-    model_name, fallbacks = router.resolve("settlement_exception_guidance", ModelType.LLM)
+    model_name, fallbacks = router.resolve("policy_qa_fee_decomposition", ModelType.LLM)
     assert model_name == ROUTING_TABLE[("default", "llm")]
     assert fallbacks == []
 
@@ -22,7 +22,6 @@ def test_resolve_unknown_scene_defaults(router):
 
 def test_active_llm_scenes_have_explicit_routes(router):
     active_scenes = {
-        "intent_recognition",
         "skill_routing",
         "policy_qa",
         "fee_explanation",

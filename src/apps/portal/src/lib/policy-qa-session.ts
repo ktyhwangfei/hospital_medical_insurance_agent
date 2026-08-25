@@ -9,7 +9,6 @@
  * - @ 指令解析（@换结算 / @换患者 / @新会话）
  */
 
-import type { ChatMessage } from '@/components/chat/helpers'
 import type {
   PolicyQACaseContext,
   PolicyQAResult,
@@ -62,7 +61,11 @@ export interface ContextNeedSnapshot {
 }
 
 /** Policy QA 对话仅持有安全公开结果；不保存院端视角或推理轨迹。 */
-export interface PolicyQAChatMessage extends ChatMessage {
+export interface PolicyQAChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+  fallback?: boolean
+  kind?: 'normal' | 'clarification' | 'confirmation'
   /** 本轮上下文规划（仅 assistant 消息） */
   contextNeed?: ContextNeedSnapshot
   answerStatus?: PolicyQAResult['answerStatus']

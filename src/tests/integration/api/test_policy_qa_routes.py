@@ -77,6 +77,25 @@ def client():
     return TestClient(app)
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("post", "/api/v1/medical-insurance-ai-agent/chat"),
+        ("post", "/api/v1/medical-insurance-ai-agent/chat/stream"),
+        ("get", "/api/v1/medical-insurance-ai-agent/workflows"),
+        ("post", "/api/v1/medical-insurance-ai-agent/tasks/confirm"),
+    ],
+)
+def test_retired_business_api_is_not_registered(
+    client: TestClient,
+    method: str,
+    path: str,
+) -> None:
+    response = client.post(path, json={}) if method == "post" else client.get(path)
+
+    assert response.status_code == 404
+
+
 @pytest.fixture
 def safe_policy_qa_dependencies(monkeypatch):
     """隔离外部 SQL/Milvus/模型依赖，让 SSE 确定性到达 result。"""
@@ -703,177 +722,3 @@ class TestPolicyQATestEndpoint:
         )
         # 应该返回422验证错误
         assert response.status_code == 422
-
-
-class TestPolicyQAOrchestrator:
-    """测试政策问答编排器"""
-
-    def test_orchestrator_import(self):
-        """测试编排器是否可以导入"""
-        try:
-            from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
-            assert True
-        except ImportError:
-            pytest.skip("PolicyQAOrchestrator not available")
-
-    def test_orchestrator_initialization(self):
-        """测试编排器是否可以初始化"""
-        try:
-            from src.runtime.policy_qa.orchestrator import PolicyQAOrchestrator
-            from src.model_service.gateway import ModelGateway
-
-            # 尝试初始化（可能会失败，但不应该抛出导入错误）
-            try:
-                gateway = ModelGateway()
-                orchestrator = PolicyQAOrchestrator(model_gateway=gateway)
-                assert orchestrator is not None
-            except Exception:
-                # 初始化失败是可以接受的（可能缺少配置）
-                pass
-        except ImportError:
-            pytest.skip("PolicyQAOrchestrator not available")
-
-
-class TestFeeDecompositionSkill:
-    """测试费用拆分计算Skill"""
-
-    def test_skill_import(self):
-        """测试Skill是否可以导入"""
-        try:
-            from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
-            assert True
-        except ImportError:
-            pytest.skip("FeeDecompositionSkill not available")
-
-    def test_skill_initialization(self):
-        """测试Skill是否可以初始化"""
-        try:
-            from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
-            skill = FeeDecompositionSkill()
-            assert skill is not None
-        except ImportError:
-            pytest.skip("FeeDecompositionSkill not available")
-
-    def test_segment_parsing(self):
-        """测试分段解析"""
-        try:
-            from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
-            skill = FeeDecompositionSkill()
-
-            # 测试解析分段
-            lower, upper = skill._parse_band("650-30000")
-            assert lower == 650.0
-            assert upper == 30000.0
-
-            # 测试解析无限大
-            lower, upper = skill._parse_band("40000-inf")
-            assert lower == 40000.0
-            assert upper == float("inf")
-
-        except ImportError:
-            pytest.skip("FeeDecompositionSkill not available")
-
-    def test_person_ratio(self):
-        """测试人员系数"""
-        try:
-            from src.runtime.policy_qa.fee_decomposition_skill import FeeDecompositionSkill
-            skill = FeeDecompositionSkill()
-
-            # 测试退休人员
-            patient = {"PER_TYPE": "2"}
-            ratio = skill._get_person_ratio(patient)
-            assert ratio == 0.6
-
-            # 测试在职人员
-            patient = {"PER_TYPE": "1"}
-            ratio = skill._get_person_ratio(patient)
-            assert ratio == 1.0
-
-        except ImportError:
-            pytest.skip("FeeDecompositionSkill not available")
-
-
-class TestQuestionRewriter:
-    """测试问题重写器"""
-
-    def test_rewriter_import(self):
-        """测试重写器是否可以导入"""
-        try:
-            from src.runtime.policy_qa.question_rewriter import QuestionRewriter
-            assert True
-        except ImportError:
-            pytest.skip("QuestionRewriter not available")
-
-    def test_rewriter_initialization(self):
-        """测试重写器是否可以初始化"""
-        try:
-            from src.runtime.policy_qa.question_rewriter import QuestionRewriter
-            rewriter = QuestionRewriter()
-            assert rewriter is not None
-        except ImportError:
-            pytest.skip("QuestionRewriter not available")
-
-
-class TestIntentDetector:
-    """测试意图识别器"""
-
-    def test_detector_import(self):
-        """测试识别器是否可以导入"""
-        try:
-            from src.runtime.policy_qa.intent_detector import IntentDetector
-            assert True
-        except ImportError:
-            pytest.skip("IntentDetector not available")
-
-    def test_detector_initialization(self):
-        """测试识别器是否可以初始化"""
-        try:
-            from src.runtime.policy_qa.intent_detector import IntentDetector
-            detector = IntentDetector()
-            assert detector is not None
-        except ImportError:
-            pytest.skip("IntentDetector not available")
-
-    def test_keyword_based_detection(self):
-        """测试基于关键词的意图识别"""
-        try:
-            from src.runtime.policy_qa.intent_detector import IntentDetector
-            from src.runtime.policy_qa.models import PolicyQAIntent
-
-            detector = IntentDetector()
-
-            # 测试费用分解
-            result = detector._keyword_based_detection("为什么我的费用是这些？")
-            assert result.intent == PolicyQAIntent.FEE_DECOMPOSITION
-
-            # 测试起付线
-            result = detector._keyword_based_detection("起付线是多少？")
-            assert result.intent == PolicyQAIntent.DEDUCTIBLE
-
-            # 测试报销比例
-            result = detector._keyword_based_detection("报销比例是多少？")
-            assert result.intent == PolicyQAIntent.PAYMENT_RATIO
-
-        except ImportError:
-            pytest.skip("IntentDetector not available")
-
-
-class TestExplanationGenerator:
-    """测试解释生成器"""
-
-    def test_generator_import(self):
-        """测试生成器是否可以导入"""
-        try:
-            from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
-            assert True
-        except ImportError:
-            pytest.skip("ExplanationGenerator not available")
-
-    def test_generator_initialization(self):
-        """测试生成器是否可以初始化"""
-        try:
-            from src.runtime.policy_qa.explanation_generator import ExplanationGenerator
-            generator = ExplanationGenerator()
-            assert generator is not None
-        except ImportError:
-            pytest.skip("ExplanationGenerator not available")

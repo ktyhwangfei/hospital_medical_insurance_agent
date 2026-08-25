@@ -3,7 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from src.runtime.api import semantic_routes
-from src.runtime.scenario_executor import _track_skill_metrics
 from src.semantic_layer.models import Metric
 
 
@@ -56,21 +55,3 @@ def test_usage_and_quality_routes_use_targeted_store_methods(monkeypatch) -> Non
     assert store.incremented == ["zcgz.payment_amount"]
     assert updated == 1
     assert store.quality_updates == [("zcgz.payment_amount", 70.0)]
-
-
-def test_scenario_metric_tracking_uses_atomic_increment(monkeypatch, tmp_path) -> None:
-    skill_dir = tmp_path / "demo_skill"
-    skill_dir.mkdir()
-    (skill_dir / "skill_manifest.yaml").write_text(
-        "needed_objects:\n  - object_code: zcgz\n    metrics:\n      - payment_amount\n",
-        encoding="utf-8",
-    )
-    store = _TrackingStore()
-    monkeypatch.setattr("src.config.production.SKILLS_DIR", tmp_path)
-    monkeypatch.setattr(
-        semantic_routes, "get_registry", lambda: SimpleNamespace(_store=store),
-    )
-
-    _track_skill_metrics("demo_skill")
-
-    assert store.incremented == ["zcgz.payment_amount"]

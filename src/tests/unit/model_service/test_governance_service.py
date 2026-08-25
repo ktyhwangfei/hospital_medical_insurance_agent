@@ -1128,35 +1128,15 @@ def test_current_prompt_projection_matches_all_runtime_templates():
     )
     from src.model_service.governance_assets import _prompt_fields
     from src.model_service.governance_import import build_current_governance_assets
-    from src.runtime.intent import prompts as intent_prompts
-    from src.runtime.intent.graph import prompts as discrimination_prompts
-    from src.runtime.policy_qa import explanation_generator, intent_detector
     from src.semantic_layer import extraction_contract
     from src.skill_infra import unified_router
     from skills.settlement_explain_skill.strategies.pooling_self_pay import strategy
 
     missing = object()
     expected = {
-        "intent.classify": (
-            "",
-            getattr(intent_prompts, "INTENT_CLASSIFICATION_PROMPT_TEMPLATE", missing),
-        ),
-        "intent.discriminate": (
-            "",
-            getattr(
-                discrimination_prompts,
-                "INTENT_DISCRIMINATION_PROMPT_TEMPLATE",
-                missing,
-            ),
-        ),
         "skill.route": (
             "",
             getattr(unified_router, "SKILL_ROUTING_PROMPT_TEMPLATE", missing),
-        ),
-        "policy_qa.intent_detect": ("", intent_detector.INTENT_DETECTION_PROMPT),
-        "policy_qa.patient_explain": (
-            "",
-            explanation_generator.EXPLANATION_PROMPTS["患者"],
         ),
         "policy.extract.schema": (
             "",

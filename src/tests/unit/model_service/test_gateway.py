@@ -74,7 +74,7 @@ def test_generate_fallback_on_exhausted(gateway):
         return _make_response(model="gpt-3.5-turbo")
 
     with patch.object(gateway, "_call_provider", side_effect=side_effect):
-        result = gateway.generate(messages, "llm", "settlement_exception_guidance")
+        result = gateway.generate(messages, "llm", "policy_qa_fee_decomposition")
 
     assert result.model_name == "gpt-3.5-turbo"
 
@@ -92,7 +92,7 @@ def test_generate_exhausted_error(gateway):
 
     with patch.object(gateway, "_call_provider", side_effect=ModelServerError("error", model_name="gpt-4o-mini")):
         with pytest.raises(ModelExhaustedError):
-            gateway.generate(messages, "llm", "settlement_exception_guidance")
+            gateway.generate(messages, "llm", "policy_qa_fee_decomposition")
 
 
 def test_generate_stream_reraises_provider_error(gateway):

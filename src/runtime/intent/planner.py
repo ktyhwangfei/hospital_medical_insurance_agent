@@ -6,10 +6,7 @@
 3. 缺失的标记 must_query_semantic=True
 4. 检测业务主体切换（patient_id 变更）
 
-与现有模块的协作：
-- parser.py: 解析用户意图 → IntentResult
-- skill_matcher.py: 匹配 Skill
-- planner.py: 规划上下文（本模块）
+当前仅服务 policy-qa 的结算单上下文规划。
 """
 
 import logging
@@ -44,10 +41,7 @@ class ContextPlanner:
 
     # 意图 → 所需业务对象类型的映射
     INTENT_OBJECT_MAP: dict[str, list[MemoryType]] = {
-        "settlement_exception_guidance": [MemoryType.SETTLEMENT, MemoryType.PATIENT, MemoryType.VISIT],
-        "pre_discharge_quality_control": [MemoryType.PATIENT, MemoryType.VISIT, MemoryType.SETTLEMENT],
         "policy_qa_fee_decomposition": [MemoryType.SETTLEMENT, MemoryType.POLICY, MemoryType.RULE],
-        "mcp_tool_invocation": [],
         "skill_execution": [],  # Skill 自带上下文
     }
 

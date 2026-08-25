@@ -50,12 +50,6 @@ def _prompt_assets(snapshot: ModelGovernanceSnapshot) -> list[PromptAssetContent
         SYSTEM_PROMPT,
         USER_PROMPT_TEMPLATE,
     )
-    from src.runtime.intent.graph.prompts import (
-        INTENT_DISCRIMINATION_PROMPT_TEMPLATE,
-    )
-    from src.runtime.intent.prompts import INTENT_CLASSIFICATION_PROMPT_TEMPLATE
-    from src.runtime.policy_qa.explanation_generator import EXPLANATION_PROMPTS
-    from src.runtime.policy_qa.intent_detector import INTENT_DETECTION_PROMPT
     from src.semantic_layer.extraction_contract import (
         SCHEMA_EXTRACTION_PROMPT_TEMPLATE,
     )
@@ -69,30 +63,10 @@ def _prompt_assets(snapshot: ModelGovernanceSnapshot) -> list[PromptAssetContent
         load_settlement_explain_prompt_templates()
     )
     templates: dict[str, tuple[str, str, tuple[str, ...]]] = {
-        "intent.classify": (
-            "",
-            INTENT_CLASSIFICATION_PROMPT_TEMPLATE,
-            ("intents_text", "message"),
-        ),
-        "intent.discriminate": (
-            "",
-            INTENT_DISCRIMINATION_PROMPT_TEMPLATE,
-            ("candidates_text", "message"),
-        ),
         "skill.route": (
             "",
             SKILL_ROUTING_PROMPT_TEMPLATE,
             ("skills_text", "question"),
-        ),
-        "policy_qa.intent_detect": (
-            "",
-            INTENT_DETECTION_PROMPT,
-            ("question",),
-        ),
-        "policy_qa.patient_explain": (
-            "",
-            EXPLANATION_PROMPTS["患者"],
-            ("question", "decomposition_text", "policy_text", "RAG_MISS_NOTE"),
         ),
         "policy.extract.schema": (
             "",

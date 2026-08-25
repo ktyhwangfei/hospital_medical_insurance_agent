@@ -108,8 +108,7 @@ def test_model_governance_management_publish_snapshot_and_rollback(
     )
     from src.runtime.api.app import create_app
     from src.runtime.api.model_governance_routes import get_model_governance_service
-    from src.runtime.intent.prompts import build_intent_prompt
-    from src.runtime.intent.registry import get_intent_registry
+    from src.skill_infra.unified_router import _build_skill_routing_prompt
     from src.model_service.models import ModelResponse, TokenUsage
     from src.model_service.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -136,7 +135,7 @@ def test_model_governance_management_publish_snapshot_and_rollback(
     assert imported_response.status_code == 201
     imported = imported_response.json()["result"]
     imported_prompt = next(
-        item for item in imported["drafts"] if item["asset_id"] == "intent.classify"
+        item for item in imported["drafts"] if item["asset_id"] == "skill.route"
     )
     edited_response = client.patch(
         f"{PREFIX}/drafts/{imported_prompt['draft_id']}",
@@ -144,7 +143,7 @@ def test_model_governance_management_publish_snapshot_and_rollback(
             "expected_revision": imported_prompt["revision"],
             "content": {
                 **imported_prompt["content"],
-                "name": "意图分类（已纳管）",
+                "name": "技能路由（已纳管）",
             },
         },
         headers=_headers("editor", "model_governance:write"),
@@ -194,26 +193,26 @@ def test_model_governance_management_publish_snapshot_and_rollback(
 
     governed_prompt = {
         "asset_type": "prompt",
-        "asset_id": "intent.classify",
-        "name": "意图分类",
-        "scene": "intent_recognition",
+        "asset_id": "skill.route",
+        "name": "技能路由",
+        "scene": "skill_routing",
         "system_prompt": "",
-        "user_prompt_template": "FLOW_INTENT_V1 {message}",
-        "variables": [{"name": "intents_text"}, {"name": "message"}],
+        "user_prompt_template": "FLOW_SKILL_V1 {question}",
+        "variables": [{"name": "skills_text"}, {"name": "question"}],
     }
     old_intent = _publish(client, governed_prompt)
     _publish(
         client,
-        {**governed_prompt, "user_prompt_template": "FLOW_INTENT_V2 {message}"},
+        {**governed_prompt, "user_prompt_template": "FLOW_SKILL_V2 {question}"},
     )
-    assert "FLOW_INTENT_V2" in build_intent_prompt("Q", get_intent_registry())
+    assert "FLOW_SKILL_V2" in _build_skill_routing_prompt("Q")
 
-    intent_rollback = client.post(
+    skill_rollback = client.post(
         f"{PREFIX}/releases/{old_intent['release_id']}/rollback",
         headers=_headers("editor", "model_governance:publish"),
     )
-    assert intent_rollback.status_code == 200
-    assert "FLOW_INTENT_V1" in build_intent_prompt("Q", get_intent_registry())
+    assert skill_rollback.status_code == 200
+    assert "FLOW_SKILL_V1" in _build_skill_routing_prompt("Q")
 
     rollback = client.post(
         f"{PREFIX}/releases/{first['release_id']}/rollback",

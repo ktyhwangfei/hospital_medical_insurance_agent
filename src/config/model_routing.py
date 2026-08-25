@@ -39,8 +39,7 @@ ROUTING_TABLE: dict = {
     ("default", "embedding"): "text-embedding-3-small",
     # Skill AI 编写、结构修复和优化共用受控 reasoning 路由。
     ("skill_authoring", "reasoning"): "deepseek-chat",
-    # 活跃业务场景显式路由（Policy QA / 意图 / 技能路由 / 费用解释 / 政策提取）
-    ("intent_recognition", "llm"): "deepseek-chat",
+    # 活跃业务场景显式路由（Policy QA / 技能路由 / 费用解释 / 政策提取）
     ("skill_routing", "llm"): "deepseek-chat",
     ("policy_qa", "llm"): "deepseek-chat",
     ("fee_explanation", "llm"): "deepseek-chat",
