@@ -331,6 +331,37 @@ export const listSemanticProposals = async (proposalType: SemanticProposalType) 
     await semanticReviewRequest(),
   )
 
+export const previewDatabaseEvidence = async (
+  concept: string,
+  definition: string,
+  candidateValues: string[],
+) => request<SemanticProposalEvidence[]>(
+  `${ALIGNMENT_API}/database-evidence-preview`,
+  await semanticReviewRequest('POST', {
+    concept: concept.trim(),
+    definition: definition.trim(),
+    candidate_values: candidateValues,
+  }),
+)
+
+export const diagnoseRuleGovernance = async (
+  releaseId: string,
+  ruleIds: string[],
+) => request<RuleGovernanceDiagnosis>(
+  `${ALIGNMENT_API}/rule-diagnoses`,
+  await semanticReviewRequest('POST', {
+    release_id: releaseId.trim(),
+    rule_ids: ruleIds,
+  }),
+)
+
+export const createRuleGovernanceDraft = async (
+  payload: RuleGovernanceDraftRequest,
+) => request<SemanticProposal>(
+  `${ALIGNMENT_API}/rule-governance-drafts`,
+  await semanticReviewRequest('POST', payload),
+)
+
 export const getSemanticProposal = async (proposalId: string) =>
   request<SemanticProposal>(
     `${SEMANTIC_PROPOSALS_API}/${encodeURIComponent(proposalId)}`,
@@ -551,9 +582,10 @@ export interface ChangeSetItem {
   canonical_rule?: { rule_id: string } | null
 }
 
-export type SemanticProposalType = 'metric' | 'value' | 'dimension'
+export type SemanticProposalType = 'metric' | 'value' | 'dimension' | 'rule_governance'
 export type SemanticProposalStatus = 'proposed' | 'reviewing' | 'accepted' | 'published' | 'rejected' | 'stale' | 'superseded'
-export type SemanticProposalTrigger = 'EXTRACTION_UNKNOWN' | 'DEMAND_GAP' | 'DATA_SCAN' | 'DERIVATION_PATTERN' | 'CONFLICT_PARTITION'
+export type SemanticProposalTrigger = 'EXTRACTION_UNKNOWN' | 'DEMAND_GAP' | 'DATA_SCAN' | 'DERIVATION_PATTERN' | 'CONFLICT_PARTITION' | 'MANUAL_RULE_CORRECTION'
+export type RuleGovernanceDecision = 'repair_extraction' | 'add_and_bind' | 'add_policy_field' | 'supplement_value_mapping' | 'needs_review'
 export type DimensionReviewConclusion =
   | 'new_dimension'
   | 'metric_split_required'
@@ -613,6 +645,8 @@ export interface DimensionCandidateProposal {
 
 export interface SemanticProposalEvidence {
   source_ref: string
+  evidence_kind?: 'policy' | 'database'
+  evidence_grade?: 'strong' | 'supporting' | 'weak' | 'rejected' | null
   excerpt?: string | null
   doc_id?: string | null
   unit_id?: string | null
@@ -629,6 +663,67 @@ export interface SemanticProposalEvidence {
   operator?: string | null
   observations?: string[]
   rule_ids?: string[]
+  match_reasons?: string[]
+  rejection_reasons?: string[]
+}
+
+export interface RuleGovernanceRuleSnapshot {
+  rule_id: string
+  release_id: string
+  compile_run_id: string
+  extraction_id: string
+  unit_id: string
+  doc_id: string
+  subject: string
+  conditions: Record<string, unknown>
+  result: Record<string, unknown>
+  excerpt: string
+}
+
+export interface RuleGovernanceIssue {
+  issue_id: string
+  issue_type: 'institution_category' | 'mutual_aid_fund' | 'benefit_ratio' | 'pooled_fund' | 'unknown'
+  title: string
+  rule_ids: string[]
+  current_structure_summary: string
+  problem: string
+  missing_concept: string | null
+  candidate_values: string[]
+  recommended_decision: RuleGovernanceDecision
+  recommended_reason: string
+  proposed_changes: string
+  policy_evidence: SemanticProposalEvidence[]
+  database_evidence: SemanticProposalEvidence[]
+  uncertainties: string[]
+}
+
+export interface RuleGovernanceDiagnosis {
+  diagnosis_id: string
+  fingerprint: string
+  release_id: string
+  rules: RuleGovernanceRuleSnapshot[]
+  items: RuleGovernanceIssue[]
+  uncertainties: string[]
+}
+
+export interface RuleGovernanceDraftRequest {
+  release_id: string
+  rule_ids: string[]
+  issue_id: string
+  decision: RuleGovernanceDecision
+  review_note?: string
+}
+
+export interface RuleGovernanceChangePlan {
+  diagnosis_id: string
+  issue_id: string
+  release_id: string
+  rule_ids: string[]
+  decision: RuleGovernanceDecision
+  proposed_changes: string
+  affected_unit_ids: string[]
+  requires_data_confirmation: boolean
+  review_note: string | null
 }
 
 export interface SemanticProposalMapping {
@@ -671,6 +766,8 @@ export interface SemanticProposal {
   suggested_mappings: SemanticProposalMapping[]
   mapping_only: boolean
   formula: Record<string, unknown> | null
+  governance_change_plan?: RuleGovernanceChangePlan | null
+  revision?: number
   dimension_candidate?: DimensionCandidateProposal | null
   review_conclusion?: DimensionReviewConclusion | null
   last_observed_at?: string | null
@@ -1168,3 +1265,186 @@ export const searchPolicyKnowledge = (body: Record<string, unknown>) =>
   request<{ groups: Array<Record<string, unknown>>; total_groups: number }>(
     `${PIPELINE_API}/rules/search`, json('POST', body)
   )
+
+// ── 政策—数据语义协同发现（PDSC）─────────────────────────────
+const PDSC_API = '/api/v1/medical-insurance-ai-agent/semantic/pdsc'
+
+export interface PdscEvidence {
+  source_ref: string
+  evidence_kind: 'policy' | 'database'
+  excerpt: string | null
+  doc_id: string | null
+  unit_id: string | null
+  table_name: string | null
+  field_name: string | null
+  sample_values: string[]
+  extracted_values?: string[] | null
+  rule_ids: string[]
+}
+
+export interface PdscCrossValidation {
+  counts: Record<string, number>
+  extension_values: string[]
+  blocked: boolean
+  error: string | null
+}
+
+export interface PdscDatabaseValue {
+  value: string
+  definition: string | null
+  classification: 'aligned' | 'value_extension' | 'db_only' | 'undecidable' | null
+}
+
+export interface PdscValueAlignment {
+  trigger_values: string[]
+  full_policy_values: string[]
+  business_standard_values: string[]
+  database_values: PdscDatabaseValue[]
+  policy_coverage_rate: number | null
+  db_definition_rate: number | null
+  alignment_score: number | null
+  notes: string[]
+}
+
+export interface PdscScore {
+  credibility: number
+  landing_support: number
+  policy_impact: number
+  total: number
+  explanations: string[]
+}
+
+export interface PdscCluster {
+  cluster_id: string
+  normalized_concept: string
+  concept: string
+  diagnosis?: string | null
+  semantic_role: string
+  semantic_type: string
+  policy_value_signature: string[]
+  status: 'pending' | 'accepted' | 'policy_only_accepted' | 'not_issue'
+  evidence: PdscEvidence[]
+  suggested_merge_cluster_ids: string[]
+  policy_metric_code: string | null
+  business_metric_code: string | null
+  cross_validation: PdscCrossValidation | null
+  value_alignment: PdscValueAlignment | null
+  score: PdscScore | null
+  review_note: string | null
+  updated_at: string
+}
+
+export interface PdscBusinessMetricCandidate {
+  metric_code: string
+  name: string
+  status: string
+  source_object: string | null
+  source_field: string | null
+  value_domain: string | null
+  value_overlap: string[]
+  match_reasons: string[]
+}
+
+export interface PdscBusinessFieldProfile {
+  metric_code: string
+  source_field: string | null
+  table_name: string | null
+  field_name: string | null
+  non_null_rate: number | null
+  distinct_count: number | null
+  sample_values: string[]
+  has_description: boolean
+  last_updated: string | null
+}
+
+export interface PdscDecisionPackage {
+  cluster: PdscCluster
+  recommended_policy_metric_code: string | null
+  recommended_business_metric_code: string | null
+  value_domain_extension_values: string[]
+  affected_unit_ids: string[]
+  affected_rule_ids: string[]
+  affected_skill_usage: number
+  business_metric_candidates?: PdscBusinessMetricCandidate[]
+  business_field_profile?: PdscBusinessFieldProfile | null
+}
+
+export type PdscDecisionAction =
+  | 'accept_full_plan'
+  | 'policy_only'
+  | 'insufficient_evidence'
+  | 'not_issue'
+
+export const listPdscClusters = (status?: string) =>
+  semanticReviewJson<PdscCluster[]>(
+    `${PDSC_API}/clusters${status ? `?status=${encodeURIComponent(status)}` : ''}`
+  )
+
+export const getPdscDecisionPackage = (clusterId: string) =>
+  semanticReviewJson<PdscDecisionPackage>(
+    `${PDSC_API}/clusters/${encodeURIComponent(clusterId)}/decision-package`
+  )
+
+export const refreshPdscCluster = (clusterId: string) =>
+  semanticReviewJson<PdscCluster>(
+    `${PDSC_API}/clusters/${encodeURIComponent(clusterId)}/refresh`, 'POST', {}
+  )
+
+export const decidePdscCluster = (clusterId: string, action: PdscDecisionAction, reason?: string) =>
+  semanticReviewJson<PdscCluster>(
+    `${PDSC_API}/clusters/${encodeURIComponent(clusterId)}/decide`, 'POST',
+    { action, reason: reason ?? null }
+  )
+
+export const adjustPdscCluster = (
+  clusterId: string,
+  body: { reason: string; business_metric_code?: string | null; policy_values?: string[] },
+) =>
+  semanticReviewJson<PdscCluster>(
+    `${PDSC_API}/clusters/${encodeURIComponent(clusterId)}/adjust`, 'POST', body
+  )
+
+export const mergePdscClusters = (sourceClusterId: string, intoClusterId: string, reason: string) =>
+  semanticReviewJson<PdscCluster>(
+    `${PDSC_API}/clusters/${encodeURIComponent(sourceClusterId)}/merge`, 'POST',
+    { into_cluster_id: intoClusterId, reason }
+  )
+
+export const splitPdscCluster = (
+  clusterId: string,
+  sourceRefs: string[],
+  reason: string,
+) =>
+  semanticReviewJson<PdscCluster>(
+    `${PDSC_API}/clusters/${encodeURIComponent(clusterId)}/split`, 'POST',
+    { source_refs: sourceRefs, reason }
+  )
+
+export interface PdscActivationStep {
+  step: string
+  passed: boolean
+  detail: string
+}
+
+export interface PdscActivation {
+  activation_id: string
+  cluster_id: string
+  status: 'running' | 'succeeded' | 'failed'
+  steps: PdscActivationStep[]
+  failed_step: string | null
+  error: string | null
+}
+
+export const activatePdscCluster = (clusterId: string) =>
+  semanticReviewJson<PdscActivation>(
+    `${PDSC_API}/clusters/${encodeURIComponent(clusterId)}/activate`, 'POST'
+  )
+
+export interface PdscScanReport {
+  scanned_extractions: number
+  intaked_clusters: number
+  detectors: Array<{ detector: string; signals: number }>
+}
+
+export const scanPdscSignals = () =>
+  semanticReviewJson<PdscScanReport>(`${PDSC_API}/scan`, 'POST')
