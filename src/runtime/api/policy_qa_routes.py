@@ -34,10 +34,12 @@ from src.runtime.policy_qa.public_contract import (
 )
 from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
 from src.runtime.policy_qa.settlement_data_provider import (
+    SettlementDataUnavailableError,
     SettlementNotFoundError,
     create_settlement_data_provider,
 )
 from src.runtime.policy_qa.structured_policy_retriever import (
+    PolicyRetrievalUnavailableError,
     retrieve_policy_evidence,
 )
 from src.config.production import MILVUS_HOST, MILVUS_PORT
@@ -80,6 +82,8 @@ from src.runtime.task_closure.service import get_task
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+MAX_POLICY_QA_ATTEMPTS = 2
 
 def _sse_event(event_type: str, data: dict | str) -> str:
     """格式化SSE事件
@@ -624,6 +628,8 @@ async def _policy_qa_stream(
 
     # 累积结果用于 task 记录
     accumulated_steps: list[dict] = []
+    attempt_count = 1
+    halt_reason = "non_retryable_error"
     
     try:
         # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
@@ -680,7 +686,21 @@ async def _policy_qa_stream(
         # ═══ Step 3: settlement_query（真实结算数据）═══
         async for _ev in _yield_step("settlement_query", "running", "查询真实结算数据…"):
             yield _ev
-        settlement_context = await provider.get_settlement_context(request.settlement_id)
+        while True:
+            try:
+                settlement_context = await provider.get_settlement_context(
+                    request.settlement_id
+                )
+                break
+            except SettlementDataUnavailableError:
+                if attempt_count >= MAX_POLICY_QA_ATTEMPTS:
+                    halt_reason = "max_attempts"
+                    raise
+                attempt_count += 1
+                async for _ev in _yield_step(
+                    "recovery", "done", "结算数据源暂时不可用，正在重试…"
+                ):
+                    yield _ev
         for _evt_type, _evt_payload in runtime_bridge.record_step(
             session_id=session_id,
             step="settlement_query",
@@ -715,15 +735,27 @@ async def _policy_qa_stream(
                 "target_amount": assembler._get_fee_amount(settlement_context, target_fee_item),
             }
             _custom_queries = assembler.build_policy_queries(target_fee_item)
-            _retrieval_result = await _loop.run_in_executor(
-                None,
-                lambda: retrieve_policy_evidence(
-                    settlement_context=_normalized_ctx,
-                    host=MILVUS_HOST,
-                    port=str(MILVUS_PORT),
-                    custom_queries=_custom_queries,
-                ),
-            )
+            while True:
+                try:
+                    _retrieval_result = await _loop.run_in_executor(
+                        None,
+                        lambda: retrieve_policy_evidence(
+                            settlement_context=_normalized_ctx,
+                            host=MILVUS_HOST,
+                            port=str(MILVUS_PORT),
+                            custom_queries=_custom_queries,
+                        ),
+                    )
+                    break
+                except PolicyRetrievalUnavailableError:
+                    if attempt_count >= MAX_POLICY_QA_ATTEMPTS:
+                        halt_reason = "max_attempts"
+                        raise
+                    attempt_count += 1
+                    async for _ev in _yield_step(
+                        "recovery", "done", "政策数据源暂时不可用，正在重试…"
+                    ):
+                        yield _ev
             for _ev in _retrieval_result.selected_evidence:
                 policy_evidence.append({
                     "title": _ev.source_text[:80] + "..." if len(_ev.source_text) > 80 else _ev.source_text,
@@ -847,6 +879,13 @@ async def _policy_qa_stream(
             case_context=_case_context,
             is_overview=_is_overview,
         )
+        halt_reason = "verified"
+        async for _ev in _yield_step(
+            "verification",
+            "done",
+            public_result.verification_summary.message,
+        ):
+            yield _ev
         # Runtime 仍在服务端维护推理链与对话记忆，但不把内部推理快照并入公开结果。
         runtime_bridge.finalize_turn(
             session_id=session_id, question=request.question,
@@ -873,6 +912,8 @@ async def _policy_qa_stream(
                     "internal_run_id": trace_run_id,
                     "selected_skill_id": skill_id,
                     "question_excerpt": (request.question or "")[:500],
+                    "attempt_count": attempt_count,
+                    "halt_reason": halt_reason,
                 },
                 duration_ms=duration_ms,
             )
@@ -886,10 +927,14 @@ async def _policy_qa_stream(
                 "qa_turn_id": qa_turn_id,
                 "answer_status": public_result.answer_status,
                 "success": True,
+                "attempt_count": attempt_count,
+                "halt_reason": halt_reason,
             },
         )
 
     except Exception as e:
+        if halt_reason != "max_attempts":
+            halt_reason = "non_retryable_error"
         print(f'[POLICY-QA] 处理异常: {e}', flush=True)
         logger.exception("Policy QA stream failed")
 
@@ -906,7 +951,10 @@ async def _policy_qa_stream(
                 question=request.question,
                 settlement_id=request.settlement_id,
                 status="failed",
-                output={},
+                output={
+                    "attempt_count": attempt_count,
+                    "halt_reason": halt_reason,
+                },
                 error_message=str(e),
                 duration_ms=duration_ms,
             )
@@ -920,6 +968,8 @@ async def _policy_qa_stream(
             {
                 "qa_turn_id": qa_turn_id,
                 "error_code": error_code,
+                "attempt_count": attempt_count,
+                "halt_reason": halt_reason,
                 "message": "政策问答处理失败，请稍后重试或联系医保办。",
             },
         )
@@ -930,6 +980,8 @@ async def _policy_qa_stream(
                 "answer_status": "unavailable",
                 "success": False,
                 "error_code": error_code,
+                "attempt_count": attempt_count,
+                "halt_reason": halt_reason,
             },
         )
 

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pymilvus import MilvusClient
+from pymilvus.exceptions import MilvusException
 
 from src.runtime.policy_qa.policy_rules_search import (
     COLLECTION_NAME,
@@ -29,6 +30,12 @@ from src.runtime.policy_qa.policy_rules_search import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class PolicyRetrievalUnavailableError(Exception):
+    """政策数据源瞬时不可用，可由有界 Loop 重试。"""
+
+    pass
 
 
 # ── 标准化结算上下文 ──────────────────────────────────────────────
@@ -228,10 +235,10 @@ class StructuredPolicyRuleRetriever:
                 limit=top_k,
             )
             print(f"[MILVUS-QUERY] Scalar query returned {len(raw_results)} raw records", flush=True)
-        except Exception as e:
+        except (ConnectionError, TimeoutError, MilvusException) as e:
             print(f"[MILVUS-QUERY] Scalar query FAILED: {e}", flush=True)
             logger.warning(f"[StructuredRetrieval] scalar query failed: {e}")
-            raw_results = []
+            raise PolicyRetrievalUnavailableError(str(e)) from e
 
         # 打印每条原始结果的关键字段
         if raw_results:

@@ -180,6 +180,185 @@ def safe_policy_qa_dependencies(monkeypatch):
 class TestPolicyQAStreamEndpoint:
     """测试政策问答SSE流式端点"""
 
+    def test_transient_settlement_failure_recovers_once(
+        self, client, safe_policy_qa_dependencies, monkeypatch
+    ):
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.settlement_data_provider import (
+            SettlementContext,
+            SettlementDataUnavailableError,
+        )
+
+        class FlakyProvider:
+            calls = 0
+
+            async def get_settlement_context(self, settlement_id: str):
+                self.calls += 1
+                if self.calls == 1:
+                    raise SettlementDataUnavailableError("temporary")
+                return SettlementContext(
+                    settlement_id=settlement_id,
+                    basic_pooling_self_pay=4962.67,
+                    total_amount=189085.85,
+                )
+
+        provider = FlakyProvider()
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: provider
+        )
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "统筹自付怎么算", "settlement_id": "S-1"},
+        )
+        events = _sse_events(response.text)
+
+        assert provider.calls == 2
+        assert any(name == "step" and data["step"] == "recovery" for name, data in events)
+        done = next(data for name, data in events if name == "done")
+        assert done["attempt_count"] == 2
+        assert done["halt_reason"] == "verified"
+
+    def test_missing_settlement_does_not_retry(
+        self, client, safe_policy_qa_dependencies, monkeypatch
+    ):
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.settlement_data_provider import SettlementNotFoundError
+
+        class MissingProvider:
+            calls = 0
+
+            async def get_settlement_context(self, _settlement_id: str):
+                self.calls += 1
+                raise SettlementNotFoundError("missing")
+
+        provider = MissingProvider()
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: provider
+        )
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "统筹自付怎么算", "settlement_id": "S-404"},
+        )
+        events = _sse_events(response.text)
+
+        assert provider.calls == 1
+        assert not any(name == "step" and data["step"] == "recovery" for name, data in events)
+        done = next(data for name, data in events if name == "done")
+        assert done["attempt_count"] == 1
+        assert done["halt_reason"] == "non_retryable_error"
+
+    def test_transient_failure_stops_after_two_attempts(
+        self, client, safe_policy_qa_dependencies, monkeypatch
+    ):
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.settlement_data_provider import SettlementDataUnavailableError
+
+        class BrokenProvider:
+            calls = 0
+
+            async def get_settlement_context(self, _settlement_id: str):
+                self.calls += 1
+                raise SettlementDataUnavailableError("temporary")
+
+        provider = BrokenProvider()
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: provider
+        )
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "统筹自付怎么算", "settlement_id": "S-1"},
+        )
+        events = _sse_events(response.text)
+
+        assert provider.calls == 2
+        done = next(data for name, data in events if name == "done")
+        assert done["attempt_count"] == 2
+        assert done["halt_reason"] == "max_attempts"
+
+    def test_transient_policy_failure_recovers_once(
+        self, client, safe_policy_qa_dependencies, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.structured_policy_retriever import (
+            PolicyRetrievalUnavailableError,
+        )
+
+        calls = 0
+
+        def flaky_retrieval(**_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise PolicyRetrievalUnavailableError("temporary")
+            return SimpleNamespace(selected_evidence=[], missing_required_rules=[])
+
+        monkeypatch.setattr(policy_qa_routes, "retrieve_policy_evidence", flaky_retrieval)
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "统筹自付怎么算", "settlement_id": "S-1"},
+        )
+        events = _sse_events(response.text)
+
+        assert calls == 2
+        assert any(name == "step" and data["step"] == "recovery" for name, data in events)
+        done = next(data for name, data in events if name == "done")
+        assert done["attempt_count"] == 2
+        assert done["halt_reason"] == "verified"
+
+    def test_verified_partial_result_does_not_retry(
+        self, client, safe_policy_qa_dependencies, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from src.runtime.api import policy_qa_routes
+
+        calls = 0
+
+        def empty_retrieval(**_kwargs):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                selected_evidence=[], missing_required_rules=["required"]
+            )
+
+        assembler = policy_qa_routes.get_assembler("settlement_explain_skill")
+        monkeypatch.setattr(
+            assembler,
+            "execute",
+            lambda **_kwargs: SimpleNamespace(
+                answer="已核对真实结算金额，但政策依据不完整。",
+                calculation_trace={"steps": []},
+                definition={},
+                warnings=["缺少必需政策规则"],
+                explanation_completeness={
+                    "level": "partial_policy_matched",
+                    "has_real_data": True,
+                },
+                policy_status="no_policy_matched",
+            ),
+        )
+        monkeypatch.setattr(policy_qa_routes, "retrieve_policy_evidence", empty_retrieval)
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "统筹自付怎么算", "settlement_id": "S-1"},
+        )
+        events = _sse_events(response.text)
+
+        assert calls == 1
+        assert not any(name == "step" and data["step"] == "recovery" for name, data in events)
+        result = next(data["result"] for name, data in events if name == "result")
+        assert result["answer_status"] == "partial"
+        done = next(data for name, data in events if name == "done")
+        assert done["attempt_count"] == 1
+        assert done["halt_reason"] == "verified"
+
     def test_stream_endpoint_exists(self, client):
         """测试流式端点是否存在"""
         response = client.post(
@@ -357,8 +536,12 @@ class TestPolicyQAStreamEndpoint:
             "internal_run_id",
             "selected_skill_id",
             "question_excerpt",
+            "attempt_count",
+            "halt_reason",
         }
         assert output_data["evidence_count"] == 1
+        assert output_data["attempt_count"] == 1
+        assert output_data["halt_reason"] == "verified"
 
     def test_stream_failure_has_safe_terminal_contract(self, client, monkeypatch):
         from src.runtime.api import policy_qa_routes
@@ -390,12 +573,16 @@ class TestPolicyQAStreamEndpoint:
         assert done_payload.pop("qa_turn_id").startswith("qat_")
         assert error_payload == {
             "error_code": "POLICY_QA_FAILED",
+            "attempt_count": 1,
+            "halt_reason": "non_retryable_error",
             "message": "政策问答处理失败，请稍后重试或联系医保办。",
         }
         assert done_payload == {
             "answer_status": "unavailable",
             "success": False,
             "error_code": "POLICY_QA_FAILED",
+            "attempt_count": 1,
+            "halt_reason": "non_retryable_error",
         }
         public_stream = response.text.casefold()
         assert all(

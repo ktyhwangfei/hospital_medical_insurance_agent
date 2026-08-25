@@ -689,6 +689,3 @@ def test_zero_amount_completeness_reaches_public_partial_status():
     assert result.answer_status == "partial"
     assert result.verification_summary.settlement_checked is True
     assert "0.00" in result.answer
-
-
-@pytest.mark.asyncio
