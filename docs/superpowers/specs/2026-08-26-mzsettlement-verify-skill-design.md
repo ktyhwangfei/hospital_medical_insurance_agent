@@ -1,7 +1,7 @@
 # 门诊结算结果核验 Skill 完善设计
 
 日期：2026-08-26
-状态：待用户书面复核
+状态：已确认（2026-08-26）
 目标草稿：`draft-cf24aa3b34fe` / `mzsettlement_verify_skill`
 业务挂载：`verify + settlement`
 
