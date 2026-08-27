@@ -1,4 +1,4 @@
-# 门诊数据契约核验记录（P0 Task 1–5）
+# 门诊数据契约核验记录（P0 Task 1–6）
 
 ## 环境
 
@@ -1165,17 +1165,172 @@ ORDER BY
 
 ## 增量游标
 
-待验证。Task 1 仅确认候选时间字段 T_TradeDate 为 datetime NOT NULL，T_ConfirmTime、SETL_DATE、T_HadDealTime 为 datetime NULL；没有验证时间范围、重复时间点、迟到数据、回写更新或组合游标稳定性。
+### Task 6：增量游标与变更捕获
+
+#### 文档级审计证据批次
+
+| 项目 | 结果 |
+|---|---|
+| 文档级证据批次 ID | `outpatient_p0_t6_20260827_094619Z`；不是数据库审计 ID 或外部 run_id |
+| 固定执行时间 | SQL Server `SYSDATETIMEOFFSET()`：2026-08-27 09:46:19.0642536 +00:00，即 2026-08-27 17:46:19.0642536 +08:00；只作为本批次服务器时钟锚点 |
+| 主体指纹 | SHA-256 38F144F8D609E1F6CFA0E3B2E4225EF783A0B313A98262F71FC0862BF97ACD70，与 Task 1–4 一致；不记录登录名 |
+| 数据范围 | 只查询 dbo.o_Trade、dbo.o_FeeItem 的 catalog 和脱敏聚合；没有读取样例行或第三张业务表 |
+| 隔离与超时 | 显式 `READ COMMITTED`，连接超时 30 秒，`LOCK_TIMEOUT` 5 秒；没有使用 `READ UNCOMMITTED` |
+| 成功查询耗时 | catalog 69.29 ms；候选字段画像 15.50 ms；容量聚合 37.59 ms |
+| 实际数据库操作 | 仅 `SET`、`SELECT`；未执行 DDL/DML，未修改索引 |
+| 查询失败 | 首次容量批次中的 `PERCENTILE_CONT` 因源库兼容级别低于其要求而编译失败；该 SQL 未重试，最终批次改用显式 nearest-rank 算法。此前两次本地脚本分别在 `.env` 自动定位和游标级 timeout 设置处于执行 SQL 前失败，不属于源库查询失败 |
+
+[来源: 文档级证据批次 outpatient_p0_t6_20260827_094619Z；执行主体指纹 SHA-256 38F144F8…ACD70；本节留存查询口径]
+
+#### 变更能力 catalog 证据
+
+| 对象 | CDC | Change Tracking | 时态表 | rowversion/timestamp 列 | identity 列 | 表级触发器 | 判断 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| dbo.o_Trade | 0 | 0 | 0 | 0 | 0 | 0 | 没有可证明的数据库变更序列或删除记录 |
+| dbo.o_FeeItem | 0 | 0 | 0 | 0 | 0 | 0 | 没有可证明的数据库变更序列或删除记录 |
+
+数据库级 `DATABASEPROPERTYEX(...,'IsCdcEnabled')` 在当前实例返回 NULL，因此不据此判断数据库级 CDC；表级 `sys.tables.is_tracked_by_cdc=0` 足以证明这两张目标表未启用 CDC。`sys.change_tracking_tables`、`sys.triggers` 对两表均无记录，`temporal_type=0`，物理列中也不存在 `rowversion`/`timestamp`。[来源: SQL Server `sys.tables`、`sys.columns`、`sys.types`、`sys.change_tracking_tables`、`sys.triggers`]
+
+元数据白名单只找到 dbo.o_Trade 的六个字段名候选：`T_TradeDate`、`T_ConfirmTime`、`SETL_DATE`、`T_HadDealTime`、`T_Version1`、`T_Version2`。前四个是 `datetime`，后两个是 `nvarchar`；均无默认值或权威字典证明其为“记录创建时间”“最后修改时间”或单调版本。dbo.o_FeeItem 没有任何日期、版本、创建、修改或删除命名候选。[来源: Task 1 `INFORMATION_SCHEMA.COLUMNS` 全量元数据；outpatient_p0_t6_20260827_094619Z catalog 查询]
+
+#### 交易表字段名候选的物理画像
+
+“重复余量”定义为非空行数减去 distinct 数，只证明时间点/版本值被复用，不等于重复组数或脏数据。“早于交易时间”只比较同一当前行中的两个物理日期，不是写入顺序或更新倒退证据。
+
+| 字段名候选 | NULL/空白 | distinct 非空 | 重复余量 | 早于 T_TradeDate | 服务器最近 24h 观察行 | 物理范围 | 游标决定 |
+|---|---:|---:|---:|---:|---:|---|---|
+| T_TradeDate | 0 | 540 | 52 | 不适用 | 0 | 2024-03-11 09:28:38 至 2026-04-17 10:41:45 | **BLOCKED**；已知是交易日期候选，不是变更时间 |
+| T_ConfirmTime | 14 | 530 | 48 | 72 | 0 | 2024-03-11 09:28:41 至 2026-04-17 10:41:59 | **BLOCKED**；可空且无“最后修改”语义 |
+| SETL_DATE | 17 | 257 | 318 | 318 | 0 | 1900-01-01 00:00:00 至 2026-04-17 10:41:55 | **BLOCKED**；可空、重复高且含 1900 哨兵候选，结算/更新语义均未签认 |
+| T_HadDealTime | 15 | 533 | 44 | 73 | 0 | 2024-03-11 09:28:41 至 2026-04-17 10:41:59 | **BLOCKED**；可空且无“最后修改”语义 |
+| T_Version1 | 81 | 7 | 504 | 不可计算 | 不可计算 | 未展示原始值 | **BLOCKED**；nvarchar 低基数，不能证明单调 |
+| T_Version2 | 80 | 5 | 507 | 不可计算 | 不可计算 | 未展示原始值 | **BLOCKED**；nvarchar 低基数，不能证明单调 |
+
+[来源: outpatient_p0_t6_20260827_094619Z 候选字段聚合；总行数 592。版本原始值未查询/未展示]
+
+[推断: 基于单快照及变更能力缺失] NULL、重复和同行日期倒置足以否定“仅凭字段名即可冻结游标”，但不能重建数据库历史写入顺序。因此以下三项均为**不可测而非零**：候选游标跨行单调倒退数、最近 24 小时迟到写入数、跨 10 分钟重叠窗口被更新数。服务器最近 24 小时的四个日期字段均观察到 0 行，只说明这些业务日期/处理日期未落入服务器时钟窗口，不能证明最近 24 小时没有 INSERT/UPDATE。
+
+dbo.o_FeeItem 没有候选变更字段，所以无法执行 NULL、重复、倒退、迟到或重叠窗口更新统计；不能用父交易的 T_TradeDate 代替明细自身变更水位，因为父行时间不会证明明细后续新增、修改或删除。[推断: 基于两表物理字段与一对多关系]
+
+#### 新增、更新、退费、冲正和删除捕获决定
+
+| 变更类型 | 当前两表可见事实 | 分钟级捕获决定 |
+|---|---|---|
+| 新增 | 当前快照可见新 `T_TradeNo` 或费用复合键，但没有可靠新增时间/序列 | **BLOCKED**；除全表键比对外无有界增量条件，而全表轮询不获批准 |
+| 更新 | 两表没有 last-modified、rowversion、CDC/CT、时态历史或更新触发日志 | **BLOCKED**；当前快照不能证明何时、哪些列被回写 |
+| 退费 | 交易表有状态、退费和原交易字段名候选，但 Task 2–5 已证明无码表、无净额化规则 | **BLOCKED**；既可能新增退费交易也可能回写原交易，当前通道不能保证全捕获 |
+| 冲正/重交易 | 有 `NT_ReTradeFlag`、原交易关系等候选，但无权威状态机和变更序列 | **BLOCKED**；不能判定新增、替换或回写语义 |
+| 删除 | 两表未启用 CDC/CT/时态表/删除触发日志，也无已签认 tombstone | **BLOCKED**；物理删除对后续快照不可见 |
+
+[推断: 基于 catalog 证据与 Task 2–5 状态/退款门禁] **分钟轮询不成立**。P1 前必须由院方提供覆盖两张最终事实源的 CDC 或等价变更日志，至少包含操作类型、提交顺序/LSN、提交时间、主键、删除 tombstone、事务边界、保留期与可重放边界；保留期必须覆盖约定的最大停机与回补窗口。只提供 SQL Server Change Tracking 时还须证明如何一致读取变更后的行并处理已删除键；不得用全表扫描或父表业务日期轮询伪装 1–5 分钟近实时。
+
+#### 实际计划与耗时测试决定
+
+未执行候选增量谓词的实际执行计划、索引使用、返回行数、P50/P95 延迟测试。原因不是查询工具不可用，而是两表均没有通过语义和完备性门禁的增量条件；对 `T_TradeDate`、`SETL_DATE` 或父交易日期做性能测试只会验证错误方案，不能形成 P1 证据。现有 `IX_QUERY(T_TradeDate,...)` 只证明索引物理存在，不证明 T_TradeDate 是变更游标。[来源: Task 1 索引元数据；outpatient_p0_t6_20260827_094619Z 游标结论]
+
+本批次未请求执行计划、未修改索引。待 CDC/变更日志和专用只读账号就绪后，才对**已冻结的真实增量条件**测试索引/捕获表访问路径、返回行数和多次 P50/P95；该后续测试不能在当前过度授权主体上替代最小权限验收。
+
+#### P1 增量输入冻结/阻断表
+
+| 输入项 | dbo.o_Trade | dbo.o_FeeItem | Task 6 决定 |
+|---|---|---|---|
+| 游标字段 | 无可靠字段 | 无候选字段 | **BLOCKED**；等待院方 CDC/变更日志提交顺序 |
+| 稳定排序键 | `T_TradeNo` 已由 Task 2 证明唯一 | `(T_TradeNo,ItemId,ItemNo)` 已由 Task 2 证明唯一 | 仅冻结为确定性键组件；没有游标时不构成可执行组合游标 |
+| 10 分钟重叠 | 无变更时间，无法定义 | 无变更时间，无法定义 | **BLOCKED**；重叠不能补救无更新/删除可见性 |
+| 页大小初值 | 未测试真实增量路径 | 未测试真实增量路径 | **BLOCKED**；不猜默认值 |
+| 退费/冲正语义 | 无码表/状态机/净额规则 | 明细跟随、回写或删除方式不明 | **BLOCKED**；沿用 T5-B02 |
+| 预期峰值 | 无可靠最近 30 日业务窗口 | 同左 | **BLOCKED**；历史物理峰值不得充当生产峰值 |
+| 运行时配置边界 | — | — | 将来只允许页大小、轮询间隔可调；游标、排序键、重叠规则、状态语义和峰值基线必须在发布版本中固定，不做运行时开关 |
+
+Task 6 增量结果：**DONE_WITH_BLOCKERS**。冻结的是“拒绝当前两表分钟轮询”和院方变更日志输入要求，不是生产增量契约；T6-B01 至 T6-B04 解除前不得编写 P1 生产取数计划。
 
 ## 容量与性能
 
-| 项目 | Task 1 证据 |
-|---|---|
-| 发现结果规模 | 2 表、236 字段；检查点快照行数合计 2,731 |
-| 发现任务持久化耗时 | 约 0.379 秒 |
-| 实际扫描模式 | 两表均 cached=true |
+### Task 6：容量观察与可用边界
 
-上述耗时只证明“列结构哈希核对 + 检查点复用”可完成，不证明真实全表统计的吞吐、锁影响、超时边界或生产容量。新鲜全量画像及执行计划待验证。
+| 容量项 | 聚合观察 | 可用于 P1 容量基线？ |
+|---|---|---|
+| 当前全量规模 | 592 个唯一 T_TradeNo；2,139 条费用明细 | 否；只证明当前两表快照规模，Task 1 发现缓存和数据完整性范围未解除 |
+| 当前物理日期范围 | T_TradeDate 2024-03-11 至 2026-04-17，共跨 768 个自然日，仅 28 个有记录日 | 否；T_TradeDate 业务时区/完整性未签认，分布明显稀疏 |
+| 全历史自然日均值 | 交易 0.7708/日；明细 2.7852/日 | 否；包含 740 个无记录自然日，不能代表医院正常流量 |
+| 全历史有记录日均值 | 交易 21.1429/有记录日；明细 76.3929/有记录日 | 否；排除无记录日会产生选择偏差，仅供解释当前样本 |
+| 全历史物理日峰值 | 交易 226；明细 1,078 | 否；不是已证明的最近 30 日峰值，也未证明数据覆盖完整 |
+| 最大物理日期当天 | 3 个交易业务键；68 条关联明细 | 否；只是数据中的最大 T_TradeDate 日，不是“当前最近一日” |
+| 服务器时钟最近 30 日/24h | T_TradeDate 观察到 0/0 个交易 | 否；Task 2 已阻断业务时区/时钟语义，不能解释为最近业务数据为零 |
+| 每交易明细数 | 592 个 T_TradeNo 分组；nearest-rank P50=3、P95=18、P99=18、最大=33 | 部分；只可作为**每交易**历史样本观察。T_SetTid 锚点未冻结，不能改称“单结算明细数” |
+| 机械三年线性外推 | 以 592/2,139 除以 768 日再乘 1,096 日：约 845 个交易、3,053 条明细 | 否；明确不是最近 30 日依据或容量预测，不用于采购、分区、SLA 或压测 |
+
+nearest-rank 定义为排序后第 `ceil(N×p)` 个整数计数，避免依赖当前兼容级别不支持的 `PERCENTILE_CONT`；P50/P95/P99 都基于 `T_TradeNo` 分组，不使用被阻断的 T_SetTid。[来源: outpatient_p0_t6_20260827_094619Z 容量聚合]
+
+[推断: 基于 Task 2 时间阻断与本批次稀疏物理日期分布] 最近 30 天日均交易数/明细数、最近 30 天峰值交易数/明细数、当前最近一日数据量和可信三年容量外推均为 **BLOCKED**，不以服务器窗口的 0 或机械外推替代。解锁需数据负责人签认交易/结算时间语义、医院时区、全量覆盖起点、缺口日和补录规则，并在同一新鲜一致性水位重跑最近 30 个完整业务日；同时取得院方业务增长系数、留存期、重跑系数和至少一个已知高峰窗口。
+
+Task 1 的发现持久化约 0.379 秒只反映缓存复用；本批次 37.59 ms 只反映 592/2,139 行小样本聚合。两者都不是增量拉取延迟、数据库负载或生产吞吐证明，也不能生成页大小初值。
+
+#### Task 6 最终只读查询口径
+
+以下为最终有效批次的核心查询口径。所有语句前均执行 `SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SET LOCK_TIMEOUT 5000;`，结果只包含字段名、日期边界和聚合计数。
+
+```sql
+SELECT t.name AS table_name,
+       t.is_tracked_by_cdc,
+       t.temporal_type,
+       CASE WHEN ct.object_id IS NULL THEN 0 ELSE 1 END AS change_tracking_enabled,
+       SUM(CASE WHEN ty.name IN ('timestamp','rowversion') THEN 1 ELSE 0 END) AS rowversion_columns,
+       SUM(CASE WHEN c.is_identity=1 THEN 1 ELSE 0 END) AS identity_columns
+FROM sys.tables t
+JOIN sys.schemas s ON s.schema_id=t.schema_id
+JOIN sys.columns c ON c.object_id=t.object_id
+JOIN sys.types ty ON ty.user_type_id=c.user_type_id
+LEFT JOIN sys.change_tracking_tables ct ON ct.object_id=t.object_id
+WHERE s.name='dbo' AND t.name IN ('o_Trade','o_FeeItem')
+GROUP BY t.name,t.is_tracked_by_cdc,t.temporal_type,ct.object_id;
+
+SELECT OBJECT_NAME(tr.parent_id) AS table_name, COUNT_BIG(*) AS trigger_count,
+       SUM(CASE WHEN OBJECTPROPERTY(tr.object_id,'ExecIsInsertTrigger')=1 THEN 1 ELSE 0 END) AS insert_trigger_count,
+       SUM(CASE WHEN OBJECTPROPERTY(tr.object_id,'ExecIsUpdateTrigger')=1 THEN 1 ELSE 0 END) AS update_trigger_count,
+       SUM(CASE WHEN OBJECTPROPERTY(tr.object_id,'ExecIsDeleteTrigger')=1 THEN 1 ELSE 0 END) AS delete_trigger_count
+FROM sys.triggers tr
+WHERE tr.parent_id IN (OBJECT_ID('dbo.o_Trade'),OBJECT_ID('dbo.o_FeeItem'))
+GROUP BY tr.parent_id;
+
+SELECT COUNT_BIG(*) AS total_rows,
+       SUM(CASE WHEN T_TradeDate IS NULL THEN 1 ELSE 0 END) AS trade_date_nulls,
+       COUNT_BIG(DISTINCT T_TradeDate) AS trade_date_distinct,
+       SUM(CASE WHEN T_ConfirmTime IS NULL THEN 1 ELSE 0 END) AS confirm_time_nulls,
+       COUNT_BIG(DISTINCT T_ConfirmTime) AS confirm_time_distinct,
+       SUM(CASE WHEN SETL_DATE IS NULL THEN 1 ELSE 0 END) AS setl_date_nulls,
+       COUNT_BIG(DISTINCT SETL_DATE) AS setl_date_distinct,
+       SUM(CASE WHEN T_HadDealTime IS NULL THEN 1 ELSE 0 END) AS had_deal_time_nulls,
+       COUNT_BIG(DISTINCT T_HadDealTime) AS had_deal_time_distinct,
+       SUM(CASE WHEN T_Version1 IS NULL OR LTRIM(RTRIM(T_Version1))='' THEN 1 ELSE 0 END) AS version1_missing_or_blank,
+       COUNT_BIG(DISTINCT NULLIF(LTRIM(RTRIM(T_Version1)),'')) AS version1_distinct_nonblank,
+       SUM(CASE WHEN T_Version2 IS NULL OR LTRIM(RTRIM(T_Version2))='' THEN 1 ELSE 0 END) AS version2_missing_or_blank,
+       COUNT_BIG(DISTINCT NULLIF(LTRIM(RTRIM(T_Version2)),'')) AS version2_distinct_nonblank,
+       SUM(CASE WHEN T_ConfirmTime IS NOT NULL AND T_ConfirmTime<T_TradeDate THEN 1 ELSE 0 END) AS confirm_before_trade_rows,
+       SUM(CASE WHEN SETL_DATE IS NOT NULL AND SETL_DATE<T_TradeDate THEN 1 ELSE 0 END) AS setl_before_trade_rows,
+       SUM(CASE WHEN T_HadDealTime IS NOT NULL AND T_HadDealTime<T_TradeDate THEN 1 ELSE 0 END) AS had_deal_before_trade_rows
+FROM dbo.o_Trade;
+
+WITH per_trade AS (
+  SELECT T_TradeNo, COUNT_BIG(*) AS detail_rows
+  FROM dbo.o_FeeItem GROUP BY T_TradeNo
+), ranked AS (
+  SELECT detail_rows,
+         ROW_NUMBER() OVER (ORDER BY detail_rows) AS rn,
+         COUNT_BIG(*) OVER () AS n
+  FROM per_trade
+)
+SELECT COUNT_BIG(*) AS transaction_groups,
+       MIN(detail_rows) AS min_details,
+       MAX(detail_rows) AS max_details,
+       MAX(CASE WHEN rn=CONVERT(bigint,CEILING(n*0.50)) THEN detail_rows END) AS nearest_rank_p50_details,
+       MAX(CASE WHEN rn=CONVERT(bigint,CEILING(n*0.95)) THEN detail_rows END) AS nearest_rank_p95_details,
+       MAX(CASE WHEN rn=CONVERT(bigint,CEILING(n*0.99)) THEN detail_rows END) AS nearest_rank_p99_details,
+       SUM(detail_rows) AS total_details
+FROM ranked;
+```
+
+[来源: outpatient_p0_t6_20260827_094619Z；完整结果口径还包括四候选日期的服务器最近 24 小时计数、物理日期日聚合及服务器最近 30 日/24h 观察，定义与本节结果表一致]
 
 ## 政策 Skill 依赖
 
@@ -1662,6 +1817,10 @@ Task 5 结果：**DONE_WITH_CONCERNS**。六指标与五维度的契约外形、
 | T5-B04 | 就诊时间来源未证明；<code>T_TradeDate</code> 不能直接当就诊时间，<code>SETL_DATE</code> 也不能直接当结算时间；科室不在两表可信闭包 | 默认时间、显式结算时间和科室分组/下钻均阻断 | 数据负责人签认双时间角色来源、优先级、时区和周界；把 HIS 科室及组织主数据作为 P1 同水位抽取输入，不允许运行时临时跨源 JOIN |
 | T5-B05 | 门诊类别、险种和结算状态虽有物理候选，但业务字典未签认；低频枚举阈值也未批准 | 三维只能保持 <code>candidate</code> 且查询失败关闭；精确小桶不可展示 | 医保办/数据负责人签认字段和值域版本；隐私负责人签认单元格阈值、组合维度、用途与二次推断控制 |
 | T5-B06 | [来源: 当前语义层代码与总设计 §12] 聚合 <code>SemanticQuery</code>、确定性 Planner/编译器尚未实现；Q01–Q50 尚未经业务签认 | 50 题只能作为 P0 契约评审草案，不能声称生产可信问题库或返回真实运营数值 | 先完成口径签认并发布语义版本；P3 实现 Registry 校验、授权、参数化编译、验证与固定下钻；医保办/数据负责人逐题签认后再转可信问题库 |
+| T6-B01 | [来源: outpatient_p0_t6_20260827_094619Z] 两表均未启用表级 CDC、Change Tracking 或时态表，没有 rowversion/timestamp、identity 或表级触发器；o_FeeItem 也无日期/版本候选 | 新增、更新和删除均没有可靠、有界、可重放的增量序列；1–5 分钟轮询不成立 | 院方提供覆盖最终交易/明细事实源的 CDC 或等价变更日志，包含操作类型、提交顺序/LSN、提交时间、键、删除 tombstone、事务边界、保留期和回放规则 |
+| T6-B02 | dbo.o_Trade 的四个日期与两个字符串版本候选均无变更语义，且出现 NULL、重复、同行日期倒置或低基数；退费/冲正状态机仍未签认 | 不能计算真实单调倒退、最近 24h 迟到或 10 分钟重叠更新，也不能保证退费/冲正的新增与回写都被捕获 | 数据负责人提供字段/接口字典和变更生成规则；医保办签认退费/冲正状态机；在有历史变更序列后重新执行迟到与重叠验证 |
+| T6-B03 | [来源: Task 2、outpatient_p0_t6_20260827_094619Z] T_TradeDate 时区/业务语义未签认，当前 768 个物理日期跨度仅 28 个有记录日，服务器最近 30 日观察为 0 | 最近 30 日均值/峰值、当前最近一日和可信三年容量预测无法成立；机械外推不能作为容量输入 | 签认医院时区、时间字段、完整覆盖起点、缺口/补录规则；以新鲜一致性水位重跑 30 个完整业务日并提供增长、留存、回补和已知高峰参数 |
+| T6-B04 | 没有通过门禁的增量谓词，故未执行计划/索引、返回行数或 P50/P95 测试；当前主体仍过度授权 | 游标、10 分钟重叠、页大小初值和生产峰值均未冻结，不能进入 P1 取数规划 | 先解除 T1-B01、T6-B01 至 T6-B03；再以专用只读账号对冻结后的真实增量条件测试执行计划、索引、返回行数和多次 P50/P95，仅将页大小/轮询间隔保留为运行时可调项 |
 
 网络、SQL Server 连接、元数据 SELECT 和发现任务持久化均成功，不构成 Task 1 的连接阻断。
 
@@ -1688,6 +1847,12 @@ Task 4 执行结果：**DONE_WITH_CONCERNS**。关注项为 T4-B01 至 T4-B04；
 [推断: 基于六指标和五维度门禁] 当前没有可发布运营指标：六指标为 0 <code>verified</code>、3 <code>candidate</code>（执行阻断）、3 <code>blocked</code>；五维度为 3 <code>candidate</code>（执行阻断）、2 <code>blocked</code>。Q01–Q50 只用于 P0 评审；医保办负责人和数据负责人逐题签认前不得转“可信问题库”，低频与患者级负向题还须信息安全/隐私负责人签认。
 
 Task 5 执行结果：**DONE_WITH_CONCERNS**。关注项为 T5-B01 至 T5-B06；未用 <code>T_SetTid</code> 或 <code>COUNT(*)</code> 冒充人次/笔数，未把 <code>T_TradeDate</code>/<code>SETL_DATE</code> 猜成已签认时间，未发布低频精确桶，也未伪造当前阻断指标的数值。
+
+[来源: 文档级证据批次 `outpatient_p0_t6_20260827_094619Z`；本节 catalog、候选字段与容量聚合] Task 6 已在 `READ COMMITTED` 下完成两表变更能力核验和历史小样本容量观察。目标表没有可证明的变更序列或删除日志；交易表字段名候选均不能升级为游标，明细表没有候选变更列，因此没有对错误增量谓词执行性能测试。
+
+[推断: 基于 T6-B01 至 T6-B04] 当前 1–5 分钟轮询方案被拒绝，P1 必须先取得院方 CDC/等价变更日志与专用只读账号。每交易明细 nearest-rank P50/P95/P99 为 3/18/18 只作历史样本观察；最近 30 日均值/峰值、当前最近一日和三年容量基线均未成立。
+
+Task 6 执行结果：**DONE_WITH_BLOCKERS**。未用全表轮询、父交易业务日期、服务器窗口零值或机械三年外推伪装近实时/容量证据；关注项为 T6-B01 至 T6-B04。
 
 | 待审核角色 | 审核状态 | 签认 |
 |---|---|---|
