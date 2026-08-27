@@ -9,15 +9,47 @@
 | SQL Server 版本 | 16.0.4255.1 / RTM / Developer Edition (64-bit) |
 | ODBC 驱动 | SQL Server |
 | 发现任务 ID | outpatient_p0_3eceb0a3067a485285169a0c |
-| 发现任务执行时间 | 2026-08-27 14:15:28.656 +08:00 至 14:15:29.035 +08:00 |
+| 发现任务缓存命中时间 | 2026-08-27 14:15:28.656 +08:00 至 14:15:29.035 +08:00；不是缓存快照生成时间 |
 | 本次操作总时间 | 2026-08-27 14:15:20 +08:00 至 14:15:29 +08:00 |
-| 统计区间 | 当前注册数据源的全表发现快照；未施加业务日期过滤。两表均命中既有检查点，业务数据起止时间待后续任务验证 |
-| 执行账号标识 | 不记录，避免泄露账号信息 |
+| 统计区间 | 既有检查点中的缓存统计；快照未记录业务日期过滤口径，业务数据起止时间待后续任务验证 |
+| 执行主体指纹 | SHA-256 38F144F8D609E1F6CFA0E3B2E4225EF783A0B313A98262F71FC0862BF97ACD70（不记录原登录名） |
+| 权限证据执行时间 | 2026-08-27 06:34:58.5512216Z（2026-08-27 14:34:58.5512216 +08:00） |
 | 数据库级权限位 | CONNECT、SELECT、INSERT、UPDATE、DELETE、VIEW DEFINITION 均为已授予 |
 | 两张候选表权限位 | SELECT、INSERT、UPDATE、DELETE 均为已授予 |
 | 实际执行边界 | SQL Server 仅执行 SELECT 与元数据查询，未执行任何写语句 |
 
-权限查询只记录能力位，不记录账号名、数据库名、主机、连接串或凭据。当前账号权限超出“批准的只读通道”最小权限基线，见“阻断项”。
+脱敏权限查询的对象范围固定为当前数据库、dbo.o_Trade、dbo.o_FeeItem，四类对象权限分别取 SELECT、INSERT、UPDATE、DELETE；主体只保留登录名的 SHA-256 指纹：
+
+    SELECT
+      CONVERT(varchar(64), HASHBYTES('SHA2_256', CONVERT(nvarchar(128), SUSER_SNAME())), 2)
+        AS principal_fingerprint_sha256,
+      CONVERT(varchar(40), SYSDATETIMEOFFSET(), 127) AS executed_at,
+      scope_name, can_select, can_insert, can_update, can_delete
+    FROM (VALUES
+      ('DATABASE',
+       HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'SELECT'),
+       HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'INSERT'),
+       HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'UPDATE'),
+       HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'DELETE')),
+      ('dbo.o_Trade',
+       HAS_PERMS_BY_NAME('dbo.o_Trade', 'OBJECT', 'SELECT'),
+       HAS_PERMS_BY_NAME('dbo.o_Trade', 'OBJECT', 'INSERT'),
+       HAS_PERMS_BY_NAME('dbo.o_Trade', 'OBJECT', 'UPDATE'),
+       HAS_PERMS_BY_NAME('dbo.o_Trade', 'OBJECT', 'DELETE')),
+      ('dbo.o_FeeItem',
+       HAS_PERMS_BY_NAME('dbo.o_FeeItem', 'OBJECT', 'SELECT'),
+       HAS_PERMS_BY_NAME('dbo.o_FeeItem', 'OBJECT', 'INSERT'),
+       HAS_PERMS_BY_NAME('dbo.o_FeeItem', 'OBJECT', 'UPDATE'),
+       HAS_PERMS_BY_NAME('dbo.o_FeeItem', 'OBJECT', 'DELETE'))
+    ) p(scope_name, can_select, can_insert, can_update, can_delete);
+
+| 权限对象 | SELECT | INSERT | UPDATE | DELETE |
+|---|:---:|:---:|:---:|:---:|
+| 当前数据库 | 1 | 1 | 1 | 1 |
+| dbo.o_Trade | 1 | 1 | 1 | 1 |
+| dbo.o_FeeItem | 1 | 1 | 1 | 1 |
+
+权限查询不记录账号名、数据库名、主机、连接串或凭据。该指纹对应主体的权限超出“批准的只读通道”最小权限基线，见“阻断项”。
 
 [来源: SQL Server SERVERPROPERTY 与 HAS_PERMS_BY_NAME 元数据查询；发现任务 outpatient_p0_3eceb0a3067a485285169a0c]
 
@@ -25,13 +57,13 @@
 
 本次发现请求将 schema 固定为 dbo，表白名单固定为 o_Trade、o_FeeItem，sample_limit 固定为 5；没有扫描其他业务表。
 
-| 源表 | 候选角色 | 发现状态 | 行数快照 | 字段数 | 映射/未映射 | 最新 DDL 修改时间 | 字段质量分（均值/最小/最大） | 平均非空率 |
-|---|---|---|---:|---:|---:|---|---:|---:|
-| dbo.o_Trade | 交易主表（待业务确认） | completed，cached=true | 592 | 195 | 86 / 109 | 2026-07-06 02:25:25（源时区未暴露） | 60.07 / 10.00 / 70.00 | 81.96% |
-| dbo.o_FeeItem | 费用明细表（待业务确认） | completed，cached=true | 2,139 | 41 | 18 / 23 | 2021-09-24 12:23:01.663（源时区未暴露） | 59.02 / 50.00 / 60.00 | 100.00% |
-| 合计 | — | completed | 2,731 | 236 | 104 / 132 | — | — | — |
+| 源表 | 候选角色 | 发现状态 | 缓存行数 | 字段数 | 映射/未映射 | 缓存 DDL 时间 | 缓存质量分（均值/最小/最大） | 缓存平均非空率 | 检查点生成时间 | 来源任务 ID |
+|---|---|---|---:|---:|---:|---|---:|---:|---|---|
+| dbo.o_Trade | 交易主表（待业务确认） | completed，cached=true | 592 | 195 | 86 / 109 | 2026-07-06 02:25:25（源时区未暴露） | 60.07 / 10.00 / 70.00 | 81.96% | 2026-07-17 17:07:35.083662 +08:00 | 未知；检查点未存 task_id |
+| dbo.o_FeeItem | 费用明细表（待业务确认） | completed，cached=true | 2,139 | 41 | 18 / 23 | 2021-09-24 12:23:01.663（源时区未暴露） | 59.02 / 50.00 / 60.00 | 100.00% | 2026-07-17 17:07:33.647508 +08:00 | 未知；检查点未存 task_id |
+| 合计 | — | completed | 2,731 | 236 | 104 / 132 | — | — | — | — | — |
 
-cached=true 表示本次实时读取 INFORMATION_SCHEMA 并核对列结构哈希后，因结构未变而复用了 discovery_table_checkpoints 中的统计快照。因此，行数、质量分、非空率和 DDL 时间不能作为“2026-08-27 重新全量画像”的证据。
+cached=true 的证明范围必须收窄：本次实时读取 INFORMATION_SCHEMA 后，当前列哈希与检查点哈希一致；该哈希只覆盖 schema/table、列名、DATA_TYPE、CHARACTER_MAXIMUM_LENGTH、IS_NULLABLE，不能据此概括完整物理定义一致。它不覆盖 NUMERIC_PRECISION、NUMERIC_SCALE。金额字段的精度与标度仅以本次独立执行的 INFORMATION_SCHEMA.COLUMNS 元数据 SELECT 为准。缓存行数、质量分、非空率和 DDL 时间不能作为“2026-08-27 重新全量画像”的证据。
 
 [来源: src/runtime/discovery/sqlserver_source.py 的 tables 白名单与检查点逻辑；发现任务结果及表级检查点]
 
@@ -296,14 +328,43 @@ cached=true 表示本次实时读取 INFORMATION_SCHEMA 并核对列结构哈希
 
 ## 键与关系
 
-| 对象 | 元数据结论 |
-|---|---|
-| dbo.o_Trade | 主键 PK_o_Trade：T_TradeNo；唯一索引 UNIQ_TT_TradeNo：TT_TradeNo |
-| dbo.o_Trade | 复合普通索引 IX_QUERY：T_TradeDate、T_State、T_HasRefundmented、T_Operator |
-| dbo.o_Trade | 普通索引 Sy_Kh：P_ICNo；普通索引 Sy_P_FundType：P_FundType |
-| dbo.o_FeeItem | 复合主键 PK_o_FeeItem_1：T_TradeNo、ItemId |
-| dbo.o_FeeItem → dbo.o_Trade | 外键 FK_o_FeeItem_o_Trade：T_TradeNo → T_TradeNo |
-| dbo.o_Diagnose → dbo.o_Trade | 入向外键 FK_o_Diagnose_o_Trade：T_TradeNo → T_TradeNo；o_Diagnose 不在本次扫描范围 |
+以下仅为初步 catalog 元数据观察，不代表主从数据质量已经验证。
+
+| 对象 | 初步元数据观察 | 状态 |
+|---|---|---|
+| dbo.o_Trade | 主键 PK_o_Trade：T_TradeNo；唯一索引 UNIQ_TT_TradeNo：TT_TradeNo | 两索引 is_disabled=false |
+| dbo.o_Trade | 复合普通索引 IX_QUERY：T_TradeDate、T_State、T_HasRefundmented、T_Operator | is_disabled=false |
+| dbo.o_Trade | 普通索引 Sy_Kh：P_ICNo；普通索引 Sy_P_FundType：P_FundType | 两索引 is_disabled=false |
+| dbo.o_FeeItem | 复合主键 PK_o_FeeItem_1：T_TradeNo、ItemId | is_disabled=false |
+| dbo.o_FeeItem → dbo.o_Trade | 外键 FK_o_FeeItem_o_Trade：T_TradeNo → T_TradeNo | is_disabled=false；is_not_trusted=false |
+| dbo.o_Diagnose → dbo.o_Trade | 入向外键 FK_o_Diagnose_o_Trade：T_TradeNo → T_TradeNo；o_Diagnose 不在本次扫描范围 | is_disabled=false；is_not_trusted=false |
+
+可复核的 catalog 查询口径：
+
+    SELECT s.name AS schema_name, t.name AS table_name, i.name AS index_name,
+           i.is_primary_key, i.is_unique, i.is_disabled,
+           c.name AS column_name, ic.key_ordinal
+    FROM sys.tables t
+    JOIN sys.schemas s ON s.schema_id=t.schema_id
+    JOIN sys.indexes i ON i.object_id=t.object_id AND i.index_id>0
+    JOIN sys.index_columns ic
+      ON ic.object_id=i.object_id AND ic.index_id=i.index_id AND ic.key_ordinal>0
+    JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
+    WHERE s.name='dbo' AND t.name IN ('o_Trade','o_FeeItem')
+    ORDER BY t.name,i.name,ic.key_ordinal;
+
+    SELECT fk.name AS foreign_key_name,
+           OBJECT_SCHEMA_NAME(fk.parent_object_id) AS child_schema,
+           OBJECT_NAME(fk.parent_object_id) AS child_table,
+           OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS parent_schema,
+           OBJECT_NAME(fk.referenced_object_id) AS parent_table,
+           fk.is_disabled, fk.is_not_trusted
+    FROM sys.foreign_keys fk
+    WHERE (OBJECT_SCHEMA_NAME(fk.parent_object_id)='dbo'
+           AND OBJECT_NAME(fk.parent_object_id) IN ('o_Trade','o_FeeItem'))
+       OR (OBJECT_SCHEMA_NAME(fk.referenced_object_id)='dbo'
+           AND OBJECT_NAME(fk.referenced_object_id) IN ('o_Trade','o_FeeItem'))
+    ORDER BY fk.name;
 
 主从基数、孤儿记录、退款自关联与重复键的数据验证不属于 Task 1，待验证。
 
@@ -326,7 +387,7 @@ cached=true 表示本次实时读取 INFORMATION_SCHEMA 并核对列结构哈希
 | 项目 | Task 1 证据 |
 |---|---|
 | 发现结果规模 | 2 表、236 字段；检查点快照行数合计 2,731 |
-| 发现任务持久化耗时 | 约 0.378 秒 |
+| 发现任务持久化耗时 | 约 0.379 秒 |
 | 实际扫描模式 | 两表均 cached=true |
 
 上述耗时只证明“列结构哈希核对 + 检查点复用”可完成，不证明真实全表统计的吞吐、锁影响、超时边界或生产容量。新鲜全量画像及执行计划待验证。
@@ -343,7 +404,7 @@ cached=true 表示本次实时读取 INFORMATION_SCHEMA 并核对列结构哈希
 
 | 编号 | 阻断/关注项 | 影响 | 解锁条件 |
 |---|---|---|---|
-| T1-B01 | 执行账号在数据库及两张候选表上具备 INSERT、UPDATE、DELETE 权限 | 不满足批准的最小只读权限基线；误操作风险高 | 提供仅 CONNECT、SELECT、VIEW DEFINITION 的专用账号或等效只读隔离通道 |
+| T1-B01 | 指纹 38F144F8…ACD70 对应主体在数据库及两张候选表上具备 INSERT、UPDATE、DELETE 权限 | 不满足批准的最小只读权限基线；误操作风险高 | 提供仅 CONNECT、SELECT、VIEW DEFINITION 的专用账号或等效只读隔离通道，并重新留存主体指纹/权限位 |
 | T1-B02 | 本次两表均命中 discovery 检查点 | 行数、质量分、非空率、DDL 时间是缓存快照，不能证明 2026-08-27 新鲜画像 | 在批准流程中生成可审计的新鲜只读全量画像，并保留任务时间与统计口径 |
 | T1-B03 | 核心字段没有随 Task 1 获得权威业务定义和值域 | 交易状态、退款链、金额公式和游标含义仍可能误判 | 取得院方数据字典/接口文档并由业务与数据负责人签认 |
 | T1-B04 | 候选表包含直接标识符、证件/卡号及电子凭证类高敏字段 | 后续 Skill 或指标若直接读取将违反最小化与脱敏要求 | 建立允许字段白名单、用途说明和 security/desensitization 验证证据 |
@@ -352,8 +413,13 @@ cached=true 表示本次实时读取 INFORMATION_SCHEMA 并核对列结构哈希
 
 ## 审核结论
 
-状态：DONE_WITH_CONCERNS。
+状态：DRAFT / PENDING_REVIEW。
 
-Task 1 已完成两张候选表的安全发现证据骨架、数据库版本/权限位、236 个字段物理类型以及键/索引/FK 元数据核验；没有修改生产代码，也没有在 SQL Server 执行写操作。
+Task 1 已形成两张候选表的发现证据草稿、数据库版本/脱敏权限位、236 个字段物理类型以及键/索引/FK 初步元数据观察；没有修改生产代码，也没有在 SQL Server 执行写操作。该草稿不代表正式审核完成。
 
 当前证据足以确认“表和物理契约存在”，不足以批准后续业务接入。T1-B01 至 T1-B04 解锁前，交易状态、金额勾稽、增量游标、容量性能、政策 Skill 依赖和运营指标依赖均保持待验证，不作确定性结论。
+
+| 待审核角色 | 审核状态 | 签认 |
+|---|---|---|
+| 医保办负责人 | 待审核 | 留空；Task 7 完成 |
+| 数据负责人 | 待审核 | 留空；Task 7 完成 |
