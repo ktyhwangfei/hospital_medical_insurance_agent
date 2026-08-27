@@ -78,7 +78,7 @@ Write-Host "[2/5] Start backend on port $PORT_BACKEND..." -ForegroundColor Cyan
 # Load .env if present (gitignored: holds secrets like MODEL_API_KEY). Pre-set env vars win.
 $envFile = Join-Path $WORKDIR ".env"
 if (Test-Path $envFile) {
-    Get-Content $envFile | ForEach-Object {
+    Get-Content -LiteralPath $envFile -Encoding UTF8 | ForEach-Object {
         $line = $_.Trim()
         if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
             $idx = $line.IndexOf("=")
@@ -132,7 +132,11 @@ if (-not $env:MODEL_GOVERNANCE_DEV_MODE) { $env:MODEL_GOVERNANCE_DEV_MODE = "1" 
 # NOTE: uvicorn --reload spawns multiprocessing workers; if the master dies the workers
 #   become orphans holding the port + stale code (see stop-servers.ps1). Use single process
 #   for daily dev; restart via .\stop-servers.ps1; .\start-servers.ps1 after backend edits.
-$be = Start-Process uvicorn -ArgumentList "src.runtime.api.app:create_app","--host","127.0.0.1","--port","$PORT_BACKEND","--factory" -WorkingDirectory $WORKDIR -WindowStyle Hidden -PassThru
+# 优先用工作区 .venv 的 uvicorn：宿主重启后 PATH 顺序可能变化，系统 Python313 的
+# uvicorn 缺 sentence-transformers 等依赖，语义检索 500（2026-08-27 事故）。
+$uvicornCmd = Join-Path $WORKDIR ".venv\Scripts\uvicorn.exe"
+if (-not (Test-Path $uvicornCmd)) { $uvicornCmd = "uvicorn" }
+$be = Start-Process $uvicornCmd -ArgumentList "src.runtime.api.app:create_app","--host","127.0.0.1","--port","$PORT_BACKEND","--factory" -WorkingDirectory $WORKDIR -WindowStyle Hidden -PassThru
 
 # Health check with generous window (startup may wait on PostgreSQL connect timeouts)
 $beOk = $false
