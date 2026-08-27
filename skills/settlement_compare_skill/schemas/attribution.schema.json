@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hospital-ai/schemas/settlement-compare/attribution.schema.json",
+  "title": "Attribution",
+  "description": "单条差异归因结果：差异字段 + 命中规则 + 归因说明 + 政策主题。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rule_id", "name", "field", "attribution", "is_fallback"],
+  "properties": {
+    "rule_id": {
+      "type": "string",
+      "description": "命中的归因规则 ID；fallback 时为 'fallback'"
+    },
+    "name": {
+      "type": "string",
+      "description": "归因规则中文名（如 起付线跨年重新累计）"
+    },
+    "field": {
+      "type": "string",
+      "description": "发生差异的结算字段名"
+    },
+    "settlement_id": {
+      "type": "string",
+      "description": "差异所属的对比结算单号（与基准对比的那张）"
+    },
+    "attribution": {
+      "type": "string",
+      "description": "面向用户的归因说明文案"
+    },
+    "baseline_value": {
+      "type": ["number", "string", "null"],
+      "description": "基准结算单该字段的值"
+    },
+    "current_value": {
+      "type": ["number", "string", "null"],
+      "description": "对比结算单该字段的值"
+    },
+    "policy_topic": {
+      "type": "string",
+      "description": "归因对应的政策主题，用于结构化政策检索取 citations"
+    },
+    "is_fallback": {
+      "type": "boolean",
+      "description": "是否为兜底归因（未命中任何规则，需声明 uncertainty）"
+    }
+  }
+}

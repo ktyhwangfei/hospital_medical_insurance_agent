@@ -1,0 +1,16 @@
+# answer_template.yaml — 对比答案文案片段
+# 确定性拼接（str.format），无模板引擎依赖；所有面向用户的文案集中于此，不在代码中硬编码
+
+header: 以结算单 {baseline_id} 为基准，对比结果如下
+settlement_header: 【结算单 {settlement_id}】
+no_diff: 各项费用与基准一致，未发现差异。
+row: "{label}：基准 {baseline_text}，本次 {current_text}"
+row_with_delta: "{label}：基准 {baseline_text}，本次 {current_text}（{delta_text}）"
+reason: 原因：{attribution}
+delta_up: 增加 {amount} 元
+delta_down: 减少 {amount} 元
+money: "{amount:.2f} 元"
+evidence_header: 政策依据
+evidence_row: "- {topic}：{source}"
+uncertainty_note: 说明：以下差异暂无明确政策归因，需人工进一步核实：{items}
+cannot_answer: 暂时无法完成结算对比：{reason}

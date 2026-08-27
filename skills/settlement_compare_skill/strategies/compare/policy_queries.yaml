@@ -1,0 +1,59 @@
+# policy_queries.yaml — 归因主题 → 结构化政策查询定义
+# key 为 attribution_rules.yaml 中各规则的 policy_topic。
+# 每个 query 对应 StructuredPolicyQuery dataclass 的字段。
+# 全部 required: false —— 政策证据缺失不应阻断确定性 diff 输出，仅降级 policy_status。
+#
+# 查询模式对齐 settlement_explain_skill 已验证命中的查询（rule_type 取实际枚举值
+# 支付比例/起付线/排除规则；source_text 为 dict，按 amount-band 关键词匹配 value）。
+
+topics:
+  起付线:
+    # 宽口径：rule_type=起付线 即可（真实规则 hosp_lv 多为空，不强滤医院等级）
+    - query_name: compare_deductible_standard
+      required: false
+      filters:
+        rule_type: 起付线
+      psn_type_allow_all: true
+      description: 起付线标准规则
+
+  分段报销:
+    # 宽口径：rule_type=支付比例 + 险种（真实规则文本为「起付标准以上X万元的部分，统筹基金支付85%」，
+    # explain 的 amount-band 关键词与之不匹配；归因 citation 用宽口径取相关支付比例规则即可）
+    - query_name: compare_segment_ratio
+      required: false
+      filters:
+        rule_type: 支付比例
+        insu_type: 城镇职工基本医疗保险
+      psn_type_allow_all: true
+      description: 城镇职工支付比例规则
+
+  人员类别待遇:
+    - query_name: compare_person_type_ratio
+      required: false
+      filters:
+        rule_type: 支付比例
+        insu_type: 城镇职工基本医疗保险
+      psn_type_allow_all: true
+      text_must_include_any:
+        - 退休人员
+        - 在职职工
+      description: 不同人员类别的报销待遇差异
+
+  医院等级待遇:
+    - query_name: compare_hospital_level
+      required: false
+      filters:
+        rule_type: 起付线
+      psn_type_allow_all: true
+      description: 不同医院等级的起付线差异
+
+  医保目录:
+    - query_name: compare_catalog_scope
+      required: false
+      filters:
+        rule_type: 排除规则
+      text_must_include_any:
+        - 目录
+        - 自费
+        - 自付
+      description: 医保目录范围与目录外自费规则

@@ -1,0 +1,188 @@
+# skill_manifest.yaml — Skill 声明文件
+# 供 src/skill_infra/skill_loader.py 动态发现和加载
+
+skill_id: settlement_compare_skill
+skill_name: 结算对比解释技能
+version: "1.0.0"
+
+# ── 业务动作分类 ──────────────────────────────────────────────
+# 参见：Business Action Specification V1.0
+# Business Action 决定"做什么"，Business Object 决定"处理谁"
+business_action: compare       # 对比：有什么不同（面向患者，比较多个对象）
+business_object: settlement    # 结算：操作对象为医保结算数据
+
+# ── 能力说明（概览页卡片展示）──
+# 一句话描述本 Skill 做什么，供治理工作台概览页与目录展示。
+description: >-
+  医保住院结算单对比解释：对 2~N 张结算单逐项比对费用字段差异，
+  基于确定性归因规则（起付线跨年/二次住院减半/进入新报销段/人员类别变化等）
+  给出差异原因，逐项附政策依据引用。
+
+# ── 语义层声明 ─────────────────────────────────────────────────
+# 与 settlement_explain_skill 相同的数据依赖（同一业务对象 Settlement）。
+needed_objects:
+  - object_code: "zydyxx"          # 住院待遇
+    metrics:
+      - bcqfje                      # 起付线
+      - bcybnje                     # 医保内费用
+    importance: "core"
+  - object_code: "zyfdxx"          # 住院分段
+    metrics:
+      - bdtczfje                    # 统筹支付
+      - bdtczf                      # 统筹自付
+      - bddezfje                    # 大额支付
+      - bddezf                      # 大额自付
+      - bdgryf                      # 个人应付（≈个人总支付）
+    importance: "core"
+  - object_code: "zyjyxx"          # 住院交易
+    metrics:
+      - rylb                        # 人员类别
+    importance: "core"
+  - object_code: "djxx"            # 参保人登记
+    metrics:
+      - fund_type                   # 险种类型
+      - yllb                        # 医疗类别
+      - hospital_level              # 医院等级（常量，固定三级医院）
+    importance: "core"
+
+# 对象版本锁定：null / 缺省 = 跟随最新已发布版本
+locked_versions:
+  zydyxx: null
+  zyfdxx: null
+  zyjyxx: null
+  djxx: null
+
+# ── 路由配置 ──────────────────────────────────────────────────
+# 对比类用户问法。explain skill 的 excluded_intents 已加入对比词，
+# 保证「为什么这次比上次多」路由到本 skill 而非解释 skill。
+supported_intents:
+  - 对比
+  - 比较
+  - 差异
+  - 不一样
+  - 为什么这次
+  - 跟上次
+  - 差多少
+  - 多了还是少了
+excluded_intents: []
+
+# ── 依赖声明 ──────────────────────────────────────────────────
+
+required_settlement_fields:
+  - zydyxx.bcqfje        # 起付线
+  - zydyxx.bcybnje       # 医保内费用
+  - zyfdxx.bdtczfje      # 统筹支付
+  - zyfdxx.bdtczf        # 统筹自付
+  - zyfdxx.bddezfje      # 大额支付
+  - zyfdxx.bddezf        # 大额自付
+  - zyfdxx.bdgryf        # 个人应付
+  - zyjyxx.rylb          # 人员类别
+  - djxx.fund_type       # 险种类型
+  - djxx.yllb            # 医疗类别
+  - djxx.hospital_level  # 医院等级
+
+required_mcp:
+  - settlement-data
+  - structured-policy-rule
+
+optional_mcp:
+  - policy-vector-search
+  - audit-trace
+
+# ── 输出结构 ──────────────────────────────────────────────────
+
+output_schema: schemas/output.schema.json
+
+forbidden_output:
+  - if t.
+  - undefined
+  - "null"
+  - None
+  - "NaN"
+  - '{"ratio"'
+  - embedding_text
+  - "Milvus score"
+  - yb_zyfdxx
+  - yb_dyxxzy
+
+# ── 执行契约（Execution Contract，概览页场景/指标展示的唯一来源）──
+# version_service 从本字段原样读取并校验为 SkillExecutionContract；
+# 治理工作台概览页据此渲染 Skill 卡片、场景网格与依赖指标。
+execution_contract:
+  version: 2
+
+  # 公共输入：全字段 diff 需要基准与对比单的全部金额/类别字段，
+  # 因此所有对比字段对应的语义层指标都声明在 common（各 profile 不重复声明）。
+  common:
+    context_inputs:
+      - code: settlement_id
+        alias: 结算单号列表
+        required: true
+        purpose: 待对比的 2~5 张结算单号，首张为基准（RuntimeContextCode 无多值型，复用 settlement_id）
+      - code: question
+        alias: 用户问题
+        required: false
+        purpose: 识别对比意图；提到具体费用项时收窄为单项对比
+    metric_inputs:
+      - metric_code: zydyxx.bcqfje
+        alias: 起付线
+        purpose: 起付线差异对比与跨年/二次住院归因
+      - metric_code: zydyxx.bcybnje
+        alias: 医保内费用
+        purpose: 目录内外费用结构对比（目录外费用增加归因）
+      - metric_code: zyfdxx.bdtczfje
+        alias: 统筹支付
+        purpose: 统筹基金支付差异对比（新报销段归因）
+      - metric_code: zyfdxx.bdtczf
+        alias: 统筹自付
+        purpose: 统筹自付差异对比（新报销段归因）
+      - metric_code: zyfdxx.bddezfje
+        alias: 大额支付
+        purpose: 大额基金支付差异对比
+      - metric_code: zyfdxx.bddezf
+        alias: 大额自付
+        purpose: 大额自付差异对比
+      - metric_code: zyfdxx.bdgryf
+        alias: 个人总支付
+        purpose: 个人负担总差异对比
+      - metric_code: zyjyxx.rylb
+        alias: 人员类别
+        purpose: 人员类别变化归因（在职/退休待遇差异）
+      - metric_code: djxx.fund_type
+        alias: 险种类型
+        purpose: 险种差异对比
+      - metric_code: djxx.yllb
+        alias: 医疗类别
+        purpose: 医疗类别差异对比
+      - metric_code: djxx.hospital_level
+        alias: 医院等级
+        purpose: 医院等级变化归因（起付线与报销比例差异）
+
+  # 执行场景：同一对比能力按「对比范围」拆分两种执行配置。
+  profiles:
+    - profile_id: full-compare
+      name: 结算全项对比
+      purpose: 两张（至多五张）结算单逐项比对全部费用字段，命中归因规则给出差异原因并附政策依据
+      routing_hints:
+        - 对比
+        - 比较
+        - 差异
+        - 不一样
+        - 为什么这次
+        - 跟上次
+        - 差多少
+    - profile_id: fee-item-compare
+      name: 单项费用对比
+      purpose: 收窄到指定费用项（起付线/统筹自付/大额自付/统筹支付/个人总支付）对比两次结算差异
+      routing_hints:
+        - 起付线对比
+        - 统筹自付对比
+        - 大额自付对比
+
+# ── 前端展示配置 ──────────────────────────────────────────────
+# compare 结果经 PolicyQAPublicResult 白名单渲染：answer（逐项差异+归因文本）、
+# calculation_steps（每行 diff：description/result/note）、citations、uncertainties。
+# display.profile/output 仅 single 模式使用（_assemble_display_payload），
+# compare 模式不配置；未来的 diff 表格视图可基于此 mode 扩展。
+display:
+  mode: compare  # single | compare

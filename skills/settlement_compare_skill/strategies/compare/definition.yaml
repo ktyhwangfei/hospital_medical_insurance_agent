@@ -1,0 +1,26 @@
+# definition.yaml — 结算对比定义与费用项字段映射
+# 每个 Strategy 拥有完全独立的定义（不依赖其他 skill 的映射表）
+
+definition:
+  name: 结算对比
+  plain_text: 对多张医保结算单逐项比对费用差异，并基于政策规则给出差异归因
+
+# 费用项 → 对比字段映射（用于 target_fee_item 收窄对比范围）
+# 注：out_of_scope（医保外费用）无单一直接字段，首版不支持收窄，
+#     传入时退化为全字段对比并给出 warning
+fee_items:
+  pooling_self_pay:
+    label: 统筹自付
+    field: basic_pooling_self_pay
+  deductible:
+    label: 起付线
+    field: deductible
+  large_amount_self_pay:
+    label: 大额自付
+    field: large_amount_self_pay
+  pooling_payment:
+    label: 统筹支付
+    field: basic_pooling_payment
+  personal_total_pay:
+    label: 个人总支付
+    field: personal_total_pay
