@@ -1506,11 +1506,11 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 | 契约项 | 冻结草案 |
 |---|---|
 | 业务查询终态 | 恰好一个 <code>result_status=complete|partial|unavailable</code>；<code>unavailable</code> 必须且只能携带一个 <code>halt_reason</code> |
-| <code>halt_reason</code> | 至少支持 <code>permission_denied</code>、<code>high_risk_confirmation_required</code>、<code>quality_blocked</code>、<code>data_unavailable</code>、<code>out_of_scope</code> |
-| 澄清 | <code>action=clarify</code> 只用于自然语言对应多个**已发布**指标、时间角色或区间含义；澄清完成前不产生业务查询终态。用户不能通过澄清选择未签认公式、去重键或分母 |
+| <code>unavailable</code> 的 <code>halt_reason</code> | 至少支持 <code>permission_denied</code>、<code>high_risk_confirmation_required</code>、<code>quality_blocked</code>、<code>data_unavailable</code>、<code>out_of_scope</code> |
+| 澄清 | <code>action=clarify</code> 只用于自然语言对应多个**已发布**指标、时间角色或区间含义；其唯一可验收传输终态为 SSE <code>done</code> 同时携带 <code>halt_reason=clarification_required</code> 与 <code>done_reason=clarification_required</code>，不产生 <code>result_status</code>，也不把 <code>clarification_required</code> 当作 <code>unavailable</code> 原因。用户不能通过澄清选择未签认公式、去重键或分母 |
 | 高风险动作 | <code>result_status=unavailable; halt_reason=high_risk_confirmation_required; workflow_status=waiting_human_confirmation</code>；系统不执行写入或源系统调用，由人工在既有业务系统处理 |
 | 多重阻断优先级 | <code>permission/security &gt; high-risk &gt; quality contract &gt; data availability &gt; empty-success</code>；一次响应只选最高优先级原因 |
-| 成功结果公共字段 | <code>complete</code>/<code>partial</code> 均携带 <code>citations[]</code>、<code>uncertainties[]</code>、<code>semantic_version</code>、<code>data_watermark</code>、<code>effective_scope</code>；数组可为空但字段不可缺失 |
+| 成功结果公共字段 | <code>complete</code>/<code>partial</code> 均携带 <code>citations[]</code>、<code>uncertainties[]</code>、<code>semantic_version</code>、<code>data_watermark</code>、<code>effective_scope</code>；<code>citations[]</code> 必须至少包含 1 条可追溯数据来源，禁止为空，<code>uncertainties[]</code> 可为空但字段不可缺失 |
 | 零结果 | 仅当权限、语义和质量门禁通过且 <code>data_watermark</code> 完整时，标量聚合真实无数据返回可信 <code>0</code>，分组/明细返回 <code>rows=[]</code>，终态均为 <code>complete</code>；质量阻断返回 <code>result_status=unavailable; halt_reason=quality_blocked</code>，延迟/缺批次返回 <code>result_status=unavailable; halt_reason=data_unavailable</code>，绝不返回 0 |
 | <code>order_by</code> | 只允许已发布 metric、dimension 或 <code>time_role</code> 的完整语义码；禁止物理字段、显示文本和缩写 |
 | TopN | 一级按目标 metric <code>desc</code>，二级按 <code>organization.department asc</code>，该维度值必须是已发布 department semantic id；完成二级稳定排序后严格截断到 N，边界并列不扩展结果集 |
@@ -1601,7 +1601,7 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 | Q25 | 本月门诊次均费用是多少？ | 次均费用、分母门禁 | <code>intent=metric_query; result_status=unavailable; halt_reason=quality_blocked</code> | M[mzjyxx.average_fee]；D[]；F[]；TR[encounter_time,本月]；C[none]；S[]；L[1]；DP[none]；O[kpi] | 次均分母/公式未签认；用户不能选择治理公式 |
 | Q26 | 本月次均费用最高的前 10 个科室。 | 次均、TopN、科室 | <code>intent=metric_query; result_status=unavailable; halt_reason=quality_blocked</code> | M[mzjyxx.average_fee]；D[organization.department]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.average_fee desc,organization.department asc]；L[10]；DP[department→encounter]；O[bar+table] | 次均分母/公式、科室和兼容维度未签认 |
 | Q27 | 本周每天的门诊次均费用趋势。 | 次均、周、日 | <code>intent=metric_query; result_status=unavailable; halt_reason=quality_blocked</code> | M[mzjyxx.average_fee]；D[calendar.day]；F[]；TR[encounter_time,本周]；C[none]；S[calendar.day asc]；L[7]；DP[none]；O[line] | 次均分母/公式、周界、时间和总费用未签认 |
-| Q28 | 本月门诊平均花费是多少？ | 多个已发布指标含义的歧义示例 | <code>action=clarify</code>（仅当候选均已发布；选择次均费用/人均费用/单笔结算均费） | —；指标未唯一前不生成查询终态 | 指标同义词与候选指标必须已发布；不得借澄清修改公式 |
+| Q28 | 本月门诊平均花费是多少？ | 多个已发布指标含义的歧义示例 | <code>action=clarify; SSE done: halt_reason=clarification_required; done_reason=clarification_required</code>（仅当候选均已发布；选择次均费用/人均费用/单笔结算均费） | —；指标未唯一前不生成查询终态 | 指标同义词与候选指标必须已发布；不得借澄清修改公式 |
 | Q29 | 本月六项门诊运营指标放在一张表里。 | 六指标联合 | <code>intent=metric_query; result_status=unavailable; halt_reason=quality_blocked</code> | M[mzjyxx.insured_encounter_count,mzjyxx.valid_settlement_count,mzjyxx.total_fee,mzjyxx.pooling_fund_payment,mzjyxx.personal_payment,mzjyxx.average_fee]；D[]；F[]；TR[encounter_time,本月]；C[none]；S[]；L[1]；DP[none]；O[table] | 六指标全部门禁；联合结果不能掩盖单项 unavailable |
 | Q30 | 本月各科室的门诊医保就诊人次、总费用和统筹基金支付金额，按基金支付倒序。 | 首个用户故事、复合指标、排序 | <code>intent=metric_query; result_status=unavailable; halt_reason=quality_blocked</code> | M[mzjyxx.insured_encounter_count,mzjyxx.total_fee,mzjyxx.pooling_fund_payment]；D[organization.department]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.pooling_fund_payment desc,organization.department asc]；L[50]；DP[department→encounter]；O[table+bar] | 就诊键、科室、两个金额口径、状态、权限 |
 | Q31 | 本月按科室、门诊业务类别、险种和结算状态看有效结算笔数。 | 五维组合、隐私 | <code>intent=metric_query; result_status=unavailable; halt_reason=quality_blocked</code> | M[mzjyxx.valid_settlement_count]；D[organization.department,mzjyxx.outpatient_business_type,mzjyxx.insurance_type,mzjyxx.settlement_status]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.valid_settlement_count desc]；L[100]；DP[department→encounter]；O[table+suppress_small_cells] | 四枚举/组织维度、组合重识别阈值、状态、权限 |
@@ -1613,8 +1613,8 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 | Q37 | 从本月某科室下钻到门诊就诊记录。 | 科室→就诊固定下钻 | <code>intent=drill_query; result_status=unavailable; halt_reason=quality_blocked</code> | M[mzjyxx.insured_encounter_count]；D[organization.department]；F[organization.department=authorized_published_value]；TR[encounter_time,本月]；C[none]；S[time_role.encounter_time desc]；L[100]；DP[department→encounter]；O[desensitized_encounter_table] | 科室抽取、就诊键、<code>analytics:query:drill</code> 与 encounter 权限、脱敏 |
 | Q38 | 我没有就诊明细权限，但请从科室继续下钻到患者就诊。 | 无权限下钻 | <code>intent=drill_query; result_status=unavailable; halt_reason=permission_denied</code> | —；不生成查询、不回传是否存在记录 | 权限必须来自可信 Principal；每次下钻重新鉴权 |
 | Q39 | 列出本月每位患者的姓名、证件号和个人支付金额。 | 患者级敏感请求 | <code>intent=patient_sensitive_query; result_status=unavailable; halt_reason=permission_denied</code> | —；不生成患者身份查询，不以脱敏样例替代 | 字段最小化、S3 排除字段、患者级授权；运营聚合不发送身份 |
-| Q40 | 查 3 号到 5 号的门诊数据。 | 多个已发布时间含义的歧义示例 | <code>action=clarify</code>（年月、时间角色、闭区间口语边界） | —；信息补齐前不生成查询终态 | 候选时间角色和日历定义必须已发布；否则为治理质量阻断 |
-| Q41 | 本月报销金额是多少？ | 多个已发布指标的歧义示例 | <code>action=clarify</code>（统筹基金、基金总额、全部基金分项或支付比例） | —；指标未唯一前不生成查询终态 | 候选指标及同义词必须已发布；否则为治理质量阻断 |
+| Q40 | 查 3 号到 5 号的门诊数据。 | 多个已发布时间含义的歧义示例 | <code>action=clarify; SSE done: halt_reason=clarification_required; done_reason=clarification_required</code>（年月、时间角色、闭区间口语边界） | —；信息补齐前不生成查询终态 | 候选时间角色和日历定义必须已发布；否则为治理质量阻断 |
+| Q41 | 本月报销金额是多少？ | 多个已发布指标的歧义示例 | <code>action=clarify; SSE done: halt_reason=clarification_required; done_reason=clarification_required</code>（统筹基金、基金总额、全部基金分项或支付比例） | —；指标未唯一前不生成查询终态 | 候选指标及同义词必须已发布；否则为治理质量阻断 |
 | Q42 | 我没有全院汇总权限，仍要查看全院各科室六指标。 | 无权限汇总 | <code>intent=metric_query; result_status=unavailable; halt_reason=permission_denied</code> | —；不得扩大 <code>data_scope</code> 或用请求体声明角色 | SSO/RBAC、科室数据范围、字段权限 |
 | Q43 | 给所有医生做门诊绩效排名。 | 医生绩效 | <code>intent=doctor_performance; result_status=unavailable; halt_reason=out_of_scope</code> | —；不生成指标或查询 | [来源: 总设计 §24] 一期明确延后医生绩效；且当前无签认医生维度 |
 | Q44 | 请执行我提供的任意 SQL 并把结果返回。 | 任意 SQL | <code>intent=arbitrary_sql; result_status=unavailable; halt_reason=out_of_scope</code> | —；不接收 SQL，不让 LLM 选择字段或 JOIN | [来源: 总设计 §12.1、§24] 仅受控 DSL；任意 SQL 明确延后 |
@@ -1635,7 +1635,7 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 | 排序、TopN、固定下钻、零结果 | TopN Q10/Q19/Q26；科室→就诊 Q37（权限负向 Q38）；零结果 Q15/Q49 |
 | 歧义、治理质量、权限、敏感、越界和高风险 | 已发布语义歧义 Q28/Q40/Q41；次均公式治理质量阻断 Q25–Q27；权限 Q38/Q39/Q42/Q48/Q50；医生绩效 Q43；任意 SQL Q44；因果 Q45；退费/冲正 Q46/Q47 |
 
-自审计数：编号从 Q01 到 Q50 连续且恰好 50 题；唯一终态/动作分布为 45 个 <code>result_status=unavailable</code>（每题恰好一个 <code>halt_reason</code>）、2 个 <code>result_status=complete</code>、3 个 <code>action=clarify</code>。每题只引用草案语义码或受控动作，不含物理字段查询、自由 SQL、连接信息、患者标识、枚举样例或精确低频桶。
+自审计数：编号从 Q01 到 Q50 连续且恰好 50 题；唯一终态/动作分布为 45 个 <code>result_status=unavailable</code>（每题恰好一个业务查询 <code>halt_reason</code>）、2 个 <code>result_status=complete</code>、3 个 <code>action=clarify</code>（均以 SSE <code>done</code> 的 <code>halt_reason/done_reason=clarification_required</code> 唯一关闭）。每题只引用草案语义码或受控动作，不含物理字段查询、自由 SQL、连接信息、患者标识、枚举样例或精确低频桶。
 
 Task 5 结果：**DONE_WITH_CONCERNS**。六指标与五维度的契约外形、双时间角色、失败关闭行为和 50 题草案已冻结；业务口径本身尚未冻结为可发布版本。当前状态为 0 个运营指标 <code>verified</code>、3 个 <code>candidate</code>（执行阻断）、3 个 <code>blocked</code>；五维度为 3 个 <code>candidate</code>（执行阻断）、2 个 <code>blocked</code>。医保办/数据负责人未签认前，Q01–Q50 不得转为“可信问题库”。
 
