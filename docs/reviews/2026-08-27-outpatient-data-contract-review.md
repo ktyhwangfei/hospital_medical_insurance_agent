@@ -1,4 +1,4 @@
-# 门诊数据契约核验记录（P0 Task 1–2）
+# 门诊数据契约核验记录（P0 Task 1–3）
 
 ## 环境
 
@@ -717,7 +717,427 @@ T_TradeNo 和费用复合键没有重复，因此没有对应的重复键状态�
 
 ## 金额勾稽
 
-待验证。Task 1 仅确认金额字段的精度：o_Trade 核心金额多为 decimal(10,2)，o_FeeItem 的 UnitPrice、Fee、FeeIn、FeeOut、SelfPay2 为 decimal(10,4)，Count 为 numeric(10,2)。勾稽公式、舍入阈值、负数/退款口径及状态过滤条件需由后续任务验证。
+### Task 3：金额口径与唯一费用明细源
+
+#### 执行证据与边界
+
+| 项目 | 结果 |
+|---|---|
+| 文档级证据批次 ID | `outpatient_p0_t3_20260827_073210Z`；仅用于关联本文 Task 3 的只读 SQL、聚合结果、固定执行时间与主体指纹，不是数据库审计 ID 或外部 run_id |
+| 固定执行时间 | SQL Server `SYSDATETIMEOFFSET()`：2026-08-27 07:32:10.3588997 +00:00，即 2026-08-27 15:32:10.3588997 +08:00；只作为本证据批次时钟锚点 |
+| 主体指纹引用 | SHA-256 38F144F8D609E1F6CFA0E3B2E4225EF783A0B313A98262F71FC0862BF97ACD70，与 Task 1–2 相同；不记录原登录名 |
+| 安全连接链 | `PolicyMetaStore(DATABASE_URL)` → `SemanticDataSource(meta_store=meta)` → `_resolve_datasource_connection('bjybdb')` → `_connect(cfg)`；worktree `.env` 仅在进程内安全加载，初始化 stdout/stderr 丢弃，未输出配置、连接 URL、主机、库名、账号或凭据 |
+| 数据范围 | dbo.o_Trade 全量 592 行；dbo.o_FeeItem 全量 2,139 行；没有业务日期过滤 |
+| 金额语义 | SQL Server `decimal` 运算，固定容差 0.0100 元；任一参与字段为 NULL 即计入 missing，不以 `COALESCE` 代替 0 |
+| 关联边界 | 只用 `T_TradeNo` 聚合和关联；未使用被阻断的 `T_SetTid`，未输出 T_TradeNo 或任何行级标识 |
+| 查询边界 | 连接/语句超时 30 秒，`LOCK_TIMEOUT` 5 秒；SQL Server 仅执行 SELECT/SET，失败不重试，未修改源库索引 |
+| 查询失败分类 | `NONE`；七组聚合查询均一次成功 |
+| 范围外事项 | 未执行字段闭包、运营指标、增量游标、容量任务；未查询第三张业务表 |
+
+[来源: 文档级证据批次 outpatient_p0_t3_20260827_073210Z；固定执行时间 2026-08-27 07:32:10.3588997 +00:00；执行主体指纹 SHA-256 38F144F8…ACD70]
+
+#### 完整可复现只读 SQL
+
+以下 SQL 与本批次实际执行口径一致。固定参数为金额容差 0.0100 元、`LOCK_TIMEOUT` 5000 毫秒；驱动层语句超时固定为 30 秒。所有结果均为聚合计数、状态码或差异摘要，不返回交易号、明细键或人员字段。
+
+```sql
+SET NOCOUNT ON;
+SET LOCK_TIMEOUT 5000;
+
+-- Q1：主体指纹和固定执行时间。
+SELECT
+  CONVERT(varchar(64), HASHBYTES('SHA2_256', CONVERT(nvarchar(128), SUSER_SNAME())), 2)
+    AS principal_fingerprint_sha256,
+  SYSDATETIMEOFFSET() AS server_executed_at;
+
+-- Q2：已冻结费用复合键复核。
+WITH duplicate_keys AS (
+  SELECT T_TradeNo, ItemId, ItemNo, COUNT_BIG(*) AS group_rows
+  FROM dbo.o_FeeItem
+  WHERE T_TradeNo IS NOT NULL AND ItemId IS NOT NULL AND ItemNo IS NOT NULL
+  GROUP BY T_TradeNo, ItemId, ItemNo
+  HAVING COUNT_BIG(*) > 1
+)
+SELECT
+  (SELECT COUNT_BIG(*) FROM dbo.o_FeeItem) AS total_rows,
+  (SELECT SUM(CASE WHEN T_TradeNo IS NULL THEN 1 ELSE 0 END) FROM dbo.o_FeeItem)
+    AS null_trade_nos,
+  (SELECT SUM(CASE WHEN ItemId IS NULL THEN 1 ELSE 0 END) FROM dbo.o_FeeItem)
+    AS null_item_ids,
+  (SELECT SUM(CASE WHEN ItemNo IS NULL THEN 1 ELSE 0 END) FROM dbo.o_FeeItem)
+    AS null_item_nos,
+  COUNT_BIG(*) AS duplicate_groups,
+  SUM(group_rows) AS duplicate_rows
+FROM duplicate_keys;
+
+-- Q3：o_Trade 两组金额等式，全量及四状态组合分层。
+WITH base AS (
+  SELECT
+    T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag,
+    CASE
+      WHEN T_FeeAll IS NULL OR T_FeeIn IS NULL OR T_FeeOut IS NULL THEN NULL
+      ELSE ABS(CONVERT(decimal(19,4), T_FeeAll)
+             - CONVERT(decimal(19,4), T_FeeIn)
+             - CONVERT(decimal(19,4), T_FeeOut))
+    END AS fee_split_abs_diff,
+    CASE
+      WHEN T_FeeAll IS NULL OR T_FundPay IS NULL OR T_SelfPayAll IS NULL THEN NULL
+      ELSE ABS(CONVERT(decimal(19,4), T_FeeAll)
+             - CONVERT(decimal(19,4), T_FundPay)
+             - CONVERT(decimal(19,4), T_SelfPayAll))
+    END AS fund_self_abs_diff
+  FROM dbo.o_Trade
+)
+SELECT
+  CASE WHEN GROUPING_ID(
+    T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag
+  ) = 15 THEN 'all' ELSE 'state' END AS scope_name,
+  T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag,
+  COUNT_BIG(*) AS row_count,
+  SUM(CASE WHEN fee_split_abs_diff IS NULL THEN 1 ELSE 0 END) AS fee_split_missing,
+  SUM(CASE WHEN fee_split_abs_diff IS NOT NULL
+                AND fee_split_abs_diff <= CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fee_split_passed,
+  SUM(CASE WHEN fee_split_abs_diff IS NOT NULL
+                AND fee_split_abs_diff > CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fee_split_failed,
+  MAX(fee_split_abs_diff) AS fee_split_max_abs_diff,
+  SUM(fee_split_abs_diff) AS fee_split_sum_abs_diff,
+  SUM(CASE WHEN fund_self_abs_diff IS NULL THEN 1 ELSE 0 END) AS fund_self_missing,
+  SUM(CASE WHEN fund_self_abs_diff IS NOT NULL
+                AND fund_self_abs_diff <= CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fund_self_passed,
+  SUM(CASE WHEN fund_self_abs_diff IS NOT NULL
+                AND fund_self_abs_diff > CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fund_self_failed,
+  MAX(fund_self_abs_diff) AS fund_self_max_abs_diff,
+  SUM(fund_self_abs_diff) AS fund_self_sum_abs_diff
+FROM base
+GROUP BY GROUPING SETS (
+  (),
+  (T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag)
+)
+ORDER BY
+  GROUPING_ID(T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag) DESC,
+  T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag;
+
+-- Q4：o_FeeItem 按 T_TradeNo 汇总后与 o_Trade 逐交易勾稽。
+WITH fee_agg AS (
+  SELECT
+    T_TradeNo,
+    SUM(CONVERT(decimal(19,4), Fee)) AS detail_fee,
+    SUM(CONVERT(decimal(19,4), FeeIn)) AS detail_fee_in,
+    SUM(CONVERT(decimal(19,4), FeeOut)) AS detail_fee_out
+  FROM dbo.o_FeeItem
+  GROUP BY T_TradeNo
+),
+joined AS (
+  SELECT
+    t.T_State, t.T_HasRefundmented, t.T_PartialReturnFlag, t.NT_ReTradeFlag,
+    CASE WHEN t.T_TradeNo IS NULL THEN 0 ELSE 1 END AS has_trade,
+    CASE WHEN f.T_TradeNo IS NULL THEN 0 ELSE 1 END AS has_detail,
+    CASE
+      WHEN t.T_FeeAll IS NULL OR f.detail_fee IS NULL THEN NULL
+      ELSE ABS(CONVERT(decimal(19,4), t.T_FeeAll) - f.detail_fee)
+    END AS fee_abs_diff,
+    CASE
+      WHEN t.T_FeeIn IS NULL OR f.detail_fee_in IS NULL THEN NULL
+      ELSE ABS(CONVERT(decimal(19,4), t.T_FeeIn) - f.detail_fee_in)
+    END AS fee_in_abs_diff,
+    CASE
+      WHEN t.T_FeeOut IS NULL OR f.detail_fee_out IS NULL THEN NULL
+      ELSE ABS(CONVERT(decimal(19,4), t.T_FeeOut) - f.detail_fee_out)
+    END AS fee_out_abs_diff
+  FROM dbo.o_Trade t
+  FULL OUTER JOIN fee_agg f ON f.T_TradeNo = t.T_TradeNo
+)
+SELECT
+  CASE WHEN GROUPING_ID(
+    T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag
+  ) = 15 THEN 'all' ELSE 'state' END AS scope_name,
+  T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag,
+  COUNT_BIG(*) AS comparison_entities,
+  SUM(has_trade) AS main_rows,
+  SUM(has_detail) AS detail_aggregate_rows,
+  SUM(CASE WHEN has_trade = 1 AND has_detail = 0 THEN 1 ELSE 0 END)
+    AS main_without_detail,
+  SUM(CASE WHEN has_trade = 0 AND has_detail = 1 THEN 1 ELSE 0 END)
+    AS detail_without_main,
+  SUM(CASE WHEN fee_abs_diff IS NULL THEN 1 ELSE 0 END) AS fee_missing,
+  SUM(CASE WHEN fee_abs_diff IS NOT NULL
+                AND fee_abs_diff <= CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fee_passed,
+  SUM(CASE WHEN fee_abs_diff IS NOT NULL
+                AND fee_abs_diff > CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fee_failed,
+  MAX(fee_abs_diff) AS fee_max_abs_diff,
+  SUM(fee_abs_diff) AS fee_sum_abs_diff,
+  SUM(CASE WHEN fee_in_abs_diff IS NULL THEN 1 ELSE 0 END) AS fee_in_missing,
+  SUM(CASE WHEN fee_in_abs_diff IS NOT NULL
+                AND fee_in_abs_diff <= CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fee_in_passed,
+  SUM(CASE WHEN fee_in_abs_diff IS NOT NULL
+                AND fee_in_abs_diff > CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fee_in_failed,
+  MAX(fee_in_abs_diff) AS fee_in_max_abs_diff,
+  SUM(fee_in_abs_diff) AS fee_in_sum_abs_diff,
+  SUM(CASE WHEN fee_out_abs_diff IS NULL THEN 1 ELSE 0 END) AS fee_out_missing,
+  SUM(CASE WHEN fee_out_abs_diff IS NOT NULL
+                AND fee_out_abs_diff <= CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fee_out_passed,
+  SUM(CASE WHEN fee_out_abs_diff IS NOT NULL
+                AND fee_out_abs_diff > CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS fee_out_failed,
+  MAX(fee_out_abs_diff) AS fee_out_max_abs_diff,
+  SUM(fee_out_abs_diff) AS fee_out_sum_abs_diff
+FROM joined
+GROUP BY GROUPING SETS (
+  (),
+  (T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag)
+)
+ORDER BY
+  GROUPING_ID(T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag) DESC,
+  T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag;
+
+-- Q5：明确存在的基金候选字段 NULL/零/非零统计。
+WITH fund_values AS (
+  SELECT v.field_name, v.amount
+  FROM dbo.o_Trade t
+  CROSS APPLY (VALUES
+    ('T_FundPay', CONVERT(decimal(19,4), t.T_FundPay)),
+    ('T_BigPay', CONVERT(decimal(19,4), t.T_BigPay)),
+    ('T_BCPay', CONVERT(decimal(19,4), t.T_BCPay)),
+    ('T_JCPay', CONVERT(decimal(19,4), t.T_JCPay)),
+    ('T_OfficalPay', CONVERT(decimal(19,4), t.T_OfficalPay)),
+    ('NT_AgencySumPay', CONVERT(decimal(19,4), t.NT_AgencySumPay)),
+    ('NT_BasicPay', CONVERT(decimal(19,4), t.NT_BasicPay)),
+    ('NT_CivilPay', CONVERT(decimal(19,4), t.NT_CivilPay)),
+    ('NT_OtherPay', CONVERT(decimal(19,4), t.NT_OtherPay)),
+    ('T_BigillPay', CONVERT(decimal(19,4), t.T_BigillPay)),
+    ('RETIRE_OFFICER_PAY', CONVERT(decimal(19,4), t.RETIRE_OFFICER_PAY))
+  ) v(field_name, amount)
+)
+SELECT
+  field_name,
+  COUNT_BIG(*) AS row_count,
+  SUM(CASE WHEN amount IS NULL THEN 1 ELSE 0 END) AS null_count,
+  SUM(CASE WHEN amount = CONVERT(decimal(19,4), 0) THEN 1 ELSE 0 END) AS zero_count,
+  SUM(CASE WHEN amount IS NOT NULL
+                AND amount <> CONVERT(decimal(19,4), 0) THEN 1 ELSE 0 END)
+    AS nonzero_count
+FROM fund_values
+GROUP BY field_name
+ORDER BY field_name;
+
+-- Q6：基金候选字段共现；N=NULL、Z=0、V=非零，顺序见结果说明。
+WITH signatures AS (
+  SELECT CONCAT(
+    CASE WHEN T_FundPay IS NULL THEN 'N'
+         WHEN T_FundPay = 0 THEN 'Z' ELSE 'V' END, '|',
+    CASE WHEN NT_AgencySumPay IS NULL THEN 'N'
+         WHEN NT_AgencySumPay = 0 THEN 'Z' ELSE 'V' END, '|',
+    CASE WHEN NT_BasicPay IS NULL THEN 'N'
+         WHEN NT_BasicPay = 0 THEN 'Z' ELSE 'V' END, '|',
+    CASE WHEN NT_CivilPay IS NULL THEN 'N'
+         WHEN NT_CivilPay = 0 THEN 'Z' ELSE 'V' END, '|',
+    CASE WHEN NT_OtherPay IS NULL THEN 'N'
+         WHEN NT_OtherPay = 0 THEN 'Z' ELSE 'V' END
+  ) AS amount_signature
+  FROM dbo.o_Trade
+)
+SELECT amount_signature, COUNT_BIG(*) AS row_count
+FROM signatures
+GROUP BY amount_signature
+ORDER BY row_count DESC, amount_signature;
+
+-- Q7：仅验证候选 NT_AgencySumPay = NT_BasicPay + NT_CivilPay + NT_OtherPay。
+WITH base AS (
+  SELECT
+    T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag,
+    CASE
+      WHEN NT_AgencySumPay IS NULL OR NT_BasicPay IS NULL
+        OR NT_CivilPay IS NULL OR NT_OtherPay IS NULL THEN NULL
+      ELSE ABS(CONVERT(decimal(19,4), NT_AgencySumPay)
+             - CONVERT(decimal(19,4), NT_BasicPay)
+             - CONVERT(decimal(19,4), NT_CivilPay)
+             - CONVERT(decimal(19,4), NT_OtherPay))
+    END AS agency_parts_abs_diff
+  FROM dbo.o_Trade
+)
+SELECT
+  CASE WHEN GROUPING_ID(
+    T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag
+  ) = 15 THEN 'all' ELSE 'state' END AS scope_name,
+  T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag,
+  COUNT_BIG(*) AS row_count,
+  SUM(CASE WHEN agency_parts_abs_diff IS NULL THEN 1 ELSE 0 END) AS missing,
+  SUM(CASE WHEN agency_parts_abs_diff IS NOT NULL
+                AND agency_parts_abs_diff <= CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS passed,
+  SUM(CASE WHEN agency_parts_abs_diff IS NOT NULL
+                AND agency_parts_abs_diff > CONVERT(decimal(19,4), 0.0100)
+           THEN 1 ELSE 0 END) AS failed,
+  MAX(agency_parts_abs_diff) AS max_abs_diff,
+  SUM(agency_parts_abs_diff) AS sum_abs_diff
+FROM base
+GROUP BY GROUPING SETS (
+  (),
+  (T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag)
+)
+ORDER BY
+  GROUPING_ID(T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag) DESC,
+  T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag;
+```
+
+[来源: 文档级证据批次 outpatient_p0_t3_20260827_073210Z；上述 SQL 一次执行成功，未重试]
+
+#### o_Trade 金额等式
+
+“缺/通/败”分别为任一参与字段 NULL、绝对差 ≤ 0.01 元、绝对差 > 0.01 元。差异使用未取绝对值前的原字段精度转为 `decimal(19,4)` 后计算；最大/合计均为绝对差。
+
+| 等式 | 行数 | 缺 | 通 | 败 | 最大绝对差（元） | 合计绝对差（元） |
+|---|---:|---:|---:|---:|---:|---:|
+| T_FeeAll = T_FeeIn + T_FeeOut | 592 | 0 | 587 | 5 | 9.0000 | 33.9500 |
+| T_FeeAll = T_FundPay + T_SelfPayAll | 592 | 0 | 586 | 6 | 600.0000 | 1,329.0000 |
+
+[来源: outpatient_p0_t3_20260827_073210Z Q3 全量聚合]
+
+| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 行数 | FeeAll=FeeIn+FeeOut 缺/通/败 | 最大/合计差 | FeeAll=FundPay+SelfPayAll 缺/通/败 | 最大/合计差 |
+|---:|---:|---|---|---:|---|---:|---|---:|
+| -3 | 0 | NULL | `''` | 2 | 0/2/0 | 0.0000/0.0000 | 0/2/0 | 0.0000/0.0000 |
+| -3 | 0 | `''` | NULL | 5 | 0/5/0 | 0.0000/0.0000 | 0/5/0 | 0.0000/0.0000 |
+| -3 | 1 | `''` | NULL | 1 | 0/1/0 | 0.0000/0.0000 | 0/1/0 | 0.0000/0.0000 |
+| -1 | 0 | `''` | NULL | 1 | 0/1/0 | 0.0000/0.0000 | 0/1/0 | 0.0000/0.0000 |
+| 3 | 0 | NULL | `''` | 3 | 0/3/0 | 0.0000/0.0000 | 0/1/2 | 55.0000/105.0000 |
+| 3 | 0 | `''` | NULL | 14 | 0/14/0 | 0.0000/0.0000 | 0/14/0 | 0.0000/0.0000 |
+| 3 | 1 | NULL | `''` | 5 | 0/5/0 | 0.0000/0.0000 | 0/2/3 | 600.0000/1,212.0000 |
+| 3 | 1 | NULL | `1` | 1 | 0/1/0 | 0.0000/0.0000 | 0/0/1 | 12.0000/12.0000 |
+| 4 | 0 | `''` | NULL | 393 | 0/390/3 | 8.0000/15.9500 | 0/393/0 | 0.0000/0.0000 |
+| 4 | 1 | `''` | NULL | 133 | 0/132/1 | 9.0000/9.0000 | 0/133/0 | 0.0000/0.0000 |
+| 4 | 1 | `1` | NULL | 34 | 0/33/1 | 9.0000/9.0000 | 0/34/0 | 0.0000/0.0000 |
+
+[来源: outpatient_p0_t3_20260827_073210Z Q3 四状态组合聚合]
+
+[推断: 基于上述数值聚合] 两组候选等式均出现实质差异，因此不能冻结为无条件金额口径。差异在状态组合上的分布仅是相关性；没有权威状态字典和有效记录规则时，不把任何状态码解释为成功、退费、冲正或应排除状态，也不把差异直接认定为脏数据。
+
+#### o_FeeItem 关联与逐交易勾稽
+
+| 验证项 | 聚合结果 | 判断 |
+|---|---:|---|
+| 费用明细行数 | 2,139 | 全量 |
+| 复合键分量 NULL（T_TradeNo / ItemId / ItemNo） | 0 / 0 / 0 | 通过 |
+| `(T_TradeNo, ItemId, ItemNo)` 重复组 | 0 | 通过；`duplicate_rows` 的 SQL 空集 SUM 为 NULL，因重复组为 0，实际没有重复涉及行 |
+| 主表交易 / 明细聚合交易 | 592 / 592 | 通过 |
+| 主表无明细 / 明细无主表 | 0 / 0 | 通过 |
+
+[来源: outpatient_p0_t3_20260827_073210Z Q2、Q4 全量聚合]
+
+| 明细汇总与主表比较 | 比较交易 | 缺 | 通 | 败 | 最大绝对差（元） | 合计绝对差（元） |
+|---|---:|---:|---:|---:|---:|---:|
+| SUM(o_FeeItem.Fee) = o_Trade.T_FeeAll | 592 | 0 | 590 | 2 | 250.0000 | 300.0000 |
+| SUM(o_FeeItem.FeeIn) = o_Trade.T_FeeIn | 592 | 0 | 592 | 0 | 0.0030 | 0.0380 |
+| SUM(o_FeeItem.FeeOut) = o_Trade.T_FeeOut | 592 | 0 | 587 | 5 | 9.0000 | 33.9840 |
+
+[来源: outpatient_p0_t3_20260827_073210Z Q4 全量聚合]
+
+| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 交易数 | 主无明/明无主 | Fee 缺/通/败；最大/合计差 | FeeIn 缺/通/败；最大/合计差 | FeeOut 缺/通/败；最大/合计差 |
+|---:|---:|---|---|---:|---|---|---|---|
+| -3 | 0 | NULL | `''` | 2 | 0/0 | 0/0/2；250.0000/300.0000 | 0/2/0；0.0000/0.0000 | 0/2/0；0.0000/0.0000 |
+| -3 | 0 | `''` | NULL | 5 | 0/0 | 0/5/0；0.0000/0.0000 | 0/5/0；0.0000/0.0000 | 0/5/0；0.0000/0.0000 |
+| -3 | 1 | `''` | NULL | 1 | 0/0 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 |
+| -1 | 0 | `''` | NULL | 1 | 0/0 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 |
+| 3 | 0 | NULL | `''` | 3 | 0/0 | 0/3/0；0.0000/0.0000 | 0/3/0；0.0000/0.0000 | 0/3/0；0.0000/0.0000 |
+| 3 | 0 | `''` | NULL | 14 | 0/0 | 0/14/0；0.0000/0.0000 | 0/14/0；0.0000/0.0000 | 0/14/0；0.0000/0.0000 |
+| 3 | 1 | NULL | `''` | 5 | 0/0 | 0/5/0；0.0000/0.0000 | 0/5/0；0.0000/0.0000 | 0/5/0；0.0000/0.0000 |
+| 3 | 1 | NULL | `1` | 1 | 0/0 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 |
+| 4 | 0 | `''` | NULL | 393 | 0/0 | 0/393/0；0.0000/0.0000 | 0/393/0；0.0030/0.0350 | 0/390/3；8.0000/15.9810 |
+| 4 | 1 | `''` | NULL | 133 | 0/0 | 0/133/0；0.0000/0.0000 | 0/133/0；0.0030/0.0030 | 0/132/1；9.0000/9.0030 |
+| 4 | 1 | `1` | NULL | 34 | 0/0 | 0/34/0；0.0000/0.0000 | 0/34/0；0.0000/0.0000 | 0/33/1；9.0000/9.0000 |
+
+[来源: outpatient_p0_t3_20260827_073210Z Q4 四状态组合聚合]
+
+[推断: 基于 Q2/Q4] 复合键、T_TradeNo 主从覆盖和 FeeIn 勾稽通过，但 Fee 有 2 笔、FeeOut 有 5 笔超过 0.01 元，金额门禁未通过。差异状态分布不构成有效状态规则；在业务字典签认前不得删除或筛掉这些记录来制造全量通过。
+
+#### 多专项基金候选字段
+
+本节只统计 Task 1 已确认物理存在的字段。NULL、0、非零严格分列；不把 T_FundPay 与任何专项字段相加，也不把共现关系写成业务口径。
+
+| 字段 | 行数 | NULL | 0 | 非零 |
+|---|---:|---:|---:|---:|
+| T_FundPay | 592 | 0 | 284 | 308 |
+| T_BigPay | 592 | 0 | 288 | 304 |
+| T_BCPay | 592 | 0 | 571 | 21 |
+| T_JCPay | 592 | 0 | 592 | 0 |
+| T_OfficalPay | 592 | 0 | 573 | 19 |
+| NT_AgencySumPay | 592 | 581 | 5 | 6 |
+| NT_BasicPay | 592 | 581 | 9 | 2 |
+| NT_CivilPay | 592 | 0 | 590 | 2 |
+| NT_OtherPay | 592 | 581 | 11 | 0 |
+| T_BigillPay | 592 | 11 | 578 | 3 |
+| RETIRE_OFFICER_PAY | 592 | 11 | 573 | 8 |
+
+[来源: outpatient_p0_t3_20260827_073210Z Q5]
+
+共现签名顺序固定为 `T_FundPay | NT_AgencySumPay | NT_BasicPay | NT_CivilPay | NT_OtherPay`；`N`=NULL、`Z`=0、`V`=非零。
+
+| 共现签名 | 行数 |
+|---|---:|
+| V\|N\|N\|Z\|N | 306 |
+| Z\|N\|N\|Z\|N | 273 |
+| Z\|Z\|Z\|Z\|Z | 5 |
+| Z\|V\|Z\|Z\|Z | 4 |
+| V\|N\|N\|V\|N | 2 |
+| Z\|V\|V\|Z\|Z | 2 |
+
+[来源: outpatient_p0_t3_20260827_073210Z Q6]
+
+`NT_AgencySumPay = NT_BasicPay + NT_CivilPay + NT_OtherPay` 仅按字段名作为候选等式验证，不视为权威业务公式。
+
+| 范围 | 行数 | 缺 | 通 | 败 | 最大绝对差（元） | 合计绝对差（元） |
+|---|---:|---:|---:|---:|---:|---:|
+| 全量 | 592 | 581 | 5 | 6 | 537.7600 | 1,204.5200 |
+
+| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 行数 | 缺/通/败 | 最大/合计差（元） |
+|---:|---:|---|---|---:|---|---:|
+| -3 | 0 | NULL | `''` | 2 | 0/2/0 | 0.0000/0.0000 |
+| -3 | 0 | `''` | NULL | 5 | 5/0/0 | NULL/NULL |
+| -3 | 1 | `''` | NULL | 1 | 1/0/0 | NULL/NULL |
+| -1 | 0 | `''` | NULL | 1 | 1/0/0 | NULL/NULL |
+| 3 | 0 | NULL | `''` | 3 | 0/1/2 | 55.0000/105.0000 |
+| 3 | 0 | `''` | NULL | 14 | 14/0/0 | NULL/NULL |
+| 3 | 1 | NULL | `''` | 5 | 0/2/3 | 537.7600/1,087.5200 |
+| 3 | 1 | NULL | `1` | 1 | 0/0/1 | 12.0000/12.0000 |
+| 4 | 0 | `''` | NULL | 393 | 393/0/0 | NULL/NULL |
+| 4 | 1 | `''` | NULL | 133 | 133/0/0 | NULL/NULL |
+| 4 | 1 | `1` | NULL | 34 | 34/0/0 | NULL/NULL |
+
+[来源: outpatient_p0_t3_20260827_073210Z Q7]
+
+[推断: 基于 Q5–Q7] 候选分项字段 581/592 行不完整，在仅 11 行可比较记录中仍有 6 行超过容差；这些结果否定“当前数据已证明候选等式”的说法，但不能反向证明字段间真实业务关系。业务字典与医保办签认前，所有专项基金关系均保持候选/待确认。
+
+#### 30 个脱敏锚点人工票据核对
+
+状态：`MANUAL_TICKET_RECONCILIATION_BLOCKED`。
+
+[来源: 本任务执行边界] 当前没有医保办票据、票据访问授权人员或获批的脱敏锚点传递通道，因此本批次没有选取、导出或展示任何原始锚点，也没有用数据库行代替人工票据核对。
+
+解锁所需外部输入：至少 30 份由医保办在批准环境内选取的票据及其脱敏锚点映射；覆盖规则和有效状态范围；权威金额/退款/冲正字典；逐票据主金额与费用明细核对表。原始票据和行级映射只保存在医院批准的受控通道，本文仅接收脱敏聚合结论与签认结果。
+
+签认角色：医保办授权经办人执行逐票核对，医保办负责人签认票据与金额口径，数据负责人签认字段和有效状态规则，信息安全/隐私负责人批准票据访问及脱敏传递边界。
+
+#### 唯一费用明细源决定
+
+| 冻结门槛 | 结果 | 状态 |
+|---|---|---|
+| 复合键与主从关联 | 复合键无重复；592/592 主交易均有明细，主表无明细 0、明细无主表 0 | 通过 |
+| 金额勾稽 | Fee 2 笔失败、FeeOut 5 笔失败；两组 o_Trade 自身等式也分别有 5、6 笔失败 | 未通过 |
+| 有效状态规则 | 四状态组合已聚合，但没有权威状态字典和筛选规则 | BLOCKED |
+| 至少 30 个票据人工核对 | 无票据和授权人员，未选取或导出锚点 | `MANUAL_TICKET_RECONCILIATION_BLOCKED` |
+| dbo.o_FeeItem 唯一费用明细源 | 仅保持候选；不冻结 | BLOCKED |
+
+[推断: 基于 outpatient_p0_t3_20260827_073210Z 与冻结门槛] dbo.o_FeeItem 的键和关联门槛通过，但金额、有效状态和人工票据三项门槛未全部通过，因此不能冻结为唯一费用明细源。
+
+[推断: 基于数据侧已出现超过容差的实质差异] `yb_mzfymx_mz` 仅登记为下一步**待授权验证候选**；本任务没有查询该表，也没有扩大 Task 1 的 dbo.o_Trade、dbo.o_FeeItem 两表白名单。只有取得额外表授权后才能单独验证，不能据字段名预设其优于 dbo.o_FeeItem。
 
 ## 增量游标
 
@@ -751,6 +1171,9 @@ T_TradeNo 和费用复合键没有重复，因此没有对应的重复键状态�
 | T1-B04 | 候选表包含直接标识符、证件/卡号及电子凭证类高敏字段 | 后续 Skill 或指标若直接读取将违反最小化与脱敏要求 | 建立允许字段白名单、用途说明和 security/desensitization 验证证据 |
 | T2-B01 | [来源: outpatient_p0_t2_20260827_070052Z] T_SetTid 有 11 行 NULL，且 2 个重复组涉及 326/592 行；重复横跨多种状态组合 | [推断: 基于全量计数] 不能冻结为内部结算锚点，`settlement_id → 单笔交易` 假设失效，P1 阻断 | 取得 T_SetTid 权威业务定义、合法一对多/版本规则及人工签认；在此之前不得自行设计替代键 |
 | T2-B02 | [来源: outpatient_p0_t2_20260827_070052Z] T_TradeDate 为无时区 datetime，尚未取得其业务时区与时钟语义；固定服务器时钟参数形成的窗口只观察到交易/关联明细 0 | [推断: 基于字段类型与缺失的业务时区定义] 不能把该观察值作为可靠最近 30 天证据；不影响全量键、重复和主从关系结论 | 由数据负责人确认 T_TradeDate 的业务时区/时钟语义，并按确认后的时间口径重新执行参数化窗口查询 |
+| T3-B01 | [来源: outpatient_p0_t3_20260827_073210Z] o_Trade 两组等式分别有 5、6 笔超差；o_FeeItem 汇总的 Fee、FeeOut 分别有 2、5 笔超差；状态码无权威有效规则 | [推断: 基于全量 decimal 聚合] 金额门禁和有效状态门禁未通过，dbo.o_FeeItem 不能冻结为唯一费用明细源 | 由医保办与数据负责人签认金额公式、舍入和有效状态规则；按签认规则重新执行同口径聚合并解释全部超差 |
+| T3-B02 | `MANUAL_TICKET_RECONCILIATION_BLOCKED`：当前没有至少 30 份医保办票据、票据访问授权人员或获批脱敏传递通道 | 无法完成唯一明细源的人工票据门禁 | 由医保办授权经办人完成至少 30 票据逐笔核对，医保办负责人、数据负责人和信息安全/隐私负责人签认 |
+| T3-B03 | [来源: outpatient_p0_t3_20260827_073210Z] 专项基金候选等式 592 行中 581 行缺字段，11 行可比较记录中 6 行超差 | 不能把字段名相关性发布为基金总分公式 | 取得权威基金字段字典与公式并由医保办、数据负责人签认；未签认前保持候选/待确认 |
 
 网络、SQL Server 连接、元数据 SELECT 和发现任务持久化均成功，不构成 Task 1 的连接阻断。
 
@@ -762,9 +1185,15 @@ Task 1 已形成两张候选表的发现证据草稿、数据库版本/脱敏权
 
 [来源: 文档级证据批次 outpatient_p0_t2_20260827_070052Z；本文留存只读 SQL 与执行时间] Task 2 已通过批准的注册表入口完成全量键、重复、孤儿和状态组合聚合；服务器时钟窗口查询仅保留为观察值，业务最近 30 天口径为 BLOCKED。仅执行只读语句，没有修改生产代码或源库。该草稿不代表正式审核完成。
 
-[推断: 基于 outpatient_p0_t2_20260827_070052Z 的全量键、重复与孤儿计数] 当前证据冻结 T_TradeNo 为交易业务键、`(T_TradeNo, ItemId, ItemNo)` 为费用明细幂等键，并确认全量 T_TradeNo 主从关系无孤儿。内部结算锚点仍为 BLOCKED：T2-B01 解锁前，P1 禁止继续使用 `settlement_id → 单笔交易` 假设。T1-B01 至 T1-B04 与 T2-B02 仍保持；金额勾稽、增量游标、容量性能、政策 Skill 依赖和运营指标依赖未在 Task 2 提前处理。
+[来源: 文档级证据批次 outpatient_p0_t3_20260827_073210Z；本文留存完整只读 SQL、固定执行时间、聚合计数和失败分类] Task 3 已完成两组主表金额等式、三组逐交易明细勾稽、专项基金候选字段和四状态组合的全量聚合。七组查询一次成功，无超时或字段不存在；仅执行 SELECT/SET，没有输出行级标识、修改源库或扩大两表白名单。
+
+[推断: 基于 outpatient_p0_t2_20260827_070052Z 与 outpatient_p0_t3_20260827_073210Z] 当前证据冻结 T_TradeNo 为交易业务键、`(T_TradeNo, ItemId, ItemNo)` 为费用明细幂等键，并确认全量 T_TradeNo 主从关系无孤儿。内部结算锚点仍为 BLOCKED：T2-B01 解锁前，P1 禁止继续使用 `settlement_id → 单笔交易` 假设。dbo.o_FeeItem 仅保持费用明细候选：金额超差、有效状态规则和 `MANUAL_TICKET_RECONCILIATION_BLOCKED` 未解除前不得冻结；`yb_mzfymx_mz` 只登记为下一步待授权验证候选。增量游标、容量性能、政策 Skill 依赖和运营指标依赖未在 Task 3 提前处理。
+
+Task 3 执行结果：**DONE_WITH_CONCERNS**。关注项为 T3-B01 至 T3-B03，未伪造人工票据或业务字典完成。
 
 | 待审核角色 | 审核状态 | 签认 |
 |---|---|---|
+| 医保办授权经办人 | 待审核 | 至少 30 票据逐笔核对留空 |
 | 医保办负责人 | 待审核 | 留空；Task 7 完成 |
 | 数据负责人 | 待审核 | 留空；Task 7 完成 |
+| 信息安全/隐私负责人 | 待审核 | 票据访问与脱敏边界留空 |
