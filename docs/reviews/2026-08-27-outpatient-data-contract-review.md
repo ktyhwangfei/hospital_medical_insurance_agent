@@ -668,7 +668,7 @@ ORDER BY period, key_name, T_State, T_HasRefundmented, T_PartialReturnFlag, NT_R
 |---|---|---|---|
 | o_Trade 行数 | 592 | 0（非可靠最近 30 天证据） | [推断: 因业务时区未确认，观察窗口 **BLOCKED**，不据此判断近期无交易] |
 | T_SetTid NULL / 去重数 | 11 / 257 | 0 / 0（观察值） | [推断: 全量计数不满足内部结算锚点的一对一要求] |
-| T_SetTid 重复组数 / 涉及行数 | 2 / 326 | 0 / 0（观察值） | [推断: 基于全量重复证据 **BLOCKED**，停止 `settlement_id → 单笔交易` 假设，P1 阻断] |
+| T_SetTid 重复组数 / 涉及行数 | 2 / 326 | 0 / 0（观察值） | [推断: 基于全量重复证据与 Issue20 §5.2 强制内部锚点要求 **BLOCKED**，停止 `settlement_id → 单笔交易` 假设，九个执行 Profile 均阻断] |
 | T_TradeNo NULL / 去重数 | 0 / 592 | 0 / 0（观察值） | [推断: 仅基于全量 592 行及物理主键，冻结为交易业务键] |
 | T_TradeNo 重复组数 / 涉及行数 | 0 / 0 | 0 / 0（观察值） | [推断: 全量结论冻结，观察窗口不参与冻结] |
 | o_FeeItem 行数 | 2,139 | 0（按父交易日期得到的观察值） | 不据此判断近期无明细 |
@@ -1189,169 +1189,171 @@ ORDER BY
 
 - 当前 `settlement_explain_skill` 是住院费用解释：数据提供器读取五张住院表；assembler/fact_builder 消费住院起付、统筹、大额和个人支付字段；政策检索的确定性过滤实际依赖 `insu_type`、`med_type`、`hosp_lv`、`psn_type`，现有 `NormalizedPolicyContext` 尚无地区、结算日期、异地、慢特病、专项待遇或政策适用机构字段。
 - 现有住院标准化器会在缺值时补“城镇职工”“住院-普通住院”“三级医院”“退休人员”。[推断: 基于现有代码] 这些是门诊新 Skill 必须禁止继承的住院默认值；门诊上下文缺失必须保持 `missing`/`missing_external_context`。
-- 设计字段按 `table.column` 去重后为 104 个（`o_Trade` 84、`o_FeeItem` 20；同名 `T_TradeNo` 是两张表各自的物理列），本次全部物理存在；另核对 3 个政策上下文物理候选、3 个可信外部语义上下文和 8 个明确排除的敏感字段。矩阵共 118 行，未重复其余 118 个无关字段。
+- 设计字段按 `table.column` 去重后为 104 个（`o_Trade` 84、`o_FeeItem` 20；同名 `T_TradeNo` 是两张表各自的物理列），本次全部物理存在。A–F 共 107 个可聚合物理字段（104 个设计字段 + 3 个政策上下文物理候选）完成画像；G 组 8 个敏感字段只引用 Task 1 `INFORMATION_SCHEMA` 元数据、不做数据画像；另登记 3 个不可由两表提供的外部上下文。矩阵共 118 行。
 - 物理存在不等于语义闭包完成。除 Task 2 已证明的内部交易/明细键外，当前没有院方字段字典或医保办签认足以把字段名候选升级为权威业务含义；尤其 `TB_*`/`TA_*` 不得仅凭前缀解释为交易前/后。
 
 矩阵缩写：`n/z/v/d` 分别为 NULL、显式零（字符串为显式空串）、非零/非空、distinct；`oT`=`dbo.o_Trade`（592 行），`oF`=`dbo.o_FeeItem`（2,139 行）。`S1` 为授权场景内普通医保事实，`S2` 为可关联业务键/敏感健康事实（仅内部受限使用），`S3` 为直接标识或明确排除字段。Profile：P1 整体结算，P2 个人负担，P3 支付渠道，P4 起付与年度累计，P5 比例与封顶，P6 目录与明细，P7 身份与专项，P8 异地与机构，P9 状态与退费，`ALL` 表示九个 Profile 的内部定位依赖。
 
+“是否核心”按用户任务而非字段数量判定：Issue20 §4 的公共上下文与 §5.2 强制锚点为“通用核心”；总设计 §9.4/§10 及 Issue20 §4/§5.4 中决定某 Profile 能否产生主要输出的字段为“对应Profile核心”；重复候选、内部去重或不能单独形成结论的字段为“辅助”；必须由可信系统注入且缺失即不能判断的上下文为“外部核心”；禁止进入公开 Skill 的字段为“排除”。[来源: 总设计 §9.3–§10.6；Issue20 §4–§6]
+
 ##### A. 交易定位与状态（13 个）
 
-| 语义名 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 状态 |
-|---|---|---|:---:|---|---|---|---|---|
-| 结算定位候选 / `T_SetTid` | oT | varchar(30) NULL | 是 | 11/324/257/257 | [来源: D10.1/I5.4A；Task 2 证明不能唯一定位] | S2，内部定位 | ALL | `semantics_pending` |
-| 交易业务键 / `T_TradeNo` | oT | nvarchar(22) NOT NULL | 是 | 0/0/592/592 | [来源: Task 2 全量非空唯一] | S2，禁止公开 | P1,P6,P9 | `verified` |
-| 交易日期 / `T_TradeDate` | oT | datetime NOT NULL | 是 | 0/0/592/540 | [来源: D10.1/I5.4A；时区语义未签认] | S1 | P1,P4,P5,P9 | `semantics_pending` |
-| 交易状态 / `T_State` | oT | int NOT NULL | 是 | 0/0/592/4 | [来源: D10.1/I5.4A；无权威码表] | S1 | P1,P9 | `semantics_pending` |
-| 已退款标志 / `T_HasRefundmented` | oT | int NOT NULL | 是 | 0/418/174/2 | [来源: D10.1/I5.4A；无权威码表] | S1 | P9 | `semantics_pending` |
-| 部分退费标志 / `T_PartialReturnFlag` | oT | nvarchar(1) NULL | 是 | 11/547/34/2 | [来源: D10.1/I5.4A；无权威码表] | S1 | P9 | `semantics_pending` |
-| 原交易号 / `T_OraginalTradeNo` | oT | nvarchar(22) NULL | 是 | 0/504/88/88 | [来源: D10.1/I5.4A；退款链含义未签认] | S2，禁止公开 | P9 | `semantics_pending` |
-| 原交易日期 / `T_OraginalTradeDate` | oT | datetime NULL | 是 | 469/0/123/87 | [来源: D10.1/I5.4A；退款链含义未签认] | S1 | P9 | `semantics_pending` |
-| 国家平台结算状态 / `NP_Settle_State` | oT | varchar(1) NULL | 是 | 11/0/581/2 | [来源: D10.1/I5.4A；无权威码表] | S1 | P9 | `semantics_pending` |
-| 国家平台结算日期 / `SETL_DATE` | oT | datetime NULL | 是 | 17/0/575/257 | [来源: D10.1/I5.4A；与交易日期优先级未签认] | S1 | P5,P9 | `semantics_pending` |
-| 重交易标志 / `NT_ReTradeFlag` | oT | varchar(3) NULL | 是 | 581/10/1/2 | [来源: D10.1/I5.4A；无权威码表] | S1 | P9 | `semantics_pending` |
-| 诊断交易类型 / `T_DiagType` | oT | nvarchar(1) NULL | 是 | 0/0/592/5 | [来源: I5.4A；无权威码表] | S1 | P5,P7 | `semantics_pending` |
-| 费用号 / `T_FeeNo` | oT | nvarchar(20) NULL | 是 | 0/143/449/402 | [来源: I5.4A；内部关联用途未签认] | S2，禁止公开 | P1,P6 | `semantics_pending` |
+| 语义名 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 是否核心 | 状态 |
+|---|---|---|:---:|---|---|---|---|---|---|
+| 强制内部结算锚点（当前多笔歧义） / `T_SetTid` | oT | varchar(30) NULL | 是 | 11/324/257/257 | [来源: Issue20 §5.2 强制 `settlement_id→T_SetTid`；Task 2 证明不能唯一定位] | S2，内部定位 | ALL | 通用核心 | `semantics_pending` |
+| 交易业务键 / `T_TradeNo` | oT | nvarchar(22) NOT NULL | 是 | 0/0/592/592 | [来源: Task 2 全量非空唯一] | S2，禁止公开 | P1,P6,P9 | 对应Profile核心 | `verified` |
+| 交易日期 / `T_TradeDate` | oT | datetime NOT NULL | 是 | 0/0/592/540 | [来源: D10.1/I5.4A；时区语义未签认] | S1 | P1,P4,P5,P9 | 对应Profile核心 | `semantics_pending` |
+| 交易状态 / `T_State` | oT | int NOT NULL | 是 | 0/0/592/4 | [来源: D10.1/I5.4A；无权威码表] | S1 | P1,P9 | 对应Profile核心 | `semantics_pending` |
+| 已退款标志 / `T_HasRefundmented` | oT | int NOT NULL | 是 | 0/418/174/2 | [来源: D10.1/I5.4A；无权威码表] | S1 | P9 | 对应Profile核心 | `semantics_pending` |
+| 部分退费标志 / `T_PartialReturnFlag` | oT | nvarchar(1) NULL | 是 | 11/547/34/2 | [来源: D10.1/I5.4A；无权威码表] | S1 | P9 | 对应Profile核心 | `semantics_pending` |
+| 原交易号 / `T_OraginalTradeNo` | oT | nvarchar(22) NULL | 是 | 0/504/88/88 | [来源: D10.1/I5.4A；退款链含义未签认] | S2，禁止公开 | P9 | 对应Profile核心 | `semantics_pending` |
+| 原交易日期 / `T_OraginalTradeDate` | oT | datetime NULL | 是 | 469/0/123/87 | [来源: D10.1/I5.4A；退款链含义未签认] | S1 | P9 | 对应Profile核心 | `semantics_pending` |
+| 国家平台结算状态 / `NP_Settle_State` | oT | varchar(1) NULL | 是 | 11/0/581/2 | [来源: D10.1/I5.4A；无权威码表] | S1 | P9 | 对应Profile核心 | `semantics_pending` |
+| 国家平台结算日期 / `SETL_DATE` | oT | datetime NULL | 是 | 17/0/575/257 | [来源: D10.1/I5.4A；与交易日期优先级未签认] | S1 | P5,P9 | 对应Profile核心 | `semantics_pending` |
+| 重交易标志 / `NT_ReTradeFlag` | oT | varchar(3) NULL | 是 | 581/10/1/2 | [来源: D10.1/I5.4A；无权威码表] | S1 | P9 | 对应Profile核心 | `semantics_pending` |
+| 诊断交易类型 / `T_DiagType` | oT | nvarchar(1) NULL | 是 | 0/0/592/5 | [来源: I5.4A；无权威码表] | S1 | P5,P7 | 辅助 | `semantics_pending` |
+| 费用号 / `T_FeeNo` | oT | nvarchar(20) NULL | 是 | 0/143/449/402 | [来源: I5.4A；内部关联用途未签认] | S2，禁止公开 | P1,P6 | 辅助 | `semantics_pending` |
 
 ##### B. 待遇身份与政策匹配（21 个）
 
-| 语义名 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 状态 |
-|---|---|---|:---:|---|---|---|---|---|
-| 险种 / `P_FundType` | oT | int NOT NULL | 是 | 0/0/592/9 | [来源: D10.2/I5.4B；现有检索要求 insu_type；无码表] | S1 | P1,P5,P7,P8 | `semantics_pending` |
-| 人员类别 / `PN_PersonType` | oT | int NOT NULL | 是 | 0/0/592/28 | [来源: D10.2/I5.4B；现有检索要求 psn_type；无码表] | S1 | P2,P5,P7 | `semantics_pending` |
-| 医疗类别 / `T_CureType` | oT | int NOT NULL | 是 | 0/0/592/4 | [来源: D10.2/I5.4B；现有检索要求 med_type；无码表] | S1 | P1,P5,P8 | `semantics_pending` |
-| 机构待遇等级候选 / `P_JCLevel` | oT | int NOT NULL | 是 | 0/572/20/3 | [来源: D10.2/I5.4B；不能仅凭字段名等同 hosp_lv] | S1 | P5,P8 | `semantics_pending` |
-| 医院待遇标志 / `P_HospFlag` | oT | int NOT NULL | 是 | 0/570/22/3 | [来源: D10.2/I5.4B；无权威码表] | S1 | P7,P8 | `semantics_pending` |
-| 异地交易标志 / `PN_OutTransaction` | oT | nvarchar(3) NULL | 是 | 11/79/502/2 | [来源: D10.2/I5.4B；空串不等于否] | S1 | P8 | `semantics_pending` |
-| 国家险种 / `PN_NationFundType` | oT | varchar(6) NULL | 是 | 581/0/11/1 | [来源: D10.2/I5.4B；无码表] | S1 | P5,P7,P8 | `semantics_pending` |
-| 慢特病标志 / `PN_ChronicFlag` | oT | nvarchar(2) NOT NULL | 是 | 0/11/581/2 | [来源: D10.2/I5.4B；无码表] | S2，健康事实 | P5,P7 | `semantics_pending` |
-| 慢特病代码 / `PN_ChronicCode` | oT | nvarchar(50) NOT NULL | 是 | 0/592/0/1 | [来源: D10.2/I5.4B；不输出代码样例] | S2，健康事实 | P5,P7 | `semantics_pending` |
-| 慢特病定点机构标志 / `PN_IsChronicHosp` | oT | nvarchar(2) NOT NULL | 是 | 0/0/592/1 | [来源: D10.2/I5.4B；无码表] | S2，健康事实 | P5,P7,P8 | `semantics_pending` |
-| 公务员待遇候选 / `P_Official` | oT | int NOT NULL | 是 | 0/503/89/3 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | `semantics_pending` |
-| 退休待遇标志 / `P_retirementflag` | oT | varchar(50) NULL | 是 | 587/0/5/2 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P5,P7 | `semantics_pending` |
-| 民政待遇标志 / `P_CivilFlag` | oT | varchar(10) NULL | 是 | 11/0/581/2 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | `semantics_pending` |
-| 民政待遇类型 / `P_CivilType` | oT | varchar(10) NULL | 是 | 11/0/581/5 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | `semantics_pending` |
-| 退役军官待遇标志 / `RETIRE_OFFICER_FLAG` | oT | varchar(1) NULL | 是 | 11/0/581/2 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | `semantics_pending` |
-| 公费归属标志 / `T_GFBelongFlag` | oT | varchar(50) NULL | 是 | 585/0/7/1 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | `semantics_pending` |
-| 补充医院标志 / `T_CompHospFlag` | oT | varchar(50) NULL | 是 | 585/0/7/1 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7,P8 | `semantics_pending` |
-| 专项结算标志 / `T_SpSetlFlag` | oT | varchar(3) NULL | 是 | 11/7/574/2 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | `semantics_pending` |
-| 专项待遇内部号 / `T_pneno` | oT | varchar(50) NULL | 是 | 583/9/0/1 | [来源: D10.2/I5.4B；内部号含义未签认] | S2，禁止公开 | P7 | `semantics_pending` |
-| 全自费标志 / `NT_AllSelfPayFlag` | oT | varchar(3) NULL | 是 | 581/2/9/2 | [来源: D10.2/I5.4B；无码表] | S1 | P1,P2,P7 | `semantics_pending` |
-| 无待遇原因 / `PN_NoRightReason` | oT | nvarchar(20) NULL | 是 | 0/435/157/6 | [来源: D10.2/I5.4B；自由文本不输出样例] | S2，受限文本 | P7,P9 | `semantics_pending` |
+| 语义名 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 是否核心 | 状态 |
+|---|---|---|:---:|---|---|---|---|---|---|
+| 险种 / `P_FundType` | oT | int NOT NULL | 是 | 0/0/592/9 | [来源: D10.2/I5.4B；现有检索要求 insu_type；无码表] | S1 | P1,P5,P7,P8 | 对应Profile核心 | `semantics_pending` |
+| 人员类别 / `PN_PersonType` | oT | int NOT NULL | 是 | 0/0/592/28 | [来源: D10.2/I5.4B；现有检索要求 psn_type；无码表] | S1 | P2,P5,P7 | 对应Profile核心 | `semantics_pending` |
+| 医疗类别 / `T_CureType` | oT | int NOT NULL | 是 | 0/0/592/4 | [来源: D10.2/I5.4B；现有检索要求 med_type；无码表] | S1 | P1,P5,P8 | 对应Profile核心 | `semantics_pending` |
+| 机构待遇等级候选 / `P_JCLevel` | oT | int NOT NULL | 是 | 0/572/20/3 | [来源: D10.2/I5.4B；不能仅凭字段名等同 hosp_lv] | S1 | P5,P8 | 对应Profile核心 | `semantics_pending` |
+| 医院待遇标志 / `P_HospFlag` | oT | int NOT NULL | 是 | 0/570/22/3 | [来源: D10.2/I5.4B；无权威码表] | S1 | P7,P8 | 辅助 | `semantics_pending` |
+| 异地交易标志 / `PN_OutTransaction` | oT | nvarchar(3) NULL | 是 | 11/79/502/2 | [来源: D10.2/I5.4B；空串不等于否] | S1 | P8 | 对应Profile核心 | `semantics_pending` |
+| 国家险种 / `PN_NationFundType` | oT | varchar(6) NULL | 是 | 581/0/11/1 | [来源: D10.2/I5.4B；无码表] | S1 | P5,P7,P8 | 对应Profile核心 | `semantics_pending` |
+| 慢特病标志 / `PN_ChronicFlag` | oT | nvarchar(2) NOT NULL | 是 | 0/11/581/2 | [来源: D10.2/I5.4B；无码表] | S2，健康事实 | P5,P7 | 对应Profile核心 | `semantics_pending` |
+| 慢特病代码 / `PN_ChronicCode` | oT | nvarchar(50) NOT NULL | 是 | 0/592/0/1 | [来源: D10.2/I5.4B；不输出代码样例] | S2，健康事实 | P5,P7 | 对应Profile核心 | `semantics_pending` |
+| 慢特病定点机构标志 / `PN_IsChronicHosp` | oT | nvarchar(2) NOT NULL | 是 | 0/0/592/1 | [来源: D10.2/I5.4B；无码表] | S2，健康事实 | P5,P7,P8 | 对应Profile核心 | `semantics_pending` |
+| 公务员待遇候选 / `P_Official` | oT | int NOT NULL | 是 | 0/503/89/3 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | 对应Profile核心 | `semantics_pending` |
+| 退休待遇标志 / `P_retirementflag` | oT | varchar(50) NULL | 是 | 587/0/5/2 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P5,P7 | 辅助 | `semantics_pending` |
+| 民政待遇标志 / `P_CivilFlag` | oT | varchar(10) NULL | 是 | 11/0/581/2 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | 对应Profile核心 | `semantics_pending` |
+| 民政待遇类型 / `P_CivilType` | oT | varchar(10) NULL | 是 | 11/0/581/5 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | 对应Profile核心 | `semantics_pending` |
+| 退役军官待遇标志 / `RETIRE_OFFICER_FLAG` | oT | varchar(1) NULL | 是 | 11/0/581/2 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | 对应Profile核心 | `semantics_pending` |
+| 公费归属标志 / `T_GFBelongFlag` | oT | varchar(50) NULL | 是 | 585/0/7/1 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | 辅助 | `semantics_pending` |
+| 补充医院标志 / `T_CompHospFlag` | oT | varchar(50) NULL | 是 | 585/0/7/1 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7,P8 | 辅助 | `semantics_pending` |
+| 专项结算标志 / `T_SpSetlFlag` | oT | varchar(3) NULL | 是 | 11/7/574/2 | [来源: D10.2/I5.4B；无码表] | S2，待遇事实 | P7 | 对应Profile核心 | `semantics_pending` |
+| 专项待遇内部号 / `T_pneno` | oT | varchar(50) NULL | 是 | 583/9/0/1 | [来源: D10.2/I5.4B；内部号含义未签认] | S2，禁止公开 | P7 | 辅助 | `semantics_pending` |
+| 全自费标志 / `NT_AllSelfPayFlag` | oT | varchar(3) NULL | 是 | 581/2/9/2 | [来源: D10.2/I5.4B；无码表] | S1 | P1,P2,P7 | 对应Profile核心 | `semantics_pending` |
+| 无待遇原因 / `PN_NoRightReason` | oT | nvarchar(20) NULL | 是 | 0/435/157/6 | [来源: D10.2/I5.4B；自由文本不输出样例] | S2，受限文本 | P7,P9 | 对应Profile核心 | `semantics_pending` |
 
 ##### C. 当次费用与支付（26 个）
 
-| 语义名 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 状态 |
-|---|---|---|:---:|---|---|---|---|---|
-| 总费用 / `T_FeeAll` | oT | decimal(10,2) NOT NULL | 是 | 0/2/590/60 | [来源: D10.3/I5.4C；Task 3 公式有超差] | S1 | P1 | `semantics_pending` |
-| 医保内费用 / `T_FeeIn` | oT | decimal(10,2) NOT NULL | 是 | 0/241/351/73 | [来源: D10.3/I5.4C；Task 3 公式有超差] | S1 | P1,P5,P6 | `semantics_pending` |
-| 医保外费用 / `T_FeeOut` | oT | decimal(10,2) NOT NULL | 是 | 0/127/465/71 | [来源: D10.3/I5.4C；Task 3 公式有超差] | S1 | P1,P2,P6 | `semantics_pending` |
-| 起付金额 / `T_FirstPay` | oT | decimal(10,2) NOT NULL | 是 | 0/541/51/24 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P4,P5 | `semantics_pending` |
-| 自付一 / `T_SelfPay1` | oT | decimal(10,2) NOT NULL | 是 | 0/491/101/49 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P5 | `semantics_pending` |
-| 自付二 / `T_SelfPay2` | oT | decimal(10,2) NOT NULL | 是 | 0/417/175/35 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P6 | `semantics_pending` |
-| 个人自付合计 / `T_SelfPayAll` | oT | decimal(10,2) NOT NULL | 是 | 0/128/464/86 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P1,P2 | `semantics_pending` |
-| 大额基金支付 / `T_BigPay` | oT | decimal(10,2) NOT NULL | 是 | 0/288/304/72 | [来源: D10.3/I5.4C；口径待签认] | S1 | P3,P5,P7 | `semantics_pending` |
-| 大额个人自付 / `T_BigSelfPay` | oT | decimal(10,2) NOT NULL | 是 | 0/529/63/33 | [来源: D10.3/I5.4C；口径待签认] | S1 | P2,P5 | `semantics_pending` |
-| 超大额费用 / `T_BeyondBig` | oT | decimal(10,2) NOT NULL | 是 | 0/588/4/5 | [来源: D10.3/I5.4C；口径待签认] | S1 | P2,P5 | `semantics_pending` |
-| 基金支付总额候选 / `T_FundPay` | oT | decimal(10,2) NOT NULL | 是 | 0/284/308/77 | [来源: D10.3/I5.4C；不得与分项盲加] | S1 | P1,P3 | `semantics_pending` |
-| 个人账户支付 / `T_PersonCountPay` | oT | decimal(10,2) NOT NULL | 是 | 0/465/127/44 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P3 | `semantics_pending` |
-| 现金支付 / `T_CashPay` | oT | decimal(10,2) NOT NULL | 是 | 0/239/353/72 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P3 | `semantics_pending` |
-| 交易前账户余额候选 / `PN_PersonCount` | oT | decimal(10,2) NOT NULL | 是 | 0/468/124/85 | [来源: D10.3/I5.4C；前后语义待签认] | S1 | P3 | `semantics_pending` |
-| 交易后账户余额候选 / `T_PersonCountAfter` | oT | decimal(10,2) NOT NULL | 是 | 0/486/106/80 | [来源: D10.3/I5.4C；前后语义待签认] | S1 | P3 | `semantics_pending` |
-| 补充支付 / `T_BCPay` | oT | decimal(10,2) NOT NULL | 是 | 0/571/21/14 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P3,P7 | `semantics_pending` |
-| 救助支付 / `T_JCPay` | oT | decimal(10,2) NOT NULL | 是 | 0/592/0/1 | [来源: D10.3/I5.4C；零不能推出不适用] | S1 | P3,P7 | `semantics_pending` |
-| 公疗支付 / `T_OfficalPay` | oT | numeric(12,2) NULL | 是 | 0/573/19/11 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P3,P7 | `semantics_pending` |
-| 大病支付 / `T_BigillPay` | oT | decimal(10,2) NULL | 是 | 11/578/3/4 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P3,P7 | `semantics_pending` |
-| 国家基础支付 / `NT_BasicPay` | oT | numeric(16,2) NULL | 是 | 581/9/2/3 | [来源: D10.3/I5.4C；总分关系待签认] | S1 | P3 | `semantics_pending` |
-| 国家民政支付 / `NT_CivilPay` | oT | numeric(16,2) NULL | 是 | 0/590/2/3 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P3,P7 | `semantics_pending` |
-| 国家其他支付 / `NT_OtherPay` | oT | numeric(16,2) NULL | 是 | 581/11/0/1 | [来源: D10.3/I5.4C；零不能推出不适用] | S1 | P3 | `semantics_pending` |
-| 经办支付合计候选 / `NT_AgencySumPay` | oT | numeric(16,2) NULL | 是 | 581/5/6/7 | [来源: D10.3/I5.4C；不得与分项盲加] | S1 | P1,P3 | `semantics_pending` |
-| 退役军官支付 / `RETIRE_OFFICER_PAY` | oT | decimal(10,2) NULL | 是 | 11/573/8/5 | [来源: D10.3/I5.4C；资格联动待签认] | S1 | P3,P7 | `semantics_pending` |
-| 异地二次比例候选 / `NT_OUT2_SCALE` | oT | numeric(16,2) NULL | 是 | 581/8/3/4 | [来源: D10.3/I5.4C；比例单位待签认] | S1 | P5,P8 | `semantics_pending` |
-| 异地二次金额候选 / `NT_OUT2_PRICE` | oT | numeric(16,2) NULL | 是 | 581/8/3/3 | [来源: D10.3/I5.4C；金额口径待签认] | S1 | P5,P8 | `semantics_pending` |
+| 语义名 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 是否核心 | 状态 |
+|---|---|---|:---:|---|---|---|---|---|---|
+| 总费用 / `T_FeeAll` | oT | decimal(10,2) NOT NULL | 是 | 0/2/590/60 | [来源: D10.3/I5.4C；Task 3 公式有超差] | S1 | P1 | 对应Profile核心 | `semantics_pending` |
+| 医保内费用 / `T_FeeIn` | oT | decimal(10,2) NOT NULL | 是 | 0/241/351/73 | [来源: D10.3/I5.4C；Task 3 公式有超差] | S1 | P1,P5,P6 | 对应Profile核心 | `semantics_pending` |
+| 医保外费用 / `T_FeeOut` | oT | decimal(10,2) NOT NULL | 是 | 0/127/465/71 | [来源: D10.3/I5.4C；Task 3 公式有超差] | S1 | P1,P2,P6 | 对应Profile核心 | `semantics_pending` |
+| 起付金额 / `T_FirstPay` | oT | decimal(10,2) NOT NULL | 是 | 0/541/51/24 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P4,P5 | 对应Profile核心 | `semantics_pending` |
+| 自付一 / `T_SelfPay1` | oT | decimal(10,2) NOT NULL | 是 | 0/491/101/49 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P5 | 对应Profile核心 | `semantics_pending` |
+| 自付二 / `T_SelfPay2` | oT | decimal(10,2) NOT NULL | 是 | 0/417/175/35 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P6 | 对应Profile核心 | `semantics_pending` |
+| 个人自付合计 / `T_SelfPayAll` | oT | decimal(10,2) NOT NULL | 是 | 0/128/464/86 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P1,P2 | 对应Profile核心 | `semantics_pending` |
+| 大额基金支付 / `T_BigPay` | oT | decimal(10,2) NOT NULL | 是 | 0/288/304/72 | [来源: D10.3/I5.4C；口径待签认] | S1 | P3,P5,P7 | 对应Profile核心 | `semantics_pending` |
+| 大额个人自付 / `T_BigSelfPay` | oT | decimal(10,2) NOT NULL | 是 | 0/529/63/33 | [来源: D10.3/I5.4C；口径待签认] | S1 | P2,P5 | 对应Profile核心 | `semantics_pending` |
+| 超大额费用 / `T_BeyondBig` | oT | decimal(10,2) NOT NULL | 是 | 0/588/4/5 | [来源: D10.3/I5.4C；口径待签认] | S1 | P2,P5 | 对应Profile核心 | `semantics_pending` |
+| 基金支付总额候选 / `T_FundPay` | oT | decimal(10,2) NOT NULL | 是 | 0/284/308/77 | [来源: D10.3/I5.4C；不得与分项盲加] | S1 | P1,P3 | 对应Profile核心 | `semantics_pending` |
+| 个人账户支付 / `T_PersonCountPay` | oT | decimal(10,2) NOT NULL | 是 | 0/465/127/44 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P3 | 对应Profile核心 | `semantics_pending` |
+| 现金支付 / `T_CashPay` | oT | decimal(10,2) NOT NULL | 是 | 0/239/353/72 | [来源: D10.3/I5.4C；公式待签认] | S1 | P2,P3 | 对应Profile核心 | `semantics_pending` |
+| 交易前账户余额候选 / `PN_PersonCount` | oT | decimal(10,2) NOT NULL | 是 | 0/468/124/85 | [来源: D10.3/I5.4C；前后语义待签认] | S1 | P3 | 对应Profile核心 | `semantics_pending` |
+| 交易后账户余额候选 / `T_PersonCountAfter` | oT | decimal(10,2) NOT NULL | 是 | 0/486/106/80 | [来源: D10.3/I5.4C；前后语义待签认] | S1 | P3 | 对应Profile核心 | `semantics_pending` |
+| 补充支付 / `T_BCPay` | oT | decimal(10,2) NOT NULL | 是 | 0/571/21/14 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P3,P7 | 对应Profile核心 | `semantics_pending` |
+| 字段语义冲突：救助/军残支付候选 / `T_JCPay` | oT | decimal(10,2) NOT NULL | 是 | 0/592/0/1 | [来源: D10.3/I5.4C 仅列字段；Issue20 §4 的专项待遇同时涉及救助与军残；无字典不得二选一] | S1 | P3,P7 | 对应Profile核心 | `semantics_pending` |
+| 公疗支付 / `T_OfficalPay` | oT | numeric(12,2) NULL | 是 | 0/573/19/11 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P3,P7 | 对应Profile核心 | `semantics_pending` |
+| 大病支付 / `T_BigillPay` | oT | decimal(10,2) NULL | 是 | 11/578/3/4 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P3,P7 | 对应Profile核心 | `semantics_pending` |
+| 国家基础支付 / `NT_BasicPay` | oT | numeric(16,2) NULL | 是 | 581/9/2/3 | [来源: D10.3/I5.4C；总分关系待签认] | S1 | P3 | 对应Profile核心 | `semantics_pending` |
+| 国家民政支付 / `NT_CivilPay` | oT | numeric(16,2) NULL | 是 | 0/590/2/3 | [来源: D10.3/I5.4C；成员关系待签认] | S1 | P3,P7 | 对应Profile核心 | `semantics_pending` |
+| 国家其他支付 / `NT_OtherPay` | oT | numeric(16,2) NULL | 是 | 581/11/0/1 | [来源: D10.3/I5.4C；零不能推出不适用] | S1 | P3 | 对应Profile核心 | `semantics_pending` |
+| 经办支付合计候选 / `NT_AgencySumPay` | oT | numeric(16,2) NULL | 是 | 581/5/6/7 | [来源: D10.3/I5.4C；不得与分项盲加] | S1 | P1,P3 | 对应Profile核心 | `semantics_pending` |
+| 退役军官支付 / `RETIRE_OFFICER_PAY` | oT | decimal(10,2) NULL | 是 | 11/573/8/5 | [来源: D10.3/I5.4C；资格联动待签认] | S1 | P3,P7 | 对应Profile核心 | `semantics_pending` |
+| 异地二次比例候选 / `NT_OUT2_SCALE` | oT | numeric(16,2) NULL | 是 | 581/8/3/4 | [来源: D10.3/I5.4C；比例单位待签认] | S1 | P5,P8 | 对应Profile核心 | `semantics_pending` |
+| 异地二次金额候选 / `NT_OUT2_PRICE` | oT | numeric(16,2) NULL | 是 | 581/8/3/3 | [来源: D10.3/I5.4C；金额口径待签认] | S1 | P5,P8 | 对应Profile核心 | `semantics_pending` |
 
 ##### D. 年度累计、起付与封顶（24 个）
 
 下列 `TB_*`/`TA_*` 仅登记物理类型和聚合；“交易前/后”均是设计候选，不是已验证含义。`TA_MZTimes` 的物理类型为 `int`，与设计的 Count 类型不冲突，但没有字段字典证明 `TA` 或其与 `TB_MZTimes` 的增量语义，故继续阻断。
 
-| 语义候选 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 状态 |
-|---|---|---|:---:|---|---|---|---|---|
-| 交易前医保内累计候选 / `TB_FeeIn` | oT | decimal(10,2) NOT NULL | 是 | 0/441/151/57 | [来源: D10.4/I5.4D；前后释义无字典] | S1 | P4,P5 | `semantics_pending` |
-| 交易后医保内累计候选 / `TA_FeeIn` | oT | decimal(10,2) NOT NULL | 是 | 0/261/331/131 | 同上 | S1 | P4,P5 | `semantics_pending` |
-| 交易前大额累计候选 / `TB_BigPay` | oT | decimal(10,2) NOT NULL | 是 | 0/456/136/49 | 同上 | S1 | P4,P5 | `semantics_pending` |
-| 交易后大额累计候选 / `TA_BigPay` | oT | decimal(10,2) NOT NULL | 是 | 0/287/305/92 | 同上 | S1 | P4,P5 | `semantics_pending` |
-| 交易前封顶后费用候选 / `TB_FeeAfterBig` | oT | decimal(10,2) NOT NULL | 是 | 0/586/6/5 | 同上 | S1 | P4,P5 | `semantics_pending` |
-| 交易后封顶后费用候选 / `TA_FeeAfterBig` | oT | decimal(10,2) NOT NULL | 是 | 0/586/6/7 | 同上 | S1 | P4,P5 | `semantics_pending` |
-| 交易前门诊次数候选 / `TB_MZTimes` | oT | int NOT NULL | 是 | 0/587/5/2 | [来源: D10.4/I5.4D；无字段字典] | S1 | P4 | `semantics_pending` |
-| 交易后门诊次数候选 / `TA_MZTimes` | oT | int NOT NULL | 是 | 0/359/233/3 | [来源: D10.4/I5.4D；类型为 int，释义仍冲突待解] | S1 | P4 | `semantics_pending` |
-| 交易前超封顶医保内候选 / `TB_BeyondFeeIn` | oT | decimal(10,2) NULL | 是 | 11/581/0/1 | [来源: D10.4/I5.4D；零不能推出不适用] | S1 | P4,P5 | `semantics_pending` |
-| 交易后超封顶医保内候选 / `TA_BeyondFeeIn` | oT | decimal(10,2) NULL | 是 | 11/575/6/7 | 同组释义无字典 | S1 | P4,P5 | `semantics_pending` |
-| 交易前大病累计基数候选 / `TB_BigillComm` | oT | decimal(10,2) NULL | 是 | 11/489/92/40 | 同组释义无字典 | S1 | P4,P5,P7 | `semantics_pending` |
-| 交易后大病累计基数候选 / `TA_BigillComm` | oT | decimal(10,2) NULL | 是 | 11/393/188/93 | 同组释义无字典 | S1 | P4,P5,P7 | `semantics_pending` |
-| 交易前大病支付累计候选 / `TB_BigillPay` | oT | decimal(10,2) NULL | 是 | 11/550/31/5 | 同组释义无字典 | S1 | P4,P5,P7 | `semantics_pending` |
-| 交易后大病支付累计候选 / `TA_BigillPay` | oT | decimal(10,2) NULL | 是 | 11/550/31/6 | 同组释义无字典 | S1 | P4,P5,P7 | `semantics_pending` |
-| 交易前民政累计基数候选 / `TB_CivilComm` | oT | decimal(10,2) NULL | 是 | 11/574/7/6 | 同组释义无字典 | S1 | P4,P7 | `semantics_pending` |
-| 交易后民政累计基数候选 / `TA_CivilComm` | oT | decimal(10,2) NULL | 是 | 11/574/7/7 | 同组释义无字典 | S1 | P4,P7 | `semantics_pending` |
-| 交易前民政支付累计候选 / `TB_CivilPay` | oT | decimal(10,2) NULL | 是 | 11/574/7/5 | 同组释义无字典 | S1 | P4,P7 | `semantics_pending` |
-| 交易后民政支付累计候选 / `TA_CivilPay` | oT | decimal(10,2) NULL | 是 | 11/574/7/4 | 同组释义无字典 | S1 | P4,P7 | `semantics_pending` |
-| 交易前一级机构医保内候选 / `TB_FeeInL1` | oT | decimal(10,2) NULL | 是 | 0/587/5/3 | 同组释义无字典 | S1 | P4,P5,P8 | `semantics_pending` |
-| 交易后一级机构医保内候选 / `TA_FeeInL1` | oT | decimal(10,2) NULL | 是 | 0/587/5/3 | 同组释义无字典 | S1 | P4,P5,P8 | `semantics_pending` |
-| 交易前一级机构大额候选 / `TB_BigPayL1` | oT | decimal(10,2) NULL | 是 | 0/590/2/2 | 同组释义无字典 | S1 | P4,P5,P8 | `semantics_pending` |
-| 交易后一级机构大额候选 / `TA_BigPayL1` | oT | decimal(10,2) NULL | 是 | 0/590/2/2 | 同组释义无字典 | S1 | P4,P5,P8 | `semantics_pending` |
-| 交易前一级机构封顶后候选 / `TB_FeeAfterBigL1` | oT | decimal(10,2) NULL | 是 | 0/589/3/2 | 同组释义无字典 | S1 | P4,P5,P8 | `semantics_pending` |
-| 交易后一级机构封顶后候选 / `TA_FeeAfterBigL1` | oT | decimal(10,2) NULL | 是 | 0/589/3/2 | 同组释义无字典 | S1 | P4,P5,P8 | `semantics_pending` |
+| 语义候选 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 是否核心 | 状态 |
+|---|---|---|:---:|---|---|---|---|---|---|
+| 交易前医保内累计候选 / `TB_FeeIn` | oT | decimal(10,2) NOT NULL | 是 | 0/441/151/57 | [来源: D10.4/I5.4D；前后释义无字典] | S1 | P4,P5 | 对应Profile核心 | `semantics_pending` |
+| 交易后医保内累计候选 / `TA_FeeIn` | oT | decimal(10,2) NOT NULL | 是 | 0/261/331/131 | 同上 | S1 | P4,P5 | 对应Profile核心 | `semantics_pending` |
+| 交易前大额累计候选 / `TB_BigPay` | oT | decimal(10,2) NOT NULL | 是 | 0/456/136/49 | 同上 | S1 | P4,P5 | 对应Profile核心 | `semantics_pending` |
+| 交易后大额累计候选 / `TA_BigPay` | oT | decimal(10,2) NOT NULL | 是 | 0/287/305/92 | 同上 | S1 | P4,P5 | 对应Profile核心 | `semantics_pending` |
+| 交易前封顶后费用候选 / `TB_FeeAfterBig` | oT | decimal(10,2) NOT NULL | 是 | 0/586/6/5 | 同上 | S1 | P4,P5 | 对应Profile核心 | `semantics_pending` |
+| 交易后封顶后费用候选 / `TA_FeeAfterBig` | oT | decimal(10,2) NOT NULL | 是 | 0/586/6/7 | 同上 | S1 | P4,P5 | 对应Profile核心 | `semantics_pending` |
+| 交易前门诊次数候选 / `TB_MZTimes` | oT | int NOT NULL | 是 | 0/587/5/2 | [来源: D10.4/I5.4D；无字段字典] | S1 | P4 | 对应Profile核心 | `semantics_pending` |
+| 交易后门诊次数候选 / `TA_MZTimes` | oT | int NOT NULL | 是 | 0/359/233/3 | [来源: D10.4/I5.4D；类型为 int，释义仍冲突待解] | S1 | P4 | 对应Profile核心 | `semantics_pending` |
+| 交易前超封顶医保内候选 / `TB_BeyondFeeIn` | oT | decimal(10,2) NULL | 是 | 11/581/0/1 | [来源: D10.4/I5.4D；零不能推出不适用] | S1 | P4,P5 | 对应Profile核心 | `semantics_pending` |
+| 交易后超封顶医保内候选 / `TA_BeyondFeeIn` | oT | decimal(10,2) NULL | 是 | 11/575/6/7 | 同组释义无字典 | S1 | P4,P5 | 对应Profile核心 | `semantics_pending` |
+| 交易前大病累计基数候选 / `TB_BigillComm` | oT | decimal(10,2) NULL | 是 | 11/489/92/40 | 同组释义无字典 | S1 | P4,P5,P7 | 对应Profile核心 | `semantics_pending` |
+| 交易后大病累计基数候选 / `TA_BigillComm` | oT | decimal(10,2) NULL | 是 | 11/393/188/93 | 同组释义无字典 | S1 | P4,P5,P7 | 对应Profile核心 | `semantics_pending` |
+| 交易前大病支付累计候选 / `TB_BigillPay` | oT | decimal(10,2) NULL | 是 | 11/550/31/5 | 同组释义无字典 | S1 | P4,P5,P7 | 对应Profile核心 | `semantics_pending` |
+| 交易后大病支付累计候选 / `TA_BigillPay` | oT | decimal(10,2) NULL | 是 | 11/550/31/6 | 同组释义无字典 | S1 | P4,P5,P7 | 对应Profile核心 | `semantics_pending` |
+| 交易前民政累计基数候选 / `TB_CivilComm` | oT | decimal(10,2) NULL | 是 | 11/574/7/6 | 同组释义无字典 | S1 | P4,P7 | 对应Profile核心 | `semantics_pending` |
+| 交易后民政累计基数候选 / `TA_CivilComm` | oT | decimal(10,2) NULL | 是 | 11/574/7/7 | 同组释义无字典 | S1 | P4,P7 | 对应Profile核心 | `semantics_pending` |
+| 交易前民政支付累计候选 / `TB_CivilPay` | oT | decimal(10,2) NULL | 是 | 11/574/7/5 | 同组释义无字典 | S1 | P4,P7 | 对应Profile核心 | `semantics_pending` |
+| 交易后民政支付累计候选 / `TA_CivilPay` | oT | decimal(10,2) NULL | 是 | 11/574/7/4 | 同组释义无字典 | S1 | P4,P7 | 对应Profile核心 | `semantics_pending` |
+| 交易前一级机构医保内候选 / `TB_FeeInL1` | oT | decimal(10,2) NULL | 是 | 0/587/5/3 | 同组释义无字典 | S1 | P4,P5,P8 | 对应Profile核心 | `semantics_pending` |
+| 交易后一级机构医保内候选 / `TA_FeeInL1` | oT | decimal(10,2) NULL | 是 | 0/587/5/3 | 同组释义无字典 | S1 | P4,P5,P8 | 对应Profile核心 | `semantics_pending` |
+| 交易前一级机构大额候选 / `TB_BigPayL1` | oT | decimal(10,2) NULL | 是 | 0/590/2/2 | 同组释义无字典 | S1 | P4,P5,P8 | 对应Profile核心 | `semantics_pending` |
+| 交易后一级机构大额候选 / `TA_BigPayL1` | oT | decimal(10,2) NULL | 是 | 0/590/2/2 | 同组释义无字典 | S1 | P4,P5,P8 | 对应Profile核心 | `semantics_pending` |
+| 交易前一级机构封顶后候选 / `TB_FeeAfterBigL1` | oT | decimal(10,2) NULL | 是 | 0/589/3/2 | 同组释义无字典 | S1 | P4,P5,P8 | 对应Profile核心 | `semantics_pending` |
+| 交易后一级机构封顶后候选 / `TA_FeeAfterBigL1` | oT | decimal(10,2) NULL | 是 | 0/589/3/2 | 同组释义无字典 | S1 | P4,P5,P8 | 对应Profile核心 | `semantics_pending` |
 
 ##### E. 费用明细（20 个）
 
-| 语义名 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 状态 |
-|---|---|---|:---:|---|---|---|---|---|
-| 交易外键 / `T_TradeNo` | oF | nvarchar(22) NOT NULL | 是 | 0/0/2139/592 | [来源: Task 2 全量无孤儿，N:1 到 oT] | S2，禁止公开 | P6 | `verified` |
-| 明细键组成 / `ItemId` | oF | int NOT NULL | 是 | 0/592/1547/33 | [来源: Task 2 复合键非空唯一] | S2，内部键 | P6 | `verified` |
-| 明细键组成 / `ItemNo` | oF | int NOT NULL | 是 | 0/82/2057/51 | [来源: Task 2 复合键非空唯一] | S2，内部键 | P6 | `verified` |
-| 院内项目代码 / `ItemCode` | oF | nvarchar(40) NOT NULL | 是 | 0/0/2139/98 | [来源: D10.5/I5.4E；代码体系未签认] | S2，健康事实 | P6 | `semantics_pending` |
-| 标准项目代码 / `StandardCode` | oF | varchar(40) NULL | 是 | 0/0/2139/92 | [来源: D10.5/I5.4E；代码体系未签认] | S2，健康事实 | P6 | `semantics_pending` |
-| 项目名称 / `ItemName` | oF | nvarchar(100) NOT NULL | 是 | 0/0/2139/94 | [来源: D10.5/I5.4E；授权解释内最小展示] | S2，健康事实 | P6 | `semantics_pending` |
-| 项目类型 / `ItemType` | oF | int NOT NULL | 是 | 0/670/1469/4 | [来源: D10.5/I5.4E；无码表] | S1 | P6 | `semantics_pending` |
-| 费用类型 / `FeeType` | oF | nvarchar(4) NOT NULL | 是 | 0/0/2139/17 | [来源: D10.5/I5.4E；无码表] | S1 | P6 | `semantics_pending` |
-| 医保项目等级 / `F_LEVEL` | oF | nvarchar(3) NULL | 是 | 0/0/2139/4 | [来源: D10.5/I5.4E；无码表] | S1 | P6 | `semantics_pending` |
-| 数量 / `Count` | oF | numeric(10,2) NOT NULL | 是 | 0/7/2132/16 | [来源: D10.5/I5.4E；单位关系待签认] | S1 | P6 | `semantics_pending` |
-| 单价 / `UnitPrice` | oF | decimal(10,4) NOT NULL | 是 | 0/0/2139/74 | [来源: D10.5/I5.4E；舍入规则待签认] | S1 | P6 | `semantics_pending` |
-| 项目费用 / `Fee` | oF | decimal(10,4) NOT NULL | 是 | 0/7/2132/119 | [来源: D10.5/I5.4E；Task 3 逐交易有超差] | S1 | P6 | `semantics_pending` |
-| 项目医保内候选 / `FeeIn` | oF | decimal(10,4) NOT NULL | 是 | 0/1020/1119/129 | [来源: D10.5/I5.4E；Task 3 口径未冻结] | S1 | P6 | `semantics_pending` |
-| 项目医保外候选 / `FeeOut` | oF | decimal(10,4) NOT NULL | 是 | 0/874/1265/95 | [来源: D10.5/I5.4E；Task 3 口径未冻结] | S1 | P6 | `semantics_pending` |
-| 项目自付二 / `SelfPay2` | oF | decimal(10,4) NOT NULL | 是 | 0/1917/222/44 | [来源: D10.5/I5.4E；汇总关系待签认] | S1 | P6 | `semantics_pending` |
-| 项目先自付比例 / `FEE_SP_SCALE` | oF | decimal(18,4) NULL | 是 | 0/2040/99/26 | [来源: D10.5/I5.4E；比例单位待签认] | S1 | P6 | `semantics_pending` |
-| 项目超限价自付 / `FEE_MEDIC_L` | oF | decimal(18,4) NULL | 是 | 0/2097/42/8 | [来源: D10.5/I5.4E；口径待签认] | S1 | P6 | `semantics_pending` |
-| 超限价自付候选 / `MEDIC_L` | oF | decimal(5,4) NULL | 是 | 0/2036/103/3 | [来源: D10.5/I5.4E；与 FEE_MEDIC_L 关系待签认] | S1 | P6 | `semantics_pending` |
-| 特殊药品标志 / `SPEDRUG_FLAG` | oF | varchar(3) NULL | 是 | 0/0/2139/1 | [来源: D10.5/I5.4E；零/代码不能推出不适用] | S2，健康事实 | P6,P7 | `semantics_pending` |
-| 明细状态 / `State` | oF | int NOT NULL | 是 | 0/1757/382/2 | [来源: D10.5/I5.4E；无权威有效码表] | S1 | P6,P9 | `semantics_pending` |
+| 语义名 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 是否核心 | 状态 |
+|---|---|---|:---:|---|---|---|---|---|---|
+| 交易外键 / `T_TradeNo` | oF | nvarchar(22) NOT NULL | 是 | 0/0/2139/592 | [来源: Task 2 全量无孤儿，N:1 到 oT] | S2，禁止公开 | P6 | 对应Profile核心 | `verified` |
+| 明细键组成 / `ItemId` | oF | int NOT NULL | 是 | 0/592/1547/33 | [来源: Task 2 复合键非空唯一] | S2，内部键 | P6 | 辅助 | `verified` |
+| 明细键组成 / `ItemNo` | oF | int NOT NULL | 是 | 0/82/2057/51 | [来源: Task 2 复合键非空唯一] | S2，内部键 | P6 | 辅助 | `verified` |
+| 院内项目代码 / `ItemCode` | oF | nvarchar(40) NOT NULL | 是 | 0/0/2139/98 | [来源: D10.5/I5.4E；代码体系未签认] | S2，健康事实 | P6 | 对应Profile核心 | `semantics_pending` |
+| 标准项目代码 / `StandardCode` | oF | varchar(40) NULL | 是 | 0/0/2139/92 | [来源: D10.5/I5.4E；代码体系未签认] | S2，健康事实 | P6 | 辅助 | `semantics_pending` |
+| 项目名称 / `ItemName` | oF | nvarchar(100) NOT NULL | 是 | 0/0/2139/94 | [来源: D10.5/I5.4E；授权解释内最小展示] | S2，健康事实 | P6 | 对应Profile核心 | `semantics_pending` |
+| 项目类型 / `ItemType` | oF | int NOT NULL | 是 | 0/670/1469/4 | [来源: D10.5/I5.4E；无码表] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 费用类型 / `FeeType` | oF | nvarchar(4) NOT NULL | 是 | 0/0/2139/17 | [来源: D10.5/I5.4E；无码表] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 医保项目等级 / `F_LEVEL` | oF | nvarchar(3) NULL | 是 | 0/0/2139/4 | [来源: D10.5/I5.4E；无码表] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 数量 / `Count` | oF | numeric(10,2) NOT NULL | 是 | 0/7/2132/16 | [来源: D10.5/I5.4E；单位关系待签认] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 单价 / `UnitPrice` | oF | decimal(10,4) NOT NULL | 是 | 0/0/2139/74 | [来源: D10.5/I5.4E；舍入规则待签认] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 项目费用 / `Fee` | oF | decimal(10,4) NOT NULL | 是 | 0/7/2132/119 | [来源: D10.5/I5.4E；Task 3 逐交易有超差] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 项目医保内候选 / `FeeIn` | oF | decimal(10,4) NOT NULL | 是 | 0/1020/1119/129 | [来源: D10.5/I5.4E；Task 3 口径未冻结] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 项目医保外候选 / `FeeOut` | oF | decimal(10,4) NOT NULL | 是 | 0/874/1265/95 | [来源: D10.5/I5.4E；Task 3 口径未冻结] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 项目自付二 / `SelfPay2` | oF | decimal(10,4) NOT NULL | 是 | 0/1917/222/44 | [来源: D10.5/I5.4E；汇总关系待签认] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 项目先自付比例 / `FEE_SP_SCALE` | oF | decimal(18,4) NULL | 是 | 0/2040/99/26 | [来源: D10.5/I5.4E；比例单位待签认] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 项目超限价自付 / `FEE_MEDIC_L` | oF | decimal(18,4) NULL | 是 | 0/2097/42/8 | [来源: D10.5/I5.4E；口径待签认] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 超限价自付候选 / `MEDIC_L` | oF | decimal(5,4) NULL | 是 | 0/2036/103/3 | [来源: D10.5/I5.4E；与 FEE_MEDIC_L 关系待签认] | S1 | P6 | 对应Profile核心 | `semantics_pending` |
+| 特殊药品标志 / `SPEDRUG_FLAG` | oF | varchar(3) NULL | 是 | 0/0/2139/1 | [来源: D10.5/I5.4E；零/代码不能推出不适用] | S2，健康事实 | P6,P7 | 对应Profile核心 | `semantics_pending` |
+| 明细状态 / `State` | oF | int NOT NULL | 是 | 0/1757/382/2 | [来源: D10.5/I5.4E；无权威有效码表] | S1 | P6,P9 | 对应Profile核心 | `semantics_pending` |
 
 ##### F. 现有政策检索上下文与可信外部依赖（6 个）
 
-| 语义名 / 原物理字段 | 源或可信上下文 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 状态 |
-|---|---|---|:---:|---|---|---|---|---|
-| 参保地区候选 / `PN_InsuredAreaCode` | oT | varchar(6) NULL | 是 | 581/0/11/1 | [推断: 字段名只支持参保地区候选，不能等同政策地区] | S2 | P5,P7,P8 | `semantics_pending` |
-| 机构代码候选 / `T_HospCode` | oT | nvarchar(10) NOT NULL | 是 | 0/0/592/1 | [推断: 需医院主数据映射，不输出代码] | S2，机构内部键 | P5,P8 | `semantics_pending` |
-| 机构代码候选 A / `T_HospCodeA` | oT | nvarchar(10) NOT NULL | 是 | 0/0/592/2 | [推断: 与 T_HospCode 关系未签认] | S2，机构内部键 | P5,P8 | `semantics_pending` |
-| 政策地区 / `policy_region` | 可信 HIS/医保接入上下文 + 政策元数据 | — | 否 | — | [来源: 现有政策检索缺该字段；不能用 PN_InsuredAreaCode 直接替代] | S1 | P5,P7,P8 | `missing_external_context` |
-| 登录医院与政策适用机构 / `hospital_id`,`policy_applicable_institution` | 登录组织 + 医院主数据 + 政策适用机构元数据 | — | 否 | — | [来源: Issue20 公共上下文 hospital_id；两表代码未获映射] | S2 | P5,P8 | `missing_external_context` |
-| 规范化专项待遇类型 / `special_benefit_type` | 可信资格接口 + 已发布政策证据 | — | 否 | — | [推断: 多个专项标志不能无字典合成统一资格事实] | S2，待遇事实 | P5,P7 | `missing_external_context` |
+| 语义名 / 原物理字段 | 源或可信上下文 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 是否核心 | 状态 |
+|---|---|---|:---:|---|---|---|---|---|---|
+| 参保地区候选 / `PN_InsuredAreaCode` | oT | varchar(6) NULL | 是 | 581/0/11/1 | [推断: 字段名只支持参保地区候选，不能等同政策地区] | S2 | P5,P7,P8 | 辅助 | `semantics_pending` |
+| 机构代码候选 / `T_HospCode` | oT | nvarchar(10) NOT NULL | 是 | 0/0/592/1 | [推断: 需医院主数据映射，不输出代码] | S2，机构内部键 | P5,P8 | 辅助 | `semantics_pending` |
+| 机构代码候选 A / `T_HospCodeA` | oT | nvarchar(10) NOT NULL | 是 | 0/0/592/2 | [推断: 与 T_HospCode 关系未签认] | S2，机构内部键 | P5,P8 | 辅助 | `semantics_pending` |
+| 政策地区 / `policy_region` | 可信 HIS/医保接入上下文 + 政策元数据 | — | 否 | — | [来源: 现有政策检索缺该字段；不能用 PN_InsuredAreaCode 直接替代] | S1 | P5,P7,P8 | 外部核心 | `missing_external_context` |
+| 登录医院与政策适用机构 / `hospital_id`,`policy_applicable_institution` | 登录组织 + 医院主数据 + 政策适用机构元数据 | — | 否 | — | [来源: Issue20 公共上下文 hospital_id；两表代码未获映射] | S2 | P5,P8 | 外部核心 | `missing_external_context` |
+| 规范化专项待遇类型 / `special_benefit_type` | 可信资格接口 + 已发布政策证据 | — | 否 | — | [推断: 多个专项标志不能无字典合成统一资格事实] | S2，待遇事实 | P5,P7 | 外部核心 | `missing_external_context` |
 
 上述六行与 A/B 组共同明确核对了地区、结算日期、险种、人员类别、医疗类别、机构级别、异地、慢特病、专项待遇、`hospital_id` 与政策适用机构。结算日期可从 `T_TradeDate`/`SETL_DATE` 读取但优先级和时区待签认；险种、人员类别、医疗类别、机构等级候选均存在但码表待签认。门诊新 Skill 不使用相似住院字段替代。
 
 ##### G. 明确排除的敏感字段（8 个）
 
-这里只保留物理类型和计数，不输出任何值。它们不进入公开 Skill 语义模型；若受限内部定位确需使用，必须经最小权限、`security/desensitization` 和审计边界。
+这里只保留 Task 1 `INFORMATION_SCHEMA.COLUMNS` 已确认的存在性与物理类型，不执行也不展示 NULL、零、非零或 distinct 统计。它们不进入公开 Skill 语义模型；若受限内部定位确需使用，必须经最小权限、`security/desensitization` 和审计边界。
 
-| 语义 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 状态 |
-|---|---|---|:---:|---|---|---|---|---|
-| 身份证件号 / `P_IDNo` | oT | nvarchar(50) NULL | 是 | 0/0/592/62 | [来源: Task 1 元数据；Task 4 安全边界] | S3 | — | `excluded_sensitive` |
-| 医保卡号 / `P_ICNo` | oT | nvarchar(12) NOT NULL | 是 | 0/11/581/63 | 同上 | S3 | — | `excluded_sensitive` |
-| 姓名 / `P_Name` | oT | nvarchar(50) NOT NULL | 是 | 0/0/592/62 | 同上 | S3 | — | `excluded_sensitive` |
-| 出生日期 / `P_Birthday` | oT | datetime NOT NULL | 是 | 0/0/592/63 | 同上 | S3 | — | `excluded_sensitive` |
-| 卡号 / `P_CardNo` | oT | nvarchar(12) NULL | 是 | 0/574/18/6 | 同上 | S3 | — | `excluded_sensitive` |
-| 处方号 / `RecipeNo` | oF | nvarchar(20) NOT NULL | 是 | 0/0/2139/17 | 同上 | S3 | — | `excluded_sensitive` |
-| HIS 名称 / `HisName` | oF | nvarchar(100) NOT NULL | 是 | 0/0/2139/98 | 同上 | S3 | — | `excluded_sensitive` |
-| HIS 代码 / `HisCode` | oF | nvarchar(40) NOT NULL | 是 | 0/0/2139/99 | 同上 | S3 | — | `excluded_sensitive` |
+| 语义 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 是否核心 | 状态 |
+|---|---|---|:---:|---|---|---|---|---|---|
+| 身份证件号 / `P_IDNo` | oT | nvarchar(50) NULL | 是 | not_profiled（敏感排除） | [来源: Task 1 元数据；Task 4 安全边界] | S3 | — | 排除 | `excluded_sensitive` |
+| 医保卡号 / `P_ICNo` | oT | nvarchar(12) NOT NULL | 是 | not_profiled（敏感排除） | 同上 | S3 | — | 排除 | `excluded_sensitive` |
+| 姓名 / `P_Name` | oT | nvarchar(50) NOT NULL | 是 | not_profiled（敏感排除） | 同上 | S3 | — | 排除 | `excluded_sensitive` |
+| 出生日期 / `P_Birthday` | oT | datetime NOT NULL | 是 | not_profiled（敏感排除） | 同上 | S3 | — | 排除 | `excluded_sensitive` |
+| 卡号 / `P_CardNo` | oT | nvarchar(12) NULL | 是 | not_profiled（敏感排除） | 同上 | S3 | — | 排除 | `excluded_sensitive` |
+| 处方号 / `RecipeNo` | oF | nvarchar(20) NOT NULL | 是 | not_profiled（敏感排除） | 同上 | S3 | — | 排除 | `excluded_sensitive` |
+| HIS 名称 / `HisName` | oF | nvarchar(100) NOT NULL | 是 | not_profiled（敏感排除） | 同上 | S3 | — | 排除 | `excluded_sensitive` |
+| HIS 代码 / `HisCode` | oF | nvarchar(40) NOT NULL | 是 | not_profiled（敏感排除） | 同上 | S3 | — | 排除 | `excluded_sensitive` |
 
 #### 安全低基数枚举码聚合
 
@@ -1395,23 +1397,25 @@ ORDER BY
 
 #### 九个 Profile 字段闭包状态
 
+执行状态采用失败关闭：Issue20 §5.2 强制所有 Profile 先以 `settlement_id→T_SetTid` 定位单次交易，而 Task 2 已证明该通用核心存在 NULL 与多笔歧义。在权威版本/有效交易选择规则签认前，任何 Profile 都不能安全执行；下表即使提到其他物理字段已存在，也只描述字段成熟度，不构成可执行 `partial`。
+
 | Profile | 状态 | 字段闭包结论与阻断原因 |
 |---|---|---|
-| P1 整体结算核验 | `partial` | 汇总金额物理存在，但 `T_SetTid` 不能唯一定位、状态有效规则和总额公式未签认；只能展示受限事实，不能判定“结算正确”。 |
-| P2 个人负担解释 | `partial` | 自付/账户/现金字段存在，但成员关系、专项支付关系和零值资格含义未签认。 |
-| P3 支付渠道核验 | `partial` | 渠道字段存在；`T_FundPay`、`NT_AgencySumPay`、`NT_BasicPay` 的总分关系未确认，不得重复求和。 |
-| P4 起付线与年度累计 | `partial` | 当次起付及 TB/TA 字段存在；交易前/后释义、年度边界和 `TA_MZTimes` 释义未签认。 |
-| P5 报销比例与封顶 | `unavailable` | 缺可信政策地区、政策适用机构、规范资格上下文及覆盖结算日期的完整政策证据，不能安全复算比例/封顶。 |
-| P6 医保目录与费用明细 | `partial` | 明细键关系成立，但 Task 3 金额勾稽仍有超差，`FeeIn/FeeOut` 口径与明细状态码未冻结。 |
-| P7 身份与特殊待遇 | `unavailable` | 候选字段存在但码表/资格定义未签认，规范专项待遇类型和政策证据缺失；零支付不能判无资格。 |
-| P8 异地与机构待遇 | `unavailable` | 异地候选存在，但政策地区、登录医院、医院等级/主数据和政策适用机构映射缺失。 |
-| P9 交易状态与退费 | `partial` | 状态和退款链字段存在，但状态码、原交易关系和有效/红冲过滤规则未签认；退费/冲正仍只转人工确认。 |
+| P1 整体结算核验 | `unavailable` | 通用核心锚点不能唯一定位；汇总金额虽存在，状态有效规则和总额公式也未签认。 |
+| P2 个人负担解释 | `unavailable` | 通用核心锚点不能唯一定位；自付/账户/现金成员关系、专项支付关系和零值资格含义未签认。 |
+| P3 支付渠道核验 | `unavailable` | 通用核心锚点不能唯一定位；总分关系未确认，且 `T_JCPay` 存在救助/军残语义冲突，不得重复求和或确定命名。 |
+| P4 起付线与年度累计 | `unavailable` | 通用核心锚点不能唯一定位；TB/TA 前后释义、年度边界和 `TA_MZTimes` 释义未签认。 |
+| P5 报销比例与封顶 | `unavailable` | 通用核心锚点不能唯一定位；另缺可信政策地区、适用机构、规范资格上下文及覆盖结算日期的完整政策证据。 |
+| P6 医保目录与费用明细 | `unavailable` | 通用核心锚点不能唯一定位；虽已证明明细关系，Task 3 金额仍超差，`FeeIn/FeeOut` 与明细状态码未冻结。 |
+| P7 身份与特殊待遇 | `unavailable` | 通用核心锚点不能唯一定位；码表/资格定义、规范专项待遇类型和政策证据缺失，且 `T_JCPay` 救助/军残语义冲突。 |
+| P8 异地与机构待遇 | `unavailable` | 通用核心锚点不能唯一定位；政策地区、登录医院、医院等级/主数据和政策适用机构映射缺失。 |
+| P9 交易状态与退费 | `unavailable` | 通用核心锚点不能唯一定位；状态码、原交易关系和有效/红冲过滤规则未签认，退费/冲正仍只转人工确认。 |
 
-九个 Profile 均不得标 `complete`，也不得发布门诊 Skill 输入契约；6 个 `partial`、3 个 `unavailable`。
+九个 Profile 均不得发布门诊 Skill 输入契约：0 `complete` / 0 `partial` / 9 `unavailable`。
 
 #### 完整可复现只读聚合 SQL
 
-Task 1 的 `INFORMATION_SCHEMA.COLUMNS` SQL 是物理类型证据。以下为 Task 4 计数聚合的完整只读形态；`VALUES` 白名单与矩阵逐字段一致。`is_numeric=1` 才统计数值零，其他类型统计空串。执行器另对上表列出的低基数字段使用同样的 `CROSS APPLY` 后按 `field_name, code` 分组；没有查询任何样例行。
+Task 1 的 `INFORMATION_SCHEMA.COLUMNS` SQL 是全部字段的物理类型证据。以下 Task 4 SQL 仅覆盖 A–F 的 107 个可聚合物理字段，不覆盖 G 组 8 个敏感排除字段，也不覆盖 3 个外部上下文；因此不能表述为“SQL 与 118 行矩阵逐字段一致”。`is_numeric=1` 才统计数值零，其他类型统计空串。执行器另对上表列出的低基数字段使用同样的 `CROSS APPLY` 后按 `field_name, code` 分组；没有查询任何样例行。
 
 ```sql
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
@@ -1490,7 +1494,7 @@ SELECT CONVERT(varchar(40),SYSDATETIMEOFFSET(),127) AS executed_at,
 
 [建议] 若需逐字复跑低基数枚举，将上面相应 `VALUES` 行保留为 `field_name,value_text`，执行 `GROUP BY field_name,value_text ORDER BY field_name,COUNT_BIG(*) DESC,value_text`；只允许上文安全枚举白名单，禁止把自由文本、代码病种、标识符或业务键加入该查询。
 
-Task 4 结果：**DONE_WITH_CONCERNS**。设计要求的 104 个字段均物理存在且聚合成功，但业务字段字典、交易前后定义、锚点规则、可信外部政策上下文和资格+政策证据不足；不得伪报字段闭包 `complete`，也不提前建立运营指标、增量游标或容量结论。
+Task 4 结果：**DONE_WITH_CONCERNS**。A–F 组 107 个可聚合物理字段完成只读画像，G 组 8 个敏感字段仅沿用 Task 1 `INFORMATION_SCHEMA` 存在性/类型元数据，另有 3 个外部核心上下文登记为 `missing_external_context`；`T_SetTid` 通用核心锚点仍存在多笔歧义，九个执行 Profile 均为 `unavailable`。业务字段字典、交易前后定义、可信外部政策上下文和资格+政策证据不足；不得伪报字段闭包 `complete`，也不提前建立运营指标、增量游标或容量结论。
 
 ## 运营指标依赖
 
@@ -1504,13 +1508,13 @@ Task 4 结果：**DONE_WITH_CONCERNS**。设计要求的 104 个字段均物理�
 | T1-B02 | 本次两表均命中 discovery 检查点 | 行数、质量分、非空率、DDL 时间是缓存快照，不能证明 2026-08-27 新鲜画像 | 在批准流程中生成可审计的新鲜只读全量画像，并保留任务时间与统计口径 |
 | T1-B03 | 核心字段没有随 Task 1 获得权威业务定义和值域 | 交易状态、退款链、金额公式和游标含义仍可能误判 | 取得院方数据字典/接口文档并由业务与数据负责人签认 |
 | T1-B04 | 候选表包含直接标识符、证件/卡号及电子凭证类高敏字段 | 后续 Skill 或指标若直接读取将违反最小化与脱敏要求 | 建立允许字段白名单、用途说明和 security/desensitization 验证证据 |
-| T2-B01 | [来源: outpatient_p0_t2_20260827_070052Z] T_SetTid 有 11 行 NULL，且 2 个重复组涉及 326/592 行；重复横跨多种状态组合 | [推断: 基于全量计数] 不能冻结为内部结算锚点，`settlement_id → 单笔交易` 假设失效，P1 阻断 | 取得 T_SetTid 权威业务定义、合法一对多/版本规则及人工签认；在此之前不得自行设计替代键 |
+| T2-B01 | [来源: outpatient_p0_t2_20260827_070052Z] T_SetTid 有 11 行 NULL，且 2 个重复组涉及 326/592 行；重复横跨多种状态组合 | [推断: 基于全量计数与 Issue20 §5.2 强制内部锚点要求] 不能冻结为内部结算锚点，`settlement_id → 单笔交易` 假设失效，所有九个执行 Profile 阻断 | 取得 T_SetTid 权威业务定义、合法一对多/版本规则及人工签认；在此之前不得自行设计替代键 |
 | T2-B02 | [来源: outpatient_p0_t2_20260827_070052Z] T_TradeDate 为无时区 datetime，尚未取得其业务时区与时钟语义；固定服务器时钟参数形成的窗口只观察到交易/关联明细 0 | [推断: 基于字段类型与缺失的业务时区定义] 不能把该观察值作为可靠最近 30 天证据；不影响全量键、重复和主从关系结论 | 由数据负责人确认 T_TradeDate 的业务时区/时钟语义，并按确认后的时间口径重新执行参数化窗口查询 |
 | T3-B01 | [来源: outpatient_p0_t3_20260827_073210Z、outpatient_p0_t3_precision_20260827_074356Z] o_Trade 两组等式分别有 5、6 笔超差；精度修正后的 o_FeeItem 汇总 Fee、FeeOut 分别有 2、5 笔超差；状态码无权威有效规则 | [推断: 基于全量 decimal 聚合] 金额门禁和有效状态门禁未通过，dbo.o_FeeItem 不能冻结为唯一费用明细源 | 由医保办与数据负责人签认金额公式、舍入和有效状态规则；按签认规则重新执行同口径聚合并解释全部超差 |
 | T3-B02 | `MANUAL_TICKET_RECONCILIATION_BLOCKED`：当前没有至少 30 份医保办票据、票据访问授权人员或获批脱敏传递通道 | 无法完成唯一明细源的人工票据门禁 | 由医保办授权经办人完成至少 30 票据逐笔核对，医保办负责人、数据负责人和信息安全/隐私负责人签认 |
 | T3-B03 | [来源: outpatient_p0_t3_20260827_073210Z] 专项基金候选等式 592 行中 581 行缺字段，11 行可比较记录中 6 行超差 | 不能把字段名相关性发布为基金总分公式 | 取得权威基金字段字典与公式并由医保办、数据负责人签认；未签认前保持候选/待确认 |
-| T4-B01 | [来源: outpatient_p0_t4_20260827_policy_closure] 104 个设计字段虽全部存在，但交易/待遇/状态码、金额成员关系及 `TB_*`/`TA_*` 前后语义缺少权威字典；`TA_MZTimes` 仅确认物理类型为 int | 九个 Profile 均不能 `complete`，尤其年度累计、状态和资格判断可能误释 | 医保办与数据负责人提供字段字典、码表、公式及 TB/TA 前后定义并签认；按签认口径重跑聚合 |
-| T4-B02 | 政策地区、登录医院/政策适用机构、规范专项待遇类型及资格证据不在两表可信闭包内 | 比例/封顶、身份专项、异地机构三个 Profile 为 `unavailable` | 从可信 HIS/登录组织/医院主数据和资格接口注入上下文，并与已发布、有效期覆盖结算日期的政策证据共同验证 |
+| T4-B01 | [来源: outpatient_p0_t4_20260827_policy_closure、Issue20 §4/§5.2/§5.4] `T_SetTid` 是九个执行 Profile 的通用核心锚点但仍有 NULL/多笔歧义；交易/待遇/状态码、金额成员关系及 `TB_*`/`TA_*` 前后语义缺少权威字典，`TA_MZTimes` 仅确认物理类型为 int，`T_JCPay` 又存在救助/军残候选语义冲突 | 九个执行 Profile 均为 `unavailable`；P3、P7 另受 `T_JCPay` 语义冲突阻断，年度累计、状态和资格判断也可能误释 | 先解除 T2-B01；再由医保办与数据负责人提供字段字典、码表、公式、`T_JCPay` 唯一释义及 TB/TA 前后定义并签认，按签认口径重跑聚合 |
+| T4-B02 | 政策地区、登录医院/政策适用机构、规范专项待遇类型及资格证据不在两表可信闭包内 | P5、P7、P8 存在额外外部核心上下文阻断；不改变九个执行 Profile 已全部 `unavailable` 的汇总结论 | 从可信 HIS/登录组织/医院主数据和资格接口注入上下文，并与已发布、有效期覆盖结算日期的政策证据共同验证 |
 | T4-B03 | 现有 `settlement_explain_skill` 是住院 Skill，标准化器会补住院险种、医疗类别、医院等级和人员默认值 | 若门诊复用会把缺失上下文伪造成住院事实，导致错误政策命中 | 门诊 Skill 保持独立字段映射；删除门诊路径所有住院默认值，缺失按 `missing` 失败关闭 |
 
 网络、SQL Server 连接、元数据 SELECT 和发现任务持久化均成功，不构成 Task 1 的连接阻断。
@@ -1525,11 +1529,11 @@ Task 1 已形成两张候选表的发现证据草稿、数据库版本/脱敏权
 
 [来源: 文档级证据批次 outpatient_p0_t3_20260827_073210Z、outpatient_p0_t3_precision_20260827_074356Z；本文留存完整只读 SQL、固定执行时间、聚合计数和失败分类] Task 3 已完成两组主表金额等式、三组逐交易明细勾稽、专项基金候选字段和四状态组合的全量聚合；明细 SUM 精度修正后又一次重跑总体和状态分层，结果未变。各 SELECT 一次成功，无超时或字段不存在；仅执行 SELECT/SET，没有输出行级标识、修改源库或扩大两表白名单。
 
-[推断: 基于 outpatient_p0_t2_20260827_070052Z 与 outpatient_p0_t3_20260827_073210Z] 当前证据冻结 T_TradeNo 为交易业务键、`(T_TradeNo, ItemId, ItemNo)` 为费用明细幂等键，并确认全量 T_TradeNo 主从关系无孤儿。内部结算锚点仍为 BLOCKED：T2-B01 解锁前，P1 禁止继续使用 `settlement_id → 单笔交易` 假设。dbo.o_FeeItem 仅保持费用明细候选：金额超差、有效状态规则和 `MANUAL_TICKET_RECONCILIATION_BLOCKED` 未解除前不得冻结；`yb_mzfymx_mz` 只登记为下一步待授权验证候选。增量游标、容量性能、政策 Skill 依赖和运营指标依赖未在 Task 3 提前处理。
+[推断: 基于 outpatient_p0_t2_20260827_070052Z 与 outpatient_p0_t3_20260827_073210Z] 当前证据冻结 T_TradeNo 为交易业务键、`(T_TradeNo, ItemId, ItemNo)` 为费用明细幂等键，并确认全量 T_TradeNo 主从关系无孤儿。内部结算锚点仍为 BLOCKED：T2-B01 解锁前，九个执行 Profile 均禁止继续使用 `settlement_id → 单笔交易` 假设。dbo.o_FeeItem 仅保持费用明细候选：金额超差、有效状态规则和 `MANUAL_TICKET_RECONCILIATION_BLOCKED` 未解除前不得冻结；`yb_mzfymx_mz` 只登记为下一步待授权验证候选。增量游标、容量性能、政策 Skill 依赖和运营指标依赖未在 Task 3 提前处理。
 
 Task 3 执行结果：**DONE_WITH_CONCERNS**。关注项为 T3-B01 至 T3-B03，未伪造人工票据或业务字典完成。
 
-[来源: 文档级证据批次 outpatient_p0_t4_20260827_policy_closure；固定执行时间、主体指纹引用、字段矩阵与完整只读 SQL 见“政策 Skill 依赖”] Task 4 已覆盖总设计 §10.1–§10.5 与 Issue20 §5.4 的 104 个按 `table.column` 去重字段，全部物理存在并完成 NULL/零/非零/distinct 聚合；另登记政策上下文候选、可信外部依赖和敏感排除边界。九个 Profile 为 6 `partial` / 3 `unavailable` / 0 `complete`。
+[来源: 文档级证据批次 outpatient_p0_t4_20260827_policy_closure；固定执行时间、主体指纹引用、字段矩阵与完整只读 SQL 见“政策 Skill 依赖”] Task 4 已覆盖总设计 §10.1–§10.5 与 Issue20 §5.4：A–F 组 107 个可聚合物理字段完成 NULL/零/非零/distinct 只读画像，G 组 8 个敏感字段仅以 Task 1 `INFORMATION_SCHEMA` 元数据确认存在性/类型，3 个外部核心上下文登记为可信外部依赖，总矩阵 118 行。九个执行 Profile 为 0 `complete` / 0 `partial` / 9 `unavailable`。
 
 Task 4 执行结果：**DONE_WITH_CONCERNS**。关注项为 T4-B01 至 T4-B03；未把住院默认值、相似字段、零值或缺失上下文伪造成门诊资格与政策事实，也未提前处理运营指标、游标或容量。
 
