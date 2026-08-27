@@ -12,19 +12,21 @@
 """
 from src.semantic_layer.models import (
     BusinessDomain, BusinessObject, Metric, ValueDomain, ValueDomainMapping,
+    SemanticDataset, DatasetKey, SemanticField, DatasetRelation, DataQualityRule,
 )
 from src.semantic_layer.registry import RegistryStore
 
-# ── 医保字典标准映射（源自 business_sql.yaml 的 CASE 转换）──────────
+# ── 医保字典标准映射（从已退役 SQL CASE 迁移）────────────────────
 # 将散落在 SQL CASE 里的码→标签映射，声明式收敛进语义层值域。
-# [来源: business_sql.yaml settlement_context 的 CASE a.FUND_TYPE / CASE a.yllb
+# [来源: 历史 settlement_context 的 CASE a.FUND_TYPE / CASE a.yllb
 #  + settlement_data_provider._normalize_person_type]
-# 语义层成为码→标签转换的唯一真源，business_sql.yaml 退役后此处保留。
+# 语义层成为码→标签转换的唯一真源。
 _YB_DICTIONARY_MAPPINGS: dict[str, dict[str, str]] = {
     # 险种类型 FUND_TYPE
     "FUND_TYPE": {
         "3": "城镇职工", "4": "工伤保险", "31": "离休统筹",
         "32": "公疗医照", "33": "征地超转人员",
+        "80": "军休干部", "999": "国家平台险种",
         "91": "城镇居民基本医疗保险_学生儿童",
         "92": "城镇居民基本医疗保险_无保障老年人",
         "93": "城镇居民基本医疗保险_无业",
@@ -39,22 +41,60 @@ _YB_DICTIONARY_MAPPINGS: dict[str, dict[str, str]] = {
         "1": "在职人员", "2": "退休人员", "3": "离休人员",
         "4": "学生儿童", "5": "无保障老年人", "6": "无业人员",
     },
+    # 门诊人员类别（来源：bjybdb.dbo.v_ybcbrylb；仅保存业务标签，不含个人信息）
+    "MZ_PERSON_TYPE": {
+        "11": "在职", "12": "在职长期驻外", "14": "城镇婴幼儿",
+        "15": "城镇学生", "16": "城镇非在校生", "17": "城镇老年人",
+        "21": "退休", "31": "离休", "35": "在职司局级医照人员",
+        "37": "在职副部级医照人员", "70": "城镇无业居民",
+        "133": "在职正部级医疗照顾人员", "140": "征地超转人员",
+        "143": "离休副市（部）长级标准人员", "171": "在职突出贡献专家",
+        "172": "退休突出贡献专家", "173": "离休突出贡献专家",
+        "174": "在职高端人才A类", "175": "退休高端人才A类",
+        "176": "离休高端人才A类", "177": "在职高端人才B类",
+        "178": "退休高端人才B类", "179": "离休高端人才B类",
+        "180": "在职高端人才C类", "181": "退休高端人才C类",
+        "182": "离休高端人才C类", "803": "军休公费医疗人员",
+        "806": "退休副省（部）长级标准报销医疗费人员",
+    },
+    # 门诊医疗类别（来源：bjybdb.dbo.v_yllb_ss）
+    "MZ_CURE_TYPE": {
+        "11": "普通门诊", "17": "门诊挂号", "18": "急诊挂号", "19": "普通急诊",
+    },
+    # P_JCLevel 实为军残待遇等级，不是医疗机构等级（来源：bjybdb.dbo.v_jcdj）
+    "MILITARY_DISABILITY_LEVEL": {
+        "0": "不享受伤残待遇", "1": "享受一级伤残待遇", "2": "享受二级伤残待遇",
+        "3": "享受三级伤残待遇", "4": "享受四级伤残待遇", "5": "享受五级伤残待遇",
+        "6": "享受六级伤残待遇", "7": "享受七级伤残待遇", "8": "享受八级伤残待遇",
+        "9": "享受九级伤残待遇",
+    },
+    # 国家平台险种代码沿用既有 MCP 结果标准化字典。
+    "NATIONAL_FUND_TYPE": {
+        "310": "城镇职工", "320": "城乡居民", "330": "离休人员",
+        "340": "超转人员", "350": "医照人员", "360": "生育保险",
+    },
+    # 医疗机构编码到等级的映射由语义发现从 v_yyzdCurr 批量治理，seed 仅建域。
+    "MZ_HOSPITAL_LEVEL_BY_CODE": {},
 }
 
 
 def ensure_yb_dictionary_mappings(store: RegistryStore) -> None:
     """幂等 ensure：把医保字典码→标签映射补入语义层值域。
 
-    每次进程启动调用一次（幂等，upsert）。弥合语义层与 business_sql.yaml
-    的「转换差异」：语义层取数后应用 resolve_value，即可产出与手写 CASE 一致的中文标签。
+    每次进程启动调用一次（幂等，upsert）。语义层取数后应用
+    resolve_value，产出与历史 CASE 一致的中文标签。
     """
     domain_names = {
         "FUND_TYPE": "险种类型", "YLLB": "医疗类别", "PERSON_TYPE": "人员类别",
+        "MZ_PERSON_TYPE": "门诊人员类别", "MZ_CURE_TYPE": "门诊医疗类别",
+        "MILITARY_DISABILITY_LEVEL": "军残待遇等级",
+        "NATIONAL_FUND_TYPE": "国家平台险种",
+        "MZ_HOSPITAL_LEVEL_BY_CODE": "门诊医疗机构等级",
     }
     for domain_code, mapping in _YB_DICTIONARY_MAPPINGS.items():
         store.save_value_domain(ValueDomain(
             domain_code=domain_code, name=domain_names.get(domain_code, domain_code),
-            description="医保系统码→中文标签（源自 business_sql.yaml CASE）",
+            description="医保系统码→中文标签（从历史 SQL CASE 迁移）",
         ))
         for source_value, standard_value in mapping.items():
             store.save_value_mapping(ValueDomainMapping(
@@ -96,13 +136,25 @@ def ensure_policy_dictionaries(store: RegistryStore) -> None:
     """幂等 ensure：把政策规则字典（5 域）灌入语义层值域（standard_values）。
 
     [来源: raw/数据模型1.xlsx 字典 sheet 一次性转录；zcgz 维度指标 value_domain 引用]
+    并集语义：域已存在时只补齐缺失的 seed 值，保留治理新增（如 hosp_lv「社区」）；
+    整值覆盖会把语义发现/人工裁决新增的值在每次重启时丢掉。
     """
     for domain_code, (name, values) in _POLICY_DICTIONARY_VALUES.items():
-        store.save_value_domain(ValueDomain(
-            domain_code=domain_code, name=name,
-            description=f"政策规则字典（源自数据模型1.xlsx，P8.3 种子）",
-            standard_values=list(values),
-        ))
+        existing = store.get_value_domain(domain_code)
+        if existing is None:
+            store.save_value_domain(ValueDomain(
+                domain_code=domain_code, name=name,
+                description="政策规则字典（源自数据模型1.xlsx，P8.3 种子）",
+                standard_values=list(values),
+            ))
+            continue
+        missing = [v for v in values if v not in existing.standard_values]
+        if missing:
+            store.save_value_domain(ValueDomain(
+                domain_code=domain_code, name=existing.name or name,
+                description=existing.description,
+                standard_values=list(existing.standard_values) + missing,
+            ))
 
 
 def publish_seed_policy_object(registry) -> None:
@@ -119,6 +171,25 @@ def publish_seed_policy_object(registry) -> None:
     registry.publish_object("zcgz", changelog="P8.3 种子发布政策规则对象，解锁提取契约")
 
 
+def publish_seed_query_object(registry) -> None:
+    """幂等发布住院结算查询模型，供运行时只读已发布快照。"""
+    if registry.get_object("inpatient_settlement") is None:
+        return
+    if registry.list_object_versions("inpatient_settlement"):
+        return
+    registry.publish_object(
+        "inpatient_settlement",
+        changelog="住院费用整次住院分段汇总查询模型",
+    )
+
+
+def publish_seed_outpatient_query_object(registry) -> None:
+    """幂等发布门诊结算查询模型，供内存运行时和测试使用。"""
+    if registry.get_object("mzjyxx") is None or registry.list_object_versions("mzjyxx"):
+        return
+    registry.publish_object("mzjyxx", changelog="门诊交易与费用明细查询模型")
+
+
 def seed_semantic_layer(store: RegistryStore) -> None:
     """灌入真实语义层：3 域 / 7 对象 / 22 指标（对齐生产 PostgreSQL）。
 
@@ -129,6 +200,8 @@ def seed_semantic_layer(store: RegistryStore) -> None:
     _seed_domains(store)
     _seed_objects(store)
     _seed_metrics(store)
+    _seed_settlement_query_model(store)
+    _seed_outpatient_query_model(store)
     ensure_yb_dictionary_mappings(store)
 
 
@@ -166,10 +239,15 @@ def _seed_objects(store: RegistryStore) -> None:
         ("zyjyxx", "ybjs", "住院交易", "住院交易信息"),
         ("zcgz", "ybzc", "政策规则",
          "从非结构化政策原文中结构化提取的医保规则。每个规则19个字段，来源于政策知识管线(policy_pipeline)的LLM提取结果，存储于PostgreSQL policy_extractions表。来源路径：政策原文 → 政策片段提取 → 规则结构化 → 语义层指标。"),
+        ("inpatient_settlement", "ybjs", "住院结算",
+         "以登记号锚定整次住院，按结算分段预聚合并汇总全部住院费用。"),
+        ("mzjyxx", "ybjs", "门诊结算",
+         "settlement_id 对应 T_TradeNo，以门诊交易号锚定单次交易，并关联费用项目明细。"),
     ]
     for code, domain, name, definition in objects:
         store.save_object(BusinessObject(
             object_code=code, domain_code=domain, name=name, definition=definition,
+            identifier="settlement_id" if code == "mzjyxx" else None,
             version="1.0", status="draft",
         ))
 
@@ -339,3 +417,353 @@ def _seed_metrics(store: RegistryStore) -> None:
     ]
     for metric in metrics:
         store.save_metric(metric)
+
+
+def _seed_settlement_query_model(store: RegistryStore) -> None:
+    """住院费用查询模型：登记锚点、待遇分段、支付分段和交易信息。"""
+    object_code = "inpatient_settlement"
+    if store.get_object(object_code) is None:
+        store.save_object(BusinessObject(
+            object_code=object_code, domain_code="ybjs", name="住院结算",
+            definition="以登记号锚定整次住院，按结算分段预聚合并汇总全部住院费用。",
+            status="draft",
+        ))
+    if store.get_dataset("inpatient_registration") is not None:
+        return
+    datasets = [
+        SemanticDataset(dataset_code="inpatient_registration", object_code=object_code,
+                        datasource_id="bjybdb", table_name="yb_brdjxx", name="住院登记"),
+        SemanticDataset(dataset_code="benefit_segments", object_code=object_code,
+                        datasource_id="bjybdb", table_name="yb_dyxxzy", name="住院待遇分段"),
+        SemanticDataset(dataset_code="payment_segments", object_code=object_code,
+                        datasource_id="bjybdb", table_name="yb_zyfdxx", name="住院支付分段"),
+        SemanticDataset(dataset_code="inpatient_transaction", object_code=object_code,
+                        datasource_id="bjybdb", table_name="yb_zyjyxx", name="住院交易"),
+    ]
+    for dataset in datasets:
+        store.save_dataset(dataset)
+
+    keys = [
+        DatasetKey(key_code="registration_pk", dataset_code="inpatient_registration",
+                   entity_code="inpatient_admission", key_type="primary", columns=["djh"]),
+        DatasetKey(key_code="benefit_segment_pk", dataset_code="benefit_segments",
+                   entity_code="admission_segment", key_type="primary",
+                   columns=["djh", "bcqsrq", "zqxh"]),
+        DatasetKey(key_code="benefit_admission_fk", dataset_code="benefit_segments",
+                   entity_code="inpatient_admission", key_type="foreign", columns=["djh"]),
+        DatasetKey(key_code="benefit_payment_key", dataset_code="benefit_segments",
+                   entity_code="admission_segment", key_type="unique", columns=["djh", "bcqsrq"]),
+        DatasetKey(key_code="payment_segment_pk", dataset_code="payment_segments",
+                   entity_code="admission_segment", key_type="primary",
+                   columns=["djh", "bdqsrq", "bdjsrq"]),
+        DatasetKey(key_code="payment_admission_fk", dataset_code="payment_segments",
+                   entity_code="inpatient_admission", key_type="foreign", columns=["djh"]),
+        DatasetKey(key_code="payment_segment_fk", dataset_code="payment_segments",
+                   entity_code="admission_segment", key_type="foreign", columns=["djh", "bdqsrq"]),
+        DatasetKey(key_code="transaction_pk", dataset_code="inpatient_transaction",
+                   entity_code="inpatient_admission", key_type="primary", columns=["djh"]),
+    ]
+    for key in keys:
+        store.save_dataset_key(key)
+
+    field_specs = [
+        ("inpatient_registration.registration_id", "inpatient_registration", "djh", "登记号", "identifier", "String", False),
+        ("inpatient_registration.insurance_type", "inpatient_registration", "FUND_TYPE", "险种类型", "dimension", "Enum", True),
+        ("inpatient_registration.service_type", "inpatient_registration", "yllb", "医疗类别", "dimension", "Enum", True),
+        ("benefit_segments.admission_id", "benefit_segments", "djh", "住院登记号", "identifier", "String", False),
+        ("benefit_segments.segment_start_date", "benefit_segments", "bcqsrq", "分段开始日期", "identifier", "Date", False),
+        ("benefit_segments.segment_end_date", "benefit_segments", "bcjsrq", "分段结束日期", "dimension", "Date", True),
+        ("benefit_segments.cycle_no", "benefit_segments", "zqxh", "周期序号", "identifier", "String", False),
+        ("benefit_segments.deductible", "benefit_segments", "bcqfje", "起付线", "fact", "Amount", True),
+        ("benefit_segments.medical_insurance_inner_amount", "benefit_segments", "bcybnje", "医保内费用", "fact", "Amount", True),
+        ("payment_segments.admission_id", "payment_segments", "djh", "住院登记号", "identifier", "String", False),
+        ("payment_segments.segment_start_date", "payment_segments", "bdqsrq", "分段开始日期", "identifier", "Date", False),
+        ("payment_segments.segment_end_date", "payment_segments", "bdjsrq", "分段结束日期", "identifier", "Date", False),
+        ("payment_segments.total_amount", "payment_segments", "bdfyzje", "住院总费用", "fact", "Amount", True),
+        ("payment_segments.basic_pooling_payment", "payment_segments", "bdtczfje", "统筹支付", "fact", "Amount", True),
+        ("payment_segments.basic_pooling_self_pay", "payment_segments", "bdtczf", "统筹自付", "fact", "Amount", True),
+        ("payment_segments.large_amount_payment", "payment_segments", "bddegwyzfje", "大额支付", "fact", "Amount", True),
+        ("payment_segments.large_amount_self_pay", "payment_segments", "bddegwyzf", "大额自付", "fact", "Amount", True),
+        ("payment_segments.personal_total_pay", "payment_segments", "bdgryf", "个人总支付", "fact", "Amount", True),
+        ("inpatient_transaction.admission_id", "inpatient_transaction", "djh", "住院登记号", "identifier", "String", False),
+        ("inpatient_transaction.person_type", "inpatient_transaction", "PER_TYPE", "人员类别", "dimension", "Enum", True),
+    ]
+    for code, dataset, column, name, role, semantic_type, nullable in field_specs:
+        store.save_field(SemanticField(
+            field_code=code, dataset_code=dataset, column_name=column, name=name,
+            field_role=role, semantic_type=semantic_type, nullable=nullable,
+            value_domain={
+                "inpatient_registration.insurance_type": "FUND_TYPE",
+                "inpatient_registration.service_type": "YLLB",
+                "inpatient_transaction.person_type": "PERSON_TYPE",
+            }.get(code),
+        ))
+
+    for relation in [
+        DatasetRelation(relation_code="registration_to_benefit", object_code=object_code,
+                        from_dataset="inpatient_registration", from_key="registration_pk",
+                        to_dataset="benefit_segments", to_key="benefit_admission_fk",
+                        cardinality="one_to_many"),
+        DatasetRelation(relation_code="benefit_to_payment", object_code=object_code,
+                        from_dataset="benefit_segments", from_key="benefit_payment_key",
+                        to_dataset="payment_segments", to_key="payment_segment_fk",
+                        cardinality="one_to_one"),
+        DatasetRelation(relation_code="registration_to_transaction", object_code=object_code,
+                        from_dataset="inpatient_registration", from_key="registration_pk",
+                        to_dataset="inpatient_transaction", to_key="transaction_pk",
+                        cardinality="one_to_one"),
+    ]:
+        store.save_dataset_relation(relation)
+
+    query_metrics = [
+        ("total_amount", "住院总费用", "payment_segments.total_amount", "sum"),
+        ("medical_insurance_inner_amount", "医保内费用", "benefit_segments.medical_insurance_inner_amount", "sum"),
+        ("deductible", "起付线", "benefit_segments.deductible", "sum"),
+        ("basic_pooling_payment", "统筹支付", "payment_segments.basic_pooling_payment", "sum"),
+        ("basic_pooling_self_pay", "统筹自付", "payment_segments.basic_pooling_self_pay", "sum"),
+        ("large_amount_payment", "大额支付", "payment_segments.large_amount_payment", "sum"),
+        ("large_amount_self_pay", "大额自付", "payment_segments.large_amount_self_pay", "sum"),
+        ("personal_total_pay", "个人总支付", "payment_segments.personal_total_pay", "sum"),
+        ("yearly_cycle_count", "结算周期数", "benefit_segments.cycle_no", "count_distinct"),
+        ("person_type", "人员类别", "inpatient_transaction.person_type", "max"),
+        ("insurance_type", "险种类型", "inpatient_registration.insurance_type", "max"),
+        ("service_type", "医疗类别", "inpatient_registration.service_type", "max"),
+    ]
+    for short_code, name, field_code, aggregation in query_metrics:
+        store.save_metric(Metric(
+            metric_code=f"{object_code}.{short_code}", object_code=object_code,
+            name=name, definition=f"整次住院{name}", metric_type="aggregate",
+            semantic_type="Amount" if aggregation in {"sum", "count_distinct"} else "Enum",
+            unit="元" if aggregation == "sum" else None,
+            fact_field_code=field_code, aggregation=aggregation,
+            status="draft", importance="core",
+        ))
+
+    for rule in [
+        DataQualityRule(rule_code="benefit_segment_key_unique", object_code=object_code,
+                        rule_type="uniqueness", target_dataset_or_relation="benefit_segments",
+                        severity="blocking", parameters={"key_code": "benefit_segment_pk"}),
+        DataQualityRule(rule_code="payment_segment_key_unique", object_code=object_code,
+                        rule_type="uniqueness", target_dataset_or_relation="payment_segments",
+                        severity="blocking", parameters={"key_code": "payment_segment_pk"}),
+        DataQualityRule(rule_code="payment_segments_cover_segment_spine", object_code=object_code,
+                        rule_type="coverage", target_dataset_or_relation="benefit_to_payment",
+                        severity="warning", parameters={"reference_dataset": "benefit_segments"}),
+        DataQualityRule(rule_code="registration_anchor_not_null", object_code=object_code,
+                        rule_type="not_null", target_dataset_or_relation="inpatient_registration",
+                        severity="blocking", parameters={"field_code": "inpatient_registration.registration_id"}),
+    ]:
+        store.save_quality_rule(rule)
+
+
+def _seed_outpatient_query_model(store: RegistryStore) -> None:
+    """门诊交易和费用明细查询模型；生产口径仍须经发现中心审核后发布。"""
+    object_code = "mzjyxx"
+    if store.get_dataset("mz_trade") is not None:
+        return
+    for dataset in [
+        SemanticDataset(
+            dataset_code="mz_trade", object_code=object_code, datasource_id="bjybdb",
+            table_name="o_Trade", name="门诊交易",
+        ),
+        SemanticDataset(
+            dataset_code="mz_fee_item", object_code=object_code, datasource_id="bjybdb",
+            table_name="o_FeeItem", name="门诊费用明细",
+        ),
+    ]:
+        store.save_dataset(dataset)
+
+    for key in [
+        DatasetKey(
+            key_code="mz_trade_pk", dataset_code="mz_trade",
+            entity_code="outpatient_transaction", key_type="primary",
+            columns=["T_TradeNo"],
+        ),
+        DatasetKey(
+            key_code="mz_fee_item_pk", dataset_code="mz_fee_item",
+            entity_code="outpatient_fee_item", key_type="primary",
+            columns=["T_TradeNo", "ItemId", "ItemNo"],
+        ),
+        DatasetKey(
+            key_code="mz_fee_item_trade_fk", dataset_code="mz_fee_item",
+            entity_code="outpatient_transaction", key_type="foreign",
+            columns=["T_TradeNo"],
+        ),
+    ]:
+        store.save_dataset_key(key)
+
+    trade_types = {
+        "String": {
+            "T_TradeNo", "T_SetTid", "T_FeeNo", "T_OraginalTradeNo",
+            "T_HospCode", "PN_ChronicCode", "T_pneno",
+        },
+        "Date": {"T_TradeDate", "T_OraginalTradeDate", "SETL_DATE"},
+        "Count": {"TB_MZTimes", "TA_MZTimes"},
+        "Ratio": {"NT_OUT2_SCALE"},
+        "Enum": {
+            "T_State", "T_HasRefundmented", "T_PartialReturnFlag",
+            "NP_Settle_State", "NT_ReTradeFlag", "T_DiagType", "P_FundType",
+            "PN_PersonType", "T_CureType", "P_JCLevel", "P_HospFlag",
+            "P_Official", "PN_ChronicFlag", "PN_IsChronicHosp",
+            "PN_NoRightReason", "PN_OutTransaction", "PN_NationFundType",
+            "P_retirementflag", "P_CivilFlag", "P_CivilType",
+            "RETIRE_OFFICER_FLAG", "T_GFBelongFlag", "T_CompHospFlag",
+            "T_SpSetlFlag", "NT_AllSelfPayFlag",
+        },
+    }
+    trade_amounts = {
+        "T_FirstPay", "T_SelfPay1", "T_SelfPay2", "T_SelfPayAll",
+        "T_BigPay", "T_BigSelfPay", "T_BeyondBig", "T_FundPay",
+        "T_PersonCountPay", "T_CashPay", "PN_PersonCount",
+        "T_PersonCountAfter", "T_BCPay", "T_JCPay", "T_FeeAll",
+        "T_FeeIn", "T_FeeOut", "T_OfficalPay", "T_BigillPay",
+        "NT_BasicPay", "NT_CivilPay", "NT_OtherPay", "NT_AgencySumPay",
+        "RETIRE_OFFICER_PAY", "NT_OUT2_PRICE", "TB_FeeIn", "TA_FeeIn",
+        "TB_BigPay", "TA_BigPay", "TB_FeeAfterBig", "TA_FeeAfterBig",
+        "TB_BeyondFeeIn", "TA_BeyondFeeIn", "TB_BigillComm",
+        "TA_BigillComm", "TB_BigillPay", "TA_BigillPay", "TB_CivilComm",
+        "TA_CivilComm", "TB_CivilPay", "TA_CivilPay", "TB_FeeInL1",
+        "TA_FeeInL1", "TB_BigPayL1", "TA_BigPayL1",
+        "TB_FeeAfterBigL1", "TA_FeeAfterBigL1",
+    }
+    for column in trade_amounts:
+        trade_types.setdefault("Amount", set()).add(column)
+
+    detail_types = {
+        "String": {
+            "T_TradeNo", "ItemId", "ItemNo", "ItemCode", "StandardCode",
+            "ItemName",
+        },
+        "Enum": {"ItemType", "FeeType", "F_LEVEL", "SPEDRUG_FLAG", "State"},
+        "Count": {"Count"},
+        "Ratio": {"FEE_SP_SCALE"},
+        "Amount": {
+            "UnitPrice", "Fee", "FeeIn", "FeeOut", "SelfPay2",
+            "FEE_MEDIC_L", "MEDIC_L",
+        },
+    }
+    display_names = {
+        "T_SetTid": "结算标识", "T_TradeNo": "交易号", "T_FeeNo": "费用号",
+        "T_TradeDate": "交易日期", "T_State": "交易状态",
+        "P_FundType": "险种类型", "PN_PersonType": "人员类别",
+        "T_CureType": "医疗类别", "P_JCLevel": "军残待遇等级",
+        "T_HospCode": "医疗机构编码", "HospitalLevel": "医疗机构等级",
+        "T_FirstPay": "起付金额", "T_SelfPay1": "个人自付一",
+        "T_SelfPay2": "个人自付二", "T_SelfPayAll": "个人支付总金额",
+        "T_BigPay": "大额基金支付", "T_BigSelfPay": "大额自付",
+        "T_FundPay": "基金支付总金额", "T_PersonCountPay": "个人账户支付",
+        "T_CashPay": "现金支付", "T_FeeAll": "费用总金额",
+        "T_FeeIn": "医保范围内金额", "T_FeeOut": "医保范围外金额",
+        "T_OfficalPay": "公务员或公疗支付", "T_BigillPay": "大病支付",
+        "T_BCPay": "补充保险支付", "T_JCPay": "军残补助支付",
+        "RETIRE_OFFICER_PAY": "退役医疗支付", "ItemName": "费用项目名称",
+        "F_LEVEL": "项目医保等级", "Fee": "项目金额",
+        "FeeIn": "项目医保内金额", "FeeOut": "项目医保外金额",
+        "FEE_SP_SCALE": "项目先自付比例", "FEE_MEDIC_L": "项目医保限额",
+        "MEDIC_L": "项目医疗限额", "SPEDRUG_FLAG": "特殊药品标志",
+    }
+    key_columns = {"T_TradeNo", "ItemId", "ItemNo"}
+    value_domains = {
+        "P_FundType": "FUND_TYPE",
+        "PN_PersonType": "MZ_PERSON_TYPE",
+        "T_CureType": "MZ_CURE_TYPE",
+        "P_JCLevel": "MILITARY_DISABILITY_LEVEL",
+        "PN_NationFundType": "NATIONAL_FUND_TYPE",
+    }
+
+    def save_fields(dataset_code: str, specs: dict[str, set[str]]) -> None:
+        for semantic_type, columns in specs.items():
+            for column in sorted(columns):
+                store.save_field(SemanticField(
+                    field_code=f"{dataset_code}.{column}", dataset_code=dataset_code,
+                    column_name=column, name=display_names.get(column, column),
+                    field_role=(
+                        "identifier" if column in key_columns
+                        else "fact" if semantic_type in {"Amount", "Count", "Ratio"}
+                        else "dimension"
+                    ),
+                    semantic_type=semantic_type,
+                    value_domain=value_domains.get(column),
+                    nullable=column not in key_columns,
+                ))
+
+    save_fields("mz_trade", trade_types)
+    save_fields("mz_fee_item", detail_types)
+
+    relation = DatasetRelation(
+        relation_code="mz_trade_to_fee_item", object_code=object_code,
+        from_dataset="mz_trade", from_key="mz_trade_pk",
+        to_dataset="mz_fee_item", to_key="mz_fee_item_trade_fk",
+        cardinality="one_to_many",
+    )
+    store.save_dataset_relation(relation)
+
+    core_metrics = {
+        "T_TradeNo", "T_TradeDate", "T_State", "P_FundType",
+        "PN_PersonType", "T_CureType", "P_JCLevel", "T_FirstPay",
+        "T_SelfPay1", "T_SelfPay2", "T_SelfPayAll", "T_BigPay",
+        "T_BigSelfPay", "T_FundPay", "T_PersonCountPay", "T_CashPay",
+        "T_FeeAll", "T_FeeIn", "T_FeeOut",
+    }
+    for semantic_type, columns in trade_types.items():
+        for column in sorted(columns):
+            store.save_metric(Metric(
+                metric_code=f"{object_code}.{column}", object_code=object_code,
+                name=display_names.get(column, column),
+                definition=f"门诊交易字段：{display_names.get(column, column)}",
+                metric_type="aggregate", semantic_type=semantic_type,
+                unit="元" if semantic_type == "Amount" else "%" if semantic_type == "Ratio" else None,
+                source_object="o_Trade", source_field=f"o_Trade.{column}",
+                value_domain=value_domains.get(column),
+                importance="core" if column in core_metrics else "optional",
+                fact_field_code=f"mz_trade.{column}", aggregation="max",
+            ))
+
+    store.save_metric(Metric(
+        metric_code=f"{object_code}.HospitalLevel", object_code=object_code,
+        name="医疗机构等级", definition="由门诊交易医疗机构编码经医院字典解析的机构等级",
+        metric_type="aggregate", semantic_type="Enum", source_object="o_Trade",
+        source_field="o_Trade.T_HospCode", value_domain="MZ_HOSPITAL_LEVEL_BY_CODE",
+        importance="core", fact_field_code="mz_trade.T_HospCode", aggregation="max",
+    ))
+
+    detail_metric_codes = {"SelfPay2": "FeeItem_SelfPay2", "State": "FeeItem_State"}
+    detail_sum = {"Count", "Fee", "FeeIn", "FeeOut", "SelfPay2"}
+    for semantic_type, columns in detail_types.items():
+        for column in sorted(columns - {"T_TradeNo", "ItemId", "ItemNo"}):
+            code = detail_metric_codes.get(column, column)
+            store.save_metric(Metric(
+                metric_code=f"{object_code}.{code}", object_code=object_code,
+                name=display_names.get(column, column),
+                definition=f"门诊费用明细字段：{display_names.get(column, column)}",
+                metric_type="aggregate", semantic_type=semantic_type,
+                unit="元" if semantic_type == "Amount" else "%" if semantic_type == "Ratio" else None,
+                source_object="o_FeeItem", source_field=f"o_FeeItem.{column}",
+                importance="core" if column in {"ItemName", "Fee", "FeeIn", "FeeOut"} else "optional",
+                fact_field_code=f"mz_fee_item.{column}",
+                aggregation="sum" if column in detail_sum else "max",
+            ))
+
+    for rule in [
+        DataQualityRule(
+            rule_code="mz_trade_key_unique", object_code=object_code,
+            rule_type="uniqueness", target_dataset_or_relation="mz_trade",
+            severity="blocking", parameters={"key_code": "mz_trade_pk"},
+        ),
+        DataQualityRule(
+            rule_code="mz_fee_item_key_unique", object_code=object_code,
+            rule_type="uniqueness", target_dataset_or_relation="mz_fee_item",
+            severity="blocking", parameters={"key_code": "mz_fee_item_pk"},
+        ),
+        DataQualityRule(
+            rule_code="mz_fee_item_coverage", object_code=object_code,
+            rule_type="coverage", target_dataset_or_relation=relation.relation_code,
+            severity="warning", parameters={"reference_dataset": "mz_fee_item"},
+        ),
+        DataQualityRule(
+            rule_code="mz_trade_anchor_not_null", object_code=object_code,
+            rule_type="not_null", target_dataset_or_relation="mz_trade",
+            severity="blocking", parameters={"field_code": "mz_trade.T_TradeNo"},
+        ),
+    ]:
+        store.save_quality_rule(rule)

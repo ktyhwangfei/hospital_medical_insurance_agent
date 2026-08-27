@@ -103,7 +103,13 @@ class ModelGateway:
         max_tokens: int | None = None,
         model_override: str | None = None,
     ) -> ModelResponse:
-        governed = resolve_governed_route(scene, model_type)
+        try:
+            governed = resolve_governed_route(scene, model_type)
+        except Exception:
+            # 治理解析失败（如缺 MASTER_KEY / 存储不可用）降级 .env 直连配置，
+            # 语义与 governed=None 一致；无直连配置时由下方 ModelConfigError 硬拦。
+            logger.warning("治理路由解析失败，降级环境配置 scene=%s type=%s", scene, model_type, exc_info=True)
+            governed = None
         if model_override:
             # model_override 非空时绕过治理与 router 直接用指定模型，并关闭 fallback
             # （用户显式选了某模型，失败应明确报错而非偷偷换模型）。
@@ -246,7 +252,11 @@ class ModelGateway:
         raise ModelExhaustedError("All models in fallback chain failed", failures=failures)
 
     def generate_stream(self, messages: list[Message], model_type: str, scene: str) -> Iterator[StreamChunk]:
-        governed = resolve_governed_route(scene, model_type)
+        try:
+            governed = resolve_governed_route(scene, model_type)
+        except Exception:
+            logger.warning("治理路由解析失败，降级环境配置 scene=%s type=%s", scene, model_type, exc_info=True)
+            governed = None
         if governed is None:
             model_name, _ = self._router.resolve(scene, model_type)
             targets: list[tuple[str, RuntimeModelProfile | None]] = [(model_name, None)]

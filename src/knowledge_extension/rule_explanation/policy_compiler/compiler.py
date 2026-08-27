@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Iterable
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from src.knowledge_extension.rule_explanation.policy_compiler.models import (
     ValidationIssue,
 )
 from src.knowledge_extension.rule_explanation.policy_retrieval.utils import normalize_ratio
+
+logger = logging.getLogger(__name__)
 
 
 RULE_KEY_FIELDS = (
@@ -51,13 +54,37 @@ def _domain_terms(domain) -> frozenset[str]:
 
 # conditions 枚举字段的受控值域（来源：policy_extract/domain_definitions，单一事实源）。
 # 未命中不阻断编译，生成 REVIEW 级 VALUE_DOMAIN_UNMAPPED，交由语义映射/值域新增流程收敛。
-_CONDITION_VALUE_DOMAINS: dict[str, frozenset[str]] = {
+# conditions 枚举字段的受控值域（来源：policy_extract/domain_definitions，单一事实源）。
+# 语义层已发布值域（med_type/hosp_lv/psn_type/insu_type/setl_type/jjgs）同步纳入允许集：
+# 提取层按语义层契约产出长格式值（如「门诊-普通门急诊」），若只认 domain_definitions
+# 短值（门诊）会全量误报 VALUE_DOMAIN_UNMAPPED（线上 52 条 blocker 全部由此产生）。
+
+def _merge_semantic_registry_domains(base: dict[str, frozenset[str]]) -> dict[str, frozenset[str]]:
+    """合并语义层已发布值域到编译器允许集（best-effort，失败用硬编码域）。"""
+    try:
+        from src.semantic_layer.registry import create_registry
+        registry = create_registry()
+        merged = {k: set(v) for k, v in base.items()}
+        for metric in registry.list_metrics("zcgz"):
+            field = metric.metric_code.split(".", 1)[-1]
+            if field not in merged or not metric.value_domain:
+                continue
+            domain = registry.get_value_domain(metric.value_domain)
+            if domain:
+                merged[field] |= set(domain.standard_values)
+        return {k: frozenset(v) for k, v in merged.items()}
+    except Exception:
+        logger.warning("编译器合并语义层值域失败，退回硬编码域", exc_info=True)
+        return base
+
+
+_CONDITION_VALUE_DOMAINS = _merge_semantic_registry_domains({
     "insu_type": _domain_terms(domain_definitions.INSURANCE_SYSTEM),
     "med_type": _domain_terms(domain_definitions.MEDICAL_CATEGORY),
     "hosp_lv": _domain_terms(domain_definitions.HOSPITAL_LEVEL),
     "psn_type": _domain_terms(domain_definitions.POPULATION_TAGS),
     "setl_type": _domain_terms(domain_definitions.SETTLEMENT_METHOD),
-}
+})
 
 
 def _iter_condition_values(raw: object):

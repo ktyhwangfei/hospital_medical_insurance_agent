@@ -157,6 +157,9 @@ class ChangeSetService:
             source_document_version_id=f"{doc_id}",
             doc_id=doc_id,
             doc_title=document.doc_title,
+            # 文档路径同样携带语义契约版本：发布校验要求 CS 与 release 一致
+            # （缺失时文档型变更集永远无法通过 POLICY_RELEASE_LINEAGE_INVALID）
+            semantic_contract_version=document.contract_version or "",
             status="NEEDS_DECISION" if compilation_blocked else "PENDING_REVIEW",
             summary={"additions": len(items), "modifications": 0, "replacements": 0,
                      "expirations": 0, "unchanged": 0},

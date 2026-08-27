@@ -598,7 +598,7 @@ class PipelineStore:
         rows = client.execute(
             """SELECT extraction_id FROM policy_extractions
                WHERE doc_id=%s AND source_text_hash=%s AND status <> 'archived'
-                 AND (unit_id = %s OR unit_id IS NULL OR %s IS NULL)
+                 AND (unit_id = %s OR unit_id IS NULL OR %s::varchar IS NULL)
                ORDER BY (unit_id = %s) DESC
                LIMIT 1""",
             (doc_id, source_text_hash, unit_id, unit_id, unit_id),

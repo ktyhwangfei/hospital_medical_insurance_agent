@@ -78,7 +78,11 @@ rule_id / fact_id / policy_id / clause_id / source_text / insu_type / med_type /
 
 
 class PolicyFactExtractionError(RuntimeError):
-    """模型调用或返回契约失败；与合法空事实列表区分。"""
+    """政策事实提取失败（模型不可用/输出不合法/截断不可恢复）。"""
+
+
+class _TruncatedOutputError(RuntimeError):
+    """内部信号：LLM 输出被 max_tokens 截断（finish_reason=length）。"""
 
 
 def _now_iso() -> str:
@@ -156,7 +160,7 @@ class PipelineOrchestrator:
             chunks = self._split_text(content, max_len=1000)
             facts: list[dict[str, Any]] = []
             for chunk in chunks:
-                chunk_facts = self._extract_policy_facts(
+                chunk_facts = self._extract_policy_facts_adaptive(
                     chunk, document_title=doc.get("title", "")
                 )
                 for fact in chunk_facts:
@@ -417,11 +421,53 @@ class PipelineOrchestrator:
             logger.error("单条提取失败 doc_id=%s: %s", doc_id, e)
             return {"success": False, "error": str(e), "doc_id": doc_id}
 
+    def _extract_policy_facts_adaptive(
+        self,
+        chunk: str,
+        document_title: str,
+        *,
+        min_chunk: int = 200,
+        override: ExtractionOverride | None = None,
+    ) -> list[dict[str, Any]]:
+        """截断自适应提取：输出被 max_tokens 截断时把片对半细分，两半分别提取。
+
+        密集表格页段落少密度高，固定 1000 字分片仍可能超出输出上限；
+        检测 finish_reason=length 后按段落/字符对半细分（两半都提，不丢后半），
+        直到 min_chunk。事实顺序按原文顺序拼接。
+        """
+        try:
+            return self._extract_policy_facts(
+                chunk, document_title, override=override,
+                _raise_on_truncation=True,
+            )
+        except _TruncatedOutputError:
+            if len(chunk) <= min_chunk:
+                raise PolicyFactExtractionError(
+                    "政策事实提取失败：分片已达下限仍被截断"
+                )
+            half = len(chunk) // 2
+            split_at = chunk.rfind("\n", 0, half)
+            if split_at < len(chunk) // 4:
+                split_at = half
+            head, tail = chunk[:split_at].strip(), chunk[split_at:].strip()
+            logger.info(
+                "提取输出被截断，细分重试 chunk=%d -> %d+%d",
+                len(chunk), len(head), len(tail),
+            )
+            facts: list[dict[str, Any]] = []
+            for part in (head, tail):
+                if part:
+                    facts.extend(self._extract_policy_facts_adaptive(
+                        part, document_title, min_chunk=min_chunk, override=override,
+                    ))
+            return facts
+
     def _extract_policy_facts(
         self,
         document_text: str,
         document_title: str = "",
         override: ExtractionOverride | None = None,
+        _raise_on_truncation: bool = False,
     ) -> list[dict[str, Any]]:
         """LLM 全文提取政策事实、规则、实体和关系。
 
@@ -458,6 +504,8 @@ class PipelineOrchestrator:
                 # 审核时显式换大模型：仅在用户指定时才传入，避免干扰默认路由
                 generate_kwargs["model_override"] = override.model_name
             response = gateway.generate(**generate_kwargs)
+            if _raise_on_truncation and getattr(response, "finish_reason", None) == "length":
+                raise _TruncatedOutputError(str(len(response.content)))
 
             content = response.content.strip()
             if content.startswith("```"):
@@ -500,6 +548,8 @@ class PipelineOrchestrator:
                     )
 
             raise ValueError(f"Unexpected LLM response type: {type(facts).__name__}")
+        except _TruncatedOutputError:
+            raise  # 截断信号交给自适应层细分重试，不在这里包装
         except Exception as e:
             logger.warning("Policy fact extraction failed: %s", e)
             raise PolicyFactExtractionError("政策事实提取失败") from e
