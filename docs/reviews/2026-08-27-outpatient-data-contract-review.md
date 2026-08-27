@@ -682,38 +682,11 @@ ORDER BY period, key_name, T_State, T_HasRefundmented, T_PartialReturnFlag, NT_R
 
 ## 交易状态
 
-服务器时钟观察窗口内状态组合查询返回 0，但因 T_TradeDate 业务时区/时钟语义未确认，不能表述为业务最近 30 天无交易。以下仅列全量状态组合；`''` 表示空字符串，`NULL` 表示数据库 NULL。
+服务器时钟观察窗口内状态组合查询返回 0，但因 T_TradeDate 业务时区/时钟语义未确认，不能表述为业务最近 30 天无交易。
 
-| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 行数 |
-|---:|---:|---|---|---:|
-| -3 | 0 | NULL | `''` | 2 |
-| -3 | 0 | `''` | NULL | 5 |
-| -3 | 1 | `''` | NULL | 1 |
-| -1 | 0 | `''` | NULL | 1 |
-| 3 | 0 | NULL | `''` | 3 |
-| 3 | 0 | `''` | NULL | 14 |
-| 3 | 1 | NULL | `''` | 5 |
-| 3 | 1 | NULL | `1` | 1 |
-| 4 | 0 | `''` | NULL | 393 |
-| 4 | 1 | `''` | NULL | 133 |
-| 4 | 1 | `1` | NULL | 34 |
+`ENUM_FREQUENCY_WITHHELD_PENDING_PRIVACY_THRESHOLD`：全量状态组合和 T_SetTid 重复键状态分层均包含 `<10（精确值已抑制）` 的小桶。为防止通过总数和互补桶反推，本节撤下整张分层频次表，不公开状态码组合、重复组分层或其互补桶精确值。[来源: 文档级证据批次 outpatient_p0_t2_20260827_070052Z；Task 4 隐私抑制规则]
 
-[来源: 文档级证据批次 outpatient_p0_t2_20260827_070052Z；全量状态组合只读 SQL；执行时段 2026-08-27 15:02:29.783–15:02:30.564 +08:00]
-
-T_TradeNo 和费用复合键没有重复，因此没有对应的重复键状态组合。T_SetTid 重复行的二次聚合如下；“涉及重复组数”表示该状态组合涉及全量 2 个重复组中的几个，同一组跨状态时会在多行出现，不能跨行相加。
-
-| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 涉及重复组数 | 重复行数 |
-|---:|---:|---|---|---:|---:|
-| -3 | 0 | `''` | NULL | 1 | 5 |
-| -3 | 1 | `''` | NULL | 1 | 1 |
-| 3 | 0 | `''` | NULL | 1 | 3 |
-| 4 | 0 | `''` | NULL | 1 | 250 |
-| 4 | 1 | `''` | NULL | 2 | 54 |
-| 4 | 1 | `1` | NULL | 1 | 13 |
-
-[来源: 文档级证据批次 outpatient_p0_t2_20260827_070052Z；重复键状态组合只读 SQL；执行时段 2026-08-27 15:02:29.783–15:02:30.564 +08:00]
-
-[推断: 基于重复键状态组合计数] 重复行在数值上集中于 T_State=4（317/326），但 T_HasRefundmented=0 仍有 258/326 行，T_PartialReturnFlag=`1` 仅 13/326 行，NT_ReTradeFlag=`1` 为 0 行。因此不能认定重复仅集中在退费、部分退费或冲正，也不能从 T_State=4 推断历史版本或任何业务终态；以上是相关性计数，不是因果结论。状态码业务含义仍需权威字典签认。
+[推断: 基于已抑制的状态组合聚合] T_SetTid 重复行横跨多种状态组合，不能认定重复只属于退费、部分退费或冲正，也不能从任一状态码推断历史版本或业务终态。状态码业务含义仍需权威字典签认；隐私抑制不改变内部结算锚点 **BLOCKED** 的判定。
 
 ## 金额勾稽
 
@@ -1019,26 +992,12 @@ ORDER BY
 
 | 等式 | 行数 | 缺 | 通 | 败 | 最大绝对差（元） | 合计绝对差（元） |
 |---|---:|---:|---:|---:|---:|---:|
-| T_FeeAll = T_FeeIn + T_FeeOut | 592 | 0 | 587 | 5 | 9.0000 | 33.9500 |
-| T_FeeAll = T_FundPay + T_SelfPayAll | 592 | 0 | 586 | 6 | 600.0000 | 1,329.0000 |
+| T_FeeAll = T_FeeIn + T_FeeOut | 592 | 0 | `>582（精确值已抑制）` | `<10（精确值已抑制）` | 已抑制 | 已抑制 |
+| T_FeeAll = T_FundPay + T_SelfPayAll | 592 | 0 | `>582（精确值已抑制）` | `<10（精确值已抑制）` | 已抑制 | 已抑制 |
 
 [来源: outpatient_p0_t3_20260827_073210Z Q3 全量聚合]
 
-| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 行数 | FeeAll=FeeIn+FeeOut 缺/通/败 | 最大/合计差 | FeeAll=FundPay+SelfPayAll 缺/通/败 | 最大/合计差 |
-|---:|---:|---|---|---:|---|---:|---|---:|
-| -3 | 0 | NULL | `''` | 2 | 0/2/0 | 0.0000/0.0000 | 0/2/0 | 0.0000/0.0000 |
-| -3 | 0 | `''` | NULL | 5 | 0/5/0 | 0.0000/0.0000 | 0/5/0 | 0.0000/0.0000 |
-| -3 | 1 | `''` | NULL | 1 | 0/1/0 | 0.0000/0.0000 | 0/1/0 | 0.0000/0.0000 |
-| -1 | 0 | `''` | NULL | 1 | 0/1/0 | 0.0000/0.0000 | 0/1/0 | 0.0000/0.0000 |
-| 3 | 0 | NULL | `''` | 3 | 0/3/0 | 0.0000/0.0000 | 0/1/2 | 55.0000/105.0000 |
-| 3 | 0 | `''` | NULL | 14 | 0/14/0 | 0.0000/0.0000 | 0/14/0 | 0.0000/0.0000 |
-| 3 | 1 | NULL | `''` | 5 | 0/5/0 | 0.0000/0.0000 | 0/2/3 | 600.0000/1,212.0000 |
-| 3 | 1 | NULL | `1` | 1 | 0/1/0 | 0.0000/0.0000 | 0/0/1 | 12.0000/12.0000 |
-| 4 | 0 | `''` | NULL | 393 | 0/390/3 | 8.0000/15.9500 | 0/393/0 | 0.0000/0.0000 |
-| 4 | 1 | `''` | NULL | 133 | 0/132/1 | 9.0000/9.0000 | 0/133/0 | 0.0000/0.0000 |
-| 4 | 1 | `1` | NULL | 34 | 0/33/1 | 9.0000/9.0000 | 0/34/0 | 0.0000/0.0000 |
-
-[来源: outpatient_p0_t3_20260827_073210Z Q3 四状态组合聚合]
+四状态组合的逐桶通过/失败数及对应最大/合计金额差均已撤下：其中存在 `<10（精确值已抑制）` 小桶，保留总数或其他互补桶会导致反推。[来源: outpatient_p0_t3_20260827_073210Z Q3 四状态组合聚合；Task 4 隐私抑制规则]
 
 [推断: 基于上述数值聚合] 两组候选等式均出现实质差异，因此不能冻结为无条件金额口径。差异在状态组合上的分布仅是相关性；没有权威状态字典和有效记录规则时，不把任何状态码解释为成功、退费、冲正或应排除状态，也不把差异直接认定为脏数据。
 
@@ -1058,86 +1017,29 @@ ORDER BY
 
 | 明细汇总与主表比较 | 比较交易 | 缺 | 通 | 败 | 最大绝对差（元） | 合计绝对差（元） |
 |---|---:|---:|---:|---:|---:|---:|
-| SUM(o_FeeItem.Fee) = o_Trade.T_FeeAll | 592 | 0 | 590 | 2 | 250.0000 | 300.0000 |
+| SUM(o_FeeItem.Fee) = o_Trade.T_FeeAll | 592 | 0 | `>582（精确值已抑制）` | `<10（精确值已抑制）` | 已抑制 | 已抑制 |
 | SUM(o_FeeItem.FeeIn) = o_Trade.T_FeeIn | 592 | 0 | 592 | 0 | 0.0030 | 0.0380 |
-| SUM(o_FeeItem.FeeOut) = o_Trade.T_FeeOut | 592 | 0 | 587 | 5 | 9.0000 | 33.9840 |
+| SUM(o_FeeItem.FeeOut) = o_Trade.T_FeeOut | 592 | 0 | `>582（精确值已抑制）` | `<10（精确值已抑制）` | 已抑制 | 已抑制 |
 
 [来源: outpatient_p0_t3_precision_20260827_074356Z Q4 全量聚合；精度修正复核结果未变]
 
-| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 交易数 | 主无明/明无主 | Fee 缺/通/败；最大/合计差 | FeeIn 缺/通/败；最大/合计差 | FeeOut 缺/通/败；最大/合计差 |
-|---:|---:|---|---|---:|---|---|---|---|
-| -3 | 0 | NULL | `''` | 2 | 0/0 | 0/0/2；250.0000/300.0000 | 0/2/0；0.0000/0.0000 | 0/2/0；0.0000/0.0000 |
-| -3 | 0 | `''` | NULL | 5 | 0/0 | 0/5/0；0.0000/0.0000 | 0/5/0；0.0000/0.0000 | 0/5/0；0.0000/0.0000 |
-| -3 | 1 | `''` | NULL | 1 | 0/0 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 |
-| -1 | 0 | `''` | NULL | 1 | 0/0 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 |
-| 3 | 0 | NULL | `''` | 3 | 0/0 | 0/3/0；0.0000/0.0000 | 0/3/0；0.0000/0.0000 | 0/3/0；0.0000/0.0000 |
-| 3 | 0 | `''` | NULL | 14 | 0/0 | 0/14/0；0.0000/0.0000 | 0/14/0；0.0000/0.0000 | 0/14/0；0.0000/0.0000 |
-| 3 | 1 | NULL | `''` | 5 | 0/0 | 0/5/0；0.0000/0.0000 | 0/5/0；0.0000/0.0000 | 0/5/0；0.0000/0.0000 |
-| 3 | 1 | NULL | `1` | 1 | 0/0 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 | 0/1/0；0.0000/0.0000 |
-| 4 | 0 | `''` | NULL | 393 | 0/0 | 0/393/0；0.0000/0.0000 | 0/393/0；0.0030/0.0350 | 0/390/3；8.0000/15.9810 |
-| 4 | 1 | `''` | NULL | 133 | 0/0 | 0/133/0；0.0000/0.0000 | 0/133/0；0.0030/0.0030 | 0/132/1；9.0000/9.0030 |
-| 4 | 1 | `1` | NULL | 34 | 0/0 | 0/34/0；0.0000/0.0000 | 0/34/0；0.0000/0.0000 | 0/33/1；9.0000/9.0000 |
+四状态组合下的交易数、逐项通过/失败数和金额差摘要均已撤下，避免小桶及其互补桶反推。[来源: outpatient_p0_t3_precision_20260827_074356Z Q4 四状态组合聚合；Task 4 隐私抑制规则]
 
-[来源: outpatient_p0_t3_precision_20260827_074356Z Q4 四状态组合聚合；精度修正复核结果未变]
-
-[推断: 基于 outpatient_p0_t3_20260827_073210Z Q2 与 outpatient_p0_t3_precision_20260827_074356Z Q4] 复合键、T_TradeNo 主从覆盖和 FeeIn 勾稽通过，但 Fee 有 2 笔、FeeOut 有 5 笔超过 0.01 元，金额门禁未通过。差异状态分布不构成有效状态规则；在业务字典签认前不得删除或筛掉这些记录来制造全量通过。
+[推断: 基于 outpatient_p0_t3_20260827_073210Z Q2 与 outpatient_p0_t3_precision_20260827_074356Z Q4] 复合键、T_TradeNo 主从覆盖和 FeeIn 勾稽通过，但 Fee 与 FeeOut 均存在 `<10（精确值已抑制）` 的超差交易，金额门禁未通过；相应差值摘要已抑制。差异状态分布不构成有效状态规则；在业务字典签认前不得删除或筛掉这些记录来制造全量通过。
 
 #### 多专项基金候选字段
 
-本节只统计 Task 1 已确认物理存在的字段。NULL、0、非零严格分列；不把 T_FundPay 与任何专项字段相加，也不把共现关系写成业务口径。
-
-| 字段 | 行数 | NULL | 0 | 非零 |
-|---|---:|---:|---:|---:|
-| T_FundPay | 592 | 0 | 284 | 308 |
-| T_BigPay | 592 | 0 | 288 | 304 |
-| T_BCPay | 592 | 0 | 571 | 21 |
-| T_JCPay | 592 | 0 | 592 | 0 |
-| T_OfficalPay | 592 | 0 | 573 | 19 |
-| NT_AgencySumPay | 592 | 581 | 5 | 6 |
-| NT_BasicPay | 592 | 581 | 9 | 2 |
-| NT_CivilPay | 592 | 0 | 590 | 2 |
-| NT_OtherPay | 592 | 581 | 11 | 0 |
-| T_BigillPay | 592 | 11 | 578 | 3 |
-| RETIRE_OFFICER_PAY | 592 | 11 | 573 | 8 |
-
-[来源: outpatient_p0_t3_20260827_073210Z Q5]
-
-共现签名顺序固定为 `T_FundPay | NT_AgencySumPay | NT_BasicPay | NT_CivilPay | NT_OtherPay`；`N`=NULL、`Z`=0、`V`=非零。
-
-| 共现签名 | 行数 |
-|---|---:|
-| V\|N\|N\|Z\|N | 306 |
-| Z\|N\|N\|Z\|N | 273 |
-| Z\|Z\|Z\|Z\|Z | 5 |
-| Z\|V\|Z\|Z\|Z | 4 |
-| V\|N\|N\|V\|N | 2 |
-| Z\|V\|V\|Z\|Z | 2 |
-
-[来源: outpatient_p0_t3_20260827_073210Z Q6]
+本节只确认 Task 1 登记的专项基金候选字段已完成 NULL/0/非零及共现聚合；不把 T_FundPay 与任何专项字段相加，也不把共现关系写成业务口径。字段分布和共现签名均含 `<10（精确值已抑制）` 小桶，且保留其他精确桶可由总数反推，故两张频次表整体撤下。[来源: outpatient_p0_t3_20260827_073210Z Q5–Q6；Task 4 隐私抑制规则]
 
 `NT_AgencySumPay = NT_BasicPay + NT_CivilPay + NT_OtherPay` 仅按字段名作为候选等式验证，不视为权威业务公式。
 
 | 范围 | 行数 | 缺 | 通 | 败 | 最大绝对差（元） | 合计绝对差（元） |
 |---|---:|---:|---:|---:|---:|---:|
-| 全量 | 592 | 581 | 5 | 6 | 537.7600 | 1,204.5200 |
+| 全量 | 592 | `>580（精确值已抑制）` | `<10（精确值已抑制）` | `<10（精确值已抑制）` | 已抑制 | 已抑制 |
 
-| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 行数 | 缺/通/败 | 最大/合计差（元） |
-|---:|---:|---|---|---:|---|---:|
-| -3 | 0 | NULL | `''` | 2 | 0/2/0 | 0.0000/0.0000 |
-| -3 | 0 | `''` | NULL | 5 | 5/0/0 | NULL/NULL |
-| -3 | 1 | `''` | NULL | 1 | 1/0/0 | NULL/NULL |
-| -1 | 0 | `''` | NULL | 1 | 1/0/0 | NULL/NULL |
-| 3 | 0 | NULL | `''` | 3 | 0/1/2 | 55.0000/105.0000 |
-| 3 | 0 | `''` | NULL | 14 | 14/0/0 | NULL/NULL |
-| 3 | 1 | NULL | `''` | 5 | 0/2/3 | 537.7600/1,087.5200 |
-| 3 | 1 | NULL | `1` | 1 | 0/0/1 | 12.0000/12.0000 |
-| 4 | 0 | `''` | NULL | 393 | 393/0/0 | NULL/NULL |
-| 4 | 1 | `''` | NULL | 133 | 133/0/0 | NULL/NULL |
-| 4 | 1 | `1` | NULL | 34 | 34/0/0 | NULL/NULL |
+按状态组合的候选等式分层及对应金额差摘要已整体撤下，避免小桶和互补桶反推。[来源: outpatient_p0_t3_20260827_073210Z Q7；Task 4 隐私抑制规则]
 
-[来源: outpatient_p0_t3_20260827_073210Z Q7]
-
-[推断: 基于 Q5–Q7] 候选分项字段 581/592 行不完整，在仅 11 行可比较记录中仍有 6 行超过容差；这些结果否定“当前数据已证明候选等式”的说法，但不能反向证明字段间真实业务关系。业务字典与医保办签认前，所有专项基金关系均保持候选/待确认。
+[推断: 基于 Q5–Q7] 候选分项字段在绝大多数交易中不完整，小规模可比较记录中仍存在 `<10（精确值已抑制）` 的超差交易；这些结果否定“当前数据已证明候选等式”的说法，但不能反向证明字段间真实业务关系。业务字典与医保办签认前，所有专项基金关系均保持候选/待确认。
 
 #### 30 个脱敏锚点人工票据核对
 
@@ -1154,7 +1056,7 @@ ORDER BY
 | 冻结门槛 | 结果 | 状态 |
 |---|---|---|
 | 复合键与主从关联 | 复合键无重复；592/592 主交易均有明细，主表无明细 0、明细无主表 0 | 通过 |
-| 金额勾稽 | Fee 2 笔失败、FeeOut 5 笔失败；两组 o_Trade 自身等式也分别有 5、6 笔失败 | 未通过 |
+| 金额勾稽 | Fee、FeeOut 及两组 o_Trade 自身等式均存在 `<10（精确值已抑制）` 的超差交易；对应差值摘要已抑制 | 未通过 |
 | 有效状态规则 | 四状态组合已聚合，但没有权威状态字典和筛选规则 | BLOCKED |
 | 至少 30 个票据人工核对 | 无票据和授权人员，未选取或导出锚点 | `MANUAL_TICKET_RECONCILIATION_BLOCKED` |
 | dbo.o_FeeItem 唯一费用明细源 | 仅保持候选；不冻结 | BLOCKED |
@@ -1276,7 +1178,7 @@ Task 6 增量结果：**DONE_WITH_BLOCKERS**。冻结的是“拒绝当前两表
 | 全历史自然日均值 | 交易 0.7708/日；明细 2.7852/日 | 否；包含 740 个无记录自然日，不能代表医院正常流量 |
 | 全历史有记录日均值 | 交易 21.1429/有记录日；明细 76.3929/有记录日 | 否；排除无记录日会产生选择偏差，仅供解释当前样本 |
 | 全历史物理日峰值 | 交易 226；明细 1,078 | 否；不是已证明的最近 30 日峰值，也未证明数据覆盖完整 |
-| 最大物理日期当天 | 交易业务键 `<10`（精确值已抑制）；68 条关联明细 | 否；只是数据中的最大 T_TradeDate 日，不是“当前最近一日”；交易计数按 Task 4 当前 `<10` 临时抑制边界隐藏 |
+| 最大物理日期当天 | 交易业务键 `<10（精确值已抑制）`；关联明细精确值已抑制 | 否；只是数据中的最大 T_TradeDate 日，不是“当前最近一日”；交易小桶及其关联明细按 Task 4 当前临时抑制边界一并隐藏 |
 | 服务器时钟最近 30 日/24h | T_TradeDate 观察到 0/0 个交易 | 否；Task 2 已阻断业务时区/时钟语义，不能解释为最近业务数据为零 |
 | 每交易明细数 | 592 个 T_TradeNo 分组；nearest-rank P50=3、P95=18、P99=18、最大=33 | 部分；只可作为**每交易**历史样本观察。T_SetTid 锚点未冻结，不能改称“单结算明细数” |
 | 机械三年线性外推 | 以 592/2,139 除以 768 日再乘 1,096 日：约 845 个交易、3,053 条明细 | 否；明确不是最近 30 日依据或容量预测，不用于采购、分区、SLA 或压测 |
@@ -1423,9 +1325,11 @@ SELECT b.min_date, b.max_date, b.active_days,
          AS latest_physical_day_trades,
        CASE WHEN d.trade_rows<@suppress_below THEN 1 ELSE 0 END
          AS latest_physical_day_trades_suppressed,
-       CASE WHEN d.detail_rows<@suppress_below THEN NULL ELSE d.detail_rows END
+       CASE WHEN d.trade_rows<@suppress_below OR d.detail_rows<@suppress_below
+         THEN NULL ELSE d.detail_rows END
          AS latest_physical_day_details,
-       CASE WHEN d.detail_rows<@suppress_below THEN 1 ELSE 0 END
+       CASE WHEN d.trade_rows<@suppress_below OR d.detail_rows<@suppress_below
+         THEN 1 ELSE 0 END
          AS latest_physical_day_details_suppressed
 FROM bounds b
 JOIN daily d ON d.physical_date=b.max_date;
@@ -1784,7 +1688,8 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 | 澄清 | <code>action=clarify</code> 只用于自然语言对应多个**已发布**指标、时间角色或区间含义；其唯一可验收传输终态为 SSE <code>done</code> 同时携带 <code>halt_reason=clarification_required</code> 与 <code>done_reason=clarification_required</code>，不产生 <code>result_status</code>，也不把 <code>clarification_required</code> 当作 <code>unavailable</code> 原因。用户不能通过澄清选择未签认公式、去重键或分母 |
 | 高风险动作 | <code>result_status=unavailable; halt_reason=high_risk_confirmation_required; workflow_status=waiting_human_confirmation</code>；系统不执行写入或源系统调用，由人工在既有业务系统处理 |
 | 多重阻断优先级 | <code>permission/security &gt; high-risk &gt; quality contract &gt; data availability &gt; empty-success</code>；一次响应只选最高优先级原因 |
-| 成功结果公共字段 | <code>complete</code>/<code>partial</code> 均携带 <code>citations[]</code>、<code>uncertainties[]</code>、<code>semantic_version</code>、<code>data_watermark</code>、<code>effective_scope</code>；<code>citations[]</code> 必须至少包含 1 条可追溯数据来源，禁止为空，<code>uncertainties[]</code> 可为空但字段不可缺失 |
+| 所有公开终态/动作公共不变量 | <code>complete</code>、<code>partial</code>、<code>unavailable</code>、<code>action=clarify</code>、<code>workflow_status=waiting_human_confirmation</code> 均必须携带 <code>citations[]</code> 与 <code>uncertainties[]</code>，且两者至少一项非空，禁止同时为空。<code>unavailable</code>、澄清和人工确认应引用触发它的证据、政策或安全规则；确无可引来源时必须提供非空 <code>uncertainties[]</code>。该不变量不改变上述 SSE <code>done</code> 映射 |
+| <code>complete</code>/<code>partial</code> 附加要求 | <code>citations[]</code> 必须至少包含 1 条可追溯数据来源，禁止为空；同时携带 <code>semantic_version</code>、<code>data_watermark</code>、<code>effective_scope</code>，<code>uncertainties[]</code> 字段不可缺失 |
 | 零结果 | 仅当权限、语义和质量门禁通过且 <code>data_watermark</code> 完整时，标量聚合真实无数据返回可信 <code>0</code>，分组/明细返回 <code>rows=[]</code>，终态均为 <code>complete</code>；质量阻断返回 <code>result_status=unavailable; halt_reason=quality_blocked</code>，延迟/缺批次返回 <code>result_status=unavailable; halt_reason=data_unavailable</code>，绝不返回 0 |
 | <code>order_by</code> | 只允许已发布 metric、dimension 或 <code>time_role</code> 的完整语义码；禁止物理字段、显示文本和缩写 |
 | TopN | 一级按目标 metric <code>desc</code>，二级按 <code>organization.department asc</code>，该维度值必须是已发布 department semantic id；完成二级稳定排序后严格截断到 N，边界并列不扩展结果集 |
@@ -1923,9 +1828,9 @@ Task 5 结果：**DONE_WITH_CONCERNS**。六指标与五维度的契约外形、
 | T1-B04 | 候选表包含直接标识符、证件/卡号及电子凭证类高敏字段 | 后续 Skill 或指标若直接读取将违反最小化与脱敏要求 | 建立允许字段白名单、用途说明和 security/desensitization 验证证据 |
 | T2-B01 | [来源: outpatient_p0_t2_20260827_070052Z] T_SetTid 有 11 行 NULL，且 2 个重复组涉及 326/592 行；重复横跨多种状态组合 | [推断: 基于全量计数与 Issue20 §5.2 强制内部锚点要求] 不能冻结为内部结算锚点，`settlement_id → 单笔交易` 假设失效，所有九个执行 Profile 阻断 | 取得 T_SetTid 权威业务定义、合法一对多/版本规则及人工签认；在此之前不得自行设计替代键 |
 | T2-B02 | [来源: outpatient_p0_t2_20260827_070052Z] T_TradeDate 为无时区 datetime，尚未取得其业务时区与时钟语义；固定服务器时钟参数形成的窗口只观察到交易/关联明细 0 | [推断: 基于字段类型与缺失的业务时区定义] 不能把该观察值作为可靠最近 30 天证据；不影响全量键、重复和主从关系结论 | 由数据负责人确认 T_TradeDate 的业务时区/时钟语义，并按确认后的时间口径重新执行参数化窗口查询 |
-| T3-B01 | [来源: outpatient_p0_t3_20260827_073210Z、outpatient_p0_t3_precision_20260827_074356Z] o_Trade 两组等式分别有 5、6 笔超差；精度修正后的 o_FeeItem 汇总 Fee、FeeOut 分别有 2、5 笔超差；状态码无权威有效规则 | [推断: 基于全量 decimal 聚合] 金额门禁和有效状态门禁未通过，dbo.o_FeeItem 不能冻结为唯一费用明细源 | 由医保办与数据负责人签认金额公式、舍入和有效状态规则；按签认规则重新执行同口径聚合并解释全部超差 |
+| T3-B01 | [来源: outpatient_p0_t3_20260827_073210Z、outpatient_p0_t3_precision_20260827_074356Z] o_Trade 两组等式及精度修正后的 o_FeeItem Fee/FeeOut 汇总均存在 `<10（精确值已抑制）` 的超差交易；关联差值摘要已抑制；状态码无权威有效规则 | [推断: 基于全量 decimal 聚合] 金额门禁和有效状态门禁未通过，dbo.o_FeeItem 不能冻结为唯一费用明细源 | 由医保办与数据负责人签认金额公式、舍入和有效状态规则；按签认规则重新执行同口径聚合并解释全部超差 |
 | T3-B02 | `MANUAL_TICKET_RECONCILIATION_BLOCKED`：当前没有至少 30 份医保办票据、票据访问授权人员或获批脱敏传递通道 | 无法完成唯一明细源的人工票据门禁 | 由医保办授权经办人完成至少 30 票据逐笔核对，医保办负责人、数据负责人和信息安全/隐私负责人签认 |
-| T3-B03 | [来源: outpatient_p0_t3_20260827_073210Z] 专项基金候选等式 592 行中 581 行缺字段，11 行可比较记录中 6 行超差 | 不能把字段名相关性发布为基金总分公式 | 取得权威基金字段字典与公式并由医保办、数据负责人签认；未签认前保持候选/待确认 |
+| T3-B03 | [来源: outpatient_p0_t3_20260827_073210Z] 专项基金候选等式绝大多数交易缺字段；小规模可比较记录中存在 `<10（精确值已抑制）` 的超差交易，关联金额摘要已抑制 | 不能把字段名相关性发布为基金总分公式 | 取得权威基金字段字典与公式并由医保办、数据负责人签认；未签认前保持候选/待确认 |
 | T4-B01 | [来源: outpatient_p0_t4_20260827_policy_closure、Issue20 §4/§5.2/§5.4] `T_SetTid` 是九个执行 Profile 的通用核心锚点但仍有 NULL/多笔歧义；交易/待遇/状态码、金额成员关系及 `TB_*`/`TA_*` 前后语义缺少权威字典，`TA_MZTimes` 仅确认物理类型为 int，`T_JCPay` 又存在救助/军残候选语义冲突 | 九个执行 Profile 均为 `unavailable`；P3、P7 另受 `T_JCPay` 语义冲突阻断，年度累计、状态和资格判断也可能误释 | 先解除 T2-B01；再由医保办与数据负责人提供字段字典、码表、公式、`T_JCPay` 唯一释义及 TB/TA 前后定义并签认，按签认口径重跑聚合 |
 | T4-B02 | 政策地区、登录医院、政策适用机构、规范专项待遇类型四项外部上下文及资格证据不在两表可信闭包内 | P5、P7、P8 存在额外外部/条件核心上下文阻断；不改变九个执行 Profile 已全部 `unavailable` 的汇总结论 | 分别从可信 HIS/医保接入上下文、登录组织、医院主数据/政策元数据和资格接口注入，并与已发布、有效期覆盖结算日期的政策证据共同验证 |
 | T4-B03 | 现有 `settlement_explain_skill` 是住院 Skill，标准化器会补住院险种、医疗类别、医院等级和人员默认值 | 若门诊复用会把缺失上下文伪造成住院事实，导致错误政策命中 | 门诊 Skill 保持独立字段映射；删除门诊路径所有住院默认值，缺失按 `missing` 失败关闭 |
@@ -1977,7 +1882,7 @@ Task 6 执行结果：**DONE_WITH_BLOCKERS**。未用全表轮询、父交易业
 
 [来源: Task 1–6 证据批次与 T1-B01 至 T6-B04] P0 评审工作已执行完毕；这只表示计划中的证据采集与文档审查已完成，不表示 P0 准入通过。
 
-[推断: 基于下列 13 项未解除阻断及签认栏为空] P0 准入门禁结论为 **blocked**，P1 为 **blocked / not_ready_for_planning**。后续只允许补证据并重新执行 P0 门禁，不编写 P1 生产代码计划。
+[推断: 基于下列 13 项未解除阻断及签认栏为空] P0 准入门禁结论为 **blocked**，P1 为 **blocked**，不得进入规划。后续只允许补证据并重新执行 P0 门禁，不编写 P1 生产代码计划。
 
 | 门禁项 | 最小阻断摘要（引用既有证据） | 责任方 | 解除证据与下一次复核动作 |
 |---|---|---|---|
@@ -2000,7 +1905,8 @@ Task 6 执行结果：**DONE_WITH_BLOCKERS**。未用全表轮询、父交易业
 - [来源: Task 4 权威字段汇总] 字段闭包已覆盖总设计 §10.1–§10.5 与 Issue 20 §5.4；本节不重复 119 字段和 Q01–Q50。
 - 文档无患者原始标识，无凭据、连接地址或账号信息；新增判断的推断均以 `[推断]` 标注。
 - [来源: Task 5] 六指标、五维度每项均保留 `verified` / `candidate` / `blocked` 状态与执行门禁，不把候选提升为可查询口径。
-- [来源: 根 `AGENTS.md` 安全约束、Task 5 受控查询边界] 任何 AI 输出仍须携带 `citations` 或声明 `uncertainties`；权限、质量、数据和高风险失败关闭约束不变。
+- [来源: 根 `AGENTS.md` 安全约束、Task 5 统一终态契约] 所有公开终态/动作均保留 `citations[]` 与 `uncertainties[]` 且至少一项非空；`complete`/`partial` 还须至少 1 条数据来源 citation。权限、质量、数据和高风险失败关闭及 SSE 终态映射不变。
+- [来源: Task 4 隐私抑制规则、本次全文复核] 状态、专项、日期及字段组合的 1–9 人/笔小桶统一显示为 `<10（精确值已抑制）` 或整组撤下；其关联金额、明细及可反推互补桶同步抑制，整体总数和无敏感分类的审计结论保留。
 
 Task 7 执行结果：**REVIEW_EXECUTED / ADMISSION_BLOCKED**。下一步仅为 G01–G13 补证据、完成真实签认并重新执行 P0 门禁；不是进入 P1。
 
