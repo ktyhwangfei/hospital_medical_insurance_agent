@@ -1,0 +1,359 @@
+# 门诊数据契约核验记录（P0 Task 1）
+
+## 环境
+
+| 项目 | 核验结果 |
+|---|---|
+| 执行日期 | 2026-08-27（Asia/Shanghai） |
+| 数据源安全别名 | bjybdb |
+| SQL Server 版本 | 16.0.4255.1 / RTM / Developer Edition (64-bit) |
+| ODBC 驱动 | SQL Server |
+| 发现任务 ID | outpatient_p0_3eceb0a3067a485285169a0c |
+| 发现任务执行时间 | 2026-08-27 14:15:28.656 +08:00 至 14:15:29.035 +08:00 |
+| 本次操作总时间 | 2026-08-27 14:15:20 +08:00 至 14:15:29 +08:00 |
+| 统计区间 | 当前注册数据源的全表发现快照；未施加业务日期过滤。两表均命中既有检查点，业务数据起止时间待后续任务验证 |
+| 执行账号标识 | 不记录，避免泄露账号信息 |
+| 数据库级权限位 | CONNECT、SELECT、INSERT、UPDATE、DELETE、VIEW DEFINITION 均为已授予 |
+| 两张候选表权限位 | SELECT、INSERT、UPDATE、DELETE 均为已授予 |
+| 实际执行边界 | SQL Server 仅执行 SELECT 与元数据查询，未执行任何写语句 |
+
+权限查询只记录能力位，不记录账号名、数据库名、主机、连接串或凭据。当前账号权限超出“批准的只读通道”最小权限基线，见“阻断项”。
+
+[来源: SQL Server SERVERPROPERTY 与 HAS_PERMS_BY_NAME 元数据查询；发现任务 outpatient_p0_3eceb0a3067a485285169a0c]
+
+## 源表
+
+本次发现请求将 schema 固定为 dbo，表白名单固定为 o_Trade、o_FeeItem，sample_limit 固定为 5；没有扫描其他业务表。
+
+| 源表 | 候选角色 | 发现状态 | 行数快照 | 字段数 | 映射/未映射 | 最新 DDL 修改时间 | 字段质量分（均值/最小/最大） | 平均非空率 |
+|---|---|---|---:|---:|---:|---|---:|---:|
+| dbo.o_Trade | 交易主表（待业务确认） | completed，cached=true | 592 | 195 | 86 / 109 | 2026-07-06 02:25:25（源时区未暴露） | 60.07 / 10.00 / 70.00 | 81.96% |
+| dbo.o_FeeItem | 费用明细表（待业务确认） | completed，cached=true | 2,139 | 41 | 18 / 23 | 2021-09-24 12:23:01.663（源时区未暴露） | 59.02 / 50.00 / 60.00 | 100.00% |
+| 合计 | — | completed | 2,731 | 236 | 104 / 132 | — | — | — |
+
+cached=true 表示本次实时读取 INFORMATION_SCHEMA 并核对列结构哈希后，因结构未变而复用了 discovery_table_checkpoints 中的统计快照。因此，行数、质量分、非空率和 DDL 时间不能作为“2026-08-27 重新全量画像”的证据。
+
+[来源: src/runtime/discovery/sqlserver_source.py 的 tables 白名单与检查点逻辑；发现任务结果及表级检查点]
+
+## 字段
+
+已通过以下批准的元数据 SELECT 确认 236 个字段的物理定义；证据仅包含字段定义，不包含患者样例行、字段样例值或任何业务标识值。
+
+    SELECT TABLE_SCHEMA,TABLE_NAME,COLUMN_NAME,DATA_TYPE,IS_NULLABLE,CHARACTER_MAXIMUM_LENGTH,NUMERIC_PRECISION,NUMERIC_SCALE,ORDINAL_POSITION
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME IN ('o_Trade','o_FeeItem')
+    ORDER BY TABLE_NAME,ORDINAL_POSITION;
+
+### dbo.o_FeeItem（41 字段）
+
+| 序号 | 字段 | 物理类型 | 可空 |
+|---:|---|---|:---:|
+| 1 | T_TradeNo | nvarchar(22) | NO |
+| 2 | ItemId | int | NO |
+| 3 | ItemNo | int | NO |
+| 4 | RecipeNo | nvarchar(20) | NO |
+| 5 | HisCode | nvarchar(40) | NO |
+| 6 | ItemCode | nvarchar(40) | NO |
+| 7 | ItemName | nvarchar(100) | NO |
+| 8 | ItemType | int | NO |
+| 9 | UnitPrice | decimal(10,4) | NO |
+| 10 | Count | numeric(10,2) | NO |
+| 11 | Fee | decimal(10,4) | NO |
+| 12 | FeeIn | decimal(10,4) | NO |
+| 13 | FeeOut | decimal(10,4) | NO |
+| 14 | SelfPay2 | decimal(10,4) | NO |
+| 15 | PreferentialScale | int | NO |
+| 16 | PreferentialFee | decimal(10,4) | NO |
+| 17 | FeeType | nvarchar(4) | NO |
+| 18 | State | int | NO |
+| 19 | Dose | nvarchar(6) | NO |
+| 20 | Specification | nvarchar(40) | YES |
+| 21 | Unit | nvarchar(20) | YES |
+| 22 | HowToUse | nvarchar(3) | YES |
+| 23 | Dosage | nvarchar(20) | YES |
+| 24 | packaging | nvarchar(10) | YES |
+| 25 | MinPackage | nvarchar(10) | YES |
+| 26 | Conversion | nvarchar(10) | YES |
+| 27 | Days | decimal(8,0) | YES |
+| 28 | HisName | nvarchar(100) | NO |
+| 29 | ApprovalNumber | nvarchar(20) | YES |
+| 30 | DecoctionOem | nvarchar(50) | YES |
+| 31 | UsageMethod | nvarchar(20) | YES |
+| 32 | DecoctionClass | nvarchar(1) | YES |
+| 33 | DecoctionMiniPack | nvarchar(1) | YES |
+| 34 | F_LEVEL | nvarchar(3) | YES |
+| 35 | SP_SCALE | decimal(18,4) | YES |
+| 36 | MEDIC_L | decimal(5,4) | YES |
+| 37 | FEE_SP_SCALE | decimal(18,4) | YES |
+| 38 | FEE_MEDIC_L | decimal(18,4) | YES |
+| 39 | PACK_FLAG | nvarchar(1) | YES |
+| 40 | StandardCode | varchar(40) | YES |
+| 41 | SPEDRUG_FLAG | varchar(3) | YES |
+
+### dbo.o_Trade（195 字段）
+
+| 序号 | 字段 | 物理类型 | 可空 |
+|---:|---|---|:---:|
+| 1 | T_TradeNo | nvarchar(22) | NO |
+| 2 | T_OraginalTradeNo | nvarchar(22) | YES |
+| 3 | T_HospCode | nvarchar(10) | NO |
+| 4 | T_HospCodeA | nvarchar(10) | NO |
+| 5 | T_HospName | nvarchar(50) | YES |
+| 6 | T_FeeNo | nvarchar(20) | YES |
+| 7 | T_CureType | int | NO |
+| 8 | T_IllType | int | NO |
+| 9 | T_TradeDate | datetime | NO |
+| 10 | T_PosNo | nvarchar(20) | YES |
+| 11 | T_FeeAll | decimal(10,2) | NO |
+| 12 | T_FeeIn | decimal(10,2) | NO |
+| 13 | T_FeeOut | decimal(10,2) | NO |
+| 14 | T_BigPay | decimal(10,2) | NO |
+| 15 | T_BCPay | decimal(10,2) | NO |
+| 16 | T_JCPay | decimal(10,2) | NO |
+| 17 | T_SelfPay1 | decimal(10,2) | NO |
+| 18 | T_FirstPay | decimal(10,2) | NO |
+| 19 | T_BeyondBig | decimal(10,2) | NO |
+| 20 | T_SelfPay2 | decimal(10,2) | NO |
+| 21 | T_BigSelfPay | decimal(10,2) | NO |
+| 22 | T_FundPay | decimal(10,2) | NO |
+| 23 | T_PersonCountPay | decimal(10,2) | NO |
+| 24 | T_PersonCountAfter | decimal(10,2) | NO |
+| 25 | T_CashPay | decimal(10,2) | NO |
+| 26 | T_SelfPayAll | decimal(10,2) | NO |
+| 27 | T_Version1 | nvarchar(20) | NO |
+| 28 | T_Version2 | nvarchar(22) | NO |
+| 29 | P_ICNo | nvarchar(12) | NO |
+| 30 | P_Name | nvarchar(50) | NO |
+| 31 | P_IDNo | nvarchar(50) | YES |
+| 32 | P_Sex | int | NO |
+| 33 | P_Official | int | NO |
+| 34 | P_OfficialCode | nvarchar(50) | YES |
+| 35 | P_Birthday | datetime | NO |
+| 36 | P_FundType | int | NO |
+| 37 | P_FromHosp | nvarchar(8) | YES |
+| 38 | P_FromHospDate | datetime | YES |
+| 39 | P_SpecHospCode | nvarchar(50) | YES |
+| 40 | P_IsYT | int | NO |
+| 41 | P_JCLevel | int | NO |
+| 42 | P_HospFlag | int | NO |
+| 43 | PN_ChronicCode | nvarchar(50) | NO |
+| 44 | PN_PersonType | int | NO |
+| 45 | PN_HospState | int | NO |
+| 46 | PN_IsChronicHosp | nvarchar(2) | NO |
+| 47 | PN_ChronicFlag | nvarchar(2) | NO |
+| 48 | PN_IsInRedList | int | NO |
+| 49 | PN_RedListState | int | NO |
+| 50 | PN_PersonCount | decimal(10,2) | NO |
+| 51 | TB_Year | int | NO |
+| 52 | TB_MZTimes | int | NO |
+| 53 | TB_FeeIn | decimal(10,2) | NO |
+| 54 | TB_BigPay | decimal(10,2) | NO |
+| 55 | TB_FeeAfterBig | decimal(10,2) | NO |
+| 56 | TB_GYTimes | int | NO |
+| 57 | TA_Year | int | NO |
+| 58 | TA_MZTimes | int | NO |
+| 59 | TA_FeeIn | decimal(10,2) | NO |
+| 60 | TA_BigPay | decimal(10,2) | NO |
+| 61 | TA_FeeAfterBig | decimal(10,2) | NO |
+| 62 | TA_GYTimes | int | NO |
+| 63 | M_medicine | decimal(10,2) | NO |
+| 64 | M_tmedicine | decimal(10,2) | NO |
+| 65 | M_therb | decimal(10,2) | NO |
+| 66 | M_examine | decimal(10,2) | NO |
+| 67 | M_ct | decimal(10,2) | NO |
+| 68 | M_mri | decimal(10,2) | NO |
+| 69 | M_ultrasonic | decimal(10,2) | NO |
+| 70 | M_oxygen | decimal(10,2) | NO |
+| 71 | M_operation | decimal(10,2) | NO |
+| 72 | M_treatment | decimal(10,2) | NO |
+| 73 | M_xray | decimal(10,2) | NO |
+| 74 | M_labexam | decimal(10,2) | NO |
+| 75 | M_bloodt | decimal(10,2) | NO |
+| 76 | M_orthodontics | decimal(10,2) | NO |
+| 77 | M_prosthesis | decimal(10,2) | NO |
+| 78 | M_psychometry | decimal(10,2) | NO |
+| 79 | M_forensicexpertise | decimal(10,2) | NO |
+| 80 | M_material | decimal(10,2) | NO |
+| 81 | M_other | decimal(10,2) | NO |
+| 82 | T_IsCapinfo | int | NO |
+| 83 | T_State | int | NO |
+| 84 | T_HasRefundmented | int | NO |
+| 85 | T_CertID | nvarchar(150) | YES |
+| 86 | T_SignInfo | nvarchar(256) | YES |
+| 87 | T_RedListVersion | nvarchar(20) | YES |
+| 88 | T_PlainText | nvarchar(250) | YES |
+| 89 | P_CardNo | nvarchar(12) | YES |
+| 90 | TT_TradeNo | char(12) | NO |
+| 91 | T_Operator | nvarchar(20) | YES |
+| 92 | T_FundPayLeft | decimal(10,2) | YES |
+| 93 | T_OfficalPay | numeric(12,2) | YES |
+| 94 | T_SignVersion | nvarchar(20) | YES |
+| 95 | CheckDetailFlag | nvarchar(1) | YES |
+| 96 | M_consultation | decimal(10,2) | YES |
+| 97 | M_registration | decimal(10,2) | YES |
+| 98 | M_feeClassType | int | YES |
+| 99 | T_PerAccountDiagID | nvarchar(32) | YES |
+| 100 | T_RePerAccountDiagID | nvarchar(32) | YES |
+| 101 | PN_DeductionFlag | nvarchar(1) | YES |
+| 102 | PN_NoRightReason | nvarchar(20) | YES |
+| 103 | T_PerAccountDiagDateTime | datetime | YES |
+| 104 | T_VerifyBlancePasswordId | nvarchar(1) | YES |
+| 105 | TB_FeeInL1 | decimal(10,2) | YES |
+| 106 | TB_BigPayL1 | decimal(10,2) | YES |
+| 107 | TB_FeeAfterBigL1 | decimal(10,2) | YES |
+| 108 | TA_FeeInL1 | decimal(10,2) | YES |
+| 109 | TA_BigPayL1 | decimal(10,2) | YES |
+| 110 | TA_FeeAfterBigL1 | decimal(10,2) | YES |
+| 111 | TR_OraginalTradeNo | nvarchar(22) | YES |
+| 112 | TR_RefundmentTradeNo | nvarchar(22) | YES |
+| 113 | T_OraginalTradeDate | datetime | YES |
+| 114 | NT_AllSelfPayFlag | varchar(3) | YES |
+| 115 | NT_QG_DIAG_ID | varchar(30) | YES |
+| 116 | NT_BalanceAccountFlag | varchar(3) | YES |
+| 117 | NT_ReTradeFlag | varchar(3) | YES |
+| 118 | PN_InsuredAreaCode | varchar(6) | YES |
+| 119 | PN_NationFundType | varchar(6) | YES |
+| 120 | NT_OUT2_SCALE | numeric(16,2) | YES |
+| 121 | NT_OUT2_PRICE | numeric(16,2) | YES |
+| 122 | NT_AgencySumPay | numeric(16,2) | YES |
+| 123 | NT_BasicPay | numeric(16,2) | YES |
+| 124 | NT_CivilPay | numeric(16,2) | YES |
+| 125 | NT_OtherPay | numeric(16,2) | YES |
+| 126 | PN_OutTransaction | nvarchar(3) | YES |
+| 127 | T_DiagType | nvarchar(1) | YES |
+| 128 | P_MediumType | nvarchar(3) | YES |
+| 129 | P_IDType | nvarchar(3) | YES |
+| 130 | P_TradeMode | nvarchar(1) | YES |
+| 131 | T_PartialReturnFlag | nvarchar(1) | YES |
+| 132 | T_HisInterfaceVersion | nvarchar(3) | YES |
+| 133 | T_BusinessNo | nvarchar(20) | YES |
+| 134 | P_EcToken | nvarchar(64) | YES |
+| 135 | P_FaceTrace | nvarchar(64) | YES |
+| 136 | P_FaceBizNo | nvarchar(64) | YES |
+| 137 | P_FaceOutBizNo | nvarchar(64) | YES |
+| 138 | T_ConfirmTime | datetime | YES |
+| 139 | T_IllCode | varchar(10) | YES |
+| 140 | FAMILY_DOC_FLAG | varchar(1) | YES |
+| 141 | NP_Settle_State | varchar(1) | YES |
+| 142 | P_Stage | varchar(1) | YES |
+| 143 | NP_PMCode | varchar(30) | YES |
+| 144 | T_SendMsgID | varchar(30) | YES |
+| 145 | T_SetTid | varchar(30) | YES |
+| 146 | T_MdtrtID | varchar(30) | YES |
+| 147 | T_PwdStatus | nvarchar(1) | YES |
+| 148 | T_SecretFreeAmt | decimal(10,2) | YES |
+| 149 | T_HadDealFlag | nvarchar(1) | YES |
+| 150 | T_HisOpt | char(10) | YES |
+| 151 | T_HospConfig | char(10) | YES |
+| 152 | T_PatientOpt | char(10) | YES |
+| 153 | SETL_DATE | datetime | YES |
+| 154 | T_HadDealTime | datetime | YES |
+| 155 | TB_BigillComm | decimal(10,2) | YES |
+| 156 | TB_BigillPay | decimal(10,2) | YES |
+| 157 | TB_CivilComm | decimal(10,2) | YES |
+| 158 | TB_CivilPay | decimal(10,2) | YES |
+| 159 | TA_BigillComm | decimal(10,2) | YES |
+| 160 | TA_BigillPay | decimal(10,2) | YES |
+| 161 | TA_CivilComm | decimal(10,2) | YES |
+| 162 | TA_CivilPay | decimal(10,2) | YES |
+| 163 | T_BigillPay | decimal(10,2) | YES |
+| 164 | P_CivilFlag | varchar(10) | YES |
+| 165 | P_CivilType | varchar(10) | YES |
+| 166 | RETIRE_OFFICER_FLAG | varchar(1) | YES |
+| 167 | RETIRE_OFFICER_PAY | decimal(10,2) | YES |
+| 168 | TRUM_FLAG | varchar(1) | YES |
+| 169 | REL_TTP_FLAG | varchar(1) | YES |
+| 170 | MDTRT_GRP_TYPE | varchar(6) | YES |
+| 171 | T_SpSetlFlag | varchar(3) | YES |
+| 172 | Fund_DET_Flag | varchar(1) | YES |
+| 173 | TB_BeyondFeeIn | decimal(10,2) | YES |
+| 174 | TA_BeyondFeeIn | decimal(10,2) | YES |
+| 175 | TB_BeyondCivilPay | decimal(10,2) | YES |
+| 176 | TA_BeyondCivilPay | decimal(10,2) | YES |
+| 177 | T_ApproveIllCode | varchar(50) | YES |
+| 178 | T_pneflag | int | YES |
+| 179 | T_pneno | varchar(50) | YES |
+| 180 | P_flxempeflag | int | YES |
+| 181 | T_wltpay | varchar(50) | YES |
+| 182 | T_wltno | varchar(50) | YES |
+| 183 | T_wltsettflag | varchar(50) | YES |
+| 184 | T_wltuseflag | varchar(50) | YES |
+| 185 | T_GFBelongFlag | varchar(50) | YES |
+| 186 | T_CompHospFlag | varchar(50) | YES |
+| 187 | T_Backpayflag | varchar(50) | YES |
+| 188 | P_diedate | varchar(50) | YES |
+| 189 | P_diedate_datasouc | varchar(50) | YES |
+| 190 | P_dietrtchk_flag | varchar(50) | YES |
+| 191 | P_retirementflag | varchar(50) | YES |
+| 192 | T_SyBeginDate | varchar(50) | YES |
+| 193 | P_fixedfamilycode | varchar(50) | YES |
+| 194 | P_fixedfamilystart | varchar(50) | YES |
+| 195 | P_fixedfamilyend | varchar(50) | YES |
+
+字段名中存在姓名、身份证件、卡号、电子凭证/人脸追踪等高敏候选字段。此处只登记物理定义；任何后续业务读取必须先建立字段白名单并经过 security/desensitization，不得以“已发现”为由直接暴露。
+
+[来源: 本次 INFORMATION_SCHEMA.COLUMNS 元数据查询]
+
+## 键与关系
+
+| 对象 | 元数据结论 |
+|---|---|
+| dbo.o_Trade | 主键 PK_o_Trade：T_TradeNo；唯一索引 UNIQ_TT_TradeNo：TT_TradeNo |
+| dbo.o_Trade | 复合普通索引 IX_QUERY：T_TradeDate、T_State、T_HasRefundmented、T_Operator |
+| dbo.o_Trade | 普通索引 Sy_Kh：P_ICNo；普通索引 Sy_P_FundType：P_FundType |
+| dbo.o_FeeItem | 复合主键 PK_o_FeeItem_1：T_TradeNo、ItemId |
+| dbo.o_FeeItem → dbo.o_Trade | 外键 FK_o_FeeItem_o_Trade：T_TradeNo → T_TradeNo |
+| dbo.o_Diagnose → dbo.o_Trade | 入向外键 FK_o_Diagnose_o_Trade：T_TradeNo → T_TradeNo；o_Diagnose 不在本次扫描范围 |
+
+主从基数、孤儿记录、退款自关联与重复键的数据验证不属于 Task 1，待验证。
+
+[来源: SQL Server sys.indexes/sys.index_columns/sys.foreign_keys 元数据查询]
+
+## 交易状态
+
+待验证。Task 1 仅确认候选物理字段：o_Trade.T_State 为 int NOT NULL、o_Trade.T_HasRefundmented 为 int NOT NULL、o_Trade.NP_Settle_State 为 varchar(1) NULL、o_FeeItem.State 为 int NOT NULL。状态值域、终态/撤销/退款语义及跨表一致性不得从字段名猜测，需后续任务取得权威字典后验证。
+
+## 金额勾稽
+
+待验证。Task 1 仅确认金额字段的精度：o_Trade 核心金额多为 decimal(10,2)，o_FeeItem 的 UnitPrice、Fee、FeeIn、FeeOut、SelfPay2 为 decimal(10,4)，Count 为 numeric(10,2)。勾稽公式、舍入阈值、负数/退款口径及状态过滤条件需由后续任务验证。
+
+## 增量游标
+
+待验证。Task 1 仅确认候选时间字段 T_TradeDate 为 datetime NOT NULL，T_ConfirmTime、SETL_DATE、T_HadDealTime 为 datetime NULL；没有验证时间范围、重复时间点、迟到数据、回写更新或组合游标稳定性。
+
+## 容量与性能
+
+| 项目 | Task 1 证据 |
+|---|---|
+| 发现结果规模 | 2 表、236 字段；检查点快照行数合计 2,731 |
+| 发现任务持久化耗时 | 约 0.378 秒 |
+| 实际扫描模式 | 两表均 cached=true |
+
+上述耗时只证明“列结构哈希核对 + 检查点复用”可完成，不证明真实全表统计的吞吐、锁影响、超时边界或生产容量。新鲜全量画像及执行计划待验证。
+
+## 政策 Skill 依赖
+
+待验证。Task 1 不建立 o_Trade/o_FeeItem 到 settlement_explain_skill 的字段映射，不修改 Skill、语义层或生产代码。后续必须逐字段对照 Skill 输入契约、引用来源与脱敏边界。
+
+## 运营指标依赖
+
+待验证。Task 1 不确认任何运营指标、口径、维度、去重键或状态过滤规则；不得仅凭已发现字段自动发布指标。
+
+## 阻断项
+
+| 编号 | 阻断/关注项 | 影响 | 解锁条件 |
+|---|---|---|---|
+| T1-B01 | 执行账号在数据库及两张候选表上具备 INSERT、UPDATE、DELETE 权限 | 不满足批准的最小只读权限基线；误操作风险高 | 提供仅 CONNECT、SELECT、VIEW DEFINITION 的专用账号或等效只读隔离通道 |
+| T1-B02 | 本次两表均命中 discovery 检查点 | 行数、质量分、非空率、DDL 时间是缓存快照，不能证明 2026-08-27 新鲜画像 | 在批准流程中生成可审计的新鲜只读全量画像，并保留任务时间与统计口径 |
+| T1-B03 | 核心字段没有随 Task 1 获得权威业务定义和值域 | 交易状态、退款链、金额公式和游标含义仍可能误判 | 取得院方数据字典/接口文档并由业务与数据负责人签认 |
+| T1-B04 | 候选表包含直接标识符、证件/卡号及电子凭证类高敏字段 | 后续 Skill 或指标若直接读取将违反最小化与脱敏要求 | 建立允许字段白名单、用途说明和 security/desensitization 验证证据 |
+
+网络、SQL Server 连接、元数据 SELECT 和发现任务持久化均成功，不构成 Task 1 的连接阻断。
+
+## 审核结论
+
+状态：DONE_WITH_CONCERNS。
+
+Task 1 已完成两张候选表的安全发现证据骨架、数据库版本/权限位、236 个字段物理类型以及键/索引/FK 元数据核验；没有修改生产代码，也没有在 SQL Server 执行写操作。
+
+当前证据足以确认“表和物理契约存在”，不足以批准后续业务接入。T1-B01 至 T1-B04 解锁前，交易状态、金额勾稽、增量游标、容量性能、政策 Skill 依赖和运营指标依赖均保持待验证，不作确定性结论。
