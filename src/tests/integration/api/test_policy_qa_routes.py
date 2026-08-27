@@ -793,6 +793,170 @@ class TestSettlementExplanationEndpoint:
         assert all(token not in public_body for token in ("select", "password", "yb_zyfdxx", "secret"))
 
 
+class TestSettlementExplanationCompare:
+    """compare_with 对比模式：settlement_compare_skill 确定性 diff + 归因。"""
+
+    @staticmethod
+    def _contexts():
+        from src.runtime.policy_qa.settlement_data_provider import SettlementContext
+
+        def _make(sid, deductible, date, cycle_count, cycle_no, person_type="退休人员"):
+            return SettlementContext(
+                settlement_id=sid,
+                person_type=person_type,
+                insurance_type="城镇职工基本医疗保险",
+                service_type="普通住院",
+                hospital_level="三级医院",
+                deductible=deductible,
+                medical_insurance_inner_amount=20000.0,
+                basic_pooling_payment=15000.0,
+                basic_pooling_self_pay=4962.67,
+                large_amount_payment=0.0,
+                large_amount_self_pay=0.0,
+                personal_total_pay=6000.0,
+                total_amount=21000.0,
+                settlement_date=date,
+                yearly_cycle_count=cycle_count,
+                cycle_no=cycle_no,
+            )
+
+        return {
+            # 基准：上年末第二次住院，起付线已减半
+            "S001": _make("S001", 325.0, "2025-12-20", 2, "2"),
+            # 对比单：新一年首次住院，起付线重新累计（跨年场景）
+            "S002": _make("S002", 650.0, "2026-01-05", 1, "1"),
+            # 第三张：人员类别变化场景
+            "S003": _make("S003", 650.0, "2026-02-10", 1, "1", person_type="在职人员"),
+        }
+
+    def _mount(self, monkeypatch, contexts, with_evidence=True):
+        from types import SimpleNamespace
+
+        from skills.settlement_compare_skill.assembler import SettlementCompareAssembler
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.settlement_data_provider import SettlementNotFoundError
+
+        class FakeProvider:
+            async def get_settlement_context(self, settlement_id: str):
+                if settlement_id not in contexts:
+                    raise SettlementNotFoundError(settlement_id)
+                return contexts[settlement_id]
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: FakeProvider()
+        )
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "get_assembler",
+            lambda skill_id: SettlementCompareAssembler()
+            if skill_id == "settlement_compare_skill"
+            else None,
+        )
+
+        def fake_retrieve(settlement_context, host, port, custom_queries=None):
+            selected = []
+            if with_evidence:
+                for q in custom_queries or []:
+                    # 每个 query 回 2 条证据，满足 _build_public_result 的 full 门槛（policy_count>=2）
+                    for i in (1, 2):
+                        selected.append(SimpleNamespace(
+                            query_name=q.query_name,
+                            source_text=f"{q.query_name} 对应的政策条文内容 {i}。",
+                            rule_type="起付线",
+                            score=1.0,
+                            applied_reason="匹配对比归因政策规则",
+                        ))
+            return SimpleNamespace(selected_evidence=selected, missing_required_rules=[])
+
+        monkeypatch.setattr(policy_qa_routes, "retrieve_policy_evidence", fake_retrieve)
+
+    def test_compare_cross_year_deductible_complete(self, client, monkeypatch):
+        """跨年住院对比：起付线差异命中归因规则，证据齐全 → complete。"""
+        self._mount(monkeypatch, self._contexts())
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "S001", "compare_with": "S002"},
+        )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["answer_status"] == "complete"
+        assert "S002" in result["answer"]
+        assert "起付线" in result["answer"]
+        assert "重新累计" in result["answer"]
+        # 逐项差异进入公开计算步骤
+        assert result["calculation_steps"]
+        assert result["citations"]
+        assert result["verification_summary"]["policy_count"] > 0
+
+    def test_compare_backward_compatible_single_value(self, client, monkeypatch):
+        """compare_with 单值用法保持兼容。"""
+        self._mount(monkeypatch, self._contexts())
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "S001", "compare_with": "S002"},
+        )
+        assert response.status_code == 200
+
+    def test_compare_three_settlements_comma_separated(self, client, monkeypatch):
+        """逗号分隔支持 3 张：基准 vs S002、基准 vs S003 各成一节。"""
+        self._mount(monkeypatch, self._contexts())
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "S001", "compare_with": "S002,S003"},
+        )
+        assert response.status_code == 200
+        answer = response.json()["answer"]
+        assert "【结算单 S002】" in answer
+        assert "【结算单 S003】" in answer
+        # S003 人员类别变化 → 命中人员类别归因
+        assert "人员类别" in answer
+
+    def test_compare_duplicate_extra_ids_deduped(self, client, monkeypatch):
+        """compare_with 内重复 id 去重后仍合法。"""
+        self._mount(monkeypatch, self._contexts())
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "S001", "compare_with": "S002,S002"},
+        )
+        assert response.status_code == 200
+
+    def test_compare_over_limit_400(self, client, monkeypatch):
+        """含主结算单超过 5 张 → 400。"""
+        self._mount(monkeypatch, self._contexts())
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "S001", "compare_with": "S002,S003,S004,S005,S006"},
+        )
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["error_code"] == "POLICY_QA_INVALID_COMPARISON"
+
+    def test_compare_settlement_not_found_404(self, client, monkeypatch):
+        """任一对比结算单不存在 → 404。"""
+        self._mount(monkeypatch, self._contexts())
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "S001", "compare_with": "S999"},
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"]["error_code"] == "POLICY_QA_SETTLEMENT_NOT_FOUND"
+
+    def test_compare_no_evidence_partial_with_uncertainties(self, client, monkeypatch):
+        """政策证据缺失 → 不为 complete，且声明 uncertainties。"""
+        self._mount(monkeypatch, self._contexts(), with_evidence=False)
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation",
+            params={"settlement_id": "S001", "compare_with": "S002"},
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result["answer_status"] in {"partial", "unavailable"}
+        assert result["citations"] == []
+        assert result["uncertainties"]
+
+
 class TestPolicyQAFeedback:
     """「回答有误」反馈端点：客户端不能伪造来源，服务端按 ID 读取并鉴权。"""
 

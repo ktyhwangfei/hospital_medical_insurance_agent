@@ -1,0 +1,117 @@
+# attribution_rules.yaml — 结算对比归因规则（业务逻辑配置化，新增规则不改代码）
+#
+# 求值语义：
+# - when.all 中所有条件同时满足才命中
+# - 条件 { field, op, value? }：
+#   - field 无前缀：取「对比单」该字段；op 为 gt/gte/lt/lte/eq/ne 时，
+#     右值默认取「基准单」同名字段；显式给 value 则与字面量比
+#   - field 带 baseline. 前缀：取「基准单」该字段，必须显式给 value
+#   - op 为 ratio_gt/ratio_lt：对比单/基准单 的比值与 value 比（基准为 0 时不命中）
+# - 同一差异字段命中多条规则时取 priority 最高者，其余进 warnings
+# - 未命中任何规则的差异走 fallback，声明 uncertainty（来源可追溯硬约束）
+
+version: "1.0"
+baseline: first          # 基准策略：first = settlement_ids 列表第一张
+
+rules:
+  - rule_id: deductible_cross_year_reset
+    name: 起付线跨年重新累计
+    applies_to: [deductible]
+    when:
+      all:
+        - { field: deductible, op: gt }                          # 本次起付线 > 基准
+        - { field: settlement_year, op: ne }                     # 结算年份不同
+        - { field: baseline.yearly_cycle_count, op: gte, value: 1 }  # 基准当年已住过院
+    attribution: 新一年度起付线重新累计，本次需重新满足起付线
+    policy_topic: 起付线
+    priority: 100
+
+  - rule_id: person_type_changed
+    name: 人员类别变化
+    applies_to: [person_type]
+    when:
+      all:
+        - { field: person_type, op: ne }
+    attribution: 两次结算人员类别不同（如在职→退休），适用的报销比例不同
+    policy_topic: 人员类别待遇
+    priority: 95
+
+  - rule_id: hospital_level_changed
+    name: 医院等级变化
+    applies_to: [hospital_level]
+    when:
+      all:
+        - { field: hospital_level, op: ne }
+    attribution: 两次结算医院等级不同，起付线与报销比例均不同
+    policy_topic: 医院等级待遇
+    priority: 95
+
+  - rule_id: deductible_repeat_hospitalization_reduced
+    name: 二次住院起付线减半
+    applies_to: [deductible]
+    when:
+      all:
+        - { field: deductible, op: lt }                          # 本次起付线 < 基准
+        - { field: cycle_no, op: gt }                            # 本次住院次数更大
+    attribution: 同一年度内二次及以后住院，起付线按规定减半或递减
+    policy_topic: 起付线
+    priority: 90
+
+  - rule_id: new_reimbursement_segment
+    name: 累计费用进入新报销段
+    applies_to: [basic_pooling_payment, basic_pooling_self_pay]
+    when:
+      all:
+        - { field: basic_pooling_self_pay, op: ratio_gt, value: 1.2 }  # 统筹自付增幅 >20%
+    attribution: 年度累计费用进入更高报销段，分段报销比例发生变化
+    policy_topic: 分段报销
+    priority: 80
+
+  - rule_id: out_of_scope_increase
+    name: 目录外费用增加
+    applies_to: [personal_total_pay]
+    when:
+      all:
+        - { field: medical_insurance_inner_amount, op: ratio_lt, value: 0.8 }  # 医保内费用降幅 >20%
+    attribution: 本次目录外费用占比明显升高，导致个人负担增加
+    policy_topic: 医保目录
+    priority: 70
+
+  # ── 量变/合计类：非政策待遇变动，不挂政策 citation（policy_topic 空）──
+  # 这些字段的差异源于诊疗量或各分项合计，没有政策规则可"解释"，
+  # 给诚实非政策归因即可；命中后不算 uncovered_topic，不阻断 complete。
+
+  - rule_id: inner_amount_volume_change
+    name: 医保内费用随诊疗量变化
+    applies_to: [medical_insurance_inner_amount]
+    when:
+      all:
+        - { field: medical_insurance_inner_amount, op: ne }
+    attribution: 医保内费用通常反映目录内诊疗项目/药品使用量变化，属费用总量变动而非政策待遇变动
+    policy_topic: ""
+    priority: 30
+
+  - rule_id: personal_total_pay_volume_change
+    name: 个人总支付随费用总量上升
+    applies_to: [personal_total_pay]
+    when:
+      all:
+        - { field: medical_insurance_inner_amount, op: ratio_gt, value: 1.0 }  # 医保内费用上升（量增场景）
+    attribution: 个人总支付随费用总量上升，各分项按比例增加，非政策待遇变动
+    policy_topic: ""
+    priority: 50
+
+  - rule_id: total_amount_composite_change
+    name: 费用总额随各分项合计变动
+    applies_to: [total_amount]
+    when:
+      all:
+        - { field: total_amount, op: ne }
+    attribution: 费用总额为各分项合计，随各分项费用变化总体变动
+    policy_topic: ""
+    priority: 20
+
+fallback:
+  name: 费用构成变化
+  attribution: 差异由费用构成变化导致，未命中已知归因规则
+  uncertainty: true        # 落入 uncertainties 而非 citations

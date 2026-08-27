@@ -1637,35 +1637,141 @@ async def get_settlement_explanation(
             internal_payload = await _process_single_settlement(settlement_id, question)
             return _public_result_from_internal_payload(internal_payload)
 
-        # ── Comparison mode ──
-        primary = await _process_single_settlement(settlement_id, question)
-        secondary = await _process_single_settlement(compare_with, question)
-        primary_answer = str(primary.get("answer") or "")
-        secondary_answer = str(secondary.get("answer") or "")
-        policy_statuses = {primary.get("policy_status"), secondary.get("policy_status")}
-        if policy_statuses == {"full_policy_matched"}:
+        # ── Comparison mode（settlement_compare_skill：确定性 diff + 归因）──
+        # compare_with 兼容单值，逗号分隔支持 2~N 张（含主结算单最多 5 张）
+        compare_ids = [settlement_id] + [
+            s.strip() for s in compare_with.split(",") if s.strip()
+        ]
+        # 去重（保序）
+        _seen: set[str] = set()
+        compare_ids = [x for x in compare_ids if not (x in _seen or _seen.add(x))]
+        if len(compare_ids) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "POLICY_QA_INVALID_COMPARISON",
+                    "对比结算单号不能与主结算单号相同。",
+                    {"operation": "settlement_explanation"},
+                ),
+            )
+        if len(compare_ids) > 5:
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "POLICY_QA_INVALID_COMPARISON",
+                    "对比结算单数量最多支持 5 张。",
+                    {"operation": "settlement_explanation"},
+                ),
+            )
+
+        # 逐单查询真实结算上下文（SettlementNotFoundError → 404，由下方统一处理）
+        provider = create_settlement_data_provider()
+        contexts = []
+        for _sid in compare_ids:
+            contexts.append(await provider.get_settlement_context(_sid))
+
+        compare_assembler = get_assembler("settlement_compare_skill")
+        if compare_assembler is None:
+            raise RuntimeError("Skill 'settlement_compare_skill' 未加载")
+
+        # target_fee_item 收窄：沿用统一解释模式识别（overview → 全字段对比）
+        _mode, _fee_item = detect_explanation_mode(question or "")
+        _target = None if _mode == ExplanationMode.OVERVIEW else _fee_item
+
+        compare_result = compare_assembler.execute(
+            settlement_contexts=contexts,
+            policy_status="no_policy_matched",
+            target_fee_item=_target,
+        )
+
+        # ── 归因政策证据：按命中主题做结构化检索，逐项挂 citations ──
+        evidence_by_topic: dict[str, list[dict]] = {}
+        topics = sorted({
+            a["policy_topic"] for a in compare_result.attributions
+            if not a["is_fallback"] and a["policy_topic"]
+        })
+        if topics:
+            _baseline = contexts[0]
+            _normalized_ctx: dict[str, Any] = {
+                "settlement_id": _baseline.settlement_id,
+                "insu_type": _normalize_insu_type(_baseline.insurance_type or "城镇职工"),
+                "med_type": _normalize_med_type(_baseline.service_type or "普通住院"),
+                "hosp_lv": _baseline.hospital_level or "三级医院",
+                "psn_type": _baseline.person_type or "退休人员",
+                "target_field": "settlement_compare",
+                "target_amount": 0.0,
+            }
+            try:
+                _queries = compare_assembler.build_policy_queries(topics)
+                _query_topic = {}
+                for _t in topics:
+                    for _q in compare_assembler.build_policy_queries([_t]):
+                        _query_topic[_q.query_name] = _t
+                _retrieval = retrieve_policy_evidence(
+                    settlement_context=_normalized_ctx,
+                    host=MILVUS_HOST,
+                    port=str(MILVUS_PORT),
+                    custom_queries=_queries,
+                )
+                for _ev in _retrieval.selected_evidence:
+                    _topic = _query_topic.get(_ev.query_name, "")
+                    if not _topic:
+                        continue
+                    evidence_by_topic.setdefault(_topic, []).append({
+                        "title": _ev.source_text[:80] + "..." if len(_ev.source_text) > 80 else _ev.source_text,
+                        "clause": _ev.source_text,
+                        "source_text": _ev.source_text,
+                        "rule_type": _ev.rule_type,
+                        "score": _ev.score,
+                        "applied_reason": _ev.applied_reason,
+                    })
+            except Exception:
+                logger.exception("[settlement-compare] 归因政策证据检索失败")
+                evidence_by_topic = {}
+
+        # 政策状态聚合：全部命中主题都有证据且总数 ≥2 → full；有证据 → partial
+        _total_evidence = sum(len(v) for v in evidence_by_topic.values())
+        _topics_with_evidence = sum(1 for _t in topics if evidence_by_topic.get(_t))
+        if topics and _topics_with_evidence == len(topics) and _total_evidence >= 2:
             combined_policy_status = "full_policy_matched"
-        elif policy_statuses.intersection({"full_policy_matched", "partial_policy_matched"}):
+        elif _total_evidence > 0:
             combined_policy_status = "partial_policy_matched"
         else:
             combined_policy_status = "no_policy_matched"
+
+        # 注入证据后重渲染（确定性纯函数，幂等）
+        compare_result = compare_assembler.execute(
+            settlement_contexts=contexts,
+            policy_status=combined_policy_status,
+            target_fee_item=_target,
+            policy_evidence_by_topic=evidence_by_topic,
+        )
+
+        _baseline = contexts[0]
         combined = {
-            "answer": f"主结算：{primary_answer}\n\n对比结算：{secondary_answer}",
-            "policy_status": combined_policy_status,
-            "policy_evidence": (primary.get("policy_evidence") or [])
-            + (secondary.get("policy_evidence") or []),
-            "calculation_trace": primary.get("calculation_trace") or {},
-            "definition": primary.get("definition"),
-            "case_context": primary.get("case_context"),
-            "warnings": (primary.get("warnings") or [])
-            + (secondary.get("warnings") or [])
-            + ["对比结果已合并为单一公开回答。"],
-            "can_answer": primary.get("can_answer") is True
-            and secondary.get("can_answer") is True,
-            "partial_answer": primary.get("partial_answer") is True
-            or secondary.get("partial_answer") is True,
-            "is_overview": primary.get("is_overview") is True
-            and secondary.get("is_overview") is True,
+            "answer": compare_result.answer,
+            "policy_status": compare_result.policy_status,
+            "policy_evidence": [
+                ev for evs in evidence_by_topic.values() for ev in evs
+            ],
+            "calculation_trace": compare_result.calculation_trace,
+            "definition": compare_result.definition,
+            "case_context": {
+                "person_type": _baseline.person_type,
+                "insurance_type": _baseline.insurance_type,
+                "service_type": _baseline.service_type,
+                "hospital_level": _baseline.hospital_level,
+                "deductible": _baseline.deductible,
+                "yearly_cycle_count": _baseline.yearly_cycle_count,
+                "basic_pooling_payment": _baseline.basic_pooling_payment,
+                "basic_pooling_self_pay": _baseline.basic_pooling_self_pay,
+                "large_amount_payment": _baseline.large_amount_payment,
+                "large_amount_self_pay": _baseline.large_amount_self_pay,
+                "personal_total_pay": _baseline.personal_total_pay,
+            },
+            "warnings": compare_result.warnings,
+            "can_answer": compare_result.can_answer,
+            "partial_answer": compare_result.partial_answer,
         }
         return _public_result_from_internal_payload(combined)
 
@@ -1678,6 +1784,9 @@ async def get_settlement_explanation(
                 {"operation": "settlement_explanation"},
             ),
         )
+    except HTTPException:
+        # 对比参数校验（400）在 try 内抛出，原样透传，不得被兜底为 503
+        raise
     except RuntimeError:
         # Raised when DATA_SOURCE_MODE != "real_db"
         logger.exception("Settlement explanation runtime failure")
