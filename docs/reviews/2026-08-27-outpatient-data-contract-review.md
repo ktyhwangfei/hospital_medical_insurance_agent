@@ -1346,7 +1346,15 @@ SELECT COUNT_BIG(*) AS total_rows,
        COUNT_BIG(DISTINCT NULLIF(LTRIM(RTRIM(T_Version2)),'')) AS version2_distinct_nonblank,
        SUM(CASE WHEN T_ConfirmTime IS NOT NULL AND T_ConfirmTime<T_TradeDate THEN 1 ELSE 0 END) AS confirm_before_trade_rows,
        SUM(CASE WHEN SETL_DATE IS NOT NULL AND SETL_DATE<T_TradeDate THEN 1 ELSE 0 END) AS setl_before_trade_rows,
-       SUM(CASE WHEN T_HadDealTime IS NOT NULL AND T_HadDealTime<T_TradeDate THEN 1 ELSE 0 END) AS had_deal_before_trade_rows
+       SUM(CASE WHEN T_HadDealTime IS NOT NULL AND T_HadDealTime<T_TradeDate THEN 1 ELSE 0 END) AS had_deal_before_trade_rows,
+       MIN(T_TradeDate) AS trade_date_min,
+       MAX(T_TradeDate) AS trade_date_max,
+       MIN(T_ConfirmTime) AS confirm_time_min,
+       MAX(T_ConfirmTime) AS confirm_time_max,
+       MIN(SETL_DATE) AS setl_date_min,
+       MAX(SETL_DATE) AS setl_date_max,
+       MIN(T_HadDealTime) AS had_deal_time_min,
+       MAX(T_HadDealTime) AS had_deal_time_max
 FROM dbo.o_Trade;
 
 -- @as_of 由调用方绑定为本节“固定执行时间”的 UTC 无时区值；不在文档写死。
