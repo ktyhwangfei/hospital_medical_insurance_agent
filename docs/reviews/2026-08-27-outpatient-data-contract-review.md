@@ -376,21 +376,30 @@ cached=true 的证明范围必须收窄：本次实时读取 INFORMATION_SCHEMA 
 
 | 项目 | 结果 |
 |---|---|
-| 执行时段 | 2026-08-27 14:52:36.455 +08:00 至 14:52:37.077 +08:00 |
-| 拟统计的完整区间 | dbo.o_Trade / dbo.o_FeeItem 全表；未执行，未取得新鲜计数 |
-| 拟统计的最近 30 天区间 | 计划以 SQL Server `SYSDATETIME()` 为右开时间锚点，按 `T_TradeDate >= DATEADD(day,-30,@as_of) AND T_TradeDate < @as_of`；因连接前阻断，实际边界未生成 |
-| 时间字段前置确认 | Task 1 元数据已确认 dbo.o_Trade.T_TradeDate 为 datetime NOT NULL；Task 2 原计划同时统计 TRY_CONVERT 失败数，未执行，不能以 Task 1 元数据替代可转换性实测 |
-| 主体指纹引用 | 引用 Task 1 的 SHA-256 38F144F8D609E1F6CFA0E3B2E4225EF783A0B313A98262F71FC0862BF97ACD70；Task 2 未连接 SQL Server，未独立重算主体指纹 |
-| 安全入口 | 使用现有 PolicyMetaStore 注册表，在内存中按启用数据源的安全别名 bjybdb 唯一筛选；不打印配置行或 connection_config |
-| 失败分类 | `DATASOURCE_ALIAS_NOT_FOUND`，匹配数 0；发生在 SQL Server 连接前 |
-| 超时边界 | 计划连接/语句超时 30 秒、LOCK_TIMEOUT 5 秒；因连接前阻断未进入查询阶段 |
-| 实际 SQL Server 操作 | 0 条；没有建立连接，没有执行 SELECT、元数据查询或写语句 |
+| 数据库时间锚点 | 2026-08-27 07:00:52.315；同次 `SYSDATETIMEOFFSET()` 返回 +00:00 |
+| 完整区间 | dbo.o_Trade / dbo.o_FeeItem 全表；o_Trade.T_TradeDate 范围 2024-03-11 09:28:38.000 至 2026-04-17 10:41:45.000（源时区不另作推断） |
+| 最近 30 天区间 | `[2026-07-28 07:00:52.315, 2026-08-27 07:00:52.315)`，左闭右开；按 o_Trade.T_TradeDate 过滤 |
+| 时间字段确认 | INFORMATION_SCHEMA 实测为 datetime NOT NULL；MIN/MAX 与所有参数化日期过滤成功，不需要猜测或解析字符串格式 |
+| 主体指纹 | SHA-256 38F144F8D609E1F6CFA0E3B2E4225EF783A0B313A98262F71FC0862BF97ACD70，与 Task 1 一致 |
+| 安全入口 | 使用启用的数据源注册表 id/name 安全别名 bjybdb；配置只在进程内传递，不打印配置行、connection_config 或初始化输出 |
+| 执行时段 | 2026-08-27 15:00:52.284–15:00:53.584、15:02:29.783–15:02:30.564、15:03:29.836–15:03:30.546（均 +08:00） |
+| 超时边界 | 连接/语句超时 30 秒，LOCK_TIMEOUT 5 秒；所有聚合查询均在 34 毫秒内完成，无超时 |
+| 实际 SQL Server 操作 | 仅 SELECT、INFORMATION_SCHEMA 元数据查询与会话级 SET；未执行写语句，未修改索引 |
+| 查询失败分类 | 首次合并画像中的 TRY_CONVERT SELECT 返回 ProgrammingError / SQLSTATE 42000；按“一次失败即记录”未重试同一查询。后续独立元数据、日期边界和过滤查询成功，因此不构成 30 天口径阻断 |
 
-该失败只证明“当前执行进程可访问的注册表中没有启用且 name 精确等于安全别名的记录”，不证明源库、表或账号不可用。Task 1 的缓存行数也不能替代 Task 2 要求的新鲜聚合计数。按照一次真实入口失败即记录、不得无界重试的约束，本次没有改走 `.env`、连接串、硬编码凭据或其他账号。
+诊断勘误：上一提交的 `DATASOURCE_ALIAS_NOT_FOUND` 是控制器未加载获准进程配置所致，不是源数据或注册表阻断，已撤销。
+
+| 查询组 | 耗时 |
+|---|---:|
+| 主体指纹与时间锚点 | 4.06 ms |
+| T_TradeDate 元数据 / 日期边界 / 最近 30 天显式零计数 | 15.93 / 5.30 / 4.93 ms |
+| o_Trade 键摘要 / 重复摘要 | 25.67 / 12.67 ms |
+| o_FeeItem 孤儿 / 复合键摘要 | 9.35 / 14.83 ms |
+| 全量状态组合 / 重复键状态组合 | 7.03 / 33.13 ms |
 
 #### 冻结的只读 SQL
 
-以下批次是 Task 2 拟执行的完整只读口径；本次因连接前阻断未执行。它只返回时间、主体哈希、状态枚举和聚合计数，不返回任何交易标识或明细键值。
+以下批次归并了 Task 2 实际成功的完整只读口径。它只返回时间、主体哈希、状态枚举和聚合计数，不返回任何交易标识或明细键值。
 
 ```sql
 SET NOCOUNT ON;
@@ -406,36 +415,35 @@ SELECT
   @as_of AS as_of,
   @window_start AS window_start;
 
-SELECT c.DATA_TYPE AS data_type,
-       c.IS_NULLABLE AS is_nullable,
-       COUNT_BIG(t.T_TradeDate) AS non_null_rows,
-       SUM(CASE WHEN TRY_CONVERT(datetime2(3), t.T_TradeDate) IS NULL THEN 1 ELSE 0 END)
-         AS conversion_failures,
-       MIN(t.T_TradeDate) AS data_min,
-       MAX(t.T_TradeDate) AS data_max
-FROM INFORMATION_SCHEMA.COLUMNS c
-CROSS JOIN dbo.o_Trade t
-WHERE c.TABLE_SCHEMA='dbo'
-  AND c.TABLE_NAME='o_Trade'
-  AND c.COLUMN_NAME='T_TradeDate'
-GROUP BY c.DATA_TYPE, c.IS_NULLABLE;
+SELECT DATA_TYPE AS data_type, IS_NULLABLE AS is_nullable
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA='dbo'
+  AND TABLE_NAME='o_Trade'
+  AND COLUMN_NAME='T_TradeDate';
 
-SELECT period,
+SELECT COUNT_BIG(*) AS total_rows,
+       MIN(T_TradeDate) AS data_min,
+       MAX(T_TradeDate) AS data_max,
+       SUM(CASE WHEN T_TradeDate >= @window_start AND T_TradeDate < @as_of THEN 1 ELSE 0 END)
+         AS recent_30d_rows
+FROM dbo.o_Trade;
+
+SELECT 'full' AS period,
        COUNT_BIG(*) AS total_rows,
-       SUM(CASE WHEN T_SetTid IS NULL THEN 1 ELSE 0 END) AS null_settlement_ids,
+       COALESCE(SUM(CASE WHEN T_SetTid IS NULL THEN 1 ELSE 0 END),0) AS null_settlement_ids,
        COUNT_BIG(DISTINCT T_SetTid) AS distinct_settlement_ids,
-       SUM(CASE WHEN T_TradeNo IS NULL THEN 1 ELSE 0 END) AS null_trade_nos,
+       COALESCE(SUM(CASE WHEN T_TradeNo IS NULL THEN 1 ELSE 0 END),0) AS null_trade_nos,
        COUNT_BIG(DISTINCT T_TradeNo) AS distinct_trade_nos
-FROM (
-  SELECT 'full' AS period, T_SetTid, T_TradeNo
-  FROM dbo.o_Trade
-  UNION ALL
-  SELECT 'recent_30d', T_SetTid, T_TradeNo
-  FROM dbo.o_Trade
-  WHERE T_TradeDate >= @window_start AND T_TradeDate < @as_of
-) s
-GROUP BY period
-ORDER BY period;
+FROM dbo.o_Trade
+UNION ALL
+SELECT 'recent_30d',
+       COUNT_BIG(*),
+       COALESCE(SUM(CASE WHEN T_SetTid IS NULL THEN 1 ELSE 0 END),0),
+       COUNT_BIG(DISTINCT T_SetTid),
+       COALESCE(SUM(CASE WHEN T_TradeNo IS NULL THEN 1 ELSE 0 END),0),
+       COUNT_BIG(DISTINCT T_TradeNo)
+FROM dbo.o_Trade
+WHERE T_TradeDate >= @window_start AND T_TradeDate < @as_of;
 
 WITH duplicate_sets AS (
   SELECT 'full' AS period, 'T_SetTid' AS key_name, COUNT_BIG(*) AS group_rows
@@ -651,18 +659,48 @@ ORDER BY period, key_name, T_State, T_HasRefundmented, T_PartialReturnFlag, NT_R
 
 | 验证项 | 完整区间 | 最近 30 天 | 决定 |
 |---|---|---|---|
-| o_Trade 行数、T_SetTid/T_TradeNo NULL 与去重数 | 未取得 | 未取得 | 阻断 |
-| T_SetTid 重复组数/涉及行数 | 未取得 | 未取得 | 内部结算锚点不冻结 |
-| T_TradeNo 重复组数/涉及行数 | 未取得 | 未取得 | 交易业务键不冻结；Task 1 的物理主键元数据不能替代数据验证 |
-| o_FeeItem 复合键 NULL、重复组数/涉及行数 | 未取得 | 未取得 | 费用明细幂等键不冻结 |
-| o_FeeItem → o_Trade 孤儿明细数 | 未取得 | 无可靠关系基础，未派生 | 一对多关系不冻结 |
-| 四字段状态组合及重复键二次聚合 | 未取得 | 未取得 | 不判断是否集中于退费、冲正或历史版本 |
+| o_Trade 行数 | 592 | 0 | 最近窗口无交易样本 |
+| T_SetTid NULL / 去重数 | 11 / 257 | 0 / 0 | 不满足内部结算锚点的一对一要求 |
+| T_SetTid 重复组数 / 涉及行数 | 2 / 326 | 0 / 0 | **BLOCKED**：停止 `settlement_id → 单笔交易` 假设，P1 阻断 |
+| T_TradeNo NULL / 去重数 | 0 / 592 | 0 / 0 | 与 592 总行数及物理主键一致，冻结为交易业务键 |
+| T_TradeNo 重复组数 / 涉及行数 | 0 / 0 | 0 / 0 | 冻结 |
+| o_FeeItem 行数 | 2,139 | 0（按父交易日期关联） | 最近窗口无明细样本 |
+| 复合键三个分量 NULL / 任一 NULL 行 | 0 / 0 / 0；任一 NULL 0 | 均为 0 | 通过 |
+| 复合键重复组数 / 涉及行数 | 0 / 0 | 0 / 0 | 冻结 `(T_TradeNo, ItemId, ItemNo)` 为费用明细幂等键 |
+| o_FeeItem → o_Trade 孤儿明细数 | 0 | 0（由全量零孤儿及最近窗口零交易共同确定） | T_TradeNo 主从关系无歧义；本范围支持一笔交易对应多条费用明细 |
 
-三项冻结状态均为 **BLOCKED**：内部结算锚点、交易业务键、费用明细幂等键均没有 Task 2 新鲜计数证据。P1 必须保持阻断，禁止沿用 `settlement_id → 单笔交易` 假设，也不得自行设计替代键。现阶段没有证据支持把任何相关性写成因果或把候选重复直接认定为脏数据。
+三项决定：内部结算锚点 **BLOCKED**；交易业务键冻结为 T_TradeNo；费用明细幂等键冻结为 `(T_TradeNo, ItemId, ItemNo)`。T_SetTid 的 2 个重复组横跨多种状态组合，且 11 行为空，当前数据不支持把它解释为单笔交易锚点；是否属于合法批次、历史版本或其他业务对象仍需权威字典确认，不自行设计替代键，也不把重复直接认定为脏数据。
 
 ## 交易状态
 
-阻断。Task 1 仅确认候选物理字段；Task 2 计划按 T_State、T_HasRefundmented、T_PartialReturnFlag、NT_ReTradeFlag 聚合，并对重复键做相同状态组合的二次聚合，但在连接前失败，未取得任何状态组合计数。状态值域、终态/撤销/退款语义及跨表一致性不得从字段名猜测；即使后续观察到集中分布，也只能记录相关性，不能写成因果。
+最近 30 天无交易，状态组合计数为 0。全量状态组合如下；`''` 表示空字符串，`NULL` 表示数据库 NULL。
+
+| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 行数 |
+|---:|---:|---|---|---:|
+| -3 | 0 | NULL | `''` | 2 |
+| -3 | 0 | `''` | NULL | 5 |
+| -3 | 1 | `''` | NULL | 1 |
+| -1 | 0 | `''` | NULL | 1 |
+| 3 | 0 | NULL | `''` | 3 |
+| 3 | 0 | `''` | NULL | 14 |
+| 3 | 1 | NULL | `''` | 5 |
+| 3 | 1 | NULL | `1` | 1 |
+| 4 | 0 | `''` | NULL | 393 |
+| 4 | 1 | `''` | NULL | 133 |
+| 4 | 1 | `1` | NULL | 34 |
+
+T_TradeNo 和费用复合键没有重复，因此没有对应的重复键状态组合。T_SetTid 重复行的二次聚合如下；“涉及重复组数”表示该状态组合涉及全量 2 个重复组中的几个，同一组跨状态时会在多行出现，不能跨行相加。
+
+| T_State | T_HasRefundmented | T_PartialReturnFlag | NT_ReTradeFlag | 涉及重复组数 | 重复行数 |
+|---:|---:|---|---|---:|---:|
+| -3 | 0 | `''` | NULL | 1 | 5 |
+| -3 | 1 | `''` | NULL | 1 | 1 |
+| 3 | 0 | `''` | NULL | 1 | 3 |
+| 4 | 0 | `''` | NULL | 1 | 250 |
+| 4 | 1 | `''` | NULL | 2 | 54 |
+| 4 | 1 | `1` | NULL | 1 | 13 |
+
+重复行在数值上集中于 T_State=4（317/326），但 T_HasRefundmented=0 仍有 258/326 行，T_PartialReturnFlag=`1` 仅 13/326 行，NT_ReTradeFlag=`1` 为 0 行。因此不能认定重复仅集中在退费、部分退费或冲正，也不能从 T_State=4 推断历史版本或任何业务终态；以上是相关性计数，不是因果结论。状态码业务含义仍需权威字典签认。
 
 ## 金额勾稽
 
@@ -698,7 +736,8 @@ ORDER BY period, key_name, T_State, T_HasRefundmented, T_PartialReturnFlag, NT_R
 | T1-B02 | 本次两表均命中 discovery 检查点 | 行数、质量分、非空率、DDL 时间是缓存快照，不能证明 2026-08-27 新鲜画像 | 在批准流程中生成可审计的新鲜只读全量画像，并保留任务时间与统计口径 |
 | T1-B03 | 核心字段没有随 Task 1 获得权威业务定义和值域 | 交易状态、退款链、金额公式和游标含义仍可能误判 | 取得院方数据字典/接口文档并由业务与数据负责人签认 |
 | T1-B04 | 候选表包含直接标识符、证件/卡号及电子凭证类高敏字段 | 后续 Skill 或指标若直接读取将违反最小化与脱敏要求 | 建立允许字段白名单、用途说明和 security/desensitization 验证证据 |
-| T2-B01 | 当前执行进程可访问的 PolicyMetaStore 中，启用数据源按安全别名 bjybdb 精确筛选为 0 条 | Task 2 无法建立批准的注册表→SQL Server 只读通道；所有键、关系、状态组合的新鲜聚合计数缺失，P1 阻断 | 在同一批准注册表入口恢复且仅恢复一条启用的安全别名映射；重新执行本文冻结 SQL，保留时间、主体指纹和聚合计数，不改走 `.env`、连接串或硬编码凭据 |
+| T2-B01 | T_SetTid 有 11 行 NULL，且 2 个重复组涉及 326/592 行；重复横跨多种状态组合 | 不能冻结为内部结算锚点，`settlement_id → 单笔交易` 假设失效，P1 阻断 | 取得 T_SetTid 权威业务定义、合法一对多/版本规则及人工签认；在此之前不得自行设计替代键 |
+| T2-B02 | 最近 30 天窗口交易和关联明细均为 0，源表最大 T_TradeDate 早于窗口起点 | 全量键证据可用，但没有近期数据证明当前上游仍按同一契约写入 | 取得当前数据供给周期说明，或在出现新交易后按同一固定 SQL 复核最近窗口 |
 
 网络、SQL Server 连接、元数据 SELECT 和发现任务持久化均成功，不构成 Task 1 的连接阻断。
 
@@ -706,9 +745,9 @@ ORDER BY period, key_name, T_State, T_HasRefundmented, T_PartialReturnFlag, NT_R
 
 状态：DRAFT / PENDING_REVIEW。
 
-Task 1 已形成两张候选表的发现证据草稿、数据库版本/脱敏权限位、236 个字段物理类型以及键/索引/FK 初步元数据观察。Task 2 在批准的注册表入口处因安全别名没有启用匹配而停止，没有建立 SQL Server 连接，也没有执行任何源库语句；完整只读聚合 SQL 已冻结供解锁后复跑。没有修改生产代码。该草稿不代表正式审核完成。
+Task 1 已形成两张候选表的发现证据草稿、数据库版本/脱敏权限位、236 个字段物理类型以及键/索引/FK 初步元数据观察。Task 2 已通过批准的注册表入口完成全量与最近 30 天的键、重复、孤儿和状态组合聚合；仅执行只读语句，没有修改生产代码或源库。该草稿不代表正式审核完成。
 
-当前证据足以确认“表和物理契约存在”，不足以批准后续业务接入。T2-B01 解锁并完成新鲜聚合前，内部结算锚点、交易业务键、费用明细幂等键及主从关系均为 BLOCKED，P1 禁止继续使用 `settlement_id → 单笔交易` 假设。T1-B01 至 T1-B04 仍保持；金额勾稽、增量游标、容量性能、政策 Skill 依赖和运营指标依赖未在 Task 2 提前处理。
+当前证据冻结 T_TradeNo 为交易业务键、`(T_TradeNo, ItemId, ItemNo)` 为费用明细幂等键，并确认全量 T_TradeNo 主从关系无孤儿。内部结算锚点仍为 BLOCKED：T2-B01 解锁前，P1 禁止继续使用 `settlement_id → 单笔交易` 假设。T1-B01 至 T1-B04 与 T2-B02 仍保持；金额勾稽、增量游标、容量性能、政策 Skill 依赖和运营指标依赖未在 Task 2 提前处理。
 
 | 待审核角色 | 审核状态 | 签认 |
 |---|---|---|
