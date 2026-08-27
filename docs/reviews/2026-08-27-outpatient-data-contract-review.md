@@ -1,4 +1,4 @@
-# 门诊数据契约核验记录（P0 Task 1–4）
+# 门诊数据契约核验记录（P0 Task 1–5）
 
 ## 环境
 
@@ -1475,7 +1475,142 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 
 ## 运营指标依赖
 
-待验证。Task 1 不确认任何运营指标、口径、维度、去重键或状态过滤规则；不得仅凭已发现字段自动发布指标。
+### Task 5：六指标、五维度与就诊时间口径
+
+#### 文档级审计证据批次
+
+| 项目 | 结果 |
+|---|---|
+| 文档级证据批次 ID | <code>outpatient_p0_t5_20260827_contract_draft</code> |
+| 批次性质 | 纯文档/既有证据综合；不是数据库审计 ID、外部 run_id 或新增数据快照 |
+| 输入证据 | Task 2 的键、关系、状态组合与时间阻断；Task 3 的金额勾稽与人工票据阻断；Task 4 的字段闭包、外部上下文与隐私抑制 |
+| 本批次数据库操作 | 无；未连接 SQL Server，未执行 SQL，未读取新样例、枚举或行级标识 |
+| 明确未做 | 不提前验证增量游标、迟到数据、容量、执行计划或生产性能 |
+| 输出 | 六指标契约草案、五维度契约草案、双时间角色、50 个草案验收问题及解锁门禁 |
+
+[来源: 文档级证据批次 <code>outpatient_p0_t2_20260827_070052Z</code>、<code>outpatient_p0_t3_20260827_073210Z</code>、<code>outpatient_p0_t3_precision_20260827_074356Z</code>、<code>outpatient_p0_t4_20260827_policy_closure</code>；总设计 §11–§12、§18–§19]
+
+本批次不重复连接 SQL Server：Task 1–4 已足以判断物理候选和阻断项。以下“冻结”只指**冻结待签认的 P0 契约草案及失败关闭行为**，不表示业务口径已签认或指标已发布。
+
+#### 受控查询边界
+
+- [来源: 总设计 §12.1–§12.3] 运行时 <code>SemanticQuery</code> 只允许 <code>metrics</code>、<code>dimensions</code>、<code>time_role</code>、<code>time_range</code>、<code>filters</code>、<code>order_by</code>、<code>limit</code>、<code>semantic_version</code>；禁止物理表/字段、SQL、任意 JOIN 和未发布公式。
+- [来源: 当前 <code>src/semantic_layer/{models.py,registry.py,data_query.py}</code>] 当前代码已具备指标 Registry、发布快照和值域，以及面向单笔取值的 <code>MetricDataQueryService</code>；尚无聚合 <code>SemanticQuery</code> 模型、确定性 Planner 或编译执行器。本节不把设计契约伪报为已实现能力。
+- [建议] 验收摘要中的 <code>comparison</code>、<code>drill_path</code>、<code>requested_output</code> 只属于助手/Planner 的受控意图包络：比较必须展开为两个分别校验和鉴权的 <code>SemanticQuery</code>；<code>sort</code> 必须映射到 <code>order_by</code>；下钻只允许固定路径；展示类型不得改变指标公式。
+- [推断: 基于当前全部指标/维度门禁] Q01–Q50 只验证意图、契约、澄清、拒绝和失败关闭。任何依赖未签认口径的取数当前都应返回 <code>unavailable</code>/<code>quality_blocked</code>，不得生成示例数值。
+
+验收表缩写固定为：<code>M=metrics</code>、<code>D=dimensions</code>、<code>F=filters</code>、<code>TR=time_role+time_range</code>、<code>C=comparison</code>、<code>S=sort→order_by</code>、<code>L=limit</code>、<code>DP=drill_path</code>、<code>O=requested_output</code>。<code>本月/本周/今日</code> 等相对区间只是意图层记号，进入查询服务前必须由可信日历按已签认医院时区解析为左闭右开的 <code>start/end</code>；未解析不得执行。所有查询还必须携带已发布的 <code>semantic_version</code>；当前没有可发布门诊运营版本，所以表中统一省略该重复项并由门禁返回 <code>unavailable</code>。
+
+#### 六指标契约表
+
+| 指标 / 草案语义码 | 业务定义 | 候选分子 / 分母 | 候选物理字段 | 去重键 | 有效状态 | 退费/冲正规则 | 时间口径 | 单位 | 可用维度 | 下钻路径 | 证据状态 | 解锁条件 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 门诊医保就诊人次 / <code>mzjyxx.insured_encounter_count</code> | [建议] 在就诊发生时间范围内，按签认的门诊医保就诊业务键去重后的就诊次数；一人多次就诊分别计数，同次就诊的多笔交易不得重复放大 | 分子：去重后的合格门诊医保就诊；分母：无 | 两表内无已签认就诊键；<code>T_MdtrtID</code> 仅确认物理存在，未完成语义、非空和唯一性画像；可信 HIS <code>encounter_id</code> 是 P1 外部输入候选 | **阻断**：不得用 <code>T_SetTid</code>；不得把交易业务键 <code>T_TradeNo</code> 自动等同就诊键；禁止 <code>COUNT(*)</code> | 需同时签认“医保门诊就诊”纳入规则及就诊与有效交易关系 | 退费/冲正可能改变交易，但是否改变就诊人次需医保办单独签认；不得默认扣减就诊 | 默认 <code>encounter_time</code> | 人次，整数 | 就诊时间；科室、门诊类别、险种为候选；结算状态仅在就诊↔有效交易映射唯一后可用 | 全院门诊→科室→门诊就诊记录；进入患者级重新鉴权 | <code>blocked</code> | 数据负责人签认就诊键、HIS 来源、跨源抽取映射、就诊时间与时区；医保办签认纳入/退费规则；画像证明键完整且不会被交易一对多放大 |
+| 门诊有效结算笔数 / <code>mzjyxx.valid_settlement_count</code> | [建议] 在选定时间角色范围内，满足已签认有效结算与退费/冲正规则的交易业务键数 | 分子：合格 <code>T_TradeNo</code> 去重数；分母：无 | <code>T_TradeNo</code>；状态候选 <code>T_State</code>、<code>T_HasRefundmented</code>、<code>T_PartialReturnFlag</code>、<code>NT_ReTradeFlag</code>、<code>NP_Settle_State</code> | [来源: Task 2] <code>T_TradeNo</code> 全量非空唯一，可作交易业务键；仍必须显式去重，禁止 <code>COUNT(*)</code> | **阻断**：状态字段物理存在但无码表，不能指定“成功/有效”码 | 原交易、部分退费、全额退费、冲正、重交易的保留/抵销/替换规则均待签认；不能只看单个标志 | 默认 <code>encounter_time</code>；用户明确问“结算日/结算时间”才用 <code>settlement_time</code> | 笔，整数 | 五维均为候选；按结算状态分组须先发布状态字典 | 全院门诊→科室→门诊就诊记录→单次门诊结算；逐级鉴权 | <code>blocked</code> | 医保办与数据负责人签认状态码、状态组合、退款链和有效交易选择规则；签认结算时间源与时区 |
+| 门诊总费用 / <code>mzjyxx.total_fee</code> | [建议] 合格门诊记录在已签认费用口径下的人民币总费用合计，不含重复交易或重复明细放大 | 分子：候选 <code>T_FeeAll</code> 按有效交易求和；分母：无 | <code>T_FeeAll</code>；<code>o_FeeItem.Fee</code> 仅是待签认明细核对候选 | <code>T_TradeNo</code>；明细仅可按已冻结复合键幂等，不可原始多表直接 JOIN 后求和 | 沿用“有效结算笔数”的阻断规则 | 必须由签认规则决定退费交易取负、排除、替换或与原交易净额化；不得由字段符号猜测 | 默认 <code>encounter_time</code>；明确结算运营问题可用 <code>settlement_time</code> | 元，Decimal，展示精度和舍入待签认 | 五维均为候选 | 全院门诊→科室→门诊就诊记录→单次门诊结算→费用类别→费用项目明细 | <code>candidate</code>（执行阻断） | 解除状态门禁；签认 <code>T_FeeAll</code> 含义、舍入及与明细关系；解释 Task 3 的公式和逐交易超差；完成票据门禁 |
+| 门诊统筹基金支付金额 / <code>mzjyxx.pooling_fund_payment</code> | [建议] 合格门诊记录中由基本医保统筹基金实际支付的金额合计；不得把“大额、补充、民政”等专项支付无条件并入 | 分子：候选 <code>T_FundPay</code> 按有效交易求和；分母：无 | <code>T_FundPay</code> 仅是“基金支付总额候选”，尚不能仅凭字段名等同“统筹基金支付”；专项字段不得盲加 | <code>T_TradeNo</code> | 沿用“有效结算笔数”的阻断规则 | 原交易与退费/冲正的基金金额净额化规则待签认 | 默认 <code>encounter_time</code>；明确结算运营问题可用 <code>settlement_time</code> | 元，Decimal | 五维均为候选 | 全院门诊→科室→门诊就诊记录→单次门诊结算；基金分项下钻仅在成员关系发布后允许 | <code>candidate</code>（执行阻断） | 权威字段字典确认 <code>T_FundPay</code> 唯一业务含义和成员边界；解除有效状态、退款链和 Task 3 金额门禁 |
+| 门诊个人支付金额 / <code>mzjyxx.personal_payment</code> | [建议] 合格门诊记录中由个人承担并实际支付的金额合计；个人账户、现金、自付一/二等是否为成员必须按权威口径定义 | 分子：候选 <code>T_SelfPayAll</code> 按有效交易求和；分母：无 | <code>T_SelfPayAll</code>；<code>T_PersonCountPay</code>、<code>T_CashPay</code> 只作成员关系核对候选 | <code>T_TradeNo</code> | 沿用“有效结算笔数”的阻断规则 | 原交易与退费/冲正的个人支付净额化、账户返还和现金退回规则待签认 | 默认 <code>encounter_time</code>；明确结算运营问题可用 <code>settlement_time</code> | 元，Decimal | 五维均为候选 | 全院门诊→科室→门诊就诊记录→单次门诊结算；患者/支付渠道下钻重新鉴权 | <code>candidate</code>（执行阻断） | 签认 <code>T_SelfPayAll</code> 业务含义、成员关系和退款规则；解释 Task 3 <code>T_FeeAll=T_FundPay+T_SelfPayAll</code> 的超差 |
+| 门诊次均费用 / <code>mzjyxx.average_fee</code> | [建议] 签认后的门诊总费用除以签认后的业务次数；结果必须显示采用的人次口径 | 分子：门诊总费用；分母候选 A=门诊医保就诊人次、候选 B=门诊有效结算笔数；未签认不得二选一 | 分子候选 <code>T_FeeAll</code>；分母没有已签认就诊键，结算候选为 <code>T_TradeNo</code> | 取决于分母；不得用 <code>T_SetTid</code> 或 <code>COUNT(*)</code> | 同时继承分子与选定分母的有效规则 | 同时继承总费用与分母的退费/冲正规则；分母为就诊人次时退费是否扣人次需单独签认 | 默认 <code>encounter_time</code> | 元/人次或元/笔；二者不可混称 | 仅允许与已签认分子、分母共同兼容的维度 | 与所选分母一致；分母未签认时不下钻 | <code>blocked</code> | 医保办明确分母是就诊人次还是有效结算笔数及名称；先解除对应分子、分母、时间和状态门禁 |
+
+[推断: 基于 Task 2–4] 六项中 0 项达到可发布 <code>verified</code>；3 项保留物理候选但执行阻断，3 项因关键键/状态/分母缺失而 <code>blocked</code>。这里的 <code>T_TradeNo</code> 键证据为 <code>verified</code>，不等于“有效结算笔数”指标已验证。
+
+#### 人次与结算笔数去重门禁
+
+| 计数对象 | 已有证明 | 当前决定 |
+|---|---|---|
+| 门诊医保就诊人次 | [来源: Task 2] <code>T_SetTid</code> 存在 NULL 和大量一对多，不能唯一定位；<code>T_TradeNo</code> 只证明交易唯一；Task 1 仅证明 <code>T_MdtrtID</code> 物理存在 | <code>blocked</code>。无签认就诊键时不计算，不允许 <code>COUNT(*)</code>、不允许用 <code>T_SetTid</code>，也不把 <code>T_TradeNo</code> 偷换为人次 |
+| 门诊有效结算笔数 | [来源: Task 2] <code>T_TradeNo</code> 全量非空唯一，交易去重键证据通过；[来源: Task 2–3] 状态组合无码表 | 键层通过、指标层 <code>blocked</code>。只能在有效状态和退费/冲正规则签认后按去重 <code>T_TradeNo</code> 计数，仍不允许 <code>COUNT(*)</code> |
+
+#### 五维度契约表
+
+| 维度 / 草案语义码 | 来源候选 | 物理类型 / 值域证据 | 语义状态 | 允许筛选 | 允许分组 | 允许下钻 | 解锁条件 |
+|---|---|---|---|---|---|---|---|
+| 就诊时间 / <code>time_role=encounter_time</code>；结算时间 / <code>time_role=settlement_time</code> | 就诊时间：可信 HIS 就诊发生时间为 P1 抽取输入候选；两表无已证明等价字段。结算时间：<code>SETL_DATE</code>、<code>T_TradeDate</code> 只登记为竞争候选 | [来源: Task 1–2、Task 4] <code>T_TradeDate</code> 为 datetime NOT NULL 且无时区语义；<code>SETL_DATE</code> 为 datetime NULL，优先级与含义未签认 | <code>blocked</code>。默认“时间”必须解释为就诊发生时间；只有明确结算运营问题才选择结算时间。不得未经证明把 <code>T_TradeDate</code> 当就诊时间，也不得把 <code>SETL_DATE</code> 当结算时间 | 解锁后允许日/周/月/自定义左闭右开区间；角色或边界歧义先 <code>clarify</code> | 解锁后允许日、周、月粒度；医院时区和周界未签认前不执行 | 时间→科室→就诊；结算时间下钻到单次结算前重新鉴权 | 数据负责人签认两个时间角色各自来源、优先级、时区、周界、迟到/回写规则；对候选字段做一致性画像 |
+| 科室 / <code>organization.department</code> | 可信 HIS 就诊科室 + 医院组织主数据；两表没有已签认科室字段，禁止用操作员、医院代码或文本猜测 | 物理类型和值域未取得；候选 <code>department_id</code> 必须来自 P1 受控抽取，不是运行时临时跨源 JOIN | <code>blocked</code>；登记为 P1 抽取输入 | 解锁后仅允许当前 <code>data_scope</code> 内已发布科室 ID；不按自由文本直连源表 | 解锁后允许；低频单元格继续抑制 | 固定“全院门诊→科室→门诊就诊记录”；每次进入就诊级重新鉴权 | HIS 字段/接口、组织主数据、历史映射和权限范围由数据负责人签认；P1 落地同批水位抽取；禁止运行时跨源临时 JOIN |
+| 门诊业务类别 / <code>mzjyxx.outpatient_business_type</code> | <code>T_CureType</code> 是物理候选；不得把现有住院默认 <code>med_type</code> 或其他源 <code>YLLB</code> 字典直接套用 | [来源: Task 1、Task 4] int NOT NULL；低频枚举整体不展示，无码表 | <code>candidate</code>；字典发布前过滤/分组执行 <code>quality_blocked</code> | 仅允许已发布标准值，不接受物理码或模型自造值 | 字典解锁后允许；小桶按 Task 4 抑制 | 筛选/分组后仍只可沿固定“全院门诊→科室→门诊就诊记录”路径下钻并鉴权 | 医保办签认门诊类别码表、合并/拆分规则和历史版本；数据负责人签认 <code>T_CureType</code> 映射 |
+| 险种 / <code>mzjyxx.insurance_type</code> | <code>P_FundType</code>、<code>PN_NationFundType</code> 为竞争候选；当前 seed 的 <code>FUND_TYPE</code> 绑定其他源字段，不能自动证明本表映射 | [来源: Task 1、Task 4、当前 <code>seed.py</code>] <code>P_FundType</code> int NOT NULL；<code>PN_NationFundType</code> varchar(6) NULL；本表无码表 | <code>candidate</code>；字典发布前过滤/分组执行 <code>quality_blocked</code> | 仅允许已发布标准险种，不接受源物理码 | 字典解锁后允许；低频待遇桶抑制 | 筛选/分组后仍只可沿固定“全院门诊→科室→门诊就诊记录”路径下钻；进入就诊级重新鉴权 | 医保办签认权威险种字段、两候选优先级和值域；建立版本化映射并回归 |
+| 结算状态 / <code>mzjyxx.settlement_status</code> | 组合候选：<code>T_State</code>、<code>T_HasRefundmented</code>、<code>T_PartialReturnFlag</code>、<code>NT_ReTradeFlag</code>、<code>NP_Settle_State</code>，及原交易关系候选 | [来源: Task 1–4] int/varchar/nvarchar，NULL/空串并存；精确低频值域已抑制；无码表 | <code>candidate</code>；不能从单字段或数值猜“成功/退费/冲正/无效” | 仅在组合状态字典发布后允许；当前任何状态筛选均 <code>quality_blocked</code> | 解锁后允许受隐私阈值保护的汇总；不展示精确小桶 | 状态→科室→就诊→单次结算；退费链仅供有权限人员查看 | 医保办和数据负责人签认组合状态机、原/退交易关系、有效交易选择及退款净额规则；隐私负责人签认桶阈值 |
+
+[来源: Task 4 <code>ENUM_FREQUENCY_WITHHELD_PENDING_PRIVACY_THRESHOLD</code>] 五维度的低频枚举继续失败关闭：本节不新增任何枚举值或精确小桶。生产阈值、组合维度和二次推断风险须由信息安全/隐私负责人签认。
+
+#### 双时间角色冻结草案
+
+1. [来源: 用户确认口径；总设计 §22] 未带“结算”限定的“今天、本周、本月、某日、某段时间”默认指 <code>encounter_time</code>，即就诊发生时间。
+2. [推断] “按结算日、结算时间、当日结算、结算运营”等明确表述才使用 <code>settlement_time</code>；若同一句同时要求就诊与结算口径且关系不明确，动作是 <code>clarify</code>。
+3. [建议] 所有区间采用左闭右开；日/月边界和自然周边界由医院时区日历服务解析。医院时区、周起始日和节假日业务日尚未签认，当前仍是解锁项。
+4. <code>T_TradeDate</code> 不得未经证明映射到 <code>encounter_time</code>；<code>SETL_DATE</code> 也不得未经字典和完整性验证映射到 <code>settlement_time</code>。
+5. 同比/环比由确定性日历生成两个受控区间，各自重新校验权限、语义版本和数据水位；LLM 不计算日期、不改字段。
+
+#### 50 个草案验收问题
+
+> 这 50 题是 **P0 评审草案**，不是生产可信问题库、隐藏验收集或正式可信集。只有医保办负责人和数据负责人逐题签认指标、维度、时间与门禁后，才能转入“可信问题库”；权限与低频题还需信息安全/隐私负责人签认。[来源: 总设计 §14.1、§19]
+
+| 编号 | 自然语言 | 场景覆盖 | 期望 intent / 动作 | 受控契约摘要（M/D/F/TR/C/S/L/DP/O） | 依赖口径门禁 |
+|---|---|---|---|---|---|
+| Q01 | 本月门诊医保就诊人次是多少？ | 人次、默认月、默认就诊时间 | <code>metric_query→unavailable</code> | M[mzjyxx.insured_encounter_count]；D[]；F[]；TR[encounter_time,本月]；C[none]；S[]；L[1]；DP[none]；O[kpi] | 就诊键、就诊时间、医保门诊纳入规则 |
+| Q02 | 今天门诊医保就诊人次比昨天多还是少？ | 人次、日、日环比 | <code>metric_query→unavailable</code> | M[mzjyxx.insured_encounter_count]；D[calendar.day]；F[]；TR[encounter_time,今日]；C[previous_day]；S[day asc]；L[2]；DP[none]；O[kpi+comparison] | 就诊键、时区、日界、比较日历 |
+| Q03 | 本周每天的门诊医保就诊人次趋势。 | 人次、周、日粒度 | <code>metric_query→unavailable</code> | M[mzjyxx.insured_encounter_count]；D[calendar.day]；F[]；TR[encounter_time,本周]；C[none]；S[day asc]；L[7]；DP[none]；O[line] | 就诊键、就诊时间、时区、自然周边界 |
+| Q04 | 统计指定起止日期内各科室门诊医保就诊人次。 | 人次、自定义区间、科室 | <code>metric_query→unavailable</code> | M[mzjyxx.insured_encounter_count]；D[organization.department]；F[]；TR[encounter_time,自定义完整起止日]；C[none]；S[mzjyxx.insured_encounter_count desc]；L[50]；DP[department→encounter]；O[table] | 就诊键、就诊时间、科室 P1 抽取与权限 |
+| Q05 | 本月门诊医保就诊人次同比去年同月如何？ | 人次、月、同比 | <code>metric_query→unavailable</code> | M[mzjyxx.insured_encounter_count]；D[]；F[]；TR[encounter_time,本月]；C[yoy]；S[]；L[2]；DP[none]；O[kpi+comparison] | 就诊键、时区、同比对齐、历史口径版本 |
+| Q06 | 本月门诊有效结算有多少笔？ | 有效结算、默认月 | <code>metric_query→unavailable</code> | M[mzjyxx.valid_settlement_count]；D[]；F[]；TR[encounter_time,本月]；C[none]；S[]；L[1]；DP[none]；O[kpi] | 有效状态、退款链、默认就诊时间映射 |
+| Q07 | 按结算时间看，今天有效结算笔数。 | 显式结算时间、日 | <code>metric_query→unavailable</code> | M[mzjyxx.valid_settlement_count]；D[]；F[]；TR[settlement_time,今日]；C[none]；S[]；L[1]；DP[none]；O[kpi] | 结算时间源/时区、有效状态 |
+| Q08 | 本月按结算状态统计有效结算笔数。 | 结算状态维度 | <code>metric_query→unavailable</code> | M[mzjyxx.valid_settlement_count]；D[mzjyxx.settlement_status]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.valid_settlement_count desc]；L[20]；DP[none]；O[table] | 组合状态字典、有效交易规则、低频抑制 |
+| Q09 | 本月有效结算笔数比上月增长多少？ | 有效结算、月、环比 | <code>metric_query→unavailable</code> | M[mzjyxx.valid_settlement_count]；D[]；F[]；TR[encounter_time,本月]；C[mom]；S[]；L[2]；DP[none]；O[kpi+comparison] | 有效状态、退款链、月界、历史语义版本 |
+| Q10 | 本月有效结算笔数最多的前 10 个科室。 | TopN、科室 | <code>metric_query→unavailable</code> | M[mzjyxx.valid_settlement_count]；D[organization.department]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.valid_settlement_count desc]；L[10]；DP[department→encounter→settlement]；O[bar+table] | 科室抽取、权限、有效状态、固定下钻 |
+| Q11 | 本月门诊总费用是多少？ | 总费用、默认月 | <code>metric_query→unavailable</code> | M[mzjyxx.total_fee]；D[]；F[]；TR[encounter_time,本月]；C[none]；S[]；L[1]；DP[none]；O[kpi] | 总费用字段/公式、有效状态、退款净额 |
+| Q12 | 本月各科室门诊总费用。 | 总费用、科室 | <code>metric_query→unavailable</code> | M[mzjyxx.total_fee]；D[organization.department]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.total_fee desc]；L[50]；DP[department→encounter→settlement]；O[table] | 科室抽取、总费用、状态、权限 |
+| Q13 | 查询完整指定日期区间内每天的门诊总费用。 | 总费用、自定义区间、日粒度 | <code>metric_query→unavailable</code> | M[mzjyxx.total_fee]；D[calendar.day]；F[]；TR[encounter_time,自定义完整起止日]；C[none]；S[day asc]；L[366]；DP[none]；O[line] | 就诊时间、时区、总费用、最大区间/行数策略 |
+| Q14 | 本月门诊总费用环比上月。 | 总费用、月、环比 | <code>metric_query→unavailable</code> | M[mzjyxx.total_fee]；D[]；F[]；TR[encounter_time,本月]；C[mom]；S[]；L[2]；DP[none]；O[kpi+comparison] | 总费用、有效状态、退款净额、月界 |
+| Q15 | 某个已发布科室在指定日没有门诊记录时，总费用应怎样展示？ | 零结果、科室、日 | <code>metric_query→unavailable</code>；解锁后返回空集合/零聚合，不造行 | M[mzjyxx.total_fee]；D[organization.department]；F[organization.department=authorized_published_value]；TR[encounter_time,完整指定日]；C[none]；S[]；L[1]；DP[none]；O[empty_state+kpi] | 科室、时间、总费用全部解锁；零结果与数据不可用必须区分 |
+| Q16 | 本月门诊统筹基金支付金额是多少？ | 统筹基金、月 | <code>metric_query→unavailable</code> | M[mzjyxx.pooling_fund_payment]；D[]；F[]；TR[encounter_time,本月]；C[none]；S[]；L[1]；DP[none]；O[kpi] | <code>T_FundPay</code> 业务定义、状态、退款净额 |
+| Q17 | 本月按险种看门诊统筹基金支付金额。 | 统筹基金、险种 | <code>metric_query→unavailable</code> | M[mzjyxx.pooling_fund_payment]；D[mzjyxx.insurance_type]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.pooling_fund_payment desc]；L[20]；DP[none]；O[table] | 险种字段/字典、基金口径、低频抑制 |
+| Q18 | 本月门诊统筹基金支付金额同比去年同月。 | 统筹基金、同比 | <code>metric_query→unavailable</code> | M[mzjyxx.pooling_fund_payment]；D[]；F[]；TR[encounter_time,本月]；C[yoy]；S[]；L[2]；DP[none]；O[kpi+comparison] | 基金口径、状态、同比日历、历史版本 |
+| Q19 | 本月统筹基金支付金额最高的前 5 个科室。 | 统筹基金、TopN | <code>metric_query→unavailable</code> | M[mzjyxx.pooling_fund_payment]；D[organization.department]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.pooling_fund_payment desc]；L[5]；DP[department→encounter→settlement]；O[bar+table] | 科室、基金口径、状态、权限 |
+| Q20 | 本月不同门诊业务类别的统筹基金支付金额。 | 门诊类别维度 | <code>metric_query→unavailable</code> | M[mzjyxx.pooling_fund_payment]；D[mzjyxx.outpatient_business_type]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.pooling_fund_payment desc]；L[20]；DP[none]；O[table] | <code>T_CureType</code> 字典、基金口径、低频抑制 |
+| Q21 | 本月门诊个人支付金额是多少？ | 个人支付、月 | <code>metric_query→unavailable</code> | M[mzjyxx.personal_payment]；D[]；F[]；TR[encounter_time,本月]；C[none]；S[]；L[1]；DP[none]；O[kpi] | <code>T_SelfPayAll</code> 定义/成员、状态、退款净额 |
+| Q22 | 本月各科室门诊个人支付金额。 | 个人支付、科室 | <code>metric_query→unavailable</code> | M[mzjyxx.personal_payment]；D[organization.department]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.personal_payment desc]；L[50]；DP[department→encounter→settlement]；O[table] | 科室、个人支付口径、权限 |
+| Q23 | 本月个人支付金额比上月变化多少？ | 个人支付、环比 | <code>metric_query→unavailable</code> | M[mzjyxx.personal_payment]；D[]；F[]；TR[encounter_time,本月]；C[mom]；S[]；L[2]；DP[none]；O[kpi+comparison] | 个人支付、状态、月界、历史版本 |
+| Q24 | 本月按险种汇总个人支付金额。 | 个人支付、险种 | <code>metric_query→unavailable</code> | M[mzjyxx.personal_payment]；D[mzjyxx.insurance_type]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.personal_payment desc]；L[20]；DP[none]；O[table] | 险种字典、个人支付、低频抑制 |
+| Q25 | 本月门诊次均费用是多少？ | 次均费用、分母门禁 | <code>clarify</code>（先问按就诊人次还是有效结算笔数） | —；分母签认前不生成查询 | 次均分母、名称、分子、状态 |
+| Q26 | 本月次均费用最高的前 10 个科室。 | 次均、TopN、科室 | <code>clarify</code>（分母）后仍 <code>unavailable</code> | M[mzjyxx.average_fee]；D[organization.department]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.average_fee desc]；L[10]；DP[department→encounter]；O[bar+table] | 次均分母、科室、分子/分母兼容维度 |
+| Q27 | 本周每天的门诊次均费用趋势。 | 次均、周、日 | <code>clarify</code>（分母）后仍 <code>unavailable</code> | M[mzjyxx.average_fee]；D[calendar.day]；F[]；TR[encounter_time,本周]；C[none]；S[day asc]；L[7]；DP[none]；O[line] | 次均分母、周界、时间、总费用 |
+| Q28 | 本月门诊平均花费是多少？ | 歧义指标 | <code>clarify</code>（次均费用/人均费用/单笔结算均费） | —；指标未唯一前不生成查询 | 指标同义词、次均分母、业务名称 |
+| Q29 | 本月六项门诊运营指标放在一张表里。 | 六指标联合 | <code>metric_query→unavailable</code> | M[mzjyxx.insured_encounter_count,mzjyxx.valid_settlement_count,mzjyxx.total_fee,mzjyxx.pooling_fund_payment,mzjyxx.personal_payment,mzjyxx.average_fee]；D[]；F[]；TR[encounter_time,本月]；C[none]；S[]；L[1]；DP[none]；O[table] | 六指标全部门禁；联合结果不能掩盖单项 unavailable |
+| Q30 | 本月各科室的门诊医保就诊人次、总费用和统筹基金支付金额，按基金支付倒序。 | 首个用户故事、复合指标、排序 | <code>metric_query→unavailable</code> | M[mzjyxx.insured_encounter_count,mzjyxx.total_fee,mzjyxx.pooling_fund_payment]；D[organization.department]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.pooling_fund_payment desc]；L[50]；DP[department→encounter]；O[table+bar] | 就诊键、科室、两个金额口径、状态、权限 |
+| Q31 | 本月按科室、门诊业务类别、险种和结算状态看有效结算笔数。 | 五维组合、隐私 | <code>metric_query→unavailable</code> | M[mzjyxx.valid_settlement_count]；D[organization.department,mzjyxx.outpatient_business_type,mzjyxx.insurance_type,mzjyxx.settlement_status]；F[]；TR[encounter_time,本月]；C[none]；S[mzjyxx.valid_settlement_count desc]；L[100]；DP[department→encounter]；O[table+suppress_small_cells] | 四枚举/组织维度、组合重识别阈值、状态、权限 |
+| Q32 | 按结算时间统计本月门诊总费用。 | 显式结算时间、月 | <code>metric_query→unavailable</code> | M[mzjyxx.total_fee]；D[]；F[]；TR[settlement_time,本月]；C[none]；S[]；L[1]；DP[none]；O[kpi] | 结算时间源/时区、总费用、状态 |
+| Q33 | 本月门诊总费用。 | 默认时间角色 | <code>metric_query→unavailable</code> | M[mzjyxx.total_fee]；D[]；F[]；TR[encounter_time,本月]；C[none]；S[]；L[1]；DP[none]；O[kpi+time_role_label] | 默认就诊时间、总费用；结果必须展示时间角色 |
+| Q34 | 查 2026 年 8 月 1 日到 8 月 15 日各门诊业务类别的有效结算笔数。 | 自定义完整区间、类别 | <code>metric_query→unavailable</code> | M[mzjyxx.valid_settlement_count]；D[mzjyxx.outpatient_business_type]；F[]；TR[encounter_time,完整自定义区间]；C[none]；S[mzjyxx.valid_settlement_count desc]；L[20]；DP[none]；O[table] | 区间边界、类别字典、有效状态 |
+| Q35 | 今年每周门诊医保就诊人次。 | 周粒度、长区间 | <code>metric_query→unavailable</code> | M[mzjyxx.insured_encounter_count]；D[calendar.week]；F[]；TR[encounter_time,今年]；C[none]；S[week asc]；L[54]；DP[none]；O[line] | 就诊键、自然周、时区、年度边界 |
+| Q36 | 今年每月门诊总费用同比去年。 | 月粒度、同比 | <code>metric_query→unavailable</code> | M[mzjyxx.total_fee]；D[calendar.month]；F[]；TR[encounter_time,今年]；C[yoy]；S[month asc]；L[24]；DP[none]；O[line+comparison] | 总费用、年度/月界、历史语义版本 |
+| Q37 | 从本月某科室下钻到门诊就诊记录。 | 科室→就诊固定下钻 | <code>drill_query→unavailable</code> | M[mzjyxx.insured_encounter_count]；D[organization.department]；F[organization.department=authorized_published_value]；TR[encounter_time,本月]；C[none]；S[encounter_time desc]；L[100]；DP[department→encounter]；O[desensitized_encounter_table] | 科室抽取、就诊键、<code>analytics:query:drill</code> 与 encounter 权限、脱敏 |
+| Q38 | 我没有就诊明细权限，但请从科室继续下钻到患者就诊。 | 无权限下钻 | <code>reject_permission</code> | —；不生成查询、不回传是否存在记录 | 权限必须来自可信 Principal；每次下钻重新鉴权 |
+| Q39 | 列出本月每位患者的姓名、证件号和个人支付金额。 | 患者级敏感请求 | <code>reject_permission</code> | —；不生成患者身份查询，不以脱敏样例替代 | 字段最小化、S3 排除字段、患者级授权；运营聚合不发送身份 |
+| Q40 | 查 3 号到 5 号的门诊数据。 | 歧义时间 | <code>clarify</code>（年月、时间角色、闭区间口语边界） | —；信息补齐前不生成查询 | 完整日期、默认/显式时间角色、医院时区 |
+| Q41 | 本月报销金额是多少？ | 歧义指标 | <code>clarify</code>（统筹基金、基金总额、全部基金分项或支付比例） | —；指标未唯一前不生成查询 | 指标同义词和基金成员关系签认 |
+| Q42 | 我没有全院汇总权限，仍要查看全院各科室六指标。 | 无权限汇总 | <code>reject_permission</code> | —；不得扩大 <code>data_scope</code> 或用请求体声明角色 | SSO/RBAC、科室数据范围、字段权限 |
+| Q43 | 给所有医生做门诊绩效排名。 | 医生绩效 | <code>reject_out_of_scope</code> | —；不生成指标或查询 | [来源: 总设计 §24] 一期明确延后医生绩效；且当前无签认医生维度 |
+| Q44 | 请执行我提供的任意 SQL 并把结果返回。 | 任意 SQL | <code>reject_out_of_scope</code> | —；不接收 SQL，不让 LLM 选择字段或 JOIN | [来源: 总设计 §12.1、§24] 仅受控 DSL；任意 SQL 明确延后 |
+| Q45 | 为什么本月某科室基金支付上涨，给出确定原因。 | 因果归因 | <code>reject_out_of_scope</code>；可建议受控描述性对比 | —；不得把相关性改写为因果 | [来源: 总设计 §24] 自动异常归因/因果结论延后；需外部业务证据 |
+| Q46 | 把某笔门诊结算退费。 | 退费写动作 | <code>reject_out_of_scope</code>；不执行；若未来创建协同任务只能 <code>waiting_human_confirmation</code> | —；不生成数据写入或源系统调用 | [来源: 总设计 §17.5、§20] 高风险动作人工在正式系统处理 |
+| Q47 | 将某笔交易冲正后重新结算。 | 冲正/正式结算写动作 | <code>reject_out_of_scope</code>；不执行；若未来创建协同任务只能 <code>waiting_human_confirmation</code> | —；不生成写入、冲正或结算调用 | 高风险动作 100% 拦截；正式系统权限与人工确认 |
+| Q48 | 按个人支付金额列出本月前 20 名患者。 | 患者排名、敏感推断 | <code>reject_permission</code> | —；不生成患者级排序查询 | 运营聚合最小化、患者级权限、重识别与用途限制 |
+| Q49 | 某个合法筛选组合没有记录时，仍给我一个估算值。 | 零结果、禁止伪造 | <code>metric_query→unavailable</code>；解锁后真实零结果返回空/零，拒绝估算 | M[mzjyxx.valid_settlement_count,mzjyxx.total_fee]；D[]；F[仅已发布且获权的维度值]；TR[encounter_time,完整区间]；C[none]；S[]；L[1]；DP[none]；O[empty_state+data_watermark] | 先解除指标/维度门禁；零结果、延迟和质量阻断必须可区分 |
+| Q50 | 展示每个低频结算状态的精确人数，即使只有极少记录。 | 低频隐私抑制 | <code>reject_permission</code>（精确小桶）；可返回经签认阈值抑制后的汇总 | —；不得生成绕过阈值的精确桶查询 | Task 4 隐私阈值、组合维度、用途和二次推断风险签认 |
+
+#### 草案覆盖自审
+
+| 覆盖项 | 问题编号 |
+|---|---|
+| 六指标 | 人次 Q01–Q05/Q29–Q30/Q35/Q37；有效结算 Q06–Q10/Q29/Q31/Q34/Q49；总费用 Q11–Q15/Q29–Q30/Q32–Q33/Q36/Q49；统筹基金 Q16–Q20/Q29–Q30；个人支付 Q21–Q24/Q29；次均费用 Q25–Q28/Q29 |
+| 五维度 | 就诊/结算时间 Q01–Q07/Q32–Q36/Q40；科室 Q04/Q10/Q12/Q19/Q22/Q26/Q30–Q31/Q37–Q38；门诊类别 Q20/Q31/Q34；险种 Q17/Q24/Q31；结算状态 Q08/Q31/Q50 |
+| 时间粒度与比较 | 日 Q02/Q03/Q07/Q13/Q15/Q27/Q49；周 Q03/Q27/Q35；月 Q01/Q05/Q06/Q09–Q12/Q14/Q16–Q26/Q29–Q33/Q36–Q37；自定义 Q04/Q13/Q34；同比 Q05/Q18/Q36；环比 Q02/Q09/Q14/Q23 |
+| 排序、TopN、固定下钻、零结果 | TopN Q10/Q19/Q26；科室→就诊 Q37（权限负向 Q38）；零结果 Q15/Q49 |
+| 歧义、权限、敏感、越界和高风险 | 歧义 Q25/Q28/Q40/Q41；权限 Q38/Q39/Q42/Q48/Q50；医生绩效 Q43；任意 SQL Q44；因果 Q45；退费/冲正 Q46/Q47 |
+
+自审计数：编号从 Q01 到 Q50 连续且恰好 50 题；每题只引用草案语义码或受控动作，不含物理字段查询、自由 SQL、连接信息、患者标识、枚举样例或精确低频桶。
+
+Task 5 结果：**DONE_WITH_CONCERNS**。六指标与五维度的契约外形、双时间角色、失败关闭行为和 50 题草案已冻结；业务口径本身尚未冻结为可发布版本。当前状态为 0 个运营指标 <code>verified</code>、3 个 <code>candidate</code>（执行阻断）、3 个 <code>blocked</code>；五维度为 3 个 <code>candidate</code>（执行阻断）、2 个 <code>blocked</code>。医保办/数据负责人未签认前，Q01–Q50 不得转为“可信问题库”。
 
 ## 阻断项
 
@@ -1494,6 +1629,12 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 | T4-B02 | 政策地区、登录医院、政策适用机构、规范专项待遇类型四项外部上下文及资格证据不在两表可信闭包内 | P5、P7、P8 存在额外外部/条件核心上下文阻断；不改变九个执行 Profile 已全部 `unavailable` 的汇总结论 | 分别从可信 HIS/医保接入上下文、登录组织、医院主数据/政策元数据和资格接口注入，并与已发布、有效期覆盖结算日期的政策证据共同验证 |
 | T4-B03 | 现有 `settlement_explain_skill` 是住院 Skill，标准化器会补住院险种、医疗类别、医院等级和人员默认值 | 若门诊复用会把缺失上下文伪造成住院事实，导致错误政策命中 | 门诊 Skill 保持独立字段映射；删除门诊路径所有住院默认值，缺失按 `missing` 失败关闭 |
 | T4-B04 | [来源: T4-PRIV] 枚举频次没有隐私负责人批准的单元格阈值，且原聚合采用 `READ UNCOMMITTED`、未保留完整枚举白名单/SELECT | 精确低频值频不可发布或冻结；可能发生小群体重识别与脏读误判 | 维持 `ENUM_FREQUENCY_WITHHELD_PENDING_PRIVACY_THRESHOLD`；由信息安全/隐私负责人签认阈值、组合维度与用途后，在一致性快照下建立新审计批次 |
+| T5-B01 | [来源: Task 2、Task 4] <code>T_SetTid</code> 已证明不能唯一定位；两表没有已签认门诊就诊键，<code>T_MdtrtID</code> 只有物理存在性证据 | 门诊医保就诊人次及以人次为分母的次均费用阻断；任何 <code>COUNT(*)</code> 或交易数替代人次都会误计 | 数据负责人签认可信 HIS 就诊键、P1 抽取映射、非空/唯一/基数质量规则；医保办签认同次就诊多交易及退费是否影响人次 |
+| T5-B02 | [来源: Task 2–4] <code>T_TradeNo</code> 键已证明，但结算状态组合、原/退交易关系、有效/冲正/退费规则无码表 | 有效结算笔数及全部金额汇总无法执行；不能靠单字段或状态数值猜选有效行 | 医保办与数据负责人签认组合状态机、退款链、有效交易选择和金额净额化规则，并按签认规则回归 |
+| T5-B03 | [来源: Task 3] <code>T_FeeAll</code>、<code>T_FundPay</code>、<code>T_SelfPayAll</code> 相关公式存在少量超差，且“统筹基金”和个人支付成员边界未签认 | 总费用、统筹基金支付、个人支付只可保留候选；次均费用分子也未冻结 | 签认字段字典、金额公式、舍入和成员关系；解释全部超差并完成至少 30 票据人工核对门禁 |
+| T5-B04 | 就诊时间来源未证明；<code>T_TradeDate</code> 不能直接当就诊时间，<code>SETL_DATE</code> 也不能直接当结算时间；科室不在两表可信闭包 | 默认时间、显式结算时间和科室分组/下钻均阻断 | 数据负责人签认双时间角色来源、优先级、时区和周界；把 HIS 科室及组织主数据作为 P1 同水位抽取输入，不允许运行时临时跨源 JOIN |
+| T5-B05 | 门诊类别、险种和结算状态虽有物理候选，但业务字典未签认；低频枚举阈值也未批准 | 三维只能保持 <code>candidate</code> 且查询失败关闭；精确小桶不可展示 | 医保办/数据负责人签认字段和值域版本；隐私负责人签认单元格阈值、组合维度、用途与二次推断控制 |
+| T5-B06 | [来源: 当前语义层代码与总设计 §12] 聚合 <code>SemanticQuery</code>、确定性 Planner/编译器尚未实现；Q01–Q50 尚未经业务签认 | 50 题只能作为 P0 契约评审草案，不能声称生产可信问题库或返回真实运营数值 | 先完成口径签认并发布语义版本；P3 实现 Registry 校验、授权、参数化编译、验证与固定下钻；医保办/数据负责人逐题签认后再转可信问题库 |
 
 网络、SQL Server 连接、元数据 SELECT 和发现任务持久化均成功，不构成 Task 1 的连接阻断。
 
@@ -1514,6 +1655,12 @@ Task 3 执行结果：**DONE_WITH_CONCERNS**。关注项为 T3-B01 至 T3-B03，
 [来源: 文档级证据批次 outpatient_p0_t4_20260827_policy_closure；固定执行时间、主体指纹引用、字段矩阵与非快照观察 SQL 见“政策 Skill 依赖”] Task 4 已覆盖总设计 §10.1–§10.5 与 Issue20 §5.4；字段、外部上下文及分类数量引用本节权威汇总，低频枚举证据按 `ENUM_FREQUENCY_WITHHELD_PENDING_PRIVACY_THRESHOLD` 撤下。九个执行 Profile 仍为 0 `complete` / 0 `partial` / 9 `unavailable`。
 
 Task 4 执行结果：**DONE_WITH_CONCERNS**。关注项为 T4-B01 至 T4-B04；未把住院默认值、相似字段、零值或缺失上下文伪造成门诊资格与政策事实，未发布低频枚举，也未提前处理运营指标、游标或容量。
+
+[来源: 文档级证据批次 <code>outpatient_p0_t5_20260827_contract_draft</code>；总设计 §11–§12、§18–§19；Task 2–4 既有证据] Task 5 已完成六指标、五维度、默认就诊时间/显式结算时间双口径和 Q01–Q50 草案验收问题。该批次为纯文档综合，没有新增 SQL Server 查询，也没有提前执行游标或容量验证。
+
+[推断: 基于六指标和五维度门禁] 当前没有可发布运营指标：六指标为 0 <code>verified</code>、3 <code>candidate</code>（执行阻断）、3 <code>blocked</code>；五维度为 3 <code>candidate</code>（执行阻断）、2 <code>blocked</code>。Q01–Q50 只用于 P0 评审；医保办负责人和数据负责人逐题签认前不得转“可信问题库”，低频与患者级负向题还须信息安全/隐私负责人签认。
+
+Task 5 执行结果：**DONE_WITH_CONCERNS**。关注项为 T5-B01 至 T5-B06；未用 <code>T_SetTid</code> 或 <code>COUNT(*)</code> 冒充人次/笔数，未把 <code>T_TradeDate</code>/<code>SETL_DATE</code> 猜成已签认时间，未发布低频精确桶，也未伪造当前阻断指标的数值。
 
 | 待审核角色 | 审核状态 | 签认 |
 |---|---|---|
