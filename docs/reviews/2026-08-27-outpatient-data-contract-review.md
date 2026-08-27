@@ -1,4 +1,4 @@
-# 门诊数据契约核验记录（P0 Task 1）
+# 门诊数据契约核验记录（P0 Task 1–2）
 
 ## 环境
 
@@ -370,9 +370,299 @@ cached=true 的证明范围必须收窄：本次实时读取 INFORMATION_SCHEMA 
 
 [来源: SQL Server sys.indexes/sys.index_columns/sys.foreign_keys 元数据查询]
 
+### Task 2：交易、明细键和一对多关系
+
+#### 执行证据与失败分类
+
+| 项目 | 结果 |
+|---|---|
+| 执行时段 | 2026-08-27 14:52:36.455 +08:00 至 14:52:37.077 +08:00 |
+| 拟统计的完整区间 | dbo.o_Trade / dbo.o_FeeItem 全表；未执行，未取得新鲜计数 |
+| 拟统计的最近 30 天区间 | 计划以 SQL Server `SYSDATETIME()` 为右开时间锚点，按 `T_TradeDate >= DATEADD(day,-30,@as_of) AND T_TradeDate < @as_of`；因连接前阻断，实际边界未生成 |
+| 时间字段前置确认 | Task 1 元数据已确认 dbo.o_Trade.T_TradeDate 为 datetime NOT NULL；Task 2 原计划同时统计 TRY_CONVERT 失败数，未执行，不能以 Task 1 元数据替代可转换性实测 |
+| 主体指纹引用 | 引用 Task 1 的 SHA-256 38F144F8D609E1F6CFA0E3B2E4225EF783A0B313A98262F71FC0862BF97ACD70；Task 2 未连接 SQL Server，未独立重算主体指纹 |
+| 安全入口 | 使用现有 PolicyMetaStore 注册表，在内存中按启用数据源的安全别名 bjybdb 唯一筛选；不打印配置行或 connection_config |
+| 失败分类 | `DATASOURCE_ALIAS_NOT_FOUND`，匹配数 0；发生在 SQL Server 连接前 |
+| 超时边界 | 计划连接/语句超时 30 秒、LOCK_TIMEOUT 5 秒；因连接前阻断未进入查询阶段 |
+| 实际 SQL Server 操作 | 0 条；没有建立连接，没有执行 SELECT、元数据查询或写语句 |
+
+该失败只证明“当前执行进程可访问的注册表中没有启用且 name 精确等于安全别名的记录”，不证明源库、表或账号不可用。Task 1 的缓存行数也不能替代 Task 2 要求的新鲜聚合计数。按照一次真实入口失败即记录、不得无界重试的约束，本次没有改走 `.env`、连接串、硬编码凭据或其他账号。
+
+#### 冻结的只读 SQL
+
+以下批次是 Task 2 拟执行的完整只读口径；本次因连接前阻断未执行。它只返回时间、主体哈希、状态枚举和聚合计数，不返回任何交易标识或明细键值。
+
+```sql
+SET NOCOUNT ON;
+SET LOCK_TIMEOUT 5000;
+
+DECLARE @as_of datetime2(3) = CAST(SYSDATETIME() AS datetime2(3));
+DECLARE @window_start datetime2(3) = DATEADD(day, -30, @as_of);
+
+SELECT
+  CONVERT(varchar(64), HASHBYTES('SHA2_256', CONVERT(nvarchar(128), SUSER_SNAME())), 2)
+    AS principal_fingerprint_sha256,
+  SYSDATETIMEOFFSET() AS executed_at,
+  @as_of AS as_of,
+  @window_start AS window_start;
+
+SELECT c.DATA_TYPE AS data_type,
+       c.IS_NULLABLE AS is_nullable,
+       COUNT_BIG(t.T_TradeDate) AS non_null_rows,
+       SUM(CASE WHEN TRY_CONVERT(datetime2(3), t.T_TradeDate) IS NULL THEN 1 ELSE 0 END)
+         AS conversion_failures,
+       MIN(t.T_TradeDate) AS data_min,
+       MAX(t.T_TradeDate) AS data_max
+FROM INFORMATION_SCHEMA.COLUMNS c
+CROSS JOIN dbo.o_Trade t
+WHERE c.TABLE_SCHEMA='dbo'
+  AND c.TABLE_NAME='o_Trade'
+  AND c.COLUMN_NAME='T_TradeDate'
+GROUP BY c.DATA_TYPE, c.IS_NULLABLE;
+
+SELECT period,
+       COUNT_BIG(*) AS total_rows,
+       SUM(CASE WHEN T_SetTid IS NULL THEN 1 ELSE 0 END) AS null_settlement_ids,
+       COUNT_BIG(DISTINCT T_SetTid) AS distinct_settlement_ids,
+       SUM(CASE WHEN T_TradeNo IS NULL THEN 1 ELSE 0 END) AS null_trade_nos,
+       COUNT_BIG(DISTINCT T_TradeNo) AS distinct_trade_nos
+FROM (
+  SELECT 'full' AS period, T_SetTid, T_TradeNo
+  FROM dbo.o_Trade
+  UNION ALL
+  SELECT 'recent_30d', T_SetTid, T_TradeNo
+  FROM dbo.o_Trade
+  WHERE T_TradeDate >= @window_start AND T_TradeDate < @as_of
+) s
+GROUP BY period
+ORDER BY period;
+
+WITH duplicate_sets AS (
+  SELECT 'full' AS period, 'T_SetTid' AS key_name, COUNT_BIG(*) AS group_rows
+  FROM dbo.o_Trade
+  WHERE T_SetTid IS NOT NULL
+  GROUP BY T_SetTid
+  HAVING COUNT_BIG(*) > 1
+  UNION ALL
+  SELECT 'recent_30d', 'T_SetTid', COUNT_BIG(*)
+  FROM dbo.o_Trade
+  WHERE T_SetTid IS NOT NULL
+    AND T_TradeDate >= @window_start AND T_TradeDate < @as_of
+  GROUP BY T_SetTid
+  HAVING COUNT_BIG(*) > 1
+  UNION ALL
+  SELECT 'full', 'T_TradeNo', COUNT_BIG(*)
+  FROM dbo.o_Trade
+  WHERE T_TradeNo IS NOT NULL
+  GROUP BY T_TradeNo
+  HAVING COUNT_BIG(*) > 1
+  UNION ALL
+  SELECT 'recent_30d', 'T_TradeNo', COUNT_BIG(*)
+  FROM dbo.o_Trade
+  WHERE T_TradeNo IS NOT NULL
+    AND T_TradeDate >= @window_start AND T_TradeDate < @as_of
+  GROUP BY T_TradeNo
+  HAVING COUNT_BIG(*) > 1
+), dimensions AS (
+  SELECT p.period, k.key_name
+  FROM (VALUES ('full'),('recent_30d')) p(period)
+  CROSS JOIN (VALUES ('T_SetTid'),('T_TradeNo')) k(key_name)
+)
+SELECT d.period,
+       d.key_name,
+       COUNT_BIG(s.group_rows) AS duplicate_groups,
+       COALESCE(SUM(s.group_rows), 0) AS duplicate_rows
+FROM dimensions d
+LEFT JOIN duplicate_sets s ON s.period=d.period AND s.key_name=d.key_name
+GROUP BY d.period, d.key_name
+ORDER BY d.period, d.key_name;
+
+SELECT COUNT_BIG(*) AS orphan_fee_items
+FROM dbo.o_FeeItem fee
+LEFT JOIN dbo.o_Trade trade ON trade.T_TradeNo=fee.T_TradeNo
+WHERE trade.T_TradeNo IS NULL;
+
+WITH fee_scoped AS (
+  SELECT 'full' AS period, f.T_TradeNo, f.ItemId, f.ItemNo
+  FROM dbo.o_FeeItem f
+  UNION ALL
+  SELECT 'recent_30d_parent_joined', f.T_TradeNo, f.ItemId, f.ItemNo
+  FROM dbo.o_FeeItem f
+  JOIN dbo.o_Trade t ON t.T_TradeNo=f.T_TradeNo
+  WHERE t.T_TradeDate >= @window_start AND t.T_TradeDate < @as_of
+), base AS (
+  SELECT period,
+         COUNT_BIG(*) AS total_rows,
+         SUM(CASE WHEN T_TradeNo IS NULL THEN 1 ELSE 0 END) AS null_trade_nos,
+         SUM(CASE WHEN ItemId IS NULL THEN 1 ELSE 0 END) AS null_item_ids,
+         SUM(CASE WHEN ItemNo IS NULL THEN 1 ELSE 0 END) AS null_item_nos,
+         SUM(CASE WHEN T_TradeNo IS NULL OR ItemId IS NULL OR ItemNo IS NULL THEN 1 ELSE 0 END)
+           AS any_null_key_rows
+  FROM fee_scoped
+  GROUP BY period
+), duplicate_keys AS (
+  SELECT period, T_TradeNo, ItemId, ItemNo, COUNT_BIG(*) AS group_rows
+  FROM fee_scoped
+  WHERE T_TradeNo IS NOT NULL AND ItemId IS NOT NULL AND ItemNo IS NOT NULL
+  GROUP BY period, T_TradeNo, ItemId, ItemNo
+  HAVING COUNT_BIG(*) > 1
+), duplicate_stats AS (
+  SELECT period,
+         COUNT_BIG(*) AS duplicate_groups,
+         SUM(group_rows) AS duplicate_rows
+  FROM duplicate_keys
+  GROUP BY period
+), periods AS (
+  SELECT period FROM (VALUES ('full'),('recent_30d_parent_joined')) p(period)
+)
+SELECT p.period,
+       COALESCE(b.total_rows,0) AS total_rows,
+       COALESCE(b.null_trade_nos,0) AS null_trade_nos,
+       COALESCE(b.null_item_ids,0) AS null_item_ids,
+       COALESCE(b.null_item_nos,0) AS null_item_nos,
+       COALESCE(b.any_null_key_rows,0) AS any_null_key_rows,
+       COALESCE(d.duplicate_groups,0) AS duplicate_groups,
+       COALESCE(d.duplicate_rows,0) AS duplicate_rows
+FROM periods p
+LEFT JOIN base b ON b.period=p.period
+LEFT JOIN duplicate_stats d ON d.period=p.period
+ORDER BY p.period;
+
+SELECT period,
+       T_State,
+       T_HasRefundmented,
+       T_PartialReturnFlag,
+       NT_ReTradeFlag,
+       COUNT_BIG(*) AS row_count
+FROM (
+  SELECT 'full' AS period,
+         T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag
+  FROM dbo.o_Trade
+  UNION ALL
+  SELECT 'recent_30d',
+         T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag
+  FROM dbo.o_Trade
+  WHERE T_TradeDate >= @window_start AND T_TradeDate < @as_of
+) s
+GROUP BY period, T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag
+ORDER BY period, T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag;
+
+WITH full_set AS (
+  SELECT T_SetTid
+  FROM dbo.o_Trade
+  WHERE T_SetTid IS NOT NULL
+  GROUP BY T_SetTid
+  HAVING COUNT_BIG(*) > 1
+), recent_set AS (
+  SELECT T_SetTid
+  FROM dbo.o_Trade
+  WHERE T_SetTid IS NOT NULL
+    AND T_TradeDate >= @window_start AND T_TradeDate < @as_of
+  GROUP BY T_SetTid
+  HAVING COUNT_BIG(*) > 1
+), full_trade AS (
+  SELECT T_TradeNo
+  FROM dbo.o_Trade
+  WHERE T_TradeNo IS NOT NULL
+  GROUP BY T_TradeNo
+  HAVING COUNT_BIG(*) > 1
+), recent_trade AS (
+  SELECT T_TradeNo
+  FROM dbo.o_Trade
+  WHERE T_TradeNo IS NOT NULL
+    AND T_TradeDate >= @window_start AND T_TradeDate < @as_of
+  GROUP BY T_TradeNo
+  HAVING COUNT_BIG(*) > 1
+), full_fee AS (
+  SELECT T_TradeNo, ItemId, ItemNo,
+         ROW_NUMBER() OVER (ORDER BY T_TradeNo,ItemId,ItemNo) AS duplicate_group_id
+  FROM dbo.o_FeeItem
+  WHERE T_TradeNo IS NOT NULL AND ItemId IS NOT NULL AND ItemNo IS NOT NULL
+  GROUP BY T_TradeNo, ItemId, ItemNo
+  HAVING COUNT_BIG(*) > 1
+), recent_fee AS (
+  SELECT f.T_TradeNo, f.ItemId, f.ItemNo,
+         ROW_NUMBER() OVER (ORDER BY f.T_TradeNo,f.ItemId,f.ItemNo) AS duplicate_group_id
+  FROM dbo.o_FeeItem f
+  JOIN dbo.o_Trade t ON t.T_TradeNo=f.T_TradeNo
+  WHERE f.T_TradeNo IS NOT NULL AND f.ItemId IS NOT NULL AND f.ItemNo IS NOT NULL
+    AND t.T_TradeDate >= @window_start AND t.T_TradeDate < @as_of
+  GROUP BY f.T_TradeNo, f.ItemId, f.ItemNo
+  HAVING COUNT_BIG(*) > 1
+), rows_by_status AS (
+  SELECT 'full' AS period, 'T_SetTid' AS key_name,
+         t.T_State, t.T_HasRefundmented, t.T_PartialReturnFlag, t.NT_ReTradeFlag,
+         COUNT_BIG(DISTINCT d.T_SetTid) AS duplicate_groups,
+         COUNT_BIG(*) AS duplicate_rows
+  FROM dbo.o_Trade t
+  JOIN full_set d ON d.T_SetTid=t.T_SetTid
+  GROUP BY t.T_State,t.T_HasRefundmented,t.T_PartialReturnFlag,t.NT_ReTradeFlag
+  UNION ALL
+  SELECT 'recent_30d', 'T_SetTid',
+         t.T_State, t.T_HasRefundmented, t.T_PartialReturnFlag, t.NT_ReTradeFlag,
+         COUNT_BIG(DISTINCT d.T_SetTid), COUNT_BIG(*)
+  FROM dbo.o_Trade t
+  JOIN recent_set d ON d.T_SetTid=t.T_SetTid
+  WHERE t.T_TradeDate >= @window_start AND t.T_TradeDate < @as_of
+  GROUP BY t.T_State,t.T_HasRefundmented,t.T_PartialReturnFlag,t.NT_ReTradeFlag
+  UNION ALL
+  SELECT 'full', 'T_TradeNo',
+         t.T_State, t.T_HasRefundmented, t.T_PartialReturnFlag, t.NT_ReTradeFlag,
+         COUNT_BIG(DISTINCT d.T_TradeNo), COUNT_BIG(*)
+  FROM dbo.o_Trade t
+  JOIN full_trade d ON d.T_TradeNo=t.T_TradeNo
+  GROUP BY t.T_State,t.T_HasRefundmented,t.T_PartialReturnFlag,t.NT_ReTradeFlag
+  UNION ALL
+  SELECT 'recent_30d', 'T_TradeNo',
+         t.T_State, t.T_HasRefundmented, t.T_PartialReturnFlag, t.NT_ReTradeFlag,
+         COUNT_BIG(DISTINCT d.T_TradeNo), COUNT_BIG(*)
+  FROM dbo.o_Trade t
+  JOIN recent_trade d ON d.T_TradeNo=t.T_TradeNo
+  WHERE t.T_TradeDate >= @window_start AND t.T_TradeDate < @as_of
+  GROUP BY t.T_State,t.T_HasRefundmented,t.T_PartialReturnFlag,t.NT_ReTradeFlag
+  UNION ALL
+  SELECT 'full', 'FeeComposite',
+         t.T_State, t.T_HasRefundmented, t.T_PartialReturnFlag, t.NT_ReTradeFlag,
+         COUNT_BIG(DISTINCT d.duplicate_group_id), COUNT_BIG(*)
+  FROM dbo.o_FeeItem f
+  JOIN full_fee d
+    ON d.T_TradeNo=f.T_TradeNo AND d.ItemId=f.ItemId AND d.ItemNo=f.ItemNo
+  JOIN dbo.o_Trade t ON t.T_TradeNo=f.T_TradeNo
+  GROUP BY t.T_State,t.T_HasRefundmented,t.T_PartialReturnFlag,t.NT_ReTradeFlag
+  UNION ALL
+  SELECT 'recent_30d', 'FeeComposite',
+         t.T_State, t.T_HasRefundmented, t.T_PartialReturnFlag, t.NT_ReTradeFlag,
+         COUNT_BIG(DISTINCT d.duplicate_group_id), COUNT_BIG(*)
+  FROM dbo.o_FeeItem f
+  JOIN recent_fee d
+    ON d.T_TradeNo=f.T_TradeNo AND d.ItemId=f.ItemId AND d.ItemNo=f.ItemNo
+  JOIN dbo.o_Trade t ON t.T_TradeNo=f.T_TradeNo
+  WHERE t.T_TradeDate >= @window_start AND t.T_TradeDate < @as_of
+  GROUP BY t.T_State,t.T_HasRefundmented,t.T_PartialReturnFlag,t.NT_ReTradeFlag
+)
+SELECT *
+FROM rows_by_status
+ORDER BY period, key_name, T_State, T_HasRefundmented, T_PartialReturnFlag, NT_ReTradeFlag;
+```
+
+最近 30 天费用明细没有独立日期字段，因此查询明确标为 `recent_30d_parent_joined`。只有在全量 T_TradeNo 无重复且全量孤儿数为 0 后，该关联结果才可视为完整的最近 30 天明细集合；否则必须与关系歧义分开报告。
+
+#### Task 2 结果与冻结决定
+
+| 验证项 | 完整区间 | 最近 30 天 | 决定 |
+|---|---|---|---|
+| o_Trade 行数、T_SetTid/T_TradeNo NULL 与去重数 | 未取得 | 未取得 | 阻断 |
+| T_SetTid 重复组数/涉及行数 | 未取得 | 未取得 | 内部结算锚点不冻结 |
+| T_TradeNo 重复组数/涉及行数 | 未取得 | 未取得 | 交易业务键不冻结；Task 1 的物理主键元数据不能替代数据验证 |
+| o_FeeItem 复合键 NULL、重复组数/涉及行数 | 未取得 | 未取得 | 费用明细幂等键不冻结 |
+| o_FeeItem → o_Trade 孤儿明细数 | 未取得 | 无可靠关系基础，未派生 | 一对多关系不冻结 |
+| 四字段状态组合及重复键二次聚合 | 未取得 | 未取得 | 不判断是否集中于退费、冲正或历史版本 |
+
+三项冻结状态均为 **BLOCKED**：内部结算锚点、交易业务键、费用明细幂等键均没有 Task 2 新鲜计数证据。P1 必须保持阻断，禁止沿用 `settlement_id → 单笔交易` 假设，也不得自行设计替代键。现阶段没有证据支持把任何相关性写成因果或把候选重复直接认定为脏数据。
+
 ## 交易状态
 
-待验证。Task 1 仅确认候选物理字段：o_Trade.T_State 为 int NOT NULL、o_Trade.T_HasRefundmented 为 int NOT NULL、o_Trade.NP_Settle_State 为 varchar(1) NULL、o_FeeItem.State 为 int NOT NULL。状态值域、终态/撤销/退款语义及跨表一致性不得从字段名猜测，需后续任务取得权威字典后验证。
+阻断。Task 1 仅确认候选物理字段；Task 2 计划按 T_State、T_HasRefundmented、T_PartialReturnFlag、NT_ReTradeFlag 聚合，并对重复键做相同状态组合的二次聚合，但在连接前失败，未取得任何状态组合计数。状态值域、终态/撤销/退款语义及跨表一致性不得从字段名猜测；即使后续观察到集中分布，也只能记录相关性，不能写成因果。
 
 ## 金额勾稽
 
@@ -408,6 +698,7 @@ cached=true 的证明范围必须收窄：本次实时读取 INFORMATION_SCHEMA 
 | T1-B02 | 本次两表均命中 discovery 检查点 | 行数、质量分、非空率、DDL 时间是缓存快照，不能证明 2026-08-27 新鲜画像 | 在批准流程中生成可审计的新鲜只读全量画像，并保留任务时间与统计口径 |
 | T1-B03 | 核心字段没有随 Task 1 获得权威业务定义和值域 | 交易状态、退款链、金额公式和游标含义仍可能误判 | 取得院方数据字典/接口文档并由业务与数据负责人签认 |
 | T1-B04 | 候选表包含直接标识符、证件/卡号及电子凭证类高敏字段 | 后续 Skill 或指标若直接读取将违反最小化与脱敏要求 | 建立允许字段白名单、用途说明和 security/desensitization 验证证据 |
+| T2-B01 | 当前执行进程可访问的 PolicyMetaStore 中，启用数据源按安全别名 bjybdb 精确筛选为 0 条 | Task 2 无法建立批准的注册表→SQL Server 只读通道；所有键、关系、状态组合的新鲜聚合计数缺失，P1 阻断 | 在同一批准注册表入口恢复且仅恢复一条启用的安全别名映射；重新执行本文冻结 SQL，保留时间、主体指纹和聚合计数，不改走 `.env`、连接串或硬编码凭据 |
 
 网络、SQL Server 连接、元数据 SELECT 和发现任务持久化均成功，不构成 Task 1 的连接阻断。
 
@@ -415,9 +706,9 @@ cached=true 的证明范围必须收窄：本次实时读取 INFORMATION_SCHEMA 
 
 状态：DRAFT / PENDING_REVIEW。
 
-Task 1 已形成两张候选表的发现证据草稿、数据库版本/脱敏权限位、236 个字段物理类型以及键/索引/FK 初步元数据观察；没有修改生产代码，也没有在 SQL Server 执行写操作。该草稿不代表正式审核完成。
+Task 1 已形成两张候选表的发现证据草稿、数据库版本/脱敏权限位、236 个字段物理类型以及键/索引/FK 初步元数据观察。Task 2 在批准的注册表入口处因安全别名没有启用匹配而停止，没有建立 SQL Server 连接，也没有执行任何源库语句；完整只读聚合 SQL 已冻结供解锁后复跑。没有修改生产代码。该草稿不代表正式审核完成。
 
-当前证据足以确认“表和物理契约存在”，不足以批准后续业务接入。T1-B01 至 T1-B04 解锁前，交易状态、金额勾稽、增量游标、容量性能、政策 Skill 依赖和运营指标依赖均保持待验证，不作确定性结论。
+当前证据足以确认“表和物理契约存在”，不足以批准后续业务接入。T2-B01 解锁并完成新鲜聚合前，内部结算锚点、交易业务键、费用明细幂等键及主从关系均为 BLOCKED，P1 禁止继续使用 `settlement_id → 单笔交易` 假设。T1-B01 至 T1-B04 仍保持；金额勾稽、增量游标、容量性能、政策 Skill 依赖和运营指标依赖未在 Task 2 提前处理。
 
 | 待审核角色 | 审核状态 | 签认 |
 |---|---|---|
