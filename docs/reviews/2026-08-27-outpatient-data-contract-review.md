@@ -1176,6 +1176,7 @@ ORDER BY
 | 主体指纹 | SHA-256 38F144F8D609E1F6CFA0E3B2E4225EF783A0B313A98262F71FC0862BF97ACD70，与 Task 1–4 一致；不记录登录名 |
 | 数据范围 | 只查询 dbo.o_Trade、dbo.o_FeeItem 的 catalog 和脱敏聚合；没有读取样例行或第三张业务表 |
 | 隔离与超时 | 显式 `READ COMMITTED`，连接超时 30 秒，`LOCK_TIMEOUT` 5 秒；没有使用 `READ UNCOMMITTED` |
+| 一致性边界 | catalog、候选画像、容量为依次执行的三个查询批次，没有显式事务或快照隔离；结果是非原子观察，不能声明两表同一水位 |
 | 成功查询耗时 | catalog 69.29 ms；候选字段画像 15.50 ms；容量聚合 37.59 ms |
 | 实际数据库操作 | 仅 `SET`、`SELECT`；未执行 DDL/DML，未修改索引 |
 | 查询失败 | 首次容量批次中的 `PERCENTILE_CONT` 因源库兼容级别低于其要求而编译失败；该 SQL 未重试，最终批次改用显式 nearest-rank 算法。此前两次本地脚本分别在 `.env` 自动定位和游标级 timeout 设置处于执行 SQL 前失败，不属于源库查询失败 |
@@ -1193,6 +1194,26 @@ ORDER BY
 
 元数据白名单只找到 dbo.o_Trade 的六个字段名候选：`T_TradeDate`、`T_ConfirmTime`、`SETL_DATE`、`T_HadDealTime`、`T_Version1`、`T_Version2`。前四个是 `datetime`，后两个是 `nvarchar`；均无默认值或权威字典证明其为“记录创建时间”“最后修改时间”或单调版本。dbo.o_FeeItem 没有任何日期、版本、创建、修改或删除命名候选。[来源: Task 1 `INFORMATION_SCHEMA.COLUMNS` 全量元数据；outpatient_p0_t6_20260827_094619Z catalog 查询]
 
+候选筛选规则固定为：先枚举两表全部 SQL `datetime`、`timestamp`/`rowversion` 物理列及名称含 `Version` 的列；仅将名称可能描述交易生成/确认/结算/处理或版本变化的字段纳入物理画像，明确属于患者、转诊、诊断或原交易业务事件的日期直接排除。字段名只能触发核验，不能证明变更语义。Task 1 全量元数据中两表一共只有下列 DateTime/Version 类字段；日期样式但物理类型为 varchar 的字段不具备可排序日期契约，也不进入游标候选。
+
+| 物理字段 | 类型 | 纳入候选画像 | 纳入/排除理由 |
+|---|---|:---:|---|
+| o_Trade.T_TradeDate | datetime NOT NULL | 是 | 名称描述交易日期，纳入核验但不得默认当新增/变更时间 |
+| o_Trade.T_ConfirmTime | datetime NULL | 是 | 确认业务事件时间候选，需验证是否可能随回写变化 |
+| o_Trade.SETL_DATE | datetime NULL | 是 | 结算业务事件时间候选，需验证是否可能随回写变化 |
+| o_Trade.T_HadDealTime | datetime NULL | 是 | 处理业务事件时间候选，需验证是否可能随回写变化 |
+| o_Trade.T_Version1 / T_Version2 | nvarchar NOT NULL | 是 | 名称含 Version；需排除协议/规则版本而非行版本，画像证明其低基数且非单调证据 |
+| o_Trade.T_RedListVersion | nvarchar NULL | 否 | 红名单业务版本候选，不是源行版本；且无权威变更语义 |
+| o_Trade.T_SignVersion | nvarchar NULL | 否 | 签名协议版本候选，不是源行版本；且无权威变更语义 |
+| o_Trade.T_HisInterfaceVersion | nvarchar NULL | 否 | HIS 接口版本候选，不是源行版本；且无权威变更语义 |
+| o_Trade.P_Birthday | datetime NOT NULL | 否 | 患者出生日期，S3 敏感静态属性；与源行变化无关且禁止画像 |
+| o_Trade.P_FromHospDate | datetime NULL | 否 | 转出/来源医院业务日期候选，不描述本表记录变化 |
+| o_Trade.T_PerAccountDiagDateTime | datetime NULL | 否 | 账户诊断业务事件日期候选，不描述本表记录变化 |
+| o_Trade.T_OraginalTradeDate | datetime NULL | 否 | 原交易业务日期，用于交易关系而非当前行变更水位 |
+| o_FeeItem | 无 DateTime/Version 类列 | 否 | 没有可画像的独立变更字段 |
+
+Task 6 实际 `INFORMATION_SCHEMA.COLUMNS` catalog 查询同时读取六个纳入候选的 `COLUMN_DEFAULT`，结果均为 NULL；这只证明未发现数据库默认约束，不能证明应用写入语义。两表 `timestamp`/`rowversion` 列数均为 0。[来源: outpatient_p0_t6_20260827_094619Z catalog 结果]
+
 #### 交易表字段名候选的物理画像
 
 “重复余量”定义为非空行数减去 distinct 数，只证明时间点/版本值被复用，不等于重复组数或脏数据。“早于交易时间”只比较同一当前行中的两个物理日期，不是写入顺序或更新倒退证据。
@@ -1208,7 +1229,7 @@ ORDER BY
 
 [来源: outpatient_p0_t6_20260827_094619Z 候选字段聚合；总行数 592。版本原始值未查询/未展示]
 
-[推断: 基于单快照及变更能力缺失] NULL、重复和同行日期倒置足以否定“仅凭字段名即可冻结游标”，但不能重建数据库历史写入顺序。因此以下三项均为**不可测而非零**：候选游标跨行单调倒退数、最近 24 小时迟到写入数、跨 10 分钟重叠窗口被更新数。服务器最近 24 小时的四个日期字段均观察到 0 行，只说明这些业务日期/处理日期未落入服务器时钟窗口，不能证明最近 24 小时没有 INSERT/UPDATE。
+[推断: 基于一次当前状态的非原子观察及变更能力缺失] NULL、重复和同行日期倒置足以否定“仅凭字段名即可冻结游标”，但不能重建数据库历史写入顺序。因此以下三项均为**不可测而非零**：候选游标跨行单调倒退数、最近 24 小时迟到写入数、跨 10 分钟重叠窗口被更新数。服务器最近 24 小时的四个日期字段均观察到 0 行，只说明这些业务日期/处理日期未落入服务器时钟窗口，不能证明最近 24 小时没有 INSERT/UPDATE。
 
 dbo.o_FeeItem 没有候选变更字段，所以无法执行 NULL、重复、倒退、迟到或重叠窗口更新统计；不能用父交易的 T_TradeDate 代替明细自身变更水位，因为父行时间不会证明明细后续新增、修改或删除。[推断: 基于两表物理字段与一对多关系]
 
@@ -1216,11 +1237,11 @@ dbo.o_FeeItem 没有候选变更字段，所以无法执行 NULL、重复、倒�
 
 | 变更类型 | 当前两表可见事实 | 分钟级捕获决定 |
 |---|---|---|
-| 新增 | 当前快照可见新 `T_TradeNo` 或费用复合键，但没有可靠新增时间/序列 | **BLOCKED**；除全表键比对外无有界增量条件，而全表轮询不获批准 |
-| 更新 | 两表没有 last-modified、rowversion、CDC/CT、时态历史或更新触发日志 | **BLOCKED**；当前快照不能证明何时、哪些列被回写 |
+| 新增 | 当前状态观察可见 `T_TradeNo` 或费用复合键，但没有可靠新增时间/序列 | **BLOCKED**；除全表键比对外无有界增量条件，而全表轮询不获批准 |
+| 更新 | 两表没有 last-modified、rowversion、CDC/CT、时态历史或更新触发日志 | **BLOCKED**；当前状态观察不能证明何时、哪些列被回写 |
 | 退费 | 交易表有状态、退费和原交易字段名候选，但 Task 2–5 已证明无码表、无净额化规则 | **BLOCKED**；既可能新增退费交易也可能回写原交易，当前通道不能保证全捕获 |
 | 冲正/重交易 | 有 `NT_ReTradeFlag`、原交易关系等候选，但无权威状态机和变更序列 | **BLOCKED**；不能判定新增、替换或回写语义 |
-| 删除 | 两表未启用 CDC/CT/时态表/删除触发日志，也无已签认 tombstone | **BLOCKED**；物理删除对后续快照不可见 |
+| 删除 | 两表未启用 CDC/CT/时态表/删除触发日志，也无已签认 tombstone | **BLOCKED**；物理删除对后续状态观察不可见 |
 
 [推断: 基于 catalog 证据与 Task 2–5 状态/退款门禁] **分钟轮询不成立**。P1 前必须由院方提供覆盖两张最终事实源的 CDC 或等价变更日志，至少包含操作类型、提交顺序/LSN、提交时间、主键、删除 tombstone、事务边界、保留期与可重放边界；保留期必须覆盖约定的最大停机与回补窗口。只提供 SQL Server Change Tracking 时还须证明如何一致读取变更后的行并处理已删除键；不得用全表扫描或父表业务日期轮询伪装 1–5 分钟近实时。
 
@@ -1250,12 +1271,12 @@ Task 6 增量结果：**DONE_WITH_BLOCKERS**。冻结的是“拒绝当前两表
 
 | 容量项 | 聚合观察 | 可用于 P1 容量基线？ |
 |---|---|---|
-| 当前全量规模 | 592 个唯一 T_TradeNo；2,139 条费用明细 | 否；只证明当前两表快照规模，Task 1 发现缓存和数据完整性范围未解除 |
+| 当前全量规模 | 592 个唯一 T_TradeNo；2,139 条费用明细 | 否；只证明 READ COMMITTED 多查询批次中的非原子观察规模，不是两表一致快照；Task 1 发现缓存和数据完整性范围未解除 |
 | 当前物理日期范围 | T_TradeDate 2024-03-11 至 2026-04-17，共跨 768 个自然日，仅 28 个有记录日 | 否；T_TradeDate 业务时区/完整性未签认，分布明显稀疏 |
 | 全历史自然日均值 | 交易 0.7708/日；明细 2.7852/日 | 否；包含 740 个无记录自然日，不能代表医院正常流量 |
 | 全历史有记录日均值 | 交易 21.1429/有记录日；明细 76.3929/有记录日 | 否；排除无记录日会产生选择偏差，仅供解释当前样本 |
 | 全历史物理日峰值 | 交易 226；明细 1,078 | 否；不是已证明的最近 30 日峰值，也未证明数据覆盖完整 |
-| 最大物理日期当天 | 3 个交易业务键；68 条关联明细 | 否；只是数据中的最大 T_TradeDate 日，不是“当前最近一日” |
+| 最大物理日期当天 | 交易业务键 `<10`（精确值已抑制）；68 条关联明细 | 否；只是数据中的最大 T_TradeDate 日，不是“当前最近一日”；交易计数按 Task 4 当前 `<10` 临时抑制边界隐藏 |
 | 服务器时钟最近 30 日/24h | T_TradeDate 观察到 0/0 个交易 | 否；Task 2 已阻断业务时区/时钟语义，不能解释为最近业务数据为零 |
 | 每交易明细数 | 592 个 T_TradeNo 分组；nearest-rank P50=3、P95=18、P99=18、最大=33 | 部分；只可作为**每交易**历史样本观察。T_SetTid 锚点未冻结，不能改称“单结算明细数” |
 | 机械三年线性外推 | 以 592/2,139 除以 768 日再乘 1,096 日：约 845 个交易、3,053 条明细 | 否；明确不是最近 30 日依据或容量预测，不用于采购、分区、SLA 或压测 |
@@ -1293,6 +1314,23 @@ FROM sys.triggers tr
 WHERE tr.parent_id IN (OBJECT_ID('dbo.o_Trade'),OBJECT_ID('dbo.o_FeeItem'))
 GROUP BY tr.parent_id;
 
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA='dbo'
+  AND TABLE_NAME IN ('o_Trade','o_FeeItem')
+  AND (
+    DATA_TYPE IN ('timestamp','rowversion') OR
+    COLUMN_NAME IN (
+      'T_TradeDate','T_ConfirmTime','SETL_DATE','T_HadDealTime',
+      'T_Version1','T_Version2'
+    ) OR
+    LOWER(COLUMN_NAME) LIKE '%update%' OR
+    LOWER(COLUMN_NAME) LIKE '%modify%' OR
+    LOWER(COLUMN_NAME) LIKE '%create%' OR
+    LOWER(COLUMN_NAME) LIKE '%delete%'
+  )
+ORDER BY TABLE_NAME, ORDINAL_POSITION;
+
 SELECT COUNT_BIG(*) AS total_rows,
        SUM(CASE WHEN T_TradeDate IS NULL THEN 1 ELSE 0 END) AS trade_date_nulls,
        COUNT_BIG(DISTINCT T_TradeDate) AS trade_date_distinct,
@@ -1310,6 +1348,79 @@ SELECT COUNT_BIG(*) AS total_rows,
        SUM(CASE WHEN SETL_DATE IS NOT NULL AND SETL_DATE<T_TradeDate THEN 1 ELSE 0 END) AS setl_before_trade_rows,
        SUM(CASE WHEN T_HadDealTime IS NOT NULL AND T_HadDealTime<T_TradeDate THEN 1 ELSE 0 END) AS had_deal_before_trade_rows
 FROM dbo.o_Trade;
+
+-- @as_of 由调用方绑定为本节“固定执行时间”的 UTC 无时区值；不在文档写死。
+DECLARE @as_of datetime2(3) = ?;
+DECLARE @window_30d_start datetime2(3) = DATEADD(day,-30,@as_of);
+DECLARE @window_24h_start datetime2(3) = DATEADD(day,-1,@as_of);
+DECLARE @suppress_below bigint = 10;
+
+SELECT @window_30d_start AS window_30d_start,
+       @window_24h_start AS window_24h_start,
+       @as_of AS window_end,
+       COUNT_BIG(DISTINCT CASE
+         WHEN t.T_TradeDate>=@window_30d_start AND t.T_TradeDate<@as_of
+         THEN t.T_TradeNo END) AS server_window_30d_trade_rows,
+       SUM(CASE
+         WHEN t.T_TradeDate>=@window_30d_start AND t.T_TradeDate<@as_of
+              AND f.T_TradeNo IS NOT NULL
+         THEN 1 ELSE 0 END) AS server_window_30d_detail_rows,
+       COUNT_BIG(DISTINCT CASE
+         WHEN t.T_TradeDate>=@window_24h_start AND t.T_TradeDate<@as_of
+         THEN t.T_TradeNo END) AS server_window_24h_trade_rows,
+       SUM(CASE
+         WHEN t.T_TradeDate>=@window_24h_start AND t.T_TradeDate<@as_of
+              AND f.T_TradeNo IS NOT NULL
+         THEN 1 ELSE 0 END) AS server_window_24h_detail_rows
+FROM dbo.o_Trade t
+LEFT JOIN dbo.o_FeeItem f ON f.T_TradeNo=t.T_TradeNo;
+
+SELECT SUM(CASE WHEN T_TradeDate>=@window_24h_start AND T_TradeDate<@as_of THEN 1 ELSE 0 END)
+         AS trade_date_server_24h_rows,
+       SUM(CASE WHEN T_ConfirmTime>=@window_24h_start AND T_ConfirmTime<@as_of THEN 1 ELSE 0 END)
+         AS confirm_time_server_24h_rows,
+       SUM(CASE WHEN SETL_DATE>=@window_24h_start AND SETL_DATE<@as_of THEN 1 ELSE 0 END)
+         AS setl_date_server_24h_rows,
+       SUM(CASE WHEN T_HadDealTime>=@window_24h_start AND T_HadDealTime<@as_of THEN 1 ELSE 0 END)
+         AS had_deal_time_server_24h_rows
+FROM dbo.o_Trade;
+
+WITH daily AS (
+  SELECT CONVERT(date,t.T_TradeDate) AS physical_date,
+         COUNT_BIG(DISTINCT t.T_TradeNo) AS trade_rows,
+         COUNT_BIG(f.T_TradeNo) AS detail_rows
+  FROM dbo.o_Trade t
+  LEFT JOIN dbo.o_FeeItem f ON f.T_TradeNo=t.T_TradeNo
+  GROUP BY CONVERT(date,t.T_TradeDate)
+), bounds AS (
+  SELECT MIN(physical_date) AS min_date,
+         MAX(physical_date) AS max_date,
+         COUNT_BIG(*) AS active_days,
+         SUM(trade_rows) AS total_trades,
+         SUM(detail_rows) AS total_details,
+         MAX(trade_rows) AS peak_trades,
+         MAX(detail_rows) AS peak_details
+  FROM daily
+)
+SELECT b.min_date, b.max_date, b.active_days,
+       DATEDIFF(day,b.min_date,b.max_date)+1 AS calendar_span_days,
+       b.total_trades, b.total_details, b.peak_trades, b.peak_details,
+       CONVERT(decimal(18,4),b.total_trades*1.0/
+         NULLIF(DATEDIFF(day,b.min_date,b.max_date)+1,0)) AS calendar_daily_avg_trades,
+       CONVERT(decimal(18,4),b.total_details*1.0/
+         NULLIF(DATEDIFF(day,b.min_date,b.max_date)+1,0)) AS calendar_daily_avg_details,
+       CONVERT(decimal(18,4),b.total_trades*1.0/NULLIF(b.active_days,0)) AS active_daily_avg_trades,
+       CONVERT(decimal(18,4),b.total_details*1.0/NULLIF(b.active_days,0)) AS active_daily_avg_details,
+       CASE WHEN d.trade_rows<@suppress_below THEN NULL ELSE d.trade_rows END
+         AS latest_physical_day_trades,
+       CASE WHEN d.trade_rows<@suppress_below THEN 1 ELSE 0 END
+         AS latest_physical_day_trades_suppressed,
+       CASE WHEN d.detail_rows<@suppress_below THEN NULL ELSE d.detail_rows END
+         AS latest_physical_day_details,
+       CASE WHEN d.detail_rows<@suppress_below THEN 1 ELSE 0 END
+         AS latest_physical_day_details_suppressed
+FROM bounds b
+JOIN daily d ON d.physical_date=b.max_date;
 
 WITH per_trade AS (
   SELECT T_TradeNo, COUNT_BIG(*) AS detail_rows
@@ -1330,7 +1441,7 @@ SELECT COUNT_BIG(*) AS transaction_groups,
 FROM ranked;
 ```
 
-[来源: outpatient_p0_t6_20260827_094619Z；完整结果口径还包括四候选日期的服务器最近 24 小时计数、物理日期日聚合及服务器最近 30 日/24h 观察，定义与本节结果表一致]
+[来源: outpatient_p0_t6_20260827_094619Z；窗口边界由本节固定执行时间参数化复现。上面的窗口与日聚合 SQL 是对同批口径的脱敏复核形式，最大日期日计数在 SQL 层应用当前 `<10` 临时抑制边界；本次质量修订未新增数据库查询]
 
 ## 政策 Skill 依赖
 
