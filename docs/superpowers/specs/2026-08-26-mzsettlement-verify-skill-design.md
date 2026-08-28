@@ -81,7 +81,7 @@
 公共上下文只声明：
 
 - `question`：必填，用于场景路由；
-- `settlement_id`：必填，用于定位单次结算；
+- `settlement_id`：必填，值就是门诊交易号 `T_TradeNo`，用于定位单次结算；
 - `hospital_id`：由会话或接入层可选注入，不要求用户重复输入。
 
 profile 不重复声明公共上下文。
@@ -120,8 +120,8 @@ profile 不重复声明公共上下文。
 
 ### 5.2 锚点、键与关系
 
-- 用户锚点：`settlement_id → mz_trade.T_SetTid`。
-- 交易实体主键候选：`T_TradeNo`。
+- 用户锚点：`settlement_id = T_TradeNo → mz_trade.T_TradeNo`。
+- 交易实体主键：`T_TradeNo`（当前只读画像中非空且唯一；生产仍由质量规则持续校验）。
 - 明细主键候选：`T_TradeNo + ItemId + ItemNo`。
 - 关系：`mz_trade.T_TradeNo 1 → N mz_fee_item.T_TradeNo`。
 
@@ -169,7 +169,7 @@ profile 不重复声明公共上下文。
 
 从发现中心纳入语义字段；其中面向 Skill 消费的业务值再批量创建指标：
 
-- `T_SetTid`、`T_FeeNo`、`T_PartialReturnFlag`、`T_OraginalTradeNo`、`T_OraginalTradeDate`、`NP_Settle_State`、`SETL_DATE`、`NT_ReTradeFlag`。
+- `T_SetTid`（普通可空字段，不作为锚点）、`T_FeeNo`、`T_PartialReturnFlag`、`T_OraginalTradeNo`、`T_OraginalTradeDate`、`NP_Settle_State`、`SETL_DATE`、`NT_ReTradeFlag`。
 
 #### B. 待遇上下文与人群
 

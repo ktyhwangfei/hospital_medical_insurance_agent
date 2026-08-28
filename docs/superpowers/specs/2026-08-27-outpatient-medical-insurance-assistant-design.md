@@ -125,7 +125,7 @@
   → 查询门诊就诊索引
   → 唯一匹配：取得 encounter_id
   → 解析内部 settlement_id
-  → settlement_id 映射 mz_trade.T_SetTid
+  → settlement_id 映射 mz_trade.T_TradeNo
   → 调用 mzsettlement_verify_skill
 ```
 
@@ -240,7 +240,7 @@ P0可以直接查询源库完成字段画像和口径验证；P1以后助手不�
 锚点与关系候选：
 
 ```text
-settlement_id → mz_trade.T_SetTid
+settlement_id → mz_trade.T_TradeNo
 mz_trade 主键 → T_TradeNo
 mz_fee_item 主键 → T_TradeNo + ItemId + ItemNo
 mz_trade.T_TradeNo 1 → N mz_fee_item.T_TradeNo
