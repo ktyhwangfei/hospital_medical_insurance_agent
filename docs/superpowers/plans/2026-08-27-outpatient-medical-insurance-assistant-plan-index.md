@@ -12,8 +12,8 @@
 
 | 阶段 | 状态 | 计划或基线 | 进入条件 | 完成门槛 |
 |---|---|---|---|---|
-| P0 数据契约 | pending_user_confirmation | `2026-08-27-outpatient-p0-data-contract.md` + [预填设计决策稿](../../reviews/2026-08-28-outpatient-p0-prefilled-design-decision.md) | `bjybdb`、v3 查询模型、主要值域和 Issue20 依赖已自主核验；D01–D12 已预填 | 用户确认 D01–D12，或完成指定编号调整 |
-| P1 近实时数据底座 | blocked（等待 P0 设计确认） | 用户确认后再编写最小实施计划 | P0 设计确认；CDC/只读账号作为实施任务而非设计问卷 | PostgreSQL 单一路径刷新 P95 不超过 5 分钟，批次原子发布，运营语义版本绑定可追溯数据批次 |
+| P0 数据契约 | complete | `2026-08-27-outpatient-p0-data-contract.md` + [预填设计决策稿](../../reviews/2026-08-28-outpatient-p0-prefilled-design-decision.md) | `bjybdb`、v3 查询模型、主要值域和 Issue20 依赖已自主核验；D01–D12 已确认 | D01–D12 已确认；外部开通项移交实施阶段 |
+| P1 近实时数据底座 | ready_for_planning | 下一步编写最小实施计划 | 已满足：P0 设计确认；CDC/只读账号作为实施任务而非设计问卷 | PostgreSQL 单一路径刷新 P95 不超过 5 分钟，批次原子发布，运营语义版本绑定可追溯数据批次 |
 | P2 门诊结算核验 | baseline | `2026-08-26-mzsettlement-verify-skill.md` | P1 发布的数据集和内部结算锚点可用 | 九个 Profile、Decimal 勾稽、字段四态、政策证据和回归矩阵通过 |
 | P3 运营受控问数 | gated | P2 通过后编写 | 六指标、五维度及可信问题口径已冻结 | 指标查询与科室→就诊下钻通过可信问题自动验收 |
 | P4 统一助手与工作台 | gated | P3 通过后编写 | 后端结果契约稳定；身份上下文接口可模拟 | 同一入口完成政策咨询、门诊核验和运营问数，前端不要求结算 ID |
@@ -29,4 +29,4 @@
 
 ## 当前执行点
 
-P0 事实探查已完成，当前执行点改为 [`P0 预填设计决策稿`](../../reviews/2026-08-28-outpatient-p0-prefilled-design-decision.md)：D01–D12 已由现有数据和成熟治理原则综合选择，用户只需确认或指出需调整的编号。外部 CDC、只读账号和扫码/SSO 是后续实施开通项，不再作为空白调研表；确认前不编写 P1 生产代码。
+P0 事实探查和设计确认已完成，D01–D12 全部采用。当前执行点进入 **P1 近实时数据底座规划**：只编写 CDC→PostgreSQL 原子批次→现有 Semantic Registry 的最小实施计划；外部 CDC、只读账号和扫码/SSO 作为实施任务，不再重复字段发现或方案问卷。

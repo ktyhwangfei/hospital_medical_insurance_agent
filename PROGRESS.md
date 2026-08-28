@@ -14,7 +14,7 @@
 
 **当前阶段**：Issue #21 已完成分层验收；范围外存量失败见 §4–§5
 
-**门诊医保数据契约 P0（2026-08-28 预填设计）**：状态为 `pending_user_confirmation`，P1 在确认前保持 `blocked`。已从 `bjybdb`、语义层和 Issue20 证据中完成事实探查，并在 [P0 预填设计决策稿](docs/reviews/2026-08-28-outpatient-p0-prefilled-design-decision.md) 给出 D01–D12 唯一推荐方案；用户只需确认或指出需调整的编号，不再填写数据调查/签认表。确认后 P0 改为 `complete`、P1 改为 `ready_for_planning`。
+**门诊医保数据契约 P0（2026-08-28 已确认）**：状态为 `complete`，P1 为 `ready_for_planning`。`bjybdb`、语义层和 Issue20 证据探查已完成，[P0 预填设计决策稿](docs/reviews/2026-08-28-outpatient-p0-prefilled-design-decision.md) 的 D01–D12 已由用户全部确认；CDC、专用只读账号和扫码/SSO 作为后续实施开通项，不再阻断 P1 规划。
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
