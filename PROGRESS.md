@@ -14,7 +14,7 @@
 
 **当前阶段**：Issue #21 已完成分层验收；范围外存量失败见 §4–§5
 
-**门诊医保数据契约 P0（2026-08-28 收口）**：评审工作已执行；准入门禁与 P1 仍为 `blocked`。G01 内部锚点、G04 `o_FeeItem` 技术选型、`mzjyxx` v3 可查询模型及主要值域已通过语义层/源库只读核验；当前按 [P0 收口签认包](docs/reviews/2026-08-28-outpatient-p0-closure-signoff-package.md) 只处理业务口径与票据签认、缺失就诊时间/ID、CDC、只读权限、隐私阈值和正式签字，不再索要系统内已有资料或重复建设查询模型。
+**门诊医保数据契约 P0（2026-08-28 预填设计）**：状态为 `pending_user_confirmation`，P1 在确认前保持 `blocked`。已从 `bjybdb`、语义层和 Issue20 证据中完成事实探查，并在 [P0 预填设计决策稿](docs/reviews/2026-08-28-outpatient-p0-prefilled-design-decision.md) 给出 D01–D12 唯一推荐方案；用户只需确认或指出需调整的编号，不再填写数据调查/签认表。确认后 P0 改为 `complete`、P1 改为 `ready_for_planning`。
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
