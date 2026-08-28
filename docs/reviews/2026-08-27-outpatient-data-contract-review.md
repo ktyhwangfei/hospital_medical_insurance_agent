@@ -1141,7 +1141,7 @@ dbo.o_FeeItem 没有候选变更字段，所以无法执行 NULL、重复、倒�
 |---|---|---|
 | 新增 | 当前状态观察可见 `T_TradeNo` 或费用复合键，但没有可靠新增时间/序列 | **BLOCKED**；除全表键比对外无有界增量条件，而全表轮询不获批准 |
 | 更新 | 两表没有 last-modified、rowversion、CDC/CT、时态历史或更新触发日志 | **BLOCKED**；当前状态观察不能证明何时、哪些列被回写 |
-| 退费 | 交易表有状态、退费和原交易字段名候选，但 Task 2–5 已证明无码表、无净额化规则 | **BLOCKED**；既可能新增退费交易也可能回写原交易，当前通道不能保证全捕获 |
+| 退费 | 交易表有状态、退费和原交易字段；2026-08-28 已找到主要单字段码表/说明，但仍无组合状态机和净额化规则 | **BLOCKED**；既可能新增退费交易也可能回写原交易，当前通道不能保证全捕获 |
 | 冲正/重交易 | 有 `NT_ReTradeFlag`、原交易关系等候选，但无权威状态机和变更序列 | **BLOCKED**；不能判定新增、替换或回写语义 |
 | 删除 | 两表未启用 CDC/CT/时态表/删除触发日志，也无已签认 tombstone | **BLOCKED**；物理删除对后续状态观察不可见 |
 
@@ -1161,7 +1161,7 @@ dbo.o_FeeItem 没有候选变更字段，所以无法执行 NULL、重复、倒�
 | 稳定排序键 | `T_TradeNo` 已由 Task 2 证明唯一 | `(T_TradeNo,ItemId,ItemNo)` 已由 Task 2 证明唯一 | 仅冻结为确定性键组件；没有游标时不构成可执行组合游标 |
 | 10 分钟重叠 | 无变更时间，无法定义 | 无变更时间，无法定义 | **BLOCKED**；重叠不能补救无更新/删除可见性 |
 | 页大小初值 | 未测试真实增量路径 | 未测试真实增量路径 | **BLOCKED**；不猜默认值 |
-| 退费/冲正语义 | 无码表/状态机/净额规则 | 明细跟随、回写或删除方式不明 | **BLOCKED**；沿用 T5-B02 |
+| 退费/冲正语义 | 单字段码表已找到；组合状态机/净额规则未签认 | 明细跟随、回写或删除方式不明 | **BLOCKED**；沿用 T5-B02 |
 | 预期峰值 | 无可靠最近 30 日业务窗口 | 同左 | **BLOCKED**；历史物理峰值不得充当生产峰值 |
 | 运行时配置边界 | — | — | 将来只允许页大小、轮询间隔可调；游标、排序键、重叠规则、状态语义和峰值基线必须在发布版本中固定，不做运行时开关 |
 
@@ -1400,13 +1400,13 @@ FROM ranked;
 
 | 语义名 / 原物理字段 | 源 | 类型 | 存在 | n/z/v/d | 业务含义证据 | 敏感 | Profile | 是否核心 | 状态 |
 |---|---|---|:---:|---|---|---|---|---|---|
-| 险种 / `P_FundType` | oT | int NOT NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；现有检索要求 insu_type；无码表] | S1 | P1,P5,P7,P8 | 对应Profile核心 | `semantics_pending` |
-| 人员类别 / `PN_PersonType` | oT | int NOT NULL | 是 | 0/0/592/28 | [来源: D10.2/I5.4B；现有检索要求 psn_type；无码表] | S1 | P2,P5,P7 | 对应Profile核心 | `semantics_pending` |
-| 医疗类别 / `T_CureType` | oT | int NOT NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；现有检索要求 med_type；无码表] | S1 | P1,P5,P8 | 对应Profile核心 | `semantics_pending` |
+| 险种 / `P_FundType` | oT | int NOT NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；已发布 `FUND_TYPE`，当前 9 个观测代码全覆盖] | S1 | P1,P5,P7,P8 | 对应Profile核心 | `mapping_verified_business_pending` |
+| 人员类别 / `PN_PersonType` | oT | int NOT NULL | 是 | 0/0/592/28 | [来源: D10.2/I5.4B；已发布 `MZ_PERSON_TYPE`，当前 28 个观测代码全覆盖] | S1 | P2,P5,P7 | 对应Profile核心 | `mapping_verified_business_pending` |
+| 医疗类别 / `T_CureType` | oT | int NOT NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；已发布 `MZ_CURE_TYPE`，当前 4 个观测代码全覆盖] | S1 | P1,P5,P8 | 对应Profile核心 | `mapping_verified_business_pending` |
 | 机构待遇等级候选 / `P_JCLevel` | oT | int NOT NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；不能仅凭字段名等同 hosp_lv] | S1 | P5,P8 | 对应Profile核心 | `semantics_pending` |
 | 医院待遇标志 / `P_HospFlag` | oT | int NOT NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；无权威码表] | S1 | P7,P8 | 辅助 | `semantics_pending` |
 | 异地交易标志 / `PN_OutTransaction` | oT | nvarchar(3) NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；空串不等于否] | S1 | P8 | 条件核心 | `semantics_pending` |
-| 国家险种 / `PN_NationFundType` | oT | varchar(6) NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；无码表] | S1 | P5,P7,P8 | 对应Profile核心 | `semantics_pending` |
+| 国家险种 / `PN_NationFundType` | oT | varchar(6) NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；已发布 `NATIONAL_FUND_TYPE`，当前观测代码全覆盖] | S1 | P5,P7,P8 | 对应Profile核心 | `mapping_verified_business_pending` |
 | 慢特病标志 / `PN_ChronicFlag` | oT | nvarchar(2) NOT NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；无码表] | S2，健康事实 | P5,P7 | 条件核心 | `semantics_pending` |
 | 慢特病代码 / `PN_ChronicCode` | oT | nvarchar(50) NOT NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；不输出代码样例] | S2，健康事实 | P5,P7 | 条件核心 | `semantics_pending` |
 | 慢特病定点机构标志 / `PN_IsChronicHosp` | oT | nvarchar(2) NOT NULL | 是 | withheld（低频可反推） | [来源: D10.2/I5.4B；无码表] | S2，健康事实 | P5,P7,P8 | 条件核心 | `semantics_pending` |
@@ -1546,25 +1546,25 @@ FROM ranked;
 
 本批次直接数据只证明三态：非 NULL 且非零为 `non_zero`，非 NULL 且显式零为 `reported_zero`，NULL、关联缺失或可信上下文未提供为 `missing`。字符串空值独立保留为空值质量问题，不自动等同数值零。`not_applicable` 必须同时有资格事实和有效期覆盖本次结算的政策证据；任何 `NULL→0`、`0→无资格` 或“全表未见非零→不适用”的转换均禁止。[来源: 总设计 §10.6；Issue20 §6.3]
 
-[推断: 基于条件核心定义] 条件核心只控制对应待遇/场景分支，不是 Profile 的永久必填字段。经可信资格事实与政策证据确认条件不适用时，该分支为 `not_applicable`，Profile 可继续处理其他基础字段；当前九个 Profile 的 `unavailable` 来自尚未发布的查询模型、未签认字段/码表/金额口径及各 Profile 专属门禁，而不是内部锚点或条件字段为 0。
+[推断: 基于条件核心定义；2026-08-28 自主语义发现补证] 条件核心只控制对应待遇/场景分支，不是 Profile 的永久必填字段。经可信资格事实与政策证据确认条件不适用时，该分支为 `not_applicable`，Profile 可继续处理其他基础字段。`mzjyxx` v3 查询模型已经发布且结构校验通过；当前九个 Profile 的 `unavailable` 来自门诊 Skill 尚未进入受控发布运行、未签认金额/状态组合及各 Profile 专属业务门禁，而不是查询模型、内部锚点或条件字段为 0。
 
 #### 九个 Profile 字段闭包状态
 
-执行状态采用失败关闭：Issue20 §5.2 以 `settlement_id = T_TradeNo → mz_trade.T_TradeNo` 定位单次交易，Task 2 已证明该内部锚点非空且唯一。锚点层通过不等于 Profile 可执行；在查询模型发布、权威字段/码表、金额关系、外部政策上下文及有效交易规则签认前，下表仍只描述字段成熟度，不构成可执行 `partial`。
+执行状态采用失败关闭：Issue20 §5.2 以 `settlement_id = T_TradeNo → mz_trade.T_TradeNo` 定位单次交易，Task 2 已证明该内部锚点非空且唯一。2026-08-28 只读核验确认 `mzjyxx` v3 已发布且 `queryable=true`，Issue20 门诊核验 Skill 声明的 88 个指标在当前注册表和 v3 快照中均无缺失。锚点与查询模型通过仍不等于 Profile 已上线；下表只描述业务门禁，不构成可执行 `partial`。
 
 | Profile | 状态 | 字段闭包结论与阻断原因 |
 |---|---|---|
-| P1 整体结算核验 | `unavailable` | 锚点已通过；汇总金额虽存在，状态有效规则和总额公式未签认，查询模型也未发布。 |
+| P1 整体结算核验 | `unavailable` | 锚点、查询模型和依赖指标已通过；汇总金额虽存在，状态有效规则、总额公式和 Skill 受控发布尚未完成。 |
 | P2 个人负担解释 | `unavailable` | 锚点已通过；自付/账户/现金成员关系、专项支付关系和零值资格含义未签认。 |
-| P3 支付渠道核验 | `unavailable` | 锚点已通过；总分关系未确认，且 `T_JCPay` 存在救助/军残语义冲突，不得重复求和或确定命名。 |
-| P4 起付线与年度累计 | `unavailable` | 锚点已通过；TB/TA 前后释义、年度边界和 `TA_MZTimes` 释义未签认。 |
+| P3 支付渠道核验 | `unavailable` | 锚点和查询模型已通过；源字典已将 `T_JCPay` 明确为军残保险，剩余阻断是基金总分关系、金额公式和有效交易规则。 |
+| P4 起付线与年度累计 | `unavailable` | 锚点和查询模型已通过；源字段说明已覆盖多数 TB=交易前、TA=交易后语义，年度边界、`TA_MZTimes` 含义及累计公式仍待签认。 |
 | P5 报销比例与封顶 | `unavailable` | 锚点已通过；缺可信政策地区、适用机构、规范资格上下文及覆盖结算日期的完整政策证据。 |
 | P6 医保目录与费用明细 | `unavailable` | 锚点和明细关系已通过；Task 3 金额仍超差，`FeeIn/FeeOut` 与明细状态码未冻结。 |
-| P7 身份与特殊待遇 | `unavailable` | 锚点已通过；码表/资格定义、规范专项待遇类型和政策证据缺失，且 `T_JCPay` 救助/军残语义冲突。 |
-| P8 异地与机构待遇 | `unavailable` | 锚点已通过；政策地区、登录医院、机构等级值域和政策适用机构映射缺失。 |
-| P9 交易状态与退费 | `unavailable` | 锚点已通过；状态码、原交易关系和有效/红冲过滤规则未签认，退费/冲正仍只转人工确认。 |
+| P7 身份与特殊待遇 | `unavailable` | 锚点和查询模型已通过，`T_JCPay` 已由源字典明确为军残保险；剩余阻断是专项资格定义、规范待遇类型、金额成员关系和政策证据。 |
+| P8 异地与机构待遇 | `unavailable` | 锚点和查询模型已通过；机构等级值域已有 6,854 条映射且当前观测值全覆盖，剩余阻断是政策地区、登录医院和政策适用机构上下文。 |
+| P9 交易状态与退费 | `unavailable` | 锚点和查询模型已通过；`v_T_State_BJ` 覆盖当前全部观测交易状态码，国家结算/退费/部分红冲字段也有源说明；组合有效规则、退款链净额化和 Skill 受控发布仍待完成。 |
 
-九个 Profile 均不得发布门诊 Skill 输入契约：0 `complete` / 0 `partial` / 9 `unavailable`。
+九个 Profile 的输入字段闭包和查询模型已具备发布资产基础，但门诊 Skill 尚未完成物化、评测和受控发布：运行态仍为 0 `complete` / 0 `partial` / 9 `unavailable`。
 
 #### 非快照观察 SQL / 查询口径
 
@@ -1649,7 +1649,7 @@ SELECT CONVERT(varchar(40),SYSDATETIMEOFFSET(),127) AS executed_at,
 
 [建议] 如需重新形成枚举证据，必须先由信息安全/隐私负责人批准字段白名单、单元格抑制阈值与组合维度，再在可重复读快照或等效一致性机制下形成独立审计批次；本次文档不提供可绕过隐私门禁的值频查询。
 
-Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权威汇总为准；`T_TradeNo` 内部锚点通过，`T_SetTid` 仅为普通可空字段。可聚合字段仍只形成 `READ UNCOMMITTED` 非快照观察，敏感字段只沿用 Task 1 元数据，四个外部上下文保持 `missing_external_context`；九个执行 Profile 因查询模型、业务字段字典、交易前后定义、金额/状态规则及可信政策上下文尚未闭包而均为 `unavailable`。不得伪报字段闭包 `complete`，也不提前建立运营指标、增量游标或容量结论。
+Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权威汇总为准；`T_TradeNo` 内部锚点通过，`T_SetTid` 仅为普通可空字段。2026-08-28 补证已确认 v3 查询模型和 88 个 Skill 依赖指标完整，并从既有值域/源字典消除了机构等级、`T_JCPay`、交易状态等“待找资料”问题；九个执行 Profile 仍因 Skill 未受控发布、金额/状态组合和可信政策上下文门禁而 `unavailable`。不得把已发现资产误报为缺失，也不得把技术闭包误报为业务验收通过。
 
 ## 运营指标依赖
 
@@ -1673,11 +1673,11 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 #### 受控查询边界
 
 - [来源: 总设计 §12.1–§12.3] 运行时 <code>SemanticQuery</code> 只允许 <code>metrics</code>、<code>dimensions</code>、<code>time_role</code>、<code>time_range</code>、<code>filters</code>、<code>order_by</code>、<code>limit</code>、<code>semantic_version</code>；禁止物理表/字段、SQL、任意 JOIN 和未发布公式。
-- [来源: 当前 <code>src/semantic_layer/{models.py,registry.py,data_query.py}</code>] 当前代码已具备指标 Registry、发布快照和值域，以及面向单笔取值的 <code>MetricDataQueryService</code>；尚无聚合 <code>SemanticQuery</code> 模型、确定性 Planner 或编译执行器。本节不把设计契约伪报为已实现能力。
+- [来源: Issue20 <code>src/semantic_layer/query_planner.py</code>、<code>registry.py</code> 与 PostgreSQL 语义注册表只读核验] 已具备 <code>SemanticQuery</code>、确定性 Planner/编译器、发布快照与查询模型校验；`mzjyxx` v3 当前结构校验 0 问题。六个运营派生指标及其已签认公式尚未发布，Q01–Q50 仍不能返回生产运营数值。
 - [建议] 验收摘要中的 <code>comparison</code>、<code>drill_path</code>、<code>requested_output</code> 只属于助手/Planner 的受控意图包络：比较必须展开为两个分别校验和鉴权的 <code>SemanticQuery</code>；<code>sort</code> 必须映射到 <code>order_by</code>；下钻只允许固定路径；展示类型不得改变指标公式。
 - [推断: 基于当前全部指标/维度门禁] Q01–Q50 只验证意图、契约、澄清、拒绝和失败关闭。任何依赖未签认口径的取数当前都应返回 <code>result_status=unavailable; halt_reason=quality_blocked</code>，不得生成示例数值。
 
-验收表缩写固定为：<code>M=metrics</code>、<code>D=dimensions</code>、<code>F=filters</code>、<code>TR=time_role+time_range</code>、<code>C=comparison</code>、<code>S=sort→order_by</code>、<code>L=limit</code>、<code>DP=drill_path</code>、<code>O=requested_output</code>。<code>本月/本周/今日</code> 等相对区间只是意图层记号，进入查询服务前必须由可信日历按已签认医院时区解析为左闭右开的 <code>start/end</code>；未解析不得执行。所有查询还必须携带已发布的 <code>semantic_version</code>；当前没有可发布门诊运营版本，所以表中统一省略该重复项并由门禁返回 <code>result_status=unavailable; halt_reason=quality_blocked</code>。
+验收表缩写固定为：<code>M=metrics</code>、<code>D=dimensions</code>、<code>F=filters</code>、<code>TR=time_role+time_range</code>、<code>C=comparison</code>、<code>S=sort→order_by</code>、<code>L=limit</code>、<code>DP=drill_path</code>、<code>O=requested_output</code>。<code>本月/本周/今日</code> 等相对区间只是意图层记号，进入查询服务前必须由可信日历按已签认医院时区解析为左闭右开的 <code>start/end</code>；未解析不得执行。所有查询还必须携带已发布的 <code>semantic_version</code>；当前已有门诊核验 v3，但尚无包含六个派生运营指标的可发布运营版本，所以表中统一省略该重复项并由门禁返回 <code>result_status=unavailable; halt_reason=quality_blocked</code>。
 
 #### 统一终态、排序与零结果
 
@@ -1698,8 +1698,8 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 
 | 指标 / 草案语义码 | 业务定义 | 候选分子 / 分母 | 候选物理字段 | 去重键 | 有效状态 | 退费/冲正规则 | 时间口径 | 单位 | 可用维度 | 下钻路径 | 证据状态 | 解锁条件 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 门诊医保就诊人次 / <code>mzjyxx.insured_encounter_count</code> | [建议] 在就诊发生时间范围内，按签认的门诊医保就诊业务键去重后的就诊次数；一人多次就诊分别计数，同次就诊的多笔交易不得重复放大 | 分子：去重后的合格门诊医保就诊；分母：无 | 两表内无已签认就诊键；<code>T_MdtrtID</code> 仅确认物理存在，未完成语义、非空和唯一性画像；可信 HIS <code>encounter_id</code> 是 P1 外部输入候选 | **阻断**：不得用 <code>T_SetTid</code>；不得把交易业务键 <code>T_TradeNo</code> 自动等同就诊键；禁止 <code>COUNT(*)</code> | 需同时签认“医保门诊就诊”纳入规则及就诊与有效交易关系 | 退费/冲正可能改变交易，但是否改变就诊人次需医保办单独签认；不得默认扣减就诊 | 默认 <code>encounter_time</code> | 人次，整数 | 就诊时间；科室、门诊类别、险种为候选；结算状态仅在就诊↔有效交易映射唯一后可用 | 全院门诊→科室→门诊就诊记录；进入患者级重新鉴权 | <code>blocked</code> | 数据负责人签认就诊键、HIS 来源、跨源抽取映射、就诊时间与时区；医保办签认纳入/退费规则；画像证明键完整且不会被交易一对多放大 |
-| 门诊有效结算笔数 / <code>mzjyxx.valid_settlement_count</code> | [建议] 在选定时间角色范围内，满足已签认有效结算与退费/冲正规则的交易业务键数 | 分子：合格 <code>T_TradeNo</code> 去重数；分母：无 | <code>T_TradeNo</code>；状态候选 <code>T_State</code>、<code>T_HasRefundmented</code>、<code>T_PartialReturnFlag</code>、<code>NT_ReTradeFlag</code>、<code>NP_Settle_State</code> | [来源: Task 2] <code>T_TradeNo</code> 全量非空唯一，可作交易业务键；仍必须显式去重，禁止 <code>COUNT(*)</code> | **阻断**：状态字段物理存在但无码表，不能指定“成功/有效”码 | 原交易、部分退费、全额退费、冲正、重交易的保留/抵销/替换规则均待签认；不能只看单个标志 | 默认 <code>encounter_time</code>；用户明确问“结算日/结算时间”才用 <code>settlement_time</code> | 笔，整数 | 五维均为候选；按结算状态分组须先发布状态字典 | 全院门诊→科室→门诊就诊记录→单次门诊结算；逐级鉴权 | <code>blocked</code> | 医保办与数据负责人签认状态码、状态组合、退款链和有效交易选择规则；签认结算时间源与时区 |
+| 门诊医保就诊人次 / <code>mzjyxx.insured_encounter_count</code> | [建议] 在就诊发生时间范围内，按签认的门诊医保就诊业务键去重后的就诊次数；一人多次就诊分别计数，同次就诊的多笔交易不得重复放大 | 分子：去重后的合格门诊医保就诊；分母：无 | <code>T_MdtrtID</code> 源定义为就诊ID；当前 261/592 笔交易非空、210 个不同值，已证明一对多但覆盖不足；缺失部分仍需可信补全来源 | **阻断**：不得用 <code>T_SetTid</code>；不得把交易业务键 <code>T_TradeNo</code> 自动等同就诊键；禁止 <code>COUNT(*)</code> | 需同时签认“医保门诊就诊”纳入规则及就诊与有效交易关系 | 退费/冲正可能改变交易，但是否改变就诊人次需医保办单独签认；不得默认扣减就诊 | 默认 <code>encounter_time</code> | 人次，整数 | 就诊时间；科室、门诊类别、险种为候选；结算状态仅在就诊↔有效交易映射唯一后可用 | 全院门诊→科室→门诊就诊记录；进入患者级重新鉴权 | <code>blocked</code> | 数据负责人确认缺失就诊ID/时间补全来源、时区与键质量；医保办签认纳入/退费规则；画像证明不会被交易一对多放大 |
+| 门诊有效结算笔数 / <code>mzjyxx.valid_settlement_count</code> | [建议] 在选定时间角色范围内，满足已签认有效结算与退费/冲正规则的交易业务键数 | 分子：合格 <code>T_TradeNo</code> 去重数；分母：无 | <code>T_TradeNo</code>；状态候选 <code>T_State</code>、<code>T_HasRefundmented</code>、<code>T_PartialReturnFlag</code>、<code>NT_ReTradeFlag</code>、<code>NP_Settle_State</code> | [来源: Task 2] <code>T_TradeNo</code> 全量非空唯一，可作交易业务键；仍必须显式去重，禁止 <code>COUNT(*)</code> | **阻断**：单字段源码表已找到，但组合“成功/有效”规则尚未签认 | 原交易、部分退费、全额退费、冲正、重交易的保留/抵销/替换规则均待签认；不能只看单个标志 | 默认 <code>encounter_time</code>；用户明确问“结算日/结算时间”才用 <code>settlement_time</code> | 笔，整数 | 五维均为候选；按结算状态分组须先发布组合状态规则 | 全院门诊→科室→门诊就诊记录→单次门诊结算；逐级鉴权 | <code>blocked</code> | 医保办与数据负责人签认状态组合、退款链和有效交易选择规则；签认结算时区 |
 | 门诊总费用 / <code>mzjyxx.total_fee</code> | [建议] 合格门诊记录在已签认费用口径下的人民币总费用合计，不含重复交易或重复明细放大 | 分子：候选 <code>T_FeeAll</code> 按有效交易求和；分母：无 | <code>T_FeeAll</code>；<code>o_FeeItem.Fee</code> 仅是待签认明细核对候选 | <code>T_TradeNo</code>；明细仅可按已冻结复合键幂等，不可原始多表直接 JOIN 后求和 | 沿用“有效结算笔数”的阻断规则 | 必须由签认规则决定退费交易取负、排除、替换或与原交易净额化；不得由字段符号猜测 | 默认 <code>encounter_time</code>；明确结算运营问题可用 <code>settlement_time</code> | 元，Decimal，展示精度和舍入待签认 | 五维均为候选 | 全院门诊→科室→门诊就诊记录→单次门诊结算→费用类别→费用项目明细 | <code>candidate</code>（执行阻断） | 解除状态门禁；签认 <code>T_FeeAll</code> 含义、舍入及与明细关系；解释 Task 3 的公式和逐交易超差；完成票据门禁 |
 | 门诊统筹基金支付金额 / <code>mzjyxx.pooling_fund_payment</code> | [建议] 合格门诊记录中由基本医保统筹基金实际支付的金额合计；不得把“大额、补充、民政”等专项支付无条件并入 | 分子：候选 <code>T_FundPay</code> 按有效交易求和；分母：无 | <code>T_FundPay</code> 仅是“基金支付总额候选”，尚不能仅凭字段名等同“统筹基金支付”；专项字段不得盲加 | <code>T_TradeNo</code> | 沿用“有效结算笔数”的阻断规则 | 原交易与退费/冲正的基金金额净额化规则待签认 | 默认 <code>encounter_time</code>；明确结算运营问题可用 <code>settlement_time</code> | 元，Decimal | 五维均为候选 | 全院门诊→科室→门诊就诊记录→单次门诊结算；基金分项下钻仅在成员关系发布后允许 | <code>candidate</code>（执行阻断） | 权威字段字典确认 <code>T_FundPay</code> 唯一业务含义和成员边界；解除有效状态、退款链和 Task 3 金额门禁 |
 | 门诊个人支付金额 / <code>mzjyxx.personal_payment</code> | [建议] 合格门诊记录中由个人承担并实际支付的金额合计；个人账户、现金、自付一/二等是否为成员必须按权威口径定义 | 分子：候选 <code>T_SelfPayAll</code> 按有效交易求和；分母：无 | <code>T_SelfPayAll</code>；<code>T_PersonCountPay</code>、<code>T_CashPay</code> 只作成员关系核对候选 | <code>T_TradeNo</code> | 沿用“有效结算笔数”的阻断规则 | 原交易与退费/冲正的个人支付净额化、账户返还和现金退回规则待签认 | 默认 <code>encounter_time</code>；明确结算运营问题可用 <code>settlement_time</code> | 元，Decimal | 五维均为候选 | 全院门诊→科室→门诊就诊记录→单次门诊结算；患者/支付渠道下钻重新鉴权 | <code>candidate</code>（执行阻断） | 签认 <code>T_SelfPayAll</code> 业务含义、成员关系和退款规则；解释 Task 3 <code>T_FeeAll=T_FundPay+T_SelfPayAll</code> 的超差 |
@@ -1718,24 +1718,24 @@ Task 4 结果：**DONE_WITH_CONCERNS**。字段与分类数量以本节两条权
 
 [来源: 总设计 §11.4] 上表五项治理字段均为发布必填；“待签认”不得被默认值替代。业务定义、公式、聚合方式、单位、精度、兼容维度、默认时间角色和数据来源由前表承载，发布版本仍待建立。
 
-[推断: 基于 Task 2–4] 六项中 0 项达到可发布 <code>verified</code>；3 项保留物理候选但执行阻断，3 项因关键键/状态/分母缺失而 <code>blocked</code>。这里的 <code>T_TradeNo</code> 键证据为 <code>verified</code>，不等于“有效结算笔数”指标已验证。
+[推断: 基于 Task 2–4 与 2026-08-28 自主语义发现补证] 六项中 0 项达到可发布 <code>verified</code>；3 项保留物理候选但执行阻断，3 项因就诊键覆盖不足、组合状态/分母未签认而 <code>blocked</code>。这里的 <code>T_TradeNo</code> 键和 <code>T_MdtrtID</code> 部分画像证据，不等于相应运营指标已验证。
 
 #### 人次与结算笔数去重门禁
 
 | 计数对象 | 已有证明 | 当前决定 |
 |---|---|---|
-| 门诊医保就诊人次 | [来源: Task 2] <code>T_SetTid</code> 存在 NULL 和大量一对多，不能唯一定位；<code>T_TradeNo</code> 只证明交易唯一；Task 1 仅证明 <code>T_MdtrtID</code> 物理存在 | <code>blocked</code>。无签认就诊键时不计算，不允许 <code>COUNT(*)</code>、不允许用 <code>T_SetTid</code>，也不把 <code>T_TradeNo</code> 偷换为人次 |
-| 门诊有效结算笔数 | [来源: Task 2] <code>T_TradeNo</code> 全量非空唯一，交易去重键证据通过；[来源: Task 2–3] 状态组合无码表 | 键层通过、指标层 <code>blocked</code>。只能在有效状态和退费/冲正规则签认后按去重 <code>T_TradeNo</code> 计数，仍不允许 <code>COUNT(*)</code> |
+| 门诊医保就诊人次 | [来源: 2026-08-28 自主语义发现补证] <code>T_MdtrtID</code> 已证明为就诊ID并显示一对多，但仅覆盖 261/592 笔交易；<code>T_SetTid</code> 是结算ID且不可替代，<code>T_TradeNo</code> 只证明交易唯一 | <code>blocked</code>。缺失就诊ID补全规则签认前不计算，不允许 <code>COUNT(*)</code>、不允许用 <code>T_SetTid</code>，也不把 <code>T_TradeNo</code> 偷换为人次 |
+| 门诊有效结算笔数 | [来源: Task 2、2026-08-28 自主语义发现补证] <code>T_TradeNo</code> 全量非空唯一，交易去重键证据通过；单字段状态码表已找到，组合有效规则未签认 | 键层通过、指标层 <code>blocked</code>。只能在有效状态和退费/冲正规则签认后按去重 <code>T_TradeNo</code> 计数，仍不允许 <code>COUNT(*)</code> |
 
 #### 五维度契约表
 
 | 维度 / 草案语义码 | 来源候选 | 物理类型 / 值域证据 | 语义状态 | 允许筛选 | 允许分组 | 允许下钻 | 解锁条件 |
 |---|---|---|---|---|---|---|---|
-| 就诊时间 / <code>time_role=encounter_time</code>；结算时间 / <code>time_role=settlement_time</code> | 就诊时间：可信 HIS 就诊发生时间为 P1 抽取输入候选；两表无已证明等价字段。结算时间：<code>SETL_DATE</code>、<code>T_TradeDate</code> 只登记为竞争候选 | [来源: Task 1–2、Task 4] <code>T_TradeDate</code> 为 datetime NOT NULL 且无时区语义；<code>SETL_DATE</code> 为 datetime NULL，优先级与含义未签认 | <code>blocked</code>。默认“时间”必须解释为就诊发生时间；只有明确结算运营问题才选择结算时间。不得未经证明把 <code>T_TradeDate</code> 当就诊时间，也不得把 <code>SETL_DATE</code> 当结算时间 | 解锁后允许日/周/月/自定义左闭右开区间；角色或边界歧义先 <code>clarify</code> | 解锁后允许日、周、月粒度；医院时区和周界未签认前不执行 | 时间→科室→就诊；结算时间下钻到单次结算前重新鉴权 | 数据负责人签认两个时间角色各自来源、优先级、时区、周界、迟到/回写规则；对候选字段做一致性画像 |
-| 科室 / <code>organization.department</code> | 可信 HIS 就诊科室 + 医院组织主数据；两表没有已签认科室字段，禁止用操作员、医院代码或文本猜测 | 物理类型和值域未取得；候选 <code>department_id</code> 必须来自 P1 受控抽取，不是运行时临时跨源 JOIN | <code>blocked</code>；登记为 P1 抽取输入 | 解锁后仅允许当前 <code>data_scope</code> 内已发布科室 ID；不按自由文本直连源表 | 解锁后允许；低频单元格继续抑制 | 固定“全院门诊→科室→门诊就诊记录”；每次进入就诊级重新鉴权 | HIS 字段/接口、组织主数据、历史映射和权限范围由数据负责人签认；P1 落地同批水位抽取；禁止运行时跨源临时 JOIN |
-| 门诊业务类别 / <code>mzjyxx.outpatient_business_type</code> | <code>T_CureType</code> 是物理候选；不得把现有住院默认 <code>med_type</code> 或其他源 <code>YLLB</code> 字典直接套用 | [来源: Task 1、Task 4] int NOT NULL；低频枚举整体不展示，无码表 | <code>candidate</code>；字典发布前过滤/分组返回 <code>result_status=unavailable; halt_reason=quality_blocked</code> | 仅允许已发布标准值，不接受物理码或模型自造值 | 字典解锁后允许；小桶按 Task 4 抑制 | 筛选/分组后仍只可沿固定“全院门诊→科室→门诊就诊记录”路径下钻并鉴权 | 医保办签认门诊类别码表、合并/拆分规则和历史版本；数据负责人签认 <code>T_CureType</code> 映射 |
-| 险种 / <code>mzjyxx.insurance_type</code> | <code>P_FundType</code>、<code>PN_NationFundType</code> 为竞争候选；当前 seed 的 <code>FUND_TYPE</code> 绑定其他源字段，不能自动证明本表映射 | [来源: Task 1、Task 4、当前 <code>seed.py</code>] <code>P_FundType</code> int NOT NULL；<code>PN_NationFundType</code> varchar(6) NULL；本表无码表 | <code>candidate</code>；字典发布前过滤/分组返回 <code>result_status=unavailable; halt_reason=quality_blocked</code> | 仅允许已发布标准险种，不接受源物理码 | 字典解锁后允许；低频待遇桶抑制 | 筛选/分组后仍只可沿固定“全院门诊→科室→门诊就诊记录”路径下钻；进入就诊级重新鉴权 | 医保办签认权威险种字段、两候选优先级和值域；建立版本化映射并回归 |
-| 结算状态 / <code>mzjyxx.settlement_status</code> | 组合候选：<code>T_State</code>、<code>T_HasRefundmented</code>、<code>T_PartialReturnFlag</code>、<code>NT_ReTradeFlag</code>、<code>NP_Settle_State</code>，及原交易关系候选 | [来源: Task 1–4] int/varchar/nvarchar，NULL/空串并存；精确低频值域已抑制；无码表 | <code>candidate</code>；不能从单字段或数值猜“成功/退费/冲正/无效” | 仅在组合状态字典发布后允许；当前任何状态筛选均返回 <code>result_status=unavailable; halt_reason=quality_blocked</code> | 解锁后允许受隐私阈值保护的汇总；不展示精确小桶 | 状态只能作为已发布筛选/分组条件；下钻仍固定“全院门诊→科室→门诊就诊记录→单次门诊结算”，退费链仅供有权限人员查看 | 医保办和数据负责人签认组合状态机、原/退交易关系、有效交易选择及退款净额规则；隐私负责人签认桶阈值 |
+| 就诊时间 / <code>time_role=encounter_time</code>；结算时间 / <code>time_role=settlement_time</code> | 就诊时间：<code>T_MdtrtID</code> 已证明为就诊ID但缺失过半，尚无等覆盖的就诊发生时间；结算时间：源字典明确 <code>SETL_DATE</code> 为国家平台结算时间，<code>T_TradeDate</code> 为交易时间 | [来源: 2026-08-28 自主语义发现补证] <code>T_MdtrtID</code> 261/592 非空；<code>SETL_DATE</code> datetime NULL；<code>T_TradeDate</code> datetime NOT NULL；两者均无时区 | <code>blocked</code>。默认“时间”仍解释为就诊发生时间；明确结算运营问题可把 <code>SETL_DATE</code> 作为已发现候选，但时区/周界签认前不执行 | 解锁后允许日/周/月/自定义左闭右开区间；角色或边界歧义先 <code>clarify</code> | 解锁后允许日、周、月粒度；医院时区和周界未签认前不执行 | 时间→科室→就诊；结算时间下钻到单次结算前重新鉴权 | 数据负责人确认缺失就诊ID/就诊时间补全来源，并签认两个时间角色的时区、周界、迟到/回写规则 |
+| 科室 / <code>organization.department</code> | <code>o_Diagnose.SectionCode/Sectionname</code> 通过受信 <code>T_TradeNo</code> FK 覆盖全部交易；仍须对齐医院组织主数据 | [来源: 2026-08-28 自主语义发现补证] 592/592 交易有科室候选；源 `yb_DeptDict` 当前为空 | <code>candidate</code>（技术来源已发现、组织映射待签认） | 仅允许当前 <code>data_scope</code> 内已发布科室 ID；不按自由文本直连源表 | 组织映射发布后允许；低频单元格继续抑制 | 固定“全院门诊→科室→门诊就诊记录”；每次进入就诊级重新鉴权 | 数据负责人签认组织映射和权限范围；P1 同批水位抽取，禁止运行时跨源临时 JOIN |
+| 门诊业务类别 / <code>mzjyxx.outpatient_business_type</code> | <code>T_CureType</code> 已绑定发布值域 `MZ_CURE_TYPE`；不得继承住院默认值 | [来源: 2026-08-28 语义注册表与源值域只读核验] int NOT NULL；当前 4 个观测代码全覆盖 | <code>candidate</code>（技术映射已验证、业务版本待签认） | 仅允许已发布标准值，不接受物理码或模型自造值 | 业务签认后允许；小桶按 Task 4 抑制 | 固定“全院门诊→科室→门诊就诊记录”路径下钻并鉴权 | 医保办签认合并/拆分规则和历史版本；数据负责人确认继续采用现有映射 |
+| 险种 / <code>mzjyxx.insurance_type</code> | <code>P_FundType→FUND_TYPE</code>、<code>PN_NationFundType→NATIONAL_FUND_TYPE</code> 均已发布，前者作为主要险种候选 | [来源: 2026-08-28 语义注册表与源值域只读核验] 当前观测代码均全覆盖 | <code>candidate</code>（技术映射已验证、两字段优先级待签认） | 仅允许已发布标准险种，不接受源物理码 | 优先级签认后允许；低频待遇桶抑制 | 固定路径下钻；进入就诊级重新鉴权 | 医保办签认两字段业务优先级；数据负责人确认继续采用现有版本化映射 |
+| 结算状态 / <code>mzjyxx.settlement_status</code> | 组合候选不变；`v_T_State_BJ` 已覆盖当前全部观测 `T_State`，国家结算/退费/部分红冲字段有源说明 | [来源: 2026-08-28 自主语义发现补证] int/varchar/nvarchar，NULL/空串并存；精确低频值频继续抑制 | <code>candidate</code>；单字段码表已找到，但不能据此猜组合“有效/退费/冲正” | 仅在组合状态规则发布后允许；当前状态筛选仍返回 <code>quality_blocked</code> | 解锁后允许受隐私阈值保护的汇总；不展示精确小桶 | 固定下钻到单次结算；退款链仅供有权限人员查看 | 把现有状态视图纳入语义值域；医保办/数据负责人签认组合状态机、原/退交易关系、有效交易选择及净额规则；隐私负责人签认桶阈值 |
 
 [来源: Task 4 <code>ENUM_FREQUENCY_WITHHELD_PENDING_PRIVACY_THRESHOLD</code>] 五维度的低频枚举继续失败关闭：本节不新增任何枚举值或精确小桶。生产阈值、组合维度和二次推断风险须由信息安全/隐私负责人签认。
 
@@ -1826,15 +1826,15 @@ Task 5 结果：**DONE_WITH_CONCERNS**。六指标与五维度的契约外形、
 
 - [来源: `ktyhwangfei/issue-20` 提交 `cbb3082` 所含 `src/semantic_layer/seed.py`] `mz_trade` 主键和阻断级非空质量规则均使用 `T_TradeNo`，费用关系也使用 `T_TradeNo`；`T_SetTid` 未声明为主键或唯一键。
 - [来源: Issue20 工作区当前设计 §4/§5.2、`skills/mzsettlement_verify_skill/SKILL.md`、`strategies/profile.py`] 原型执行契约把 `settlement_id` 定义为门诊交易号 `T_TradeNo`，查询锚点是 `mz_trade.T_TradeNo`。这些设计和 Skill 包仍含未提交改动，只作为对齐证据，不视为已发布生产能力。
-- [来源: 总设计 §1/§6.2] 页面不要求用户提供结算 ID；可信身份、患者和就诊时间先唯一定位 `encounter_id`，后台再解析 `T_TradeNo`。因此“用户定位”和“Skill 内部交易锚点”是两层契约，前者继续由 G07 阻断，不能把 `T_SetTid` 的一对多误当成后者失败。
+- [来源: 总设计 §1/§6.2、2026-08-28 自主语义发现补证] 页面不要求用户提供结算 ID；可信身份和就诊时间先检索候选，唯一时直接进入，歧义时按需补科室/诊断等上下文，后台最终解析 `T_TradeNo`。因此“用户定位”和“Skill 内部交易锚点”是两层契约，不能把 `T_SetTid` 或时间检索歧义误当成内部锚点失败。
 
-纠偏决定：G01 的技术证据闭合为 `settlement_id = T_TradeNo → mz_trade.T_TradeNo`；Task 2 的 592/592 非空唯一和物理主键证据支持该决定。`T_SetTid` 的业务含义仍待字典确认，但不再是 P1 的独立锚点阻断。
+纠偏决定：G01 的技术证据闭合为 `settlement_id = T_TradeNo → mz_trade.T_TradeNo`；Task 2 的 592/592 非空唯一和物理主键证据支持该决定。源字典已确认 `T_SetTid=结算ID`，但其非空覆盖和唯一性不足，继续只作外部交叉标识，不是 Skill 内部锚点或 P1 独立阻断。
 
 ### 政策解释 Skill 最小字段闭包复核
 
 - Issue20 原型清单声明 9 个 Profile、120 次指标引用、88 个唯一语义指标代码。[来源: Issue20 工作区 `skill_manifest.yaml`]
-- 88 个代码中，85 个可按同名字段落到 `o_Trade/o_FeeItem`；`FeeItem_SelfPay2` 和 `FeeItem_State` 在已提交语义种子中显式映射到 `o_FeeItem.SelfPay2/State`；`HospitalLevel` 映射到 `o_Trade.T_HospCode`，但 `MZ_HOSPITAL_LEVEL_BY_CODE` 当前为空域，仍需从机构主数据治理并签认。[来源: Issue20 分支 `src/semantic_layer/seed.py`；推断: 与最新两表 discovery 字段名集合对照]
-- 结论是“物理候选字段可覆盖原型声明”，不是“业务语义已发布”。金额成员关系、状态码、`TB_*`/`TA_*`、`T_JCPay` 以及机构等级值域仍由 G03/G05/G06/G07 阻断。
+- 88 个代码在当前语义注册表和 v3 已发布快照中均无缺失；`FeeItem_SelfPay2`、`FeeItem_State` 和 `HospitalLevel` 均已有事实字段映射。`MZ_HOSPITAL_LEVEL_BY_CODE` 已有 6,854 条映射，当前观测机构代码全覆盖。[来源: Issue20 `skill_manifest.yaml`、PostgreSQL 语义注册表与 SQL Server 源值域只读核验]
+- 结论是“查询字段闭包与值域资产已发布”，不是“九 Profile 已完成业务验收”。剩余阻断是金额成员关系、组合状态机、少量歧义字段、政策上下文以及 Skill 受控发布。
 - 当前 `settlement_explain_skill` 是住院 Skill，`field_mapping.yaml` 仍含城镇职工、普通住院、三级医院、退休人员默认值。门诊链路必须继续使用独立 Skill，并把缺失上下文保持为 `missing`/`missing_external_context`，不得继承这些默认值。[来源: 当前主线 `skills/settlement_explain_skill/field_mapping.yaml`]
 
 ### 定向只读语义发现
@@ -1849,7 +1849,7 @@ Task 5 结果：**DONE_WITH_CONCERNS**。六指标与五维度的契约外形、
 | `yb_mzzd_mz` | 6 字段；当前总量 `<10（精确值已抑制）`；含诊断编码/名称候选 | 仅登记为另一诊断候选 | 样本和权威映射不足，不优先于已有受信 FK 的 `o_Diagnose` |
 | `yb_DeptDict` | 9 字段；当前总量 `<10（精确值已抑制）`；含科室及上级科室候选 | 仅登记为科室主数据候选 | 数据量和映射均未达到发布条件；不得在运行时临时 JOIN |
 
-补证结论：G01 技术纠偏完成；G04/G07 从“候选未知”推进到“候选已发现但证据不足”。这次扫描不改变 G02–G13 的准入阻断，也不构成启动 P1 的授权。
+补证结论（已被“2026-08-28 自主语义发现补证”进一步更新）：G01 技术纠偏完成；G04 已由已发布 v3 冻结 `o_FeeItem` 技术选型，G07 已找到诊断/科室和部分覆盖的就诊ID。P0 仍未准入，不构成启动 P1 的授权。
 
 ## 阻断项
 
@@ -1857,23 +1857,23 @@ Task 5 结果：**DONE_WITH_CONCERNS**。六指标与五维度的契约外形、
 |---|---|---|---|
 | T1-B01 | 指纹 38F144F8…ACD70 对应主体在数据库及两张候选表上具备 INSERT、UPDATE、DELETE 权限 | 不满足批准的最小只读权限基线；误操作风险高 | 提供符合批准范围的专用只读账号或等效只读隔离通道，并重新留存主体指纹及 SELECT、INSERT、UPDATE、DELETE 权限位 |
 | T1-B02 | 本次两表均命中 discovery 检查点 | 行数、质量分、非空率、DDL 时间是缓存快照，不能证明 2026-08-27 新鲜画像 | 在批准流程中生成可审计的新鲜只读全量画像，并保留任务时间与统计口径 |
-| T1-B03 | 核心字段没有随 Task 1 获得权威业务定义和值域 | 交易状态、退款链、金额公式和游标含义仍可能误判 | 取得院方数据字典/接口文档并由业务与数据负责人签认 |
+| T1-B03 | Task 1 当时未取得核心字段定义；2026-08-28 已从语义层、源视图和字段说明补齐主要值域/定义 | 金额公式、组合退款链、就诊时间和游标含义仍可能误判 | 不再索要整包字典；只由业务与数据负责人签认补证中列出的剩余歧义和公式 |
 | T1-B04 | 候选表包含直接标识符、证件/卡号及电子凭证类高敏字段 | 后续 Skill 或指标若直接读取将违反最小化与脱敏要求 | 建立允许字段白名单、用途说明和 security/desensitization 验证证据 |
 | T2-R01（已纠偏） | [来源: Issue20 §4/§5.2、Issue20 分支语义种子、outpatient_p0_t2_20260827_070052Z] 内部锚点是全量非空唯一的 `T_TradeNo`；`T_SetTid` 是普通可空字段 | G01 技术证据闭合；`T_SetTid` 的空值/重复只保留为字段语义关注项，不阻断 Skill 定位 | 在 G13 正式签认中确认该契约；用户按就诊时间解析 `T_TradeNo` 的外部上下文仍按 G07 补证 |
 | T2-B02 | [来源: outpatient_p0_t2_20260827_070052Z] T_TradeDate 为无时区 datetime，尚未取得其业务时区与时钟语义；固定服务器时钟参数形成的窗口只观察到交易/关联明细 0 | [推断: 基于字段类型与缺失的业务时区定义] 不能把该观察值作为可靠最近 30 天证据；不影响全量键、重复和主从关系结论 | 由数据负责人确认 T_TradeDate 的业务时区/时钟语义，并按确认后的时间口径重新执行参数化窗口查询 |
 | T3-B01 | [来源: outpatient_p0_t3_20260827_073210Z、outpatient_p0_t3_precision_20260827_074356Z] o_Trade 两组等式及精度修正后的 o_FeeItem Fee/FeeOut 汇总均存在 `<10（精确值已抑制）` 的超差交易；关联差值摘要已抑制；状态码无权威有效规则 | [推断: 基于全量 decimal 聚合] 金额门禁和有效状态门禁未通过，dbo.o_FeeItem 不能冻结为唯一费用明细源 | 由医保办与数据负责人签认金额公式、舍入和有效状态规则；按签认规则重新执行同口径聚合并解释全部超差 |
 | T3-B02 | `MANUAL_TICKET_RECONCILIATION_BLOCKED`：当前没有至少 30 份医保办票据、票据访问授权人员或获批脱敏传递通道 | 无法完成唯一明细源的人工票据门禁 | 由医保办授权经办人完成至少 30 票据逐笔核对，医保办负责人、数据负责人和信息安全/隐私负责人签认 |
 | T3-B03 | [来源: outpatient_p0_t3_20260827_073210Z] 专项基金候选等式绝大多数交易缺字段；小规模可比较记录中存在 `<10（精确值已抑制）` 的超差交易，关联金额摘要已抑制 | 不能把字段名相关性发布为基金总分公式 | 取得权威基金字段字典与公式并由医保办、数据负责人签认；未签认前保持候选/待确认 |
-| T4-B01 | [来源: outpatient_p0_t4_20260827_policy_closure、本次 Issue20 对齐] `T_TradeNo` 锚点已通过，但交易/待遇/状态码、金额成员关系及 `TB_*`/`TA_*` 前后语义缺少权威字典，`TA_MZTimes` 仅确认物理类型为 int，`T_JCPay` 又存在救助/军残候选语义冲突 | 九个执行 Profile 仍因各自核心语义或查询模型未发布而 `unavailable`；P3、P7 另受 `T_JCPay` 语义冲突阻断，年度累计、状态和资格判断也可能误释 | 由医保办与数据负责人提供字段字典、码表、公式、`T_JCPay` 唯一释义及 TB/TA 前后定义并签认，按签认口径重跑聚合 |
+| T4-B01 | [来源: 2026-08-28 自主语义发现补证] `T_TradeNo`、v3 查询模型和 88 个 Skill 依赖已通过；`T_JCPay` 已明确为军残保险，多数 TB/TA 与状态码已有源定义，`TA_MZTimes`、金额成员关系和组合状态规则仍未签认 | 九个执行 Profile 仍因剩余核心语义、金额/状态规则和 Skill 未受控发布而 `unavailable`；不再受查询模型或 `T_JCPay` 冲突阻断 | 仅签认剩余歧义字段、金额公式和组合状态规则，按签认口径重跑聚合并完成 Skill 评测/发布 |
 | T4-B02 | 政策地区、登录医院、政策适用机构、规范专项待遇类型四项外部上下文及资格证据不在两表可信闭包内 | P5、P7、P8 存在额外外部/条件核心上下文阻断；不改变九个执行 Profile 已全部 `unavailable` 的汇总结论 | 分别从可信 HIS/医保接入上下文、登录组织、医院主数据/政策元数据和资格接口注入，并与已发布、有效期覆盖结算日期的政策证据共同验证 |
 | T4-B03 | 现有 `settlement_explain_skill` 是住院 Skill，标准化器会补住院险种、医疗类别、医院等级和人员默认值 | 若门诊复用会把缺失上下文伪造成住院事实，导致错误政策命中 | 门诊 Skill 保持独立字段映射；删除门诊路径所有住院默认值，缺失按 `missing` 失败关闭 |
 | T4-B04 | [来源: T4-PRIV] 枚举频次没有隐私负责人批准的单元格阈值，且原聚合采用 `READ UNCOMMITTED`、未保留完整枚举白名单/SELECT | 精确低频值频不可发布或冻结；可能发生小群体重识别与脏读误判 | 维持 `ENUM_FREQUENCY_WITHHELD_PENDING_PRIVACY_THRESHOLD`；由信息安全/隐私负责人签认阈值、组合维度与用途后，在一致性快照下建立新审计批次 |
-| T5-B01 | [来源: Task 2、Task 4、本次定向 discovery] <code>T_TradeNo</code> 只能唯一定位交易；两表仍没有已签认门诊就诊键，新增发现的 `o_Diagnose`、`yb_mzjyxx_mz` 也尚未证明可信 <code>encounter_id → T_TradeNo</code> 映射 | 门诊医保就诊人次及以人次为分母的次均费用阻断；任何 <code>COUNT(*)</code> 或交易数替代人次都会误计 | 数据负责人签认可信 HIS 就诊键、P1 抽取映射、非空/唯一/基数质量规则；医保办签认同次就诊多交易及退费是否影响人次 |
-| T5-B02 | [来源: Task 2–4] <code>T_TradeNo</code> 键已证明，但结算状态组合、原/退交易关系、有效/冲正/退费规则无码表 | 有效结算笔数及全部金额汇总无法执行；不能靠单字段或状态数值猜选有效行 | 医保办与数据负责人签认组合状态机、退款链、有效交易选择和金额净额化规则，并按签认规则回归 |
+| T5-B01 | [来源: Task 2、2026-08-28 自主语义发现补证] <code>T_MdtrtID</code> 源字典明确为“就诊ID”，当前 261/592 笔交易非空、210 个不同值、50 个值对应多笔交易，证明就诊→交易一对多但覆盖不足；<code>T_TradeNo</code> 只唯一定位交易 | 门诊医保就诊人次及以人次为分母的次均费用仍阻断；任何 <code>COUNT(*)</code> 或交易数替代人次都会误计 | 数据负责人确认缺失 <code>T_MdtrtID</code> 的补全来源/回填规则并签认键质量；医保办签认同次就诊多交易及退费是否影响人次 |
+| T5-B02 | [来源: Task 2–4、2026-08-28 自主语义发现补证] <code>T_TradeNo</code> 键已证明；<code>v_T_State_BJ</code> 覆盖当前全部 4 个观测交易状态码，国家结算/退费/部分红冲字段有源说明，但组合状态机、原/退交易关系和净额化规则未签认 | 有效结算笔数及全部金额汇总仍无法执行；不能靠单字段或状态数值猜选有效行 | 医保办与数据负责人签认组合状态机、退款链、有效交易选择和金额净额化规则，并按签认规则回归 |
 | T5-B03 | [来源: Task 3] <code>T_FeeAll</code>、<code>T_FundPay</code>、<code>T_SelfPayAll</code> 相关公式存在少量超差，且“统筹基金”和个人支付成员边界未签认 | 总费用、统筹基金支付、个人支付只可保留候选；次均费用分子也未冻结 | 签认字段字典、金额公式、舍入和成员关系；解释全部超差并完成至少 30 票据人工核对门禁 |
-| T5-B04 | 就诊时间来源未证明；<code>T_TradeDate</code> 不能直接当就诊时间，<code>SETL_DATE</code> 也不能直接当结算时间；科室不在两表可信闭包 | 默认时间、显式结算时间和科室分组/下钻均阻断 | 数据负责人签认双时间角色来源、优先级、时区和周界；把 HIS 科室及组织主数据作为 P1 同水位抽取输入，不允许运行时临时跨源 JOIN |
-| T5-B05 | 门诊类别、险种和结算状态虽有物理候选，但业务字典未签认；低频枚举阈值也未批准 | 三维只能保持 <code>candidate</code> 且查询失败关闭；精确小桶不可展示 | 医保办/数据负责人签认字段和值域版本；隐私负责人签认单元格阈值、组合维度、用途与二次推断控制 |
-| T5-B06 | [来源: 当前语义层代码与总设计 §12] 聚合 <code>SemanticQuery</code>、确定性 Planner/编译器尚未实现；Q01–Q50 尚未经业务签认 | 50 题只能作为 P0 契约评审草案，不能声称生产可信问题库或返回真实运营数值 | 先完成口径签认并发布语义版本；P3 实现 Registry 校验、授权、参数化编译、验证与固定下钻；医保办/数据负责人逐题签认后再转可信问题库 |
+| T5-B04 | [来源: 2026-08-28 自主语义发现补证] <code>T_TradeDate</code> 源定义为交易时间，<code>SETL_DATE</code> 源定义为国家平台结算时间；<code>o_Diagnose</code> 经受信 FK 覆盖全部 592 笔交易的科室，但其临床处方时间有 339/619 行与交易时间相差超过 24 小时，不能冒充就诊时间 | 默认就诊时间仍阻断；显式结算时间和科室已有技术候选，但时区/周界、组织映射和同水位抽取仍须签认 | 数据负责人签认双时间角色、时区、周界和科室组织映射；P1 同水位抽取，不允许运行时临时跨源 JOIN |
+| T5-B05 | [来源: 2026-08-28 自主语义发现补证] 险种、人员类别、门诊医疗类别、机构等级等已发布值域对当前观测代码全覆盖；交易状态有源视图但尚未登记为语义值域，低频枚举阈值也未批准 | 险种和门诊类别已具备技术映射；组合结算状态和精确小桶仍失败关闭 | 把已发现源视图纳入版本化语义值域并签认组合状态规则；隐私负责人签认单元格阈值、组合维度、用途与二次推断控制 |
+| T5-B06 | [来源: Issue20 查询 Planner 与 2026-08-28 语义注册表只读核验] <code>SemanticQuery</code>、确定性 Planner/编译器和 v3 可查询模型已存在；六个运营派生指标及其公式尚未发布，Q01–Q50 尚未经业务签认 | 查询引擎不再是阻断项；50 题仍只能作为 P0 契约评审草案，不能声称生产可信问题库或返回真实运营数值 | 完成六指标/五维度口径签认并发布派生指标；医保办/数据负责人逐题签认后再转可信问题库 |
 | T6-B01 | [来源: outpatient_p0_t6_20260827_094619Z] 两表均未启用表级 CDC、Change Tracking 或时态表，没有 rowversion/timestamp、identity 或表级触发器；o_FeeItem 也无日期/版本候选 | 新增、更新和删除均没有可靠、有界、可重放的增量序列；1–5 分钟轮询不成立 | 院方提供覆盖最终交易/明细事实源的 CDC 或等价变更日志，包含操作类型、提交顺序/LSN、提交时间、键、删除 tombstone、事务边界、保留期和回放规则 |
 | T6-B02 | dbo.o_Trade 的四个日期与两个字符串版本候选均无变更语义，且出现 NULL、重复、同行日期倒置或低基数；退费/冲正状态机仍未签认 | 不能计算真实单调倒退、最近 24h 迟到或 10 分钟重叠更新，也不能保证退费/冲正的新增与回写都被捕获 | 数据负责人提供字段/接口字典和变更生成规则；医保办签认退费/冲正状态机；在有历史变更序列后重新执行迟到与重叠验证 |
 | T6-B03 | [来源: Task 2、outpatient_p0_t6_20260827_094619Z] T_TradeDate 时区/业务语义未签认，当前 768 个物理日期跨度仅 28 个有记录日，服务器最近 30 日观察为 0 | 最近 30 日均值/峰值、当前最近一日和可信三年容量预测无法成立；机械外推不能作为容量输入 | 签认医院时区、时间字段、完整覆盖起点、缺口/补录规则；以新鲜一致性水位重跑 30 个完整业务日并提供增长、留存、回补和已知高峰参数 |
@@ -1895,7 +1895,7 @@ Task 1 已形成两张候选表的发现证据草稿、数据库版本/脱敏权
 
 Task 3 执行结果：**DONE_WITH_CONCERNS**。关注项为 T3-B01 至 T3-B03，未伪造人工票据或业务字典完成。
 
-[来源: 文档级证据批次 outpatient_p0_t4_20260827_policy_closure、本次 Issue20 对齐；固定执行时间、主体指纹引用、字段矩阵与非快照观察 SQL 见“政策 Skill 依赖”] Task 4 已覆盖总设计 §10.1–§10.5 与 Issue20 §5.4，并纠正内部锚点为 `T_TradeNo`；字段、外部上下文及分类数量引用本节权威汇总，低频枚举证据按 `ENUM_FREQUENCY_WITHHELD_PENDING_PRIVACY_THRESHOLD` 撤下。由于查询模型与各 Profile 业务语义门禁未解除，九个执行 Profile 仍为 0 `complete` / 0 `partial` / 9 `unavailable`。
+[来源: 文档级证据批次 outpatient_p0_t4_20260827_policy_closure、Issue20 对齐与 2026-08-28 自主语义发现补证] Task 4 已覆盖总设计 §10.1–§10.5 与 Issue20 §5.4，并纠正内部锚点为 `T_TradeNo`；v3 查询模型和 88 个 Skill 依赖已验证。由于各 Profile 业务语义、金额/状态组合、政策上下文及 Skill 受控发布门禁未解除，运行态仍为 0 `complete` / 0 `partial` / 9 `unavailable`。
 
 Task 4 执行结果：**DONE_WITH_CONCERNS**。关注项为 T4-B01 至 T4-B04；未把住院默认值、相似字段、零值或缺失上下文伪造成门诊资格与政策事实，未发布低频枚举，也未提前处理运营指标、游标或容量。
 
@@ -1911,24 +1911,42 @@ Task 5 执行结果：**DONE_WITH_CONCERNS**。关注项为 T5-B01 至 T5-B06；
 
 Task 6 执行结果：**DONE_WITH_BLOCKERS**。未用全表轮询、父交易业务日期、服务器窗口零值或机械三年外推伪装近实时/容量证据；关注项为 T6-B01 至 T6-B04。
 
+### 2026-08-28 自主语义发现补证
+
+本批次按“先查语义层与历史发现，再判断是否需要院方材料”的原则补证。PostgreSQL 语义注册表、历史 discovery、SQL Server 元数据/值域视图及聚合均为只读；SQL Server 证据时间为 `2026-08-28T05:27:52.7221471Z`。查询未返回患者样例值、标识值或凭据，1–9 行/笔结果继续显示为 `<10（精确值已抑制）`。
+
+| 证据域 | 自主发现结果 | 门禁影响 |
+|---|---|---|
+| 已发布查询模型 | `mzjyxx` 状态为 `published`、当前版本 v3；当前模型与已发布快照均 `queryable=true`，结构校验 0 问题。模型含 `mz_trade→dbo.o_Trade`、`mz_fee_item→dbo.o_FeeItem`，105 字段、3 键、1 条一对多关系、4 条质量规则；Issue20 门诊核验 Skill 声明的 88 个指标在当前注册表和 v3 快照中均无缺失 | “查询模型未发布/Planner 未实现”证据已过期，不再作为 T4/T5/G08 阻断；门诊 Skill 仍须物化、评测和受控发布 |
+| 已发布值域 | `P_FundType→FUND_TYPE`、`P_JCLevel→MILITARY_DISABILITY_LEVEL`、`PN_NationFundType→NATIONAL_FUND_TYPE`、`PN_PersonType→MZ_PERSON_TYPE`、`T_CureType→MZ_CURE_TYPE`、`T_HospCode→MZ_HOSPITAL_LEVEL_BY_CODE` 均已映射；当前观测代码覆盖率均为 100%，机构等级源映射共 6,854 条 | 险种、人员类别、医疗类别和机构等级不再要求院方重新提供码表；只需治理发布/签认既有版本 |
+| 状态与退费 | SQL Server 已有 `v_T_State_BJ` 8 项交易状态码，当前 `o_Trade.T_State` 4 个观测代码全部覆盖；`NP_Settle_State` 源说明明确 1=成功、0=失败，`T_HasRefundmented` 明确 1=已退费，`T_PartialReturnFlag` 明确 1=部分退费红冲交易 | G05 从“找不到码表”收敛为组合状态机、退款链和金额净额化规则的业务签认；`o_FeeItem.State` 仍无码表 |
+| 字段冲突 | 源字典明确 `T_JCPay=军残保险`；多数 `TB_*`/`TA_*` 字段说明明确为交易前/交易后累计。`TA_MZTimes` 的“门诊时间”说明仍不足以证明其为次数 | G06 不再要求整包字段字典，只保留 `TA_MZTimes` 等少数字段与金额成员关系签认 |
+| 诊断与科室 | `o_Diagnose` 619 行、592 个 `T_TradeNo`，受信 FK 全部关联 `o_Trade`；全部 592 笔交易均有科室和临床处方时间候选。诊断类型当前 2 个观测代码仅 1 个被 `v_DIAGTYPE` 覆盖 | 科室/诊断源已找到；只需补齐组织映射、主诊断规则和缺失诊断类型映射，不再要求医院另找一张未知表 |
+| 就诊键与时间 | 源字典明确 `T_MdtrtID=就诊ID`；当前 261/592 笔交易非空、210 个不同值，50 个值对应多笔交易，最大 3 笔，证明就诊→交易一对多但覆盖不足。患者身份+精确 `T_TradeDate` 仍有 38 个歧义组；按自然日有 61 个歧义组，最大 25 笔。`o_Diagnose.RecipeDate` 有 339/619 行与交易时间相差超过 24 小时，不能冒充就诊时间 | 前端采用“身份授权→就诊时间找候选→歧义时按需补上下文→内部解析 `T_TradeNo`”是正确路径；`T_MdtrtID` 缺失补全与真正就诊时间仍是 G02/G07 数据签认项 |
+| 费用明细源 | v3 已将 `dbo.o_FeeItem` 发布为唯一 `mz_fee_item` 数据集并登记主从关系；替代候选 `yb_mzfymx_mz` 当前总量 `<10`，只能关联自身 `yb_mzjyxx_mz` 小样本，不能关联 `o_Trade.T_FeeNo` | G04 技术选型已闭合为 `o_FeeItem`；生产准入继续受 G03 金额超差和人工票据核验约束，不再反复寻找替代表 |
+| 金额勾稽 | 当前 592 笔交易中，`总额=医保内+医保外`、`总额=基金+个人`、明细 `SUM(Fee)=T_FeeAll` 均仍有 `<10` 超差 | G03 保持人工票据、舍入和成员关系门禁；语义发现不能替代票据核验 |
+| 增量候选 | 目标主表、明细、诊断及已发现交易/上传记录表均未启用 CDC、Change Tracking、时态表、触发器或 rowversion/identity。`o_TradeTrans` 仅覆盖当前 326/592 笔交易，支付时间全空且接收日期只有 1 个不同值；上传记录不覆盖当前交易；`o_TransStatus` 为空 | G09 仍是真实外部阻断：必须由源系统/数据库负责人提供覆盖增删改的 CDC 或等价变更日志 |
+
+[推断: 基于上述补证] 后续不得再把可从语义层、历史 discovery、源视图或字段说明中取得的材料列为“请医院提供”。真正需要外部协同的只剩：业务口径与票据签认、缺失就诊键/时间的来源决定、CDC/删除捕获、专用只读账号、隐私阈值/字段用途和最终正式签字。
+
 ### Task 7：P0 人工门禁判定
 
 [来源: Task 1–6 证据批次与 T1-B01 至 T6-B04] P0 评审工作已执行完毕；这只表示计划中的证据采集与文档审查已完成，不表示 P0 准入通过。
 
-[推断: G01 技术证据已纠偏闭合，但 G02–G13 仍未解除且签认栏为空] P0 准入门禁结论为 **blocked**，P1 为 **blocked**，不得进入规划。后续只允许补证据并重新执行 P0 门禁，不编写 P1 生产代码计划。
+[推断: G01 与 G04 技术证据已闭合，G05–G08 的“待找资料/待实现查询模型”部分已由自主语义发现消除；仍有业务签认和外部运行门禁] P0 准入结论为 **blocked**，P1 为 **blocked**，不得进入规划。后续只补真正缺失的业务/运行证据并重新执行 P0 门禁，不再向医院索要语义层已有资料，也不编写 P1 生产代码计划。
 
 | 门禁项 | 最小阻断摘要（引用既有证据） | 责任方 | 解除证据与下一次复核动作 |
 |---|---|---|---|
 | G01 内部结算锚（技术证据已闭合） | `settlement_id = T_TradeNo → mz_trade.T_TradeNo`；全量非空唯一，`T_SetTid` 不作锚点。[来源: T2-R01、本次 Issue20 对齐] | 医保办负责人、数据负责人 | 技术补证完成；只需纳入 G13 正式签认。用户按就诊时间解析 `T_TradeNo` 继续由 G07 复核。 |
-| G02 业务时间 | 就诊/结算双时间来源、时区、周界及迟到回写未签认。[来源: T2-B02、T5-B04] | 数据负责人、医保办负责人 | 签认两个时间角色及医院时区；以固定业务日历重跑窗口与一致性画像。 |
+| G02 业务时间（部分补证） | 源字典已确认 `T_TradeDate=交易时间`、`SETL_DATE=国家平台结算时间`；真正就诊时间、医院时区、周界和迟到回写仍未签认。临床处方时间不能替代就诊时间。[来源: T5-B04、2026-08-28 自主语义发现补证] | 数据负责人、医保办负责人 | 仅需确认就诊时间来源及两个时间角色的时区/周界/迟到规则；以固定业务日历重跑窗口。 |
 | G03 金额与票据 | 金额公式仍有超差，至少 30 票据人工核验未执行。[来源: T3-B01 至 T3-B03、T5-B03] | 医保办授权经办人、医保办负责人、数据负责人、信息安全/隐私负责人 | 提交公式/舍入/成员关系和全部超差解释；在获批脱敏通道完成至少 30 票逐笔核验并留签认。 |
-| G04 费用明细源 | `dbo.o_FeeItem` 仅为候选；`yb_mzfymx_mz` 已定向发现但总量 `<10（精确值已抑制）`，跨表键与金额语义未签认。[来源: “唯一费用明细源决定”、T3-B01 至 T3-B02、本次定向 discovery] | 数据负责人、医保办负责人、信息安全/隐私负责人 | 在获批一致水位和足量样本下独立核验 `yb_mzfymx_mz`，与票据和 `o_FeeItem` 对照；签认唯一正式源或明确分工。 |
-| G05 状态与退费链 | 有效、退费、冲正、重交易及原/退交易关系无码表和净额化规则。[来源: T5-B02、T6-B02] | 医保办负责人、数据负责人 | 签认组合状态机、关系键、保留/抵销/替换规则；按规则回归笔数和金额。 |
-| G06 冲突字段语义 | `T_JCPay` 等字段存在候选释义冲突，`TB_*`/`TA_*` 前后语义未定。[来源: T4-B01] | 医保办负责人、数据负责人 | 提交版本化字段字典、码表和唯一释义；重跑字段闭包与九 Profile。 |
-| G07 外部上下文 | `o_Diagnose` 已定向发现并通过受信 `T_TradeNo` FK 提供诊断/科室候选；`yb_mzjyxx_mz` 提供就诊/结算交叉键与时间候选。但可信 `encounter_id → T_TradeNo`、主诊断/科室规则、政策地区/机构/专项资格仍未签认。[来源: “键与关系”、T4-B02、T5-B01、T5-B04、本次定向 discovery] | 数据负责人、HIS/主数据负责人、政策知识负责人、医保办负责人 | 签认各外部源、键、基数、同水位抽取和权限边界；注入已发布政策证据后重跑闭包，禁止运行时临时跨源 JOIN。 |
-| G08 六指标五维度 | 六指标为 0 `verified` / 3 `candidate`（执行阻断）/ 3 `blocked`；五维度为 3 `candidate`（执行阻断）/ 2 `blocked`。[来源: Task 5 六指标表、五维度表、T5-B01 至 T5-B06] | 医保办负责人、数据负责人 | 逐项签认定义、公式、维度、时间和执行门禁；逐题复核 Q01–Q50 后才可转可信问题库。 |
+| G04 费用明细源（技术证据已闭合） | v3 已发布 `dbo.o_FeeItem→mz_fee_item` 及受控一对多关系；替代候选 `yb_mzfymx_mz` 总量 `<10` 且不能关联主交易。[来源: 2026-08-28 自主语义发现补证] | 医保办负责人、数据负责人 | 技术选型不再反复评估；随 G03 完成金额/票据验收并纳入 G13 正式签认。 |
+| G05 状态与退费链（部分补证） | `v_T_State_BJ` 覆盖当前全部观测交易状态码，国家结算/退费/部分红冲字段有源说明；`o_FeeItem.State`、组合有效规则、原/退交易关系和净额化仍未签认。[来源: T5-B02、2026-08-28 自主语义发现补证] | 医保办负责人、数据负责人 | 将现有源视图登记为版本化值域；只签认组合状态机、关系键、保留/抵销/替换规则并回归。 |
+| G06 冲突字段语义（大部补证） | 源字典已明确 `T_JCPay=军残保险`，多数 `TB_*`/`TA_*` 为交易前/后累计；仅 `TA_MZTimes` 等少数字段和金额成员关系仍有歧义。[来源: 2026-08-28 自主语义发现补证] | 医保办负责人、数据负责人 | 只对剩余歧义字段和金额成员关系签认，不再要求提交整包字段字典。 |
+| G07 外部上下文（部分补证） | `o_Diagnose` 受信 FK 覆盖全部交易的诊断/科室；`T_MdtrtID` 已证实为就诊ID并显示一对多，但仅覆盖 261/592 笔；机构等级值域当前观测值全覆盖。缺失就诊ID补全、主诊断/组织映射、政策地区/登录机构/专项资格仍未签认。[来源: T4-B02、T5-B01、T5-B04、2026-08-28 自主语义发现补证] | 数据负责人、HIS/主数据负责人、政策知识负责人、医保办负责人 | 决定缺失就诊ID和就诊时间的可信来源；签认主诊断、组织映射、同水位抽取与政策上下文，禁止运行时临时跨源 JOIN。 |
+| G08 六指标五维度（查询引擎已闭合） | v3 查询模型、确定性 Planner/编译器及 88 个 Skill 依赖已验证；六个运营派生指标尚未发布，指标/维度业务口径仍沿用 0 `verified` / 3 `candidate` / 3 `blocked` 与 3 `candidate` / 2 `blocked`。[来源: Task 5、2026-08-28 自主语义发现补证] | 医保办负责人、数据负责人 | 不再开发第二套查询引擎；逐项签认并在现有 Registry 发布六指标/五维度，逐题复核 Q01–Q50。 |
 | G09 增量与删除捕获 | 无可靠游标、删除 tombstone、CDC/Change Tracking 或等价变更日志。[来源: T6-B01 至 T6-B02] | 数据负责人、源系统/数据库负责人 | 提供含提交顺序、操作类型、键、删除、事务边界和保留期的变更序列；重跑迟到、重叠、回放和退费/冲正捕获验证。 |
-| G10 新鲜画像与容量基线 | Task 1 两表均命中 discovery 检查点，尚无新鲜全量画像；完整最近 30 个业务日、当前最近一日、峰值和三年容量输入也未成立。[来源: T1-B02、T6-B03 至 T6-B04] | 数据负责人、基础设施/容量负责人 | 在批准流程生成可审计的新鲜全量画像；以同一新鲜一致水位按签认时间口径补齐 30 个完整业务日及已知高峰参数，再测返回行数与 P50/P95。 |
+| G10 新鲜画像与容量基线（部分补证） | 2026-08-28 已完成零样例定向复查和当前全量键/覆盖/金额聚合；但源数据仍不足以形成完整最近 30 个业务日、当前最近一日、峰值和三年容量输入。[来源: 2026-08-28 自主语义发现补证、T6-B03 至 T6-B04] | 数据负责人、基础设施/容量负责人 | 不再重复索要字段画像；仅需确认生产覆盖起点/回补/留存和高峰参数，再按签认时间口径测返回行数与 P50/P95。 |
 | G11 最小只读权限 | 当前主体具写权限，不满足专用只读账号门禁。[来源: T1-B01、T6-B04] | 数据库负责人、信息安全负责人、数据负责人 | 提供专用只读账号或等价隔离通道；重新留存脱敏主体指纹及 SELECT/写权限位。 |
 | G12 敏感字段与隐私阈值 | 高敏字段允许白名单、用途和脱敏验证未建立；低频单元格、组合维度和二次推断阈值也未批准。[来源: T1-B04、T4-B04、T5-B05] | 信息安全/隐私负责人、数据负责人 | 签认敏感字段白名单、用途、脱敏验证、阈值和组合规则；在一致性快照下建立新审计批次，继续禁止未授权字段和精确小桶。 |
 | G13 人工签认 | 医保办负责人、数据负责人均未实际签认；经办票据和隐私边界也待签认。[来源: 下方签认表] | 医保办负责人、数据负责人；相关经办人与信息安全/隐私负责人 | 仅在 G01–G12 证据齐备后，以工号或组织身份标识签认；随后重新执行 Task 7，不补录或代签姓名、工号、日期。 |
@@ -1941,7 +1959,7 @@ Task 6 执行结果：**DONE_WITH_BLOCKERS**。未用全表轮询、父交易业
 - [来源: 根 `AGENTS.md` 安全约束、Task 5 统一终态契约] 所有公开终态/动作均保留 `citations[]` 与 `uncertainties[]` 且至少一项非空；`complete`/`partial` 还须至少 1 条数据来源 citation。权限、质量、数据和高风险失败关闭及 SSE 终态映射不变。
 - [来源: Task 4 隐私抑制规则、本次全文复核] 状态、专项、日期及字段组合的 1–9 人/笔小桶统一显示为 `<10（精确值已抑制）` 或整组撤下；其关联金额、明细及可反推互补桶同步抑制，整体总数和无敏感分类的审计结论保留。
 
-Task 7 执行结果：**REVIEW_EXECUTED / ADMISSION_BLOCKED**。G01 技术证据已闭合；下一步仅为 G02–G13 补证据、完成真实签认并重新执行 P0 门禁；不是进入 P1。
+Task 7 执行结果：**REVIEW_EXECUTED / ADMISSION_BLOCKED**。G01、G04 技术证据已闭合，G05–G08 与 G10 已由自主发现显著收敛；下一步只处理表中仍需业务决定或外部系统动作的部分，并完成真实签认后重跑 P0 门禁。不是进入 P1，也不再向医院索要系统内已有字段、码表或查询模型资料。
 
 | 待签认角色 | 签认状态 | 签认 |
 |---|---|---|
