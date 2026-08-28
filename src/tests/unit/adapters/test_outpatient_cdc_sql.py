@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+from src.adapters.insurance_interface.outpatient_cdc import OUTPATIENT_SOURCE_SPECS
+
 
 SCRIPT = Path(__file__).parents[4] / "scripts" / "enable_outpatient_cdc.sql"
 
@@ -28,6 +30,10 @@ def test_outpatient_cdc_enablement_is_fixed_and_read_only_for_business_data() ->
     assert set(captured) == {"o_Trade", "o_FeeItem", "o_Diagnose"}
     assert {name: len(columns.split(",")) for name, columns in captured.items()} == {
         "o_Trade": 87, "o_FeeItem": 20, "o_Diagnose": 10,
+    }
+    assert captured == {
+        spec.table_name: ",".join(spec.columns)
+        for spec in OUTPATIENT_SOURCE_SPECS.values()
     }
     for sensitive_column in [
         "P_IDNo", "P_ICNo", "P_Name", "P_Birthday", "P_CardNo", "HisName", "HisCode",
