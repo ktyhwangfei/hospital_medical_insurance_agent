@@ -46,6 +46,8 @@
 
 ### Task 1：落地 Issue20 查询模型契约的最小子集
 
+**Status:** complete — `d0d70c4`
+
 **Files:**
 - Modify: `src/semantic_layer/models.py`
 - Modify: `src/semantic_layer/registry.py`
@@ -87,6 +89,8 @@ git commit -m "feat: 落地门诊语义查询模型契约"
 ```
 
 ### Task 2：提供受控、可审计的 SQL Server CDC 开通脚本
+
+**Status:** complete — `1520e61`
 
 **Files:**
 - Add: `scripts/enable_outpatient_cdc.sql`
@@ -138,6 +142,8 @@ git commit -m "feat: 增加门诊源表CDC开通契约"
 
 ### Task 3：实现单院门诊 SQL Server CDC 读取适配器
 
+**Status:** complete — `d90966f`
+
 **Files:**
 - Add: `src/adapters/insurance_interface/outpatient_cdc.py`
 - Modify: `src/runtime/discovery/semantic_source.py`
@@ -179,6 +185,8 @@ git commit -m "feat: 实现门诊SQL Server CDC读取"
 ```
 
 ### Task 4：建立 PostgreSQL 追加事件与原子当前投影
+
+**Status:** complete — `6f9d6b7`
 
 **Files:**
 - Add: `src/data_platform/storage/postgresql/outpatient_store.py`

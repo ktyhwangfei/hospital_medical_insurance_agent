@@ -14,7 +14,7 @@
 
 **当前阶段**：Issue #21 已完成分层验收；范围外存量失败见 §4–§5
 
-**门诊医保数据底座 P1（2026-08-28 已规划）**：P0 状态为 `complete`，P1 状态为 `planned`，当前执行点为 Task 1（落地 Issue20 查询模型契约的最小子集）。[P1 实施计划](docs/superpowers/plans/2026-08-28-outpatient-p1-near-real-time-data-foundation.md) 已把 D01–D12 收敛为 CDC → PostgreSQL 原子批次 → 现有 Semantic Registry 单一路径；CDC、专用只读账号和扫码/SSO 是实施开通项，不再重复字段发现或方案问卷。
+**门诊医保数据底座 P1（2026-08-28 实施中）**：P0 状态为 `complete`，P1 状态为 `in_progress`。Task 1–4 已完成：门诊查询模型契约、受控 CDC 开通脚本、SQL Server CDC 只读适配器和 PostgreSQL 原子发布存储分别提交为 `d0d70c4`、`1520e61`、`d90966f`、`6f9d6b7`；308 个 data_platform/门诊契约聚焦单元通过。当前检查点为 Task 5（同步编排、质量、退款链和诊断上下文）待开始。[P1 实施计划](docs/superpowers/plans/2026-08-28-outpatient-p1-near-real-time-data-foundation.md) 保持 CDC → PostgreSQL 原子批次 → 现有 Semantic Registry 单一路径；源库 CDC 尚未由 DBA 实际启用，未声明目标环境链路已可用。
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
