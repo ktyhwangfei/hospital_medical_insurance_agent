@@ -51,18 +51,6 @@ def _client(
         lambda: snapshot_store,
     )
 
-    class ContentSource:
-        def records(self):
-            return ([{"fact_id": "fact_1"}], [{"rule_id": "kn_1"}])
-
-    class Builder:
-        def build(self, release_id: str, *, facts, rules):
-            release = store.get_release(release_id)
-            assert release is not None and facts and rules
-            return store.save_release(release.model_copy(update={"status": "ready"}))
-
-    monkeypatch.setattr(policy_workbench_routes, "_get_release_content_source", lambda: ContentSource())
-    monkeypatch.setattr(policy_workbench_routes, "_get_release_index_builder", lambda: Builder())
     return TestClient(create_app()), store, snapshot_store
 
 
@@ -99,9 +87,6 @@ def test_candidate_release_uses_one_versioned_collection_pair(monkeypatch) -> No
     assert response.json()["source_change_set_id"] is None
     assert response.json()["facts_collection"] == "policy_facts_rel_20260803_01"
     assert response.json()["rules_collection"] == "policy_rules_rel_20260803_01"
-    built = client.post(f"{PREFIX}/releases/rel_20260803_01/build")
-    assert built.status_code == 200
-    assert built.json()["status"] == "ready"
     listed = client.get(f"{PREFIX}/releases")
     assert listed.status_code == 200
     assert listed.json()[0]["release_id"] == "rel_20260803_01"

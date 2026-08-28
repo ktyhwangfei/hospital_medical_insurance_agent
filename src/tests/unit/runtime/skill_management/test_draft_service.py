@@ -136,6 +136,22 @@ def test_create_from_template_omits_execution_contract_when_none():
     assert "execution_contract" not in draft.structured_config
 
 
+def test_create_from_template_persists_output_schema():
+    service = _service()
+    output_schema = {
+        "type": "object",
+        "properties": {"amount": {"type": "number"}},
+    }
+    draft = service.create_from_template(
+        skill_id="schema_skill",
+        skill_name="Schema Skill",
+        created_by="u",
+        output_schema=output_schema,
+    )
+
+    assert draft.structured_config["schemas"]["output"] == output_schema
+
+
 # ── 复制 ──────────────────────────────────────────────────────────
 
 

@@ -246,7 +246,10 @@ def test_runs_and_steps_are_append_only(store) -> None:
 def test_recompilation_keeps_ordered_trace_history_and_snapshots(store) -> None:
     for version in (1, 2):
         run_id = f"run_{version}"
-        store.create_run(run(run_id))
+        store.create_run(run(
+            run_id,
+            started_at=datetime(2026, 8, 11, version, tzinfo=timezone.utc),
+        ))
         store.append_step(run_id, step(run_id, 1, "CANONICALIZE"))
         store.append_step(run_id, step(run_id, 2, "VALIDATE"))
         store.finish_run(run_id, status="PASS", metrics={"version": version})
