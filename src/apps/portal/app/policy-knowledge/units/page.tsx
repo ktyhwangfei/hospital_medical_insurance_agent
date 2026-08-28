@@ -267,6 +267,9 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return n / (a.size + b.size - n)
 }
 function detectDupLeaves(leaves: ClauseNode[], byId: Map<string, ClauseNode>): { dupSet: Set<string>; partnerMap: Map<string, string[]> } {
+  // 超大文档护栏：O(n²) 两两比较在万级叶子上卡死浏览器（121KB 文档 10135 叶 → 亿次 bigram 集合运算）。
+  // 超过 2000 叶子只保留 hash 精确去重，关闭近义标记（成本与收益不匹）。hash 去重在上方 keptLeaves 已做。
+  if (leaves.length > 2000) return { dupSet: new Set(), partnerMap: new Map() }
   const items = leaves.map((l) => leafAndPath(l, byId))
   const dup = new Set<string>()
   const partnerMap = new Map<string, string[]>()
