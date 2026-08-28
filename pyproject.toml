@@ -31,6 +31,8 @@ dev = [
     "redis>=8.0.0",
     "sqlalchemy>=2.0.50",
     "uvicorn>=0.48.0",
+    "fakeredis>=2.37.1",
+    "respx>=0.23.1",
 ]
 
 [tool.pytest.ini_options]
