@@ -18,7 +18,13 @@ from src.semantic_layer.models import (
     BusinessDomain,
     BusinessObject,
     ObjectRelation,
+    PreferredRelationPath,
     Metric,
+    SemanticDataset,
+    DatasetKey,
+    SemanticField,
+    DatasetRelation,
+    DataQualityRule,
     ObjectVersionMetric,
     BusinessObjectVersion,
     ValueDomain,
@@ -51,6 +57,7 @@ CREATE TABLE IF NOT EXISTS semantic_objects (
     source_object VARCHAR(256),
     source_adapter_port VARCHAR(256),
     relations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    preferred_relation_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
     version VARCHAR(32) NOT NULL DEFAULT '1.0',
     status VARCHAR(32) NOT NULL DEFAULT 'draft',
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -84,10 +91,26 @@ CREATE TABLE IF NOT EXISTS semantic_metrics (
     indexed BOOLEAN NOT NULL DEFAULT FALSE,
     extraction_hint TEXT,
     schema_version INTEGER NOT NULL DEFAULT 1,
+    fact_field_code VARCHAR(256),
+    aggregation VARCHAR(32),
+    expression TEXT,
+    dependencies JSONB NOT NULL DEFAULT '[]'::jsonb,
+    non_additive_dimensions JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_semantic_metrics_object ON semantic_metrics(object_code);
+
+-- 查询模型元数据（Dataset/Key/Field/Relation/QualityRule 共用受控 JSON 载体）
+CREATE TABLE IF NOT EXISTS semantic_query_metadata (
+    kind VARCHAR(32) NOT NULL,
+    code VARCHAR(256) NOT NULL,
+    object_code VARCHAR(64) NOT NULL REFERENCES semantic_objects(object_code) ON DELETE CASCADE,
+    payload JSONB NOT NULL,
+    PRIMARY KEY (kind, code)
+);
+CREATE INDEX IF NOT EXISTS idx_semantic_query_metadata_object
+    ON semantic_query_metadata(object_code, kind);
 
 -- 值域
 CREATE TABLE IF NOT EXISTS semantic_value_domains (
@@ -118,6 +141,7 @@ CREATE TABLE IF NOT EXISTS semantic_object_versions (
     version VARCHAR(32) NOT NULL,
     snapshot JSONB NOT NULL,
     metrics JSONB NOT NULL DEFAULT '[]'::jsonb,
+    query_model JSONB NOT NULL DEFAULT '{}'::jsonb,
     published_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     published_by VARCHAR(128),
     changelog TEXT,
@@ -147,6 +171,9 @@ def _row_to_object(row: dict) -> BusinessObject:
     if isinstance(relations_raw, str):
         relations_raw = json.loads(relations_raw)
     relations = [ObjectRelation(**r) for r in relations_raw] if relations_raw else []
+    preferred_raw = row.get("preferred_relation_paths", [])
+    if isinstance(preferred_raw, str):
+        preferred_raw = json.loads(preferred_raw)
     return BusinessObject(
         object_code=row["object_code"],
         domain_code=row["domain_code"],
@@ -156,6 +183,7 @@ def _row_to_object(row: dict) -> BusinessObject:
         source_object=row.get("source_object"),
         source_adapter_port=row.get("source_adapter_port"),
         relations=relations,
+        preferred_relation_paths=[PreferredRelationPath(**item) for item in (preferred_raw or [])],
         version=row.get("version", "1.0"),
         status=row.get("status", "draft"),
         current_version=row.get("current_version"),
@@ -168,6 +196,12 @@ def _row_to_metric(row: dict) -> Metric:
     transformation = row.get("transformation")
     if isinstance(transformation, str):
         transformation = json.loads(transformation)
+    dependencies = row.get("dependencies") or []
+    non_additive = row.get("non_additive_dimensions") or []
+    if isinstance(dependencies, str):
+        dependencies = json.loads(dependencies)
+    if isinstance(non_additive, str):
+        non_additive = json.loads(non_additive)
     return Metric(
         metric_code=row["metric_code"],
         object_code=row["object_code"],
@@ -192,6 +226,11 @@ def _row_to_metric(row: dict) -> Metric:
         indexed=bool(row.get("indexed", False)),
         extraction_hint=row.get("extraction_hint"),
         schema_version=int(row.get("schema_version", 1)),
+        fact_field_code=row.get("fact_field_code"),
+        aggregation=row.get("aggregation"),
+        expression=row.get("expression"),
+        dependencies=list(dependencies),
+        non_additive_dimensions=list(non_additive),
         created_at=row.get("created_at", _now()),
         updated_at=row.get("updated_at", _now()),
     )
@@ -229,12 +268,20 @@ def _row_to_object_version(row: dict) -> BusinessObjectVersion:
     if isinstance(metrics_raw, str):
         metrics_raw = json.loads(metrics_raw)
     metrics = [ObjectVersionMetric(**m) for m in (metrics_raw or [])]
+    query_model = row.get("query_model") or {}
+    if isinstance(query_model, str):
+        query_model = json.loads(query_model)
     return BusinessObjectVersion(
         version_id=row["version_id"],
         object_code=row["object_code"],
         version=row["version"],
         snapshot=snapshot or {},
         metrics=metrics,
+        datasets=[SemanticDataset(**item) for item in query_model.get("datasets", [])],
+        keys=[DatasetKey(**item) for item in query_model.get("keys", [])],
+        fields=[SemanticField(**item) for item in query_model.get("fields", [])],
+        relations=[DatasetRelation(**item) for item in query_model.get("relations", [])],
+        quality_rules=[DataQualityRule(**item) for item in query_model.get("quality_rules", [])],
         published_at=row.get("published_at", _now()),
         published_by=row.get("published_by"),
         changelog=row.get("changelog"),
@@ -262,8 +309,15 @@ class PostgresRegistryStore:
 
         upsert 语义，每次进程启动安全重复执行。"""
         try:
-            from src.semantic_layer.seed import ensure_yb_dictionary_mappings
+            from src.semantic_layer.seed import (
+                ensure_outpatient_query_model,
+                ensure_yb_dictionary_mappings,
+                publish_seed_outpatient_query_object,
+            )
             ensure_yb_dictionary_mappings(self)
+            ensure_outpatient_query_model(self)
+            from src.semantic_layer.registry import SemanticRegistry
+            publish_seed_outpatient_query_object(SemanticRegistry(self))
         except Exception:
             logger.warning("ensure_yb_dictionary_mappings 失败，跳过", exc_info=True)
 
@@ -299,6 +353,18 @@ class PostgresRegistryStore:
             self._client.execute(
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1"
             )
+            self._client.execute(
+                "ALTER TABLE semantic_objects ADD COLUMN IF NOT EXISTS preferred_relation_paths JSONB NOT NULL DEFAULT '[]'::jsonb"
+            )
+            for statement in [
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS fact_field_code VARCHAR(256)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS aggregation VARCHAR(32)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS expression TEXT",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS dependencies JSONB NOT NULL DEFAULT '[]'::jsonb",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS non_additive_dimensions JSONB NOT NULL DEFAULT '[]'::jsonb",
+                "ALTER TABLE semantic_object_versions ADD COLUMN IF NOT EXISTS query_model JSONB NOT NULL DEFAULT '{}'::jsonb",
+            ]:
+                self._client.execute(statement)
             logger.info("PostgresRegistryStore: standard_values 列已确认存在")
             logger.debug("PostgresRegistryStore: 表结构已确认")
         except Exception as e:
@@ -315,8 +381,13 @@ class PostgresRegistryStore:
         seed_settlement_domain(self)
         # P8.3：种子后发布 zcgz，解锁提取契约（build_extraction_schema 只收 published）
         from src.semantic_layer.registry import SemanticRegistry
-        from src.semantic_layer.seed import publish_seed_policy_object
-        publish_seed_policy_object(SemanticRegistry(self))
+        from src.semantic_layer.seed import (
+            publish_seed_outpatient_query_object,
+            publish_seed_policy_object,
+        )
+        registry = SemanticRegistry(self)
+        publish_seed_policy_object(registry)
+        publish_seed_outpatient_query_object(registry)
 
     def close(self) -> None:
         if self._client is not None:
@@ -375,12 +446,16 @@ class PostgresRegistryStore:
         relations_json = json.dumps(
             [r.model_dump() for r in obj.relations], ensure_ascii=False
         )
+        preferred_json = json.dumps(
+            [item.model_dump() for item in obj.preferred_relation_paths], ensure_ascii=False
+        )
         client.execute(
             """INSERT INTO semantic_objects
                (object_code, domain_code, name, definition, identifier,
-                source_object, source_adapter_port, relations, version, status,
+                source_object, source_adapter_port, relations, preferred_relation_paths,
+                version, status,
                 current_version, created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (object_code) DO UPDATE SET
                    domain_code = EXCLUDED.domain_code,
                    name = EXCLUDED.name,
@@ -389,13 +464,14 @@ class PostgresRegistryStore:
                    source_object = EXCLUDED.source_object,
                    source_adapter_port = EXCLUDED.source_adapter_port,
                    relations = EXCLUDED.relations,
+                   preferred_relation_paths = EXCLUDED.preferred_relation_paths,
                    version = EXCLUDED.version,
                    status = EXCLUDED.status,
                    current_version = EXCLUDED.current_version,
                    updated_at = EXCLUDED.updated_at""",
             (obj.object_code, obj.domain_code, obj.name, obj.definition,
              obj.identifier, obj.source_object, obj.source_adapter_port,
-             relations_json, obj.version, obj.status, obj.current_version,
+             relations_json, preferred_json, obj.version, obj.status, obj.current_version,
              obj.created_at, obj.updated_at),
         )
 
@@ -437,6 +513,8 @@ class PostgresRegistryStore:
             json.dumps(metric.transformation, ensure_ascii=False)
             if metric.transformation else None
         )
+        dependencies_json = json.dumps(metric.dependencies, ensure_ascii=False)
+        non_additive_json = json.dumps(metric.non_additive_dimensions, ensure_ascii=False)
         client.execute(
             """INSERT INTO semantic_metrics
                (metric_code, object_code, name, definition, metric_type,
@@ -445,8 +523,9 @@ class PostgresRegistryStore:
                 transformation, value_domain, importance,
                 usage_count, quality_score, version, status,
                 metric_kind, indexed, extraction_hint, schema_version,
+                fact_field_code, aggregation, expression, dependencies, non_additive_dimensions,
                 created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (metric_code) DO UPDATE SET
                    object_code = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.object_code ELSE semantic_metrics.object_code END,
                    name = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.name ELSE semantic_metrics.name END,
@@ -469,6 +548,11 @@ class PostgresRegistryStore:
                    metric_kind = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.metric_kind ELSE semantic_metrics.metric_kind END,
                    indexed = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.indexed ELSE semantic_metrics.indexed END,
                    extraction_hint = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.extraction_hint ELSE semantic_metrics.extraction_hint END,
+                   fact_field_code = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.fact_field_code ELSE semantic_metrics.fact_field_code END,
+                   aggregation = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.aggregation ELSE semantic_metrics.aggregation END,
+                   expression = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.expression ELSE semantic_metrics.expression END,
+                   dependencies = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.dependencies ELSE semantic_metrics.dependencies END,
+                   non_additive_dimensions = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.non_additive_dimensions ELSE semantic_metrics.non_additive_dimensions END,
                    schema_version = GREATEST(semantic_metrics.schema_version, EXCLUDED.schema_version),
                    updated_at = EXCLUDED.updated_at""",
             (metric.metric_code, metric.object_code, metric.name, metric.definition,
@@ -478,6 +562,8 @@ class PostgresRegistryStore:
              transformation_json, metric.value_domain, metric.importance,
              metric.usage_count, metric.quality_score, metric.version, metric.status,
              metric.metric_kind, metric.indexed, metric.extraction_hint, metric.schema_version,
+             metric.fact_field_code, metric.aggregation, metric.expression,
+             dependencies_json, non_additive_json,
              metric.created_at, metric.updated_at),
         )
 
@@ -533,6 +619,133 @@ class PostgresRegistryStore:
         client.execute(
             "DELETE FROM semantic_metrics WHERE metric_code = %s", (metric_code,)
         )
+
+    # ═══════════════════════════════════════════════════════════════
+    # Query model metadata
+    # ═══════════════════════════════════════════════════════════════
+
+    _QUERY_MODEL_TYPES = {
+        "dataset": SemanticDataset,
+        "key": DatasetKey,
+        "field": SemanticField,
+        "relation": DatasetRelation,
+        "quality_rule": DataQualityRule,
+    }
+
+    def _save_query_item(self, kind: str, code: str, object_code: str, item) -> None:
+        self._get_client().execute(
+            """INSERT INTO semantic_query_metadata(kind, code, object_code, payload)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT(kind, code) DO UPDATE SET
+                   object_code = EXCLUDED.object_code,
+                   payload = EXCLUDED.payload""",
+            (kind, code, object_code, json.dumps(item.model_dump(mode="json"), ensure_ascii=False)),
+        )
+
+    def _get_query_item(self, kind: str, code: str):
+        rows = self._get_client().execute(
+            "SELECT payload FROM semantic_query_metadata WHERE kind = %s AND code = %s",
+            (kind, code),
+        )
+        if not rows:
+            return None
+        payload = rows[0]["payload"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        return self._QUERY_MODEL_TYPES[kind](**payload)
+
+    def _list_query_items(self, kind: str, object_code: Optional[str] = None):
+        if object_code:
+            rows = self._get_client().execute(
+                "SELECT payload FROM semantic_query_metadata WHERE kind = %s AND object_code = %s ORDER BY code",
+                (kind, object_code),
+            )
+        else:
+            rows = self._get_client().execute(
+                "SELECT payload FROM semantic_query_metadata WHERE kind = %s ORDER BY code",
+                (kind,),
+            )
+        result = []
+        for row in rows:
+            payload = row["payload"]
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            result.append(self._QUERY_MODEL_TYPES[kind](**payload))
+        return result
+
+    def _delete_query_item(self, kind: str, code: str) -> None:
+        self._get_client().execute(
+            "DELETE FROM semantic_query_metadata WHERE kind = %s AND code = %s",
+            (kind, code),
+        )
+
+    def save_dataset(self, dataset: SemanticDataset) -> None:
+        self._save_query_item("dataset", dataset.dataset_code, dataset.object_code, dataset)
+
+    def get_dataset(self, dataset_code: str) -> Optional[SemanticDataset]:
+        return self._get_query_item("dataset", dataset_code)
+
+    def list_datasets(self, object_code: Optional[str] = None) -> list[SemanticDataset]:
+        return self._list_query_items("dataset", object_code)
+
+    def delete_dataset(self, dataset_code: str) -> None:
+        self._delete_query_item("dataset", dataset_code)
+
+    def _dataset_object_code(self, dataset_code: str) -> str:
+        dataset = self.get_dataset(dataset_code)
+        if dataset is None:
+            raise ValueError(f"dataset '{dataset_code}' 不存在")
+        return dataset.object_code
+
+    def save_dataset_key(self, key: DatasetKey) -> None:
+        self._save_query_item("key", key.key_code, self._dataset_object_code(key.dataset_code), key)
+
+    def get_dataset_key(self, key_code: str) -> Optional[DatasetKey]:
+        return self._get_query_item("key", key_code)
+
+    def list_dataset_keys(self, dataset_code: Optional[str] = None, object_code: Optional[str] = None) -> list[DatasetKey]:
+        values = self._list_query_items("key", object_code)
+        return [item for item in values if item.dataset_code == dataset_code] if dataset_code else values
+
+    def delete_dataset_key(self, key_code: str) -> None:
+        self._delete_query_item("key", key_code)
+
+    def save_field(self, field: SemanticField) -> None:
+        self._save_query_item("field", field.field_code, self._dataset_object_code(field.dataset_code), field)
+
+    def get_field(self, field_code: str) -> Optional[SemanticField]:
+        return self._get_query_item("field", field_code)
+
+    def list_fields(self, dataset_code: Optional[str] = None, object_code: Optional[str] = None) -> list[SemanticField]:
+        values = self._list_query_items("field", object_code)
+        return [item for item in values if item.dataset_code == dataset_code] if dataset_code else values
+
+    def delete_field(self, field_code: str) -> None:
+        self._delete_query_item("field", field_code)
+
+    def save_dataset_relation(self, relation: DatasetRelation) -> None:
+        self._save_query_item("relation", relation.relation_code, relation.object_code, relation)
+
+    def get_dataset_relation(self, relation_code: str) -> Optional[DatasetRelation]:
+        return self._get_query_item("relation", relation_code)
+
+    def list_dataset_relations(self, object_code: Optional[str] = None) -> list[DatasetRelation]:
+        return self._list_query_items("relation", object_code)
+
+    def delete_dataset_relation(self, relation_code: str) -> None:
+        self._delete_query_item("relation", relation_code)
+
+    def save_quality_rule(self, rule: DataQualityRule) -> None:
+        self._save_query_item("quality_rule", rule.rule_code, rule.object_code, rule)
+
+    def get_quality_rule(self, rule_code: str) -> Optional[DataQualityRule]:
+        return self._get_query_item("quality_rule", rule_code)
+
+    def list_quality_rules(self, object_code: Optional[str] = None) -> list[DataQualityRule]:
+        return self._list_query_items("quality_rule", object_code)
+
+    def delete_quality_rule(self, rule_code: str) -> None:
+        self._delete_query_item("quality_rule", rule_code)
 
     # ═══════════════════════════════════════════════════════════════
     # Value Domain
@@ -618,13 +831,20 @@ class PostgresRegistryStore:
         snapshot_json = json.dumps(version.snapshot, ensure_ascii=False)
         metrics_json = json.dumps(
             [m.model_dump() for m in version.metrics], ensure_ascii=False)
+        query_model_json = json.dumps({
+            "datasets": [item.model_dump(mode="json") for item in version.datasets],
+            "keys": [item.model_dump(mode="json") for item in version.keys],
+            "fields": [item.model_dump(mode="json") for item in version.fields],
+            "relations": [item.model_dump(mode="json") for item in version.relations],
+            "quality_rules": [item.model_dump(mode="json") for item in version.quality_rules],
+        }, ensure_ascii=False)
         client.execute(
             """INSERT INTO semantic_object_versions
-               (version_id, object_code, version, snapshot, metrics,
+               (version_id, object_code, version, snapshot, metrics, query_model,
                 published_at, published_by, changelog)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (version.version_id, version.object_code, version.version,
-             snapshot_json, metrics_json, version.published_at,
+             snapshot_json, metrics_json, query_model_json, version.published_at,
              version.published_by, version.changelog),
         )
 
