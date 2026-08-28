@@ -14,7 +14,7 @@
 
 **当前阶段**：Issue #21 已完成分层验收；范围外存量失败见 §4–§5
 
-**门诊医保数据契约 P0（2026-08-28 已确认）**：状态为 `complete`，P1 为 `ready_for_planning`。`bjybdb`、语义层和 Issue20 证据探查已完成，[P0 预填设计决策稿](docs/reviews/2026-08-28-outpatient-p0-prefilled-design-decision.md) 的 D01–D12 已由用户全部确认；CDC、专用只读账号和扫码/SSO 作为后续实施开通项，不再阻断 P1 规划。
+**门诊医保数据底座 P1（2026-08-28 已规划）**：P0 状态为 `complete`，P1 状态为 `planned`，当前执行点为 Task 1（落地 Issue20 查询模型契约的最小子集）。[P1 实施计划](docs/superpowers/plans/2026-08-28-outpatient-p1-near-real-time-data-foundation.md) 已把 D01–D12 收敛为 CDC → PostgreSQL 原子批次 → 现有 Semantic Registry 单一路径；CDC、专用只读账号和扫码/SSO 是实施开通项，不再重复字段发现或方案问卷。
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
