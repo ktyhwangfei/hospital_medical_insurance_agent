@@ -49,3 +49,13 @@ def test_outpatient_cdc_enablement_is_fixed_and_read_only_for_business_data() ->
     assert "cdc.change_tables" in sql
     assert "start_lsn" in sql
     assert "msdb.dbo.cdc_jobs" in sql
+
+
+def test_cdc_script_targets_current_validated_database() -> None:
+    sql = SCRIPT.read_text(encoding="utf-8")
+
+    assert "DB_NAME() <> N'bjyb'" not in sql
+    assert "Required outpatient source tables are missing" in sql
+    assert "sys.sp_cdc_enable_db" in sql
+    assert "sys.sp_cdc_enable_table" in sql
+    assert "DROP " not in sql.upper()

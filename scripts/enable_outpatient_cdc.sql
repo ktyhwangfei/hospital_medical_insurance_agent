@@ -1,11 +1,5 @@
 SET NOCOUNT ON;
 
-IF DB_NAME() <> N'bjyb'
-BEGIN
-    RAISERROR(N'Run this script only in the bjyb database.', 16, 1);
-    RETURN;
-END;
-
 IF OBJECT_ID(N'dbo.o_Trade', N'U') IS NULL
    OR OBJECT_ID(N'dbo.o_FeeItem', N'U') IS NULL
    OR OBJECT_ID(N'dbo.o_Diagnose', N'U') IS NULL

@@ -24,7 +24,20 @@ class _FakeCursor:
     def execute(self, sql, *params):
         self.connection.calls.append((sql, params))
         self.rows = []
-        if "INFORMATION_SCHEMA.COLUMNS" in sql:
+        if "SELECT is_cdc_enabled" in sql:
+            self.description = [("is_cdc_enabled",)]
+            self.rows = [(self.connection.cdc_enabled,)]
+        elif "cdc.captured_columns" in sql:
+            self.description = [("capture_instance",), ("column_name",)]
+            self.rows = [
+                (capture, column)
+                for capture, columns in self.connection.captured_columns.items()
+                for column in columns
+            ]
+        elif "msdb.dbo.cdc_jobs" in sql:
+            self.description = [("retention",)]
+            self.rows = [(self.connection.retention_minutes,)]
+        elif "INFORMATION_SCHEMA.COLUMNS" in sql:
             self.description = [("TABLE_NAME",), ("COLUMN_NAME",)]
             self.rows = [
                 (spec.table_name, column)
@@ -81,6 +94,11 @@ class _FakeConnection:
         self.min_lsn = {capture: b"\x10" for capture in OUTPATIENT_SOURCE_SPECS}
         self.commit_time = datetime(2026, 8, 28, tzinfo=timezone.utc)
         self.missing_column = None
+        self.cdc_enabled = True
+        self.captured_columns = {
+            capture: spec.columns for capture, spec in OUTPATIENT_SOURCE_SPECS.items()
+        }
+        self.retention_minutes = 4320
         self.closed = False
 
     def cursor(self):
@@ -183,3 +201,30 @@ def test_outpatient_checkpoint_is_source_neutral() -> None:
 
     assert checkpoint.kind is CheckpointKind.LSN
     assert checkpoint.value == "0000002a"
+
+
+def test_probe_cdc_reports_waiting_dba_without_raw_error() -> None:
+    connection = _FakeConnection()
+    connection.cdc_enabled = False
+
+    result = SqlServerOutpatientCdcSource(lambda: connection).probe_cdc()
+
+    assert result.database_enabled is False
+    assert result.status == "waiting_dba"
+    assert result.safe_message == "数据库尚未开启 CDC"
+    assert connection.closed is True
+
+
+def test_probe_cdc_requires_all_captures_columns_and_retention() -> None:
+    connection = _FakeConnection()
+    ready = SqlServerOutpatientCdcSource(lambda: connection).probe_cdc()
+    assert ready.status == "ready"
+    assert ready.missing_captures == ()
+    assert ready.retention_minutes == 4320
+
+    connection = _FakeConnection()
+    connection.captured_columns.pop("dbo_o_Diagnose")
+    invalid = SqlServerOutpatientCdcSource(lambda: connection).probe_cdc()
+    assert invalid.status == "invalid"
+    assert invalid.missing_captures == ("dbo_o_Diagnose",)
+    assert "dbo_o_Diagnose" not in invalid.safe_message
