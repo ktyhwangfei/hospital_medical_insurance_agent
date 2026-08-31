@@ -16,12 +16,25 @@ from src.data_platform.outpatient_governance import (
     CdcEnablementStatus,
     ConnectionStatus,
     OutpatientDataSource,
+    OutpatientSyncJob,
+    SyncJobStatus,
     PostgresTargetStatus,
 )
 from src.security.data_source_credentials import (
     DataSourceCredentialVault,
     data_source_endpoint,
 )
+from src.data_platform.storage.postgresql.outpatient_governance_store import (
+    OutpatientGovernanceNotFoundError,
+)
+
+
+class CdcNotReadyError(RuntimeError):
+    pass
+
+
+class SyncJobInvalidStateError(RuntimeError):
+    pass
 
 
 class CreateDataSourceCommand(BaseModel):
@@ -92,6 +105,93 @@ class DataGovernanceService:
         self._store.create_source_with_credential(source, credential)
         return source
 
+    def list_sources(self) -> list[OutpatientDataSource]:
+        return [self._with_credential_status(source) for source in self._store.list_sources()]
+
+    def overview(self):
+        from src.runtime.api.data_governance_schemas import (
+            DataGovernanceOverview,
+            DataGovernanceSourceStatus,
+        )
+
+        sources = self.list_sources()
+        statuses = []
+        issues = []
+        recent_runs = []
+        latencies = []
+        running_jobs = 0
+        for source in sources:
+            try:
+                job = self._store.get_job(source.source_id)
+            except OutpatientGovernanceNotFoundError:
+                job = None
+            sync_status = self._outpatient_store.get_sync_status(source.source_id)
+            latency = sync_status.last_non_empty_latency_seconds
+            if latency is not None:
+                latencies.append(latency)
+            statuses.append(DataGovernanceSourceStatus.from_source(
+                source,
+                job,
+                quality_status=sync_status.quality_status,
+                latest_latency_seconds=latency,
+            ))
+            if job and job.status in {SyncJobStatus.READY, SyncJobStatus.RUNNING}:
+                running_jobs += 1
+            issues.extend(_source_issues(source, job, sync_status.quality_status))
+            recent_runs.extend(self._store.list_attempts(source.source_id, limit=5))
+        recent_runs.sort(key=lambda item: item.started_at, reverse=True)
+        return DataGovernanceOverview(
+            data_source_count=len(sources),
+            running_job_count=running_jobs,
+            issue_count=len(issues),
+            latest_latency_seconds=max(latencies) if latencies else None,
+            sources=statuses,
+            issues=issues,
+            recent_runs=recent_runs[:10],
+        )
+
+    def update_source_config(self, source_id: str, request, actor: str) -> OutpatientDataSource:
+        del actor
+        source = self._store.get_source(source_id)
+        now = datetime.now(timezone.utc)
+        changes = request.model_dump(exclude_none=True, exclude_unset=True)
+        endpoint_changed = bool({"host", "port", "database", "username"} & changes.keys())
+        updated = source.model_copy(update={
+            **changes,
+            **({
+                "connection_status": ConnectionStatus.UNKNOWN,
+                "cdc_status": CdcEnablementStatus.NOT_CHECKED,
+                "safe_probe_message": None,
+            } if endpoint_changed else {}),
+            "updated_at": now,
+        })
+        self._store.update_source(updated)
+        return self._with_credential_status(updated)
+
+    def rotate_credential(
+        self,
+        source_id: str,
+        credential_id: str,
+        password: str,
+        expected_revision: int,
+        actor: str,
+    ) -> OutpatientDataSource:
+        source = self._store.get_source(source_id)
+        if credential_id != source.credential_id:
+            raise SyncJobInvalidStateError("凭据标识与数据源不匹配")
+        endpoint = data_source_endpoint(
+            source.host, source.port, source.database, source.username
+        )
+        credential = self._vault.seal(
+            credential_id=credential_id,
+            password=password,
+            endpoint=endpoint,
+            actor=actor,
+            revision=expected_revision + 1,
+        )
+        self._store.rotate_credential(credential, expected_revision=expected_revision)
+        return source.model_copy(update={"credential_configured": True})
+
     def probe_connection(self, source_id: str) -> DataSourceConnectionProbe:
         source = self._store.get_source(source_id)
         checked_at = datetime.now(timezone.utc)
@@ -150,6 +250,99 @@ class DataGovernanceService:
         }))
         return result
 
+    def mark_waiting_dba(self, source_id: str, actor: str) -> None:
+        del actor
+        source = self._store.get_source(source_id)
+        if source.cdc_status is CdcEnablementStatus.READY:
+            return
+        now = datetime.now(timezone.utc)
+        self._store.update_source(source.model_copy(update={
+            "cdc_status": CdcEnablementStatus.WAITING_DBA,
+            "safe_probe_message": "等待医院 DBA 执行受控 CDC 脚本",
+            "updated_at": now,
+        }))
+
+    def get_job(self, source_id: str) -> OutpatientSyncJob:
+        return self._store.get_job(source_id)
+
+    def save_job_config(self, source_id: str, request, actor: str) -> OutpatientSyncJob:
+        del actor
+        from src.adapters.insurance_interface.outpatient_source import OutpatientSourceMode
+        self._store.get_source(source_id)
+        now = datetime.now(timezone.utc)
+        mode = OutpatientSourceMode(request.source_mode)
+        try:
+            current = self._store.get_job(source_id)
+        except OutpatientGovernanceNotFoundError:
+            if request.expected_revision != 1:
+                raise SyncJobInvalidStateError("首次保存同步任务时修订号必须为 1")
+            job = OutpatientSyncJob(
+                source_id=source_id,
+                source_mode=mode,
+                status=SyncJobStatus.DRAFT,
+                cdc_poll_interval_seconds=request.cdc_poll_interval_seconds,
+                schedule_interval_minutes=request.schedule_interval_minutes,
+                lookback_hours=request.lookback_hours,
+                reconcile_days=request.reconcile_days,
+                revision=1,
+                created_at=now,
+                updated_at=now,
+            )
+            self._store.save_job(job)
+            return job
+        mode_changed = current.source_mode != mode
+        if mode_changed and (
+            current.status not in {SyncJobStatus.DRAFT, SyncJobStatus.PAUSED}
+            or not request.confirm_mode_switch
+        ):
+            raise SyncJobInvalidStateError("切换同步模式需先暂停任务并明确确认")
+        job = current.model_copy(update={
+            "source_mode": mode,
+            "cdc_poll_interval_seconds": request.cdc_poll_interval_seconds,
+            "schedule_interval_minutes": request.schedule_interval_minutes,
+            "lookback_hours": request.lookback_hours,
+            "reconcile_days": request.reconcile_days,
+            "revision": current.revision + 1,
+            "baseline_required": current.baseline_required or mode_changed,
+            "updated_at": now,
+        })
+        self._store.save_job(job, expected_revision=request.expected_revision)
+        return job
+
+    def start_job(self, source_id: str, actor: str) -> OutpatientSyncJob:
+        del actor
+        job = self._store.get_job(source_id)
+        source = self._with_credential_status(self._store.get_source(source_id))
+        if not source.credential_configured:
+            raise SyncJobInvalidStateError("数据源凭据需重新提交")
+        if job.source_mode.value == "cdc" and source.cdc_status is not CdcEnablementStatus.READY:
+            raise CdcNotReadyError("CDC 尚未按受控模板开通")
+        now = datetime.now(timezone.utc)
+        return self._save_job_state(job, SyncJobStatus.READY, now, next_run_at=now)
+
+    def pause_job(self, source_id: str, actor: str) -> OutpatientSyncJob:
+        del actor
+        job = self._store.get_job(source_id)
+        return self._save_job_state(job, SyncJobStatus.PAUSED, datetime.now(timezone.utc))
+
+    def request_run_once(self, source_id: str, actor: str) -> OutpatientSyncJob:
+        del actor
+        job = self._store.get_job(source_id)
+        if job.status not in {SyncJobStatus.READY, SyncJobStatus.RUNNING}:
+            raise SyncJobInvalidStateError("只有已启用任务可以请求立即执行")
+        now = datetime.now(timezone.utc)
+        updated = job.model_copy(update={
+            "run_once_requested_at": now,
+            "revision": job.revision + 1,
+            "updated_at": now,
+        })
+        self._store.save_job(updated, expected_revision=job.revision)
+        return updated
+
+    def list_runs(self, source_id: str):
+        self._store.get_source(source_id)
+        return self._store.list_attempts(source_id)
+
     def postgres_target_status(self) -> PostgresTargetStatus:
         checked_at = datetime.now(timezone.utc)
         try:
@@ -186,6 +379,37 @@ class DataGovernanceService:
             ),
         )
 
+    def _with_credential_status(self, source: OutpatientDataSource) -> OutpatientDataSource:
+        try:
+            credential = self._store.get_credential(source.credential_id)
+        except OutpatientGovernanceNotFoundError:
+            configured = False
+        else:
+            configured = self._vault.is_bound(
+                credential,
+                endpoint=data_source_endpoint(
+                    source.host, source.port, source.database, source.username
+                ),
+            )
+        return source.model_copy(update={"credential_configured": configured})
+
+    def _save_job_state(
+        self,
+        job: OutpatientSyncJob,
+        status: SyncJobStatus,
+        now: datetime,
+        *,
+        next_run_at: datetime | None = None,
+    ) -> OutpatientSyncJob:
+        updated = job.model_copy(update={
+            "status": status,
+            "next_run_at": next_run_at if next_run_at is not None else job.next_run_at,
+            "revision": job.revision + 1,
+            "updated_at": now,
+        })
+        self._store.save_job(updated, expected_revision=job.revision)
+        return updated
+
 
 def _safe_connection_error(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, SourceContractMismatchError):
@@ -196,3 +420,38 @@ def _safe_connection_error(exc: Exception) -> tuple[str, str]:
     if any(marker in message for marker in ("login failed", "authentication", "28000", "18456")):
         return "authentication_failed", "账号或密码验证失败"
     return "connection_failed", "连接失败"
+
+
+def _source_issues(source, job, quality_status):
+    from src.runtime.api.data_governance_schemas import DataGovernanceIssue
+
+    issues = []
+    if not source.credential_configured:
+        issues.append(DataGovernanceIssue(
+            code="credential_unavailable",
+            severity="blocking",
+            message="数据源凭据未配置或端点已变更",
+            source_id=source.source_id,
+        ))
+    if source.connection_status is ConnectionStatus.ERROR:
+        issues.append(DataGovernanceIssue(
+            code="connection_error",
+            severity="blocking",
+            message="数据源连接异常",
+            source_id=source.source_id,
+        ))
+    if job and job.status in {SyncJobStatus.DEGRADED, SyncJobStatus.FAILED}:
+        issues.append(DataGovernanceIssue(
+            code="sync_job_error",
+            severity="blocking",
+            message="同步任务需要处理",
+            source_id=source.source_id,
+        ))
+    if quality_status == "blocked":
+        issues.append(DataGovernanceIssue(
+            code="quality_blocked",
+            severity="blocking",
+            message="最近批次未通过数据质量校验",
+            source_id=source.source_id,
+        ))
+    return issues

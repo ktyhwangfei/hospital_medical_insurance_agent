@@ -64,6 +64,10 @@ class DataSourceCredentialVault:
         except (InvalidToken, UnicodeDecodeError, UnicodeEncodeError) as exc:
             raise DataSourceCredentialError("数据源凭据无法解密") from exc
 
+    @staticmethod
+    def is_bound(credential: DataSourceCredential, *, endpoint: str) -> bool:
+        return credential.endpoint_fingerprint == _fingerprint(endpoint)
+
 
 def _fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
