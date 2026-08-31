@@ -32,6 +32,10 @@ class InMemorySessionStorage:
                 session_id=session_id,
                 user_id=user_id,
                 role=role or existing.role,
+                # 生命周期状态不随活跃刷新重置（Issue #30 §3.2）
+                status=existing.status,
+                status_reason=existing.status_reason,
+                status_updated_at=existing.status_updated_at,
                 created_at=existing.created_at,
                 last_active=now,
             )
@@ -64,6 +68,20 @@ class InMemorySessionStorage:
         result = list(self._sessions.values())
         result.sort(key=lambda s: s.last_active, reverse=True)
         return result[offset:offset + limit]
+
+    def update_session_status(
+        self, session_id: str, status: str, reason: str = ""
+    ) -> Session | None:
+        existing = self._sessions.get(session_id)
+        if existing is None:
+            return None
+        updated = existing.model_copy(update={
+            "status": status,
+            "status_reason": reason,
+            "status_updated_at": _now(),
+        })
+        self._sessions[session_id] = updated
+        return updated
 
     def health(self) -> SessionStorageHealth:
         return SessionStorageHealth(

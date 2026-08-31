@@ -10,9 +10,9 @@
 
 ## 0. 当前焦点
 
-**当前领域**：Issue #21 — `policy-qa` 唯一业务入口与有界恢复循环（§1.1 单元 1.6–1.7）
+**当前领域**：Issue #30 — 轨迹持久化存储与问答挂起/升级/恢复（政策问答域延伸）
 
-**当前阶段**：Issue #21 已完成分层验收；范围外存量失败见 §4–§5
+**当前阶段**：后端 + 前端全链路实现完成，T1/T2a/T2b + Portal 验证通过；待浏览器人工验收
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
@@ -51,6 +51,9 @@
 | 1.5 | 历史问答记录查询 | F+B+S | `qa-history/page.tsx` | `history_service.py` | PostgreSQL | impl_done |
 | 1.6 | 院端经办通过 Chat-first 连续问答获取单一、安全且可追溯的政策解释 | F+B+S | `PolicyQAWorkspace` → `PolicyConversation` | `policy_qa_routes.py` → `PolicyQAPublicResult` | 任务/工作流记录 + SQL Server + Milvus | verified |
 | 1.7 | 瞬时结算/政策检索故障执行一次有界恢复，确定性缺失立即停止 | B+S | 恢复与查证步骤 | `policy_qa_routes.py` + 数据提供器/检索器错误分类 | SQL Server + Milvus | verified |
+| 1.8 | 轨迹持久化与会话生命周期：每轮可重放公开快照落库、刷新恢复、挂起/恢复/升级医保办/回复回填 | F+B+S | `PolicyConversation` 生命周期横幅/操作 | `session_lifecycle.py` + `/sessions*` 端点 | PostgreSQL（policy_qa_trajectories + sessions 状态列） | impl_done |
+
+> **1.8 验收标准**（Issue #30）：每轮 QA 公开轨迹（context_need/memory_updates/完整 result）持久化，按会话回放重建对话/记忆/锚点；会话状态机 active⇄suspended、active→escalated→(resolve)→active、→closed；非活跃会话拒绝新问答（409 SESSION_NOT_ACTIVE）；升级工单复用 task_closure（waiting_human_confirmation），医保办回复回填后会话恢复。设计见 `docs/steering/政策问答-轨迹持久化与挂起升级恢复-设计-V1.0.md`。
 
 > **1.6–1.7 验收标准**：Portal 只通过 `/policy-qa/stream` 展示单一 `answer`，请求必须携带 `settlement_id`；`/settlement`、`/qc`、`/dashboard`、`/chat` 返回 404。确定性政策结论携带可展示引用，证据不足时明确不确定性。瞬时结算或政策检索故障全局最多执行 2 次尝试；结算不存在、配置错误和普通业务错误不重试；`done` 事件记录 `attempt_count` 与 `halt_reason`，公开步骤不泄露 SQL、表字段或内部推理。
 
@@ -339,6 +342,7 @@
 | 2026-08-19 | **Issue #19 单元医疗类别区分（按用户设计重做）**：第一轮方向错误（提取回填+审核页筛选）已回退。现行实现：知识构建页新增「医疗类别分类」面板（执行分类→类别数量卡片→明细下钻→人工修正/恢复自动，PG 持久化 policy_unit_med_types）；新建构建任务向导按医疗类别筛选单元。T1 3+592、T2a 3+41、前端 2+17+139、tsc/build 通过；失败均为预存环境依赖。待用户验证 | 政策知识管线；需求迭代记录 Issue 19 节；领域字典新增 med_type_classifier/UnitMedTypeOverride |
 | 2026-08-19 | **模型治理新模型接入辅助**：通用 OpenAI-compatible `/models` 探测、写权限与脱敏审计、安全失败提示；Portal 模型名支持可搜索列表和手填兜底，端点/密钥变更后列表失效。真实 OpenCode Go 匿名探测 28 个模型且含 `deepseek-v4-flash`，Portal tsc 通过，待用户页面验收 | 模型服务与管理 4.6；`/model-governance` |
 | 2026-08-25 | **Issue #21 完成并验证**：确认 `policy-qa` 为唯一业务入口，结算单作为必填问答上下文；删除结算异常、出院质控、运营看板、静态旧 Chat 原型及通用编排代码和测试，退役路径保持 404；按 Loop Engineering 为结算读取与政策检索增加全局最多 2 次的有界恢复、稳定停止原因及公开验证步骤。T1/T2a/T2b 177/40/139（另 1 optional skipped），Portal 相关 65、E2E/smoke 9、并发 SSE 25/25，TypeScript/build/compileall 通过 | §1.1 单元 1.6–1.7；§3.5；§4；核心 AGENTS/接口/原型文档 |
+| 2026-08-31 | **Issue #30 轨迹持久化与挂起/升级/恢复**：新增 `policy_qa_trajectories` 表（每轮可重放公开快照）与 sessions 状态列（active/suspended/escalated/closed，CREATE+ALTER 双写）；`session_lifecycle.py` 状态机 + 升级工单（复用 task_closure，waiting_human_confirmation→resolve 回填）；7 个生命周期/轨迹端点；/stream 收尾写轨迹 + 非活跃会话 409；前端刷新恢复（localStorage sessionId + 轨迹重建）与挂起/升级 UI。顺带修复预存缺陷：PG task_store.create_task 缺 input_data/status 等参数（与 service 层协议不匹配，PG 模式下 record_qa_task 曾静默失败）。T1 单元 15+307、T2a API 9+47、T2b Flow 1、Portal Vitest 聚焦 82/全量 358（3 failed 为 §5 预存债务）、TSC/ESLint/build/compileall 通过；真实 PG 冒烟（DDL 双写 + jsonb 读写 + 状态机）通过 | §1.1 单元 1.8；数据库/接口文档待同步；SSO 接入后 user_id 改认证上下文 |
 
 ---
 

@@ -9,6 +9,7 @@
  * - @ 指令解析（@换结算 / @换患者 / @新会话）
  */
 
+import { toPolicyQAResult } from '@/lib/policy-qa-stream'
 import type {
   PolicyQACaseContext,
   PolicyQAResult,
@@ -229,4 +230,102 @@ export function emptyAnchor(): SessionAnchor {
     subjectChanged: false,
     subjectChangeMsg: null,
   }
+}
+
+// ── 轨迹恢复（Issue #30：刷新后从持久化轨迹重建会话）──────────
+
+const SESSION_ID_STORAGE_KEY = 'policy-qa-session-id'
+
+export function loadPersistedSessionId(): string | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem(SESSION_ID_STORAGE_KEY)
+}
+
+export function persistSessionId(sessionId: string): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(SESSION_ID_STORAGE_KEY, sessionId)
+}
+
+export function clearPersistedSessionId(): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem(SESSION_ID_STORAGE_KEY)
+}
+
+/** 后端轨迹轮次 DTO（snake_case，GET /sessions/{id}/trajectory） */
+export interface TrajectoryTurnDTO {
+  qa_turn_id: string
+  question: string
+  answer_status: string
+  settlement_id?: string
+  payload?: {
+    context_need?: RawContextNeed | null
+    memory_updates?: RawMemoryUpdate[]
+    result?: unknown
+    halt_reason?: string
+  }
+}
+
+export interface TrajectoryResponseDTO {
+  session_id: string
+  status: string
+  status_reason?: string
+  turns: TrajectoryTurnDTO[]
+}
+
+export interface RestoredSessionState {
+  anchor: SessionAnchor
+  memories: MemoryCard[]
+  messages: PolicyQAChatMessage[]
+}
+
+const UNAVAILABLE_FALLBACK =
+  '该问题当时未能获得答案（服务或数据源暂时不可用）。\n\n可重新提问，或携带结算单前往医保办咨询。\n\n本回答仅供参考，不作为报销或结算依据。'
+
+/** 从轨迹重建前端会话状态（纯函数，可单测）。 */
+export function restoreSessionState(trajectory: TrajectoryResponseDTO): RestoredSessionState {
+  const messages: PolicyQAChatMessage[] = []
+  let memories: MemoryCard[] = []
+  let anchor = emptyAnchor()
+
+  for (const turn of trajectory.turns) {
+    const payload = turn.payload ?? {}
+    const contextNeed = payload.context_need ? toContextNeed(payload.context_need) : null
+    for (const mu of payload.memory_updates ?? []) {
+      if (mu?.memory) memories = upsertMemory(memories, toMemoryCard(mu.memory))
+    }
+    const settlementId = turn.settlement_id || contextNeed?.settlementId || null
+    anchor = {
+      ...anchor,
+      settlementId: settlementId ?? anchor.settlementId,
+      topic: contextNeed?.topic ?? anchor.topic,
+    }
+
+    messages.push({ role: 'user', content: turn.question })
+    const result = toPolicyQAResult(payload.result)
+    messages.push(
+      result.answerStatus === 'unavailable'
+        ? {
+            role: 'assistant',
+            content: UNAVAILABLE_FALLBACK,
+            answerStatus: 'unavailable',
+            contextNeed: contextNeed ?? undefined,
+            qaTurnId: turn.qa_turn_id,
+          }
+        : {
+            role: 'assistant',
+            content: result.answer,
+            answerStatus: result.answerStatus,
+            contextNeed: contextNeed ?? undefined,
+            citations: result.citations,
+            uncertainties: result.uncertainties,
+            verificationSummary: result.verificationSummary,
+            calculationSteps: result.calculationSteps,
+            definition: result.definition,
+            warnings: result.warnings,
+            caseContext: result.caseContext,
+            qaTurnId: turn.qa_turn_id,
+          },
+    )
+  }
+  return { anchor, memories, messages }
 }
