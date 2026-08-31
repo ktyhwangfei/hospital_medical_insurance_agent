@@ -6,11 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.adapters.insurance_interface.outpatient_cdc import (
-    CdcRetentionGapError,
-    OutpatientCdcBatch,
-    OutpatientCdcChange,
-    OutpatientSnapshot,
+from src.adapters.insurance_interface.outpatient_cdc import CdcRetentionGapError
+from src.adapters.insurance_interface.outpatient_source import (
+    CheckpointKind,
+    OutpatientChange,
+    OutpatientCheckpoint,
+    OutpatientSourceBatch,
+    OutpatientSourceMode,
 )
 from src.data_platform.outpatient_sync import OutpatientSyncService
 
@@ -25,10 +27,9 @@ def _change(capture: str, key: tuple[str, ...], operation: int = 2, **payload):
         "dbo_o_Diagnose": ("T_TradeNo", "DiagnoseNo", "RecipeNo"),
     }[capture]
     payload.update(dict(zip(key_columns, key)))
-    return OutpatientCdcChange(
+    return OutpatientChange(
         capture_instance=capture,
-        start_lsn=b"\x20",
-        seqval=bytes([len(key), operation]),
+        source_cursor=b"\x20" + bytes([len(key), operation]),
         operation=operation,
         commit_time=NOW,
         source_key=key,
@@ -37,19 +38,13 @@ def _change(capture: str, key: tuple[str, ...], operation: int = 2, **payload):
 
 
 class _Source:
-    def __init__(self, *, snapshot=None, batches=(), error=None):
-        self.snapshot = snapshot
+    def __init__(self, *, batches=(), error=None):
         self.batches = list(batches)
         self.error = error
-        self.snapshot_calls = 0
-        self.change_calls = []
+        self.calls = []
 
-    def read_snapshot(self):
-        self.snapshot_calls += 1
-        return self.snapshot
-
-    def read_changes(self, last_lsn):
-        self.change_calls.append(last_lsn)
+    def read(self, checkpoint):
+        self.calls.append(checkpoint)
         if self.error:
             raise self.error
         return self.batches.pop(0)
@@ -80,10 +75,10 @@ class _Store:
         if self.fail:
             raise RuntimeError("store failed")
         self.calls.append(kwargs)
-        self.checkpoint = SimpleNamespace(last_lsn=kwargs["to_lsn"])
+        self.checkpoint = kwargs["batch"].checkpoint
         return SimpleNamespace(
             batch_id=f"batch-{len(self.calls)}", published_at=NOW,
-            row_count=len(kwargs["changes"]),
+            row_count=len(kwargs["batch"].changes),
         )
 
 
@@ -119,10 +114,11 @@ def _snapshot(*rows):
     grouped = {"dbo_o_Trade": [], "dbo_o_FeeItem": [], "dbo_o_Diagnose": []}
     for capture, payload in rows:
         grouped[capture].append(payload)
-    return OutpatientSnapshot(
-        checkpoint_lsn=b"\x20",
-        min_lsn_by_capture={capture: b"\x10" for capture in grouped},
-        rows_by_capture={capture: tuple(items) for capture, items in grouped.items()},
+    return OutpatientSourceBatch(
+        mode=OutpatientSourceMode.CDC,
+        checkpoint=OutpatientCheckpoint(CheckpointKind.LSN, "20", NOW),
+        snapshot_rows={capture: tuple(items) for capture, items in grouped.items()},
+        is_baseline=True,
     )
 
 
@@ -139,44 +135,45 @@ def test_run_once_uses_snapshot_and_preserves_decimal_values() -> None:
             "RecipeDate": NOW, "DiagnoseCode": "Z00", "SectionCode": "S1",
         }),
     )
-    source = _Source(snapshot=snapshot)
+    source = _Source(batches=[snapshot])
     store = _Store()
 
     result = OutpatientSyncService(source, store, _Registry()).run_once()
 
     assert result.mode == "snapshot"
     assert result.semantic_version == "3"
-    assert source.snapshot_calls == 1
-    assert store.calls[0]["from_lsn"] == store.calls[0]["to_lsn"] == b"\x20"
-    trade_change = next(c for c in store.calls[0]["changes"] if c.capture_instance == "dbo_o_Trade")
+    assert source.calls == [None]
+    assert result.checkpoint.value == "20"
+    trade_change = next(c for c in store.calls[0]["batch"].changes if c.capture_instance == "dbo_o_Trade")
     assert trade_change.payload["T_FeeAll"] == Decimal("100.00")
     assert not isinstance(trade_change.payload["T_FeeAll"], float)
 
 
 def test_incremental_heartbeat_and_store_failure_do_not_skip_checkpoint() -> None:
-    checkpoint = SimpleNamespace(last_lsn=b"\x20")
-    empty = OutpatientCdcBatch(
-        from_lsn=b"\x21", to_lsn=b"\x22",
-        min_lsn_by_capture={}, changes=(),
+    checkpoint = OutpatientCheckpoint(CheckpointKind.LSN, "20", NOW)
+    empty = OutpatientSourceBatch(
+        mode=OutpatientSourceMode.CDC,
+        checkpoint=OutpatientCheckpoint(CheckpointKind.LSN, "22", NOW),
     )
     store = _Store(checkpoint=checkpoint)
     result = OutpatientSyncService(
         _Source(batches=[empty]), store, _Registry(),
     ).run_once()
     assert result.mode == "heartbeat"
-    assert store.calls[0]["changes"] == ()
+    assert store.calls[0]["batch"].changes == ()
 
-    store = _Store(checkpoint=SimpleNamespace(last_lsn=b"\x30"))
+    store = _Store(checkpoint=OutpatientCheckpoint(CheckpointKind.LSN, "30", NOW))
     store.fail = True
-    change_batch = OutpatientCdcBatch(
-        from_lsn=b"\x31", to_lsn=b"\x32", min_lsn_by_capture={},
+    change_batch = OutpatientSourceBatch(
+        mode=OutpatientSourceMode.CDC,
+        checkpoint=OutpatientCheckpoint(CheckpointKind.LSN, "32", NOW),
         changes=(_change("dbo_o_Trade", ("T2",), **_trade("T2")),),
     )
     with pytest.raises(RuntimeError, match="store failed"):
         OutpatientSyncService(
             _Source(batches=[change_batch]), store, _Registry(),
         ).run_once()
-    assert store.checkpoint.last_lsn == b"\x30"
+    assert store.checkpoint.value == "30"
 
 
 def test_refund_chain_diagnosis_fallback_and_amount_warning_are_published() -> None:
@@ -207,7 +204,7 @@ def test_refund_chain_diagnosis_fallback_and_amount_warning_are_published() -> N
     )
     store = _Store()
 
-    OutpatientSyncService(_Source(snapshot=snapshot), store, _Registry()).run_once()
+    OutpatientSyncService(_Source(batches=[snapshot]), store, _Registry()).run_once()
 
     call = store.calls[0]
     metadata = call["projection_metadata"][("dbo_o_Trade", ("T1",))]
@@ -221,7 +218,7 @@ def test_refund_chain_diagnosis_fallback_and_amount_warning_are_published() -> N
     assert "fee_detail_total_mismatch" in {
         issue["rule_code"] for issue in call["quality_summary"]["issues"]
     }
-    assert next(c for c in call["changes"] if c.source_key == ("T1",)).payload["T_FeeAll"] == Decimal("100.00")
+    assert next(c for c in call["batch"].changes if c.source_key == ("T1",)).payload["T_FeeAll"] == Decimal("100.00")
 
 
 def test_primary_diagnosis_wins_and_tie_break_is_stable() -> None:
@@ -237,7 +234,7 @@ def test_primary_diagnosis_wins_and_tie_break_is_stable() -> None:
         }),
     )
     store = _Store()
-    OutpatientSyncService(_Source(snapshot=snapshot), store, _Registry()).run_once()
+    OutpatientSyncService(_Source(batches=[snapshot]), store, _Registry()).run_once()
     metadata = store.calls[0]["projection_metadata"][("dbo_o_Trade", ("T1",))]
     assert metadata["context_quality"] == "source_primary"
     assert metadata["diagnosis_codes"] == ["PRIMARY"]
@@ -254,7 +251,7 @@ def test_primary_diagnosis_wins_and_tie_break_is_stable() -> None:
         }),
     )
     store = _Store()
-    OutpatientSyncService(_Source(snapshot=tied), store, _Registry()).run_once()
+    OutpatientSyncService(_Source(batches=[tied]), store, _Registry()).run_once()
     metadata = store.calls[0]["projection_metadata"][("dbo_o_Trade", ("T1",))]
     assert metadata["diagnosis_codes"] == ["A"]
 
@@ -273,7 +270,7 @@ def test_structural_and_unmatched_refund_problems_block_batch() -> None:
     )
     store = _Store()
 
-    result = OutpatientSyncService(_Source(snapshot=snapshot), store, _Registry()).run_once()
+    result = OutpatientSyncService(_Source(batches=[snapshot]), store, _Registry()).run_once()
 
     assert result.quality_status == "blocked"
     codes = {issue["rule_code"] for issue in store.calls[0]["quality_summary"]["issues"]}
@@ -282,15 +279,15 @@ def test_structural_and_unmatched_refund_problems_block_batch() -> None:
 
 def test_retention_gap_fails_closed_and_unpublished_model_blocks_queryability() -> None:
     gap = CdcRetentionGapError("cdc_retention_gap")
-    store = _Store(checkpoint=SimpleNamespace(last_lsn=b"\x01"))
+    store = _Store(checkpoint=OutpatientCheckpoint(CheckpointKind.LSN, "01", NOW))
     with pytest.raises(CdcRetentionGapError):
         OutpatientSyncService(_Source(error=gap), store, _Registry()).run_once()
     assert store.calls == []
-    assert store.checkpoint.last_lsn == b"\x01"
+    assert store.checkpoint.value == "01"
 
     store = _Store()
     result = OutpatientSyncService(
-        _Source(snapshot=_snapshot(("dbo_o_Trade", _trade()))),
+        _Source(batches=[_snapshot(("dbo_o_Trade", _trade()))]),
         store,
         _Registry(version=None),
     ).run_once()

@@ -3,10 +3,15 @@ from datetime import datetime, timezone
 import pytest
 
 from src.adapters.insurance_interface.outpatient_cdc import (
-    OUTPATIENT_SOURCE_SPECS,
     CdcRetentionGapError,
     SourceContractMismatchError,
     SqlServerOutpatientCdcSource,
+)
+from src.adapters.insurance_interface.outpatient_source import (
+    OUTPATIENT_SOURCE_SPECS,
+    CheckpointKind,
+    OutpatientCheckpoint,
+    OutpatientSourceMode,
 )
 
 
@@ -95,16 +100,21 @@ def _values(spec, capture):
 
 def _payloads(result):
     if hasattr(result, "changes"):
-        return [change.payload for change in result.changes]
-    return [row for rows in result.rows_by_capture.values() for row in rows]
+        payloads = [change.payload for change in result.changes]
+        if payloads:
+            return payloads
+    return [row for rows in (result.snapshot_rows or {}).values() for row in rows]
 
 
 def test_snapshot_uses_one_max_lsn_then_reads_all_whitelisted_tables() -> None:
     connection = _FakeConnection()
-    result = SqlServerOutpatientCdcSource(lambda: connection).read_snapshot()
+    result = SqlServerOutpatientCdcSource(lambda: connection).read(None)
 
-    assert result.checkpoint_lsn == b"\x20"
-    assert set(result.rows_by_capture) == set(OUTPATIENT_SOURCE_SPECS)
+    assert result.mode is OutpatientSourceMode.CDC
+    assert result.checkpoint.kind is CheckpointKind.LSN
+    assert result.checkpoint.value == "20"
+    assert result.is_baseline is True
+    assert set(result.snapshot_rows or {}) == set(OUTPATIENT_SOURCE_SPECS)
     max_call = next(i for i, (sql, _params) in enumerate(connection.calls) if "get_max_lsn" in sql)
     table_calls = [
         i for i, (sql, _params) in enumerate(connection.calls)
@@ -117,13 +127,16 @@ def test_snapshot_uses_one_max_lsn_then_reads_all_whitelisted_tables() -> None:
 
 def test_incremental_reads_after_images_with_one_shared_lsn_window() -> None:
     connection = _FakeConnection()
-    result = SqlServerOutpatientCdcSource(lambda: connection).read_changes(b"\x10")
+    result = SqlServerOutpatientCdcSource(lambda: connection).read(
+        OutpatientCheckpoint(CheckpointKind.LSN, "10", connection.commit_time)
+    )
 
-    assert (result.from_lsn, result.to_lsn) == (b"\x11", b"\x20")
+    assert result.checkpoint.value == "20"
     assert {change.operation for change in result.changes} == {1, 2, 4}
     assert len(result.changes) == 9
     assert all(change.commit_time == connection.commit_time for change in result.changes)
     assert all(change.source_key for change in result.changes)
+    assert all(change.source_cursor.startswith(b"\x18") for change in result.changes)
     cdc_calls = [call for call in connection.calls if "fn_cdc_get_all_changes_" in call[0]]
     assert len(cdc_calls) == 3
     assert all(params == (b"\x11", b"\x20") for _sql, params in cdc_calls)
@@ -135,7 +148,9 @@ def test_incremental_fails_closed_when_checkpoint_falls_out_of_retention() -> No
     connection.min_lsn["dbo_o_FeeItem"] = b"\x20"
 
     with pytest.raises(CdcRetentionGapError) as exc_info:
-        SqlServerOutpatientCdcSource(lambda: connection).read_changes(b"\x10")
+        SqlServerOutpatientCdcSource(lambda: connection).read(
+            OutpatientCheckpoint(CheckpointKind.LSN, "10", connection.commit_time)
+        )
 
     assert exc_info.value.error_code == "cdc_retention_gap"
 
@@ -145,7 +160,7 @@ def test_source_contract_mismatch_names_the_missing_whitelisted_column() -> None
     connection.missing_column = ("dbo_o_Trade", "T_FeeAll")
 
     with pytest.raises(SourceContractMismatchError) as exc_info:
-        SqlServerOutpatientCdcSource(lambda: connection).read_snapshot()
+        SqlServerOutpatientCdcSource(lambda: connection).read(None)
 
     assert exc_info.value.error_code == "source_contract_mismatch"
     assert "o_Trade.T_FeeAll" in str(exc_info.value)
@@ -157,3 +172,14 @@ def _assert_no_sensitive_payload(payloads) -> None:
         assert forbidden.isdisjoint(payload)
         if "ItemId" in payload:
             assert "RecipeNo" not in payload
+
+
+def test_outpatient_checkpoint_is_source_neutral() -> None:
+    checkpoint = OutpatientCheckpoint(
+        kind=CheckpointKind.LSN,
+        value="0000002a",
+        observed_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+    )
+
+    assert checkpoint.kind is CheckpointKind.LSN
+    assert checkpoint.value == "0000002a"

@@ -4,7 +4,13 @@ import re
 
 import pytest
 
-from src.adapters.insurance_interface.outpatient_cdc import OutpatientCdcChange
+from src.adapters.insurance_interface.outpatient_source import (
+    CheckpointKind,
+    OutpatientChange,
+    OutpatientCheckpoint,
+    OutpatientSourceBatch,
+    OutpatientSourceMode,
+)
 from src.data_platform.storage.postgresql.outpatient_store import OutpatientPostgresStore
 from src.semantic_layer.registry import InMemoryRegistryStore, SemanticRegistry
 from src.semantic_layer.seed import seed_semantic_layer
@@ -35,7 +41,7 @@ class _FakeCursor:
                 )
         elif "INSERT INTO outpatient_sync_batches" in sql:
             self.client.existing_batch_id = params[0]
-            self.client.existing_row_count = params[7]
+            self.client.existing_row_count = params[-3]
         return self
 
     def fetchone(self):
@@ -79,10 +85,9 @@ class _FakeClient:
 
 def _change(capture, operation, key_values, **payload):
     payload.update(key_values)
-    return OutpatientCdcChange(
+    return OutpatientChange(
         capture_instance=capture,
-        start_lsn=b"\x18",
-        seqval=bytes([operation]),
+        source_cursor=b"\x18" + bytes([operation]),
         operation=operation,
         commit_time=datetime(2026, 8, 28, tzinfo=timezone.utc),
         source_key=tuple(key_values.values()),
@@ -109,6 +114,16 @@ def _changes():
     )
 
 
+def _batch():
+    return OutpatientSourceBatch(
+        mode=OutpatientSourceMode.CDC,
+        checkpoint=OutpatientCheckpoint(
+            CheckpointKind.LSN, "20", datetime(2026, 8, 28, tzinfo=timezone.utc)
+        ),
+        changes=_changes(),
+    )
+
+
 def test_schema_is_idempotent_and_views_expose_only_fixed_semantic_columns() -> None:
     client = _FakeClient()
     store = OutpatientPostgresStore(client=client)
@@ -117,19 +132,28 @@ def test_schema_is_idempotent_and_views_expose_only_fixed_semantic_columns() -> 
 
     ddl = "\n".join(sql for sql, _params in client.schema_sql)
     for table in [
-        "outpatient_sync_checkpoints", "outpatient_sync_batches", "outpatient_cdc_events",
+        "outpatient_sync_checkpoints", "outpatient_sync_batches", "outpatient_sync_events",
         "outpatient_trade_current", "outpatient_fee_item_current",
         "outpatient_diagnosis_current",
     ]:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
     assert "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS semantic_version" in ddl
+    assert "ALTER TABLE outpatient_sync_checkpoints ALTER COLUMN last_lsn DROP NOT NULL" in ddl
+    assert "batch_key VARCHAR(64)" in ddl
+    assert "source_mode VARCHAR(32)" in ddl
+    assert "checkpoint_kind VARCHAR(32)" in ddl
+    assert "checkpoint_value TEXT" in ddl
+    assert "source_cursor BYTEA" in ddl
+    assert "SET source_cursor = COALESCE(source_lsn" in ddl
+    assert "ALTER COLUMN source_cursor SET NOT NULL" in ddl
     assert "ALTER TABLE outpatient_trade_current ADD COLUMN IF NOT EXISTS settlement_lifecycle" in ddl
     assert 'CREATE OR REPLACE VIEW mz_trade' in ddl
     assert 'AS "T_FeeAll"' in ddl
     assert 'CREATE OR REPLACE VIEW mz_fee_item' in ddl
     assert "P_IDNo" not in ddl
     assert "P_Name" not in ddl
-    assert "WHERE NOT is_deleted" in ddl
+    assert "trade.quality_status <> 'blocked'" in ddl
+    assert "JOIN outpatient_trade_current AS trade" in ddl
     registry_store = InMemoryRegistryStore()
     seed_semantic_layer(registry_store)
     registry = SemanticRegistry(registry_store)
@@ -148,13 +172,13 @@ def test_publish_batch_is_atomic_ordered_and_idempotent() -> None:
     store = OutpatientPostgresStore(client=client)
 
     first = store.publish_batch(
-        source_id="bjybdb", mode="incremental", from_lsn=b"\x11", to_lsn=b"\x20",
-        semantic_version="1", changes=_changes(), quality_summary={"status": "complete"},
+        source_id="bjybdb", execution_mode="incremental", batch=_batch(),
+        semantic_version="1", quality_summary={"status": "complete"},
     )
     statement_count = len(client.transaction_sql)
     second = store.publish_batch(
-        source_id="bjybdb", mode="incremental", from_lsn=b"\x11", to_lsn=b"\x20",
-        semantic_version="1", changes=_changes(), quality_summary={"status": "complete"},
+        source_id="bjybdb", execution_mode="incremental", batch=_batch(),
+        semantic_version="1", quality_summary={"status": "complete"},
     )
 
     assert client.transaction_count == 2
@@ -162,13 +186,13 @@ def test_publish_batch_is_atomic_ordered_and_idempotent() -> None:
     assert len(client.transaction_sql) == statement_count + 2  # advisory lock + identity lookup
     assert all(statement.count("%s") == len(params) for statement, params in client.transaction_sql)
     sql = [statement for statement, _params in client.transaction_sql[:statement_count]]
-    event_sql = next(item for item in sql if "INSERT INTO outpatient_cdc_events" in item)
-    assert "source_id, capture_instance, start_lsn, seqval, operation" in event_sql
-    assert "ON CONFLICT (source_id, capture_instance, start_lsn, seqval, operation) DO NOTHING" in event_sql
+    event_sql = next(item for item in sql if "INSERT INTO outpatient_sync_events" in item)
+    assert "event_key, source_id, source_mode, capture_instance, source_cursor" in event_sql
+    assert "ON CONFLICT (event_key) DO NOTHING" in event_sql
     projection_sql = [item for item in sql if "_current" in item and "INSERT INTO" in item]
     assert len(projection_sql) == 3
     assert all(
-        "WHERE (EXCLUDED.source_lsn, EXCLUDED.source_seqval) >=" in item
+        "WHERE EXCLUDED.source_cursor >=" in item
         for item in projection_sql
     )
     delete_call = next(
@@ -189,8 +213,8 @@ def test_publish_batch_rolls_back_before_batch_and_checkpoint_on_projection_erro
 
     with pytest.raises(RuntimeError, match="forced write failure"):
         store.publish_batch(
-            source_id="bjybdb", mode="incremental", from_lsn=b"\x11", to_lsn=b"\x20",
-            semantic_version="1", changes=_changes(), quality_summary={},
+            source_id="bjybdb", execution_mode="incremental", batch=_batch(),
+            semantic_version="1", quality_summary={},
         )
 
     sql = [statement for statement, _params in client.transaction_sql]

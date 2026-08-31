@@ -58,12 +58,11 @@ def run_loop(service, interval: int, stop_event: Event, *, wait=None):
 
 
 def format_status(status: OutpatientSyncStatus) -> str:
-    checkpoint = status.checkpoint_lsn.hex() if status.checkpoint_lsn else "none"
     return "\n".join((
         f"source_id={status.source_id}",
         f"last_batch_id={status.last_batch_id or 'none'}",
         f"last_mode={status.last_mode or 'none'}",
-        f"checkpoint_lsn={checkpoint}",
+        f"checkpoint_kind={status.checkpoint_kind or 'none'}",
         f"last_published_at={_iso(status.last_published_at)}",
         f"last_non_empty_latency_seconds={_number(status.last_non_empty_latency_seconds)}",
         f"sample_count={status.non_empty_sample_count}",

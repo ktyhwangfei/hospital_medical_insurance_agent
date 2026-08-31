@@ -1,16 +1,17 @@
-"""门诊 CDC 批次的确定性加工与原子发布。"""
+"""门诊数据批次的确定性加工与原子发布。"""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from src.adapters.insurance_interface.outpatient_cdc import (
+from src.adapters.insurance_interface.outpatient_source import (
     OUTPATIENT_SOURCE_SPECS,
-    OutpatientCdcBatch,
-    OutpatientCdcChange,
-    OutpatientSnapshot,
+    CheckpointKind,
+    OutpatientChange,
+    OutpatientCheckpoint,
+    OutpatientSourceBatch,
 )
 
 
@@ -25,7 +26,7 @@ _CENT = Decimal("0.01")
 class OutpatientSyncResult:
     batch_id: str
     mode: str
-    to_lsn: bytes
+    checkpoint: OutpatientCheckpoint
     row_count: int
     semantic_version: str | None
     quality_status: str
@@ -43,18 +44,16 @@ class OutpatientSyncService:
 
     def run_once(self) -> OutpatientSyncResult:
         checkpoint = self._store.get_checkpoint(self._source_id)
-        if checkpoint is None:
-            source_result = self._source.read_snapshot()
-            changes = _snapshot_changes(source_result)
+        batch = self._source.read(checkpoint)
+        if batch.snapshot_rows is not None:
+            changes = _snapshot_changes(batch)
             mode = "snapshot"
-            from_lsn = to_lsn = source_result.checkpoint_lsn
-            rows = source_result.rows_by_capture
+            rows = batch.snapshot_rows
+            batch = replace(batch, changes=changes)
         else:
-            source_result = self._source.read_changes(checkpoint.last_lsn)
-            changes = source_result.changes
+            changes = batch.changes
             mode = "incremental" if changes else "heartbeat"
-            from_lsn, to_lsn = source_result.from_lsn, source_result.to_lsn
-            affected = _affected_trade_nos(changes)
+            affected = set(batch.scope_trade_nos) or _affected_trade_nos(changes)
             rows = self._store.load_projection_rows(affected)
 
         state, issues = _build_state(rows)
@@ -67,18 +66,16 @@ class OutpatientSyncService:
 
         published = self._store.publish_batch(
             source_id=self._source_id,
-            mode=mode,
-            from_lsn=from_lsn,
-            to_lsn=to_lsn,
+            execution_mode=mode,
+            batch=batch,
             semantic_version=semantic_version,
-            changes=changes,
             quality_summary=quality_summary,
             projection_metadata=metadata,
         )
         return OutpatientSyncResult(
             batch_id=published.batch_id,
             mode=mode,
-            to_lsn=to_lsn,
+            checkpoint=batch.checkpoint,
             row_count=published.row_count,
             semantic_version=semantic_version,
             quality_status=quality_summary["status"],
@@ -86,20 +83,20 @@ class OutpatientSyncService:
         )
 
 
-def _snapshot_changes(snapshot: OutpatientSnapshot) -> tuple[OutpatientCdcChange, ...]:
-    changes: list[OutpatientCdcChange] = []
+def _snapshot_changes(batch: OutpatientSourceBatch) -> tuple[OutpatientChange, ...]:
+    changes: list[OutpatientChange] = []
+    cursor_prefix = _checkpoint_bytes(batch.checkpoint)
     for capture in _CAPTURES:
         spec = OUTPATIENT_SOURCE_SPECS[capture]
         rows = sorted(
-            snapshot.rows_by_capture.get(capture, ()),
+            (batch.snapshot_rows or {}).get(capture, ()),
             key=lambda row: tuple(repr(row.get(column)) for column in spec.key_columns),
         )
         for index, row in enumerate(rows, start=1):
             payload = dict(row)
-            changes.append(OutpatientCdcChange(
+            changes.append(OutpatientChange(
                 capture_instance=capture,
-                start_lsn=snapshot.checkpoint_lsn,
-                seqval=index.to_bytes(10, "big"),
+                source_cursor=cursor_prefix + index.to_bytes(10, "big"),
                 operation=2,
                 commit_time=None,
                 source_key=tuple(payload.get(column) for column in spec.key_columns),
@@ -108,7 +105,7 @@ def _snapshot_changes(snapshot: OutpatientSnapshot) -> tuple[OutpatientCdcChange
     return tuple(changes)
 
 
-def _affected_trade_nos(changes: tuple[OutpatientCdcChange, ...]) -> set[str]:
+def _affected_trade_nos(changes: tuple[OutpatientChange, ...]) -> set[str]:
     values: set[str] = set()
     for change in changes:
         trade_no = change.payload.get("T_TradeNo")
@@ -118,6 +115,12 @@ def _affected_trade_nos(changes: tuple[OutpatientCdcChange, ...]) -> set[str]:
         if original not in (None, ""):
             values.add(str(original))
     return values
+
+
+def _checkpoint_bytes(checkpoint: OutpatientCheckpoint) -> bytes:
+    if checkpoint.kind is CheckpointKind.LSN:
+        return bytes.fromhex(checkpoint.value)
+    return checkpoint.value.encode("utf-8")
 
 
 def _empty_state() -> dict[str, dict[tuple[Any, ...], dict[str, Any]]]:

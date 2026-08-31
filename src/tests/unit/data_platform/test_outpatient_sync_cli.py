@@ -97,7 +97,7 @@ def test_stop_request_during_batch_exits_before_waiting() -> None:
 def test_status_is_freshness_only_and_excludes_sensitive_details() -> None:
     status = OutpatientSyncStatus(
         source_id="bjybdb", last_batch_id="batch-9", last_mode="heartbeat",
-        checkpoint_lsn=b"\x20", last_published_at=NOW,
+        checkpoint_kind="lsn", checkpoint_value="20", last_published_at=NOW,
         last_non_empty_latency_seconds=72.5,
         non_empty_sample_count=100, p95_latency_seconds=240.0,
         quality_status="warning", semantic_version="4",
@@ -106,7 +106,8 @@ def test_status_is_freshness_only_and_excludes_sensitive_details() -> None:
     output = format_status(status)
 
     assert "batch-9" in output
-    assert "checkpoint_lsn=20" in output
+    assert "checkpoint_kind=lsn" in output
+    assert "checkpoint_value" not in output
     assert "last_non_empty_latency_seconds=72.5" in output
     assert "p95_latency_seconds=240.0" in output
     assert "sample_count=100" in output

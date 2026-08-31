@@ -6,11 +6,13 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from scripts.generate_outpatient_reconciliation import build_reconciliation_report
-from src.adapters.insurance_interface.outpatient_cdc import (
+from src.adapters.insurance_interface.outpatient_source import (
     OUTPATIENT_SOURCE_SPECS,
-    OutpatientCdcBatch,
-    OutpatientCdcChange,
-    OutpatientSnapshot,
+    CheckpointKind,
+    OutpatientChange,
+    OutpatientCheckpoint,
+    OutpatientSourceBatch,
+    OutpatientSourceMode,
 )
 from src.data_platform.outpatient_sync import OutpatientSyncService
 from src.semantic_layer.registry import InMemoryRegistryStore, SemanticRegistry
@@ -22,19 +24,16 @@ NOW = datetime(2026, 8, 28, 8, tzinfo=timezone.utc)
 
 class _MemorySource:
     def __init__(self, snapshot, batches) -> None:
-        self.snapshot = snapshot
-        self.batches = list(batches)
+        self.batches = [snapshot, *batches]
 
-    def read_snapshot(self):
-        return self.snapshot
-
-    def read_changes(self, _last_lsn):
+    def read(self, _checkpoint):
         return self.batches.pop(0)
 
 
 class _AtomicStore:
     def __init__(self) -> None:
         self.checkpoint = None
+        self.last_batch_id = None
         self.rows = {capture: {} for capture in OUTPATIENT_SOURCE_SPECS}
         self.metadata = {}
         self.batches = []
@@ -55,14 +54,18 @@ class _AtomicStore:
         }
 
     def publish_batch(self, **batch):
-        identity = (batch["source_id"], batch["from_lsn"], batch["to_lsn"], batch["mode"])
+        source_batch = batch["batch"]
+        identity = (
+            batch["source_id"], source_batch.mode, source_batch.checkpoint.kind,
+            source_batch.checkpoint.value, batch["execution_mode"],
+        )
         if identity in self.by_identity:
             return self.by_identity[identity]
 
         old_visible = self.signature()
         staged_rows = deepcopy(self.rows)
         staged_metadata = deepcopy(self.metadata)
-        for change in batch["changes"]:
+        for change in source_batch.changes:
             spec = OUTPATIENT_SOURCE_SPECS[change.capture_instance]
             key = tuple(change.payload[column] for column in spec.key_columns)
             if change.operation == 1:
@@ -83,16 +86,18 @@ class _AtomicStore:
 
         self.rows = staged_rows
         self.metadata = staged_metadata
-        self.checkpoint = SimpleNamespace(last_lsn=batch["to_lsn"], last_batch_id=batch_id)
+        self.checkpoint = source_batch.checkpoint
+        self.last_batch_id = batch_id
         record = {
             "batch_id": batch_id,
-            "from_lsn": batch["from_lsn"],
-            "to_lsn": batch["to_lsn"],
+            "checkpoint_value": source_batch.checkpoint.value,
             "semantic_version": batch["semantic_version"],
             "quality_status": batch["quality_summary"]["status"],
         }
         self.batches.append(record)
-        published = SimpleNamespace(batch_id=batch_id, published_at=NOW, row_count=len(batch["changes"]))
+        published = SimpleNamespace(
+            batch_id=batch_id, published_at=NOW, row_count=len(source_batch.changes)
+        )
         self.by_identity[identity] = published
         return published
 
@@ -101,7 +106,7 @@ class _AtomicStore:
             len(self.rows["dbo_o_Trade"]),
             len(self.rows["dbo_o_FeeItem"]),
             len(self.rows["dbo_o_Diagnose"]),
-            self.checkpoint.last_batch_id if self.checkpoint else None,
+            self.last_batch_id,
         )
 
     def reconciliation_rows(self, batch_id):
@@ -142,18 +147,18 @@ def _trade(trade_no="T1", **changes):
 
 def _change(capture, operation, sequence, **payload):
     spec = OUTPATIENT_SOURCE_SPECS[capture]
-    return OutpatientCdcChange(
-        capture_instance=capture, start_lsn=b"\x30", seqval=bytes([sequence]),
+    return OutpatientChange(
+        capture_instance=capture, source_cursor=b"\x30" + bytes([sequence]),
         operation=operation, commit_time=NOW,
         source_key=tuple(payload[column] for column in spec.key_columns), payload=payload,
     )
 
 
 def test_outpatient_snapshot_increment_replay_reconciliation_flow() -> None:
-    snapshot = OutpatientSnapshot(
-        checkpoint_lsn=b"\x20",
-        min_lsn_by_capture={capture: b"\x10" for capture in OUTPATIENT_SOURCE_SPECS},
-        rows_by_capture={
+    snapshot = OutpatientSourceBatch(
+        mode=OutpatientSourceMode.CDC,
+        checkpoint=OutpatientCheckpoint(CheckpointKind.LSN, "20", NOW),
+        snapshot_rows={
             "dbo_o_Trade": (_trade(),),
             "dbo_o_FeeItem": ({
                 "T_TradeNo": "T1", "ItemId": "I1", "ItemNo": "1",
@@ -165,6 +170,7 @@ def test_outpatient_snapshot_increment_replay_reconciliation_flow() -> None:
                 "SectionCode": "S1",
             },),
         },
+        is_baseline=True,
     )
     changes = (
         _change("dbo_o_Trade", 4, 1, **_trade(
@@ -188,8 +194,10 @@ def test_outpatient_snapshot_increment_replay_reconciliation_flow() -> None:
             T_FundPay=Decimal("-14"), T_SelfPayAll=Decimal("-6"),
         )),
     )
-    incremental = OutpatientCdcBatch(
-        from_lsn=b"\x21", to_lsn=b"\x30", min_lsn_by_capture={}, changes=changes,
+    incremental = OutpatientSourceBatch(
+        mode=OutpatientSourceMode.CDC,
+        checkpoint=OutpatientCheckpoint(CheckpointKind.LSN, "30", NOW),
+        changes=changes,
     )
     source = _MemorySource(snapshot, [incremental, incremental])
     store = _AtomicStore()
@@ -224,4 +232,4 @@ def test_outpatient_snapshot_increment_replay_reconciliation_flow() -> None:
     assert report.sample_insufficient is True
     assert all(case.data_batch_id == incremental_result.batch_id for case in report.cases)
     assert store.batches[-1]["semantic_version"] == "1"
-    assert store.batches[-1]["to_lsn"] == b"\x30"
+    assert store.batches[-1]["checkpoint_value"] == "30"

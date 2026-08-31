@@ -1,67 +1,18 @@
 """单院门诊 SQL Server CDC 只读源。"""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
-
-def _columns(value: str) -> tuple[str, ...]:
-    return tuple(value.split(","))
-
-
-@dataclass(frozen=True)
-class OutpatientSourceSpec:
-    table_name: str
-    capture_instance: str
-    key_columns: tuple[str, ...]
-    columns: tuple[str, ...]
-
-
-OUTPATIENT_SOURCE_SPECS = {
-    "dbo_o_Trade": OutpatientSourceSpec(
-        table_name="o_Trade",
-        capture_instance="dbo_o_Trade",
-        key_columns=("T_TradeNo",),
-        columns=_columns(
-            "T_SetTid,T_TradeNo,T_TradeDate,T_State,T_HasRefundmented,T_PartialReturnFlag,"
-            "T_OraginalTradeNo,T_OraginalTradeDate,NP_Settle_State,SETL_DATE,NT_ReTradeFlag,"
-            "T_DiagType,T_FeeNo,P_FundType,PN_PersonType,T_CureType,P_JCLevel,P_HospFlag,"
-            "PN_OutTransaction,PN_NationFundType,PN_ChronicFlag,PN_ChronicCode,"
-            "PN_IsChronicHosp,P_Official,P_retirementflag,P_CivilFlag,P_CivilType,"
-            "RETIRE_OFFICER_FLAG,T_GFBelongFlag,T_CompHospFlag,T_SpSetlFlag,T_pneno,"
-            "NT_AllSelfPayFlag,PN_NoRightReason,T_FeeAll,T_FeeIn,T_FeeOut,T_FirstPay,"
-            "T_SelfPay1,T_SelfPay2,T_SelfPayAll,T_BigPay,T_BigSelfPay,T_BeyondBig,T_FundPay,"
-            "T_PersonCountPay,T_CashPay,PN_PersonCount,T_PersonCountAfter,T_BCPay,T_JCPay,"
-            "T_OfficalPay,T_BigillPay,NT_BasicPay,NT_CivilPay,NT_OtherPay,NT_AgencySumPay,"
-            "RETIRE_OFFICER_PAY,NT_OUT2_SCALE,NT_OUT2_PRICE,TB_FeeIn,TA_FeeIn,TB_BigPay,"
-            "TA_BigPay,TB_FeeAfterBig,TA_FeeAfterBig,TB_MZTimes,TA_MZTimes,TB_BeyondFeeIn,"
-            "TA_BeyondFeeIn,TB_BigillComm,TA_BigillComm,TB_BigillPay,TA_BigillPay,"
-            "TB_CivilComm,TA_CivilComm,TB_CivilPay,TA_CivilPay,TB_FeeInL1,TA_FeeInL1,"
-            "TB_BigPayL1,TA_BigPayL1,TB_FeeAfterBigL1,TA_FeeAfterBigL1,PN_InsuredAreaCode,"
-            "T_HospCode,T_HospCodeA"
-        ),
-    ),
-    "dbo_o_FeeItem": OutpatientSourceSpec(
-        table_name="o_FeeItem",
-        capture_instance="dbo_o_FeeItem",
-        key_columns=("T_TradeNo", "ItemId", "ItemNo"),
-        columns=_columns(
-            "T_TradeNo,ItemId,ItemNo,ItemCode,StandardCode,ItemName,ItemType,FeeType,F_LEVEL,"
-            "Count,UnitPrice,Fee,FeeIn,FeeOut,SelfPay2,FEE_SP_SCALE,FEE_MEDIC_L,MEDIC_L,"
-            "SPEDRUG_FLAG,State"
-        ),
-    ),
-    "dbo_o_Diagnose": OutpatientSourceSpec(
-        table_name="o_Diagnose",
-        capture_instance="dbo_o_Diagnose",
-        key_columns=("T_TradeNo", "DiagnoseNo", "RecipeNo"),
-        columns=_columns(
-            "T_TradeNo,DiagnoseNo,RecipeNo,RecipeDate,DiagnoseName,DiagnoseCode,SectionCode,"
-            "Sectionname,HISSectionName,DiagnoseType"
-        ),
-    ),
-}
+from src.adapters.insurance_interface.outpatient_source import (
+    OUTPATIENT_SOURCE_SPECS,
+    CheckpointKind,
+    OutpatientChange,
+    OutpatientCheckpoint,
+    OutpatientSourceBatch,
+    OutpatientSourceMode,
+    OutpatientSourceSpec,
+)
 
 
 class CdcRetentionGapError(RuntimeError):
@@ -72,39 +23,20 @@ class SourceContractMismatchError(RuntimeError):
     error_code = "source_contract_mismatch"
 
 
-@dataclass(frozen=True)
-class OutpatientSnapshot:
-    checkpoint_lsn: bytes
-    min_lsn_by_capture: dict[str, bytes]
-    rows_by_capture: dict[str, tuple[dict[str, Any], ...]]
-
-
-@dataclass(frozen=True)
-class OutpatientCdcChange:
-    capture_instance: str
-    start_lsn: bytes
-    seqval: bytes
-    operation: int
-    commit_time: datetime | None
-    source_key: tuple[Any, ...]
-    payload: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class OutpatientCdcBatch:
-    from_lsn: bytes
-    to_lsn: bytes
-    min_lsn_by_capture: dict[str, bytes]
-    changes: tuple[OutpatientCdcChange, ...]
-
-
 class SqlServerOutpatientCdcSource:
     """固定读取 bjyb 三张门诊源表及其 CDC capture instance。"""
 
     def __init__(self, connection_factory: Callable[[], Any]) -> None:
         self._connection_factory = connection_factory
 
-    def read_snapshot(self) -> OutpatientSnapshot:
+    def read(self, checkpoint: OutpatientCheckpoint | None) -> OutpatientSourceBatch:
+        if checkpoint is None:
+            return self._read_snapshot()
+        if checkpoint.kind is not CheckpointKind.LSN:
+            raise ValueError("CDC source requires an LSN checkpoint")
+        return self._read_changes(bytes.fromhex(checkpoint.value))
+
+    def _read_snapshot(self) -> OutpatientSourceBatch:
         connection = self._connection_factory()
         try:
             cursor = connection.cursor()
@@ -112,20 +44,21 @@ class SqlServerOutpatientCdcSource:
             checkpoint_lsn = self._read_scalar(
                 cursor, "SELECT sys.fn_cdc_get_max_lsn() AS max_lsn"
             )
-            min_lsn_by_capture = self._read_min_lsns(cursor)
+            self._read_min_lsns(cursor)
             rows_by_capture = {
                 capture: tuple(self._read_current_rows(cursor, spec))
                 for capture, spec in OUTPATIENT_SOURCE_SPECS.items()
             }
-            return OutpatientSnapshot(
-                checkpoint_lsn=checkpoint_lsn,
-                min_lsn_by_capture=min_lsn_by_capture,
-                rows_by_capture=rows_by_capture,
+            return OutpatientSourceBatch(
+                mode=OutpatientSourceMode.CDC,
+                checkpoint=_lsn_checkpoint(checkpoint_lsn),
+                snapshot_rows=rows_by_capture,
+                is_baseline=True,
             )
         finally:
             connection.close()
 
-    def read_changes(self, last_lsn: bytes) -> OutpatientCdcBatch:
+    def _read_changes(self, last_lsn: bytes) -> OutpatientSourceBatch:
         connection = self._connection_factory()
         try:
             cursor = connection.cursor()
@@ -142,7 +75,7 @@ class SqlServerOutpatientCdcSource:
             to_lsn = self._read_scalar(
                 cursor, "SELECT sys.fn_cdc_get_max_lsn() AS max_lsn"
             )
-            changes: list[OutpatientCdcChange] = []
+            changes: list[OutpatientChange] = []
             if from_lsn <= to_lsn:
                 try:
                     for spec in OUTPATIENT_SOURCE_SPECS.values():
@@ -155,11 +88,10 @@ class SqlServerOutpatientCdcSource:
                             "cdc_retention_gap: checkpoint is older than " + ", ".join(gaps)
                         ) from exc
                     raise
-            changes.sort(key=lambda item: (item.start_lsn, item.seqval, item.capture_instance))
-            return OutpatientCdcBatch(
-                from_lsn=from_lsn,
-                to_lsn=to_lsn,
-                min_lsn_by_capture=min_lsn_by_capture,
+            changes.sort(key=lambda item: (item.source_cursor, item.capture_instance))
+            return OutpatientSourceBatch(
+                mode=OutpatientSourceMode.CDC,
+                checkpoint=_lsn_checkpoint(to_lsn),
                 changes=tuple(changes),
             )
         finally:
@@ -223,7 +155,7 @@ class SqlServerOutpatientCdcSource:
         spec: OutpatientSourceSpec,
         from_lsn: bytes,
         to_lsn: bytes,
-    ) -> list[OutpatientCdcChange]:
+    ) -> list[OutpatientChange]:
         columns = ", ".join(f"[{column}]" for column in spec.columns)
         cursor.execute(
             f"""SELECT [__$start_lsn] AS start_lsn,
@@ -242,10 +174,9 @@ class SqlServerOutpatientCdcSource:
             if operation not in {1, 2, 4}:
                 continue
             payload = {column: row.get(column) for column in spec.columns}
-            changes.append(OutpatientCdcChange(
+            changes.append(OutpatientChange(
                 capture_instance=spec.capture_instance,
-                start_lsn=row["start_lsn"],
-                seqval=row["seqval"],
+                source_cursor=row["start_lsn"] + row["seqval"],
                 operation=operation,
                 commit_time=row.get("commit_time"),
                 source_key=tuple(payload[column] for column in spec.key_columns),
@@ -257,3 +188,11 @@ class SqlServerOutpatientCdcSource:
     def _rows_as_dicts(cursor) -> list[dict[str, Any]]:
         names = [item[0] for item in cursor.description]
         return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+
+def _lsn_checkpoint(value: bytes) -> OutpatientCheckpoint:
+    return OutpatientCheckpoint(
+        kind=CheckpointKind.LSN,
+        value=value.hex(),
+        observed_at=datetime.now(timezone.utc),
+    )

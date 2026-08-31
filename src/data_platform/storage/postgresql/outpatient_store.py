@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -9,9 +10,13 @@ from math import ceil
 from typing import Any
 from uuid import uuid4
 
-from src.adapters.insurance_interface.outpatient_cdc import (
+from src.adapters.insurance_interface.outpatient_source import (
     OUTPATIENT_SOURCE_SPECS,
-    OutpatientCdcChange,
+    CheckpointKind,
+    OutpatientChange,
+    OutpatientCheckpoint,
+    OutpatientSourceBatch,
+    OutpatientSourceMode,
 )
 from src.config.production import DATABASE_URL
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
@@ -95,7 +100,8 @@ def _build_trade_view() -> str:
         'trade.settlement_lifecycle AS "settlement_lifecycle"',
     ])
     return "CREATE OR REPLACE VIEW mz_trade AS\nSELECT\n    " + ",\n    ".join(fields) + (
-        "\nFROM outpatient_trade_current AS trade\nWHERE NOT is_deleted"
+        "\nFROM outpatient_trade_current AS trade"
+        "\nWHERE NOT trade.is_deleted AND trade.quality_status <> 'blocked'"
     )
 
 
@@ -106,23 +112,33 @@ def _build_fee_view() -> str:
     ]
     fields.extend(["fee_item.data_batch_id", "fee_item.source_lsn", "fee_item.semantic_version"])
     return "CREATE OR REPLACE VIEW mz_fee_item AS\nSELECT\n    " + ",\n    ".join(fields) + (
-        "\nFROM outpatient_fee_item_current AS fee_item\nWHERE NOT is_deleted"
+        "\nFROM outpatient_fee_item_current AS fee_item"
+        "\nJOIN outpatient_trade_current AS trade ON trade.trade_no = fee_item.trade_no"
+        "\nWHERE NOT fee_item.is_deleted AND NOT trade.is_deleted"
+        " AND trade.quality_status <> 'blocked'"
     )
 
 
 OUTPATIENT_SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS outpatient_sync_checkpoints (
         source_id VARCHAR(64) PRIMARY KEY,
-        last_lsn BYTEA NOT NULL,
+        source_mode VARCHAR(32),
+        checkpoint_kind VARCHAR(32),
+        checkpoint_value TEXT,
+        last_lsn BYTEA,
         last_batch_id VARCHAR(64) NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS outpatient_sync_batches (
         batch_id VARCHAR(64) PRIMARY KEY,
+        batch_key VARCHAR(64),
         source_id VARCHAR(64) NOT NULL,
         mode VARCHAR(32) NOT NULL CHECK(mode IN ('snapshot', 'incremental', 'heartbeat')),
-        from_lsn BYTEA NOT NULL,
-        to_lsn BYTEA NOT NULL,
+        source_mode VARCHAR(32),
+        checkpoint_kind VARCHAR(32),
+        checkpoint_value TEXT,
+        from_lsn BYTEA,
+        to_lsn BYTEA,
         semantic_version VARCHAR(32),
         source_committed_at TIMESTAMPTZ,
         published_at TIMESTAMPTZ NOT NULL,
@@ -130,18 +146,19 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
         quality_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
         UNIQUE(source_id, from_lsn, to_lsn, mode)
     )""",
-    """CREATE TABLE IF NOT EXISTS outpatient_cdc_events (
+    """CREATE TABLE IF NOT EXISTS outpatient_sync_events (
+        event_key VARCHAR(64) PRIMARY KEY,
         source_id VARCHAR(64) NOT NULL,
+        source_mode VARCHAR(32) NOT NULL,
         capture_instance VARCHAR(128) NOT NULL,
-        start_lsn BYTEA NOT NULL,
-        seqval BYTEA NOT NULL,
+        source_cursor BYTEA NOT NULL,
         operation INTEGER NOT NULL CHECK(operation IN (1, 2, 4)),
         commit_time TIMESTAMPTZ,
         source_key JSONB NOT NULL,
         payload JSONB NOT NULL,
         data_batch_id VARCHAR(64) NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY(source_id, capture_instance, start_lsn, seqval, operation)
+        UNIQUE(source_id, source_mode, capture_instance, source_cursor, operation)
     )""",
     """CREATE TABLE IF NOT EXISTS outpatient_trade_current (
         trade_no TEXT PRIMARY KEY,
@@ -164,6 +181,7 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
         cash_pay NUMERIC,
         payload JSONB NOT NULL,
         is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+        source_cursor BYTEA NOT NULL,
         source_lsn BYTEA NOT NULL,
         source_seqval BYTEA NOT NULL,
         source_operation INTEGER NOT NULL,
@@ -196,6 +214,7 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
         item_state TEXT,
         payload JSONB NOT NULL,
         is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+        source_cursor BYTEA NOT NULL,
         source_lsn BYTEA NOT NULL,
         source_seqval BYTEA NOT NULL,
         source_operation INTEGER NOT NULL,
@@ -217,6 +236,7 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
         diagnose_type TEXT,
         payload JSONB NOT NULL,
         is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+        source_cursor BYTEA NOT NULL,
         source_lsn BYTEA NOT NULL,
         source_seqval BYTEA NOT NULL,
         source_operation INTEGER NOT NULL,
@@ -225,13 +245,39 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
         updated_at TIMESTAMPTZ NOT NULL,
         PRIMARY KEY(trade_no, diagnose_no, recipe_no)
     )""",
-    "CREATE INDEX IF NOT EXISTS idx_outpatient_events_batch ON outpatient_cdc_events(data_batch_id)",
+    "CREATE INDEX IF NOT EXISTS idx_outpatient_events_batch ON outpatient_sync_events(data_batch_id)",
     "CREATE INDEX IF NOT EXISTS idx_outpatient_fee_trade ON outpatient_fee_item_current(trade_no)",
     "CREATE INDEX IF NOT EXISTS idx_outpatient_diagnosis_trade ON outpatient_diagnosis_current(trade_no)",
     "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS semantic_version VARCHAR(32) NOT NULL DEFAULT '1'",
     "ALTER TABLE outpatient_sync_batches ALTER COLUMN semantic_version DROP NOT NULL",
     "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS source_committed_at TIMESTAMPTZ",
     "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS quality_summary JSONB NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE outpatient_sync_checkpoints ADD COLUMN IF NOT EXISTS source_mode VARCHAR(32)",
+    "ALTER TABLE outpatient_sync_checkpoints ADD COLUMN IF NOT EXISTS checkpoint_kind VARCHAR(32)",
+    "ALTER TABLE outpatient_sync_checkpoints ADD COLUMN IF NOT EXISTS checkpoint_value TEXT",
+    "ALTER TABLE outpatient_sync_checkpoints ALTER COLUMN last_lsn DROP NOT NULL",
+    "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS batch_key VARCHAR(64)",
+    "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS source_mode VARCHAR(32)",
+    "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS checkpoint_kind VARCHAR(32)",
+    "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS checkpoint_value TEXT",
+    "ALTER TABLE outpatient_sync_batches ALTER COLUMN from_lsn DROP NOT NULL",
+    "ALTER TABLE outpatient_sync_batches ALTER COLUMN to_lsn DROP NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_outpatient_sync_batches_batch_key ON outpatient_sync_batches(batch_key) WHERE batch_key IS NOT NULL",
+    "ALTER TABLE outpatient_trade_current ADD COLUMN IF NOT EXISTS source_cursor BYTEA",
+    "UPDATE outpatient_trade_current SET source_cursor = COALESCE(source_lsn, decode('', 'hex')) || COALESCE(source_seqval, decode('', 'hex')) WHERE source_cursor IS NULL",
+    "ALTER TABLE outpatient_trade_current ALTER COLUMN source_cursor SET NOT NULL",
+    "ALTER TABLE outpatient_trade_current ALTER COLUMN source_lsn DROP NOT NULL",
+    "ALTER TABLE outpatient_trade_current ALTER COLUMN source_seqval DROP NOT NULL",
+    "ALTER TABLE outpatient_fee_item_current ADD COLUMN IF NOT EXISTS source_cursor BYTEA",
+    "UPDATE outpatient_fee_item_current SET source_cursor = COALESCE(source_lsn, decode('', 'hex')) || COALESCE(source_seqval, decode('', 'hex')) WHERE source_cursor IS NULL",
+    "ALTER TABLE outpatient_fee_item_current ALTER COLUMN source_cursor SET NOT NULL",
+    "ALTER TABLE outpatient_fee_item_current ALTER COLUMN source_lsn DROP NOT NULL",
+    "ALTER TABLE outpatient_fee_item_current ALTER COLUMN source_seqval DROP NOT NULL",
+    "ALTER TABLE outpatient_diagnosis_current ADD COLUMN IF NOT EXISTS source_cursor BYTEA",
+    "UPDATE outpatient_diagnosis_current SET source_cursor = COALESCE(source_lsn, decode('', 'hex')) || COALESCE(source_seqval, decode('', 'hex')) WHERE source_cursor IS NULL",
+    "ALTER TABLE outpatient_diagnosis_current ALTER COLUMN source_cursor SET NOT NULL",
+    "ALTER TABLE outpatient_diagnosis_current ALTER COLUMN source_lsn DROP NOT NULL",
+    "ALTER TABLE outpatient_diagnosis_current ALTER COLUMN source_seqval DROP NOT NULL",
     "ALTER TABLE outpatient_trade_current ADD COLUMN IF NOT EXISTS quality_status VARCHAR(32) NOT NULL DEFAULT 'complete'",
     "ALTER TABLE outpatient_trade_current ADD COLUMN IF NOT EXISTS context_quality VARCHAR(32)",
     "ALTER TABLE outpatient_trade_current ADD COLUMN IF NOT EXISTS settlement_chain_id TEXT",
@@ -255,19 +301,12 @@ class PublishedOutpatientBatch:
 
 
 @dataclass(frozen=True)
-class OutpatientSyncCheckpoint:
-    source_id: str
-    last_lsn: bytes
-    last_batch_id: str
-    updated_at: datetime
-
-
-@dataclass(frozen=True)
 class OutpatientSyncStatus:
     source_id: str
     last_batch_id: str | None
     last_mode: str | None
-    checkpoint_lsn: bytes | None
+    checkpoint_kind: str | None
+    checkpoint_value: str | None
     last_published_at: datetime | None
     last_non_empty_latency_seconds: float | None
     non_empty_sample_count: int
@@ -297,7 +336,7 @@ class OutpatientPostgresStore:
             """SELECT COUNT(*) AS present
                FROM unnest(ARRAY[
                    'outpatient_sync_checkpoints', 'outpatient_sync_batches',
-                   'outpatient_cdc_events', 'outpatient_trade_current',
+                   'outpatient_sync_events', 'outpatient_trade_current',
                    'outpatient_fee_item_current', 'outpatient_diagnosis_current',
                    'mz_trade', 'mz_fee_item'
                ]) AS expected(name)
@@ -317,14 +356,20 @@ class OutpatientPostgresStore:
             columns[row["table_name"]].add(row["column_name"])
         return columns
 
-    def get_checkpoint(self, source_id: str) -> OutpatientSyncCheckpoint | None:
+    def get_checkpoint(self, source_id: str) -> OutpatientCheckpoint | None:
         self.ensure_schema()
         rows = self._client.execute(
-            """SELECT source_id, last_lsn, last_batch_id, updated_at
+            """SELECT checkpoint_kind, checkpoint_value, updated_at
                FROM outpatient_sync_checkpoints WHERE source_id = %s""",
             (source_id,),
         )
-        return OutpatientSyncCheckpoint(**rows[0]) if rows else None
+        if not rows or not rows[0].get("checkpoint_kind") or rows[0].get("checkpoint_value") is None:
+            return None
+        return OutpatientCheckpoint(
+            kind=CheckpointKind(rows[0]["checkpoint_kind"]),
+            value=rows[0]["checkpoint_value"],
+            observed_at=rows[0]["updated_at"],
+        )
 
     def load_projection_rows(
         self, trade_nos: set[str]
@@ -392,7 +437,8 @@ class OutpatientPostgresStore:
             source_id=source_id,
             last_batch_id=latest.get("batch_id"),
             last_mode=latest.get("mode"),
-            checkpoint_lsn=checkpoint.last_lsn if checkpoint else None,
+            checkpoint_kind=checkpoint.kind.value if checkpoint else None,
+            checkpoint_value=checkpoint.value if checkpoint else None,
             last_published_at=latest.get("published_at"),
             last_non_empty_latency_seconds=latest_non_empty_latency,
             non_empty_sample_count=len(latencies),
@@ -405,17 +451,17 @@ class OutpatientPostgresStore:
         self,
         *,
         source_id: str,
-        mode: str,
-        from_lsn: bytes,
-        to_lsn: bytes,
+        execution_mode: str,
+        batch: OutpatientSourceBatch,
         semantic_version: str | None,
-        changes: tuple[OutpatientCdcChange, ...],
         quality_summary: dict[str, Any],
         projection_metadata: dict[tuple[str, tuple[Any, ...]], dict[str, Any]] | None = None,
     ) -> PublishedOutpatientBatch:
         self.ensure_schema()
         batch_id = str(uuid4())
         published_at = datetime.now(timezone.utc)
+        changes = batch.changes
+        batch_key = _batch_key(source_id, execution_mode, batch)
         source_committed_at = max(
             (change.commit_time for change in changes if change.commit_time is not None),
             default=None,
@@ -430,8 +476,8 @@ class OutpatientPostgresStore:
                 cursor.execute(
                     """SELECT batch_id, published_at, row_count
                        FROM outpatient_sync_batches
-                       WHERE source_id = %s AND from_lsn = %s AND to_lsn = %s AND mode = %s""",
-                    (source_id, from_lsn, to_lsn, mode),
+                       WHERE batch_key = %s""",
+                    (batch_key,),
                 )
                 existing = cursor.fetchone()
                 if existing:
@@ -439,7 +485,7 @@ class OutpatientPostgresStore:
                         batch_id=existing[0], published_at=existing[1], row_count=existing[2]
                     )
                 for change in changes:
-                    self._insert_event(cursor, source_id, batch_id, change)
+                    self._insert_event(cursor, source_id, batch.mode, batch_id, change)
                     metadata = projection_metadata.get(
                         (change.capture_instance, change.source_key), {}
                     )
@@ -453,41 +499,57 @@ class OutpatientPostgresStore:
                         )
                 cursor.execute(
                     """INSERT INTO outpatient_sync_batches
-                       (batch_id, source_id, mode, from_lsn, to_lsn, semantic_version,
-                        source_committed_at, row_count, quality_summary, published_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)""",
+                       (batch_id, batch_key, source_id, mode, source_mode, checkpoint_kind,
+                        checkpoint_value, semantic_version, source_committed_at, row_count,
+                        quality_summary, published_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)""",
                     (
-                        batch_id, source_id, mode, from_lsn, to_lsn, semantic_version,
+                        batch_id, batch_key, source_id, execution_mode, batch.mode.value,
+                        batch.checkpoint.kind.value, batch.checkpoint.value, semantic_version,
                         source_committed_at, len(changes), _json_dumps(quality_summary), published_at,
                     ),
                 )
                 cursor.execute(
                     """INSERT INTO outpatient_sync_checkpoints
-                       (source_id, last_lsn, last_batch_id, updated_at)
-                       VALUES (%s, %s, %s, %s)
+                       (source_id, source_mode, checkpoint_kind, checkpoint_value,
+                        last_lsn, last_batch_id, updated_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)
                        ON CONFLICT (source_id) DO UPDATE SET
+                           source_mode = EXCLUDED.source_mode,
+                           checkpoint_kind = EXCLUDED.checkpoint_kind,
+                           checkpoint_value = EXCLUDED.checkpoint_value,
                            last_lsn = EXCLUDED.last_lsn,
                            last_batch_id = EXCLUDED.last_batch_id,
-                           updated_at = EXCLUDED.updated_at
-                       WHERE EXCLUDED.last_lsn >= outpatient_sync_checkpoints.last_lsn""",
-                    (source_id, to_lsn, batch_id, published_at),
+                           updated_at = EXCLUDED.updated_at""",
+                    (
+                        source_id, batch.mode.value, batch.checkpoint.kind.value,
+                        batch.checkpoint.value, _legacy_lsn(batch.checkpoint), batch_id,
+                        published_at,
+                    ),
                 )
         return PublishedOutpatientBatch(
             batch_id=batch_id, published_at=published_at, row_count=len(changes)
         )
 
     @staticmethod
-    def _insert_event(cursor, source_id: str, batch_id: str, change: OutpatientCdcChange) -> None:
+    def _insert_event(
+        cursor,
+        source_id: str,
+        source_mode: OutpatientSourceMode,
+        batch_id: str,
+        change: OutpatientChange,
+    ) -> None:
+        event_key = _event_key(source_id, source_mode, change)
         cursor.execute(
-            """INSERT INTO outpatient_cdc_events
-               (source_id, capture_instance, start_lsn, seqval, operation, commit_time,
-                source_key, payload, data_batch_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
-               ON CONFLICT (source_id, capture_instance, start_lsn, seqval, operation) DO NOTHING""",
+            """INSERT INTO outpatient_sync_events
+               (event_key, source_id, source_mode, capture_instance, source_cursor,
+                operation, commit_time, source_key, payload, data_batch_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+               ON CONFLICT (event_key) DO NOTHING""",
             (
-                source_id, change.capture_instance, change.start_lsn, change.seqval,
-                change.operation, change.commit_time, _json_dumps(change.source_key),
-                _json_dumps(change.payload), batch_id,
+                event_key, source_id, source_mode.value, change.capture_instance,
+                change.source_cursor, change.operation, change.commit_time,
+                _json_dumps(change.source_key), _json_dumps(change.payload), batch_id,
             ),
         )
 
@@ -497,7 +559,7 @@ class OutpatientPostgresStore:
         batch_id: str,
         semantic_version: str,
         quality_summary: dict[str, Any],
-        change: OutpatientCdcChange,
+        change: OutpatientChange,
         metadata: dict[str, Any],
     ) -> None:
         if metadata.get("skip_projection"):
@@ -548,13 +610,14 @@ class OutpatientPostgresStore:
                (trade_no, trade_date, trade_state, fund_type, person_type, cure_type,
                 hospital_code, fee_all, fee_in, fee_out, fund_pay, self_pay_all,
                 self_pay_1, self_pay_2, big_self_pay, first_pay, person_account_pay,
-                cash_pay, payload, is_deleted, source_lsn, source_seqval, source_operation,
+                cash_pay, payload, is_deleted, source_cursor, source_lsn, source_seqval,
+                source_operation,
                 data_batch_id, semantic_version, quality_status, context_quality,
                 settlement_chain_id, settlement_lifecycle, diagnosis_codes,
                 section_codes, section_names, updated_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                        %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
-                       %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)
+                       %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)
                ON CONFLICT (trade_no) DO UPDATE SET
                    trade_date=EXCLUDED.trade_date, trade_state=EXCLUDED.trade_state,
                    fund_type=EXCLUDED.fund_type, person_type=EXCLUDED.person_type,
@@ -565,6 +628,7 @@ class OutpatientPostgresStore:
                    big_self_pay=EXCLUDED.big_self_pay, first_pay=EXCLUDED.first_pay,
                    person_account_pay=EXCLUDED.person_account_pay, cash_pay=EXCLUDED.cash_pay,
                    payload=EXCLUDED.payload, is_deleted=EXCLUDED.is_deleted,
+                   source_cursor=EXCLUDED.source_cursor,
                    source_lsn=EXCLUDED.source_lsn, source_seqval=EXCLUDED.source_seqval,
                    source_operation=EXCLUDED.source_operation, data_batch_id=EXCLUDED.data_batch_id,
                    semantic_version=EXCLUDED.semantic_version, quality_status=EXCLUDED.quality_status,
@@ -574,8 +638,7 @@ class OutpatientPostgresStore:
                    diagnosis_codes=EXCLUDED.diagnosis_codes,
                    section_codes=EXCLUDED.section_codes, section_names=EXCLUDED.section_names,
                    updated_at=EXCLUDED.updated_at
-               WHERE (EXCLUDED.source_lsn, EXCLUDED.source_seqval) >=
-                     (outpatient_trade_current.source_lsn, outpatient_trade_current.source_seqval)""",
+               WHERE EXCLUDED.source_cursor >= outpatient_trade_current.source_cursor""",
             (
                 _text(payload.get("T_TradeNo")), payload.get("T_TradeDate"),
                 _text(payload.get("T_State")), _text(payload.get("P_FundType")),
@@ -586,7 +649,8 @@ class OutpatientPostgresStore:
                 payload.get("T_SelfPay2"), payload.get("T_BigSelfPay"),
                 payload.get("T_FirstPay"), payload.get("T_PersonCountPay"),
                 payload.get("T_CashPay"), _json_dumps(payload), change.operation == 1,
-                change.start_lsn, change.seqval, change.operation, batch_id, semantic_version,
+                change.source_cursor, change.source_cursor, b"", change.operation,
+                batch_id, semantic_version,
                 metadata.get("quality_status", quality_summary.get("status", "complete")),
                 metadata.get("context_quality"), metadata.get("settlement_chain_id"),
                 metadata.get("settlement_lifecycle"),
@@ -603,10 +667,10 @@ class OutpatientPostgresStore:
             """INSERT INTO outpatient_fee_item_current
                (trade_no, item_id, item_no, item_code, standard_code, item_name, item_type,
                 fee_type, fee_level, item_count, fee, fee_in, fee_out, self_pay_2, item_state,
-                payload, is_deleted, source_lsn, source_seqval, source_operation,
+                payload, is_deleted, source_cursor, source_lsn, source_seqval, source_operation,
                 data_batch_id, semantic_version, updated_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                       %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
+                       %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (trade_no, item_id, item_no) DO UPDATE SET
                    item_code=EXCLUDED.item_code, standard_code=EXCLUDED.standard_code,
                    item_name=EXCLUDED.item_name, item_type=EXCLUDED.item_type,
@@ -615,11 +679,11 @@ class OutpatientPostgresStore:
                    fee_in=EXCLUDED.fee_in, fee_out=EXCLUDED.fee_out,
                    self_pay_2=EXCLUDED.self_pay_2, item_state=EXCLUDED.item_state,
                    payload=EXCLUDED.payload, is_deleted=EXCLUDED.is_deleted,
+                   source_cursor=EXCLUDED.source_cursor,
                    source_lsn=EXCLUDED.source_lsn, source_seqval=EXCLUDED.source_seqval,
                    source_operation=EXCLUDED.source_operation, data_batch_id=EXCLUDED.data_batch_id,
                    semantic_version=EXCLUDED.semantic_version, updated_at=EXCLUDED.updated_at
-               WHERE (EXCLUDED.source_lsn, EXCLUDED.source_seqval) >=
-                     (outpatient_fee_item_current.source_lsn, outpatient_fee_item_current.source_seqval)""",
+               WHERE EXCLUDED.source_cursor >= outpatient_fee_item_current.source_cursor""",
             (
                 _text(payload.get("T_TradeNo")), _text(payload.get("ItemId")),
                 _text(payload.get("ItemNo")), _text(payload.get("ItemCode")),
@@ -628,7 +692,8 @@ class OutpatientPostgresStore:
                 _text(payload.get("F_LEVEL")), payload.get("Count"), payload.get("Fee"),
                 payload.get("FeeIn"), payload.get("FeeOut"), payload.get("SelfPay2"),
                 _text(payload.get("State")), _json_dumps(payload), change.operation == 1,
-                change.start_lsn, change.seqval, change.operation, batch_id, semantic_version,
+                change.source_cursor, change.source_cursor, b"", change.operation,
+                batch_id, semantic_version,
                 datetime.now(timezone.utc),
             ),
         )
@@ -640,31 +705,64 @@ class OutpatientPostgresStore:
             """INSERT INTO outpatient_diagnosis_current
                (trade_no, diagnose_no, recipe_no, recipe_date, diagnose_name, diagnose_code,
                 section_code, section_name, his_section_name, diagnose_type, payload, is_deleted,
-                source_lsn, source_seqval, source_operation, data_batch_id, semantic_version,
+                source_cursor, source_lsn, source_seqval, source_operation, data_batch_id,
+                semantic_version,
                 updated_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s,
-                       %s, %s, %s, %s)
+                       %s, %s, %s, %s, %s)
                ON CONFLICT (trade_no, diagnose_no, recipe_no) DO UPDATE SET
                    recipe_date=EXCLUDED.recipe_date, diagnose_name=EXCLUDED.diagnose_name,
                    diagnose_code=EXCLUDED.diagnose_code, section_code=EXCLUDED.section_code,
                    section_name=EXCLUDED.section_name, his_section_name=EXCLUDED.his_section_name,
                    diagnose_type=EXCLUDED.diagnose_type, payload=EXCLUDED.payload,
-                   is_deleted=EXCLUDED.is_deleted, source_lsn=EXCLUDED.source_lsn,
-                   source_seqval=EXCLUDED.source_seqval,
+                   is_deleted=EXCLUDED.is_deleted, source_cursor=EXCLUDED.source_cursor,
+                   source_lsn=EXCLUDED.source_lsn, source_seqval=EXCLUDED.source_seqval,
                    source_operation=EXCLUDED.source_operation, data_batch_id=EXCLUDED.data_batch_id,
                    semantic_version=EXCLUDED.semantic_version, updated_at=EXCLUDED.updated_at
-               WHERE (EXCLUDED.source_lsn, EXCLUDED.source_seqval) >=
-                     (outpatient_diagnosis_current.source_lsn, outpatient_diagnosis_current.source_seqval)""",
+               WHERE EXCLUDED.source_cursor >= outpatient_diagnosis_current.source_cursor""",
             (
                 _text(payload.get("T_TradeNo")), _text(payload.get("DiagnoseNo")),
                 _text(payload.get("RecipeNo")), payload.get("RecipeDate"),
                 _text(payload.get("DiagnoseName")), _text(payload.get("DiagnoseCode")),
                 _text(payload.get("SectionCode")), _text(payload.get("Sectionname")),
                 _text(payload.get("HISSectionName")), _text(payload.get("DiagnoseType")),
-                _json_dumps(payload), change.operation == 1, change.start_lsn, change.seqval,
-                change.operation, batch_id, semantic_version, datetime.now(timezone.utc),
+                _json_dumps(payload), change.operation == 1, change.source_cursor,
+                change.source_cursor, b"", change.operation, batch_id, semantic_version,
+                datetime.now(timezone.utc),
             ),
         )
+
+
+def _batch_key(source_id: str, execution_mode: str, batch: OutpatientSourceBatch) -> str:
+    identity = "\x1f".join((
+        source_id,
+        execution_mode,
+        batch.mode.value,
+        batch.checkpoint.kind.value,
+        batch.checkpoint.value,
+    ))
+    return sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _event_key(
+    source_id: str,
+    source_mode: OutpatientSourceMode,
+    change: OutpatientChange,
+) -> str:
+    identity = "\x1f".join((
+        source_id,
+        source_mode.value,
+        change.capture_instance,
+        change.source_cursor.hex(),
+        str(change.operation),
+    ))
+    return sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _legacy_lsn(checkpoint: OutpatientCheckpoint) -> bytes | None:
+    if checkpoint.kind is not CheckpointKind.LSN:
+        return None
+    return bytes.fromhex(checkpoint.value)
 
 
 def _text(value: Any) -> str | None:
