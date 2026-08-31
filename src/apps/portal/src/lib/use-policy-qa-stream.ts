@@ -88,6 +88,8 @@ export interface UsePolicyQAStreamReturn {
   resumeSession: () => Promise<void>
   /** 升级问题至医保办 */
   escalateSession: (question: string, reason?: string) => Promise<void>
+  /** 医保办回复升级工单（dev 模拟入口）；成功后本地状态转 active 并展示回复 */
+  resolveEscalation: (reply: string) => Promise<boolean>
   /** 局部更新锚点（如 @换患者） */
   updateAnchor: (patch: Partial<SessionAnchor>) => void
   /** 关闭主体切换横幅 */
@@ -550,6 +552,28 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
     }
   }, [])
 
+  const resolveEscalation = useCallback(async (reply: string) => {
+    const taskId = escalation?.taskId
+    if (!taskId || !reply.trim()) return false
+    const { ok, data } = await fetchJson(
+      `${SESSIONS_URL.replace('/sessions', '')}/escalations/${encodeURIComponent(taskId)}/resolve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reply, resolved_by: 'dev-simulated' }),
+      },
+    )
+    if (ok && data && typeof data === 'object') {
+      setSessionStatus('active')
+      setStatusReason('')
+      setEscalation((prev) =>
+        prev ? { ...prev, status: 'completed', reply } : prev,
+      )
+      return true
+    }
+    return false
+  }, [escalation?.taskId])
+
   const updateAnchor = useCallback((patch: Partial<SessionAnchor>) => {
     setAnchor((prev) => ({ ...prev, ...patch }))
   }, [])
@@ -580,6 +604,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
     suspendSession,
     resumeSession,
     escalateSession,
+    resolveEscalation,
     updateAnchor,
     dismissSubjectChange,
     appendLocalMessage,

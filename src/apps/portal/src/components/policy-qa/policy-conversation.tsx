@@ -100,6 +100,16 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
     void stream.escalateSession(question)
   }
 
+  // Issue #30：dev 模拟医保办回复（生产构建不渲染）
+  const isDev = process.env.NODE_ENV !== 'production'
+  const [simReply, setSimReply] = useState('')
+  const handleSimulateResolve = () => {
+    if (!simReply.trim()) return
+    const reply = simReply.trim()
+    setSimReply('')
+    void stream.resolveEscalation(reply)
+  }
+
   return (
     <section className="space-y-6">
       <header className="space-y-1">
@@ -156,9 +166,31 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
         <div
           role="status"
           data-testid="policy-qa-escalated-banner"
-          className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          className="space-y-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
         >
-          已升级至医保办人工处理，本会话暂停提问。医保办回复后重新进入本页即可看到答复。
+          <p>已升级至医保办人工处理，本会话暂停提问。医保办回复后重新进入本页即可看到答复。</p>
+          {isDev ? (
+            <div className="flex items-center gap-2">
+              <input
+                value={simReply}
+                onChange={(event) => setSimReply(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') handleSimulateResolve()
+                }}
+                placeholder="模拟医保办回复（开发环境）"
+                aria-label="模拟医保办回复"
+                className="flex-1 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-xs text-slate-700"
+              />
+              <button
+                type="button"
+                onClick={handleSimulateResolve}
+                disabled={!simReply.trim()}
+                className="shrink-0 rounded-full bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-500 disabled:opacity-50"
+              >
+                模拟回复并恢复
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

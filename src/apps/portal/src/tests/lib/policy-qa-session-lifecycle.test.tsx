@@ -145,6 +145,7 @@ function makeStream(partial: Partial<UsePolicyQAStreamReturn> = {}): UsePolicyQA
     suspendSession: vi.fn(async () => {}),
     resumeSession: vi.fn(async () => {}),
     escalateSession: vi.fn(async () => {}),
+    resolveEscalation: vi.fn(async () => true),
     updateAnchor: vi.fn(),
     dismissSubjectChange: vi.fn(),
     appendLocalMessage: vi.fn(),
@@ -172,6 +173,19 @@ describe('PolicyConversation 会话生命周期 UI', () => {
     ).toBeDisabled()
     await userEvent.click(screen.getByRole('button', { name: /恢复对话/ }))
     expect(stream.resumeSession).toHaveBeenCalledOnce()
+  })
+
+  it('escalated 显示升级横幅与 dev 模拟回复入口', async () => {
+    const stream = makeStream({ sessionStatus: 'escalated' })
+    render(<PolicyConversation stream={stream} />)
+    expect(screen.getByTestId('policy-qa-escalated-banner')).toHaveTextContent('医保办人工处理')
+    // dev 环境横幅内嵌模拟回复入口
+    await userEvent.type(
+      screen.getByRole('textbox', { name: '模拟医保办回复' }),
+      '请携带材料到窗口办理',
+    )
+    await userEvent.click(screen.getByRole('button', { name: '模拟回复并恢复' }))
+    expect(stream.resolveEscalation).toHaveBeenCalledWith('请携带材料到窗口办理')
   })
 
   it('escalated 显示升级横幅与医保办回复', () => {

@@ -53,6 +53,7 @@ function makeStream(
     suspendSession: vi.fn(async () => {}),
     resumeSession: vi.fn(async () => {}),
     escalateSession: vi.fn(async () => {}),
+    resolveEscalation: vi.fn(async () => true),
     updateAnchor: vi.fn(),
     dismissSubjectChange: vi.fn(),
     appendLocalMessage: vi.fn(),
