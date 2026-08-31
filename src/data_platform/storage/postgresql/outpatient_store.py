@@ -118,7 +118,7 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
         mode VARCHAR(32) NOT NULL CHECK(mode IN ('snapshot', 'incremental', 'heartbeat')),
         from_lsn BYTEA NOT NULL,
         to_lsn BYTEA NOT NULL,
-        semantic_version VARCHAR(32) NOT NULL,
+        semantic_version VARCHAR(32),
         source_committed_at TIMESTAMPTZ,
         published_at TIMESTAMPTZ NOT NULL,
         row_count INTEGER NOT NULL CHECK(row_count >= 0),
@@ -163,7 +163,7 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
         source_seqval BYTEA NOT NULL,
         source_operation INTEGER NOT NULL,
         data_batch_id VARCHAR(64) NOT NULL,
-        semantic_version VARCHAR(32) NOT NULL,
+        semantic_version VARCHAR(32),
         quality_status VARCHAR(32) NOT NULL DEFAULT 'complete',
         context_quality VARCHAR(32),
         settlement_chain_id TEXT,
@@ -195,7 +195,7 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
         source_seqval BYTEA NOT NULL,
         source_operation INTEGER NOT NULL,
         data_batch_id VARCHAR(64) NOT NULL,
-        semantic_version VARCHAR(32) NOT NULL,
+        semantic_version VARCHAR(32),
         updated_at TIMESTAMPTZ NOT NULL,
         PRIMARY KEY(trade_no, item_id, item_no)
     )""",
@@ -216,7 +216,7 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
         source_seqval BYTEA NOT NULL,
         source_operation INTEGER NOT NULL,
         data_batch_id VARCHAR(64) NOT NULL,
-        semantic_version VARCHAR(32) NOT NULL,
+        semantic_version VARCHAR(32),
         updated_at TIMESTAMPTZ NOT NULL,
         PRIMARY KEY(trade_no, diagnose_no, recipe_no)
     )""",
@@ -224,6 +224,7 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_outpatient_fee_trade ON outpatient_fee_item_current(trade_no)",
     "CREATE INDEX IF NOT EXISTS idx_outpatient_diagnosis_trade ON outpatient_diagnosis_current(trade_no)",
     "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS semantic_version VARCHAR(32) NOT NULL DEFAULT '1'",
+    "ALTER TABLE outpatient_sync_batches ALTER COLUMN semantic_version DROP NOT NULL",
     "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS source_committed_at TIMESTAMPTZ",
     "ALTER TABLE outpatient_sync_batches ADD COLUMN IF NOT EXISTS quality_summary JSONB NOT NULL DEFAULT '{}'::jsonb",
     "ALTER TABLE outpatient_trade_current ADD COLUMN IF NOT EXISTS quality_status VARCHAR(32) NOT NULL DEFAULT 'complete'",
@@ -233,6 +234,9 @@ OUTPATIENT_SCHEMA_STATEMENTS = (
     "ALTER TABLE outpatient_trade_current ADD COLUMN IF NOT EXISTS diagnosis_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
     "ALTER TABLE outpatient_trade_current ADD COLUMN IF NOT EXISTS section_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
     "ALTER TABLE outpatient_trade_current ADD COLUMN IF NOT EXISTS section_names JSONB NOT NULL DEFAULT '[]'::jsonb",
+    "ALTER TABLE outpatient_trade_current ALTER COLUMN semantic_version DROP NOT NULL",
+    "ALTER TABLE outpatient_fee_item_current ALTER COLUMN semantic_version DROP NOT NULL",
+    "ALTER TABLE outpatient_diagnosis_current ALTER COLUMN semantic_version DROP NOT NULL",
     _build_trade_view(),
     _build_fee_view(),
 )
@@ -243,6 +247,14 @@ class PublishedOutpatientBatch:
     batch_id: str
     published_at: datetime
     row_count: int
+
+
+@dataclass(frozen=True)
+class OutpatientSyncCheckpoint:
+    source_id: str
+    last_lsn: bytes
+    last_batch_id: str
+    updated_at: datetime
 
 
 class OutpatientPostgresStore:
@@ -274,6 +286,48 @@ class OutpatientPostgresStore:
         )
         return bool(rows and int(rows[0]["present"]) == 8)
 
+    def get_checkpoint(self, source_id: str) -> OutpatientSyncCheckpoint | None:
+        self.ensure_schema()
+        rows = self._client.execute(
+            """SELECT source_id, last_lsn, last_batch_id, updated_at
+               FROM outpatient_sync_checkpoints WHERE source_id = %s""",
+            (source_id,),
+        )
+        return OutpatientSyncCheckpoint(**rows[0]) if rows else None
+
+    def load_projection_rows(
+        self, trade_nos: set[str]
+    ) -> dict[str, tuple[dict[str, Any], ...]]:
+        """读取受影响交易及同链事实，供下一批确定性重算。"""
+        if not trade_nos:
+            return {capture: () for capture in OUTPATIENT_SOURCE_SPECS}
+        requested = sorted(trade_nos)
+        trade_rows = self._client.execute(
+            """SELECT payload FROM outpatient_trade_current
+               WHERE NOT is_deleted
+                 AND (trade_no = ANY(%s) OR payload ->> 'T_OraginalTradeNo' = ANY(%s))""",
+            (requested, requested),
+        )
+        trades = tuple(_payload(row["payload"]) for row in trade_rows)
+        chain_trade_nos = sorted({
+            str(row.get("T_TradeNo")) for row in trades if row.get("T_TradeNo") is not None
+        } | set(requested))
+        fee_rows = self._client.execute(
+            """SELECT payload FROM outpatient_fee_item_current
+               WHERE NOT is_deleted AND trade_no = ANY(%s)""",
+            (chain_trade_nos,),
+        )
+        diagnosis_rows = self._client.execute(
+            """SELECT payload FROM outpatient_diagnosis_current
+               WHERE NOT is_deleted AND trade_no = ANY(%s)""",
+            (chain_trade_nos,),
+        )
+        return {
+            "dbo_o_Trade": trades,
+            "dbo_o_FeeItem": tuple(_payload(row["payload"]) for row in fee_rows),
+            "dbo_o_Diagnose": tuple(_payload(row["payload"]) for row in diagnosis_rows),
+        }
+
     def publish_batch(
         self,
         *,
@@ -281,7 +335,7 @@ class OutpatientPostgresStore:
         mode: str,
         from_lsn: bytes,
         to_lsn: bytes,
-        semantic_version: str,
+        semantic_version: str | None,
         changes: tuple[OutpatientCdcChange, ...],
         quality_summary: dict[str, Any],
         projection_metadata: dict[tuple[str, tuple[Any, ...]], dict[str, Any]] | None = None,
@@ -319,6 +373,11 @@ class OutpatientPostgresStore:
                     self._upsert_projection(
                         cursor, batch_id, semantic_version, quality_summary, change, metadata
                     )
+                for (capture_instance, source_key), metadata in projection_metadata.items():
+                    if capture_instance == "dbo_o_Trade" and source_key:
+                        self._update_trade_metadata(
+                            cursor, str(source_key[0]), batch_id, semantic_version, metadata
+                        )
                 cursor.execute(
                     """INSERT INTO outpatient_sync_batches
                        (batch_id, source_id, mode, from_lsn, to_lsn, semantic_version,
@@ -368,6 +427,8 @@ class OutpatientPostgresStore:
         change: OutpatientCdcChange,
         metadata: dict[str, Any],
     ) -> None:
+        if metadata.get("skip_projection"):
+            return
         if change.capture_instance == "dbo_o_Trade":
             self._upsert_trade(
                 cursor, batch_id, semantic_version, quality_summary, change, metadata
@@ -378,6 +439,33 @@ class OutpatientPostgresStore:
             self._upsert_diagnosis(cursor, batch_id, semantic_version, change)
         else:
             raise ValueError(f"unsupported capture instance: {change.capture_instance}")
+
+    @staticmethod
+    def _update_trade_metadata(
+        cursor,
+        trade_no: str,
+        batch_id: str,
+        semantic_version: str | None,
+        metadata: dict[str, Any],
+    ) -> None:
+        cursor.execute(
+            """UPDATE outpatient_trade_current SET
+                   data_batch_id = %s, semantic_version = %s, quality_status = %s,
+                   context_quality = %s, settlement_chain_id = %s,
+                   settlement_lifecycle = %s, diagnosis_codes = %s::jsonb,
+                   section_codes = %s::jsonb, section_names = %s::jsonb,
+                   updated_at = %s
+               WHERE trade_no = %s""",
+            (
+                batch_id, semantic_version, metadata.get("quality_status", "complete"),
+                metadata.get("context_quality"), metadata.get("settlement_chain_id"),
+                metadata.get("settlement_lifecycle"),
+                _json_dumps(metadata.get("diagnosis_codes", [])),
+                _json_dumps(metadata.get("section_codes", [])),
+                _json_dumps(metadata.get("section_names", [])),
+                datetime.now(timezone.utc), trade_no,
+            ),
+        )
 
     @staticmethod
     def _upsert_trade(cursor, batch_id, semantic_version, quality_summary, change, metadata) -> None:
@@ -522,3 +610,13 @@ def _json_default(value: Any) -> str:
     if isinstance(value, bytes):
         return value.hex()
     raise TypeError(f"unsupported JSON value: {type(value).__name__}")
+
+
+def _payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        loaded = json.loads(value)
+        if isinstance(loaded, dict):
+            return loaded
+    raise TypeError("outpatient projection payload must be a JSON object")
