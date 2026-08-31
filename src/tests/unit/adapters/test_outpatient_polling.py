@@ -1,9 +1,14 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
+from src.adapters.insurance_interface.outpatient_cdc import SourceContractMismatchError
 from src.adapters.insurance_interface.outpatient_polling import (
     SqlServerOutpatientPollingSource,
+    probe_outpatient_readiness,
 )
 from src.adapters.insurance_interface.outpatient_source import (
+    OUTPATIENT_SOURCE_SPECS,
     CheckpointKind,
     OutpatientCheckpoint,
     OutpatientSourceMode,
@@ -21,6 +26,8 @@ class _Cursor:
 
     def execute(self, sql, *params):
         self.connection.executions.append((sql, params))
+        if self.connection.fail_table and f"[{self.connection.fail_table}]" in sql:
+            raise RuntimeError("raw database error")
         if "[dbo].[o_Trade]" in sql:
             self.description = [("T_TradeNo",), ("T_TradeDate",)]
             self.rows = [(trade_no, END - timedelta(minutes=1)) for trade_no in self.connection.trade_nos]
@@ -35,10 +42,14 @@ class _Cursor:
     def fetchall(self):
         return self.rows
 
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
 
 class _Connection:
-    def __init__(self, trade_nos=("T1",)):
+    def __init__(self, trade_nos=("T1",), fail_table=None):
         self.trade_nos = trade_nos
+        self.fail_table = fail_table
         self.executions = []
         self.closed = False
 
@@ -104,3 +115,26 @@ def test_first_read_is_controlled_baseline_and_next_read_uses_lookback() -> None
     )
     assert incremental.is_baseline is False
     assert incremental.window_start == END - timedelta(hours=2)
+
+
+def test_readiness_probe_reads_all_three_tables_and_contract_columns() -> None:
+    connection = _Connection()
+
+    table_count, column_count = probe_outpatient_readiness(connection)
+
+    assert table_count == 3
+    assert column_count == 117
+    probes = [sql for sql, _params in connection.executions if sql.startswith("SELECT TOP 1")]
+    assert len(probes) == 3
+    for spec in OUTPATIENT_SOURCE_SPECS.values():
+        sql = next(item for item in probes if f"[dbo].[{spec.table_name}]" in item)
+        assert all(f"[{column}]" in sql for column in spec.columns)
+
+
+def test_readiness_probe_hides_raw_table_error() -> None:
+    connection = _Connection(fail_table="o_FeeItem")
+
+    with pytest.raises(SourceContractMismatchError, match="门诊源表不可直接读取") as caught:
+        probe_outpatient_readiness(connection)
+
+    assert "raw database error" not in str(caught.value)

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from src.adapters.insurance_interface.outpatient_cdc import SourceContractMismatchError
 from src.adapters.insurance_interface.outpatient_source import (
     OUTPATIENT_SOURCE_SPECS,
     CheckpointKind,
@@ -11,6 +12,23 @@ from src.adapters.insurance_interface.outpatient_source import (
     OutpatientSourceBatch,
     OutpatientSourceMode,
 )
+
+
+def probe_outpatient_readiness(connection) -> tuple[int, int]:
+    """验证固定门诊三表、契约字段和当前账号读取权限。"""
+    cursor = connection.cursor()
+    try:
+        for spec in OUTPATIENT_SOURCE_SPECS.values():
+            columns = ", ".join(f"[{column}]" for column in spec.columns)
+            cursor.execute(
+                f"SELECT TOP 1 {columns} FROM [dbo].[{spec.table_name}]"
+            )
+            cursor.fetchone()
+    except Exception as exc:
+        raise SourceContractMismatchError("门诊源表不可直接读取") from exc
+    return len(OUTPATIENT_SOURCE_SPECS), sum(
+        len(spec.columns) for spec in OUTPATIENT_SOURCE_SPECS.values()
+    )
 
 
 class SqlServerOutpatientPollingSource:

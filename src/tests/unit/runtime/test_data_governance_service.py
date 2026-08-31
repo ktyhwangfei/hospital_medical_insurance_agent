@@ -41,12 +41,13 @@ class _PostgresStore:
 class _Connection:
     def __init__(self):
         self.closed = False
+        self.executions = []
 
     def cursor(self):
         return self
 
     def execute(self, sql):
-        assert sql == "SELECT 1"
+        self.executions.append(sql)
 
     def fetchone(self):
         return (1,)
@@ -115,5 +116,7 @@ def test_connection_probe_closes_successful_connection(monkeypatch) -> None:
     result = service.probe_connection("bjybdb")
 
     assert result.status is ConnectionStatus.HEALTHY
+    assert result.safe_message == "门诊 3 张源表及 117 个契约字段可读"
+    assert len(connection.executions) == 3
     assert result.checked_at <= datetime.now(timezone.utc)
     assert connection.closed is True

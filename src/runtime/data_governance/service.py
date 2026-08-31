@@ -12,6 +12,7 @@ from src.adapters.insurance_interface.outpatient_cdc import (
     SourceContractMismatchError,
     SqlServerOutpatientCdcSource,
 )
+from src.adapters.insurance_interface.outpatient_polling import probe_outpatient_readiness
 from src.data_platform.outpatient_governance import (
     CdcEnablementStatus,
     ConnectionStatus,
@@ -202,15 +203,13 @@ class DataGovernanceService:
         try:
             password = self._password(source)
             connection = self._connection_factory(source, password)
-            cursor = connection.cursor()
-            cursor.execute("SELECT 1")
-            if cursor.fetchone() is None:
-                raise RuntimeError("empty probe result")
+            table_count, column_count = probe_outpatient_readiness(connection)
         except Exception as exc:
             error_code, safe_message = _safe_connection_error(exc)
             status = ConnectionStatus.ERROR
         else:
-            error_code, safe_message = None, "连接成功"
+            error_code = None
+            safe_message = f"门诊 {table_count} 张源表及 {column_count} 个契约字段可读"
             status = ConnectionStatus.HEALTHY
         finally:
             if connection is not None:
