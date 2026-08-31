@@ -1,4 +1,4 @@
-import { requestJson } from './api-client'
+import { API_PREFIX, parseError, requestJson } from './api-client'
 import { ApiClientError } from './types'
 
 export type ConnectionStatus = 'unknown' | 'healthy' | 'error'
@@ -52,6 +52,91 @@ export interface DataGovernanceOverview {
   recentRuns: SyncRun[]
 }
 
+export interface DataSource {
+  sourceId: string
+  hospitalCode: string
+  hospitalName: string
+  name: string
+  host: string
+  port: number
+  database: string
+  schemaName: string
+  username: string
+  credentialId: string
+  credentialConfigured: boolean
+  credentialRevision: number | null
+  connectionStatus: ConnectionStatus
+  cdcStatus: CdcStatus
+  safeProbeMessage: string | null
+  lastProbedAt: string | null
+}
+
+export interface CreateDataSourceInput {
+  sourceId: string
+  hospitalCode: string
+  hospitalName: string
+  name: string
+  host: string
+  port: number
+  database: string
+  username: string
+  credentialId: string
+  password: string
+}
+
+export interface ConnectionProbe {
+  status: ConnectionStatus
+  errorCode: string | null
+  safeMessage: string
+  checkedAt: string
+}
+
+export interface CdcProbe {
+  status: string
+  databaseEnabled: boolean
+  readyCaptures: string[]
+  missingCaptures: string[]
+  retentionMinutes: number | null
+  safeMessage: string
+  checkedAt: string
+}
+
+export interface PostgresTarget {
+  connectionStatus: ConnectionStatus
+  schemaReady: boolean
+  safeMessage: string
+  checkedAt: string
+}
+
+export interface SyncJob {
+  sourceId: string
+  sourceMode: SourceMode
+  status: string
+  cdcPollIntervalSeconds: number
+  scheduleIntervalMinutes: number
+  lookbackHours: number
+  reconcileTime: string
+  reconcileDays: number
+  revision: number
+  baselineRequired: boolean
+  nextRunAt: string | null
+  runOnceRequestedAt: string | null
+  lastStartedAt: string | null
+  lastSucceededAt: string | null
+  lastErrorCode: string | null
+}
+
+export interface SaveSyncJobInput {
+  sourceMode: SourceMode
+  expectedRevision: number
+  confirmModeSwitch?: boolean
+  cdcPollIntervalSeconds?: number
+  scheduleIntervalMinutes?: number
+  lookbackHours?: number
+  reconcileTime?: string
+  reconcileDays?: number
+}
+
 interface SourceStatusDto {
   source_id: string
   hospital_code: string
@@ -97,6 +182,43 @@ interface OverviewResponse {
     }>
     recent_runs: SyncRunDto[]
   }
+}
+
+interface DataSourceDto {
+  source_id: string
+  hospital_code: string
+  hospital_name: string
+  name: string
+  host: string
+  port: number
+  database: string
+  schema_name: string
+  username: string
+  credential_id: string
+  credential_configured: boolean
+  credential_revision: number | null
+  connection_status: ConnectionStatus
+  cdc_status: CdcStatus
+  safe_probe_message: string | null
+  last_probed_at: string | null
+}
+
+interface SyncJobDto {
+  source_id: string
+  source_mode: SourceMode
+  status: string
+  cdc_poll_interval_seconds: number
+  schedule_interval_minutes: number
+  lookback_hours: number
+  reconcile_time: string
+  reconcile_days: number
+  revision: number
+  baseline_required: boolean
+  next_run_at: string | null
+  run_once_requested_at: string | null
+  last_started_at: string | null
+  last_succeeded_at: string | null
+  last_error_code: string | null
 }
 
 function governanceToken(): string | null {
@@ -155,6 +277,47 @@ function mapRun(item: SyncRunDto): SyncRun {
   }
 }
 
+function mapDataSource(item: DataSourceDto): DataSource {
+  return {
+    sourceId: item.source_id,
+    hospitalCode: item.hospital_code,
+    hospitalName: item.hospital_name,
+    name: item.name,
+    host: item.host,
+    port: item.port,
+    database: item.database,
+    schemaName: item.schema_name,
+    username: item.username,
+    credentialId: item.credential_id,
+    credentialConfigured: item.credential_configured,
+    credentialRevision: item.credential_revision,
+    connectionStatus: item.connection_status,
+    cdcStatus: item.cdc_status,
+    safeProbeMessage: item.safe_probe_message,
+    lastProbedAt: item.last_probed_at,
+  }
+}
+
+function mapJob(item: SyncJobDto): SyncJob {
+  return {
+    sourceId: item.source_id,
+    sourceMode: item.source_mode,
+    status: item.status,
+    cdcPollIntervalSeconds: item.cdc_poll_interval_seconds,
+    scheduleIntervalMinutes: item.schedule_interval_minutes,
+    lookbackHours: item.lookback_hours,
+    reconcileTime: item.reconcile_time,
+    reconcileDays: item.reconcile_days,
+    revision: item.revision,
+    baselineRequired: item.baseline_required,
+    nextRunAt: item.next_run_at,
+    runOnceRequestedAt: item.run_once_requested_at,
+    lastStartedAt: item.last_started_at,
+    lastSucceededAt: item.last_succeeded_at,
+    lastErrorCode: item.last_error_code,
+  }
+}
+
 export async function getDataGovernanceOverview(): Promise<DataGovernanceOverview> {
   const { result } = await dataGovernanceRequest<OverviewResponse>('/overview')
   return {
@@ -171,4 +334,151 @@ export async function getDataGovernanceOverview(): Promise<DataGovernanceOvervie
     })),
     recentRuns: result.recent_runs.map(mapRun),
   }
+}
+
+export async function listDataSources(): Promise<DataSource[]> {
+  const response = await dataGovernanceRequest<{ result: { items: DataSourceDto[] } }>('/data-sources')
+  return response.result.items.map(mapDataSource)
+}
+
+export async function createDataSource(input: CreateDataSourceInput): Promise<DataSource> {
+  const response = await dataGovernanceRequest<{ result: DataSourceDto }>('/data-sources', {
+    method: 'POST',
+    body: JSON.stringify({
+      source_id: input.sourceId,
+      hospital_code: input.hospitalCode,
+      hospital_name: input.hospitalName,
+      name: input.name,
+      host: input.host,
+      port: input.port,
+      database: input.database,
+      schema_name: 'dbo',
+      username: input.username,
+      credential: { credential_id: input.credentialId, password: input.password },
+    }),
+  })
+  return mapDataSource(response.result)
+}
+
+export async function updateDataSource(
+  sourceId: string,
+  input: Partial<Pick<CreateDataSourceInput, 'hospitalCode' | 'hospitalName' | 'name' | 'host' | 'port' | 'database' | 'username'>>,
+): Promise<DataSource> {
+  const response = await dataGovernanceRequest<{ result: DataSourceDto }>(`/data-sources/${encodeURIComponent(sourceId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(Object.fromEntries(Object.entries({
+      hospital_code: input.hospitalCode,
+      hospital_name: input.hospitalName,
+      name: input.name,
+      host: input.host,
+      port: input.port,
+      database: input.database,
+      username: input.username,
+    }).filter(([, value]) => value !== undefined))),
+  })
+  return mapDataSource(response.result)
+}
+
+export async function rotateDataSourceCredential(
+  sourceId: string,
+  credentialId: string,
+  password: string,
+  expectedRevision: number,
+): Promise<DataSource> {
+  const response = await dataGovernanceRequest<{ result: DataSourceDto }>(`/data-sources/${encodeURIComponent(sourceId)}/credential`, {
+    method: 'PUT',
+    body: JSON.stringify({ credential_id: credentialId, password, expected_revision: expectedRevision }),
+  })
+  return mapDataSource(response.result)
+}
+
+export async function testDataSourceConnection(sourceId: string): Promise<ConnectionProbe> {
+  const response = await dataGovernanceRequest<{ result: { status: ConnectionStatus; error_code: string | null; safe_message: string; checked_at: string } }>(`/data-sources/${encodeURIComponent(sourceId)}/test`, { method: 'POST' })
+  return {
+    status: response.result.status,
+    errorCode: response.result.error_code,
+    safeMessage: response.result.safe_message,
+    checkedAt: response.result.checked_at,
+  }
+}
+
+export async function downloadCdcScript(sourceId: string): Promise<void> {
+  const headers = new Headers()
+  const token = governanceToken()
+  if (token) headers.set('Authorization', token.startsWith('Bearer ') ? token : `Bearer ${token}`)
+  const response = await fetch(`${API_PREFIX}/data-governance/data-sources/${encodeURIComponent(sourceId)}/cdc-script`, { headers })
+  if (!response.ok) throw await parseError(response)
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'enable_outpatient_cdc.sql'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function checkDataSourceCdc(sourceId: string): Promise<CdcProbe> {
+  const response = await dataGovernanceRequest<{ result: {
+    status: string; database_enabled: boolean; ready_captures: string[]; missing_captures: string[];
+    retention_minutes: number | null; safe_message: string; checked_at: string
+  } }>(`/data-sources/${encodeURIComponent(sourceId)}/cdc-check`, { method: 'POST' })
+  return {
+    status: response.result.status,
+    databaseEnabled: response.result.database_enabled,
+    readyCaptures: response.result.ready_captures,
+    missingCaptures: response.result.missing_captures,
+    retentionMinutes: response.result.retention_minutes,
+    safeMessage: response.result.safe_message,
+    checkedAt: response.result.checked_at,
+  }
+}
+
+export async function getPostgresTargetStatus(): Promise<PostgresTarget> {
+  const response = await dataGovernanceRequest<{ result: { connection_status: ConnectionStatus; schema_ready: boolean; safe_message: string; checked_at: string } }>('/postgresql/status')
+  return {
+    connectionStatus: response.result.connection_status,
+    schemaReady: response.result.schema_ready,
+    safeMessage: response.result.safe_message,
+    checkedAt: response.result.checked_at,
+  }
+}
+
+export async function getSyncJob(sourceId: string): Promise<SyncJob | null> {
+  try {
+    const response = await dataGovernanceRequest<{ result: SyncJobDto }>(`/sync-jobs/${encodeURIComponent(sourceId)}`)
+    return mapJob(response.result)
+  } catch (error) {
+    if (error instanceof ApiClientError && error.status === 404) return null
+    throw error
+  }
+}
+
+export async function saveSyncJob(sourceId: string, input: SaveSyncJobInput): Promise<SyncJob> {
+  const response = await dataGovernanceRequest<{ result: SyncJobDto }>(`/sync-jobs/${encodeURIComponent(sourceId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      source_mode: input.sourceMode,
+      expected_revision: input.expectedRevision,
+      confirm_mode_switch: input.confirmModeSwitch ?? false,
+      cdc_poll_interval_seconds: input.cdcPollIntervalSeconds ?? 45,
+      schedule_interval_minutes: input.scheduleIntervalMinutes ?? 5,
+      lookback_hours: input.lookbackHours ?? 2,
+      reconcile_time: input.reconcileTime ?? '02:00:00',
+      reconcile_days: input.reconcileDays ?? 30,
+    }),
+  })
+  return mapJob(response.result)
+}
+
+async function syncJobAction(sourceId: string, action: 'start' | 'pause' | 'run-once'): Promise<SyncJob> {
+  const response = await dataGovernanceRequest<{ result: SyncJobDto }>(`/sync-jobs/${encodeURIComponent(sourceId)}/${action}`, { method: 'POST' })
+  return mapJob(response.result)
+}
+
+export const startSyncJob = (sourceId: string) => syncJobAction(sourceId, 'start')
+export const pauseSyncJob = (sourceId: string) => syncJobAction(sourceId, 'pause')
+export const runSyncJobOnce = (sourceId: string) => syncJobAction(sourceId, 'run-once')
+
+export async function listSyncRuns(sourceId: string): Promise<SyncRun[]> {
+  const response = await dataGovernanceRequest<{ result: { items: SyncRunDto[] } }>(`/sync-jobs/${encodeURIComponent(sourceId)}/runs`)
+  return response.result.items.map(mapRun)
 }

@@ -1,7 +1,7 @@
 """门诊数据治理 API 的公开契约。"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, Field, SecretStr
@@ -62,6 +62,7 @@ class SaveSyncJobRequest(BaseModel):
     cdc_poll_interval_seconds: int = Field(default=45, ge=30, le=60)
     schedule_interval_minutes: int = Field(default=5, ge=1, le=1440)
     lookback_hours: int = Field(default=2, ge=1, le=168)
+    reconcile_time: time = time(2)
     reconcile_days: int = Field(default=30, ge=1, le=365)
 
 

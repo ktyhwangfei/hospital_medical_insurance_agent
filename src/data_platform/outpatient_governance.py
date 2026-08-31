@@ -44,6 +44,7 @@ class OutpatientDataSource(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     credential_id: str = Field(min_length=1, max_length=128)
     credential_configured: bool = True
+    credential_revision: int | None = Field(default=None, ge=1)
     connection_status: ConnectionStatus = ConnectionStatus.UNKNOWN
     cdc_status: CdcEnablementStatus = CdcEnablementStatus.NOT_CHECKED
     safe_probe_message: str | None = Field(default=None, max_length=256)

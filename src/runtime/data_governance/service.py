@@ -190,7 +190,10 @@ class DataGovernanceService:
             revision=expected_revision + 1,
         )
         self._store.rotate_credential(credential, expected_revision=expected_revision)
-        return source.model_copy(update={"credential_configured": True})
+        return source.model_copy(update={
+            "credential_configured": True,
+            "credential_revision": credential.revision,
+        })
 
     def probe_connection(self, source_id: str) -> DataSourceConnectionProbe:
         source = self._store.get_source(source_id)
@@ -283,6 +286,7 @@ class DataGovernanceService:
                 cdc_poll_interval_seconds=request.cdc_poll_interval_seconds,
                 schedule_interval_minutes=request.schedule_interval_minutes,
                 lookback_hours=request.lookback_hours,
+                reconcile_time=request.reconcile_time,
                 reconcile_days=request.reconcile_days,
                 revision=1,
                 created_at=now,
@@ -301,6 +305,7 @@ class DataGovernanceService:
             "cdc_poll_interval_seconds": request.cdc_poll_interval_seconds,
             "schedule_interval_minutes": request.schedule_interval_minutes,
             "lookback_hours": request.lookback_hours,
+            "reconcile_time": request.reconcile_time,
             "reconcile_days": request.reconcile_days,
             "revision": current.revision + 1,
             "baseline_required": current.baseline_required or mode_changed,
@@ -391,7 +396,10 @@ class DataGovernanceService:
                     source.host, source.port, source.database, source.username
                 ),
             )
-        return source.model_copy(update={"credential_configured": configured})
+        return source.model_copy(update={
+            "credential_configured": configured,
+            "credential_revision": credential.revision if configured else None,
+        })
 
     def _save_job_state(
         self,
