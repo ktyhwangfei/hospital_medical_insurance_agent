@@ -6,7 +6,7 @@ from src.adapters.billing.models import (
     PreviewedRefundItem,
     SettlementAmountSnapshot,
 )
-from skills.outpatient_pre_refund_analysis_skill.assembler import load
+from skill_drafts.outpatient_pre_refund_analysis_skill.assembler import load
 
 
 def _request(quantity: str = "1") -> tuple[PartialRefundItemRequest, ...]:

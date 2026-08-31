@@ -2,43 +2,27 @@ from importlib.util import find_spec
 from decimal import Decimal
 
 import pytest
-from pydantic import ValidationError
 
 from src.adapters.base.models import AdapterCallContext
 from src.adapters.base.service import failed_result, successful_result
 from src.adapters.billing.models import (
+    PartialRefundItemRequest,
     PartialRefundPreview,
     PreSettlementErrorType,
     PreviewedRefundItem,
     SettlementAmountSnapshot,
 )
 from src.runtime.api.schemas import AgentResponse
-from src.runtime.policy_qa import models
-from src.runtime.policy_qa.models import PolicyQARequest, PreRefundItemInput
-from src.runtime.policy_qa.pre_refund_flow import (
+from skill_drafts.outpatient_pre_refund_analysis_skill.scripts.pre_refund_flow import (
     refund_execution_actions,
     run_pre_refund_flow,
 )
 
 
-def test_policy_qa_models_expose_structured_pre_refund_item():
-    assert hasattr(models, "PreRefundItemInput")
-
-
 def test_pre_refund_core_flow_module_exists():
-    assert find_spec("src.runtime.policy_qa.pre_refund_flow") is not None
-
-
-@pytest.mark.parametrize(
-    ("fee_detail_id", "refund_quantity"),
-    [("", "1"), ("   ", "1"), ("F001", "0"), ("F001", "-1")],
-)
-def test_pre_refund_item_rejects_invalid_values(fee_detail_id, refund_quantity):
-    with pytest.raises(ValidationError):
-        PreRefundItemInput(
-            fee_detail_id=fee_detail_id,
-            refund_quantity=refund_quantity,
-        )
+    assert find_spec(
+        "skill_drafts.outpatient_pre_refund_analysis_skill.scripts.pre_refund_flow"
+    ) is not None
 
 
 class StubBillingAdapter:
@@ -54,16 +38,25 @@ class StubBillingAdapter:
         return self._results.pop(0)
 
 
-def _request(
+def _items() -> tuple[PartialRefundItemRequest, ...]:
+    return (
+        PartialRefundItemRequest(
+            fee_detail_id="F001",
+            refund_quantity=Decimal("1"),
+        ),
+    )
+
+
+async def _run(
+    adapter: StubBillingAdapter,
     question: str = "请做部分项目预退费分析",
-    items: list[PreRefundItemInput] | None = None,
-) -> PolicyQARequest:
-    return PolicyQARequest(
+    items: tuple[PartialRefundItemRequest, ...] | None = None,
+):
+    return await run_pre_refund_flow(
         question=question,
         settlement_id="OP-001",
-        pre_refund_items=items
-        if items is not None
-        else [PreRefundItemInput(fee_detail_id="F001", refund_quantity="1")],
+        items=_items() if items is None else items,
+        billing_adapter=adapter,
     )
 
 
@@ -121,7 +114,7 @@ def _failed_result(error_type: PreSettlementErrorType):
 async def test_successful_preview_is_assembled_once():
     adapter = StubBillingAdapter(_success_result())
 
-    outcome = await run_pre_refund_flow(_request(), adapter)
+    outcome = await _run(adapter)
 
     assert outcome.state == "completed"
     assert outcome.skill_result is not None
@@ -135,15 +128,13 @@ async def test_successful_preview_is_assembled_once():
 async def test_missing_or_duplicate_items_do_not_call_adapter():
     adapter = StubBillingAdapter()
 
-    missing = await run_pre_refund_flow(_request(items=[]), adapter)
-    duplicate = await run_pre_refund_flow(
-        _request(
-            items=[
-                PreRefundItemInput(fee_detail_id="F001", refund_quantity="1"),
-                PreRefundItemInput(fee_detail_id="F001", refund_quantity="1"),
-            ]
-        ),
+    missing = await _run(adapter, items=())
+    duplicate = await _run(
         adapter,
+        items=(
+            PartialRefundItemRequest("F001", Decimal("1")),
+            PartialRefundItemRequest("F001", Decimal("1")),
+        ),
     )
 
     assert missing.state == "unavailable"
@@ -158,7 +149,7 @@ async def test_not_configured_failure_is_not_retried():
         _failed_result(PreSettlementErrorType.NOT_CONFIGURED)
     )
 
-    outcome = await run_pre_refund_flow(_request(), adapter)
+    outcome = await _run(adapter)
 
     assert outcome.state == "unavailable"
     assert outcome.attempt_count == 1
@@ -173,7 +164,7 @@ async def test_transient_failure_recovers_once():
         _success_result(),
     )
 
-    outcome = await run_pre_refund_flow(_request(), adapter)
+    outcome = await _run(adapter)
 
     assert outcome.state == "completed"
     assert outcome.attempt_count == 2
@@ -188,7 +179,7 @@ async def test_repeated_transient_failure_stops_after_two_attempts():
         _failed_result(PreSettlementErrorType.UNAVAILABLE),
     )
 
-    outcome = await run_pre_refund_flow(_request(), adapter)
+    outcome = await _run(adapter)
 
     assert outcome.state == "unavailable"
     assert outcome.attempt_count == 2
@@ -205,11 +196,11 @@ async def test_explicit_refund_execution_waits_for_human_before_adapter(monkeypa
         blocked_actions=["执行退费"],
     )
     monkeypatch.setattr(
-        "src.runtime.policy_qa.pre_refund_flow.build_human_confirmation_response",
+        "skill_drafts.outpatient_pre_refund_analysis_skill.scripts.pre_refund_flow.build_human_confirmation_response",
         lambda actions: confirmation,
     )
 
-    outcome = await run_pre_refund_flow(_request("请立即执行退费"), adapter)
+    outcome = await _run(adapter, "请立即执行退费")
 
     assert outcome.state == "waiting_human_confirmation"
     assert outcome.confirmation is confirmation
@@ -221,7 +212,7 @@ async def test_explicit_refund_execution_waits_for_human_before_adapter(monkeypa
 async def test_preview_wording_is_not_treated_as_execution():
     adapter = StubBillingAdapter(_success_result())
 
-    outcome = await run_pre_refund_flow(_request("请做预退费分析"), adapter)
+    outcome = await _run(adapter, "请做预退费分析")
 
     assert outcome.state == "completed"
     assert adapter.preview_calls == 1
@@ -229,7 +220,7 @@ async def test_preview_wording_is_not_treated_as_execution():
 
 def test_preview_wording_does_not_bypass_other_high_risk_actions(monkeypatch):
     monkeypatch.setattr(
-        "src.runtime.policy_qa.pre_refund_flow.detect_blocked_actions",
+        "skill_drafts.outpatient_pre_refund_analysis_skill.scripts.pre_refund_flow.detect_blocked_actions",
         lambda question: [("退费", "refund-rule"), ("病案首页修改", "record-rule")],
     )
 

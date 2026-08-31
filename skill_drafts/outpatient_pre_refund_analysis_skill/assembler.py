@@ -1,3 +1,5 @@
+"""门诊部分项目预退费分析候选 Skill 组装器。"""
+
 from decimal import Decimal
 from pathlib import Path
 

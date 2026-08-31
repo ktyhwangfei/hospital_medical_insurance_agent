@@ -1,5 +1,7 @@
 # 门诊部分项目预退费分析 Implementation Plan
 
+> **状态更正（2026-08-31）**：原计划错误地绕过草稿治理直接接入正式运行时，后续实施已撤回。当前只保留 `skill_drafts/` 候选包、适配器契约和隔离核心流程；真实预结算接入、候选评测、人工审批与物化发布须另行执行。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在现有 `/policy-qa/stream` 入口中增加门诊部分项目预退费分析：只接受费用明细唯一标识和拟退数量，只信任院端预结算结果，输出可追溯的退款/补缴分析，并在任何实际退费意图出现时转人工确认。

@@ -21,20 +21,12 @@ import asyncio
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from src.adapters.billing.in_memory import InMemoryBillingAdapter
-from src.adapters.ports.billing import BillingPort
 from src.runtime.policy_qa.explanation_mode import (
     ExplanationMode,
     detect_explanation_mode,
     fee_item_label,
 )
 from src.runtime.policy_qa.models import PolicyQARequest
-from src.runtime.policy_qa.pre_refund_flow import (
-    EXECUTION_TERMS,
-    PRE_REFUND_SKILL_ID,
-    PreRefundFlowOutcome,
-    run_pre_refund_flow,
-)
 from src.runtime.policy_qa.public_contract import (
     PolicyCitation,
     PolicyQAPublicResult,
@@ -173,15 +165,6 @@ def get_policy_qa_regression_mining_service() -> RegressionMiningService:
 
 PolicyQARegressionMiningDependency = Annotated[
     RegressionMiningService, Depends(get_policy_qa_regression_mining_service)
-]
-
-
-def get_pre_refund_billing_adapter() -> BillingPort:
-    return InMemoryBillingAdapter()
-
-
-PreRefundBillingDependency = Annotated[
-    BillingPort, Depends(get_pre_refund_billing_adapter)
 ]
 
 
@@ -437,8 +420,6 @@ def _build_public_result(
     warnings: list[str],
     case_context: dict | None,
     is_overview: bool = False,
-    source_citations: list[dict[str, str]] | None = None,
-    verified_external_result: bool = False,
 ) -> PolicyQAPublicResult:
     """用字段白名单把内部执行结果重建为唯一公开回答契约。"""
     safe_context = None
@@ -521,30 +502,6 @@ def _build_public_result(
         citations.append(PolicyCitation(title=title, excerpt=excerpt))
         seen_citations.add(citation_key)
 
-    has_verified_source = False
-    for source in source_citations or []:
-        if not isinstance(source, dict):
-            continue
-        raw_title = source.get("title") or "官方预结算"
-        raw_excerpt = source.get("excerpt")
-        if (
-            _contains_internal_implementation(raw_title)
-            or _contains_internal_implementation(raw_excerpt)
-        ):
-            continue
-        title_text = _sanitize_public_text(raw_title)
-        excerpt_text = _sanitize_public_text(raw_excerpt)
-        if not title_text.is_publicly_meaningful or not excerpt_text.is_publicly_meaningful:
-            continue
-        has_verified_source = True
-        citation_key = (title_text.text, excerpt_text.text)
-        if citation_key in seen_citations:
-            continue
-        citations.append(
-            PolicyCitation(title=title_text.text, excerpt=excerpt_text.text)
-        )
-        seen_citations.add(citation_key)
-
     answer_text = _sanitize_public_text(answer)
     safe_answer = answer_text.text
     has_meaningful_answer = answer_text.is_publicly_meaningful
@@ -556,10 +513,7 @@ def _build_public_result(
     )
     calculation_checked = bool(safe_steps)
     policy_count = len(safe_evidence)
-    verified_external = verified_external_result and has_verified_source
-    if verified_external and has_meaningful_answer and can_answer:
-        answer_status = "complete"
-    elif is_overview and has_meaningful_answer and can_answer and has_real_amount:
+    if is_overview and has_meaningful_answer and can_answer and has_real_amount:
         answer_status = "complete"
     elif (
         has_meaningful_answer
@@ -590,13 +544,9 @@ def _build_public_result(
 
     verification_messages = {
         "complete": (
-            "院端官方预结算结果及来源已完成核对。"
-            if verified_external
-            else (
-                "真实结算金额已完成核对；费用总览不涉及单项政策或计算过程核验。"
-                if is_overview
-                else "结算金额、计算过程和政策依据已完成核对。"
-            )
+            "真实结算金额已完成核对；费用总览不涉及单项政策或计算过程核验。"
+            if is_overview
+            else "结算金额、计算过程和政策依据已完成核对。"
         ),
         "partial": "已核对结算金额，但政策依据或计算过程仍不完整。",
         "unavailable": "现有信息不足，未形成可靠核对结论。",
@@ -612,7 +562,7 @@ def _build_public_result(
         citations=citations,
         uncertainties=uncertainties,
         verification_summary=VerificationSummary(
-            settlement_checked=has_real_amount or verified_external,
+            settlement_checked=has_real_amount,
             calculation_checked=calculation_checked,
             policy_count=policy_count,
             message=verification_messages[answer_status],
@@ -620,61 +570,8 @@ def _build_public_result(
     )
 
 
-def _build_pre_refund_public_result(
-    outcome: PreRefundFlowOutcome,
-) -> PolicyQAPublicResult:
-    """把预退费内部结果映射到唯一公开白名单。"""
-    skill_result = outcome.skill_result
-    if skill_result is None:
-        answer = outcome.message or "当前无法形成可靠的门诊预退费分析结论。"
-        warnings = (
-            outcome.confirmation.uncertainties
-            if outcome.confirmation is not None
-            else [answer]
-        )
-        return _build_public_result(
-            answer=answer,
-            can_answer=False,
-            partial_answer=False,
-            policy_status="no_policy_matched",
-            policy_evidence=[],
-            calculation_steps=[],
-            definition={
-                "name": "门诊部分项目预退费分析",
-                "plain_text": "实际退费由人工在既有业务系统确认执行。",
-            },
-            warnings=warnings,
-            case_context=None,
-        )
-
-    return _build_public_result(
-        answer=skill_result.answer,
-        can_answer=skill_result.can_answer,
-        partial_answer=skill_result.partial_answer,
-        policy_status=skill_result.policy_status,
-        policy_evidence=[],
-        calculation_steps=[
-            step.model_dump(mode="python")
-            for step in skill_result.calculation_steps
-        ],
-        definition=skill_result.definition.model_dump(mode="python"),
-        warnings=skill_result.warnings,
-        case_context=(
-            skill_result.case_context.model_dump(mode="python")
-            if skill_result.case_context is not None
-            else None
-        ),
-        source_citations=[
-            citation.model_dump(mode="python")
-            for citation in skill_result.source_citations
-        ],
-        verified_external_result=skill_result.verified_external_result,
-    )
-
-
 async def _policy_qa_stream(
     request: PolicyQARequest,
-    billing_adapter: BillingPort,
 ) -> AsyncGenerator[str, None]:
     """
     政策问答SSE流式处理
@@ -764,110 +661,7 @@ async def _policy_qa_stream(
             await asyncio.sleep(0)
 
         question = request.question or ""
-        execution_hint = any(term in question for term in EXECUTION_TERMS) or (
-            "立即执行" in question and ("退费" in question or "冲正" in question)
-        )
-        routed_skill_id = (
-            PRE_REFUND_SKILL_ID
-            if request.pre_refund_items is not None
-            else route_question(question)
-        )
-        is_pre_refund_request = (
-            routed_skill_id == PRE_REFUND_SKILL_ID or execution_hint
-        )
-        if is_pre_refund_request:
-            async for _ev in _yield_step(
-                "intent_detection", "running", "识别预退费分析意图…"
-            ):
-                yield _ev
-            async for _ev in _yield_step(
-                "intent_detection", "done", "识别为「门诊部分项目预退费分析」"
-            ):
-                yield _ev
-            async for _ev in _yield_step("skill_routing", "running", "匹配技能…"):
-                yield _ev
-            async for _ev in _yield_step(
-                "skill_routing", "done", "已匹配门诊部分项目预退费分析技能"
-            ):
-                yield _ev
-            async for _ev in _yield_step(
-                "pre_refund_analysis", "running", "校验请求并查询院端预结算…"
-            ):
-                yield _ev
-
-            pre_refund_outcome = await run_pre_refund_flow(request, billing_adapter)
-            attempt_count = pre_refund_outcome.attempt_count
-            halt_reason = pre_refund_outcome.halt_reason
-            if pre_refund_outcome.recovery_count:
-                async for _ev in _yield_step(
-                    "recovery", "done", "院端预结算暂时不可用，已完成一次重试。"
-                ):
-                    yield _ev
-            async for _ev in _yield_step(
-                "pre_refund_analysis",
-                "done",
-                pre_refund_outcome.message or "门诊部分项目预退费分析完成",
-            ):
-                yield _ev
-
-            public_result = _build_pre_refund_public_result(pre_refund_outcome)
-            async for _ev in _yield_step(
-                "verification",
-                "done",
-                public_result.verification_summary.message,
-            ):
-                yield _ev
-            runtime_bridge.finalize_turn(
-                session_id=session_id,
-                question=request.question,
-            )
-            yield _sse_event(
-                "result",
-                {
-                    "qa_turn_id": qa_turn_id,
-                    "result": public_result.model_dump(mode="json"),
-                },
-            )
-
-            duration_ms = int((_time.time() - start_time) * 1000)
-            try:
-                record_qa_task(
-                    qa_turn_id=qa_turn_id,
-                    workflow_id=workflow_id,
-                    session_id=session_id,
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    role=role,
-                    question=request.question,
-                    settlement_id=request.settlement_id,
-                    status="completed",
-                    output={
-                        "answer_excerpt": public_result.answer[:500],
-                        "answer_status": public_result.answer_status,
-                        "evidence_count": 0,
-                        "internal_run_id": trace_run_id,
-                        "selected_skill_id": PRE_REFUND_SKILL_ID,
-                        "question_excerpt": question[:500],
-                        "attempt_count": attempt_count,
-                        "halt_reason": halt_reason,
-                    },
-                    duration_ms=duration_ms,
-                )
-                finalize_workflow(workflow_id, "completed", accumulated_steps)
-            except Exception as e:
-                logger.warning(f"Failed to persist pre-refund result: {e}")
-
-            done_payload: dict[str, Any] = {
-                "qa_turn_id": qa_turn_id,
-                "answer_status": public_result.answer_status,
-                "success": True,
-                "attempt_count": attempt_count,
-                "halt_reason": halt_reason,
-            }
-            if pre_refund_outcome.state == "waiting_human_confirmation":
-                done_payload["status"] = "waiting_human_confirmation"
-            yield _sse_event("done", done_payload)
-            return
+        routed_skill_id = route_question(question)
 
         # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
         # 旧编排器（PolicyQAOrchestrator）已退役：政策检索/计算/回答统一走 skill 策略引擎。
@@ -1212,7 +1006,6 @@ async def _policy_qa_stream(
 @router.post("/stream")
 async def policy_qa_stream(
     request: PolicyQARequest,
-    billing_adapter: PreRefundBillingDependency,
 ) -> StreamingResponse:
     """
     政策问答SSE流式端点
@@ -1230,21 +1023,9 @@ async def policy_qa_stream(
     if not request.settlement_id:
         raise HTTPException(status_code=400, detail="结算ID不能为空")
 
-    if request.pre_refund_items is not None:
-        fee_detail_ids = [item.fee_detail_id for item in request.pre_refund_items]
-        if len(set(fee_detail_ids)) != len(fee_detail_ids):
-            raise HTTPException(
-                status_code=400,
-                detail=error_detail(
-                    "DUPLICATE_FEE_DETAIL_ID",
-                    "pre_refund_items 中的 fee_detail_id 不得重复",
-                    {"event_type": "pre_refund_request_rejected"},
-                ),
-            )
-
     # 返回SSE流式响应
     return StreamingResponse(
-        _policy_qa_stream(request, billing_adapter),
+        _policy_qa_stream(request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

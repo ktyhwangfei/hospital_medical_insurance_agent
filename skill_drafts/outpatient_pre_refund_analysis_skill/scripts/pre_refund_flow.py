@@ -1,4 +1,4 @@
-"""门诊部分项目预退费分析核心流程。"""
+"""门诊部分项目预退费分析候选流程；物化前不接入运行时。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,10 @@ import asyncio
 from dataclasses import dataclass
 from typing import Literal
 
-from skills.outpatient_pre_refund_analysis_skill.assembler import PreRefundSkillResult
+from skill_drafts.outpatient_pre_refund_analysis_skill.assembler import (
+    PreRefundSkillResult,
+    load,
+)
 from src.adapters.base.models import AdapterCallStatus
 from src.adapters.billing.models import (
     PartialRefundItemRequest,
@@ -15,15 +18,10 @@ from src.adapters.billing.models import (
 )
 from src.adapters.ports.billing import BillingPort
 from src.runtime.api.schemas import AgentResponse
-from src.runtime.policy_qa.models import PolicyQARequest
 from src.security.risk_control.service import (
     build_human_confirmation_response,
     detect_blocked_actions,
 )
-from src.skill_infra.skill_router import get_assembler
-
-
-PRE_REFUND_SKILL_ID = "outpatient_pre_refund_analysis_skill"
 PREVIEW_TERMS = ("预退费", "退费分析", "退费试算", "分析退费")
 EXECUTION_TERMS = ("确认退费", "执行退费", "办理退费", "立即退费", "马上退费", "冲正")
 
@@ -54,11 +52,13 @@ def refund_execution_actions(question: str) -> list[tuple[str, str]]:
 
 
 async def run_pre_refund_flow(
-    request: PolicyQARequest,
+    question: str,
+    settlement_id: str,
+    items: tuple[PartialRefundItemRequest, ...],
     billing_adapter: BillingPort,
 ) -> PreRefundFlowOutcome:
-    """执行门诊部分项目预退费分析，不执行实际退费。"""
-    blocked_actions = refund_execution_actions(request.question)
+    """在候选评测环境执行预退费分析，不执行实际退费。"""
+    blocked_actions = refund_execution_actions(question)
     if blocked_actions:
         confirmation = build_human_confirmation_response(blocked_actions)
         return PreRefundFlowOutcome(
@@ -68,14 +68,13 @@ async def run_pre_refund_flow(
             message="实际退费或冲正必须由人工确认执行。",
         )
 
-    request_items = request.pre_refund_items or []
-    if not request_items:
+    if not items:
         return PreRefundFlowOutcome(
             state="unavailable",
             halt_reason="pre_refund_items_missing",
             message="预退费分析缺少拟退费用明细。",
         )
-    fee_detail_ids = [item.fee_detail_id for item in request_items]
+    fee_detail_ids = [item.fee_detail_id for item in items]
     if len(set(fee_detail_ids)) != len(fee_detail_ids):
         return PreRefundFlowOutcome(
             state="unavailable",
@@ -83,20 +82,13 @@ async def run_pre_refund_flow(
             message="拟退费用明细存在重复的 fee_detail_id。",
         )
 
-    items = tuple(
-        PartialRefundItemRequest(
-            fee_detail_id=item.fee_detail_id,
-            refund_quantity=item.refund_quantity,
-        )
-        for item in request_items
-    )
     attempt_count = 0
     recovery_count = 0
     while attempt_count < 2:
         attempt_count += 1
         adapter_result = await asyncio.to_thread(
             billing_adapter.preview_partial_refund,
-            request.settlement_id,
+            settlement_id,
             items,
         )
         if adapter_result.status == AdapterCallStatus.FAILED:
@@ -124,16 +116,7 @@ async def run_pre_refund_flow(
                 message="院端预结算响应缺少有效的结构化结果。",
             )
 
-        assembler = get_assembler(PRE_REFUND_SKILL_ID)
-        if assembler is None:
-            return PreRefundFlowOutcome(
-                state="unavailable",
-                attempt_count=attempt_count,
-                recovery_count=recovery_count,
-                halt_reason="pre_refund_skill_unavailable",
-                message="门诊部分项目预退费分析 Skill 未加载。",
-            )
-        skill_result = assembler.execute(request.settlement_id, items, preview)
+        skill_result = load().execute(settlement_id, items, preview)
         if not skill_result.can_answer:
             return PreRefundFlowOutcome(
                 state="unavailable",

@@ -67,8 +67,8 @@ class TestRouteQuestion:
         assert result == "settlement_explain_skill"
 
     @pytest.mark.parametrize("question", ["部分项目预退费分析", "这笔费用做退费试算"])
-    def test_matches_outpatient_pre_refund_analysis(self, question):
-        assert route_question(question) == "outpatient_pre_refund_analysis_skill"
+    def test_draft_outpatient_pre_refund_skill_is_not_routable(self, question):
+        assert route_question(question) != "outpatient_pre_refund_analysis_skill"
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -47,17 +47,22 @@ skills/
             └── definition.yaml
 ```
 
-## 如何新增 Skill
+## 如何新增并发布 Skill
 
-1. 创建 `skills/<skill_id>/` 目录
-2. 创建 `skill_manifest.yaml`（含 `skill_id`, `business_action`, `business_object`, `supported_intents`, `excluded_intents`）
+1. 在运行时目录外准备候选包，并通过 `/infra-skills/drafts/import` 导入草稿库
+2. 草稿完成结构校验、隔离候选评测和人工审批
+3. 仅由 `SkillMaterializer` 将已批准草稿写入 `skills/<skill_id>/`
+4. `SkillLoader` 下次 `discover()` 时自动发现已物化 Skill
+
+候选包不得直接提交到 `skills/`；该目录中的包会被运行时视为正式能力并参与路由。
+
+候选包的 `skill_manifest.yaml` 必须包含 `skill_id`, `business_action`, `business_object`, `supported_intents`, `excluded_intents`：
+
    - `business_action` 必须是 `BusinessAction` 七类之一（如 `explain`, `query`, `guide`）
    - `business_object` 必须是 `BusinessObject` 枚举值（如 `settlement`, `benefit`, `policy`）
    - Action-Object 组合必须在 `src/domain/common/actions.py` 的 `VALID_ACTION_OBJECT_PAIRS` 白名单中
-3. 创建 `assembler.py`（含 `load()` 函数返回 assembler 实例，带 `execute()` 方法）
-4. SkillLoader 下次 `discover()` 时自动发现
 
-**产品代码无需修改**。
+候选包还需包含 `assembler.py`（`load()` 返回带 `execute()` 的实例）；物化发布前不得接入产品路由。
 
 **命名约定**：`{BusinessObject}{BusinessAction}Skill`（如 `SettlementExplainSkill`、`BenefitQuerySkill`）。
 
@@ -66,9 +71,8 @@ skills/
 | Skill ID | 业务动作 | 业务对象 | 触发方式 |
 |----------|---------|---------|----------|
 | `settlement_explain_skill` | `explain` | `settlement` | 关键词快筛（25 个核心词）+ LLM 语义消歧（hybrid 模式） |
-| `outpatient_pre_refund_analysis_skill` | `evaluate` | `settlement` | 预退费关键词 + 结构化 `fee_detail_id` / `refund_quantity` |
 
-`outpatient_pre_refund_analysis_skill` 仅分析门诊部分项目预退费，金额以收费系统正式预结算结果为准；实际退费、冲正不在 Skill 内执行，必须转人工确认。
+`outpatient_pre_refund_analysis_skill` 当前位于 `skill_drafts/` 并登记为 `editing` 草稿，不属于已注册 Skill，不参与路由。
 
 ### 路由机制
 

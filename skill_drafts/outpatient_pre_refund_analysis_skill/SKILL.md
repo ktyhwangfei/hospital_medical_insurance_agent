@@ -7,7 +7,7 @@ scope: project
 version: "1.0.0"
 ---
 
-# 门诊部分项目预退费分析 Skill
+# 门诊部分项目预退费分析 Skill（草稿）
 
 ## 概述
 
