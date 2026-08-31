@@ -137,6 +137,44 @@ def test_route_case_belongs_to_selected_suite(service: SkillGovernanceService) -
     assert service.list_cases(suite_id=suite.suite_id) == [case]
 
 
+def test_skill_suite_rejects_case_skill_change(
+    service: SkillGovernanceService,
+) -> None:
+    suite = service.create_suite(
+        name="演示 Skill 路由",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    case = service.create_case(
+        suite_id=suite.suite_id,
+        question_template="统筹自付怎么算",
+        expected_skill_id="demo-skill",
+        required=True,
+        risk_tags=[],
+        business_tags=[],
+        source_type="manual",
+        source_ref="",
+        contains_sensitive_data=False,
+        created_by="quality-user",
+    )
+
+    with pytest.raises(SkillGovernanceGateError, match="期望 Skill"):
+        service.update_case(
+            case.case_id,
+            question_template=case.question_template,
+            expected_skill_id="other-skill",
+            required=case.required,
+            risk_tags=case.risk_tags,
+            business_tags=case.business_tags,
+            source_type=case.source_type,
+            source_ref=case.source_ref,
+            enabled=case.enabled,
+            contains_sensitive_data=False,
+        )
+
+
 def test_same_question_is_deduplicated_only_inside_same_suite(
     service: SkillGovernanceService,
 ) -> None:

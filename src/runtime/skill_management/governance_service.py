@@ -270,6 +270,15 @@ class SkillGovernanceService:
         current = self._storage.get_case(case_id)
         if current is None:
             raise SkillGovernanceNotFoundError(f"评测用例不存在: {case_id}")
+        suite = self.get_suite(current.suite_id)
+        if (
+            suite.scope == SkillEvalSuiteScope.SKILL
+            and expected_skill_id != suite.skill_id
+        ):
+            raise SkillGovernanceGateError(
+                "路由用例的期望 Skill 与测评集不一致",
+                ["eval_case_skill_mismatch"],
+            )
         updated = current.model_copy(
             update={
                 "question_template": question_template.strip(),
