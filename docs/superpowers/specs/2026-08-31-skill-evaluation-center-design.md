@@ -104,8 +104,10 @@ SkillEvalSuite（可编辑数据集工作区）
                  └─ 不可变运行快照
                       ├─ TaskResult[]
                       ├─ FailureAttribution[]
-                      ├─ FailureCluster[]
-                      └─ ImprovementTaskLink[]
+                      └─ FailureCluster[]
+
+runtime/task_closure（现有任务闭环）
+  └─ ImprovementTaskLink[]（以 run_id 作为 workflow_id 动态关联）
 ```
 
 ### 4.1 `SkillEvalSuite`
@@ -604,10 +606,10 @@ Skill 概览默认只展示名称、能力、状态、场景和覆盖摘要；�
 现有表扩展：
 
 - `skill_eval_cases.task_id`；
-- `skill_regression_cases.task_id` 和 `behavior` 类型；
-- `skill_eval_runs.dataset_version_id`、`benchmark_id`、`environment_snapshot`、`task_results`、`trajectory_summary`、`failure_attributions`、`failure_clusters`、`improvement_links` 和分维度摘要。
+- `skill_regression_cases.task_id`；
+- `skill_eval_runs.dataset_version_id`、`benchmark_id`、`environment_snapshot`、`task_results`、`trajectory_summary`、`failure_attributions`、`failure_clusters` 和分维度摘要。
 
-运行结果、归因、失败簇和改进链接首期沿用现有运行快照的 JSONB 存储方式，不为每类结果新增表。页面查询均以单次运行为边界；只有任务量或跨运行分析出现可测量的查询瓶颈时再规范化拆表。
+运行结果、归因和失败簇首期沿用现有运行快照的 JSONB 存储方式，不为每类结果新增表。改进任务继续写入现有 `runtime/task_closure`，以 `run_id` 作为 `workflow_id` 查询关联，避免修改不可变运行。页面查询均以单次运行为边界；只有任务量或跨运行分析出现可测量的查询瓶颈时再规范化拆表。
 
 原则：
 
