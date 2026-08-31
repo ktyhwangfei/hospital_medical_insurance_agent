@@ -14,7 +14,7 @@
 
 **当前阶段**：Issue #21 已完成分层验收；范围外存量失败见 §4–§5
 
-**门诊医保数据底座 P1（2026-08-31，`impl_done`）**：Task 1–8 的代码与本地验证已完成，提交包括 `d0d70c4`、`1520e61`、`d90966f`、`6f9d6b7`、`62eefdb`、`891961b`、`386ac69` 及 Task 8 所在提交。严格 T1 28 passed → T2a 现有 API 全集 290 passed → T2b Flow 1 passed，相关模块回归 486 passed，`compileall` 通过；本地 PostgreSQL 门诊表/视图已幂等初始化并通过 `--check`。[P1 验证记录](docs/reviews/2026-08-28-outpatient-p1-verification.md) 如实记录目标验收未完成：当前环境未解析到 `bjybdb` 注册/完整连接配置，未生成真实批次、LSN、语义新版本或 100 个非空批次 P95。达到 P95 ≤ 300 秒前 P1 不改 `complete`，P2 不改 `ready_for_planning`。
+**门诊医保数据底座 P1（2026-08-31，`impl_done`）**：P1 数据底座与独立数据治理中心 Task 1–9 已实现，支持 CDC 和受控定时 SQL、加密数据源凭据、PostgreSQL 原子落地、常驻 worker、中文配置页及状态页。数据治理 Unit 48 passed/1 skipped → API 10 passed → Flow 2 passed；全仓 2409 passed/3 skipped，Portal 367 passed、38 路由构建通过，Chromium/WebKit E2E 通过。Firefox 在本机被 Next dev HMR WebSocket 环境阻断，保留生产态复验；目标医院仍未提供 `bjybdb` 完整连接凭据，未生成真实批次、LSN 或 100 个非空批次 P95。[P1 验证记录](docs/reviews/2026-08-28-outpatient-p1-verification.md) 持续保持证据边界；达到 P95 ≤ 300 秒并完成目标环境验收前不改 `complete`，P2 不改 `ready_for_planning`。
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|

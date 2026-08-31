@@ -9,6 +9,7 @@ import {
   createDataSource,
   downloadCdcScript,
   getPostgresTargetStatus,
+  hasDataGovernancePermission,
   listDataSources,
   rotateDataSourceCredential,
   testDataSourceConnection,
@@ -64,6 +65,7 @@ export default function DataSourcesPage() {
   const [rotating, setRotating] = useState<DataSource | null>(null)
   const [newPassword, setNewPassword] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
+  const [canWrite, setCanWrite] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -83,6 +85,11 @@ export default function DataSourcesPage() {
     const timer = window.setTimeout(() => { void load() }, 0)
     return () => window.clearTimeout(timer)
   }, [load])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setCanWrite(hasDataGovernancePermission('write')), 0)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   const openCreate = () => {
     setForm(emptyForm)
@@ -174,7 +181,7 @@ export default function DataSourcesPage() {
   return <div className="space-y-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h2 className="font-semibold text-slate-900">SQL Server 数据源</h2><p className="mt-1 text-sm text-slate-600">密码只在提交时传输，页面和接口响应均不回显。</p></div>
-      <Button onClick={openCreate}>新增数据源</Button>
+      {canWrite && <Button onClick={openCreate}>新增数据源</Button>}
     </div>
 
     {(message || error) && <div role={error ? 'alert' : 'status'} className={`rounded-lg border px-4 py-3 text-sm ${error ? 'border-red-200 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{error ?? message}</div>}
@@ -195,13 +202,13 @@ export default function DataSourcesPage() {
           <td className="px-4 py-3 font-mono text-xs text-slate-700">{maskedEndpoint(source)}</td>
           <td className="px-4 py-3"><span className={source.credentialConfigured ? 'text-emerald-700' : 'text-red-700'}>{source.credentialConfigured ? '凭据已配置' : '需重新提交凭据'}</span></td>
           <td className="px-4 py-3">{connectionLabel[source.connectionStatus]}</td><td className="px-4 py-3">{cdcLabel[source.cdcStatus]}</td>
-          <td className="px-4 py-3"><div className="flex flex-wrap gap-1.5">
+          <td className="px-4 py-3">{canWrite && <div className="flex flex-wrap gap-1.5">
             <Button size="sm" variant="outline" aria-label="编辑数据源" onClick={() => openEdit(source)}><Pencil /></Button>
             <Button size="sm" variant="outline" aria-label="轮换凭据" onClick={() => setRotating(source)}><KeyRound /></Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act(source.sourceId, 'test')}><PlugZap />测试连接</Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act(source.sourceId, 'download')}><Download />下载 CDC 脚本</Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act(source.sourceId, 'check')}><RefreshCw />重新检测 CDC</Button>
-          </div></td>
+          </div>}</td>
         </tr>)}</tbody>
       </table></div>
     </section>}

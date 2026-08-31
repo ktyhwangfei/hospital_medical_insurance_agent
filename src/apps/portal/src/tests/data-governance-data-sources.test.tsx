@@ -28,6 +28,7 @@ const source: DataSource = {
 }
 
 beforeEach(() => {
+  sessionStorage.clear()
   vi.mocked(listDataSources).mockReset().mockResolvedValue([])
   vi.mocked(createDataSource).mockReset().mockResolvedValue(source)
   vi.mocked(getPostgresTargetStatus).mockReset().mockResolvedValue({
@@ -73,5 +74,17 @@ describe('数据源配置', () => {
     await user.click(screen.getByRole('button', { name: '重新检测 CDC' }))
     expect(await screen.findByText('CDC 已就绪')).toBeInTheDocument()
     expect(checkDataSourceCdc).toHaveBeenCalledWith('bjybdb')
+  })
+
+  it('只读用户看得到状态但没有写操作', async () => {
+    const payload = btoa(JSON.stringify({ permissions: ['data_governance:read'] }))
+    sessionStorage.setItem('data-governance-token', `header.${payload}.signature`)
+    vi.mocked(listDataSources).mockResolvedValue([source])
+
+    render(<DataSourcesPage />)
+
+    expect(await screen.findByText('凭据已配置')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '新增数据源' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '测试连接' })).not.toBeInTheDocument()
   })
 })

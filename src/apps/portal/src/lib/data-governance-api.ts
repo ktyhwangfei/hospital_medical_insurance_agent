@@ -231,6 +231,19 @@ function governanceToken(): string | null {
     : process.env.NEXT_PUBLIC_DATA_GOVERNANCE_TOKEN || null
 }
 
+export function hasDataGovernancePermission(permission: 'read' | 'write'): boolean {
+  const token = governanceToken()
+  if (!token) return process.env.NODE_ENV !== 'production'
+  try {
+    const payload = token.replace(/^Bearer\s+/i, '').split('.')[1]
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=')
+    const permissions = JSON.parse(atob(base64)).permissions
+    return Array.isArray(permissions) && permissions.includes(`data_governance:${permission}`)
+  } catch {
+    return false
+  }
+}
+
 export async function dataGovernanceRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   const token = governanceToken()

@@ -6,6 +6,7 @@ import { CircleAlert, Pause, Play, RefreshCw, Save } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   getSyncJob,
+  hasDataGovernancePermission,
   listDataSources,
   listSyncRuns,
   pauseSyncJob,
@@ -61,12 +62,18 @@ export default function SyncJobsPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [canWrite, setCanWrite] = useState(false)
 
   useEffect(() => {
     void listDataSources().then((items) => {
       setSources(items)
       setSourceId((value) => value || items[0]?.sourceId || '')
     }, (reason) => setError(safeMessage(reason)))
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setCanWrite(hasDataGovernancePermission('write')), 0)
+    return () => window.clearTimeout(timer)
   }, [])
 
   const loadJob = useCallback(async (selected: string) => {
@@ -172,10 +179,12 @@ export default function SyncJobsPage() {
         {modeChanged && <label className="flex items-start gap-2 text-sm text-slate-700"><input type="checkbox" className="mt-1" checked={form.confirmModeSwitch} onChange={(event) => setForm({ ...form, confirmModeSwitch: event.target.checked })} /><span>确认切换同步模式。下次运行将重新建立基线。</span></label>}
 
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" disabled={busy || running || (modeChanged && !form.confirmModeSwitch)}><Save />保存配置</Button>
-          <Button type="button" variant="outline" disabled={busy || !job || running || cdcBlocked} onClick={() => void action('start')}><Play />启动任务</Button>
-          <Button type="button" variant="outline" disabled={busy || !job || !running} onClick={() => void action('pause')}><Pause />暂停任务</Button>
-          <Button type="button" variant="outline" disabled={busy || !job || !running} onClick={() => void action('run')}><RefreshCw />立即执行</Button>
+          {canWrite && <>
+            <Button type="submit" disabled={busy || running || (modeChanged && !form.confirmModeSwitch)}><Save />保存配置</Button>
+            <Button type="button" variant="outline" disabled={busy || !job || running || cdcBlocked} onClick={() => void action('start')}><Play />启动任务</Button>
+            <Button type="button" variant="outline" disabled={busy || !job || !running} onClick={() => void action('pause')}><Pause />暂停任务</Button>
+            <Button type="button" variant="outline" disabled={busy || !job || !running} onClick={() => void action('run')}><RefreshCw />立即执行</Button>
+          </>}
         </div>
       </form>}
     </section>

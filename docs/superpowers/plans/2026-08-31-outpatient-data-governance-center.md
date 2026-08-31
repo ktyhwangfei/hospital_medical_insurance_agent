@@ -1127,7 +1127,7 @@ git add src/apps/portal/app/data-governance/data-sources/page.tsx src/apps/porta
 git commit -m "feat: 完成数据治理配置页面"
 ```
 
-### Task 9：接通本地服务、运维文档与端到端验收
+### Task 9：接通本地服务、运维文档与端到端验收（`impl_done`，Firefox 环境项待复验）
 
 **Files:**
 - Create: `scripts/configure_data_governance_local.py`
@@ -1143,7 +1143,7 @@ git commit -m "feat: 完成数据治理配置页面"
 - Modify: `docs/superpowers/plans/2026-08-27-outpatient-medical-insurance-assistant-plan-index.md`
 - Modify: `PROGRESS.md`
 
-- [ ] **Step 1: 写完整双模式 Flow 与 Portal E2E**
+- [x] **Step 1: 写完整双模式 Flow 与 Portal E2E**
 
 后端 Flow 使用 fake SQL Server 与事务 fake PostgreSQL，覆盖：
 
@@ -1165,7 +1165,7 @@ Playwright 流程使用 API stub 或本地测试数据，断言管理员能新�
 
 同时先创建本任务列出的本地主密钥和启停脚本文本契约测试；实现脚本前测试必须失败。
 
-- [ ] **Step 2: 运行 Flow 并确认先红**
+- [x] **Step 2: 运行 Flow 并确认先红**
 
 ```powershell
 uv run python -m pytest src/tests/unit/scripts/test_configure_data_governance_local.py -v --tb=short
@@ -1174,7 +1174,7 @@ uv run python -m pytest src/tests/integration/flow/test_outpatient_data_governan
 
 Expected: Unit 测试因 `configure_data_governance_local.py` 不存在、启停脚本没有 worker 生命周期而 FAIL；Flow 可以同时暴露跨层契约缺口，但不得用放宽断言通过。
 
-- [ ] **Step 3: 增加持久本地主密钥配置脚本**
+- [x] **Step 3: 增加持久本地主密钥配置脚本**
 
 `configure_data_governance_local.py`：
 
@@ -1197,7 +1197,7 @@ uv run python scripts/configure_data_governance_local.py
 
 Expected: `.env` 获得持久主密钥，终端不出现秘密值。
 
-- [ ] **Step 4: 让中央启动链托管 worker**
+- [x] **Step 4: 让中央启动链托管 worker**
 
 `start-servers.ps1` 在加载 `.env` 后：
 
@@ -1216,7 +1216,7 @@ uv run python -m pytest src/tests/unit/scripts/test_configure_data_governance_lo
 
 Expected: PASS。
 
-- [ ] **Step 5: 编写运维手册并记录真实状态**
+- [x] **Step 5: 编写运维手册并记录真实状态**
 
 `docs/operations/outpatient-data-sync-configuration.md` 必须包含：
 
@@ -1231,7 +1231,7 @@ Expected: PASS。
 
 没有真实 SQL Server 连接时继续记录“待目标医院执行”，不写虚假 LSN、延迟或成功批次。
 
-- [ ] **Step 6: 严格执行 Unit → API → Flow**
+- [x] **Step 6: 严格执行 Unit → API → Flow**
 
 Unit：
 
@@ -1283,7 +1283,9 @@ try { npm test -- flows/portal/data-governance.flow.ts } finally { Pop-Location 
 
 Expected: Chromium、Firefox、WebKit 均通过；`run-playwright.mjs` 从该工作区 `.server-ports.json` 读取实际端口，不能手工猜端口。
 
-- [ ] **Step 8: 全仓回归、状态更新与提交**
+实测：Portal 48 文件 367 passed，生产构建 38 个路由通过；数据治理 E2E 在 Chromium、WebKit 通过。Playwright Firefox 在本机访问 Next.js 开发态时持续无法建立 `/_next/webpack-hmr` WebSocket，服务端直连握手为 101，且无头/有头、代理绕过和 HMR mock 均未解决；该环境项不改业务代码，保留待独立生产态浏览器环境复验。
+
+- [x] **Step 8: 全仓回归、状态更新与提交**
 
 ```powershell
 uv run python -m pytest -q --tb=short
