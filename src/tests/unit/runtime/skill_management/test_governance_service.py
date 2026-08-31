@@ -13,10 +13,16 @@ from src.data_platform.storage.skill.version_in_memory import (
 )
 from src.domain.skill.governance_models import (
     DEFAULT_ROUTING_SUITE_ID,
+    SkillEvalAssertion,
+    SkillEvalDimension,
+    SkillEvalPartition,
     SkillEvalRunStatus,
+    SkillEvalTask,
+    SkillEvalTaskInput,
     SkillReleaseEnvironment,
     SkillReleaseStatus,
 )
+from src.domain.skill.regression_models import CalculationAssertions
 from src.domain.skill.version_models import SkillValidationStatus, SkillVersion
 from src.runtime.skill_management.governance_service import (
     SkillGovernanceGateError,
@@ -98,6 +104,69 @@ def test_create_skill_suite_generates_prefixed_id(service: SkillGovernanceServic
     assert suite.suite_id.startswith("EVS_")
     assert suite.skill_id == "demo-skill"
     assert suite.revision == 1
+
+
+def _eval_task(suite_id: str) -> SkillEvalTask:
+    return SkillEvalTask(
+        task_id="EVT_demo_outpatient",
+        suite_id=suite_id,
+        target_skill_id="demo-skill",
+        name="门诊费用组成",
+        partition=SkillEvalPartition.REGRESSION,
+        input=SkillEvalTaskInput(question="费用组成", settlement_id="T_demo"),
+        assertions=[
+            SkillEvalAssertion(
+                assertion_id="self_pay_one",
+                dimension=SkillEvalDimension.BEHAVIOR,
+                output_adapter="self_pay_one",
+                expected=CalculationAssertions(expected_value=510.96),
+            )
+        ],
+        source_type="outpatient_self_test",
+        source_ref="person-21",
+        created_by="importer",
+        updated_by="importer",
+    )
+
+
+def test_import_and_freeze_dataset_are_idempotent(
+    service: SkillGovernanceService,
+) -> None:
+    suite = service.create_suite(
+        name="门诊基准集",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="端到端任务",
+        created_by="quality-user",
+    )
+    task = _eval_task(suite.suite_id)
+
+    first_import = service.import_tasks(
+        suite.suite_id,
+        [task],
+        created_by="quality-user",
+    )
+    second_import = service.import_tasks(
+        suite.suite_id,
+        [task],
+        created_by="quality-user",
+    )
+    first_version = service.freeze_dataset(
+        suite.suite_id,
+        created_by="quality-user",
+    )
+    second_version = service.freeze_dataset(
+        suite.suite_id,
+        created_by="quality-user",
+    )
+
+    assert first_import == second_import
+    assert len(first_version.task_snapshots) == 1
+    assert first_version.dataset_version_id == second_version.dataset_version_id
+
+    updated = task.model_copy(update={"name": "修改后的任务", "revision": 2})
+    service.update_task(updated, expected_revision=1, updated_by="quality-user")
+    assert first_version.task_snapshots[0].name == "门诊费用组成"
 
 
 def test_create_suite_rejects_unknown_skill(service: SkillGovernanceService) -> None:

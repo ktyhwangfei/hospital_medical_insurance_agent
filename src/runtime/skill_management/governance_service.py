@@ -16,16 +16,19 @@ from src.data_platform.storage.skill.governance_ports import (
 from src.data_platform.storage.skill.version_ports import SkillVersionStorage
 from src.domain.skill.governance_models import (
     DEFAULT_ROUTING_SUITE_ID,
+    SkillEvalDatasetVersion,
     SkillEvalCase,
     SkillEvalRun,
     SkillEvalRunStatus,
     SkillEvalSuite,
     SkillEvalSuiteScope,
     SkillEvalSuiteStatus,
+    SkillEvalTask,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
     SkillReleaseStatus,
+    canonical_eval_hash,
 )
 from src.domain.skill.version_models import SkillValidationStatus, SkillVersion
 from src.security.desensitization.detection import detect_sensitive_patterns
@@ -69,6 +72,7 @@ class SkillGovernanceService:
         "max_new_false_takeovers": 0,
         "runtime_mode": "shadow",
     }
+    _EVALUATOR_PLAN_ID = "deterministic_v1"
 
     def __init__(
         self,
@@ -170,13 +174,156 @@ class SkillGovernanceService:
                 ["default_eval_suite_protected"],
             )
         self.get_suite(suite_id)
-        if self._storage.count_cases(suite_id) > 0:
+        if self._storage.count_cases(suite_id) > 0 or self._storage.list_tasks(suite_id):
             raise SkillGovernanceGateError(
                 "测评集包含用例，只能停用",
                 ["eval_suite_not_empty"],
             )
         if not self._storage.delete_suite(suite_id):
             raise SkillGovernanceNotFoundError(f"测评集不存在: {suite_id}")
+
+    def list_tasks(
+        self,
+        suite_id: str,
+        *,
+        enabled_only: bool = False,
+    ) -> list[SkillEvalTask]:
+        self.get_suite(suite_id)
+        return self._storage.list_tasks(suite_id, enabled_only=enabled_only)
+
+    def import_tasks(
+        self,
+        suite_id: str,
+        tasks: list[SkillEvalTask],
+        *,
+        created_by: str,
+    ) -> list[SkillEvalTask]:
+        """幂等导入已转换的任务，不覆盖质量人员维护过的同 ID 任务。"""
+        suite = self.get_suite(suite_id)
+        imported: list[SkillEvalTask] = []
+        now = datetime.now(timezone.utc)
+        for task in tasks:
+            existing = self._storage.get_task(task.task_id)
+            if existing is not None:
+                if existing.suite_id != suite_id:
+                    raise SkillGovernanceConflictError(
+                        f"评测任务 ID 已属于其他测评集: {task.task_id}"
+                    )
+                imported.append(existing)
+                continue
+            candidate = SkillEvalTask.model_validate(
+                task.model_copy(
+                    update={
+                        "suite_id": suite_id,
+                        "created_by": created_by.strip(),
+                        "updated_by": created_by.strip(),
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                    deep=True,
+                ).model_dump()
+            )
+            self._validate_task_for_suite(candidate, suite)
+            imported.append(self._storage.save_task(candidate))
+        return imported
+
+    def update_task(
+        self,
+        task: SkillEvalTask,
+        *,
+        expected_revision: int,
+        updated_by: str,
+    ) -> SkillEvalTask:
+        current = self._storage.get_task(task.task_id)
+        if current is None:
+            raise SkillGovernanceNotFoundError(f"评测任务不存在: {task.task_id}")
+        suite = self.get_suite(current.suite_id)
+        updated = SkillEvalTask.model_validate(
+            task.model_copy(
+                update={
+                    "suite_id": current.suite_id,
+                    "revision": expected_revision + 1,
+                    "created_by": current.created_by,
+                    "created_at": current.created_at,
+                    "updated_by": updated_by.strip(),
+                    "updated_at": datetime.now(timezone.utc),
+                },
+                deep=True,
+            ).model_dump()
+        )
+        self._validate_task_for_suite(updated, suite)
+        return self._storage.update_task(updated, expected_revision=expected_revision)
+
+    def freeze_dataset(
+        self,
+        suite_id: str,
+        *,
+        created_by: str,
+    ) -> SkillEvalDatasetVersion:
+        suite = self.get_suite(suite_id)
+        tasks = self._storage.list_tasks(suite_id, enabled_only=True)
+        if not tasks:
+            raise SkillGovernanceGateError(
+                "测评集没有可冻结的任务",
+                ["eval_dataset_empty"],
+            )
+        ordered = sorted(tasks, key=lambda item: item.task_id)
+        content_hash = canonical_eval_hash(
+            [task.model_dump(mode="json") for task in ordered]
+        )
+        environment_contract_hash = canonical_eval_hash(
+            [
+                requirement.model_dump(mode="json")
+                for task in ordered
+                for requirement in task.environment_requirements
+            ]
+        )
+        evaluator_plan_hash = canonical_eval_hash(
+            {"evaluator_plan_id": self._EVALUATOR_PLAN_ID}
+        )
+        versions = self._storage.list_dataset_versions(suite_id)
+        existing = next(
+            (
+                version
+                for version in versions
+                if version.content_hash == content_hash
+                and version.environment_contract_hash == environment_contract_hash
+                and version.evaluator_plan_hash == evaluator_plan_hash
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        version = SkillEvalDatasetVersion(
+            dataset_version_id=f"EVD_{uuid4().hex}",
+            suite_id=suite_id,
+            suite_revision=suite.revision,
+            version_number=max((item.version_number for item in versions), default=0) + 1,
+            task_snapshots=tuple(ordered),
+            environment_contract_hash=environment_contract_hash,
+            evaluator_plan_hash=evaluator_plan_hash,
+            content_hash=content_hash,
+            created_by=created_by.strip(),
+        )
+        return self._storage.save_dataset_version(version)
+
+    @staticmethod
+    def _validate_task_for_suite(
+        task: SkillEvalTask,
+        suite: SkillEvalSuite,
+    ) -> None:
+        if suite.status != SkillEvalSuiteStatus.ACTIVE:
+            raise SkillGovernanceGateError("测评集已停用", ["eval_suite_inactive"])
+        if suite.scope == SkillEvalSuiteScope.SKILL and task.target_skill_id != suite.skill_id:
+            raise SkillGovernanceGateError(
+                "评测任务的目标 Skill 与测评集不一致",
+                ["eval_task_skill_mismatch"],
+            )
+        if task.contains_sensitive_data or detect_sensitive_patterns(task.input.question):
+            raise SkillGovernanceGateError(
+                "评测任务包含敏感信息，必须脱敏后再保存",
+                ["sensitive_data_detected"],
+            )
 
     def list_cases(
         self,
