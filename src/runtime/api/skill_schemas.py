@@ -6,6 +6,15 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from src.domain.skill.draft_models import SkillDraft, SkillExecutionContract
+from src.domain.skill.governance_models import (
+    SkillEvalAssertion,
+    SkillEvalDataLocator,
+    SkillEvalEnvironmentRequirement,
+    SkillEvalEnvironmentSnapshot,
+    SkillEvalGateThresholds,
+    SkillEvalTaskInput,
+    TrajectoryPrefix,
+)
 from src.domain.skill.regression_models import SkillFeedbackReasonCode
 from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationProvenance,
@@ -102,6 +111,121 @@ class SkillEvalSuiteResponse(BaseModel):
 
 class SkillEvalSuiteListResponse(BaseModel):
     items: list[SkillEvalSuiteResponse]
+    total: int
+
+
+class _SkillEvalTaskPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_skill_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+    partition: Literal["regression", "benchmark", "holdout"] = "regression"
+    input: SkillEvalTaskInput
+    data_locators: list[SkillEvalDataLocator] = Field(default_factory=list)
+    environment_requirements: list[SkillEvalEnvironmentRequirement] = Field(
+        default_factory=list
+    )
+    assertions: list[SkillEvalAssertion] = Field(min_length=1)
+    trajectory_prefixes: list[TrajectoryPrefix] = Field(default_factory=list)
+    required: bool = True
+    enabled: bool = True
+    source_type: str = Field(default="manual", min_length=1, max_length=64)
+    source_ref: str = Field(default="", max_length=256)
+    risk_tags: list[str] = Field(default_factory=list)
+    business_tags: list[str] = Field(default_factory=list)
+    contains_sensitive_data: Literal[False] = False
+
+
+class SkillEvalTaskCreateRequest(_SkillEvalTaskPayload):
+    task_id: str | None = Field(default=None, max_length=80)
+
+
+class SkillEvalTaskUpdateRequest(_SkillEvalTaskPayload):
+    expected_revision: int = Field(ge=1)
+
+
+class SkillEvalTaskResponse(BaseModel):
+    task_id: str
+    suite_id: str
+    target_skill_id: str
+    name: str
+    partition: str
+    input: SkillEvalTaskInput
+    data_locators: list[SkillEvalDataLocator]
+    environment_requirements: list[SkillEvalEnvironmentRequirement]
+    assertions: list[SkillEvalAssertion]
+    trajectory_prefixes: list[TrajectoryPrefix]
+    required: bool
+    enabled: bool
+    source_type: str
+    source_ref: str
+    risk_tags: list[str]
+    business_tags: list[str]
+    contains_sensitive_data: bool
+    revision: int
+    created_by: str
+    updated_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillEvalTaskListResponse(BaseModel):
+    items: list[SkillEvalTaskResponse]
+    total: int
+
+
+class SkillEvalDatasetVersionResponse(BaseModel):
+    dataset_version_id: str
+    suite_id: str
+    suite_revision: int
+    version_number: int
+    task_snapshots: list[SkillEvalTaskResponse]
+    environment_contract_hash: str
+    evaluator_plan_hash: str
+    content_hash: str
+    created_by: str
+    created_at: datetime
+
+
+class SkillEvalDatasetVersionListResponse(BaseModel):
+    items: list[SkillEvalDatasetVersionResponse]
+    total: int
+
+
+class SkillEvalBenchmarkCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=256)
+    skill_id: str = Field(min_length=1, max_length=128)
+    dataset_version_id: str = Field(min_length=1, max_length=80)
+    environment_snapshot: SkillEvalEnvironmentSnapshot
+    evaluator_plan_id: Literal[
+        "deterministic_v1", "deterministic_judge_v1"
+    ] = "deterministic_v1"
+    judge_version: str | None = Field(default=None, max_length=128)
+    gate_thresholds: SkillEvalGateThresholds = Field(
+        default_factory=SkillEvalGateThresholds
+    )
+
+
+class SkillEvalBenchmarkResponse(BaseModel):
+    benchmark_id: str
+    name: str
+    skill_id: str
+    dataset_version_id: str
+    environment_snapshot: SkillEvalEnvironmentSnapshot
+    environment_hash: str
+    evaluator_plan_id: str
+    evaluator_plan_hash: str
+    judge_version: str | None
+    gate_thresholds: SkillEvalGateThresholds
+    status: str
+    created_by: str
+    created_at: datetime
+
+
+class SkillEvalBenchmarkListResponse(BaseModel):
+    items: list[SkillEvalBenchmarkResponse]
     total: int
 
 

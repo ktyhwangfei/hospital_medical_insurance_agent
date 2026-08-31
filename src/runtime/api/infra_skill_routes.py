@@ -8,6 +8,7 @@ from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Protocol, TypeVar, cast
+from uuid import uuid4
 
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -97,7 +98,7 @@ from src.runtime.skill_management.ai_authoring.candidate_execution_ports import 
     CandidateExecutionPort,
     DisabledCandidateExecutionAdapter,
 )
-from src.domain.skill.governance_models import SkillRelease
+from src.domain.skill.governance_models import SkillEvalTask, SkillRelease
 from src.runtime.api.skill_schemas import (
     SkillAIAcceptRequest,
     SkillAIGenerateRequest,
@@ -126,6 +127,15 @@ from src.runtime.api.skill_schemas import (
     SkillEvalSuiteListResponse,
     SkillEvalSuiteResponse,
     SkillEvalSuiteUpdateRequest,
+    SkillEvalBenchmarkCreateRequest,
+    SkillEvalBenchmarkListResponse,
+    SkillEvalBenchmarkResponse,
+    SkillEvalDatasetVersionListResponse,
+    SkillEvalDatasetVersionResponse,
+    SkillEvalTaskCreateRequest,
+    SkillEvalTaskListResponse,
+    SkillEvalTaskResponse,
+    SkillEvalTaskUpdateRequest,
     SkillEvalRunCreateRequest,
     SkillEvalRunListResponse,
     SkillEvalRunResponse,
@@ -715,6 +725,223 @@ def delete_skill_eval_suite(
         SkillGovernanceNotFoundError,
     ) as exc:
         raise _governance_error(exc) from exc
+
+
+@router.get(
+    "/infra-skills/eval-suites/{suite_id}/tasks",
+    response_model=SkillEvalTaskListResponse,
+)
+def list_skill_eval_tasks(
+    suite_id: str,
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+    enabled_only: bool = Query(default=False),
+) -> SkillEvalTaskListResponse:
+    try:
+        tasks = service.list_tasks(suite_id, enabled_only=enabled_only)
+    except SkillGovernanceNotFoundError as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalTaskListResponse(
+        items=[SkillEvalTaskResponse.model_validate(task.model_dump()) for task in tasks],
+        total=len(tasks),
+    )
+
+
+@router.post(
+    "/infra-skills/eval-suites/{suite_id}/tasks",
+    response_model=SkillEvalTaskResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_skill_eval_task(
+    suite_id: str,
+    request: SkillEvalTaskCreateRequest,
+    service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalTaskResponse:
+    task = SkillEvalTask(
+        task_id=request.task_id or f"EVT_{uuid4().hex}",
+        suite_id=suite_id,
+        created_by=principal.user_id,
+        updated_by=principal.user_id,
+        **request.model_dump(exclude={"task_id"}),
+    )
+    try:
+        created = service.create_task(task, created_by=principal.user_id)
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalTaskResponse.model_validate(created.model_dump())
+
+
+@router.get(
+    "/infra-skills/eval-tasks/{task_id}",
+    response_model=SkillEvalTaskResponse,
+)
+def get_skill_eval_task(
+    task_id: str,
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalTaskResponse:
+    try:
+        task = service.get_task(task_id)
+    except SkillGovernanceNotFoundError as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalTaskResponse.model_validate(task.model_dump())
+
+
+@router.put(
+    "/infra-skills/eval-tasks/{task_id}",
+    response_model=SkillEvalTaskResponse,
+)
+def update_skill_eval_task(
+    task_id: str,
+    request: SkillEvalTaskUpdateRequest,
+    service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalTaskResponse:
+    try:
+        current = service.get_task(task_id)
+        task = SkillEvalTask.model_validate(
+            {
+                **current.model_dump(),
+                **request.model_dump(exclude={"task_id", "expected_revision"}),
+            }
+        )
+        updated = service.update_task(
+            task,
+            expected_revision=request.expected_revision,
+            updated_by=principal.user_id,
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalTaskResponse.model_validate(updated.model_dump())
+
+
+@router.post(
+    "/infra-skills/eval-suites/{suite_id}/import-outpatient",
+    response_model=SkillEvalTaskListResponse,
+)
+def import_outpatient_eval_tasks(
+    suite_id: str,
+    service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalTaskListResponse:
+    from skills.mzsettlement_verify_skill.self_tests import build_eval_tasks
+
+    try:
+        tasks = service.import_tasks(
+            suite_id,
+            build_eval_tasks(suite_id, created_by=principal.user_id),
+            created_by=principal.user_id,
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalTaskListResponse(
+        items=[SkillEvalTaskResponse.model_validate(task.model_dump()) for task in tasks],
+        total=len(tasks),
+    )
+
+
+@router.get(
+    "/infra-skills/eval-suites/{suite_id}/dataset-versions",
+    response_model=SkillEvalDatasetVersionListResponse,
+)
+def list_skill_eval_dataset_versions(
+    suite_id: str,
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalDatasetVersionListResponse:
+    try:
+        versions = service.list_dataset_versions(suite_id)
+    except SkillGovernanceNotFoundError as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalDatasetVersionListResponse(
+        items=[
+            SkillEvalDatasetVersionResponse.model_validate(version.model_dump())
+            for version in versions
+        ],
+        total=len(versions),
+    )
+
+
+@router.post(
+    "/infra-skills/eval-suites/{suite_id}/dataset-versions",
+    response_model=SkillEvalDatasetVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def freeze_skill_eval_dataset(
+    suite_id: str,
+    service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalDatasetVersionResponse:
+    try:
+        version = service.freeze_dataset(suite_id, created_by=principal.user_id)
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalDatasetVersionResponse.model_validate(version.model_dump())
+
+
+@router.get(
+    "/infra-skills/eval-benchmarks",
+    response_model=SkillEvalBenchmarkListResponse,
+)
+def list_skill_eval_benchmarks(
+    service: SkillGovernanceServiceDependency,
+    skill_id: str | None = Query(default=None),
+) -> SkillEvalBenchmarkListResponse:
+    benchmarks = service.list_benchmarks(skill_id)
+    return SkillEvalBenchmarkListResponse(
+        items=[
+            SkillEvalBenchmarkResponse.model_validate(benchmark.model_dump())
+            for benchmark in benchmarks
+        ],
+        total=len(benchmarks),
+    )
+
+
+@router.post(
+    "/infra-skills/eval-benchmarks",
+    response_model=SkillEvalBenchmarkResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_skill_eval_benchmark(
+    request: SkillEvalBenchmarkCreateRequest,
+    service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalBenchmarkResponse:
+    try:
+        benchmark = service.create_benchmark(
+            name=request.name,
+            skill_id=request.skill_id,
+            dataset_version_id=request.dataset_version_id,
+            environment_snapshot=request.environment_snapshot,
+            evaluator_plan_id=request.evaluator_plan_id,
+            judge_version=request.judge_version,
+            gate_thresholds=request.gate_thresholds,
+            created_by=principal.user_id,
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalBenchmarkResponse.model_validate(benchmark.model_dump())
 
 
 @router.get(
