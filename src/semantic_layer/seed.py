@@ -16,6 +16,17 @@ from src.semantic_layer.models import (
 )
 from src.semantic_layer.registry import RegistryStore
 
+
+OUTPATIENT_P1_TRADE_FIELDS = (
+    ("data_batch_id", "String"),
+    ("source_lsn", "String"),
+    ("semantic_version", "String"),
+    ("quality_status", "Enum"),
+    ("context_quality", "Enum"),
+    ("settlement_chain_id", "String"),
+    ("settlement_lifecycle", "Enum"),
+)
+
 # ── 医保字典标准映射（源自 business_sql.yaml 的 CASE 转换）──────────
 # 将散落在 SQL CASE 里的码→标签映射，声明式收敛进语义层值域。
 # [来源: business_sql.yaml settlement_context 的 CASE a.FUND_TYPE / CASE a.yllb
@@ -170,6 +181,26 @@ def ensure_outpatient_query_model(store: RegistryStore) -> None:
             identifier="settlement_id", version="1.0", status="draft",
         ))
     _seed_outpatient_query_model(store)
+
+
+def switch_outpatient_query_model_to_postgres(store: RegistryStore) -> None:
+    """把现有门诊模型绑定切到已发布的 PostgreSQL 视图。"""
+    for dataset_code in ("mz_trade", "mz_fee_item"):
+        dataset = store.get_dataset(dataset_code)
+        if dataset is None:
+            raise ValueError(f"门诊数据集不存在: {dataset_code}")
+        store.save_dataset(dataset.model_copy(update={
+            "datasource_id": "outpatient_postgres",
+            "schema_name": "public",
+            "table_name": dataset_code,
+            "status": "draft",
+        }))
+    for column, semantic_type in OUTPATIENT_P1_TRADE_FIELDS:
+        store.save_field(SemanticField(
+            field_code=f"mz_trade.{column}", dataset_code="mz_trade",
+            column_name=column, name=column, field_role="dimension",
+            semantic_type=semantic_type, nullable=column != "data_batch_id",
+        ))
 
 
 def seed_semantic_layer(store: RegistryStore) -> None:
@@ -405,12 +436,14 @@ def _seed_outpatient_query_model(store: RegistryStore) -> None:
         return
     for dataset in [
         SemanticDataset(
-            dataset_code="mz_trade", object_code=object_code, datasource_id="bjybdb",
-            table_name="o_Trade", name="门诊交易",
+            dataset_code="mz_trade", object_code=object_code,
+            datasource_id="outpatient_postgres", schema_name="public",
+            table_name="mz_trade", name="门诊交易",
         ),
         SemanticDataset(
-            dataset_code="mz_fee_item", object_code=object_code, datasource_id="bjybdb",
-            table_name="o_FeeItem", name="门诊费用明细",
+            dataset_code="mz_fee_item", object_code=object_code,
+            datasource_id="outpatient_postgres", schema_name="public",
+            table_name="mz_fee_item", name="门诊费用明细",
         ),
     ]:
         store.save_dataset(dataset)
@@ -525,6 +558,12 @@ def _seed_outpatient_query_model(store: RegistryStore) -> None:
 
     save_fields("mz_trade", trade_types)
     save_fields("mz_fee_item", detail_types)
+    for column, semantic_type in OUTPATIENT_P1_TRADE_FIELDS:
+        store.save_field(SemanticField(
+            field_code=f"mz_trade.{column}", dataset_code="mz_trade",
+            column_name=column, name=column, field_role="dimension",
+            semantic_type=semantic_type, nullable=column != "data_batch_id",
+        ))
 
     relation = DatasetRelation(
         relation_code="mz_trade_to_fee_item", object_code=object_code,

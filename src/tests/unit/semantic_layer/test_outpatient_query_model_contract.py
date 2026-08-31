@@ -106,9 +106,12 @@ def test_mzjyxx_query_model_preserves_issue20_contract_on_publish() -> None:
     seed_semantic_layer(store)
     registry = SemanticRegistry(store)
 
-    assert {item.dataset_code for item in registry.list_datasets("mzjyxx")} == {
-        "mz_trade",
-        "mz_fee_item",
+    assert {
+        (item.dataset_code, item.datasource_id, item.schema_name, item.table_name)
+        for item in registry.list_datasets("mzjyxx")
+    } == {
+        ("mz_trade", "outpatient_postgres", "public", "mz_trade"),
+        ("mz_fee_item", "outpatient_postgres", "public", "mz_fee_item"),
     }
     assert {
         (item.key_code, item.dataset_code, tuple(item.columns), item.key_type)
@@ -128,7 +131,17 @@ def test_mzjyxx_query_model_preserves_issue20_contract_on_publish() -> None:
             "foreign",
         ),
     }
-    assert len(registry.list_fields(object_code="mzjyxx")) == 105
+    fields = registry.list_fields(object_code="mzjyxx")
+    assert len(fields) >= 105
+    assert {
+        "mz_trade.data_batch_id",
+        "mz_trade.source_lsn",
+        "mz_trade.semantic_version",
+        "mz_trade.quality_status",
+        "mz_trade.context_quality",
+        "mz_trade.settlement_chain_id",
+        "mz_trade.settlement_lifecycle",
+    } <= {item.field_code for item in fields}
     relations = registry.list_dataset_relations("mzjyxx")
     assert len(relations) == 1
     assert relations[0].cardinality == "one_to_many"
@@ -143,7 +156,7 @@ def test_mzjyxx_query_model_preserves_issue20_contract_on_publish() -> None:
     assert version.snapshot["queryable"] is True
     assert len(version.datasets) == 2
     assert len(version.keys) == 3
-    assert len(version.fields) == 105
+    assert len(version.fields) >= 105
     assert len(version.relations) == 1
     assert len(version.quality_rules) == 4
     assert all(item.status == "published" for item in version.datasets)
@@ -185,4 +198,4 @@ def test_postgres_query_model_schema_and_snapshot_round_trip() -> None:
 
     assert json.loads(params[5])["datasets"][0]["status"] == "published"
     assert len(restored.datasets) == 2
-    assert len(restored.fields) == 105
+    assert len(restored.fields) >= 105

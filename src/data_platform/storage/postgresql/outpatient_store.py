@@ -86,9 +86,13 @@ def _build_trade_view() -> str:
         for column in columns
     ]
     fields.extend([
-        "trade.data_batch_id", "trade.source_lsn", "trade.semantic_version",
-        "trade.quality_status", "trade.context_quality", "trade.settlement_chain_id",
-        "trade.settlement_lifecycle",
+        'trade.data_batch_id AS "data_batch_id"',
+        'trade.source_lsn AS "source_lsn"',
+        'trade.semantic_version AS "semantic_version"',
+        'trade.quality_status AS "quality_status"',
+        'trade.context_quality AS "context_quality"',
+        'trade.settlement_chain_id AS "settlement_chain_id"',
+        'trade.settlement_lifecycle AS "settlement_lifecycle"',
     ])
     return "CREATE OR REPLACE VIEW mz_trade AS\nSELECT\n    " + ",\n    ".join(fields) + (
         "\nFROM outpatient_trade_current AS trade\nWHERE NOT is_deleted"
@@ -300,6 +304,18 @@ class OutpatientPostgresStore:
                WHERE to_regclass(expected.name) IS NOT NULL"""
         )
         return bool(rows and int(rows[0]["present"]) == 8)
+
+    def get_view_columns(self) -> dict[str, set[str]]:
+        rows = self._client.execute(
+            """SELECT table_name, column_name
+               FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = ANY(%s)""",
+            (["mz_trade", "mz_fee_item"],),
+        )
+        columns = {"mz_trade": set(), "mz_fee_item": set()}
+        for row in rows:
+            columns[row["table_name"]].add(row["column_name"])
+        return columns
 
     def get_checkpoint(self, source_id: str) -> OutpatientSyncCheckpoint | None:
         self.ensure_schema()
