@@ -15,9 +15,13 @@ from src.data_platform.storage.skill.governance_ports import (
 )
 from src.data_platform.storage.skill.version_ports import SkillVersionStorage
 from src.domain.skill.governance_models import (
+    DEFAULT_ROUTING_SUITE_ID,
     SkillEvalCase,
     SkillEvalRun,
     SkillEvalRunStatus,
+    SkillEvalSuite,
+    SkillEvalSuiteScope,
+    SkillEvalSuiteStatus,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
@@ -77,8 +81,113 @@ class SkillGovernanceService:
         self._version_storage = version_storage
         self._loader = loader
 
-    def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]:
-        return self._storage.list_cases(enabled_only=enabled_only)
+    def list_suites(
+        self,
+        *,
+        skill_id: str | None = None,
+        include_inactive: bool = True,
+    ) -> list[SkillEvalSuite]:
+        return self._storage.list_suites(
+            skill_id=skill_id,
+            include_inactive=include_inactive,
+        )
+
+    def get_suite(self, suite_id: str) -> SkillEvalSuite:
+        suite = self._storage.get_suite(suite_id)
+        if suite is None:
+            raise SkillGovernanceNotFoundError(f"测评集不存在: {suite_id}")
+        return suite
+
+    def create_suite(
+        self,
+        *,
+        name: str,
+        scope: SkillEvalSuiteScope | str,
+        skill_id: str | None,
+        purpose: str,
+        created_by: str,
+    ) -> SkillEvalSuite:
+        resolved_scope = SkillEvalSuiteScope(scope)
+        if resolved_scope == SkillEvalSuiteScope.SKILL:
+            if not skill_id or skill_id not in self._loader.get_all():
+                raise SkillGovernanceNotFoundError(f"Skill 不存在: {skill_id}")
+        else:
+            skill_id = None
+        now = datetime.now(timezone.utc)
+        return self._storage.save_suite(
+            SkillEvalSuite(
+                suite_id=f"EVS_{uuid4().hex}",
+                name=name.strip(),
+                scope=resolved_scope,
+                skill_id=skill_id,
+                purpose=purpose.strip(),
+                created_by=created_by.strip(),
+                updated_by=created_by.strip(),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    def update_suite(
+        self,
+        suite_id: str,
+        *,
+        name: str,
+        purpose: str,
+        status: SkillEvalSuiteStatus | str,
+        expected_revision: int,
+        updated_by: str,
+    ) -> SkillEvalSuite:
+        current = self.get_suite(suite_id)
+        resolved_status = SkillEvalSuiteStatus(status)
+        if (
+            suite_id == DEFAULT_ROUTING_SUITE_ID
+            and resolved_status != SkillEvalSuiteStatus.ACTIVE
+        ):
+            raise SkillGovernanceGateError(
+                "平台默认路由测评集不能停用",
+                ["default_eval_suite_protected"],
+            )
+        updated = current.model_copy(
+            update={
+                "name": name.strip(),
+                "purpose": purpose.strip(),
+                "status": resolved_status,
+                "revision": expected_revision + 1,
+                "updated_by": updated_by.strip(),
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        return self._storage.update_suite(
+            SkillEvalSuite.model_validate(updated.model_dump()),
+            expected_revision=expected_revision,
+        )
+
+    def delete_suite(self, suite_id: str) -> None:
+        if suite_id == DEFAULT_ROUTING_SUITE_ID:
+            raise SkillGovernanceGateError(
+                "平台默认路由测评集不能删除",
+                ["default_eval_suite_protected"],
+            )
+        self.get_suite(suite_id)
+        if self._storage.count_cases(suite_id) > 0:
+            raise SkillGovernanceGateError(
+                "测评集包含用例，只能停用",
+                ["eval_suite_not_empty"],
+            )
+        if not self._storage.delete_suite(suite_id):
+            raise SkillGovernanceNotFoundError(f"测评集不存在: {suite_id}")
+
+    def list_cases(
+        self,
+        *,
+        suite_id: str | None = None,
+        enabled_only: bool = False,
+    ) -> list[SkillEvalCase]:
+        return self._storage.list_cases(
+            suite_id=suite_id,
+            enabled_only=enabled_only,
+        )
 
     def current_suite_version(self) -> int:
         return self._storage.current_suite_version()
@@ -86,6 +195,7 @@ class SkillGovernanceService:
     def create_case(
         self,
         *,
+        suite_id: str = DEFAULT_ROUTING_SUITE_ID,
         question_template: str,
         expected_skill_id: str | None,
         required: bool,
@@ -96,6 +206,17 @@ class SkillGovernanceService:
         contains_sensitive_data: bool,
         created_by: str,
     ) -> SkillEvalCase:
+        suite = self.get_suite(suite_id)
+        if suite.status != SkillEvalSuiteStatus.ACTIVE:
+            raise SkillGovernanceGateError("测评集已停用", ["eval_suite_inactive"])
+        if (
+            suite.scope == SkillEvalSuiteScope.SKILL
+            and expected_skill_id != suite.skill_id
+        ):
+            raise SkillGovernanceGateError(
+                "路由用例的期望 Skill 与测评集不一致",
+                ["eval_case_skill_mismatch"],
+            )
         if contains_sensitive_data or detect_sensitive_patterns(question_template):
             raise SkillGovernanceGateError(
                 "评测用例包含敏感信息，必须脱敏后再保存",
@@ -105,13 +226,15 @@ class SkillGovernanceService:
         normalized_q = question_template.strip()
         for existing in self._storage.list_cases():
             if (
-                existing.question_template.strip() == normalized_q
+                existing.suite_id == suite_id
+                and existing.question_template.strip() == normalized_q
                 and existing.expected_skill_id == expected_skill_id
             ):
                 return existing
         return self._storage.save_case_with_new_suite_version(
             SkillEvalCase(
-                case_id=uuid4().hex,
+                case_id=f"EVC_{uuid4().hex}",
+                suite_id=suite_id,
                 suite_version=1,
                 question_template=question_template.strip(),
                 expected_skill_id=expected_skill_id,
@@ -171,12 +294,12 @@ class SkillGovernanceService:
             raise SkillGovernanceNotFoundError(f"评测用例不存在: {case_id}")
 
     def dedupe_cases(self) -> int:
-        """合并重复用例：同 (question_template, expected_skill_id) 仅保留最新一条，返回删除数。"""
+        """同测评集内按问题和期望 Skill 去重，保留最新一条。"""
         # ponytail: O(n) 分组扫描，用例规模小；上万条改 SQL GROUP BY
-        groups: dict[tuple[str, str | None], list[SkillEvalCase]] = {}
+        groups: dict[tuple[str, str, str | None], list[SkillEvalCase]] = {}
         for c in self._storage.list_cases():
             groups.setdefault(
-                (c.question_template.strip(), c.expected_skill_id), []
+                (c.suite_id, c.question_template.strip(), c.expected_skill_id), []
             ).append(c)
         removed = 0
         for group in groups.values():
@@ -195,6 +318,7 @@ class SkillGovernanceService:
         for template, skill_id, tags in GOLDEN_ROUTING_CASES:
             seeded.append(
                 self.create_case(
+                    suite_id=DEFAULT_ROUTING_SUITE_ID,
                     question_template=template,
                     expected_skill_id=skill_id,
                     required=True,

@@ -5,10 +5,14 @@ import pytest
 from src.data_platform.storage.skill.governance_in_memory import (
     InMemorySkillGovernanceStorage,
 )
+from src.data_platform.storage.skill.governance_ports import (
+    SkillGovernanceNotFoundError,
+)
 from src.data_platform.storage.skill.version_in_memory import (
     InMemorySkillVersionStorage,
 )
 from src.domain.skill.governance_models import (
+    DEFAULT_ROUTING_SUITE_ID,
     SkillEvalRunStatus,
     SkillReleaseEnvironment,
     SkillReleaseStatus,
@@ -80,6 +84,134 @@ def service() -> SkillGovernanceService:
         version_storage=versions,
         loader=_Loader([_manifest("runtime", ["统筹自付"])]),
     )
+
+
+def test_create_skill_suite_generates_prefixed_id(service: SkillGovernanceService) -> None:
+    suite = service.create_suite(
+        name="演示 Skill 回归",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="验证演示 Skill 路由",
+        created_by="quality-user",
+    )
+
+    assert suite.suite_id.startswith("EVS_")
+    assert suite.skill_id == "demo-skill"
+    assert suite.revision == 1
+
+
+def test_create_suite_rejects_unknown_skill(service: SkillGovernanceService) -> None:
+    with pytest.raises(SkillGovernanceNotFoundError, match="Skill 不存在"):
+        service.create_suite(
+            name="未知 Skill 回归",
+            scope="skill",
+            skill_id="missing-skill",
+            purpose="",
+            created_by="quality-user",
+        )
+
+
+def test_route_case_belongs_to_selected_suite(service: SkillGovernanceService) -> None:
+    suite = service.create_suite(
+        name="演示 Skill 路由",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    case = service.create_case(
+        suite_id=suite.suite_id,
+        question_template="统筹自付怎么算",
+        expected_skill_id="demo-skill",
+        required=True,
+        risk_tags=[],
+        business_tags=[],
+        source_type="manual",
+        source_ref="",
+        contains_sensitive_data=False,
+        created_by="quality-user",
+    )
+
+    assert case.case_id.startswith("EVC_")
+    assert case.suite_id == suite.suite_id
+    assert service.list_cases(suite_id=suite.suite_id) == [case]
+
+
+def test_same_question_is_deduplicated_only_inside_same_suite(
+    service: SkillGovernanceService,
+) -> None:
+    first_suite = service.create_suite(
+        name="第一套",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    second_suite = service.create_suite(
+        name="第二套",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    base = {
+        "question_template": "起付线怎么算",
+        "expected_skill_id": "demo-skill",
+        "required": True,
+        "risk_tags": [],
+        "business_tags": [],
+        "source_type": "manual",
+        "source_ref": "",
+        "contains_sensitive_data": False,
+        "created_by": "quality-user",
+    }
+    first = service.create_case(suite_id=first_suite.suite_id, **base)
+    second = service.create_case(suite_id=second_suite.suite_id, **base)
+
+    assert first.case_id != second.case_id
+
+
+def test_non_empty_or_default_suite_cannot_be_deleted(
+    service: SkillGovernanceService,
+) -> None:
+    with pytest.raises(SkillGovernanceGateError, match="默认"):
+        service.delete_suite(DEFAULT_ROUTING_SUITE_ID)
+
+    suite = service.create_suite(
+        name="非空测评集",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    service.create_case(
+        suite_id=suite.suite_id,
+        question_template="起付线怎么算",
+        expected_skill_id="demo-skill",
+        required=True,
+        risk_tags=[],
+        business_tags=[],
+        source_type="manual",
+        source_ref="",
+        contains_sensitive_data=False,
+        created_by="quality-user",
+    )
+    with pytest.raises(SkillGovernanceGateError, match="包含用例"):
+        service.delete_suite(suite.suite_id)
+
+
+def test_default_routing_suite_cannot_be_inactivated(
+    service: SkillGovernanceService,
+) -> None:
+    with pytest.raises(SkillGovernanceGateError, match="默认"):
+        service.update_suite(
+            DEFAULT_ROUTING_SUITE_ID,
+            name="平台默认路由测评集",
+            purpose="兼容历史路由评测与发布门禁",
+            status="inactive",
+            expected_revision=1,
+            updated_by="quality-user",
+        )
 
 
 def test_case_changes_increment_global_suite_version(
