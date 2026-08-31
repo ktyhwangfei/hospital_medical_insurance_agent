@@ -1,205 +1,191 @@
 # 门诊部分项目预退费分析设计
 
-> **状态更正（2026-08-31）**：本文保留目标设计，但能力已撤出正式 `skills/` 和 `/policy-qa/stream`。当前候选包位于 `skill_drafts/`、草稿状态为 `editing`；真实预结算接入、隔离评测和人工审批完成前不得物化上线。
+> **状态（2026-08-31）**：能力仅存在于 `skill_drafts/outpatient_pre_refund_analysis_skill/`，草稿状态为 `editing`。本设计先冻结指标和 `BillingPort` 业务参数；真实收费接口、样例取数、候选评测和人工审批完成前不得物化上线。
 
-## 1. 目标
+## 1. 目标与成功标准
 
-在唯一业务入口 `/policy-qa` 中新增门诊部分项目预退费分析能力。调用方提交门诊原交易号、费用明细唯一 ID 和拟退数量；系统调用院内或医保正式预结算接口，以官方试算结果说明拟退项目、基金支付变化、个人支付变化以及最终应退或应补金额。
+门诊经办人员指定原交易中的部分收费项目和拟退数量，系统调用收费系统的官方预结算能力，解释退费后总费用、基金支付和个人支付的变化。本系统不自行重算医保待遇，也不执行退费。
 
-本能力只做分析和解释，不执行退费、冲正、撤销结算或费用明细修改。任何实际执行诉求必须返回 `waiting_human_confirmation`，由人工在既有业务系统处理。
+本阶段成功标准：
 
-## 2. 已确认范围
+- 冻结预结算业务入参为 `original_trade_no + item_id + refund_quantity`。
+- 明确请求参数、数据库校验指标和官方预结算回参的边界。
+- 复用现有门诊结算对象 `mzjyxx`，不创建平行退费对象。
+- 草稿可表达完整指标依赖，但在真实接口和治理门禁完成前保持 `editing`。
+- 实际退费、冲正等写操作继续由安全层拦截为 `waiting_human_confirmation`。
 
-- 仅支持门诊部分项目预退费。
-- 拟退项目必须由调用方传入费用明细唯一 ID 和拟退数量。
-- 金额、项目名称和单价不接受客户端传值，全部以收费系统返回为准。
-- 准确结果必须来自院内或医保正式预结算接口；本地代码不重算医保待遇。
-- 当前没有真实预结算接口契约。本期实现 Skill、适配器端口和核心流程；生产环境未配置接口时返回 `unavailable`，不生成测试金额或估算金额。
-- 复用 `/policy-qa/stream`、SkillRouter、任务闭环、SSE 和 `PolicyQAPublicResult`，不增加第二业务入口。
-- 不修改数据库 Schema，不建设通用模拟引擎、规则 DSL 或退费执行能力。
+## 2. 当前事实与约束
+
+当前 PostgreSQL 语义注册表已有门诊结算对象 `mzjyxx`，其物理来源包括 `o_Trade` 和 `o_FeeItem`。`o_FeeItem` 的明细复合主键为 `T_TradeNo + ItemId`，因此 `ItemId` 不能脱离原交易号单独使用。[来源: 当前 PostgreSQL 语义注册表与 discovery 扫描快照，2026-08-31]
+
+现状仍有四项治理缺口：
+
+- `mzjyxx` 没有已发布对象版本，Skill 输入门禁会判定 `OBJECT_NOT_PUBLISHED`。
+- `o_FeeItem.ItemId` 尚未建立 `mzjyxx.ItemId` 指标映射。
+- 部分现有 `mzjyxx` 指标没有 `source_adapter_port`，暂时不能作为 `runtime_resolvable` Skill 输入。[来源: `src/runtime/skill_management/skill_input_service.py`]
+- `T_State`、`FeeItem_State`、`T_HasRefundmented` 均没有已审核值域，不能依据原始数值猜测业务状态。
+
+这些缺口用于阻止草稿提前物化，本阶段不通过绕过校验或伪造默认值解除门禁。
 
 ## 3. 方案选择
 
-采用独立 `outpatient_pre_refund_analysis_skill`，复用现有平台能力并扩展 `BillingPort` 的只读预结算能力。
+采用“最小业务参数 + 内部指标校验 + 官方回参定值”方案：
 
-未采用以下方案：
+1. 调用方只传原交易号、项目 ID 和拟退数量。
+2. 平台通过语义指标读取原交易及项目事实。
+3. `BillingPort` 将三项业务参数传给真实收费接口。
+4. 最终金额和可退数量只认官方预结算回参。
 
-- 扩展 `settlement_explain_skill`：会混合住院结算解释与门诊预退费分析，职责不清。
-- 新增退费 API：会违反 `/policy-qa` 唯一业务入口约束，并重复 SSE、持久化和任务闭环。
-- 本地规则估算：医院无法提供完整医保计算过程，不能保证基金和个人支付变化准确。
+未采用：
 
-## 4. 架构与职责
+- **新建退费语义对象**：会复制 `mzjyxx` 已有交易和费用事实，形成两套真相。
+- **由客户端传完整费用快照**：单价、金额、基金和个人支付可能被篡改或过期。
+- **仅传原交易号**：无法无歧义地表达“部分项目、部分数量”的退费意图。
 
-```text
-PolicyQARequest
-  settlement_id = 门诊原交易号
-  pre_refund_items = [{fee_detail_id, refund_quantity}]
-        │
-        ▼
-请求校验与操作性质识别
-        │
-        ├─ 实际执行诉求 → waiting_human_confirmation
-        └─ 分析/模拟诉求
-                │
-                ▼
-SkillRouter → outpatient_pre_refund_analysis_skill
-                │
-                ▼
-BillingPort.preview_partial_refund(...)
-  读取原交易与权威费用明细
-  调用院内/医保预结算接口
-                │
-                ▼
-Skill 确定性核验与差额计算
-                │
-                ▼
-PolicyQAPublicResult → result + done
-```
+## 4. 数据契约
 
-### 4.1 API 与编排层
-
-`PolicyQARequest` 增加可选的 `pre_refund_items`。普通政策问答不传该字段，现有行为保持不变。预退费分析使用现有 `settlement_id` 承载门诊原交易号，避免新增第二个根业务标识。
-
-编排层在查询现有住院结算上下文之前识别预退费请求。命中后进入独立分支，不调用 `SettlementDataProvider`，避免把门诊交易号误当作住院登记号。
-
-编排层负责：
-
-- 校验结构化拟退项目；
-- 区分只读分析与实际执行诉求；
-- 获取 `BillingPort` 依赖；
-- 管理最多一次的瞬时故障恢复；
-- 将 Skill 结果转换为现有公开结果契约；
-- 持久化任务状态、`attempt_count` 和 `halt_reason`。
-
-### 4.2 收费系统适配层
-
-扩展现有 `BillingPort`，增加只读 `preview_partial_refund()`。输入只包含原交易号、费用明细 ID 和拟退数量；返回收费系统确认的原交易、拟退项目、正式预结算结果、业务返回码、试算流水号和来源信息。
-
-端口不得包含实际退费、冲正或提交结算方法。当前没有真实接口契约时，生产默认实现抛出明确的“预结算未配置”异常。单元和集成测试通过依赖覆盖注入确定性适配器，不进入生产配置。
-
-### 4.3 Skill
-
-新增 `outpatient_pre_refund_analysis_skill`，声明：
-
-- `business_action: evaluate`
-- `business_object: settlement`
-- 关键词包括“预退费”“退费分析”“退费试算”“退掉这个项目”“部分项目退费影响”。
-
-Skill 只负责：
-
-- 验证预结算响应属于本次原交易和拟退项目；
-- 验证拟退数量不超过权威费用明细可退数量；
-- 使用 `Decimal` 计算官方试算结果与原结算的差额；
-- 生成患者可理解的解释、计算步骤、警告、来源和不确定性。
-
-Skill 不查询数据库、不调用 HTTP、不执行退费，也不自行推导医保待遇公式。
-
-## 5. 数据契约
-
-### 5.1 请求
+### 4.1 业务请求参数
 
 ```json
 {
-  "question": "分析退掉这些项目后需要退钱还是补钱",
-  "settlement_id": "门诊原交易号",
-  "pre_refund_items": [
+  "original_trade_no": "门诊原交易号",
+  "items": [
     {
-      "fee_detail_id": "费用明细唯一ID",
+      "item_id": 123,
       "refund_quantity": "1"
     }
   ]
 }
 ```
 
-`refund_quantity` 以十进制定点值解析，必须大于零。重复 `fee_detail_id`、空 ID、非法数量在信任边界拒绝；客户端不得提交单价、项目名称或退款金额。
+约束：
 
-### 5.2 适配器结果
+- `original_trade_no` 非空。
+- `item_id` 为正整数；其业务身份是 `(original_trade_no, item_id)`。
+- `refund_quantity` 使用 `Decimal` 解析且必须大于零。
+- 同一请求中不得重复 `(original_trade_no, item_id)`。
+- 客户端不得传项目名称、单价、退款金额、基金金额或个人金额。
 
-适配器结果至少包含：
+`refund_quantity` 是用户命令参数，不是数据库指标。运行时问题文本仍由执行契约的 `question` 上下文提供，用于区分只读分析和实际退费诉求。
 
-- 原交易号、原交易总费用、原基金支付、原个人支付；
-- 每条拟退项目的权威明细 ID、名称、原数量、可退数量、拟退数量、权威金额；
-- 试算后总费用、基金支付、个人支付；
-- 最终应退金额或应补金额；
-- 试算业务码、业务说明、试算流水号、来源系统和来源记录标识。
+### 4.2 语义指标
 
-金额统一使用 `Decimal`。对外输出前按现有脱敏和公开字段白名单处理。
+复用 `mzjyxx`，只新增缺失的 `mzjyxx.ItemId`。指标按用途分层：
 
-### 5.3 公开结果
+| 用途 | 指标 | 物理来源 | 必需性 | 处理规则 |
+|---|---|---|---|---|
+| 原交易定位 | `mzjyxx.T_TradeNo` | `o_Trade.T_TradeNo` | 必需 | 与请求 `original_trade_no` 一致 |
+| 明细定位 | `mzjyxx.ItemId` | `o_FeeItem.ItemId` | 必需、新增 | 与原交易号组成复合键 |
+| 交易状态 | `mzjyxx.T_State` | `o_Trade.T_State` | 必需 | 已审核值域明确无效时停止调用 |
+| 明细状态 | `mzjyxx.FeeItem_State` | `o_FeeItem.State` | 必需 | 已审核值域明确不可用时停止调用 |
+| 原收费数量 | `mzjyxx.Count` | `o_FeeItem.Count` | 必需 | 用于非正数量和明显超量预检 |
+| 原项目金额 | `mzjyxx.Fee` | `o_FeeItem.Fee` | 必需 | 仅作原始事实和回参交叉核验 |
+| 历史退费标志 | `mzjyxx.T_HasRefundmented` | `o_Trade.T_HasRefundmented` | 候选 | 值域审核后才提示历史风险；不推导剩余可退量 |
+| 原交易总金额 | `mzjyxx.T_FeeAll` | `o_Trade.T_FeeAll` | 建议 | 与官方 `before.total_amount` 交叉核验 |
+| 原基金支付 | `mzjyxx.T_FundPay` | `o_Trade.T_FundPay` | 建议 | 与官方 `before.fund_amount` 交叉核验 |
+| 原个人支付 | `mzjyxx.T_SelfPayAll` | `o_Trade.T_SelfPayAll` | 建议 | 与官方 `before.personal_amount` 交叉核验 |
+| 项目解释 | `mzjyxx.ItemCode`、`mzjyxx.ItemName` | `o_FeeItem` 同名字段 | 可选 | 用于可读展示，不影响能否试算 |
+| 金额解释 | `mzjyxx.UnitPrice`、`mzjyxx.FeeIn`、`mzjyxx.FeeOut`、`mzjyxx.FeeItem_SelfPay2` | `o_FeeItem` 对应字段 | 可选 | 用于解释原项目构成，不用于本地重算待遇 |
 
-继续使用 `PolicyQAPublicResult`：
+`mzjyxx.T_PartialReturnFlag` 暂不列为依赖：当前缺少权威字段定义，不能依据名称猜测它表示“支持部分退费”还是“已发生部分退费”。获得收费系统字段说明后再决定是否纳入。
 
-- `answer`：简明说明拟退项目及患者最终应退或应补金额；
-- `calculation_steps`：原结算、拟退项目、试算后结算、基金变化、个人变化；
-- `warnings`：项目不可退、数量不足、官方拒绝或数据异常；
-- `citations`：预结算来源系统、试算流水号或来源记录说明；
-- `uncertainties`：接口未配置、响应缺字段或政策证据不足；
-- `verification_summary`：确认交易、项目、金额和来源是否完成确定性核验。
+状态指标值域未审核前，流程不得硬编码任何原始状态值；只能依赖官方预结算结果并声明本地状态未核验。
 
-公开结果不得包含 SQL、数据库表名、内部异常堆栈、患者敏感身份或适配器密钥。
+### 4.3 BillingPort 参数
 
-## 6. 流程状态与错误处理
+`BillingPort.preview_partial_refund()` 的稳定业务参数为：
 
-| 场景 | 处理 | 是否重试 |
+```python
+preview_partial_refund(
+    original_trade_no: str,
+    items: tuple[PartialRefundItemRequest, ...],
+)
+
+PartialRefundItemRequest(
+    item_id: int,
+    refund_quantity: Decimal,
+)
+```
+
+真实厂商接口若额外要求操作员、退费原因、授权票据或幂等号，由适配器从认证和审计上下文补齐；这些是控制元数据，不是退费分析指标。端口不得增加实际退费或冲正方法。
+
+### 4.4 官方预结算回参
+
+官方回参至少包含：
+
+- `accepted`、`response_code`、`response_message`、`preview_id`；
+- 每项 `item_id`、拟退数量、官方可退数量、官方退款金额；
+- 预结算前后的总金额、基金支付和个人支付；
+- `source_system` 与 `source_reference`。
+
+系统只做以下确定性差额：
+
+```text
+总费用减少 = before.total_amount - after.total_amount
+基金冲回   = before.fund_amount - after.fund_amount
+个人变化   = before.personal_amount - after.personal_amount
+```
+
+不根据单价、医保内外金额或比例重算医保待遇。官方回参缺失或关联核验失败时，不输出确定性金额结论。
+
+## 5. 核心流程
+
+```text
+结构化三项入参
+  → 校验复合键、重复项和正数量
+  → 按 mzjyxx 指标读取原交易与费用明细
+  → 执行状态、数量和原始金额预检
+  → BillingPort.preview_partial_refund（三项业务参数）
+  → 核验交易号、item_id、数量、金额快照和来源
+  → 计算官方前后差额
+  → 输出解释、citations、warnings 或 uncertainties
+```
+
+权威性顺序：官方预结算回参高于本地历史指标。历史退费标志只能触发警告；最终可退数量以 `refundable_quantity` 为准。
+
+## 6. 错误处理与安全
+
+| 场景 | 结果 | 重试 |
 |---|---|---:|
-| 未选择拟退项目 | `unavailable`，提示先选择费用明细 | 否 |
-| 明细重复、ID 为空或数量非法 | 请求校验错误 | 否 |
-| 明细不属于原交易或数量超过可退数量 | `unavailable`，说明校验失败 | 否 |
-| 预结算接口未配置 | `unavailable`，不生成金额 | 否 |
-| 连接超时或瞬时数据源故障 | 发送 `recovery`，最多恢复一次 | 是，最多一次 |
-| 原交易或费用明细不存在 | `unavailable` | 否 |
-| 官方预结算拒绝 | `complete`，展示业务码和拒绝原因 | 否 |
-| 响应交易号、项目或金额不一致 | `unavailable`，不展示未经核验金额 | 否 |
-| 官方预结算成功且核验通过 | `complete`，展示确定性差额 | 否 |
-| 用户要求实际执行退费或冲正 | `waiting_human_confirmation`，适配器零调用 | 否 |
+| 入参为空、重复、非法数量 | `unavailable` 或请求校验错误 | 否 |
+| 原交易或项目不存在 | `unavailable` | 否 |
+| 交易/项目状态明确不可退 | `unavailable` | 否 |
+| 预结算接口未配置 | `unavailable`，不生成估算金额 | 否 |
+| 超时或瞬时连接故障 | 有界恢复 | 最多一次 |
+| 官方拒绝 | 展示业务码和拒绝原因 | 否 |
+| 回参交易号、项目或金额快照不一致 | `unavailable`，隐藏未核验金额 | 否 |
+| 用户要求执行退费或冲正 | `waiting_human_confirmation`，适配器零调用 | 否 |
 
-SSE 成功与不可用路径均以 `done` 结束，并携带 `attempt_count` 与明确的 `halt_reason`。瞬时故障之外的确定性结果不进入恢复循环。
+所有确定性输出必须携带预结算来源引用；无法核验时声明不确定性。输出不得包含 SQL、物理表字段、适配器凭据或患者敏感身份。
 
-## 7. 安全约束
+## 7. 草稿与发布门禁
 
-- “分析、模拟、试算、如果退掉”属于只读预结算，不触发高风险写操作。
-- “立即执行、确认退费、直接退费、冲正、撤销结算”等实际执行诉求必须在调用适配器前转为 `waiting_human_confirmation`。
-- 预结算适配器没有退费写方法，因此即使意图识别异常也不存在自动退费执行路径。
-- 客户端金额不可信，所有项目和金额必须由收费系统确认。
-- 响应关联校验失败时不得输出金额结论。
-- 所有输出携带 citations 或 uncertainties，并经过脱敏与公开字段白名单。
+指标确定不等于发布。按以下顺序解除草稿门禁：
+
+1. 在语义层新增并审核 `mzjyxx.ItemId`。
+2. 审核交易状态、明细状态和历史退费标志的值域；无法确认的指标不得参与硬判。
+3. 为草稿实际依赖指标配置 `BillingPort` 运行时解析和字段映射。
+4. 使用脱敏样例验证 `(original_trade_no, item_id)` 能唯一取回明细。
+5. 人工发布 `mzjyxx` 对象版本，使依赖指标可被 Skill 门禁解析。
+6. 更新退费 Skill 草稿执行契约并通过草稿校验。
+7. 接入真实只读预结算接口，完成隔离候选评测。
+8. 经人工审批后才允许物化并接入 `/policy-qa`。
+
+任何一步未完成，草稿保持 `editing`，正式 `skills/` 和公开 API 均不出现退费能力。
 
 ## 8. 测试与验收
 
-本变更涉及门诊结算、高风险动作识别、适配器和核心运行时，按 R3 最低要求执行 Unit → API → Flow；安全拒绝路径必须覆盖。
+按 R4 变更执行 Unit → API → Flow：
 
-### 8.1 Unit
+- **Unit**：复合键、正数量、重复项、已审核状态门禁、无值域时禁止猜测、Decimal 差额、回参关联核验、高风险意图拦截。
+- **API**：草稿保存/校验展示指标缺口；未发布对象或不可解析指标必须阻断物化。
+- **Flow**：官方成功、官方拒绝、未配置、瞬时故障一次恢复、确定性失败不重试、执行退费诉求零适配器调用。
+- **外部集成**：真实接口到位后验证字段映射、鉴权、超时、幂等、业务码和脱敏日志；此项未通过前不得声称上线可用。
 
-- Skill 加载、清单和关键词路由正确；
-- 官方试算成功时准确计算总费用、基金支付和个人支付差额；
-- 支持部分数量；
-- 正确解释“应补金额大于零”的场景；
-- 官方拒绝返回可解释结果；
-- 交易号、项目或金额不一致时拒绝输出；
-- 未配置适配器返回明确异常；
-- 普通费用解释路由保持不变。
+成功路径必须证明三项业务参数原样进入 `BillingPort`，且最终金额来自官方回参而非本地推算。
 
-### 8.2 API
+## 9. 非目标与回滚
 
-- 合法 `pre_refund_items` 被解析；
-- 重复明细、空 ID 和非正数量被拒绝；
-- 未配置接口返回 `unavailable`；
-- 成功结果符合 `PolicyQAPublicResult` 白名单；
-- 输出不包含 SQL、内部字段和敏感数据。
+本设计不包含实际退费、冲正、第二业务入口、通用医保模拟引擎、规则 DSL、新数据库 Schema 或前端完整退费工作台。
 
-### 8.3 Flow
-
-- 成功流包含 `context_need → step → result → done`；
-- 瞬时故障最多恢复一次，并记录 `attempt_count`；
-- 确定性不可用不重试；
-- “立即执行退费”返回 `waiting_human_confirmation`，且预结算适配器调用次数为零；
-- 普通 `/policy-qa` 结算解释流程继续通过。
-
-真实院内/医保预结算接口尚未提供，因此真实系统联调不属于本期“已通过”范围。后续获得接口契约后，只新增或替换 `BillingPort` 真实适配器并执行外部集成验收，不改 Skill 的确定性分析规则。
-
-## 9. 回滚与兼容性
-
-- `pre_refund_items` 为可选字段，现有调用方兼容。
-- 不修改数据库 Schema，无数据迁移和数据回滚。
-- 回滚时移除预退费路由分支、可选请求字段、BillingPort 新方法和 Skill 包即可；原政策问答与结算解释流程不受影响。
-- 当前未配置真实预结算接口时，功能以明确 `unavailable` 收口，不影响其他 Skill。
+回滚时移除草稿中的指标依赖和 `BillingPort` 候选方法即可；由于能力尚未物化，不影响正式 Skill 路由和现有 Policy QA。
