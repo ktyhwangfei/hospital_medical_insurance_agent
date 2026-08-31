@@ -275,11 +275,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 错误码 | `error_code` | Value Object | `str \| None` | 医保接口返回的错误码，结算异常时的核心诊断入口 |
 | 医保接口适配器端口 | `InsuranceInterfacePort` | **Domain Service** (接口) | Protocol | 与医保局端核心结算系统交互的防腐层端口 |
 | 收费系统适配器端口 | `BillingPort` | **Domain Service** (接口) | Protocol | 与医院收费系统交互的防腐层端口 |
-| 部分退费项目请求 | `PartialRefundItemRequest` | **Value Object** | `@dataclass(frozen=True)` | 指定费用明细 ID 与拟退数量的只读预结算输入 |
-| 结算金额快照 | `SettlementAmountSnapshot` | **Value Object** | `@dataclass(frozen=True)` | 医院收费系统返回的预退费前后金额快照 |
-| 预退费项目结果 | `PreviewedRefundItem` | **Value Object** | `@dataclass(frozen=True)` | 医院收费系统核定的单项可退数量与退费金额 |
-| 部分退费预结算结果 | `PartialRefundPreview` | **Value Object** | `@dataclass(frozen=True)` | 医院收费系统对门诊部分项目预退费的权威只读结果 |
-| 预结算错误类型 | `PreSettlementErrorType` | **Value Object** | `StrEnum` | 区分未配置与瞬时不可用，决定是否允许一次恢复 |
+| 门诊部分项目预退费分析 | `OutpatientPartialPreRefundAnalysis` | **Domain Service** | Skill | 基于院端官方预结算结果，对拟退明细进行只读分析 |
+| 拟退项目 | `PartialRefundItemRequest` | **Value Object** | `@dataclass(frozen=True)` | 指定费用明细 ID 与拟退数量的只读预结算输入 |
+| 预结算结果 | `PartialRefundPreview` | **Value Object** | `@dataclass(frozen=True)` | 医院收费系统对门诊部分项目预退费的权威只读结果 |
 
 #### 业务规则
 
@@ -988,15 +986,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ModelRequest` | 模型请求 | ModelService | DTO |
 | `ModelResponse` | 模型响应 | ModelService | DTO |
 | `Order` | 医嘱 | OrderFee | Aggregate Root |
+| `OutpatientPartialPreRefundAnalysis` | 门诊部分项目预退费分析 | Insurance | Domain Service |
 | `Patient` | 患者 | Patient | Entity |
 | `PaymentRate` | 支付费率 | DrgDip | Value Object |
-| `PartialRefundItemRequest` | 部分退费项目请求 | Insurance | Value Object |
-| `PartialRefundPreview` | 部分退费预结算结果 | Insurance | Value Object |
+| `PartialRefundItemRequest` | 拟退项目 | Insurance | Value Object |
+| `PartialRefundPreview` | 预结算结果 | Insurance | Value Object |
 | `PolicyExpression` | 政策表达式 | Knowledge | Value Object |
 | `PolicyFact` | 政策事实 | Knowledge | Value Object |
 | `PreAuditPort` | 事前审核适配器端口 | AuditRisk | Domain Service |
-| `PreSettlementErrorType` | 预结算错误类型 | Insurance | Value Object |
-| `PreviewedRefundItem` | 预退费项目结果 | Insurance | Value Object |
 | `ProfitLoss` | 盈亏分析 | DrgDip | Value Object |
 | `PromptTemplate` | 提示模板 | Knowledge | Entity |
 | `RAGPipeline` | RAG 管线 | Knowledge | Domain Service |
@@ -1021,7 +1018,6 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `SkillMetadata` | 技能元数据 | SkillTool | Value Object |
 | `SkillNextAction` | 技能下一步动作 | SkillTool | Value Object |
 | `SkillStep` | 技能步骤 | SkillTool | Entity |
-| `SettlementAmountSnapshot` | 结算金额快照 | Insurance | Value Object |
 | `StreamChunk` | 流式块 | ModelService | DTO |
 | `Surgery` | 手术记录 | MedicalRecord | Entity |
 | `TaskConfirmRequest` | 任务确认请求 | TaskClosure | DTO |
