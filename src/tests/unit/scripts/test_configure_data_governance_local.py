@@ -66,3 +66,8 @@ def test_server_scripts_manage_only_the_scoped_worker() -> None:
     assert "$WORKDIR" in stop_script
     assert "worker_pid" in stop_script
     assert "Get-Process python" not in stop_script
+    assert "git rev-parse --path-format=absolute --git-common-dir" in start_script
+    assert "bootstrap_outpatient_governance.py" in start_script
+    assert start_script.index("bootstrap_outpatient_governance.py") < start_script.index(
+        "Start-Process uvicorn"
+    )

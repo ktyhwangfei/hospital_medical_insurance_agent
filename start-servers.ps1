@@ -132,17 +132,38 @@ if (-not $env:MSSQL_HOST) { $env:MSSQL_HOST = "localhost" }
 if (-not $env:MSSQL_PORT) { $env:MSSQL_PORT = "1433" }
 if (-not $env:MSSQL_DATABASE) { $env:MSSQL_DATABASE = "bjybdb" }
 if (-not $env:MSSQL_USER) { $env:MSSQL_USER = "sa" }
+$dockerEnvCandidates = @((Join-Path $WORKDIR "deploy\docker\.env"))
+try {
+    Push-Location $WORKDIR
+    $gitCommonDir = (& git rev-parse --path-format=absolute --git-common-dir 2>$null).Trim()
+    Pop-Location
+    if ($gitCommonDir) {
+        $mainCheckout = Split-Path $gitCommonDir -Parent
+        $dockerEnvCandidates += Join-Path $mainCheckout "deploy\docker\.env"
+    }
+} catch {
+    Pop-Location -ErrorAction SilentlyContinue
+}
+$dockerEnv = $dockerEnvCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $env:MSSQL_PASSWORD) {
-    $dockerEnv = Join-Path $WORKDIR "deploy\docker\.env"
-    if (Test-Path $dockerEnv) {
-        $saPass = (Get-Content $dockerEnv | Where-Object { $_ -match '^SA_PASSWORD=' }) -replace '^SA_PASSWORD=', ''
+    if ($dockerEnv) {
+        $saPass = (Get-Content -LiteralPath $dockerEnv | Where-Object { $_ -match '^SA_PASSWORD=' }) -replace '^SA_PASSWORD=', ''
         if ($saPass) { $env:MSSQL_PASSWORD = $saPass.Trim() }
     }
     if (-not $env:MSSQL_PASSWORD) {
         Write-Warning "MSSQL_PASSWORD not set; set env var or add SA_PASSWORD to deploy/docker/.env"
     }
 }
+if (-not $env:POSTGRES_PASSWORD -and $dockerEnv) {
+    $postgresPass = (Get-Content -LiteralPath $dockerEnv | Where-Object { $_ -match '^POSTGRES_PASSWORD=' }) -replace '^POSTGRES_PASSWORD=', ''
+    if ($postgresPass) { $env:POSTGRES_PASSWORD = $postgresPass.Trim() }
+}
 if (-not $env:MSSQL_DRIVER) { $env:MSSQL_DRIVER = "SQL Server" }
+# Register and verify the current local outpatient source before API/worker startup.
+$pythonExe = Join-Path $WORKDIR ".venv\Scripts\python.exe"
+if (-not (Test-Path $pythonExe)) { $pythonExe = (Get-Command python -ErrorAction Stop).Source }
+& $pythonExe (Join-Path $WORKDIR "scripts\bootstrap_outpatient_governance.py")
+if ($LASTEXITCODE -ne 0) { throw "Outpatient data governance bootstrap failed" }
 # Enable real-DB data source so the skill path (settlement_data_provider) can query
 # the SQL Server settlement context (REST + SSE skill execution require real_db mode).
 if (-not $env:DATA_SOURCE_MODE) { $env:DATA_SOURCE_MODE = "real_db" }
@@ -173,8 +194,6 @@ Write-Host "  Backend PID $($be.Id) healthy" -ForegroundColor Green
 # ---- [3] Start outpatient synchronization worker ----
 Write-Host "[3/5] Start outpatient synchronization worker..." -ForegroundColor Cyan
 $workerScript = Join-Path $WORKDIR "scripts\run_outpatient_sync_worker.py"
-$pythonExe = Join-Path $WORKDIR ".venv\Scripts\python.exe"
-if (-not (Test-Path $pythonExe)) { $pythonExe = (Get-Command python -ErrorAction Stop).Source }
 $worker = Start-Process $pythonExe -ArgumentList $workerScript -WorkingDirectory $WORKDIR -WindowStyle Hidden -PassThru
 Start-Sleep -Seconds 1
 if ($worker.HasExited) { throw "Outpatient synchronization worker failed to start" }
