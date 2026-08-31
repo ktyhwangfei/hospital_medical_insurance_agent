@@ -13,15 +13,24 @@ from src.data_platform.storage.skill.governance_postgres import (
 )
 from src.domain.skill.governance_models import (
     DEFAULT_ROUTING_SUITE_ID,
+    SkillEvalAssertion,
+    SkillEvalBenchmark,
     SkillEvalCase,
+    SkillEvalDatasetVersion,
+    SkillEvalDimension,
+    SkillEvalEnvironmentSnapshot,
+    SkillEvalPartition,
     SkillEvalSuite,
     SkillEvalSuiteScope,
     SkillEvalSuiteStatus,
+    SkillEvalTask,
+    SkillEvalTaskInput,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
     SkillReleaseStatus,
 )
+from src.domain.skill.regression_models import CalculationAssertions
 
 
 def test_eval_suite_requires_skill_id_only_for_skill_scope() -> None:
@@ -86,6 +95,101 @@ def test_suite_storage_round_trip_and_filter() -> None:
     assert [
         suite.suite_id for suite in storage.list_suites(skill_id="other-skill")
     ] == [DEFAULT_ROUTING_SUITE_ID]
+
+
+def _eval_task(suite_id: str, *, revision: int = 1) -> SkillEvalTask:
+    return SkillEvalTask(
+        task_id="EVT_demo",
+        suite_id=suite_id,
+        target_skill_id="demo-skill",
+        name="门诊个人自付一",
+        partition=SkillEvalPartition.REGRESSION,
+        input=SkillEvalTaskInput(question="费用组成", settlement_id="T_demo"),
+        assertions=[
+            SkillEvalAssertion(
+                assertion_id="self_pay_one",
+                dimension=SkillEvalDimension.BEHAVIOR,
+                output_adapter="self_pay_one",
+                expected=CalculationAssertions(expected_value=510.96),
+            )
+        ],
+        revision=revision,
+        created_by="quality-user",
+        updated_by="quality-user",
+    )
+
+
+def _dataset_version(task: SkillEvalTask) -> SkillEvalDatasetVersion:
+    return SkillEvalDatasetVersion(
+        dataset_version_id="EVD_demo_1",
+        suite_id=task.suite_id,
+        suite_revision=1,
+        version_number=1,
+        task_snapshots=[task],
+        environment_contract_hash="a" * 64,
+        evaluator_plan_hash="b" * 64,
+        content_hash="c" * 64,
+        created_by="quality-user",
+    )
+
+
+def _benchmark(version: SkillEvalDatasetVersion) -> SkillEvalBenchmark:
+    return SkillEvalBenchmark(
+        benchmark_id="EVB_demo_1",
+        name="门诊基准 V1",
+        skill_id="demo-skill",
+        dataset_version_id=version.dataset_version_id,
+        environment_snapshot=SkillEvalEnvironmentSnapshot(
+            runtime_version="test",
+            data_source_mode="memory",
+        ),
+        environment_hash="d" * 64,
+        evaluator_plan_hash="b" * 64,
+        created_by="quality-user",
+    )
+
+
+def test_dataset_assets_round_trip_and_task_revision() -> None:
+    storage = InMemorySkillGovernanceStorage()
+    suite = storage.save_suite(_suite())
+    task = storage.save_task(_eval_task(suite.suite_id))
+    version = storage.save_dataset_version(_dataset_version(task))
+    benchmark = storage.save_benchmark(_benchmark(version))
+
+    assert storage.list_tasks(suite.suite_id) == [task]
+    assert storage.get_dataset_version(version.dataset_version_id) == version
+    assert storage.get_benchmark(benchmark.benchmark_id) == benchmark
+
+    updated = task.model_copy(update={"name": "新名称", "revision": 2})
+    assert storage.update_task(updated, expected_revision=1) == updated
+    with pytest.raises(SkillGovernanceConflictError, match="revision"):
+        storage.update_task(updated, expected_revision=1)
+
+    with pytest.raises(SkillGovernanceConflictError):
+        storage.save_dataset_version(version)
+    with pytest.raises(SkillGovernanceConflictError):
+        storage.save_benchmark(benchmark)
+
+
+def test_in_memory_dataset_constraints_match_postgres() -> None:
+    storage = InMemorySkillGovernanceStorage()
+    task = _eval_task("EVS_missing")
+    with pytest.raises(SkillGovernanceConflictError):
+        storage.save_task(task)
+
+    storage.save_suite(_suite())
+    task = storage.save_task(_eval_task("EVS_demo"))
+    version = storage.save_dataset_version(_dataset_version(task))
+    with pytest.raises(SkillGovernanceConflictError):
+        storage.save_dataset_version(
+            version.model_copy(update={"dataset_version_id": "EVD_duplicate_number"})
+        )
+
+    orphan_benchmark = _benchmark(version).model_copy(
+        update={"dataset_version_id": "EVD_missing"}
+    )
+    with pytest.raises(SkillGovernanceConflictError):
+        storage.save_benchmark(orphan_benchmark)
 
 
 def test_suite_update_rejects_stale_revision() -> None:
@@ -385,3 +489,23 @@ def test_skill_eval_runs_insert_columns_covered_by_ddl() -> None:
         f"save_run INSERT 列未在 DDL（CREATE+ALTER）定义: {missing}。"
         "旧库 CREATE IF NOT EXISTS 不补列，必须配 ALTER ADD COLUMN IF NOT EXISTS。"
     )
+
+    new_run_cols = {
+        "dataset_version_id",
+        "benchmark_id",
+        "environment_snapshot",
+        "task_results",
+        "trajectory_summary",
+        "failure_attributions",
+        "failure_clusters",
+        "dimension_summary",
+    }
+    assert new_run_cols <= create_cols
+    assert new_run_cols <= alter_cols
+
+
+def test_postgres_schema_contains_dataset_asset_tables() -> None:
+    normalized = " ".join(SKILL_GOVERNANCE_TABLE_SCHEMA.split())
+    assert "CREATE TABLE IF NOT EXISTS skill_eval_tasks" in normalized
+    assert "CREATE TABLE IF NOT EXISTS skill_eval_dataset_versions" in normalized
+    assert "CREATE TABLE IF NOT EXISTS skill_eval_benchmarks" in normalized

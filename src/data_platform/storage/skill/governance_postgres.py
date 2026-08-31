@@ -18,11 +18,20 @@ from src.data_platform.storage.skill.version_postgres import (
 from src.data_platform.storage.skill.postgres import SKILL_TABLE_SCHEMA
 from src.domain.skill.governance_models import (
     DEFAULT_ROUTING_SUITE_ID,
+    FailureAttribution,
+    FailureCluster,
+    SkillEvalBenchmark,
     SkillEvalCase,
+    SkillEvalDatasetVersion,
+    SkillEvalDimensionSummary,
+    SkillEvalEnvironmentSnapshot,
     SkillEvalMetrics,
     SkillEvalResult,
     SkillEvalRun,
     SkillEvalSuite,
+    SkillEvalTask,
+    SkillEvalTaskResult,
+    SkillEvalTrajectoryStep,
     SkillRegressionEvalRecord,
     SkillRegressionSummary,
     SkillRelease,
@@ -32,7 +41,7 @@ from src.domain.skill.governance_models import (
 )
 
 
-SKILL_GOVERNANCE_TABLE_SCHEMA = """
+SKILL_GOVERNANCE_TABLE_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS skill_eval_suites (
     suite_id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(256) NOT NULL,
@@ -55,14 +64,14 @@ INSERT INTO skill_eval_suites (
     suite_id, name, scope, skill_id, purpose, status, revision,
     created_by, updated_by, created_at, updated_at
 ) VALUES (
-    'EVS_platform_routing', '平台默认路由测评集', 'platform', NULL,
+    '{DEFAULT_ROUTING_SUITE_ID}', '平台默认路由测评集', 'platform', NULL,
     '兼容历史路由评测与发布门禁', 'active', 1,
     'system', 'system', NOW(), NOW()
 ) ON CONFLICT (suite_id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS skill_eval_cases (
     case_id VARCHAR(64) PRIMARY KEY,
-    suite_id VARCHAR(64) NOT NULL DEFAULT 'EVS_platform_routing'
+    suite_id VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_ROUTING_SUITE_ID}'
         REFERENCES skill_eval_suites(suite_id),
     suite_version INTEGER NOT NULL,
     question_template TEXT NOT NULL,
@@ -80,7 +89,7 @@ CREATE TABLE IF NOT EXISTS skill_eval_cases (
 );
 ALTER TABLE skill_eval_cases
     ADD COLUMN IF NOT EXISTS suite_id VARCHAR(64)
-    NOT NULL DEFAULT 'EVS_platform_routing';
+    NOT NULL DEFAULT '{DEFAULT_ROUTING_SUITE_ID}';
 CREATE INDEX IF NOT EXISTS idx_skill_eval_cases_suite_version
     ON skill_eval_cases(suite_id, suite_version, case_id);
 
@@ -96,6 +105,43 @@ ON CONFLICT (singleton_id) DO UPDATE SET
         EXCLUDED.revision
     );
 
+CREATE TABLE IF NOT EXISTS skill_eval_tasks (
+    task_id VARCHAR(80) PRIMARY KEY,
+    suite_id VARCHAR(64) NOT NULL REFERENCES skill_eval_suites(suite_id),
+    target_skill_id VARCHAR(128) NOT NULL,
+    name VARCHAR(256) NOT NULL,
+    task_partition VARCHAR(16) NOT NULL,
+    task_snapshot JSONB NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_eval_tasks_suite
+    ON skill_eval_tasks(suite_id, enabled, task_id);
+
+CREATE TABLE IF NOT EXISTS skill_eval_dataset_versions (
+    dataset_version_id VARCHAR(80) PRIMARY KEY,
+    suite_id VARCHAR(64) NOT NULL REFERENCES skill_eval_suites(suite_id),
+    version_number INTEGER NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    snapshot JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (suite_id, version_number),
+    UNIQUE (suite_id, content_hash)
+);
+
+CREATE TABLE IF NOT EXISTS skill_eval_benchmarks (
+    benchmark_id VARCHAR(80) PRIMARY KEY,
+    skill_id VARCHAR(128) NOT NULL,
+    dataset_version_id VARCHAR(80) NOT NULL
+        REFERENCES skill_eval_dataset_versions(dataset_version_id),
+    benchmark_snapshot JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_eval_benchmarks_skill_created
+    ON skill_eval_benchmarks(skill_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS skill_eval_runs (
     run_id VARCHAR(64) PRIMARY KEY,
     skill_id VARCHAR(128) NOT NULL REFERENCES skills(skill_id),
@@ -110,6 +156,14 @@ CREATE TABLE IF NOT EXISTS skill_eval_runs (
     case_snapshots JSONB NOT NULL DEFAULT '[]',
     regression_results JSONB NOT NULL DEFAULT '[]',
     regression_summary JSONB,
+    dataset_version_id VARCHAR(80) REFERENCES skill_eval_dataset_versions(dataset_version_id),
+    benchmark_id VARCHAR(80) REFERENCES skill_eval_benchmarks(benchmark_id),
+    environment_snapshot JSONB,
+    task_results JSONB NOT NULL DEFAULT '[]',
+    trajectory_summary JSONB NOT NULL DEFAULT '[]',
+    failure_attributions JSONB NOT NULL DEFAULT '[]',
+    failure_clusters JSONB NOT NULL DEFAULT '[]',
+    dimension_summary JSONB NOT NULL DEFAULT '[]',
     created_by VARCHAR(128) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ
@@ -124,6 +178,24 @@ ALTER TABLE skill_eval_runs
     ADD COLUMN IF NOT EXISTS regression_results JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE skill_eval_runs
     ADD COLUMN IF NOT EXISTS regression_summary JSONB;
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS dataset_version_id VARCHAR(80)
+    REFERENCES skill_eval_dataset_versions(dataset_version_id);
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS benchmark_id VARCHAR(80)
+    REFERENCES skill_eval_benchmarks(benchmark_id);
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS environment_snapshot JSONB;
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS task_results JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS trajectory_summary JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS failure_attributions JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS failure_clusters JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE skill_eval_runs
+    ADD COLUMN IF NOT EXISTS dimension_summary JSONB NOT NULL DEFAULT '[]';
 
 CREATE TABLE IF NOT EXISTS skill_releases (
     release_id VARCHAR(64) PRIMARY KEY,
@@ -298,6 +370,196 @@ class PostgresSkillGovernanceStorage:
         )
         return int(rows[0]["n"]) if rows else 0
 
+    def save_task(self, task: SkillEvalTask) -> SkillEvalTask:
+        try:
+            rows = self._get_client().execute(
+                """
+                INSERT INTO skill_eval_tasks (
+                    task_id, suite_id, target_skill_id, name, task_partition,
+                    task_snapshot, enabled, revision, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    task.task_id,
+                    task.suite_id,
+                    task.target_skill_id,
+                    task.name,
+                    task.partition.value,
+                    self._json(task.model_dump(mode="json")),
+                    task.enabled,
+                    task.revision,
+                    task.created_at,
+                    task.updated_at,
+                ),
+            )
+        except Exception as exc:
+            raise SkillGovernanceConflictError(
+                f"评测任务 ID 已存在或测评集无效: {task.task_id}"
+            ) from exc
+        return self._row_to_task(rows[0])
+
+    def get_task(self, task_id: str) -> SkillEvalTask | None:
+        rows = self._get_client().execute(
+            "SELECT * FROM skill_eval_tasks WHERE task_id = %s",
+            (task_id,),
+        )
+        return None if not rows else self._row_to_task(rows[0])
+
+    def list_tasks(
+        self,
+        suite_id: str,
+        *,
+        enabled_only: bool = False,
+    ) -> list[SkillEvalTask]:
+        enabled_clause = " AND enabled = TRUE" if enabled_only else ""
+        rows = self._get_client().execute(
+            f"""
+            SELECT * FROM skill_eval_tasks
+            WHERE suite_id = %s{enabled_clause}
+            ORDER BY task_id
+            """,
+            (suite_id,),
+        )
+        return [self._row_to_task(row) for row in rows]
+
+    def update_task(
+        self,
+        task: SkillEvalTask,
+        *,
+        expected_revision: int,
+    ) -> SkillEvalTask:
+        if task.revision != expected_revision + 1:
+            raise SkillGovernanceConflictError("新 revision 必须递增 1")
+        rows = self._get_client().execute(
+            """
+            UPDATE skill_eval_tasks SET
+                target_skill_id = %s, name = %s, task_partition = %s,
+                task_snapshot = %s, enabled = %s, revision = %s, updated_at = %s
+            WHERE task_id = %s AND suite_id = %s AND revision = %s
+            RETURNING *
+            """,
+            (
+                task.target_skill_id,
+                task.name,
+                task.partition.value,
+                self._json(task.model_dump(mode="json")),
+                task.enabled,
+                task.revision,
+                task.updated_at,
+                task.task_id,
+                task.suite_id,
+                expected_revision,
+            ),
+        )
+        if not rows:
+            raise SkillGovernanceConflictError("评测任务 revision 已变化")
+        return self._row_to_task(rows[0])
+
+    def save_dataset_version(
+        self,
+        version: SkillEvalDatasetVersion,
+    ) -> SkillEvalDatasetVersion:
+        try:
+            rows = self._get_client().execute(
+                """
+                INSERT INTO skill_eval_dataset_versions (
+                    dataset_version_id, suite_id, version_number, content_hash,
+                    snapshot, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    version.dataset_version_id,
+                    version.suite_id,
+                    version.version_number,
+                    version.content_hash,
+                    self._json(version.model_dump(mode="json")),
+                    version.created_at,
+                ),
+            )
+        except Exception as exc:
+            raise SkillGovernanceConflictError(
+                "数据集版本 ID、序号或内容哈希已存在"
+            ) from exc
+        return self._row_to_dataset_version(rows[0])
+
+    def get_dataset_version(
+        self,
+        dataset_version_id: str,
+    ) -> SkillEvalDatasetVersion | None:
+        rows = self._get_client().execute(
+            """
+            SELECT * FROM skill_eval_dataset_versions
+            WHERE dataset_version_id = %s
+            """,
+            (dataset_version_id,),
+        )
+        return None if not rows else self._row_to_dataset_version(rows[0])
+
+    def list_dataset_versions(
+        self,
+        suite_id: str,
+    ) -> list[SkillEvalDatasetVersion]:
+        rows = self._get_client().execute(
+            """
+            SELECT * FROM skill_eval_dataset_versions
+            WHERE suite_id = %s
+            ORDER BY version_number DESC
+            """,
+            (suite_id,),
+        )
+        return [self._row_to_dataset_version(row) for row in rows]
+
+    def save_benchmark(self, benchmark: SkillEvalBenchmark) -> SkillEvalBenchmark:
+        try:
+            rows = self._get_client().execute(
+                """
+                INSERT INTO skill_eval_benchmarks (
+                    benchmark_id, skill_id, dataset_version_id,
+                    benchmark_snapshot, created_at
+                ) VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    benchmark.benchmark_id,
+                    benchmark.skill_id,
+                    benchmark.dataset_version_id,
+                    self._json(benchmark.model_dump(mode="json")),
+                    benchmark.created_at,
+                ),
+            )
+        except Exception as exc:
+            raise SkillGovernanceConflictError(
+                f"Benchmark ID 已存在或数据集版本无效: {benchmark.benchmark_id}"
+            ) from exc
+        return self._row_to_benchmark(rows[0])
+
+    def get_benchmark(self, benchmark_id: str) -> SkillEvalBenchmark | None:
+        rows = self._get_client().execute(
+            "SELECT * FROM skill_eval_benchmarks WHERE benchmark_id = %s",
+            (benchmark_id,),
+        )
+        return None if not rows else self._row_to_benchmark(rows[0])
+
+    def list_benchmarks(
+        self,
+        skill_id: str | None = None,
+    ) -> list[SkillEvalBenchmark]:
+        if skill_id is None:
+            rows = self._get_client().execute(
+                "SELECT * FROM skill_eval_benchmarks ORDER BY created_at DESC"
+            )
+        else:
+            rows = self._get_client().execute(
+                """
+                SELECT * FROM skill_eval_benchmarks
+                WHERE skill_id = %s ORDER BY created_at DESC
+                """,
+                (skill_id,),
+            )
+        return [self._row_to_benchmark(row) for row in rows]
+
     def next_suite_version(self) -> int:
         rows = self._get_client().execute(
             """
@@ -428,8 +690,15 @@ class PostgresSkillGovernanceStorage:
                 run_id, skill_id, version_id, baseline_version_id, suite_version,
                 config_hash, routing_manifest_hash, status, metrics, results,
                 case_snapshots, regression_results, regression_summary,
+                dataset_version_id, benchmark_id, environment_snapshot,
+                task_results, trajectory_summary, failure_attributions,
+                failure_clusters, dimension_summary,
                 created_by, created_at, completed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s
+            )
             RETURNING *
             """,
             (
@@ -448,6 +717,23 @@ class PostgresSkillGovernanceStorage:
                 self._json(run.regression_summary.model_dump(mode="json"))
                 if run.regression_summary
                 else None,
+                run.dataset_version_id,
+                run.benchmark_id,
+                self._json(run.environment_snapshot.model_dump(mode="json"))
+                if run.environment_snapshot
+                else None,
+                self._json([result.model_dump(mode="json") for result in run.task_results]),
+                self._json([step.model_dump(mode="json") for step in run.trajectory_summary]),
+                self._json([
+                    attribution.model_dump(mode="json")
+                    for attribution in run.failure_attributions
+                ]),
+                self._json([
+                    cluster.model_dump(mode="json") for cluster in run.failure_clusters
+                ]),
+                self._json([
+                    summary.model_dump(mode="json") for summary in run.dimension_summary
+                ]),
                 run.created_by,
                 run.created_at,
                 run.completed_at,
@@ -763,12 +1049,41 @@ class PostgresSkillGovernanceStorage:
         )
 
     @classmethod
+    def _row_to_task(cls, row: dict[str, Any]) -> SkillEvalTask:
+        return SkillEvalTask.model_validate(
+            cls._json_value(row.get("task_snapshot"), {})
+        )
+
+    @classmethod
+    def _row_to_dataset_version(
+        cls,
+        row: dict[str, Any],
+    ) -> SkillEvalDatasetVersion:
+        return SkillEvalDatasetVersion.model_validate(
+            cls._json_value(row.get("snapshot"), {})
+        )
+
+    @classmethod
+    def _row_to_benchmark(cls, row: dict[str, Any]) -> SkillEvalBenchmark:
+        return SkillEvalBenchmark.model_validate(
+            cls._json_value(row.get("benchmark_snapshot"), {})
+        )
+
+    @classmethod
     def _row_to_run(cls, row: dict[str, Any]) -> SkillEvalRun:
         metrics = cls._json_value(row.get("metrics"), {})
         results = cls._json_value(row.get("results"), [])
         case_snapshots = cls._json_value(row.get("case_snapshots"), [])
         regression_results_raw = cls._json_value(row.get("regression_results"), [])
         regression_summary_raw = row.get("regression_summary")
+        environment_snapshot_raw = row.get("environment_snapshot")
+        task_results_raw = cls._json_value(row.get("task_results"), [])
+        trajectory_summary_raw = cls._json_value(row.get("trajectory_summary"), [])
+        failure_attributions_raw = cls._json_value(
+            row.get("failure_attributions"), []
+        )
+        failure_clusters_raw = cls._json_value(row.get("failure_clusters"), [])
+        dimension_summary_raw = cls._json_value(row.get("dimension_summary"), [])
         return SkillEvalRun(
             run_id=row["run_id"],
             skill_id=row["skill_id"],
@@ -792,6 +1107,33 @@ class PostgresSkillGovernanceStorage:
             )
             if regression_summary_raw
             else None,
+            dataset_version_id=row.get("dataset_version_id"),
+            benchmark_id=row.get("benchmark_id"),
+            environment_snapshot=SkillEvalEnvironmentSnapshot.model_validate(
+                cls._json_value(environment_snapshot_raw, {})
+            )
+            if environment_snapshot_raw
+            else None,
+            task_results=[
+                SkillEvalTaskResult.model_validate(result)
+                for result in task_results_raw
+            ],
+            trajectory_summary=[
+                SkillEvalTrajectoryStep.model_validate(step)
+                for step in trajectory_summary_raw
+            ],
+            failure_attributions=[
+                FailureAttribution.model_validate(attribution)
+                for attribution in failure_attributions_raw
+            ],
+            failure_clusters=[
+                FailureCluster.model_validate(cluster)
+                for cluster in failure_clusters_raw
+            ],
+            dimension_summary=[
+                SkillEvalDimensionSummary.model_validate(summary)
+                for summary in dimension_summary_raw
+            ],
             created_by=row["created_by"],
             created_at=row["created_at"],
             completed_at=row.get("completed_at"),

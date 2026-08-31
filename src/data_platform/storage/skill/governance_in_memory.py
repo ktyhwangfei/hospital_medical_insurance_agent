@@ -9,11 +9,14 @@ from src.data_platform.storage.skill.governance_ports import (
 )
 from src.domain.skill.governance_models import (
     DEFAULT_ROUTING_SUITE_ID,
+    SkillEvalBenchmark,
     SkillEvalCase,
+    SkillEvalDatasetVersion,
     SkillEvalRun,
     SkillEvalSuite,
     SkillEvalSuiteScope,
     SkillEvalSuiteStatus,
+    SkillEvalTask,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
@@ -35,6 +38,9 @@ class InMemorySkillGovernanceStorage:
             default_suite.suite_id: default_suite,
         }
         self._cases: dict[str, SkillEvalCase] = {}
+        self._tasks: dict[str, SkillEvalTask] = {}
+        self._dataset_versions: dict[str, SkillEvalDatasetVersion] = {}
+        self._benchmarks: dict[str, SkillEvalBenchmark] = {}
         self._runs: dict[str, SkillEvalRun] = {}
         self._releases: dict[str, SkillRelease] = {}
         self._approvals: dict[str, SkillReleaseApproval] = {}
@@ -100,6 +106,126 @@ class InMemorySkillGovernanceStorage:
 
     def count_cases(self, suite_id: str) -> int:
         return sum(case.suite_id == suite_id for case in self._cases.values())
+
+    def save_task(self, task: SkillEvalTask) -> SkillEvalTask:
+        if task.suite_id not in self._suites:
+            raise SkillGovernanceConflictError(f"测评集不存在: {task.suite_id}")
+        if task.task_id in self._tasks:
+            raise SkillGovernanceConflictError(f"评测任务已存在: {task.task_id}")
+        stored = self._copy(task)
+        self._tasks[stored.task_id] = stored
+        return self._copy(stored)
+
+    def get_task(self, task_id: str) -> SkillEvalTask | None:
+        task = self._tasks.get(task_id)
+        return None if task is None else self._copy(task)
+
+    def list_tasks(
+        self,
+        suite_id: str,
+        *,
+        enabled_only: bool = False,
+    ) -> list[SkillEvalTask]:
+        tasks = [
+            self._copy(task)
+            for task in self._tasks.values()
+            if task.suite_id == suite_id and (not enabled_only or task.enabled)
+        ]
+        return sorted(tasks, key=lambda item: item.task_id)
+
+    def update_task(
+        self,
+        task: SkillEvalTask,
+        *,
+        expected_revision: int,
+    ) -> SkillEvalTask:
+        current = self._tasks.get(task.task_id)
+        if current is None:
+            raise SkillGovernanceNotFoundError(f"评测任务不存在: {task.task_id}")
+        if current.revision != expected_revision:
+            raise SkillGovernanceConflictError("评测任务 revision 已变化")
+        if task.revision != expected_revision + 1:
+            raise SkillGovernanceConflictError("新 revision 必须递增 1")
+        if task.suite_id != current.suite_id:
+            raise SkillGovernanceConflictError("评测任务不能移动到其他测评集")
+        stored = self._copy(task)
+        self._tasks[stored.task_id] = stored
+        return self._copy(stored)
+
+    def save_dataset_version(
+        self,
+        version: SkillEvalDatasetVersion,
+    ) -> SkillEvalDatasetVersion:
+        if version.suite_id not in self._suites:
+            raise SkillGovernanceConflictError(f"测评集不存在: {version.suite_id}")
+        duplicate = next(
+            (
+                current
+                for current in self._dataset_versions.values()
+                if current.dataset_version_id == version.dataset_version_id
+                or (
+                    current.suite_id == version.suite_id
+                    and (
+                        current.version_number == version.version_number
+                        or current.content_hash == version.content_hash
+                    )
+                )
+            ),
+            None,
+        )
+        if duplicate is not None:
+            raise SkillGovernanceConflictError(
+                f"数据集版本已存在或版本内容重复: {version.dataset_version_id}"
+            )
+        stored = self._copy(version)
+        self._dataset_versions[stored.dataset_version_id] = stored
+        return self._copy(stored)
+
+    def get_dataset_version(
+        self,
+        dataset_version_id: str,
+    ) -> SkillEvalDatasetVersion | None:
+        version = self._dataset_versions.get(dataset_version_id)
+        return None if version is None else self._copy(version)
+
+    def list_dataset_versions(
+        self,
+        suite_id: str,
+    ) -> list[SkillEvalDatasetVersion]:
+        versions = [
+            self._copy(version)
+            for version in self._dataset_versions.values()
+            if version.suite_id == suite_id
+        ]
+        return sorted(versions, key=lambda item: item.version_number, reverse=True)
+
+    def save_benchmark(self, benchmark: SkillEvalBenchmark) -> SkillEvalBenchmark:
+        if benchmark.dataset_version_id not in self._dataset_versions:
+            raise SkillGovernanceConflictError(
+                f"数据集版本不存在: {benchmark.dataset_version_id}"
+            )
+        if benchmark.benchmark_id in self._benchmarks:
+            raise SkillGovernanceConflictError(
+                f"Benchmark 已存在: {benchmark.benchmark_id}"
+            )
+        stored = self._copy(benchmark)
+        self._benchmarks[stored.benchmark_id] = stored
+        return self._copy(stored)
+
+    def get_benchmark(self, benchmark_id: str) -> SkillEvalBenchmark | None:
+        benchmark = self._benchmarks.get(benchmark_id)
+        return None if benchmark is None else self._copy(benchmark)
+
+    def list_benchmarks(
+        self,
+        skill_id: str | None = None,
+    ) -> list[SkillEvalBenchmark]:
+        benchmarks = [
+            self._copy(benchmark)
+            for benchmark in self._benchmarks.values()
+            if skill_id is None or benchmark.skill_id == skill_id
+        ]
+        return sorted(benchmarks, key=lambda item: item.created_at, reverse=True)
 
     def current_suite_version(self) -> int:
         with self._suite_version_lock:
