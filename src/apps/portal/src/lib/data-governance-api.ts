@@ -43,6 +43,8 @@ export interface SyncRun {
 }
 
 export interface DataGovernanceOverview {
+  platformReady: boolean
+  postgresql: PostgresTarget
   dataSourceCount: number
   runningJobCount: number
   issueCount: number
@@ -169,6 +171,13 @@ interface SyncRunDto {
 
 interface OverviewResponse {
   result: {
+    platform_ready: boolean
+    postgresql: {
+      connection_status: ConnectionStatus
+      schema_ready: boolean
+      safe_message: string
+      checked_at: string
+    }
     data_source_count: number
     running_job_count: number
     issue_count: number
@@ -334,6 +343,13 @@ function mapJob(item: SyncJobDto): SyncJob {
 export async function getDataGovernanceOverview(): Promise<DataGovernanceOverview> {
   const { result } = await dataGovernanceRequest<OverviewResponse>('/overview')
   return {
+    platformReady: result.platform_ready,
+    postgresql: {
+      connectionStatus: result.postgresql.connection_status,
+      schemaReady: result.postgresql.schema_ready,
+      safeMessage: result.postgresql.safe_message,
+      checkedAt: result.postgresql.checked_at,
+    },
     dataSourceCount: result.data_source_count,
     runningJobCount: result.running_job_count,
     issueCount: result.issue_count,

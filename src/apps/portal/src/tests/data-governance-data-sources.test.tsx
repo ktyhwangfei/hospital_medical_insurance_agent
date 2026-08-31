@@ -24,7 +24,7 @@ const source: DataSource = {
   sourceId: 'bjybdb', hospitalCode: 'H001', hospitalName: '示例医院', name: '门诊医保库',
   host: '10.20.30.40', port: 1433, database: 'bjybdb', schemaName: 'dbo', username: 'readonly',
   credentialId: 'credential.bjybdb', credentialConfigured: true, credentialRevision: 1, connectionStatus: 'healthy',
-  cdcStatus: 'waiting_dba', safeProbeMessage: '等待医院 DBA 执行受控 CDC 脚本', lastProbedAt: null,
+  cdcStatus: 'waiting_dba', safeProbeMessage: '门诊 3 张源表及 117 个契约字段可读', lastProbedAt: null,
 }
 
 beforeEach(() => {
@@ -32,9 +32,9 @@ beforeEach(() => {
   vi.mocked(listDataSources).mockReset().mockResolvedValue([])
   vi.mocked(createDataSource).mockReset().mockResolvedValue(source)
   vi.mocked(getPostgresTargetStatus).mockReset().mockResolvedValue({
-    connectionStatus: 'healthy', schemaReady: true, safeMessage: 'PostgreSQL 目标库已就绪', checkedAt: '2026-08-31T00:00:00Z',
+    connectionStatus: 'healthy', schemaReady: true, safeMessage: 'PostgreSQL 门诊结构及读写已就绪', checkedAt: '2026-08-31T00:00:00Z',
   })
-  vi.mocked(testDataSourceConnection).mockReset().mockResolvedValue({ status: 'healthy', errorCode: null, safeMessage: '连接成功', checkedAt: '2026-08-31T00:00:00Z' })
+  vi.mocked(testDataSourceConnection).mockReset().mockResolvedValue({ status: 'healthy', errorCode: null, safeMessage: '门诊 3 张源表及 117 个契约字段可读', checkedAt: '2026-08-31T00:00:00Z' })
   vi.mocked(downloadCdcScript).mockReset().mockResolvedValue()
   vi.mocked(checkDataSourceCdc).mockReset().mockResolvedValue({ status: 'ready', databaseEnabled: true, readyCaptures: ['dbo_o_Trade'], missingCaptures: [], retentionMinutes: 4320, safeMessage: 'CDC 已按受控模板开通', checkedAt: '2026-08-31T00:00:00Z' })
 })
@@ -74,6 +74,17 @@ describe('数据源配置', () => {
     await user.click(screen.getByRole('button', { name: '重新检测 CDC' }))
     expect(await screen.findByText('CDC 已就绪')).toBeInTheDocument()
     expect(checkDataSourceCdc).toHaveBeenCalledWith('bjybdb')
+  })
+
+  it('分别展示门诊源表、PostgreSQL 读写和 CDC 状态', async () => {
+    vi.mocked(listDataSources).mockResolvedValue([source])
+
+    render(<DataSourcesPage />)
+
+    expect(await screen.findByText('门诊 3 张源表及 117 个契约字段可读')).toBeInTheDocument()
+    expect(screen.getByText('PostgreSQL 门诊结构及读写已就绪')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '门诊源表' })).toBeInTheDocument()
+    expect(screen.getByText('等待 DBA')).toBeInTheDocument()
   })
 
   it('只读用户看得到状态但没有写操作', async () => {

@@ -67,7 +67,8 @@ def _source():
         username="readonly",
         credential_id="credential.bjybdb",
         connection_status=ConnectionStatus.HEALTHY,
-        cdc_status=CdcEnablementStatus.READY,
+        cdc_status=CdcEnablementStatus.WAITING_DBA,
+        safe_probe_message="门诊 3 张源表及 117 个契约字段可读",
         created_at=NOW,
         updated_at=NOW,
     )
@@ -111,6 +112,8 @@ class _Service:
 
     def overview(self):
         return DataGovernanceOverview(
+            platform_ready=True,
+            postgresql=self.postgres_target_status(),
             data_source_count=1,
             running_job_count=0,
             issue_count=0,
@@ -139,7 +142,7 @@ class _Service:
         return SimpleNamespace(
             status=ConnectionStatus.HEALTHY,
             error_code=None,
-            safe_message="连接成功",
+            safe_message="门诊 3 张源表及 117 个契约字段可读",
             checked_at=NOW,
         )
 
@@ -164,7 +167,7 @@ class _Service:
         return PostgresTargetStatus(
             connection_status=ConnectionStatus.HEALTHY,
             schema_ready=True,
-            safe_message="PostgreSQL 目标库已就绪",
+            safe_message="PostgreSQL 门诊结构及读写已就绪",
             checked_at=NOW,
         )
 
@@ -252,6 +255,20 @@ def test_read_endpoints_are_available(client, path):
     )
     assert response.status_code == 200
     assert response.json()["status"] == "success"
+
+
+def test_overview_reports_platform_ready_independently_from_cdc(client):
+    response = client[0].get(
+        f"{PREFIX}/overview",
+        headers=_headers("data_governance:read"),
+    )
+
+    result = response.json()["result"]
+    assert result["platform_ready"] is True
+    assert result["postgresql"]["connection_status"] == "healthy"
+    assert result["postgresql"]["schema_ready"] is True
+    assert result["postgresql"]["safe_message"] == "PostgreSQL 门诊结构及读写已就绪"
+    assert result["sources"][0]["cdc_status"] == "waiting_dba"
 
 
 def test_all_write_actions_and_cdc_download_are_controlled(client):

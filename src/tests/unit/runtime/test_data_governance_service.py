@@ -195,3 +195,16 @@ def test_scheduled_sql_start_requires_source_and_postgres_but_not_cdc(monkeypatc
     postgres.writable = True
     started = service.start_job("bjybdb", actor="admin-1")
     assert started.status is SyncJobStatus.READY
+
+
+def test_cdc_waiting_state_does_not_overwrite_source_readiness_message(monkeypatch) -> None:
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+    store = _GovernanceStore()
+    service = DataGovernanceService(store, _PostgresStore(), lambda _s, _p: _Connection())
+    service.create_source(_command(), actor="admin-1")
+    service.probe_connection("bjybdb")
+
+    service.mark_waiting_dba("bjybdb", actor="admin-1")
+
+    source = store.get_source("bjybdb")
+    assert source.safe_probe_message == "门诊 3 张源表及 117 个契约字段可读"

@@ -268,7 +268,6 @@ class DataGovernanceService:
             )
         self._store.update_source(source.model_copy(update={
             "cdc_status": CdcEnablementStatus(result.status),
-            "safe_probe_message": result.safe_message,
             "last_probed_at": result.checked_at,
             "updated_at": result.checked_at,
         }))
@@ -282,7 +281,6 @@ class DataGovernanceService:
         now = datetime.now(timezone.utc)
         self._store.update_source(source.model_copy(update={
             "cdc_status": CdcEnablementStatus.WAITING_DBA,
-            "safe_probe_message": "等待医院 DBA 执行受控 CDC 脚本",
             "updated_at": now,
         }))
 

@@ -88,6 +88,7 @@ export default function DataGovernanceOverviewPage() {
 
   if (!overview) return null
   const metrics = [
+    ['数据底座', overview.platformReady ? '可用' : '未就绪', overview.postgresql.safeMessage],
     ['数据源', String(overview.dataSourceCount), '已登记医院门诊数据源'],
     ['运行任务', String(overview.runningJobCount), '已启用或正在执行'],
     ['待处理项', String(overview.issueCount), '需经办或运维处理'],
@@ -95,7 +96,7 @@ export default function DataGovernanceOverviewPage() {
   ]
 
   return <div aria-live="polite" className="space-y-5">
-    <section aria-label="运行指标" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <section aria-label="运行指标" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
       {metrics.map(([label, value, note]) => <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <p className="text-sm font-medium text-slate-600">{label}</p>
         <p className="mt-2 font-mono text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
@@ -118,7 +119,7 @@ export default function DataGovernanceOverviewPage() {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[860px] text-left text-sm">
           <thead className="bg-slate-50 text-xs text-slate-600">
-            <tr><th className="px-4 py-3 font-medium">医院与数据源</th><th className="px-4 py-3 font-medium">连接</th><th className="px-4 py-3 font-medium">CDC</th><th className="px-4 py-3 font-medium">同步</th><th className="px-4 py-3 font-medium">质量</th><th className="px-4 py-3 font-medium">最近成功</th><th className="px-4 py-3 font-medium">延迟</th></tr>
+            <tr><th className="px-4 py-3 font-medium">医院与数据源</th><th className="px-4 py-3 font-medium">门诊源表</th><th className="px-4 py-3 font-medium">CDC</th><th className="px-4 py-3 font-medium">同步</th><th className="px-4 py-3 font-medium">质量</th><th className="px-4 py-3 font-medium">最近成功</th><th className="px-4 py-3 font-medium">延迟</th></tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {overview.sources.map((source) => <tr key={source.sourceId} className="text-slate-700">

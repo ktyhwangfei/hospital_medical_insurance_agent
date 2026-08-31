@@ -152,7 +152,7 @@ export default function DataSourcesPage() {
       } else {
         const result = await checkDataSourceCdc(sourceId)
         setMessage(result.safeMessage)
-        setSources((items) => items.map((item) => item.sourceId === sourceId ? { ...item, cdcStatus: result.status as DataSource['cdcStatus'], safeProbeMessage: result.safeMessage } : item))
+        setSources((items) => items.map((item) => item.sourceId === sourceId ? { ...item, cdcStatus: result.status as DataSource['cdcStatus'] } : item))
       }
     } catch (reason) {
       setError(safeMessage(reason))
@@ -196,12 +196,12 @@ export default function DataSourcesPage() {
 
     {loading ? <p className="py-10 text-center text-sm text-slate-500">正在读取数据源...</p> : sources.length === 0 ? <section className="rounded-xl border border-dashed border-slate-300 bg-white py-12 text-center"><p className="font-medium text-slate-800">暂无数据源</p><p className="mt-1 text-sm text-slate-500">点击“新增数据源”登记第一家医院。</p></section> : <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm">
-        <thead className="bg-slate-50 text-xs text-slate-600"><tr><th className="px-4 py-3 font-medium">医院</th><th className="px-4 py-3 font-medium">端点</th><th className="px-4 py-3 font-medium">凭据</th><th className="px-4 py-3 font-medium">连接</th><th className="px-4 py-3 font-medium">CDC</th><th className="px-4 py-3 font-medium">操作</th></tr></thead>
+        <thead className="bg-slate-50 text-xs text-slate-600"><tr><th className="px-4 py-3 font-medium">医院</th><th className="px-4 py-3 font-medium">端点</th><th className="px-4 py-3 font-medium">凭据</th><th className="px-4 py-3 font-medium">门诊源表</th><th className="px-4 py-3 font-medium">CDC</th><th className="px-4 py-3 font-medium">操作</th></tr></thead>
         <tbody className="divide-y divide-slate-100">{sources.map((source) => <tr key={source.sourceId}>
           <td className="px-4 py-3"><p className="font-medium text-slate-900">{source.hospitalName}</p><p className="text-xs text-slate-500">{source.name} ({source.sourceId})</p></td>
           <td className="px-4 py-3 font-mono text-xs text-slate-700">{maskedEndpoint(source)}</td>
           <td className="px-4 py-3"><span className={source.credentialConfigured ? 'text-emerald-700' : 'text-red-700'}>{source.credentialConfigured ? '凭据已配置' : '需重新提交凭据'}</span></td>
-          <td className="px-4 py-3">{connectionLabel[source.connectionStatus]}</td><td className="px-4 py-3">{cdcLabel[source.cdcStatus]}</td>
+          <td className="px-4 py-3"><p>{connectionLabel[source.connectionStatus]}</p>{source.safeProbeMessage && <p className="mt-0.5 max-w-64 text-xs text-slate-500">{source.safeProbeMessage}</p>}</td><td className="px-4 py-3">{cdcLabel[source.cdcStatus]}</td>
           <td className="px-4 py-3">{canWrite && <div className="flex flex-wrap gap-1.5">
             <Button size="sm" variant="outline" aria-label="编辑数据源" onClick={() => openEdit(source)}><Pencil /></Button>
             <Button size="sm" variant="outline" aria-label="轮换凭据" onClick={() => setRotating(source)}><KeyRound /></Button>

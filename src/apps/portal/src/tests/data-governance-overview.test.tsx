@@ -25,14 +25,19 @@ vi.mock('@/lib/data-governance-api', async (importOriginal) => ({
 }))
 
 const overview: DataGovernanceOverview = {
+  platformReady: true,
+  postgresql: {
+    connectionStatus: 'healthy', schemaReady: true,
+    safeMessage: 'PostgreSQL 门诊结构及读写已就绪', checkedAt: '2026-08-31T00:00:00Z',
+  },
   dataSourceCount: 1,
   runningJobCount: 1,
   issueCount: 0,
   latestLatencySeconds: 42,
   sources: [{
     sourceId: 'bjybdb', hospitalCode: 'H001', hospitalName: '示例医院门诊', name: '门诊医保库',
-    credentialConfigured: true, connectionStatus: 'healthy', cdcStatus: 'ready',
-    syncStatus: 'running', sourceMode: 'cdc', nextRunAt: '2026-08-31T08:00:00Z',
+    credentialConfigured: true, connectionStatus: 'healthy', cdcStatus: 'waiting_dba',
+    syncStatus: 'running', sourceMode: 'scheduled_sql', nextRunAt: '2026-08-31T08:00:00Z',
     lastSucceededAt: '2026-08-31T07:59:00Z', qualityStatus: 'accepted', latestLatencySeconds: 42,
   }],
   issues: [],
@@ -63,6 +68,11 @@ describe('数据治理运行概览', () => {
     render(<DataGovernanceLayout><DataGovernanceOverviewPage /></DataGovernanceLayout>)
 
     expect(await screen.findByText('示例医院门诊')).toBeInTheDocument()
+    expect(screen.getByText('数据底座')).toBeInTheDocument()
+    expect(screen.getByText('可用')).toBeInTheDocument()
+    expect(screen.getByText('PostgreSQL 门诊结构及读写已就绪')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '门诊源表' })).toBeInTheDocument()
+    expect(screen.getByText('等待 DBA')).toBeInTheDocument()
     expect(screen.getAllByText('42 秒').length).toBeGreaterThan(0)
     expect(screen.getByText('batch-1')).toBeInTheDocument()
     expect(screen.queryByText('暂无数据源，请先新增')).not.toBeInTheDocument()
@@ -73,7 +83,7 @@ describe('数据治理运行概览', () => {
 
   it('无数据源时显示明确入口，不伪造医院记录', async () => {
     vi.mocked(getDataGovernanceOverview).mockResolvedValue({
-      ...overview, dataSourceCount: 0, runningJobCount: 0, latestLatencySeconds: null,
+      ...overview, platformReady: false, dataSourceCount: 0, runningJobCount: 0, latestLatencySeconds: null,
       sources: [], recentRuns: [],
     })
     render(<DataGovernanceOverviewPage />)
