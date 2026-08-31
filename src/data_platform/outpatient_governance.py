@@ -88,7 +88,7 @@ class OutpatientSyncAttempt(BaseModel):
     attempt_id: str = Field(min_length=1, max_length=64)
     source_id: str = Field(min_length=1, max_length=64)
     source_mode: OutpatientSourceMode
-    run_kind: str = Field(pattern=r"^(baseline|incremental|reconcile|manual)$")
+    run_kind: str = Field(pattern=r"^(baseline|incremental|reconciliation|manual)$")
     status: str = Field(pattern=r"^(running|succeeded|failed)$")
     started_at: datetime
     finished_at: datetime | None = None
@@ -103,3 +103,15 @@ class PostgresTargetStatus(BaseModel):
     schema_ready: bool
     safe_message: str = Field(max_length=256)
     checked_at: datetime
+
+
+class ClaimedOutpatientSyncJob(BaseModel):
+    job: OutpatientSyncJob
+    attempt: OutpatientSyncAttempt
+
+
+class OutpatientWorkerStatus(BaseModel):
+    total_jobs: int = Field(ge=0)
+    due_jobs: int = Field(ge=0)
+    last_attempt_status: str | None = None
+    last_attempt_at: datetime | None = None

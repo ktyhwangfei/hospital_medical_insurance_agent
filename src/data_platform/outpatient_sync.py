@@ -44,8 +44,8 @@ class OutpatientSyncService:
         self._registry = semantic_registry
         self._source_id = source_id
 
-    def run_once(self) -> OutpatientSyncResult:
-        checkpoint = self._store.get_checkpoint(self._source_id)
+    def run_once(self, *, force_baseline: bool = False) -> OutpatientSyncResult:
+        checkpoint = None if force_baseline else self._store.get_checkpoint(self._source_id)
         batch = self._source.read(checkpoint)
         if batch.snapshot_rows is not None:
             if batch.mode is OutpatientSourceMode.SCHEDULED_SQL:

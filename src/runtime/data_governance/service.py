@@ -169,6 +169,10 @@ class DataGovernanceService:
             checked_at=checked_at,
         )
 
+    def open_source_connection(self, source_id: str):
+        source = self._store.get_source(source_id)
+        return self._connection_factory(source, self._password(source))
+
     @staticmethod
     def cdc_script_path() -> Path:
         return Path(__file__).resolve().parents[3] / "scripts" / "enable_outpatient_cdc.sql"

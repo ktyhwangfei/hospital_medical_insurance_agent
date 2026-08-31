@@ -36,7 +36,9 @@ class _Cursor:
 
     def execute(self, sql, params=()):
         self.client.transaction_sql.append((sql, params))
-        if "SELECT revision" in sql:
+        if "FOR UPDATE SKIP LOCKED" in sql:
+            self.row = self.client.claim_row
+        elif "SELECT revision" in sql:
             self.row = (self.client.credential_revision,)
         return self
 
@@ -60,6 +62,7 @@ class _Client:
         self.credential_revision = 1
         self.source_rows = []
         self.update_rows = []
+        self.claim_row = None
 
     def execute(self, sql, params=()):
         self.schema_sql.append((sql, params))
@@ -194,3 +197,20 @@ def test_rotate_credential_and_job_update_enforce_revision(monkeypatch) -> None:
         item for item in client.schema_sql if "UPDATE outpatient_sync_jobs" in item[0]
     )
     assert update_sql.count("%s") == len(params)
+
+
+def test_claim_due_job_uses_skip_locked_and_marks_attempt_running() -> None:
+    client = _Client()
+    job = _job()
+    client.claim_row = tuple(job.model_dump().values())
+    store = OutpatientGovernanceStore(client=client)
+
+    claimed = store.claim_due_job(NOW)
+
+    assert claimed.job.source_id == "bjybdb"
+    sql = "\n".join(statement for statement, _params in client.transaction_sql)
+    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert "status IN ('ready', 'running')" in sql
+    assert "COALESCE(run_once_requested_at, next_run_at) <= %s" in sql
+    assert "INSERT INTO outpatient_sync_attempts" in sql
+    assert "active_attempt_id" in sql

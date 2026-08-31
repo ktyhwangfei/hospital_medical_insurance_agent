@@ -1,14 +1,20 @@
 """门诊数据治理控制面的 PostgreSQL 存储。"""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from src.config.production import DATABASE_URL
 from src.data_platform.outpatient_governance import (
     DataSourceCredential,
+    ClaimedOutpatientSyncJob,
     OutpatientDataSource,
     OutpatientSyncAttempt,
     OutpatientSyncJob,
+    OutpatientWorkerStatus,
+    SyncJobStatus,
 )
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
 
@@ -331,12 +337,154 @@ class OutpatientGovernanceStore:
         )
         return [OutpatientSyncAttempt.model_validate(row) for row in rows]
 
+    def claim_due_job(self, now: datetime) -> ClaimedOutpatientSyncJob | None:
+        self.ensure_schema()
+        with self._client.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""SELECT {', '.join(_JOB_COLUMNS)}
+                       FROM outpatient_sync_jobs
+                       WHERE status IN ('ready', 'running')
+                         AND COALESCE(run_once_requested_at, next_run_at) <= %s
+                       ORDER BY COALESCE(run_once_requested_at, next_run_at), source_id
+                       FOR UPDATE SKIP LOCKED
+                       LIMIT 1""",
+                    (now,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                job = OutpatientSyncJob.model_validate(dict(zip(_JOB_COLUMNS, row)))
+                attempt = OutpatientSyncAttempt(
+                    attempt_id=str(uuid4()),
+                    source_id=job.source_id,
+                    source_mode=job.source_mode,
+                    run_kind=_run_kind(job, now),
+                    status="running",
+                    started_at=now,
+                )
+                cursor.execute(
+                    """UPDATE outpatient_sync_jobs SET
+                           status='running', active_attempt_id=%s, last_started_at=%s,
+                           updated_at=%s
+                       WHERE source_id=%s""",
+                    (attempt.attempt_id, now, now, job.source_id),
+                )
+                cursor.execute(
+                    """INSERT INTO outpatient_sync_attempts
+                       (attempt_id, source_id, source_mode, run_kind, status, started_at,
+                        row_count)
+                       VALUES (%s, %s, %s, %s, 'running', %s, 0)""",
+                    (
+                        attempt.attempt_id, attempt.source_id, attempt.source_mode.value,
+                        attempt.run_kind, attempt.started_at,
+                    ),
+                )
+                return ClaimedOutpatientSyncJob(
+                    job=job.model_copy(update={
+                        "status": SyncJobStatus.RUNNING,
+                        "active_attempt_id": attempt.attempt_id,
+                        "last_started_at": now,
+                        "updated_at": now,
+                    }),
+                    attempt=attempt,
+                )
+
+    def complete_job(
+        self,
+        claimed: ClaimedOutpatientSyncJob,
+        result,
+        *,
+        finished_at: datetime,
+        next_run_at: datetime,
+    ) -> None:
+        with self._client.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE outpatient_sync_attempts SET
+                           status='succeeded', finished_at=%s, row_count=%s, batch_id=%s
+                       WHERE attempt_id=%s""",
+                    (
+                        finished_at, result.row_count, result.batch_id,
+                        claimed.attempt.attempt_id,
+                    ),
+                )
+                cursor.execute(
+                    """UPDATE outpatient_sync_jobs SET
+                           status='running', active_attempt_id=NULL, baseline_required=FALSE,
+                           next_run_at=%s, run_once_requested_at=NULL,
+                           last_succeeded_at=%s,
+                           last_reconciled_at=CASE WHEN %s THEN %s ELSE last_reconciled_at END,
+                           last_error_code=NULL, updated_at=%s
+                       WHERE source_id=%s AND active_attempt_id=%s""",
+                    (
+                        next_run_at, finished_at,
+                        claimed.attempt.run_kind == "reconciliation", finished_at,
+                        finished_at, claimed.job.source_id, claimed.attempt.attempt_id,
+                    ),
+                )
+
+    def fail_job(
+        self,
+        claimed: ClaimedOutpatientSyncJob,
+        *,
+        error_code: str,
+        safe_message: str,
+        finished_at: datetime,
+        degraded: bool = False,
+    ) -> None:
+        status = "degraded" if degraded else "failed"
+        with self._client.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE outpatient_sync_attempts SET
+                           status='failed', finished_at=%s, safe_error_code=%s,
+                           safe_message=%s
+                       WHERE attempt_id=%s""",
+                    (finished_at, error_code, safe_message, claimed.attempt.attempt_id),
+                )
+                cursor.execute(
+                    """UPDATE outpatient_sync_jobs SET
+                           status=%s, active_attempt_id=NULL, last_error_code=%s,
+                           updated_at=%s
+                       WHERE source_id=%s AND active_attempt_id=%s""",
+                    (
+                        status, error_code, finished_at, claimed.job.source_id,
+                        claimed.attempt.attempt_id,
+                    ),
+                )
+
+    def get_worker_status(self, now: datetime) -> OutpatientWorkerStatus:
+        self.ensure_schema()
+        counts = self._client.execute(
+            """SELECT COUNT(*) AS total_jobs,
+                      COUNT(*) FILTER (
+                          WHERE status IN ('ready', 'running')
+                            AND COALESCE(run_once_requested_at, next_run_at) <= %s
+                      ) AS due_jobs
+               FROM outpatient_sync_jobs""",
+            (now,),
+        )[0]
+        attempts = self._client.execute(
+            """SELECT status, started_at FROM outpatient_sync_attempts
+               ORDER BY started_at DESC LIMIT 1"""
+        )
+        latest = attempts[0] if attempts else {}
+        return OutpatientWorkerStatus(
+            total_jobs=counts["total_jobs"],
+            due_jobs=counts["due_jobs"],
+            last_attempt_status=latest.get("status"),
+            last_attempt_at=latest.get("started_at"),
+        )
+
 
 _SOURCE_SELECT = """SELECT source_id, hospital_code, hospital_name, name, host, port,
                             database_name, schema_name, username, credential_id,
                             TRUE AS credential_configured, connection_status, cdc_status,
                             safe_probe_message, last_probed_at, created_at, updated_at
                      FROM outpatient_data_sources"""
+
+_JOB_COLUMNS = tuple(OutpatientSyncJob.model_fields)
 
 
 def _source_values(source: OutpatientDataSource) -> tuple[Any, ...]:
@@ -363,3 +511,20 @@ def _job_values(job: OutpatientSyncJob) -> tuple[Any, ...]:
         job.active_attempt_id, job.last_started_at, job.last_succeeded_at,
         job.last_reconciled_at, job.last_error_code, job.created_at, job.updated_at,
     )
+
+
+def _run_kind(job: OutpatientSyncJob, now: datetime) -> str:
+    if job.baseline_required:
+        return "baseline"
+    if job.source_mode.value != "scheduled_sql":
+        return "incremental"
+    local_now = now.astimezone(ZoneInfo("Asia/Shanghai"))
+    last = (
+        job.last_reconciled_at.astimezone(ZoneInfo("Asia/Shanghai"))
+        if job.last_reconciled_at else None
+    )
+    if local_now.time().replace(tzinfo=None) >= job.reconcile_time and (
+        last is None or last.date() < local_now.date()
+    ):
+        return "reconciliation"
+    return "incremental"

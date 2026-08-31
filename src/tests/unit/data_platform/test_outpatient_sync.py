@@ -368,3 +368,12 @@ def test_scheduled_window_reuses_quality_and_atomic_publish_pipeline() -> None:
     assert result.mode == "incremental"
     assert store.calls[0]["batch"].mode is OutpatientSourceMode.SCHEDULED_SQL
     assert store.calls[0]["batch"].changes[0].operation == 4
+
+
+def test_force_baseline_does_not_pass_previous_mode_checkpoint_to_source() -> None:
+    source = _Source(batches=[_snapshot(("dbo_o_Trade", _trade()))])
+    store = _Store(checkpoint=OutpatientCheckpoint(CheckpointKind.LSN, "20", NOW))
+
+    OutpatientSyncService(source, store, _Registry()).run_once(force_baseline=True)
+
+    assert source.calls == [None]
