@@ -66,6 +66,9 @@ skills/
 | Skill ID | 业务动作 | 业务对象 | 触发方式 |
 |----------|---------|---------|----------|
 | `settlement_explain_skill` | `explain` | `settlement` | 关键词快筛（25 个核心词）+ LLM 语义消歧（hybrid 模式） |
+| `outpatient_pre_refund_analysis_skill` | `evaluate` | `settlement` | 预退费关键词 + 结构化 `fee_detail_id` / `refund_quantity` |
+
+`outpatient_pre_refund_analysis_skill` 仅分析门诊部分项目预退费，金额以收费系统正式预结算结果为准；实际退费、冲正不在 Skill 内执行，必须转人工确认。
 
 ### 路由机制
 

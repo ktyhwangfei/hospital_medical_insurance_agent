@@ -10,14 +10,15 @@
 
 ## 0. 当前焦点
 
-**当前领域**：Issue #21 — `policy-qa` 唯一业务入口与有界恢复循环（§1.1 单元 1.6–1.7）
+**当前领域**：Issue #31 — 门诊部分项目预退费分析（§1.1 单元 1.8）
 
-**当前阶段**：Issue #21 已完成分层验收；范围外存量失败见 §4–§5
+**当前阶段**：Issue #31 核心流程已完成分层验收；生产接入等待医院收费系统正式预结算接口契约
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
 | §10.1/10.2 安全审计 | 需对接医院 SSO / 外部系统 | 获取医院 SSO 文档 |
 | §11.1/11.2 适配器 | 需真实医保 / DRG 系统 API | 获取系统 API 文档和测试环境 |
+| Issue #31 真实预结算 | 缺医院收费系统正式预结算 API 契约 | 获取接口文档、鉴权方式和联调环境 |
 
 ---
 
@@ -25,7 +26,7 @@
 
 | 领域 | 单元数 | ✅ verified | 🟢 impl_done | 🔴 blocked | ⚪ pending | 备注 |
 |------|:--:|:--:|:--:|:--:|:--:|---|
-| 政策问答 | 7 | 2 | 5 | 0 | 0 | 单元 1.6–1.7 已验证；唯一业务入口，结算单是问答上下文 |
+| 政策问答 | 8 | 3 | 5 | 0 | 0 | 单元 1.6–1.8 已验证；唯一业务入口，结算单是问答上下文 |
 | 模型服务与管理 | 6 | 1 | 5 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证；端点模型列表探测待页面验收 |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 | 知识库管理 | 4 | 1 | 3 | 0 | 0 | §2 P9 5 tab 已上线；语义提议 S1 已完成 R4，S5 冲突维度候选已完成聚焦验证 |
@@ -33,10 +34,10 @@
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **34** | **10** | **20** | **2** | **2** | 已删除的结算异常、出院质控、运营看板不再计入现行业务能力 |
+| **合计** | **35** | **11** | **20** | **2** | **2** | 已删除的结算异常、出院质控、运营看板不再计入现行业务能力 |
 
 > **现状**：现行业务流只有 `policy-qa`；结算单是政策问答的必填业务数据。`/settlement`、`/qc`、`/dashboard`、`/chat` 及其旧后端编排已退役，不得作为兼容入口恢复。验证流程见 `src/tests/AGENTS.md`
-> 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6–1.7 和 §4 为准；
+> 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6–1.8 和 §4 为准；
 > 知识库管理最新进度以 §2 政策知识管线重构为准。
 
 ### 1.1 各领域详情
@@ -51,10 +52,13 @@
 | 1.5 | 历史问答记录查询 | F+B+S | `qa-history/page.tsx` | `history_service.py` | PostgreSQL | impl_done |
 | 1.6 | 院端经办通过 Chat-first 连续问答获取单一、安全且可追溯的政策解释 | F+B+S | `PolicyQAWorkspace` → `PolicyConversation` | `policy_qa_routes.py` → `PolicyQAPublicResult` | 任务/工作流记录 + SQL Server + Milvus | verified |
 | 1.7 | 瞬时结算/政策检索故障执行一次有界恢复，确定性缺失立即停止 | B+S | 恢复与查证步骤 | `policy_qa_routes.py` + 数据提供器/检索器错误分类 | SQL Server + Milvus | verified |
+| 1.8 | 院端经办按费用明细 ID 和数量预览门诊部分项目退费影响 | B | — | `pre_refund_flow.py` → `outpatient_pre_refund_analysis_skill` → `BillingPort` | 医院收费系统正式预结算（待真实接入） | verified |
 
 > **1.6–1.7 验收标准**：Portal 只通过 `/policy-qa/stream` 展示单一 `answer`，请求必须携带 `settlement_id`；`/settlement`、`/qc`、`/dashboard`、`/chat` 返回 404。确定性政策结论携带可展示引用，证据不足时明确不确定性。瞬时结算或政策检索故障全局最多执行 2 次尝试；结算不存在、配置错误和普通业务错误不重试；`done` 事件记录 `attempt_count` 与 `halt_reason`，公开步骤不泄露 SQL、表字段或内部推理。
 
 > **Issue #21 验证证据（2026-08-25）**：T1 聚焦单元 177 passed（全量 Unit 因缺 `fakeredis`/`mcp` 在收集期中止）；T2a Policy QA API 40 passed；T2b Flow 全覆盖 139 passed / 1 optional skipped；Portal 相关 Vitest 65 passed、TypeScript、scoped ESLint、Next.js build 与 `compileall` 通过；Chromium Policy QA + smoke 9 passed，真实确认 `/settlement`、`/qc`、`/dashboard` 为 404。Locust 在当前 Windows 环境因 `gevent` DLL 加载失败未运行，使用 5 并发 SSE 25 次等价烟压补证：0 失败、P95 406.32ms、`max_attempt_count=1`。全量 API、Portal 与 lint 的范围外存量失败如实记录在 §4–§5，不计作本单元通过证据。
+
+> **Issue #31 验证证据（2026-08-31）**：T1 聚焦单元 121 passed；T2a Policy QA API 55 passed；T2b 新增预退费 Flow 与既有 Policy QA Flow 合计 105 passed。覆盖正式预结算成功、正式业务拒绝、未配置不重试、瞬时故障最多恢复一次、结果金额一致性校验，以及实际退费/冲正意图在适配器调用前转人工确认。当前内存适配器默认返回 `unavailable`，不生成假金额。
 
 #### 模型服务与管理（Model Service）
 | # | 单元 | 后端 | 状态 |
@@ -280,6 +284,7 @@
 | Runtime 新模块单元（memory/composer/reasoning/planner/storage） | ✅ 全绿 | 63 passed（§3.3） |
 | Runtime 性能基准 | ✅ 全绿 | 3 passed：Memory ≤ 0.005ms、Composer 0.244ms（§3.2） |
 | Policy QA 唯一入口与有界恢复 | ✅ 全链路验证通过 | T1 177、T2a 40、T2b 139 passed / 1 skipped；并发 SSE 25/25、Chromium E2E/smoke 9/9，详见 §1.1 |
+| 门诊部分项目预退费分析 | ✅ 核心流程验证通过 | T1 121、T2a 55、T2b 105 passed；真实收费系统适配器待接口契约，详见 §1.1 单元 1.8 |
 | Policy QA Chat-first Portal | ✅ 聚焦验证通过 | 相关 Vitest 65 passed；`tsc --noEmit`、scoped ESLint、Next.js build 通过；全量 352 passed / 3 个范围外知识治理失败 |
 | 模型治理真实资产运行时 | ✅ 全链路验证通过 | T1 89、T2a 23、T2b 2、T3 4、Portal Vitest 21、TypeScript/build、Chromium E2E 1 均通过 |
 | 全量回归（2026-08-25） | ⚠️ 有范围外存量问题 | Unit：缺 `fakeredis`/`mcp` 导致 3 个收集错误；API：273 passed / 19 failed；Flow：139 passed / 1 optional skipped；Portal：352 passed / 3 failed，见 §5 |
@@ -339,6 +344,7 @@
 | 2026-08-19 | **Issue #19 单元医疗类别区分（按用户设计重做）**：第一轮方向错误（提取回填+审核页筛选）已回退。现行实现：知识构建页新增「医疗类别分类」面板（执行分类→类别数量卡片→明细下钻→人工修正/恢复自动，PG 持久化 policy_unit_med_types）；新建构建任务向导按医疗类别筛选单元。T1 3+592、T2a 3+41、前端 2+17+139、tsc/build 通过；失败均为预存环境依赖。待用户验证 | 政策知识管线；需求迭代记录 Issue 19 节；领域字典新增 med_type_classifier/UnitMedTypeOverride |
 | 2026-08-19 | **模型治理新模型接入辅助**：通用 OpenAI-compatible `/models` 探测、写权限与脱敏审计、安全失败提示；Portal 模型名支持可搜索列表和手填兜底，端点/密钥变更后列表失效。真实 OpenCode Go 匿名探测 28 个模型且含 `deepseek-v4-flash`，Portal tsc 通过，待用户页面验收 | 模型服务与管理 4.6；`/model-governance` |
 | 2026-08-25 | **Issue #21 完成并验证**：确认 `policy-qa` 为唯一业务入口，结算单作为必填问答上下文；删除结算异常、出院质控、运营看板、静态旧 Chat 原型及通用编排代码和测试，退役路径保持 404；按 Loop Engineering 为结算读取与政策检索增加全局最多 2 次的有界恢复、稳定停止原因及公开验证步骤。T1/T2a/T2b 177/40/139（另 1 optional skipped），Portal 相关 65、E2E/smoke 9、并发 SSE 25/25，TypeScript/build/compileall 通过 | §1.1 单元 1.6–1.7；§3.5；§4；核心 AGENTS/接口/原型文档 |
+| 2026-08-31 | **Issue #31 门诊部分项目预退费分析完成**：新增独立 Skill、`BillingPort` 正式预结算契约、金额一致性验证和 `/policy-qa/stream` 分支；实际退费/冲正零适配器调用并转人工确认。T1/T2a/T2b 121/55/105 passed；未新增数据库 Schema，真实收费系统适配器待接口契约 | §1.1 单元 1.8；接口设计 3.3 |
 
 ---
 
