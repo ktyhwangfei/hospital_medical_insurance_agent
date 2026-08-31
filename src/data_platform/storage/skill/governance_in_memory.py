@@ -8,8 +8,12 @@ from src.data_platform.storage.skill.governance_ports import (
     SkillGovernanceNotFoundError,
 )
 from src.domain.skill.governance_models import (
+    DEFAULT_ROUTING_SUITE_ID,
     SkillEvalCase,
     SkillEvalRun,
+    SkillEvalSuite,
+    SkillEvalSuiteScope,
+    SkillEvalSuiteStatus,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
@@ -19,6 +23,17 @@ from src.domain.skill.governance_models import (
 
 class InMemorySkillGovernanceStorage:
     def __init__(self) -> None:
+        default_suite = SkillEvalSuite(
+            suite_id=DEFAULT_ROUTING_SUITE_ID,
+            name="平台默认路由测评集",
+            scope=SkillEvalSuiteScope.PLATFORM,
+            purpose="兼容历史路由评测与发布门禁",
+            created_by="system",
+            updated_by="system",
+        )
+        self._suites: dict[str, SkillEvalSuite] = {
+            default_suite.suite_id: default_suite,
+        }
         self._cases: dict[str, SkillEvalCase] = {}
         self._runs: dict[str, SkillEvalRun] = {}
         self._releases: dict[str, SkillRelease] = {}
@@ -37,6 +52,54 @@ class InMemorySkillGovernanceStorage:
                 max((case.suite_version for case in self._cases.values()), default=0),
             ) + 1
             return self._suite_version
+
+    def save_suite(self, suite: SkillEvalSuite) -> SkillEvalSuite:
+        if suite.suite_id in self._suites:
+            raise SkillGovernanceConflictError(f"测评集已存在: {suite.suite_id}")
+        stored = self._copy(suite)
+        self._suites[stored.suite_id] = stored
+        return self._copy(stored)
+
+    def get_suite(self, suite_id: str) -> SkillEvalSuite | None:
+        suite = self._suites.get(suite_id)
+        return None if suite is None else self._copy(suite)
+
+    def list_suites(
+        self,
+        *,
+        skill_id: str | None = None,
+        include_inactive: bool = True,
+    ) -> list[SkillEvalSuite]:
+        suites = [
+            self._copy(suite)
+            for suite in self._suites.values()
+            if (skill_id is None or suite.skill_id in {None, skill_id})
+            and (include_inactive or suite.status == SkillEvalSuiteStatus.ACTIVE)
+        ]
+        return sorted(suites, key=lambda item: (item.scope.value, item.name, item.suite_id))
+
+    def update_suite(
+        self,
+        suite: SkillEvalSuite,
+        *,
+        expected_revision: int,
+    ) -> SkillEvalSuite:
+        current = self._suites.get(suite.suite_id)
+        if current is None:
+            raise SkillGovernanceNotFoundError(f"测评集不存在: {suite.suite_id}")
+        if current.revision != expected_revision:
+            raise SkillGovernanceConflictError("测评集 revision 已变化")
+        if suite.revision != expected_revision + 1:
+            raise SkillGovernanceConflictError("新 revision 必须递增 1")
+        stored = self._copy(suite)
+        self._suites[stored.suite_id] = stored
+        return self._copy(stored)
+
+    def delete_suite(self, suite_id: str) -> bool:
+        return self._suites.pop(suite_id, None) is not None
+
+    def count_cases(self, suite_id: str) -> int:
+        return sum(case.suite_id == suite_id for case in self._cases.values())
 
     def current_suite_version(self) -> int:
         with self._suite_version_lock:
@@ -77,11 +140,17 @@ class InMemorySkillGovernanceStorage:
         with self._suite_version_lock:
             return self._cases.pop(case_id, None) is not None
 
-    def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]:
+    def list_cases(
+        self,
+        *,
+        suite_id: str | None = None,
+        enabled_only: bool = False,
+    ) -> list[SkillEvalCase]:
         cases = [
             self._copy(case)
             for case in self._cases.values()
-            if not enabled_only or case.enabled
+            if (suite_id is None or case.suite_id == suite_id)
+            and (not enabled_only or case.enabled)
         ]
         return sorted(cases, key=lambda item: (item.suite_version, item.case_id))
 

@@ -56,6 +56,72 @@ def test_eval_case_defaults_to_platform_routing_suite() -> None:
     assert case.suite_id == DEFAULT_ROUTING_SUITE_ID
 
 
+def _suite(
+    suite_id: str = "EVS_demo",
+    *,
+    revision: int = 1,
+    status: SkillEvalSuiteStatus = SkillEvalSuiteStatus.ACTIVE,
+) -> SkillEvalSuite:
+    return SkillEvalSuite(
+        suite_id=suite_id,
+        name="演示 Skill 测评集",
+        scope=SkillEvalSuiteScope.SKILL,
+        skill_id="demo-skill",
+        status=status,
+        revision=revision,
+        created_by="quality-user",
+        updated_by="quality-user",
+    )
+
+
+def test_suite_storage_round_trip_and_filter() -> None:
+    storage = InMemorySkillGovernanceStorage()
+    stored = storage.save_suite(_suite())
+
+    assert storage.get_suite(stored.suite_id) == stored
+    assert {suite.suite_id for suite in storage.list_suites(skill_id="demo-skill")} == {
+        DEFAULT_ROUTING_SUITE_ID,
+        stored.suite_id,
+    }
+    assert [
+        suite.suite_id for suite in storage.list_suites(skill_id="other-skill")
+    ] == [DEFAULT_ROUTING_SUITE_ID]
+
+
+def test_suite_update_rejects_stale_revision() -> None:
+    storage = InMemorySkillGovernanceStorage()
+    current = storage.save_suite(_suite())
+    updated = current.model_copy(update={"name": "新名称", "revision": 2})
+    storage.update_suite(updated, expected_revision=1)
+
+    with pytest.raises(SkillGovernanceConflictError, match="revision"):
+        storage.update_suite(updated, expected_revision=1)
+
+
+def test_cases_can_be_filtered_by_suite() -> None:
+    storage = InMemorySkillGovernanceStorage()
+    storage.save_suite(_suite())
+    storage.save_case(SkillEvalCase(
+        case_id="EVC_demo",
+        suite_id="EVS_demo",
+        suite_version=1,
+        question_template="测试问题",
+        expected_skill_id="demo-skill",
+        created_by="quality-user",
+    ))
+
+    assert [case.case_id for case in storage.list_cases(suite_id="EVS_demo")] == ["EVC_demo"]
+    assert storage.list_cases(suite_id=DEFAULT_ROUTING_SUITE_ID) == []
+
+
+def test_postgres_schema_covers_suite_and_case_suite_id() -> None:
+    normalized = " ".join(SKILL_GOVERNANCE_TABLE_SCHEMA.split())
+    assert "CREATE TABLE IF NOT EXISTS skill_eval_suites" in normalized
+    assert "ADD COLUMN IF NOT EXISTS suite_id" in normalized
+    assert "INSERT INTO skill_eval_suites" in normalized
+    assert DEFAULT_ROUTING_SUITE_ID in SKILL_GOVERNANCE_TABLE_SCHEMA
+
+
 def _release(
     release_id: str,
     status: SkillReleaseStatus,

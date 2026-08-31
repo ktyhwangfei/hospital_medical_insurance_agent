@@ -3,6 +3,7 @@ from typing import Protocol
 from src.domain.skill.governance_models import (
     SkillEvalCase,
     SkillEvalRun,
+    SkillEvalSuite,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
@@ -18,6 +19,28 @@ class SkillGovernanceNotFoundError(LookupError):
 
 
 class SkillGovernanceStorage(Protocol):
+    def save_suite(self, suite: SkillEvalSuite) -> SkillEvalSuite: ...
+
+    def get_suite(self, suite_id: str) -> SkillEvalSuite | None: ...
+
+    def list_suites(
+        self,
+        *,
+        skill_id: str | None = None,
+        include_inactive: bool = True,
+    ) -> list[SkillEvalSuite]: ...
+
+    def update_suite(
+        self,
+        suite: SkillEvalSuite,
+        *,
+        expected_revision: int,
+    ) -> SkillEvalSuite: ...
+
+    def delete_suite(self, suite_id: str) -> bool: ...
+
+    def count_cases(self, suite_id: str) -> int: ...
+
     def next_suite_version(self) -> int: ...
 
     def current_suite_version(self) -> int: ...
@@ -34,7 +57,12 @@ class SkillGovernanceStorage(Protocol):
 
     def delete_case(self, case_id: str) -> bool: ...
 
-    def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]: ...
+    def list_cases(
+        self,
+        *,
+        suite_id: str | None = None,
+        enabled_only: bool = False,
+    ) -> list[SkillEvalCase]: ...
 
     def save_run(self, run: SkillEvalRun) -> SkillEvalRun: ...
 

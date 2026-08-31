@@ -17,10 +17,12 @@ from src.data_platform.storage.skill.version_postgres import (
 )
 from src.data_platform.storage.skill.postgres import SKILL_TABLE_SCHEMA
 from src.domain.skill.governance_models import (
+    DEFAULT_ROUTING_SUITE_ID,
     SkillEvalCase,
     SkillEvalMetrics,
     SkillEvalResult,
     SkillEvalRun,
+    SkillEvalSuite,
     SkillRegressionEvalRecord,
     SkillRegressionSummary,
     SkillRelease,
@@ -31,8 +33,37 @@ from src.domain.skill.governance_models import (
 
 
 SKILL_GOVERNANCE_TABLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS skill_eval_suites (
+    suite_id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(256) NOT NULL,
+    scope VARCHAR(16) NOT NULL,
+    skill_id VARCHAR(128),
+    purpose TEXT NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_by VARCHAR(128) NOT NULL,
+    updated_by VARCHAR(128) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    CHECK (
+        (scope = 'platform' AND skill_id IS NULL)
+        OR (scope = 'skill' AND skill_id IS NOT NULL)
+    )
+);
+
+INSERT INTO skill_eval_suites (
+    suite_id, name, scope, skill_id, purpose, status, revision,
+    created_by, updated_by, created_at, updated_at
+) VALUES (
+    'EVS_platform_routing', '平台默认路由测评集', 'platform', NULL,
+    '兼容历史路由评测与发布门禁', 'active', 1,
+    'system', 'system', NOW(), NOW()
+) ON CONFLICT (suite_id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS skill_eval_cases (
     case_id VARCHAR(64) PRIMARY KEY,
+    suite_id VARCHAR(64) NOT NULL DEFAULT 'EVS_platform_routing'
+        REFERENCES skill_eval_suites(suite_id),
     suite_version INTEGER NOT NULL,
     question_template TEXT NOT NULL,
     expected_skill_id VARCHAR(128),
@@ -47,6 +78,11 @@ CREATE TABLE IF NOT EXISTS skill_eval_cases (
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
 );
+ALTER TABLE skill_eval_cases
+    ADD COLUMN IF NOT EXISTS suite_id VARCHAR(64)
+    NOT NULL DEFAULT 'EVS_platform_routing';
+CREATE INDEX IF NOT EXISTS idx_skill_eval_cases_suite_version
+    ON skill_eval_cases(suite_id, suite_version, case_id);
 
 CREATE TABLE IF NOT EXISTS skill_eval_suite_state (
     singleton_id SMALLINT PRIMARY KEY CHECK (singleton_id = 1),
@@ -159,6 +195,109 @@ class PostgresSkillGovernanceStorage:
             return default
         return json.loads(value) if isinstance(value, str) else value
 
+    def save_suite(self, suite: SkillEvalSuite) -> SkillEvalSuite:
+        try:
+            rows = self._get_client().execute(
+                """
+                INSERT INTO skill_eval_suites (
+                    suite_id, name, scope, skill_id, purpose, status, revision,
+                    created_by, updated_by, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    suite.suite_id,
+                    suite.name,
+                    suite.scope.value,
+                    suite.skill_id,
+                    suite.purpose,
+                    suite.status.value,
+                    suite.revision,
+                    suite.created_by,
+                    suite.updated_by,
+                    suite.created_at,
+                    suite.updated_at,
+                ),
+            )
+        except Exception as exc:
+            raise SkillGovernanceConflictError(
+                f"测评集 ID 已存在: {suite.suite_id}"
+            ) from exc
+        return self._row_to_suite(rows[0])
+
+    def get_suite(self, suite_id: str) -> SkillEvalSuite | None:
+        rows = self._get_client().execute(
+            "SELECT * FROM skill_eval_suites WHERE suite_id = %s",
+            (suite_id,),
+        )
+        return None if not rows else self._row_to_suite(rows[0])
+
+    def list_suites(
+        self,
+        *,
+        skill_id: str | None = None,
+        include_inactive: bool = True,
+    ) -> list[SkillEvalSuite]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if skill_id is not None:
+            clauses.append("(scope = 'platform' OR skill_id = %s)")
+            params.append(skill_id)
+        if not include_inactive:
+            clauses.append("status = 'active'")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._get_client().execute(
+            f"""
+            SELECT * FROM skill_eval_suites {where}
+            ORDER BY scope, name, suite_id
+            """,
+            tuple(params),
+        )
+        return [self._row_to_suite(row) for row in rows]
+
+    def update_suite(
+        self,
+        suite: SkillEvalSuite,
+        *,
+        expected_revision: int,
+    ) -> SkillEvalSuite:
+        rows = self._get_client().execute(
+            """
+            UPDATE skill_eval_suites
+            SET name = %s, purpose = %s, status = %s, revision = %s,
+                updated_by = %s, updated_at = %s
+            WHERE suite_id = %s AND revision = %s
+            RETURNING *
+            """,
+            (
+                suite.name,
+                suite.purpose,
+                suite.status.value,
+                suite.revision,
+                suite.updated_by,
+                suite.updated_at,
+                suite.suite_id,
+                expected_revision,
+            ),
+        )
+        if not rows:
+            raise SkillGovernanceConflictError("测评集 revision 已变化")
+        return self._row_to_suite(rows[0])
+
+    def delete_suite(self, suite_id: str) -> bool:
+        rows = self._get_client().execute(
+            "DELETE FROM skill_eval_suites WHERE suite_id = %s RETURNING suite_id",
+            (suite_id,),
+        )
+        return bool(rows)
+
+    def count_cases(self, suite_id: str) -> int:
+        rows = self._get_client().execute(
+            "SELECT COUNT(*) AS n FROM skill_eval_cases WHERE suite_id = %s",
+            (suite_id,),
+        )
+        return int(rows[0]["n"]) if rows else 0
+
     def next_suite_version(self) -> int:
         rows = self._get_client().execute(
             """
@@ -207,11 +346,12 @@ class PostgresSkillGovernanceStorage:
         rows = self._get_client().execute(
             """
             INSERT INTO skill_eval_cases (
-                case_id, suite_version, question_template, expected_skill_id,
+                case_id, suite_id, suite_version, question_template, expected_skill_id,
                 required, risk_tags, business_tags, source_type, source_ref,
                 contains_sensitive_data, enabled, created_by, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (case_id) DO UPDATE SET
+                suite_id = EXCLUDED.suite_id,
                 suite_version = EXCLUDED.suite_version,
                 question_template = EXCLUDED.question_template,
                 expected_skill_id = EXCLUDED.expected_skill_id,
@@ -228,6 +368,7 @@ class PostgresSkillGovernanceStorage:
             """,
             (
                 case.case_id,
+                case.suite_id,
                 case.suite_version,
                 case.question_template,
                 case.expected_skill_id,
@@ -260,10 +401,23 @@ class PostgresSkillGovernanceStorage:
         )
         return bool(rows)
 
-    def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]:
-        where = "WHERE enabled = TRUE" if enabled_only else ""
+    def list_cases(
+        self,
+        *,
+        suite_id: str | None = None,
+        enabled_only: bool = False,
+    ) -> list[SkillEvalCase]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if suite_id is not None:
+            clauses.append("suite_id = %s")
+            params.append(suite_id)
+        if enabled_only:
+            clauses.append("enabled = TRUE")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._get_client().execute(
-            f"SELECT * FROM skill_eval_cases {where} ORDER BY suite_version, case_id"
+            f"SELECT * FROM skill_eval_cases {where} ORDER BY suite_version, case_id",
+            tuple(params),
         )
         return [self._row_to_case(row) for row in rows]
 
@@ -593,6 +747,10 @@ class PostgresSkillGovernanceStorage:
             release.activated_at,
             release.retired_at,
         )
+
+    @classmethod
+    def _row_to_suite(cls, row: dict[str, Any]) -> SkillEvalSuite:
+        return SkillEvalSuite.model_validate(row)
 
     @classmethod
     def _row_to_case(cls, row: dict[str, Any]) -> SkillEvalCase:
