@@ -16,9 +16,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   applyContextNeed,
+  clearPersistedSessionId,
   emptyAnchor,
+  loadPersistedSessionId,
   newSessionId,
+  persistSessionId,
   resetTurnFlags,
+  restoreSessionState,
   toContextNeed,
   toMemoryCard,
   upsertMemory,
@@ -28,6 +32,7 @@ import {
   type RawContextNeed,
   type RawMemoryUpdate,
   type SessionAnchor,
+  type TrajectoryResponseDTO,
 } from '@/lib/policy-qa-session'
 import {
   parseSseBlock,
@@ -44,6 +49,13 @@ export interface PolicyQATurnStep {
   publicMessage?: string
 }
 
+export interface SessionEscalationInfo {
+  taskId: string
+  status: string
+  reply: string
+  reason: string
+}
+
 export interface UsePolicyQAStreamReturn {
   /** 跨轮不变的会话 ID */
   sessionId: string
@@ -55,13 +67,29 @@ export interface UsePolicyQAStreamReturn {
   steps: PolicyQATurnStep[]
   isStreaming: boolean
   error: string | null
+  /** 刷新后是否正在从持久化轨迹恢复 */
+  restoring: boolean
+  /** 会话生命周期状态（active/suspended/escalated/closed；unknown=尚未查询） */
+  sessionStatus: string
+  statusReason: string
+  /** 最近一次升级工单（含医保办回复） */
+  escalation: SessionEscalationInfo | null
   /**
    * 发起一轮对话。settlementId 缺省时复用 anchor.settlementId；
-   * 两者皆空返回 false（调用方提示用户先锚定结算单号）。
+   * 两者皆空返回 false（调用方提示用户先锚定结算单号）；
+   * 非活跃会话（挂起/升级中）拒绝发送。
    */
   send: (question: string, opts?: { settlementId?: string }) => Promise<boolean>
-  /** 新建会话：新 sessionId + 清空记忆/消息/锚点 */
+  /** 新建会话：新 sessionId + 清空记忆/消息/锚点/持久化 */
   resetSession: () => void
+  /** 挂起当前会话 */
+  suspendSession: (reason?: string) => Promise<void>
+  /** 恢复挂起会话并重建轨迹 */
+  resumeSession: () => Promise<void>
+  /** 升级问题至医保办 */
+  escalateSession: (question: string, reason?: string) => Promise<void>
+  /** 医保办回复升级工单（dev 模拟入口）；成功后本地状态转 active 并展示回复 */
+  resolveEscalation: (reply: string) => Promise<boolean>
   /** 局部更新锚点（如 @换患者） */
   updateAnchor: (patch: Partial<SessionAnchor>) => void
   /** 关闭主体切换横幅 */
@@ -71,6 +99,18 @@ export interface UsePolicyQAStreamReturn {
 }
 
 const STREAM_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/stream'
+const SESSIONS_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/sessions'
+
+async function fetchJson(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const response = await fetch(url, init)
+  let data: unknown = null
+  try {
+    data = await response.json()
+  } catch {
+    // 非 JSON 响应按空处理
+  }
+  return { ok: response.ok, status: response.status, data }
+}
 
 function isTurnStepStatus(value: unknown): value is PolicyQATurnStep['status'] {
   return (
@@ -131,6 +171,11 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
   const [steps, setSteps] = useState<PolicyQATurnStep[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Issue #30：会话生命周期状态与轨迹恢复
+  const [restoring, setRestoring] = useState(false)
+  const [sessionStatus, setSessionStatus] = useState('unknown')
+  const [statusReason, setStatusReason] = useState('')
+  const [escalation, setEscalation] = useState<SessionEscalationInfo | null>(null)
 
   // 异步 send 内需要读取最新锚点 / 会话，使用 ref 避免闭包过期
   // （ref 在 effect 中同步，避免 render 期间写 ref）
@@ -144,6 +189,57 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
   useEffect(() => {
     sessionIdRef.current = sessionId
   }, [sessionId])
+
+  // ── 刷新恢复：挂载时从持久化轨迹重建会话（Issue #30 §六）──
+  useEffect(() => {
+    const persisted = loadPersistedSessionId()
+    if (!persisted) return
+    let cancelled = false
+    void (async () => {
+      setRestoring(true)
+      try {
+        const { ok, data } = await fetchJson(
+          `${SESSIONS_URL}/${encodeURIComponent(persisted)}/trajectory?user_id=demo`,
+        )
+        if (cancelled) return
+        if (ok && data && typeof data === 'object') {
+          const trajectory = data as TrajectoryResponseDTO
+          const restored = restoreSessionState(trajectory)
+          setSessionId(trajectory.session_id)
+          setAnchor(restored.anchor)
+          setMemories(restored.memories)
+          setMessages(restored.messages)
+          setSessionStatus(trajectory.status)
+          setStatusReason(trajectory.status_reason ?? '')
+          // 恢复升级工单信息（含医保办回复）
+          const detail = await fetchJson(
+            `${SESSIONS_URL}/${encodeURIComponent(persisted)}?user_id=demo`,
+          )
+          if (!cancelled && detail.ok && detail.data && typeof detail.data === 'object') {
+            const esc = (detail.data as { escalation?: Record<string, unknown> }).escalation
+            if (esc && esc.task_id) {
+              setEscalation({
+                taskId: String(esc.task_id),
+                status: String(esc.status ?? ''),
+                reply: String(esc.reply ?? ''),
+                reason: String(esc.reason ?? ''),
+              })
+            }
+          }
+        } else {
+          // 会话不存在（服务端重启/内存存储）：清除残留，开新会话
+          clearPersistedSessionId()
+        }
+      } catch {
+        if (!cancelled) clearPersistedSessionId()
+      } finally {
+        if (!cancelled) setRestoring(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // ── SSE 事件分发（每个事件独立 try/catch，失败不阻塞主流程）────
   const dispatchEvent = useCallback(
@@ -254,6 +350,16 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
       const text = question.trim()
       const settlementId = opts?.settlementId ?? anchorRef.current.settlementId
       if (!text || !settlementId || isStreaming) return false
+      // 挂起/升级中的会话拒绝新问答（后端同样拦截，双保险）
+      if (
+        sessionStatus === 'suspended' ||
+        sessionStatus === 'escalated' ||
+        sessionStatus === 'closed'
+      ) {
+        setError('当前会话已挂起或升级中，请先恢复会话或新建会话。')
+        return false
+      }
+      persistSessionId(sessionIdRef.current)
 
       abortRef.current?.abort()
       const controller = new AbortController()
@@ -362,14 +468,16 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
       setIsStreaming(false)
       return true
     },
-    [dispatchEvent, isStreaming],
+    [dispatchEvent, isStreaming, sessionStatus],
   )
 
   // ── 新会话 ───────────────────────────────────────────────────
   const resetSession = useCallback(() => {
     abortRef.current?.abort()
     abortRef.current = null
-    setSessionId(newSessionId())
+    const sid = newSessionId()
+    setSessionId(sid)
+    persistSessionId(sid)
     setAnchor(emptyAnchor())
     setMemories([])
     setMessages([])
@@ -377,7 +485,94 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
     setSteps([])
     setError(null)
     setIsStreaming(false)
+    setSessionStatus('active')
+    setStatusReason('')
+    setEscalation(null)
   }, [])
+
+  // ── 会话生命周期动作（Issue #30）──────────────────────────
+  const suspendSession = useCallback(async (reason = '') => {
+    const { ok, data } = await fetchJson(
+      `${SESSIONS_URL}/${encodeURIComponent(sessionIdRef.current)}/suspend?user_id=demo`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      },
+    )
+    if (ok && data && typeof data === 'object') {
+      const body = data as { status?: string; status_reason?: string }
+      setSessionStatus(body.status ?? 'suspended')
+      setStatusReason(body.status_reason ?? '')
+    }
+  }, [])
+
+  const resumeSession = useCallback(async () => {
+    const { ok, data } = await fetchJson(
+      `${SESSIONS_URL}/${encodeURIComponent(sessionIdRef.current)}/resume?user_id=demo`,
+      { method: 'POST' },
+    )
+    if (ok && data && typeof data === 'object') {
+      const body = data as {
+        status?: string
+        status_reason?: string
+        trajectory?: TrajectoryResponseDTO
+      }
+      setSessionStatus(body.status ?? 'active')
+      setStatusReason(body.status_reason ?? '')
+      if (body.trajectory) {
+        const restored = restoreSessionState(body.trajectory)
+        setAnchor(restored.anchor)
+        setMemories(restored.memories)
+        setMessages(restored.messages)
+      }
+    }
+  }, [])
+
+  const escalateSession = useCallback(async (question: string, reason = '') => {
+    const { ok, data } = await fetchJson(
+      `${SESSIONS_URL}/${encodeURIComponent(sessionIdRef.current)}/escalate?user_id=demo`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, reason }),
+      },
+    )
+    if (ok && data && typeof data === 'object') {
+      const esc = (data as { escalation?: Record<string, unknown> }).escalation
+      setSessionStatus('escalated')
+      if (esc && esc.task_id) {
+        setEscalation({
+          taskId: String(esc.task_id),
+          status: String(esc.status ?? ''),
+          reply: String(esc.reply ?? ''),
+          reason: String(esc.reason ?? ''),
+        })
+      }
+    }
+  }, [])
+
+  const resolveEscalation = useCallback(async (reply: string) => {
+    const taskId = escalation?.taskId
+    if (!taskId || !reply.trim()) return false
+    const { ok, data } = await fetchJson(
+      `${SESSIONS_URL.replace('/sessions', '')}/escalations/${encodeURIComponent(taskId)}/resolve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reply, resolved_by: 'dev-simulated' }),
+      },
+    )
+    if (ok && data && typeof data === 'object') {
+      setSessionStatus('active')
+      setStatusReason('')
+      setEscalation((prev) =>
+        prev ? { ...prev, status: 'completed', reply } : prev,
+      )
+      return true
+    }
+    return false
+  }, [escalation?.taskId])
 
   const updateAnchor = useCallback((patch: Partial<SessionAnchor>) => {
     setAnchor((prev) => ({ ...prev, ...patch }))
@@ -400,8 +595,16 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
     steps,
     isStreaming,
     error,
+    restoring,
+    sessionStatus,
+    statusReason,
+    escalation,
     send,
     resetSession,
+    suspendSession,
+    resumeSession,
+    escalateSession,
+    resolveEscalation,
     updateAnchor,
     dismissSubjectChange,
     appendLocalMessage,

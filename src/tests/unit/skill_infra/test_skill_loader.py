@@ -195,13 +195,27 @@ class TestSkillLoaderManifestFields:
         assert isinstance(skill.include_keywords, list)
         assert all(isinstance(kw, str) for kw in skill.include_keywords)
 
-    def test_excluded_intents_empty_list(self):
-        """settlement_explain_skill 的 excluded_intents 为空列表。"""
+    def test_excluded_intents_route_compare_away(self):
+        """settlement_explain_skill 的 excluded_intents 含对比类关键词。
+
+        对比问法（对比/比较/差异等）应路由到 settlement_compare_skill，
+        explain skill 命中这些词时受 confidence ×0.3 惩罚。
+        """
         loader = SkillLoader()
         loader.discover()
         skill = loader.get("settlement_explain_skill")
         assert isinstance(skill.excluded_intents, list)
-        assert skill.excluded_intents == []
+        assert set(skill.excluded_intents) == {"对比", "比较", "差异", "为什么这次", "跟上次"}
+
+    def test_compare_skill_discovered_with_compare_action(self):
+        """settlement_compare_skill 被发现，且声明 compare × settlement。"""
+        loader = SkillLoader()
+        loader.discover()
+        skill = loader.get("settlement_compare_skill")
+        assert skill is not None
+        assert skill.business_action == "compare"
+        assert skill.business_object == "settlement"
+        assert "对比" in skill.include_keywords
 
     def test_manifest_raw_data_preserved(self):
         """manifest 原始数据完整保留。"""

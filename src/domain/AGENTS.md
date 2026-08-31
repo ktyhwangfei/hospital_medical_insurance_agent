@@ -63,6 +63,7 @@ domain/
 12. [安全上下文（Security）](#12-安全上下文-security)
 13. [模型服务上下文（Model Service）](#13-模型服务上下文-model-service)
 13.5. [Runtime 上下文（Runtime）](#135-runtime-上下文runtime)
+13.6. [问答会话生命周期与轨迹（Policy QA）](#136-问答会话生命周期与轨迹policy-qa)
 14. [共享通用层（Shared / Common）](#14-共享通用层-shared--common)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
@@ -799,6 +800,22 @@ HIS 系统 → HisPort → Patient (查询/读取)
     → ReasoningStateManager 维护推理链（ReasoningStep）与假设（Hypothesis）
     → 注入 RuntimeContext → 场景执行
 ```
+
+---
+
+### 13.6. 问答会话生命周期与轨迹（Policy QA）
+
+> Issue #30 新增。设计详见 `docs/steering/政策问答-轨迹持久化与挂起升级恢复-设计-V1.0.md`；实现：`src/runtime/policy_qa/session_lifecycle.py`、`src/data_platform/storage/policy_qa/trajectory_storage.py`。
+
+| 通用语言 | 代码标识 | 战术分类 | 代码模式 | 含义 |
+|------|------|------|------|------|
+| 轨迹轮次 | `trajectory turn`（表 `policy_qa_trajectories` 行） | **Entity**（不可变日志） | 行记录 | 一轮 QA 的可重放公开快照：context_need + memory_updates + 完整 result；失败轮也落一行（answer_status=unavailable） |
+| 会话状态 | `Session.status`（active/suspended/escalated/closed） | **Value Object** | `str` 字面量 | 问答会话生命周期；状态机：active⇄suspended、active→escalated→(resolve)→active、非终态→closed（closed 终态） |
+| 挂起 | `suspend` | 动作 | — | 用户主动暂停会话（等补材料等）；挂起后拒绝新问答（409 SESSION_NOT_ACTIVE） |
+| 升级工单 | `policy_qa_escalation` task | **Entity** | task_closure 记录 | 问题升级医保办人工处理；waiting_human_confirmation → resolve 回填 escalation_reply 后会话恢复 active |
+| 轨迹重放 | `restore/replay` | 动作 | — | 按 session_id 读全部轮次快照重建对话/记忆/锚点；读取按所有权校验，非本人 404 |
+
+> 状态机合法转移与所有权校验的唯一权威实现在 `session_lifecycle.py`；前端恢复重建的纯函数在 `policy-qa-session.ts::restoreSessionState`。
 
 ---
 

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hospital-ai/schemas/settlement-compare/input.schema.json",
+  "title": "Skill Input Schema",
+  "description": "settlement-compare skill 的输入结构。",
+  "type": "object",
+  "required": ["settlement_ids"],
+  "properties": {
+    "settlement_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 2,
+      "maxItems": 5,
+      "description": "待对比的结算单号列表，第一张为基准（baseline）",
+      "examples": [["1671213", "1671214"]]
+    },
+    "question": {
+      "type": "string",
+      "description": "用户的自然语言问题（用于上下文，可选）",
+      "examples": ["为什么这次比上次多", "这两次结算差多少"]
+    },
+    "target_fee_item": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "可选：指定只对比某个费用项；null 表示全项对比",
+      "enum": ["pooling_self_pay", "deductible", "large_amount_self_pay", "pooling_payment", "personal_total_pay", "out_of_scope", null]
+    }
+  }
+}

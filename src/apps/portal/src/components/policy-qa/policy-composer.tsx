@@ -11,6 +11,8 @@ interface PolicyComposerProps {
   onChange: (value: string) => void
   onSend: () => void
   isStreaming?: boolean
+  /** 会话非活跃（挂起/升级中）时禁止输入 */
+  disabled?: boolean
 }
 
 export default function PolicyComposer({
@@ -19,8 +21,10 @@ export default function PolicyComposer({
   onChange,
   onSend,
   isStreaming = false,
+  disabled = false,
 }: PolicyComposerProps) {
-  const canSend = value.trim().length > 0 && !isStreaming
+  const locked = isStreaming || disabled
+  const canSend = value.trim().length > 0 && !locked
 
   return (
     <div
@@ -49,11 +53,13 @@ export default function PolicyComposer({
               if (canSend) onSend()
             }
           }}
-          disabled={isStreaming}
+          disabled={locked}
           placeholder={
-            settlementId
-              ? '继续追问当前结算单…'
-              : '首次请提供结算单号，例如：查询住院费用，结算单 1671213'
+            disabled
+              ? '会话已挂起或升级中，恢复后可继续提问'
+              : settlementId
+                ? '继续追问当前结算单…'
+                : '首次请提供结算单号，例如：查询住院费用，结算单 1671213'
           }
           rows={2}
           className="min-h-20 resize-none border-0 px-2 shadow-none focus-visible:ring-2 focus-visible:ring-blue-500/25"
