@@ -25,7 +25,7 @@
 
 | 文件 | 操作 | 职责 |
 |---|---|---|
-| `src/adapters/billing/models.py` | 新建 | 预退费适配器的输入、项目、金额快照、结果和明确异常 |
+| `src/adapters/billing/models.py` | 新建 | 预退费适配器的输入、项目、金额快照、结果和失败类型 |
 | `src/adapters/ports/billing.py` | 修改 | 为 `BillingPort` 增加只读 `preview_partial_refund` |
 | `src/adapters/billing/in_memory.py` | 修改 | 默认实现明确返回“预结算未配置”，不生成假金额 |
 | `skills/outpatient_pre_refund_analysis_skill/*` | 新建 | Skill 清单、说明、schema、确定性 assembler 及测试 |
@@ -58,7 +58,7 @@ def preview_partial_refund(
     self,
     original_trade_no: str,
     items: tuple[PartialRefundItemRequest, ...],
-) -> PartialRefundPreview: ...
+) -> AdapterCallResult: ...
 ```
 
 测试还应构造 `PartialRefundItemRequest(fee_detail_id="F001", refund_quantity=Decimal("1"))`，证明数量为 `Decimal` 而非浮点数。
@@ -76,8 +76,9 @@ Expected: FAIL，原因是模型或端口方法尚不存在。
 在 `src/adapters/billing/models.py` 中定义冻结 dataclass：
 
 ```python
-class PreSettlementNotConfiguredError(RuntimeError): ...
-class PreSettlementUnavailableError(RuntimeError): ...
+class PreSettlementErrorType(str, Enum):
+    NOT_CONFIGURED = "pre_settlement_not_configured"
+    UNAVAILABLE = "pre_settlement_unavailable"
 
 @dataclass(frozen=True)
 class PartialRefundItemRequest:
@@ -115,17 +116,23 @@ class PartialRefundPreview:
 
 - [ ] **Step 4：扩展端口和默认适配器**
 
-在 `BillingPort` 增加上述方法。在 `InMemoryBillingAdapter` 中实现为：
+在 `BillingPort` 增加上述方法，返回现有 `AdapterCallResult`。在 `InMemoryBillingAdapter` 中通过 `failed_result` 实现为失败结果：
 
 ```python
-raise PreSettlementNotConfiguredError("院端门诊部分退费预结算接口未配置")
+return failed_result(
+    context=context,
+    source_system="billing",
+    capability="preview_partial_refund",
+    error_type=PreSettlementErrorType.NOT_CONFIGURED.value,
+    message="院端门诊部分退费预结算接口未配置",
+)
 ```
 
 不得返回演示金额或根据原结算单推算结果。
 
 - [ ] **Step 5：补默认行为契约测试并跑绿**
 
-在 `test_adapter_contracts.py` 断言默认适配器抛出 `PreSettlementNotConfiguredError`。
+在 `test_adapter_contracts.py` 断言默认适配器返回 `AdapterCallStatus.FAILED`、`PreSettlementErrorType.NOT_CONFIGURED`，且仍满足 `AdapterCallResult` 契约。
 
 ```powershell
 uv run python -m pytest src/tests/unit/adapters/test_ports.py src/tests/unit/adapters/test_adapter_contracts.py -q
@@ -150,6 +157,7 @@ git commit -m "feat: 增加门诊部分退费预结算端口"
 - Create: `skills/outpatient_pre_refund_analysis_skill/assembler.py`
 - Create: `skills/outpatient_pre_refund_analysis_skill/schemas/input.schema.json`
 - Create: `skills/outpatient_pre_refund_analysis_skill/schemas/output.schema.json`
+- Create: `skills/outpatient_pre_refund_analysis_skill/templates/analysis.yaml`
 - Create: `skills/outpatient_pre_refund_analysis_skill/tests/__init__.py`
 - Create: `skills/outpatient_pre_refund_analysis_skill/tests/test_assembler.py`
 - Modify: `src/tests/unit/skill_infra/test_skill_loader.py`
@@ -225,11 +233,10 @@ Expected: FAIL，assembler 尚不存在。
 
 - [ ] **Step 5：实现最小 assembler**
 
-定义冻结结果模型 `PreRefundSkillResult`，只包含现有公开结果构建所需的数据：
+定义 Pydantic 结果模型 `PreRefundSkillResult`，只包含现有公开结果构建所需的数据：
 
 ```python
-@dataclass(frozen=True)
-class PreRefundSkillResult:
+class PreRefundSkillResult(BaseModel):
     answer: str
     calculation_trace: list[dict[str, object]]
     warnings: list[str]
@@ -253,7 +260,7 @@ def assemble_pre_refund_analysis(
     ...
 ```
 
-实现顺序：先校验原交易号和项目集合，再校验数量，再校验金额快照与恒等式，最后生成中文解释、计算步骤和来源。不得调用模型或外部 IO。
+实现顺序：先校验原交易号和项目集合，再校验数量，再校验金额快照与恒等式，最后从 `templates/analysis.yaml` 读取并格式化中文解释、计算步骤和来源。不得调用模型或外部 IO，解释文案不得硬编码在 Python 中。
 
 官方拒绝分支不要求 `before/after`，但必须有 `response_code`、`response_message` 和来源引用；官方接受分支必须有完整快照。
 
@@ -314,8 +321,8 @@ pre_refund_items: list[PreRefundItemInput] | None = None
 - 零数、负数和空明细 ID 校验失败。
 - 重复 `fee_detail_id` 被流程拒绝。
 - 明确分析意图调用适配器一次。
-- `PreSettlementNotConfiguredError` 不重试并返回 unavailable。
-- `PreSettlementUnavailableError` 只重试一次。
+- `error_type=pre_settlement_not_configured` 不重试并返回 unavailable。
+- `error_type=pre_settlement_unavailable` 只重试一次。
 - 返回关联不一致不重试。
 - “立即执行退费/确认退费/冲正”先转人工确认，适配器调用次数为 0。
 - “预退费分析/退费试算”不误判为写操作。
@@ -358,8 +365,8 @@ class PreRefundFlowOutcome:
 2. 校验非空项目和重复 ID。
 3. 转换为 adapter request。
 4. 用 `asyncio.to_thread` 调用同步适配器。
-5. `PreSettlementNotConfiguredError` 直接 unavailable。
-6. `PreSettlementUnavailableError` 最多再试一次。
+5. 适配器失败且 `error_type=pre_settlement_not_configured` 时直接 unavailable。
+6. 适配器失败且 `error_type=pre_settlement_unavailable` 时最多再试一次。
 7. 调用 Skill assembler；校验失败直接 unavailable。
 
 不得捕获所有异常后继续；未知异常应交给现有 SSE 错误边界。
