@@ -48,6 +48,7 @@ class _Service:
             database=command.database,
             username=command.username,
             credential_id=command.credential_id,
+            credential_configured=True,
             credential_revision=1,
             connection_status=ConnectionStatus.UNKNOWN,
             cdc_status=CdcEnablementStatus.NOT_CHECKED,
@@ -104,6 +105,23 @@ class _Service:
         return job
 
 
+class _StaleCredentialService(_Service):
+    def __init__(self):
+        super().__init__()
+        source = self.create_source(_command(), "test")
+        source.credential_configured = False
+        source.credential_revision = 3
+        self.rotate_expected_revision = None
+
+    def rotate_credential(self, source_id, credential_id, password, expected_revision, actor):
+        del credential_id, password, actor
+        assert expected_revision == 3
+        self.rotate_expected_revision = expected_revision
+        self.sources[source_id].credential_configured = True
+        self.sources[source_id].credential_revision = expected_revision + 1
+        return self.sources[source_id]
+
+
 def _command(password="never-print-this"):
     return CreateDataSourceCommand(
         source_id="bjybdb",
@@ -136,6 +154,15 @@ def test_bootstrap_is_idempotent_and_creates_one_scheduled_sql_draft() -> None:
     assert second.job_status is SyncJobStatus.DRAFT
     assert second.source_mode == "scheduled_sql"
     assert "never-print-this" not in second.model_dump_json()
+
+
+def test_bootstrap_rebinds_an_existing_unconfigured_credential() -> None:
+    service = _StaleCredentialService()
+
+    result = bootstrap(service, _command())
+
+    assert result.platform_ready is True
+    assert service.rotate_expected_revision == 3
 
 
 def test_bootstrap_fails_closed_when_postgresql_is_not_writable() -> None:

@@ -8,7 +8,7 @@ from src.data_platform.outpatient_governance import ConnectionStatus, SyncJobSta
 from src.data_platform.storage.postgresql.outpatient_governance_store import (
     OutpatientGovernanceNotFoundError,
 )
-from src.runtime.api.data_governance_schemas import SaveSyncJobRequest
+from src.runtime.api.data_governance_schemas import SaveSyncJobRequest, UpdateDataSourceRequest
 from src.runtime.data_governance.service import (
     CreateDataSourceCommand,
     DataGovernanceService,
@@ -120,6 +120,20 @@ def test_create_source_seals_password_and_returns_public_model(monkeypatch) -> N
     assert "secret-value" not in source.model_dump_json()
     assert "encrypted_password" not in source.model_dump_json()
     assert "secret-value" not in store.credentials[source.credential_id].model_dump_json()
+
+
+def test_endpoint_change_keeps_revision_available_for_credential_rebinding(monkeypatch) -> None:
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+    store = _GovernanceStore()
+    service = DataGovernanceService(store, _PostgresStore(), lambda _source, _password: _Connection())
+    service.create_source(_command(), actor="admin-1")
+
+    source = service.update_source_config(
+        "bjybdb", UpdateDataSourceRequest(host="replacement.example"), actor="admin-1"
+    )
+
+    assert source.credential_configured is False
+    assert source.credential_revision == 1
 
 
 def test_connection_probe_returns_only_safe_error_code(monkeypatch) -> None:

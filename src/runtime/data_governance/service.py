@@ -420,6 +420,7 @@ class DataGovernanceService:
         try:
             credential = self._store.get_credential(source.credential_id)
         except OutpatientGovernanceNotFoundError:
+            credential = None
             configured = False
         else:
             configured = self._vault.is_bound(
@@ -430,7 +431,7 @@ class DataGovernanceService:
             )
         return source.model_copy(update={
             "credential_configured": configured,
-            "credential_revision": credential.revision if configured else None,
+            "credential_revision": credential.revision if credential else None,
         })
 
     def _save_job_state(

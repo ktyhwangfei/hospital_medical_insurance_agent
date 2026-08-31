@@ -9,11 +9,14 @@
 | 项目 | 实测结果 |
 |---|---|
 | 本地主密钥 | 已写入 gitignored 项目根 `.env`；未输出密钥值 |
-| PostgreSQL | `scripts/bootstrap_outpatient_store.py --check` 返回 `outpatient store: ready` |
-| worker 控制面 | 可读取，当前 `total_jobs=0`、`due_jobs=0` |
-| 页面验收 | Portal 367 passed、38 路由构建通过；Chromium/WebKit E2E 通过，Firefox 待无开发态 HMR 干扰的环境复验 |
-| 目标医院 SQL Server | **待目标医院 DBA 执行**；当前无真实连接凭据 |
+| SQL Server 门诊源 | 当前测试账号已读取 `dbo.o_Trade`、`dbo.o_FeeItem`、`dbo.o_Diagnose`，共 117 个契约字段，三表均有数据 |
+| PostgreSQL | 门诊结构检查及真实事务写入→读取→删除探针通过，探针不留存 |
+| worker 控制面 | `bjybdb` 已自动登记，当前 `total_jobs=1`、`due_jobs=0`；定时 SQL 任务为草稿，未自动启动 |
+| 页面验收 | 真实页面显示“数据底座可用”；Portal 368 passed、38 路由构建通过；Chromium/WebKit E2E 通过，Firefox 待无开发态 HMR 干扰的环境复验 |
+| SQL Server CDC | 当前库未开启，页面显示“等待 DBA”；不影响定时 SQL 和数据底座就绪 |
 | 真实 LSN / batch_id / P95 | 无，不伪造；须完成院方验收后记录 |
+
+当前版本的唯一接入成功条件是：三张固定门诊源表及 117 个契约字段能被当前 SQL Server 账号读取，同时 PostgreSQL 门诊结构可初始化且事务读写通过。CDC 是可选同步方式，不参与“数据底座可用”判定。[来源: `src/runtime/data_governance/service.py`、`scripts/bootstrap_outpatient_governance.py`]
 
 ## 2. 页面配置与权限
 
@@ -25,12 +28,14 @@
 ..\ws.ps1 url all
 ```
 
-打开 Portal 的“数据治理”后按以下顺序操作：
+当前工作区验证地址为 `http://127.0.0.1:3178/data-governance`；若工作区名称或端口分配变化，以 `..\ws.ps1 url all` 输出为准。
 
-1. “数据源”页新增 SQL Server：医院、端点、数据库、只读用户名、凭据 ID 和密码。密码只在提交时传输，不回显、不进入浏览器 storage。
-2. 点击“测试连接”；连接通过后下载 CDC 脚本，交 DBA 审核执行。
+`..\ws.ps1 up outpatient-p0-data-contract` 会从既有 gitignored 环境配置读取当前 SQL Server/PostgreSQL 凭据，幂等登记 `bjybdb`、验证唯一就绪条件，并在没有任务时创建一个未启动的定时 SQL 草稿。打开 Portal 的“数据治理”后按以下顺序操作：
+
+1. 当前测试环境先在“运行概览”确认“数据底座可用”，再到“数据源”确认三表可读及 PostgreSQL 读写就绪；其他医院才需要手工新增数据源。密码只在提交时传输，不回显、不进入浏览器 storage。
+2. 不允许 CDC 的医院直接保留“定时 SQL”；允许 CDC 时再下载脚本交 DBA 审核执行。
 3. DBA 完成后点击“重新检测 CDC”。只有数据库、三个 capture instance、捕获列和 4320 分钟 retention 全部一致才显示“CDC 已就绪”。
-4. “同步任务”页选择 CDC 或定时 SQL，保存后启动。立即执行只表示进入 worker 队列，是否成功以“运行记录”为准。
+4. “同步任务”页确认参数后人工启动。立即执行只表示进入 worker 队列，是否成功以“运行记录”为准；启动脚本不会自动拉取业务数据。
 5. “运行概览”页查看连接、CDC、任务、质量、批次和延迟状态。
 
 `data_governance:read` 可查看状态；`data_governance:write` 才能新增/修改数据源、提交凭据、检测、配置和启停任务。Portal 会隐藏只读用户的写按钮，后端仍执行最终鉴权。[来源: `src/runtime/api/data_governance_routes.py`]
@@ -81,6 +86,7 @@ SELECT job_type, retention FROM msdb.dbo.cdc_jobs WHERE database_id = DB_ID();
 ```powershell
 .\.venv\Scripts\python.exe scripts\bootstrap_outpatient_store.py
 .\.venv\Scripts\python.exe scripts\bootstrap_outpatient_store.py --check
+.\.venv\Scripts\python.exe scripts\bootstrap_outpatient_governance.py
 .\.venv\Scripts\python.exe scripts\run_outpatient_sync_worker.py --status
 ```
 
@@ -136,4 +142,4 @@ pg_dump --format=custom --file hospital_mcp_YYYYMMDD.dump hospital_mcp
 4. CDC 由 DBA 在确认无其他消费者后再禁用；应用侧无权直接关闭源库 CDC。
 5. 重新运行 PostgreSQL `--check`、worker `--status` 和页面只读检查。
 
-目标医院完成真实接入后，应补录 DBA、capture/列核验、首个 LSN、batch_id、至少 100 个非空批次及 P95 延迟；这些证据完成前项目保持 `impl_done`，不能标记 `complete`。[来源: `docs/superpowers/plans/2026-08-31-outpatient-data-governance-center.md` §3]
+当前测试环境已满足数据接入就绪条件。要把整个 P1 近实时同步里程碑从 `impl_done` 改为 `complete`，仍应在人工启动任务后补录首个 batch_id；若采用 CDC，再补录 DBA、capture/列核验和首个 LSN；累积至少 100 个非空批次后记录 P95 延迟。[来源: `docs/superpowers/plans/2026-08-31-outpatient-data-governance-center.md` §3]

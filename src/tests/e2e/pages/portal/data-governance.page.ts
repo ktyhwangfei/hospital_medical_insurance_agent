@@ -12,6 +12,10 @@ export class DataGovernancePage extends BasePage {
     await super.goto('/data-governance/data-sources');
   }
 
+  async gotoOverview(): Promise<void> {
+    await super.goto('/data-governance');
+  }
+
   async gotoSyncJobs(): Promise<void> {
     await super.goto('/data-governance/sync-jobs');
   }
@@ -55,6 +59,14 @@ export class DataGovernancePage extends BasePage {
       session: Object.fromEntries(Object.entries(sessionStorage)),
     }));
     expect(storage).not.toContain(secret);
+  }
+
+  async expectReadyStates(): Promise<void> {
+    await expect(this.page.getByText('数据底座')).toBeVisible();
+    await expect(this.page.getByText('可用')).toBeVisible();
+    await expect(this.page.getByText('PostgreSQL 门诊结构及读写已就绪')).toBeVisible();
+    await expect(this.page.getByRole('columnheader', { name: '门诊源表' })).toBeVisible();
+    await expect(this.page.getByText('等待 DBA')).toBeVisible();
   }
 
   async expectReadOnly(): Promise<void> {

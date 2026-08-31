@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 
+from scripts.bootstrap_outpatient_governance import bootstrap
 from src.adapters.insurance_interface.outpatient_cdc import CdcRetentionGapError
 from src.adapters.insurance_interface.outpatient_source import (
     OUTPATIENT_SOURCE_SPECS,
@@ -131,6 +132,9 @@ class _ProjectionStore:
         return None
 
     def check_schema(self):
+        return True
+
+    def check_writable(self):
         return True
 
     def get_checkpoint(self, _source_id):
@@ -283,20 +287,24 @@ def test_governed_dual_mode_sync_and_failure_recovery(monkeypatch) -> None:
         governance_store, projection_store,
         lambda _source, _password: _ProbeConnection(probe_state),
     )
-    source = service.create_source(CreateDataSourceCommand(
+    command = CreateDataSourceCommand(
         source_id="hospital-outpatient", hospital_code="H001", hospital_name="示例医院",
         name="门诊医保库", host="sqlserver.internal", database="bjybdb",
         username="cdc_reader", credential_id="credential.hospital-outpatient",
         password="never-return-this-password",
-    ), actor="admin")
-    assert "never-return-this-password" not in source.model_dump_json()
-    assert service.probe_cdc(source.source_id).status == "waiting_dba"
+    )
+    readiness = bootstrap(service, command)
+    source = governance_store.get_source(command.source_id)
+    assert readiness.platform_ready is True
+    assert readiness.source_status.value == "healthy"
+    assert readiness.postgresql_ready is True
+    assert readiness.cdc_status is CdcEnablementStatus.WAITING_DBA
+    assert readiness.source_mode == "scheduled_sql"
+    assert readiness.job_status is SyncJobStatus.DRAFT
+    assert "never-return-this-password" not in readiness.model_dump_json()
     assert governance_store.get_source(source.source_id).cdc_status is CdcEnablementStatus.WAITING_DBA
 
-    job = service.save_job_config(source.source_id, SaveSyncJobRequest(
-        source_mode="scheduled_sql", expected_revision=1,
-        schedule_interval_minutes=5, lookback_hours=2,
-    ), actor="admin")
+    job = governance_store.get_job(source.source_id)
     service.start_job(source.source_id, actor="admin")
     batches = {
         OutpatientSourceMode.SCHEDULED_SQL: [

@@ -7,8 +7,8 @@ const source = {
   source_id: 'hospital-e2e', hospital_code: 'H-E2E', hospital_name: 'E2E 示例医院',
   name: '门诊医保库', host: '10.20.30.40', port: 1433, database: 'bjybdb', schema_name: 'dbo',
   username: 'readonly', credential_id: 'credential.hospital-e2e', credential_configured: true,
-  credential_revision: 1, connection_status: 'healthy', cdc_status: 'ready',
-  safe_probe_message: 'CDC 已按受控模板开通', last_probed_at: '2026-08-31T08:00:00Z',
+  credential_revision: 1, connection_status: 'healthy', cdc_status: 'waiting_dba',
+  safe_probe_message: '门诊 3 张源表及 117 个契约字段可读', last_probed_at: '2026-08-31T08:00:00Z',
   created_at: '2026-08-31T08:00:00Z', updated_at: '2026-08-31T08:00:00Z',
 };
 let sources: typeof source[];
@@ -43,8 +43,24 @@ test.beforeEach(async ({ page }) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     const method = request.method();
-    if (path.endsWith('/postgresql/status')) {
-      await respond(route, { connection_status: 'healthy', schema_ready: true, safe_message: 'PostgreSQL 目标库已就绪', checked_at: '2026-08-31T08:00:00Z' });
+    if (path.endsWith('/overview')) {
+      await respond(route, {
+        platform_ready: true,
+        postgresql: { connection_status: 'healthy', schema_ready: true, safe_message: 'PostgreSQL 门诊结构及读写已就绪', checked_at: '2026-08-31T08:00:00Z' },
+        data_source_count: sources.length, running_job_count: 0, issue_count: 0,
+        latest_latency_seconds: null,
+        sources: sources.map((item) => ({
+          source_id: item.source_id, hospital_code: item.hospital_code,
+          hospital_name: item.hospital_name, name: item.name,
+          credential_configured: true, connection_status: item.connection_status,
+          cdc_status: item.cdc_status, sync_status: 'draft', source_mode: 'scheduled_sql',
+          next_run_at: null, last_succeeded_at: null, quality_status: null,
+          latest_latency_seconds: null,
+        })),
+        issues: [], recent_runs: [],
+      });
+    } else if (path.endsWith('/postgresql/status')) {
+      await respond(route, { connection_status: 'healthy', schema_ready: true, safe_message: 'PostgreSQL 门诊结构及读写已就绪', checked_at: '2026-08-31T08:00:00Z' });
     } else if (path.endsWith('/data-sources') && method === 'GET') {
       await respond(route, { items: sources });
     } else if (path.endsWith('/data-sources') && method === 'POST') {
@@ -87,6 +103,8 @@ test('管理员配置双模式任务且只读用户没有写入口', async ({ pa
   await governance.createSource(secret);
   expect(capturedPassword).toBe(secret);
   await governance.expectSecretAbsent(secret);
+  await governance.gotoOverview();
+  await governance.expectReadyStates();
 
   await governance.gotoSyncJobs();
   await governance.configureScheduledSql();

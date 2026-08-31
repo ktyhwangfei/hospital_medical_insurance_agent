@@ -88,12 +88,14 @@ def bootstrap(service, command: CreateDataSourceCommand) -> BootstrapResult:
                 UpdateDataSourceRequest(**changes),
                 actor,
             )
-        if endpoint_changed:
+        if endpoint_changed or not source.credential_configured:
+            if source.credential_revision is None:
+                raise BootstrapReadinessError("现有数据源缺少可轮换的凭据版本")
             source = service.rotate_credential(
                 source.source_id,
                 source.credential_id,
                 command.password.get_secret_value(),
-                source.credential_revision or 1,
+                source.credential_revision,
                 actor,
             )
 
