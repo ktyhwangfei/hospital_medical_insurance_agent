@@ -115,6 +115,8 @@ class DataGovernanceSourceStatus(BaseModel):
 
 
 class DataGovernanceOverview(BaseModel):
+    platform_ready: bool = False
+    postgresql: PostgresTargetStatus
     data_source_count: int = Field(ge=0)
     running_job_count: int = Field(ge=0)
     issue_count: int = Field(ge=0)

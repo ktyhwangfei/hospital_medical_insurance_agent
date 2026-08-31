@@ -1,11 +1,18 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
+import pytest
 
-from src.data_platform.outpatient_governance import ConnectionStatus
+from src.data_platform.outpatient_governance import ConnectionStatus, SyncJobStatus
+from src.data_platform.storage.postgresql.outpatient_governance_store import (
+    OutpatientGovernanceNotFoundError,
+)
+from src.runtime.api.data_governance_schemas import SaveSyncJobRequest
 from src.runtime.data_governance.service import (
     CreateDataSourceCommand,
     DataGovernanceService,
+    SyncJobInvalidStateError,
 )
 
 
@@ -29,13 +36,44 @@ class _GovernanceStore:
         self.sources[source.source_id] = source
         self.updates.append(source)
 
+    def list_sources(self):
+        return list(self.sources.values())
+
+    def get_job(self, source_id):
+        if not hasattr(self, "jobs") or source_id not in self.jobs:
+            raise OutpatientGovernanceNotFoundError(source_id)
+        return self.jobs[source_id]
+
+    def save_job(self, job, expected_revision=None):
+        del expected_revision
+        if not hasattr(self, "jobs"):
+            self.jobs = {}
+        self.jobs[job.source_id] = job
+
+    def list_attempts(self, source_id, limit=100):
+        del source_id, limit
+        return []
+
 
 class _PostgresStore:
+    def __init__(self, writable=True):
+        self.writable = writable
+
     def ensure_schema(self):
         return None
 
     def check_schema(self):
         return True
+
+    def check_writable(self):
+        return self.writable
+
+    def get_sync_status(self, source_id):
+        return SimpleNamespace(
+            source_id=source_id,
+            last_non_empty_latency_seconds=None,
+            quality_status=None,
+        )
 
 
 class _Connection:
@@ -120,3 +158,40 @@ def test_connection_probe_closes_successful_connection(monkeypatch) -> None:
     assert len(connection.executions) == 3
     assert result.checked_at <= datetime.now(timezone.utc)
     assert connection.closed is True
+
+
+def test_overview_is_ready_without_cdc_when_source_and_postgres_are_ready(monkeypatch) -> None:
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+    store = _GovernanceStore()
+    service = DataGovernanceService(store, _PostgresStore(), lambda _s, _p: _Connection())
+    service.create_source(_command(), actor="admin-1")
+    service.probe_connection("bjybdb")
+
+    overview = service.overview()
+
+    assert overview.platform_ready is True
+    assert overview.postgresql.connection_status is ConnectionStatus.HEALTHY
+    assert overview.postgresql.schema_ready is True
+
+
+def test_scheduled_sql_start_requires_source_and_postgres_but_not_cdc(monkeypatch) -> None:
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+    store = _GovernanceStore()
+    postgres = _PostgresStore()
+    service = DataGovernanceService(store, postgres, lambda _s, _p: _Connection())
+    service.create_source(_command(), actor="admin-1")
+    service.save_job_config("bjybdb", SaveSyncJobRequest(
+        source_mode="scheduled_sql", expected_revision=1,
+    ), actor="admin-1")
+
+    with pytest.raises(SyncJobInvalidStateError, match="门诊源表"):
+        service.start_job("bjybdb", actor="admin-1")
+
+    service.probe_connection("bjybdb")
+    postgres.writable = False
+    with pytest.raises(SyncJobInvalidStateError, match="PostgreSQL"):
+        service.start_job("bjybdb", actor="admin-1")
+
+    postgres.writable = True
+    started = service.start_job("bjybdb", actor="admin-1")
+    assert started.status is SyncJobStatus.READY

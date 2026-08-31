@@ -116,6 +116,7 @@ class DataGovernanceService:
         )
 
         sources = self.list_sources()
+        postgresql = self.postgres_target_status()
         statuses = []
         issues = []
         recent_runs = []
@@ -140,8 +141,29 @@ class DataGovernanceService:
                 running_jobs += 1
             issues.extend(_source_issues(source, job, sync_status.quality_status))
             recent_runs.extend(self._store.list_attempts(source.source_id, limit=5))
+        if (
+            postgresql.connection_status is not ConnectionStatus.HEALTHY
+            or not postgresql.schema_ready
+        ):
+            from src.runtime.api.data_governance_schemas import DataGovernanceIssue
+            issues.append(DataGovernanceIssue(
+                code="postgresql_unavailable",
+                severity="blocking",
+                message="PostgreSQL 门诊目标库未就绪",
+            ))
         recent_runs.sort(key=lambda item: item.started_at, reverse=True)
         return DataGovernanceOverview(
+            platform_ready=(
+                bool(sources)
+                and postgresql.connection_status is ConnectionStatus.HEALTHY
+                and postgresql.schema_ready
+                and all(
+                    source.credential_configured
+                    and source.connection_status is ConnectionStatus.HEALTHY
+                    for source in sources
+                )
+            ),
+            postgresql=postgresql,
             data_source_count=len(sources),
             running_job_count=running_jobs,
             issue_count=len(issues),
@@ -319,6 +341,14 @@ class DataGovernanceService:
         source = self._with_credential_status(self._store.get_source(source_id))
         if not source.credential_configured:
             raise SyncJobInvalidStateError("数据源凭据需重新提交")
+        if source.connection_status is not ConnectionStatus.HEALTHY:
+            raise SyncJobInvalidStateError("门诊源表尚未通过可读检测")
+        target = self.postgres_target_status()
+        if (
+            target.connection_status is not ConnectionStatus.HEALTHY
+            or not target.schema_ready
+        ):
+            raise SyncJobInvalidStateError("PostgreSQL 门诊目标库尚未就绪")
         if job.source_mode.value == "cdc" and source.cdc_status is not CdcEnablementStatus.READY:
             raise CdcNotReadyError("CDC 尚未按受控模板开通")
         now = datetime.now(timezone.utc)
@@ -352,6 +382,7 @@ class DataGovernanceService:
         try:
             self._outpatient_store.ensure_schema()
             ready = self._outpatient_store.check_schema()
+            writable = ready and self._outpatient_store.check_writable()
         except Exception:
             return PostgresTargetStatus(
                 connection_status=ConnectionStatus.ERROR,
@@ -361,8 +392,12 @@ class DataGovernanceService:
             )
         return PostgresTargetStatus(
             connection_status=ConnectionStatus.HEALTHY,
-            schema_ready=ready,
-            safe_message="PostgreSQL 目标库已就绪" if ready else "PostgreSQL 目标表尚未就绪",
+            schema_ready=ready and writable,
+            safe_message=(
+                "PostgreSQL 门诊结构及读写已就绪"
+                if ready and writable
+                else "PostgreSQL 门诊结构或读写尚未就绪"
+            ),
             checked_at=checked_at,
         )
 

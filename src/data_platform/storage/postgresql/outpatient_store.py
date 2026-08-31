@@ -344,6 +344,28 @@ class OutpatientPostgresStore:
         )
         return bool(rows and int(rows[0]["present"]) == 8)
 
+    def check_writable(self) -> bool:
+        """使用真实控制表验证事务读写，提交后不保留探测记录。"""
+        probe_id = f"__readiness__{uuid4()}"
+        with self._client.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO outpatient_sync_checkpoints
+                       (source_id, source_mode, last_batch_id, updated_at)
+                       VALUES (%s, 'scheduled_sql', %s, NOW())""",
+                    (probe_id, probe_id),
+                )
+                cursor.execute(
+                    "SELECT 1 FROM outpatient_sync_checkpoints WHERE source_id = %s",
+                    (probe_id,),
+                )
+                ready = cursor.fetchone() is not None
+                cursor.execute(
+                    "DELETE FROM outpatient_sync_checkpoints WHERE source_id = %s",
+                    (probe_id,),
+                )
+        return ready
+
     def get_view_columns(self) -> dict[str, set[str]]:
         rows = self._client.execute(
             """SELECT table_name, column_name

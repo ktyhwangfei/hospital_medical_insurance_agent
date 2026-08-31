@@ -42,6 +42,8 @@ class _FakeCursor:
         elif "INSERT INTO outpatient_sync_batches" in sql:
             self.client.existing_batch_id = params[0]
             self.client.existing_row_count = params[-3]
+        elif "SELECT 1 FROM outpatient_sync_checkpoints" in sql:
+            self.row = (1,)
         return self
 
     def fetchone(self):
@@ -236,3 +238,17 @@ def test_window_projection_read_is_parameterized_and_loads_children_by_trade() -
     )
     assert "trade_date >= %s AND trade_date < %s" in trade_sql
     assert params == (start, end)
+
+
+def test_writable_probe_uses_real_control_table_without_leaving_a_row() -> None:
+    client = _FakeClient()
+    store = OutpatientPostgresStore(client=client)
+
+    assert store.check_writable() is True
+
+    statements = [sql for sql, _params in client.transaction_sql]
+    assert client.transaction_count == 1
+    assert "INSERT INTO outpatient_sync_checkpoints" in statements[0]
+    assert "SELECT 1 FROM outpatient_sync_checkpoints" in statements[1]
+    assert "DELETE FROM outpatient_sync_checkpoints" in statements[2]
+    assert client.committed is True
