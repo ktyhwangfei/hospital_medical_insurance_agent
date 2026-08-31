@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from math import ceil
 from typing import Any
 from uuid import uuid4
 
@@ -257,6 +258,20 @@ class OutpatientSyncCheckpoint:
     updated_at: datetime
 
 
+@dataclass(frozen=True)
+class OutpatientSyncStatus:
+    source_id: str
+    last_batch_id: str | None
+    last_mode: str | None
+    checkpoint_lsn: bytes | None
+    last_published_at: datetime | None
+    last_non_empty_latency_seconds: float | None
+    non_empty_sample_count: int
+    p95_latency_seconds: float | None
+    quality_status: str | None
+    semantic_version: str | None
+
+
 class OutpatientPostgresStore:
     def __init__(
         self,
@@ -327,6 +342,48 @@ class OutpatientPostgresStore:
             "dbo_o_FeeItem": tuple(_payload(row["payload"]) for row in fee_rows),
             "dbo_o_Diagnose": tuple(_payload(row["payload"]) for row in diagnosis_rows),
         }
+
+    def get_sync_status(self, source_id: str) -> OutpatientSyncStatus:
+        checkpoint = self.get_checkpoint(source_id)
+        latest_rows = self._client.execute(
+            """SELECT batch_id, mode, published_at, semantic_version, quality_summary
+               FROM outpatient_sync_batches
+               WHERE source_id = %s ORDER BY published_at DESC LIMIT 1""",
+            (source_id,),
+        )
+        non_empty_rows = self._client.execute(
+            """SELECT source_committed_at, published_at
+               FROM outpatient_sync_batches
+               WHERE source_id = %s AND row_count > 0 AND source_committed_at IS NOT NULL
+               ORDER BY published_at DESC LIMIT 100""",
+            (source_id,),
+        )
+        latencies = sorted(
+            max(0.0, (row["published_at"] - row["source_committed_at"]).total_seconds())
+            for row in non_empty_rows
+        )
+        latest_non_empty_latency = None
+        if non_empty_rows:
+            newest = non_empty_rows[0]
+            latest_non_empty_latency = max(
+                0.0,
+                (newest["published_at"] - newest["source_committed_at"]).total_seconds(),
+            )
+        p95 = latencies[ceil(len(latencies) * 0.95) - 1] if latencies else None
+        latest = latest_rows[0] if latest_rows else {}
+        quality = _payload(latest.get("quality_summary", {}))
+        return OutpatientSyncStatus(
+            source_id=source_id,
+            last_batch_id=latest.get("batch_id"),
+            last_mode=latest.get("mode"),
+            checkpoint_lsn=checkpoint.last_lsn if checkpoint else None,
+            last_published_at=latest.get("published_at"),
+            last_non_empty_latency_seconds=latest_non_empty_latency,
+            non_empty_sample_count=len(latencies),
+            p95_latency_seconds=p95,
+            quality_status=quality.get("status"),
+            semantic_version=latest.get("semantic_version"),
+        )
 
     def publish_batch(
         self,
