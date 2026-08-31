@@ -554,6 +554,13 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 技能制品快照 | `SkillArtifactSnapshot` | **Value Object** | Pydantic `BaseModel`（frozen） | Skill 目录规范化后的 Manifest、依赖、文件清单与 SHA-256 |
 | 技能校验状态 | `SkillValidationStatus` | **Value Object** | `StrEnum` | pending / passed / failed |
 | 技能测评集 | `SkillEvalSuite` | **Entity** | Pydantic `BaseModel`（frozen） | 按平台或单个 Skill 组织评测用例的治理资产；不等同于一次评测运行 |
+| 技能评测任务 | `SkillEvalTask` | **Entity** | Pydantic `BaseModel`（frozen） | 一次可被多条类型化断言验证的端到端 Skill 任务；通过 revision 在工作区演进 |
+| 评测数据定位 | `SkillEvalDataLocator` | **Value Object** | Pydantic `BaseModel`（frozen） | 用业务资源类型和 ID 安全定位评测数据，不包含物理表名或查询语句 |
+| 评测环境要求 | `SkillEvalEnvironmentRequirement` | **Value Object** | Pydantic `BaseModel`（frozen） | 任务声明的数据源、政策、语义、工具、模型或安全依赖 |
+| 技能评测数据集版本 | `SkillEvalDatasetVersion` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 冻结任务快照、环境契约和验证方案哈希的不可变版本 |
+| 技能评测基准 | `SkillEvalBenchmark` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 绑定数据集版本、类型化环境快照、验证方案和硬门禁的不可变定义 |
+| 评测轨迹接力点 | `TrajectoryPrefix` | **Value Object** | Pydantic `BaseModel`（frozen） | 仅保存可恢复结构化状态 schema 的执行边界，不包含隐藏思维过程 |
+| 评测失败归因 | `FailureAttribution` | **Value Object** | Pydantic `BaseModel`（frozen） | 记录责任类型、失败阶段、稳定机器码和证据引用 |
 | 技能评测用例 | `SkillEvalCase` | **Entity** | Pydantic `BaseModel`（frozen） | 归属于一个 SkillEvalSuite，固定、脱敏且可追溯的路由回归问题模板 |
 | 技能评测运行 | `SkillEvalRun` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 绑定候选版本、基线、测试集和配置哈希的批量评测证据 |
 | 技能评测结果 | `SkillEvalResult` | **Entity** | Pydantic `BaseModel`（frozen） | 单条用例的候选/基线路由结果与差异分类 |
@@ -601,6 +608,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - `McpCapability.requires_human_confirmation` 为 `True` 时（高风险或有外部副作用），必须等待人工确认
 - `ToolOwner` 与 `Role` 枚举部分重复但缺少 `CLINICIAN`，使用时需注意
 - Skill 评测用例禁止保存患者原始上下文或含敏感信息的样本
+- SkillEvalDatasetVersion、SkillEvalBenchmark、SkillEvalRun 及其任务结果、轨迹和归因均不可修改；工作区任务通过 revision 产生新快照
+- 评测轨迹只保存动作、脱敏观察和结构化状态，禁止保存模型隐藏思维过程
 - Skill 错误统一先进 `SkillEvalCasePoolItem`；routing 投影到现有 `SkillEvalCase`，其余五类写入 `SkillRegressionCase`；`other` 仅表示尚未完成分型，不生成可执行资产
 - 回归用例的 `expected_assertions` 必须是判别联合结构化断言，禁止保存自然语言裸 expected；历史回答不直接成为 expected
 - 评测器缺失时回归用例状态为 `blocked_by_evaluator`，不会显示通过或放行发布；非路由结果不污染 top1 accuracy
@@ -958,6 +967,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Evidence` | 证据材料 | Appeal | Entity |
 | `ExecutionProfileSpec` | 执行场景 | SkillTool | Value Object |
 | `FeeItem` | 费用明细 | OrderFee | Entity |
+| `FailureAttribution` | 评测失败归因 | SkillTool | Value Object |
 | `HisPort` | HIS 适配器端口 | Patient | Domain Service |
 | `Hypothesis` | 推理假设 | Runtime | Entity |
 | `InsuranceInterfacePort` | 医保接口适配器端口 | Insurance | Domain Service |
@@ -1009,6 +1019,11 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `SkillExecutionEngine` | 技能执行引擎 | SkillTool | Domain Service |
 | `SkillExecutionContract` | 技能执行契约 | SkillTool | Value Object |
 | `SkillEvalSuite` | 技能测评集 | SkillTool | Entity |
+| `SkillEvalTask` | 技能评测任务 | SkillTool | Entity |
+| `SkillEvalDataLocator` | 评测数据定位 | SkillTool | Value Object |
+| `SkillEvalEnvironmentRequirement` | 评测环境要求 | SkillTool | Value Object |
+| `SkillEvalDatasetVersion` | 技能评测数据集版本 | SkillTool | Aggregate Root |
+| `SkillEvalBenchmark` | 技能评测基准 | SkillTool | Aggregate Root |
 | `SkillGovernancePriority` | 技能治理优先级 | SkillTool | Value Object |
 | `SkillGovernanceStage` | 技能治理阶段 | SkillTool | Value Object |
 | `SkillMetadata` | 技能元数据 | SkillTool | Value Object |
@@ -1019,6 +1034,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `TaskConfirmRequest` | 任务确认请求 | TaskClosure | DTO |
 | `TokenUsage` | Token 用量 | ModelService | Value Object |
 | `ToolOwner` | 技能拥有者 | SkillTool | Value Object |
+| `TrajectoryPrefix` | 评测轨迹接力点 | SkillTool | Value Object |
 | `Treatment` | 诊疗项目 | OrderFee | Value Object |
 | `VisibilityScope` | 可见性范围 | Knowledge | Value Object |
 | `ValidationIssue` | 校验问题 | Knowledge | Value Object |

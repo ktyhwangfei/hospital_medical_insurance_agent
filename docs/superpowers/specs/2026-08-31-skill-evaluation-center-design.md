@@ -151,7 +151,7 @@ runtime/task_closure（现有任务闭环）
 ### 4.3 既有用例的兼容定位
 
 - `SkillEvalCase` 继续只表示路由断言；
-- `SkillRegressionCase` 继续表示计算、政策内容、引用、答案质量和安全断言，并增加 `behavior` 业务行为类型；
+- `SkillRegressionCase` 继续表示计算、政策内容、引用、答案质量和安全断言；任务级 `dimension` 可将既有确定性断言归入 `behavior` 业务行为维度，不新增平行验证器；
 - 两者逐步增加可选 `task_id`；
 - 同一个任务可以引用多条断言；
 - 没有 `task_id` 的历史用例由兼容层合成为“单断言任务”，不要求一次性迁移；
