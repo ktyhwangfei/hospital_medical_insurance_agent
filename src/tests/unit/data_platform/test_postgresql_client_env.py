@@ -93,3 +93,43 @@ def test_no_env_returns_none(monkeypatch):
     monkeypatch.delenv("POSTGRES_HOST", raising=False)
     c = PostgreSQLClient()
     assert c._database_url is None
+
+
+def test_startup_log_never_prints_database_password(monkeypatch, capsys):
+    import sys
+    from types import SimpleNamespace
+
+    connection = SimpleNamespace(closed=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda *_args, **_kwargs: connection),
+    )
+    client = PostgreSQLClient(
+        database_url="postgresql://operator:never-print-me@db.example:5432/hospital_mcp"
+    )
+
+    client._ensure_connected()
+
+    output = capsys.readouterr().out
+    assert "never-print-me" not in output
+    assert "db.example:5432/hospital_mcp" in output
+
+
+def test_connection_error_redacts_database_url(monkeypatch, capsys):
+    import sys
+    from types import SimpleNamespace
+    import pytest
+
+    database_url = "postgresql://operator:never-print-me@db.example:5432/hospital_mcp"
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(database_url))),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        PostgreSQLClient(database_url=database_url)._ensure_connected()
+
+    assert "never-print-me" not in capsys.readouterr().out
+    assert "never-print-me" not in str(exc_info.value)
