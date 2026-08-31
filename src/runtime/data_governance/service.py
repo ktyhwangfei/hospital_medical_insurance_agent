@@ -22,6 +22,7 @@ from src.data_platform.outpatient_governance import (
     PostgresTargetStatus,
 )
 from src.security.data_source_credentials import (
+    DataSourceCredentialError,
     DataSourceCredentialVault,
     data_source_endpoint,
 )
@@ -455,6 +456,8 @@ class DataGovernanceService:
 def _safe_connection_error(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, SourceContractMismatchError):
         return "source_contract_mismatch", "源表结构不符合门诊数据契约"
+    if isinstance(exc, DataSourceCredentialError):
+        return "credential_unavailable", "数据源凭据需重新提交"
     if isinstance(exc, TimeoutError):
         return "timeout", "连接超时"
     message = str(exc).lower()

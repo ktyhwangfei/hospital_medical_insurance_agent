@@ -122,6 +122,27 @@ class _StaleCredentialService(_Service):
         return self.sources[source_id]
 
 
+class _OldMasterKeyService(_StaleCredentialService):
+    def __init__(self):
+        super().__init__()
+        self.sources["bjybdb"].credential_configured = True
+        self.rotated = False
+
+    def probe_connection(self, source_id):
+        if not self.rotated:
+            return SimpleNamespace(
+                status=ConnectionStatus.ERROR,
+                error_code="credential_unavailable",
+                safe_message="数据源凭据需重新提交",
+            )
+        return super().probe_connection(source_id)
+
+    def rotate_credential(self, *args, **kwargs):
+        source = super().rotate_credential(*args, **kwargs)
+        self.rotated = True
+        return source
+
+
 def _command(password="never-print-this"):
     return CreateDataSourceCommand(
         source_id="bjybdb",
@@ -163,6 +184,15 @@ def test_bootstrap_rebinds_an_existing_unconfigured_credential() -> None:
 
     assert result.platform_ready is True
     assert service.rotate_expected_revision == 3
+
+
+def test_bootstrap_reseals_a_credential_after_master_key_rotation() -> None:
+    service = _OldMasterKeyService()
+
+    result = bootstrap(service, _command())
+
+    assert result.platform_ready is True
+    assert service.rotated is True
 
 
 def test_bootstrap_fails_closed_when_postgresql_is_not_writable() -> None:

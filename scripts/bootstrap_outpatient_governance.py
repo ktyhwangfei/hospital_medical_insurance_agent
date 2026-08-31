@@ -102,7 +102,7 @@ def bootstrap(service, command: CreateDataSourceCommand) -> BootstrapResult:
     source_probe = service.probe_connection(source.source_id)
     if (
         source_probe.status is ConnectionStatus.ERROR
-        and source_probe.error_code == "authentication_failed"
+        and source_probe.error_code in {"authentication_failed", "credential_unavailable"}
     ):
         source = service.rotate_credential(
             source.source_id,

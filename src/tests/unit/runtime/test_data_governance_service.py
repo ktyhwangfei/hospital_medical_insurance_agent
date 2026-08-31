@@ -158,6 +158,23 @@ def test_connection_probe_returns_only_safe_error_code(monkeypatch) -> None:
     assert store.updates[-1].connection_status is ConnectionStatus.ERROR
 
 
+def test_connection_probe_identifies_credentials_encrypted_with_an_old_key(monkeypatch) -> None:
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+    store = _GovernanceStore()
+    DataGovernanceService(
+        store, _PostgresStore(), lambda _source, _password: _Connection()
+    ).create_source(_command(), actor="admin-1")
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+
+    result = DataGovernanceService(
+        store, _PostgresStore(), lambda _source, _password: _Connection()
+    ).probe_connection("bjybdb")
+
+    assert result.status is ConnectionStatus.ERROR
+    assert result.error_code == "credential_unavailable"
+    assert result.safe_message == "数据源凭据需重新提交"
+
+
 def test_connection_probe_closes_successful_connection(monkeypatch) -> None:
     monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
     store = _GovernanceStore()
