@@ -66,6 +66,10 @@ class TestRouteQuestion:
         result = route_question("为什么统筹自付这么多")
         assert result == "settlement_explain_skill"
 
+    @pytest.mark.parametrize("question", ["部分项目预退费分析", "这笔费用做退费试算"])
+    def test_matches_outpatient_pre_refund_analysis(self, question):
+        assert route_question(question) == "outpatient_pre_refund_analysis_skill"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # ② route_question — 边界条件（空/无关）

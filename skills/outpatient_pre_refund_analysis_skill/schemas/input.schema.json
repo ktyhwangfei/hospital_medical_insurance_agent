@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["original_trade_no", "items"],
+  "properties": {
+    "original_trade_no": {"type": "string", "minLength": 1},
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fee_detail_id", "refund_quantity"],
+        "properties": {
+          "fee_detail_id": {"type": "string", "minLength": 1},
+          "refund_quantity": {
+            "type": "string",
+            "pattern": "^(?:[1-9]\\d*(?:\\.\\d+)?|0\\.\\d*[1-9]\\d*)$"
+          }
+        }
+      }
+    }
+  }
+}

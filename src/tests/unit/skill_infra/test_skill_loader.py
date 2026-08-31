@@ -34,6 +34,17 @@ class TestSkillLoaderDiscovery:
         skills = loader.discover()
         assert "settlement_explain_skill" in skills
 
+    def test_discovers_outpatient_pre_refund_analysis_skill(self):
+        loader = SkillLoader()
+        loader.discover()
+
+        skill = loader.get("outpatient_pre_refund_analysis_skill")
+
+        assert skill is not None
+        assert skill.business_action == "evaluate"
+        assert skill.business_object == "settlement"
+        assert "预退费" in skill.include_keywords
+
     def test_discover_returns_dict_of_loaded_skill(self):
         """返回 dict[str, LoadedSkill] 类型。"""
         loader = SkillLoader()
