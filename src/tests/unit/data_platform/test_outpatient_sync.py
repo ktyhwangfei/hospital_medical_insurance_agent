@@ -15,6 +15,7 @@ from src.adapters.insurance_interface.outpatient_source import (
     OutpatientSourceMode,
 )
 from src.data_platform.outpatient_sync import OutpatientSyncService
+from src.data_platform.outpatient_sync import build_snapshot_changes
 
 
 NOW = datetime(2026, 8, 28, 8, tzinfo=timezone.utc)
@@ -70,6 +71,12 @@ class _Store:
             )
             for capture, rows in self.rows.items()
         }
+
+    def load_projection_rows_for_window(self, _start, _end):
+        return self.rows
+
+    def load_all_projection_rows(self):
+        return self.rows
 
     def publish_batch(self, **kwargs):
         if self.fail:
@@ -297,3 +304,67 @@ def test_retention_gap_fails_closed_and_unpublished_model_blocks_queryability() 
     assert "semantic_model_unavailable" in {
         issue["rule_code"] for issue in store.calls[0]["quality_summary"]["issues"]
     }
+
+
+def test_snapshot_diff_detects_insert_update_and_scoped_delete() -> None:
+    current = {
+        "dbo_o_Trade": (_trade("T1", T_FeeAll=Decimal("10")), _trade("T2", T_FeeAll=Decimal("20"))),
+        "dbo_o_FeeItem": (),
+        "dbo_o_Diagnose": (),
+    }
+    incoming = {
+        "dbo_o_Trade": (_trade("T1", T_FeeAll=Decimal("11")), _trade("T3", T_FeeAll=Decimal("30"))),
+        "dbo_o_FeeItem": (),
+        "dbo_o_Diagnose": (),
+    }
+
+    changes = build_snapshot_changes(current, incoming, {"T1", "T2", "T3"}, NOW)
+
+    assert {(change.source_key, change.operation) for change in changes} == {
+        (("T1",), 4),
+        (("T2",), 1),
+        (("T3",), 2),
+    }
+    repeated = build_snapshot_changes(incoming, incoming, {"T1", "T3"}, NOW)
+    assert repeated == ()
+
+
+def test_snapshot_diff_does_not_delete_rows_outside_window_scope() -> None:
+    current = {
+        "dbo_o_Trade": (_trade("OUTSIDE"),),
+        "dbo_o_FeeItem": (),
+        "dbo_o_Diagnose": (),
+    }
+    incoming = {capture: () for capture in current}
+
+    assert build_snapshot_changes(current, incoming, {"INSIDE"}, NOW) == ()
+
+
+def test_scheduled_window_reuses_quality_and_atomic_publish_pipeline() -> None:
+    current = {
+        "dbo_o_Trade": (_trade("T1", T_FeeAll=Decimal("90")),),
+        "dbo_o_FeeItem": (),
+        "dbo_o_Diagnose": (),
+    }
+    batch = OutpatientSourceBatch(
+        mode=OutpatientSourceMode.SCHEDULED_SQL,
+        checkpoint=OutpatientCheckpoint(CheckpointKind.TIME_WINDOW, NOW.isoformat(), NOW),
+        snapshot_rows={
+            "dbo_o_Trade": (_trade("T1"),),
+            "dbo_o_FeeItem": (),
+            "dbo_o_Diagnose": (),
+        },
+        scope_trade_nos=frozenset({"T1"}),
+        window_start=NOW,
+        window_end=NOW,
+    )
+    store = _Store(
+        checkpoint=OutpatientCheckpoint(CheckpointKind.TIME_WINDOW, NOW.isoformat(), NOW),
+        rows=current,
+    )
+
+    result = OutpatientSyncService(_Source(batches=[batch]), store, _Registry()).run_once()
+
+    assert result.mode == "incremental"
+    assert store.calls[0]["batch"].mode is OutpatientSourceMode.SCHEDULED_SQL
+    assert store.calls[0]["batch"].changes[0].operation == 4

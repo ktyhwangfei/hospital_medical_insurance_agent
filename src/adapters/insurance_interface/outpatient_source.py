@@ -100,6 +100,8 @@ class OutpatientSourceBatch:
     snapshot_rows: dict[str, tuple[dict[str, Any], ...]] | None = None
     scope_trade_nos: frozenset[str] = field(default_factory=frozenset)
     is_baseline: bool = False
+    window_start: datetime | None = None
+    window_end: datetime | None = None
 
 
 class OutpatientSource(Protocol):

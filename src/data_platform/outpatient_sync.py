@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+import json
 from typing import Any
 
 from src.adapters.insurance_interface.outpatient_source import (
@@ -12,6 +13,7 @@ from src.adapters.insurance_interface.outpatient_source import (
     OutpatientChange,
     OutpatientCheckpoint,
     OutpatientSourceBatch,
+    OutpatientSourceMode,
 )
 
 
@@ -46,9 +48,24 @@ class OutpatientSyncService:
         checkpoint = self._store.get_checkpoint(self._source_id)
         batch = self._source.read(checkpoint)
         if batch.snapshot_rows is not None:
-            changes = _snapshot_changes(batch)
-            mode = "snapshot"
-            rows = batch.snapshot_rows
+            if batch.mode is OutpatientSourceMode.SCHEDULED_SQL:
+                if batch.is_baseline:
+                    rows = self._store.load_all_projection_rows()
+                else:
+                    rows = self._store.load_projection_rows_for_window(
+                        batch.window_start, batch.window_end
+                    )
+                scope = set(batch.scope_trade_nos) | _trade_nos(rows)
+                changes = build_snapshot_changes(
+                    rows, batch.snapshot_rows, scope, batch.checkpoint.observed_at
+                )
+                mode = "snapshot" if batch.is_baseline else (
+                    "incremental" if changes else "heartbeat"
+                )
+            else:
+                changes = _snapshot_changes(batch)
+                mode = "snapshot"
+                rows = batch.snapshot_rows
             batch = replace(batch, changes=changes)
         else:
             changes = batch.changes
@@ -115,6 +132,84 @@ def _affected_trade_nos(changes: tuple[OutpatientChange, ...]) -> set[str]:
         if original not in (None, ""):
             values.add(str(original))
     return values
+
+
+def build_snapshot_changes(
+    current: dict[str, tuple[dict[str, Any], ...]],
+    incoming: dict[str, tuple[dict[str, Any], ...]],
+    scope_trade_nos: set[str],
+    observed_at: datetime,
+) -> tuple[OutpatientChange, ...]:
+    changes: list[OutpatientChange] = []
+    timestamp = int(observed_at.timestamp() * 1_000_000).to_bytes(8, "big", signed=True)
+    for capture_index, capture in enumerate(_CAPTURES, start=1):
+        spec = OUTPATIENT_SOURCE_SPECS[capture]
+        current_by_key = _rows_by_key(current.get(capture, ()), spec.key_columns)
+        incoming_by_key = _rows_by_key(incoming.get(capture, ()), spec.key_columns)
+        actions = []
+        for key in sorted(set(current_by_key) | set(incoming_by_key), key=repr):
+            old = current_by_key.get(key)
+            new = incoming_by_key.get(key)
+            if old is None:
+                actions.append((key, 2, new))
+            elif new is None:
+                if _trade_no(old) in scope_trade_nos:
+                    actions.append((key, 1, old))
+            elif _canonical_payload(old) != _canonical_payload(new):
+                actions.append((key, 4, new))
+        for row_index, (key, operation, payload) in enumerate(actions, start=1):
+            changes.append(OutpatientChange(
+                capture_instance=capture,
+                source_cursor=(
+                    timestamp
+                    + capture_index.to_bytes(2, "big")
+                    + row_index.to_bytes(8, "big")
+                ),
+                operation=operation,
+                commit_time=observed_at,
+                source_key=key,
+                payload=dict(payload),
+            ))
+    return tuple(changes)
+
+
+def _rows_by_key(rows, key_columns):
+    return {
+        tuple(row.get(column) for column in key_columns): dict(row)
+        for row in rows
+    }
+
+
+def _trade_nos(rows_by_capture) -> set[str]:
+    return {
+        trade_no
+        for rows in rows_by_capture.values()
+        for row in rows
+        if (trade_no := _trade_no(row)) is not None
+    }
+
+
+def _canonical_payload(payload) -> str:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_canonical_value,
+    )
+
+
+def _canonical_value(value):
+    if isinstance(value, datetime):
+        value = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return format(value.normalize(), "f")
+    if isinstance(value, bytes):
+        return value.hex()
+    raise TypeError(f"unsupported snapshot value: {type(value).__name__}")
 
 
 def _checkpoint_bytes(checkpoint: OutpatientCheckpoint) -> bytes:

@@ -221,3 +221,18 @@ def test_publish_batch_rolls_back_before_batch_and_checkpoint_on_projection_erro
     assert client.rolled_back is True
     assert not any("INSERT INTO outpatient_sync_batches" in item for item in sql)
     assert not any("INSERT INTO outpatient_sync_checkpoints" in item for item in sql)
+
+
+def test_window_projection_read_is_parameterized_and_loads_children_by_trade() -> None:
+    client = _FakeClient()
+    store = OutpatientPostgresStore(client=client)
+    start = datetime(2026, 8, 31, 8, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 31, 10, tzinfo=timezone.utc)
+
+    store.load_projection_rows_for_window(start, end)
+
+    trade_sql, params = next(
+        item for item in client.schema_sql if "FROM outpatient_trade_current" in item[0]
+    )
+    assert "trade_date >= %s AND trade_date < %s" in trade_sql
+    assert params == (start, end)

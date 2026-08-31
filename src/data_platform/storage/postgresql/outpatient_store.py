@@ -404,6 +404,48 @@ class OutpatientPostgresStore:
             "dbo_o_Diagnose": tuple(_payload(row["payload"]) for row in diagnosis_rows),
         }
 
+    def load_projection_rows_for_window(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> dict[str, tuple[dict[str, Any], ...]]:
+        trade_rows = self._client.execute(
+            """SELECT payload FROM outpatient_trade_current
+               WHERE NOT is_deleted AND trade_date >= %s AND trade_date < %s""",
+            (start, end),
+        )
+        trades = tuple(_payload(row["payload"]) for row in trade_rows)
+        trade_nos = {
+            str(row["T_TradeNo"])
+            for row in trades
+            if row.get("T_TradeNo") not in (None, "")
+        }
+        if not trade_nos:
+            return {
+                "dbo_o_Trade": trades,
+                "dbo_o_FeeItem": (),
+                "dbo_o_Diagnose": (),
+            }
+        children = self.load_projection_rows(trade_nos)
+        children["dbo_o_Trade"] = trades
+        return children
+
+    def load_all_projection_rows(self) -> dict[str, tuple[dict[str, Any], ...]]:
+        tables = {
+            "dbo_o_Trade": "outpatient_trade_current",
+            "dbo_o_FeeItem": "outpatient_fee_item_current",
+            "dbo_o_Diagnose": "outpatient_diagnosis_current",
+        }
+        return {
+            capture: tuple(
+                _payload(row["payload"])
+                for row in self._client.execute(
+                    f"SELECT payload FROM {table} WHERE NOT is_deleted"
+                )
+            )
+            for capture, table in tables.items()
+        }
+
     def get_sync_status(self, source_id: str) -> OutpatientSyncStatus:
         checkpoint = self.get_checkpoint(source_id)
         latest_rows = self._client.execute(
