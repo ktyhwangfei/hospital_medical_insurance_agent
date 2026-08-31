@@ -239,6 +239,7 @@ export interface SkillVersionSyncRequest {
 
 export interface SkillEvalCaseResponse {
   case_id: string
+  suite_id: string
   suite_version: number
   question_template: string
   expected_skill_id?: string | null
@@ -261,6 +262,7 @@ export interface SkillEvalCaseListResponse {
 }
 
 export interface SkillEvalCaseCreateRequest {
+  suite_id?: string
   question_template: string
   expected_skill_id?: string | null
   required?: boolean
@@ -269,6 +271,39 @@ export interface SkillEvalCaseCreateRequest {
   source_type?: string
   source_ref?: string
   contains_sensitive_data?: false
+}
+
+export interface SkillEvalSuiteResponse {
+  suite_id: string
+  name: string
+  scope: 'platform' | 'skill'
+  skill_id?: string | null
+  purpose: string
+  status: 'active' | 'inactive'
+  revision: number
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillEvalSuiteListResponse {
+  items: SkillEvalSuiteResponse[]
+  total: number
+}
+
+export interface SkillEvalSuiteCreateRequest {
+  name: string
+  scope: 'platform' | 'skill'
+  skill_id?: string | null
+  purpose: string
+}
+
+export interface SkillEvalSuiteUpdateRequest {
+  name: string
+  purpose: string
+  status: 'active' | 'inactive'
+  expected_revision: number
 }
 
 export interface SkillEvalMetricsResponse {

@@ -80,8 +80,54 @@ export async function syncInfraSkillVersion(
   )
 }
 
-export async function listSkillEvalCases(): Promise<SkillEvalCaseListResponse> {
-  return requestJson<SkillEvalCaseListResponse>('/infra-skills/eval-cases')
+export async function listSkillEvalCases(params?: {
+  suiteId?: string
+}): Promise<SkillEvalCaseListResponse> {
+  const search = new URLSearchParams()
+  if (params?.suiteId) search.set('suite_id', params.suiteId)
+  const query = search.toString()
+  return requestJson<SkillEvalCaseListResponse>(
+    `/infra-skills/eval-cases${query ? `?${query}` : ''}`,
+  )
+}
+
+export async function listSkillEvalSuites(params?: {
+  skillId?: string
+  includeInactive?: boolean
+}): Promise<SkillEvalSuiteListResponse> {
+  const search = new URLSearchParams()
+  if (params?.skillId) search.set('skill_id', params.skillId)
+  if (params?.includeInactive !== undefined) {
+    search.set('include_inactive', String(params.includeInactive))
+  }
+  const query = search.toString()
+  return requestJson<SkillEvalSuiteListResponse>(
+    `/infra-skills/eval-suites${query ? `?${query}` : ''}`,
+  )
+}
+
+export async function createSkillEvalSuite(
+  request: SkillEvalSuiteCreateRequest,
+): Promise<SkillEvalSuiteResponse> {
+  return requestJson<SkillEvalSuiteResponse>('/infra-skills/eval-suites', {
+    method: 'POST',
+    headers: skillEvaluationHeaders(),
+    body: JSON.stringify(request),
+  })
+}
+
+export async function updateSkillEvalSuite(
+  suiteId: string,
+  request: SkillEvalSuiteUpdateRequest,
+): Promise<SkillEvalSuiteResponse> {
+  return requestJson<SkillEvalSuiteResponse>(
+    `/infra-skills/eval-suites/${encodeURIComponent(suiteId)}`,
+    {
+      method: 'PUT',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify(request),
+    },
+  )
 }
 
 export async function createSkillEvalCase(
@@ -373,6 +419,10 @@ import type {
   SkillEvalCaseCreateRequest,
   SkillEvalCaseListResponse,
   SkillEvalCaseResponse,
+  SkillEvalSuiteCreateRequest,
+  SkillEvalSuiteListResponse,
+  SkillEvalSuiteResponse,
+  SkillEvalSuiteUpdateRequest,
   SkillEvalRunCreateRequest,
   SkillEvalRunListResponse,
   SkillEvalRunResponse,

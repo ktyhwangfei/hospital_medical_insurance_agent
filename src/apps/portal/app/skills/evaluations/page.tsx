@@ -21,6 +21,7 @@ import type {
 } from '@/lib/types'
 import RunDetail from '@/components/skills/skill-eval-run-detail'
 import SkillEvalLaunchPanel from '@/components/skills/skill-eval-launch-panel'
+import SkillEvalSuitePanel from '@/components/skills/skill-eval-suite-panel'
 
 const RUN_STATUS_TONE: Record<string, string> = {
   passed: 'bg-emerald-50 text-emerald-700',
@@ -53,13 +54,14 @@ function EvaluationsContent() {
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
   const [busyCases, setBusyCases] = useState(false)
+  const [selectedSuiteId, setSelectedSuiteId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const [c, r] = await Promise.all([
-        listSkillEvalCases(),
+        listSkillEvalCases({ suiteId: selectedSuiteId ?? undefined }),
         listAllSkillEvalRuns(skillFilter ? { skillId: skillFilter, limit: 50 } : { limit: 50 }),
       ])
       setCases(c)
@@ -69,7 +71,7 @@ function EvaluationsContent() {
     } finally {
       setLoading(false)
     }
-  }, [skillFilter])
+  }, [selectedSuiteId, skillFilter])
 
   useEffect(() => {
     void Promise.resolve().then(load)
@@ -81,7 +83,11 @@ function EvaluationsContent() {
     setAdding(true)
     setAddError(null)
     try {
-      await createSkillEvalCase({ question_template: q, expected_skill_id: skillFilter })
+      await createSkillEvalCase({
+        suite_id: selectedSuiteId ?? 'EVS_platform_routing',
+        question_template: q,
+        expected_skill_id: skillFilter,
+      })
       setNewQuestion('')
       await load()
     } catch (err) {
@@ -149,6 +155,12 @@ function EvaluationsContent() {
           </p>
         )}
       </header>
+
+      <SkillEvalSuitePanel
+        skillId={skillFilter}
+        selectedSuiteId={selectedSuiteId}
+        onSelect={setSelectedSuiteId}
+      />
 
       {error && (
         <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
