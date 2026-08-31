@@ -852,6 +852,23 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.5. 门诊数据治理控制面（Outpatient Data Governance）
+
+#### 文件位置
+
+`src/data_platform/outpatient_governance.py` + `src/adapters/insurance_interface/outpatient_source.py`
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 门诊数据源 | `OutpatientDataSource` | **DTO** | Pydantic `BaseModel` | 一家医院的门诊 SQL Server 只读数据源配置，不含密码或密文 |
+| 同步任务 | `OutpatientSyncJob` | **DTO** | Pydantic `BaseModel` | 数据源唯一的 CDC 或定时 SQL 同步运行配置；禁止另建 `pipeline`、`source job`、`import task` 同义模型 |
+| 同步尝试 | `OutpatientSyncAttempt` | **DTO** | Pydantic `BaseModel` | 同步任务一次可审计的实际执行记录 |
+| 来源检查点 | `OutpatientCheckpoint` | **Value Object** | `@dataclass(frozen=True)` | CDC LSN 或定时 SQL 时间窗的来源中立进度位置 |
+
+---
+
 ### 15. AI 编程工作流契约
 
 #### 契约 1：先查后写

@@ -523,7 +523,7 @@ def _scan_single_table_full(conn: Any, tschema: str, tname: str,
     return fields, total_rows
 
 
-def scan_sqlserver(cfg: dict, store=None) -> dict:
+def scan_sqlserver(cfg: dict, store=None, connection=None) -> dict:
     """扫描 SQL Server，返回 discovery 结果结构。
 
     如果 store（DiscoveryStore）可用，使用增量扫描：
@@ -535,23 +535,30 @@ def scan_sqlserver(cfg: dict, store=None) -> dict:
     exclude_prefixes = cfg.get("exclude_prefixes", ["sys_", "dt_", "MSreplication_"])
     sample_limit = cfg.get("sample_limit", 10000)
 
-    conn = None
-    try:
-        conn, _used_driver = _try_connect(cfg)
-    except RuntimeError:
-        if cfg.get("fallback_to_env"):
-            env_conn_str = _env_fallback_conn_str()
-            if env_conn_str:
-                logger.info("页面配置连接失败，回退到环境变量配置")
-                try:
-                    conn = _connect(env_conn_str)
-                except Exception as exc2:
-                    raise RuntimeError(f"SQL Server 环境变量连接也失败: {exc2}") from exc2
-            else:
+    conn = connection
+    if conn is None:
+        try:
+            conn, _used_driver = _try_connect(cfg)
+        except RuntimeError:
+            if not cfg.get("fallback_to_env"):
                 raise
-        else:
-            raise
+            env_conn_str = _env_fallback_conn_str()
+            if not env_conn_str:
+                raise
+            logger.info("页面配置连接失败，回退到环境变量配置")
+            try:
+                conn = _connect(env_conn_str)
+            except Exception as exc2:
+                raise RuntimeError(f"SQL Server 环境变量连接也失败: {exc2}") from exc2
+    try:
+        return _scan_connected(
+            conn, schema, tables_filter, exclude_prefixes, sample_limit, store
+        )
+    finally:
+        conn.close()
 
+
+def _scan_connected(conn, schema, tables_filter, exclude_prefixes, sample_limit, store):
     tables = _query_tables(conn, schema, tables_filter, exclude_prefixes)
     fields: list[dict] = []
     tables_seen: set[str] = set()

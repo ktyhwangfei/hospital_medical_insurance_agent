@@ -12,10 +12,10 @@
 
 | 阶段 | 状态 | 计划或基线 | 进入条件 | 完成门槛 |
 |---|---|---|---|---|
-| P0 数据契约 | ready | `2026-08-27-outpatient-p0-data-contract.md` | 已有 SQL Server 只读画像权限 | 键、关系、金额、游标、容量和字段依赖均有脱敏证据并获业务/数据负责人确认 |
-| P1 近实时数据底座 | gated | P0 通过后编写 | 明细源和可靠增量游标已冻结 | PostgreSQL 单一路径刷新 P95 不超过 5 分钟，批次原子发布，`mzjyxx.queryable=true` |
+| P0 数据契约 | complete | `2026-08-27-outpatient-p0-data-contract.md` + [预填设计决策稿](../../reviews/2026-08-28-outpatient-p0-prefilled-design-decision.md) | `bjybdb`、v3 查询模型、主要值域和 Issue20 依赖已自主核验；D01–D12 已确认 | D01–D12 已确认；外部开通项移交实施阶段 |
+| P1 近实时数据底座 | impl_done | `2026-08-28-outpatient-p1-near-real-time-data-foundation.md` + `2026-08-31-outpatient-data-governance-center.md` | 已满足：P0 设计确认；CDC/只读账号作为实施任务而非设计问卷 | CDC/定时 SQL 双模式、数据治理页面与本地验证完成；仍须目标环境注册 `bjybdb`、执行所选模式、取得 100 个非空批次 P95 ≤ 300 秒证据并完成 Firefox 生产态复验后改为 complete |
 | P2 门诊结算核验 | baseline | `2026-08-26-mzsettlement-verify-skill.md` | P1 发布的数据集和内部结算锚点可用 | 九个 Profile、Decimal 勾稽、字段四态、政策证据和回归矩阵通过 |
-| P3 运营受控问数 | gated | P2 通过后编写 | 六指标、五维度及可信问题口径已冻结 | 指标查询与科室→就诊下钻通过可信问题自动验收 |
+| P3 运营受控问数 | gated | P2 通过后编写 | 五个可确定指标、五维度及可信问题口径已冻结；就诊人次保持 unavailable | 指标查询与科室→就诊下钻通过可信问题自动验收 |
 | P4 统一助手与工作台 | gated | P3 通过后编写 | 后端结果契约稳定；身份上下文接口可模拟 | 同一入口完成政策咨询、门诊核验和运营问数，前端不要求结算 ID |
 | P5 上线加固 | gated | 医院确认 SSO/扫码方案后编写 | 身份提供方、组织角色和数据范围接口明确 | 权限、高风险拦截、审计、准确率、性能和回滚门槛全部通过 |
 
@@ -29,4 +29,4 @@
 
 ## 当前执行点
 
-只执行 P0。P0 未证明可靠增量游标时，不开始每分钟同步开发；未证明 `o_FeeItem` 金额口径时，不发布该明细源；未证明候选键唯一时，不创建可查询语义版本。
+P0 事实探查和设计确认已完成，D01–D12 全部采用。P1 数据底座及独立数据治理中心已实现：PostgreSQL 原子落地、CDC/受控定时 SQL、worker、配置 API 和中文 Portal 均完成本地验证；全仓 2409 passed，Portal 367 passed，Chromium/WebKit E2E 通过。目标环境尚未提供 `bjybdb` 完整连接凭据，因而没有真实批次、LSN 或 P95 证据；Firefox 还需在无 Next dev HMR 干扰的环境复验。P1 保持 `impl_done`，P2 保持 `baseline`。下一步由目标环境管理员登记只读数据源；允许 CDC 时由 DBA 审核开通，不允许时直接选择定时 SQL。扫码/SSO 仍是后续实施项。

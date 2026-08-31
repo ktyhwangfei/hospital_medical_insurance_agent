@@ -12,20 +12,29 @@
 
 $ErrorActionPreference = "SilentlyContinue"
 
-$WORKDIR = Split-Path -Parent $MyInvocation.MyCommand.Path
+$invokedWorkdir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$workdirItem = Get-Item -LiteralPath $invokedWorkdir
+$linkTarget = @($workdirItem.Target)[0]
+$WORKDIR = if ($linkTarget) {
+    if ([System.IO.Path]::IsPathRooted($linkTarget)) { $linkTarget } else { Join-Path $invokedWorkdir $linkTarget }
+} else {
+    $invokedWorkdir
+}
 $STATE_FILE = Join-Path $WORKDIR ".server-ports.json"
 
 # Resolve ports: persisted pair only. Without state file there is nothing scoped to stop.
 $backendPort = $null
 $frontendPort = $null
+$workerPid = $null
 if (Test-Path $STATE_FILE) {
     try {
         $state = Get-Content $STATE_FILE -Raw | ConvertFrom-Json
         if ($state.backend_port) { $backendPort = [int]$state.backend_port }
         if ($state.frontend_port) { $frontendPort = [int]$state.frontend_port }
+        if ($state.worker_pid) { $workerPid = [int]$state.worker_pid }
     } catch {}
 }
-if (-not $backendPort -and -not $frontendPort) {
+if (-not $backendPort -and -not $frontendPort -and -not $workerPid) {
     Write-Host "No .server-ports.json found; nothing scoped to stop." -ForegroundColor Gray
     exit 0
 }
@@ -38,6 +47,20 @@ function Get-ListeningPids([int]$port) {
 
 $toKill = [System.Collections.Generic.HashSet[int]]::new()
 $note = @()
+
+# Worker: persisted PID must name both this worktree and the scoped worker script.
+if ($workerPid) {
+    $workerProc = Get-CimInstance Win32_Process -Filter "ProcessId=$workerPid" -ErrorAction SilentlyContinue
+    if (
+        $workerProc -and
+        $workerProc.CommandLine.Contains($WORKDIR) -and
+        $workerProc.CommandLine.Contains("run_outpatient_sync_worker.py")
+    ) {
+        $null = $toKill.Add([int]$workerProc.ProcessId)
+    } elseif ($workerProc) {
+        $note += "worker PID $workerPid does not match this worktree (skipped)"
+    }
+}
 
 # Backend: listening PID on our backend port must match our uvicorn signature.
 if ($backendPort) {
@@ -85,6 +108,7 @@ $still = 0
 foreach ($p in @($backendPort, $frontendPort)) {
     if ($p) { $still += @(Get-ListeningPids $p).Count }
 }
+if ($workerPid -and (Get-Process -Id $workerPid -ErrorAction SilentlyContinue)) { $still += 1 }
 if ($still -gt 0) {
     Write-Warning "Residual listeners remain on scoped ports (count=$still). Check netstat -ano." 
     exit 2

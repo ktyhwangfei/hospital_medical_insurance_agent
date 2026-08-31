@@ -14,6 +14,8 @@
 
 **当前阶段**：后端 + 前端全链路实现完成，T1/T2a/T2b + Portal 验证通过；待浏览器人工验收
 
+**门诊医保数据底座 P1（2026-08-31，`impl_done`）**：当前测试环境已自动登记 `bjybdb`，SQL Server 三张门诊表及 117 个契约字段可读，PostgreSQL 门诊结构与事务读写通过，真实页面显示“数据底座可用”；CDC 未开启并单独显示“等待 DBA”，不影响默认 5 分钟定时 SQL。最新全量 Unit 1977 passed/2 skipped → API 301 passed → Flow 140 passed/1 skipped；Portal 368 passed、TypeScript 与 38 路由构建通过，Chromium/WebKit E2E 通过。Firefox 在本机被 Next dev/HMR 请求停滞阻断，保留生产态复验；同步任务仍为草稿，未擅自生成批次、LSN 或 P95。[P1 验证记录](docs/reviews/2026-08-28-outpatient-p1-verification.md) 持续保持证据边界；达到 P95 ≤ 300 秒并完成同步验收前不改整个 P1 为 `complete`，P2 不改 `ready_for_planning`。
+
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
 | §10.1/10.2 安全审计 | 需对接医院 SSO / 外部系统 | 获取医院 SSO 文档 |
@@ -343,6 +345,7 @@
 | 2026-08-19 | **模型治理新模型接入辅助**：通用 OpenAI-compatible `/models` 探测、写权限与脱敏审计、安全失败提示；Portal 模型名支持可搜索列表和手填兜底，端点/密钥变更后列表失效。真实 OpenCode Go 匿名探测 28 个模型且含 `deepseek-v4-flash`，Portal tsc 通过，待用户页面验收 | 模型服务与管理 4.6；`/model-governance` |
 | 2026-08-25 | **Issue #21 完成并验证**：确认 `policy-qa` 为唯一业务入口，结算单作为必填问答上下文；删除结算异常、出院质控、运营看板、静态旧 Chat 原型及通用编排代码和测试，退役路径保持 404；按 Loop Engineering 为结算读取与政策检索增加全局最多 2 次的有界恢复、稳定停止原因及公开验证步骤。T1/T2a/T2b 177/40/139（另 1 optional skipped），Portal 相关 65、E2E/smoke 9、并发 SSE 25/25，TypeScript/build/compileall 通过 | §1.1 单元 1.6–1.7；§3.5；§4；核心 AGENTS/接口/原型文档 |
 | 2026-08-31 | **Issue #30 轨迹持久化与挂起/升级/恢复**：新增 `policy_qa_trajectories` 表（每轮可重放公开快照）与 sessions 状态列（active/suspended/escalated/closed，CREATE+ALTER 双写）；`session_lifecycle.py` 状态机 + 升级工单（复用 task_closure，waiting_human_confirmation→resolve 回填）；7 个生命周期/轨迹端点；/stream 收尾写轨迹 + 非活跃会话 409；前端刷新恢复（localStorage sessionId + 轨迹重建）与挂起/升级 UI。顺带修复预存缺陷：PG task_store.create_task 缺 input_data/status 等参数（与 service 层协议不匹配，PG 模式下 record_qa_task 曾静默失败）。T1 单元 15+307、T2a API 9+47、T2b Flow 1、Portal Vitest 聚焦 82/全量 358（3 failed 为 §5 预存债务）、TSC/ESLint/build/compileall 通过；真实 PG 冒烟（DDL 双写 + jsonb 读写 + 状态机）通过 | §1.1 单元 1.8；数据库/接口文档待同步；SSO 接入后 user_id 改认证上下文 |
+| 2026-08-31 | **门诊测试数据底座接入就绪**：复用既有 SQL Server/PostgreSQL 测试凭据，自动登记并验证三表 117 字段与 PG 事务读写；页面拆分展示数据底座、门诊源表、PG、CDC 和同步草稿状态，CDC 可选；修复端点变化后凭据 revision 丢失导致启动不幂等 | 门诊数据治理中心；P1 接入就绪 |
 
 ---
 
