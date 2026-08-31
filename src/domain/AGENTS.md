@@ -553,7 +553,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 技能版本 | `SkillVersion` | **Entity** | Pydantic `BaseModel`（frozen） | 由 Git 提交与制品哈希唯一追溯的不可变技能版本 |
 | 技能制品快照 | `SkillArtifactSnapshot` | **Value Object** | Pydantic `BaseModel`（frozen） | Skill 目录规范化后的 Manifest、依赖、文件清单与 SHA-256 |
 | 技能校验状态 | `SkillValidationStatus` | **Value Object** | `StrEnum` | pending / passed / failed |
-| 技能评测用例 | `SkillEvalCase` | **Entity** | Pydantic `BaseModel`（frozen） | 固定、脱敏且可追溯的路由回归问题模板 |
+| 技能测评集 | `SkillEvalSuite` | **Entity** | Pydantic `BaseModel`（frozen） | 按平台或单个 Skill 组织评测用例的治理资产；不等同于一次评测运行 |
+| 技能评测用例 | `SkillEvalCase` | **Entity** | Pydantic `BaseModel`（frozen） | 归属于一个 SkillEvalSuite，固定、脱敏且可追溯的路由回归问题模板 |
 | 技能评测运行 | `SkillEvalRun` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 绑定候选版本、基线、测试集和配置哈希的批量评测证据 |
 | 技能评测结果 | `SkillEvalResult` | **Entity** | Pydantic `BaseModel`（frozen） | 单条用例的候选/基线路由结果与差异分类 |
 | 技能评测指标 | `SkillEvalMetrics` | **Value Object** | Pydantic `BaseModel`（frozen） | 发布门禁使用的必测通过率、准确率和回归数量 |
@@ -1007,6 +1008,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `SkillDraft(source_type=AI_GENERATED)` | AI 草稿 | SkillTool | Entity |
 | `SkillExecutionEngine` | 技能执行引擎 | SkillTool | Domain Service |
 | `SkillExecutionContract` | 技能执行契约 | SkillTool | Value Object |
+| `SkillEvalSuite` | 技能测评集 | SkillTool | Entity |
 | `SkillGovernancePriority` | 技能治理优先级 | SkillTool | Value Object |
 | `SkillGovernanceStage` | 技能治理阶段 | SkillTool | Value Object |
 | `SkillMetadata` | 技能元数据 | SkillTool | Value Object |

@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+DEFAULT_ROUTING_SUITE_ID = "EVS_platform_routing"
 
 
 def _utc_now() -> datetime:
@@ -40,12 +43,53 @@ class SkillReleaseStatus(StrEnum):
     RETIRED = "retired"
 
 
+class SkillEvalSuiteScope(StrEnum):
+    PLATFORM = "platform"
+    SKILL = "skill"
+
+
+class SkillEvalSuiteStatus(StrEnum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+class SkillEvalSuite(BaseModel):
+    """可命名、可审计的 Skill 测评用例集合。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    suite_id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=256)
+    scope: SkillEvalSuiteScope
+    skill_id: str | None = Field(default=None, max_length=128)
+    purpose: str = Field(default="", max_length=1000)
+    status: SkillEvalSuiteStatus = SkillEvalSuiteStatus.ACTIVE
+    revision: int = Field(default=1, ge=1)
+    created_by: str = Field(min_length=1, max_length=128)
+    updated_by: str = Field(min_length=1, max_length=128)
+    created_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now)
+
+    @model_validator(mode="after")
+    def _validate_scope(self) -> "SkillEvalSuite":
+        if self.scope == SkillEvalSuiteScope.PLATFORM and self.skill_id is not None:
+            raise ValueError("platform 测评集不能设置 skill_id")
+        if self.scope == SkillEvalSuiteScope.SKILL and not self.skill_id:
+            raise ValueError("skill 测评集必须设置 skill_id")
+        return self
+
+
 class SkillEvalCase(BaseModel):
     """固定、脱敏的路由评测用例。"""
 
     model_config = ConfigDict(frozen=True)
 
     case_id: str
+    suite_id: str = Field(
+        default=DEFAULT_ROUTING_SUITE_ID,
+        min_length=1,
+        max_length=64,
+    )
     suite_version: int = Field(ge=1)
     question_template: str = Field(min_length=1, max_length=2000)
     expected_skill_id: str | None = None

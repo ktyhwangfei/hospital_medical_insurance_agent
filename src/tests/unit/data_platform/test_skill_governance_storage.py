@@ -12,12 +12,48 @@ from src.data_platform.storage.skill.governance_postgres import (
     SKILL_GOVERNANCE_TABLE_SCHEMA,
 )
 from src.domain.skill.governance_models import (
+    DEFAULT_ROUTING_SUITE_ID,
     SkillEvalCase,
+    SkillEvalSuite,
+    SkillEvalSuiteScope,
+    SkillEvalSuiteStatus,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
     SkillReleaseStatus,
 )
+
+
+def test_eval_suite_requires_skill_id_only_for_skill_scope() -> None:
+    platform = SkillEvalSuite(
+        suite_id=DEFAULT_ROUTING_SUITE_ID,
+        name="平台默认路由测评集",
+        scope=SkillEvalSuiteScope.PLATFORM,
+        created_by="system",
+        updated_by="system",
+    )
+    assert platform.skill_id is None
+    assert platform.status == SkillEvalSuiteStatus.ACTIVE
+
+    with pytest.raises(ValueError, match="skill_id"):
+        SkillEvalSuite(
+            suite_id="EVS_invalid",
+            name="无 Skill 的专属测评集",
+            scope=SkillEvalSuiteScope.SKILL,
+            created_by="tester",
+            updated_by="tester",
+        )
+
+
+def test_eval_case_defaults_to_platform_routing_suite() -> None:
+    case = SkillEvalCase(
+        case_id="EVC_case",
+        suite_version=1,
+        question_template="起付线怎么算",
+        expected_skill_id="demo-skill",
+        created_by="tester",
+    )
+    assert case.suite_id == DEFAULT_ROUTING_SUITE_ID
 
 
 def _release(
