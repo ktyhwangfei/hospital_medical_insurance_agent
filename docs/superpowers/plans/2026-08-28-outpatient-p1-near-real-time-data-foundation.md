@@ -229,6 +229,8 @@ git commit -m "feat: 建立门诊事实原子发布存储"
 
 ### Task 5：实现批次编排、退款链、诊断快照和质量规则
 
+**Status:** complete — `62eefdb`
+
 **Files:**
 - Add: `src/data_platform/outpatient_sync.py`
 - Add: `src/tests/unit/data_platform/test_outpatient_sync.py`
@@ -276,6 +278,8 @@ git commit -m "feat: 实现门诊批次质量与上下文加工"
 
 ### Task 6：提供 30–60 秒运行入口和新鲜度状态
 
+**Status:** complete — `891961b`
+
 **Files:**
 - Add: `scripts/run_outpatient_cdc_sync.py`
 - Add: `src/tests/unit/data_platform/test_outpatient_sync_cli.py`
@@ -316,6 +320,8 @@ git commit -m "feat: 增加门诊CDC同步运行入口"
 
 ### Task 7：把 `mzjyxx` 当前查询模型切到 PostgreSQL 发布视图
 
+**Status:** complete — `386ac69`
+
 **Files:**
 - Modify: `src/semantic_layer/seed.py`
 - Modify: `src/tests/unit/semantic_layer/test_outpatient_query_model_contract.py`
@@ -349,6 +355,8 @@ git commit -m "feat: 切换门诊语义模型到PostgreSQL批次"
 ```
 
 ### Task 8：完成 Flow、回滚和生产验收证据
+
+**Status:** implementation complete — 本地 T1/T2a/T2b/模块回归全绿；目标环境 `bjybdb` 注册、CDC 快照与 100 个非空批次 P95 证据待外部实施
 
 **Files:**
 - Add: `src/tests/integration/flow/test_outpatient_sync_flow.py`

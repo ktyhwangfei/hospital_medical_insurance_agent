@@ -13,7 +13,7 @@
 | 阶段 | 状态 | 计划或基线 | 进入条件 | 完成门槛 |
 |---|---|---|---|---|
 | P0 数据契约 | complete | `2026-08-27-outpatient-p0-data-contract.md` + [预填设计决策稿](../../reviews/2026-08-28-outpatient-p0-prefilled-design-decision.md) | `bjybdb`、v3 查询模型、主要值域和 Issue20 依赖已自主核验；D01–D12 已确认 | D01–D12 已确认；外部开通项移交实施阶段 |
-| P1 近实时数据底座 | in_progress | `2026-08-28-outpatient-p1-near-real-time-data-foundation.md` | 已满足：P0 设计确认；CDC/只读账号作为实施任务而非设计问卷 | PostgreSQL 单一路径刷新 P95 不超过 5 分钟，批次原子发布，运营语义版本绑定可追溯数据批次 |
+| P1 近实时数据底座 | impl_done | `2026-08-28-outpatient-p1-near-real-time-data-foundation.md` | 已满足：P0 设计确认；CDC/只读账号作为实施任务而非设计问卷 | 代码与本地三层验证完成；仍须目标环境注册 `bjybdb`、启用 CDC 并取得 100 个非空批次 P95 ≤ 300 秒证据后改为 complete |
 | P2 门诊结算核验 | baseline | `2026-08-26-mzsettlement-verify-skill.md` | P1 发布的数据集和内部结算锚点可用 | 九个 Profile、Decimal 勾稽、字段四态、政策证据和回归矩阵通过 |
 | P3 运营受控问数 | gated | P2 通过后编写 | 五个可确定指标、五维度及可信问题口径已冻结；就诊人次保持 unavailable | 指标查询与科室→就诊下钻通过可信问题自动验收 |
 | P4 统一助手与工作台 | gated | P3 通过后编写 | 后端结果契约稳定；身份上下文接口可模拟 | 同一入口完成政策咨询、门诊核验和运营问数，前端不要求结算 ID |
@@ -29,4 +29,4 @@
 
 ## 当前执行点
 
-P0 事实探查和设计确认已完成，D01–D12 全部采用。P1 Task 1–4 已按独立提交完成，当前在 **Task 5 前检查点**；下一步是同步编排、质量、退款链和诊断上下文。源库 CDC 仍须 DBA 审核执行，扫码/SSO 仍是后续实施项。
+P0 事实探查和设计确认已完成，D01–D12 全部采用。P1 Task 1–8 的代码、脱敏核验报告和本地 T1→T2a→T2b 已完成；本地 PostgreSQL 门诊表/视图已初始化。目标环境尚未解析到 `bjybdb` 注册/完整连接配置，因而没有真实批次、LSN 或 P95 证据，P1 保持 `impl_done`，P2 保持 `baseline`。下一步由目标环境管理员注册只读数据源、DBA 审核启用 CDC 后执行验收；扫码/SSO 仍是后续实施项。

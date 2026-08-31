@@ -14,7 +14,7 @@
 
 **当前阶段**：Issue #21 已完成分层验收；范围外存量失败见 §4–§5
 
-**门诊医保数据底座 P1（2026-08-28 实施中）**：P0 状态为 `complete`，P1 状态为 `in_progress`。Task 1–4 已完成：门诊查询模型契约、受控 CDC 开通脚本、SQL Server CDC 只读适配器和 PostgreSQL 原子发布存储分别提交为 `d0d70c4`、`1520e61`、`d90966f`、`6f9d6b7`；308 个 data_platform/门诊契约聚焦单元通过。当前检查点为 Task 5（同步编排、质量、退款链和诊断上下文）待开始。[P1 实施计划](docs/superpowers/plans/2026-08-28-outpatient-p1-near-real-time-data-foundation.md) 保持 CDC → PostgreSQL 原子批次 → 现有 Semantic Registry 单一路径；源库 CDC 尚未由 DBA 实际启用，未声明目标环境链路已可用。
+**门诊医保数据底座 P1（2026-08-31，`impl_done`）**：Task 1–8 的代码与本地验证已完成，提交包括 `d0d70c4`、`1520e61`、`d90966f`、`6f9d6b7`、`62eefdb`、`891961b`、`386ac69` 及 Task 8 所在提交。严格 T1 28 passed → T2a 现有 API 全集 290 passed → T2b Flow 1 passed，相关模块回归 486 passed，`compileall` 通过；本地 PostgreSQL 门诊表/视图已幂等初始化并通过 `--check`。[P1 验证记录](docs/reviews/2026-08-28-outpatient-p1-verification.md) 如实记录目标验收未完成：当前环境未解析到 `bjybdb` 注册/完整连接配置，未生成真实批次、LSN、语义新版本或 100 个非空批次 P95。达到 P95 ≤ 300 秒前 P1 不改 `complete`，P2 不改 `ready_for_planning`。
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
