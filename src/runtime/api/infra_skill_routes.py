@@ -122,6 +122,10 @@ from src.runtime.api.skill_schemas import (
     SkillEvalCaseListResponse,
     SkillEvalCaseResponse,
     SkillEvalCaseUpdateRequest,
+    SkillEvalSuiteCreateRequest,
+    SkillEvalSuiteListResponse,
+    SkillEvalSuiteResponse,
+    SkillEvalSuiteUpdateRequest,
     SkillEvalRunCreateRequest,
     SkillEvalRunListResponse,
     SkillEvalRunResponse,
@@ -624,14 +628,105 @@ def _governance_error(exc: Exception) -> HTTPException:
 
 
 @router.get(
+    "/infra-skills/eval-suites",
+    response_model=SkillEvalSuiteListResponse,
+)
+def list_skill_eval_suites(
+    service: SkillGovernanceServiceDependency,
+    skill_id: str | None = Query(default=None),
+    include_inactive: bool = Query(default=True),
+) -> SkillEvalSuiteListResponse:
+    suites = service.list_suites(
+        skill_id=skill_id,
+        include_inactive=include_inactive,
+    )
+    return SkillEvalSuiteListResponse(
+        items=[
+            SkillEvalSuiteResponse.model_validate(suite.model_dump())
+            for suite in suites
+        ],
+        total=len(suites),
+    )
+
+
+@router.post(
+    "/infra-skills/eval-suites",
+    response_model=SkillEvalSuiteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_skill_eval_suite(
+    request: SkillEvalSuiteCreateRequest,
+    service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalSuiteResponse:
+    try:
+        suite = service.create_suite(
+            **request.model_dump(),
+            created_by=principal.user_id,
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalSuiteResponse.model_validate(suite.model_dump())
+
+
+@router.put(
+    "/infra-skills/eval-suites/{suite_id}",
+    response_model=SkillEvalSuiteResponse,
+)
+def update_skill_eval_suite(
+    suite_id: str,
+    request: SkillEvalSuiteUpdateRequest,
+    service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalSuiteResponse:
+    try:
+        suite = service.update_suite(
+            suite_id,
+            **request.model_dump(),
+            updated_by=principal.user_id,
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalSuiteResponse.model_validate(suite.model_dump())
+
+
+@router.delete(
+    "/infra-skills/eval-suites/{suite_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_skill_eval_suite(
+    suite_id: str,
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> None:
+    try:
+        service.delete_suite(suite_id)
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+
+
+@router.get(
     "/infra-skills/eval-cases",
     response_model=SkillEvalCaseListResponse,
 )
 def list_skill_eval_cases(
     service: SkillGovernanceServiceDependency,
+    suite_id: str | None = Query(default=None),
     enabled_only: bool = Query(default=False),
 ) -> SkillEvalCaseListResponse:
-    cases = service.list_cases(enabled_only=enabled_only)
+    cases = service.list_cases(suite_id=suite_id, enabled_only=enabled_only)
     return SkillEvalCaseListResponse(
         items=[SkillEvalCaseResponse.model_validate(case.model_dump()) for case in cases],
         suite_version=service.current_suite_version(),

@@ -953,6 +953,100 @@ def _eval_case_headers() -> dict[str, str]:
     }
 
 
+def test_eval_suite_crud_and_case_filter(client: TestClient) -> None:
+    created = client.post(
+        f"{PREFIX}/infra-skills/eval-suites",
+        headers=_eval_case_headers(),
+        json={
+            "name": "门诊解释路由回归",
+            "scope": "skill",
+            "skill_id": "settlement_explain_skill",
+            "purpose": "验证门诊结算问题进入目标 Skill",
+        },
+    )
+    assert created.status_code == 201
+    suite = created.json()
+    assert suite["suite_id"].startswith("EVS_")
+    assert suite["revision"] == 1
+
+    case = client.post(
+        f"{PREFIX}/infra-skills/eval-cases",
+        headers=_eval_case_headers(),
+        json={
+            "suite_id": suite["suite_id"],
+            "question_template": "这笔门诊费用怎么组成",
+            "expected_skill_id": "settlement_explain_skill",
+        },
+    )
+    assert case.status_code == 201
+    assert case.json()["suite_id"] == suite["suite_id"]
+    assert case.json()["case_id"].startswith("EVC_")
+
+    listed = client.get(
+        f"{PREFIX}/infra-skills/eval-cases",
+        params={"suite_id": suite["suite_id"]},
+    )
+    assert listed.status_code == 200
+    assert [item["case_id"] for item in listed.json()["items"]] == [
+        case.json()["case_id"]
+    ]
+
+    updated = client.put(
+        f"{PREFIX}/infra-skills/eval-suites/{suite['suite_id']}",
+        headers=_eval_case_headers(),
+        json={
+            "name": "门诊解释路由回归（停用）",
+            "purpose": suite["purpose"],
+            "status": "inactive",
+            "expected_revision": 1,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "inactive"
+    assert updated.json()["revision"] == 2
+
+
+def test_eval_suite_write_requires_skill_evaluate(client: TestClient) -> None:
+    response = client.post(
+        f"{PREFIX}/infra-skills/eval-suites",
+        json={
+            "name": "无权限测评集",
+            "scope": "platform",
+            "purpose": "",
+        },
+    )
+    assert response.status_code in {401, 403}
+
+
+def test_eval_suite_rejects_stale_revision(client: TestClient) -> None:
+    created = client.post(
+        f"{PREFIX}/infra-skills/eval-suites",
+        headers=_eval_case_headers(),
+        json={
+            "name": "并发测试",
+            "scope": "platform",
+            "purpose": "",
+        },
+    ).json()
+    payload = {
+        "name": "第一次更新",
+        "purpose": "",
+        "status": "active",
+        "expected_revision": 1,
+    }
+    assert client.put(
+        f"{PREFIX}/infra-skills/eval-suites/{created['suite_id']}",
+        headers=_eval_case_headers(),
+        json=payload,
+    ).status_code == 200
+    stale = client.put(
+        f"{PREFIX}/infra-skills/eval-suites/{created['suite_id']}",
+        headers=_eval_case_headers(),
+        json=payload,
+    )
+    assert stale.status_code == 409
+
+
 def test_create_eval_case_dedupes_same_template(client: TestClient) -> None:
     """同 (question_template, expected_skill_id) 重复创建返回同一 case_id。"""
     headers = _eval_case_headers()

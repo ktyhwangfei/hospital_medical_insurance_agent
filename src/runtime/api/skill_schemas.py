@@ -19,6 +19,9 @@ from src.runtime.skill_management.workbench_service import (
 
 
 class SkillEvalCaseCreateRequest(BaseModel):
+    suite_id: str = Field(
+        default="EVS_platform_routing", min_length=1, max_length=64
+    )
     question_template: str = Field(min_length=1, max_length=2000)
     expected_skill_id: str | None = None
     required: bool = True
@@ -43,6 +46,7 @@ class SkillEvalCaseUpdateRequest(BaseModel):
 
 class SkillEvalCaseResponse(BaseModel):
     case_id: str
+    suite_id: str
     suite_version: int
     question_template: str
     expected_skill_id: str | None
@@ -61,6 +65,43 @@ class SkillEvalCaseResponse(BaseModel):
 class SkillEvalCaseListResponse(BaseModel):
     items: list[SkillEvalCaseResponse]
     suite_version: int
+    total: int
+
+
+class SkillEvalSuiteCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=256)
+    scope: Literal["platform", "skill"]
+    skill_id: str | None = Field(default=None, max_length=128)
+    purpose: str = Field(default="", max_length=1000)
+
+
+class SkillEvalSuiteUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=256)
+    purpose: str = Field(default="", max_length=1000)
+    status: Literal["active", "inactive"]
+    expected_revision: int = Field(ge=1)
+
+
+class SkillEvalSuiteResponse(BaseModel):
+    suite_id: str
+    name: str
+    scope: str
+    skill_id: str | None
+    purpose: str
+    status: str
+    revision: int
+    created_by: str
+    updated_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillEvalSuiteListResponse(BaseModel):
+    items: list[SkillEvalSuiteResponse]
     total: int
 
 
