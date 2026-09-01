@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
@@ -37,6 +38,8 @@ CORE_DIM_FIELDS = (
     "publish_status",   # 发布状态：published/draft/revoked/pilot（Issue #25）
     "policy_version",   # 政策版本（Issue #25）
     "is_remote",        # 是否异地规则（Issue #25）
+    "amount_band_min",  # 金额分段下限（元）（Issue #25 阶段 2）
+    "amount_band_max",  # 金额分段上限（元），-1 表示无上界（Issue #25 阶段 2）
     "schema_version",
     "vector",
 )
@@ -102,6 +105,10 @@ def create_policy_rules_v2_collection(
                     description="政策版本（Issue #25）"),
         FieldSchema("is_remote", DataType.BOOL,
                     description="是否异地规则（Issue #25）"),
+        FieldSchema("amount_band_min", DataType.INT64,
+                    description="金额分段下限（元）（Issue #25 阶段 2）"),
+        FieldSchema("amount_band_max", DataType.INT64,
+                    description="金额分段上限（元），-1 表示无上界（Issue #25 阶段 2）"),
         FieldSchema("schema_version", DataType.INT64, description="提取时 schema 版本"),
         FieldSchema("vector", DataType.FLOAT_VECTOR, dim=dim,
                     description="复用对应 fact 的事实向量（§4.1）"),
@@ -130,7 +137,8 @@ def _create_indexes(col: Collection) -> None:
     for dim in ("fact_id", "doc_id", "rule_type", "insu_type",
                 "med_type", "hosp_lv", "psn_type", "setl_type",
                 "region", "effective_date", "expiry_date",
-                "publish_status", "policy_version", "is_remote"):
+                "publish_status", "policy_version", "is_remote",
+                "amount_band_min", "amount_band_max"):
         col.create_index(field_name=dim, index_params={})
 
 
@@ -199,6 +207,9 @@ _DEFAULT_EXPIRY_DATE = "9999-12-31"
 _DEFAULT_PUBLISH_STATUS = "published"
 _DEFAULT_POLICY_VERSION = "1.0"
 
+# 金额段默认起付线（元），用于 "起付标准" 文本解析
+_DEFAULT_DEDUCTIBLE_AMOUNT = 1300
+
 
 def _normalize_date(value: Any) -> str:
     """将各种日期输入统一为 YYYY-MM-DD 格式。
@@ -239,6 +250,81 @@ def _normalize_bool(value: Any) -> bool:
     return text in ("true", "1", "yes", "是", "异地", "remote")
 
 
+# Issue #25 阶段 2：金额段数值化解析
+_AMOUNT_BAND_RE = re.compile(r"(\d+(?:\.\d+)?)")
+
+
+def _parse_amount_band(value: Any, deductible_amount: Any = None) -> tuple[int, int]:
+    """把金额分段文本解析为 (min, max) 元整数值。
+
+    支持格式：
+    - "起付标准至3万元" → (1300, 30000)
+    - "超过3万元至4万元" → (30000, 40000)
+    - "超过4万元" / "4万元以上" → (40000, -1)
+    - "第1档" 等无法解析 → (0, 0)
+    - 空值/无法识别 → (0, 0)
+
+    遇到 "起付标准" 时，优先使用 rule 中的 deductible_amount 作为下限；
+    未提供 deductible_amount 时使用默认起付线 1300 元。
+    """
+    if value is None:
+        return 0, 0
+    text = str(value).strip()
+    if not text:
+        return 0, 0
+
+    numbers = [float(n) for n in _AMOUNT_BAND_RE.findall(text)]
+    if not numbers:
+        return 0, 0
+
+    # 单位换算为 "元"
+    def to_yuan(num: float) -> int:
+        # 原文出现 "万元" 时数字按万处理；出现 "元" 或无量词时按原值处理
+        if "万元" in text:
+            return int(num * 10000)
+        if "元" in text:
+            return int(num)
+        # 无量词时：大于 1000 按元，否则按万元（兼容 "3" 表示 "3万元" 的简略写法）
+        return int(num * 10000) if num < 1000 else int(num)
+
+    lower, upper = 0, 0
+
+    # "起付标准至X万元"
+    if "起付标准" in text or "起付线" in text:
+        deductible = _DEFAULT_DEDUCTIBLE_AMOUNT
+        if deductible_amount is not None:
+            try:
+                parsed_ded = float(str(deductible_amount).strip().replace(",", "").replace("，", ""))
+                deductible = int(parsed_ded)
+            except (ValueError, TypeError):
+                pass
+        lower = deductible
+        if numbers:
+            upper = to_yuan(numbers[-1])
+        return lower, upper
+
+    # "超过X至Y"
+    if "超过" in text and "至" in text and len(numbers) >= 2:
+        lower = to_yuan(numbers[0])
+        upper = to_yuan(numbers[1])
+        return lower, upper
+
+    # 简单 "X元至Y元" / "X-Y元" 范围（无 "超过/以上" 关键词）
+    if ("至" in text or "-" in text) and len(numbers) >= 2:
+        lower = to_yuan(numbers[0])
+        upper = to_yuan(numbers[1])
+        return lower, upper
+
+    # "超过X" / "X以上" / "X元以上"
+    if "超过" in text or "以上" in text:
+        lower = to_yuan(numbers[0])
+        upper = -1
+        return lower, upper
+
+    # 仅单个数字，无法判断上下界
+    return 0, 0
+
+
 def rule_to_entity(
     rule: dict[str, Any],
     vector: list[float],
@@ -266,6 +352,9 @@ def rule_to_entity(
     for dim in CORE_DIM_FIELDS:
         if dim in ("vector", "schema_version"):
             continue
+        # amount_band_min/max 由 amount_band 文本解析得到，见下方
+        if dim in ("amount_band_min", "amount_band_max"):
+            continue
         val = rule.get(dim)
         if dim == "hosp_lv":
             val = normalize_hosp_lv(str(val or ""))
@@ -286,6 +375,13 @@ def rule_to_entity(
         else:
             val = str(val or "")
         entity[dim] = val
+
+    # Issue #25 阶段 2：金额段数值化
+    amount_min, amount_max = _parse_amount_band(
+        rule.get("amount_band"), rule.get("deductible_amount")
+    )
+    entity["amount_band_min"] = amount_min
+    entity["amount_band_max"] = amount_max
 
     # 详情字段 → FieldTrace（裸值包成溯源对象）
     for detail in DETAIL_FIELDS:
