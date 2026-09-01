@@ -188,6 +188,40 @@ export interface ReleaseGateStatus {
   sync_pending_reasons: string[]
 }
 
+export interface Issue25BaselineMetrics {
+  precision_at_k: number
+  recall: number
+  far: number
+  complete_rate: number
+  honest_refusal_rate: number
+  p95_latency_ms: number
+}
+
+export interface Issue25Metrics {
+  run_at: string
+  embedding_kind: string
+  corpus_size: number
+  case_count: number
+  text_only: Issue25BaselineMetrics
+  current_hybrid: Issue25BaselineMetrics
+  enhanced_hybrid: Issue25BaselineMetrics
+  broad_hybrid: Issue25BaselineMetrics
+  field_quality_score: number
+  top_diff_cases: Array<{
+    case_id: string
+    scenario: string
+    precision_diff: number
+    recall_diff: number
+    current_retrieved: string[]
+    enhanced_retrieved: string[]
+  }>
+}
+
+export const getIssue25Metrics = (embeddingKind = 'hash') =>
+  request<Issue25Metrics>(
+    `${WORKBENCH_API}/quality/issue25-metrics?embedding_kind=${encodeURIComponent(embeddingKind)}`,
+  )
+
 export const QUALITY_RUN_CONFIG = {
   repeat_count: 3,
   minimum_quality: 0.8,
