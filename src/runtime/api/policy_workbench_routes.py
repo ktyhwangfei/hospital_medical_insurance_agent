@@ -1,9 +1,13 @@
 """政策知识 Unit×Knowledge 三栏工作台 API。"""
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
+import sys
 from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
@@ -375,6 +379,21 @@ class ReleaseGateStatus(BaseModel):
     blocked_reasons: list[str] = Field(default_factory=list)
     sync_pending: bool = False
     sync_pending_reasons: list[str] = Field(default_factory=list)
+
+
+class Issue25MetricsResponse(BaseModel):
+    """Issue #25 专项检索指标（供 policy-knowledge/test 看板展示）。"""
+
+    run_at: str
+    embedding_kind: str
+    corpus_size: int
+    case_count: int
+    text_only: dict[str, float]
+    current_hybrid: dict[str, float]
+    enhanced_hybrid: dict[str, float]
+    broad_hybrid: dict[str, float]
+    field_quality_score: float
+    top_diff_cases: list[dict[str, Any]]
 
 
 def _require_legacy_policy_releases_enabled() -> None:
@@ -1385,6 +1404,111 @@ def get_latest_release_quality(release_id: str) -> QualityRunReport:
     return QualityRunReport(
         run=run,
         case_results=_get_quality_store().list_case_results(run.run_id),
+    )
+
+
+_issue25_evaluation_runner: Callable[[str], dict[str, Any]] | None = None
+
+
+def _load_issue25_evaluation_runner() -> Callable[[str], dict[str, Any]]:
+    """动态加载 Issue #25 评估脚本中的 run_issue25_evaluation 函数。"""
+    global _issue25_evaluation_runner
+    if _issue25_evaluation_runner is not None:
+        return _issue25_evaluation_runner
+
+    script_path = Path(__file__).resolve().parents[3] / "scripts" / "eval" / "issue25_retrieval_baseline.py"
+    if not script_path.exists():
+        raise RuntimeError(f"Issue #25 评估脚本不存在: {script_path}")
+
+    spec = importlib.util.spec_from_file_location("issue25_retrieval_baseline", script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载 Issue #25 评估脚本: {script_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    # 评估脚本依赖 PROJECT_ROOT 在 sys.path 中，先注入
+    project_root = str(script_path.resolve().parents[2])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    # 必须先注册到 sys.modules，否则脚本内 dataclass 装饰器会报 NoneType.__dict__ 错误
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    runner = getattr(module, "run_issue25_evaluation", None)
+    if runner is None or not callable(runner):
+        raise RuntimeError("Issue #25 评估脚本未导出 run_issue25_evaluation 函数")
+
+    _issue25_evaluation_runner = runner
+    return runner
+
+
+@router.get("/quality/issue25-metrics", response_model=Issue25MetricsResponse)
+def get_issue25_metrics(
+    embedding_kind: str = "hash",
+) -> Issue25MetricsResponse:
+    """Issue #25 专项检索指标：对跑 text_only / current_hybrid / enhanced_hybrid / broad_hybrid 四条基线。
+
+    默认使用 hash embedding 快速返回；生产环境可传 `sentence_transformer` 获取真实 bge 结果，
+    但首次调用需加载模型，耗时较长。
+
+    ⚠️ 评估脚本使用内存 fake Milvus 客户端，会临时替换模块级 MilvusClient 引用，
+    调用前后自动恢复，不影响生产检索。
+    """
+    if embedding_kind not in ("hash", "sentence_transformer"):
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "ISSUE25_METRICS_INVALID_KIND",
+                "embedding_kind 必须是 hash 或 sentence_transformer",
+                {"embedding_kind": embedding_kind},
+            ),
+        )
+
+    # 保存原 MilvusClient，评估后恢复
+    from src.runtime.policy_qa import structured_policy_retriever as _spr_module
+    from src.runtime.policy_qa import broad_policy_retriever as _bpr_module
+
+    _original_structured_client = getattr(_spr_module, "MilvusClient", None)
+    _original_broad_client = getattr(_bpr_module, "MilvusClient", None)
+
+    try:
+        runner = _load_issue25_evaluation_runner()
+        result = runner(embedding_kind=embedding_kind)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "ISSUE25_EVALUATION_UNAVAILABLE",
+                str(exc),
+                {"embedding_kind": embedding_kind},
+            ),
+        ) from exc
+    except Exception as exc:
+        logger.exception("Issue #25 评估执行失败")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "ISSUE25_EVALUATION_FAILED",
+                f"评估执行失败: {exc}",
+                {"embedding_kind": embedding_kind},
+            ),
+        ) from exc
+    finally:
+        if _original_structured_client is not None:
+            _spr_module.MilvusClient = _original_structured_client
+        if _original_broad_client is not None:
+            _bpr_module.MilvusClient = _original_broad_client
+
+    return Issue25MetricsResponse(
+        run_at=datetime.now().isoformat(),
+        embedding_kind=result.get("embedding_kind", embedding_kind),
+        corpus_size=result.get("corpus_size", 0),
+        case_count=result.get("case_count", 0),
+        text_only=result.get("text_only", {}),
+        current_hybrid=result.get("current_hybrid", {}),
+        enhanced_hybrid=result.get("enhanced_hybrid", {}),
+        broad_hybrid=result.get("broad_hybrid", {}),
+        field_quality_score=result.get("field_quality_score", 0.0),
+        top_diff_cases=result.get("top_diff_cases", []),
     )
 
 

@@ -254,6 +254,29 @@ class _ExprMatcher:
             if op == "!=":
                 return lhs_bool != rhs_bool
 
+        # Issue #25 阶段 2：INT64 字段按数值比较
+        _INT64_FIELDS = {"amount_band_min", "amount_band_max", "schema_version"}
+        if field in _INT64_FIELDS:
+            try:
+                lhs_num = int(lhs) if lhs is not None else 0
+                rhs_num = int(rhs)
+            except (ValueError, TypeError):
+                lhs_num = lhs or 0
+                rhs_num = rhs
+            if op == "==":
+                return lhs_num == rhs_num
+            if op == "!=":
+                return lhs_num != rhs_num
+            if op == "<=":
+                return lhs_num <= rhs_num
+            if op == ">=":
+                return lhs_num >= rhs_num
+            if op == "<":
+                return lhs_num < rhs_num
+            if op == ">":
+                return lhs_num > rhs_num
+            raise ValueError(f"Unsupported op: {op}")
+
         if op == "==":
             return str(lhs or "") == rhs
         if op == "!=":
@@ -1586,37 +1609,28 @@ def _write_assessment_report(
     print(f"[eval] wrote {path}")
 
 
-# ── 主流程 ────────────────────────────────────────────────────────
+# ── 可调用评估核心（供后端 /policy-workbench/quality/issue25-metrics 复用）──
 
-def main() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Issue #25 最小混合检索评估")
-    parser.add_argument(
-        "--embedding-kind",
-        choices=["sentence_transformer", "hash"],
-        default="sentence_transformer",
-        help="embedding provider 类型：sentence_transformer 使用真实 bge 模型，hash 用于快速回归",
-    )
-    parser.add_argument(
-        "--broad-only",
-        action="store_true",
-        help="仅运行宽泛问题子集与 broad_hybrid 基线",
-    )
-    args = parser.parse_args()
-
-    print(f"[eval] embedding_kind={args.embedding_kind}")
-    if args.embedding_kind == "sentence_transformer":
+def run_issue25_evaluation(
+    embedding_kind: str = "sentence_transformer",
+    broad_only: bool = False,
+) -> dict[str, Any]:
+    """运行 Issue #25 评估，返回结构化指标（不写 markdown 报告）。"""
+    if embedding_kind == "sentence_transformer":
         embedding_provider = get_embedding_provider("sentence_transformer")
-    else:
+    elif embedding_kind == "hash":
         embedding_provider = HashEmbeddingProvider(dim=POLICY_RULES_V2_VECTOR_DIM)
+    else:
+        raise ValueError(f"unsupported embedding_kind: {embedding_kind}")
 
-    print("[eval] building corpus...")
     corpus = _build_corpus(embedding_provider)
 
     # 注册 fake Milvus 集合：full 含所有新字段；old 缺少新字段，用于 current_hybrid 基线
     all_fields = set(corpus[0].keys())
-    old_fields = all_fields - {"region", "effective_date", "expiry_date", "publish_status", "policy_version", "is_remote"}
+    old_fields = all_fields - {
+        "region", "effective_date", "expiry_date", "publish_status",
+        "policy_version", "is_remote",
+    }
 
     fake = _FakeMilvusClient()
     fake.register_collection(COLLECTION_FULL, corpus, all_fields)
@@ -1624,14 +1638,9 @@ def main() -> None:
     _patch_milvus_client(fake)
     _patch_broad_milvus_client(fake)
 
-    print(f"[eval] corpus={len(corpus)} rules; full_fields={len(all_fields)} old_fields={len(old_fields)}")
-
     cases = _build_golden_cases()
-    if args.broad_only:
+    if broad_only:
         cases = [c for c in cases if "宽泛问题" in c.dimensions]
-    print(f"[eval] golden_cases={len(cases)}")
-
-    _write_golden_cases(cases)
 
     bm25 = _BM25Retriever(corpus)
 
@@ -1665,6 +1674,130 @@ def main() -> None:
 
     # broad_hybrid：向量 + BM25 + 适用性字段精排
     broad_results: list[CaseResult] = []
+    broad_retriever = BroadPolicyRetriever(
+        collection_name=COLLECTION_FULL,
+        embedding_provider=embedding_provider,
+    )
+    for c in cases:
+        broad_results.append(_run_broad_case(c, broad_retriever))
+    broad_metrics = AggregateMetrics(baseline="broad_hybrid", cases=broad_results)
+    broad_metrics.compute()
+
+    def _metrics_dict(m: AggregateMetrics) -> dict[str, float]:
+        return {
+            "precision_at_k": m.precision_mean,
+            "recall": m.recall_mean,
+            "far": m.far_mean,
+            "complete_rate": m.complete_rate,
+            "honest_refusal_rate": m.honest_refusal_rate,
+            "p95_latency_ms": m.p95_latency_ms,
+        }
+
+    # 取差异最大的 5 条用例
+    current_by_id = {c.case_id: c for c in current_metrics.cases}
+    enhanced_by_id = {c.case_id: c for c in enhanced_metrics.cases}
+    diff_cases = []
+    for c in cases:
+        cur = current_by_id[c.case_id]
+        enh = enhanced_by_id[c.case_id]
+        diff_cases.append({
+            "case_id": c.case_id,
+            "scenario": c.scenario,
+            "precision_diff": enh.precision_at_k - cur.precision_at_k,
+            "recall_diff": enh.recall - cur.recall,
+            "current_retrieved": cur.retrieved_ids,
+            "enhanced_retrieved": enh.retrieved_ids,
+        })
+    diff_cases.sort(key=lambda x: abs(x["precision_diff"]) + abs(x["recall_diff"]), reverse=True)
+
+    return {
+        "embedding_kind": embedding_kind,
+        "corpus_size": len(corpus),
+        "case_count": len(cases),
+        "text_only": _metrics_dict(text_metrics),
+        "current_hybrid": _metrics_dict(current_metrics),
+        "enhanced_hybrid": _metrics_dict(enhanced_metrics),
+        "broad_hybrid": _metrics_dict(broad_metrics),
+        "field_quality_score": enhanced_metrics.field_quality_score,
+        "top_diff_cases": diff_cases[:5],
+    }
+
+
+# ── 主流程 ────────────────────────────────────────────────────────
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Issue #25 最小混合检索评估")
+    parser.add_argument(
+        "--embedding-kind",
+        choices=["sentence_transformer", "hash"],
+        default="sentence_transformer",
+        help="embedding provider 类型：sentence_transformer 使用真实 bge 模型，hash 用于快速回归",
+    )
+    parser.add_argument(
+        "--broad-only",
+        action="store_true",
+        help="仅运行宽泛问题子集与 broad_hybrid 基线",
+    )
+    args = parser.parse_args()
+
+    print(f"[eval] embedding_kind={args.embedding_kind}")
+    result = run_issue25_evaluation(
+        embedding_kind=args.embedding_kind,
+        broad_only=args.broad_only,
+    )
+
+    _write_golden_cases(_build_golden_cases())
+    # 重新跑一遍以生成报告所需对象；评估较快，可接受
+    embedding_provider = (
+        get_embedding_provider("sentence_transformer")
+        if args.embedding_kind == "sentence_transformer"
+        else HashEmbeddingProvider(dim=POLICY_RULES_V2_VECTOR_DIM)
+    )
+    corpus = _build_corpus(embedding_provider)
+    all_fields = set(corpus[0].keys())
+    old_fields = all_fields - {
+        "region", "effective_date", "expiry_date", "publish_status",
+        "policy_version", "is_remote",
+    }
+    fake = _FakeMilvusClient()
+    fake.register_collection(COLLECTION_FULL, corpus, all_fields)
+    fake.register_collection(COLLECTION_OLD, corpus, old_fields)
+    _patch_milvus_client(fake)
+    _patch_broad_milvus_client(fake)
+
+    cases = _build_golden_cases()
+    if args.broad_only:
+        cases = [c for c in cases if "宽泛问题" in c.dimensions]
+    bm25 = _BM25Retriever(corpus)
+
+    text_results = [_run_text_only_case(c, bm25) for c in cases]
+    text_metrics = AggregateMetrics(baseline="text_only", cases=text_results)
+    text_metrics.compute()
+
+    current_results = []
+    for c in cases:
+        retriever = StructuredPolicyRuleRetriever(
+            collection_name=COLLECTION_OLD,
+            enable_applicability_fields=False,
+        )
+        current_results.append(_run_hybrid_case(c, retriever, "current_hybrid"))
+    current_metrics = AggregateMetrics(baseline="current_hybrid", cases=current_results)
+    current_metrics.compute()
+
+    enhanced_results = []
+    for c in cases:
+        retriever = StructuredPolicyRuleRetriever(
+            collection_name=COLLECTION_FULL,
+            enable_applicability_fields=True,
+        )
+        enhanced_results.append(_run_hybrid_case(c, retriever, "enhanced_hybrid"))
+    enhanced_metrics = AggregateMetrics(baseline="enhanced_hybrid", cases=enhanced_results)
+    enhanced_metrics.field_quality_score = _field_quality(corpus)
+    enhanced_metrics.compute()
+
+    broad_results = []
     broad_retriever = BroadPolicyRetriever(
         collection_name=COLLECTION_FULL,
         embedding_provider=embedding_provider,
