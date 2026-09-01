@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import {
   AlertCircle,
   BarChart3,
@@ -19,6 +19,7 @@ import {
   createSkillEvalCase,
   deleteSkillEvalCase,
   listAllSkillEvalRuns,
+  listInfraSkills,
   listSkillEvalBenchmarks,
   listSkillEvalCases,
   listSkillEvalDatasetVersions,
@@ -70,7 +71,22 @@ function errorMessage(error: unknown, fallback: string): string {
 
 function EvaluationsContent() {
   const skillFilter = useSearchParams().get('skill')
+  const router = useRouter()
   const skillNameMap = useSkillNameMap()
+  const [skillOptions, setSkillOptions] = useState<Array<{ skill_id: string; skill_name: string }>>([])
+  useEffect(() => {
+    let alive = true
+    listInfraSkills()
+      .then((skills) => {
+        if (alive) setSkillOptions(skills.map((s) => ({ skill_id: s.skill_id, skill_name: s.skill_name })))
+      })
+      .catch(() => {
+        // 拉取失败时选择器留空，用户仍可通过 ?skill= 深链进入
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
   const displayName = useCallback((id: string | null | undefined) => (
     id ? (skillNameMap.get(id) ?? id) : '通用'
   ), [skillNameMap])
@@ -234,7 +250,27 @@ function EvaluationsContent() {
             </Link>
           </p>
         ) : (
-          <p className="text-xs text-amber-700">从 Skill 详情页进入可锁定 Skill，并启用数据集与 Benchmark 创建操作。</p>
+          <p className="text-xs text-amber-700">
+            选择 Skill 进入评测（也可从 Skill 详情页进入）：
+            <select
+              aria-label="选择 Skill"
+              data-testid="eval-skill-select"
+              value=""
+              onChange={(event) => {
+                if (event.target.value) {
+                  router.replace(`/skills/evaluations?skill=${encodeURIComponent(event.target.value)}`)
+                }
+              }}
+              className="ml-1 rounded-md border border-amber-300 bg-white px-2 py-1 text-xs"
+            >
+              <option value="">选择 Skill…</option>
+              {skillOptions.map((skill) => (
+                <option key={skill.skill_id} value={skill.skill_id}>
+                  {skill.skill_name}
+                </option>
+              ))}
+            </select>
+          </p>
         )}
       </header>
 
