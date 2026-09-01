@@ -15,7 +15,11 @@ def render_answer(
         for item in fact_checks
     )
     if result.field_explanations:
-        lines.extend(("", "结算金额已按结算单原始字段列示。"))
+        lines.extend(("", "费用金额（取结算单原始字段）："))
+        lines.extend(
+            f"- {item.field_name}：{"未返回" if item.value is None else f"{item.value} 元"}"
+            for item in result.field_explanations
+        )
     if result.anomalies:
         lines.extend(("", "异常项：", *(f"- {item}" for item in result.anomalies)))
     return "\n".join(lines)
