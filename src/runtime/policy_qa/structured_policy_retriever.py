@@ -109,6 +109,7 @@ class StructuredPolicyQuery:
     text_must_include_all: list[str] = field(default_factory=list)  # source_text 全部包含
     psn_type_allow_all: bool = False          # 是否允许 psn_type 宽松匹配（不限定为指定值）
     settlement_date: str = _DEFAULT_SETTLEMENT_DATE  # 结算日期 YYYY-MM-DD（Issue #25 时间过滤）
+    amount_range: tuple[int, int] | None = None  # 金额段范围 (min, max)（Issue #25 阶段 2）
 
 
 # ── 结构化检索结果 ────────────────────────────────────────────────
@@ -250,7 +251,7 @@ class StructuredPolicyRuleRetriever:
             if ctx.hosp_lv:
                 query1_filters["hosp_lv"] = ctx.hosp_lv
 
-            queries.append(StructuredPolicyQuery(
+            query1 = StructuredPolicyQuery(
                 query_name="employee_inpatient_tertiary_segment_ratio",
                 required=True,
                 filters=query1_filters,
@@ -260,7 +261,11 @@ class StructuredPolicyRuleRetriever:
                     "超过3万元至4万元",
                     "超过4万元",
                 ],
-            ))
+            )
+            # Issue #25 阶段 2：金额段范围过滤
+            if ctx.target_amount > 0:
+                query1.amount_range = (int(ctx.target_amount), int(ctx.target_amount))
+            queries.append(query1)
 
             # 查询2: 退休人员个人支付比例（折算物化后的绝对值规则 + 折算公式规则）
             # ★ U3：去掉硬编码 rule_type=计算公式（提取端不产出该类型），改 rule_type=支付比例；
@@ -342,6 +347,16 @@ class StructuredPolicyRuleRetriever:
                 expr_parts.append(f'effective_date <= "{settlement_date}"')
             if "expiry_date" in available_fields:
                 expr_parts.append(f'(expiry_date == "9999-12-31" or expiry_date >= "{settlement_date}")')
+
+        # Issue #25 阶段 2：金额段范围过滤
+        if (
+            query.amount_range
+            and "amount_band_min" in available_fields
+            and "amount_band_max" in available_fields
+        ):
+            amount = query.amount_range[0]
+            expr_parts.append(f'amount_band_min <= {amount}')
+            expr_parts.append(f'(amount_band_max >= {amount} or amount_band_max == -1)')
 
         if skipped_fields:
             logger.warning(
