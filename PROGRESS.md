@@ -126,7 +126,7 @@
 
 7.10 验证证据（2026-08-31，聚焦）：Skill 单元 25 passed，新增 API 1 passed，门诊政策问答 Flow 1 passed；Portal 相关 Vitest 4 文件 50 passed，TypeScript、scoped ESLint 与 Next.js 生产构建通过。真实服务使用交易号 `011100030X260417004975` 复验：个人自付一保留结算单原值 510.96 元，旧通用反推公式与中间实际/期望值均未进入回答正文；28 个固定人群案例全部通过，自测页面返回 200。
 
-7.11 验证证据（2026-08-31）：严格按层验证，Unit（领域/存储/runner/评测器/治理）66 passed → API（infra_skill_routes + policy_qa_routes）78 passed → Flow（suite + benchmark + release）3 passed；评测闭环 Benchmark Flow 覆盖导入 28 例 → 冻结 → 建 Benchmark → person-21 错误金额归因 calculation → 改进任务 → 修复后完整通过。Portal 聚焦 Vitest 4 文件 13 passed、TypeScript 零错误、scoped ESLint 零错误、Next.js 生产构建通过。确定性规则已验证：Judge blocked/needs_review 不伪造通过、不可翻确定性失败；发布门禁接入 `_benchmark_evidence_failures`。环境阻塞：真实服务 UI 端到端（页面导入/冻结/正式 Benchmark 运行与运行 ID 记录）待执行，交易号 `011100030X260417004975` 的真实运行验收待补。
+7.11 验证证据（2026-08-31）：严格按层验证，Unit（领域/存储/runner/评测器/治理）66 passed → API（infra_skill_routes + policy_qa_routes）78 passed → Flow（suite + benchmark + release）3 passed；评测闭环 Benchmark Flow 覆盖导入 28 例 → 冻结 → 建 Benchmark → person-21 错误金额归因 calculation → 改进任务 → 修复后完整通过。Portal 聚焦 Vitest 4 文件 13 passed、TypeScript 零错误、scoped ESLint 零错误、Next.js 生产构建通过。确定性规则已验证：Judge blocked/needs_review 不伪造通过、不可翻确定性失败；发布门禁接入 `_benchmark_evidence_failures`。回答质量首轮 0/28：回答未报告任何金额原值；修复后回答完整报告费用组成（标签+原值+零值业务提示），并将数据集断言从单数字子串强化为组成六要素（个人自付一/医保范围内金额/基金支付总金额的标签与原值）；v2 数据集（EVD_71b7660471bd4f37b5c5a90a1e7e0669）Benchmark 运行 EVR_cb9485f96dbb4f98bb647a0e80e1ac15 status=passed，behavior 28/28、answer_quality 28/28。环境阻塞：真实服务 UI 端到端（页面导入/冻结/正式 Benchmark 运行与运行 ID 记录）待执行，交易号 `011100030X260417004975` 的真实运行验收待补。
 
 #### 嵌入式 / 安全与审计 / 适配器接入
 | # | 单元 | 状态 | 备注 |
