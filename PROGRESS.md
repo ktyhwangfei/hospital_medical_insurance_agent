@@ -29,11 +29,11 @@
 | 模型服务与管理 | 6 | 1 | 5 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证；端点模型列表探测待页面验收 |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
 | 知识库管理 | 4 | 1 | 3 | 0 | 0 | §2 P9 5 tab 已上线；语义提议 S1 已完成 R4，S5 冲突维度候选已完成聚焦验证 |
-| 技能管理 | 9 | 6 | 3 | 0 | 0 | 版本、治理、草稿、AI 创作与日常工作台已验证 |
+| 技能管理 | 11 | 7 | 4 | 0 | 0 | 版本、治理、草稿、AI 创作、日常工作台与门诊全人群固定自测已验证；端到端评测闭环后端/页面已验证，真实 UI 端到端待执行 |
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **34** | **10** | **20** | **2** | **2** | 已删除的结算异常、出院质控、运营看板不再计入现行业务能力 |
+| **合计** | **36** | **11** | **21** | **2** | **2** | 已删除的结算异常、出院质控、运营看板不再计入现行业务能力 |
 
 > **现状**：现行业务流只有 `policy-qa`；结算单是政策问答的必填业务数据。`/settlement`、`/qc`、`/dashboard`、`/chat` 及其旧后端编排已退役，不得作为兼容入口恢复。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6–1.7 和 §4 为准；
@@ -82,12 +82,18 @@
 | 6.2 | 知识检索（RAG） | — | `rule_explanation/` → `policy_retrieval/` | impl_done |
 | 6.3 | 政策知识浏览 | `policy-knowledge/*`（P9 已重构为 5 tab） | `policy_knowledge_routes.py` | impl_done |
 | 6.4 | 政策抽取主动生成可审核的指标/值域提议与冲突维度候选，发布后进入统一语义契约 | `/semantic-layer/proposals` | `pipeline_orchestrator.py` → `semantic_alignment.py` → `semantic_alignment_routes.py` | verified |
+| 6.5 | 从指定发布版本的异常规则生成结构诊断、bjyb 证据和未发布治理草稿 | `/policy-knowledge/knowledge/semantic-discovery` | `rule_governance.py` → `semantic_alignment_routes.py` | impl_done |
+| 6.6 | 政策—数据语义协同发现（PDSC）：检测引擎、发现簇去重聚类、全政策交叉验证、价值分、值域对齐、人工裁决、拆分/合并、激活流水线与 PolicyApplicabilityRelation/Skill 解析 | `/policy-knowledge/knowledge/semantic-discovery` 语义发现决策卡（含扫描/拆分/激活） | `pdsc.py` + `pdsc_detectors.py` + `pdsc_routes.py` + `pdsc_filter_bridge.py` | impl_done |
 
 6.4 验证证据（2026-08-12，R4）：严格按 T1 → T2a → T2b → T3 → T4 执行。T1 聚焦回归 125 passed / 1 optional skipped，真实 PostgreSQL 事务节点另 1 passed；T2a 语义提议与指标变更门禁 API 37 passed；T2b 抽取未知概念→提议→审核→发布→契约可读 Flow 及相关知识流程 7 passed；Portal Vitest 24 passed、TypeScript 与 Next.js 生产构建通过；真实 PostgreSQL 后端的 Locust 50 用户运行 60 秒完成 12,683 次提议列表请求，0 失败、P95 29 ms；Chromium 提议审核发布流程 1 passed。V1 交付设计 §11–§12 规定的 S1 最小闭环，S2 需求缺口、S3 数据扫描、S4 派生模式保留为后续增量信号源。
 
 6.4 S5 验证证据（2026-08-14，聚焦）：规则值归一化、身份签名、严格分区、竞争分区降级、候选幂等/失效/再出现、七类人工建模结论、Enum 维度和值域发布及抽取快照接入已实现。T1 85 passed / 1 optional skipped；T2a 16 passed；T2b 1 passed；Portal Vitest 8 passed，TypeScript 与 Next.js build 通过。按本次需求未扩大到全量、性能或浏览器 E2E 测试。
 
 6.4 原子规则语义修复（2026-08-18，聚焦）：规范规则主体改为表达完整业务度量，综合报销比例与具体基金分项比例不再压扁为通用 `payment_ratio`；细化主体仍复用基础比例结果字段，不扩张语义层指标。相关单元 17 passed、API 1 passed、Flow 1 passed；真实任务 `CS_TASK_630837f92752b70d` 重建后 7/7 规范规则可发布，实时审核页返回 200。
+
+6.5 验证证据（2026-08-20，聚焦）：按单元 → API → Flow 顺序完成 61 passed / 1 skipped、19 passed、1 passed；Portal 12 passed，TypeScript 检查通过。真实 PostgreSQL 的 `REL_202608182` 复验输出三个独立问题：医疗机构类别（两条规则）、大额医疗互助资金（`rule_3222a148156d8c7d`）和综合待遇比例纠偏（`rule_4df372b59673556e`）。页面与新增 API 路径实时返回 200；草稿仅进入审核队列，不写 Milvus、不自动发布。
+
+6.6 验证证据（2026-08-21，PDSC 后端+前端+全 Phase 补齐）：后端单元 30 passed（§4.2 六类检测器、§5.2 自动库值与失败降级、§6.1 拆分、§11.2/§11.3 激活流水线含 §13.10 失败不改活动版本、未预期异常落激活记录、无受影响文档平凡通过，及 §13 项 1-9 与门禁）；API 10 passed（鉴权、完整治理流、扫描接入、拆分、激活失败步骤上报）；桥接 4 passed（无关系/异常服务退回旧路径、已发布关系转换、draft 关系不消费）；前端决策卡 Vitest 8 passed（扫描报告、激活失败步骤展示、拆分需理由）；TypeScript 检查通过；回归 semantic_alignment 78 / semantic_layer 145 / Portal 相关 20 passed（trace_store 1 个失败与会话前 WIP 改动相关，与 PDSC 零 import 关联）；真实 PG 数据冒烟：304 条提取行扫描 → 8 个结构压缩信号 → 去重聚 4 簇，检测器对不可重放行自动过滤。设计偏差：§11.1 状态机未收敛至 SemanticProposal（簇独立 ClusterStatus，功能等价，两套审核入口待后续收敛）；激活中重提取依赖 MODEL_API_KEY，未配置时明确失败而非静默跳过。
 
 #### 技能管理（Skill）
 | # | 单元 | 后端 | 状态 |
@@ -101,6 +107,8 @@
 | 7.7 | Skill 管理工作台（草稿生命周期）：草稿 CRUD/复制（乐观锁）、校验/包生成、导入（ZIP/Git/受控目录）、输入指标契约与语义层交互、物化+版本登记+loader 热重载、停用/恢复/归档 | `domain/skill/draft_models.py` → `data_platform/storage/skill/draft_*` → `runtime/skill_management/{draft_service,draft_validator,package_generator,import_service,skill_input_service,materializer,lifecycle_service}.py` → `infra_skill_routes.py` → Portal `/skills`（四页签） | verified |
 | 7.8 | Skill AI 创作与候选评测：已发布指标生成、人工接受、差异优化、草稿校验、隔离路由/行为评测、人工物化 | `runtime/skill_management/ai_authoring` → `candidate_evaluation.py` → `infra_skill_routes.py` → Portal `/skills/new` 与草稿编辑器 | verified |
 | 7.9 | Skill 日常治理工作台：由既有版本、评测、Release 和草稿事实派生治理待办，默认主链为评测→定位问题→修改→复审→Test Shadow 发布；无第二套可变状态机。 | `/infra-skills/workbench` → Portal `/skills`、`/skills/releases` | verified |
+| 7.10 | 门诊结算全人群固定自测：保留结算单原始金额、禁止通用公式反推个人自付一，固定不同人群/险种/支付渠道真实快照并支持页面编辑和一键回归 | `mzsettlement_verify_skill/self_test_cases.yaml` → 自测 API → Portal `/skills/evaluations?skill=mzsettlement_verify_skill` | verified |
+| 7.11 | Skill 端到端评测闭环：通用任务/数据集版本/Benchmark 三类资产、真实 Policy QA 执行与 prefix 归因、可选 Judge（blocked 不伪造通过、不可翻确定性失败）、失败簇改进任务与复测、正式 Benchmark 驱动 Release 门禁、评测页四工作区重组 | `domain/skill/governance_models.py` → `runtime/skill_management/{evaluation_runner,evaluation_attribution,evaluation_judge}.py` → `governance_service.create_benchmark_run` → `/infra-skills/eval-benchmarks|eval-runs` → Portal `/skills/evaluations` | impl_done |
 
 7.4 验证证据（2026-08-05）：T1 新功能相关测试 18 passed；T2a Skill API 10 passed；T2b 版本目录 Flow 1 passed；Portal Vitest 3 passed、变更文件 ESLint 通过、Next.js build 通过；Chromium E2E 1 passed。旧 `test_skill_mention.py` / `test_skill_intent_matching.py` 中 8 个请求已下线路由的 404 为预存测试债务，不计入 7.4 通过证据。
 
@@ -115,6 +123,10 @@
 7.8 验证证据（2026-08-10）：Task 8 完成候选制品隔离目录、固定路由快照、Docker 行为执行适配器与 fail-closed 策略（提交 `1775779`）；Task 9 补齐六个低基数 AI 创作指标、Portal 候选评测面板和完整 Flow。按 T1 → T2a → T2b 顺序为 104/56/1 passed；Portal Vitest 31 文件 268 passed，变更范围 ESLint 零错误，Next.js 16.2.12 生产构建通过，`skill` 工作区 3173 端口 Chromium E2E 1 passed（含 390px 横向溢出门禁）。当前 Windows 环境未安装 Docker CLI，候选 runner 镜像需在部署环境构建并配置；镜像不可用时行为评测会阻断，不会回退到宿主机执行。
 
 7.9 验证证据（2026-08-11）：严格按 T1 → T2a → T2b 为 25/31/1 passed，其中 T2b 是真实后端固定评测到 Release 的领域闭环；Portal 全量 Vitest 33 文件 328 passed，最终相关 3 文件 66 passed，全分支 57 个 Portal 改动文件 scoped ESLint 0 errors/0 warnings，Next.js 16.2.12 生产构建通过（36/36 静态页生成）。全仓 `npm run lint` 仍有范围外历史基线 107 errors/66 warnings，集中于 policy-knowledge、dashboard、settlement、thinking-chain、sse-hooks 等，未扩大本任务修复。中央 `skill` 工作区后端/前端为 8173/3173，代理与直连 workbench total 均为 1；最终 Chromium E2E 11 passed。浏览器治理主链使用 stateful route interception 验证同一 API 契约及 creator/reviewer token 分离，不声明真实持久化闭环；自动化 409 使用确定性 route interception 并验证待办、生命周期、选中 URL 不丢失，当前持久态 `settlement_explain_skill` 的语义版本 2.0.0 绑定旧 artifact hash、真实 `/versions/sync` 返回 409 仅作为现场观察的已知边界，不作为自动化证明，完整 source commit 不展示，此持久数据冲突未在本任务修复。响应式视觉矩阵覆盖 1440×1000 与 1600×1000 内联待办/决策/证据三栏、1024×900 证据抽屉、390×844 零占位移动导航及占满可用视口的详情/返回聚焦，以及 CSS zoom 2× stress check；均无页面横向溢出，全页仅一个 Skill H1，390px 产品/连接标签隐藏且角色切换控件不裁切，移动抽屉打开时主区退出可访问树，Tab/Shift+Tab 焦点循环、导航 Link 关闭及打开/关闭/Escape/遮罩焦点交接经真实浏览器验证，ArrowDown/ArrowUp 只移动焦点、Enter 打开，主操作和证据入口可聚焦。Impeccable detector 按 Task 7 一次性规则执行一次，结果 `[]`；规格复核修正未重复执行。构建稳定性偏差：未恢复 Google `next/font`，因构建端请求曾返回 101×404 且仓库无本地 Noto 字体资产，继续使用 `globals.css` 的 `Noto Sans SC, system-ui, sans-serif` 字体栈。回滚边界：恢复旧 `/skills` 编排或停止消费新增只读字段；既有 version/eval/draft/release 证据不受影响。
+
+7.10 验证证据（2026-08-31，聚焦）：Skill 单元 25 passed，新增 API 1 passed，门诊政策问答 Flow 1 passed；Portal 相关 Vitest 4 文件 50 passed，TypeScript、scoped ESLint 与 Next.js 生产构建通过。真实服务使用交易号 `011100030X260417004975` 复验：个人自付一保留结算单原值 510.96 元，旧通用反推公式与中间实际/期望值均未进入回答正文；28 个固定人群案例全部通过，自测页面返回 200。
+
+7.11 验证证据（2026-08-31）：严格按层验证，Unit（领域/存储/runner/评测器/治理）66 passed → API（infra_skill_routes + policy_qa_routes）78 passed → Flow（suite + benchmark + release）3 passed；评测闭环 Benchmark Flow 覆盖导入 28 例 → 冻结 → 建 Benchmark → person-21 错误金额归因 calculation → 改进任务 → 修复后完整通过。Portal 聚焦 Vitest 4 文件 13 passed、TypeScript 零错误、scoped ESLint 零错误、Next.js 生产构建通过。确定性规则已验证：Judge blocked/needs_review 不伪造通过、不可翻确定性失败；发布门禁接入 `_benchmark_evidence_failures`。环境阻塞：真实服务 UI 端到端（页面导入/冻结/正式 Benchmark 运行与运行 ID 记录）待执行，交易号 `011100030X260417004975` 的真实运行验收待补。
 
 #### 嵌入式 / 安全与审计 / 适配器接入
 | # | 单元 | 状态 | 备注 |
@@ -339,6 +351,7 @@
 | 2026-08-19 | **Issue #19 单元医疗类别区分（按用户设计重做）**：第一轮方向错误（提取回填+审核页筛选）已回退。现行实现：知识构建页新增「医疗类别分类」面板（执行分类→类别数量卡片→明细下钻→人工修正/恢复自动，PG 持久化 policy_unit_med_types）；新建构建任务向导按医疗类别筛选单元。T1 3+592、T2a 3+41、前端 2+17+139、tsc/build 通过；失败均为预存环境依赖。待用户验证 | 政策知识管线；需求迭代记录 Issue 19 节；领域字典新增 med_type_classifier/UnitMedTypeOverride |
 | 2026-08-19 | **模型治理新模型接入辅助**：通用 OpenAI-compatible `/models` 探测、写权限与脱敏审计、安全失败提示；Portal 模型名支持可搜索列表和手填兜底，端点/密钥变更后列表失效。真实 OpenCode Go 匿名探测 28 个模型且含 `deepseek-v4-flash`，Portal tsc 通过，待用户页面验收 | 模型服务与管理 4.6；`/model-governance` |
 | 2026-08-25 | **Issue #21 完成并验证**：确认 `policy-qa` 为唯一业务入口，结算单作为必填问答上下文；删除结算异常、出院质控、运营看板、静态旧 Chat 原型及通用编排代码和测试，退役路径保持 404；按 Loop Engineering 为结算读取与政策检索增加全局最多 2 次的有界恢复、稳定停止原因及公开验证步骤。T1/T2a/T2b 177/40/139（另 1 optional skipped），Portal 相关 65、E2E/smoke 9、并发 SSE 25/25，TypeScript/build/compileall 通过 | §1.1 单元 1.6–1.7；§3.5；§4；核心 AGENTS/接口/原型文档 |
+| 2026-08-20 | **政策字段 bjyb 数据证据增强最小闭环**：统一语义提案只读关联最新 discovery 字段画像，按业务角色推荐 `H_TYPE`/基金款项与支付分项，明确排除 `H_LEVEL`/险种 `FUND_TYPE`；Portal 增加只读数据库证据预览和历史提议切换。聚焦验证：匹配/API 3、Flow 1、Portal 11 passed，TypeScript 通过；未扩展 Milvus schema 或自动发布。 | §1 知识库管理 6.4；Issue 20 |
 
 ---
 
