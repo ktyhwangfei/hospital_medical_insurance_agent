@@ -14,7 +14,7 @@
 
 **当前阶段**：Issue #31 已撤回为 `editing` 草稿，候选核心流程可隔离测试、正式路由与公开 API 未开放；Issue #30（单元 1.8 轨迹持久化）后端 + 前端全链路实现完成，待浏览器人工验收
 
-**门诊医保数据底座 P1（2026-08-31，`impl_done`）**：当前测试环境已自动登记 `bjybdb`，SQL Server 三张门诊表及 117 个契约字段可读，PostgreSQL 门诊结构与事务读写通过，真实页面显示“数据底座可用”；CDC 未开启并单独显示“等待 DBA”，不影响默认 5 分钟定时 SQL。最新全量 Unit 1977 passed/2 skipped → API 301 passed → Flow 140 passed/1 skipped；Portal 368 passed、TypeScript 与 38 路由构建通过，Chromium/WebKit E2E 通过。Firefox 在本机被 Next dev/HMR 请求停滞阻断，保留生产态复验；同步任务仍为草稿，未擅自生成批次、LSN 或 P95。[P1 验证记录](docs/reviews/2026-08-28-outpatient-p1-verification.md) 持续保持证据边界；达到 P95 ≤ 300 秒并完成同步验收前不改整个 P1 为 `complete`，P2 不改 `ready_for_planning`。
+**门诊医保数据底座 P1（2026-08-31，`impl_done`；2026-09-01 同步已启动）**：当前测试环境已自动登记 `bjybdb`，SQL Server 三张门诊表及 117 个契约字段可读，PostgreSQL 门诊结构与事务读写通过，真实页面显示“数据底座可用”；CDC 未开启并单独显示“等待 DBA”，不影响默认 5 分钟定时 SQL。**2026-09-01 定时 SQL 任务已人工启动**：基线快照 3350 行（592/2139/619）幂等落库，5 分钟心跳正常，P95 样本积累中（首批 batch `5d56bfaa`/`a3a9edb0`）。启动时修复多 worker 重复认领缺陷（认领 WHERE 补 `active_attempt_id IS NULL`、`start_job` 清残留 attempt），全量 Unit 2013 passed/2 skipped → API+Flow 460 passed/1 skipped。Firefox 在本机被 Next dev/HMR 请求停滞阻断，保留生产态复验。[P1 验证记录](docs/reviews/2026-08-28-outpatient-p1-verification.md) 持续保持证据边界；达到 P95 ≤ 300 秒并完成同步验收前不改整个 P1 为 `complete`，P2 不改 `ready_for_planning`。
 
 | 阻塞项 | 原因 | 解锁条件 |
 |---|---|---|
@@ -352,6 +352,7 @@
 | 2026-08-31 | **Issue #31 草稿治理更正**：撤回未具备上线条件的正式 Skill 与 `/policy-qa/stream` 退费分支；候选包迁至 `skill_drafts/` 并通过既有导入服务登记为 `editing`，保留适配器契约和隔离核心流程。真实预结算、候选评测、人工审批完成前不参与运行时发现或路由（进度编号由 1.8 重编为 1.9，避开 Issue #30 占用） | §1.1 单元 1.9；Skill 草稿管理 |
 | 2026-08-31 | **Issue #30 轨迹持久化与挂起/升级/恢复**：新增 `policy_qa_trajectories` 表（每轮可重放公开快照）与 sessions 状态列（active/suspended/escalated/closed，CREATE+ALTER 双写）；`session_lifecycle.py` 状态机 + 升级工单（复用 task_closure，waiting_human_confirmation→resolve 回填）；7 个生命周期/轨迹端点；/stream 收尾写轨迹 + 非活跃会话 409；前端刷新恢复（localStorage sessionId + 轨迹重建）与挂起/升级 UI。顺带修复预存缺陷：PG task_store.create_task 缺 input_data/status 等参数（与 service 层协议不匹配，PG 模式下 record_qa_task 曾静默失败）。T1 单元 15+307、T2a API 9+47、T2b Flow 1、Portal Vitest 聚焦 82/全量 358（3 failed 为 §5 预存债务）、TSC/ESLint/build/compileall 通过；真实 PG 冒烟（DDL 双写 + jsonb 读写 + 状态机）通过 | §1.1 单元 1.8；数据库/接口文档待同步；SSO 接入后 user_id 改认证上下文 |
 | 2026-08-31 | **门诊测试数据底座接入就绪**：复用既有 SQL Server/PostgreSQL 测试凭据，自动登记并验证三表 117 字段与 PG 事务读写；页面拆分展示数据底座、门诊源表、PG、CDC 和同步草稿状态，CDC 可选；修复端点变化后凭据 revision 丢失导致启动不幂等 | 门诊数据治理中心；P1 接入就绪 |
+| 2026-09-01 | **门诊同步任务人工启动 + 多 worker 竞态修复**：定时 SQL 从草稿转 running，基线 3350 行幂等落库、5 分钟心跳正常，P95 样本开始积累；发现并修复他检出目录遗留 worker 共享 PG 抢任务导致的重复认领与成功批次孤儿化（先红后绿补 2 个回归测试），杀僵尸 worker 后全量 Unit 2013 → API+Flow 460 通过 | 门诊数据治理中心；P1 同步验收进行中 |
 
 ---
 

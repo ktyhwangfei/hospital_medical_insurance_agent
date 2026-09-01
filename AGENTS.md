@@ -207,6 +207,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - 手动 `uvicorn`/`npm run dev` 绕过 `start-servers.ps1` 会丢一串环境注入：后端缺 `AUTH_JWT_SECRET`（语义对齐接口 401「JWT 验签配置缺失」）、前端缺 `NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN`（语义发现页报「缺少语义审核登录凭证」，且 sessionStorage 无登录入口，token 唯一来源就是启动脚本同密钥签发注入），还丢 `MODEL_GOVERNANCE_DEV_MODE`/`SKILL_CONTROL_DEV_MODE`/`DATA_SOURCE_MODE` 等。半启动/鉴权异常一律 `..\ws.ps1 restart` 修复。
 - 前端 dev 进程复用旧实例时不纠正 `NEXT_PUBLIC_API_BASE_URL`。`start-servers.ps1` 见前端端口已监听即 `Nothing to start` 退出，多工作区下若旧进程曾用 `next.config.ts` 默认值 8000，前端 API 代理会持续转发到错误后端实例、`/skills` 工作台目录与所有 skill 列表全空（summary 全 0）。诊断：经前端代理 `curl 127.0.0.1:<前端端口>/api/v1/medical-insurance-ai-agent/infra-skills/workbench` 的 total 与直连本工作区后端端口不一致（代理 0、后端 >0）。正确做法：`Stop-Process` 杀前端进程后带 `$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:<后端端口>'` 重启 `npm run dev`。
 - Postgres 表加列只在 `CREATE TABLE` 写、漏配 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，旧库因 `CREATE TABLE IF NOT EXISTS` 不重建导致 INSERT 报 `UndefinedColumn` 500（发起评测曾因 `regression_results`/`regression_summary` 漏配 ALTER 而崩）。模型加字段必须 CREATE + ALTER 双写；防回归测试 `test_skill_eval_runs_insert_columns_covered_by_ddl` 校验 INSERT 列 ⊆ DDL 列。
+- 多检出目录的 outpatient sync worker 共享同一 PostgreSQL 时互相抢任务：后启动方 bootstrap 用本目录主密钥重封共享凭据，旧 worker 认领后解封即失败并把任务打成 `failed`，且其 `fail_job` 覆盖 `active_attempt_id` 导致另一 worker 已成功批次被孤儿化（任务行丢失成功状态）。排查用 `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*sync_worker*' }`，杀掉非本工作区 PID；启动同步前先确认单 worker；认领护栏 `active_attempt_id IS NULL` 已入回归测试。
 
 ### 陷阱模板
 
