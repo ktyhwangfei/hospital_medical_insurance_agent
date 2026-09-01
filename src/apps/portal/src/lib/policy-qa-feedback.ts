@@ -1,6 +1,7 @@
 'use client'
 
 import { requestJson } from '@/lib/api-client'
+import { policyQAFeedbackHeaders } from '@/lib/skill-auth'
 
 // ── 类型 ──────────────────────────────────────────────
 
@@ -98,6 +99,7 @@ export async function submitPolicyQAFeedback(
 ): Promise<PolicyQAFeedbackResult> {
   const raw = await requestJson<RawFeedbackResponse>('/policy-qa/feedback', {
     method: 'POST',
+    headers: policyQAFeedbackHeaders(),
     body: JSON.stringify({
       qa_turn_id: payload.qaTurnId,
       reason_code: payload.reasonCode,
@@ -118,6 +120,49 @@ export interface EvalCasePoolFilter {
   targetSkillId?: string
   limit?: number
   offset?: number
+}
+
+// ── 答案验证（五维）：MVU-4 ───────────────────────────
+
+export type KnowledgeAnswerVerificationStatus =
+  | 'passed'
+  | 'failed'
+  | 'not_evaluable'
+  | 'blocked_by_evaluator'
+  | 'review_required'
+
+export interface VerificationFailure {
+  code: string
+  message: string
+  [key: string]: unknown
+}
+
+export interface VerificationDimensionResult {
+  status: KnowledgeAnswerVerificationStatus
+  failures?: VerificationFailure[]
+  details?: Record<string, unknown>
+}
+
+export interface KnowledgeAnswerVerificationResult {
+  status: KnowledgeAnswerVerificationStatus
+  dimensions: Record<string, VerificationDimensionResult>
+  [key: string]: unknown
+}
+
+export interface VerifyAnswerResponse {
+  verification: KnowledgeAnswerVerificationResult
+  trace_available: boolean
+  degraded: boolean
+}
+
+/** 对已有的一次政策问答回答（以 qa_turn_id 为句柄）做五维交叉验证。 */
+export async function verifyPolicyQAAnswer(
+  qaTurnId: string,
+): Promise<VerifyAnswerResponse> {
+  return requestJson<VerifyAnswerResponse>(
+    `/policy-qa/answers/${encodeURIComponent(qaTurnId)}/verification`,
+    { method: 'POST' },
+  )
 }
 
 export async function listEvalCasePool(

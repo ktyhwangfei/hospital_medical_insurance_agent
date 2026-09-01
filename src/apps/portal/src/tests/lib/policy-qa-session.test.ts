@@ -193,6 +193,10 @@ describe('extractSettlementId', () => {
     expect(extractSettlementId('查询住院费用，结算单 1671213')).toBe('1671213')
   })
 
+  it('完整提取包含字母的门诊交易号', () => {
+    expect(extractSettlementId('011100030X240311000031，费用组成')).toBe('011100030X240311000031')
+  })
+
   it('无数字时返回 null', () => {
     expect(extractSettlementId('那起付线呢')).toBeNull()
   })
@@ -296,6 +300,31 @@ describe('toPolicyQAResult', () => {
       settlementChecked: false,
       calculationChecked: false,
       policyCount: 0,
+    })
+  })
+
+  it('转换整次住院查询范围和分段覆盖字段', () => {
+    const result = toPolicyQAResult({
+      ...validResult,
+      case_context: {
+        query_scope: 'whole_admission',
+        segment_count: 2,
+        matched_segment_count: 2,
+        coverage_status: 'complete',
+        stay_start_date: '2025-01-01',
+        stay_end_date: '2025-04-15',
+        total_amount: 189085.85,
+      },
+    })
+
+    expect(result.caseContext).toMatchObject({
+      queryScope: 'whole_admission',
+      segmentCount: 2,
+      matchedSegmentCount: 2,
+      coverageStatus: 'complete',
+      stayStartDate: '2025-01-01',
+      stayEndDate: '2025-04-15',
+      totalAmount: 189085.85,
     })
   })
 })

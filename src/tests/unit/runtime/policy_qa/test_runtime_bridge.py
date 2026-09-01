@@ -169,6 +169,20 @@ def test_finalize_turn_returns_chain_and_updates_conversation_memory():
     assert need["topic_changed"] is False
 
 
+def test_finalize_turn_remembers_skill_only_for_same_settlement():
+    bridge, _, _ = _make_bridge()
+
+    bridge.finalize_turn(
+        session_id="s1",
+        question="这次门诊结算对不对",
+        skill_id="mzsettlement_verify_skill",
+        settlement_id="MZ-1",
+    )
+
+    assert bridge.last_skill_id("s1", "MZ-1") == "mzsettlement_verify_skill"
+    assert bridge.last_skill_id("s1", "MZ-2") is None
+
+
 def test_memory_upsert_replaces_same_ref_object():
     """同一结算单多次查询：记忆覆盖而非累积（version +1）。"""
     bridge, memory_manager, _ = _make_bridge()

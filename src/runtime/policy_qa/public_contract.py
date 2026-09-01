@@ -36,6 +36,14 @@ class PolicyQACaseContext(BaseModel):
     large_amount_self_pay: float | None = None
     personal_total_pay: float | None = None
     total_amount: float | None = None
+    query_scope: Literal[
+        "whole_admission", "segment", "whole_settlement", "fee_item"
+    ] | None = None
+    segment_count: int | None = Field(default=None, ge=0)
+    matched_segment_count: int | None = Field(default=None, ge=0)
+    coverage_status: Literal["complete", "partial", "unavailable"] | None = None
+    stay_start_date: str | None = None
+    stay_end_date: str | None = None
 
 
 class PolicyQACalculationStep(BaseModel):
@@ -67,6 +75,37 @@ class PolicyEvidence(BaseModel):
     score: float | None = Field(default=None, allow_inf_nan=False)
 
 
+class OutpatientContextCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    value: str | float | int | bool | None = None
+    status: Literal["present", "missing"]
+
+
+class OutpatientAmountCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    equation: str
+    actual: float | None = None
+    expected: float | None = None
+    difference: float | None = None
+    tolerance: float
+    status: Literal["passed", "failed", "not_evaluable"]
+
+
+class OutpatientFieldExplanation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field_name: str
+    value: float | None = None
+    state: Literal["non_zero", "reported_zero", "missing", "not_applicable"]
+    applicable: bool | None = None
+    explanation: str
+    citations: list[str] = Field(min_length=1)
+
+
 class PolicyQAPublicResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -80,3 +119,24 @@ class PolicyQAPublicResult(BaseModel):
     citations: list[PolicyCitation] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
     verification_summary: VerificationSummary
+    scenario_id: str | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    context_checks: list[OutpatientContextCheck] = Field(
+        default_factory=list, exclude_if=lambda value: not value,
+    )
+    amount_checks: list[OutpatientAmountCheck] = Field(
+        default_factory=list, exclude_if=lambda value: not value,
+    )
+    field_explanations: list[OutpatientFieldExplanation] = Field(
+        default_factory=list, exclude_if=lambda value: not value,
+    )
+    anomalies: list[str] = Field(
+        default_factory=list, exclude_if=lambda value: not value,
+    )
+    next_actions: list[str] = Field(
+        default_factory=list, exclude_if=lambda value: not value,
+    )
+    action_status: Literal["waiting_human_confirmation"] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )

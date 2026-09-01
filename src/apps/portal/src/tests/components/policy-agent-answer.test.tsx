@@ -19,6 +19,15 @@ const completeMessage: PolicyQAChatMessage = {
     excludes: ['目录外全自费费用'],
   },
   warnings: ['最终结算结果以医保系统为准。'],
+  caseContext: {
+    totalAmount: 189085.85,
+    queryScope: 'whole_admission',
+    segmentCount: 2,
+    matchedSegmentCount: 2,
+    coverageStatus: 'complete',
+    stayStartDate: '2025-01-01',
+    stayEndDate: '2025-04-15',
+  },
   citations: [
     { title: '基本医疗保险住院待遇政策', excerpt: '参保人员按规定承担统筹范围内费用。' },
     { title: '住院费用结算说明', excerpt: '结算单分别列示统筹支付与个人支付。' },
@@ -44,6 +53,11 @@ describe('PolicyAgentAnswer', () => {
     expect(screen.getByRole('button', { name: '查看 2 条政策来源' })).toBeInTheDocument()
     expect(screen.getByText('计算依据')).toBeInTheDocument()
     expect(screen.getByText('计算依据').closest('details')).not.toHaveAttribute('open')
+    fireEvent.click(screen.getByText('计算依据'))
+    expect(screen.getByText('查询范围：整次住院')).toBeInTheDocument()
+    expect(screen.getByText('住院期间：2025-01-01 至 2025-04-15')).toBeInTheDocument()
+    expect(screen.getByText('结算分段：2 个，已完整汇总')).toBeInTheDocument()
+    expect(screen.getByText('189,085.85 元')).toBeInTheDocument()
   })
 
   it('shows only policy title and excerpt in the sources dialog', () => {
@@ -88,6 +102,27 @@ describe('PolicyAgentAnswer', () => {
     expect(summary.querySelector('.lucide-triangle-alert')).toBeInTheDocument()
   })
 
+  it('does not render amounts when segment coverage is partial', () => {
+    render(
+      <PolicyAgentAnswer
+        message={{
+          ...completeMessage,
+          answerStatus: 'unavailable',
+          caseContext: {
+            ...completeMessage.caseContext,
+            totalAmount: null,
+            matchedSegmentCount: 1,
+            coverageStatus: 'partial',
+          },
+        }}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('计算依据'))
+    expect(screen.getByText('结算分段：2 个，目前仅匹配 1 个')).toBeInTheDocument()
+    expect(screen.queryByText('住院总费用')).not.toBeInTheDocument()
+  })
+
   it('uses neutral alert semantics instead of a verified badge for unavailable answers', () => {
     render(
       <PolicyAgentAnswer
@@ -109,5 +144,32 @@ describe('PolicyAgentAnswer', () => {
     expect(summary).toHaveClass('border-slate-200')
     expect(summary.querySelector('.lucide-badge-check')).not.toBeInTheDocument()
     expect(summary.querySelector('.lucide-circle-alert')).toBeInTheDocument()
+  })
+
+  it('shows outpatient source amounts without exposing intermediate calculations', () => {
+    render(
+      <PolicyAgentAnswer
+        message={{
+          ...completeMessage,
+          content: '已列示本次门诊结算单中的个人负担金额。',
+          scenarioId: 'personal-liability-explanation',
+          settlementFields: [
+            { fieldName: '个人自付一', value: 510.96, state: 'non_zero' },
+            { fieldName: '个人自付二', value: 22.48, state: 'non_zero' },
+            { fieldName: '现金支付', value: 0, state: 'reported_zero' },
+          ],
+          calculationSteps: [
+            { stepName: '个人自付一组成勾稽', description: '错误的中间计算不应展示。' },
+          ],
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('region', { name: '结算单费用' })).toBeInTheDocument()
+    expect(screen.getByText('510.96 元')).toBeInTheDocument()
+    expect(screen.getByText('0.00 元')).toBeInTheDocument()
+    expect(screen.getByText('以上金额均来自本次医保结算单原始字段。')).toBeInTheDocument()
+    expect(screen.queryByText('错误的中间计算不应展示。')).not.toBeInTheDocument()
+    expect(screen.queryByText('计算依据')).not.toBeInTheDocument()
   })
 })
