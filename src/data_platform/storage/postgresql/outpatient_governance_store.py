@@ -346,6 +346,7 @@ class OutpatientGovernanceStore:
                        FROM outpatient_sync_jobs
                        WHERE status IN ('ready', 'running')
                          AND COALESCE(run_once_requested_at, next_run_at) <= %s
+                         AND active_attempt_id IS NULL
                        ORDER BY COALESCE(run_once_requested_at, next_run_at), source_id
                        FOR UPDATE SKIP LOCKED
                        LIMIT 1""",

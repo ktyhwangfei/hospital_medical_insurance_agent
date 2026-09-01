@@ -228,6 +228,26 @@ def test_scheduled_sql_start_requires_source_and_postgres_but_not_cdc(monkeypatc
     assert started.status is SyncJobStatus.READY
 
 
+def test_start_job_clears_stale_active_attempt(monkeypatch) -> None:
+    """worker 崩溃残留 active_attempt_id 时，手动重启必须清掉，否则任务永远无法再被认领。"""
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+    store = _GovernanceStore()
+    service = DataGovernanceService(store, _PostgresStore(), lambda _s, _p: _Connection())
+    service.create_source(_command(), actor="admin-1")
+    service.save_job_config("bjybdb", SaveSyncJobRequest(
+        source_mode="scheduled_sql", expected_revision=1,
+    ), actor="admin-1")
+    service.probe_connection("bjybdb")
+    store.jobs["bjybdb"] = store.jobs["bjybdb"].model_copy(
+        update={"active_attempt_id": "stale-attempt", "status": SyncJobStatus.RUNNING}
+    )
+
+    started = service.start_job("bjybdb", actor="admin-1")
+
+    assert started.status is SyncJobStatus.READY
+    assert started.active_attempt_id is None
+
+
 def test_cdc_waiting_state_does_not_overwrite_source_readiness_message(monkeypatch) -> None:
     monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
     store = _GovernanceStore()

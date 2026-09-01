@@ -351,6 +351,8 @@ class DataGovernanceService:
         if job.source_mode.value == "cdc" and source.cdc_status is not CdcEnablementStatus.READY:
             raise CdcNotReadyError("CDC 尚未按受控模板开通")
         now = datetime.now(timezone.utc)
+        # worker 崩溃可能残留 active_attempt_id；手动重启必须清掉，否则任务永远无法再被认领
+        job = job.model_copy(update={"active_attempt_id": None})
         return self._save_job_state(job, SyncJobStatus.READY, now, next_run_at=now)
 
     def pause_job(self, source_id: str, actor: str) -> OutpatientSyncJob:
