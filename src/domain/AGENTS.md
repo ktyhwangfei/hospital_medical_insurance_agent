@@ -663,7 +663,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 标准值提案 | `StandardValueProposal` | **Entity** | Pydantic `BaseModel` | 现有标准值域无法承接来源值时提交的人工审核草稿 |
 | 语义提议 | `SemanticProposal` | **Aggregate Root** | Pydantic `BaseModel` | 系统从抽取等运行信号主动发现指标或值域缺口后形成的统一审核对象，必须经人工审核后才能发布 |
 | 发现信号 | `DiscoverySignal` | **Value Object** | Pydantic `BaseModel` | 携带触发来源、结构化证据与建议落地字段的主动发现输入 |
-| 发现证据 | `DiscoveryEvidence` | **Value Object** | Pydantic `BaseModel` | 可追溯到政策文档、单元与提取记录的结构化证据；同一来源重复观测需幂等合并 |
+| 发现证据 | `DiscoveryEvidence` | **Value Object** | Pydantic `BaseModel` | 可追溯到政策文档、单元、提取记录或 bjyb 数据字段的结构化证据；数据库证据需标明采纳/排除等级与理由，同一来源重复观测需幂等合并 |
 | 冲突诊断 | `ConflictDiagnosis` | **Value Object** | `StrEnum` | 规则值冲突的确定性分类；只有缺失维度且满足严格分区时可形成候选 |
 | 冲突分区证据 | `ConflictPartitionEvidence` | **Value Object** | Pydantic `BaseModel`（frozen） | 记录身份签名、冲突值、分区映射、覆盖率、排他性及 extraction snapshot 的强证据 |
 | 维度候选提议 | `DimensionCandidateProposal` | **Value Object** | Pydantic `BaseModel`（frozen） | S5 从冲突严格分区发现的候选维度和值域，仅能装入 `SemanticProposal` 等待人工建模审核 |
@@ -677,6 +677,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 编译运行 | `CompileRun` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 一次不可变政策规则编译运行及其输入输出快照 |
 | 编译步骤 | `CompileStep` | **Entity** | Pydantic `BaseModel`（frozen） | 编译运行中按序追加的阶段输入、输出和状态 |
 | 校验问题 | `ValidationIssue` | **Value Object** | Pydantic `BaseModel`（frozen） | 带稳定错误码、阶段、严重度和处理建议的编译问题 |
+| 知识答案验证 | `KnowledgeAnswerVerification` | **Domain Service** | — | 以 `qa_turn_id` 为句柄验证 Policy QA 回答的引用真实性与结论与结构化知识一致性；确定性优先、fail-closed |
+| 知识答案断言 | `KnowledgeAnswerAssertions` | **Value Object** | 判别联合 | 答案验证五个维度的结构化断言，独立于 Skill 的 `RegressionAssertions`，禁止自然语言裸期望 |
+| 答案验证维度 | `KnowledgeAnswerVerificationDimension` | **Value Object** | `StrEnum` | citation_authenticity / citation_support / conclusion_consistency / calculation_consistency / coverage_completeness |
+| 答案验证状态 | `KnowledgeAnswerVerificationStatus` | **Value Object** | `StrEnum` | passed / failed / not_evaluable / blocked_by_evaluator / review_required |
+| 引用关联方法 | `CitationLinkMethod` | **Value Object** | `StrEnum` | internal_id_match / normalized_exact_match / metadata_constrained_match / vector_candidate_fallback / unverified；前三级可强通过，向量仅候选发现不做真实性证明 |
+| 答案验证夹具 | `AnswerVerificationFixture` | **Value Object** | Pydantic `BaseModel`（frozen） | 挂载在经典 Policy QA 用例上的确定性公开答案、引用、内部证据与门禁维度声明 |
+| 答案验证运行 | `AnswerVerificationRun` | **Aggregate Root** | Pydantic `BaseModel` | 一次候选政策 release 的答案验证门禁运行，汇总逐用例阻断原因并决定是否可发布 |
+| 策略答案验证门禁服务 | `PolicyAnswerVerificationGateService` | **Domain Service** | — | 使用候选 release 知识源和用例夹具执行答案验证，作为质量门禁之外的第二道发布阻断 |
 
 #### 业务规则
 
@@ -687,6 +695,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - 结构化字段与政策 Knowledge 字段是两类权威来源，通过 `MetricSourceBinding` 多对一汇聚到同一标准指标；不得分别建立平行指标体系
 - 新指标、来源值映射和标准值提案默认均为 `draft`，只有语义层独立审核动作可以发布
 - 一条规范规则必须由 `subject + conditions + result + evidence` 独立表达完整业务语义；规则主体细化不得自动扩张语义层指标，比例结果仍复用基础 `payment_ratio`
+- 答案验证的引用真实性必须用规则 ID/原文片段/hash 证明，向量检索只能召回候选，不得单独作为真实性证明；公开 excerpt 找不到原文即 fail-closed
+- 覆盖完整性在没有 coverage planner 的问题类型上必须返回 `not_evaluable` 而非 `passed`，防止"看起来全覆盖"的假安全感
 
 #### 生命周期
 
@@ -696,6 +706,23 @@ HIS 系统 → HisPort → Patient (查询/读取)
     → 错误码知识 / 规则解释 / 提示模板
     → 结果 + Citation 引用 → AgentResponse
 ```
+
+#### 语义查询模型通用语言
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 语义数据集 | `SemanticDataset` | **Entity** | Pydantic `BaseModel` | 已登记且可查询的物理表或视图，以 `dataset_code` 唯一标识 |
+| 数据集键 | `DatasetKey` | **Value Object** | Pydantic `BaseModel` | primary / unique / foreign 复合键声明；primary key 决定数据集行粒度 |
+| 语义字段 | `SemanticField` | **Entity** | Pydantic `BaseModel` | 物理列的 identifier / dimension / fact 语义声明，以 `field_code` 唯一标识 |
+| 数据集关系 | `DatasetRelation` | **Entity** | Pydantic `BaseModel` | 由两端已登记键定义的等值关系，不包含用户 SQL 或 JOIN 表达式 |
+| 数据质量规则 | `DataQualityRule` | **Entity** | Pydantic `BaseModel` | coverage / uniqueness / not_null 运行时核验规则 |
+| 语义查询 | `SemanticQuery` | **Value Object** | Pydantic `BaseModel` | 只包含业务对象、范围锚点、指标、维度和受限过滤的查询契约 |
+| 逻辑查询计划 | `LogicalQueryPlan` | **Value Object** | Pydantic `BaseModel` | 预聚合分支、公共粒度、关联和质量检查的稳定执行契约 |
+| 语义查询结果 | `SemanticQueryResult` | **DTO** | Pydantic `BaseModel` | 查询行、模型版本、范围、质量状态、证据和警告 |
+
+- `scope.anchor` 用于定位业务主体及完整范围；普通 `filters` 只限制参与计算的数据行，两者禁止混用。
+- 多事实数据集必须分别预聚合到公共实体粒度后再关联，禁止先连接原始事实行。
+- 运行时只消费已发布查询模型；关系歧义、重复主键或可能放大金额时 fail-closed。
 
 ---
 
