@@ -1,4 +1,4 @@
-﻿"""
+"""
 医保政策问答RAG系统 - SSE流式API端点
 
 端点: POST /api/v1/medical-insurance-ai-agent/policy-qa/stream
@@ -48,6 +48,11 @@ from src.runtime.policy_qa.settlement_data_provider import (
 from src.runtime.policy_qa.structured_policy_retriever import (
     PolicyRetrievalUnavailableError,
     retrieve_policy_evidence,
+)
+from src.runtime.policy_qa.broad_policy_retriever import (
+    BroadPolicyRetriever,
+    InferredQueryContext,
+    retrieve_broad_policy_evidence,
 )
 from src.config.production import MILVUS_HOST, MILVUS_PORT
 from src.skill_infra.skill_router import route_question, get_assembler, get_skill_manifest
@@ -103,6 +108,65 @@ def _sse_event(event_type: str, data: dict | str) -> str:
     else:
         data_str = data
     return f'event: {event_type}\ndata: {data_str}\n\n'
+
+
+def _is_broad_question(request: PolicyQARequest, context_need: dict[str, Any] | None) -> bool:
+    """判定是否为宽泛政策问题（无结算单上下文）。
+
+    Issue #25：当前以 settlement_id 缺失为主要判定；后续可结合 must_query_semantic
+    与问题关键词做更细粒度的路由。
+    """
+    if not request.settlement_id:
+        return True
+    return False
+
+
+def _generate_broad_answer(question: str, evidence: list[dict[str, Any]]) -> str:
+    """为宽泛问题生成基于政策证据的回答。
+
+    模型调用统一走 model_service/gateway；失败时返回带 citations 的安全降级文本。
+    """
+    if not evidence:
+        return "未检索到与您问题相关的政策依据，建议您补充地区、险种、医疗类别等具体信息后再试。"
+
+    try:
+        from src.model_service.gateway import ModelGateway
+        from src.model_service.models import Message
+
+        citations_text = "\n".join(
+            f"- {i + 1}. {ev.get('source_text', ev.get('clause', ''))[:200]}"
+            for i, ev in enumerate(evidence[:5])
+        )
+        prompt = (
+            "你是医保政策问答助手。请根据以下检索到的政策依据，用中文简明回答用户问题。"
+            "必须标注来源，不确定的地方明确声明。\n\n"
+            f"用户问题：{question}\n\n"
+            f"政策依据：\n{citations_text}\n\n"
+            "回答："
+        )
+        gateway = ModelGateway()
+        response = gateway.generate(
+            messages=[Message(role="user", content=prompt)],
+            model_type="llm",
+            scene="policy_qa_broad_answer",
+            max_tokens=1024,
+        )
+        return (response.content or "").strip() or _fallback_broad_answer(evidence)
+    except Exception as e:
+        logger.warning("[BROAD-QA] 模型生成失败，使用安全降级回答: %s", e)
+        return _fallback_broad_answer(evidence)
+
+
+def _fallback_broad_answer(evidence: list[dict[str, Any]]) -> str:
+    """模型不可用时的安全降级回答。"""
+    clauses = [
+        f"{i + 1}. {ev.get('source_text', ev.get('clause', ''))[:120]}"
+        for i, ev in enumerate(evidence[:3])
+    ]
+    return (
+        "根据检索到的政策依据，为您整理如下：\n" + "\n".join(clauses)
+        + "\n\n以上信息仅供参考，具体待遇以当地医保经办机构解释为准。"
+    )
 
 
 def _resolve_tenant_id(request: PolicyQARequest) -> str:
@@ -429,6 +493,7 @@ def _build_public_result(
     warnings: list[str],
     case_context: dict | None,
     is_overview: bool = False,
+    is_broad: bool = False,
 ) -> PolicyQAPublicResult:
     """用字段白名单把内部执行结果重建为唯一公开回答契约。"""
     safe_context = None
@@ -544,12 +609,17 @@ def _build_public_result(
         uncertainties.append("公开回答未包含可核验的业务内容。")
     if is_overview:
         uncertainties.append("费用总览不涉及单项政策匹配或单项计算过程核验。")
+    elif is_broad:
+        uncertainties.append("本回答针对宽泛政策问题，未关联具体结算单，仅供参考。")
     elif not citations:
         uncertainties.append("未检索到可展示的政策依据。")
     if answer_status == "partial":
-        uncertainties.append("政策依据不完整，当前回答仅供核对真实结算金额。")
+        if is_broad:
+            uncertainties.append("政策依据可能不完整，请结合当地最新政策文件核对。")
+        else:
+            uncertainties.append("政策依据不完整，当前回答仅供核对真实结算金额。")
     elif answer_status == "unavailable":
-        uncertainties.append("现有结算数据和政策依据不足以形成可靠结论。")
+        uncertainties.append("现有信息不足，未形成可靠核对结论。")
 
     verification_messages = {
         "complete": (
@@ -557,7 +627,11 @@ def _build_public_result(
             if is_overview
             else "结算金额、计算过程和政策依据已完成核对。"
         ),
-        "partial": "已核对结算金额，但政策依据或计算过程仍不完整。",
+        "partial": (
+            "已基于检索到的政策依据生成解释，但未关联具体结算单。"
+            if is_broad
+            else "已核对结算金额，但政策依据或计算过程仍不完整。"
+        ),
         "unavailable": "现有信息不足，未形成可靠核对结论。",
     }
     return PolicyQAPublicResult(
@@ -644,11 +718,14 @@ async def _policy_qa_stream(
     # 轨迹收集（Issue #30：公开快照，供会话重放）
     turn_context_need: dict | None = None
     turn_memory_updates: list[dict] = []
-    
+
+    # Issue #25：宽泛政策问题标识（无结算单上下文，走 BM25+向量宽召回）
+    is_broad = _is_broad_question(request, context_need)
+
     try:
         # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
         # 旧编排器（PolicyQAOrchestrator）已退役：政策检索/计算/回答统一走 skill 策略引擎。
-        provider = create_settlement_data_provider()
+        provider = create_settlement_data_provider() if not is_broad else None
         # 处理请求并 yield SSE 事件（Skill 驱动：五步流程）
         public_steps: list[dict] = []          # 累积公开步骤
         result_answer = ""                     # 最终公开回答
@@ -697,55 +774,109 @@ async def _policy_qa_stream(
         async for _ev in _yield_step("skill_routing", "done", "已匹配费用解释技能"):
             yield _ev
 
-        # ═══ Step 3: settlement_query（真实结算数据）═══
-        async for _ev in _yield_step("settlement_query", "running", "查询真实结算数据…"):
-            yield _ev
-        while True:
-            try:
-                settlement_context = await provider.get_settlement_context(
-                    request.settlement_id
-                )
-                break
-            except SettlementDataUnavailableError:
-                failure_class = "settlement_data_unavailable"
-                if attempt_count >= MAX_POLICY_QA_ATTEMPTS:
-                    halt_reason = (
-                        "stalled"
-                        if last_retryable_failure == failure_class
-                        else "max_attempts"
+        # ═══ Step 3: settlement_query（真实结算数据；宽泛问题跳过）═══
+        settlement_context: Any = None
+        if not is_broad:
+            async for _ev in _yield_step("settlement_query", "running", "查询真实结算数据…"):
+                yield _ev
+            while True:
+                try:
+                    settlement_context = await provider.get_settlement_context(
+                        request.settlement_id
                     )
-                    raise
-                last_retryable_failure = failure_class
-                attempt_count += 1
-                async for _ev in _yield_step(
-                    "recovery", "done", "结算数据源暂时不可用，正在重试…"
-                ):
-                    yield _ev
-        for _evt_type, _evt_payload in runtime_bridge.record_step(
-            session_id=session_id,
-            step="settlement_query",
-            detail={
-                "settlement_id": request.settlement_id,
-                "total_fee": settlement_context.total_amount,
-                "deductible": settlement_context.deductible,
-                "basic_pooling_self_pay": settlement_context.basic_pooling_self_pay,
-            },
-            settlement_id=request.settlement_id,
-        ):
-            if _evt_type == "memory_update":
-                turn_memory_updates.append(dict(_evt_payload))
-                yield _sse_event(_evt_type, _sanitize(_evt_payload))
-                await asyncio.sleep(0)
-        async for _ev in _yield_step("settlement_query", "done", "结算数据获取完成"):
-            yield _ev
+                    break
+                except SettlementDataUnavailableError:
+                    failure_class = "settlement_data_unavailable"
+                    if attempt_count >= MAX_POLICY_QA_ATTEMPTS:
+                        halt_reason = (
+                            "stalled"
+                            if last_retryable_failure == failure_class
+                            else "max_attempts"
+                        )
+                        raise
+                    last_retryable_failure = failure_class
+                    attempt_count += 1
+                    async for _ev in _yield_step(
+                        "recovery", "done", "结算数据源暂时不可用，正在重试…"
+                    ):
+                        yield _ev
+            for _evt_type, _evt_payload in runtime_bridge.record_step(
+                session_id=session_id,
+                step="settlement_query",
+                detail={
+                    "settlement_id": request.settlement_id,
+                    "total_fee": settlement_context.total_amount,
+                    "deductible": settlement_context.deductible,
+                    "basic_pooling_self_pay": settlement_context.basic_pooling_self_pay,
+                },
+                settlement_id=request.settlement_id,
+            ):
+                if _evt_type == "memory_update":
+                    turn_memory_updates.append(dict(_evt_payload))
+                    yield _sse_event(_evt_type, _sanitize(_evt_payload))
+                    await asyncio.sleep(0)
+            async for _ev in _yield_step("settlement_query", "done", "结算数据获取完成"):
+                yield _ev
+        else:
+            async for _ev in _yield_step(
+                "settlement_query", "done", "宽泛问题无需结算单上下文"
+            ):
+                yield _ev
 
-        # ═══ Step 4: policy_rule_search（skill 查询计划 + 结构化检索）═══
+        # ═══ Step 4: policy_rule_search（skill 查询计划 + 结构化检索 / 宽泛问题宽召回）═══
         async for _ev in _yield_step("policy_rule_search", "running", "检索政策规则…"):
             yield _ev
         policy_evidence: list[dict] = []
         policy_status = "no_policy_matched"
+        _broad_trace: dict[str, Any] = {}
         # overview 模式是纯数据总览，不依赖单项政策规则；仅 single_item 检索单项政策
-        if not _is_overview:
+        if is_broad:
+            # Issue #25：宽泛问题走 BM25 + 向量宽召回
+            while True:
+                try:
+                    _retrieval_result = await _loop.run_in_executor(
+                        None,
+                        lambda: retrieve_broad_policy_evidence(
+                            question=request.question or "",
+                            host=MILVUS_HOST,
+                            port=str(MILVUS_PORT),
+                            top_k=8,
+                            embedding_kind="hash",
+                        ),
+                    )
+                    break
+                except PolicyRetrievalUnavailableError:
+                    failure_class = "policy_retrieval_unavailable"
+                    if attempt_count >= MAX_POLICY_QA_ATTEMPTS:
+                        halt_reason = (
+                            "stalled"
+                            if last_retryable_failure == failure_class
+                            else "max_attempts"
+                        )
+                        raise
+                    last_retryable_failure = failure_class
+                    attempt_count += 1
+                    async for _ev in _yield_step(
+                        "recovery", "done", "政策数据源暂时不可用，正在重试…"
+                    ):
+                        yield _ev
+            _broad_trace = _retrieval_result.query_trace
+            for _ev in _retrieval_result.selected_evidence:
+                policy_evidence.append({
+                    "title": _ev.source_text[:80] + "..." if len(_ev.source_text) > 80 else _ev.source_text,
+                    "clause": _ev.source_text,
+                    "evidence_text": _ev.source_text,
+                    "matched_reason": _ev.applied_reason or f"匹配规则类型: {_ev.rule_type}",
+                    "rule_type": _ev.rule_type,
+                    "score": _ev.score,
+                    "source_text": _ev.source_text,
+                    "payment_ratio": _ev.payment_ratio,
+                    "amount_band": _ev.amount_band,
+                    "rule_value": _ev.rule_value,
+                })
+            if len(policy_evidence) > 0:
+                policy_status = "partial_policy_matched"
+        elif not _is_overview:
             _normalized_ctx: dict[str, Any] = {
                 "settlement_id": settlement_context.settlement_id,
                 "insu_type": _normalize_insu_type(settlement_context.insurance_type or "城镇职工"),
@@ -800,30 +931,37 @@ async def _policy_qa_stream(
                 policy_status = "full_policy_matched"
             elif len(policy_evidence) > 0:
                 policy_status = "partial_policy_matched"
-            for _evt_type, _evt_payload in runtime_bridge.record_step(
-                session_id=session_id,
-                step="policy_rule_search",
-                detail={"rules_count": len(policy_evidence), "policy_filters": []},
-            ):
-                if _evt_type == "memory_update":
-                    turn_memory_updates.append(dict(_evt_payload))
-                    yield _sse_event(_evt_type, _sanitize(_evt_payload))
-                    await asyncio.sleep(0)
+        for _evt_type, _evt_payload in runtime_bridge.record_step(
+            session_id=session_id,
+            step="policy_rule_search",
+            detail={"rules_count": len(policy_evidence), "policy_filters": _broad_trace.get("keywords", [])},
+        ):
+            if _evt_type == "memory_update":
+                turn_memory_updates.append(dict(_evt_payload))
+                yield _sse_event(_evt_type, _sanitize(_evt_payload))
+                await asyncio.sleep(0)
         async for _ev in _yield_step(
             "policy_rule_search", "done",
             f"检索到 {len(policy_evidence)} 条政策规则" if policy_evidence else "未检索到匹配的政策规则",
         ):
             yield _ev
 
-        # ═══ Step 5: skill_execution（skill 策略引擎执行 / overview 总览生成）═══
+        # ═══ Step 5: skill_execution（skill 策略引擎执行 / overview 总览生成 / 宽泛问题模型回答）═══
         _exec_msg = "生成费用构成总览…" if _is_overview else "生成费用解释…"
+        if is_broad:
+            _exec_msg = "生成政策解释…"
         async for _ev in _yield_step("skill_execution", "running", _exec_msg):
             yield _ev
-        # overview → 费用构成总表（纯数据，不检索单项政策）；single_item → assembler 单项解释
+        # overview → 费用构成总表（纯数据，不检索单项政策）；single_item → assembler 单项解释；宽泛 → 模型基于证据回答
         overview_payload: dict | None = None
         result_answer = ""
         _single_skill_result = None
-        if _is_overview:
+        if is_broad:
+            result_answer = await _loop.run_in_executor(
+                None,
+                lambda: _generate_broad_answer(request.question or "", policy_evidence),
+            )
+        elif _is_overview:
             overview_payload = await _loop.run_in_executor(
                 None,
                 lambda: _build_overview_payload(settlement_context, request.question, skill_id, assembler),
@@ -862,7 +1000,14 @@ async def _policy_qa_stream(
         _definition: dict | None = None
         _warnings: list[str] = []
         _case_context: dict | None = None
-        if _single_skill_result is not None:
+        if is_broad:
+            trace_can_answer = bool(result_answer)
+            trace_partial_answer = True
+            _calc_steps = []
+            _definition = None
+            _warnings = ["本回答针对宽泛政策问题，未关联具体结算单，仅供参考。"]
+            _case_context = None
+        elif _single_skill_result is not None:
             policy_status = _single_skill_result.policy_status or policy_status
             trace_can_answer, trace_partial_answer = _answerability_from_completeness(
                 _single_skill_result.explanation_completeness,
@@ -906,7 +1051,8 @@ async def _policy_qa_stream(
             definition=_definition,
             warnings=_warnings,
             case_context=_case_context,
-            is_overview=_is_overview,
+            is_overview=_is_overview and not is_broad,
+            is_broad=is_broad,
         )
         halt_reason = "verified"
         async for _ev in _yield_step(
@@ -1065,8 +1211,7 @@ async def policy_qa_stream(request: PolicyQARequest) -> StreamingResponse:
     if not request.question:
         raise HTTPException(status_code=400, detail="问题不能为空")
 
-    if not request.settlement_id:
-        raise HTTPException(status_code=400, detail="结算ID不能为空")
+    # Issue #25：宽泛政策问题允许省略 settlement_id（走 BM25+向量宽召回）
 
     # Issue #30：挂起/升级/关闭的会话拒绝新问答（状态机见 session_lifecycle）
     if request.session_id:
@@ -1108,8 +1253,7 @@ async def policy_qa_test(request: PolicyQARequest) -> dict:
     if not request.question:
         raise HTTPException(status_code=400, detail="问题不能为空")
 
-    if not request.settlement_id:
-        raise HTTPException(status_code=400, detail="结算ID不能为空")
+    # Issue #25：宽泛政策问题允许省略 settlement_id
 
     # 返回测试结果
     return {
