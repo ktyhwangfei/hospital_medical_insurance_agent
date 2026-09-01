@@ -98,15 +98,19 @@ class TestApplicabilityExpr:
         assert 'expiry_date == "9999-12-31" or expiry_date >= "2025-06-01"' in expr
 
 
-class TestKeywordExtraction:
-    def test_extract_keywords_removes_stop_words(self):
-        keywords = BroadPolicyRetriever._extract_keywords("请问北京职工医保住院怎么报销")
-        assert "北京" in keywords
-        assert "职工" in keywords
-        assert "医保" in keywords
-        assert "住院" in keywords
-        assert "怎么" not in keywords
-        assert "请问" not in keywords
+class TestBm25Search:
+    def test_bm25_ranks_relevant_higher(self, fake_records):
+        retriever = BroadPolicyRetriever(embedding_provider=_FakeEmbeddingProvider())
+        retriever.client = FakeMilvusClient(fake_records)
+        hits = retriever._keyword_search("退休人员住院个人支付比例", expr="", top_k=2)
+        # 第一条记录明确提到“退休人员”“个人支付比例”，应排在首位
+        assert hits[0]["rule_id"] == "r1"
+
+    def test_bm25_empty_corpus_returns_empty(self):
+        retriever = BroadPolicyRetriever(embedding_provider=_FakeEmbeddingProvider())
+        retriever.client = FakeMilvusClient([])
+        hits = retriever._keyword_search("住院报销", expr="", top_k=3)
+        assert hits == []
 
 
 class TestRrfMerge:

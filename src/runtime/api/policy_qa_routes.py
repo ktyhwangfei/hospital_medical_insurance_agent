@@ -841,7 +841,7 @@ async def _policy_qa_stream(
                             host=MILVUS_HOST,
                             port=str(MILVUS_PORT),
                             top_k=8,
-                            embedding_kind="hash",
+                            embedding_kind="sentence_transformer",
                         ),
                     )
                     break

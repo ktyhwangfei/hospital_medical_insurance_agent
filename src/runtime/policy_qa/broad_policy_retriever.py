@@ -2,12 +2,12 @@
 宽泛问题混合检索器（BroadPolicyRetriever）
 
 针对没有结算单上下文的宽泛政策问题（如“北京职工医保住院报销比例是多少”），
-走向量语义召回 + 关键词（BM25-like）召回 + 适用性字段精排，返回政策证据。
+走向量语义召回 + BM25 关键词召回 + 适用性字段精排，返回政策证据。
 
 设计约束（Issue #25 阶段 2-3）：
 - 不修改提取契约 / Milvus schema / 存量数据；只消费 policy_rules_v2 已有字段。
-- 向量复用 policy_rules_v2.vector（bge-base-zh-v1.5，768 维）。
-- 关键词召回用 source_text LIKE 作为 BM25 不可用时的轻量替代。
+- 向量复用 policy_rules_v2.vector（bge-base-zh-v1.5，768 维），默认真实 bge 模型。
+- 关键词召回使用 rank-bm25 + jieba 分词，在适用性过滤后的候选池上计算真实 BM25 分数。
 - 适用性字段（region / effective_date / expiry_date / publish_status / is_remote）
   用于过滤与精排。
 """
@@ -15,13 +15,14 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
 import grpc
+import jieba
 from pymilvus import MilvusClient
+from rank_bm25 import BM25Okapi
 from pymilvus.exceptions import (
     ConnectError,
     ConnectionNotExistException,
@@ -160,9 +161,8 @@ class BroadPolicyRetriever:
         # 3. 向量召回
         vector_hits = self._vector_search(question, expr, top_k=top_k * 3)
 
-        # 4. 关键词召回（BM25-like）
-        keywords = self._extract_keywords(question)
-        keyword_hits = self._keyword_search(keywords, expr, top_k=top_k * 3)
+        # 4. 关键词召回（真实 BM25）
+        keyword_hits = self._keyword_search(question, expr, top_k=top_k * 3)
 
         # 5. RRF 融合
         merged_hits = self._rrf_merge(vector_hits, keyword_hits, top_k=top_k * 3)
@@ -181,7 +181,6 @@ class BroadPolicyRetriever:
                 "psn_type": merged.psn_type,
                 "hosp_lv": merged.hosp_lv,
             },
-            "keywords": keywords,
             "expr": expr,
             "vector_hits": len(vector_hits),
             "keyword_hits": len(keyword_hits),
@@ -282,31 +281,6 @@ class BroadPolicyRetriever:
 
         return " and ".join(parts)
 
-    @staticmethod
-    def _extract_keywords(question: str) -> list[str]:
-        """轻量关键词提取：基于二字字符 bigram，过滤停用词与停用短语。"""
-        stop_phrases = {
-            "请问", "怎么", "如何", "为什么", "什么", "多少", "是否",
-            "一个", "一下", "可以", "咨询", "的", "了", "吗", "呢",
-        }
-        stop_chars = set("的了吗呢和与是在及")
-        q = question or ""
-        keywords: list[str] = []
-        seen: set[str] = set()
-        for i in range(len(q) - 1):
-            bigram = q[i:i + 2]
-            if not re.match(r"^[\u4e00-\u9fff]{2}$", bigram):
-                continue
-            if bigram in stop_phrases:
-                continue
-            if all(ch in stop_chars for ch in bigram):
-                continue
-            if bigram in seen:
-                continue
-            seen.add(bigram)
-            keywords.append(bigram)
-        return keywords[:8]
-
     def _vector_search(
         self,
         question: str,
@@ -347,39 +321,55 @@ class BroadPolicyRetriever:
 
     def _keyword_search(
         self,
-        keywords: list[str],
+        question: str,
         expr: str,
         top_k: int,
+        candidate_limit: int = 200,
     ) -> list[dict[str, Any]]:
-        """关键词召回：对 source_text 做 LIKE 查询并取并集。"""
-        if not keywords:
+        """BM25 关键词召回：在适用性过滤后的候选池上用 rank-bm25 + jieba 分词打分。"""
+        if not question or not question.strip():
             return []
 
-        hits: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for kw in keywords[:3]:
-            like_expr = f'{expr} and source_text like "%{kw}%"' if expr else f'source_text like "%{kw}%"'
-            try:
-                results = self.client.query(
-                    collection_name=self.collection_name,
-                    filter=like_expr,
-                    output_fields=OUTPUT_FIELDS,
-                    limit=top_k,
-                )
-            except Exception as e:
-                if not _is_transient_milvus_error(e):
-                    raise
-                raise PolicyRetrievalUnavailableError(str(e)) from e
+        try:
+            results = self.client.query(
+                collection_name=self.collection_name,
+                filter=expr or 'rule_id != ""',
+                output_fields=OUTPUT_FIELDS,
+                limit=candidate_limit,
+            )
+        except Exception as e:
+            if not _is_transient_milvus_error(e):
+                raise
+            raise PolicyRetrievalUnavailableError(str(e)) from e
 
-            for entity in results:
-                unpack_detail(entity)
-                rid = str(entity.get("rule_id", ""))
-                if rid and rid in seen:
-                    continue
-                seen.add(rid)
-                entity["score"] = 1.0
-                entity["_source"] = "keyword"
-                hits.append(entity)
+        if not results:
+            return []
+
+        for entity in results:
+            unpack_detail(entity)
+
+        # jieba 分词构建语料与查询
+        corpus = [list(jieba.cut(str(r.get("source_text", "") or ""))) for r in results]
+        query_tokens = list(jieba.cut(question))
+
+        try:
+            bm25 = BM25Okapi(corpus)
+            scores = bm25.get_scores(query_tokens)
+        except Exception as e:
+            logger.warning("[BroadRetrieval] BM25 scoring failed: %s", e)
+            return []
+
+        scored = sorted(
+            zip(scores, results),
+            key=lambda x: x[0],
+            reverse=True,
+        )[:top_k]
+
+        hits: list[dict[str, Any]] = []
+        for score, entity in scored:
+            entity["score"] = float(score)
+            entity["_source"] = "bm25"
+            hits.append(entity)
         return hits
 
     @staticmethod
@@ -424,15 +414,16 @@ class BroadPolicyRetriever:
         scored: list[tuple[float, dict[str, Any]]] = []
         for hit in hits:
             score = float(hit.get("_rrf_score", hit.get("score", 0.0)))
-            # 适用性字段匹配加分
+            # 适用性字段匹配加分（与 RRF 分数同量级，避免过度挤压语义/关键词信号）
+            boost = 0.005
             if ctx.insu_type and str(hit.get("insu_type", "")) in (ctx.insu_type, ""):
-                score += 0.05
+                score += boost
             if ctx.med_type and str(hit.get("med_type", "")) in (ctx.med_type, ""):
-                score += 0.05
+                score += boost
             if ctx.psn_type and str(hit.get("psn_type", "")) in (ctx.psn_type, ""):
-                score += 0.05
+                score += boost
             if ctx.hosp_lv and str(hit.get("hosp_lv", "")) in (ctx.hosp_lv, ""):
-                score += 0.05
+                score += boost
             scored.append((score, hit))
 
         scored.sort(key=lambda x: x[0], reverse=True)
