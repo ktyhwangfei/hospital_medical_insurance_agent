@@ -36,10 +36,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provider import (
+    EmbeddingProvider,
+    HashEmbeddingProvider,
+    get_embedding_provider,
+)
 from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
+    POLICY_RULES_V2_VECTOR_DIM,
     rule_to_entity,
 )
+from src.runtime.policy_qa import broad_policy_retriever as broad_module
 from src.runtime.policy_qa import structured_policy_retriever as retriever_module
+from src.runtime.policy_qa.broad_policy_retriever import (
+    BroadPolicyRetriever,
+    InferredQueryContext,
+)
 from src.runtime.policy_qa.structured_policy_retriever import (
     NormalizedPolicyContext,
     StructuredPolicyRuleRetriever,
@@ -64,7 +75,7 @@ REVIEW_DIR.mkdir(parents=True, exist_ok=True)
 # ── 内存 Milvus 客户端（足够支持本次评估的 expr 子集）───────
 
 class _FakeMilvusClient:
-    """内存版 MilvusClient，支持本次评估所需的 query/describe_collection。"""
+    """内存版 MilvusClient，支持本次评估所需的 query/search/describe_collection。"""
 
     def __init__(self, uri: str = "http://127.0.0.1:19530") -> None:
         self.uri = uri
@@ -107,6 +118,48 @@ class _FakeMilvusClient:
         for e in hits[:limit]:
             row = {f: e.get(f, "" if f != "is_remote" else False) for f in output_fields}
             result.append(row)
+        return result
+
+    def search(
+        self,
+        collection_name: str,
+        data: list[list[float]],
+        anns_field: str,
+        filter: str | None = None,
+        limit: int = 10,
+        output_fields: list[str] | None = None,
+        search_params: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> list[list[dict[str, Any]]]:
+        """内存版向量搜索：先按 expr 过滤，再按余弦相似度排序。"""
+        if collection_name not in self._collections:
+            raise RuntimeError(f"Collection not found: {collection_name}")
+        entities = self._collections[collection_name]["entities"]
+        matcher = _ExprMatcher(filter) if filter else None
+        candidates = [e for e in entities if matcher is None or matcher.match(e)]
+
+        query_vector = data[0]
+        norm_q = _l2_norm(query_vector)
+
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for e in candidates:
+            vec = e.get("vector") or []
+            norm_e = _l2_norm(vec)
+            if norm_q == 0 or norm_e == 0:
+                sim = 0.0
+            else:
+                sim = sum(a * b for a, b in zip(query_vector, vec)) / (norm_q * norm_e)
+            scored.append((sim, e))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = scored[:limit]
+
+        out_fields = output_fields or list(self._collections[collection_name]["fields"])
+        result: list[list[dict[str, Any]]] = [[]]
+        for sim, e in top:
+            row = {f: e.get(f, "" if f != "is_remote" else False) for f in out_fields}
+            row["distance"] = float(sim)
+            result[0].append({"entity": row, "distance": float(sim)})
         return result
 
 
@@ -225,10 +278,19 @@ class _ExprMatcher:
         return body in text
 
 
+def _l2_norm(vec: list[float]) -> float:
+    return math.sqrt(sum(x * x for x in vec)) or 0.0
+
+
 def _patch_milvus_client(fake: _FakeMilvusClient) -> None:
     """把 StructuredPolicyRuleRetriever 使用的 MilvusClient 替换为 fake 实例。"""
     # retriever 模块在 import 时持有 MilvusClient 引用，必须直接替换模块级名称
     retriever_module.MilvusClient = lambda *args, **kwargs: fake  # type: ignore[misc]
+
+
+def _patch_broad_milvus_client(fake: _FakeMilvusClient) -> None:
+    """把 BroadPolicyRetriever 使用的 MilvusClient 替换为 fake 实例。"""
+    broad_module.MilvusClient = lambda *args, **kwargs: fake  # type: ignore[misc]
 
 
 # ── 语料生成 ──────────────────────────────────────────────────────
@@ -236,8 +298,8 @@ def _patch_milvus_client(fake: _FakeMilvusClient) -> None:
 _INSU_TYPE = "城镇职工基本医疗保险"
 
 
-def _build_corpus() -> list[dict[str, Any]]:
-    """构造 80+ 条模拟 policy_rules_v2 规则实体。"""
+def _build_corpus(embedding_provider: EmbeddingProvider) -> list[dict[str, Any]]:
+    """构造 80+ 条模拟 policy_rules_v2 规则实体，并用真实 embedding 模型编码向量。"""
     rules: list[dict[str, Any]] = []
 
     # 基础分段：北京 2024 职工住院三级医院
@@ -573,8 +635,13 @@ def _build_corpus() -> list[dict[str, Any]]:
             "amount_band": "起付标准至3万元",
         })
 
-    # 转成 Milvus entity（含 FieldTrace 包详情字段）
-    entities = [rule_to_entity(r, vector=[0.0] * 768, extracted_at="2024-09-01T00:00:00") for r in rules]
+    # 用真实 embedding 模型编码 source_text，生成 bge 向量
+    texts = [r["source_text"] for r in rules]
+    vectors = embedding_provider.encode(texts)
+    entities = [
+        rule_to_entity(r, vector=vectors[i], extracted_at="2024-09-01T00:00:00")
+        for i, r in enumerate(rules)
+    ]
     return entities
 
 
@@ -1231,6 +1298,57 @@ def _run_text_only_case(
     )
 
 
+def _run_broad_case(
+    case: GoldenCase,
+    retriever: BroadPolicyRetriever,
+) -> CaseResult:
+    """宽泛问题混合检索基线：向量 + BM25 + 适用性字段精排。"""
+    start = time.perf_counter()
+    with redirect_stdout(io.StringIO()):
+        result = retriever.retrieve(
+            case.question,
+            top_k=TOP_K,
+            ctx=InferredQueryContext(
+                region=case.settlement_context.get("region", ""),
+                reference_date=case.settlement_context.get("settlement_date") or None,
+                is_remote=case.settlement_context.get("is_remote")
+                if "is_remote" in case.settlement_context
+                else None,
+                insu_type=case.settlement_context.get("insu_type", ""),
+                med_type=case.settlement_context.get("med_type", ""),
+                psn_type=case.settlement_context.get("psn_type", ""),
+                hosp_lv=case.settlement_context.get("hosp_lv", ""),
+            ),
+        )
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    retrieved = [e.rule_id for e in result.selected_evidence[:TOP_K]]
+    expected = set(case.expected_rule_ids)
+    retrieved_set = set(retrieved)
+    relevant = expected & retrieved_set
+    precision = len(relevant) / len(retrieved) if retrieved else 0.0
+    recall = len(relevant) / len(expected) if expected else (0.0 if retrieved else 1.0)
+    false_ids = [rid for rid in retrieved if rid not in expected]
+    far = len(false_ids) / len(retrieved) if retrieved else 0.0
+    complete = expected.issubset(retrieved_set) and not false_ids
+    honest = None
+    if case.is_negative:
+        honest = len(retrieved) == 0
+
+    return CaseResult(
+        case_id=case.case_id,
+        baseline="broad_hybrid",
+        retrieved_ids=retrieved,
+        precision_at_k=precision,
+        recall=recall,
+        far=far,
+        complete=complete,
+        honest_refusal=honest,
+        latency_ms=latency_ms,
+        false_ids=false_ids,
+    )
+
+
 def _field_quality(entities: list[dict[str, Any]]) -> float:
     """简单字段质量分：region/publish_status/effective_date/expiry_date/policy_version 非空比例。"""
     if not entities:
@@ -1308,6 +1426,7 @@ def _write_assessment_report(
     text_metrics: AggregateMetrics,
     current_metrics: AggregateMetrics,
     enhanced_metrics: AggregateMetrics,
+    broad_metrics: AggregateMetrics,
     corpus: list[dict[str, Any]],
 ) -> None:
     lines = [
@@ -1316,20 +1435,23 @@ def _write_assessment_report(
         f"> 生成时间：{datetime.now().isoformat(timespec='seconds')}",
         f"> 数据集：{len(corpus)} 条模拟 policy_rules_v2 规则，{len(cases)} 条黄金用例",
         f"> Top-K：{TOP_K}",
+        f"> Embedding：真实 bge-base-zh-v1.5（默认）或 hash 向量（--embedding-kind=hash）",
         "",
         "## 执行摘要",
         "",
-        "本次评估在内存模拟的 `policy_rules_v2` 集合上，对跑三条基线：",
+        "本次评估在内存模拟的 `policy_rules_v2` 集合上，对跑四条基线：",
         "- **text_only**：BM25 纯文本召回，无结构化过滤；",
         "- **current_hybrid**：`StructuredPolicyRuleRetriever` 关闭适用性字段（仅 core 维度 + source_text 关键词），代表 Issue #25 改造前的生产路径；",
-        "- **enhanced_hybrid**：`StructuredPolicyRuleRetriever` 启用新增适用性字段（region / effective_date / expiry_date / publish_status / policy_version / is_remote）。",
+        "- **enhanced_hybrid**：`StructuredPolicyRuleRetriever` 启用新增适用性字段（region / effective_date / expiry_date / publish_status / policy_version / is_remote）；",
+        "- **broad_hybrid**：`BroadPolicyRetriever` 向量语义召回 + rank-bm25 + 适用性字段精排，覆盖宽泛问题与结算单场景。",
         "",
         "核心结论：",
         f"- 补强适用性字段后，适用规则准确率从 {_fmt_float(current_metrics.precision_mean)} 提升至 {_fmt_float(enhanced_metrics.precision_mean)}，",
         f"  证据召回率从 {_fmt_float(current_metrics.recall_mean)} 提升至 {_fmt_float(enhanced_metrics.recall_mean)}。",
         f"- 错误适用规则率（FAR）从 {_fmt_float(current_metrics.far_mean)} 降至 {_fmt_float(enhanced_metrics.far_mean)}。",
-        f"- 完整回答率 {_fmt_float(enhanced_metrics.complete_rate)}，诚实拒答率 {_fmt_float(enhanced_metrics.honest_refusal_rate)}。",
-        f"- P95 时延：text_only {text_metrics.p95_latency_ms:.2f}ms / current {current_metrics.p95_latency_ms:.2f}ms / enhanced {enhanced_metrics.p95_latency_ms:.2f}ms。",
+        f"- 宽泛问题混合检索（broad_hybrid）适用规则准确率 {_fmt_float(broad_metrics.precision_mean)}，证据召回率 {_fmt_float(broad_metrics.recall_mean)}，FAR {_fmt_float(broad_metrics.far_mean)}。",
+        f"- 完整回答率：enhanced {_fmt_float(enhanced_metrics.complete_rate)} / broad {_fmt_float(broad_metrics.complete_rate)}；诚实拒答率：enhanced {_fmt_float(enhanced_metrics.honest_refusal_rate)} / broad {_fmt_float(broad_metrics.honest_refusal_rate)}。",
+        f"- P95 时延：text_only {text_metrics.p95_latency_ms:.2f}ms / current {current_metrics.p95_latency_ms:.2f}ms / enhanced {enhanced_metrics.p95_latency_ms:.2f}ms / broad {broad_metrics.p95_latency_ms:.2f}ms。",
         "",
         "> ⚠️ 本评估使用合成语料与内存 Milvus，真实生产数据上的绝对数值会有差异；相对差异和字段效用结论可复现。",
         "",
@@ -1350,21 +1472,23 @@ def _write_assessment_report(
     lines.append(row(text_metrics))
     lines.append(row(current_metrics))
     lines.append(row(enhanced_metrics))
+    lines.append(row(broad_metrics))
     lines.append("")
 
     # 逐案差异样例
     lines.append("## 逐案差异样例")
     lines.append("")
-    lines.append("以下选取 10 条差异最大的用例展示三条基线的召回结果。")
+    lines.append("以下选取 10 条差异最大的用例展示四条基线的召回结果。")
     lines.append("")
-    lines.append("| 用例 | 场景 | text_only | current_hybrid | enhanced_hybrid | 说明 |")
-    lines.append("|------|------|-----------|----------------|-----------------|------|")
+    lines.append("| 用例 | 场景 | text_only | current_hybrid | enhanced_hybrid | broad_hybrid | 说明 |")
+    lines.append("|------|------|-----------|----------------|-----------------|--------------|------|")
 
     # 以 enhanced 与 current 的 P@K 差值排序
     diff_cases = []
     current_by_id = {c.case_id: c for c in current_metrics.cases}
     enhanced_by_id = {c.case_id: c for c in enhanced_metrics.cases}
     text_by_id = {c.case_id: c for c in text_metrics.cases}
+    broad_by_id = {c.case_id: c for c in broad_metrics.cases}
     for c in cases:
         cur = current_by_id[c.case_id]
         enh = enhanced_by_id[c.case_id]
@@ -1376,9 +1500,10 @@ def _write_assessment_report(
         t = text_by_id[c.case_id]
         cur = current_by_id[c.case_id]
         enh = enhanced_by_id[c.case_id]
+        brd = broad_by_id[c.case_id]
         lines.append(
             f"| {c.case_id} | {c.scenario} | {t.retrieved_ids} | {cur.retrieved_ids} | "
-            f"{enh.retrieved_ids} | {c.notes or '-'} |"
+            f"{enh.retrieved_ids} | {brd.retrieved_ids} | {c.notes or '-'} |"
         )
     lines.append("")
 
@@ -1437,7 +1562,7 @@ def _write_assessment_report(
     lines.append("")
     lines.append("- 本评估语料为合成数据，真实生产中的字段分布、文本表达、规则冲突密度可能不同。")
     lines.append("- `policy_version` 未做运行时过滤，仅用于展示；若业务需要按版本强过滤，需额外设计。")
-    lines.append("- 宽泛问题子集未接入真实向量模型，使用 BM25 代理；真实向量+BM25 混合的召回贡献需在线数据进一步验证。")
+    lines.append("- broad_hybrid 基线默认使用真实 bge-base-zh-v1.5 编码 source_text；在真实 policy_rules_v2 上的绝对数值可能不同，本报告结论侧重相对差异与实现可复现性。")
     lines.append("")
 
     # 阶段 2 实施计划
@@ -1447,7 +1572,7 @@ def _write_assessment_report(
     lines.append("")
     lines.append("1. **存量回填流水线**：基于 `rule_to_entity` 默认值机制，对现有 `policy_rules_v2` 规则回填 `region`/`effective_date`/`expiry_date`/`publish_status`/`policy_version`/`is_remote`；回填值在知识审核页以‘提议者-审核者’模式展示，人工确认后发布。")
     lines.append("2. **适用性字段质量门禁**：在知识发布/变更集 promote 时，校验所有 published 规则必须包含非空 `region`、`effective_date`、`expiry_date`、`publish_status`；缺失则阻断发布并生成 DecisionTask。")
-    lines.append("3. **宽泛问题混合检索路径**：在 `policy_qa` 流式接口中，当结算上下文缺失或问题类型为宽泛咨询时，启用 `BM25 + 向量语义搜索` 宽召回，再经适用性字段精排，最终仍由 `StructuredPolicyRuleRetriever` 做证据校验。")
+    lines.append("3. **宽泛问题混合检索路径**：✅ 已完成。`BroadPolicyRetriever` 使用真实 bge 向量 + rank-bm25 + 适用性字段精排；`/policy-qa/stream` 在 `settlement_id` 缺失时自动切换至此路径。")
     lines.append("4. **指标看板**：在 policy-knowledge 测试页增加 Issue #25 专项指标卡（FAR、P@3、诚实拒答率、字段完整率），每轮候选版本发布前自动对跑。")
     lines.append("5. **生产灰度**：先对北京地区住院/门诊规则启用新字段过滤，观察一周后扩展至其他地区；回滚开关为 `enable_applicability_fields=False`。")
     lines.append("")
@@ -1464,8 +1589,30 @@ def _write_assessment_report(
 # ── 主流程 ────────────────────────────────────────────────────────
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Issue #25 最小混合检索评估")
+    parser.add_argument(
+        "--embedding-kind",
+        choices=["sentence_transformer", "hash"],
+        default="sentence_transformer",
+        help="embedding provider 类型：sentence_transformer 使用真实 bge 模型，hash 用于快速回归",
+    )
+    parser.add_argument(
+        "--broad-only",
+        action="store_true",
+        help="仅运行宽泛问题子集与 broad_hybrid 基线",
+    )
+    args = parser.parse_args()
+
+    print(f"[eval] embedding_kind={args.embedding_kind}")
+    if args.embedding_kind == "sentence_transformer":
+        embedding_provider = get_embedding_provider("sentence_transformer")
+    else:
+        embedding_provider = HashEmbeddingProvider(dim=POLICY_RULES_V2_VECTOR_DIM)
+
     print("[eval] building corpus...")
-    corpus = _build_corpus()
+    corpus = _build_corpus(embedding_provider)
 
     # 注册 fake Milvus 集合：full 含所有新字段；old 缺少新字段，用于 current_hybrid 基线
     all_fields = set(corpus[0].keys())
@@ -1475,10 +1622,13 @@ def main() -> None:
     fake.register_collection(COLLECTION_FULL, corpus, all_fields)
     fake.register_collection(COLLECTION_OLD, corpus, old_fields)
     _patch_milvus_client(fake)
+    _patch_broad_milvus_client(fake)
 
     print(f"[eval] corpus={len(corpus)} rules; full_fields={len(all_fields)} old_fields={len(old_fields)}")
 
     cases = _build_golden_cases()
+    if args.broad_only:
+        cases = [c for c in cases if "宽泛问题" in c.dimensions]
     print(f"[eval] golden_cases={len(cases)}")
 
     _write_golden_cases(cases)
@@ -1513,12 +1663,26 @@ def main() -> None:
     enhanced_metrics.field_quality_score = _field_quality(corpus)
     enhanced_metrics.compute()
 
-    _write_assessment_report(cases, text_metrics, current_metrics, enhanced_metrics, corpus)
+    # broad_hybrid：向量 + BM25 + 适用性字段精排
+    broad_results: list[CaseResult] = []
+    broad_retriever = BroadPolicyRetriever(
+        collection_name=COLLECTION_FULL,
+        embedding_provider=embedding_provider,
+    )
+    for c in cases:
+        broad_results.append(_run_broad_case(c, broad_retriever))
+    broad_metrics = AggregateMetrics(baseline="broad_hybrid", cases=broad_results)
+    broad_metrics.compute()
+
+    _write_assessment_report(
+        cases, text_metrics, current_metrics, enhanced_metrics, broad_metrics, corpus
+    )
 
     print("[eval] done")
     print(f"  text_only      Precision={text_metrics.precision_mean:.3f} Recall={text_metrics.recall_mean:.3f} FAR={text_metrics.far_mean:.3f}")
     print(f"  current_hybrid Precision={current_metrics.precision_mean:.3f} Recall={current_metrics.recall_mean:.3f} FAR={current_metrics.far_mean:.3f}")
     print(f"  enhanced_hybrid Precision={enhanced_metrics.precision_mean:.3f} Recall={enhanced_metrics.recall_mean:.3f} FAR={enhanced_metrics.far_mean:.3f}")
+    print(f"  broad_hybrid   Precision={broad_metrics.precision_mean:.3f} Recall={broad_metrics.recall_mean:.3f} FAR={broad_metrics.far_mean:.3f}")
 
 
 if __name__ == "__main__":

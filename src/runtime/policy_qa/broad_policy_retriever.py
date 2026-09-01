@@ -89,7 +89,7 @@ class InferredQueryContext:
 
     region: str = _DEFAULT_REGION
     reference_date: str = _DEFAULT_REFERENCE_DATE
-    is_remote: bool = False
+    is_remote: bool | None = None  # None 表示未推断出，不做异地过滤
     insu_type: str = ""
     med_type: str = ""
     psn_type: str = ""
