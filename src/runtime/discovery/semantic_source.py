@@ -214,35 +214,24 @@ class SemanticDataSource:
         self,
         metric_codes: list[str],
         context: Optional[dict[str, Any]] = None,
-        join_mode: str = "flat",
     ) -> dict[str, Any]:
         """按指标编码查询真实值。
 
         Args:
             metric_codes: 指标编码列表
             context: 必须包含 filter_context_key（默认 "djh"）对应的值
-            join_mode: "flat"(默认) 每表单独 SELECT；"joined" 复用
-                business_sql.yaml 的 settlement_context 多表 JOIN（含日期语义条件）
-
         Returns:
             {metric_code: value}，未映射或取数失败的返回 None
         """
         context = context or {}
         filter_value = context.get(DEFAULT_FILTER_CONTEXT_KEY)
 
-        if join_mode == "joined" and filter_value is not None:
-            joined = self._query_joined(metric_codes, filter_value)
-            if joined is not None:
-                return joined
-            # joined 不可用时退回 flat
-            logger.info("query: joined 模式不可用，退回 flat")
-
         return self._query_flat(metric_codes, filter_value)
 
     def _query_flat(
         self, metric_codes: list[str], filter_value: Any
     ) -> dict[str, Any]:
-        """flat 模式：每表单独 SELECT TOP 1，取数后应用值域转换。"""
+        """单表读取器；多行时拒绝猜测结果粒度。"""
         resolved = [self.resolve_metric(c) for c in metric_codes]
         # 多源分组：按 (datasource_id, table)（P7.2b）
         groups: dict[tuple[str | None, str], list[dict[str, Any]]] = {}
@@ -279,17 +268,19 @@ class SemanticDataSource:
                 # 同表多列合并为一次 SELECT（批量取数）
                 cols = ", ".join(f"[{m['column']}]" for m in metrics)
                 sql = (
-                    f"SELECT TOP 1 {cols} "
+                    f"SELECT {cols} "
                     f"FROM [{schema}].[{table}] "
                     f"WHERE [{DEFAULT_FILTER_COLUMN}] = ?"
                 )
                 try:
                     cursor = conn.cursor()
                     cursor.execute(sql, filter_value)
-                    row = cursor.fetchone()
-                    if row:
-                        for m, val in zip(metrics, row):
+                    rows = cursor.fetchall()
+                    if len(rows) == 1:
+                        for m, val in zip(metrics, rows[0]):
                             results[m["metric_code"]] = val
+                    elif len(rows) > 1:
+                        logger.warning("query: ds=%s table=%s 返回多行，需使用 Query Planner", ds_id, table)
                 except Exception:
                     logger.warning("query: 取数失败 ds=%s table=%s", ds_id, table, exc_info=True)
             finally:
@@ -299,50 +290,8 @@ class SemanticDataSource:
                     pass
 
         # 值域转换：对声明了 value_domain 的枚举型指标，码→标准标签
-        # [来源: 弥合与 business_sql.yaml CASE 的转换差异]
+        # [来源: 语义层值域注册表]
         self._apply_value_domains(metric_codes, results)
-        return results
-
-    def _query_joined(
-        self, metric_codes: list[str], djh: Any
-    ) -> Optional[dict[str, Any]]:
-        """joined 模式：复用 business_sql.yaml 的 settlement_context 多表 JOIN。
-
-        复用经过业务调优的 JOIN（含 d.bdqsrq=c.bcqsrq 分段日期语义条件），
-        避免重新生成高风险的 JOIN。business_sql 的 CASE 已转换码→标签，
-        故本模式不再二次应用 value_domain。
-
-        Returns None 表示 business_sql 路径不可用（调用方应退回 flat）。
-        """
-        try:
-            from pathlib import Path
-
-            from src.knowledge_extension.rule_explanation.policy_retrieval.sqlserver_business_data_client import (
-                SqlServerBusinessDataClient,
-            )
-
-            sql_config_path = (
-                Path(__file__).parent.parent.parent
-                / "knowledge_extension" / "rule_explanation"
-                / "policy_retrieval" / "config" / "business_sql.yaml"
-            )
-            client = SqlServerBusinessDataClient(sql_config_path=sql_config_path)
-            raw_context = client.get_case_context_raw(settlement_id=str(djh))
-            raw_data = raw_context.raw_data or {}
-        except Exception:
-            logger.warning("_query_joined: business_sql 路径失败", exc_info=True)
-            return None
-
-        if not raw_data:
-            return None
-
-        # 大小写不敏感的列名索引（SQL 别例大小写与 source_field 可能不一致）
-        lower_index = {k.lower(): v for k, v in raw_data.items()}
-        results: dict[str, Any] = {}
-        for code in metric_codes:
-            r = self.resolve_metric(code)
-            col = (r.get("column") or "").lower()
-            results[code] = lower_index.get(col)
         return results
 
     def _apply_value_domains(

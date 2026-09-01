@@ -198,6 +198,7 @@ class FakePostgreSQLClient:
                 key=lambda item: (
                     self.runs[item["compile_run_id"]]["started_at"],
                     item["created_at"],
+                    item["rule_version"] or 0,
                 ),
                 reverse=True,
             )
@@ -602,7 +603,7 @@ def test_pipeline_schema_adds_lineage_columns_before_unique_index() -> None:
             normalized = " ".join(sql.lower().split())
             if "add column if not exists compile_run_id" in normalized:
                 self.compile_run_column_exists = True
-            if "unique index" in normalized:
+            if "uq_lineage_rule_compile_run" in normalized:
                 if not self.compile_run_column_exists:
                     raise AssertionError("unique index created before compile_run_id migration")
                 self.unique_index_created = True

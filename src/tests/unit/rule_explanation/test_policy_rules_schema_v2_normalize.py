@@ -26,6 +26,12 @@ def test_hosp_lv_community_and_undefined_mapped():
     assert normalize_hosp_lv("未定级") == "无等级"
 
 
+def test_hosp_lv_hospital_suffix_is_removed():
+    assert normalize_hosp_lv("三级医院") == "三级"
+    assert normalize_hosp_lv("二级医院") == "二级"
+    assert normalize_hosp_lv("一级医院") == "一级"
+
+
 def test_hosp_lv_empty_passthrough():
     assert normalize_hosp_lv("") == ""
 

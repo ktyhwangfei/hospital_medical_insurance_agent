@@ -716,7 +716,7 @@ def test_needs_decision_change_set_can_be_returned_or_rejected() -> None:
     assert rejected.status == "REJECTED"
 
 
-def test_approved_change_set_cannot_be_returned_or_rejected() -> None:
+def test_approved_change_set_can_be_returned_for_rebuild_but_not_rejected() -> None:
     first = _leaf_ids()[0]
     store = InMemoryChangeSetStore()
     service = ChangeSetService(
@@ -726,12 +726,56 @@ def test_approved_change_set_cannot_be_returned_or_rejected() -> None:
     change_set = service.build_for_document("doc_1")
     approved = service.approve(change_set.change_set_id, "alice", "通过")
 
-    with pytest.raises(ValueError, match="不可退回"):
-        service.return_for_rebuild(approved.change_set_id, "bob", "补充证据")
     with pytest.raises(ValueError, match="不可驳回"):
         service.reject(approved.change_set_id, "bob", "证据不足")
+    returned = service.return_for_rebuild(approved.change_set_id, "bob", "补充证据")
 
-    assert store.get(approved.change_set_id).status == "APPROVED"
+    assert returned.status == "RETURNED"
+
+
+def test_task_backed_approved_change_set_return_releases_unit_claims() -> None:
+    change_sets = InMemoryChangeSetStore()
+    build_tasks = InMemoryKnowledgeBuildStore()
+    created = build_tasks.create_with_claims(KnowledgeBuildTask(
+        task_id="KB_return_approved",
+        name="退回已通过候选",
+        status="QUEUED",
+        build_mode="INITIAL",
+        semantic_contract_version="1",
+        pipeline_version="pipeline-v1",
+        model_scene="policy_structuring",
+        config_hash="cfg",
+        created_by="editor",
+        units=[KnowledgeBuildTaskUnit(
+            doc_id="doc_1",
+            doc_title="政策",
+            unit_id="unit_1",
+            unit_revision_id="revision_1",
+        )],
+    ))
+    running = build_tasks.save(created.model_copy(update={"status": "RUNNING"}))
+    waiting = build_tasks.save(running.model_copy(update={
+        "status": "WAITING_REVIEW",
+        "result_change_set_id": "CS_return_approved",
+    }))
+    build_tasks.save(waiting.model_copy(update={"status": "APPROVED_PENDING_RELEASE"}))
+    change_sets.save(change_set_models.KnowledgeChangeSet(
+        change_set_id="CS_return_approved",
+        source_document_version_id="doc_1",
+        doc_id="doc_1",
+        doc_title="政策",
+        build_task_id=created.task_id,
+        status="APPROVED",
+    ))
+    service = ChangeSetService(object(), change_sets, build_store=build_tasks)
+
+    returned = service.return_for_rebuild(
+        "CS_return_approved", "reviewer", "经典用例集已更新"
+    )
+
+    assert returned.status == "RETURNED"
+    assert build_tasks.get(created.task_id).status == "RETURNED"
+    assert build_tasks.get_claim("doc_1", "unit_1") is None
 
 
 def test_concurrent_approve_and_reject_only_one_transition_succeeds() -> None:

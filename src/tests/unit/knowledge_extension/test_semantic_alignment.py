@@ -11,6 +11,65 @@ from src.semantic_layer.models import BusinessObject, Metric, ValueDomain
 from src.semantic_layer.registry import InMemoryRegistryStore, SemanticRegistry
 
 
+def test_database_evidence_distinguishes_business_role_from_similar_field_names() -> None:
+    from src.knowledge_extension.rule_explanation.semantic_alignment import (
+        match_database_evidence,
+    )
+
+    fields = [
+        {
+            "table_name": "m_institution", "field_name": "H_TYPE",
+            "description": "医疗机构类型", "non_null_rate": 1,
+            "distinct_count": 4, "sample_values": ["01", "02", "03", "05"],
+        },
+        {
+            "table_name": "m_institution", "field_name": "H_LEVEL",
+            "description": "医院等级", "non_null_rate": 1,
+            "distinct_count": 14, "sample_values": ["一级", "二级", "三级"],
+        },
+        {
+            "table_name": "yb_yd_jjfx", "field_name": "FUND_CODE",
+            "description": "基金款项编码", "non_null_rate": 1,
+            "distinct_count": 7, "sample_values": ["TC", "DE"],
+        },
+        {
+            "table_name": "yb_jsqd_MAIN_PAY", "field_name": "UNITE_IN",
+            "description": "统筹基金支付金额", "non_null_rate": 0.98,
+            "distinct_count": 80,
+        },
+        {
+            "table_name": "yb_brdjxx", "field_name": "FUND_TYPE",
+            "description": "险种类型", "non_null_rate": 1,
+            "distinct_count": 3, "sample_values": ["职工", "居民"],
+        },
+    ]
+
+    institution = {
+        item.source_ref: item for item in match_database_evidence(
+            "医疗机构类别",
+            "区分社区卫生服务机构与本市其他定点医疗机构",
+            ["社区卫生服务机构", "其他定点医疗机构"],
+            fields,
+        )
+    }
+    fund = {
+        item.source_ref: item for item in match_database_evidence(
+            "基金归属",
+            "区分统筹基金与大额医疗互助资金",
+            ["统筹基金", "大额医疗互助资金"],
+            fields,
+        )
+    }
+
+    assert institution["database:m_institution.H_TYPE"].evidence_grade == "strong"
+    assert institution["database:m_institution.H_LEVEL"].evidence_grade == "rejected"
+    assert "医院等级" in institution["database:m_institution.H_LEVEL"].rejection_reasons[0]
+    assert fund["database:yb_yd_jjfx.FUND_CODE"].evidence_grade == "strong"
+    assert fund["database:yb_jsqd_MAIN_PAY.UNITE_IN"].evidence_grade == "supporting"
+    assert fund["database:yb_brdjxx.FUND_TYPE"].evidence_grade == "rejected"
+    assert "险种类型" in fund["database:yb_brdjxx.FUND_TYPE"].rejection_reasons[0]
+
+
 def _registry() -> tuple[SemanticRegistry, InMemoryRegistryStore]:
     store = InMemoryRegistryStore()
     store.save_object(BusinessObject(

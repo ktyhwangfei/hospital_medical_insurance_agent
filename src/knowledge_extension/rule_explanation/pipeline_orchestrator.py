@@ -763,15 +763,17 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
                 concept_identity = hashlib.sha256(
                     " ".join(concept.casefold().split()).encode("utf-8")
                 ).hexdigest()[:16]
+                # 政策解读类纯文本可能没有编号条款，仍以文档级稳定单元保留证据。
+                evidence_unit_id = unit_id or f"document:{doc_id}"
                 alignment_service.intake_signal(DiscoverySignal(
                     trigger_source=TriggerSource.EXTRACTION_UNKNOWN,
                     concept=concept,
                     evidence=DiscoveryEvidence(
                         source_ref=(
-                            f"policy-extraction:{doc_id}:{unit_id}:{concept_identity}"
+                            f"policy-extraction:{doc_id}:{evidence_unit_id}:{concept_identity}"
                         ),
                         doc_id=doc_id,
-                        unit_id=unit_id,
+                        unit_id=evidence_unit_id,
                         extraction_id=extraction_id,
                         excerpt=excerpt,
                         occurrence_count=occurrence_count,

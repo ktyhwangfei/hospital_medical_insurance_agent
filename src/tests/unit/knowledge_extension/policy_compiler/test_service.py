@@ -5,6 +5,7 @@ _to_fact 适配后 subject 落入哨兵，compiler 必须在 Canonicalize 拦截
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
@@ -294,3 +295,62 @@ def test_ratio_rules_keep_complete_business_subjects() -> None:
         for candidate in candidates.values()
         for issue in candidate.issues
     } & {"CONFLICT", "NO_RULE_PRODUCED"}
+
+
+def test_payment_rule_prefers_fund_ratio_over_personal_ratio() -> None:
+    knowledge = _knowledge(
+        topic_concept="PAYMENT_RATIO",
+        fields=[
+            KnowledgeField(field_code="payment_ratio", field_name="基金支付比例", raw_value="80%"),
+            KnowledgeField(
+                field_code="personal_payment_ratio",
+                field_name="个人支付比例",
+                raw_value="20%",
+            ),
+            KnowledgeField(field_code="deductible_amount", field_name="起付线", raw_value="1800"),
+        ],
+        business_sentence="起付线以上基金支付80%，个人支付20%。",
+    )
+    extraction = {
+        "extraction_id": "ext_dummy",
+        "doc_id": "doc_dummy",
+        "source_text": "起付线以上基金支付80%，个人支付20%。",
+        "extracted_fields": {"rules": [{
+            "knowledge_id": "kn_dummy",
+            "rule_type": "支付比例",
+            "payment_ratio": "80%",
+            "personal_payment_ratio": "20%",
+            "deductible_amount": "1800",
+        }]},
+    }
+
+    rule = _service(extraction).compile_units([_unit(knowledge)])["unit_x::kn_dummy"].canonical_rules[0]
+
+    assert rule.result == {"ratio": Decimal("0.8")}
+
+
+def test_personal_payment_rule_preserves_explicit_zero_ratio() -> None:
+    knowledge = _knowledge(
+        topic_concept="PAYMENT_RATIO",
+        fields=[KnowledgeField(
+            field_code="personal_payment_ratio",
+            field_name="个人支付比例",
+            raw_value=Decimal("0"),
+        )],
+        business_sentence="个人支付比例为0。",
+    )
+    extraction = {
+        "extraction_id": "ext_dummy",
+        "doc_id": "doc_dummy",
+        "source_text": "个人支付比例为0。",
+        "extracted_fields": {"rules": [{
+            "knowledge_id": "kn_dummy",
+            "subject": "personal_payment_ratio",
+            "personal_payment_ratio": Decimal("0"),
+            "ratio": Decimal("0.2"),
+        }]},
+    }
+
+    rule = _service(extraction).compile_units([_unit(knowledge)])["unit_x::kn_dummy"].canonical_rules[0]
+
+    assert rule.result == {"ratio": Decimal("0")}

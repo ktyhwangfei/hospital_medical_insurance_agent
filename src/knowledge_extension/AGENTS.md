@@ -37,13 +37,13 @@ knowledge_extension/
 │   ├── policy_retrieval/ # 政策检索子系统（Milvus 向量检索 + SQL Server 实时数据）
 │   │   ├── milvus_retriever.py, reranker.py, query_understanding.py,
 │   │   ├── semantic_mapping.py, explanation_planner.py,
-│   │   ├── sqlserver_business_data_client.py, data_model1_loader.py,
+│   │   ├── data_model1_loader.py,
 │   │   ├── milvus_ingest.py, policy_rules_schema.py, embedding_provider.py,
 │   │   ├── mcp_result_normalizer.py, question_rewriter.py, contextual_policy_qa.py,
 │   │   ├── context_requirement.py, case_context.py, claim_explain_tree.py,
 │   │   ├── explanation_trace.py, excel_loader.py, utils.py, models.py,
 │   │   ├── business_data_client.py, embedding_text_builder.py,
-│   │   └── config/business_sql.yaml  # SQL 查询配置
+│   │   └── config/semantic_mapping.yaml  # 政策语义映射
 │   ├── crawl/            # 政策爬虫
 │   ├── policy_extract/   # 政策提取
 │   ├── policy_fact/      # 政策事实

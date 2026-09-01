@@ -364,15 +364,6 @@ def test_task_backed_release_promotion_publishes_lineage_and_releases_claim(
     )
     _approve_and_prepare_release(client, quality_store)
 
-    returned = client.post(
-        f"{PREFIX}/change-sets/CS_task_1/return",
-        json={"reviewer": "reviewer_b", "note": "不得改写已批准结果"},
-    )
-    assert returned.status_code == 409
-    assert change_sets.get("CS_task_1").status == "APPROVED"
-    assert build_tasks.get("KB_task_1").status == "APPROVED_PENDING_RELEASE"
-    assert build_tasks.get_claim("doc_1", "unit_1") is not None
-
     promoted = client.post(
         f"{PREFIX}/releases/candidate_task_1/promote",
         json={"reviewed_by": "publisher"},
@@ -384,6 +375,23 @@ def test_task_backed_release_promotion_publishes_lineage_and_releases_claim(
     assert snapshot.source_change_set_id == "CS_task_1"
     assert change_sets.get("CS_task_1").status == "PUBLISHED"
     assert build_tasks.get("KB_task_1").status == "PUBLISHED"
+    assert build_tasks.get_claim("doc_1", "unit_1") is None
+
+
+def test_task_backed_approved_change_set_can_return_for_rebuild(monkeypatch) -> None:
+    client, quality_store, change_sets, build_tasks, _snapshots = _lifecycle_client(
+        monkeypatch
+    )
+    _approve_and_prepare_release(client, quality_store)
+
+    returned = client.post(
+        f"{PREFIX}/change-sets/CS_task_1/return",
+        json={"reviewer": "reviewer_b", "note": "经典用例集已更新"},
+    )
+
+    assert returned.status_code == 200
+    assert change_sets.get("CS_task_1").status == "RETURNED"
+    assert build_tasks.get("KB_task_1").status == "RETURNED"
     assert build_tasks.get_claim("doc_1", "unit_1") is None
 
 

@@ -4,11 +4,35 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from src.knowledge_extension.rule_explanation.answer_verification.models import (
+    AnswerCitation,
+    AnswerEvidenceRef,
+    KnowledgeAnswerVerificationDimension,
+    QueryPlanItem,
+)
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class AnswerVerificationFixture(BaseModel):
+    """经典问答用例上的答案验证夹具，声明公开答案与期望内部证据。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    answer: str
+    citations: list[AnswerCitation] = Field(default_factory=list)
+    expected_evidence: list[AnswerEvidenceRef] = Field(default_factory=list)
+    scenario: str = ""
+    planned_queries: list[QueryPlanItem] = Field(default_factory=list)
+    missing_required_rules: list[str] = Field(default_factory=list)
+    calculation_trace: dict[str, Any] | None = None
+    gated_dimensions: list[KnowledgeAnswerVerificationDimension] = Field(
+        default_factory=list
+    )
 
 
 class PolicyQATestCase(BaseModel):
@@ -20,6 +44,7 @@ class PolicyQATestCase(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
     required: bool = True
     active: bool = True
+    answer_verification: AnswerVerificationFixture | None = None
     case_set_version: int = 0
     updated_at: datetime = Field(default_factory=utc_now)
 

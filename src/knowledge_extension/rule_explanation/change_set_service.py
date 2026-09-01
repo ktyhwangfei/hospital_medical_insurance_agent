@@ -331,7 +331,7 @@ class ChangeSetService:
         """将待审或已通过候选退回，等待新的构建任务重新生成。"""
         return self._transition_status(
             change_set_id,
-            allowed_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
+            allowed_statuses={"PENDING_REVIEW", "NEEDS_DECISION", "APPROVED"},
             target_status="RETURNED",
             invalid_action="退回",
             decision={
@@ -588,7 +588,9 @@ class ChangeSetService:
         """审核落库前校验关联任务，避免任何单边状态写入。"""
         transitions = {
             "APPROVED": ("APPROVED_PENDING_RELEASE", {"WAITING_REVIEW"}),
-            "RETURNED": ("RETURNED", {"WAITING_REVIEW"}),
+            "RETURNED": (
+                "RETURNED", {"WAITING_REVIEW", "APPROVED_PENDING_RELEASE"}
+            ),
             "REJECTED": ("REJECTED", {"WAITING_REVIEW"}),
             "PUBLISHED": ("PUBLISHED", {"APPROVED_PENDING_RELEASE"}),
         }

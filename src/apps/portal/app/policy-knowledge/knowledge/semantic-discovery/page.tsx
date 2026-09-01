@@ -1,18 +1,33 @@
-import SemanticProposalsContent from '../../../semantic-layer/proposals/page'
-
+import { PdscDecisionBoard } from '@/components/policy-knowledge/pdsc-decision-board'
+import { RuleGovernanceWizard } from '@/components/policy-knowledge/rule-governance-wizard'
 import { WorkspaceNav } from '../workspace-nav'
 
-export default function SemanticDiscoveryPage() {
+// 规则治理向导仅在规则追溯"发起结构治理"深链（release_id + rule_ids）进入时渲染，
+// 默认视图只保留语义发现决策列表。
+export default async function SemanticDiscoveryPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const params = await searchParams
+  const governanceDeepLink = Boolean(params.release_id && params.rule_ids)
+
   return (
     <div className="space-y-4">
       <WorkspaceNav />
       <header className="space-y-1">
-        <h1 className="text-xl font-semibold tracking-tight text-slate-900">语义发现</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-slate-900">语义发现（政策—数据协同）</h1>
         <p className="text-sm text-slate-600">
-          统一审核队列：政策抽取未知概念、值域取值与规则冲突维度候选合并为一个待审核列表，按类型徽标区分，核对原文证据后发布到正式语义注册表。
+          机器发现的政策结构线索经全政策交叉验证后聚合为语义发现，按治理价值分排序，逐卡完成建模裁决。
         </p>
       </header>
-      <SemanticProposalsContent />
+      {governanceDeepLink && (
+        <section className="space-y-1">
+          <h2 className="text-base font-semibold text-slate-900">规则治理向导</h2>
+          <RuleGovernanceWizard />
+        </section>
+      )}
+      <PdscDecisionBoard />
     </div>
   )
 }

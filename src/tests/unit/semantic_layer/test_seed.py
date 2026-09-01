@@ -80,3 +80,55 @@ def test_zcgz_seed_marks_core_dimensions_indexed(registry):
 
     # 仍为 draft（发布流程在 P4 质量门禁）
     assert registry.get_metric("zcgz.insu_type").status == "draft"
+
+
+def test_outpatient_query_model_seeds_complete_catalog_and_publishes(registry):
+    seed_semantic_layer(registry._store)
+
+    outpatient_object = registry.get_object("mzjyxx")
+    assert outpatient_object.identifier == "settlement_id"
+    assert "settlement_id 对应 T_TradeNo" in outpatient_object.definition
+    assert {item.dataset_code for item in registry.list_datasets("mzjyxx")} == {
+        "mz_trade", "mz_fee_item",
+    }
+    required_codes = {
+        f"mzjyxx.{code}"
+        for code in (
+            "T_SetTid T_TradeNo T_TradeDate T_State P_FundType PN_PersonType "
+            "T_CureType HospitalLevel P_JCLevel PN_ChronicFlag PN_OutTransaction "
+            "T_FirstPay T_SelfPay1 T_SelfPay2 T_SelfPayAll T_BigPay "
+            "T_FundPay T_PersonCountPay T_CashPay T_FeeAll T_FeeIn T_FeeOut "
+            "T_OfficalPay T_BigillPay NT_BasicPay NT_CivilPay NT_OtherPay "
+            "NT_AgencySumPay RETIRE_OFFICER_PAY TB_FeeIn TA_FeeIn TB_MZTimes "
+            "TA_MZTimes ItemName F_LEVEL Fee FeeIn FeeOut FeeItem_SelfPay2 "
+            "FEE_SP_SCALE FEE_MEDIC_L MEDIC_L SPEDRUG_FLAG FeeItem_State"
+        ).split()
+    }
+    assert required_codes <= {
+        item.metric_code for item in registry.get_metrics_by_object("mzjyxx")
+    }
+    assert registry.get_metric("mzjyxx.T_FeeAll").semantic_type == "Amount"
+    assert registry.get_metric("mzjyxx.T_SetTid").semantic_type == "String"
+    assert registry.get_metric("mzjyxx.T_SetTid").importance == "optional"
+    assert registry.get_metric("mzjyxx.T_TradeDate").semantic_type == "Date"
+    assert registry.get_metric("mzjyxx.TB_MZTimes").semantic_type == "Count"
+    assert registry.get_metric("mzjyxx.FEE_SP_SCALE").semantic_type == "Ratio"
+    assert registry.get_metric("mzjyxx.P_JCLevel").name == "军残待遇等级"
+    assert registry.get_metric("mzjyxx.HospitalLevel").value_domain == "MZ_HOSPITAL_LEVEL_BY_CODE"
+    assert not {
+        "P_IDNo", "P_ICNo", "HisName", "HisCode",
+    } & {item.column_name for item in registry.list_fields(object_code="mzjyxx")}
+    assert registry.validate_query_model("mzjyxx") == []
+    assert not any(
+        key.columns == ["T_SetTid"] and key.key_type in {"primary", "unique"}
+        for key in registry.list_dataset_keys("mz_trade")
+    )
+    assert next(
+        field for field in registry.list_fields(object_code="mzjyxx")
+        if field.field_code == "mz_trade.T_SetTid"
+    ).nullable is True
+
+    version = registry.publish_object("mzjyxx")
+
+    assert version.datasets
+    assert all(item.status == "published" for item in version.datasets)
