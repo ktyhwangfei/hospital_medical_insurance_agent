@@ -1,6 +1,6 @@
 skill_id: mzsettlement_verify_skill
 skill_name: 门诊结算结果核验
-version: "1.0.3"
+version: "1.0.4"
 business_action: verify
 business_object: settlement
 description: >-

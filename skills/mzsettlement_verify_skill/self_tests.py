@@ -121,6 +121,15 @@ def build_eval_tasks(
     tasks: list[SkillEvalTask] = []
     for case in load_self_test_cases(path):
         expected = str(case.expected_self_pay_one)
+        # 费用组成三要素：个人自付一原值 + 医保范围内金额 + 基金支付总金额。
+        # 标签与数值都入 must_include：防止回答只埋一个数字、不讲组成。
+        composition_phrases = ["个人自付一", expected]
+        for label, value in (
+            ("医保范围内金额", case.context.in_scope_amount),
+            ("基金支付总金额", case.context.fund_total_amount),
+        ):
+            if value is not None:
+                composition_phrases.extend((label, str(value)))
         business_tags = tuple(
             value
             for value in (
@@ -173,7 +182,7 @@ def build_eval_tasks(
                         output_adapter="public_answer",
                         expected=AnswerQualityAssertions(
                             answerable=True,
-                            must_include=[expected],
+                            must_include=composition_phrases,
                             must_not_include=[
                                 "医保范围内金额 - 基金支付总金额",
                                 "医保范围内金额-基金支付总金额",
