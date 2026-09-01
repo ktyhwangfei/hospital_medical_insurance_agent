@@ -1708,3 +1708,33 @@ def test_rule_trace_backfill_repairs_orphan_extraction_run_and_then_skips() -> N
         assert [step.sequence_no for step in trace.steps] == sorted(
             step.sequence_no for step in trace.steps
         )
+
+
+def test_issue25_metrics_endpoint_returns_structured_baseline() -> None:
+    """Issue #25 指标看板端点返回四条基线指标。"""
+    client = TestClient(create_app())
+    response = client.get(f"{PREFIX}/quality/issue25-metrics?embedding_kind=hash")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["embedding_kind"] == "hash"
+    assert data["corpus_size"] > 0
+    assert data["case_count"] > 0
+    for baseline in ("text_only", "current_hybrid", "enhanced_hybrid", "broad_hybrid"):
+        assert baseline in data
+        metrics = data[baseline]
+        assert "precision_at_k" in metrics
+        assert "recall" in metrics
+        assert "far" in metrics
+        assert "complete_rate" in metrics
+        assert "honest_refusal_rate" in metrics
+        assert "p95_latency_ms" in metrics
+    assert 0.0 <= data["field_quality_score"] <= 1.0
+    assert isinstance(data["top_diff_cases"], list)
+
+
+def test_issue25_metrics_endpoint_rejects_invalid_kind() -> None:
+    """Issue #25 指标看板端点拒绝非法 embedding_kind。"""
+    client = TestClient(create_app())
+    response = client.get(f"{PREFIX}/quality/issue25-metrics?embedding_kind=invalid")
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "ISSUE25_METRICS_INVALID_KIND"
