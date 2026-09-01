@@ -19,16 +19,24 @@ POLICY_RULES_V2_COLLECTION = "policy_rules_v2"
 POLICY_RULES_V2_VECTOR_DIM = 768  # bge-base-zh-v1.5，与 policy_facts 一致
 
 # 核心检索维度（进固定 schema + 标量索引）。设计文档 §3.3 固定 schema。
+# Issue #25 新增适用性字段：region / effective_date / expiry_date / publish_status /
+# policy_version / is_remote。
 CORE_DIM_FIELDS = (
-    "rule_id",      # PK
-    "fact_id",      # 关联 policy_facts
-    "doc_id",       # 关联 policy_documents
-    "rule_type",    # 规则业务类别（起付线/报销比例/封顶线…）
-    "insu_type",    # 险种
-    "med_type",     # 医疗类别
-    "hosp_lv",      # 医院等级
-    "psn_type",     # 人群标签
-    "setl_type",    # 结算方式
+    "rule_id",          # PK
+    "fact_id",          # 关联 policy_facts
+    "doc_id",           # 关联 policy_documents
+    "rule_type",        # 规则业务类别（起付线/报销比例/封顶线…）
+    "insu_type",        # 险种
+    "med_type",         # 医疗类别
+    "hosp_lv",          # 医院等级
+    "psn_type",         # 人群标签
+    "setl_type",        # 结算方式
+    "region",           # 适用地区（Issue #25）
+    "effective_date",   # 生效日期 YYYY-MM-DD（Issue #25）
+    "expiry_date",      # 失效日期 YYYY-MM-DD（Issue #25）
+    "publish_status",   # 发布状态：published/draft/revoked/pilot（Issue #25）
+    "policy_version",   # 政策版本（Issue #25）
+    "is_remote",        # 是否异地规则（Issue #25）
     "schema_version",
     "vector",
 )
@@ -82,6 +90,18 @@ def create_policy_rules_v2_collection(
         FieldSchema("hosp_lv", DataType.VARCHAR, max_length=64, description="医疗机构等级"),
         FieldSchema("psn_type", DataType.VARCHAR, max_length=64, description="人群标签"),
         FieldSchema("setl_type", DataType.VARCHAR, max_length=64, description="结算方式"),
+        FieldSchema("region", DataType.VARCHAR, max_length=64,
+                    description="适用地区，默认北京（Issue #25）"),
+        FieldSchema("effective_date", DataType.VARCHAR, max_length=10,
+                    description="生效日期 YYYY-MM-DD（Issue #25）"),
+        FieldSchema("expiry_date", DataType.VARCHAR, max_length=10,
+                    description="失效日期 YYYY-MM-DD（Issue #25）"),
+        FieldSchema("publish_status", DataType.VARCHAR, max_length=32,
+                    description="发布状态 published/draft/revoked/pilot（Issue #25）"),
+        FieldSchema("policy_version", DataType.VARCHAR, max_length=64,
+                    description="政策版本（Issue #25）"),
+        FieldSchema("is_remote", DataType.BOOL,
+                    description="是否异地规则（Issue #25）"),
         FieldSchema("schema_version", DataType.INT64, description="提取时 schema 版本"),
         FieldSchema("vector", DataType.FLOAT_VECTOR, dim=dim,
                     description="复用对应 fact 的事实向量（§4.1）"),
@@ -108,7 +128,9 @@ def _create_indexes(col: Collection) -> None:
     )
     # 核心维度标量索引（高频过滤）
     for dim in ("fact_id", "doc_id", "rule_type", "insu_type",
-                "med_type", "hosp_lv", "psn_type", "setl_type"):
+                "med_type", "hosp_lv", "psn_type", "setl_type",
+                "region", "effective_date", "expiry_date",
+                "publish_status", "policy_version", "is_remote"):
         col.create_index(field_name=dim, index_params={})
 
 
@@ -170,6 +192,53 @@ def normalize_med_type(value: str) -> str:
     return value
 
 
+# Issue #25 新增字段默认值
+_DEFAULT_REGION = "北京"
+_DEFAULT_EFFECTIVE_DATE = "1900-01-01"
+_DEFAULT_EXPIRY_DATE = "9999-12-31"
+_DEFAULT_PUBLISH_STATUS = "published"
+_DEFAULT_POLICY_VERSION = "1.0"
+
+
+def _normalize_date(value: Any) -> str:
+    """将各种日期输入统一为 YYYY-MM-DD 格式。
+
+    支持的输入：YYYY-MM-DD、YYYY/MM/DD、YYYYMMDD、YYYY年MM月DD日。
+    无法解析时返回空字符串。
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    # 已经是标准格式
+    if len(text) == 10 and text[4] == "-" and text[7] == "-":
+        return text
+    # 处理 YYYYMMDD
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    # 处理 YYYY/MM/DD
+    if len(text) == 10 and text[4] == "/" and text[7] == "/":
+        return text.replace("/", "-")
+    # 处理 YYYY年MM月DD日
+    import re
+    m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", text)
+    if m:
+        y, mo, d = m.groups()
+        return f"{y}-{int(mo):02d}-{int(d):02d}"
+    return ""
+
+
+def _normalize_bool(value: Any) -> bool:
+    """将各种布尔输入统一为 bool。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return text in ("true", "1", "yes", "是", "异地", "remote")
+
+
 def rule_to_entity(
     rule: dict[str, Any],
     vector: list[float],
@@ -192,16 +261,30 @@ def rule_to_entity(
     """
     entity: dict[str, Any] = {"vector": vector, "schema_version": schema_version}
 
-    # 核心维度（rule_id/fact_id/doc_id/rule_type/insu_type/med_type/hosp_lv/psn_type/setl_type）
+    # 核心维度（含 Issue #25 新增适用性字段）
     # hosp_lv/med_type 标准化到业务字典值（对齐 semantic_layer/seed.py）
     for dim in CORE_DIM_FIELDS:
         if dim in ("vector", "schema_version"):
             continue
-        val = str(rule.get(dim, ""))
+        val = rule.get(dim)
         if dim == "hosp_lv":
-            val = normalize_hosp_lv(val)
+            val = normalize_hosp_lv(str(val or ""))
         elif dim == "med_type":
-            val = normalize_med_type(val)
+            val = normalize_med_type(str(val or ""))
+        elif dim == "region":
+            val = str(val or _DEFAULT_REGION)
+        elif dim == "effective_date":
+            val = _normalize_date(val) or _DEFAULT_EFFECTIVE_DATE
+        elif dim == "expiry_date":
+            val = _normalize_date(val) or _DEFAULT_EXPIRY_DATE
+        elif dim == "publish_status":
+            val = str(val or _DEFAULT_PUBLISH_STATUS)
+        elif dim == "policy_version":
+            val = str(val or _DEFAULT_POLICY_VERSION)
+        elif dim == "is_remote":
+            val = _normalize_bool(val)
+        else:
+            val = str(val or "")
         entity[dim] = val
 
     # 详情字段 → FieldTrace（裸值包成溯源对象）

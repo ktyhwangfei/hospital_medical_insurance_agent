@@ -77,6 +77,11 @@ class PolicyRetrievalUnavailableError(Exception):
 
 # ── 标准化结算上下文 ──────────────────────────────────────────────
 
+# Issue #25 新增适用性字段默认值
+_DEFAULT_REGION = "北京"
+_DEFAULT_SETTLEMENT_DATE = "9999-12-31"
+
+
 @dataclass
 class NormalizedPolicyContext:
     """从真实结算数据标准化后的政策查询上下文。"""
@@ -85,6 +90,9 @@ class NormalizedPolicyContext:
     med_type: str = ""        # 医疗类别: "住院-普通住院"
     hosp_lv: str = ""         # 医院等级: "三级医院"
     psn_type: str = ""        # 人员类别: "退休人员"
+    region: str = _DEFAULT_REGION  # 适用地区（Issue #25）
+    settlement_date: str = _DEFAULT_SETTLEMENT_DATE  # 结算日期 YYYY-MM-DD（Issue #25）
+    is_remote: bool = False   # 是否异地就医（Issue #25）
     target_field: str = ""    # 目标字段: "统筹自付"
     target_amount: float = 0.0  # 目标金额
 
@@ -100,6 +108,7 @@ class StructuredPolicyQuery:
     text_must_include_any: list[str] = field(default_factory=list)  # source_text 至少包含一个
     text_must_include_all: list[str] = field(default_factory=list)  # source_text 全部包含
     psn_type_allow_all: bool = False          # 是否允许 psn_type 宽松匹配（不限定为指定值）
+    settlement_date: str = _DEFAULT_SETTLEMENT_DATE  # 结算日期 YYYY-MM-DD（Issue #25 时间过滤）
 
 
 # ── 结构化检索结果 ────────────────────────────────────────────────
@@ -117,6 +126,12 @@ class StructuredPolicyEvidence:
     med_type: str = ""
     hosp_lv: str = ""
     psn_type: str = ""
+    region: str = _DEFAULT_REGION  # 适用地区（Issue #25）
+    effective_date: str = ""      # 生效日期（Issue #25）
+    expiry_date: str = ""         # 失效日期（Issue #25）
+    publish_status: str = ""      # 发布状态（Issue #25）
+    policy_version: str = ""      # 政策版本（Issue #25）
+    is_remote: bool = False       # 是否异地规则（Issue #25）
     source_text: str = ""
     rule_value: str = ""
     payment_ratio: str = ""
@@ -131,7 +146,7 @@ class StructuredPolicyEvidence:
 class StructuredRetrievalResult:
     """完整的结构化检索结果。"""
     settlement_context: dict[str, Any] = field(default_factory=dict)
-    normalized_context: dict[str, str] = field(default_factory=dict)
+    normalized_context: dict[str, Any] = field(default_factory=dict)
     planned_queries: list[dict[str, Any]] = field(default_factory=list)
     query_results: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     selected_evidence: list[StructuredPolicyEvidence] = field(default_factory=list)
@@ -162,7 +177,33 @@ class StructuredPolicyRuleRetriever:
                 raise
             raise PolicyRetrievalUnavailableError(str(e)) from e
         self.collection_name = collection_name or COLLECTION_NAME
+        # Issue #25：缓存 collection 的固定 schema 字段名，用于旧 collection 兼容
+        self._collection_fields: set[str] | None = None
         logger.info(f"StructuredPolicyRuleRetriever initialized: {uri}")
+
+    def _get_collection_fields(self) -> set[str]:
+        """获取当前 collection 的字段名集合（含固定 schema + dynamic field 键）。
+
+        用于 Issue #25 新增字段的向后兼容：若旧 collection 缺少某字段，
+        则跳过该字段的 Milvus expr 过滤，避免查询报错。
+
+        注：单元测试可能直接构造实例而不调用 __init__，使用 getattr 防御。
+        """
+        cached = getattr(self, "_collection_fields", None)
+        if cached is not None:
+            return cached
+        try:
+            desc = self.client.describe_collection(collection_name=self.collection_name)
+        except Exception as e:
+            logger.warning(f"[StructuredRetrieval] describe_collection failed: {e}")
+            self._collection_fields: set[str] = set()
+            return self._collection_fields
+        fields: set[str] = set()
+        for f in desc.get("fields", []):
+            fields.add(str(f.get("name", "")))
+        self._collection_fields = fields
+        logger.info(f"[StructuredRetrieval] collection fields: {sorted(fields)}")
+        return self._collection_fields
 
     # ── 查询规划 ─────────────────────────────────────────────────
 
@@ -174,14 +215,28 @@ class StructuredPolicyRuleRetriever:
         "统筹自付"需要两组必需规则：
         1. 三级医院职工住院分段支付比例
         2. 退休人员个人支付比例60%折算公式
+
+        Issue #25：所有查询默认注入 region / publish_status / is_remote 适用性过滤。
         """
         queries: list[StructuredPolicyQuery] = []
+
+        # Issue #25 全局适用性过滤（会注入到每个查询中）
+        base_filters: dict[str, str] = {
+            "region": ctx.region or _DEFAULT_REGION,
+            "publish_status": "published",
+        }
+        if ctx.is_remote:
+            base_filters["is_remote"] = "true"
+        else:
+            # 本地结算：同时匹配本地规则（is_remote=false）和未标记规则（兼容旧数据）
+            base_filters["is_remote"] = "false"
 
         if target_field in ("统筹自付", "pooling_self_pay"):
             # 查询1: 三级医院职工住院分段支付比例
             # ★ psn_type 不限定为退休人员，基础分段比例对全部人群通用
             # ★ hosp_lv 必须包含，否则会混入其他等级医院的规则
             query1_filters = {
+                **base_filters,
                 "insu_type": ctx.insu_type,
                 "med_type": ctx.med_type,
                 "rule_type": "支付比例",
@@ -205,6 +260,7 @@ class StructuredPolicyRuleRetriever:
             # ★ U3：去掉硬编码 rule_type=计算公式（提取端不产出该类型），改 rule_type=支付比例；
             # ★ 命中 U3 折算展开的退休 personal_payment_ratio 规则（source_text 含「个人支付比例/60%」）
             query2_filters = {
+                **base_filters,
                 "insu_type": ctx.insu_type,
                 "med_type": ctx.med_type,
                 "psn_type": ctx.psn_type,
@@ -232,14 +288,32 @@ class StructuredPolicyRuleRetriever:
 
         优先使用 Milvus scalar query（字段过滤 + source_text LIKE），
         不依赖向量相似度。
+
+        Issue #25：新增 region / effective_date / expiry_date / publish_status /
+        policy_version / is_remote 过滤；对旧 collection 缺少的字段做兼容跳过。
         """
         results: list[dict[str, Any]] = []
 
+        # Issue #25：检测当前 collection 实际存在的字段（旧 collection 兼容）
+        available_fields = self._get_collection_fields()
+
         # 构建 Milvus expr 过滤条件
         expr_parts: list[str] = []
+        skipped_fields: list[str] = []
 
         # 字段相等/模糊过滤
         for field, value in query.filters.items():
+            # Issue #25：字段不存在时跳过，避免旧 collection 查询报错
+            if available_fields and field not in available_fields:
+                skipped_fields.append(field)
+                continue
+
+            if field == "is_remote":
+                # is_remote 是 BOOL 类型
+                bool_val = str(value).lower() in ("true", "1", "yes", "是")
+                expr_parts.append(f'is_remote == {str(bool_val).lower()}')
+                continue
+
             if value and field != "psn_type":
                 # ★ insu_type 使用 LIKE 匹配，因为上下文可能返回简称
                 if field == "insu_type":
@@ -250,6 +324,20 @@ class StructuredPolicyRuleRetriever:
                 # psn_type 允许宽松匹配
                 if not query.psn_type_allow_all:
                     expr_parts.append(f'psn_type == "{value}"')
+
+        # Issue #25：时间范围过滤（ settlement_date 在 [effective_date, expiry_date] 内）
+        settlement_date = query.settlement_date
+        if settlement_date and settlement_date != _DEFAULT_SETTLEMENT_DATE:
+            if "effective_date" in available_fields:
+                expr_parts.append(f'effective_date <= "{settlement_date}"')
+            if "expiry_date" in available_fields:
+                expr_parts.append(f'(expiry_date == "9999-12-31" or expiry_date >= "{settlement_date}")')
+
+        if skipped_fields:
+            logger.warning(
+                f"[StructuredRetrieval] Query '{query.query_name}' skipped fields not in collection: "
+                f"{skipped_fields}"
+            )
 
         # ★ 如果没有其他过滤条件，加一个保底条件
         if not expr_parts:
@@ -374,6 +462,9 @@ class StructuredPolicyRuleRetriever:
             "med_type": ctx.med_type,
             "hosp_lv": ctx.hosp_lv,
             "psn_type": ctx.psn_type,
+            "region": ctx.region or _DEFAULT_REGION,
+            "settlement_date": ctx.settlement_date or _DEFAULT_SETTLEMENT_DATE,
+            "is_remote": ctx.is_remote,
             "target_field": target_field,
             "target_amount": ctx.target_amount,
         }
@@ -381,6 +472,9 @@ class StructuredPolicyRuleRetriever:
 
         # Step 1: 规划查询（支持外部传入的自定义查询计划）
         queries = custom_queries if custom_queries is not None else self.plan_queries(ctx, target_field)
+        # 注入结算日期到每个查询（Issue #25 时间过滤）
+        for q in queries:
+            q.settlement_date = ctx.settlement_date or _DEFAULT_SETTLEMENT_DATE
         result.planned_queries = [
             {
                 "query_name": q.query_name,
@@ -389,6 +483,7 @@ class StructuredPolicyRuleRetriever:
                 "text_must_include_any": q.text_must_include_any,
                 "text_must_include_all": q.text_must_include_all,
                 "psn_type_allow_all": q.psn_type_allow_all,
+                "settlement_date": q.settlement_date,
             }
             for q in queries
         ]
@@ -459,6 +554,8 @@ class StructuredPolicyRuleRetriever:
             str(entity.get("hosp_lv", "") or ""),
             str(entity.get("psn_type", "") or ""),
             str(entity.get("rule_type", "") or ""),
+            str(entity.get("region", "") or ""),
+            str(entity.get("policy_version", "") or ""),
             str(entity.get("payment_ratio", "") or ""),
             str(entity.get("amount_band", "") or ""),
             str(entity.get("rule_value", "") or "")[:200],
@@ -474,6 +571,15 @@ class StructuredPolicyRuleRetriever:
         # 构建 applied_reason
         applied_reason = self._build_applied_reason(entity, query_name)
 
+        # Issue #25：从 entity 读取适用性字段，缺失时填默认值
+        def _bool_val(key: str) -> bool:
+            v = entity.get(key)
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, str):
+                return v.lower() in ("true", "1", "yes", "是")
+            return False
+
         return StructuredPolicyEvidence(
             evidence_id=str(entity.get("rule_id", "") or ""),
             source="structured_policy_rule",
@@ -485,6 +591,12 @@ class StructuredPolicyRuleRetriever:
             med_type=str(entity.get("med_type", "") or ""),
             hosp_lv=str(entity.get("hosp_lv", "") or ""),
             psn_type=str(entity.get("psn_type", "") or ""),
+            region=str(entity.get("region", "") or _DEFAULT_REGION),
+            effective_date=str(entity.get("effective_date", "") or ""),
+            expiry_date=str(entity.get("expiry_date", "") or ""),
+            publish_status=str(entity.get("publish_status", "") or ""),
+            policy_version=str(entity.get("policy_version", "") or ""),
+            is_remote=_bool_val("is_remote"),
             source_text=str(entity.get("source_text", "") or ""),
             rule_value=str(entity.get("rule_value", "") or ""),
             payment_ratio=str(entity.get("payment_ratio", "") or ""),
@@ -532,12 +644,24 @@ def retrieve_policy_evidence(
     Returns:
         StructuredRetrievalResult
     """
+    # Issue #25：读取新增适用性字段
+    def _bool_from_ctx(key: str) -> bool:
+        v = settlement_context.get(key)
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.lower() in ("true", "1", "yes", "是")
+        return False
+
     ctx = NormalizedPolicyContext(
         settlement_id=str(settlement_context.get("settlement_id", "")),
         insu_type=str(settlement_context.get("insu_type", "")),
         med_type=str(settlement_context.get("med_type", "")),
         hosp_lv=str(settlement_context.get("hosp_lv", "")),
         psn_type=str(settlement_context.get("psn_type", "")),
+        region=str(settlement_context.get("region", _DEFAULT_REGION) or _DEFAULT_REGION),
+        settlement_date=str(settlement_context.get("settlement_date", _DEFAULT_SETTLEMENT_DATE) or _DEFAULT_SETTLEMENT_DATE),
+        is_remote=_bool_from_ctx("is_remote"),
         target_field=str(settlement_context.get("target_field", "统筹自付")),
         target_amount=float(settlement_context.get("target_amount", 0)),
     )

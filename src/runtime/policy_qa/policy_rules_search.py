@@ -18,6 +18,8 @@ VECTOR_FIELD = "vector"
 CORE_FIELDS = (
     "rule_id", "fact_id", "doc_id",
     "rule_type", "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+    "region", "effective_date", "expiry_date", "publish_status",
+    "policy_version", "is_remote",
 )
 
 # 详情字段（落 dynamic field，值是 FieldTrace dict，需解包 .value）
