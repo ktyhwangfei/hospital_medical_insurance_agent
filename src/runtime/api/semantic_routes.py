@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.data_platform.storage.postgresql.policy_meta_store import PolicyMetaStore
 from src.runtime.api.semantic_alignment_routes import SemanticReviewPrincipalDependency
@@ -1824,10 +1824,11 @@ def _collect_source_fields() -> set[str]:
 
 
 class DiscoveryScanRequest(BaseModel):
-    task_id: str | None = None
-    source_config: dict | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    datasource_id: str = Field(min_length=3, max_length=64)
     scope: str = "全部已接入表"
-    sample_limit: int = 10000  # 样本值行数上限（页面可配置）
+    sample_limit: int = Field(default=10000, ge=1, le=100000)
 
 
 # ── Discovery store（PostgreSQL 持久化，重启不丢） ──────────────────────────
@@ -1844,19 +1845,23 @@ def _get_discovery_store() -> "DiscoveryStore":
     return _discovery_store
 
 
-def _run_discovery_sync(source_config: dict, store=None, meta_store=None) -> dict:
-    """Lazy wrapper to avoid circular import at module load time.
-
-    多源（P7.2）：source_config 无 sqlserver 时从注册表取启用源逐个扫描。
-    """
+def _run_discovery_sync(
+    datasource_id: str,
+    sample_limit: int,
+    store=None,
+    governance_service=None,
+) -> dict:
+    """延迟导入，扫描时才解密并打开受控数据源连接。"""
     from src.runtime.discovery.service import run_discovery
-    # source_config 无 sqlserver 配置时，从 datasource 注册表取多源
-    if not (source_config or {}).get("sqlserver") and meta_store is None:
-        try:
-            meta_store = _get_meta_store()
-        except Exception:
-            meta_store = None
-    return run_discovery(source_config, store, meta_store=meta_store)
+    if governance_service is None:
+        from src.runtime.api.data_governance_routes import get_data_governance_service
+        governance_service = get_data_governance_service()
+    return run_discovery(
+        datasource_id=datasource_id,
+        governance_service=governance_service,
+        sample_limit=sample_limit,
+        store=store,
+    )
 
 
 @router.post("/discovery/incremental-update", response_model=DiscoveryScanResponse)
@@ -1933,13 +1938,15 @@ def incremental_discovery_update():
 
 
 @router.post("/discovery/scan", response_model=DiscoveryScanResponse)
-async def start_discovery_scan(req: DiscoveryScanRequest | None = None):
-    """Start a discovery scan task. Accepts optional source_config from frontend."""
+async def start_discovery_scan(req: DiscoveryScanRequest):
+    """创建只引用受控数据源 ID 的扫描任务。"""
     task_id = str(uuid.uuid4())
-    config = (req.source_config if req and req.source_config else None) or {}
-    sample_limit = req.sample_limit if req else 10000
     store = _get_discovery_store()
-    store.create_task(task_id, config, sample_limit)
+    store.create_task(
+        task_id,
+        {"datasource_id": req.datasource_id, "scope": req.scope},
+        req.sample_limit,
+    )
     return DiscoveryScanResponse(task_id=task_id, status="started")
 
 
@@ -1951,20 +1958,19 @@ async def get_scan_status(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail=f"Scan task '{task_id}' not found")
 
-    source_config = task.get("source_config") or {}
-    if isinstance(source_config, str):
-        source_config = json.loads(source_config)
+    task_config = task.get("source_config") or {}
+    if isinstance(task_config, str):
+        task_config = json.loads(task_config)
     sample_limit = task.get("sample_limit", 10000)
-
-    # 将 sample_limit 注入 source_config 传递给 discovery 服务
-    if source_config.get("sqlserver"):
-        source_config["sqlserver"]["sample_limit"] = sample_limit
-    else:
-        source_config["sample_limit"] = sample_limit
+    datasource_id = task_config.get("datasource_id")
+    if not datasource_id:
+        raise HTTPException(status_code=409, detail="历史扫描任务缺少受控数据源 ID，请重新发起")
 
     async def event_generator():
         try:
-            result = await asyncio.to_thread(_run_discovery_sync, source_config, store)
+            result = await asyncio.to_thread(
+                _run_discovery_sync, datasource_id, sample_limit, store
+            )
             tables = result.get("tables", [])
             total_fields = result.get("total_fields", 0)
             mapped_fields = result.get("mapped_fields", 0)

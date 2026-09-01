@@ -1,126 +1,92 @@
-"""P7.2 discovery 多源扫描测试 — 从注册表取多源逐个扫描合并。
+"""语义发现只允许使用数据治理中心的受控连接。"""
+import asyncio
+from datetime import datetime, timezone
 
-mock scan_sqlserver 隔离真实 SQL Server。
-[依据: docs/steering/政策知识管线设计.md §7.6；开发计划 P7.2]
-"""
+import pytest
+from pydantic import ValidationError
+
+from src.data_platform.outpatient_governance import ConnectionStatus, OutpatientDataSource
 from src.runtime.discovery import service
-from src.runtime.discovery.service import list_enabled_sqlserver_sources, run_discovery
+from src.runtime.discovery.service import run_discovery
 
 
-class _FakeMetaStore:
-    def __init__(self, ds_list):
-        self._ds = ds_list
-
-    def list_datasources(self, enabled_only=False):
-        rows = self._ds
-        if enabled_only:
-            rows = [d for d in rows if d.get("enabled")]
-        return rows
+NOW = datetime(2026, 8, 31, tzinfo=timezone.utc)
 
 
-def test_list_enabled_sqlserver_sources_filters_type_and_enabled():
-    meta = _FakeMetaStore([
-        {"id": "ds1", "name": "HIS", "type": "sqlserver", "enabled": True,
-         "connection_config": {"host": "h1"}},
-        {"id": "ds2", "name": "Milvus", "type": "milvus", "enabled": True,
-         "connection_config": {}},
-        {"id": "ds3", "name": "禁用", "type": "sqlserver", "enabled": False,
-         "connection_config": {"host": "h3"}},
-    ])
-    sources = list_enabled_sqlserver_sources(meta)
-    assert len(sources) == 1
-    assert sources[0][0] == "ds1"
-    assert sources[0][2]["host"] == "h1"
+def _source(status=ConnectionStatus.HEALTHY):
+    return OutpatientDataSource(
+        source_id="bjybdb", hospital_code="H001", hospital_name="示例医院",
+        name="门诊医保库", host="secret-host", database="bjybdb", username="readonly",
+        credential_id="credential.bjybdb", credential_configured=True,
+        connection_status=status, created_at=NOW, updated_at=NOW,
+    )
 
 
-def test_list_enabled_sqlserver_sources_none_meta():
-    assert list_enabled_sqlserver_sources(None) == []
+class _GovernanceService:
+    def __init__(self, source=None):
+        self.source = source or _source()
+        self.connection = object()
+
+    def list_sources(self):
+        return [self.source]
+
+    def open_source_connection(self, source_id):
+        assert source_id == self.source.source_id
+        return self.connection
 
 
-def test_run_discovery_multi_source_merges(monkeypatch):
-    """多源：从注册表取 2 个启用源，逐个扫描，合并表/字段。"""
-    meta = _FakeMetaStore([
-        {"id": "ds1", "type": "sqlserver", "enabled": True,
-         "connection_config": {"host": "h1", "database": "d1", "schema": "dbo"}},
-        {"id": "ds2", "type": "sqlserver", "enabled": True,
-         "connection_config": {"host": "h2", "database": "d2", "schema": "dbo"}},
-    ])
-    calls: list[str] = []
+def test_run_discovery_uses_controlled_connection_without_connection_fields(monkeypatch):
+    governance = _GovernanceService()
+    captured = {}
 
-    def fake_scan(cfg, store=None):
-        calls.append(cfg["host"])
-        return {
-            "tables": [f"t_{cfg['host']}"],
-            "fields": [{"field_name": "c", "table_name": f"t_{cfg['host']}",
-                        "data_type": "varchar", "non_null_rate": 1.0}],
-            "table_statuses": [],
-        }
+    def fake_scan(cfg, store=None, connection=None):
+        captured.update(cfg)
+        assert connection is governance.connection
+        return {"tables": ["o_Trade"], "fields": [{
+            "field_name": "T_TradeDate", "table_name": "o_Trade",
+            "data_type": "datetime", "non_null_rate": 1.0,
+        }], "table_statuses": []}
 
     monkeypatch.setattr(service, "scan_sqlserver", fake_scan)
-    result = run_discovery(meta_store=meta)
+    result = run_discovery(
+        datasource_id="bjybdb", sample_limit=5000, governance_service=governance,
+    )
 
-    assert len(calls) == 2  # 扫了两个源
-    assert set(calls) == {"h1", "h2"}
-    assert result["total_tables"] == 2
-    assert result["total_fields"] == 2
-    # 每个字段标记了来源 datasource_id（三段式寻址基础）
-    assert all("datasource_id" in f for f in result["fields"])
-
-
-def test_run_discovery_single_source_config_backward_compatible(monkeypatch):
-    """显式传 source_config 时：单源扫描（向后兼容）。"""
-    calls: list[str] = []
-
-    def fake_scan(cfg, store=None):
-        calls.append(cfg["host"])
-        return {"tables": ["t1"], "fields": [], "table_statuses": []}
-
-    monkeypatch.setattr(service, "scan_sqlserver", fake_scan)
-    run_discovery(source_config={"sqlserver": {"host": "legacy", "database": "d"}})
-    assert calls == ["legacy"]  # 只扫一个
+    assert result["fields"][0]["datasource_id"] == "bjybdb"
+    assert captured == {"schema": "dbo", "sample_limit": 5000}
+    assert not ({"host", "user", "password", "database"} & captured.keys())
 
 
-# ── _run_discovery_sync 多源接线（P7.2，semantic_routes）──
+def test_run_discovery_rejects_unhealthy_controlled_source():
+    with pytest.raises(ValueError, match="连接健康"):
+        run_discovery(
+            datasource_id="bjybdb",
+            governance_service=_GovernanceService(_source(ConnectionStatus.ERROR)),
+        )
 
 
-def test_run_discovery_sync_passes_meta_store_when_no_sqlserver(monkeypatch):
-    """source_config 无 sqlserver 时自动取 meta_store 传给 run_discovery。"""
+def test_discovery_request_forbids_legacy_source_config():
+    from src.runtime.api.semantic_routes import DiscoveryScanRequest
+
+    with pytest.raises(ValidationError):
+        DiscoveryScanRequest.model_validate({
+            "datasource_id": "bjybdb",
+            "source_config": {"sqlserver": {"password": "must-not-persist"}},
+        })
+
+
+def test_scan_task_persists_only_controlled_source_id(monkeypatch):
     from src.runtime.api import semantic_routes
-    from src.runtime.discovery import service
 
-    captured: dict = {}
+    captured = {}
 
-    def fake_run(source_config=None, store=None, meta_store=None):
-        captured["meta_store"] = meta_store
-        return {"tables": [], "total_tables": 0, "total_fields": 0,
-                "mapped_fields": 0, "unmapped_fields": 0,
-                "fields": [], "table_statuses": []}
+    class Store:
+        def create_task(self, task_id, config, sample_limit):
+            captured.update(config)
 
-    monkeypatch.setattr(service, "run_discovery", fake_run)
-    sentinel = object()
-    monkeypatch.setattr(semantic_routes, "_get_meta_store", lambda: sentinel)
-    semantic_routes._run_discovery_sync({"sample_limit": 10000}, None)
-    assert captured["meta_store"] is sentinel
+    monkeypatch.setattr(semantic_routes, "_get_discovery_store", lambda: Store())
+    request = semantic_routes.DiscoveryScanRequest(datasource_id="bjybdb", sample_limit=1000)
+    asyncio.run(semantic_routes.start_discovery_scan(request))
 
-
-def test_run_discovery_sync_skips_meta_store_when_sqlserver_config(monkeypatch):
-    """source_config 有 sqlserver 时不取 meta_store（单源兼容）。"""
-    from src.runtime.api import semantic_routes
-    from src.runtime.discovery import service
-
-    captured: dict = {}
-
-    def fake_run(source_config=None, store=None, meta_store=None):
-        captured["meta_store"] = meta_store
-        return {"tables": [], "total_tables": 0, "total_fields": 0,
-                "mapped_fields": 0, "unmapped_fields": 0,
-                "fields": [], "table_statuses": []}
-
-    monkeypatch.setattr(service, "run_discovery", fake_run)
-
-    def boom():
-        raise AssertionError("source_config 有 sqlserver 时不应取 meta_store")
-
-    monkeypatch.setattr(semantic_routes, "_get_meta_store", boom)
-    semantic_routes._run_discovery_sync({"sqlserver": {"host": "h", "database": "d"}}, None)
-    assert captured["meta_store"] is None
+    assert captured == {"datasource_id": "bjybdb", "scope": "全部已接入表"}
+    assert "password" not in str(captured).lower()

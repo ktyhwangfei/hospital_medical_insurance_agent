@@ -12,21 +12,23 @@
 """
 from __future__ import annotations
 
-import json
-import urllib.request
-
 from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import (
     _leaf_body,
     match_leaves,
     parse_kept_leaves,
 )
 
-DOC_URL = "http://127.0.0.1:8135/api/v1/medical-insurance-ai-agent/policy-pipeline/documents/doc_1d44e2e1db0c"
+DOCUMENT_TITLE = "关于修改《规定》的决定"
+DOCUMENT_CONTENT = """二、第三十六条修改为：
+（四）退休人员个人支付比例为职工支付比例的60%。
+第四章 基本医疗保险待遇
+第三十六条 在一个结算期内职工和退休人员发生的医疗费用，由基本医疗保险统筹基金和个人按比例分担：
+（四）退休人员个人支付比例为职工支付比例的60%。
+"""
 
 
 def _load_document() -> tuple[str, str]:
-    doc = json.load(urllib.request.urlopen(DOC_URL))
-    return doc.get("content_text") or "", doc.get("title") or ""
+    return DOCUMENT_CONTENT, DOCUMENT_TITLE
 
 
 def test_kept_leaves_dedupes_identical_body_across_sections() -> None:
@@ -66,7 +68,8 @@ def test_match_leaves_retiree_60_returns_single_main_text_unit() -> None:
     matched = match_leaves("（四）退休人员个人支付比例为职工支付比例的60%。", kept)
     assert len(matched) == 1, f"应唯一匹配，实际 {len(matched)}: {matched}"
     # 应匹配正文单元（path 含「第四章」），而非修改决定单元（path 含「二、…修改为」）
-    assert matched[0] == "n_hI9sUrj0uvBe"
+    matched_leaf = next(leaf for leaf in kept if leaf.node_id == matched[0])
+    assert any("第四章" in part for part in matched_leaf.path)
 
 
 def test_run_extraction_assigns_unit_id_for_retiree_fact() -> None:

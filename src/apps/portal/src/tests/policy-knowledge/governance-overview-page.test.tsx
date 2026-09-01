@@ -156,11 +156,12 @@ describe('知识资产概览页', () => {
     expect(within(detail).getByText('PASS 20')).toBeInTheDocument()
     expect(within(detail).getByText('REVIEW 6')).toBeInTheDocument()
 
-    const workspaces = within(detail).getByRole('region', { name: '知识工作域' })
-    expect(within(workspaces).getByRole('link', { name: /知识构建/ })).toHaveAttribute('href', '/policy-knowledge/knowledge/build')
-    expect(within(workspaces).getByRole('link', { name: /知识审核/ })).toHaveAttribute('href', '/policy-knowledge/knowledge/review')
-    expect(within(workspaces).getByRole('link', { name: /发布管理/ })).toHaveAttribute('href', '/policy-knowledge/knowledge/releases')
-    expect(within(workspaces).getByRole('link', { name: /语义发现/ })).toHaveAttribute('href', '/policy-knowledge/knowledge/semantic-discovery')
+    const workspaces = within(detail).getByRole('heading', { name: '知识工作域' }).parentElement
+    expect(workspaces).not.toBeNull()
+    expect(within(workspaces as HTMLElement).getByRole('link', { name: /知识构建/ })).toHaveAttribute('href', '/policy-knowledge/knowledge/build')
+    expect(within(workspaces as HTMLElement).getByRole('link', { name: /知识审核/ })).toHaveAttribute('href', '/policy-knowledge/knowledge/review')
+    expect(within(workspaces as HTMLElement).getByRole('link', { name: /发布管理/ })).toHaveAttribute('href', '/policy-knowledge/knowledge/releases')
+    expect(within(workspaces as HTMLElement).getByRole('link', { name: /语义发现/ })).toHaveAttribute('href', '/policy-knowledge/knowledge/semantic-discovery')
   })
 
   it('治理进度只显示积压与当前优先待办', async () => {
@@ -188,7 +189,7 @@ describe('知识资产概览页', () => {
 
     const ledger = await screen.findByRole('table', { name: '知识资产台账' })
     await waitFor(() => {
-      expect(within(ledger).getByRole('row', { name: /发布快照.*0.*未发布/ })).toBeInTheDocument()
+      expect(within(ledger).getByRole('row', { name: /发布快照.*尚未发布版本/ })).toBeInTheDocument()
     })
     expect(screen.queryByText('无法连接后端')).not.toBeInTheDocument()
   })

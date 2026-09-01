@@ -26,7 +26,14 @@ from src.runtime.policy_qa.explanation_mode import (
     detect_explanation_mode,
     fee_item_label,
 )
-from src.runtime.policy_qa.models import PolicyQARequest
+from src.runtime.policy_qa.models import (
+    EscalateSessionRequest,
+    PolicyQARequest,
+    ResolveEscalationRequest,
+    SuspendSessionRequest,
+)
+from src.runtime.policy_qa import session_lifecycle
+from src.runtime.policy_qa.session_lifecycle import SessionLifecycleError
 from src.runtime.policy_qa.public_contract import (
     PolicyCitation,
     PolicyQAPublicResult,
@@ -48,8 +55,10 @@ from src.runtime.policy_qa.persistence import (
     ensure_session_and_workflow,
     record_qa_task,
     record_step_task,
+    record_trajectory_turn,
     finalize_workflow,
 )
+from src.data_platform.storage.session.factory import session_storage
 from src.runtime.infra_event.context import set_infra_context
 from src.shared.schemas.responses import error_detail
 from src.data_platform.storage.skill.regression_factory import (
@@ -624,6 +633,7 @@ async def _policy_qa_stream(
         role=role,
     )
     if context_need:
+        turn_context_need = dict(context_need)
         yield _sse_event("context_need", _sanitize(context_need))
 
     # 累积结果用于 task 记录
@@ -631,6 +641,9 @@ async def _policy_qa_stream(
     attempt_count = 1
     halt_reason = "non_retryable_error"
     last_retryable_failure: str | None = None
+    # 轨迹收集（Issue #30：公开快照，供会话重放）
+    turn_context_need: dict | None = None
+    turn_memory_updates: list[dict] = []
     
     try:
         # 处理请求并 yield SSE 事件（Skill 驱动：五步流程）
@@ -724,6 +737,7 @@ async def _policy_qa_stream(
             settlement_id=request.settlement_id,
         ):
             if _evt_type == "memory_update":
+                turn_memory_updates.append(dict(_evt_payload))
                 yield _sse_event(_evt_type, _sanitize(_evt_payload))
                 await asyncio.sleep(0)
         async for _ev in _yield_step("settlement_query", "done", "结算数据获取完成"):
@@ -796,6 +810,7 @@ async def _policy_qa_stream(
                 detail={"rules_count": len(policy_evidence), "policy_filters": []},
             ):
                 if _evt_type == "memory_update":
+                    turn_memory_updates.append(dict(_evt_payload))
                     yield _sse_event(_evt_type, _sanitize(_evt_payload))
                     await asyncio.sleep(0)
         async for _ev in _yield_step(
@@ -833,6 +848,7 @@ async def _policy_qa_stream(
             session_id=session_id, step="answer_assembly", detail={},
         ):
             if _evt_type == "memory_update":
+                turn_memory_updates.append(dict(_evt_payload))
                 yield _sse_event(_evt_type, _sanitize(_evt_payload))
                 await asyncio.sleep(0)
         _exec_done_msg = "费用构成总览生成完成" if _is_overview else "费用解释生成完成"
@@ -938,6 +954,24 @@ async def _policy_qa_stream(
         except Exception as e:
             logger.warning(f"Failed to persist QA result: {e}")
 
+        # ── 持久化：轨迹快照（Issue #30，非阻塞）──
+        record_trajectory_turn(
+            qa_turn_id=qa_turn_id,
+            session_id=session_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            settlement_id=request.settlement_id,
+            question=request.question,
+            answer_status=public_result.answer_status,
+            payload={
+                "context_need": turn_context_need,
+                "memory_updates": turn_memory_updates,
+                "result": public_result.model_dump(mode="json"),
+                "attempt_count": attempt_count,
+                "halt_reason": halt_reason,
+            },
+        )
+
         yield _sse_event(
             "done",
             {
@@ -978,6 +1012,23 @@ async def _policy_qa_stream(
             finalize_workflow(workflow_id, "failed", accumulated_steps)
         except Exception as pe:
             logger.warning(f"Failed to persist error state: {pe}")
+
+        # ── 持久化：失败轮轨迹（无 result，保证对话序列完整）──
+        record_trajectory_turn(
+            qa_turn_id=qa_turn_id,
+            session_id=session_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            settlement_id=request.settlement_id,
+            question=request.question,
+            answer_status="unavailable",
+            payload={
+                "context_need": turn_context_need,
+                "memory_updates": turn_memory_updates,
+                "attempt_count": attempt_count,
+                "halt_reason": halt_reason,
+            },
+        )
 
         error_code = "POLICY_QA_FAILED"
         yield _sse_event(
@@ -1022,6 +1073,19 @@ async def policy_qa_stream(
 
     if not request.settlement_id:
         raise HTTPException(status_code=400, detail="结算ID不能为空")
+
+    # Issue #30：挂起/升级/关闭的会话拒绝新问答（状态机见 session_lifecycle）
+    if request.session_id:
+        existing = session_storage.get_session(request.session_id)
+        if existing is not None and (existing.status or "active") != "active":
+            raise HTTPException(
+                status_code=409,
+                detail=error_detail(
+                    "SESSION_NOT_ACTIVE",
+                    f"会话当前状态为 {existing.status}，请先恢复会话或新建会话",
+                    {"session_id": request.session_id, "status": existing.status},
+                ),
+            )
 
     # 返回SSE流式响应
     return StreamingResponse(
@@ -1877,3 +1941,122 @@ def submit_policy_qa_feedback(
         source_selected_skill_id=item.source_selected_skill_id,
     )
 
+
+
+# ── 会话生命周期与轨迹端点（Issue #30）─────────────────────────
+
+
+def _lifecycle_http_error(e: SessionLifecycleError) -> HTTPException:
+    return HTTPException(
+        status_code=e.status_code,
+        detail=error_detail(e.code, e.message),
+    )
+
+
+@router.get("/sessions")
+def list_qa_sessions(
+    user_id: str = Query(default="demo", description="用户ID（SSO 接入后改为认证上下文）"),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    """用户可恢复会话列表（含生命周期状态与轮次摘要）。"""
+    try:
+        return {"items": session_lifecycle.list_user_sessions(user_id, limit=limit)}
+    except Exception:
+        logger.exception("Failed to list QA sessions")
+        raise HTTPException(status_code=500, detail=error_detail("SESSION_LIST_FAILED", "会话列表查询失败"))
+
+
+@router.get("/sessions/{session_id}")
+def get_qa_session_detail(
+    session_id: str,
+    user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
+) -> dict:
+    """会话详情：状态、状态原因、升级工单与回复。"""
+    try:
+        return session_lifecycle.get_session_detail(session_id, user_id)
+    except SessionLifecycleError as e:
+        raise _lifecycle_http_error(e)
+    except Exception:
+        logger.exception("Failed to get session detail")
+        raise HTTPException(status_code=500, detail=error_detail("SESSION_DETAIL_FAILED", "会话详情查询失败"))
+
+
+@router.get("/sessions/{session_id}/trajectory")
+def get_qa_session_trajectory(
+    session_id: str,
+    user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
+) -> dict:
+    """按会话回放全部轮次轨迹快照（Issue #30 §五）。"""
+    try:
+        return session_lifecycle.list_session_trajectory(session_id, user_id)
+    except SessionLifecycleError as e:
+        raise _lifecycle_http_error(e)
+    except Exception:
+        logger.exception("Failed to get session trajectory")
+        raise HTTPException(status_code=500, detail=error_detail("TRAJECTORY_READ_FAILED", "轨迹读取失败"))
+
+
+@router.post("/sessions/{session_id}/suspend")
+def suspend_qa_session(
+    session_id: str,
+    user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
+    request: SuspendSessionRequest | None = None,
+) -> dict:
+    """挂起会话（active → suspended）。"""
+    reason = (request.reason if request else "") or ""
+    try:
+        session = session_lifecycle.suspend_session(session_id, user_id, reason=reason)
+        return {"session_id": session.session_id, "status": session.status, "status_reason": session.status_reason}
+    except SessionLifecycleError as e:
+        raise _lifecycle_http_error(e)
+
+
+@router.post("/sessions/{session_id}/resume")
+def resume_qa_session(
+    session_id: str,
+    user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
+) -> dict:
+    """恢复挂起会话（suspended → active），响应携带完整轨迹供前端重建。"""
+    try:
+        session = session_lifecycle.resume_session(session_id, user_id)
+        trajectory = session_lifecycle.list_session_trajectory(session_id, user_id)
+        return {
+            "session_id": session.session_id,
+            "status": session.status,
+            "status_reason": session.status_reason,
+            "trajectory": trajectory,
+        }
+    except SessionLifecycleError as e:
+        raise _lifecycle_http_error(e)
+    except Exception:
+        logger.exception("Failed to resume session")
+        raise HTTPException(status_code=500, detail=error_detail("SESSION_RESUME_FAILED", "会话恢复失败"))
+
+
+@router.post("/sessions/{session_id}/escalate")
+def escalate_qa_session(
+    session_id: str,
+    request: EscalateSessionRequest,
+    user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
+) -> dict:
+    """升级问题至医保办（active → escalated，创建人工工单）。"""
+    try:
+        escalation = session_lifecycle.escalate_session(
+            session_id,
+            user_id=user_id,
+            question=request.question,
+            reason=request.reason,
+            qa_turn_id=request.qa_turn_id,
+        )
+        return {"session_id": session_id, "status": "escalated", "escalation": escalation}
+    except SessionLifecycleError as e:
+        raise _lifecycle_http_error(e)
+
+
+@router.post("/escalations/{task_id}/resolve")
+def resolve_qa_escalation(task_id: str, request: ResolveEscalationRequest) -> dict:
+    """医保办回复升级工单；回填后所属会话恢复 active。"""
+    try:
+        return session_lifecycle.resolve_escalation(task_id, request.reply, request.resolved_by)
+    except SessionLifecycleError as e:
+        raise _lifecycle_http_error(e)

@@ -98,14 +98,14 @@ afterEach(() => {
 })
 
 describe('knowledge workspace navigation', () => {
-  it('exposes only the build, review, and release workspaces', () => {
+  it('exposes the four current knowledge workspaces', () => {
     mockedUsePathname.mockReturnValue('/policy-knowledge/knowledge/build')
 
     render(<WorkspaceNav />)
 
     const navigation = screen.getByRole('navigation', { name: '知识治理工作区' })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(3)
+    expect(links).toHaveLength(4)
     expect(within(navigation).getByRole('link', { name: '知识构建' })).toHaveAttribute(
       'href',
       '/policy-knowledge/knowledge/build',
@@ -117,6 +117,10 @@ describe('knowledge workspace navigation', () => {
     expect(within(navigation).getByRole('link', { name: '发布管理' })).toHaveAttribute(
       'href',
       '/policy-knowledge/knowledge/releases',
+    )
+    expect(within(navigation).getByRole('link', { name: '语义发现' })).toHaveAttribute(
+      'href',
+      '/policy-knowledge/knowledge/semantic-discovery',
     )
     expect(navigation).not.toHaveTextContent(/驾驶舱|工作台|变更集|待决策/)
   })

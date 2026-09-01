@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Activity,
   SlidersHorizontal,
+  Database,
 } from 'lucide-react'
 import { ApiProvider, useApiContext } from '@/lib/api-context'
 import RoleSwitcher from '@/components/role-switcher'
@@ -48,6 +49,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: '语义层', href: '/semantic-layer', icon: <Brain className="size-4" /> },
   { label: '政策知识', href: '/policy-knowledge', icon: <BookOpen className="size-4" /> },
   { label: '问答历史', href: '/qa-history', icon: <History className="size-4" /> },
+  { label: '数据治理', href: '/data-governance', icon: <Database className="size-4" /> },
 ]
 
 const ADMIN_NAV_ITEM: NavItem = {

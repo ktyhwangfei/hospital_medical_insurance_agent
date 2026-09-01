@@ -147,6 +147,20 @@ def test_resolve_connection_none_ds_falls_back():
     assert isinstance(cfg, dict)
 
 
+def test_connect_datasource_reuses_registered_resolution_and_connect():
+    src = _make_source_with_meta(_FakeMeta({}))
+    resolved: list[str] = []
+    connected: list[dict] = []
+    src._resolve_datasource_connection = lambda datasource_id: (
+        resolved.append(datasource_id) or {"host": "sqlserver"}
+    )
+    src._connect = lambda cfg: connected.append(cfg) or "connection"
+
+    assert src.connect_datasource("bjybdb") == "connection"
+    assert resolved == ["bjybdb"]
+    assert connected == [{"host": "sqlserver"}]
+
+
 # ── _query_flat 多源执行（P7.2b）──────────────────────────
 
 class _FakeConn:

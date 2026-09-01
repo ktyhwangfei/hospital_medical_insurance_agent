@@ -81,6 +81,7 @@ describe('usePolicyQAStream', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
+    window.localStorage.clear() // Issue #30：避免挂载恢复 effect 读到残留 sessionId
     streamQueue = []
     fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url)

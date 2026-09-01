@@ -21,6 +21,7 @@ from typing import Optional, Protocol
 
 from src.semantic_layer.models import (
     BusinessDomain, BusinessObject, Metric,
+    SemanticDataset, DatasetKey, SemanticField, DatasetRelation, DataQualityRule,
     ObjectVersionMetric, BusinessObjectVersion,
     ValueDomain, ValueDomainMapping,
 )
@@ -42,6 +43,26 @@ class RegistryStore(Protocol):
     def get_metric(self, metric_code: str) -> Optional[Metric]: ...
     def list_metrics(self, object_code: Optional[str] = None) -> list[Metric]: ...
     def delete_metric(self, metric_code: str) -> None: ...
+    def save_dataset(self, dataset: SemanticDataset) -> None: ...
+    def get_dataset(self, dataset_code: str) -> Optional[SemanticDataset]: ...
+    def list_datasets(self, object_code: Optional[str] = None) -> list[SemanticDataset]: ...
+    def delete_dataset(self, dataset_code: str) -> None: ...
+    def save_dataset_key(self, key: DatasetKey) -> None: ...
+    def get_dataset_key(self, key_code: str) -> Optional[DatasetKey]: ...
+    def list_dataset_keys(self, dataset_code: Optional[str] = None, object_code: Optional[str] = None) -> list[DatasetKey]: ...
+    def delete_dataset_key(self, key_code: str) -> None: ...
+    def save_field(self, field: SemanticField) -> None: ...
+    def get_field(self, field_code: str) -> Optional[SemanticField]: ...
+    def list_fields(self, dataset_code: Optional[str] = None, object_code: Optional[str] = None) -> list[SemanticField]: ...
+    def delete_field(self, field_code: str) -> None: ...
+    def save_dataset_relation(self, relation: DatasetRelation) -> None: ...
+    def get_dataset_relation(self, relation_code: str) -> Optional[DatasetRelation]: ...
+    def list_dataset_relations(self, object_code: Optional[str] = None) -> list[DatasetRelation]: ...
+    def delete_dataset_relation(self, relation_code: str) -> None: ...
+    def save_quality_rule(self, rule: DataQualityRule) -> None: ...
+    def get_quality_rule(self, rule_code: str) -> Optional[DataQualityRule]: ...
+    def list_quality_rules(self, object_code: Optional[str] = None) -> list[DataQualityRule]: ...
+    def delete_quality_rule(self, rule_code: str) -> None: ...
     def save_value_domain(self, vd: ValueDomain) -> None: ...
     def get_value_domain(self, domain_code: str) -> Optional[ValueDomain]: ...
     def save_value_mapping(self, vm: ValueDomainMapping) -> None: ...
@@ -61,6 +82,11 @@ class InMemoryRegistryStore:
     _domains: dict[str, BusinessDomain] = field(default_factory=dict)
     _objects: dict[str, BusinessObject] = field(default_factory=dict)
     _metrics: dict[str, Metric] = field(default_factory=dict)
+    _datasets: dict[str, SemanticDataset] = field(default_factory=dict)
+    _dataset_keys: dict[str, DatasetKey] = field(default_factory=dict)
+    _fields: dict[str, SemanticField] = field(default_factory=dict)
+    _dataset_relations: dict[str, DatasetRelation] = field(default_factory=dict)
+    _quality_rules: dict[str, DataQualityRule] = field(default_factory=dict)
     _value_domains: dict[str, ValueDomain] = field(default_factory=dict)
     _value_mappings: dict[str, list[ValueDomainMapping]] = field(default_factory=lambda: defaultdict(list))
     _object_versions: dict[str, list[BusinessObjectVersion]] = field(
@@ -75,6 +101,11 @@ class InMemoryRegistryStore:
                 self._domains,
                 self._objects,
                 self._metrics,
+                self._datasets,
+                self._dataset_keys,
+                self._fields,
+                self._dataset_relations,
+                self._quality_rules,
                 self._value_domains,
                 self._value_mappings,
                 self._object_versions,
@@ -86,6 +117,11 @@ class InMemoryRegistryStore:
                     self._domains,
                     self._objects,
                     self._metrics,
+                    self._datasets,
+                    self._dataset_keys,
+                    self._fields,
+                    self._dataset_relations,
+                    self._quality_rules,
                     self._value_domains,
                     self._value_mappings,
                     self._object_versions,
@@ -159,6 +195,82 @@ class InMemoryRegistryStore:
     def delete_metric(self, metric_code: str) -> None:
         self._metrics.pop(metric_code, None)
 
+    # Query model metadata
+    def save_dataset(self, dataset: SemanticDataset) -> None:
+        self._datasets[dataset.dataset_code] = dataset
+
+    def get_dataset(self, dataset_code: str) -> Optional[SemanticDataset]:
+        return self._datasets.get(dataset_code)
+
+    def list_datasets(self, object_code: Optional[str] = None) -> list[SemanticDataset]:
+        values = list(self._datasets.values())
+        return [item for item in values if item.object_code == object_code] if object_code else values
+
+    def delete_dataset(self, dataset_code: str) -> None:
+        self._datasets.pop(dataset_code, None)
+
+    def save_dataset_key(self, key: DatasetKey) -> None:
+        self._dataset_keys[key.key_code] = key
+
+    def get_dataset_key(self, key_code: str) -> Optional[DatasetKey]:
+        return self._dataset_keys.get(key_code)
+
+    def list_dataset_keys(self, dataset_code: Optional[str] = None, object_code: Optional[str] = None) -> list[DatasetKey]:
+        values = list(self._dataset_keys.values())
+        if dataset_code:
+            values = [item for item in values if item.dataset_code == dataset_code]
+        if object_code:
+            dataset_codes = {item.dataset_code for item in self.list_datasets(object_code)}
+            values = [item for item in values if item.dataset_code in dataset_codes]
+        return values
+
+    def delete_dataset_key(self, key_code: str) -> None:
+        self._dataset_keys.pop(key_code, None)
+
+    def save_field(self, field: SemanticField) -> None:
+        self._fields[field.field_code] = field
+
+    def get_field(self, field_code: str) -> Optional[SemanticField]:
+        return self._fields.get(field_code)
+
+    def list_fields(self, dataset_code: Optional[str] = None, object_code: Optional[str] = None) -> list[SemanticField]:
+        values = list(self._fields.values())
+        if dataset_code:
+            values = [item for item in values if item.dataset_code == dataset_code]
+        if object_code:
+            dataset_codes = {item.dataset_code for item in self.list_datasets(object_code)}
+            values = [item for item in values if item.dataset_code in dataset_codes]
+        return values
+
+    def delete_field(self, field_code: str) -> None:
+        self._fields.pop(field_code, None)
+
+    def save_dataset_relation(self, relation: DatasetRelation) -> None:
+        self._dataset_relations[relation.relation_code] = relation
+
+    def get_dataset_relation(self, relation_code: str) -> Optional[DatasetRelation]:
+        return self._dataset_relations.get(relation_code)
+
+    def list_dataset_relations(self, object_code: Optional[str] = None) -> list[DatasetRelation]:
+        values = list(self._dataset_relations.values())
+        return [item for item in values if item.object_code == object_code] if object_code else values
+
+    def delete_dataset_relation(self, relation_code: str) -> None:
+        self._dataset_relations.pop(relation_code, None)
+
+    def save_quality_rule(self, rule: DataQualityRule) -> None:
+        self._quality_rules[rule.rule_code] = rule
+
+    def get_quality_rule(self, rule_code: str) -> Optional[DataQualityRule]:
+        return self._quality_rules.get(rule_code)
+
+    def list_quality_rules(self, object_code: Optional[str] = None) -> list[DataQualityRule]:
+        values = list(self._quality_rules.values())
+        return [item for item in values if item.object_code == object_code] if object_code else values
+
+    def delete_quality_rule(self, rule_code: str) -> None:
+        self._quality_rules.pop(rule_code, None)
+
     # Value Domain
     def save_value_domain(self, vd: ValueDomain) -> None:
         self._value_domains[vd.domain_code] = vd
@@ -230,6 +342,22 @@ class SemanticRegistry:
         """列全部指标，或按 object_code 过滤（object_code=None 返回全部）。"""
         return self._store.list_metrics(object_code=object_code)
 
+    # Query model queries
+    def list_datasets(self, object_code: Optional[str] = None) -> list[SemanticDataset]:
+        return self._store.list_datasets(object_code)
+
+    def list_dataset_keys(self, dataset_code: Optional[str] = None, object_code: Optional[str] = None) -> list[DatasetKey]:
+        return self._store.list_dataset_keys(dataset_code, object_code)
+
+    def list_fields(self, dataset_code: Optional[str] = None, object_code: Optional[str] = None) -> list[SemanticField]:
+        return self._store.list_fields(dataset_code, object_code)
+
+    def list_dataset_relations(self, object_code: Optional[str] = None) -> list[DatasetRelation]:
+        return self._store.list_dataset_relations(object_code)
+
+    def list_quality_rules(self, object_code: Optional[str] = None) -> list[DataQualityRule]:
+        return self._store.list_quality_rules(object_code)
+
     def save_metric_draft(self, metric: Metric) -> None:
         """通过公开边界保存草稿指标，禁止调用方直接访问私有 store。"""
         if metric.status != "draft":
@@ -300,6 +428,9 @@ class SemanticRegistry:
             source_adapter_port=vm.source_adapter_port,
             value_domain=vm.value_domain, importance=vm.importance,
             default_value=vm.default_value,
+            fact_field_code=vm.fact_field_code, aggregation=vm.aggregation,
+            expression=vm.expression, dependencies=vm.dependencies,
+            non_additive_dimensions=vm.non_additive_dimensions,
         )
 
     # Value Domain resolution
@@ -330,6 +461,15 @@ class SemanticRegistry:
         metrics = self._store.list_metrics(object_code=object_code)
         if not metrics:
             raise ValueError(f"对象 '{object_code}' 无指标，不能发布（§5：空指标不能发布）")
+        datasets = self._store.list_datasets(object_code)
+        keys = self._store.list_dataset_keys(object_code=object_code)
+        fields = self._store.list_fields(object_code=object_code)
+        relations = self._store.list_dataset_relations(object_code)
+        quality_rules = self._store.list_quality_rules(object_code)
+        if datasets or any(m.fact_field_code or m.expression for m in metrics):
+            issues = self.validate_query_model(object_code)
+            if issues:
+                raise ValueError("; ".join(issues))
         existing = self._store.list_object_versions(object_code)
         next_version = str(len(existing) + 1)
         snapshot = BusinessObjectVersion(
@@ -341,8 +481,15 @@ class SemanticRegistry:
                 "definition": obj.definition, "domain_code": obj.domain_code,
                 "identifier": obj.identifier, "source_object": obj.source_object,
                 "source_adapter_port": obj.source_adapter_port,
+                "preferred_relation_paths": [p.model_dump() for p in obj.preferred_relation_paths],
+                "queryable": bool(datasets),
             },
             metrics=[ObjectVersionMetric.from_metric(m) for m in metrics],
+            datasets=[item.model_copy(update={"status": "published"}) for item in datasets],
+            keys=keys,
+            fields=[item.model_copy(update={"status": "published"}) for item in fields],
+            relations=[item.model_copy(update={"status": "published"}) for item in relations],
+            quality_rules=[item.model_copy(update={"status": "published"}) for item in quality_rules],
             changelog=changelog,
             published_by=published_by,
         )
@@ -354,7 +501,104 @@ class SemanticRegistry:
         for m in metrics:
             m.status = "published"
             self._store.save_metric(m)
+        for dataset in datasets:
+            self._store.save_dataset(dataset.model_copy(update={"status": "published"}))
+        for item in fields:
+            self._store.save_field(item.model_copy(update={"status": "published"}))
+        for item in relations:
+            self._store.save_dataset_relation(item.model_copy(update={"status": "published"}))
+        for item in quality_rules:
+            self._store.save_quality_rule(item.model_copy(update={"status": "published"}))
         return snapshot
+
+    def validate_query_model(self, object_code: str) -> list[str]:
+        """返回阻断发布的查询模型结构问题。"""
+        datasets = self._store.list_datasets(object_code)
+        keys = self._store.list_dataset_keys(object_code=object_code)
+        fields = self._store.list_fields(object_code=object_code)
+        relations = self._store.list_dataset_relations(object_code)
+        metrics = self._store.list_metrics(object_code)
+        dataset_codes = {item.dataset_code for item in datasets}
+        field_codes = {item.field_code for item in fields}
+        key_by_code = {item.key_code: item for item in keys}
+        issues: list[str] = []
+        if len({item.datasource_id for item in datasets}) > 1:
+            issues.append("query model cannot span multiple datasources")
+        columns_by_dataset: dict[str, set[str]] = defaultdict(set)
+        nullable_by_column: dict[tuple[str, str], bool] = {}
+        for field in fields:
+            columns_by_dataset[field.dataset_code].add(field.column_name)
+            nullable_by_column[(field.dataset_code, field.column_name)] = field.nullable
+        for dataset in datasets:
+            primary_keys = [key for key in keys if key.dataset_code == dataset.dataset_code and key.key_type == "primary"]
+            if len(primary_keys) != 1:
+                issues.append(f"dataset '{dataset.dataset_code}' must have exactly one primary key")
+        for key in keys:
+            if set(key.columns) - columns_by_dataset[key.dataset_code]:
+                issues.append(f"key '{key.key_code}' references unknown columns")
+            if key.key_type == "primary" and any(
+                nullable_by_column.get((key.dataset_code, column), True) for column in key.columns
+            ):
+                issues.append(f"primary key '{key.key_code}' contains nullable columns")
+        for field in fields:
+            if field.dataset_code not in dataset_codes:
+                issues.append(f"field '{field.field_code}' references unknown dataset")
+        for relation in relations:
+            from_key = key_by_code.get(relation.from_key)
+            to_key = key_by_code.get(relation.to_key)
+            if not from_key or from_key.dataset_code != relation.from_dataset:
+                issues.append(f"relation '{relation.relation_code}' has invalid from_key")
+            if not to_key or to_key.dataset_code != relation.to_dataset:
+                issues.append(f"relation '{relation.relation_code}' has invalid to_key")
+            if from_key and to_key and len(from_key.columns) != len(to_key.columns):
+                issues.append(f"relation '{relation.relation_code}' key width mismatch")
+            if from_key and to_key and from_key.entity_code != to_key.entity_code:
+                issues.append(f"relation '{relation.relation_code}' joins different entities")
+        for metric in metrics:
+            if metric.fact_field_code and metric.fact_field_code not in field_codes:
+                issues.append(f"metric '{metric.metric_code}' references unknown fact field")
+            if metric.fact_field_code and not metric.aggregation:
+                issues.append(f"metric '{metric.metric_code}' missing aggregation")
+        metric_by_code = {item.metric_code: item for item in metrics}
+        query_metrics = [item for item in metrics if item.fact_field_code or item.expression]
+        if datasets and not query_metrics:
+            issues.append("query model has no queryable metrics")
+        dependency_graph: dict[str, list[str]] = {}
+        for metric in metrics:
+            if not metric.expression:
+                continue
+            dependencies = [
+                code if "." in code else f"{object_code}.{code}"
+                for code in metric.dependencies
+            ]
+            dependency_graph[metric.metric_code] = dependencies
+            for code in dependencies:
+                if code not in metric_by_code:
+                    issues.append(f"metric '{metric.metric_code}' depends on unknown metric '{code}'")
+
+        def visit(code: str, visiting: set[str], visited: set[str]) -> None:
+            if code in visiting:
+                issues.append(f"metric '{code}' has cyclic dependencies")
+                return
+            if code in visited:
+                return
+            for dependency in dependency_graph.get(code, []):
+                visit(dependency, {*visiting, code}, visited)
+            visited.add(code)
+
+        visited: set[str] = set()
+        for code in dependency_graph:
+            visit(code, set(), visited)
+        quality_rules = self._store.list_quality_rules(object_code)
+        if datasets and not any(rule.rule_type == "coverage" for rule in quality_rules):
+            issues.append("query model missing coverage rule")
+        obj = self._store.get_object(object_code)
+        relation_codes = {item.relation_code for item in relations}
+        if obj:
+            for path in obj.preferred_relation_paths:
+                if any(code not in relation_codes for code in path.relation_codes):
+                    issues.append("preferred relation path references unknown relation")
+        return issues
 
     def get_object_version(self, object_code: str, version: str) -> Optional[BusinessObjectVersion]:
         return self._store.get_object_version(object_code, version)
@@ -390,13 +634,16 @@ def get_semantic_registry() -> SemanticRegistry:
         return _semantic_registry_instance
     if os.environ.get("USE_MEMORY_STORAGE") == "1":
         from src.semantic_layer.seed import (
-            seed_settlement_domain, publish_seed_policy_object,
+            publish_seed_outpatient_query_object,
+            publish_seed_policy_object,
+            seed_settlement_domain,
         )
         store = InMemoryRegistryStore()
         seed_settlement_domain(store)
         reg = SemanticRegistry(store)
         # P8.3：种子后发布 zcgz，解锁提取契约（build_extraction_schema 只收 published）
         publish_seed_policy_object(reg)
+        publish_seed_outpatient_query_object(reg)
         _semantic_registry_instance = reg
     else:
         from src.data_platform.storage.postgresql.semantic_registry_store import (
