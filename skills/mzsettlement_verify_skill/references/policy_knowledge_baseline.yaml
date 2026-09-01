@@ -1,0 +1,94 @@
+baseline_id: mz8-20260827
+captured_at: "2026-08-27"
+scope: 门诊结算九类解释场景的政策与语义基线
+
+documents:
+  - doc_id: doc_4bf8d92facc0
+    title: 城镇职工医保 | 门诊、住院医疗费用报销比例是多少？看这里！
+    source_url: https://ybj.beijing.gov.cn/zwgk/2020_zfxxgk/2020_xxgkml/202501/t20250120_3994118.html
+    content_hash: 20bcdc282c4c1b24
+    content_size: 791
+    role: 北京市职工门诊待遇
+  - doc_id: doc_466953309ccf
+    title: 北京市人力资源和社会保障局印发《北京市城乡居民基本医疗保险办法实施细则》的通知
+    source_url: https://ybj.beijing.gov.cn/zwgk/2024zcwj/202406/t20240612_3710806.html
+    content_hash: 3a8ba0ab85664c90
+    content_size: 8130
+    role: 北京市城乡居民医保实施细则
+  - doc_id: doc_22c5625f58e2
+    title: 知晓这些名词含义，明明白白办理医保报销
+    source_url: https://ybj.beijing.gov.cn/swdt/2020_gzdt/202608/t20260818_4826956.html
+    content_hash: 2b97bee3d8673d92
+    content_size: 781
+    role: 医保结算术语解释
+  - doc_id: doc_28ddb1a2ea44
+    title: 北京市医疗保障局关于印发《北京市基本医疗保险用药管理暂行办法》的通知
+    source_url: https://ybj.beijing.gov.cn/zwgk/2024zcwj/202406/t20240618_3719829.html
+    content_hash: d8921c376ffef444
+    content_size: 3838
+    role: 北京市基本医疗保险用药管理
+  - doc_id: doc_592c820eb140
+    title: 北京市医疗保障局 北京市人力资源和社会保障局关于明确综合诊查等11类医疗服务价格项目基本医疗保险及工伤保险报销政策的通知
+    source_url: https://ybj.beijing.gov.cn/zwgk/2024zcwj/202606/t20260624_4713638.html
+    content_hash: f7a2c0f5a8dea87c
+    content_size: 121431
+    role: 2026年医疗服务项目甲乙丙类及个人先行负担政策（附件182页）
+  - doc_id: doc_7ec146a78b34
+    title: 国家医保局 财政部关于建立医疗保障待遇清单制度的意见
+    source_url: https://www.nhsa.gov.cn/art/2021/8/10/art_104_6537.html
+    content_hash: bfed628b54badacd
+    content_size: 4688
+    role: 国家医保待遇清单制度
+  - doc_id: doc_3062bff9c1b8
+    title: 国家医保信息业务编码标准数据库动态维护
+    source_url: https://code.nhsa.gov.cn/home.html
+    content_hash: e507e6fec46f6f6c
+    content_size: 1041
+    role: 编码与目录引用资料（不生成报销比例）
+  - doc_id: doc_20aca7ad3dfa
+    title: 关于北京市离休干部医疗费用全市统筹有关问题的通知
+    source_url: https://ybj.beijing.gov.cn/zwgk/2024zcwj/202605/t20260507_4639457.html
+    content_hash: 1700c42cdfaa3725
+    content_size: 1407
+    role: 北京市离休干部医疗费用统筹
+
+knowledge_pipeline:
+  approved_evidence_units: 195
+  rejected_evidence_units: 2
+  core_candidate_rules: 31
+  compiler_pass: 31
+  compiler_blockers: 0
+  source_change_set_id: CS_TASK_923fc33bad6cf240
+
+semantic_release:
+  object_code: mzjyxx
+  version: "3"
+  published_metric_count: 103
+  skill_required_metric_count: 88
+  missing_skill_metrics: 0
+  published_assets:
+    - {type: value, domain_code: hosp_lv, value: 社区}
+    - {type: metric, metric_code: mzjyxx.F_LEVEL, name: 项目医保等级}
+    - {type: value, domain_code: item_insurance_level, value: 甲类}
+    - {type: value, domain_code: item_insurance_level, value: 乙类}
+    - {type: value, domain_code: item_insurance_level, value: 丙类}
+    - {type: value, domain_code: insu_type, value: 工伤保险}
+    - {type: value, domain_code: psn_type, value: 70岁以下退休人员}
+    - {type: value, domain_code: psn_type, value: 70岁以上退休人员}
+    - {type: value, domain_code: psn_type, value: 返贫致贫人口}
+
+knowledge_release:
+  release_id: REL_20260827_MZ8_V3
+  status: active
+  quality_run_id: run_e3e381e35ff446b7893acbb4a49a2363
+  case_set_version: 2
+  candidate_score: 1.0
+  baseline_score: 0.93775
+  consistency_score: 1.0
+  blockers: 0
+
+answer_verification:
+  run_id: avrun_caf4cb27c0ca427c9a09dddbe554a30b
+  status: failed_closed
+  production_gate_enabled: false
+  reason: 五个经典用例缺少答案、引用、预期证据、查询计划和计算链夹具

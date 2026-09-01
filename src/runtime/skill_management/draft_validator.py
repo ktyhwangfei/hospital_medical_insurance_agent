@@ -254,9 +254,20 @@ class SkillDraftValidator:
                 )
             )
 
-        common_metric_codes = {
-            m.metric_code for m in contract.common.metric_inputs
-        }
+        common_metric_codes: set[str] = set()
+        for metric in contract.common.metric_inputs:
+            if metric.metric_code in common_metric_codes:
+                issues.append(self._blocking(
+                    "DUPLICATE_METRIC_INPUT",
+                    f"Common 内重复指标: {metric.metric_code}",
+                    f"execution_contract.common.metric_inputs.{metric.metric_code}",
+                ))
+                continue
+            common_metric_codes.add(metric.metric_code)
+            issues.extend(self._validate_metric_resolvable(
+                metric.metric_code,
+                "execution_contract.common.metric_inputs",
+            ))
         common_context_codes = {
             c.code for c in contract.common.context_inputs
         }

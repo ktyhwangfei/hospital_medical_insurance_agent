@@ -7,12 +7,17 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from src.domain.skill.draft_models import SkillDraft, SkillExecutionContract
 from src.domain.skill.governance_models import (
+    FailureAttribution,
+    FailureCluster,
     SkillEvalAssertion,
     SkillEvalDataLocator,
     SkillEvalEnvironmentRequirement,
     SkillEvalEnvironmentSnapshot,
     SkillEvalGateThresholds,
+    SkillEvalDimensionSummary,
     SkillEvalTaskInput,
+    SkillEvalTaskResult,
+    SkillEvalTrajectoryStep,
     TrajectoryPrefix,
 )
 from src.domain.skill.regression_models import SkillFeedbackReasonCode
@@ -234,6 +239,28 @@ class SkillEvalRunCreateRequest(BaseModel):
     baseline_version_id: str | None = Field(default=None, max_length=64)
 
 
+class SkillEvalImprovementTaskCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    responsible_role: str = Field(default="skill_maintainer", min_length=1, max_length=64)
+    suggested_target: str = Field(default="skill", min_length=1, max_length=128)
+
+
+class SkillEvalImprovementTaskResponse(BaseModel):
+    task_id: str
+    run_id: str
+    cluster_id: str
+    status: str
+    description: str
+
+
+class SkillEvalFailureClusterResponse(BaseModel):
+    cluster: FailureCluster
+    improvement_tasks: list[SkillEvalImprovementTaskResponse] = Field(
+        default_factory=list
+    )
+
+
 class SkillEvalMetricsResponse(BaseModel):
     total: int
     passed: int
@@ -273,6 +300,14 @@ class SkillEvalRunResponse(BaseModel):
     metrics: SkillEvalMetricsResponse
     results: list[SkillEvalResultResponse]
     case_snapshots: list[SkillEvalCaseResponse]
+    dataset_version_id: str | None = None
+    benchmark_id: str | None = None
+    environment_snapshot: SkillEvalEnvironmentSnapshot | None = None
+    task_results: list[SkillEvalTaskResult] = Field(default_factory=list)
+    trajectory_summary: list[SkillEvalTrajectoryStep] = Field(default_factory=list)
+    failure_attributions: list[FailureAttribution] = Field(default_factory=list)
+    failure_clusters: list[FailureCluster] = Field(default_factory=list)
+    dimension_summary: list[SkillEvalDimensionSummary] = Field(default_factory=list)
     created_by: str
     created_at: datetime
     completed_at: datetime | None

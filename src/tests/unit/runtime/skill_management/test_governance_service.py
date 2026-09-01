@@ -14,11 +14,15 @@ from src.data_platform.storage.skill.version_in_memory import (
 from src.domain.skill.governance_models import (
     DEFAULT_ROUTING_SUITE_ID,
     SkillEvalAssertion,
+    SkillEvalAssertionResult,
     SkillEvalDimension,
+    SkillEvalEnvironmentSnapshot,
     SkillEvalPartition,
     SkillEvalRunStatus,
     SkillEvalTask,
     SkillEvalTaskInput,
+    SkillEvalTaskResult,
+    SkillEvalTaskStatus,
     SkillReleaseEnvironment,
     SkillReleaseStatus,
 )
@@ -89,6 +93,7 @@ def service() -> SkillGovernanceService:
         storage=InMemorySkillGovernanceStorage(),
         version_storage=versions,
         loader=_Loader([_manifest("runtime", ["统筹自付"])]),
+        current_artifact_hash_resolver=lambda _skill_id: "a" * 64,
     )
 
 
@@ -167,6 +172,131 @@ def test_import_and_freeze_dataset_are_idempotent(
     updated = task.model_copy(update={"name": "修改后的任务", "revision": 2})
     service.update_task(updated, expected_revision=1, updated_by="quality-user")
     assert first_version.task_snapshots[0].name == "门诊费用组成"
+
+
+@pytest.mark.asyncio
+async def test_create_benchmark_run_executes_frozen_tasks_once(
+    service: SkillGovernanceService,
+) -> None:
+    suite = service.create_suite(
+        name="门诊基准集",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="端到端任务",
+        created_by="quality-user",
+    )
+    service.import_tasks(
+        suite.suite_id,
+        [_eval_task(suite.suite_id)],
+        created_by="quality-user",
+    )
+    dataset = service.freeze_dataset(suite.suite_id, created_by="quality-user")
+    benchmark = service.create_benchmark(
+        name="门诊 V1",
+        skill_id="demo-skill",
+        dataset_version_id=dataset.dataset_version_id,
+        environment_snapshot=SkillEvalEnvironmentSnapshot(
+            runtime_version="test",
+            data_source_mode="memory",
+        ),
+        evaluator_plan_id="deterministic_v1",
+        judge_version=None,
+        gate_thresholds={},
+        created_by="quality-user",
+    )
+    mismatched = service.create_benchmark(
+        name="制品不一致",
+        skill_id="demo-skill",
+        dataset_version_id=dataset.dataset_version_id,
+        environment_snapshot=SkillEvalEnvironmentSnapshot(
+            runtime_version="test",
+            data_source_mode="memory",
+            skill_artifact_hash="f" * 64,
+        ),
+        evaluator_plan_id="deterministic_v1",
+        judge_version=None,
+        gate_thresholds={},
+        created_by="quality-user",
+    )
+
+    with pytest.raises(SkillGovernanceGateError) as mismatch_error:
+        await service.create_benchmark_run(
+            mismatched.benchmark_id,
+            version_id="a-version",
+            baseline_version_id=None,
+            created_by="quality-user",
+        )
+    assert "benchmark_artifact_mismatch" in mismatch_error.value.gate_failures
+
+    class Runner:
+        calls = 0
+
+        async def run(self, task):
+            self.calls += 1
+            return SkillEvalTaskResult(
+                task_id=task.task_id,
+                status=SkillEvalTaskStatus.PASSED,
+                selected_skill_id=task.target_skill_id,
+                assertion_results=(
+                    SkillEvalAssertionResult(
+                        assertion_id="self_pay_one",
+                        dimension=SkillEvalDimension.BEHAVIOR,
+                        status=SkillEvalTaskStatus.PASSED,
+                        actual_value=510.96,
+                    ),
+                ),
+            )
+
+    runner = Runner()
+    with pytest.raises(SkillGovernanceGateError) as candidate_error:
+        await service.create_benchmark_run(
+            benchmark.benchmark_id,
+            version_id="b-version",
+            baseline_version_id=None,
+            created_by="quality-user",
+            runner=runner,
+        )
+    assert "candidate_not_materialized" in candidate_error.value.gate_failures
+
+    with pytest.raises(SkillGovernanceGateError) as baseline_error:
+        await service.create_benchmark_run(
+            benchmark.benchmark_id,
+            version_id="a-version",
+            baseline_version_id="b-version",
+            created_by="quality-user",
+            runner=runner,
+        )
+    assert "baseline_isolation_unavailable" in baseline_error.value.gate_failures
+
+    run = await service.create_benchmark_run(
+        benchmark.benchmark_id,
+        version_id="a-version",
+        baseline_version_id=None,
+        created_by="quality-user",
+        runner=runner,
+    )
+
+    assert runner.calls == 1
+    assert run.status == SkillEvalRunStatus.PASSED
+    assert run.dataset_version_id == dataset.dataset_version_id
+    assert run.task_results[0].task_id == "EVT_demo_outpatient"
+    assert run.dimension_summary[0].dimension == SkillEvalDimension.BEHAVIOR
+    candidate = service.create_candidate(
+        "demo-skill",
+        version_id="a-version",
+        eval_run_id=run.run_id,
+        environment="test",
+        created_by="developer",
+    )
+    rerun = await service.retest_benchmark_run(
+        run.run_id,
+        created_by="quality-user",
+        runner=runner,
+    )
+
+    assert candidate.eval_run_id == run.run_id
+    assert rerun.run_id != run.run_id
+    assert runner.calls == 2
 
 
 def test_create_suite_rejects_unknown_skill(service: SkillGovernanceService) -> None:

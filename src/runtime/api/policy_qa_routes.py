@@ -15,6 +15,8 @@ import time as _time
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from decimal import Decimal
+from types import SimpleNamespace
 from typing import Annotated, Any
 
 import asyncio
@@ -28,6 +30,9 @@ from src.runtime.policy_qa.explanation_mode import (
 )
 from src.runtime.policy_qa.models import PolicyQARequest
 from src.runtime.policy_qa.public_contract import (
+    OutpatientAmountCheck,
+    OutpatientContextCheck,
+    OutpatientFieldExplanation,
     PolicyCitation,
     PolicyQAPublicResult,
     VerificationSummary,
@@ -52,6 +57,10 @@ from src.runtime.policy_qa.persistence import (
 )
 from src.runtime.infra_event.context import set_infra_context
 from src.shared.schemas.responses import error_detail
+from src.security.risk_control.service import (
+    build_human_confirmation_response,
+    detect_blocked_actions,
+)
 from src.data_platform.storage.skill.regression_factory import (
     get_skill_regression_storage,
 )
@@ -77,7 +86,24 @@ from src.runtime.skill_management.regression_mining_service import (
     RegressionPrincipal,
     SensitiveFeedbackRejectedError,
 )
+from src.runtime.skill_management.evaluation_runner import (
+    PolicyQAEvalObserver,
+    PolicyQAEvalPrefix,
+)
 from src.runtime.task_closure.service import get_task
+from src.knowledge_extension.rule_explanation.answer_verification.milvus_port import (
+    get_rule_knowledge_port,
+)
+from src.knowledge_extension.rule_explanation.answer_verification.models import (
+    RuleKnowledgePort,
+)
+from src.runtime.policy_qa.verification_trace import (
+    AnswerVerificationTraceStore,
+    QAVerificationOutcome,
+    build_verification_envelope,
+    get_answer_verification_trace_store as _get_trace_store_singleton,
+    verify_qa_turn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +194,24 @@ PolicyQARegressionMiningDependency = Annotated[
 ]
 
 
+def get_answer_verification_trace_store() -> AnswerVerificationTraceStore:
+    """答案验证 trace 存储依赖（测试经 dependency_overrides 注入隔离实例）。"""
+    return _get_trace_store_singleton()
+
+
+def get_answer_verification_rule_port() -> RuleKnowledgePort | None:
+    """规则知识源依赖；Milvus 不可达时返回 None（fail-closed → blocked_by_evaluator）。"""
+    return get_rule_knowledge_port()
+
+
+AnswerVerificationTraceStoreDependency = Annotated[
+    AnswerVerificationTraceStore, Depends(get_answer_verification_trace_store)
+]
+AnswerVerificationRulePortDependency = Annotated[
+    RuleKnowledgePort | None, Depends(get_answer_verification_rule_port)
+]
+
+
 # ── 防泄漏：禁止返回前端的字段 ────────────────────────────────────
 _FORBIDDEN_KEYS = frozenset({
     "reasoning", "reasoning_content", "chain_of_thought", "thought",
@@ -197,6 +241,15 @@ def _sanitize(obj: dict) -> dict:
     return result
 
 
+def _notify_evaluation(
+    observer: PolicyQAEvalObserver | None,
+    event: str,
+    payload: dict[str, Any],
+) -> None:
+    if observer is not None:
+        observer(event, _sanitize(payload))
+
+
 _PUBLIC_CONTEXT_FIELDS = frozenset({
     "person_type",
     "insurance_type",
@@ -210,6 +263,12 @@ _PUBLIC_CONTEXT_FIELDS = frozenset({
     "large_amount_self_pay",
     "personal_total_pay",
     "total_amount",
+    "query_scope",
+    "segment_count",
+    "matched_segment_count",
+    "coverage_status",
+    "stay_start_date",
+    "stay_end_date",
 })
 _PUBLIC_CALCULATION_FIELDS = frozenset({
     "step_name", "description", "label", "formula", "result", "calculation", "note",
@@ -408,6 +467,63 @@ def _answerability_from_completeness(
     return can_answer, partial_answer
 
 
+def _settlement_case_context(context: Any) -> dict[str, Any]:
+    """结算公开上下文的唯一字段映射。"""
+    return {
+        "person_type": getattr(context, "person_type", None),
+        "insurance_type": getattr(context, "insurance_type", None),
+        "service_type": getattr(context, "service_type", None),
+        "hospital_level": getattr(context, "hospital_level", None),
+        "deductible": getattr(context, "deductible", None),
+        "yearly_cycle_count": getattr(context, "yearly_cycle_count", None),
+        "basic_pooling_payment": getattr(context, "basic_pooling_payment", None),
+        "basic_pooling_self_pay": getattr(context, "basic_pooling_self_pay", None),
+        "large_amount_payment": getattr(context, "large_amount_payment", None),
+        "large_amount_self_pay": getattr(context, "large_amount_self_pay", None),
+        "personal_total_pay": getattr(context, "personal_total_pay", None),
+        "total_amount": getattr(context, "total_amount", None),
+        "query_scope": getattr(context, "query_scope", None),
+        "segment_count": getattr(context, "segment_count", None),
+        "matched_segment_count": getattr(context, "matched_segment_count", None),
+        "coverage_status": getattr(context, "coverage_status", None),
+        "stay_start_date": getattr(context, "stay_start_date", None),
+        "stay_end_date": getattr(context, "stay_end_date", None),
+    }
+
+
+def _incomplete_coverage_payload(context: Any, question: str) -> dict[str, Any]:
+    """分段覆盖不完整时停止费用解释，避免部分金额被误认为整次住院。"""
+    segment_count = getattr(context, "segment_count", 0)
+    matched_count = getattr(context, "matched_segment_count", 0)
+    if getattr(context, "coverage_status", "unavailable") == "partial":
+        answer = (
+            f"发现 {segment_count} 个结算分段，目前仅匹配 {matched_count} 个；"
+            "暂不展示金额，避免把部分分段误当作整次住院费用。"
+        )
+    else:
+        answer = "当前结算分段无法形成可靠的整次住院费用，暂不展示金额。"
+    warnings = list(getattr(context, "warnings", []) or [])
+    if answer not in warnings:
+        warnings.append(answer)
+    return {
+        "question": question,
+        "answer": answer,
+        "policy_status": "no_policy_matched",
+        "policy_evidence": [],
+        "calculation_trace": {"steps": []},
+        "definition": {
+            "name": "住院费用查询范围",
+            "plain_text": "按登记号查询整次住院，并校验全部结算分段覆盖。",
+        },
+        "case_context": _settlement_case_context(context),
+        "warnings": warnings,
+        "explanation_completeness": {"level": "data_incomplete", "has_real_data": False},
+        "can_answer": False,
+        "partial_answer": False,
+        "is_overview": False,
+    }
+
+
 def _build_public_result(
     *,
     answer: str,
@@ -420,6 +536,8 @@ def _build_public_result(
     warnings: list[str],
     case_context: dict | None,
     is_overview: bool = False,
+    outpatient_result: dict | None = None,
+    action_status: str | None = None,
 ) -> PolicyQAPublicResult:
     """用字段白名单把内部执行结果重建为唯一公开回答契约。"""
     safe_context = None
@@ -430,8 +548,8 @@ def _build_public_result(
                 continue
             if isinstance(value, str):
                 safe_context[key] = _public_text(value)
-            elif value is None or isinstance(value, (int, float, bool)):
-                safe_context[key] = value
+            elif value is None or isinstance(value, (int, float, bool, Decimal)):
+                safe_context[key] = float(value) if isinstance(value, Decimal) else value
         safe_context = safe_context or None
 
     safe_steps: list[dict[str, str]] = []
@@ -502,6 +620,47 @@ def _build_public_result(
         citations.append(PolicyCitation(title=title, excerpt=excerpt))
         seen_citations.add(citation_key)
 
+    outpatient_result = outpatient_result if isinstance(outpatient_result, dict) else {}
+    safe_context_checks = [
+        OutpatientContextCheck.model_validate({
+            **item,
+            "name": _public_text(item.get("name")),
+            "value": _public_text(item.get("value")) if isinstance(item.get("value"), str) else item.get("value"),
+        })
+        for item in outpatient_result.get("context_checks", [])
+        if isinstance(item, dict)
+    ]
+    safe_amount_checks = [
+        OutpatientAmountCheck.model_validate({
+            **item,
+            "name": _public_text(item.get("name")),
+            "equation": _public_text(item.get("equation")),
+        })
+        for item in outpatient_result.get("amount_checks", [])
+        if isinstance(item, dict)
+    ]
+    safe_field_explanations = [
+        OutpatientFieldExplanation.model_validate({
+            **item,
+            "field_name": _public_text(item.get("field_name")),
+            "explanation": _public_text(item.get("explanation")),
+            "citations": [
+                _public_text(citation) for citation in item.get("citations", [])
+                if str(citation or "").strip()
+            ],
+        })
+        for item in outpatient_result.get("field_explanations", [])
+        if isinstance(item, dict)
+    ]
+    safe_anomalies = [
+        _public_text(item) for item in outpatient_result.get("anomalies", [])
+        if str(item or "").strip()
+    ]
+    safe_next_actions = [
+        _public_text(item) for item in outpatient_result.get("next_actions", [])
+        if str(item or "").strip()
+    ]
+
     answer_text = _sanitize_public_text(answer)
     safe_answer = answer_text.text
     has_meaningful_answer = answer_text.is_publicly_meaningful
@@ -511,26 +670,39 @@ def _build_public_result(
         and not isinstance(safe_context[key], bool)
         for key in _PUBLIC_AMOUNT_FIELDS
     )
-    calculation_checked = bool(safe_steps)
+    has_settlement_fact = has_real_amount or any(
+        item.status == "present" for item in safe_context_checks
+    )
+    calculation_checked = bool(safe_steps) or (
+        bool(safe_amount_checks)
+        and all(item.status == "passed" for item in safe_amount_checks)
+    )
+    calculation_satisfied = calculation_checked or (
+        bool(outpatient_result) and not safe_amount_checks
+    )
     policy_count = len(safe_evidence)
     if is_overview and has_meaningful_answer and can_answer and has_real_amount:
         answer_status = "complete"
     elif (
         has_meaningful_answer
         and can_answer
-        and has_real_amount
-        and calculation_checked
+        and has_settlement_fact
+        and calculation_satisfied
         and policy_status == "full_policy_matched"
         and policy_count > 0
     ):
         answer_status = "complete"
-    elif has_meaningful_answer and (partial_answer or (can_answer and has_real_amount)):
+    elif has_meaningful_answer and (partial_answer or (can_answer and has_settlement_fact)):
         answer_status = "partial"
     else:
         answer_status = "unavailable"
         safe_answer = safe_answer or "当前信息不足，无法可靠回答该问题。"
 
     uncertainties: list[str] = []
+    uncertainties.extend(
+        _public_text(item) for item in outpatient_result.get("uncertainties", [])
+        if str(item or "").strip()
+    )
     if not has_meaningful_answer:
         uncertainties.append("公开回答未包含可核验的业务内容。")
     if is_overview:
@@ -546,9 +718,9 @@ def _build_public_result(
         "complete": (
             "真实结算金额已完成核对；费用总览不涉及单项政策或计算过程核验。"
             if is_overview
-            else "结算金额、计算过程和政策依据已完成核对。"
+            else "结算事实、适用计算和政策依据已完成核对。"
         ),
-        "partial": "已核对结算金额，但政策依据或计算过程仍不完整。",
+        "partial": "已核对可用结算事实，但政策依据或计算过程仍不完整。",
         "unavailable": "现有信息不足，未形成可靠核对结论。",
     }
     return PolicyQAPublicResult(
@@ -562,16 +734,50 @@ def _build_public_result(
         citations=citations,
         uncertainties=uncertainties,
         verification_summary=VerificationSummary(
-            settlement_checked=has_real_amount,
+            settlement_checked=has_settlement_fact,
             calculation_checked=calculation_checked,
             policy_count=policy_count,
             message=verification_messages[answer_status],
         ),
+        scenario_id=(
+            _public_text(outpatient_result.get("scenario_id"))
+            if outpatient_result.get("scenario_id") else None
+        ),
+        context_checks=safe_context_checks,
+        amount_checks=safe_amount_checks,
+        field_explanations=safe_field_explanations,
+        anomalies=safe_anomalies,
+        next_actions=safe_next_actions,
+        action_status=action_status,
     )
+
+
+def _looks_like_outpatient_trade_no(settlement_id: str) -> bool:
+    """当前门诊交易号为不含分隔符的长字母数字串。"""
+    return re.fullmatch(r"[A-Za-z0-9]{15,}", settlement_id) is not None
+
+
+def _enrich_outpatient_question(question: str, context: Any) -> str:
+    """用真实结算主记录补齐路由所需的门诊业务语义。"""
+    parts = ["门诊费用"]
+    for label, attr in (
+        ("医疗类别", "service_type"),
+        ("险种", "insurance_type"),
+        ("人员类别", "person_type"),
+        ("医疗机构等级", "hospital_level"),
+    ):
+        value = getattr(context, attr, None)
+        if value:
+            parts.append(f"{label}：{value}")
+    parts.append(f"用户问题：{question}")
+    return "；".join(parts)
 
 
 async def _policy_qa_stream(
     request: PolicyQARequest,
+    *,
+    evaluation_observer: PolicyQAEvalObserver | None = None,
+    evaluation_prefix: PolicyQAEvalPrefix | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     政策问答SSE流式处理
@@ -646,6 +852,7 @@ async def _policy_qa_stream(
         trace_run_id: str = workflow_id
         trace_can_answer: bool = False
         trace_partial_answer: bool = False
+        trace_retrieval_result = None  # 政策检索结果（overview 模式无单项检索）
 
         _loop = asyncio.get_event_loop()
 
@@ -663,9 +870,75 @@ async def _policy_qa_stream(
             yield _sse_event("step", _sanitize(step_evt))
             await asyncio.sleep(0)
 
+        # 长 T_TradeNo 先查询门诊主记录，再用医疗类别、险种和人员类别做最终意图路由。
+        routing_question = request.question
+        skill_id: str | None = None
+        prefetched_semantic_results: list[Any] | None = None
+        prefetched_settlement_context: Any | None = None
+        if evaluation_prefix is not None:
+            routing_question = evaluation_prefix.rewritten_question
+            skill_id = evaluation_prefix.selected_skill_id
+            prefetched_settlement_context = SimpleNamespace(
+                **evaluation_prefix.settlement_context
+            )
+        outpatient_assembler = get_assembler("mzsettlement_verify_skill")
+        if (
+            evaluation_prefix is None
+            and outpatient_assembler is not None
+            and _looks_like_outpatient_trade_no(request.settlement_id)
+            and "住院" not in request.question
+        ):
+            if outpatient_assembler.requires_human_confirmation(request.question):
+                skill_id = "mzsettlement_verify_skill"
+            else:
+                routing_profile_id = "overall-settlement-verification"
+                while True:
+                    try:
+                        prefetched_semantic_results = [
+                            await provider.run_semantic_query(query)
+                            for query in outpatient_assembler.build_semantic_queries(
+                                request.settlement_id, routing_profile_id
+                            )
+                        ]
+                        routing_context = outpatient_assembler.build_context(
+                            prefetched_semantic_results, routing_profile_id
+                        )
+                        if not routing_context.record_found:
+                            raise SettlementNotFoundError(
+                                f"未查询到真实结算数据: anchor={request.settlement_id}"
+                            )
+                        routing_question = _enrich_outpatient_question(
+                            request.question, routing_context
+                        )
+                        break
+                    except SettlementDataUnavailableError:
+                        failure_class = "settlement_data_unavailable"
+                        if attempt_count >= MAX_POLICY_QA_ATTEMPTS:
+                            halt_reason = (
+                                "stalled"
+                                if last_retryable_failure == failure_class
+                                else "max_attempts"
+                            )
+                            raise
+                        last_retryable_failure = failure_class
+                        attempt_count += 1
+                        async for _ev in _yield_step(
+                            "recovery", "done", "结算数据源暂时不可用，正在重试…"
+                        ):
+                            yield _ev
+
+        _notify_evaluation(
+            evaluation_observer,
+            "context_rewritten",
+            {
+                "question": routing_question,
+                "enriched": routing_question != request.question,
+            },
+        )
+
         # ═══ Step 1: intent_detection（统一解释模式识别，C 方案）═══
         # overview（费用构成总览）/ single_item（单项），消除「默认 pooling_self_pay」有毒默认
-        _explanation_mode, _detected_fee_item = detect_explanation_mode(request.question or "")
+        _explanation_mode, _detected_fee_item = detect_explanation_mode(routing_question or "")
         _is_overview = _explanation_mode == ExplanationMode.OVERVIEW
         target_fee_item = _detected_fee_item or "pooling_self_pay"
         async for _ev in _yield_step("intent_detection", "running", "识别问题意图…"):
@@ -675,23 +948,118 @@ async def _policy_qa_stream(
             yield _ev
 
         # ═══ Step 2: skill_routing（SkillRouter 路由到技能）═══
-        skill_id = route_question(request.question) or "settlement_explain_skill"
+        routed_skill_id = route_question(routing_question)
+        if prefetched_semantic_results is not None:
+            skill_id = "mzsettlement_verify_skill"
+        if skill_id is None:
+            previous_skill_id = runtime_bridge.last_skill_id(
+                session_id, request.settlement_id
+            )
+            if previous_skill_id:
+                previous_assembler = get_assembler(previous_skill_id)
+                detect_profile = getattr(previous_assembler, "detect_profile", None)
+                if callable(detect_profile) and detect_profile(routing_question) is not None:
+                    skill_id = previous_skill_id
+        skill_id = skill_id or routed_skill_id or "settlement_explain_skill"
         assembler = get_assembler(skill_id)
         if assembler is None:
             raise RuntimeError(f"Skill '{skill_id}' 未加载")
+        uses_declared_queries = callable(
+            getattr(assembler, "build_semantic_queries", None)
+        )
+        profile_id = (
+            assembler.detect_profile(routing_question) if uses_declared_queries else None
+        )
+        if uses_declared_queries and profile_id is None:
+            raise RuntimeError("问题不属于该结算核验 Skill 的已声明场景")
+        if uses_declared_queries:
+            _is_overview = False
+        _notify_evaluation(
+            evaluation_observer,
+            "skill_selected",
+            {"skill_id": skill_id, "profile_id": profile_id},
+        )
         async for _ev in _yield_step("skill_routing", "running", "匹配技能…"):
             yield _ev
         async for _ev in _yield_step("skill_routing", "done", "已匹配费用解释技能"):
             yield _ev
+
+        if uses_declared_queries and assembler.requires_human_confirmation(
+            request.question
+        ):
+            blocked = detect_blocked_actions(request.question) or [("高风险结算操作", "hardcoded")]
+            confirmation = build_human_confirmation_response(blocked)
+            public_result = _build_public_result(
+                answer=str(confirmation.result.get("message") or "该操作需要人工确认。"),
+                can_answer=False,
+                partial_answer=False,
+                policy_status="no_policy_matched",
+                policy_evidence=[],
+                calculation_steps=[],
+                definition=None,
+                warnings=[],
+                case_context=None,
+                outpatient_result={
+                    "scenario_id": profile_id,
+                    "uncertainties": confirmation.uncertainties,
+                    "next_actions": ["请医保经办人员在既有业务系统确认并执行。"],
+                },
+                action_status="waiting_human_confirmation",
+            )
+            _notify_evaluation(
+                evaluation_observer,
+                "result_verified",
+                {
+                    "answer_status": public_result.answer_status,
+                    "settlement_checked": False,
+                    "calculation_checked": False,
+                },
+            )
+            halt_reason = "waiting_human_confirmation"
+            yield _sse_event(
+                "result",
+                {"qa_turn_id": qa_turn_id, "result": public_result.model_dump(mode="json")},
+            )
+            yield _sse_event(
+                "done",
+                {
+                    "qa_turn_id": qa_turn_id,
+                    "answer_status": public_result.answer_status,
+                    "success": True,
+                    "attempt_count": attempt_count,
+                    "halt_reason": halt_reason,
+                },
+            )
+            return
 
         # ═══ Step 3: settlement_query（真实结算数据）═══
         async for _ev in _yield_step("settlement_query", "running", "查询真实结算数据…"):
             yield _ev
         while True:
             try:
-                settlement_context = await provider.get_settlement_context(
-                    request.settlement_id
-                )
+                if prefetched_settlement_context is not None:
+                    settlement_context = prefetched_settlement_context
+                elif uses_declared_queries:
+                    if (
+                        prefetched_semantic_results is not None
+                        and skill_id == "mzsettlement_verify_skill"
+                        and profile_id == "overall-settlement-verification"
+                    ):
+                        semantic_results = prefetched_semantic_results
+                    else:
+                        semantic_results = [
+                            await provider.run_semantic_query(query)
+                            for query in assembler.build_semantic_queries(
+                                request.settlement_id, profile_id
+                            )
+                        ]
+                    settlement_context = assembler.build_context(
+                        semantic_results, profile_id
+                    )
+                else:
+                    settlement_context = await provider.get_settlement_context(
+                        request.settlement_id
+                    )
                 break
             except SettlementDataUnavailableError:
                 failure_class = "settlement_data_unavailable"
@@ -708,14 +1076,23 @@ async def _policy_qa_stream(
                     "recovery", "done", "结算数据源暂时不可用，正在重试…"
                 ):
                     yield _ev
+        _coverage_incomplete = (
+            False if uses_declared_queries
+            else not getattr(settlement_context, "amounts_reliable", True)
+        )
         for _evt_type, _evt_payload in runtime_bridge.record_step(
             session_id=session_id,
             step="settlement_query",
             detail={
                 "settlement_id": request.settlement_id,
                 "total_fee": settlement_context.total_amount,
-                "deductible": settlement_context.deductible,
-                "basic_pooling_self_pay": settlement_context.basic_pooling_self_pay,
+                "deductible": getattr(
+                    settlement_context, "deductible",
+                    getattr(settlement_context, "deductible_amount", None),
+                ),
+                "basic_pooling_self_pay": getattr(
+                    settlement_context, "basic_pooling_self_pay", None,
+                ),
             },
             settlement_id=request.settlement_id,
         ):
@@ -724,6 +1101,30 @@ async def _policy_qa_stream(
                 await asyncio.sleep(0)
         async for _ev in _yield_step("settlement_query", "done", "结算数据获取完成"):
             yield _ev
+        settlement_observation: dict[str, Any] = {
+            "settlement_id": request.settlement_id,
+            "record_found": bool(getattr(settlement_context, "record_found", True)),
+        }
+        if uses_declared_queries and skill_id == "mzsettlement_verify_skill":
+            context_snapshot = (
+                settlement_context.model_dump(mode="json")
+                if callable(getattr(settlement_context, "model_dump", None))
+                else dict(evaluation_prefix.settlement_context)
+                if evaluation_prefix is not None
+                else {}
+            )
+            if context_snapshot:
+                settlement_observation["prefix"] = PolicyQAEvalPrefix(
+                    rewritten_question=routing_question,
+                    selected_skill_id=skill_id,
+                    profile_id=profile_id,
+                    settlement_context=context_snapshot,
+                ).model_dump(mode="json")
+        _notify_evaluation(
+            evaluation_observer,
+            "settlement_loaded",
+            settlement_observation,
+        )
 
         # ═══ Step 4: policy_rule_search（skill 查询计划 + 结构化检索）═══
         async for _ev in _yield_step("policy_rule_search", "running", "检索政策规则…"):
@@ -731,17 +1132,32 @@ async def _policy_qa_stream(
         policy_evidence: list[dict] = []
         policy_status = "no_policy_matched"
         # overview 模式是纯数据总览，不依赖单项政策规则；仅 single_item 检索单项政策
-        if not _is_overview:
-            _normalized_ctx: dict[str, Any] = {
-                "settlement_id": settlement_context.settlement_id,
-                "insu_type": _normalize_insu_type(settlement_context.insurance_type or "城镇职工"),
-                "med_type": _normalize_med_type(settlement_context.service_type or "普通住院"),
-                "hosp_lv": settlement_context.hospital_level or "三级医院",
-                "psn_type": settlement_context.person_type or "退休人员",
-                "target_field": assembler._get_fee_field(target_fee_item),
-                "target_amount": assembler._get_fee_amount(settlement_context, target_fee_item),
-            }
-            _custom_queries = assembler.build_policy_queries(target_fee_item)
+        if not _is_overview and not _coverage_incomplete:
+            if uses_declared_queries:
+                _normalized_ctx = {
+                    "settlement_id": request.settlement_id,
+                    "insu_type": settlement_context.insurance_type or "",
+                    "med_type": settlement_context.service_type or "",
+                    "hosp_lv": settlement_context.hospital_level or "",
+                    "psn_type": settlement_context.person_type or "",
+                    "target_field": profile_id,
+                    "target_amount": float(settlement_context.total_amount or 0),
+                    **assembler.build_policy_context(settlement_context, profile_id),
+                }
+                _custom_queries = assembler.build_policy_queries(
+                    profile_id, settlement_context
+                )
+            else:
+                _normalized_ctx = {
+                    "settlement_id": settlement_context.settlement_id,
+                    "insu_type": _normalize_insu_type(settlement_context.insurance_type or "城镇职工"),
+                    "med_type": _normalize_med_type(settlement_context.service_type or "普通住院"),
+                    "hosp_lv": settlement_context.hospital_level or "三级医院",
+                    "psn_type": settlement_context.person_type or "退休人员",
+                    "target_field": assembler._get_fee_field(target_fee_item),
+                    "target_amount": assembler._get_fee_amount(settlement_context, target_fee_item),
+                }
+                _custom_queries = assembler.build_policy_queries(target_fee_item)
             while True:
                 try:
                     _retrieval_result = await _loop.run_in_executor(
@@ -769,6 +1185,7 @@ async def _policy_qa_stream(
                         "recovery", "done", "政策数据源暂时不可用，正在重试…"
                     ):
                         yield _ev
+            trace_retrieval_result = _retrieval_result
             for _ev in _retrieval_result.selected_evidence:
                 policy_evidence.append({
                     "title": _ev.source_text[:80] + "..." if len(_ev.source_text) > 80 else _ev.source_text,
@@ -799,6 +1216,14 @@ async def _policy_qa_stream(
             f"检索到 {len(policy_evidence)} 条政策规则" if policy_evidence else "未检索到匹配的政策规则",
         ):
             yield _ev
+        _notify_evaluation(
+            evaluation_observer,
+            "policy_retrieved",
+            {
+                "policy_count": len(policy_evidence),
+                "policy_status": policy_status,
+            },
+        )
 
         # ═══ Step 5: skill_execution（skill 策略引擎执行 / overview 总览生成）═══
         _exec_msg = "生成费用构成总览…" if _is_overview else "生成费用解释…"
@@ -808,23 +1233,40 @@ async def _policy_qa_stream(
         overview_payload: dict | None = None
         result_answer = ""
         _single_skill_result = None
-        if _is_overview:
+        _outpatient_result: dict | None = None
+        if _coverage_incomplete:
+            result_answer = _incomplete_coverage_payload(
+                settlement_context, request.question
+            )["answer"]
+        elif _is_overview:
             overview_payload = await _loop.run_in_executor(
                 None,
                 lambda: _build_overview_payload(settlement_context, request.question, skill_id, assembler),
             )
             result_answer = overview_payload["answer"]
         else:
-            _single_skill_result = await _loop.run_in_executor(
-                None,
-                lambda: assembler.execute(
-                    settlement_context=settlement_context,
-                    policy_evidence=policy_evidence,
-                    policy_status=policy_status,
-                    target_fee_item=target_fee_item,
-                ),
-            )
-            result_answer = _single_skill_result.answer or ""
+            if uses_declared_queries:
+                _single_skill_result = await _loop.run_in_executor(
+                    None,
+                    lambda: assembler.execute(
+                        settlement_context,
+                        policy_evidence=policy_evidence,
+                        profile_id=profile_id,
+                    ),
+                )
+                _outpatient_result = _single_skill_result.model_dump(mode="json")
+                result_answer = _single_skill_result.summary
+            else:
+                _single_skill_result = await _loop.run_in_executor(
+                    None,
+                    lambda: assembler.execute(
+                        settlement_context=settlement_context,
+                        policy_evidence=policy_evidence,
+                        policy_status=policy_status,
+                        target_fee_item=target_fee_item,
+                    ),
+                )
+                result_answer = _single_skill_result.answer or ""
         for _evt_type, _evt_payload in runtime_bridge.record_step(
             session_id=session_id, step="answer_assembly", detail={},
         ):
@@ -843,31 +1285,44 @@ async def _policy_qa_stream(
         # single_item 的结构化计算依据（overview 模式留空）——此前被丢弃，
         # 导致前端只拿到文本，无法展示「为什么这么多」的算账过程。
         _calc_steps: list[dict] = []
+        _trace: dict = {}
         _definition: dict | None = None
         _warnings: list[str] = []
         _case_context: dict | None = None
-        if _single_skill_result is not None:
-            policy_status = _single_skill_result.policy_status or policy_status
-            trace_can_answer, trace_partial_answer = _answerability_from_completeness(
-                _single_skill_result.explanation_completeness,
-                _single_skill_result.warnings,
-            )
-            _trace = _single_skill_result.calculation_trace or {}
-            _calc_steps = _trace.get("steps", []) if isinstance(_trace, dict) else []
-            _definition = _single_skill_result.definition or None
-            _warnings = _single_skill_result.warnings or []
-            _case_context = {
-                "person_type": getattr(settlement_context, "person_type", None),
-                "insurance_type": getattr(settlement_context, "insurance_type", None),
-                "service_type": getattr(settlement_context, "service_type", None),
-                "hospital_level": getattr(settlement_context, "hospital_level", None),
-                "deductible": getattr(settlement_context, "deductible", None),
-                "basic_pooling_payment": getattr(settlement_context, "basic_pooling_payment", None),
-                "basic_pooling_self_pay": getattr(settlement_context, "basic_pooling_self_pay", None),
-                "large_amount_payment": getattr(settlement_context, "large_amount_payment", None),
-                "large_amount_self_pay": getattr(settlement_context, "large_amount_self_pay", None),
-                "personal_total_pay": getattr(settlement_context, "personal_total_pay", None),
-            }
+        if _coverage_incomplete:
+            _incomplete = _incomplete_coverage_payload(settlement_context, request.question)
+            trace_can_answer = False
+            trace_partial_answer = False
+            _definition = _incomplete["definition"]
+            _warnings = _incomplete["warnings"]
+            _case_context = _incomplete["case_context"]
+        elif _single_skill_result is not None:
+            if uses_declared_queries:
+                trace_can_answer = _single_skill_result.status != "unavailable"
+                trace_partial_answer = _single_skill_result.status == "partial"
+                _warnings = _single_skill_result.uncertainties
+                _case_context = {
+                    "person_type": settlement_context.person_type,
+                    "insurance_type": settlement_context.insurance_type,
+                    "service_type": settlement_context.service_type,
+                    "hospital_level": settlement_context.hospital_level,
+                    "deductible": settlement_context.deductible_amount,
+                    "personal_total_pay": settlement_context.personal_total_amount,
+                    "total_amount": settlement_context.total_amount,
+                    "query_scope": "whole_settlement",
+                    "coverage_status": _single_skill_result.status,
+                }
+            else:
+                policy_status = _single_skill_result.policy_status or policy_status
+                trace_can_answer, trace_partial_answer = _answerability_from_completeness(
+                    _single_skill_result.explanation_completeness,
+                    _single_skill_result.warnings,
+                )
+                _trace = _single_skill_result.calculation_trace or {}
+                _calc_steps = _trace.get("steps", []) if isinstance(_trace, dict) else []
+                _definition = _single_skill_result.definition or None
+                _warnings = _single_skill_result.warnings or []
+                _case_context = _settlement_case_context(settlement_context)
         elif overview_payload is not None:
             trace_can_answer = True
             trace_partial_answer = False
@@ -891,6 +1346,16 @@ async def _policy_qa_stream(
             warnings=_warnings,
             case_context=_case_context,
             is_overview=_is_overview,
+            outpatient_result=_outpatient_result,
+        )
+        _notify_evaluation(
+            evaluation_observer,
+            "result_verified",
+            {
+                "answer_status": public_result.answer_status,
+                "settlement_checked": public_result.verification_summary.settlement_checked,
+                "calculation_checked": public_result.verification_summary.calculation_checked,
+            },
         )
         halt_reason = "verified"
         async for _ev in _yield_step(
@@ -901,7 +1366,10 @@ async def _policy_qa_stream(
             yield _ev
         # Runtime 仍在服务端维护推理链与对话记忆，但不把内部推理快照并入公开结果。
         runtime_bridge.finalize_turn(
-            session_id=session_id, question=request.question,
+            session_id=session_id,
+            question=request.question,
+            skill_id=skill_id,
+            settlement_id=request.settlement_id,
         )
         yield _sse_event("result", {"qa_turn_id": qa_turn_id, "result": public_result.model_dump(mode="json")})
 
@@ -933,6 +1401,20 @@ async def _policy_qa_stream(
             finalize_workflow(workflow_id, "completed", accumulated_steps or public_steps)
         except Exception as e:
             logger.warning(f"Failed to persist QA result: {e}")
+
+        # ── 答案验证 trace 捕获（MVU-3；服务端内部信封，失败不影响流式响应与公开契约）──
+        try:
+            _get_trace_store_singleton().save(build_verification_envelope(
+                qa_turn_id=qa_turn_id,
+                question=request.question,
+                public_result=public_result,
+                retrieval_result=trace_retrieval_result,
+                calculation_trace=_trace,
+                scenario="" if _is_overview else target_fee_item,
+                context=_case_context,
+            ))
+        except Exception as te:
+            logger.warning(f"Failed to capture answer verification trace: {te}")
 
         yield _sse_event(
             "done",
@@ -1157,6 +1639,30 @@ async def debug_structured_policy_search(
         raise HTTPException(status_code=503, detail=f'检索失败: {str(e)}')
 
 
+# ── 答案验证（MVU-3）：按 qa_turn_id 事后验证 ─────────────────────
+
+@router.post("/answers/{qa_turn_id}/verification")
+def verify_policy_qa_answer(
+    qa_turn_id: str,
+    store: AnswerVerificationTraceStoreDependency,
+    port: AnswerVerificationRulePortDependency,
+) -> QAVerificationOutcome:
+    """对一次政策问答回答做答案验证（引用真实性/结论/计算/覆盖，确定性优先）。
+
+    只读诊断端点：调用方已持有 qa_turn_id 这个访问句柄，验证本身不产生写入，
+    因此不要求登录凭证（与反馈提交等写操作区分）。qid 存在但无 trace →
+    公开-only 降级（degraded）；轮次不存在 → 404（不泄露内部细节）。
+    不改 SSE 公开契约。
+    """
+    outcome = verify_qa_turn(qa_turn_id, store=store, port=port)
+    if outcome is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("QA_TURN_NOT_FOUND", "未找到该问答轮次"),
+        )
+    return outcome
+
+
 # ── 解释生成辅助函数（从结算上下文构建双视角文本和计算链路）──
 
 # ★ Milvus 字段标准化映射
@@ -1339,19 +1845,7 @@ def _build_overview_payload(context: Any, question: str, skill_id: str, assemble
             "plain_text": "本次住院结算的费用构成总览，包含医保支付与个人承担各部分金额。",
             "excludes": [],
         },
-        "case_context": {
-            "person_type": context.person_type,
-            "insurance_type": context.insurance_type,
-            "service_type": context.service_type,
-            "hospital_level": context.hospital_level,
-            "deductible": context.deductible,
-            "yearly_cycle_count": getattr(context, "yearly_cycle_count", 0),
-            "basic_pooling_payment": context.basic_pooling_payment,
-            "basic_pooling_self_pay": context.basic_pooling_self_pay,
-            "large_amount_payment": context.large_amount_payment,
-            "large_amount_self_pay": context.large_amount_self_pay,
-            "personal_total_pay": context.personal_total_pay,
-        },
+        "case_context": _settlement_case_context(context),
         "policy_evidence": [],
         "policy_status": "no_policy_matched",
         "policy_warning": "费用构成总览不依赖单项政策规则；如需单项计算过程，请针对该单项提问。",
@@ -1391,6 +1885,8 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
     """
     provider = create_settlement_data_provider()
     context = await provider.get_settlement_context(settlement_id)
+    if not getattr(context, "amounts_reliable", True):
+        return _incomplete_coverage_payload(context, question)
 
     # ★ Skill 驱动架构：通过 SkillRouter 路由到对应 skill
     skill_id = route_question(question or "统筹自付")
@@ -1526,19 +2022,7 @@ async def _process_single_settlement(settlement_id: str, question: str = "") -> 
             "sql_profile": context.query_profile,
         },
         "definition": skill_result.definition,
-        "case_context": {
-            "person_type": context.person_type,
-            "insurance_type": context.insurance_type,
-            "service_type": context.service_type,
-            "hospital_level": context.hospital_level,
-            "deductible": context.deductible,
-            "yearly_cycle_count": context.yearly_cycle_count,
-            "basic_pooling_payment": context.basic_pooling_payment,
-            "basic_pooling_self_pay": context.basic_pooling_self_pay,
-            "large_amount_payment": context.large_amount_payment,
-            "large_amount_self_pay": context.large_amount_self_pay,
-            "personal_total_pay": context.personal_total_pay,
-        },
+        "case_context": _settlement_case_context(context),
         "policy_evidence": policy_evidence,
         "policy_status": skill_result.policy_status,
         "policy_warning": skill_result.policy_status_message,

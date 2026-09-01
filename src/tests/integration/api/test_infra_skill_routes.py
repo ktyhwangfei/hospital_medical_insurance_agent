@@ -24,6 +24,7 @@ from src.runtime.skill_management.governance_service import SkillGovernanceServi
 from src.domain.skill.governance_models import SkillRelease, SkillReleaseStatus
 from src.runtime.skill_management.version_service import SkillVersionService
 from src.skill_infra.skill_loader import get_loader
+from skills.mzsettlement_verify_skill.self_tests import SettlementSelfTestCase
 
 
 PREFIX = "/api/v1/medical-insurance-ai-agent"
@@ -1105,3 +1106,227 @@ def test_seed_golden_eval_cases_idempotent(client: TestClient) -> None:
     assert r1.json()["total"] >= 8
     golden = [i for i in r1.json()["items"] if i.get("source_type") == "golden_seed"]
     assert len(golden) >= 8
+
+
+def test_mzsettlement_fixed_self_tests_can_be_listed_run_and_edited(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    path = f"{PREFIX}/infra-skills/mzsettlement_verify_skill/self-tests"
+    listed = client.get(path)
+    assert listed.status_code == 200
+    suite = listed.json()
+    assert suite["total"] == 28
+    target = next(
+        item for item in suite["items"]
+        if item["settlement_id"] == "011100030X260417004975"
+    )
+    assert target["expected_self_pay_one"] == "510.96"
+
+    executed = client.post(f"{path}/run", headers=_eval_case_headers())
+    assert executed.status_code == 200
+    assert executed.json()["failed"] == 0
+
+    def fake_update(case_id, request):
+        return SettlementSelfTestCase(case_id=case_id, **request.model_dump())
+
+    monkeypatch.setattr(
+        "src.runtime.api.infra_skill_routes.update_self_test_case",
+        fake_update,
+    )
+    payload = {key: value for key, value in target.items() if key != "case_id"}
+    payload["note"] = "页面编辑验证"
+    updated = client.put(
+        f"{path}/{target['case_id']}",
+        headers=_eval_case_headers(),
+        json=payload,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["note"] == "页面编辑验证"
+
+
+def test_outpatient_dataset_can_be_imported_frozen_and_bound_to_benchmark(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    headers = _eval_case_headers()
+    created = client.post(
+        f"{PREFIX}/infra-skills/eval-suites",
+        headers=headers,
+        json={
+            "name": "门诊结算基准集",
+            "scope": "skill",
+            "skill_id": "mzsettlement_verify_skill",
+            "purpose": "费用组成",
+        },
+    )
+    assert created.status_code == 201
+    suite_id = created.json()["suite_id"]
+
+    import_path = f"{PREFIX}/infra-skills/eval-suites/{suite_id}/import-outpatient"
+    assert client.post(import_path).status_code in {401, 403}
+    imported = client.post(import_path, headers=headers)
+    assert imported.status_code == 200
+    assert imported.json()["total"] == 28
+
+    tasks_path = f"{PREFIX}/infra-skills/eval-suites/{suite_id}/tasks"
+    assert client.get(tasks_path).status_code in {401, 403}
+    tasks = client.get(tasks_path, headers=headers)
+    assert tasks.status_code == 200
+    assert tasks.json()["total"] == 28
+    target = next(
+        item
+        for item in tasks.json()["items"]
+        if item["input"]["settlement_id"] == "011100030X260417004975"
+    )
+
+    freeze_path = f"{PREFIX}/infra-skills/eval-suites/{suite_id}/dataset-versions"
+    assert client.post(freeze_path).status_code in {401, 403}
+    frozen = client.post(freeze_path, headers=headers)
+    assert frozen.status_code == 201
+    assert len(frozen.json()["task_snapshots"]) == 28
+
+    update_payload = {
+        key: value
+        for key, value in target.items()
+        if key not in {
+            "task_id",
+            "suite_id",
+            "revision",
+            "created_by",
+            "updated_by",
+            "created_at",
+            "updated_at",
+        }
+    }
+    update_payload["name"] = "修改后不影响冻结版本"
+    update_payload["expected_revision"] = target["revision"]
+    updated = client.put(
+        f"{PREFIX}/infra-skills/eval-tasks/{target['task_id']}",
+        headers=headers,
+        json=update_payload,
+    )
+    assert updated.status_code == 200
+    assert client.get(freeze_path).status_code in {401, 403}
+    versions = client.get(freeze_path, headers=headers).json()["items"]
+    frozen_target = next(
+        item
+        for item in versions[0]["task_snapshots"]
+        if item["task_id"] == target["task_id"]
+    )
+    assert frozen_target["name"] == target["name"]
+
+    benchmark_payload = {
+        "name": "门诊 V1",
+        "skill_id": "mzsettlement_verify_skill",
+        "dataset_version_id": frozen.json()["dataset_version_id"],
+        "environment_snapshot": {
+            "runtime_version": "test",
+            "data_source_mode": "memory",
+        },
+        "evaluator_plan_id": "deterministic_v1",
+    }
+    benchmark_path = f"{PREFIX}/infra-skills/eval-benchmarks"
+    assert client.post(benchmark_path, json=benchmark_payload).status_code in {401, 403}
+    benchmark = client.post(
+        benchmark_path,
+        headers=headers,
+        json=benchmark_payload,
+    )
+    assert benchmark.status_code == 201
+    assert benchmark.json()["environment_hash"]
+    assert benchmark.json()["evaluator_plan_hash"]
+
+    from src.domain.skill.governance_models import (
+        FailureAttribution,
+        SkillEvalTaskResult,
+        SkillEvalTaskStatus,
+    )
+    from src.runtime.task_closure import service as task_closure_service
+
+    class Runner:
+        async def run(self, task):
+            if task.task_id == frozen.json()["task_snapshots"][0]["task_id"]:
+                return SkillEvalTaskResult(
+                    task_id=task.task_id,
+                    status=SkillEvalTaskStatus.FAILED,
+                    selected_skill_id=task.target_skill_id,
+                    failure_attributions=(
+                        FailureAttribution(
+                            task_id=task.task_id,
+                            owner_type="agent",
+                            stage="calculation",
+                            failure_code="CALCULATION_TOLERANCE_EXCEEDED",
+                            dimension="calculation",
+                            summary="金额超出容差",
+                            evidence_refs=("settlement:self_pay_one",),
+                        ),
+                    ),
+                )
+            return SkillEvalTaskResult(
+                task_id=task.task_id,
+                status=SkillEvalTaskStatus.PASSED,
+                selected_skill_id=task.target_skill_id,
+            )
+
+    monkeypatch.setattr(
+        "src.runtime.skill_management.governance_service.PolicyQAEvaluationRunner",
+        lambda **_kwargs: Runner(),
+    )
+    created_tasks: list[dict[str, object]] = []
+
+    def fake_create_task(**kwargs):
+        task = {**kwargs, "status": "pending"}
+        created_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(task_closure_service, "create_task", fake_create_task)
+    monkeypatch.setattr(
+        task_closure_service,
+        "list_tasks_by_workflow",
+        lambda workflow_id: [
+            task for task in created_tasks if task.get("workflow_id") == workflow_id
+        ],
+    )
+    version = client.post(
+        f"{PREFIX}/infra-skills/mzsettlement_verify_skill/versions/sync",
+        json={"created_by": "developer"},
+    )
+    assert version.status_code == 201
+    run_path = (
+        f"{PREFIX}/infra-skills/eval-benchmarks/"
+        f"{benchmark.json()['benchmark_id']}/runs"
+    )
+    assert client.post(
+        run_path,
+        json={"version_id": version.json()["version_id"]},
+    ).status_code in {401, 403}
+    run = client.post(
+        run_path,
+        headers=headers,
+        json={"version_id": version.json()["version_id"]},
+    )
+    assert run.status_code == 201
+    assert run.json()["status"] == "failed"
+    run_id = run.json()["run_id"]
+    assert client.get(f"{PREFIX}/infra-skills/eval-runs/{run_id}").status_code == 200
+
+    cluster_path = f"{PREFIX}/infra-skills/eval-runs/{run_id}/failure-clusters"
+    clusters = client.get(cluster_path)
+    assert clusters.status_code == 200
+    cluster_id = clusters.json()[0]["cluster"]["cluster_id"]
+    improvement = client.post(
+        f"{PREFIX}/infra-skills/eval-failure-clusters/{cluster_id}/improvement-task",
+        headers=headers,
+        json={"suggested_target": "assembler"},
+    )
+    assert improvement.status_code == 201
+    assert improvement.json()["cluster_id"] == cluster_id
+    assert len(client.get(cluster_path).json()[0]["improvement_tasks"]) == 1
+
+    retest = client.post(
+        f"{PREFIX}/infra-skills/eval-runs/{run_id}/retest",
+        headers=headers,
+    )
+    assert retest.status_code == 201
+    assert retest.json()["run_id"] != run_id

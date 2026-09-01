@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from src.data_platform.storage.skill.governance_ports import (
@@ -16,17 +16,23 @@ from src.data_platform.storage.skill.governance_ports import (
 from src.data_platform.storage.skill.version_ports import SkillVersionStorage
 from src.domain.skill.governance_models import (
     DEFAULT_ROUTING_SUITE_ID,
+    FailureCluster,
     SkillEvalBenchmark,
     SkillEvalDatasetVersion,
+    SkillEvalDimension,
+    SkillEvalDimensionSummary,
     SkillEvalEnvironmentSnapshot,
     SkillEvalGateThresholds,
     SkillEvalCase,
+    SkillEvalMetrics,
     SkillEvalRun,
     SkillEvalRunStatus,
     SkillEvalSuite,
     SkillEvalSuiteScope,
     SkillEvalSuiteStatus,
     SkillEvalTask,
+    SkillEvalTaskResult,
+    SkillEvalTaskStatus,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
@@ -36,6 +42,9 @@ from src.domain.skill.governance_models import (
 from src.domain.skill.version_models import SkillValidationStatus, SkillVersion
 from src.security.desensitization.detection import detect_sensitive_patterns
 from src.skill_infra.route_evaluator import evaluate_route_suite
+from src.runtime.skill_management.evaluation_attribution import cluster_failures
+from src.runtime.skill_management.evaluation_judge import SkillEvalJudge
+from src.runtime.skill_management.evaluation_runner import PolicyQAEvaluationRunner
 
 # 预置黄金 routing 用例：覆盖 settlement_explain_skill 核心关键词，作为路由回归基线。
 # expected_skill_id 必须是已物化 skill（当前仅 settlement_explain_skill）。
@@ -49,6 +58,31 @@ GOLDEN_ROUTING_CASES: list[tuple[str, str, list[str]]] = [
     ("医保报销比例", "settlement_explain_skill", ["settlement"]),
     ("住院起付线多少", "settlement_explain_skill", ["settlement"]),
 ]
+
+
+def _summarize_dimension(
+    dimension: SkillEvalDimension,
+    task_results: list[SkillEvalTaskResult],
+) -> SkillEvalDimensionSummary:
+    assertions = [
+        assertion
+        for result in task_results
+        for assertion in result.assertion_results
+        if assertion.dimension == dimension
+    ]
+    return SkillEvalDimensionSummary(
+        dimension=dimension,
+        total=len(assertions),
+        passed=sum(item.status == SkillEvalTaskStatus.PASSED for item in assertions),
+        failed=sum(item.status == SkillEvalTaskStatus.FAILED for item in assertions),
+        blocked=sum(item.status == SkillEvalTaskStatus.BLOCKED for item in assertions),
+        needs_review=sum(
+            item.status == SkillEvalTaskStatus.NEEDS_REVIEW for item in assertions
+        ),
+        invalid_dataset=sum(
+            item.status == SkillEvalTaskStatus.INVALID_DATASET for item in assertions
+        ),
+    )
 
 
 class SkillGovernanceGateError(ValueError):
@@ -83,10 +117,12 @@ class SkillGovernanceService:
         storage: SkillGovernanceStorage,
         version_storage: SkillVersionStorage,
         loader: _LoaderView,
+        current_artifact_hash_resolver: Callable[[str], str] | None = None,
     ) -> None:
         self._storage = storage
         self._version_storage = version_storage
         self._loader = loader
+        self._current_artifact_hash_resolver = current_artifact_hash_resolver
 
     def list_suites(
         self,
@@ -421,6 +457,148 @@ class SkillGovernanceService:
     ) -> list[SkillEvalBenchmark]:
         return self._storage.list_benchmarks(skill_id)
 
+    async def create_benchmark_run(
+        self,
+        benchmark_id: str,
+        *,
+        version_id: str,
+        baseline_version_id: str | None,
+        created_by: str,
+        runner: PolicyQAEvaluationRunner | None = None,
+    ) -> SkillEvalRun:
+        benchmark = self._storage.get_benchmark(benchmark_id)
+        if benchmark is None:
+            raise SkillGovernanceNotFoundError(f"Benchmark 不存在: {benchmark_id}")
+        if benchmark.status.value != "active":
+            raise SkillGovernanceGateError(
+                "Benchmark 已归档",
+                ["benchmark_inactive"],
+            )
+        dataset = self._storage.get_dataset_version(benchmark.dataset_version_id)
+        if dataset is None:
+            raise SkillGovernanceNotFoundError(
+                f"数据集版本不存在: {benchmark.dataset_version_id}"
+            )
+        candidate = self._require_version(benchmark.skill_id, version_id)
+        if candidate.validation_status != SkillValidationStatus.PASSED:
+            raise SkillGovernanceGateError(
+                "候选版本校验未通过",
+                ["version_validation_failed"],
+            )
+        if (
+            self._current_artifact_hash_resolver is not None
+            and self._current_artifact_hash_resolver(benchmark.skill_id)
+            != candidate.artifact_hash
+        ):
+            raise SkillGovernanceGateError(
+                "候选版本尚未物化为当前运行时 Skill 制品",
+                ["candidate_not_materialized"],
+            )
+        if (
+            benchmark.environment_snapshot.skill_artifact_hash is not None
+            and benchmark.environment_snapshot.skill_artifact_hash
+            != candidate.artifact_hash
+        ):
+            raise SkillGovernanceGateError(
+                "候选 Skill 制品与 Benchmark 环境快照不一致",
+                ["benchmark_artifact_mismatch"],
+            )
+        if baseline_version_id is not None:
+            raise SkillGovernanceGateError(
+                "当前 Policy QA 运行时尚不支持隔离执行基线版本",
+                ["baseline_isolation_unavailable"],
+            )
+        resolved_baseline = None
+        evaluator = runner or PolicyQAEvaluationRunner(
+            judge=(
+                SkillEvalJudge(model_override=benchmark.judge_version)
+                if benchmark.evaluator_plan_id == "deterministic_judge_v1"
+                else None
+            )
+        )
+        task_results = [
+            await evaluator.run(task) for task in dataset.task_snapshots
+        ]
+        required = [
+            result
+            for task, result in zip(
+                dataset.task_snapshots,
+                task_results,
+                strict=True,
+            )
+            if task.required
+        ]
+        required_passed = sum(
+            result.status == SkillEvalTaskStatus.PASSED for result in required
+        )
+        hard_pass_rate = required_passed / len(required) if required else 1.0
+        gate_passed = (
+            hard_pass_rate >= benchmark.gate_thresholds.required_hard_pass_rate
+        )
+        dimensions = tuple(
+            _summarize_dimension(dimension, task_results)
+            for dimension in SkillEvalDimension
+            if any(
+                assertion.dimension == dimension
+                for result in task_results
+                for assertion in result.assertion_results
+            )
+        )
+        attributions = [
+            attribution
+            for result in task_results
+            for attribution in result.failure_attributions
+        ]
+        total = len(task_results)
+        passed = sum(
+            result.status == SkillEvalTaskStatus.PASSED for result in task_results
+        )
+        now = datetime.now(timezone.utc)
+        run = SkillEvalRun(
+            run_id=f"EVR_{uuid4().hex}",
+            skill_id=benchmark.skill_id,
+            version_id=version_id,
+            baseline_version_id=(
+                resolved_baseline.version_id if resolved_baseline is not None else None
+            ),
+            suite_version=dataset.version_number,
+            config_hash=benchmark.environment_hash,
+            routing_manifest_hash=candidate.artifact_hash,
+            status=(
+                SkillEvalRunStatus.PASSED
+                if gate_passed
+                else SkillEvalRunStatus.FAILED
+            ),
+            metrics=SkillEvalMetrics(
+                total=total,
+                passed=passed,
+                required_total=len(required),
+                required_passed=required_passed,
+                top1_accuracy=passed / total if total else 0.0,
+                baseline_top1_accuracy=0.0,
+                regression_count=0,
+                new_false_takeover_count=0,
+                gate_passed=gate_passed,
+            ),
+            dataset_version_id=dataset.dataset_version_id,
+            benchmark_id=benchmark.benchmark_id,
+            environment_snapshot=benchmark.environment_snapshot,
+            task_results=tuple(task_results),
+            trajectory_summary=tuple(
+                step for result in task_results for step in result.trajectory
+            ),
+            failure_attributions=tuple(attributions),
+            failure_clusters=cluster_failures(
+                {task.task_id: task for task in dataset.task_snapshots},
+                attributions,
+            ),
+            dimension_summary=dimensions,
+            created_by=created_by.strip(),
+            created_at=now,
+            completed_at=now,
+        )
+        return self._storage.save_run(run)
+
     @staticmethod
     def _validate_task_for_suite(
         task: SkillEvalTask,
@@ -667,6 +845,49 @@ class SkillGovernanceService:
             raise SkillGovernanceNotFoundError(f"评测运行不存在: {run_id}")
         return run
 
+    def get_eval_run_by_id(self, run_id: str) -> SkillEvalRun:
+        run = next(
+            (item for item in self._storage.list_runs() if item.run_id == run_id),
+            None,
+        )
+        if run is None:
+            raise SkillGovernanceNotFoundError(f"评测运行不存在: {run_id}")
+        return run
+
+    def get_failure_cluster(
+        self,
+        cluster_id: str,
+    ) -> tuple[SkillEvalRun, FailureCluster]:
+        for run in self._storage.list_runs():
+            cluster = next(
+                (item for item in run.failure_clusters if item.cluster_id == cluster_id),
+                None,
+            )
+            if cluster is not None:
+                return run, cluster
+        raise SkillGovernanceNotFoundError(f"失败簇不存在: {cluster_id}")
+
+    async def retest_benchmark_run(
+        self,
+        run_id: str,
+        *,
+        created_by: str,
+        runner: PolicyQAEvaluationRunner | None = None,
+    ) -> SkillEvalRun:
+        previous = self.get_eval_run_by_id(run_id)
+        if previous.benchmark_id is None:
+            raise SkillGovernanceGateError(
+                "旧路由评测不支持 Benchmark 复测",
+                ["benchmark_run_required"],
+            )
+        return await self.create_benchmark_run(
+            previous.benchmark_id,
+            version_id=previous.version_id,
+            baseline_version_id=previous.baseline_version_id,
+            created_by=created_by,
+            runner=runner,
+        )
+
     def create_candidate(
         self,
         skill_id: str,
@@ -702,12 +923,15 @@ class SkillGovernanceService:
             failures.append("evaluation_failed")
         if run.version_id != version_id:
             failures.append("evaluation_version_mismatch")
-        if run.config_hash != self._config_hash(run.suite_version):
-            failures.append("evaluation_config_changed")
-        if run.routing_manifest_hash != self._manifests_hash(
-            self._manifests_with_version(version)
-        ):
-            failures.append("routing_manifest_changed")
+        if run.benchmark_id is not None:
+            failures.extend(self._benchmark_evidence_failures(run, version))
+        else:
+            if run.config_hash != self._config_hash(run.suite_version):
+                failures.append("evaluation_config_changed")
+            if run.routing_manifest_hash != self._manifests_hash(
+                self._manifests_with_version(version)
+            ):
+                failures.append("routing_manifest_changed")
         expected_baseline_version_id = active.version_id if active is not None else None
         if run.baseline_version_id != expected_baseline_version_id:
             failures.append("evaluation_baseline_mismatch")
@@ -953,14 +1177,58 @@ class SkillGovernanceService:
             failures.append("evaluation_failed")
         if run.config_hash != release.config_hash:
             failures.append("config_changed")
-        if run.config_hash != self._config_hash(run.suite_version):
-            failures.append("evaluation_config_changed")
-        if run.routing_manifest_hash != self._manifests_hash(
-            self._manifests_with_version(version)
-        ):
-            failures.append("routing_manifest_changed")
-        latest_suite = self._storage.current_suite_version()
-        if run.suite_version != latest_suite:
-            failures.append("eval_suite_changed")
+        if run.benchmark_id is not None:
+            failures.extend(self._benchmark_evidence_failures(run, version))
+        else:
+            if run.config_hash != self._config_hash(run.suite_version):
+                failures.append("evaluation_config_changed")
+            if run.routing_manifest_hash != self._manifests_hash(
+                self._manifests_with_version(version)
+            ):
+                failures.append("routing_manifest_changed")
+            latest_suite = self._storage.current_suite_version()
+            if run.suite_version != latest_suite:
+                failures.append("eval_suite_changed")
         if failures:
             raise SkillGovernanceGateError("发布证据已变化", failures)
+
+    def _benchmark_evidence_failures(
+        self,
+        run: SkillEvalRun,
+        version: SkillVersion,
+    ) -> list[str]:
+        benchmark = self._storage.get_benchmark(run.benchmark_id or "")
+        if benchmark is None:
+            return ["benchmark_missing"]
+        dataset = self._storage.get_dataset_version(benchmark.dataset_version_id)
+        failures: list[str] = []
+        if dataset is None:
+            return ["benchmark_dataset_missing"]
+        if benchmark.skill_id != run.skill_id:
+            failures.append("evaluation_benchmark_skill_mismatch")
+        if run.dataset_version_id != benchmark.dataset_version_id:
+            failures.append("evaluation_dataset_mismatch")
+        if run.environment_snapshot != benchmark.environment_snapshot:
+            failures.append("evaluation_environment_changed")
+        if run.config_hash != benchmark.environment_hash:
+            failures.append("evaluation_config_changed")
+        if run.routing_manifest_hash != version.artifact_hash:
+            failures.append("routing_manifest_changed")
+        if (
+            benchmark.environment_snapshot.skill_artifact_hash is not None
+            and benchmark.environment_snapshot.skill_artifact_hash
+            != version.artifact_hash
+        ):
+            failures.append("benchmark_artifact_mismatch")
+        results = {result.task_id: result for result in run.task_results}
+        for task in dataset.task_snapshots:
+            if not task.required:
+                continue
+            result = results.get(task.task_id)
+            if result is None:
+                failures.append("required_task_result_missing")
+            elif result.status == SkillEvalTaskStatus.NEEDS_REVIEW:
+                failures.append("required_task_needs_review")
+            elif result.status != SkillEvalTaskStatus.PASSED:
+                failures.append("required_task_not_passed")
+        return failures

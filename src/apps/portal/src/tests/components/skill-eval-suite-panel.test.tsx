@@ -103,4 +103,31 @@ describe('SkillEvalSuitePanel', () => {
       },
     ))
   })
+
+  it('停用测评集仍可选择并重新启用', async () => {
+    vi.mocked(listSkillEvalSuites).mockResolvedValueOnce({
+      items: [platformSuite, { ...skillSuite, status: 'inactive' }],
+      total: 2,
+    })
+    vi.mocked(updateSkillEvalSuite).mockResolvedValueOnce({
+      ...skillSuite,
+      status: 'active',
+      revision: 2,
+    })
+    render(
+      <SkillEvalSuitePanel
+        skillId="mzsettlement_verify_skill"
+        selectedSuiteId="EVS_skill"
+        onSelect={vi.fn()}
+      />,
+    )
+
+    const select = await screen.findByLabelText('选择测评集')
+    expect(select.querySelector('option[value="EVS_skill"]')).not.toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '启用测评集' }))
+    await waitFor(() => expect(updateSkillEvalSuite).toHaveBeenCalledWith(
+      'EVS_skill',
+      expect.objectContaining({ status: 'active' }),
+    ))
+  })
 })

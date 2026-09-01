@@ -32,7 +32,6 @@ export default function SkillEvalSuitePanel({
 
   useEffect(() => {
     let active = true
-    setError(null)
     listSkillEvalSuites({
       skillId: skillId ?? undefined,
       includeInactive: true,
@@ -40,11 +39,11 @@ export default function SkillEvalSuitePanel({
       .then((response) => {
         if (!active) return
         setSuites(response.items)
-        const selectedIsActive = response.items.some(
-          (item) => item.suite_id === selectedSuiteId && item.status === 'active',
+        const selectedExists = response.items.some(
+          (item) => item.suite_id === selectedSuiteId,
         )
-        if (!selectedIsActive) {
-          const first = response.items.find((item) => item.status === 'active')
+        if (!selectedExists) {
+          const first = response.items.find((item) => item.status === 'active') ?? response.items[0]
           if (first) onSelect(first.suite_id)
         }
       })
@@ -91,12 +90,6 @@ export default function SkillEvalSuitePanel({
       setSuites((current) => current.map((item) => (
         item.suite_id === updated.suite_id ? updated : item
       )))
-      if (updated.status === 'inactive') {
-        const fallback = suites.find((item) => (
-          item.suite_id !== updated.suite_id && item.status === 'active'
-        ))
-        if (fallback) onSelect(fallback.suite_id)
-      }
     } catch (reason) {
       setError(errorMessage(reason))
     } finally {
@@ -122,7 +115,6 @@ export default function SkillEvalSuitePanel({
               <option
                 key={suite.suite_id}
                 value={suite.suite_id}
-                disabled={suite.status === 'inactive'}
               >
                 {suite.name}{suite.status === 'inactive' ? '（已停用）' : ''}
               </option>

@@ -6,15 +6,13 @@ import SkillEvalLaunchPanel from '@/components/skills/skill-eval-launch-panel'
 import type { SkillVersionResponse } from '@/lib/types'
 
 const mocks = vi.hoisted(() => ({
-  catalog: vi.fn(),
   versions: vi.fn(),
   run: vi.fn(),
 }))
 
 vi.mock('@/lib/api-client', () => ({
-  listInfraSkillCatalog: (...a: unknown[]) => mocks.catalog(...a),
   listInfraSkillVersions: (...a: unknown[]) => mocks.versions(...a),
-  createSkillEvalRun: (...a: unknown[]) => mocks.run(...a),
+  createSkillEvalBenchmarkRun: (...a: unknown[]) => mocks.run(...a),
 }))
 
 afterEach(cleanup)
@@ -40,56 +38,61 @@ function makeVersion(overrides: Partial<SkillVersionResponse> = {}): SkillVersio
 
 describe('SkillEvalLaunchPanel — 发起评测', () => {
   beforeEach(() => {
-    mocks.catalog.mockReset()
     mocks.versions.mockReset()
     mocks.run.mockReset()
+    mocks.versions.mockResolvedValue([makeVersion()])
   })
 
-  it('未选 skill/version 时发起按钮禁用', async () => {
-    mocks.catalog.mockResolvedValue({ items: [{ skill_id: 'sk1' }] })
-    render(<SkillEvalLaunchPanel enabledCaseCount={0} onLaunched={() => {}} />)
-    await waitFor(() =>
-      expect(screen.getByTestId('eval-launch-skill')).toBeInTheDocument(),
+  it('深链 Skill 不再要求二次选择', async () => {
+    render(
+      <SkillEvalLaunchPanel
+        skillId="sk1"
+        benchmarkId="EVB_1"
+        taskCount={28}
+        onLaunched={() => {}}
+      />,
     )
+    await waitFor(() => expect(mocks.versions).toHaveBeenCalledWith('sk1'))
+    expect(screen.queryByTestId('eval-launch-skill')).not.toBeInTheDocument()
     expect(screen.getByTestId('eval-launch-button')).toBeDisabled()
   })
 
-  it('选 skill → 选版本 → 发起评测调用 createSkillEvalRun', async () => {
+  it('选择候选版本后按 benchmark_id 发起评测', async () => {
     const user = userEvent.setup()
     const onLaunched = vi.fn()
-    mocks.catalog.mockResolvedValue({ items: [{ skill_id: 'sk1' }] })
-    mocks.versions.mockResolvedValue([makeVersion()])
     mocks.run.mockResolvedValue({ run_id: 'run-9', skill_id: 'sk1' })
 
-    render(<SkillEvalLaunchPanel enabledCaseCount={5} onLaunched={onLaunched} />)
-    await waitFor(() =>
-      expect(screen.getByTestId('eval-launch-skill')).toBeInTheDocument(),
+    render(
+      <SkillEvalLaunchPanel
+        skillId="sk1"
+        benchmarkId="EVB_1"
+        taskCount={28}
+        onLaunched={onLaunched}
+      />,
     )
-
-    await user.selectOptions(screen.getByTestId('eval-launch-skill'), 'sk1')
-    await waitFor(() =>
-      expect(mocks.versions).toHaveBeenCalledWith('sk1'),
-    )
+    await waitFor(() => expect(mocks.versions).toHaveBeenCalledWith('sk1'))
     await user.selectOptions(screen.getByTestId('eval-launch-version'), 'v1')
     await user.click(screen.getByTestId('eval-launch-button'))
 
     await waitFor(() =>
-      expect(mocks.run).toHaveBeenCalledWith('sk1', { version_id: 'v1' }),
+      expect(mocks.run).toHaveBeenCalledWith('EVB_1', { version_id: 'v1' }),
     )
     expect(onLaunched).toHaveBeenCalledWith({ run_id: 'run-9', skill_id: 'sk1' })
   })
 
   it('发起失败时显示错误', async () => {
     const user = userEvent.setup()
-    mocks.catalog.mockResolvedValue({ items: [{ skill_id: 'sk1' }] })
-    mocks.versions.mockResolvedValue([makeVersion()])
     mocks.run.mockRejectedValue(new Error('版本未校验'))
 
-    render(<SkillEvalLaunchPanel enabledCaseCount={0} onLaunched={() => {}} />)
-    await waitFor(() =>
-      expect(screen.getByTestId('eval-launch-skill')).toBeInTheDocument(),
+    render(
+      <SkillEvalLaunchPanel
+        skillId="sk1"
+        benchmarkId="EVB_1"
+        taskCount={28}
+        onLaunched={() => {}}
+      />,
     )
-    await user.selectOptions(screen.getByTestId('eval-launch-skill'), 'sk1')
+    await waitFor(() => expect(mocks.versions).toHaveBeenCalledWith('sk1'))
     await user.selectOptions(screen.getByTestId('eval-launch-version'), 'v1')
     await user.click(screen.getByTestId('eval-launch-button'))
 

@@ -40,6 +40,15 @@ from src.data_platform.storage.skill.governance_ports import (
 from src.data_platform.cache import create_cache_client
 from src.data_platform.cache.ports import IdempotencyStore, ShortStateStore
 from src.observability import metrics as observability_metrics
+from skills.mzsettlement_verify_skill.self_tests import (
+    SettlementSelfTestCase,
+    SettlementSelfTestCaseUpdate,
+    SettlementSelfTestRun,
+    SettlementSelfTestSuite,
+    list_self_test_suite,
+    run_self_tests,
+    update_self_test_case,
+)
 
 logger = logging.getLogger(__name__)
 from src.runtime.api.schemas import (
@@ -67,6 +76,7 @@ from src.runtime.skill_management.governance_service import (
     SkillGovernanceGateError,
     SkillGovernanceService,
 )
+from src.skill_infra.artifact import build_skill_artifact
 from src.runtime.skill_management.workbench_service import (
     SkillGovernancePriority,
     SkillGovernanceStatus,
@@ -132,6 +142,9 @@ from src.runtime.api.skill_schemas import (
     SkillEvalBenchmarkResponse,
     SkillEvalDatasetVersionListResponse,
     SkillEvalDatasetVersionResponse,
+    SkillEvalFailureClusterResponse,
+    SkillEvalImprovementTaskCreateRequest,
+    SkillEvalImprovementTaskResponse,
     SkillEvalTaskCreateRequest,
     SkillEvalTaskListResponse,
     SkillEvalTaskResponse,
@@ -195,6 +208,10 @@ def get_skill_governance_service() -> SkillGovernanceService:
         storage=get_skill_governance_storage(),
         version_storage=get_skill_version_storage(),
         loader=get_loader(),
+        current_artifact_hash_resolver=lambda skill_id: build_skill_artifact(
+            Path(SKILLS_DIR) / skill_id,
+            skills_root=Path(SKILLS_DIR),
+        ).artifact_hash,
     )
 
 
@@ -944,6 +961,32 @@ def create_skill_eval_benchmark(
     return SkillEvalBenchmarkResponse.model_validate(benchmark.model_dump())
 
 
+@router.post(
+    "/infra-skills/eval-benchmarks/{benchmark_id}/runs",
+    response_model=SkillEvalRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_skill_eval_benchmark_run(
+    benchmark_id: str,
+    request: SkillEvalRunCreateRequest,
+    service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalRunResponse:
+    try:
+        run = await service.create_benchmark_run(
+            benchmark_id,
+            **request.model_dump(),
+            created_by=principal.user_id,
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalRunResponse.model_validate(run.model_dump())
+
+
 @router.get(
     "/infra-skills/eval-cases",
     response_model=SkillEvalCaseListResponse,
@@ -1070,6 +1113,144 @@ def list_all_skill_eval_runs(
         items=[SkillEvalRunResponse.model_validate(run.model_dump()) for run in runs],
         total=len(runs),
     )
+
+
+@router.get(
+    "/infra-skills/eval-runs/{run_id}",
+    response_model=SkillEvalRunResponse,
+)
+def get_skill_eval_run_by_id(
+    run_id: str,
+    service: SkillGovernanceServiceDependency,
+) -> SkillEvalRunResponse:
+    try:
+        run = service.get_eval_run_by_id(run_id)
+    except SkillGovernanceNotFoundError as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalRunResponse.model_validate(run.model_dump())
+
+
+def _improvement_tasks_for_run(run_id: str) -> list[dict[str, object]]:
+    from src.runtime.task_closure.service import list_tasks_by_workflow
+
+    return [
+        task
+        for task in list_tasks_by_workflow(run_id)
+        if task.get("task_type") == "skill_evaluation_improvement"
+    ]
+
+
+@router.get(
+    "/infra-skills/eval-runs/{run_id}/failure-clusters",
+    response_model=list[SkillEvalFailureClusterResponse],
+)
+def list_skill_eval_failure_clusters(
+    run_id: str,
+    service: SkillGovernanceServiceDependency,
+) -> list[SkillEvalFailureClusterResponse]:
+    try:
+        run = service.get_eval_run_by_id(run_id)
+    except SkillGovernanceNotFoundError as exc:
+        raise _governance_error(exc) from exc
+    tasks = _improvement_tasks_for_run(run_id)
+    return [
+        SkillEvalFailureClusterResponse(
+            cluster=cluster,
+            improvement_tasks=[
+                SkillEvalImprovementTaskResponse(
+                    task_id=str(task["task_id"]),
+                    run_id=run_id,
+                    cluster_id=cluster.cluster_id,
+                    status=str(task["status"]),
+                    description=str(task["description"]),
+                )
+                for task in tasks
+                if isinstance(task.get("input_data"), dict)
+                and task["input_data"].get("cluster_id") == cluster.cluster_id
+            ],
+        )
+        for cluster in run.failure_clusters
+    ]
+
+
+@router.post(
+    "/infra-skills/eval-failure-clusters/{cluster_id}/improvement-task",
+    response_model=SkillEvalImprovementTaskResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_skill_eval_improvement_task(
+    cluster_id: str,
+    request: SkillEvalImprovementTaskCreateRequest,
+    service: SkillGovernanceServiceDependency,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalImprovementTaskResponse:
+    from src.runtime.task_closure.service import create_task
+
+    try:
+        run, cluster = service.get_failure_cluster(cluster_id)
+    except SkillGovernanceNotFoundError as exc:
+        raise _governance_error(exc) from exc
+    evidence_refs = sorted(
+        {
+            ref
+            for item in run.failure_attributions
+            if item.task_id in cluster.task_ids
+            and item.failure_code == cluster.failure_code
+            for ref in item.evidence_refs
+        }
+    )
+    description = (
+        f"修复 {cluster.failure_code}（影响 {len(cluster.task_ids)} 个评测任务）"
+    )
+    task = create_task(
+        task_id=f"tsk_eval_{uuid4().hex}",
+        task_type="skill_evaluation_improvement",
+        description=description,
+        responsible_role=request.responsible_role,
+        workflow_id=run.run_id,
+        executor_type="human",
+        input_data={
+            "run_id": run.run_id,
+            "cluster_id": cluster.cluster_id,
+            "failure_code": cluster.failure_code,
+            "stage": cluster.stage.value,
+            "target_skill_id": cluster.target_skill_id,
+            "task_ids": list(cluster.task_ids),
+            "evidence_refs": evidence_refs,
+            "suggested_target": request.suggested_target,
+        },
+    )
+    return SkillEvalImprovementTaskResponse(
+        task_id=str(task["task_id"]),
+        run_id=run.run_id,
+        cluster_id=cluster.cluster_id,
+        status=str(task["status"]),
+        description=description,
+    )
+
+
+@router.post(
+    "/infra-skills/eval-runs/{run_id}/retest",
+    response_model=SkillEvalRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def retest_skill_eval_run(
+    run_id: str,
+    service: SkillGovernanceServiceDependency,
+    principal: SkillEvaluationPrincipalDependency,
+) -> SkillEvalRunResponse:
+    try:
+        run = await service.retest_benchmark_run(
+            run_id,
+            created_by=principal.user_id,
+        )
+    except (
+        SkillGovernanceConflictError,
+        SkillGovernanceGateError,
+        SkillGovernanceNotFoundError,
+    ) as exc:
+        raise _governance_error(exc) from exc
+    return SkillEvalRunResponse.model_validate(run.model_dump())
 
 
 @router.get(
@@ -2578,6 +2759,45 @@ def reject_eval_case_pool_item(
     except SkillRegressionConflictError:
         raise HTTPException(status_code=409, detail=error_detail("EVAL_CASE_POOL_REVISION_CONFLICT", "案例已被修改，请刷新"))
     return _pool_item_to_response(updated)
+
+
+@router.get(
+    "/infra-skills/mzsettlement_verify_skill/self-tests",
+    response_model=SettlementSelfTestSuite,
+)
+def list_mzsettlement_self_tests() -> SettlementSelfTestSuite:
+    """查看门诊结算全人群固定自测样例。"""
+    return list_self_test_suite()
+
+
+@router.put(
+    "/infra-skills/mzsettlement_verify_skill/self-tests/{case_id}",
+    response_model=SettlementSelfTestCase,
+)
+def update_mzsettlement_self_test(
+    case_id: str,
+    request: SettlementSelfTestCaseUpdate,
+    _principal: SkillEvaluationPrincipalDependency,
+) -> SettlementSelfTestCase:
+    """保存单个门诊结算固定样例。"""
+    try:
+        return update_self_test_case(case_id, request)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("SETTLEMENT_SELF_TEST_NOT_FOUND", "固定自测样例不存在"),
+        ) from exc
+
+
+@router.post(
+    "/infra-skills/mzsettlement_verify_skill/self-tests/run",
+    response_model=SettlementSelfTestRun,
+)
+def run_mzsettlement_self_tests(
+    _principal: SkillEvaluationPrincipalDependency,
+) -> SettlementSelfTestRun:
+    """运行全部启用的门诊结算固定样例。"""
+    return run_self_tests()
 
 
 @router.get("/infra-skills/{skill_id}", response_model=InfraSkillDetailResponse)

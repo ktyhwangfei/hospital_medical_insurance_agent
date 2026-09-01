@@ -1,0 +1,27 @@
+scenario_id: overall-settlement-verification
+amounts:
+  total_amount: 1916.72
+  in_scope_amount: 1812.37
+  self_pay_one: 485.94
+  deductible_amount: 838.56
+  beyond_cap_amount: 0.00
+  account_payment: 590.29
+  cash_payment: 0.00
+  big_disease_payment: 0.00
+  retired_medical_payment: 0.00
+  unit_supplement_payment: 644.76
+  personal_total_amount: 590.29
+  out_of_scope_amount: 104.35
+  self_pay_two: 104.35
+  large_self_pay: 292.14
+  fund_total_amount: 1326.43
+  large_fund_payment: 681.67
+  disabled_soldier_payment: 0.00
+  supplementary_insurance_payment: 0.00
+  assistance_payment: 0.00
+policy_evidence:
+  - source_id: image-policy-ratio
+    rule_type: 支付比例
+    payment_ratio: 0.70
+    calculation_base: in_scope_minus_deductible
+

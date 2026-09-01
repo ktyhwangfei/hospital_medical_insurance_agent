@@ -306,6 +306,136 @@ export interface SkillEvalSuiteUpdateRequest {
   expected_revision: number
 }
 
+export type SkillEvalTaskStatus = 'passed' | 'failed' | 'blocked' | 'needs_review' | 'invalid_dataset'
+export type SkillEvalDimension = 'route' | 'behavior' | 'calculation' | 'policy_content' | 'citation' | 'answer_quality' | 'safety'
+export type SkillEvalStage = 'preflight' | 'settlement_lookup' | 'context' | 'routing' | 'skill_execution' | 'policy_retrieval' | 'calculation' | 'answer_composition' | 'deterministic_verification' | 'judge'
+
+export interface SkillEvalTaskInput {
+  question: string
+  settlement_id?: string | null
+  role: string
+}
+
+export interface SkillEvalDataLocator {
+  resource_type: string
+  resource_id: string
+}
+
+export interface SkillEvalEnvironmentRequirement {
+  kind: 'data_source' | 'policy' | 'semantic' | 'tool' | 'model' | 'security'
+  name: string
+  version?: string | null
+  required: boolean
+}
+
+export interface SkillEvalAssertion {
+  assertion_id: string
+  dimension: SkillEvalDimension
+  output_adapter: string
+  expected: Record<string, unknown>
+  required: boolean
+}
+
+export interface SkillEvalTrajectoryPrefix {
+  prefix_id: string
+  boundary_kind: 'after_settlement_loaded'
+  state_schema_version: 'policy_qa_prefix_v1'
+}
+
+export interface SkillEvalTaskResponse {
+  task_id: string
+  suite_id: string
+  target_skill_id: string
+  name: string
+  partition: 'regression' | 'benchmark' | 'holdout'
+  input: SkillEvalTaskInput
+  data_locators: SkillEvalDataLocator[]
+  environment_requirements: SkillEvalEnvironmentRequirement[]
+  assertions: SkillEvalAssertion[]
+  trajectory_prefixes: SkillEvalTrajectoryPrefix[]
+  required: boolean
+  enabled: boolean
+  source_type: string
+  source_ref: string
+  risk_tags: string[]
+  business_tags: string[]
+  contains_sensitive_data: boolean
+  revision: number
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillEvalTaskListResponse {
+  items: SkillEvalTaskResponse[]
+  total: number
+}
+
+export interface SkillEvalDatasetVersionResponse {
+  dataset_version_id: string
+  suite_id: string
+  suite_revision: number
+  version_number: number
+  task_snapshots: SkillEvalTaskResponse[]
+  environment_contract_hash: string
+  evaluator_plan_hash: string
+  content_hash: string
+  created_by: string
+  created_at: string
+}
+
+export interface SkillEvalDatasetVersionListResponse {
+  items: SkillEvalDatasetVersionResponse[]
+  total: number
+}
+
+export interface SkillEvalEnvironmentSnapshot {
+  runtime_version: string
+  data_source_mode: string
+  data_source_version?: string | null
+  skill_artifact_hash?: string | null
+  policy_version?: string | null
+  semantic_version?: string | null
+  tool_registry_version?: string | null
+  model_routing_version?: string | null
+  prompt_version?: string | null
+  security_policy_version?: string | null
+}
+
+export interface SkillEvalBenchmarkResponse {
+  benchmark_id: string
+  name: string
+  skill_id: string
+  dataset_version_id: string
+  environment_snapshot: SkillEvalEnvironmentSnapshot
+  environment_hash: string
+  evaluator_plan_id: 'deterministic_v1' | 'deterministic_judge_v1'
+  evaluator_plan_hash: string
+  judge_version?: string | null
+  gate_thresholds: {
+    required_hard_pass_rate: number
+    max_new_failures: number
+  }
+  status: 'active' | 'archived'
+  created_by: string
+  created_at: string
+}
+
+export interface SkillEvalBenchmarkListResponse {
+  items: SkillEvalBenchmarkResponse[]
+  total: number
+}
+
+export interface SkillEvalBenchmarkCreateRequest {
+  name: string
+  skill_id: string
+  dataset_version_id: string
+  environment_snapshot: SkillEvalEnvironmentSnapshot
+  evaluator_plan_id?: 'deterministic_v1' | 'deterministic_judge_v1'
+  judge_version?: string | null
+}
+
 export interface SkillEvalMetricsResponse {
   total: number
   passed: number
@@ -345,6 +475,14 @@ export interface SkillEvalRunResponse {
   metrics: SkillEvalMetricsResponse
   results: SkillEvalResultResponse[]
   case_snapshots: SkillEvalCaseResponse[]
+  dataset_version_id?: string | null
+  benchmark_id?: string | null
+  environment_snapshot?: SkillEvalEnvironmentSnapshot | null
+  task_results?: SkillEvalTaskResult[]
+  trajectory_summary?: SkillEvalTrajectoryStep[]
+  failure_attributions?: SkillEvalFailureAttribution[]
+  failure_clusters?: SkillEvalFailureCluster[]
+  dimension_summary?: SkillEvalDimensionSummary[]
   created_by: string
   created_at: string
   completed_at?: string | null
@@ -358,6 +496,145 @@ export interface SkillEvalRunListResponse {
 export interface SkillEvalRunCreateRequest {
   version_id: string
   baseline_version_id?: string | null
+}
+
+export interface SkillEvalAssertionResult {
+  assertion_id: string
+  dimension: SkillEvalDimension
+  status: SkillEvalTaskStatus
+  actual_value?: string | number | boolean | null
+  failure_codes: string[]
+  evidence_refs: string[]
+}
+
+export interface SkillEvalTrajectoryStep {
+  task_id: string
+  sequence: number
+  stage: SkillEvalStage
+  status: 'completed' | 'failed' | 'blocked' | 'skipped'
+  action: string
+  observation_summary: string
+  observation_hash?: string | null
+  evidence_refs: string[]
+}
+
+export interface SkillEvalFailureAttribution {
+  task_id: string
+  owner_type: 'agent' | 'environment' | 'dataset' | 'evaluator'
+  stage: SkillEvalStage
+  failure_code: string
+  dimension?: SkillEvalDimension | null
+  summary: string
+  evidence_refs: string[]
+}
+
+export interface SkillEvalTaskResult {
+  task_id: string
+  status: SkillEvalTaskStatus
+  selected_skill_id?: string | null
+  answer_excerpt: string
+  assertion_results: SkillEvalAssertionResult[]
+  trajectory: SkillEvalTrajectoryStep[]
+  failure_attributions: SkillEvalFailureAttribution[]
+  diagnostic_prefix_id?: string | null
+}
+
+export interface SkillEvalFailureCluster {
+  cluster_id: string
+  cluster_key: string
+  owner_type: 'agent' | 'environment' | 'dataset' | 'evaluator'
+  stage: SkillEvalStage
+  failure_code: string
+  dimension?: SkillEvalDimension | null
+  target_skill_id: string
+  task_ids: string[]
+  representative_task_id: string
+  business_tags: string[]
+}
+
+export interface SkillEvalDimensionSummary {
+  dimension: SkillEvalDimension
+  total: number
+  passed: number
+  failed: number
+  blocked: number
+  needs_review: number
+  invalid_dataset: number
+}
+
+export interface SkillEvalImprovementTaskResponse {
+  task_id: string
+  run_id: string
+  cluster_id: string
+  status: string
+  description: string
+}
+
+export interface SkillEvalFailureClusterResponse {
+  cluster: SkillEvalFailureCluster
+  improvement_tasks: SkillEvalImprovementTaskResponse[]
+}
+
+export interface OutpatientSettlementSelfTestContext {
+  total_amount?: string | null
+  in_scope_amount?: string | null
+  out_of_scope_amount?: string | null
+  self_pay_one?: string | null
+  self_pay_two?: string | null
+  personal_total_amount?: string | null
+  deductible_amount?: string | null
+  beyond_cap_amount?: string | null
+  large_self_pay?: string | null
+  fund_total_amount?: string | null
+  large_fund_payment?: string | null
+  account_payment?: string | null
+  cash_payment?: string | null
+  big_disease_payment?: string | null
+  retired_medical_payment?: string | null
+  unit_supplement_payment?: string | null
+  disabled_soldier_payment?: string | null
+  supplementary_insurance_payment?: string | null
+  assistance_payment?: string | null
+  insurance_type?: string | null
+  person_type?: string | null
+  service_type?: string | null
+  hospital_level?: string | null
+  settlement_date?: string | null
+  record_found?: boolean | null
+  applicability?: Record<string, boolean>
+  additional_metrics?: Record<string, string | number | boolean | null>
+  fee_items?: Array<Record<string, string | number | boolean | null>>
+  data_quality_warnings?: string[]
+}
+
+export interface SettlementSelfTestCase {
+  case_id: string
+  settlement_id: string
+  expected_self_pay_one: string
+  context: OutpatientSettlementSelfTestContext
+  enabled: boolean
+  note: string
+}
+
+export interface SettlementSelfTestSuite {
+  items: SettlementSelfTestCase[]
+  total: number
+  enabled: number
+}
+
+export interface SettlementSelfTestCaseResult {
+  case_id: string
+  status: 'passed' | 'failed' | 'disabled'
+  actual_self_pay_one?: string | null
+  expected_self_pay_one: string
+  message: string
+}
+
+export interface SettlementSelfTestRun {
+  results: SettlementSelfTestCaseResult[]
+  total: number
+  passed: number
+  failed: number
 }
 
 export type SkillCandidateEvaluationStatus =
@@ -570,33 +847,6 @@ export interface SkillQueryExecuteResult {
   skill_id: string
   djh: string | number
   items: QueryExecuteItem[]
-}
-
-/** GET /semantic/skills/{id}/consistency-check?djh=X */
-export interface ConsistencyItem {
-  metric_code: string
-  name: string
-  semantic_value: unknown
-  semantic_joined_value: unknown
-  business_sql_value: unknown
-  compared: boolean
-  match: boolean
-  joined_match: boolean
-}
-export interface ConsistencyCheckResult {
-  skill_id: string
-  djh: string
-  supported: boolean
-  message?: string
-  business_sql_error: string | null
-  summary: {
-    compared: number
-    flat_matched: number
-    flat_mismatched: number
-    joined_matched: number
-    joined_mismatched: number
-  }
-  items: ConsistencyItem[]
 }
 
 // ── QA History Types ────────────────────────────────────────────

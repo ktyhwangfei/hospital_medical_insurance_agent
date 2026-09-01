@@ -18,6 +18,7 @@ import shutil
 import tempfile
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -153,6 +154,9 @@ class SkillMaterializer:
             # 版本登记失败：保留草稿与校验报告，但需回滚已写入的目录
             self._rollback_write(draft.skill_id)
             raise
+        backup = self._skills_root / f".{draft.skill_id}.bak"
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
 
         # 草稿标记 materialized（用读到的当前 revision，物化过程不修改草稿）
         try:
@@ -198,8 +202,6 @@ class SkillMaterializer:
                 if backup is not None and backup.exists():
                     backup.rename(target)
                 raise
-            if backup is not None and backup.exists():
-                shutil.rmtree(backup, ignore_errors=True)
         except Exception:
             shutil.rmtree(tmp, ignore_errors=True)
             raise
@@ -209,6 +211,9 @@ class SkillMaterializer:
         target = self._skills_root / skill_id
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
+        backup = target.parent / f".{skill_id}.bak"
+        if backup.exists():
+            backup.rename(target)
 
     # ── SkillDefinition upsert ────────────────────────────────────
 
@@ -235,6 +240,8 @@ class SkillMaterializer:
                 "business_action": now_def.business_action,
                 "business_object": now_def.business_object,
                 "current_version_id": version_id,
+                "revision": existing.revision + 1,
+                "updated_at": datetime.now(timezone.utc),
             }
         )
         try:

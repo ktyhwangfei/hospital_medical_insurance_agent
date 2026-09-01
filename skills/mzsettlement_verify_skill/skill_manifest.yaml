@@ -1,0 +1,329 @@
+skill_id: mzsettlement_verify_skill
+skill_name: 门诊结算结果核验
+version: "1.0.1"
+business_action: verify
+business_object: settlement
+description: >-
+  基于门诊交易与费用明细，核验金额勾稽、个人负担、支付渠道、起付线、
+  报销与封顶、待遇资格、异地结算及交易状态；政策不足时明确不确定性。
+
+needed_objects:
+  - object_code: mzjyxx
+    importance: core
+    metrics:
+      - T_TradeDate
+      - T_State
+      - P_FundType
+      - PN_PersonType
+      - T_CureType
+      - HospitalLevel
+      - P_JCLevel
+      - T_FeeAll
+      - T_FeeIn
+      - T_FeeOut
+      - T_FundPay
+      - T_SelfPayAll
+      - T_SelfPay1
+      - T_SelfPay2
+      - T_BigSelfPay
+      - T_FirstPay
+      - T_PersonCountPay
+      - T_CashPay
+      - T_BigPay
+      - T_BCPay
+      - T_JCPay
+      - T_OfficalPay
+      - T_BigillPay
+      - NT_BasicPay
+      - NT_CivilPay
+      - NT_OtherPay
+      - NT_AgencySumPay
+      - RETIRE_OFFICER_PAY
+      - TB_FeeIn
+      - TA_FeeIn
+      - TB_MZTimes
+      - TA_MZTimes
+      - TB_BigPay
+      - TA_BigPay
+      - TB_FeeAfterBig
+      - TA_FeeAfterBig
+      - TB_FeeInL1
+      - TA_FeeInL1
+      - TB_BigPayL1
+      - TA_BigPayL1
+      - TB_FeeAfterBigL1
+      - TA_FeeAfterBigL1
+      - T_BeyondBig
+      - NT_OUT2_SCALE
+      - NT_OUT2_PRICE
+      - TB_BeyondFeeIn
+      - TA_BeyondFeeIn
+      - TB_BigillComm
+      - TA_BigillComm
+      - TB_BigillPay
+      - TA_BigillPay
+      - P_HospFlag
+      - P_Official
+      - PN_ChronicFlag
+      - PN_IsChronicHosp
+      - PN_ChronicCode
+      - PN_NoRightReason
+      - P_retirementflag
+      - P_CivilFlag
+      - P_CivilType
+      - RETIRE_OFFICER_FLAG
+      - T_GFBelongFlag
+      - NT_AllSelfPayFlag
+      - PN_OutTransaction
+      - PN_NationFundType
+      - T_CompHospFlag
+      - T_SpSetlFlag
+      - T_HasRefundmented
+      - T_PartialReturnFlag
+      - T_OraginalTradeNo
+      - T_OraginalTradeDate
+      - NP_Settle_State
+      - SETL_DATE
+      - NT_ReTradeFlag
+      - T_FeeNo
+      - Fee
+      - FeeIn
+      - FeeOut
+      - FeeItem_SelfPay2
+      - FEE_SP_SCALE
+      - FEE_MEDIC_L
+      - MEDIC_L
+      - SPEDRUG_FLAG
+      - ItemCode
+      - StandardCode
+      - ItemType
+      - FeeType
+      - FeeItem_State
+
+locked_versions:
+  mzjyxx: null
+
+supported_intents:
+  - 门诊结算
+  - 门诊费用
+  - 解释这笔门诊费用
+  - 费用解释
+  - 门诊个人支付
+  - 个人付
+  - 为什么个人付
+  - 自付一
+  - 自付二
+  - 门诊起付线
+  - 门诊报销比例
+  - 门诊封顶线
+  - 门诊费用明细
+  - 慢特病待遇
+  - 异地门诊
+  - 门诊交易状态
+  - 门诊退费状态
+  - 个人账户支付
+  - 今年累计
+excluded_intents:
+  - 住院
+  - 怎么办
+  - 如何办理
+  - 备案
+  - 临床
+
+required_mcp:
+  - settlement-data
+  - structured-policy-rule
+optional_mcp:
+  - policy-vector-search
+output_schema: schemas/output.schema.json
+test_cases:
+  - tests/case_image_golden.yaml
+
+execution_contract:
+  version: 2
+  common:
+    context_inputs:
+      - {code: settlement_id, alias: 门诊交易号, required: true}
+      - {code: question, alias: 用户问题, required: true}
+      - {code: hospital_id, alias: 医疗机构, required: false}
+    metric_inputs:
+      - {metric_code: mzjyxx.T_TradeDate, alias: 交易日期}
+      - {metric_code: mzjyxx.T_State, alias: 交易状态}
+      - {metric_code: mzjyxx.P_FundType, alias: 险种}
+      - {metric_code: mzjyxx.PN_NationFundType, alias: 国家平台险种}
+      - {metric_code: mzjyxx.PN_PersonType, alias: 人员类别}
+      - {metric_code: mzjyxx.T_CureType, alias: 医疗类别}
+      - {metric_code: mzjyxx.HospitalLevel, alias: 医疗机构等级}
+      - {metric_code: mzjyxx.P_JCLevel, alias: 军残待遇等级}
+  profiles:
+    - profile_id: overall-settlement-verification
+      name: 总体结算核验
+      purpose: 核验总费用、医保内外、基金与个人支付勾稽
+      routing_hints: [门诊结算, 门诊费用, 解释这笔门诊费用, 费用解释, 结算对不对, 总费用]
+      required_metrics: [T_FeeAll]
+      metric_inputs:
+        - {metric_code: mzjyxx.T_FeeAll}
+        - {metric_code: mzjyxx.T_FeeIn}
+        - {metric_code: mzjyxx.T_FeeOut}
+        - {metric_code: mzjyxx.T_SelfPay1}
+        - {metric_code: mzjyxx.T_FirstPay}
+        - {metric_code: mzjyxx.T_BeyondBig}
+        - {metric_code: mzjyxx.T_PersonCountPay}
+        - {metric_code: mzjyxx.T_CashPay}
+        - {metric_code: mzjyxx.T_BigillPay}
+        - {metric_code: mzjyxx.RETIRE_OFFICER_PAY}
+        - {metric_code: mzjyxx.T_OfficalPay}
+        - {metric_code: mzjyxx.T_SelfPayAll}
+        - {metric_code: mzjyxx.T_SelfPay2}
+        - {metric_code: mzjyxx.T_BigSelfPay}
+        - {metric_code: mzjyxx.T_FundPay}
+        - {metric_code: mzjyxx.T_BigPay}
+        - {metric_code: mzjyxx.T_JCPay}
+        - {metric_code: mzjyxx.T_BCPay}
+        - {metric_code: mzjyxx.NT_CivilPay}
+    - profile_id: personal-liability-explanation
+      name: 个人负担解释
+      purpose: 解释自付一、自付二、大额自付、起付与个人支付渠道
+      routing_hints: [个人付, 个人承担, 统筹自付, 自付一, 自付二]
+      required_metrics: [T_SelfPayAll]
+      metric_inputs:
+        - {metric_code: mzjyxx.T_FeeIn}
+        - {metric_code: mzjyxx.T_FeeOut}
+        - {metric_code: mzjyxx.T_SelfPayAll}
+        - {metric_code: mzjyxx.T_SelfPay1}
+        - {metric_code: mzjyxx.T_SelfPay2}
+        - {metric_code: mzjyxx.T_BigSelfPay}
+        - {metric_code: mzjyxx.T_FirstPay}
+        - {metric_code: mzjyxx.T_FundPay}
+        - {metric_code: mzjyxx.T_OfficalPay}
+        - {metric_code: mzjyxx.T_PersonCountPay}
+        - {metric_code: mzjyxx.T_CashPay}
+    - profile_id: payment-channel-verification
+      name: 支付渠道核验
+      purpose: 核验基金、账户、现金及各类补助支付
+      routing_hints: [账户, 现金, 基金分别, 支付渠道]
+      required_metrics: [T_FundPay]
+      metric_inputs:
+        - {metric_code: mzjyxx.T_FundPay}
+        - {metric_code: mzjyxx.T_PersonCountPay}
+        - {metric_code: mzjyxx.T_CashPay}
+        - {metric_code: mzjyxx.T_BigPay}
+        - {metric_code: mzjyxx.T_BCPay}
+        - {metric_code: mzjyxx.T_JCPay}
+        - {metric_code: mzjyxx.T_OfficalPay}
+        - {metric_code: mzjyxx.T_BigillPay}
+        - {metric_code: mzjyxx.NT_BasicPay}
+        - {metric_code: mzjyxx.NT_CivilPay}
+        - {metric_code: mzjyxx.NT_OtherPay}
+        - {metric_code: mzjyxx.NT_AgencySumPay}
+        - {metric_code: mzjyxx.RETIRE_OFFICER_PAY}
+    - profile_id: deductible-and-annual-progress
+      name: 起付线与年度累计
+      purpose: 解释本次起付金额、年度次数和分层累计
+      routing_hints: [起付线, 门槛费, 今年累计, 年度累计]
+      required_metrics: [T_FirstPay]
+      metric_inputs:
+        - {metric_code: mzjyxx.T_FirstPay}
+        - {metric_code: mzjyxx.TB_FeeIn}
+        - {metric_code: mzjyxx.TA_FeeIn}
+        - {metric_code: mzjyxx.TB_MZTimes}
+        - {metric_code: mzjyxx.TA_MZTimes}
+        - {metric_code: mzjyxx.TB_BigPay}
+        - {metric_code: mzjyxx.TA_BigPay}
+        - {metric_code: mzjyxx.TB_FeeAfterBig}
+        - {metric_code: mzjyxx.TA_FeeAfterBig}
+        - {metric_code: mzjyxx.TB_FeeInL1}
+        - {metric_code: mzjyxx.TA_FeeInL1}
+        - {metric_code: mzjyxx.TB_BigPayL1}
+        - {metric_code: mzjyxx.TA_BigPayL1}
+        - {metric_code: mzjyxx.TB_FeeAfterBigL1}
+        - {metric_code: mzjyxx.TA_FeeAfterBigL1}
+    - profile_id: reimbursement-and-cap-verification
+      name: 报销比例与封顶核验
+      purpose: 在有政策证据时核验支付比例、封顶及大病支付
+      routing_hints: [报销比例, 封顶, 报销多少, 支付比例]
+      required_metrics: [T_FeeIn]
+      metric_inputs:
+        - {metric_code: mzjyxx.T_FeeIn}
+        - {metric_code: mzjyxx.T_FirstPay}
+        - {metric_code: mzjyxx.T_BigPay}
+        - {metric_code: mzjyxx.T_BigSelfPay}
+        - {metric_code: mzjyxx.T_BeyondBig}
+        - {metric_code: mzjyxx.NT_OUT2_SCALE}
+        - {metric_code: mzjyxx.NT_OUT2_PRICE}
+        - {metric_code: mzjyxx.TB_BeyondFeeIn}
+        - {metric_code: mzjyxx.TA_BeyondFeeIn}
+        - {metric_code: mzjyxx.TB_BigillComm}
+        - {metric_code: mzjyxx.TA_BigillComm}
+        - {metric_code: mzjyxx.TB_BigillPay}
+        - {metric_code: mzjyxx.TA_BigillPay}
+    - profile_id: fee-item-scope-explanation
+      name: 费用明细医保范围解释
+      purpose: 定位产生医保外和先自付费用的药品、诊疗及耗材明细
+      routing_hints: [哪个药, 哪项, 明细, 目录外, 医保外费用]
+      required_metrics: [T_FeeAll]
+      required_collections: [fee_items]
+      metric_inputs:
+        - {metric_code: mzjyxx.T_FeeAll}
+        - {metric_code: mzjyxx.T_FeeIn}
+        - {metric_code: mzjyxx.T_FeeOut}
+        - {metric_code: mzjyxx.T_SelfPay2}
+        - {metric_code: mzjyxx.Fee}
+        - {metric_code: mzjyxx.FeeIn}
+        - {metric_code: mzjyxx.FeeOut}
+        - {metric_code: mzjyxx.FeeItem_SelfPay2}
+        - {metric_code: mzjyxx.FEE_SP_SCALE}
+        - {metric_code: mzjyxx.FEE_MEDIC_L}
+        - {metric_code: mzjyxx.MEDIC_L}
+        - {metric_code: mzjyxx.SPEDRUG_FLAG}
+        - {metric_code: mzjyxx.ItemCode}
+        - {metric_code: mzjyxx.StandardCode}
+        - {metric_code: mzjyxx.ItemType}
+        - {metric_code: mzjyxx.FeeType}
+        - {metric_code: mzjyxx.FeeItem_State}
+    - profile_id: eligibility-and-special-benefit
+      name: 资格与特殊待遇核验
+      purpose: 核验慢特病、公务员、民政、退役和全自费标志及支付
+      routing_hints: [慢特病, 公务员, 军残, 退役, 待遇资格]
+      required_metrics: []
+      metric_inputs:
+        - {metric_code: mzjyxx.P_HospFlag}
+        - {metric_code: mzjyxx.P_Official}
+        - {metric_code: mzjyxx.PN_ChronicFlag}
+        - {metric_code: mzjyxx.PN_IsChronicHosp}
+        - {metric_code: mzjyxx.PN_ChronicCode}
+        - {metric_code: mzjyxx.PN_NoRightReason}
+        - {metric_code: mzjyxx.P_retirementflag}
+        - {metric_code: mzjyxx.P_CivilFlag}
+        - {metric_code: mzjyxx.P_CivilType}
+        - {metric_code: mzjyxx.RETIRE_OFFICER_FLAG}
+        - {metric_code: mzjyxx.T_GFBelongFlag}
+        - {metric_code: mzjyxx.NT_AllSelfPayFlag}
+        - {metric_code: mzjyxx.T_OfficalPay}
+        - {metric_code: mzjyxx.T_BigillPay}
+        - {metric_code: mzjyxx.NT_CivilPay}
+        - {metric_code: mzjyxx.RETIRE_OFFICER_PAY}
+        - {metric_code: mzjyxx.T_JCPay}
+    - profile_id: cross-region-and-institution
+      name: 异地与医疗机构条件核验
+      purpose: 核验异地、国家险种、机构等级和特殊结算标志
+      routing_hints: [异地门诊, 异地就医, 医院等级, 跨省]
+      required_metrics: [PN_OutTransaction]
+      metric_inputs:
+        - {metric_code: mzjyxx.PN_OutTransaction}
+        - {metric_code: mzjyxx.T_CompHospFlag}
+        - {metric_code: mzjyxx.T_SpSetlFlag}
+    - profile_id: transaction-status-and-refund
+      name: 交易状态与退费核验
+      purpose: 只读核验结算、冲正、退费和原交易关系；写操作必须人工确认
+      routing_hints: [冲正, 退费, 撤销结算, 结算成功, 交易状态]
+      required_metrics: [T_State]
+      metric_inputs:
+        - {metric_code: mzjyxx.T_HasRefundmented}
+        - {metric_code: mzjyxx.T_PartialReturnFlag}
+        - {metric_code: mzjyxx.T_OraginalTradeNo}
+        - {metric_code: mzjyxx.T_OraginalTradeDate}
+        - {metric_code: mzjyxx.NP_Settle_State}
+        - {metric_code: mzjyxx.SETL_DATE}
+        - {metric_code: mzjyxx.NT_ReTradeFlag}
+        - {metric_code: mzjyxx.T_FeeNo}
