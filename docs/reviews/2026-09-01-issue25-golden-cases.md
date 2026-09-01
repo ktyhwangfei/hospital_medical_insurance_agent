@@ -1,201 +1,1440 @@
-# Issue #25 黄金用例集：医保政策知识适用性评估
+# Issue #25 黄金用例集
 
-> **定位**：为 Issue #25「医保政策知识结构化索引专题」提供可重复、可审计的评估数据集。  
-> **状态**：评估草案，待与业务方确认口径后定版。  
-> **约束**：本阶段不修改提取契约、Milvus schema、索引或存量数据；用例基于当前 `policy_rules_v2` 已发布规则与北京医保公开政策构造，真实线上数据差异需人工复核。
+> 生成时间：2026-09-01T11:41:56
+> 用例总数：58 条
+> 覆盖维度：地区、政策时间、人群、医疗类别、医院等级、异地/转诊、金额分段、政策替代、宽泛问题
 
----
+## 标注口径
 
-## 1. 用例设计原则
+1. **期望规则（expected_rule_ids）**：由人工根据结算上下文与政策文本判定必须召回的规则 rule_id。
+2. **负例**：`is_negative=True` 表示该场景下不应召回任何规则；命中即视为错误适用。
+3. **结算上下文**：包含 `insu_type`/`med_type`/`hosp_lv`/`psn_type`/`region`/`settlement_date`/`is_remote`。
+4. **默认地区**：当 `region` 为空时，系统默认使用北京。
+5. **默认时间**：当 `settlement_date` 为空时，不过滤有效期。
+6. **宽泛问题**：无结算上下文，仅依赖自然语言问题；用于测试文本召回+适用性字段精排。
 
-### 1.1 分层维度
+## 用例列表
 
-每条用例至少覆盖以下一个维度，关键用例覆盖多个维度交叉：
+| 编号 | 场景 | 维度 | 地区 | 结算日期 | 期望规则数 | 负例 | 备注 |
+|------|------|------|------|----------|------------|------|------|
+| BJ_EMP_TERT_IP_BAND_1 | 北京在职职工三级医院住院，起付标准至3万元 | 地区,人群,医院等级,医疗类别,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_EMP_TERT_IP_BAND_2 | 北京在职职工三级医院住院，超过3万元至4万元 | 地区,人群,医院等级,医疗类别,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_EMP_TERT_IP_BAND_3 | 北京在职职工三级医院住院，超过4万元 | 地区,人群,医院等级,医疗类别,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_EMP_SEC_IP_BAND_1 | 北京在职职工二级医院住院，起付标准至3万元 | 医院等级 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_EMP_SEC_IP_BAND_2 | 北京在职职工二级医院住院，超过3万元至4万元 | 医院等级 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_EMP_SEC_IP_BAND_3 | 北京在职职工二级医院住院，超过4万元 | 医院等级 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_RET_TERT_IP_FORMULA | 北京退休人员三级医院住院，需命中折算公式 | 人群,政策替代 | 北京 | 2024-06-15 | 1 | 否 | 应同时命中公式与物化规则，但期望至少命中公式 |
+| BJ_RET_TERT_IP_BAND_1 | 北京退休人员三级医院住院第1档 | 人群,金额分段,政策替代 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_RET_TERT_IP_BAND_2 | 北京退休人员三级医院住院第2档 | 人群,金额分段,政策替代 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_RET_TERT_IP_BAND_3 | 北京退休人员三级医院住院第3档 | 人群,金额分段,政策替代 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_EMP_TERT_OP | 北京在职职工三级医院门诊 | 医疗类别 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_EMP_REMOTE | 北京参保人异地三级医院住院 | 异地/转诊 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_EMP_TERT_IP_2025 | 2025年北京在职职工三级医院住院 | 政策时间,政策版本 | 北京 | 2025-03-01 | 1 | 否 |  |
+| BJ_EMP_TERT_IP_2025_BAND2 | 2025年北京在职职工三级医院住院，超过3万元至4万元 | 政策时间,政策版本,金额分段 | 北京 | 2025-03-01 | 1 | 否 |  |
+| SH_EMP_TERT_IP | 上海在职职工三级医院住院 | 地区,金额分段 | 上海 | 2024-06-15 | 1 | 否 |  |
+| BJ_RESIDENT_TERT_IP | 北京城乡居民三级医院住院 | 人群,险种 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_DEDUCT_TERT | 北京职工三级医院住院起付线 | 医疗类别,规则类型 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BJ_CAP | 北京职工住院封顶线 | 规则类型 | 北京 | 2024-06-15 | 1 | 否 |  |
+| NEG_EXPIRED_2023 | 2024年结算不应命中已废止的2023规则 | 政策时间,发布状态,反例 | 北京 | 2024-06-15 | 0 | 是 | 2023规则 expiry_date=2023-12-31，不应命中 |
+| NEG_FUTURE_2025 | 2024年结算不应命中2025年才生效规则 | 政策时间,反例 | 北京 | 2024-06-15 | 0 | 是 | 2025规则 effective_date=2025-01-01，不应命中 |
+| NEG_REGION_SH | 北京结算不应命中上海规则 | 地区,反例 | 北京 | 2024-06-15 | 0 | 是 |  |
+| NEG_PILOT | 非试点地区不应命中试点规则 | 发布状态,反例 | 北京 | 2024-06-15 | 0 | 是 | pilot 规则 publish_status=pilot，非默认 published |
+| NEG_REMOTE_FALSE | 本地结算不应命中异地规则 | 异地/转诊,反例 | 北京 | 2024-06-15 | 0 | 是 |  |
+| NEG_POP_STUDENT | 学生儿童不应命中在职职工规则 | 人群,反例 | 北京 | 2024-06-15 | 0 | 是 |  |
+| NEG_HOSP_PRIMARY | 一级医院不应命中三级医院规则 | 医院等级,反例 | 北京 | 2024-06-15 | 0 | 是 |  |
+| NEG_OUTPATIENT_VS_IP | 住院场景不应命中门诊规则 | 医疗类别,反例 | 北京 | 2024-06-15 | 0 | 是 |  |
+| NEG_INSU_RESIDENT | 职工不应命中城乡居民规则 | 险种,反例 | 北京 | 2024-06-15 | 0 | 是 |  |
+| NEG_REVOKED | 不应命中已撤销规则 | 发布状态,反例 | 北京 | 2024-06-15 | 0 | 是 | BJ_2023_IP_TERT_EMP_001 publish_status=revoked |
+| BJ_RET_SEC_IP | 北京退休人员二级医院住院 | 人群,医院等级 | 北京 | 2024-06-15 | 1 | 否 | 语料未覆盖二级退休，测试诚实拒答或近似召回 |
+| BJ_EMP_TERT_IP_BAND_ALL | 北京在职职工三级医院住院全段 | 金额分段,完整回答 | 北京 | 2024-06-15 | 3 | 否 |  |
+| BJ_EMP_TERT_IP_NEAR_EXPIRY | 2024-12-30结算应仍命中2024规则 | 政策时间,边界 | 北京 | 2024-12-30 | 1 | 否 |  |
+| BJ_EMP_TERT_IP_EXPIRY_DAY | 2024-12-31结算仍命中2024规则 | 政策时间,边界 | 北京 | 2024-12-31 | 1 | 否 |  |
+| BJ_EMP_TERT_IP_NEW_YEAR | 2025-01-01结算命中2025规则 | 政策时间,政策版本,边界 | 北京 | 2025-01-01 | 1 | 否 |  |
+| BJ_EMP_TERT_IP_DEFAULT_REGION | 结算上下文未提供地区，默认北京 | 地区,默认值 |  | 2024-06-15 | 1 | 否 | region 空 → 默认北京 |
+| BJ_EMP_TERT_IP_NO_DATE | 结算上下文未提供结算日期，应不过滤时间 | 政策时间,默认值 | 北京 |  | 1 | 否 | 无日期不过期过滤，可能多召回，正例只要包含2024即可 |
+| SH_EMP_TERT_IP_NO_REGION | 未提供地区时不应误命中上海规则 | 地区,反例 |  | 2024-06-15 | 0 | 是 | region 默认北京，上海规则不应命中 |
+| BJ_EMP_TERT_IP_DRAFT | 草稿规则不应进入 Runtime | 发布状态,反例 | 北京 | 2024-06-15 | 0 | 是 | 语料无 draft 规则，此用例验证过滤逻辑存在性 |
+| BJ_EMP_TERT_IP_VERSION_MISMATCH | 明确指定政策版本2024时不应命中2025规则 | 政策版本,反例 | 北京 | 2025-06-15 | 1 | 否 | 当前 retrieve 未消费 policy_version 过滤，此用例记录待增强点 |
+| BULK_051 | 北京在职职工三级医院住院第1档 | 地区,人群,医院等级,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_052 | 北京在职职工三级医院住院第2档 | 金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_053 | 北京在职职工三级医院住院第3档 | 金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_054 | 北京在职职工二级医院住院第1档 | 医院等级,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_055 | 北京在职职工二级医院住院第2档 | 医院等级,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_056 | 北京在职职工二级医院住院第3档 | 医院等级,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_057 | 北京退休人员三级医院住院第4档 | 人群,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_058 | 北京退休人员三级医院住院第5档 | 人群,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_059 | 北京退休人员三级医院住院第6档 | 人群,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_060 | 北京退休人员三级医院住院第7档 | 人群,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_061 | 北京退休人员三级医院住院第8档 | 人群,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BULK_062 | 北京退休人员三级医院住院第9档 | 人群,金额分段 | 北京 | 2024-06-15 | 1 | 否 |  |
+| BROAD_DEDUCTIBLE | 宽泛问：北京住院起付线多少 | 宽泛问题 |  |  | 1 | 否 | 无结算上下文，依赖文本召回+适用性字段精排 |
+| BROAD_CAP | 宽泛问：北京医保封顶线 | 宽泛问题 |  |  | 1 | 否 |  |
+| BROAD_RETIREE_RATIO | 宽泛问：退休人员住院个人支付比例 | 宽泛问题,人群 |  |  | 1 | 否 |  |
+| BROAD_REMOTE | 宽泛问：异地就医报销比例 | 宽泛问题,异地/转诊 |  |  | 1 | 否 |  |
+| BROAD_OUTPATIENT | 宽泛问：门诊报销比例 | 宽泛问题,医疗类别 |  |  | 1 | 否 |  |
+| BROAD_SHANGHAI | 宽泛问：上海住院报销 | 宽泛问题,地区 |  |  | 1 | 否 |  |
+| BROAD_AMOUNT_BAND | 宽泛问：超过3万元至4万元报销比例 | 宽泛问题,金额分段 |  |  | 1 | 否 |  |
+| BROAD_VERSION | 宽泛问：2025年北京住院新规 | 宽泛问题,政策版本 |  |  | 1 | 否 | 无结算日期，无法做时间过滤，可能多版本召回 |
 
-| 维度 | 说明 | 当前字段/缺口 |
-|------|------|---------------|
-| 地区 | 北京市、外省市、京津冀异地 | 当前无 `region` 字段 |
-| 政策时间 | 政策生效/失效年度、跨年结算 | 当前无 `effective_date/expiry_date` |
-| 人群 | 在职、退休、学生儿童、无业、离休 | `psn_type` 存在，但多值用逗号串存储 |
-| 医疗类别 | 住院、门诊、门特、急诊、购药 | `med_type` 已标准化，但复合类别仍可能歧义 |
-| 医院等级 | 三级、二级、一级及以下、社区 | `hosp_lv` 已标准化，但值域边界待治理 |
-| 异地/转诊 | 本地、异地安置、转诊转院 | 当前无字段 |
-| 金额分段 | 起付线以下、分段比例、封顶线 | `amount_band` 为文本，无量化边界 |
-| 政策替代 | 新/旧政策、补充保险、大病保险 | 当前无 `policy_version/replaces` |
+## 用例原始数据
 
-### 1.2 用例类型
-
-- **正例**：应命中且能支撑回答的规则存在，期望 `answer_status` 为 `complete` 或 `partial`。
-- **反例**：不应命中但文本相似可能召回的规则存在，期望被过滤或触发 `unavailable`/诚实拒答。
-- **边界例**：字段缺失、多值、歧义，用于测试适用性字段质量。
-
-### 1.3 口径说明
-
-- 结算上下文字段采用 `SettlementContext` 属性名（`person_type`, `insurance_type`, `service_type`, `hospital_level`, ...）。
-- 政策规则字段采用 `policy_rules_v2` schema（`rule_type/insu_type/med_type/hosp_lv/psn_type/...`）。
-- "应命中规则" 指在当前知识库中**理论上存在**的规则；若真实库中不存在，记为 `expected_evidence=MISSING`。
-- 所有金额单位为元；比例以百分数给出。
-
----
-
-## 2. 评估指标定义
-
-| 指标 | 定义 | 计算方式 |
-|------|------|----------|
-| 错误适用规则率（FAR） | 召回规则中不适用当前上下文的占比 | 错误适用规则数 / 召回规则总数 |
-| 适用规则准确率（P@k） | top-k 召回中确实适用的比例 | 适用规则数 / k |
-| 证据召回率（Recall） | 应命中规则中被成功召回的比例 | 召回的应命中规则数 / 应命中规则总数 |
-| 完整回答率 | `answer_status == complete` 的用例占比 | complete 数 / 总数 |
-| 诚实拒答率 | 反例中返回 `unavailable` 的占比 | 反例 unavailable 数 / 反例总数 |
-| 字段质量分 | 关键字段非空且标准化的规则占比 | 字段合格数 / 被测规则数 |
-| P95 时延 | 第 95 百分位检索耗时 | 统计单次检索耗时 |
-
----
-
-## 3. 黄金用例（共 72 条）
-
-### A. 地区维度（A01–A08）
-
-| ID | 类型 | 问题 | 结算上下文 | 应命中规则 | 不应命中规则 | 期望状态 | 口径说明 |
-|----|------|------|------------|------------|--------------|----------|----------|
-| A01 | 正例 | 我这次住院统筹自付怎么算？ | 北京，城镇职工，退休，三级医院，普通住院 | 北京市职工住院分段支付比例 + 退休60%折算 | 上海市/河北省同名规则 | complete | 默认本地规则适用；地区字段缺失时假设为本地。 |
-| A02 | 反例 | 我在上海就医，北京政策还适用吗？ | 上海，城镇职工，退休，三级医院，普通住院 | MISSING | 北京规则（地区不符） | unavailable | 结算地区≠北京，应明确说明跨地区就医需按参保地或就医地政策。 |
-| A03 | 正例 | 京津冀异地就医门诊能报多少？ | 北京参保，河北就医，在职，门诊 | 京津冀异地就医门诊直接结算规则 | 普通北京门诊规则 | partial | 异地规则应优先于本地普通规则。 |
-| A04 | 边界例 | 我在天津住院，按北京还是天津比例？ | 北京参保，天津住院，退休 | 京津冀住院异地结算规则 | 北京本地住院分段规则 | partial | 无 `region`/`异地就医` 字段时，系统无法自判定，应声明不确定性。 |
-| A05 | 反例 | 广州医保在北京住院怎么报？ | 广州参保，北京就医 | MISSING | 北京职工住院规则 | unavailable | 非京津冀异地，当前知识库无对应规则，应拒答。 |
-| A06 | 正例 | 北京城乡居民住院起付线多少？ | 北京，城乡居民，儿童，一级医院，住院 | 城乡居民住院起付线规则 | 职工住院起付线规则 | complete | 险种+地区共同决定规则适用性。 |
-| A07 | 边界例 | 外省新农合来北京住院 | 外省新农合，北京三级医院，住院 | MISSING | 北京城乡居民/职工规则 | unavailable | 新农合已逐步并轨，当前库可能缺失，应拒答而非套用。 |
-| A08 | 反例 | 北京市2024年废止的住院规则还适用吗？ | 北京，职工，2026年结算 | 现行有效规则 | 2024年废止的旧规则 | complete | 时间维度过滤必须生效，否则属错误适用。 |
-
-### B. 政策时间维度（B09–B16）
-
-| ID | 类型 | 问题 | 结算上下文 | 应命中规则 | 不应命中规则 | 期望状态 | 口径说明 |
-|----|------|------|------------|------------|--------------|----------|----------|
-| B09 | 正例 | 2025年职工住院起付线是多少？ | 北京，职工，2025年住院 | 2025年度起付线规则 | 2023/2024年度规则 | complete | 年度版本规则应精确命中。 |
-| B10 | 反例 | 2023年的报销比例今年还适用吗？ | 北京，职工，2026年结算 | 现行规则 | 2023年旧比例规则 | unavailable/partial | 过期规则应被过滤；若现行规则缺失则诚实拒答。 |
-| B11 | 边界例 | 跨年住院，起付线怎么算？ | 北京，职工，2025-12-31 入院，2026-01-05 出院 | 跨年度住院起付线规则 | 单一年度起付线规则 | partial | 结算日期决定年度；需 `effective_date` 字段支撑。 |
-| B12 | 正例 | 新政策从哪天开始执行？ | 北京，职工，2026-01-01 住院 | 2026年生效规则 | 2025年规则 | complete | 生效日精确匹配。 |
-| B13 | 反例 | 政策文件已废止但文本还相似 | 北京，职工，2026年结算 | 现行规则 | 已废止文件规则 | complete | 废止规则即使文本相似也不得召回。 |
-| B14 | 边界例 | 结算在过渡期，新旧政策并行 | 北京，职工，政策切换当月住院 | 过渡期规则 | 纯旧/纯新规则 | partial | 需 `policy_version` + `transitional` 标记。 |
-| B15 | 正例 | 大病保险2025年度封顶线 | 北京，职工，2025年 | 2025大病保险封顶线 | 2026版本 | complete | 年度封顶线差异需时间字段区分。 |
-| B16 | 反例 | 使用已失效的门诊共济政策 | 北京，职工，2026年门诊 | 现行门诊规则 | 已失效门诊共济规则 | unavailable | 失效政策应被过滤。 |
-
-### C. 人群维度（C17–C28）
-
-| ID | 类型 | 问题 | 结算上下文 | 应命中规则 | 不应命中规则 | 期望状态 | 口径说明 |
-|----|------|------|------------|------------|--------------|----------|----------|
-| C17 | 正例 | 退休人员统筹自付比例 | 北京，职工，退休，三级医院住院 | 退休个人支付比例规则（60%折算后） | 在职职工个人比例规则 | complete | Issue 9 已要求退休折算规则必须可检索。 |
-| C18 | 正例 | 在职职工住院个人支付多少 | 北京，职工，在职，三级医院住院 | 在职个人支付比例规则 | 退休人员规则 | complete | 人群精确匹配。 |
-| C19 | 边界例 | 学生儿童住院起付线 | 北京，城乡居民，学生儿童，三级医院住院 | 城乡居民学生儿童规则 | 成人居民/职工规则 | partial | `psn_type` 需支持单值精确匹配。 |
-| C20 | 反例 | 用成人规则解释儿童结算 | 北京，城乡居民，学生儿童，住院 | 学生儿童规则 | 成人居民规则 | unavailable | 儿童规则与成人规则金额不同，不可套用。 |
-| C21 | 正例 | 离休人员住院报销 | 北京，离休统筹，三级医院住院 | 离休统筹规则 | 职工/居民规则 | complete | 离休为独立险种+人群。 |
-| C22 | 边界例 | 灵活就业人员住院 | 北京，职工（灵活就业），在职，住院 | 职工规则 | 居民规则 | partial | 灵活就业人员参加职工医保，应按职工规则。 |
-| C23 | 反例 | 无业人员按职工比例解释 | 北京，无业人员，住院 | 居民/无业规则 | 职工规则 | unavailable | 险种不符，不可套用。 |
-| C24 | 正例 | 80岁以上老年人门诊报销 | 北京，居民，老年人，门诊 | 老年人门诊倾斜规则 | 普通居民门诊规则 | partial | 部分政策对老年人群有额外比例。 |
-| C25 | 边界例 | 人群字段写"在职职工,退休人员" | 北京，职工，退休，住院 | 退休规则 | 复合人群规则被误用于退休场景 | partial | Issue 9 遗留：人群多值逗号串导致精确检索失效。 |
-| C26 | 正例 | 新生儿住院 | 北京，城乡居民，新生儿，住院 | 新生儿参保/报销规则 | 普通儿童规则 | partial | 新生儿有独立参保与待遇规则。 |
-| C27 | 反例 | 用退休人员规则解释在职人员 | 北京，职工，在职，住院 | 在职规则 | 退休人员规则 | unavailable | 反向错误适用。 |
-| C28 | 边界例 | 失业人员领取失业金期间 | 北京，职工，失业但由失业基金缴费，住院 | 职工规则 | 居民规则 | partial | 缴费期间仍按职工医保待遇。 |
-
-### D. 医疗类别维度（D29–D38）
-
-| ID | 类型 | 问题 | 结算上下文 | 应命中规则 | 不应命中规则 | 期望状态 | 口径说明 |
-|----|------|------|------------|------------|--------------|----------|----------|
-| D29 | 正例 | 普通住院统筹自付 | 北京，职工，退休，普通住院 | 住院分段比例规则 | 门诊规则 | complete | `med_type` 精确过滤。 |
-| D30 | 正例 | 门诊特殊病报销比例 | 北京，职工，退休，门诊特殊病 | 门特规则 | 普通门诊/住院规则 | complete | 门特单独规则。 |
-| D31 | 边界例 | 急诊留观转住院 | 北京，职工，在职，急诊留观后住院 | 急诊留观+住院衔接规则 | 单纯急诊/单纯住院规则 | partial | 需规则间关系或入院来源字段。 |
-| D32 | 反例 | 用住院规则解释门诊费用 | 北京，职工，在职，普通门诊 | 门诊规则 | 住院分段比例规则 | unavailable | 医疗类别错误套用。 |
-| D33 | 正例 | 家庭病床起付线 | 北京，职工，退休，家庭病床 | 家庭病床规则 | 普通住院起付线规则 | complete | 家庭病床通常按住院但起付线不同。 |
-| D34 | 边界例 | 日间手术报销 | 北京，职工，在职，日间手术 | 日间手术规则 | 普通住院/门诊手术规则 | partial | 日间手术可能按住院结算但政策单独规定。 |
-| D35 | 反例 | 药店购药按门诊报销解释 | 北京，职工，退休，药店购药 | 个人账户/药店购药规则 | 普通门诊统筹规则 | unavailable | 药店购药通常不走门诊统筹。 |
-| D36 | 正例 | 门诊统筹起付线 | 北京，职工，在职，普通门诊 | 门诊统筹起付线规则 | 住院起付线规则 | complete | 门诊统筹有独立起付线。 |
-| D37 | 边界例 | 门急诊合并类别 | 北京，职工，在职，门（急）诊 | 门诊/急诊对应规则 | 因类别歧义导致错误 | partial | Issue 19 已处理复合类别，需验证。 |
-| D38 | 反例 | 生育住院按普通住院解释 | 北京，职工，在职，生育住院 | 生育保险规则 | 普通住院规则 | unavailable | 生育住院通常单独结算。 |
-
-### E. 医院等级维度（E39–E46）
-
-| ID | 类型 | 问题 | 结算上下文 | 应命中规则 | 不应命中规则 | 期望状态 | 口径说明 |
-|----|------|------|------------|------------|--------------|----------|----------|
-| E39 | 正例 | 三级医院住院起付线 | 北京，职工，在职，三级医院，住院 | 三级医院起付线规则 | 二级/一级规则 | complete | `hosp_lv` 精确过滤。 |
-| E40 | 正例 | 一级医院住院报销比例 | 北京，职工，在职，一级医院，住院 | 一级医院比例规则 | 三级医院比例规则 | complete | 不同等级比例不同。 |
-| E41 | 边界例 | 社区卫生服务中心 | 北京，职工，在职，社区卫生服务中心，住院 | 社区/一级规则 | 三级/二级规则 | partial | Issue 19/20 已处理"社区"值域映射。 |
-| E42 | 反例 | 用三级医院比例解释一级医院 | 北京，职工，在职，一级医院，住院 | 一级医院规则 | 三级医院比例规则 | unavailable | 等级错误套用。 |
-| E43 | 正例 | 未定级医院住院 | 北京，职工，在职，未定级医院，住院 | 未定级/默认规则 | 三级规则 | partial | 未定级医院需默认规则兜底。 |
-| E44 | 边界例 | 专科医院等级不明 | 北京，职工，在职，某专科医院，住院 | 按医保定点等级规则 | 任意套用高/低等级 | partial | 需医院等级映射表支持。 |
-| E45 | 反例 | 门诊社区医院按三级比例 | 北京，职工，在职，社区门诊 | 社区门诊规则 | 三级医院门诊规则 | unavailable | 门诊同样需等级过滤。 |
-| E46 | 正例 | 二级医院住院个人支付 | 北京，职工，退休，二级医院，住院 | 二级医院住院分段比例+退休折算 | 三级/一级规则 | complete | 等级+人群交叉。 |
-
-### F. 异地/转诊维度（F47–F52）
-
-| ID | 类型 | 问题 | 结算上下文 | 应命中规则 | 不应命中规则 | 期望状态 | 口径说明 |
-|----|------|------|------------|------------|--------------|----------|----------|
-| F47 | 正例 | 异地安置人员北京门诊 | 外地参保，北京就医，异地安置，门诊 | 异地安置门诊直接结算规则 | 本地职工门诊规则 | partial | 需 `is_remote/settlement_mode` 字段。 |
-| F48 | 反例 | 未备案异地就医 | 外地参保，北京就医，未备案，住院 | MISSING | 本地/已备案异地规则 | unavailable | 未备案通常需回参保地手工报销。 |
-| F49 | 边界例 | 转诊转院到三级医院 | 北京参保，因转诊到上海三级医院，住院 | 转诊转院报销规则 | 北京本地三级规则 | partial | 转诊可能提高自付比例或降低封顶线。 |
-| F50 | 正例 | 京津冀异地住院直接结算 | 北京参保，天津住院，直接结算 | 京津冀异地住院规则 | 北京本地住院规则 | complete | 京津冀有专门规则。 |
-| F51 | 反例 | 本地规则用于跨省异地 | 北京参保，广州住院 | MISSING | 北京本地住院规则 | unavailable | 跨省非京津冀，规则缺失应拒答。 |
-| F52 | 边界例 | 急诊异地抢救 | 北京参保，上海急诊抢救 | 急诊抢救异地备案规则 | 普通异地住院规则 | partial | 急诊抢救可能有先救治后备案规则。 |
-
-### G. 金额分段维度（G53–G62）
-
-| ID | 类型 | 问题 | 结算上下文 | 应命中规则 | 不应命中规则 | 期望状态 | 口径说明 |
-|----|------|------|------------|------------|--------------|----------|----------|
-| G53 | 正例 | 起付标准至3万元部分个人支付 | 北京，职工，在职，三级医院，住院，费用段1 | 起付标准-3万元段规则 | 其他分段规则 | complete | 金额分段精确匹配。 |
-| G54 | 正例 | 超过4万元部分报销比例 | 北京，职工，在职，三级医院，住院，费用段3 | 4万元以上段规则 | 低段规则 | complete | 高段比例通常更高。 |
-| G55 | 边界例 | 费用恰好在3万元 | 北京，职工，在职，三级医院，住院，医保内费用3万元 | 3万元所在段规则 | 不应同时命中两段 | partial | 分段边界需明确定义（含上限/含下限）。 |
-| G56 | 反例 | 用1万元段规则解释4万元费用 | 北京，职工，在职，三级医院，住院，费用4万元 | 4万元段规则 | 起付标准-3万元段规则 | unavailable | 分段错误套用。 |
-| G57 | 正例 | 起付线以下费用 | 北京，职工，在职，三级医院，住院，费用低于起付线 | 起付线规则 | 分段比例规则 | complete | 起付线以下无统筹支付。 |
-| G58 | 边界例 | 年度累计跨段 | 北京，职工，在职，年内多次住院，累计跨段 | 累计分段规则 | 单次住院分段规则 | partial | 需 `yearly_cycle_count`/累计金额字段。 |
-| G59 | 正例 | 大额医疗互助资金段 | 北京，职工，在职，三级医院，住院，费用超封顶线 | 大额医疗互助规则 | 基本统筹规则 | complete | 大额段单独规则。 |
-| G60 | 反例 | 封顶线以上仍用基本统筹比例 | 北京，职工，在职，住院，费用超封顶 | 大额规则 | 基本统筹比例规则 | unavailable | 超封顶部分应走大额/补充保险。 |
-| G61 | 边界例 | 金额分段字段缺失 | 规则 `amount_band` 为空 | MISSING | 任意分段规则 | unavailable | 字段质量直接影响可计算性。 |
-| G62 | 正例 | 退休人员在4万元以上段 | 北京，职工，退休，三级医院，住院，费用5万元 | 4万元以上段规则 + 退休60%折算 | 在职比例规则 | complete | 金额段+人群交叉。 |
-
-### H. 政策替代/版本维度（H63–H72）
-
-| ID | 类型 | 问题 | 结算上下文 | 应命中规则 | 不应命中规则 | 期望状态 | 口径说明 |
-|----|------|------|------------|------------|--------------|----------|----------|
-| H63 | 正例 | 职工大额互助起付线 | 北京，职工，在职，住院，进入大额段 | 大额互助起付线规则 | 基本统筹起付线规则 | complete | 大额互助为独立政策文件。 |
-| H64 | 边界例 | 基本统筹封顶线后大病保险 | 北京，职工，住院，费用超过基本封顶 | 大病保险规则 | 基本统筹规则 | partial | 大病保险与基本统筹衔接。 |
-| H65 | 反例 | 用旧规定解释已被替代规则 | 北京，职工，2026年结算 | 现行替代规则 | 已被替代的同名旧规则 | unavailable | 政策替代关系需 `replaces` 字段。 |
-| H66 | 正例 | 公务员医疗补助 | 北京，职工+公务员补助，住院 | 公务员补助规则 | 普通职工规则 | partial | 补充保险规则应叠加。 |
-| H67 | 边界例 | 企业补充医保 | 北京，职工，企业补充医保，住院 | 企业补充规则（若入库） | 基本医保规则 | partial | 企业补充规则通常不在政策库，应声明缺失。 |
-| H68 | 反例 | 用居民大病规则解释职工 | 北京，职工，住院 | 职工大额/大病规则 | 居民大病规则 | unavailable | 险种间政策不可套用。 |
-| H69 | 正例 | 生育保险与医保合并后规则 | 北京，职工，生育住院 | 合并后生育保险规则 | 旧独立生育规则 | complete | 政策合并后需新版本。 |
-| H70 | 边界例 | 门诊共济改革前后个人账户 | 北京，职工，2024年门诊 | 改革后门诊共济规则 | 改革前个人账户规则 | partial | 政策版本切换需时间字段。 |
-| H71 | 反例 | 用试行期规则解释正式结算 | 北京，职工，2026年结算 | 正式规则 | 试行/征求意见稿 | unavailable | 试行/征求意见稿不应用于正式结算。 |
-| H72 | 正例 | 政策文件A被文件B修订后条款 | 北京，职工，2026年结算 | 文件B修订后规则 | 文件A原文规则 | complete | 修订关系需 `amends/replaces` 字段。 |
-
----
-
-## 4. 用例统计
-
-| 维度 | 正例 | 反例 | 边界例 | 小计 |
-|------|:--:|:--:|:--:|:--:|
-| 地区 | 2 | 4 | 2 | 8 |
-| 政策时间 | 4 | 3 | 1 | 8 |
-| 人群 | 5 | 3 | 4 | 12 |
-| 医疗类别 | 4 | 3 | 3 | 10 |
-| 医院等级 | 4 | 2 | 2 | 8 |
-| 异地/转诊 | 2 | 3 | 1 | 6 |
-| 金额分段 | 4 | 3 | 3 | 10 |
-| 政策替代/版本 | 3 | 3 | 4 | 10 |
-| **合计** | **28** | **24** | **20** | **72** |
-
----
-
-## 5. 数据来源与不确定性声明
-
-- [来源: `docs/steering/政策知识治理-需求迭代记录.md` Issue 9/15/19 节] 已暴露人群多值、医疗类别、退休折算等数据质量问题。
-- [来源: `src/runtime/policy_qa/structured_policy_retriever.py`] 当前生产读路径使用 policy_rules_v2 标量过滤，缺少 `region`、`effective_date` 等适用性字段。
-- [来源: `src/knowledge_extension/rule_explanation/policy_retrieval/policy_rules_schema_v2.py`] CORE_DIM_FIELDS 固定 schema 仅包含 rule_type/insu_type/med_type/hosp_lv/psn_type/setl_type。
-- [推断: 基于北京市医保局公开政策] 地区、时间、异地等维度为真实医保业务必要维度，但具体值域需业务方确认。
-- [不确定性] 本用例集未连接真实线上结算库；部分用例的 `expected_evidence=MISSING` 需通过真实数据扫描后更新为存在或不存在。
-
----
-
-## 6. 使用方式
-
-1. **基线对跑脚本**：读取本文件，将每条用例输入三条检索实现（纯文本 / 当前混合 / 补强适用性字段后的混合），记录召回规则与 `answer_status`。
-2. **人工复核**：对 `MISSING` 和边界例标记，由业务方确认期望是否合理。
-3. **定版流程**：本草案经确认后，版本号升级为 v1.0，并锁定为 Issue #25 评估唯一用例集。
+```json
+[
+  {
+    "case_id": "BJ_EMP_TERT_IP_BAND_1",
+    "scenario": "北京在职职工三级医院住院，起付标准至3万元",
+    "dimensions": [
+      "地区",
+      "人群",
+      "医院等级",
+      "医疗类别",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 35000.0
+    },
+    "question": "北京在职职工三级医院住院，起付标准至3万元的支付比例是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_BAND_2",
+    "scenario": "北京在职职工三级医院住院，超过3万元至4万元",
+    "dimensions": [
+      "地区",
+      "人群",
+      "医院等级",
+      "医疗类别",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 45000.0
+    },
+    "question": "北京在职职工三级医院住院，超过3万元至4万元的支付比例是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_002"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_BAND_3",
+    "scenario": "北京在职职工三级医院住院，超过4万元",
+    "dimensions": [
+      "地区",
+      "人群",
+      "医院等级",
+      "医疗类别",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 55000.0
+    },
+    "question": "北京在职职工三级医院住院，超过4万元的支付比例是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_003"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_SEC_IP_BAND_1",
+    "scenario": "北京在职职工二级医院住院，起付标准至3万元",
+    "dimensions": [
+      "医院等级"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "二级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 35000.0
+    },
+    "question": "北京在职职工二级医院住院，起付标准至3万元的支付比例是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_SEC_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_SEC_IP_BAND_2",
+    "scenario": "北京在职职工二级医院住院，超过3万元至4万元",
+    "dimensions": [
+      "医院等级"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "二级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 45000.0
+    },
+    "question": "北京在职职工二级医院住院，超过3万元至4万元的支付比例是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_SEC_EMP_002"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_SEC_IP_BAND_3",
+    "scenario": "北京在职职工二级医院住院，超过4万元",
+    "dimensions": [
+      "医院等级"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "二级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 55000.0
+    },
+    "question": "北京在职职工二级医院住院，超过4万元的支付比例是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_SEC_EMP_003"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_RET_TERT_IP_FORMULA",
+    "scenario": "北京退休人员三级医院住院，需命中折算公式",
+    "dimensions": [
+      "人群",
+      "政策替代"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院，统筹自付怎么算？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_FORMULA_001"
+    ],
+    "is_negative": false,
+    "notes": "应同时命中公式与物化规则，但期望至少命中公式"
+  },
+  {
+    "case_id": "BJ_RET_TERT_IP_BAND_1",
+    "scenario": "北京退休人员三级医院住院第1档",
+    "dimensions": [
+      "人群",
+      "金额分段",
+      "政策替代"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院第1档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_RET_TERT_IP_BAND_2",
+    "scenario": "北京退休人员三级医院住院第2档",
+    "dimensions": [
+      "人群",
+      "金额分段",
+      "政策替代"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院第2档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_002"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_RET_TERT_IP_BAND_3",
+    "scenario": "北京退休人员三级医院住院第3档",
+    "dimensions": [
+      "人群",
+      "金额分段",
+      "政策替代"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院第3档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_003"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_TERT_OP",
+    "scenario": "北京在职职工三级医院门诊",
+    "dimensions": [
+      "医疗类别"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "门诊-普通门急诊",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 500.0
+    },
+    "question": "北京在职职工三级医院门诊报销比例？",
+    "expected_rule_ids": [
+      "BJ_2024_OP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_REMOTE",
+    "scenario": "北京参保人异地三级医院住院",
+    "dimensions": [
+      "异地/转诊"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": true,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京参保人异地就医三级医院住院支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_REMOTE_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_2025",
+    "scenario": "2025年北京在职职工三级医院住院",
+    "dimensions": [
+      "政策时间",
+      "政策版本"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2025-03-01",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "2025年北京在职职工三级医院住院支付比例？",
+    "expected_rule_ids": [
+      "BJ_2025_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_2025_BAND2",
+    "scenario": "2025年北京在职职工三级医院住院，超过3万元至4万元",
+    "dimensions": [
+      "政策时间",
+      "政策版本",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2025-03-01",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 35000.0
+    },
+    "question": "2025年北京在职职工三级医院住院，3-4万元段支付比例？",
+    "expected_rule_ids": [
+      "BJ_2025_IP_TERT_EMP_002"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "SH_EMP_TERT_IP",
+    "scenario": "上海在职职工三级医院住院",
+    "dimensions": [
+      "地区",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "上海",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "上海在职职工三级医院住院支付比例？",
+    "expected_rule_ids": [
+      "SH_2024_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_RESIDENT_TERT_IP",
+    "scenario": "北京城乡居民三级医院住院",
+    "dimensions": [
+      "人群",
+      "险种"
+    ],
+    "settlement_context": {
+      "insu_type": "城乡居民基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "居民",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京城乡居民三级医院住院支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_RESIDENT_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_DEDUCT_TERT",
+    "scenario": "北京职工三级医院住院起付线",
+    "dimensions": [
+      "医疗类别",
+      "规则类型"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "起付线",
+      "target_amount": 1300.0
+    },
+    "question": "北京职工三级医院住院起付线多少？",
+    "expected_rule_ids": [
+      "BJ_2024_DEDUCT_TERT_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_CAP",
+    "scenario": "北京职工住院封顶线",
+    "dimensions": [
+      "规则类型"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "封顶线",
+      "target_amount": 500000.0
+    },
+    "question": "北京职工住院年度最高支付限额是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_CAP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "NEG_EXPIRED_2023",
+    "scenario": "2024年结算不应命中已废止的2023规则",
+    "dimensions": [
+      "政策时间",
+      "发布状态",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "2024年结算是否适用2023年已废止规则？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": "2023规则 expiry_date=2023-12-31，不应命中"
+  },
+  {
+    "case_id": "NEG_FUTURE_2025",
+    "scenario": "2024年结算不应命中2025年才生效规则",
+    "dimensions": [
+      "政策时间",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "2024年结算是否适用2025年规则？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": "2025规则 effective_date=2025-01-01，不应命中"
+  },
+  {
+    "case_id": "NEG_REGION_SH",
+    "scenario": "北京结算不应命中上海规则",
+    "dimensions": [
+      "地区",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京参保人在上海规则里报销？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": ""
+  },
+  {
+    "case_id": "NEG_PILOT",
+    "scenario": "非试点地区不应命中试点规则",
+    "dimensions": [
+      "发布状态",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "非试点地区是否适用试点报销比例？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": "pilot 规则 publish_status=pilot，非默认 published"
+  },
+  {
+    "case_id": "NEG_REMOTE_FALSE",
+    "scenario": "本地结算不应命中异地规则",
+    "dimensions": [
+      "异地/转诊",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "本地住院是否适用异地报销规则？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": ""
+  },
+  {
+    "case_id": "NEG_POP_STUDENT",
+    "scenario": "学生儿童不应命中在职职工规则",
+    "dimensions": [
+      "人群",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "学生儿童",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "学生儿童住院是否按在职职工比例报销？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": ""
+  },
+  {
+    "case_id": "NEG_HOSP_PRIMARY",
+    "scenario": "一级医院不应命中三级医院规则",
+    "dimensions": [
+      "医院等级",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "一级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "一级医院住院是否按三级医院比例？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": ""
+  },
+  {
+    "case_id": "NEG_OUTPATIENT_VS_IP",
+    "scenario": "住院场景不应命中门诊规则",
+    "dimensions": [
+      "医疗类别",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "住院统筹自付是否适用门诊比例？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": ""
+  },
+  {
+    "case_id": "NEG_INSU_RESIDENT",
+    "scenario": "职工不应命中城乡居民规则",
+    "dimensions": [
+      "险种",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "城镇职工是否适用城乡居民规则？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": ""
+  },
+  {
+    "case_id": "NEG_REVOKED",
+    "scenario": "不应命中已撤销规则",
+    "dimensions": [
+      "发布状态",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "已撤销规则是否仍适用？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": "BJ_2023_IP_TERT_EMP_001 publish_status=revoked"
+  },
+  {
+    "case_id": "BJ_RET_SEC_IP",
+    "scenario": "北京退休人员二级医院住院",
+    "dimensions": [
+      "人群",
+      "医院等级"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "二级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员二级医院住院支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_001"
+    ],
+    "is_negative": false,
+    "notes": "语料未覆盖二级退休，测试诚实拒答或近似召回"
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_BAND_ALL",
+    "scenario": "北京在职职工三级医院住院全段",
+    "dimensions": [
+      "金额分段",
+      "完整回答"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京在职职工三级医院住院各段支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_001",
+      "BJ_2024_IP_TERT_EMP_002",
+      "BJ_2024_IP_TERT_EMP_003"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_NEAR_EXPIRY",
+    "scenario": "2024-12-30结算应仍命中2024规则",
+    "dimensions": [
+      "政策时间",
+      "边界"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-12-30",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "2024年底结算适用哪版规则？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_EXPIRY_DAY",
+    "scenario": "2024-12-31结算仍命中2024规则",
+    "dimensions": [
+      "政策时间",
+      "边界"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-12-31",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "2024年最后一天结算适用规则？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_NEW_YEAR",
+    "scenario": "2025-01-01结算命中2025规则",
+    "dimensions": [
+      "政策时间",
+      "政策版本",
+      "边界"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2025-01-01",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "2025年第一天结算适用规则？",
+    "expected_rule_ids": [
+      "BJ_2025_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_DEFAULT_REGION",
+    "scenario": "结算上下文未提供地区，默认北京",
+    "dimensions": [
+      "地区",
+      "默认值"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "未提供地区时默认适用北京规则？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": "region 空 → 默认北京"
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_NO_DATE",
+    "scenario": "结算上下文未提供结算日期，应不过滤时间",
+    "dimensions": [
+      "政策时间",
+      "默认值"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "无结算日期时是否返回所有版本规则？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": "无日期不过期过滤，可能多召回，正例只要包含2024即可"
+  },
+  {
+    "case_id": "SH_EMP_TERT_IP_NO_REGION",
+    "scenario": "未提供地区时不应误命中上海规则",
+    "dimensions": [
+      "地区",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "未提供地区时是否会召回上海规则？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": "region 默认北京，上海规则不应命中"
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_DRAFT",
+    "scenario": "草稿规则不应进入 Runtime",
+    "dimensions": [
+      "发布状态",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "草稿规则是否会被召回？",
+    "expected_rule_ids": [],
+    "is_negative": true,
+    "notes": "语料无 draft 规则，此用例验证过滤逻辑存在性"
+  },
+  {
+    "case_id": "BJ_EMP_TERT_IP_VERSION_MISMATCH",
+    "scenario": "明确指定政策版本2024时不应命中2025规则",
+    "dimensions": [
+      "政策版本",
+      "反例"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2025-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0,
+      "policy_version": "2024"
+    },
+    "question": "指定2024版本时不应命中2025规则？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": "当前 retrieve 未消费 policy_version 过滤，此用例记录待增强点"
+  },
+  {
+    "case_id": "BULK_051",
+    "scenario": "北京在职职工三级医院住院第1档",
+    "dimensions": [
+      "地区",
+      "人群",
+      "医院等级",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京在职职工三级医院住院第1档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_052",
+    "scenario": "北京在职职工三级医院住院第2档",
+    "dimensions": [
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京在职职工三级医院住院第2档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_002"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_053",
+    "scenario": "北京在职职工三级医院住院第3档",
+    "dimensions": [
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京在职职工三级医院住院第3档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_003"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_054",
+    "scenario": "北京在职职工二级医院住院第1档",
+    "dimensions": [
+      "医院等级",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "二级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京在职职工二级医院住院第1档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_SEC_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_055",
+    "scenario": "北京在职职工二级医院住院第2档",
+    "dimensions": [
+      "医院等级",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "二级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京在职职工二级医院住院第2档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_SEC_EMP_002"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_056",
+    "scenario": "北京在职职工二级医院住院第3档",
+    "dimensions": [
+      "医院等级",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "二级",
+      "psn_type": "在职职工",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京在职职工二级医院住院第3档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_SEC_EMP_003"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_057",
+    "scenario": "北京退休人员三级医院住院第4档",
+    "dimensions": [
+      "人群",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院第4档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_004"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_058",
+    "scenario": "北京退休人员三级医院住院第5档",
+    "dimensions": [
+      "人群",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院第5档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_005"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_059",
+    "scenario": "北京退休人员三级医院住院第6档",
+    "dimensions": [
+      "人群",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院第6档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_006"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_060",
+    "scenario": "北京退休人员三级医院住院第7档",
+    "dimensions": [
+      "人群",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院第7档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_007"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_061",
+    "scenario": "北京退休人员三级医院住院第8档",
+    "dimensions": [
+      "人群",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院第8档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_008"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BULK_062",
+    "scenario": "北京退休人员三级医院住院第9档",
+    "dimensions": [
+      "人群",
+      "金额分段"
+    ],
+    "settlement_context": {
+      "insu_type": "城镇职工基本医疗保险",
+      "med_type": "住院-普通住院",
+      "hosp_lv": "三级",
+      "psn_type": "退休人员",
+      "region": "北京",
+      "settlement_date": "2024-06-15",
+      "is_remote": false,
+      "target_field": "统筹自付",
+      "target_amount": 25000.0
+    },
+    "question": "北京退休人员三级医院住院第9档的支付比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_TERT_009"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BROAD_DEDUCTIBLE",
+    "scenario": "宽泛问：北京住院起付线多少",
+    "dimensions": [
+      "宽泛问题"
+    ],
+    "settlement_context": {},
+    "question": "北京住院起付线多少？",
+    "expected_rule_ids": [
+      "BJ_2024_DEDUCT_TERT_001"
+    ],
+    "is_negative": false,
+    "notes": "无结算上下文，依赖文本召回+适用性字段精排"
+  },
+  {
+    "case_id": "BROAD_CAP",
+    "scenario": "宽泛问：北京医保封顶线",
+    "dimensions": [
+      "宽泛问题"
+    ],
+    "settlement_context": {},
+    "question": "北京医保封顶线是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_CAP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BROAD_RETIREE_RATIO",
+    "scenario": "宽泛问：退休人员住院个人支付比例",
+    "dimensions": [
+      "宽泛问题",
+      "人群"
+    ],
+    "settlement_context": {},
+    "question": "退休人员住院个人支付比例是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_RET_FORMULA_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BROAD_REMOTE",
+    "scenario": "宽泛问：异地就医报销比例",
+    "dimensions": [
+      "宽泛问题",
+      "异地/转诊"
+    ],
+    "settlement_context": {},
+    "question": "异地就医报销比例是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_REMOTE_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BROAD_OUTPATIENT",
+    "scenario": "宽泛问：门诊报销比例",
+    "dimensions": [
+      "宽泛问题",
+      "医疗类别"
+    ],
+    "settlement_context": {},
+    "question": "门诊报销比例是多少？",
+    "expected_rule_ids": [
+      "BJ_2024_OP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BROAD_SHANGHAI",
+    "scenario": "宽泛问：上海住院报销",
+    "dimensions": [
+      "宽泛问题",
+      "地区"
+    ],
+    "settlement_context": {},
+    "question": "上海住院报销比例是多少？",
+    "expected_rule_ids": [
+      "SH_2024_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BROAD_AMOUNT_BAND",
+    "scenario": "宽泛问：超过3万元至4万元报销比例",
+    "dimensions": [
+      "宽泛问题",
+      "金额分段"
+    ],
+    "settlement_context": {},
+    "question": "住院费用超过3万元至4万元报销比例？",
+    "expected_rule_ids": [
+      "BJ_2024_IP_TERT_EMP_002"
+    ],
+    "is_negative": false,
+    "notes": ""
+  },
+  {
+    "case_id": "BROAD_VERSION",
+    "scenario": "宽泛问：2025年北京住院新规",
+    "dimensions": [
+      "宽泛问题",
+      "政策版本"
+    ],
+    "settlement_context": {},
+    "question": "2025年北京住院有什么新报销政策？",
+    "expected_rule_ids": [
+      "BJ_2025_IP_TERT_EMP_001"
+    ],
+    "is_negative": false,
+    "notes": "无结算日期，无法做时间过滤，可能多版本召回"
+  }
+]
+```

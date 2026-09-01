@@ -168,6 +168,7 @@ class StructuredPolicyRuleRetriever:
         host: str = "127.0.0.1",
         port: str = "19530",
         collection_name: str | None = None,
+        enable_applicability_fields: bool = True,
     ):
         uri = f"http://{host}:{port}"
         try:
@@ -179,7 +180,12 @@ class StructuredPolicyRuleRetriever:
         self.collection_name = collection_name or COLLECTION_NAME
         # Issue #25：缓存 collection 的固定 schema 字段名，用于旧 collection 兼容
         self._collection_fields: set[str] | None = None
-        logger.info(f"StructuredPolicyRuleRetriever initialized: {uri}")
+        # Issue #25 评估：是否启用新增适用性字段（region/validity/publish_status/policy_version/is_remote）
+        self._enable_applicability_fields = enable_applicability_fields
+        logger.info(
+            f"StructuredPolicyRuleRetriever initialized: {uri} "
+            f"(applicability_fields={enable_applicability_fields})"
+        )
 
     def _get_collection_fields(self) -> set[str]:
         """获取当前 collection 的字段名集合（含固定 schema + dynamic field 键）。
@@ -221,15 +227,15 @@ class StructuredPolicyRuleRetriever:
         queries: list[StructuredPolicyQuery] = []
 
         # Issue #25 全局适用性过滤（会注入到每个查询中）
-        base_filters: dict[str, str] = {
-            "region": ctx.region or _DEFAULT_REGION,
-            "publish_status": "published",
-        }
-        if ctx.is_remote:
-            base_filters["is_remote"] = "true"
-        else:
-            # 本地结算：同时匹配本地规则（is_remote=false）和未标记规则（兼容旧数据）
-            base_filters["is_remote"] = "false"
+        base_filters: dict[str, str] = {}
+        if getattr(self, "_enable_applicability_fields", True):
+            base_filters["region"] = ctx.region or _DEFAULT_REGION
+            base_filters["publish_status"] = "published"
+            if ctx.is_remote:
+                base_filters["is_remote"] = "true"
+            else:
+                # 本地结算：同时匹配本地规则（is_remote=false）和未标记规则（兼容旧数据）
+                base_filters["is_remote"] = "false"
 
         if target_field in ("统筹自付", "pooling_self_pay"):
             # 查询1: 三级医院职工住院分段支付比例
@@ -327,7 +333,11 @@ class StructuredPolicyRuleRetriever:
 
         # Issue #25：时间范围过滤（ settlement_date 在 [effective_date, expiry_date] 内）
         settlement_date = query.settlement_date
-        if settlement_date and settlement_date != _DEFAULT_SETTLEMENT_DATE:
+        if (
+            getattr(self, "_enable_applicability_fields", True)
+            and settlement_date
+            and settlement_date != _DEFAULT_SETTLEMENT_DATE
+        ):
             if "effective_date" in available_fields:
                 expr_parts.append(f'effective_date <= "{settlement_date}"')
             if "expiry_date" in available_fields:
