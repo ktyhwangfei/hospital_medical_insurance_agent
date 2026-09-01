@@ -6,6 +6,7 @@ import pytest
 from src.knowledge_extension.rule_explanation.policy_retrieval.applicability_backfill import (
     ApplicabilityBackfillService,
     BackfillProposal,
+    InMemoryDocumentStore,
     InMemoryRuleStore,
 )
 from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
@@ -120,3 +121,54 @@ def test_validate_gate_passes_after_apply(service: ApplicabilityBackfillService)
     passed, missing = service.validate_gate()
     assert passed is True
     assert len(missing) == 0
+
+
+def test_propose_uses_document_metadata_when_available() -> None:
+    entities = [
+        _entity(
+            "r_from_doc",
+            missing_fields={"region", "effective_date", "expiry_date", "publish_status"},
+            doc_id="doc_beijing_2024",
+        ),
+    ]
+    doc_store = InMemoryDocumentStore({
+        "doc_beijing_2024": {
+            "policy_region": "北京",
+            "effective_date": "2024-01-01",
+            "abolition_date": "2025-12-31",
+            "validity": "valid",
+        },
+    })
+    service = ApplicabilityBackfillService(
+        InMemoryRuleStore(entities),
+        document_store=doc_store,
+    )
+    proposals = service.propose()
+    by_field = {p.field_name: p for p in proposals}
+
+    assert by_field["region"].proposed_value == "北京"
+    assert by_field["region"].confidence == "doc_metadata"
+    assert by_field["effective_date"].proposed_value == "2024-01-01"
+    assert by_field["expiry_date"].proposed_value == "2025-12-31"
+    assert by_field["publish_status"].proposed_value == "published"
+
+
+def test_propose_falls_back_to_system_defaults_when_metadata_missing() -> None:
+    entities = [
+        _entity(
+            "r_no_meta",
+            missing_fields={"region", "effective_date", "expiry_date"},
+            doc_id="doc_unknown",
+        ),
+    ]
+    service = ApplicabilityBackfillService(
+        InMemoryRuleStore(entities),
+        document_store=InMemoryDocumentStore(),
+    )
+    proposals = service.propose()
+    by_field = {p.field_name: p for p in proposals}
+
+    assert by_field["region"].proposed_value == _DEFAULT_REGION
+    assert by_field["region"].confidence == "system_default"
+    assert by_field["effective_date"].proposed_value == _DEFAULT_EFFECTIVE_DATE
+    assert by_field["expiry_date"].proposed_value == _DEFAULT_EXPIRY_DATE

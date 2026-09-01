@@ -29,6 +29,11 @@ READ_EXTRACTIONS_SQL = (
     "WHERE extracted_fields IS NOT NULL AND status <> 'archived'"
 )
 
+READ_DOCUMENTS_SQL = (
+    "SELECT doc_id, policy_region, publish_date, document_date, effective_date, "
+    "abolition_date, validity FROM policy_documents"
+)
+
 
 def to_ingest_input(ext: dict) -> dict:
     """单条 extraction → build_ingest_records 输入 {fact_text, rules}。
@@ -82,6 +87,20 @@ def read_extractions() -> list[dict]:
             return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
+def read_documents_metadata() -> dict[str, dict[str, Any]]:
+    """读 PG policy_documents 元数据，按 doc_id 索引。"""
+    import psycopg
+
+    from src.config.production import DATABASE_URL
+
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(READ_DOCUMENTS_SQL)
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            return {row["doc_id"]: row for row in rows}
+
+
 def migrate(drop: bool = False, dry_run: bool = False) -> dict:
     """执行迁移，返回统计 {extractions, facts, rules}。
 
@@ -106,6 +125,7 @@ def migrate(drop: bool = False, dry_run: bool = False) -> dict:
 
     exts = read_extractions()
     inputs = [to_ingest_input(e) for e in exts]
+    doc_metadata_map = read_documents_metadata()
 
     provider = get_embedding_provider()
     extracted_at = datetime.now(timezone.utc).isoformat()
@@ -115,7 +135,11 @@ def migrate(drop: bool = False, dry_run: bool = False) -> dict:
     # 每条 extraction 一条 fact（build_ingest_records 按 doc_id 分组；同 doc 多 extraction → 多 fact）
     for ext, inp in zip(exts, inputs):
         fact_records, rule_entities = build_ingest_records(
-            [inp], doc_id=ext["doc_id"], provider=provider, extracted_at=extracted_at,
+            [inp],
+            doc_id=ext["doc_id"],
+            provider=provider,
+            extracted_at=extracted_at,
+            doc_metadata=doc_metadata_map.get(ext["doc_id"]),
         )
         all_facts += fact_records
         all_rules += rule_entities

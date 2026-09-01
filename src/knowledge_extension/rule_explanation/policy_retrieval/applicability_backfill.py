@@ -13,9 +13,12 @@ Issue #25 存量适用性字段回填服务（提议者-审核者模型）。
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
     _DEFAULT_EFFECTIVE_DATE,
@@ -24,17 +27,18 @@ from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_sche
     _DEFAULT_PUBLISH_STATUS,
     _DEFAULT_REGION,
     POLICY_RULES_V2_COLLECTION,
+    _normalize_date,
 )
 
-# Issue #25 适用性字段 → 默认值工厂
-_APPLICABILITY_FIELDS = {
-    "region": lambda _rule: _DEFAULT_REGION,
-    "effective_date": lambda _rule: _DEFAULT_EFFECTIVE_DATE,
-    "expiry_date": lambda _rule: _DEFAULT_EXPIRY_DATE,
-    "publish_status": lambda _rule: _DEFAULT_PUBLISH_STATUS,
-    "policy_version": lambda _rule: _DEFAULT_POLICY_VERSION,
-    "is_remote": lambda _rule: False,
-}
+# Issue #25 适用性字段
+_APPLICABILITY_FIELDS = (
+    "region",
+    "effective_date",
+    "expiry_date",
+    "publish_status",
+    "policy_version",
+    "is_remote",
+)
 
 
 def _is_empty(value: Any) -> bool:
@@ -78,6 +82,46 @@ class RuleStorePort(Protocol):
     def update_rules(self, entities: list[dict[str, Any]]) -> int: ...
 
 
+class DocumentStorePort(Protocol):
+    """文档元数据存储端口：按 doc_id 读取政策文档元数据。"""
+
+    def get_metadata(self, doc_id: str) -> dict[str, Any]: ...
+
+
+class InMemoryDocumentStore:
+    """测试用内存文档元数据存储。"""
+
+    def __init__(self, metadata: dict[str, dict[str, Any]] | None = None) -> None:
+        self._metadata = metadata or {}
+
+    def get_metadata(self, doc_id: str) -> dict[str, Any]:
+        return dict(self._metadata.get(doc_id, {}))
+
+
+class PipelineDocumentStore:
+    """生产环境：从 pipeline_store 读取政策文档元数据。"""
+
+    def __init__(self, store: Any | None = None) -> None:
+        self._store = store
+
+    def get_metadata(self, doc_id: str) -> dict[str, Any]:
+        if self._store is None:
+            from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
+
+            self._store = PipelineStore()
+        doc = self._store.get_document(doc_id)
+        if not doc:
+            return {}
+        return {
+            "policy_region": doc.get("policy_region", ""),
+            "effective_date": doc.get("effective_date", ""),
+            "publish_date": doc.get("publish_date", ""),
+            "document_date": doc.get("document_date", ""),
+            "abolition_date": doc.get("abolition_date", ""),
+            "validity": doc.get("validity", ""),
+        }
+
+
 class InMemoryRuleStore:
     """测试与本地评估使用的内存规则存储。"""
 
@@ -102,7 +146,7 @@ class InMemoryRuleStore:
 
 
 class MilvusRuleStore:
-    """生产 Milvus 规则存储适配器（操作 policy_rules_v2）。"""
+    """生产 Milvus 规则存储适配器（操作 policy_rules_v2 或候选 release collection）。"""
 
     def __init__(
         self,
@@ -148,27 +192,94 @@ class MilvusRuleStore:
 class ApplicabilityBackfillService:
     """适用性字段回填服务：扫描 → 提议 → 人工确认 → 应用。"""
 
-    def __init__(self, store: RuleStorePort) -> None:
+    def __init__(
+        self,
+        store: RuleStorePort,
+        document_store: DocumentStorePort | None = None,
+    ) -> None:
         self._store = store
+        self._document_store = document_store
+
+    def _fetch_doc_metadata(self, doc_id: str) -> dict[str, Any]:
+        if self._document_store is None or not doc_id:
+            return {}
+        try:
+            return self._document_store.get_metadata(doc_id)
+        except Exception as exc:
+            logger.warning("[ApplicabilityBackfill] 读取文档 %s 元数据失败: %s", doc_id, exc)
+            return {}
+
+    def _propose_field_value(
+        self,
+        field_name: str,
+        meta: dict[str, Any],
+    ) -> tuple[Any, str, str]:
+        """返回 (提议值, confidence, reason)。"""
+        region = str(meta.get("policy_region") or "").strip()
+        effective = (
+            _normalize_date(meta.get("effective_date"))
+            or _normalize_date(meta.get("publish_date"))
+            or _normalize_date(meta.get("document_date"))
+        )
+        abolition = _normalize_date(meta.get("abolition_date"))
+        validity = str(meta.get("validity") or "").strip().lower()
+
+        if field_name == "region":
+            if region:
+                return region, "doc_metadata", f"来自文档 policy_region={region}"
+            return _DEFAULT_REGION, "system_default", f"字段缺失，使用系统默认值 {_DEFAULT_REGION!r}"
+
+        if field_name == "effective_date":
+            if effective:
+                return effective, "doc_metadata", "来自文档 effective_date/publish_date/document_date"
+            return _DEFAULT_EFFECTIVE_DATE, "system_default", f"字段缺失，使用系统默认值 {_DEFAULT_EFFECTIVE_DATE!r}"
+
+        if field_name == "expiry_date":
+            if abolition:
+                return abolition, "doc_metadata", f"来自文档 abolition_date={abolition}"
+            return _DEFAULT_EXPIRY_DATE, "system_default", f"字段缺失，使用系统默认值 {_DEFAULT_EXPIRY_DATE!r}"
+
+        if field_name == "publish_status":
+            if validity == "invalid":
+                return "revoked", "doc_metadata", "文档 validity=invalid，标记为 revoked"
+            if validity == "valid":
+                return "published", "doc_metadata", "文档 validity=valid，标记为 published"
+            return _DEFAULT_PUBLISH_STATUS, "system_default", f"字段缺失，使用系统默认值 {_DEFAULT_PUBLISH_STATUS!r}"
+
+        if field_name == "policy_version":
+            return _DEFAULT_POLICY_VERSION, "system_default", f"字段缺失，使用系统默认值 {_DEFAULT_POLICY_VERSION!r}"
+
+        if field_name == "is_remote":
+            return False, "system_default", "字段缺失，使用系统默认值 False"
+
+        return None, "system_default", "字段缺失"
 
     def propose(self) -> list[BackfillProposal]:
         """扫描存储，为缺失适用性字段的规则生成回填提议。"""
         rules = self._store.list_rules()
         proposals: list[BackfillProposal] = []
+        doc_metadata_cache: dict[str, dict[str, Any]] = {}
+
         for rule in rules:
             rid = rule.get("rule_id")
             if not rid:
                 continue
-            for field_name, default_factory in _APPLICABILITY_FIELDS.items():
+
+            doc_id = rule.get("doc_id")
+            if doc_id and doc_id not in doc_metadata_cache:
+                doc_metadata_cache[doc_id] = self._fetch_doc_metadata(doc_id)
+            meta = doc_metadata_cache.get(doc_id, {})
+
+            for field_name in _APPLICABILITY_FIELDS:
                 if _is_empty(rule.get(field_name)):
-                    proposed = default_factory(rule)
+                    proposed, confidence, reason = self._propose_field_value(field_name, meta)
                     proposals.append(BackfillProposal(
                         rule_id=rid,
                         field_name=field_name,
                         old_value=rule.get(field_name),
                         proposed_value=proposed,
-                        confidence="system_default",
-                        reason=f"字段缺失，使用系统默认值 {proposed!r}",
+                        confidence=confidence,
+                        reason=reason,
                     ))
         return proposals
 

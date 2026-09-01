@@ -1059,6 +1059,15 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
         rules = fields.get("rules", [])
         doc_id = ext["doc_id"]
         extracted_at = _now_iso()
+        doc = self._store.get_document(doc_id) or {}
+        doc_metadata = {
+            "policy_region": doc.get("policy_region", ""),
+            "effective_date": doc.get("effective_date", ""),
+            "publish_date": doc.get("publish_date", ""),
+            "document_date": doc.get("document_date", ""),
+            "abolition_date": doc.get("abolition_date", ""),
+            "validity": doc.get("validity", ""),
+        }
 
         try:
             from src.knowledge_extension.rule_explanation.policy_retrieval.policy_facts_schema import (
@@ -1083,8 +1092,31 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
 
             fact_records, rule_entities = build_ingest_records(
                 [{"fact_text": fact_text, "rules": rules}],
-                doc_id=doc_id, provider=provider, extracted_at=extracted_at,
+                doc_id=doc_id,
+                provider=provider,
+                extracted_at=extracted_at,
+                doc_metadata=doc_metadata,
             )
+
+            # Issue #25：发布前适用性字段质量门禁
+            from src.knowledge_extension.rule_explanation.policy_retrieval.applicability_backfill import (
+                ApplicabilityBackfillService,
+                InMemoryRuleStore,
+            )
+
+            gate_service = ApplicabilityBackfillService(InMemoryRuleStore(rule_entities))
+            passed, missing = gate_service.validate_gate()
+            if not passed:
+                missing_summary = ", ".join(
+                    f"{m.rule_id}.{m.field_name}" for m in missing[:10]
+                )
+                return {
+                    "success": False,
+                    "error": f"适用性字段质量门禁未通过: {missing_summary}",
+                    "extraction_id": extraction_id,
+                    "missing_count": len(missing),
+                }
+
             upsert_facts(facts_col, fact_records)
             upsert_rules(rules_col, rule_entities)
 

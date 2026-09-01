@@ -1512,6 +1512,31 @@ def _validate_release_source_before_promote(
         )
 
 
+def _validate_applicability_gate_for_release(release: KnowledgeRelease) -> None:
+    """Issue #25：在 release promote 前校验候选 collection 的适用性字段质量门禁。
+
+    若候选 collection 尚未构建（如测试环境未执行 build），则跳过强门禁，
+    由 `/backfill-applicability/validate-gate` 端点提供显式检查。
+    """
+    from pymilvus.exceptions import MilvusException
+
+    try:
+        store = MilvusRuleStore(collection_name=release.rules_collection)
+        if not store.client.has_collection(store.collection_name):
+            return
+        service = ApplicabilityBackfillService(store)
+        passed, missing = service.validate_gate()
+    except MilvusException:
+        # collection 不存在或 Milvus 瞬时不可用：不在 promote 路径强阻断
+        return
+
+    if not passed:
+        summary = ", ".join(f"{m.rule_id}.{m.field_name}" for m in missing[:10])
+        raise ValueError(
+            f"适用性字段质量门禁未通过: {summary} (共 {len(missing)} 条)"
+        )
+
+
 def _validate_governed_release_source_before_promote(
     release: KnowledgeRelease,
     *,
@@ -1543,6 +1568,8 @@ def _validate_governed_release_source_before_promote(
         release.release_id, expected_rule_runs
     ):
         raise ValueError(f"release {release.release_id} 编译血缘不完整")
+    # Issue #25：适用性字段质量门禁
+    _validate_applicability_gate_for_release(release)
 
 
 def _release_sync_pending_reasons(release: KnowledgeRelease) -> list[str]:
