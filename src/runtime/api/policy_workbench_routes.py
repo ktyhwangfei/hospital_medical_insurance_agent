@@ -82,6 +82,12 @@ from src.knowledge_extension.rule_explanation.release_index import (
     MilvusReleaseIndexBackend,
     ReleaseIndexBuilder,
 )
+from src.knowledge_extension.rule_explanation.policy_retrieval.applicability_backfill import (
+    ApplicabilityBackfillService,
+    BackfillApplication,
+    BackfillProposal,
+    MilvusRuleStore,
+)
 from src.knowledge_extension.rule_explanation.semantic_alignment import (
     get_semantic_alignment_service,
 )
@@ -117,6 +123,7 @@ _decision_task_service: "DecisionTaskService | None" = None
 _knowledge_build_store: KnowledgeBuildStore | None = None
 _knowledge_build_service: KnowledgeBuildService | None = None
 _unit_med_type_store: Any | None = None
+_applicability_backfill_service: ApplicabilityBackfillService | None = None
 
 
 def _get_unit_med_type_store():
@@ -295,6 +302,15 @@ def _get_release_index_builder() -> ReleaseIndexBuilder:
             _get_compilation_trace_store(),
         )
     return _release_index_builder
+
+
+def _get_applicability_backfill_service() -> ApplicabilityBackfillService:
+    global _applicability_backfill_service
+    if _applicability_backfill_service is None:
+        _applicability_backfill_service = ApplicabilityBackfillService(
+            MilvusRuleStore()
+        )
+    return _applicability_backfill_service
 
 
 def _get_release_content_source() -> KnowledgeWorkbenchReleaseSource:
@@ -1811,3 +1827,117 @@ def rollback_release(
                 "POLICY_RELEASE_ROLLBACK_BLOCKED", str(exc), {"release_id": release_id}
             ),
         ) from exc
+
+
+# ── Issue #25：适用性字段存量回填（提议者-审核者模型）──────────────
+
+
+class _BackfillProposalItem(BaseModel):
+    rule_id: str
+    field_name: str
+    old_value: Any
+    proposed_value: Any
+    confidence: str
+    reason: str
+
+
+class _BackfillApplicationItem(BaseModel):
+    rule_id: str
+    field_name: str
+    applied_value: Any
+    reviewed_by: str
+    reviewed_at: str
+
+
+class ProposeBackfillResponse(BaseModel):
+    proposals: list[_BackfillProposalItem]
+    total_rules: int
+    missing_count: int
+
+
+class ApplyBackfillRequest(BaseModel):
+    proposals: list[_BackfillProposalItem]
+    reviewed_by: str
+
+
+class ApplyBackfillResponse(BaseModel):
+    applications: list[_BackfillApplicationItem]
+    updated_count: int
+
+
+class ValidateBackfillGateResponse(BaseModel):
+    passed: bool
+    missing: list[_BackfillProposalItem]
+
+
+def _proposal_item(p: BackfillProposal) -> _BackfillProposalItem:
+    return _BackfillProposalItem(
+        rule_id=p.rule_id,
+        field_name=p.field_name,
+        old_value=p.old_value,
+        proposed_value=p.proposed_value,
+        confidence=p.confidence,
+        reason=p.reason,
+    )
+
+
+def _application_item(a: BackfillApplication) -> _BackfillApplicationItem:
+    return _BackfillApplicationItem(
+        rule_id=a.rule_id,
+        field_name=a.field_name,
+        applied_value=a.applied_value,
+        reviewed_by=a.reviewed_by,
+        reviewed_at=a.reviewed_at,
+    )
+
+
+@router.get("/backfill-applicability/propose", response_model=ProposeBackfillResponse)
+def propose_applicability_backfill() -> ProposeBackfillResponse:
+    """扫描当前 policy_rules_v2，返回缺失适用性字段的回填提议。"""
+    service = _get_applicability_backfill_service()
+    proposals = service.propose()
+    rules = service._store.list_rules()
+    return ProposeBackfillResponse(
+        proposals=[_proposal_item(p) for p in proposals],
+        total_rules=len(rules),
+        missing_count=len(proposals),
+    )
+
+
+@router.post("/backfill-applicability/apply", response_model=ApplyBackfillResponse)
+def apply_applicability_backfill(request: ApplyBackfillRequest) -> ApplyBackfillResponse:
+    """人工确认后应用回填提议。reviewed_by 必填。"""
+    service = _get_applicability_backfill_service()
+    domain_proposals = [
+        BackfillProposal(
+            rule_id=p.rule_id,
+            field_name=p.field_name,
+            old_value=p.old_value,
+            proposed_value=p.proposed_value,
+            confidence=p.confidence,
+            reason=p.reason,
+        )
+        for p in request.proposals
+    ]
+    try:
+        applications, updated_count = service.apply(domain_proposals, request.reviewed_by)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("BACKFILL_REVIEW_REQUIRED", str(exc), {}),
+        ) from exc
+    return ApplyBackfillResponse(
+        applications=[_application_item(a) for a in applications],
+        updated_count=updated_count,
+    )
+
+
+@router.get("/backfill-applicability/validate-gate", response_model=ValidateBackfillGateResponse)
+def validate_applicability_backfill_gate() -> ValidateBackfillGateResponse:
+    """质量门禁：检查 published 规则是否仍缺失关键适用性字段。"""
+    service = _get_applicability_backfill_service()
+    passed, missing = service.validate_gate()
+    return ValidateBackfillGateResponse(
+        passed=passed,
+        missing=[_proposal_item(p) for p in missing],
+    )
