@@ -32,7 +32,7 @@
 
 在 `test_query_planner.py` 增加内存注册表夹具，登记：
 
-- `mz_trade`：锚点 `T_SetTid`，交易键 `T_TradeNo`；
+- `mz_trade`：`settlement_id` 直接对应锚点及交易键 `T_TradeNo`；
 - `mz_fee_item`：交易外键 `T_TradeNo`，项目主键 `T_TradeNo + ItemId + ItemNo`；
 - `mz_trade_to_fee_item`：`one_to_many`；
 - 汇总指标 `total_amount / in_scope_amount / out_of_scope_amount`；
@@ -159,7 +159,7 @@ Expected: `mzjyxx` 种子或查询模型不存在。
 ```text
 mz_trade       dbo.o_Trade     outpatient_settlement
 mz_fee_item    dbo.o_FeeItem   outpatient_fee_item
-anchor         mz_trade.T_SetTid
+anchor         mz_trade.T_TradeNo
 relation       mz_trade.T_TradeNo 1:N mz_fee_item.T_TradeNo
 ```
 
