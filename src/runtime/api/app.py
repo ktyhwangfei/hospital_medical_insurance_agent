@@ -23,6 +23,7 @@ from src.runtime.api.semantic_alignment_routes import router as semantic_alignme
 from src.runtime.api.pdsc_routes import router as pdsc_router
 from src.runtime.api.policy_workbench_routes import router as policy_workbench_router
 from src.runtime.api.model_governance_routes import router as model_governance_router
+from src.runtime.api.data_governance_routes import router as data_governance_router
 
 logger = logging.getLogger(__name__)
 
@@ -99,5 +100,6 @@ def create_app() -> FastAPI:
     app.include_router(pdsc_router)
     app.include_router(policy_workbench_router)
     app.include_router(model_governance_router)
+    app.include_router(data_governance_router)
     print("[STARTUP] create_app: 完成", flush=True)
     return app

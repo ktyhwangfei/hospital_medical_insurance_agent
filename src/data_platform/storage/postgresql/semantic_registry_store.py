@@ -309,12 +309,24 @@ class PostgresRegistryStore:
 
         upsert 语义，每次进程启动安全重复执行。"""
         try:
-            from src.semantic_layer.seed import ensure_yb_dictionary_mappings
+            from src.semantic_layer.seed import (
+                ensure_outpatient_query_model,
+                ensure_yb_dictionary_mappings,
+                publish_seed_outpatient_query_object,
+            )
             ensure_yb_dictionary_mappings(self)
-            from src.semantic_layer.seed import _seed_settlement_query_model, publish_seed_query_object
+            from src.semantic_layer.seed import (
+                _seed_settlement_query_model,
+                ensure_outpatient_query_model,
+                publish_seed_outpatient_query_object,
+                publish_seed_query_object,
+            )
             from src.semantic_layer.registry import SemanticRegistry
             _seed_settlement_query_model(self)
-            publish_seed_query_object(SemanticRegistry(self))
+            ensure_outpatient_query_model(self)
+            registry = SemanticRegistry(self)
+            publish_seed_query_object(registry)
+            publish_seed_outpatient_query_object(registry)
         except Exception:
             logger.warning("ensure_yb_dictionary_mappings 失败，跳过", exc_info=True)
 
@@ -378,9 +390,15 @@ class PostgresRegistryStore:
         seed_settlement_domain(self)
         # P8.3：种子后发布 zcgz，解锁提取契约（build_extraction_schema 只收 published）
         from src.semantic_layer.registry import SemanticRegistry
-        from src.semantic_layer.seed import publish_seed_policy_object, publish_seed_query_object
-        publish_seed_policy_object(SemanticRegistry(self))
-        publish_seed_query_object(SemanticRegistry(self))
+        from src.semantic_layer.seed import (
+            publish_seed_outpatient_query_object,
+            publish_seed_policy_object,
+            publish_seed_query_object,
+        )
+        registry = SemanticRegistry(self)
+        publish_seed_policy_object(registry)
+        publish_seed_query_object(registry)
+        publish_seed_outpatient_query_object(registry)
 
     def close(self) -> None:
         if self._client is not None:
@@ -446,7 +464,8 @@ class PostgresRegistryStore:
             """INSERT INTO semantic_objects
                (object_code, domain_code, name, definition, identifier,
                 source_object, source_adapter_port, relations, preferred_relation_paths,
-                version, status, current_version, created_at, updated_at)
+                version, status,
+                current_version, created_at, updated_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (object_code) DO UPDATE SET
                    domain_code = EXCLUDED.domain_code,

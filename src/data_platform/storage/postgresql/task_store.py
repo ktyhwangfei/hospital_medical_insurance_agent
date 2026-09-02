@@ -109,17 +109,36 @@ on conflict (task_id) do update set
         description: str,
         responsible_role: str,
         workflow_id: str | None = None,
+        executor_type: str | None = None,
+        input_data: dict | None = None,
+        output_data: dict | None = None,
+        step_id: str | None = None,
+        error_message: str | None = None,
+        duration_ms: float | None = None,
+        status: str = "pending",
     ) -> dict[str, Any]:
-        """Create a new pending task."""
+        """Create a task（与内存版/service 层协议同签名）"""
         task = {
             "task_id": task_id,
             "task_type": task_type,
-            "status": "pending",
+            "status": status,
             "description": description,
             "responsible_role": responsible_role,
             "workflow_id": workflow_id,
             "updated_at": _now(),
         }
+        if executor_type is not None:
+            task["executor_type"] = executor_type
+        if input_data is not None:
+            task["input_data"] = input_data
+        if output_data is not None:
+            task["output_data"] = output_data
+        if step_id is not None:
+            task["step_id"] = step_id
+        if error_message is not None:
+            task["error_message"] = error_message
+        if duration_ms is not None:
+            task["duration_ms"] = duration_ms
         return self.save_task(task)
 
     def update_task_confirmation(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from decimal import Decimal
 from threading import Barrier
 
@@ -57,6 +58,7 @@ def _add_rule_trace(
         extraction_id=f"ext_{version}",
         raw_input={"source_text": "政策原文快照"},
         llm_output={"facts": [{"fact_id": f"fact_{version}"}]},
+        started_at=datetime(2026, 8, 11, version, tzinfo=timezone.utc),
     )
     store.create_run(run)
     store.append_step(run_id, CompileStep(

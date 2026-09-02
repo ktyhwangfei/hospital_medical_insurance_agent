@@ -137,6 +137,13 @@ class SemanticDataSource:
 
         return raw_connect(env_conn_str)
 
+    def connect_datasource(self, datasource_id: str) -> Any:
+        """复用已注册数据源配置建立连接，供受控适配器使用。"""
+        cfg = self._resolve_datasource_connection(datasource_id)
+        if not cfg:
+            raise RuntimeError(f"数据源 '{datasource_id}' 未注册、未启用或缺少连接配置")
+        return self._connect(cfg)
+
     # ============================================================
     # 指标解析
     # ============================================================

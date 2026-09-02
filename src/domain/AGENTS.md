@@ -63,6 +63,7 @@ domain/
 12. [安全上下文（Security）](#12-安全上下文-security)
 13. [模型服务上下文（Model Service）](#13-模型服务上下文-model-service)
 13.5. [Runtime 上下文（Runtime）](#135-runtime-上下文runtime)
+13.6. [问答会话生命周期与轨迹（Policy QA）](#136-问答会话生命周期与轨迹policy-qa)
 14. [共享通用层（Shared / Common）](#14-共享通用层-shared--common)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
@@ -275,6 +276,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 错误码 | `error_code` | Value Object | `str \| None` | 医保接口返回的错误码，结算异常时的核心诊断入口 |
 | 医保接口适配器端口 | `InsuranceInterfacePort` | **Domain Service** (接口) | Protocol | 与医保局端核心结算系统交互的防腐层端口 |
 | 收费系统适配器端口 | `BillingPort` | **Domain Service** (接口) | Protocol | 与医院收费系统交互的防腐层端口 |
+| 门诊部分项目预退费分析 | `OutpatientPartialPreRefundAnalysis` | **Domain Service** | Skill | 基于院端官方预结算结果，对拟退明细进行只读分析 |
+| 拟退项目 | `PartialRefundItemRequest` | **Value Object** | `@dataclass(frozen=True)` | 指定费用明细 ID 与拟退数量的只读预结算输入 |
+| 预结算结果 | `PartialRefundPreview` | **Value Object** | `@dataclass(frozen=True)` | 医院收费系统对门诊部分项目预退费的权威只读结果 |
 
 #### 业务规则
 
@@ -839,6 +843,22 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 13.6. 问答会话生命周期与轨迹（Policy QA）
+
+> Issue #30 新增。设计详见 `docs/steering/政策问答-轨迹持久化与挂起升级恢复-设计-V1.0.md`；实现：`src/runtime/policy_qa/session_lifecycle.py`、`src/data_platform/storage/policy_qa/trajectory_storage.py`。
+
+| 通用语言 | 代码标识 | 战术分类 | 代码模式 | 含义 |
+|------|------|------|------|------|
+| 轨迹轮次 | `trajectory turn`（表 `policy_qa_trajectories` 行） | **Entity**（不可变日志） | 行记录 | 一轮 QA 的可重放公开快照：context_need + memory_updates + 完整 result；失败轮也落一行（answer_status=unavailable） |
+| 会话状态 | `Session.status`（active/suspended/escalated/closed） | **Value Object** | `str` 字面量 | 问答会话生命周期；状态机：active⇄suspended、active→escalated→(resolve)→active、非终态→closed（closed 终态） |
+| 挂起 | `suspend` | 动作 | — | 用户主动暂停会话（等补材料等）；挂起后拒绝新问答（409 SESSION_NOT_ACTIVE） |
+| 升级工单 | `policy_qa_escalation` task | **Entity** | task_closure 记录 | 问题升级医保办人工处理；waiting_human_confirmation → resolve 回填 escalation_reply 后会话恢复 active |
+| 轨迹重放 | `restore/replay` | 动作 | — | 按 session_id 读全部轮次快照重建对话/记忆/锚点；读取按所有权校验，非本人 404 |
+
+> 状态机合法转移与所有权校验的唯一权威实现在 `session_lifecycle.py`；前端恢复重建的纯函数在 `policy-qa-session.ts::restoreSessionState`。
+
+---
+
 ### 14. 共享通用层（Shared / Common）
 
 #### 概述
@@ -869,6 +889,23 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - 错误响应统一使用 `ErrorDetail` 结构，通过 `error_detail()` 工厂函数创建
 - 适配器统一返回 `AdapterCallResult`，不抛出异常（支持优雅降级）
 - `DataQualityStatus` 的 `DEGRADED` / `MISSING` 状态用于外部系统不可用时的降级策略
+
+---
+
+### 14.5. 门诊数据治理控制面（Outpatient Data Governance）
+
+#### 文件位置
+
+`src/data_platform/outpatient_governance.py` + `src/adapters/insurance_interface/outpatient_source.py`
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 门诊数据源 | `OutpatientDataSource` | **DTO** | Pydantic `BaseModel` | 一家医院的门诊 SQL Server 只读数据源配置，不含密码或密文 |
+| 同步任务 | `OutpatientSyncJob` | **DTO** | Pydantic `BaseModel` | 数据源唯一的 CDC 或定时 SQL 同步运行配置；禁止另建 `pipeline`、`source job`、`import task` 同义模型 |
+| 同步尝试 | `OutpatientSyncAttempt` | **DTO** | Pydantic `BaseModel` | 同步任务一次可审计的实际执行记录 |
+| 来源检查点 | `OutpatientCheckpoint` | **Value Object** | `@dataclass(frozen=True)` | CDC LSN 或定时 SQL 时间窗的来源中立进度位置 |
 
 ---
 
@@ -1021,8 +1058,11 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ModelRequest` | 模型请求 | ModelService | DTO |
 | `ModelResponse` | 模型响应 | ModelService | DTO |
 | `Order` | 医嘱 | OrderFee | Aggregate Root |
+| `OutpatientPartialPreRefundAnalysis` | 门诊部分项目预退费分析 | Insurance | Domain Service |
 | `Patient` | 患者 | Patient | Entity |
 | `PaymentRate` | 支付费率 | DrgDip | Value Object |
+| `PartialRefundItemRequest` | 拟退项目 | Insurance | Value Object |
+| `PartialRefundPreview` | 预结算结果 | Insurance | Value Object |
 | `PolicyExpression` | 政策表达式 | Knowledge | Value Object |
 | `PolicyFact` | 政策事实 | Knowledge | Value Object |
 | `PreAuditPort` | 事前审核适配器端口 | AuditRisk | Domain Service |

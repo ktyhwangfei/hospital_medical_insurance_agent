@@ -428,6 +428,9 @@ class SemanticRegistry:
             source_adapter_port=vm.source_adapter_port,
             value_domain=vm.value_domain, importance=vm.importance,
             default_value=vm.default_value,
+            fact_field_code=vm.fact_field_code, aggregation=vm.aggregation,
+            expression=vm.expression, dependencies=vm.dependencies,
+            non_additive_dimensions=vm.non_additive_dimensions,
         )
 
     # Value Domain resolution
@@ -458,6 +461,15 @@ class SemanticRegistry:
         metrics = self._store.list_metrics(object_code=object_code)
         if not metrics:
             raise ValueError(f"对象 '{object_code}' 无指标，不能发布（§5：空指标不能发布）")
+        datasets = self._store.list_datasets(object_code)
+        keys = self._store.list_dataset_keys(object_code=object_code)
+        fields = self._store.list_fields(object_code=object_code)
+        relations = self._store.list_dataset_relations(object_code)
+        quality_rules = self._store.list_quality_rules(object_code)
+        if datasets or any(m.fact_field_code or m.expression for m in metrics):
+            issues = self.validate_query_model(object_code)
+            if issues:
+                raise ValueError("; ".join(issues))
         existing = self._store.list_object_versions(object_code)
         datasets = self._store.list_datasets(object_code)
         keys = self._store.list_dataset_keys(object_code=object_code)
@@ -480,6 +492,7 @@ class SemanticRegistry:
                 "identifier": obj.identifier, "source_object": obj.source_object,
                 "source_adapter_port": obj.source_adapter_port,
                 "preferred_relation_paths": [p.model_dump() for p in obj.preferred_relation_paths],
+                "queryable": bool(datasets),
             },
             metrics=[ObjectVersionMetric.from_metric(m) for m in metrics],
             datasets=[item.model_copy(update={"status": "published"}) for item in datasets],

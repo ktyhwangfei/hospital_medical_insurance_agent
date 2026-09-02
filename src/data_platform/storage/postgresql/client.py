@@ -2,6 +2,7 @@ import os
 from contextlib import contextmanager
 from threading import RLock
 from typing import Any
+from urllib.parse import urlsplit
 
 
 class PostgreSQLClient:
@@ -46,7 +47,11 @@ class PostgreSQLClient:
             msg = "DATABASE_URL is not configured. Set the DATABASE_URL environment variable or pass database_url to the constructor."
             raise RuntimeError(msg)
 
-        print(f"[STARTUP] PostgreSQLClient: 正在连接 {self._database_url} (超时={self._CONNECT_TIMEOUT}s)", flush=True)
+        print(
+            f"[STARTUP] PostgreSQLClient: 正在连接 {_safe_database_target(self._database_url)} "
+            f"(超时={self._CONNECT_TIMEOUT}s)",
+            flush=True,
+        )
         
         # 尝试 psycopg (v3) 或回退到 psycopg2
         try:
@@ -68,10 +73,16 @@ class PostgreSQLClient:
             self._conn.autocommit = True
             print("[STARTUP] PostgreSQLClient: 使用 psycopg2 连接成功", flush=True)
         except Exception as e:
-            print(f"[STARTUP] PostgreSQLClient: 连接失败 (超时={self._CONNECT_TIMEOUT}s) — {e}", flush=True)
-            host_hint = self._database_url.split("@")[-1] if "@" in self._database_url else self._database_url
+            safe_error = _redact_database_error(e, self._database_url)
+            print(
+                f"[STARTUP] PostgreSQLClient: 连接失败 "
+                f"(超时={self._CONNECT_TIMEOUT}s) — {safe_error}",
+                flush=True,
+            )
+            host_hint = _safe_database_target(self._database_url)
             raise RuntimeError(
-                f"知识库数据源(PostgreSQL)不可达：{e}。请确认 PostgreSQL 服务已启动（{host_hint}）。"
+                f"知识库数据源(PostgreSQL)不可达：{safe_error}。"
+                f"请确认 PostgreSQL 服务已启动（{host_hint}）。"
             ) from e
 
     @contextmanager
@@ -131,3 +142,17 @@ class PostgreSQLClient:
     @property
     def is_connected(self) -> bool:
         return self._conn is not None and not self._conn.closed
+
+
+def _safe_database_target(database_url: str) -> str:
+    parsed = urlsplit(database_url)
+    host = parsed.hostname or "configured-host"
+    port = f":{parsed.port}" if parsed.port else ""
+    database = parsed.path.lstrip("/")
+    return f"{host}{port}/{database}" if database else f"{host}{port}"
+
+
+def _redact_database_error(error: Exception, database_url: str) -> str:
+    message = str(error).replace(database_url, "<redacted-database-url>")
+    password = urlsplit(database_url).password
+    return message.replace(password, "<redacted>") if password else message

@@ -11,6 +11,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from src.data_platform.storage.policy_qa.trajectory_storage import (
+    trajectory_storage,
+)
 from src.data_platform.storage.session.factory import session_storage
 from src.runtime.runtime_state.models import StepState, WorkflowInstance
 from src.data_platform.storage.postgresql.workflow_store import PostgreSQLWorkflowStore
@@ -240,3 +243,34 @@ def finalize_workflow(workflow_id: str, status: str, steps: list[dict]) -> None:
         _get_wf_store().save_workflow(wf)
     except Exception as e:
         logger.warning(f"Failed to finalize workflow {workflow_id}: {e}")
+
+
+def record_trajectory_turn(
+    *,
+    qa_turn_id: str,
+    session_id: str,
+    user_id: str,
+    tenant_id: str,
+    settlement_id: str,
+    question: str,
+    answer_status: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """写入一轮可重放轨迹快照（Issue #30 §3.1；失败不阻塞主流式响应）
+
+    payload 只存公开契约字段：context_need / memory_updates / result /
+    attempt_count / halt_reason；内部推理不入轨迹。
+    """
+    try:
+        trajectory_storage.append_turn({
+            "qa_turn_id": qa_turn_id,
+            "session_id": session_id,
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "settlement_id": settlement_id,
+            "question": question or "",
+            "answer_status": answer_status,
+            "payload": payload or {},
+        })
+    except Exception as e:
+        logger.warning(f"Failed to persist trajectory turn {qa_turn_id}: {e}")

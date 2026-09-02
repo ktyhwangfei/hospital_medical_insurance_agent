@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +26,7 @@ import {
   Tag,
 } from 'lucide-react'
 import { semanticReviewJson } from '@/lib/policy-knowledge-api'
+import { listDataSources, type DataSource } from '@/lib/data-governance-api'
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -36,7 +38,6 @@ interface ScanSampleStats {
   is_long_text: boolean
   non_null_count: number
 }
-
 interface ScanResultField {
   field_name: string
   table_name: string
@@ -803,7 +804,6 @@ export default function DiscoveryCenterPage() {
   const [searchText, setSearchText] = useState('')
   const [sortField, setSortField] = useState<SortField>('value_score')
   const [expandedFields, setExpandedFields] = useState<Set<string>>(new Set())
-  const [showDataSourceConfig, setShowDataSourceConfig] = useState(false)
   const [metricCreatedTables, setMetricCreatedTables] = useState<Set<string>>(new Set())
 
   // ── Excel import state ──
@@ -832,36 +832,20 @@ export default function DiscoveryCenterPage() {
   const PAGE_SIZE = 50
   const [currentPage, setCurrentPage] = useState(1)
 
-  // ── Data source config state ──
-  const [dataSourceConfig, setDataSourceConfig] = useState<{
-    host: string
-    port: string
-    database: string
-    user: string
-    password: string
-    driver: string
-    schema: string
-    tables: string
-  } | null>(null)
+  // ── Controlled data source state ──
+  const [dataSources, setDataSources] = useState<DataSource[]>([])
+  const [dataSourceId, setDataSourceId] = useState('')
 
-  // Load data source config from localStorage on mount
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('discovery_datasource_config')
-      if (saved) setDataSourceConfig(JSON.parse(saved))
-    } catch {
-      // ignore
-    }
+    void listDataSources().then((items) => {
+      const healthy = items.filter((item) => item.credentialConfigured && item.connectionStatus === 'healthy')
+      setDataSources(healthy)
+      setDataSourceId((value) => value || healthy[0]?.sourceId || '')
+    }, () => {
+      setDataSources([])
+      setDataSourceId('')
+    })
   }, [])
-
-  const saveDataSourceConfig = (cfg: typeof dataSourceConfig) => {
-    setDataSourceConfig(cfg)
-    if (cfg) {
-      localStorage.setItem('discovery_datasource_config', JSON.stringify(cfg))
-    } else {
-      localStorage.removeItem('discovery_datasource_config')
-    }
-  }
 
   // ── History state ──
   const [history, setHistory] = useState<HistoryItem[]>([])
@@ -898,27 +882,13 @@ export default function DiscoveryCenterPage() {
     const controller = new AbortController()
     abortRef.current = controller
 
-    // Build source_config from saved data source config
-    const sourceConfig = dataSourceConfig?.database ? {
-      sqlserver: {
-        host: dataSourceConfig.host || "127.0.0.1",
-        port: Number(dataSourceConfig.port) || 1433,
-        database: dataSourceConfig.database,
-        user: dataSourceConfig.user,
-        password: dataSourceConfig.password,
-        driver: dataSourceConfig.driver || "ODBC Driver 18 for SQL Server",
-        schema: dataSourceConfig.schema || "dbo",
-        tables: dataSourceConfig.tables ? dataSourceConfig.tables.split(",").map(s => s.trim()).filter(Boolean) : [],
-      },
-    } : null
-
     try {
       const res = await fetch(`${API_BASE}/discovery/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          datasource_id: dataSourceId,
           scope: scanScope,
-          source_config: sourceConfig,
           sample_limit: sampleLimit,
         }),
         signal: controller.signal,
@@ -974,7 +944,7 @@ export default function DiscoveryCenterPage() {
       setScanError(err instanceof Error ? err.message : '扫描失败')
       setScanning(false)
     }
-  }, [scanScope, dataSourceConfig])
+  }, [dataSourceId, sampleLimit, scanScope])
 
   // ── Incremental update ──
   const handleIncrementalUpdate = useCallback(async () => {
@@ -1112,15 +1082,20 @@ export default function DiscoveryCenterPage() {
             ))}
           </select>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowDataSourceConfig((v) => !v)}
-            className="gap-1.5 border-slate-300 text-xs text-slate-700 hover:text-slate-900"
-          >
+          <label className="flex items-center gap-1.5 text-xs text-slate-600">
             <Database className="h-3.5 w-3.5" />
-            数据源
-          </Button>
+            <span>数据源</span>
+            <select
+              aria-label="数据源"
+              value={dataSourceId}
+              onChange={(event) => setDataSourceId(event.target.value)}
+              disabled={scanning || dataSources.length === 0}
+              className="h-8 min-w-44 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
+            >
+              {dataSources.length === 0 && <option value="">无健康数据源</option>}
+              {dataSources.map((source) => <option key={source.sourceId} value={source.sourceId}>{source.hospitalName} / {source.name}</option>)}
+            </select>
+          </label>
 
           <Button
             variant="outline"
@@ -1159,7 +1134,7 @@ export default function DiscoveryCenterPage() {
             variant="outline"
             size="sm"
             onClick={startScan}
-            disabled={scanning}
+            disabled={scanning || !dataSourceId}
             className="gap-1.5 border-slate-300 text-xs text-slate-700 hover:text-slate-900"
           >
             {scanning ? (
@@ -1186,24 +1161,10 @@ export default function DiscoveryCenterPage() {
         </div>
       </div>
 
-      {/* ── Data source config panel ─────────────────────────────── */}
-      {showDataSourceConfig && (
-        <Card className="rounded-2xl border border-slate-200/70 bg-white/80 shadow-sm backdrop-blur">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-slate-800">
-              <Database className="h-4 w-4 text-blue-600" />
-              SQL Server 数据源配置
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 px-5 py-4">
-            <DataSourceConfigForm
-              initial={dataSourceConfig}
-              onSave={saveDataSourceConfig}
-              onCancel={() => setShowDataSourceConfig(false)}
-            />
-          </CardContent>
-        </Card>
-      )}
+      {dataSources.length === 0 && <Alert className="border-amber-200 bg-amber-50">
+        <AlertTitle className="text-amber-900">没有可扫描的数据源</AlertTitle>
+        <AlertDescription className="text-amber-800">请先到 <Link className="font-medium underline" href="/data-governance/data-sources">数据治理中心</Link> 完成凭据配置和连接检测。</AlertDescription>
+      </Alert>}
 
       {/* ── Excel import panel ────────────────────────────────────── */}
       {showExcelImport && (
@@ -1926,178 +1887,4 @@ export default function DiscoveryCenterPage() {
     )}
   </>
 )
-}
-
-// ── Data Source Config Form ─────────────────────────────────────
-
-function DataSourceConfigForm({
-  initial,
-  onSave,
-  onCancel,
-}: {
-  initial: {
-    host: string
-    port: string
-    database: string
-    user: string
-    password: string
-    driver: string
-    schema: string
-    tables: string
-  } | null
-  onSave: (cfg: {
-    host: string
-    port: string
-    database: string
-    user: string
-    password: string
-    driver: string
-    schema: string
-    tables: string
-  }) => void
-  onCancel: () => void
-}) {
-  const [form, setForm] = useState({
-    host: initial?.host || '127.0.0.1',
-    port: initial?.port || '1433',
-    database: initial?.database || '',
-    user: initial?.user || 'sa',
-    password: initial?.password || '',
-    driver: initial?.driver || 'ODBC Driver 18 for SQL Server',
-    schema: initial?.schema || 'dbo',
-    tables: initial?.tables || '',
-  })
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
-
-  const handleSave = useCallback(async () => {
-    if (!form.database.trim()) {
-      setError('数据库名不能为空')
-      return
-    }
-    setSaving(true)
-    setError(null)
-    // Actual connection test happens during scan; just persist here.
-    await new Promise((r) => setTimeout(r, 200))
-    onSave(form)
-    setSuccess(true)
-    setTimeout(() => onCancel(), 600)
-    setSaving(false)
-  }, [form, onSave, onCancel])
-
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="mb-1 block text-[11px] text-slate-500">主机</label>
-          <Input
-            value={form.host}
-            onChange={(e) => setForm((f) => ({ ...f, host: e.target.value }))}
-            className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
-            placeholder="127.0.0.1"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-[11px] text-slate-500">端口</label>
-          <Input
-            value={form.port}
-            onChange={(e) => setForm((f) => ({ ...f, port: e.target.value }))}
-            className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
-            placeholder="1433"
-          />
-        </div>
-      </div>
-
-      <div>
-        <label className="mb-1 block text-[11px] text-slate-500">数据库名 *</label>
-        <Input
-          value={form.database}
-          onChange={(e) => setForm((f) => ({ ...f, database: e.target.value }))}
-          className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
-          placeholder="hospital_mcp"
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="mb-1 block text-[11px] text-slate-500">用户名</label>
-          <Input
-            value={form.user}
-            onChange={(e) => setForm((f) => ({ ...f, user: e.target.value }))}
-            className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
-            placeholder="sa"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-[11px] text-slate-500">密码</label>
-          <Input
-            type="password"
-            value={form.password}
-            onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-            className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
-            placeholder="••••••"
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="mb-1 block text-[11px] text-slate-500">ODBC 驱动</label>
-          <Input
-            value={form.driver}
-            onChange={(e) => setForm((f) => ({ ...f, driver: e.target.value }))}
-            className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
-            placeholder="ODBC Driver 18 for SQL Server"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-[11px] text-slate-500">Schema</label>
-          <Input
-            value={form.schema}
-            onChange={(e) => setForm((f) => ({ ...f, schema: e.target.value }))}
-            className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
-            placeholder="dbo"
-          />
-        </div>
-      </div>
-
-      <div>
-        <label className="mb-1 block text-[11px] text-slate-500">
-          表名过滤 <span className="text-slate-400">(可选，逗号分隔，空=全部)</span>
-        </label>
-        <Input
-          value={form.tables}
-          onChange={(e) => setForm((f) => ({ ...f, tables: e.target.value }))}
-          className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
-          placeholder="yb_settlement, yb_fee_detail"
-        />
-      </div>
-
-      {error && <p className="text-[11px] text-red-600">{error}</p>}
-      {success && (
-        <p className="text-[11px] text-emerald-600">配置已保存，下次扫描将使用此连接</p>
-      )}
-
-      <div className="flex items-center gap-2">
-        <Button
-          size="sm"
-          onClick={handleSave}
-          disabled={saving}
-          className="gap-1 bg-blue-50 text-blue-600 text-xs hover:bg-blue-100"
-        >
-          {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-          保存配置
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onCancel}
-          className="text-xs text-slate-500 hover:text-slate-700"
-        >
-          取消
-        </Button>
-      </div>
-    </div>
-  )
 }

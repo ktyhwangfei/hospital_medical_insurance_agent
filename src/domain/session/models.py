@@ -6,13 +6,20 @@ from pydantic import BaseModel, ConfigDict
 
 
 class Session(BaseModel):
-    """用户会话（按 user_id 分组，一个用户可以有多个会话）"""
+    """用户会话（按 user_id 分组，一个用户可以有多个会话）
+
+    status 是问答会话生命周期状态（Issue #30 轨迹持久化设计 §四）：
+    active / suspended / escalated / closed。
+    """
 
     model_config = ConfigDict(frozen=False)
 
     session_id: str
     user_id: str
     role: str = ""
+    status: str = "active"
+    status_reason: str = ""
+    status_updated_at: str = ""
     created_at: str = ""
     last_active: str = ""
 

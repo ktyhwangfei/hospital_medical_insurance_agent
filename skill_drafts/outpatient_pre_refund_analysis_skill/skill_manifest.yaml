@@ -1,0 +1,61 @@
+skill_id: outpatient_pre_refund_analysis_skill
+skill_name: 门诊部分项目预退费分析技能
+version: "1.0.0"
+
+business_action: evaluate
+business_object: settlement
+
+description: >-
+  基于院端收费系统的官方预结算结果，对门诊原交易中的指定费用明细和拟退数量
+  进行只读退费影响分析，说明基金与个人金额变化以及预计退款或补缴方向。
+
+needed_objects: []
+
+supported_intents:
+  - 部分项目预退费分析
+  - 预退费
+  - 退费试算
+  - 部分项目退费
+  - 退费分析
+  - 分析退费
+excluded_intents:
+  - 立即执行
+  - 确认退费
+  - 办理退费
+  - 冲正
+
+required_mcp:
+  - billing-pre-settlement
+
+output_schema: schemas/output.schema.json
+
+forbidden_output:
+  - undefined
+  - "NaN"
+  - raw_sql
+  - table_name
+
+execution_contract:
+  version: 2
+  common:
+    context_inputs:
+      - code: settlement_id
+        alias: 门诊原交易号
+        required: true
+        purpose: 定位待分析的门诊原交易
+      - code: question
+        alias: 用户问题
+        required: true
+        purpose: 区分只读分析与实际退费意图
+    metric_inputs: []
+  profiles:
+    - profile_id: partial-pre-refund-analysis
+      name: 门诊部分项目预退费分析
+      purpose: 对结构化拟退项目调用官方预结算并解释金额变化
+      routing_hints:
+        - 预退费
+        - 退费试算
+        - 部分项目退费
+
+display:
+  mode: single

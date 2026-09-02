@@ -1,6 +1,6 @@
 # 门诊结算结果核验 Skill 实施计划
 
-> **For Codex:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
+> **For agentic workers:** This is a gated P2 baseline, not the current executable plan. After P0/P1 alignment, revise it to checkbox (`- [ ]`) tasks and execute with `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans`.
 
 **Goal:** 在不新增第二个门诊 Skill、不硬编码地区待遇比例的前提下，把现有 `draft-cf24aa3b34fe / mzsettlement_verify_skill` 完善为可从真实门诊结算数据取数、覆盖九类问题、确定性核验金额并携带政策证据的候选 Skill。
 
@@ -15,6 +15,8 @@
 **Compatibility:** 只给现有枚举和公开模型增加可选值/可选字段；保留 `whole_admission`、`segment`、原住院质量字段和原 assembler 路径。门诊逻辑通过 assembler 能力检测进入，不按 Skill ID 写死业务分支。
 
 **Rollback:** 不自动激活候选 Skill。语义对象通过不可变版本保留旧版；运行回滚时切回 `mzjyxx` 上一个发布版本并禁用候选 Skill。代码回滚使用对应原子提交的 `git revert`，不改写历史。
+
+**Execution status (2026-08-27):** 本文是 P2 门诊核验的设计基线，当前不能从 Task 1 直接执行。主分支尚无本文假定的 `src/semantic_layer/query_planner.py`，且本文原方案让运行时复用 SQL Server 直查通道，与已确认的 PostgreSQL 唯一分析链路冲突。先完成 `2026-08-27-outpatient-p0-data-contract.md`，再根据已冻结的源游标、明细表和 PostgreSQL 事实模型对本文做一次最小修订。P1 以后 `o_Trade/o_FeeItem` 只用于只读增量抽取和源端核验；助手运行时只查询 PostgreSQL 发布批次。用户界面不要求输入 `settlement_id`，但本 Skill 继续接收由可信上下文解析器提供的内部结算锚点。
 
 ---
 
@@ -32,7 +34,7 @@
 
 在 `test_query_planner.py` 增加内存注册表夹具，登记：
 
-- `mz_trade`：`settlement_id` 直接对应锚点及交易键 `T_TradeNo`；
+- `mz_trade`：锚点 `T_SetTid`，交易键 `T_TradeNo`；
 - `mz_fee_item`：交易外键 `T_TradeNo`，项目主键 `T_TradeNo + ItemId + ItemNo`；
 - `mz_trade_to_fee_item`：`one_to_many`；
 - 汇总指标 `total_amount / in_scope_amount / out_of_scope_amount`；
@@ -159,7 +161,7 @@ Expected: `mzjyxx` 种子或查询模型不存在。
 ```text
 mz_trade       dbo.o_Trade     outpatient_settlement
 mz_fee_item    dbo.o_FeeItem   outpatient_fee_item
-anchor         mz_trade.T_TradeNo
+anchor         mz_trade.T_SetTid
 relation       mz_trade.T_TradeNo 1:N mz_fee_item.T_TradeNo
 ```
 

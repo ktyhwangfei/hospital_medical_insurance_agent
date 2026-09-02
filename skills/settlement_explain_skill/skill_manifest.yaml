@@ -95,7 +95,14 @@ supported_intents:
   # ── 高频场景 ──
   - 结算
   - 费用
-excluded_intents: []  # unified skill — no exclusions
+excluded_intents:
+  # 对比类问法路由到 settlement_compare_skill（compare × settlement），
+  # 本 skill 命中这些词时 confidence ×0.3 惩罚，避免抢占对比意图
+  - 对比
+  - 比较
+  - 差异
+  - 为什么这次
+  - 跟上次
 
 # ── 依赖声明 ──────────────────────────────────────────────────
 
