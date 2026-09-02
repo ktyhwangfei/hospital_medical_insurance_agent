@@ -418,4 +418,6 @@
 - E2E 说明：新增 `skill-error-mining.flow.ts` 未在本环境运行——`playwright.config` 写死 3000/8000，当前 3000 被主工作区 D:/project（main 分支）前端占用，不含本工作区新代码（已知陷阱：多工作区端口互斥）。flow 组件交互逻辑已由 Vitest（eval-case-pool-table / eval-launch / eval-run-detail / layout-tabs 共 71 例）覆盖，合并后可在干净端口环境补跑。
 - 新增文档：`docs/steering/skill草稿-指标选择与多意图输入契约-设计.md`（草稿第三步改造设计，待评审）。
 
+| 2026-09-02 | Issue #35 语义指标治理字段补齐：`semantic_metrics` 增加 8 个治理字段，Metric/API/Portal 复用现有指标链路；`mzjyxx` 发布门禁校验治理完整性，保留旧对象发布兼容；首批 5 个运营指标补齐治理元数据，`insured_encounter_count` 保持 draft/unavailable。Unit 176 + 聚焦存储/种子 16，API+Flow 23 通过；Portal tsc 受当前工作区缺少前端依赖及既有 `tsconfig.json` 语法错误阻塞 | Issue #35 |
+
 > **维护约定**：每次状态变更必须在此记录。§2 与 `docs/steering/政策知识管线开发计划.md` 双向同步。
