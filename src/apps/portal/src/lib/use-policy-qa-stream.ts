@@ -154,6 +154,8 @@ function applyPublicResult(
     definition: result.definition,
     warnings: result.warnings,
     caseContext: result.caseContext,
+    scenarioId: result.scenarioId,
+    settlementFields: result.settlementFields,
     citations: result.citations,
     uncertainties: result.uncertainties,
     verificationSummary: result.verificationSummary,

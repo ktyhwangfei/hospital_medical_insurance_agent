@@ -357,6 +357,24 @@ def test_run_extraction_intakes_unknown_with_matched_unit(monkeypatch) -> None:
     _assert_signal(alignment.signals[0], extraction)
 
 
+def test_run_extraction_intakes_unknown_with_document_scope_when_no_unit(monkeypatch) -> None:
+    """无条款结构的政策解读仍应生成可追溯语义发现证据。"""
+    from src.knowledge_extension.rule_explanation.policy_struct import leaf_match
+
+    store = _Store()
+    alignment = _Alignment()
+    orch = PipelineOrchestrator(store=store, alignment_service=alignment)
+    monkeypatch.setattr(orch, "_extract_policy_facts", lambda *args, **kwargs: [_fact()])
+    monkeypatch.setattr(orch, "_calculate_coverage", lambda *args: {"ratio": 1})
+    monkeypatch.setattr(leaf_match, "parse_kept_leaves", lambda *args: (None, {}, [], []))
+    monkeypatch.setattr(leaf_match, "match_leaves", lambda *args: [])
+
+    result = orch.run_extraction("doc_1")
+
+    assert result["success"] is True
+    assert alignment.signals[0].evidence.unit_id == "document:doc_1"
+
+
 def test_run_extraction_rerun_replaces_evidence_and_keeps_current_extraction_link(
     monkeypatch,
 ) -> None:

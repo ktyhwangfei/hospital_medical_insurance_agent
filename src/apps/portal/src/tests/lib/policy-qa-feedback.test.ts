@@ -53,6 +53,30 @@ describe('submitPolicyQAFeedback', () => {
     })
   })
 
+  it('uses the same demo principal as policy QA turns in development', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockResponse({
+        pool_id: 'pool_auth',
+        status: 'pending_triage',
+        error_dimension: 'policy_content',
+        source_selected_skill_id: 'mzsettlement_verify_skill',
+      }),
+    )
+
+    await submitPolicyQAFeedback({
+      qaTurnId: 'qat_auth',
+      reasonCode: 'wrong_policy_content',
+      comment: null,
+    })
+
+    const [, init] = vi.mocked(fetch).mock.calls[0]
+    const authorization = new Headers((init as RequestInit).headers).get('Authorization')
+    expect(authorization).toMatch(/^Bearer test\./)
+    const encoded = authorization!.slice('Bearer '.length).split('.')[1]
+    const payload = JSON.parse(atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '=')))
+    expect(payload.sub).toBe('demo')
+  })
+
   it('maps snake_case response to camelCase', async () => {
     vi.mocked(fetch).mockResolvedValue(
       mockResponse({

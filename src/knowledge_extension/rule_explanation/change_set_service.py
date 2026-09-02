@@ -157,6 +157,9 @@ class ChangeSetService:
             source_document_version_id=f"{doc_id}",
             doc_id=doc_id,
             doc_title=document.doc_title,
+            # 文档路径同样携带语义契约版本：发布校验要求 CS 与 release 一致
+            # （缺失时文档型变更集永远无法通过 POLICY_RELEASE_LINEAGE_INVALID）
+            semantic_contract_version=document.contract_version or "",
             status="NEEDS_DECISION" if compilation_blocked else "PENDING_REVIEW",
             summary={"additions": len(items), "modifications": 0, "replacements": 0,
                      "expirations": 0, "unchanged": 0},
@@ -328,7 +331,7 @@ class ChangeSetService:
         """将待审或已通过候选退回，等待新的构建任务重新生成。"""
         return self._transition_status(
             change_set_id,
-            allowed_statuses={"PENDING_REVIEW", "NEEDS_DECISION"},
+            allowed_statuses={"PENDING_REVIEW", "NEEDS_DECISION", "APPROVED"},
             target_status="RETURNED",
             invalid_action="退回",
             decision={
@@ -585,7 +588,9 @@ class ChangeSetService:
         """审核落库前校验关联任务，避免任何单边状态写入。"""
         transitions = {
             "APPROVED": ("APPROVED_PENDING_RELEASE", {"WAITING_REVIEW"}),
-            "RETURNED": ("RETURNED", {"WAITING_REVIEW"}),
+            "RETURNED": (
+                "RETURNED", {"WAITING_REVIEW", "APPROVED_PENDING_RELEASE"}
+            ),
             "REJECTED": ("REJECTED", {"WAITING_REVIEW"}),
             "PUBLISHED": ("PUBLISHED", {"APPROVED_PENDING_RELEASE"}),
         }

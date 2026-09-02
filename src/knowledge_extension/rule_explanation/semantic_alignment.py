@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 from threading import RLock
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,7 @@ class TriggerSource(StrEnum):
     DATA_SCAN = "DATA_SCAN"
     DERIVATION_PATTERN = "DERIVATION_PATTERN"
     CONFLICT_PARTITION = "CONFLICT_PARTITION"
+    MANUAL_RULE_CORRECTION = "MANUAL_RULE_CORRECTION"
 
 
 class ProposalStatus(StrEnum):
@@ -139,6 +140,7 @@ class ProposalType(StrEnum):
     METRIC = "metric"
     VALUE = "value"
     DIMENSION = "dimension"
+    RULE_GOVERNANCE = "rule_governance"
 
 
 class DimensionReviewConclusion(StrEnum):
@@ -155,6 +157,8 @@ class DiscoveryEvidence(BaseModel):
     """主动发现证据；四类信号共用的结构化超集。"""
 
     source_ref: str
+    evidence_kind: Literal["policy", "database"] = "policy"
+    evidence_grade: Literal["strong", "supporting", "weak", "rejected"] | None = None
     excerpt: str | None = None
     doc_id: str | None = None
     unit_id: str | None = None
@@ -165,12 +169,211 @@ class DiscoveryEvidence(BaseModel):
     table_name: str | None = None
     field_name: str | None = None
     sample_values: list[str] = Field(default_factory=list)
+    extracted_values: list[str] = Field(default_factory=list)
     non_null_rate: float | None = None
     distinct_count: int | None = None
     base_metric_code: str | None = None
     operator: str | None = None
     observations: list[str] = Field(default_factory=list)
     rule_ids: list[str] = Field(default_factory=list)
+    match_reasons: list[str] = Field(default_factory=list)
+    rejection_reasons: list[str] = Field(default_factory=list)
+
+
+RuleGovernanceDecision = Literal[
+    "repair_extraction",
+    "add_and_bind",
+    "add_policy_field",
+    "supplement_value_mapping",
+    "needs_review",
+]
+
+
+class RuleGovernanceRuleSnapshot(BaseModel):
+    rule_id: str
+    release_id: str
+    compile_run_id: str
+    extraction_id: str
+    unit_id: str
+    doc_id: str
+    subject: str
+    conditions: dict[str, Any]
+    result: dict[str, Any]
+    excerpt: str
+
+
+class RuleGovernanceIssue(BaseModel):
+    issue_id: str
+    issue_type: Literal[
+        "institution_category",
+        "mutual_aid_fund",
+        "benefit_ratio",
+        "pooled_fund",
+        "unknown",
+    ]
+    title: str
+    rule_ids: list[str]
+    current_structure_summary: str
+    problem: str
+    missing_concept: str | None = None
+    candidate_values: list[str] = Field(default_factory=list)
+    recommended_decision: RuleGovernanceDecision
+    recommended_reason: str
+    proposed_changes: str
+    policy_evidence: list[DiscoveryEvidence]
+    database_evidence: list[DiscoveryEvidence] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+
+
+class RuleGovernanceDiagnosis(BaseModel):
+    diagnosis_id: str
+    fingerprint: str
+    release_id: str
+    rules: list[RuleGovernanceRuleSnapshot]
+    items: list[RuleGovernanceIssue]
+    uncertainties: list[str] = Field(default_factory=list)
+
+
+class RuleGovernanceChangePlan(BaseModel):
+    diagnosis_id: str
+    issue_id: str
+    release_id: str
+    rule_ids: list[str]
+    decision: RuleGovernanceDecision
+    proposed_changes: str
+    affected_unit_ids: list[str]
+    requires_data_confirmation: bool = False
+    review_note: str | None = None
+
+
+def match_database_evidence(
+    concept: str,
+    definition: str,
+    candidate_values: list[str],
+    fields: list[dict],
+    limit: int = 5,
+) -> list[DiscoveryEvidence]:
+    """用字段业务角色和值域统计为政策结构缺口补充 bjyb 证据。"""
+    topic = " ".join((concept, definition)).casefold()
+    candidate_text = " ".join(candidate_values).casefold()
+    query = f"{topic} {candidate_text}"
+    is_institution_category = any(term in topic for term in (
+        "机构类别", "机构类型",
+    )) or all(term in candidate_text for term in ("社区卫生服务机构", "定点医疗机构"))
+    is_fund_attribution = any(term in topic for term in (
+        "基金归属", "基金款项", "支付来源",
+    )) or all(term in candidate_text for term in ("统筹基金", "大额医疗互助"))
+    ranked: list[tuple[int, DiscoveryEvidence]] = []
+
+    for field_meta in fields:
+        table_name = str(field_meta.get("table_name") or "").strip()
+        field_name = str(field_meta.get("field_name") or "").strip()
+        description = str(field_meta.get("description") or "").strip()
+        remark = str(field_meta.get("remark") or "").strip()
+        if not table_name or not field_name:
+            continue
+        field_key = field_name.casefold()
+        field_text = " ".join((table_name, field_name, description, remark)).casefold()
+        score = 0
+        match_reasons: list[str] = []
+        rejection_reasons: list[str] = []
+
+        if is_institution_category:
+            if field_key in {"h_level", "hosp_lv", "hospital_level"} or any(
+                term in field_text for term in ("医院等级", "医疗机构等级")
+            ):
+                rejection_reasons.append("医院等级描述层级，不是医疗机构类别")
+            elif field_key == "h_type" or any(
+                term in field_text for term in ("机构类型", "机构类别")
+            ):
+                score = 8
+                match_reasons.append("字段业务角色直接表达医疗机构类别")
+        elif is_fund_attribution:
+            if any(term in field_text for term in ("险种类型", "保险类型", "医保类型")):
+                rejection_reasons.append("险种类型描述参保险种，不是基金归属")
+            elif field_key in {"fund_code", "province_fund_name"} or any(
+                term in field_text for term in ("基金款项编码", "基金款项名称", "基金项目编码", "基金项目名称")
+            ):
+                score = 8
+                match_reasons.append("字段直接表达基金款项编码或名称")
+            elif field_key in {"unite_in", "large_in", "supply_in"} or any(
+                term in field_text for term in ("统筹基金支付", "大额医疗互助", "补充医疗支付")
+            ):
+                score = 5 if (
+                    (field_key == "unite_in" and "统筹" in query)
+                    or (field_key == "large_in" and "大额" in query)
+                ) else 4
+                match_reasons.append("支付分项可佐证基金来源，但不是统一分类字段")
+        else:
+            matched_terms = {
+                term for term in ("机构", "类别", "类型", "基金", "统筹", "互助", "支付", "归属")
+                if term in query and term in field_text
+            }
+            score = len(matched_terms)
+            if matched_terms:
+                match_reasons.append(f"字段描述命中：{'、'.join(sorted(matched_terms))}")
+
+        if rejection_reasons:
+            grade: Literal["strong", "supporting", "weak", "rejected"] = "rejected"
+        elif score >= 6:
+            grade = "strong"
+        elif score >= 3:
+            grade = "supporting"
+        elif score:
+            grade = "weak"
+        else:
+            continue
+
+        distinct_count = field_meta.get("distinct_count")
+        raw_samples = field_meta.get("sample_values") or [field_meta.get("sample_value")]
+        sample_values = []
+        if distinct_count is not None and int(distinct_count) <= 100:
+            sample_values = [
+                str(value) for value in raw_samples[:20]
+                if value is not None and str(value).strip() and str(value).casefold() != "null"
+                and not detect_sensitive_patterns(str(value))
+            ]
+        non_null_rate = field_meta.get("non_null_rate")
+        if non_null_rate is not None:
+            non_null_rate = float(non_null_rate)
+            if non_null_rate > 1:
+                non_null_rate /= 100
+        ranked.append((score, DiscoveryEvidence(
+            source_ref=f"database:{table_name}.{field_name}",
+            evidence_kind="database",
+            evidence_grade=grade,
+            excerpt=description or remark or None,
+            table_name=table_name,
+            field_name=field_name,
+            sample_values=sample_values,
+            non_null_rate=non_null_rate,
+            distinct_count=int(distinct_count) if distinct_count is not None else None,
+            match_reasons=match_reasons,
+            rejection_reasons=rejection_reasons,
+        )))
+
+    strong = sorted(
+        (item for item in ranked if item[1].evidence_grade == "strong"),
+        key=lambda item: (-item[0], item[1].source_ref),
+    )
+    supporting = sorted(
+        (item for item in ranked if item[1].evidence_grade == "supporting"),
+        key=lambda item: (-item[0], item[1].source_ref),
+    )
+    weak = sorted(
+        (item for item in ranked if item[1].evidence_grade == "weak"),
+        key=lambda item: (-item[0], item[1].source_ref),
+    )
+    rejected = sorted(
+        (item for item in ranked if item[1].evidence_grade == "rejected"),
+        key=lambda item: (-(item[1].distinct_count or 0), item[1].source_ref),
+    )
+    rejected_slots = min(len(rejected), 1 if len(strong) + len(supporting) >= 4 else 2)
+    accepted_slots = limit - rejected_slots
+    selected = strong[:2]
+    for group in (supporting, strong[2:], weak):
+        selected.extend(group[:max(0, accepted_slots - len(selected))])
+    return [item for _, item in (selected[:accepted_slots] + rejected[:rejected_slots])]
 
 
 class DiscoverySignal(BaseModel):
@@ -178,6 +381,7 @@ class DiscoverySignal(BaseModel):
     evidence: DiscoveryEvidence
     object_code: str = "zcgz"
     concept: str = Field(min_length=1)
+    diagnosis: str = ""  # 机器诊断句（与概念分离：concept 供聚类/交叉验证取词，诊断仅供展示）
     metric_code: str | None = None
     metric_name: str | None = None
     definition: str | None = None
@@ -237,6 +441,8 @@ class SemanticProposal(BaseModel):
     suggested_mappings: list[SourceValueMappingDraft] = Field(default_factory=list)
     mapping_only: bool = False
     formula: MetricFormula | None = None
+    governance_change_plan: RuleGovernanceChangePlan | None = None
+    revision: int = Field(default=1, ge=1)
     evidence: list[DiscoveryEvidence]
     confidence: float = Field(ge=0.0, le=1.0)
     occurrence_count: int = Field(ge=1)
@@ -776,6 +982,67 @@ class SemanticAlignmentService:
     ) -> list[SemanticProposal]:
         return self._store.list_proposals(proposal_type, status)
 
+    def create_rule_governance_draft(
+        self,
+        diagnosis: RuleGovernanceDiagnosis,
+        issue_id: str,
+        decision: RuleGovernanceDecision,
+        *,
+        review_note: str | None = None,
+    ) -> SemanticProposal:
+        issue = next((item for item in diagnosis.items if item.issue_id == issue_id), None)
+        if issue is None:
+            raise ValueError(f"规则治理问题不存在: {issue_id}")
+        note = (review_note or "").strip() or None
+        if decision != issue.recommended_decision and note is None:
+            raise ValueError("修改推荐结论时必须填写审核说明")
+        fingerprint = hashlib.sha256(
+            f"rule-governance|{diagnosis.fingerprint}|{issue_id}".encode("utf-8")
+        ).hexdigest()
+        unit_ids = sorted({
+            rule.unit_id for rule in diagnosis.rules if rule.rule_id in issue.rule_ids
+        })
+        plan = RuleGovernanceChangePlan(
+            diagnosis_id=diagnosis.diagnosis_id,
+            issue_id=issue_id,
+            release_id=diagnosis.release_id,
+            rule_ids=issue.rule_ids,
+            decision=decision,
+            proposed_changes=issue.proposed_changes,
+            affected_unit_ids=unit_ids,
+            requires_data_confirmation=(
+                decision == "needs_review"
+                or not any(item.evidence_grade == "strong" for item in issue.database_evidence)
+            ),
+            review_note=note,
+        )
+        existing = self._store.get_proposal_by_fingerprint(fingerprint)
+        if existing is not None:
+            if existing.status == ProposalStatus.ACCEPTED:
+                if existing.governance_change_plan == plan:
+                    return existing
+                raise ValueError("已批准的治理计划不能直接覆盖")
+            updated = existing.model_copy(update={
+                "governance_change_plan": plan,
+                "review_note": note,
+                "revision": existing.revision + 1,
+                "updated_at": _now(),
+            }, deep=True)
+            return self._store.save_proposal(updated)
+        evidence = issue.policy_evidence + issue.database_evidence
+        return self._store.save_proposal(SemanticProposal(
+            proposal_id=f"proposal_{uuid.uuid4().hex[:16]}",
+            fingerprint=fingerprint,
+            proposal_type=ProposalType.RULE_GOVERNANCE,
+            trigger_source=TriggerSource.MANUAL_RULE_CORRECTION,
+            concept=issue.title,
+            governance_change_plan=plan,
+            evidence=evidence,
+            confidence=0.9 if not issue.uncertainties else 0.6,
+            occurrence_count=max(1, len(issue.rule_ids)),
+            review_note=note,
+        ))
+
     def transition_proposal(
         self,
         proposal_id: str,
@@ -912,6 +1179,8 @@ class SemanticAlignmentService:
                     return proposal
                 if proposal.status != ProposalStatus.ACCEPTED:
                     raise ValueError("只有 accepted 提议可以发布")
+                if proposal.proposal_type == ProposalType.RULE_GOVERNANCE:
+                    raise ValueError("规则治理草稿不支持直接发布")
                 self._store.lock_and_claim_landing_targets(proposal)
                 if proposal.proposal_type == ProposalType.METRIC:
                     self._publish_metric_proposal(proposal)

@@ -6,6 +6,20 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from src.domain.skill.draft_models import SkillDraft, SkillExecutionContract
+from src.domain.skill.governance_models import (
+    FailureAttribution,
+    FailureCluster,
+    SkillEvalAssertion,
+    SkillEvalDataLocator,
+    SkillEvalEnvironmentRequirement,
+    SkillEvalEnvironmentSnapshot,
+    SkillEvalGateThresholds,
+    SkillEvalDimensionSummary,
+    SkillEvalTaskInput,
+    SkillEvalTaskResult,
+    SkillEvalTrajectoryStep,
+    TrajectoryPrefix,
+)
 from src.domain.skill.regression_models import SkillFeedbackReasonCode
 from src.runtime.skill_management.ai_authoring.schemas import (
     SkillAIGenerationProvenance,
@@ -19,6 +33,9 @@ from src.runtime.skill_management.workbench_service import (
 
 
 class SkillEvalCaseCreateRequest(BaseModel):
+    suite_id: str = Field(
+        default="EVS_platform_routing", min_length=1, max_length=64
+    )
     question_template: str = Field(min_length=1, max_length=2000)
     expected_skill_id: str | None = None
     required: bool = True
@@ -43,6 +60,7 @@ class SkillEvalCaseUpdateRequest(BaseModel):
 
 class SkillEvalCaseResponse(BaseModel):
     case_id: str
+    suite_id: str
     suite_version: int
     question_template: str
     expected_skill_id: str | None
@@ -64,9 +82,183 @@ class SkillEvalCaseListResponse(BaseModel):
     total: int
 
 
+class SkillEvalSuiteCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=256)
+    scope: Literal["platform", "skill"]
+    skill_id: str | None = Field(default=None, max_length=128)
+    purpose: str = Field(default="", max_length=1000)
+
+
+class SkillEvalSuiteUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=256)
+    purpose: str = Field(default="", max_length=1000)
+    status: Literal["active", "inactive"]
+    expected_revision: int = Field(ge=1)
+
+
+class SkillEvalSuiteResponse(BaseModel):
+    suite_id: str
+    name: str
+    scope: str
+    skill_id: str | None
+    purpose: str
+    status: str
+    revision: int
+    created_by: str
+    updated_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillEvalSuiteListResponse(BaseModel):
+    items: list[SkillEvalSuiteResponse]
+    total: int
+
+
+class _SkillEvalTaskPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_skill_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+    partition: Literal["regression", "benchmark", "holdout"] = "regression"
+    input: SkillEvalTaskInput
+    data_locators: list[SkillEvalDataLocator] = Field(default_factory=list)
+    environment_requirements: list[SkillEvalEnvironmentRequirement] = Field(
+        default_factory=list
+    )
+    assertions: list[SkillEvalAssertion] = Field(min_length=1)
+    trajectory_prefixes: list[TrajectoryPrefix] = Field(default_factory=list)
+    required: bool = True
+    enabled: bool = True
+    source_type: str = Field(default="manual", min_length=1, max_length=64)
+    source_ref: str = Field(default="", max_length=256)
+    risk_tags: list[str] = Field(default_factory=list)
+    business_tags: list[str] = Field(default_factory=list)
+    contains_sensitive_data: Literal[False] = False
+
+
+class SkillEvalTaskCreateRequest(_SkillEvalTaskPayload):
+    task_id: str | None = Field(default=None, max_length=80)
+
+
+class SkillEvalTaskUpdateRequest(_SkillEvalTaskPayload):
+    expected_revision: int = Field(ge=1)
+
+
+class SkillEvalTaskResponse(BaseModel):
+    task_id: str
+    suite_id: str
+    target_skill_id: str
+    name: str
+    partition: str
+    input: SkillEvalTaskInput
+    data_locators: list[SkillEvalDataLocator]
+    environment_requirements: list[SkillEvalEnvironmentRequirement]
+    assertions: list[SkillEvalAssertion]
+    trajectory_prefixes: list[TrajectoryPrefix]
+    required: bool
+    enabled: bool
+    source_type: str
+    source_ref: str
+    risk_tags: list[str]
+    business_tags: list[str]
+    contains_sensitive_data: bool
+    revision: int
+    created_by: str
+    updated_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillEvalTaskListResponse(BaseModel):
+    items: list[SkillEvalTaskResponse]
+    total: int
+
+
+class SkillEvalDatasetVersionResponse(BaseModel):
+    dataset_version_id: str
+    suite_id: str
+    suite_revision: int
+    version_number: int
+    task_snapshots: list[SkillEvalTaskResponse]
+    environment_contract_hash: str
+    evaluator_plan_hash: str
+    content_hash: str
+    created_by: str
+    created_at: datetime
+
+
+class SkillEvalDatasetVersionListResponse(BaseModel):
+    items: list[SkillEvalDatasetVersionResponse]
+    total: int
+
+
+class SkillEvalBenchmarkCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=256)
+    skill_id: str = Field(min_length=1, max_length=128)
+    dataset_version_id: str = Field(min_length=1, max_length=80)
+    environment_snapshot: SkillEvalEnvironmentSnapshot
+    evaluator_plan_id: Literal[
+        "deterministic_v1", "deterministic_judge_v1"
+    ] = "deterministic_v1"
+    judge_version: str | None = Field(default=None, max_length=128)
+    gate_thresholds: SkillEvalGateThresholds = Field(
+        default_factory=SkillEvalGateThresholds
+    )
+
+
+class SkillEvalBenchmarkResponse(BaseModel):
+    benchmark_id: str
+    name: str
+    skill_id: str
+    dataset_version_id: str
+    environment_snapshot: SkillEvalEnvironmentSnapshot
+    environment_hash: str
+    evaluator_plan_id: str
+    evaluator_plan_hash: str
+    judge_version: str | None
+    gate_thresholds: SkillEvalGateThresholds
+    status: str
+    created_by: str
+    created_at: datetime
+
+
+class SkillEvalBenchmarkListResponse(BaseModel):
+    items: list[SkillEvalBenchmarkResponse]
+    total: int
+
+
 class SkillEvalRunCreateRequest(BaseModel):
     version_id: str = Field(min_length=1, max_length=64)
     baseline_version_id: str | None = Field(default=None, max_length=64)
+
+
+class SkillEvalImprovementTaskCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    responsible_role: str = Field(default="skill_maintainer", min_length=1, max_length=64)
+    suggested_target: str = Field(default="skill", min_length=1, max_length=128)
+
+
+class SkillEvalImprovementTaskResponse(BaseModel):
+    task_id: str
+    run_id: str
+    cluster_id: str
+    status: str
+    description: str
+
+
+class SkillEvalFailureClusterResponse(BaseModel):
+    cluster: FailureCluster
+    improvement_tasks: list[SkillEvalImprovementTaskResponse] = Field(
+        default_factory=list
+    )
 
 
 class SkillEvalMetricsResponse(BaseModel):
@@ -108,6 +300,14 @@ class SkillEvalRunResponse(BaseModel):
     metrics: SkillEvalMetricsResponse
     results: list[SkillEvalResultResponse]
     case_snapshots: list[SkillEvalCaseResponse]
+    dataset_version_id: str | None = None
+    benchmark_id: str | None = None
+    environment_snapshot: SkillEvalEnvironmentSnapshot | None = None
+    task_results: list[SkillEvalTaskResult] = Field(default_factory=list)
+    trajectory_summary: list[SkillEvalTrajectoryStep] = Field(default_factory=list)
+    failure_attributions: list[FailureAttribution] = Field(default_factory=list)
+    failure_clusters: list[FailureCluster] = Field(default_factory=list)
+    dimension_summary: list[SkillEvalDimensionSummary] = Field(default_factory=list)
     created_by: str
     created_at: datetime
     completed_at: datetime | None

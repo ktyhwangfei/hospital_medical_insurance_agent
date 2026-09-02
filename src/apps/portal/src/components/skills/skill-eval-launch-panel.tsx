@@ -3,8 +3,7 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, Loader2, Play } from 'lucide-react'
 import {
-  createSkillEvalRun,
-  listInfraSkillCatalog,
+  createSkillEvalBenchmarkRun,
   listInfraSkillVersions,
 } from '@/lib/api-client'
 import { ApiClientError } from '@/lib/types'
@@ -12,47 +11,48 @@ import type { SkillEvalRunResponse, SkillVersionResponse } from '@/lib/types'
 
 /** 发起评测面板：选 Skill → 选版本 → 发起路由回归评测。 */
 export default function SkillEvalLaunchPanel({
+  skillId,
+  benchmarkId,
   onLaunched,
-  enabledCaseCount,
+  taskCount,
 }: {
+  skillId: string | null
+  benchmarkId: string | null
   onLaunched: (run: SkillEvalRunResponse) => void
-  enabledCaseCount: number
+  taskCount: number
 }) {
-  const [skills, setSkills] = useState<Array<{ skill_id: string }>>([])
-  const [selectedSkill, setSelectedSkill] = useState('')
   const [versions, setVersions] = useState<SkillVersionResponse[]>([])
   const [selectedVersion, setSelectedVersion] = useState('')
-  const [loadingVersions, setLoadingVersions] = useState(false)
+  const [loadingVersions, setLoadingVersions] = useState(Boolean(skillId))
   const [launching, setLaunching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    listInfraSkillCatalog()
-      .then((r) => setSkills(r.items))
-      .catch(() => undefined)
-  }, [])
-
-  async function onSkillChange(skillId: string) {
-    setSelectedSkill(skillId)
-    setSelectedVersion('')
-    setVersions([])
     if (!skillId) return
-    setLoadingVersions(true)
-    try {
-      setVersions(await listInfraSkillVersions(skillId))
-    } catch {
-      setVersions([])
-    } finally {
-      setLoadingVersions(false)
-    }
-  }
+    let active = true
+    listInfraSkillVersions(skillId)
+      .then((items) => {
+        if (active) {
+          setVersions(items.filter((item) => item.validation_status === 'passed'))
+        }
+      })
+      .catch(() => {
+        if (active) setVersions([])
+      })
+      .finally(() => {
+        if (active) setLoadingVersions(false)
+      })
+    return () => { active = false }
+  }, [skillId])
 
   async function launch() {
-    if (!selectedSkill || !selectedVersion) return
+    if (!benchmarkId || !selectedVersion) return
     setLaunching(true)
     setError(null)
     try {
-      const run = await createSkillEvalRun(selectedSkill, { version_id: selectedVersion })
+      const run = await createSkillEvalBenchmarkRun(benchmarkId, {
+        version_id: selectedVersion,
+      })
       onLaunched(run)
       setSelectedVersion('')
     } catch (err) {
@@ -68,23 +68,9 @@ export default function SkillEvalLaunchPanel({
         <Play className="h-4 w-4 text-blue-600" />
         发起评测
       </h3>
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="min-w-[180px] flex-1">
-          <label className="block text-xs text-slate-500">选择 Skill</label>
-          <select
-            data-testid="eval-launch-skill"
-            value={selectedSkill}
-            onChange={(e) => void onSkillChange(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm"
-          >
-            <option value="">— 选择 Skill —</option>
-            {skills.map((s) => (
-              <option key={s.skill_id} value={s.skill_id}>{s.skill_id}</option>
-            ))}
-          </select>
-        </div>
+      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
         <div className="min-w-[200px] flex-1">
-          <label className="block text-xs text-slate-500">选择版本（需 passed）</label>
+          <label className="block text-xs text-slate-600">候选版本</label>
           <select
             data-testid="eval-launch-version"
             value={selectedVersion}
@@ -92,19 +78,23 @@ export default function SkillEvalLaunchPanel({
             disabled={!versions.length || loadingVersions}
             className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm disabled:bg-slate-50"
           >
-            <option value="">{loadingVersions ? '加载中…' : '— 选择版本 —'}</option>
+            <option value="">{loadingVersions ? '加载中...' : '请选择已校验版本'}</option>
             {versions.map((v) => (
               <option key={v.version_id} value={v.version_id}>
-                {v.semantic_version} · {v.validation_status}
+                {v.semantic_version} ({v.version_id})
               </option>
             ))}
           </select>
+        </div>
+        <div className="min-w-[200px] rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <span className="font-medium text-slate-700">基线版本</span>
+          <p className="mt-1">待接入版本隔离执行后开放，当前不会生成伪对比。</p>
         </div>
         <button
           type="button"
           data-testid="eval-launch-button"
           onClick={() => void launch()}
-          disabled={launching || !selectedSkill || !selectedVersion}
+          disabled={launching || !benchmarkId || !selectedVersion}
           className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
           {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
@@ -112,7 +102,8 @@ export default function SkillEvalLaunchPanel({
         </button>
       </div>
       <p className="mt-2 text-xs text-slate-500">
-        评测将用 <span className="font-medium text-slate-700">{enabledCaseCount}</span> 个启用的路由用例做候选 vs 基线回归。
+        本次运行锁定 Benchmark <span className="font-mono text-slate-700">{benchmarkId ?? '未选择'}</span>，
+        共 <span className="font-medium text-slate-700">{taskCount}</span> 个端到端任务。
       </p>
       {error ? (
         <div className="mt-2 flex items-center gap-2 rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-700">

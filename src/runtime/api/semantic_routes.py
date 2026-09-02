@@ -18,6 +18,23 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.data_platform.storage.postgresql.policy_meta_store import PolicyMetaStore
 from src.runtime.api.semantic_alignment_routes import SemanticReviewPrincipalDependency
 from src.semantic_layer.extraction_contract import ExtractionSchema, build_extraction_schema
+from src.semantic_layer.models import (
+    DataQualityRule,
+    DatasetKey,
+    DatasetRelation,
+    ObjectVersionMetric,
+    PreferredRelationPath,
+    SemanticDataset,
+    SemanticField,
+)
+from src.semantic_layer.query_planner import (
+    LogicalQueryPlan,
+    SemanticQuery,
+    SemanticQueryPlanner,
+    SemanticQueryPlanningError,
+    SemanticQueryResult,
+    SemanticQueryService,
+)
 from src.shared.schemas.responses import error_detail
 
 logger = logging.getLogger(__name__)
@@ -84,6 +101,11 @@ class MetricDetail(BaseModel):
     quality_score: float
     version: str
     status: str
+    fact_field_code: str | None = None
+    aggregation: str | None = None
+    expression: str | None = None
+    dependencies: list[str] = Field(default_factory=list)
+    non_additive_dimensions: list[str] = Field(default_factory=list)
 
 
 class UpdateMetricResponse(BaseModel):
@@ -117,6 +139,11 @@ class SemanticSummary(BaseModel):
     discovery_tables: int = 0
     discovery_fields: int = 0
     discovery_unmapped: int = 0
+    datasets_count: int = 0
+    relations_count: int = 0
+    queryable_objects_count: int = 0
+    invalid_models_count: int = 0
+    runtime_coverage_status: str = "unavailable"
 
 
 class FieldMetadataItem(BaseModel):
@@ -409,6 +436,220 @@ def get_object(object_code: str):
     )
 
 
+class QueryModelDocument(BaseModel):
+    datasets: list[SemanticDataset]
+    keys: list[DatasetKey]
+    fields: list[SemanticField]
+    relations: list[DatasetRelation]
+    quality_rules: list[DataQualityRule]
+    preferred_relation_paths: list[PreferredRelationPath] = Field(default_factory=list)
+
+
+class QueryModelResponse(QueryModelDocument):
+    object_code: str
+    metrics: list[ObjectVersionMetric] = Field(default_factory=list)
+    validation_issues: list[str]
+    queryable: bool
+
+
+def _query_model_response(object_code: str) -> QueryModelResponse:
+    reg = get_registry()
+    obj = reg.get_object(object_code)
+    if obj is None:
+        raise HTTPException(status_code=404, detail=f"对象 '{object_code}' 不存在")
+    issues = reg.validate_query_model(object_code)
+    datasets = reg.list_datasets(object_code)
+    return QueryModelResponse(
+        object_code=object_code,
+        datasets=datasets,
+        keys=reg.list_dataset_keys(object_code=object_code),
+        fields=reg.list_fields(object_code=object_code),
+        relations=reg.list_dataset_relations(object_code),
+        quality_rules=reg.list_quality_rules(object_code),
+        preferred_relation_paths=obj.preferred_relation_paths,
+        metrics=[
+            ObjectVersionMetric.from_metric(metric)
+            for metric in reg.list_metrics(object_code)
+            if metric.fact_field_code or metric.expression
+        ],
+        validation_issues=issues,
+        queryable=bool(datasets) and not issues,
+    )
+
+
+def _published_query_model_response(object_code: str) -> QueryModelResponse:
+    reg = get_registry()
+    if reg.get_object(object_code) is None:
+        raise HTTPException(status_code=404, detail=f"对象 '{object_code}' 不存在")
+    versions = reg.list_object_versions(object_code)
+    if not versions:
+        return QueryModelResponse(
+            object_code=object_code,
+            datasets=[],
+            keys=[],
+            fields=[],
+            relations=[],
+            quality_rules=[],
+            preferred_relation_paths=[],
+            validation_issues=["对象没有已发布查询模型"],
+            queryable=False,
+        )
+    version = versions[-1]
+    return QueryModelResponse(
+        object_code=object_code,
+        datasets=version.datasets,
+        keys=version.keys,
+        fields=version.fields,
+        relations=version.relations,
+        quality_rules=version.quality_rules,
+        preferred_relation_paths=version.snapshot.get("preferred_relation_paths", []),
+        metrics=version.metrics,
+        validation_issues=[],
+        queryable=bool(version.datasets and version.keys and version.fields),
+    )
+
+
+def _validate_query_model_document(object_code: str, document: QueryModelDocument) -> list[str]:
+    """写入前校验引用完整性，避免批量替换破坏当前可用模型。"""
+    dataset_codes = [item.dataset_code for item in document.datasets]
+    key_codes = [item.key_code for item in document.keys]
+    field_codes = [item.field_code for item in document.fields]
+    relation_codes = [item.relation_code for item in document.relations]
+    rule_codes = [item.rule_code for item in document.quality_rules]
+    issues: list[str] = []
+    for label, values in (
+        ("dataset", dataset_codes), ("key", key_codes), ("field", field_codes),
+        ("relation", relation_codes), ("quality rule", rule_codes),
+    ):
+        if len(values) != len(set(values)):
+            issues.append(f"{label} code duplicated")
+    datasets = set(dataset_codes)
+    if len({item.datasource_id for item in document.datasets}) > 1:
+        issues.append("query model cannot span multiple datasources")
+    keys = {item.key_code: item for item in document.keys}
+    relations = set(relation_codes)
+    columns_by_dataset: dict[str, set[str]] = {}
+    nullable_by_column: dict[tuple[str, str], bool] = {}
+    for item in document.fields:
+        columns_by_dataset.setdefault(item.dataset_code, set()).add(item.column_name)
+        nullable_by_column[(item.dataset_code, item.column_name)] = item.nullable
+    for item in document.datasets:
+        if item.object_code != object_code:
+            issues.append(f"dataset '{item.dataset_code}' belongs to another object")
+        primary_keys = [key for key in document.keys if key.dataset_code == item.dataset_code and key.key_type == "primary"]
+        if len(primary_keys) != 1:
+            issues.append(f"dataset '{item.dataset_code}' must have exactly one primary key")
+    for item in document.keys:
+        if item.dataset_code not in datasets:
+            issues.append(f"key '{item.key_code}' references unknown dataset")
+        missing_columns = set(item.columns) - columns_by_dataset.get(item.dataset_code, set())
+        if missing_columns:
+            issues.append(f"key '{item.key_code}' references unknown columns")
+        if item.key_type == "primary" and any(
+            nullable_by_column.get((item.dataset_code, column), True) for column in item.columns
+        ):
+            issues.append(f"primary key '{item.key_code}' contains nullable columns")
+    for item in document.fields:
+        if item.dataset_code not in datasets:
+            issues.append(f"field '{item.field_code}' references unknown dataset")
+    for item in document.relations:
+        if item.object_code != object_code:
+            issues.append(f"relation '{item.relation_code}' belongs to another object")
+        from_key = keys.get(item.from_key)
+        to_key = keys.get(item.to_key)
+        if item.from_dataset not in datasets or item.to_dataset not in datasets:
+            issues.append(f"relation '{item.relation_code}' references unknown dataset")
+        if from_key is None or from_key.dataset_code != item.from_dataset:
+            issues.append(f"relation '{item.relation_code}' has invalid from_key")
+        if to_key is None or to_key.dataset_code != item.to_dataset:
+            issues.append(f"relation '{item.relation_code}' has invalid to_key")
+        if from_key and to_key and len(from_key.columns) != len(to_key.columns):
+            issues.append(f"relation '{item.relation_code}' key width mismatch")
+        if from_key and to_key and from_key.entity_code != to_key.entity_code:
+            issues.append(f"relation '{item.relation_code}' joins different entities")
+    for item in document.quality_rules:
+        if item.object_code != object_code:
+            issues.append(f"quality rule '{item.rule_code}' belongs to another object")
+        if item.target_dataset_or_relation not in datasets | relations:
+            issues.append(f"quality rule '{item.rule_code}' references unknown target")
+        reference = item.parameters.get("reference_dataset")
+        if reference is not None and reference not in datasets:
+            issues.append(f"quality rule '{item.rule_code}' references unknown dataset")
+    if document.datasets and not any(item.rule_type == "coverage" for item in document.quality_rules):
+        issues.append("query model missing coverage rule")
+    for item in document.preferred_relation_paths:
+        if item.from_dataset not in datasets or item.to_dataset not in datasets:
+            issues.append("preferred relation path references unknown dataset")
+        if any(code not in relations for code in item.relation_codes):
+            issues.append("preferred relation path references unknown relation")
+    known_fields = set(field_codes)
+    for metric in get_registry().list_metrics(object_code):
+        if metric.fact_field_code and metric.fact_field_code not in known_fields:
+            issues.append(f"metric '{metric.metric_code}' references unknown fact field")
+    return issues
+
+
+@router.get("/objects/{object_code}/query-model", response_model=QueryModelResponse)
+def get_query_model(object_code: str, published: bool = False) -> QueryModelResponse:
+    return (
+        _published_query_model_response(object_code)
+        if published
+        else _query_model_response(object_code)
+    )
+
+
+@router.post("/objects/{object_code}/query-model/validate", response_model=QueryModelResponse)
+def validate_query_model(object_code: str) -> QueryModelResponse:
+    return _query_model_response(object_code)
+
+
+@router.put("/objects/{object_code}/query-model", response_model=QueryModelResponse)
+def replace_query_model(
+    object_code: str,
+    document: QueryModelDocument,
+    principal: SemanticReviewPrincipalDependency,
+) -> QueryModelResponse:
+    del principal
+    reg = get_registry()
+    obj = reg.get_object(object_code)
+    if obj is None:
+        raise HTTPException(status_code=404, detail=f"对象 '{object_code}' 不存在")
+    issues = _validate_query_model_document(object_code, document)
+    if issues:
+        raise HTTPException(status_code=400, detail={
+            "error_code": "SEMANTIC_QUERY_MODEL_INVALID",
+            "message": "; ".join(issues),
+            "audit_event": {"object_code": object_code},
+        })
+
+    store = reg._store
+    transaction = store.transaction() if hasattr(store, "transaction") else nullcontext()
+    with transaction:
+        for item in store.list_quality_rules(object_code):
+            store.delete_quality_rule(item.rule_code)
+        for item in store.list_dataset_relations(object_code):
+            store.delete_dataset_relation(item.relation_code)
+        for item in store.list_fields(object_code=object_code):
+            store.delete_field(item.field_code)
+        for item in store.list_dataset_keys(object_code=object_code):
+            store.delete_dataset_key(item.key_code)
+        for item in store.list_datasets(object_code):
+            store.delete_dataset(item.dataset_code)
+        for item in document.datasets:
+            store.save_dataset(item)
+        for item in document.keys:
+            store.save_dataset_key(item)
+        for item in document.fields:
+            store.save_field(item)
+        for item in document.relations:
+            store.save_dataset_relation(item)
+        for item in document.quality_rules:
+            store.save_quality_rule(item)
+        obj.preferred_relation_paths = document.preferred_relation_paths
+        store.save_object(obj)
+    return _query_model_response(object_code)
+
+
 @router.get("/objects/{object_code}/extraction-schema", response_model=ExtractionSchema)
 def get_extraction_schema(object_code: str):
     """提取契约（政策管线只读消费）：返回该对象 status=published 指标的提取 schema。
@@ -545,6 +786,9 @@ def get_metric(metric_code: str):
         source_adapter_port=metric.source_adapter_port,
         usage_count=usage_count, quality_score=metric.quality_score,
         version=metric.version, status=metric.status,
+        fact_field_code=metric.fact_field_code, aggregation=metric.aggregation,
+        expression=metric.expression, dependencies=metric.dependencies,
+        non_additive_dimensions=metric.non_additive_dimensions,
     )
 
 
@@ -561,6 +805,11 @@ class BatchCreateMetricItem(BaseModel):
     required: bool = False
     source_table: str | None = None
     source_field: str | None = None
+    fact_field_code: str | None = None
+    aggregation: str | None = None
+    expression: str | None = None
+    dependencies: list[str] = Field(default_factory=list)
+    non_additive_dimensions: list[str] = Field(default_factory=list)
 
 
 class BatchCreateMetricsRequest(BaseModel):
@@ -606,6 +855,11 @@ def create_metric(req: CreateMetricRequest, principal: SemanticReviewPrincipalDe
         importance=req.importance,
         value_domain=req.value_domain,
         required=req.required,
+        fact_field_code=req.fact_field_code,
+        aggregation=req.aggregation,
+        expression=req.expression,
+        dependencies=req.dependencies,
+        non_additive_dimensions=req.non_additive_dimensions,
     )
     if req.source_field:
         metric.source_field = req.source_field
@@ -656,6 +910,11 @@ def create_metrics_batch(req: BatchCreateMetricsRequest, principal: SemanticRevi
                 importance=item.importance,
                 value_domain=item.value_domain,
                 required=item.required,
+                fact_field_code=item.fact_field_code,
+                aggregation=item.aggregation,
+                expression=item.expression,
+                dependencies=item.dependencies,
+                non_additive_dimensions=item.non_additive_dimensions,
             )
             if item.source_field:
                 metric.source_field = item.source_field
@@ -770,6 +1029,16 @@ def update_metric(
             metric.value_domain = req.value_domain
         if req.required is not None:
             metric.required = req.required
+        if req.fact_field_code is not None:
+            metric.fact_field_code = req.fact_field_code
+        if req.aggregation is not None:
+            metric.aggregation = req.aggregation
+        if req.expression is not None:
+            metric.expression = req.expression
+        if req.dependencies is not None:
+            metric.dependencies = req.dependencies
+        if req.non_additive_dimensions is not None:
+            metric.non_additive_dimensions = req.non_additive_dimensions
 
         task = None
         if requires_reextract:
@@ -840,6 +1109,11 @@ class CreateMetricRequest(BaseModel):
     required: bool = False
     source_table: str | None = None
     source_field: str | None = None
+    fact_field_code: str | None = None
+    aggregation: str | None = None
+    expression: str | None = None
+    dependencies: list[str] = Field(default_factory=list)
+    non_additive_dimensions: list[str] = Field(default_factory=list)
 
 
 class UpdateMetricRequest(BaseModel):
@@ -859,6 +1133,11 @@ class UpdateMetricRequest(BaseModel):
     source_table: str | None = None
     value_domain: str | None = None
     required: bool | None = None
+    fact_field_code: str | None = None
+    aggregation: str | None = None
+    expression: str | None = None
+    dependencies: list[str] | None = None
+    non_additive_dimensions: list[str] | None = None
 
 
 class CreateDomainRequest(BaseModel):
@@ -1059,6 +1338,23 @@ def get_semantic_summary():
     mapping_rate = (mapped_count / metrics_count * 100.0) if metrics_count > 0 else 0.0
 
     skill_references = sum(skill_refs_map.values())
+    datasets_count = len(store.list_datasets())
+    relations_count = len(store.list_dataset_relations())
+    queryable_objects_count = 0
+    invalid_models_count = 0
+    for obj in all_objects:
+        has_query_model = bool(store.list_datasets(obj.object_code))
+        if not has_query_model:
+            continue
+        if reg.validate_query_model(obj.object_code):
+            invalid_models_count += 1
+        elif reg.list_object_versions(obj.object_code):
+            queryable_objects_count += 1
+    runtime_coverage_status = (
+        "complete" if queryable_objects_count and invalid_models_count == 0
+        else "partial" if queryable_objects_count
+        else "unavailable"
+    )
 
     domain_progress = []
     for domain in domains:
@@ -1105,6 +1401,11 @@ def get_semantic_summary():
         discovery_tables=discovery_tables,
         discovery_fields=discovery_fields,
         discovery_unmapped=discovery_unmapped,
+        datasets_count=datasets_count,
+        relations_count=relations_count,
+        queryable_objects_count=queryable_objects_count,
+        invalid_models_count=invalid_models_count,
+        runtime_coverage_status=runtime_coverage_status,
     )
 
 
@@ -1701,115 +2002,98 @@ def execute_skill_query(skill_id: str, req: SkillQueryExecuteRequest):
     return {"skill_id": skill_id, "djh": req.djh, "items": items}
 
 
-# SettlementContext 字段 → 语义指标编码（一致性校验用）
-# [来源: settlement_data_provider.SettlementContext 与语义层指标的对应]
-_SETTLEMENT_CONTEXT_TO_METRIC = {
-    "deductible": "zydyxx.bcqfje",
-    "medical_insurance_inner_amount": "zydyxx.bcybnje",
-    "basic_pooling_payment": "zyfdxx.bdtczfje",
-    "basic_pooling_self_pay": "zyfdxx.bdtczf",
-    "large_amount_payment": "zyfdxx.bddezfje",
-    "large_amount_self_pay": "zyfdxx.bddezf",
-    "personal_total_pay": "zyfdxx.bdgryf",
-    "person_type": "zyjyxx.rylb",
-    "insurance_type": "djxx.fund_type",
-    "service_type": "djxx.yllb",
-}
+class SemanticQueryTestResponse(BaseModel):
+    plan: LogicalQueryPlan
+    result: SemanticQueryResult
+    parameterized_sql: str
 
 
-@router.get("/skills/{skill_id}/consistency-check")
-def consistency_check_skill(skill_id: str, djh: str):
-    """一致性校验：同一 djh 下，语义层路径 vs 现有 business_sql 路径的取数对比。
+class AnchorSampleRequest(BaseModel):
+    object_code: str
+    entity_code: str
+    field_code: str
 
-    回答“语义层建的映射对不对”：对每个指标对比两条路径的值，标出差异。
-    仅 settlement_explain_skill 有并行 business_sql 路径；其他技能返回未支持。
-    """
+
+class AnchorSampleResponse(BaseModel):
+    value: str | int | float
+
+
+def _get_semantic_query_runtime() -> tuple[SemanticQueryPlanner, SemanticQueryService]:
     from src.runtime.discovery.semantic_source import get_semantic_data_source
 
-    if skill_id != "settlement_explain_skill":
-        return {"skill_id": skill_id, "supported": False,
-                "message": "该技能无并行 business_sql 路径，无法对比"}
-
-    metric_codes = _resolve_skill_metric_codes(skill_id)
-
-    # ① 语义层 flat 路径
+    registry = get_registry()
     source = get_semantic_data_source()
-    semantic_values = source.query(metric_codes, context={"djh": djh})
-    # ①' 语义层 joined 路径（复用 business_sql JOIN）
-    joined_values = source.query(metric_codes, context={"djh": djh}, join_mode="joined")
 
-    # ② business_sql 路径（现有生产路径）
-    business_values: dict[str, Any] = {}
-    business_error: str | None = None
+    def connect(datasource_id: str):
+        config = source._resolve_datasource_connection(datasource_id)
+        if config is None:
+            config = source._resolve_source_config()
+        return source._connect(config)
+
+    return SemanticQueryPlanner(registry), SemanticQueryService(registry, connect)
+
+
+@router.post("/query/test", response_model=SemanticQueryTestResponse)
+def test_semantic_query(
+    query: SemanticQuery,
+    principal: SemanticReviewPrincipalDependency,
+) -> SemanticQueryTestResponse:
+    """管理员受控查询验证：返回逻辑计划、质量结果和参数化 SQL。"""
+    del principal
+    planner, service = _get_semantic_query_runtime()
     try:
-        from src.config.production import DATA_SOURCE_MODE
-        if DATA_SOURCE_MODE != "real_db":
-            business_error = f"DATA_SOURCE_MODE={DATA_SOURCE_MODE}，未启用真实 DB"
-        else:
-            from src.runtime.policy_qa.settlement_data_provider import RealDbSettlementDataProvider
-            provider = RealDbSettlementDataProvider()
-            raw = provider.client.get_case_context_raw(settlement_id=djh)
-            raw_data = raw.raw_data or {}
-            # 映射 SettlementContext 字段 → 指标编码
-            for ctx_field, metric_code in _SETTLEMENT_CONTEXT_TO_METRIC.items():
-                raw_key = {
-                    "deductible": "bcqfje", "medical_insurance_inner_amount": "bcybnje",
-                    "basic_pooling_payment": "bdtczfje", "basic_pooling_self_pay": "bdtczf",
-                    "large_amount_payment": "bddegwyzfje", "large_amount_self_pay": "bddegwyzf",
-                    "personal_total_pay": "bdgryf", "person_type": "PER_TYPE",
-                    "insurance_type": "fund_type", "service_type": "yllb",
-                }.get(ctx_field, ctx_field)
-                if raw_key in raw_data:
-                    business_values[metric_code] = raw_data.get(raw_key)
-    except Exception as e:
-        business_error = str(e)
-
-    # ③ 逐指标对比
-    reg = get_registry()
-    store = reg._store
-    items = []
-    for code in metric_codes:
-        m = store.get_metric(code)
-        sem_v = semantic_values.get(code)
-        join_v = joined_values.get(code)
-        biz_v = business_values.get(code)
-        # 只对两条路径都返回的数值型指标判定 match
-        compared = code in business_values
-        match = (compared and _values_equal(sem_v, biz_v))
-        joined_match = (compared and _values_equal(join_v, biz_v))
-        items.append({
-            "metric_code": code,
-            "name": m.name if m else code,
-            "semantic_value": sem_v,
-            "semantic_joined_value": join_v,
-            "business_sql_value": biz_v,
-            "compared": compared,
-            "match": match,
-            "joined_match": joined_match,
-        })
-    matched = sum(1 for it in items if it["match"])
-    joined_matched = sum(1 for it in items if it["joined_match"])
-    compared = sum(1 for it in items if it["compared"])
-    return {
-        "skill_id": skill_id, "djh": djh, "supported": True,
-        "business_sql_error": business_error,
-        "summary": {
-            "compared": compared,
-            "flat_matched": matched, "flat_mismatched": compared - matched,
-            "joined_matched": joined_matched, "joined_mismatched": compared - joined_matched,
-        },
-        "items": items,
-    }
+        compiled = planner.compile(query)
+        result = service.execute(query)
+    except SemanticQueryPlanningError as exc:
+        raise HTTPException(status_code=400, detail=error_detail(
+            "SEMANTIC_QUERY_INVALID", str(exc), {"object_code": query.object_code},
+        )) from exc
+    except Exception as exc:
+        logger.exception("semantic query test failed")
+        raise HTTPException(status_code=503, detail=error_detail(
+            "SEMANTIC_QUERY_UNAVAILABLE", "语义查询执行失败", {"object_code": query.object_code},
+        )) from exc
+    return SemanticQueryTestResponse(
+        plan=compiled.plan,
+        result=result,
+        parameterized_sql=compiled.sql,
+    )
 
 
-def _values_equal(a: Any, b: Any) -> bool:
-    """数值型容差比较；非数值要求相等。"""
+@router.post("/query/anchor-sample", response_model=AnchorSampleResponse)
+def sample_semantic_query_anchor(
+    request: AnchorSampleRequest,
+    principal: SemanticReviewPrincipalDependency,
+) -> AnchorSampleResponse:
+    """从已发布 identifier 字段中随机取得一个非空验证锚点。"""
+    del principal
+    _planner, service = _get_semantic_query_runtime()
     try:
-        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-            return abs(float(a) - float(b)) < 0.01
-    except Exception:
-        pass
-    return str(a) == str(b)
+        value = service.sample_anchor(
+            request.object_code,
+            request.entity_code,
+            request.field_code,
+        )
+    except SemanticQueryPlanningError as exc:
+        raise HTTPException(status_code=400, detail=error_detail(
+            "SEMANTIC_ANCHOR_SAMPLE_INVALID",
+            str(exc),
+            {"object_code": request.object_code},
+        )) from exc
+    except Exception as exc:
+        logger.exception("semantic anchor sample failed")
+        raise HTTPException(status_code=503, detail=error_detail(
+            "SEMANTIC_ANCHOR_SAMPLE_UNAVAILABLE",
+            "锚点取样失败",
+            {"object_code": request.object_code},
+        )) from exc
+    if value is None:
+        raise HTTPException(status_code=404, detail=error_detail(
+            "SEMANTIC_ANCHOR_SAMPLE_EMPTY",
+            "当前锚点字段没有可用样本",
+            {"object_code": request.object_code},
+        ))
+    return AnchorSampleResponse(value=value)
 
 
 

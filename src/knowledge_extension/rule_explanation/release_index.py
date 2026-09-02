@@ -20,6 +20,9 @@ PublicationRecord = tuple[str, str, str, CanonicalRule]
 
 
 class ReleaseIndexBackend(Protocol):
+    def read_all(
+        self, kind: CollectionKind, collection_name: str
+    ) -> list[dict[str, Any]]: ...
     def create(self, kind: CollectionKind, collection_name: str) -> None: ...
     def insert(
         self, kind: CollectionKind, collection_name: str, records: list[dict[str, Any]]
@@ -97,7 +100,15 @@ class KnowledgeWorkbenchReleaseSource:
             payload["hosp_lv"] = payload.pop("hospital_level")
         payload.update({
             "rule_id": rule.rule_id,
-            "rule_type": rule.subject,
+            "rule_type": (
+                {"deductible": "起付线", "cap": "封顶线"}.get(rule.subject)
+                or (
+                    "支付比例"
+                    if rule.subject == "payment_ratio"
+                    or rule.subject.endswith(("_payment_ratio", "_reimbursement_ratio"))
+                    else rule.subject
+                )
+            ),
             "psn_type": rule.population or "",
             "source_text": source_text,
         })
@@ -153,6 +164,25 @@ class ReleaseIndexBuilder:
             raise ValueError(f"候选版本不存在: {release_id}")
         if release.status != "building":
             raise ValueError(f"仅 building 版本可以构建索引: {release.status}")
+
+        active = self._store.get_active_release()
+        if (
+            active is not None
+            and active.release_id != release_id
+            and hasattr(self._backend, "read_all")
+        ):
+            facts = _merge_records(
+                "fact_id",
+                self._backend.read_all("facts", "policy_facts"),
+                self._backend.read_all("facts", active.facts_collection),
+                facts,
+            )
+            rules = _merge_records(
+                "rule_id",
+                self._backend.read_all("rules", "policy_rules_v2"),
+                self._backend.read_all("rules", active.rules_collection),
+                rules,
+            )
 
         self._backend.create("facts", release.facts_collection)
         self._backend.create("rules", release.rules_collection)
@@ -213,6 +243,30 @@ class MilvusReleaseIndexBackend:
         self._alias = alias
         self._collections: dict[str, Any] = {}
 
+    def read_all(
+        self, kind: CollectionKind, collection_name: str
+    ) -> list[dict[str, Any]]:
+        from pymilvus import Collection, connections, utility
+
+        if not connections.has_connection(self._alias):
+            from src.config.production import MILVUS_HOST, MILVUS_PORT
+
+            connections.connect(
+                alias=self._alias, host=MILVUS_HOST, port=str(MILVUS_PORT)
+            )
+        if not utility.has_collection(collection_name, using=self._alias):
+            return []
+        collection = Collection(collection_name, using=self._alias)
+        collection.load()
+        iterator = collection.query_iterator(expr="", output_fields=["*"])
+        records: list[dict[str, Any]] = []
+        try:
+            while batch := iterator.next():
+                records.extend(dict(item) for item in batch)
+        finally:
+            iterator.close()
+        return records
+
     def create(self, kind: CollectionKind, collection_name: str) -> None:
         if kind == "facts":
             from src.knowledge_extension.rule_explanation.policy_retrieval.policy_facts_schema import (
@@ -259,3 +313,15 @@ class MilvusReleaseIndexBackend:
         from pymilvus import utility
 
         return bool(utility.has_collection(collection_name, using=self._alias))
+
+
+def _merge_records(
+    identity: str, *groups: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        for record in group:
+            key = str(record.get(identity) or "")
+            if key:
+                merged[key] = record
+    return list(merged.values())

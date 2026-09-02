@@ -34,6 +34,11 @@ interface SemanticSummary {
   discovery_tables: number
   discovery_fields: number
   discovery_unmapped: number
+  datasets_count: number
+  relations_count: number
+  queryable_objects_count: number
+  invalid_models_count: number
+  runtime_coverage_status: string
 }
 
 // ── API Path ─────────────────────────────────────────────────────
@@ -225,13 +230,13 @@ export default function SemanticLayerDashboard() {
 
         <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-1.5">
-            <CardTitle className="text-[11px] font-medium text-slate-500">技能引用</CardTitle>
+            <CardTitle className="text-[11px] font-medium text-slate-500">可查询对象</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold tracking-tight text-amber-600">
-              {data.skill_references}
+              {data.queryable_objects_count}
             </div>
-            <p className="text-[10px] text-slate-400 mt-0.5">指标累计被引用次数</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">运行时覆盖：{data.runtime_coverage_status}</p>
           </CardContent>
         </Card>
       </div>
@@ -309,17 +314,17 @@ export default function SemanticLayerDashboard() {
           href="/semantic-layer/metrics"
         />
 
-        {/* 映射 */}
+        {/* 数据模型 */}
         <SectionCard
           icon={Link2}
           iconColor="text-emerald-600"
           iconBg="bg-emerald-50"
-          title="映射中心"
-          description="追踪字段到指标映射关系"
+          title="数据模型"
+          description="管理数据集、键、字段与关系"
           stats={[
-            { label: '映射率', value: `${data.mapping_rate.toFixed(0)}%`, accent: 'text-emerald-600' },
-            { label: '已映射', value: data.mapped_count, accent: 'text-emerald-600' },
-            { label: '待处理', value: data.unmapped_count, accent: 'text-red-500' },
+            { label: '数据集', value: data.datasets_count, accent: 'text-blue-600' },
+            { label: '关系', value: data.relations_count, accent: 'text-emerald-600' },
+            { label: '无效模型', value: data.invalid_models_count, accent: 'text-red-500' },
           ]}
           href="/semantic-layer/mapping"
         />

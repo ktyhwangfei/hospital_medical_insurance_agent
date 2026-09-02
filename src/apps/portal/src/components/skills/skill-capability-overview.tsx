@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Layers3, RefreshCw, Search } from 'lucide-react'
+import Link from 'next/link'
+import { FlaskConical, Layers3, RefreshCw, Search } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -122,6 +123,13 @@ function SkillCard({ item }: { item: SkillWorkbenchItem }) {
             <span>v{item.semantic_version}</span>
             <span>{contract.profiles.length} 个场景</span>
             <span>{uniqueMetricCount(contract)} 个业务指标</span>
+            <Link
+              href={`/skills/evaluations?skill=${encodeURIComponent(item.skill_id)}`}
+              className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1.5 font-medium text-white hover:bg-blue-700"
+            >
+              <FlaskConical className="size-3.5" aria-hidden="true" />
+              测评
+            </Link>
           </div>
         </div>
         {commonMetrics.length > 0 && (

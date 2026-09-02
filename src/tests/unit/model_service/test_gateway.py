@@ -37,6 +37,26 @@ def _make_response(content="ok", model="gpt-4o-mini"):
     )
 
 
+def test_generate_governed_route_resolution_error_falls_back_to_env_config(monkeypatch):
+    """治理解析失败（如缺 MODEL_GOVERNANCE_MASTER_KEY）→ 降级 .env 直连，不硬失败。
+
+    线上事故：库里有 active 治理路由但未配 master key，提取全线 500，
+    而环境里 MODEL_BASE_URL/KEY 明明可用。降级语义与 governed=None 一致。
+    """
+    from src.model_service.governance_runtime import GovernanceRuntimeError
+
+    def boom(scene, model_type):
+        raise GovernanceRuntimeError("解析治理路由模型失败")
+
+    monkeypatch.setattr("src.model_service.gateway.resolve_governed_route", boom)
+    instance = ModelGateway()
+    instance._config.base_url = "https://static.example.test/v1"
+    messages = [Message(role="user", content="Hi")]
+    with patch.object(instance, "_call_provider", return_value=_make_response("ok")):
+        result = instance.generate(messages, "llm", "policy_fact_extraction")
+    assert result.content == "ok"
+
+
 def test_generate_success(gateway):
     messages = [Message(role="user", content="Hello")]
     with patch.object(gateway, "_call_provider", return_value=_make_response("Hi")):

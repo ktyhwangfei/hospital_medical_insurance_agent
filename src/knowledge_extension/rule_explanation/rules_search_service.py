@@ -28,18 +28,50 @@ RULE_OUTPUT_FIELDS = [
 ]
 
 
+def _resolve_active_release() -> dict | None:
+    """读 policy_active_release 当前激活版（best-effort，失败返回 None 回退 v2）。
+
+    指针表只存 release_id；collection 名按发布约定拼接（create_release 同规则）。
+    """
+    try:
+        from src.config.production import DATABASE_URL
+        from src.data_platform.storage.postgresql.client import PostgreSQLClient
+        rows = PostgreSQLClient(DATABASE_URL).execute(
+            "SELECT release_id FROM policy_active_release WHERE singleton_id = TRUE LIMIT 1",
+        )
+        if not rows:
+            return None
+        release_id = rows[0]["release_id"]
+        return {
+            "release_id": release_id,
+            "facts_collection": f"policy_facts_{release_id}",
+            "rules_collection": f"policy_rules_{release_id}",
+        }
+    except Exception:
+        return None
+
+
 class RulesSearchService:
-    """政策规则三模式检索 + 按 fact 分组。"""
+    """政策规则三模式检索 + 按 fact 分组。
+
+    默认 collection 跟随 policy_active_release（治理发布接管检索，评审 B2/P0-1）；
+    无激活记录或读库失败时回退 policy_rules_v2 / policy_facts（向后兼容）。
+    """
 
     def __init__(
         self,
         uri: str = "http://127.0.0.1:19530",
-        rules_col_name: str = "policy_rules_v2",
-        facts_col_name: str = "policy_facts",
+        rules_col_name: str | None = None,
+        facts_col_name: str | None = None,
     ):
         self._client = MilvusClient(uri=uri, timeout=10)
-        self._rules_col = rules_col_name
-        self._facts_col = facts_col_name
+        active = _resolve_active_release() if rules_col_name is None else None
+        self._rules_col = rules_col_name or (
+            active["rules_collection"] if active else "policy_rules_v2"
+        )
+        self._facts_col = facts_col_name or (
+            active["facts_collection"] if active else "policy_facts"
+        )
 
     @staticmethod
     def _build_filter(filters: dict[str, str]) -> str:

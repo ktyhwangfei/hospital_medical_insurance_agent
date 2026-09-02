@@ -69,6 +69,7 @@ class PolicyQualityStore(Protocol):
     def list_releases(self) -> list[KnowledgeRelease]: ...
     def get_active_release(self) -> KnowledgeRelease | None: ...
     def claim_quality_run(self, release_id: str, run_id: str) -> str: ...
+    def reclaim_stale_runs(self, release_id: str, stale_after_seconds: int = 1800) -> int: ...
     def complete_quality_run(
         self,
         release_id: str,
@@ -172,6 +173,31 @@ class InMemoryPolicyQualityStore:
                 update={"status": "testing", "quality_run_id": run_id}
             )
             return previous_status
+
+    def reclaim_stale_runs(self, release_id: str, stale_after_seconds: int = 1800) -> int:
+        """回收孤儿运行：running 超时则置 failed 并释放 release（内存实现）。"""
+        import datetime as _dt
+
+        cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=stale_after_seconds)
+        reclaimed = 0
+        with self._lock:
+            for run in self.runs.values():
+                if run.release_id == release_id and run.status == "running" and run.created_at < cutoff:
+                    self.runs[run.run_id] = run.model_copy(update={
+                        "status": "failed",
+                        "blocked_reasons": ["后端中断孤儿运行自动回收"],
+                    })
+                    reclaimed += 1
+            release = self.releases.get(release_id)
+            if (
+                reclaimed
+                and release is not None
+                and release.status == "testing"
+            ):
+                self.releases[release_id] = release.model_copy(
+                    update={"status": "failed", "quality_run_id": None}
+                )
+        return reclaimed
 
     def complete_quality_run(
         self,

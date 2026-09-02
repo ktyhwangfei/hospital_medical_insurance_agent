@@ -13,6 +13,12 @@ export interface PolicyQACaseContext {
   largeAmountSelfPay?: number | null
   personalTotalPay?: number | null
   totalAmount?: number | null
+  queryScope?: 'whole_admission' | 'segment' | null
+  segmentCount?: number | null
+  matchedSegmentCount?: number | null
+  coverageStatus?: 'complete' | 'partial' | 'unavailable' | null
+  stayStartDate?: string | null
+  stayEndDate?: string | null
 }
 
 export interface PolicyQAVerificationSummary {
@@ -20,6 +26,12 @@ export interface PolicyQAVerificationSummary {
   calculationChecked: boolean
   policyCount: number
   message: string
+}
+
+export interface PolicyQASettlementField {
+  fieldName: string
+  value: number | null
+  state: 'non_zero' | 'reported_zero' | 'missing' | 'not_applicable'
 }
 
 export interface PolicyQAResult {
@@ -32,6 +44,8 @@ export interface PolicyQAResult {
   citations: Array<{ title: string; excerpt: string }>
   uncertainties: string[]
   verificationSummary: PolicyQAVerificationSummary
+  scenarioId?: string
+  settlementFields: PolicyQASettlementField[]
 }
 
 export interface PolicyQASseEvent {
@@ -136,6 +150,8 @@ export function toPolicyQAResult(raw: unknown): PolicyQAResult {
       policyCount: verification.policy_count,
       message: verification.message,
     },
+    scenarioId: typeof raw.scenario_id === 'string' ? raw.scenario_id : undefined,
+    settlementFields: toSettlementFields(raw.field_explanations),
   }
 }
 
@@ -153,6 +169,7 @@ function unavailableResult(): PolicyQAResult {
       policyCount: 0,
       message: '公开结果不完整，未展示未经核验的内容。',
     },
+    settlementFields: [],
   }
 }
 
@@ -197,6 +214,24 @@ function toCaseContext(value: unknown): PolicyQACaseContext | undefined {
     largeAmountSelfPay: nullableNumber(value.large_amount_self_pay),
     personalTotalPay: nullableNumber(value.personal_total_pay),
     totalAmount: nullableNumber(value.total_amount),
+    queryScope:
+      value.query_scope === 'whole_admission' || value.query_scope === 'segment'
+        ? value.query_scope
+        : value.query_scope === null
+          ? null
+          : undefined,
+    segmentCount: nullableNumber(value.segment_count),
+    matchedSegmentCount: nullableNumber(value.matched_segment_count),
+    coverageStatus:
+      value.coverage_status === 'complete' ||
+      value.coverage_status === 'partial' ||
+      value.coverage_status === 'unavailable'
+        ? value.coverage_status
+        : value.coverage_status === null
+          ? null
+          : undefined,
+    stayStartDate: nullableString(value.stay_start_date),
+    stayEndDate: nullableString(value.stay_end_date),
   }
 }
 
@@ -206,6 +241,25 @@ function toCalculationSteps(value: unknown): PolicyQAResult['calculationSteps'] 
     stepName: typeof step.step_name === 'string' ? step.step_name : '',
     description: typeof step.description === 'string' ? step.description : '',
   }))
+}
+
+function toSettlementFields(value: unknown): PolicyQASettlementField[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(isRecord).flatMap((item) => {
+    const state = item.state
+    if (
+      typeof item.field_name !== 'string' ||
+      (state !== 'non_zero' &&
+        state !== 'reported_zero' &&
+        state !== 'missing' &&
+        state !== 'not_applicable')
+    ) {
+      return []
+    }
+    const amount = nullableNumber(item.value)
+    if (amount === undefined) return []
+    return [{ fieldName: item.field_name, value: amount ?? null, state }]
+  })
 }
 
 function toDefinition(value: unknown): PolicyQAResult['definition'] {

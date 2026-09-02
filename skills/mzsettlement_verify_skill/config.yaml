@@ -1,0 +1,129 @@
+money_tolerance: "0.01"
+money_states: [non_zero, reported_zero, missing, not_applicable]
+high_risk_actions: [退费, 冲正, 撤销结算, 重新结算]
+always_confirm_actions: [撤销结算, 重新结算]
+write_intent_terms: [帮我, 请, 执行, 办理, 进行, 立即, 马上, 给我, 给患者, 申请]
+excluded_route_phrases: [如何办理异地, 怎么异地备案, 如何办理慢特病]
+routing_priority:
+  - transaction-status-and-refund
+  - fee-item-scope-explanation
+  - cross-region-and-institution
+  - eligibility-and-special-benefit
+  - deductible-and-annual-progress
+  - reimbursement-and-cap-verification
+  - payment-channel-verification
+  - personal-liability-explanation
+  - overall-settlement-verification
+
+context_fields:
+  T_FeeAll: total_amount
+  T_FeeIn: in_scope_amount
+  T_FeeOut: out_of_scope_amount
+  T_SelfPay1: self_pay_one
+  T_SelfPay2: self_pay_two
+  T_SelfPayAll: personal_total_amount
+  T_FirstPay: deductible_amount
+  T_BeyondBig: beyond_cap_amount
+  T_BigSelfPay: large_self_pay
+  T_FundPay: fund_total_amount
+  T_BigPay: large_fund_payment
+  T_PersonCountPay: account_payment
+  T_CashPay: cash_payment
+  T_BigillPay: big_disease_payment
+  RETIRE_OFFICER_PAY: retired_medical_payment
+  T_OfficalPay: unit_supplement_payment
+  T_JCPay: disabled_soldier_payment
+  T_BCPay: supplementary_insurance_payment
+  NT_CivilPay: assistance_payment
+  P_FundType: insurance_type
+  PN_PersonType: person_type
+  T_CureType: service_type
+  HospitalLevel: hospital_level
+  T_TradeDate: settlement_date
+
+fee_item_query:
+  profile_ids: [fee-item-scope-explanation, personal-liability-explanation]
+  metrics: [Fee, FeeIn, FeeOut, FeeItem_SelfPay2, FEE_SP_SCALE, FEE_MEDIC_L, MEDIC_L]
+  dimensions: [ItemName, F_LEVEL, ItemCode, StandardCode, ItemType, FeeType, SPEDRUG_FLAG, State]
+
+fee_item_labels:
+  ItemName: 项目
+  ItemCode: 项目编码
+  StandardCode: 国家标准码
+  ItemType: 项目类别
+  FeeType: 费用类别
+  F_LEVEL: 医保等级
+  Fee: 金额
+  FeeIn: 医保内
+  FeeOut: 医保外
+  FeeItem_SelfPay2: 先自付
+  FEE_SP_SCALE: 先自付比例
+  FEE_MEDIC_L: 医保限额
+  MEDIC_L: 医疗限额
+  SPEDRUG_FLAG: 特殊药品标志
+  State: 明细状态
+
+metric_labels:
+  T_State: 交易状态
+  P_JCLevel: 军残待遇等级
+  NT_BasicPay: 基本支付金额
+  NT_OtherPay: 其他支付金额
+  NT_AgencySumPay: 经办机构支付合计
+  TB_FeeIn: 本次结算前年度医保内累计
+  TA_FeeIn: 本次结算后年度医保内累计
+  TB_MZTimes: 本次结算前年度门诊次数
+  TA_MZTimes: 本次结算后年度门诊次数
+  TB_BigPay: 本次结算前年度大额支付累计
+  TA_BigPay: 本次结算后年度大额支付累计
+  TB_FeeAfterBig: 本次结算前大额段后费用累计
+  TA_FeeAfterBig: 本次结算后大额段后费用累计
+  TB_FeeInL1: 本次结算前一级医院医保内累计
+  TA_FeeInL1: 本次结算后一级医院医保内累计
+  TB_BigPayL1: 本次结算前一级医院大额支付累计
+  TA_BigPayL1: 本次结算后一级医院大额支付累计
+  TB_FeeAfterBigL1: 本次结算前一级医院大额段后累计
+  TA_FeeAfterBigL1: 本次结算后一级医院大额段后累计
+  NT_OUT2_SCALE: 门诊二段支付比例记录
+  NT_OUT2_PRICE: 门诊二段定额记录
+  TB_BeyondFeeIn: 本次结算前超封顶医保内累计
+  TA_BeyondFeeIn: 本次结算后超封顶医保内累计
+  TB_BigillComm: 本次结算前大病共付累计
+  TA_BigillComm: 本次结算后大病共付累计
+  TB_BigillPay: 本次结算前大病支付累计
+  TA_BigillPay: 本次结算后大病支付累计
+  P_HospFlag: 医院就医标志
+  P_Official: 公务员或公疗资格标志
+  PN_ChronicFlag: 慢特病资格标志
+  PN_IsChronicHosp: 慢特病定点机构标志
+  PN_ChronicCode: 慢特病病种编码
+  PN_NoRightReason: 待遇未参与原因
+  P_retirementflag: 退休标志
+  P_CivilFlag: 民政待遇标志
+  P_CivilType: 民政待遇类别
+  RETIRE_OFFICER_FLAG: 退役医疗待遇标志
+  T_GFBelongFlag: 军残待遇标志
+  NT_AllSelfPayFlag: 全自费结算标志
+  PN_OutTransaction: 异地交易标志
+  PN_NationFundType: 国家平台险种
+  T_CompHospFlag: 定点机构符合标志
+  T_SpSetlFlag: 特殊结算标志
+  T_HasRefundmented: 是否已退费
+  T_PartialReturnFlag: 部分退费标志
+  T_OraginalTradeNo: 原交易号
+  T_OraginalTradeDate: 原交易日期
+  NP_Settle_State: 结算处理状态
+  SETL_DATE: 结算处理日期
+  NT_ReTradeFlag: 重交易标志
+  T_FeeNo: 费用号
+
+profile_summaries:
+  overall-settlement-verification: 已完成门诊结算总额和支付方金额勾稽。
+  personal-liability-explanation: 已列示本次门诊结算单中的个人负担金额。
+  payment-channel-verification: 已列示本次门诊各支付渠道，未盲目重复相加总分项。
+  deductible-and-annual-progress: 已列示起付金额及本次结算前后年度累计。
+  reimbursement-and-cap-verification: 已核验可证明的金额关系；比例和封顶结论以政策证据为准。
+  fee-item-scope-explanation: 已列示门诊费用明细的医保内外和先自付事实。
+  eligibility-and-special-benefit: 已列示资格标志与专项待遇实际支付。
+  cross-region-and-institution: 已列示异地与医疗机构相关结算条件。
+  transaction-status-and-refund: 已列示交易、结算和退费状态；未执行任何写操作。
+

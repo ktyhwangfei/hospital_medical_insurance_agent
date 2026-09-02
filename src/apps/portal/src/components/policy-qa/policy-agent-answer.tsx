@@ -2,6 +2,7 @@
 
 import { AlertTriangle, Sparkles } from 'lucide-react'
 
+import AnswerVerificationButton from '@/components/policy-qa/answer-verification-button'
 import CalculationDisclosure from '@/components/policy-qa/calculation-disclosure'
 import FeedbackDrawer from '@/components/policy-qa/feedback-drawer'
 import PolicySourcesDialog from '@/components/policy-qa/policy-sources-dialog'
@@ -53,7 +54,10 @@ export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAn
       ) : null}
 
       {message.qaTurnId ? (
-        <FeedbackDrawer qaTurnId={message.qaTurnId} />
+        <div className="flex flex-wrap items-center gap-3">
+          <AnswerVerificationButton qaTurnId={message.qaTurnId} />
+          <FeedbackDrawer qaTurnId={message.qaTurnId} />
+        </div>
       ) : null}
 
       {onFollowUp ? (

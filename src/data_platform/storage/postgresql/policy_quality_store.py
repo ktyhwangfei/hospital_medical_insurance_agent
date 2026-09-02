@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS policy_qa_test_cases (
     filters JSONB NOT NULL DEFAULT '{}'::jsonb,
     required BOOLEAN NOT NULL DEFAULT TRUE,
     active BOOLEAN NOT NULL DEFAULT TRUE,
+    answer_verification JSONB,
     case_set_version INTEGER NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -190,6 +191,21 @@ QUALITY_RUN_SEQUENCE_MIGRATION_SQL = ";\n".join(
     QUALITY_RUN_SEQUENCE_MIGRATION_STATEMENTS
 )
 
+TEST_CASE_ANSWER_VERIFICATION_COLUMN_QUERY = """
+SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'policy_qa_test_cases'
+      AND column_name = 'answer_verification'
+) AS exists
+"""
+
+TEST_CASE_ANSWER_VERIFICATION_MIGRATION_SQL = """
+ALTER TABLE policy_qa_test_cases
+ADD COLUMN IF NOT EXISTS answer_verification JSONB
+"""
+
 
 def _run_bounded_column_migration(
     client: PostgreSQLClient,
@@ -259,6 +275,11 @@ class PostgresPolicyQualityStore:
                 RELEASE_BUILD_ERROR_MIGRATION_SQL,
             )
             _migrate_quality_run_sequence(client)
+            _run_bounded_column_migration(
+                client,
+                TEST_CASE_ANSWER_VERIFICATION_COLUMN_QUERY,
+                TEST_CASE_ANSWER_VERIFICATION_MIGRATION_SQL,
+            )
         except BaseException:
             try:
                 client.close()
@@ -277,11 +298,13 @@ class PostgresPolicyQualityStore:
         for case in DEFAULT_TEST_CASES:
             client.execute(
                 """INSERT INTO policy_qa_test_cases
-                   (case_id,name,query,mode,expected_knowledge_ids,filters,required,active,case_set_version,updated_at)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                   (case_id,name,query,mode,expected_knowledge_ids,filters,required,active,answer_verification,case_set_version,updated_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (case.case_id, case.name, case.query, case.mode,
                  json.dumps(case.expected_knowledge_ids), json.dumps(case.filters),
-                 case.required, case.active, case.case_set_version, case.updated_at),
+                 case.required, case.active,
+                 json.dumps(case.answer_verification.model_dump(mode="json")) if case.answer_verification else None,
+                 case.case_set_version, case.updated_at),
             )
 
     def save_test_case(self, case: PolicyQATestCase) -> PolicyQATestCase:
@@ -291,15 +314,18 @@ class PostgresPolicyQualityStore:
         saved = case.model_copy(update={"case_set_version": version})
         client.execute(
             """INSERT INTO policy_qa_test_cases
-               (case_id,name,query,mode,expected_knowledge_ids,filters,required,active,case_set_version,updated_at)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               (case_id,name,query,mode,expected_knowledge_ids,filters,required,active,answer_verification,case_set_version,updated_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (case_id) DO UPDATE SET name=EXCLUDED.name,query=EXCLUDED.query,
                mode=EXCLUDED.mode,expected_knowledge_ids=EXCLUDED.expected_knowledge_ids,
                filters=EXCLUDED.filters,required=EXCLUDED.required,active=EXCLUDED.active,
+               answer_verification=EXCLUDED.answer_verification,
                case_set_version=EXCLUDED.case_set_version,updated_at=EXCLUDED.updated_at""",
             (saved.case_id, saved.name, saved.query, saved.mode,
              json.dumps(saved.expected_knowledge_ids), json.dumps(saved.filters),
-             saved.required, saved.active, version, saved.updated_at),
+             saved.required, saved.active,
+             json.dumps(saved.answer_verification.model_dump(mode="json")) if saved.answer_verification else None,
+             version, saved.updated_at),
         )
         return saved
 
@@ -519,6 +545,30 @@ class PostgresPolicyQualityStore:
         if active is None:
             raise RuntimeError("活动版本切换后读取失败")
         return active
+
+    def reclaim_stale_runs(self, release_id: str, stale_after_seconds: int = 1800) -> int:
+        """回收孤儿运行：running 超时置 failed 并释放 release 回 failed（可重试）。"""
+        client = self._get_client()
+        rows = client.execute(
+            """
+            WITH stale AS (
+                UPDATE policy_quality_runs
+                   SET status = 'failed',
+                       blocked_reasons = '["后端中断孤儿运行自动回收"]'::jsonb
+                 WHERE release_id = %s
+                   AND status = 'running'
+                   AND created_at < now() - (%s || ' seconds')::interval
+             RETURNING run_id
+            )
+            UPDATE policy_knowledge_releases r
+               SET status = 'failed', quality_run_id = NULL
+              FROM stale
+             WHERE r.release_id = %s AND r.status = 'testing'
+            RETURNING r.release_id
+            """,
+            (release_id, str(stale_after_seconds), release_id),
+        )
+        return len(rows)
 
     def save_run(self, run: QualityRun) -> QualityRun:
         self._get_client().execute(

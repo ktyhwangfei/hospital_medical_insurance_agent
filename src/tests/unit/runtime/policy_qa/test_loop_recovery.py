@@ -7,7 +7,7 @@ from pymilvus.exceptions import MilvusException
 from pymilvus.exceptions import ParamError
 
 from src.runtime.policy_qa.settlement_data_provider import (
-    RealDbSettlementDataProvider,
+    SemanticSettlementDataProvider,
     SettlementDataUnavailableError,
     SettlementNotFoundError,
 )
@@ -33,9 +33,9 @@ def test_policy_retriever_classifies_transient_connection_failure(monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_settlement_provider_classifies_transient_source_failure() -> None:
-    provider = RealDbSettlementDataProvider.__new__(RealDbSettlementDataProvider)
-    provider.client = SimpleNamespace(
-        get_case_context_raw=lambda **_kwargs: (_ for _ in ()).throw(TimeoutError("timeout"))
+    provider = SemanticSettlementDataProvider.__new__(SemanticSettlementDataProvider)
+    provider._service = SimpleNamespace(
+        execute=lambda _query: (_ for _ in ()).throw(TimeoutError("timeout"))
     )
 
     with pytest.raises(SettlementDataUnavailableError):
@@ -44,10 +44,10 @@ async def test_settlement_provider_classifies_transient_source_failure() -> None
 
 @pytest.mark.asyncio
 async def test_settlement_provider_classifies_missing_record_without_retry_signal() -> None:
-    provider = RealDbSettlementDataProvider.__new__(RealDbSettlementDataProvider)
-    provider.client = SimpleNamespace(
-        get_case_context_raw=lambda **_kwargs: (_ for _ in ()).throw(
-            ValueError("未查询到结算记录 djh=S-404")
+    provider = SemanticSettlementDataProvider.__new__(SemanticSettlementDataProvider)
+    provider._service = SimpleNamespace(
+        execute=lambda _query: SimpleNamespace(
+            rows=[], evidence=SimpleNamespace(anchor_count=0)
         )
     )
 
@@ -57,9 +57,9 @@ async def test_settlement_provider_classifies_missing_record_without_retry_signa
 
 @pytest.mark.asyncio
 async def test_settlement_provider_does_not_retry_invalid_sql() -> None:
-    provider = RealDbSettlementDataProvider.__new__(RealDbSettlementDataProvider)
-    provider.client = SimpleNamespace(
-        get_case_context_raw=lambda **_kwargs: (_ for _ in ()).throw(
+    provider = SemanticSettlementDataProvider.__new__(SemanticSettlementDataProvider)
+    provider._service = SimpleNamespace(
+        execute=lambda _query: (_ for _ in ()).throw(
             pyodbc.ProgrammingError("42000", "invalid SQL")
         )
     )

@@ -9,6 +9,7 @@ import PolicyQAEmptyState from '@/components/policy-qa/policy-qa-empty-state'
 import {
   extractSettlementId,
   parsePolicyQACommand,
+  resolveAnchoredSwitch,
 } from '@/lib/policy-qa-session'
 import type { UsePolicyQAStreamReturn } from '@/lib/use-policy-qa-stream'
 
@@ -59,6 +60,18 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
     }
 
     if (stream.anchor.settlementId) {
+      // 锚定后问题里出现与当前锚不同的结算单号 → 自动按 @换结算 处理，
+      // 避免用户直接打新单号被静默忽略、拿到旧单数据。
+      const switchTarget = resolveAnchoredSwitch(
+        stream.anchor.settlementId,
+        command.question,
+      )
+      if (switchTarget) {
+        await stream.send(switchTarget.question || '查询该结算单的费用构成', {
+          settlementId: switchTarget.settlementId,
+        })
+        return
+      }
       await stream.send(command.question)
       return
     }

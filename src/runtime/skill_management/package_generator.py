@@ -54,7 +54,7 @@ class SkillPackageGenerator:
 
         # 合并草稿携带的原始文件（导入/源码编辑产物），保留用户自定义内容
         for path, content in draft.raw_files.items():
-            if path not in files and not path.startswith("__"):
+            if not path.startswith("__"):
                 files[path] = content
 
         return SkillPackage(files)

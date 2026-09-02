@@ -26,6 +26,9 @@ def _metric(
     field="t.col",
     default=None,
     importance="core",
+    fact_field_code=None,
+    aggregation=None,
+    expression=None,
 ):
     return SimpleNamespace(
         metric_code=code,
@@ -41,6 +44,9 @@ def _metric(
         usage_count=1,
         unit=None,
         semantic_type="Amount",
+        fact_field_code=fact_field_code,
+        aggregation=aggregation,
+        expression=expression,
     )
 
 
@@ -237,6 +243,28 @@ def test_capability_resolvable_default_value():
     cap = svc.resolve_metric_capability(m, _object())
     assert cap.runtime_resolvable is True
     assert cap.resolution_type == MetricResolutionType.DEFAULT_VALUE
+
+
+def test_capability_resolves_published_query_model_metrics():
+    svc = SkillInputService(_registry())
+
+    aggregate = svc.resolve_metric_capability(
+        _metric(
+            "zydyxx.query", adapter=None, field=None,
+            fact_field_code="rows.amount", aggregation="sum",
+        ),
+        _object(),
+    )
+    derived = svc.resolve_metric_capability(
+        _metric(
+            "zydyxx.derived", adapter=None, field=None,
+            expression="query - deductible",
+        ),
+        _object(),
+    )
+
+    assert aggregate.resolution_type == MetricResolutionType.SQL_EXPRESSION
+    assert derived.resolution_type == MetricResolutionType.DERIVED
 
 
 def test_capability_not_published():

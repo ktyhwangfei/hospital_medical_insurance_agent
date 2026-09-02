@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from src.data_platform.storage.skill.governance_ports import (
@@ -15,17 +15,36 @@ from src.data_platform.storage.skill.governance_ports import (
 )
 from src.data_platform.storage.skill.version_ports import SkillVersionStorage
 from src.domain.skill.governance_models import (
+    DEFAULT_ROUTING_SUITE_ID,
+    FailureCluster,
+    SkillEvalBenchmark,
+    SkillEvalDatasetVersion,
+    SkillEvalDimension,
+    SkillEvalDimensionSummary,
+    SkillEvalEnvironmentSnapshot,
+    SkillEvalGateThresholds,
     SkillEvalCase,
+    SkillEvalMetrics,
     SkillEvalRun,
     SkillEvalRunStatus,
+    SkillEvalSuite,
+    SkillEvalSuiteScope,
+    SkillEvalSuiteStatus,
+    SkillEvalTask,
+    SkillEvalTaskResult,
+    SkillEvalTaskStatus,
     SkillRelease,
     SkillReleaseApproval,
     SkillReleaseEnvironment,
     SkillReleaseStatus,
+    canonical_eval_hash,
 )
 from src.domain.skill.version_models import SkillValidationStatus, SkillVersion
 from src.security.desensitization.detection import detect_sensitive_patterns
 from src.skill_infra.route_evaluator import evaluate_route_suite
+from src.runtime.skill_management.evaluation_attribution import cluster_failures
+from src.runtime.skill_management.evaluation_judge import SkillEvalJudge
+from src.runtime.skill_management.evaluation_runner import PolicyQAEvaluationRunner
 
 # 预置黄金 routing 用例：覆盖 settlement_explain_skill 核心关键词，作为路由回归基线。
 # expected_skill_id 必须是已物化 skill（当前仅 settlement_explain_skill）。
@@ -39,6 +58,31 @@ GOLDEN_ROUTING_CASES: list[tuple[str, str, list[str]]] = [
     ("医保报销比例", "settlement_explain_skill", ["settlement"]),
     ("住院起付线多少", "settlement_explain_skill", ["settlement"]),
 ]
+
+
+def _summarize_dimension(
+    dimension: SkillEvalDimension,
+    task_results: list[SkillEvalTaskResult],
+) -> SkillEvalDimensionSummary:
+    assertions = [
+        assertion
+        for result in task_results
+        for assertion in result.assertion_results
+        if assertion.dimension == dimension
+    ]
+    return SkillEvalDimensionSummary(
+        dimension=dimension,
+        total=len(assertions),
+        passed=sum(item.status == SkillEvalTaskStatus.PASSED for item in assertions),
+        failed=sum(item.status == SkillEvalTaskStatus.FAILED for item in assertions),
+        blocked=sum(item.status == SkillEvalTaskStatus.BLOCKED for item in assertions),
+        needs_review=sum(
+            item.status == SkillEvalTaskStatus.NEEDS_REVIEW for item in assertions
+        ),
+        invalid_dataset=sum(
+            item.status == SkillEvalTaskStatus.INVALID_DATASET for item in assertions
+        ),
+    )
 
 
 class SkillGovernanceGateError(ValueError):
@@ -65,6 +109,7 @@ class SkillGovernanceService:
         "max_new_false_takeovers": 0,
         "runtime_mode": "shadow",
     }
+    _EVALUATOR_PLAN_ID = "deterministic_v1"
 
     def __init__(
         self,
@@ -72,13 +117,516 @@ class SkillGovernanceService:
         storage: SkillGovernanceStorage,
         version_storage: SkillVersionStorage,
         loader: _LoaderView,
+        current_artifact_hash_resolver: Callable[[str], str] | None = None,
     ) -> None:
         self._storage = storage
         self._version_storage = version_storage
         self._loader = loader
+        self._current_artifact_hash_resolver = current_artifact_hash_resolver
 
-    def list_cases(self, *, enabled_only: bool = False) -> list[SkillEvalCase]:
-        return self._storage.list_cases(enabled_only=enabled_only)
+    def list_suites(
+        self,
+        *,
+        skill_id: str | None = None,
+        include_inactive: bool = True,
+    ) -> list[SkillEvalSuite]:
+        return self._storage.list_suites(
+            skill_id=skill_id,
+            include_inactive=include_inactive,
+        )
+
+    def get_suite(self, suite_id: str) -> SkillEvalSuite:
+        suite = self._storage.get_suite(suite_id)
+        if suite is None:
+            raise SkillGovernanceNotFoundError(f"测评集不存在: {suite_id}")
+        return suite
+
+    def create_suite(
+        self,
+        *,
+        name: str,
+        scope: SkillEvalSuiteScope | str,
+        skill_id: str | None,
+        purpose: str,
+        created_by: str,
+    ) -> SkillEvalSuite:
+        resolved_scope = SkillEvalSuiteScope(scope)
+        if resolved_scope == SkillEvalSuiteScope.SKILL:
+            if not skill_id or skill_id not in self._loader.get_all():
+                raise SkillGovernanceNotFoundError(f"Skill 不存在: {skill_id}")
+        else:
+            skill_id = None
+        now = datetime.now(timezone.utc)
+        return self._storage.save_suite(
+            SkillEvalSuite(
+                suite_id=f"EVS_{uuid4().hex}",
+                name=name.strip(),
+                scope=resolved_scope,
+                skill_id=skill_id,
+                purpose=purpose.strip(),
+                created_by=created_by.strip(),
+                updated_by=created_by.strip(),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    def update_suite(
+        self,
+        suite_id: str,
+        *,
+        name: str,
+        purpose: str,
+        status: SkillEvalSuiteStatus | str,
+        expected_revision: int,
+        updated_by: str,
+    ) -> SkillEvalSuite:
+        current = self.get_suite(suite_id)
+        resolved_status = SkillEvalSuiteStatus(status)
+        if (
+            suite_id == DEFAULT_ROUTING_SUITE_ID
+            and resolved_status != SkillEvalSuiteStatus.ACTIVE
+        ):
+            raise SkillGovernanceGateError(
+                "平台默认路由测评集不能停用",
+                ["default_eval_suite_protected"],
+            )
+        updated = current.model_copy(
+            update={
+                "name": name.strip(),
+                "purpose": purpose.strip(),
+                "status": resolved_status,
+                "revision": expected_revision + 1,
+                "updated_by": updated_by.strip(),
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        return self._storage.update_suite(
+            SkillEvalSuite.model_validate(updated.model_dump()),
+            expected_revision=expected_revision,
+        )
+
+    def delete_suite(self, suite_id: str) -> None:
+        if suite_id == DEFAULT_ROUTING_SUITE_ID:
+            raise SkillGovernanceGateError(
+                "平台默认路由测评集不能删除",
+                ["default_eval_suite_protected"],
+            )
+        self.get_suite(suite_id)
+        if self._storage.count_cases(suite_id) > 0 or self._storage.list_tasks(suite_id):
+            raise SkillGovernanceGateError(
+                "测评集包含用例，只能停用",
+                ["eval_suite_not_empty"],
+            )
+        if not self._storage.delete_suite(suite_id):
+            raise SkillGovernanceNotFoundError(f"测评集不存在: {suite_id}")
+
+    def list_tasks(
+        self,
+        suite_id: str,
+        *,
+        enabled_only: bool = False,
+    ) -> list[SkillEvalTask]:
+        self.get_suite(suite_id)
+        return self._storage.list_tasks(suite_id, enabled_only=enabled_only)
+
+    def get_task(self, task_id: str) -> SkillEvalTask:
+        task = self._storage.get_task(task_id)
+        if task is None:
+            raise SkillGovernanceNotFoundError(f"评测任务不存在: {task_id}")
+        return task
+
+    def create_task(
+        self,
+        task: SkillEvalTask,
+        *,
+        created_by: str,
+    ) -> SkillEvalTask:
+        suite = self.get_suite(task.suite_id)
+        now = datetime.now(timezone.utc)
+        created = SkillEvalTask.model_validate(
+            task.model_copy(
+                update={
+                    "revision": 1,
+                    "created_by": created_by.strip(),
+                    "updated_by": created_by.strip(),
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                deep=True,
+            ).model_dump()
+        )
+        self._validate_task_for_suite(created, suite)
+        return self._storage.save_task(created)
+
+    def import_tasks(
+        self,
+        suite_id: str,
+        tasks: list[SkillEvalTask],
+        *,
+        created_by: str,
+    ) -> list[SkillEvalTask]:
+        """幂等导入已转换的任务，不覆盖质量人员维护过的同 ID 任务。"""
+        suite = self.get_suite(suite_id)
+        imported: list[SkillEvalTask] = []
+        now = datetime.now(timezone.utc)
+        for task in tasks:
+            existing = self._storage.get_task(task.task_id)
+            if existing is not None:
+                if existing.suite_id != suite_id:
+                    raise SkillGovernanceConflictError(
+                        f"评测任务 ID 已属于其他测评集: {task.task_id}"
+                    )
+                imported.append(existing)
+                continue
+            candidate = SkillEvalTask.model_validate(
+                task.model_copy(
+                    update={
+                        "suite_id": suite_id,
+                        "created_by": created_by.strip(),
+                        "updated_by": created_by.strip(),
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                    deep=True,
+                ).model_dump()
+            )
+            self._validate_task_for_suite(candidate, suite)
+            imported.append(self._storage.save_task(candidate))
+        return imported
+
+    def update_task(
+        self,
+        task: SkillEvalTask,
+        *,
+        expected_revision: int,
+        updated_by: str,
+    ) -> SkillEvalTask:
+        current = self._storage.get_task(task.task_id)
+        if current is None:
+            raise SkillGovernanceNotFoundError(f"评测任务不存在: {task.task_id}")
+        suite = self.get_suite(current.suite_id)
+        updated = SkillEvalTask.model_validate(
+            task.model_copy(
+                update={
+                    "suite_id": current.suite_id,
+                    "revision": expected_revision + 1,
+                    "created_by": current.created_by,
+                    "created_at": current.created_at,
+                    "updated_by": updated_by.strip(),
+                    "updated_at": datetime.now(timezone.utc),
+                },
+                deep=True,
+            ).model_dump()
+        )
+        self._validate_task_for_suite(updated, suite)
+        return self._storage.update_task(updated, expected_revision=expected_revision)
+
+    def freeze_dataset(
+        self,
+        suite_id: str,
+        *,
+        created_by: str,
+    ) -> SkillEvalDatasetVersion:
+        suite = self.get_suite(suite_id)
+        if suite.status != SkillEvalSuiteStatus.ACTIVE:
+            raise SkillGovernanceGateError("测评集已停用", ["eval_suite_inactive"])
+        tasks = self._storage.list_tasks(suite_id, enabled_only=True)
+        if not tasks:
+            raise SkillGovernanceGateError(
+                "测评集没有可冻结的任务",
+                ["eval_dataset_empty"],
+            )
+        ordered = sorted(tasks, key=lambda item: item.task_id)
+        content_hash = canonical_eval_hash(
+            [task.model_dump(mode="json") for task in ordered]
+        )
+        environment_contract_hash = canonical_eval_hash(
+            [
+                requirement.model_dump(mode="json")
+                for task in ordered
+                for requirement in task.environment_requirements
+            ]
+        )
+        evaluator_plan_hash = canonical_eval_hash(
+            {"evaluator_plan_id": self._EVALUATOR_PLAN_ID}
+        )
+        versions = self._storage.list_dataset_versions(suite_id)
+        existing = next(
+            (
+                version
+                for version in versions
+                if version.content_hash == content_hash
+                and version.environment_contract_hash == environment_contract_hash
+                and version.evaluator_plan_hash == evaluator_plan_hash
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        version = SkillEvalDatasetVersion(
+            dataset_version_id=f"EVD_{uuid4().hex}",
+            suite_id=suite_id,
+            suite_revision=suite.revision,
+            version_number=max((item.version_number for item in versions), default=0) + 1,
+            task_snapshots=tuple(ordered),
+            environment_contract_hash=environment_contract_hash,
+            evaluator_plan_hash=evaluator_plan_hash,
+            content_hash=content_hash,
+            created_by=created_by.strip(),
+        )
+        return self._storage.save_dataset_version(version)
+
+    def list_dataset_versions(
+        self,
+        suite_id: str,
+    ) -> list[SkillEvalDatasetVersion]:
+        self.get_suite(suite_id)
+        return self._storage.list_dataset_versions(suite_id)
+
+    def create_benchmark(
+        self,
+        *,
+        name: str,
+        skill_id: str,
+        dataset_version_id: str,
+        environment_snapshot: SkillEvalEnvironmentSnapshot,
+        evaluator_plan_id: str,
+        judge_version: str | None,
+        gate_thresholds: SkillEvalGateThresholds,
+        created_by: str,
+    ) -> SkillEvalBenchmark:
+        if evaluator_plan_id not in {
+            "deterministic_v1",
+            "deterministic_judge_v1",
+        }:
+            raise SkillGovernanceGateError(
+                "评测器方案未注册",
+                ["evaluator_plan_not_registered"],
+            )
+        if evaluator_plan_id == "deterministic_judge_v1" and not judge_version:
+            raise SkillGovernanceGateError(
+                "Judge 方案必须冻结 judge_version",
+                ["judge_version_missing"],
+            )
+        if skill_id not in self._loader.get_all():
+            raise SkillGovernanceNotFoundError(f"Skill 不存在: {skill_id}")
+        dataset = self._storage.get_dataset_version(dataset_version_id)
+        if dataset is None:
+            raise SkillGovernanceNotFoundError(
+                f"数据集版本不存在: {dataset_version_id}"
+            )
+        suite = self.get_suite(dataset.suite_id)
+        if suite.scope == SkillEvalSuiteScope.SKILL and suite.skill_id != skill_id:
+            raise SkillGovernanceGateError(
+                "Benchmark Skill 与数据集不一致",
+                ["benchmark_skill_mismatch"],
+            )
+        if any(task.target_skill_id != skill_id for task in dataset.task_snapshots):
+            raise SkillGovernanceGateError(
+                "Benchmark 数据集包含其他目标 Skill 的任务",
+                ["benchmark_task_skill_mismatch"],
+            )
+        environment_hash = canonical_eval_hash(
+            environment_snapshot.model_dump(mode="json")
+        )
+        evaluator_plan_hash = canonical_eval_hash(
+            {
+                "evaluator_plan_id": evaluator_plan_id,
+                "judge_version": judge_version,
+            }
+        )
+        benchmark = SkillEvalBenchmark(
+            benchmark_id=f"EVB_{uuid4().hex}",
+            name=name.strip(),
+            skill_id=skill_id,
+            dataset_version_id=dataset_version_id,
+            environment_snapshot=environment_snapshot,
+            environment_hash=environment_hash,
+            evaluator_plan_id=evaluator_plan_id,
+            evaluator_plan_hash=evaluator_plan_hash,
+            judge_version=judge_version,
+            gate_thresholds=gate_thresholds,
+            created_by=created_by.strip(),
+        )
+        return self._storage.save_benchmark(benchmark)
+
+    def list_benchmarks(
+        self,
+        skill_id: str | None = None,
+    ) -> list[SkillEvalBenchmark]:
+        return self._storage.list_benchmarks(skill_id)
+
+    async def create_benchmark_run(
+        self,
+        benchmark_id: str,
+        *,
+        version_id: str,
+        baseline_version_id: str | None,
+        created_by: str,
+        runner: PolicyQAEvaluationRunner | None = None,
+    ) -> SkillEvalRun:
+        benchmark = self._storage.get_benchmark(benchmark_id)
+        if benchmark is None:
+            raise SkillGovernanceNotFoundError(f"Benchmark 不存在: {benchmark_id}")
+        if benchmark.status.value != "active":
+            raise SkillGovernanceGateError(
+                "Benchmark 已归档",
+                ["benchmark_inactive"],
+            )
+        dataset = self._storage.get_dataset_version(benchmark.dataset_version_id)
+        if dataset is None:
+            raise SkillGovernanceNotFoundError(
+                f"数据集版本不存在: {benchmark.dataset_version_id}"
+            )
+        candidate = self._require_version(benchmark.skill_id, version_id)
+        if candidate.validation_status != SkillValidationStatus.PASSED:
+            raise SkillGovernanceGateError(
+                "候选版本校验未通过",
+                ["version_validation_failed"],
+            )
+        if (
+            self._current_artifact_hash_resolver is not None
+            and self._current_artifact_hash_resolver(benchmark.skill_id)
+            != candidate.artifact_hash
+        ):
+            raise SkillGovernanceGateError(
+                "候选版本尚未物化为当前运行时 Skill 制品",
+                ["candidate_not_materialized"],
+            )
+        if (
+            benchmark.environment_snapshot.skill_artifact_hash is not None
+            and benchmark.environment_snapshot.skill_artifact_hash
+            != candidate.artifact_hash
+        ):
+            raise SkillGovernanceGateError(
+                "候选 Skill 制品与 Benchmark 环境快照不一致",
+                ["benchmark_artifact_mismatch"],
+            )
+        if baseline_version_id is not None:
+            raise SkillGovernanceGateError(
+                "当前 Policy QA 运行时尚不支持隔离执行基线版本",
+                ["baseline_isolation_unavailable"],
+            )
+        resolved_baseline = None
+        evaluator = runner or PolicyQAEvaluationRunner(
+            judge=(
+                SkillEvalJudge(model_override=benchmark.judge_version)
+                if benchmark.evaluator_plan_id == "deterministic_judge_v1"
+                else None
+            )
+        )
+        task_results = [
+            await evaluator.run(task) for task in dataset.task_snapshots
+        ]
+        required = [
+            result
+            for task, result in zip(
+                dataset.task_snapshots,
+                task_results,
+                strict=True,
+            )
+            if task.required
+        ]
+        required_passed = sum(
+            result.status == SkillEvalTaskStatus.PASSED for result in required
+        )
+        hard_pass_rate = required_passed / len(required) if required else 1.0
+        gate_passed = (
+            hard_pass_rate >= benchmark.gate_thresholds.required_hard_pass_rate
+        )
+        dimensions = tuple(
+            _summarize_dimension(dimension, task_results)
+            for dimension in SkillEvalDimension
+            if any(
+                assertion.dimension == dimension
+                for result in task_results
+                for assertion in result.assertion_results
+            )
+        )
+        attributions = [
+            attribution
+            for result in task_results
+            for attribution in result.failure_attributions
+        ]
+        total = len(task_results)
+        passed = sum(
+            result.status == SkillEvalTaskStatus.PASSED for result in task_results
+        )
+        now = datetime.now(timezone.utc)
+        run = SkillEvalRun(
+            run_id=f"EVR_{uuid4().hex}",
+            skill_id=benchmark.skill_id,
+            version_id=version_id,
+            baseline_version_id=(
+                resolved_baseline.version_id if resolved_baseline is not None else None
+            ),
+            suite_version=dataset.version_number,
+            config_hash=benchmark.environment_hash,
+            routing_manifest_hash=candidate.artifact_hash,
+            status=(
+                SkillEvalRunStatus.PASSED
+                if gate_passed
+                else SkillEvalRunStatus.FAILED
+            ),
+            metrics=SkillEvalMetrics(
+                total=total,
+                passed=passed,
+                required_total=len(required),
+                required_passed=required_passed,
+                top1_accuracy=passed / total if total else 0.0,
+                baseline_top1_accuracy=0.0,
+                regression_count=0,
+                new_false_takeover_count=0,
+                gate_passed=gate_passed,
+            ),
+            dataset_version_id=dataset.dataset_version_id,
+            benchmark_id=benchmark.benchmark_id,
+            environment_snapshot=benchmark.environment_snapshot,
+            task_results=tuple(task_results),
+            trajectory_summary=tuple(
+                step for result in task_results for step in result.trajectory
+            ),
+            failure_attributions=tuple(attributions),
+            failure_clusters=cluster_failures(
+                {task.task_id: task for task in dataset.task_snapshots},
+                attributions,
+            ),
+            dimension_summary=dimensions,
+            created_by=created_by.strip(),
+            created_at=now,
+            completed_at=now,
+        )
+        return self._storage.save_run(run)
+
+    @staticmethod
+    def _validate_task_for_suite(
+        task: SkillEvalTask,
+        suite: SkillEvalSuite,
+    ) -> None:
+        if suite.status != SkillEvalSuiteStatus.ACTIVE:
+            raise SkillGovernanceGateError("测评集已停用", ["eval_suite_inactive"])
+        if suite.scope == SkillEvalSuiteScope.SKILL and task.target_skill_id != suite.skill_id:
+            raise SkillGovernanceGateError(
+                "评测任务的目标 Skill 与测评集不一致",
+                ["eval_task_skill_mismatch"],
+            )
+        if task.contains_sensitive_data or detect_sensitive_patterns(task.input.question):
+            raise SkillGovernanceGateError(
+                "评测任务包含敏感信息，必须脱敏后再保存",
+                ["sensitive_data_detected"],
+            )
+
+    def list_cases(
+        self,
+        *,
+        suite_id: str | None = None,
+        enabled_only: bool = False,
+    ) -> list[SkillEvalCase]:
+        return self._storage.list_cases(
+            suite_id=suite_id,
+            enabled_only=enabled_only,
+        )
 
     def current_suite_version(self) -> int:
         return self._storage.current_suite_version()
@@ -86,6 +634,7 @@ class SkillGovernanceService:
     def create_case(
         self,
         *,
+        suite_id: str = DEFAULT_ROUTING_SUITE_ID,
         question_template: str,
         expected_skill_id: str | None,
         required: bool,
@@ -96,6 +645,17 @@ class SkillGovernanceService:
         contains_sensitive_data: bool,
         created_by: str,
     ) -> SkillEvalCase:
+        suite = self.get_suite(suite_id)
+        if suite.status != SkillEvalSuiteStatus.ACTIVE:
+            raise SkillGovernanceGateError("测评集已停用", ["eval_suite_inactive"])
+        if (
+            suite.scope == SkillEvalSuiteScope.SKILL
+            and expected_skill_id != suite.skill_id
+        ):
+            raise SkillGovernanceGateError(
+                "路由用例的期望 Skill 与测评集不一致",
+                ["eval_case_skill_mismatch"],
+            )
         if contains_sensitive_data or detect_sensitive_patterns(question_template):
             raise SkillGovernanceGateError(
                 "评测用例包含敏感信息，必须脱敏后再保存",
@@ -105,13 +665,15 @@ class SkillGovernanceService:
         normalized_q = question_template.strip()
         for existing in self._storage.list_cases():
             if (
-                existing.question_template.strip() == normalized_q
+                existing.suite_id == suite_id
+                and existing.question_template.strip() == normalized_q
                 and existing.expected_skill_id == expected_skill_id
             ):
                 return existing
         return self._storage.save_case_with_new_suite_version(
             SkillEvalCase(
-                case_id=uuid4().hex,
+                case_id=f"EVC_{uuid4().hex}",
+                suite_id=suite_id,
                 suite_version=1,
                 question_template=question_template.strip(),
                 expected_skill_id=expected_skill_id,
@@ -147,6 +709,15 @@ class SkillGovernanceService:
         current = self._storage.get_case(case_id)
         if current is None:
             raise SkillGovernanceNotFoundError(f"评测用例不存在: {case_id}")
+        suite = self.get_suite(current.suite_id)
+        if (
+            suite.scope == SkillEvalSuiteScope.SKILL
+            and expected_skill_id != suite.skill_id
+        ):
+            raise SkillGovernanceGateError(
+                "路由用例的期望 Skill 与测评集不一致",
+                ["eval_case_skill_mismatch"],
+            )
         updated = current.model_copy(
             update={
                 "question_template": question_template.strip(),
@@ -171,12 +742,12 @@ class SkillGovernanceService:
             raise SkillGovernanceNotFoundError(f"评测用例不存在: {case_id}")
 
     def dedupe_cases(self) -> int:
-        """合并重复用例：同 (question_template, expected_skill_id) 仅保留最新一条，返回删除数。"""
+        """同测评集内按问题和期望 Skill 去重，保留最新一条。"""
         # ponytail: O(n) 分组扫描，用例规模小；上万条改 SQL GROUP BY
-        groups: dict[tuple[str, str | None], list[SkillEvalCase]] = {}
+        groups: dict[tuple[str, str, str | None], list[SkillEvalCase]] = {}
         for c in self._storage.list_cases():
             groups.setdefault(
-                (c.question_template.strip(), c.expected_skill_id), []
+                (c.suite_id, c.question_template.strip(), c.expected_skill_id), []
             ).append(c)
         removed = 0
         for group in groups.values():
@@ -195,6 +766,7 @@ class SkillGovernanceService:
         for template, skill_id, tags in GOLDEN_ROUTING_CASES:
             seeded.append(
                 self.create_case(
+                    suite_id=DEFAULT_ROUTING_SUITE_ID,
                     question_template=template,
                     expected_skill_id=skill_id,
                     required=True,
@@ -273,6 +845,49 @@ class SkillGovernanceService:
             raise SkillGovernanceNotFoundError(f"评测运行不存在: {run_id}")
         return run
 
+    def get_eval_run_by_id(self, run_id: str) -> SkillEvalRun:
+        run = next(
+            (item for item in self._storage.list_runs() if item.run_id == run_id),
+            None,
+        )
+        if run is None:
+            raise SkillGovernanceNotFoundError(f"评测运行不存在: {run_id}")
+        return run
+
+    def get_failure_cluster(
+        self,
+        cluster_id: str,
+    ) -> tuple[SkillEvalRun, FailureCluster]:
+        for run in self._storage.list_runs():
+            cluster = next(
+                (item for item in run.failure_clusters if item.cluster_id == cluster_id),
+                None,
+            )
+            if cluster is not None:
+                return run, cluster
+        raise SkillGovernanceNotFoundError(f"失败簇不存在: {cluster_id}")
+
+    async def retest_benchmark_run(
+        self,
+        run_id: str,
+        *,
+        created_by: str,
+        runner: PolicyQAEvaluationRunner | None = None,
+    ) -> SkillEvalRun:
+        previous = self.get_eval_run_by_id(run_id)
+        if previous.benchmark_id is None:
+            raise SkillGovernanceGateError(
+                "旧路由评测不支持 Benchmark 复测",
+                ["benchmark_run_required"],
+            )
+        return await self.create_benchmark_run(
+            previous.benchmark_id,
+            version_id=previous.version_id,
+            baseline_version_id=previous.baseline_version_id,
+            created_by=created_by,
+            runner=runner,
+        )
+
     def create_candidate(
         self,
         skill_id: str,
@@ -308,12 +923,15 @@ class SkillGovernanceService:
             failures.append("evaluation_failed")
         if run.version_id != version_id:
             failures.append("evaluation_version_mismatch")
-        if run.config_hash != self._config_hash(run.suite_version):
-            failures.append("evaluation_config_changed")
-        if run.routing_manifest_hash != self._manifests_hash(
-            self._manifests_with_version(version)
-        ):
-            failures.append("routing_manifest_changed")
+        if run.benchmark_id is not None:
+            failures.extend(self._benchmark_evidence_failures(run, version))
+        else:
+            if run.config_hash != self._config_hash(run.suite_version):
+                failures.append("evaluation_config_changed")
+            if run.routing_manifest_hash != self._manifests_hash(
+                self._manifests_with_version(version)
+            ):
+                failures.append("routing_manifest_changed")
         expected_baseline_version_id = active.version_id if active is not None else None
         if run.baseline_version_id != expected_baseline_version_id:
             failures.append("evaluation_baseline_mismatch")
@@ -559,14 +1177,58 @@ class SkillGovernanceService:
             failures.append("evaluation_failed")
         if run.config_hash != release.config_hash:
             failures.append("config_changed")
-        if run.config_hash != self._config_hash(run.suite_version):
-            failures.append("evaluation_config_changed")
-        if run.routing_manifest_hash != self._manifests_hash(
-            self._manifests_with_version(version)
-        ):
-            failures.append("routing_manifest_changed")
-        latest_suite = self._storage.current_suite_version()
-        if run.suite_version != latest_suite:
-            failures.append("eval_suite_changed")
+        if run.benchmark_id is not None:
+            failures.extend(self._benchmark_evidence_failures(run, version))
+        else:
+            if run.config_hash != self._config_hash(run.suite_version):
+                failures.append("evaluation_config_changed")
+            if run.routing_manifest_hash != self._manifests_hash(
+                self._manifests_with_version(version)
+            ):
+                failures.append("routing_manifest_changed")
+            latest_suite = self._storage.current_suite_version()
+            if run.suite_version != latest_suite:
+                failures.append("eval_suite_changed")
         if failures:
             raise SkillGovernanceGateError("发布证据已变化", failures)
+
+    def _benchmark_evidence_failures(
+        self,
+        run: SkillEvalRun,
+        version: SkillVersion,
+    ) -> list[str]:
+        benchmark = self._storage.get_benchmark(run.benchmark_id or "")
+        if benchmark is None:
+            return ["benchmark_missing"]
+        dataset = self._storage.get_dataset_version(benchmark.dataset_version_id)
+        failures: list[str] = []
+        if dataset is None:
+            return ["benchmark_dataset_missing"]
+        if benchmark.skill_id != run.skill_id:
+            failures.append("evaluation_benchmark_skill_mismatch")
+        if run.dataset_version_id != benchmark.dataset_version_id:
+            failures.append("evaluation_dataset_mismatch")
+        if run.environment_snapshot != benchmark.environment_snapshot:
+            failures.append("evaluation_environment_changed")
+        if run.config_hash != benchmark.environment_hash:
+            failures.append("evaluation_config_changed")
+        if run.routing_manifest_hash != version.artifact_hash:
+            failures.append("routing_manifest_changed")
+        if (
+            benchmark.environment_snapshot.skill_artifact_hash is not None
+            and benchmark.environment_snapshot.skill_artifact_hash
+            != version.artifact_hash
+        ):
+            failures.append("benchmark_artifact_mismatch")
+        results = {result.task_id: result for result in run.task_results}
+        for task in dataset.task_snapshots:
+            if not task.required:
+                continue
+            result = results.get(task.task_id)
+            if result is None:
+                failures.append("required_task_result_missing")
+            elif result.status == SkillEvalTaskStatus.NEEDS_REVIEW:
+                failures.append("required_task_needs_review")
+            elif result.status != SkillEvalTaskStatus.PASSED:
+                failures.append("required_task_not_passed")
+        return failures

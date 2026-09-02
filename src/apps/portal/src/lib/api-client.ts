@@ -80,8 +80,54 @@ export async function syncInfraSkillVersion(
   )
 }
 
-export async function listSkillEvalCases(): Promise<SkillEvalCaseListResponse> {
-  return requestJson<SkillEvalCaseListResponse>('/infra-skills/eval-cases')
+export async function listSkillEvalCases(params?: {
+  suiteId?: string
+}): Promise<SkillEvalCaseListResponse> {
+  const search = new URLSearchParams()
+  if (params?.suiteId) search.set('suite_id', params.suiteId)
+  const query = search.toString()
+  return requestJson<SkillEvalCaseListResponse>(
+    `/infra-skills/eval-cases${query ? `?${query}` : ''}`,
+  )
+}
+
+export async function listSkillEvalSuites(params?: {
+  skillId?: string
+  includeInactive?: boolean
+}): Promise<SkillEvalSuiteListResponse> {
+  const search = new URLSearchParams()
+  if (params?.skillId) search.set('skill_id', params.skillId)
+  if (params?.includeInactive !== undefined) {
+    search.set('include_inactive', String(params.includeInactive))
+  }
+  const query = search.toString()
+  return requestJson<SkillEvalSuiteListResponse>(
+    `/infra-skills/eval-suites${query ? `?${query}` : ''}`,
+  )
+}
+
+export async function createSkillEvalSuite(
+  request: SkillEvalSuiteCreateRequest,
+): Promise<SkillEvalSuiteResponse> {
+  return requestJson<SkillEvalSuiteResponse>('/infra-skills/eval-suites', {
+    method: 'POST',
+    headers: skillEvaluationHeaders(),
+    body: JSON.stringify(request),
+  })
+}
+
+export async function updateSkillEvalSuite(
+  suiteId: string,
+  request: SkillEvalSuiteUpdateRequest,
+): Promise<SkillEvalSuiteResponse> {
+  return requestJson<SkillEvalSuiteResponse>(
+    `/infra-skills/eval-suites/${encodeURIComponent(suiteId)}`,
+    {
+      method: 'PUT',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify(request),
+    },
+  )
 }
 
 export async function createSkillEvalCase(
@@ -113,6 +159,33 @@ export async function seedGoldenSkillEvalCases(): Promise<SkillEvalCaseListRespo
     method: 'POST',
     headers: skillEvaluationHeaders(),
   })
+}
+
+export async function listSettlementSelfTests(): Promise<SettlementSelfTestSuite> {
+  return requestJson<SettlementSelfTestSuite>(
+    '/infra-skills/mzsettlement_verify_skill/self-tests',
+  )
+}
+
+export async function updateSettlementSelfTest(
+  caseId: string,
+  request: Omit<SettlementSelfTestCase, 'case_id'>,
+): Promise<SettlementSelfTestCase> {
+  return requestJson<SettlementSelfTestCase>(
+    `/infra-skills/mzsettlement_verify_skill/self-tests/${encodeURIComponent(caseId)}`,
+    {
+      method: 'PUT',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify(request),
+    },
+  )
+}
+
+export async function runSettlementSelfTests(): Promise<SettlementSelfTestRun> {
+  return requestJson<SettlementSelfTestRun>(
+    '/infra-skills/mzsettlement_verify_skill/self-tests/run',
+    { method: 'POST', headers: skillEvaluationHeaders() },
+  )
 }
 
 // ── 错误案例池：转换 / 确认 / 拒绝（仅 skill:evaluate）──
@@ -234,6 +307,108 @@ export async function createSkillEvalRun(
   )
 }
 
+export async function listSkillEvalTasks(
+  suiteId: string,
+): Promise<SkillEvalTaskListResponse> {
+  return requestJson<SkillEvalTaskListResponse>(
+    `/infra-skills/eval-suites/${encodeURIComponent(suiteId)}/tasks`,
+    { headers: skillEvaluationHeaders() },
+  )
+}
+
+export async function importOutpatientEvalTasks(
+  suiteId: string,
+): Promise<SkillEvalTaskListResponse> {
+  return requestJson<SkillEvalTaskListResponse>(
+    `/infra-skills/eval-suites/${encodeURIComponent(suiteId)}/import-outpatient`,
+    { method: 'POST', headers: skillEvaluationHeaders() },
+  )
+}
+
+export async function listSkillEvalDatasetVersions(
+  suiteId: string,
+): Promise<SkillEvalDatasetVersionListResponse> {
+  return requestJson<SkillEvalDatasetVersionListResponse>(
+    `/infra-skills/eval-suites/${encodeURIComponent(suiteId)}/dataset-versions`,
+    { headers: skillEvaluationHeaders() },
+  )
+}
+
+export async function freezeSkillEvalDataset(
+  suiteId: string,
+): Promise<SkillEvalDatasetVersionResponse> {
+  return requestJson<SkillEvalDatasetVersionResponse>(
+    `/infra-skills/eval-suites/${encodeURIComponent(suiteId)}/dataset-versions`,
+    { method: 'POST', headers: skillEvaluationHeaders() },
+  )
+}
+
+export async function listSkillEvalBenchmarks(
+  skillId?: string,
+): Promise<SkillEvalBenchmarkListResponse> {
+  const query = skillId ? `?skill_id=${encodeURIComponent(skillId)}` : ''
+  return requestJson<SkillEvalBenchmarkListResponse>(`/infra-skills/eval-benchmarks${query}`)
+}
+
+export async function createSkillEvalBenchmark(
+  request: SkillEvalBenchmarkCreateRequest,
+): Promise<SkillEvalBenchmarkResponse> {
+  return requestJson<SkillEvalBenchmarkResponse>('/infra-skills/eval-benchmarks', {
+    method: 'POST',
+    headers: skillEvaluationHeaders(),
+    body: JSON.stringify(request),
+  })
+}
+
+export async function createSkillEvalBenchmarkRun(
+  benchmarkId: string,
+  request: SkillEvalRunCreateRequest,
+): Promise<SkillEvalRunResponse> {
+  return requestJson<SkillEvalRunResponse>(
+    `/infra-skills/eval-benchmarks/${encodeURIComponent(benchmarkId)}/runs`,
+    {
+      method: 'POST',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify(request),
+    },
+  )
+}
+
+export async function getSkillEvalRun(runId: string): Promise<SkillEvalRunResponse> {
+  return requestJson<SkillEvalRunResponse>(
+    `/infra-skills/eval-runs/${encodeURIComponent(runId)}`,
+  )
+}
+
+export async function listSkillEvalFailureClusters(
+  runId: string,
+): Promise<SkillEvalFailureClusterResponse[]> {
+  return requestJson<SkillEvalFailureClusterResponse[]>(
+    `/infra-skills/eval-runs/${encodeURIComponent(runId)}/failure-clusters`,
+  )
+}
+
+export async function createSkillEvalImprovementTask(
+  clusterId: string,
+  request: { responsible_role?: string; suggested_target?: string } = {},
+): Promise<SkillEvalImprovementTaskResponse> {
+  return requestJson<SkillEvalImprovementTaskResponse>(
+    `/infra-skills/eval-failure-clusters/${encodeURIComponent(clusterId)}/improvement-task`,
+    {
+      method: 'POST',
+      headers: skillEvaluationHeaders(),
+      body: JSON.stringify(request),
+    },
+  )
+}
+
+export async function retestSkillEvalRun(runId: string): Promise<SkillEvalRunResponse> {
+  return requestJson<SkillEvalRunResponse>(
+    `/infra-skills/eval-runs/${encodeURIComponent(runId)}/retest`,
+    { method: 'POST', headers: skillEvaluationHeaders() },
+  )
+}
+
 export async function listSkillReleases(
   skillId: string,
   environment: 'dev' | 'test' = 'test',
@@ -348,14 +523,6 @@ export async function executeSkillQuery(
   )
 }
 
-export async function checkSkillConsistency(
-  skillId: string,
-  djh: string
-): Promise<ConsistencyCheckResult> {
-  return requestJson<ConsistencyCheckResult>(
-    `/semantic/skills/${encodeURIComponent(skillId)}/consistency-check?djh=${encodeURIComponent(djh)}`
-  )
-}
 import type {
   ApiErrorDetail,
   McpServer,
@@ -373,9 +540,24 @@ import type {
   SkillEvalCaseCreateRequest,
   SkillEvalCaseListResponse,
   SkillEvalCaseResponse,
+  SkillEvalSuiteCreateRequest,
+  SkillEvalSuiteListResponse,
+  SkillEvalSuiteResponse,
+  SkillEvalSuiteUpdateRequest,
+  SkillEvalBenchmarkCreateRequest,
+  SkillEvalBenchmarkListResponse,
+  SkillEvalBenchmarkResponse,
+  SkillEvalDatasetVersionListResponse,
+  SkillEvalDatasetVersionResponse,
+  SkillEvalFailureClusterResponse,
+  SkillEvalImprovementTaskResponse,
   SkillEvalRunCreateRequest,
   SkillEvalRunListResponse,
   SkillEvalRunResponse,
+  SkillEvalTaskListResponse,
+  SettlementSelfTestCase,
+  SettlementSelfTestRun,
+  SettlementSelfTestSuite,
   SkillWorkbenchFilter,
   SkillReleaseApproveRequest,
   SkillReleaseCreateRequest,
@@ -391,7 +573,6 @@ import type {
   SemanticMetricDetail,
   SkillQueryPlan,
   SkillQueryExecuteResult,
-  ConsistencyCheckResult,
 } from './types'
 import { skillControlHeaders, skillEvaluationHeaders } from './skill-auth'
 import { ApiClientError } from './types'

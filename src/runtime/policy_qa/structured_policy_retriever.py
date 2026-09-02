@@ -1,8 +1,9 @@
 """
 结构化政策规则检索器（StructuredPolicyRuleRetriever）
 
-不依赖向量检索，优先使用 Milvus scalar query（字段精准过滤）查询 policy_rules。
-向量检索只作为排序兜底，不作为判断"有没有政策依据"的依据。
+优先使用 Milvus scalar query（字段精准过滤）查询 policy_rules。
+结构化候选不相关时，使用稠密向量召回并在本地做 BM25 重排；混合检索
+不能绕过险种、医疗类别等严格适用条件。
 
 设计原则：
 1. 基于真实结算上下文生成标准化查询条件
@@ -17,6 +18,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,6 +33,12 @@ from pymilvus.exceptions import (
     MilvusUnavailableException,
 )
 
+from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
+    normalize_hosp_lv,
+)
+from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provider import (
+    get_embedding_provider,
+)
 from src.runtime.policy_qa.policy_rules_search import (
     COLLECTION_NAME,
     OUTPUT_FIELDS,
@@ -75,6 +84,102 @@ class PolicyRetrievalUnavailableError(Exception):
     pass
 
 
+def _searchable_text(rule: dict[str, Any]) -> str:
+    return " ".join(
+        str(rule.get(field, "") or "")
+        for field in ("source_text", "rule_value")
+    )
+
+
+def _bm25_tokens(text: str) -> list[str]:
+    """无需额外分词依赖的中英文 BM25 词元。"""
+    tokens: list[str] = []
+    for chunk in re.findall(r"[a-z0-9_.%+-]+|[\u4e00-\u9fff]+", text.lower()):
+        if not re.fullmatch(r"[\u4e00-\u9fff]+", chunk):
+            tokens.append(chunk)
+            continue
+        if len(chunk) == 1:
+            tokens.append(chunk)
+            continue
+        for size in range(2, min(4, len(chunk)) + 1):
+            tokens.extend(chunk[index:index + size] for index in range(len(chunk) - size + 1))
+    return tokens
+
+
+def _bm25_scores(query_text: str, documents: list[str]) -> list[float]:
+    query_tokens = set(_bm25_tokens(query_text))
+    document_tokens = [_bm25_tokens(item) for item in documents]
+    if not query_tokens or not document_tokens:
+        return [0.0] * len(documents)
+    average_length = sum(map(len, document_tokens)) / len(document_tokens) or 1.0
+    document_frequency = {
+        token: sum(token in document for document in document_tokens)
+        for token in query_tokens
+    }
+    scores: list[float] = []
+    for document in document_tokens:
+        score = 0.0
+        for token in query_tokens:
+            frequency = document.count(token)
+            if not frequency:
+                continue
+            inverse_frequency = math.log(
+                1 + (len(document_tokens) - document_frequency[token] + 0.5)
+                / (document_frequency[token] + 0.5)
+            )
+            score += inverse_frequency * frequency * 2.5 / (
+                frequency + 1.5 * (0.25 + 0.75 * len(document) / average_length)
+            )
+        scores.append(score)
+    maximum = max(scores, default=0.0)
+    return [score / maximum if maximum else 0.0 for score in scores]
+
+
+_release_store: Any | None = None
+
+
+def _get_release_store() -> Any:
+    global _release_store
+    if _release_store is None:
+        from src.data_platform.storage.postgresql.policy_quality_store import (
+            PostgresPolicyQualityStore,
+        )
+
+        _release_store = PostgresPolicyQualityStore()
+    return _release_store
+
+
+def _is_complete_release_collection(
+    collection_name: str, host: str, port: str
+) -> bool:
+    client: Any = MilvusClient(uri=f"http://{host}:{port}")
+    collections = set(client.list_collections() or [])
+    if collection_name not in collections:
+        return False
+    if COLLECTION_NAME not in collections:
+        return True
+    active_count = int(client.get_collection_stats(collection_name).get("row_count", 0))
+    baseline_count = int(client.get_collection_stats(COLLECTION_NAME).get("row_count", 0))
+    # ponytail: 删除型发布上线后改用显式 snapshot_complete 元数据，不再比较行数。
+    return active_count >= baseline_count
+
+
+def resolve_rules_collection(
+    host: str = "127.0.0.1", port: str = "19530"
+) -> str:
+    """只采用完整活动发布版；指针或快照不可用时整体降级到旧 collection。"""
+    try:
+        active = _get_release_store().get_active_release()
+        if active and _is_complete_release_collection(
+            active.rules_collection, host, port
+        ):
+            return active.rules_collection
+        return COLLECTION_NAME
+    except Exception as exc:
+        logger.warning("[StructuredRetrieval] active release unavailable: %s", exc)
+        return COLLECTION_NAME
+
+
 # ── 标准化结算上下文 ──────────────────────────────────────────────
 
 @dataclass
@@ -100,6 +205,8 @@ class StructuredPolicyQuery:
     text_must_include_any: list[str] = field(default_factory=list)  # source_text 至少包含一个
     text_must_include_all: list[str] = field(default_factory=list)  # source_text 全部包含
     psn_type_allow_all: bool = False          # 是否允许 psn_type 宽松匹配（不限定为指定值）
+    search_text: str = ""                    # 结构化不足时的向量/BM25 查询文本
+    exact_match_fields: list[str] = field(default_factory=list)  # 不允许空维度兜底
 
 
 # ── 结构化检索结果 ────────────────────────────────────────────────
@@ -240,16 +347,24 @@ class StructuredPolicyRuleRetriever:
 
         # 字段相等/模糊过滤
         for field, value in query.filters.items():
+            safe_value = str(value).replace("\\", "\\\\").replace('"', '\\"')
+            exact = field in query.exact_match_fields
             if value and field != "psn_type":
                 # ★ insu_type 使用 LIKE 匹配，因为上下文可能返回简称
                 if field == "insu_type":
-                    expr_parts.append(f'{field} like "%{value}%"')
+                    match = f'{field} like "%{safe_value}%"'
+                    expr_parts.append(match if exact else f'({match} or {field} == "")')
+                elif field == "rule_type":
+                    expr_parts.append(f'{field} == "{safe_value}"')
                 else:
-                    expr_parts.append(f'{field} == "{value}"')
+                    match = f'{field} == "{safe_value}"'
+                    expr_parts.append(match if exact else f'({match} or {field} == "")')
             elif value and field == "psn_type":
                 # psn_type 允许宽松匹配
-                if not query.psn_type_allow_all:
-                    expr_parts.append(f'psn_type == "{value}"')
+                if exact:
+                    expr_parts.append(f'psn_type == "{safe_value}"')
+                elif not query.psn_type_allow_all:
+                    expr_parts.append(f'(psn_type == "{safe_value}" or psn_type == "")')
 
         # ★ 如果没有其他过滤条件，加一个保底条件
         if not expr_parts:
@@ -299,10 +414,21 @@ class StructuredPolicyRuleRetriever:
         for r in raw_results:
             unpack_detail(r)
 
-        # 后处理：文本关键词过滤
+        # 后处理：严格适用维度与文本关键词过滤
         skipped_keyword = 0
         for r in raw_results:
-            combined_text = str(r.get("source_text", "") or "")
+            if any(
+                not str(r.get(field, "") or "")
+                or not (
+                    str(query.filters.get(field, "")) in str(r.get(field, ""))
+                    or str(r.get(field, "")) in str(query.filters.get(field, ""))
+                )
+                for field in query.exact_match_fields
+                if query.filters.get(field)
+            ):
+                skipped_keyword += 1
+                continue
+            combined_text = _searchable_text(r)
 
             # 检查 text_must_include_any
             if query.text_must_include_any:
@@ -320,11 +446,68 @@ class StructuredPolicyRuleRetriever:
             r["_query_name"] = query.query_name
             results.append(r)
 
+        if results and query.search_text:
+            scores = _bm25_scores(query.search_text, [_searchable_text(r) for r in results])
+            for item, score in zip(results, scores):
+                item["score"] = 0.7 + 0.3 * score
+            results.sort(key=lambda item: item["score"], reverse=True)
+
         if skipped_keyword > 0:
             print(f"[MILVUS-QUERY] Keyword filter: {skipped_keyword} records skipped", flush=True)
 
-        # 降级：如果标量查询 + 关键词过滤无结果，尝试 LIKE 宽松查询
-        if not results and query.text_must_include_any:
+        # 结构化候选存在但不相关时，保持适用条件做向量召回 + BM25 重排。
+        if not results and raw_results and query.search_text:
+            try:
+                vector = get_embedding_provider().encode([query.search_text])[0]
+                search_results = self.client.search(
+                    collection_name=self.collection_name,
+                    data=[vector],
+                    anns_field="vector",
+                    search_params={"metric_type": "COSINE", "params": {"ef": 64}},
+                    filter=expr,
+                    limit=top_k * 3,
+                    output_fields=OUTPUT_FIELDS,
+                )
+                candidates: list[dict[str, Any]] = []
+                dense_scores: list[float] = []
+                for hit in search_results[0] if search_results else []:
+                    item = dict(hit["entity"])
+                    unpack_detail(item)
+                    combined_text = _searchable_text(item)
+                    if query.text_must_include_any and not any(
+                        keyword in combined_text for keyword in query.text_must_include_any
+                    ):
+                        continue
+                    if query.text_must_include_all and not all(
+                        keyword in combined_text for keyword in query.text_must_include_all
+                    ):
+                        continue
+                    candidates.append(item)
+                    dense_scores.append(max(0.0, min(1.0, float(hit["distance"]))))
+                bm25_scores = _bm25_scores(
+                    query.search_text, [_searchable_text(item) for item in candidates]
+                )
+                for item, dense_score, bm25_score in zip(
+                    candidates, dense_scores, bm25_scores
+                ):
+                    keyword_score = sum(
+                        keyword in _searchable_text(item)
+                        for keyword in query.text_must_include_any
+                    ) / max(1, len(query.text_must_include_any))
+                    item["score"] = (
+                        0.55 * dense_score + 0.25 * bm25_score + 0.20 * keyword_score
+                    )
+                    item["_query_name"] = query.query_name
+                results = sorted(
+                    candidates, key=lambda item: item["score"], reverse=True
+                )[:top_k]
+            except Exception as e:
+                if _is_transient_milvus_error(e):
+                    raise PolicyRetrievalUnavailableError(str(e)) from e
+                logger.warning("[StructuredRetrieval] hybrid fallback failed: %s", e)
+
+        # 兼容旧查询计划：无语义检索文本时继续使用 LIKE 宽松查询。
+        if not results and not query.search_text and query.text_must_include_any:
             print(f"[MILVUS-QUERY] No results after keyword filter, trying LIKE fallback...", flush=True)
             for kw in query.text_must_include_any[:3]:
                 try:
@@ -389,6 +572,8 @@ class StructuredPolicyRuleRetriever:
                 "text_must_include_any": q.text_must_include_any,
                 "text_must_include_all": q.text_must_include_all,
                 "psn_type_allow_all": q.psn_type_allow_all,
+                "search_text": q.search_text,
+                "exact_match_fields": q.exact_match_fields,
             }
             for q in queries
         ]
@@ -520,6 +705,7 @@ def retrieve_policy_evidence(
     host: str = "127.0.0.1",
     port: str = "19530",
     custom_queries: list[StructuredPolicyQuery] | None = None,
+    collection_name: str | None = None,
 ) -> StructuredRetrievalResult:
     """
     从结算上下文快速检索政策证据。
@@ -532,15 +718,26 @@ def retrieve_policy_evidence(
     Returns:
         StructuredRetrievalResult
     """
+    # PDSC 适用关系过滤（§10.3）：已发布关系存在时，业务事实值转换为
+    # 政策标量过滤并覆盖同名上下文字段；无关系时为空，行为不变。
+    from src.runtime.policy_qa.pdsc_filter_bridge import build_pdsc_filters
+
+    pdsc_filters = build_pdsc_filters(settlement_context)
+    effective_context = dict(settlement_context)
+    effective_context.update(pdsc_filters)
     ctx = NormalizedPolicyContext(
-        settlement_id=str(settlement_context.get("settlement_id", "")),
-        insu_type=str(settlement_context.get("insu_type", "")),
-        med_type=str(settlement_context.get("med_type", "")),
-        hosp_lv=str(settlement_context.get("hosp_lv", "")),
-        psn_type=str(settlement_context.get("psn_type", "")),
-        target_field=str(settlement_context.get("target_field", "统筹自付")),
-        target_amount=float(settlement_context.get("target_amount", 0)),
+        settlement_id=str(effective_context.get("settlement_id", "")),
+        insu_type=str(effective_context.get("insu_type", "")),
+        med_type=str(effective_context.get("med_type", "")),
+        hosp_lv=normalize_hosp_lv(str(effective_context.get("hosp_lv", ""))),
+        psn_type=str(effective_context.get("psn_type", "")),
+        target_field=str(effective_context.get("target_field", "统筹自付")),
+        target_amount=float(effective_context.get("target_amount", 0)),
     )
 
-    retriever = StructuredPolicyRuleRetriever(host=host, port=port)
+    retriever = StructuredPolicyRuleRetriever(
+        host=host,
+        port=port,
+        collection_name=collection_name or resolve_rules_collection(host, port),
+    )
     return retriever.retrieve(ctx, target_field=ctx.target_field, custom_queries=custom_queries)

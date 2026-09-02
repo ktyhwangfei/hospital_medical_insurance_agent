@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
 import { Database, Loader2, Plus, Search, ShieldCheck } from 'lucide-react'
 
+import { AnswerVerificationPanel } from '@/components/policy-qa/answer-verification-panel'
 import { QualityDashboard } from '@/components/policy-knowledge/quality-dashboard'
 import {
   createRelease,
@@ -104,6 +105,7 @@ export default function PolicyKnowledgeTestPage() {
 
     <SearchWorkbench />
     <QualityDashboard releases={releases} activeRelease={activeRelease} latestRun={latestRun} currentCaseSetVersion={Math.max(0, ...cases.map((item) => item.case_set_version))} caseResults={caseResults} onSelectRelease={restoreQuality} onRun={run} onPromote={promote} onRollback={rollback} />
+    <AnswerVerificationPanel />
     <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
       <TestCasePanel cases={cases} onSaved={refresh} />
       <CandidatePanel onCreated={refresh} />

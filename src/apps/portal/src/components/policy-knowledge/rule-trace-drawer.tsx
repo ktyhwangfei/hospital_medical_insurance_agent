@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Loader2, RefreshCw, X } from 'lucide-react'
+import Link from 'next/link'
 
 import {
   Dialog,
@@ -202,6 +203,13 @@ export default function RuleTraceDrawer({ open, ruleId, runId, fieldLabels = {},
                 {trace.rule && <Badge>规则版本 {trace.rule.rule_version}</Badge>}
                 <Badge>编译器 {trace.rule?.compiler_version ?? trace.run.compiler_version}</Badge>
                 {trace.publication && <Badge>发布 {trace.publication.release_id}{trace.publication.published_at ? ` · ${trace.publication.published_at}` : ''}</Badge>}
+                {trace.publication && <Link
+                  className="rounded-md bg-blue-600 px-2 py-1 font-medium text-white hover:bg-blue-700"
+                  href={{
+                    pathname: '/policy-knowledge/knowledge/semantic-discovery',
+                    query: { release_id: trace.publication.release_id, rule_ids: trace.rule_id },
+                  }}
+                >发起结构治理</Link>}
               </div>
             )}
           </DialogHeader>
