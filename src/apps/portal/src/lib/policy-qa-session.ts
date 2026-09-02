@@ -214,6 +214,20 @@ export function extractSettlementId(text: string): string | null {
   return text.match(/[A-Za-z0-9]{6,}/g)?.find((value) => /\d/.test(value)) ?? null
 }
 
+/**
+ * 锚定后的自动切换单号：普通问题里出现与当前锚不同的结算单号时视为切换，
+ * 避免用户直接打新单号被静默忽略（与首次锚定共用同一提取规则）。
+ */
+export function resolveAnchoredSwitch(
+  anchorSettlementId: string | null,
+  question: string,
+): { settlementId: string; question: string } | null {
+  if (!anchorSettlementId) return null
+  const candidate = extractSettlementId(question)
+  if (!candidate || candidate === anchorSettlementId) return null
+  return { settlementId: candidate, question }
+}
+
 /** 生成新会话 ID（首帧生成，跨轮复用） */
 export function newSessionId(): string {
   return `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`

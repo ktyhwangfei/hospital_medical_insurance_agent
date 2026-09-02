@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest'
 import {
   applyContextNeed,
   extractSettlementId,
+  resolveAnchoredSwitch,
   parsePolicyQACommand,
   resetTurnFlags,
   toContextNeed,
@@ -199,6 +200,38 @@ describe('extractSettlementId', () => {
 
   it('无数字时返回 null', () => {
     expect(extractSettlementId('那起付线呢')).toBeNull()
+  })
+})
+
+// ── 锚定后的自动切换单号 ─────────────────────────────────────────
+
+describe('resolveAnchoredSwitch', () => {
+  it('锚定后问题里出现与当前锚不同的单号 → 视为切换', () => {
+    const target = resolveAnchoredSwitch(
+      '011100030X240913000191',
+      '011100030X241120000001 费用组成',
+    )
+    expect(target).toEqual({
+      settlementId: '011100030X241120000001',
+      question: '011100030X241120000001 费用组成',
+    })
+  })
+
+  it('问题里的单号与当前锚相同 → 不切换', () => {
+    expect(
+      resolveAnchoredSwitch('011100030X240913000191', '011100030X240913000191 费用组成'),
+    ).toBeNull()
+  })
+
+  it('无单号或未锚定 → 不切换', () => {
+    expect(resolveAnchoredSwitch('011100030X240913000191', '个人自付一为什么这么多')).toBeNull()
+    expect(resolveAnchoredSwitch(null, '011100030X241120000001 费用组成')).toBeNull()
+  })
+
+  it('金额文本不误判为单号', () => {
+    expect(
+      resolveAnchoredSwitch('011100030X240913000191', '为什么个人付了 186.21 元'),
+    ).toBeNull()
   })
 })
 
