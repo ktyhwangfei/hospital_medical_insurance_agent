@@ -166,3 +166,58 @@ def test_retrieve_broad_policy_evidence_with_hash_provider():
     retriever.client = FakeMilvusClient([])
     result = retriever.retrieve("北京医保政策", top_k=3)
     assert isinstance(result, BroadRetrievalResult)
+
+
+class TestHonestRefusalGate:
+    """Issue #33 P1-5：向量低分 + BM25 零命中 → 诚实拒答（空证据 + refusal_reason）。"""
+
+    def test_below_threshold_and_zero_bm25_refuses(self, fake_records):
+        # FakeMilvusClient 向量 distance 固定 0.85 < 阈值 0.9；
+        # 问题与语料零词面重叠 → BM25 全 0
+        retriever = BroadPolicyRetriever(
+            embedding_provider=_FakeEmbeddingProvider(), min_vector_score=0.9
+        )
+        retriever.client = FakeMilvusClient(fake_records)
+        result = retriever.retrieve("zxqwv asdf", top_k=5)
+
+        assert result.selected_evidence == []
+        assert "below_threshold" in result.query_trace.get("refusal_reason", "")
+
+    def test_above_threshold_keeps_results(self, fake_records):
+        retriever = BroadPolicyRetriever(
+            embedding_provider=_FakeEmbeddingProvider(), min_vector_score=0.5
+        )
+        retriever.client = FakeMilvusClient(fake_records)
+        result = retriever.retrieve("退休人员住院个人支付比例", top_k=5)
+
+        assert len(result.selected_evidence) > 0
+        assert "refusal_reason" not in result.query_trace
+
+    def test_default_threshold_disabled(self):
+        retriever = BroadPolicyRetriever(embedding_provider=_FakeEmbeddingProvider())
+        assert retriever.min_vector_score == 0.0
+
+
+class TestDimensionConflictExclusion:
+    """Issue #33：显式维度硬冲突排除（诚实拒答的主要信号）。"""
+
+    def test_conflict_detected(self):
+        from src.runtime.policy_qa.broad_policy_retriever import _dimension_conflict
+
+        ctx = InferredQueryContext(insu_type="城乡居民基本医疗保险", med_type="门诊-普通门急诊")
+        # 候选险种冲突 → 排除
+        assert _dimension_conflict({"insu_type": "城镇职工基本医疗保险", "med_type": "门诊-普通门急诊"}, ctx)
+        # 候选维度为空（通用）→ 保留
+        assert not _dimension_conflict({"insu_type": "", "med_type": "门诊-普通门急诊"}, ctx)
+        # 双向子串兼容（"退休" vs "70岁以上退休人员"）→ 保留
+        ctx2 = InferredQueryContext(psn_type="退休人员")
+        assert not _dimension_conflict({"psn_type": "70岁以上退休人员"}, ctx2)
+        # 未给出显式维度 → 不排除
+        assert not _dimension_conflict({"insu_type": "城镇职工基本医疗保险"}, InferredQueryContext())
+
+    def test_retrieve_excludes_conflicting_candidates(self, fake_records):
+        # fake_records 全部为 职工+住院；问题显式问居民+门诊 → 全部冲突排除 → 空证据
+        retriever = BroadPolicyRetriever(embedding_provider=_FakeEmbeddingProvider())
+        retriever.client = FakeMilvusClient(fake_records)
+        result = retriever.retrieve("北京城乡居民医保门诊报销比例", top_k=5)
+        assert result.selected_evidence == []

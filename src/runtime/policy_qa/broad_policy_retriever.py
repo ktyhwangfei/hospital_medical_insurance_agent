@@ -39,7 +39,10 @@ from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provide
 from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
     POLICY_RULES_V2_VECTOR_DIM,
 )
-from src.runtime.policy_qa.policy_rules_search import COLLECTION_NAME, OUTPUT_FIELDS, unpack_detail
+from src.knowledge_extension.rule_explanation.release_resolver import (
+    resolve_rules_collection,
+)
+from src.runtime.policy_qa.policy_rules_search import OUTPUT_FIELDS, unpack_detail
 from src.runtime.policy_qa.structured_policy_retriever import (
     PolicyRetrievalUnavailableError,
     StructuredPolicyEvidence,
@@ -66,6 +69,24 @@ _TRANSIENT_GRPC_CODES = {
 _DEFAULT_EXPIRY_DATE = "9999-12-31"
 _DEFAULT_REFERENCE_DATE = "2026-01-01"
 _RRF_K = 60
+
+
+def _default_min_vector_score() -> float:
+    """诚实拒答阈值（Issue #33 P1-5）：向量召回最高分低于该值且 BM25 零命中时判为无证据。
+
+    默认 0.0（不启用，保持既有行为）；由真实语料基线校准后通过
+    ``BROAD_MIN_VECTOR_SCORE`` 环境变量或构造参数开启。
+    """
+    import os
+
+    raw = os.getenv("BROAD_MIN_VECTOR_SCORE", "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("[BroadRetrieval] BROAD_MIN_VECTOR_SCORE 非法值: %r，按 0.0 处理", raw)
+        return 0.0
 
 
 def _is_transient_milvus_error(exc: Exception) -> bool:
@@ -105,6 +126,20 @@ class BroadRetrievalResult:
     query_trace: dict[str, Any] = field(default_factory=dict)
 
 
+def _dimension_conflict(hit: dict[str, Any], ctx: InferredQueryContext) -> bool:
+    """显式维度硬冲突判定（Issue #33 P1-5 校准结论：向量分数不可分，拒答靠维度冲突）。
+
+    上下文给出显式维度值时，候选规则同维度非空且不兼容（双向子串均不含）→ 冲突排除；
+    候选该维度为空（通用规则）→ 保留。region 不在这里判（expr 已硬过滤）。
+    """
+    for dim in ("insu_type", "med_type", "psn_type", "hosp_lv"):
+        want = str(getattr(ctx, dim, "") or "").strip()
+        have = str(hit.get(dim, "") or "").strip()
+        if want and have and want not in have and have not in want:
+            return True
+    return False
+
+
 class BroadPolicyRetriever:
     """宽泛问题混合检索器：向量 + 关键词 + 适用性字段精排。"""
 
@@ -115,6 +150,7 @@ class BroadPolicyRetriever:
         collection_name: str | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         embedding_kind: str = "sentence_transformer",
+        min_vector_score: float | None = None,
     ):
         uri = f"http://{host}:{port}"
         try:
@@ -124,8 +160,11 @@ class BroadPolicyRetriever:
                 raise
             raise PolicyRetrievalUnavailableError(str(e)) from e
 
-        self.collection_name = collection_name or COLLECTION_NAME
+        self.collection_name = collection_name or resolve_rules_collection(host, port)
         self.embedding_provider = embedding_provider or get_embedding_provider(embedding_kind)
+        self.min_vector_score = (
+            min_vector_score if min_vector_score is not None else _default_min_vector_score()
+        )
         logger.info(
             "BroadPolicyRetriever initialized: %s (dim=%s)",
             uri,
@@ -167,7 +206,36 @@ class BroadPolicyRetriever:
         # 5. RRF 融合
         merged_hits = self._rrf_merge(vector_hits, keyword_hits, top_k=top_k * 3)
 
-        # 6. 适用性字段精排
+        # 5.5 诚实拒答出口（Issue #33 P1-5）：向量最高相似度低于阈值且 BM25 零命中
+        # （与问题零词面重叠）时判为无证据，直接返回空结果，由上层走 unavailable。
+        refusal_reason = ""
+        if self.min_vector_score > 0 and merged_hits:
+            best_vector = max(
+                (float(h.get("score", 0.0)) for h in vector_hits), default=0.0
+            )
+            best_bm25 = max(
+                (float(h.get("score", 0.0)) for h in keyword_hits), default=0.0
+            )
+            if best_vector < self.min_vector_score and best_bm25 <= 0:
+                merged_hits = []
+                refusal_reason = (
+                    f"below_threshold(best_vector={best_vector:.3f} < "
+                    f"{self.min_vector_score}, best_bm25={best_bm25:.3f})"
+                )
+
+        # 6. 显式维度硬冲突排除（Issue #33）：上下文显式维度与候选冲突时直接排除，
+        # 通用（空值）规则保留——这是诚实拒答的主要信号（向量分数实测不可分）
+        if merged_hits:
+            before = len(merged_hits)
+            merged_hits = [h for h in merged_hits if not _dimension_conflict(h, merged)]
+            if len(merged_hits) != before:
+                logger.info(
+                    "[BroadRetrieval] dimension conflict excluded %d/%d hits",
+                    before - len(merged_hits),
+                    before,
+                )
+
+        # 7. 适用性字段精排
         ranked = self._applicability_rerank(merged_hits, merged, top_k=top_k)
 
         trace = {
@@ -186,6 +254,8 @@ class BroadPolicyRetriever:
             "keyword_hits": len(keyword_hits),
             "final_hits": len(ranked),
         }
+        if refusal_reason:
+            trace["refusal_reason"] = refusal_reason
         logger.info("[BroadRetrieval] %s", trace)
 
         return BroadRetrievalResult(

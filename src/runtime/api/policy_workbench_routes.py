@@ -355,8 +355,18 @@ def _get_release_index_builder() -> ReleaseIndexBuilder:
 def _get_applicability_backfill_service() -> ApplicabilityBackfillService:
     global _applicability_backfill_service
     if _applicability_backfill_service is None:
+        from src.knowledge_extension.rule_explanation.release_resolver import (
+            resolve_rules_collection,
+        )
+
+        # Issue #33：回填写入 Runtime 当前实际读的集合（active release 优先），
+        # 禁止直写 policy_rules_v2（有 active release 时 Runtime 读不到）。
         _applicability_backfill_service = ApplicabilityBackfillService(
-            MilvusRuleStore()
+            MilvusRuleStore(
+                collection_name=resolve_rules_collection(
+                    production_config.MILVUS_HOST, str(production_config.MILVUS_PORT)
+                )
+            )
         )
     return _applicability_backfill_service
 

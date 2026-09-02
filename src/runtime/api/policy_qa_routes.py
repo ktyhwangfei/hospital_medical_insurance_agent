@@ -757,6 +757,13 @@ def _build_public_result(
     policy_count = len(safe_evidence)
     if is_overview and has_meaningful_answer and can_answer and has_real_amount:
         answer_status = "complete"
+    elif is_broad and policy_count == 0:
+        # Issue #33 P1-5：宽泛问题零政策证据即诚实拒答，禁止模型低置信作答
+        answer_status = "unavailable"
+        safe_answer = (
+            "现有政策知识库中未检索到足以回答该问题的政策依据，"
+            "建议咨询医保办或查阅最新政策文件。"
+        )
     elif (
         has_meaningful_answer
         and can_answer

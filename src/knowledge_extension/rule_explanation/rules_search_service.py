@@ -16,6 +16,12 @@ from typing import Any
 
 from pymilvus import MilvusClient
 
+from src.knowledge_extension.rule_explanation.release_resolver import (
+    resolve_facts_collection,
+    resolve_rules_collection,
+    split_milvus_uri,
+)
+
 # 核心维度（可做标量过滤）
 CORE_DIMS = ("rule_type", "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type")
 
@@ -28,34 +34,12 @@ RULE_OUTPUT_FIELDS = [
 ]
 
 
-def _resolve_active_release() -> dict | None:
-    """读 policy_active_release 当前激活版（best-effort，失败返回 None 回退 v2）。
-
-    指针表只存 release_id；collection 名按发布约定拼接（create_release 同规则）。
-    """
-    try:
-        from src.config.production import DATABASE_URL
-        from src.data_platform.storage.postgresql.client import PostgreSQLClient
-        rows = PostgreSQLClient(DATABASE_URL).execute(
-            "SELECT release_id FROM policy_active_release WHERE singleton_id = TRUE LIMIT 1",
-        )
-        if not rows:
-            return None
-        release_id = rows[0]["release_id"]
-        return {
-            "release_id": release_id,
-            "facts_collection": f"policy_facts_{release_id}",
-            "rules_collection": f"policy_rules_{release_id}",
-        }
-    except Exception:
-        return None
-
-
 class RulesSearchService:
     """政策规则三模式检索 + 按 fact 分组。
 
-    默认 collection 跟随 policy_active_release（治理发布接管检索，评审 B2/P0-1）；
-    无激活记录或读库失败时回退 policy_rules_v2 / policy_facts（向后兼容）。
+    默认 collection 经统一 release resolver 解析（Issue #33 P0-1）：
+    跟随 policy_active_release 且校验集合存在非空，不可用时回退
+    policy_rules_v2 / policy_facts（向后兼容）。
     """
 
     def __init__(
@@ -65,13 +49,9 @@ class RulesSearchService:
         facts_col_name: str | None = None,
     ):
         self._client = MilvusClient(uri=uri, timeout=10)
-        active = _resolve_active_release() if rules_col_name is None else None
-        self._rules_col = rules_col_name or (
-            active["rules_collection"] if active else "policy_rules_v2"
-        )
-        self._facts_col = facts_col_name or (
-            active["facts_collection"] if active else "policy_facts"
-        )
+        host, port = split_milvus_uri(uri)
+        self._rules_col = rules_col_name or resolve_rules_collection(host, port)
+        self._facts_col = facts_col_name or resolve_facts_collection(host, port)
 
     @staticmethod
     def _build_filter(filters: dict[str, str]) -> str:
