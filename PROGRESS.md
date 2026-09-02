@@ -10,9 +10,9 @@
 
 ## 0. 当前焦点
 
-**当前领域**：Issue #31 — 门诊部分项目预退费分析（§1.1 单元 1.9，与 Issue #30 单元 1.8 重编号区隔）
+**当前领域**：Issue #33 — 政策知识上线补强（门诊+通用，§1.1 单元 6.7）
 
-**当前阶段**：Issue #31 已撤回为 `editing` 草稿，候选核心流程可隔离测试、正式路由与公开 API 未开放；Issue #30（单元 1.8 轨迹持久化）后端 + 前端全链路实现完成，待浏览器人工验收
+**当前阶段**：Issue #33 全部机制与回填已落地并完成门禁复测（2026-09-02 终态：structured 诚实拒答 87.5% 达标，FAR/P@3 未达，见 `docs/reviews/2026-09-02-issue33-real-corpus-baseline.md` §8），门禁放行留待需求方判定；Issue #31 仍为 `editing` 草稿（等待真实预结算接口），Issue #30（单元 1.8 轨迹持久化）待浏览器人工验收
 
 **门诊医保数据底座 P1（2026-08-31，`impl_done`；2026-09-01 同步已启动）**：当前测试环境已自动登记 `bjybdb`，SQL Server 三张门诊表及 117 个契约字段可读，PostgreSQL 门诊结构与事务读写通过，真实页面显示“数据底座可用”；CDC 未开启并单独显示“等待 DBA”，不影响默认 5 分钟定时 SQL。**2026-09-01 定时 SQL 任务已人工启动**：基线快照 3350 行（592/2139/619）幂等落库，5 分钟心跳正常，P95 样本积累中（首批 batch `5d56bfaa`/`a3a9edb0`）。启动时修复多 worker 重复认领缺陷（认领 WHERE 补 `active_attempt_id IS NULL`、`start_job` 清残留 attempt），全量 Unit 2013 passed/2 skipped → API+Flow 460 passed/1 skipped。Firefox 在本机被 Next dev/HMR 请求停滞阻断，保留生产态复验。[P1 验证记录](docs/reviews/2026-08-28-outpatient-p1-verification.md) 持续保持证据边界；达到 P95 ≤ 300 秒并完成同步验收前不改整个 P1 为 `complete`，P2 不改 `ready_for_planning`。
 
@@ -31,12 +31,12 @@
 | 政策问答 | 8 | 2 | 5 | 1 | 0 | 单元 1.6–1.7 已验证；1.8 轨迹持久化待浏览器人工验收；单元 1.9 等待真实预结算、候选评测和审批 |
 | 模型服务与管理 | 6 | 1 | 5 | 0 | 0 | 真实资产版本、加密凭据和 dev/test 运行时路由已验证；端点模型列表探测待页面验收 |
 | MCP 工具管理 | 3 | 0 | 3 | 0 | 0 | — |
-| 知识库管理 | 4 | 1 | 3 | 0 | 0 | §2 P9 5 tab 已上线；语义提议 S1 已完成 R4，S5 冲突维度候选已完成聚焦验证 |
+| 知识库管理 | 7 | 1 | 6 | 0 | 0 | §2 P9 5 tab 已上线；语义提议 S1 已完成 R4，S5 冲突维度候选已完成聚焦验证；6.7 Issue #33 上线补强已完成，门禁 3 项中 1 项达标（待需求方判定） |
 | 技能管理 | 11 | 7 | 4 | 0 | 0 | 版本、治理、草稿、AI 创作、日常工作台与门诊全人群固定自测已验证；端到端评测闭环后端/页面已验证，真实 UI 端到端待执行 |
 | 嵌入式组件 | 1 | 0 | 1 | 0 | 0 | — |
 | 安全与审计 | 2 | 0 | 0 | 0 | 2 | 待外部系统 |
 | 适配器接入 | 2 | 0 | 0 | 2 | 0 | 需真实系统 |
-| **合计** | **37** | **11** | **21** | **3** | **2** | 已删除的结算异常、出院质控、运营看板不再计入现行业务能力 |
+| **合计** | **38** | **11** | **22** | **3** | **2** | 已删除的结算异常、出院质控、运营看板不再计入现行业务能力 |
 
 > **现状**：现行业务流只有 `policy-qa`；结算单是政策问答的必填业务数据。`/settlement`、`/qc`、`/dashboard`、`/chat` 及其旧后端编排已退役，不得作为兼容入口恢复。验证流程见 `src/tests/AGENTS.md`
 > 与 `docs/governance/TEST-VERIFICATION-MATRIX.md`。政策问答最新进度以 §1.1 单元 1.6–1.8 和 §4 为准；
@@ -93,6 +93,7 @@
 | 6.4 | 政策抽取主动生成可审核的指标/值域提议与冲突维度候选，发布后进入统一语义契约 | `/semantic-layer/proposals` | `pipeline_orchestrator.py` → `semantic_alignment.py` → `semantic_alignment_routes.py` | verified |
 | 6.5 | 从指定发布版本的异常规则生成结构诊断、bjyb 证据和未发布治理草稿 | `/policy-knowledge/knowledge/semantic-discovery` | `rule_governance.py` → `semantic_alignment_routes.py` | impl_done |
 | 6.6 | 政策—数据语义协同发现（PDSC）：检测引擎、发现簇去重聚类、全政策交叉验证、价值分、值域对齐、人工裁决、拆分/合并、激活流水线与 PolicyApplicabilityRelation/Skill 解析 | `/policy-knowledge/knowledge/semantic-discovery` 语义发现决策卡（含扫描/拆分/激活） | `pdsc.py` + `pdsc_detectors.py` + `pdsc_routes.py` + `pdsc_filter_bridge.py` | impl_done |
+| 6.7 | 政策知识上线补强（Issue #33，门诊+通用）：读路径统一 resolver、金额段/适用性存量回填、dynamic field 过滤修复、诚实拒答出口、真实语料门禁复测 | — | `release_resolver.py` + 五条读路径 + `backfill_amount_band.py` / `backfill_applicability_outpatient.py` + `broad_policy_retriever` 硬冲突排除 | impl_done |
 
 6.4 验证证据（2026-08-12，R4）：严格按 T1 → T2a → T2b → T3 → T4 执行。T1 聚焦回归 125 passed / 1 optional skipped，真实 PostgreSQL 事务节点另 1 passed；T2a 语义提议与指标变更门禁 API 37 passed；T2b 抽取未知概念→提议→审核→发布→契约可读 Flow 及相关知识流程 7 passed；Portal Vitest 24 passed、TypeScript 与 Next.js 生产构建通过；真实 PostgreSQL 后端的 Locust 50 用户运行 60 秒完成 12,683 次提议列表请求，0 失败、P95 29 ms；Chromium 提议审核发布流程 1 passed。V1 交付设计 §11–§12 规定的 S1 最小闭环，S2 需求缺口、S3 数据扫描、S4 派生模式保留为后续增量信号源。
 
@@ -103,6 +104,8 @@
 6.5 验证证据（2026-08-20，聚焦）：按单元 → API → Flow 顺序完成 61 passed / 1 skipped、19 passed、1 passed；Portal 12 passed，TypeScript 检查通过。真实 PostgreSQL 的 `REL_202608182` 复验输出三个独立问题：医疗机构类别（两条规则）、大额医疗互助资金（`rule_3222a148156d8c7d`）和综合待遇比例纠偏（`rule_4df372b59673556e`）。页面与新增 API 路径实时返回 200；草稿仅进入审核队列，不写 Milvus、不自动发布。
 
 6.6 验证证据（2026-08-21，PDSC 后端+前端+全 Phase 补齐）：后端单元 30 passed（§4.2 六类检测器、§5.2 自动库值与失败降级、§6.1 拆分、§11.2/§11.3 激活流水线含 §13.10 失败不改活动版本、未预期异常落激活记录、无受影响文档平凡通过，及 §13 项 1-9 与门禁）；API 10 passed（鉴权、完整治理流、扫描接入、拆分、激活失败步骤上报）；桥接 4 passed（无关系/异常服务退回旧路径、已发布关系转换、draft 关系不消费）；前端决策卡 Vitest 8 passed（扫描报告、激活失败步骤展示、拆分需理由）；TypeScript 检查通过；回归 semantic_alignment 78 / semantic_layer 145 / Portal 相关 20 passed（trace_store 1 个失败与会话前 WIP 改动相关，与 PDSC 零 import 关联）；真实 PG 数据冒烟：304 条提取行扫描 → 8 个结构压缩信号 → 去重聚 4 簇，检测器对不可重放行自动过滤。设计偏差：§11.1 状态机未收敛至 SemanticProposal（簇独立 ClusterStatus，功能等价，两套审核入口待后续收敛）；激活中重提取依赖 MODEL_API_KEY，未配置时明确失败而非静默跳过。
+
+6.7 验证证据（2026-09-02，Issue #33 收尾）：统一 resolver `release_resolver.py` 接入五条读路径 + 回填 API 改 active 感知写入；金额段 27 条数值化与门诊+通用 351 条 ×6 适用性字段已 --apply 到 active release 集合 `policy_rules_REL_20260827_MZ8_V3`（住院 67 条全部未回填）；dynamic field 修复使适用性/金额段过滤在生产真实生效（此前 describe 看不到动态键被静默跳过）。单元 814 passed / 1 skipped，API 105 passed。真实语料门禁终态复测（82 条用例，`docs/reviews/2026-09-02-issue33-real-corpus-baseline.md` §8）：structured 诚实拒答 87.5% **达标**；FAR structured 12.5% / broad 39.6%（目标 <8%）与 P@3 structured 8.3% / broad 23.8%（目标 >90%）**未达**，剩余失败逐案归因与后续候选见报告 §8.4/§8.6，门禁放行留待需求方判定。
 
 #### 技能管理（Skill）
 | # | 单元 | 后端 | 状态 |
