@@ -64,5 +64,7 @@ def test_output_fields_is_core_plus_detail():
     """输出字段 = 核心维度 + 详情字段。"""
     assert set(OUTPUT_FIELDS) == set(
         ["rule_id", "fact_id", "doc_id", "rule_type", "insu_type", "med_type",
-         "hosp_lv", "psn_type", "setl_type"]
+         "hosp_lv", "psn_type", "setl_type",
+         "region", "effective_date", "expiry_date", "publish_status",
+         "policy_version", "is_remote"]
     ) | set(DETAIL_FIELDS)

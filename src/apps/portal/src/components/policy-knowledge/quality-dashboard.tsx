@@ -3,14 +3,15 @@
 import { useState } from 'react'
 import { ArrowRight, CheckCircle2, FlaskConical, LockKeyhole, Rocket, ShieldAlert } from 'lucide-react'
 
-import type { KnowledgeRelease, QualityCaseResult, QualityRun } from '@/lib/policy-knowledge-api'
+import type { Issue25Metrics, KnowledgeRelease, QualityCaseResult, QualityRun } from '@/lib/policy-knowledge-api'
 
-export function QualityDashboard({ releases, activeRelease, latestRun, currentCaseSetVersion, caseResults = [], onSelectRelease, onRun, onPromote, onRollback }: {
+export function QualityDashboard({ releases, activeRelease, latestRun, currentCaseSetVersion, caseResults = [], issue25Metrics = null, onSelectRelease, onRun, onPromote, onRollback }: {
   releases: KnowledgeRelease[]
   activeRelease: KnowledgeRelease | null
   latestRun: QualityRun | null
   currentCaseSetVersion: number
   caseResults?: QualityCaseResult[]
+  issue25Metrics?: Issue25Metrics | null
   onSelectRelease?: (releaseId: string) => void
   onRun: (releaseId: string) => void
   onPromote: (releaseId: string) => void
@@ -68,8 +69,82 @@ export function QualityDashboard({ releases, activeRelease, latestRun, currentCa
         {canPublish ? <Rocket className="size-3.5" /> : <LockKeyhole className="size-3.5" />}人工发布候选版本
       </button>
     </div>
+
+    {issue25Metrics && <Issue25MetricsCard metrics={issue25Metrics} />}
+
     <div className="mt-5 border-t border-slate-100 pt-4"><p className="text-xs font-semibold text-slate-700">发布与回滚历史</p><div className="mt-2 space-y-2">{releases.filter((release) => release.status === 'active' || release.status === 'retired').map((release) => <div key={release.release_id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px]"><span className="font-mono text-slate-700">{release.release_id}</span><span className="text-slate-400">{statusLabel(release.status)}</span>{release.status === 'retired' && onRollback && <button type="button" aria-label={`回滚到 ${release.release_id}`} onClick={() => onRollback(release.release_id)} className="ml-auto rounded border border-amber-200 px-2 py-1 font-semibold text-amber-700">回滚</button>}</div>)}</div></div>
   </section>
+}
+
+function Issue25MetricsCard({ metrics }: { metrics: Issue25Metrics }) {
+  const baselines = [
+    { key: 'text_only', label: '纯文本召回' },
+    { key: 'current_hybrid', label: '当前混合检索' },
+    { key: 'enhanced_hybrid', label: '补强适用性字段' },
+    { key: 'broad_hybrid', label: '宽泛问题混合检索' },
+  ] as const
+
+  const formatPct = (value: number | undefined) => value === undefined ? '—' : `${Math.round(value * 100)}%`
+  const formatMs = (value: number | undefined) => value === undefined ? '—' : `${value.toFixed(2)}ms`
+
+  return <div className="mt-5 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
+    <div className="flex items-center gap-2">
+      <FlaskConical className="size-4 text-indigo-600" />
+      <p className="text-xs font-semibold text-indigo-700">Issue #25 专项检索指标</p>
+      <span className="ml-auto text-[10px] text-slate-400">{metrics.run_at} · {metrics.embedding_kind} · {metrics.case_count} 用例</span>
+    </div>
+    <div className="mt-3 overflow-x-auto">
+      <table className="w-full text-[11px]">
+        <thead>
+          <tr className="text-left text-slate-500">
+            <th className="pb-2 font-medium">基线</th>
+            <th className="pb-2 font-medium">P@3</th>
+            <th className="pb-2 font-medium">R@3</th>
+            <th className="pb-2 font-medium">FAR</th>
+            <th className="pb-2 font-medium">完整回答率</th>
+            <th className="pb-2 font-medium">诚实拒答率</th>
+            <th className="pb-2 font-medium">P95 时延</th>
+          </tr>
+        </thead>
+        <tbody>
+          {baselines.map(({ key, label }) => {
+            const m = metrics[key]
+            return <tr key={key} className="border-t border-indigo-100">
+              <td className="py-2 font-medium text-slate-700">{label}</td>
+              <td className="py-2">{formatPct(m.precision_at_k)}</td>
+              <td className="py-2">{formatPct(m.recall)}</td>
+              <td className="py-2 text-red-700">{formatPct(m.far)}</td>
+              <td className="py-2">{formatPct(m.complete_rate)}</td>
+              <td className="py-2">{formatPct(m.honest_refusal_rate)}</td>
+              <td className="py-2">{formatMs(m.p95_latency_ms)}</td>
+            </tr>
+          })}
+        </tbody>
+      </table>
+    </div>
+    <div className="mt-3 grid grid-cols-3 gap-2">
+      <div className="rounded-lg bg-white/80 p-2 text-center">
+        <p className="text-[10px] text-slate-400">字段完整率</p>
+        <p className="mt-1 text-sm font-bold text-slate-800">{formatPct(metrics.field_quality_score)}</p>
+      </div>
+      <div className="rounded-lg bg-white/80 p-2 text-center">
+        <p className="text-[10px] text-slate-400">语料规模</p>
+        <p className="mt-1 text-sm font-bold text-slate-800">{metrics.corpus_size}</p>
+      </div>
+      <div className="rounded-lg bg-white/80 p-2 text-center">
+        <p className="text-[10px] text-slate-400">用例数</p>
+        <p className="mt-1 text-sm font-bold text-slate-800">{metrics.case_count}</p>
+      </div>
+    </div>
+    {metrics.top_diff_cases.length > 0 && <div className="mt-3 rounded-lg bg-white/70 p-3">
+      <p className="text-[11px] font-semibold text-slate-700">Top 差异用例（补强 - 当前）</p>
+      <ul className="mt-2 space-y-1 font-mono text-[10px] text-slate-600">
+        {metrics.top_diff_cases.slice(0, 3).map((item) => <li key={item.case_id}>
+          {item.case_id} · P+{Math.round(item.precision_diff * 100)}% R+{Math.round(item.recall_diff * 100)}% · {item.scenario}
+        </li>)}
+      </ul>
+    </div>}
+  </div>
 }
 
 function buildCaseDiffs(results: QualityCaseResult[]) {

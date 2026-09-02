@@ -617,16 +617,50 @@ class TestPolicyQAStreamEndpoint:
         # 应该返回422验证错误
         assert response.status_code == 422
 
-    def test_stream_endpoint_requires_settlement_id(self, client):
-        """测试流式端点需要settlement_id参数"""
+    def test_stream_endpoint_accepts_broad_question_without_settlement_id(
+        self, client, monkeypatch
+    ):
+        """宽泛政策问题允许省略 settlement_id，走 BM25+向量宽召回。"""
+        from types import SimpleNamespace
+
+        from src.runtime.api import policy_qa_routes
+
+        fake_evidence = SimpleNamespace(
+            source_text="北京市职工医保住院报销比例为起付线以上按比例分段支付。",
+            applied_reason="宽泛问题向量召回",
+            rule_type="支付比例",
+            score=0.95,
+            payment_ratio="",
+            amount_band="",
+            rule_value="",
+        )
+
+        def fake_retrieve_broad(**_kwargs):
+            return SimpleNamespace(
+                selected_evidence=[fake_evidence],
+                query_trace={"keywords": ["北京", "职工", "住院", "报销"]},
+            )
+
+        monkeypatch.setattr(
+            policy_qa_routes, "retrieve_broad_policy_evidence", fake_retrieve_broad
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "_generate_broad_answer", lambda _q, _ev: "北京市职工医保住院报销比例..."
+        )
+
         response = client.post(
             "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
-            json={
-                "question": "为什么我的费用是这些？",
-            },
+            json={"question": "北京职工医保住院怎么报销"},
         )
-        # 应该返回422验证错误
-        assert response.status_code == 422
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        events = _sse_events(response.text)
+        event_names = {name for name, _ in events}
+        assert "result" in event_names
+        assert "done" in event_names
+        result = next(data["result"] for name, data in events if name == "result")
+        assert result["answer_status"] in {"partial", "complete"}
+        assert result["uncertainties"]
 
     def test_stream_endpoint_returns_sse(self, client):
         """测试流式端点返回SSE格式"""
@@ -1352,13 +1386,11 @@ class TestPolicyQATestEndpoint:
         # 应该返回422验证错误
         assert response.status_code == 422
 
-    def test_test_endpoint_requires_settlement_id(self, client):
-        """测试测试端点需要settlement_id参数"""
+    def test_test_endpoint_accepts_broad_question_without_settlement_id(self, client):
+        """测试端点允许宽泛政策问题省略 settlement_id。"""
         response = client.post(
             "/api/v1/medical-insurance-ai-agent/policy-qa/test",
-            json={
-                "question": "为什么我的费用是这些？",
-            },
+            json={"question": "北京职工医保住院怎么报销"},
         )
-        # 应该返回422验证错误
-        assert response.status_code == 422
+        assert response.status_code == 200
+        assert response.json()["request"]["settlement_id"] is None
