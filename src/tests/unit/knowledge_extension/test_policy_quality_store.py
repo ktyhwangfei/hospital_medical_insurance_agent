@@ -59,11 +59,13 @@ class _FakePolicyQualityClient:
         run_sequence_owned: bool = True,
         run_sequence_next: int = 1,
         has_run_sequence_unique_index: bool = True,
+        has_answer_verification_column: bool = False,
     ) -> None:
         self.releases: dict[str, dict] = {}
         self.has_source_lineage_column = has_source_lineage_column
         self.has_quality_run_id_column = has_quality_run_id_column
         self.has_build_error_column = has_build_error_column
+        self.has_answer_verification_column = has_answer_verification_column
         self.has_run_sequence_column = has_run_sequence_column
         self.run_sequences = dict(run_sequences or {})
         self.run_sequence_has_default = run_sequence_has_default
@@ -93,6 +95,9 @@ class _FakePolicyQualityClient:
             if "COLUMN_NAME = 'BUILD_ERROR'" in upper:
                 assert "TABLE_NAME = 'POLICY_KNOWLEDGE_RELEASES'" in upper
                 return [{"exists": self.has_build_error_column}]
+            if "COLUMN_NAME = 'ANSWER_VERIFICATION'" in upper:
+                assert "TABLE_NAME = 'POLICY_QA_TEST_CASES'" in upper
+                return [{"exists": self.has_answer_verification_column}]
             assert "TABLE_NAME = 'POLICY_QUALITY_RUNS'" in upper
             assert "COLUMN_NAME = 'RUN_SEQUENCE'" in upper
             return [{"exists": self.has_run_sequence_column}]
@@ -115,6 +120,10 @@ class _FakePolicyQualityClient:
                 self.run_sequence_has_default = True
             if "SET NOT NULL" in upper:
                 self.run_sequence_not_null = True
+            return []
+        if upper.startswith("ALTER TABLE POLICY_QA_TEST_CASES"):
+            if "ANSWER_VERIFICATION" in upper and "ADD COLUMN" in upper:
+                self.has_answer_verification_column = True
             return []
         if upper.startswith("CREATE UNIQUE INDEX"):
             if not self.has_run_sequence_column:
@@ -381,7 +390,10 @@ def test_missing_release_build_error_column_runs_bounded_migration(monkeypatch) 
 
 
 def test_existing_release_source_column_skips_alter(monkeypatch) -> None:
-    client = _FakePolicyQualityClient(has_source_lineage_column=True)
+    client = _FakePolicyQualityClient(
+        has_source_lineage_column=True,
+        has_answer_verification_column=True,
+    )
 
     _initialize_postgres_store(monkeypatch, client)
 

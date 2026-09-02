@@ -5,14 +5,28 @@ import pytest
 from src.data_platform.storage.skill.governance_in_memory import (
     InMemorySkillGovernanceStorage,
 )
+from src.data_platform.storage.skill.governance_ports import (
+    SkillGovernanceNotFoundError,
+)
 from src.data_platform.storage.skill.version_in_memory import (
     InMemorySkillVersionStorage,
 )
 from src.domain.skill.governance_models import (
+    DEFAULT_ROUTING_SUITE_ID,
+    SkillEvalAssertion,
+    SkillEvalAssertionResult,
+    SkillEvalDimension,
+    SkillEvalEnvironmentSnapshot,
+    SkillEvalPartition,
     SkillEvalRunStatus,
+    SkillEvalTask,
+    SkillEvalTaskInput,
+    SkillEvalTaskResult,
+    SkillEvalTaskStatus,
     SkillReleaseEnvironment,
     SkillReleaseStatus,
 )
+from src.domain.skill.regression_models import CalculationAssertions
 from src.domain.skill.version_models import SkillValidationStatus, SkillVersion
 from src.runtime.skill_management.governance_service import (
     SkillGovernanceGateError,
@@ -79,7 +93,362 @@ def service() -> SkillGovernanceService:
         storage=InMemorySkillGovernanceStorage(),
         version_storage=versions,
         loader=_Loader([_manifest("runtime", ["统筹自付"])]),
+        current_artifact_hash_resolver=lambda _skill_id: "a" * 64,
     )
+
+
+def test_create_skill_suite_generates_prefixed_id(service: SkillGovernanceService) -> None:
+    suite = service.create_suite(
+        name="演示 Skill 回归",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="验证演示 Skill 路由",
+        created_by="quality-user",
+    )
+
+    assert suite.suite_id.startswith("EVS_")
+    assert suite.skill_id == "demo-skill"
+    assert suite.revision == 1
+
+
+def _eval_task(suite_id: str) -> SkillEvalTask:
+    return SkillEvalTask(
+        task_id="EVT_demo_outpatient",
+        suite_id=suite_id,
+        target_skill_id="demo-skill",
+        name="门诊费用组成",
+        partition=SkillEvalPartition.REGRESSION,
+        input=SkillEvalTaskInput(question="费用组成", settlement_id="T_demo"),
+        assertions=[
+            SkillEvalAssertion(
+                assertion_id="self_pay_one",
+                dimension=SkillEvalDimension.BEHAVIOR,
+                output_adapter="self_pay_one",
+                expected=CalculationAssertions(expected_value=510.96),
+            )
+        ],
+        source_type="outpatient_self_test",
+        source_ref="person-21",
+        created_by="importer",
+        updated_by="importer",
+    )
+
+
+def test_import_and_freeze_dataset_are_idempotent(
+    service: SkillGovernanceService,
+) -> None:
+    suite = service.create_suite(
+        name="门诊基准集",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="端到端任务",
+        created_by="quality-user",
+    )
+    task = _eval_task(suite.suite_id)
+
+    first_import = service.import_tasks(
+        suite.suite_id,
+        [task],
+        created_by="quality-user",
+    )
+    second_import = service.import_tasks(
+        suite.suite_id,
+        [task],
+        created_by="quality-user",
+    )
+    first_version = service.freeze_dataset(
+        suite.suite_id,
+        created_by="quality-user",
+    )
+    second_version = service.freeze_dataset(
+        suite.suite_id,
+        created_by="quality-user",
+    )
+
+    assert first_import == second_import
+    assert len(first_version.task_snapshots) == 1
+    assert first_version.dataset_version_id == second_version.dataset_version_id
+
+    updated = task.model_copy(update={"name": "修改后的任务", "revision": 2})
+    service.update_task(updated, expected_revision=1, updated_by="quality-user")
+    assert first_version.task_snapshots[0].name == "门诊费用组成"
+
+
+@pytest.mark.asyncio
+async def test_create_benchmark_run_executes_frozen_tasks_once(
+    service: SkillGovernanceService,
+) -> None:
+    suite = service.create_suite(
+        name="门诊基准集",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="端到端任务",
+        created_by="quality-user",
+    )
+    service.import_tasks(
+        suite.suite_id,
+        [_eval_task(suite.suite_id)],
+        created_by="quality-user",
+    )
+    dataset = service.freeze_dataset(suite.suite_id, created_by="quality-user")
+    benchmark = service.create_benchmark(
+        name="门诊 V1",
+        skill_id="demo-skill",
+        dataset_version_id=dataset.dataset_version_id,
+        environment_snapshot=SkillEvalEnvironmentSnapshot(
+            runtime_version="test",
+            data_source_mode="memory",
+        ),
+        evaluator_plan_id="deterministic_v1",
+        judge_version=None,
+        gate_thresholds={},
+        created_by="quality-user",
+    )
+    mismatched = service.create_benchmark(
+        name="制品不一致",
+        skill_id="demo-skill",
+        dataset_version_id=dataset.dataset_version_id,
+        environment_snapshot=SkillEvalEnvironmentSnapshot(
+            runtime_version="test",
+            data_source_mode="memory",
+            skill_artifact_hash="f" * 64,
+        ),
+        evaluator_plan_id="deterministic_v1",
+        judge_version=None,
+        gate_thresholds={},
+        created_by="quality-user",
+    )
+
+    with pytest.raises(SkillGovernanceGateError) as mismatch_error:
+        await service.create_benchmark_run(
+            mismatched.benchmark_id,
+            version_id="a-version",
+            baseline_version_id=None,
+            created_by="quality-user",
+        )
+    assert "benchmark_artifact_mismatch" in mismatch_error.value.gate_failures
+
+    class Runner:
+        calls = 0
+
+        async def run(self, task):
+            self.calls += 1
+            return SkillEvalTaskResult(
+                task_id=task.task_id,
+                status=SkillEvalTaskStatus.PASSED,
+                selected_skill_id=task.target_skill_id,
+                assertion_results=(
+                    SkillEvalAssertionResult(
+                        assertion_id="self_pay_one",
+                        dimension=SkillEvalDimension.BEHAVIOR,
+                        status=SkillEvalTaskStatus.PASSED,
+                        actual_value=510.96,
+                    ),
+                ),
+            )
+
+    runner = Runner()
+    with pytest.raises(SkillGovernanceGateError) as candidate_error:
+        await service.create_benchmark_run(
+            benchmark.benchmark_id,
+            version_id="b-version",
+            baseline_version_id=None,
+            created_by="quality-user",
+            runner=runner,
+        )
+    assert "candidate_not_materialized" in candidate_error.value.gate_failures
+
+    with pytest.raises(SkillGovernanceGateError) as baseline_error:
+        await service.create_benchmark_run(
+            benchmark.benchmark_id,
+            version_id="a-version",
+            baseline_version_id="b-version",
+            created_by="quality-user",
+            runner=runner,
+        )
+    assert "baseline_isolation_unavailable" in baseline_error.value.gate_failures
+
+    run = await service.create_benchmark_run(
+        benchmark.benchmark_id,
+        version_id="a-version",
+        baseline_version_id=None,
+        created_by="quality-user",
+        runner=runner,
+    )
+
+    assert runner.calls == 1
+    assert run.status == SkillEvalRunStatus.PASSED
+    assert run.dataset_version_id == dataset.dataset_version_id
+    assert run.task_results[0].task_id == "EVT_demo_outpatient"
+    assert run.dimension_summary[0].dimension == SkillEvalDimension.BEHAVIOR
+    candidate = service.create_candidate(
+        "demo-skill",
+        version_id="a-version",
+        eval_run_id=run.run_id,
+        environment="test",
+        created_by="developer",
+    )
+    rerun = await service.retest_benchmark_run(
+        run.run_id,
+        created_by="quality-user",
+        runner=runner,
+    )
+
+    assert candidate.eval_run_id == run.run_id
+    assert rerun.run_id != run.run_id
+    assert runner.calls == 2
+
+
+def test_create_suite_rejects_unknown_skill(service: SkillGovernanceService) -> None:
+    with pytest.raises(SkillGovernanceNotFoundError, match="Skill 不存在"):
+        service.create_suite(
+            name="未知 Skill 回归",
+            scope="skill",
+            skill_id="missing-skill",
+            purpose="",
+            created_by="quality-user",
+        )
+
+
+def test_route_case_belongs_to_selected_suite(service: SkillGovernanceService) -> None:
+    suite = service.create_suite(
+        name="演示 Skill 路由",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    case = service.create_case(
+        suite_id=suite.suite_id,
+        question_template="统筹自付怎么算",
+        expected_skill_id="demo-skill",
+        required=True,
+        risk_tags=[],
+        business_tags=[],
+        source_type="manual",
+        source_ref="",
+        contains_sensitive_data=False,
+        created_by="quality-user",
+    )
+
+    assert case.case_id.startswith("EVC_")
+    assert case.suite_id == suite.suite_id
+    assert service.list_cases(suite_id=suite.suite_id) == [case]
+
+
+def test_skill_suite_rejects_case_skill_change(
+    service: SkillGovernanceService,
+) -> None:
+    suite = service.create_suite(
+        name="演示 Skill 路由",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    case = service.create_case(
+        suite_id=suite.suite_id,
+        question_template="统筹自付怎么算",
+        expected_skill_id="demo-skill",
+        required=True,
+        risk_tags=[],
+        business_tags=[],
+        source_type="manual",
+        source_ref="",
+        contains_sensitive_data=False,
+        created_by="quality-user",
+    )
+
+    with pytest.raises(SkillGovernanceGateError, match="期望 Skill"):
+        service.update_case(
+            case.case_id,
+            question_template=case.question_template,
+            expected_skill_id="other-skill",
+            required=case.required,
+            risk_tags=case.risk_tags,
+            business_tags=case.business_tags,
+            source_type=case.source_type,
+            source_ref=case.source_ref,
+            enabled=case.enabled,
+            contains_sensitive_data=False,
+        )
+
+
+def test_same_question_is_deduplicated_only_inside_same_suite(
+    service: SkillGovernanceService,
+) -> None:
+    first_suite = service.create_suite(
+        name="第一套",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    second_suite = service.create_suite(
+        name="第二套",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    base = {
+        "question_template": "起付线怎么算",
+        "expected_skill_id": "demo-skill",
+        "required": True,
+        "risk_tags": [],
+        "business_tags": [],
+        "source_type": "manual",
+        "source_ref": "",
+        "contains_sensitive_data": False,
+        "created_by": "quality-user",
+    }
+    first = service.create_case(suite_id=first_suite.suite_id, **base)
+    second = service.create_case(suite_id=second_suite.suite_id, **base)
+
+    assert first.case_id != second.case_id
+
+
+def test_non_empty_or_default_suite_cannot_be_deleted(
+    service: SkillGovernanceService,
+) -> None:
+    with pytest.raises(SkillGovernanceGateError, match="默认"):
+        service.delete_suite(DEFAULT_ROUTING_SUITE_ID)
+
+    suite = service.create_suite(
+        name="非空测评集",
+        scope="skill",
+        skill_id="demo-skill",
+        purpose="",
+        created_by="quality-user",
+    )
+    service.create_case(
+        suite_id=suite.suite_id,
+        question_template="起付线怎么算",
+        expected_skill_id="demo-skill",
+        required=True,
+        risk_tags=[],
+        business_tags=[],
+        source_type="manual",
+        source_ref="",
+        contains_sensitive_data=False,
+        created_by="quality-user",
+    )
+    with pytest.raises(SkillGovernanceGateError, match="包含用例"):
+        service.delete_suite(suite.suite_id)
+
+
+def test_default_routing_suite_cannot_be_inactivated(
+    service: SkillGovernanceService,
+) -> None:
+    with pytest.raises(SkillGovernanceGateError, match="默认"):
+        service.update_suite(
+            DEFAULT_ROUTING_SUITE_ID,
+            name="平台默认路由测评集",
+            purpose="兼容历史路由评测与发布门禁",
+            status="inactive",
+            expected_revision=1,
+            updated_by="quality-user",
+        )
 
 
 def test_case_changes_increment_global_suite_version(

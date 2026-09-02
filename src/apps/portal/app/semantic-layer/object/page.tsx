@@ -73,19 +73,21 @@ function PublishCheckDialog({ obj, onCancel, onPublished }: {
   useEffect(() => {
     (async () => {
       try {
-        // 获取该对象的所有指标，检查哪些 skill 引用了它们
-        const metrics = await fetchJson<any[]>(`${SEMANTIC_API}/metrics?object_code=${encodeURIComponent(obj.object_code)}`)
+        const [metrics, model] = await Promise.all([
+          fetchJson<any[]>(`${SEMANTIC_API}/metrics?object_code=${encodeURIComponent(obj.object_code)}`),
+          fetchJson<{ queryable: boolean; validation_issues: string[]; datasets: unknown[]; keys: unknown[]; relations: unknown[] }>(`${SEMANTIC_API}/objects/${encodeURIComponent(obj.object_code)}/query-model/validate`, { method: 'POST' }),
+        ])
         const usedMetrics = metrics.filter((m: any) => m.usage_count > 0)
         const skillNames = [...new Set(usedMetrics.map((m: any) => m.metric_code))]
-        // 简化版质量检查：有引用 → 需人工确认
-        const warnings: string[] = []
+        const warnings: string[] = model.validation_issues.map((issue) => `阻断：${issue}`)
+        if (model.queryable) warnings.push(`键/关系/粒度校验通过：${model.datasets.length} 个数据集、${model.keys.length} 个键、${model.relations.length} 条关系，可编译查询模型`)
         if (usedMetrics.length === 0) {
           warnings.push('该对象下无可被 Skill 引用的指标，发布后可能无实际作用')
         } else {
           warnings.push(`${usedMetrics.length} 个指标被 ${usedMetrics.reduce((s: number, m: any) => s + m.usage_count, 0)} 个 Skill 引用`)
           warnings.push('请确认相关 Skill 测试通过后再发布')
         }
-        setResult({ ok: true, skills: skillNames, warnings })
+        setResult({ ok: model.queryable, skills: skillNames, warnings })
       } catch (err: any) {
         setResult({ ok: false, skills: [], warnings: [err.message || '质量检查失败'] })
       }

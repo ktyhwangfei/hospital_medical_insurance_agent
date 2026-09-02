@@ -24,6 +24,13 @@ from src.knowledge_extension.rule_explanation.semantic_alignment import (
     StandardValueProposalDraft,
     TriggerSource,
 )
+from src.knowledge_extension.rule_explanation.policy_compiler.models import (
+    CanonicalRule,
+    CompileRun,
+)
+from src.knowledge_extension.rule_explanation.policy_compiler.trace_store import (
+    InMemoryCompilationTraceStore,
+)
 from src.runtime.api.app import create_app
 from src.semantic_layer.extraction_contract import build_extraction_schema
 from src.semantic_layer.models import BusinessObject, Metric, ValueDomain
@@ -373,6 +380,169 @@ def test_dimension_proposal_lists_strong_evidence_and_resolves_modeling_conclusi
     assert resolved.json()["review_conclusion"] == "new_dimension"
     metric = registry_store.get_metric("zcgz.fund_type")
     assert metric is not None and metric.semantic_type == "Enum"
+
+
+def test_dimension_proposal_list_adds_bjyb_field_evidence_without_persisting_it(
+    monkeypatch,
+) -> None:
+    from src.runtime.api import semantic_alignment_routes
+
+    service, _registry_store = _service()
+    monkeypatch.setattr(semantic_alignment_routes, "_get_service", lambda: service)
+    monkeypatch.setattr(semantic_alignment_routes, "_get_discovery_fields", lambda: [
+        {
+            "table_name": "yb_yd_jjfx", "field_name": "FUND_CODE",
+            "description": "基金款项编码", "non_null_rate": 1,
+            "distinct_count": 7, "sample_values": ["TC", "DE"],
+        },
+        {
+            "table_name": "yb_brdjxx", "field_name": "FUND_TYPE",
+            "description": "险种类型", "non_null_rate": 1,
+            "distinct_count": 3, "sample_values": ["职工", "居民"],
+        },
+    ])
+    proposal = _intake_dimension(service)
+    client = TestClient(create_app())
+
+    response = client.get(
+        f"{PREFIX}/proposals",
+        params={"proposal_type": "dimension"},
+        headers=_review_headers(),
+    )
+
+    assert response.status_code == 200
+    evidence = {item["source_ref"]: item for item in response.json()[0]["evidence"]}
+    assert evidence["database:yb_yd_jjfx.FUND_CODE"]["evidence_grade"] == "strong"
+    assert evidence["database:yb_brdjxx.FUND_TYPE"]["evidence_grade"] == "rejected"
+    stored = service.get_proposal(proposal.proposal_id)
+    assert stored is not None
+    assert all(item.evidence_kind == "policy" for item in stored.evidence)
+
+
+def test_database_evidence_preview_does_not_require_an_existing_proposal(monkeypatch) -> None:
+    from src.runtime.api import semantic_alignment_routes
+
+    service, _registry_store = _service()
+    monkeypatch.setattr(semantic_alignment_routes, "_get_service", lambda: service)
+    monkeypatch.setattr(semantic_alignment_routes, "_get_discovery_fields", lambda: [
+        {
+            "table_name": "m_institution", "field_name": "H_TYPE",
+            "description": "医疗机构类型", "non_null_rate": 1,
+            "distinct_count": 4, "sample_values": ["01", "02", "03", "05"],
+        },
+        {
+            "table_name": "m_institution", "field_name": "H_LEVEL",
+            "description": "医院等级", "non_null_rate": 1,
+            "distinct_count": 14, "sample_values": ["一级", "二级", "三级"],
+        },
+    ])
+    client = TestClient(create_app())
+
+    response = client.post(
+        f"{PREFIX}/database-evidence-preview",
+        json={
+            "concept": "医疗机构类别",
+            "definition": "区分社区卫生服务机构与其他定点医疗机构",
+            "candidate_values": ["社区卫生服务机构", "其他定点医疗机构"],
+        },
+        headers=_review_headers(),
+    )
+
+    assert response.status_code == 200
+    evidence = {item["source_ref"]: item for item in response.json()}
+    assert evidence["database:m_institution.H_TYPE"]["evidence_grade"] == "strong"
+    assert evidence["database:m_institution.H_LEVEL"]["evidence_grade"] == "rejected"
+    assert service.list_proposals() == []
+
+
+def test_rule_governance_diagnosis_creates_unpublished_draft(monkeypatch) -> None:
+    from src.runtime.api import semantic_alignment_routes
+
+    service, registry_store = _service()
+    traces = InMemoryCompilationTraceStore()
+    for rule_id, excerpt, ratio in (
+        ("rule_69fc18433e6a7364", "在本市社区卫生服务机构就医。", "0.9"),
+        ("rule_63e89e926492ebd8", "在本市社区卫生服务机构以外的其他定点医疗机构就医。", "0.7"),
+    ):
+        run_id = f"run_{rule_id}"
+        traces.create_run(CompileRun(
+            run_id=run_id,
+            document_id="doc_policy",
+            unit_id="unit_inst",
+            extraction_id="ext_inst",
+            raw_input={"source_text": excerpt},
+            llm_output={},
+        ))
+        traces.save_lineage(
+            rule=CanonicalRule(
+                rule_id=rule_id,
+                subject="门诊报销比例",
+                conditions={"hosp_lv": "一级"},
+                result={"ratio": ratio},
+                evidence=[excerpt],
+            ),
+            run_id=run_id,
+            extraction_id="ext_inst",
+            document_id="doc_policy",
+            release_id="REL_202608182",
+        )
+    monkeypatch.setattr(semantic_alignment_routes, "_get_service", lambda: service)
+    monkeypatch.setattr(
+        semantic_alignment_routes,
+        "get_rule_governance_trace_store",
+        lambda: traces,
+        raising=False,
+    )
+    monkeypatch.setattr(semantic_alignment_routes, "_get_discovery_fields", lambda: [
+        {
+            "table_name": "m_institution", "field_name": "H_TYPE",
+            "description": "医疗机构类型", "non_null_rate": 1,
+            "distinct_count": 4, "sample_values": ["01", "02", "03", "05"],
+        },
+        {
+            "table_name": "m_institution", "field_name": "H_LEVEL",
+            "description": "医院等级", "non_null_rate": 1,
+            "distinct_count": 3, "sample_values": ["一级", "二级", "三级"],
+        },
+    ])
+    client = TestClient(create_app())
+    headers = _review_headers()
+    payload = {
+        "release_id": "REL_202608182",
+        "rule_ids": ["rule_69fc18433e6a7364", "rule_63e89e926492ebd8"],
+    }
+
+    diagnosed = client.post(f"{PREFIX}/rule-diagnoses", json=payload, headers=headers)
+
+    assert diagnosed.status_code == 200
+    issue = diagnosed.json()["items"][0]
+    assert issue["title"] == "医疗机构类别被误提取为医院等级"
+    assert {item["field_name"] for item in issue["database_evidence"]} == {"H_TYPE", "H_LEVEL"}
+
+    created = client.post(
+        f"{PREFIX}/rule-governance-drafts",
+        json={**payload, "issue_id": issue["issue_id"], "decision": "add_and_bind"},
+        headers=headers,
+    )
+
+    assert created.status_code == 201
+    draft = created.json()
+    assert draft["proposal_type"] == "rule_governance"
+    assert draft["status"] == "proposed"
+    assert draft["governance_change_plan"]["release_id"] == "REL_202608182"
+    assert registry_store.get_metric("zcgz.institution_category") is None
+    refused = client.post(
+        f"{PREFIX}/proposals/{draft['proposal_id']}/review", headers=headers
+    )
+    assert refused.status_code == 200
+    accepted = client.post(
+        f"{PREFIX}/proposals/{draft['proposal_id']}/accept", headers=headers
+    )
+    assert accepted.status_code == 200
+    published = client.post(
+        f"{PREFIX}/proposals/{draft['proposal_id']}/publish", headers=headers
+    )
+    assert published.status_code == 409
 
 
 def test_metric_proposal_review_accept_publish_uses_token_principal(monkeypatch) -> None:

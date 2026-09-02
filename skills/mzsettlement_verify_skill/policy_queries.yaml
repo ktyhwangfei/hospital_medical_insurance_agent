@@ -1,0 +1,63 @@
+common_dimensions: [险种, 人员类别, 医疗类别, 医疗机构等级, 结算日期, 参保地]
+normalization:
+  insu_type:
+    exact:
+      城镇职工: 城镇职工基本医疗保险
+      城乡居民: 城乡居民基本医疗保险
+    contains:
+      - {terms: [城镇职工, 职工基本医疗保险, 职工医保], value: 城镇职工基本医疗保险}
+      - {terms: [城乡居民, 城镇居民, 学生儿童, 无保障老年人, 无业], value: 城乡居民基本医疗保险}
+  med_type:
+    exact:
+      普通门诊: 门诊-普通门急诊
+      门诊挂号: 门诊-普通门急诊
+      急诊挂号: 门诊-普通门急诊
+      普通急诊: 门诊-普通门急诊
+  psn_type:
+    preserve:
+      - 在职职工
+      - 退休人员
+      - 离休人员
+      - 灵活就业人员
+      - 学生儿童
+      - 城乡老年人
+      - 劳动年龄内居民
+      - 70岁以下退休人员
+      - 70岁以上退休人员
+      - 返贫致贫人口
+      - 残疾人员
+      - 优抚对象
+      - 特困供养人员
+      - 低收入救助人员
+    contains:
+      - {terms: [在职], value: 在职职工}
+      - {terms: [退休], value: 退休人员}
+      - {terms: [离休], value: 离休人员}
+      - {terms: [学生, 婴幼儿, 非在校生], value: 学生儿童}
+      - {terms: [老年], value: 城乡老年人}
+      - {terms: [无业], value: 劳动年龄内居民}
+profiles:
+  overall-settlement-verification: [适用范围]
+  personal-liability-explanation: [起付线, 支付比例, 排除规则]
+  payment-channel-verification: [适用范围]
+  deductible-and-annual-progress: [起付线]
+  reimbursement-and-cap-verification: [支付比例, 封顶线]
+  fee-item-scope-explanation: [排除规则, 支付比例]
+  eligibility-and-special-benefit: [适用范围]
+  cross-region-and-institution: [适用范围]
+  transaction-status-and-refund: [通用规则]
+exact_match_fields:
+  default: [insu_type, med_type]
+  personal-liability-explanation: [insu_type, med_type]
+query_terms:
+  default:
+    适用范围: [门诊, 适用范围, 适用对象]
+    起付线: [起付线, 起付标准]
+    支付比例: [支付比例, 报销比例, 个人负担]
+    排除规则: [医保目录, 自费, 先行负担, 不予支付]
+    封顶线: [封顶线, 最高支付限额]
+    通用规则: [门诊结算, 交易状态, 退费]
+  personal-liability-explanation:
+    起付线: [个人自付一, 起付线, 起付标准]
+    支付比例: [个人自付一, 个人自付二, 个人负担, 先行负担, 先自付, 支付比例, 报销比例]
+    排除规则: [个人自付二, 自费, 医保目录, 甲类, 乙类, 丙类, 先行负担]

@@ -18,6 +18,9 @@ from src.config import production as production_config
 from src.data_platform.storage.postgresql.policy_quality_store import (
     PostgresPolicyQualityStore,
 )
+from src.data_platform.storage.postgresql.policy_answer_verification_gate_store import (
+    PostgresAnswerVerificationGateStore,
+)
 
 from src.knowledge_extension.rule_explanation.change_set_models import KnowledgeChangeSet
 from src.knowledge_extension.rule_explanation.decision_task_models import DecisionTask
@@ -81,6 +84,20 @@ from src.knowledge_extension.rule_explanation.quality_service import (
     RulesReleaseSearcher,
 )
 from src.knowledge_extension.rule_explanation.quality_store import PolicyQualityStore
+from src.knowledge_extension.rule_explanation.answer_verification.gate_models import (
+    AnswerVerificationCaseResult,
+    AnswerVerificationRun,
+)
+from src.knowledge_extension.rule_explanation.answer_verification.gate_service import (
+    PolicyAnswerVerificationGateService,
+)
+from src.knowledge_extension.rule_explanation.answer_verification.gate_store import (
+    AnswerVerificationGateStore,
+    InMemoryAnswerVerificationGateStore,
+)
+from src.knowledge_extension.rule_explanation.answer_verification.milvus_port import (
+    get_rule_knowledge_port_for_collection,
+)
 from src.knowledge_extension.rule_explanation.release_index import (
     KnowledgeWorkbenchReleaseSource,
     MilvusReleaseIndexBackend,
@@ -118,6 +135,8 @@ router = APIRouter(
 _service: KnowledgeWorkbenchService | None = None
 _quality_store: PolicyQualityStore | None = None
 _quality_service: PolicyQualityService | None = None
+_answer_verification_gate_store: AnswerVerificationGateStore | None = None
+_answer_verification_gate_service: PolicyAnswerVerificationGateService | None = None
 _release_index_builder: ReleaseIndexBuilder | None = None
 _release_content_source: KnowledgeWorkbenchReleaseSource | None = None
 _review_store: KnowledgeReviewStore | None = None
@@ -297,6 +316,31 @@ def _get_quality_service() -> PolicyQualityService:
     return _quality_service
 
 
+def get_answer_verification_gate_store() -> AnswerVerificationGateStore:
+    """答案验证门禁存储依赖；API 测试可通过 dependency_overrides 注入。"""
+    global _answer_verification_gate_store
+    if _answer_verification_gate_store is None:
+        _answer_verification_gate_store = (
+            InMemoryAnswerVerificationGateStore()
+            if os.environ.get("USE_MEMORY_STORAGE") == "1"
+            else PostgresAnswerVerificationGateStore()
+        )
+    return _answer_verification_gate_store
+
+
+def get_answer_verification_gate_service() -> PolicyAnswerVerificationGateService:
+    """答案验证门禁服务依赖；保持 release 检索与质量门禁使用同一 store。"""
+    global _answer_verification_gate_service
+    if _answer_verification_gate_service is None:
+        _answer_verification_gate_service = PolicyAnswerVerificationGateService(
+            _get_quality_store(),
+            get_answer_verification_gate_store(),
+            RulesReleaseSearcher(),
+            get_rule_knowledge_port_for_collection,
+        )
+    return _answer_verification_gate_service
+
+
 def _get_release_index_builder() -> ReleaseIndexBuilder:
     global _release_index_builder
     if _release_index_builder is None:
@@ -368,6 +412,11 @@ class QualityRunReport(BaseModel):
     case_results: list[QualityCaseResult]
 
 
+class AnswerVerificationRunReport(BaseModel):
+    run: AnswerVerificationRun
+    case_results: list[AnswerVerificationCaseResult]
+
+
 class ReleaseGateStatus(BaseModel):
     """只读门禁快照；POST 发布会重新执行权威校验，不能依赖此结果放行。"""
 
@@ -376,6 +425,9 @@ class ReleaseGateStatus(BaseModel):
     current_case_set_version: int
     active_release_id: str | None = None
     latest_run: QualityRun | None = None
+    latest_answer_verification_run: AnswerVerificationRun | None = None
+    answer_verification_gate_enabled: bool = False
+    answer_verification_blocked_reasons: list[str] = Field(default_factory=list)
     blocked_reasons: list[str] = Field(default_factory=list)
     sync_pending: bool = False
     sync_pending_reasons: list[str] = Field(default_factory=list)
@@ -1512,6 +1564,55 @@ def get_issue25_metrics(
     )
 
 
+@router.post(
+    "/releases/{release_id}/answer-verification/test",
+    response_model=AnswerVerificationRun,
+)
+def run_release_answer_verification(
+    release_id: str,
+    service: PolicyAnswerVerificationGateService = Depends(
+        get_answer_verification_gate_service
+    ),
+) -> AnswerVerificationRun:
+    """触发候选 release 的夹具驱动答案验证门禁运行。"""
+    try:
+        return service.run_release(release_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "POLICY_ANSWER_VERIFICATION_RUN_BLOCKED",
+                str(exc),
+                {"release_id": release_id},
+            ),
+        ) from exc
+
+
+@router.get(
+    "/releases/{release_id}/answer-verification/latest",
+    response_model=AnswerVerificationRunReport,
+)
+def get_latest_release_answer_verification(
+    release_id: str,
+    store: AnswerVerificationGateStore = Depends(get_answer_verification_gate_store),
+) -> AnswerVerificationRunReport:
+    """读取最新答案验证门禁报告及逐用例结果。"""
+    run = store.get_latest_run(release_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "POLICY_ANSWER_VERIFICATION_RUN_NOT_FOUND",
+                "候选版本尚无答案验证门禁运行",
+                {"release_id": release_id},
+            ),
+        )
+    return AnswerVerificationRunReport(
+        run=run,
+        case_results=store.list_case_results(run.run_id),
+    )
+
+
 def _release_sync_pending_response(
     release_id: str,
     source_change_set_id: str | None,
@@ -1730,7 +1831,12 @@ def _release_sync_pending_reasons(release: KnowledgeRelease) -> list[str]:
     "/releases/{release_id}/gate-status",
     response_model=ReleaseGateStatus,
 )
-def get_release_gate_status(release_id: str) -> ReleaseGateStatus:
+def get_release_gate_status(
+    release_id: str,
+    answer_gate_store: AnswerVerificationGateStore = Depends(
+        get_answer_verification_gate_store
+    ),
+) -> ReleaseGateStatus:
     """返回观察性快照；真正发布仍由 POST 接口在事务前重新校验。"""
     try:
         store = _get_quality_store()
@@ -1738,11 +1844,13 @@ def get_release_gate_status(release_id: str) -> ReleaseGateStatus:
         current_case_set_version = store.current_case_set_version()
         active = store.get_active_release()
         latest_run = store.get_latest_run(release_id)
+        latest_answer_verification_run = answer_gate_store.get_latest_run(release_id)
     except Exception as exc:
         raise _release_gate_unavailable_response(release_id) from exc
 
     active_release_id = active.release_id if active is not None else None
     blocked_reasons: list[str] = []
+    answer_verification_blocked_reasons: list[str] = []
     sync_pending_reasons: list[str] = []
     if release is None:
         blocked_reasons.append("release 不存在")
@@ -1763,6 +1871,21 @@ def get_release_gate_status(release_id: str) -> ReleaseGateStatus:
                 blocked_reasons.append("release 测试配置与最新质量运行不一致")
             if latest_run.baseline_release_id != active_release_id:
                 blocked_reasons.append("最新质量运行的活动基线已过期")
+
+        answer_gate_enabled = (
+            production_config.POLICY_RELEASE_ANSWER_VERIFICATION_GATE_ENABLED
+        )
+        if not answer_gate_enabled:
+            answer_verification_blocked_reasons.append("skipped: 答案验证门禁未启用")
+        elif latest_answer_verification_run is None:
+            answer_verification_blocked_reasons.append("缺少答案验证门禁运行")
+        elif latest_answer_verification_run.status != "passed":
+            answer_verification_blocked_reasons.extend(
+                latest_answer_verification_run.blocked_reasons
+                or ["最新答案验证门禁运行未通过"]
+            )
+        if answer_gate_enabled:
+            blocked_reasons.extend(answer_verification_blocked_reasons)
 
         try:
             _validate_governed_release_source_before_promote(
@@ -1789,10 +1912,45 @@ def get_release_gate_status(release_id: str) -> ReleaseGateStatus:
         current_case_set_version=current_case_set_version,
         active_release_id=active_release_id,
         latest_run=latest_run,
+        latest_answer_verification_run=latest_answer_verification_run,
+        answer_verification_gate_enabled=production_config.POLICY_RELEASE_ANSWER_VERIFICATION_GATE_ENABLED,
+        answer_verification_blocked_reasons=answer_verification_blocked_reasons,
         blocked_reasons=blocked_reasons,
         sync_pending=bool(sync_pending_reasons),
         sync_pending_reasons=sync_pending_reasons,
     )
+
+
+def _validate_answer_verification_gate_before_promote(
+    release: KnowledgeRelease,
+    gate_store: AnswerVerificationGateStore,
+) -> None:
+    """发布前第二道答案验证门禁；开关关闭时明确跳过且不阻断。"""
+    if not production_config.POLICY_RELEASE_ANSWER_VERIFICATION_GATE_ENABLED:
+        return
+    latest = gate_store.get_latest_run(release.release_id)
+    if latest is None:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "POLICY_RELEASE_ANSWER_VERIFICATION_GATE_BLOCKED",
+                "缺少答案验证门禁运行",
+                {"release_id": release.release_id},
+            ),
+        )
+    if latest.status != "passed":
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "POLICY_RELEASE_ANSWER_VERIFICATION_GATE_BLOCKED",
+                "最新答案验证门禁运行未通过",
+                {
+                    "release_id": release.release_id,
+                    "run_id": latest.run_id,
+                    "blocked_reasons": latest.blocked_reasons,
+                },
+            ),
+        )
 
 
 def _promote_release(
@@ -1800,6 +1958,7 @@ def _promote_release(
     request: ReleaseReviewRequest,
     *,
     legacy: bool,
+    answer_gate_store: AnswerVerificationGateStore | None = None,
 ) -> KnowledgeRelease:
     if legacy:
         _require_legacy_policy_releases_enabled()
@@ -1856,6 +2015,11 @@ def _promote_release(
     if active_retry:
         promoted_release = release
     else:
+        if not legacy:
+            _validate_answer_verification_gate_before_promote(
+                release,
+                answer_gate_store or get_answer_verification_gate_store(),
+            )
         try:
             promoted_release = quality_store.promote_release(
                 release_id, request.reviewed_by
@@ -1916,9 +2080,18 @@ def _promote_release(
 
 @router.post("/releases/{release_id}/promote", response_model=KnowledgeRelease)
 def promote_release(
-    release_id: str, request: ReleaseReviewRequest
+    release_id: str,
+    request: ReleaseReviewRequest,
+    answer_gate_store: AnswerVerificationGateStore = Depends(
+        get_answer_verification_gate_store
+    ),
 ) -> KnowledgeRelease:
-    return _promote_release(release_id, request, legacy=False)
+    return _promote_release(
+        release_id,
+        request,
+        legacy=False,
+        answer_gate_store=answer_gate_store,
+    )
 
 
 @router.post(

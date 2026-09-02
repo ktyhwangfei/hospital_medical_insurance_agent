@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["question", "settlement_id"],
+  "properties": {
+    "question": {"type": "string", "minLength": 1},
+    "settlement_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "门诊交易号，对应语义查询锚点 mz_trade.T_TradeNo"
+    },
+    "hospital_id": {"type": ["string", "null"]}
+  }
+}

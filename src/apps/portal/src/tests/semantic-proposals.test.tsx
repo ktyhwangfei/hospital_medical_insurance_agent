@@ -96,6 +96,29 @@ const DIMENSION = {
     unit_id: 'unit-conflict',
     extraction_id: 'ext-conflict',
     occurrence_count: 2,
+  }, {
+    source_ref: 'database:yb_yd_jjfx.FUND_CODE',
+    evidence_kind: 'database',
+    evidence_grade: 'strong',
+    excerpt: '基金款项编码',
+    table_name: 'yb_yd_jjfx',
+    field_name: 'FUND_CODE',
+    non_null_rate: 1,
+    distinct_count: 7,
+    sample_values: ['TC', 'DE'],
+    match_reasons: ['字段直接表达基金款项编码或名称'],
+    occurrence_count: 1,
+  }, {
+    source_ref: 'database:yb_brdjxx.FUND_TYPE',
+    evidence_kind: 'database',
+    evidence_grade: 'rejected',
+    excerpt: '险种类型',
+    table_name: 'yb_brdjxx',
+    field_name: 'FUND_TYPE',
+    non_null_rate: 1,
+    distinct_count: 3,
+    rejection_reasons: ['险种类型描述参保险种，不是基金归属'],
+    occurrence_count: 1,
   }],
   dimension_candidate: {
     fingerprint: 'dimension-fingerprint',
@@ -154,6 +177,29 @@ function installFetch(metric = METRIC, value = VALUE, dimension = DIMENSION) {
     if (method === 'GET' && url.includes('proposal_type=metric')) return response([metric])
     if (method === 'GET' && url.includes('proposal_type=value')) return response([value])
     if (method === 'GET' && url.includes('proposal_type=dimension')) return response([dimension])
+    if (method === 'GET' && url.includes('proposal_type=rule_governance')) return response([])
+    if (url.endsWith('/database-evidence-preview')) return response([{
+      source_ref: 'database:m_institution.H_TYPE',
+      evidence_kind: 'database',
+      evidence_grade: 'strong',
+      excerpt: '医疗机构类型',
+      table_name: 'm_institution',
+      field_name: 'H_TYPE',
+      non_null_rate: 1,
+      distinct_count: 4,
+      sample_values: ['01', '02', '03', '05'],
+      match_reasons: ['字段角色是医疗机构类别'],
+      occurrence_count: 1,
+    }, {
+      source_ref: 'database:m_institution.H_LEVEL',
+      evidence_kind: 'database',
+      evidence_grade: 'rejected',
+      excerpt: '医院等级',
+      table_name: 'm_institution',
+      field_name: 'H_LEVEL',
+      rejection_reasons: ['医院等级不等于医疗机构类别'],
+      occurrence_count: 1,
+    }])
     if (url.endsWith('/review')) return response({ ...metric, status: 'reviewing' })
     if (url.endsWith('/accept')) return response({ ...metric, status: 'accepted' })
     if (url.endsWith('/publish')) return response({ ...metric, status: 'published' })
@@ -229,6 +275,45 @@ describe('SemanticProposalsPage', () => {
     })
   })
 
+  it('shows bjyb field candidates and explicit rejection reasons', async () => {
+    sessionStorage.setItem('semantic-review-token', 'review-token')
+    installFetch()
+    render(<SemanticProposalsPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '展开 fund_type 证据' }))
+
+    expect(await screen.findByText('bjyb 数据证据')).toBeInTheDocument()
+    expect(screen.getByText('yb_yd_jjfx.FUND_CODE')).toBeInTheDocument()
+    expect(screen.getByText('非空率 100% · 7 个不同值')).toBeInTheDocument()
+    expect(screen.getByText('险种类型描述参保险种，不是基金归属')).toBeInTheDocument()
+  })
+
+  it('previews database evidence without an existing proposal and can show history', async () => {
+    sessionStorage.setItem('semantic-review-token', 'review-token')
+    const fetchMock = installFetch(METRIC, VALUE, { ...DIMENSION, status: 'published' })
+    render(<SemanticProposalsPage />)
+
+    await screen.findByText('mutual_aid_deductible')
+    expect(screen.queryByText('fund_type')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '包含历史提议' }))
+    expect(screen.getByText('fund_type')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('政策概念'), { target: { value: '医疗机构类别' } })
+    fireEvent.change(screen.getByLabelText('候选值'), {
+      target: { value: '社区卫生服务机构；其他定点医疗机构' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '匹配 bjyb 字段' }))
+
+    expect(await screen.findByText('m_institution.H_TYPE')).toBeInTheDocument()
+    expect(screen.getByText('医院等级不等于医疗机构类别')).toBeInTheDocument()
+    const previewCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/database-evidence-preview'))
+    expect(JSON.parse(String(previewCall?.[1]?.body))).toEqual({
+      concept: '医疗机构类别',
+      definition: '',
+      candidate_values: ['社区卫生服务机构', '其他定点医疗机构'],
+    })
+  })
+
   it('marks a proposed item as reviewing when evidence is expanded', async () => {
     sessionStorage.setItem('semantic-review-token', 'review-token')
     const fetchMock = installFetch()
@@ -289,7 +374,7 @@ describe('SemanticProposalsPage', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<SemanticProposalsPage />)
     expect(screen.getByText('正在加载提议…')).toBeInTheDocument()
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4))
     resolvers.forEach((resolve) => resolve(response([])))
     await waitFor(() => expect(screen.getByText('暂无待审核提议')).toBeInTheDocument())
   })

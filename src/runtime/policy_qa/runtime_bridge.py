@@ -161,6 +161,23 @@ class PolicyQARuntimeBridge:
             logger.warning(f"[RUNTIME-BRIDGE] prepare_turn 降级: {e}")
             return None
 
+    def last_skill_id(self, session_id: str, settlement_id: str) -> str | None:
+        """返回同一结算单上一轮成功使用的 Skill。"""
+        try:
+            memories = self._memory.get_by_session_and_type(
+                session_id, MemoryType.CONVERSATION
+            )
+            if not memories:
+                return None
+            snapshot = memories[0].object_snapshot
+            if snapshot.get("last_settlement_id") != settlement_id:
+                return None
+            skill_id = str(snapshot.get("last_skill_id") or "").strip()
+            return skill_id or None
+        except Exception as e:
+            logger.warning(f"[RUNTIME-BRIDGE] last_skill_id 降级: {e}")
+            return None
+
     # ── 步骤完成：沉淀记忆与推理 ─────────────────────────────────
 
     def record_step(
@@ -298,22 +315,34 @@ class PolicyQARuntimeBridge:
 
     # ── 轮次收尾：推理链快照 + 对话记忆更新 ──────────────────────
 
-    def finalize_turn(self, *, session_id: str, question: str) -> dict[str, Any]:
+    def finalize_turn(
+        self,
+        *,
+        session_id: str,
+        question: str,
+        skill_id: str = "",
+        settlement_id: str = "",
+    ) -> dict[str, Any]:
         """返回 result 事件的 Runtime 附加字段，并更新 CONVERSATION 记忆。
 
         失败时返回空 dict（降级）。
         """
         try:
             chain = self._reasoning.get_chain(session_id)
+            snapshot = {
+                "last_intent": _POLICY_QA_INTENT,
+                "last_question": question[:_MAX_SNAPSHOT_VALUE_LEN],
+                "turn_count": len(chain),
+            }
+            if skill_id:
+                snapshot["last_skill_id"] = skill_id
+            if settlement_id:
+                snapshot["last_settlement_id"] = settlement_id
             self._upsert_memory(
                 session_id=session_id,
                 type=MemoryType.CONVERSATION,
                 ref_id=None,
-                snapshot={
-                    "last_intent": _POLICY_QA_INTENT,
-                    "last_question": question[:_MAX_SNAPSHOT_VALUE_LEN],
-                    "turn_count": len(chain),
-                },
+                snapshot=snapshot,
                 importance=_CONVERSATION_IMPORTANCE,
                 expire_policy=ExpirePolicy.STICKY,
             )

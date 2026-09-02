@@ -1,0 +1,16 @@
+# 产品层负责注册 MCP；Skill 只声明依赖，不直连外部系统。
+required_mcp_capabilities:
+  - id: settlement-data
+    description: 按门诊交易号 T_TradeNo 查询已发布 mzjyxx 语义对象
+    protocol: stdio
+    purpose: 获取结算上下文、金额、资格标志与费用明细
+  - id: structured-policy-rule
+    description: 按险种、人群、医疗类别、机构等级和日期查询已发布政策规则
+    protocol: stdio
+    purpose: 为比例、起付线、封顶线及待遇适用性提供可追溯证据
+
+optional_mcp_capabilities:
+  - id: policy-vector-search
+    description: 结构化政策规则无结果时的语义检索兜底
+    protocol: stdio
+    purpose: 发现候选证据；候选未经结构化确认不得生成确定性结论

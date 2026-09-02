@@ -82,6 +82,10 @@ class PolicyQualityService:
     ) -> QualityRun:
         if repeat_count < 3:
             raise ValueError("统一测试至少重复运行 3 次")
+        # 孤儿恢复：上次运行中后端崩溃会残留 running run + release 卡 testing，
+        # 无回收副永远无法重试（测试页「流程不通」根因）。超过 30 分钟的
+        # 陈旧 running 先置 failed，释放 release 回 failed 态。
+        self._store.reclaim_stale_runs(release_id, stale_after_seconds=1800)
         candidate = self._require_candidate(release_id)
         cases = self._store.list_test_cases(active_only=True)
         case_set_version = self._store.current_case_set_version()
@@ -234,9 +238,8 @@ def _score_result(
     result = set(result_ids)
     expected = set(expected_ids)
     if not expected:
-        # 无期望知识 ID 的用例视为“检索性校验”：检索到内容即通过。
-        score = 1.0 if result else 0.0
-        return score, bool(result), {"precision": 1.0 if result else 0.0, "recall": 1.0, "f1": score}
+        # 无期望值时无法证明召回正确，门禁必须 fail-closed。
+        return 0.0, False, {"precision": 0.0, "recall": 0.0, "f1": 0.0}
     matched = result & expected
     precision = len(matched) / len(result) if result else 0.0
     recall = len(matched) / len(expected)

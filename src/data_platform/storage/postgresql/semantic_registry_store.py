@@ -315,9 +315,18 @@ class PostgresRegistryStore:
                 publish_seed_outpatient_query_object,
             )
             ensure_yb_dictionary_mappings(self)
-            ensure_outpatient_query_model(self)
+            from src.semantic_layer.seed import (
+                _seed_settlement_query_model,
+                ensure_outpatient_query_model,
+                publish_seed_outpatient_query_object,
+                publish_seed_query_object,
+            )
             from src.semantic_layer.registry import SemanticRegistry
-            publish_seed_outpatient_query_object(SemanticRegistry(self))
+            _seed_settlement_query_model(self)
+            ensure_outpatient_query_model(self)
+            registry = SemanticRegistry(self)
+            publish_seed_query_object(registry)
+            publish_seed_outpatient_query_object(registry)
         except Exception:
             logger.warning("ensure_yb_dictionary_mappings 失败，跳过", exc_info=True)
 
@@ -384,9 +393,11 @@ class PostgresRegistryStore:
         from src.semantic_layer.seed import (
             publish_seed_outpatient_query_object,
             publish_seed_policy_object,
+            publish_seed_query_object,
         )
         registry = SemanticRegistry(self)
         publish_seed_policy_object(registry)
+        publish_seed_query_object(registry)
         publish_seed_outpatient_query_object(registry)
 
     def close(self) -> None:

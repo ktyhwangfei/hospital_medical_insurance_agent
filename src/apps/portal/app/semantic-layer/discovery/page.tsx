@@ -119,7 +119,6 @@ interface QuickMetricForm {
 const API_BASE = '/api/v1/medical-insurance-ai-agent/semantic'
 const SCAN_SCOPE_OPTIONS = ['全部已接入表'] as const
 
-const METRIC_TYPE_OPTIONS = ['Atomic', 'Derived'] as const
 const SEMANTIC_TYPE_OPTIONS = ['Amount', 'Ratio', 'Enum', 'Date', 'Count'] as const
 
 const SORT_OPTIONS = [
@@ -398,82 +397,49 @@ function ScanProgressList({
 
 function QuickMetricForm({
   field,
-  onSuccess,
   onCancel,
 }: {
   field: ScanResultField
-  onSuccess: () => void
   onCancel: () => void
 }) {
   const [form, setForm] = useState<QuickMetricForm>({
     name: field.description || field.field_name,
-    metric_type: 'Atomic',
+    metric_type: 'fact',
     semantic_type: 'Amount',
     value_domain: '',
     unit: '',
     object_code: field.suggested_object || '',
   })
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
-
-  const handleSubmit = useCallback(async () => {
-    setSubmitting(true)
-    setError(null)
-    try {
-      await semanticReviewJson(`${API_BASE}/metrics`, 'POST', {
-          name: form.name,
-          metric_type: form.metric_type,
-          semantic_type: form.semantic_type || null,
-          value_domain: form.value_domain || null,
-          unit: form.unit || null,
-          object_code: form.object_code,
-          source_table: field.table_name,
-          source_field: field.field_name,
-        })
-      setSuccess(true)
-      setTimeout(() => onSuccess(), 1500)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '创建失败')
-    } finally {
-      setSubmitting(false)
-    }
-  }, [form, field, onSuccess])
-
-  if (success) {
-    return (
-      <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-600">
-        <CheckCircle2 className="h-4 w-4" />
-        指标创建成功
-      </div>
-    )
-  }
+  const handleSubmit = useCallback(() => {
+    const params = new URLSearchParams({ object_code: form.object_code, table: field.table_name, field: field.field_name })
+    window.location.assign(`/semantic-layer/mapping?${params}`)
+  }, [form.object_code, field])
 
   return (
     <div className="space-y-3">
-      <h4 className="text-xs font-medium text-slate-700">快速创建指标</h4>
+      <h4 className="text-xs font-medium text-slate-700">纳入数据模型</h4>
 
       {/* Name */}
       <div>
-        <label className="mb-1 block text-[11px] text-slate-500">名称</label>
+        <label className="mb-1 block text-[11px] text-slate-500">语义字段名称</label>
         <Input
           value={form.name}
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none"
-          placeholder="指标名称"
+          placeholder="语义字段名称"
         />
       </div>
 
       {/* Type + Semantic Type row */}
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <label className="mb-1 block text-[11px] text-slate-500">类型</label>
+          <label className="mb-1 block text-[11px] text-slate-500">字段角色</label>
           <select
             value={form.metric_type}
             onChange={(e) => setForm((f) => ({ ...f, metric_type: e.target.value }))}
             className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
           >
-            {METRIC_TYPE_OPTIONS.map((opt) => (
+            {['identifier', 'dimension', 'fact'].map((opt) => (
               <option key={opt} value={opt}>
                 {opt}
               </option>
@@ -533,26 +499,17 @@ function QuickMetricForm({
         />
       </div>
 
-      {/* Error */}
-      {error && (
-        <p className="text-[11px] text-red-600">{error}</p>
-      )}
-
       {/* Buttons */}
       <div className="flex items-center gap-2">
         <Button
           variant="default"
           size="sm"
           onClick={handleSubmit}
-          disabled={submitting || !form.name.trim() || !form.object_code.trim()}
+          disabled={!form.name.trim() || !form.object_code.trim()}
           className="gap-1 bg-blue-50 text-blue-600 text-xs hover:bg-blue-100"
         >
-          {submitting ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <PlusCircle className="h-3 w-3" />
-          )}
-          创建指标并关联此字段
+          <PlusCircle className="h-3 w-3" />
+          前往数据模型创建语义字段
         </Button>
         <Button
           variant="ghost"
@@ -800,16 +757,12 @@ function FieldExpandDetail({
           {showCreateForm ? (
             <QuickMetricForm
               field={field}
-              onSuccess={() => {
-                setShowCreateForm(false)
-                onMetricCreated()
-              }}
               onCancel={() => setShowCreateForm(false)}
             />
           ) : (
             <div className="flex flex-col items-start gap-3">
               <p className="text-xs text-slate-500">
-                此字段尚未关联指标。可快速创建指标并与当前字段关联。
+                此字段尚未纳入查询模型。请先加入数据集并创建语义字段，再由指标引用。
               </p>
               <Button
                 variant="outline"
@@ -818,7 +771,7 @@ function FieldExpandDetail({
                 className="gap-1 border-slate-300 text-xs text-slate-600 hover:text-slate-800"
               >
                 <PlusCircle className="h-3 w-3" />
-                快速创建指标
+                纳入数据模型
               </Button>
             </div>
           )}
@@ -1444,7 +1397,7 @@ export default function DiscoveryCenterPage() {
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50 text-slate-500 sticky top-0">
                       <th className="px-3 py-2 font-medium">源字段</th>
-                      <th className="px-3 py-2 font-medium">指标名</th>
+                      <th className="px-3 py-2 font-medium">语义字段名</th>
                       <th className="px-3 py-2 font-medium">归属对象</th>
                     </tr>
                   </thead>
@@ -1462,7 +1415,7 @@ export default function DiscoveryCenterPage() {
                             <input
                               type="text"
                               className="h-7 w-full rounded border border-slate-300 px-2 text-[11px] text-slate-700 focus:border-blue-500 focus:outline-none"
-                              placeholder="指标名称"
+                              placeholder="语义字段名称"
                               value={assignment?.name || field.description || field.field_name}
                               onChange={(e) => {
                                 const next = new Map(batchAssignments)
@@ -1504,51 +1457,7 @@ export default function DiscoveryCenterPage() {
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
-                  onClick={async () => {
-                    const items = Array.from(selectedFieldKeys).map(key => {
-                      const field = processedFields.find(f => `${f.table_name}:${f.field_name}` === key)!
-                      const assignment = batchAssignments.get(key)
-                      return {
-                        object_code: assignment?.object_code || field.suggested_object || '',
-                        name: assignment?.name || field.description || field.field_name,
-                        metric_code: field.field_name,
-                        definition: field.remark || null,
-                        metric_type: 'Atomic' as const,
-                        semantic_type: 'Amount' as const,
-                        source_table: field.table_name,
-                        source_field: `${field.table_name}.${field.field_name}`,
-                      }
-                    })
-
-                    const invalidItems = items.filter(i => !i.object_code)
-                    if (invalidItems.length > 0) {
-                      alert(`${invalidItems.length} 个字段未分配对象，请先分配`)
-                      return
-                    }
-
-                    setBatchSubmitting(true)
-                    setBatchResult(null)
-                    try {
-                      const data = await semanticReviewJson<Array<{ index: number; metric_code: string; name: string; status: string; error: string | null }>>(`${API_BASE}/metrics/batch`, 'POST', { items })
-                      setBatchResult(data)
-                      if (data.some(d => d.status === 'created')) {
-                        // Mark created fields as done locally
-                        const created = new Set(metricCreatedTables)
-                        data.forEach(d => {
-                          if (d.status === 'created' && items[d.index]) {
-                            created.add(items[d.index].source_field)
-                          }
-                        })
-                        setMetricCreatedTables(created)
-                        setSelectedFieldKeys(new Set())
-                        setBatchAssignments(new Map())
-                      }
-                    } catch (err: any) {
-                      alert(err.message || '批量创建失败')
-                    } finally {
-                      setBatchSubmitting(false)
-                    }
-                  }}
+                  onClick={() => window.location.assign('/semantic-layer/mapping')}
                   disabled={batchSubmitting || selectedFieldKeys.size === 0}
                   className="gap-1 bg-blue-50 text-blue-600 text-xs hover:bg-blue-100"
                 >
@@ -1557,7 +1466,7 @@ export default function DiscoveryCenterPage() {
                   ) : (
                     <PlusCircle className="h-3 w-3" />
                   )}
-                  批量创建指标 ({selectedFieldKeys.size})
+                  批量纳入数据模型 ({selectedFieldKeys.size})
                 </Button>
                 <Button
                   variant="ghost"

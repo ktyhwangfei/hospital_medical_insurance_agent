@@ -3,6 +3,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import PolicyKnowledgeTestPage from '../../../app/policy-knowledge/test/page'
 
+vi.mock('@/lib/policy-qa-feedback', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/policy-qa-feedback')>()
+  return {
+    ...actual,
+    verifyPolicyQAAnswer: vi.fn(),
+  }
+})
+
+vi.mock('@/lib/api-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api-client')>()
+  return {
+    ...actual,
+    fetchQAHistory: vi.fn().mockResolvedValue({ items: [] }),
+  }
+})
+
 vi.mock('@/lib/policy-knowledge-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/policy-knowledge-api')>()
   const candidate = { release_id: 'candidate', status: 'passed', facts_collection: 'facts_candidate', rules_collection: 'rules_candidate', contract_version: '2', case_set_version: 1, config_hash: 'cfg', quality_score: 0.9, consistency_score: 1 }
@@ -47,17 +63,10 @@ describe('PolicyKnowledgeTestPage', () => {
     })))
   })
 
-  it('creates a candidate with the readonly deterministic quality config hash', async () => {
-    const api = await import('@/lib/policy-knowledge-api')
+  it('renders the answer verification panel entry on the test page', async () => {
     render(<PolicyKnowledgeTestPage />)
-
-    const hash = screen.getByLabelText('测试配置哈希')
-    expect(hash).toHaveAttribute('readonly')
-    expect(hash).toHaveValue('197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22')
-    fireEvent.click(screen.getByRole('button', { name: '创建候选版本' }))
-
-    await waitFor(() => expect(api.createRelease).toHaveBeenCalledWith(expect.objectContaining({
-      config_hash: '197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22',
-    })))
+    await waitFor(() => expect(screen.getByText('答案验证')).toBeInTheDocument())
+    expect(screen.getByText('对政策问答回答做引用/结论/计算/覆盖五维交叉验证')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '验证' })).toBeInTheDocument()
   })
 })

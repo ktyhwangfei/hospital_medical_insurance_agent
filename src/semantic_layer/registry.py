@@ -471,6 +471,16 @@ class SemanticRegistry:
             if issues:
                 raise ValueError("; ".join(issues))
         existing = self._store.list_object_versions(object_code)
+        datasets = self._store.list_datasets(object_code)
+        keys = self._store.list_dataset_keys(object_code=object_code)
+        fields = self._store.list_fields(object_code=object_code)
+        relations = self._store.list_dataset_relations(object_code)
+        quality_rules = self._store.list_quality_rules(object_code)
+        query_metrics = [m for m in metrics if m.fact_field_code or m.expression]
+        if datasets or query_metrics:
+            issues = self.validate_query_model(object_code)
+            if issues:
+                raise ValueError("; ".join(issues))
         next_version = str(len(existing) + 1)
         snapshot = BusinessObjectVersion(
             version_id=str(uuid.uuid4()),
@@ -493,6 +503,70 @@ class SemanticRegistry:
             changelog=changelog,
             published_by=published_by,
         )
+        if query_metrics:
+            from src.semantic_layer.query_planner import (
+                QueryAnchor,
+                QueryScope,
+                SemanticQuery,
+                SemanticQueryPlanner,
+                SemanticQueryPlanningError,
+            )
+            anchor_field_code = next(
+                (
+                    rule.parameters.get("field_code")
+                    for rule in quality_rules
+                    if rule.rule_type == "not_null" and rule.parameters.get("field_code")
+                ),
+                None,
+            )
+            anchor_field = next(
+                (field for field in fields if field.field_code == anchor_field_code),
+                next((field for field in fields if field.field_role == "identifier"), None),
+            )
+            anchor_key = next(
+                (
+                    key for key in keys
+                    if anchor_field
+                    and key.dataset_code == anchor_field.dataset_code
+                    and anchor_field.column_name in key.columns
+                ),
+                None,
+            )
+            if anchor_field is None or anchor_key is None:
+                raise ValueError("查询模型缺少可编译的实体锚点")
+            temporary_store = InMemoryRegistryStore()
+            temporary_store.save_object_version(snapshot)
+            try:
+                planner = SemanticQueryPlanner(SemanticRegistry(temporary_store))
+                if anchor_key.entity_code == "inpatient_admission":
+                    groups = [("whole_admission", query_metrics)]
+                else:
+                    field_dataset = {field.field_code: field.dataset_code for field in fields}
+                    by_scope: dict[str, list[ObjectVersionMetric]] = defaultdict(list)
+                    for metric in query_metrics:
+                        dataset_code = field_dataset.get(metric.fact_field_code or "")
+                        scope = (
+                            "whole_settlement"
+                            if dataset_code == anchor_field.dataset_code
+                            else "fee_item"
+                        )
+                        by_scope[scope].append(ObjectVersionMetric.from_metric(metric))
+                    groups = list(by_scope.items())
+                for query_scope, group in groups:
+                    planner.compile(SemanticQuery(
+                        object_code=object_code,
+                        scope=QueryScope(
+                            entity_code=anchor_key.entity_code,
+                            anchor=QueryAnchor(
+                                field_code=anchor_field.field_code,
+                                value="__publish_check__",
+                            ),
+                            query_scope=query_scope,
+                        ),
+                        metrics=[metric.metric_code for metric in group],
+                    ))
+            except SemanticQueryPlanningError as exc:
+                raise ValueError(f"查询模型不可编译: {exc}") from exc
         self._store.save_object_version(snapshot)
         obj.current_version = next_version
         obj.status = "published"
@@ -567,6 +641,11 @@ class SemanticRegistry:
         for metric in metrics:
             if not metric.expression:
                 continue
+            from src.semantic_layer.query_planner import SemanticQueryPlanner, SemanticQueryPlanningError
+            try:
+                SemanticQueryPlanner._validate_expression(ObjectVersionMetric.from_metric(metric))
+            except SemanticQueryPlanningError as exc:
+                issues.append(str(exc))
             dependencies = [
                 code if "." in code else f"{object_code}.{code}"
                 for code in metric.dependencies
@@ -636,6 +715,7 @@ def get_semantic_registry() -> SemanticRegistry:
         from src.semantic_layer.seed import (
             publish_seed_outpatient_query_object,
             publish_seed_policy_object,
+            publish_seed_query_object,
             seed_settlement_domain,
         )
         store = InMemoryRegistryStore()
@@ -643,6 +723,7 @@ def get_semantic_registry() -> SemanticRegistry:
         reg = SemanticRegistry(store)
         # P8.3：种子后发布 zcgz，解锁提取契约（build_extraction_schema 只收 published）
         publish_seed_policy_object(reg)
+        publish_seed_query_object(reg)
         publish_seed_outpatient_query_object(reg)
         _semantic_registry_instance = reg
     else:

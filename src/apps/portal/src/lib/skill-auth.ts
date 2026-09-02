@@ -6,6 +6,9 @@ export const DEV_SKILL_CONTROL_TOKEN =
 export const DEV_SKILL_APPROVAL_TOKEN =
   'test.eyJzdWIiOiJwb3J0YWwtaW5mb3JtYXRpb24tYWRtaW4iLCJyb2xlcyI6WyJpbmZvcm1hdGlvbl9kZXBhcnRtZW50Il0sInBlcm1pc3Npb25zIjpbInNraWxsOnJlbGVhc2U6dGVzdCJdLCJleHAiOjQxMDI0NDQ4MDB9.signature'
 
+export const DEV_POLICY_QA_FEEDBACK_TOKEN =
+  'test.eyJzdWIiOiJkZW1vIiwicm9sZXMiOlsiY2FzaGllciJdLCJwZXJtaXNzaW9ucyI6W10sImV4cCI6NDEwMjQ0NDQ4MDB9.signature'
+
 function resolveToken(storageKey: string, devFallback: string): string | null {
   if (typeof window === 'undefined') return null
   return (
@@ -18,6 +21,13 @@ function resolveToken(storageKey: string, devFallback: string): string | null {
 export function skillEvaluationHeaders(): HeadersInit {
   const headers: Record<string, string> = {}
   const token = resolveToken('skill-control-token', DEV_SKILL_CONTROL_TOKEN)
+  if (token) headers.Authorization = `Bearer ${token}`
+  return headers
+}
+
+export function policyQAFeedbackHeaders(): HeadersInit {
+  const headers: Record<string, string> = {}
+  const token = resolveToken('policy-qa-feedback-token', DEV_POLICY_QA_FEEDBACK_TOKEN)
   if (token) headers.Authorization = `Bearer ${token}`
   return headers
 }

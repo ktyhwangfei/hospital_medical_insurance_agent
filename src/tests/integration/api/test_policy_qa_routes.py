@@ -129,6 +129,13 @@ def safe_policy_qa_dependencies(monkeypatch):
                 large_amount_self_pay=13407.93,
                 personal_total_pay=43694.67,
                 total_amount=189085.85,
+                query_scope="whole_admission",
+                segment_count=2,
+                matched_segment_count=2,
+                coverage_status="complete",
+                stay_start_date="2025-01-01",
+                stay_end_date="2025-04-15",
+                amounts_reliable=True,
             )
 
     class FakeAssembler:
@@ -188,6 +195,181 @@ def safe_policy_qa_dependencies(monkeypatch):
 
 class TestPolicyQAStreamEndpoint:
     """测试政策问答SSE流式端点"""
+
+    def test_outpatient_skill_uses_declared_semantic_queries_and_public_extension(
+        self, client, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from skills.mzsettlement_verify_skill.assembler import (
+            OutpatientSettlementVerifierAssembler,
+        )
+        from src.runtime.api import policy_qa_routes
+
+        class Provider:
+            queries = []
+
+            async def run_semantic_query(self, query):
+                self.queries.append(query)
+                return SimpleNamespace(
+                    rows=[{
+                        "T_FeeAll": 100,
+                        "T_FeeIn": 80,
+                        "T_FeeOut": 20,
+                        "T_FundPay": 70,
+                        "T_SelfPayAll": 30,
+                        "P_FundType": "职工",
+                        "PN_PersonType": "在职",
+                        "T_CureType": "普通门诊",
+                        "HospitalLevel": "三级",
+                        "P_JCLevel": "不享受伤残待遇",
+                        "T_TradeDate": "2026-08-26",
+                    }],
+                    quality_status="complete",
+                )
+
+        provider = Provider()
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: provider
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "route_question", lambda _question: "mzsettlement_verify_skill"
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "get_assembler",
+            lambda _skill_id: OutpatientSettlementVerifierAssembler(),
+        )
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "retrieve_policy_evidence",
+            lambda **_kwargs: SimpleNamespace(
+                selected_evidence=[], missing_required_rules=["政策证据"]
+            ),
+        )
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "这次门诊结算对不对", "settlement_id": "MZ-1"},
+        )
+        events = _sse_events(response.text)
+        result = next(data["result"] for name, data in events if name == "result")
+
+        assert len(provider.queries) == 1
+        assert provider.queries[0].scope.query_scope == "whole_settlement"
+        assert result["scenario_id"] == "overall-settlement-verification"
+        assert len(result["field_explanations"]) == 19
+        assert all(item["citations"] for item in result["field_explanations"])
+        assert events[-1][0] == "done"
+
+    def test_trade_number_context_is_loaded_before_skill_routing(self, client, monkeypatch):
+        from types import SimpleNamespace
+
+        from src.runtime.api import policy_qa_routes
+
+        class Provider:
+            queries = []
+
+            async def run_semantic_query(self, query):
+                self.queries.append(query)
+                return SimpleNamespace(
+                    rows=[{
+                        "T_FeeAll": 100,
+                        "T_FeeIn": 80,
+                        "T_FeeOut": 20,
+                        "T_FundPay": 70,
+                        "T_SelfPayAll": 30,
+                        "P_FundType": "职工",
+                        "PN_PersonType": "在职",
+                        "T_CureType": "普通门诊",
+                        "HospitalLevel": "三级",
+                        "T_TradeDate": "2026-08-26",
+                    }],
+                    quality_status="complete",
+                )
+
+        provider = Provider()
+        routed_questions = []
+
+        def route_with_context(question):
+            routed_questions.append(question)
+            if "医疗类别：普通门诊" in question and "险种：职工" in question:
+                return "mzsettlement_verify_skill"
+            return "settlement_explain_skill"
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: provider
+        )
+        monkeypatch.setattr(policy_qa_routes, "route_question", route_with_context)
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "retrieve_policy_evidence",
+            lambda **_kwargs: SimpleNamespace(
+                selected_evidence=[], missing_required_rules=["政策证据"]
+            ),
+        )
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={
+                "question": "011100030X240311000031，费用组成",
+                "settlement_id": "011100030X240311000031",
+            },
+        )
+        events = _sse_events(response.text)
+        result = next(data["result"] for name, data in events if name == "result")
+
+        assert len(provider.queries) == 1
+        assert routed_questions and "医疗类别：普通门诊" in routed_questions[0]
+        assert result["scenario_id"] == "overall-settlement-verification"
+        assert events[-1][0] == "done"
+
+    def test_outpatient_write_action_is_stopped_before_query(self, client, monkeypatch):
+        from types import SimpleNamespace
+
+        from skills.mzsettlement_verify_skill.assembler import (
+            OutpatientSettlementVerifierAssembler,
+        )
+        from src.runtime.api import policy_qa_routes
+
+        class Provider:
+            async def run_semantic_query(self, _query):
+                raise AssertionError("高风险写操作不应查询或执行结算")
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: Provider()
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "route_question", lambda _question: "mzsettlement_verify_skill"
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "get_assembler",
+            lambda _skill_id: OutpatientSettlementVerifierAssembler(),
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "detect_blocked_actions",
+            lambda _question: [("冲正", "R-HIGH")],
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "build_human_confirmation_response",
+            lambda _actions: SimpleNamespace(
+                result={"message": "命中高风险动作，需人工确认。"},
+                uncertainties=["AI 不会执行冲正。"],
+            ),
+        )
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={
+                "question": "请帮我冲正这笔门诊结算",
+                "settlement_id": "011100030X240311000031",
+            },
+        )
+        events = _sse_events(response.text)
+        result = next(data["result"] for name, data in events if name == "result")
+        done = next(data for name, data in events if name == "done")
+
+        assert result["action_status"] == "waiting_human_confirmation"
+        assert done["halt_reason"] == "waiting_human_confirmation"
 
     def test_transient_settlement_failure_recovers_once(
         self, client, safe_policy_qa_dependencies, monkeypatch
@@ -629,6 +811,60 @@ class TestPolicyQAStreamEndpoint:
         assert output_data["evidence_count"] == 1
         assert output_data["attempt_count"] == 1
         assert output_data["halt_reason"] == "verified"
+
+    def test_stream_partial_segment_coverage_withholds_amounts(self, client, monkeypatch):
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.settlement_data_provider import SettlementContext
+
+        class PartialProvider:
+            async def get_settlement_context(self, settlement_id: str) -> SettlementContext:
+                return SettlementContext(
+                    settlement_id=settlement_id,
+                    query_scope="whole_admission",
+                    segment_count=2,
+                    matched_segment_count=1,
+                    coverage_status="partial",
+                    stay_start_date="2025-01-01",
+                    stay_end_date="2025-04-15",
+                    amounts_reliable=False,
+                    warnings=["发现 2 个结算分段，目前仅匹配 1 个。"],
+                )
+
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "create_settlement_data_provider",
+            lambda: PartialProvider(),
+        )
+        monkeypatch.setattr(policy_qa_routes, "get_assembler", lambda _skill_id: object())
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": "查询住院费用", "settlement_id": "1671213"},
+        )
+
+        result = next(
+            payload["result"]
+            for name, payload in _sse_events(response.text)
+            if name == "result"
+        )
+        assert result["answer_status"] == "unavailable"
+        assert "发现 2 个结算分段，目前仅匹配 1 个" in result["answer"]
+        scope_context = {
+            key: result["case_context"][key]
+            for key in (
+                "query_scope", "segment_count", "matched_segment_count",
+                "coverage_status", "stay_start_date", "stay_end_date",
+            )
+        }
+        assert scope_context == {
+            "query_scope": "whole_admission",
+            "segment_count": 2,
+            "matched_segment_count": 1,
+            "coverage_status": "partial",
+            "stay_start_date": "2025-01-01",
+            "stay_end_date": "2025-04-15",
+        }
+        assert result["case_context"]["total_amount"] is None
 
     def test_stream_failure_has_safe_terminal_contract(self, client, monkeypatch):
         from src.runtime.api import policy_qa_routes

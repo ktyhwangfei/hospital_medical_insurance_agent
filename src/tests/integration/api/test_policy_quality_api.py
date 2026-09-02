@@ -75,16 +75,18 @@ def test_test_case_create_and_list(monkeypatch) -> None:
 
 def test_candidate_release_uses_one_versioned_collection_pair(monkeypatch) -> None:
     client, _, _snapshots = _client(monkeypatch)
+    _install_approved_gate_source(monkeypatch, "CS_collection_pair")
 
     response = client.post(f"{PREFIX}/releases", json={
         "release_id": "rel_20260803_01",
         "contract_version": "2",
         "config_hash": "cfg_1",
+        "source_change_set_id": "CS_collection_pair",
     })
 
     assert response.status_code == 201
     assert response.json()["status"] == "building"
-    assert response.json()["source_change_set_id"] is None
+    assert response.json()["source_change_set_id"] == "CS_collection_pair"
     assert response.json()["facts_collection"] == "policy_facts_rel_20260803_01"
     assert response.json()["rules_collection"] == "policy_rules_rel_20260803_01"
     listed = client.get(f"{PREFIX}/releases")
@@ -785,6 +787,9 @@ def test_release_gate_status_returns_authoritative_typed_decision(monkeypatch) -
         "current_case_set_version": 0,
         "active_release_id": None,
         "latest_run": response.json()["latest_run"],
+        "latest_answer_verification_run": None,
+        "answer_verification_gate_enabled": False,
+        "answer_verification_blocked_reasons": ["skipped: 答案验证门禁未启用"],
         "blocked_reasons": [],
         "sync_pending": False,
         "sync_pending_reasons": [],

@@ -26,7 +26,7 @@ class FakeVersionService:
         if self.fail_once and self.calls == 1:
             raise RuntimeError("simulated version registration failure")
         return SimpleNamespace(
-            version_id="ver-1",
+            version_id=f"ver-{self.calls}",
             skill_id=skill_id,
             semantic_version="1.0.0",
             artifact_hash="a" * 64,
@@ -97,6 +97,41 @@ def test_materialize_creates_enabled_definition(tmp_path):
     assert defn is not None
     assert defn.lifecycle_status.value == "enabled"
     assert defn.current_version_id == "ver-1"
+
+
+def test_rematerialize_advances_definition_to_new_version(tmp_path):
+    materializer, draft_service, storage = _materializer(tmp_path)
+    draft = _validated_draft(draft_service)
+    (tmp_path / "skills").mkdir()
+    materializer.materialize(
+        draft_id=draft.draft_id,
+        expected_revision=draft.revision,
+        created_by="u",
+        reason="首次发布",
+    )
+    draft = draft_service.get_draft(draft.draft_id)
+    draft = draft_service.save_draft(
+        draft_id=draft.draft_id,
+        structured_config=draft.structured_config,
+        expected_revision=draft.revision,
+    )
+    draft = draft_service.record_validation(
+        draft_id=draft.draft_id,
+        validation_report={"blocking": []},
+        expected_revision=draft.revision,
+        blocking_ok=True,
+    )
+
+    materializer.materialize(
+        draft_id=draft.draft_id,
+        expected_revision=draft.revision,
+        created_by="u",
+        reason="补丁发布",
+    )
+
+    definition = storage.get_definition("new_skill")
+    assert definition.current_version_id == "ver-2"
+    assert definition.revision == 2
 
 
 def test_materialize_marks_draft_materialized(tmp_path):
@@ -192,6 +227,26 @@ def test_materialize_rolls_back_on_version_failure(tmp_path):
         )
     # 版本登记失败后，写入的目录应被回滚
     assert not (skills_root / "new_skill").exists()
+
+
+def test_materialize_restores_existing_skill_on_version_failure(tmp_path):
+    materializer, draft_service, _ = _materializer(
+        tmp_path, version_service=FakeVersionService(fail_once=True)
+    )
+    draft = _validated_draft(draft_service)
+    target = tmp_path / "skills" / "new_skill"
+    target.mkdir(parents=True)
+    (target / "sentinel.txt").write_text("old", encoding="utf-8")
+
+    with pytest.raises(RuntimeError):
+        materializer.materialize(
+            draft_id=draft.draft_id,
+            expected_revision=draft.revision,
+            created_by="u",
+            reason="test",
+        )
+
+    assert (target / "sentinel.txt").read_text(encoding="utf-8") == "old"
 
 
 def test_materialize_overwrites_existing_skill_atomically(tmp_path):

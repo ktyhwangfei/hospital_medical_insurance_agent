@@ -557,7 +557,15 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 技能版本 | `SkillVersion` | **Entity** | Pydantic `BaseModel`（frozen） | 由 Git 提交与制品哈希唯一追溯的不可变技能版本 |
 | 技能制品快照 | `SkillArtifactSnapshot` | **Value Object** | Pydantic `BaseModel`（frozen） | Skill 目录规范化后的 Manifest、依赖、文件清单与 SHA-256 |
 | 技能校验状态 | `SkillValidationStatus` | **Value Object** | `StrEnum` | pending / passed / failed |
-| 技能评测用例 | `SkillEvalCase` | **Entity** | Pydantic `BaseModel`（frozen） | 固定、脱敏且可追溯的路由回归问题模板 |
+| 技能测评集 | `SkillEvalSuite` | **Entity** | Pydantic `BaseModel`（frozen） | 按平台或单个 Skill 组织评测用例的治理资产；不等同于一次评测运行 |
+| 技能评测任务 | `SkillEvalTask` | **Entity** | Pydantic `BaseModel`（frozen） | 一次可被多条类型化断言验证的端到端 Skill 任务；通过 revision 在工作区演进 |
+| 评测数据定位 | `SkillEvalDataLocator` | **Value Object** | Pydantic `BaseModel`（frozen） | 用业务资源类型和 ID 安全定位评测数据，不包含物理表名或查询语句 |
+| 评测环境要求 | `SkillEvalEnvironmentRequirement` | **Value Object** | Pydantic `BaseModel`（frozen） | 任务声明的数据源、政策、语义、工具、模型或安全依赖 |
+| 技能评测数据集版本 | `SkillEvalDatasetVersion` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 冻结任务快照、环境契约和验证方案哈希的不可变版本 |
+| 技能评测基准 | `SkillEvalBenchmark` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 绑定数据集版本、类型化环境快照、验证方案和硬门禁的不可变定义 |
+| 评测轨迹接力点 | `TrajectoryPrefix` | **Value Object** | Pydantic `BaseModel`（frozen） | 仅保存可恢复结构化状态 schema 的执行边界，不包含隐藏思维过程 |
+| 评测失败归因 | `FailureAttribution` | **Value Object** | Pydantic `BaseModel`（frozen） | 记录责任类型、失败阶段、稳定机器码和证据引用 |
+| 技能评测用例 | `SkillEvalCase` | **Entity** | Pydantic `BaseModel`（frozen） | 归属于一个 SkillEvalSuite，固定、脱敏且可追溯的路由回归问题模板 |
 | 技能评测运行 | `SkillEvalRun` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 绑定候选版本、基线、测试集和配置哈希的批量评测证据 |
 | 技能评测结果 | `SkillEvalResult` | **Entity** | Pydantic `BaseModel`（frozen） | 单条用例的候选/基线路由结果与差异分类 |
 | 技能评测指标 | `SkillEvalMetrics` | **Value Object** | Pydantic `BaseModel`（frozen） | 发布门禁使用的必测通过率、准确率和回归数量 |
@@ -604,6 +612,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - `McpCapability.requires_human_confirmation` 为 `True` 时（高风险或有外部副作用），必须等待人工确认
 - `ToolOwner` 与 `Role` 枚举部分重复但缺少 `CLINICIAN`，使用时需注意
 - Skill 评测用例禁止保存患者原始上下文或含敏感信息的样本
+- SkillEvalDatasetVersion、SkillEvalBenchmark、SkillEvalRun 及其任务结果、轨迹和归因均不可修改；工作区任务通过 revision 产生新快照
+- 评测轨迹只保存动作、脱敏观察和结构化状态，禁止保存模型隐藏思维过程
 - Skill 错误统一先进 `SkillEvalCasePoolItem`；routing 投影到现有 `SkillEvalCase`，其余五类写入 `SkillRegressionCase`；`other` 仅表示尚未完成分型，不生成可执行资产
 - 回归用例的 `expected_assertions` 必须是判别联合结构化断言，禁止保存自然语言裸 expected；历史回答不直接成为 expected
 - 评测器缺失时回归用例状态为 `blocked_by_evaluator`，不会显示通过或放行发布；非路由结果不污染 top1 accuracy
@@ -657,7 +667,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 标准值提案 | `StandardValueProposal` | **Entity** | Pydantic `BaseModel` | 现有标准值域无法承接来源值时提交的人工审核草稿 |
 | 语义提议 | `SemanticProposal` | **Aggregate Root** | Pydantic `BaseModel` | 系统从抽取等运行信号主动发现指标或值域缺口后形成的统一审核对象，必须经人工审核后才能发布 |
 | 发现信号 | `DiscoverySignal` | **Value Object** | Pydantic `BaseModel` | 携带触发来源、结构化证据与建议落地字段的主动发现输入 |
-| 发现证据 | `DiscoveryEvidence` | **Value Object** | Pydantic `BaseModel` | 可追溯到政策文档、单元与提取记录的结构化证据；同一来源重复观测需幂等合并 |
+| 发现证据 | `DiscoveryEvidence` | **Value Object** | Pydantic `BaseModel` | 可追溯到政策文档、单元、提取记录或 bjyb 数据字段的结构化证据；数据库证据需标明采纳/排除等级与理由，同一来源重复观测需幂等合并 |
 | 冲突诊断 | `ConflictDiagnosis` | **Value Object** | `StrEnum` | 规则值冲突的确定性分类；只有缺失维度且满足严格分区时可形成候选 |
 | 冲突分区证据 | `ConflictPartitionEvidence` | **Value Object** | Pydantic `BaseModel`（frozen） | 记录身份签名、冲突值、分区映射、覆盖率、排他性及 extraction snapshot 的强证据 |
 | 维度候选提议 | `DimensionCandidateProposal` | **Value Object** | Pydantic `BaseModel`（frozen） | S5 从冲突严格分区发现的候选维度和值域，仅能装入 `SemanticProposal` 等待人工建模审核 |
@@ -671,6 +681,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 编译运行 | `CompileRun` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 一次不可变政策规则编译运行及其输入输出快照 |
 | 编译步骤 | `CompileStep` | **Entity** | Pydantic `BaseModel`（frozen） | 编译运行中按序追加的阶段输入、输出和状态 |
 | 校验问题 | `ValidationIssue` | **Value Object** | Pydantic `BaseModel`（frozen） | 带稳定错误码、阶段、严重度和处理建议的编译问题 |
+| 知识答案验证 | `KnowledgeAnswerVerification` | **Domain Service** | — | 以 `qa_turn_id` 为句柄验证 Policy QA 回答的引用真实性与结论与结构化知识一致性；确定性优先、fail-closed |
+| 知识答案断言 | `KnowledgeAnswerAssertions` | **Value Object** | 判别联合 | 答案验证五个维度的结构化断言，独立于 Skill 的 `RegressionAssertions`，禁止自然语言裸期望 |
+| 答案验证维度 | `KnowledgeAnswerVerificationDimension` | **Value Object** | `StrEnum` | citation_authenticity / citation_support / conclusion_consistency / calculation_consistency / coverage_completeness |
+| 答案验证状态 | `KnowledgeAnswerVerificationStatus` | **Value Object** | `StrEnum` | passed / failed / not_evaluable / blocked_by_evaluator / review_required |
+| 引用关联方法 | `CitationLinkMethod` | **Value Object** | `StrEnum` | internal_id_match / normalized_exact_match / metadata_constrained_match / vector_candidate_fallback / unverified；前三级可强通过，向量仅候选发现不做真实性证明 |
+| 答案验证夹具 | `AnswerVerificationFixture` | **Value Object** | Pydantic `BaseModel`（frozen） | 挂载在经典 Policy QA 用例上的确定性公开答案、引用、内部证据与门禁维度声明 |
+| 答案验证运行 | `AnswerVerificationRun` | **Aggregate Root** | Pydantic `BaseModel` | 一次候选政策 release 的答案验证门禁运行，汇总逐用例阻断原因并决定是否可发布 |
+| 策略答案验证门禁服务 | `PolicyAnswerVerificationGateService` | **Domain Service** | — | 使用候选 release 知识源和用例夹具执行答案验证，作为质量门禁之外的第二道发布阻断 |
 
 #### 业务规则
 
@@ -681,6 +699,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - 结构化字段与政策 Knowledge 字段是两类权威来源，通过 `MetricSourceBinding` 多对一汇聚到同一标准指标；不得分别建立平行指标体系
 - 新指标、来源值映射和标准值提案默认均为 `draft`，只有语义层独立审核动作可以发布
 - 一条规范规则必须由 `subject + conditions + result + evidence` 独立表达完整业务语义；规则主体细化不得自动扩张语义层指标，比例结果仍复用基础 `payment_ratio`
+- 答案验证的引用真实性必须用规则 ID/原文片段/hash 证明，向量检索只能召回候选，不得单独作为真实性证明；公开 excerpt 找不到原文即 fail-closed
+- 覆盖完整性在没有 coverage planner 的问题类型上必须返回 `not_evaluable` 而非 `passed`，防止"看起来全覆盖"的假安全感
 
 #### 生命周期
 
@@ -690,6 +710,23 @@ HIS 系统 → HisPort → Patient (查询/读取)
     → 错误码知识 / 规则解释 / 提示模板
     → 结果 + Citation 引用 → AgentResponse
 ```
+
+#### 语义查询模型通用语言
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 语义数据集 | `SemanticDataset` | **Entity** | Pydantic `BaseModel` | 已登记且可查询的物理表或视图，以 `dataset_code` 唯一标识 |
+| 数据集键 | `DatasetKey` | **Value Object** | Pydantic `BaseModel` | primary / unique / foreign 复合键声明；primary key 决定数据集行粒度 |
+| 语义字段 | `SemanticField` | **Entity** | Pydantic `BaseModel` | 物理列的 identifier / dimension / fact 语义声明，以 `field_code` 唯一标识 |
+| 数据集关系 | `DatasetRelation` | **Entity** | Pydantic `BaseModel` | 由两端已登记键定义的等值关系，不包含用户 SQL 或 JOIN 表达式 |
+| 数据质量规则 | `DataQualityRule` | **Entity** | Pydantic `BaseModel` | coverage / uniqueness / not_null 运行时核验规则 |
+| 语义查询 | `SemanticQuery` | **Value Object** | Pydantic `BaseModel` | 只包含业务对象、范围锚点、指标、维度和受限过滤的查询契约 |
+| 逻辑查询计划 | `LogicalQueryPlan` | **Value Object** | Pydantic `BaseModel` | 预聚合分支、公共粒度、关联和质量检查的稳定执行契约 |
+| 语义查询结果 | `SemanticQueryResult` | **DTO** | Pydantic `BaseModel` | 查询行、模型版本、范围、质量状态、证据和警告 |
+
+- `scope.anchor` 用于定位业务主体及完整范围；普通 `filters` 只限制参与计算的数据行，两者禁止混用。
+- 多事实数据集必须分别预聚合到公共实体粒度后再关联，禁止先连接原始事实行。
+- 运行时只消费已发布查询模型；关系歧义、重复主键或可能放大金额时 fail-closed。
 
 ---
 
@@ -994,6 +1031,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Evidence` | 证据材料 | Appeal | Entity |
 | `ExecutionProfileSpec` | 执行场景 | SkillTool | Value Object |
 | `FeeItem` | 费用明细 | OrderFee | Entity |
+| `FailureAttribution` | 评测失败归因 | SkillTool | Value Object |
 | `HisPort` | HIS 适配器端口 | Patient | Domain Service |
 | `Hypothesis` | 推理假设 | Runtime | Entity |
 | `InsuranceInterfacePort` | 医保接口适配器端口 | Insurance | Domain Service |
@@ -1047,6 +1085,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `SkillDraft(source_type=AI_GENERATED)` | AI 草稿 | SkillTool | Entity |
 | `SkillExecutionEngine` | 技能执行引擎 | SkillTool | Domain Service |
 | `SkillExecutionContract` | 技能执行契约 | SkillTool | Value Object |
+| `SkillEvalSuite` | 技能测评集 | SkillTool | Entity |
+| `SkillEvalTask` | 技能评测任务 | SkillTool | Entity |
+| `SkillEvalDataLocator` | 评测数据定位 | SkillTool | Value Object |
+| `SkillEvalEnvironmentRequirement` | 评测环境要求 | SkillTool | Value Object |
+| `SkillEvalDatasetVersion` | 技能评测数据集版本 | SkillTool | Aggregate Root |
+| `SkillEvalBenchmark` | 技能评测基准 | SkillTool | Aggregate Root |
 | `SkillGovernancePriority` | 技能治理优先级 | SkillTool | Value Object |
 | `SkillGovernanceStage` | 技能治理阶段 | SkillTool | Value Object |
 | `SkillMetadata` | 技能元数据 | SkillTool | Value Object |
@@ -1057,6 +1101,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `TaskConfirmRequest` | 任务确认请求 | TaskClosure | DTO |
 | `TokenUsage` | Token 用量 | ModelService | Value Object |
 | `ToolOwner` | 技能拥有者 | SkillTool | Value Object |
+| `TrajectoryPrefix` | 评测轨迹接力点 | SkillTool | Value Object |
 | `Treatment` | 诊疗项目 | OrderFee | Value Object |
 | `VisibilityScope` | 可见性范围 | Knowledge | Value Object |
 | `ValidationIssue` | 校验问题 | Knowledge | Value Object |

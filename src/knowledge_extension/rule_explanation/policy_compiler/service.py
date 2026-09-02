@@ -234,11 +234,33 @@ class PolicyCompilationService:
         result = raw_rule.get("result") or raw_rule.get("value")
         if not isinstance(result, dict):
             result = {}
-            for name, value in fields.items():
-                if name == "ratio" or name.endswith("_ratio"):
-                    result["ratio"] = value
-                elif name == "amount" or name.endswith("_amount"):
-                    result["amount"] = value
+            if subject == "personal_payment_ratio":
+                result["ratio"] = next((
+                    value for value in (
+                        fields.get("personal_payment_ratio"), fields.get("ratio")
+                    ) if value not in (None, "")
+                ), None)
+            elif subject == "deductible":
+                result["amount"] = next((
+                    value for value in (
+                        fields.get("deductible_amount"), fields.get("amount")
+                    ) if value not in (None, "")
+                ), None)
+            elif subject == "cap":
+                result["amount"] = next((
+                    value for value in (
+                        fields.get("cap_amount"), fields.get("amount")
+                    ) if value not in (None, "")
+                ), None)
+            elif fields.get("payment_ratio") not in (None, ""):
+                result["ratio"] = fields["payment_ratio"]
+            else:
+                for name, value in fields.items():
+                    if name == "ratio" or name.endswith("_ratio"):
+                        result["ratio"] = value
+                    elif name == "amount" or name.endswith("_amount"):
+                        result["amount"] = value
+            result = {name: value for name, value in result.items() if value not in (None, "")}
             if not result and expression is None:
                 rule_value = raw_rule.get("rule_value") or fields.get("rule_value")
                 if rule_value not in (None, ""):

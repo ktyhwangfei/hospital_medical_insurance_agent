@@ -51,6 +51,9 @@ class CompilationTraceStore(Protocol):
     def get_rule_trace(
         self, rule_id: str, run_id: str | None = None
     ) -> RuleCompilationTraceResponse | None: ...
+    def get_rule_trace_for_release(
+        self, rule_id: str, release_id: str
+    ) -> RuleCompilationTraceResponse | None: ...
     def has_release_lineage(
         self, release_id: str, rule_runs: list[tuple[str, str]]
     ) -> bool: ...
@@ -194,9 +197,32 @@ class InMemoryCompilationTraceStore:
             key=lambda item: (
                 self._runs[item["run_id"]].started_at,
                 item["created_at"],
+                item["rule"].rule_version if item["rule"] else 0,
             ),
-            reverse=True,
         )
+        lineages.reverse()
+        if not lineages:
+            return None
+        current = lineages[0]
+        run = self._runs[current["run_id"]]
+        steps = sorted(self._steps.get(run.run_id, []), key=lambda item: item.sequence_no)
+        return self._trace(current, run, steps, lineages)
+
+    def get_rule_trace_for_release(
+        self, rule_id: str, release_id: str
+    ) -> RuleCompilationTraceResponse | None:
+        lineages = sorted(
+            (
+                item for item in self._lineages
+                if item["rule_id"] == rule_id and item["release_id"] == release_id
+            ),
+            key=lambda item: (
+                self._runs[item["run_id"]].started_at,
+                item["created_at"],
+                item["rule"].rule_version if item["rule"] else 0,
+            ),
+        )
+        lineages.reverse()
         if not lineages:
             return None
         current = lineages[0]
@@ -460,7 +486,8 @@ class PostgresCompilationTraceStore:
                WHERE lineage.rule_id=%s AND lineage.compile_run_id IS NOT NULL
                  AND (%s::VARCHAR IS NULL OR lineage.compile_run_id=%s)
                ORDER BY run.started_at DESC,
-                        lineage.created_at DESC""",
+                        lineage.created_at DESC,
+                        lineage.rule_version DESC NULLS LAST""",
             (rule_id, run_id, run_id),
         )
         if not rows:
@@ -505,6 +532,45 @@ class PostgresCompilationTraceStore:
                 if current.get("release_id") else None
             ),
             history=history,
+        )
+
+    def get_rule_trace_for_release(
+        self, rule_id: str, release_id: str
+    ) -> RuleCompilationTraceResponse | None:
+        rows = self._get_client().execute(
+            """SELECT lineage.* FROM policy_rule_lineage AS lineage
+               JOIN policy_compile_runs AS run
+                 ON run.run_id=lineage.compile_run_id
+               WHERE lineage.rule_id=%s AND lineage.release_id=%s
+                 AND lineage.compile_run_id IS NOT NULL
+                 AND lineage.canonical_rule IS NOT NULL
+               ORDER BY run.started_at DESC, lineage.created_at DESC,
+                        lineage.rule_version DESC NULLS LAST LIMIT 1""",
+            (rule_id, release_id),
+        )
+        if not rows:
+            return None
+        current = rows[0]
+        run = self.get_run(current["compile_run_id"])
+        if run is None:
+            return None
+        raw_rule = self._load(current.get("canonical_rule"), None)
+        rule = CanonicalRule(**raw_rule) if raw_rule else None
+        steps = self._get_steps(run.run_id)
+        latest = self.get_rule_trace(rule_id)
+        return RuleCompilationTraceResponse(
+            rule_id=str(current["rule_id"]),
+            rule=rule,
+            run=run,
+            raw_input=run.raw_input,
+            llm_output=run.llm_output,
+            steps=steps,
+            issues=[issue for item in steps for issue in item.issues],
+            publication=RulePublication(
+                release_id=str(current["release_id"]),
+                published_at=current.get("published_at"),
+            ),
+            history=latest.history if latest else [],
         )
 
     def has_release_lineage(

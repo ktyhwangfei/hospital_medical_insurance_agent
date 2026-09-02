@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from 'next/navigation'
 import {
-  LayoutDashboard, Building2, Box, BarChart3, Link2, Search,
+  LayoutDashboard, Building2, Box, BarChart3, Link2, Search, TestTube2,
 } from 'lucide-react'
 
 interface NavTab {
@@ -15,7 +15,8 @@ const NAV_TABS: NavTab[] = [
   { label: '业务域', href: '/semantic-layer/domain' },
   { label: '业务对象', href: '/semantic-layer/object' },
   { label: '业务指标', href: '/semantic-layer/metrics' },
-  { label: '映射', href: '/semantic-layer/mapping' },
+  { label: '数据模型', href: '/semantic-layer/mapping' },
+  { label: '查询验证', href: '/semantic-layer/query' },
   { label: '发现', href: '/semantic-layer/discovery' },
 ]
 
@@ -58,16 +59,23 @@ const TAB_HEADERS: Record<string, TabHeader> = {
   },
   '/semantic-layer/mapping': {
     badge: '语义层',
-    breadcrumb: '数据模型 / 映射',
-    title: '映射中心',
-    description: '追踪数据源字段到语义指标的映射关系，发现并处理未映射字段和值域标准化待办。',
+    breadcrumb: '数据模型 / 查询模型',
+    title: '数据模型',
+    description: '管理数据集、键、语义字段、关系和质量规则，并保留值域标准化能力。',
     icon: Link2,
+  },
+  '/semantic-layer/query': {
+    badge: '语义层',
+    breadcrumb: '数据模型 / 查询验证',
+    title: '查询验证',
+    description: '用受限语义查询验证已发布模型、分段覆盖和参数化 SQL。',
+    icon: TestTube2,
   },
   '/semantic-layer/discovery': {
     badge: '语义层',
     breadcrumb: '数据模型 / 发现',
     title: '发现中心',
-    description: '扫描已接入数据表，自动发现未映射字段并快速创建指标。支持 Excel 批量导入字段释义。',
+    description: '扫描已接入数据表，发现未映射字段并将其纳入数据集后创建语义字段。',
     icon: Search,
   },
 }

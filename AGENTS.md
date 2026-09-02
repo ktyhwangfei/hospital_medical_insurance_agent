@@ -145,6 +145,15 @@ Portal `/policy-qa`
 > 
 > **统一测试口径与风险分级验证矩阵详见 `docs/governance/TEST-VERIFICATION-MATRIX.md`**。该文档统一了本文件与 `src/tests/AGENTS.md` 的测试分层表述，定义了风险等级（R1-R4）与最低验证要求的映射关系，是所有测试相关决策的唯一权威参考。
 
+### 审查-修复-再审查铁律
+
+> ⛔ 实现完成后、运行验证前，必须执行完整审查闭环，禁止跳过审查直接交付：
+>
+> 1. **审查**：对照本次需求、计划和改动 diff，检查功能是否完整、设计意图是否一致
+> 2. **查漏**：检查边界条件、错误路径、回归风险、测试/类型/文档是否遗漏
+> 3. **修复**：修复确认有效的问题（涉 Bug 走 §缺陷驱动测试铁律）
+> 4. **再审查**：重新审查修复后的改动，按改动分级运行对应验证（§开发完成验证流程）后再交付
+
 ### 开发完成验证流程（硬性）
 
 > ⛔ 代码开发完成后，必须严格按 **单元测试 → API 测试 → Flow 测试** 顺序逐步验证。三个阶段全部通过才算完成。
@@ -202,6 +211,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - pytest_asyncio 旧版本与 pytest 9 不兼容（启动报 `ImportError: cannot import name 'FixtureDef' from 'pytest'`）。当前锁定的 pytest-asyncio 1.4.0 与 pytest 9.0.3 已兼容，**不要**加 `-p no:asyncio`（会禁用 async 测试导致 test_policy_qa 等 4 个用例失败）。若升级 pytest 后重现 ImportError，再升级 pytest-asyncio 或加该 flag。
 - 构建索引/质量检查连不上 PostgreSQL/Milvus：服务在 WSL2 Docker 内，Windows 侧 `127.0.0.1` 不通（WSL2 NAT 默认不转发），报 `ConnectionTimeout`。在 `C:\Users\<用户>\.wslconfig` 加 `[wsl2] networkingMode=mirrored` 后 `wsl --shutdown` 重启，`127.0.0.1` 直通 WSL 容器；临时方案用 `wsl -e hostname -I` 拿 WSL IP 设 `POSTGRES_HOST`/`MILVUS_HOST`（IP 重启会变，不推荐持久）。
 - `production.py` 的 `POSTGRES_PASSWORD` 默认曾为空，连库报 `fe_sendauth: no password supplied`。已改默认 `'postgres'`（与 AGENTS.md、docker-compose 一致）；若遇认证失败先检查该环境变量是否被显式设为空。
+- Skill 目录内容变更后 `POST /infra-skills/{id}/versions/sync` 会报 409 `SKILL_VERSION_CONFLICT`（manifest 里的语义版本已绑定旧制品哈希）。正确做法：先升 `skill_manifest.yaml` 的 `version`（如 1.0.1 → 1.0.2）再 sync；评测发起预检要求候选版本 `artifact_hash` == 当前运行时哈希，不改版本号永远 409。
 - 部分工作区（codex-policy-compare-v2、pi-policy-knowledge-optimize 等独立副本）的启停脚本曾是写死 8000/3000 的旧版，多工作区会端口互斥。运行 `..\ws.ps1 sync` 同步新版脚本（按工作区名确定性分配 8100+/3100+）。
 - 多工作区同时验证时逐个猜端口很费时。用 `..\ws.ps1 list` 并行探测所有工作区端口与健康状态，`..\ws.ps1 up/down` 并行启停（详见下方多工作区章节）。
 - 手动 `uvicorn`/`npm run dev` 绕过 `start-servers.ps1` 会丢一串环境注入：后端缺 `AUTH_JWT_SECRET`（语义对齐接口 401「JWT 验签配置缺失」）、前端缺 `NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN`（语义发现页报「缺少语义审核登录凭证」，且 sessionStorage 无登录入口，token 唯一来源就是启动脚本同密钥签发注入），还丢 `MODEL_GOVERNANCE_DEV_MODE`/`SKILL_CONTROL_DEV_MODE`/`DATA_SOURCE_MODE` 等。半启动/鉴权异常一律 `..\ws.ps1 restart` 修复。

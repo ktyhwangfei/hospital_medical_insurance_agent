@@ -248,6 +248,16 @@ def test_score_rewards_expected_order_and_penalizes_swapped_ids() -> None:
     assert swapped_diagnostics["rank_score"] < exact_diagnostics["rank_score"]
 
 
+def test_score_fails_closed_when_required_expectations_are_empty() -> None:
+    from src.knowledge_extension.rule_explanation.quality_service import _score_result
+
+    score, passed, diagnostics = _score_result(["unrelated_rule"], [])
+
+    assert score == 0.0
+    assert passed is False
+    assert diagnostics == {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+
+
 def test_repeat_consistency_is_order_sensitive() -> None:
     from src.knowledge_extension.rule_explanation.quality_models import QualityCaseResult
     from src.knowledge_extension.rule_explanation.quality_service import _repeat_consistency

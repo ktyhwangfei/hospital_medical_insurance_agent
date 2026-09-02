@@ -140,6 +140,7 @@ class Metric(BaseModel):
     indexed: bool = Field(default=False, description="是否核心检索维度：True→进 Milvus 固定 schema + 标量索引；False→详情走 dynamic field")
     extraction_hint: Optional[str] = Field(None, description="给 LLM 的提取说明，动态拼 prompt 用")
     schema_version: int = Field(default=1, description="schema 演化版本，配合字段级溯源")
+    # 查询模型扩展：仅 aggregate / derived 指标由 Query Planner 消费。
     fact_field_code: Optional[str] = Field(None, max_length=256)
     aggregation: Optional[Literal["sum", "min", "max", "avg", "count", "count_distinct"]] = None
     expression: Optional[str] = None

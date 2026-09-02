@@ -68,6 +68,22 @@ class SkillInputService:
                 resolution_type=None,
                 unavailable_reason=MetricUnavailableReason.OBJECT_NOT_PUBLISHED,
             )
+        if getattr(metric, "expression", None):
+            return MetricRuntimeCapability(
+                metric_code=metric.metric_code,
+                status=metric.status,
+                runtime_resolvable=True,
+                resolution_type=MetricResolutionType.DERIVED,
+                unavailable_reason=None,
+            )
+        if getattr(metric, "fact_field_code", None) and getattr(metric, "aggregation", None):
+            return MetricRuntimeCapability(
+                metric_code=metric.metric_code,
+                status=metric.status,
+                runtime_resolvable=True,
+                resolution_type=MetricResolutionType.SQL_EXPRESSION,
+                unavailable_reason=None,
+            )
         has_adapter = bool(metric.source_adapter_port)
         has_default = metric.default_value is not None
         if has_adapter and not metric.source_field and not has_default:
@@ -221,6 +237,10 @@ class SkillInputService:
 
     @staticmethod
     def _classify_source(metric: Any, obj: Any) -> str:
+        if getattr(metric, "expression", None):
+            return "derived"
+        if getattr(metric, "fact_field_code", None) and getattr(metric, "aggregation", None):
+            return "semantic_query"
         if metric.default_value is not None and not metric.source_adapter_port:
             return "constant"
         if metric.source_adapter_port:
