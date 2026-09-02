@@ -321,11 +321,15 @@ def _parse_amount_band(value: Any, deductible_amount: Any = None) -> tuple[int, 
         upper = to_yuan(numbers[1])
         return lower, upper
 
-    # "超过X" / "X以上" / "X元以上"
-    if "超过" in text or "以上" in text:
+    # "超过X" / "X以上" / "X元以上"（"不超过" 属于上界语义，见下方分支）
+    if ("超过" in text and "不超过" not in text) or "以上" in text:
         lower = to_yuan(numbers[0])
         upper = -1
         return lower, upper
+
+    # "X以下" / "X以内" / "不超过X"（Issue #33：下限为 0，与 (0,0) 未解析哨兵可区分）
+    if "以下" in text or "以内" in text or "不超过" in text:
+        return 0, to_yuan(numbers[0])
 
     # 仅单个数字，无法判断上下界
     return 0, 0
