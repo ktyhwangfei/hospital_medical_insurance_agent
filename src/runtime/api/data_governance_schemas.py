@@ -8,14 +8,21 @@ from pydantic import BaseModel, Field, SecretStr
 
 from src.data_platform.outpatient_governance import (
     CdcEnablementStatus,
+    CaptureMapping,
     ConnectionStatus,
     OutpatientDataSource,
+    OutpatientSourceMapping,
     OutpatientSyncAttempt,
     OutpatientSyncJob,
     PostgresTargetStatus,
 )
 from src.runtime.api.schemas import AgentResponse
-
+from src.runtime.data_governance.service import (
+    MappingSqlPreview,
+    SaveMappingRequest,
+    SourceColumnDetail,
+    SourceTableSummary,
+)
 
 class DataGovernancePrincipal(BaseModel):
     user_id: str
@@ -197,3 +204,42 @@ class SyncRunListResponse(AgentResponse):
     scenario: Literal["data_governance"] = "data_governance"
     status: Literal["success"] = "success"
     result: SyncRunListResult
+
+
+class SourceTableListResponse(AgentResponse):
+    scenario: Literal["data_governance"] = "data_governance"
+    status: Literal["success"] = "success"
+    result: list[SourceTableSummary]
+
+
+class SourceColumnListResponse(AgentResponse):
+    scenario: Literal["data_governance"] = "data_governance"
+    status: Literal["success"] = "success"
+    result: list[SourceColumnDetail]
+
+
+class MappingResponse(AgentResponse):
+    scenario: Literal["data_governance"] = "data_governance"
+    status: Literal["success"] = "success"
+    result: OutpatientSourceMapping
+
+
+class SqlPreviewResponse(AgentResponse):
+    scenario: Literal["data_governance"] = "data_governance"
+    status: Literal["success"] = "success"
+    result: MappingSqlPreview
+
+
+class SqlPreviewRequest(BaseModel):
+    """草稿预览：携带未保存的 capture 映射列表。"""
+
+    captures: list[CaptureMapping] = Field(min_length=3, max_length=3)
+
+
+__all__ = [
+    "MappingResponse",
+    "SaveMappingRequest",
+    "SourceColumnListResponse",
+    "SourceTableListResponse",
+    "SqlPreviewResponse",
+]

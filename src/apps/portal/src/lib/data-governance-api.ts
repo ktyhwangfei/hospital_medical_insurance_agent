@@ -511,3 +511,94 @@ export async function listSyncRuns(sourceId: string): Promise<SyncRun[]> {
   const response = await dataGovernanceRequest<{ result: { items: SyncRunDto[] } }>(`/sync-jobs/${encodeURIComponent(sourceId)}/runs`)
   return response.result.items.map(mapRun)
 }
+
+// ---- 源表探查 / 映射 / SQL 预览 ----
+
+export interface SourceTable {
+  table_schema: string
+  table_name: string
+  row_count: number
+}
+
+export interface SourceColumn {
+  name: string
+  data_type: string
+  is_nullable: boolean
+  max_length: number | null
+  is_primary_key: boolean
+}
+
+export interface CaptureMapping {
+  capture: string
+  table_schema: string
+  table_name: string
+  key_fields: string[]
+  column_map: Record<string, string>
+}
+
+export interface SourceMapping {
+  source_id: string
+  captures: Record<string, CaptureMapping>
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+export interface MappingSqlPreview {
+  is_default: boolean
+  mapping_revision: number
+  baseline_sql: string[]
+  incremental_window_sql: string
+  incremental_children_sql: string[]
+}
+
+export async function exploreSourceTables(sourceId: string): Promise<SourceTable[]> {
+  const response = await dataGovernanceRequest<{ result: SourceTable[] }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/explore`,
+  )
+  return response.result
+}
+
+export async function exploreSourceTable(
+  sourceId: string,
+  tableSchema: string,
+  tableName: string,
+): Promise<SourceColumn[]> {
+  const response = await dataGovernanceRequest<{ result: SourceColumn[] }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/explore/${encodeURIComponent(tableSchema)}/${encodeURIComponent(tableName)}`,
+  )
+  return response.result
+}
+
+export async function getSourceMapping(sourceId: string): Promise<SourceMapping> {
+  const response = await dataGovernanceRequest<{ result: SourceMapping }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/mapping`,
+  )
+  return response.result
+}
+
+export async function saveSourceMapping(
+  sourceId: string,
+  captures: CaptureMapping[],
+  expectedRevision: number,
+): Promise<SourceMapping> {
+  const response = await dataGovernanceRequest<{ result: SourceMapping }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/mapping`,
+    { method: 'PUT', body: JSON.stringify({ captures, expected_revision: expectedRevision }) },
+  )
+  return response.result
+}
+
+export async function getMappingSqlPreview(
+  sourceId: string,
+  draftCaptures?: CaptureMapping[],
+): Promise<MappingSqlPreview> {
+  const response = await dataGovernanceRequest<{ result: MappingSqlPreview }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/mapping/sql-preview`,
+    draftCaptures ? {
+      method: 'POST',
+      body: JSON.stringify({ captures: draftCaptures }),
+    } : { method: 'POST' },
+  )
+  return response.result
+}

@@ -59,6 +59,15 @@ class _GovernanceStore:
     def get_credential(self, credential_id):
         return self.credentials[credential_id]
 
+    def get_mapping(self, source_id):
+        return self.mappings.get(source_id) if hasattr(self, "mappings") else None
+
+    def save_mapping(self, mapping, expected_revision=None):
+        del expected_revision
+        if not hasattr(self, "mappings"):
+            self.mappings = {}
+        self.mappings[mapping.source_id] = mapping
+
     def get_job(self, source_id):
         try:
             return self.jobs[source_id]

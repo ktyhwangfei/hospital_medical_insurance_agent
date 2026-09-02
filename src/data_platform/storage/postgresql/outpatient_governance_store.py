@@ -1,6 +1,7 @@
 """门诊数据治理控制面的 PostgreSQL 存储。"""
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -8,9 +9,11 @@ from zoneinfo import ZoneInfo
 
 from src.config.production import DATABASE_URL
 from src.data_platform.outpatient_governance import (
+    CaptureMapping,
     DataSourceCredential,
     ClaimedOutpatientSyncJob,
     OutpatientDataSource,
+    OutpatientSourceMapping,
     OutpatientSyncAttempt,
     OutpatientSyncJob,
     OutpatientWorkerStatus,
@@ -76,6 +79,13 @@ OUTPATIENT_GOVERNANCE_SCHEMA = (
         created_at TIMESTAMPTZ NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS outpatient_source_mappings (
+        source_id VARCHAR(64) PRIMARY KEY REFERENCES outpatient_data_sources(source_id),
+        captures JSONB NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS outpatient_sync_attempts (
         attempt_id VARCHAR(64) PRIMARY KEY,
         source_id VARCHAR(64) NOT NULL REFERENCES outpatient_data_sources(source_id),
@@ -138,6 +148,10 @@ OUTPATIENT_GOVERNANCE_SCHEMA = (
     "ALTER TABLE outpatient_sync_attempts ADD COLUMN IF NOT EXISTS safe_message VARCHAR(256)",
     "ALTER TABLE outpatient_sync_attempts ADD COLUMN IF NOT EXISTS row_count INTEGER DEFAULT 0",
     "ALTER TABLE outpatient_sync_attempts ADD COLUMN IF NOT EXISTS batch_id VARCHAR(64)",
+    "ALTER TABLE outpatient_source_mappings ADD COLUMN IF NOT EXISTS captures JSONB",
+    "ALTER TABLE outpatient_source_mappings ADD COLUMN IF NOT EXISTS revision INTEGER DEFAULT 1",
+    "ALTER TABLE outpatient_source_mappings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ",
+    "ALTER TABLE outpatient_source_mappings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
     "CREATE INDEX IF NOT EXISTS idx_outpatient_sync_jobs_due ON outpatient_sync_jobs(status, next_run_at)",
     "CREATE INDEX IF NOT EXISTS idx_outpatient_sync_attempts_source ON outpatient_sync_attempts(source_id, started_at DESC)",
 )
@@ -262,6 +276,65 @@ class OutpatientGovernanceStore:
                         credential.endpoint_fingerprint, credential.revision,
                         credential.updated_by, credential.updated_at, credential.credential_id,
                     ),
+                )
+
+    def get_mapping(self, source_id: str) -> OutpatientSourceMapping | None:
+        """无映射行时返回 None（调用方回退默认固定契约）。"""
+        self.ensure_schema()
+        rows = self._client.execute(
+            """SELECT source_id, captures, revision, created_at, updated_at
+               FROM outpatient_source_mappings WHERE source_id=%s""",
+            (source_id,),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        captures = {
+            item["capture"]: CaptureMapping.model_validate(item)
+            for item in row["captures"]
+        }
+        return OutpatientSourceMapping(
+            source_id=row["source_id"],
+            captures=captures,
+            revision=row["revision"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def save_mapping(
+        self,
+        mapping: OutpatientSourceMapping,
+        *,
+        expected_revision: int | None = None,
+    ) -> None:
+        self.ensure_schema()
+        now = mapping.updated_at
+        captures_json = [
+            item.model_dump(mode="json") for item in mapping.captures.values()
+        ]
+        with self._client.transaction() as connection:
+            with connection.cursor() as cursor:
+                if expected_revision is None:
+                    cursor.execute(
+                        """INSERT INTO outpatient_source_mappings
+                           (source_id, captures, revision, created_at, updated_at)
+                           VALUES (%s, %s, %s, %s, %s)""",
+                        (mapping.source_id, json.dumps(captures_json), 1, now, now),
+                    )
+                    return
+                cursor.execute(
+                    "SELECT revision FROM outpatient_source_mappings WHERE source_id=%s FOR UPDATE",
+                    (mapping.source_id,),
+                )
+                row = cursor.fetchone()
+                current = row["revision"] if isinstance(row, dict) else row[0] if row else None
+                if current != expected_revision or mapping.revision != expected_revision + 1:
+                    raise OutpatientGovernanceConflictError("数据源映射版本冲突")
+                cursor.execute(
+                    """UPDATE outpatient_source_mappings SET
+                           captures=%s, revision=%s, updated_at=%s
+                       WHERE source_id=%s""",
+                    (json.dumps(captures_json), mapping.revision, now, mapping.source_id),
                 )
 
     def get_job(self, source_id: str) -> OutpatientSyncJob:
