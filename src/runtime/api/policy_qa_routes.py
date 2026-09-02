@@ -723,9 +723,6 @@ async def _policy_qa_stream(
     is_broad = _is_broad_question(request, context_need)
 
     try:
-        # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
-        # 旧编排器（PolicyQAOrchestrator）已退役：政策检索/计算/回答统一走 skill 策略引擎。
-        provider = create_settlement_data_provider() if not is_broad else None
         # 处理请求并 yield SSE 事件（Skill 驱动：五步流程）
         public_steps: list[dict] = []          # 累积公开步骤
         result_answer = ""                     # 最终公开回答
@@ -753,6 +750,14 @@ async def _policy_qa_stream(
             yield _sse_event("step", _sanitize(step_evt))
             await asyncio.sleep(0)
 
+        question = request.question or ""
+        routed_skill_id = route_question(question)
+
+        # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
+        # 旧编排器（PolicyQAOrchestrator）已退役：政策检索/计算/回答统一走 skill 策略引擎。
+        # Issue #25：宽泛政策问题无结算单上下文，跳过 provider 创建
+        provider = create_settlement_data_provider() if not is_broad else None
+
         # ═══ Step 1: intent_detection（统一解释模式识别，C 方案）═══
         # overview（费用构成总览）/ single_item（单项），消除「默认 pooling_self_pay」有毒默认
         _explanation_mode, _detected_fee_item = detect_explanation_mode(request.question or "")
@@ -765,7 +770,7 @@ async def _policy_qa_stream(
             yield _ev
 
         # ═══ Step 2: skill_routing（SkillRouter 路由到技能）═══
-        skill_id = route_question(request.question) or "settlement_explain_skill"
+        skill_id = routed_skill_id or "settlement_explain_skill"
         assembler = get_assembler(skill_id)
         if assembler is None:
             raise RuntimeError(f"Skill '{skill_id}' 未加载")
@@ -1197,7 +1202,9 @@ async def _policy_qa_stream(
 
 
 @router.post("/stream")
-async def policy_qa_stream(request: PolicyQARequest) -> StreamingResponse:
+async def policy_qa_stream(
+    request: PolicyQARequest,
+) -> StreamingResponse:
     """
     政策问答SSE流式端点
 

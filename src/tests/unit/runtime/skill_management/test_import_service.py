@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import struct
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -150,6 +151,22 @@ def test_import_dir_creates_draft(tmp_path):
     )
     assert draft.skill_id == "my_skill"
     assert "SKILL.md" in draft.raw_files
+
+
+def test_outpatient_pre_refund_candidate_imports_as_editing_draft():
+    repo_root = Path(__file__).resolve().parents[5]
+    import_root = repo_root / "skill_drafts"
+    svc, _ = _service(import_root=import_root)
+
+    draft = svc.import_from_controlled_dir(
+        relative_path="outpatient_pre_refund_analysis_skill",
+        created_by="test",
+    )
+
+    assert draft.skill_id == "outpatient_pre_refund_analysis_skill"
+    assert draft.status.value == "editing"
+    assert "assembler.py" in draft.raw_files
+    assert "scripts/pre_refund_flow.py" in draft.raw_files
 
 
 def test_import_dir_path_escape_rejected(tmp_path):

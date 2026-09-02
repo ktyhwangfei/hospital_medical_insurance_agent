@@ -70,6 +70,15 @@ def _internal_settlement_payload() -> dict:
     }
 
 
+def test_pre_refund_draft_is_not_exposed_by_policy_qa_api():
+    from src.runtime.api import policy_qa_routes
+
+    openapi = create_app().openapi()
+
+    assert "pre_refund_items" not in json.dumps(openapi)
+    assert not hasattr(policy_qa_routes, "get_pre_refund_billing_adapter")
+
+
 @pytest.fixture
 def client():
     """创建测试客户端"""

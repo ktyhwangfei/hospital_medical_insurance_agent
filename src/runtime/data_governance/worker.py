@@ -89,6 +89,7 @@ def run_outpatient_job(
             connection_factory,
             clock=lambda: now,
             lookback=timedelta(hours=job.lookback_hours),
+            mapping=governance_service.effective_mapping(job.source_id),
         )
         if run_kind == "reconciliation":
             source = _FixedBatchSource(

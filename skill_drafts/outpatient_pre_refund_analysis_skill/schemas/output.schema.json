@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "answer",
+    "calculation_steps",
+    "warnings",
+    "definition",
+    "source_citations",
+    "can_answer",
+    "partial_answer",
+    "verified_external_result",
+    "policy_status"
+  ],
+  "properties": {
+    "answer": {"type": "string"},
+    "calculation_steps": {"type": "array", "items": {"type": "object"}},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "definition": {"type": "object"},
+    "source_citations": {"type": "array", "items": {"type": "object"}},
+    "case_context": {"type": ["object", "null"]},
+    "can_answer": {"type": "boolean"},
+    "partial_answer": {"type": "boolean"},
+    "verified_external_result": {"type": "boolean"},
+    "policy_status": {"type": "string"}
+  }
+}

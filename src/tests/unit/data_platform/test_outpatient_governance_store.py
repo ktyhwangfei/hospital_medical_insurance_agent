@@ -214,3 +214,16 @@ def test_claim_due_job_uses_skip_locked_and_marks_attempt_running() -> None:
     assert "COALESCE(run_once_requested_at, next_run_at) <= %s" in sql
     assert "INSERT INTO outpatient_sync_attempts" in sql
     assert "active_attempt_id" in sql
+
+
+def test_claim_due_job_excludes_in_flight_attempt() -> None:
+    """认领不得命中仍有在途 attempt 的任务（多 worker 防重复执行）。"""
+    client = _Client()
+    job = _job()
+    client.claim_row = tuple(job.model_dump().values())
+    store = OutpatientGovernanceStore(client=client)
+
+    store.claim_due_job(NOW)
+
+    claim_sql = client.transaction_sql[0][0]
+    assert "active_attempt_id IS NULL" in claim_sql

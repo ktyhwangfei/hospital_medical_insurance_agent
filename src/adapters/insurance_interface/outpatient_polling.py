@@ -1,6 +1,7 @@
-"""不允许开 CDC 时的门诊固定 SQL 时间窗读取适配器。"""
+"""不允许开 CDC 时的门诊定时 SQL 读取适配器（支持源表映射）。"""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -12,23 +13,96 @@ from src.adapters.insurance_interface.outpatient_source import (
     OutpatientSourceBatch,
     OutpatientSourceMode,
 )
+from src.data_platform.outpatient_governance import (
+    TIME_FIELD,
+    TRADE_NO_FIELD,
+    CaptureMapping,
+    OutpatientSourceMapping,
+    default_source_mapping,
+)
+
+TRADE_CAPTURE = "dbo_o_Trade"
 
 
-def probe_outpatient_readiness(connection) -> tuple[int, int]:
-    """验证固定门诊三表、契约字段和当前账号读取权限。"""
+@dataclass(frozen=True)
+class ResolvedCapture:
+    """映射解析后的单表 SQL 构件（执行与预览共用，保证所见即所执行）。"""
+
+    capture: str
+    select_sql: str  # SELECT [源列] AS [契约字段], ... FROM [schema].[table]
+    key_source_columns: tuple[str, ...]  # ORDER BY 用源列名
+    time_source_column: str  # 交易表时间窗口字段（源列名）
+    trade_no_source_column: str  # 父子关联字段（源列名）
+
+
+def resolve_capture(mapping: CaptureMapping) -> ResolvedCapture:
+    source_column = mapping.column_map  # 契约字段 → 源列
+    select_list = ", ".join(
+        f"[{source_column[field]}] AS [{field}]" for field in source_column
+    )
+    return ResolvedCapture(
+        capture=mapping.capture,
+        select_sql=(
+            f"SELECT {select_list} "
+            f"FROM [{mapping.table_schema}].[{mapping.table_name}]"
+        ),
+        key_source_columns=tuple(source_column[field] for field in mapping.key_fields),
+        time_source_column=source_column.get(TIME_FIELD),
+        trade_no_source_column=source_column[TRADE_NO_FIELD],
+    )
+
+
+def resolve_mapping(mapping: OutpatientSourceMapping) -> dict[str, ResolvedCapture]:
+    return {capture: resolve_capture(item) for capture, item in mapping.captures.items()}
+
+
+def default_captures() -> dict[str, ResolvedCapture]:
+    """历史固定契约（无映射存储行时的回退，逐字等价）。"""
+    return resolve_mapping(default_source_mapping("_default"))
+
+
+def baseline_sql(capture: ResolvedCapture) -> str:
+    order_by = ", ".join(f"[{column}]" for column in capture.key_source_columns)
+    return f"{capture.select_sql} ORDER BY {order_by}"
+
+
+def window_sql(capture: ResolvedCapture) -> str:
+    if capture.time_source_column is None:
+        raise ValueError("时间窗口 SQL 仅适用于已映射 T_TradeDate 的交易表")
+    time_column = capture.time_source_column
+    return (
+        f"{capture.select_sql} "
+        f"WHERE [{time_column}] >= ? AND [{time_column}] < ? "
+        f"ORDER BY [{time_column}]"
+    )
+
+
+def children_sql(capture: ResolvedCapture, chunk_size: int) -> str:
+    placeholders = ", ".join("?" for _ in range(chunk_size))
+    return (
+        f"{capture.select_sql} "
+        f"WHERE [{capture.trade_no_source_column}] IN ({placeholders}) "
+        f"ORDER BY [{capture.trade_no_source_column}]"
+    )
+
+
+def probe_outpatient_readiness(
+    connection, mapping: OutpatientSourceMapping | None = None
+) -> tuple[int, int]:
+    """验证映射源表、契约字段和当前账号读取权限。"""
+    captures = resolve_mapping(mapping) if mapping else default_captures()
     cursor = connection.cursor()
     try:
-        for spec in OUTPATIENT_SOURCE_SPECS.values():
-            columns = ", ".join(f"[{column}]" for column in spec.columns)
-            cursor.execute(
-                f"SELECT TOP 1 {columns} FROM [dbo].[{spec.table_name}]"
-            )
+        for capture in captures.values():
+            cursor.execute(f"SELECT TOP 1 {capture.select_sql[len('SELECT '):]}")
             cursor.fetchone()
     except Exception as exc:
         raise SourceContractMismatchError("门诊源表不可直接读取") from exc
-    return len(OUTPATIENT_SOURCE_SPECS), sum(
-        len(spec.columns) for spec in OUTPATIENT_SOURCE_SPECS.values()
-    )
+    if mapping:
+        field_count = sum(len(item.column_map) for item in mapping.captures.values())
+    else:
+        field_count = sum(len(spec.columns) for spec in OUTPATIENT_SOURCE_SPECS.values())
+    return len(captures), field_count
 
 
 class SqlServerOutpatientPollingSource:
@@ -39,11 +113,13 @@ class SqlServerOutpatientPollingSource:
         clock: Callable[[], datetime] | None = None,
         lookback: timedelta = timedelta(hours=2),
         baseline_start: datetime | None = None,
+        mapping: OutpatientSourceMapping | None = None,
     ) -> None:
         self._connection_factory = connection_factory
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._lookback = lookback
         self._baseline_start = baseline_start
+        self._captures = resolve_mapping(mapping) if mapping else default_captures()
 
     def read(self, checkpoint: OutpatientCheckpoint | None) -> OutpatientSourceBatch:
         end = _utc(self._clock())
@@ -65,23 +141,16 @@ class SqlServerOutpatientPollingSource:
         connection = self._connection_factory()
         try:
             cursor = connection.cursor()
-            trade_spec = OUTPATIENT_SOURCE_SPECS["dbo_o_Trade"]
-            columns = ", ".join(f"[{column}]" for column in trade_spec.columns)
-            cursor.execute(
-                f"SELECT {columns} FROM [dbo].[{trade_spec.table_name}] "
-                "WHERE [T_TradeDate] >= ? AND [T_TradeDate] < ? "
-                "ORDER BY [T_TradeDate], [T_TradeNo]",
-                window_start,
-                window_end,
-            )
+            trade = self._captures[TRADE_CAPTURE]
+            cursor.execute(window_sql(trade), window_start, window_end)
             trades = tuple(_rows_as_dicts(cursor))
             trade_nos = tuple(sorted({
-                str(row["T_TradeNo"])
+                str(row[TRADE_NO_FIELD])
                 for row in trades
-                if row.get("T_TradeNo") not in (None, "")
+                if row.get(TRADE_NO_FIELD) not in (None, "")
             }))
             rows = {
-                "dbo_o_Trade": trades,
+                TRADE_CAPTURE: trades,
                 "dbo_o_FeeItem": self._read_children(cursor, "dbo_o_FeeItem", trade_nos),
                 "dbo_o_Diagnose": self._read_children(cursor, "dbo_o_Diagnose", trade_nos),
             }
@@ -94,37 +163,27 @@ class SqlServerOutpatientPollingSource:
         try:
             cursor = connection.cursor()
             rows = {}
-            for capture, spec in OUTPATIENT_SOURCE_SPECS.items():
-                columns = ", ".join(f"[{column}]" for column in spec.columns)
-                order_by = ", ".join(f"[{column}]" for column in spec.key_columns)
-                cursor.execute(
-                    f"SELECT {columns} FROM [dbo].[{spec.table_name}] ORDER BY {order_by}"
-                )
+            for capture, resolved in self._captures.items():
+                cursor.execute(baseline_sql(resolved))
                 rows[capture] = tuple(_rows_as_dicts(cursor))
+            trade_rows = rows[TRADE_CAPTURE]
             trade_nos = tuple(sorted({
-                str(row["T_TradeNo"])
-                for row in rows["dbo_o_Trade"]
-                if row.get("T_TradeNo") not in (None, "")
+                str(row[TRADE_NO_FIELD])
+                for row in trade_rows
+                if row.get(TRADE_NO_FIELD) not in (None, "")
             }))
             return _batch(rows, trade_nos, None, observed_at, True)
         finally:
             connection.close()
 
-    @staticmethod
-    def _read_children(cursor, capture: str, trade_nos: tuple[str, ...]):
+    def _read_children(self, cursor, capture: str, trade_nos: tuple[str, ...]):
         if not trade_nos:
             return ()
-        spec = OUTPATIENT_SOURCE_SPECS[capture]
-        columns = ", ".join(f"[{column}]" for column in spec.columns)
+        resolved = self._captures[capture]
         rows = []
         for start in range(0, len(trade_nos), 500):
             chunk = trade_nos[start:start + 500]
-            placeholders = ", ".join("?" for _ in chunk)
-            cursor.execute(
-                f"SELECT {columns} FROM [dbo].[{spec.table_name}] "
-                f"WHERE [T_TradeNo] IN ({placeholders}) ORDER BY [T_TradeNo]",
-                *chunk,
-            )
+            cursor.execute(children_sql(resolved, len(chunk)), *chunk)
             rows.extend(_rows_as_dicts(cursor))
         return tuple(rows)
 
