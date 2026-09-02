@@ -461,6 +461,20 @@ class SemanticRegistry:
         metrics = self._store.list_metrics(object_code=object_code)
         if not metrics:
             raise ValueError(f"对象 '{object_code}' 无指标，不能发布（§5：空指标不能发布）")
+        governed_metrics = [
+            m for m in metrics
+            if object_code == "mzjyxx" and (
+                any((m.synonyms, m.compatible_dimensions, m.default_time_role,
+                        m.refresh_frequency, m.permission_level, m.owner,
+                        m.reviewer, m.precision is not None))
+            )
+        ]
+        incomplete = {
+            m.metric_code: m.governance_missing_fields()
+            for m in governed_metrics if m.governance_missing_fields()
+        }
+        if incomplete:
+            raise ValueError(f"治理字段不完整: {incomplete}")
         datasets = self._store.list_datasets(object_code)
         keys = self._store.list_dataset_keys(object_code=object_code)
         fields = self._store.list_fields(object_code=object_code)

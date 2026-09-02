@@ -79,6 +79,10 @@ class MetricSummary(BaseModel):
     importance: str
     status: str
     usage_count: int = 0
+    owner: str | None = None
+    reviewer: str | None = None
+    refresh_frequency: str | None = None
+    permission_level: str | None = None
 
 
 class MetricDetail(BaseModel):
@@ -106,6 +110,14 @@ class MetricDetail(BaseModel):
     expression: str | None = None
     dependencies: list[str] = Field(default_factory=list)
     non_additive_dimensions: list[str] = Field(default_factory=list)
+    synonyms: list[str] = Field(default_factory=list)
+    compatible_dimensions: list[str] = Field(default_factory=list)
+    default_time_role: str | None = None
+    refresh_frequency: str | None = None
+    permission_level: str | None = None
+    owner: str | None = None
+    reviewer: str | None = None
+    precision: int | None = None
 
 
 class UpdateMetricResponse(BaseModel):
@@ -749,7 +761,7 @@ def list_metrics(object_code: str | None = Query(None)):
     reg = get_registry()
     metrics = reg.list_metrics(object_code)
     refs = _get_skill_metric_refs()
-    return [MetricSummary(metric_code=m.metric_code, name=m.name, object_code=m.object_code, metric_type=m.metric_type, importance=m.importance, status=m.status, usage_count=refs.get(m.metric_code, 0)) for m in metrics]
+    return [MetricSummary(metric_code=m.metric_code, name=m.name, object_code=m.object_code, metric_type=m.metric_type, importance=m.importance, status=m.status, usage_count=refs.get(m.metric_code, 0), owner=m.owner, reviewer=m.reviewer, refresh_frequency=m.refresh_frequency, permission_level=m.permission_level) for m in metrics]
 
 
 @router.get("/metrics/{metric_code:path}/value-mismatch", response_model=ValueMismatchResponse)
@@ -789,6 +801,10 @@ def get_metric(metric_code: str):
         fact_field_code=metric.fact_field_code, aggregation=metric.aggregation,
         expression=metric.expression, dependencies=metric.dependencies,
         non_additive_dimensions=metric.non_additive_dimensions,
+        synonyms=metric.synonyms, compatible_dimensions=metric.compatible_dimensions,
+        default_time_role=metric.default_time_role, refresh_frequency=metric.refresh_frequency,
+        permission_level=metric.permission_level, owner=metric.owner,
+        reviewer=metric.reviewer, precision=metric.precision,
     )
 
 
@@ -1039,6 +1055,22 @@ def update_metric(
             metric.dependencies = req.dependencies
         if req.non_additive_dimensions is not None:
             metric.non_additive_dimensions = req.non_additive_dimensions
+        if req.synonyms is not None:
+            metric.synonyms = req.synonyms
+        if req.compatible_dimensions is not None:
+            metric.compatible_dimensions = req.compatible_dimensions
+        if req.default_time_role is not None:
+            metric.default_time_role = req.default_time_role
+        if req.refresh_frequency is not None:
+            metric.refresh_frequency = req.refresh_frequency
+        if req.permission_level is not None:
+            metric.permission_level = req.permission_level
+        if req.owner is not None:
+            metric.owner = req.owner
+        if req.reviewer is not None:
+            metric.reviewer = req.reviewer
+        if req.precision is not None:
+            metric.precision = req.precision
 
         task = None
         if requires_reextract:
@@ -1138,6 +1170,14 @@ class UpdateMetricRequest(BaseModel):
     expression: str | None = None
     dependencies: list[str] | None = None
     non_additive_dimensions: list[str] | None = None
+    synonyms: list[str] | None = None
+    compatible_dimensions: list[str] | None = None
+    default_time_role: str | None = None
+    refresh_frequency: str | None = None
+    permission_level: str | None = None
+    owner: str | None = None
+    reviewer: str | None = None
+    precision: int | None = None
 
 
 class CreateDomainRequest(BaseModel):

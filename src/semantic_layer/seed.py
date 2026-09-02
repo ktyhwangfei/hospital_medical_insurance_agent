@@ -783,6 +783,42 @@ def _seed_outpatient_query_model(store: RegistryStore) -> None:
                 aggregation="sum" if column in detail_sum else "max",
             ))
 
+    governed = {
+        "T_State": ("门诊有效结算笔数", "count", "笔", 0),
+        "T_FeeAll": ("门诊总费用", "sum", "元", 2),
+        "T_FundPay": ("门诊统筹基金支付金额", "sum", "元", 2),
+        "T_SelfPayAll": ("门诊个人支付金额", "sum", "元", 2),
+    }
+    for column, (name, aggregation, unit, precision) in governed.items():
+        metric = store.get_metric(f"{object_code}.{column}")
+        if metric is None:
+            continue
+        store.save_metric(metric.model_copy(update={
+            "name": name, "definition": f"按门诊交易统计{name}",
+            "synonyms": [name], "compatible_dimensions": ["time", "organization.department", "insurance_type", "settlement_status"],
+            "default_time_role": "settlement_time", "refresh_frequency": "5m",
+            "permission_level": "summary", "owner": "医保数据组", "reviewer": "医保业务组",
+            "precision": precision, "unit": unit, "aggregation": aggregation,
+            "status": "published",
+        }))
+    store.save_metric(Metric(
+        metric_code=f"{object_code}.average_fee", object_code=object_code,
+        name="门诊次均费用", definition="门诊总费用除以有效结算笔数",
+        metric_type="aggregate", semantic_type="Amount", unit="元", precision=2,
+        fact_field_code="mz_trade.T_FeeAll", aggregation="avg",
+        dependencies=[f"{object_code}.T_FeeAll", f"{object_code}.T_State"],
+        synonyms=["门诊平均费用", "次均费用"],
+        compatible_dimensions=["time", "organization.department", "insurance_type", "settlement_status"],
+        default_time_role="settlement_time", refresh_frequency="5m", permission_level="summary",
+        owner="医保数据组", reviewer="医保业务组", source_object="mz_trade", status="published",
+    ))
+    store.save_metric(Metric(
+        metric_code=f"{object_code}.insured_encounter_count", object_code=object_code,
+        name="门诊医保就诊人次", definition="按唯一就诊标识统计医保门诊人次",
+        metric_type="Aggregate", semantic_type="Count", unit="人次", aggregation="count_distinct",
+        fact_field_code="mz_trade.T_TradeNo", source_object="mz_trade", status="draft",
+    ))
+
     for rule in [
         DataQualityRule(
             rule_code="mz_trade_key_unique", object_code=object_code,
