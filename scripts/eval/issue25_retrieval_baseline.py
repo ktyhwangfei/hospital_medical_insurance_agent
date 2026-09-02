@@ -87,9 +87,14 @@ class _FakeMilvusClient:
         name: str,
         entities: list[dict[str, Any]],
         fields: set[str] | None = None,
+        enable_dynamic_field: bool = False,
     ) -> None:
         fields = fields or set(entities[0].keys()) if entities else set()
-        self._collections[name] = {"entities": list(entities), "fields": fields}
+        self._collections[name] = {
+            "entities": list(entities),
+            "fields": fields,
+            "enable_dynamic_field": enable_dynamic_field,
+        }
 
     def describe_collection(self, collection_name: str) -> dict[str, Any]:
         if collection_name not in self._collections:
@@ -98,7 +103,12 @@ class _FakeMilvusClient:
             {"name": n}
             for n in sorted(self._collections[collection_name]["fields"])
         ]
-        return {"fields": fields}
+        return {
+            "fields": fields,
+            "enable_dynamic_field": self._collections[collection_name][
+                "enable_dynamic_field"
+            ],
+        }
 
     def query(
         self,
@@ -680,6 +690,7 @@ class GoldenCase:
     expected_rule_ids: list[str]
     notes: str = ""
     is_negative: bool = False        # 负例：期望无命中
+    skip: bool = False               # 跳过：真实语料无法评估该用例（字段/机制缺失），不计入指标
 
 
 def _build_golden_cases() -> list[GoldenCase]:
@@ -1106,6 +1117,347 @@ def _build_golden_cases() -> list[GoldenCase]:
     return cases
 
 
+# ── 真实语料模式（Issue #33 P0-4）─────────────────────────────────
+#
+# 范围纪律：仅评门诊 + 通用规则，住院规则排除（issue #33 明确口径）。
+_REAL_MED_TYPES = ("门诊-普通门急诊", "门诊-急诊留观", "门诊-一般门特")
+
+# 真实 release collection 的固定 schema 字段（2026-09-02 实测
+# policy_rules_REL_20260827_MZ8_V3 describe_collection）：无 region /
+# effective_date / expiry_date / publish_status / policy_version / is_remote /
+# amount_band_min / amount_band_max。灌入 _FakeMilvusClient 时以此为准，
+# 并开启 enable_dynamic_field——Issue #33 修复后 StructuredPolicyRuleRetriever
+# 的 _get_collection_fields 会把已知动态键并入可过滤字段，保证 eval 与生产一致。
+_REAL_FIXED_FIELDS = {
+    "rule_id", "fact_id", "doc_id", "rule_type", "insu_type", "med_type",
+    "hosp_lv", "psn_type", "setl_type", "schema_version", "vector",
+}
+
+
+def _load_real_corpus(
+    host: str = "127.0.0.1",
+    port: str = "19530",
+) -> tuple[list[dict[str, Any]], str]:
+    """从 Milvus active release 读取真实规则实体（纯只读），按范围纪律过滤。
+
+    返回 (entities, collection_name)。实体保持 FieldTrace 原样（detail 字段
+    不解包），与生产 Milvus 返回形态一致——retriever 内部会自行 unpack_detail。
+    向量复用 collection 内已落库的 bge 向量，查询侧仍由 embedding provider 编码。
+    """
+    from src.knowledge_extension.rule_explanation.policy_retrieval.applicability_backfill import (
+        MilvusRuleStore,
+    )
+    from src.knowledge_extension.rule_explanation.release_resolver import (
+        resolve_rules_collection,
+    )
+
+    collection_name = resolve_rules_collection(host, port)
+    store = MilvusRuleStore(host, port, collection_name=collection_name)
+    rows = store.list_rules(limit=10000)
+    kept = [r for r in rows if (r.get("med_type") or "") in ("",) + _REAL_MED_TYPES]
+    return kept, collection_name
+
+
+def _build_real_golden_cases() -> list[GoldenCase]:
+    """真实语料黄金用例集：以 58 条合成用例的问题意图为骨架逐条处理。
+
+    处理方式（全部标注基于 2026-09-02 通读的 351 条真实规则，
+    dump 见 scripts/eval/real_corpus_dump.json / real_corpus_listing.txt）：
+    - 映射：真实语料中存在对应规则 → 标注真实 expected_rule_ids；
+    - 转负例：真实语料无对应规则（住院/上海/异地比例/2025 版等）→ 期望诚实拒答；
+    - 跳过：用例考查的机制在真实语料中不存在（region/有效期/版本字段全缺失）。
+    """
+    from dataclasses import replace
+
+    synthetic = _build_golden_cases()
+
+    # 映射用例：ctx 覆盖 + 真实 expected_rule_ids
+    mapped: dict[str, dict[str, Any]] = {
+        # 合成原例：北京在职职工三级医院门诊报销比例
+        # 真实对应：doc_7173172eb649 门诊统筹分段比例（三级/在职职工）
+        "BJ_EMP_TERT_OP": {
+            "ctx": {"med_type": "门诊-普通门急诊", "target_amount": 500.0},
+            "question": "北京在职职工三级医院门诊报销比例？",
+            "expected": ["rule_bd19807063be1fd8", "rule_e04620a0f3dffeb2"],
+            "notes": "真实语料门诊比例按金额段拆分（2万以下70% / 2万以上60%），完整答案需两条同时召回；"
+                     "语料另有门诊大额互助规则（rule_2003952d3afc 70%），属另一政策维度不计入期望",
+        },
+        # 合成原例：北京职工住院封顶线
+        # 真实对应：职工统筹基金年度最高支付限额 10 万元（med_type 空，通用规则）
+        "BJ_CAP": {
+            "ctx": {},
+            "expected": ["rule_e44e75c149f9"],
+            "notes": "rule_e44e75c149f9（10万元）med_type 为空属通用规则，适用住院场景；"
+                     "rule_eb4c465e6f2e 仅引用第三十三条无数值，不计入期望",
+        },
+        # 合成原例：宽泛问北京医保封顶线
+        # 真实对应：职工统筹封顶 10 万 + 居民大病封顶 15 万（问题未限定险种，两者均为有效答案）
+        "BROAD_CAP": {
+            "ctx": {},
+            "expected": ["rule_e44e75c149f9", "rule_9da07fdaeaf8"],
+            "notes": "问题未限定险种：职工统筹封顶10万与居民大病封顶15万均为有效答案；"
+                     "rule_eb4c465e6f2e 无数值不计入",
+        },
+        # 合成原例：宽泛问门诊报销比例（原期望在职三级门诊70%规则）
+        # 真实对应：在职职工门诊统筹 2万以下 70%（rule_74af12a735aef785）
+        "BROAD_OUTPATIENT": {
+            "ctx": {},
+            "expected": ["rule_74af12a735aef785"],
+            "notes": "问题未限定人群/险种，语料另有退休及居民门诊比例规则"
+                     "（rule_0c31054fbb71 / rule_cda56c7057bb1edd 等），其召回计为 FAR 信号",
+        },
+    }
+
+    # 跳过用例：考查的机制在真实语料中不存在（适用性字段全缺失）
+    skipped: dict[str, str] = {
+        "BJ_EMP_TERT_IP_NEAR_EXPIRY": "跳过：语料 effective_date/expiry_date 字段全缺失，时间边界过滤无法评估",
+        "BJ_EMP_TERT_IP_EXPIRY_DAY": "跳过：语料 effective_date/expiry_date 字段全缺失，时间边界过滤无法评估",
+        "BJ_EMP_TERT_IP_NEW_YEAR": "跳过：语料无有效期字段且无多版本规则，版本切换边界无法评估",
+        "BJ_EMP_TERT_IP_DEFAULT_REGION": "跳过：语料 region 字段全缺失（全部为本市政策），默认地区逻辑无法评估",
+        "BJ_EMP_TERT_IP_NO_DATE": "跳过：语料无有效期字段，无结算日期场景退化为普通过滤，评测价值低",
+        "BJ_EMP_TERT_IP_VERSION_MISMATCH": "跳过：语料 policy_version 字段全缺失，版本过滤机制无法评估",
+    }
+
+    # 转负例用例的专属理由（未列出的用通用理由）
+    negative_notes: dict[str, str] = {
+        "BJ_RET_TERT_IP_FORMULA": "语料无住院退休折算规则（退休规则均为门诊比例/个人账户划入），期望诚实拒答",
+        "BJ_EMP_REMOTE": "语料无异地就医支付比例规则（仅居民异地备案/手工报销流程规则），且 is_remote 字段全缺失，期望诚实拒答",
+        "BROAD_REMOTE": "语料无异地就医支付比例规则（仅备案/垫付流程规则），期望诚实拒答",
+        "BJ_EMP_TERT_IP_2025": "语料无 2025 版规则且无有效期字段，期望诚实拒答",
+        "BJ_EMP_TERT_IP_2025_BAND2": "语料无 2025 版规则且无有效期字段，期望诚实拒答",
+        "SH_EMP_TERT_IP": "语料全部为本市（北京）政策，无上海规则，期望诚实拒答",
+        "SH_EMP_TERT_IP_NO_REGION": "语料无上海规则，期望诚实拒答",
+        "BJ_RESIDENT_TERT_IP": "居民住院规则按范围纪律排除，语料仅含居民门诊/通用规则，期望诚实拒答",
+        "BJ_DEDUCT_TERT": "语料无住院起付线规则（仅门诊起付线），期望诚实拒答；若召回门诊起付线则暴露医疗类别混淆",
+        "BROAD_DEDUCTIBLE": "语料无住院起付线规则（仅门诊起付线），期望诚实拒答；若召回门诊起付线则暴露医疗类别混淆",
+        "NEG_EXPIRED_2023": "语料无有效期字段亦无 2023 已废止规则，期望诚实拒答",
+        "NEG_FUTURE_2025": "语料无有效期字段亦无 2025 未来规则，期望诚实拒答",
+        "NEG_REGION_SH": "语料无上海规则且 region 字段全缺失，期望诚实拒答",
+        "NEG_PILOT": "语料 publish_status 字段全缺失、无试点规则，期望诚实拒答",
+        "NEG_REMOTE_FALSE": "语料 is_remote 字段全缺失，期望诚实拒答",
+        "NEG_POP_STUDENT": "语料无住院规则，学生儿童住院问题期望诚实拒答",
+        "NEG_HOSP_PRIMARY": "语料无住院规则，期望诚实拒答",
+        "NEG_OUTPATIENT_VS_IP": "语料含大量门诊规则，验证住院场景不误召回门诊规则，期望诚实拒答",
+        "NEG_INSU_RESIDENT": "语料同时含职工与居民规则，验证险种隔离：职工上下文不应召回居民规则",
+        "NEG_REVOKED": "语料无 publish_status 字段、无已撤销规则，期望诚实拒答",
+        "BJ_EMP_TERT_IP_DRAFT": "语料无 publish_status 字段、无草稿规则，期望诚实拒答",
+        "BROAD_AMOUNT_BAND": "语料无 3万-4万 住院分段规则（大病保险分段为 5 万档），期望诚实拒答",
+        "BROAD_VERSION": "语料无 2025 年规则，期望诚实拒答",
+    }
+    _default_negative_note = "真实语料按范围纪律仅含门诊+通用规则，无住院分段规则，期望诚实拒答"
+
+    cases: list[GoldenCase] = []
+    for c in synthetic:
+        if c.case_id in skipped:
+            cases.append(replace(c, skip=True, notes=skipped[c.case_id]))
+        elif c.case_id in mapped:
+            m = mapped[c.case_id]
+            cases.append(GoldenCase(
+                case_id=c.case_id,
+                scenario=c.scenario,
+                dimensions=c.dimensions,
+                settlement_context={**c.settlement_context, **m.get("ctx", {})},
+                question=m.get("question", c.question),
+                expected_rule_ids=list(m["expected"]),
+                notes=m.get("notes", ""),
+                is_negative=False,
+            ))
+        else:
+            cases.append(replace(
+                c,
+                is_negative=True,
+                expected_rule_ids=[],
+                notes=negative_notes.get(c.case_id, _default_negative_note),
+            ))
+
+    # 覆盖护栏：58 条合成用例必须全部处理，且三种处理方式无交集
+    assert len(cases) == len(synthetic), "真实用例集必须与合成用例一一对应"
+    overlap = set(mapped) & set(skipped)
+    assert not overlap, f"用例同时被映射与跳过: {overlap}"
+
+    # Issue #33 正向用例扩充：在 58 条骨架之外追加真实语料正向用例
+    positives = _build_real_positive_cases()
+    assert 15 <= len(positives) <= 25, f"正向用例数 {len(positives)} 超出 15-25 目标区间"
+    cases.extend(positives)
+    return cases
+
+
+def _build_real_positive_cases() -> list[GoldenCase]:
+    """真实语料正向用例（Issue #33 后续）：24 条，覆盖六大主题规则群。
+
+    标注方法：逐条通读 351 条真实规则（scripts/eval/real_corpus_listing.txt），
+    按"哪些规则应被召回回答该问题"人工标注 expected_rule_ids：
+    - 同事实完全重复对（如 45+ 划入 2% 的两条同文规则）与维度一致的碎片规则
+      （source_text 仅 "60%。" 但维度完全匹配）一并计入期望，避免误记 FAR；
+    - 维度冲突或仅回答子问题的规则不计入期望，在 notes 写明排除理由；
+    - 完整答案需多条时用例 expected 覆盖全部（如退休 2万以下按 70 岁分档）。
+    标注只依赖语料内容，不依据任何一次检索结果反推。
+    """
+    # 通用上下文基线：真实语料全部为本市（北京）政策，region/日期留空
+    # （语料无 region/effective_date 字段，填充只会误导读者）
+    emp_op: dict[str, Any] = {  # 职工门诊
+        "insu_type": _INSU_TYPE, "med_type": "门诊-普通门急诊",
+        "hosp_lv": "", "psn_type": "", "region": "", "settlement_date": "",
+        "is_remote": False, "target_field": "统筹自付", "target_amount": 0.0,
+    }
+    res_op = {**emp_op, "insu_type": "城乡居民基本医疗保险"}   # 居民门诊
+    dbi = {"insu_type": "大病保险", "med_type": "", "hosp_lv": "", "psn_type": "困难人群",
+           "region": "", "settlement_date": "", "is_remote": False,
+           "target_field": "大病自付", "target_amount": 0.0}
+
+    def C(case_id: str, scenario: str, topic: str, ctx: dict[str, Any],
+          question: str, expected: list[str], notes: str) -> GoldenCase:
+        return GoldenCase(
+            case_id=case_id, scenario=scenario, dimensions=["真实正向", topic],
+            settlement_context=ctx, question=question,
+            expected_rule_ids=expected, notes=notes,
+        )
+
+    return [
+        # ── 主题 1：职工门诊统筹分段与起付线（doc_4bf8d92facc0 / doc_7173172eb649）──
+        C("REAL_OP_EMP_DEDUCT", "在职职工门诊起付标准", "门诊起付线",
+          {**emp_op, "psn_type": "在职职工", "target_field": "起付线"},
+          "在职职工门诊起付标准是多少元？",
+          ["rule_8238788ad33d5cb4"],
+          "唯一在职门诊起付线规则（1800元），语料无其他在职门诊起付线"),
+        C("REAL_OP_RET_DEDUCT", "退休人员门诊起付标准", "门诊起付线",
+          {**emp_op, "psn_type": "退休人员", "target_field": "起付线"},
+          "退休人员门诊起付标准是多少元？",
+          ["rule_bc4c8deba3574b52", "rule_aac09533029c03a5"],
+          "两条均为1300元：rule_bc4c8deba3574b52 为退休人员通用表述，"
+          "rule_aac09533029c03a5 为70岁以上专项表述（rule_type=deductible），问题未限定年龄两者均应召回"),
+        C("REAL_OP_EMP_SEC_BAND1", "在职职工二级医院门诊2万元以下支付比例", "门诊分段",
+          {**emp_op, "psn_type": "在职职工", "hosp_lv": "二级", "target_amount": 15000.0},
+          "在职职工二级医院门诊，2万元以下部分统筹基金支付比例是多少？",
+          ["rule_7f3f6f0c6fd2a758"],
+          "二级在职2万以下档唯一无冲突（统筹70%）；一级同档存在 "
+          "rule_0412833fee42d9d1/rule_ccc47eef94d825d8/rule_f7226be3f086fdcf 三条冲突值（0.9/0.1/0.3），"
+          "属数据质量问题，故选二级档标注"),
+        C("REAL_OP_EMP_BAND2", "在职职工门诊超过2万元支付比例", "门诊分段",
+          {**emp_op, "psn_type": "在职职工", "target_amount": 25000.0},
+          "在职职工门诊费用超过2万元的部分，统筹基金支付比例是多少？",
+          ["rule_a9ba270201c559e1", "rule_1b5d162145d9c088"],
+          "两条均表述在职2万以上统筹60%；rule_1b5d162145d9c088 为同事实碎片（source_text 仅 \"60%。\"），"
+          "维度完全一致计入期望"),
+        C("REAL_OP_RET_BAND1", "退休人员门诊2万元以下支付比例", "门诊分段",
+          {**emp_op, "psn_type": "退休人员", "target_amount": 15000.0},
+          "退休人员门诊2万元以下部分报销比例是多少？",
+          ["rule_ca52d442e0eb77f8", "rule_63a423fab0492787"],
+          "退休2万以下按年龄分档：70岁以下85%（rule_ca52d442e0eb77f8）+ 70岁以上90%（rule_63a423fab0492787），"
+          "完整答案需两条同时召回；医院等级变体（一级90%等）与通用档数值冲突，属数据质量问题不计入"),
+        C("REAL_OP_RET_BAND2", "退休人员门诊超过2万元支付比例", "门诊分段",
+          {**emp_op, "psn_type": "退休人员", "target_amount": 25000.0},
+          "退休人员门诊费用超过2万元的部分报销比例是多少？",
+          ["rule_9f08b4ad7e8cf1e2", "rule_31a8f163639447e4"],
+          "两条均表述退休2万以上80%；rule_31a8f163639447e4 为同事实碎片（\"80%。\"）计入期望"),
+        # ── 主题 2：门诊大额医疗互助（doc_7a1fbf7480d4，2010年调整）──
+        C("REAL_LMAA_EMP_COMMUNITY", "在职职工社区门诊大额互助报销比例", "大额互助",
+          {**emp_op, "psn_type": "在职职工", "hosp_lv": "一级"},
+          "在职职工在社区卫生服务机构门诊，大额医疗互助资金报销比例是多少？",
+          ["rule_fe86fd3ef332", "rule_63e89e926492ebd8"],
+          "在职社区门诊大额互助90%；rule_63e89e926492ebd8 为同事实碎片（\"90%。\"，"
+          "rule_type=large_medical_mutual_aid_payment_ratio）计入期望"),
+        C("REAL_LMAA_RET_COMMUNITY", "退休人员社区门诊报销比例", "大额互助",
+          {**emp_op, "psn_type": "退休人员", "hosp_lv": "一级"},
+          "退休人员在社区卫生服务机构门诊，报销比例是多少？",
+          ["rule_bb14031d909f", "rule_4df372b59673556e"],
+          "退休社区门诊90%（含大额互助80%+统一补充）；rule_4df372b59673556e 完整复述同一事实计入期望；"
+          "80% 组件规则（rule_25721ca05b5d/rule_3222a148156d8c7d）仅回答大额互助子项，不计入"),
+        C("REAL_LMAA_NON_COMMUNITY", "在职职工非社区门诊大额互助报销比例", "大额互助",
+          {**emp_op, "psn_type": "在职职工"},
+          "在职职工在社区以外的定点医疗机构门诊，大额医疗互助报销比例是多少？",
+          ["rule_2003952d3afc"],
+          "非社区门诊大额互助70%（hosp_lv=无等级）；碎片 rule_69fc18433e6a7364 同为0.7但 hosp_lv 误标一级"
+          "（与政策矛盾，一级社区应为90%），属数据冲突不计入"),
+        # ── 主题 3：城乡居民大病保险（doc_a73c31a7630e 2019 + doc_7ec146a78b34 倾斜）──
+        C("REAL_DBI_DEDUCT", "城乡居民大病保险起付标准", "大病保险",
+          {**dbi, "psn_type": "城乡居民", "target_field": "起付线"},
+          "城乡居民大病保险的起付标准是多少？",
+          ["rule_5c825a5842dc"],
+          "2019年起付标准30404元（按上年度城镇居民20%低收入户人均可支配收入），语料唯一起付标准数值规则"),
+        C("REAL_DBI_DEDUCT_POOR", "困难人员大病保险起付标准", "大病保险",
+          {**dbi, "target_field": "起付线"},
+          "低保等困难人员的城乡居民大病保险起付标准是多少？",
+          ["rule_dfc997e0e80f"],
+          "困难人员起付标准降低一半（15202元），规则自身含数值可直接作答；"
+          "基准规则 rule_5c825a5842dc 提供上下文但不直接回答困难标准，不计入"),
+        C("REAL_DBI_RATIO_BAND1", "困难人员大病5万元以内支付比例", "大病保险",
+          {**dbi, "target_amount": 30000.0},
+          "困难人员大病保险，起付标准以上5万元以内的个人自付费用支付比例是多少？",
+          ["rule_eabcb26ebdb0"],
+          "5万以内档由60%提高至65%（amount_band=0-50000，困难人群），唯一对应规则"),
+        C("REAL_DBI_RATIO_BAND2", "困难人员大病超过5万元支付比例", "大病保险",
+          {**dbi, "target_amount": 60000.0},
+          "困难人员大病保险，超过5万元的个人自付费用支付比例是多少？",
+          ["rule_3fdd1238293f"],
+          "超过5万档由70%提高至75%（amount_band=50000-，困难人群），唯一对应规则"),
+        C("REAL_DBI_TILT_DIBAO", "低保对象大病保险倾斜政策", "大病保险",
+          {"insu_type": "城乡居民大病保险", "med_type": "", "hosp_lv": "",
+           "psn_type": "低保对象", "region": "", "settlement_date": "",
+           "is_remote": False, "target_field": "大病自付", "target_amount": 0.0},
+          "低保对象的大病保险有哪些倾斜政策？",
+          ["rule_2e052d5d5ec61d3a", "rule_7ae1f61c041b73ff", "rule_af35738965046238"],
+          "低保倾斜三件套：起付标准降低50% + 支付比例提高5个百分点 + 取消最高支付限额；"
+          "完整答案恰为3条=TOP_K，测试多规则完整召回"),
+        # ── 主题 4：城乡居民门诊待遇（doc_ebea08e4d59d 2018办法 + 实施细则）──
+        C("REAL_RES_OP_DEDUCT", "城乡居民门诊起付标准", "居民门诊",
+          {**res_op, "psn_type": "城乡居民", "target_field": "起付线"},
+          "城乡居民医保门诊（急诊）的起付标准是多少？",
+          ["rule_844017664834", "rule_b266a6011f26"],
+          "一级及以下100元 + 二级及以上550元，同一原文句按医院等级拆成两条，完整答案需同时召回"),
+        C("REAL_RES_OP_RATIO", "城乡居民门诊支付比例", "居民门诊",
+          {**res_op, "psn_type": "城乡居民"},
+          "城乡居民门诊费用超过起付标准后，医保基金支付比例是多少？",
+          ["rule_0c31054fbb71", "rule_c0c06ba8a75b"],
+          "一级55% + 二级及以上50%（年度累计封顶3000元），同一原文句拆分两条，需同时召回"),
+        C("REAL_RES_OP_POOL50", "居民门诊统筹支付比例下限", "居民门诊",
+          {**res_op},
+          "居民医保门诊统筹支付比例不低于多少？",
+          ["rule_cda56c7057bb1edd"],
+          "门诊统筹支付比例不低于50%（doc_7ec146a78b34），唯一对应规则；"
+          "与 REAL_RES_OP_RATIO 的分段比例属不同政策口径"),
+        C("REAL_ER_OBS", "急诊留观费用报销规则", "急诊留观",
+          {**res_op, "med_type": "门诊-急诊留观", "psn_type": "城乡居民"},
+          "参保人员急诊留观发生的医疗费用如何报销？",
+          ["rule_730543a736bd"],
+          "急诊留观费用按住院医疗费用报销规定执行，语料唯一急诊留观支付规则"),
+        C("REAL_FIRST_DIAG_REFERRAL", "居民门诊基层首诊与转诊规定", "居民门诊",
+          {**res_op, "psn_type": "城乡居民", "hosp_lv": "一级", "target_field": "就医流程"},
+          "城乡老年人和劳动年龄内居民门诊就医的基层首诊和转诊规定是什么？",
+          ["rule_29efc57f99c3", "rule_6497e489c1c4", "rule_eb166c734035"],
+          "首诊制度 + 凭首诊转诊证明转诊 + 转诊有效180天，三条构成完整流程；"
+          "rule_956cc41cfe44（未经首诊不予支付，排除规则）属后果条款不计入"),
+        # ── 主题 5：门诊特殊病种（doc_466953309ccf 实施细则，门特 9 条规则群）──
+        C("REAL_MENTE_SCOPE", "城乡居民特殊病种范围", "门特",
+          {**res_op, "med_type": "门诊-一般门特", "target_field": "支付范围"},
+          "城乡居民基本医疗保险的特殊病种包括哪些？",
+          ["rule_d8302ad37c87"],
+          "门特病种清单规则（恶性肿瘤门诊治疗/血友病/肾透析等），唯一对应规则"),
+        C("REAL_MENTE_PAY", "门特费用支付标准", "门特",
+          {**res_op, "med_type": "门诊-一般门特", "psn_type": "城乡居民"},
+          "特殊病种门诊医疗费用按什么标准支付？",
+          ["rule_b1005f370c2d"],
+          "门特费用按住院标准支付，唯一对应规则"),
+        C("REAL_MENTE_SETTLE", "门特结算期规则", "门特",
+          {**res_op, "med_type": "门诊-一般门特", "target_field": "就医流程"},
+          "特殊病种门诊治疗的结算期如何计算？",
+          ["rule_e797192073c0", "rule_fbc97f217d2f"],
+          "当年备案者自备案首次就医至年度截止 + 一般情形按每保险年度一个结算期，两条互补构成完整答案"),
+        # ── 主题 6：个人账户与缴费（doc_1d44e2e1db0c 2001 规定，通用规则）──
+        C("REAL_ACCOUNT_45P", "45周岁以上在职职工个人账户划入比例", "个人账户",
+          {**emp_op, "med_type": "", "psn_type": "在职职工", "target_field": "个人账户"},
+          "45周岁以上的在职职工，个人账户按什么比例划入？",
+          ["rule_aa5635596476", "rule_fc5d869d66d5"],
+          "45+ 按缴费工资基数2%划入；语料存在 source_text 完全相同的重复对，两者均应视为有效答案"
+          "（用于检验召回侧去重/并列行为）"),
+        C("REAL_PREMIUM", "职工基本医疗保险缴费比例", "缴费",
+          {**emp_op, "med_type": "", "psn_type": "在职职工", "target_field": "缴费"},
+          "职工基本医疗保险的缴费比例是多少（个人和单位分别缴多少）？",
+          ["rule_0b5fda014f4f", "rule_e74984933d37"],
+          "个人按上年月平均工资2% + 单位按缴费工资基数之和9%，两条互补构成完整答案"),
+    ]
+
+
 # ── BM25 纯文本召回 ───────────────────────────────────────────────
 
 class _BM25Retriever:
@@ -1389,9 +1741,13 @@ def _fmt_float(v: float) -> str:
     return f"{v*100:.1f}%" if isinstance(v, float) else str(v)
 
 
-def _write_golden_cases(cases: list[GoldenCase]) -> None:
+def _write_golden_cases(
+    cases: list[GoldenCase],
+    filename: str = "2026-09-01-issue25-golden-cases.md",
+    title: str = "# Issue #25 黄金用例集",
+) -> None:
     lines = [
-        "# Issue #25 黄金用例集",
+        title,
         "",
         f"> 生成时间：{datetime.now().isoformat(timespec='seconds')}",
         f"> 用例总数：{len(cases)} 条",
@@ -1405,6 +1761,9 @@ def _write_golden_cases(cases: list[GoldenCase]) -> None:
         "4. **默认地区**：当 `region` 为空时，系统默认使用北京。",
         "5. **默认时间**：当 `settlement_date` 为空时，不过滤有效期。",
         "6. **宽泛问题**：无结算上下文，仅依赖自然语言问题；用于测试文本召回+适用性字段精排。",
+        "7. **跳过**（仅真实语料模式）：`skip=True` 表示该用例考查的机制在真实语料中不存在，不计入指标。",
+        "8. **真实正向用例**（仅真实语料模式）：`REAL_*` 前缀用例为基于真实规则全文通读标注的正向用例，"
+        "notes 含标注依据（重复对/碎片/冲突规则的计入与排除理由），标注不依据检索结果反推。",
         "",
         "## 用例列表",
         "",
@@ -1415,9 +1774,10 @@ def _write_golden_cases(cases: list[GoldenCase]) -> None:
         dims = ",".join(c.dimensions)
         region = c.settlement_context.get("region", "")
         date = c.settlement_context.get("settlement_date", "")
+        flag = "跳过" if c.skip else ("是" if c.is_negative else "否")
         lines.append(
             f"| {c.case_id} | {c.scenario} | {dims} | {region} | {date} | "
-            f"{len(c.expected_rule_ids)} | {'是' if c.is_negative else '否'} | {c.notes} |"
+            f"{len(c.expected_rule_ids)} | {flag} | {c.notes} |"
         )
     lines.append("")
     lines.append("## 用例原始数据")
@@ -1433,13 +1793,14 @@ def _write_golden_cases(cases: list[GoldenCase]) -> None:
             "question": c.question,
             "expected_rule_ids": c.expected_rule_ids,
             "is_negative": c.is_negative,
+            "skip": c.skip,
             "notes": c.notes,
         })
     lines.append(json.dumps(serializable, ensure_ascii=False, indent=2))
     lines.append("```")
     lines.append("")
 
-    path = REVIEW_DIR / "2026-09-01-issue25-golden-cases.md"
+    path = REVIEW_DIR / filename
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"[eval] wrote {path}")
 
@@ -1614,8 +1975,17 @@ def _write_assessment_report(
 def run_issue25_evaluation(
     embedding_kind: str = "sentence_transformer",
     broad_only: bool = False,
+    corpus_kind: str = "synthetic",
+    milvus_host: str = "127.0.0.1",
+    milvus_port: str = "19530",
 ) -> dict[str, Any]:
-    """运行 Issue #25 评估，返回结构化指标（不写 markdown 报告）。"""
+    """运行 Issue #25 评估，返回结构化指标（不写 markdown 报告）。
+
+    corpus_kind="real"（Issue #33 P0-4）：从 Milvus active release 只读加载
+    真实门诊+通用规则（含库内向量），灌入 _FakeMilvusClient 后走同一评估流程；
+    describe_collection 按真实固定 schema 字段返回并开启 dynamic field，
+    适用性过滤行为与生产一致（Issue #33 修复后动态键可过滤）。
+    """
     if embedding_kind == "sentence_transformer":
         embedding_provider = get_embedding_provider("sentence_transformer")
     elif embedding_kind == "hash":
@@ -1623,22 +1993,52 @@ def run_issue25_evaluation(
     else:
         raise ValueError(f"unsupported embedding_kind: {embedding_kind}")
 
-    corpus = _build_corpus(embedding_provider)
-
-    # 注册 fake Milvus 集合：full 含所有新字段；old 缺少新字段，用于 current_hybrid 基线
-    all_fields = set(corpus[0].keys())
-    old_fields = all_fields - {
-        "region", "effective_date", "expiry_date", "publish_status",
-        "policy_version", "is_remote",
-    }
+    real_collection_name = ""
+    if corpus_kind == "real":
+        corpus, real_collection_name = _load_real_corpus(milvus_host, milvus_port)
+        # 真实 collection 固定 schema 无 Issue #25 适用性字段（以 dynamic key 存储），
+        # full/old 两个逻辑集合字段集一致，current_hybrid 与 enhanced_hybrid
+        # 退化为同一行为（忠实复现生产）
+        all_fields = set(_REAL_FIXED_FIELDS)
+        old_fields = set(_REAL_FIXED_FIELDS)
+        # 真实 release collection 开启 dynamic field（Issue #33 修复依赖）
+        real_dynamic = True
+    else:
+        corpus = _build_corpus(embedding_provider)
+        # 注册 fake Milvus 集合：full 含所有新字段；old 缺少新字段，用于 current_hybrid 基线
+        all_fields = set(corpus[0].keys())
+        old_fields = all_fields - {
+            "region", "effective_date", "expiry_date", "publish_status",
+            "policy_version", "is_remote",
+        }
+        # 合成语料固定 schema 已含适用性字段，无需 dynamic field
+        real_dynamic = False
 
     fake = _FakeMilvusClient()
-    fake.register_collection(COLLECTION_FULL, corpus, all_fields)
-    fake.register_collection(COLLECTION_OLD, corpus, old_fields)
+    fake.register_collection(
+        COLLECTION_FULL, corpus, all_fields, enable_dynamic_field=real_dynamic
+    )
+    fake.register_collection(
+        COLLECTION_OLD, corpus, old_fields, enable_dynamic_field=real_dynamic
+    )
     _patch_milvus_client(fake)
     _patch_broad_milvus_client(fake)
 
-    cases = _build_golden_cases()
+    if corpus_kind == "real":
+        all_cases = _build_real_golden_cases()
+        # 标注护栏：期望 rule_id 必须真实存在于语料中，禁止臆造
+        corpus_ids = {str(e.get("rule_id", "")) for e in corpus}
+        unknown = sorted({
+            rid for c in all_cases if not c.skip for rid in c.expected_rule_ids
+        } - corpus_ids)
+        if unknown:
+            raise ValueError(f"真实用例期望了语料中不存在的 rule_id: {unknown}")
+        skipped_cases = [c for c in all_cases if c.skip]
+        cases = [c for c in all_cases if not c.skip]
+    else:
+        all_cases = _build_golden_cases()
+        skipped_cases = []
+        cases = all_cases
     if broad_only:
         cases = [c for c in cases if "宽泛问题" in c.dimensions]
 
@@ -1710,16 +2110,42 @@ def run_issue25_evaluation(
         })
     diff_cases.sort(key=lambda x: abs(x["precision_diff"]) + abs(x["recall_diff"]), reverse=True)
 
+    def _case_dict(c: CaseResult) -> dict[str, Any]:
+        return {
+            "case_id": c.case_id,
+            "retrieved_ids": c.retrieved_ids,
+            "precision_at_k": c.precision_at_k,
+            "recall": c.recall,
+            "far": c.far,
+            "complete": c.complete,
+            "honest_refusal": c.honest_refusal,
+            "false_ids": c.false_ids,
+        }
+
     return {
         "embedding_kind": embedding_kind,
+        "corpus_kind": corpus_kind,
+        "real_collection_name": real_collection_name,
         "corpus_size": len(corpus),
         "case_count": len(cases),
+        "case_disposition": {
+            "mapped": sum(1 for c in all_cases if c.expected_rule_ids and not c.skip),
+            "negative": sum(1 for c in all_cases if c.is_negative and not c.skip),
+            "skipped": len(skipped_cases),
+            "skipped_ids": [c.case_id for c in skipped_cases],
+        },
         "text_only": _metrics_dict(text_metrics),
         "current_hybrid": _metrics_dict(current_metrics),
         "enhanced_hybrid": _metrics_dict(enhanced_metrics),
         "broad_hybrid": _metrics_dict(broad_metrics),
         "field_quality_score": enhanced_metrics.field_quality_score,
         "top_diff_cases": diff_cases[:5],
+        "per_case": {
+            "text_only": [_case_dict(c) for c in text_metrics.cases],
+            "current_hybrid": [_case_dict(c) for c in current_metrics.cases],
+            "enhanced_hybrid": [_case_dict(c) for c in enhanced_metrics.cases],
+            "broad_hybrid": [_case_dict(c) for c in broad_metrics.cases],
+        },
     }
 
 
@@ -1740,13 +2166,51 @@ def main() -> None:
         action="store_true",
         help="仅运行宽泛问题子集与 broad_hybrid 基线",
     )
+    parser.add_argument(
+        "--corpus",
+        choices=["synthetic", "real"],
+        default="synthetic",
+        help="语料来源：synthetic 为合成语料（行为与 Issue #25 一致）；"
+             "real 从 Milvus active release 只读加载真实门诊+通用规则（Issue #33 P0-4）",
+    )
+    parser.add_argument("--milvus-host", default="127.0.0.1", help="真实语料模式的 Milvus 主机")
+    parser.add_argument("--milvus-port", default="19530", help="真实语料模式的 Milvus 端口")
     args = parser.parse_args()
 
-    print(f"[eval] embedding_kind={args.embedding_kind}")
+    print(f"[eval] embedding_kind={args.embedding_kind} corpus={args.corpus}")
     result = run_issue25_evaluation(
         embedding_kind=args.embedding_kind,
         broad_only=args.broad_only,
+        corpus_kind=args.corpus,
+        milvus_host=args.milvus_host,
+        milvus_port=args.milvus_port,
     )
+
+    if args.corpus == "real":
+        # 真实语料模式：写真实黄金用例文档 + 逐案 JSON 结果（供基线报告引用），
+        # 不写 Issue #25 合成评估报告
+        _write_golden_cases(
+            _build_real_golden_cases(),
+            filename="2026-09-02-issue33-real-golden-cases.md",
+            title="# Issue #33 真实语料黄金用例集（门诊+通用规则）",
+        )
+        result_path = Path(__file__).resolve().parent / "issue33_real_baseline_result.json"
+        result_path.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"[eval] wrote {result_path}")
+        print(f"[eval] done (corpus=real, collection={result['real_collection_name']}, "
+              f"corpus_size={result['corpus_size']})")
+        for name in ("text_only", "current_hybrid", "enhanced_hybrid", "broad_hybrid"):
+            m = result[name]
+            print(
+                f"  {name:16s} P@K={m['precision_at_k']:.3f} Recall={m['recall']:.3f} "
+                f"FAR={m['far']:.3f} Complete={m['complete_rate']:.3f} "
+                f"Honest={m['honest_refusal_rate']:.3f}"
+            )
+        d = result["case_disposition"]
+        print(f"  cases: mapped={d['mapped']} negative={d['negative']} skipped={d['skipped']}")
+        return
 
     _write_golden_cases(_build_golden_cases())
     # 重新跑一遍以生成报告所需对象；评估较快，可接受

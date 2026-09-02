@@ -1,6 +1,6 @@
 # Issue #25 结构化索引与最小混合检索评估报告
 
-> 生成时间：2026-09-01T16:21:23
+> 生成时间：2026-09-02T19:42:53
 > 数据集：32 条模拟 policy_rules_v2 规则，58 条黄金用例
 > Top-K：3
 > Embedding：真实 bge-base-zh-v1.5（默认）或 hash 向量（--embedding-kind=hash）
@@ -14,12 +14,12 @@
 - **broad_hybrid**：`BroadPolicyRetriever` 向量语义召回 + rank-bm25 + 适用性字段精排，覆盖宽泛问题与结算单场景。
 
 核心结论：
-- 补强适用性字段后，适用规则准确率从 11.5% 提升至 16.7%，
-  证据召回率从 28.2% 提升至 26.4%。
-- 错误适用规则率（FAR）从 79.9% 降至 73.0%。
-- 宽泛问题混合检索（broad_hybrid）适用规则准确率 14.4%，证据召回率 36.2%，FAR 85.6%。
-- 完整回答率：enhanced 13.8% / broad 3.4%；诚实拒答率：enhanced 8.3% / broad 0.0%。
-- P95 时延：text_only 0.44ms / current 1.18ms / enhanced 2.19ms / broad 4.43ms。
+- 补强适用性字段后，适用规则准确率从 12.6% 提升至 14.9%，
+  证据召回率从 29.9% 提升至 33.3%。
+- 错误适用规则率（FAR）从 83.9% 降至 81.6%。
+- 宽泛问题混合检索（broad_hybrid）适用规则准确率 24.7%，证据召回率 61.5%，FAR 66.7%。
+- 完整回答率：enhanced 5.2% / broad 10.3%；诚实拒答率：enhanced 0.0% / broad 16.7%。
+- P95 时延：text_only 0.37ms / current 1.65ms / enhanced 2.62ms / broad 69.17ms。
 
 > ⚠️ 本评估使用合成语料与内存 Milvus，真实生产数据上的绝对数值会有差异；相对差异和字段效用结论可复现。
 
@@ -27,10 +27,10 @@
 
 | 基线 | 适用规则准确率 | 证据召回率 | FAR | 完整回答率 | 诚实拒答率 | 字段质量 | P95 时延(ms) |
 |------|----------------|------------|-----|------------|------------|----------|--------------|
-| text_only | 13.2% | 44.8% | 71.3% | 5.2% | 25.0% | 0.0% | 0.44 |
-| current_hybrid | 11.5% | 28.2% | 79.9% | 5.2% | 8.3% | 0.0% | 1.18 |
-| enhanced_hybrid | 16.7% | 26.4% | 73.0% | 13.8% | 8.3% | 100.0% | 2.19 |
-| broad_hybrid | 14.4% | 36.2% | 85.6% | 3.4% | 0.0% | 0.0% | 4.43 |
+| text_only | 13.2% | 44.8% | 71.3% | 5.2% | 25.0% | 0.0% | 0.37 |
+| current_hybrid | 12.6% | 29.9% | 83.9% | 3.4% | 0.0% | 0.0% | 1.65 |
+| enhanced_hybrid | 14.9% | 33.3% | 81.6% | 5.2% | 0.0% | 100.0% | 2.62 |
+| broad_hybrid | 24.7% | 61.5% | 66.7% | 10.3% | 16.7% | 0.0% | 69.17 |
 
 ## 逐案差异样例
 
@@ -38,16 +38,16 @@
 
 | 用例 | 场景 | text_only | current_hybrid | enhanced_hybrid | broad_hybrid | 说明 |
 |------|------|-----------|----------------|-----------------|--------------|------|
-| BJ_EMP_TERT_IP_BAND_3 | 北京在职职工三级医院住院，超过4万元 | ['BJ_2024_IP_REMOTE_001', 'BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003', 'BJ_2025_IP_TERT_EMP_003', 'SH_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_OP_TERT_EMP_001'] | - |
-| BJ_EMP_TERT_IP_2025 | 2025年北京在职职工三级医院住院 | [] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_001', 'SH_2024_IP_TERT_EMP_001'] | ['BJ_2025_IP_TERT_EMP_001'] | ['BJ_2025_IP_TERT_EMP_002', 'BJ_2025_IP_TERT_EMP_003', 'BJ_2025_IP_TERT_EMP_001'] | - |
-| BJ_EMP_TERT_IP_2025_BAND2 | 2025年北京在职职工三级医院住院，超过3万元至4万元 | ['BJ_2024_IP_RET_TERT_003', 'BJ_2024_IP_RET_TERT_008', 'BJ_2024_IP_TERT_EMP_AM_003'] | ['BJ_2024_IP_TERT_EMP_002', 'BJ_2025_IP_TERT_EMP_002', 'SH_2024_IP_TERT_EMP_002'] | ['BJ_2025_IP_TERT_EMP_002'] | ['BJ_2025_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_003', 'BJ_2025_IP_TERT_EMP_002'] | - |
-| SH_EMP_TERT_IP | 上海在职职工三级医院住院 | ['SH_2024_IP_TERT_EMP_002', 'SH_2024_IP_TERT_EMP_003', 'SH_2024_IP_TERT_EMP_001'] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_001', 'SH_2024_IP_TERT_EMP_001'] | ['SH_2024_IP_TERT_EMP_001'] | ['SH_2024_IP_TERT_EMP_001', 'SH_2024_IP_TERT_EMP_002', 'SH_2024_IP_TERT_EMP_003'] | - |
-| BJ_EMP_TERT_IP_NEW_YEAR | 2025-01-01结算命中2025规则 | [] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_001', 'SH_2024_IP_TERT_EMP_001'] | ['BJ_2025_IP_TERT_EMP_001'] | ['BJ_2025_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_002', 'BJ_2025_IP_TERT_EMP_003'] | - |
-| BJ_EMP_TERT_IP_BAND_1 | 北京在职职工三级医院住院，起付标准至3万元 | ['BJ_2023_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_001'] | ['BJ_2024_IP_TERT_EMP_002', 'BJ_2025_IP_TERT_EMP_002', 'SH_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_TERT_EMP_AM_002', 'BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_AM_001'] | - |
-| BJ_EMP_TERT_IP_BAND_2 | 北京在职职工三级医院住院，超过3万元至4万元 | ['BJ_2024_IP_REMOTE_001', 'BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003', 'BJ_2025_IP_TERT_EMP_003', 'SH_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003', 'BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_AM_003'] | - |
-| BJ_EMP_SEC_IP_BAND_1 | 北京在职职工二级医院住院，起付标准至3万元 | ['BJ_2024_IP_SEC_EMP_001', 'BJ_2023_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_001'] | ['BJ_2024_IP_SEC_EMP_002'] | ['BJ_2024_IP_SEC_EMP_002'] | ['BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_TERT_EMP_AM_001', 'BJ_2024_IP_TERT_EMP_AM_003'] | - |
-| BJ_EMP_SEC_IP_BAND_2 | 北京在职职工二级医院住院，超过3万元至4万元 | ['BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_REMOTE_001'] | ['BJ_2024_IP_SEC_EMP_003'] | ['BJ_2024_IP_SEC_EMP_003'] | ['BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_SEC_EMP_001', 'BJ_2024_IP_TERT_EMP_AM_003'] | - |
-| BJ_EMP_SEC_IP_BAND_3 | 北京在职职工二级医院住院，超过4万元 | ['BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_REMOTE_001'] | ['BJ_2024_IP_SEC_EMP_003'] | ['BJ_2024_IP_SEC_EMP_003'] | ['BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_RET_FORMULA_001'] | - |
+| BJ_EMP_REMOTE | 北京参保人异地三级医院住院 | ['BJ_2024_IP_REMOTE_001', 'BJ_2025_PILOT_IP_TERT_EMP_001', 'BJ_2024_IP_RET_TERT_001'] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_001', 'SH_2024_IP_TERT_EMP_001'] | ['BJ_2024_IP_REMOTE_001'] | ['BJ_2024_IP_REMOTE_001'] | - |
+| BJ_EMP_TERT_IP_BAND_1 | 北京在职职工三级医院住院，起付标准至3万元 | ['BJ_2023_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_001'] | ['BJ_2024_IP_TERT_EMP_002', 'BJ_2025_IP_TERT_EMP_002', 'SH_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_AM_003', 'BJ_2024_IP_TERT_EMP_AM_001'] | - |
+| BJ_EMP_TERT_IP_BAND_2 | 北京在职职工三级医院住院，超过3万元至4万元 | ['BJ_2024_IP_REMOTE_001', 'BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003', 'BJ_2025_IP_TERT_EMP_003', 'SH_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_003', 'BJ_2024_IP_TERT_EMP_001'] | - |
+| BJ_EMP_TERT_IP_BAND_3 | 北京在职职工三级医院住院，超过4万元 | ['BJ_2024_IP_REMOTE_001', 'BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003', 'BJ_2025_IP_TERT_EMP_003', 'SH_2024_IP_TERT_EMP_003'] | ['BJ_2024_IP_TERT_EMP_003', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_TERT_EMP_003', 'BJ_2024_IP_TERT_EMP_002', 'BJ_2024_IP_TERT_EMP_001'] | - |
+| BJ_EMP_SEC_IP_BAND_1 | 北京在职职工二级医院住院，起付标准至3万元 | ['BJ_2024_IP_SEC_EMP_001', 'BJ_2023_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_001'] | ['BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_SEC_EMP_001', 'BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_SEC_EMP_003'] | - |
+| BJ_EMP_SEC_IP_BAND_2 | 北京在职职工二级医院住院，超过3万元至4万元 | ['BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_REMOTE_001'] | ['BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_SEC_EMP_001'] | - |
+| BJ_EMP_SEC_IP_BAND_3 | 北京在职职工二级医院住院，超过4万元 | ['BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_REMOTE_001'] | ['BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_002'] | ['BJ_2024_IP_SEC_EMP_003', 'BJ_2024_IP_SEC_EMP_002', 'BJ_2024_IP_SEC_EMP_001'] | - |
+| BJ_RET_TERT_IP_FORMULA | 北京退休人员三级医院住院，需命中折算公式 | ['BJ_2024_IP_REMOTE_001', 'BJ_2024_IP_RET_TERT_001', 'BJ_2024_IP_RET_TERT_002'] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_001', 'SH_2024_IP_TERT_EMP_001'] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_AM_001', 'BJ_2024_IP_TERT_EMP_AM_002'] | ['BJ_2024_IP_RET_TERT_003', 'BJ_2024_IP_RET_TERT_001', 'BJ_2024_IP_RET_TERT_005'] | 应同时命中公式与物化规则，但期望至少命中公式 |
+| BJ_RET_TERT_IP_BAND_1 | 北京退休人员三级医院住院第1档 | ['BJ_2024_IP_REMOTE_001', 'BJ_2024_IP_RET_TERT_001', 'BJ_2024_IP_RET_TERT_002'] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_001', 'SH_2024_IP_TERT_EMP_001'] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_AM_001', 'BJ_2024_IP_TERT_EMP_AM_002'] | ['BJ_2024_IP_RET_TERT_001', 'BJ_2024_IP_RET_TERT_003', 'BJ_2024_IP_RET_TERT_002'] | - |
+| BJ_RET_TERT_IP_BAND_2 | 北京退休人员三级医院住院第2档 | ['BJ_2024_IP_REMOTE_001', 'BJ_2024_IP_RET_TERT_001', 'BJ_2024_IP_RET_TERT_002'] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2025_IP_TERT_EMP_001', 'SH_2024_IP_TERT_EMP_001'] | ['BJ_2024_IP_TERT_EMP_001', 'BJ_2024_IP_TERT_EMP_AM_001', 'BJ_2024_IP_TERT_EMP_AM_002'] | ['BJ_2024_IP_RET_TERT_002', 'BJ_2024_IP_RET_TERT_003', 'BJ_2024_IP_RET_TERT_005'] | - |
 
 ## 字段分类清单
 

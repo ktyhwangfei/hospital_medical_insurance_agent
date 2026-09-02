@@ -1,6 +1,6 @@
 # Issue #25 黄金用例集
 
-> 生成时间：2026-09-01T16:21:22
+> 生成时间：2026-09-02T19:42:50
 > 用例总数：58 条
 > 覆盖维度：地区、政策时间、人群、医疗类别、医院等级、异地/转诊、金额分段、政策替代、宽泛问题
 
@@ -12,6 +12,8 @@
 4. **默认地区**：当 `region` 为空时，系统默认使用北京。
 5. **默认时间**：当 `settlement_date` 为空时，不过滤有效期。
 6. **宽泛问题**：无结算上下文，仅依赖自然语言问题；用于测试文本召回+适用性字段精排。
+7. **跳过**（仅真实语料模式）：`skip=True` 表示该用例考查的机制在真实语料中不存在，不计入指标。
+8. **真实正向用例**（仅真实语料模式）：`REAL_*` 前缀用例为基于真实规则全文通读标注的正向用例，notes 含标注依据（重复对/碎片/冲突规则的计入与排除理由），标注不依据检索结果反推。
 
 ## 用例列表
 
@@ -106,6 +108,7 @@
       "BJ_2024_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -134,6 +137,7 @@
       "BJ_2024_IP_TERT_EMP_002"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -162,6 +166,7 @@
       "BJ_2024_IP_TERT_EMP_003"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -186,6 +191,7 @@
       "BJ_2024_IP_SEC_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -210,6 +216,7 @@
       "BJ_2024_IP_SEC_EMP_002"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -234,6 +241,7 @@
       "BJ_2024_IP_SEC_EMP_003"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -259,6 +267,7 @@
       "BJ_2024_IP_RET_FORMULA_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": "应同时命中公式与物化规则，但期望至少命中公式"
   },
   {
@@ -285,6 +294,7 @@
       "BJ_2024_IP_RET_TERT_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -311,6 +321,7 @@
       "BJ_2024_IP_RET_TERT_002"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -337,6 +348,7 @@
       "BJ_2024_IP_RET_TERT_003"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -361,6 +373,7 @@
       "BJ_2024_OP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -385,6 +398,7 @@
       "BJ_2024_IP_REMOTE_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -410,6 +424,7 @@
       "BJ_2025_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -436,6 +451,7 @@
       "BJ_2025_IP_TERT_EMP_002"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -461,6 +477,7 @@
       "SH_2024_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -486,6 +503,7 @@
       "BJ_2024_IP_TERT_RESIDENT_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -511,6 +529,7 @@
       "BJ_2024_DEDUCT_TERT_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -535,6 +554,7 @@
       "BJ_2024_CAP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -559,6 +579,7 @@
     "question": "2024年结算是否适用2023年已废止规则？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": "2023规则 expiry_date=2023-12-31，不应命中"
   },
   {
@@ -582,6 +603,7 @@
     "question": "2024年结算是否适用2025年规则？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": "2025规则 effective_date=2025-01-01，不应命中"
   },
   {
@@ -605,6 +627,7 @@
     "question": "北京参保人在上海规则里报销？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": ""
   },
   {
@@ -628,6 +651,7 @@
     "question": "非试点地区是否适用试点报销比例？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": "pilot 规则 publish_status=pilot，非默认 published"
   },
   {
@@ -651,6 +675,7 @@
     "question": "本地住院是否适用异地报销规则？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": ""
   },
   {
@@ -674,6 +699,7 @@
     "question": "学生儿童住院是否按在职职工比例报销？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": ""
   },
   {
@@ -697,6 +723,7 @@
     "question": "一级医院住院是否按三级医院比例？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": ""
   },
   {
@@ -720,6 +747,7 @@
     "question": "住院统筹自付是否适用门诊比例？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": ""
   },
   {
@@ -743,6 +771,7 @@
     "question": "城镇职工是否适用城乡居民规则？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": ""
   },
   {
@@ -766,6 +795,7 @@
     "question": "已撤销规则是否仍适用？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": "BJ_2023_IP_TERT_EMP_001 publish_status=revoked"
   },
   {
@@ -791,6 +821,7 @@
       "BJ_2024_IP_RET_TERT_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": "语料未覆盖二级退休，测试诚实拒答或近似召回"
   },
   {
@@ -818,6 +849,7 @@
       "BJ_2024_IP_TERT_EMP_003"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -843,6 +875,7 @@
       "BJ_2024_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -868,6 +901,7 @@
       "BJ_2024_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -894,6 +928,7 @@
       "BJ_2025_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -919,6 +954,7 @@
       "BJ_2024_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": "region 空 → 默认北京"
   },
   {
@@ -944,6 +980,7 @@
       "BJ_2024_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": "无日期不过期过滤，可能多召回，正例只要包含2024即可"
   },
   {
@@ -967,6 +1004,7 @@
     "question": "未提供地区时是否会召回上海规则？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": "region 默认北京，上海规则不应命中"
   },
   {
@@ -990,6 +1028,7 @@
     "question": "草稿规则是否会被召回？",
     "expected_rule_ids": [],
     "is_negative": true,
+    "skip": false,
     "notes": "语料无 draft 规则，此用例验证过滤逻辑存在性"
   },
   {
@@ -1016,6 +1055,7 @@
       "BJ_2024_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": "当前 retrieve 未消费 policy_version 过滤，此用例记录待增强点"
   },
   {
@@ -1043,6 +1083,7 @@
       "BJ_2024_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1067,6 +1108,7 @@
       "BJ_2024_IP_TERT_EMP_002"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1091,6 +1133,7 @@
       "BJ_2024_IP_TERT_EMP_003"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1116,6 +1159,7 @@
       "BJ_2024_IP_SEC_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1141,6 +1185,7 @@
       "BJ_2024_IP_SEC_EMP_002"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1166,6 +1211,7 @@
       "BJ_2024_IP_SEC_EMP_003"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1191,6 +1237,7 @@
       "BJ_2024_IP_RET_TERT_004"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1216,6 +1263,7 @@
       "BJ_2024_IP_RET_TERT_005"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1241,6 +1289,7 @@
       "BJ_2024_IP_RET_TERT_006"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1266,6 +1315,7 @@
       "BJ_2024_IP_RET_TERT_007"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1291,6 +1341,7 @@
       "BJ_2024_IP_RET_TERT_008"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1316,6 +1367,7 @@
       "BJ_2024_IP_RET_TERT_009"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1330,6 +1382,7 @@
       "BJ_2024_DEDUCT_TERT_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": "无结算上下文，依赖文本召回+适用性字段精排"
   },
   {
@@ -1344,6 +1397,7 @@
       "BJ_2024_CAP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1359,6 +1413,7 @@
       "BJ_2024_IP_RET_FORMULA_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1374,6 +1429,7 @@
       "BJ_2024_IP_REMOTE_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1389,6 +1445,7 @@
       "BJ_2024_OP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1404,6 +1461,7 @@
       "SH_2024_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1419,6 +1477,7 @@
       "BJ_2024_IP_TERT_EMP_002"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": ""
   },
   {
@@ -1434,6 +1493,7 @@
       "BJ_2025_IP_TERT_EMP_001"
     ],
     "is_negative": false,
+    "skip": false,
     "notes": "无结算日期，无法做时间过滤，可能多版本召回"
   }
 ]
