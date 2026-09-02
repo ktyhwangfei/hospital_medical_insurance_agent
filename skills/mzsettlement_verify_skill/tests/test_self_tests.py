@@ -21,15 +21,15 @@ def test_fixed_cases_cover_every_person_type_and_keep_target_settlement_value():
 def test_every_enabled_fixed_case_preserves_reported_self_pay_one():
     result = run_self_tests()
 
-    assert result.total == 28
+    assert result.total == 31
     assert result.failed == 0
-    assert result.passed == 28
+    assert result.passed == 31
 
 
 def test_fixed_cases_convert_to_generic_eval_tasks():
     tasks = build_eval_tasks("EVS_mz", created_by="quality-user")
 
-    assert len(tasks) == 28
+    assert len(tasks) == 31
     target = next(
         task
         for task in tasks

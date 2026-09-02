@@ -1252,6 +1252,7 @@ async def _policy_qa_stream(
                         settlement_context,
                         policy_evidence=policy_evidence,
                         profile_id=profile_id,
+                        question=routing_question,
                     ),
                 )
                 _outpatient_result = _single_skill_result.model_dump(mode="json")

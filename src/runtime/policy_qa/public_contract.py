@@ -88,6 +88,8 @@ class OutpatientAmountCheck(BaseModel):
 
     name: str
     equation: str
+    # 数值算式（带单位的操作数展示），与 Skill 内部 AmountCheck.detail 对齐
+    detail: str | None = None
     actual: float | None = None
     expected: float | None = None
     difference: float | None = None

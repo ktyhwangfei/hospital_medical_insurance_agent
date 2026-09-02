@@ -70,6 +70,8 @@ class PolicyEvidence(BaseModel):
 class AmountCheck(BaseModel):
     name: str
     equation: str
+    # 数值算式（如 "90.00 元 = 75.60 元 + 14.40 元"），缺失时渲染层回退到实际/应得
+    detail: str | None = None
     actual: Decimal | None
     expected: Decimal | None
     difference: Decimal | None

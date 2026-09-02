@@ -1,6 +1,6 @@
 skill_id: mzsettlement_verify_skill
 skill_name: 门诊结算结果核验
-version: "1.0.4"
+version: "1.0.18"
 business_action: verify
 business_object: settlement
 description: >-
@@ -184,9 +184,10 @@ execution_contract:
     - profile_id: personal-liability-explanation
       name: 个人负担解释
       purpose: 解释自付一、自付二、大额自付、起付与个人支付渠道
-      routing_hints: [个人付, 个人承担, 统筹自付, 自付一, 自付二]
+      routing_hints: [个人付, 个人承担, 个人负担, 个人支付, 统筹自付, 自付一, 自付二, 大额自付]
       required_metrics: [T_SelfPayAll]
       metric_inputs:
+        - {metric_code: mzjyxx.T_FeeAll}
         - {metric_code: mzjyxx.T_FeeIn}
         - {metric_code: mzjyxx.T_FeeOut}
         - {metric_code: mzjyxx.T_SelfPayAll}
@@ -195,7 +196,13 @@ execution_contract:
         - {metric_code: mzjyxx.T_BigSelfPay}
         - {metric_code: mzjyxx.T_FirstPay}
         - {metric_code: mzjyxx.T_FundPay}
+        - {metric_code: mzjyxx.T_BigPay}
+        - {metric_code: mzjyxx.T_BCPay}
+        - {metric_code: mzjyxx.T_BigillPay}
+        - {metric_code: mzjyxx.T_JCPay}
+        - {metric_code: mzjyxx.NT_CivilPay}
         - {metric_code: mzjyxx.T_OfficalPay}
+        - {metric_code: mzjyxx.RETIRE_OFFICER_PAY}
         - {metric_code: mzjyxx.T_PersonCountPay}
         - {metric_code: mzjyxx.T_CashPay}
     - profile_id: payment-channel-verification
@@ -220,9 +227,10 @@ execution_contract:
     - profile_id: deductible-and-annual-progress
       name: 起付线与年度累计
       purpose: 解释本次起付金额、年度次数和分层累计
-      routing_hints: [起付线, 门槛费, 今年累计, 年度累计]
+      routing_hints: [起付, 门槛费, 今年累计, 年度累计]
       required_metrics: [T_FirstPay]
       metric_inputs:
+        - {metric_code: mzjyxx.T_BigPay}
         - {metric_code: mzjyxx.T_FirstPay}
         - {metric_code: mzjyxx.TB_FeeIn}
         - {metric_code: mzjyxx.TA_FeeIn}
@@ -247,6 +255,8 @@ execution_contract:
         - {metric_code: mzjyxx.T_FeeIn}
         - {metric_code: mzjyxx.T_FirstPay}
         - {metric_code: mzjyxx.T_BigPay}
+        - {metric_code: mzjyxx.TB_BigPay}
+        - {metric_code: mzjyxx.TA_BigPay}
         - {metric_code: mzjyxx.T_BigSelfPay}
         - {metric_code: mzjyxx.T_BeyondBig}
         - {metric_code: mzjyxx.NT_OUT2_SCALE}

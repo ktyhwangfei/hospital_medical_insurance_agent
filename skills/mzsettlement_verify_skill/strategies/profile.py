@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
@@ -10,7 +11,14 @@ from src.semantic_layer.query_planner import QueryAnchor, QueryScope, SemanticQu
 
 from ..models import ContextCheck, OutpatientSettlementContext, OutpatientVerificationResult
 from ..scripts.render_answer import render_answer
-from ..verifier import verify_settlement
+from ..verifier import (
+    _yuan,
+    decompose_personal_payment,
+    explain_cap_progress,
+    explain_deductible_progress,
+    money,
+    verify_settlement,
+)
 
 
 ROOT = Path(__file__).parents[1]
@@ -233,6 +241,7 @@ class ProfileStrategy:
         *,
         profile_id: str = "overall-settlement-verification",
         policy_evidence: list[dict] | None = None,
+        question: str | None = None,
     ) -> OutpatientVerificationResult:
         evidence = [
             {
@@ -287,13 +296,33 @@ class ProfileStrategy:
                 value=None if value is None else str(value),
                 status="missing" if value is None else "present",
             ))
-        for index, item in enumerate(context.fee_items, start=1):
+        # 问题相关性精简：个人负担场景只列先自付相关明细，且只保留关键字段；
+        # 其余场景（如费用明细医保范围解释）保留全量字段。
+        liability_focus = profile_id == "personal-liability-explanation"
+        liability_labels = {
+            "ItemName": "项目", "Fee": "金额",
+            "FeeOut": "医保外", "FeeItem_SelfPay2": "先自付",
+        }
+        fee_item_index = 0
+        for item in context.fee_items:
+            if liability_focus and money(item.get("FeeItem_SelfPay2")) in (
+                None, Decimal("0.00")
+            ):
+                continue
+            fee_item_index += 1
+            labels = (
+                liability_labels if liability_focus else self.config["fee_item_labels"]
+            )
             value = "；".join(
                 f"{label}={item.get(code, '')}"
-                for code, label in self.config["fee_item_labels"].items()
+                for code, label in labels.items()
             )
             fact_checks.append(ContextCheck(
-                name=f"费用明细 {index}", value=value, status="present"
+                name=(
+                    "费用明细（先自付相关）" if liability_focus
+                    else f"费用明细 {fee_item_index}"
+                ),
+                value=value, status="present"
             ))
         uncertainties = list(result.uncertainties)
         if missing_profile_facts:
@@ -307,11 +336,84 @@ class ProfileStrategy:
             or bool(missing_required_metrics)
             or bool(missing_required_collections)
         )
+        decomposition: list[str] = []
+        decomposition_title = "费用分解（逐层勾稽，取结算单原始字段）："
+        if profile_id == "personal-liability-explanation" and not unavailable:
+            decomposition, decomposition_uncertainties = decompose_personal_payment(context)
+            uncertainties.extend(decomposition_uncertainties)
+        elif profile_id == "deductible-and-annual-progress" and not unavailable:
+            decomposition, decomposition_uncertainties = explain_deductible_progress(
+                context, evidence
+            )
+            uncertainties.extend(decomposition_uncertainties)
+            decomposition_title = "起付线解读（取结算单原始字段与年度累计）："
+        elif profile_id == "reimbursement-and-cap-verification" and not unavailable:
+            decomposition, decomposition_uncertainties = explain_cap_progress(
+                context, evidence
+            )
+            uncertainties.extend(decomposition_uncertainties)
+            decomposition_title = "封顶与大额段解读（取结算单原始字段与年度累计）："
+        elif profile_id == "overall-settlement-verification" and not unavailable:
+            # 总体核验也讲费用构成故事：支付方恒等式置首（保证费用组成三要素
+            # 在精简文本中完整），后接逐层分解，阶段型单据（如年度首笔大额起付）
+            # 的成因不再被字段罗列淹没。
+            decomposition, decomposition_uncertainties = decompose_personal_payment(
+                context
+            )
+            uncertainties.extend(decomposition_uncertainties)
+            if (
+                context.total_amount is not None
+                and context.fund_total_amount is not None
+                and context.personal_total_amount is not None
+            ):
+                decomposition.insert(
+                    0,
+                    f"费用总金额 {_yuan(context.total_amount)} = "
+                    f"基金支付总金额 {_yuan(context.fund_total_amount)}"
+                    f" + 个人支付总金额 {_yuan(context.personal_total_amount)}",
+                )
         headline = (
             "结算记录或场景核心数据不可用。" if unavailable
             else result.summary if result.anomalies
             else self.config["profile_summaries"][profile_id]
         )
+        # 个人负担场景：勾稽全通过且三个金额齐备时，首行直接给出核心分解算式；
+        # 若用户问的是具体字段（自付一/自付二），首行跟随所问字段，避免答非所问。
+        if (
+            profile_id == "personal-liability-explanation"
+            and not unavailable
+            and not result.anomalies
+        ):
+            focus_keyword = None
+            if question:
+                if "自付一" in question:
+                    focus_keyword = "个人自付一"
+                elif "自付二" in question:
+                    focus_keyword = "个人自付二"
+                elif "大额自付" in question:
+                    focus_keyword = "大额自付"
+            focus_line = next(
+                (
+                    item
+                    for item in decomposition
+                    if focus_keyword and focus_keyword in item
+                ),
+                None,
+            )
+            if focus_line is not None:
+                headline = focus_line
+                decomposition = [item for item in decomposition if item != focus_line]
+            elif (
+                context.total_amount is not None
+                and context.fund_total_amount is not None
+                and context.personal_total_amount is not None
+            ):
+                headline = (
+                    f"个人支付总金额 {_yuan(context.personal_total_amount)} = "
+                    f"费用总金额 {_yuan(context.total_amount)} - "
+                    f"基金支付总金额 {_yuan(context.fund_total_amount)}，"
+                    "即费用总额中基金支付后由个人承担的部分。"
+                )
         return result.model_copy(update={
             "status": (
                 "unavailable" if unavailable
@@ -319,7 +421,9 @@ class ProfileStrategy:
                 if result.status == "complete" and missing_profile_facts
                 else result.status
             ),
-            "summary": render_answer(headline, result, fact_checks),
+            "summary": render_answer(
+                headline, result, fact_checks, decomposition, decomposition_title
+            ),
             "context_checks": fact_checks,
             "uncertainties": uncertainties,
         })

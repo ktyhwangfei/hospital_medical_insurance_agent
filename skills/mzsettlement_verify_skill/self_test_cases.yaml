@@ -111,3 +111,18 @@
   settlement_id: 011100030X260416006969
   expected_self_pay_one: '1538.60'
   context: {insurance_type: 城镇居民基本医疗保险_无业, person_type: 城镇无业居民, service_type: 普通急诊, in_scope_amount: '3133.51', fund_total_amount: '1598.36', self_pay_one: '1538.60', large_fund_payment: '0.00', assistance_payment: '1598.36'}
+- case_id: person-11-cross-1
+  settlement_id: 011100030X241120000001
+  expected_self_pay_one: '1980.00'
+  note: 年度首笔跨起付线：起付线 1800 元全额自付，超线 600 元按 70/30 分担（大额基金 420、个人 180）。
+  context: {insurance_type: 城镇职工, person_type: 在职, service_type: 普通门诊, in_scope_amount: '2400.00', out_of_scope_amount: '600.00', fund_total_amount: '420.00', self_pay_one: '1980.00', self_pay_two: '600.00', personal_total_amount: '2580.00', deductible_amount: '1800.00', large_self_pay: '180.00', large_fund_payment: '420.00', account_payment: '260.80', cash_payment: '2319.20'}
+- case_id: person-11-cross-2
+  settlement_id: 011100030X241126000017
+  expected_self_pay_one: '1734.49'
+  note: 分笔积累跨起付线：年度累计 93.59→1893.59，本笔医保内 1800 中 1706.41 计入起付、93.59 进入统筹按 70/30 分担。
+  context: {insurance_type: 城镇职工, person_type: 在职, service_type: 普通门诊, in_scope_amount: '1800.00', out_of_scope_amount: '200.00', fund_total_amount: '65.51', self_pay_one: '1734.49', self_pay_two: '200.00', personal_total_amount: '1934.49', deductible_amount: '1706.41', large_self_pay: '28.08', large_fund_payment: '65.51', account_payment: '400.00', cash_payment: '1534.49'}
+- case_id: person-11-nearcap-1
+  settlement_id: 011100030X240913000174
+  expected_self_pay_one: '66.45'
+  note: 大额段进行中：年度大额支付累计 12158.69→12313.74；与 person-11 为同一患者连续结算（累计链 18864→19475）。
+  context: {insurance_type: 城镇职工, person_type: 在职, service_type: 普通门诊, in_scope_amount: '221.50', out_of_scope_amount: '28.50', fund_total_amount: '199.35', self_pay_one: '66.45', self_pay_two: '8.50', personal_total_amount: '50.65', deductible_amount: '0.00', large_self_pay: '66.45', large_fund_payment: '155.05', cash_payment: '50.65', retired_medical_payment: '44.30'}

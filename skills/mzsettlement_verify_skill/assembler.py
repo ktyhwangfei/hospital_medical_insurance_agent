@@ -44,11 +44,13 @@ class OutpatientSettlementVerifierAssembler:
         *,
         profile_id: str = "overall-settlement-verification",
         policy_evidence: list[dict] | None = None,
+        question: str | None = None,
     ) -> OutpatientVerificationResult:
         return self.strategy.execute(
             context,
             profile_id=profile_id,
             policy_evidence=policy_evidence,
+            question=question,
         )
 
 

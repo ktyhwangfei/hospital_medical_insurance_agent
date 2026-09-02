@@ -32,6 +32,34 @@ def test_image_golden_case_checks_every_displayed_amount():
     assert any("单位补充医疗" in item for item in result.uncertainties)
 
 
+def test_decompose_personal_payment_solves_channels_and_handles_zeros():
+    """多渠道抵扣用连减号呈现；零值自付二不报「无法拆解」噪音。"""
+    from skills.mzsettlement_verify_skill.verifier import decompose_personal_payment
+
+    multi_channel = OutpatientSettlementContext(
+        total_amount="2554.76", in_scope_amount="2554.76", out_of_scope_amount="0.00",
+        self_pay_one="510.96", self_pay_two="0.00",
+        personal_total_amount="510.96",
+        large_fund_payment="1788.33", unit_supplement_payment="255.47",
+    )
+    lines, uncertainties = decompose_personal_payment(multi_channel)
+    assert any(
+        "个人自付一 510.96 元 = 医保范围内金额 2554.76 元"
+        " - 门诊大额基金支付 1788.33 元 - 单位补充医疗支付 255.47 元" in line
+        for line in lines
+    ), lines
+    assert any("个人自付二 0.00 元" in line for line in lines)
+    assert not any("无法拆解" in line for line in lines)
+
+    retired = OutpatientSettlementContext(
+        total_amount="100.00", in_scope_amount="100.00", out_of_scope_amount="0.00",
+        self_pay_one="0.00", self_pay_two="0.00",
+        personal_total_amount="0.00", large_fund_payment="100.00",
+    )
+    lines, uncertainties = decompose_personal_payment(retired)
+    assert not any("无法拆解" in line for line in lines), lines
+
+
 def test_money_state_keeps_zero_missing_and_not_applicable_distinct():
     assert state_of("1.00") == "non_zero"
     assert state_of(0) == "reported_zero"
