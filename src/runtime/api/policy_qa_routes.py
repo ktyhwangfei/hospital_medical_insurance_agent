@@ -880,6 +880,10 @@ async def _policy_qa_stream(
             yield _sse_event("step", _sanitize(step_evt))
             await asyncio.sleep(0)
 
+        # ── Skill 驱动：结算数据 provider（真实 SQL）+ 模型网关（来源标注）──
+        # 旧编排器（PolicyQAOrchestrator）已退役：政策检索/计算/回答统一走 skill 策略引擎。
+        provider = create_settlement_data_provider()
+
         # 长 T_TradeNo 先查询门诊主记录，再用医疗类别、险种和人员类别做最终意图路由。
         routing_question = request.question
         skill_id: str | None = None
