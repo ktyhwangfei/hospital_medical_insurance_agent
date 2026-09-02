@@ -90,10 +90,10 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
       indexed: metric.indexed,
       value_domain: metric.value_domain || '', importance: metric.importance || 'optional',
       required: metric.required,
-      fact_field_code: metric.fact_field_code || '', aggregation: metric.aggregation || 'sum',
-      expression: metric.expression || '', dependencies: metric.dependencies.join(', '),
-      non_additive_dimensions: metric.non_additive_dimensions.join(', '),
-      synonyms: metric.synonyms.join(', '), compatible_dimensions: metric.compatible_dimensions.join(', '),
+      fact_field_code: metric.fact_field_code || '', aggregation: metric.aggregation || '',
+      expression: metric.expression || '', dependencies: (metric.dependencies ?? []).join(', '),
+      non_additive_dimensions: (metric.non_additive_dimensions ?? []).join(', '),
+      synonyms: (metric.synonyms ?? []).join(', '), compatible_dimensions: (metric.compatible_dimensions ?? []).join(', '),
       default_time_role: metric.default_time_role || '', refresh_frequency: metric.refresh_frequency || '',
       permission_level: metric.permission_level || '', owner: metric.owner || '', reviewer: metric.reviewer || '',
       precision: metric.precision ?? '',
@@ -120,12 +120,12 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
     if (editDraft.expression !== (metric.expression || '')) body.expression = editDraft.expression || null
     const dependencies = editDraft.dependencies.split(',').map((item: string) => item.trim()).filter(Boolean)
     const nonAdditive = editDraft.non_additive_dimensions.split(',').map((item: string) => item.trim()).filter(Boolean)
-    if (dependencies.join(',') !== metric.dependencies.join(',')) body.dependencies = dependencies
-    if (nonAdditive.join(',') !== metric.non_additive_dimensions.join(',')) body.non_additive_dimensions = nonAdditive
+    if (dependencies.join(',') !== (metric.dependencies ?? []).join(',')) body.dependencies = dependencies
+    if (nonAdditive.join(',') !== (metric.non_additive_dimensions ?? []).join(',')) body.non_additive_dimensions = nonAdditive
     const synonyms = editDraft.synonyms.split(',').map((item: string) => item.trim()).filter(Boolean)
     const dimensions = editDraft.compatible_dimensions.split(',').map((item: string) => item.trim()).filter(Boolean)
-    if (synonyms.join(',') !== metric.synonyms.join(',')) body.synonyms = synonyms
-    if (dimensions.join(',') !== metric.compatible_dimensions.join(',')) body.compatible_dimensions = dimensions
+    if (synonyms.join(',') !== (metric.synonyms ?? []).join(',')) body.synonyms = synonyms
+    if (dimensions.join(',') !== (metric.compatible_dimensions ?? []).join(',')) body.compatible_dimensions = dimensions
     for (const key of ['default_time_role', 'refresh_frequency', 'permission_level', 'owner', 'reviewer'] as const) {
       if (editDraft[key] !== (metric[key] || '')) body[key] = editDraft[key] || null
     }

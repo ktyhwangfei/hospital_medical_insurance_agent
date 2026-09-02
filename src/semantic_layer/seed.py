@@ -803,14 +803,12 @@ def _seed_outpatient_query_model(store: RegistryStore) -> None:
         }))
     store.save_metric(Metric(
         metric_code=f"{object_code}.average_fee", object_code=object_code,
-        name="门诊次均费用", definition="门诊总费用除以有效结算笔数",
-        metric_type="aggregate", semantic_type="Amount", unit="元", precision=2,
-        fact_field_code="mz_trade.T_FeeAll", aggregation="avg",
-        dependencies=[f"{object_code}.T_FeeAll", f"{object_code}.T_State"],
-        synonyms=["门诊平均费用", "次均费用"],
-        compatible_dimensions=["time", "organization.department", "insurance_type", "settlement_status"],
-        default_time_role="settlement_time", refresh_frequency="5m", permission_level="summary",
-        owner="医保数据组", reviewer="医保业务组", source_object="mz_trade", status="published",
+        name="门诊次均费用", definition="门诊总费用除以医保门诊就诊人次（就诊人次口径待定）",
+        metric_type="aggregate", semantic_type="Amount", unit="元", precision=None,
+        fact_field_code=None, aggregation=None,
+        dependencies=[f"{object_code}.T_FeeAll", f"{object_code}.insured_encounter_count"],
+        synonyms=[], compatible_dimensions=[], default_time_role=None, refresh_frequency=None, permission_level=None,
+        owner=None, reviewer=None, source_object="mz_trade", status="draft",
     ))
     store.save_metric(Metric(
         metric_code=f"{object_code}.insured_encounter_count", object_code=object_code,
