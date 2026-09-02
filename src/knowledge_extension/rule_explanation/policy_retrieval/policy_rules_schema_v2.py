@@ -222,6 +222,9 @@ def _normalize_date(value: Any) -> str:
     text = str(value).strip()
     if not text:
         return ""
+    # 截取 datetime 带时间部分（如 '2005-06-06 00:00:00'）的日期前缀，
+    # 文档元数据 publish_date 等列从 PostgreSQL 读出即为该形态
+    text = text.replace("T", " ").split(" ")[0]
     # 已经是标准格式
     if len(text) == 10 and text[4] == "-" and text[7] == "-":
         return text

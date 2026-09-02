@@ -160,16 +160,19 @@ class MilvusRuleStore:
         self.collection_name = collection_name
 
     def list_rules(self, limit: int = 10000) -> list[dict[str, Any]]:
-        from src.runtime.policy_qa.policy_rules_search import OUTPUT_FIELDS, unpack_detail
+        from src.runtime.policy_qa.policy_rules_search import OUTPUT_FIELDS
 
+        # update_rules 是 delete+insert，这里必须取回完整行（含 vector 等固定列），
+        # 否则写回会丢失向量导致检索不可用；detail 字段保留 FieldTrace 原样回写，溯源不丢。
+        output_fields = OUTPUT_FIELDS + [
+            "vector", "schema_version", "amount_band_min", "amount_band_max",
+        ]
         rows = self.client.query(
             collection_name=self.collection_name,
             filter='rule_id != ""',
-            output_fields=OUTPUT_FIELDS,
+            output_fields=output_fields,
             limit=limit,
         )
-        for r in rows:
-            unpack_detail(r)
         return rows
 
     def update_rules(self, entities: list[dict[str, Any]]) -> int:
