@@ -141,6 +141,15 @@ def test_governance_is_applied_on_already_seeded_registry():
         m = store.get_metric(code)
         assert m.unit == unit and m.precision == precision
         assert m.owner == "医保数据组" and m.permission_level == "summary"
+    # ①②口径（知识顾清对接）：T_State 定义须带“结算成功/医保实际受理、非挂号/流水”正向句；
+    #  金额三指标定义须含勾稽关系（总费用=统筹支付+个人支付），防各自为政。
+    state_def = store.get_metric("mzjyxx.T_State").definition
+    assert "医保实际受理" in state_def and "非挂号" in state_def
+    for code in ("mzjyxx.T_FeeAll", "mzjyxx.T_FundPay", "mzjyxx.T_SelfPayAll"):
+        assert "勾稽" in store.get_metric(code).definition
+    # ②暂缓：依赖就诊人次口径的派生指标保持 draft，不被本 ensure 放行发布
+    assert store.get_metric("mzjyxx.average_fee").status == "draft"
+    assert store.get_metric("mzjyxx.insured_encounter_count").status == "draft"
     # 幂等：再跑一次不报错、不改名
     ensure_outpatient_metric_governance(store)
     assert store.get_metric("mzjyxx.T_State").name == "门诊有效结算笔数"

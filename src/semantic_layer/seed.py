@@ -358,17 +358,22 @@ def ensure_outpatient_metric_governance(store: RegistryStore) -> None:
     """
     object_code = "mzjyxx"
     governed = {
-        "T_State": ("门诊有效结算笔数", "count", "笔", 0),
-        "T_FeeAll": ("门诊总费用", "sum", "元", 2),
-        "T_FundPay": ("门诊统筹基金支付金额", "sum", "元", 2),
-        "T_SelfPayAll": ("门诊个人支付金额", "sum", "元", 2),
+        # 中文名口径已与知识（顾清）核对；T_State 非挂号/建档/流水条数，是结算成功且医保实际受理的有效笔数。
+        "T_State": ("门诊有效结算笔数", "count", "笔", 0,
+                    "结算成功且医保实际受理的有效门诊结算笔数（非挂号/建档笔数，非交易流水条数）"),
+        "T_FeeAll": ("门诊总费用", "sum", "元", 2,
+                     "门诊结算费用总计；不加其他支付段时与统筹基金支付+个人支付满足勾稽关系"),
+        "T_FundPay": ("门诊统筹基金支付金额", "sum", "元", 2,
+                      "统筹基金支付部分；与门诊个人支付金额之和应勾稽门诊总费用"),
+        "T_SelfPayAll": ("门诊个人支付金额", "sum", "元", 2,
+                         "个人支付部分；与门诊统筹基金支付金额之和应勾稽门诊总费用"),
     }
-    for column, (name, aggregation, unit, precision) in governed.items():
+    for column, (name, aggregation, unit, precision, definition) in governed.items():
         metric = store.get_metric(f"{object_code}.{column}")
         if metric is None:
             continue
         store.save_metric(metric.model_copy(update={
-            "name": name, "definition": f"按门诊交易统计{name}",
+            "name": name, "definition": definition,
             "synonyms": [name], "compatible_dimensions": ["time", "organization.department", "insurance_type", "settlement_status"],
             "default_time_role": "settlement_time", "refresh_frequency": "5m",
             "permission_level": "summary", "owner": "医保数据组", "reviewer": "医保业务组",
