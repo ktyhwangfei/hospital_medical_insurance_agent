@@ -23,7 +23,7 @@
     "far": 0.8289473684210527,
     "complete_rate": 0.06578947368421052,
     "honest_refusal_rate": 0.08333333333333333,
-    "p95_latency_ms": 7.176724966848269
+    "p95_latency_ms": 6.236589967738837
   },
   "current_hybrid": {
     "precision_at_k": 0.02631578947368421,
@@ -31,7 +31,7 @@
     "far": 0.13157894736842105,
     "complete_rate": 0.631578947368421,
     "honest_refusal_rate": 1.0,
-    "p95_latency_ms": 21.025765023659915
+    "p95_latency_ms": 21.54036501306109
   },
   "enhanced_hybrid": {
     "precision_at_k": 0.03070175438596491,
@@ -39,7 +39,7 @@
     "far": 0.12719298245614036,
     "complete_rate": 0.631578947368421,
     "honest_refusal_rate": 1.0,
-    "p95_latency_ms": 34.45473000174388
+    "p95_latency_ms": 37.63459005858749
   },
   "broad_hybrid": {
     "precision_at_k": 0.08771929824561403,
@@ -47,7 +47,7 @@
     "far": 0.49122807017543857,
     "complete_rate": 0.3815789473684211,
     "honest_refusal_rate": 0.6041666666666666,
-    "p95_latency_ms": 91.11638001631945
+    "p95_latency_ms": 89.2143750039395
   },
   "field_quality_score": 1.0,
   "top_diff_cases": [

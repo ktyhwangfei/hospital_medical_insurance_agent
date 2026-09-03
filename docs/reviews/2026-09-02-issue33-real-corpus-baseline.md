@@ -247,3 +247,38 @@ text_only 对照逐位一致（0.132/0.448/0.713）；structured 两组 FAR 下�
 structured 三项已过两项；**门禁整体保持关闭**——broad 路径 FAR/诚实拒答与双路径 P@3 未变。剩余工作即 §8.6 的 ③（plan_queries 射程泛化或 eval 按生产路由分流）与 ④（doc_7173172eb649 冲突比例规则数据治理），以及 broad 有效期硬过滤（原 §8.6 ①）。
 
 [来源：scripts/eval/issue33_real_baseline_result.json 加固后逐案实测；合成模式 stdout]
+
+
+---
+
+## 10. 加固②落地：broad 有效期 / publish_status 硬过滤（2026-09-02）
+
+### 10.1 实现
+
+- 新增共享 helper `src/runtime/policy_qa/policy_validity.py`：`build_publish_status_expr`（publish_status 必须为 published）+ `build_validity_date_expr`（effective_date <= 参考日期 且 expiry_date >= 参考日期或为 9999-12-31 哨兵；**精确当天视为有效**，前一天/后一天即排除）。
+- structured `execute_query` 原内联日期 expr 改调同一 helper（输出逐字不变，零行为变化）；broad `_build_applicability_expr` 改由 helper 拼装——两读路径版本/有效期语义统一到单一实现。
+- broad 新增 `_get_collection_fields()`（describe 固定字段 + `enable_dynamic_field` 时并入已知动态键，与 structured 同一语义）：**collection 缺有效期/发布状态字段时跳过对应过滤片段**，修复旧 schema 集合上 broad 硬编码 publish_status 过滤导致全空召回的隐患（§4 发现 1 的反向形态），满足"只排明确失效，不排字段缺省"。探测失败返回 None（未知 → 不跳过，保持既有严格度）。
+
+### 10.2 验证
+
+- 先红后绿：新增 8 个测试用例（有效期边界：expiry 精确当天/eff 精确当天/前后一年锚定；status 边界：published 必需/缺字段跳过；expr 拼装：缺字段不误杀/字段齐全照常；行为级：过期+草案记录命中即丢弃、现行保留；structured 等价：expr 逐字一致）。单元 819→**827 passed**，API 105 passed。
+
+### 10.3 关键实测结论：本语料 broad FAR 不会因本加固移动（前提修正）
+
+动手前对 19 条 broad 负例误召规则做了 Milvus 只读探针（31 条 rule_id 全覆盖）：**全部 published、expiry 均为 9999-12-31**——本语料不存在任何过期/未发布/未来生效规则。因此：
+
+- 加固后真实语料 eval（82 条，干净复跑）四基线数字与加固前**逐位一致**（broad 0.088/0.555/0.491/60.4%，structured 1.000 拒答不回退）。这不是加固失效，而是语料中没有任何可被本机制拦截的规则。
+- 派工卡"根因：broad 把已失效或无版本约束的政策语料当成可答"的表述**与本语料实测不符**：5 条版本类负例（NEG_EXPIRED_2023 / NEG_FUTURE_2025 / NEG_REVOKED / BJ_EMP_TERT_IP_DRAFT / BROAD_VERSION）的问法是"2023 年已废止规则/草案/未来版本是否适用"，语料中**不存在**这些版本状态，正确行为是拒答——这是问题语义与语料覆盖面的 gap，任何字段级过滤都无法解决（现行规则按字段过滤全部合法命中）。
+- 本加固的价值是**防御性 + 一致性**：未来语料出现过期/未发布段时 broad 出口具备硬排除能力，且两读路径共用同一判定实现；broad FAR 要实质下降，杠杆仍在加固③（住院通用规则空值保留组 6 条）与问题语义拒答（版本类 5 条）。
+
+### 10.4 门禁状态（加固②后，无变化）
+
+| 门禁 | 目标 | structured | broad | 判定 |
+|------|------|-----------|-------|------|
+| FAR（负例子集） | < 8% | 0% ✓ | 39.6% ✗（不变） | 未达 |
+| 诚实拒答率 | > 80% | 100% ✓ | 60.4% ✗（不变） | 未达 |
+| P@3 | > 90% | 8.3% ✗ | 23.8% ✗ | 未达 |
+
+**门禁整体保持关闭。** broad FAR 距离 <8% 仍然遥远，原因已从"缺有效期过滤"修正为：住院空值保留 6 条 + 版本语义 5 条 + 词面重叠/推断歧义 8 条；下次复测前需先做加固③（住院组）并评估版本语义拒答机制的设计边界。
+
+[来源：Milvus query 只读探针（19 条误召 rule_id 全覆盖）；scripts/eval/issue33_real_baseline_result.json 加固前后两次干净复跑]
