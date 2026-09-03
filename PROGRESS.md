@@ -107,7 +107,9 @@
 
 6.7 验证证据（2026-09-02，Issue #33 收尾）：统一 resolver `release_resolver.py` 接入五条读路径 + 回填 API 改 active 感知写入；金额段 27 条数值化与门诊+通用 351 条 ×6 适用性字段已 --apply 到 active release 集合 `policy_rules_REL_20260827_MZ8_V3`（住院 67 条全部未回填）；dynamic field 修复使适用性/金额段过滤在生产真实生效（此前 describe 看不到动态键被静默跳过）。单元 814 passed / 1 skipped，API 105 passed。真实语料门禁终态复测（82 条用例，`docs/reviews/2026-09-02-issue33-real-corpus-baseline.md` §8）：structured 诚实拒答 87.5% **达标**；FAR structured 12.5% / broad 39.6%（目标 <8%）与 P@3 structured 8.3% / broad 23.8%（目标 >90%）**未达**，剩余失败逐案归因与后续候选见报告 §8.4/§8.6，门禁不放行（需求方 2026-09-02 决定）。
 
-6.7 加固①补充证据（2026-09-02）：structured 空上下文必须拒答落地（`plan_queries` 返回空 + `retrieve` 短路 `refusal_reason="empty_context"`，显式 custom_queries 不受限），先红后绿 4 例，单元 818 / API 105 passed。真实语料复测（报告 §9）：structured 负例误答 6/48→0/48，负例 FAR 0%、诚实拒答 100%，正向不受影响；合成 text_only 对照不变、structured FAR 下降（§9.4 新基线）。门禁整体仍关闭，剩余 §8.6 ③④与 broad 有效期硬过滤。
+6.7 加固①补充证据（2026-09-02）：structured 空上下文必须拒答落地（`plan_queries` 返回空 + `retrieve` 短路 `refusal_reason/refusal_message`，显式 custom_queries 不受限），先红后绿 5 例，单元 819 / API 105 passed。真实语料复测（报告 §9）：structured 负例误答 6/48→0/48，负例 FAR 0%、诚实拒答 100%，正向不受影响；合成 text_only 对照不变、structured FAR 下降（§9.4 新基线）。门禁整体仍关闭。
+
+6.7 加固②补充证据（2026-09-02）：broad 有效期/publish_status 硬过滤落地，与 structured 共用 `policy_validity` helper（publish_status=published + effective<=ref + expiry>=ref/9999 哨兵，精确当天有效），broad 补 `_get_collection_fields` 字段存在性判定（缺字段跳过不误杀）。先红后绿 8 例，单元 827 / API 105 passed。**关键实测修正**：19 条 broad 负例误召规则全部 published/expiry=9999，加固后真实语料 eval 四基线逐位一致——broad FAR 39.6% 不因本加固移动（语料无过期/未发布规则），版本类 5 条负例属问题语义 gap；报告 §10 落档。门禁整体仍关闭。
 
 #### 技能管理（Skill）
 | # | 单元 | 后端 | 状态 |
