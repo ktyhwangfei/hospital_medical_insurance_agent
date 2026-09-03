@@ -43,10 +43,15 @@ from src.knowledge_extension.rule_explanation.release_resolver import (
     resolve_rules_collection,
 )
 from src.runtime.policy_qa.policy_rules_search import OUTPUT_FIELDS, unpack_detail
+from src.runtime.policy_qa.policy_validity import (
+    build_publish_status_expr,
+    build_validity_date_expr,
+)
 from src.runtime.policy_qa.structured_policy_retriever import (
     PolicyRetrievalUnavailableError,
     StructuredPolicyEvidence,
     _DEFAULT_REGION,
+    _KNOWN_DYNAMIC_FILTERABLE_FIELDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,7 +71,6 @@ _TRANSIENT_GRPC_CODES = {
     grpc.StatusCode.UNKNOWN,
 }
 
-_DEFAULT_EXPIRY_DATE = "9999-12-31"
 _DEFAULT_REFERENCE_DATE = "2026-01-01"
 _RRF_K = 60
 
@@ -195,7 +199,11 @@ class BroadPolicyRetriever:
         merged = self._merge_context(inferred, question_inferred)
 
         # 2. 构建硬过滤 expr（发布状态 + 地区 + 有效期 + 异地标识）
-        expr = self._build_applicability_expr(merged, reference_date)
+        # Issue #33 加固②：有效期/发布状态与 structured 共用同一 helper；
+        # 字段存在性按 collection 实际 schema 判定（缺字段跳过，不误杀通用规则）
+        expr = self._build_applicability_expr(
+            merged, reference_date, available_fields=self._get_collection_fields()
+        )
 
         # 3. 向量召回
         vector_hits = self._vector_search(question, expr, top_k=top_k * 3)
@@ -332,22 +340,54 @@ class BroadPolicyRetriever:
             hosp_lv=base.hosp_lv or inferred.hosp_lv,
         )
 
+    def _get_collection_fields(self) -> set[str] | None:
+        """获取当前 collection 可过滤字段名集合；探测失败返回 None（未知 → 不跳过过滤）。
+
+        与 structured_policy_retriever._get_collection_fields 同一语义：固定 schema 字段
+        + dynamic field 开启时并入已知动态键（release 集合的适用性字段为 dynamic key）。
+        """
+        cached = getattr(self, "_collection_fields", None)
+        if cached is not None:
+            return cached
+        try:
+            desc = self.client.describe_collection(collection_name=self.collection_name)
+        except Exception as e:
+            logger.warning("[BroadRetrieval] describe_collection failed: %s", e)
+            return None
+        fields = {str(f.get("name", "")) for f in desc.get("fields", [])}
+        if desc.get("enable_dynamic_field"):
+            fields |= _KNOWN_DYNAMIC_FILTERABLE_FIELDS
+        self._collection_fields: set[str] | None = fields
+        return fields
+
     @staticmethod
     def _build_applicability_expr(
-        ctx: InferredQueryContext, reference_date: str
+        ctx: InferredQueryContext,
+        reference_date: str,
+        available_fields: set[str] | None = None,
     ) -> str:
-        """构建适用性硬过滤表达式。"""
-        parts = ['publish_status == "published"']
+        """构建适用性硬过滤表达式。
+
+        Issue #33 加固②：发布状态/有效期片段由 policy_validity 共享 helper 生成，
+        与 structured 同一判定语义；available_fields 给出集合实际字段，
+        缺字段时跳过对应片段（不误杀、不报错）。None 表示字段未知（不过滤）。
+        """
+        parts: list[str] = []
+
+        status_expr = build_publish_status_expr(available_fields)
+        if status_expr:
+            parts.append(status_expr)
 
         if ctx.region:
             parts.append(f'region == "{ctx.region}"')
 
-        if reference_date and reference_date != _DEFAULT_EXPIRY_DATE:
-            parts.append(f'effective_date <= "{reference_date}"')
-            parts.append(f'(expiry_date == "{_DEFAULT_EXPIRY_DATE}" or expiry_date >= "{reference_date}")')
+        parts.extend(build_validity_date_expr(reference_date, available_fields))
 
         if ctx.is_remote is not None:
             parts.append(f'is_remote == {str(ctx.is_remote).lower()}')
+
+        if not parts:
+            parts.append('rule_id != ""')
 
         return " and ".join(parts)
 

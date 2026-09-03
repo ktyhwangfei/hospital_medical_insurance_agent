@@ -44,6 +44,7 @@ from src.runtime.policy_qa.policy_rules_search import (
     OUTPUT_FIELDS,
     unpack_detail,
 )
+from src.runtime.policy_qa.policy_validity import build_validity_date_expr
 
 logger = logging.getLogger(__name__)
 
@@ -478,16 +479,14 @@ class StructuredPolicyRuleRetriever:
                     expr_parts.append(f'(psn_type == "{safe_value}" or psn_type == "")')
 
         # Issue #25：时间范围过滤（ settlement_date 在 [effective_date, expiry_date] 内）
+        # Issue #33 加固②：与 broad 共用 policy_validity helper，两读路径同一有效期语义
         settlement_date = query.settlement_date
         if (
             getattr(self, "_enable_applicability_fields", True)
             and settlement_date
             and settlement_date != _DEFAULT_SETTLEMENT_DATE
         ):
-            if "effective_date" in available_fields:
-                expr_parts.append(f'effective_date <= "{settlement_date}"')
-            if "expiry_date" in available_fields:
-                expr_parts.append(f'(expiry_date == "9999-12-31" or expiry_date >= "{settlement_date}")')
+            expr_parts.extend(build_validity_date_expr(settlement_date, available_fields))
 
         # Issue #25 阶段 2：金额段范围过滤
         # Issue #33：(0,0) 视为"无法解析"，不参与范围过滤、保留召回（不漏规则优先）
