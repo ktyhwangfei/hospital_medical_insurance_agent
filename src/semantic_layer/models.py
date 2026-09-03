@@ -154,6 +154,11 @@ class Metric(BaseModel):
     owner: Optional[str] = Field(None, max_length=128)
     reviewer: Optional[str] = Field(None, max_length=128)
     precision: Optional[int] = Field(None, ge=0, le=12)
+    # ── 政策承载（#60 #35-follow-up）：政策绑定类指标发布须带 文号/地域/生效期 ──
+    subkind: Optional[str] = Field(
+        None, max_length=32, description="A/B 判别位: policy_rate|policy_elig(政策绑定类) 或 None/''（运营事实类 B）")
+    policy_carrier: Optional[dict[str, Any]] = Field(
+        None, description="A 类发布硬卡组: doc_number/region_scope/effective_start[/effective_end]/policy_rule_ref")
 
     def governance_missing_fields(self) -> list[str]:
         required = {
@@ -214,6 +219,8 @@ class ObjectVersionMetric(BaseModel):
     owner: Optional[str] = None
     reviewer: Optional[str] = None
     precision: Optional[int] = None
+    subkind: Optional[str] = None
+    policy_carrier: Optional[dict[str, Any]] = None
 
     @classmethod
     def from_metric(cls, m: "Metric") -> "ObjectVersionMetric":
@@ -232,7 +239,8 @@ class ObjectVersionMetric(BaseModel):
             synonyms=m.synonyms, compatible_dimensions=m.compatible_dimensions,
             default_time_role=m.default_time_role, refresh_frequency=m.refresh_frequency,
             permission_level=m.permission_level, owner=m.owner, reviewer=m.reviewer,
-            precision=m.precision,
+            precision=m.precision, subkind=m.subkind,
+            policy_carrier=({**m.policy_carrier} if m.policy_carrier else None),
         )
 
 
