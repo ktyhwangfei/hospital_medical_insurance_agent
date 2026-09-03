@@ -419,5 +419,6 @@
 - 新增文档：`docs/steering/skill草稿-指标选择与多意图输入契约-设计.md`（草稿第三步改造设计，待评审）。
 
 | 2026-09-02 | Issue #35 语义指标治理字段补齐：`semantic_metrics` 增加 8 个治理字段，Metric/API/Portal 复用现有指标链路；`mzjyxx` 首批只发布 `T_State`、`T_FeeAll`、`T_FundPay`、`T_SelfPayAll` 4 个指标，`average_fee` 与 `insured_encounter_count` 同批暂缓并保持 draft/unavailable，发布拒绝明确提示“就诊人次口径未定”。最终验证：semantic layer Unit 179、相关 API 32、Flow 3 通过；Portal 依赖已安装，`tsc --noEmit` 零错误，Vitest 58 files / 418 tests 通过 | Issue #35 |
+| 2026-09-03 | **Issue #36 query_planner 受控聚合查询引擎最小单元**：PR #57 合入 main，基于已发布指标与语义版本锁定，实现 4 项控制门——draft/就诊人次指标解析阶段拒绝并提示口径未定、`permission_level=summary` 禁明细行输出、compile 出口 SQL 只读白名单、总费用/统筹/个人支付同口径勾稽保护。验证：`test_query_planner` 21 passed、`test_metric_governance` 8 passed、语义 API/Flow 8 passed；main 上手工 `/query/test` 4 指标聚合返回 complete，勾稽 2427.02+186.21=2613.23 成立 | Issue #36 |
 
 > **维护约定**：每次状态变更必须在此记录。§2 与 `docs/steering/政策知识管线开发计划.md` 双向同步。
