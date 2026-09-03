@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
@@ -20,7 +21,11 @@ from src.semantic_layer.models import (
     SemanticDataset,
     SemanticField,
 )
-from src.semantic_layer.registry import SemanticRegistry
+from src.semantic_layer.registry import (
+    SemanticRegistry,
+    _DEFERRED_OUTPATIENT_METRICS,
+    _DEFERRED_OUTPATIENT_REASON,
+)
 
 
 QueryScopeName = Literal["whole_admission", "segment", "whole_settlement", "fee_item"]
@@ -299,6 +304,24 @@ class SemanticQueryPlanner:
         ).hexdigest()[:16]
         return plan
 
+    @classmethod
+    def _assert_read_only_select(cls, sql_text: str) -> None:
+        """#36 缺口3：compile 出口 SQL 白名单终检——只允许只读 SELECT 查询。
+
+        planner 用 SQLAlchemy Core 组装，正常只产生聚合 SELECT；此为 defence-in-depth 出口断言：
+        一旦任何路径把 DML/DDL/注释/分号/临时表等带出编译结果即拦截（仅 SELECT+聚合+WHERE，无副作用语句）。
+        """
+        lower = sql_text.lower()
+        for kw in ("insert", "update", "delete", "drop", "alter", "create",
+                   "truncate", "exec", "execute", "merge", "grant", "revoke",
+                   "shutdown", "bulk"):
+            if re.search(rf"\b{kw}\b", lower):
+                raise SemanticQueryPlanningError(f"SQL 含受限语句关键字 '{kw}'，仅允许只读 SELECT")
+        if any(tok in sql_text for tok in ("/*", "--", ";")):
+            raise SemanticQueryPlanningError("SQL 含注释/多条语句分号，仅允许单条只读 SELECT")
+        if not re.match(r"(?is)^\s*(WITH\b|SELECT\b)", sql_text):
+            raise SemanticQueryPlanningError("SQL 必须以 SELECT(或只读 WITH…SELECT)开头")
+
     def compile(self, query: SemanticQuery) -> CompiledSemanticQuery:
         plan = self.plan(query)
         version = self._published_version(query.object_code)
@@ -311,6 +334,8 @@ class SemanticQueryPlanner:
             dialect=mssql.dialect(paramstyle="qmark"),
             compile_kwargs={"render_postcompile": True},
         )
+        sql_text = str(compiled)
+        self._assert_read_only_select(sql_text)
         params = dict(compiled.params)
         params["anchor_value"] = query.scope.anchor.value
         return CompiledSemanticQuery(
@@ -460,6 +485,14 @@ class SemanticQueryPlanner:
         for metric in [*requested_metrics, *metrics]:
             if metric.non_additive_dimensions and not set(metric.non_additive_dimensions) <= set(query.group_by):
                 raise SemanticQueryPlanningError(f"指标 '{metric.metric_code}' 跨不可加维度聚合")
+        # #36 缺口2：permission_level=summary 的指标禁止明细行输出（须在分组聚合后再返回）
+        if query.scope.query_scope != "whole_settlement" and not query.group_by:
+            for metric in [*requested_metrics, *metrics]:
+                if metric.permission_level == "summary":
+                    raise SemanticQueryPlanningError(
+                        f"指标 '{metric.metric_code}' 仅授权汇总口径，禁止明细行输出（需分组聚合）"
+                    )
+
 
         if query.scope.query_scope == "whole_settlement":
             if metric_datasets != {anchor_dataset.dataset_code}:
@@ -940,6 +973,11 @@ class SemanticQueryPlanner:
         resolved = []
         for code in query.metrics:
             full_code = code if "." in code else f"{query.object_code}.{code}"
+            # 指标级暂缓/草稿门禁：禁止请求口径未定的暂缓/草稿指标（如就医人次/次均费用）
+            if full_code in _DEFERRED_OUTPATIENT_METRICS:
+                raise SemanticQueryPlanningError(
+                    f"指标 '{code}' 不可查询: {_DEFERRED_OUTPATIENT_REASON}"
+                )
             metric = by_code.get(full_code)
             if metric is None or not (metric.fact_field_code or metric.expression):
                 raise SemanticQueryPlanningError(f"指标 '{code}' 未在已发布查询模型中定义")
