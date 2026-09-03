@@ -464,6 +464,14 @@ class SemanticQueryPlanner:
         for metric in [*requested_metrics, *metrics]:
             if metric.non_additive_dimensions and not set(metric.non_additive_dimensions) <= set(query.group_by):
                 raise SemanticQueryPlanningError(f"指标 '{metric.metric_code}' 跨不可加维度聚合")
+        # #36 缺口2：permission_level=summary 的指标禁止明细行输出（须在分组聚合后再返回）
+        if query.scope.query_scope != "whole_settlement" and not query.group_by:
+            for metric in [*requested_metrics, *metrics]:
+                if metric.permission_level == "summary":
+                    raise SemanticQueryPlanningError(
+                        f"指标 '{metric.metric_code}' 仅授权汇总口径，禁止明细行输出（需分组聚合）"
+                    )
+
 
         if query.scope.query_scope == "whole_settlement":
             if metric_datasets != {anchor_dataset.dataset_code}:

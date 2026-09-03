@@ -54,7 +54,8 @@ def _whole_admission_query(**updates):
     return SemanticQuery(**payload)
 
 
-def _outpatient_registry():
+def _outpatient_registry(metric_permission: dict[str, str] | None = None):
+    metric_permission = metric_permission or {}
     store = InMemoryRegistryStore()
     datasets = [
         SemanticDataset(
@@ -134,14 +135,28 @@ def _outpatient_registry():
         cardinality="one_to_many", status="published",
     )
     metrics = [
-        ObjectVersionMetric.from_metric(Metric(
-            metric_code="mzjyxx.total_amount", object_code="mzjyxx", name="费用总金额",
-            fact_field_code="mz_trade.total_amount", aggregation="max", status="published",
-        )),
-        ObjectVersionMetric.from_metric(Metric(
-            metric_code="mzjyxx.item_fee", object_code="mzjyxx", name="项目金额",
-            fact_field_code="mz_fee_item.item_fee", aggregation="sum", status="published",
-        )),
+        ObjectVersionMetric.from_metric(
+            Metric(
+                metric_code="mzjyxx.total_amount", object_code="mzjyxx", name="费用总金额",
+                fact_field_code="mz_trade.total_amount", aggregation="max", status="published",
+            ).model_copy(update={"permission_level": metric_permission.get("total_amount")})
+            if metric_permission.get("total_amount")
+            else Metric(
+                metric_code="mzjyxx.total_amount", object_code="mzjyxx", name="费用总金额",
+                fact_field_code="mz_trade.total_amount", aggregation="max", status="published",
+            ),
+        ),
+        ObjectVersionMetric.from_metric(
+            Metric(
+                metric_code="mzjyxx.item_fee", object_code="mzjyxx", name="项目金额",
+                fact_field_code="mz_fee_item.item_fee", aggregation="sum", status="published",
+            ).model_copy(update={"permission_level": metric_permission.get("item_fee")})
+            if metric_permission.get("item_fee")
+            else Metric(
+                metric_code="mzjyxx.item_fee", object_code="mzjyxx", name="项目金额",
+                fact_field_code="mz_fee_item.item_fee", aggregation="sum", status="published",
+            ),
+        ),
     ]
     rules = [
         DataQualityRule(
@@ -497,3 +512,27 @@ def test_deferred_outpatient_metric_is_rejected_as_unavailable():
     for code in ("average_fee", "mzjyxx.average_fee", "insured_encounter_count"):
         with pytest.raises(SemanticQueryPlanningError, match="就诊人次口径未定"):
             planner.compile(_outpatient_query("whole_settlement", [code]))
+
+
+def test_summary_permission_metric_rejects_ungrouped_detail_rows():
+    """#36 缺口2：permission_level=summary 的指标只在分组聚合后可用，禁止明细行输出。
+
+    item_fee 标 summary → fee_item 明细查询不分组(逐行明细) → 拒绝；带 group_by 聚合 → 放行。
+    """
+    planner = SemanticQueryPlanner(_outpatient_registry(metric_permission={"item_fee": "summary"}))
+
+    # 无 group_by → 明细行 → 拒绝
+    with pytest.raises(SemanticQueryPlanningError, match="仅授权汇总口径"):
+        planner.compile(_outpatient_query("fee_item", ["item_fee"]))
+    # 有 group_by → 分组聚合 → 放行
+    compiled = planner.compile(
+        _outpatient_query("fee_item", ["item_fee"], group_by=["mz_fee_item.item_name"])
+    )
+    assert compiled is not None
+
+
+def test_public_permission_metric_still_allows_detail_rows():
+    """对照：非 summary 的指标明细查询不受限（缺缺2不漏放也勿误杀）。"""
+    planner = SemanticQueryPlanner(_outpatient_registry(metric_permission={"item_fee": "detail"}))
+    compiled = planner.compile(_outpatient_query("fee_item", ["item_fee"]))
+    assert compiled is not None
