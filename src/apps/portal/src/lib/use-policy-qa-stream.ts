@@ -351,7 +351,9 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
     async (question: string, opts?: { settlementId?: string }): Promise<boolean> => {
       const text = question.trim()
       const settlementId = opts?.settlementId ?? anchorRef.current.settlementId
-      if (!text || !settlementId || isStreaming) return false
+      // Issue #33 路由/拒答：无结算单的宽泛问题放行到后端 broad router（结构化引用/确定性拒答），
+      // 前端不得静默吞掉请求；settlement_id 为 null 时后端走 is_broad 分流
+      if (!text || isStreaming) return false
       // 挂起/升级中的会话拒绝新问答（后端同样拦截，双保险）
       if (
         sessionStatus === 'suspended' ||
