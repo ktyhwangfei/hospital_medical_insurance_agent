@@ -104,6 +104,8 @@ CREATE TABLE IF NOT EXISTS semantic_metrics (
     owner VARCHAR(128),
     reviewer VARCHAR(128),
     precision INTEGER,
+    subkind VARCHAR(32),
+    policy_carrier JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -253,6 +255,8 @@ def _row_to_metric(row: dict) -> Metric:
         owner=row.get("owner"),
         reviewer=row.get("reviewer"),
         precision=row.get("precision"),
+        subkind=row.get("subkind"),
+        policy_carrier=(row.get("policy_carrier") or None),
         created_at=row.get("created_at", _now()),
         updated_at=row.get("updated_at", _now()),
     )
@@ -401,6 +405,8 @@ class PostgresRegistryStore:
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS owner VARCHAR(128)",
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS reviewer VARCHAR(128)",
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS precision INTEGER",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS subkind VARCHAR(32)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS policy_carrier JSONB",
                 "ALTER TABLE semantic_object_versions ADD COLUMN IF NOT EXISTS query_model JSONB NOT NULL DEFAULT '{}'::jsonb",
             ]:
                 self._client.execute(statement)
@@ -568,8 +574,8 @@ class PostgresRegistryStore:
                 metric_kind, indexed, extraction_hint, schema_version,
                 fact_field_code, aggregation, expression, dependencies, non_additive_dimensions,
                 synonyms, compatible_dimensions, default_time_role, refresh_frequency,
-                permission_level, owner, reviewer, precision, created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                permission_level, owner, reviewer, precision, subkind, policy_carrier, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (metric_code) DO UPDATE SET
                    object_code = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.object_code ELSE semantic_metrics.object_code END,
                    name = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.name ELSE semantic_metrics.name END,
@@ -605,6 +611,8 @@ class PostgresRegistryStore:
                    owner = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.owner ELSE semantic_metrics.owner END,
                    reviewer = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.reviewer ELSE semantic_metrics.reviewer END,
                    precision = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.precision ELSE semantic_metrics.precision END,
+                   subkind = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.subkind ELSE semantic_metrics.subkind END,
+                   policy_carrier = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.policy_carrier ELSE semantic_metrics.policy_carrier END,
                    schema_version = GREATEST(semantic_metrics.schema_version, EXCLUDED.schema_version),
                    updated_at = EXCLUDED.updated_at""",
             (metric.metric_code, metric.object_code, metric.name, metric.definition,
@@ -618,6 +626,8 @@ class PostgresRegistryStore:
              dependencies_json, non_additive_json, synonyms_json, compatible_dimensions_json,
              metric.default_time_role, metric.refresh_frequency, metric.permission_level,
              metric.owner, metric.reviewer, metric.precision,
+             metric.subkind,
+             json.dumps(metric.policy_carrier, ensure_ascii=False) if metric.policy_carrier else None,
              metric.created_at, metric.updated_at),
         )
 

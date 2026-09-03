@@ -197,3 +197,42 @@ def test_publish_gate_only_requires_tier1_owner_definition():
     # 缺失第1档(owner)的指标是治理不完整的客观判据：发布快照不应持有
     bad = base.model_copy(update={"owner": None})
     assert bad.owner is None and bad.definition          # 需先补齐才允许对外发布
+
+
+def test_policy_carrier_gate_a_two_state_only_requires_for_a_subkind():
+    """#60 门禁 A/B 两态（架构验收#1）：subkind∈{policy_rate}缺 文号/统筹区划/生效起 → 发布拒且指明；
+    B(subkind 空,运营类) 不填 policy_carrier 也能发布。"""
+    from src.semantic_layer.models import BusinessObject
+
+    def _pub(subkind, carrier_keys):
+        store = InMemoryRegistryStore()
+        store.save_object(BusinessObject(object_code="care.TestObj", domain_code="ybzc",
+                                          name="测试对象", status="draft"))
+        kwargs = {"name": "政策额", "status": "published", "subkind": subkind}
+        if carrier_keys is not None:
+            kwargs["policy_carrier"] = {
+                "doc_number": "京医保〔2024〕1号" if "doc_number" in carrier_keys else "",
+                "region_scope": "北京市" if "region_scope" in carrier_keys else "",
+                "effective_start": "2024-01-01" if "effective_start" in carrier_keys else "",
+            }
+        metric = Metric(metric_code="care.TestObj.amt", object_code="care.TestObj",
+                        definition="报销比例按政策口径", **kwargs)
+        store.save_metric(metric)
+        reg = SemanticRegistry(store)
+        return reg, store
+
+    # A 类缺 effective_start → 拒并指明
+    reg, _ = _pub("policy_rate", {"doc_number", "region_scope"})
+    try:
+        reg.publish_object("care.TestObj")
+        raise AssertionError("应拒绝缺生效起的 A 类")
+    except ValueError as e:
+        assert "政策承载不完整" in str(e) and "生效起" in str(e)
+    # A 类齐全 → 发布通过
+    reg, store = _pub("policy_rate", {"doc_number", "region_scope", "effective_start"})
+    ver = reg.publish_object("care.TestObj")
+    vm = next(x for x in ver.metrics if x.metric_code == "care.TestObj.amt")
+    assert vm.subkind == "policy_rate" and vm.policy_carrier["doc_number"]  # 快照 carry (#5)
+    # B 运营(subkind 空) 无 carrier 也发布
+    reg, _ = _pub("", None)
+    reg.publish_object("care.TestObj")

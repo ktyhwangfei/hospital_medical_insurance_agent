@@ -438,6 +438,8 @@ class SemanticRegistry:
             fact_field_code=vm.fact_field_code, aggregation=vm.aggregation,
             expression=vm.expression, dependencies=vm.dependencies,
             non_additive_dimensions=vm.non_additive_dimensions,
+            subkind=vm.subkind,
+            policy_carrier=({**vm.policy_carrier} if vm.policy_carrier else None),
         )
 
     # Value Domain resolution
@@ -490,6 +492,20 @@ class SemanticRegistry:
         tier1_missing = {c: fs for c, fs in tier1_missing.items() if fs}
         if tier1_missing:
             raise ValueError(f"治理字段不完整(第1档必填): {tier1_missing}")
+        # #60 政策承载门禁（架构验收#1 A/B 两态）：subkind 政策绑定类发布须带 文号/统筹区划/生效起
+        #   运营类(B/subkind 空) 不要求 policy_carrier；A 缺任一必拒并指明缺哪项。
+        _POLICY = {"policy_rate", "policy_elig"}
+        _PC = {"doc_number": "政策文号", "region_scope": "统筹区划", "effective_start": "生效起"}
+        policy_bad: dict[str, list[str]] = {}
+        for m in publish_metrics:
+            if (m.subkind or "") not in _POLICY:
+                continue
+            pc = m.policy_carrier or {}
+            miss = [label for key, label in _PC.items() if not (pc.get(key) or "")]
+            if miss:
+                policy_bad[m.metric_code] = miss
+        if policy_bad:
+            raise ValueError(f"政策承载不完整(A政策绑定类必填): {policy_bad}")
         datasets = self._store.list_datasets(object_code)
         keys = self._store.list_dataset_keys(object_code=object_code)
         fields = self._store.list_fields(object_code=object_code)
