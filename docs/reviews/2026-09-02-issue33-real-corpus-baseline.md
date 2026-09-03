@@ -203,3 +203,47 @@ eval 侧对齐：`_FakeMilvusClient.describe_collection` 增加 `enable_dynamic_
 - doc_7173172eb649 提取质量治理（同维度冲突比例规则去重与口径统一）。
 
 [来源：scripts/eval/issue33_real_baseline_result.json 逐案实测（2026-09-02 干净复跑）；Milvus describe_collection/query 只读探针]
+
+
+---
+
+## 9. 加固①落地：structured 空上下文必须拒答（2026-09-02，需求方排入下一轮）
+
+### 9.1 实现
+
+- 新增 `_is_empty_policy_context(ctx)`：险种/医疗类别/人群/医院等级/结算单号**全部为空**即判空上下文（target_amount/region/date 等修饰量不算区分性维度）。
+- `plan_queries` 空上下文直接返回 `[]` 并 warning（纵深防御，独立调用者同样受保护）。
+- `retrieve` 空上下文且未显式传 `custom_queries` 时短路返回空证据，`StructuredRetrievalResult` 新增 `refusal_reason`（`"empty_context"`）与 `refusal_message`（"缺少可依据的政策上下文（无险种/医疗类别/人群/医院等级/结算单号），无法回答该问题。"）字段，**不触碰 Milvus**；显式传 `custom_queries` 的调用方自负规划责任，不受限。下游零证据走既有诚实拒答通道（`answer_status=unavailable`），不得编造兜底答案。
+- 先红后绿：新增 4 例（空 ctx 拒规划 / 部分维度照常规划 / retrieve 拒答且零 Milvus 调用 / custom_queries 放行），随后实现转绿。
+
+### 9.2 验证
+
+- 单元 818 passed / 1 skipped；API 回归 105 passed（`test_policy_qa_routes` + `policy_workbench_api` + `policy_qa_verification_api`）。
+- 生产调用方核对：`policy_qa_routes` 与 `policy_strategy` 均带结算单号或维度进入，不受影响；空 settlement_context 走 Composer 时现在安全地得到空证据而非泛化规则。
+
+### 9.3 真实语料复测（加固后，干净复跑）
+
+| 基线 | P@3 | Recall | FAR | Complete | 诚实拒答 |
+|------|-----|--------|-----|----------|----------|
+| current_hybrid | 0.026 | 0.684 | 0.132 | 0.632 | **1.000** |
+| enhanced_hybrid | 0.031 | 0.697 | 0.127 | 0.632 | **1.000** |
+| broad_hybrid | 0.088 | 0.555 | 0.491 | 0.382 | 0.604 |
+
+- structured 负例误答 **0/48**（此前 6/48，全部是空 ctx BROAD_* 用例召回同 3 条门诊规则）；负例子集 FAR 12.5% → **0%**，诚实拒答 87.5% → **100%**。Recall 0.605→0.684 系 6 条负例从误召转为诚实拒答（空召回的负例 recall 计 1.0），非正例召回提升。
+- 正向 28 条均带非空 ctx，P@3（0.083）、Recall 不受影响；BROAD_CAP / BROAD_OUTPATIENT 两条空 ctx 正向映射用例转为拒答，其基线值本就为 0（未命中期望），无指标损失。
+
+### 9.4 合成模式新基线
+
+text_only 对照逐位一致（0.132/0.448/0.713）；structured 两组 FAR 下降（current 0.839→0.707、enhanced 0.816→0.684，合成 BROAD_* 负例同样被空 ctx 拒答拦截）；broad 不变（0.247/0.615/0.667）。上述为拒答加固后的**新预期基线**，后续 synthetic 回归以本节为准。
+
+### 9.5 门禁进展（加固后）
+
+| 门禁 | 目标 | structured | broad | 判定 |
+|------|------|-----------|-------|------|
+| FAR（负例子集） | < 8% | **0% 达标** | 39.6% | structured 达，broad 未达 |
+| 诚实拒答率 | > 80% | **100% 达标** | 60.4% | structured 达，broad 未达 |
+| P@3 | > 90% | 8.3%（射程内 16.7%） | 23.8% | **均未达** |
+
+structured 三项已过两项；**门禁整体保持关闭**——broad 路径 FAR/诚实拒答与双路径 P@3 未变。剩余工作即 §8.6 的 ③（plan_queries 射程泛化或 eval 按生产路由分流）与 ④（doc_7173172eb649 冲突比例规则数据治理），以及 broad 有效期硬过滤（原 §8.6 ①）。
+
+[来源：scripts/eval/issue33_real_baseline_result.json 加固后逐案实测；合成模式 stdout]

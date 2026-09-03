@@ -23,23 +23,23 @@
     "far": 0.8289473684210527,
     "complete_rate": 0.06578947368421052,
     "honest_refusal_rate": 0.08333333333333333,
-    "p95_latency_ms": 6.762435036944225
+    "p95_latency_ms": 7.176724966848269
   },
   "current_hybrid": {
     "precision_at_k": 0.02631578947368421,
-    "recall": 0.6052631578947368,
-    "far": 0.23684210526315788,
-    "complete_rate": 0.5526315789473685,
-    "honest_refusal_rate": 0.875,
-    "p95_latency_ms": 23.19255507318303
+    "recall": 0.6842105263157895,
+    "far": 0.13157894736842105,
+    "complete_rate": 0.631578947368421,
+    "honest_refusal_rate": 1.0,
+    "p95_latency_ms": 21.025765023659915
   },
   "enhanced_hybrid": {
     "precision_at_k": 0.03070175438596491,
-    "recall": 0.618421052631579,
-    "far": 0.2324561403508772,
-    "complete_rate": 0.5526315789473685,
-    "honest_refusal_rate": 0.875,
-    "p95_latency_ms": 35.37039502407424
+    "recall": 0.6973684210526315,
+    "far": 0.12719298245614036,
+    "complete_rate": 0.631578947368421,
+    "honest_refusal_rate": 1.0,
+    "p95_latency_ms": 34.45473000174388
   },
   "broad_hybrid": {
     "precision_at_k": 0.08771929824561403,
@@ -47,7 +47,7 @@
     "far": 0.49122807017543857,
     "complete_rate": 0.3815789473684211,
     "honest_refusal_rate": 0.6041666666666666,
-    "p95_latency_ms": 97.09384502493776
+    "p95_latency_ms": 91.11638001631945
   },
   "field_quality_score": 1.0,
   "top_diff_cases": [
@@ -1859,147 +1859,83 @@
       },
       {
         "case_id": "BROAD_DEDUCTIBLE",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_CAP",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
         "recall": 0.0,
-        "far": 1.0,
+        "far": 0.0,
         "complete": false,
         "honest_refusal": null,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "false_ids": []
       },
       {
         "case_id": "BROAD_RETIREE_RATIO",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_REMOTE",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_OUTPATIENT",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
         "recall": 0.0,
-        "far": 1.0,
+        "far": 0.0,
         "complete": false,
         "honest_refusal": null,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "false_ids": []
       },
       {
         "case_id": "BROAD_SHANGHAI",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_AMOUNT_BAND",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_VERSION",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "REAL_OP_EMP_DEDUCT",
@@ -2775,147 +2711,83 @@
       },
       {
         "case_id": "BROAD_DEDUCTIBLE",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_CAP",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
         "recall": 0.0,
-        "far": 1.0,
+        "far": 0.0,
         "complete": false,
         "honest_refusal": null,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "false_ids": []
       },
       {
         "case_id": "BROAD_RETIREE_RATIO",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_REMOTE",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_OUTPATIENT",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
         "recall": 0.0,
-        "far": 1.0,
+        "far": 0.0,
         "complete": false,
         "honest_refusal": null,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "false_ids": []
       },
       {
         "case_id": "BROAD_SHANGHAI",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_AMOUNT_BAND",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "BROAD_VERSION",
-        "retrieved_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ],
+        "retrieved_ids": [],
         "precision_at_k": 0.0,
-        "recall": 0.0,
-        "far": 1.0,
-        "complete": false,
-        "honest_refusal": false,
-        "false_ids": [
-          "rule_03131e7a5600f41a",
-          "rule_043714511e59df14",
-          "rule_0c32d785a8011676"
-        ]
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
       },
       {
         "case_id": "REAL_OP_EMP_DEDUCT",
