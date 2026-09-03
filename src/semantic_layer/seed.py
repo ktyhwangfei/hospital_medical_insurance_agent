@@ -345,6 +345,51 @@ def ensure_outpatient_query_model(store: RegistryStore) -> None:
             identifier="settlement_id", version="1.0", status="draft",
         ))
     _seed_outpatient_query_model(store)
+    ensure_outpatient_metric_governance(store)
+
+
+def ensure_outpatient_metric_governance(store: RegistryStore) -> None:
+    """幂等补齐门诊首批 4 指标治理元数据 + 依赖次均/就诊人次（draft）。
+
+    issue-35 的治理口径若不抽离，会被 ``_seed_outpatient_query_model`` 顶部的
+    ``mz_trade`` 数据集存在即 return 一并跳过——既有注册库只会注册为治理前的旧名。
+    本函数每个 PG client 初始化都会运行：仅对已存在的基础指标做治理改名（经
+    save_metric 的 schema_version 守卫，不覆盖更高版本），并补齐 draft 派生指标。
+    """
+    object_code = "mzjyxx"
+    governed = {
+        "T_State": ("门诊有效结算笔数", "count", "笔", 0),
+        "T_FeeAll": ("门诊总费用", "sum", "元", 2),
+        "T_FundPay": ("门诊统筹基金支付金额", "sum", "元", 2),
+        "T_SelfPayAll": ("门诊个人支付金额", "sum", "元", 2),
+    }
+    for column, (name, aggregation, unit, precision) in governed.items():
+        metric = store.get_metric(f"{object_code}.{column}")
+        if metric is None:
+            continue
+        store.save_metric(metric.model_copy(update={
+            "name": name, "definition": f"按门诊交易统计{name}",
+            "synonyms": [name], "compatible_dimensions": ["time", "organization.department", "insurance_type", "settlement_status"],
+            "default_time_role": "settlement_time", "refresh_frequency": "5m",
+            "permission_level": "summary", "owner": "医保数据组", "reviewer": "医保业务组",
+            "precision": precision, "unit": unit, "aggregation": aggregation,
+            "status": "published",
+        }))
+    store.save_metric(Metric(
+        metric_code=f"{object_code}.average_fee", object_code=object_code,
+        name="门诊次均费用", definition="门诊总费用除以医保门诊就诊人次（就诊人次口径待定）",
+        metric_type="aggregate", semantic_type="Amount", unit="元", precision=None,
+        fact_field_code=None, aggregation=None,
+        dependencies=[f"{object_code}.T_FeeAll", f"{object_code}.insured_encounter_count"],
+        synonyms=[], compatible_dimensions=[], default_time_role=None, refresh_frequency=None, permission_level=None,
+        owner=None, reviewer=None, source_object="mz_trade", status="draft",
+    ))
+    store.save_metric(Metric(
+        metric_code=f"{object_code}.insured_encounter_count", object_code=object_code,
+        name="门诊医保就诊人次", definition="按唯一就诊标识统计医保门诊人次",
+        metric_type="Aggregate", semantic_type="Count", unit="人次", aggregation="count_distinct",
+        fact_field_code="mz_trade.T_TradeNo", source_object="mz_trade", status="draft",
+    ))
 
 
 def switch_outpatient_query_model_to_postgres(store: RegistryStore) -> None:
@@ -782,40 +827,6 @@ def _seed_outpatient_query_model(store: RegistryStore) -> None:
                 fact_field_code=f"mz_fee_item.{column}",
                 aggregation="sum" if column in detail_sum else "max",
             ))
-
-    governed = {
-        "T_State": ("门诊有效结算笔数", "count", "笔", 0),
-        "T_FeeAll": ("门诊总费用", "sum", "元", 2),
-        "T_FundPay": ("门诊统筹基金支付金额", "sum", "元", 2),
-        "T_SelfPayAll": ("门诊个人支付金额", "sum", "元", 2),
-    }
-    for column, (name, aggregation, unit, precision) in governed.items():
-        metric = store.get_metric(f"{object_code}.{column}")
-        if metric is None:
-            continue
-        store.save_metric(metric.model_copy(update={
-            "name": name, "definition": f"按门诊交易统计{name}",
-            "synonyms": [name], "compatible_dimensions": ["time", "organization.department", "insurance_type", "settlement_status"],
-            "default_time_role": "settlement_time", "refresh_frequency": "5m",
-            "permission_level": "summary", "owner": "医保数据组", "reviewer": "医保业务组",
-            "precision": precision, "unit": unit, "aggregation": aggregation,
-            "status": "published",
-        }))
-    store.save_metric(Metric(
-        metric_code=f"{object_code}.average_fee", object_code=object_code,
-        name="门诊次均费用", definition="门诊总费用除以医保门诊就诊人次（就诊人次口径待定）",
-        metric_type="aggregate", semantic_type="Amount", unit="元", precision=None,
-        fact_field_code=None, aggregation=None,
-        dependencies=[f"{object_code}.T_FeeAll", f"{object_code}.insured_encounter_count"],
-        synonyms=[], compatible_dimensions=[], default_time_role=None, refresh_frequency=None, permission_level=None,
-        owner=None, reviewer=None, source_object="mz_trade", status="draft",
-    ))
-    store.save_metric(Metric(
-        metric_code=f"{object_code}.insured_encounter_count", object_code=object_code,
-        name="门诊医保就诊人次", definition="按唯一就诊标识统计医保门诊人次",
-        metric_type="Aggregate", semantic_type="Count", unit="人次", aggregation="count_distinct",
-        fact_field_code="mz_trade.T_TradeNo", source_object="mz_trade", status="draft",
-    ))
 
     for rule in [
         DataQualityRule(
