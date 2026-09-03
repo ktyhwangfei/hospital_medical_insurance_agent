@@ -620,37 +620,40 @@ class TestPolicyQAStreamEndpoint:
     def test_stream_endpoint_accepts_broad_question_without_settlement_id(
         self, client, monkeypatch
     ):
-        """宽泛政策问题允许省略 settlement_id，走 BM25+向量宽召回。"""
+        """宽泛政策问题（B 向）允许省略 settlement_id，经路由层走 structured 检索。"""
         from types import SimpleNamespace
 
         from src.runtime.api import policy_qa_routes
 
         fake_evidence = SimpleNamespace(
-            source_text="北京市职工医保住院报销比例为起付线以上按比例分段支付。",
-            applied_reason="宽泛问题向量召回",
+            source_text="本市在职职工门诊统筹支付比例为一级医院90%、二级医院87%、三级医院85%。",
+            applied_reason="宽泛问题路由 structured 命中",
             rule_type="支付比例",
-            score=0.95,
+            score=1.0,
             payment_ratio="",
             amount_band="",
             rule_value="",
         )
 
-        def fake_retrieve_broad(**_kwargs):
+        calls: list[dict] = []
+
+        def fake_retrieve_policy_evidence(**kwargs):
+            calls.append(kwargs)
             return SimpleNamespace(
                 selected_evidence=[fake_evidence],
-                query_trace={"keywords": ["北京", "职工", "住院", "报销"]},
+                missing_required_rules=[],
             )
 
         monkeypatch.setattr(
-            policy_qa_routes, "retrieve_broad_policy_evidence", fake_retrieve_broad
+            policy_qa_routes, "retrieve_policy_evidence", fake_retrieve_policy_evidence
         )
         monkeypatch.setattr(
-            policy_qa_routes, "_generate_broad_answer", lambda _q, _ev: "北京市职工医保住院报销比例..."
+            policy_qa_routes, "_generate_broad_answer", lambda _q, _ev: "本市职工门诊报销比例…"
         )
 
         response = client.post(
             "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
-            json={"question": "北京职工医保住院怎么报销"},
+            json={"question": "北京职工医保门诊报销比例是多少"},
         )
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")
@@ -661,6 +664,151 @@ class TestPolicyQAStreamEndpoint:
         result = next(data["result"] for name, data in events if name == "result")
         assert result["answer_status"] in {"partial", "complete"}
         assert result["uncertainties"]
+        assert result["policy_evidence"]
+        # Issue #33 路由拒答：B 向必须走 structured（custom_queries），不得走 broad 自由检索
+        assert calls, "路由 structured 应触发结构化检索"
+        assert calls[0].get("custom_queries"), "B 向应携带路由查询计划"
+
+
+class TestPolicyQABroadRouterDispatch:
+    """Issue #33 路由/拒答 T2：A/B/C 三向端到端 + broad 兜底默认关闭回归。"""
+
+    def _post_broad(self, client, question: str):
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={"question": question},
+        )
+        assert response.status_code == 200
+        events = _sse_events(response.text)
+        result = next(data["result"] for name, data in events if name == "result")
+        done = next(data for name, data in events if name == "done")
+        return result, done
+
+    def test_direction_a_specific_question_routes_to_structured(
+        self, client, monkeypatch
+    ):
+        """A 向（险种+类别+行为齐备）：直接 structured 精确路径并产出答案。"""
+        from types import SimpleNamespace
+
+        from src.runtime.api import policy_qa_routes
+
+        fake_evidence = SimpleNamespace(
+            source_text="退休人员门诊个人支付比例为职工个人支付比例的60%。",
+            applied_reason="宽泛问题路由 structured 命中",
+            rule_type="支付比例",
+            score=1.1,
+            payment_ratio="",
+            amount_band="",
+            rule_value="",
+        )
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "retrieve_policy_evidence",
+            lambda **_kwargs: SimpleNamespace(
+                selected_evidence=[fake_evidence], missing_required_rules=[]
+            ),
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "_generate_broad_answer", lambda _q, _ev: "退休人员门诊支付比例…"
+        )
+
+        result, done = self._post_broad(client, "在职职工门诊报销比例是多少")
+
+        assert result["answer_status"] in {"partial", "complete"}
+        assert result["policy_evidence"]
+
+    def test_direction_c_time_version_refusal(self, client, monkeypatch):
+        """C 向·时间/版本判据：确定性拒答，文案含'未收录'语义，不触碰检索与模型。"""
+        from src.runtime.api import policy_qa_routes
+
+        def _boom(**_kwargs):
+            raise AssertionError("C 判拒答不得触发结构化检索")
+
+        monkeypatch.setattr(policy_qa_routes, "retrieve_policy_evidence", _boom)
+
+        result, done = self._post_broad(client, "去年的门诊政策还有效吗")
+
+        assert result["answer_status"] == "unavailable"
+        assert "未收录" in result["answer"]
+        assert not result["policy_evidence"]
+
+    def test_direction_c_region_refusal(self, client):
+        """C 向·地域判据：非本统筹区拒答，文案含'不适用'语义。"""
+        result, _ = self._post_broad(client, "上海医保门诊报销比例是多少")
+
+        assert result["answer_status"] == "unavailable"
+        assert "不适用" in result["answer"]
+        assert not result["policy_evidence"]
+
+    def test_direction_c_scope_refusal_inpatient(self, client):
+        """C 向·范围判据：住院问题拒答（不落 broad），文案含'暂未收录'语义。"""
+        result, _ = self._post_broad(client, "北京职工医保住院怎么报销")
+
+        assert result["answer_status"] == "unavailable"
+        assert "暂未收录" in result["answer"]
+        assert not result["policy_evidence"]
+
+    def test_direction_c_remote_process_question_not_refused_by_region(self, client, monkeypatch):
+        """异地'备案流程'类不属地域拒答对象，按 B 向路由 structured。"""
+        from types import SimpleNamespace
+
+        from src.runtime.api import policy_qa_routes
+
+        fake_evidence = SimpleNamespace(
+            source_text="参保人员跨省异地就医前应办理备案手续。",
+            applied_reason="宽泛问题路由 structured 命中",
+            rule_type="适用范围",
+            score=1.0,
+            payment_ratio="",
+            amount_band="",
+            rule_value="",
+        )
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "retrieve_policy_evidence",
+            lambda **_kwargs: SimpleNamespace(
+                selected_evidence=[fake_evidence], missing_required_rules=[]
+            ),
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "_generate_broad_answer", lambda _q, _ev: "异地就医备案流程…"
+        )
+
+        result, _ = self._post_broad(client, "异地就医备案流程是什么")
+
+        assert result["answer_status"] in {"partial", "complete"}
+
+    def test_structured_miss_falls_back_to_honest_refusal(self, client, monkeypatch):
+        """结构化候选为空 → 回落确定性拒答（诚实），绝不回落 broad 自由检索。"""
+        from types import SimpleNamespace
+
+        from src.runtime.api import policy_qa_routes
+
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "retrieve_policy_evidence",
+            lambda **_kwargs: SimpleNamespace(selected_evidence=[], missing_required_rules=["router_outpatient_支付比例"]),
+        )
+
+        result, _ = self._post_broad(client, "门特待遇标准是多少")
+
+        assert result["answer_status"] == "unavailable"
+        assert "未检索到" in result["answer"]
+        assert not result["policy_evidence"]
+
+    def test_broad_fallback_kept_closed_only_audit(self, client, monkeypatch):
+        """条件1：broad 兜底默认关闭——域外问题空证据拒答，不调用 broad 检索。"""
+        from src.runtime.api import policy_qa_routes
+
+        def _boom(**_kwargs):
+            raise AssertionError("broad 兜底默认关闭，不得调用任何检索")
+
+        monkeypatch.setattr(policy_qa_routes, "retrieve_policy_evidence", _boom)
+
+        result, _ = self._post_broad(client, "医保基金是怎么管理的")
+
+        assert result["answer_status"] == "unavailable"
+        assert not result["policy_evidence"]
 
     def test_stream_endpoint_returns_sse(self, client):
         """测试流式端点返回SSE格式"""

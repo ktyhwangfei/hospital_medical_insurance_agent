@@ -52,12 +52,13 @@ from src.runtime.policy_qa.settlement_data_provider import (
 )
 from src.runtime.policy_qa.structured_policy_retriever import (
     PolicyRetrievalUnavailableError,
+    StructuredRetrievalResult,
+    _DEFAULT_REGION,
     retrieve_policy_evidence,
 )
-from src.runtime.policy_qa.broad_policy_retriever import (
-    BroadPolicyRetriever,
-    InferredQueryContext,
-    retrieve_broad_policy_evidence,
+from src.runtime.policy_qa.broad_query_router import (
+    BroadRouteDecision,
+    route_broad_question,
 )
 from src.config.production import MILVUS_HOST, MILVUS_PORT
 from src.skill_infra.skill_router import route_question, get_assembler, get_skill_manifest
@@ -145,6 +146,20 @@ def _is_broad_question(request: PolicyQARequest, context_need: dict[str, Any] | 
     if not request.settlement_id:
         return True
     return False
+
+
+def _router_structured_retrieve(decision: BroadRouteDecision) -> StructuredRetrievalResult:
+    """路由层结构化检索注入点：以路由查询计划走 structured 读路径。
+
+    Issue #33 路由/拒答：A/B 落点只走 structured 精确路径，绝不回落 broad 自由检索。
+    API 测试可 monkeypatch 本模块的 retrieve_policy_evidence 注入假数据源。
+    """
+    return retrieve_policy_evidence(
+        settlement_context={"settlement_id": "", "region": _DEFAULT_REGION},
+        host=MILVUS_HOST,
+        port=str(MILVUS_PORT),
+        custom_queries=decision.structured_queries,
+    )
 
 
 def _generate_broad_answer(question: str, evidence: list[dict[str, Any]]) -> str:
@@ -612,6 +627,7 @@ def _build_public_result(
     is_broad: bool = False,
     outpatient_result: dict | None = None,
     action_status: str | None = None,
+    deterministic_refusal: str = "",
 ) -> PolicyQAPublicResult:
     """用字段白名单把内部执行结果重建为唯一公开回答契约。"""
     safe_context = None
@@ -755,7 +771,12 @@ def _build_public_result(
         bool(outpatient_result) and not safe_amount_checks
     )
     policy_count = len(safe_evidence)
-    if is_overview and has_meaningful_answer and can_answer and has_real_amount:
+    if deterministic_refusal:
+        # Issue #33 路由拒答：三判据/结构化漏空的确定性拒答文案直出（不可用），
+        # 不被宽泛问题零证据的通用文案覆盖
+        answer_status = "unavailable"
+        safe_answer = _sanitize_public_text(deterministic_refusal).text
+    elif is_overview and has_meaningful_answer and can_answer and has_real_amount:
         answer_status = "complete"
     elif is_broad and policy_count == 0:
         # Issue #33 P1-5：宽泛问题零政策证据即诚实拒答，禁止模型低置信作答
@@ -1239,20 +1260,18 @@ async def _policy_qa_stream(
             yield _ev
         policy_evidence: list[dict] = []
         policy_status = "no_policy_matched"
-        _broad_trace: dict[str, Any] = {}
+        # Issue #33 路由/拒答：宽泛问题在入口路由（C 判拦截 / A·B 路由 structured /
+        # broad 兜底默认关闭只落 audit），结构化候选空或低置信回落确定性拒答
+        _router_refusal_message = ""
         # overview 模式是纯数据总览，不依赖单项政策规则；仅 single_item 检索单项政策
         if is_broad:
-            # Issue #25：宽泛问题走 BM25 + 向量宽召回
             while True:
                 try:
-                    _retrieval_result = await _loop.run_in_executor(
+                    _route_decision = await _loop.run_in_executor(
                         None,
-                        lambda: retrieve_broad_policy_evidence(
-                            question=request.question or "",
-                            host=MILVUS_HOST,
-                            port=str(MILVUS_PORT),
-                            top_k=8,
-                            embedding_kind="sentence_transformer",
+                        lambda: route_broad_question(
+                            request.question or "",
+                            structured_retrieve=_router_structured_retrieve,
                         ),
                     )
                     break
@@ -1271,8 +1290,10 @@ async def _policy_qa_stream(
                         "recovery", "done", "政策数据源暂时不可用，正在重试…"
                     ):
                         yield _ev
-            _broad_trace = _retrieval_result.query_trace
-            for _ev in _retrieval_result.selected_evidence:
+            if _route_decision.route != "structured":
+                # 确定性拒答（C 判 / 结构化漏空 / broad 兜底关闭）：空证据 + 拒答文案
+                _router_refusal_message = _route_decision.refusal_message
+            for _ev in _route_decision.evidence:
                 policy_evidence.append({
                     "title": _ev.source_text[:80] + "..." if len(_ev.source_text) > 80 else _ev.source_text,
                     "clause": _ev.source_text,
@@ -1361,7 +1382,7 @@ async def _policy_qa_stream(
         for _evt_type, _evt_payload in runtime_bridge.record_step(
             session_id=session_id,
             step="policy_rule_search",
-            detail={"rules_count": len(policy_evidence), "policy_filters": _broad_trace.get("keywords", [])},
+            detail={"rules_count": len(policy_evidence), "policy_filters": []},
         ):
             if _evt_type == "memory_update":
                 turn_memory_updates.append(dict(_evt_payload))
@@ -1393,11 +1414,15 @@ async def _policy_qa_stream(
         _single_skill_result = None
         _outpatient_result: dict | None = None
         if is_broad:
-            # Issue #25：宽泛问题由模型基于检索证据生成回答
-            result_answer = await _loop.run_in_executor(
-                None,
-                lambda: _generate_broad_answer(request.question or "", policy_evidence),
-            )
+            if _router_refusal_message:
+                # Issue #33 路由拒答：三判据/结构化漏空的确定性拒答文案直出，不调模型
+                result_answer = _router_refusal_message
+            else:
+                # A/B 落点：模型基于 structured 证据生成回答
+                result_answer = await _loop.run_in_executor(
+                    None,
+                    lambda: _generate_broad_answer(request.question or "", policy_evidence),
+                )
         elif _coverage_incomplete:
             result_answer = _incomplete_coverage_payload(
                 settlement_context, request.question
@@ -1522,6 +1547,7 @@ async def _policy_qa_stream(
             is_overview=_is_overview and not is_broad,
             is_broad=is_broad,
             outpatient_result=_outpatient_result,
+            deterministic_refusal=_router_refusal_message,
         )
         _notify_evaluation(
             evaluation_observer,
