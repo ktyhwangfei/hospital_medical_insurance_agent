@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
@@ -303,6 +304,24 @@ class SemanticQueryPlanner:
         ).hexdigest()[:16]
         return plan
 
+    @classmethod
+    def _assert_read_only_select(cls, sql_text: str) -> None:
+        """#36 缺口3：compile 出口 SQL 白名单终检——只允许只读 SELECT 查询。
+
+        planner 用 SQLAlchemy Core 组装，正常只产生聚合 SELECT；此为 defence-in-depth 出口断言：
+        一旦任何路径把 DML/DDL/注释/分号/临时表等带出编译结果即拦截（仅 SELECT+聚合+WHERE，无副作用语句）。
+        """
+        lower = sql_text.lower()
+        for kw in ("insert", "update", "delete", "drop", "alter", "create",
+                   "truncate", "exec", "execute", "merge", "grant", "revoke",
+                   "shutdown", "bulk"):
+            if re.search(rf"\b{kw}\b", lower):
+                raise SemanticQueryPlanningError(f"SQL 含受限语句关键字 '{kw}'，仅允许只读 SELECT")
+        if any(tok in sql_text for tok in ("/*", "--", ";")):
+            raise SemanticQueryPlanningError("SQL 含注释/多条语句分号，仅允许单条只读 SELECT")
+        if not re.match(r"(?is)^\s*(WITH\b|SELECT\b)", sql_text):
+            raise SemanticQueryPlanningError("SQL 必须以 SELECT(或只读 WITH…SELECT)开头")
+
     def compile(self, query: SemanticQuery) -> CompiledSemanticQuery:
         plan = self.plan(query)
         version = self._published_version(query.object_code)
@@ -315,6 +334,8 @@ class SemanticQueryPlanner:
             dialect=mssql.dialect(paramstyle="qmark"),
             compile_kwargs={"render_postcompile": True},
         )
+        sql_text = str(compiled)
+        self._assert_read_only_select(sql_text)
         params = dict(compiled.params)
         params["anchor_value"] = query.scope.anchor.value
         return CompiledSemanticQuery(

@@ -1,4 +1,5 @@
 import pytest
+import re
 
 from src.semantic_layer.models import (
     BusinessObjectVersion,
@@ -536,3 +537,22 @@ def test_public_permission_metric_still_allows_detail_rows():
     planner = SemanticQueryPlanner(_outpatient_registry(metric_permission={"item_fee": "detail"}))
     compiled = planner.compile(_outpatient_query("fee_item", ["item_fee"]))
     assert compiled is not None
+
+
+def test_compile_exit_sql_is_readonly_select_whitelist():
+    """#36 缺口3：compile 出口 SQL 白名单终检——只产出只读 SELECT 聚合(无 DML/注释/分号)。"""
+    planner = SemanticQueryPlanner(_outpatient_registry())
+    compiled = planner.compile(_outpatient_query("whole_settlement", ["total_amount"]))
+    sql = compiled.sql
+    # 允许 WITH…SELECT 的只读 CTE 形态(planner 聚合走 CTE)；仍必须是 SELECT 系只读
+    assert bool(re.match(r"(?is)^\s*(WITH\b|SELECT\b)", sql))
+    low = sql.lower()
+    for kw in ("insert", "update", "delete", "drop", "alter", "drop table", ";", "--", "/*"):
+        assert kw not in sql.lower()
+    # 直接验证 dml 字符串被守卫拦下
+    for bad in ("UPDATE x SET y=1", "DELETE FROM x", "INSERT INTO", "DROP TABLE t", "SELECT 1; DROP", "/* leak */ SELECT 1"):
+        try:
+            planner._assert_read_only_select(bad)
+            raise AssertionError(f"未拦截: {bad!r}")
+        except SemanticQueryPlanningError:
+            pass
