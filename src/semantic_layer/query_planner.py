@@ -20,7 +20,11 @@ from src.semantic_layer.models import (
     SemanticDataset,
     SemanticField,
 )
-from src.semantic_layer.registry import SemanticRegistry
+from src.semantic_layer.registry import (
+    SemanticRegistry,
+    _DEFERRED_OUTPATIENT_METRICS,
+    _DEFERRED_OUTPATIENT_REASON,
+)
 
 
 QueryScopeName = Literal["whole_admission", "segment", "whole_settlement", "fee_item"]
@@ -940,6 +944,11 @@ class SemanticQueryPlanner:
         resolved = []
         for code in query.metrics:
             full_code = code if "." in code else f"{query.object_code}.{code}"
+            # 指标级暂缓/草稿门禁：禁止请求口径未定的暂缓/草稿指标（如就医人次/次均费用）
+            if full_code in _DEFERRED_OUTPATIENT_METRICS:
+                raise SemanticQueryPlanningError(
+                    f"指标 '{code}' 不可查询: {_DEFERRED_OUTPATIENT_REASON}"
+                )
             metric = by_code.get(full_code)
             if metric is None or not (metric.fact_field_code or metric.expression):
                 raise SemanticQueryPlanningError(f"指标 '{code}' 未在已发布查询模型中定义")

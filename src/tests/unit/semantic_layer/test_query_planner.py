@@ -485,3 +485,15 @@ def test_outpatient_missing_fee_items_is_partial():
 
     assert result.quality_status == "partial"
     assert result.rows == []
+
+
+def test_deferred_outpatient_metric_is_rejected_as_unavailable():
+    """#36 缺口1：请求口径未定的暂缓指标(次均费用)在解析阶段即被拒，带回原消息。
+
+    就医人次/次均费用与 insured_encounter_count 口诀暂未落地前绝不可进入任何查询，
+    拒绝原因须可读（含「就诊人次口径未定」），而非落入「未发布于查询模型」的泛化误报。
+    """
+    planner = SemanticQueryPlanner(_outpatient_registry())
+    for code in ("average_fee", "mzjyxx.average_fee", "insured_encounter_count"):
+        with pytest.raises(SemanticQueryPlanningError, match="就诊人次口径未定"):
+            planner.compile(_outpatient_query("whole_settlement", [code]))
