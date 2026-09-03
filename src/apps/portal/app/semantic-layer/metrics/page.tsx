@@ -102,6 +102,10 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
 
   const handleSave = useCallback(async () => {
     if (!editDraft) return
+    if (!editDraft.owner?.trim() || !editDraft.definition?.trim()) {
+      alert('治理门禁：owner（负责人）与 definition（口径定义）为第①档必填，发布/保存前不能为空。')
+      return
+    }
     setSaving(true)
     const body: Record<string, any> = {}
     if (editDraft.metric_code !== metric.metric_code) body.metric_code = editDraft.metric_code
@@ -196,7 +200,7 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
               <div><label className="mb-1 block text-[11px] text-slate-500">英文编码</label><Input value={editDraft.metric_code} onChange={(e) => setEditDraft((p) => p ? { ...p, metric_code: e.target.value } : p)} className="h-8 text-xs font-mono" /></div>
               <div><label className="mb-1 block text-[11px] text-slate-500">所属对象</label><select value={editDraft.object_code} onChange={(e) => setEditDraft((p) => p ? { ...p, object_code: e.target.value } : p)} className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs">{objects.map((o) => <option key={o.object_code} value={o.object_code}>{o.name} ({o.object_code})</option>)}</select></div>
               <div><label className="mb-1 block text-[11px] text-slate-500">中文名称</label><Input value={editDraft.name} onChange={(e) => setEditDraft((p) => p ? { ...p, name: e.target.value } : p)} className="h-8 text-xs" /></div>
-              <div className="col-span-2"><label className="mb-1 block text-[11px] text-slate-500">指标描述</label><Input value={editDraft.definition} onChange={(e) => setEditDraft((p) => p ? { ...p, definition: e.target.value } : p)} placeholder="标准业务定义" className="h-8 text-xs" /></div>
+              <div className="col-span-2"><label className="mb-1 block text-[11px] text-slate-500">指标口径定义（definition）<span className="text-red-500">＊必填</span></label><Input value={editDraft.definition} onChange={(e) => setEditDraft((p) => p ? { ...p, definition: e.target.value } : p)} placeholder="口径是指标存在的理由，发布时必填" className={`h-8 text-xs ${editDraft.definition ? 'border-green-300' : 'border-red-300'}`} /></div>
               <div><label className="mb-1 block text-[11px] text-slate-500">指标类型</label><select value={editDraft.metric_type} onChange={(e) => setEditDraft((p) => p ? { ...p, metric_type: e.target.value } : p)} className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs"><option value="Atomic">Atomic（原子）</option><option value="Derived">Derived（派生）</option></select></div>
               <div><label className="mb-1 block text-[11px] text-slate-500">语义类型</label><select value={editDraft.semantic_type} onChange={(e) => setEditDraft((p) => p ? { ...p, semantic_type: e.target.value } : p)} className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs"><option value="">未设置</option><option value="Amount">Amount（金额）</option><option value="Ratio">Ratio（比率）</option><option value="Enum">Enum（枚举）</option><option value="Date">Date（日期）</option><option value="Count">Count（计数）</option><option value="String">String（字符串）</option></select></div>
               <div><label className="mb-1 block text-[11px] text-slate-500">事实字段</label><Input value={editDraft.fact_field_code} onChange={(e) => setEditDraft((p) => p ? { ...p, fact_field_code: e.target.value } : p)} placeholder="dataset.field" className="h-8 font-mono text-xs" /></div>
@@ -211,10 +215,25 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
               <div className="flex items-end pb-1"><label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-600"><input type="checkbox" checked={editDraft.required} onChange={(e) => setEditDraft((p) => p ? { ...p, required: e.target.checked } : p)} className="h-3.5 w-3.5 rounded border-slate-300" />必填指标</label></div>
               <div className="flex items-end pb-1"><label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-600"><input type="checkbox" checked={editDraft.indexed} onChange={(e) => setEditDraft((p) => p ? { ...p, indexed: e.target.checked } : p)} className="h-3.5 w-3.5 rounded border-slate-300" />参与索引</label></div>
             </div>
-            <div className="grid grid-cols-2 gap-3 mt-3">
-              {(['synonyms','compatible_dimensions','default_time_role','refresh_frequency','permission_level','owner','reviewer','precision'] as const).map((key) => (
-                <label key={key} className="text-[11px] text-slate-500">{key}<Input type={key === 'precision' ? 'number' : 'text'} value={editDraft[key]} onChange={(e) => setEditDraft((p) => p ? { ...p, [key]: e.target.value } : p)} className="h-8 text-xs" /></label>
-              ))}
+            <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+              <div className="mb-2 flex items-center gap-2"><Settings2 className="h-3.5 w-3.5 text-slate-400" /><h4 className="text-[11px] font-semibold text-slate-600">治理属性（发布门禁只硬卡第 ① 档）</h4></div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-[11px] text-slate-500">owner 负责人 <span className="text-red-500">＊必填</span><Input value={editDraft.owner} onChange={(e) => setEditDraft((p) => p ? { ...p, owner: e.target.value } : p)} placeholder="发布时必填，缺省被门禁拦截" className={`h-8 text-xs ${editDraft.owner ? 'border-green-300' : 'border-red-300'}`} /></label>
+                <label className="text-[11px] text-slate-500">reviewer 复核人<Input value={editDraft.reviewer} onChange={(e) => setEditDraft((p) => p ? { ...p, reviewer: e.target.value } : p)} placeholder="留空默认与 owner 同负责" className="h-8 text-xs" /></label>
+                <label className="text-[11px] text-slate-500">refresh_frequency 刷新频率<Input value={editDraft.refresh_frequency} onChange={(e) => setEditDraft((p) => p ? { ...p, refresh_frequency: e.target.value } : p)} placeholder="留空使用默认，门禁不校验此档" className="h-8 text-xs" /></label>
+                <label className="text-[11px] text-slate-500">permission_level 可见级别<Input value={editDraft.permission_level} onChange={(e) => setEditDraft((p) => p ? { ...p, permission_level: e.target.value } : p)} placeholder="留空使用默认，门禁不校验此档" className="h-8 text-xs" /></label>
+                <label className="text-[11px] text-slate-500">default_time_role 默认时间角色<Input value={editDraft.default_time_role} onChange={(e) => setEditDraft((p) => p ? { ...p, default_time_role: e.target.value } : p)} placeholder="留空使用默认（结算时间）" className="h-8 text-xs" /></label>
+                <label className="text-[11px] text-slate-500">precision 精度（0-12）<Input type="number" value={editDraft.precision} onChange={(e) => setEditDraft((p) => p ? { ...p, precision: e.target.value } : p)} placeholder="留空使用默认" className="h-8 text-xs" /></label>
+              </div>
+              <div className="mt-2 rounded-md bg-slate-50 px-3 py-2">
+                <details>
+                  <summary className="cursor-pointer select-none text-[11px] font-medium text-slate-500">同义词 / 兼容维度（可选，点击展开）<ChevronDown className="inline h-3 w-3" /></summary>
+                  <div className="grid grid-cols-2 gap-3 pt-2">
+                    <label className="text-[11px] text-slate-500">synonyms 同义词（英文逗号分隔）<Input value={editDraft.synonyms} onChange={(e) => setEditDraft((p) => p ? { ...p, synonyms: e.target.value } : p)} className="h-8 text-xs" /></label>
+                    <label className="text-[11px] text-slate-500">compatible_dimensions 兼容维度（英文逗号分隔）<Input value={editDraft.compatible_dimensions} onChange={(e) => setEditDraft((p) => p ? { ...p, compatible_dimensions: e.target.value } : p)} className="h-8 text-xs" /></label>
+                  </div>
+                </details>
+              </div>
             </div>
             <div className="mt-3 flex justify-end gap-2">
               <button onClick={() => setEditDraft(null)} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50">取消</button>
