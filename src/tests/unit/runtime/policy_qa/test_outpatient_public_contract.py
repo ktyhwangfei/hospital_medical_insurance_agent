@@ -64,3 +64,43 @@ def test_non_amount_outpatient_scenario_can_verify_settlement_facts():
     assert result.answer_status == "complete"
     assert result.verification_summary.settlement_checked is True
     assert result.verification_summary.calculation_checked is False
+
+
+def test_broad_question_with_zero_policy_evidence_is_unavailable():
+    """Issue #33 P1-5：宽泛问题零政策证据 → 诚实拒答 unavailable，禁止低置信 partial。"""
+    result = _build_public_result(
+        answer="未检索到与您问题相关的政策依据。",
+        can_answer=True,
+        partial_answer=True,  # broad 路径现行行为：有无证据都标 partial_answer
+        policy_status="no_policy_matched",
+        policy_evidence=[],
+        calculation_steps=[],
+        definition=None,
+        warnings=[],
+        case_context=None,
+        is_overview=False,
+        is_broad=True,
+    )
+
+    assert result.answer_status == "unavailable"
+    assert "未检索到足以回答该问题的政策依据" in result.answer
+    assert any("现有信息不足" in item for item in result.uncertainties)
+
+
+def test_broad_question_with_evidence_remains_partial():
+    """宽泛问题有政策证据时维持 partial（不被零证据规则误伤）。"""
+    result = _build_public_result(
+        answer="退休人员门诊起付线为 1300 元。",
+        can_answer=True,
+        partial_answer=True,
+        policy_status="partial_policy_matched",
+        policy_evidence=[{"title": "门诊起付线", "source_text": "门诊起付标准为 1300 元。"}],
+        calculation_steps=[],
+        definition=None,
+        warnings=[],
+        case_context=None,
+        is_overview=False,
+        is_broad=True,
+    )
+
+    assert result.answer_status == "partial"

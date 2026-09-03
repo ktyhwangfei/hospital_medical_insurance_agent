@@ -90,6 +90,13 @@ def test_parse_amount_band_unparseable_returns_zero():
     assert _parse_amount_band(None) == (0, 0)
 
 
+def test_parse_amount_band_below_x():
+    """Issue #33：2万元以下 / 不超过4万元 → (0, 20000) / (0, 40000)，下限 0 可与未解析哨兵 (0,0) 区分。"""
+    assert _parse_amount_band("2万元以下") == (0, 20000)
+    assert _parse_amount_band("2000元以内") == (0, 2000)
+    assert _parse_amount_band("不超过4万元") == (0, 40000)
+
+
 def test_rule_to_entity_parses_amount_band():
     """rule_to_entity 应把 amount_band 解析为 amount_band_min/max。"""
     rule = {

@@ -28,11 +28,15 @@ def _get_collection():
     try:
         from pymilvus import Collection, connections
         from src.config.production import MILVUS_HOST, MILVUS_PORT
+        from src.knowledge_extension.rule_explanation.release_resolver import (
+            resolve_rules_collection,
+        )
     except ImportError:
         raise HTTPException(status_code=503, detail=error_detail("MILVUS_UNAVAILABLE", "pymilvus 未安装", {}))
     try:
         connections.connect(host=MILVUS_HOST, port=str(MILVUS_PORT), timeout=5)
-        return Collection("policy_rules_v2")
+        # Issue #33 P0-1：经统一 resolver 跟随 active release
+        return Collection(resolve_rules_collection(MILVUS_HOST, str(MILVUS_PORT)))
     except Exception as e:
         raise HTTPException(status_code=503, detail=error_detail("MILVUS_UNAVAILABLE", f"Milvus 连接失败: {e}", {}))
 

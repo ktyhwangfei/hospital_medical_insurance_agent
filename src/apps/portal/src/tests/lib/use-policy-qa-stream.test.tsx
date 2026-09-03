@@ -132,6 +132,22 @@ describe('usePolicyQAStream', () => {
     expect(result.current.messages).toHaveLength(4)
   })
 
+  it('无锚定宽泛问题（无 settlementId）直接放行到后端路由', async () => {
+    streamQueue = [sseText(firstTurnEvents())]
+    const { result } = renderHook(() => usePolicyQAStream())
+    await act(async () => {
+      await result.current.send('上海在职职工门诊报销比例')
+    })
+
+    const bodies = streamBodies()
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0].question).toBe('上海在职职工门诊报销比例')
+    // Issue #33 路由/拒答：无结算单时 settlement_id 提交 null/空，
+    // 由后端 broad router 决定结构化引用/确定性拒答，前端不得吞掉请求
+    expect(bodies[0].settlement_id).toBeNull()
+    expect(result.current.messages).toHaveLength(2)
+  })
+
   it('首轮锚定后追问轮自动携带 anchor.settlementId', async () => {
     streamQueue = [sseText(firstTurnEvents()), sseText(firstTurnEvents())]
     const { result } = renderHook(() => usePolicyQAStream())
@@ -243,17 +259,6 @@ describe('usePolicyQAStream', () => {
     const types = result.current.memories.map((m) => m.type)
     expect(types).not.toContain('settlement')
     expect(types).toContain('policy')
-  })
-
-  it('无锚点时 send 返回 false 且不发请求', async () => {
-    streamQueue = []
-    const { result } = renderHook(() => usePolicyQAStream())
-    let sent: boolean | undefined
-    await act(async () => {
-      sent = await result.current.send('那起付线呢')
-    })
-    expect(sent).toBe(false)
-    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('resetSession 生成新 session_id 并清空状态', async () => {

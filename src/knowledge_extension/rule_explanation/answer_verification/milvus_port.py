@@ -164,8 +164,16 @@ def get_rule_knowledge_port() -> RuleKnowledgePort | None:
             return _port_singleton
         try:
             from src.config.production import MILVUS_HOST, MILVUS_PORT
+            from src.knowledge_extension.rule_explanation.release_resolver import (
+                resolve_rules_collection,
+            )
 
-            candidate = MilvusRuleKnowledgePort(host=MILVUS_HOST, port=str(MILVUS_PORT))
+            # Issue #33 P0-1：经统一 resolver 跟随 active release，验证来源与 Runtime 读路径一致
+            candidate = MilvusRuleKnowledgePort(
+                host=MILVUS_HOST,
+                port=str(MILVUS_PORT),
+                collection_name=resolve_rules_collection(MILVUS_HOST, str(MILVUS_PORT)),
+            )
             _port_singleton = candidate if candidate.has_collection() else None
             if _port_singleton is None:
                 logger.warning(

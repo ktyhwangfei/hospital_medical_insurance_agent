@@ -1,42 +1,30 @@
-"""检索默认 collection 解析测试：激活发布接管检索（评审 B2 / P0-1）。
+"""检索默认 collection 解析测试：激活发布接管检索（评审 B2 / P0-1，Issue #33 统一 resolver）。
 
-缺陷：RulesSearchService 硬编码 policy_rules_v2——治理流水线（审核/发布/血缘）
-不影响线上答案，激活版形同虚设。修复：默认从 policy_active_release 解析，
-无激活记录时回退 policy_rules_v2（向后兼容）。
+RulesSearchService 的默认 collection 经统一 release resolver 解析：
+跟随 policy_active_release（含存在且非空校验），无激活或不可用时回退
+policy_rules_v2 / policy_facts（向后兼容）。
 """
 from __future__ import annotations
 
-import pytest
+
+class _FakeMilvusClient:
+    def __init__(self, uri=None, timeout=None, **kw):
+        pass
 
 
-class FakeActiveStore:
-    """policy_active_release 读取桩。"""
-
-    def __init__(self, release: dict | None):
-        self._release = release
-
-    def get_active_release(self):
-        return self._release
+def _patch_client(monkeypatch, rss) -> None:
+    monkeypatch.setattr(rss, "MilvusClient", _FakeMilvusClient)
 
 
 def test_default_collections_follow_active_release(monkeypatch):
     from src.knowledge_extension.rule_explanation import rules_search_service as rss
 
-    store = FakeActiveStore({
-        "release_id": "REL_X",
-        "facts_collection": "policy_facts_REL_X",
-        "rules_collection": "policy_rules_REL_X",
-    })
-    captured: dict[str, str] = {}
-
-    class FakeMilvusClient:
-        def __init__(self, uri=None, timeout=None, **kw):
-            pass
-
-    monkeypatch.setattr(rss, "MilvusClient", FakeMilvusClient)
+    _patch_client(monkeypatch, rss)
     monkeypatch.setattr(
-        rss, "_resolve_active_release",
-        lambda: {"rules_collection": "policy_rules_REL_X", "facts_collection": "policy_facts_REL_X"},
+        rss, "resolve_rules_collection", lambda _host, _port: "policy_rules_REL_X"
+    )
+    monkeypatch.setattr(
+        rss, "resolve_facts_collection", lambda _host, _port: "policy_facts_REL_X"
     )
     svc = rss.RulesSearchService()
     assert svc._rules_col == "policy_rules_REL_X"
@@ -46,12 +34,13 @@ def test_default_collections_follow_active_release(monkeypatch):
 def test_fallback_to_v2_when_no_active_release(monkeypatch):
     from src.knowledge_extension.rule_explanation import rules_search_service as rss
 
-    class FakeMilvusClient:
-        def __init__(self, uri=None, timeout=None, **kw):
-            pass
-
-    monkeypatch.setattr(rss, "MilvusClient", FakeMilvusClient)
-    monkeypatch.setattr(rss, "_resolve_active_release", lambda: None)
+    _patch_client(monkeypatch, rss)
+    monkeypatch.setattr(
+        rss, "resolve_rules_collection", lambda _host, _port: "policy_rules_v2"
+    )
+    monkeypatch.setattr(
+        rss, "resolve_facts_collection", lambda _host, _port: "policy_facts"
+    )
     svc = rss.RulesSearchService()
     assert svc._rules_col == "policy_rules_v2"
     assert svc._facts_col == "policy_facts"
@@ -60,12 +49,13 @@ def test_fallback_to_v2_when_no_active_release(monkeypatch):
 def test_explicit_col_names_win(monkeypatch):
     from src.knowledge_extension.rule_explanation import rules_search_service as rss
 
-    class FakeMilvusClient:
-        def __init__(self, uri=None, timeout=None, **kw):
-            pass
+    _patch_client(monkeypatch, rss)
 
-    monkeypatch.setattr(rss, "MilvusClient", FakeMilvusClient)
-    monkeypatch.setattr(rss, "_resolve_active_release", lambda: {"rules_collection": "R", "facts_collection": "F"})
+    def _explode(*_args, **_kwargs):
+        raise AssertionError("显式 collection 名时不应触发 resolver")
+
+    monkeypatch.setattr(rss, "resolve_rules_collection", _explode)
+    monkeypatch.setattr(rss, "resolve_facts_collection", _explode)
     svc = rss.RulesSearchService(rules_col_name="my_rules", facts_col_name="my_facts")
     assert svc._rules_col == "my_rules"
     assert svc._facts_col == "my_facts"

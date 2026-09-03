@@ -44,6 +44,7 @@ from src.runtime.policy_qa.policy_rules_search import (
     OUTPUT_FIELDS,
     unpack_detail,
 )
+from src.runtime.policy_qa.policy_validity import build_validity_date_expr
 
 logger = logging.getLogger(__name__)
 
@@ -135,49 +136,15 @@ def _bm25_scores(query_text: str, documents: list[str]) -> list[float]:
     return [score / maximum if maximum else 0.0 for score in scores]
 
 
-_release_store: Any | None = None
-
-
-def _get_release_store() -> Any:
-    global _release_store
-    if _release_store is None:
-        from src.data_platform.storage.postgresql.policy_quality_store import (
-            PostgresPolicyQualityStore,
-        )
-
-        _release_store = PostgresPolicyQualityStore()
-    return _release_store
-
-
-def _is_complete_release_collection(
-    collection_name: str, host: str, port: str
-) -> bool:
-    client: Any = MilvusClient(uri=f"http://{host}:{port}")
-    collections = set(client.list_collections() or [])
-    if collection_name not in collections:
-        return False
-    if COLLECTION_NAME not in collections:
-        return True
-    active_count = int(client.get_collection_stats(collection_name).get("row_count", 0))
-    baseline_count = int(client.get_collection_stats(COLLECTION_NAME).get("row_count", 0))
-    # ponytail: 删除型发布上线后改用显式 snapshot_complete 元数据，不再比较行数。
-    return active_count >= baseline_count
-
-
 def resolve_rules_collection(
     host: str = "127.0.0.1", port: str = "19530"
 ) -> str:
-    """只采用完整活动发布版；指针或快照不可用时整体降级到旧 collection。"""
-    try:
-        active = _get_release_store().get_active_release()
-        if active and _is_complete_release_collection(
-            active.rules_collection, host, port
-        ):
-            return active.rules_collection
-        return COLLECTION_NAME
-    except Exception as exc:
-        logger.warning("[StructuredRetrieval] active release unavailable: %s", exc)
-        return COLLECTION_NAME
+    """委托统一 release resolver（Issue #33 P0-1）；保留本函数名兼容既有调用方。"""
+    from src.knowledge_extension.rule_explanation.release_resolver import (
+        resolve_rules_collection as _resolve,
+    )
+
+    return _resolve(host, port)
 
 
 # ── 标准化结算上下文 ──────────────────────────────────────────────
@@ -185,6 +152,13 @@ def resolve_rules_collection(
 # Issue #25 新增适用性字段默认值
 _DEFAULT_REGION = "北京"
 _DEFAULT_SETTLEMENT_DATE = "9999-12-31"
+
+# Issue #33：dynamic field 开启时可过滤的已知动态键（适用性字段 + 金额段数值，
+# 见 policy_rules_schema_v2.CORE_DIM_FIELDS 中未进固定 schema 的 Issue #25 字段）
+_KNOWN_DYNAMIC_FILTERABLE_FIELDS = frozenset({
+    "region", "effective_date", "expiry_date", "publish_status",
+    "policy_version", "is_remote", "amount_band_min", "amount_band_max",
+})
 
 
 @dataclass
@@ -260,6 +234,33 @@ class StructuredRetrievalResult:
     selected_evidence: list[StructuredPolicyEvidence] = field(default_factory=list)
     missing_required_rules: list[str] = field(default_factory=list)
     dedupe_info: dict[str, Any] = field(default_factory=dict)
+    # Issue #33 加固：拒答原因与面向用户的拒答文案（空串表示正常完成）。
+    # 下游零证据应走既有诚实拒答通道（answer_status=unavailable），不得编造兜底答案。
+    refusal_reason: str = ""
+    refusal_message: str = ""
+
+
+# Issue #33 加固①空 ctx 拒答：拒答码与面向用户文案
+EMPTY_CONTEXT_REFUSAL_REASON = "empty_context"
+EMPTY_CONTEXT_REFUSAL_MESSAGE = (
+    "缺少可依据的政策上下文（无险种/医疗类别/人群/医院等级/结算单号），无法回答该问题。"
+)
+
+
+def _is_empty_policy_context(ctx: NormalizedPolicyContext) -> bool:
+    """Issue #33 加固：上下文是否没有任何区分性维度。
+
+    险种/医疗类别/人群/医院等级/结算单号全部为空时，所有维度过滤退化为
+    "空值保留"，泛化规则会被当作确定答案召回（真实语料基线实测 6 条 BROAD_*
+    负例全部误召同 3 条门诊支付比例规则）——此时必须拒答而非放行。
+    """
+    return not any([
+        str(ctx.insu_type or "").strip(),
+        str(ctx.med_type or "").strip(),
+        str(ctx.psn_type or "").strip(),
+        str(ctx.hosp_lv or "").strip(),
+        str(ctx.settlement_id or "").strip(),
+    ])
 
 
 # ── 结构化检索器 ──────────────────────────────────────────────────
@@ -315,6 +316,11 @@ class StructuredPolicyRuleRetriever:
         fields: set[str] = set()
         for f in desc.get("fields", []):
             fields.add(str(f.get("name", "")))
+        # Issue #33：dynamic field 开启的 collection（含 release 产物）中，适用性/金额段
+        # 字段以 dynamic key 存储、不出现在 describe 固定字段里，但可正常过滤
+        # （缺失该 key 的实体不匹配而非报错）。显式并入已知可过滤动态键。
+        if desc.get("enable_dynamic_field"):
+            fields |= _KNOWN_DYNAMIC_FILTERABLE_FIELDS
         self._collection_fields = fields
         logger.info(f"[StructuredRetrieval] collection fields: {sorted(fields)}")
         return self._collection_fields
@@ -332,6 +338,15 @@ class StructuredPolicyRuleRetriever:
 
         Issue #25：所有查询默认注入 region / publish_status / is_remote 适用性过滤。
         """
+        # Issue #33 加固：空上下文（无险种/医疗类别/人群/医院等级/结算单号）拒绝规划，
+        # 防止泛化规则被当作确定答案召回
+        if _is_empty_policy_context(ctx):
+            logger.warning(
+                "[StructuredRetrieval] 空上下文拒答：无险种/医疗类别/人群/医院等级/结算单号，"
+                "拒绝规划查询"
+            )
+            return []
+
         queries: list[StructuredPolicyQuery] = []
 
         # Issue #25 全局适用性过滤（会注入到每个查询中）
@@ -346,7 +361,7 @@ class StructuredPolicyRuleRetriever:
                 base_filters["is_remote"] = "false"
 
         if target_field in ("统筹自付", "pooling_self_pay"):
-            # 查询1: 三级医院职工住院分段支付比例
+            # 查询1: 分段支付比例（Issue #33：按医疗类别分化）
             # ★ psn_type 不限定为退休人员，基础分段比例对全部人群通用
             # ★ hosp_lv 必须包含，否则会混入其他等级医院的规则
             query1_filters = {
@@ -358,17 +373,27 @@ class StructuredPolicyRuleRetriever:
             if ctx.hosp_lv:
                 query1_filters["hosp_lv"] = ctx.hosp_lv
 
-            query1 = StructuredPolicyQuery(
-                query_name="employee_inpatient_tertiary_segment_ratio",
-                required=True,
-                filters=query1_filters,
-                psn_type_allow_all=True,
-                text_must_include_any=[
-                    "起付标准至3万元",
-                    "超过3万元至4万元",
-                    "超过4万元",
-                ],
-            )
+            if ctx.med_type.startswith("门诊"):
+                # 门诊：分段文本不在 source_text 而在 amount_band 字段（实测），
+                # 分段选择交给金额段数值过滤（P0-2 已回填），不再用住院特化关键词
+                query1 = StructuredPolicyQuery(
+                    query_name="employee_outpatient_segment_ratio",
+                    required=True,
+                    filters=query1_filters,
+                    psn_type_allow_all=True,
+                )
+            else:
+                query1 = StructuredPolicyQuery(
+                    query_name="employee_inpatient_tertiary_segment_ratio",
+                    required=True,
+                    filters=query1_filters,
+                    psn_type_allow_all=True,
+                    text_must_include_any=[
+                        "起付标准至3万元",
+                        "超过3万元至4万元",
+                        "超过4万元",
+                    ],
+                )
             # Issue #25 阶段 2：金额段范围过滤
             if ctx.target_amount > 0:
                 query1.amount_range = (int(ctx.target_amount), int(ctx.target_amount))
@@ -389,9 +414,11 @@ class StructuredPolicyRuleRetriever:
                 query_name="retiree_personal_ratio",
                 required=True,
                 filters=query2_filters,
+                # Issue #33：去掉万金油关键词 "60%"（实测误召回大量无关分段规则，
+                # 是负例 FAR 的全部来源）；"个人支付"同时覆盖折算公式规则
+                # （"个人支付比例为职工…60%"）与门诊分段规则（"个人支付15%。"）
                 text_must_include_any=[
-                    "个人支付比例",
-                    "60%",
+                    "个人支付",
                 ],
             ))
 
@@ -452,26 +479,28 @@ class StructuredPolicyRuleRetriever:
                     expr_parts.append(f'(psn_type == "{safe_value}" or psn_type == "")')
 
         # Issue #25：时间范围过滤（ settlement_date 在 [effective_date, expiry_date] 内）
+        # Issue #33 加固②：与 broad 共用 policy_validity helper，两读路径同一有效期语义
         settlement_date = query.settlement_date
         if (
             getattr(self, "_enable_applicability_fields", True)
             and settlement_date
             and settlement_date != _DEFAULT_SETTLEMENT_DATE
         ):
-            if "effective_date" in available_fields:
-                expr_parts.append(f'effective_date <= "{settlement_date}"')
-            if "expiry_date" in available_fields:
-                expr_parts.append(f'(expiry_date == "9999-12-31" or expiry_date >= "{settlement_date}")')
+            expr_parts.extend(build_validity_date_expr(settlement_date, available_fields))
 
         # Issue #25 阶段 2：金额段范围过滤
+        # Issue #33：(0,0) 视为"无法解析"，不参与范围过滤、保留召回（不漏规则优先）
         if (
             query.amount_range
             and "amount_band_min" in available_fields
             and "amount_band_max" in available_fields
         ):
             amount = query.amount_range[0]
-            expr_parts.append(f'amount_band_min <= {amount}')
-            expr_parts.append(f'(amount_band_max >= {amount} or amount_band_max == -1)')
+            expr_parts.append(
+                f'((amount_band_min == 0 and amount_band_max == 0) or '
+                f'(amount_band_min <= {amount} and '
+                f'(amount_band_max >= {amount} or amount_band_max == -1)))'
+            )
 
         if skipped_fields:
             logger.warning(
@@ -498,11 +527,18 @@ class StructuredPolicyRuleRetriever:
 
         try:
             # 优先：纯标量查询（不依赖向量）
+            # Issue #33：带关键词过滤时先取足候选再过滤——此前 limit=top_k 在关键词
+            # 过滤之前截断，候选超过 top_k 时期望规则会被截掉（基线实测第 22 位被截）
+            candidate_limit = (
+                max(top_k, 200)
+                if (query.text_must_include_any or query.text_must_include_all)
+                else top_k
+            )
             raw_results = self.client.query(
                 collection_name=self.collection_name,
                 filter=expr,
                 output_fields=OUTPUT_FIELDS,
-                limit=top_k,
+                limit=candidate_limit,
                 retry_times=0,
             )
             print(f"[MILVUS-QUERY] Scalar query returned {len(raw_results)} raw records", flush=True)
@@ -564,6 +600,32 @@ class StructuredPolicyRuleRetriever:
             for item, score in zip(results, scores):
                 item["score"] = 0.7 + 0.3 * score
             results.sort(key=lambda item: item["score"], reverse=True)
+        elif results:
+            # Issue #33：无语义文本时按适用特异性确定性排序（此前为 Milvus 插入序，
+            # top_k 截断后期望规则能否进入前列纯属运气）：
+            # 精确人群/医院等级匹配 + 已解析金额段优先
+            want_psn = str(query.filters.get("psn_type", "") or "")
+            want_hosp = str(query.filters.get("hosp_lv", "") or "")
+
+            def _specificity(item: dict[str, Any]) -> float:
+                score = 1.0
+                if want_psn and str(item.get("psn_type", "") or "") == want_psn:
+                    score += 0.2
+                if want_hosp and str(item.get("hosp_lv", "") or "") == want_hosp:
+                    score += 0.1
+                if query.amount_range and (
+                    int(item.get("amount_band_min") or 0),
+                    int(item.get("amount_band_max") or 0),
+                ) != (0, 0):
+                    score += 0.1
+                return score
+
+            for item in results:
+                item["score"] = _specificity(item)
+            results.sort(key=lambda item: item["score"], reverse=True)
+
+        # Issue #33：候选放大（candidate_limit）后截回 top_k，保持既有返回上界
+        results = results[:top_k]
 
         if skipped_keyword > 0:
             print(f"[MILVUS-QUERY] Keyword filter: {skipped_keyword} records skipped", flush=True)
@@ -677,6 +739,17 @@ class StructuredPolicyRuleRetriever:
             "target_amount": ctx.target_amount,
         }
         result.normalized_context = result.settlement_context
+
+        # Issue #33 加固：空上下文（无区分性维度）直接拒答，返回空证据。
+        # 显式传入 custom_queries 的调用方自负规划责任，不受此限。
+        if custom_queries is None and _is_empty_policy_context(ctx):
+            result.refusal_reason = EMPTY_CONTEXT_REFUSAL_REASON
+            result.refusal_message = EMPTY_CONTEXT_REFUSAL_MESSAGE
+            logger.warning(
+                "[StructuredRetrieval] 空上下文拒答：无险种/医疗类别/人群/医院等级/结算单号，"
+                "返回空证据"
+            )
+            return result
 
         # Step 1: 规划查询（支持外部传入的自定义查询计划）
         queries = custom_queries if custom_queries is not None else self.plan_queries(ctx, target_field)
