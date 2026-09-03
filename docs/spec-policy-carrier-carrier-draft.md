@@ -24,11 +24,11 @@ policy_carrier: {
 - 若政策文号/生效期已以"结构化提取"存在于 zcgz，优先 **引用** zcgz 实体（policy_rule_ref），指标只冗余生效快照，避免两处口径漂移；文号语义单一源在 zcgz（与 #26 origin trust 一致）。
 - 生效期校验跨两个口径：政策口径(section8 生效档) 决定指标现值；语义层自身 effective 用于查询不得用已废止时段值。
 
-## 3. 发布门禁（架构④ 政策附加 → 具体到码）
-后端 `publish_object` / `save_published_metric` 对 **metric_kind=="policy"/fact-dependency 且 semantics 属 A 类**（口径分类由知识给，落到一个 metric_kind/标签位）命中时：
-- 缺失任一 = 拒绝并指出缺哪个（doc_number | region_scope | effective_start_required 等）。
-- 现在后端唯一硬卡 owner+definition(tier1)；政策类在此之上加硬卡 policy_carrier 三件。
-- 需要一个稳定判别位：建议加 `metric.subkind: "policy_rate" | "policy_rule" | ""`（或复用 metric_kind 扩展）把 "政策类" 显式化，门禁按 subtitle 跑，而不是靠 semantic_type 猜。
+## 3. 发布门禁（架构④ → 具体到码；Q1 subkind 判别）
+后端 `publish_object` / `save_published_metric` 对 **subkind ∈ {policy_rate, policy_elig}**（知识 Q1落到 metric.subkind）命中时：
+- 必填校验缺哪个报哪个：doc_number | region_scope | effective_start 三件必填；若已废止则 effective_end 必填。
+- 现后端唯一硬卡 owner+definition(tier1)；政策类在此之上加哈卡 policy_carrier。
+- 判别位：新增 metric.subkind：policy_rate|policy_elig|""（A 类显式，不靠 semantic_type 猜）。
 
 ## 4. 存储/迁移/回滚
 - semantic_metrics 增 JSONB 列(或并入现有 payload) + schema_version +=1；CREATE+ALTER 双写为防回归。
@@ -43,3 +43,8 @@ policy_carrier: {
 数据据此把草案落成正式 spec + PO 后放入 #35 follow-up issue 与 schema 迁移一并排程。
 
 —— 数据稿(苏杭) 2026-09-03；待知识 口径注释/样例校准后固化。
+
+## 知识 Q2-Q4 审结（2026-09-03）——并入本节采定稿
+**Q2 region/effective 粒度**：region_scope=统筹区划(地市/直辖市级)字符串，不自建层父表、同省市同写同名；effective=date 日粒度，语义 [生效日,失效日] 闭区间，start 必填。
+**Q3 废止 end**：已替换/确定废止的 A 类，effective_end 必填=废止日，缺即拒（防已废止时段仍可答）；现行未废止 end=null 合法；禁“无 end 却已废止”幽灵档发布。
+**Q4 溯源主键**：policy_rule_ref 绑 zcgz 结构化提取“规则行”实体主键(id)，非 section 非 doc_number——一文号可多条可执行规则，须溯源到执行它的规则行；doc_number/section 作为该行属性存 zcgz 单源，指标侧仅引用其行主键。
