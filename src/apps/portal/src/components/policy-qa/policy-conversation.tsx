@@ -80,7 +80,10 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
     if (settlementId) {
       await stream.send(command.question, { settlementId })
     } else {
-      appendPromptForSettlement()
+      // #33 路由放行：无锚定/未解析出单号的问题不再被前端本地挡回"请提供结算单号"，
+      // 默认放行到后端路由层——由 router 决定结构化引用/宽泛路由/确定性拒答（新设计：
+      // 宁可不给错答案也不在前端拦。仅锚定后仍需解析换单由上层守卫处理）。
+      await stream.send(command.question)
     }
   }
 
