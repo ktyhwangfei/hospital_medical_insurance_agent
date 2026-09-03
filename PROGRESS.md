@@ -12,7 +12,7 @@
 
 **当前领域**：Issue #33 — 政策知识上线补强（门诊+通用，§1.1 单元 6.7）
 
-**当前阶段**：Issue #33 全部机制与回填已落地并完成门禁复测（2026-09-02 终态：structured 诚实拒答 87.5% 达标，FAR/P@3 未达，见 `docs/reviews/2026-09-02-issue33-real-corpus-baseline.md` §8），门禁放行留待需求方判定；Issue #31 仍为 `editing` 草稿（等待真实预结算接口），Issue #30（单元 1.8 轨迹持久化）待浏览器人工验收
+**当前阶段**：Issue #33 机制、回填与门禁复测完成（2026-09-02 终态：structured 诚实拒答 87.5%，FAR/P@3 未达）；需求方决定门禁不放行、提交仅留档，加固① structured 空上下文拒答已落地（报告 §9：structured 负例 FAR 0%、诚实拒答 100%，P@3 未达，门禁整体仍关闭），下一轮为 §8.6 ③④与 broad 有效期硬过滤；Issue #31 仍为 `editing` 草稿（等待真实预结算接口），Issue #30（单元 1.8 轨迹持久化）待浏览器人工验收
 
 **门诊医保数据底座 P1（2026-08-31，`impl_done`；2026-09-01 同步已启动）**：当前测试环境已自动登记 `bjybdb`，SQL Server 三张门诊表及 117 个契约字段可读，PostgreSQL 门诊结构与事务读写通过，真实页面显示“数据底座可用”；CDC 未开启并单独显示“等待 DBA”，不影响默认 5 分钟定时 SQL。**2026-09-01 定时 SQL 任务已人工启动**：基线快照 3350 行（592/2139/619）幂等落库，5 分钟心跳正常，P95 样本积累中（首批 batch `5d56bfaa`/`a3a9edb0`）。启动时修复多 worker 重复认领缺陷（认领 WHERE 补 `active_attempt_id IS NULL`、`start_job` 清残留 attempt），全量 Unit 2013 passed/2 skipped → API+Flow 460 passed/1 skipped。Firefox 在本机被 Next dev/HMR 请求停滞阻断，保留生产态复验。[P1 验证记录](docs/reviews/2026-08-28-outpatient-p1-verification.md) 持续保持证据边界；达到 P95 ≤ 300 秒并完成同步验收前不改整个 P1 为 `complete`，P2 不改 `ready_for_planning`。
 
@@ -105,7 +105,9 @@
 
 6.6 验证证据（2026-08-21，PDSC 后端+前端+全 Phase 补齐）：后端单元 30 passed（§4.2 六类检测器、§5.2 自动库值与失败降级、§6.1 拆分、§11.2/§11.3 激活流水线含 §13.10 失败不改活动版本、未预期异常落激活记录、无受影响文档平凡通过，及 §13 项 1-9 与门禁）；API 10 passed（鉴权、完整治理流、扫描接入、拆分、激活失败步骤上报）；桥接 4 passed（无关系/异常服务退回旧路径、已发布关系转换、draft 关系不消费）；前端决策卡 Vitest 8 passed（扫描报告、激活失败步骤展示、拆分需理由）；TypeScript 检查通过；回归 semantic_alignment 78 / semantic_layer 145 / Portal 相关 20 passed（trace_store 1 个失败与会话前 WIP 改动相关，与 PDSC 零 import 关联）；真实 PG 数据冒烟：304 条提取行扫描 → 8 个结构压缩信号 → 去重聚 4 簇，检测器对不可重放行自动过滤。设计偏差：§11.1 状态机未收敛至 SemanticProposal（簇独立 ClusterStatus，功能等价，两套审核入口待后续收敛）；激活中重提取依赖 MODEL_API_KEY，未配置时明确失败而非静默跳过。
 
-6.7 验证证据（2026-09-02，Issue #33 收尾）：统一 resolver `release_resolver.py` 接入五条读路径 + 回填 API 改 active 感知写入；金额段 27 条数值化与门诊+通用 351 条 ×6 适用性字段已 --apply 到 active release 集合 `policy_rules_REL_20260827_MZ8_V3`（住院 67 条全部未回填）；dynamic field 修复使适用性/金额段过滤在生产真实生效（此前 describe 看不到动态键被静默跳过）。单元 814 passed / 1 skipped，API 105 passed。真实语料门禁终态复测（82 条用例，`docs/reviews/2026-09-02-issue33-real-corpus-baseline.md` §8）：structured 诚实拒答 87.5% **达标**；FAR structured 12.5% / broad 39.6%（目标 <8%）与 P@3 structured 8.3% / broad 23.8%（目标 >90%）**未达**，剩余失败逐案归因与后续候选见报告 §8.4/§8.6，门禁放行留待需求方判定。
+6.7 验证证据（2026-09-02，Issue #33 收尾）：统一 resolver `release_resolver.py` 接入五条读路径 + 回填 API 改 active 感知写入；金额段 27 条数值化与门诊+通用 351 条 ×6 适用性字段已 --apply 到 active release 集合 `policy_rules_REL_20260827_MZ8_V3`（住院 67 条全部未回填）；dynamic field 修复使适用性/金额段过滤在生产真实生效（此前 describe 看不到动态键被静默跳过）。单元 814 passed / 1 skipped，API 105 passed。真实语料门禁终态复测（82 条用例，`docs/reviews/2026-09-02-issue33-real-corpus-baseline.md` §8）：structured 诚实拒答 87.5% **达标**；FAR structured 12.5% / broad 39.6%（目标 <8%）与 P@3 structured 8.3% / broad 23.8%（目标 >90%）**未达**，剩余失败逐案归因与后续候选见报告 §8.4/§8.6，门禁不放行（需求方 2026-09-02 决定）。
+
+6.7 加固①补充证据（2026-09-02）：structured 空上下文必须拒答落地（`plan_queries` 返回空 + `retrieve` 短路 `refusal_reason="empty_context"`，显式 custom_queries 不受限），先红后绿 4 例，单元 818 / API 105 passed。真实语料复测（报告 §9）：structured 负例误答 6/48→0/48，负例 FAR 0%、诚实拒答 100%，正向不受影响；合成 text_only 对照不变、structured FAR 下降（§9.4 新基线）。门禁整体仍关闭，剩余 §8.6 ③④与 broad 有效期硬过滤。
 
 #### 技能管理（Skill）
 | # | 单元 | 后端 | 状态 |
