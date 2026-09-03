@@ -104,6 +104,16 @@ def _outpatient_registry(metric_permission: dict[str, str] | None = None):
             semantic_type="Amount", status="published",
         ),
         SemanticField(
+            field_code="mz_trade.total_fund", dataset_code="mz_trade",
+            column_name="T_FundPay", name="统筹基金支付", field_role="fact",
+            semantic_type="Amount", status="published",
+        ),
+        SemanticField(
+            field_code="mz_trade.total_self", dataset_code="mz_trade",
+            column_name="T_SelfPayAll", name="个人支付", field_role="fact",
+            semantic_type="Amount", status="published",
+        ),
+        SemanticField(
             field_code="mz_fee_item.trade_no", dataset_code="mz_fee_item",
             column_name="T_TradeNo", name="交易号", field_role="identifier",
             semantic_type="String", nullable=False, status="published",
@@ -158,6 +168,16 @@ def _outpatient_registry(metric_permission: dict[str, str] | None = None):
                 fact_field_code="mz_fee_item.item_fee", aggregation="sum", status="published",
             ),
         ),
+        ObjectVersionMetric.from_metric(Metric(
+            metric_code="mzjyxx.fund_pay", object_code="mzjyxx", name="统筹基金支付",
+            fact_field_code="mz_trade.total_fund", aggregation="max",
+            semantic_type="Amount", status="published",
+        )),
+        ObjectVersionMetric.from_metric(Metric(
+            metric_code="mzjyxx.self_pay", object_code="mzjyxx", name="个人支付",
+            fact_field_code="mz_trade.total_self", aggregation="max",
+            semantic_type="Amount", status="published",
+        )),
     ]
     rules = [
         DataQualityRule(
@@ -556,3 +576,30 @@ def test_compile_exit_sql_is_readonly_select_whitelist():
             raise AssertionError(f"未拦截: {bad!r}")
         except SemanticQueryPlanningError:
             pass
+
+
+def test_amount_metrics_coquery_preserves_tieout_on_same_grain():
+    """#36 缺口4 勾稽保护：总费用/统筹/个人支付同 scope 聚合 → 同口径可复算 总=统筹+个人。
+
+    planner 对同一结算把三金额指标做同一 common_grain 的单表聚合；本测试断言编译只有一个
+    branch 覆盖三者 + 口径一致性(总=统筹+个人)可作为结果校验钩子(勾稽不被跨口径拆散)。
+    """
+    planner = SemanticQueryPlanner(_outpatient_registry())
+    query = _outpatient_query(
+        "whole_settlement",
+        ["total_amount", "fund_pay", "self_pay"],
+    )
+    plan = planner.plan(query)
+    assert len(plan.branches) == 1
+    assert plan.branches[0].dataset == "mz_trade"
+    agg_metrics = set(plan.branches[0].metrics)
+    assert {"total_amount", "fund_pay", "self_pay"} <= agg_metrics
+    # 同 scope 口径：勾稽恒等 总费用 = 统筹支付 + 个人支付
+    assert plan.common_grain == ["outpatient_settlement"]
+
+    result = planner.result_from_row(query, plan, {
+        "total_amount": 100.0, "fund_pay": 70.0, "self_pay": 30.0,
+        "_anchor_count": 1,
+    }, duration_ms=1)
+    row = result.rows[0]
+    assert row["total_amount"] == row["fund_pay"] + row["self_pay"] == 100.0
