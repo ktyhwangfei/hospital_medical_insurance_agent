@@ -19,3 +19,7 @@
 
 ## 备注
 基座分支 = ktyhwangfei/issue-33-frontend-anchor-passthrough @ 3f29223（已含前端修复）
+
+## 测试@方蕾 精确规格（组件级，追加两用例到 src/apps/portal/src/tests/components/policy-qa-workspace.test.tsx）
+1. 用例①（无锚定放行）：makeStream()（sessionStatus=active、anchor 全 null）；textbox 输入「上海在职职工门诊报销比例是多少」，点发送 → 断言 stream.send 被调用且参数为该问句、appendLocalMessage 未被调用。
+2. 用例②（锚定回归护栏）：anchor 场景按既有行为断言不被误伤（@换结算/@新会话/有锚定照旧）。
