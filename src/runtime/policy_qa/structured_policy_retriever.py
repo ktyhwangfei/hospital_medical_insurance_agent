@@ -233,6 +233,33 @@ class StructuredRetrievalResult:
     selected_evidence: list[StructuredPolicyEvidence] = field(default_factory=list)
     missing_required_rules: list[str] = field(default_factory=list)
     dedupe_info: dict[str, Any] = field(default_factory=dict)
+    # Issue #33 加固：拒答原因与面向用户的拒答文案（空串表示正常完成）。
+    # 下游零证据应走既有诚实拒答通道（answer_status=unavailable），不得编造兜底答案。
+    refusal_reason: str = ""
+    refusal_message: str = ""
+
+
+# Issue #33 加固①空 ctx 拒答：拒答码与面向用户文案
+EMPTY_CONTEXT_REFUSAL_REASON = "empty_context"
+EMPTY_CONTEXT_REFUSAL_MESSAGE = (
+    "缺少可依据的政策上下文（无险种/医疗类别/人群/医院等级/结算单号），无法回答该问题。"
+)
+
+
+def _is_empty_policy_context(ctx: NormalizedPolicyContext) -> bool:
+    """Issue #33 加固：上下文是否没有任何区分性维度。
+
+    险种/医疗类别/人群/医院等级/结算单号全部为空时，所有维度过滤退化为
+    "空值保留"，泛化规则会被当作确定答案召回（真实语料基线实测 6 条 BROAD_*
+    负例全部误召同 3 条门诊支付比例规则）——此时必须拒答而非放行。
+    """
+    return not any([
+        str(ctx.insu_type or "").strip(),
+        str(ctx.med_type or "").strip(),
+        str(ctx.psn_type or "").strip(),
+        str(ctx.hosp_lv or "").strip(),
+        str(ctx.settlement_id or "").strip(),
+    ])
 
 
 # ── 结构化检索器 ──────────────────────────────────────────────────
@@ -310,6 +337,15 @@ class StructuredPolicyRuleRetriever:
 
         Issue #25：所有查询默认注入 region / publish_status / is_remote 适用性过滤。
         """
+        # Issue #33 加固：空上下文（无险种/医疗类别/人群/医院等级/结算单号）拒绝规划，
+        # 防止泛化规则被当作确定答案召回
+        if _is_empty_policy_context(ctx):
+            logger.warning(
+                "[StructuredRetrieval] 空上下文拒答：无险种/医疗类别/人群/医院等级/结算单号，"
+                "拒绝规划查询"
+            )
+            return []
+
         queries: list[StructuredPolicyQuery] = []
 
         # Issue #25 全局适用性过滤（会注入到每个查询中）
@@ -704,6 +740,17 @@ class StructuredPolicyRuleRetriever:
             "target_amount": ctx.target_amount,
         }
         result.normalized_context = result.settlement_context
+
+        # Issue #33 加固：空上下文（无区分性维度）直接拒答，返回空证据。
+        # 显式传入 custom_queries 的调用方自负规划责任，不受此限。
+        if custom_queries is None and _is_empty_policy_context(ctx):
+            result.refusal_reason = EMPTY_CONTEXT_REFUSAL_REASON
+            result.refusal_message = EMPTY_CONTEXT_REFUSAL_MESSAGE
+            logger.warning(
+                "[StructuredRetrieval] 空上下文拒答：无险种/医疗类别/人群/医院等级/结算单号，"
+                "返回空证据"
+            )
+            return result
 
         # Step 1: 规划查询（支持外部传入的自定义查询计划）
         queries = custom_queries if custom_queries is not None else self.plan_queries(ctx, target_field)

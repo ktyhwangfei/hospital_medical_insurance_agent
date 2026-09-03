@@ -306,3 +306,112 @@ def test_relevance_query_rejects_generic_rules_and_uses_dense_bm25_fallback(
     assert [item["rule_id"] for item in results] == [
         "self-pay-rule", "less-relevant",
     ]
+
+
+def test_empty_context_plan_queries_refuses() -> None:
+    """Issue #33 加固：空上下文（无险种/医疗类别/人群/医院等级/结算单号）拒绝规划查询。
+
+    空上下文时所有维度过滤退化为"空值保留"，泛化规则会被当作确定答案召回
+    （真实语料基线 6 条 BROAD_* 负例全部误召同 3 条门诊规则）。
+    """
+    from src.runtime.policy_qa.structured_policy_retriever import (
+        NormalizedPolicyContext,
+        StructuredPolicyRuleRetriever,
+    )
+
+    retriever = StructuredPolicyRuleRetriever.__new__(StructuredPolicyRuleRetriever)
+    ctx = NormalizedPolicyContext()
+
+    assert retriever.plan_queries(ctx, target_field="统筹自付") == []
+
+
+def test_partial_context_still_plans_queries() -> None:
+    """只有部分维度（如仅医疗类别）不算空上下文，查询计划照常生成。"""
+    from src.runtime.policy_qa.structured_policy_retriever import (
+        NormalizedPolicyContext,
+        StructuredPolicyRuleRetriever,
+    )
+
+    retriever = StructuredPolicyRuleRetriever.__new__(StructuredPolicyRuleRetriever)
+    ctx = NormalizedPolicyContext(med_type="门诊-普通门急诊")
+
+    queries = retriever.plan_queries(ctx, target_field="统筹自付")
+
+    assert len(queries) == 2
+    assert queries[0].filters["med_type"] == "门诊-普通门急诊"
+
+
+def test_empty_context_retrieve_returns_refusal_result() -> None:
+    """空上下文 retrieve 直接返回空证据并标记 refusal_reason，不触碰 Milvus。"""
+    from src.runtime.policy_qa.structured_policy_retriever import (
+        NormalizedPolicyContext,
+        StructuredPolicyRuleRetriever,
+    )
+
+    class ExplodingClient:
+        def query(self, **_kwargs):
+            raise AssertionError("空上下文不应执行任何 Milvus 查询")
+
+    retriever = StructuredPolicyRuleRetriever.__new__(StructuredPolicyRuleRetriever)
+    retriever.client = ExplodingClient()
+    retriever.collection_name = "policy_rules_v2"
+
+    result = retriever.retrieve(NormalizedPolicyContext(), target_field="统筹自付")
+
+    assert result.selected_evidence == []
+    assert result.refusal_reason == "empty_context"
+    assert "缺少可依据的政策上下文" in result.refusal_message
+    assert result.planned_queries == []
+
+
+def test_broad_empty_ctx_negatives_refuse_through_structured() -> None:
+    """真实语料基线 6 条 BROAD_* 空 ctx 负例（BROAD_DEDUCTIBLE / BROAD_RETIREE_RATIO /
+    BROAD_REMOTE / BROAD_SHANGHAI / BROAD_AMOUNT_BAND / BROAD_VERSION）走 structured
+    的行为断言：ctx 均为全空 → 必须诚实拒答，不得召回泛化规则兜底。"""
+    from src.runtime.policy_qa.structured_policy_retriever import (
+        NormalizedPolicyContext,
+        StructuredPolicyRuleRetriever,
+    )
+
+    class ExplodingClient:
+        def query(self, **_kwargs):
+            raise AssertionError("空上下文不应执行任何 Milvus 查询")
+
+    retriever = StructuredPolicyRuleRetriever.__new__(StructuredPolicyRuleRetriever)
+    retriever.client = ExplodingClient()
+    retriever.collection_name = "policy_rules_v2"
+
+    result = retriever.retrieve(NormalizedPolicyContext(), target_field="统筹自付")
+
+    assert result.selected_evidence == []
+    assert result.refusal_reason == "empty_context"
+    assert result.refusal_message
+
+
+def test_empty_context_retrieve_honors_explicit_custom_queries() -> None:
+    """外部显式传入 custom_queries 时不受空上下文拒答限制（调用方自负规划责任）。"""
+    from src.runtime.policy_qa.structured_policy_retriever import (
+        NormalizedPolicyContext,
+        StructuredPolicyQuery,
+        StructuredPolicyRuleRetriever,
+    )
+
+    calls: list[str] = []
+
+    class FakeClient:
+        def query(self, *, filter, **_kwargs):
+            calls.append(filter)
+            return []
+
+    retriever = StructuredPolicyRuleRetriever.__new__(StructuredPolicyRuleRetriever)
+    retriever.client = FakeClient()
+    retriever.collection_name = "policy_rules_v2"
+
+    result = retriever.retrieve(
+        NormalizedPolicyContext(),
+        target_field="统筹自付",
+        custom_queries=[StructuredPolicyQuery(query_name="explicit", filters={"rule_type": "支付比例"})],
+    )
+
+    assert len(calls) == 1
+    assert result.refusal_reason == ""
