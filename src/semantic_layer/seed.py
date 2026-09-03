@@ -27,6 +27,57 @@ OUTPATIENT_P1_TRADE_FIELDS = (
     ("settlement_lifecycle", "Enum"),
 )
 
+# ── 门诊英文字段 → 中文显示名（权威来源：知识·顾清 66 字段审结终稿）────
+# 文件: docs/66-guqing-review-FINAL.md (commit 06d66a5)。取值以 discovery 实测 SQL Server
+# 原始字段语义为准，不按名字面翻。TA_=交易后累计、TB_=交易前累计。
+# 三陷阱字段经 discovery 纠正：名字含 Person/编号 易被误当“就诊人次/编号”发布，实为
+# 个人账户余额/生育备案号 —— 与 insured_encounter_count 人次口径冲突会污染次均，禁止当人次发布。
+_GUQING_FINAL_CN: dict[str, str] = {
+    "Count": "总数量", "FeeItem_SelfPay2": "个人自付二", "FeeItem_State": "收费明细状态",
+    "FeeType": "费用类型", "ItemCode": "子项目医保编码", "ItemType": "子项目类型",
+    "NP_Settle_State": "国家平台结算状态",
+    "NT_AgencySumPay": "经办机构支付总额", "NT_AllSelfPayFlag": "全额垫付标志",
+    "NT_BasicPay": "基本医疗保险统筹基金支付金额", "NT_CivilPay": "民政补助基金支付金额",
+    "NT_OtherPay": "其他基金支付金额", "NT_OUT2_PRICE": "超限价自付费用",
+    "NT_OUT2_SCALE": "乙类先自付费用合计", "NT_ReTradeFlag": "退费交易重收标识",
+    "P_CivilFlag": "民政救助标识", "P_CivilType": "民政救助类别",
+    "P_HospFlag": "医院标识(定点范围标识)", "P_Official": "是否公务员(身份档位)",
+    "P_retirementflag": "退休标识",
+    "PN_ChronicCode": "慢性病代号", "PN_ChronicFlag": "慢性病标识",
+    "PN_IsChronicHosp": "慢性病就医医院标识", "PN_NationFundType": "险种类型",
+    "PN_NoRightReason": "医保未结算原因", "PN_OutTransaction": "异地结算人员标识",
+    "PN_PersonCount": "交易前个人账户余额",  # 陷阱：非“就诊人次”，discovery=trade 前个人账户余额
+    "RETIRE_OFFICER_FLAG": "退役军人标识", "SETL_DATE": "国家平台结算时间",
+    "StandardCode": "国家项目编码",
+    "T_BeyondBig": "超门诊大额封顶部分", "T_CompHospFlag": "医照医院范围标识",
+    "T_DiagType": "交易类型", "T_GFBelongFlag": "医照人员属地标识",
+    "T_HasRefundmented": "是否退费交易", "T_OraginalTradeDate": "原交易时间",
+    "T_OraginalTradeNo": "原交易号", "T_PartialReturnFlag": "部分退费红冲交易标识",
+    "T_PersonCountAfter": "当次交易后个人账户余额",  # 陷阱：非“结算后人次”，实为当次交易后个人账户余额
+    "T_pneno": "生育备案号",                        # 陷阱：非“就诊编号”，实为生育备案号
+    "T_SpSetlFlag": "特殊结算标识",
+    "TA_BeyondFeeIn": "结算后门诊超封顶部分", "TA_BigillComm": "交易后大病医保内费用累计",
+    "TA_BigillPay": "交易后大病保障累计支付", "TA_BigPay": "年度门诊大额支付累计",
+    "TA_BigPayL1": "一级医院城乡居民年度门诊大额支付累计(交易后)",
+    "TA_CivilComm": "交易后民政救助医保内费用累计", "TA_CivilPay": "交易后民政救助累计支付",
+    "TA_FeeAfterBig": "年度超门诊大额封顶后医保内费用累计(交易后)",
+    "TA_FeeAfterBigL1": "一级医院城乡居民年度超大额封顶后医保内费用累计(交易后)",
+    "TA_FeeIn": "年度门诊医保内费用累计(交易后)",
+    "TA_FeeInL1": "一级医院城乡居民年度门诊医保内费用累计(交易后)",
+    "TA_MZTimes": "门诊结算次数(交易后)",
+    "TB_BeyondFeeIn": "结算前门诊超封顶部分", "TB_BigillComm": "交易前大病医保内费用累计",
+    "TB_BigillPay": "交易前大病保障累计支付", "TB_BigPay": "大额支付(交易前)",
+    "TB_BigPayL1": "一级医院城乡居民年度门诊大额支付累计(交易前)",
+    "TB_CivilComm": "交易前民政救助医保内费用累计", "TB_CivilPay": "交易前民政救助累计支付",
+    "TB_FeeAfterBig": "年度超门诊大额封顶后医保内费用累计(交易前)",
+    "TB_FeeAfterBigL1": "一级医院城乡居民超大额封顶后医保内费用累计(交易前)",
+    "TB_FeeIn": "年度门诊医保内费用累计(交易前)",
+    "TB_FeeInL1": "一级医院城乡居民年度门诊医保内费用累计(交易前)",
+    "TB_MZTimes": "年度结算次数(交易前)",
+    "UnitPrice": "价格",
+}
+
+
 # ── 医保字典标准映射（源自 business_sql.yaml 的 CASE 转换）──────────
 # 将散落在 SQL CASE 里的码→标签映射，声明式收敛进语义层值域。
 # [来源: business_sql.yaml settlement_context 的 CASE a.FUND_TYPE / CASE a.yllb
@@ -395,6 +446,31 @@ def ensure_outpatient_metric_governance(store: RegistryStore) -> None:
         metric_type="Aggregate", semantic_type="Count", unit="人次", aggregation="count_distinct",
         fact_field_code="mz_trade.T_TradeNo", source_object="mz_trade", status="draft",
     ))
+    _localize_outpatient_metric_display_names(store, object_code)
+
+
+def _localize_outpatient_metric_display_names(store: RegistryStore, object_code: str) -> None:
+    """幂等把门诊指标中文显示名落在既有库（知识审结 66 字段）。
+
+    这些名称仅由一次性 dataset 守卫的 _seed_outpatient_query_model 里的 base 注册写入，
+    对已存在 mz 库不会重跑 → 一直保留英文列名。本函数随 ensure 每次幂等把 name 换成
+    知识审结中文（_GUQING_FINAL_CN），并给将来发布金额字段补口径底注（实付vs记账、负数=冲正）。
+    尊重 save_metric 的 schema_version 守卫，不覆盖高版本的用户改名。
+    """
+    for mid in store.list_metrics(object_code=object_code):
+        col = mid.metric_code.split(".", 1)[-1]
+        cn = _GUQING_FINAL_CN.get(col)
+        if not cn:
+            continue
+        upd = {}
+        if not mid.name or mid.name.isascii():
+            upd["name"] = cn
+        if mid.semantic_type == "Amount" and mid.fact_field_code and not mid.expression:
+            base = (mid.definition or cn)
+            if "负数" not in base and "冲正" not in base:
+                upd["definition"] = f"{base}；口径：实付支付额，负数为冲正/红冲金额"
+        if upd:
+            store.save_metric(mid.model_copy(update=upd))
 
 
 def switch_outpatient_query_model_to_postgres(store: RegistryStore) -> None:
@@ -749,6 +825,7 @@ def _seed_outpatient_query_model(store: RegistryStore) -> None:
         "FEE_SP_SCALE": "项目先自付比例", "FEE_MEDIC_L": "项目医保限额",
         "MEDIC_L": "项目医疗限额", "SPEDRUG_FLAG": "特殊药品标志",
     }
+    display_names.update(_GUQING_FINAL_CN)  # 知识审结中文名（66 字段）优先覆盖/补齐
     key_columns = {"T_TradeNo", "ItemId", "ItemNo"}
     value_domains = {
         "P_FundType": "FUND_TYPE", "PN_PersonType": "MZ_PERSON_TYPE",

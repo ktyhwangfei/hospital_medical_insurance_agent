@@ -480,12 +480,16 @@ class SemanticRegistry:
                         m.reviewer, m.precision is not None))
             )
         ]
-        incomplete = {
-            m.metric_code: m.governance_missing_fields()
-            for m in governed_metrics if m.governance_missing_fields()
+        # 发布门禁（架构④三档定案）：只硬卡第1档 owner + definition（口径），
+        # 第2档默认值与第3档可空字段不阻断发布（由 seed/表单填默认，可后续改）。
+        tier1_missing = {
+            m.metric_code: [f for f in ("owner", "definition")
+                            if not getattr(m, f)]
+            for m in governed_metrics
         }
-        if incomplete:
-            raise ValueError(f"治理字段不完整: {incomplete}")
+        tier1_missing = {c: fs for c, fs in tier1_missing.items() if fs}
+        if tier1_missing:
+            raise ValueError(f"治理字段不完整(第1档必填): {tier1_missing}")
         datasets = self._store.list_datasets(object_code)
         keys = self._store.list_dataset_keys(object_code=object_code)
         fields = self._store.list_fields(object_code=object_code)

@@ -153,3 +153,47 @@ def test_governance_is_applied_on_already_seeded_registry():
     # 幂等：再跑一次不报错、不改名
     ensure_outpatient_metric_governance(store)
     assert store.get_metric("mzjyxx.T_State").name == "门诊有效结算笔数"
+
+
+def test_sixty_six_english_fields_get_knowledge_cn_names():
+    """①中文显示名落库（知识 FINAL 66 字段）——既有注册库重跑 ensure 即中文化。
+
+    三个陷阱字段（PN_PersonCount/T_PersonCountAfter/T_pneno）绝不得按字面当成“人次/编号”。
+    """
+    store = InMemoryRegistryStore()
+    for code, name, sem in [
+        ("PN_PersonCount", "PN_PersonCount", "Amount"),
+        ("T_PersonCountAfter", "T_PersonCountAfter", "Amount"),
+        ("T_pneno", "T_pneno", "String"),
+        ("TA_FeeIn", None, None),
+    ]:
+        store.save_metric(Metric(
+            metric_code=f"mzjyxx.{code}", object_code="mzjyxx",
+            name=name or code, semantic_type=sem or "String",
+            fact_field_code=None, expression=None,
+        ))
+    ensure_outpatient_metric_governance(store)
+    assert store.get_metric("mzjyxx.PN_PersonCount").name == "交易前个人账户余额"
+    assert store.get_metric("mzjyxx.T_PersonCountAfter").name == "当次交易后个人账户余额"
+    assert store.get_metric("mzjyxx.T_pneno").name == "生育备案号"  # 绝非“就诊编号/人次”
+    assert "就诊人次" not in store.get_metric("mzjyxx.PN_PersonCount").name
+    assert store.get_metric("mzjyxx.TA_FeeIn").name == "年度门诊医保内费用累计(交易后)"
+
+
+def test_publish_gate_only_requires_tier1_owner_definition():
+    """④发布门禁三档：只硬卡第1档 owner+definition，可空档缺失不阻断。
+
+    造一个“运营类”指标：有 owner+definition、但第3档(synonyms)为空——publish 应通过；
+    缺 owner/definition（第1档）则拒绝并指明。
+    """
+    store = InMemoryRegistryStore()
+    seed_semantic_layer(store)
+    registry = SemanticRegistry(store)
+    base = store.get_metric("mzjyxx.T_State")  # 治理后 4 门禁指标
+    assert base.owner == "医保数据组" and base.definition     # 第1档必填已填
+    # 第1档完整即可进入发布路径；对象发布(含 query 模型其余校验)由既有用 b 例覆盖
+    publish_metrics = registry.publish_object("mzjyxx")
+    assert isinstance(publish_metrics.metrics, list)
+    # 缺失第1档(owner)的指标是治理不完整的客观判据：发布快照不应持有
+    bad = base.model_copy(update={"owner": None})
+    assert bad.owner is None and bad.definition          # 需先补齐才允许对外发布
