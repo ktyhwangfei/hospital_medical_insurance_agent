@@ -328,6 +328,14 @@ export interface SemanticMetricContract {
   semantic_type: string | null
   indexed: boolean
   schema_version: number
+  synonyms?: string[]
+  compatible_dimensions?: string[]
+  default_time_role?: string | null
+  refresh_frequency?: string | null
+  permission_level?: string | null
+  owner?: string | null
+  reviewer?: string | null
+  precision?: number | null
 }
 
 export interface UpdateSemanticMetricResponse {

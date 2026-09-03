@@ -30,6 +30,9 @@ interface MetricDetail {
   version: string; status: string
   fact_field_code: string | null; aggregation: string | null; expression: string | null
   dependencies: string[]; non_additive_dimensions: string[]
+  synonyms: string[]; compatible_dimensions: string[]; default_time_role: string | null
+  refresh_frequency: string | null; permission_level: string | null; owner: string | null
+  reviewer: string | null; precision: number | null
 }
 type MappingStatus = 'mapped' | 'unmapped' | 'value-missing'
 interface EnrichedMetric extends MetricDetail {
@@ -87,9 +90,13 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
       indexed: metric.indexed,
       value_domain: metric.value_domain || '', importance: metric.importance || 'optional',
       required: metric.required,
-      fact_field_code: metric.fact_field_code || '', aggregation: metric.aggregation || 'sum',
-      expression: metric.expression || '', dependencies: metric.dependencies.join(', '),
-      non_additive_dimensions: metric.non_additive_dimensions.join(', '),
+      fact_field_code: metric.fact_field_code || '', aggregation: metric.aggregation || '',
+      expression: metric.expression || '', dependencies: (metric.dependencies ?? []).join(', '),
+      non_additive_dimensions: (metric.non_additive_dimensions ?? []).join(', '),
+      synonyms: (metric.synonyms ?? []).join(', '), compatible_dimensions: (metric.compatible_dimensions ?? []).join(', '),
+      default_time_role: metric.default_time_role || '', refresh_frequency: metric.refresh_frequency || '',
+      permission_level: metric.permission_level || '', owner: metric.owner || '', reviewer: metric.reviewer || '',
+      precision: metric.precision ?? '',
     })
   }, [metric])
 
@@ -113,8 +120,16 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
     if (editDraft.expression !== (metric.expression || '')) body.expression = editDraft.expression || null
     const dependencies = editDraft.dependencies.split(',').map((item: string) => item.trim()).filter(Boolean)
     const nonAdditive = editDraft.non_additive_dimensions.split(',').map((item: string) => item.trim()).filter(Boolean)
-    if (dependencies.join(',') !== metric.dependencies.join(',')) body.dependencies = dependencies
-    if (nonAdditive.join(',') !== metric.non_additive_dimensions.join(',')) body.non_additive_dimensions = nonAdditive
+    if (dependencies.join(',') !== (metric.dependencies ?? []).join(',')) body.dependencies = dependencies
+    if (nonAdditive.join(',') !== (metric.non_additive_dimensions ?? []).join(',')) body.non_additive_dimensions = nonAdditive
+    const synonyms = editDraft.synonyms.split(',').map((item: string) => item.trim()).filter(Boolean)
+    const dimensions = editDraft.compatible_dimensions.split(',').map((item: string) => item.trim()).filter(Boolean)
+    if (synonyms.join(',') !== (metric.synonyms ?? []).join(',')) body.synonyms = synonyms
+    if (dimensions.join(',') !== (metric.compatible_dimensions ?? []).join(',')) body.compatible_dimensions = dimensions
+    for (const key of ['default_time_role', 'refresh_frequency', 'permission_level', 'owner', 'reviewer'] as const) {
+      if (editDraft[key] !== (metric[key] || '')) body[key] = editDraft[key] || null
+    }
+    if (editDraft.precision !== (metric.precision ?? '')) body.precision = editDraft.precision === '' ? null : Number(editDraft.precision)
     try {
       const response = await updateSemanticMetric(metric.metric_code, metric, body)
       onSave({ ...metric, ...editDraft, semantic_type: editDraft.semantic_type || null, schema_version: response.schema_version })
@@ -195,6 +210,11 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
               <div><label className="mb-1 block text-[11px] text-slate-500">重要性</label><select value={editDraft.importance} onChange={(e) => setEditDraft((p) => p ? { ...p, importance: e.target.value } : p)} className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs"><option value="core">core（核心）</option><option value="optional">optional（可选）</option></select></div>
               <div className="flex items-end pb-1"><label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-600"><input type="checkbox" checked={editDraft.required} onChange={(e) => setEditDraft((p) => p ? { ...p, required: e.target.checked } : p)} className="h-3.5 w-3.5 rounded border-slate-300" />必填指标</label></div>
               <div className="flex items-end pb-1"><label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-600"><input type="checkbox" checked={editDraft.indexed} onChange={(e) => setEditDraft((p) => p ? { ...p, indexed: e.target.checked } : p)} className="h-3.5 w-3.5 rounded border-slate-300" />参与索引</label></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-3">
+              {(['synonyms','compatible_dimensions','default_time_role','refresh_frequency','permission_level','owner','reviewer','precision'] as const).map((key) => (
+                <label key={key} className="text-[11px] text-slate-500">{key}<Input type={key === 'precision' ? 'number' : 'text'} value={editDraft[key]} onChange={(e) => setEditDraft((p) => p ? { ...p, [key]: e.target.value } : p)} className="h-8 text-xs" /></label>
+              ))}
             </div>
             <div className="mt-3 flex justify-end gap-2">
               <button onClick={() => setEditDraft(null)} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50">取消</button>

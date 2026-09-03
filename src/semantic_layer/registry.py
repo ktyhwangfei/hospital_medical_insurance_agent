@@ -26,6 +26,11 @@ from src.semantic_layer.models import (
     ValueDomain, ValueDomainMapping,
 )
 
+_DEFERRED_OUTPATIENT_METRICS = {
+    "mzjyxx.average_fee", "mzjyxx.insured_encounter_count",
+}
+_DEFERRED_OUTPATIENT_REASON = "就诊人次口径未定，门诊医保就诊人次和门诊次均费用暂缓发布"
+
 
 class RegistryStore(Protocol):
     """Storage backend interface for Semantic Registry."""
@@ -370,6 +375,8 @@ class SemanticRegistry:
         """保存已通过人工审核的指标，供提议发布路径使用。"""
         if metric.status != "published":
             raise ValueError("发布指标状态必须为 published")
+        if metric.metric_code in _DEFERRED_OUTPATIENT_METRICS:
+            raise ValueError(_DEFERRED_OUTPATIENT_REASON)
         if self._store.get_object(metric.object_code) is None:
             raise ValueError(f"对象 '{metric.object_code}' 不存在")
         self._store.save_metric(metric)
@@ -461,12 +468,34 @@ class SemanticRegistry:
         metrics = self._store.list_metrics(object_code=object_code)
         if not metrics:
             raise ValueError(f"对象 '{object_code}' 无指标，不能发布（§5：空指标不能发布）")
+        deferred_codes = _DEFERRED_OUTPATIENT_METRICS if object_code == "mzjyxx" else set()
+        publish_metrics = [m for m in metrics if m.metric_code not in deferred_codes]
+        if any(m.status == "published" for m in metrics if m.metric_code in deferred_codes):
+            raise ValueError(_DEFERRED_OUTPATIENT_REASON)
+        governed_metrics = [
+            m for m in publish_metrics
+            if object_code == "mzjyxx" and (
+                any((m.synonyms, m.compatible_dimensions, m.default_time_role,
+                        m.refresh_frequency, m.permission_level, m.owner,
+                        m.reviewer, m.precision is not None))
+            )
+        ]
+        # 发布门禁（架构④三档定案）：只硬卡第1档 owner + definition（口径），
+        # 第2档默认值与第3档可空字段不阻断发布（由 seed/表单填默认，可后续改）。
+        tier1_missing = {
+            m.metric_code: [f for f in ("owner", "definition")
+                            if not getattr(m, f)]
+            for m in governed_metrics
+        }
+        tier1_missing = {c: fs for c, fs in tier1_missing.items() if fs}
+        if tier1_missing:
+            raise ValueError(f"治理字段不完整(第1档必填): {tier1_missing}")
         datasets = self._store.list_datasets(object_code)
         keys = self._store.list_dataset_keys(object_code=object_code)
         fields = self._store.list_fields(object_code=object_code)
         relations = self._store.list_dataset_relations(object_code)
         quality_rules = self._store.list_quality_rules(object_code)
-        if datasets or any(m.fact_field_code or m.expression for m in metrics):
+        if datasets or any(m.fact_field_code or m.expression for m in publish_metrics):
             issues = self.validate_query_model(object_code)
             if issues:
                 raise ValueError("; ".join(issues))
@@ -476,7 +505,7 @@ class SemanticRegistry:
         fields = self._store.list_fields(object_code=object_code)
         relations = self._store.list_dataset_relations(object_code)
         quality_rules = self._store.list_quality_rules(object_code)
-        query_metrics = [m for m in metrics if m.fact_field_code or m.expression]
+        query_metrics = [m for m in publish_metrics if m.fact_field_code or m.expression]
         if datasets or query_metrics:
             issues = self.validate_query_model(object_code)
             if issues:
@@ -494,7 +523,7 @@ class SemanticRegistry:
                 "preferred_relation_paths": [p.model_dump() for p in obj.preferred_relation_paths],
                 "queryable": bool(datasets),
             },
-            metrics=[ObjectVersionMetric.from_metric(m) for m in metrics],
+            metrics=[ObjectVersionMetric.from_metric(m) for m in publish_metrics],
             datasets=[item.model_copy(update={"status": "published"}) for item in datasets],
             keys=keys,
             fields=[item.model_copy(update={"status": "published"}) for item in fields],
@@ -572,7 +601,7 @@ class SemanticRegistry:
         obj.status = "published"
         self._store.save_object(obj)
         # 同步 metric.status → published（解锁 build_extraction_schema / 契约，§5 发布）
-        for m in metrics:
+        for m in publish_metrics:
             m.status = "published"
             self._store.save_metric(m)
         for dataset in datasets:

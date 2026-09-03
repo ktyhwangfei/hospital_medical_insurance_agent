@@ -146,6 +146,34 @@ class Metric(BaseModel):
     expression: Optional[str] = None
     dependencies: list[str] = Field(default_factory=list)
     non_additive_dimensions: list[str] = Field(default_factory=list)
+    synonyms: list[str] = Field(default_factory=list)
+    compatible_dimensions: list[str] = Field(default_factory=list)
+    default_time_role: Optional[str] = Field(None, max_length=64)
+    refresh_frequency: Optional[str] = Field(None, max_length=64)
+    permission_level: Optional[str] = Field(None, max_length=64)
+    owner: Optional[str] = Field(None, max_length=128)
+    reviewer: Optional[str] = Field(None, max_length=128)
+    precision: Optional[int] = Field(None, ge=0, le=12)
+
+    def governance_missing_fields(self) -> list[str]:
+        required = {
+            "name": self.name,
+            "synonyms": self.synonyms,
+            "definition": self.definition,
+            "expression": self.expression if self.metric_type == "Derived" else True,
+            "aggregation": self.aggregation,
+            "unit": self.unit,
+            "precision": self.precision,
+            "compatible_dimensions": self.compatible_dimensions,
+            "default_time_role": self.default_time_role,
+            "source_object": self.source_object,
+            "refresh_frequency": self.refresh_frequency,
+            "permission_level": self.permission_level,
+            "owner": self.owner,
+            "reviewer": self.reviewer,
+            "version": self.version,
+        }
+        return [key for key, value in required.items() if value is None or value == "" or value == []]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -178,6 +206,14 @@ class ObjectVersionMetric(BaseModel):
     expression: Optional[str] = None
     dependencies: list[str] = Field(default_factory=list)
     non_additive_dimensions: list[str] = Field(default_factory=list)
+    synonyms: list[str] = Field(default_factory=list)
+    compatible_dimensions: list[str] = Field(default_factory=list)
+    default_time_role: Optional[str] = None
+    refresh_frequency: Optional[str] = None
+    permission_level: Optional[str] = None
+    owner: Optional[str] = None
+    reviewer: Optional[str] = None
+    precision: Optional[int] = None
 
     @classmethod
     def from_metric(cls, m: "Metric") -> "ObjectVersionMetric":
@@ -193,6 +229,10 @@ class ObjectVersionMetric(BaseModel):
             fact_field_code=m.fact_field_code, aggregation=m.aggregation,
             expression=m.expression, dependencies=m.dependencies,
             non_additive_dimensions=m.non_additive_dimensions,
+            synonyms=m.synonyms, compatible_dimensions=m.compatible_dimensions,
+            default_time_role=m.default_time_role, refresh_frequency=m.refresh_frequency,
+            permission_level=m.permission_level, owner=m.owner, reviewer=m.reviewer,
+            precision=m.precision,
         )
 
 

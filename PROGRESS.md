@@ -418,4 +418,6 @@
 - E2E 说明：新增 `skill-error-mining.flow.ts` 未在本环境运行——`playwright.config` 写死 3000/8000，当前 3000 被主工作区 D:/project（main 分支）前端占用，不含本工作区新代码（已知陷阱：多工作区端口互斥）。flow 组件交互逻辑已由 Vitest（eval-case-pool-table / eval-launch / eval-run-detail / layout-tabs 共 71 例）覆盖，合并后可在干净端口环境补跑。
 - 新增文档：`docs/steering/skill草稿-指标选择与多意图输入契约-设计.md`（草稿第三步改造设计，待评审）。
 
+| 2026-09-02 | Issue #35 语义指标治理字段补齐：`semantic_metrics` 增加 8 个治理字段，Metric/API/Portal 复用现有指标链路；`mzjyxx` 首批只发布 `T_State`、`T_FeeAll`、`T_FundPay`、`T_SelfPayAll` 4 个指标，`average_fee` 与 `insured_encounter_count` 同批暂缓并保持 draft/unavailable，发布拒绝明确提示“就诊人次口径未定”。最终验证：semantic layer Unit 179、相关 API 32、Flow 3 通过；Portal 依赖已安装，`tsc --noEmit` 零错误，Vitest 58 files / 418 tests 通过 | Issue #35 |
+
 > **维护约定**：每次状态变更必须在此记录。§2 与 `docs/steering/政策知识管线开发计划.md` 双向同步。
