@@ -102,10 +102,8 @@ function MetricRow({ metric, objects, onSave, onDelete, onOpenVD }: {
 
   const handleSave = useCallback(async () => {
     if (!editDraft) return
-    if (!editDraft.owner?.trim() || !editDraft.definition?.trim()) {
-      alert('治理门禁：owner（负责人）与 definition（口径定义）为第①档必填，发布/保存前不能为空。')
-      return
-    }
+    // #56 follow-up：第①档必填(owner/definition)由后端 publish 门禁硬卡，
+    // 编辑/仅改名等增量保存不受草稿缺 definition 拦截（口径可在草稿期后补）。
     setSaving(true)
     const body: Record<string, any> = {}
     if (editDraft.metric_code !== metric.metric_code) body.metric_code = editDraft.metric_code
