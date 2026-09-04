@@ -59,6 +59,11 @@ def test_seed_publishes_four_metrics_and_defers_encounter_dependent_metrics():
         "mzjyxx.T_FeeAll",
         "mzjyxx.T_FundPay",
         "mzjyxx.T_SelfPayAll",
+        # 批次二：加工视图 v_op_outpatient_processed 四字段指标（口径句 v4 签核已过）
+        "mzjyxx.op_valid_settle_count",
+        "mzjyxx.op_total_fee",
+        "mzjyxx.op_fund_pay",
+        "mzjyxx.op_self_pay",
     }
     average_fee = store.get_metric("mzjyxx.average_fee")
     assert average_fee.status == "draft"

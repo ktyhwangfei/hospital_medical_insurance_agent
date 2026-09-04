@@ -1,0 +1,66 @@
+# ============================================================
+# 加工注册表：门诊有效结算加工视图（口径句 v4，知识定稿签核已过）
+# 派工单: docs/processing/batch2-registry.md
+# 物化: docs/processing/outpatient_processed_view.sql → v_op_outpatient_processed
+# ============================================================
+registry:
+  processed_object: v_op_outpatient_processed
+  datasource: sqlserver://source/bjybdb
+  source_table: dbo.o_Trade
+  signoff: v4 已签核（docs/processing/batch1-view.md + view-dispatch.md）
+  fields:
+    op_valid_settle_count:
+      名称: 门诊有效结算笔数
+      算子: COUNT(DISTINCT {T_TradeNo})
+      来源字段: o_Trade.T_TradeNo
+      口径句v4: >-
+        T_State IN (2,3) AND NP_Settle_State=1 AND T_HasRefundmented != 1
+        AND (T_PartialReturnFlag IS NULL OR T_PartialReturnFlag='')
+        AND (T_CureType IN (11,17,18,19) OR T_CureType IS NULL)
+      去重键: T_TradeNo（跨险种同 trade_no 只计 1 笔）
+      物化策略: view（v_op_outpatient_processed）
+      签核状态: 已过
+    op_total_fee:
+      名称: 门诊总费用
+      算子: SUM({T_FeeAll})
+      来源字段: o_Trade.T_FeeAll
+      口径句v4: >-
+        T_State IN (2,3) AND NP_Settle_State=1 AND T_HasRefundmented != 1
+        AND (T_PartialReturnFlag IS NULL OR T_PartialReturnFlag='')
+        AND (T_CureType IN (11,17,18,19) OR T_CureType IS NULL)
+      去重键: 无（金额逐行累加）
+      物化策略: view（v_op_outpatient_processed）
+      签核状态: 已过
+    op_fund_pay:
+      名称: 门诊统筹基金支付金额
+      算子: SUM({T_FundPay})
+      来源字段: o_Trade.T_FundPay
+      口径句v4: >-
+        T_State IN (2,3) AND NP_Settle_State=1 AND T_HasRefundmented != 1
+        AND (T_PartialReturnFlag IS NULL OR T_PartialReturnFlag='')
+        AND (T_CureType IN (11,17,18,19) OR T_CureType IS NULL)
+      去重键: 无（金额逐行累加）
+      物化策略: view（v_op_outpatient_processed）
+      签核状态: 已过
+    op_self_pay:
+      名称: 门诊个人支付金额
+      算子: SUM({T_SelfPayAll})
+      来源字段: o_Trade.T_SelfPayAll
+      口径句v4: >-
+        T_State IN (2,3) AND NP_Settle_State=1 AND T_HasRefundmented != 1
+        AND (T_PartialReturnFlag IS NULL OR T_PartialReturnFlag='')
+        AND (T_CureType IN (11,17,18,19) OR T_CureType IS NULL)
+      去重键: 无（金额逐行累加）
+      物化策略: view（v_op_outpatient_processed）
+      签核状态: 已过
+# 门诊档取证: MZ_CURE_TYPE 已发布值域 {11:普通门诊, 17:门诊挂号, 18:急诊挂号, 19:普通急诊}
+#   [来源: src/semantic_layer/seed.py; docs/reviews/2026-08-27-outpatient-data-contract-review.md
+#    L1405/L1921 当前 4 个观测代码全覆盖]
+# med_type 空档边界: 源库 T_State IN (2,3) 下 T_CureType IS NULL 行数 = 0（2026-09-03 实测）
+#   → 边界恒不触发；口径句已含 OR T_CureType IS NULL 分支（空=通用门诊规则），
+#   若源将来出现空值行，视图按通用门诊纳入，无需改分支，仅需复核边界断言。
+# 勾稽恒等: op_total_fee = op_fund_pay + op_self_pay（口径句保证，活库实测差 0.00）
+# 受控问数消费入口（#62 验收③·API 演进）:
+#   GET /api/v1/medical-insurance-ai-agent/semantic/query/processed-snapshot
+#   只读已发布直接映射，单行预聚合天然 summary；前端卡片见 Portal
+#   /semantic-layer/query 页「门诊加工指标快照」

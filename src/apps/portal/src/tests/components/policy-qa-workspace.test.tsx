@@ -143,6 +143,34 @@ describe('PolicyQAWorkspace', () => {
     expect(stream.send).not.toHaveBeenCalled()
   })
 
+  // Issue #33 前端无锚定放行（docs/dispatch/T2-noanchor-dispatch.md v2 规格）：
+  // 无单号政策问题不再被前端本地挡回，放行到后端路由层
+  it('passes an anchorless broad policy question to the backend router', () => {
+    const stream = makeStream()
+    render(<PolicyConversation stream={stream} />)
+
+    fireEvent.change(screen.getByRole('textbox', { name: '政策问题' }), {
+      target: { value: '上海在职职工门诊报销比例是多少' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    expect(stream.send).toHaveBeenCalledWith('上海在职职工门诊报销比例是多少')
+    expect(stream.appendLocalMessage).not.toHaveBeenCalled()
+  })
+
+  it('still sends an anchorless-input question when an anchor is active', () => {
+    const stream = makeStream({ anchor: makeAnchor({ settlementId: '1671213' }) })
+    render(<PolicyConversation stream={stream} />)
+
+    fireEvent.change(screen.getByRole('textbox', { name: '政策问题' }), {
+      target: { value: '上海在职职工门诊报销比例是多少' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    expect(stream.send).toHaveBeenCalledWith('上海在职职工门诊报销比例是多少')
+    expect(stream.appendLocalMessage).not.toHaveBeenCalled()
+  })
+
   it('shows only the latest public streaming message', () => {
     const stream = makeStream({
       isStreaming: true,

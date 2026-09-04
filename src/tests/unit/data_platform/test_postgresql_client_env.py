@@ -87,12 +87,19 @@ def test_explicit_arg_takes_priority(monkeypatch):
     assert c._database_url == "postgresql://arg:arg@x:2/e"
 
 
-def test_no_env_returns_none(monkeypatch):
-    """无任何 PG 环境变量 → _database_url 为 None（调用方决定如何报错）。"""
+def test_no_env_falls_back_to_production_config(monkeypatch):
+    """无任何 PG 环境变量 → 回退 src/config/production.py 默认连接。
+
+    背景：后端 .env 只提供 MSSQL_*/MODEL_*/主密钥，未写 DATABASE_URL/POSTGRES_*，
+    裸构造的 PolicyMetaStore 等因 client 无 URL 连不上，datasource 路由静默降级
+    （#62 受控问数快照 503 事故）。回退 production 默认（127.0.0.1:5432/hospital_mcp）。
+    """
+    from src.config.production import DATABASE_URL as production_url
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("POSTGRES_HOST", raising=False)
     c = PostgreSQLClient()
-    assert c._database_url is None
+    assert c._database_url == production_url
+    assert "127.0.0.1:5432/hospital_mcp" in c._database_url
 
 
 def test_startup_log_never_prints_database_password(monkeypatch, capsys):

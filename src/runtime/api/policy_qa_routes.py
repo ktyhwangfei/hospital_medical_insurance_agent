@@ -162,10 +162,64 @@ def _router_structured_retrieve(decision: BroadRouteDecision) -> StructuredRetri
     )
 
 
+_INSU_SHORT_NAMES = (
+    ("城镇职工", "职工医保"),
+    ("城乡居民", "居民医保"),
+    ("大病", "大病保险"),
+    ("工伤", "工伤保险"),
+)
+# 分组呈现顺序：面向用户以职工/居民两大人群为主
+_GROUP_PRIORITY = {"职工医保": 0, "居民医保": 1}
+
+
+def _insu_short(insu_type: str) -> str:
+    """险种全称 → 用户可读简称（回答分组标题用）。"""
+    for key, short in _INSU_SHORT_NAMES:
+        if key in (insu_type or ""):
+            return short
+    return (insu_type or "").strip() or "通用政策"
+
+
+def _source_attribution(evidence: dict[str, Any]) -> str:
+    """单条证据的出处标注：险种·规则类型（施行年份）。
+
+    语料 release 集合无政策文件名（policy_title 未随实体下发），出处以
+    适用维度组合呈现；doc_id 已在证据链路上透传，文件名级标注待 doc 注册表。
+    """
+    parts = [_insu_short(str(evidence.get("insu_type", "") or ""))]
+    if evidence.get("rule_type"):
+        parts.append(str(evidence["rule_type"]))
+    effective = str(evidence.get("effective_date", "") or "")
+    attribution = "·".join(parts)
+    # 语料用 1900 哨兵表示"日期未知"，不得渲染成"1900年施行"
+    year = effective[:4] if len(effective) >= 4 and effective[:4].isdigit() else ""
+    if year and int(year) >= 1950:
+        attribution += f"（{year}年施行）"
+    return attribution
+
+
+def _format_broad_evidence(evidence: list[dict[str, Any]]) -> str:
+    """把证据按险种分组格式化为带出处标注的文本块（LLM prompt 与降级回答共用）。"""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for ev in evidence[:5]:
+        groups.setdefault(_insu_short(str(ev.get("insu_type", "") or "")), []).append(ev)
+    blocks = []
+    for name, items in sorted(
+        groups.items(), key=lambda kv: (_GROUP_PRIORITY.get(kv[0], 99),)
+    ):
+        lines = [f"【{name}】"]
+        for i, ev in enumerate(items, start=1):
+            text = str(ev.get("source_text", ev.get("clause", "")) or "")[:200]
+            lines.append(f"{i}. {text}（出处：{_source_attribution(ev)}）")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 def _generate_broad_answer(question: str, evidence: list[dict[str, Any]]) -> str:
     """为宽泛问题生成基于政策证据的回答。
 
-    模型调用统一走 model_service/gateway；失败时返回带 citations 的安全降级文本。
+    回答组织形式对齐政策原文习惯：按险种分组、每条标注出处（险种·规则类型·
+    施行年份）。模型调用统一走 model_service/gateway；失败时返回同结构的安全降级文本。
     """
     if not evidence:
         return "未检索到与您问题相关的政策依据，建议您补充地区、险种、医疗类别等具体信息后再试。"
@@ -174,15 +228,15 @@ def _generate_broad_answer(question: str, evidence: list[dict[str, Any]]) -> str
         from src.model_service.gateway import ModelGateway
         from src.model_service.models import Message
 
-        citations_text = "\n".join(
-            f"- {i + 1}. {ev.get('source_text', ev.get('clause', ''))[:200]}"
-            for i, ev in enumerate(evidence[:5])
-        )
         prompt = (
-            "你是医保政策问答助手。请根据以下检索到的政策依据，用中文简明回答用户问题。"
-            "必须标注来源，不确定的地方明确声明。\n\n"
+            "你是医保政策问答助手。请根据以下检索到的政策依据回答用户问题。\n"
+            "回答格式要求（对齐政策原文的严谨表述）：\n"
+            "1. 严格按【职工医保】【居民医保】等险种分组小标题组织，不得平铺；\n"
+            "2. 每组内逐条列出规定内容，每条末尾保留括号中的出处标注，不得删除或改写；\n"
+            "3. 只依据给定政策依据作答，无依据的内容明确声明不确定，禁止编造；\n"
+            "4. 结尾提示'以上信息仅供参考，具体待遇以当地医保经办机构解释为准'。\n\n"
             f"用户问题：{question}\n\n"
-            f"政策依据：\n{citations_text}\n\n"
+            f"政策依据：\n{_format_broad_evidence(evidence)}\n\n"
             "回答："
         )
         gateway = ModelGateway()
@@ -199,13 +253,12 @@ def _generate_broad_answer(question: str, evidence: list[dict[str, Any]]) -> str
 
 
 def _fallback_broad_answer(evidence: list[dict[str, Any]]) -> str:
-    """模型不可用时的安全降级回答。"""
-    clauses = [
-        f"{i + 1}. {ev.get('source_text', ev.get('clause', ''))[:120]}"
-        for i, ev in enumerate(evidence[:3])
-    ]
+    """模型不可用时的安全降级回答：与 LLM 路径同结构（分组 + 出处标注）。"""
+    if not evidence:
+        return "未检索到与您问题相关的政策依据，建议您补充地区、险种、医疗类别等具体信息后再试。"
     return (
-        "根据检索到的政策依据，为您整理如下：\n" + "\n".join(clauses)
+        "根据检索到的政策依据，为您整理如下：\n"
+        + _format_broad_evidence(evidence)
         + "\n\n以上信息仅供参考，具体待遇以当地医保经办机构解释为准。"
     )
 
@@ -1305,6 +1358,12 @@ async def _policy_qa_stream(
                     "payment_ratio": _ev.payment_ratio,
                     "amount_band": _ev.amount_band,
                     "rule_value": _ev.rule_value,
+                    # 出处标注与人群分组所需维度（加固⑤）；getattr 兼容测试注入的裸 evidence
+                    "insu_type": getattr(_ev, "insu_type", ""),
+                    "psn_type": getattr(_ev, "psn_type", ""),
+                    "hosp_lv": getattr(_ev, "hosp_lv", ""),
+                    "effective_date": getattr(_ev, "effective_date", ""),
+                    "doc_id": getattr(_ev, "doc_id", ""),
                 })
             if len(policy_evidence) > 0:
                 policy_status = "partial_policy_matched"

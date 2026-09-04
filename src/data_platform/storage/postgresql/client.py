@@ -19,6 +19,7 @@ class PostgreSQLClient:
             database_url
             or os.environ.get("DATABASE_URL")
             or self._build_url_from_postgres_env()
+            or self._production_default_url()
         )
         self._conn = None
         # 单连接会被 FastAPI 的工作线程共享；锁必须覆盖完整事务，避免语句串入。
@@ -39,6 +40,20 @@ class PostgreSQLClient:
         port = os.environ.get("POSTGRES_PORT", "5432")
         db = os.environ.get("POSTGRES_DB", "hospital_mcp")
         return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+
+    @staticmethod
+    def _production_default_url() -> str | None:
+        """POSTGRES_* 也缺失时退回 production 配置默认（127.0.0.1:5432/hospital_mcp）。
+
+        后端 .env 只写 MSSQL_*/MODEL_*/主密钥，不写 DATABASE_URL/POSTGRES_*；
+        裸构造（PolicyMetaStore 等）曾因此连不上且被调用方静默降级
+        （#62 受控问数快照 503 事故）。
+        """
+        try:
+            from src.config.production import DATABASE_URL as production_url
+            return production_url
+        except Exception:
+            return None
 
     def _ensure_connected(self) -> None:
         if self._conn is not None:

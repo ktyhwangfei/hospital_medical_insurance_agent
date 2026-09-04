@@ -5,7 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { semanticReviewJson } from '@/lib/policy-knowledge-api'
-import { Loader2, Play, Plus, ShieldCheck, Trash2 } from 'lucide-react'
+import { Loader2, Play, Plus, ShieldCheck, Trash2, Database } from 'lucide-react'
 
 const API = '/api/v1/medical-insurance-ai-agent/semantic'
 
@@ -27,6 +27,8 @@ interface QueryModel {
 }
 interface FilterRow { field_code: string; operator: string; value: string }
 interface OrderRow { field_code: string; direction: 'asc' | 'desc' }
+interface ProcessedMetric { metric_code: string; name: string; value: number | null; unit: string | null; precision: number | null; definition: string }
+interface ProcessedSnapshot { view: string; datasource_id: string; signoff: string; metrics: ProcessedMetric[] }
 interface QueryResult {
   plan: Record<string, unknown>
   result: {
@@ -65,6 +67,16 @@ export default function SemanticQueryPage() {
   const [error, setError] = useState<string | null>(null)
   const [sampleError, setSampleError] = useState<string | null>(null)
   const [output, setOutput] = useState<QueryResult | null>(null)
+  const [snapshot, setSnapshot] = useState<ProcessedSnapshot | null>(null)
+  const [snapshotError, setSnapshotError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    semanticReviewJson<ProcessedSnapshot>(`${API}/query/processed-snapshot`, 'GET')
+      .then((data) => { if (active) setSnapshot(data) })
+      .catch((reason) => { if (active) setSnapshotError(reason instanceof Error ? reason.message : '快照加载失败') })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -241,6 +253,31 @@ export default function SemanticQueryPage() {
   return (
     <div className="space-y-5">
       {error && !objectCode && <Alert variant="destructive"><AlertTitle>加载失败</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
+      {/* ── 门诊加工指标快照（#62 验收③：加工结果一屏可见）────────── */}
+      <Card className="border-slate-200 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base"><Database className="h-4 w-4 text-cyan-600" />门诊加工指标快照</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {snapshotError && <p className="text-xs text-slate-400">快照不可用：{snapshotError}</p>}
+          {snapshot && (
+            <>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                {snapshot.metrics.map((metric) => (
+                  <div key={metric.metric_code} className="rounded-lg border border-slate-200 bg-slate-50 p-3" title={metric.definition}>
+                    <p className="text-[11px] text-slate-500">{metric.name}</p>
+                    <p className="mt-1 font-mono text-xl font-bold tabular-nums text-cyan-700">
+                      {metric.value === null ? '-' : metric.value.toLocaleString('zh-CN', { minimumFractionDigits: metric.precision ?? 0, maximumFractionDigits: metric.precision ?? 2 })}
+                      {metric.unit && <span className="ml-1 text-[11px] font-normal text-slate-400">{metric.unit}</span>}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-400">来源：{snapshot.view}（{snapshot.datasource_id}）· {snapshot.signoff}</p>
+            </>
+          )}
+        </CardContent>
+      </Card>
       <Card className="border-slate-200 bg-white shadow-sm">
         <CardHeader><CardTitle className="text-base">受限语义查询</CardTitle></CardHeader>
         <CardContent className="space-y-5">
