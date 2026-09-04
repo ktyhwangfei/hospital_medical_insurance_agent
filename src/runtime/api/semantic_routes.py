@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from contextlib import nullcontext
@@ -2145,6 +2146,114 @@ def _collect_source_fields() -> set[str]:
     reg = get_registry()
     store = reg._store
     return {m.source_field.lower() for m in store.list_metrics() if m.source_field}
+
+
+# ── 门诊加工视图快照（#62 验收③ 受控问数闭环·API 演进）──────────────────
+
+_PROCESSED_VIEW_SOURCE_OBJECT = "v_op_outpatient_processed"
+_PROCESSED_VIEW_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class ProcessedMetricValue(BaseModel):
+    metric_code: str
+    name: str
+    value: float | None
+    unit: str | None
+    precision: int | None
+    source_field: str
+    definition: str
+
+
+class ProcessedViewSnapshotResponse(BaseModel):
+    object_code: str
+    view: str
+    datasource_id: str
+    signoff: str
+    metrics: list[ProcessedMetricValue]
+
+
+def _connect_processed_view(source, datasource_id: str):
+    """连接 seam（测试 monkeypatch 点）：复用 discovery 多源路由。"""
+    return source.connect_datasource(datasource_id)
+
+
+@router.get("/query/processed-snapshot", response_model=ProcessedViewSnapshotResponse)
+def get_processed_view_snapshot(principal: SemanticReviewPrincipalDependency):
+    """门诊加工视图单行快照：四加工字段受控问数入口（只读已发布直接映射）。
+
+    仅返回 mzjyxx 下 source_object=v_op_outpatient_processed 的 published 指标；
+    视图单行预聚合（口径句 v4 固化在 SQL 内），天然 summary 无明细可泄。
+    """
+    del principal
+    store = get_registry()._store
+    metrics = sorted(
+        (m for m in store.list_metrics(object_code="mzjyxx")
+         if (m.source_object or "") == _PROCESSED_VIEW_SOURCE_OBJECT
+         and m.status == "published"),
+        key=lambda m: m.metric_code,
+    )
+    if not metrics:
+        raise HTTPException(status_code=404, detail=error_detail(
+            "SEMANTIC_PROCESSED_SNAPSHOT_UNMAPPED",
+            "门诊加工视图指标未注册或未发布", {"object_code": "mzjyxx"},
+        ))
+    datasource_id = (metrics[0].source_field or "").split(".", 1)[0]
+    columns = [m.source_field.split(".")[-1] for m in metrics]
+    if not datasource_id or any(not _PROCESSED_VIEW_COLUMN_RE.match(c) for c in columns):
+        raise HTTPException(status_code=422, detail=error_detail(
+            "SEMANTIC_PROCESSED_SNAPSHOT_INVALID", "加工视图指标 source_field 非法", {},
+        ))
+    from src.runtime.discovery.semantic_source import get_semantic_data_source
+    source = get_semantic_data_source()
+    try:
+        conn = _connect_processed_view(source, datasource_id)
+    except Exception:
+        logger.exception("processed snapshot connect failed")
+        raise HTTPException(status_code=503, detail=error_detail(
+            "SEMANTIC_PROCESSED_SNAPSHOT_UNAVAILABLE", "加工视图数据源不可用",
+            {"datasource_id": datasource_id},
+        ))
+    try:
+        cursor = conn.cursor()
+        cols_sql = ", ".join(f"[{c}]" for c in columns)
+        cursor.execute(f"SELECT {cols_sql} FROM [dbo].[{_PROCESSED_VIEW_SOURCE_OBJECT}]")
+        rows = cursor.fetchall()
+    except Exception:
+        logger.exception("processed snapshot query failed")
+        raise HTTPException(status_code=503, detail=error_detail(
+            "SEMANTIC_PROCESSED_SNAPSHOT_UNAVAILABLE", "加工视图查询失败",
+            {"view": _PROCESSED_VIEW_SOURCE_OBJECT},
+        ))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    if len(rows) == 0:
+        raise HTTPException(status_code=404, detail=error_detail(
+            "SEMANTIC_PROCESSED_SNAPSHOT_EMPTY", "加工视图无快照行",
+            {"view": _PROCESSED_VIEW_SOURCE_OBJECT},
+        ))
+    if len(rows) > 1:
+        raise HTTPException(status_code=503, detail=error_detail(
+            "SEMANTIC_PROCESSED_SNAPSHOT_AMBIGUOUS", "加工视图返回多行，拒绝猜测粒度",
+            {"view": _PROCESSED_VIEW_SOURCE_OBJECT, "rows": len(rows)},
+        ))
+    items = [
+        ProcessedMetricValue(
+            metric_code=m.metric_code, name=m.name,
+            value=None if value is None else float(value),
+            unit=m.unit, precision=m.precision, source_field=m.source_field,
+            definition=m.definition or "",
+        )
+        for m, value in zip(metrics, rows[0])
+    ]
+    return ProcessedViewSnapshotResponse(
+        object_code="mzjyxx", view=_PROCESSED_VIEW_SOURCE_OBJECT,
+        datasource_id=datasource_id,
+        signoff="口径句 v4 已签核（docs/processing/registry.yaml）",
+        metrics=items,
+    )
 
 
 class DiscoveryScanRequest(BaseModel):

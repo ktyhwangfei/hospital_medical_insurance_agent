@@ -397,6 +397,7 @@ def ensure_outpatient_query_model(store: RegistryStore) -> None:
         ))
     _seed_outpatient_query_model(store)
     ensure_outpatient_metric_governance(store)
+    ensure_outpatient_processed_view_metrics(store)
 
 
 def ensure_outpatient_metric_governance(store: RegistryStore) -> None:
@@ -447,6 +448,59 @@ def ensure_outpatient_metric_governance(store: RegistryStore) -> None:
         fact_field_code="mz_trade.T_TradeNo", source_object="mz_trade", status="draft",
     ))
     _localize_outpatient_metric_display_names(store, object_code)
+
+
+VIEW_PROCESSED_口径句_V4 = (
+    """口径句 v4（已签核）：公共外过滤。配 docs/processing/registry.yaml。"""
+    "T_State IN (2,3) AND NP_Settle_State=1 AND T_HasRefundmented != 1 "
+    "AND (T_PartialReturnFlag IS NULL OR T_PartialReturnFlag='') "
+    "AND (T_CureType IN (11,17,18,19) OR T_CureType IS NULL)"
+)
+
+
+def ensure_outpatient_processed_view_metrics(store: RegistryStore) -> None:
+    """幂等注册 v_op_outpatient_processed 加工视图 4 指标（口径句 v4 已签核）。
+
+    docs/processing/registry.yaml 是数据侧定义源；本函数在语义层登记同构
+    指标，source_field 三段式 bjybdb.v_op_outpatient_processed.<col>，
+    供受控问数（MetricDataQueryService / SemanticDataSource）消费。
+    ⑤ 缺签核口径句→拒绝：definition 必须携带口径句 v4 原文，缺失即不注册。
+    """
+    object_code = "mzjyxx"
+    base = "加工视图 v_op_outpatient_processed（口径句 v4 已签核）"
+    view_metrics = [
+        ("op_valid_settle_count", "门诊有效结算笔数", "count", "笔", 0,
+         "COUNT(DISTINCT T_TradeNo)", "Count"),
+        ("op_total_fee", "门诊总费用", "sum", "元", 2, "SUM(T_FeeAll)", "Amount"),
+        ("op_fund_pay", "门诊统筹基金支付金额", "sum", "元", 2, "SUM(T_FundPay)", "Amount"),
+        ("op_self_pay", "门诊个人支付金额", "sum", "元", 2, "SUM(T_SelfPayAll)", "Amount"),
+    ]
+    for col, name, agg, unit, prec, formula, sem_type in view_metrics:
+        definition = f"{base}：{formula}；口径句v4：{VIEW_PROCESSED_口径句_V4}"
+        if VIEW_PROCESSED_口径句_V4 not in definition:
+            continue  # ⑤ 缺签核口径句 → 拒绝注册
+        existing = store.get_metric(f"{object_code}.{col}")
+        if existing is not None and VIEW_PROCESSED_口径句_V4 in (existing.definition or ""):
+            continue  # 已注册且口径句在，幂等跳过
+        if existing is not None and (existing.definition or "").strip():
+            # 已有同名指标但缺口径句 → 拒绝覆盖未签核定义
+            raise ValueError(
+                f"指标 {object_code}.{col} 已存在但缺签核口径句 v4，拒绝注册"
+            )
+        store.save_metric(Metric(
+            metric_code=f"{object_code}.{col}", object_code=object_code,
+            name=name, definition=definition,
+            metric_type="aggregate", semantic_type=sem_type,
+            unit=unit, precision=prec,
+            source_object="v_op_outpatient_processed",
+            source_field=f"bjybdb.v_op_outpatient_processed.{col}",
+            fact_field_code=None, aggregation=agg,
+            synonyms=[name],
+            compatible_dimensions=["time", "insurance_type", "settlement_status"],
+            default_time_role="settlement_time", refresh_frequency="5m",
+            permission_level="summary", owner="医保数据组", reviewer="医保业务组",
+            status="published",
+        ))
 
 
 def _localize_outpatient_metric_display_names(store: RegistryStore, object_code: str) -> None:
