@@ -70,6 +70,8 @@ describe('SemanticQueryPage', () => {
   beforeEach(() => {
     installFetch()
     semanticReviewJsonMock.mockReset()
+    // 加工快照卡默认不可用（页面应降级不阻塞）；需要时在用例内重新 mockResolvedValue
+    semanticReviewJsonMock.mockRejectedValue(new Error('快照不可用'))
   })
 
   afterEach(() => {
@@ -96,6 +98,7 @@ describe('SemanticQueryPage', () => {
   })
 
   it('fills the anchor only after an explicit random sample request', async () => {
+    semanticReviewJsonMock.mockResolvedValueOnce(null) // 首个调用是加工快照卡（不可用即降级）
     semanticReviewJsonMock.mockResolvedValueOnce({ value: '1671213' })
     const user = userEvent.setup()
     render(<SemanticQueryPage />)
