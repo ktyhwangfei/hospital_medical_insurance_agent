@@ -477,3 +477,59 @@ class TestRouterEvidenceGrounding:
         texts = [ev.source_text for ev in decision.evidence]
         assert process_rule.source_text in texts
         assert noise.source_text not in texts
+
+
+class TestDualGroupCoverage:
+    """加固⑤：B 向无险种问题时，职工/居民两大人群各有代表证据进入答案。"""
+
+    def _ev(self, text: str, insu: str):
+        return SimpleNamespace(
+            score=1.0,
+            source_text=text,
+            insu_type=insu,
+            med_type="门诊-普通门急诊",
+            hosp_lv="",
+            psn_type="",
+            rule_type="支付比例",
+        )
+
+    def test_uninferred_insu_ensures_employee_and_resident(self, monkeypatch):
+        """池内职工证据占满 top5、居民仅 1 条时，居民代表必须被保障进答案。"""
+        monkeypatch.setattr(
+            broad_query_router, "_cosine_similarities", lambda _q, _t: [0.90] * 6
+        )
+        pool = [
+            self._ev("在职职工门诊大额医疗互助资金报销比例调整为90%", "城镇职工基本医疗保险"),
+            self._ev("统筹基金支付60%，个人支付40%。", "城镇职工基本医疗保险"),
+            self._ev("统筹基金支付70%，个人支付30%。", "城镇职工基本医疗保险"),
+            self._ev("门诊大额医疗互助资金报销比例调整为80%", "城镇职工基本医疗保险"),
+            self._ev("35周岁以上不满45周岁的职工按本人月缴费工资基数的1%划入个人账户", "城镇职工基本医疗保险"),
+            # 居民证据词面与问题几乎无重叠：无覆盖机制时会被相关性带裁掉
+            self._ev("基金支付标准按年度方案执行", "城乡居民基本医疗保险"),
+        ]
+        decision = route_broad_question(
+            "门诊报销比例是多少",
+            structured_retrieve=lambda _d: SimpleNamespace(selected_evidence=pool),
+            current_year=2026,
+        )
+        assert decision.route == "structured"
+        insus = {ev.insu_type for ev in decision.evidence}
+        assert any("职工" in i for i in insus), "职工人群代表缺失"
+        assert any("居民" in i for i in insus), "居民人群代表缺失"
+
+    def test_inferred_insu_no_coverage_expansion(self, monkeypatch):
+        """A 向已限定险种：不做跨人群覆盖扩展（医保过滤本就单一险种）。"""
+        monkeypatch.setattr(
+            broad_query_router, "_cosine_similarities", lambda _q, _t: [0.90]
+        )
+        decision = route_broad_question(
+            "在职职工门诊三级医院报销比例是多少",
+            structured_retrieve=lambda _d: SimpleNamespace(
+                selected_evidence=[
+                    self._ev("统筹基金支付70%，个人支付30%。", "城镇职工基本医疗保险")
+                ]
+            ),
+            current_year=2026,
+        )
+        assert decision.route == "structured"
+        assert all("职工" in ev.insu_type for ev in decision.evidence)

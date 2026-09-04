@@ -222,6 +222,7 @@ class StructuredPolicyEvidence:
     rule_id: str = ""
     rule_instance_key: str = ""
     applied_reason: str = ""
+    doc_id: str = ""                # 来源文档标识（出处追溯）
     score: float = 1.0  # 结构化匹配默认满分
 
 
@@ -888,6 +889,7 @@ class StructuredPolicyRuleRetriever:
             rule_id=str(entity.get("rule_id", "") or ""),
             rule_instance_key=self._build_rule_instance_key(entity),
             applied_reason=applied_reason,
+            doc_id=str(entity.get("doc_id", "") or ""),
             score=float(entity.get("score", 1.0)),
         )
 

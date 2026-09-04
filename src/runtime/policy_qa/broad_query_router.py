@@ -346,12 +346,14 @@ def _rerank_evidence_by_relevance(
     evidence: list[StructuredPolicyEvidence],
     inferred: InferredQueryContext | None = None,
     preferred_rule_type: str = "",
+    ensure_insu_groups: tuple[str, ...] = (),
 ) -> tuple[list[StructuredPolicyEvidence], float | None]:
     """按问题相关性对证据重排/过滤/截断（BM25 维度富文本 + 向量语义融合 + 推断维度加权）。
 
     相关性主分（BM25×向量几何平均）决定"是否与问题相关"；维度加权只做有界
     tiebreaker，把命中问题推断维度（险种/医院等级/人群/规则类型）的规则提到
     词面宽泛的泛规则之前，空值维度中性不误伤通用规则。
+    ensure_insu_groups：无险种问题时保障这些人群（职工/居民）各有代表证据进答案。
 
     Returns:
         (保留证据, 语义地板裁决)：语义地板未通过时返回 ([], best_cosine)，
@@ -421,7 +423,58 @@ def _rerank_evidence_by_relevance(
         best_combined = max(combined, default=0.0)
 
     ranked = sorted(zip(combined, evidence), key=lambda pair: pair[0], reverse=True)
-    return [ev for rel, ev in ranked if rel >= best_combined * _RELEVANCE_BAND][:_EVIDENCE_TOP_N], None
+    selected = [ev for rel, ev in ranked if rel >= best_combined * _RELEVANCE_BAND][:_EVIDENCE_TOP_N]
+    if ensure_insu_groups and len(ranked) > len(selected):
+        selected = _ensure_insu_coverage(selected, ranked, ensure_insu_groups)
+    return selected, None
+
+
+def _ensure_insu_coverage(
+    selected: list[StructuredPolicyEvidence],
+    ranked: list[tuple[float, StructuredPolicyEvidence]],
+    groups: tuple[str, ...],
+) -> list[StructuredPolicyEvidence]:
+    """无险种问题时保障职工/居民两大人群各有代表证据（面向用户人群结构）。
+
+    相关性 top-N 可能把某人群全部裁掉（该人群词面与问题弱相关但仍是合法答案面）；
+    用排位最高的未选人群代表替换选中列表中最低位的"非人群代表"项，不扩答案长度。
+    """
+    selected = list(selected)
+    selected_ids = {id(ev) for ev in selected}
+
+    def _groups_of(ev: StructuredPolicyEvidence) -> set[str]:
+        insu = str(getattr(ev, "insu_type", "") or "")
+        return {g for g in groups if g in insu}
+
+    def _is_representative(ev: StructuredPolicyEvidence) -> bool:
+        # 是某人群在选中列表中的唯一载体时不可被替换；无人群标签（通用规则）可替换
+        ev_groups = _groups_of(ev)
+        if not ev_groups:
+            return False
+        return any(
+            sum(1 for other in selected if g in _groups_of(other)) == 1
+            for g in ev_groups
+        )
+
+    for group in groups:
+        if any(group in _groups_of(ev) for ev in selected):
+            continue
+        for _rel, candidate in ranked:
+            if id(candidate) in selected_ids:
+                continue
+            if group not in _groups_of(candidate):
+                continue
+            victims = [
+                (idx, ev) for idx, ev in enumerate(selected)
+                if not _is_representative(ev)
+            ]
+            if victims:
+                idx, _ = victims[-1]
+                selected_ids.discard(id(selected[idx]))
+                selected[idx] = candidate
+                selected_ids.add(id(candidate))
+            break
+    return selected
 
 
 def _default_audit_sink(record: dict[str, Any]) -> None:
@@ -529,7 +582,14 @@ def route_broad_question(
         else:
             # 相关性重排后再消费：缴费/划入类噪声不进答案；候选池整体不相关则诚实拒答
             reranked, low_cosine = _rerank_evidence_by_relevance(
-                q, raw_evidence, inferred, action_rule_type
+                q,
+                raw_evidence,
+                inferred,
+                action_rule_type,
+                # B 向无险种：职工/居民两大人群各有代表证据（面向用户人群结构）
+                ensure_insu_groups=()
+                if inferred.insu_type
+                else ("城镇职工", "城乡居民"),
             )
             if low_cosine is not None:
                 decision.route = "refuse"
