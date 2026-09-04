@@ -1,0 +1,6 @@
+route=structured landing=A evidence=20 rule_id_full=20/20 policy_version_full=20/20 sample_rule_id=rule_03131e7a5600f41a sample_version=1.0
+  rule_id=rule_03131e7a5600f41a version=1.0 type=支付比例 src=统筹基金支付60%，个人支付40%。
+  rule_id=rule_043714511e59df14 version=1.0 type=支付比例 src=统筹基金支付90%，个人支付10%。
+  rule_id=rule_060266f56351 version=1.0 type=支付比例 src=35周岁以上不满45周岁的职工按本人月缴费工资基数的1%划入个人账户
+  rule_id=rule_0b5fda014f4f version=1.0 type=支付比例 src=职工按本人上一年月平均工资的2%缴纳基本医疗保险费。
+  rule_id=rule_0c32d785a8011676 version=1.0 type=支付比例 src=统筹基金支付90%，个人支付10%。

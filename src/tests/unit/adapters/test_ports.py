@@ -31,6 +31,9 @@ class TestPortContracts:
         result = adapter.query_billing_status("P001", "E001")
         assert result.status.value == "success"
 
+    def test_billing_port_exposes_partial_refund_preview(self):
+        assert hasattr(BillingPort, "preview_partial_refund")
+
     def test_his_port(self):
         adapter = InMemoryHisAdapter()
         assert isinstance(adapter, HisPort)

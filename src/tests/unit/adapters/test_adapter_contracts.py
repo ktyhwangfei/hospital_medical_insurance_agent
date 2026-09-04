@@ -1,5 +1,8 @@
+from decimal import Decimal
+
 from src.adapters.base.models import AdapterCallContext, AdapterCallResult, AdapterCallStatus, AdapterError, DataQualityStatus
 from src.adapters.base.service import adapter_citation, failed_result, successful_result
+from src.adapters.billing import models as billing_models
 from src.adapters.billing.in_memory import InMemoryBillingAdapter
 from src.adapters.drg_dip.in_memory import InMemoryDrgDipAdapter
 from src.adapters.emr.in_memory import InMemoryEmrAdapter
@@ -83,3 +86,27 @@ def test_in_memory_adapters_return_adapter_call_result():
 
     assert all(isinstance(result, AdapterCallResult) for result in adapters)
     assert {result.status for result in adapters} == {AdapterCallStatus.SUCCESS}
+
+
+def test_partial_refund_request_preserves_decimal_quantity():
+    item = billing_models.PartialRefundItemRequest(
+        fee_detail_id="F001",
+        refund_quantity=Decimal("1.25"),
+    )
+
+    assert item.refund_quantity == Decimal("1.25")
+    assert hasattr(billing_models, "PartialRefundPreview")
+
+
+def test_in_memory_billing_reports_pre_settlement_not_configured():
+    item = billing_models.PartialRefundItemRequest(
+        fee_detail_id="F001",
+        refund_quantity=Decimal("1"),
+    )
+
+    result = InMemoryBillingAdapter().preview_partial_refund("OP-001", (item,))
+
+    assert isinstance(result, AdapterCallResult)
+    assert result.status == AdapterCallStatus.FAILED
+    assert result.error_type == billing_models.PreSettlementErrorType.NOT_CONFIGURED.value
+    assert result.input_summary == {"original_trade_no": "OP-001", "item_count": 1}

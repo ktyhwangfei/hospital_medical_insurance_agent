@@ -73,7 +73,15 @@ class HashEmbeddingProvider(EmbeddingProvider):
         return [x / norm for x in vals]
 
 
+_provider_instance: "SentenceTransformerEmbeddingProvider | None" = None
+
+
 def get_embedding_provider(kind: str = "sentence_transformer") -> EmbeddingProvider:
+    """进程级单例：质量门禁一次运行 30 次语义检索，无缓存时每次重新加载
+    199 层模型，内存膨胀把后端压崩（2026-08-27 统一测试中断事故）。"""
+    global _provider_instance
     if kind == "hash":
         return HashEmbeddingProvider()
-    return SentenceTransformerEmbeddingProvider()
+    if _provider_instance is None:
+        _provider_instance = SentenceTransformerEmbeddingProvider()
+    return _provider_instance

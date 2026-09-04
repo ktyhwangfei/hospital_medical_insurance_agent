@@ -7,10 +7,10 @@ from pydantic import BaseModel, Field
 
 @dataclass
 class PolicyQARequest:
-    """政策问答请求；结算单是必需业务上下文。"""
+    """政策问答请求；结算单是业务上下文，宽泛政策问题可省略。"""
 
     question: str
-    settlement_id: str
+    settlement_id: str | None = None
     session_id: str | None = None
     user_id: str = ""
     role: str = ""

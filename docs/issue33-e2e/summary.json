@@ -1,0 +1,30 @@
+{
+  "case1_shanghai_region": {
+    "ok": true,
+    "desc": "异地拒答",
+    "log": [
+      "assert refuse terms=['不适用', '未收录'] hits=['不适用'] => True"
+    ]
+  },
+  "case2_structured_ratio": {
+    "ok": true,
+    "desc": "结构化引用",
+    "log": [
+      "assert structured: refused=False has_evidence=True => True"
+    ]
+  },
+  "case3_inpatient_scope": {
+    "ok": true,
+    "desc": "住院范围外拒答",
+    "log": [
+      "assert refuse terms=['住院范围', '暂未收录', '未收录'] hits=['住院范围', '暂未收录', '未收录'] => True"
+    ]
+  },
+  "case4_time_version": {
+    "ok": true,
+    "desc": "版本/时间拒答",
+    "log": [
+      "assert refuse terms=['未收录该年度', '现行政策未收录', '未收录该年度或版本'] hits=['未收录该年度', '现行政策未收录', '未收录该年度或版本'] => True"
+    ]
+  }
+}

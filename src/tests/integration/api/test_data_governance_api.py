@@ -21,12 +21,18 @@ from src.data_platform.outpatient_governance import (
     OutpatientSyncJob,
     PostgresTargetStatus,
     SyncJobStatus,
+    default_source_mapping,
 )
 from src.runtime.api.app import create_app
 from src.runtime.api.data_governance_routes import get_data_governance_service
 from src.runtime.api.data_governance_schemas import (
     DataGovernanceOverview,
     DataGovernanceSourceStatus,
+)
+from src.runtime.data_governance.service import (
+    MappingSqlPreview,
+    SourceColumnDetail,
+    SourceTableSummary,
 )
 
 
@@ -203,6 +209,37 @@ class _Service:
             batch_id="batch-1",
         )]
 
+    def explore_tables(self, source_id):
+        self.calls.append(("explore_tables", source_id))
+        return [SourceTableSummary(table_schema="dbo", table_name="o_Trade", row_count=592)]
+
+    def explore_table(self, source_id, table_schema, table_name):
+        self.calls.append(("explore_table", source_id, table_schema, table_name))
+        return [SourceColumnDetail(
+            name="T_TradeNo", data_type="varchar", is_nullable=False,
+            max_length=32, is_primary_key=True,
+        )]
+
+    def effective_mapping(self, source_id):
+        return default_source_mapping(source_id)
+
+    def save_mapping(self, source_id, request, actor):
+        self.calls.append(("save_mapping", source_id, actor))
+        return default_source_mapping(source_id)
+
+    def sql_preview(self, source_id, draft_captures=None):
+        self.calls.append(("sql_preview", source_id))
+        return MappingSqlPreview(
+            is_default=True,
+            mapping_revision=1,
+            baseline_sql=["SELECT [T_TradeNo] AS [T_TradeNo] FROM [dbo].[o_Trade]"],
+            incremental_window_sql=(
+                "SELECT [T_TradeNo] AS [T_TradeNo] FROM [dbo].[o_Trade] "
+                "WHERE [T_TradeDate] >= ? AND [T_TradeDate] < ?"
+            ),
+            incremental_children_sql=["SELECT 1 FROM [dbo].[o_FeeItem] WHERE [T_TradeNo] IN (?, ?, ?)"],
+        )
+
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
@@ -311,3 +348,70 @@ def test_database_error_is_sanitized(client):
     assert response.status_code == 503
     assert "secret" not in response.text
     assert response.json()["detail"]["error_code"] == "DATA_GOVERNANCE_UNAVAILABLE"
+
+
+# ---- 源表探查 / 映射 / SQL 预览 ----
+
+def test_explore_and_mapping_endpoints_read_controlled(client):
+    test_client, service = client
+
+    response = test_client.get(
+        f"{PREFIX}/data-sources/bjybdb/explore", headers=_headers("data_governance:read")
+    )
+    assert response.status_code == 200
+    assert response.json()["result"][0]["table_name"] == "o_Trade"
+
+    response = test_client.get(
+        f"{PREFIX}/data-sources/bjybdb/explore/dbo/o_Trade",
+        headers=_headers("data_governance:read"),
+    )
+    assert response.status_code == 200
+    assert response.json()["result"][0]["is_primary_key"] is True
+
+    response = test_client.get(
+        f"{PREFIX}/data-sources/bjybdb/mapping", headers=_headers("data_governance:read")
+    )
+    assert response.status_code == 200
+    assert set(response.json()["result"]["captures"]) == {
+        "dbo_o_Trade", "dbo_o_FeeItem", "dbo_o_Diagnose"
+    }
+
+    response = test_client.post(
+        f"{PREFIX}/data-sources/bjybdb/mapping/sql-preview",
+        headers=_headers("data_governance:read"),
+    )
+    assert response.status_code == 200
+    preview = response.json()["result"]
+    assert preview["is_default"] is True
+    assert "T_TradeDate] >= ?" in preview["incremental_window_sql"]
+
+
+def test_save_mapping_requires_write_permission_and_full_captures(client):
+    test_client, service = client
+    mapping = default_source_mapping("bjybdb")
+    body = {
+        "captures": [
+            item.model_dump(mode="json") for item in mapping.captures.values()
+        ],
+        "expected_revision": 1,
+    }
+
+    denied = test_client.put(
+        f"{PREFIX}/data-sources/bjybdb/mapping",
+        json=body, headers=_headers("data_governance:read"),
+    )
+    assert denied.status_code == 403
+
+    incomplete = {**body, "captures": body["captures"][:2]}
+    rejected = test_client.put(
+        f"{PREFIX}/data-sources/bjybdb/mapping",
+        json=incomplete, headers=_headers("data_governance:write"),
+    )
+    assert rejected.status_code == 422
+
+    accepted = test_client.put(
+        f"{PREFIX}/data-sources/bjybdb/mapping",
+        json=body, headers=_headers("data_governance:write"),
+    )
+    assert accepted.status_code == 200
+    assert ("save_mapping", "bjybdb", "admin-1") in service.calls

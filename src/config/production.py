@@ -13,6 +13,11 @@ ALLOW_LEGACY_POLICY_RELEASES = os.getenv(
     "ALLOW_LEGACY_POLICY_RELEASES", "0"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
+# 候选政策 release 发布前的答案验证第二道门禁，默认关闭以兼容存量流程。
+POLICY_RELEASE_ANSWER_VERIFICATION_GATE_ENABLED = os.getenv(
+    "POLICY_RELEASE_ANSWER_VERIFICATION_GATE_ENABLED", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
+
 # PostgreSQL 配置
 # 注：默认密码 postgres（见 AGENTS.md 生产环境配置；可用 POSTGRES_PASSWORD 覆盖）
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")

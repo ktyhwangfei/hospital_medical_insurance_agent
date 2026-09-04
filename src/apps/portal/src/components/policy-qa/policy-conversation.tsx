@@ -9,6 +9,7 @@ import PolicyQAEmptyState from '@/components/policy-qa/policy-qa-empty-state'
 import {
   extractSettlementId,
   parsePolicyQACommand,
+  resolveAnchoredSwitch,
 } from '@/lib/policy-qa-session'
 import type { UsePolicyQAStreamReturn } from '@/lib/use-policy-qa-stream'
 
@@ -59,6 +60,18 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
     }
 
     if (stream.anchor.settlementId) {
+      // 锚定后问题里出现与当前锚不同的结算单号 → 自动按 @换结算 处理，
+      // 避免用户直接打新单号被静默忽略、拿到旧单数据。
+      const switchTarget = resolveAnchoredSwitch(
+        stream.anchor.settlementId,
+        command.question,
+      )
+      if (switchTarget) {
+        await stream.send(switchTarget.question || '查询该结算单的费用构成', {
+          settlementId: switchTarget.settlementId,
+        })
+        return
+      }
       await stream.send(command.question)
       return
     }
@@ -67,7 +80,10 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
     if (settlementId) {
       await stream.send(command.question, { settlementId })
     } else {
-      appendPromptForSettlement()
+      // #33 路由放行：无锚定/未解析出单号的问题不再被前端本地挡回"请提供结算单号"，
+      // 默认放行到后端路由层——由 router 决定结构化引用/宽泛路由/确定性拒答（新设计：
+      // 宁可不给错答案也不在前端拦。仅锚定后仍需解析换单由上层守卫处理）。
+      await stream.send(command.question)
     }
   }
 

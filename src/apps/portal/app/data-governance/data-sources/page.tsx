@@ -5,6 +5,10 @@ import { Database, Download, KeyRound, Pencil, PlugZap, RefreshCw, X } from 'luc
 
 import { Button } from '@/components/ui/button'
 import {
+  SourceExploreModal,
+  SourceMappingModal,
+} from '@/components/data-governance-source-tools'
+import {
   checkDataSourceCdc,
   createDataSource,
   downloadCdcScript,
@@ -66,6 +70,8 @@ export default function DataSourcesPage() {
   const [newPassword, setNewPassword] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [canWrite, setCanWrite] = useState(false)
+  const [exploring, setExploring] = useState<DataSource | null>(null)
+  const [mappingSource, setMappingSource] = useState<DataSource | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -205,6 +211,8 @@ export default function DataSourcesPage() {
           <td className="px-4 py-3">{canWrite && <div className="flex flex-wrap gap-1.5">
             <Button size="sm" variant="outline" aria-label="编辑数据源" onClick={() => openEdit(source)}><Pencil /></Button>
             <Button size="sm" variant="outline" aria-label="轮换凭据" onClick={() => setRotating(source)}><KeyRound /></Button>
+            <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => setExploring(source)}>表探查</Button>
+            <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => setMappingSource(source)}>字段映射</Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act(source.sourceId, 'test')}><PlugZap />测试连接</Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act(source.sourceId, 'download')}><Download />下载 CDC 脚本</Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act(source.sourceId, 'check')}><RefreshCw />重新检测 CDC</Button>
@@ -230,5 +238,12 @@ export default function DataSourcesPage() {
     </Modal>}
 
     {rotating && <Modal title="轮换数据源凭据" onClose={() => setRotating(null)}><form onSubmit={rotate} className="space-y-4 p-5"><Field label="新密码"><input className={inputClass} required type="password" autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} /></Field><div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setRotating(null)}>取消</Button><Button type="submit" disabled={busy !== null}>更新凭据</Button></div></form></Modal>}
+
+    {exploring && <SourceExploreModal sourceId={exploring.sourceId} onClose={() => setExploring(null)} />}
+    {mappingSource && <SourceMappingModal
+      sourceId={mappingSource.sourceId}
+      onClose={() => setMappingSource(null)}
+      onSaved={(text) => { setMappingSource(null); setMessage(text); void load() }}
+    />}
   </div>
 }

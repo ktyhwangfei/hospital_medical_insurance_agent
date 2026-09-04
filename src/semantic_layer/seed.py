@@ -27,6 +27,57 @@ OUTPATIENT_P1_TRADE_FIELDS = (
     ("settlement_lifecycle", "Enum"),
 )
 
+# ── 门诊英文字段 → 中文显示名（权威来源：知识·顾清 66 字段审结终稿）────
+# 文件: docs/66-guqing-review-FINAL.md (commit 06d66a5)。取值以 discovery 实测 SQL Server
+# 原始字段语义为准，不按名字面翻。TA_=交易后累计、TB_=交易前累计。
+# 三陷阱字段经 discovery 纠正：名字含 Person/编号 易被误当“就诊人次/编号”发布，实为
+# 个人账户余额/生育备案号 —— 与 insured_encounter_count 人次口径冲突会污染次均，禁止当人次发布。
+_GUQING_FINAL_CN: dict[str, str] = {
+    "Count": "总数量", "FeeItem_SelfPay2": "个人自付二", "FeeItem_State": "收费明细状态",
+    "FeeType": "费用类型", "ItemCode": "子项目医保编码", "ItemType": "子项目类型",
+    "NP_Settle_State": "国家平台结算状态",
+    "NT_AgencySumPay": "经办机构支付总额", "NT_AllSelfPayFlag": "全额垫付标志",
+    "NT_BasicPay": "基本医疗保险统筹基金支付金额", "NT_CivilPay": "民政补助基金支付金额",
+    "NT_OtherPay": "其他基金支付金额", "NT_OUT2_PRICE": "超限价自付费用",
+    "NT_OUT2_SCALE": "乙类先自付费用合计", "NT_ReTradeFlag": "退费交易重收标识",
+    "P_CivilFlag": "民政救助标识", "P_CivilType": "民政救助类别",
+    "P_HospFlag": "医院标识(定点范围标识)", "P_Official": "是否公务员(身份档位)",
+    "P_retirementflag": "退休标识",
+    "PN_ChronicCode": "慢性病代号", "PN_ChronicFlag": "慢性病标识",
+    "PN_IsChronicHosp": "慢性病就医医院标识", "PN_NationFundType": "险种类型",
+    "PN_NoRightReason": "医保未结算原因", "PN_OutTransaction": "异地结算人员标识",
+    "PN_PersonCount": "交易前个人账户余额",  # 陷阱：非“就诊人次”，discovery=trade 前个人账户余额
+    "RETIRE_OFFICER_FLAG": "退役军人标识", "SETL_DATE": "国家平台结算时间",
+    "StandardCode": "国家项目编码",
+    "T_BeyondBig": "超门诊大额封顶部分", "T_CompHospFlag": "医照医院范围标识",
+    "T_DiagType": "交易类型", "T_GFBelongFlag": "医照人员属地标识",
+    "T_HasRefundmented": "是否退费交易", "T_OraginalTradeDate": "原交易时间",
+    "T_OraginalTradeNo": "原交易号", "T_PartialReturnFlag": "部分退费红冲交易标识",
+    "T_PersonCountAfter": "当次交易后个人账户余额",  # 陷阱：非“结算后人次”，实为当次交易后个人账户余额
+    "T_pneno": "生育备案号",                        # 陷阱：非“就诊编号”，实为生育备案号
+    "T_SpSetlFlag": "特殊结算标识",
+    "TA_BeyondFeeIn": "结算后门诊超封顶部分", "TA_BigillComm": "交易后大病医保内费用累计",
+    "TA_BigillPay": "交易后大病保障累计支付", "TA_BigPay": "年度门诊大额支付累计",
+    "TA_BigPayL1": "一级医院城乡居民年度门诊大额支付累计(交易后)",
+    "TA_CivilComm": "交易后民政救助医保内费用累计", "TA_CivilPay": "交易后民政救助累计支付",
+    "TA_FeeAfterBig": "年度超门诊大额封顶后医保内费用累计(交易后)",
+    "TA_FeeAfterBigL1": "一级医院城乡居民年度超大额封顶后医保内费用累计(交易后)",
+    "TA_FeeIn": "年度门诊医保内费用累计(交易后)",
+    "TA_FeeInL1": "一级医院城乡居民年度门诊医保内费用累计(交易后)",
+    "TA_MZTimes": "门诊结算次数(交易后)",
+    "TB_BeyondFeeIn": "结算前门诊超封顶部分", "TB_BigillComm": "交易前大病医保内费用累计",
+    "TB_BigillPay": "交易前大病保障累计支付", "TB_BigPay": "大额支付(交易前)",
+    "TB_BigPayL1": "一级医院城乡居民年度门诊大额支付累计(交易前)",
+    "TB_CivilComm": "交易前民政救助医保内费用累计", "TB_CivilPay": "交易前民政救助累计支付",
+    "TB_FeeAfterBig": "年度超门诊大额封顶后医保内费用累计(交易前)",
+    "TB_FeeAfterBigL1": "一级医院城乡居民超大额封顶后医保内费用累计(交易前)",
+    "TB_FeeIn": "年度门诊医保内费用累计(交易前)",
+    "TB_FeeInL1": "一级医院城乡居民年度门诊医保内费用累计(交易前)",
+    "TB_MZTimes": "年度结算次数(交易前)",
+    "UnitPrice": "价格",
+}
+
+
 # ── 医保字典标准映射（源自 business_sql.yaml 的 CASE 转换）──────────
 # 将散落在 SQL CASE 里的码→标签映射，声明式收敛进语义层值域。
 # [来源: business_sql.yaml settlement_context 的 CASE a.FUND_TYPE / CASE a.yllb
@@ -142,13 +193,25 @@ def ensure_policy_dictionaries(store: RegistryStore) -> None:
     """幂等 ensure：把政策规则字典（5 域）灌入语义层值域（standard_values）。
 
     [来源: raw/数据模型1.xlsx 字典 sheet 一次性转录；zcgz 维度指标 value_domain 引用]
+    并集语义：域已存在时只补齐缺失的 seed 值，保留治理新增（如 hosp_lv「社区」）；
+    整值覆盖会把语义发现/人工裁决新增的值在每次重启时丢掉。
     """
     for domain_code, (name, values) in _POLICY_DICTIONARY_VALUES.items():
-        store.save_value_domain(ValueDomain(
-            domain_code=domain_code, name=name,
-            description=f"政策规则字典（源自数据模型1.xlsx，P8.3 种子）",
-            standard_values=list(values),
-        ))
+        existing = store.get_value_domain(domain_code)
+        if existing is None:
+            store.save_value_domain(ValueDomain(
+                domain_code=domain_code, name=name,
+                description="政策规则字典（源自数据模型1.xlsx，P8.3 种子）",
+                standard_values=list(values),
+            ))
+            continue
+        missing = [v for v in values if v not in existing.standard_values]
+        if missing:
+            store.save_value_domain(ValueDomain(
+                domain_code=domain_code, name=existing.name or name,
+                description=existing.description,
+                standard_values=list(existing.standard_values) + missing,
+            ))
 
 
 def publish_seed_policy_object(registry) -> None:
@@ -163,6 +226,158 @@ def publish_seed_policy_object(registry) -> None:
     if registry.list_object_versions("zcgz"):
         return  # 已发布过，幂等跳过
     registry.publish_object("zcgz", changelog="P8.3 种子发布政策规则对象，解锁提取契约")
+
+
+def _seed_settlement_query_model(store: RegistryStore) -> None:
+    """住院费用查询模型：登记锚点、待遇分段、支付分段和交易信息。"""
+    object_code = "inpatient_settlement"
+    if store.get_object(object_code) is None:
+        store.save_object(BusinessObject(
+            object_code=object_code, domain_code="ybjs", name="住院结算",
+            definition="以登记号锚定整次住院，按结算分段预聚合并汇总全部住院费用。",
+            status="draft",
+        ))
+    if store.get_dataset("inpatient_registration") is not None:
+        return
+    datasets = [
+        SemanticDataset(dataset_code="inpatient_registration", object_code=object_code,
+                        datasource_id="bjybdb", table_name="yb_brdjxx", name="住院登记"),
+        SemanticDataset(dataset_code="benefit_segments", object_code=object_code,
+                        datasource_id="bjybdb", table_name="yb_dyxxzy", name="住院待遇分段"),
+        SemanticDataset(dataset_code="payment_segments", object_code=object_code,
+                        datasource_id="bjybdb", table_name="yb_zyfdxx", name="住院支付分段"),
+        SemanticDataset(dataset_code="inpatient_transaction", object_code=object_code,
+                        datasource_id="bjybdb", table_name="yb_zyjyxx", name="住院交易"),
+    ]
+    for dataset in datasets:
+        store.save_dataset(dataset)
+
+    keys = [
+        DatasetKey(key_code="registration_pk", dataset_code="inpatient_registration",
+                   entity_code="inpatient_admission", key_type="primary", columns=["djh"]),
+        DatasetKey(key_code="benefit_segment_pk", dataset_code="benefit_segments",
+                   entity_code="admission_segment", key_type="primary",
+                   columns=["djh", "bcqsrq", "zqxh"]),
+        DatasetKey(key_code="benefit_admission_fk", dataset_code="benefit_segments",
+                   entity_code="inpatient_admission", key_type="foreign", columns=["djh"]),
+        DatasetKey(key_code="benefit_payment_key", dataset_code="benefit_segments",
+                   entity_code="admission_segment", key_type="unique", columns=["djh", "bcqsrq"]),
+        DatasetKey(key_code="payment_segment_pk", dataset_code="payment_segments",
+                   entity_code="admission_segment", key_type="primary",
+                   columns=["djh", "bdqsrq", "bdjsrq"]),
+        DatasetKey(key_code="payment_admission_fk", dataset_code="payment_segments",
+                   entity_code="inpatient_admission", key_type="foreign", columns=["djh"]),
+        DatasetKey(key_code="payment_segment_fk", dataset_code="payment_segments",
+                   entity_code="admission_segment", key_type="foreign", columns=["djh", "bdqsrq"]),
+        DatasetKey(key_code="transaction_pk", dataset_code="inpatient_transaction",
+                   entity_code="inpatient_admission", key_type="primary", columns=["djh"]),
+    ]
+    for key in keys:
+        store.save_dataset_key(key)
+
+    field_specs = [
+        ("inpatient_registration.registration_id", "inpatient_registration", "djh", "登记号", "identifier", "String", False),
+        ("inpatient_registration.insurance_type", "inpatient_registration", "FUND_TYPE", "险种类型", "dimension", "Enum", True),
+        ("inpatient_registration.service_type", "inpatient_registration", "yllb", "医疗类别", "dimension", "Enum", True),
+        ("benefit_segments.admission_id", "benefit_segments", "djh", "住院登记号", "identifier", "String", False),
+        ("benefit_segments.segment_start_date", "benefit_segments", "bcqsrq", "分段开始日期", "identifier", "Date", False),
+        ("benefit_segments.segment_end_date", "benefit_segments", "bcjsrq", "分段结束日期", "dimension", "Date", True),
+        ("benefit_segments.cycle_no", "benefit_segments", "zqxh", "周期序号", "identifier", "String", False),
+        ("benefit_segments.deductible", "benefit_segments", "bcqfje", "起付线", "fact", "Amount", True),
+        ("benefit_segments.medical_insurance_inner_amount", "benefit_segments", "bcybnje", "医保内费用", "fact", "Amount", True),
+        ("payment_segments.admission_id", "payment_segments", "djh", "住院登记号", "identifier", "String", False),
+        ("payment_segments.segment_start_date", "payment_segments", "bdqsrq", "分段开始日期", "identifier", "Date", False),
+        ("payment_segments.segment_end_date", "payment_segments", "bdjsrq", "分段结束日期", "identifier", "Date", False),
+        ("payment_segments.total_amount", "payment_segments", "bdfyzje", "住院总费用", "fact", "Amount", True),
+        ("payment_segments.basic_pooling_payment", "payment_segments", "bdtczfje", "统筹支付", "fact", "Amount", True),
+        ("payment_segments.basic_pooling_self_pay", "payment_segments", "bdtczf", "统筹自付", "fact", "Amount", True),
+        ("payment_segments.large_amount_payment", "payment_segments", "bddegwyzfje", "大额支付", "fact", "Amount", True),
+        ("payment_segments.large_amount_self_pay", "payment_segments", "bddegwyzf", "大额自付", "fact", "Amount", True),
+        ("payment_segments.personal_total_pay", "payment_segments", "bdgryf", "个人总支付", "fact", "Amount", True),
+        ("inpatient_transaction.admission_id", "inpatient_transaction", "djh", "住院登记号", "identifier", "String", False),
+        ("inpatient_transaction.person_type", "inpatient_transaction", "PER_TYPE", "人员类别", "dimension", "Enum", True),
+    ]
+    for code, dataset, column, name, role, semantic_type, nullable in field_specs:
+        store.save_field(SemanticField(
+            field_code=code, dataset_code=dataset, column_name=column, name=name,
+            field_role=role, semantic_type=semantic_type, nullable=nullable,
+            value_domain={
+                "inpatient_registration.insurance_type": "FUND_TYPE",
+                "inpatient_registration.service_type": "YLLB",
+                "inpatient_transaction.person_type": "PERSON_TYPE",
+            }.get(code),
+        ))
+
+    for relation in [
+        DatasetRelation(relation_code="registration_to_benefit", object_code=object_code,
+                        from_dataset="inpatient_registration", from_key="registration_pk",
+                        to_dataset="benefit_segments", to_key="benefit_admission_fk",
+                        cardinality="one_to_many"),
+        DatasetRelation(relation_code="benefit_to_payment", object_code=object_code,
+                        from_dataset="benefit_segments", from_key="benefit_payment_key",
+                        to_dataset="payment_segments", to_key="payment_segment_fk",
+                        cardinality="one_to_one"),
+        DatasetRelation(relation_code="registration_to_transaction", object_code=object_code,
+                        from_dataset="inpatient_registration", from_key="registration_pk",
+                        to_dataset="inpatient_transaction", to_key="transaction_pk",
+                        cardinality="one_to_one"),
+    ]:
+        store.save_dataset_relation(relation)
+
+    query_metrics = [
+        ("total_amount", "住院总费用", "payment_segments.total_amount", "sum"),
+        ("medical_insurance_inner_amount", "医保内费用", "benefit_segments.medical_insurance_inner_amount", "sum"),
+        ("deductible", "起付线", "benefit_segments.deductible", "sum"),
+        ("basic_pooling_payment", "统筹支付", "payment_segments.basic_pooling_payment", "sum"),
+        ("basic_pooling_self_pay", "统筹自付", "payment_segments.basic_pooling_self_pay", "sum"),
+        ("large_amount_payment", "大额支付", "payment_segments.large_amount_payment", "sum"),
+        ("large_amount_self_pay", "大额自付", "payment_segments.large_amount_self_pay", "sum"),
+        ("personal_total_pay", "个人总支付", "payment_segments.personal_total_pay", "sum"),
+        ("yearly_cycle_count", "结算周期数", "benefit_segments.cycle_no", "count_distinct"),
+        ("person_type", "人员类别", "inpatient_transaction.person_type", "max"),
+        ("insurance_type", "险种类型", "inpatient_registration.insurance_type", "max"),
+        ("service_type", "医疗类别", "inpatient_registration.service_type", "max"),
+    ]
+    for short_code, name, field_code, aggregation in query_metrics:
+        store.save_metric(Metric(
+            metric_code=f"{object_code}.{short_code}", object_code=object_code,
+            name=name, definition=f"整次住院{name}", metric_type="aggregate",
+            semantic_type="Amount" if aggregation in {"sum", "count_distinct"} else "Enum",
+            unit="元" if aggregation == "sum" else None,
+            fact_field_code=field_code, aggregation=aggregation,
+            status="draft", importance="core",
+        ))
+
+    for rule in [
+        DataQualityRule(rule_code="benefit_segment_key_unique", object_code=object_code,
+                        rule_type="uniqueness", target_dataset_or_relation="benefit_segments",
+                        severity="blocking", parameters={"key_code": "benefit_segment_pk"}),
+        DataQualityRule(rule_code="payment_segment_key_unique", object_code=object_code,
+                        rule_type="uniqueness", target_dataset_or_relation="payment_segments",
+                        severity="blocking", parameters={"key_code": "payment_segment_pk"}),
+        DataQualityRule(rule_code="payment_segments_cover_segment_spine", object_code=object_code,
+                        rule_type="coverage", target_dataset_or_relation="benefit_to_payment",
+                        severity="warning", parameters={"reference_dataset": "benefit_segments"}),
+        DataQualityRule(rule_code="registration_anchor_not_null", object_code=object_code,
+                        rule_type="not_null", target_dataset_or_relation="inpatient_registration",
+                        severity="blocking", parameters={"field_code": "inpatient_registration.registration_id"}),
+    ]:
+        store.save_quality_rule(rule)
+
+
+
+
+def publish_seed_query_object(registry) -> None:
+    """幂等发布住院结算查询模型，供运行时只读已发布快照。"""
+    if registry.get_object("inpatient_settlement") is None:
+        return
+    if registry.list_object_versions("inpatient_settlement"):
+        return
+    registry.publish_object(
+        "inpatient_settlement",
+        changelog="住院费用整次住院分段汇总查询模型",
+    )
+
 
 
 def publish_seed_outpatient_query_object(registry) -> None:
@@ -181,6 +396,81 @@ def ensure_outpatient_query_model(store: RegistryStore) -> None:
             identifier="settlement_id", version="1.0", status="draft",
         ))
     _seed_outpatient_query_model(store)
+    ensure_outpatient_metric_governance(store)
+
+
+def ensure_outpatient_metric_governance(store: RegistryStore) -> None:
+    """幂等补齐门诊首批 4 指标治理元数据 + 依赖次均/就诊人次（draft）。
+
+    issue-35 的治理口径若不抽离，会被 ``_seed_outpatient_query_model`` 顶部的
+    ``mz_trade`` 数据集存在即 return 一并跳过——既有注册库只会注册为治理前的旧名。
+    本函数每个 PG client 初始化都会运行：仅对已存在的基础指标做治理改名（经
+    save_metric 的 schema_version 守卫，不覆盖更高版本），并补齐 draft 派生指标。
+    """
+    object_code = "mzjyxx"
+    governed = {
+        # 中文名口径已与知识（顾清）核对；T_State 非挂号/建档/流水条数，是结算成功且医保实际受理的有效笔数。
+        "T_State": ("门诊有效结算笔数", "count", "笔", 0,
+                    "结算成功且医保实际受理的有效门诊结算笔数（非挂号/建档笔数，非交易流水条数）"),
+        "T_FeeAll": ("门诊总费用", "sum", "元", 2,
+                     "门诊结算费用总计；不加其他支付段时与统筹基金支付+个人支付满足勾稽关系"),
+        "T_FundPay": ("门诊统筹基金支付金额", "sum", "元", 2,
+                      "统筹基金支付部分；与门诊个人支付金额之和应勾稽门诊总费用"),
+        "T_SelfPayAll": ("门诊个人支付金额", "sum", "元", 2,
+                         "个人支付部分；与门诊统筹基金支付金额之和应勾稽门诊总费用"),
+    }
+    for column, (name, aggregation, unit, precision, definition) in governed.items():
+        metric = store.get_metric(f"{object_code}.{column}")
+        if metric is None:
+            continue
+        store.save_metric(metric.model_copy(update={
+            "name": name, "definition": definition,
+            "synonyms": [name], "compatible_dimensions": ["time", "organization.department", "insurance_type", "settlement_status"],
+            "default_time_role": "settlement_time", "refresh_frequency": "5m",
+            "permission_level": "summary", "owner": "医保数据组", "reviewer": "医保业务组",
+            "precision": precision, "unit": unit, "aggregation": aggregation,
+            "status": "published",
+        }))
+    store.save_metric(Metric(
+        metric_code=f"{object_code}.average_fee", object_code=object_code,
+        name="门诊次均费用", definition="门诊总费用除以医保门诊就诊人次（就诊人次口径待定）",
+        metric_type="aggregate", semantic_type="Amount", unit="元", precision=None,
+        fact_field_code=None, aggregation=None,
+        dependencies=[f"{object_code}.T_FeeAll", f"{object_code}.insured_encounter_count"],
+        synonyms=[], compatible_dimensions=[], default_time_role=None, refresh_frequency=None, permission_level=None,
+        owner=None, reviewer=None, source_object="mz_trade", status="draft",
+    ))
+    store.save_metric(Metric(
+        metric_code=f"{object_code}.insured_encounter_count", object_code=object_code,
+        name="门诊医保就诊人次", definition="按唯一就诊标识统计医保门诊人次",
+        metric_type="Aggregate", semantic_type="Count", unit="人次", aggregation="count_distinct",
+        fact_field_code="mz_trade.T_TradeNo", source_object="mz_trade", status="draft",
+    ))
+    _localize_outpatient_metric_display_names(store, object_code)
+
+
+def _localize_outpatient_metric_display_names(store: RegistryStore, object_code: str) -> None:
+    """幂等把门诊指标中文显示名落在既有库（知识审结 66 字段）。
+
+    这些名称仅由一次性 dataset 守卫的 _seed_outpatient_query_model 里的 base 注册写入，
+    对已存在 mz 库不会重跑 → 一直保留英文列名。本函数随 ensure 每次幂等把 name 换成
+    知识审结中文（_GUQING_FINAL_CN），并给将来发布金额字段补口径底注（实付vs记账、负数=冲正）。
+    尊重 save_metric 的 schema_version 守卫，不覆盖高版本的用户改名。
+    """
+    for mid in store.list_metrics(object_code=object_code):
+        col = mid.metric_code.split(".", 1)[-1]
+        cn = _GUQING_FINAL_CN.get(col)
+        if not cn:
+            continue
+        upd = {}
+        if not mid.name or mid.name.isascii():
+            upd["name"] = cn
+        if mid.semantic_type == "Amount" and mid.fact_field_code and not mid.expression:
+            base = (mid.definition or cn)
+            if "负数" not in base and "冲正" not in base:
+                upd["definition"] = f"{base}；口径：实付支付额，负数为冲正/红冲金额"
+        if upd:
+            store.save_metric(mid.model_copy(update=upd))
 
 
 def switch_outpatient_query_model_to_postgres(store: RegistryStore) -> None:
@@ -213,6 +503,7 @@ def seed_semantic_layer(store: RegistryStore) -> None:
     _seed_domains(store)
     _seed_objects(store)
     _seed_metrics(store)
+    _seed_settlement_query_model(store)
     ensure_outpatient_query_model(store)
     ensure_yb_dictionary_mappings(store)
 
@@ -534,6 +825,7 @@ def _seed_outpatient_query_model(store: RegistryStore) -> None:
         "FEE_SP_SCALE": "项目先自付比例", "FEE_MEDIC_L": "项目医保限额",
         "MEDIC_L": "项目医疗限额", "SPEDRUG_FLAG": "特殊药品标志",
     }
+    display_names.update(_GUQING_FINAL_CN)  # 知识审结中文名（66 字段）优先覆盖/补齐
     key_columns = {"T_TradeNo", "ItemId", "ItemNo"}
     value_domains = {
         "P_FundType": "FUND_TYPE", "PN_PersonType": "MZ_PERSON_TYPE",

@@ -15,9 +15,13 @@ COLLECTION_NAME = "policy_rules_v2"
 VECTOR_FIELD = "vector"
 
 # 核心维度字段（固定列，裸值）
+# amount_band_min/max 在 release 产物集合中是 dynamic key（可按名取回），
+# 在新建 v2 schema 中是固定列（Issue #25 阶段 2）
 CORE_FIELDS = (
     "rule_id", "fact_id", "doc_id",
     "rule_type", "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type",
+    "region", "effective_date", "expiry_date", "publish_status",
+    "policy_version", "is_remote", "amount_band_min", "amount_band_max",
 )
 
 # 详情字段（落 dynamic field，值是 FieldTrace dict，需解包 .value）

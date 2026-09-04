@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import {
   acceptSemanticProposal,
   listSemanticProposals,
+  previewDatabaseEvidence,
   publishSemanticProposal,
   rejectSemanticProposal,
   resolveDimensionProposal,
@@ -28,6 +29,7 @@ const TYPE_LABELS: Record<SemanticProposalType, string> = {
   metric: '指标提议',
   value: '值域提议',
   dimension: '维度候选',
+  rule_governance: '规则治理草稿',
 }
 
 const TYPE_FILTERS: Array<{ key: SemanticProposalType | 'all'; label: string }> = [
@@ -35,6 +37,7 @@ const TYPE_FILTERS: Array<{ key: SemanticProposalType | 'all'; label: string }> 
   { key: 'metric', label: '只看指标提议' },
   { key: 'value', label: '只看值域提议' },
   { key: 'dimension', label: '只看维度候选' },
+  { key: 'rule_governance', label: '只看规则治理' },
 ]
 
 const STATUS_LABELS: Record<SemanticProposalStatus, string> = {
@@ -53,6 +56,7 @@ const TRIGGER_LABELS: Record<SemanticProposal['trigger_source'], string> = {
   DATA_SCAN: '数据扫描',
   DERIVATION_PATTERN: '派生模式',
   CONFLICT_PARTITION: '规则冲突诊断',
+  MANUAL_RULE_CORRECTION: '异常规则纠偏',
 }
 
 function errorMessage(error: unknown): string {
@@ -148,6 +152,46 @@ function Evidence({ evidence }: { evidence: SemanticProposalEvidence }) {
   )
 }
 
+function DatabaseEvidence({ evidence }: { evidence: SemanticProposalEvidence[] }) {
+  if (evidence.length === 0) return null
+  const gradeLabel = {
+    strong: '强证据',
+    supporting: '佐证',
+    weak: '弱证据',
+    rejected: '排除',
+  } as const
+  return (
+    <section aria-label="bjyb 数据证据" className="space-y-2 rounded-lg border border-emerald-100 bg-emerald-50/40 p-4">
+      <h3 className="font-medium text-slate-900">bjyb 数据证据</h3>
+      {evidence.map((item) => {
+        const rate = item.non_null_rate == null ? null : Math.round(item.non_null_rate * 100)
+        return (
+          <div key={item.source_ref} className="space-y-2 rounded-md border border-slate-200 bg-white p-3 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <code className="font-medium text-blue-700">{item.table_name}.{item.field_name}</code>
+              {item.evidence_grade && (
+                <Badge variant={item.evidence_grade === 'rejected' ? 'destructive' : 'outline'}>
+                  {gradeLabel[item.evidence_grade]}
+                </Badge>
+              )}
+            </div>
+            {item.excerpt && <p className="text-slate-700">{item.excerpt}</p>}
+            {(rate != null || item.distinct_count != null) && (
+              <p className="text-slate-600">
+                {rate != null ? `非空率 ${rate}%` : '非空率未知'}
+                {item.distinct_count != null ? ` · ${item.distinct_count} 个不同值` : ''}
+              </p>
+            )}
+            {item.sample_values?.length ? <p className="text-slate-600">观测值：{item.sample_values.join('、')}</p> : null}
+            {item.match_reasons?.map((reason) => <p key={reason} className="text-emerald-700">采纳理由：{reason}</p>)}
+            {item.rejection_reasons?.map((reason) => <p key={reason} className="text-red-700">{reason}</p>)}
+          </div>
+        )
+      })}
+    </section>
+  )
+}
+
 interface ProposalCardProps {
   proposal: SemanticProposal
   expanded: boolean
@@ -192,6 +236,8 @@ function ProposalCard({
   const evidenceSummary = proposal.evidence[0]?.excerpt
     ?? proposal.value_draft?.evidence
     ?? '已记录结构化来源证据'
+  const databaseEvidence = proposal.evidence.filter((item) => item.evidence_kind === 'database')
+  const policyEvidence = proposal.evidence.filter((item) => item.evidence_kind !== 'database')
 
   return (
     <Card className="border border-slate-200 bg-white/90 shadow-sm hover:shadow-sm">
@@ -252,7 +298,8 @@ function ProposalCard({
           <section aria-label={`${label} 证据详情`} className="space-y-2">
             {proposal.proposal_type === 'dimension'
               ? <DimensionEvidence proposal={proposal} />
-              : proposal.evidence.map((evidence) => <Evidence key={evidence.source_ref} evidence={evidence} />)}
+              : policyEvidence.map((evidence) => <Evidence key={evidence.source_ref} evidence={evidence} />)}
+            <DatabaseEvidence evidence={databaseEvidence} />
           </section>
         )}
         {rejecting && proposal.proposal_type !== 'dimension' && (
@@ -323,8 +370,8 @@ function ProposalCard({
         ) : (
           <CardFooter className="justify-end gap-2">
             <Button type="button" variant="outline" aria-label={`驳回 ${label}`} onClick={onRejectStart} disabled={pending}>驳回</Button>
-            <Button type="button" aria-label={`通过并发布 ${label}`} onClick={onAccept} disabled={pending}>
-              {pending ? '处理中…' : '通过并发布'}
+            <Button type="button" aria-label={`${proposal.proposal_type === 'rule_governance' ? '批准变更计划' : '通过并发布'} ${label}`} onClick={onAccept} disabled={pending}>
+              {pending ? '处理中…' : proposal.proposal_type === 'rule_governance' ? '批准变更计划' : '通过并发布'}
             </Button>
           </CardFooter>
         )
@@ -336,6 +383,8 @@ function ProposalCard({
 export default function SemanticProposalsPage() {
   const [typeFilter, setTypeFilter] = useState<SemanticProposalType | 'all'>('all')
   const [proposals, setProposals] = useState<SemanticProposal[]>([])
+  const [historicalIds, setHistoricalIds] = useState<Set<string>>(new Set())
+  const [showHistory, setShowHistory] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -344,6 +393,12 @@ export default function SemanticProposalsPage() {
   const [pendingId, setPendingId] = useState<string | null>(null)
   const [rejectingId, setRejectingId] = useState<string | null>(null)
   const [rejectReason, setRejectReason] = useState('')
+  const [previewConcept, setPreviewConcept] = useState('')
+  const [previewDefinition, setPreviewDefinition] = useState('')
+  const [previewValues, setPreviewValues] = useState('')
+  const [previewEvidence, setPreviewEvidence] = useState<SemanticProposalEvidence[]>([])
+  const [previewing, setPreviewing] = useState(false)
+  const [previewError, setPreviewError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -351,15 +406,17 @@ export default function SemanticProposalsPage() {
       listSemanticProposals('metric'),
       listSemanticProposals('value'),
       listSemanticProposals('dimension'),
+      listSemanticProposals('rule_governance'),
     ])
-      .then(([metrics, values, dimensions]) => {
+      .then(([metrics, values, dimensions, governance]) => {
         if (!cancelled) {
           // 统一审核队列：三类提议合并后按更新时间倒序，不按类型拆分
-          setProposals(
-            [...metrics, ...values, ...dimensions]
-              .filter((item) => ACTIVE_STATUSES.has(item.status))
-              .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
-          )
+          const all = [...metrics, ...values, ...dimensions, ...governance]
+            .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+          setHistoricalIds(new Set(
+            all.filter((item) => !ACTIVE_STATUSES.has(item.status)).map((item) => item.proposal_id),
+          ))
+          setProposals(all)
         }
       })
       .catch((error: unknown) => {
@@ -372,7 +429,17 @@ export default function SemanticProposalsPage() {
   }, [])
 
   const updateProposal = (proposal: SemanticProposal) => {
-    setProposals((current) => current.map((item) => item.proposal_id === proposal.proposal_id ? proposal : item))
+    setProposals((current) => current.map((item) => {
+      if (item.proposal_id !== proposal.proposal_id) return item
+      const incomingRefs = new Set(proposal.evidence.map((evidence) => evidence.source_ref))
+      return {
+        ...proposal,
+        evidence: [
+          ...proposal.evidence,
+          ...item.evidence.filter((evidence) => evidence.evidence_kind === 'database' && !incomingRefs.has(evidence.source_ref)),
+        ],
+      }
+    }))
   }
 
   const beginMutation = (proposalId: string) => {
@@ -414,6 +481,10 @@ export default function SemanticProposalsPage() {
       if (current.status === 'reviewing') {
         current = await acceptSemanticProposal(current.proposal_id)
         updateProposal(current)
+      }
+      if (proposal.proposal_type === 'rule_governance') {
+        setSuccess(`${proposalLabel(proposal)} 变更计划已批准，尚未执行`)
+        return
       }
       const published = await publishSemanticProposal(current.proposal_id)
       updateProposal(published)
@@ -466,10 +537,30 @@ export default function SemanticProposalsPage() {
     }
   }
 
-  const visible = typeFilter === 'all'
+  const preview = async () => {
+    if (!previewConcept.trim()) return
+    setPreviewing(true)
+    setPreviewError('')
+    try {
+      setPreviewEvidence(await previewDatabaseEvidence(
+        previewConcept,
+        previewDefinition,
+        previewValues.split(/[，,；;\n]+/).map((value) => value.trim()).filter(Boolean),
+      ))
+    } catch (error) {
+      setPreviewError(errorMessage(error))
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
+  const listed = showHistory
     ? proposals
-    : proposals.filter((proposal) => proposal.proposal_type === typeFilter)
-  const countByType = proposals.reduce<Record<string, number>>((acc, proposal) => {
+    : proposals.filter((proposal) => !historicalIds.has(proposal.proposal_id))
+  const visible = typeFilter === 'all'
+    ? listed
+    : listed.filter((proposal) => proposal.proposal_type === typeFilter)
+  const countByType = listed.reduce<Record<string, number>>((acc, proposal) => {
     acc[proposal.proposal_type] = (acc[proposal.proposal_type] ?? 0) + 1
     return acc
   }, {})
@@ -497,10 +588,26 @@ export default function SemanticProposalsPage() {
           <Link className="underline underline-offset-2 hover:text-emerald-900" href="/policy-knowledge/knowledge/build">去重新抽取</Link>
         </div>
       )}
+      <section aria-label="数据库字段证据预览" className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
+        <div>
+          <h2 className="font-medium text-slate-900">数据库字段证据预览</h2>
+          <p className="text-xs text-slate-600">不创建提议、不修改审核状态，直接验证政策概念与 bjyb 字段和值域的匹配结果。</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="grid gap-1 text-xs text-slate-600">政策概念<Input aria-label="政策概念" value={previewConcept} onChange={(event) => setPreviewConcept(event.target.value)} placeholder="例如：医疗机构类别、基金归属" /></label>
+          <label className="grid gap-1 text-xs text-slate-600">语义说明<Input aria-label="语义说明" value={previewDefinition} onChange={(event) => setPreviewDefinition(event.target.value)} placeholder="可选：说明字段业务角色" /></label>
+          <label className="grid gap-1 text-xs text-slate-600">候选值<Input aria-label="候选值" value={previewValues} onChange={(event) => setPreviewValues(event.target.value)} placeholder="可选，用逗号或分号分隔" /></label>
+        </div>
+        <Button type="button" onClick={() => void preview()} disabled={previewing || !previewConcept.trim()}>
+          {previewing ? '匹配中…' : '匹配 bjyb 字段'}
+        </Button>
+        {previewError && <div role="alert" className="text-sm text-red-700">{previewError}</div>}
+        <DatabaseEvidence evidence={previewEvidence} />
+      </section>
       <div role="group" aria-label="提议类型筛选" className="flex flex-wrap items-center gap-2">
         {TYPE_FILTERS.map(({ key, label }) => {
           const active = typeFilter === key
-          const count = key === 'all' ? proposals.length : countByType[key] ?? 0
+          const count = key === 'all' ? listed.length : countByType[key] ?? 0
           return (
             <Button
               key={key}
@@ -514,6 +621,18 @@ export default function SemanticProposalsPage() {
             </Button>
           )
         })}
+        {historicalIds.size > 0 && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-label={showHistory ? '隐藏历史提议' : '包含历史提议'}
+            aria-pressed={showHistory}
+            onClick={() => setShowHistory((current) => !current)}
+          >
+            {showHistory ? '隐藏历史提议' : `包含历史提议（${historicalIds.size}）`}
+          </Button>
+        )}
       </div>
       {visible.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-6 py-12 text-center text-sm text-slate-600">

@@ -140,11 +140,45 @@ class Metric(BaseModel):
     indexed: bool = Field(default=False, description="是否核心检索维度：True→进 Milvus 固定 schema + 标量索引；False→详情走 dynamic field")
     extraction_hint: Optional[str] = Field(None, description="给 LLM 的提取说明，动态拼 prompt 用")
     schema_version: int = Field(default=1, description="schema 演化版本，配合字段级溯源")
+    # 查询模型扩展：仅 aggregate / derived 指标由 Query Planner 消费。
     fact_field_code: Optional[str] = Field(None, max_length=256)
     aggregation: Optional[Literal["sum", "min", "max", "avg", "count", "count_distinct"]] = None
     expression: Optional[str] = None
     dependencies: list[str] = Field(default_factory=list)
     non_additive_dimensions: list[str] = Field(default_factory=list)
+    synonyms: list[str] = Field(default_factory=list)
+    compatible_dimensions: list[str] = Field(default_factory=list)
+    default_time_role: Optional[str] = Field(None, max_length=64)
+    refresh_frequency: Optional[str] = Field(None, max_length=64)
+    permission_level: Optional[str] = Field(None, max_length=64)
+    owner: Optional[str] = Field(None, max_length=128)
+    reviewer: Optional[str] = Field(None, max_length=128)
+    precision: Optional[int] = Field(None, ge=0, le=12)
+    # ── 政策承载（#60 #35-follow-up）：政策绑定类指标发布须带 文号/地域/生效期 ──
+    subkind: Optional[str] = Field(
+        None, max_length=32, description="A/B 判别位: policy_rate|policy_elig(政策绑定类) 或 None/''（运营事实类 B）")
+    policy_carrier: Optional[dict[str, Any]] = Field(
+        None, description="A 类发布硬卡组: doc_number/region_scope/effective_start[/effective_end]/policy_rule_ref")
+
+    def governance_missing_fields(self) -> list[str]:
+        required = {
+            "name": self.name,
+            "synonyms": self.synonyms,
+            "definition": self.definition,
+            "expression": self.expression if self.metric_type == "Derived" else True,
+            "aggregation": self.aggregation,
+            "unit": self.unit,
+            "precision": self.precision,
+            "compatible_dimensions": self.compatible_dimensions,
+            "default_time_role": self.default_time_role,
+            "source_object": self.source_object,
+            "refresh_frequency": self.refresh_frequency,
+            "permission_level": self.permission_level,
+            "owner": self.owner,
+            "reviewer": self.reviewer,
+            "version": self.version,
+        }
+        return [key for key, value in required.items() if value is None or value == "" or value == []]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -177,6 +211,16 @@ class ObjectVersionMetric(BaseModel):
     expression: Optional[str] = None
     dependencies: list[str] = Field(default_factory=list)
     non_additive_dimensions: list[str] = Field(default_factory=list)
+    synonyms: list[str] = Field(default_factory=list)
+    compatible_dimensions: list[str] = Field(default_factory=list)
+    default_time_role: Optional[str] = None
+    refresh_frequency: Optional[str] = None
+    permission_level: Optional[str] = None
+    owner: Optional[str] = None
+    reviewer: Optional[str] = None
+    precision: Optional[int] = None
+    subkind: Optional[str] = None
+    policy_carrier: Optional[dict[str, Any]] = None
 
     @classmethod
     def from_metric(cls, m: "Metric") -> "ObjectVersionMetric":
@@ -192,6 +236,11 @@ class ObjectVersionMetric(BaseModel):
             fact_field_code=m.fact_field_code, aggregation=m.aggregation,
             expression=m.expression, dependencies=m.dependencies,
             non_additive_dimensions=m.non_additive_dimensions,
+            synonyms=m.synonyms, compatible_dimensions=m.compatible_dimensions,
+            default_time_role=m.default_time_role, refresh_frequency=m.refresh_frequency,
+            permission_level=m.permission_level, owner=m.owner, reviewer=m.reviewer,
+            precision=m.precision, subkind=m.subkind,
+            policy_carrier=({**m.policy_carrier} if m.policy_carrier else None),
         )
 
 

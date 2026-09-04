@@ -23,12 +23,19 @@ class FakeIndexBackend:
     def __init__(self, healthy: bool = True) -> None:
         self.calls: list[tuple[str, str]] = []
         self.healthy = healthy
+        self.records: dict[tuple[str, str], list[dict]] = {}
+        self.inserted: dict[tuple[str, str], list[dict]] = {}
+
+    def read_all(self, kind: str, collection_name: str) -> list[dict]:
+        self.calls.append((f"read_{kind}", collection_name))
+        return [dict(item) for item in self.records.get((kind, collection_name), [])]
 
     def create(self, kind: str, collection_name: str) -> None:
         self.calls.append((f"create_{kind}", collection_name))
 
     def insert(self, kind: str, collection_name: str, records: list[dict]) -> None:
         self.calls.append((f"insert_{kind}", collection_name))
+        self.inserted[(kind, collection_name)] = records
 
     def load(self, collection_name: str) -> None:
         self.calls.append(("load", collection_name))
@@ -131,6 +138,47 @@ def test_build_loads_and_checks_one_collection_pair_before_ready() -> None:
     ]
 
 
+def test_build_merges_global_and_active_baselines_before_candidate_delta() -> None:
+    from src.knowledge_extension.rule_explanation.release_index import ReleaseIndexBuilder
+
+    store = InMemoryPolicyQualityStore()
+    active = KnowledgeRelease(
+        release_id="active",
+        status="active",
+        facts_collection="policy_facts_active",
+        rules_collection="policy_rules_active",
+        contract_version="1",
+        case_set_version=1,
+        config_hash="cfg_1",
+    )
+    store.save_release(active)
+    store.active_release_id = active.release_id
+    candidate = _building_release()
+    store.save_release(candidate)
+    backend = FakeIndexBackend()
+    backend.records = {
+        ("facts", "policy_facts"): [{"fact_id": "fact_global"}],
+        ("rules", "policy_rules_v2"): [{"rule_id": "rule_global"}],
+        ("facts", active.facts_collection): [{"fact_id": "fact_active"}],
+        ("rules", active.rules_collection): [{"rule_id": "rule_active"}],
+    }
+
+    ReleaseIndexBuilder(store, backend).build(
+        candidate.release_id,
+        facts=[{"fact_id": "fact_delta"}],
+        rules=[{"rule_id": "rule_delta"}],
+    )
+
+    assert {
+        item["fact_id"]
+        for item in backend.inserted[("facts", candidate.facts_collection)]
+    } == {"fact_global", "fact_active", "fact_delta"}
+    assert {
+        item["rule_id"]
+        for item in backend.inserted[("rules", candidate.rules_collection)]
+    } == {"rule_global", "rule_active", "rule_delta"}
+
+
 def test_build_records_publish_step_and_lineage_only_after_health() -> None:
     from src.knowledge_extension.rule_explanation.release_index import (
         KnowledgeWorkbenchReleaseSource,
@@ -176,9 +224,33 @@ def test_specific_ratio_subject_reuses_base_payment_ratio_field() -> None:
 
     payload = KnowledgeWorkbenchReleaseSource._runtime_rule(rule, "原文")
 
-    assert payload["rule_type"] == "large_medical_mutual_aid_payment_ratio"
+    assert payload["rule_type"] == "支付比例"
     assert str(payload["payment_ratio"]) == "0.8"
     assert "large_medical_mutual_aid_payment_ratio" not in payload
+
+
+def test_amount_subjects_publish_with_skill_rule_types() -> None:
+    from src.knowledge_extension.rule_explanation.release_index import (
+        KnowledgeWorkbenchReleaseSource,
+    )
+
+    deductible = KnowledgeWorkbenchReleaseSource._runtime_rule(CanonicalRule(
+        rule_id="rule_deductible",
+        subject="deductible",
+        result={"amount": "1800"},
+        evidence=["evidence_1"],
+    ), "原文")
+    cap = KnowledgeWorkbenchReleaseSource._runtime_rule(CanonicalRule(
+        rule_id="rule_cap",
+        subject="cap",
+        result={"amount": "20000"},
+        evidence=["evidence_1"],
+    ), "原文")
+
+    assert deductible["rule_type"] == "起付线"
+    assert deductible["deductible_amount"] == "1800"
+    assert cap["rule_type"] == "封顶线"
+    assert cap["cap_amount"] == "20000"
 
 
 def test_rule_entity_serializes_decimal_detail_for_milvus_dynamic_json() -> None:

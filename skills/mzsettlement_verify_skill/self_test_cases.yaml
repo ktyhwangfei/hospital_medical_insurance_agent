@@ -1,0 +1,128 @@
+- case_id: person-11
+  settlement_id: 011100030X240913000177
+  expected_self_pay_one: '25.20'
+  context: {insurance_type: 城镇职工, person_type: 在职, service_type: 普通急诊, in_scope_amount: '84.00', fund_total_amount: '75.60', self_pay_one: '25.20', large_fund_payment: '58.80', supplementary_insurance_payment: '0.00', unit_supplement_payment: '0.00', big_disease_payment: '0.00', assistance_payment: '0.00', retired_medical_payment: '16.80'}
+- case_id: person-12
+  settlement_id: 011100030X241126000016
+  expected_self_pay_one: '1796.50'
+  context: {insurance_type: 城镇职工, person_type: 在职长期驻外, service_type: 普通门诊, in_scope_amount: '1800.00', fund_total_amount: '3.50', self_pay_one: '1796.50', large_fund_payment: '3.50', supplementary_insurance_payment: '0.00', unit_supplement_payment: '0.00', big_disease_payment: '0.00', assistance_payment: '0.00', retired_medical_payment: '0.00'}
+- case_id: person-21
+  settlement_id: 011100030X260417004975
+  expected_self_pay_one: '510.96'
+  note: 补充保险支付已包含在基金支付总金额中，不能使用医保内减基金总额核验原始个人自付一。
+  context: {insurance_type: 城镇职工, person_type: 退休, service_type: 普通门诊, in_scope_amount: '2554.76', fund_total_amount: '2427.02', self_pay_one: '510.96', large_fund_payment: '1788.33', supplementary_insurance_payment: '383.22', unit_supplement_payment: '255.47', big_disease_payment: '0.00', assistance_payment: '0.00', retired_medical_payment: '0.00'}
+- case_id: person-31
+  settlement_id: 011100030X240929000004
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 离休统筹, person_type: 离休, service_type: 普通门诊, in_scope_amount: '100.00', fund_total_amount: '100.00', self_pay_one: '0.00', large_fund_payment: '100.00', supplementary_insurance_payment: '0.00', unit_supplement_payment: '0.00', big_disease_payment: '0.00', assistance_payment: '0.00', retired_medical_payment: '0.00'}
+- case_id: person-35
+  settlement_id: 011100030X240311000231
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 在职司局级医照人员, service_type: 普通急诊, in_scope_amount: '6349.00', fund_total_amount: '6349.00', self_pay_one: '0.00', large_fund_payment: '6349.00', supplementary_insurance_payment: '0.00', unit_supplement_payment: '0.00', big_disease_payment: '0.00', assistance_payment: '0.00', retired_medical_payment: '0.00'}
+- case_id: person-37
+  settlement_id: 011100030X240311000230
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 在职副部级医照人员, service_type: 普通急诊, in_scope_amount: '8769.00', fund_total_amount: '8769.00', self_pay_one: '0.00', large_fund_payment: '8769.00'}
+- case_id: person-133
+  settlement_id: 011100030X240914000011
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 在职正部级医疗照顾人员, service_type: 普通门诊, in_scope_amount: '250.00', fund_total_amount: '250.00', self_pay_one: '0.00', large_fund_payment: '250.00'}
+- case_id: person-143
+  settlement_id: 011100030X240913000208
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 离休副市（部）长级标准人员, service_type: 急诊挂号, in_scope_amount: '50.00', fund_total_amount: '50.00', self_pay_one: '0.00', large_fund_payment: '50.00'}
+- case_id: person-171
+  settlement_id: 011100030X240311000223
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 在职突出贡献专家, service_type: 普通急诊, in_scope_amount: '6349.00', fund_total_amount: '6349.00', self_pay_one: '0.00', large_fund_payment: '6349.00'}
+- case_id: person-172
+  settlement_id: 011100030X240311000067
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 退休突出贡献专家, service_type: 普通急诊, in_scope_amount: '800.00', fund_total_amount: '800.00', self_pay_one: '0.00', large_fund_payment: '800.00'}
+- case_id: person-173
+  settlement_id: 011100030X240311000224
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 离休突出贡献专家, service_type: 普通急诊, in_scope_amount: '6769.00', fund_total_amount: '6769.00', self_pay_one: '0.00', large_fund_payment: '6769.00'}
+- case_id: person-174
+  settlement_id: 011100030X240311000225
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 在职高端人才A类, service_type: 普通急诊, in_scope_amount: '8769.00', fund_total_amount: '8769.00', self_pay_one: '0.00', large_fund_payment: '8769.00'}
+- case_id: person-175
+  settlement_id: 011100030X240311000070
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 退休高端人才A类, service_type: 普通急诊, in_scope_amount: '1000.00', fund_total_amount: '1000.00', self_pay_one: '0.00', large_fund_payment: '1000.00'}
+- case_id: person-176
+  settlement_id: 011100030X240311000071
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 离休高端人才A类, service_type: 普通急诊, in_scope_amount: '1000.00', fund_total_amount: '1000.00', self_pay_one: '0.00', large_fund_payment: '1000.00'}
+- case_id: person-177
+  settlement_id: 011100030X240311000226
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 在职高端人才B类, service_type: 普通急诊, in_scope_amount: '8769.00', fund_total_amount: '8769.00', self_pay_one: '0.00', large_fund_payment: '8769.00'}
+- case_id: person-178
+  settlement_id: 011100030X240311000073
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 退休高端人才B类, service_type: 普通急诊, in_scope_amount: '1000.00', fund_total_amount: '1000.00', self_pay_one: '0.00', large_fund_payment: '1000.00'}
+- case_id: person-179
+  settlement_id: 011100030X240311000074
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 离休高端人才B类, service_type: 普通急诊, in_scope_amount: '1000.00', fund_total_amount: '1000.00', self_pay_one: '0.00', large_fund_payment: '1000.00'}
+- case_id: person-180
+  settlement_id: 011100030X240311000227
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 在职高端人才C类, service_type: 普通急诊, in_scope_amount: '6349.00', fund_total_amount: '6349.00', self_pay_one: '0.00', large_fund_payment: '6349.00'}
+- case_id: person-181
+  settlement_id: 011100030X240311000076
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 退休高端人才C类, service_type: 普通急诊, in_scope_amount: '800.00', fund_total_amount: '800.00', self_pay_one: '0.00', large_fund_payment: '800.00'}
+- case_id: person-182
+  settlement_id: 011100030X240311000228
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 公疗医照, person_type: 离休高端人才C类, service_type: 普通急诊, in_scope_amount: '6769.00', fund_total_amount: '6769.00', self_pay_one: '0.00', large_fund_payment: '6769.00'}
+- case_id: person-140
+  settlement_id: 011100030X240929000005
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 征地超转人员, person_type: 征地超转人员, service_type: 普通门诊, in_scope_amount: '0.00', fund_total_amount: '0.00', self_pay_one: '0.00', large_fund_payment: '0.00'}
+- case_id: person-803
+  settlement_id: 011100030X240913000191
+  expected_self_pay_one: '12.60'
+  context: {insurance_type: 军休干部, person_type: 军休公费医疗人员, service_type: 普通急诊, in_scope_amount: '84.00', fund_total_amount: '79.80', self_pay_one: '12.60', large_fund_payment: '67.20', supplementary_insurance_payment: '8.40', unit_supplement_payment: '4.20'}
+- case_id: person-806
+  settlement_id: 011100030X240914000009
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 军休干部, person_type: 退休副省（部）长级标准报销医疗费人员, service_type: 普通急诊, in_scope_amount: '90.00', fund_total_amount: '90.00', self_pay_one: '0.00', large_fund_payment: '90.00'}
+- case_id: person-14
+  settlement_id: 011100030X241008000002
+  expected_self_pay_one: '9.00'
+  context: {insurance_type: 城镇居民基本医疗保险_学生儿童, person_type: 城镇婴幼儿, service_type: 普通门诊, in_scope_amount: '18.00', fund_total_amount: '9.00', self_pay_one: '9.00', large_fund_payment: '9.00'}
+- case_id: person-15
+  settlement_id: 011100030X241115000031
+  expected_self_pay_one: '2.25'
+  context: {insurance_type: 城镇居民基本医疗保险_学生儿童, person_type: 城镇学生, service_type: 普通门诊, in_scope_amount: '2.25', fund_total_amount: '0.00', self_pay_one: '2.25', large_fund_payment: '0.00'}
+- case_id: person-16
+  settlement_id: 011100030X240412000003
+  expected_self_pay_one: '0.00'
+  context: {insurance_type: 城镇居民基本医疗保险_学生儿童, person_type: 城镇非在校生, service_type: 普通急诊, in_scope_amount: '0.00', fund_total_amount: '0.00', self_pay_one: '0.00', large_fund_payment: '0.00'}
+- case_id: person-17
+  settlement_id: 011100030X240914000004
+  expected_self_pay_one: '21.00'
+  context: {insurance_type: 城镇居民基本医疗保险_无保障老年人, person_type: 城镇老年人, service_type: 普通急诊, in_scope_amount: '84.00', fund_total_amount: '67.50', self_pay_one: '21.00', large_fund_payment: '0.00', big_disease_payment: '67.50'}
+- case_id: person-70
+  settlement_id: 011100030X260416006969
+  expected_self_pay_one: '1538.60'
+  context: {insurance_type: 城镇居民基本医疗保险_无业, person_type: 城镇无业居民, service_type: 普通急诊, in_scope_amount: '3133.51', fund_total_amount: '1598.36', self_pay_one: '1538.60', large_fund_payment: '0.00', assistance_payment: '1598.36'}
+- case_id: person-11-cross-1
+  settlement_id: 011100030X241120000001
+  expected_self_pay_one: '1980.00'
+  note: 年度首笔跨起付线：起付线 1800 元全额自付，超线 600 元按 70/30 分担（大额基金 420、个人 180）。
+  context: {insurance_type: 城镇职工, person_type: 在职, service_type: 普通门诊, in_scope_amount: '2400.00', out_of_scope_amount: '600.00', fund_total_amount: '420.00', self_pay_one: '1980.00', self_pay_two: '600.00', personal_total_amount: '2580.00', deductible_amount: '1800.00', large_self_pay: '180.00', large_fund_payment: '420.00', account_payment: '260.80', cash_payment: '2319.20'}
+- case_id: person-11-cross-2
+  settlement_id: 011100030X241126000017
+  expected_self_pay_one: '1734.49'
+  note: 分笔积累跨起付线：年度累计 93.59→1893.59，本笔医保内 1800 中 1706.41 计入起付、93.59 进入统筹按 70/30 分担。
+  context: {insurance_type: 城镇职工, person_type: 在职, service_type: 普通门诊, in_scope_amount: '1800.00', out_of_scope_amount: '200.00', fund_total_amount: '65.51', self_pay_one: '1734.49', self_pay_two: '200.00', personal_total_amount: '1934.49', deductible_amount: '1706.41', large_self_pay: '28.08', large_fund_payment: '65.51', account_payment: '400.00', cash_payment: '1534.49'}
+- case_id: person-11-nearcap-1
+  settlement_id: 011100030X240913000174
+  expected_self_pay_one: '66.45'
+  note: 大额段进行中：年度大额支付累计 12158.69→12313.74；与 person-11 为同一患者连续结算（累计链 18864→19475）。
+  context: {insurance_type: 城镇职工, person_type: 在职, service_type: 普通门诊, in_scope_amount: '221.50', out_of_scope_amount: '28.50', fund_total_amount: '199.35', self_pay_one: '66.45', self_pay_two: '8.50', personal_total_amount: '50.65', deductible_amount: '0.00', large_self_pay: '66.45', large_fund_payment: '155.05', cash_payment: '50.65', retired_medical_payment: '44.30'}

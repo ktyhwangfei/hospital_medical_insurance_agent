@@ -96,6 +96,16 @@ CREATE TABLE IF NOT EXISTS semantic_metrics (
     expression TEXT,
     dependencies JSONB NOT NULL DEFAULT '[]'::jsonb,
     non_additive_dimensions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    synonyms JSONB NOT NULL DEFAULT '[]'::jsonb,
+    compatible_dimensions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    default_time_role VARCHAR(64),
+    refresh_frequency VARCHAR(64),
+    permission_level VARCHAR(64),
+    owner VARCHAR(128),
+    reviewer VARCHAR(128),
+    precision INTEGER,
+    subkind VARCHAR(32),
+    policy_carrier JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -198,10 +208,16 @@ def _row_to_metric(row: dict) -> Metric:
         transformation = json.loads(transformation)
     dependencies = row.get("dependencies") or []
     non_additive = row.get("non_additive_dimensions") or []
+    synonyms = row.get("synonyms") or []
+    compatible_dimensions = row.get("compatible_dimensions") or []
     if isinstance(dependencies, str):
         dependencies = json.loads(dependencies)
     if isinstance(non_additive, str):
         non_additive = json.loads(non_additive)
+    if isinstance(synonyms, str):
+        synonyms = json.loads(synonyms)
+    if isinstance(compatible_dimensions, str):
+        compatible_dimensions = json.loads(compatible_dimensions)
     return Metric(
         metric_code=row["metric_code"],
         object_code=row["object_code"],
@@ -231,6 +247,16 @@ def _row_to_metric(row: dict) -> Metric:
         expression=row.get("expression"),
         dependencies=list(dependencies),
         non_additive_dimensions=list(non_additive),
+        synonyms=list(synonyms),
+        compatible_dimensions=list(compatible_dimensions),
+        default_time_role=row.get("default_time_role"),
+        refresh_frequency=row.get("refresh_frequency"),
+        permission_level=row.get("permission_level"),
+        owner=row.get("owner"),
+        reviewer=row.get("reviewer"),
+        precision=row.get("precision"),
+        subkind=row.get("subkind"),
+        policy_carrier=(row.get("policy_carrier") or None),
         created_at=row.get("created_at", _now()),
         updated_at=row.get("updated_at", _now()),
     )
@@ -315,9 +341,18 @@ class PostgresRegistryStore:
                 publish_seed_outpatient_query_object,
             )
             ensure_yb_dictionary_mappings(self)
-            ensure_outpatient_query_model(self)
+            from src.semantic_layer.seed import (
+                _seed_settlement_query_model,
+                ensure_outpatient_query_model,
+                publish_seed_outpatient_query_object,
+                publish_seed_query_object,
+            )
             from src.semantic_layer.registry import SemanticRegistry
-            publish_seed_outpatient_query_object(SemanticRegistry(self))
+            _seed_settlement_query_model(self)
+            ensure_outpatient_query_model(self)
+            registry = SemanticRegistry(self)
+            publish_seed_query_object(registry)
+            publish_seed_outpatient_query_object(registry)
         except Exception:
             logger.warning("ensure_yb_dictionary_mappings 失败，跳过", exc_info=True)
 
@@ -362,6 +397,16 @@ class PostgresRegistryStore:
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS expression TEXT",
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS dependencies JSONB NOT NULL DEFAULT '[]'::jsonb",
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS non_additive_dimensions JSONB NOT NULL DEFAULT '[]'::jsonb",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS synonyms JSONB NOT NULL DEFAULT '[]'::jsonb",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS compatible_dimensions JSONB NOT NULL DEFAULT '[]'::jsonb",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS default_time_role VARCHAR(64)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS refresh_frequency VARCHAR(64)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS permission_level VARCHAR(64)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS owner VARCHAR(128)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS reviewer VARCHAR(128)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS precision INTEGER",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS subkind VARCHAR(32)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS policy_carrier JSONB",
                 "ALTER TABLE semantic_object_versions ADD COLUMN IF NOT EXISTS query_model JSONB NOT NULL DEFAULT '{}'::jsonb",
             ]:
                 self._client.execute(statement)
@@ -384,9 +429,11 @@ class PostgresRegistryStore:
         from src.semantic_layer.seed import (
             publish_seed_outpatient_query_object,
             publish_seed_policy_object,
+            publish_seed_query_object,
         )
         registry = SemanticRegistry(self)
         publish_seed_policy_object(registry)
+        publish_seed_query_object(registry)
         publish_seed_outpatient_query_object(registry)
 
     def close(self) -> None:
@@ -515,6 +562,8 @@ class PostgresRegistryStore:
         )
         dependencies_json = json.dumps(metric.dependencies, ensure_ascii=False)
         non_additive_json = json.dumps(metric.non_additive_dimensions, ensure_ascii=False)
+        synonyms_json = json.dumps(metric.synonyms, ensure_ascii=False)
+        compatible_dimensions_json = json.dumps(metric.compatible_dimensions, ensure_ascii=False)
         client.execute(
             """INSERT INTO semantic_metrics
                (metric_code, object_code, name, definition, metric_type,
@@ -524,8 +573,9 @@ class PostgresRegistryStore:
                 usage_count, quality_score, version, status,
                 metric_kind, indexed, extraction_hint, schema_version,
                 fact_field_code, aggregation, expression, dependencies, non_additive_dimensions,
-                created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                synonyms, compatible_dimensions, default_time_role, refresh_frequency,
+                permission_level, owner, reviewer, precision, subkind, policy_carrier, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (metric_code) DO UPDATE SET
                    object_code = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.object_code ELSE semantic_metrics.object_code END,
                    name = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.name ELSE semantic_metrics.name END,
@@ -553,6 +603,16 @@ class PostgresRegistryStore:
                    expression = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.expression ELSE semantic_metrics.expression END,
                    dependencies = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.dependencies ELSE semantic_metrics.dependencies END,
                    non_additive_dimensions = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.non_additive_dimensions ELSE semantic_metrics.non_additive_dimensions END,
+                   synonyms = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.synonyms ELSE semantic_metrics.synonyms END,
+                   compatible_dimensions = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.compatible_dimensions ELSE semantic_metrics.compatible_dimensions END,
+                   default_time_role = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.default_time_role ELSE semantic_metrics.default_time_role END,
+                   refresh_frequency = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.refresh_frequency ELSE semantic_metrics.refresh_frequency END,
+                   permission_level = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.permission_level ELSE semantic_metrics.permission_level END,
+                   owner = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.owner ELSE semantic_metrics.owner END,
+                   reviewer = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.reviewer ELSE semantic_metrics.reviewer END,
+                   precision = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.precision ELSE semantic_metrics.precision END,
+                   subkind = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.subkind ELSE semantic_metrics.subkind END,
+                   policy_carrier = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.policy_carrier ELSE semantic_metrics.policy_carrier END,
                    schema_version = GREATEST(semantic_metrics.schema_version, EXCLUDED.schema_version),
                    updated_at = EXCLUDED.updated_at""",
             (metric.metric_code, metric.object_code, metric.name, metric.definition,
@@ -563,7 +623,11 @@ class PostgresRegistryStore:
              metric.usage_count, metric.quality_score, metric.version, metric.status,
              metric.metric_kind, metric.indexed, metric.extraction_hint, metric.schema_version,
              metric.fact_field_code, metric.aggregation, metric.expression,
-             dependencies_json, non_additive_json,
+             dependencies_json, non_additive_json, synonyms_json, compatible_dimensions_json,
+             metric.default_time_role, metric.refresh_frequency, metric.permission_level,
+             metric.owner, metric.reviewer, metric.precision,
+             metric.subkind,
+             json.dumps(metric.policy_carrier, ensure_ascii=False) if metric.policy_carrier else None,
              metric.created_at, metric.updated_at),
         )
 

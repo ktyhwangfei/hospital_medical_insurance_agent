@@ -4,14 +4,20 @@ from types import SimpleNamespace
 from cryptography.fernet import Fernet
 import pytest
 
-from src.data_platform.outpatient_governance import ConnectionStatus, SyncJobStatus
+from src.data_platform.outpatient_governance import (
+    CaptureMapping,
+    ConnectionStatus,
+    SyncJobStatus,
+)
 from src.data_platform.storage.postgresql.outpatient_governance_store import (
+    OutpatientGovernanceConflictError,
     OutpatientGovernanceNotFoundError,
 )
 from src.runtime.api.data_governance_schemas import SaveSyncJobRequest, UpdateDataSourceRequest
 from src.runtime.data_governance.service import (
     CreateDataSourceCommand,
     DataGovernanceService,
+    SaveMappingRequest,
     SyncJobInvalidStateError,
 )
 
@@ -53,6 +59,15 @@ class _GovernanceStore:
     def list_attempts(self, source_id, limit=100):
         del source_id, limit
         return []
+
+    def get_mapping(self, source_id):
+        return getattr(self, "mappings", {}).get(source_id)
+
+    def save_mapping(self, mapping, expected_revision=None):
+        del expected_revision
+        if not hasattr(self, "mappings"):
+            self.mappings = {}
+        self.mappings[mapping.source_id] = mapping
 
 
 class _PostgresStore:
@@ -228,6 +243,26 @@ def test_scheduled_sql_start_requires_source_and_postgres_but_not_cdc(monkeypatc
     assert started.status is SyncJobStatus.READY
 
 
+def test_start_job_clears_stale_active_attempt(monkeypatch) -> None:
+    """worker 崩溃残留 active_attempt_id 时，手动重启必须清掉，否则任务永远无法再被认领。"""
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+    store = _GovernanceStore()
+    service = DataGovernanceService(store, _PostgresStore(), lambda _s, _p: _Connection())
+    service.create_source(_command(), actor="admin-1")
+    service.save_job_config("bjybdb", SaveSyncJobRequest(
+        source_mode="scheduled_sql", expected_revision=1,
+    ), actor="admin-1")
+    service.probe_connection("bjybdb")
+    store.jobs["bjybdb"] = store.jobs["bjybdb"].model_copy(
+        update={"active_attempt_id": "stale-attempt", "status": SyncJobStatus.RUNNING}
+    )
+
+    started = service.start_job("bjybdb", actor="admin-1")
+
+    assert started.status is SyncJobStatus.READY
+    assert started.active_attempt_id is None
+
+
 def test_cdc_waiting_state_does_not_overwrite_source_readiness_message(monkeypatch) -> None:
     monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
     store = _GovernanceStore()
@@ -239,3 +274,128 @@ def test_cdc_waiting_state_does_not_overwrite_source_readiness_message(monkeypat
 
     source = store.get_source("bjybdb")
     assert source.safe_probe_message == "门诊 3 张源表及 117 个契约字段可读"
+
+
+# ---- 源表映射与 SQL 预览 ----
+
+def _mapping_request(expected_revision: int = 1) -> SaveMappingRequest:
+    return SaveMappingRequest(
+        captures=[
+            CaptureMapping(
+                capture="dbo_o_Trade", table_schema="his", table_name="MZ_JYLS",
+                key_fields=("T_TradeNo",),
+                column_map={"T_TradeNo": "JYLSH", "T_TradeDate": "JY_RQ", "T_State": "ZT"},
+            ),
+            CaptureMapping(
+                capture="dbo_o_FeeItem", table_schema="his", table_name="MZ_SFMX",
+                key_fields=("T_TradeNo", "ItemId"),
+                column_map={"T_TradeNo": "JYLSH", "ItemId": "MX_ID"},
+            ),
+            CaptureMapping(
+                capture="dbo_o_Diagnose", table_schema="his", table_name="MZ_ZD",
+                key_fields=("T_TradeNo", "DiagnoseNo"),
+                column_map={"T_TradeNo": "JYLSH", "DiagnoseNo": "ZD_ID"},
+            ),
+        ],
+        expected_revision=expected_revision,
+    )
+
+
+def _mapping_service(monkeypatch):
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+    store = _GovernanceStore()
+    service = DataGovernanceService(store, _PostgresStore(), lambda _s, _p: _Connection())
+    service.create_source(_command(), actor="admin-1")
+    service.probe_connection("bjybdb")
+    return service
+
+
+def test_sql_preview_defaults_to_fixed_contract(monkeypatch) -> None:
+    service = _mapping_service(monkeypatch)
+
+    preview = service.sql_preview("bjybdb")
+
+    assert preview.is_default is True
+    assert any("[dbo].[o_Trade]" in sql for sql in preview.baseline_sql)
+    assert "[T_TradeDate] >= ? AND [T_TradeDate] < ?" in preview.incremental_window_sql
+
+
+def test_save_mapping_then_preview_uses_custom_tables(monkeypatch) -> None:
+    service = _mapping_service(monkeypatch)
+
+    saved = service.save_mapping("bjybdb", _mapping_request(), actor="admin-1")
+    preview = service.sql_preview("bjybdb")
+
+    assert saved.revision == 1
+    assert preview.is_default is False
+    assert any("[his].[MZ_JYLS]" in sql for sql in preview.baseline_sql)
+    assert "[JY_RQ] >= ? AND [JY_RQ] < ?" in preview.incremental_window_sql
+    assert any("[his].[MZ_SFMX]" in sql for sql in preview.incremental_children_sql)
+
+
+def test_save_mapping_bumps_revision_and_conflicts_on_stale(monkeypatch) -> None:
+    service = _mapping_service(monkeypatch)
+    service.save_mapping("bjybdb", _mapping_request(1), actor="admin-1")
+
+    # 第二次保存携带当前 revision=1，产出 revision=2
+    second = service.save_mapping("bjybdb", _mapping_request(1), actor="admin-1")
+    assert second.revision == 2
+
+    # 过期 revision（当前已是 2）必须 409
+    with pytest.raises(OutpatientGovernanceConflictError, match="映射版本冲突"):
+        service.save_mapping("bjybdb", _mapping_request(1), actor="admin-1")
+
+
+def test_save_mapping_requires_all_three_captures(monkeypatch) -> None:
+    service = _mapping_service(monkeypatch)
+    request = _mapping_request()
+    request.captures = request.captures[:2]
+
+    with pytest.raises(SyncJobInvalidStateError, match="三张源表"):
+        service.save_mapping("bjybdb", request, actor="admin-1")
+
+
+def test_explore_table_rejects_unsafe_identifiers(monkeypatch) -> None:
+    service = _mapping_service(monkeypatch)
+
+    with pytest.raises(SyncJobInvalidStateError, match="非法表名"):
+        service.explore_table("bjybdb", "dbo", "t; DROP TABLE x")
+
+
+class _ExploreCursor:
+    def __init__(self, rows, names):
+        self._rows = rows
+        self.description = [(name,) for name in names]
+
+    def execute(self, sql, *params):
+        self.params = params
+
+    def fetchall(self):
+        return self._rows
+
+
+class _ExploreConnection:
+    def __init__(self, rows, names):
+        self._cursor = _ExploreCursor(rows, names)
+
+    def cursor(self):
+        return self._cursor
+
+    def close(self):
+        pass
+
+
+def test_explore_tables_maps_metadata_rows(monkeypatch) -> None:
+    monkeypatch.setenv("DATA_GOVERNANCE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
+    rows = [("dbo", "o_Trade", 592), ("his", "MZ_JYLS", 1000)]
+    service = DataGovernanceService(
+        _GovernanceStore(), _PostgresStore(),
+        lambda _s, _p: _ExploreConnection(rows, ["table_schema", "table_name", "row_count"]),
+    )
+    service.create_source(_command(), actor="admin-1")
+    service.probe_connection("bjybdb")
+
+    tables = service.explore_tables("bjybdb")
+
+    assert [item.table_name for item in tables] == ["o_Trade", "MZ_JYLS"]
+    assert tables[0].row_count == 592

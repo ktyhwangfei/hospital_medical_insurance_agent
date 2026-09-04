@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest'
 import {
   applyContextNeed,
   extractSettlementId,
+  resolveAnchoredSwitch,
   parsePolicyQACommand,
   resetTurnFlags,
   toContextNeed,
@@ -193,8 +194,44 @@ describe('extractSettlementId', () => {
     expect(extractSettlementId('查询住院费用，结算单 1671213')).toBe('1671213')
   })
 
+  it('完整提取包含字母的门诊交易号', () => {
+    expect(extractSettlementId('011100030X240311000031，费用组成')).toBe('011100030X240311000031')
+  })
+
   it('无数字时返回 null', () => {
     expect(extractSettlementId('那起付线呢')).toBeNull()
+  })
+})
+
+// ── 锚定后的自动切换单号 ─────────────────────────────────────────
+
+describe('resolveAnchoredSwitch', () => {
+  it('锚定后问题里出现与当前锚不同的单号 → 视为切换', () => {
+    const target = resolveAnchoredSwitch(
+      '011100030X240913000191',
+      '011100030X241120000001 费用组成',
+    )
+    expect(target).toEqual({
+      settlementId: '011100030X241120000001',
+      question: '011100030X241120000001 费用组成',
+    })
+  })
+
+  it('问题里的单号与当前锚相同 → 不切换', () => {
+    expect(
+      resolveAnchoredSwitch('011100030X240913000191', '011100030X240913000191 费用组成'),
+    ).toBeNull()
+  })
+
+  it('无单号或未锚定 → 不切换', () => {
+    expect(resolveAnchoredSwitch('011100030X240913000191', '个人自付一为什么这么多')).toBeNull()
+    expect(resolveAnchoredSwitch(null, '011100030X241120000001 费用组成')).toBeNull()
+  })
+
+  it('金额文本不误判为单号', () => {
+    expect(
+      resolveAnchoredSwitch('011100030X240913000191', '为什么个人付了 186.21 元'),
+    ).toBeNull()
   })
 })
 
@@ -296,6 +333,31 @@ describe('toPolicyQAResult', () => {
       settlementChecked: false,
       calculationChecked: false,
       policyCount: 0,
+    })
+  })
+
+  it('转换整次住院查询范围和分段覆盖字段', () => {
+    const result = toPolicyQAResult({
+      ...validResult,
+      case_context: {
+        query_scope: 'whole_admission',
+        segment_count: 2,
+        matched_segment_count: 2,
+        coverage_status: 'complete',
+        stay_start_date: '2025-01-01',
+        stay_end_date: '2025-04-15',
+        total_amount: 189085.85,
+      },
+    })
+
+    expect(result.caseContext).toMatchObject({
+      queryScope: 'whole_admission',
+      segmentCount: 2,
+      matchedSegmentCount: 2,
+      coverageStatus: 'complete',
+      stayStartDate: '2025-01-01',
+      stayEndDate: '2025-04-15',
+      totalAmount: 189085.85,
     })
   })
 })

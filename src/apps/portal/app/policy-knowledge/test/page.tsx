@@ -3,11 +3,13 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
 import { Database, Loader2, Plus, Search, ShieldCheck } from 'lucide-react'
 
+import { AnswerVerificationPanel } from '@/components/policy-qa/answer-verification-panel'
 import { QualityDashboard } from '@/components/policy-knowledge/quality-dashboard'
 import {
   createRelease,
   buildRelease,
   getActiveRelease,
+  getIssue25Metrics,
   getLatestReleaseQuality,
   listReleases,
   listQualityCaseResults,
@@ -17,6 +19,7 @@ import {
   runQuality,
   saveTestCase,
   searchPolicyKnowledge,
+  type Issue25Metrics,
   type KnowledgeRelease,
   type PolicyTestCase,
   type QualityCaseResult,
@@ -35,6 +38,7 @@ export default function PolicyKnowledgeTestPage() {
   const [cases, setCases] = useState<PolicyTestCase[]>([])
   const [latestRun, setLatestRun] = useState<QualityRun | null>(null)
   const [caseResults, setCaseResults] = useState<QualityCaseResult[]>([])
+  const [issue25Metrics, setIssue25Metrics] = useState<Issue25Metrics | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -51,9 +55,15 @@ export default function PolicyKnowledgeTestPage() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : '测试页加载失败') }
   }, [])
   useEffect(() => {
-    void Promise.all([listReleases(), listTestCases(), getActiveRelease().catch(() => null)])
-      .then(([releaseItems, caseItems, active]) => {
+    void Promise.all([
+      listReleases(),
+      listTestCases(),
+      getActiveRelease().catch(() => null),
+      getIssue25Metrics('hash').catch(() => null),
+    ])
+      .then(([releaseItems, caseItems, active, metrics]) => {
         setReleases(releaseItems); setCases(caseItems); setActiveRelease(active)
+        if (metrics) setIssue25Metrics(metrics)
         const candidate = releaseItems.find((item) => !['active', 'retired'].includes(item.status))
         if (candidate) void restoreQuality(candidate.release_id)
       })
@@ -103,7 +113,8 @@ export default function PolicyKnowledgeTestPage() {
     {busy && <div className="fixed right-6 top-6 z-40 flex items-center gap-2 rounded-full bg-slate-900 px-3 py-2 text-xs text-white shadow-lg"><Loader2 className="size-3.5 animate-spin" />处理中</div>}
 
     <SearchWorkbench />
-    <QualityDashboard releases={releases} activeRelease={activeRelease} latestRun={latestRun} currentCaseSetVersion={Math.max(0, ...cases.map((item) => item.case_set_version))} caseResults={caseResults} onSelectRelease={restoreQuality} onRun={run} onPromote={promote} onRollback={rollback} />
+    <QualityDashboard releases={releases} activeRelease={activeRelease} latestRun={latestRun} currentCaseSetVersion={Math.max(0, ...cases.map((item) => item.case_set_version))} caseResults={caseResults} issue25Metrics={issue25Metrics} onSelectRelease={restoreQuality} onRun={run} onPromote={promote} onRollback={rollback} />
+    <AnswerVerificationPanel />
     <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
       <TestCasePanel cases={cases} onSaved={refresh} />
       <CandidatePanel onCreated={refresh} />

@@ -16,6 +16,12 @@ from typing import Any
 
 from pymilvus import MilvusClient
 
+from src.knowledge_extension.rule_explanation.release_resolver import (
+    resolve_facts_collection,
+    resolve_rules_collection,
+    split_milvus_uri,
+)
+
 # 核心维度（可做标量过滤）
 CORE_DIMS = ("rule_type", "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type")
 
@@ -29,17 +35,23 @@ RULE_OUTPUT_FIELDS = [
 
 
 class RulesSearchService:
-    """政策规则三模式检索 + 按 fact 分组。"""
+    """政策规则三模式检索 + 按 fact 分组。
+
+    默认 collection 经统一 release resolver 解析（Issue #33 P0-1）：
+    跟随 policy_active_release 且校验集合存在非空，不可用时回退
+    policy_rules_v2 / policy_facts（向后兼容）。
+    """
 
     def __init__(
         self,
         uri: str = "http://127.0.0.1:19530",
-        rules_col_name: str = "policy_rules_v2",
-        facts_col_name: str = "policy_facts",
+        rules_col_name: str | None = None,
+        facts_col_name: str | None = None,
     ):
         self._client = MilvusClient(uri=uri, timeout=10)
-        self._rules_col = rules_col_name
-        self._facts_col = facts_col_name
+        host, port = split_milvus_uri(uri)
+        self._rules_col = rules_col_name or resolve_rules_collection(host, port)
+        self._facts_col = facts_col_name or resolve_facts_collection(host, port)
 
     @staticmethod
     def _build_filter(filters: dict[str, str]) -> str:

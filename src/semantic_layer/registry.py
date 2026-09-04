@@ -26,6 +26,11 @@ from src.semantic_layer.models import (
     ValueDomain, ValueDomainMapping,
 )
 
+_DEFERRED_OUTPATIENT_METRICS = {
+    "mzjyxx.average_fee", "mzjyxx.insured_encounter_count",
+}
+_DEFERRED_OUTPATIENT_REASON = "就诊人次口径未定，门诊医保就诊人次和门诊次均费用暂缓发布"
+
 
 class RegistryStore(Protocol):
     """Storage backend interface for Semantic Registry."""
@@ -370,6 +375,8 @@ class SemanticRegistry:
         """保存已通过人工审核的指标，供提议发布路径使用。"""
         if metric.status != "published":
             raise ValueError("发布指标状态必须为 published")
+        if metric.metric_code in _DEFERRED_OUTPATIENT_METRICS:
+            raise ValueError(_DEFERRED_OUTPATIENT_REASON)
         if self._store.get_object(metric.object_code) is None:
             raise ValueError(f"对象 '{metric.object_code}' 不存在")
         self._store.save_metric(metric)
@@ -431,6 +438,8 @@ class SemanticRegistry:
             fact_field_code=vm.fact_field_code, aggregation=vm.aggregation,
             expression=vm.expression, dependencies=vm.dependencies,
             non_additive_dimensions=vm.non_additive_dimensions,
+            subkind=vm.subkind,
+            policy_carrier=({**vm.policy_carrier} if vm.policy_carrier else None),
         )
 
     # Value Domain resolution
@@ -461,16 +470,62 @@ class SemanticRegistry:
         metrics = self._store.list_metrics(object_code=object_code)
         if not metrics:
             raise ValueError(f"对象 '{object_code}' 无指标，不能发布（§5：空指标不能发布）")
+        deferred_codes = _DEFERRED_OUTPATIENT_METRICS if object_code == "mzjyxx" else set()
+        publish_metrics = [m for m in metrics if m.metric_code not in deferred_codes]
+        if any(m.status == "published" for m in metrics if m.metric_code in deferred_codes):
+            raise ValueError(_DEFERRED_OUTPATIENT_REASON)
+        governed_metrics = [
+            m for m in publish_metrics
+            if object_code == "mzjyxx" and (
+                any((m.synonyms, m.compatible_dimensions, m.default_time_role,
+                        m.refresh_frequency, m.permission_level, m.owner,
+                        m.reviewer, m.precision is not None))
+            )
+        ]
+        # 发布门禁（架构④三档定案）：只硬卡第1档 owner + definition（口径），
+        # 第2档默认值与第3档可空字段不阻断发布（由 seed/表单填默认，可后续改）。
+        tier1_missing = {
+            m.metric_code: [f for f in ("owner", "definition")
+                            if not getattr(m, f)]
+            for m in governed_metrics
+        }
+        tier1_missing = {c: fs for c, fs in tier1_missing.items() if fs}
+        if tier1_missing:
+            raise ValueError(f"治理字段不完整(第1档必填): {tier1_missing}")
+        # #60 政策承载门禁（架构验收#1 A/B 两态）：subkind 政策绑定类发布须带 文号/统筹区划/生效起
+        #   运营类(B/subkind 空) 不要求 policy_carrier；A 缺任一必拒并指明缺哪项。
+        _POLICY = {"policy_rate", "policy_elig"}
+        _PC = {"doc_number": "政策文号", "region_scope": "统筹区划", "effective_start": "生效起"}
+        policy_bad: dict[str, list[str]] = {}
+        for m in publish_metrics:
+            if (m.subkind or "") not in _POLICY:
+                continue
+            pc = m.policy_carrier or {}
+            miss = [label for key, label in _PC.items() if not (pc.get(key) or "")]
+            if miss:
+                policy_bad[m.metric_code] = miss
+        if policy_bad:
+            raise ValueError(f"政策承载不完整(A政策绑定类必填): {policy_bad}")
         datasets = self._store.list_datasets(object_code)
         keys = self._store.list_dataset_keys(object_code=object_code)
         fields = self._store.list_fields(object_code=object_code)
         relations = self._store.list_dataset_relations(object_code)
         quality_rules = self._store.list_quality_rules(object_code)
-        if datasets or any(m.fact_field_code or m.expression for m in metrics):
+        if datasets or any(m.fact_field_code or m.expression for m in publish_metrics):
             issues = self.validate_query_model(object_code)
             if issues:
                 raise ValueError("; ".join(issues))
         existing = self._store.list_object_versions(object_code)
+        datasets = self._store.list_datasets(object_code)
+        keys = self._store.list_dataset_keys(object_code=object_code)
+        fields = self._store.list_fields(object_code=object_code)
+        relations = self._store.list_dataset_relations(object_code)
+        quality_rules = self._store.list_quality_rules(object_code)
+        query_metrics = [m for m in publish_metrics if m.fact_field_code or m.expression]
+        if datasets or query_metrics:
+            issues = self.validate_query_model(object_code)
+            if issues:
+                raise ValueError("; ".join(issues))
         next_version = str(len(existing) + 1)
         snapshot = BusinessObjectVersion(
             version_id=str(uuid.uuid4()),
@@ -484,7 +539,7 @@ class SemanticRegistry:
                 "preferred_relation_paths": [p.model_dump() for p in obj.preferred_relation_paths],
                 "queryable": bool(datasets),
             },
-            metrics=[ObjectVersionMetric.from_metric(m) for m in metrics],
+            metrics=[ObjectVersionMetric.from_metric(m) for m in publish_metrics],
             datasets=[item.model_copy(update={"status": "published"}) for item in datasets],
             keys=keys,
             fields=[item.model_copy(update={"status": "published"}) for item in fields],
@@ -493,12 +548,76 @@ class SemanticRegistry:
             changelog=changelog,
             published_by=published_by,
         )
+        if query_metrics:
+            from src.semantic_layer.query_planner import (
+                QueryAnchor,
+                QueryScope,
+                SemanticQuery,
+                SemanticQueryPlanner,
+                SemanticQueryPlanningError,
+            )
+            anchor_field_code = next(
+                (
+                    rule.parameters.get("field_code")
+                    for rule in quality_rules
+                    if rule.rule_type == "not_null" and rule.parameters.get("field_code")
+                ),
+                None,
+            )
+            anchor_field = next(
+                (field for field in fields if field.field_code == anchor_field_code),
+                next((field for field in fields if field.field_role == "identifier"), None),
+            )
+            anchor_key = next(
+                (
+                    key for key in keys
+                    if anchor_field
+                    and key.dataset_code == anchor_field.dataset_code
+                    and anchor_field.column_name in key.columns
+                ),
+                None,
+            )
+            if anchor_field is None or anchor_key is None:
+                raise ValueError("查询模型缺少可编译的实体锚点")
+            temporary_store = InMemoryRegistryStore()
+            temporary_store.save_object_version(snapshot)
+            try:
+                planner = SemanticQueryPlanner(SemanticRegistry(temporary_store))
+                if anchor_key.entity_code == "inpatient_admission":
+                    groups = [("whole_admission", query_metrics)]
+                else:
+                    field_dataset = {field.field_code: field.dataset_code for field in fields}
+                    by_scope: dict[str, list[ObjectVersionMetric]] = defaultdict(list)
+                    for metric in query_metrics:
+                        dataset_code = field_dataset.get(metric.fact_field_code or "")
+                        scope = (
+                            "whole_settlement"
+                            if dataset_code == anchor_field.dataset_code
+                            else "fee_item"
+                        )
+                        by_scope[scope].append(ObjectVersionMetric.from_metric(metric))
+                    groups = list(by_scope.items())
+                for query_scope, group in groups:
+                    planner.compile(SemanticQuery(
+                        object_code=object_code,
+                        scope=QueryScope(
+                            entity_code=anchor_key.entity_code,
+                            anchor=QueryAnchor(
+                                field_code=anchor_field.field_code,
+                                value="__publish_check__",
+                            ),
+                            query_scope=query_scope,
+                        ),
+                        metrics=[metric.metric_code for metric in group],
+                    ))
+            except SemanticQueryPlanningError as exc:
+                raise ValueError(f"查询模型不可编译: {exc}") from exc
         self._store.save_object_version(snapshot)
         obj.current_version = next_version
         obj.status = "published"
         self._store.save_object(obj)
         # 同步 metric.status → published（解锁 build_extraction_schema / 契约，§5 发布）
-        for m in metrics:
+        for m in publish_metrics:
             m.status = "published"
             self._store.save_metric(m)
         for dataset in datasets:
@@ -567,6 +686,11 @@ class SemanticRegistry:
         for metric in metrics:
             if not metric.expression:
                 continue
+            from src.semantic_layer.query_planner import SemanticQueryPlanner, SemanticQueryPlanningError
+            try:
+                SemanticQueryPlanner._validate_expression(ObjectVersionMetric.from_metric(metric))
+            except SemanticQueryPlanningError as exc:
+                issues.append(str(exc))
             dependencies = [
                 code if "." in code else f"{object_code}.{code}"
                 for code in metric.dependencies
@@ -636,6 +760,7 @@ def get_semantic_registry() -> SemanticRegistry:
         from src.semantic_layer.seed import (
             publish_seed_outpatient_query_object,
             publish_seed_policy_object,
+            publish_seed_query_object,
             seed_settlement_domain,
         )
         store = InMemoryRegistryStore()
@@ -643,6 +768,7 @@ def get_semantic_registry() -> SemanticRegistry:
         reg = SemanticRegistry(store)
         # P8.3：种子后发布 zcgz，解锁提取契约（build_extraction_schema 只收 published）
         publish_seed_policy_object(reg)
+        publish_seed_query_object(reg)
         publish_seed_outpatient_query_object(reg)
         _semantic_registry_instance = reg
     else:

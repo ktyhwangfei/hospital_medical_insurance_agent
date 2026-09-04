@@ -25,7 +25,7 @@ def test_ensure_creates_yllb_domain(store_with_dicts):
     vd = store_with_dicts.get_value_domain("YLLB")
     assert vd is not None
     assert vd.name == "医疗类别"
-    # 码 21 → 普通住院（源自 business_sql.yaml CASE）
+    # 码 21 → 普通住院（从历史 SQL CASE 迁移）
     reg = SemanticRegistry(store_with_dicts)
     assert reg.resolve_value("YLLB", "21") == "普通住院"
     assert reg.resolve_value("YLLB", "11") == "普通门诊"
@@ -43,6 +43,9 @@ def test_ensure_person_type_code_mappings(store_with_dicts):
     reg = SemanticRegistry(store_with_dicts)
     assert reg.resolve_value("PERSON_TYPE", "1") == "在职人员"
     assert reg.resolve_value("PERSON_TYPE", "2") == "退休人员"
+    assert reg.resolve_value("MZ_PERSON_TYPE", "175") == "退休高端人才A类"
+    assert reg.resolve_value("MZ_CURE_TYPE", "19") == "普通急诊"
+    assert reg.resolve_value("MILITARY_DISABILITY_LEVEL", "3") == "享受三级伤残待遇"
 
 
 def test_ensure_is_idempotent(store_with_dicts):

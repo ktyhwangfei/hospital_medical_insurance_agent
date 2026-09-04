@@ -95,6 +95,11 @@ CREATE INDEX IF NOT EXISTS idx_ext_doc_id ON policy_extractions(doc_id);
 CREATE INDEX IF NOT EXISTS idx_ext_unit_id ON policy_extractions(unit_id);
 CREATE INDEX IF NOT EXISTS idx_ext_status ON policy_extractions(status);
 CREATE INDEX IF NOT EXISTS idx_ext_hash ON policy_extractions(source_text_hash);
+-- 单元去重兑底：同文档同单元同原文至多一行活跃（NULL 归一；跨单元同文不约束）
+-- [来源: docs/superpowers/specs/2026-08-25-extraction-unit-dedup-design.md §4.2]
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ext_active_doc_unit_text
+    ON policy_extractions (doc_id, COALESCE(unit_id, ''), source_text_hash)
+    WHERE status <> 'archived';
 """
 
 EXTRACTIONS_MIGRATION = """
@@ -582,8 +587,26 @@ class PipelineStore:
         )
         return self._ext_row(rows[0]) if rows else None
 
+    def _find_active_duplicate(
+        self, client: PostgreSQLClient, doc_id: str, unit_id: str | None,
+        source_text_hash: str,
+    ) -> str | None:
+        """查活跃查重目标：unit 精确命中 > NULL 行承接（漂移）；跨单元同文不命中。
+
+        SELECT 过滤 archived：归档行不可被复活（设计 §4.1）。
+        """
+        rows = client.execute(
+            """SELECT extraction_id FROM policy_extractions
+               WHERE doc_id=%s AND source_text_hash=%s AND status <> 'archived'
+                 AND (unit_id = %s OR unit_id IS NULL OR %s::varchar IS NULL)
+               ORDER BY (unit_id = %s) DESC
+               LIMIT 1""",
+            (doc_id, source_text_hash, unit_id, unit_id, unit_id),
+        )
+        return str(rows[0]["extraction_id"]) if rows else None
+
     def batch_create_extractions(self, items: list[dict[str, Any]]) -> int:
-        """批量创建提取结果，按 doc_id + source_text_hash 去重"""
+        """批量创建提取结果，按 doc_id + source_text_hash 去重（NULL 承接漂移，见 _find_active_duplicate）"""
         import hashlib
 
         client = self._get_client()
@@ -598,23 +621,13 @@ class PipelineStore:
             extracted_fields = item.get("extracted_fields", {})
             confidence = item.get("confidence", 0.0)
 
-            # 去重
-            if unit_id:
-                existing = client.execute(
-                    "SELECT extraction_id FROM policy_extractions WHERE doc_id=%s AND unit_id=%s AND source_text_hash=%s",
-                    (doc_id, unit_id, source_text_hash),
-                )
-            else:
-                existing = client.execute(
-                    "SELECT extraction_id FROM policy_extractions WHERE doc_id=%s AND source_text_hash=%s",
-                    (doc_id, source_text_hash),
-                )
-            if existing:
-                existing_id = str(existing[0]["extraction_id"])
+            # 去重：滤 archived；unit 精确命中 > NULL 承接；跨单元同文不命中（合法）
+            existing_id = self._find_active_duplicate(client, doc_id, unit_id, source_text_hash)
+            if existing_id:
                 item["extraction_id"] = existing_id
                 client.execute(
                     """UPDATE policy_extractions SET
-                         unit_id=%s, source_text=%s, source_text_hash=%s,
+                         unit_id=COALESCE(%s, unit_id), source_text=%s, source_text_hash=%s,
                          extracted_fields=%s, confidence=%s, status='draft',
                          reviewed_by=NULL, reviewed_at=NULL, updated_at=%s
                        WHERE extraction_id=%s""",
@@ -662,20 +675,10 @@ class PipelineStore:
                 unit_id = item.get("unit_id") or None
                 source_text = str(item.get("source_text") or "")
                 source_text_hash = hashlib.sha256(source_text.encode()).hexdigest()[:16]
-                if unit_id:
-                    existing = client.execute(
-                        """SELECT extraction_id FROM policy_extractions
-                           WHERE doc_id=%s AND unit_id=%s AND source_text_hash=%s""",
-                        (doc_id, unit_id, source_text_hash),
-                    )
-                else:
-                    existing = client.execute(
-                        """SELECT extraction_id FROM policy_extractions
-                           WHERE doc_id=%s AND source_text_hash=%s""",
-                        (doc_id, source_text_hash),
-                    )
-                if existing:
-                    extraction_id = str(existing[0]["extraction_id"])
+                # 与 batch_create 同一查重语义：滤 archived，NULL 承接漂移（设计 §4.1）
+                dup = self._find_active_duplicate(client, doc_id, unit_id, source_text_hash)
+                if dup:
+                    extraction_id = dup
                     item["extraction_id"] = extraction_id
                 current_ids.append(extraction_id)
                 client.execute(
@@ -684,7 +687,8 @@ class PipelineStore:
                         extracted_fields, confidence, status, created_at, updated_at)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, 'draft', %s, %s)
                        ON CONFLICT (extraction_id) DO UPDATE SET
-                         unit_id=EXCLUDED.unit_id, source_text=EXCLUDED.source_text,
+                         unit_id=COALESCE(EXCLUDED.unit_id, policy_extractions.unit_id),
+                         source_text=EXCLUDED.source_text,
                          source_text_hash=EXCLUDED.source_text_hash,
                          extracted_fields=EXCLUDED.extracted_fields,
                          confidence=EXCLUDED.confidence, status='draft',

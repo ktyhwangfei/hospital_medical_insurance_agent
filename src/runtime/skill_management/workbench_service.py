@@ -10,6 +10,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.domain.skill.draft_models import (
+    MetricInputSpec,
     SkillDraft,
     SkillDraftStatus,
     SkillExecutionContract,
@@ -173,6 +174,38 @@ _ACTION_ORDER = {
     SkillNextAction.REGISTER_VERSION: 3,
     SkillNextAction.VIEW_EVIDENCE: 4,
 }
+
+
+def _fill_metric_aliases(contract: "SkillExecutionContract") -> "SkillExecutionContract":
+    """alias 缺失时回填语义层中文名（前端展示用；英文编码只作回退）。
+
+    只读 best-effort：语义层不可用/指标未注册时保持原样。
+    """
+    try:
+        from src.semantic_layer.registry import get_semantic_registry
+        reg = get_semantic_registry()
+
+        def fill(metric: "MetricInputSpec") -> "MetricInputSpec":
+            if metric.alias and metric.alias.strip():
+                return metric
+            m = reg.get_metric(metric.metric_code)
+            if m is None or not (m.name or "").strip():
+                return metric
+            return metric.model_copy(update={"alias": m.name})
+
+        return contract.model_copy(update={
+            "common": contract.common.model_copy(update={
+                "metric_inputs": [fill(m) for m in contract.common.metric_inputs],
+            }),
+            "profiles": [
+                p.model_copy(update={
+                    "metric_inputs": [fill(m) for m in (p.metric_inputs or [])],
+                })
+                for p in contract.profiles
+            ],
+        })
+    except Exception:
+        return contract
 
 
 def _resolve_status(
@@ -427,7 +460,7 @@ class SkillWorkbenchService:
                 business_action=entry.business_action,
                 business_object=entry.business_object,
                 description=entry.description,
-                execution_contract=entry.execution_contract,
+                execution_contract=_fill_metric_aliases(entry.execution_contract),
                 semantic_version=entry.semantic_version,
                 artifact_status=entry.artifact_status,
                 validation_status=validation_status,

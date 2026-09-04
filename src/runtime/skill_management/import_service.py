@@ -162,6 +162,8 @@ class SkillImportService:
         for path in target.rglob("*"):
             if not path.is_file():
                 continue
+            if "__pycache__" in path.parts or path.suffix.lower() == ".pyc":
+                continue
             if path.is_symlink():
                 raise SkillImportError(f"受控目录含符号链接: {path}")
             if path.stat().st_size > MAX_ZIP_BYTES:

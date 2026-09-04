@@ -26,9 +26,15 @@ from src.runtime.api.data_governance_schemas import (
     DataSourceListResponse,
     DataSourceListResult,
     DataSourceResponse,
+    MappingResponse,
     PostgresTargetResponse,
     RotateDataSourceCredentialRequest,
+    SaveMappingRequest,
     SaveSyncJobRequest,
+    SourceColumnListResponse,
+    SourceTableListResponse,
+    SqlPreviewRequest,
+    SqlPreviewResponse,
     SyncJobResponse,
     SyncRunListResponse,
     SyncRunListResult,
@@ -255,6 +261,64 @@ def check_cdc(
 @router.get("/postgresql/status", response_model=PostgresTargetResponse)
 def get_postgresql_status(_: ReadPrincipal, service: GovernanceService):
     return PostgresTargetResponse(result=_call(service.postgres_target_status))
+
+
+@router.get("/data-sources/{source_id}/explore", response_model=SourceTableListResponse)
+def explore_source_tables(source_id: str, _: ReadPrincipal, service: GovernanceService):
+    """探查源库表清单（元数据 + 行数，不含样本值）。"""
+    return SourceTableListResponse(result=_call(lambda: service.explore_tables(source_id)))
+
+
+@router.get(
+    "/data-sources/{source_id}/explore/{table_schema}/{table_name}",
+    response_model=SourceColumnListResponse,
+)
+def explore_source_table(
+    source_id: str,
+    table_schema: str,
+    table_name: str,
+    _: ReadPrincipal,
+    service: GovernanceService,
+):
+    """探查单表列元数据（类型/可空/主键标记）。"""
+    return SourceColumnListResponse(result=_call(
+        lambda: service.explore_table(source_id, table_schema, table_name)
+    ))
+
+
+@router.get("/data-sources/{source_id}/mapping", response_model=MappingResponse)
+def get_source_mapping(source_id: str, _: ReadPrincipal, service: GovernanceService):
+    """返回生效映射（无保存行时为默认固定契约）。"""
+    return MappingResponse(result=_call(lambda: service.effective_mapping(source_id)))
+
+
+@router.put("/data-sources/{source_id}/mapping", response_model=MappingResponse)
+def save_source_mapping(
+    source_id: str,
+    request: SaveMappingRequest,
+    principal: WritePrincipal,
+    service: GovernanceService,
+):
+    return MappingResponse(result=_call(
+        lambda: service.save_mapping(source_id, request, principal.user_id)
+    ))
+
+
+@router.post(
+    "/data-sources/{source_id}/mapping/sql-preview",
+    response_model=SqlPreviewResponse,
+)
+def get_mapping_sql_preview(
+    source_id: str,
+    _: ReadPrincipal,
+    service: GovernanceService,
+    request: SqlPreviewRequest | None = None,
+):
+    """SQL 预览与实际执行共用同一构造器，所见即所执行；传草稿则预览草稿。"""
+    draft = request.captures if request is not None else None
+    return SqlPreviewResponse(result=_call(
+        lambda: service.sql_preview(source_id, draft_captures=draft)
+    ))
 
 
 @router.get("/sync-jobs/{source_id}", response_model=SyncJobResponse)

@@ -1,0 +1,296 @@
+{
+  "generated_at": "2026-09-04T10:47:25",
+  "corpus_collection": "policy_rules_REL_20260827_MZ8_V3",
+  "corpus_entities": 351,
+  "current_year": 2026,
+  "metrics": {
+    "router_accuracy": 1.0,
+    "misroute_rate": 0.0,
+    "deterministic_refusal_rate": 1.0,
+    "router_accuracy_n": 6,
+    "misroute_n": 0,
+    "deterministic_refusal_n": 7,
+    "total_cases": 13,
+    "note": "首轮基线只记录不定阈值（架构条件2），门禁留给加固后统一复测"
+  },
+  "landing_distribution": {
+    "A": 1,
+    "B": 5,
+    "C": 6,
+    "broad-kept-closed": 1
+  },
+  "cases": [
+    {
+      "case_id": "A_RATIO_EMPLOYEE",
+      "question": "在职职工门诊三级医院报销比例是多少",
+      "expected": "structured",
+      "landing": "A",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 5,
+      "top_evidence": [
+        "统筹基金支付60%，个人支付40%。",
+        "统筹基金支付70%，个人支付30%。",
+        "职工按本人上一年月平均工资的2%缴纳基本医疗保险费。"
+      ]
+    },
+    {
+      "case_id": "A_RATIO_RETIREE",
+      "question": "退休人员门诊报销比例是多少",
+      "expected": "structured",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 5,
+      "top_evidence": [
+        "70岁以下退休人员在本市社区卫生服务机构就医，门诊医疗费用报销比例调整为90%（含退休人员统一补充医疗保险，其中：门诊大额医疗互助资金报销比例调整为80%）",
+        "门诊大额医疗互助资金报销比例调整为80%",
+        "不满70周岁的退休人员按上一年本市职工月平均工资的4.3%划入个人账户"
+      ]
+    },
+    {
+      "case_id": "B_RATIO_GENERIC",
+      "question": "门诊报销比例是多少",
+      "expected": "structured",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 5,
+      "top_evidence": [
+        "70岁以下退休人员在本市社区卫生服务机构就医，门诊医疗费用报销比例调整为90%（含退休人员统一补充医疗保险，其中：门诊大额医疗互助资金报销比例调整为80%）",
+        "门诊大额医疗互助资金报销比例调整为80%",
+        "在职职工在本市社区卫生服务机构就医，门诊大额医疗互助资金报销比例调整为90%"
+      ]
+    },
+    {
+      "case_id": "B_CAP",
+      "question": "医保门诊最高限额是多少",
+      "expected": "structured",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 2,
+      "top_evidence": [
+        "但基本医疗保险统筹基金按照比例支付的最高数额不得超过本规定第三十三条规定的最高支付限额。",
+        "参加城镇职工基本医疗保险的在职职工和退休人员基本医疗保险统筹基金最高支付限额调整为10万元"
+      ]
+    },
+    {
+      "case_id": "B_DEDUCTIBLE",
+      "question": "门诊起付线是多少",
+      "expected": "structured",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 4,
+      "top_evidence": [
+        "城乡居民医保基金在一个医疗保险年度内门(急)诊的起付标准为：一级及以下医疗机构100元、二级及以上医疗机构550元。",
+        "城乡居民医保基金在一个医疗保险年度内门(急)诊的起付标准为：一级及以下医疗机构100元、二级及以上医疗机构550元。",
+        "城乡居民大病保险起付标准调整为上一年度本市城镇居民中20%低收入户人均可支配收入(以下简称起付标准，以北京市统计局公开发布的数据为准)。2019年城乡居民大病保"
+      ]
+    },
+    {
+      "case_id": "B_REMOTE_PROCESS",
+      "question": "异地就医备案流程是什么",
+      "expected": "structured",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 3,
+      "top_evidence": [
+        "城乡老年人、劳动年龄内居民在外省市居住一年以上、学生儿童在外省市居住或就读的，应在本人参保地社保经办机构申请办理异地就医备案手续，可选择居住地2所县级以上定点医",
+        "已办理跨省异地就医住院医疗费用直接结算备案（转外就医除外）的参保人员在外埠跨省异地就医直接结算定点医疗机构发生的急诊住院医疗费用，可以直接结算。",
+        "参保人员在本人定点医疗机构和共同的定点医疗机构就医按照本细则规定享受城乡居民基本医疗保险待遇。"
+      ]
+    },
+    {
+      "case_id": "C_TIME_EXPLICIT_YEAR",
+      "question": "2023年的门诊政策还有效吗",
+      "expected": "refuse",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "time_version",
+      "evidence_count": 0,
+      "top_evidence": []
+    },
+    {
+      "case_id": "C_TIME_LAST_YEAR",
+      "question": "去年的门诊报销比例是多少",
+      "expected": "refuse",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "time_version",
+      "evidence_count": 0,
+      "top_evidence": []
+    },
+    {
+      "case_id": "C_TIME_DRAFT",
+      "question": "门诊统筹新规什么时候实施",
+      "expected": "refuse",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "time_version",
+      "evidence_count": 0,
+      "top_evidence": []
+    },
+    {
+      "case_id": "C_REGION_SHANGHAI",
+      "question": "上海医保门诊报销比例是多少",
+      "expected": "refuse",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "region_out_of_scope",
+      "evidence_count": 0,
+      "top_evidence": []
+    },
+    {
+      "case_id": "C_REGION_REMOTE_RATIO",
+      "question": "异地就医报销比例是多少",
+      "expected": "refuse",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "region_out_of_scope",
+      "evidence_count": 0,
+      "top_evidence": []
+    },
+    {
+      "case_id": "C_SCOPE_INPATIENT",
+      "question": "职工医保住院报销比例是多少",
+      "expected": "refuse",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "scope_inpatient",
+      "evidence_count": 0,
+      "top_evidence": []
+    },
+    {
+      "case_id": "CLOSED_FUND_GOVERNANCE",
+      "question": "医保基金是怎么管理的",
+      "expected": "refuse",
+      "landing": "broad-kept-closed",
+      "route": "broad_kept_closed",
+      "refusal_reason": "broad_fallback_closed",
+      "evidence_count": 0,
+      "top_evidence": []
+    }
+  ],
+  "audit_log": [
+    {
+      "question": "在职职工门诊三级医院报销比例是多少",
+      "landing": "A",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 5
+    },
+    {
+      "question": "退休人员门诊报销比例是多少",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 5
+    },
+    {
+      "question": "门诊报销比例是多少",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 5
+    },
+    {
+      "question": "医保门诊最高限额是多少",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 2
+    },
+    {
+      "question": "门诊起付线是多少",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 4
+    },
+    {
+      "question": "异地就医备案流程是什么",
+      "landing": "B",
+      "route": "structured",
+      "refusal_reason": "",
+      "evidence_count": 3
+    },
+    {
+      "question": "2023年的门诊政策还有效吗",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "time_version",
+      "evidence_count": 0
+    },
+    {
+      "question": "去年的门诊报销比例是多少",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "time_version",
+      "evidence_count": 0
+    },
+    {
+      "question": "门诊统筹新规什么时候实施",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "time_version",
+      "evidence_count": 0
+    },
+    {
+      "question": "上海医保门诊报销比例是多少",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "region_out_of_scope",
+      "evidence_count": 0
+    },
+    {
+      "question": "异地就医报销比例是多少",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "region_out_of_scope",
+      "evidence_count": 0
+    },
+    {
+      "question": "职工医保住院报销比例是多少",
+      "landing": "C",
+      "route": "refuse",
+      "refusal_reason": "scope_inpatient",
+      "evidence_count": 0
+    },
+    {
+      "question": "医保基金是怎么管理的",
+      "landing": "broad-kept-closed",
+      "route": "broad_kept_closed",
+      "refusal_reason": "broad_fallback_closed",
+      "evidence_count": 0
+    }
+  ],
+  "existing_baselines_for_reference": {
+    "text_only": {
+      "precision_at_k": 0.11842105263157894,
+      "recall": 0.2850877192982456,
+      "far": 0.8289473684210527,
+      "honest_refusal_rate": 0.08333333333333333
+    },
+    "current_hybrid": {
+      "precision_at_k": 0.02631578947368421,
+      "recall": 0.6842105263157895,
+      "far": 0.13157894736842105,
+      "honest_refusal_rate": 1.0
+    },
+    "enhanced_hybrid": {
+      "precision_at_k": 0.03070175438596491,
+      "recall": 0.6973684210526315,
+      "far": 0.12719298245614036,
+      "honest_refusal_rate": 1.0
+    },
+    "broad_hybrid": {
+      "precision_at_k": 0.08771929824561403,
+      "recall": 0.5548245614035088,
+      "far": 0.49122807017543857,
+      "honest_refusal_rate": 0.6041666666666666
+    }
+  }
+}

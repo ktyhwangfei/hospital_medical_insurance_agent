@@ -21,11 +21,46 @@ if TYPE_CHECKING:
     from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provider import EmbeddingProvider
 
 
+def _applicability_from_doc_metadata(doc_metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """把 policy_documents 元数据映射到 policy_rules_v2 适用性字段。"""
+    if not doc_metadata:
+        return {}
+    from src.knowledge_extension.rule_explanation.policy_retrieval.policy_rules_schema_v2 import (
+        _normalize_date,
+    )
+
+    applicability: dict[str, Any] = {}
+    region = str(doc_metadata.get("policy_region") or "").strip()
+    if region:
+        applicability["region"] = region
+
+    effective = (
+        _normalize_date(doc_metadata.get("effective_date"))
+        or _normalize_date(doc_metadata.get("publish_date"))
+        or _normalize_date(doc_metadata.get("document_date"))
+    )
+    if effective:
+        applicability["effective_date"] = effective
+
+    abolition = _normalize_date(doc_metadata.get("abolition_date"))
+    if abolition:
+        applicability["expiry_date"] = abolition
+
+    validity = str(doc_metadata.get("validity") or "").strip().lower()
+    if validity == "valid":
+        applicability["publish_status"] = "published"
+    elif validity == "invalid":
+        applicability["publish_status"] = "revoked"
+
+    return applicability
+
+
 def build_ingest_records(
     facts: list[dict[str, Any]],
     doc_id: str,
     provider: "EmbeddingProvider",
     extracted_at: str = "",
+    doc_metadata: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """从 LLM 提取的 facts 构建 (fact_records, rule_entities)。
 
@@ -34,12 +69,14 @@ def build_ingest_records(
         doc_id: 所属政策文档 ID。
         provider: 向量化 provider（fact_text → vector）。
         extracted_at: 本次提取时间（ISO），写入字段级溯源。
+        doc_metadata: 可选的 policy_documents 元数据，用于预填充适用性字段。
     Returns:
         fact_records: 每条 {fact_id, doc_id, fact_text, vector, created_at}。
         rule_entities: 每条为 rule_to_entity 产出 + fact_id。
     """
     fact_records: list[dict[str, Any]] = []
     rule_entities: list[dict[str, Any]] = []
+    applicability_defaults = _applicability_from_doc_metadata(doc_metadata)
 
     for fact in facts:
         fact_text = fact.get("fact_text", "") or ""
@@ -62,8 +99,10 @@ def build_ingest_records(
             # rule_id 是系统字段（LLM 不产），必须生成唯一值，
             # 否则 Milvus 空 PK 去重导致 publish 数据丢失
             rule_id = rule.get("rule_id") or f"rule_{uuid.uuid4().hex[:12]}"
+            # Issue #25：文档元数据预填充适用性字段（rule 自身值优先）
+            enriched_rule = {**applicability_defaults, **rule, "rule_id": rule_id}
             entity = rule_to_entity(
-                {**rule, "rule_id": rule_id},
+                enriched_rule,
                 vector=vector,            # 复用所属 fact 向量（§4.1）
                 extracted_at=extracted_at,
                 confidence=rule.get("confidence", 0.7),

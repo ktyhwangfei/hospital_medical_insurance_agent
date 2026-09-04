@@ -1,0 +1,4157 @@
+{
+  "embedding_kind": "sentence_transformer",
+  "corpus_kind": "real",
+  "real_collection_name": "policy_rules_REL_20260827_MZ8_V3",
+  "corpus_size": 351,
+  "case_count": 76,
+  "case_disposition": {
+    "mapped": 28,
+    "negative": 48,
+    "skipped": 6,
+    "skipped_ids": [
+      "BJ_EMP_TERT_IP_NEAR_EXPIRY",
+      "BJ_EMP_TERT_IP_EXPIRY_DAY",
+      "BJ_EMP_TERT_IP_NEW_YEAR",
+      "BJ_EMP_TERT_IP_DEFAULT_REGION",
+      "BJ_EMP_TERT_IP_NO_DATE",
+      "BJ_EMP_TERT_IP_VERSION_MISMATCH"
+    ]
+  },
+  "text_only": {
+    "precision_at_k": 0.11842105263157894,
+    "recall": 0.2850877192982456,
+    "far": 0.8289473684210527,
+    "complete_rate": 0.06578947368421052,
+    "honest_refusal_rate": 0.08333333333333333,
+    "p95_latency_ms": 6.236589967738837
+  },
+  "current_hybrid": {
+    "precision_at_k": 0.02631578947368421,
+    "recall": 0.6842105263157895,
+    "far": 0.13157894736842105,
+    "complete_rate": 0.631578947368421,
+    "honest_refusal_rate": 1.0,
+    "p95_latency_ms": 21.54036501306109
+  },
+  "enhanced_hybrid": {
+    "precision_at_k": 0.03070175438596491,
+    "recall": 0.6973684210526315,
+    "far": 0.12719298245614036,
+    "complete_rate": 0.631578947368421,
+    "honest_refusal_rate": 1.0,
+    "p95_latency_ms": 37.63459005858749
+  },
+  "broad_hybrid": {
+    "precision_at_k": 0.08771929824561403,
+    "recall": 0.5548245614035088,
+    "far": 0.49122807017543857,
+    "complete_rate": 0.3815789473684211,
+    "honest_refusal_rate": 0.6041666666666666,
+    "p95_latency_ms": 89.2143750039395
+  },
+  "field_quality_score": 1.0,
+  "top_diff_cases": [
+    {
+      "case_id": "REAL_MENTE_PAY",
+      "scenario": "门特费用支付标准",
+      "precision_diff": 0.3333333333333333,
+      "recall_diff": 1.0,
+      "current_retrieved": [
+        "rule_5d40d937257ed014",
+        "rule_6e680bdb2ee5b7d7",
+        "rule_a9f93ee2d80f0ac5"
+      ],
+      "enhanced_retrieved": [
+        "rule_5d40d937257ed014",
+        "rule_a9f93ee2d80f0ac5",
+        "rule_b1005f370c2d"
+      ]
+    },
+    {
+      "case_id": "BJ_EMP_TERT_IP_BAND_1",
+      "scenario": "北京在职职工三级医院住院，起付标准至3万元",
+      "precision_diff": 0.0,
+      "recall_diff": 0.0,
+      "current_retrieved": [],
+      "enhanced_retrieved": []
+    },
+    {
+      "case_id": "BJ_EMP_TERT_IP_BAND_2",
+      "scenario": "北京在职职工三级医院住院，超过3万元至4万元",
+      "precision_diff": 0.0,
+      "recall_diff": 0.0,
+      "current_retrieved": [],
+      "enhanced_retrieved": []
+    },
+    {
+      "case_id": "BJ_EMP_TERT_IP_BAND_3",
+      "scenario": "北京在职职工三级医院住院，超过4万元",
+      "precision_diff": 0.0,
+      "recall_diff": 0.0,
+      "current_retrieved": [],
+      "enhanced_retrieved": []
+    },
+    {
+      "case_id": "BJ_EMP_SEC_IP_BAND_1",
+      "scenario": "北京在职职工二级医院住院，起付标准至3万元",
+      "precision_diff": 0.0,
+      "recall_diff": 0.0,
+      "current_retrieved": [],
+      "enhanced_retrieved": []
+    }
+  ],
+  "per_case": {
+    "text_only": [
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_1",
+        "retrieved_ids": [
+          "rule_5c825a5842dc",
+          "rule_8238788ad33d5cb4",
+          "rule_b4f38e98f1b1"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_5c825a5842dc",
+          "rule_8238788ad33d5cb4",
+          "rule_b4f38e98f1b1"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_2",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_eb4c465e6f2e"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_eb4c465e6f2e"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_3",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_eb4c465e6f2e"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_eb4c465e6f2e"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_1",
+        "retrieved_ids": [
+          "rule_5c825a5842dc",
+          "rule_b266a6011f26",
+          "rule_8238788ad33d5cb4"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_5c825a5842dc",
+          "rule_b266a6011f26",
+          "rule_8238788ad33d5cb4"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_2",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_1af82642c671"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_1af82642c671"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_3",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_1af82642c671"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_1af82642c671"
+        ]
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_FORMULA",
+        "retrieved_ids": [
+          "rule_118a85b169e5bba4",
+          "rule_5176ad56c77532b1",
+          "rule_1af82642c671"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_118a85b169e5bba4",
+          "rule_5176ad56c77532b1",
+          "rule_1af82642c671"
+        ]
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_1",
+        "retrieved_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_2",
+        "retrieved_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_3",
+        "retrieved_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_TERT_OP",
+        "retrieved_ids": [
+          "rule_fe86fd3ef332",
+          "rule_bb14031d909f",
+          "rule_2003952d3afc"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_fe86fd3ef332",
+          "rule_bb14031d909f",
+          "rule_2003952d3afc"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_REMOTE",
+        "retrieved_ids": [
+          "rule_1af82642c671",
+          "rule_186b4d697b38",
+          "rule_730543a736bd"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_1af82642c671",
+          "rule_186b4d697b38",
+          "rule_730543a736bd"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_2025",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_2025_BAND2",
+        "retrieved_ids": [
+          "rule_6ab232c64ff8",
+          "rule_f1a70190bc2f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_6ab232c64ff8",
+          "rule_f1a70190bc2f"
+        ]
+      },
+      {
+        "case_id": "SH_EMP_TERT_IP",
+        "retrieved_ids": [
+          "rule_bd19807063be1fd8",
+          "rule_e04620a0f3dffeb2",
+          "rule_0c32d785a8011676"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_bd19807063be1fd8",
+          "rule_e04620a0f3dffeb2",
+          "rule_0c32d785a8011676"
+        ]
+      },
+      {
+        "case_id": "BJ_RESIDENT_TERT_IP",
+        "retrieved_ids": [
+          "rule_b1005f370c2d",
+          "rule_730543a736bd",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b1005f370c2d",
+          "rule_730543a736bd",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BJ_DEDUCT_TERT",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_5c825a5842dc"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_5c825a5842dc"
+        ]
+      },
+      {
+        "case_id": "BJ_CAP",
+        "retrieved_ids": [
+          "rule_9da07fdaeaf8",
+          "rule_eb4c465e6f2e",
+          "rule_af35738965046238"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_9da07fdaeaf8",
+          "rule_eb4c465e6f2e",
+          "rule_af35738965046238"
+        ]
+      },
+      {
+        "case_id": "NEG_EXPIRED_2023",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_FUTURE_2025",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_REGION_SH",
+        "retrieved_ids": [
+          "rule_820c38c849c0",
+          "rule_22ef5cca5f62",
+          "rule_ddff9946f344"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_820c38c849c0",
+          "rule_22ef5cca5f62",
+          "rule_ddff9946f344"
+        ]
+      },
+      {
+        "case_id": "NEG_PILOT",
+        "retrieved_ids": [
+          "rule_2003952d3afc",
+          "rule_6e680bdb2ee5b7d7",
+          "rule_1a523e89a025"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_2003952d3afc",
+          "rule_6e680bdb2ee5b7d7",
+          "rule_1a523e89a025"
+        ]
+      },
+      {
+        "case_id": "NEG_REMOTE_FALSE",
+        "retrieved_ids": [
+          "rule_5b2266196896",
+          "rule_1af82642c671",
+          "rule_22ef5cca5f62"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_5b2266196896",
+          "rule_1af82642c671",
+          "rule_22ef5cca5f62"
+        ]
+      },
+      {
+        "case_id": "NEG_POP_STUDENT",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_d2eeb51327f3",
+          "rule_71773b376e6b"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_d2eeb51327f3",
+          "rule_71773b376e6b"
+        ]
+      },
+      {
+        "case_id": "NEG_HOSP_PRIMARY",
+        "retrieved_ids": [
+          "rule_fbc97f217d2f",
+          "rule_f50c5a599232",
+          "rule_b1005f370c2d"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_fbc97f217d2f",
+          "rule_f50c5a599232",
+          "rule_b1005f370c2d"
+        ]
+      },
+      {
+        "case_id": "NEG_OUTPATIENT_VS_IP",
+        "retrieved_ids": [
+          "rule_cda56c7057bb1edd",
+          "rule_63a423fab0492787",
+          "rule_ca52d442e0eb77f8"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_cda56c7057bb1edd",
+          "rule_63a423fab0492787",
+          "rule_ca52d442e0eb77f8"
+        ]
+      },
+      {
+        "case_id": "NEG_INSU_RESIDENT",
+        "retrieved_ids": [
+          "rule_1a523e89a025",
+          "rule_f50c5a599232",
+          "rule_c1d138060d5c"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_1a523e89a025",
+          "rule_f50c5a599232",
+          "rule_c1d138060d5c"
+        ]
+      },
+      {
+        "case_id": "NEG_REVOKED",
+        "retrieved_ids": [
+          "rule_1a523e89a025",
+          "rule_6e680bdb2ee5b7d7",
+          "rule_85e6c02acea9"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_1a523e89a025",
+          "rule_6e680bdb2ee5b7d7",
+          "rule_85e6c02acea9"
+        ]
+      },
+      {
+        "case_id": "BJ_RET_SEC_IP",
+        "retrieved_ids": [
+          "rule_362bcfee2afd5629",
+          "rule_44abcbc43b0966f7",
+          "rule_bb14031d909f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_362bcfee2afd5629",
+          "rule_44abcbc43b0966f7",
+          "rule_bb14031d909f"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_ALL",
+        "retrieved_ids": [
+          "rule_bd19807063be1fd8",
+          "rule_e04620a0f3dffeb2",
+          "rule_0c32d785a8011676"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_bd19807063be1fd8",
+          "rule_e04620a0f3dffeb2",
+          "rule_0c32d785a8011676"
+        ]
+      },
+      {
+        "case_id": "SH_EMP_TERT_IP_NO_REGION",
+        "retrieved_ids": [
+          "rule_82f4759fb361",
+          "rule_470fa0161a4f",
+          "rule_fcfc71f2ace1"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_82f4759fb361",
+          "rule_470fa0161a4f",
+          "rule_fcfc71f2ace1"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_DRAFT",
+        "retrieved_ids": [
+          "rule_48463cbbeb5d",
+          "rule_2e78ba435ac0",
+          "rule_018ea59161c2"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_48463cbbeb5d",
+          "rule_2e78ba435ac0",
+          "rule_018ea59161c2"
+        ]
+      },
+      {
+        "case_id": "BULK_051",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_8be3669c3554"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_8be3669c3554"
+        ]
+      },
+      {
+        "case_id": "BULK_052",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_8be3669c3554"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_8be3669c3554"
+        ]
+      },
+      {
+        "case_id": "BULK_053",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_8be3669c3554"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_8be3669c3554"
+        ]
+      },
+      {
+        "case_id": "BULK_054",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_4be673ec234b"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_4be673ec234b"
+        ]
+      },
+      {
+        "case_id": "BULK_055",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_4be673ec234b"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_4be673ec234b"
+        ]
+      },
+      {
+        "case_id": "BULK_056",
+        "retrieved_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_4be673ec234b"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_b4f38e98f1b1",
+          "rule_5f5aa6c9f68a",
+          "rule_4be673ec234b"
+        ]
+      },
+      {
+        "case_id": "BULK_057",
+        "retrieved_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BULK_058",
+        "retrieved_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BULK_059",
+        "retrieved_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BULK_060",
+        "retrieved_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BULK_061",
+        "retrieved_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BULK_062",
+        "retrieved_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554",
+          "rule_fbc97f217d2f",
+          "rule_5f5aa6c9f68a"
+        ]
+      },
+      {
+        "case_id": "BROAD_DEDUCTIBLE",
+        "retrieved_ids": [
+          "rule_5c825a5842dc",
+          "rule_13a40a1d54b6",
+          "rule_6e680bdb2ee5b7d7"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_5c825a5842dc",
+          "rule_13a40a1d54b6",
+          "rule_6e680bdb2ee5b7d7"
+        ]
+      },
+      {
+        "case_id": "BROAD_CAP",
+        "retrieved_ids": [
+          "rule_6e680bdb2ee5b7d7",
+          "rule_af35738965046238",
+          "rule_f5ee21aeafd160e2"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_6e680bdb2ee5b7d7",
+          "rule_af35738965046238",
+          "rule_f5ee21aeafd160e2"
+        ]
+      },
+      {
+        "case_id": "BROAD_RETIREE_RATIO",
+        "retrieved_ids": [
+          "rule_9f08b4ad7e8cf1e2",
+          "rule_118a85b169e5bba4",
+          "rule_32d51e32e35c1e5a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_9f08b4ad7e8cf1e2",
+          "rule_118a85b169e5bba4",
+          "rule_32d51e32e35c1e5a"
+        ]
+      },
+      {
+        "case_id": "BROAD_REMOTE",
+        "retrieved_ids": [
+          "rule_5b2266196896",
+          "rule_6e680bdb2ee5b7d7",
+          "rule_bb14031d909f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_5b2266196896",
+          "rule_6e680bdb2ee5b7d7",
+          "rule_bb14031d909f"
+        ]
+      },
+      {
+        "case_id": "BROAD_OUTPATIENT",
+        "retrieved_ids": [
+          "rule_bb14031d909f",
+          "rule_25721ca05b5d",
+          "rule_3222a148156d8c7d"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_bb14031d909f",
+          "rule_25721ca05b5d",
+          "rule_3222a148156d8c7d"
+        ]
+      },
+      {
+        "case_id": "BROAD_SHANGHAI",
+        "retrieved_ids": [
+          "rule_6e680bdb2ee5b7d7",
+          "rule_730543a736bd",
+          "rule_bb14031d909f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_6e680bdb2ee5b7d7",
+          "rule_730543a736bd",
+          "rule_bb14031d909f"
+        ]
+      },
+      {
+        "case_id": "BROAD_AMOUNT_BAND",
+        "retrieved_ids": [
+          "rule_3fdd1238293f",
+          "rule_eb4c465e6f2e",
+          "rule_1af82642c671"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_3fdd1238293f",
+          "rule_eb4c465e6f2e",
+          "rule_1af82642c671"
+        ]
+      },
+      {
+        "case_id": "BROAD_VERSION",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_OP_EMP_DEDUCT",
+        "retrieved_ids": [
+          "rule_8238788ad33d5cb4",
+          "rule_bc4c8deba3574b52",
+          "rule_aac09533029c03a5"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_bc4c8deba3574b52",
+          "rule_aac09533029c03a5"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_RET_DEDUCT",
+        "retrieved_ids": [
+          "rule_bc4c8deba3574b52",
+          "rule_8238788ad33d5cb4",
+          "rule_aac09533029c03a5"
+        ],
+        "precision_at_k": 0.6666666666666666,
+        "recall": 1.0,
+        "far": 0.3333333333333333,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_8238788ad33d5cb4"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_EMP_SEC_BAND1",
+        "retrieved_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_7f3f6f0c6fd2a758",
+          "rule_043714511e59df14"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_043714511e59df14"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_EMP_BAND2",
+        "retrieved_ids": [
+          "rule_eb4c465e6f2e",
+          "rule_74af12a735aef785",
+          "rule_a9ba270201c559e1"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_eb4c465e6f2e",
+          "rule_74af12a735aef785"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_RET_BAND1",
+        "retrieved_ids": [
+          "rule_bc4c8deba3574b52",
+          "rule_4df372b59673556e",
+          "rule_9f08b4ad7e8cf1e2"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_bc4c8deba3574b52",
+          "rule_4df372b59673556e",
+          "rule_9f08b4ad7e8cf1e2"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_RET_BAND2",
+        "retrieved_ids": [
+          "rule_4df372b59673556e",
+          "rule_bc4c8deba3574b52",
+          "rule_bb14031d909f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_4df372b59673556e",
+          "rule_bc4c8deba3574b52",
+          "rule_bb14031d909f"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_EMP_COMMUNITY",
+        "retrieved_ids": [
+          "rule_fe86fd3ef332",
+          "rule_2003952d3afc",
+          "rule_3222a148156d8c7d"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_2003952d3afc",
+          "rule_3222a148156d8c7d"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_RET_COMMUNITY",
+        "retrieved_ids": [
+          "rule_fe86fd3ef332",
+          "rule_2003952d3afc",
+          "rule_bb14031d909f"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_fe86fd3ef332",
+          "rule_2003952d3afc"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_NON_COMMUNITY",
+        "retrieved_ids": [
+          "rule_2003952d3afc",
+          "rule_fe86fd3ef332",
+          "rule_3222a148156d8c7d"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_fe86fd3ef332",
+          "rule_3222a148156d8c7d"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_DEDUCT",
+        "retrieved_ids": [
+          "rule_2e052d5d5ec61d3a",
+          "rule_fc28138fc8492c60",
+          "rule_e23f3cfdcb36c368"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_2e052d5d5ec61d3a",
+          "rule_fc28138fc8492c60",
+          "rule_e23f3cfdcb36c368"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_DEDUCT_POOR",
+        "retrieved_ids": [
+          "rule_dfc997e0e80f",
+          "rule_fc28138fc8492c60",
+          "rule_2e052d5d5ec61d3a"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_fc28138fc8492c60",
+          "rule_2e052d5d5ec61d3a"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_RATIO_BAND1",
+        "retrieved_ids": [
+          "rule_eabcb26ebdb0",
+          "rule_fc28138fc8492c60",
+          "rule_dfc997e0e80f"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_fc28138fc8492c60",
+          "rule_dfc997e0e80f"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_RATIO_BAND2",
+        "retrieved_ids": [
+          "rule_3fdd1238293f",
+          "rule_dfc997e0e80f",
+          "rule_eabcb26ebdb0"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_dfc997e0e80f",
+          "rule_eabcb26ebdb0"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_TILT_DIBAO",
+        "retrieved_ids": [
+          "rule_2e052d5d5ec61d3a",
+          "rule_7ae1f61c041b73ff",
+          "rule_af35738965046238"
+        ],
+        "precision_at_k": 1.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_RES_OP_DEDUCT",
+        "retrieved_ids": [
+          "rule_844017664834",
+          "rule_b266a6011f26",
+          "rule_8238788ad33d5cb4"
+        ],
+        "precision_at_k": 0.6666666666666666,
+        "recall": 1.0,
+        "far": 0.3333333333333333,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_8238788ad33d5cb4"
+        ]
+      },
+      {
+        "case_id": "REAL_RES_OP_RATIO",
+        "retrieved_ids": [
+          "rule_0c31054fbb71",
+          "rule_c0c06ba8a75b",
+          "rule_3fdd1238293f"
+        ],
+        "precision_at_k": 0.6666666666666666,
+        "recall": 1.0,
+        "far": 0.3333333333333333,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_3fdd1238293f"
+        ]
+      },
+      {
+        "case_id": "REAL_RES_OP_POOL50",
+        "retrieved_ids": [
+          "rule_cda56c7057bb1edd",
+          "rule_043714511e59df14",
+          "rule_0c32d785a8011676"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_043714511e59df14",
+          "rule_0c32d785a8011676"
+        ]
+      },
+      {
+        "case_id": "REAL_ER_OBS",
+        "retrieved_ids": [
+          "rule_730543a736bd",
+          "rule_28407a7794d3",
+          "rule_ddff9946f344"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_28407a7794d3",
+          "rule_ddff9946f344"
+        ]
+      },
+      {
+        "case_id": "REAL_FIRST_DIAG_REFERRAL",
+        "retrieved_ids": [
+          "rule_29efc57f99c3",
+          "rule_6497e489c1c4",
+          "rule_956cc41cfe44"
+        ],
+        "precision_at_k": 0.6666666666666666,
+        "recall": 0.6666666666666666,
+        "far": 0.3333333333333333,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_956cc41cfe44"
+        ]
+      },
+      {
+        "case_id": "REAL_MENTE_SCOPE",
+        "retrieved_ids": [
+          "rule_d8302ad37c87",
+          "rule_b1005f370c2d",
+          "rule_9da07fdaeaf8"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_b1005f370c2d",
+          "rule_9da07fdaeaf8"
+        ]
+      },
+      {
+        "case_id": "REAL_MENTE_PAY",
+        "retrieved_ids": [
+          "rule_b1005f370c2d",
+          "rule_fbc97f217d2f",
+          "rule_27f67848e505"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_fbc97f217d2f",
+          "rule_27f67848e505"
+        ]
+      },
+      {
+        "case_id": "REAL_MENTE_SETTLE",
+        "retrieved_ids": [
+          "rule_fbc97f217d2f",
+          "rule_e797192073c0",
+          "rule_27f67848e505"
+        ],
+        "precision_at_k": 0.6666666666666666,
+        "recall": 1.0,
+        "far": 0.3333333333333333,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_27f67848e505"
+        ]
+      },
+      {
+        "case_id": "REAL_ACCOUNT_45P",
+        "retrieved_ids": [
+          "rule_34a1e13b8042",
+          "rule_5efadbc7fa02",
+          "rule_060266f56351"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_34a1e13b8042",
+          "rule_5efadbc7fa02",
+          "rule_060266f56351"
+        ]
+      },
+      {
+        "case_id": "REAL_PREMIUM",
+        "retrieved_ids": [
+          "rule_b7a397978d4b",
+          "rule_e74984933d37",
+          "rule_48fb0a37adff"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_b7a397978d4b",
+          "rule_48fb0a37adff"
+        ]
+      }
+    ],
+    "current_hybrid": [
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_3",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_3",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_FORMULA",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_3",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_OP",
+        "retrieved_ids": [
+          "rule_118a85b169e5bba4",
+          "rule_bd19807063be1fd8",
+          "rule_0c32d785a8011676"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_118a85b169e5bba4",
+          "rule_0c32d785a8011676"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_REMOTE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_2025",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_2025_BAND2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "SH_EMP_TERT_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RESIDENT_TERT_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_DEDUCT_TERT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_CAP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_EXPIRED_2023",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_FUTURE_2025",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_REGION_SH",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_PILOT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_REMOTE_FALSE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_POP_STUDENT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_HOSP_PRIMARY",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_OUTPATIENT_VS_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_INSU_RESIDENT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_REVOKED",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_SEC_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_ALL",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "SH_EMP_TERT_IP_NO_REGION",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_DRAFT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_051",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_052",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_053",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_054",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_055",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_056",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_057",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_058",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_059",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_060",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_061",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_062",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_DEDUCTIBLE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_CAP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_RETIREE_RATIO",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_REMOTE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_OUTPATIENT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_SHANGHAI",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_AMOUNT_BAND",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_VERSION",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_OP_EMP_DEDUCT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_OP_RET_DEDUCT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_OP_EMP_SEC_BAND1",
+        "retrieved_ids": [
+          "rule_362bcfee2afd5629",
+          "rule_7f3f6f0c6fd2a758",
+          "rule_043714511e59df14"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_362bcfee2afd5629",
+          "rule_043714511e59df14"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_EMP_BAND2",
+        "retrieved_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_1b5d162145d9c088",
+          "rule_31a8f163639447e4"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_31a8f163639447e4"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_RET_BAND1",
+        "retrieved_ids": [
+          "rule_0412833fee42d9d1",
+          "rule_118a85b169e5bba4",
+          "rule_362bcfee2afd5629"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_0412833fee42d9d1",
+          "rule_118a85b169e5bba4",
+          "rule_362bcfee2afd5629"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_RET_BAND2",
+        "retrieved_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_1b5d162145d9c088",
+          "rule_31a8f163639447e4"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_1b5d162145d9c088"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_EMP_COMMUNITY",
+        "retrieved_ids": [
+          "rule_0412833fee42d9d1",
+          "rule_25721ca05b5d",
+          "rule_32d51e32e35c1e5a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_0412833fee42d9d1",
+          "rule_25721ca05b5d",
+          "rule_32d51e32e35c1e5a"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_RET_COMMUNITY",
+        "retrieved_ids": [
+          "rule_0412833fee42d9d1",
+          "rule_25721ca05b5d",
+          "rule_32d51e32e35c1e5a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_0412833fee42d9d1",
+          "rule_25721ca05b5d",
+          "rule_32d51e32e35c1e5a"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_NON_COMMUNITY",
+        "retrieved_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_0412833fee42d9d1",
+          "rule_043714511e59df14"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_0412833fee42d9d1",
+          "rule_043714511e59df14"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_DEDUCT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_DBI_DEDUCT_POOR",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_DBI_RATIO_BAND1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_DBI_RATIO_BAND2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_DBI_TILT_DIBAO",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_RES_OP_DEDUCT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_RES_OP_RATIO",
+        "retrieved_ids": [
+          "rule_0c31054fbb71",
+          "rule_5d40d937257ed014",
+          "rule_6e680bdb2ee5b7d7"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_5d40d937257ed014",
+          "rule_6e680bdb2ee5b7d7"
+        ]
+      },
+      {
+        "case_id": "REAL_RES_OP_POOL50",
+        "retrieved_ids": [
+          "rule_0c31054fbb71",
+          "rule_5d40d937257ed014",
+          "rule_6e680bdb2ee5b7d7"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_0c31054fbb71",
+          "rule_5d40d937257ed014",
+          "rule_6e680bdb2ee5b7d7"
+        ]
+      },
+      {
+        "case_id": "REAL_ER_OBS",
+        "retrieved_ids": [
+          "rule_5d40d937257ed014",
+          "rule_6e680bdb2ee5b7d7",
+          "rule_730543a736bd"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_5d40d937257ed014",
+          "rule_6e680bdb2ee5b7d7"
+        ]
+      },
+      {
+        "case_id": "REAL_FIRST_DIAG_REFERRAL",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_MENTE_SCOPE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_MENTE_PAY",
+        "retrieved_ids": [
+          "rule_5d40d937257ed014",
+          "rule_6e680bdb2ee5b7d7",
+          "rule_a9f93ee2d80f0ac5"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_5d40d937257ed014",
+          "rule_6e680bdb2ee5b7d7",
+          "rule_a9f93ee2d80f0ac5"
+        ]
+      },
+      {
+        "case_id": "REAL_MENTE_SETTLE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_ACCOUNT_45P",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_PREMIUM",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      }
+    ],
+    "enhanced_hybrid": [
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_3",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_3",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_FORMULA",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_3",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_OP",
+        "retrieved_ids": [
+          "rule_118a85b169e5bba4",
+          "rule_bd19807063be1fd8",
+          "rule_0c32d785a8011676"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_118a85b169e5bba4",
+          "rule_0c32d785a8011676"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_REMOTE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_2025",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_2025_BAND2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "SH_EMP_TERT_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RESIDENT_TERT_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_DEDUCT_TERT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_CAP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_EXPIRED_2023",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_FUTURE_2025",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_REGION_SH",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_PILOT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_REMOTE_FALSE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_POP_STUDENT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_HOSP_PRIMARY",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_OUTPATIENT_VS_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_INSU_RESIDENT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_REVOKED",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_SEC_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_ALL",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "SH_EMP_TERT_IP_NO_REGION",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_DRAFT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_051",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_052",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_053",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_054",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_055",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_056",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_057",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_058",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_059",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_060",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_061",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_062",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_DEDUCTIBLE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_CAP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_RETIREE_RATIO",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_REMOTE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_OUTPATIENT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_SHANGHAI",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_AMOUNT_BAND",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_VERSION",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_OP_EMP_DEDUCT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_OP_RET_DEDUCT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_OP_EMP_SEC_BAND1",
+        "retrieved_ids": [
+          "rule_362bcfee2afd5629",
+          "rule_7f3f6f0c6fd2a758",
+          "rule_043714511e59df14"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_362bcfee2afd5629",
+          "rule_043714511e59df14"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_EMP_BAND2",
+        "retrieved_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_1b5d162145d9c088",
+          "rule_31a8f163639447e4"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_31a8f163639447e4"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_RET_BAND1",
+        "retrieved_ids": [
+          "rule_118a85b169e5bba4",
+          "rule_362bcfee2afd5629",
+          "rule_7f3f6f0c6fd2a758"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_118a85b169e5bba4",
+          "rule_362bcfee2afd5629",
+          "rule_7f3f6f0c6fd2a758"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_RET_BAND2",
+        "retrieved_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_1b5d162145d9c088",
+          "rule_31a8f163639447e4"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_1b5d162145d9c088"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_EMP_COMMUNITY",
+        "retrieved_ids": [
+          "rule_25721ca05b5d",
+          "rule_32d51e32e35c1e5a",
+          "rule_755237a97589cc67"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_25721ca05b5d",
+          "rule_32d51e32e35c1e5a",
+          "rule_755237a97589cc67"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_RET_COMMUNITY",
+        "retrieved_ids": [
+          "rule_25721ca05b5d",
+          "rule_32d51e32e35c1e5a",
+          "rule_755237a97589cc67"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_25721ca05b5d",
+          "rule_32d51e32e35c1e5a",
+          "rule_755237a97589cc67"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_NON_COMMUNITY",
+        "retrieved_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_043714511e59df14",
+          "rule_060266f56351"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_03131e7a5600f41a",
+          "rule_043714511e59df14",
+          "rule_060266f56351"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_DEDUCT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_DBI_DEDUCT_POOR",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_DBI_RATIO_BAND1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_DBI_RATIO_BAND2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_DBI_TILT_DIBAO",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_RES_OP_DEDUCT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_RES_OP_RATIO",
+        "retrieved_ids": [
+          "rule_0c31054fbb71",
+          "rule_5d40d937257ed014",
+          "rule_a9f93ee2d80f0ac5"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_5d40d937257ed014",
+          "rule_a9f93ee2d80f0ac5"
+        ]
+      },
+      {
+        "case_id": "REAL_RES_OP_POOL50",
+        "retrieved_ids": [
+          "rule_0c31054fbb71",
+          "rule_5d40d937257ed014",
+          "rule_a9f93ee2d80f0ac5"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_0c31054fbb71",
+          "rule_5d40d937257ed014",
+          "rule_a9f93ee2d80f0ac5"
+        ]
+      },
+      {
+        "case_id": "REAL_ER_OBS",
+        "retrieved_ids": [
+          "rule_5d40d937257ed014",
+          "rule_730543a736bd",
+          "rule_a9f93ee2d80f0ac5"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_5d40d937257ed014",
+          "rule_a9f93ee2d80f0ac5"
+        ]
+      },
+      {
+        "case_id": "REAL_FIRST_DIAG_REFERRAL",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_MENTE_SCOPE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_MENTE_PAY",
+        "retrieved_ids": [
+          "rule_5d40d937257ed014",
+          "rule_a9f93ee2d80f0ac5",
+          "rule_b1005f370c2d"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_5d40d937257ed014",
+          "rule_a9f93ee2d80f0ac5"
+        ]
+      },
+      {
+        "case_id": "REAL_MENTE_SETTLE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_ACCOUNT_45P",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_PREMIUM",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      }
+    ],
+    "broad_hybrid": [
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_2",
+        "retrieved_ids": [
+          "rule_06ac3fb97826",
+          "rule_042ab3cd7346"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_06ac3fb97826",
+          "rule_042ab3cd7346"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_3",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_2",
+        "retrieved_ids": [
+          "rule_06ac3fb97826"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_06ac3fb97826"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_SEC_IP_BAND_3",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_FORMULA",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_1",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RET_TERT_IP_BAND_3",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_OP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_REMOTE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_2025",
+        "retrieved_ids": [
+          "rule_c441c41144e7"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_c441c41144e7"
+        ]
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_2025_BAND2",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "SH_EMP_TERT_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_RESIDENT_TERT_IP",
+        "retrieved_ids": [
+          "rule_8be3669c3554"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_8be3669c3554"
+        ]
+      },
+      {
+        "case_id": "BJ_DEDUCT_TERT",
+        "retrieved_ids": [
+          "rule_1ab609c6466c"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_1ab609c6466c"
+        ]
+      },
+      {
+        "case_id": "BJ_CAP",
+        "retrieved_ids": [
+          "rule_eb4c465e6f2e",
+          "rule_e44e75c149f9"
+        ],
+        "precision_at_k": 0.5,
+        "recall": 1.0,
+        "far": 0.5,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_eb4c465e6f2e"
+        ]
+      },
+      {
+        "case_id": "NEG_EXPIRED_2023",
+        "retrieved_ids": [
+          "rule_6a19894fdab2",
+          "rule_a2d714f790a7"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_6a19894fdab2",
+          "rule_a2d714f790a7"
+        ]
+      },
+      {
+        "case_id": "NEG_FUTURE_2025",
+        "retrieved_ids": [
+          "rule_a2d714f790a7",
+          "rule_6a19894fdab2"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_a2d714f790a7",
+          "rule_6a19894fdab2"
+        ]
+      },
+      {
+        "case_id": "NEG_REGION_SH",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_PILOT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_REMOTE_FALSE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_POP_STUDENT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_HOSP_PRIMARY",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "NEG_OUTPATIENT_VS_IP",
+        "retrieved_ids": [
+          "rule_c441c41144e7",
+          "rule_eb4c465e6f2e"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_c441c41144e7",
+          "rule_eb4c465e6f2e"
+        ]
+      },
+      {
+        "case_id": "NEG_INSU_RESIDENT",
+        "retrieved_ids": [
+          "rule_ab4cdf16136d"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_ab4cdf16136d"
+        ]
+      },
+      {
+        "case_id": "NEG_REVOKED",
+        "retrieved_ids": [
+          "rule_9bd6c14290925150",
+          "rule_a2d714f790a7"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_9bd6c14290925150",
+          "rule_a2d714f790a7"
+        ]
+      },
+      {
+        "case_id": "BJ_RET_SEC_IP",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_BAND_ALL",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "SH_EMP_TERT_IP_NO_REGION",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BJ_EMP_TERT_IP_DRAFT",
+        "retrieved_ids": [
+          "rule_018ea59161c2",
+          "rule_2e78ba435ac0",
+          "rule_9bd6c14290925150"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_018ea59161c2",
+          "rule_2e78ba435ac0",
+          "rule_9bd6c14290925150"
+        ]
+      },
+      {
+        "case_id": "BULK_051",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_052",
+        "retrieved_ids": [
+          "rule_0b5fda014f4f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_0b5fda014f4f"
+        ]
+      },
+      {
+        "case_id": "BULK_053",
+        "retrieved_ids": [
+          "rule_0165ef09b30b"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_0165ef09b30b"
+        ]
+      },
+      {
+        "case_id": "BULK_054",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_055",
+        "retrieved_ids": [
+          "rule_0b5fda014f4f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_0b5fda014f4f"
+        ]
+      },
+      {
+        "case_id": "BULK_056",
+        "retrieved_ids": [
+          "rule_0165ef09b30b"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_0165ef09b30b"
+        ]
+      },
+      {
+        "case_id": "BULK_057",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_058",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_059",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_060",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_061",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BULK_062",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_DEDUCTIBLE",
+        "retrieved_ids": [
+          "rule_5c825a5842dc",
+          "rule_2f7acaa926ee"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_5c825a5842dc",
+          "rule_2f7acaa926ee"
+        ]
+      },
+      {
+        "case_id": "BROAD_CAP",
+        "retrieved_ids": [
+          "rule_5bb131d9336a",
+          "rule_1a523e89a025",
+          "rule_0c31054fbb71"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_5bb131d9336a",
+          "rule_1a523e89a025",
+          "rule_0c31054fbb71"
+        ]
+      },
+      {
+        "case_id": "BROAD_RETIREE_RATIO",
+        "retrieved_ids": [
+          "rule_34a1e13b8042",
+          "rule_f1a70190bc2f",
+          "rule_1a523e89a025"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_34a1e13b8042",
+          "rule_f1a70190bc2f",
+          "rule_1a523e89a025"
+        ]
+      },
+      {
+        "case_id": "BROAD_REMOTE",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_OUTPATIENT",
+        "retrieved_ids": [
+          "rule_25721ca05b5d",
+          "rule_0c31054fbb71",
+          "rule_3222a148156d8c7d"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_25721ca05b5d",
+          "rule_0c31054fbb71",
+          "rule_3222a148156d8c7d"
+        ]
+      },
+      {
+        "case_id": "BROAD_SHANGHAI",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 1.0,
+        "far": 0.0,
+        "complete": true,
+        "honest_refusal": true,
+        "false_ids": []
+      },
+      {
+        "case_id": "BROAD_AMOUNT_BAND",
+        "retrieved_ids": [
+          "rule_3fdd1238293f",
+          "rule_eabcb26ebdb0"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_3fdd1238293f",
+          "rule_eabcb26ebdb0"
+        ]
+      },
+      {
+        "case_id": "BROAD_VERSION",
+        "retrieved_ids": [
+          "rule_22ef5cca5f62",
+          "rule_33c4cbbaef43",
+          "rule_5bb131d9336a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": false,
+        "false_ids": [
+          "rule_22ef5cca5f62",
+          "rule_33c4cbbaef43",
+          "rule_5bb131d9336a"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_EMP_DEDUCT",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_OP_RET_DEDUCT",
+        "retrieved_ids": [
+          "rule_25721ca05b5d",
+          "rule_bb14031d909f",
+          "rule_4df372b59673556e"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_25721ca05b5d",
+          "rule_bb14031d909f",
+          "rule_4df372b59673556e"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_EMP_SEC_BAND1",
+        "retrieved_ids": [
+          "rule_c441c41144e7",
+          "rule_06ac3fb97826",
+          "rule_03131e7a5600f41a"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_c441c41144e7",
+          "rule_06ac3fb97826",
+          "rule_03131e7a5600f41a"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_EMP_BAND2",
+        "retrieved_ids": [
+          "rule_c441c41144e7",
+          "rule_2003952d3afc",
+          "rule_0b5fda014f4f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_c441c41144e7",
+          "rule_2003952d3afc",
+          "rule_0b5fda014f4f"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_RET_BAND1",
+        "retrieved_ids": [
+          "rule_25721ca05b5d",
+          "rule_4df372b59673556e",
+          "rule_bb14031d909f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_25721ca05b5d",
+          "rule_4df372b59673556e",
+          "rule_bb14031d909f"
+        ]
+      },
+      {
+        "case_id": "REAL_OP_RET_BAND2",
+        "retrieved_ids": [
+          "rule_25721ca05b5d",
+          "rule_4df372b59673556e",
+          "rule_bb14031d909f"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_25721ca05b5d",
+          "rule_4df372b59673556e",
+          "rule_bb14031d909f"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_EMP_COMMUNITY",
+        "retrieved_ids": [
+          "rule_fe86fd3ef332",
+          "rule_8c1d5957be7d",
+          "rule_74fc57c60c9a"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_8c1d5957be7d",
+          "rule_74fc57c60c9a"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_RET_COMMUNITY",
+        "retrieved_ids": [
+          "rule_25721ca05b5d",
+          "rule_4df372b59673556e",
+          "rule_bb14031d909f"
+        ],
+        "precision_at_k": 0.6666666666666666,
+        "recall": 1.0,
+        "far": 0.3333333333333333,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_25721ca05b5d"
+        ]
+      },
+      {
+        "case_id": "REAL_LMAA_NON_COMMUNITY",
+        "retrieved_ids": [
+          "rule_06ac3fb97826",
+          "rule_8c1d5957be7d",
+          "rule_fe86fd3ef332"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_06ac3fb97826",
+          "rule_8c1d5957be7d",
+          "rule_fe86fd3ef332"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_DEDUCT",
+        "retrieved_ids": [
+          "rule_5c825a5842dc",
+          "rule_44a8b1be1fd6"
+        ],
+        "precision_at_k": 0.5,
+        "recall": 1.0,
+        "far": 0.5,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_44a8b1be1fd6"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_DEDUCT_POOR",
+        "retrieved_ids": [
+          "rule_3fdd1238293f",
+          "rule_dfc997e0e80f",
+          "rule_eabcb26ebdb0"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_3fdd1238293f",
+          "rule_eabcb26ebdb0"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_RATIO_BAND1",
+        "retrieved_ids": [
+          "rule_3fdd1238293f",
+          "rule_eabcb26ebdb0",
+          "rule_dfc997e0e80f"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_3fdd1238293f",
+          "rule_dfc997e0e80f"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_RATIO_BAND2",
+        "retrieved_ids": [
+          "rule_3fdd1238293f",
+          "rule_12ffd91a18ee",
+          "rule_eabcb26ebdb0"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_12ffd91a18ee",
+          "rule_eabcb26ebdb0"
+        ]
+      },
+      {
+        "case_id": "REAL_DBI_TILT_DIBAO",
+        "retrieved_ids": [],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 0.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": []
+      },
+      {
+        "case_id": "REAL_RES_OP_DEDUCT",
+        "retrieved_ids": [
+          "rule_0c31054fbb71",
+          "rule_844017664834",
+          "rule_b266a6011f26"
+        ],
+        "precision_at_k": 0.6666666666666666,
+        "recall": 1.0,
+        "far": 0.3333333333333333,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_0c31054fbb71"
+        ]
+      },
+      {
+        "case_id": "REAL_RES_OP_RATIO",
+        "retrieved_ids": [
+          "rule_0c31054fbb71",
+          "rule_844017664834",
+          "rule_b266a6011f26"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_844017664834",
+          "rule_b266a6011f26"
+        ]
+      },
+      {
+        "case_id": "REAL_RES_OP_POOL50",
+        "retrieved_ids": [
+          "rule_0c31054fbb71",
+          "rule_844017664834",
+          "rule_b266a6011f26"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_0c31054fbb71",
+          "rule_844017664834",
+          "rule_b266a6011f26"
+        ]
+      },
+      {
+        "case_id": "REAL_ER_OBS",
+        "retrieved_ids": [
+          "rule_730543a736bd",
+          "rule_1af82642c671",
+          "rule_28407a7794d3"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_1af82642c671",
+          "rule_28407a7794d3"
+        ]
+      },
+      {
+        "case_id": "REAL_FIRST_DIAG_REFERRAL",
+        "retrieved_ids": [
+          "rule_29efc57f99c3",
+          "rule_6497e489c1c4",
+          "rule_1a523e89a025"
+        ],
+        "precision_at_k": 0.6666666666666666,
+        "recall": 0.6666666666666666,
+        "far": 0.3333333333333333,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_1a523e89a025"
+        ]
+      },
+      {
+        "case_id": "REAL_MENTE_SCOPE",
+        "retrieved_ids": [
+          "rule_27f67848e505",
+          "rule_8fafec2a3d67",
+          "rule_d8302ad37c87"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_27f67848e505",
+          "rule_8fafec2a3d67"
+        ]
+      },
+      {
+        "case_id": "REAL_MENTE_PAY",
+        "retrieved_ids": [
+          "rule_27f67848e505",
+          "rule_b1005f370c2d",
+          "rule_456f0f94c18e"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 1.0,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_27f67848e505",
+          "rule_456f0f94c18e"
+        ]
+      },
+      {
+        "case_id": "REAL_MENTE_SETTLE",
+        "retrieved_ids": [
+          "rule_27f67848e505",
+          "rule_456f0f94c18e",
+          "rule_8fafec2a3d67"
+        ],
+        "precision_at_k": 0.0,
+        "recall": 0.0,
+        "far": 1.0,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_27f67848e505",
+          "rule_456f0f94c18e",
+          "rule_8fafec2a3d67"
+        ]
+      },
+      {
+        "case_id": "REAL_ACCOUNT_45P",
+        "retrieved_ids": [
+          "rule_060266f56351",
+          "rule_aa5635596476",
+          "rule_bed6f820ca5d"
+        ],
+        "precision_at_k": 0.3333333333333333,
+        "recall": 0.5,
+        "far": 0.6666666666666666,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_060266f56351",
+          "rule_bed6f820ca5d"
+        ]
+      },
+      {
+        "case_id": "REAL_PREMIUM",
+        "retrieved_ids": [
+          "rule_e74984933d37",
+          "rule_0b5fda014f4f",
+          "rule_fc5d869d66d5"
+        ],
+        "precision_at_k": 0.6666666666666666,
+        "recall": 1.0,
+        "far": 0.3333333333333333,
+        "complete": false,
+        "honest_refusal": null,
+        "false_ids": [
+          "rule_fc5d869d66d5"
+        ]
+      }
+    ]
+  }
+}

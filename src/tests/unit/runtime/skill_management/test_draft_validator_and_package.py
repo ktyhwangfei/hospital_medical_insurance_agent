@@ -419,8 +419,13 @@ class TestSkillPackageGenerator:
         assert "schemas/output.schema.json" in package.file_paths
 
     def test_preserves_user_raw_files(self):
-        raw = {"templates/custom.md": "# custom", "references/note.md": "note"}
+        raw = {
+            "SKILL.md": "# edited skill",
+            "templates/custom.md": "# custom",
+            "references/note.md": "note",
+        }
         package = self.generator.generate(_draft(raw_files=raw))
+        assert package.files["SKILL.md"] == "# edited skill"
         assert "templates/custom.md" in package.file_paths
         assert "references/note.md" in package.file_paths
 
@@ -602,6 +607,22 @@ class TestExecutionContractValidation:
         )
         report = self.validator.validate(_draft(structured_config=cfg))
         assert "COMMON_METRIC_REDECLARED" in _codes(report, ValidationSeverity.BLOCKING)
+
+    def test_common_metrics_use_the_same_uniqueness_and_runtime_gate(self):
+        cfg = _contract_cfg(
+            common={"context_inputs": [], "metric_inputs": [
+                {"metric_code": "zydyxx.draft"},
+                {"metric_code": "zydyxx.draft"},
+            ]},
+            profiles=[],
+        )
+
+        report = self.validator.validate(_draft(structured_config=cfg))
+
+        assert "DUPLICATE_METRIC_INPUT" in _codes(report, ValidationSeverity.BLOCKING)
+        assert "METRIC_NOT_RUNTIME_RESOLVABLE" in _codes(
+            report, ValidationSeverity.BLOCKING,
+        )
 
     def test_metric_not_resolvable_blocking(self):
         # §54.3 draft 指标不可解析

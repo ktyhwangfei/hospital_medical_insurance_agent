@@ -1,0 +1,30 @@
+definition:
+  name: 门诊部分项目预退费分析
+  plain_text: 基于院端官方预结算结果，分析拟退项目对基金支付和个人支付的影响。
+  includes:
+    - 拟退项目金额变化
+    - 基金支付变化
+    - 个人支付变化
+  excludes:
+    - 实际退费
+    - 冲正
+    - 本地医保待遇重算
+
+refund: >-
+  院端预结算显示：拟退项目使交易总金额减少 {total_delta} 元，基金支付减少
+  {fund_delta} 元，个人支付预计退还 {personal_delta} 元。该结果仅用于办理前核对。
+supplement: >-
+  院端预结算显示：拟退项目使交易总金额减少 {total_delta} 元，基金支付减少
+  {fund_delta} 元；待遇重新计算后，个人支付预计补缴 {personal_delta} 元。该结果仅用于办理前核对。
+no_change: >-
+  院端预结算显示：拟退项目使交易总金额减少 {total_delta} 元，基金支付减少
+  {fund_delta} 元，个人支付预计无变化。该结果仅用于办理前核对。
+official_rejection: >-
+  院端预结算未接受本次拟退方案（{response_code}）：{response_message}。请按院端提示核对后再办理。
+unavailable: 当前无法取得可核验的院端预结算结论，未生成退费金额估算。
+advisory_warning: 预结算结果仅供办理前分析，实际退费必须由人工在既有业务系统确认执行。
+
+steps:
+  total: 交易总金额变化
+  fund: 基金支付变化
+  personal: 个人支付变化

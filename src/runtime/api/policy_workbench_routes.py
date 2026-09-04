@@ -1,9 +1,13 @@
 """政策知识 Unit×Knowledge 三栏工作台 API。"""
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
+import sys
 from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
@@ -13,6 +17,9 @@ from pydantic import BaseModel, Field, field_validator
 from src.config import production as production_config
 from src.data_platform.storage.postgresql.policy_quality_store import (
     PostgresPolicyQualityStore,
+)
+from src.data_platform.storage.postgresql.policy_answer_verification_gate_store import (
+    PostgresAnswerVerificationGateStore,
 )
 
 from src.knowledge_extension.rule_explanation.change_set_models import KnowledgeChangeSet
@@ -77,10 +84,30 @@ from src.knowledge_extension.rule_explanation.quality_service import (
     RulesReleaseSearcher,
 )
 from src.knowledge_extension.rule_explanation.quality_store import PolicyQualityStore
+from src.knowledge_extension.rule_explanation.answer_verification.gate_models import (
+    AnswerVerificationCaseResult,
+    AnswerVerificationRun,
+)
+from src.knowledge_extension.rule_explanation.answer_verification.gate_service import (
+    PolicyAnswerVerificationGateService,
+)
+from src.knowledge_extension.rule_explanation.answer_verification.gate_store import (
+    AnswerVerificationGateStore,
+    InMemoryAnswerVerificationGateStore,
+)
+from src.knowledge_extension.rule_explanation.answer_verification.milvus_port import (
+    get_rule_knowledge_port_for_collection,
+)
 from src.knowledge_extension.rule_explanation.release_index import (
     KnowledgeWorkbenchReleaseSource,
     MilvusReleaseIndexBackend,
     ReleaseIndexBuilder,
+)
+from src.knowledge_extension.rule_explanation.policy_retrieval.applicability_backfill import (
+    ApplicabilityBackfillService,
+    BackfillApplication,
+    BackfillProposal,
+    MilvusRuleStore,
 )
 from src.knowledge_extension.rule_explanation.semantic_alignment import (
     get_semantic_alignment_service,
@@ -108,6 +135,8 @@ router = APIRouter(
 _service: KnowledgeWorkbenchService | None = None
 _quality_store: PolicyQualityStore | None = None
 _quality_service: PolicyQualityService | None = None
+_answer_verification_gate_store: AnswerVerificationGateStore | None = None
+_answer_verification_gate_service: PolicyAnswerVerificationGateService | None = None
 _release_index_builder: ReleaseIndexBuilder | None = None
 _release_content_source: KnowledgeWorkbenchReleaseSource | None = None
 _review_store: KnowledgeReviewStore | None = None
@@ -117,6 +146,7 @@ _decision_task_service: "DecisionTaskService | None" = None
 _knowledge_build_store: KnowledgeBuildStore | None = None
 _knowledge_build_service: KnowledgeBuildService | None = None
 _unit_med_type_store: Any | None = None
+_applicability_backfill_service: ApplicabilityBackfillService | None = None
 
 
 def _get_unit_med_type_store():
@@ -286,6 +316,31 @@ def _get_quality_service() -> PolicyQualityService:
     return _quality_service
 
 
+def get_answer_verification_gate_store() -> AnswerVerificationGateStore:
+    """答案验证门禁存储依赖；API 测试可通过 dependency_overrides 注入。"""
+    global _answer_verification_gate_store
+    if _answer_verification_gate_store is None:
+        _answer_verification_gate_store = (
+            InMemoryAnswerVerificationGateStore()
+            if os.environ.get("USE_MEMORY_STORAGE") == "1"
+            else PostgresAnswerVerificationGateStore()
+        )
+    return _answer_verification_gate_store
+
+
+def get_answer_verification_gate_service() -> PolicyAnswerVerificationGateService:
+    """答案验证门禁服务依赖；保持 release 检索与质量门禁使用同一 store。"""
+    global _answer_verification_gate_service
+    if _answer_verification_gate_service is None:
+        _answer_verification_gate_service = PolicyAnswerVerificationGateService(
+            _get_quality_store(),
+            get_answer_verification_gate_store(),
+            RulesReleaseSearcher(),
+            get_rule_knowledge_port_for_collection,
+        )
+    return _answer_verification_gate_service
+
+
 def _get_release_index_builder() -> ReleaseIndexBuilder:
     global _release_index_builder
     if _release_index_builder is None:
@@ -295,6 +350,25 @@ def _get_release_index_builder() -> ReleaseIndexBuilder:
             _get_compilation_trace_store(),
         )
     return _release_index_builder
+
+
+def _get_applicability_backfill_service() -> ApplicabilityBackfillService:
+    global _applicability_backfill_service
+    if _applicability_backfill_service is None:
+        from src.knowledge_extension.rule_explanation.release_resolver import (
+            resolve_rules_collection,
+        )
+
+        # Issue #33：回填写入 Runtime 当前实际读的集合（active release 优先），
+        # 禁止直写 policy_rules_v2（有 active release 时 Runtime 读不到）。
+        _applicability_backfill_service = ApplicabilityBackfillService(
+            MilvusRuleStore(
+                collection_name=resolve_rules_collection(
+                    production_config.MILVUS_HOST, str(production_config.MILVUS_PORT)
+                )
+            )
+        )
+    return _applicability_backfill_service
 
 
 def _get_release_content_source() -> KnowledgeWorkbenchReleaseSource:
@@ -348,6 +422,11 @@ class QualityRunReport(BaseModel):
     case_results: list[QualityCaseResult]
 
 
+class AnswerVerificationRunReport(BaseModel):
+    run: AnswerVerificationRun
+    case_results: list[AnswerVerificationCaseResult]
+
+
 class ReleaseGateStatus(BaseModel):
     """只读门禁快照；POST 发布会重新执行权威校验，不能依赖此结果放行。"""
 
@@ -356,9 +435,27 @@ class ReleaseGateStatus(BaseModel):
     current_case_set_version: int
     active_release_id: str | None = None
     latest_run: QualityRun | None = None
+    latest_answer_verification_run: AnswerVerificationRun | None = None
+    answer_verification_gate_enabled: bool = False
+    answer_verification_blocked_reasons: list[str] = Field(default_factory=list)
     blocked_reasons: list[str] = Field(default_factory=list)
     sync_pending: bool = False
     sync_pending_reasons: list[str] = Field(default_factory=list)
+
+
+class Issue25MetricsResponse(BaseModel):
+    """Issue #25 专项检索指标（供 policy-knowledge/test 看板展示）。"""
+
+    run_at: str
+    embedding_kind: str
+    corpus_size: int
+    case_count: int
+    text_only: dict[str, float]
+    current_hybrid: dict[str, float]
+    enhanced_hybrid: dict[str, float]
+    broad_hybrid: dict[str, float]
+    field_quality_score: float
+    top_diff_cases: list[dict[str, Any]]
 
 
 def _require_legacy_policy_releases_enabled() -> None:
@@ -1372,6 +1469,160 @@ def get_latest_release_quality(release_id: str) -> QualityRunReport:
     )
 
 
+_issue25_evaluation_runner: Callable[[str], dict[str, Any]] | None = None
+
+
+def _load_issue25_evaluation_runner() -> Callable[[str], dict[str, Any]]:
+    """动态加载 Issue #25 评估脚本中的 run_issue25_evaluation 函数。"""
+    global _issue25_evaluation_runner
+    if _issue25_evaluation_runner is not None:
+        return _issue25_evaluation_runner
+
+    script_path = Path(__file__).resolve().parents[3] / "scripts" / "eval" / "issue25_retrieval_baseline.py"
+    if not script_path.exists():
+        raise RuntimeError(f"Issue #25 评估脚本不存在: {script_path}")
+
+    spec = importlib.util.spec_from_file_location("issue25_retrieval_baseline", script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载 Issue #25 评估脚本: {script_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    # 评估脚本依赖 PROJECT_ROOT 在 sys.path 中，先注入
+    project_root = str(script_path.resolve().parents[2])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    # 必须先注册到 sys.modules，否则脚本内 dataclass 装饰器会报 NoneType.__dict__ 错误
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    runner = getattr(module, "run_issue25_evaluation", None)
+    if runner is None or not callable(runner):
+        raise RuntimeError("Issue #25 评估脚本未导出 run_issue25_evaluation 函数")
+
+    _issue25_evaluation_runner = runner
+    return runner
+
+
+@router.get("/quality/issue25-metrics", response_model=Issue25MetricsResponse)
+def get_issue25_metrics(
+    embedding_kind: str = "hash",
+) -> Issue25MetricsResponse:
+    """Issue #25 专项检索指标：对跑 text_only / current_hybrid / enhanced_hybrid / broad_hybrid 四条基线。
+
+    默认使用 hash embedding 快速返回；生产环境可传 `sentence_transformer` 获取真实 bge 结果，
+    但首次调用需加载模型，耗时较长。
+
+    ⚠️ 评估脚本使用内存 fake Milvus 客户端，会临时替换模块级 MilvusClient 引用，
+    调用前后自动恢复，不影响生产检索。
+    """
+    if embedding_kind not in ("hash", "sentence_transformer"):
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "ISSUE25_METRICS_INVALID_KIND",
+                "embedding_kind 必须是 hash 或 sentence_transformer",
+                {"embedding_kind": embedding_kind},
+            ),
+        )
+
+    # 保存原 MilvusClient，评估后恢复
+    from src.runtime.policy_qa import structured_policy_retriever as _spr_module
+    from src.runtime.policy_qa import broad_policy_retriever as _bpr_module
+
+    _original_structured_client = getattr(_spr_module, "MilvusClient", None)
+    _original_broad_client = getattr(_bpr_module, "MilvusClient", None)
+
+    try:
+        runner = _load_issue25_evaluation_runner()
+        result = runner(embedding_kind=embedding_kind)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "ISSUE25_EVALUATION_UNAVAILABLE",
+                str(exc),
+                {"embedding_kind": embedding_kind},
+            ),
+        ) from exc
+    except Exception as exc:
+        logger.exception("Issue #25 评估执行失败")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "ISSUE25_EVALUATION_FAILED",
+                f"评估执行失败: {exc}",
+                {"embedding_kind": embedding_kind},
+            ),
+        ) from exc
+    finally:
+        if _original_structured_client is not None:
+            _spr_module.MilvusClient = _original_structured_client
+        if _original_broad_client is not None:
+            _bpr_module.MilvusClient = _original_broad_client
+
+    return Issue25MetricsResponse(
+        run_at=datetime.now().isoformat(),
+        embedding_kind=result.get("embedding_kind", embedding_kind),
+        corpus_size=result.get("corpus_size", 0),
+        case_count=result.get("case_count", 0),
+        text_only=result.get("text_only", {}),
+        current_hybrid=result.get("current_hybrid", {}),
+        enhanced_hybrid=result.get("enhanced_hybrid", {}),
+        broad_hybrid=result.get("broad_hybrid", {}),
+        field_quality_score=result.get("field_quality_score", 0.0),
+        top_diff_cases=result.get("top_diff_cases", []),
+    )
+
+
+@router.post(
+    "/releases/{release_id}/answer-verification/test",
+    response_model=AnswerVerificationRun,
+)
+def run_release_answer_verification(
+    release_id: str,
+    service: PolicyAnswerVerificationGateService = Depends(
+        get_answer_verification_gate_service
+    ),
+) -> AnswerVerificationRun:
+    """触发候选 release 的夹具驱动答案验证门禁运行。"""
+    try:
+        return service.run_release(release_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "POLICY_ANSWER_VERIFICATION_RUN_BLOCKED",
+                str(exc),
+                {"release_id": release_id},
+            ),
+        ) from exc
+
+
+@router.get(
+    "/releases/{release_id}/answer-verification/latest",
+    response_model=AnswerVerificationRunReport,
+)
+def get_latest_release_answer_verification(
+    release_id: str,
+    store: AnswerVerificationGateStore = Depends(get_answer_verification_gate_store),
+) -> AnswerVerificationRunReport:
+    """读取最新答案验证门禁报告及逐用例结果。"""
+    run = store.get_latest_run(release_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "POLICY_ANSWER_VERIFICATION_RUN_NOT_FOUND",
+                "候选版本尚无答案验证门禁运行",
+                {"release_id": release_id},
+            ),
+        )
+    return AnswerVerificationRunReport(
+        run=run,
+        case_results=store.list_case_results(run.run_id),
+    )
+
+
 def _release_sync_pending_response(
     release_id: str,
     source_change_set_id: str | None,
@@ -1496,6 +1747,31 @@ def _validate_release_source_before_promote(
         )
 
 
+def _validate_applicability_gate_for_release(release: KnowledgeRelease) -> None:
+    """Issue #25：在 release promote 前校验候选 collection 的适用性字段质量门禁。
+
+    若候选 collection 尚未构建（如测试环境未执行 build），则跳过强门禁，
+    由 `/backfill-applicability/validate-gate` 端点提供显式检查。
+    """
+    from pymilvus.exceptions import MilvusException
+
+    try:
+        store = MilvusRuleStore(collection_name=release.rules_collection)
+        if not store.client.has_collection(store.collection_name):
+            return
+        service = ApplicabilityBackfillService(store)
+        passed, missing = service.validate_gate()
+    except MilvusException:
+        # collection 不存在或 Milvus 瞬时不可用：不在 promote 路径强阻断
+        return
+
+    if not passed:
+        summary = ", ".join(f"{m.rule_id}.{m.field_name}" for m in missing[:10])
+        raise ValueError(
+            f"适用性字段质量门禁未通过: {summary} (共 {len(missing)} 条)"
+        )
+
+
 def _validate_governed_release_source_before_promote(
     release: KnowledgeRelease,
     *,
@@ -1527,6 +1803,8 @@ def _validate_governed_release_source_before_promote(
         release.release_id, expected_rule_runs
     ):
         raise ValueError(f"release {release.release_id} 编译血缘不完整")
+    # Issue #25：适用性字段质量门禁
+    _validate_applicability_gate_for_release(release)
 
 
 def _release_sync_pending_reasons(release: KnowledgeRelease) -> list[str]:
@@ -1563,7 +1841,12 @@ def _release_sync_pending_reasons(release: KnowledgeRelease) -> list[str]:
     "/releases/{release_id}/gate-status",
     response_model=ReleaseGateStatus,
 )
-def get_release_gate_status(release_id: str) -> ReleaseGateStatus:
+def get_release_gate_status(
+    release_id: str,
+    answer_gate_store: AnswerVerificationGateStore = Depends(
+        get_answer_verification_gate_store
+    ),
+) -> ReleaseGateStatus:
     """返回观察性快照；真正发布仍由 POST 接口在事务前重新校验。"""
     try:
         store = _get_quality_store()
@@ -1571,11 +1854,13 @@ def get_release_gate_status(release_id: str) -> ReleaseGateStatus:
         current_case_set_version = store.current_case_set_version()
         active = store.get_active_release()
         latest_run = store.get_latest_run(release_id)
+        latest_answer_verification_run = answer_gate_store.get_latest_run(release_id)
     except Exception as exc:
         raise _release_gate_unavailable_response(release_id) from exc
 
     active_release_id = active.release_id if active is not None else None
     blocked_reasons: list[str] = []
+    answer_verification_blocked_reasons: list[str] = []
     sync_pending_reasons: list[str] = []
     if release is None:
         blocked_reasons.append("release 不存在")
@@ -1596,6 +1881,21 @@ def get_release_gate_status(release_id: str) -> ReleaseGateStatus:
                 blocked_reasons.append("release 测试配置与最新质量运行不一致")
             if latest_run.baseline_release_id != active_release_id:
                 blocked_reasons.append("最新质量运行的活动基线已过期")
+
+        answer_gate_enabled = (
+            production_config.POLICY_RELEASE_ANSWER_VERIFICATION_GATE_ENABLED
+        )
+        if not answer_gate_enabled:
+            answer_verification_blocked_reasons.append("skipped: 答案验证门禁未启用")
+        elif latest_answer_verification_run is None:
+            answer_verification_blocked_reasons.append("缺少答案验证门禁运行")
+        elif latest_answer_verification_run.status != "passed":
+            answer_verification_blocked_reasons.extend(
+                latest_answer_verification_run.blocked_reasons
+                or ["最新答案验证门禁运行未通过"]
+            )
+        if answer_gate_enabled:
+            blocked_reasons.extend(answer_verification_blocked_reasons)
 
         try:
             _validate_governed_release_source_before_promote(
@@ -1622,10 +1922,45 @@ def get_release_gate_status(release_id: str) -> ReleaseGateStatus:
         current_case_set_version=current_case_set_version,
         active_release_id=active_release_id,
         latest_run=latest_run,
+        latest_answer_verification_run=latest_answer_verification_run,
+        answer_verification_gate_enabled=production_config.POLICY_RELEASE_ANSWER_VERIFICATION_GATE_ENABLED,
+        answer_verification_blocked_reasons=answer_verification_blocked_reasons,
         blocked_reasons=blocked_reasons,
         sync_pending=bool(sync_pending_reasons),
         sync_pending_reasons=sync_pending_reasons,
     )
+
+
+def _validate_answer_verification_gate_before_promote(
+    release: KnowledgeRelease,
+    gate_store: AnswerVerificationGateStore,
+) -> None:
+    """发布前第二道答案验证门禁；开关关闭时明确跳过且不阻断。"""
+    if not production_config.POLICY_RELEASE_ANSWER_VERIFICATION_GATE_ENABLED:
+        return
+    latest = gate_store.get_latest_run(release.release_id)
+    if latest is None:
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "POLICY_RELEASE_ANSWER_VERIFICATION_GATE_BLOCKED",
+                "缺少答案验证门禁运行",
+                {"release_id": release.release_id},
+            ),
+        )
+    if latest.status != "passed":
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "POLICY_RELEASE_ANSWER_VERIFICATION_GATE_BLOCKED",
+                "最新答案验证门禁运行未通过",
+                {
+                    "release_id": release.release_id,
+                    "run_id": latest.run_id,
+                    "blocked_reasons": latest.blocked_reasons,
+                },
+            ),
+        )
 
 
 def _promote_release(
@@ -1633,6 +1968,7 @@ def _promote_release(
     request: ReleaseReviewRequest,
     *,
     legacy: bool,
+    answer_gate_store: AnswerVerificationGateStore | None = None,
 ) -> KnowledgeRelease:
     if legacy:
         _require_legacy_policy_releases_enabled()
@@ -1689,6 +2025,11 @@ def _promote_release(
     if active_retry:
         promoted_release = release
     else:
+        if not legacy:
+            _validate_answer_verification_gate_before_promote(
+                release,
+                answer_gate_store or get_answer_verification_gate_store(),
+            )
         try:
             promoted_release = quality_store.promote_release(
                 release_id, request.reviewed_by
@@ -1749,9 +2090,18 @@ def _promote_release(
 
 @router.post("/releases/{release_id}/promote", response_model=KnowledgeRelease)
 def promote_release(
-    release_id: str, request: ReleaseReviewRequest
+    release_id: str,
+    request: ReleaseReviewRequest,
+    answer_gate_store: AnswerVerificationGateStore = Depends(
+        get_answer_verification_gate_store
+    ),
 ) -> KnowledgeRelease:
-    return _promote_release(release_id, request, legacy=False)
+    return _promote_release(
+        release_id,
+        request,
+        legacy=False,
+        answer_gate_store=answer_gate_store,
+    )
 
 
 @router.post(
@@ -1811,3 +2161,117 @@ def rollback_release(
                 "POLICY_RELEASE_ROLLBACK_BLOCKED", str(exc), {"release_id": release_id}
             ),
         ) from exc
+
+
+# ── Issue #25：适用性字段存量回填（提议者-审核者模型）──────────────
+
+
+class _BackfillProposalItem(BaseModel):
+    rule_id: str
+    field_name: str
+    old_value: Any
+    proposed_value: Any
+    confidence: str
+    reason: str
+
+
+class _BackfillApplicationItem(BaseModel):
+    rule_id: str
+    field_name: str
+    applied_value: Any
+    reviewed_by: str
+    reviewed_at: str
+
+
+class ProposeBackfillResponse(BaseModel):
+    proposals: list[_BackfillProposalItem]
+    total_rules: int
+    missing_count: int
+
+
+class ApplyBackfillRequest(BaseModel):
+    proposals: list[_BackfillProposalItem]
+    reviewed_by: str
+
+
+class ApplyBackfillResponse(BaseModel):
+    applications: list[_BackfillApplicationItem]
+    updated_count: int
+
+
+class ValidateBackfillGateResponse(BaseModel):
+    passed: bool
+    missing: list[_BackfillProposalItem]
+
+
+def _proposal_item(p: BackfillProposal) -> _BackfillProposalItem:
+    return _BackfillProposalItem(
+        rule_id=p.rule_id,
+        field_name=p.field_name,
+        old_value=p.old_value,
+        proposed_value=p.proposed_value,
+        confidence=p.confidence,
+        reason=p.reason,
+    )
+
+
+def _application_item(a: BackfillApplication) -> _BackfillApplicationItem:
+    return _BackfillApplicationItem(
+        rule_id=a.rule_id,
+        field_name=a.field_name,
+        applied_value=a.applied_value,
+        reviewed_by=a.reviewed_by,
+        reviewed_at=a.reviewed_at,
+    )
+
+
+@router.get("/backfill-applicability/propose", response_model=ProposeBackfillResponse)
+def propose_applicability_backfill() -> ProposeBackfillResponse:
+    """扫描当前 policy_rules_v2，返回缺失适用性字段的回填提议。"""
+    service = _get_applicability_backfill_service()
+    proposals = service.propose()
+    rules = service._store.list_rules()
+    return ProposeBackfillResponse(
+        proposals=[_proposal_item(p) for p in proposals],
+        total_rules=len(rules),
+        missing_count=len(proposals),
+    )
+
+
+@router.post("/backfill-applicability/apply", response_model=ApplyBackfillResponse)
+def apply_applicability_backfill(request: ApplyBackfillRequest) -> ApplyBackfillResponse:
+    """人工确认后应用回填提议。reviewed_by 必填。"""
+    service = _get_applicability_backfill_service()
+    domain_proposals = [
+        BackfillProposal(
+            rule_id=p.rule_id,
+            field_name=p.field_name,
+            old_value=p.old_value,
+            proposed_value=p.proposed_value,
+            confidence=p.confidence,
+            reason=p.reason,
+        )
+        for p in request.proposals
+    ]
+    try:
+        applications, updated_count = service.apply(domain_proposals, request.reviewed_by)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("BACKFILL_REVIEW_REQUIRED", str(exc), {}),
+        ) from exc
+    return ApplyBackfillResponse(
+        applications=[_application_item(a) for a in applications],
+        updated_count=updated_count,
+    )
+
+
+@router.get("/backfill-applicability/validate-gate", response_model=ValidateBackfillGateResponse)
+def validate_applicability_backfill_gate() -> ValidateBackfillGateResponse:
+    """质量门禁：检查 published 规则是否仍缺失关键适用性字段。"""
+    service = _get_applicability_backfill_service()
+    passed, missing = service.validate_gate()
+    return ValidateBackfillGateResponse(
+        passed=passed,
+        missing=[_proposal_item(p) for p in missing],
+    )

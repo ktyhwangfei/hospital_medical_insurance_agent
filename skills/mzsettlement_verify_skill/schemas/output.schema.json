@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "scenario_id", "summary", "context_checks", "amount_checks", "field_explanations", "anomalies", "citations", "uncertainties", "next_actions"],
+  "properties": {
+    "status": {"enum": ["complete", "partial", "unavailable"]},
+    "scenario_id": {"type": "string"},
+    "summary": {"type": "string"},
+    "context_checks": {"type": "array", "items": {"type": "object"}},
+    "amount_checks": {"type": "array", "items": {"type": "object"}},
+    "field_explanations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field_name", "value", "state", "applicable", "explanation", "citations"],
+        "properties": {
+          "field_name": {"type": "string"},
+          "value": {"type": ["number", "string", "null"]},
+          "state": {"enum": ["non_zero", "reported_zero", "missing", "not_applicable"]},
+          "applicable": {"type": ["boolean", "null"]},
+          "explanation": {"type": "string"},
+          "citations": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+        }
+      }
+    },
+    "anomalies": {"type": "array", "items": {"type": "string"}},
+    "citations": {"type": "array", "items": {"type": "string"}},
+    "uncertainties": {"type": "array", "items": {"type": "string"}},
+    "next_actions": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -1,6 +1,7 @@
 """门诊数据源配置、连接检测与 CDC 检测应用服务。"""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -12,14 +13,23 @@ from src.adapters.insurance_interface.outpatient_cdc import (
     SourceContractMismatchError,
     SqlServerOutpatientCdcSource,
 )
-from src.adapters.insurance_interface.outpatient_polling import probe_outpatient_readiness
+from src.adapters.insurance_interface.outpatient_polling import (
+    baseline_sql,
+    children_sql,
+    probe_outpatient_readiness,
+    resolve_mapping,
+    window_sql,
+)
 from src.data_platform.outpatient_governance import (
     CdcEnablementStatus,
+    CaptureMapping,
     ConnectionStatus,
     OutpatientDataSource,
+    OutpatientSourceMapping,
     OutpatientSyncJob,
     SyncJobStatus,
     PostgresTargetStatus,
+    default_source_mapping,
 )
 from src.security.data_source_credentials import (
     DataSourceCredentialError,
@@ -27,12 +37,47 @@ from src.security.data_source_credentials import (
     data_source_endpoint,
 )
 from src.data_platform.storage.postgresql.outpatient_governance_store import (
+    OutpatientGovernanceConflictError,
     OutpatientGovernanceNotFoundError,
 )
 
 
 class CdcNotReadyError(RuntimeError):
     pass
+
+
+_IDENTIFIER_RE = r"^[A-Za-z_][A-Za-z0-9_@$#]{0,127}$"
+
+# 探查只读元数据：表清单（含行数）与列清单（含主键标记），不回显样本值（HIS 含患者隐私）
+_EXPLORE_TABLES_SQL = """
+    SELECT s.name AS table_schema, t.name AS table_name,
+           CAST(COALESCE(SUM(p.rows), 0) AS BIGINT) AS row_count
+    FROM sys.tables t
+    JOIN sys.schemas s ON s.schema_id = t.schema_id
+    LEFT JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
+    GROUP BY s.name, t.name
+    ORDER BY s.name, t.name
+"""
+
+_EXPLORE_COLUMNS_SQL = """
+    SELECT c.name AS name, ty.name AS data_type,
+           CASE WHEN c.is_nullable = 1 THEN 1 ELSE 0 END AS is_nullable,
+           CASE WHEN c.max_length > 0 THEN CAST(c.max_length AS BIGINT) ELSE NULL END AS max_length,
+           CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key
+    FROM sys.tables t
+    JOIN sys.schemas s ON s.schema_id = t.schema_id
+    JOIN sys.columns c ON c.object_id = t.object_id
+    JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+    LEFT JOIN (
+        SELECT ic.object_id, ic.column_id
+        FROM sys.indexes i
+        JOIN sys.index_columns ic
+          ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+        WHERE i.is_primary_key = 1
+    ) pk ON pk.object_id = c.object_id AND pk.column_id = c.column_id
+    WHERE s.name = ? AND t.name = ?
+    ORDER BY c.column_id
+"""
 
 
 class SyncJobInvalidStateError(RuntimeError):
@@ -58,6 +103,37 @@ class DataSourceConnectionProbe(BaseModel):
     error_code: str | None = None
     safe_message: str = Field(max_length=256)
     checked_at: datetime
+
+
+class SourceTableSummary(BaseModel):
+    """探查：源库表清单（只含元数据，不回显样本值，避免泄露患者隐私）。"""
+
+    table_schema: str
+    table_name: str
+    row_count: int = Field(ge=0)
+
+
+class SourceColumnDetail(BaseModel):
+    name: str
+    data_type: str
+    is_nullable: bool
+    max_length: int | None = None
+    is_primary_key: bool = False
+
+
+class SaveMappingRequest(BaseModel):
+    captures: list[CaptureMapping] = Field(min_length=3, max_length=3)
+    expected_revision: int = Field(ge=1)
+
+
+class MappingSqlPreview(BaseModel):
+    """SQL 预览与实际执行共用同一构造器，所见即所执行。"""
+
+    is_default: bool
+    mapping_revision: int
+    baseline_sql: list[str]
+    incremental_window_sql: str
+    incremental_children_sql: list[str]
 
 
 class DataGovernanceService:
@@ -226,7 +302,10 @@ class DataGovernanceService:
         try:
             password = self._password(source)
             connection = self._connection_factory(source, password)
-            table_count, column_count = probe_outpatient_readiness(connection)
+            mapping = self.get_mapping(source_id)
+            table_count, column_count = probe_outpatient_readiness(
+                connection, None if mapping is None else mapping
+            )
         except Exception as exc:
             error_code, safe_message = _safe_connection_error(exc)
             status = ConnectionStatus.ERROR
@@ -351,6 +430,8 @@ class DataGovernanceService:
         if job.source_mode.value == "cdc" and source.cdc_status is not CdcEnablementStatus.READY:
             raise CdcNotReadyError("CDC 尚未按受控模板开通")
         now = datetime.now(timezone.utc)
+        # worker 崩溃可能残留 active_attempt_id；手动重启必须清掉，否则任务永远无法再被认领
+        job = job.model_copy(update={"active_attempt_id": None})
         return self._save_job_state(job, SyncJobStatus.READY, now, next_run_at=now)
 
     def pause_job(self, source_id: str, actor: str) -> OutpatientSyncJob:
@@ -403,6 +484,105 @@ class DataGovernanceService:
     def open_source_connection(self, source_id: str):
         source = self._store.get_source(source_id)
         return self._connection_factory(source, self._password(source))
+
+    # ---- 源表探查与映射 ----
+
+    def get_mapping(self, source_id: str) -> OutpatientSourceMapping | None:
+        """返回已保存映射；无存储行时返回 None（调用方按需回退默认固定契约）。"""
+        self._store.get_source(source_id)
+        return self._store.get_mapping(source_id)
+
+    def effective_mapping(self, source_id: str) -> OutpatientSourceMapping:
+        return self._store.get_mapping(source_id) or default_source_mapping(source_id)
+
+    def save_mapping(
+        self, source_id: str, request: SaveMappingRequest, actor: str
+    ) -> OutpatientSourceMapping:
+        del actor
+        self._store.get_source(source_id)
+        captures = {item.capture: item for item in request.captures}
+        required = {"dbo_o_Trade", "dbo_o_FeeItem", "dbo_o_Diagnose"}
+        if set(captures) != required:
+            raise SyncJobInvalidStateError("需配置全部三张源表（交易/费用/诊断）的映射")
+        current = self._store.get_mapping(source_id)
+        now = datetime.now(timezone.utc)
+        if current is None:
+            if request.expected_revision != 1:
+                raise OutpatientGovernanceConflictError("数据源映射版本冲突")
+            mapping = OutpatientSourceMapping(
+                source_id=source_id, captures=captures,
+                revision=1, created_at=now, updated_at=now,
+            )
+            self._store.save_mapping(mapping)
+            return mapping
+        if request.expected_revision != current.revision:
+            raise OutpatientGovernanceConflictError("数据源映射版本冲突")
+        updated = current.model_copy(update={
+            "captures": captures,
+            "revision": current.revision + 1,
+            "updated_at": now,
+        })
+        self._store.save_mapping(updated, expected_revision=current.revision)
+        return updated
+
+    def explore_tables(self, source_id: str) -> list[SourceTableSummary]:
+        return self._explore(source_id, _EXPLORE_TABLES_SQL, (), SourceTableSummary)
+
+    def explore_table(
+        self, source_id: str, table_schema: str, table_name: str
+    ) -> list[SourceColumnDetail]:
+        if not re.match(_IDENTIFIER_RE, table_schema) or not re.match(_IDENTIFIER_RE, table_name):
+            raise SyncJobInvalidStateError("非法表名")
+        return self._explore(
+            source_id, _EXPLORE_COLUMNS_SQL, (table_schema, table_name), SourceColumnDetail
+        )
+
+    def _explore(self, source_id: str, sql: str, params: tuple, row_model) -> list:
+        connection = self.open_source_connection(source_id)
+        try:
+            cursor = connection.cursor()
+            cursor.execute(sql, *params)
+            names = [item[0] for item in cursor.description]
+            rows = cursor.fetchall()
+        except SyncJobInvalidStateError:
+            raise
+        except Exception as exc:
+            raise SyncJobInvalidStateError("源库元数据探查失败，请检查连接与账号权限") from exc
+        finally:
+            connection.close()
+        return [row_model.model_validate(dict(zip(names, row))) for row in rows]
+
+    def sql_preview(
+        self, source_id: str, draft_captures: list[CaptureMapping] | None = None
+    ) -> MappingSqlPreview:
+        """SQL 预览与实际执行共用同一构造器；传入草稿时预览草稿，否则预览已保存/默认映射。"""
+        self._store.get_source(source_id)
+        if draft_captures is not None:
+            now = datetime.now(timezone.utc)
+            mapping = OutpatientSourceMapping(
+                source_id=source_id,
+                captures={item.capture: item for item in draft_captures},
+                revision=1, created_at=now, updated_at=now,
+            )
+            is_default = False
+        else:
+            saved = self._store.get_mapping(source_id)
+            mapping = saved or default_source_mapping(source_id)
+            is_default = saved is None
+        captures = resolve_mapping(mapping)
+        return MappingSqlPreview(
+            is_default=is_default,
+            mapping_revision=mapping.revision,
+            baseline_sql=[
+                baseline_sql(captures[capture])
+                for capture in ("dbo_o_Trade", "dbo_o_FeeItem", "dbo_o_Diagnose")
+            ],
+            incremental_window_sql=window_sql(captures["dbo_o_Trade"]),
+            incremental_children_sql=[
+                children_sql(captures["dbo_o_FeeItem"], 3),
+                children_sql(captures["dbo_o_Diagnose"], 3),
+            ],
+        )
 
     @staticmethod
     def cdc_script_path() -> Path:

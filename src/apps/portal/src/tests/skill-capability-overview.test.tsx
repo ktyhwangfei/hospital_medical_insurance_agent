@@ -187,4 +187,24 @@ describe('Skill capability overview', () => {
     const normalCard = screen.getByTestId('skill-overview-settlement_explain_skill')
     expect(within(normalCard).queryByText('草稿')).not.toBeInTheDocument()
   })
+
+  it('每个 Skill 卡片都提供通用测评入口', async () => {
+    mockGetSkillGovernanceWorkbench.mockResolvedValueOnce({
+      ...response,
+      items: [baseItem, draftItem],
+    })
+
+    render(<SkillCapabilityOverview />)
+
+    const settlement = await screen.findByTestId('skill-overview-settlement_explain_skill')
+    const outpatient = screen.getByTestId('skill-overview-mzsettlement_verify_skill')
+    expect(within(settlement).getByRole('link', { name: '测评' })).toHaveAttribute(
+      'href',
+      '/skills/evaluations?skill=settlement_explain_skill',
+    )
+    expect(within(outpatient).getByRole('link', { name: '测评' })).toHaveAttribute(
+      'href',
+      '/skills/evaluations?skill=mzsettlement_verify_skill',
+    )
+  })
 })

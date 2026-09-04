@@ -77,6 +77,8 @@ export interface PolicyQAChatMessage {
   definition?: PolicyQAResult['definition']
   warnings?: string[]
   caseContext?: PolicyQACaseContext
+  scenarioId?: PolicyQAResult['scenarioId']
+  settlementFields?: PolicyQAResult['settlementFields']
   /** 服务端为本轮生成的稳定 ID（result/done 共享）；仅该 ID 提交给反馈接口 */
   qaTurnId?: string
   /** 仅来自具备评测权限的历史 DTO；SSE 禁止携带，不得从流式响应中读取 */
@@ -208,10 +210,23 @@ export function parsePolicyQACommand(input: string): PolicyQACommand {
   return { kind: 'question', question: text }
 }
 
-/** 从自然语言中提取结算单号（首帧锚定兜底：6 位以上数字串） */
+/** 从自然语言中提取结算单号（首帧锚定兜底：6 位以上字母数字串） */
 export function extractSettlementId(text: string): string | null {
-  const m = text.match(/\d{6,}/)
-  return m ? m[0] : null
+  return text.match(/[A-Za-z0-9]{6,}/g)?.find((value) => /\d/.test(value)) ?? null
+}
+
+/**
+ * 锚定后的自动切换单号：普通问题里出现与当前锚不同的结算单号时视为切换，
+ * 避免用户直接打新单号被静默忽略（与首次锚定共用同一提取规则）。
+ */
+export function resolveAnchoredSwitch(
+  anchorSettlementId: string | null,
+  question: string,
+): { settlementId: string; question: string } | null {
+  if (!anchorSettlementId) return null
+  const candidate = extractSettlementId(question)
+  if (!candidate || candidate === anchorSettlementId) return null
+  return { settlementId: candidate, question }
 }
 
 /** 生成新会话 ID（首帧生成，跨轮复用） */
