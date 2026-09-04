@@ -60,3 +60,7 @@ registry:
 #   → 边界恒不触发；口径句已含 OR T_CureType IS NULL 分支（空=通用门诊规则），
 #   若源将来出现空值行，视图按通用门诊纳入，无需改分支，仅需复核边界断言。
 # 勾稽恒等: op_total_fee = op_fund_pay + op_self_pay（口径句保证，活库实测差 0.00）
+# 受控问数消费入口（#62 验收③·API 演进）:
+#   GET /api/v1/medical-insurance-ai-agent/semantic/query/processed-snapshot
+#   只读已发布直接映射，单行预聚合天然 summary；前端卡片见 Portal
+#   /semantic-layer/query 页「门诊加工指标快照」
