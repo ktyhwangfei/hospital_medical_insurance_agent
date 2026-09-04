@@ -374,6 +374,7 @@
 | 2026-08-31 | **门诊测试数据底座接入就绪**：复用既有 SQL Server/PostgreSQL 测试凭据，自动登记并验证三表 117 字段与 PG 事务读写；页面拆分展示数据底座、门诊源表、PG、CDC 和同步草稿状态，CDC 可选；修复端点变化后凭据 revision 丢失导致启动不幂等 | 门诊数据治理中心；P1 接入就绪 |
 | 2026-09-01 | **门诊同步任务人工启动 + 多 worker 竞态修复**：定时 SQL 从草稿转 running，基线 3350 行幂等落库、5 分钟心跳正常，P95 样本开始积累；发现并修复他检出目录遗留 worker 共享 PG 抢任务导致的重复认领与成功批次孤儿化（先红后绿补 2 个回归测试），杀僵尸 worker 后全量 Unit 2013 → API+Flow 460 通过 | 门诊数据治理中心；P1 同步验收进行中 |
 | 2026-09-02 | **源表映射向导（探查/选表/字段映射/SQL 预览）**：新增 outpatient_source_mappings 存储（CREATE+ALTER 双写）与 CaptureMapping 域模型（标识符白名单防注入，契约锚点 T_TradeNo/T_TradeDate 不可改名）；轮询适配器映射化，SQL 构造器与预览共用（所见即所执行，预览支持草稿 POST）；5 个新端点（explore 表/列、mapping GET/PUT、sql-preview）+ Portal「表探查」「字段映射」弹窗（自动同名匹配、主键勾选、SQL 预览）；无映射行回退默认固定契约，存量 bjybdb 零迁移。Unit 2024 → API+Flow 461 → Portal 378/build/tsc 通过；真实库实测 361 表 195 列探查、默认映射预览与心跳同步正常 | 门诊数据治理中心；真实医院接入向导 |
+| 2026-09-04 | **Issue #65 Phase 0 契约冻结**：治理数据流 GovernedFlow DSL 落地（8 节点白名单判别联合 / draft→published 状态机 / revision+content_hash 乐观锁 / 23 个 FLOW_* 错误码 / 口径未签核 fail closed 发布门禁）+ #62 四指标 Golden Flow 基准夹具（口径句 v4、T_CureType 值域与 med_type 隔离）+ 领域字典 §14.6（20 词）+ @xyflow/react 12 画布技术验证（MIT、jsdom 可测、键盘可达、tsc/build 通过，验证后未引入依赖，5 个实施陷阱归档）。Unit 49 passed、compileall 通过 | `docs/steering/治理Flow控制面-Phase0契约冻结-V1.0.md`；Phase 1 依赖 #62 分支合并 |
 
 ---
 

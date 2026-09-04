@@ -65,6 +65,8 @@ domain/
 13.5. [Runtime 上下文（Runtime）](#135-runtime-上下文runtime)
 13.6. [问答会话生命周期与轨迹（Policy QA）](#136-问答会话生命周期与轨迹policy-qa)
 14. [共享通用层（Shared / Common）](#14-共享通用层-shared--common)
+14.5. [门诊数据治理控制面（Outpatient Data Governance）](#145-门诊数据治理控制面outpatient-data-governance)
+14.6. [治理数据流上下文（Governed Data Flow）](#146-治理数据流上下文governed-data-flow)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
 ---
@@ -909,6 +911,49 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.6. 治理数据流上下文（Governed Data Flow）
+
+> 依据：issue #65 Phase 0 契约冻结 + `docs/research/治理中心全流程可视化配置-开源调研与落地方案-V1.0.md`。
+> Golden Flow 基准：issue #62 门诊四加工字段（口径句 v4）。
+
+#### 文件位置
+
+`src/domain/governed_flow/models.py`（DSL 契约）+ `src/domain/governed_flow/validation.py`（图与契约校验）
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 治理数据流 | `FlowDefinition` | **Aggregate Root** | Pydantic `BaseModel` | 数据加工→语义指标→受控消费的声明式版本化资产；画布只编辑它，不编辑 SQL |
+| 流节点 | `FlowNode`（discriminated union） | **Entity** | Pydantic `BaseModel` | 八类白名单节点：source/filter/join/aggregate/derived_metric/dimension/quality_gate/consumer |
+| 流边 | `FlowEdge` | **Value Object** | Pydantic `BaseModel` | 节点连接；图必须无环（DAG） |
+| 流状态 | `FlowStatus` | **Value Object** | `StrEnum` | draft → validating → pending_review → published → deprecated |
+| 来源节点 | `SourceNode` | **Entity** | Pydantic `BaseModel` | 只引用已登记数据集（dataset_code），禁止连接串；不允许有入边 |
+| 过滤节点 | `FilterNode` | **Entity** | Pydantic `BaseModel` | AND 组合条件；`in_or_null` 算子表达口径句的 `IN(...) OR IS NULL` 分支 |
+| 过滤条件 | `FlowFilterCondition` | **Value Object** | Pydantic `BaseModel` | 字段+算子+值+可选值域声明；字段必须在 source contract 内 |
+| 聚合节点 | `AggregateNode` | **Entity** | Pydantic `BaseModel` | group_by + measures；空 group_by=全局单行快照（#62 形态） |
+| 聚合度量 | `AggregateMeasure` | **Value Object** | Pydantic `BaseModel` | 算子白名单 count/count_distinct/sum/avg；count_distinct 必须显式 distinct_key；空值/冲正策略显式声明 |
+| 派生指标节点 | `DerivedMetricNode` | **Entity** | Pydantic `BaseModel` | AST 白名单算术公式（仅 + - * / 与依赖变量），禁止 eval/任意 SQL |
+| 维度节点 | `DimensionNode` | **Entity** | Pydantic `BaseModel` | 值域 + 权限级别（summary/detail），保留下钻边界 |
+| 质量门禁节点 | `QualityGateNode` | **Entity** | Pydantic `BaseModel` | 口径签核/勾稽恒等/行数/空值率/新鲜度/权限检查 |
+| 消费节点 | `ConsumerNode` | **Entity** | Pydantic `BaseModel` | query_planner/skill/dashboard_card/weekly_report/assistant；只读引用已发布指标；不允许有出边 |
+| 来源契约 | `SourceContract` | **Value Object** | Pydantic `BaseModel` | 本 flow 实际引用的字段白名单 |
+| 指标输出绑定 | `MetricOutputBinding` | **Value Object** | Pydantic `BaseModel` | flow 产出指标与语义层绑定；口径句（policy_definition）必填，发布前必须已签核 |
+| 政策载体 | `PolicyCarrier` | **Value Object** | Pydantic `BaseModel` | 复用 #60 结构：doc_number/region_scope/effective_start/effective_end/policy_rule_ref |
+| 发布修订 | `FlowPublishedRevision` | **Entity**（不可变） | Pydantic `BaseModel` | 原子锁定 flow revision + semantic revision + 产物 hash；回滚只切换 active revision，不删除历史 |
+| 内容哈希 | `compute_flow_content_hash()` | — | 纯函数 | 规范化 JSON 的 sha256；排除 revision/status/发布元数据/画布坐标，节点顺序无关 |
+| 状态流转 | `transition_flow_status()` | — | 纯函数 | 非法流转抛 `FlowStateInvalidError`；deprecated 为终态 |
+
+#### 业务规则（Phase 0 冻结）
+
+1. 节点/算子/消费方均为白名单枚举，扩充必须过评审并同步本字典。
+2. 过滤与聚合引用的字段必须在 `SourceContract.fields` 内；数据集/join 关系必须已登记。
+3. `T_CureType` 过滤必须显式声明 `value_domain=MZ_CURE_TYPE`；med_type 是政策知识管线医疗类别维度，两域不混用（#62 签核结论）。
+4. 发布门禁 fail closed：口径句未签核、依赖未发布、图有环、越权字段任一存在即 blocking。
+5. 冻结错误码见 `models.py::FLOW_ERROR_CODES`，API 层按 `FLOW_*` 前缀映射 HTTP 状态。
+
+---
+
 ### 15. AI 编程工作流契约
 
 #### 契约 1：先查后写
@@ -1032,6 +1077,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ExecutionProfileSpec` | 执行场景 | SkillTool | Value Object |
 | `FeeItem` | 费用明细 | OrderFee | Entity |
 | `FailureAttribution` | 评测失败归因 | SkillTool | Value Object |
+| `FlowDefinition` | 治理数据流 | GovernedFlow | Aggregate Root |
+| `FlowEdge` | 流边 | GovernedFlow | Value Object |
+| `FlowFilterCondition` | 过滤条件 | GovernedFlow | Value Object |
+| `FlowNode` | 流节点 | GovernedFlow | Entity |
+| `FlowPublishedRevision` | 流发布修订 | GovernedFlow | Entity |
+| `FlowStatus` | 流状态 | GovernedFlow | Value Object |
 | `HisPort` | HIS 适配器端口 | Patient | Domain Service |
 | `Hypothesis` | 推理假设 | Runtime | Entity |
 | `InsuranceInterfacePort` | 医保接口适配器端口 | Insurance | Domain Service |
@@ -1043,6 +1094,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `KnowledgeExtensionStatus` | 知识扩展状态 | Knowledge | Value Object |
 | `LLMContext` | LLM 上下文 | Runtime | DTO |
 | `MetricInputSpec` | 业务指标输入 | SkillTool | Value Object |
+| `MetricOutputBinding` | 指标输出绑定 | GovernedFlow | Value Object |
 | `McpCapability` | MCP 能力 | SkillTool | Entity |
 | `McpRiskLevel` | MCP 风险等级 | SkillTool | Value Object |
 | `McpServer` | MCP 服务器 | SkillTool | Entity |
@@ -1064,6 +1116,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `PartialRefundItemRequest` | 拟退项目 | Insurance | Value Object |
 | `PartialRefundPreview` | 预结算结果 | Insurance | Value Object |
 | `PolicyExpression` | 政策表达式 | Knowledge | Value Object |
+| `PolicyCarrier` | 政策载体 | GovernedFlow | Value Object |
 | `PolicyFact` | 政策事实 | Knowledge | Value Object |
 | `PreAuditPort` | 事前审核适配器端口 | AuditRisk | Domain Service |
 | `ProfitLoss` | 盈亏分析 | DrgDip | Value Object |
@@ -1079,6 +1132,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `RuleExplanation` | 规则解释 | Knowledge | Entity |
 | `RuleHit` | 规则命中 | AuditRisk | Value Object |
 | `RuntimeTask` | 运行时任务 | Shared | DTO |
+| `SourceContract` | 来源契约 | GovernedFlow | Value Object |
 | `Skill` | 技能 | SkillTool | Aggregate Root |
 | `SkillAIGenerationResponse` | AI 生成提案 | SkillTool | DTO |
 | `SkillCandidateArtifact` | Skill 候选制品 | SkillTool | Value Object |
