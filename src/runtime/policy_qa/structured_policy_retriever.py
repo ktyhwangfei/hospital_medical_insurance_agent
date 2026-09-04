@@ -191,6 +191,7 @@ class StructuredPolicyQuery:
     amount_range: tuple[int, int] | None = None  # 金额段范围 (min, max)（Issue #25 阶段 2）
     search_text: str = ""                    # 结构化不足时的向量/BM25 查询文本
     exact_match_fields: list[str] = field(default_factory=list)  # 不允许空维度兜底
+    top_k: int = 20                          # 候选池上限（路由层放大喂下游重排）
 
 
 # ── 结构化检索结果 ────────────────────────────────────────────────
@@ -775,7 +776,7 @@ class StructuredPolicyRuleRetriever:
         # Step 2: 执行各组查询
         all_raw_hits: list[dict[str, Any]] = []
         for query in queries:
-            hits = self.execute_query(query)
+            hits = self.execute_query(query, top_k=query.top_k)
             result.query_results[query.query_name] = hits
             all_raw_hits.extend(hits)
 

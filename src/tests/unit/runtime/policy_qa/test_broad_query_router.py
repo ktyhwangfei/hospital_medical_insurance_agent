@@ -346,3 +346,134 @@ class TestRouteBroadQuestion:
         """未注入 audit_sink 时使用默认日志 sink，不抛错。"""
         decision = route_broad_question("医保基金是怎么管理的", current_year=2026)
         assert decision.audit["landing"] == "broad-kept-closed"
+
+
+class TestRouterEvidenceGrounding:
+    """加固④（2026-09-04 验收表 #7-#10 固化）：rule_type 兜底硬过滤拆除、
+    推断维度进重排加权、路由候选池放大。对应用户验收表第 2 步 A/B 向四用例。"""
+
+    def test_uninferred_rule_type_omits_hard_filter(self):
+        """推断不出规则类型时不得兜底 rule_type=支付比例硬过滤（备案流程类否则候选池被清空）。"""
+        decision = route_broad_question("异地就医备案流程是什么", current_year=2026)
+        assert decision.route == "structured"
+        assert decision.landing == "B"
+        assert "rule_type" not in decision.structured_queries[0].filters
+
+    def test_router_query_enlarges_candidate_pool(self):
+        """路由候选池放大喂重排：期望规则此前在 top-K=20 截断阶段丢失（70% 规则实证）。"""
+        decision = route_broad_question("在职职工门诊三级医院报销比例是多少", current_year=2026)
+        assert decision.structured_queries[0].top_k >= 50
+
+    def test_rerank_dimension_match_beats_broad_lexical(self):
+        """维度精确匹配（三级/在职职工/职工/门诊/支付比例）应压过词面宽泛的大额互助规则。"""
+        rule_70 = SimpleNamespace(
+            score=1.0,
+            source_text="统筹基金支付70%，个人支付30%。",
+            insu_type="城镇职工基本医疗保险",
+            med_type="门诊-普通门急诊",
+            hosp_lv="三级",
+            psn_type="在职职工",
+            rule_type="支付比例",
+        )
+        noise = SimpleNamespace(
+            score=1.0,
+            source_text="门诊大额医疗互助资金报销比例调整为80%",
+            insu_type="城镇职工基本医疗保险",
+            med_type="门诊-普通门急诊",
+            hosp_lv="一级",
+            psn_type="",
+            rule_type="支付比例",
+        )
+        monkey_cosine = [0.80, 0.82]  # 噪声词面更宽，向量略高：纯相关性会选错
+        import src.runtime.policy_qa.broad_query_router as router_mod
+
+        original = router_mod._cosine_similarities
+        router_mod._cosine_similarities = lambda _q, _t: monkey_cosine
+        try:
+            decision = route_broad_question(
+                "在职职工门诊三级医院报销比例是多少",
+                structured_retrieve=lambda _d: SimpleNamespace(
+                    selected_evidence=[noise, rule_70]
+                ),
+                current_year=2026,
+            )
+        finally:
+            router_mod._cosine_similarities = original
+        assert decision.route == "structured"
+        assert decision.evidence[0].source_text == "统筹基金支付70%，个人支付30%。"
+
+    def test_rerank_empty_dimension_neutral_not_penalized(self):
+        """hosp_lv 为空的通用规则不得因问题提到三级而被惩罚到错配规则之后。"""
+        generic = SimpleNamespace(
+            score=1.0,
+            source_text="参保人员医疗费用按规定比例支付",
+            insu_type="",
+            med_type="",
+            hosp_lv="",
+            psn_type="",
+            rule_type="支付比例",
+        )
+        wrong_lv = SimpleNamespace(
+            score=1.0,
+            source_text="二级医疗机构相关支付规定",
+            insu_type="",
+            med_type="",
+            hosp_lv="二级",
+            psn_type="",
+            rule_type="支付比例",
+        )
+        import src.runtime.policy_qa.broad_query_router as router_mod
+
+        original = router_mod._cosine_similarities
+        router_mod._cosine_similarities = lambda _q, _t: [0.80, 0.78]
+        try:
+            decision = route_broad_question(
+                "三级医院门诊报销比例是多少",
+                structured_retrieve=lambda _d: SimpleNamespace(
+                    selected_evidence=[wrong_lv, generic]
+                ),
+                current_year=2026,
+            )
+        finally:
+            router_mod._cosine_similarities = original
+        assert decision.route == "structured"
+        assert decision.evidence[0].source_text == generic.source_text
+
+    def test_remote_process_question_surfaces_process_evidence(self):
+        """验收 #10：备案流程类问题召回流程类证据（rule_type 硬过滤拆除后由重排把关）。"""
+        process_rule = SimpleNamespace(
+            score=1.0,
+            source_text="参保人员跨省异地就医前应在参保地经办机构办理备案手续",
+            insu_type="城乡居民基本医疗保险",
+            med_type="",
+            hosp_lv="",
+            psn_type="",
+            rule_type="适用范围",
+        )
+        noise = SimpleNamespace(
+            score=1.0,
+            source_text="在本市社区卫生服务机构以外的其他定点医疗机构就医，门诊大额医疗互助资金报销比例调整为70%",
+            insu_type="城镇职工基本医疗保险",
+            med_type="门诊-普通门急诊",
+            hosp_lv="无等级",
+            psn_type="",
+            rule_type="支付比例",
+        )
+        import src.runtime.policy_qa.broad_query_router as router_mod
+
+        original = router_mod._cosine_similarities
+        router_mod._cosine_similarities = lambda _q, _t: [0.85, 0.70]
+        try:
+            decision = route_broad_question(
+                "异地就医备案流程是什么",
+                structured_retrieve=lambda _d: SimpleNamespace(
+                    selected_evidence=[noise, process_rule]
+                ),
+                current_year=2026,
+            )
+        finally:
+            router_mod._cosine_similarities = original
+        assert decision.route == "structured"
+        texts = [ev.source_text for ev in decision.evidence]
+        assert process_rule.source_text in texts
+        assert noise.source_text not in texts

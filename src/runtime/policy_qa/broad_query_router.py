@@ -197,6 +197,9 @@ def build_structured_queries(
 
     发布状态/有效期与 structured 共用同一语义（published + 默认结算日哨兵不裁日期）。
     search_text 挂原问题：激活 execute_query 内置 BM25 重排，避免候选退化为 Milvus 插入序。
+    rule_type 仅在推断出动作时硬过滤；推断不出（如备案流程类）不做类型硬过滤——
+    硬过滤兜底会把流程类规则全部排除导致答非所问（验收 #10 实证），类型偏好交给重排软加权。
+    top_k 放大候选池喂下游相关性重排（20 条截断曾把期望规则挡在池外，验收 #8 实证）。
     """
     filters: dict[str, str] = {
         "region": _DEFAULT_REGION,
@@ -207,10 +210,10 @@ def build_structured_queries(
         filters["insu_type"] = inferred.insu_type
     if inferred.med_type:
         filters["med_type"] = inferred.med_type
-    # B 无明确动作时取域内最可能意图：支付比例
-    filters["rule_type"] = action_rule_type or "支付比例"
+    if action_rule_type:
+        filters["rule_type"] = action_rule_type
 
-    query_name = "router_outpatient_" + filters["rule_type"]
+    query_name = "router_outpatient_" + (action_rule_type or "broad")
     return [
         StructuredPolicyQuery(
             query_name=query_name,
@@ -218,6 +221,7 @@ def build_structured_queries(
             filters=filters,
             psn_type_allow_all=True,
             search_text=question,
+            top_k=_ROUTER_TOP_K,
         )
     ]
 
@@ -229,6 +233,67 @@ _RELEVANCE_BAND = 0.25
 # 语义地板：问题与候选文本的向量最高余弦低于该值 → 候选池整体不相关，
 # 按"宁可多拒"原则诚实拒答（标量过滤无法区分的跨主题词面巧合在此拦截）
 _EVIDENCE_MIN_COSINE = 0.62
+# 路由候选池上限：远大于消费上限，给重排留足素材（20 条曾把期望规则截在池外）
+_ROUTER_TOP_K = 50
+# 推断维度加权（有界 tiebreaker）：维度精确匹配加分、证据维度为空中性（通用规则不误伤）。
+# 非空错配不做加权微调而是分区降级——用户点名的维度上事实不适用的规则
+# （如问三级医院给一级专属规则）不是"相关性低"是"答错"，整体压到适用分区之后。
+_DIMENSION_MATCH_BONUS = 0.12
+
+
+def _dimension_verdicts(
+    evidence: StructuredPolicyEvidence,
+    inferred: InferredQueryContext,
+    preferred_rule_type: str,
+) -> tuple[int, int]:
+    """返回 (匹配数, 错配数)：空值中性（0 匹配 0 错配），非空不同为错配。
+
+    医院等级做"医院"后缀归一（问题推断"三级医院" vs 语料"三级"）。
+    人群做"人员"归一（推断"在职人员" vs 语料"在职职工"去后缀后互相包含）。
+    险种/医疗类别做双向包含（语料与推断存在全称/裸值差异）。
+    """
+    def _match(inferred_value: str, evidence_value: str) -> int:
+        # 返回 1 匹配 / 0 中性(任一空) / -1 错配
+        left = (inferred_value or "").strip()
+        right = (evidence_value or "").strip()
+        if not left or not right:
+            return 0
+        if left == right or left in right or right in left:
+            return 1
+        return -1
+
+    matches = mismatches = 0
+    for dim in ("insu_type", "med_type"):
+        verdict = _match(getattr(inferred, dim, ""), getattr(evidence, dim, ""))
+        matches += verdict == 1
+        mismatches += verdict == -1
+    psn_verdict = _match(
+        (getattr(inferred, "psn_type", "") or "").replace("人员", ""),
+        (getattr(evidence, "psn_type", "") or "").replace("人员", ""),
+    )
+    matches += psn_verdict == 1
+    mismatches += psn_verdict == -1
+    hosp_verdict = _match(
+        (getattr(inferred, "hosp_lv", "") or "").replace("医院", ""),
+        (getattr(evidence, "hosp_lv", "") or "").replace("医院", ""),
+    )
+    matches += hosp_verdict == 1
+    mismatches += hosp_verdict == -1
+    if preferred_rule_type:
+        rule_verdict = _match(preferred_rule_type, getattr(evidence, "rule_type", ""))
+        matches += rule_verdict == 1
+        mismatches += rule_verdict == -1
+    return matches, mismatches
+
+
+def _dimension_weight(
+    evidence: StructuredPolicyEvidence,
+    inferred: InferredQueryContext,
+    preferred_rule_type: str,
+) -> float:
+    """适用分区内的匹配加分（有界，压不过相关性主分）。"""
+    matches, _ = _dimension_verdicts(evidence, inferred, preferred_rule_type)
+    return 1.0 + _DIMENSION_MATCH_BONUS * matches
 
 
 def _cosine_similarities(question: str, texts: list[str]) -> list[float] | None:
@@ -279,8 +344,14 @@ def _evidence_score_text(evidence: StructuredPolicyEvidence) -> str:
 def _rerank_evidence_by_relevance(
     question: str,
     evidence: list[StructuredPolicyEvidence],
+    inferred: InferredQueryContext | None = None,
+    preferred_rule_type: str = "",
 ) -> tuple[list[StructuredPolicyEvidence], float | None]:
-    """按问题相关性对证据重排/过滤/截断（BM25 维度富文本 + 向量语义融合）。
+    """按问题相关性对证据重排/过滤/截断（BM25 维度富文本 + 向量语义融合 + 推断维度加权）。
+
+    相关性主分（BM25×向量几何平均）决定"是否与问题相关"；维度加权只做有界
+    tiebreaker，把命中问题推断维度（险种/医院等级/人群/规则类型）的规则提到
+    词面宽泛的泛规则之前，空值维度中性不误伤通用规则。
 
     Returns:
         (保留证据, 语义地板裁决)：语义地板未通过时返回 ([], best_cosine)，
@@ -331,6 +402,23 @@ def _rerank_evidence_by_relevance(
     if best_combined <= 0.0:
         # 零词面信号（embedding 不可用时）：不做相关性裁决，保持检索原序
         return list(evidence[:_EVIDENCE_TOP_N]), None
+
+    if inferred is not None:
+        # 维度适用分区：用户点名维度上非空错配的规则事实不适用（答错而非不相关），
+        # 整体压到适用分区之后；适用分区为空时回落全池（不制造新拒答）
+        applicable = [
+            (score, ev)
+            for score, ev in zip(combined, evidence)
+            if _dimension_verdicts(ev, inferred, preferred_rule_type)[1] == 0
+        ]
+        if applicable:
+            combined = [score for score, _ in applicable]
+            evidence = [ev for _, ev in applicable]
+        combined = [
+            score * _dimension_weight(ev, inferred, preferred_rule_type)
+            for score, ev in zip(combined, evidence)
+        ]
+        best_combined = max(combined, default=0.0)
 
     ranked = sorted(zip(combined, evidence), key=lambda pair: pair[0], reverse=True)
     return [ev for rel, ev in ranked if rel >= best_combined * _RELEVANCE_BAND][:_EVIDENCE_TOP_N], None
@@ -440,7 +528,9 @@ def route_broad_question(
             decision.refusal_message = STRUCTURED_MISS_REFUSAL_MESSAGE
         else:
             # 相关性重排后再消费：缴费/划入类噪声不进答案；候选池整体不相关则诚实拒答
-            reranked, low_cosine = _rerank_evidence_by_relevance(q, raw_evidence)
+            reranked, low_cosine = _rerank_evidence_by_relevance(
+                q, raw_evidence, inferred, action_rule_type
+            )
             if low_cosine is not None:
                 decision.route = "refuse"
                 decision.refusal_reason = "low_relevance"
