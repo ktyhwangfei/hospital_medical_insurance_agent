@@ -12,7 +12,7 @@
 
 **当前领域**：Issue #33 — 政策知识上线补强（门诊+通用，§1.1 单元 6.7）
 
-**当前阶段**：Issue #33 机制、回填与门禁复测完成（2026-09-02 终态：structured 诚实拒答 87.5%，FAR/P@3 未达）；需求方决定门禁不放行、提交仅留档，加固① structured 空上下文拒答已落地（报告 §9：structured 负例 FAR 0%、诚实拒答 100%，P@3 未达，门禁整体仍关闭），下一轮为 §8.6 ③④与 broad 有效期硬过滤；Issue #31 仍为 `editing` 草稿（等待真实预结算接口），Issue #30（单元 1.8 轨迹持久化）待浏览器人工验收
+**当前阶段**：Issue #33 机制、回填与门禁复测完成（2026-09-02 终态：structured 诚实拒答 87.5%，FAR/P@3 未达）；需求方决定门禁不放行、提交仅留档。后续已落地：路由拒答①（broad→structured 三判据路由/拒答，9/3）、加固① structured 空上下文拒答（报告 §9：负例 FAR 0%、诚实拒答 100%）、加固② broad 有效期/status 硬过滤（报告 §10）、加固③ 路由证据重排与相关性过滤（2026-09-04，SSE 复测噪声证据收敛、路由三口径基线重跑 evidence_count 20→2~4，详见 6.7 加固③补充证据）；门禁整体仍关闭；Issue #31 仍为 `editing` 草稿（等待真实预结算接口），Issue #30（单元 1.8 轨迹持久化）待浏览器人工验收
 
 **门诊医保数据底座 P1（2026-08-31，`impl_done`；2026-09-01 同步已启动）**：当前测试环境已自动登记 `bjybdb`，SQL Server 三张门诊表及 117 个契约字段可读，PostgreSQL 门诊结构与事务读写通过，真实页面显示“数据底座可用”；CDC 未开启并单独显示“等待 DBA”，不影响默认 5 分钟定时 SQL。**2026-09-01 定时 SQL 任务已人工启动**：基线快照 3350 行（592/2139/619）幂等落库，5 分钟心跳正常，P95 样本积累中（首批 batch `5d56bfaa`/`a3a9edb0`）。启动时修复多 worker 重复认领缺陷（认领 WHERE 补 `active_attempt_id IS NULL`、`start_job` 清残留 attempt），全量 Unit 2013 passed/2 skipped → API+Flow 460 passed/1 skipped。Firefox 在本机被 Next dev/HMR 请求停滞阻断，保留生产态复验。[P1 验证记录](docs/reviews/2026-08-28-outpatient-p1-verification.md) 持续保持证据边界；达到 P95 ≤ 300 秒并完成同步验收前不改整个 P1 为 `complete`，P2 不改 `ready_for_planning`。
 
@@ -110,6 +110,8 @@
 6.7 加固①补充证据（2026-09-02）：structured 空上下文必须拒答落地（`plan_queries` 返回空 + `retrieve` 短路 `refusal_reason/refusal_message`，显式 custom_queries 不受限），先红后绿 5 例，单元 819 / API 105 passed。真实语料复测（报告 §9）：structured 负例误答 6/48→0/48，负例 FAR 0%、诚实拒答 100%，正向不受影响；合成 text_only 对照不变、structured FAR 下降（§9.4 新基线）。门禁整体仍关闭。
 
 6.7 加固②补充证据（2026-09-02）：broad 有效期/publish_status 硬过滤落地，与 structured 共用 `policy_validity` helper（publish_status=published + effective<=ref + expiry>=ref/9999 哨兵，精确当天有效），broad 补 `_get_collection_fields` 字段存在性判定（缺字段跳过不误杀）。先红后绿 8 例，单元 827 / API 105 passed。**关键实测修正**：19 条 broad 负例误召规则全部 published/expiry=9999，加固后真实语料 eval 四基线逐位一致——broad FAR 39.6% 不因本加固移动（语料无过期/未发布规则），版本类 5 条负例属问题语义 gap；报告 §10 落档。门禁整体仍关闭。
+
+6.7 加固③补充证据（2026-09-04）：路由层证据相关性治理——`build_structured_queries` 挂 `search_text=原问题` 激活 execute_query 内置 BM25 重排（候选不再退化 Milvus 插入序）；路由消费前 `_rerank_evidence_by_relevance` 对证据做 BM25×向量几何平均融合重排，top5 截断 + 0.25 相关性带剔除缴费/划入类噪声；候选池最高语义余弦 <0.62 整体不相关时 `low_relevance` 诚实拒答；embedding 不可用时降级 BM25-only，零词面信号不误杀。先红后绿 5 例，路由单测 33 passed；全量回归单元 2344 / API 368 / Flow 144 passed（7 个失败均为 HEAD 预存，stash 前后复现验证，与本次无关）。API 复测（SSE）：「门诊报销比例是多少」答案消费证据从 20 条（统筹60%/90%、个人账户划入等噪声）收敛为门诊大额互助 80%/70% 相关规则。路由三口径基线重跑（13 用例，`scripts/eval/issue33_router_baseline_result.json` 2026-09-04）：路由准确率 1.0 / 误路由 0.0 / 确定性拒答率 1.0 不变，structured 命中案 evidence_count 20→2~4、top 证据全部换成问题相关规则。门禁整体仍关闭。
 
 #### 技能管理（Skill）
 | # | 单元 | 后端 | 状态 |

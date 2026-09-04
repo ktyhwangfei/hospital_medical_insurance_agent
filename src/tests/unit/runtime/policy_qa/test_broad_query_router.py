@@ -8,6 +8,7 @@
 
 from types import SimpleNamespace
 
+from src.runtime.policy_qa import broad_query_router
 from src.runtime.policy_qa.broad_query_router import (
     EMPTY_QUESTION_REFUSAL_MESSAGE,
     REGION_REFUSAL_MESSAGE,
@@ -200,6 +201,95 @@ class TestRouteBroadQuestion:
         )
         assert decision.route == "refuse"
         assert decision.refusal_reason == "structured_miss"
+
+    def test_structured_queries_carry_question_as_search_text(self):
+        """路由查询挂 search_text=原问题，激活 structured 内置 BM25 重排（排序修复）。"""
+        decision = route_broad_question("门诊报销比例是多少", current_year=2026)
+        assert decision.structured_queries[0].search_text == "门诊报销比例是多少"
+
+    def test_evidence_relevance_filter_drops_noise(self, monkeypatch):
+        """低相关噪声（缴费/划入类比例）被过滤，证据按问题相关性排序并截断。"""
+        monkeypatch.setattr(
+            broad_query_router,
+            "_cosine_similarities",
+            lambda _q, _texts: [0.80, 0.66, 0.70],
+        )
+        question = "门诊报销比例是多少"
+        noise = SimpleNamespace(
+            score=1.0, source_text="35周岁以上不满45周岁的职工按本人月缴费工资基数的1%划入个人账户"
+        )
+        relevant_a = SimpleNamespace(score=1.0, source_text="门诊统筹基金支付85%，个人支付15%")
+        relevant_b = SimpleNamespace(score=1.0, source_text="门诊统筹基金支付90%，个人支付10%")
+        decision = route_broad_question(
+            question,
+            structured_retrieve=lambda _d: SimpleNamespace(
+                selected_evidence=[noise, relevant_a, relevant_b]
+            ),
+            current_year=2026,
+        )
+        assert decision.route == "structured"
+        texts = [ev.source_text for ev in decision.evidence]
+        # 噪声被相关性过滤剔除，相关证据保留且排在前面
+        assert noise.source_text not in texts
+        assert relevant_a.source_text in texts
+        assert relevant_b.source_text in texts
+
+    def test_evidence_low_semantic_floor_refuses(self, monkeypatch):
+        """候选池整体语义不相关（向量最高分低于地板）→ 诚实拒答，不硬答。"""
+        monkeypatch.setattr(
+            broad_query_router,
+            "_cosine_similarities",
+            lambda _q, _texts: [0.50, 0.45],
+        )
+        decision = route_broad_question(
+            "异地就医备案流程是什么",
+            structured_retrieve=lambda _d: SimpleNamespace(
+                selected_evidence=[
+                    SimpleNamespace(score=1.0, source_text="门诊大额医疗互助资金报销比例调整为70%"),
+                    SimpleNamespace(score=1.0, source_text="统筹基金支付85%，个人支付15%"),
+                ]
+            ),
+            current_year=2026,
+        )
+        assert decision.route == "refuse"
+        assert decision.refusal_reason == "low_relevance"
+        assert decision.evidence == []
+
+    def test_evidence_relevance_no_lexical_signal_keeps_evidence(self, monkeypatch):
+        """问题与证据零词面重叠（纯语义命中）时不误杀：保留证据，避免过度拒答。"""
+        monkeypatch.setattr(
+            broad_query_router,
+            "_cosine_similarities",
+            lambda _q, _texts: [0.90],
+        )
+        decision = route_broad_question(
+            "门诊待遇怎么样",
+            structured_retrieve=lambda _d: SimpleNamespace(
+                selected_evidence=[
+                    SimpleNamespace(score=1.0, source_text="统筹基金按规定比例支付医疗费用")
+                ]
+            ),
+            current_year=2026,
+        )
+        assert decision.route == "structured"
+        assert len(decision.evidence) == 1
+
+    def test_evidence_embedding_unavailable_degrades_to_bm25(self, monkeypatch):
+        """embedding 不可用时降级 BM25-only：不做语义地板裁决，行为与旧版一致。"""
+        monkeypatch.setattr(
+            broad_query_router, "_cosine_similarities", lambda _q, _texts: None
+        )
+        decision = route_broad_question(
+            "门诊报销比例是多少",
+            structured_retrieve=lambda _d: SimpleNamespace(
+                selected_evidence=[
+                    SimpleNamespace(score=1.0, source_text="门诊统筹基金支付85%，个人支付15%")
+                ]
+            ),
+            current_year=2026,
+        )
+        assert decision.route == "structured"
+        assert len(decision.evidence) == 1
 
     def test_structured_hit_returns_evidence(self):
         decision = route_broad_question(

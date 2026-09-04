@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -190,10 +191,12 @@ def _infer_action_rule_type(question: str) -> str:
 def build_structured_queries(
     inferred: InferredQueryContext,
     action_rule_type: str,
+    question: str = "",
 ) -> list[StructuredPolicyQuery]:
     """按路由推断维度构建结构化查询（B 缺险种时不过滤 = 职工/居民 all）。
 
     发布状态/有效期与 structured 共用同一语义（published + 默认结算日哨兵不裁日期）。
+    search_text 挂原问题：激活 execute_query 内置 BM25 重排，避免候选退化为 Milvus 插入序。
     """
     filters: dict[str, str] = {
         "region": _DEFAULT_REGION,
@@ -214,8 +217,123 @@ def build_structured_queries(
             required=True,
             filters=filters,
             psn_type_allow_all=True,
+            search_text=question,
         )
     ]
+
+
+# 证据消费上限：答案生成只消费 top N，超出部分只会稀释相关性
+_EVIDENCE_TOP_N = 5
+# 相关性过滤带：保留综合相对分 >= 该比例的证据（低于带宽的视为噪声）
+_RELEVANCE_BAND = 0.25
+# 语义地板：问题与候选文本的向量最高余弦低于该值 → 候选池整体不相关，
+# 按"宁可多拒"原则诚实拒答（标量过滤无法区分的跨主题词面巧合在此拦截）
+_EVIDENCE_MIN_COSINE = 0.62
+
+
+def _cosine_similarities(question: str, texts: list[str]) -> list[float] | None:
+    """问题与候选文本的向量余弦相似度；embedding 不可用返回 None（降级 BM25-only）。"""
+    try:
+        import numpy as np
+
+        from src.knowledge_extension.rule_explanation.policy_retrieval.embedding_provider import (
+            get_embedding_provider,
+        )
+
+        provider = get_embedding_provider("sentence_transformer")
+        query_vector = np.asarray(provider.encode([question or ""])[0], dtype=float)
+        text_vectors = np.asarray(provider.encode(list(texts)), dtype=float)
+        query_norm = float(np.linalg.norm(query_vector))
+        text_norms = np.linalg.norm(text_vectors, axis=1)
+        if query_norm == 0.0 or bool((text_norms == 0.0).all()):
+            return None
+        return [
+            float(score)
+            for score in (text_vectors @ query_vector) / (text_norms * query_norm + 1e-9)
+        ]
+    except Exception as exc:  # embedding 模型缺失/加载失败 → 降级，不阻塞路由
+        logger.warning("[QUERY-ROUTER] embedding 不可用，证据排序降级为 BM25-only: %s", exc)
+        return None
+
+
+def _evidence_score_text(evidence: StructuredPolicyEvidence) -> str:
+    """参与相关性打分的富文本：source_text + 适用维度字段。
+
+    短文本规则（如"统筹基金支付85%"）词面信息少，把险种/医疗类别/医院等级/人群
+    等维度并入打分文本，"三级医院"这类问题词才能命中对应规则。
+    """
+    return " ".join(
+        str(part or "")
+        for part in (
+            getattr(evidence, "source_text", ""),
+            getattr(evidence, "insu_type", ""),
+            getattr(evidence, "med_type", ""),
+            getattr(evidence, "hosp_lv", ""),
+            getattr(evidence, "psn_type", ""),
+            getattr(evidence, "rule_value", ""),
+            getattr(evidence, "payment_ratio", ""),
+        )
+    )
+
+
+def _rerank_evidence_by_relevance(
+    question: str,
+    evidence: list[StructuredPolicyEvidence],
+) -> tuple[list[StructuredPolicyEvidence], float | None]:
+    """按问题相关性对证据重排/过滤/截断（BM25 维度富文本 + 向量语义融合）。
+
+    Returns:
+        (保留证据, 语义地板裁决)：语义地板未通过时返回 ([], best_cosine)，
+        调用方应回落确定性拒答；embedding 不可用时地板裁决为 None（BM25-only）。
+    """
+    if not evidence:
+        return [], None
+    from src.runtime.policy_qa.structured_policy_retriever import _bm25_scores
+
+    bm25 = _bm25_scores(question or "", [_evidence_score_text(ev) for ev in evidence])
+    # 向量只对非空文本打分（无文本证据不参与语义裁决）
+    cosine_indexed: dict[int, float] = {}
+    scored = [
+        (idx, str(getattr(ev, "source_text", "") or "").strip())
+        for idx, ev in enumerate(evidence)
+    ]
+    non_empty = [(idx, text) for idx, text in scored if text]
+    cosine = (
+        _cosine_similarities(question or "", [text for _, text in non_empty])
+        if non_empty
+        else None
+    )
+
+    cosine_norm: list[float] | None = None
+    if cosine is not None:
+        best_cosine = max(cosine)
+        if best_cosine < _EVIDENCE_MIN_COSINE:
+            # 候选池整体语义不相关（如问备案而池里只有报销比例）→ 诚实拒答
+            return [], best_cosine
+        cosine_norm = [0.0] * len(evidence)
+        for (idx, _text), score in zip(non_empty, cosine):
+            cosine_norm[idx] = score / best_cosine
+
+    bm25_best = max(bm25, default=0.0)
+    bm25_norm = [score / bm25_best if bm25_best > 0 else 0.0 for score in bm25]
+
+    if cosine_norm is not None:
+        # 几何平均融合：BM25 与向量任一维度归零即归零（词面/语义双重把关），
+        # 划入类噪声（BM25 近零）与跨主题词面巧合（向量近零）都被过滤
+        combined = [
+            math.sqrt(bm * cs) if bm > 0 and cs > 0 else 0.0
+            for bm, cs in zip(bm25_norm, cosine_norm)
+        ]
+    else:
+        combined = bm25_norm
+
+    best_combined = max(combined, default=0.0)
+    if best_combined <= 0.0:
+        # 零词面信号（embedding 不可用时）：不做相关性裁决，保持检索原序
+        return list(evidence[:_EVIDENCE_TOP_N]), None
+
+    ranked = sorted(zip(combined, evidence), key=lambda pair: pair[0], reverse=True)
+    return [ev for rel, ev in ranked if rel >= best_combined * _RELEVANCE_BAND][:_EVIDENCE_TOP_N], None
 
 
 def _default_audit_sink(record: dict[str, Any]) -> None:
@@ -308,19 +426,27 @@ def route_broad_question(
     decision = BroadRouteDecision(
         landing=landing,
         route="structured",
-        structured_queries=build_structured_queries(inferred, action_rule_type),
+        structured_queries=build_structured_queries(inferred, action_rule_type, q),
     )
 
     # 3. 结构化检索与误路由兜底（候选空/低置信 → 确定性拒答，绝不回落 broad）
     if structured_retrieve is not None:
         retrieval_result = structured_retrieve(decision)
-        decision.evidence = list(getattr(retrieval_result, "selected_evidence", []) or [])
-        best_confidence = max((float(getattr(e, "score", 0.0) or 0.0) for e in decision.evidence), default=0.0)
-        if not decision.evidence or best_confidence < ROUTING_MIN_CONFIDENCE:
+        raw_evidence = list(getattr(retrieval_result, "selected_evidence", []) or [])
+        best_confidence = max((float(getattr(e, "score", 0.0) or 0.0) for e in raw_evidence), default=0.0)
+        if not raw_evidence or best_confidence < ROUTING_MIN_CONFIDENCE:
             decision.route = "refuse"
             decision.refusal_reason = "structured_miss"
             decision.refusal_message = STRUCTURED_MISS_REFUSAL_MESSAGE
-            decision.evidence = []
+        else:
+            # 相关性重排后再消费：缴费/划入类噪声不进答案；候选池整体不相关则诚实拒答
+            reranked, low_cosine = _rerank_evidence_by_relevance(q, raw_evidence)
+            if low_cosine is not None:
+                decision.route = "refuse"
+                decision.refusal_reason = "low_relevance"
+                decision.refusal_message = STRUCTURED_MISS_REFUSAL_MESSAGE
+            else:
+                decision.evidence = reranked
 
     decision.audit = {
         "question": q,
