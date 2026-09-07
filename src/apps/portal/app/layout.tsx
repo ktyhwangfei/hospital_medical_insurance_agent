@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Database,
+  FolderSearch,
 } from 'lucide-react'
 import { ApiProvider, useApiContext } from '@/lib/api-context'
 import RoleSwitcher from '@/components/role-switcher'
@@ -52,6 +53,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: '问答历史', href: '/qa-history', icon: <History className="size-4" /> },
   { label: '可信问题库', href: '/trusted-questions', icon: <ShieldCheck className="size-4" /> },
   { label: '数据治理', href: '/data-governance', icon: <Database className="size-4" /> },
+  { label: '数据目录', href: '/data-catalog', icon: <FolderSearch className="size-4" /> },
 ]
 
 const ADMIN_NAV_ITEM: NavItem = {
