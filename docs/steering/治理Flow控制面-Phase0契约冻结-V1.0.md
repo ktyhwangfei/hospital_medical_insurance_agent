@@ -133,8 +133,8 @@ src_trade(source: mz_trade) → filter_valid(口径句 v4)
 | T9 | 并发写冲突 | 双人同时编辑 | expected_revision 乐观锁 + FLOW_REVISION_CONFLICT | ✅ 契约 |
 | T10 | 笛卡尔积 join | 未登记关系自由 join | FLOW_RELATION_NOT_REGISTERED | ✅ |
 | T11 | 越权维度下钻 | detail 级维度给 summary 用户 | DimensionBinding.permission_level；Phase 3 消费侧强制 | 🟡 契约已冻结，执行 Phase 3 |
-| T12 | 画布 XSS | 节点名/口径句回显注入 | React 默认转义 + 字段 max_length；Phase 2 页面复测 | 🟡 Phase 2 |
-| T13 | 大 payload DoS | 超大 definition | 字段级 max_length 已有；**节点/边数量上限 Phase 1 API 层补** | 🟡 Phase 1 待办 |
+| T12 | 画布 XSS | 节点名/口径句回显注入 | React 默认转义 + 字段 max_length；Phase 2 页面复测 | ✅ Phase 2 页面全 React 文本节点渲染，无 dangerouslySetInnerHTML |
+| T13 | 大 payload DoS | 超大 definition | 字段级 max_length + 节点/边数量上限（`MAX_FLOW_NODES=50`/`MAX_FLOW_EDGES=100`，Pydantic Field max_length 解析期 422；前端组件盘同步上限禁用） | ✅ Phase 2 补齐 |
 | T14 | 自然语言直译 SQL | 问数绕过消费契约 | 执行只走 query_planner 已发布语义（#36 边界），DSL 不含 NL 入口 | ✅ 继承 |
 
 ## 5. 画布组件技术验证结论（决策记录 #3 兑现）
@@ -290,3 +290,60 @@ SQL Server bjybdb dbo.o_Trade（只读，同步 worker 经防腐层拉取）
   **4 passed**（部署/权限、view==落地表同口径直接聚合逐值一致、勾稽恒等、med_type 边界）。
 - 受影响确定性套件全绿：governed_flow Unit / processing / semantic_layer /
   data_platform outpatient_store / Flow API + 生命周期 + PG 冒烟（详见 PROGRESS 当日行）。
+
+## 10. Phase 2 落地记录（2026-09-07：可视化画布 + T13 加固）
+
+**前置**：Phase 1（§8）+ §9 架构裁决均已合入；`@xyflow/react@12.11.6`
+按 §5 决策正式引入（`npm install`，非 spike 的 --no-save）。
+
+### 10.1 交付物
+
+| 层 | 文件 | 内容 |
+|----|------|------|
+| API 客户端 | `src/apps/portal/src/lib/flow-api.ts` | 12 端点全量 TS 客户端；类型逐一镜像 Pydantic snake_case；`MAX_FLOW_NODES` 与后端同源常量导出 |
+| 画布映射 | `src/apps/portal/src/components/flow/canvas-dto.ts` | 画布 ↔ FlowDefinition 双向映射 + 8 类新节点最小骨架（结构合法，画布补全） |
+| 画布组件 | `flow-node-card.tsx` / `flow-canvas.tsx` | 8 类自定义节点卡（按类型配色/图标/摘要、校验问题数红徽标）；组件盘（节点达上限禁用 + `节点 n/50` 计数）+ 受控画布（只读模式、删除键、自环边拒绝） |
+| 属性面板 | `node-property-panel.tsx` / `flow-detail-panels.tsx` | 8 类节点编辑器（filter 条件行含 11 操作符、`in*` 逗号分隔 + 数值自动转型；gate params JSON 文本域带解析红守卫）+ 契约/指标产出定义级编辑器；校验报告（问题点击定位节点）/编译预览（view_sql + query_plan + artifact_hash）/发布修订（活跃徽标 + 回滚）三面板 |
+| 页面 | `app/flow/page.tsx` / `app/flow/[flowId]/page.tsx` | 列表页（状态徽标、draft 删除、新建对话框生成最小合法骨架）+ 画布编辑器（状态机门控操作栏：校验/提交/发布/退役按 §3.1 前置禁用，published 保存修订=开新 draft 修订） |
+| 导航 | `app/layout.tsx` | 侧边栏「治理Flow」入口 |
+| 后端加固 | `src/domain/governed_flow/models.py` | **T13**：`MAX_FLOW_NODES=50` / `MAX_FLOW_EDGES=100` 以 `Field(max_length=...)` 落在 `FlowDefinition.nodes/edges`，解析期 422 覆盖全部 12 个入口 |
+
+### 10.2 实现裁决（偏离/细化 §3.3 之处）
+
+1. **画布 data 载荷存完整节点 definition**（非 §3.3 的「只存展示所需子集」）：
+   画布节点是唯一事实源，位置与参数就地编辑，`canvasToDefinition` 原位组装
+   PUT 载荷——避免页面再持一份节点参数镜像导致双向失同步。定义级字段
+   （name/owner/契约/指标产出）仍在页面 state，不进节点 data。
+2. **单节点组件 + 类型配置表**：`GovernedFlowNode`（memo）按 `node_type`
+   查表取样式/摘要函数/Handle 布局，非 §3.3 设想的每类型一个组件类；
+   8 类型共用一套选中/徽标/连线桩逻辑。
+3. **边 id 策略**：加载沿用后端 `edge_id`；画布新建边生成
+   `e_<base36时间戳>_<序号>`，保存时随 definition 全量提交。
+4. **新建 flow 的最小合法结构**：FlowDefinition 要求非空 `nodes`/
+   `source_contracts`/`metric_outputs`，列表页新建对话框生成
+   source→aggregate→consumer 三节点骨架 + 占位口径句（「请在画布补全并经
+   知识签核」），口径句未签核在发布门禁 fail closed（T6 不变）。
+5. **T13 未新增错误码**：超限走 Pydantic 422 标准校验错误（issues 随
+   `audit_event` 返回），冻结清单维持 24 项不动；前端组件盘同步在
+   50 节点禁用添加，给出与后端一致的提前反馈。
+
+### 10.3 验证证据
+
+- 后端：`src/tests/unit/governed_flow/` + API → **98 passed**
+  （单元 81 = Phase 1 的 78 + T13 3 例：超限节点拒/超限边拒/50+100 边界过；
+  API 17 = 16 + 超限 payload 422）。受影响面回归共 312 passed。
+- 前端：新增 16 测（flow-api 7 / 列表页 4 / 编辑器页 5）+ 全量 **436 passed**；
+  `tsc --noEmit` 通过；`npm run build` 通过（`/flow` 静态、`/flow/[flowId]` 动态）。
+- 活体 E2E（经前端代理全链路）：金标 flow 创建 201 → 校验 0 阻断 →
+  提交评审 rev2 → 发布（content_hash + semantic_revision + artifact_hash 落证据）→
+  revisions 双修订 → 预览 PG 方言 SQL（`CREATE OR REPLACE VIEW v_flow_* … mz_trade`）→
+  回滚切活跃 → 55 节点超限创建 **422**（T13 实测）。
+- 真实浏览器（Playwright）：列表页（状态徽标/rev4 发布信息）与编辑器画布
+  （5 节点 4 边、组件盘 8 类 + `节点 5/50`、Controls/MiniMap、契约 9 字段、
+  4 指标产出携口径句 v4）渲染完整；点击「口径过滤」节点 → 属性面板联动
+  切换，5 个过滤条件的操作符/值/值域（MZ_CURE_TYPE）逐项正确；
+  `in*` 操作符自动切换逗号分隔输入。§5 陷阱 1-4（具名导入/双桩/边走真实
+  浏览器/'use client'）全部按约执行。
+- 遗留（Phase 3）：落地视图状态码列类型数值化迁移（DROP+重建）或执行器
+  注入 `NULLIF::NUMERIC`；质量门禁运行时执行（勾稽查数）；T11 消费侧
+  权限强制；移动端 390px 与键盘全路径矩阵（§5 陷阱 5）。
