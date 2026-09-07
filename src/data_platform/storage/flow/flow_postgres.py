@@ -229,7 +229,14 @@ class PostgresGovernedFlowStorage:
         return self._row_to_revision(rows[0]) if rows else None
 
     def set_active_revision(self, flow_id: str, revision_id: str) -> None:
-        """先验归属再单条 UPDATE 原子切换（部分唯一索引兜底并发）。"""
+        """先验归属再切换活跃指针（部分唯一索引兜底并发）。
+
+        必须拆两条语句「先撤旧活跃、再启目标」：单条多行翻转
+        `SET is_active = (revision_id = %s)` 逐行更新时目标行先变 TRUE
+        而旧行仍 TRUE，瞬态重复触发 uq_governed_flow_active_revision
+        （PG 非可延迟索引逐行检查）。两语句间的瞬态空窗方向安全：
+        消费侧要求活跃版本存在，空窗即 fail closed，不会出现双活跃。
+        """
         client = self._get_client()
         target = client.execute(
             "SELECT flow_id FROM governed_flow_revisions WHERE revision_id = %s",
@@ -242,8 +249,16 @@ class PostgresGovernedFlowStorage:
         client.execute(
             """
             UPDATE governed_flow_revisions
-            SET is_active = (revision_id = %s)
-            WHERE flow_id = %s
+            SET is_active = FALSE
+            WHERE flow_id = %s AND is_active AND revision_id <> %s
             """,
-            (revision_id, flow_id),
+            (flow_id, revision_id),
+        )
+        client.execute(
+            """
+            UPDATE governed_flow_revisions
+            SET is_active = TRUE
+            WHERE flow_id = %s AND revision_id = %s
+            """,
+            (flow_id, revision_id),
         )
