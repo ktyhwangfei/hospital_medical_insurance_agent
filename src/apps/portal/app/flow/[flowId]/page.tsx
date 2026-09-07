@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, use } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  addEdge, useEdgesState, useNodesState, type Connection,
+  addEdge, useEdgesState, useNodesState,
+  type Connection, type NodeSelectionChange, type OnNodesChange,
 } from '@xyflow/react'
 import { ArrowLeft, Loader2, Play, Save, Send, Trash2, FileCode2 } from 'lucide-react'
 import {
@@ -124,6 +125,15 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
       n.id === node.node_id ? { ...n, data: { ...n.data, definition: node } } : n,
     ))
   }, [setNodes])
+
+  // 键盘 Enter 选中节点只产生 selection change（不经 onNodeClick），此处同步属性面板
+  const handleNodesChange: OnNodesChange<FlowCanvasNode> = useCallback((changes) => {
+    onNodesChange(changes)
+    const picked = changes.find((c): c is NodeSelectionChange => c.type === 'select' && c.selected)
+    const dropped = changes.some((c) => c.type === 'select' && !c.selected)
+    if (picked) setSelectedNodeId(picked.id)
+    else if (dropped) setSelectedNodeId(null)
+  }, [onNodesChange])
 
   const deleteNode = useCallback((nodeId: string) => {
     setNodes((current) => current.filter((n) => n.id !== nodeId))
@@ -258,8 +268,9 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
   const canPublish = flow.status === 'pending_review'
   const canDeprecate = flow.status === 'published'
 
+  // 窄屏（390px）中段纵向堆叠由内容撑高、外层 main 滚动；桌面恢复 h-full 画布布局
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="flow-editor-page">
+    <div className="flex flex-col md:h-full md:min-h-0" data-testid="flow-editor-page">
       <header className="space-y-2 border-b border-slate-200 bg-white px-4 py-3">
         <div className="flex items-center gap-3">
           <button type="button" onClick={() => router.push('/flow')}
@@ -316,16 +327,19 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 border-r border-slate-200">
+      {/* 390px 矩阵：窄屏画布在上（显式高度 + flex-none，纵向 flex 的 basis:0 会压掉 height），属性面板全宽在下；≥md 恢复左画布右面板 */}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row" data-testid="flow-editor-mid">
+        <div className="h-[320px] min-w-0 flex-none border-b border-slate-200 md:h-auto md:min-h-0 md:flex-1 md:border-b-0 md:border-r">
           <FlowCanvas
             nodes={nodes} edges={edges}
-            onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+            onNodesChange={handleNodesChange} onEdgesChange={onEdgesChange}
             onConnect={onConnect} onAddNode={addNode}
             onSelectNode={setSelectedNodeId}
             readOnly={readOnly} nodeCount={nodeCount} maxNodes={MAX_FLOW_NODES} />
         </div>
-        <aside className="w-80 shrink-0 border-l border-slate-200 bg-white">
+        <aside
+          className="w-full shrink-0 border-t border-slate-200 bg-white md:w-80 md:border-t-0 md:border-l"
+          data-testid="flow-editor-aside">
           <NodePropertyPanel
             flow={canvasToDefinition(flow, nodes, edges)}
             selectedNodeId={selectedNodeId} readOnly={readOnly}

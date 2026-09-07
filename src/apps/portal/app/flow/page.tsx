@@ -3,7 +3,7 @@
 // 治理 Flow 列表页（Phase 2 入口）：资产清单 + 新建骨架。
 // 新建走最小结构模板（source→aggregate→consumer + 契约 + 指标输出占位），
 // DSL 要求 nodes/source_contracts/metric_outputs 均非空，占位值在画布属性面板补全。
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Plus, Trash2, Workflow } from 'lucide-react'
 import { createFlow, deleteFlow, listFlows } from '@/lib/flow-api'
@@ -87,6 +87,14 @@ export default function FlowListPage() {
   const [form, setForm] = useState<CreateForm>(EMPTY_FORM)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const createBtnRef = useRef<HTMLButtonElement>(null)
+
+  /** 关闭新建对话框并归还焦点给打开按钮（键盘全路径验收项） */
+  const closeCreate = useCallback(() => {
+    setShowCreate(false)
+    setCreateError(null)
+    requestAnimationFrame(() => createBtnRef.current?.focus())
+  }, [])
 
   const reload = useCallback(async () => {
     try {
@@ -133,18 +141,18 @@ export default function FlowListPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-4" data-testid="flow-list-page">
-      <header className="flex items-center gap-3">
-        <span className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-2.5 py-2 text-white">
+      <header className="flex flex-wrap items-center gap-3">
+        <span className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-slate-900 px-2.5 py-2 text-white">
           <Workflow className="size-4" />
         </span>
-        <div>
+        <div className="min-w-0">
           <h1 className="text-base font-semibold text-slate-900">治理 Flow</h1>
           <p className="text-xs text-slate-500">
             数据加工 → 智能问数的可视化配置与复用闭环（画布编辑、口径签核发布、修订回滚）
           </p>
         </div>
-        <button type="button" onClick={() => setShowCreate(true)}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700">
+        <button type="button" ref={createBtnRef} onClick={() => setShowCreate(true)}
+          className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700">
           <Plus className="size-3.5" />新建 Flow
         </button>
       </header>
@@ -193,15 +201,18 @@ export default function FlowListPage() {
 
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md space-y-3 rounded-lg bg-white p-5 shadow-xl" data-testid="flow-create-dialog">
+          <div
+            role="dialog" aria-modal="true" aria-label="新建 Flow（最小结构模板）"
+            onKeyDown={(e) => { if (e.key === 'Escape' && !creating) closeCreate() }}
+            className="w-full max-w-md space-y-3 rounded-lg bg-white p-5 shadow-xl" data-testid="flow-create-dialog">
             <h2 className="text-sm font-semibold text-slate-900">新建 Flow（最小结构模板）</h2>
             <p className="text-xs text-slate-500">
               模板生成 source → aggregate → consumer 骨架与契约/指标输出占位，创建后进入画布补全口径。
             </p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label className="space-y-1">
                 <span className="text-xs font-medium text-slate-500">flow_id</span>
-                <input className={inputCls} value={form.flow_id} placeholder="flow_op_xxx"
+                <input autoFocus className={inputCls} value={form.flow_id} placeholder="flow_op_xxx"
                   onChange={(e) => setForm({ ...form, flow_id: e.target.value })} />
               </label>
               <label className="space-y-1">
@@ -232,7 +243,7 @@ export default function FlowListPage() {
             </div>
             {createError && <p className="text-xs text-red-600">{createError}</p>}
             <div className="flex justify-end gap-2 pt-1">
-              <button type="button" onClick={() => setShowCreate(false)} disabled={creating}
+              <button type="button" onClick={closeCreate} disabled={creating}
                 className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:border-slate-500">
                 取消
               </button>

@@ -30,23 +30,26 @@ export function FlowCanvas({
   readOnly, nodeCount, maxNodes,
 }: FlowCanvasProps) {
   return (
-    <div className="flex h-full min-h-0">
+    // 窄屏（390px）纵向堆叠：节点面板在上横向滚动，画布在下；≥md 恢复左栏右画布
+    <div className="flex h-full min-h-0 flex-col md:flex-row">
       {!readOnly && (
-        <aside className="w-36 shrink-0 space-y-1.5 border-r border-slate-200 bg-white p-2.5" data-testid="flow-palette">
-          <p className="px-1 text-xs font-medium text-slate-500">添加节点</p>
+        <aside
+          className="flex w-full shrink-0 flex-row items-center gap-1.5 overflow-x-auto border-b border-slate-200 bg-white p-2.5 md:w-36 md:flex-col md:items-stretch md:overflow-visible md:border-b-0 md:border-r"
+          data-testid="flow-palette">
+          <p className="shrink-0 whitespace-nowrap px-1 text-xs font-medium text-slate-500">添加节点</p>
           {(Object.keys(NODE_TYPE_LABELS) as FlowNodeType[]).map((type) => (
             <button
               key={type}
               type="button"
               onClick={() => onAddNode(type)}
               disabled={nodeCount >= maxNodes}
-              className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-left text-xs text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              className="w-auto shrink-0 whitespace-nowrap rounded-md border border-slate-200 px-2 py-1.5 text-left text-xs text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 md:w-full"
               title={nodeCount >= maxNodes ? `已达节点上限 ${maxNodes}` : `添加${NODE_TYPE_LABELS[type]}节点`}
             >
               {NODE_TYPE_LABELS[type]}
             </button>
           ))}
-          <p className="px-1 pt-1 text-[11px] text-slate-400">
+          <p className="shrink-0 whitespace-nowrap px-1 text-[11px] text-slate-400 md:pt-1">
             节点 {nodeCount}/{maxNodes}
           </p>
         </aside>

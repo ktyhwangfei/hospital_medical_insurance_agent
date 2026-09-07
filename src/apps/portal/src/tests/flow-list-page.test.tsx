@@ -90,6 +90,35 @@ describe('FlowListPage 列表页', () => {
     expect(push).toHaveBeenCalledWith('/flow/flow_op_outpatient_processed')
   })
 
+  it('新建对话框键盘可达：role=dialog、初始焦点落 flow_id、Escape 关闭并归还焦点', async () => {
+    vi.mocked(listFlows).mockResolvedValue([])
+    render(<FlowListPage />)
+    await waitFor(() => screen.getByTestId('flow-list-page'))
+
+    fireEvent.click(screen.getByRole('button', { name: /新建 Flow/ }))
+    const dialog = await screen.findByTestId('flow-create-dialog')
+    expect(dialog.getAttribute('role')).toBe('dialog')
+    // 初始焦点落在第一个必填输入（flow_id），键盘用户免一次 Tab
+    await waitFor(() => expect(document.activeElement).toBe(dialog.querySelector('input')))
+    // Escape 关闭，焦点归还「新建 Flow」按钮（rAF 异步归还，waitFor 等待）
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('flow-create-dialog')).toBeNull())
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: /新建 Flow/ })))
+  })
+
+  it('新建对话框窄屏单列、≥sm 双列（390px 矩阵）', async () => {
+    vi.mocked(listFlows).mockResolvedValue([])
+    render(<FlowListPage />)
+    await waitFor(() => screen.getByTestId('flow-list-page'))
+
+    fireEvent.click(screen.getByRole('button', { name: /新建 Flow/ }))
+    const dialog = await screen.findByTestId('flow-create-dialog')
+    const grid = dialog.querySelector('.grid')
+    expect(grid?.className).toContain('grid-cols-1')
+    expect(grid?.className).toContain('sm:grid-cols-2')
+  })
+
   it('必填缺失时不发请求并提示', async () => {
     vi.mocked(listFlows).mockResolvedValue([])
     render(<FlowListPage />)

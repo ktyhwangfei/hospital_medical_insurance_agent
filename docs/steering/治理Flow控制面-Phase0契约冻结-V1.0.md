@@ -161,7 +161,7 @@ src_trade(source: mz_trade) → filter_valid(口径句 v4)
 3. SVG 边在 jsdom 下不渲染（无真实布局测量）——边交互验证走 Playwright
    真实浏览器 E2E，不在 Vitest 断言。
 4. 服务端渲染必须 `'use client'`；样式 `@xyflow/react/dist/style.css` 随组件导入。
-5. 移动端（390px）与键盘全路径可达性需真实浏览器矩阵验证，Phase 2 验收项。
+5. 移动端（390px）与键盘全路径可达性需真实浏览器矩阵验证——已于 §13 完成（2026-09-07）。
 
 复跑命令（Phase 2 引入依赖后）：
 `cd src/apps/portal && npx vitest run src/tests/flow-canvas-spike.test.tsx`
@@ -419,7 +419,7 @@ T11 消费侧强制」三项全部落地。
 - 消费结果的维度值域展示映射（MZ_CURE_TYPE 编码→名称）。
 - 活库 op_* 指标 `source_field` 前缀（bjybdb）与种子（outpatient_postgres）
   不一致——快照 `datasource_id` 回显仅装饰性，建议数据治理对齐。
-- 移动端 390px 与键盘全路径矩阵（承 §5 陷阱 5，Phase 2 遗留）。
+- 移动端 390px 与键盘全路径矩阵（承 §5 陷阱 5，Phase 2 遗留）——已完成，见 §13。
 
 ## 12. Phase 3 补全：指标码驱动消费接入点（2026-09-07）
 
@@ -468,3 +468,54 @@ query_planner 层）实际只知**语义指标码**、不知 flow_id，缺一个
   12 笔 / 6643.69 / 基金 113.66 / 个人 6530.03，与 P3e 三路对数
   （flow/query == processed-snapshot == mz_trade 直聚合）逐值一致，
   双门禁通过；未知指标 live 422、子集投影 live 通过。
+
+## 13. Phase 2 补全：390px 移动端与键盘全路径真实浏览器矩阵（2026-09-07）
+
+承 §11.4 遗留（验收总则第 4 条「1440px、1024px、390px 下画布和详情页可用，
+关键操作可键盘完成」）。本节为**真实浏览器矩阵验证记录**，非 UI 重写。
+
+### 13.1 交付物（最小修复）
+
+| 文件 | 改动 |
+|------|------|
+| `app/flow/page.tsx` | 头部 `flex-wrap` 防挤压；新建对话框 `role=dialog`+`aria-modal`+`aria-label`、`autoFocus` 落 flow_id、Escape 关闭并把焦点归还「新建 Flow」按钮（rAF）、表单栅格 `grid-cols-1 sm:grid-cols-2` |
+| `app/flow/[flowId]/page.tsx` | 根容器窄屏内容高度（`md:h-full`）；中段 `flex-col md:flex-row` 堆叠；画布包裹层窄屏 `h-[320px] flex-none`、桌面 `md:h-auto md:flex-1`；属性面板窄屏全宽（`w-full md:w-80`）；`handleNodesChange` 把 XYFlow selection change 同步到属性面板（键盘 Enter 选中节点不经 `onNodeClick`，原实现面板不打开——真浏览器实测确认的键盘断点） |
+| `src/components/flow/flow-canvas.tsx` | 根 `flex-col md:flex-row`；节点面板窄屏横向滚动条（`flex-row overflow-x-auto md:flex-col`），按钮 `shrink-0 whitespace-nowrap` |
+
+### 13.2 矩阵验证证据（Playwright 真实浏览器，后端 8178 活库 + portal 3178 dev）
+
+> 环境注记：该浏览器视口按 1.5 反向缩放（DPR 0.667），setViewportSize(260,563)
+> 即 CSS 390×844；1024×768 同理换算，均以 `window.innerWidth` 实测复核。
+
+- **1440×900**：列表/编辑器/新建对话框正常；Tab 序 11 站完整
+  （收起侧栏→7 导航→后台管理→角色切换→新建 Flow），Enter 开对话框、
+  初始焦点 flow_id、Escape 关闭并归还焦点。
+- **1024×768（CSS 实测）**：两页 `scrollWidth==clientWidth` 无横向溢出；
+  编辑器 aside 320px + 画布 288px（Phase 2 既有布局，未回归）。
+- **390×844（CSS 实测）**：两页均无横向溢出；中段 `flex-direction=column`、
+  属性面板全宽 320px、节点面板 `flex-direction=row` + `overflow-x=auto`、
+  画布包裹层 320px（画布区 247px、节点可见）；`main` 纵向滚动
+  （scrollHeight 1887 > clientHeight 789）；侧栏抽屉 Escape 关闭；
+  对话框单列（gridTemplateColumns 1 列）、键盘路径与 1440 一致。
+- **键盘全路径**：Tab 到画布节点（XYFlow wrapper `tabindex=0`+`role=group`，
+  5 节点 + 4 边均可聚焦）→ Enter 选中 → 属性面板打开（`数据源 · src_trade`，
+  修复后实测）；编辑页 56 个可聚焦元素、0 个被 inert 阻断；保存/校验/提交/
+  发布/退役/预览/页签/回滚均为原生 button（状态门控禁用项按状态机正确禁用，
+  草稿态启用路径由组件测试覆盖）。
+
+### 13.3 两个真浏览器才暴露的实现陷阱（jsdom 测不出）
+
+1. **`h-full` 不解析 `min-height` 派生高度**：窄屏根容器改内容高度后，
+   画布链上 `height:100%` 失去解析基准 → ReactFlow 视口 0 高。
+   修法：窄屏显式 `h-[320px]`。
+2. **纵向 flex 中 `flex-1` 的 `flex-basis:0%` 压掉 `height`**：`h-[320px]+flex-1`
+   仍 0 高。修法：窄屏 `flex-none`，桌面 `md:flex-1`。
+   （断言这两点的组件测试 `flow-editor-page.test.tsx` 同步钉住。）
+
+### 13.4 验证
+
+- 先红后绿：`flow-list-page.test.tsx` +2（对话框键盘、栅格断言）、
+  `flow-editor-page.test.tsx` +2（键盘 Enter→面板、窄屏类契约）；
+  首轮 3 红（对话框 role/Escape、栅格、编辑页 testid）+ 键盘 Enter 断点 1 红，
+  修复后全绿。portal 全量 **440 passed**（61 文件）、`tsc --noEmit` 0 错误。
+- 矩阵会话产物（截图/快照）为临时证据未入库，数值结论以本节为准。

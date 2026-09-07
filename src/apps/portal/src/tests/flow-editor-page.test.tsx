@@ -189,6 +189,45 @@ describe('FlowEditorPage 画布编辑页', () => {
     expect(screen.getByTestId('flow-node-editor').textContent).toContain('filter_valid')
   })
 
+  it('窄屏（390px）布局契约：中段纵向堆叠、属性面板全宽、节点面板横条、画布保有最小高度', async () => {
+    vi.mocked(getFlow).mockResolvedValue(goldenFlow())
+    render(<FlowEditorPage params={Promise.resolve({ flowId: 'flow_op_outpatient_processed' })} />)
+    await waitFor(() => screen.getByTestId('flow-canvas-pane'))
+
+    // 中段行在窄屏堆叠为列，桌面仍为行
+    const mid = screen.getByTestId('flow-editor-mid')
+    expect(mid.className).toContain('flex-col')
+    expect(mid.className).toContain('md:flex-row')
+    // 属性面板窄屏全宽，桌面固定 320px
+    const aside = screen.getByTestId('flow-editor-aside')
+    expect(aside.className).toContain('w-full')
+    expect(aside.className).toContain('md:w-80')
+    // 节点面板窄屏横向滚动条，桌面纵向栏
+    const palette = screen.getByTestId('flow-palette')
+    expect(palette.className).toContain('flex-row')
+    expect(palette.className).toContain('md:flex-col')
+    // 画布窄屏显式 320px 高 + flex-none（纵向 flex 的 basis:0 会压掉 height，真浏览器实测 0 高），桌面交还 flex
+    expect(mid.firstElementChild?.className).toContain('h-[320px]')
+    expect(mid.firstElementChild?.className).toContain('flex-none')
+    expect(mid.firstElementChild?.className).toContain('md:h-auto')
+    expect(mid.firstElementChild?.className).toContain('md:flex-1')
+  })
+
+  it('键盘 Enter 选中画布节点同样打开属性面板（键盘全路径）', async () => {
+    vi.mocked(getFlow).mockResolvedValue(goldenFlow())
+    render(<FlowEditorPage params={Promise.resolve({ flowId: 'flow_op_outpatient_processed' })} />)
+    await waitFor(() => screen.getByTestId('flow-node-src_trade'))
+
+    // XYFlow 节点 wrapper tabindex=0；聚焦后 Enter 仅产生 selection change（不触发 onNodeClick）
+    const wrapper = screen.getByTestId('flow-node-src_trade').closest('.react-flow__node') as HTMLElement
+    expect(wrapper.getAttribute('tabindex')).toBe('0')
+    wrapper.focus()
+    fireEvent.keyDown(wrapper, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('flow-node-editor').textContent).toContain('src_trade'))
+  })
+
   it('状态机门控：draft 只能保存/校验/提交，发布按钮禁用', async () => {
     vi.mocked(getFlow).mockResolvedValue(goldenFlow())
     vi.mocked(submitFlowReview).mockResolvedValue(goldenFlow({ status: 'pending_review' }))
