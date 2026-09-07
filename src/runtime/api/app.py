@@ -25,6 +25,7 @@ from src.runtime.api.policy_workbench_routes import router as policy_workbench_r
 from src.runtime.api.model_governance_routes import router as model_governance_router
 from src.runtime.api.data_governance_routes import router as data_governance_router
 from src.runtime.api.trusted_question_routes import router as trusted_question_router
+from src.runtime.api.data_catalog_routes import router as data_catalog_router
 
 logger = logging.getLogger(__name__)
 
@@ -103,5 +104,6 @@ def create_app() -> FastAPI:
     app.include_router(model_governance_router)
     app.include_router(data_governance_router)
     app.include_router(trusted_question_router, prefix='/api/v1/medical-insurance-ai-agent')
+    app.include_router(data_catalog_router, prefix='/api/v1/medical-insurance-ai-agent')
     print("[STARTUP] create_app: 完成", flush=True)
     return app
