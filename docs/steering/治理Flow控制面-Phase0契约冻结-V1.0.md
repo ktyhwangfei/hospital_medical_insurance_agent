@@ -185,3 +185,46 @@ src_trade(source: o_trade) → filter_valid(口径句 v4)
    四件套 + API 路由 + 审计。
 3. T13 节点/边数量上限在 Phase 1 API 层补齐。
 4. 领域字典 §14.6 已同步（本仓库规则：新增领域概念必须同步更新）。
+
+## 8. Phase 1 落地记录（2026-09-04，同日完成）
+
+**前置**：`ktyhwangfei/issue-62-processing-fields` 已合入 main（merge `d51d908`），
+issue-65 分支已同步合并。
+
+### 8.1 交付物
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 域编译器 | `src/domain/governed_flow/compiler.py` | 线性管道 → `CREATE OR ALTER VIEW`；标识符白名单正则 + 字面量转义 + 派生公式 AST 重序列化（T5 注入面全关）；Golden Flow 编译产物与 #62 视图 SELECT/WHERE 语义等价 |
+| 存储 | `src/data_platform/storage/flow/` | 四件套（ports/in_memory/postgres/factory）；`governed_flows` + `governed_flow_revisions` 双表，`(flow_id) WHERE is_active` 部分唯一索引，活跃切换单条 UPDATE 原子完成 |
+| 服务 | `src/runtime/flow/flow_service.py` | 草稿 CRUD/校验编排/发布原子锁（flow revision + semantic revision + artifact hash）/回滚只切活跃指针/退役终态；签核上下文从语义层已发布指标定义推导 |
+| API | `src/runtime/api/flow_routes.py` | §3.1 全部 12 操作挂载（`/flow` 前缀），错误码映射 404/409/422；服务经 `Depends(get_flow_service)` 注入（可 override） |
+| 语义层 | `src/semantic_layer/seed.py` | `_register_outpatient_source_dataset` 补登记 `o_trade` 数据集（dbo.o_Trade，#62 registry.yaml 同源），供 Golden Flow 引用与编译器物理表解析。挂独立源对象 `mzjy_src`（mzjyxx 查询模型绑定 outpatient_postgres，单对象单数据源，混挂会阻断其发布校验） |
+
+### 8.2 实现裁决（偏离/细化 §3 之处）
+
+1. **已发布再编辑**：PUT 在 published 状态 = 从当前定义开新修订（draft 起步），
+   活跃发布证据不动——对齐状态机注释「新 revision 从 draft 开始」。
+2. **validating 为瞬态**：validate 端点 draft→validating→draft 一次完成；
+   submit-review 内部过 validating 直达 pending_review，避免出现无法离开的中间态。
+3. **签核口径句提取**：#62 批次二治理指标定义为散文格式
+   （「口径句v4：<签核说明>。<口径句全文>」），上下文构建把 marker 后尾巴
+   整体及按「。」切分的句段都收入签核集合，发布门禁按口径句全文精确匹配不变。
+4. **错误码扩展 23→24**：新增 `FLOW_COMPILE_UNSUPPORTED`（图形态超出 Phase 1
+   线性编译能力：分叉/缺聚合输出），已同步冻结清单与防逃逸测试。
+5. **MZ_CURE_TYPE 值域超集**：语义层字典并集语义下该值域含政策字典补充值
+   （15 个），黄金过滤值 {11,17,18,19} ⊆ 值域仍通过；结构强制
+   （T_CureType 必须声明 MZ_CURE_TYPE）不受影响。
+
+### 8.3 验证证据
+
+- Unit（T1）：`src/tests/unit/governed_flow/` → **78 passed**
+  （新增编译器 15：golden SQL 等价/注入三连拒/分叉拒/hash 确定性；
+  新增存储 14：CRUD 乐观锁/发布证据/活跃切换/深拷贝隔离）。
+- API（T2a）：`src/tests/integration/api/test_governed_flow_api.py` → **16 passed**
+  （12 端点 happy path + 404/409/422；口径句篡改过评审但发布 422 fail closed 携全量报告）。
+- Flow（T2b）：`src/tests/integration/flow/test_governed_flow_lifecycle.py` → **2 passed**
+  （完整生命周期：发布→再编辑开新修订→二次发布→回滚证据不可变→终态全拒止）。
+- PG 活库冒烟：`test_governed_flow_pg_smoke.py` → 1 passed（DDL + 部分唯一索引 + 原子切换实测）。
+- 遗留：T13 节点/边数量上限未做（Phase 2 API 加固）；质量门禁运行时执行
+  （勾稽恒等查数断言）留 Phase 3 消费接线时落地。

@@ -918,7 +918,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 #### 文件位置
 
-`src/domain/governed_flow/models.py`（DSL 契约）+ `src/domain/governed_flow/validation.py`（图与契约校验）
+`src/domain/governed_flow/models.py`（DSL 契约）+ `src/domain/governed_flow/validation.py`（图与契约校验） + `src/domain/governed_flow/compiler.py`（View 编译器）
++ `src/runtime/flow/flow_service.py`（生命周期服务）+ `src/data_platform/storage/flow/`（存储四件套）+ `src/runtime/api/flow_routes.py`（API）
 
 #### 通用语言字典
 
@@ -943,6 +944,13 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 发布修订 | `FlowPublishedRevision` | **Entity**（不可变） | Pydantic `BaseModel` | 原子锁定 flow revision + semantic revision + 产物 hash；回滚只切换 active revision，不删除历史 |
 | 内容哈希 | `compute_flow_content_hash()` | — | 纯函数 | 规范化 JSON 的 sha256；排除 revision/status/发布元数据/画布坐标，节点顺序无关 |
 | 状态流转 | `transition_flow_status()` | — | 纯函数 | 非法流转抛 `FlowStateInvalidError`；deprecated 为终态 |
+| 治理流服务 | `FlowGovernanceService` | **Domain Service** | 无状态服务类 | 编排存储/校验/编译；发布原子锁三要素，回滚只切活跃版本 |
+| 流存储端口 | `GovernedFlowStorage` | **Port** | `typing.Protocol` | 主表 CRUD + 发布证据 + 活跃指针；内存/PG 双实现，`USE_MEMORY_STORAGE=1` 回退 |
+| 编译产物 | `CompiledFlowArtifact` | **Value Object** | Pydantic `BaseModel` | view_name + view_sql（CREATE OR ALTER VIEW）+ 查询计划 + artifact_hash |
+| 查询计划步 | `CompileStep` | **Value Object** | Pydantic `BaseModel` | 每节点一步；Phase 2 画布预览与 Phase 3 消费契约对接载体 |
+| 编译失败 | `FlowCompileError` | — | `ValueError` 子类 | args[0] 为 FLOW_* 错误码；标识符注入/分叉拓扑/非 view 物化一律拒绝 |
+| 校验阻断 | `FlowPublishBlockedError` | — | `ValueError` 子类 | 携带完整 `FlowValidationReport`；API 映射 422 fail closed |
+| 语义版本锁 | `compute_semantic_revision()` | — | 纯函数 | 数据集/关系/指标口径/派生依赖锚点的 sha256，发布时与 artifact_hash 一并锁定 |
 
 #### 业务规则（Phase 0 冻结）
 

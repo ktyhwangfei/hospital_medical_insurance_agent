@@ -13,7 +13,7 @@ from __future__ import annotations
 import ast
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from src.domain.governed_flow.models import (
     AggregateNode,
@@ -57,6 +57,7 @@ class FlowValidationIssue(BaseModel):
 class FlowValidationReport(BaseModel):
     issues: list[FlowValidationIssue] = Field(default_factory=list)
 
+    @computed_field  # 序列化进 API 响应（路由直接返回本模型）
     @property
     def has_blocking(self) -> bool:
         return any(i.severity == ValidationSeverity.BLOCKING for i in self.issues)

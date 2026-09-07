@@ -186,6 +186,7 @@ FLOW_ERROR_CODES: frozenset[str] = frozenset({
     "FLOW_IDENTITY_TARGET_INVALID",    # 勾稽恒等引用了不存在的输出
     "FLOW_CONSUMES_UNKNOWN_METRIC",    # consumer 引用了 flow 未产出的指标
     "FLOW_MATERIALIZATION_UNSUPPORTED",# 物化策略不在 Phase 0 白名单
+    "FLOW_COMPILE_UNSUPPORTED",      # 图形态超出 Phase 1 编译能力（分叉/缺输出）
     # 生命周期/存储类（Phase 1 API：404/409）
     "FLOW_NOT_FOUND",
     "FLOW_REVISION_CONFLICT",

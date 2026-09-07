@@ -395,9 +395,32 @@ def ensure_outpatient_query_model(store: RegistryStore) -> None:
             definition="settlement_id 对应 T_TradeNo，以门诊交易号锚定单次交易，并关联费用项目明细。",
             identifier="settlement_id", version="1.0", status="draft",
         ))
+    _register_outpatient_source_dataset(store)
     _seed_outpatient_query_model(store)
     ensure_outpatient_metric_governance(store)
     ensure_outpatient_processed_view_metrics(store)
+
+
+def _register_outpatient_source_dataset(store: RegistryStore) -> None:
+    """#65 治理 Flow：登记加工视图来源源表 o_Trade（独立源对象，不并入 mzjyxx）。
+
+    #62 registry.yaml 声明 datasource=sqlserver://source/bjybdb、
+    source_table=dbo.o_Trade。mzjyxx 查询模型绑定 outpatient_postgres
+    （单对象单数据源），源表挂在 mzjy_src 下，仅供 Golden Flow source
+    contract 引用与编译器解析物理表名，不参与 mzjyxx 发布校验。
+    """
+    if store.get_object("mzjy_src") is None:
+        store.save_object(BusinessObject(
+            object_code="mzjy_src", domain_code="ybjs", name="门诊交易源表",
+            definition="门诊交易原始源表 dbo.o_Trade（bjybdb），加工视图 v_op_outpatient_processed 的来源。",
+            version="1.0", status="draft",
+        ))
+    if store.get_dataset("o_trade") is None:
+        store.save_dataset(SemanticDataset(
+            dataset_code="o_trade", object_code="mzjy_src",
+            datasource_id="bjybdb", schema_name="dbo", table_name="o_Trade",
+            name="门诊交易源表（加工视图来源）", status="published",
+        ))
 
 
 def ensure_outpatient_metric_governance(store: RegistryStore) -> None:
