@@ -18,6 +18,7 @@ domain/
 ├── order_fee/      # Order, FeeItem, Drug, Consumable
 ├── common/         # Citation, Role 枚举
 ├── skill/          # Skill, SkillStep, SkillMetadata（Pydantic）
+├── trusted_qa/     # TrustedQuestion 可信问题（Pydantic，Issue #37）
 └── tool/           # Tool, ToolOwner, ToolType（Pydantic）
 ```
 
@@ -859,6 +860,29 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 13.7. 可信问题上下文（Trusted QA）
+
+> Issue #37 新增。可信问题库与匹配引擎：生产运行优先匹配可信问题，长尾再走受控语义生成；匹配不确定时必须澄清，不猜测执行。实现：`src/domain/trusted_qa/models.py`、`src/data_platform/storage/trusted_question/`。
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 可信问题 | `TrustedQuestion` | **Entity** | Pydantic `BaseModel`（frozen） | 经人工审核、绑定确定性查询计划（`query_plan` 快照）的标准问题；携带乐观锁 `version` |
+| 可信问题状态 | `TrustedQuestionStatus` | **Value Object** | `StrEnum` | draft / pending_review / active / retired；状态机：draft→pending_review→active→retired，驳回 pending_review→draft |
+| 同义表达 | `TrustedQuestionSynonym` | **Value Object** | Pydantic `BaseModel`（frozen） | 标准问题的等价问法（expression），记录运营人 added_by 与时间；active 状态也允许运营 |
+| 预期结果特征 | `expected_result_traits` | Value Object | `dict` | 命中执行后的结果校验特征（行数/非空列/值域等），支撑"命中即正确"验收 |
+| 状态机转移表 | `ALLOWED_TRANSITIONS` | Value Object | `dict` | 状态流转的唯一权威定义，`validate_transition` 统一裁定 |
+
+#### 业务规则
+
+- 仅 draft / pending_review 状态可编辑内容（`ensure_editable`）；active 需先退役，retired 只读
+- 任何内容变更（编辑/流转/同义表达运营）均递增 `version`，存储层乐观锁冲突抛 `TrustedQuestionConflictError`
+- approve / reject 必须留痕 `reviewed_by` / `reviewed_at`；冷启动批量导入一律进入 draft，禁止直接 active
+- `query_plan` 为语义层 `LogicalQueryPlan` 的不透明 JSONB 快照，领域层不依赖 semantic_layer
+
+---
+
 ### 14. 共享通用层（Shared / Common）
 
 #### 概述
@@ -1103,6 +1127,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ToolOwner` | 技能拥有者 | SkillTool | Value Object |
 | `TrajectoryPrefix` | 评测轨迹接力点 | SkillTool | Value Object |
 | `Treatment` | 诊疗项目 | OrderFee | Value Object |
+| `TrustedQuestion` | 可信问题 | TrustedQA | Entity |
+| `TrustedQuestionStatus` | 可信问题状态 | TrustedQA | Value Object |
+| `TrustedQuestionSynonym` | 同义表达 | TrustedQA | Value Object |
 | `VisibilityScope` | 可见性范围 | Knowledge | Value Object |
 | `ValidationIssue` | 校验问题 | Knowledge | Value Object |
 
