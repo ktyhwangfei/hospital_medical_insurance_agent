@@ -26,8 +26,17 @@ from src.domain.trusted_qa.models import (
     TrustedQuestionStatus,
     TrustedQuestionSynonym,
 )
+from src.runtime.trusted_qa.executor import (
+    TrustedAnswerResult,
+    execute_trusted_answer,
+)
 from src.runtime.trusted_qa.matcher import TrustedQuestionMatcher
-from src.runtime.trusted_qa.models import TrustedQuestionMatchResult
+from src.runtime.trusted_qa.models import (
+    TrustedQuestionCandidate,
+    TrustedQuestionMatchOutcome,
+    TrustedQuestionMatchResult,
+)
+from src.semantic_layer.query_planner import SemanticQueryService
 from src.shared.schemas.responses import error_detail
 
 logger = logging.getLogger(__name__)
@@ -53,6 +62,19 @@ TrustedQuestionStoreDependency = Annotated[
 
 def get_trusted_question_matcher() -> TrustedQuestionMatcher:
     return TrustedQuestionMatcher()
+
+
+def get_semantic_query_service() -> SemanticQueryService:
+    """语义查询执行通道：与 /semantic/query/test 共用连接注入（SQL Server 防腐层）。"""
+    from src.runtime.api.semantic_routes import _get_semantic_query_runtime
+
+    _, service = _get_semantic_query_runtime()
+    return service
+
+
+SemanticQueryServiceDependency = Annotated[
+    SemanticQueryService, Depends(get_semantic_query_service)
+]
 
 
 TrustedQuestionMatcherDependency = Annotated[
@@ -378,3 +400,63 @@ def match_trusted_question(
             if not q.applicable_roles or request.role in q.applicable_roles
         ]
     return matcher.match(request.question, active)
+
+
+# ── 命中执行闭环 ────────────────────────────────────────────────
+
+
+class TrustedMatchAndExecuteResponse(BaseModel):
+    """match + execute 组合响应。
+
+    仅 matched 且携带查询计划快照时才执行；candidates/no_match
+    绝不执行，交澄清或长尾受控语义生成。
+    """
+
+    outcome: TrustedQuestionMatchOutcome
+    question: TrustedQuestion | None = None
+    candidates: list[TrustedQuestionCandidate] = Field(default_factory=list)
+    answer: TrustedAnswerResult | None = None
+
+
+@router.post(
+    "/trusted-questions/match-and-execute",
+    response_model=TrustedMatchAndExecuteResponse,
+)
+def match_and_execute_trusted_question(
+    request: TrustedQuestionMatchRequest,
+    store: TrustedQuestionStoreDependency,
+    matcher: TrustedQuestionMatcherDependency,
+    service: SemanticQueryServiceDependency,
+) -> TrustedMatchAndExecuteResponse:
+    """可信问题优先命中 + 确定性执行闭环。
+
+    验收口径：命中时结果必须来自 query_plan 快照回放且通过
+    expected_result_traits 校验；匹配不确定时只返回候选，不猜测执行。
+    """
+    active = store.list_questions(
+        status=TrustedQuestionStatus.ACTIVE, limit=_MATCH_LOAD_LIMIT
+    )
+    if request.role:
+        active = [
+            q
+            for q in active
+            if not q.applicable_roles or request.role in q.applicable_roles
+        ]
+    match_result = matcher.match(request.question, active)
+
+    # 不确定或未命中：只回候选，绝不执行
+    if match_result.outcome != TrustedQuestionMatchOutcome.MATCHED or (
+        match_result.question is None
+    ):
+        return TrustedMatchAndExecuteResponse(
+            outcome=match_result.outcome,
+            question=match_result.question,
+            candidates=match_result.candidates,
+        )
+
+    answer = execute_trusted_answer(match_result.question, service)
+    return TrustedMatchAndExecuteResponse(
+        outcome=match_result.outcome,
+        question=match_result.question,
+        answer=answer,
+    )

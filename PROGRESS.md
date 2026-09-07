@@ -10,7 +10,7 @@
 
 ## 0. 当前焦点
 
-**Issue #37 可信问题库与匹配引擎（分支 ktyhwangfei/issue-37-38，进行中）**：Slice 1 领域模型+存储四件套（trusted_questions 表，DDL 双写）✅ `6b8a99e`；Slice 2 确定性匹配引擎（matched/candidates/no_match 三态，不确定必澄清不猜测执行）✅ `b0bf30b`；Slice 3 审核流 API（/trusted-questions CRUD + 状态机 + 同义表达运营 + /match）✅ `6065d50`；Slice 4 冷启动脚本（QA 轨迹高频挖掘 → 幂等 draft 候选，真实 PG 入库 20 条）✅ `2001e78`；Slice 5 Portal 管理页（/trusted-questions：审核流操作 + 同义表达运营 + 匹配测试；Vitest 59 文件 427 passed、build 通过、真实 PG 全链路冒烟 submit→approve→match 命中）✅。进行中：Slice 6 命中执行闭环（query_plan 快照回放 + expected_result_traits 校验 + golden 验收）。
+**Issue #37 可信问题库与匹配引擎（分支 ktyhwangfei/issue-37-38，进行中）**：Slice 1 领域模型+存储四件套（trusted_questions 表，DDL 双写）✅ `6b8a99e`；Slice 2 确定性匹配引擎（matched/candidates/no_match 三态，不确定必澄清不猜测执行）✅ `b0bf30b`；Slice 3 审核流 API（/trusted-questions CRUD + 状态机 + 同义表达运营 + /match）✅ `6065d50`；Slice 4 冷启动脚本（QA 轨迹高频挖掘 → 幂等 draft 候选，真实 PG 入库 20 条）✅ `2001e78`；Slice 5 Portal 管理页（/trusted-questions：审核流操作 + 同义表达运营 + 匹配测试；Vitest 59 文件 427 passed、build 通过、真实 PG 全链路冒烟 submit→approve→match 命中）✅。Slice 6 命中执行闭环 ✅：`/trusted-questions/match-and-execute`（matched 才回放 SemanticQuery 快照，candidates/no_match 绝不执行）+ `expected_result_traits` 确定性校验（quality/行数/必需列），golden 用例集 10 条；真实 PG+语义层端到端冒烟通过（mzjyxx.T_FundPay 回放 executed/complete）。Issue #37 六个 Slice 全部完成，待验收。
 
 **当前领域**：Issue #33 — 政策知识上线补强（门诊+通用，§1.1 单元 6.7）
 

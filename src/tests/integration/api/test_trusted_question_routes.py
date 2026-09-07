@@ -13,7 +13,15 @@ from src.data_platform.storage.trusted_question.trusted_question_in_memory impor
     InMemoryTrustedQuestionStorage,
 )
 from src.runtime.api.app import create_app
-from src.runtime.api.trusted_question_routes import get_trusted_question_store
+from src.runtime.api.trusted_question_routes import (
+    get_semantic_query_service,
+    get_trusted_question_store,
+)
+from src.semantic_layer.query_planner import (
+    QueryEvidence,
+    SemanticQueryResult,
+    SemanticQueryService,
+)
 
 PREFIX = "/api/v1/medical-insurance-ai-agent/trusted-questions"
 
@@ -231,3 +239,106 @@ class TestMatch:
             json={"question": "门诊报销比例是多少", "role": "CASHIER"},
         )
         assert allowed.json()["outcome"] == "matched"
+
+
+# ── 命中执行闭环（Slice 6）─────────────────────────────────────
+
+_VALID_QUERY_PLAN = {
+    "object_code": "outpatient_settlement",
+    "scope": {
+        "entity_code": "settlement",
+        "anchor": {"field_code": "settlement_id", "value": "E001"},
+        "query_scope": "whole_settlement",
+    },
+    "metrics": ["total_cost"],
+    "limit": 100,
+}
+
+
+def _stub_service(
+    rows: list[dict] | None = None, error: Exception | None = None
+) -> SemanticQueryService:
+    class _Stub(SemanticQueryService):
+        def execute(self, query) -> SemanticQueryResult:  # noqa: ANN001
+            if error is not None:
+                raise error
+            return SemanticQueryResult(
+                rows=rows if rows is not None else [{"total_cost": 100.0}],
+                model_version="v1",
+                result_grain=["settlement"],
+                query_scope="whole_settlement",
+                quality_status="complete",
+                evidence=QueryEvidence(plan_hash="h", datasets_used=["ds"]),
+            )
+
+    return _Stub.__new__(_Stub)
+
+
+@pytest.fixture()
+def exec_client() -> TestClient:
+    app = create_app()
+    store = InMemoryTrustedQuestionStorage()
+    app.dependency_overrides[get_trusted_question_store] = lambda: store
+    app.dependency_overrides[get_semantic_query_service] = lambda: _stub_service()
+    return TestClient(app)
+
+
+class TestMatchAndExecute:
+    def test_matched_with_plan_executes(self, exec_client: TestClient) -> None:
+        created = _create(exec_client, query_plan=_VALID_QUERY_PLAN)
+        _activate(exec_client, created["question_id"])
+        response = exec_client.post(
+            f"{PREFIX}/match-and-execute", json={"question": "门诊报销比例是多少"}
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["outcome"] == "matched"
+        assert body["answer"]["outcome"] == "executed"
+        assert body["answer"]["result"]["rows"] == [{"total_cost": 100.0}]
+
+    def test_matched_without_plan_reports_no_plan(self, exec_client: TestClient) -> None:
+        created = _create(exec_client)
+        _activate(exec_client, created["question_id"])
+        body = exec_client.post(
+            f"{PREFIX}/match-and-execute", json={"question": "门诊报销比例是多少"}
+        ).json()
+        assert body["outcome"] == "matched"
+        assert body["answer"]["outcome"] == "no_plan"
+
+    def test_candidates_never_execute(self, exec_client: TestClient) -> None:
+        first = _create(exec_client, "在职职工门诊报销比例是多少", query_plan=_VALID_QUERY_PLAN)
+        second = _create(exec_client, "退休职工门诊报销比例是多少", query_plan=_VALID_QUERY_PLAN)
+        _activate(exec_client, first["question_id"])
+        _activate(exec_client, second["question_id"])
+        body = exec_client.post(
+            f"{PREFIX}/match-and-execute", json={"question": "职工门诊报销比例是多少"}
+        ).json()
+        # 匹配不确定：只回候选澄清，绝不执行
+        assert body["outcome"] == "candidates"
+        assert body["answer"] is None
+        assert len(body["candidates"]) == 2
+
+    def test_no_match_never_execute(self, exec_client: TestClient) -> None:
+        created = _create(exec_client, query_plan=_VALID_QUERY_PLAN)
+        _activate(exec_client, created["question_id"])
+        body = exec_client.post(
+            f"{PREFIX}/match-and-execute", json={"question": "食堂今天有什么菜"}
+        ).json()
+        assert body["outcome"] == "no_match"
+        assert body["answer"] is None
+
+    def test_execution_failure_reported(self, exec_client: TestClient) -> None:
+        app = create_app()
+        store = InMemoryTrustedQuestionStorage()
+        app.dependency_overrides[get_trusted_question_store] = lambda: store
+        app.dependency_overrides[get_semantic_query_service] = lambda: _stub_service(
+            error=RuntimeError("SQL Server 连接超时")
+        )
+        client = TestClient(app)
+        created = _create(client, query_plan=_VALID_QUERY_PLAN)
+        _activate(client, created["question_id"])
+        body = client.post(
+            f"{PREFIX}/match-and-execute", json={"question": "门诊报销比例是多少"}
+        ).json()
+        assert body["answer"]["outcome"] == "execution_failed"
+        assert "连接超时" in body["answer"]["violations"][0]
