@@ -59,12 +59,17 @@ class TestGoldenFlowCompile:
         assert 'SUM("T_FeeAll") AS "op_total_fee"' in sql
         assert 'SUM("T_FundPay") AS "op_fund_pay"' in sql
         assert 'SUM("T_SelfPayAll") AS "op_self_pay"' in sql
-        # 口径句 v4 全部 5 个条件（WHERE 以 AND 连接）
-        assert '"T_State" IN (2, 3)' in sql
-        assert '"NP_Settle_State" = 1' in sql
-        assert '"T_HasRefundmented" != 1' in sql
+        # 口径句 v4 全部 5 个条件（WHERE 以 AND 连接）。
+        # mz_trade 状态四列以 text 落地（payload 抽取），数值比较必须
+        # NULLIF(col,'')::NUMERIC 转型（P3a，与 #62 视图 28-42 行同构），
+        # 否则 PG 报 operator does not exist: text = integer
+        assert "NULLIF(\"T_State\", '')::NUMERIC IN (2, 3)" in sql
+        assert "NULLIF(\"NP_Settle_State\", '')::NUMERIC = 1" in sql
+        assert "NULLIF(\"T_HasRefundmented\", '')::NUMERIC != 1" in sql
+        # text 语义列（空串判断）不转型
         assert '("T_PartialReturnFlag" IN (\'\') OR "T_PartialReturnFlag" IS NULL)' in sql
-        assert '("T_CureType" IN (11, 17, 18, 19) OR "T_CureType" IS NULL)' in sql
+        # IN_OR_NULL 的 IN 侧转型、IS NULL 侧保持原列（col='' 时语义不同）
+        assert "(NULLIF(\"T_CureType\", '')::NUMERIC IN (11, 17, 18, 19) OR \"T_CureType\" IS NULL)" in sql
         # 全局单行快照：无 GROUP BY
         assert "GROUP BY" not in sql
 
@@ -91,6 +96,55 @@ class TestGoldenFlowCompile:
             update={"value": [2, 3, 9]}
         )
         assert _compile(tampered).artifact_hash != _compile(flow).artifact_hash
+
+
+class TestTextEncodedNumericCast:
+    """P3a：mz_trade text 落地数值列的 NULLIF(col,'')::NUMERIC 转型边界。
+
+    转型只发生在「源数据集已登记该列」且「比较值全为数值」时；
+    字符串值/未登记列/IS NULL/其他数据集同名列一律保持原样。
+    """
+
+    _RESOLVER = {"mz_trade": "public.mz_trade", "other_ds": "public.other"}.get
+
+    def _compile_probe(
+        self, dataset_code: str, conditions: list[FlowFilterCondition]
+    ) -> CompiledFlowArtifact:
+        return compile_flow_view(
+            _cast_probe_flow(dataset_code, conditions), dataset_resolver=self._RESOLVER
+        )
+
+    def test_string_valued_comparison_not_cast(self):
+        """比较值为字符串时不转型——NULLIF 后等于把 '' 比较语义改掉。"""
+        artifact = self._compile_probe("mz_trade", [
+            FlowFilterCondition(field_code="T_State", operator=FilterOperator.IN, value=["2", "3"]),
+        ])
+        assert "NULLIF" not in artifact.view_sql
+        assert "\"T_State\" IN ('2', '3')" in artifact.view_sql
+
+    def test_unregistered_field_not_cast(self):
+        """金额列以 numeric 落地，不在转型白名单。"""
+        artifact = self._compile_probe("mz_trade", [
+            FlowFilterCondition(field_code="T_FeeAll", operator=FilterOperator.GT, value=100),
+        ])
+        assert "NULLIF" not in artifact.view_sql
+        assert "\"T_FeeAll\" > 100" in artifact.view_sql
+
+    def test_null_check_not_cast(self):
+        """IS NULL 对 text 原生成立，无需转型。"""
+        artifact = self._compile_probe("mz_trade", [
+            FlowFilterCondition(field_code="T_State", operator=FilterOperator.IS_NULL, value=None),
+        ])
+        assert "NULLIF" not in artifact.view_sql
+        assert "\"T_State\" IS NULL" in artifact.view_sql
+
+    def test_other_dataset_same_column_not_cast(self):
+        """转型白名单按源数据集登记：其他数据集的同名列不转型。"""
+        artifact = self._compile_probe("other_ds", [
+            FlowFilterCondition(field_code="T_State", operator=FilterOperator.EQ, value=1),
+        ])
+        assert "NULLIF" not in artifact.view_sql
+        assert "\"T_State\" = 1" in artifact.view_sql
 
 
 class TestCompileSecurity:
@@ -179,6 +233,43 @@ class TestCompileBoundaries:
 
 
 # ── 测试辅助 ──────────────────────────────────────────────────────
+
+
+def _cast_probe_flow(dataset_code: str, conditions: list[FlowFilterCondition]) -> FlowDefinition:
+    """最小转型探针：source(指定数据集) → filter(指定条件) → aggregate(SUM)。"""
+    return FlowDefinition(
+        flow_id=f"flow_cast_probe_{dataset_code}",
+        name="text 数值列转型探针", owner="data_governance",
+        nodes=[
+            SourceNode(
+                node_id="src", name="source", dataset_code=dataset_code,
+                object_code="mzjyxx", fields=["T_State", "T_FeeAll"],
+                position={"x": 0, "y": 0},
+            ),
+            FilterNode(
+                node_id="flt", name="filter", conditions=conditions,
+                position={"x": 1, "y": 0},
+            ),
+            AggregateNode(
+                node_id="agg", name="agg", group_by=[],
+                measures=[AggregateMeasure(
+                    output_code="probe_fee", source_field="T_FeeAll",
+                    operator=AggregateOperator.SUM,
+                )],
+                position={"x": 2, "y": 0},
+            ),
+        ],
+        edges=[
+            FlowEdge(edge_id="p1", from_node="src", to_node="flt"),
+            FlowEdge(edge_id="p2", from_node="flt", to_node="agg"),
+        ],
+        source_contracts=[
+            SourceContract(dataset_code=dataset_code, object_code="mzjyxx", fields=["T_State", "T_FeeAll"])
+        ],
+        metric_outputs=[MetricOutputBinding(
+            metric_code="probe_fee", name="探针指标", node_id="agg", policy_definition="probe",
+        )],
+    )
 
 
 def _flow_with_derived(expression: str) -> FlowDefinition:

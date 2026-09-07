@@ -54,6 +54,15 @@ JoinClauseResolver = Callable[[str], str]
 
 _SIGNED_CALIBER_MARKER = "口径句v4："
 
+# mz_trade 落地契约（2026-09-07 §9 裁决 / #62 视图 28-42 行）：以下状态列
+# 以 text 落地（payload 抽取）但承载数值语义，数值比较必须先
+# NULLIF(col,'')::NUMERIC，否则 PG 报 operator does not exist: text = integer。
+# 白名单按源数据集登记；转型必须发生在编译期（进入 artifact_hash），
+# 部署期改写会破坏发布证据的防篡改锁定。
+_TEXT_ENCODED_NUMERIC_FIELDS: dict[str, frozenset[str]] = {
+    "mz_trade": frozenset({"T_State", "NP_Settle_State", "T_HasRefundmented", "T_CureType"}),
+}
+
 
 class FlowCompileError(ValueError):
     """编译失败；args[0] 为 FLOW_* 错误码。"""
@@ -117,7 +126,30 @@ def _literal(value) -> str:
     raise FlowCompileError("FLOW_EXPRESSION_INVALID", f"不支持的字面量类型: {type(value).__name__}")
 
 
-def _render_filter(cond: FlowFilterCondition) -> str:
+def _numeric_cast_field(
+    field_sql: str, field_code: str, values, source_dataset: Optional[str]
+) -> str:
+    """text 落地数值列在「全数值比较值」时渲染为 NULLIF(col,'')::NUMERIC。
+
+    字符串值（如 IN ('')）保持 text 比较不转型；IS NULL 分支由调用方
+    保留原列（col IS NULL 与 NULLIF(col,'') IS NULL 语义不同：后者含空串）。
+    """
+    registered = _TEXT_ENCODED_NUMERIC_FIELDS.get(source_dataset or "", frozenset())
+    if field_code.rsplit(".", 1)[-1] not in registered:
+        return field_sql
+    candidates = values if isinstance(values, list) else [values]
+    if not candidates:
+        return field_sql
+    if all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in candidates
+    ):
+        return f"NULLIF({field_sql}, '')::NUMERIC"
+    return field_sql
+
+
+def _render_filter(
+    cond: FlowFilterCondition, source_dataset: Optional[str] = None
+) -> str:
     field = _identifier(cond.field_code, "过滤字段")
     op = cond.operator
     if op is FilterOperator.IS_NULL:
@@ -125,21 +157,22 @@ def _render_filter(cond: FlowFilterCondition) -> str:
     if op is FilterOperator.IS_NOT_NULL:
         return f"{field} IS NOT NULL"
     values = cond.value
+    cast_field = _numeric_cast_field(field, cond.field_code, values, source_dataset)
     if op in {FilterOperator.IN, FilterOperator.NOT_IN, FilterOperator.IN_OR_NULL}:
         if not isinstance(values, list) or not values:
             raise FlowCompileError("FLOW_EXPRESSION_INVALID", f"{field} 的 {op.value} 需要非空列表")
         rendered = ", ".join(_literal(v) for v in values)
         if op is FilterOperator.IN:
-            return f"{field} IN ({rendered})"
+            return f"{cast_field} IN ({rendered})"
         if op is FilterOperator.NOT_IN:
-            return f"{field} NOT IN ({rendered})"
-        return f"({field} IN ({rendered}) OR {field} IS NULL)"
+            return f"{cast_field} NOT IN ({rendered})"
+        return f"({cast_field} IN ({rendered}) OR {field} IS NULL)"
     rendered = _literal(values)
     symbol = {
         FilterOperator.EQ: "=", FilterOperator.NE: "!=", FilterOperator.GT: ">",
         FilterOperator.GTE: ">=", FilterOperator.LT: "<", FilterOperator.LTE: "<=",
     }[op]
-    return f"{field} {symbol} {rendered}"
+    return f"{cast_field} {symbol} {rendered}"
 
 
 def _render_measure(measure: AggregateMeasure) -> str:
@@ -233,6 +266,7 @@ def compile_flow_view(
     steps: list[CompileStep] = []
 
     from_table: Optional[str] = None
+    source_dataset: Optional[str] = None
     where_parts: list[str] = []
     select_parts: list[str] = []
     group_by: list[str] = []
@@ -245,12 +279,15 @@ def compile_flow_view(
                 "来源表",
             )
             from_table = table
+            source_dataset = node.dataset_code
             steps.append(CompileStep(
                 step_index=index, node_id=node.node_id, node_type=node.node_type,
                 description=f"FROM {table}（投影 {len(node.fields)} 字段）",
             ))
         elif isinstance(node, FilterNode):
-            where_parts.extend(_render_filter(c) for c in node.conditions)
+            where_parts.extend(
+                _render_filter(c, source_dataset) for c in node.conditions
+            )
             steps.append(CompileStep(
                 step_index=index, node_id=node.node_id, node_type=node.node_type,
                 description=f"WHERE 追加 {len(node.conditions)} 个 AND 条件",
