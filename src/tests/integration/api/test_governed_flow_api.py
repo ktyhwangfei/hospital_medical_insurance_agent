@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.data_platform.storage.flow.flow_in_memory import InMemoryGovernedFlowStorage
+from src.domain.governed_flow.models import MAX_FLOW_NODES
 from src.runtime.api.app import create_app
 from src.runtime.api.flow_routes import get_flow_service
 from src.runtime.flow.flow_service import FlowGovernanceService
@@ -91,6 +92,15 @@ class TestCrud:
         resp = api.delete(f"{BASE}/flow_op_outpatient_processed?expected_revision=1")
         assert resp.status_code == 200
         assert api.get(f"{BASE}/flow_op_outpatient_processed").status_code == 404
+
+    def test_create_oversized_definition_422(self, api):
+        """T13 大 payload DoS：节点数超上限在请求体校验层直接拒止。"""
+        payload = _golden_payload()
+        filter_node = next(n for n in payload["nodes"] if n["node_type"] == "filter")
+        for i in range(MAX_FLOW_NODES):
+            payload["nodes"].append({**filter_node, "node_id": f"filter_pad_{i}"})
+        resp = api.post(BASE, json=payload)
+        assert resp.status_code == 422
 
 
 class TestValidateAndReview:

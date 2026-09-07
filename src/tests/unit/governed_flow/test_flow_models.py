@@ -5,6 +5,8 @@ from pydantic import ValidationError
 from src.domain.governed_flow.models import (
     FLOW_ERROR_CODES,
     FLOW_STATUS_TRANSITIONS,
+    MAX_FLOW_EDGES,
+    MAX_FLOW_NODES,
     AggregateMeasure,
     AggregateOperator,
     ConsumerKind,
@@ -155,3 +157,40 @@ class TestConsumerKinds:
         assert {k.value for k in ConsumerKind} == {
             "query_planner", "skill", "dashboard_card", "weekly_report", "assistant",
         }
+
+
+class TestGraphSizeLimits:
+    """T13 大 payload DoS 加固：节点/边数量上限（Phase 0 §4 遗留，Phase 2 补齐）。"""
+
+    @staticmethod
+    def _padded_payload(extra_nodes: int, extra_edges: int) -> dict:
+        payload = build_golden_flow().model_dump()
+        filter_node = next(n for n in payload["nodes"] if n["node_type"] == "filter")
+        for i in range(extra_nodes):
+            pad = {**filter_node, "node_id": f"filter_pad_{i}"}
+            payload["nodes"].append(pad)
+        for i in range(extra_edges):
+            payload["edges"].append({
+                "edge_id": f"e_pad_{i}",
+                "from_node": "src_trade", "to_node": "filter_valid",
+            })
+        return payload
+
+    def test_oversized_nodes_rejected(self):
+        payload = self._padded_payload(extra_nodes=MAX_FLOW_NODES, extra_edges=0)
+        with pytest.raises(ValidationError):
+            FlowDefinition.model_validate(payload)
+
+    def test_oversized_edges_rejected(self):
+        payload = self._padded_payload(extra_nodes=0, extra_edges=MAX_FLOW_EDGES)
+        with pytest.raises(ValidationError):
+            FlowDefinition.model_validate(payload)
+
+    def test_boundary_at_limits_accepted(self):
+        # 金标 5 节点/4 边 + 补齐到恰好上限必须可建（上限不是白名单拒绝面）
+        payload = self._padded_payload(
+            extra_nodes=MAX_FLOW_NODES - 5, extra_edges=MAX_FLOW_EDGES - 4,
+        )
+        flow = FlowDefinition.model_validate(payload)
+        assert len(flow.nodes) == MAX_FLOW_NODES
+        assert len(flow.edges) == MAX_FLOW_EDGES

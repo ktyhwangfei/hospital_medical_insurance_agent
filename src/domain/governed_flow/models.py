@@ -379,6 +379,10 @@ class FlowEdge(BaseModel):
 
 # ── 聚合根 ─────────────────────────────────────────────────────────
 
+# T13 大 payload DoS 上限（Phase 0 §4 威胁缓解；金标 Flow 5 节点/4 边）
+MAX_FLOW_NODES = 50
+MAX_FLOW_EDGES = 100
+
 
 class FlowDefinition(BaseModel):
     """Flow 声明式定义（版本化治理资产，方案 §4.3）。
@@ -392,8 +396,8 @@ class FlowDefinition(BaseModel):
     name: str = Field(..., min_length=1, max_length=256)
     owner: str = Field(..., min_length=1, max_length=128)
     status: FlowStatus = FlowStatus.DRAFT
-    nodes: list[FlowNode] = Field(..., min_length=1)
-    edges: list[FlowEdge] = Field(default_factory=list)
+    nodes: list[FlowNode] = Field(..., min_length=1, max_length=MAX_FLOW_NODES)
+    edges: list[FlowEdge] = Field(default_factory=list, max_length=MAX_FLOW_EDGES)
     source_contracts: list[SourceContract] = Field(..., min_length=1)
     metric_outputs: list[MetricOutputBinding] = Field(..., min_length=1)
     materialization: MaterializationStrategy = MaterializationStrategy.VIEW
