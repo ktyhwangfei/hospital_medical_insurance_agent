@@ -22,6 +22,7 @@ from src.data_platform.storage.data_catalog.data_catalog_ports import (
     DataCatalogStorage,
 )
 from src.domain.data_catalog.models import CatalogAsset, CatalogAssetType
+from src.runtime.data_catalog.lineage import AssetLineage, derive_lineage
 from src.shared.schemas.responses import error_detail
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,28 @@ def get_catalog_asset(
             detail=error_detail("CATALOG_ASSET_NOT_FOUND", f"资产不存在: {asset_id}"),
         )
     return asset
+
+
+# ── 血缘端点（Slice 4 动态推导）────────────────────────────────
+
+
+@router.get("/data-catalog/assets/{asset_id}/lineage", response_model=AssetLineage)
+def get_catalog_asset_lineage(
+    asset_id: str,
+    store: DataCatalogStoreDependency,
+) -> AssetLineage:
+    """血缘子图：以资产为根双向遍历（源表→指标→语义对象→消费方）。
+
+    零新表：边从目录快照字段动态推导，与资产同刷同新；
+    节点携带 semantic_version/last_batch_id 供溯源展示。
+    """
+    lineage = derive_lineage(store, asset_id)
+    if lineage is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_detail("CATALOG_ASSET_NOT_FOUND", f"资产不存在: {asset_id}"),
+        )
+    return lineage
 
 
 # ── 目录刷新（治理支撑操作）────────────────────────────────────

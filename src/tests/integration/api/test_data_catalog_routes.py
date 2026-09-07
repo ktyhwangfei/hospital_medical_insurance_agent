@@ -113,6 +113,31 @@ class TestRefresh:
         assert isinstance(captured["storage"], InMemoryDataCatalogStorage)
 
 
+class TestLineage:
+    def test_lineage_subgraph(
+        self, client: TestClient, store: InMemoryDataCatalogStorage
+    ) -> None:
+        seeded = _seed(store)
+        store.upsert_asset(
+            CatalogAsset(
+                asset_id="ca_obj001",
+                asset_type=CatalogAssetType.SEMANTIC_OBJECT,
+                asset_key="semantic_object:mzjyxx",
+                name="门诊交易信息",
+            )
+        )
+        body = client.get(f"{PREFIX}/assets/{seeded.asset_id}/lineage").json()
+        assert body["root"] == seeded.asset_id
+        ids = {n["asset_id"] for n in body["nodes"]}
+        assert ids == {seeded.asset_id, "ca_obj001"}
+        assert body["edges"][0]["relation"] == "belongs_to"
+
+    def test_lineage_missing_404(self, client: TestClient) -> None:
+        response = client.get(f"{PREFIX}/assets/ca_missing/lineage")
+        assert response.status_code == 404
+        assert response.json()["detail"]["error_code"] == "CATALOG_ASSET_NOT_FOUND"
+
+
 class TestSla:
     def test_sla_degrades_independently(self, client: TestClient) -> None:
         """两数据源各自降级：真实源不可用时 outpatient_sync=None、quality_gates=[]。"""
