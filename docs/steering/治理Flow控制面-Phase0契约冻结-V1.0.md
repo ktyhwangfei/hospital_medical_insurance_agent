@@ -57,7 +57,7 @@ FlowDefinition（聚合根）
 （`build_golden_flow()` + `golden_validation_context()`）。
 
 ```text
-src_trade(source: o_trade) → filter_valid(口径句 v4)
+src_trade(source: mz_trade) → filter_valid(口径句 v4)
   → agg_snapshot(count_distinct T_TradeNo; sum T_FeeAll/T_FundPay/T_SelfPayAll)
   → gate_caliber(caliber_signoff + identity_assertion 总费用=基金+个人, tol=0)
   → consumer_qp(query_planner)
@@ -181,7 +181,7 @@ src_trade(source: o_trade) → filter_valid(口径句 v4)
    Phase 1 的注册表接线与存量一致断言依赖其交付物
    （`docs/processing/registry.yaml`、`v_op_outpatient_processed` 视图）。
 2. Phase 1 范围（按父 issue）：草稿 CRUD、图校验服务化、查询计划预览、
-   View 编译（`CREATE OR ALTER VIEW`）、质量门禁执行、发布/回滚 + 存储
+   View 编译（`CREATE OR REPLACE VIEW`，PG 落地库方言，见 §9）、质量门禁执行、发布/回滚 + 存储
    四件套 + API 路由 + 审计。
 3. T13 节点/边数量上限在 Phase 1 API 层补齐。
 4. 领域字典 §14.6 已同步（本仓库规则：新增领域概念必须同步更新）。
@@ -195,11 +195,11 @@ issue-65 分支已同步合并。
 
 | 层 | 文件 | 内容 |
 |---|---|---|
-| 域编译器 | `src/domain/governed_flow/compiler.py` | 线性管道 → `CREATE OR ALTER VIEW`；标识符白名单正则 + 字面量转义 + 派生公式 AST 重序列化（T5 注入面全关）；Golden Flow 编译产物与 #62 视图 SELECT/WHERE 语义等价 |
+| 域编译器 | `src/domain/governed_flow/compiler.py` | 线性管道 → `CREATE OR REPLACE VIEW`（PG 落地库方言，§9 裁决）；标识符白名单正则 + 双引号渲染 + 字面量转义 + 派生公式 AST 重序列化（T5 注入面全关）；Golden Flow 编译产物与 #62 视图 SELECT/WHERE 语义等价 |
 | 存储 | `src/data_platform/storage/flow/` | 四件套（ports/in_memory/postgres/factory）；`governed_flows` + `governed_flow_revisions` 双表，`(flow_id) WHERE is_active` 部分唯一索引，活跃切换单条 UPDATE 原子完成 |
 | 服务 | `src/runtime/flow/flow_service.py` | 草稿 CRUD/校验编排/发布原子锁（flow revision + semantic revision + artifact hash）/回滚只切活跃指针/退役终态；签核上下文从语义层已发布指标定义推导 |
 | API | `src/runtime/api/flow_routes.py` | §3.1 全部 12 操作挂载（`/flow` 前缀），错误码映射 404/409/422；服务经 `Depends(get_flow_service)` 注入（可 override） |
-| 语义层 | `src/semantic_layer/seed.py` | `_register_outpatient_source_dataset` 补登记 `o_trade` 数据集（dbo.o_Trade，#62 registry.yaml 同源），供 Golden Flow 引用与编译器物理表解析。挂独立源对象 `mzjy_src`（mzjyxx 查询模型绑定 outpatient_postgres，单对象单数据源，混挂会阻断其发布校验） |
+| 语义层 | `src/semantic_layer/seed.py` | 四个 op_* 指标 `source_field` 前缀切换为 `outpatient_postgres.v_op_outpatient_processed.*`（§9 裁决：加工落位 PG 落地库）；曾短暂登记的 `o_trade`/`mzjy_src` 已按 §9 回退删除 |
 
 ### 8.2 实现裁决（偏离/细化 §3 之处）
 
@@ -228,3 +228,65 @@ issue-65 分支已同步合并。
 - PG 活库冒烟：`test_governed_flow_pg_smoke.py` → 1 passed（DDL + 部分唯一索引 + 原子切换实测）。
 - 遗留：T13 节点/边数量上限未做（Phase 2 API 加固）；质量门禁运行时执行
   （勾稽恒等查数断言）留 Phase 3 消费接线时落地。
+
+## 9. 架构裁决修订：加工视图落位 PG 落地库（2026-09-07）
+
+> 推翻本契约 §2 冻结的「source=o_trade（SQL Server 源库）」一项；其余冻结项不变。
+> 由用户裁决 + 全量查证后原子落地（`fix(#62,#65)` 单提交）。
+
+### 9.1 裁决内容与理由
+
+**加工（含加工视图 DDL）一律在本院 PG 落地库执行，禁止在 SQL Server 源库执行。**
+
+- 违反仓库自身铁律：外部系统只经 `adapters/` 防腐层访问、平台不修改既有业务系统
+  ——往医保中心源库写 DDL 属于修改外部系统，生产环境亦无此权限。
+- #62 原实现 `outpatient_processed_view.sql` 为 T-SQL（`CREATE OR ALTER ... FROM o_Trade`），
+  T2a 活库测试曾真实往源库部署视图——本裁决一并纠正。
+- **签核不失效**：口径句 v4 签核对象是口径语义（过滤条件与算子），不是执行位置；
+  裁决只改「在哪里算」，口径句原文一字未动。
+
+### 9.2 修正后的数据流
+
+```
+SQL Server bjybdb dbo.o_Trade（只读，同步 worker 经防腐层拉取）
+  → PG outpatient_trade_current（原始落地 + 质量标记）
+  → PG mz_trade（治理视图：payload 摊平，排除删除行/质量拦截行）
+  → PG v_op_outpatient_processed（★ 加工视图：口径句 v4 + 四指标）
+  → op_* 指标 source_field 路由 outpatient_postgres，供受控问数消费
+```
+
+附带收益：质量门禁先行（blocked 行进不了加工），代价是新鲜度受同步节奏限制
+（指标本就声明 refresh_frequency 5m，口径一致）。
+
+### 9.3 影响面（原子落地清单）
+
+| 产物 | 变更 |
+|------|------|
+| `docs/processing/outpatient_processed_view.sql` | PG 方言重写：`CREATE OR REPLACE VIEW ... FROM mz_trade`，标识符双引号 |
+| `docs/processing/registry.yaml` | `datasource: postgres://landing/outpatient_postgres`、`source_table: public.mz_trade`，`dbo.o_Trade` 降为 lineage 血缘标注 |
+| `test_outpatient_processed_view_t2a.py` | 活库部署验收从源库改为 PG 落地库（对数基准 mz_trade） |
+| `src/domain/governed_flow/compiler.py` | `CREATE OR REPLACE VIEW` + 全标识符双引号渲染（点分段各自包裹） |
+| `golden_flow.py` 基准夹具 | source 契约 `o_trade/OutpatientTrade` → `mz_trade/mzjyxx`（列名与源契约一致） |
+| `src/semantic_layer/seed.py` | op_* 指标 `source_field` 前缀 `bjybdb.` → `outpatient_postgres.`；回退删除 Phase 1 曾加的 `o_trade` 数据集与 `mzjy_src` 对象登记 |
+
+### 9.4 实施中发现并裁决的衍生问题
+
+1. **落地视图列名保留大小写**（`AS "T_TradeNo"`，payload 抽取）：PG 裸标识符折叠
+   小写会报 column does not exist，故 #62 视图 SQL 与编译器产物统一双引号渲染
+   （`"public"."mz_trade"`、`"T_State"`）。
+2. **状态码列在落地视图为 text**（payload 抽取未数值化）：口径句的数值比较
+   （IN/=/!=）经 `NULLIF(col,'')::NUMERIC` 显式转型执行，与落地视图数值列的
+   渲染约定一致。曾尝试直接把 T_State 等 4 列加入 `_TRADE_NUMERIC_FIELDS`，
+   活库验证发现 `CREATE OR REPLACE VIEW` 不能改既有视图列类型
+   （`cannot change data type of view column ... from text to numeric`），
+   需 DROP 重建即破坏既有库——回退为视图内显式转型；列类型数值化迁移留 Phase 3。
+3. **编译器产物暂不带转型**：编译器只解析物理表名、不感知列类型；Phase 3
+   执行器接线时负责按落地视图列类型注入 `NULLIF::NUMERIC` 转型
+   （或届时做列类型迁移）后执行。
+
+### 9.5 验证证据
+
+- T2a 活库（PG 落地库 hospital_mcp）：`test_outpatient_processed_view_t2a.py` →
+  **4 passed**（部署/权限、view==落地表同口径直接聚合逐值一致、勾稽恒等、med_type 边界）。
+- 受影响确定性套件全绿：governed_flow Unit / processing / semantic_layer /
+  data_platform outpatient_store / Flow API + 生命周期 + PG 冒烟（详见 PROGRESS 当日行）。

@@ -39,7 +39,7 @@ def api(monkeypatch):
 
 
 def test_full_lifecycle(api):
-    # 1. 草稿创建 + 校验干净（真实签核上下文：o_trade 已登记、口径句 v4 已签核）
+    # 1. 草稿创建 + 校验干净（真实签核上下文：mz_trade 已登记、口径句 v4 已签核）
     assert api.post(BASE, json=build_golden_flow().model_dump(mode="json")).status_code == 201
     report = api.post(f"{BASE}/{FLOW_ID}/validate").json()
     assert report["has_blocking"] is False
@@ -108,10 +108,10 @@ def test_published_flow_preview_matches_view_sql(api):
     api.post(f"{BASE}/{FLOW_ID}/publish", json={"published_by": "医保数据组"})
     artifact = api.get(f"{BASE}/{FLOW_ID}/preview").json()
     sql = artifact["view_sql"]
-    assert "COUNT(DISTINCT T_TradeNo) AS op_valid_settle_count" in sql
-    assert "SUM(T_FeeAll) AS op_total_fee" in sql
-    assert "T_State IN (2, 3)" in sql
-    assert "NP_Settle_State = 1" in sql
-    assert "T_HasRefundmented != 1" in sql
-    assert "(T_PartialReturnFlag IN ('') OR T_PartialReturnFlag IS NULL)" in sql
-    assert "(T_CureType IN (11, 17, 18, 19) OR T_CureType IS NULL)" in sql
+    assert 'COUNT(DISTINCT "T_TradeNo") AS "op_valid_settle_count"' in sql
+    assert 'SUM("T_FeeAll") AS "op_total_fee"' in sql
+    assert '"T_State" IN (2, 3)' in sql
+    assert '"NP_Settle_State" = 1' in sql
+    assert '"T_HasRefundmented" != 1' in sql
+    assert '("T_PartialReturnFlag" IN (\'\') OR "T_PartialReturnFlag" IS NULL)' in sql
+    assert '("T_CureType" IN (11, 17, 18, 19) OR "T_CureType" IS NULL)' in sql

@@ -33,9 +33,9 @@ from src.domain.governed_flow.models import (
 )
 from src.tests.unit.governed_flow.golden_flow import build_golden_flow
 
-# 与 #62 视图一致的数据集解析（语义层种子里 o_trade → dbo.o_Trade，
+# 与 #62 视图一致的数据集解析（语义层种子里 mz_trade → public.mz_trade，
 # 编译器单测直接给最小解析器验证 SQL 等价性）
-_GOLDEN_RESOLVER = {"o_trade": "o_Trade"}
+_GOLDEN_RESOLVER = {"mz_trade": "public.mz_trade"}
 
 
 def _compile(flow: FlowDefinition) -> CompiledFlowArtifact:
@@ -51,19 +51,20 @@ class TestGoldenFlowCompile:
         """编译产物必须携带 #62 视图的全部口径句 v4 条件与 4 个聚合表达式。"""
         artifact = _compile(build_golden_flow())
         sql = artifact.view_sql
-        assert sql.startswith("CREATE OR ALTER VIEW v_flow_flow_op_outpatient_processed AS")
-        assert "FROM o_Trade" in sql
+        # PG 落地库方言（2026-09-07 裁决）：标识符双引号、CREATE OR REPLACE
+        assert sql.startswith("CREATE OR REPLACE VIEW v_flow_flow_op_outpatient_processed AS")
+        assert 'FROM "public"."mz_trade"' in sql
         # 4 个聚合输出（与 v_op_outpatient_processed SELECT 一致）
-        assert "COUNT(DISTINCT T_TradeNo) AS op_valid_settle_count" in sql
-        assert "SUM(T_FeeAll) AS op_total_fee" in sql
-        assert "SUM(T_FundPay) AS op_fund_pay" in sql
-        assert "SUM(T_SelfPayAll) AS op_self_pay" in sql
+        assert 'COUNT(DISTINCT "T_TradeNo") AS "op_valid_settle_count"' in sql
+        assert 'SUM("T_FeeAll") AS "op_total_fee"' in sql
+        assert 'SUM("T_FundPay") AS "op_fund_pay"' in sql
+        assert 'SUM("T_SelfPayAll") AS "op_self_pay"' in sql
         # 口径句 v4 全部 5 个条件（WHERE 以 AND 连接）
-        assert "T_State IN (2, 3)" in sql
-        assert "NP_Settle_State = 1" in sql
-        assert "T_HasRefundmented != 1" in sql
-        assert "(T_PartialReturnFlag IN ('') OR T_PartialReturnFlag IS NULL)" in sql
-        assert "(T_CureType IN (11, 17, 18, 19) OR T_CureType IS NULL)" in sql
+        assert '"T_State" IN (2, 3)' in sql
+        assert '"NP_Settle_State" = 1' in sql
+        assert '"T_HasRefundmented" != 1' in sql
+        assert '("T_PartialReturnFlag" IN (\'\') OR "T_PartialReturnFlag" IS NULL)' in sql
+        assert '("T_CureType" IN (11, 17, 18, 19) OR "T_CureType" IS NULL)' in sql
         # 全局单行快照：无 GROUP BY
         assert "GROUP BY" not in sql
 
@@ -115,7 +116,7 @@ class TestCompileSecurity:
         )
         artifact = _compile(quoted)
         # 内部单引号翻倍转义：'''= 包裹引号+转义后的内容引号
-        assert "T_PartialReturnFlag = '''; DELETE FROM users; --'" in artifact.view_sql
+        assert "\"T_PartialReturnFlag\" = '''; DELETE FROM users; --'" in artifact.view_sql
 
     def test_derived_expression_call_rejected(self):
         flow = _flow_with_derived("__import__('os').system('dir')")
@@ -131,7 +132,7 @@ class TestCompileSecurity:
     def test_derived_arithmetic_rendered(self):
         flow = _flow_with_derived("op_total_fee / op_valid_settle_count")
         artifact = _compile(flow)
-        assert "(op_total_fee / op_valid_settle_count) AS avg_fee_per_trade" in artifact.view_sql
+        assert '("op_total_fee" / "op_valid_settle_count") AS "avg_fee_per_trade"' in artifact.view_sql
 
 
 class TestCompileBoundaries:
@@ -160,9 +161,9 @@ class TestCompileBoundaries:
         artifact = compile_flow_view(
             joined,
             dataset_resolver=_GOLDEN_RESOLVER.get,
-            join_resolver=lambda code: "o_Trade.T_TradeNo = o_FeeItem.T_TradeNo",
+            join_resolver=lambda code: '"mz_trade"."T_TradeNo" = "mz_fee_item"."T_TradeNo"',
         )
-        assert "INNER JOIN <rel_trade_fee> ON o_Trade.T_TradeNo = o_FeeItem.T_TradeNo" in artifact.view_sql
+        assert 'INNER JOIN <rel_trade_fee> ON "mz_trade"."T_TradeNo" = "mz_fee_item"."T_TradeNo"' in artifact.view_sql
 
     def test_non_view_materialization_rejected(self):
         flow = build_golden_flow()
@@ -174,7 +175,7 @@ class TestCompileBoundaries:
     def test_dimension_node_adds_group_by(self):
         grouped = _flow_with_dimension()
         artifact = _compile(grouped)
-        assert "GROUP BY T_CureType" in artifact.view_sql
+        assert 'GROUP BY "T_CureType"' in artifact.view_sql
 
 
 # ── 测试辅助 ──────────────────────────────────────────────────────

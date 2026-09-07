@@ -97,7 +97,7 @@ def test_快照端点_返回四加工字段值(api):
     assert resp.status_code == 200
     body = resp.json()
     assert body["view"] == "v_op_outpatient_processed"
-    assert body["datasource_id"] == "bjybdb"
+    assert body["datasource_id"] == "outpatient_postgres"  # §9 裁决：加工视图落位 PG 落地库
     assert "口径句 v4" in body["signoff"]
     values = {m["metric_code"]: m["value"] for m in body["metrics"]}
     assert values == {

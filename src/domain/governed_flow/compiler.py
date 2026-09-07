@@ -6,6 +6,12 @@ docs/processing/outpatient_processed_view.sql 同构的 SELECT/WHERE 语义）�
 （source → filter* → join* → aggregate → derived_metric*），
 dimension/quality_gate 不生成 SQL（分别注入 GROUP BY / 计划断言段）。
 
+方言（2026-09-07 架构裁决）：产物为 PostgreSQL 落地库方言
+（CREATE OR REPLACE VIEW）——加工一律在 PG 落地库执行，禁止在
+SQL Server 源库上执行 DDL（防腐层纪律）。落地视图列名保留大小写
+（AS "T_TradeNo"），裸标识符会被 PG 折叠为小写导致 column does not
+exist，故所有标识符统一渲染为双引号形式（"public"."mz_trade"）。
+
 安全边界（Phase 0 威胁模型 T5）：所有标识符过白名单正则，
 字面量走参数化渲染（数字原样、字符串转义单引号），
 派生表达式经 AST 白名单重新序列化，杜绝 SQL 注入面。
@@ -90,9 +96,15 @@ def derive_view_name(flow_id: str) -> str:
 
 
 def _identifier(value: str, what: str) -> str:
+    """校验白名单并渲染为 PG 双引号标识符（点分段各自包裹）。
+
+    落地视图列名保留大小写（AS "T_TradeNo"），裸引用会被 PG 折叠成
+    小写而找不到列；先过白名单正则（拒绝引号/分号等注入面）再逐段
+    加双引号，语义不变且可执行。
+    """
     if not _IDENTIFIER_RE.match(value):
         raise FlowCompileError("FLOW_EXPRESSION_INVALID", f"{what} 标识符非法: {value!r}")
-    return value
+    return ".".join(f'"{segment}"' for segment in value.split("."))
 
 
 def _literal(value) -> str:
@@ -209,7 +221,7 @@ def compile_flow_view(
     dataset_resolver: Optional[DatasetPhysicalResolver] = None,
     join_resolver: Optional[JoinClauseResolver] = None,
 ) -> CompiledFlowArtifact:
-    """编译 FlowDefinition 为 CREATE OR ALTER VIEW 语句与查询计划。"""
+    """编译 FlowDefinition 为 PostgreSQL 落地库的 CREATE OR REPLACE VIEW 语句与查询计划。"""
     materialization = str(
         getattr(flow.materialization, "value", flow.materialization)
     )
@@ -303,7 +315,7 @@ def compile_flow_view(
         raise FlowCompileError("FLOW_COMPILE_UNSUPPORTED", "管道没有聚合/派生输出，无可编译 SELECT")
 
     view_name = derive_view_name(flow.flow_id)
-    sql_lines = [f"CREATE OR ALTER VIEW {view_name} AS", "SELECT"]
+    sql_lines = [f"CREATE OR REPLACE VIEW {view_name} AS", "SELECT"]
     sql_lines.append("  " + ",\n  ".join(select_parts))
     sql_lines.append(f"FROM {from_table}")
     if where_parts:

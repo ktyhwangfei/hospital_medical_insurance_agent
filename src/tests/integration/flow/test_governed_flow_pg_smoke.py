@@ -63,7 +63,7 @@ def test_pg_roundtrip_and_active_switch(storage: PostgresGovernedFlowStorage):
     # 主表 CRUD + JSONB 往返
     storage.create_flow(flow)
     loaded = storage.get_flow(FLOW_ID)
-    assert loaded is not None and loaded.nodes[0].dataset_code == "o_trade"
+    assert loaded is not None and loaded.nodes[0].dataset_code == "mz_trade"
 
     # 发布证据：后发版本自动置活跃（部分唯一索引保证单活跃）
     storage.save_published_revision(_published(flow, 1))

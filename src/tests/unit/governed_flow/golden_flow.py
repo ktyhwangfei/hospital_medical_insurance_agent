@@ -4,6 +4,10 @@
 outpatient_processed_view.sql（v_op_outpatient_processed）。
 Phase 0 冻结：本夹具是 Flow DSL 表达力的基准用例，Phase 1 编译器
 必须能把它编译为与该视图等价的 SQL。
+
+2026-09-07 架构裁决（Phase 0 文档 §9）：加工视图落位 PG 落地库，
+源从 SQL Server o_Trade 切换为 PG 治理视图 mz_trade（列名与源
+o_Trade 契约一致），上游血缘经同步落地链路保留。
 """
 from __future__ import annotations
 
@@ -33,7 +37,7 @@ CALIBER_V4 = (
     "AND (T_CureType IN (11,17,18,19) OR T_CureType IS NULL)"
 )
 
-# o_Trade 契约字段：9 个（投影白名单 = 视图实际引用列）
+# mz_trade 契约字段：9 个（投影白名单 = 视图实际引用列；与源 o_Trade 契约列名一致）
 O_TRADE_FIELDS = [
     "T_TradeNo", "T_State", "NP_Settle_State", "T_HasRefundmented",
     "T_PartialReturnFlag", "T_CureType", "T_FeeAll", "T_FundPay", "T_SelfPayAll",
@@ -51,8 +55,8 @@ def build_golden_flow() -> FlowDefinition:
     """构建 #62 Golden Flow：source → filter(口径句v4) → aggregate(4度量) → quality_gate → consumer。"""
     nodes = [
         SourceNode(
-            node_id="src_trade", name="门诊结算源表 o_Trade",
-            dataset_code="o_trade", object_code="OutpatientTrade",
+            node_id="src_trade", name="门诊结算落地表 mz_trade",
+            dataset_code="mz_trade", object_code="mzjyxx",
             fields=O_TRADE_FIELDS,
             position={"x": 40, "y": 200},
         ),
@@ -115,7 +119,7 @@ def build_golden_flow() -> FlowDefinition:
         nodes=nodes,
         edges=[FlowEdge(**e) for e in edges],
         source_contracts=[
-            SourceContract(dataset_code="o_trade", object_code="OutpatientTrade", fields=O_TRADE_FIELDS)
+            SourceContract(dataset_code="mz_trade", object_code="mzjyxx", fields=O_TRADE_FIELDS)
         ],
         metric_outputs=[
             MetricOutputBinding(
@@ -132,7 +136,7 @@ def golden_validation_context():
     from src.domain.governed_flow.validation import FlowValidationContext
 
     return FlowValidationContext(
-        registered_datasets={"o_trade"},
+        registered_datasets={"mz_trade"},
         value_domains={"MZ_CURE_TYPE": {"11", "17", "18", "19"}},
         signed_calibers={CALIBER_V4},
     )

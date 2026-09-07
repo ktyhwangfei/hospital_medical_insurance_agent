@@ -220,6 +220,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - Milvus release 产物集合（`policy_rules_REL_*`）的适用性字段（region/effective_date/publish_status/amount_band_min/max 等）是 dynamic key，`describe_collection` 的固定字段列表看不到；只读 describe 结果做字段存在性检查会让过滤被**静默跳过**且无任何报错（Issue #33 实测生产适用性过滤从未生效）。判字段必须同时检查 `enable_dynamic_field`，为真时并入 `structured_policy_retriever._KNOWN_DYNAMIC_FILTERABLE_FIELDS`；dynamic key 可按名进 expr 过滤和 output_fields 取回。
 - 多检出目录的 outpatient sync worker 共享同一 PostgreSQL 时互相抢任务：后启动方 bootstrap 用本目录主密钥重封共享凭据，旧 worker 认领后解封即失败并把任务打成 `failed`，且其 `fail_job` 覆盖 `active_attempt_id` 导致另一 worker 已成功批次被孤儿化（任务行丢失成功状态）。排查用 `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*sync_worker*' }`，杀掉非本工作区 PID；启动同步前先确认单 worker；认领护栏 `active_attempt_id IS NULL` 已入回归测试。
 
+- PG 落地视图（mz_trade/mz_fee_item）列名保留大小写（AS "T_TradeNo"），SQL 裸引用被 PG 折叠小写报 `column "t_tradeno" does not exist`，必须双引号包裹（编译器 _identifier 已统一引号化）。且 `CREATE OR REPLACE VIEW` 不能改既有视图列类型（`cannot change data type of view column ... from text to numeric`），改列类型（如状态码列 text→numeric）须 DROP 重建走迁移，勿直接改 outpatient_store 的 `_TRADE_NUMERIC_FIELDS` 期望幂等生效（活库已实测报错）。
 ### 陷阱模板
 
 新增陷阱按以下格式写入，禁止自由格式：

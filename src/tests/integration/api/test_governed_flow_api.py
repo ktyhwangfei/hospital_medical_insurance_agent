@@ -1,6 +1,6 @@
 """治理 Flow API 测试（T2a）— Phase 1。
 
-依赖注入内存存储 + 种子语义层（含 #62 四指标口径句 v4 与 o_trade 数据集），
+依赖注入内存存储 + 种子语义层（含 #62 四指标口径句 v4 与 mz_trade 落地数据集），
 覆盖 12 个端点的 happy path 与 404/409/422 拒止路径。
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ BASE = "/api/v1/medical-insurance-ai-agent/flow"
 @pytest.fixture
 def api(monkeypatch):
     monkeypatch.setenv("AUTH_JWT_SECRET", "governed-flow-test-secret")
-    # 种子语义层：o_trade 数据集 + mzjyxx.op_* 四指标（口径句 v4 已签核）
+    # 种子语义层：mz_trade 落地数据集 + mzjyxx.op_* 四指标（口径句 v4 已签核）
     store = InMemoryRegistryStore()
     seed_semantic_layer(store)
     monkeypatch.setattr(
@@ -175,8 +175,8 @@ class TestPublish:
         resp = api.get(f"{BASE}/flow_op_outpatient_processed/preview")
         assert resp.status_code == 200
         artifact = resp.json()
-        assert "FROM dbo.o_Trade" in artifact["view_sql"]
-        assert "(T_CureType IN (11, 17, 18, 19) OR T_CureType IS NULL)" in artifact["view_sql"]
+        assert 'FROM "public"."mz_trade"' in artifact["view_sql"]
+        assert '("T_CureType" IN (11, 17, 18, 19) OR "T_CureType" IS NULL)' in artifact["view_sql"]
         assert len(artifact["query_plan"]) == 4
 
     def test_delete_published_rejected(self, api):
