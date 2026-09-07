@@ -10,6 +10,8 @@
 
 ## 0. 当前焦点
 
+**Issue #37 可信问题库与匹配引擎（分支 ktyhwangfei/issue-37-38，进行中）**：Slice 1 领域模型+存储四件套（trusted_questions 表，DDL 双写）✅ `6b8a99e`；Slice 2 确定性匹配引擎（matched/candidates/no_match 三态，不确定必澄清不猜测执行）✅ `b0bf30b`；Slice 3 审核流 API（/trusted-questions CRUD + 状态机 + 同义表达运营 + /match）✅ `6065d50`；Slice 4 冷启动脚本（QA 轨迹高频挖掘 → 幂等 draft 候选，真实 PG 入库 20 条）✅ `2001e78`；Slice 5 Portal 管理页（/trusted-questions：审核流操作 + 同义表达运营 + 匹配测试；Vitest 59 文件 427 passed、build 通过、真实 PG 全链路冒烟 submit→approve→match 命中）✅。进行中：Slice 6 命中执行闭环（query_plan 快照回放 + expected_result_traits 校验 + golden 验收）。
+
 **当前领域**：Issue #33 — 政策知识上线补强（门诊+通用，§1.1 单元 6.7）
 
 **当前阶段**：Issue #33 机制、回填与门禁复测完成（2026-09-02 终态：structured 诚实拒答 87.5%，FAR/P@3 未达）；需求方决定门禁不放行、提交仅留档。后续已落地：路由拒答①（broad→structured 三判据路由/拒答，9/3）、加固① structured 空上下文拒答（报告 §9）、加固② broad 有效期/status 硬过滤（报告 §10）、加固③ 路由证据重排与相关性过滤（9/4）、加固④ 路由针对性修复（rule_type 硬过滤拆除 + 推断维度分区降级 + 候选池 20→50；验收表 #7-#10 SSE 复测 #8/#9/#10 达标 #7 大幅改善）、加固⑤ 双人群覆盖 + 回答按险种分组出处标注（#7 全人群覆盖实测；详见 6.7 加固③④⑤补充证据）；门禁整体仍关闭；Issue #31 仍为 `editing` 草稿（等待真实预结算接口），Issue #30（单元 1.8 轨迹持久化）待浏览器人工验收

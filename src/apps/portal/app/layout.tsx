@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Activity,
+  ShieldCheck,
   SlidersHorizontal,
   Database,
 } from 'lucide-react'
@@ -49,6 +50,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: '语义层', href: '/semantic-layer', icon: <Brain className="size-4" /> },
   { label: '政策知识', href: '/policy-knowledge', icon: <BookOpen className="size-4" /> },
   { label: '问答历史', href: '/qa-history', icon: <History className="size-4" /> },
+  { label: '可信问题库', href: '/trusted-questions', icon: <ShieldCheck className="size-4" /> },
   { label: '数据治理', href: '/data-governance', icon: <Database className="size-4" /> },
 ]
 
