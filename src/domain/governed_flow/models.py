@@ -145,6 +145,10 @@ class FlowStateInvalidError(ValueError):
     """非法状态流转。"""
 
 
+class FlowArtifactMismatchError(FlowStateInvalidError):
+    """发布证据 artifact_hash 与定义重编译产物不一致（T8 防篡改拦截）。"""
+
+
 class FlowRevisionConflictError(ValueError):
     """乐观锁冲突：expected_revision 与当前不符。"""
 
@@ -191,6 +195,9 @@ FLOW_ERROR_CODES: frozenset[str] = frozenset({
     "FLOW_NOT_FOUND",
     "FLOW_REVISION_CONFLICT",
     "FLOW_STATE_INVALID",
+    # Phase 3 消费契约接线新增（24 → 26）
+    "FLOW_ARTIFACT_MISMATCH",          # 发布证据与重编译产物哈希不一致（T8 防篡改）
+    "FLOW_CONSUME_DIMENSION_FORBIDDEN",# 消费维度不在维度节点绑定白名单（T11 越权拦截）
 })
 
 
@@ -421,6 +428,39 @@ class FlowPublishedRevision(BaseModel):
     published_at: str
     published_by: str
     definition: FlowDefinition
+
+
+class FlowGateResult(BaseModel):
+    """消费时质量门禁单项运行时评估结果。"""
+
+    check_type: str = Field(..., description="quality_check.check_type（identity_assertion 等）")
+    passed: bool
+    detail: str = Field(..., description="通过/失败说明；失败必须携带差异事实")
+
+
+# 消费行值域：指标数值或维度编码；Decimal 由服务层统一转 float 出参
+FlowQueryCell = Union[int, float, str, None]
+
+
+class FlowQueryResult(BaseModel):
+    """受控问数消费结果（Phase 3）：数值 + 发布证据 + 门禁评估三件套。
+
+    勾稽恒等失败时 quality_status=unavailable 且 rows 扣发（fail closed），
+    数值不可见但证据与门禁事实完整可审计。
+    """
+
+    flow_id: str
+    revision_id: str
+    flow_revision: int
+    artifact_hash: str = Field(..., min_length=64, max_length=64)
+    view_name: str
+    metrics: list[str]
+    dimensions: list[str]
+    rows: list[dict[str, FlowQueryCell]]
+    quality_status: str = Field(..., description="passed | unavailable")
+    gate_results: list[FlowGateResult] = Field(default_factory=list)
+    published_at: str
+    published_by: str
 
 
 # ── content_hash ───────────────────────────────────────────────────

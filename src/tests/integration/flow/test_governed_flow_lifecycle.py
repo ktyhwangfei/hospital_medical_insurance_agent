@@ -110,8 +110,9 @@ def test_published_flow_preview_matches_view_sql(api):
     sql = artifact["view_sql"]
     assert 'COUNT(DISTINCT "T_TradeNo") AS "op_valid_settle_count"' in sql
     assert 'SUM("T_FeeAll") AS "op_total_fee"' in sql
-    assert '"T_State" IN (2, 3)' in sql
-    assert '"NP_Settle_State" = 1' in sql
-    assert '"T_HasRefundmented" != 1' in sql
+    # P3a：mz_trade text 落地状态列数值比较经 NULLIF 转型（与 #62 视图同构）
+    assert "NULLIF(\"T_State\", '')::NUMERIC IN (2, 3)" in sql
+    assert "NULLIF(\"NP_Settle_State\", '')::NUMERIC = 1" in sql
+    assert "NULLIF(\"T_HasRefundmented\", '')::NUMERIC != 1" in sql
     assert '("T_PartialReturnFlag" IN (\'\') OR "T_PartialReturnFlag" IS NULL)' in sql
-    assert '("T_CureType" IN (11, 17, 18, 19) OR "T_CureType" IS NULL)' in sql
+    assert "(NULLIF(\"T_CureType\", '')::NUMERIC IN (11, 17, 18, 19) OR \"T_CureType\" IS NULL)" in sql

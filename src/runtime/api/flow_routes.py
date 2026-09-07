@@ -12,18 +12,29 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from src.data_platform.storage.flow.flow_factory import get_governed_flow_storage
+from src.data_platform.storage.flow.flow_factory import (
+    get_flow_view_reader,
+    get_flow_view_deployer,
+    get_governed_flow_storage,
+)
 from src.domain.governed_flow.compiler import CompiledFlowArtifact
 from src.domain.governed_flow.models import (
+    FlowArtifactMismatchError,
     FlowDefinition,
     FlowNotFoundError,
     FlowPublishedRevision,
+    FlowQueryResult,
     FlowRevisionConflictError,
     FlowStateInvalidError,
 )
 from src.domain.governed_flow.validation import FlowValidationReport
+from src.runtime.flow.flow_query_service import (
+    FlowConsumeDimensionForbiddenError,
+    FlowConsumeMetricUnknownError,
+    FlowQueryService,
+)
 from src.runtime.flow.flow_service import FlowGovernanceService, FlowPublishBlockedError
 from src.shared.schemas.responses import error_detail
 
@@ -36,8 +47,17 @@ router = APIRouter(
 
 
 def get_flow_service() -> FlowGovernanceService:
-    """依赖注入 seam：API 测试 override 此函数注入内存存储。"""
-    return FlowGovernanceService(get_governed_flow_storage())
+    """依赖注入 seam：API 测试 override 此函数注入内存存储。
+
+    生产 wiring 一并注入视图部署器（publish/rollback 真部署 DDL）；
+    API 测试 override 时自行决定是否携带部署器。
+    """
+    return FlowGovernanceService(get_governed_flow_storage(), get_flow_view_deployer())
+
+
+def get_flow_query_service() -> FlowQueryService:
+    """消费服务依赖注入 seam：API 测试 override 注入内存存储 + stub 读取器。"""
+    return FlowQueryService(get_governed_flow_storage(), get_flow_view_reader())
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -49,9 +69,22 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=409, detail=error_detail(
             "FLOW_REVISION_CONFLICT", str(exc), {},
         ))
+    # 子类先于父类 FlowStateInvalidError 判断（T8 防篡改专用码）
+    if isinstance(exc, FlowArtifactMismatchError):
+        return HTTPException(status_code=409, detail=error_detail(
+            "FLOW_ARTIFACT_MISMATCH", str(exc), {},
+        ))
     if isinstance(exc, FlowStateInvalidError):
         return HTTPException(status_code=409, detail=error_detail(
             "FLOW_STATE_INVALID", str(exc), {},
+        ))
+    if isinstance(exc, FlowConsumeMetricUnknownError):
+        return HTTPException(status_code=422, detail=error_detail(
+            "FLOW_CONSUMES_UNKNOWN_METRIC", str(exc), {},
+        ))
+    if isinstance(exc, FlowConsumeDimensionForbiddenError):
+        return HTTPException(status_code=422, detail=error_detail(
+            "FLOW_CONSUME_DIMENSION_FORBIDDEN", str(exc), {},
         ))
     if isinstance(exc, FlowPublishBlockedError):
         blocking = [i.code for i in exc.report.issues if i.severity.value == "blocking"]
@@ -79,6 +112,13 @@ class PublishRequest(BaseModel):
 
 class RollbackRequest(BaseModel):
     revision_id: str
+
+
+class FlowQueryRequest(BaseModel):
+    """受控问数请求：metrics/dimensions 为空 = 消费契约全量指标 / 无下钻。"""
+
+    metrics: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
 
 
 @router.post("", status_code=201)
@@ -213,5 +253,18 @@ def preview_flow(
 ) -> CompiledFlowArtifact:
     try:
         return service.preview_flow(flow_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/{flow_id}/query")
+def query_flow(
+    flow_id: str,
+    request: FlowQueryRequest,
+    service: FlowQueryService = Depends(get_flow_query_service),
+) -> FlowQueryResult:
+    """受控问数：只读已部署视图，携带发布证据与门禁评估（Phase 3）。"""
+    try:
+        return service.query(flow_id, request.metrics, request.dimensions)
     except Exception as exc:
         raise _http_error(exc) from exc

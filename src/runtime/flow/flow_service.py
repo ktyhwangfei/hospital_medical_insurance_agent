@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
+from typing import Optional
 
-from src.data_platform.storage.flow.flow_ports import GovernedFlowStorage
+from src.data_platform.storage.flow.flow_ports import FlowViewDeployer, GovernedFlowStorage
 from src.domain.governed_flow.compiler import (
     CompiledFlowArtifact,
     compile_flow_view,
 )
 from src.domain.governed_flow.models import (
+    FlowArtifactMismatchError,
     FlowDefinition,
     FlowNotFoundError,
     FlowPublishedRevision,
@@ -139,11 +141,28 @@ def compute_semantic_revision(flow: FlowDefinition) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-class FlowGovernanceService:
-    """治理 Flow 生命周期服务（草稿 CRUD → 校验 → 发布 → 回滚 → 退役）。"""
+class _NullViewDeployer:
+    """未注入部署器时的退化实现：不部署（纯登记模式，仅测试用）。"""
 
-    def __init__(self, storage: GovernedFlowStorage) -> None:
+    def deploy_view(self, view_sql: str) -> None:
+        return None
+
+
+class FlowGovernanceService:
+    """治理 Flow 生命周期服务（草稿 CRUD → 校验 → 发布 → 回滚 → 退役）。
+
+    view_deployer 未注入时退化为纯登记模式（不部署视图，仅测试用）；
+    生产 wiring 由 routes 注入工厂部署器：publish/rollback 先部署 DDL
+    再落/切发布证据，部署失败 fail closed。
+    """
+
+    def __init__(
+        self,
+        storage: GovernedFlowStorage,
+        view_deployer: Optional[FlowViewDeployer] = None,
+    ) -> None:
         self._storage = storage
+        self._view_deployer = view_deployer or _NullViewDeployer()
 
     # ── 草稿 CRUD ──────────────────────────────────────────────────
 
@@ -253,6 +272,10 @@ class FlowGovernanceService:
         except ValueError as exc:  # FlowCompileError 及标识符拒绝
             raise FlowStateInvalidError(f"编译失败: {exc}") from exc
 
+        # 先部署 DDL 再落发布证据：部署失败 → 无新版本、状态留在
+        # pending_review（fail closed，禁止"证据已发布但视图不存在"）
+        self._view_deployer.deploy_view(artifact.view_sql)
+
         published_at = _utc_now_iso()
         revision = FlowPublishedRevision(
             revision_id=f"{flow_id}-rev{flow.revision}",
@@ -285,6 +308,22 @@ class FlowGovernanceService:
         target = self._storage.get_published_revision(revision_id)
         if target is None or target.flow_id != flow_id:
             raise FlowNotFoundError(f"发布版本 {revision_id} 不属于 flow {flow_id}")
+
+        # T8 防篡改：重编译目标定义必须复现锁定时的 artifact_hash，
+        # 不一致说明证据被改过，拒绝回滚（不部署、不切活跃指针）
+        try:
+            artifact = compile_flow_view(
+                target.definition, dataset_resolver=_dataset_physical_resolver()
+            )
+        except ValueError as exc:
+            raise FlowStateInvalidError(f"回滚重编译失败: {exc}") from exc
+        if artifact.artifact_hash != target.artifact_hash:
+            raise FlowArtifactMismatchError(
+                "FLOW_ARTIFACT_MISMATCH: "
+                f"发布版本 {revision_id} 的定义重编译产物与锁定 artifact_hash 不一致，拒绝回滚"
+            )
+        self._view_deployer.deploy_view(artifact.view_sql)
+
         self._storage.set_active_revision(flow_id, revision_id)
         restored = target.definition.model_copy(deep=True, update={
             "status": FlowStatus.PUBLISHED,

@@ -20,6 +20,7 @@ from src.domain.governed_flow.models import (
     FlowNotFoundError,
     FlowRevisionConflictError,
     FlowStateInvalidError,
+    FlowArtifactMismatchError,
 )
 from src.tests.unit.governed_flow.golden_flow import build_golden_flow
 
@@ -143,11 +144,14 @@ class TestErrorCodes:
             "FLOW_CALIBER_NOT_SIGNED", "FLOW_IDENTITY_TARGET_INVALID",
             "FLOW_CONSUMES_UNKNOWN_METRIC", "FLOW_MATERIALIZATION_UNSUPPORTED", "FLOW_COMPILE_UNSUPPORTED",
             "FLOW_NOT_FOUND", "FLOW_REVISION_CONFLICT", "FLOW_STATE_INVALID",
+            # Phase 3 消费契约接线（24 → 26）
+            "FLOW_ARTIFACT_MISMATCH", "FLOW_CONSUME_DIMENSION_FORBIDDEN",
         }
         assert expected <= FLOW_ERROR_CODES
 
     def test_exceptions_hierarchy(self):
         assert issubclass(FlowStateInvalidError, ValueError)
+        assert issubclass(FlowArtifactMismatchError, FlowStateInvalidError)
         assert issubclass(FlowRevisionConflictError, ValueError)
         assert issubclass(FlowNotFoundError, LookupError)
 

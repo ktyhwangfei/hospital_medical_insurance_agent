@@ -1,7 +1,9 @@
 """#62 验收③ 受控问数闭环：门诊加工视图快照端点（/semantic/query/processed-snapshot）。
 
-只读已发布直接映射：stub 连接断言 SQL 指向视图、单行快照返回四值、
-缺口径句/未注册/多行/未认证各拒止路径。
+§9 裁决后加工视图落位 PG 落地库：读取通道必须是 PostgreSQL 方言直读
+（双引号标识符 + public schema），不再走 SQL Server pyodbc 多源路由。
+本文件 stub `_read_processed_view_rows` 读取 seam 断言列序与返回四值、
+PG 方言 SQL、缺口径句/多行/读取失败/未认证各拒止路径。
 """
 from __future__ import annotations
 
@@ -9,7 +11,7 @@ import base64
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,55 +42,34 @@ def _review_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {signing_input}.{signature}"}
 
 
-from datetime import timedelta  # noqa: E402  (置于 _review_headers 后可读性优先)
-
-
-class _StubCursor:
-    def __init__(self, rows, captured):
-        self._rows = rows
-        self._captured = captured
-
-    def execute(self, sql):
-        self._captured["sql"] = str(sql)
-
-    def fetchall(self):
-        return self._rows
-
-    @property
-    def description(self):
-        return None
-
-
-class _StubConnection:
-    def __init__(self, rows, captured):
-        self._captured = captured
-        self._rows = rows
-
-    def cursor(self):
-        return _StubCursor(self._rows, self._captured)
-
-    def close(self):
-        self._captured["closed"] = True
-
-
-@pytest.fixture
-def api(monkeypatch):
+def _client_with_rows(monkeypatch, rows, captured=None):
+    """stub `_read_processed_view_rows` seam：记录列序、返回固定行。"""
     from src.runtime.api import semantic_routes
 
     store = InMemoryRegistryStore()
     seed_semantic_layer(store)  # 批次二 ensure：mzjyxx.op_* 四指标 published
-    registry = SemanticRegistry(store)
-    monkeypatch.setattr(semantic_routes, "get_registry", lambda: registry)
+    monkeypatch.setattr(
+        semantic_routes, "get_registry", lambda: SemanticRegistry(store)
+    )
     monkeypatch.setenv("AUTH_JWT_SECRET", JWT_SECRET)
+
+    def _stub(columns):
+        if captured is not None:
+            captured["columns"] = list(columns)
+        return rows
+
+    monkeypatch.setattr(semantic_routes, "_read_processed_view_rows", _stub)
+    return TestClient(create_app(), raise_server_exceptions=False)
+
+
+@pytest.fixture
+def api(monkeypatch):
     captured: dict = {}
     # 列序 = 指标按 metric_code 排序后的 SELECT 序：op_fund_pay, op_self_pay, op_total_fee, op_valid_settle_count
-    monkeypatch.setattr(
-        semantic_routes, "_connect_processed_view",
-        lambda source, ds_id: _StubConnection(
-            [(113.66, 6530.03, 6643.69, 12)], captured
-        ),
+    client = _client_with_rows(
+        monkeypatch, [(113.66, 6530.03, 6643.69, 12)], captured
     )
-    return TestClient(create_app(), raise_server_exceptions=False), captured
+    return client, captured
 
 
 def test_快照端点_返回四加工字段值(api):
@@ -108,8 +89,36 @@ def test_快照端点_返回四加工字段值(api):
     }
     first = body["metrics"][0]
     assert "口径句v4" in first["definition"]  # 口径句随结果可追溯
-    assert "v_op_outpatient_processed" in captured["sql"]  # SQL 指向加工视图
-    assert captured["closed"] is True
+    assert captured["columns"] == [
+        "op_fund_pay", "op_self_pay", "op_total_fee", "op_valid_settle_count",
+    ]
+
+
+def test_读取SQL为PostgreSQL方言():
+    """§9 裁决：双引号标识符 + public schema，禁止 T-SQL 方括号。"""
+    from src.runtime.api.semantic_routes import _processed_view_sql
+
+    sql = _processed_view_sql(["op_fund_pay", "op_total_fee"])
+    assert sql == 'SELECT "op_fund_pay", "op_total_fee" FROM "public"."v_op_outpatient_processed"'
+    assert "[" not in sql and "]" not in sql
+
+
+def test_快照端点_读取失败503(monkeypatch):
+    from src.runtime.api import semantic_routes
+
+    store = InMemoryRegistryStore()
+    seed_semantic_layer(store)
+    monkeypatch.setattr(semantic_routes, "get_registry", lambda: SemanticRegistry(store))
+    monkeypatch.setenv("AUTH_JWT_SECRET", JWT_SECRET)
+
+    def _boom(columns):
+        raise RuntimeError("pg unavailable")
+
+    monkeypatch.setattr(semantic_routes, "_read_processed_view_rows", _boom)
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    resp = client.get(f"{BASE}/query/processed-snapshot", headers=_review_headers())
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error_code"] == "SEMANTIC_PROCESSED_SNAPSHOT_UNAVAILABLE"
 
 
 def test_快照端点_未注册指标404(monkeypatch):
@@ -125,17 +134,7 @@ def test_快照端点_未注册指标404(monkeypatch):
 
 
 def test_快照端点_多行拒绝猜测(monkeypatch):
-    from src.runtime.api import semantic_routes
-
-    store = InMemoryRegistryStore()
-    seed_semantic_layer(store)
-    monkeypatch.setattr(semantic_routes, "get_registry", lambda: SemanticRegistry(store))
-    monkeypatch.setenv("AUTH_JWT_SECRET", JWT_SECRET)
-    monkeypatch.setattr(
-        semantic_routes, "_connect_processed_view",
-        lambda source, ds_id: _StubConnection([(1, 2, 3, 4), (5, 6, 7, 8)], {}),
-    )
-    client = TestClient(create_app(), raise_server_exceptions=False)
+    client = _client_with_rows(monkeypatch, [(1, 2, 3, 4), (5, 6, 7, 8)])
     resp = client.get(f"{BASE}/query/processed-snapshot", headers=_review_headers())
     assert resp.status_code == 503
     assert resp.json()["detail"]["error_code"] == "SEMANTIC_PROCESSED_SNAPSHOT_AMBIGUOUS"

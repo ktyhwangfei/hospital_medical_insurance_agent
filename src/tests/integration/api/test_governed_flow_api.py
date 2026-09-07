@@ -186,7 +186,8 @@ class TestPublish:
         assert resp.status_code == 200
         artifact = resp.json()
         assert 'FROM "public"."mz_trade"' in artifact["view_sql"]
-        assert '("T_CureType" IN (11, 17, 18, 19) OR "T_CureType" IS NULL)' in artifact["view_sql"]
+        # P3a：mz_trade text 落地状态列数值比较经 NULLIF 转型（与 #62 视图同构）
+        assert "(NULLIF(\"T_CureType\", '')::NUMERIC IN (11, 17, 18, 19) OR \"T_CureType\" IS NULL)" in artifact["view_sql"]
         assert len(artifact["query_plan"]) == 4
 
     def test_delete_published_rejected(self, api):

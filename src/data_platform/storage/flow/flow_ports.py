@@ -22,3 +22,22 @@ class GovernedFlowStorage(Protocol):
     def list_published_revisions(self, flow_id: str) -> list[FlowPublishedRevision]: ...
     def get_active_revision(self, flow_id: str) -> FlowPublishedRevision | None: ...
     def set_active_revision(self, flow_id: str, revision_id: str) -> None: ...
+
+
+class FlowViewDeployer(Protocol):
+    """发布视图 DDL 的部署端口（Phase 3：publish/rollback 前先落 PG 落地库）。
+
+    DDL 由编译器产出并锁定进 artifact_hash，部署方不得改写；
+    部署失败必须抛异常（fail closed：无部署则无发布证据）。
+    """
+
+    def deploy_view(self, view_sql: str) -> None: ...
+
+
+class FlowViewReader(Protocol):
+    """受控问数视图读取端口（Phase 3：消费只读已部署视图，禁止改写 SQL）。
+
+    列名由服务层从发布定义白名单推导；读取方不得拼接任意 SQL。
+    """
+
+    def read(self, view_name: str, columns: list[str]) -> list[dict]: ...
