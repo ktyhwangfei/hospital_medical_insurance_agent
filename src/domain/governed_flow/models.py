@@ -198,6 +198,7 @@ FLOW_ERROR_CODES: frozenset[str] = frozenset({
     # Phase 3 消费契约接线新增（24 → 26）
     "FLOW_ARTIFACT_MISMATCH",          # 发布证据与重编译产物哈希不一致（T8 防篡改）
     "FLOW_CONSUME_DIMENSION_FORBIDDEN",# 消费维度不在维度节点绑定白名单（T11 越权拦截）
+    "FLOW_CONSUME_AMBIGUOUS",          # 多个已发布消费契约覆盖同一组指标，拒绝猜测（26 → 27）
 })
 
 

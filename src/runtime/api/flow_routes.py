@@ -31,6 +31,7 @@ from src.domain.governed_flow.models import (
 )
 from src.domain.governed_flow.validation import FlowValidationReport
 from src.runtime.flow.flow_query_service import (
+    FlowConsumeAmbiguousError,
     FlowConsumeDimensionForbiddenError,
     FlowConsumeMetricUnknownError,
     FlowQueryService,
@@ -73,6 +74,11 @@ def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, FlowArtifactMismatchError):
         return HTTPException(status_code=409, detail=error_detail(
             "FLOW_ARTIFACT_MISMATCH", str(exc), {},
+        ))
+    # 子类先于父类 FlowStateInvalidError 判断（多契约拒猜专用码）
+    if isinstance(exc, FlowConsumeAmbiguousError):
+        return HTTPException(status_code=409, detail=error_detail(
+            "FLOW_CONSUME_AMBIGUOUS", str(exc), {},
         ))
     if isinstance(exc, FlowStateInvalidError):
         return HTTPException(status_code=409, detail=error_detail(
@@ -266,5 +272,21 @@ def query_flow(
     """受控问数：只读已部署视图，携带发布证据与门禁评估（Phase 3）。"""
     try:
         return service.query(flow_id, request.metrics, request.dimensions)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/consume")
+def consume_by_metrics(
+    request: FlowQueryRequest,
+    service: FlowQueryService = Depends(get_flow_query_service),
+) -> FlowQueryResult:
+    """指标码驱动受控消费（query_planner / 问数层接入点）。
+
+    消费方只知语义指标码、不感知 flow_id：解析已发布消费契约的唯一活跃
+    版本后走既有 T8 / 白名单 / 勾稽门禁链路；无契约 422、多契约 409。
+    """
+    try:
+        return service.query_by_metrics(request.metrics, request.dimensions)
     except Exception as exc:
         raise _http_error(exc) from exc

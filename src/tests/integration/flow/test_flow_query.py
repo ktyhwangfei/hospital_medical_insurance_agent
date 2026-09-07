@@ -250,3 +250,86 @@ def test_query_flow_not_found(parts):
     resp = api.post(f"{BASE}/flow_missing/query", json={})
     assert resp.status_code == 404
     assert resp.json()["detail"]["error_code"] == "FLOW_NOT_FOUND"
+
+
+# ── 指标码驱动消费（query_planner/问数层接入点）：POST /flow/consume ──────
+
+
+def test_consume_by_metrics_resolves_published_contract(parts):
+    """指标码全量消费：解析到已发布消费契约，走既有 T8/白名单/门禁链路。"""
+    api, _, reader = parts
+    _publish_golden(api)
+
+    resp = api.post(f"{BASE}/consume", json={
+        "metrics": [
+            "mzjyxx.op_valid_settle_count", "mzjyxx.op_total_fee",
+            "mzjyxx.op_fund_pay", "mzjyxx.op_self_pay",
+        ],
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    # 契约声明用短码，指标码驱动侧以对象域全码解析
+    assert body["flow_id"] == FLOW_ID
+    assert body["rows"] == [GOLDEN_ROW]
+    assert body["quality_status"] == "passed"
+    assert reader.queries[-1][0] == "v_flow_flow_op_outpatient_processed"
+
+
+def test_consume_by_metrics_subset_projects(parts):
+    api, _, reader = parts
+    _publish_golden(api)
+
+    resp = api.post(f"{BASE}/consume", json={"metrics": ["mzjyxx.op_total_fee"]})
+    assert resp.status_code == 200
+    assert resp.json()["rows"] == [{"op_total_fee": 6643.69}]
+    assert reader.queries[-1][1][0] == "op_total_fee"
+
+
+def test_consume_by_metrics_no_contract_rejected(parts):
+    """没有任何已发布消费契约覆盖请求指标 → 422 fail closed。"""
+    api, _, reader = parts
+    _publish_golden(api)
+
+    resp = api.post(f"{BASE}/consume", json={"metrics": ["mzjyxx.op_avg_fee"]})
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error_code"] == "FLOW_CONSUMES_UNKNOWN_METRIC"
+    assert reader.queries == []
+
+
+def test_consume_by_metrics_unpublished_flow_ignored(parts):
+    """仅 pending_review 的 flow 不构成可解析契约（发布前不可消费）。"""
+    api, _, reader = parts
+    api.post(BASE, json=build_golden_flow().model_dump(mode="json"))
+    api.post(f"{BASE}/{FLOW_ID}/submit-review")
+
+    resp = api.post(f"{BASE}/consume", json={"metrics": ["mzjyxx.op_total_fee"]})
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error_code"] == "FLOW_CONSUMES_UNKNOWN_METRIC"
+    assert reader.queries == []
+
+
+def test_consume_by_metrics_ambiguous_contract_rejected(parts):
+    """多个已发布契约覆盖同一组指标 → 409 拒绝猜测（fail closed）。"""
+    api, _, reader = parts
+    _publish_golden(api)
+    second = build_golden_flow().model_copy(update={"flow_id": "flow_op_dup"})
+    api.post(BASE, json=second.model_dump(mode="json"))
+    api.post(f"{BASE}/flow_op_dup/submit-review")
+    assert api.post(
+        f"{BASE}/flow_op_dup/publish", json={"published_by": "医保数据组"}
+    ).status_code == 201
+
+    resp = api.post(f"{BASE}/consume", json={"metrics": ["mzjyxx.op_total_fee"]})
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error_code"] == "FLOW_CONSUME_AMBIGUOUS"
+    assert reader.queries == []
+
+
+def test_consume_by_metrics_empty_request_rejected(parts):
+    api, _, reader = parts
+    _publish_golden(api)
+
+    resp = api.post(f"{BASE}/consume", json={})
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error_code"] == "FLOW_CONSUMES_UNKNOWN_METRIC"
+    assert reader.queries == []

@@ -32,6 +32,7 @@ from src.domain.governed_flow.models import (
     FlowStateInvalidError,
     QualityCheckType,
     QualityGateNode,
+    SourceNode,
 )
 
 
@@ -41,6 +42,10 @@ class FlowConsumeMetricUnknownError(ValueError):
 
 class FlowConsumeDimensionForbiddenError(ValueError):
     """请求下钻的维度未在维度节点绑定白名单内（T11 越权拦截）。"""
+
+
+class FlowConsumeAmbiguousError(FlowStateInvalidError):
+    """多个已发布消费契约覆盖同一组指标，拒绝猜测（指标码驱动解析 fail closed）。"""
 
 
 def _num(value: Any) -> float:
@@ -148,7 +153,70 @@ class FlowQueryService:
             published_by=active.published_by,
         )
 
+    def query_by_metrics(
+        self,
+        metric_codes: list[str],
+        dimensions: Optional[list[str]] = None,
+    ) -> FlowQueryResult:
+        """指标码驱动的消费契约解析（query_planner / 问数层接入点）。
+
+        消费方只知语义指标码（接受 `<object_code>.<短码>` 全码或契约短码），
+        不感知 flow_id：在已发布 flow 的活跃版本中解析「consumer 契约
+        consumes ⊇ 请求码」的唯一契约；无契约覆盖拒止、多契约拒绝猜测。
+        解析成功后仍走 query() 的 T8 防篡改、白名单与勾稽门禁链路，不设旁路。
+        """
+        if not metric_codes:
+            raise FlowConsumeMetricUnknownError("请求消费的指标码为空")
+        matches: list[tuple[str, list[str]]] = []  # (flow_id, 归一化短码)
+        for flow in self._storage.list_flows():
+            if flow.status is not FlowStatus.PUBLISHED:
+                continue
+            active = self._storage.get_active_revision(flow.flow_id)
+            if active is None:
+                continue
+            short_codes = self._normalize_metric_codes(
+                active.definition, metric_codes
+            )
+            if any(
+                isinstance(n, ConsumerNode)
+                and set(short_codes).issubset(set(n.consumes))
+                for n in active.definition.nodes
+            ):
+                matches.append((flow.flow_id, short_codes))
+        if not matches:
+            raise FlowConsumeMetricUnknownError(
+                f"指标不在任何已发布消费契约内: {sorted(metric_codes)}"
+            )
+        if len(matches) > 1:
+            raise FlowConsumeAmbiguousError(
+                "多个已发布 flow 的消费契约覆盖请求指标，拒绝猜测: "
+                f"{sorted(flow_id for flow_id, _ in matches)}"
+            )
+        flow_id, short_codes = matches[0]
+        return self.query(flow_id, metrics=short_codes, dimensions=dimensions)
+
     # ── 内部 ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_metric_codes(
+        definition: FlowDefinition, metric_codes: list[str]
+    ) -> list[str]:
+        """全码 `<object_code>.<短码>` → 契约短码（按该 flow 的来源对象域归一）。
+
+        对象域不符的全码（如 `other_object.op_total_fee`）保持原样 → 无法匹配
+        契约 → fail closed；裸短码原样透传。
+        """
+        prefixes = tuple(
+            f"{node.object_code}."
+            for node in definition.nodes
+            if isinstance(node, SourceNode)
+        )
+        codes = []
+        for code in metric_codes:
+            if prefixes and code.startswith(prefixes):
+                code = code.split(".", 1)[1]
+            codes.append(code)
+        return codes
 
     @staticmethod
     def _identity_gate_columns(definition: FlowDefinition) -> list[str]:

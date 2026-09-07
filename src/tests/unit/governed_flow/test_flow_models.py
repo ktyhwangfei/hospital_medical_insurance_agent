@@ -146,6 +146,8 @@ class TestErrorCodes:
             "FLOW_NOT_FOUND", "FLOW_REVISION_CONFLICT", "FLOW_STATE_INVALID",
             # Phase 3 消费契约接线（24 → 26）
             "FLOW_ARTIFACT_MISMATCH", "FLOW_CONSUME_DIMENSION_FORBIDDEN",
+            # Phase 3 指标码驱动消费接入点（26 → 27）
+            "FLOW_CONSUME_AMBIGUOUS",
         }
         assert expected <= FLOW_ERROR_CODES
 
