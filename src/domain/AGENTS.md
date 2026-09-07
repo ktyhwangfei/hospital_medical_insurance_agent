@@ -958,6 +958,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 门禁评估结果 | `FlowGateResult` | **Value Object** | Pydantic `BaseModel` | check_type + passed + detail；失败 detail 必须携带差异事实 |
 | 证据不一致 | `FlowArtifactMismatchError` | — | `FlowStateInvalidError` 子类 | 发布证据 artifact_hash 与定义重编译产物不一致（T8 篡改拦截）；API 409 `FLOW_ARTIFACT_MISMATCH` |
 | 消费白名单拒止 | `FlowConsumeMetricUnknownError` / `FlowConsumeDimensionForbiddenError` | — | `ValueError` 子类 | 请求指标不在 consumer.consumes / 请求维度不在维度绑定白名单（T11）；API 422 |
+| 消费歧义拒猜 | `FlowConsumeAmbiguousError` | — | `FlowStateInvalidError` 子类 | 指标码驱动解析（query_by_metrics）命中多个已发布消费契约，拒绝猜测；API 409 `FLOW_CONSUME_AMBIGUOUS` |
 
 #### 业务规则（Phase 0 冻结）
 

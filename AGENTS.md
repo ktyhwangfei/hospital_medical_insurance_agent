@@ -225,6 +225,8 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - PG 落地视图（mz_trade/mz_fee_item）列名保留大小写（AS "T_TradeNo"），SQL 裸引用被 PG 折叠小写报 `column "t_tradeno" does not exist`，必须双引号包裹（编译器 _identifier 已统一引号化）。且 `CREATE OR REPLACE VIEW` 不能改既有视图列类型（`cannot change data type of view column ... from text to numeric`），改列类型（如状态码列 text→numeric）须 DROP 重建走迁移，勿直接改 outpatient_store 的 `_TRADE_NUMERIC_FIELDS` 期望幂等生效（活库已实测报错）。
 - PostgreSQLClient.execute 直接执行含 `%` 的 SQL（如 `LIKE 'v_flow_%'`）报 psycopg `only '%s', '%b', '%t' are allowed as placeholders`。`%` 是 psycopg 占位符前缀；改用 `position('xxx' in col)=1` 或 `%%` 转义，勿把含 `%` 的 DDL/查询当无参 SQL 直传。
 - 活库注册中心的 mz_trade/mz_fee_item 数据集映射若仍是 §9 裁决前旧登记（`schema=dbo, table=o_Trade`），flow 发布会 live 500（`relation "dbo.o_Trade" does not exist`）。`ensure_outpatient_query_model` 遇旧名即跳过不会自愈；必须显式执行官方迁移 `switch_outpatient_query_model_to_postgres(store)`（→ `public.mz_trade` + datasource `outpatient_postgres`），§9 后新环境同理。
+- 部分唯一索引（`CREATE UNIQUE INDEX ... WHERE is_active`）上执行单条多行翻转 UPDATE（`SET is_active = (revision_id = %s)`）报 `UniqueViolation: uq_governed_flow_active_revision`——PG 非可延迟索引逐行检查，目标行先翻 TRUE 而旧行仍 TRUE 即瞬态重复。必须拆「先撤旧值、再启目标」两条语句（`flow_postgres.set_active_revision` 已修，pg_smoke 回归）。
+- 本克隆 `git stash list` 存有他人旧 stash（issue-20 时期）。`git stash push` 参数写错（如 `-- src/ -q` 中 `-q` 被当 pathspec）会静默失败，随后 `git stash pop` 弹出他人 stash 污染工作区（UU 冲突 + untracked 泄入）。pop 前必须 `git stash list` 确认栈顶；甄别预存失败用 `git worktree add` 干净检出复跑，不用 stash。
 ### 陷阱模板
 
 新增陷阱按以下格式写入，禁止自由格式：

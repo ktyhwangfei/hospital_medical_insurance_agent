@@ -420,3 +420,51 @@ T11 消费侧强制」三项全部落地。
 - 活库 op_* 指标 `source_field` 前缀（bjybdb）与种子（outpatient_postgres）
   不一致——快照 `datasource_id` 回显仅装饰性，建议数据治理对齐。
 - 移动端 390px 与键盘全路径矩阵（承 §5 陷阱 5，Phase 2 遗留）。
+
+## 12. Phase 3 补全：指标码驱动消费接入点（2026-09-07）
+
+兑现验收总则第二句「四字段可被 **query_planner** 和受控问数消费」中缺失的
+query_planner 侧接线：§11 只交付了按 flow_id 的消费通道，消费方（问数 /
+query_planner 层）实际只知**语义指标码**、不知 flow_id，缺一个可调用的
+契约解析接入点。
+
+### 12.1 交付物
+
+| 切片 | 内容 | 位置 |
+|------|------|------|
+| 契约解析消费 | `FlowQueryService.query_by_metrics`：指标码（全码 `<object_code>.<短码>` 或短码）→ 解析「已发布 flow 活跃版本中 consumer 契约 consumes ⊇ 请求码」的唯一契约 → 走既有 query() 的 T8/白名单/勾稽门禁链路，不设旁路 | `flow_query_service.py` |
+| API | `POST /flow/consume`（body 同 FlowQueryRequest）：无契约 422 `FLOW_CONSUMES_UNKNOWN_METRIC`（错误消息点名未覆盖码）、多契约 409 `FLOW_CONSUME_AMBIGUOUS`（拒绝猜测）、空请求 422 | `flow_routes.py` |
+| 错误码 | 26 → 27：`FLOW_CONSUME_AMBIGUOUS`；`FlowConsumeAmbiguousError(FlowStateInvalidError)`，路由映射子类先判 | `models.py` / `flow_routes.py` |
+| 附带缺陷修复 | `set_active_revision` 单条多行翻转 `SET is_active = (revision_id = %s)` 在部分唯一索引 `uq_governed_flow_active_revision` 上逐行检查触发瞬态重复（stash 甄别预存，pg_smoke 活库必红）；拆「先撤旧活跃、再启目标」两条语句，瞬态空窗方向安全（消费侧要求活跃存在，空窗即 fail closed） | `flow_postgres.py` |
+
+### 12.2 实现裁决
+
+1. **#36 锚点内核不强改**：`SemanticQuery` 必须携带 `scope.anchor`
+   （患者/就诊锚点），是「按实体锚点的受控聚合」内核；op_* 是全局快照
+   指标（单行全院口径），强行进入锚点模型会同时扭曲 #36 契约与指标
+   语义。裁决：query_planner 侧消费经**消费契约接入点**落地
+   （方案文档 §73「published views → query_planner」、#36 定位
+   「消费执行内核与安全边界，新增消费契约接入点」），执行必须落到
+   已发布语义和消费契约（issue 关键约束原文），而非把快照指标塞进
+   SQL 规划器。
+2. **解析边界=活跃发布版本**：契约匹配只看 `active.definition`（当前
+   flow 定义可能已进入新一轮草稿），与 query() 的消费口径一致。
+3. **拒猜纪律**：无契约覆盖 422（点名缺失码）；多个已发布契约覆盖
+   同组指标 409 拒绝猜测（不做跨 flow 联邦，那属于新能力）。
+4. **全码归一按来源对象域**：`mzjyxx.op_total_fee` → 按该 flow
+   SourceNode.object_code 剥前缀归一为契约短码；对象域不符的全码
+   保持原样 → 匹配不到契约 → fail closed；裸短码透传。
+
+### 12.3 验证证据
+
+- 先红后绿：`test_flow_query.py` 新增 6 例（全量解析/子集投影/无契约
+  422/未发布不构成契约/多契约 409/空请求 422）；冻结清单 26→27 同步。
+- 域内回归 273 passed（pg_smoke 修复后转绿）；全仓 unit+api
+  **2855 passed**，4 失败与既往甄别清单完全一致（预存）；
+  `test_policy_qa_outpatient_settlement_flow` 经干净 worktree（HEAD
+  341f4ac）复跑确证预存（答案脱敏断言，数据态类）。
+- **活体四路一致**：`POST /flow/consume` 四指标全码 → 解析到
+  `flow_op_outpatient_processed` rev2（artifact 85bbe9b1…），
+  12 笔 / 6643.69 / 基金 113.66 / 个人 6530.03，与 P3e 三路对数
+  （flow/query == processed-snapshot == mz_trade 直聚合）逐值一致，
+  双门禁通过；未知指标 live 422、子集投影 live 通过。
