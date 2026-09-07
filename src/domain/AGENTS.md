@@ -919,7 +919,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 #### 文件位置
 
 `src/domain/governed_flow/models.py`（DSL 契约）+ `src/domain/governed_flow/validation.py`（图与契约校验） + `src/domain/governed_flow/compiler.py`（View 编译器）
-+ `src/runtime/flow/flow_service.py`（生命周期服务）+ `src/data_platform/storage/flow/`（存储四件套）+ `src/runtime/api/flow_routes.py`（API）
++ `src/runtime/flow/flow_service.py`（生命周期服务）+ `src/runtime/flow/flow_query_service.py`（受控问数服务）+ `src/data_platform/storage/flow/`（存储与部署/读取适配器）+ `src/runtime/api/flow_routes.py`（API）
 
 #### 通用语言字典
 
@@ -951,6 +951,13 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 编译失败 | `FlowCompileError` | — | `ValueError` 子类 | args[0] 为 FLOW_* 错误码；标识符注入/分叉拓扑/非 view 物化一律拒绝 |
 | 校验阻断 | `FlowPublishBlockedError` | — | `ValueError` 子类 | 携带完整 `FlowValidationReport`；API 映射 422 fail closed |
 | 语义版本锁 | `compute_semantic_revision()` | — | 纯函数 | 数据集/关系/指标口径/派生依赖锚点的 sha256，发布时与 artifact_hash 一并锁定 |
+| 视图部署端口 | `FlowViewDeployer` | **Port** | `typing.Protocol` | publish/rollback 先经它把 CREATE OR REPLACE VIEW 落 PG 落地库再动证据；部署失败抛异常（fail closed） |
+| 视图读取端口 | `FlowViewReader` | **Port** | `typing.Protocol` | 受控问数只读已部署视图的列投影通道；内存模式 fail-closed 拒读 |
+| 受控问数服务 | `FlowQueryService` | **Domain Service** | 无状态服务类 | 只消费 published 活跃版本；消费前重编译验 artifact_hash（T8）；指标 ⊆ consumer.consumes、维度 ⊆ 维度绑定白名单（T11）；勾稽门禁逐行评估 |
+| 受控问数结果 | `FlowQueryResult` | **Value Object** | Pydantic `BaseModel` | 数值 + 发布证据（revision_id/artifact_hash/view_name）+ 门禁评估三件套；恒等失败时 unavailable 且数值扣发 |
+| 门禁评估结果 | `FlowGateResult` | **Value Object** | Pydantic `BaseModel` | check_type + passed + detail；失败 detail 必须携带差异事实 |
+| 证据不一致 | `FlowArtifactMismatchError` | — | `FlowStateInvalidError` 子类 | 发布证据 artifact_hash 与定义重编译产物不一致（T8 篡改拦截）；API 409 `FLOW_ARTIFACT_MISMATCH` |
+| 消费白名单拒止 | `FlowConsumeMetricUnknownError` / `FlowConsumeDimensionForbiddenError` | — | `ValueError` 子类 | 请求指标不在 consumer.consumes / 请求维度不在维度绑定白名单（T11）；API 422 |
 
 #### 业务规则（Phase 0 冻结）
 

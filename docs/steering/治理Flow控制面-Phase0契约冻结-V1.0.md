@@ -347,3 +347,76 @@ SQL Server bjybdb dbo.o_Trade（只读，同步 worker 经防腐层拉取）
 - 遗留（Phase 3）：落地视图状态码列类型数值化迁移（DROP+重建）或执行器
   注入 `NULLIF::NUMERIC`；质量门禁运行时执行（勾稽查数）；T11 消费侧
   权限强制；移动端 390px 与键盘全路径矩阵（§5 陷阱 5）。
+
+## 11. Phase 3 落地记录（2026-09-07：受控问数消费契约接线）
+
+兑现 issue #65 验收：**发布后四字段可被 query_planner 和受控问数消费，
+结果与既有路径一致**。§10 遗留的「编译产物可部署 / 门禁运行时执行 /
+T11 消费侧强制」三项全部落地。
+
+### 11.1 交付物
+
+| 切片 | 内容 | 位置 |
+|------|------|------|
+| P3a 编译器数值转型 | mz_trade text 落地状态四列（T_State/NP_Settle_State/T_HasRefundmented/T_CureType）数值比较渲染为 `NULLIF(col,'')::NUMERIC`，白名单 `_TEXT_ENCODED_NUMERIC_FIELDS` 按源数据集登记 | `src/domain/governed_flow/compiler.py` |
+| P3b 发布部署闭环 | `FlowViewDeployer` 端口 + PG 适配器（经 PostgreSQLClient）+ `get_flow_view_deployer` 工厂；publish **先部署 DDL 再落发布证据**；rollback 重编译目标定义验 artifact_hash（T8）后重部署再切活跃指针 | `flow_ports.py` / `flow_view_deployer.py` / `flow_factory.py` / `flow_service.py` |
+| P3c 消费执行器 | `FlowQueryService` + `FlowViewReader` 端口（PG 真读 / 内存 fail-closed）+ `POST /flow/{flow_id}/query`；`FlowQueryResult`/`FlowGateResult` 领域模型；错误码 24→26（新增 `FLOW_ARTIFACT_MISMATCH`、`FLOW_CONSUME_DIMENSION_FORBIDDEN`） | `flow_query_service.py` / `flow_view_reader.py` / `flow_routes.py` / `models.py` |
+| P3d 快照 PG 通道修复 | `/semantic/query/processed-snapshot` 弃 SQL Server pyodbc 多源路由，改 `_processed_view_sql`（PG 方言纯函数）+ `_read_processed_view_rows`（PG 读取 seam，测试 monkeypatch 点）；响应结构不变（Portal 卡片无感） | `semantic_routes.py` |
+| P3e 活体验证 | 真实 PG 发布→部署→消费三路对数（见 11.3） | 一次性脚本（已删） |
+
+### 11.2 实现裁决
+
+1. **转型在编译期**：NULLIF 转型进入 view_sql 即进入 artifact_hash；
+   部署期改写产物会破坏发布证据防篡改锁（T8），禁止。命中条件 =
+   源数据集已登记该列 **且** 比较值全为数值；字符串值（`IN ('')`）、
+   IS NULL、未登记列、其他数据集同名列一律不转型（`in_or_null` 的
+   `IS NULL` 侧保留原列——`NULLIF(col,'') IS NULL` 含空串，语义不同）。
+2. **部署顺序 fail closed**：compile → deploy → save revision。部署失败
+   无新证据、状态留 pending_review；反向顺序会产生「证据已发布但视图
+   不存在」的破契约状态。
+3. **消费前防篡改**：每次消费重编译活跃定义并校验 artifact_hash 与
+   发布证据一致（T8），不一致 409 `FLOW_ARTIFACT_MISMATCH` 拒止。
+4. **白名单边界**：请求指标 ⊆ consumer.consumes（复用
+   `FLOW_CONSUMES_UNKNOWN_METRIC`）；请求维度 ⊆ DimensionNode 绑定
+   field_codes（T11，新码 `FLOW_CONSUME_DIMENSION_FORBIDDEN`，422）。
+   permission_level × 调用方角色的对接是后续接入点，当前边界=绑定白名单。
+5. **门禁列随读全口径**：读取列 = 请求列 ∪ 勾稽恒等引用列，出参投影回
+   请求列——子集消费不会因未选指标缺列而误判恒等失败。恒等失败返回
+   200 + `quality_status=unavailable` + 数值扣发（可审计不报错）；
+   空数据集 SUM=NULL 按 0 参与勾稽（0=0+0 口径不破）。
+6. **快照直读 PG**：`outpatient_postgres` 从未注册为 SQL Server 源，
+   旧通道 live 必 503（测试桩掩盖）；§9 裁决后唯一正确通道是 PG 直读。
+
+### 11.3 验证证据
+
+- 单元/API/Flow：`src/tests/unit/governed_flow/` + flow API 17 +
+  lifecycle = **108 passed**（新增部署纪律 4 例：先部署后落证据 / 部署
+  失败无证据 / 回滚重部署逐字一致 / 篡改证据拒绝回滚）；消费契约
+  `test_flow_query.py` **10 passed**（默认全量+证据回带 / 子集投影 /
+  未知指标 422 / T11 越权 422 / 绑定维度放行 / 恒等失败扣发 /
+  NULL 过恒等 / 未发布 409 / 篡改证据 409 / 404）；快照
+  `test_semantic_processed_snapshot_api.py` **6 passed**（含 PG 方言
+  SQL 纯函数断言）。全仓 unit+api 回归 **2855 passed**，4 失败经
+  stash 复跑确证为预存（policy 检索 Milvus 数据态 / 脚本作用域 / 
+  skill 导入 PG 态），与本切片无关。
+- **活体三路对数**（真实 hospital_mcp，一次性脚本）：
+  A `POST /flow/{id}/query` == B `/semantic/query/processed-snapshot`
+  == C 直接聚合 `public.mz_trade`（口径句 v4 手写 SQL 独立 oracle）：
+  12 笔 / 6643.69 / 113.66 / 6530.03 全等；门禁 caliber_signoff +
+  identity_assertion 双通过；T11 越权维度与未知指标 live 422。
+  发布真实部署 `v_flow_flow_op_outpatient_processed` 至 hospital_mcp。
+  **fail closed 实证**：切换迁移前的发布在部署阶段 500，无证据落库、
+  状态留 pending_review，二次修复后才成功发布。
+- **活库数据修复**：注册中心 mz_trade/mz_fee_item 数据集映射仍为
+  §9 前旧登记（`dbo.o_Trade`），对活库执行官方迁移
+  `switch_outpatient_query_model_to_postgres`（→ public.* +
+  outpatient_postgres）。注意 `ensure_outpatient_query_model` 遇旧名
+  即跳过不会自愈——§9 后的环境必须显式跑迁移。
+
+### 11.4 遗留（后续）
+
+- permission_level × 调用方角色的消费侧强制（当前边界=维度绑定白名单）。
+- 消费结果的维度值域展示映射（MZ_CURE_TYPE 编码→名称）。
+- 活库 op_* 指标 `source_field` 前缀（bjybdb）与种子（outpatient_postgres）
+  不一致——快照 `datasource_id` 回显仅装饰性，建议数据治理对齐。
+- 移动端 390px 与键盘全路径矩阵（承 §5 陷阱 5，Phase 2 遗留）。
