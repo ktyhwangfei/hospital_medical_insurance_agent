@@ -879,7 +879,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - 仅 draft / pending_review 状态可编辑内容（`ensure_editable`）；active 需先退役，retired 只读
 - 任何内容变更（编辑/流转/同义表达运营）均递增 `version`，存储层乐观锁冲突抛 `TrustedQuestionConflictError`
 - approve / reject 必须留痕 `reviewed_by` / `reviewed_at`；冷启动批量导入一律进入 draft，禁止直接 active
-- `query_plan` 为语义层 `LogicalQueryPlan` 的不透明 JSONB 快照，领域层不依赖 semantic_layer
+- `query_plan` 为语义层 `SemanticQuery` 的不透明 JSONB 快照，领域层不依赖 semantic_layer
+- approve 前必须绑定合法的 `SemanticQuery` query_plan（路由层闸门，400 `QUERY_PLAN_REQUIRED`/`QUERY_PLAN_INVALID`），无计划问题不得进入 active
 
 ---
 

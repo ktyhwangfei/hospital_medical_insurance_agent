@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from src.data_platform.storage.trusted_question.trusted_question_in_memory import (
     InMemoryTrustedQuestionStorage,
 )
+from src.domain.trusted_qa.models import TrustedQuestion, TrustedQuestionStatus
 from src.runtime.api.app import create_app
 from src.runtime.api.trusted_question_routes import (
     get_semantic_query_service,
@@ -25,6 +26,18 @@ from src.semantic_layer.query_planner import (
 
 PREFIX = "/api/v1/medical-insurance-ai-agent/trusted-questions"
 
+# 合法 SemanticQuery 快照：approve 闸门上线后，激活可信问题必须绑定
+_VALID_QUERY_PLAN = {
+    "object_code": "outpatient_settlement",
+    "scope": {
+        "entity_code": "settlement",
+        "anchor": {"field_code": "settlement_id", "value": "E001"},
+        "query_scope": "whole_settlement",
+    },
+    "metrics": ["total_cost"],
+    "limit": 100,
+}
+
 
 @pytest.fixture()
 def client() -> TestClient:
@@ -35,6 +48,8 @@ def client() -> TestClient:
 
 
 def _create(client: TestClient, question: str = "门诊报销比例是多少", **extra) -> dict:
+    # 默认绑定合法 query_plan（approve 闸门要求）；需无 plan 场景时显式传 query_plan=None
+    extra.setdefault("query_plan", _VALID_QUERY_PLAN)
     response = client.post(
         PREFIX,
         json={"standard_question": question, "created_by": "tester", **extra},
@@ -162,6 +177,43 @@ class TestReviewFlow:
         )
 
 
+class TestApproveQueryPlanGate:
+    """approve 闸门：无 query_plan 或计划非法的可信问题不得进入 active。"""
+
+    def test_approve_without_query_plan_400(self, client: TestClient) -> None:
+        created = _create(client, query_plan=None)
+        qid = created["question_id"]
+        client.post(f"{PREFIX}/{qid}/submit-review", json={"expected_version": 1})
+        response = client.post(
+            f"{PREFIX}/{qid}/approve",
+            json={"expected_version": 2, "operator": "reviewer-1"},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"]["error_code"] == "QUERY_PLAN_REQUIRED"
+        # 状态保持 pending_review，未发生流转
+        assert client.get(f"{PREFIX}/{qid}").json()["status"] == "pending_review"
+
+    def test_approve_with_invalid_query_plan_400(self, client: TestClient) -> None:
+        created = _create(client, query_plan={})
+        qid = created["question_id"]
+        client.post(f"{PREFIX}/{qid}/submit-review", json={"expected_version": 1})
+        response = client.post(
+            f"{PREFIX}/{qid}/approve",
+            json={"expected_version": 2, "operator": "reviewer-1"},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"]["error_code"] == "QUERY_PLAN_INVALID"
+
+    def test_draft_approve_still_409_not_plan_gate(self, client: TestClient) -> None:
+        # 非法流转优先由状态机裁定 409，不触发 plan 闸门
+        created = _create(client, query_plan=None)
+        response = client.post(
+            f"{PREFIX}/{created['question_id']}/approve",
+            json={"expected_version": 1, "operator": "reviewer-1"},
+        )
+        assert response.status_code == 409
+
+
 class TestSynonymOperations:
     def test_add_and_remove_synonym(self, client: TestClient) -> None:
         created = _create(client)
@@ -243,17 +295,6 @@ class TestMatch:
 
 # ── 命中执行闭环（Slice 6）─────────────────────────────────────
 
-_VALID_QUERY_PLAN = {
-    "object_code": "outpatient_settlement",
-    "scope": {
-        "entity_code": "settlement",
-        "anchor": {"field_code": "settlement_id", "value": "E001"},
-        "query_scope": "whole_settlement",
-    },
-    "metrics": ["total_cost"],
-    "limit": 100,
-}
-
 
 def _stub_service(
     rows: list[dict] | None = None, error: Exception | None = None
@@ -296,10 +337,23 @@ class TestMatchAndExecute:
         assert body["answer"]["outcome"] == "executed"
         assert body["answer"]["result"]["rows"] == [{"total_cost": 100.0}]
 
-    def test_matched_without_plan_reports_no_plan(self, exec_client: TestClient) -> None:
-        created = _create(exec_client)
-        _activate(exec_client, created["question_id"])
-        body = exec_client.post(
+    def test_matched_without_plan_reports_no_plan(self) -> None:
+        # 防御性路径：approve 闸门上线后，无 plan 问题无法经 API 进入 active，
+        # 仅存量/异常数据可能出现——直接写库模拟一条 active 无计划问题
+        app = create_app()
+        store = InMemoryTrustedQuestionStorage()
+        app.dependency_overrides[get_trusted_question_store] = lambda: store
+        app.dependency_overrides[get_semantic_query_service] = lambda: _stub_service()
+        client = TestClient(app)
+        store.save_question(
+            TrustedQuestion(
+                question_id="tq_legacy_no_plan",
+                standard_question="门诊报销比例是多少",
+                status=TrustedQuestionStatus.ACTIVE,
+                created_by="legacy-seed",
+            )
+        )
+        body = client.post(
             f"{PREFIX}/match-and-execute", json={"question": "门诊报销比例是多少"}
         ).json()
         assert body["outcome"] == "matched"

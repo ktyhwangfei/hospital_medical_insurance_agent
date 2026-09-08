@@ -83,7 +83,7 @@ class TrustedQuestion(BaseModel):
 
     携带乐观锁 ``version``，任何内容变更（含同义表达运营、状态流转）递增；
     存储层冲突时抛 ``TrustedQuestionConflictError``。
-    ``query_plan`` 为语义层 ``LogicalQueryPlan`` 的不透明快照（JSONB），
+    ``query_plan`` 为语义层 ``SemanticQuery`` 的不透明快照（JSONB），
     领域层不依赖 semantic_layer，由服务层负责构造与回放。
     """
 

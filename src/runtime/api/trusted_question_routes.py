@@ -13,7 +13,7 @@ from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from src.data_platform.storage.trusted_question.trusted_question_ports import (
     TrustedQuestionConflictError,
@@ -36,7 +36,7 @@ from src.runtime.trusted_qa.models import (
     TrustedQuestionMatchOutcome,
     TrustedQuestionMatchResult,
 )
-from src.semantic_layer.query_planner import SemanticQueryService
+from src.semantic_layer.query_planner import SemanticQuery, SemanticQueryService
 from src.shared.schemas.responses import error_detail
 
 logger = logging.getLogger(__name__)
@@ -286,6 +286,30 @@ def approve_trusted_question(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_detail("REVIEWER_REQUIRED", "审核通过必须声明审核人 operator"),
         )
+    question = store.get_question(question_id)
+    if question is None:
+        raise _not_found(TrustedQuestionNotFoundError(f"可信问题不存在: {question_id}"))
+    # 查询计划闸门：仅在合法流转（pending_review → active）时强制校验；
+    # 非法流转仍由状态机裁定为 409。可信问题命中后靠 query_plan 回放执行，
+    # 无计划或计划非法的问题进入 active 只会产出 no_plan/执行失败
+    if question.status is TrustedQuestionStatus.PENDING_REVIEW:
+        if question.query_plan is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_detail(
+                    "QUERY_PLAN_REQUIRED", "审核通过前必须绑定查询计划 query_plan"
+                ),
+            )
+        try:
+            SemanticQuery.model_validate(question.query_plan)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_detail(
+                    "QUERY_PLAN_INVALID",
+                    f"query_plan 不是合法的 SemanticQuery 快照: {exc.errors()[0]['msg']}",
+                ),
+            ) from exc
     return _transition(store, question_id, TrustedQuestionStatus.ACTIVE, request)
 
 

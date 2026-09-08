@@ -74,6 +74,8 @@ export async function createTrustedQuestion(input: {
   standard_question: string
   created_by: string
   synonyms?: string[]
+  query_plan?: Record<string, unknown>
+  metric_codes?: string[]
 }): Promise<TrustedQuestion> {
   return requestJson<TrustedQuestion>('/trusted-questions', {
     method: 'POST',
@@ -166,6 +168,42 @@ export async function matchTrustedQuestion(input: {
   role?: string
 }): Promise<TrustedQuestionMatchResult> {
   return requestJson<TrustedQuestionMatchResult>('/trusted-questions/match', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+// ── 命中执行闭环（match-and-execute）──
+
+export type TrustedAnswerOutcome = 'executed' | 'no_plan' | 'trait_violation' | 'execution_failed'
+
+export interface TrustedAnswerResultData {
+  rows: Record<string, unknown>[]
+  quality_status: 'complete' | 'partial' | 'unavailable'
+  result_grain?: string[]
+  query_scope?: string
+  warnings?: string[]
+}
+
+export interface TrustedAnswerResult {
+  outcome: TrustedAnswerOutcome
+  question_id: string
+  result: TrustedAnswerResultData | null
+  violations: string[]
+}
+
+export interface TrustedMatchAndExecuteResult {
+  outcome: 'matched' | 'candidates' | 'no_match'
+  question: TrustedQuestion | null
+  candidates: TrustedQuestionCandidate[]
+  answer: TrustedAnswerResult | null
+}
+
+export async function matchAndExecuteTrustedQuestion(input: {
+  question: string
+  role?: string
+}): Promise<TrustedMatchAndExecuteResult> {
+  return requestJson<TrustedMatchAndExecuteResult>('/trusted-questions/match-and-execute', {
     method: 'POST',
     body: JSON.stringify(input),
   })
