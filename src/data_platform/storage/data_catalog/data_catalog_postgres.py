@@ -15,7 +15,12 @@ from typing import Any
 
 from src.config.production import DATABASE_URL
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
-from src.domain.data_catalog.models import CatalogAsset, CatalogAssetType
+from src.domain.data_catalog.models import (
+    CatalogAsset,
+    CatalogAssetType,
+    CatalogColumn,
+    CatalogLineageEdge,
+)
 
 DATA_CATALOG_TABLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS data_catalog_assets (
@@ -26,6 +31,7 @@ CREATE TABLE IF NOT EXISTS data_catalog_assets (
     description TEXT NOT NULL DEFAULT '',
     owner VARCHAR(64) NOT NULL DEFAULT '',
     refresh_freq VARCHAR(64) NOT NULL DEFAULT '',
+    tags JSONB NOT NULL DEFAULT '[]',
     value_ranges JSONB NOT NULL DEFAULT '{}',
     sample_summary JSONB NOT NULL DEFAULT '{}',
     semantic_object_code VARCHAR(128),
@@ -39,6 +45,32 @@ CREATE INDEX IF NOT EXISTS idx_data_catalog_assets_type
     ON data_catalog_assets(asset_type);
 CREATE INDEX IF NOT EXISTS idx_data_catalog_assets_name
     ON data_catalog_assets(name);
+
+CREATE TABLE IF NOT EXISTS data_catalog_columns (
+    column_id VARCHAR(96) PRIMARY KEY,
+    asset_id VARCHAR(96) NOT NULL,
+    column_name VARCHAR(256) NOT NULL,
+    name VARCHAR(256) NOT NULL DEFAULT '',
+    data_type VARCHAR(64) NOT NULL DEFAULT '',
+    field_role VARCHAR(32) NOT NULL DEFAULT '',
+    nullable BOOLEAN NOT NULL DEFAULT TRUE,
+    value_domain VARCHAR(128),
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (asset_id, column_name)
+);
+CREATE INDEX IF NOT EXISTS idx_data_catalog_columns_asset
+    ON data_catalog_columns(asset_id);
+
+CREATE TABLE IF NOT EXISTS data_catalog_lineage_edges (
+    edge_id VARCHAR(96) PRIMARY KEY,
+    upstream_asset_id VARCHAR(96) NOT NULL,
+    downstream_asset_id VARCHAR(96) NOT NULL,
+    relation VARCHAR(32) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_data_catalog_lineage_upstream
+    ON data_catalog_lineage_edges(upstream_asset_id);
+CREATE INDEX IF NOT EXISTS idx_data_catalog_lineage_downstream
+    ON data_catalog_lineage_edges(downstream_asset_id);
 """
 
 # CREATE+ALTER 双写：旧库不重建，逐列补列（与 CREATE 列清单一一对应）
@@ -50,6 +82,7 @@ ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS name VARCHAR(256);
 ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
 ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS owner VARCHAR(64) NOT NULL DEFAULT '';
 ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS refresh_freq VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS value_ranges JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS sample_summary JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS semantic_object_code VARCHAR(128);
@@ -58,7 +91,47 @@ ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS last_batch_id VARCHAR(6
 ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS source_ref JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE data_catalog_assets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS column_id VARCHAR(96);
+ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS asset_id VARCHAR(96);
+ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS column_name VARCHAR(256);
+ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS name VARCHAR(256) NOT NULL DEFAULT '';
+ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS data_type VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS field_role VARCHAR(32) NOT NULL DEFAULT '';
+ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS nullable BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS value_domain VARCHAR(128);
+ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS ordinal INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE data_catalog_lineage_edges ADD COLUMN IF NOT EXISTS edge_id VARCHAR(96);
+ALTER TABLE data_catalog_lineage_edges ADD COLUMN IF NOT EXISTS upstream_asset_id VARCHAR(96);
+ALTER TABLE data_catalog_lineage_edges ADD COLUMN IF NOT EXISTS downstream_asset_id VARCHAR(96);
+ALTER TABLE data_catalog_lineage_edges ADD COLUMN IF NOT EXISTS relation VARCHAR(32);
 """
+
+
+def _asset_filters(
+    asset_type: CatalogAssetType | None,
+    keyword: str | None,
+    owner: str | None,
+    tag: str | None,
+) -> tuple[str, list[Any]]:
+    """list/count 共用的 WHERE 子句组装（参数化，禁止字符串拼接值）。"""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if asset_type is not None:
+        clauses.append("asset_type = %s")
+        params.append(asset_type.value)
+    if keyword:
+        clauses.append("(name ILIKE %s OR description ILIKE %s OR asset_key ILIKE %s)")
+        like = f"%{keyword}%"
+        params.extend([like, like, like])
+    if owner:
+        clauses.append("owner = %s")
+        params.append(owner)
+    if tag:
+        # JSONB 数组包含匹配
+        clauses.append("tags @> %s::jsonb")
+        params.append(json.dumps([tag], ensure_ascii=False))
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
 
 
 class PostgresDataCatalogStorage:
@@ -98,21 +171,12 @@ class PostgresDataCatalogStorage:
         *,
         asset_type: CatalogAssetType | None = None,
         keyword: str | None = None,
+        owner: str | None = None,
+        tag: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[CatalogAsset]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if asset_type is not None:
-            clauses.append("asset_type = %s")
-            params.append(asset_type.value)
-        if keyword:
-            clauses.append(
-                "(name ILIKE %s OR description ILIKE %s OR asset_key ILIKE %s)"
-            )
-            like = f"%{keyword}%"
-            params.extend([like, like, like])
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        where, params = _asset_filters(asset_type, keyword, owner, tag)
         client = self._get_client()
         rows = client.execute(
             "SELECT * FROM data_catalog_assets"
@@ -122,6 +186,22 @@ class PostgresDataCatalogStorage:
         )
         return [self._row_to_asset(row) for row in rows]
 
+    def count_assets(
+        self,
+        *,
+        asset_type: CatalogAssetType | None = None,
+        keyword: str | None = None,
+        owner: str | None = None,
+        tag: str | None = None,
+    ) -> int:
+        where, params = _asset_filters(asset_type, keyword, owner, tag)
+        client = self._get_client()
+        rows = client.execute(
+            f"SELECT COUNT(*) AS c FROM data_catalog_assets{where}",  # noqa: S608
+            tuple(params),
+        )
+        return int(rows[0]["c"])
+
     # ── 写入 ────────────────────────────────────────────────────
 
     def upsert_asset(self, asset: CatalogAsset) -> CatalogAsset:
@@ -130,15 +210,16 @@ class PostgresDataCatalogStorage:
             """
             INSERT INTO data_catalog_assets (
                 asset_id, asset_type, asset_key, name, description, owner,
-                refresh_freq, value_ranges, sample_summary,
+                refresh_freq, tags, value_ranges, sample_summary,
                 semantic_object_code, semantic_version, last_batch_id,
                 source_ref, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (asset_key) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
                 owner = EXCLUDED.owner,
                 refresh_freq = EXCLUDED.refresh_freq,
+                tags = EXCLUDED.tags,
                 value_ranges = EXCLUDED.value_ranges,
                 sample_summary = EXCLUDED.sample_summary,
                 semantic_object_code = EXCLUDED.semantic_object_code,
@@ -156,6 +237,7 @@ class PostgresDataCatalogStorage:
                 asset.description,
                 asset.owner,
                 asset.refresh_freq,
+                json.dumps(asset.tags, ensure_ascii=False),
                 json.dumps(asset.value_ranges, ensure_ascii=False),
                 json.dumps(asset.sample_summary, ensure_ascii=False),
                 asset.semantic_object_code,
@@ -179,6 +261,102 @@ class PostgresDataCatalogStorage:
         )
         return len(rows)
 
+    # ── 列级元数据 ──────────────────────────────────────────────
+
+    def replace_columns(self, columns: list[CatalogColumn]) -> None:
+        client = self._get_client()
+        client.execute("DELETE FROM data_catalog_columns")
+        for col in columns:
+            client.execute(
+                """
+                INSERT INTO data_catalog_columns (
+                    column_id, asset_id, column_name, name, data_type,
+                    field_role, nullable, value_domain, ordinal
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (asset_id, column_name) DO UPDATE SET
+                    column_id = EXCLUDED.column_id,
+                    name = EXCLUDED.name,
+                    data_type = EXCLUDED.data_type,
+                    field_role = EXCLUDED.field_role,
+                    nullable = EXCLUDED.nullable,
+                    value_domain = EXCLUDED.value_domain,
+                    ordinal = EXCLUDED.ordinal
+                """,
+                (
+                    col.column_id,
+                    col.asset_id,
+                    col.column_name,
+                    col.name,
+                    col.data_type,
+                    col.field_role,
+                    col.nullable,
+                    col.value_domain,
+                    col.ordinal,
+                ),
+            )
+
+    def list_columns(self, asset_id: str) -> list[CatalogColumn]:
+        client = self._get_client()
+        rows = client.execute(
+            "SELECT * FROM data_catalog_columns WHERE asset_id = %s"
+            " ORDER BY ordinal, column_name",
+            (asset_id,),
+        )
+        return [
+            CatalogColumn(
+                column_id=row["column_id"],
+                asset_id=row["asset_id"],
+                column_name=row["column_name"],
+                name=row.get("name") or "",
+                data_type=row.get("data_type") or "",
+                field_role=row.get("field_role") or "",
+                nullable=bool(row.get("nullable", True)),
+                value_domain=row.get("value_domain"),
+                ordinal=int(row.get("ordinal") or 0),
+            )
+            for row in rows
+        ]
+
+    # ── 血缘边 ──────────────────────────────────────────────────
+
+    def replace_lineage_edges(self, edges: list[CatalogLineageEdge]) -> None:
+        client = self._get_client()
+        client.execute("DELETE FROM data_catalog_lineage_edges")
+        for edge in edges:
+            client.execute(
+                """
+                INSERT INTO data_catalog_lineage_edges (
+                    edge_id, upstream_asset_id, downstream_asset_id, relation
+                ) VALUES (%s, %s, %s, %s)
+                ON CONFLICT (edge_id) DO UPDATE SET
+                    upstream_asset_id = EXCLUDED.upstream_asset_id,
+                    downstream_asset_id = EXCLUDED.downstream_asset_id,
+                    relation = EXCLUDED.relation
+                """,
+                (
+                    edge.edge_id,
+                    edge.upstream_asset_id,
+                    edge.downstream_asset_id,
+                    edge.relation,
+                ),
+            )
+
+    def list_lineage_edges(self) -> list[CatalogLineageEdge]:
+        client = self._get_client()
+        rows = client.execute(
+            "SELECT * FROM data_catalog_lineage_edges"
+            " ORDER BY upstream_asset_id, downstream_asset_id, relation"
+        )
+        return [
+            CatalogLineageEdge(
+                edge_id=row["edge_id"],
+                upstream_asset_id=row["upstream_asset_id"],
+                downstream_asset_id=row["downstream_asset_id"],
+                relation=row["relation"],
+            )
+            for row in rows
+        ]
+
     # ── 行映射 ──────────────────────────────────────────────────
 
     @staticmethod
@@ -198,6 +376,7 @@ class PostgresDataCatalogStorage:
             description=row.get("description") or "",
             owner=row.get("owner") or "",
             refresh_freq=row.get("refresh_freq") or "",
+            tags=cls._json_value(row.get("tags"), []),
             value_ranges=cls._json_value(row.get("value_ranges"), {}),
             sample_summary=cls._json_value(row.get("sample_summary"), {}),
             semantic_object_code=row.get("semantic_object_code"),

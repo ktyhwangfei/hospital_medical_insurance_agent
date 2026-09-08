@@ -1,13 +1,14 @@
-"""数据目录 API（Issue #38 Slice 3）。
+"""数据目录 API（Issue #38 Slice 3 / 开源对标增强）。
 
 前缀：/api/v1/medical-insurance-ai-agent/data-catalog
 
-- ``GET /assets``：统一资产搜索（类型过滤 + 关键字 + 分页）
+- ``GET /assets``：统一资产搜索（类型/owner/tag 分面 + 关键字 + total 真分页）
 - ``GET /assets/{asset_id}``：资产详情（含溯源字段）
-- ``POST /refresh``：触发目录构建器全量刷新（治理支撑操作）
+- ``GET /assets/{asset_id}/columns``：资产字段清单（源表列 / 向量集合 schema）
+- ``POST /refresh``：触发目录构建器全量刷新（治理支撑操作；列与血缘边随刷新重建）
 - ``GET /sla``：SLA 看板（门诊同步 P95/质量状态 + 质量门禁 golden_score）
 
-血缘端点（``/assets/{asset_id}/lineage``）属 Slice 4 动态推导，本文件不含。
+血缘端点（``/assets/{asset_id}/lineage``）读取刷新时落表的血缘边。
 """
 
 from __future__ import annotations
@@ -21,7 +22,11 @@ from pydantic import BaseModel, Field
 from src.data_platform.storage.data_catalog.data_catalog_ports import (
     DataCatalogStorage,
 )
-from src.domain.data_catalog.models import CatalogAsset, CatalogAssetType
+from src.domain.data_catalog.models import (
+    CatalogAsset,
+    CatalogAssetType,
+    CatalogColumn,
+)
 from src.runtime.data_catalog.lineage import AssetLineage, derive_lineage
 from src.shared.schemas.responses import error_detail
 
@@ -48,13 +53,20 @@ DataCatalogStoreDependency = Annotated[
 
 class CatalogAssetListResponse(BaseModel):
     items: list[CatalogAsset]
+    total: int
     limit: int
     offset: int
+
+
+class CatalogColumnListResponse(BaseModel):
+    items: list[CatalogColumn]
 
 
 class CatalogRefreshResponse(BaseModel):
     upserted: int
     pruned: int
+    columns: int = 0
+    edges: int = 0
 
 
 class OutpatientSyncSla(BaseModel):
@@ -91,14 +103,21 @@ def list_catalog_assets(
     store: DataCatalogStoreDependency,
     asset_type: CatalogAssetType | None = Query(default=None),
     keyword: str | None = Query(default=None),
+    owner: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> CatalogAssetListResponse:
-    """统一资产搜索：跨源表/语义对象/指标/消费方四类资产。"""
+    """统一资产搜索：跨源表/语义对象/指标/消费方/向量集合五类资产。
+
+    支持 owner/tag 分面过滤；``total`` 为同过滤条件总数，供前端真分页。
+    """
     items = store.list_assets(
-        asset_type=asset_type, keyword=keyword, limit=limit, offset=offset
+        asset_type=asset_type, keyword=keyword, owner=owner, tag=tag,
+        limit=limit, offset=offset,
     )
-    return CatalogAssetListResponse(items=items, limit=limit, offset=offset)
+    total = store.count_assets(asset_type=asset_type, keyword=keyword, owner=owner, tag=tag)
+    return CatalogAssetListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/data-catalog/assets/{asset_id}", response_model=CatalogAsset)
@@ -116,7 +135,24 @@ def get_catalog_asset(
     return asset
 
 
-# ── 血缘端点（Slice 4 动态推导）────────────────────────────────
+@router.get(
+    "/data-catalog/assets/{asset_id}/columns",
+    response_model=CatalogColumnListResponse,
+)
+def get_catalog_asset_columns(
+    asset_id: str,
+    store: DataCatalogStoreDependency,
+) -> CatalogColumnListResponse:
+    """资产字段清单：源表列（语义字段同源）/ 向量集合 schema 字段。"""
+    if store.get_asset(asset_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_detail("CATALOG_ASSET_NOT_FOUND", f"资产不存在: {asset_id}"),
+        )
+    return CatalogColumnListResponse(items=store.list_columns(asset_id))
+
+
+# ── 血缘端点（Slice 4：刷新时推导落表）───────────────────────────
 
 
 @router.get("/data-catalog/assets/{asset_id}/lineage", response_model=AssetLineage)
@@ -126,7 +162,7 @@ def get_catalog_asset_lineage(
 ) -> AssetLineage:
     """血缘子图：以资产为根双向遍历（源表→指标→语义对象→消费方）。
 
-    零新表：边从目录快照字段动态推导，与资产同刷同新；
+    边在目录刷新时推导并落表（``data_catalog_lineage_edges``），查询走索引；
     节点携带 semantic_version/last_batch_id 供溯源展示。
     """
     lineage = derive_lineage(store, asset_id)

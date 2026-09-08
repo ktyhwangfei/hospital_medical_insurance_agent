@@ -8,12 +8,14 @@ from src.runtime.data_catalog.builder import (
     PORTAL_PAGE_CONSUMERS,
     _asset_id,
     build_catalog_assets,
+    build_catalog_columns,
 )
 from src.semantic_layer.models import (
     BusinessObject,
     BusinessObjectVersion,
     ObjectVersionMetric,
     SemanticDataset,
+    SemanticField,
 )
 
 
@@ -175,3 +177,157 @@ class TestBuildCatalogAssets:
     def test_deterministic_asset_id(self) -> None:
         assert _asset_id("metric:mzjyxx.T_FundPay") == _asset_id("metric:mzjyxx.T_FundPay")
         assert _asset_id("metric:a") != _asset_id("metric:b")
+
+
+def _version_with_fields() -> BusinessObjectVersion:
+    return BusinessObjectVersion(
+        version_id="v4-id",
+        object_code="mzjyxx",
+        version="4",
+        snapshot={},
+        metrics=[_metric()],
+        datasets=[_dataset()],
+        keys=[],
+        fields=[
+            SemanticField(
+                field_code="mz_trade.trade_no",
+                dataset_code="mz_trade",
+                column_name="trade_no",
+                name="交易流水号",
+                field_role="identifier",
+                semantic_type="String",
+                nullable=False,
+                status="published",
+            ),
+            SemanticField(
+                field_code="mz_trade.pay_type",
+                dataset_code="mz_trade",
+                column_name="pay_type",
+                name="支付类别",
+                field_role="dimension",
+                semantic_type="Enum",
+                value_domain="PAY_TYPE",
+                status="published",
+            ),
+        ],
+        published_by="data-team",
+    )
+
+
+class TestGovernanceFields:
+    """开源对标增强：owner 真实来源 / 确定性 tags / 值域回填。"""
+
+    def test_semantic_object_owner_from_published_by(self) -> None:
+        """对象模型无 owner 字段，目录 owner 取发布人（真实来源，不臆造）。"""
+        assets = build_catalog_assets(
+            objects=[_object()],
+            versions_by_object={"mzjyxx": _version_with_fields()},
+        )
+        obj = next(a for a in assets if a.asset_type == CatalogAssetType.SEMANTIC_OBJECT)
+        assert obj.owner == "data-team"
+
+    def test_tags_deterministic(self) -> None:
+        """tags 来自确定性属性：业务域 / 门诊同步标记 / 消费方类别。"""
+        assets = build_catalog_assets(
+            objects=[_object()],
+            versions_by_object={"mzjyxx": _version()},
+            outpatient_dataset_codes={"mz_trade"},
+        )
+        obj = next(a for a in assets if a.asset_type == CatalogAssetType.SEMANTIC_OBJECT)
+        assert obj.tags == ["outpatient"]
+        table = next(a for a in assets if a.asset_type == CatalogAssetType.SOURCE_TABLE)
+        assert table.tags == ["outpatient", "门诊同步"]
+        page = next(
+            a for a in assets
+            if a.asset_type == CatalogAssetType.CONSUMER
+            and a.source_ref.get("kind") == "portal_page"
+        )
+        assert page.tags == ["portal页面"]
+
+    def test_value_ranges_backfilled_from_value_domains(self) -> None:
+        """value_ranges 回填：字段声明 value_domain 且码表存在才写入。"""
+        assets = build_catalog_assets(
+            objects=[_object()],
+            versions_by_object={"mzjyxx": _version_with_fields()},
+            value_domains={"PAY_TYPE": ["统筹", "自费"]},
+        )
+        table = next(a for a in assets if a.asset_type == CatalogAssetType.SOURCE_TABLE)
+        assert table.value_ranges == {"mz_trade.pay_type": ["统筹", "自费"]}
+
+    def test_value_ranges_skip_missing_domain(self) -> None:
+        """值域码表缺失时不写入（不臆造枚举值）。"""
+        assets = build_catalog_assets(
+            objects=[_object()],
+            versions_by_object={"mzjyxx": _version_with_fields()},
+            value_domains={},
+        )
+        table = next(a for a in assets if a.asset_type == CatalogAssetType.SOURCE_TABLE)
+        assert table.value_ranges == {}
+
+    def test_policy_qa_page_carries_business_object(self) -> None:
+        """policy-qa 页面声明真实消费的语义对象，可产生 consumed_by 血缘边。"""
+        assets = build_catalog_assets(objects=[], versions_by_object={})
+        page = next(
+            a for a in assets
+            if a.asset_key == "consumer:page:/policy-qa"
+        )
+        assert page.source_ref.get("business_object") == "mzjyxx"
+
+
+class TestVectorCollections:
+    """第五类资产：Milvus 向量集合（政策知识 RAG）。"""
+
+    def _collections(self) -> list[dict]:
+        return [
+            {
+                "name": "policy_rules_v2",
+                "description": "政策规则主集合",
+                "row_count": 1024,
+                "enable_dynamic_field": True,
+                "fields": [
+                    {"name": "rule_id", "type": "VARCHAR", "is_primary": True},
+                    {"name": "embedding", "type": "FLOAT_VECTOR"},
+                ],
+            }
+        ]
+
+    def test_vector_collection_asset(self) -> None:
+        assets = build_catalog_assets(
+            objects=[], versions_by_object={}, collections=self._collections()
+        )
+        col = next(
+            a for a in assets if a.asset_type == CatalogAssetType.VECTOR_COLLECTION
+        )
+        assert col.asset_key == "vector_collection:policy_rules_v2"
+        assert col.description == "政策规则主集合"
+        assert col.tags == ["政策知识", "向量检索"]
+        # 脱敏摘要：仅计数与 schema 标记
+        assert col.sample_summary == {"row_count": 1024, "enable_dynamic_field": True}
+
+    def test_vector_collection_columns(self) -> None:
+        """集合 schema 字段入列快照：向量/主键/标量角色识别。"""
+        columns = build_catalog_columns(
+            versions_by_object={}, collections=self._collections()
+        )
+        by_name = {c.column_name: c for c in columns}
+        assert by_name["rule_id"].field_role == "primary_key"
+        assert by_name["rule_id"].data_type == "VARCHAR"
+        assert by_name["embedding"].field_role == "vector"
+        asset_id = _asset_id("vector_collection:policy_rules_v2")
+        assert all(c.asset_id == asset_id for c in columns)
+
+
+class TestBuildCatalogColumns:
+    """source_table 列来自发布版本 SemanticField（同源语义声明）。"""
+
+    def test_source_table_columns(self) -> None:
+        columns = build_catalog_columns(
+            versions_by_object={"mzjyxx": _version_with_fields()}
+        )
+        assert [c.column_name for c in columns] == ["trade_no", "pay_type"]
+        trade_no = columns[0]
+        assert trade_no.asset_id == _asset_id("source_table:mz_trade")
+        assert trade_no.field_role == "identifier"
+        assert trade_no.nullable is False
+        assert columns[1].value_domain == "PAY_TYPE"
+        assert columns[1].ordinal == 1

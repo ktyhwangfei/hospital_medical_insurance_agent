@@ -886,14 +886,16 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ### 13.8. 数据目录上下文（Data Catalog）
 
-> Issue #38 新增。数据资产目录：源表字段 → 语义对象/指标 → 消费方（skill/页面）三级资产的可发现、可理解、可信任视图。实现：`src/domain/data_catalog/models.py`、`src/data_platform/storage/data_catalog/`。
+> Issue #38 新增。数据资产目录：源表字段 → 语义对象/指标 → 消费方（skill/页面）+ 向量集合（Milvus 政策知识 RAG 资产）的可发现、可理解、可信任视图。实现：`src/domain/data_catalog/models.py`、`src/data_platform/storage/data_catalog/`。
 
 #### 通用语言字典
 
 | 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
 |---------|---------|-------------|------|------|
-| 数据资产 | `CatalogAsset` | **Entity** | Pydantic `BaseModel`（frozen） | 目录中的一条可检索资产；携带业务口径、负责人、更新频率、值域码表、脱敏样例摘要 |
-| 资产类型 | `CatalogAssetType` | **Value Object** | `StrEnum` | source_table / semantic_object / metric / consumer |
+| 数据资产 | `CatalogAsset` | **Entity** | Pydantic `BaseModel`（frozen） | 目录中的一条可检索资产；携带业务口径、负责人、更新频率、标签（`tags`）、值域码表、脱敏样例摘要 |
+| 资产类型 | `CatalogAssetType` | **Value Object** | `StrEnum` | source_table / semantic_object / metric / consumer / vector_collection |
+| 资产字段 | `CatalogColumn` | **Entity** | Pydantic `BaseModel`（frozen） | 列级元数据（源表列 / 向量集合 schema 字段）；`column_id` 由 `{asset_id}:{column_name}` 确定性派生，随刷新整体替换 |
+| 血缘边 | `CatalogLineageEdge` | **Entity** | Pydantic `BaseModel`（frozen） | upstream → downstream（feeds / belongs_to / consumed_by）；`edge_id` 确定性派生，刷新时推导落表 `data_catalog_lineage_edges` |
 | 资产自然键 | `asset_key` | Value Object | `str` | `{asset_type}:{业务标识}`，构建器幂等 upsert 的唯一键 |
 | 溯源指针 | `source_ref` | Value Object | `dict` | 指向数据集/表名/skill_id/页面路由等来源 |
 | 语义版本 | `semantic_version` | Value Object | `str` | 资产关联的语义对象发布版本，支撑"溯源到语义版本"验收 |
@@ -902,8 +904,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 #### 业务规则
 
 - 资产是目录构建器刷新的快照：按 `asset_key` 幂等 upsert，无审核状态机、无乐观锁
-- 全量刷新后 `delete_assets_except(keep_keys)` 清理失效资产
-- 血缘（批次→投影表→指标→消费方）由服务层动态推导，不落表
+- 全量刷新后 `delete_assets_except(keep_keys)` 清理失效资产；列快照（`replace_columns`）与血缘边（`replace_lineage_edges`）随刷新整体重建，与资产同刷同新
+- 血缘（批次→投影表→指标→消费方）刷新时从资产快照推导并落表，查询走索引而非全量现推；vector_collection 暂不参与血缘推导
 - 样例分布只存脱敏摘要（计数/值域/空值率），禁止行级数据入库
 
 ---

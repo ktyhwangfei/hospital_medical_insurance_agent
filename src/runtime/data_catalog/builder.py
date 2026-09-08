@@ -1,12 +1,14 @@
-"""数据目录构建器（Issue #38 Slice 2）。
+"""数据目录构建器（Issue #38 Slice 2 / 开源对标增强）。
 
-扫描三个来源生成三级资产快照：
+扫描四个来源生成资产快照：
 - semantic registry：已发布语义对象版本（最新可查询版本快照）/ 指标 / 数据集
 - outpatient 同步状态：门诊 PG 投影数据集的最近批次与质量状态（SLA 溯源）
 - skill 注册表 + portal 页面静态清单：消费方
+- Milvus：向量集合（政策知识 RAG 资产，第五类 ``vector_collection``）
 
-资产按 ``asset_key`` 幂等 upsert，全量刷新后 prune 失效资产。
-样例分布只采集脱敏摘要（行数/质量状态），不出库行级数据。
+资产按 ``asset_key`` 幂等 upsert，全量刷新后 prune 失效资产；
+列级元数据（``data_catalog_columns``）与血缘边（``data_catalog_lineage_edges``）
+随刷新整体重建。样例分布只采集脱敏摘要（行数/质量状态），不出库行级数据。
 """
 
 from __future__ import annotations
@@ -16,7 +18,11 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from src.data_platform.storage.data_catalog.data_catalog_ports import DataCatalogStorage
-from src.domain.data_catalog.models import CatalogAsset, CatalogAssetType
+from src.domain.data_catalog.models import (
+    CatalogAsset,
+    CatalogAssetType,
+    CatalogColumn,
+)
 
 if TYPE_CHECKING:
     from src.data_platform.storage.postgresql.outpatient_store import OutpatientSyncStatus
@@ -26,11 +32,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Portal 消费方静态清单（页面级消费，运行时调用追踪不在本期范围）
+# business_object 声明该页面真实消费的语义对象编码（与 skill 挂载口径一致），
+# 用于血缘推导 semantic_object → consumer；无语义消费的页面不声明。
 PORTAL_PAGE_CONSUMERS: list[dict[str, str]] = [
     {
         "route": "/policy-qa",
         "name": "政策问答",
         "description": "结算费用解释主链路，消费门诊语义模型与政策知识",
+        # 与 settlement_explain_skill 的挂载对象一致（门诊交易语义对象）
+        "business_object": "mzjyxx",
     },
     {
         "route": "/semantic-layer",
@@ -56,6 +66,73 @@ def _asset_id(asset_key: str) -> str:
     return f"ca_{digest}"
 
 
+def _column_id(asset_id: str, column_name: str) -> str:
+    """确定性 column_id：同一资产同一列跨刷新稳定。"""
+    digest = hashlib.sha256(f"{asset_id}:{column_name}".encode("utf-8")).hexdigest()[:12]
+    return f"cc_{digest}"
+
+
+def _milvus_type_name(raw_type: Any) -> str:
+    """pymilvus DataType 枚举归一化为可读名（如 FLOAT_VECTOR）。"""
+    return getattr(raw_type, "name", str(raw_type))
+
+
+def build_catalog_columns(
+    *,
+    versions_by_object: dict[str, "BusinessObjectVersion"],
+    collections: list[dict[str, Any]] | None = None,
+) -> list[CatalogColumn]:
+    """纯函数：发布版本字段 + Milvus 集合 schema → 列快照（可独立单测）。
+
+    - source_table 列来自 ``SemanticField``（field_role/semantic_type/value_domain 同源）；
+    - vector_collection 列来自 ``describe_collection`` 的 fields（dynamic key 不出现在
+      固定字段列表，故以 ``enable_dynamic_field`` 标记在资产摘要中，见资产构建）。
+    """
+    columns: list[CatalogColumn] = []
+    for version in versions_by_object.values():
+        ordinals: dict[str, int] = {}
+        for field in version.fields:
+            asset_id = _asset_id(f"source_table:{field.dataset_code}")
+            ordinal = ordinals.get(field.dataset_code, 0)
+            ordinals[field.dataset_code] = ordinal + 1
+            columns.append(
+                CatalogColumn(
+                    column_id=_column_id(asset_id, field.column_name),
+                    asset_id=asset_id,
+                    column_name=field.column_name,
+                    name=field.name,
+                    data_type=field.semantic_type,
+                    field_role=field.field_role,
+                    nullable=field.nullable,
+                    value_domain=field.value_domain,
+                    ordinal=ordinal,
+                )
+            )
+    for col_info in collections or []:
+        asset_id = _asset_id(f"vector_collection:{col_info['name']}")
+        for idx, f in enumerate(col_info.get("fields") or []):
+            type_name = _milvus_type_name(f.get("type", ""))
+            if "VECTOR" in type_name.upper():
+                role = "vector"
+            elif f.get("is_primary"):
+                role = "primary_key"
+            else:
+                role = "scalar"
+            columns.append(
+                CatalogColumn(
+                    column_id=_column_id(asset_id, f["name"]),
+                    asset_id=asset_id,
+                    column_name=f["name"],
+                    name=str(f.get("description") or ""),
+                    data_type=type_name,
+                    field_role=role,
+                    nullable=bool(f.get("nullable", True)),
+                    ordinal=idx,
+                )
+            )
+    return columns
+
+
 def build_catalog_assets(
     *,
     objects: list["BusinessObject"],
@@ -64,16 +141,20 @@ def build_catalog_assets(
     sync_status: "OutpatientSyncStatus | None" = None,
     table_row_counts: dict[str, int] | None = None,
     skills: list[dict[str, Any]] | None = None,
+    value_domains: dict[str, list[str]] | None = None,
+    collections: list[dict[str, Any]] | None = None,
 ) -> list[CatalogAsset]:
     """纯函数：扫描结果 → 资产快照列表（可独立单测）。
 
     ``versions_by_object`` 只放最新可查询已发布版本（与 planner
     ``_published_version`` 口径一致）；门诊同步状态只作用于
-    ``outpatient_dataset_codes`` 中的数据集（避免错贴到其他数据源）。
+    ``outpatient_dataset_codes`` 中的数据集（避免错贴到其他数据源）；
+    ``value_domains`` 为值域编码 → 标准值列表，回填 source_table 的 ``value_ranges``。
     """
     assets: list[CatalogAsset] = []
     outpatient_dataset_codes = outpatient_dataset_codes or set()
     table_row_counts = table_row_counts or {}
+    value_domains = value_domains or {}
 
     for obj in objects:
         version = versions_by_object.get(obj.object_code)
@@ -87,7 +168,9 @@ def build_catalog_assets(
                 asset_key=key,
                 name=obj.name,
                 description=obj.definition or "",
-                owner="",
+                # owner 真实来源：发布人（对象模型本身无 owner 字段）
+                owner=(version.published_by or "") if version else "",
+                tags=[obj.domain_code] if obj.domain_code else [],
                 semantic_object_code=obj.object_code,
                 semantic_version=version.version if version else None,
                 source_ref={
@@ -113,6 +196,7 @@ def build_catalog_assets(
                     description=metric.definition or "",
                     owner=metric.owner or "",
                     refresh_freq=metric.refresh_frequency or "",
+                    tags=[t for t in [obj.domain_code, metric.metric_type] if t],
                     semantic_object_code=obj.object_code,
                     semantic_version=version.version,
                     source_ref={
@@ -145,6 +229,17 @@ def build_catalog_assets(
                 }.items()
                 if v is not None
             }
+            # 值域回填：该数据集声明了 value_domain 的字段 → 标准值列表
+            value_ranges = {
+                field.field_code: value_domains[field.value_domain]
+                for field in version.fields
+                if field.dataset_code == dataset.dataset_code
+                and field.value_domain
+                and field.value_domain in value_domains
+            }
+            tags = [t for t in [obj.domain_code] if t]
+            if is_outpatient:
+                tags.append("门诊同步")
             assets.append(
                 CatalogAsset(
                     asset_id=_asset_id(key),
@@ -153,6 +248,8 @@ def build_catalog_assets(
                     name=dataset.name,
                     description=f"{dataset.schema_name}.{dataset.table_name}",
                     refresh_freq="5 分钟定时 SQL 同步" if is_outpatient else "",
+                    tags=tags,
+                    value_ranges=value_ranges,
                     sample_summary=sample_summary,
                     semantic_object_code=obj.object_code,
                     semantic_version=version.version,
@@ -179,6 +276,7 @@ def build_catalog_assets(
                 asset_key=key,
                 name=skill.get("skill_name") or skill["skill_id"],
                 description=f"skill：{', '.join(skill.get('include_keywords') or [])}",
+                tags=["skill"],
                 source_ref={
                     "kind": "skill",
                     "skill_id": skill["skill_id"],
@@ -198,7 +296,37 @@ def build_catalog_assets(
                 asset_key=key,
                 name=page["name"],
                 description=page["description"],
-                source_ref={"kind": "portal_page", "route": page["route"]},
+                tags=["portal页面"],
+                source_ref={
+                    "kind": "portal_page",
+                    "route": page["route"],
+                    # 页面真实消费的语义对象（无则不产生血缘边）
+                    "business_object": page.get("business_object"),
+                },
+            )
+        )
+
+    # ── 向量集合（Milvus，政策知识 RAG 资产）──
+    for col_info in collections or []:
+        key = f"vector_collection:{col_info['name']}"
+        sample_summary = {
+            k: v
+            for k, v in {
+                "row_count": col_info.get("row_count"),
+                "enable_dynamic_field": col_info.get("enable_dynamic_field"),
+            }.items()
+            if v is not None
+        }
+        assets.append(
+            CatalogAsset(
+                asset_id=_asset_id(key),
+                asset_type=CatalogAssetType.VECTOR_COLLECTION,
+                asset_key=key,
+                name=col_info["name"],
+                description=col_info.get("description") or "Milvus 向量集合",
+                tags=["政策知识", "向量检索"],
+                sample_summary=sample_summary,
+                source_ref={"collection_name": col_info["name"]},
             )
         )
 
@@ -216,10 +344,37 @@ def _latest_queryable_version(registry: "SemanticRegistry", object_code: str):
     return latest
 
 
-def refresh_data_catalog(storage: DataCatalogStorage | None = None) -> dict[str, int]:
-    """真实源编排：扫描 registry 发布版本 + outpatient 同步状态 + skills，刷新目录快照。
+def _scan_milvus_collections() -> list[dict[str, Any]]:
+    """扫描 Milvus 集合（名称/描述/行数/schema 字段）；连接失败抛异常由调用方降级。"""
+    from pymilvus import MilvusClient
 
-    返回统计：{"upserted": n, "pruned": n}。单源故障不阻断整体刷新（记日志跳过）。
+    from src.config.production import MILVUS_HOST, MILVUS_PORT, MILVUS_TOKEN
+
+    client = MilvusClient(
+        uri=f"http://{MILVUS_HOST}:{MILVUS_PORT}",
+        token=MILVUS_TOKEN or "",
+    )
+    collections: list[dict[str, Any]] = []
+    for name in client.list_collections() or []:
+        desc = client.describe_collection(name)
+        stats = client.get_collection_stats(name)
+        collections.append(
+            {
+                "name": name,
+                "description": desc.get("description") or "",
+                "row_count": int(stats.get("row_count", 0)),
+                "enable_dynamic_field": bool(desc.get("enable_dynamic_field", False)),
+                "fields": desc.get("fields") or [],
+            }
+        )
+    return collections
+
+
+def refresh_data_catalog(storage: DataCatalogStorage | None = None) -> dict[str, int]:
+    """真实源编排：扫描 registry 发布版本 + 门诊同步状态 + skills + Milvus，刷新目录快照。
+
+    刷新末尾整体重建列快照与血缘边表。单源故障不阻断整体刷新（记日志跳过）。
+    返回统计：{"upserted", "pruned", "columns", "edges"}。
     """
     from src.data_platform.storage.data_catalog.data_catalog_factory import (
         get_data_catalog_storage,
@@ -243,6 +398,20 @@ def refresh_data_catalog(storage: DataCatalogStorage | None = None) -> dict[str,
         for obj in objects
         if (v := _latest_queryable_version(registry, obj.object_code)) is not None
     }
+
+    # 值域码表：发布版本字段引用到的 value_domain → 标准值列表
+    value_domains: dict[str, list[str]] = {}
+    for version in versions_by_object.values():
+        for field in version.fields:
+            if not field.value_domain or field.value_domain in value_domains:
+                continue
+            try:
+                domain = registry.get_value_domain(field.value_domain)
+            except Exception:
+                logger.warning("值域读取跳过: %s", field.value_domain, exc_info=True)
+                continue
+            if domain is not None:
+                value_domains[field.value_domain] = list(domain.standard_values)
 
     # 门诊同步状态与投影表行数（脱敏摘要：仅计数；只作用于门诊 PG 投影数据集）
     sync_status = None
@@ -271,6 +440,12 @@ def refresh_data_catalog(storage: DataCatalogStorage | None = None) -> dict[str,
     except Exception:
         logger.warning("skill 注册表不可用，跳过消费方扫描", exc_info=True)
 
+    collections: list[dict[str, Any]] = []
+    try:
+        collections = _scan_milvus_collections()
+    except Exception:
+        logger.warning("Milvus 不可用，跳过向量集合扫描", exc_info=True)
+
     assets = build_catalog_assets(
         objects=objects,
         versions_by_object=versions_by_object,
@@ -278,8 +453,31 @@ def refresh_data_catalog(storage: DataCatalogStorage | None = None) -> dict[str,
         sync_status=sync_status,
         table_row_counts=table_row_counts,
         skills=skills,
+        value_domains=value_domains,
+        collections=collections,
     )
     for asset in assets:
         storage.upsert_asset(asset)
     pruned = storage.delete_assets_except([a.asset_key for a in assets])
-    return {"upserted": len(assets), "pruned": pruned}
+
+    # 列快照整体重建（source_table 来自发布版本字段，vector_collection 来自集合 schema）
+    columns = build_catalog_columns(
+        versions_by_object=versions_by_object, collections=collections
+    )
+    # 裁剪掉已 prune 资产的列（列按资产快照全量重建，asset_id 必须在册）
+    live_ids = {a.asset_id for a in assets}
+    columns = [c for c in columns if c.asset_id in live_ids]
+    storage.replace_columns(columns)
+
+    # 血缘边推导落表（查询期走索引，不再全量现推）
+    from src.runtime.data_catalog.lineage import derive_edges
+
+    edges = derive_edges(assets)
+    storage.replace_lineage_edges(edges)
+
+    return {
+        "upserted": len(assets),
+        "pruned": pruned,
+        "columns": len(columns),
+        "edges": len(edges),
+    }

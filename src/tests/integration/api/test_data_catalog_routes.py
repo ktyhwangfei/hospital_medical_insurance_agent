@@ -12,7 +12,11 @@ from fastapi.testclient import TestClient
 from src.data_platform.storage.data_catalog.data_catalog_in_memory import (
     InMemoryDataCatalogStorage,
 )
-from src.domain.data_catalog.models import CatalogAsset, CatalogAssetType
+from src.domain.data_catalog.models import (
+    CatalogAsset,
+    CatalogAssetType,
+    CatalogColumn,
+)
 from src.runtime.api import data_catalog_routes
 from src.runtime.api.app import create_app
 from src.runtime.api.data_catalog_routes import get_data_catalog_store
@@ -49,7 +53,7 @@ def _seed(store: InMemoryDataCatalogStorage) -> CatalogAsset:
 class TestAssets:
     def test_list_empty(self, client: TestClient) -> None:
         body = client.get(f"{PREFIX}/assets").json()
-        assert body == {"items": [], "limit": 50, "offset": 0}
+        assert body == {"items": [], "total": 0, "limit": 50, "offset": 0}
 
     def test_list_with_type_and_keyword(
         self, client: TestClient, store: InMemoryDataCatalogStorage
@@ -67,12 +71,34 @@ class TestAssets:
             f"{PREFIX}/assets", params={"asset_type": "metric"}
         ).json()
         assert len(metrics["items"]) == 1
+        assert metrics["total"] == 1
         assert metrics["items"][0]["asset_key"] == "metric:mzjyxx.T_FundPay"
 
         hit = client.get(f"{PREFIX}/assets", params={"keyword": "统筹"}).json()
         assert len(hit["items"]) == 1
         miss = client.get(f"{PREFIX}/assets", params={"keyword": "不存在"}).json()
         assert miss["items"] == []
+        assert miss["total"] == 0
+
+    def test_list_with_owner_and_tag_facets(
+        self, client: TestClient, store: InMemoryDataCatalogStorage
+    ) -> None:
+        """owner/tag 分面过滤 + total 支撑真分页。"""
+        _seed(store)  # owner=医保办
+        store.upsert_asset(
+            CatalogAsset(
+                asset_id="ca_test003",
+                asset_type=CatalogAssetType.VECTOR_COLLECTION,
+                asset_key="vector_collection:policy_rules_v2",
+                name="policy_rules_v2",
+                tags=["政策知识", "向量检索"],
+            )
+        )
+        by_owner = client.get(f"{PREFIX}/assets", params={"owner": "医保办"}).json()
+        assert [i["asset_id"] for i in by_owner["items"]] == ["ca_test001"]
+        by_tag = client.get(f"{PREFIX}/assets", params={"tag": "政策知识"}).json()
+        assert [i["asset_id"] for i in by_tag["items"]] == ["ca_test003"]
+        assert by_tag["total"] == 1
 
     def test_get_detail_with_traceability(
         self, client: TestClient, store: InMemoryDataCatalogStorage
@@ -90,6 +116,35 @@ class TestAssets:
         assert response.json()["detail"]["error_code"] == "CATALOG_ASSET_NOT_FOUND"
 
 
+class TestColumns:
+    def test_columns_list(
+        self, client: TestClient, store: InMemoryDataCatalogStorage
+    ) -> None:
+        seeded = _seed(store)
+        store.replace_columns(
+            [
+                CatalogColumn(
+                    column_id="cc_t1",
+                    asset_id=seeded.asset_id,
+                    column_name="T_FundPay",
+                    name="统筹基金支付金额",
+                    data_type="Amount",
+                    field_role="fact",
+                    ordinal=0,
+                )
+            ]
+        )
+        body = client.get(f"{PREFIX}/assets/{seeded.asset_id}/columns").json()
+        assert len(body["items"]) == 1
+        assert body["items"][0]["column_name"] == "T_FundPay"
+        assert body["items"][0]["field_role"] == "fact"
+
+    def test_columns_missing_asset_404(self, client: TestClient) -> None:
+        response = client.get(f"{PREFIX}/assets/ca_missing/columns")
+        assert response.status_code == 404
+        assert response.json()["detail"]["error_code"] == "CATALOG_ASSET_NOT_FOUND"
+
+
 class TestRefresh:
     def test_refresh_returns_stats(
         self,
@@ -101,14 +156,14 @@ class TestRefresh:
 
         def fake_refresh(storage: object) -> dict[str, int]:
             captured["storage"] = storage
-            return {"upserted": 3, "pruned": 1}
+            return {"upserted": 3, "pruned": 1, "columns": 12, "edges": 5}
 
         monkeypatch.setattr(
             "src.runtime.data_catalog.builder.refresh_data_catalog", fake_refresh
         )
         response = client.post(f"{PREFIX}/refresh")
         assert response.status_code == 200
-        assert response.json() == {"upserted": 3, "pruned": 1}
+        assert response.json() == {"upserted": 3, "pruned": 1, "columns": 12, "edges": 5}
         # 构建器拿到的必须是依赖注入覆盖的内存存储
         assert isinstance(captured["storage"], InMemoryDataCatalogStorage)
 
@@ -126,6 +181,10 @@ class TestLineage:
                 name="门诊交易信息",
             )
         )
+        # 血缘边来自刷新落表（此处模拟构建器路径：推导 → 落表）
+        from src.runtime.data_catalog.lineage import derive_edges
+
+        store.replace_lineage_edges(derive_edges(store.list_assets(limit=100)))
         body = client.get(f"{PREFIX}/assets/{seeded.asset_id}/lineage").json()
         assert body["root"] == seeded.asset_id
         ids = {n["asset_id"] for n in body["nodes"]}
