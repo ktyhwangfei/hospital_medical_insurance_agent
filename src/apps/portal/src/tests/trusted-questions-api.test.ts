@@ -5,6 +5,7 @@ import {
   approveTrustedQuestion,
   createTrustedQuestion,
   listTrustedQuestions,
+  matchAndExecuteTrustedQuestion,
   matchTrustedQuestion,
   rejectTrustedQuestion,
   removeTrustedQuestionSynonym,
@@ -127,5 +128,49 @@ describe('trusted-questions-api', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ question: '甲问题', role: 'cashier' })
     expect(result.outcome).toBe('candidates')
     expect(result.candidates[0].score).toBe(0.8)
+  })
+
+  it('matchAndExecuteTrustedQuestion POST /match-and-execute 并解析执行闭环', async () => {
+    const payload = {
+      outcome: 'matched',
+      question: { question_id: 'tq_1', standard_question: '门诊报销比例是多少？' },
+      candidates: [],
+      answer: {
+        outcome: 'executed',
+        question_id: 'tq_1',
+        result: { rows: [{ ratio: 0.8 }], quality_status: 'complete' },
+        violations: [],
+      },
+    }
+    const spy = mockFetchOnce(payload)
+    const result = await matchAndExecuteTrustedQuestion({ question: '门诊报销比例', role: 'cashier' })
+    const [url, init] = spy.mock.calls[0]
+    expect(url).toBe(`${API}/match-and-execute`)
+    expect(JSON.parse(String(init?.body))).toEqual({ question: '门诊报销比例', role: 'cashier' })
+    expect(result.outcome).toBe('matched')
+    expect(result.answer?.outcome).toBe('executed')
+    expect(result.answer?.result?.rows).toHaveLength(1)
+    expect(result.answer?.result?.quality_status).toBe('complete')
+  })
+
+  it('createTrustedQuestion 透传 query_plan 与 metric_codes 快照', async () => {
+    const spy = mockFetchOnce({ question_id: 'tq_2' }, 201)
+    const queryPlan = { object_code: 'inpatient_settlement', metrics: ['total_amount'] }
+    await createTrustedQuestion({
+      standard_question: '住院总费用是多少？',
+      created_by: 'op-1',
+      synonyms: ['住院费用'],
+      query_plan: queryPlan,
+      metric_codes: ['total_amount'],
+    })
+    const [url, init] = spy.mock.calls[0]
+    expect(url).toBe(API)
+    expect(JSON.parse(String(init?.body))).toEqual({
+      standard_question: '住院总费用是多少？',
+      created_by: 'op-1',
+      synonyms: ['住院费用'],
+      query_plan: queryPlan,
+      metric_codes: ['total_amount'],
+    })
   })
 })

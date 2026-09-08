@@ -219,6 +219,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - Postgres 表加列只在 `CREATE TABLE` 写、漏配 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，旧库因 `CREATE TABLE IF NOT EXISTS` 不重建导致 INSERT 报 `UndefinedColumn` 500（发起评测曾因 `regression_results`/`regression_summary` 漏配 ALTER 而崩）。模型加字段必须 CREATE + ALTER 双写；防回归测试 `test_skill_eval_runs_insert_columns_covered_by_ddl` 校验 INSERT 列 ⊆ DDL 列。
 - Milvus release 产物集合（`policy_rules_REL_*`）的适用性字段（region/effective_date/publish_status/amount_band_min/max 等）是 dynamic key，`describe_collection` 的固定字段列表看不到；只读 describe 结果做字段存在性检查会让过滤被**静默跳过**且无任何报错（Issue #33 实测生产适用性过滤从未生效）。判字段必须同时检查 `enable_dynamic_field`，为真时并入 `structured_policy_retriever._KNOWN_DYNAMIC_FILTERABLE_FIELDS`；dynamic key 可按名进 expr 过滤和 output_fields 取回。
 - 多检出目录的 outpatient sync worker 共享同一 PostgreSQL 时互相抢任务：后启动方 bootstrap 用本目录主密钥重封共享凭据，旧 worker 认领后解封即失败并把任务打成 `failed`，且其 `fail_job` 覆盖 `active_attempt_id` 导致另一 worker 已成功批次被孤儿化（任务行丢失成功状态）。排查用 `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*sync_worker*' }`，杀掉非本工作区 PID；启动同步前先确认单 worker；认领护栏 `active_attempt_id IS NULL` 已入回归测试。
+- 可信问题库（Issue #37）禁止从政策问答历史（`policy_qa_trajectories`）冷启动挖掘：那是结算单解释类问题，与受控问数场景问题类型错位且天然无 `query_plan`，入库即死数据（命中只回 `no_plan`）。approve 已加闸门（pending_review→active 必须绑定合法 `SemanticQuery` 快照，400 `QUERY_PLAN_REQUIRED`/`QUERY_PLAN_INVALID`）；正确沉淀路径是问数工作台 `/semantic-layer/query` 执行验证后"存为可信问题草稿"。存量错位草稿用 `scripts/cleanup_trusted_question_seeds.py` 清理。
 
 ### 陷阱模板
 
