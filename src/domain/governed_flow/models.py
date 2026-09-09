@@ -118,6 +118,26 @@ class PermissionLevel(StrEnum):
     DETAIL = "detail"
 
 
+# T11 消费侧强制：调用方角色 → 维度权限级别冻结映射。
+# detail 级授予治理与业务主角色：information_department（治理特权，
+# infra_skill_routes 发布审批先例）、medical_office（医保数据业务主，
+# security_policy 字段可见特权先例）；其余角色及未知/缺省一律 summary（fail closed）。
+# 注意：caller_role 是已解析角色串的传入 seam，生产接入时必须来自认证主体
+# （Authorization JWT），不得信任客户端自报角色。
+FLOW_CALLER_ROLE_LEVELS: dict[str, PermissionLevel] = {
+    "cashier": PermissionLevel.SUMMARY,
+    "medical_office": PermissionLevel.DETAIL,
+    "information_department": PermissionLevel.DETAIL,
+    "medical_record_staff": PermissionLevel.SUMMARY,
+    "clinician": PermissionLevel.SUMMARY,
+}
+
+
+def caller_permission_level(caller_role: str | None) -> PermissionLevel:
+    """调用方角色 → 权限级别；未知/缺省角色按 summary 收紧（最小权限）。"""
+    return FLOW_CALLER_ROLE_LEVELS.get(caller_role or "", PermissionLevel.SUMMARY)
+
+
 class MaterializationStrategy(StrEnum):
     """物化策略；Phase 0/1 仅 view（方案 §7，性能实测后再议物化表）。"""
 
@@ -199,6 +219,8 @@ FLOW_ERROR_CODES: frozenset[str] = frozenset({
     "FLOW_ARTIFACT_MISMATCH",          # 发布证据与重编译产物哈希不一致（T8 防篡改）
     "FLOW_CONSUME_DIMENSION_FORBIDDEN",# 消费维度不在维度节点绑定白名单（T11 越权拦截）
     "FLOW_CONSUME_AMBIGUOUS",          # 多个已发布消费契约覆盖同一组指标，拒绝猜测（26 → 27）
+    # T11 消费侧强制新增（27 → 28）
+    "FLOW_CONSUME_DIMENSION_PERMISSION_DENIED",  # detail 级维度对 summary 调用方拒止
 })
 
 

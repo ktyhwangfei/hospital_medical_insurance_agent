@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.data_platform.storage.flow.flow_factory import (
@@ -28,11 +28,15 @@ from src.domain.governed_flow.models import (
     FlowQueryResult,
     FlowRevisionConflictError,
     FlowStateInvalidError,
+    FLOW_CALLER_ROLE_LEVELS,
+    PermissionLevel,
 )
+from src.gateway.auth import authenticator
 from src.domain.governed_flow.validation import FlowValidationReport
 from src.runtime.flow.flow_query_service import (
     FlowConsumeAmbiguousError,
     FlowConsumeDimensionForbiddenError,
+    FlowConsumeDimensionPermissionDeniedError,
     FlowConsumeMetricUnknownError,
     FlowQueryService,
 )
@@ -59,6 +63,35 @@ def get_flow_service() -> FlowGovernanceService:
 def get_flow_query_service() -> FlowQueryService:
     """消费服务依赖注入 seam：API 测试 override 注入内存存储 + stub 读取器。"""
     return FlowQueryService(get_governed_flow_storage(), get_flow_view_reader())
+
+
+def get_flow_caller_role(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> str | None:
+    """校验 flow:read 后从签名主体读取查询角色。"""
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("AUTH_REQUIRED", "缺少 Authorization 凭据"),
+        )
+    auth = authenticator.validate_signed_token(authorization)
+    if not auth.is_success:
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("AUTH_INVALID", auth.error_message or "登录凭据无效"),
+        )
+    permitted = authenticator.check_permission(auth, "flow:read")
+    if not permitted.is_success:
+        raise HTTPException(
+            status_code=403,
+            detail=error_detail("AUTH_FORBIDDEN", "权限不足"),
+        )
+    # 多角色主体按最高已声明级别取值；未知角色不会获得权限。
+    detail_roles = {
+        role for role, level in FLOW_CALLER_ROLE_LEVELS.items()
+        if level is PermissionLevel.DETAIL
+    }
+    return next((role for role in auth.roles if role in detail_roles), None)
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -92,6 +125,11 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=422, detail=error_detail(
             "FLOW_CONSUME_DIMENSION_FORBIDDEN", str(exc), {},
         ))
+    # T11 消费侧强制：detail 级维度对 summary 调用方拒止
+    if isinstance(exc, FlowConsumeDimensionPermissionDeniedError):
+        return HTTPException(status_code=422, detail=error_detail(
+            "FLOW_CONSUME_DIMENSION_PERMISSION_DENIED", str(exc), {},
+        ))
     if isinstance(exc, FlowPublishBlockedError):
         blocking = [i.code for i in exc.report.issues if i.severity.value == "blocking"]
         return HTTPException(status_code=422, detail=error_detail(
@@ -121,7 +159,10 @@ class RollbackRequest(BaseModel):
 
 
 class FlowQueryRequest(BaseModel):
-    """受控问数请求：metrics/dimensions 为空 = 消费契约全量指标 / 无下钻。"""
+    """受控问数请求：metrics/dimensions 为空 = 消费契约全量指标 / 无下钻。
+
+    调用方角色从 Authorization 签名主体解析，不接受请求体自报角色。
+    """
 
     metrics: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
@@ -268,10 +309,14 @@ def query_flow(
     flow_id: str,
     request: FlowQueryRequest,
     service: FlowQueryService = Depends(get_flow_query_service),
+    caller_role: str | None = Depends(get_flow_caller_role),
 ) -> FlowQueryResult:
     """受控问数：只读已部署视图，携带发布证据与门禁评估（Phase 3）。"""
     try:
-        return service.query(flow_id, request.metrics, request.dimensions)
+        return service.query(
+            flow_id, request.metrics, request.dimensions,
+            caller_role=caller_role,
+        )
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -280,6 +325,7 @@ def query_flow(
 def consume_by_metrics(
     request: FlowQueryRequest,
     service: FlowQueryService = Depends(get_flow_query_service),
+    caller_role: str | None = Depends(get_flow_caller_role),
 ) -> FlowQueryResult:
     """指标码驱动受控消费（query_planner / 问数层接入点）。
 
@@ -287,6 +333,9 @@ def consume_by_metrics(
     版本后走既有 T8 / 白名单 / 勾稽门禁链路；无契约 422、多契约 409。
     """
     try:
-        return service.query_by_metrics(request.metrics, request.dimensions)
+        return service.query_by_metrics(
+            request.metrics, request.dimensions,
+            caller_role=caller_role,
+        )
     except Exception as exc:
         raise _http_error(exc) from exc

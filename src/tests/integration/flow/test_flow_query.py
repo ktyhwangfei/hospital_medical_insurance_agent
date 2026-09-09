@@ -10,6 +10,12 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,6 +30,7 @@ from src.tests.unit.governed_flow.golden_flow import build_golden_flow
 
 BASE = "/api/v1/medical-insurance-ai-agent/flow"
 FLOW_ID = "flow_op_outpatient_processed"
+JWT_SECRET = "flow-query-test-secret"
 
 # #62 验收③ 四值口径（与 processed-snapshot 同源数值）
 GOLDEN_ROW = {
@@ -32,6 +39,28 @@ GOLDEN_ROW = {
     "op_fund_pay": 6530.03,
     "op_self_pay": 113.66,
 }
+
+
+def _auth_headers(
+    role: str, permissions: list[str] | None = None,
+) -> dict[str, str]:
+    def encode(value: object) -> str:
+        return base64.urlsafe_b64encode(
+            json.dumps(value, separators=(",", ":")).encode()
+        ).decode().rstrip("=")
+
+    header = encode({"alg": "HS256", "typ": "JWT"})
+    payload = encode({
+        "sub": f"{role}-user",
+        "exp": time.time() + 3600,
+        "roles": [role],
+        "permissions": ["flow:read"] if permissions is None else permissions,
+    })
+    signing_input = f"{header}.{payload}"
+    signature = base64.urlsafe_b64encode(
+        hmac.new(JWT_SECRET.encode(), signing_input.encode(), hashlib.sha256).digest()
+    ).decode().rstrip("=")
+    return {"Authorization": f"Bearer {signing_input}.{signature}"}
 
 
 class StubReader:
@@ -49,12 +78,13 @@ class StubReader:
 @pytest.fixture
 def parts(monkeypatch):
     """(api, storage, reader)：内存存储 + 种子语义层 + stub 读取器。"""
-    monkeypatch.setenv("AUTH_JWT_SECRET", "flow-query-test-secret")
+    monkeypatch.setenv("AUTH_JWT_SECRET", JWT_SECRET)
     store = InMemoryRegistryStore()
     seed_semantic_layer(store)
+    registry = SemanticRegistry(store)
     monkeypatch.setattr(
         "src.semantic_layer.registry.get_semantic_registry",
-        lambda: SemanticRegistry(store),
+        lambda: registry,
     )
     flow_storage = InMemoryGovernedFlowStorage()
     reader = StubReader([GOLDEN_ROW])
@@ -64,7 +94,11 @@ def parts(monkeypatch):
     app = create_app()
     app.dependency_overrides[get_flow_service] = lambda: govern_service
     app.dependency_overrides[get_flow_query_service] = lambda: query_service
-    api = TestClient(app, raise_server_exceptions=False)
+    api = TestClient(
+        app,
+        raise_server_exceptions=False,
+        headers=_auth_headers("cashier"),
+    )
     return api, flow_storage, reader
 
 
@@ -100,6 +134,28 @@ def test_query_default_returns_all_consumed_metrics_with_evidence(parts):
     assert body["artifact_hash"] == revision["artifact_hash"]
     assert body["view_name"] == "v_flow_flow_op_outpatient_processed"
     assert body["published_by"] == "医保数据组"
+
+
+def test_query_requires_flow_read_permission(parts):
+    api, _, _ = parts
+    response = api.post(
+        f"{BASE}/{FLOW_ID}/query",
+        json={},
+        headers=_auth_headers("cashier", permissions=[]),
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "AUTH_FORBIDDEN"
+
+
+def test_query_requires_signed_token(parts):
+    api, _, _ = parts
+    response = api.post(
+        f"{BASE}/{FLOW_ID}/query",
+        json={},
+        headers={"Authorization": ""},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"]["error_code"] == "AUTH_REQUIRED"
 
 
 def test_query_metric_subset_projects_requested_columns(parts):
@@ -333,3 +389,117 @@ def test_consume_by_metrics_empty_request_rejected(parts):
     assert resp.status_code == 422
     assert resp.json()["detail"]["error_code"] == "FLOW_CONSUMES_UNKNOWN_METRIC"
     assert reader.queries == []
+
+
+# ── T11 消费侧强制：permission_level × 调用方角色 ──────────────────────
+
+
+def _publish_with_dimension(api, permission_level: str) -> None:
+    """发布一个绑定 T_CureType 维度（指定权限级别）的 golden flow。"""
+    from src.domain.governed_flow.models import (
+        DimensionBinding,
+        DimensionNode,
+    )
+
+    flow = build_golden_flow()
+    flow.nodes.append(DimensionNode(
+        node_id="dim_cure", name="门诊医疗类别维度",
+        dimensions=[DimensionBinding(
+            field_code="T_CureType", value_domain="MZ_CURE_TYPE",
+            permission_level=permission_level,
+        )],
+    ))
+    flow.edges = [
+        e.model_copy(update={"to_node": "dim_cure"}) if e.edge_id == "e3" else e
+        for e in flow.edges
+    ]
+    flow.edges.append(
+        type(flow.edges[0])(edge_id="e_dim", from_node="dim_cure", to_node="gate_caliber")
+    )
+    api.post(BASE, json=flow.model_dump(mode="json"))
+    api.post(f"{BASE}/{FLOW_ID}/submit-review")
+    assert api.post(
+        f"{BASE}/{FLOW_ID}/publish", json={"published_by": "医保数据组"}
+    ).status_code == 201
+
+
+@pytest.mark.parametrize("caller_role", [None, "cashier", "clinician", "intern"])
+def test_query_detail_dimension_denied_for_summary_callers(parts, caller_role):
+    """T11 消费侧强制：detail 级维度对 summary 调用方拒止（缺省/未知角色按 summary 收紧）。"""
+    api, _, reader = parts
+    _publish_with_dimension(api, "detail")
+    payload: dict = {"metrics": ["op_total_fee"], "dimensions": ["T_CureType"]}
+    headers = _auth_headers(caller_role) if caller_role else _auth_headers("cashier")
+
+    resp = api.post(f"{BASE}/{FLOW_ID}/query", json=payload, headers=headers)
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error_code"] == "FLOW_CONSUME_DIMENSION_PERMISSION_DENIED"
+    assert reader.queries == []  # 拒止时不触达视图
+
+
+def test_query_ignores_client_supplied_caller_role(parts):
+    """请求体不能伪造 detail 角色提升权限。"""
+    api, _, reader = parts
+    _publish_with_dimension(api, "detail")
+
+    resp = api.post(f"{BASE}/{FLOW_ID}/query", json={
+        "metrics": ["op_total_fee"],
+        "dimensions": ["T_CureType"],
+        "caller_role": "information_department",
+    })
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error_code"] == "FLOW_CONSUME_DIMENSION_PERMISSION_DENIED"
+    assert reader.queries == []
+
+
+@pytest.mark.parametrize("caller_role", ["information_department", "medical_office"])
+def test_query_detail_dimension_allowed_for_detail_callers(parts, caller_role):
+    """detail 级调用方（信息科/医保办）可下钻 detail 级维度。"""
+    api, _, reader = parts
+    _publish_with_dimension(api, "detail")
+    reader.rows = [
+        {"T_CureType": "11", "op_total_fee": 5000.0, "op_fund_pay": 4900.0, "op_self_pay": 100.0},
+    ]
+
+    resp = api.post(f"{BASE}/{FLOW_ID}/query", json={
+        "metrics": ["op_total_fee"], "dimensions": ["T_CureType"],
+    }, headers=_auth_headers(caller_role))
+    assert resp.status_code == 200
+    assert [r["T_CureType"] for r in resp.json()["rows"]] == ["11"]
+
+
+def test_query_summary_dimension_open_to_any_caller(parts):
+    """summary 级维度绑定不因调用方角色收紧（T11 只约束 detail 下钻）。"""
+    api, _, reader = parts
+    _publish_with_dimension(api, "summary")
+    reader.rows = [
+        {"T_CureType": "11", "op_total_fee": 5000.0, "op_fund_pay": 4900.0, "op_self_pay": 100.0},
+    ]
+
+    resp = api.post(f"{BASE}/{FLOW_ID}/query", json={
+        "metrics": ["op_total_fee"], "dimensions": ["T_CureType"],
+    })
+    assert resp.status_code == 200
+    assert reader.queries[-1][0] == "v_flow_flow_op_outpatient_processed"
+
+
+def test_consume_by_metrics_enforces_dimension_permission(parts):
+    """指标码驱动消费同链路强制：cashier 422，information_department 200。"""
+    api, _, reader = parts
+    _publish_with_dimension(api, "detail")
+    reader.rows = [
+        {"T_CureType": "11", "op_total_fee": 5000.0, "op_fund_pay": 4900.0, "op_self_pay": 100.0},
+    ]
+
+    denied = api.post(f"{BASE}/consume", json={
+        "metrics": ["mzjyxx.op_total_fee"], "dimensions": ["T_CureType"],
+    })
+    assert denied.status_code == 422
+    assert denied.json()["detail"]["error_code"] == "FLOW_CONSUME_DIMENSION_PERMISSION_DENIED"
+    assert reader.queries == []
+
+    allowed = api.post(f"{BASE}/consume", json={
+        "metrics": ["mzjyxx.op_total_fee"], "dimensions": ["T_CureType"],
+    }, headers=_auth_headers("information_department"))
+    assert allowed.status_code == 200
+    assert [r["T_CureType"] for r in allowed.json()["rows"]] == ["11"]

@@ -4,8 +4,11 @@
 - 只消费 published flow 的活跃发布版本（草稿/评审中/退役一律拒止）；
 - 消费前重编译活跃定义并校验 artifact_hash（T8：证据被篡改即拒止）；
 - 请求指标 ⊆ consumer.consumes 白名单（FLOW_CONSUMES_UNKNOWN_METRIC）；
-- 请求维度 ⊆ 维度节点绑定白名单（T11 越权拒止 FLOW_CONSUME_DIMENSION_FORBIDDEN；
-  permission_level 的调用方角色校验属后续接入点，当前以绑定白名单为边界）；
+- 请求维度 ⊆ 维度节点绑定白名单（T11 越权拒止 FLOW_CONSUME_DIMENSION_FORBIDDEN）；
+- T11 消费侧强制：绑定 permission_level=detail 的维度只对 detail 级调用方开放
+  （FLOW_CONSUME_DIMENSION_PERMISSION_DENIED）；角色→级别映射冻结在
+  FLOW_CALLER_ROLE_LEVELS，缺省/未知角色按 summary 收紧。caller_role 是
+  已解析角色串的传入 seam（生产须来自认证主体，不信任客户端自报）；
 - 勾稽恒等门禁在结果行上运行时评估，失败 → 200 + unavailable + 数值扣发。
 
 结果与既有路径一致（issue #65 验收）：与 /semantic/query/processed-snapshot
@@ -30,9 +33,11 @@ from src.domain.governed_flow.models import (
     FlowQueryResult,
     FlowStatus,
     FlowStateInvalidError,
+    PermissionLevel,
     QualityCheckType,
     QualityGateNode,
     SourceNode,
+    caller_permission_level,
 )
 
 
@@ -42,6 +47,10 @@ class FlowConsumeMetricUnknownError(ValueError):
 
 class FlowConsumeDimensionForbiddenError(ValueError):
     """请求下钻的维度未在维度节点绑定白名单内（T11 越权拦截）。"""
+
+
+class FlowConsumeDimensionPermissionDeniedError(ValueError):
+    """请求下钻 detail 级维度，但调用方角色只具备 summary 级（T11 消费侧强制）。"""
 
 
 class FlowConsumeAmbiguousError(FlowStateInvalidError):
@@ -82,6 +91,7 @@ class FlowQueryService:
         flow_id: str,
         metrics: Optional[list[str]] = None,
         dimensions: Optional[list[str]] = None,
+        caller_role: Optional[str] = None,
     ) -> FlowQueryResult:
         flow = self._storage.get_flow(flow_id)
         if flow is None:
@@ -111,16 +121,30 @@ class FlowQueryService:
             )
 
         requested_dimensions = list(dimensions or [])
-        bound = {
-            d.field_code
+        bindings = {
+            d.field_code: d.permission_level
             for n in definition.nodes
             if isinstance(n, DimensionNode)
             for d in n.dimensions
         }
-        forbidden = [d for d in requested_dimensions if d not in bound]
+        forbidden = [d for d in requested_dimensions if d not in bindings]
         if forbidden:
             raise FlowConsumeDimensionForbiddenError(
-                f"维度不在绑定白名单内: {forbidden}，允许: {sorted(bound) or '（无）'}"
+                f"维度不在绑定白名单内: {forbidden}，允许: {sorted(bindings) or '（无）'}"
+            )
+
+        # T11 消费侧强制：detail 级维度只对 detail 级调用方开放，
+        # 缺省/未知角色按 summary 收紧（角色→级别映射冻结在 FLOW_CALLER_ROLE_LEVELS）
+        caller_level = caller_permission_level(caller_role)
+        denied = [
+            d for d in requested_dimensions
+            if bindings[d] is PermissionLevel.DETAIL
+            and caller_level is not PermissionLevel.DETAIL
+        ]
+        if denied:
+            raise FlowConsumeDimensionPermissionDeniedError(
+                f"维度为 detail 级，调用方角色 '{caller_role or '（未声明）'}'"
+                f" 仅具备 summary 级，禁止下钻: {denied}"
             )
 
         # 勾稽门禁引用的列必须一并读取（按全口径评估），出参再投影回请求列；
@@ -157,6 +181,7 @@ class FlowQueryService:
         self,
         metric_codes: list[str],
         dimensions: Optional[list[str]] = None,
+        caller_role: Optional[str] = None,
     ) -> FlowQueryResult:
         """指标码驱动的消费契约解析（query_planner / 问数层接入点）。
 
@@ -193,7 +218,10 @@ class FlowQueryService:
                 f"{sorted(flow_id for flow_id, _ in matches)}"
             )
         flow_id, short_codes = matches[0]
-        return self.query(flow_id, metrics=short_codes, dimensions=dimensions)
+        return self.query(
+            flow_id, metrics=short_codes, dimensions=dimensions,
+            caller_role=caller_role,
+        )
 
     # ── 内部 ────────────────────────────────────────────────────────
 

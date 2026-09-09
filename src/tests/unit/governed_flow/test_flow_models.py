@@ -3,6 +3,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.domain.governed_flow.models import (
+    FLOW_CALLER_ROLE_LEVELS,
     FLOW_ERROR_CODES,
     FLOW_STATUS_TRANSITIONS,
     MAX_FLOW_EDGES,
@@ -15,6 +16,8 @@ from src.domain.governed_flow.models import (
     FlowNodeType,
     FlowStatus,
     FilterOperator,
+    PermissionLevel,
+    caller_permission_level,
     transition_flow_status,
     compute_flow_content_hash,
     FlowNotFoundError,
@@ -148,6 +151,8 @@ class TestErrorCodes:
             "FLOW_ARTIFACT_MISMATCH", "FLOW_CONSUME_DIMENSION_FORBIDDEN",
             # Phase 3 指标码驱动消费接入点（26 → 27）
             "FLOW_CONSUME_AMBIGUOUS",
+            # T11 消费侧强制：detail 级维度对 summary 调用方拒止（27 → 28）
+            "FLOW_CONSUME_DIMENSION_PERMISSION_DENIED",
         }
         assert expected <= FLOW_ERROR_CODES
 
@@ -156,6 +161,31 @@ class TestErrorCodes:
         assert issubclass(FlowArtifactMismatchError, FlowStateInvalidError)
         assert issubclass(FlowRevisionConflictError, ValueError)
         assert issubclass(FlowNotFoundError, LookupError)
+
+
+class TestCallerPermissionLevel:
+    """T11 消费侧强制：调用方角色 → 维度权限级别冻结映射。"""
+
+    def test_mapping_covers_all_canonical_roles(self):
+        # 角色集合与平台 ALL_ROLES 同源，防止新增角色后映射漏配
+        from src.config.security_policy.rules import ALL_ROLES
+
+        assert set(FLOW_CALLER_ROLE_LEVELS) == ALL_ROLES
+
+    def test_detail_roles_are_governance_owners(self):
+        # 信息科（治理特权，infra_skill_routes 先例）+ 医保办（医保数据业务主，
+        # security_policy 字段可见特权先例）可下钻 detail；其余一律 summary
+        detail = {
+            role for role, level in FLOW_CALLER_ROLE_LEVELS.items()
+            if level == PermissionLevel.DETAIL
+        }
+        assert detail == {"information_department", "medical_office"}
+
+    def test_unknown_or_missing_role_tightens_to_summary(self):
+        assert caller_permission_level(None) == PermissionLevel.SUMMARY
+        assert caller_permission_level("") == PermissionLevel.SUMMARY
+        assert caller_permission_level("intern") == PermissionLevel.SUMMARY
+        assert caller_permission_level("information_department") == PermissionLevel.DETAIL
 
 
 class TestConsumerKinds:
