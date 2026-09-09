@@ -1,4 +1,4 @@
-"""健康运营 API — issue #45 P0（问题库 + 手动巡检）。
+"""健康运营 API — issue #45 P0（问题库 + 手动巡检）+ #50（详情与生命周期）。
 
 前缀 /api/v1/medical-insurance-ai-agent/ops；鉴权走签名 JWT 的
 ops:read / ops:write 权限（与 data-governance 同模式）。
@@ -9,10 +9,15 @@ ops:read / ops:write 权限（与 data-governance 同模式）。
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from src.data_platform.storage.ops.ops_factory import get_ops_finding_storage
 from src.domain.ops.models import (
+    FindingRevisionConflictError,
+    InvalidFindingTransitionError,
     OpsAssetType,
+    OpsFindingDetail,
+    OpsFindingNotFoundError,
     OpsFindingPage,
     OpsFindingStatus,
     OpsSeverity,
@@ -106,3 +111,92 @@ def list_findings(
         page=page,
         page_size=page_size,
     )
+
+
+class IgnoreFindingRequest(BaseModel):
+    """忽略原因（必填，写入事件留痕）。"""
+
+    reason: str = Field(min_length=1, max_length=500)
+
+
+def _raise_lifecycle_error(exc: Exception) -> None:
+    """生命周期异常 → HTTP 映射：404 不存在 / 409 非法流转或版本冲突。"""
+    if isinstance(exc, OpsFindingNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_detail("FINDING_NOT_FOUND", str(exc)),
+        ) from exc
+    if isinstance(exc, InvalidFindingTransitionError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_detail("FINDING_TRANSITION_INVALID", str(exc)),
+        ) from exc
+    if isinstance(exc, FindingRevisionConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_detail("FINDING_REVISION_CONFLICT", str(exc)),
+        ) from exc
+    raise exc
+
+
+@router.get(
+    "/findings/{finding_id}",
+    response_model=OpsFindingDetail,
+)
+def get_finding(
+    finding_id: str,
+    _principal=Depends(require_ops_read),
+    service: OpsHealthService = Depends(get_ops_service),
+) -> OpsFindingDetail:
+    """单条问题详情：证据快照 + 生命周期事件时间线。"""
+    try:
+        return service.get_finding_detail(finding_id)
+    except OpsFindingNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_detail("FINDING_NOT_FOUND", str(exc)),
+        ) from exc
+
+
+@router.post(
+    "/findings/{finding_id}/ignore",
+    response_model=OpsFindingDetail,
+)
+def ignore_finding(
+    finding_id: str,
+    request: IgnoreFindingRequest,
+    expected_revision: int = Query(ge=1),
+    principal: DataGovernancePrincipal = Depends(require_ops_write),
+    service: OpsHealthService = Depends(get_ops_service),
+) -> OpsFindingDetail:
+    """忽略开放问题（open → ignored）：必填原因，乐观锁 expected_revision。"""
+    try:
+        return service.ignore_finding(
+            finding_id,
+            expected_revision=expected_revision,
+            reason=request.reason,
+            actor=principal.user_id,
+        )
+    except (OpsFindingNotFoundError, InvalidFindingTransitionError, FindingRevisionConflictError) as exc:
+        _raise_lifecycle_error(exc)
+
+
+@router.post(
+    "/findings/{finding_id}/reopen",
+    response_model=OpsFindingDetail,
+)
+def reopen_finding(
+    finding_id: str,
+    expected_revision: int = Query(ge=1),
+    principal: DataGovernancePrincipal = Depends(require_ops_write),
+    service: OpsHealthService = Depends(get_ops_service),
+) -> OpsFindingDetail:
+    """重开已忽略/已解决问题（ignored|resolved → open）：乐观锁 expected_revision。"""
+    try:
+        return service.reopen_finding(
+            finding_id,
+            expected_revision=expected_revision,
+            actor=principal.user_id,
+        )
+    except (OpsFindingNotFoundError, InvalidFindingTransitionError, FindingRevisionConflictError) as exc:
+        _raise_lifecycle_error(exc)

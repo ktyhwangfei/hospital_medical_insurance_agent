@@ -6,8 +6,11 @@ from datetime import datetime
 
 from src.domain.ops.models import (
     FindingDraft,
+    FindingRevisionConflictError,
     OpsAssetType,
     OpsFinding,
+    OpsFindingEvent,
+    OpsFindingNotFoundError,
     OpsFindingPage,
     OpsFindingStatus,
     OpsSeverity,
@@ -27,6 +30,7 @@ class InMemoryOpsFindingStorage:
 
     def __init__(self) -> None:
         self._findings: dict[str, OpsFinding] = {}  # fingerprint → OpsFinding
+        self._events: dict[str, list[OpsFindingEvent]] = {}  # finding_id → 事件（升序追加）
         self._lock = threading.RLock()
 
     def upsert_finding(self, draft: FindingDraft, *, seen_at: datetime) -> OpsFinding:
@@ -85,3 +89,36 @@ class InMemoryOpsFindingStorage:
             page=page,
             page_size=page_size,
         )
+
+    def get_finding(self, finding_id: str) -> OpsFinding:
+        with self._lock:
+            for finding in self._findings.values():
+                if finding.finding_id == finding_id:
+                    return finding.model_copy(deep=True)
+        raise OpsFindingNotFoundError(finding_id)
+
+    def transition_finding(
+        self,
+        finding_id: str,
+        *,
+        expected_revision: int,
+        new_status: OpsFindingStatus,
+        event: OpsFindingEvent,
+    ) -> OpsFinding:
+        with self._lock:
+            current = self.get_finding(finding_id)  # 不存在则抛 NotFound
+            if current.revision != expected_revision:
+                raise FindingRevisionConflictError(finding_id, expected_revision, current.revision)
+            fingerprint = current.fingerprint
+            updated = current.model_copy(update={
+                "status": new_status,
+                "revision": current.revision + 1,
+            })
+            self._findings[fingerprint] = updated
+            self._events.setdefault(finding_id, []).append(event.model_copy(deep=True))
+            return updated.model_copy(deep=True)
+
+    def list_finding_events(self, finding_id: str) -> list[OpsFindingEvent]:
+        with self._lock:
+            events = self._events.get(finding_id, [])
+            return [event.model_copy(deep=True) for event in events]

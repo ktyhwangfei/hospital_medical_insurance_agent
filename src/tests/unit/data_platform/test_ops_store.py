@@ -1,4 +1,5 @@
-"""健康运营问题库内存存储单元测试 — issue #45（去重/累计/过滤/排序）。"""
+"""健康运营问题库内存存储单元测试 — #45（去重/累计/过滤/排序）
++ #50（详情 / 乐观锁流转 / 事件时间线）。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -8,10 +9,16 @@ import pytest
 from src.data_platform.storage.ops.ops_in_memory import InMemoryOpsFindingStorage
 from src.domain.ops.models import (
     FindingDraft,
+    FindingRevisionConflictError,
+    InvalidFindingTransitionError,
     OpsAssetType,
+    OpsFindingEvent,
+    OpsFindingEventType,
+    OpsFindingNotFoundError,
     OpsFindingStatus,
     OpsSeverity,
     finding_fingerprint,
+    new_finding_event_id,
 )
 
 T0 = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
@@ -89,3 +96,161 @@ class TestListFilters:
     def test_status_filter_excludes_missing_status(self, seeded):
         assert seeded.list_findings(status=OpsFindingStatus.RESOLVED).total == 0
         assert seeded.list_findings(status=OpsFindingStatus.OPEN).total == 3
+
+
+def _event(finding_id: str, event_type: OpsFindingEventType, reason: str | None = None,
+           created_at: datetime = T1) -> OpsFindingEvent:
+    return OpsFindingEvent(
+        event_id=new_finding_event_id(),
+        finding_id=finding_id,
+        event_type=event_type,
+        actor="ops-admin-1",
+        reason=reason,
+        created_at=created_at,
+    )
+
+
+class TestLifecycle:
+    """#50：get / transition（乐观锁 + 事件留痕）/ 事件时间线。"""
+
+    @pytest.fixture
+    def store_with_finding(self):
+        store = InMemoryOpsFindingStorage()
+        finding = store.upsert_finding(_draft(), seen_at=T0)
+        return store, finding
+
+    def test_get_finding_unknown_raises(self):
+        store = InMemoryOpsFindingStorage()
+        with pytest.raises(OpsFindingNotFoundError):
+            store.get_finding("no-such-id")
+
+    def test_get_finding_returns_current_state(self, store_with_finding):
+        store, finding = store_with_finding
+        assert store.get_finding(finding.finding_id) == finding
+
+    def test_transition_updates_status_and_appends_event(self, store_with_finding):
+        store, finding = store_with_finding
+        event = _event(finding.finding_id, OpsFindingEventType.IGNORED, reason="排期维护")
+        updated = store.transition_finding(
+            finding.finding_id,
+            expected_revision=finding.revision,
+            new_status=OpsFindingStatus.IGNORED,
+            event=event,
+        )
+        assert updated.status is OpsFindingStatus.IGNORED
+        assert updated.revision == finding.revision + 1
+        assert store.get_finding(finding.finding_id).status is OpsFindingStatus.IGNORED
+        events = store.list_finding_events(finding.finding_id)
+        assert [e.event_type for e in events] == [OpsFindingEventType.IGNORED]
+        assert events[0].reason == "排期维护"
+
+    def test_transition_with_stale_revision_raises_conflict(self, store_with_finding):
+        store, finding = store_with_finding
+        store.upsert_finding(_draft(), seen_at=T1)  # 复现巡检使 revision+1
+        with pytest.raises(FindingRevisionConflictError):
+            store.transition_finding(
+                finding.finding_id,
+                expected_revision=finding.revision,
+                new_status=OpsFindingStatus.IGNORED,
+                event=_event(finding.finding_id, OpsFindingEventType.IGNORED, "过期"),
+            )
+
+    def test_transition_unknown_finding_raises_not_found(self):
+        store = InMemoryOpsFindingStorage()
+        with pytest.raises(OpsFindingNotFoundError):
+            store.transition_finding(
+                "no-such-id",
+                expected_revision=1,
+                new_status=OpsFindingStatus.IGNORED,
+                event=_event("no-such-id", OpsFindingEventType.IGNORED, "x"),
+            )
+
+    def test_events_timeline_keeps_insertion_order(self, store_with_finding):
+        store, finding = store_with_finding
+        store.transition_finding(
+            finding.finding_id,
+            expected_revision=finding.revision,
+            new_status=OpsFindingStatus.IGNORED,
+            event=_event(finding.finding_id, OpsFindingEventType.IGNORED, "先忽略", created_at=T1),
+        )
+        store.transition_finding(
+            finding.finding_id,
+            expected_revision=finding.revision + 1,
+            new_status=OpsFindingStatus.OPEN,
+            event=_event(finding.finding_id, OpsFindingEventType.REOPENED, created_at=T1 + timedelta(minutes=1)),
+        )
+        assert [e.event_type for e in store.list_finding_events(finding.finding_id)] == [
+            OpsFindingEventType.IGNORED, OpsFindingEventType.REOPENED,
+        ]
+
+    def test_events_isolated_between_findings(self):
+        store = InMemoryOpsFindingStorage()
+        first = store.upsert_finding(_draft(), seen_at=T0)
+        second = store.upsert_finding(_draft(check_id="data_source_down", severity=OpsSeverity.CRITICAL), seen_at=T0)
+        store.transition_finding(
+            first.finding_id,
+            expected_revision=first.revision,
+            new_status=OpsFindingStatus.IGNORED,
+            event=_event(first.finding_id, OpsFindingEventType.IGNORED, "只影响第一条"),
+        )
+        assert store.list_finding_events(second.finding_id) == []
+
+
+class TestServiceLifecycle:
+    """#50 服务层状态机：非法流转在服务层拦截，存储只管乐观锁。"""
+
+    @pytest.fixture
+    def service_with_finding(self):
+        from src.runtime.ops.service import OpsHealthService
+
+        store = InMemoryOpsFindingStorage()
+        finding = store.upsert_finding(_draft(), seen_at=T0)
+        service = OpsHealthService(store, lambda: _NoopReader())
+        return service, finding
+
+    def test_ignore_then_reopen_roundtrip(self, service_with_finding):
+        service, finding = service_with_finding
+        ignored = service.ignore_finding(
+            finding.finding_id, expected_revision=finding.revision,
+            reason="已知误报", actor="ops-admin-1",
+        )
+        assert ignored.finding.status is OpsFindingStatus.IGNORED
+        reopened = service.reopen_finding(
+            finding.finding_id, expected_revision=ignored.finding.revision, actor="ops-admin-1",
+        )
+        assert reopened.finding.status is OpsFindingStatus.OPEN
+        assert [e.event_type for e in reopened.events] == [
+            OpsFindingEventType.IGNORED, OpsFindingEventType.REOPENED,
+        ]
+
+    def test_ignore_on_ignored_raises_invalid_transition(self, service_with_finding):
+        service, finding = service_with_finding
+        service.ignore_finding(
+            finding.finding_id, expected_revision=finding.revision,
+            reason="一次", actor="ops-admin-1",
+        )
+        with pytest.raises(InvalidFindingTransitionError):
+            service.ignore_finding(
+                finding.finding_id, expected_revision=2,
+                reason="两次", actor="ops-admin-1",
+            )
+
+    def test_reopen_on_open_raises_invalid_transition(self, service_with_finding):
+        service, finding = service_with_finding
+        with pytest.raises(InvalidFindingTransitionError):
+            service.reopen_finding(finding.finding_id, expected_revision=1, actor="ops-admin-1")
+
+    def test_get_detail_unknown_propagates_not_found(self, service_with_finding):
+        service, _ = service_with_finding
+        with pytest.raises(OpsFindingNotFoundError):
+            service.get_finding_detail("no-such-id")
+
+
+class _NoopReader:
+    """生命周期操作不触达巡检读取面。"""
+
+    def list_sources(self):
+        return []
+
+    def get_job(self, source_id):
+        raise LookupError(source_id)

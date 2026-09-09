@@ -1,7 +1,7 @@
 'use client'
 
-// 健康运营 /ops 页 — issue #45 P0：开放问题列表（severity/资产过滤 + 分页）
-// + 「立即巡检」手动触发。无开放问题时显示「全部健康」空态。
+// 健康运营 /ops 页 — #45：开放问题列表（severity/资产过滤 + 分页）+「立即巡检」。
+// #50：状态筛选与状态徽标、行点开详情抽屉（忽略/重开生命周期操作）。
 import { useCallback, useEffect, useState } from 'react'
 import { HeartPulse, Loader2, RefreshCw, ShieldCheck } from 'lucide-react'
 import {
@@ -11,35 +11,20 @@ import {
   type OpsAssetType,
   type OpsFindingDto,
   type OpsFindingPageDto,
+  type OpsFindingStatus,
   type OpsSeverity,
 } from '@/lib/ops-api'
 import { ApiClientError } from '@/lib/types'
-
-const SEVERITY_BADGES: Record<OpsSeverity, string> = {
-  critical: 'bg-red-50 text-red-700 ring-red-200',
-  warning: 'bg-amber-50 text-amber-700 ring-amber-200',
-  info: 'bg-sky-50 text-sky-700 ring-sky-200',
-}
-const SEVERITY_LABELS: Record<OpsSeverity, string> = {
-  critical: '严重',
-  warning: '警告',
-  info: '提示',
-}
-const ASSET_LABELS: Record<OpsAssetType, string> = {
-  data: '数据',
-  skill: '技能',
-  knowledge: '知识',
-  runtime: '运行时',
-}
-const CHECK_LABELS: Record<string, string> = {
-  data_sync_failed: '门诊同步异常',
-  data_source_down: '数据源连接失败',
-}
-
-function formatTime(iso: string): string {
-  if (!iso) return '—'
-  return iso.replace('T', ' ').replace(/([+-]\d{2}:\d{2}|Z)$/, '')
-}
+import FindingDetailDrawer from './finding-detail-drawer'
+import {
+  ASSET_LABELS,
+  CHECK_LABELS,
+  SEVERITY_BADGES,
+  SEVERITY_LABELS,
+  STATUS_BADGES,
+  STATUS_LABELS,
+  formatTime,
+} from './shared'
 
 /** 证据摘要：problem 优先展示，附 1-2 个关键安全字段 */
 function evidenceSummary(finding: OpsFindingDto): string {
@@ -62,14 +47,16 @@ export default function OpsPage() {
   const [error, setError] = useState<string | null>(null)
   const [severity, setSeverity] = useState<OpsSeverity | ''>('')
   const [assetType, setAssetType] = useState<OpsAssetType | ''>('')
+  const [statusFilter, setStatusFilter] = useState<OpsFindingStatus | ''>('')
   const [pageNum, setPageNum] = useState(1)
   const [inspecting, setInspecting] = useState(false)
   const [inspectionNote, setInspectionNote] = useState<string | null>(null)
+  const [activeFindingId, setActiveFindingId] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     try {
       const result = await listOpsFindings({
-        status: 'open',
+        status: statusFilter || undefined,
         severity: severity || undefined,
         asset_type: assetType || undefined,
         page: pageNum,
@@ -80,7 +67,7 @@ export default function OpsPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [severity, assetType, pageNum])
+  }, [severity, assetType, statusFilter, pageNum])
 
   useEffect(() => { reload() }, [reload])
 
@@ -91,6 +78,10 @@ export default function OpsPage() {
   }
   const changeAssetType = (value: OpsAssetType | '') => {
     setAssetType(value)
+    setPageNum(1)
+  }
+  const changeStatus = (value: OpsFindingStatus | '') => {
+    setStatusFilter(value)
     setPageNum(1)
   }
 
@@ -194,9 +185,23 @@ export default function OpsPage() {
             <option value="runtime">运行时</option>
           </select>
         </label>
+        <label className="flex items-center gap-1.5 text-xs text-slate-500">
+          状态
+          <select
+            className={selectCls}
+            value={statusFilter}
+            aria-label="按状态过滤"
+            onChange={(e) => changeStatus(e.target.value as OpsFindingStatus | '')}
+          >
+            <option value="">全部</option>
+            <option value="open">开放</option>
+            <option value="ignored">已忽略</option>
+            <option value="resolved">已解决</option>
+          </select>
+        </label>
         {page && (
           <span className="ml-auto text-xs text-slate-500" data-testid="ops-total">
-            开放问题 {page.total} 条
+            问题 {page.total} 条
           </span>
         )}
       </div>
@@ -213,7 +218,7 @@ export default function OpsPage() {
           <ShieldCheck className="mx-auto size-8 text-emerald-500" />
           <p className="mt-2 text-sm font-medium text-emerald-700">全部健康</p>
           <p className="mt-1 text-xs text-slate-500">
-            当前没有开放问题。点击右上角「立即巡检」重新检查各资产域。
+            当前筛选条件下没有问题记录。点击右上角「立即巡检」重新检查各资产域。
           </p>
         </div>
       ) : (
@@ -225,6 +230,7 @@ export default function OpsPage() {
                 <th className="px-4 py-2.5 font-medium">资产</th>
                 <th className="px-4 py-2.5 font-medium">检查项</th>
                 <th className="px-4 py-2.5 font-medium">证据摘要</th>
+                <th className="px-4 py-2.5 font-medium">状态</th>
                 <th className="px-4 py-2.5 font-medium">首次发现</th>
                 <th className="px-4 py-2.5 font-medium">最近发现</th>
                 <th className="px-4 py-2.5 font-medium">次数</th>
@@ -234,7 +240,9 @@ export default function OpsPage() {
               {page.items.map((finding) => (
                 <tr
                   key={finding.finding_id}
-                  className="border-b border-slate-50 last:border-0 hover:bg-amber-50/30"
+                  onClick={() => setActiveFindingId(finding.finding_id)}
+                  className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-amber-50/30"
+                  data-testid="ops-finding-row"
                 >
                   <td className="px-4 py-2.5">
                     <span className={`inline-flex rounded-full px-2 py-px text-[10px] font-semibold ring-1 ${SEVERITY_BADGES[finding.severity]}`}>
@@ -250,6 +258,11 @@ export default function OpsPage() {
                   </td>
                   <td className="max-w-[16rem] truncate px-4 py-2.5 text-slate-500" title={evidenceSummary(finding)}>
                     {evidenceSummary(finding)}
+                  </td>
+                  <td className="px-4 py-2.5 whitespace-nowrap">
+                    <span className={`inline-flex rounded-full px-2 py-px text-[10px] font-semibold ring-1 ${STATUS_BADGES[finding.status]}`}>
+                      {STATUS_LABELS[finding.status]}
+                    </span>
                   </td>
                   <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">
                     {formatTime(finding.first_seen_at)}
@@ -286,6 +299,13 @@ export default function OpsPage() {
           </button>
         </div>
       )}
+
+      <FindingDetailDrawer
+        findingId={activeFindingId}
+        canWrite={canWrite}
+        onClose={() => setActiveFindingId(null)}
+        onMutated={reload}
+      />
     </div>
   )
 }

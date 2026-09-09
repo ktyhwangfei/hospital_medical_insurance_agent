@@ -54,6 +54,22 @@ export interface OpsFindingsQuery {
   page_size?: number
 }
 
+export type OpsFindingEventType = 'ignored' | 'reopened'
+
+export interface OpsFindingEventDto {
+  event_id: string
+  finding_id: string
+  event_type: OpsFindingEventType
+  actor: string
+  reason: string | null
+  created_at: string
+}
+
+export interface OpsFindingDetailDto {
+  finding: OpsFindingDto
+  events: OpsFindingEventDto[]
+}
+
 // ── 鉴权（与 data-governance-api 同模式：sessionStorage → dev 环境变量 token）──
 
 function opsToken(): string | null {
@@ -101,4 +117,31 @@ export async function listOpsFindings(query: OpsFindingsQuery): Promise<OpsFindi
   if (query.page_size) params.set('page_size', String(query.page_size))
   const suffix = params.toString()
   return opsRequest<OpsFindingPageDto>(`/findings${suffix ? `?${suffix}` : ''}`)
+}
+
+// ── #50 详情与生命周期 ──
+
+export async function getOpsFinding(findingId: string): Promise<OpsFindingDetailDto> {
+  return opsRequest<OpsFindingDetailDto>(`/findings/${encodeURIComponent(findingId)}`)
+}
+
+export async function ignoreOpsFinding(
+  findingId: string,
+  expectedRevision: number,
+  reason: string,
+): Promise<OpsFindingDetailDto> {
+  return opsRequest<OpsFindingDetailDto>(
+    `/findings/${encodeURIComponent(findingId)}/ignore?expected_revision=${expectedRevision}`,
+    { method: 'POST', body: JSON.stringify({ reason }) },
+  )
+}
+
+export async function reopenOpsFinding(
+  findingId: string,
+  expectedRevision: number,
+): Promise<OpsFindingDetailDto> {
+  return opsRequest<OpsFindingDetailDto>(
+    `/findings/${encodeURIComponent(findingId)}/reopen?expected_revision=${expectedRevision}`,
+    { method: 'POST' },
+  )
 }

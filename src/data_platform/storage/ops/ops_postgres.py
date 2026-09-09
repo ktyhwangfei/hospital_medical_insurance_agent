@@ -1,8 +1,9 @@
-"""健康运营问题库 PostgreSQL 存储 — issue #45 P0。
+"""健康运营问题库 PostgreSQL 存储 — issue #45 P0 + #50 生命周期。
 
 ops_findings 单表：fingerprint 唯一索引承载去重（ON CONFLICT 单语句
-upsert，occurrence_count 原子累加）；DDL 遵循 CREATE+ALTER 双写约定，
-旧库加列不改表结构（AGENTS.md 已知陷阱）。
+upsert，occurrence_count 原子累加）；ops_finding_events 追加留痕每次
+ignore/reopen 流转；DDL 遵循 CREATE+ALTER 双写约定，旧库加列不改表
+结构（AGENTS.md 已知陷阱）。
 """
 from __future__ import annotations
 
@@ -14,8 +15,12 @@ from src.config.production import DATABASE_URL
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
 from src.domain.ops.models import (
     FindingDraft,
+    FindingRevisionConflictError,
     OpsAssetType,
     OpsFinding,
+    OpsFindingEvent,
+    OpsFindingEventType,
+    OpsFindingNotFoundError,
     OpsFindingPage,
     OpsFindingStatus,
     OpsSeverity,
@@ -56,6 +61,24 @@ OPS_FINDINGS_TABLE_SCHEMA = (
     "CREATE INDEX IF NOT EXISTS idx_ops_findings_asset ON ops_findings(asset_type, severity)",
 )
 
+OPS_FINDING_EVENTS_TABLE_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS ops_finding_events (
+        event_id VARCHAR(64) PRIMARY KEY,
+        finding_id VARCHAR(64) NOT NULL,
+        event_type VARCHAR(32) NOT NULL,
+        actor VARCHAR(128) NOT NULL,
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL
+    )""",
+    "ALTER TABLE ops_finding_events ADD COLUMN IF NOT EXISTS event_id VARCHAR(64)",
+    "ALTER TABLE ops_finding_events ADD COLUMN IF NOT EXISTS finding_id VARCHAR(64)",
+    "ALTER TABLE ops_finding_events ADD COLUMN IF NOT EXISTS event_type VARCHAR(32)",
+    "ALTER TABLE ops_finding_events ADD COLUMN IF NOT EXISTS actor VARCHAR(128)",
+    "ALTER TABLE ops_finding_events ADD COLUMN IF NOT EXISTS reason TEXT",
+    "ALTER TABLE ops_finding_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS idx_ops_finding_events_finding ON ops_finding_events(finding_id, created_at)",
+)
+
 _FINDING_COLUMNS = (
     "finding_id, asset_type, asset_id, check_id, severity, status, fingerprint, "
     "payload, first_seen_at, last_seen_at, occurrence_count, diagnosis, revision"
@@ -80,6 +103,17 @@ def _row_to_finding(row: dict[str, Any]) -> OpsFinding:
     )
 
 
+def _row_to_event(row: dict[str, Any]) -> OpsFindingEvent:
+    return OpsFindingEvent(
+        event_id=row["event_id"],
+        finding_id=row["finding_id"],
+        event_type=OpsFindingEventType(row["event_type"]),
+        actor=row["actor"],
+        reason=row["reason"],
+        created_at=row["created_at"],
+    )
+
+
 class PostgresOpsFindingStorage:
     def __init__(
         self,
@@ -95,7 +129,7 @@ class PostgresOpsFindingStorage:
         if self._client is None:
             self._client = PostgreSQLClient(self._database_url)
         if not self._schema_ensured:
-            for statement in OPS_FINDINGS_TABLE_SCHEMA:
+            for statement in (*OPS_FINDINGS_TABLE_SCHEMA, *OPS_FINDING_EVENTS_TABLE_SCHEMA):
                 self._client.execute(statement)
             self._schema_ensured = True
         return self._client
@@ -168,3 +202,59 @@ class PostgresOpsFindingStorage:
             page=page,
             page_size=page_size,
         )
+
+    def get_finding(self, finding_id: str) -> OpsFinding:
+        rows = self._get_client().execute(
+            f"SELECT {_FINDING_COLUMNS} FROM ops_findings WHERE finding_id = %s",
+            (finding_id,),
+        )
+        if not rows:
+            raise OpsFindingNotFoundError(finding_id)
+        return _row_to_finding(rows[0])
+
+    def transition_finding(
+        self,
+        finding_id: str,
+        *,
+        expected_revision: int,
+        new_status: OpsFindingStatus,
+        event: OpsFindingEvent,
+    ) -> OpsFinding:
+        # 条件 UPDATE 承载乐观锁：revision 匹配才生效，避免「先读后写」竞态
+        rows = self._get_client().execute(
+            f"""
+            UPDATE ops_findings SET status = %s, revision = revision + 1
+            WHERE finding_id = %s AND revision = %s
+            RETURNING {_FINDING_COLUMNS}
+            """,
+            (new_status.value, finding_id, expected_revision),
+        )
+        if not rows:
+            current = self.get_finding(finding_id)  # 不存在则抛 NotFound
+            raise FindingRevisionConflictError(finding_id, expected_revision, current.revision)
+        self._get_client().execute(
+            """
+            INSERT INTO ops_finding_events (event_id, finding_id, event_type, actor, reason, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                event.event_id,
+                event.finding_id,
+                event.event_type.value,
+                event.actor,
+                event.reason,
+                event.created_at,
+            ),
+        )
+        return _row_to_finding(rows[0])
+
+    def list_finding_events(self, finding_id: str) -> list[OpsFindingEvent]:
+        rows = self._get_client().execute(
+            """
+            SELECT event_id, finding_id, event_type, actor, reason, created_at
+            FROM ops_finding_events WHERE finding_id = %s
+            ORDER BY created_at ASC, event_id ASC
+            """,
+            (finding_id,),
+        )
+        return [_row_to_event(row) for row in rows]

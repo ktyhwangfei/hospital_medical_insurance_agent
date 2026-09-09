@@ -1,4 +1,5 @@
-"""健康运营 /ops API 测试 — issue #45 P0（鉴权 + 巡检去重 + 列表过滤分页）。"""
+"""健康运营 /ops API 测试 — issue #45 P0（鉴权 + 巡检去重 + 列表过滤分页）
++ #50（详情 / ignore / reopen 状态机与乐观锁）。"""
 from __future__ import annotations
 
 import base64
@@ -212,3 +213,135 @@ class TestFindingsList:
     def test_severity_orders_critical_first(self, api):
         body = api.get(f"{BASE}/findings", headers=_headers("ops:read")).json()
         assert body["items"][0]["severity"] == "critical"
+
+
+class TestFindingLifecycle:
+    """#50：详情查询 + ignore/reopen 流转、非法流转 409、乐观锁 409。"""
+
+    @pytest.fixture
+    def api(self, api_factory):
+        # 一条 warning 问题（DEGRADED 同步任务），生命周期操作对象
+        reader = _Reader([_source()], {"bjybdb": _job(SyncJobStatus.DEGRADED)})
+        api = api_factory(reader)
+        api.post(f"{BASE}/inspections", headers=_headers("ops:write"))
+        return api
+
+    @pytest.fixture
+    def finding(self, api) -> dict:
+        body = api.get(f"{BASE}/findings", headers=_headers("ops:read")).json()
+        assert body["total"] == 1
+        return body["items"][0]
+
+    def test_get_detail_returns_finding_and_empty_timeline(self, api, finding):
+        resp = api.get(f"{BASE}/findings/{finding['finding_id']}", headers=_headers("ops:read"))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["finding"]["finding_id"] == finding["finding_id"]
+        assert body["finding"]["payload"]["problem"] == "sync_job_degraded"
+        assert body["events"] == []
+
+    def test_get_detail_unknown_404(self, api):
+        resp = api.get(f"{BASE}/findings/no-such-id", headers=_headers("ops:read"))
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error_code"] == "FINDING_NOT_FOUND"
+
+    def test_ignore_records_reason_actor_and_event(self, api, finding):
+        fid, revision = finding["finding_id"], finding["revision"]
+        resp = api.post(
+            f"{BASE}/findings/{fid}/ignore?expected_revision={revision}",
+            json={"reason": "已知 DBA 排期维护，暂不处理"},
+            headers=_headers("ops:write"),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["finding"]["status"] == "ignored"
+        assert body["finding"]["revision"] == revision + 1
+        assert len(body["events"]) == 1
+        event = body["events"][0]
+        assert event["event_type"] == "ignored"
+        assert event["reason"] == "已知 DBA 排期维护，暂不处理"
+        assert event["actor"] == "ops-admin-1"
+
+    def test_ignore_requires_reason_422(self, api, finding):
+        resp = api.post(
+            f"{BASE}/findings/{finding['finding_id']}/ignore?expected_revision=1",
+            json={"reason": ""},
+            headers=_headers("ops:write"),
+        )
+        assert resp.status_code == 422
+
+    def test_ignore_twice_409_invalid_transition(self, api, finding):
+        fid, revision = finding["finding_id"], finding["revision"]
+        first = api.post(
+            f"{BASE}/findings/{fid}/ignore?expected_revision={revision}",
+            json={"reason": "先忽略"},
+            headers=_headers("ops:write"),
+        )
+        assert first.status_code == 200
+        second = api.post(
+            f"{BASE}/findings/{fid}/ignore?expected_revision={first.json()['finding']['revision']}",
+            json={"reason": "再忽略"},
+            headers=_headers("ops:write"),
+        )
+        assert second.status_code == 409
+        assert second.json()["detail"]["error_code"] == "FINDING_TRANSITION_INVALID"
+
+    def test_ignore_with_stale_revision_409(self, api, finding):
+        fid = finding["finding_id"]
+        api.post(f"{BASE}/inspections", headers=_headers("ops:write"))  # 巡检刷新 revision
+        resp = api.post(
+            f"{BASE}/findings/{fid}/ignore?expected_revision={finding['revision']}",
+            json={"reason": "过期版本"},
+            headers=_headers("ops:write"),
+        )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error_code"] == "FINDING_REVISION_CONFLICT"
+
+    def test_reopen_after_ignore_restores_open_with_event(self, api, finding):
+        fid, revision = finding["finding_id"], finding["revision"]
+        ignored = api.post(
+            f"{BASE}/findings/{fid}/ignore?expected_revision={revision}",
+            json={"reason": "暂时搁置"},
+            headers=_headers("ops:write"),
+        ).json()
+        resp = api.post(
+            f"{BASE}/findings/{fid}/reopen?expected_revision={ignored['finding']['revision']}",
+            headers=_headers("ops:write"),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["finding"]["status"] == "open"
+        assert [event["event_type"] for event in body["events"]] == ["ignored", "reopened"]
+        assert body["events"][1]["reason"] is None
+
+    def test_reopen_from_open_409(self, api, finding):
+        resp = api.post(
+            f"{BASE}/findings/{finding['finding_id']}/reopen?expected_revision=1",
+            headers=_headers("ops:write"),
+        )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error_code"] == "FINDING_TRANSITION_INVALID"
+
+    def test_lifecycle_write_requires_ops_write(self, api, finding):
+        fid = finding["finding_id"]
+        assert api.post(
+            f"{BASE}/findings/{fid}/ignore?expected_revision=1",
+            json={"reason": "x"},
+            headers=_headers("ops:read"),
+        ).status_code == 403
+        assert api.post(
+            f"{BASE}/findings/{fid}/reopen?expected_revision=1",
+            headers=_headers("ops:read"),
+        ).status_code == 403
+
+    def test_recurrence_does_not_resurrect_ignored_status(self, api, finding):
+        fid, revision = finding["finding_id"], finding["revision"]
+        api.post(
+            f"{BASE}/findings/{fid}/ignore?expected_revision={revision}",
+            json={"reason": "忽略后复现不复活"},
+            headers=_headers("ops:write"),
+        )
+        api.post(f"{BASE}/inspections", headers=_headers("ops:write"))  # 复现巡检
+        body = api.get(f"{BASE}/findings/{fid}", headers=_headers("ops:read")).json()
+        assert body["finding"]["status"] == "ignored"  # 生命周期不被巡检覆盖
+        assert body["finding"]["occurrence_count"] == 2

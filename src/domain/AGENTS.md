@@ -973,12 +973,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ### 14.7. 健康运营上下文（Ops Health）
 
-> 依据：issue #45 P0 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
-> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；P0 只做「发现」（只读检查器 + fingerprint 去重落库），诊断/修复/验证随 P1/P2 分期。
+> 依据：issue #45 P0 + issue #50 生命周期 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
+> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）与「手动处置」（#50：ignore/reopen 流转 + 事件留痕）已落地，诊断/自动修复/验证随 P1/P2 分期。
 
 #### 文件位置
 
-`src/domain/ops/models.py`（领域模型）+ `src/runtime/ops/checkers.py`（检查器注册）+ `src/runtime/ops/service.py`（巡检编排）+ `src/data_platform/storage/ops/`（存储 ports/adapter 四件套）+ `src/runtime/api/ops_routes.py`（API）+ portal `/ops` 页（`src/apps/portal/app/ops/page.tsx` + `src/lib/ops-api.ts`）
+`src/domain/ops/models.py`（领域模型）+ `src/runtime/ops/checkers.py`（检查器注册）+ `src/runtime/ops/service.py`（巡检编排与生命周期状态机）+ `src/data_platform/storage/ops/`（存储 ports/adapter 四件套）+ `src/runtime/api/ops_routes.py`（API）+ portal `/ops` 页（`src/apps/portal/app/ops/page.tsx` + `finding-detail-drawer.tsx` + `src/lib/ops-api.ts`）
 
 #### 通用语言字典
 
@@ -989,10 +989,13 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 问题指纹 | `finding_fingerprint()` | 值函数 | — | 去重键 `asset_type:asset_id:check_id`；同资产同检查项复现只累计 |
 | 受检资产类型 | `OpsAssetType` | **Value Object** | `StrEnum` | skill / knowledge / data / runtime 四域 |
 | 问题严重度 | `OpsSeverity` | **Value Object** | `StrEnum` | critical（立即处理）/ warning（排期）/ info（记录） |
-| 问题状态 | `OpsFindingStatus` | **Value Object** | `StrEnum` | P0 仅 open；resolved/ignored 由 #50 生命周期操作驱动，诊断/修复态随 P1/P2 扩充 |
+| 问题状态 | `OpsFindingStatus` | **Value Object** | `StrEnum` | open（#45 默认）/ ignored（#50 忽略）/ resolved（#53 自动修复驱动） |
+| 生命周期事件 | `OpsFindingEvent` | **Entity** | Pydantic `BaseModel`（frozen） | 一次 ignore/reopen 流转留痕（actor + 可选 reason + created_at），追加只增不改 |
+| 事件类型 | `OpsFindingEventType` | **Value Object** | `StrEnum` | ignored / reopened；resolved 事件归 #53 |
+| 问题详情 | `OpsFindingDetail` | **DTO** | Pydantic `BaseModel` | finding 当前态 + events 时间线（升序），详情页/流转接口返回体 |
 | 检查器注册项 | `CheckSpec` | **Value Object** | frozen dataclass | 代码内注册（id/资产类型/描述/runner），不引入 YAML 配置系统 |
 | 检查器读取面 | `GovernanceStatusReader` | **Port** | `typing.Protocol` | 检查器对治理控制面的最小只读依赖（list_sources/get_job） |
-| 健康运营巡检服务 | `OpsHealthService` | **Domain Service** | — | 逐检查器只读取数→问题库去重落库；单检查器失败不中断整次巡检 |
+| 健康运营巡检服务 | `OpsHealthService` | **Domain Service** | — | 逐检查器只读取数→问题库去重落库；单检查器失败不中断整次巡检；承载 ignore/reopen 状态机 |
 | 巡检结果 | `OpsInspectionResult` | **DTO** | Pydantic `BaseModel` | checked_at / check_count / finding_count / findings / checker_errors |
 
 #### 业务规则
@@ -1000,8 +1003,11 @@ HIS 系统 → HisPort → Patient (查询/读取)
 1. 检查器**只读**复用既有域状态数据（如 data_governance 连接探测、同步任务状态），不改其任何表。
 2. 滞后判定：应到未到超过 `max(2×调度间隔, 15 分钟)` 宽限才告警（`LAG_GRACE_FLOOR_MINUTES`）。
 3. payload 只允许 safe_* / 状态码 / 时间戳等脱敏字段，检查器取数侧负责不带出凭据与连接串。
-4. upsert 语义：首见插入 open/1 次；复现 occurrence_count+1、last_seen_at/severity/payload 刷新，status 与 diagnosis 不动（生命周期归 #50，诊断归 P1）。
-5. API 鉴权：签名 JWT `ops:read`（GET /ops/findings）/ `ops:write`（POST /ops/inspections），与 data-governance 同模式。
+4. upsert 语义：首见插入 open/1 次；复现 occurrence_count+1、last_seen_at/severity/payload 刷新，status 与 diagnosis 不动（复现不复活已忽略问题；诊断归 P1）。
+5. 生命周期状态机（#50）：ignore 仅允许 open→ignored（reason 必填）；reopen 仅允许 ignored|resolved→open；非法流转抛 `InvalidFindingTransitionError`（API 409 `FINDING_TRANSITION_INVALID`）。
+6. 乐观锁：流转必须携带 `expected_revision`，与库内不一致抛 `FindingRevisionConflictError`（API 409 `FINDING_REVISION_CONFLICT`）；revision 随每次 upsert/流转递增。
+7. 事件留痕与状态更新同事务（storage `transition_finding` 单调用），事件追加只增不改，构成详情页时间线。
+8. API 鉴权：签名 JWT `ops:read`（GET）/ `ops:write`（POST /ops/inspections、ignore、reopen），与 data-governance 同模式。
 
 ---
 
@@ -1164,6 +1170,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ModelResponse` | 模型响应 | ModelService | DTO |
 | `OpsAssetType` | 受检资产类型 | OpsHealth | Value Object |
 | `OpsFinding` | 资产健康问题 | OpsHealth | Aggregate Root |
+| `OpsFindingDetail` | 问题详情 | OpsHealth | DTO |
+| `OpsFindingEvent` | 生命周期事件 | OpsHealth | Entity |
+| `OpsFindingEventType` | 事件类型 | OpsHealth | Value Object |
 | `OpsFindingPage` | 问题分页结果 | OpsHealth | DTO |
 | `OpsFindingStatus` | 问题状态 | OpsHealth | Value Object |
 | `OpsHealthService` | 健康运营巡检服务 | OpsHealth | Domain Service |

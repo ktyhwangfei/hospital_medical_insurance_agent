@@ -1,4 +1,4 @@
-"""健康运营服务 — 巡检编排与问题查询（issue #45 P0）。"""
+"""健康运营服务 — 巡检编排、问题查询与生命周期流转（#45 P0 + #50）。"""
 from __future__ import annotations
 
 import logging
@@ -9,11 +9,16 @@ from pydantic import BaseModel, Field
 
 from src.data_platform.storage.ops.ops_ports import OpsFindingStorage
 from src.domain.ops.models import (
+    InvalidFindingTransitionError,
     OpsAssetType,
     OpsFinding,
+    OpsFindingDetail,
+    OpsFindingEvent,
+    OpsFindingEventType,
     OpsFindingPage,
     OpsFindingStatus,
     OpsSeverity,
+    new_finding_event_id,
 )
 from src.runtime.ops.checkers import OPS_CHECKS, GovernanceStatusReader
 
@@ -85,4 +90,74 @@ class OpsHealthService:
             asset_type=asset_type,
             page=page,
             page_size=page_size,
+        )
+
+    # ── #50 生命周期：详情 + ignore/reopen 流转 ──
+
+    def get_finding_detail(self, finding_id: str) -> OpsFindingDetail:
+        """单条问题详情：当前状态 + 生命周期事件时间线。"""
+        finding = self._storage.get_finding(finding_id)
+        return OpsFindingDetail(finding=finding, events=self._storage.list_finding_events(finding_id))
+
+    def ignore_finding(
+        self,
+        finding_id: str,
+        *,
+        expected_revision: int,
+        reason: str,
+        actor: str,
+    ) -> OpsFindingDetail:
+        """忽略开放问题（必填原因）：open → ignored。"""
+        current = self._storage.get_finding(finding_id)
+        if current.status != OpsFindingStatus.OPEN:
+            raise InvalidFindingTransitionError(finding_id, "ignore", current.status)
+        updated = self._storage.transition_finding(
+            finding_id,
+            expected_revision=expected_revision,
+            new_status=OpsFindingStatus.IGNORED,
+            event=self._build_event(
+                finding_id, OpsFindingEventType.IGNORED, actor, reason,
+                occurred_at=datetime.now(timezone.utc),
+            ),
+        )
+        return self.get_finding_detail(updated.finding_id)
+
+    def reopen_finding(
+        self,
+        finding_id: str,
+        *,
+        expected_revision: int,
+        actor: str,
+    ) -> OpsFindingDetail:
+        """重开已忽略/已解决问题：ignored|resolved → open。"""
+        current = self._storage.get_finding(finding_id)
+        if current.status == OpsFindingStatus.OPEN:
+            raise InvalidFindingTransitionError(finding_id, "reopen", current.status)
+        updated = self._storage.transition_finding(
+            finding_id,
+            expected_revision=expected_revision,
+            new_status=OpsFindingStatus.OPEN,
+            event=self._build_event(
+                finding_id, OpsFindingEventType.REOPENED, actor, None,
+                occurred_at=datetime.now(timezone.utc),
+            ),
+        )
+        return self.get_finding_detail(updated.finding_id)
+
+    @staticmethod
+    def _build_event(
+        finding_id: str,
+        event_type: OpsFindingEventType,
+        actor: str,
+        reason: str | None,
+        *,
+        occurred_at: datetime,
+    ) -> OpsFindingEvent:
+        return OpsFindingEvent(
+            event_id=new_finding_event_id(),
+            finding_id=finding_id,
+            event_type=event_type,
+            actor=actor,
+            reason=reason,
+            created_at=occurred_at,
         )

@@ -1,4 +1,5 @@
-// 健康运营 /ops 页测试 — issue #45 P0（空态「全部健康」/巡检触发/过滤徽标/错误态）。
+// 健康运营 /ops 页测试 — #45（空态/巡检触发/过滤徽标/错误态）
+// + #50（状态筛选与徽标、行点开详情抽屉）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
@@ -14,12 +15,13 @@ vi.mock('@/lib/ops-api', async (importOriginal) => {
     hasOpsPermission: vi.fn(() => true),
     listOpsFindings: vi.fn(),
     runOpsInspection: vi.fn(),
+    getOpsFinding: vi.fn(),
   }
 })
 
 import OpsPage from '../../app/ops/page'
-import { listOpsFindings, runOpsInspection } from '@/lib/ops-api'
-import type { OpsFindingDto, OpsFindingPageDto } from '@/lib/ops-api'
+import { getOpsFinding, listOpsFindings, runOpsInspection } from '@/lib/ops-api'
+import type { OpsFindingDetailDto, OpsFindingDto, OpsFindingPageDto } from '@/lib/ops-api'
 
 function finding(overrides: Partial<OpsFindingDto> = {}): OpsFindingDto {
   return {
@@ -51,11 +53,12 @@ describe('OpsPage 健康运营页', () => {
   })
   afterEach(() => cleanup())
 
-  it('无开放问题时展示「全部健康」空态', async () => {
+  it('无问题时展示「全部健康」空态（默认查全部状态）', async () => {
     render(<OpsPage />)
     await waitFor(() => expect(screen.getByTestId('ops-empty')).toBeTruthy())
     expect(screen.getByText('全部健康')).toBeTruthy()
-    expect(listOpsFindings).toHaveBeenCalledWith(expect.objectContaining({ status: 'open' }))
+    // 默认不带 status 过滤（#50 起列表展示全部状态，徽标区分）
+    expect(vi.mocked(listOpsFindings).mock.calls[0]?.[0]?.status).toBeUndefined()
   })
 
   it('渲染问题列表：severity 徽标、资产、检查项与发生次数', async () => {
@@ -129,5 +132,47 @@ describe('OpsPage 健康运营页', () => {
     render(<OpsPage />)
     await waitFor(() => expect(screen.getByTestId('ops-error')).toBeTruthy())
     expect(screen.getByTestId('ops-error').textContent).toContain('无法连接健康运营服务')
+  })
+
+  it('渲染状态徽标并支持状态过滤', async () => {
+    vi.mocked(listOpsFindings).mockResolvedValue(page([
+      finding(),
+      finding({ finding_id: 'f2', status: 'ignored' }),
+    ]))
+    render(<OpsPage />)
+    await waitFor(() => expect(screen.getByTestId('ops-table')).toBeTruthy())
+    expect(screen.getAllByText('开放').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('已忽略').length).toBeGreaterThan(0)
+
+    fireEvent.change(screen.getByLabelText('按状态过滤'), { target: { value: 'ignored' } })
+    await waitFor(() =>
+      expect(listOpsFindings).toHaveBeenLastCalledWith(expect.objectContaining({
+        status: 'ignored', page: 1,
+      })),
+    )
+  })
+
+  it('点击行打开详情抽屉并加载证据', async () => {
+    vi.mocked(listOpsFindings).mockResolvedValue(page([finding()]))
+    const detailDto: OpsFindingDetailDto = {
+      finding: finding(),
+      events: [{
+        event_id: 'e1',
+        finding_id: 'f1',
+        event_type: 'ignored',
+        actor: 'portal-dev-ops',
+        reason: '排期维护',
+        created_at: '2026-09-09T04:05:00+00:00',
+      }],
+    }
+    vi.mocked(getOpsFinding).mockResolvedValue(detailDto)
+    render(<OpsPage />)
+    await waitFor(() => expect(screen.getByTestId('ops-finding-row')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('ops-finding-row'))
+    await waitFor(() => expect(getOpsFinding).toHaveBeenCalledWith('f1'))
+    await waitFor(() => expect(screen.getByTestId('ops-detail-drawer')).toBeTruthy())
+    expect(screen.getByText('证据快照')).toBeTruthy()
+    expect(screen.getByText(/由 portal-dev-ops 忽略/)).toBeTruthy()
   })
 })
