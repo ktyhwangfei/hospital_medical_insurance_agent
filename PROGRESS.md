@@ -447,3 +447,6 @@
 - 当前活库结果：顺序 P95 2.91ms、并发 P95 4.30ms，均低于只读接口 300ms 阈值；当前 View 仅 1 行，结果仅作为小规模基线。
 - 当前决策：不提前引入物化表、调度器、缓存或异步运行层；接入代表性生产规模数据且 P95 超阈值或出现明确资源瓶颈后再评估。
 - 验证：`src/tests/performance/test_governed_flow_view.py` 1 passed；详细证据见 `docs/reviews/2026-09-07-issue65-phase4-performance.md`。
+
+| 2026-09-09 | **Issue #45 健康运营 P0 落地（#65 关联 issue 依赖序第 1 位）**：`ops_findings` 问题库（fingerprint=`asset_type:asset_id:check_id` 唯一索引 + ON CONFLICT 单语句 upsert，occurrence_count/revision 原子累计；CREATE+ALTER 双写 DDL）+ 存储四件套（ports/内存/PG/工厂，USE_MEMORY_STORAGE=1 回退）+ 数据域只读检查器 2 个（data_sync_failed：failed=critical/degraded=warning/滞后=超 max(2×调度间隔,15min) 宽限 warning；data_source_down：connection_status=error critical，payload 仅 safe 字段）+ `OpsHealthService` 巡检编排（单检查器失败不中断，记 checker_errors）+ API `POST /ops/inspections`、`GET /ops/findings`（severity/asset_type/status 过滤+分页，severeity→last_seen 排序；ops:read/ops:write 签名 JWT 鉴权，start-servers.ps1 签发 NEXT_PUBLIC_OPS_TOKEN dev token）+ portal `/ops` 独立页（导航「健康运营」入口、立即巡检按钮、severity 徽标、证据摘要、发生次数、分页、「全部健康」空态）。领域字典 §14.7（10 词条）+ 附录 A 8 行。验证：Unit 18 + API 10 + Flow 活库冒烟 2（DDL 幂等/去重/过滤实测）全绿；portal 新增 6 测 + 全量 446 passed + tsc 0 错误；全仓 unit+api 2886 passed（4 失败 stash 甄别为预存：scripts 启动脚本断言、policy_rules_search、infra_skill×2，与本次改动无关） | #50 详情页/生命周期与 P1 诊断的存储前置已就绪 |
+
