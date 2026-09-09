@@ -7,6 +7,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
@@ -29,6 +30,29 @@ from src.semantic_layer.registry import (
 
 
 QueryScopeName = Literal["whole_admission", "segment", "whole_settlement", "fee_item"]
+
+
+def _assert_metric_in_force(code: str, metric: ObjectVersionMetric) -> None:
+    """#60 查询层生效期裁剪：不得使用已废止/未生效时段的政策承载值。
+
+    按查询执行日（date.today()）对照 policy_carrier 生效区间：
+    effective_start > 今日 → 未生效；effective_end < 今日 → 已废止；均拒查并指明。
+    日期格式非法时跳过（发布门禁负责硬卡，查询层不因脏数据阻断）。
+    """
+    carrier = metric.policy_carrier or {}
+    start, end = carrier.get("effective_start"), carrier.get("effective_end")
+    if not start and not end:
+        return
+    try:
+        start_d = date.fromisoformat(str(start)) if start else None
+        end_d = date.fromisoformat(str(end)) if end else None
+    except ValueError:
+        return
+    today = date.today()
+    if start_d and start_d > today:
+        raise SemanticQueryPlanningError(f"指标 '{code}' 未生效(生效起 {start})，不可用于查询")
+    if end_d and end_d < today:
+        raise SemanticQueryPlanningError(f"指标 '{code}' 已废止(废止日 {end})，不可用于查询")
 
 
 class SemanticQueryPlanningError(ValueError):
@@ -981,6 +1005,8 @@ class SemanticQueryPlanner:
             metric = by_code.get(full_code)
             if metric is None or not (metric.fact_field_code or metric.expression):
                 raise SemanticQueryPlanningError(f"指标 '{code}' 未在已发布查询模型中定义")
+            # #60 查询层生效期裁剪：已废止/未生效的政策承载值不可用于查询
+            _assert_metric_in_force(code, metric)
             resolved.append(metric)
         return resolved
 

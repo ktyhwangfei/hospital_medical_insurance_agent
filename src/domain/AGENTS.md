@@ -69,6 +69,7 @@ domain/
 14.6. [治理数据流上下文（Governed Data Flow）](#146-治理数据流上下文governed-data-flow)
 14.7. [健康运营上下文（Ops Health）](#147-健康运营上下文ops-health)
 14.8. [数据目录上下文（Data Catalog）](#148-数据目录上下文data-catalog)
+14.9. [语义指标政策承载（Metric Policy Carrier）](#149-语义指标政策承载metric-policy-carrier)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
 ---
@@ -1055,6 +1056,37 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.9. 语义指标政策承载（Metric Policy Carrier）
+
+> 依据：issue #35 follow-up / issue #60（切片①-③ 经 PR#61 落地：subkind/policy_carrier 字段 + A/B 两态发布门禁 + 快照携带；切片④ 本期补齐：policy_rule_ref 溯源 + 幽灵档拒绝 + 查询层生效期裁剪）。
+> 定位：政策口径类指标（结算法则/报销规则/目录待遇）在发布的指标定义上硬携带 文号/地域/生效期，保证可溯源、不二次漂移；承载单源在 zcgz 规则行（`policy_extractions`），指标只冗余。
+
+#### 文件位置
+
+`src/semantic_layer/models.py`（Metric.subkind/policy_carrier + ObjectVersionMetric 快照冻结）+ `src/semantic_layer/registry.py`（发布门禁 + `PolicyRuleReader` Port + `PgPolicyRuleReader`）+ `src/semantic_layer/query_planner.py`（`_assert_metric_in_force` 生效期裁剪）
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 政策承载 | `policy_carrier` | **Value Object** | Metric 上的 `dict` 字段 | `{doc_number, region_scope, effective_start, effective_end?, policy_rule_ref?}`；A 类发布硬卡组 |
+| 政策判别位 | `subkind` | **Value Object** | Metric 上的 `str` 字段 | `policy_rate`（A 报销/统筹/补差金额类）/ `policy_elig`（A 待遇资格/准入）/ None·空（B 运营事实类） |
+| 政策规则引用 | `policy_rule_ref` | **Value Object** | policy_carrier 键 | zcgz 规则行实体主键（`policy_extractions.extraction_id`），非 section/文号；单源在 zcgz，指标只冗余 |
+| 幽灵档 | — | 业务规则 | — | 引用的规则行已废止（archived）而承载缺 `effective_end` 的发布态：废止事实必须落到废止日，否则拒绝发布 |
+| 政策规则读取面 | `PolicyRuleReader` | **Port** | `typing.Protocol` | 发布门禁对 zcgz 规则行的只读溯源句柄 `get_rule(rule_ref)`（至少含 status）；None=不校验（存量兼容） |
+| PG 政策规则读取器 | `PgPolicyRuleReader` | **Adapter** | 普通 class | 同库窄列 SELECT（extraction_id/status）；不反向 import knowledge_extension，保持依赖方向 |
+| 生效期裁剪 | `_assert_metric_in_force` | 值函数 | — | 查询层按执行日对照生效区间：effective_start>今日 → 未生效拒查；effective_end<今日 → 已废止拒查；格式非法跳过 |
+
+#### 业务规则
+
+1. A/B 两态门禁（PR#61，验收#1）：subkind∈{policy_rate, policy_elig} 缺 doc_number/region_scope/effective_start 任一 → 发布拒绝并逐项指明；B 类（空/运营）不因未填 policy_carrier 被拒（验收#3 存量回归）。
+2. 溯源校验（#60 切片④，验收#4）：policy_rule_ref 非空（不分 A/B）→ 必须命中同库 zcgz 规则行；引用不存在 → 拒绝发布并指明引用值；仅在注入 `PolicyRuleReader` 时生效（生产 `get_semantic_registry()` 注入，内存注册表/存量构造路径不受影响）。
+3. 幽灵档拒绝（#60 切片④，验收#2）：引用行 status=archived（已废止）而承载缺 effective_end → 拒绝并指向废止事实；补齐废止日或引用现行行（end=null=现行）合法。
+4. 查询层生效期裁剪（规格「查询层不得用已废止时段值」）：`_resolve_metrics` 对带承载指标按查询执行日裁剪，已废止/未生效指标不可进入任何查询；日期格式非法时跳过（发布门禁负责硬卡，查询层不因脏数据阻断）。
+5. 快照一致性（验收#5，PR#61）：policy_carrier + subkind 随 BusinessObjectVersion 发布冻结（`ObjectVersionMetric.from_metric` 深拷贝），回滚=版本指针恢复旧快照。
+
+---
+
 ### 15. AI 编程工作流契约
 
 #### 契约 1：先查后写
@@ -1240,6 +1272,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `PartialRefundPreview` | 预结算结果 | Insurance | Value Object |
 | `PolicyExpression` | 政策表达式 | Knowledge | Value Object |
 | `PolicyCarrier` | 政策载体 | GovernedFlow | Value Object |
+| `PolicyRuleReader` | 政策规则读取面 | SemanticLayer | Port |
+| `PgPolicyRuleReader` | PG 政策规则读取器 | SemanticLayer | Adapter |
 | `PolicyFact` | 政策事实 | Knowledge | Value Object |
 | `PreAuditPort` | 事前审核适配器端口 | AuditRisk | Domain Service |
 | `ProfitLoss` | 盈亏分析 | DrgDip | Value Object |
