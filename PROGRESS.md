@@ -441,3 +441,9 @@
 | 2026-09-02 | Issue #35 语义指标治理字段补齐：`semantic_metrics` 增加 8 个治理字段，Metric/API/Portal 复用现有指标链路；`mzjyxx` 首批只发布 `T_State`、`T_FeeAll`、`T_FundPay`、`T_SelfPayAll` 4 个指标，`average_fee` 与 `insured_encounter_count` 同批暂缓并保持 draft/unavailable，发布拒绝明确提示“就诊人次口径未定”。最终验证：semantic layer Unit 179、相关 API 32、Flow 3 通过；Portal 依赖已安装，`tsc --noEmit` 零错误，Vitest 58 files / 418 tests 通过 | Issue #35 |
 
 > **维护约定**：每次状态变更必须在此记录。§2 与 `docs/steering/政策知识管线开发计划.md` 双向同步。
+### 2026-09-07 Issue #65 Phase 4 启动：View 性能基线
+
+- 已新增真实 PostgreSQL View 性能基准：顺序热连接 30 次、10 个独立连接并发 50 次，复用 `PostgresFlowViewReader.read()`，只测查询热路径。
+- 当前活库结果：顺序 P95 2.91ms、并发 P95 4.30ms，均低于只读接口 300ms 阈值；当前 View 仅 1 行，结果仅作为小规模基线。
+- 当前决策：不提前引入物化表、调度器、缓存或异步运行层；接入代表性生产规模数据且 P95 超阈值或出现明确资源瓶颈后再评估。
+- 验证：`src/tests/performance/test_governed_flow_view.py` 1 passed；详细证据见 `docs/reviews/2026-09-07-issue65-phase4-performance.md`。
