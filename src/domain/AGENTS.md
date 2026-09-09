@@ -973,12 +973,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ### 14.7. 健康运营上下文（Ops Health）
 
-> 依据：issue #45 P0 + issue #50 生命周期 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
-> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）与「手动处置」（#50：ignore/reopen 流转 + 事件留痕）已落地，诊断/自动修复/验证随 P1/P2 分期。
+> 依据：issue #45 P0 + issue #50 生命周期 + issue #53 L1 自动修复 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
+> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）、「手动处置」（#50：ignore/reopen 流转 + 事件留痕）与「解决」（#53：L1 白名单自动修复 + 修复后强制验证闭环）已落地，诊断归后续分期。
 
 #### 文件位置
 
-`src/domain/ops/models.py`（领域模型）+ `src/runtime/ops/checkers.py`（检查器注册）+ `src/runtime/ops/service.py`（巡检编排与生命周期状态机）+ `src/data_platform/storage/ops/`（存储 ports/adapter 四件套）+ `src/runtime/api/ops_routes.py`（API）+ portal `/ops` 页（`src/apps/portal/app/ops/page.tsx` + `finding-detail-drawer.tsx` + `src/lib/ops-api.ts`）
+`src/domain/ops/models.py`（领域模型）+ `src/runtime/ops/checkers.py`（检查器注册）+ `src/runtime/ops/remediation.py`（L1 修复白名单与执行器）+ `src/runtime/ops/service.py`（巡检编排与生命周期状态机）+ `src/data_platform/storage/ops/`（存储 ports/adapter 四件套）+ `src/runtime/api/ops_routes.py`（API）+ portal `/ops` 页（`src/apps/portal/app/ops/page.tsx` + `finding-detail-drawer.tsx` + `src/lib/ops-api.ts`）
 
 #### 通用语言字典
 
@@ -989,14 +989,22 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 问题指纹 | `finding_fingerprint()` | 值函数 | — | 去重键 `asset_type:asset_id:check_id`；同资产同检查项复现只累计 |
 | 受检资产类型 | `OpsAssetType` | **Value Object** | `StrEnum` | skill / knowledge / data / runtime 四域 |
 | 问题严重度 | `OpsSeverity` | **Value Object** | `StrEnum` | critical（立即处理）/ warning（排期）/ info（记录） |
-| 问题状态 | `OpsFindingStatus` | **Value Object** | `StrEnum` | open（#45 默认）/ ignored（#50 忽略）/ resolved（#53 自动修复驱动） |
-| 生命周期事件 | `OpsFindingEvent` | **Entity** | Pydantic `BaseModel`（frozen） | 一次 ignore/reopen 流转留痕（actor + 可选 reason + created_at），追加只增不改 |
-| 事件类型 | `OpsFindingEventType` | **Value Object** | `StrEnum` | ignored / reopened；resolved 事件归 #53 |
-| 问题详情 | `OpsFindingDetail` | **DTO** | Pydantic `BaseModel` | finding 当前态 + events 时间线（升序），详情页/流转接口返回体 |
+| 问题状态 | `OpsFindingStatus` | **Value Object** | `StrEnum` | open（#45 巡检产出）/ ignored（#50 忽略）/ resolved（#53 修复验证通过） |
+| 生命周期事件 | `OpsFindingEvent` | **Entity** | Pydantic `BaseModel`（frozen） | 一次 ignore/reopen/resolved/reopened 流转留痕（actor + 可选 reason + created_at），追加只增不改 |
+| 事件类型 | `OpsFindingEventType` | **Value Object** | `StrEnum` | ignored / reopened / resolved（#53 修复验证通过）/ reopened 复用（巡检发现已解决问题复发） |
+| 问题详情 | `OpsFindingDetail` | **DTO** | Pydantic `BaseModel` | finding 当前态 + events 时间线（升序）+ remediations 修复记录（升序），详情页/流转接口返回体 |
 | 检查器注册项 | `CheckSpec` | **Value Object** | frozen dataclass | 代码内注册（id/资产类型/描述/runner），不引入 YAML 配置系统 |
 | 检查器读取面 | `GovernanceStatusReader` | **Port** | `typing.Protocol` | 检查器对治理控制面的最小只读依赖（list_sources/get_job） |
-| 健康运营巡检服务 | `OpsHealthService` | **Domain Service** | — | 逐检查器只读取数→问题库去重落库；单检查器失败不中断整次巡检；承载 ignore/reopen 状态机 |
+| 健康运营巡检服务 | `OpsHealthService` | **Domain Service** | — | 逐检查器只读取数→问题库去重落库；单检查器失败不中断整次巡检；承载 ignore/reopen/remediate 状态机 |
 | 巡检结果 | `OpsInspectionResult` | **DTO** | Pydantic `BaseModel` | checked_at / check_count / finding_count / findings / checker_errors |
+| 修复运行 | `OpsRemediationRun` | **Entity** | Pydantic `BaseModel`（frozen） | 一次修复尝试留痕：status 记动作执行、verification_result 记修复后验证（None=未验证）；追加只增不改 |
+| 修复风险级 | `RemediationRiskLevel` | **Value Object** | `StrEnum` | L1（白名单自动执行）/ L2（人工确认） |
+| 修复运行状态 | `RemediationRunStatus` | **Value Object** | `StrEnum` | succeeded（动作已执行）/ failed（动作未发起，after_evidence 携带原因） |
+| 验证结果 | `VerificationResult` | **Value Object** | `StrEnum` | passed（检查复跑通过→resolved）/ failed（复跑仍报问题→保持 open） |
+| 修复动作执行结果 | `RemediationActionOutcome` | **DTO** | Pydantic `BaseModel`（frozen） | 执行器返回体：executed + before/after 证据快照（脱敏字段） |
+| 修复白名单项 | `RemediationSpec` | **Value Object** | frozen dataclass | action_id ↔ check_id ↔ risk_level ↔ executor 的白名单注册；`default_remediation_whitelist()` 代码内注册 |
+| 修复执行器 | `RemediationExecutor` | **Port** | `typing.Protocol`（Callable） | `(OpsFinding, action_id) -> RemediationActionOutcome`；业务修复逻辑的唯一扩展点 |
+| 重试门诊同步 | `retry_data_sync` | 修复动作 | — | 本期唯一 L1 动作：复用 data_governance 同步入口重试失败/滞后的门诊同步任务 |
 
 #### 业务规则
 
@@ -1007,7 +1015,11 @@ HIS 系统 → HisPort → Patient (查询/读取)
 5. 生命周期状态机（#50）：ignore 仅允许 open→ignored（reason 必填）；reopen 仅允许 ignored|resolved→open；非法流转抛 `InvalidFindingTransitionError`（API 409 `FINDING_TRANSITION_INVALID`）。
 6. 乐观锁：流转必须携带 `expected_revision`，与库内不一致抛 `FindingRevisionConflictError`（API 409 `FINDING_REVISION_CONFLICT`）；revision 随每次 upsert/流转递增。
 7. 事件留痕与状态更新同事务（storage `transition_finding` 单调用），事件追加只增不改，构成详情页时间线。
-8. API 鉴权：签名 JWT `ops:read`（GET）/ `ops:write`（POST /ops/inspections、ignore、reopen），与 data-governance 同模式。
+8. API 鉴权：签名 JWT `ops:read`（GET）/ `ops:write`（POST /ops/inspections、ignore、reopen、remediate），与 data-governance 同模式。
+9. L1 白名单（#53）：只收录幂等、可重放、可验证的修复动作，本期仅 `data_sync_failed → retry_data_sync`；非白名单 check_id 的修复请求抛 `RemediationNotAllowedError`（API 409 `REMEDIATION_NOT_WHITELISTED`），portal 不展示修复按钮。
+10. 修复仅允许对 open 问题发起（同 ignore）；执行器先做动作、后强制重跑该问题的触发检查器（按 fingerprint 匹配草稿）：复跑通过→resolved（事件 reason 记 `L1 修复动作 xxx 验证通过`）；复跑仍报→upsert 复现（occurrence_count+1）保持 open；检查器异常→不判定验证结果，状态不动，`after_evidence.verification_error` 记原因。
+11. 修复运行留痕先于状态流转：动作未发起（如任务 paused/draft、同步任务不存在）记 `failed` 运行行且不触发验证，问题状态不动；`expected_revision` 乐观锁只约束 resolved 流转，冲突时运行行仍保留（动作幂等可重放）。
+12. 已解决问题复现：巡检 upsert 后自动 open（系统 actor `system:ops-inspector` 记 reopened 事件）；ignored 问题复现不复活（#50 规则）。
 
 ---
 
@@ -1142,6 +1154,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `FlowNode` | 流节点 | GovernedFlow | Entity |
 | `FlowPublishedRevision` | 流发布修订 | GovernedFlow | Entity |
 | `FlowStatus` | 流状态 | GovernedFlow | Value Object |
+| `GovernanceStatusReader` | 检查器读取面 | OpsHealth | Port |
 | `HisPort` | HIS 适配器端口 | Patient | Domain Service |
 | `Hypothesis` | 推理假设 | Runtime | Entity |
 | `InsuranceInterfacePort` | 医保接口适配器端口 | Insurance | Domain Service |
@@ -1177,6 +1190,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `OpsFindingStatus` | 问题状态 | OpsHealth | Value Object |
 | `OpsHealthService` | 健康运营巡检服务 | OpsHealth | Domain Service |
 | `OpsInspectionResult` | 巡检结果 | OpsHealth | DTO |
+| `OpsRemediationRun` | 修复运行 | OpsHealth | Entity |
 | `OpsSeverity` | 问题严重度 | OpsHealth | Value Object |
 | `Order` | 医嘱 | OrderFee | Aggregate Root |
 | `OutpatientPartialPreRefundAnalysis` | 门诊部分项目预退费分析 | Insurance | Domain Service |
@@ -1195,6 +1209,11 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ReasoningStateManager` | 推理状态管理器 | Runtime | Domain Service |
 | `ReasoningStep` | 推理步骤 | Runtime | Entity |
 | `ReasoningStep.kind` | 推理步骤类型 | Runtime | Value Object |
+| `RemediationActionOutcome` | 修复动作执行结果 | OpsHealth | DTO |
+| `RemediationExecutor` | 修复执行器 | OpsHealth | Port |
+| `RemediationRiskLevel` | 修复风险级 | OpsHealth | Value Object |
+| `RemediationRunStatus` | 修复运行状态 | OpsHealth | Value Object |
+| `RemediationSpec` | 修复白名单项 | OpsHealth | Value Object |
 | `RiskControlService` | 风控服务 | Security | Domain Service |
 | `RiskFlag` | 风险标记 | AuditRisk | Entity |
 | `Role` | 角色 | Shared | Value Object |
@@ -1226,6 +1245,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ToolOwner` | 技能拥有者 | SkillTool | Value Object |
 | `TrajectoryPrefix` | 评测轨迹接力点 | SkillTool | Value Object |
 | `Treatment` | 诊疗项目 | OrderFee | Value Object |
+| `VerificationResult` | 验证结果 | OpsHealth | Value Object |
 | `VisibilityScope` | 可见性范围 | Knowledge | Value Object |
 | `ValidationIssue` | 校验问题 | Knowledge | Value Object |
 

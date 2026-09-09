@@ -1,4 +1,5 @@
-// 问题详情抽屉测试 — issue #50（证据快照 / 忽略与重开流转 / 时间线 / 冲突错误）。
+// 问题详情抽屉测试 — #50（证据快照 / 忽略与重开流转 / 时间线 / 冲突错误）
+// + #53（白名单执行修复 / 修复留痕时间线 / 非白名单负例）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
@@ -14,6 +15,8 @@ vi.mock('@/lib/ops-api', async (importOriginal) => {
     getOpsFinding: vi.fn(),
     ignoreOpsFinding: vi.fn(),
     reopenOpsFinding: vi.fn(),
+    listOpsRemediationActions: vi.fn(),
+    remediateOpsFinding: vi.fn(),
   }
 })
 
@@ -21,12 +24,26 @@ import FindingDetailDrawer from '../../app/ops/finding-detail-drawer'
 import {
   getOpsFinding,
   ignoreOpsFinding,
+  listOpsRemediationActions,
+  remediateOpsFinding,
   reopenOpsFinding,
   type OpsFindingDetailDto,
   type OpsFindingDto,
   type OpsFindingEventDto,
+  type OpsRemediationActionDto,
+  type OpsRemediationResultDto,
+  type OpsRemediationRunDto,
 } from '@/lib/ops-api'
 import { ApiClientError } from '@/lib/types'
+
+const ACTIONS: OpsRemediationActionDto[] = [
+  {
+    action: 'retry_data_sync',
+    check_id: 'data_sync_failed',
+    risk_level: 'L1',
+    description: '重试失败/滞后的门诊同步任务（复用 data_governance 同步入口）',
+  },
+]
 
 function finding(overrides: Partial<OpsFindingDto> = {}): OpsFindingDto {
   return {
@@ -64,8 +81,24 @@ function event(overrides: Partial<OpsFindingEventDto> = {}): OpsFindingEventDto 
   }
 }
 
+function run(overrides: Partial<OpsRemediationRunDto> = {}): OpsRemediationRunDto {
+  return {
+    run_id: 'r1',
+    finding_id: 'f1',
+    action: 'retry_data_sync',
+    risk_level: 'L1',
+    status: 'succeeded',
+    before_evidence: { job_status: 'failed' },
+    after_evidence: { job_status: 'running' },
+    verification_result: 'passed',
+    created_by: 'portal-dev-ops',
+    created_at: '2026-09-09T04:06:00+00:00',
+    ...overrides,
+  }
+}
+
 function detail(overrides: Partial<OpsFindingDetailDto> = {}): OpsFindingDetailDto {
-  return { finding: finding(), events: [], ...overrides }
+  return { finding: finding(), events: [], remediations: [], ...overrides }
 }
 
 function renderDrawer(findingId: string | null = 'f1', canWrite = true) {
@@ -81,6 +114,7 @@ describe('FindingDetailDrawer 详情抽屉', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(getOpsFinding).mockResolvedValue(detail())
+    vi.mocked(listOpsRemediationActions).mockResolvedValue(ACTIONS)
   })
   afterEach(() => cleanup())
 
@@ -180,5 +214,84 @@ describe('FindingDetailDrawer 详情抽屉', () => {
     renderDrawer('f1', false)
     await waitFor(() => expect(screen.getByTestId('ops-detail-drawer')).toBeTruthy())
     expect(screen.queryByTestId('ops-detail-ignore')).toBeNull()
+  })
+
+  // ── #53 L1 自动修复 ──
+
+  it('白名单检查项展示执行修复：提交带乐观锁版本，成功后回填已解决与修复留痕', async () => {
+    const resolvedRun = run()
+    const remediatedDetail = detail({
+      finding: finding({ status: 'resolved', revision: 4 }),
+      events: [{
+        ...event(),
+        event_type: 'resolved',
+        reason: 'L1 修复动作 retry_data_sync 验证通过',
+        created_at: '2026-09-09T04:06:00+00:00',
+      }],
+      remediations: [resolvedRun],
+    })
+    const result: OpsRemediationResultDto = { run: resolvedRun, detail: remediatedDetail }
+    vi.mocked(remediateOpsFinding).mockResolvedValue(result)
+    const { onMutated } = renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-detail-remediate')).toBeTruthy())
+    expect(screen.getByTestId('ops-detail-remediate').textContent).toContain('重试门诊同步')
+
+    fireEvent.click(screen.getByTestId('ops-detail-remediate'))
+    await waitFor(() => expect(remediateOpsFinding).toHaveBeenCalledWith('f1', 3))
+    // 回填：已解决徽标、resolved 事件与修复留痕进入时间线，通知列表刷新
+    await waitFor(() => expect(screen.getByText('已解决')).toBeTruthy())
+    expect(screen.getByText(/由 portal-dev-ops 解决/)).toBeTruthy()
+    expect(screen.getByText(/由 portal-dev-ops 执行修复（重试门诊同步）/)).toBeTruthy()
+    expect(screen.getByText(/已执行 · 验证通过/)).toBeTruthy()
+    expect(onMutated).toHaveBeenCalledTimes(1)
+  })
+
+  it('修复执行未发起（动作失败）时留痕展示原因且问题保持开放', async () => {
+    const failedRun = run({
+      status: 'failed',
+      after_evidence: { error: '任务处于 paused 状态，不自动重试' },
+      verification_result: null,
+      created_at: '2026-09-09T04:06:00+00:00',
+    })
+    const result: OpsRemediationResultDto = {
+      run: failedRun,
+      detail: detail({ remediations: [failedRun] }),
+    }
+    vi.mocked(remediateOpsFinding).mockResolvedValue(result)
+    renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-detail-remediate')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('ops-detail-remediate'))
+    await waitFor(() =>
+      expect(screen.getByText(/未发起 · 未验证 · 原因：任务处于 paused 状态，不自动重试/)).toBeTruthy(),
+    )
+    expect(screen.getByText('开放')).toBeTruthy()  // 状态不动
+  })
+
+  it('非白名单检查项（data_source_down）不渲染执行修复入口', async () => {
+    vi.mocked(getOpsFinding).mockResolvedValue(
+      detail({ finding: finding({ check_id: 'data_source_down', severity: 'critical' }) }),
+    )
+    renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-detail-ignore')).toBeTruthy())
+    expect(screen.queryByTestId('ops-detail-remediate')).toBeNull()
+    expect(screen.queryByTestId('ops-detail-remediate-block')).toBeNull()
+  })
+
+  it('修复版本冲突（409）时展示错误条', async () => {
+    vi.mocked(remediateOpsFinding).mockRejectedValue(new ApiClientError(409, {
+      error_code: 'FINDING_REVISION_CONFLICT',
+      message: '问题 f1 版本冲突：期望 revision 3，实际 4',
+    }))
+    renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-detail-remediate')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('ops-detail-remediate'))
+    await waitFor(() => expect(screen.getByTestId('ops-detail-action-error')).toBeTruthy())
+    expect(screen.getByTestId('ops-detail-action-error').textContent).toContain(
+      'FINDING_REVISION_CONFLICT',
+    )
+    // 仍开放，修复按钮可重试
+    expect(screen.getByTestId('ops-detail-remediate')).toBeTruthy()
   })
 })

@@ -1,5 +1,5 @@
 """健康运营问题库内存存储单元测试 — #45（去重/累计/过滤/排序）
-+ #50（详情 / 乐观锁流转 / 事件时间线）。"""
++ #50（详情 / 乐观锁流转 / 事件时间线）+ #53（修复留痕）。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -16,9 +16,14 @@ from src.domain.ops.models import (
     OpsFindingEventType,
     OpsFindingNotFoundError,
     OpsFindingStatus,
+    OpsRemediationRun,
     OpsSeverity,
+    RemediationRiskLevel,
+    RemediationRunStatus,
+    VerificationResult,
     finding_fingerprint,
     new_finding_event_id,
+    new_remediation_run_id,
 )
 
 T0 = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
@@ -254,3 +259,48 @@ class _NoopReader:
 
     def get_job(self, source_id):
         raise LookupError(source_id)
+
+
+def _run(finding_id: str, *, action: str = "retry_data_sync",
+         status: RemediationRunStatus = RemediationRunStatus.SUCCEEDED,
+         verification: VerificationResult | None = VerificationResult.PASSED,
+         created_at: datetime = T1) -> OpsRemediationRun:
+    return OpsRemediationRun(
+        run_id=new_remediation_run_id(),
+        finding_id=finding_id,
+        action=action,
+        risk_level=RemediationRiskLevel.L1,
+        status=status,
+        before_evidence={"job_status": "failed"},
+        after_evidence={"job_status": "running"},
+        verification_result=verification,
+        created_by="ops-admin-1",
+        created_at=created_at,
+    )
+
+
+class TestRemediationRuns:
+    """#53：修复留痕追加与时间线读取。"""
+
+    def test_insert_returns_run_and_lists_in_order(self):
+        store = InMemoryOpsFindingStorage()
+        finding = store.upsert_finding(_draft(), seen_at=T0)
+        first = store.insert_remediation_run(_run(finding.finding_id, created_at=T1))
+        second = store.insert_remediation_run(
+            _run(finding.finding_id, created_at=T1 + timedelta(minutes=1)),
+        )
+        runs = store.list_remediation_runs(finding.finding_id)
+        assert [r.run_id for r in runs] == [first.run_id, second.run_id]
+        assert runs[0].verification_result is VerificationResult.PASSED
+        assert runs[0].risk_level is RemediationRiskLevel.L1
+
+    def test_runs_isolated_between_findings(self):
+        store = InMemoryOpsFindingStorage()
+        first = store.upsert_finding(_draft(), seen_at=T0)
+        second = store.upsert_finding(_draft(check_id="data_source_down"), seen_at=T0)
+        store.insert_remediation_run(_run(first.finding_id))
+        assert store.list_remediation_runs(second.finding_id) == []
+
+    def test_runs_of_unknown_finding_empty(self):
+        store = InMemoryOpsFindingStorage()
+        assert store.list_remediation_runs("no-such-id") == []

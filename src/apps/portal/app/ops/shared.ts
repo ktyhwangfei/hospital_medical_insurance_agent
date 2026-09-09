@@ -1,5 +1,5 @@
-// /ops 页公共标签与格式化 — 列表页与详情抽屉共享（#45 建立，#50 扩充状态/证据标签）。
-import type { OpsFindingStatus, OpsSeverity } from '@/lib/ops-api'
+// /ops 页公共标签与格式化 — 列表页与详情抽屉共享（#45 建立，#50 扩充状态/证据标签，#53 扩充修复标签）。
+import type { OpsFindingStatus, OpsSeverity, RemediationRunStatus, VerificationResult } from '@/lib/ops-api'
 
 export const SEVERITY_BADGES: Record<OpsSeverity, string> = {
   critical: 'bg-red-50 text-red-700 ring-red-200',
@@ -30,6 +30,23 @@ export const STATUS_LABELS: Record<OpsFindingStatus, string> = {
   open: '开放',
   ignored: '已忽略',
   resolved: '已解决',
+}
+
+// ── #53 L1 自动修复标签 ──
+
+/** 修复动作 → 中文短语 */
+export const ACTION_LABELS: Record<string, string> = {
+  retry_data_sync: '重试门诊同步',
+}
+
+export const RUN_STATUS_LABELS: Record<RemediationRunStatus, string> = {
+  succeeded: '已执行',
+  failed: '未发起',
+}
+
+export const VERIFICATION_LABELS: Record<VerificationResult, string> = {
+  passed: '验证通过',
+  failed: '验证未通过',
 }
 
 /** 证据快照字段的展示名（未知键原样展示） */

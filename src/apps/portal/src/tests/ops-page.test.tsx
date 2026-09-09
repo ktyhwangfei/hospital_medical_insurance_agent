@@ -16,11 +16,12 @@ vi.mock('@/lib/ops-api', async (importOriginal) => {
     listOpsFindings: vi.fn(),
     runOpsInspection: vi.fn(),
     getOpsFinding: vi.fn(),
+    listOpsRemediationActions: vi.fn(),
   }
 })
 
 import OpsPage from '../../app/ops/page'
-import { getOpsFinding, listOpsFindings, runOpsInspection } from '@/lib/ops-api'
+import { getOpsFinding, listOpsFindings, listOpsRemediationActions, runOpsInspection } from '@/lib/ops-api'
 import type { OpsFindingDetailDto, OpsFindingDto, OpsFindingPageDto } from '@/lib/ops-api'
 
 function finding(overrides: Partial<OpsFindingDto> = {}): OpsFindingDto {
@@ -164,8 +165,10 @@ describe('OpsPage 健康运营页', () => {
         reason: '排期维护',
         created_at: '2026-09-09T04:05:00+00:00',
       }],
+      remediations: [],
     }
     vi.mocked(getOpsFinding).mockResolvedValue(detailDto)
+    vi.mocked(listOpsRemediationActions).mockResolvedValue([])
     render(<OpsPage />)
     await waitFor(() => expect(screen.getByTestId('ops-finding-row')).toBeTruthy())
 

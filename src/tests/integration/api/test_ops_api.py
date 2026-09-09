@@ -23,8 +23,10 @@ from src.data_platform.storage.postgresql.outpatient_governance_store import (
     OutpatientGovernanceNotFoundError,
 )
 from src.data_platform.storage.ops.ops_in_memory import InMemoryOpsFindingStorage
+from src.domain.ops.models import RemediationRiskLevel
 from src.runtime.api.app import create_app
 from src.runtime.api.ops_routes import get_ops_service
+from src.runtime.ops.remediation import RemediationActionOutcome, RemediationSpec
 from src.runtime.ops.service import OpsHealthService
 
 BASE = "/api/v1/medical-insurance-ai-agent/ops"
@@ -108,13 +110,28 @@ class _Reader:
         return self._jobs[source_id]
 
 
+def _fake_executor(outcome: RemediationActionOutcome):
+    return lambda finding, actor: outcome
+
+
+def _fake_whitelist(executor):
+    return (RemediationSpec(
+        action_id="retry_data_sync",
+        check_id="data_sync_failed",
+        risk_level=RemediationRiskLevel.L1,
+        description="重试门诊同步（测试）",
+        executor=executor,
+    ),)
+
+
 @pytest.fixture
 def api_factory(monkeypatch):
     monkeypatch.setenv("AUTH_JWT_SECRET", JWT_SECRET)
 
-    def build(reader) -> TestClient:
+    def build(reader, *, executor=None) -> TestClient:
         # 依赖注入必须复用同一服务实例：lambda 内 new 存储会让每个请求拿到空库
-        service = OpsHealthService(InMemoryOpsFindingStorage(), lambda: reader)
+        whitelist = _fake_whitelist(executor) if executor else None
+        service = OpsHealthService(InMemoryOpsFindingStorage(), lambda: reader, whitelist)
         app = create_app()
         app.dependency_overrides[get_ops_service] = lambda: service
         return TestClient(app, raise_server_exceptions=False)
@@ -345,3 +362,131 @@ class TestFindingLifecycle:
         body = api.get(f"{BASE}/findings/{fid}", headers=_headers("ops:read")).json()
         assert body["finding"]["status"] == "ignored"  # 生命周期不被巡检覆盖
         assert body["finding"]["occurrence_count"] == 2
+
+
+class TestRemediation:
+    """#53：L1 白名单修复端点 + 强制验证闭环 + 非白名单 409 负例。"""
+
+    EXECUTED = RemediationActionOutcome(
+        executed=True,
+        before_evidence={"job_status": "failed"},
+        after_evidence={"job_status": "running"},
+    )
+
+    @pytest.fixture
+    def harness(self, api_factory):
+        """失败同步任务 → 巡检落库 open finding；reader 可切换以驱动验证结果。"""
+        reader = _Reader([_source()], {"bjybdb": _job(SyncJobStatus.FAILED)})
+        api = api_factory(reader, executor=_fake_executor(self.EXECUTED))
+        api.post(f"{BASE}/inspections", headers=_headers("ops:write"))
+        body = api.get(f"{BASE}/findings", headers=_headers("ops:read")).json()
+        assert body["total"] == 1
+        return api, reader, body["items"][0]
+
+    def _remediate(self, api, finding, revision=None):
+        return api.post(
+            f"{BASE}/findings/{finding['finding_id']}/remediate"
+            f"?expected_revision={revision or finding['revision']}",
+            headers=_headers("ops:write"),
+        )
+
+    def test_actions_endpoint_lists_whitelist(self, api_factory):
+        api = api_factory(_Reader())
+        resp = api.get(f"{BASE}/remediation-actions", headers=_headers("ops:read"))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [(a["action"], a["check_id"], a["risk_level"]) for a in body] == [
+            ("retry_data_sync", "data_sync_failed", "L1"),
+        ]
+        assert body[0]["description"]
+
+    def test_verification_pass_resolves_finding(self, harness):
+        api, reader, finding = harness
+        reader._jobs["bjybdb"] = _job(SyncJobStatus.RUNNING)  # 修复后任务健康
+        resp = self._remediate(api, finding)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["run"]["status"] == "succeeded"
+        assert body["run"]["verification_result"] == "passed"
+        assert body["run"]["action"] == "retry_data_sync"
+        assert body["run"]["created_by"] == "ops-admin-1"
+        assert body["detail"]["finding"]["status"] == "resolved"
+        assert [e["event_type"] for e in body["detail"]["events"]] == ["resolved"]
+        assert [r["run_id"] for r in body["detail"]["remediations"]] == [body["run"]["run_id"]]
+
+    def test_verification_fail_keeps_open_and_accumulates(self, harness):
+        api, _reader, finding = harness  # 任务仍 failed → 验证未通过
+        resp = self._remediate(api, finding)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["run"]["verification_result"] == "failed"
+        assert body["detail"]["finding"]["status"] == "open"
+        assert body["detail"]["finding"]["occurrence_count"] == 2
+
+    def test_action_not_executed_records_failed_run(self, api_factory):
+        reader = _Reader([_source()], {"bjybdb": _job(SyncJobStatus.FAILED)})
+        outcome = RemediationActionOutcome(
+            executed=False, after_evidence={"error": "任务处于 paused 状态，不自动重试"},
+        )
+        api = api_factory(reader, executor=_fake_executor(outcome))
+        api.post(f"{BASE}/inspections", headers=_headers("ops:write"))
+        finding = api.get(f"{BASE}/findings", headers=_headers("ops:read")).json()["items"][0]
+
+        resp = self._remediate(api, finding)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["run"]["status"] == "failed"
+        assert body["run"]["verification_result"] is None
+        assert body["detail"]["finding"]["status"] == "open"
+        assert body["detail"]["finding"]["occurrence_count"] == 1
+
+    def test_non_whitelisted_check_409(self, api_factory):
+        # 连接探测失败不在白名单：无自动修复入口（负例）
+        reader = _Reader([_source(ConnectionStatus.ERROR)], {})
+        api = api_factory(reader, executor=_fake_executor(self.EXECUTED))
+        api.post(f"{BASE}/inspections", headers=_headers("ops:write"))
+        body = api.get(f"{BASE}/findings", headers=_headers("ops:read")).json()
+        finding = next(f for f in body["items"] if f["check_id"] == "data_source_down")
+
+        resp = self._remediate(api, finding)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error_code"] == "REMEDIATION_NOT_WHITELISTED"
+        detail = api.get(
+            f"{BASE}/findings/{finding['finding_id']}", headers=_headers("ops:read")
+        ).json()
+        assert detail["remediations"] == []
+
+    def test_stale_revision_409(self, harness):
+        api, reader, finding = harness
+        api.post(f"{BASE}/inspections", headers=_headers("ops:write"))  # 复现使 revision+1
+        reader._jobs["bjybdb"] = _job(SyncJobStatus.RUNNING)  # 验证走通过路径才会触发流转
+        resp = self._remediate(api, finding)  # 携带旧 revision
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error_code"] == "FINDING_REVISION_CONFLICT"
+
+    def test_remediate_on_ignored_409(self, harness):
+        api, _reader, finding = harness
+        ignored = api.post(
+            f"{BASE}/findings/{finding['finding_id']}/ignore?expected_revision=1",
+            json={"reason": "排期维护"},
+            headers=_headers("ops:write"),
+        )
+        assert ignored.status_code == 200
+        resp = self._remediate(api, finding, revision=ignored.json()["finding"]["revision"])
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error_code"] == "FINDING_TRANSITION_INVALID"
+
+    def test_remediate_requires_ops_write(self, harness):
+        api, _reader, finding = harness
+        resp = api.post(
+            f"{BASE}/findings/{finding['finding_id']}/remediate?expected_revision=1",
+            headers=_headers("ops:read"),
+        )
+        assert resp.status_code == 403
+
+    def test_detail_unknown_404(self, api_factory):
+        api = api_factory(_Reader())
+        resp = api.post(f"{BASE}/findings/no-such-id/remediate?expected_revision=1",
+                        headers=_headers("ops:write"))
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error_code"] == "FINDING_NOT_FOUND"

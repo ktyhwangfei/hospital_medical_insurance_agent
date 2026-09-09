@@ -1,9 +1,10 @@
 """健康运营问题库 PG 存储活库冒烟 — #45（DDL/去重/过滤分页）
-+ #50（事件表 DDL / 乐观锁流转 / 时间线）。
++ #50（事件表 DDL / 乐观锁流转 / 时间线）+ #53（修复留痕表 DDL / 闭环流转）。
 
-验证 ops_findings / ops_finding_events 表 DDL（CREATE+ALTER 双写幂等）、
-fingerprint 唯一索引 ON CONFLICT 去重累计、条件 UPDATE 乐观锁流转与
-事件留痕在真实 PostgreSQL 上成立。
+验证 ops_findings / ops_finding_events / ops_remediation_runs 表 DDL
+（CREATE+ALTER 双写幂等）、fingerprint 唯一索引 ON CONFLICT 去重累计、
+条件 UPDATE 乐观锁流转、L1 修复留痕与 resolved 闭环在真实 PostgreSQL
+上成立。
 环境依赖: PostgreSQL（127.0.0.1:5432/hospital_mcp，与生产同构）；不可用时整组 skip。
 """
 from __future__ import annotations
@@ -22,8 +23,13 @@ from src.domain.ops.models import (
     OpsFindingNotFoundError,
     OpsFindingStatus,
     OpsSeverity,
+    RemediationRiskLevel,
+    RemediationRunStatus,
+    VerificationResult,
     new_finding_event_id,
 )
+from src.runtime.ops.remediation import RemediationActionOutcome, RemediationSpec
+from src.runtime.ops.service import OpsHealthService
 
 T0 = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
 T1 = T0 + timedelta(minutes=10)
@@ -53,6 +59,14 @@ def storage() -> PostgresOpsFindingStorage:
 def _cleanup(storage: PostgresOpsFindingStorage):
     yield
     client = storage._get_client()
+    client.execute(
+        """
+        DELETE FROM ops_remediation_runs WHERE finding_id IN (
+            SELECT finding_id FROM ops_findings WHERE asset_id = %s
+        )
+        """,
+        (SMOKE_ASSET,),
+    )
     client.execute(
         """
         DELETE FROM ops_finding_events WHERE finding_id IN (
@@ -199,3 +213,59 @@ def test_stale_revision_conflicts_on_live_pg(storage: PostgresOpsFindingStorage)
 
     with pytest.raises(OpsFindingNotFoundError):
         storage.get_finding("no-such-finding")
+
+
+class _HealthyReader:
+    """闭环验证用读取面：同资产任务健康，检查器不再产出问题。"""
+
+    def list_sources(self):
+        return []
+
+    def get_job(self, source_id):
+        raise LookupError(source_id)
+
+
+def test_remediation_closed_loop_on_live_pg(storage: PostgresOpsFindingStorage):
+    """#53：修复留痕表 DDL + 验证通过 → resolved 事件 + run 行在活库成立。"""
+    # 首次 _get_client 已 ensure 全部三表 DDL（含 ops_remediation_runs 幂等重跑）
+    PostgresOpsFindingStorage(client=storage._get_client())._get_client()
+
+    finding = storage.upsert_finding(
+        _draft("data_sync_failed", OpsSeverity.CRITICAL, {"problem": "sync_job_failed"}),
+        seen_at=T0,
+    )
+    outcome = RemediationActionOutcome(
+        executed=True,
+        before_evidence={"job_status": "failed"},
+        after_evidence={"job_status": "running"},
+    )
+    whitelist = (RemediationSpec(
+        action_id="retry_data_sync",
+        check_id="data_sync_failed",
+        risk_level=RemediationRiskLevel.L1,
+        description="重试门诊同步（冒烟）",
+        executor=lambda f, actor: outcome,
+    ),)
+    service = OpsHealthService(storage, lambda: _HealthyReader(), whitelist)
+
+    result = service.remediate_finding(
+        finding.finding_id, expected_revision=finding.revision, actor="ops-admin-1",
+    )
+
+    # 留痕行落 ops_remediation_runs，证据与验证结果完整往返
+    runs = storage.list_remediation_runs(finding.finding_id)
+    assert [r.run_id for r in runs] == [result.run.run_id]
+    assert runs[0].status is RemediationRunStatus.SUCCEEDED
+    assert runs[0].verification_result is VerificationResult.PASSED
+    assert runs[0].before_evidence == {"job_status": "failed"}
+    assert runs[0].after_evidence == {"job_status": "running"}
+    assert runs[0].risk_level is RemediationRiskLevel.L1
+    # 验证通过 → open → resolved + 事件留痕
+    assert storage.get_finding(finding.finding_id).status == OpsFindingStatus.RESOLVED
+    events = storage.list_finding_events(finding.finding_id)
+    assert [e.event_type for e in events] == [OpsFindingEventType.RESOLVED]
+    assert "retry_data_sync" in events[0].reason
+    # 详情聚合含修复留痕时间线
+    assert [r.run_id for r in service.get_finding_detail(finding.finding_id).remediations] == [
+        result.run.run_id,
+    ]

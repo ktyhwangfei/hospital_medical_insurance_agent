@@ -1,24 +1,32 @@
 'use client'
 
-// 问题详情抽屉 — issue #50：证据快照 + 生命周期时间线 + 忽略/重开操作。
+// 问题详情抽屉 — issue #50：证据快照 + 生命周期时间线 + 忽略/重开操作；
+// issue #53：白名单 L1「执行修复」+ 修复留痕时间线。
 // 由 /ops 列表行点开；操作成功后以响应回填详情并通知列表刷新。
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, RotateCcw, Stethoscope, X } from 'lucide-react'
+import { Loader2, RotateCcw, Stethoscope, Wrench, X } from 'lucide-react'
 import {
   getOpsFinding,
   ignoreOpsFinding,
+  listOpsRemediationActions,
+  remediateOpsFinding,
   reopenOpsFinding,
   type OpsFindingDetailDto,
+  type OpsRemediationActionDto,
+  type OpsRemediationRunDto,
 } from '@/lib/ops-api'
 import { ApiClientError } from '@/lib/types'
 import {
+  ACTION_LABELS,
   ASSET_LABELS,
   CHECK_LABELS,
   PAYLOAD_KEY_LABELS,
+  RUN_STATUS_LABELS,
   SEVERITY_BADGES,
   SEVERITY_LABELS,
   STATUS_BADGES,
   STATUS_LABELS,
+  VERIFICATION_LABELS,
   formatPayloadValue,
   formatTime,
 } from './shared'
@@ -27,7 +35,7 @@ interface FindingDetailDrawerProps {
   findingId: string | null
   canWrite: boolean
   onClose: () => void
-  /** 生命周期变更（忽略/重开）后通知列表刷新 */
+  /** 生命周期变更（忽略/重开/修复）后通知列表刷新 */
   onMutated: () => void
 }
 
@@ -35,18 +43,41 @@ interface TimelineEntry {
   at: string
   label: string
   sub: string | null
+  /** sub 前缀（事件原因用「原因：」，修复留痕自带结构化摘要不加前缀） */
+  subPrefix: string | null
+}
+
+/** 修复留痕时间线副标题：动作执行状态 · 验证结果 · 未发起原因 */
+function runSub(run: OpsRemediationRunDto): string {
+  const parts: string[] = [RUN_STATUS_LABELS[run.status]]
+  if (run.verification_result) parts.push(VERIFICATION_LABELS[run.verification_result])
+  else parts.push('未验证')
+  const error = run.after_evidence.error
+  if (typeof error === 'string') parts.push(`原因：${error}`)
+  return parts.join(' · ')
 }
 
 function buildTimeline(detail: OpsFindingDetailDto): TimelineEntry[] {
-  const { finding, events } = detail
+  const { finding, events, remediations } = detail
   const entries: TimelineEntry[] = [
-    { at: finding.first_seen_at, label: '首次发现', sub: null },
+    { at: finding.first_seen_at, label: '首次发现', sub: null, subPrefix: null },
     ...events.map((event) => ({
       at: event.created_at,
-      label: event.event_type === 'ignored' ? `由 ${event.actor} 忽略` : `由 ${event.actor} 重开`,
+      label: event.event_type === 'ignored'
+        ? `由 ${event.actor} 忽略`
+        : event.event_type === 'resolved'
+          ? `由 ${event.actor} 解决`
+          : `由 ${event.actor} 重开`,
       sub: event.reason,
+      subPrefix: '原因：',
     })),
-    { at: finding.last_seen_at, label: '最近巡检确认', sub: null },
+    ...remediations.map((run) => ({
+      at: run.created_at,
+      label: `由 ${run.created_by} 执行修复（${ACTION_LABELS[run.action] ?? run.action}）`,
+      sub: runSub(run),
+      subPrefix: null,
+    })),
+    { at: finding.last_seen_at, label: '最近巡检确认', sub: null, subPrefix: null },
   ]
   return entries.sort((a, b) => a.at.localeCompare(b.at))
 }
@@ -62,6 +93,8 @@ export default function FindingDetailDrawer({
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [mutating, setMutating] = useState(false)
+  const [remediating, setRemediating] = useState(false)
+  const [actions, setActions] = useState<OpsRemediationActionDto[]>([])
   const [ignoreDraftOpen, setIgnoreDraftOpen] = useState(false)
   const [ignoreReason, setIgnoreReason] = useState('')
 
@@ -76,7 +109,13 @@ export default function FindingDetailDrawer({
       .then(setDetail)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
-  }, [findingId])
+    // 白名单决定是否展示「执行修复」入口（与详情并行加载）
+    if (canWrite) {
+      listOpsRemediationActions()
+        .then(setActions)
+        .catch(() => setActions([]))
+    }
+  }, [findingId, canWrite])
 
   // Escape 关闭（对话框键盘化，与 flow 编辑器约定一致）
   useEffect(() => {
@@ -126,10 +165,30 @@ export default function FindingDetailDrawer({
     }
   }, [detail, onMutated])
 
+  const handleRemediate = useCallback(async () => {
+    if (!detail) return
+    setRemediating(true)
+    setActionError(null)
+    try {
+      const result = await remediateOpsFinding(
+        detail.finding.finding_id, detail.finding.revision,
+      )
+      setDetail(result.detail)
+      onMutated()
+    } catch (e) {
+      setActionError(errorMessage(e))
+    } finally {
+      setRemediating(false)
+    }
+  }, [detail, onMutated])
+
   if (!findingId) return null
 
   const finding = detail?.finding
   const timeline = detail ? buildTimeline(detail) : []
+  const remediation = finding
+    ? actions.find((a) => a.check_id === finding.check_id) ?? null
+    : null
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end" data-testid="ops-detail-overlay">
@@ -251,6 +310,25 @@ export default function FindingDetailDrawer({
               {canWrite && (
                 <section aria-label="状态操作" className="space-y-2">
                   <h2 className="text-xs font-semibold text-slate-900">状态操作</h2>
+                  {finding.status === 'open' && remediation && (
+                    <div className="space-y-1.5" data-testid="ops-detail-remediate-block">
+                      <button
+                        type="button"
+                        onClick={handleRemediate}
+                        disabled={remediating || mutating}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+                        data-testid="ops-detail-remediate"
+                      >
+                        {remediating
+                          ? <Loader2 className="size-3.5 animate-spin" />
+                          : <Wrench className="size-3.5" />}
+                        执行修复（{ACTION_LABELS[remediation.action] ?? remediation.action}）
+                      </button>
+                      <p className="text-[11px] text-slate-400">
+                        {remediation.description}；执行后自动重跑检查验证，通过才标记已解决。
+                      </p>
+                    </div>
+                  )}
                   {finding.status === 'open' && !ignoreDraftOpen && (
                     <button
                       type="button"
@@ -330,7 +408,7 @@ export default function FindingDetailDrawer({
                         <p className="mt-0.5 text-[11px] text-slate-400">{formatTime(entry.at)}</p>
                         {entry.sub && (
                           <p className="mt-1 rounded-md bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
-                            原因：{entry.sub}
+                            {entry.subPrefix}{entry.sub}
                           </p>
                         )}
                       </div>

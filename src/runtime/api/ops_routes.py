@@ -1,4 +1,5 @@
-"""健康运营 API — issue #45 P0（问题库 + 手动巡检）+ #50（详情与生命周期）。
+"""健康运营 API — issue #45 P0（问题库 + 手动巡检）+ #50（详情与生命周期）
++ #53（L1 白名单自动修复与强制验证）。
 
 前缀 /api/v1/medical-insurance-ai-agent/ops；鉴权走签名 JWT 的
 ops:read / ops:write 权限（与 data-governance 同模式）。
@@ -21,10 +22,12 @@ from src.domain.ops.models import (
     OpsFindingPage,
     OpsFindingStatus,
     OpsSeverity,
+    RemediationNotAllowedError,
+    RemediationRiskLevel,
 )
 from src.gateway.auth import authenticator
 from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
-from src.runtime.ops.service import OpsHealthService, OpsInspectionResult
+from src.runtime.ops.service import OpsHealthService, OpsInspectionResult, OpsRemediationResult
 from src.shared.schemas.responses import error_detail
 
 router = APIRouter(
@@ -119,8 +122,17 @@ class IgnoreFindingRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class RemediationActionInfo(BaseModel):
+    """修复白名单条目（Portal 据此渲染「执行修复」入口）。"""
+
+    action: str
+    check_id: str
+    risk_level: RemediationRiskLevel
+    description: str
+
+
 def _raise_lifecycle_error(exc: Exception) -> None:
-    """生命周期异常 → HTTP 映射：404 不存在 / 409 非法流转或版本冲突。"""
+    """生命周期异常 → HTTP 映射：404 不存在 / 409 非法流转、版本冲突或非白名单。"""
     if isinstance(exc, OpsFindingNotFoundError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -135,6 +147,11 @@ def _raise_lifecycle_error(exc: Exception) -> None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=error_detail("FINDING_REVISION_CONFLICT", str(exc)),
+        ) from exc
+    if isinstance(exc, RemediationNotAllowedError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_detail("REMEDIATION_NOT_WHITELISTED", str(exc)),
         ) from exc
     raise exc
 
@@ -199,4 +216,54 @@ def reopen_finding(
             actor=principal.user_id,
         )
     except (OpsFindingNotFoundError, InvalidFindingTransitionError, FindingRevisionConflictError) as exc:
+        _raise_lifecycle_error(exc)
+
+
+@router.get(
+    "/remediation-actions",
+    response_model=list[RemediationActionInfo],
+)
+def list_remediation_actions(
+    _principal=Depends(require_ops_read),
+    service: OpsHealthService = Depends(get_ops_service),
+) -> list[RemediationActionInfo]:
+    """当前 L1 修复白名单：检查项 → 允许自动执行的动作。"""
+    return [
+        RemediationActionInfo(
+            action=spec.action_id,
+            check_id=spec.check_id,
+            risk_level=spec.risk_level,
+            description=spec.description,
+        )
+        for spec in service.list_remediation_actions()
+    ]
+
+
+@router.post(
+    "/findings/{finding_id}/remediate",
+    response_model=OpsRemediationResult,
+)
+def remediate_finding(
+    finding_id: str,
+    expected_revision: int = Query(ge=1),
+    principal: DataGovernancePrincipal = Depends(require_ops_write),
+    service: OpsHealthService = Depends(get_ops_service),
+) -> OpsRemediationResult:
+    """对开放问题执行白名单 L1 动作并强制验证（#53）。
+
+    验证通过 → resolved；未通过 → 保持 open 并累计 occurrence；
+    动作未发起 → 只落 failed 留痕。非白名单检查项 409。
+    """
+    try:
+        return service.remediate_finding(
+            finding_id,
+            expected_revision=expected_revision,
+            actor=principal.user_id,
+        )
+    except (
+        OpsFindingNotFoundError,
+        InvalidFindingTransitionError,
+        FindingRevisionConflictError,
+        RemediationNotAllowedError,
+    ) as exc:
         _raise_lifecycle_error(exc)

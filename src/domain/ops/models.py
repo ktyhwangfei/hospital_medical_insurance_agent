@@ -1,11 +1,12 @@
-"""健康运营（Ops Health）领域模型 — issue #45 P0 问题库 + #50 生命周期。
+"""健康运营（Ops Health）领域模型 — #45 P0 问题库 + #50 生命周期 + #53 自动修复。
 
 横跨四类资产（skill/knowledge/data/runtime）的开放问题汇聚层；
 「发现」阶段检查器只读产出 FindingDraft，存储按 fingerprint 去重
 落库为 OpsFinding（occurrence_count 累计）。「处置」阶段（#50）提供
-ignore/reopen 手动流转：带乐观锁 revision 与事件时间线；resolved 由
-#53 自动修复闭环驱动，本期不建写入口。诊断/修复/验证状态机值随
-P1/P2 分期扩充，不提前建列。
+ignore/reopen 手动流转：带乐观锁 revision 与事件时间线。「解决」阶段
+（#53）提供 L1 白名单自动修复：执行幂等动作后强制重跑触发检查器，
+验证通过才 resolved，失败累计 occurrence 保持 open；每次修复落
+OpsRemediationRun 留痕。诊断与 L2 人工流程随 P1/后续分期扩充。
 """
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ class OpsSeverity(StrEnum):
 
 
 class OpsFindingStatus(StrEnum):
-    """问题状态（P0 仅 open；resolved/ignored 由 #50 生命周期操作驱动）。"""
+    """问题状态（open 由巡检产出；ignored 由 #50 手动忽略；resolved 由 #53 修复验证驱动）。"""
 
     OPEN = "open"
     RESOLVED = "resolved"
@@ -47,6 +48,10 @@ def new_finding_id() -> str:
 
 
 def new_finding_event_id() -> str:
+    return uuid.uuid4().hex
+
+
+def new_remediation_run_id() -> str:
     return uuid.uuid4().hex
 
 
@@ -104,10 +109,11 @@ class OpsFindingPage(BaseModel):
 
 
 class OpsFindingEventType(StrEnum):
-    """生命周期流转事件类型（手动操作产生；resolved 事件归 #53）。"""
+    """生命周期流转事件类型（手动操作与 #53 修复验证产生）。"""
 
     IGNORED = "ignored"
     REOPENED = "reopened"
+    RESOLVED = "resolved"
 
 
 class OpsFindingEvent(BaseModel):
@@ -127,10 +133,53 @@ class OpsFindingEvent(BaseModel):
 
 
 class OpsFindingDetail(BaseModel):
-    """单条问题详情视图：当前状态 + 生命周期事件时间线（升序）。"""
+    """单条问题详情视图：当前状态 + 生命周期事件与修复记录时间线（升序）。"""
 
     finding: OpsFinding
     events: list[OpsFindingEvent]
+    remediations: list["OpsRemediationRun"] = Field(default_factory=list)
+
+
+class RemediationRiskLevel(StrEnum):
+    """修复动作风险级：L1 幂等可重放、允许自动执行；L2 需人工确认。"""
+
+    L1 = "L1"
+    L2 = "L2"
+
+
+class RemediationRunStatus(StrEnum):
+    """修复动作执行状态（动作本身是否执行到位，与验证结果正交）。"""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class VerificationResult(StrEnum):
+    """修复后强制验证结果：重跑触发检查器是否仍产出该问题。"""
+
+    PASSED = "passed"
+    FAILED = "failed"
+
+
+class OpsRemediationRun(BaseModel):
+    """一次 L1 自动修复的留痕（Entity）：动作前后证据 + 强制验证结果。
+
+    status 描述动作执行（retry 是否真正跑起来）；verification_result
+    描述修复后验证（None = 未验证：动作未执行或检查器自身出错）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str = Field(min_length=1, max_length=64)
+    finding_id: str = Field(min_length=1, max_length=64)
+    action: str = Field(min_length=1, max_length=64)
+    risk_level: RemediationRiskLevel
+    status: RemediationRunStatus
+    before_evidence: dict[str, Any] = Field(default_factory=dict)
+    after_evidence: dict[str, Any] = Field(default_factory=dict)
+    verification_result: VerificationResult | None = None
+    created_by: str = Field(min_length=1, max_length=128)
+    created_at: datetime
 
 
 class OpsFindingNotFoundError(Exception):
@@ -163,3 +212,12 @@ class FindingRevisionConflictError(Exception):
         self.finding_id = finding_id
         self.expected_revision = expected_revision
         self.actual_revision = actual_revision
+
+
+class RemediationNotAllowedError(Exception):
+    """该问题的检查项不在 L1 修复白名单内（只允许人工处置）。"""
+
+    def __init__(self, finding_id: str, check_id: str) -> None:
+        super().__init__(f"问题 {finding_id} 的检查项 {check_id} 不在自动修复白名单内")
+        self.finding_id = finding_id
+        self.check_id = check_id

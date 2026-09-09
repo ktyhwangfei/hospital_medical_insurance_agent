@@ -1,9 +1,10 @@
-"""健康运营问题库 PostgreSQL 存储 — issue #45 P0 + #50 生命周期。
+"""健康运营问题库 PostgreSQL 存储 — issue #45 P0 + #50 生命周期 + #53 自动修复。
 
 ops_findings 单表：fingerprint 唯一索引承载去重（ON CONFLICT 单语句
 upsert，occurrence_count 原子累加）；ops_finding_events 追加留痕每次
-ignore/reopen 流转；DDL 遵循 CREATE+ALTER 双写约定，旧库加列不改表
-结构（AGENTS.md 已知陷阱）。
+ignore/reopen/resolved 流转；ops_remediation_runs 留痕每次 L1 自动修复
+（动作前后证据 + 强制验证结果）；DDL 遵循 CREATE+ALTER 双写约定，旧库
+加列不改表结构（AGENTS.md 已知陷阱）。
 """
 from __future__ import annotations
 
@@ -23,7 +24,11 @@ from src.domain.ops.models import (
     OpsFindingNotFoundError,
     OpsFindingPage,
     OpsFindingStatus,
+    OpsRemediationRun,
     OpsSeverity,
+    RemediationRiskLevel,
+    RemediationRunStatus,
+    VerificationResult,
     finding_fingerprint,
     new_finding_id,
 )
@@ -79,9 +84,40 @@ OPS_FINDING_EVENTS_TABLE_SCHEMA = (
     "CREATE INDEX IF NOT EXISTS idx_ops_finding_events_finding ON ops_finding_events(finding_id, created_at)",
 )
 
+OPS_REMEDIATION_RUNS_TABLE_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS ops_remediation_runs (
+        run_id VARCHAR(64) PRIMARY KEY,
+        finding_id VARCHAR(64) NOT NULL,
+        action VARCHAR(64) NOT NULL,
+        risk_level VARCHAR(8) NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        before_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+        after_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+        verification_result VARCHAR(16),
+        created_by VARCHAR(128) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL
+    )""",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS run_id VARCHAR(64)",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS finding_id VARCHAR(64)",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS action VARCHAR(64)",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS risk_level VARCHAR(8)",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS status VARCHAR(32)",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS before_evidence JSONB DEFAULT '{}'::jsonb",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS after_evidence JSONB DEFAULT '{}'::jsonb",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS verification_result VARCHAR(16)",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS created_by VARCHAR(128)",
+    "ALTER TABLE ops_remediation_runs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS idx_ops_remediation_runs_finding ON ops_remediation_runs(finding_id, created_at)",
+)
+
 _FINDING_COLUMNS = (
     "finding_id, asset_type, asset_id, check_id, severity, status, fingerprint, "
     "payload, first_seen_at, last_seen_at, occurrence_count, diagnosis, revision"
+)
+
+_RUN_COLUMNS = (
+    "run_id, finding_id, action, risk_level, status, "
+    "before_evidence, after_evidence, verification_result, created_by, created_at"
 )
 
 
@@ -114,6 +150,24 @@ def _row_to_event(row: dict[str, Any]) -> OpsFindingEvent:
     )
 
 
+def _row_to_run(row: dict[str, Any]) -> OpsRemediationRun:
+    return OpsRemediationRun(
+        run_id=row["run_id"],
+        finding_id=row["finding_id"],
+        action=row["action"],
+        risk_level=RemediationRiskLevel(row["risk_level"]),
+        status=RemediationRunStatus(row["status"]),
+        before_evidence=row["before_evidence"] or {},
+        after_evidence=row["after_evidence"] or {},
+        verification_result=(
+            VerificationResult(row["verification_result"])
+            if row["verification_result"] else None
+        ),
+        created_by=row["created_by"],
+        created_at=row["created_at"],
+    )
+
+
 class PostgresOpsFindingStorage:
     def __init__(
         self,
@@ -129,7 +183,11 @@ class PostgresOpsFindingStorage:
         if self._client is None:
             self._client = PostgreSQLClient(self._database_url)
         if not self._schema_ensured:
-            for statement in (*OPS_FINDINGS_TABLE_SCHEMA, *OPS_FINDING_EVENTS_TABLE_SCHEMA):
+            for statement in (
+                *OPS_FINDINGS_TABLE_SCHEMA,
+                *OPS_FINDING_EVENTS_TABLE_SCHEMA,
+                *OPS_REMEDIATION_RUNS_TABLE_SCHEMA,
+            ):
                 self._client.execute(statement)
             self._schema_ensured = True
         return self._client
@@ -258,3 +316,36 @@ class PostgresOpsFindingStorage:
             (finding_id,),
         )
         return [_row_to_event(row) for row in rows]
+
+    def insert_remediation_run(self, run: OpsRemediationRun) -> OpsRemediationRun:
+        rows = self._get_client().execute(
+            f"""
+            INSERT INTO ops_remediation_runs ({_RUN_COLUMNS})
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING {_RUN_COLUMNS}
+            """,
+            (
+                run.run_id,
+                run.finding_id,
+                run.action,
+                run.risk_level.value,
+                run.status.value,
+                json.dumps(run.before_evidence, ensure_ascii=False),
+                json.dumps(run.after_evidence, ensure_ascii=False),
+                run.verification_result.value if run.verification_result else None,
+                run.created_by,
+                run.created_at,
+            ),
+        )
+        return _row_to_run(rows[0])
+
+    def list_remediation_runs(self, finding_id: str) -> list[OpsRemediationRun]:
+        rows = self._get_client().execute(
+            f"""
+            SELECT {_RUN_COLUMNS} FROM ops_remediation_runs
+            WHERE finding_id = %s
+            ORDER BY created_at ASC, run_id ASC
+            """,
+            (finding_id,),
+        )
+        return [_row_to_run(row) for row in rows]

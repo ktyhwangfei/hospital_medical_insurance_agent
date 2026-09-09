@@ -13,6 +13,7 @@ from src.domain.ops.models import (
     OpsFindingNotFoundError,
     OpsFindingPage,
     OpsFindingStatus,
+    OpsRemediationRun,
     OpsSeverity,
     finding_fingerprint,
     new_finding_id,
@@ -31,6 +32,7 @@ class InMemoryOpsFindingStorage:
     def __init__(self) -> None:
         self._findings: dict[str, OpsFinding] = {}  # fingerprint → OpsFinding
         self._events: dict[str, list[OpsFindingEvent]] = {}  # finding_id → 事件（升序追加）
+        self._runs: dict[str, list[OpsRemediationRun]] = {}  # finding_id → 修复留痕（升序追加）
         self._lock = threading.RLock()
 
     def upsert_finding(self, draft: FindingDraft, *, seen_at: datetime) -> OpsFinding:
@@ -122,3 +124,14 @@ class InMemoryOpsFindingStorage:
         with self._lock:
             events = self._events.get(finding_id, [])
             return [event.model_copy(deep=True) for event in events]
+
+    def insert_remediation_run(self, run: OpsRemediationRun) -> OpsRemediationRun:
+        with self._lock:
+            stored = run.model_copy(deep=True)
+            self._runs.setdefault(run.finding_id, []).append(stored)
+            return stored.model_copy(deep=True)
+
+    def list_remediation_runs(self, finding_id: str) -> list[OpsRemediationRun]:
+        with self._lock:
+            runs = self._runs.get(finding_id, [])
+            return [run.model_copy(deep=True) for run in runs]

@@ -54,7 +54,7 @@ export interface OpsFindingsQuery {
   page_size?: number
 }
 
-export type OpsFindingEventType = 'ignored' | 'reopened'
+export type OpsFindingEventType = 'ignored' | 'reopened' | 'resolved'
 
 export interface OpsFindingEventDto {
   event_id: string
@@ -65,9 +65,41 @@ export interface OpsFindingEventDto {
   created_at: string
 }
 
+// ── #53 L1 自动修复 ──
+
+export type RemediationRiskLevel = 'L1' | 'L2'
+export type RemediationRunStatus = 'succeeded' | 'failed'
+export type VerificationResult = 'passed' | 'failed'
+
+export interface OpsRemediationActionDto {
+  action: string
+  check_id: string
+  risk_level: RemediationRiskLevel
+  description: string
+}
+
+export interface OpsRemediationRunDto {
+  run_id: string
+  finding_id: string
+  action: string
+  risk_level: RemediationRiskLevel
+  status: RemediationRunStatus
+  before_evidence: Record<string, unknown>
+  after_evidence: Record<string, unknown>
+  verification_result: VerificationResult | null
+  created_by: string
+  created_at: string
+}
+
 export interface OpsFindingDetailDto {
   finding: OpsFindingDto
   events: OpsFindingEventDto[]
+  remediations: OpsRemediationRunDto[]
+}
+
+export interface OpsRemediationResultDto {
+  run: OpsRemediationRunDto
+  detail: OpsFindingDetailDto
 }
 
 // ── 鉴权（与 data-governance-api 同模式：sessionStorage → dev 环境变量 token）──
@@ -142,6 +174,20 @@ export async function reopenOpsFinding(
 ): Promise<OpsFindingDetailDto> {
   return opsRequest<OpsFindingDetailDto>(
     `/findings/${encodeURIComponent(findingId)}/reopen?expected_revision=${expectedRevision}`,
+    { method: 'POST' },
+  )
+}
+
+export async function listOpsRemediationActions(): Promise<OpsRemediationActionDto[]> {
+  return opsRequest<OpsRemediationActionDto[]>('/remediation-actions')
+}
+
+export async function remediateOpsFinding(
+  findingId: string,
+  expectedRevision: number,
+): Promise<OpsRemediationResultDto> {
+  return opsRequest<OpsRemediationResultDto>(
+    `/findings/${encodeURIComponent(findingId)}/remediate?expected_revision=${expectedRevision}`,
     { method: 'POST' },
   )
 }
