@@ -68,6 +68,7 @@ domain/
 14.5. [门诊数据治理控制面（Outpatient Data Governance）](#145-门诊数据治理控制面outpatient-data-governance)
 14.6. [治理数据流上下文（Governed Data Flow）](#146-治理数据流上下文governed-data-flow)
 14.7. [健康运营上下文（Ops Health）](#147-健康运营上下文ops-health)
+14.8. [数据目录上下文（Data Catalog）](#148-数据目录上下文data-catalog)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
 ---
@@ -1023,6 +1024,37 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.8. 数据目录上下文（Data Catalog）
+
+> 依据：issue #38。
+> 定位：三级资产（源表字段 dataset/field → 语义对象/指标 object/metric → 消费方 consumer=skill）的**只读聚合目录**——统一搜索、资产详情、血缘链与同步 SLA 看板；不新增任何存储表，全部数据来自既有注册中心/治理控制面/发现层/skill manifest 的运行时聚合。
+
+#### 文件位置
+
+`src/runtime/catalog/service.py`（`CatalogService` 编排 + `PgCatalogSyncReader` 活库适配 + DTO 全集）+ `src/runtime/api/catalog_routes.py`（API）+ portal `/catalog` 页（`src/apps/portal/app/catalog/page.tsx` + `asset-detail-drawer.tsx` + `src/lib/catalog-api.ts`）
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 数据目录服务 | `CatalogService` | **Domain Service** | — | 双端口只读编排：SemanticRegistry（语义资产）+ CatalogSyncReader（治理控制面）+ skill manifest 消费方；搜索/详情/血缘/SLA 四入口 |
+| 目录资产 | `CatalogAsset` | **DTO** | Pydantic `BaseModel` | 五类资产的统一投影（asset_type ∈ dataset/field/object/metric/consumer + asset_id + title/subtitle + matched_on 命中字段） |
+| 资产类型 | `CatalogAssetType` | **Value Object** | `Literal` | dataset / field / object / metric / consumer 五类（`ASSET_TYPES`） |
+| 资产详情 | `CatalogAssetDetail` | **DTO** | Pydantic `BaseModel` | asset + summary 摘要 KVs + 按类型可选分节（fields/metrics/datasets/consumers/batches/versions/value_mappings） |
+| 目录血缘 | `CatalogLineage` | **DTO** | Pydantic `BaseModel` | 血缘链投影：sources（数据源）→ batches（同步批次）→ datasets+fields（投影表/字段）→ metrics（指标）→ consumers + versions（消费方与语义版本） |
+| SLA 看板 | `CatalogSlaBoard` / `CatalogSourceSla` | **DTO** | Pydantic `BaseModel` | 每数据源：连接/任务状态、P95 与最近非空延迟、质量门、语义版本、近 10 次尝试统计、最近批次（真实行） |
+| 目录同步读取面 | `CatalogSyncReader` | **Port** | `typing.Protocol` | 目录对治理控制面的最小只读依赖（list_sources/get_job/get_sync_status/list_recent_batches/list_attempts）；`PgCatalogSyncReader` 为活库实现 |
+| 消费方 | `CatalogConsumerInfo` | **DTO** | Pydantic `BaseModel` | 从 `skills/*/skill_manifest.yaml` needed_objects 解析的 skill 级消费方（consumer_id=skill 目录名，consumed_objects/consumed_metrics） |
+
+#### 业务规则
+
+1. **只读聚合零新表**：目录不建任何存储表、无任何写端点；语义资产来自 SemanticRegistry、批次/SLA 来自治理控制面、字段描述/主键来自发现层（`table:column` 键）、消费方来自 skill manifest，均运行时聚合。
+2. 批次只挂接落地库数据集：仅 `datasource_id == "outpatient_postgres"`（`PROJECTION_DATASOURCE_ID`）的数据集展示同步批次与 SLA 延迟，外部源数据集不伪造批次。
+3. 指标↔数据集双向挂接：指标按 `object_code` 归属对象、按 `source_field` 三段式（datasource.table.column）精确触达字段级投影表；血缘字段取指标 source_field 引用的列。
+4. API 只读无鉴权（沿语义层 GET 先例）；五类资产类型用 `Literal` 参数自动 422，未知资产 404 `CATALOG_ASSET_NOT_FOUND`。
+
+---
+
 ### 15. AI 编程工作流契约
 
 #### 契约 1：先查后写
@@ -1126,6 +1158,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `CompileStep` | 编译步骤 | Knowledge | Entity |
 | `Consumable` | 耗材 | OrderFee | Value Object |
 | `CanonicalRule` | 规范规则 | Knowledge | Entity |
+| `CatalogAsset` | 目录资产 | DataCatalog | DTO |
+| `CatalogAssetDetail` | 资产详情 | DataCatalog | DTO |
+| `CatalogAssetType` | 资产类型 | DataCatalog | Value Object |
+| `CatalogConsumerInfo` | 消费方 | DataCatalog | DTO |
+| `CatalogLineage` | 目录血缘 | DataCatalog | DTO |
+| `CatalogService` | 数据目录服务 | DataCatalog | Domain Service |
+| `CatalogSlaBoard` / `CatalogSourceSla` | SLA 看板 | DataCatalog | DTO |
+| `CatalogSyncReader` | 目录同步读取面 | DataCatalog | Port |
 | `ContextComposer` | 上下文编排器 | Runtime | Domain Service |
 | `ContextNeed` | 上下文需求 | Runtime | Value Object |
 | `ContextPlanner` | 上下文规划器 | Runtime | Domain Service |

@@ -26,6 +26,7 @@ from src.runtime.api.model_governance_routes import router as model_governance_r
 from src.runtime.api.data_governance_routes import router as data_governance_router
 from src.runtime.api.flow_routes import router as governed_flow_router
 from src.runtime.api.ops_routes import router as ops_health_router
+from src.runtime.api.catalog_routes import router as catalog_router
 
 logger = logging.getLogger(__name__)
 
@@ -105,5 +106,6 @@ def create_app() -> FastAPI:
     app.include_router(data_governance_router)
     app.include_router(governed_flow_router)
     app.include_router(ops_health_router)
+    app.include_router(catalog_router)
     print("[STARTUP] create_app: 完成", flush=True)
     return app

@@ -14,6 +14,7 @@ import {
   Activity,
   SlidersHorizontal,
   Database,
+  Library,
   Workflow,
   HeartPulse,
 } from 'lucide-react'
@@ -52,6 +53,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: '政策知识', href: '/policy-knowledge', icon: <BookOpen className="size-4" /> },
   { label: '问答历史', href: '/qa-history', icon: <History className="size-4" /> },
   { label: '数据治理', href: '/data-governance', icon: <Database className="size-4" /> },
+  { label: '数据目录', href: '/catalog', icon: <Library className="size-4" /> },
   { label: '治理Flow', href: '/flow', icon: <Workflow className="size-4" /> },
   { label: '健康运营', href: '/ops', icon: <HeartPulse className="size-4" /> },
 ]
