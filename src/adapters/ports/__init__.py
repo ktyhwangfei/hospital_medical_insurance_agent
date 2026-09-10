@@ -5,6 +5,7 @@ from src.adapters.ports.emr import EmrPort
 from src.adapters.ports.pre_audit import PreAuditPort
 from src.adapters.ports.drg_dip import DrgDipPort
 from src.adapters.ports.medical_record import MedicalRecordPort
+from src.adapters.ports.data_supply import DataSupplyConnectionPort
 
 __all__ = [
     "InsuranceInterfacePort",
@@ -14,4 +15,5 @@ __all__ = [
     "PreAuditPort",
     "DrgDipPort",
     "MedicalRecordPort",
+    "DataSupplyConnectionPort",
 ]

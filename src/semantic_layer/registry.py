@@ -13,11 +13,12 @@ get_registry() 单例，服务于已退役的 IndicatorContext 增强路径。�
 """
 import os
 from collections import defaultdict
+from collections.abc import Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from threading import RLock
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 from src.semantic_layer.models import (
     BusinessDomain, BusinessObject, Metric,
@@ -319,11 +320,21 @@ class InMemoryRegistryStore:
         return list(self._object_versions.get(object_code, []))
 
 
+class PolicyRuleReader(Protocol):
+    """#60 切片④：发布门禁对 zcgz 规则行（policy_extractions）的只读溯源句柄。"""
+
+    def get_rule(self, rule_ref: str) -> Optional[Mapping[str, Any]]:
+        """按规则行主键取行（至少含 status）；不存在返回 None。"""
+        ...
+
+
 class SemanticRegistry:
     """Semantic Registry — business-facing CRUD + query operations."""
 
-    def __init__(self, store: RegistryStore):
+    def __init__(self, store: RegistryStore, policy_rule_reader: Optional[PolicyRuleReader] = None):
         self._store = store
+        # #60 切片④：注入时发布门禁校验 policy_rule_ref 同库存在性与幽灵档；None=不校验（存量兼容）
+        self._policy_rule_reader = policy_rule_reader
 
     # Domain queries
     def list_domains(self) -> list[BusinessDomain]:
@@ -506,6 +517,24 @@ class SemanticRegistry:
                 policy_bad[m.metric_code] = miss
         if policy_bad:
             raise ValueError(f"政策承载不完整(A政策绑定类必填): {policy_bad}")
+        # #60 切片④（验收#4 溯源 + #2 幽灵档）：policy_rule_ref 必须指向同库 zcgz 规则行
+        #   （policy_extractions 主键）；引用不存在 → 拒；行已废止(archived)而承载缺
+        #   effective_end → 拒（幽灵档：废止事实必须落到废止日）。现行行 end=null 合法。
+        #   仅在注入只读句柄时校验（生产 get_semantic_registry 注入；内存注册表/存量路径不受影响）。
+        if self._policy_rule_reader is not None:
+            ref_bad: dict[str, str] = {}
+            for m in publish_metrics:
+                pc = m.policy_carrier or {}
+                ref = str(pc.get("policy_rule_ref") or "").strip()
+                if not ref:
+                    continue
+                row = self._policy_rule_reader.get_rule(ref)
+                if row is None:
+                    ref_bad[m.metric_code] = f"政策规则引用不存在: {ref}"
+                elif str(row.get("status") or "") == "archived" and not (pc.get("effective_end") or ""):
+                    ref_bad[m.metric_code] = f"规则已废止(归档)但缺 effective_end(幽灵档): {ref}"
+            if ref_bad:
+                raise ValueError(f"政策承载溯源不合法(policy_rule_ref): {ref_bad}")
         datasets = self._store.list_datasets(object_code)
         keys = self._store.list_dataset_keys(object_code=object_code)
         fields = self._store.list_fields(object_code=object_code)
@@ -748,6 +777,29 @@ def create_registry(use_memory: bool = False) -> SemanticRegistry:
 _semantic_registry_instance: Optional[SemanticRegistry] = None
 
 
+class PgPolicyRuleReader:
+    """#60 切片④：zcgz 规则行只读读取（policy_extractions，与注册中心同库）。
+
+    只做窄列 SELECT（extraction_id/status）；表 DDL 归知识管线 pipeline_store 所有，
+    此处仅按行主键只读溯源，不反向 import knowledge_extension（保持依赖方向）。
+    """
+
+    def __init__(self, database_url: Optional[str] = None):
+        self._database_url = database_url
+        self._client: Any = None
+
+    def get_rule(self, rule_ref: str) -> Optional[dict[str, Any]]:
+        if self._client is None:
+            from src.data_platform.storage.postgresql.client import PostgreSQLClient
+
+            self._client = PostgreSQLClient(self._database_url)
+        rows = self._client.execute(
+            "SELECT extraction_id, status FROM policy_extractions WHERE extraction_id = %s",
+            (rule_ref,),
+        )
+        return rows[0] if rows else None
+
+
 def get_semantic_registry() -> SemanticRegistry:
     """获取全局 SemanticRegistry 单例（项目唯一注册表）。
 
@@ -775,5 +827,8 @@ def get_semantic_registry() -> SemanticRegistry:
         from src.data_platform.storage.postgresql.semantic_registry_store import (
             PostgresRegistryStore,
         )
-        _semantic_registry_instance = SemanticRegistry(PostgresRegistryStore())
+        # #60 切片④：生产注册中心携带 zcgz 规则行只读句柄（惰性连接，发布门禁溯源用）
+        _semantic_registry_instance = SemanticRegistry(
+            PostgresRegistryStore(), policy_rule_reader=PgPolicyRuleReader()
+        )
     return _semantic_registry_instance

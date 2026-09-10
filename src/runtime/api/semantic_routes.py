@@ -2172,9 +2172,22 @@ class ProcessedViewSnapshotResponse(BaseModel):
     metrics: list[ProcessedMetricValue]
 
 
-def _connect_processed_view(source, datasource_id: str):
-    """连接 seam（测试 monkeypatch 点）：复用 discovery 多源路由。"""
-    return source.connect_datasource(datasource_id)
+def _processed_view_sql(columns: list[str]) -> str:
+    """受控投影 SQL（PostgreSQL 落地库方言）：双引号标识符 + public schema。
+
+    §9 裁决：加工视图落位 PG 落地库，禁止 T-SQL 方括号方言；
+    列名已过 `_PROCESSED_VIEW_COLUMN_RE` 白名单（防注入）。
+    """
+    cols_sql = ", ".join(f'"{c}"' for c in columns)
+    return f'SELECT {cols_sql} FROM "public"."{_PROCESSED_VIEW_SOURCE_OBJECT}"'
+
+
+def _read_processed_view_rows(columns: list[str]) -> list[tuple]:
+    """读取 seam（测试 monkeypatch 点）：经 PostgreSQLClient 防腐通道直读加工视图。"""
+    from src.data_platform.storage.postgresql.client import PostgreSQLClient
+
+    rows = PostgreSQLClient().execute(_processed_view_sql(columns))
+    return [tuple(row.get(c) for c in columns) for row in rows]
 
 
 @router.get("/query/processed-snapshot", response_model=ProcessedViewSnapshotResponse)
@@ -2203,32 +2216,14 @@ def get_processed_view_snapshot(principal: SemanticReviewPrincipalDependency):
         raise HTTPException(status_code=422, detail=error_detail(
             "SEMANTIC_PROCESSED_SNAPSHOT_INVALID", "加工视图指标 source_field 非法", {},
         ))
-    from src.runtime.discovery.semantic_source import get_semantic_data_source
-    source = get_semantic_data_source()
     try:
-        conn = _connect_processed_view(source, datasource_id)
-    except Exception:
-        logger.exception("processed snapshot connect failed")
-        raise HTTPException(status_code=503, detail=error_detail(
-            "SEMANTIC_PROCESSED_SNAPSHOT_UNAVAILABLE", "加工视图数据源不可用",
-            {"datasource_id": datasource_id},
-        ))
-    try:
-        cursor = conn.cursor()
-        cols_sql = ", ".join(f"[{c}]" for c in columns)
-        cursor.execute(f"SELECT {cols_sql} FROM [dbo].[{_PROCESSED_VIEW_SOURCE_OBJECT}]")
-        rows = cursor.fetchall()
+        rows = _read_processed_view_rows(columns)
     except Exception:
         logger.exception("processed snapshot query failed")
         raise HTTPException(status_code=503, detail=error_detail(
             "SEMANTIC_PROCESSED_SNAPSHOT_UNAVAILABLE", "加工视图查询失败",
             {"view": _PROCESSED_VIEW_SOURCE_OBJECT},
         ))
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
     if len(rows) == 0:
         raise HTTPException(status_code=404, detail=error_detail(
             "SEMANTIC_PROCESSED_SNAPSHOT_EMPTY", "加工视图无快照行",

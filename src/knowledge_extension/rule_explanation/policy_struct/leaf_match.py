@@ -14,6 +14,10 @@ from typing import Any
 from src.knowledge_extension.rule_explanation.policy_struct.structure_parser import (
     parse_policy_structure,
 )
+from src.knowledge_extension.rule_explanation.policy_struct.table_parser import (
+    CELL_SEP,
+    build_cell_units,
+)
 
 # 与前端 normText 一致：剥除空白与标点
 _WS = re.compile(r"[\s，。、；：“”‘’（）()【】\[\]「」.,;:％%]")
@@ -184,3 +188,68 @@ def match_leaves(src: str, leaves: list) -> list[str]:
         mx = max(c[1] for c in scored)
         return [c[0] for c in scored if c[1] == mx]
     return []
+
+
+def collect_cell_units(leaves: list) -> list:
+    """叶子文本中的表格块 → 单元格定位单元（#39/#24 表格引用）。
+
+    表格行由爬虫渲染为「单元格 | 单元格」文本挂在条款叶子下；此处解析出
+    单元格级单元，供事实引用定位到 r{n}c{m}。
+    """
+    units: list = []
+    for lf in leaves:
+        body = _leaf_body(lf)
+        if CELL_SEP not in body:
+            continue
+        units.extend(build_cell_units(lf.node_id, body.split("\n")))
+    return units
+
+
+def match_cell_units(src: str, cell_units: list) -> tuple[str, list[str]]:
+    """提取记录 source_text → 表格单元格定位（node_id#r{n}c{m}）。
+
+    返回 ``(tier, locators)``，tier ∈ ``combo`` / ``value`` / ``lcs`` / ``''``：
+
+    - ``combo``（最强）：行表头+单元格值 连拼与 src 相互包含——事实同时提及
+      行维度与值，几乎必然来自表格（如「一级及以下定点医疗机构100元」）；
+    - ``value``：单元格值与 src 相互包含；
+    - ``lcs``：归一化 LCS 兜底（≥值50%且≥6字，单元格值通常短于条款文本）。
+
+    调用方应让 ``combo`` 优先于条款匹配、``value``/``lcs`` 仅在条款无匹配时
+    兜底——正文条款也会提到表格里的数值，裸值命中不能抢占条款归属。
+    """
+    s = norm_text(src)
+    if not s:
+        return "", []
+    combo: list[tuple[str, int]] = []
+    value_hit: list[tuple[str, int]] = []
+    for unit in cell_units:
+        row_head = norm_text(unit.row_header)
+        col_head = norm_text(unit.column_header)
+        value = norm_text(unit.value)
+        if not value:
+            continue
+        # combo：事实同时含行维度与值（列名可作旁证）——自然语序是
+        # 「机构+列名+值」，成分同现比连拼更稳
+        if row_head and row_head in s and value in s and value != row_head:
+            combo.append((unit.locator, len(row_head) + len(value)))
+        elif value in s or s in value:
+            value_hit.append((unit.locator, len(value)))
+    if combo:
+        mx = max(c[1] for c in combo)
+        return "combo", [c[0] for c in combo if c[1] == mx]
+    if value_hit:
+        mx = max(c[1] for c in value_hit)
+        return "value", [c[0] for c in value_hit if c[1] == mx]
+    scored: list[tuple[str, int]] = []
+    for unit in cell_units:
+        value = norm_text(unit.value)
+        if len(value) < 3:
+            continue
+        lcs = _lcs_len(value, s)
+        if lcs >= 6 and lcs >= len(value) * 0.5:
+            scored.append((unit.locator, lcs))
+    if scored:
+        mx = max(c[1] for c in scored)
+        return "lcs", [c[0] for c in scored if c[1] == mx]
+    return "", []

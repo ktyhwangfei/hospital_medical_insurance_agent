@@ -99,10 +99,10 @@ def test_语义层登记_四view指标_口径句v4发布(seeded_registry):
     assert [m.aggregation for m in metrics] == ["count", "sum", "sum", "sum"]
     assert all(m.source_object == VIEW_CODE for m in metrics)
     assert [m.source_field for m in metrics] == [
-        "bjybdb.v_op_outpatient_processed.op_valid_settle_count",
-        "bjybdb.v_op_outpatient_processed.op_total_fee",
-        "bjybdb.v_op_outpatient_processed.op_fund_pay",
-        "bjybdb.v_op_outpatient_processed.op_self_pay",
+        "outpatient_postgres.v_op_outpatient_processed.op_valid_settle_count",
+        "outpatient_postgres.v_op_outpatient_processed.op_total_fee",
+        "outpatient_postgres.v_op_outpatient_processed.op_fund_pay",
+        "outpatient_postgres.v_op_outpatient_processed.op_self_pay",
     ]
 
 
@@ -140,6 +140,6 @@ def test_受控问数可解析四view指标(seeded_registry):
     assert len(resolved) == 4
     assert all(not info.get("unmapped") for info in resolved.values())
     assert all(
-        info["source_field"].startswith("bjybdb.v_op_outpatient_processed.")
+        info["source_field"].startswith("outpatient_postgres.v_op_outpatient_processed.")
         for info in resolved.values()
     )

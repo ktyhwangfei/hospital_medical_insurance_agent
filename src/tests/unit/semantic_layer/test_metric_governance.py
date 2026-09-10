@@ -241,3 +241,85 @@ def test_policy_carrier_gate_a_two_state_only_requires_for_a_subkind():
     # B 运营(subkind 空) 无 carrier 也发布
     reg, _ = _pub("", None)
     reg.publish_object("care.TestObj")
+
+
+# ── #60 切片④（验收#4 溯源 + #2 幽灵档）：policy_rule_ref 同库存在性校验 ──
+
+class _FakeRuleReader:
+    """只读句柄桩：rows 按 rule_ref 返回行（含 status），未登记返回 None。"""
+
+    def __init__(self, rows: dict[str, dict]):
+        self._rows = rows
+        self.calls: list[str] = []
+
+    def get_rule(self, ref: str):
+        self.calls.append(ref)
+        return self._rows.get(ref)
+
+
+def _ref_registry(reader=None, *, subkind="policy_rate", carrier_extra=None):
+    """构造带完整 A 类承载(三件) + 可选附加键的发布路径注册表。"""
+    from src.semantic_layer.models import BusinessObject
+
+    store = InMemoryRegistryStore()
+    store.save_object(BusinessObject(object_code="care.RefObj", domain_code="ybzc",
+                                     name="测试对象", status="draft"))
+    carrier = {
+        "doc_number": "京医保〔2024〕1号", "region_scope": "北京市",
+        "effective_start": "2024-01-01",
+    }
+    if carrier_extra:
+        carrier.update(carrier_extra)
+    store.save_metric(Metric(
+        metric_code="care.RefObj.amt", object_code="care.RefObj", name="政策额",
+        definition="报销比例按政策口径", status="published", subkind=subkind,
+        policy_carrier=carrier,
+    ))
+    if reader is not None:
+        return SemanticRegistry(store, policy_rule_reader=reader)
+    return SemanticRegistry(store)
+
+
+def test_policy_rule_ref_must_reference_existing_zcgz_row():
+    """#60 验收#4：policy_rule_ref 指向不存在的 zcgz 规则行 → 发布拒并指明引用。"""
+    reader = _FakeRuleReader({"ext_good": {"extraction_id": "ext_good", "status": "published"}})
+    reg = _ref_registry(reader, carrier_extra={"policy_rule_ref": "ext_missing"})
+    with pytest.raises(ValueError) as ei:
+        reg.publish_object("care.RefObj")
+    assert "政策承载溯源不合法" in str(ei.value)
+    assert "care.RefObj.amt" in str(ei.value) and "政策规则引用不存在: ext_missing" in str(ei.value)
+
+
+def test_ghost_carrier_revoked_rule_without_effective_end_rejected():
+    """#60 验收#2 幽灵档：引用行已废止(archived)而承载缺 effective_end → 拒；补齐废止日 → 放行。"""
+    reader = _FakeRuleReader({"ext_rev": {"extraction_id": "ext_rev", "status": "archived"}})
+    reg = _ref_registry(reader, carrier_extra={"policy_rule_ref": "ext_rev"})
+    with pytest.raises(ValueError) as ei:
+        reg.publish_object("care.RefObj")
+    assert "幽灵档" in str(ei.value) and "ext_rev" in str(ei.value)
+    # 补 effective_end（废止日落档）→ 发布通过
+    reg = _ref_registry(reader, carrier_extra={
+        "policy_rule_ref": "ext_rev", "effective_end": "2025-12-31",
+    })
+    reg.publish_object("care.RefObj")
+
+
+def test_current_rule_with_null_effective_end_and_valid_ref_publishes():
+    """现行未废止行 end=null 合法：引用 published 行 + 完整三件 → 发布通过且句柄被调用。"""
+    reader = _FakeRuleReader({"ext_cur": {"extraction_id": "ext_cur", "status": "published"}})
+    reg = _ref_registry(reader, carrier_extra={"policy_rule_ref": "ext_cur"})
+    ver = reg.publish_object("care.RefObj")
+    vm = next(x for x in ver.metrics if x.metric_code == "care.RefObj.amt")
+    assert vm.policy_carrier["policy_rule_ref"] == "ext_cur"
+    assert reader.calls == ["ext_cur"]
+
+
+def test_ref_gate_applies_to_any_filled_ref_and_absent_reader_keeps_legacy_path():
+    """B 类填了 ref 也校验（溯源不分类别）；未注入句柄的存量注册表不因 ref 校验阻断（验收#3 回归）。"""
+    reader = _FakeRuleReader({})
+    reg = _ref_registry(reader, subkind="", carrier_extra={"policy_rule_ref": "ext_x"})
+    with pytest.raises(ValueError, match="政策规则引用不存在"):
+        reg.publish_object("care.RefObj")
+    # 未注入句柄（内存注册表/存量构造路径）：ref 不校验，发布照常
+    reg = _ref_registry(subkind="", carrier_extra={"policy_rule_ref": "ext_x"})
+    reg.publish_object("care.RefObj")

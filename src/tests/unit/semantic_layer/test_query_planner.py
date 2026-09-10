@@ -55,8 +55,10 @@ def _whole_admission_query(**updates):
     return SemanticQuery(**payload)
 
 
-def _outpatient_registry(metric_permission: dict[str, str] | None = None):
+def _outpatient_registry(metric_permission: dict[str, str] | None = None,
+                         metric_carrier: dict[str, dict] | None = None):
     metric_permission = metric_permission or {}
+    metric_carrier = metric_carrier or {}
     store = InMemoryRegistryStore()
     datasets = [
         SemanticDataset(
@@ -179,6 +181,11 @@ def _outpatient_registry(metric_permission: dict[str, str] | None = None):
             semantic_type="Amount", status="published",
         )),
     ]
+    # #60 查询层裁剪用：按指标短名挂 policy_carrier（生效区间）
+    for _m in metrics:
+        _carrier = metric_carrier.get(_m.metric_code.split(".")[-1])
+        if _carrier:
+            _m.policy_carrier = _carrier
     rules = [
         DataQualityRule(
             rule_code="mz_fee_item_coverage", object_code="mzjyxx", rule_type="coverage",
@@ -603,3 +610,35 @@ def test_amount_metrics_coquery_preserves_tieout_on_same_grain():
     }, duration_ms=1)
     row = result.rows[0]
     assert row["total_amount"] == row["fund_pay"] + row["self_pay"] == 100.0
+
+
+def test_policy_carrier_effective_interval_clips_revoked_and_future_metrics():
+    """#60 查询层生效期裁剪：已废止(effective_end<今日)/未生效(effective_start>今日)指标拒查；现行可查。
+
+    日期相对真实「今日」构造，避免冻结时间依赖。
+    """
+    from datetime import date, timedelta
+
+    yesterday = str(date.today() - timedelta(days=1))
+    tomorrow = str(date.today() + timedelta(days=1))
+    planner = SemanticQueryPlanner(_outpatient_registry(metric_carrier={
+        # 已废止：废止日在昨日
+        "fund_pay": {"doc_number": "京医保〔2024〕1号", "region_scope": "北京市",
+                     "effective_start": "2024-01-01", "effective_end": yesterday},
+        # 未生效：生效起在明日
+        "self_pay": {"doc_number": "京医保〔2026〕9号", "region_scope": "北京市",
+                     "effective_start": tomorrow},
+        # 现行：end=null=现行，可查
+        "total_amount": {"doc_number": "京医保〔2024〕1号", "region_scope": "北京市",
+                         "effective_start": "2024-01-01"},
+    }))
+
+    with pytest.raises(SemanticQueryPlanningError, match="已废止"):
+        planner.compile(_outpatient_query("whole_settlement", ["fund_pay"]))
+    with pytest.raises(SemanticQueryPlanningError, match="未生效"):
+        planner.compile(_outpatient_query("whole_settlement", ["self_pay"]))
+    # 现行(end=null)与无承载指标照常编译（item_fee 为明细粒度，按既有口径分组查询）
+    assert planner.compile(_outpatient_query("whole_settlement", ["total_amount"]))
+    assert planner.compile(_outpatient_query(
+        "fee_item", ["item_fee"], group_by=["mz_fee_item.item_name"],
+    ))
