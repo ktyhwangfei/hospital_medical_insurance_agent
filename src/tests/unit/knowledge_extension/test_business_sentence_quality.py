@@ -68,3 +68,51 @@ def test_sentence_known_rule_type_unchanged() -> None:
     rule = _rule_with_structured_fields(rule_type="payment_ratio", payment_ratio="80%")
     sentence = _sentence(rule)
     assert sentence == "退休人员住院时，统筹基金支付比例为80%。"
+
+
+def test_sentence_includes_dimension_fields_for_distinctness() -> None:
+    """业务句必须携带医院等级、金额区间等区分字段，避免多个规则文本完全相同。"""
+    sentence = _sentence({
+        "rule_type": "payment_ratio",
+        "psn_type": "在职职工",
+        "med_type": "门诊-普通门急诊",
+        "hosp_lv": "三级",
+        "amount_band": "2万元以下",
+        "payment_ratio": "0.85",
+    })
+    assert "在职职工门诊-普通门急诊" in sentence
+    assert "三级医院" in sentence
+    assert "2万元以下" in sentence
+    assert "85%" in sentence
+
+
+def test_sentence_formats_decimal_ratio_as_percentage() -> None:
+    """比例字段为 0~1 小数时输出百分比，且保留一位小数（96.1 不能截断成 96）。"""
+    sentence = _sentence({
+        "rule_type": "payment_ratio",
+        "psn_type": "在职职工",
+        "med_type": "门诊-普通门急诊",
+        "payment_ratio": "0.6",
+    })
+    assert "60%" in sentence
+    sentence = _sentence({
+        "rule_type": "payment_ratio",
+        "psn_type": "退休人员",
+        "med_type": "住院",
+        "payment_ratio": "0.961",
+    })
+    assert "96.1%" in sentence
+
+
+def test_sentence_excludes_time_period_and_admission_order() -> None:
+    """time_period / admission_order 等非业务维度不混入已知规则类型句子。"""
+    sentence = _sentence({
+        "rule_type": "payment_ratio",
+        "psn_type": "在职职工",
+        "med_type": "住院",
+        "payment_ratio": "80%",
+        "time_period": "年度",
+        "admission_order": "首次",
+    })
+    assert "年度" not in sentence
+    assert "首次" not in sentence

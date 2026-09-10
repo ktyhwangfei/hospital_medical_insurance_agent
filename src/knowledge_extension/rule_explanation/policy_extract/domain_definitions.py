@@ -283,8 +283,8 @@ HOSPITAL_LEVEL = _build_domain(
         # 基层机构
         {
             "standard": "社区卫生服务中心",
-            "abbr": "社区中心",
-            "aliases": ["社区卫生服务中心"],
+            "abbr": "社区",
+            "aliases": ["社区卫生服务中心", "社区卫生服务机构", "社区医院", "社区"],
             "category": "基层机构",
             "desc": "社区卫生服务中心"
         },

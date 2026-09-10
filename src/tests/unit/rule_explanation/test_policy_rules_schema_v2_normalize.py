@@ -21,8 +21,9 @@ def test_hosp_lv_standard_values_unchanged():
 
 
 def test_hosp_lv_community_and_undefined_mapped():
-    """社区→一级，未定级→无等级（对齐 seed.py 标准 [三级/二级/一级/无等级]）。"""
-    assert normalize_hosp_lv("社区") == "一级"
+    """社区保持独立值（门诊「医院 vs 社区」比例不同，不能并入一级），未定级→无等级。"""
+    assert normalize_hosp_lv("社区") == "社区"
+    assert normalize_hosp_lv("社区卫生服务中心") == "社区"
     assert normalize_hosp_lv("未定级") == "无等级"
 
 

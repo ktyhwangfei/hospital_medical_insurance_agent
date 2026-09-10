@@ -72,10 +72,22 @@ class KnowledgeWorkbenchReleaseSource:
                 raise ValueError(
                     f"变更项 {item.item_id} 编译状态为 {item.compilation_status}，不可发布"
                 )
-            source_text = str((item.after or {}).get("business_sentence") or "")
+            # 2026-09：fact_text 必须用包含区分字段的完整业务句生成，
+            # 不能沿用旧的 business_sentence（可能丢失医院等级、金额区间等维度）。
+            from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
+                _sentence,
+            )
+
+            source_text = str((item.after or {}).get("source_text") or "")
             rule = self._runtime_rule(canonical, source_text)
+            fact_text = _sentence(rule)
             fact_records, rule_records = build_ingest_records(
-                [{"fact_text": source_text, "rules": [rule]}],
+                [{
+                    "fact_text": fact_text,
+                    "rules": [rule],
+                    "unit_id": item.unit_id,
+                    "unit_source_text": source_text,
+                }],
                 doc_id=item.doc_id,
                 provider=self._provider,
                 extracted_at=extracted_at,
@@ -182,6 +194,21 @@ class ReleaseIndexBuilder:
                 self._backend.read_all("rules", "policy_rules_v2"),
                 self._backend.read_all("rules", active.rules_collection),
                 rules,
+            )
+
+        # 发布门禁：同一维度键（险种×人群×医疗类别×医院等级×金额区间×规则类型）
+        # 不允许冲突比例——LLM 产候选，代码做验收，冲突必须回上游修复而不是带病发布。
+        from src.knowledge_extension.rule_explanation.extraction_validators import (
+            check_key_uniqueness,
+        )
+
+        key_conflicts = [
+            issue for issue in check_key_uniqueness(rules) if issue.level == "ERROR"
+        ]
+        if key_conflicts:
+            raise ValueError(
+                "候选版本存在维度键冲突，禁止构建: "
+                + "; ".join(issue.message for issue in key_conflicts[:5])
             )
 
         self._backend.create("facts", release.facts_collection)
