@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from 'react'
 import { Database, Loader2, Plus, Search, ShieldCheck } from 'lucide-react'
 
 import { AnswerVerificationPanel } from '@/components/policy-qa/answer-verification-panel'
+import { GoldenCaseCoverage } from '@/components/policy-knowledge/golden-case-coverage'
 import { QualityDashboard } from '@/components/policy-knowledge/quality-dashboard'
 import {
   createRelease,
@@ -14,6 +15,7 @@ import {
   listReleases,
   listQualityCaseResults,
   listTestCases,
+  getWorkbenchDocuments,
   promoteRelease,
   rollbackRelease,
   runQuality,
@@ -24,6 +26,7 @@ import {
   type PolicyTestCase,
   type QualityCaseResult,
   type QualityRun,
+  type WorkbenchDocumentSummary,
   QUALITY_CONFIG_HASH,
   QUALITY_RUN_CONFIG,
 } from '@/lib/policy-knowledge-api'
@@ -39,6 +42,7 @@ export default function PolicyKnowledgeTestPage() {
   const [latestRun, setLatestRun] = useState<QualityRun | null>(null)
   const [caseResults, setCaseResults] = useState<QualityCaseResult[]>([])
   const [issue25Metrics, setIssue25Metrics] = useState<Issue25Metrics | null>(null)
+  const [documents, setDocuments] = useState<WorkbenchDocumentSummary[]>([])
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -46,10 +50,12 @@ export default function PolicyKnowledgeTestPage() {
   const refresh = useCallback(async () => {
     setError('')
     try {
-      const [releaseItems, caseItems, active] = await Promise.all([
+      const [releaseItems, caseItems, active, documentItems] = await Promise.all([
         listReleases(), listTestCases(), getActiveRelease().catch(() => null),
+        getWorkbenchDocuments().catch(() => []),
       ])
       setReleases(releaseItems); setCases(caseItems); setActiveRelease(active)
+      setDocuments(documentItems)
       const candidate = releaseItems.find((item) => !['active', 'retired'].includes(item.status))
       if (candidate) await restoreQuality(candidate.release_id)
     } catch (reason) { setError(reason instanceof Error ? reason.message : '测试页加载失败') }
@@ -60,9 +66,11 @@ export default function PolicyKnowledgeTestPage() {
       listTestCases(),
       getActiveRelease().catch(() => null),
       getIssue25Metrics('hash').catch(() => null),
+      getWorkbenchDocuments().catch(() => []),
     ])
-      .then(([releaseItems, caseItems, active, metrics]) => {
+      .then(([releaseItems, caseItems, active, metrics, documentItems]) => {
         setReleases(releaseItems); setCases(caseItems); setActiveRelease(active)
+        setDocuments(documentItems)
         if (metrics) setIssue25Metrics(metrics)
         const candidate = releaseItems.find((item) => !['active', 'retired'].includes(item.status))
         if (candidate) void restoreQuality(candidate.release_id)
@@ -114,6 +122,7 @@ export default function PolicyKnowledgeTestPage() {
 
     <SearchWorkbench />
     <QualityDashboard releases={releases} activeRelease={activeRelease} latestRun={latestRun} currentCaseSetVersion={Math.max(0, ...cases.map((item) => item.case_set_version))} caseResults={caseResults} issue25Metrics={issue25Metrics} onSelectRelease={restoreQuality} onRun={run} onPromote={promote} onRollback={rollback} />
+    <GoldenCaseCoverage cases={cases} documents={documents} caseResults={caseResults} />
     <AnswerVerificationPanel />
     <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
       <TestCasePanel cases={cases} onSaved={refresh} />

@@ -151,6 +151,18 @@ class WorkbenchDocumentSummary(BaseModel):
     knowledge_count: int
 
 
+class PolicyDocumentContent(BaseModel):
+    """原始政策文档内容（溯源页用）。"""
+
+    doc_id: str
+    title: str
+    content_text: str
+    source_url: str = ""
+    issuing_agency: str = ""
+    publish_date: str = ""
+    validity: str = "unknown"
+
+
 class WorkbenchDocumentList(BaseModel):
     items: list[WorkbenchDocumentSummary]
     total: int
