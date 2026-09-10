@@ -34,6 +34,7 @@ const TYPE_META: Record<CatalogAssetType, { label: string; cls: string; dot: str
   semantic_object: { label: '语义对象', cls: 'bg-violet-50 text-violet-700', dot: 'bg-violet-500', icon: <Brain className="size-3" /> },
   metric: { label: '指标', cls: 'bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', icon: <Sigma className="size-3" /> },
   consumer: { label: '消费方', cls: 'bg-amber-50 text-amber-700', dot: 'bg-amber-500', icon: <MousePointerClick className="size-3" /> },
+  vector_collection: { label: '向量集合', cls: 'bg-rose-50 text-rose-700', dot: 'bg-rose-500', icon: <Database className="size-3" /> },
 }
 
 const TYPE_TABS: { key: CatalogAssetType | 'all'; label: string }[] = [
@@ -45,7 +46,7 @@ const TYPE_TABS: { key: CatalogAssetType | 'all'; label: string }[] = [
 ]
 
 function TypeBadge({ type }: { type: CatalogAssetType }) {
-  const m = TYPE_META[type]
+  const m = TYPE_META[type] ?? { label: type, cls: 'bg-slate-100 text-slate-600', dot: 'bg-slate-400', icon: <Database className="size-3" /> }
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-px text-[10px] font-semibold ${m.cls}`}>
       {m.icon}{m.label}
@@ -269,7 +270,9 @@ export default function DataCatalogPage() {
   useEffect(() => { getCatalogSla().then(setSla).catch(() => setSla(null)) }, [])
 
   const typeCounts = useMemo(() => {
-    const c: Record<CatalogAssetType, number> = { source_table: 0, semantic_object: 0, metric: 0, consumer: 0 }
+    const c: Record<CatalogAssetType, number> = {
+      source_table: 0, semantic_object: 0, metric: 0, consumer: 0, vector_collection: 0,
+    }
     for (const a of assets) c[a.asset_type] += 1
     return c
   }, [assets])
