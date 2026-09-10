@@ -84,7 +84,8 @@ def test_broad_question_with_zero_policy_evidence_is_unavailable():
 
     assert result.answer_status == "unavailable"
     assert "未检索到足以回答该问题的政策依据" in result.answer
-    assert any("现有信息不足" in item for item in result.uncertainties)
+    # 宽泛问题后端不再返回 uncertainties，由前端统一展示免责提示
+    assert result.uncertainties == []
 
 
 def test_broad_question_with_evidence_remains_partial():

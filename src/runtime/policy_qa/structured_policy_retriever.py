@@ -223,6 +223,8 @@ class StructuredPolicyEvidence:
     rule_instance_key: str = ""
     applied_reason: str = ""
     doc_id: str = ""                # 来源文档标识（出处追溯）
+    unit_id: str = ""               # 来源提取单元（段落级溯源）
+    unit_source_text: str = ""      # 来源单元原文段落（溯源页高亮用）
     score: float = 1.0  # 结构化匹配默认满分
 
 

@@ -52,6 +52,7 @@ from src.runtime.policy_qa.settlement_data_provider import (
 )
 from src.runtime.policy_qa.structured_policy_retriever import (
     PolicyRetrievalUnavailableError,
+    StructuredPolicyEvidence,
     StructuredRetrievalResult,
     _DEFAULT_REGION,
     retrieve_policy_evidence,
@@ -112,6 +113,7 @@ from src.knowledge_extension.rule_explanation.answer_verification.milvus_port im
 from src.knowledge_extension.rule_explanation.answer_verification.models import (
     RuleKnowledgePort,
 )
+from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
 from src.runtime.policy_qa.verification_trace import (
     AnswerVerificationTraceStore,
     QAVerificationOutcome,
@@ -149,16 +151,44 @@ def _is_broad_question(request: PolicyQARequest, context_need: dict[str, Any] | 
 
 
 def _router_structured_retrieve(decision: BroadRouteDecision) -> StructuredRetrievalResult:
-    """路由层结构化检索注入点：以路由查询计划走 structured 读路径。
+    """宽泛问题检索注入点：走 policy_facts_* 语义单元向量搜索 + BM25 重排。
 
-    Issue #33 路由/拒答：A/B 落点只走 structured 精确路径，绝不回落 broad 自由检索。
-    API 测试可 monkeypatch 本模块的 retrieve_policy_evidence 注入假数据源。
+    基于结算单的精确问答仍走 `retrieve_policy_evidence`（结构化字段过滤）；
+    宽泛政策问答命中的是事实单元（fact_text），再回查原始文档补标题。
     """
-    return retrieve_policy_evidence(
-        settlement_context={"settlement_id": "", "region": _DEFAULT_REGION},
+    from src.runtime.policy_qa.broad_fact_retriever import retrieve_broad_fact_units
+
+    question = decision.structured_queries[0].search_text if decision.structured_queries else ""
+    facts = retrieve_broad_fact_units(
+        question,
         host=MILVUS_HOST,
         port=str(MILVUS_PORT),
-        custom_queries=decision.structured_queries,
+        top_k=50,
+        final_top_n=50,
+    )
+    selected_evidence: list[StructuredPolicyEvidence] = []
+    for fact in facts:
+        text = fact["fact_text"]
+        # 简单险种推断，用于回答分组
+        insu_type = ""
+        if "职工" in text or "在职" in text or "退休" in text:
+            insu_type = "城镇职工基本医疗保险"
+        elif "城乡居民" in text or "居民医保" in text:
+            insu_type = "城乡居民基本医疗保险"
+
+        ev = StructuredPolicyEvidence(
+            source_text=text,
+            doc_id=fact["doc_id"],
+            unit_id=fact.get("unit_id", ""),
+            unit_source_text=fact.get("unit_source_text", ""),
+            score=fact["score"],
+            insu_type=insu_type,
+        )
+        selected_evidence.append(ev)
+
+    return StructuredRetrievalResult(
+        selected_evidence=selected_evidence,
+        missing_required_rules=[],
     )
 
 
@@ -181,14 +211,12 @@ def _insu_short(insu_type: str) -> str:
 
 
 def _source_attribution(evidence: dict[str, Any]) -> str:
-    """单条证据的出处标注：险种·规则类型（施行年份）。
-
-    语料 release 集合无政策文件名（policy_title 未随实体下发），出处以
-    适用维度组合呈现；doc_id 已在证据链路上透传，文件名级标注待 doc 注册表。
-    """
+    """单条证据的出处标注：险种·规则类型·政策标题（施行年份）。"""
     parts = [_insu_short(str(evidence.get("insu_type", "") or ""))]
     if evidence.get("rule_type"):
         parts.append(str(evidence["rule_type"]))
+    if evidence.get("doc_title"):
+        parts.append(str(evidence["doc_title"]))
     effective = str(evidence.get("effective_date", "") or "")
     attribution = "·".join(parts)
     # 语料用 1900 哨兵表示"日期未知"，不得渲染成"1900年施行"
@@ -198,18 +226,132 @@ def _source_attribution(evidence: dict[str, Any]) -> str:
     return attribution
 
 
+def _excerpt_around(source_text: str, content_text: str, window: int = 80) -> str:
+    """在原始文档内容中定位 source_text 并抽取前后文片段。
+
+    优先用 source_text 中的中文连续片段或数字做 needle；找不到时回退到文档开头。
+    """
+    if not content_text:
+        return ""
+    if not source_text:
+        return content_text[:200].strip()
+
+    # 候选 needle：中文词串（>=4 字）、数字（含百分号）、去空白后的整句
+    needles: list[str] = re.findall(r"[\u4e00-\u9fa5]{4,}", source_text)
+    needles.extend(re.findall(r"\d+%?", source_text))
+    collapsed = re.sub(r"\s+", "", source_text)
+    if collapsed and collapsed not in needles:
+        needles.append(collapsed)
+
+    for needle in needles:
+        idx = content_text.find(needle)
+        if idx != -1:
+            start = max(0, idx - window)
+            end = min(len(content_text), idx + len(needle) + window)
+            return content_text[start:end].strip()
+
+    return content_text[:200].strip()
+
+
+def _enrich_broad_evidence_with_docs(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """用 doc_id 回查 policy_documents，补充政策标题和原文片段。"""
+    doc_ids = {
+        str(ev.get("doc_id", "")).strip()
+        for ev in evidence
+        if ev.get("doc_id")
+    }
+    if not doc_ids:
+        return list(evidence)
+
+    docs: dict[str, dict[str, Any]] = {}
+    try:
+        store = PipelineStore()
+        for doc_id in doc_ids:
+            doc = store.get_document(doc_id)
+            if doc:
+                docs[doc_id] = doc
+    except Exception as e:
+        logger.warning("[BROAD-QA] 原始政策文档查询失败: %s", e)
+
+    enriched: list[dict[str, Any]] = []
+    for ev in evidence:
+        new_ev = dict(ev)
+        doc_id = str(new_ev.get("doc_id", "")).strip()
+        doc = docs.get(doc_id)
+        if doc:
+            title = str(doc.get("title") or "").strip()
+            if title:
+                new_ev["doc_title"] = title
+            content = str(doc.get("content_text") or "")
+            source = str(new_ev.get("source_text", new_ev.get("clause", "")) or "")
+            excerpt = _excerpt_around(source, content, window=80)
+            if excerpt:
+                new_ev["doc_excerpt"] = excerpt
+        enriched.append(new_ev)
+    return enriched
+
+
 def _format_broad_evidence(evidence: list[dict[str, Any]]) -> str:
-    """把证据按险种分组格式化为带出处标注的文本块（LLM prompt 与降级回答共用）。"""
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for ev in evidence[:5]:
-        groups.setdefault(_insu_short(str(ev.get("insu_type", "") or "")), []).append(ev)
+    """把证据按险种分组格式化为带出处标注的文本块（LLM prompt 与降级回答共用）。
+
+    处理规则：
+    - 按 source_text 去重，避免同一规则多条相似碎片重复列出；
+    - 险种间轮询选取，保证职工/居民等各人群都有代表，避免某一类事实垄断 top 5；
+    - 在每条规则后补充适用场景（医疗类别 / 医院等级 / 人员类别），减少"只有比例没有背景"的问题。
+    """
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for ev in evidence:
+        text = str(ev.get("source_text", ev.get("clause", "")) or "").strip()
+        # 忽略纯空白或已有重复文本
+        if not text:
+            continue
+        key = "".join(text.split())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(ev)
+
+    # 按险种分组后轮询选取，确保不同险种都被展示
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for ev in deduped:
+        grouped.setdefault(_insu_short(str(ev.get("insu_type", "") or "")), []).append(ev)
+
+    group_names = sorted(grouped.keys(), key=lambda k: (_GROUP_PRIORITY.get(k, 99),))
+    selected: list[dict[str, Any]] = []
+    round_idx = 0
+    while len(selected) < 5:
+        added_in_round = False
+        for name in group_names:
+            if round_idx < len(grouped[name]):
+                selected.append(grouped[name][round_idx])
+                added_in_round = True
+                if len(selected) >= 5:
+                    break
+        if not added_in_round:
+            break
+        round_idx += 1
+
+    display_groups: dict[str, list[dict[str, Any]]] = {}
+    for ev in selected:
+        display_groups.setdefault(_insu_short(str(ev.get("insu_type", "") or "")), []).append(ev)
     blocks = []
     for name, items in sorted(
-        groups.items(), key=lambda kv: (_GROUP_PRIORITY.get(kv[0], 99),)
+        display_groups.items(), key=lambda kv: (_GROUP_PRIORITY.get(kv[0], 99),)
     ):
         lines = [f"【{name}】"]
         for i, ev in enumerate(items, start=1):
             text = str(ev.get("source_text", ev.get("clause", "")) or "")[:200]
+            context_parts = [
+                p for p in [
+                    str(ev.get("med_type", "") or "").strip(),
+                    str(ev.get("hosp_lv", "") or "").strip(),
+                    str(ev.get("psn_type", "") or "").strip(),
+                ] if p
+            ]
+            context = " / ".join(context_parts)
+            if context:
+                text = f"{text}（适用：{context}）"
             lines.append(f"{i}. {text}（出处：{_source_attribution(ev)}）")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
@@ -219,7 +361,8 @@ def _generate_broad_answer(question: str, evidence: list[dict[str, Any]]) -> str
     """为宽泛问题生成基于政策证据的回答。
 
     回答组织形式对齐政策原文习惯：按险种分组、每条标注出处（险种·规则类型·
-    施行年份）。模型调用统一走 model_service/gateway；失败时返回同结构的安全降级文本。
+    政策标题·施行年份），并回查原始文档补充原文片段。模型调用统一走
+    model_service/gateway；失败时返回同结构的安全降级文本。
     """
     if not evidence:
         return "未检索到与您问题相关的政策依据，建议您补充地区、险种、医疗类别等具体信息后再试。"
@@ -233,8 +376,7 @@ def _generate_broad_answer(question: str, evidence: list[dict[str, Any]]) -> str
             "回答格式要求（对齐政策原文的严谨表述）：\n"
             "1. 严格按【职工医保】【居民医保】等险种分组小标题组织，不得平铺；\n"
             "2. 每组内逐条列出规定内容，每条末尾保留括号中的出处标注，不得删除或改写；\n"
-            "3. 只依据给定政策依据作答，无依据的内容明确声明不确定，禁止编造；\n"
-            "4. 结尾提示'以上信息仅供参考，具体待遇以当地医保经办机构解释为准'。\n\n"
+            "3. 只依据给定政策依据作答，无依据的内容明确声明不确定，禁止编造。\n\n"
             f"用户问题：{question}\n\n"
             f"政策依据：\n{_format_broad_evidence(evidence)}\n\n"
             "回答："
@@ -256,11 +398,7 @@ def _fallback_broad_answer(evidence: list[dict[str, Any]]) -> str:
     """模型不可用时的安全降级回答：与 LLM 路径同结构（分组 + 出处标注）。"""
     if not evidence:
         return "未检索到与您问题相关的政策依据，建议您补充地区、险种、医疗类别等具体信息后再试。"
-    return (
-        "根据检索到的政策依据，为您整理如下：\n"
-        + _format_broad_evidence(evidence)
-        + "\n\n以上信息仅供参考，具体待遇以当地医保经办机构解释为准。"
-    )
+    return "根据检索到的政策依据，为您整理如下：\n" + _format_broad_evidence(evidence)
 
 
 def _resolve_tenant_id(request: PolicyQARequest) -> str:
@@ -739,7 +877,12 @@ def _build_public_result(
             or evidence.get("evidence_text")
             or evidence.get("source_text")
         )
-        raw_title = evidence.get("title") or evidence.get("policy_title") or "政策依据"
+        raw_title = (
+            evidence.get("doc_title")
+            or evidence.get("title")
+            or evidence.get("policy_title")
+            or "政策依据"
+        )
         if (
             _contains_internal_implementation(raw_excerpt)
             or _contains_internal_implementation(raw_title)
@@ -759,8 +902,12 @@ def _build_public_result(
             public_score = None
         if public_score is not None and not math.isfinite(public_score):
             public_score = None
-        safe_evidence.append({"title": title, "excerpt": excerpt, "score": public_score})
-        citations.append(PolicyCitation(title=title, excerpt=excerpt))
+        doc_id = str(evidence.get("doc_id") or "")
+        source_excerpt = _public_text(evidence.get("unit_source_text") or "")
+        safe_evidence.append({"title": title, "excerpt": excerpt, "score": public_score, "doc_id": doc_id})
+        citations.append(PolicyCitation(
+            title=title, excerpt=excerpt, doc_id=doc_id, source_excerpt=source_excerpt
+        ))
         seen_citations.add(citation_key)
 
     outpatient_result = outpatient_result if isinstance(outpatient_result, dict) else {}
@@ -854,25 +1001,21 @@ def _build_public_result(
         safe_answer = safe_answer or "当前信息不足，无法可靠回答该问题。"
 
     uncertainties: list[str] = []
-    uncertainties.extend(
-        _public_text(item) for item in outpatient_result.get("uncertainties", [])
-        if str(item or "").strip()
-    )
-    if not has_meaningful_answer:
-        uncertainties.append("公开回答未包含可核验的业务内容。")
-    if is_overview:
-        uncertainties.append("费用总览不涉及单项政策匹配或单项计算过程核验。")
-    elif is_broad:
-        uncertainties.append("本回答针对宽泛政策问题，未关联具体结算单，仅供参考。")
-    elif not citations:
-        uncertainties.append("未检索到可展示的政策依据。")
-    if answer_status == "partial":
-        if is_broad:
-            uncertainties.append("政策依据可能不完整，请结合当地最新政策文件核对。")
-        else:
+    if not is_broad:
+        uncertainties.extend(
+            _public_text(item) for item in outpatient_result.get("uncertainties", [])
+            if str(item or "").strip()
+        )
+        if not has_meaningful_answer:
+            uncertainties.append("公开回答未包含可核验的业务内容。")
+        if is_overview:
+            uncertainties.append("费用总览不涉及单项政策匹配或单项计算过程核验。")
+        elif not citations:
+            uncertainties.append("未检索到可展示的政策依据。")
+        if answer_status == "partial":
             uncertainties.append("政策依据不完整，当前回答仅供核对真实结算金额。")
-    elif answer_status == "unavailable":
-        uncertainties.append("现有信息不足，未形成可靠核对结论。")
+        elif answer_status == "unavailable":
+            uncertainties.append("现有信息不足，未形成可靠核对结论。")
 
     verification_messages = {
         "complete": (
@@ -880,11 +1023,7 @@ def _build_public_result(
             if is_overview
             else "结算事实、适用计算和政策依据已完成核对。"
         ),
-        "partial": (
-            "已基于检索到的政策依据生成解释，但未关联具体结算单。"
-            if is_broad
-            else "已核对结算金额，但政策依据或计算过程仍不完整。"
-        ),
+        "partial": "政策依据已检索" if is_broad else "已核对结算金额，但政策依据或计算过程仍不完整。",
         "unavailable": "现有信息不足，未形成可靠核对结论。",
     }
     return PolicyQAPublicResult(
@@ -893,8 +1032,9 @@ def _build_public_result(
         case_context=safe_context,
         calculation_steps=safe_steps,
         definition=safe_definition,
-        warnings=[_public_text(item) for item in warnings or [] if str(item or "").strip()],
+        warnings=[] if is_broad else [_public_text(item) for item in warnings or [] if str(item or "").strip()],
         policy_evidence=safe_evidence,
+        is_broad=is_broad,
         citations=citations,
         uncertainties=uncertainties,
         verification_summary=VerificationSummary(
@@ -1364,6 +1504,7 @@ async def _policy_qa_stream(
                     "hosp_lv": getattr(_ev, "hosp_lv", ""),
                     "effective_date": getattr(_ev, "effective_date", ""),
                     "doc_id": getattr(_ev, "doc_id", ""),
+                    "unit_source_text": getattr(_ev, "unit_source_text", ""),
                 })
             if len(policy_evidence) > 0:
                 policy_status = "partial_policy_matched"
@@ -1433,6 +1574,8 @@ async def _policy_qa_stream(
                     "payment_ratio": _ev.payment_ratio,
                     "amount_band": _ev.amount_band,
                     "rule_value": _ev.rule_value,
+                    "doc_id": getattr(_ev, "doc_id", ""),
+                    "unit_source_text": getattr(_ev, "unit_source_text", ""),
                 })
             if not _retrieval_result.missing_required_rules and len(policy_evidence) >= 2:
                 policy_status = "full_policy_matched"
@@ -1473,6 +1616,8 @@ async def _policy_qa_stream(
         _single_skill_result = None
         _outpatient_result: dict | None = None
         if is_broad:
+            # 宽泛问题：用 doc_id 回查原始文档，补充政策标题（answer 与 citations 共用）
+            policy_evidence = _enrich_broad_evidence_with_docs(policy_evidence)
             if _router_refusal_message:
                 # Issue #33 路由拒答：三判据/结构化漏空的确定性拒答文案直出，不调模型
                 result_answer = _router_refusal_message
@@ -1545,7 +1690,7 @@ async def _policy_qa_stream(
             trace_partial_answer = True
             _calc_steps = []
             _definition = None
-            _warnings = ["本回答针对宽泛政策问题，未关联具体结算单，仅供参考。"]
+            _warnings = []
             _case_context = None
         elif _coverage_incomplete:
             _incomplete = _incomplete_coverage_payload(settlement_context, request.question)

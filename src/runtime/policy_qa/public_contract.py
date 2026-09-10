@@ -10,6 +10,8 @@ class PolicyCitation(BaseModel):
 
     title: str
     excerpt: str
+    doc_id: str = ""
+    source_excerpt: str = ""  # 命中单元的原文段落（溯源页高亮用）
 
 
 class VerificationSummary(BaseModel):
@@ -73,6 +75,7 @@ class PolicyEvidence(BaseModel):
     title: str
     excerpt: str
     score: float | None = Field(default=None, allow_inf_nan=False)
+    doc_id: str = ""
 
 
 class OutpatientContextCheck(BaseModel):
@@ -121,6 +124,7 @@ class PolicyQAPublicResult(BaseModel):
     citations: list[PolicyCitation] = Field(default_factory=list)
     uncertainties: list[str] = Field(default_factory=list)
     verification_summary: VerificationSummary
+    is_broad: bool = False
     scenario_id: str | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )

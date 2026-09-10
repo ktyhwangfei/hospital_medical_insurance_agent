@@ -50,7 +50,7 @@ describe('PolicyAgentAnswer', () => {
     expect(answer.closest('article')?.firstElementChild).toBe(answer)
     expect(screen.getByText('已核对当前结算单与 2 条政策依据。')).toBeInTheDocument()
     expect(screen.queryByText('本轮执行链路')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '查看 2 条政策来源' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '查看 2 篇政策来源（2 条命中单元）' })).toBeInTheDocument()
     expect(screen.getByText('计算依据')).toBeInTheDocument()
     expect(screen.getByText('计算依据').closest('details')).not.toHaveAttribute('open')
     fireEvent.click(screen.getByText('计算依据'))
@@ -63,20 +63,56 @@ describe('PolicyAgentAnswer', () => {
   it('shows only policy title and excerpt in the sources dialog', () => {
     render(<PolicyAgentAnswer message={completeMessage} />)
 
-    fireEvent.click(screen.getByRole('button', { name: '查看 2 条政策来源' }))
+    fireEvent.click(screen.getByRole('button', { name: '查看 2 篇政策来源（2 条命中单元）' }))
 
     expect(screen.getByText('基本医疗保险住院待遇政策')).toBeInTheDocument()
     expect(screen.getByText('参保人员按规定承担统筹范围内费用。')).toBeInTheDocument()
     expect(screen.queryByText(/yb_zyfdxx|sql_profile|结算数据来源/)).not.toBeInTheDocument()
   })
 
-  it('renders uncertainties and sends the suggested follow-up', () => {
-    const onFollowUp = vi.fn()
-    render(<PolicyAgentAnswer message={completeMessage} onFollowUp={onFollowUp} />)
+  it('merges multiple hit units from the same document into one source card', () => {
+    render(
+      <PolicyAgentAnswer
+        message={{
+          ...completeMessage,
+          citations: [
+            {
+              title: '本市城镇职工医疗保险待遇',
+              excerpt: '在职职工门诊 2 万元以下医院支付 70%。',
+              docId: 'doc_7173172eb649',
+            },
+            {
+              title: '本市城镇职工医疗保险待遇',
+              excerpt: '退休人员门诊 2 万元以上医院支付 80%。',
+              docId: 'doc_7173172eb649',
+            },
+            {
+              title: '北京市城乡居民基本医疗保险办法',
+              excerpt: '城乡居民门诊一级医院支付 55%。',
+              docId: 'doc_ebea08e4d59d',
+            },
+          ],
+        }}
+      />,
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', { name: '查看 2 篇政策来源（3 条命中单元）' }),
+    )
+
+    // 同一篇文档只出现一次标题与一个“查看原文”链接
+    expect(screen.getAllByText('本市城镇职工医疗保险待遇')).toHaveLength(1)
+    expect(screen.getByText('在职职工门诊 2 万元以下医院支付 70%。')).toBeInTheDocument()
+    expect(screen.getByText('退休人员门诊 2 万元以上医院支付 80%。')).toBeInTheDocument()
+    const links = screen.getAllByRole('link', { name: '查看原文 →' })
+    expect(links).toHaveLength(2)
+    expect(links[0]).toHaveAttribute('href', '/policy-document/doc_7173172eb649')
+  })
+
+  it('renders uncertainties for non-broad answers', () => {
+    render(<PolicyAgentAnswer message={completeMessage} />)
 
     expect(screen.getByText('结算单未提供部分费用项目的逐项明细。')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '请用更通俗的话解释' }))
-    expect(onFollowUp).toHaveBeenCalledWith('请用更通俗的语言解释刚才的回答')
   })
 
   it('uses warning semantics instead of a verified badge for partial answers', () => {

@@ -620,14 +620,14 @@ class TestPolicyQAStreamEndpoint:
     def test_stream_endpoint_accepts_broad_question_without_settlement_id(
         self, client, monkeypatch
     ):
-        """宽泛政策问题（B 向）允许省略 settlement_id，经路由层走 structured 检索。"""
+        """宽泛政策问题（B 向）允许省略 settlement_id，经事实单元检索回答。"""
         from types import SimpleNamespace
 
         from src.runtime.api import policy_qa_routes
 
         fake_evidence = SimpleNamespace(
             source_text="本市在职职工门诊统筹支付比例为一级医院90%、二级医院87%、三级医院85%。",
-            applied_reason="宽泛问题路由 structured 命中",
+            applied_reason="宽泛问题路由事实单元命中",
             rule_type="支付比例",
             score=1.0,
             payment_ratio="",
@@ -635,17 +635,19 @@ class TestPolicyQAStreamEndpoint:
             rule_value="",
         )
 
-        calls: list[dict] = []
+        calls: list = []
 
-        def fake_retrieve_policy_evidence(**kwargs):
-            calls.append(kwargs)
+        def fake_router_structured_retrieve(decision):
+            calls.append(decision)
             return SimpleNamespace(
                 selected_evidence=[fake_evidence],
                 missing_required_rules=[],
             )
 
         monkeypatch.setattr(
-            policy_qa_routes, "retrieve_policy_evidence", fake_retrieve_policy_evidence
+            policy_qa_routes,
+            "_router_structured_retrieve",
+            fake_router_structured_retrieve,
         )
         monkeypatch.setattr(
             policy_qa_routes, "_generate_broad_answer", lambda _q, _ev: "本市职工门诊报销比例…"
@@ -663,11 +665,9 @@ class TestPolicyQAStreamEndpoint:
         assert "done" in event_names
         result = next(data["result"] for name, data in events if name == "result")
         assert result["answer_status"] in {"partial", "complete"}
-        assert result["uncertainties"]
         assert result["policy_evidence"]
-        # Issue #33 路由拒答：B 向必须走 structured（custom_queries），不得走 broad 自由检索
-        assert calls, "路由 structured 应触发结构化检索"
-        assert calls[0].get("custom_queries"), "B 向应携带路由查询计划"
+        assert result.get("is_broad") is True
+        assert calls, "宽泛问题应触发事实单元检索"
 
 
 class TestPolicyQABroadRouterDispatch:
@@ -692,21 +692,15 @@ class TestPolicyQABroadRouterDispatch:
 
         from src.runtime.api import policy_qa_routes
 
-        fake_evidence = SimpleNamespace(
-            source_text="退休人员门诊个人支付比例为职工个人支付比例的60%。",
-            applied_reason="宽泛问题路由 structured 命中",
-            rule_type="支付比例",
-            score=1.1,
-            payment_ratio="",
-            amount_band="",
-            rule_value="",
-        )
         monkeypatch.setattr(
-            policy_qa_routes,
-            "retrieve_policy_evidence",
-            lambda **_kwargs: SimpleNamespace(
-                selected_evidence=[fake_evidence], missing_required_rules=[]
-            ),
+            "src.runtime.policy_qa.broad_fact_retriever.retrieve_broad_fact_units",
+            lambda *_args, **_kwargs: [
+                {
+                    "fact_text": "退休人员门诊个人支付比例为职工个人支付比例的60%。",
+                    "doc_id": "doc_1",
+                    "score": 1.0,
+                }
+            ],
         )
         monkeypatch.setattr(
             policy_qa_routes, "_generate_broad_answer", lambda _q, _ev: "退休人员门诊支付比例…"
@@ -754,21 +748,15 @@ class TestPolicyQABroadRouterDispatch:
 
         from src.runtime.api import policy_qa_routes
 
-        fake_evidence = SimpleNamespace(
-            source_text="参保人员跨省异地就医前应办理备案手续。",
-            applied_reason="宽泛问题路由 structured 命中",
-            rule_type="适用范围",
-            score=1.0,
-            payment_ratio="",
-            amount_band="",
-            rule_value="",
-        )
         monkeypatch.setattr(
-            policy_qa_routes,
-            "retrieve_policy_evidence",
-            lambda **_kwargs: SimpleNamespace(
-                selected_evidence=[fake_evidence], missing_required_rules=[]
-            ),
+            "src.runtime.policy_qa.broad_fact_retriever.retrieve_broad_fact_units",
+            lambda *_args, **_kwargs: [
+                {
+                    "fact_text": "参保人员跨省异地就医前应办理备案手续。",
+                    "doc_id": "doc_1",
+                    "score": 1.0,
+                }
+            ],
         )
         monkeypatch.setattr(
             policy_qa_routes, "_generate_broad_answer", lambda _q, _ev: "异地就医备案流程…"
@@ -785,9 +773,8 @@ class TestPolicyQABroadRouterDispatch:
         from src.runtime.api import policy_qa_routes
 
         monkeypatch.setattr(
-            policy_qa_routes,
-            "retrieve_policy_evidence",
-            lambda **_kwargs: SimpleNamespace(selected_evidence=[], missing_required_rules=["router_outpatient_支付比例"]),
+            "src.runtime.policy_qa.broad_fact_retriever.retrieve_broad_fact_units",
+            lambda *_args, **_kwargs: [],
         )
 
         result, _ = self._post_broad(client, "门特待遇标准是多少")
@@ -800,10 +787,12 @@ class TestPolicyQABroadRouterDispatch:
         """条件1：broad 兜底默认关闭——域外问题空证据拒答，不调用 broad 检索。"""
         from src.runtime.api import policy_qa_routes
 
-        def _boom(**_kwargs):
+        def _boom(*_args, **_kwargs):
             raise AssertionError("broad 兜底默认关闭，不得调用任何检索")
 
-        monkeypatch.setattr(policy_qa_routes, "retrieve_policy_evidence", _boom)
+        monkeypatch.setattr(
+            "src.runtime.policy_qa.broad_fact_retriever.retrieve_broad_fact_units", _boom
+        )
 
         result, _ = self._post_broad(client, "医保基金是怎么管理的")
 
@@ -884,6 +873,7 @@ class TestPolicyQABroadRouterDispatch:
             "citations",
             "uncertainties",
             "verification_summary",
+            "is_broad",
         }
         forbidden = {
             "patient_view",
@@ -1189,6 +1179,7 @@ class TestSettlementExplanationEndpoint:
             "citations",
             "uncertainties",
             "verification_summary",
+            "is_broad",
         }
         assert result["answer_status"] == "complete"
         assert not {"query_trace", "raw_sql", "sql_profile"}.intersection(

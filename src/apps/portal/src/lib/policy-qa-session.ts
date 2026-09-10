@@ -83,6 +83,8 @@ export interface PolicyQAChatMessage {
   qaTurnId?: string
   /** 仅来自具备评测权限的历史 DTO；SSE 禁止携带，不得从流式响应中读取 */
   selectedSkillId?: string
+  /** 本轮为宽泛政策问题（无结算单） */
+  isBroad?: boolean
   /** 本轮“回答有误”反馈状态（前端本地标记，仅依据 qaTurnId 提交） */
   feedbackState?: 'idle' | 'submitted' | 'error'
 }

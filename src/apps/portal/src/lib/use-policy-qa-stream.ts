@@ -159,6 +159,7 @@ function applyPublicResult(
     citations: result.citations,
     uncertainties: result.uncertainties,
     verificationSummary: result.verificationSummary,
+    isBroad: result.isBroad,
     // 仅在消息尚未锁定 ID 时写入；result 与 done 不一致时以首轮锁定的为准
     qaTurnId: msg.qaTurnId ?? qaTurnId,
   }

@@ -41,11 +41,12 @@ export interface PolicyQAResult {
   calculationSteps: Array<{ stepName: string; description: string }>
   definition?: { name: string; plainText: string; excludes: string[] }
   warnings: string[]
-  citations: Array<{ title: string; excerpt: string }>
+  citations: Array<{ title: string; excerpt: string; docId?: string; sourceExcerpt?: string }>
   uncertainties: string[]
   verificationSummary: PolicyQAVerificationSummary
   scenarioId?: string
   settlementFields: PolicyQASettlementField[]
+  isBroad?: boolean
 }
 
 export interface PolicyQASseEvent {
@@ -152,6 +153,7 @@ export function toPolicyQAResult(raw: unknown): PolicyQAResult {
     },
     scenarioId: typeof raw.scenario_id === 'string' ? raw.scenario_id : undefined,
     settlementFields: toSettlementFields(raw.field_explanations),
+    isBroad: raw.is_broad === true,
   }
 }
 
@@ -286,5 +288,13 @@ function toCitations(value: unknown): PolicyQAResult['citations'] | undefined {
   return value.map((citation) => ({
     title: citation.title as string,
     excerpt: citation.excerpt as string,
+    docId:
+      typeof citation.doc_id === 'string'
+        ? (citation.doc_id as string)
+        : undefined,
+    sourceExcerpt:
+      typeof citation.source_excerpt === 'string'
+        ? (citation.source_excerpt as string)
+        : undefined,
   }))
 }

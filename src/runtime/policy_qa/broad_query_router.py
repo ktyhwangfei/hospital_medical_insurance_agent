@@ -226,8 +226,10 @@ def build_structured_queries(
     ]
 
 
-# 证据消费上限：答案生成只消费 top N，超出部分只会稀释相关性
-_EVIDENCE_TOP_N = 5
+# 证据消费上限：答案生成只消费 top N，超出部分只会稀释相关性。
+# 2026-09 上调到 12：下游格式化会再轮询选 5 条，保留更大候选池才能
+# 同时覆盖职工、居民等多个人群的事实单元。
+_EVIDENCE_TOP_N = 12
 # 相关性过滤带：保留综合相对分 >= 该比例的证据（低于带宽的视为噪声）
 _RELEVANCE_BAND = 0.25
 # 语义地板：问题与候选文本的向量最高余弦低于该值 → 候选池整体不相关，
@@ -365,7 +367,6 @@ def _rerank_evidence_by_relevance(
 
     bm25 = _bm25_scores(question or "", [_evidence_score_text(ev) for ev in evidence])
     # 向量只对非空文本打分（无文本证据不参与语义裁决）
-    cosine_indexed: dict[int, float] = {}
     scored = [
         (idx, str(getattr(ev, "source_text", "") or "").strip())
         for idx, ev in enumerate(evidence)
