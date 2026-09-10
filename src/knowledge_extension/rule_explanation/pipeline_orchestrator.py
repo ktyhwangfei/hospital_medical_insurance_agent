@@ -195,6 +195,8 @@ class PipelineOrchestrator:
             from src.knowledge_extension.rule_explanation.policy_struct.leaf_match import (
                 _is_main_text_path,
                 _path_text_parts,
+                collect_cell_units,
+                match_cell_units,
                 match_leaves,
                 parse_kept_leaves,
             )
@@ -203,28 +205,41 @@ class PipelineOrchestrator:
                 content,
                 doc.get("title", ""),
             )
+            # 表格单元格定位单元（#39/#24）：表格事实优先落到 r{n}c{m} 单元格
+            cell_units = collect_cell_units(kept_leaves)
             extraction_items: list[dict[str, Any]] = []
             grounding_texts: list[str] = []
             total_rules = 0
             for fact in facts:
                 fact_rules = fact.get("rules", [])
                 total_rules += len(fact_rules)
-                matched_units = match_leaves(fact.get("fact_text", ""), kept_leaves)
-                # 多匹配时优先正文段（修改决定 vs 正文重复），避免 unit_id 留空
-                # （迭代 19 反思：重复单元导致全部 extraction 无归属）
-                if len(matched_units) > 1:
-                    _main = [
-                        uid for uid in matched_units
-                        if _is_main_text_path(
-                            _path_text_parts(_by_id.get(uid), _by_id)
-                        )
-                    ]
-                    if _main:
-                        matched_units = _main[:1]
-                unit_id = matched_units[0] if len(matched_units) == 1 else ""
                 fact_text = str(fact.get("fact_text") or "")
+                # 表格事实分层：combo（行表头+值同现）优先于条款归属；
+                # value/lcs 裸值层仅在条款无匹配时兜底，避免正文条款
+                # 提到表格数值被单元格抢占（#39/#24）
+                cell_tier, cell_hits = ("", [])
+                if cell_units:
+                    cell_tier, cell_hits = match_cell_units(fact_text, cell_units)
+                matched_units: list[str] = []
+                if cell_tier != "combo":
+                    matched_units = match_leaves(fact_text, kept_leaves)
+                if not matched_units and cell_hits:
+                    unit_id = cell_hits[0]
+                else:
+                    # 多匹配时优先正文段（修改决定 vs 正文重复），避免 unit_id 留空
+                    # （迭代 19 反思：重复单元导致全部 extraction 无归属）
+                    if len(matched_units) > 1:
+                        _main = [
+                            uid for uid in matched_units
+                            if _is_main_text_path(
+                                _path_text_parts(_by_id.get(uid), _by_id)
+                            )
+                        ]
+                        if _main:
+                            matched_units = _main[:1]
+                    unit_id = matched_units[0] if len(matched_units) == 1 else ""
                 raw_context = str(fact.get("_source_context") or "")
-                unit_node = _by_id.get(unit_id) if unit_id else None
+                unit_node = _by_id.get(unit_id.split("#", 1)[0]) if unit_id else None
                 unit_text = str(getattr(unit_node, "text", "") or "")
                 if fact_text and fact_text in raw_context:
                     grounding_text = fact_text
