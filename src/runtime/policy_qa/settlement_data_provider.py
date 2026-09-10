@@ -7,6 +7,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from src.adapters.ports import DataSupplyConnectionPort
 from src.semantic_layer.query_planner import (
     QueryAnchor,
     QueryScope,
@@ -86,20 +87,19 @@ class SemanticSettlementDataProvider:
         self,
         service: SemanticQueryService | None = None,
         registry: SemanticRegistry | None = None,
+        supply: "DataSupplyConnectionPort | None" = None,
     ) -> None:
         self._registry = registry or get_semantic_registry()
         if service is None:
-            from src.runtime.discovery.semantic_source import get_semantic_data_source
+            # #27 供给收敛：默认装配一档 SQL Server 直连适配器（组合根在此，
+            # adapters 不反向依赖 runtime）；二档医院替换 supply 实现即可。
+            if supply is None:
+                from src.adapters.data_supply import SqlServerDirectSupplyAdapter
+                from src.runtime.discovery.semantic_source import get_semantic_data_source
 
-            source = get_semantic_data_source()
-
-            def connect(datasource_id: str):
-                config = source._resolve_datasource_connection(datasource_id)
-                if config is None:
-                    config = source._resolve_source_config()
-                return source._connect(config)
-
-            service = SemanticQueryService(self._registry, connect)
+                source = get_semantic_data_source()
+                supply = SqlServerDirectSupplyAdapter(connect_fn=source.open_connection)
+            service = SemanticQueryService(self._registry, supply.connect)
         self._service = service
         logger.info("[SETTLEMENT-DATA-PROVIDER] Semantic query provider initialized")
 

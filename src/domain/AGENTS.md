@@ -70,6 +70,7 @@ domain/
 14.7. [健康运营上下文（Ops Health）](#147-健康运营上下文ops-health)
 14.8. [数据目录上下文（Data Catalog）](#148-数据目录上下文data-catalog)
 14.9. [语义指标政策承载（Metric Policy Carrier）](#149-语义指标政策承载metric-policy-carrier)
+14.10. [数据供给分档（Data Supply）](#1410-数据供给分档data-supply)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
 ---
@@ -1087,6 +1088,31 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.10. 数据供给分档（Data Supply）
+
+> 依据：issue #27。定位：语义层（需求侧）定跨院不变的视图/字段/值域标准，供给侧按院区分档实现；平台只通过 `DataSupplyConnectionPort` 取只读连接，不感知分档细节。规范文档：`docs/steering/数据接入规范.md`。
+
+#### 文件位置
+
+`src/adapters/ports/data_supply.py`（端口）+ `src/adapters/data_supply/sqlserver_direct.py`（一档适配器）+ 组合根 `src/runtime/policy_qa/settlement_data_provider.py`（注入 `connect_fn`，连接能力来自 `SemanticDataSource.open_connection`）
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 数据供给连接端口 | `DataSupplyConnectionPort` | **Port** | `runtime_checkable Protocol` | `connect(datasource_id) -> Any` 只读 PEP 249 连接契约；供给侧不可用抛 `RuntimeError` |
+| SQL Server 直连供给适配器 | `SqlServerDirectSupplyAdapter` | **Adapter** | 普通 class | 一档实现：CDR 只读视图直连，构造注入 `connect_fn`，禁止反向 import runtime |
+
+#### 业务规则
+
+1. 三档供给：一档 CDR 只读视图直连（SQL Server）；二档厂商 API/中间件同步（门诊 PG 同步即此形态）；三档医保局代理暂缓——档位差异被端口吸收，语义层与查询服务不感知。
+2. 适配器只接受注入的 `connect_fn`，组合根在 `SemanticSettlementDataProvider`；adapters 包不得反向 import `src.runtime`（防腐层依赖方向）。
+3. 供给侧四承诺：只读、可审计、单条低频查询、码值稳定；需求侧标准（视图/字段/值域）以 `docs/steering/数据接入规范.md` 为单源，跨院不变。
+4. `SemanticDataSource.open_connection` 是 provider 历史回退链的公开化（注册数据源→发现层最近扫描→env 配置），区别于严格模式的 `connect_datasource`。
+
+---
+
+
 ### 15. AI 编程工作流契约
 
 #### 契约 1：先查后写
@@ -1202,6 +1228,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ContextNeed` | 上下文需求 | Runtime | Value Object |
 | `ContextPlanner` | 上下文规划器 | Runtime | Domain Service |
 | `DataQualityStatus` | 数据质量状态 | Shared | Value Object |
+| `DataSupplyConnectionPort` | 数据供给连接端口 | Adapters | Port |
 | `DenialRecord` | 拒付记录 | Appeal | Entity |
 | `DesensitizationService` | 脱敏服务 | Security | Domain Service |
 | `Diagnosis` | 诊断记录 | MedicalRecord | Entity |
@@ -1294,6 +1321,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `RuleExplanation` | 规则解释 | Knowledge | Entity |
 | `RuleHit` | 规则命中 | AuditRisk | Value Object |
 | `RuntimeTask` | 运行时任务 | Shared | DTO |
+| `SqlServerDirectSupplyAdapter` | SQL Server 直连供给适配器 | Adapters | Adapter |
 | `SourceContract` | 来源契约 | GovernedFlow | Value Object |
 | `Skill` | 技能 | SkillTool | Aggregate Root |
 | `SkillAIGenerationResponse` | AI 生成提案 | SkillTool | DTO |
