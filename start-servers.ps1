@@ -134,6 +134,17 @@ if (-not $env:NEXT_PUBLIC_OPS_TOKEN) {
     $jwtHmac.Dispose()
     $env:NEXT_PUBLIC_OPS_TOKEN = "$jwtHeader.$jwtPayload.$jwtSignature"
 }
+# 可信问题库（#37）治理会话：审核流 + 同义表达运营
+if (-not $env:NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN) {
+    $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtPayloadJson = @{ sub = "portal-dev-question-library"; roles = @("information_department"); permissions = @("question_library:read", "question_library:write"); exp = [DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+    $jwtPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jwtPayloadJson)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtHmac = New-Object System.Security.Cryptography.HMACSHA256
+    $jwtHmac.Key = [Text.Encoding]::UTF8.GetBytes($env:AUTH_JWT_SECRET)
+    $jwtSignature = [Convert]::ToBase64String($jwtHmac.ComputeHash([Text.Encoding]::ASCII.GetBytes("$jwtHeader.$jwtPayload"))).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtHmac.Dispose()
+    $env:NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN = "$jwtHeader.$jwtPayload.$jwtSignature"
+}
 # Inject MSSQL connection env vars for the backend process (SqlServerBusinessDataClient
 # requires MSSQL_DATABASE/USER/PASSWORD). Pre-set env vars win; the password is NOT
 # hardcoded here - it is read from the gitignored deploy/docker/.env (SA_PASSWORD).

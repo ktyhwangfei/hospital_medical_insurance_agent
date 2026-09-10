@@ -71,6 +71,7 @@ domain/
 14.8. [数据目录上下文（Data Catalog）](#148-数据目录上下文data-catalog)
 14.9. [语义指标政策承载（Metric Policy Carrier）](#149-语义指标政策承载metric-policy-carrier)
 14.10. [数据供给分档（Data Supply）](#1410-数据供给分档data-supply)
+14.11. [可信问题库（Trusted Question Library）](#1411-可信问题库trusted-question-library)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
 ---
@@ -1112,6 +1113,41 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.11. 可信问题库（Trusted Question Library）
+
+> 依据：issue #37、设计文档 §14.1。定位：高频问法沉淀为「标准问题 + 同义表达 + 绑定查询计划」的可信条目，人工审核后发布；生产问数优先确定性匹配可信问题执行，不确定降级候选澄清，**绝不猜测执行**。「文本一致 + 计划人工审核」是结果 100% 正确的机制保证。
+
+#### 文件位置
+
+`src/domain/question_library/models.py`（领域模型）+ `src/runtime/question_library/matcher.py`（匹配引擎）+ `src/runtime/question_library/service.py`（领域服务）+ 存储 `src/data_platform/storage/question_library/`（ports / in_memory / postgres / factory）+ API `src/runtime/api/question_library_routes.py` + portal `src/apps/portal/app/question-library/page.tsx`
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 可信问题 | `TrustedQuestion` | **Aggregate Root** | Pydantic BaseModel | 聚合根：标准问题/同义/适用角色/指标/维度/时间口径/筛选/查询计划/允许下钻/预期结果/审核人/版本；`tq_` 前缀 ID |
+| 可信问题草稿 | `TrustedQuestionDraft` | **Entity** | Pydantic BaseModel | 创建载荷；model_validator 校验 metadata 镜像 query_plan（object_code/metrics/group_by 三一致） |
+| 可信问题状态 | `TrustedQuestionStatus` | **Value Object** | StrEnum | draft → published（审核通过 version+1 记审核人）/ archived（驳回或归档）；不可逆出 draft |
+| 问题匹配引擎 | `QuestionMatcher` | **Domain Service** | 普通 class | 命中=归一化文本与标准问题或任一同义**完全相等**；否则 bigram Jaccard 澄清候选（≥0.35，最多 5 个） |
+| 问题匹配结果 | `QuestionMatchOutcome` | **Value Object** | Pydantic BaseModel | hit（question + matched_text）/ clarify（candidates + resolved）；`QuestionMatchCandidate` 带 score |
+| 问题匹配事件 | `QuestionMatchEvent` | **Entity** | Pydantic BaseModel | append-only 留痕：每次 match（hit/clarify）与 resolve（selected）；`qme_` 前缀 ID |
+| 问题文本归一化 | `normalize_question_text` | — | 函数 | NFKC + 小写 + 剥 `[\W_]+`（标点/空白）；唯一性与命中判定统一口径 |
+| 同义冲突异常 | `QuestionSynonymConflictError` | — | Exception | 新文本归一化后已被其他非归档问题占用，报持有 `question_id` |
+| 可信问题存储端口 | `TrustedQuestionStorage` | **Port** | Protocol | insert/get/list/list_published/update(乐观锁)/list_texts/事件读写/计数 |
+| 冷启动候选 | `ColdStartCandidate` | **Value Object** | Pydantic BaseModel | tasks 表 policy_qa 历史问法频次聚合，排除已被覆盖的归一化文本 |
+
+#### 业务规则
+
+1. **只有归一化完全相等才命中自动执行**（标准问题或任一同义）；模糊相似度再高也只产生澄清候选，由用户选择后执行——不确定不执行是硬约束。
+2. 草稿创建时绑定查询计划必须经 `SemanticQueryPlanner` dry-run 校验可编译，metadata（object_code/metrics/dimensions）必须与 query_plan 一致，防止展示与执行两张皮。
+3. 状态机：draft →（review approve）published（version+1、reviewer 记录）/ draft →（review reject 或 archive）archived；只有 published 可被匹配命中与执行。
+4. 全库归一化文本唯一（跨非归档问题的标准问题与同义）：`list_texts` 建归一化→持有者索引，冲突即拒，保证匹配命中唯一不歧义。
+5. 执行走存储的 query_plan **逐字**交给 `SemanticQueryService`（与结算问数同通道同数据源），并先按 `applies_to_roles` 角色门禁（空角色=全员）。
+6. 每次匹配都落 `question_match_events`（含澄清时用户最终选择的 selected 事件），澄清事件在 portal 一键采纳为已发布问题的同义——「越问越准」闭环的数据底座。
+7. 更新走乐观锁：`expected_revision` 比较-交换，存储将 revision 置 expected+1，过期即 `QuestionRevisionConflictError`（HTTP 409）。
+
+---
+
 
 ### 15. AI 编程工作流契约
 
@@ -1207,6 +1243,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Citation` | 引用来源 | Shared / Knowledge | Value Object |
 | `ClosureTask` | 闭环任务 | TaskClosure | Entity |
 | `Coding` | 编码信息 | MedicalRecord | Value Object |
+| `ColdStartCandidate` | 冷启动候选 | QuestionLibrary | Value Object |
 | `CheckSpec` | 检查器注册项 | OpsHealth | Value Object |
 | `CommonInputSpec` | 公共输入 | SkillTool | Value Object |
 | `ComplianceScore` | 合规评分 | AuditRisk | Value Object |
@@ -1305,6 +1342,11 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `PreAuditPort` | 事前审核适配器端口 | AuditRisk | Domain Service |
 | `ProfitLoss` | 盈亏分析 | DrgDip | Value Object |
 | `PromptTemplate` | 提示模板 | Knowledge | Entity |
+| `QuestionMatchCandidate` | 问题匹配候选 | QuestionLibrary | Value Object |
+| `QuestionMatchEvent` | 问题匹配事件 | QuestionLibrary | Entity |
+| `QuestionMatcher` | 问题匹配引擎 | QuestionLibrary | Domain Service |
+| `QuestionMatchOutcome` | 问题匹配结果 | QuestionLibrary | Value Object |
+| `QuestionSynonymConflictError` | 同义冲突异常 | QuestionLibrary | Exception |
 | `RAGPipeline` | RAG 管线 | Knowledge | Domain Service |
 | `ReasoningState` | 推理状态 | Runtime | Entity |
 | `ReasoningStateManager` | 推理状态管理器 | Runtime | Domain Service |
@@ -1347,6 +1389,10 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ToolOwner` | 技能拥有者 | SkillTool | Value Object |
 | `TrajectoryPrefix` | 评测轨迹接力点 | SkillTool | Value Object |
 | `Treatment` | 诊疗项目 | OrderFee | Value Object |
+| `TrustedQuestion` | 可信问题 | QuestionLibrary | Aggregate Root |
+| `TrustedQuestionDraft` | 可信问题草稿 | QuestionLibrary | Entity |
+| `TrustedQuestionStatus` | 可信问题状态 | QuestionLibrary | Value Object |
+| `TrustedQuestionStorage` | 可信问题存储端口 | QuestionLibrary | Port |
 | `VerificationResult` | 验证结果 | OpsHealth | Value Object |
 | `VisibilityScope` | 可见性范围 | Knowledge | Value Object |
 | `ValidationIssue` | 校验问题 | Knowledge | Value Object |
