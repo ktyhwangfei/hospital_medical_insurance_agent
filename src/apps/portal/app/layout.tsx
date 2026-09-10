@@ -18,6 +18,7 @@ import {
   BookMarked,
   Workflow,
   HeartPulse,
+  BarChart3,
 } from 'lucide-react'
 import { ApiProvider, useApiContext } from '@/lib/api-context'
 import RoleSwitcher from '@/components/role-switcher'
@@ -58,6 +59,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: '可信问题库', href: '/question-library', icon: <BookMarked className="size-4" /> },
   { label: '治理Flow', href: '/flow', icon: <Workflow className="size-4" /> },
   { label: '健康运营', href: '/ops', icon: <HeartPulse className="size-4" /> },
+  { label: '运营分析', href: '/ops-analytics', icon: <BarChart3 className="size-4" /> },
 ]
 
 const ADMIN_NAV_ITEM: NavItem = {

@@ -47,7 +47,7 @@ Agent 编码时根据以下映射定位代码位置：
 
 | 目录 | 职责 | 当前状态 |
 |------|------|----------|
-| `runtime/` | Agent 核心运行时：Policy QA API、会话上下文、结算/政策检索、确定性验证、有界恢复、任务闭环、事件日志及 Skill 管理；可信问题库（#37 确定性匹配+澄清降级） | 已实现（`api/policy_qa_routes.py`、`policy_qa/`、question_library、context/memory/reasoning/task_closure/skill_management） |
+| `runtime/` | Agent 核心运行时：Policy QA API、会话上下文、结算/政策检索、确定性验证、有界恢复、任务闭环、事件日志及 Skill 管理；可信问题库（#37 确定性匹配+澄清降级）；门诊运营分析（#40 受控问数/下钻/周报） | 已实现（`api/policy_qa_routes.py`、`policy_qa/`、question_library、ops_analytics、context/memory/reasoning/task_closure/skill_management） |
 | `model_service/` | 模型服务网关：统一调用入口、路由策略、OpenAI 兼容 Provider、流式生成、异常分类、模型配置管理、Provider 管理 | 已实现（gateway/router/providers/openai_compatible/exceptions/models/ports） |
 | `knowledge_extension/` | 知识与扩展：规则解释（含 Milvus 政策检索+SQL Server 数据源）、MCP 注册中心、扩展注册 | 已实现（common/extension_registry/mcp_registry/rule_explanation + policy_retrieval 含 Milvus/SQLServer/语义映射） |
 | `adapters/` | 外部系统防腐层：医保接口、事前审核、DRG/DIP、HIS、EMR、病案、收费、数据供给（#27 分档接入，`DataSupplyConnectionPort` + 一档 SQL Server 直连） | 7 个内存适配器 + base 基类（models/service）+ ports 端口定义均已实现；数据供给见 `docs/steering/数据接入规范.md` |
@@ -59,7 +59,7 @@ Agent 编码时根据以下映射定位代码位置：
 | `shared/` | 共享基础：异常模型、响应契约、Schema 契约、技能加载器/注册表 | 已实现（exceptions/schemas/skills） |
 | `gateway/` | 统一接入网关：API网关、渠道识别、认证鉴权、租户隔离、限流熔断、请求安全校验、接入日志 | 已实现（api_gateway/channel/auth/tenant/rate_limiter/request_guard/access_log） |
 | `interaction/` | 多模态交互层：Chat对话、文件上传、语音交互、页面上下文、消息提醒、知识上传 | 已实现（chat/file/voice/page_context/notification/knowledge_upload） |
-| `apps/` | SaaS 应用入口层：Next.js 16 Portal；`/policy-qa` 是唯一业务入口，其余页面是治理与支撑工作台 | 已实现（policy-qa/semantic-layer/policy-knowledge/skills/model-governance/qa-history/data-governance/catalog/flow/ops/question-library） |
+| `apps/` | SaaS 应用入口层：Next.js 16 Portal；`/policy-qa` 是唯一业务入口，其余页面是治理与支撑工作台 | 已实现（policy-qa/semantic-layer/policy-knowledge/skills/model-governance/qa-history/data-governance/catalog/flow/ops/ops-analytics/question-library） |
 | `skills/` | Skill 驱动架构：自包含的医保业务能力包（费用解释、起付线、大额自付等），通过 YAML 配置 + Python assembler 实现声明式业务逻辑。每个 Skill 通过 `business_action` + `business_object` 挂载到平台七类业务动作 | 已实现（settlement_explain_skill/ 含 SKILL.md + schemas + templates + scripts，已声明 `explain` + `settlement`） |
 | `src/skill_infra/` | Skill 基础设施：动态加载器（SkillLoader）、关键词路由器（SkillRouter），自动扫描 skills/ 目录发现和加载 skill 包 | 已实现（skill_loader.py, skill_router.py） |
 | `src/domain/common/actions.py` | Business Action 枚举：平台最高层业务分类（七类动作 + 十类对象 + 能力矩阵白名单） | 已实现（BusinessAction, BusinessObject, VALID_ACTION_OBJECT_PAIRS） |

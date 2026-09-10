@@ -72,6 +72,7 @@ domain/
 14.9. [语义指标政策承载（Metric Policy Carrier）](#149-语义指标政策承载metric-policy-carrier)
 14.10. [数据供给分档（Data Supply）](#1410-数据供给分档data-supply)
 14.11. [可信问题库（Trusted Question Library）](#1411-可信问题库trusted-question-library)
+14.12. [门诊运营分析（Ops Analytics）](#1412-门诊运营分析ops-analytics)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
 ---
@@ -1148,6 +1149,40 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.12. 门诊运营分析（Ops Analytics）
+
+> 依据：issue #40、docs/superpowers/plans/2026-08-27-outpatient-p0-data-contract.md Task 5、docs/reviews/2026-08-27-outpatient-data-contract-review.md（P3 冻结语义）。定位：六指标 × 五维度的受控问数仪表盘 + 行级下钻 + 周报运营指导；有界确定性聚合，结论可溯源到指标批次。
+
+#### 文件位置
+
+`src/domain/ops_analytics/models.py`（领域模型）+ `src/runtime/ops_analytics/service.py`（领域服务）+ API `src/runtime/api/ops_analytics_routes.py` + portal `src/apps/portal/app/ops-analytics/page.tsx`
+
+#### 通用语言字典
+
+| 英文命名 | 中文术语 | DDD 分类 | 说明 |
+|---------|---------|---------|------|
+| `OpsResultStatus` | 运营结果状态 | Value Object | `complete` / `partial` / `unavailable`，冻结契约三态 |
+| `OpsMetricCard` | 指标卡 | Value Object | 单指标值 + result_status + halt_reason/halt_detail，值与不可用原因二选一 |
+| `OpsOverview` | 指标总览 | Value Object | 六指标卡集合 + 数据范围 + 指标批次（data_batch_ids） |
+| `OpsAnalyticsDimension` | 分析维度 | Value Object | `fund_type` / `cure_type` / `settle_state` / `department`（五维度中受支持的拆分键） |
+| `OpsDimensionItem` | 维度拆分项 | Value Object | 码 + 中文标签 + 四指标值 + 笔数占比 |
+| `OpsTrendPoint` | 月度趋势点 | Value Object | YYYY-MM 桶 + 四指标值 |
+| `OpsDrillRow` | 就诊下钻行 | Value Object | T_TradeNo 粒度就诊明细，行携带 data_batch_id 指标批次溯源 |
+| `OpsWeekDelta` | 周环比 | Value Object | 单指标本周/上周值 + delta/pct/direction；除零时 pct=None 不猜 |
+| `OpsConclusion` | 周报结论 | Value Object | 文本 + citations（metric_definition 口径 / metric_batch 指标批次） |
+| `OpsWeeklyReport` | 运营周报 | Value Object | 四指标环比 + 结论 + AI 摘要（可降级）+ uncertainties |
+| `OpsAnalyticsService` | 门诊运营分析服务 | Domain Service | 有界确定性聚合；读取面 Protocol 注入（PostgreSQLClient 同形） |
+
+#### 业务规则
+
+1. **口径唯一真源**：聚合 WHERE 谓词逐字取自 `docs/processing/outpatient_processed_view.sql`（口径句 v4，已签核），服务不重新发明口径；活库冒烟与 `v_op_outpatient_processed` 四指标对账。
+2. **诚实不可用**：就诊人次 / 次均费用 / 科室维度保持 `unavailable`（halt_reason=`data_unavailable`，HIS 就诊关联是 P1 必需输入、禁止跨源临时 JOIN），绝不估算；每个结果恰好一个 halt_reason。
+3. **有界确定性**：只执行常量 SQL 模板 + 参数化过滤（维度列、日期、分页白名单），禁止任意 SQL 拼接；读取面经 Protocol 注入。
+4. **结论可溯源**：所有结果携带 `data_batch_ids`（mz_trade.data_batch_id 指标批次）；周报每条结论的 citations 同时引用指标口径（metric_definition）与指标批次（metric_batch）。
+5. **AI 摘要有界**：模型调用走 `ModelGateway` 统一入口（scene=`ops_weekly_summary`），prompt 仅含已计算数值结论并禁止引入未给出的数字；模型未配置或失败时诚实降级（summary=None + uncertainties），不返回假数据。
+
+---
+
 
 ### 15. AI 编程工作流契约
 
@@ -1328,6 +1363,17 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `OpsInspectionResult` | 巡检结果 | OpsHealth | DTO |
 | `OpsRemediationRun` | 修复运行 | OpsHealth | Entity |
 | `OpsSeverity` | 问题严重度 | OpsHealth | Value Object |
+| `OpsAnalyticsDimension` | 分析维度 | OpsAnalytics | Value Object |
+| `OpsAnalyticsService` | 门诊运营分析服务 | OpsAnalytics | Domain Service |
+| `OpsConclusion` | 周报结论 | OpsAnalytics | Value Object |
+| `OpsDimensionItem` | 维度拆分项 | OpsAnalytics | Value Object |
+| `OpsDrillRow` | 就诊下钻行 | OpsAnalytics | Value Object |
+| `OpsMetricCard` | 指标卡 | OpsAnalytics | Value Object |
+| `OpsOverview` | 指标总览 | OpsAnalytics | Value Object |
+| `OpsResultStatus` | 运营结果状态 | OpsAnalytics | Value Object |
+| `OpsTrendPoint` | 月度趋势点 | OpsAnalytics | Value Object |
+| `OpsWeekDelta` | 周环比 | OpsAnalytics | Value Object |
+| `OpsWeeklyReport` | 运营周报 | OpsAnalytics | Value Object |
 | `Order` | 医嘱 | OrderFee | Aggregate Root |
 | `OutpatientPartialPreRefundAnalysis` | 门诊部分项目预退费分析 | Insurance | Domain Service |
 | `Patient` | 患者 | Patient | Entity |
