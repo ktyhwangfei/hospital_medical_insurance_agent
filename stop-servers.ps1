@@ -26,15 +26,17 @@ $STATE_FILE = Join-Path $WORKDIR ".server-ports.json"
 $backendPort = $null
 $frontendPort = $null
 $workerPid = $null
+$opsWorkerPid = $null
 if (Test-Path $STATE_FILE) {
     try {
         $state = Get-Content $STATE_FILE -Raw | ConvertFrom-Json
         if ($state.backend_port) { $backendPort = [int]$state.backend_port }
         if ($state.frontend_port) { $frontendPort = [int]$state.frontend_port }
         if ($state.worker_pid) { $workerPid = [int]$state.worker_pid }
+        if ($state.ops_worker_pid) { $opsWorkerPid = [int]$state.ops_worker_pid }
     } catch {}
 }
-if (-not $backendPort -and -not $frontendPort -and -not $workerPid) {
+if (-not $backendPort -and -not $frontendPort -and -not $workerPid -and -not $opsWorkerPid) {
     Write-Host "No .server-ports.json found; nothing scoped to stop." -ForegroundColor Gray
     exit 0
 }
@@ -59,6 +61,20 @@ if ($workerPid) {
         $null = $toKill.Add([int]$workerProc.ProcessId)
     } elseif ($workerProc) {
         $note += "worker PID $workerPid does not match this worktree (skipped)"
+    }
+}
+
+# Ops inspection worker (issue #52): same scoping rules as the sync worker.
+if ($opsWorkerPid) {
+    $opsWorkerProc = Get-CimInstance Win32_Process -Filter "ProcessId=$opsWorkerPid" -ErrorAction SilentlyContinue
+    if (
+        $opsWorkerProc -and
+        $opsWorkerProc.CommandLine.Contains($WORKDIR) -and
+        $opsWorkerProc.CommandLine.Contains("run_ops_inspection_worker.py")
+    ) {
+        $null = $toKill.Add([int]$opsWorkerProc.ProcessId)
+    } elseif ($opsWorkerProc) {
+        $note += "ops worker PID $opsWorkerPid does not match this worktree (skipped)"
     }
 }
 
@@ -109,6 +125,7 @@ foreach ($p in @($backendPort, $frontendPort)) {
     if ($p) { $still += @(Get-ListeningPids $p).Count }
 }
 if ($workerPid -and (Get-Process -Id $workerPid -ErrorAction SilentlyContinue)) { $still += 1 }
+if ($opsWorkerPid -and (Get-Process -Id $opsWorkerPid -ErrorAction SilentlyContinue)) { $still += 1 }
 if ($still -gt 0) {
     Write-Warning "Residual listeners remain on scoped ports (count=$still). Check netstat -ano." 
     exit 2

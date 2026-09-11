@@ -2,9 +2,11 @@
 
 // 健康运营 /ops 页 — #45：开放问题列表（severity/资产过滤 + 分页）+「立即巡检」。
 // #50：状态筛选与状态徽标、行点开详情抽屉（忽略/重开生命周期操作）。
+// #52：顶部巡检摘要条（最近巡检/结果/下次巡检时间/周期）。
 import { useCallback, useEffect, useState } from 'react'
-import { HeartPulse, Loader2, RefreshCw, ShieldCheck } from 'lucide-react'
+import { CalendarClock, HeartPulse, Loader2, RefreshCw, ShieldCheck } from 'lucide-react'
 import {
+  getOpsInspectionSummary,
   hasOpsPermission,
   listOpsFindings,
   runOpsInspection,
@@ -12,6 +14,7 @@ import {
   type OpsFindingDto,
   type OpsFindingPageDto,
   type OpsFindingStatus,
+  type OpsInspectionSummaryDto,
   type OpsSeverity,
 } from '@/lib/ops-api'
 import { ApiClientError } from '@/lib/types'
@@ -19,11 +22,15 @@ import FindingDetailDrawer from './finding-detail-drawer'
 import {
   ASSET_LABELS,
   CHECK_LABELS,
+  INSPECTION_STATUS_BADGES,
+  INSPECTION_STATUS_LABELS,
+  INSPECTION_TRIGGER_LABELS,
   SEVERITY_BADGES,
   SEVERITY_LABELS,
   STATUS_BADGES,
   STATUS_LABELS,
   formatTime,
+  inspectionIntervalLabel,
 } from './shared'
 
 /** 证据摘要：problem 优先展示，附 1-2 个关键安全字段 */
@@ -44,6 +51,7 @@ function evidenceSummary(finding: OpsFindingDto): string {
 
 export default function OpsPage() {
   const [page, setPage] = useState<OpsFindingPageDto | null>(null)
+  const [summary, setSummary] = useState<OpsInspectionSummaryDto | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [severity, setSeverity] = useState<OpsSeverity | ''>('')
   const [assetType, setAssetType] = useState<OpsAssetType | ''>('')
@@ -55,14 +63,19 @@ export default function OpsPage() {
 
   const reload = useCallback(async () => {
     try {
-      const result = await listOpsFindings({
-        status: statusFilter || undefined,
-        severity: severity || undefined,
-        asset_type: assetType || undefined,
-        page: pageNum,
-        page_size: 20,
-      })
+      // 问题列表与巡检摘要并行刷新（#52 摘要条与列表同生命周期）
+      const [result, inspectionSummary] = await Promise.all([
+        listOpsFindings({
+          status: statusFilter || undefined,
+          severity: severity || undefined,
+          asset_type: assetType || undefined,
+          page: pageNum,
+          page_size: 20,
+        }),
+        getOpsInspectionSummary(),
+      ])
       setPage(result)
+      setSummary(inspectionSummary)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -94,7 +107,7 @@ export default function OpsPage() {
         ? `；${result.checker_errors.length} 个检查器执行失败`
         : ''
       setInspectionNote(
-        `巡检完成（${result.check_count} 项检查）：本次发现 ${result.finding_count} 个问题${errorNote}`,
+        `巡检完成（${result.check_count} 项检查）：本次发现 ${result.finding_count} 个问题、新发现 ${result.new_finding_count} 个${errorNote}`,
       )
       setPageNum(1)
       await reload()
@@ -140,6 +153,43 @@ export default function OpsPage() {
           立即巡检
         </button>
       </header>
+
+      {summary && (
+        <div
+          className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs shadow-sm"
+          data-testid="ops-inspection-summary"
+        >
+          <span className="inline-flex shrink-0 items-center gap-1.5 font-medium text-slate-700">
+            <CalendarClock className="size-3.5 text-slate-400" />
+            巡检调度
+          </span>
+          {summary.latest ? (
+            <span className="text-slate-600" data-testid="ops-summary-last">
+              最近巡检 {formatTime(summary.latest.finished_at ?? summary.latest.started_at)}
+              <span className={`ml-1.5 inline-flex rounded-full px-2 py-px text-[10px] font-semibold ring-1 ${INSPECTION_STATUS_BADGES[summary.latest.status]}`}>
+                {INSPECTION_STATUS_LABELS[summary.latest.status]}
+              </span>
+              <span className="ml-1.5">
+                {INSPECTION_TRIGGER_LABELS[summary.latest.trigger_source]} · 新发现 {summary.latest.new_finding_count}
+              </span>
+            </span>
+          ) : (
+            <span className="text-slate-400" data-testid="ops-summary-last">尚无巡检记录</span>
+          )}
+          {summary.in_progress ? (
+            <span className="inline-flex items-center gap-1.5 text-amber-600" data-testid="ops-summary-next">
+              <Loader2 className="size-3 animate-spin" />巡检进行中…
+            </span>
+          ) : (
+            <span className="text-slate-600" data-testid="ops-summary-next">
+              下次巡检 {formatTime(summary.next_run_at)}
+            </span>
+          )}
+          <span className="ml-auto shrink-0 text-slate-400" data-testid="ops-summary-interval">
+            周期 {inspectionIntervalLabel(summary.interval_minutes)}
+          </span>
+        </div>
+      )}
 
       {error && (
         <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700" data-testid="ops-error">
@@ -195,6 +245,7 @@ export default function OpsPage() {
           >
             <option value="">全部</option>
             <option value="open">开放</option>
+            <option value="waiting_human">转人工处理中</option>
             <option value="ignored">已忽略</option>
             <option value="resolved">已解决</option>
           </select>
