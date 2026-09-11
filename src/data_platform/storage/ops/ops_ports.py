@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from src.domain.ops.models import (
     FindingDraft,
@@ -14,7 +14,6 @@ from src.domain.ops.models import (
     OpsRemediationRun,
     OpsSeverity,
 )
-
 
 class OpsFindingStorage(Protocol):
     """问题库存储契约。
@@ -34,6 +33,10 @@ class OpsFindingStorage(Protocol):
     - insert_remediation_run 追加一行 OpsRemediationRun（run_id 由服务层
       生成，存储不查重不校验）；list_remediation_runs 按 created_at 升序
       返回该问题的全部修复记录。
+
+    诊断语义（#51 P1-5）：
+    - save_diagnosis 覆盖写入 diagnosis 列（最新一份报告），不动 status
+      与 revision（诊断只读、不驱动生命周期），问题不存在抛 NotFound。
     """
 
     def upsert_finding(self, draft: FindingDraft, *, seen_at: datetime) -> OpsFinding: ...
@@ -73,4 +76,8 @@ class OpsFindingStorage(Protocol):
 
     def list_remediation_runs(self, finding_id: str) -> list[OpsRemediationRun]:
         """该问题的修复记录时间线（created_at 升序）。"""
+        ...
+
+    def save_diagnosis(self, finding_id: str, diagnosis: dict[str, Any]) -> OpsFinding:
+        """覆盖写入诊断报告（#51）：不动 status 与 revision。"""
         ...

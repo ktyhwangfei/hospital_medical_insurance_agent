@@ -14,9 +14,11 @@ from pydantic import BaseModel, Field
 
 from src.data_platform.storage.ops.ops_factory import get_ops_finding_storage
 from src.domain.ops.models import (
+    DiagnosisUnavailableError,
     FindingRevisionConflictError,
     InvalidFindingTransitionError,
     OpsAssetType,
+    OpsDiagnosisResult,
     OpsFindingDetail,
     OpsFindingNotFoundError,
     OpsFindingPage,
@@ -27,6 +29,7 @@ from src.domain.ops.models import (
 )
 from src.gateway.auth import authenticator
 from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
+from src.runtime.ops.diagnosis import OpsDiagnosisService
 from src.runtime.ops.service import OpsHealthService, OpsInspectionResult, OpsRemediationResult
 from src.shared.schemas.responses import error_detail
 
@@ -42,6 +45,17 @@ def get_ops_service() -> OpsHealthService:
     from src.runtime.api.data_governance_routes import get_data_governance_service
 
     return OpsHealthService(get_ops_finding_storage(), get_data_governance_service)
+
+
+def get_ops_diagnosis_service() -> OpsDiagnosisService:
+    """诊断服务依赖注入 seam（#51）：与 /ops 共享问题库存储进程级单例。"""
+
+    def gateway_factory():
+        from src.model_service.gateway import ModelGateway
+
+        return ModelGateway()
+
+    return OpsDiagnosisService(get_ops_finding_storage(), gateway_factory)
 
 
 def _require_permission(permission: str, authorization: str | None):
@@ -217,6 +231,34 @@ def reopen_finding(
         )
     except (OpsFindingNotFoundError, InvalidFindingTransitionError, FindingRevisionConflictError) as exc:
         _raise_lifecycle_error(exc)
+
+
+@router.post(
+    "/findings/{finding_id}/diagnose",
+    response_model=OpsDiagnosisResult,
+)
+def diagnose_finding(
+    finding_id: str,
+    principal: DataGovernancePrincipal = Depends(require_ops_write),
+    service: OpsDiagnosisService = Depends(get_ops_diagnosis_service),
+) -> OpsDiagnosisResult:
+    """对单条问题发起 LLM 智能诊断（#51）。
+
+    无引用诊断落库 insufficient_evidence（不产生可执行建议）；
+    模型未配置/输出不可解析 → 503，不落库不覆盖旧报告。
+    """
+    try:
+        return service.diagnose_finding(finding_id, actor=principal.user_id)
+    except OpsFindingNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_detail("FINDING_NOT_FOUND", str(exc)),
+        ) from exc
+    except DiagnosisUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=error_detail("DIAGNOSIS_UNAVAILABLE", str(exc)),
+        ) from exc
 
 
 @router.get(

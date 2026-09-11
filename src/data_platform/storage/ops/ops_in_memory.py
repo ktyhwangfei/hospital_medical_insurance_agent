@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+from copy import deepcopy
 from datetime import datetime
 
 from src.domain.ops.models import (
@@ -135,3 +136,10 @@ class InMemoryOpsFindingStorage:
         with self._lock:
             runs = self._runs.get(finding_id, [])
             return [run.model_copy(deep=True) for run in runs]
+
+    def save_diagnosis(self, finding_id: str, diagnosis: dict) -> OpsFinding:
+        with self._lock:
+            current = self.get_finding(finding_id)  # 不存在则抛 NotFound
+            updated = current.model_copy(update={"diagnosis": deepcopy(diagnosis)})
+            self._findings[current.fingerprint] = updated
+            return updated.model_copy(deep=True)

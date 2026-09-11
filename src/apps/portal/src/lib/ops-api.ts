@@ -102,6 +102,40 @@ export interface OpsRemediationResultDto {
   detail: OpsFindingDetailDto
 }
 
+// ── #51 P1-5 LLM 智能诊断 ──
+
+export type DiagnosisStatus = 'complete' | 'insufficient_evidence'
+export type DiagnosisActionLevel = 'L1' | 'L2' | 'L3'
+
+export interface DiagnosisCitationDto {
+  citation_id: string
+  source: string
+  quote: string
+}
+
+export interface DiagnosisActionDto {
+  level: DiagnosisActionLevel
+  description: string
+  citation_ids: string[]
+}
+
+export interface OpsDiagnosisReportDto {
+  finding_id: string
+  status: DiagnosisStatus
+  root_cause: string | null
+  citations: DiagnosisCitationDto[]
+  uncertainties: string[]
+  actions: DiagnosisActionDto[]
+  model_route: { scene?: string; model_type?: string; model_name?: string }
+  generated_by: string
+  generated_at: string
+}
+
+export interface OpsDiagnosisResultDto {
+  finding: OpsFindingDto
+  report: OpsDiagnosisReportDto
+}
+
 // ── 鉴权（与 data-governance-api 同模式：sessionStorage → dev 环境变量 token）──
 
 function opsToken(): string | null {
@@ -188,6 +222,15 @@ export async function remediateOpsFinding(
 ): Promise<OpsRemediationResultDto> {
   return opsRequest<OpsRemediationResultDto>(
     `/findings/${encodeURIComponent(findingId)}/remediate?expected_revision=${expectedRevision}`,
+    { method: 'POST' },
+  )
+}
+
+export async function diagnoseOpsFinding(
+  findingId: string,
+): Promise<OpsDiagnosisResultDto> {
+  return opsRequest<OpsDiagnosisResultDto>(
+    `/findings/${encodeURIComponent(findingId)}/diagnose`,
     { method: 'POST' },
   )
 }

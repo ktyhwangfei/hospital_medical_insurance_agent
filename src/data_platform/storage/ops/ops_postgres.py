@@ -349,3 +349,17 @@ class PostgresOpsFindingStorage:
             (finding_id,),
         )
         return [_row_to_run(row) for row in rows]
+
+    def save_diagnosis(self, finding_id: str, diagnosis: dict[str, Any]) -> OpsFinding:
+        # 诊断只读不驱动生命周期：只覆盖 diagnosis 列，不动 status/revision
+        rows = self._get_client().execute(
+            f"""
+            UPDATE ops_findings SET diagnosis = %s
+            WHERE finding_id = %s
+            RETURNING {_FINDING_COLUMNS}
+            """,
+            (json.dumps(diagnosis, ensure_ascii=False), finding_id),
+        )
+        if not rows:
+            raise OpsFindingNotFoundError(finding_id)
+        return _row_to_finding(rows[0])

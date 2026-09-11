@@ -80,7 +80,9 @@ def _job(status: SyncJobStatus) -> OutpatientSyncJob:
         source_mode=OutpatientSourceMode.CDC,
         status=status,
         schedule_interval_minutes=5,
-        next_run_at=NOW + timedelta(minutes=5),
+        # 相对真实时钟取未来值：巡检/修复验证用 datetime.now 判定滞后，
+        # 固定历史日期会让健康任务随日历推进被判 lagging（时间炸弹）
+        next_run_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         created_at=NOW,
         updated_at=NOW,
     )

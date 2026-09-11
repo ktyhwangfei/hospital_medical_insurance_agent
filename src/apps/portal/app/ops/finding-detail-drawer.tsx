@@ -1,16 +1,19 @@
 'use client'
 
 // 问题详情抽屉 — issue #50：证据快照 + 生命周期时间线 + 忽略/重开操作；
-// issue #53：白名单 L1「执行修复」+ 修复留痕时间线。
+// issue #53：白名单 L1「执行修复」+ 修复留痕时间线；
+// issue #51：「发起诊断」+ 诊断报告卡片（根因/可展开引用/分级建议/insufficient_evidence 专属态）。
 // 由 /ops 列表行点开；操作成功后以响应回填详情并通知列表刷新。
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, RotateCcw, Stethoscope, Wrench, X } from 'lucide-react'
+import { AlertTriangle, Loader2, RotateCcw, Stethoscope, Wrench, X } from 'lucide-react'
 import {
+  diagnoseOpsFinding,
   getOpsFinding,
   ignoreOpsFinding,
   listOpsRemediationActions,
   remediateOpsFinding,
   reopenOpsFinding,
+  type OpsDiagnosisReportDto,
   type OpsFindingDetailDto,
   type OpsRemediationActionDto,
   type OpsRemediationRunDto,
@@ -20,6 +23,8 @@ import {
   ACTION_LABELS,
   ASSET_LABELS,
   CHECK_LABELS,
+  DIAGNOSIS_LEVEL_BADGES,
+  DIAGNOSIS_LEVEL_LABELS,
   PAYLOAD_KEY_LABELS,
   RUN_STATUS_LABELS,
   SEVERITY_BADGES,
@@ -82,6 +87,101 @@ function buildTimeline(detail: OpsFindingDetailDto): TimelineEntry[] {
   return entries.sort((a, b) => a.at.localeCompare(b.at))
 }
 
+/** 从 finding.diagnosis（Record）安全解析诊断报告；结构不符返回 null 按未诊断处理 */
+function parseDiagnosis(raw: Record<string, unknown> | null): OpsDiagnosisReportDto | null {
+  if (!raw || typeof raw !== 'object') return null
+  if (raw.status !== 'complete' && raw.status !== 'insufficient_evidence') return null
+  return raw as unknown as OpsDiagnosisReportDto
+}
+
+/** 诊断报告卡片（#51）：根因 + 可展开引用 + 分级建议 + 不确定性 + 模型路由审计 */
+function DiagnosisReportCard({ report }: { report: OpsDiagnosisReportDto }) {
+  return (
+    <div
+      className="space-y-3 rounded-lg border border-slate-100 p-3"
+      data-testid="ops-diagnosis-report"
+    >
+      {report.status === 'insufficient_evidence' ? (
+        <div
+          className="flex items-start gap-2 rounded-md bg-amber-50 px-3 py-2 text-amber-800"
+          data-testid="ops-diagnosis-insufficient"
+        >
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          <div>
+            <p className="font-medium">证据不足，未生成结论与建议</p>
+            <p className="mt-0.5 text-[11px] text-amber-700">
+              模型未给出可验证的证据引用；按安全约束不落根因、不产生任何可执行建议。
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div>
+            <p className="text-[11px] text-slate-400">根因分析（依据下方引用）</p>
+            <p className="mt-1 text-slate-800" data-testid="ops-diagnosis-root-cause">
+              {report.root_cause ?? '—'}
+            </p>
+          </div>
+          {report.citations.length > 0 && (
+            <div data-testid="ops-diagnosis-citations">
+              <p className="text-[11px] text-slate-400">证据引用（点击展开原文）</p>
+              <div className="mt-1 space-y-1">
+                {report.citations.map((citation) => (
+                  <details
+                    key={citation.citation_id}
+                    className="rounded-md bg-slate-50 px-2 py-1"
+                    data-testid="ops-diagnosis-citation"
+                  >
+                    <summary className="cursor-pointer list-none text-slate-600">
+                      <span className="font-mono text-[11px] text-sky-700">{citation.citation_id}</span>
+                      <span className="ml-1.5 font-mono text-[11px]">{citation.source}</span>
+                    </summary>
+                    <p className="mt-1 break-all font-mono text-[11px] text-slate-500">{citation.quote}</p>
+                  </details>
+                ))}
+              </div>
+            </div>
+          )}
+          {report.actions.length > 0 && (
+            <div data-testid="ops-diagnosis-actions">
+              <p className="text-[11px] text-slate-400">建议动作（分级标注，执行仍受白名单/人工流程约束）</p>
+              <ul className="mt-1 space-y-1.5">
+                {report.actions.map((action, index) => (
+                  <li key={index} className="flex items-start gap-2">
+                    <span className={`shrink-0 rounded-full px-2 py-px text-[10px] font-semibold ring-1 ${DIAGNOSIS_LEVEL_BADGES[action.level]}`}>
+                      {DIAGNOSIS_LEVEL_LABELS[action.level]}
+                    </span>
+                    <span className="text-slate-700">
+                      {action.description}
+                      <span className="ml-1.5 font-mono text-[11px] text-sky-700">
+                        {action.citation_ids.join('、')}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+      {report.uncertainties.length > 0 && (
+        <div className="rounded-md bg-amber-50 px-3 py-2" data-testid="ops-diagnosis-uncertainties">
+          <p className="text-[11px] font-medium text-amber-800">不确定性（阅读结论时请注意）</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-amber-700">
+            {report.uncertainties.map((item, index) => (
+              <li key={index}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <p className="border-t border-slate-100 pt-2 text-[11px] text-slate-400" data-testid="ops-diagnosis-meta">
+        由 {report.generated_by} 于 {formatTime(report.generated_at)} 生成 · 模型路由：
+        {report.model_route?.model_name ?? report.model_route?.scene ?? '—'}
+      </p>
+    </div>
+  )
+}
+
 export default function FindingDetailDrawer({
   findingId,
   canWrite,
@@ -94,6 +194,7 @@ export default function FindingDetailDrawer({
   const [actionError, setActionError] = useState<string | null>(null)
   const [mutating, setMutating] = useState(false)
   const [remediating, setRemediating] = useState(false)
+  const [diagnosing, setDiagnosing] = useState(false)
   const [actions, setActions] = useState<OpsRemediationActionDto[]>([])
   const [ignoreDraftOpen, setIgnoreDraftOpen] = useState(false)
   const [ignoreReason, setIgnoreReason] = useState('')
@@ -181,6 +282,21 @@ export default function FindingDetailDrawer({
       setRemediating(false)
     }
   }, [detail, onMutated])
+
+  const handleDiagnose = useCallback(async () => {
+    if (!detail) return
+    setDiagnosing(true)
+    setActionError(null)
+    try {
+      // 诊断只读不改生命周期：仅回填 finding（含新报告），不触发列表刷新
+      const result = await diagnoseOpsFinding(detail.finding.finding_id)
+      setDetail((prev) => (prev ? { ...prev, finding: result.finding } : prev))
+    } catch (e) {
+      setActionError(errorMessage(e))
+    } finally {
+      setDiagnosing(false)
+    }
+  }, [detail])
 
   if (!findingId) return null
 
@@ -296,15 +412,35 @@ export default function FindingDetailDrawer({
                 <h2 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-900">
                   <Stethoscope className="size-3.5 text-slate-400" />诊断
                 </h2>
-                {finding.diagnosis ? (
-                  <pre className="overflow-x-auto rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
-                    {JSON.stringify(finding.diagnosis, null, 2)}
-                  </pre>
-                ) : (
-                  <p className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-slate-400" data-testid="ops-detail-diagnosis">
-                    诊断报告未生成（P1 诊断引擎接入后自动产出）
-                  </p>
+                {canWrite && (
+                  <div className="mb-2 space-y-1" data-testid="ops-diagnose-block">
+                    <button
+                      type="button"
+                      onClick={handleDiagnose}
+                      disabled={diagnosing || mutating}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-40"
+                      data-testid="ops-diagnose-button"
+                    >
+                      {diagnosing
+                        ? <Loader2 className="size-3.5 animate-spin" />
+                        : <Stethoscope className="size-3.5" />}
+                      发起诊断
+                    </button>
+                    <p className="text-[11px] text-slate-400">
+                      LLM 基于证据快照与补充证据生成根因分析；无证据引用时如实标注证据不足，不产生建议。
+                    </p>
+                  </div>
                 )}
+                {(() => {
+                  const report = parseDiagnosis(finding.diagnosis)
+                  return report
+                    ? <DiagnosisReportCard report={report} />
+                    : (
+                        <p className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-slate-400" data-testid="ops-diagnosis-empty">
+                          诊断报告未生成（点击「发起诊断」由 LLM 产出带证据引用的根因分析）
+                        </p>
+                      )
+                })()}
               </section>
 
               {canWrite && (

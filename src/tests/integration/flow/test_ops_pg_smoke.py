@@ -269,3 +269,64 @@ def test_remediation_closed_loop_on_live_pg(storage: PostgresOpsFindingStorage):
     assert [r.run_id for r in service.get_finding_detail(finding.finding_id).remediations] == [
         result.run.run_id,
     ]
+
+
+def test_diagnosis_report_persisted_on_live_pg(storage: PostgresOpsFindingStorage):
+    """#51：诊断报告覆盖落库（JSONB 往返）、不动 status/revision；重诊覆盖旧报告。"""
+    import json as _json
+
+    from src.model_service.models import ModelResponse, TokenUsage
+    from src.runtime.ops.diagnosis import OpsDiagnosisService
+
+    finding = storage.upsert_finding(
+        _draft("data_sync_failed", OpsSeverity.CRITICAL, {
+            "problem": "sync_job_failed", "job_status": "failed",
+        }),
+        seen_at=T0,
+    )
+
+    class _FixedGateway:
+        def __init__(self, content: str):
+            self.content = content
+
+        def generate(self, messages, model_type, scene, **kwargs):
+            return ModelResponse(
+                content=self.content,
+                model_name="fake-diag-model",
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1),
+                finish_reason="stop",
+            )
+
+    service = OpsDiagnosisService(
+        storage, lambda: _FixedGateway(_json.dumps({
+            "root_cause": "同步连接失败",
+            "citations": ["E1"],
+            "uncertainties": [],
+            "actions": [
+                {"level": "L1", "description": "重试同步", "citation_ids": ["E1"]},
+            ],
+        })),
+        evidence_collector=lambda f: [],
+    )
+    result = service.diagnose_finding(finding.finding_id, actor="ops-admin-1")
+    assert result.report.status.value == "complete"
+
+    # 重新读取：JSONB 完整往返，诊断不动生命周期字段
+    reloaded = storage.get_finding(finding.finding_id)
+    assert reloaded.diagnosis["status"] == "complete"
+    assert reloaded.diagnosis["root_cause"] == "同步连接失败"
+    assert reloaded.diagnosis["model_route"]["model_name"] == "fake-diag-model"
+    assert reloaded.status is OpsFindingStatus.OPEN
+    assert reloaded.revision == finding.revision
+
+    # 二次诊断（无引用）覆盖旧报告为 insufficient_evidence 且无建议动作
+    degraded = OpsDiagnosisService(
+        storage, lambda: _FixedGateway(_json.dumps({
+            "root_cause": "x", "citations": [], "uncertainties": [], "actions": [],
+        })),
+        evidence_collector=lambda f: [],
+    )
+    degraded.diagnose_finding(finding.finding_id, actor="ops-admin-1")
+    final = storage.get_finding(finding.finding_id)
+    assert final.diagnosis["status"] == "insufficient_evidence"
+    assert final.diagnosis["actions"] == []

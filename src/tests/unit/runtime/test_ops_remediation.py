@@ -61,12 +61,14 @@ def _source(source_id: str = "bjybdb") -> OutpatientDataSource:
 
 
 def _job(status: SyncJobStatus, **overrides) -> OutpatientSyncJob:
+    # next_run_at 相对真实时钟取未来值：remediate 的验证环节用 datetime.now
+    # 判定滞后，固定历史日期会让健康任务随日历推进被判 lagging（时间炸弹）
     defaults = dict(
         source_id="bjybdb",
         source_mode=OutpatientSourceMode.CDC,
         status=status,
         schedule_interval_minutes=5,
-        next_run_at=T1,
+        next_run_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         last_succeeded_at=T0,
         created_at=T0,
         updated_at=T0,

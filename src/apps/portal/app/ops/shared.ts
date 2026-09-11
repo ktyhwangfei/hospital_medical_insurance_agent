@@ -1,5 +1,11 @@
-// /ops 页公共标签与格式化 — 列表页与详情抽屉共享（#45 建立，#50 扩充状态/证据标签，#53 扩充修复标签）。
-import type { OpsFindingStatus, OpsSeverity, RemediationRunStatus, VerificationResult } from '@/lib/ops-api'
+// /ops 页公共标签与格式化 — 列表页与详情抽屉共享（#45 建立，#50 扩充状态/证据标签，#53 扩充修复标签，#51 扩充诊断标签）。
+import type {
+  DiagnosisActionLevel,
+  OpsFindingStatus,
+  OpsSeverity,
+  RemediationRunStatus,
+  VerificationResult,
+} from '@/lib/ops-api'
 
 export const SEVERITY_BADGES: Record<OpsSeverity, string> = {
   critical: 'bg-red-50 text-red-700 ring-red-200',
@@ -47,6 +53,20 @@ export const RUN_STATUS_LABELS: Record<RemediationRunStatus, string> = {
 export const VERIFICATION_LABELS: Record<VerificationResult, string> = {
   passed: '验证通过',
   failed: '验证未通过',
+}
+
+// ── #51 LLM 智能诊断标签 ──
+
+/** 建议动作分级 → 标签与配色（L3 红色醒目：禁止自动执行） */
+export const DIAGNOSIS_LEVEL_BADGES: Record<DiagnosisActionLevel, string> = {
+  L1: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  L2: 'bg-amber-50 text-amber-700 ring-amber-200',
+  L3: 'bg-red-50 text-red-700 ring-red-200',
+}
+export const DIAGNOSIS_LEVEL_LABELS: Record<DiagnosisActionLevel, string> = {
+  L1: 'L1 可自动',
+  L2: 'L2 需人工确认',
+  L3: 'L3 禁止自动执行',
 }
 
 /** 证据快照字段的展示名（未知键原样展示） */

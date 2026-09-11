@@ -978,8 +978,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ### 14.7. 健康运营上下文（Ops Health）
 
-> 依据：issue #45 P0 + issue #50 生命周期 + issue #53 L1 自动修复 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
-> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）、「手动处置」（#50：ignore/reopen 流转 + 事件留痕）与「解决」（#53：L1 白名单自动修复 + 修复后强制验证闭环）已落地，诊断归后续分期。
+> 依据：issue #45 P0 + issue #50 生命周期 + issue #53 L1 自动修复 + issue #51 P1-5 LLM 智能诊断 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
+> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）、「手动处置」（#50：ignore/reopen 流转 + 事件留痕）、「解决」（#53：L1 白名单自动修复 + 修复后强制验证闭环）与「诊断」（#51：LLM 智能诊断，citations 强制）已落地。
 
 #### 文件位置
 
@@ -1010,6 +1010,16 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 修复白名单项 | `RemediationSpec` | **Value Object** | frozen dataclass | action_id ↔ check_id ↔ risk_level ↔ executor 的白名单注册；`default_remediation_whitelist()` 代码内注册 |
 | 修复执行器 | `RemediationExecutor` | **Port** | `typing.Protocol`（Callable） | `(OpsFinding, action_id) -> RemediationActionOutcome`；业务修复逻辑的唯一扩展点 |
 | 重试门诊同步 | `retry_data_sync` | 修复动作 | — | 本期唯一 L1 动作：复用 data_governance 同步入口重试失败/滞后的门诊同步任务 |
+| 诊断报告 | `OpsDiagnosisReport` | **DTO** | Pydantic `BaseModel` | 单条 finding 的 LLM 诊断（存 `OpsFinding.diagnosis`，最新覆盖）：status/root_cause/citations/uncertainties/actions/model_route |
+| 诊断结论状态 | `DiagnosisStatus` | **Value Object** | `StrEnum` | complete（有引用）/ insufficient_evidence（无引用，不落根因不留建议） |
+| 诊断建议分级 | `DiagnosisActionLevel` | **Value Object** | `StrEnum` | L1 自动白名单 / L2 人工确认 / L3 禁止自动执行（仅提示）；建议仅作指引，执行仍受 #53 白名单约束 |
+| 诊断证据引用 | `DiagnosisCitation` | **Value Object** | Pydantic `BaseModel`（frozen） | citation_id（E1..En）+ source + quote；**只能从证据目录选取，quote 取自目录原文，模型不可编造** |
+| 诊断建议动作 | `DiagnosisAction` | **Value Object** | Pydantic `BaseModel`（frozen） | level + description + citation_ids；未挂任何有效引用的建议在构建时丢弃 |
+| 诊断结果 | `OpsDiagnosisResult` | **DTO** | Pydantic `BaseModel` | diagnose 端点返回体：刷新后的 finding（含新报告）+ 报告本体 |
+| 诊断不可用 | `DiagnosisUnavailableError` | 异常 | — | 模型未配置/调用失败/输出不可解析；API 503 `DIAGNOSIS_UNAVAILABLE`，不落库不覆盖旧报告 |
+| 智能诊断服务 | `OpsDiagnosisService` | **Domain Service** | — | 证据目录（payload+定向补充，过脱敏）→ ModelGateway scene=asset_diagnosis → 校验落库；citations 硬约束 |
+| 证据目录构建 | `build_evidence_catalog()` | 值函数 | — | payload 逐字段 + 定向补充证据（`supplement.*`），统一 `redact_sensitive_text` 后编号 E1..En |
+| 定向证据采集器 | `EvidenceCollector` | **Port** | `typing.Protocol`（Callable） | `(OpsFinding) -> [(source, quote)]`；默认实现为门诊同步问题附最近尝试记录 |
 
 #### 业务规则
 
@@ -1025,6 +1035,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 10. 修复仅允许对 open 问题发起（同 ignore）；执行器先做动作、后强制重跑该问题的触发检查器（按 fingerprint 匹配草稿）：复跑通过→resolved（事件 reason 记 `L1 修复动作 xxx 验证通过`）；复跑仍报→upsert 复现（occurrence_count+1）保持 open；检查器异常→不判定验证结果，状态不动，`after_evidence.verification_error` 记原因。
 11. 修复运行留痕先于状态流转：动作未发起（如任务 paused/draft、同步任务不存在）记 `failed` 运行行且不触发验证，问题状态不动；`expected_revision` 乐观锁只约束 resolved 流转，冲突时运行行仍保留（动作幂等可重放）。
 12. 已解决问题复现：巡检 upsert 后自动 open（系统 actor `system:ops-inspector` 记 reopened 事件）；ignored 问题复现不复活（#50 规则）。
+13. 诊断（#51）只读：`POST /ops/findings/{id}/diagnose`（ops:write）不改 status/revision；报告覆盖写入 `diagnosis` 列。citations 硬约束：引用只能从证据目录选取（模型只可挑选不可编造 quote）；引用为空 → status=insufficient_evidence、root_cause 置空、actions 清空，不驱动任何修复动作（负例测试守护）。
+14. 诊断输入过 `security/desensitization`：证据目录构建时统一 `redact_sensitive_text`，PHI 原值不进模型也不落库；报告记录 `model_route`（scene/model_type/实际 model_name）供审计。
+15. 诊断模型调用走 `ModelGateway` scene=`asset_diagnosis`、model_type=`llm`（路由表显式条目，治理路由发布优先）；模型失败/输出不可解析抛 `DiagnosisUnavailableError`（API 503），不落库不覆盖旧报告。
 
 ---
 
@@ -1359,6 +1372,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `OpsFindingEventType` | 事件类型 | OpsHealth | Value Object |
 | `OpsFindingPage` | 问题分页结果 | OpsHealth | DTO |
 | `OpsFindingStatus` | 问题状态 | OpsHealth | Value Object |
+| `OpsDiagnosisReport` | 诊断报告 | OpsHealth | DTO |
+| `OpsDiagnosisResult` | 诊断结果 | OpsHealth | DTO |
+| `OpsDiagnosisService` | 智能诊断服务 | OpsHealth | Domain Service |
+| `DiagnosisStatus` | 诊断结论状态 | OpsHealth | Value Object |
+| `DiagnosisActionLevel` | 诊断建议分级 | OpsHealth | Value Object |
+| `DiagnosisCitation` | 诊断证据引用 | OpsHealth | Value Object |
+| `DiagnosisAction` | 诊断建议动作 | OpsHealth | Value Object |
+| `DiagnosisUnavailableError` | 诊断不可用异常 | OpsHealth | 异常 |
 | `OpsHealthService` | 健康运营巡检服务 | OpsHealth | Domain Service |
 | `OpsInspectionResult` | 巡检结果 | OpsHealth | DTO |
 | `OpsRemediationRun` | 修复运行 | OpsHealth | Entity |

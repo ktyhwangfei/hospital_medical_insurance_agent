@@ -182,6 +182,73 @@ class OpsRemediationRun(BaseModel):
     created_at: datetime
 
 
+# ── #51 P1-5 LLM 智能诊断 ──
+
+
+class DiagnosisStatus(StrEnum):
+    """诊断结论状态：无 citations 一律落 insufficient_evidence，不驱动动作。"""
+
+    COMPLETE = "complete"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+class DiagnosisActionLevel(StrEnum):
+    """建议动作分级：L1 自动白名单 / L2 人工确认 / L3 禁止（仅提示永不执行）。"""
+
+    L1 = "L1"
+    L2 = "L2"
+    L3 = "L3"
+
+
+class DiagnosisCitation(BaseModel):
+    """诊断证据引用：只能从证据目录中选取（quote 取自目录，模型不可编造）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    citation_id: str = Field(min_length=1, max_length=16)
+    source: str = Field(min_length=1, max_length=128)
+    quote: str = Field(min_length=1, max_length=500)
+
+
+class DiagnosisAction(BaseModel):
+    """分级建议动作（诊断只读产出，执行仍走 #53 白名单 / #54 人工流）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    level: DiagnosisActionLevel
+    description: str = Field(min_length=1, max_length=500)
+    citation_ids: list[str] = Field(min_length=1)
+
+
+class OpsDiagnosisReport(BaseModel):
+    """单条 finding 的诊断报告（存入 OpsFinding.diagnosis，最新一份覆盖）。"""
+
+    finding_id: str = Field(min_length=1, max_length=64)
+    status: DiagnosisStatus
+    root_cause: str | None = Field(default=None, max_length=2000)
+    citations: list[DiagnosisCitation] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    actions: list[DiagnosisAction] = Field(default_factory=list)
+    model_route: dict[str, Any] = Field(default_factory=dict)  # scene/model_name 审计
+    generated_by: str = Field(min_length=1, max_length=128)
+    generated_at: datetime
+
+
+class OpsDiagnosisResult(BaseModel):
+    """一次诊断的结果：刷新后的问题（含新报告）+ 报告本体。"""
+
+    finding: OpsFinding
+    report: OpsDiagnosisReport
+
+
+class DiagnosisUnavailableError(Exception):
+    """诊断不可用（模型未配置/调用失败/输出不可解析），不落库不覆盖旧报告。"""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"诊断不可用：{reason}")
+        self.reason = reason
+
+
 class OpsFindingNotFoundError(Exception):
     """问题不存在（按 finding_id 查询）。"""
 

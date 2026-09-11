@@ -418,7 +418,9 @@ class OpsAnalyticsService:
 
             response = self._model_gateway.generate(
                 [Message(role="user", content="\n".join(prompt_lines))],
-                model_type="chat",
+                # model_type 必须是 "llm"：路由表只有 (default, llm) 兜底，
+                # 此前误用 "chat" 会在未发布治理路由时抛 ModelRouteError 恒降级
+                model_type="llm",
                 scene="ops_weekly_summary",
             )
         except Exception as exc:  # 模型未配置/调用失败：降级，不阻断周报

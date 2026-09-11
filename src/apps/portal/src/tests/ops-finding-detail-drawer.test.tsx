@@ -17,16 +17,20 @@ vi.mock('@/lib/ops-api', async (importOriginal) => {
     reopenOpsFinding: vi.fn(),
     listOpsRemediationActions: vi.fn(),
     remediateOpsFinding: vi.fn(),
+    diagnoseOpsFinding: vi.fn(),
   }
 })
 
 import FindingDetailDrawer from '../../app/ops/finding-detail-drawer'
 import {
+  diagnoseOpsFinding,
   getOpsFinding,
   ignoreOpsFinding,
   listOpsRemediationActions,
   remediateOpsFinding,
   reopenOpsFinding,
+  type OpsDiagnosisReportDto,
+  type OpsDiagnosisResultDto,
   type OpsFindingDetailDto,
   type OpsFindingDto,
   type OpsFindingEventDto,
@@ -128,7 +132,7 @@ describe('FindingDetailDrawer 详情抽屉', () => {
     expect(screen.getByText('SOURCE_TIMEOUT')).toBeTruthy()
     expect(screen.getByText('连接探测')).toBeTruthy()
     // 诊断占位
-    expect(screen.getByTestId('ops-detail-diagnosis').textContent).toContain('诊断报告未生成')
+    expect(screen.getByTestId('ops-diagnosis-empty').textContent).toContain('诊断报告未生成')
     // 时间线：首见 + 最近巡检确认（无流转事件）；「首次发现」在基础信息区也出现，用 getAll
     expect(screen.getAllByText('首次发现').length).toBeGreaterThan(0)
     expect(screen.getByText('最近巡检确认')).toBeTruthy()
@@ -293,5 +297,91 @@ describe('FindingDetailDrawer 详情抽屉', () => {
     )
     // 仍开放，修复按钮可重试
     expect(screen.getByTestId('ops-detail-remediate')).toBeTruthy()
+  })
+
+  // ── #51 LLM 智能诊断 ──
+
+  const DIAGNOSIS_COMPLETE: OpsDiagnosisReportDto = {
+    finding_id: 'f1',
+    status: 'complete',
+    root_cause: '同步任务连续失败，疑似源库连接超时',
+    citations: [
+      { citation_id: 'E1', source: 'payload.problem', quote: '"sync_job_degraded"' },
+      { citation_id: 'E2', source: 'supplement.sync_attempts[0]', quote: 'status=failed error_code=SOURCE_TIMEOUT rows=0' },
+    ],
+    uncertainties: ['缺少最近一次成功同步时间'],
+    actions: [
+      { level: 'L1', description: '重试同步任务', citation_ids: ['E1'] },
+      { level: 'L2', description: '人工核对源库凭据', citation_ids: ['E1', 'E2'] },
+    ],
+    model_route: { scene: 'asset_diagnosis', model_type: 'llm', model_name: 'deepseek-chat' },
+    generated_by: 'portal-dev-ops',
+    generated_at: '2026-09-10T04:20:00+00:00',
+  }
+
+  it('发起诊断：调用端点并以响应回填报告卡片（只读不刷新列表）', async () => {
+    const result: OpsDiagnosisResultDto = {
+      finding: finding({ diagnosis: { ...DIAGNOSIS_COMPLETE } }),
+      report: DIAGNOSIS_COMPLETE,
+    }
+    vi.mocked(diagnoseOpsFinding).mockResolvedValue(result)
+    const { onMutated } = renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-diagnose-button')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('ops-diagnose-button'))
+    await waitFor(() => expect(screen.getByTestId('ops-diagnosis-report')).toBeTruthy())
+    expect(diagnoseOpsFinding).toHaveBeenCalledWith('f1')
+    // 根因、可展开引用、分级建议与不确定性齐备
+    expect(screen.getByTestId('ops-diagnosis-root-cause').textContent).toContain('连接超时')
+    expect(screen.getAllByTestId('ops-diagnosis-citation').length).toBe(2)
+    expect(screen.getByText('L1 可自动')).toBeTruthy()
+    expect(screen.getByText('L2 需人工确认')).toBeTruthy()
+    expect(screen.getByTestId('ops-diagnosis-uncertainties').textContent).toContain('成功同步时间')
+    // 模型路由审计信息
+    expect(screen.getByTestId('ops-diagnosis-meta').textContent).toContain('deepseek-chat')
+    // 诊断只读：不通知列表刷新
+    expect(onMutated).not.toHaveBeenCalled()
+  })
+
+  it('insufficient_evidence 专属态：不渲染根因与建议，只显示证据不足提示', async () => {
+    const insufficient = {
+      ...DIAGNOSIS_COMPLETE,
+      status: 'insufficient_evidence' as const,
+      root_cause: null,
+      citations: [],
+      actions: [],
+      uncertainties: ['模型未给出可验证的证据引用，诊断不成立'],
+    }
+    vi.mocked(getOpsFinding).mockResolvedValue(
+      detail({ finding: finding({ diagnosis: insufficient }) }),
+    )
+    renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-diagnosis-insufficient')).toBeTruthy())
+    expect(screen.getByTestId('ops-diagnosis-insufficient').textContent).toContain('证据不足')
+    expect(screen.queryByTestId('ops-diagnosis-root-cause')).toBeNull()
+    expect(screen.queryByTestId('ops-diagnosis-actions')).toBeNull()
+    expect(screen.queryAllByTestId('ops-diagnosis-citation')).toEqual([])
+  })
+
+  it('诊断不可用（503）时展示错误条且不落报告', async () => {
+    vi.mocked(diagnoseOpsFinding).mockRejectedValue(new ApiClientError(503, {
+      error_code: 'DIAGNOSIS_UNAVAILABLE',
+      message: '诊断不可用：模型调用失败：ModelConfigError',
+    }))
+    renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-diagnose-button')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('ops-diagnose-button'))
+    await waitFor(() => expect(screen.getByTestId('ops-detail-action-error')).toBeTruthy())
+    expect(screen.getByTestId('ops-detail-action-error').textContent).toContain('DIAGNOSIS_UNAVAILABLE')
+    // 未落报告：占位仍在
+    expect(screen.getByTestId('ops-diagnosis-empty')).toBeTruthy()
+  })
+
+  it('只读模式（canWrite=false）不渲染发起诊断入口', async () => {
+    renderDrawer('f1', false)
+    await waitFor(() => expect(screen.getByTestId('ops-detail-drawer')).toBeTruthy())
+    expect(screen.queryByTestId('ops-diagnose-block')).toBeNull()
+    expect(screen.getByTestId('ops-diagnosis-empty')).toBeTruthy()
   })
 })
