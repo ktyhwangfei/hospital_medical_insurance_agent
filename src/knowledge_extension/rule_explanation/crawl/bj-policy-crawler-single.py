@@ -11,6 +11,11 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urljoin, urlparse, unquote
 
+try:
+    from src.knowledge_extension.rule_explanation.crawl.html_text import extract_text_with_tables
+except ImportError:  # 作为脚本在 crawl/ 目录内直接运行
+    from html_text import extract_text_with_tables
+
 
 # BASE_URL = "https://www.beijing.gov.cn/zhengce/zhengcefagui/"
 BASE_URL = "https://ybj.beijing.gov.cn/zwgk/2020_zfxxgk/2020_xxgkml/202501/t20250120_3994118.html"
@@ -337,7 +342,8 @@ def extract_content(soup: BeautifulSoup):
         if not node:
             continue
 
-        text = node.get_text("\n", strip=True)
+        # 表格感知提取：<table> 渲染为「单元格 | 单元格」行，保留行列结构（#39/#24）
+        text = extract_text_with_tables(node)
 
         # 去掉明显无关内容
         text = re.sub(r"字号：\s*大\s*中\s*小", "", text)

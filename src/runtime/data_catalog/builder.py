@@ -53,9 +53,24 @@ PORTAL_PAGE_CONSUMERS: list[dict[str, str]] = [
         "description": "政策问答任务与轨迹档案",
     },
     {
-        "route": "/trusted-questions",
+        "route": "/question-library",
         "name": "可信问题库",
         "description": "可信问题审核与同义表达运营（Issue #37）",
+    },
+    {
+        "route": "/flow",
+        "name": "治理Flow",
+        "description": "治理数据流编排画布与发布（Issue #65）",
+    },
+    {
+        "route": "/ops",
+        "name": "健康运营",
+        "description": "系统健康巡检",
+    },
+    {
+        "route": "/ops-analytics",
+        "name": "运营分析",
+        "description": "运营指标分析",
     },
 ]
 

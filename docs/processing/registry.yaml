@@ -2,17 +2,22 @@
 # 加工注册表：门诊有效结算加工视图（口径句 v4，知识定稿签核已过）
 # 派工单: docs/processing/batch2-registry.md
 # 物化: docs/processing/outpatient_processed_view.sql → v_op_outpatient_processed
+# 架构裁决（2026-09-07，#65 Phase 0 文档 §9）：加工落位 PG 落地库，
+#   源切换为治理视图 mz_trade（同步落地 dbo.o_Trade，已排除删除行与
+#   质量拦截行）；禁止在 SQL Server 源库执行 DDL。口径句 v4 语义与
+#   签核原文一致，签核继续有效。
 # ============================================================
 registry:
   processed_object: v_op_outpatient_processed
-  datasource: sqlserver://source/bjybdb
-  source_table: dbo.o_Trade
-  signoff: v4 已签核（docs/processing/batch1-view.md + view-dispatch.md）
+  datasource: postgres://landing/outpatient_postgres
+  source_table: public.mz_trade
+  lineage: dbo.o_Trade（bjybdb SQL Server 源库，只读经同步落地）→ mz_trade（PG 治理视图）
+  signoff: v4 已签核（docs/processing/batch1-view.md + view-dispatch.md；执行位置变更不改变口径语义）
   fields:
     op_valid_settle_count:
       名称: 门诊有效结算笔数
       算子: COUNT(DISTINCT {T_TradeNo})
-      来源字段: o_Trade.T_TradeNo
+      来源字段: mz_trade.T_TradeNo（列名与源 o_Trade 契约一致）
       口径句v4: >-
         T_State IN (2,3) AND NP_Settle_State=1 AND T_HasRefundmented != 1
         AND (T_PartialReturnFlag IS NULL OR T_PartialReturnFlag='')
@@ -23,7 +28,7 @@ registry:
     op_total_fee:
       名称: 门诊总费用
       算子: SUM({T_FeeAll})
-      来源字段: o_Trade.T_FeeAll
+      来源字段: mz_trade.T_FeeAll（列名与源 o_Trade 契约一致）
       口径句v4: >-
         T_State IN (2,3) AND NP_Settle_State=1 AND T_HasRefundmented != 1
         AND (T_PartialReturnFlag IS NULL OR T_PartialReturnFlag='')
@@ -34,7 +39,7 @@ registry:
     op_fund_pay:
       名称: 门诊统筹基金支付金额
       算子: SUM({T_FundPay})
-      来源字段: o_Trade.T_FundPay
+      来源字段: mz_trade.T_FundPay（列名与源 o_Trade 契约一致）
       口径句v4: >-
         T_State IN (2,3) AND NP_Settle_State=1 AND T_HasRefundmented != 1
         AND (T_PartialReturnFlag IS NULL OR T_PartialReturnFlag='')
@@ -45,7 +50,7 @@ registry:
     op_self_pay:
       名称: 门诊个人支付金额
       算子: SUM({T_SelfPayAll})
-      来源字段: o_Trade.T_SelfPayAll
+      来源字段: mz_trade.T_SelfPayAll（列名与源 o_Trade 契约一致）
       口径句v4: >-
         T_State IN (2,3) AND NP_Settle_State=1 AND T_HasRefundmented != 1
         AND (T_PartialReturnFlag IS NULL OR T_PartialReturnFlag='')

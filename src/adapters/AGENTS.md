@@ -2,20 +2,21 @@
 
 ## 概述
 
-7 个外部系统的 Ports & Adapters 实现。当前全部为内存适配器。
+7 个外部系统的 Ports & Adapters 实现，外加数据供给分档接入（#27）：`DataSupplyConnectionPort` 端口 + 一档 SQL Server 只读直连适配器。除数据供给一档外当前全部为内存适配器。
 
 ## 结构
 
 ```
 adapters/
-├── ports/                # 7 个 Protocol 接口定义
+├── ports/                # 8 个 Protocol 接口定义
 │   ├── insurance_interface.py  # InsuranceInterfacePort
 │   ├── billing.py              # BillingPort
 │   ├── pre_audit.py            # PreAuditPort
 │   ├── drg_dip.py              # DrgDipPort
 │   ├── his.py                  # HisPort
 │   ├── emr.py                  # EmrPort
-│   └── medical_record.py       # MedicalRecordPort
+│   ├── medical_record.py       # MedicalRecordPort
+│   └── data_supply.py          # DataSupplyConnectionPort（#27 只读连接端口）
 ├── base/                 # 共享基类
 │   ├── models.py         # AdapterCallResult, AdapterCallContext, AdapterCallStatus
 │   └── service.py        # successful_result(), failed_result(), adapter_citation()
@@ -25,8 +26,20 @@ adapters/
 ├── drg_dip/              # DRG/DIP 分组适配器
 ├── his/                  # HIS 系统适配器
 ├── emr/                  # EMR 适配器
-└── medical_record/       # 病案适配器
+├── medical_record/       # 病案适配器
+└── data_supply/          # 数据供给适配器（#27 分档）
+    └── sqlserver_direct.py    # SqlServerDirectSupplyAdapter（一档：SQL Server 只读直连）
 ```
+
+## 数据供给分档（#27）
+
+需求侧标准（跨院不变）见 `docs/steering/数据接入规范.md`；供给侧按院区分档：
+
+- **一档**：CDR 只读视图直连（SQL Server，PEP 249 连接）— `SqlServerDirectSupplyAdapter`
+- **二档**：厂商 API/中间件同步（门诊 PG 同步即此形态的产品化）
+- **三档**：医保局代理 — 暂缓
+
+约定：适配器只接受注入的 `connect_fn`（组合根在 `src/runtime/policy_qa/settlement_data_provider.py`），禁止反向 import `src.runtime`。
 
 ## 关键约定
 

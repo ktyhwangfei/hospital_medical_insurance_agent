@@ -66,6 +66,14 @@ domain/
 13.5. [Runtime 上下文（Runtime）](#135-runtime-上下文runtime)
 13.6. [问答会话生命周期与轨迹（Policy QA）](#136-问答会话生命周期与轨迹policy-qa)
 14. [共享通用层（Shared / Common）](#14-共享通用层-shared--common)
+14.5. [门诊数据治理控制面（Outpatient Data Governance）](#145-门诊数据治理控制面outpatient-data-governance)
+14.6. [治理数据流上下文（Governed Data Flow）](#146-治理数据流上下文governed-data-flow)
+14.7. [健康运营上下文（Ops Health）](#147-健康运营上下文ops-health)
+14.8. [数据目录上下文（Data Catalog）](#148-数据目录上下文data-catalog)
+14.9. [语义指标政策承载（Metric Policy Carrier）](#149-语义指标政策承载metric-policy-carrier)
+14.10. [数据供给分档（Data Supply）](#1410-数据供给分档data-supply)
+14.11. [可信问题库（Trusted Question Library）](#1411-可信问题库trusted-question-library)
+14.12. [门诊运营分析（Ops Analytics）](#1412-门诊运营分析ops-analytics)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
 ---
@@ -960,6 +968,273 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.6. 治理数据流上下文（Governed Data Flow）
+
+> 依据：issue #65 Phase 0 契约冻结 + `docs/research/治理中心全流程可视化配置-开源调研与落地方案-V1.0.md`。
+> Golden Flow 基准：issue #62 门诊四加工字段（口径句 v4）。
+
+#### 文件位置
+
+`src/domain/governed_flow/models.py`（DSL 契约）+ `src/domain/governed_flow/validation.py`（图与契约校验） + `src/domain/governed_flow/compiler.py`（View 编译器）
++ `src/runtime/flow/flow_service.py`（生命周期服务）+ `src/runtime/flow/flow_query_service.py`（受控问数服务）+ `src/data_platform/storage/flow/`（存储与部署/读取适配器）+ `src/runtime/api/flow_routes.py`（API）
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 治理数据流 | `FlowDefinition` | **Aggregate Root** | Pydantic `BaseModel` | 数据加工→语义指标→受控消费的声明式版本化资产；画布只编辑它，不编辑 SQL |
+| 流节点 | `FlowNode`（discriminated union） | **Entity** | Pydantic `BaseModel` | 八类白名单节点：source/filter/join/aggregate/derived_metric/dimension/quality_gate/consumer |
+| 流边 | `FlowEdge` | **Value Object** | Pydantic `BaseModel` | 节点连接；图必须无环（DAG） |
+| 流状态 | `FlowStatus` | **Value Object** | `StrEnum` | draft → validating → pending_review → published → deprecated |
+| 来源节点 | `SourceNode` | **Entity** | Pydantic `BaseModel` | 只引用已登记数据集（dataset_code），禁止连接串；不允许有入边 |
+| 过滤节点 | `FilterNode` | **Entity** | Pydantic `BaseModel` | AND 组合条件；`in_or_null` 算子表达口径句的 `IN(...) OR IS NULL` 分支 |
+| 过滤条件 | `FlowFilterCondition` | **Value Object** | Pydantic `BaseModel` | 字段+算子+值+可选值域声明；字段必须在 source contract 内 |
+| 聚合节点 | `AggregateNode` | **Entity** | Pydantic `BaseModel` | group_by + measures；空 group_by=全局单行快照（#62 形态） |
+| 聚合度量 | `AggregateMeasure` | **Value Object** | Pydantic `BaseModel` | 算子白名单 count/count_distinct/sum/avg；count_distinct 必须显式 distinct_key；空值/冲正策略显式声明 |
+| 派生指标节点 | `DerivedMetricNode` | **Entity** | Pydantic `BaseModel` | AST 白名单算术公式（仅 + - * / 与依赖变量），禁止 eval/任意 SQL |
+| 维度节点 | `DimensionNode` | **Entity** | Pydantic `BaseModel` | 值域 + 权限级别（summary/detail），保留下钻边界 |
+| 质量门禁节点 | `QualityGateNode` | **Entity** | Pydantic `BaseModel` | 口径签核/勾稽恒等/行数/空值率/新鲜度/权限检查 |
+| 消费节点 | `ConsumerNode` | **Entity** | Pydantic `BaseModel` | query_planner/skill/dashboard_card/weekly_report/assistant；只读引用已发布指标；不允许有出边 |
+| 来源契约 | `SourceContract` | **Value Object** | Pydantic `BaseModel` | 本 flow 实际引用的字段白名单 |
+| 指标输出绑定 | `MetricOutputBinding` | **Value Object** | Pydantic `BaseModel` | flow 产出指标与语义层绑定；口径句（policy_definition）必填，发布前必须已签核 |
+| 政策载体 | `PolicyCarrier` | **Value Object** | Pydantic `BaseModel` | 复用 #60 结构：doc_number/region_scope/effective_start/effective_end/policy_rule_ref |
+| 发布修订 | `FlowPublishedRevision` | **Entity**（不可变） | Pydantic `BaseModel` | 原子锁定 flow revision + semantic revision + 产物 hash；回滚只切换 active revision，不删除历史 |
+| 内容哈希 | `compute_flow_content_hash()` | — | 纯函数 | 规范化 JSON 的 sha256；排除 revision/status/发布元数据/画布坐标，节点顺序无关 |
+| 状态流转 | `transition_flow_status()` | — | 纯函数 | 非法流转抛 `FlowStateInvalidError`；deprecated 为终态 |
+| 治理流服务 | `FlowGovernanceService` | **Domain Service** | 无状态服务类 | 编排存储/校验/编译；发布原子锁三要素，回滚只切活跃版本 |
+| 流存储端口 | `GovernedFlowStorage` | **Port** | `typing.Protocol` | 主表 CRUD + 发布证据 + 活跃指针；内存/PG 双实现，`USE_MEMORY_STORAGE=1` 回退 |
+| 编译产物 | `CompiledFlowArtifact` | **Value Object** | Pydantic `BaseModel` | view_name + view_sql（CREATE OR ALTER VIEW）+ 查询计划 + artifact_hash |
+| 查询计划步 | `CompileStep` | **Value Object** | Pydantic `BaseModel` | 每节点一步；Phase 2 画布预览与 Phase 3 消费契约对接载体 |
+| 编译失败 | `FlowCompileError` | — | `ValueError` 子类 | args[0] 为 FLOW_* 错误码；标识符注入/分叉拓扑/非 view 物化一律拒绝 |
+| 校验阻断 | `FlowPublishBlockedError` | — | `ValueError` 子类 | 携带完整 `FlowValidationReport`；API 映射 422 fail closed |
+| 语义版本锁 | `compute_semantic_revision()` | — | 纯函数 | 数据集/关系/指标口径/派生依赖锚点的 sha256，发布时与 artifact_hash 一并锁定 |
+| 视图部署端口 | `FlowViewDeployer` | **Port** | `typing.Protocol` | publish/rollback 先经它把 CREATE OR REPLACE VIEW 落 PG 落地库再动证据；部署失败抛异常（fail closed） |
+| 视图读取端口 | `FlowViewReader` | **Port** | `typing.Protocol` | 受控问数只读已部署视图的列投影通道；内存模式 fail-closed 拒读 |
+| 受控问数服务 | `FlowQueryService` | **Domain Service** | 无状态服务类 | 只消费 published 活跃版本；消费前重编译验 artifact_hash（T8）；指标 ⊆ consumer.consumes、维度 ⊆ 维度绑定白名单（T11）；勾稽门禁逐行评估 |
+| 受控问数结果 | `FlowQueryResult` | **Value Object** | Pydantic `BaseModel` | 数值 + 发布证据（revision_id/artifact_hash/view_name）+ 门禁评估三件套；恒等失败时 unavailable 且数值扣发 |
+| 门禁评估结果 | `FlowGateResult` | **Value Object** | Pydantic `BaseModel` | check_type + passed + detail；失败 detail 必须携带差异事实 |
+| 证据不一致 | `FlowArtifactMismatchError` | — | `FlowStateInvalidError` 子类 | 发布证据 artifact_hash 与定义重编译产物不一致（T8 篡改拦截）；API 409 `FLOW_ARTIFACT_MISMATCH` |
+| 消费白名单拒止 | `FlowConsumeMetricUnknownError` / `FlowConsumeDimensionForbiddenError` | — | `ValueError` 子类 | 请求指标不在 consumer.consumes / 请求维度不在维度绑定白名单（T11）；API 422 |
+| 消费歧义拒猜 | `FlowConsumeAmbiguousError` | — | `FlowStateInvalidError` 子类 | 指标码驱动解析（query_by_metrics）命中多个已发布消费契约，拒绝猜测；API 409 `FLOW_CONSUME_AMBIGUOUS` |
+
+#### 业务规则（Phase 0 冻结）
+
+1. 节点/算子/消费方均为白名单枚举，扩充必须过评审并同步本字典。
+2. 过滤与聚合引用的字段必须在 `SourceContract.fields` 内；数据集/join 关系必须已登记。
+3. `T_CureType` 过滤必须显式声明 `value_domain=MZ_CURE_TYPE`；med_type 是政策知识管线医疗类别维度，两域不混用（#62 签核结论）。
+4. 发布门禁 fail closed：口径句未签核、依赖未发布、图有环、越权字段任一存在即 blocking。
+5. 冻结错误码见 `models.py::FLOW_ERROR_CODES`，API 层按 `FLOW_*` 前缀映射 HTTP 状态。
+
+---
+
+### 14.7. 健康运营上下文（Ops Health）
+
+> 依据：issue #45 P0 + issue #50 生命周期 + issue #53 L1 自动修复 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
+> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）、「手动处置」（#50：ignore/reopen 流转 + 事件留痕）与「解决」（#53：L1 白名单自动修复 + 修复后强制验证闭环）已落地，诊断归后续分期。
+
+#### 文件位置
+
+`src/domain/ops/models.py`（领域模型）+ `src/runtime/ops/checkers.py`（检查器注册）+ `src/runtime/ops/remediation.py`（L1 修复白名单与执行器）+ `src/runtime/ops/service.py`（巡检编排与生命周期状态机）+ `src/data_platform/storage/ops/`（存储 ports/adapter 四件套）+ `src/runtime/api/ops_routes.py`（API）+ portal `/ops` 页（`src/apps/portal/app/ops/page.tsx` + `finding-detail-drawer.tsx` + `src/lib/ops-api.ts`）
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 资产健康问题 | `OpsFinding` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | 问题库单行；fingerprint 唯一，复现累计 occurrence_count，revision 乐观锁 |
+| 问题草稿 | `FindingDraft` | **Value Object** | Pydantic `BaseModel`（frozen） | 检查器单次产出、未落库；payload 只含脱敏安全字段 |
+| 问题指纹 | `finding_fingerprint()` | 值函数 | — | 去重键 `asset_type:asset_id:check_id`；同资产同检查项复现只累计 |
+| 受检资产类型 | `OpsAssetType` | **Value Object** | `StrEnum` | skill / knowledge / data / runtime 四域 |
+| 问题严重度 | `OpsSeverity` | **Value Object** | `StrEnum` | critical（立即处理）/ warning（排期）/ info（记录） |
+| 问题状态 | `OpsFindingStatus` | **Value Object** | `StrEnum` | open（#45 巡检产出）/ ignored（#50 忽略）/ resolved（#53 修复验证通过） |
+| 生命周期事件 | `OpsFindingEvent` | **Entity** | Pydantic `BaseModel`（frozen） | 一次 ignore/reopen/resolved/reopened 流转留痕（actor + 可选 reason + created_at），追加只增不改 |
+| 事件类型 | `OpsFindingEventType` | **Value Object** | `StrEnum` | ignored / reopened / resolved（#53 修复验证通过）/ reopened 复用（巡检发现已解决问题复发） |
+| 问题详情 | `OpsFindingDetail` | **DTO** | Pydantic `BaseModel` | finding 当前态 + events 时间线（升序）+ remediations 修复记录（升序），详情页/流转接口返回体 |
+| 检查器注册项 | `CheckSpec` | **Value Object** | frozen dataclass | 代码内注册（id/资产类型/描述/runner），不引入 YAML 配置系统 |
+| 检查器读取面 | `GovernanceStatusReader` | **Port** | `typing.Protocol` | 检查器对治理控制面的最小只读依赖（list_sources/get_job） |
+| 健康运营巡检服务 | `OpsHealthService` | **Domain Service** | — | 逐检查器只读取数→问题库去重落库；单检查器失败不中断整次巡检；承载 ignore/reopen/remediate 状态机 |
+| 巡检结果 | `OpsInspectionResult` | **DTO** | Pydantic `BaseModel` | checked_at / check_count / finding_count / findings / checker_errors |
+| 修复运行 | `OpsRemediationRun` | **Entity** | Pydantic `BaseModel`（frozen） | 一次修复尝试留痕：status 记动作执行、verification_result 记修复后验证（None=未验证）；追加只增不改 |
+| 修复风险级 | `RemediationRiskLevel` | **Value Object** | `StrEnum` | L1（白名单自动执行）/ L2（人工确认） |
+| 修复运行状态 | `RemediationRunStatus` | **Value Object** | `StrEnum` | succeeded（动作已执行）/ failed（动作未发起，after_evidence 携带原因） |
+| 验证结果 | `VerificationResult` | **Value Object** | `StrEnum` | passed（检查复跑通过→resolved）/ failed（复跑仍报问题→保持 open） |
+| 修复动作执行结果 | `RemediationActionOutcome` | **DTO** | Pydantic `BaseModel`（frozen） | 执行器返回体：executed + before/after 证据快照（脱敏字段） |
+| 修复白名单项 | `RemediationSpec` | **Value Object** | frozen dataclass | action_id ↔ check_id ↔ risk_level ↔ executor 的白名单注册；`default_remediation_whitelist()` 代码内注册 |
+| 修复执行器 | `RemediationExecutor` | **Port** | `typing.Protocol`（Callable） | `(OpsFinding, action_id) -> RemediationActionOutcome`；业务修复逻辑的唯一扩展点 |
+| 重试门诊同步 | `retry_data_sync` | 修复动作 | — | 本期唯一 L1 动作：复用 data_governance 同步入口重试失败/滞后的门诊同步任务 |
+
+#### 业务规则
+
+1. 检查器**只读**复用既有域状态数据（如 data_governance 连接探测、同步任务状态），不改其任何表。
+2. 滞后判定：应到未到超过 `max(2×调度间隔, 15 分钟)` 宽限才告警（`LAG_GRACE_FLOOR_MINUTES`）。
+3. payload 只允许 safe_* / 状态码 / 时间戳等脱敏字段，检查器取数侧负责不带出凭据与连接串。
+4. upsert 语义：首见插入 open/1 次；复现 occurrence_count+1、last_seen_at/severity/payload 刷新，status 与 diagnosis 不动（复现不复活已忽略问题；诊断归 P1）。
+5. 生命周期状态机（#50）：ignore 仅允许 open→ignored（reason 必填）；reopen 仅允许 ignored|resolved→open；非法流转抛 `InvalidFindingTransitionError`（API 409 `FINDING_TRANSITION_INVALID`）。
+6. 乐观锁：流转必须携带 `expected_revision`，与库内不一致抛 `FindingRevisionConflictError`（API 409 `FINDING_REVISION_CONFLICT`）；revision 随每次 upsert/流转递增。
+7. 事件留痕与状态更新同事务（storage `transition_finding` 单调用），事件追加只增不改，构成详情页时间线。
+8. API 鉴权：签名 JWT `ops:read`（GET）/ `ops:write`（POST /ops/inspections、ignore、reopen、remediate），与 data-governance 同模式。
+9. L1 白名单（#53）：只收录幂等、可重放、可验证的修复动作，本期仅 `data_sync_failed → retry_data_sync`；非白名单 check_id 的修复请求抛 `RemediationNotAllowedError`（API 409 `REMEDIATION_NOT_WHITELISTED`），portal 不展示修复按钮。
+10. 修复仅允许对 open 问题发起（同 ignore）；执行器先做动作、后强制重跑该问题的触发检查器（按 fingerprint 匹配草稿）：复跑通过→resolved（事件 reason 记 `L1 修复动作 xxx 验证通过`）；复跑仍报→upsert 复现（occurrence_count+1）保持 open；检查器异常→不判定验证结果，状态不动，`after_evidence.verification_error` 记原因。
+11. 修复运行留痕先于状态流转：动作未发起（如任务 paused/draft、同步任务不存在）记 `failed` 运行行且不触发验证，问题状态不动；`expected_revision` 乐观锁只约束 resolved 流转，冲突时运行行仍保留（动作幂等可重放）。
+12. 已解决问题复现：巡检 upsert 后自动 open（系统 actor `system:ops-inspector` 记 reopened 事件）；ignored 问题复现不复活（#50 规则）。
+
+---
+
+### 14.8. 数据目录上下文（Data Catalog）
+
+> 依据：issue #38。
+> 定位：三级资产（源表字段 dataset/field → 语义对象/指标 object/metric → 消费方 consumer=skill）的**只读聚合目录**——统一搜索、资产详情、血缘链与同步 SLA 看板；不新增任何存储表，全部数据来自既有注册中心/治理控制面/发现层/skill manifest 的运行时聚合。
+
+#### 文件位置
+
+`src/runtime/catalog/service.py`（`CatalogService` 编排 + `PgCatalogSyncReader` 活库适配 + DTO 全集）+ `src/runtime/api/catalog_routes.py`（API）+ portal `/catalog` 页（`src/apps/portal/app/catalog/page.tsx` + `asset-detail-drawer.tsx` + `src/lib/catalog-api.ts`）
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 数据目录服务 | `CatalogService` | **Domain Service** | — | 双端口只读编排：SemanticRegistry（语义资产）+ CatalogSyncReader（治理控制面）+ skill manifest 消费方；搜索/详情/血缘/SLA 四入口 |
+| 目录资产 | `CatalogAsset` | **DTO** | Pydantic `BaseModel` | 五类资产的统一投影（asset_type ∈ dataset/field/object/metric/consumer + asset_id + title/subtitle + matched_on 命中字段） |
+| 资产类型 | `CatalogAssetType` | **Value Object** | `Literal` | dataset / field / object / metric / consumer 五类（`ASSET_TYPES`） |
+| 资产详情 | `CatalogAssetDetail` | **DTO** | Pydantic `BaseModel` | asset + summary 摘要 KVs + 按类型可选分节（fields/metrics/datasets/consumers/batches/versions/value_mappings） |
+| 目录血缘 | `CatalogLineage` | **DTO** | Pydantic `BaseModel` | 血缘链投影：sources（数据源）→ batches（同步批次）→ datasets+fields（投影表/字段）→ metrics（指标）→ consumers + versions（消费方与语义版本） |
+| SLA 看板 | `CatalogSlaBoard` / `CatalogSourceSla` | **DTO** | Pydantic `BaseModel` | 每数据源：连接/任务状态、P95 与最近非空延迟、质量门、语义版本、近 10 次尝试统计、最近批次（真实行） |
+| 目录同步读取面 | `CatalogSyncReader` | **Port** | `typing.Protocol` | 目录对治理控制面的最小只读依赖（list_sources/get_job/get_sync_status/list_recent_batches/list_attempts）；`PgCatalogSyncReader` 为活库实现 |
+| 消费方 | `CatalogConsumerInfo` | **DTO** | Pydantic `BaseModel` | 从 `skills/*/skill_manifest.yaml` needed_objects 解析的 skill 级消费方（consumer_id=skill 目录名，consumed_objects/consumed_metrics） |
+
+#### 业务规则
+
+1. **只读聚合零新表**：目录不建任何存储表、无任何写端点；语义资产来自 SemanticRegistry、批次/SLA 来自治理控制面、字段描述/主键来自发现层（`table:column` 键）、消费方来自 skill manifest，均运行时聚合。
+2. 批次只挂接落地库数据集：仅 `datasource_id == "outpatient_postgres"`（`PROJECTION_DATASOURCE_ID`）的数据集展示同步批次与 SLA 延迟，外部源数据集不伪造批次。
+3. 指标↔数据集双向挂接：指标按 `object_code` 归属对象、按 `source_field` 三段式（datasource.table.column）精确触达字段级投影表；血缘字段取指标 source_field 引用的列。
+4. API 只读无鉴权（沿语义层 GET 先例）；五类资产类型用 `Literal` 参数自动 422，未知资产 404 `CATALOG_ASSET_NOT_FOUND`。
+
+---
+
+### 14.9. 语义指标政策承载（Metric Policy Carrier）
+
+> 依据：issue #35 follow-up / issue #60（切片①-③ 经 PR#61 落地：subkind/policy_carrier 字段 + A/B 两态发布门禁 + 快照携带；切片④ 本期补齐：policy_rule_ref 溯源 + 幽灵档拒绝 + 查询层生效期裁剪）。
+> 定位：政策口径类指标（结算法则/报销规则/目录待遇）在发布的指标定义上硬携带 文号/地域/生效期，保证可溯源、不二次漂移；承载单源在 zcgz 规则行（`policy_extractions`），指标只冗余。
+
+#### 文件位置
+
+`src/semantic_layer/models.py`（Metric.subkind/policy_carrier + ObjectVersionMetric 快照冻结）+ `src/semantic_layer/registry.py`（发布门禁 + `PolicyRuleReader` Port + `PgPolicyRuleReader`）+ `src/semantic_layer/query_planner.py`（`_assert_metric_in_force` 生效期裁剪）
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 政策承载 | `policy_carrier` | **Value Object** | Metric 上的 `dict` 字段 | `{doc_number, region_scope, effective_start, effective_end?, policy_rule_ref?}`；A 类发布硬卡组 |
+| 政策判别位 | `subkind` | **Value Object** | Metric 上的 `str` 字段 | `policy_rate`（A 报销/统筹/补差金额类）/ `policy_elig`（A 待遇资格/准入）/ None·空（B 运营事实类） |
+| 政策规则引用 | `policy_rule_ref` | **Value Object** | policy_carrier 键 | zcgz 规则行实体主键（`policy_extractions.extraction_id`），非 section/文号；单源在 zcgz，指标只冗余 |
+| 幽灵档 | — | 业务规则 | — | 引用的规则行已废止（archived）而承载缺 `effective_end` 的发布态：废止事实必须落到废止日，否则拒绝发布 |
+| 政策规则读取面 | `PolicyRuleReader` | **Port** | `typing.Protocol` | 发布门禁对 zcgz 规则行的只读溯源句柄 `get_rule(rule_ref)`（至少含 status）；None=不校验（存量兼容） |
+| PG 政策规则读取器 | `PgPolicyRuleReader` | **Adapter** | 普通 class | 同库窄列 SELECT（extraction_id/status）；不反向 import knowledge_extension，保持依赖方向 |
+| 生效期裁剪 | `_assert_metric_in_force` | 值函数 | — | 查询层按执行日对照生效区间：effective_start>今日 → 未生效拒查；effective_end<今日 → 已废止拒查；格式非法跳过 |
+
+#### 业务规则
+
+1. A/B 两态门禁（PR#61，验收#1）：subkind∈{policy_rate, policy_elig} 缺 doc_number/region_scope/effective_start 任一 → 发布拒绝并逐项指明；B 类（空/运营）不因未填 policy_carrier 被拒（验收#3 存量回归）。
+2. 溯源校验（#60 切片④，验收#4）：policy_rule_ref 非空（不分 A/B）→ 必须命中同库 zcgz 规则行；引用不存在 → 拒绝发布并指明引用值；仅在注入 `PolicyRuleReader` 时生效（生产 `get_semantic_registry()` 注入，内存注册表/存量构造路径不受影响）。
+3. 幽灵档拒绝（#60 切片④，验收#2）：引用行 status=archived（已废止）而承载缺 effective_end → 拒绝并指向废止事实；补齐废止日或引用现行行（end=null=现行）合法。
+4. 查询层生效期裁剪（规格「查询层不得用已废止时段值」）：`_resolve_metrics` 对带承载指标按查询执行日裁剪，已废止/未生效指标不可进入任何查询；日期格式非法时跳过（发布门禁负责硬卡，查询层不因脏数据阻断）。
+5. 快照一致性（验收#5，PR#61）：policy_carrier + subkind 随 BusinessObjectVersion 发布冻结（`ObjectVersionMetric.from_metric` 深拷贝），回滚=版本指针恢复旧快照。
+
+---
+
+### 14.10. 数据供给分档（Data Supply）
+
+> 依据：issue #27。定位：语义层（需求侧）定跨院不变的视图/字段/值域标准，供给侧按院区分档实现；平台只通过 `DataSupplyConnectionPort` 取只读连接，不感知分档细节。规范文档：`docs/steering/数据接入规范.md`。
+
+#### 文件位置
+
+`src/adapters/ports/data_supply.py`（端口）+ `src/adapters/data_supply/sqlserver_direct.py`（一档适配器）+ 组合根 `src/runtime/policy_qa/settlement_data_provider.py`（注入 `connect_fn`，连接能力来自 `SemanticDataSource.open_connection`）
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 数据供给连接端口 | `DataSupplyConnectionPort` | **Port** | `runtime_checkable Protocol` | `connect(datasource_id) -> Any` 只读 PEP 249 连接契约；供给侧不可用抛 `RuntimeError` |
+| SQL Server 直连供给适配器 | `SqlServerDirectSupplyAdapter` | **Adapter** | 普通 class | 一档实现：CDR 只读视图直连，构造注入 `connect_fn`，禁止反向 import runtime |
+
+#### 业务规则
+
+1. 三档供给：一档 CDR 只读视图直连（SQL Server）；二档厂商 API/中间件同步（门诊 PG 同步即此形态）；三档医保局代理暂缓——档位差异被端口吸收，语义层与查询服务不感知。
+2. 适配器只接受注入的 `connect_fn`，组合根在 `SemanticSettlementDataProvider`；adapters 包不得反向 import `src.runtime`（防腐层依赖方向）。
+3. 供给侧四承诺：只读、可审计、单条低频查询、码值稳定；需求侧标准（视图/字段/值域）以 `docs/steering/数据接入规范.md` 为单源，跨院不变。
+4. `SemanticDataSource.open_connection` 是 provider 历史回退链的公开化（注册数据源→发现层最近扫描→env 配置），区别于严格模式的 `connect_datasource`。
+
+---
+
+### 14.11. 可信问题库（Trusted Question Library）
+
+> 依据：issue #37、设计文档 §14.1。定位：高频问法沉淀为「标准问题 + 同义表达 + 绑定查询计划」的可信条目，人工审核后发布；生产问数优先确定性匹配可信问题执行，不确定降级候选澄清，**绝不猜测执行**。「文本一致 + 计划人工审核」是结果 100% 正确的机制保证。
+
+#### 文件位置
+
+`src/domain/question_library/models.py`（领域模型）+ `src/runtime/question_library/matcher.py`（匹配引擎）+ `src/runtime/question_library/service.py`（领域服务）+ 存储 `src/data_platform/storage/question_library/`（ports / in_memory / postgres / factory）+ API `src/runtime/api/question_library_routes.py` + portal `src/apps/portal/app/question-library/page.tsx`
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 可信问题 | `TrustedQuestion` | **Aggregate Root** | Pydantic BaseModel | 聚合根：标准问题/同义/适用角色/指标/维度/时间口径/筛选/查询计划/允许下钻/预期结果/审核人/版本；`tq_` 前缀 ID |
+| 可信问题草稿 | `TrustedQuestionDraft` | **Entity** | Pydantic BaseModel | 创建载荷；model_validator 校验 metadata 镜像 query_plan（object_code/metrics/group_by 三一致） |
+| 可信问题状态 | `TrustedQuestionStatus` | **Value Object** | StrEnum | draft → published（审核通过 version+1 记审核人）/ archived（驳回或归档）；不可逆出 draft |
+| 问题匹配引擎 | `QuestionMatcher` | **Domain Service** | 普通 class | 命中=归一化文本与标准问题或任一同义**完全相等**；否则 bigram Jaccard 澄清候选（≥0.35，最多 5 个） |
+| 问题匹配结果 | `QuestionMatchOutcome` | **Value Object** | Pydantic BaseModel | hit（question + matched_text）/ clarify（candidates + resolved）；`QuestionMatchCandidate` 带 score |
+| 问题匹配事件 | `QuestionMatchEvent` | **Entity** | Pydantic BaseModel | append-only 留痕：每次 match（hit/clarify）与 resolve（selected）；`qme_` 前缀 ID |
+| 问题文本归一化 | `normalize_question_text` | — | 函数 | NFKC + 小写 + 剥 `[\W_]+`（标点/空白）；唯一性与命中判定统一口径 |
+| 同义冲突异常 | `QuestionSynonymConflictError` | — | Exception | 新文本归一化后已被其他非归档问题占用，报持有 `question_id` |
+| 可信问题存储端口 | `TrustedQuestionStorage` | **Port** | Protocol | insert/get/list/list_published/update(乐观锁)/list_texts/事件读写/计数 |
+| 冷启动候选 | `ColdStartCandidate` | **Value Object** | Pydantic BaseModel | tasks 表 policy_qa 历史问法频次聚合，排除已被覆盖的归一化文本 |
+
+#### 业务规则
+
+1. **只有归一化完全相等才命中自动执行**（标准问题或任一同义）；模糊相似度再高也只产生澄清候选，由用户选择后执行——不确定不执行是硬约束。
+2. 草稿创建时绑定查询计划必须经 `SemanticQueryPlanner` dry-run 校验可编译，metadata（object_code/metrics/dimensions）必须与 query_plan 一致，防止展示与执行两张皮。
+3. 状态机：draft →（review approve）published（version+1、reviewer 记录）/ draft →（review reject 或 archive）archived；只有 published 可被匹配命中与执行。
+4. 全库归一化文本唯一（跨非归档问题的标准问题与同义）：`list_texts` 建归一化→持有者索引，冲突即拒，保证匹配命中唯一不歧义。
+5. 执行走存储的 query_plan **逐字**交给 `SemanticQueryService`（与结算问数同通道同数据源），并先按 `applies_to_roles` 角色门禁（空角色=全员）。
+6. 每次匹配都落 `question_match_events`（含澄清时用户最终选择的 selected 事件），澄清事件在 portal 一键采纳为已发布问题的同义——「越问越准」闭环的数据底座。
+7. 更新走乐观锁：`expected_revision` 比较-交换，存储将 revision 置 expected+1，过期即 `QuestionRevisionConflictError`（HTTP 409）。
+
+---
+
+### 14.12. 门诊运营分析（Ops Analytics）
+
+> 依据：issue #40、docs/superpowers/plans/2026-08-27-outpatient-p0-data-contract.md Task 5、docs/reviews/2026-08-27-outpatient-data-contract-review.md（P3 冻结语义）。定位：六指标 × 五维度的受控问数仪表盘 + 行级下钻 + 周报运营指导；有界确定性聚合，结论可溯源到指标批次。
+
+#### 文件位置
+
+`src/domain/ops_analytics/models.py`（领域模型）+ `src/runtime/ops_analytics/service.py`（领域服务）+ API `src/runtime/api/ops_analytics_routes.py` + portal `src/apps/portal/app/ops-analytics/page.tsx`
+
+#### 通用语言字典
+
+| 英文命名 | 中文术语 | DDD 分类 | 说明 |
+|---------|---------|---------|------|
+| `OpsResultStatus` | 运营结果状态 | Value Object | `complete` / `partial` / `unavailable`，冻结契约三态 |
+| `OpsMetricCard` | 指标卡 | Value Object | 单指标值 + result_status + halt_reason/halt_detail，值与不可用原因二选一 |
+| `OpsOverview` | 指标总览 | Value Object | 六指标卡集合 + 数据范围 + 指标批次（data_batch_ids） |
+| `OpsAnalyticsDimension` | 分析维度 | Value Object | `fund_type` / `cure_type` / `settle_state` / `department`（五维度中受支持的拆分键） |
+| `OpsDimensionItem` | 维度拆分项 | Value Object | 码 + 中文标签 + 四指标值 + 笔数占比 |
+| `OpsTrendPoint` | 月度趋势点 | Value Object | YYYY-MM 桶 + 四指标值 |
+| `OpsDrillRow` | 就诊下钻行 | Value Object | T_TradeNo 粒度就诊明细，行携带 data_batch_id 指标批次溯源 |
+| `OpsWeekDelta` | 周环比 | Value Object | 单指标本周/上周值 + delta/pct/direction；除零时 pct=None 不猜 |
+| `OpsConclusion` | 周报结论 | Value Object | 文本 + citations（metric_definition 口径 / metric_batch 指标批次） |
+| `OpsWeeklyReport` | 运营周报 | Value Object | 四指标环比 + 结论 + AI 摘要（可降级）+ uncertainties |
+| `OpsAnalyticsService` | 门诊运营分析服务 | Domain Service | 有界确定性聚合；读取面 Protocol 注入（PostgreSQLClient 同形） |
+
+#### 业务规则
+
+1. **口径唯一真源**：聚合 WHERE 谓词逐字取自 `docs/processing/outpatient_processed_view.sql`（口径句 v4，已签核），服务不重新发明口径；活库冒烟与 `v_op_outpatient_processed` 四指标对账。
+2. **诚实不可用**：就诊人次 / 次均费用 / 科室维度保持 `unavailable`（halt_reason=`data_unavailable`，HIS 就诊关联是 P1 必需输入、禁止跨源临时 JOIN），绝不估算；每个结果恰好一个 halt_reason。
+3. **有界确定性**：只执行常量 SQL 模板 + 参数化过滤（维度列、日期、分页白名单），禁止任意 SQL 拼接；读取面经 Protocol 注入。
+4. **结论可溯源**：所有结果携带 `data_batch_ids`（mz_trade.data_batch_id 指标批次）；周报每条结论的 citations 同时引用指标口径（metric_definition）与指标批次（metric_batch）。
+5. **AI 摘要有界**：模型调用走 `ModelGateway` 统一入口（scene=`ops_weekly_summary`），prompt 仅含已计算数值结论并禁止引入未给出的数字；模型未配置或失败时诚实降级（summary=None + uncertainties），不返回假数据。
+
+---
+
+
 ### 15. AI 编程工作流契约
 
 #### 契约 1：先查后写
@@ -1054,6 +1329,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Citation` | 引用来源 | Shared / Knowledge | Value Object |
 | `ClosureTask` | 闭环任务 | TaskClosure | Entity |
 | `Coding` | 编码信息 | MedicalRecord | Value Object |
+| `ColdStartCandidate` | 冷启动候选 | QuestionLibrary | Value Object |
+| `CheckSpec` | 检查器注册项 | OpsHealth | Value Object |
 | `CommonInputSpec` | 公共输入 | SkillTool | Value Object |
 | `ComplianceScore` | 合规评分 | AuditRisk | Value Object |
 | `ConflictDiagnosis` | 冲突诊断 | Knowledge | Value Object |
@@ -1062,10 +1339,19 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `CompileStep` | 编译步骤 | Knowledge | Entity |
 | `Consumable` | 耗材 | OrderFee | Value Object |
 | `CanonicalRule` | 规范规则 | Knowledge | Entity |
+| `CatalogAsset` | 目录资产 | DataCatalog | DTO |
+| `CatalogAssetDetail` | 资产详情 | DataCatalog | DTO |
+| `CatalogAssetType` | 资产类型 | DataCatalog | Value Object |
+| `CatalogConsumerInfo` | 消费方 | DataCatalog | DTO |
+| `CatalogLineage` | 目录血缘 | DataCatalog | DTO |
+| `CatalogService` | 数据目录服务 | DataCatalog | Domain Service |
+| `CatalogSlaBoard` / `CatalogSourceSla` | SLA 看板 | DataCatalog | DTO |
+| `CatalogSyncReader` | 目录同步读取面 | DataCatalog | Port |
 | `ContextComposer` | 上下文编排器 | Runtime | Domain Service |
 | `ContextNeed` | 上下文需求 | Runtime | Value Object |
 | `ContextPlanner` | 上下文规划器 | Runtime | Domain Service |
 | `DataQualityStatus` | 数据质量状态 | Shared | Value Object |
+| `DataSupplyConnectionPort` | 数据供给连接端口 | Adapters | Port |
 | `DenialRecord` | 拒付记录 | Appeal | Entity |
 | `DesensitizationService` | 脱敏服务 | Security | Domain Service |
 | `Diagnosis` | 诊断记录 | MedicalRecord | Entity |
@@ -1083,6 +1369,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ExecutionProfileSpec` | 执行场景 | SkillTool | Value Object |
 | `FeeItem` | 费用明细 | OrderFee | Entity |
 | `FailureAttribution` | 评测失败归因 | SkillTool | Value Object |
+| `FindingDraft` | 问题草稿 | OpsHealth | Value Object |
+| `FlowDefinition` | 治理数据流 | GovernedFlow | Aggregate Root |
+| `FlowEdge` | 流边 | GovernedFlow | Value Object |
+| `FlowFilterCondition` | 过滤条件 | GovernedFlow | Value Object |
+| `FlowNode` | 流节点 | GovernedFlow | Entity |
+| `FlowPublishedRevision` | 流发布修订 | GovernedFlow | Entity |
+| `FlowStatus` | 流状态 | GovernedFlow | Value Object |
+| `GovernanceStatusReader` | 检查器读取面 | OpsHealth | Port |
 | `HisPort` | HIS 适配器端口 | Patient | Domain Service |
 | `Hypothesis` | 推理假设 | Runtime | Entity |
 | `InsuranceInterfacePort` | 医保接口适配器端口 | Insurance | Domain Service |
@@ -1094,6 +1388,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `KnowledgeExtensionStatus` | 知识扩展状态 | Knowledge | Value Object |
 | `LLMContext` | LLM 上下文 | Runtime | DTO |
 | `MetricInputSpec` | 业务指标输入 | SkillTool | Value Object |
+| `MetricOutputBinding` | 指标输出绑定 | GovernedFlow | Value Object |
 | `McpCapability` | MCP 能力 | SkillTool | Entity |
 | `McpRiskLevel` | MCP 风险等级 | SkillTool | Value Object |
 | `McpServer` | MCP 服务器 | SkillTool | Entity |
@@ -1108,6 +1403,28 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ModelGateway` | 模型网关 | ModelService | Domain Service |
 | `ModelRequest` | 模型请求 | ModelService | DTO |
 | `ModelResponse` | 模型响应 | ModelService | DTO |
+| `OpsAssetType` | 受检资产类型 | OpsHealth | Value Object |
+| `OpsFinding` | 资产健康问题 | OpsHealth | Aggregate Root |
+| `OpsFindingDetail` | 问题详情 | OpsHealth | DTO |
+| `OpsFindingEvent` | 生命周期事件 | OpsHealth | Entity |
+| `OpsFindingEventType` | 事件类型 | OpsHealth | Value Object |
+| `OpsFindingPage` | 问题分页结果 | OpsHealth | DTO |
+| `OpsFindingStatus` | 问题状态 | OpsHealth | Value Object |
+| `OpsHealthService` | 健康运营巡检服务 | OpsHealth | Domain Service |
+| `OpsInspectionResult` | 巡检结果 | OpsHealth | DTO |
+| `OpsRemediationRun` | 修复运行 | OpsHealth | Entity |
+| `OpsSeverity` | 问题严重度 | OpsHealth | Value Object |
+| `OpsAnalyticsDimension` | 分析维度 | OpsAnalytics | Value Object |
+| `OpsAnalyticsService` | 门诊运营分析服务 | OpsAnalytics | Domain Service |
+| `OpsConclusion` | 周报结论 | OpsAnalytics | Value Object |
+| `OpsDimensionItem` | 维度拆分项 | OpsAnalytics | Value Object |
+| `OpsDrillRow` | 就诊下钻行 | OpsAnalytics | Value Object |
+| `OpsMetricCard` | 指标卡 | OpsAnalytics | Value Object |
+| `OpsOverview` | 指标总览 | OpsAnalytics | Value Object |
+| `OpsResultStatus` | 运营结果状态 | OpsAnalytics | Value Object |
+| `OpsTrendPoint` | 月度趋势点 | OpsAnalytics | Value Object |
+| `OpsWeekDelta` | 周环比 | OpsAnalytics | Value Object |
+| `OpsWeeklyReport` | 运营周报 | OpsAnalytics | Value Object |
 | `Order` | 医嘱 | OrderFee | Aggregate Root |
 | `OutpatientPartialPreRefundAnalysis` | 门诊部分项目预退费分析 | Insurance | Domain Service |
 | `Patient` | 患者 | Patient | Entity |
@@ -1115,21 +1432,36 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `PartialRefundItemRequest` | 拟退项目 | Insurance | Value Object |
 | `PartialRefundPreview` | 预结算结果 | Insurance | Value Object |
 | `PolicyExpression` | 政策表达式 | Knowledge | Value Object |
+| `PolicyCarrier` | 政策载体 | GovernedFlow | Value Object |
+| `PolicyRuleReader` | 政策规则读取面 | SemanticLayer | Port |
+| `PgPolicyRuleReader` | PG 政策规则读取器 | SemanticLayer | Adapter |
 | `PolicyFact` | 政策事实 | Knowledge | Value Object |
 | `PreAuditPort` | 事前审核适配器端口 | AuditRisk | Domain Service |
 | `ProfitLoss` | 盈亏分析 | DrgDip | Value Object |
 | `PromptTemplate` | 提示模板 | Knowledge | Entity |
+| `QuestionMatchCandidate` | 问题匹配候选 | QuestionLibrary | Value Object |
+| `QuestionMatchEvent` | 问题匹配事件 | QuestionLibrary | Entity |
+| `QuestionMatcher` | 问题匹配引擎 | QuestionLibrary | Domain Service |
+| `QuestionMatchOutcome` | 问题匹配结果 | QuestionLibrary | Value Object |
+| `QuestionSynonymConflictError` | 同义冲突异常 | QuestionLibrary | Exception |
 | `RAGPipeline` | RAG 管线 | Knowledge | Domain Service |
 | `ReasoningState` | 推理状态 | Runtime | Entity |
 | `ReasoningStateManager` | 推理状态管理器 | Runtime | Domain Service |
 | `ReasoningStep` | 推理步骤 | Runtime | Entity |
 | `ReasoningStep.kind` | 推理步骤类型 | Runtime | Value Object |
+| `RemediationActionOutcome` | 修复动作执行结果 | OpsHealth | DTO |
+| `RemediationExecutor` | 修复执行器 | OpsHealth | Port |
+| `RemediationRiskLevel` | 修复风险级 | OpsHealth | Value Object |
+| `RemediationRunStatus` | 修复运行状态 | OpsHealth | Value Object |
+| `RemediationSpec` | 修复白名单项 | OpsHealth | Value Object |
 | `RiskControlService` | 风控服务 | Security | Domain Service |
 | `RiskFlag` | 风险标记 | AuditRisk | Entity |
 | `Role` | 角色 | Shared | Value Object |
 | `RuleExplanation` | 规则解释 | Knowledge | Entity |
 | `RuleHit` | 规则命中 | AuditRisk | Value Object |
 | `RuntimeTask` | 运行时任务 | Shared | DTO |
+| `SqlServerDirectSupplyAdapter` | SQL Server 直连供给适配器 | Adapters | Adapter |
+| `SourceContract` | 来源契约 | GovernedFlow | Value Object |
 | `Skill` | 技能 | SkillTool | Aggregate Root |
 | `SkillAIGenerationResponse` | AI 生成提案 | SkillTool | DTO |
 | `SkillCandidateArtifact` | Skill 候选制品 | SkillTool | Value Object |
@@ -1154,9 +1486,11 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ToolOwner` | 技能拥有者 | SkillTool | Value Object |
 | `TrajectoryPrefix` | 评测轨迹接力点 | SkillTool | Value Object |
 | `Treatment` | 诊疗项目 | OrderFee | Value Object |
-| `TrustedQuestion` | 可信问题 | TrustedQA | Entity |
-| `TrustedQuestionStatus` | 可信问题状态 | TrustedQA | Value Object |
-| `TrustedQuestionSynonym` | 同义表达 | TrustedQA | Value Object |
+| `TrustedQuestion` | 可信问题 | QuestionLibrary | Aggregate Root |
+| `TrustedQuestionDraft` | 可信问题草稿 | QuestionLibrary | Entity |
+| `TrustedQuestionStatus` | 可信问题状态 | QuestionLibrary | Value Object |
+| `TrustedQuestionStorage` | 可信问题存储端口 | QuestionLibrary | Port |
+| `VerificationResult` | 验证结果 | OpsHealth | Value Object |
 | `VisibilityScope` | 可见性范围 | Knowledge | Value Object |
 | `ValidationIssue` | 校验问题 | Knowledge | Value Object |
 

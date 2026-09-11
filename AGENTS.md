@@ -47,11 +47,11 @@ Agent 编码时根据以下映射定位代码位置：
 
 | 目录 | 职责 | 当前状态 |
 |------|------|----------|
-| `runtime/` | Agent 核心运行时：Policy QA API、会话上下文、结算/政策检索、确定性验证、有界恢复、任务闭环、事件日志及 Skill 管理 | 已实现（`api/policy_qa_routes.py`、`policy_qa/`、context/memory/reasoning/task_closure/skill_management） |
+| `runtime/` | Agent 核心运行时：Policy QA API、会话上下文、结算/政策检索、确定性验证、有界恢复、任务闭环、事件日志及 Skill 管理；可信问题库（#37 确定性匹配+澄清降级）；门诊运营分析（#40 受控问数/下钻/周报） | 已实现（`api/policy_qa_routes.py`、`policy_qa/`、question_library、ops_analytics、context/memory/reasoning/task_closure/skill_management） |
 | `model_service/` | 模型服务网关：统一调用入口、路由策略、OpenAI 兼容 Provider、流式生成、异常分类、模型配置管理、Provider 管理 | 已实现（gateway/router/providers/openai_compatible/exceptions/models/ports） |
 | `knowledge_extension/` | 知识与扩展：规则解释（含 Milvus 政策检索+SQL Server 数据源）、MCP 注册中心、扩展注册 | 已实现（common/extension_registry/mcp_registry/rule_explanation + policy_retrieval 含 Milvus/SQLServer/语义映射） |
-| `adapters/` | 外部系统防腐层：医保接口、事前审核、DRG/DIP、HIS、EMR、病案、收费 | 7 个内存适配器 + base 基类（models/service）+ ports 端口定义均已实现 |
-| `data_platform/` | DaaS 数据底座：数据访问、存储端口、缓存（含 Redis）、持久化（含 PostgreSQL 方言/迁移/执行器）、Skill/MCP/向量存储 | 已实现（data_access/cache/persistence/storage 含 skill/mcp/postgresql/vector 子目录） |
+| `adapters/` | 外部系统防腐层：医保接口、事前审核、DRG/DIP、HIS、EMR、病案、收费、数据供给（#27 分档接入，`DataSupplyConnectionPort` + 一档 SQL Server 直连） | 7 个内存适配器 + base 基类（models/service）+ ports 端口定义均已实现；数据供给见 `docs/steering/数据接入规范.md` |
+| `data_platform/` | DaaS 数据底座：数据访问、存储端口、缓存（含 Redis）、持久化（含 PostgreSQL 方言/迁移/执行器）、Skill/MCP/向量存储 | 已实现（data_access/cache/persistence/storage 含 skill/mcp/postgresql/vector/ops/question_library 子目录） |
 | `domain/` | 领域模型：患者、医保、费用、审核风险、DRG/DIP、病案、任务、申诉、医嘱费用、技能 | 已实现（patient/insurance/task/common/drg_dip/medical_record/audit_risk/appeal/order_fee/skill） |
 | `security/` | 安全围栏：权限、脱敏、风险控制、审计（含 PostgreSQL 持久化） | 已实现（authorization/desensitization/risk_control/audit 含 postgresql_store） |
 | `config/` | 全局配置：安全策略、适配器配置、模型路由、模型服务、MCP 配置 | 已实现（security_policy/adapters/model_routing/model_service/mcp） |
@@ -59,7 +59,7 @@ Agent 编码时根据以下映射定位代码位置：
 | `shared/` | 共享基础：异常模型、响应契约、Schema 契约、技能加载器/注册表 | 已实现（exceptions/schemas/skills） |
 | `gateway/` | 统一接入网关：API网关、渠道识别、认证鉴权、租户隔离、限流熔断、请求安全校验、接入日志 | 已实现（api_gateway/channel/auth/tenant/rate_limiter/request_guard/access_log） |
 | `interaction/` | 多模态交互层：Chat对话、文件上传、语音交互、页面上下文、消息提醒、知识上传 | 已实现（chat/file/voice/page_context/notification/knowledge_upload） |
-| `apps/` | SaaS 应用入口层：Next.js 16 Portal；`/policy-qa` 是唯一业务入口，其余页面是治理与支撑工作台 | 已实现（policy-qa/semantic-layer/policy-knowledge/skills/model-governance/qa-history） |
+| `apps/` | SaaS 应用入口层：Next.js 16 Portal；`/policy-qa` 是唯一业务入口，其余页面是治理与支撑工作台 | 已实现（policy-qa/semantic-layer/policy-knowledge/skills/model-governance/qa-history/data-governance/catalog/flow/ops/ops-analytics/question-library） |
 | `skills/` | Skill 驱动架构：自包含的医保业务能力包（费用解释、起付线、大额自付等），通过 YAML 配置 + Python assembler 实现声明式业务逻辑。每个 Skill 通过 `business_action` + `business_object` 挂载到平台七类业务动作 | 已实现（settlement_explain_skill/ 含 SKILL.md + schemas + templates + scripts，已声明 `explain` + `settlement`） |
 | `src/skill_infra/` | Skill 基础设施：动态加载器（SkillLoader）、关键词路由器（SkillRouter），自动扫描 skills/ 目录发现和加载 skill 包 | 已实现（skill_loader.py, skill_router.py） |
 | `src/domain/common/actions.py` | Business Action 枚举：平台最高层业务分类（七类动作 + 十类对象 + 能力矩阵白名单） | 已实现（BusinessAction, BusinessObject, VALID_ACTION_OBJECT_PAIRS） |
@@ -208,6 +208,8 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - `delete_skill_draft` 端点需要 `?expected_revision=N` 查询参数，返回 200（非 204）
 - `materialize` 端点成功返回 201，未校验草稿物化返回 409（`SKILL_MATERIALIZE_FAILED`）
 - 前端 `@/app/...` 路径在 Vitest 中无法解析，组件测试改用相对路径 `../../app/...`；`@/lib/...` 和 `@/components/...` 正常工作
+- Next 16 动态路由页用 react 的 `use(params)` 取参数会 suspend，Vitest jsdom 下渲染为空并报 "component suspended inside an act scope"。测试需 mock react 的 `use`：promise 入参同步返回 ROUTE_PARAMS、其余透传 `actual.use`（skill-detail-page / flow-editor-page 测试既有模式）。
+- 删除/改名路由后 `tsc --noEmit` 报 `.next/types/...` 引用已删页面（如 `Cannot find module '../../app/xxx/page.js'` 或 `Type 'Route' does not satisfy the constraint 'LayoutRoutes'`）。这是残留的生成产物，删掉过期的 `.next/types`、`.next-3000`、`.next-3001` 等目录再跑即可，不要去改业务代码。
 - pytest_asyncio 旧版本与 pytest 9 不兼容（启动报 `ImportError: cannot import name 'FixtureDef' from 'pytest'`）。当前锁定的 pytest-asyncio 1.4.0 与 pytest 9.0.3 已兼容，**不要**加 `-p no:asyncio`（会禁用 async 测试导致 test_policy_qa 等 4 个用例失败）。若升级 pytest 后重现 ImportError，再升级 pytest-asyncio 或加该 flag。
 - 构建索引/质量检查连不上 PostgreSQL/Milvus：服务在 WSL2 Docker 内，Windows 侧 `127.0.0.1` 不通（WSL2 NAT 默认不转发），报 `ConnectionTimeout`。在 `C:\Users\<用户>\.wslconfig` 加 `[wsl2] networkingMode=mirrored` 后 `wsl --shutdown` 重启，`127.0.0.1` 直通 WSL 容器；临时方案用 `wsl -e hostname -I` 拿 WSL IP 设 `POSTGRES_HOST`/`MILVUS_HOST`（IP 重启会变，不推荐持久）。
 - `production.py` 的 `POSTGRES_PASSWORD` 默认曾为空，连库报 `fe_sendauth: no password supplied`。已改默认 `'postgres'`（与 AGENTS.md、docker-compose 一致）；若遇认证失败先检查该环境变量是否被显式设为空。
@@ -219,8 +221,13 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - Postgres 表加列只在 `CREATE TABLE` 写、漏配 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，旧库因 `CREATE TABLE IF NOT EXISTS` 不重建导致 INSERT 报 `UndefinedColumn` 500（发起评测曾因 `regression_results`/`regression_summary` 漏配 ALTER 而崩）。模型加字段必须 CREATE + ALTER 双写；防回归测试 `test_skill_eval_runs_insert_columns_covered_by_ddl` 校验 INSERT 列 ⊆ DDL 列。
 - Milvus release 产物集合（`policy_rules_REL_*`）的适用性字段（region/effective_date/publish_status/amount_band_min/max 等）是 dynamic key，`describe_collection` 的固定字段列表看不到；只读 describe 结果做字段存在性检查会让过滤被**静默跳过**且无任何报错（Issue #33 实测生产适用性过滤从未生效）。判字段必须同时检查 `enable_dynamic_field`，为真时并入 `structured_policy_retriever._KNOWN_DYNAMIC_FILTERABLE_FIELDS`；dynamic key 可按名进 expr 过滤和 output_fields 取回。
 - 多检出目录的 outpatient sync worker 共享同一 PostgreSQL 时互相抢任务：后启动方 bootstrap 用本目录主密钥重封共享凭据，旧 worker 认领后解封即失败并把任务打成 `failed`，且其 `fail_job` 覆盖 `active_attempt_id` 导致另一 worker 已成功批次被孤儿化（任务行丢失成功状态）。排查用 `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*sync_worker*' }`，杀掉非本工作区 PID；启动同步前先确认单 worker；认领护栏 `active_attempt_id IS NULL` 已入回归测试。
-- 可信问题库（Issue #37）禁止从政策问答历史（`policy_qa_trajectories`）冷启动挖掘：那是结算单解释类问题，与受控问数场景问题类型错位且天然无 `query_plan`，入库即死数据（命中只回 `no_plan`）。approve 已加闸门（pending_review→active 必须绑定合法 `SemanticQuery` 快照，400 `QUERY_PLAN_REQUIRED`/`QUERY_PLAN_INVALID`）；正确沉淀路径是问数工作台 `/semantic-layer/query` 执行验证后"存为可信问题草稿"。存量错位草稿用 `scripts/cleanup_trusted_question_seeds.py` 清理。
+- 可信问题库（Issue #37）禁止从政策问答历史（`policy_qa_trajectories`）冷启动挖掘：那是结算单解释类问题，与受控问数场景问题类型错位且天然无 `query_plan`，入库即死数据。草稿创建必须绑定经 `SemanticQueryPlanner` 干跑验证的合法查询计划快照（`question_library` 服务内强校验，422 `QUESTION_DRAFT_INVALID`）；正确沉淀路径是问数工作台 `/semantic-layer/query` 执行验证后“存为可信问题草稿”。
 
+- PG 落地视图（mz_trade/mz_fee_item）列名保留大小写（AS "T_TradeNo"），SQL 裸引用被 PG 折叠小写报 `column "t_tradeno" does not exist`，必须双引号包裹（编译器 _identifier 已统一引号化）。且 `CREATE OR REPLACE VIEW` 不能改既有视图列类型（`cannot change data type of view column ... from text to numeric`），改列类型（如状态码列 text→numeric）须 DROP 重建走迁移，勿直接改 outpatient_store 的 `_TRADE_NUMERIC_FIELDS` 期望幂等生效（活库已实测报错）。
+- PostgreSQLClient.execute 直接执行含 `%` 的 SQL（如 `LIKE 'v_flow_%'`）报 psycopg `only '%s', '%b', '%t' are allowed as placeholders`。`%` 是 psycopg 占位符前缀；改用 `position('xxx' in col)=1` 或 `%%` 转义，勿把含 `%` 的 DDL/查询当无参 SQL 直传。
+- 活库注册中心的 mz_trade/mz_fee_item 数据集映射若仍是 §9 裁决前旧登记（`schema=dbo, table=o_Trade`），flow 发布会 live 500（`relation "dbo.o_Trade" does not exist`）。`ensure_outpatient_query_model` 遇旧名即跳过不会自愈；必须显式执行官方迁移 `switch_outpatient_query_model_to_postgres(store)`（→ `public.mz_trade` + datasource `outpatient_postgres`），§9 后新环境同理。
+- 部分唯一索引（`CREATE UNIQUE INDEX ... WHERE is_active`）上执行单条多行翻转 UPDATE（`SET is_active = (revision_id = %s)`）报 `UniqueViolation: uq_governed_flow_active_revision`——PG 非可延迟索引逐行检查，目标行先翻 TRUE 而旧行仍 TRUE 即瞬态重复。必须拆「先撤旧值、再启目标」两条语句（`flow_postgres.set_active_revision` 已修，pg_smoke 回归）。
+- 本克隆 `git stash list` 存有他人旧 stash（issue-20 时期）。`git stash push` 参数写错（如 `-- src/ -q` 中 `-q` 被当 pathspec）会静默失败，随后 `git stash pop` 弹出他人 stash 污染工作区（UU 冲突 + untracked 泄入）。pop 前必须 `git stash list` 确认栈顶；甄别预存失败用 `git worktree add` 干净检出复跑，不用 stash。
 ### 陷阱模板
 
 新增陷阱按以下格式写入，禁止自由格式：

@@ -62,7 +62,7 @@ function installFetch() {
     if (metricObject) return response(METRICS[metricObject])
     if (url.includes('/metrics/total_amount')) return response({ ...METRICS.inpatient_settlement[0], fact_field_code: 'registration.total_amount', expression: null })
     if (url.includes('/metrics/second_amount')) return response({ ...METRICS.second_queryable[0], fact_field_code: 'second_data.amount', expression: null })
-    if (url.endsWith('/trusted-questions')) {
+    if (url.endsWith('/question-library/questions')) {
       return new Response(JSON.stringify({ question_id: 'tq_new', status: 'draft' }), {
         status: 201,
         headers: { 'Content-Type': 'application/json' },
@@ -126,7 +126,7 @@ describe('SemanticQueryPage', () => {
     )
   })
 
-  it('执行验证成功后可存为可信问题草稿，提交体携带 query_plan 与 metric_codes', async () => {
+  it('执行验证成功后可存为可信问题草稿，提交体携带 query_plan 与指标/维度元数据', async () => {
     const queryResult = {
       plan: { kind: 'logical' },
       result: {
@@ -155,25 +155,30 @@ describe('SemanticQueryPage', () => {
     await user.click(await screen.findByRole('button', { name: '存为可信问题草稿' }))
     await user.type(await screen.findByLabelText('标准问题'), '住院总费用是多少？')
     await user.type(screen.getByLabelText('同义表达'), '住院费用总额，住院花了多少')
-    await user.type(screen.getByLabelText('操作人 ID'), 'op-1')
     await user.click(screen.getByRole('button', { name: '保存草稿' }))
 
-    // 成功提示 + 可信问题库链接
+    // 成功提示 + 可信问题库链接（main 版 question_library 页）
     expect(await screen.findByText('已保存为草稿，请到可信问题库提交审核')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '前往可信问题库' })).toHaveAttribute('href', '/trusted-questions')
+    expect(screen.getByRole('link', { name: '前往可信问题库' })).toHaveAttribute('href', '/question-library')
 
-    // 提交体：query_plan 为发给 /query/test 的同一请求对象，metric_codes 为选中指标
+    // 提交体：query_plan 为发给 /query/test 的同一请求对象，metrics/dimensions 与计划一致
     const testCall = semanticReviewJsonMock.mock.calls.find(([url]) => String(url).includes('/query/test'))
     expect(testCall).toBeDefined()
     const fetchMock = vi.mocked(fetch)
-    const createCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/trusted-questions'))
+    const createCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/question-library/questions'))
     expect(createCall).toBeDefined()
     expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
       standard_question: '住院总费用是多少？',
-      created_by: 'op-1',
       synonyms: ['住院费用总额', '住院花了多少'],
+      roles: [],
+      object_code: 'inpatient_settlement',
+      metrics: ['total_amount'],
+      dimensions: [],
+      time_scope: null,
+      filters: [],
       query_plan: testCall?.[2],
-      metric_codes: ['total_amount'],
+      allow_drilldown: true,
+      expected_result: {},
     })
   })
 })

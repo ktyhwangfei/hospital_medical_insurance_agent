@@ -144,6 +144,18 @@ class SemanticDataSource:
             raise RuntimeError(f"数据源 '{datasource_id}' 未注册、未启用或缺少连接配置")
         return self._connect(cfg)
 
+    def open_connection(self, datasource_id: str | None = None) -> Any:
+        """公开供给端口入口（#27）：按注册数据源建立只读连接，未注册回退默认源。
+
+        与 connect_datasource 的差异：后者严格按注册表（未注册即拒），
+        本方法保留语义查询路径的历史回退链（注册源 → discovery 最近扫描 → 环境变量），
+        供 DataSupplyConnectionPort 一档适配器组合使用。
+        """
+        cfg = self._resolve_datasource_connection(datasource_id)
+        if not cfg:
+            cfg = self._resolve_source_config()
+        return self._connect(cfg)
+
     # ============================================================
     # 指标解析
     # ============================================================

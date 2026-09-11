@@ -9,6 +9,11 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from datetime import datetime
 
+try:
+    from src.knowledge_extension.rule_explanation.crawl.html_text import extract_text_with_tables
+except ImportError:  # 作为脚本在 crawl/ 目录内直接运行
+    from html_text import extract_text_with_tables
+
 COLUMNS = [
     {
         "name": "政策文件",
@@ -263,7 +268,8 @@ def extract_content(soup):
     content = ""
     for node in candidates:
         if node:
-            text = node.get_text("\n", strip=True)
+            # 表格感知提取：<table> 渲染为「单元格 | 单元格」行，保留行列结构（#39/#24）
+            text = extract_text_with_tables(node)
             if len(text) > len(content):
                 content = text
 

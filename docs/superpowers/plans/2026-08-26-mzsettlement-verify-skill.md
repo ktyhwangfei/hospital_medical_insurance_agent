@@ -18,6 +18,8 @@
 
 **Execution status (2026-08-27):** 本文是 P2 门诊核验的设计基线，当前不能从 Task 1 直接执行。主分支尚无本文假定的 `src/semantic_layer/query_planner.py`，且本文原方案让运行时复用 SQL Server 直查通道，与已确认的 PostgreSQL 唯一分析链路冲突。先完成 `2026-08-27-outpatient-p0-data-contract.md`，再根据已冻结的源游标、明细表和 PostgreSQL 事实模型对本文做一次最小修订。P1 以后 `o_Trade/o_FeeItem` 只用于只读增量抽取和源端核验；助手运行时只查询 PostgreSQL 发布批次。用户界面不要求输入 `settlement_id`，但本 Skill 继续接收由可信上下文解析器提供的内部结算锚点。
 
+**Revision per P0/P1 frozen facts (2026-09-10, issue #39):** P0/P1 已冻结——门诊数据走 `mz_trade/mz_fee_item` PostgreSQL 落地视图（源 `o_Trade/o_FeeItem` 只读增量抽取，§9 裁决后查询模型已切 `public.mz_trade` + datasource `outpatient_postgres`）；`query_planner.py`（#36）与指标治理字段（#35）已合入 main。本文 Task 1（查询器支持门诊粒度）已按冻结事实由 `mzjyxx` 语义查询对象 + profile 计划实现；Task 2-4 的九 Profile / Decimal 勾稽 / 字段四态（`non_zero/reported_zero/missing/not_applicable`）/ 政策证据 / 回归矩阵已落地（`skills/mzsettlement_verify_skill/` 36 测 + 桥接 11 测 + 31 例自测）。执行差异：政策表格条款解析升级（原 #24，RagFlow 式表格切片 + 引用定位到单元格 `node_id#r{n}c{m}`）于本期落地在知识管线（`crawl/html_text.py` + `policy_struct/table_parser.py`）而非 Skill 内。「不自动激活候选 Skill；语义对象经不可变版本回滚」由既有护栏保证（候选制品强制写入 runtime skills 目录之外；发布即冻结快照）。
+
 ---
 
 ## Task 1：让现有语义查询器支持门诊交易和费用明细粒度

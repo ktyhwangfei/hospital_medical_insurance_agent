@@ -1,0 +1,328 @@
+"""Flow 编译器单元测试 — Phase 1。
+
+核心断言：Golden Flow 编译产物与 #62 docs/processing/outpatient_processed_view.sql
+的核心 SELECT/WHERE 语义等价（口径句 v4 全部 5 个条件 + 4 个聚合表达式）。
+"""
+from __future__ import annotations
+
+import pytest
+
+from src.domain.governed_flow.compiler import (
+    CompiledFlowArtifact,
+    FlowCompileError,
+    compile_flow_view,
+    compute_artifact_hash,
+    derive_view_name,
+)
+from src.domain.governed_flow.models import (
+    AggregateMeasure,
+    AggregateNode,
+    AggregateOperator,
+    DerivedMetricNode,
+    DerivedMetricSpec,
+    DimensionBinding,
+    DimensionNode,
+    FilterNode,
+    FilterOperator,
+    FlowDefinition,
+    FlowEdge,
+    FlowFilterCondition,
+    MetricOutputBinding,
+    SourceContract,
+    SourceNode,
+)
+from src.tests.unit.governed_flow.golden_flow import build_golden_flow
+
+# 与 #62 视图一致的数据集解析（语义层种子里 mz_trade → public.mz_trade，
+# 编译器单测直接给最小解析器验证 SQL 等价性）
+_GOLDEN_RESOLVER = {"mz_trade": "public.mz_trade"}
+
+
+def _compile(flow: FlowDefinition) -> CompiledFlowArtifact:
+    return compile_flow_view(flow, dataset_resolver=_GOLDEN_RESOLVER.get)
+
+
+class TestGoldenFlowCompile:
+    def test_view_name_derivation(self):
+        assert derive_view_name("flow_op_outpatient_processed") == "v_flow_flow_op_outpatient_processed"
+        assert derive_view_name("非法 Flow-Id!") == "v_flow_flow_id"
+
+    def test_golden_sql_equivalent_to_62_view(self):
+        """编译产物必须携带 #62 视图的全部口径句 v4 条件与 4 个聚合表达式。"""
+        artifact = _compile(build_golden_flow())
+        sql = artifact.view_sql
+        # PG 落地库方言（2026-09-07 裁决）：标识符双引号、CREATE OR REPLACE
+        assert sql.startswith("CREATE OR REPLACE VIEW v_flow_flow_op_outpatient_processed AS")
+        assert 'FROM "public"."mz_trade"' in sql
+        # 4 个聚合输出（与 v_op_outpatient_processed SELECT 一致）
+        assert 'COUNT(DISTINCT "T_TradeNo") AS "op_valid_settle_count"' in sql
+        assert 'SUM("T_FeeAll") AS "op_total_fee"' in sql
+        assert 'SUM("T_FundPay") AS "op_fund_pay"' in sql
+        assert 'SUM("T_SelfPayAll") AS "op_self_pay"' in sql
+        # 口径句 v4 全部 5 个条件（WHERE 以 AND 连接）。
+        # mz_trade 状态四列以 text 落地（payload 抽取），数值比较必须
+        # NULLIF(col,'')::NUMERIC 转型（P3a，与 #62 视图 28-42 行同构），
+        # 否则 PG 报 operator does not exist: text = integer
+        assert "NULLIF(\"T_State\", '')::NUMERIC IN (2, 3)" in sql
+        assert "NULLIF(\"NP_Settle_State\", '')::NUMERIC = 1" in sql
+        assert "NULLIF(\"T_HasRefundmented\", '')::NUMERIC != 1" in sql
+        # text 语义列（空串判断）不转型
+        assert '("T_PartialReturnFlag" IN (\'\') OR "T_PartialReturnFlag" IS NULL)' in sql
+        # IN_OR_NULL 的 IN 侧转型、IS NULL 侧保持原列（col='' 时语义不同）
+        assert "(NULLIF(\"T_CureType\", '')::NUMERIC IN (11, 17, 18, 19) OR \"T_CureType\" IS NULL)" in sql
+        # 全局单行快照：无 GROUP BY
+        assert "GROUP BY" not in sql
+
+    def test_query_plan_steps_present(self):
+        artifact = _compile(build_golden_flow())
+        node_ids = [s.node_id for s in artifact.query_plan]
+        assert node_ids == ["src_trade", "filter_valid", "agg_snapshot", "gate_caliber"]
+        gate = artifact.query_plan[-1]
+        assert "op_total_fee = op_fund_pay + op_self_pay" in gate.description
+
+    def test_artifact_hash_shape_and_determinism(self):
+        flow = build_golden_flow()
+        first = _compile(flow)
+        second = _compile(build_golden_flow())
+        assert first.artifact_hash == second.artifact_hash
+        assert first.artifact_hash == compute_artifact_hash(first.view_sql)
+        assert len(first.artifact_hash) == 64
+
+    def test_content_change_changes_artifact_hash(self):
+        flow = build_golden_flow()
+        tampered = flow.model_copy(deep=True)
+        condition = tampered.nodes[1].conditions[0]
+        tampered.nodes[1].conditions[0] = condition.model_copy(
+            update={"value": [2, 3, 9]}
+        )
+        assert _compile(tampered).artifact_hash != _compile(flow).artifact_hash
+
+
+class TestTextEncodedNumericCast:
+    """P3a：mz_trade text 落地数值列的 NULLIF(col,'')::NUMERIC 转型边界。
+
+    转型只发生在「源数据集已登记该列」且「比较值全为数值」时；
+    字符串值/未登记列/IS NULL/其他数据集同名列一律保持原样。
+    """
+
+    _RESOLVER = {"mz_trade": "public.mz_trade", "other_ds": "public.other"}.get
+
+    def _compile_probe(
+        self, dataset_code: str, conditions: list[FlowFilterCondition]
+    ) -> CompiledFlowArtifact:
+        return compile_flow_view(
+            _cast_probe_flow(dataset_code, conditions), dataset_resolver=self._RESOLVER
+        )
+
+    def test_string_valued_comparison_not_cast(self):
+        """比较值为字符串时不转型——NULLIF 后等于把 '' 比较语义改掉。"""
+        artifact = self._compile_probe("mz_trade", [
+            FlowFilterCondition(field_code="T_State", operator=FilterOperator.IN, value=["2", "3"]),
+        ])
+        assert "NULLIF" not in artifact.view_sql
+        assert "\"T_State\" IN ('2', '3')" in artifact.view_sql
+
+    def test_unregistered_field_not_cast(self):
+        """金额列以 numeric 落地，不在转型白名单。"""
+        artifact = self._compile_probe("mz_trade", [
+            FlowFilterCondition(field_code="T_FeeAll", operator=FilterOperator.GT, value=100),
+        ])
+        assert "NULLIF" not in artifact.view_sql
+        assert "\"T_FeeAll\" > 100" in artifact.view_sql
+
+    def test_null_check_not_cast(self):
+        """IS NULL 对 text 原生成立，无需转型。"""
+        artifact = self._compile_probe("mz_trade", [
+            FlowFilterCondition(field_code="T_State", operator=FilterOperator.IS_NULL, value=None),
+        ])
+        assert "NULLIF" not in artifact.view_sql
+        assert "\"T_State\" IS NULL" in artifact.view_sql
+
+    def test_other_dataset_same_column_not_cast(self):
+        """转型白名单按源数据集登记：其他数据集的同名列不转型。"""
+        artifact = self._compile_probe("other_ds", [
+            FlowFilterCondition(field_code="T_State", operator=FilterOperator.EQ, value=1),
+        ])
+        assert "NULLIF" not in artifact.view_sql
+        assert "\"T_State\" = 1" in artifact.view_sql
+
+
+class TestCompileSecurity:
+    """威胁模型 T5：标识符/字面量注入面必须全部拒绝。"""
+
+    def test_injection_in_field_code_rejected(self):
+        flow = build_golden_flow()
+        evil = flow.model_copy(deep=True)
+        evil.nodes[1].conditions[0] = FlowFilterCondition(
+            field_code="T_State); DROP TABLE o_Trade; --",
+            operator=FilterOperator.EQ, value=1,
+        )
+        with pytest.raises(FlowCompileError) as exc:
+            _compile(evil)
+        assert exc.value.args[0].startswith("FLOW_EXPRESSION_INVALID")
+
+    def test_string_literal_quote_escaped(self):
+        flow = build_golden_flow()
+        quoted = flow.model_copy(deep=True)
+        quoted.nodes[1].conditions[3] = FlowFilterCondition(
+            field_code="T_PartialReturnFlag", operator=FilterOperator.EQ,
+            value="'; DELETE FROM users; --",
+        )
+        artifact = _compile(quoted)
+        # 内部单引号翻倍转义：'''= 包裹引号+转义后的内容引号
+        assert "\"T_PartialReturnFlag\" = '''; DELETE FROM users; --'" in artifact.view_sql
+
+    def test_derived_expression_call_rejected(self):
+        flow = _flow_with_derived("__import__('os').system('dir')")
+        with pytest.raises(FlowCompileError) as exc:
+            _compile(flow)
+        assert exc.value.args[0].startswith("FLOW_EXPRESSION_INVALID")
+
+    def test_derived_expression_attribute_rejected(self):
+        flow = _flow_with_derived("op_total_fee.__class__")
+        with pytest.raises(FlowCompileError):
+            _compile(flow)
+
+    def test_derived_arithmetic_rendered(self):
+        flow = _flow_with_derived("op_total_fee / op_valid_settle_count")
+        artifact = _compile(flow)
+        assert '("op_total_fee" / "op_valid_settle_count") AS "avg_fee_per_trade"' in artifact.view_sql
+
+
+class TestCompileBoundaries:
+    def test_branching_pipeline_rejected(self):
+        flow = build_golden_flow()
+        branched = flow.model_copy(deep=True)
+        second_agg = branched.nodes[2].model_copy(deep=True)
+        second_agg = second_agg.model_copy(update={"node_id": "agg_second"})
+        branched.nodes.append(second_agg)
+        branched.edges.append(FlowEdge(
+            edge_id="e_branch", from_node="filter_valid", to_node="agg_second"
+        ))
+        with pytest.raises(FlowCompileError) as exc:
+            _compile(branched)
+        assert exc.value.args[0].startswith("FLOW_COMPILE_UNSUPPORTED")
+
+    def test_join_without_resolver_rejected(self):
+        flow = build_golden_flow()
+        joined = _flow_with_join(build=False)
+        with pytest.raises(FlowCompileError) as exc:
+            _compile(joined)
+        assert exc.value.args[0].startswith("FLOW_RELATION_NOT_REGISTERED")
+
+    def test_join_with_resolver_renders_clause(self):
+        joined = _flow_with_join()
+        artifact = compile_flow_view(
+            joined,
+            dataset_resolver=_GOLDEN_RESOLVER.get,
+            join_resolver=lambda code: '"mz_trade"."T_TradeNo" = "mz_fee_item"."T_TradeNo"',
+        )
+        assert 'INNER JOIN <rel_trade_fee> ON "mz_trade"."T_TradeNo" = "mz_fee_item"."T_TradeNo"' in artifact.view_sql
+
+    def test_non_view_materialization_rejected(self):
+        flow = build_golden_flow()
+        materialized = flow.model_copy(deep=True, update={"materialization": "materialized_table"})
+        with pytest.raises(FlowCompileError) as exc:
+            _compile(materialized)
+        assert exc.value.args[0].startswith("FLOW_MATERIALIZATION_UNSUPPORTED")
+
+    def test_dimension_node_adds_group_by(self):
+        grouped = _flow_with_dimension()
+        artifact = _compile(grouped)
+        assert 'GROUP BY "T_CureType"' in artifact.view_sql
+
+
+# ── 测试辅助 ──────────────────────────────────────────────────────
+
+
+def _cast_probe_flow(dataset_code: str, conditions: list[FlowFilterCondition]) -> FlowDefinition:
+    """最小转型探针：source(指定数据集) → filter(指定条件) → aggregate(SUM)。"""
+    return FlowDefinition(
+        flow_id=f"flow_cast_probe_{dataset_code}",
+        name="text 数值列转型探针", owner="data_governance",
+        nodes=[
+            SourceNode(
+                node_id="src", name="source", dataset_code=dataset_code,
+                object_code="mzjyxx", fields=["T_State", "T_FeeAll"],
+                position={"x": 0, "y": 0},
+            ),
+            FilterNode(
+                node_id="flt", name="filter", conditions=conditions,
+                position={"x": 1, "y": 0},
+            ),
+            AggregateNode(
+                node_id="agg", name="agg", group_by=[],
+                measures=[AggregateMeasure(
+                    output_code="probe_fee", source_field="T_FeeAll",
+                    operator=AggregateOperator.SUM,
+                )],
+                position={"x": 2, "y": 0},
+            ),
+        ],
+        edges=[
+            FlowEdge(edge_id="p1", from_node="src", to_node="flt"),
+            FlowEdge(edge_id="p2", from_node="flt", to_node="agg"),
+        ],
+        source_contracts=[
+            SourceContract(dataset_code=dataset_code, object_code="mzjyxx", fields=["T_State", "T_FeeAll"])
+        ],
+        metric_outputs=[MetricOutputBinding(
+            metric_code="probe_fee", name="探针指标", node_id="agg", policy_definition="probe",
+        )],
+    )
+
+
+def _flow_with_derived(expression: str) -> FlowDefinition:
+    """在 golden flow 的 aggregate 与 quality_gate 之间插入派生指标节点（保持线性链）。"""
+    flow = build_golden_flow()
+    enriched = flow.model_copy(deep=True)
+    enriched.nodes.append(DerivedMetricNode(
+        node_id="derived_avg", name="次均费用",
+        metrics=[DerivedMetricSpec(
+            output_code="avg_fee_per_trade", expression=expression,
+            dependencies=["op_total_fee"],
+        )],
+    ))
+    # e3 原为 agg_snapshot→gate_caliber，改接派生节点再回到 gate
+    enriched.edges = [
+        e.model_copy(update={"to_node": "derived_avg"}) if e.edge_id == "e3" else e
+        for e in enriched.edges
+    ]
+    enriched.edges.append(FlowEdge(edge_id="e_derived", from_node="derived_avg", to_node="gate_caliber"))
+    return enriched
+
+
+def _flow_with_join(*, build: bool = True) -> FlowDefinition:
+    """在 filter 与 aggregate 之间插入 join 节点（保持线性链）。
+
+    build=False 时仍构造链，但测试不传 join_resolver 以触发未登记拒绝。
+    """
+    flow = build_golden_flow()
+    joined = flow.model_copy(deep=True)
+    from src.domain.governed_flow.models import JoinNode
+    joined.nodes.append(JoinNode(
+        node_id="join_fee", name="关联费用明细", relation_code="rel_trade_fee"
+    ))
+    # e2 原为 filter_valid→agg_snapshot，改接 join 再回到 aggregate
+    joined.edges = [
+        e.model_copy(update={"to_node": "join_fee"}) if e.edge_id == "e2" else e
+        for e in joined.edges
+    ]
+    joined.edges.append(FlowEdge(edge_id="e_join", from_node="join_fee", to_node="agg_snapshot"))
+    return joined
+
+
+def _flow_with_dimension() -> FlowDefinition:
+    """在 aggregate 与 quality_gate 之间插入维度节点（保持线性链）。"""
+    flow = build_golden_flow()
+    grouped = flow.model_copy(deep=True)
+    grouped.nodes.append(DimensionNode(
+        node_id="dim_cure", name="门诊医疗类别维度",
+        dimensions=[DimensionBinding(field_code="T_CureType", value_domain="MZ_CURE_TYPE")],
+    ))
+    grouped.edges = [
+        e.model_copy(update={"to_node": "dim_cure"}) if e.edge_id == "e3" else e
+        for e in grouped.edges
+    ]
+    grouped.edges.append(FlowEdge(edge_id="e_dim", from_node="dim_cure", to_node="gate_caliber"))
+    return grouped

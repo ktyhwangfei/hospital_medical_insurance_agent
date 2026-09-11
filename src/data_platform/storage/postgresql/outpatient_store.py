@@ -301,6 +301,20 @@ class PublishedOutpatientBatch:
 
 
 @dataclass(frozen=True)
+class RecentOutpatientBatch:
+    """批次表只读行 — 数据目录血缘/SLA 聚合用（issue #38）。"""
+
+    batch_id: str
+    source_id: str
+    mode: str
+    semantic_version: str | None
+    published_at: datetime
+    source_committed_at: datetime | None
+    row_count: int
+    quality_summary: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class OutpatientSyncStatus:
     source_id: str
     last_batch_id: str | None
@@ -510,6 +524,38 @@ class OutpatientPostgresStore:
             quality_status=quality.get("status"),
             semantic_version=latest.get("semantic_version"),
         )
+
+    def list_recent_batches(
+        self, source_id: str | None = None, limit: int = 10
+    ) -> list[RecentOutpatientBatch]:
+        """最近发布批次（只读，按 published_at 倒序）— 数据目录血缘/SLA 用。"""
+        if limit <= 0:
+            return []
+        query = (
+            "SELECT batch_id, source_id, mode, semantic_version, published_at, "
+            "source_committed_at, row_count, quality_summary "
+            "FROM outpatient_sync_batches"
+        )
+        params: tuple[Any, ...] = ()
+        if source_id is not None:
+            query += " WHERE source_id = %s"
+            params = (source_id,)
+        query += " ORDER BY published_at DESC LIMIT %s"
+        params = params + (limit,)
+        rows = self._client.execute(query, params)
+        return [
+            RecentOutpatientBatch(
+                batch_id=row["batch_id"],
+                source_id=row["source_id"],
+                mode=row["mode"],
+                semantic_version=row.get("semantic_version"),
+                published_at=row["published_at"],
+                source_committed_at=row.get("source_committed_at"),
+                row_count=row["row_count"],
+                quality_summary=_payload(row.get("quality_summary", {})),
+            )
+            for row in rows
+        ]
 
     def publish_batch(
         self,

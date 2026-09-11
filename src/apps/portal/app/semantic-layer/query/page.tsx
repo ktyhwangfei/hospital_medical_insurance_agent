@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { semanticReviewJson } from '@/lib/policy-knowledge-api'
-import { createTrustedQuestion } from '@/lib/trusted-questions-api'
+import { createTrustedQuestionDraft } from '@/lib/question-library-api'
 import { Loader2, Play, Plus, ShieldCheck, Trash2, Database, BookmarkPlus } from 'lucide-react'
 
 const API = '/api/v1/medical-insurance-ai-agent/semantic'
@@ -80,7 +80,6 @@ export default function SemanticQueryPage() {
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveQuestion, setSaveQuestion] = useState('')
   const [saveSynonyms, setSaveSynonyms] = useState('')
-  const [saveOperator, setSaveOperator] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveDone, setSaveDone] = useState(false)
@@ -270,16 +269,23 @@ export default function SemanticQueryPage() {
   }
 
   async function saveTrustedQuestion() {
-    if (!lastQueryPlan || !saveQuestion.trim() || !saveOperator.trim()) return
+    if (!lastQueryPlan || !saveQuestion.trim()) return
     setSaving(true)
     setSaveError(null)
     try {
-      await createTrustedQuestion({
+      // 写入 main 版可信问题库（question_library）：操作人由 JWT 鉴权推导
+      await createTrustedQuestionDraft({
         standard_question: saveQuestion.trim(),
-        created_by: saveOperator.trim(),
         synonyms: saveSynonyms.split(/[,，;；]/).map((item) => item.trim()).filter(Boolean),
+        roles: [],
+        object_code: objectCode,
+        metrics: selectedMetrics,
+        dimensions: groupBy,
+        time_scope: null,
+        filters: (lastQueryPlan.filters as Array<Record<string, unknown>>) ?? [],
         query_plan: lastQueryPlan,
-        metric_codes: selectedMetrics,
+        allow_drilldown: true,
+        expected_result: {},
       })
       setSaveDone(true)
       setSaveOpen(false)
@@ -419,7 +425,7 @@ export default function SemanticQueryPage() {
             <Alert className="border-emerald-200 bg-emerald-50">
               <AlertTitle className="text-emerald-700">已保存为草稿，请到可信问题库提交审核</AlertTitle>
               <AlertDescription>
-                <Link href="/trusted-questions" className="text-emerald-700 underline underline-offset-2 hover:text-emerald-800">前往可信问题库</Link>
+                <Link href="/question-library" className="text-emerald-700 underline underline-offset-2 hover:text-emerald-800">前往可信问题库</Link>
               </AlertDescription>
             </Alert>
           )}
@@ -444,9 +450,6 @@ export default function SemanticQueryPage() {
             <label className="block text-xs text-slate-500">同义表达（可选，逗号分隔）
               <Input aria-label="同义表达" className="mt-1" value={saveSynonyms} onChange={(event) => setSaveSynonyms(event.target.value)} placeholder="住院花了多少钱，住院费用总额" />
             </label>
-            <label className="block text-xs text-slate-500">操作人 ID（必填）
-              <Input aria-label="操作人 ID" className="mt-1" value={saveOperator} onChange={(event) => setSaveOperator(event.target.value)} placeholder="开发期声明式身份" />
-            </label>
             {saveError && <p className="text-xs text-red-600">{saveError}</p>}
           </div>
           <DialogFooter>
@@ -454,7 +457,7 @@ export default function SemanticQueryPage() {
             <Button
               className="bg-amber-600 text-white shadow-xs hover:bg-amber-700"
               onClick={saveTrustedQuestion}
-              disabled={saving || !saveQuestion.trim() || !saveOperator.trim()}
+              disabled={saving || !saveQuestion.trim()}
             >
               {saving && <Loader2 className="h-4 w-4 animate-spin" />}保存草稿
             </Button>

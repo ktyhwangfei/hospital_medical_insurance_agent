@@ -6,6 +6,11 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
+try:
+    from src.knowledge_extension.rule_explanation.crawl.html_text import extract_text_with_tables
+except ImportError:  # 作为脚本在 crawl/ 目录内直接运行
+    from html_text import extract_text_with_tables
+
 BASE_URL = "https://ybj.beijing.gov.cn/zwgk/2020_zfxxgk/2020_xxgkml/202501/t20250120_3994118.html"
 SAVE_DIR = "./raw"
 ATTACH_DIR = os.path.join(SAVE_DIR, "attachments")
@@ -107,7 +112,8 @@ def parse_detail_page(url):
     content = ""
     for c in candidates:
         if c:
-            content = c.get_text("\n", strip=True)
+            # 表格感知提取：<table> 渲染为「单元格 | 单元格」行，保留行列结构（#39/#24）
+            content = extract_text_with_tables(c)
             if len(content) > 100:
                 break
 

@@ -462,7 +462,8 @@ def ensure_outpatient_processed_view_metrics(store: RegistryStore) -> None:
     """幂等注册 v_op_outpatient_processed 加工视图 4 指标（口径句 v4 已签核）。
 
     docs/processing/registry.yaml 是数据侧定义源；本函数在语义层登记同构
-    指标，source_field 三段式 bjybdb.v_op_outpatient_processed.<col>，
+    指标，source_field 三段式 outpatient_postgres.v_op_outpatient_processed.<col>
+    （2026-09-07 架构裁决：加工视图落位 PG 落地库，不在 SQL Server 源库执行），
     供受控问数（MetricDataQueryService / SemanticDataSource）消费。
     ⑤ 缺签核口径句→拒绝：definition 必须携带口径句 v4 原文，缺失即不注册。
     """
@@ -493,7 +494,7 @@ def ensure_outpatient_processed_view_metrics(store: RegistryStore) -> None:
             metric_type="aggregate", semantic_type=sem_type,
             unit=unit, precision=prec,
             source_object="v_op_outpatient_processed",
-            source_field=f"bjybdb.v_op_outpatient_processed.{col}",
+            source_field=f"outpatient_postgres.v_op_outpatient_processed.{col}",
             fact_field_code=None, aggregation=agg,
             synonyms=[name],
             compatible_dimensions=["time", "insurance_type", "settlement_status"],

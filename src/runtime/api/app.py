@@ -24,7 +24,10 @@ from src.runtime.api.pdsc_routes import router as pdsc_router
 from src.runtime.api.policy_workbench_routes import router as policy_workbench_router
 from src.runtime.api.model_governance_routes import router as model_governance_router
 from src.runtime.api.data_governance_routes import router as data_governance_router
-from src.runtime.api.trusted_question_routes import router as trusted_question_router
+from src.runtime.api.flow_routes import router as governed_flow_router
+from src.runtime.api.ops_routes import router as ops_health_router
+from src.runtime.api.question_library_routes import router as question_library_router
+from src.runtime.api.ops_analytics_routes import router as ops_analytics_router
 from src.runtime.api.data_catalog_routes import router as data_catalog_router
 
 logger = logging.getLogger(__name__)
@@ -103,7 +106,10 @@ def create_app() -> FastAPI:
     app.include_router(policy_workbench_router)
     app.include_router(model_governance_router)
     app.include_router(data_governance_router)
-    app.include_router(trusted_question_router, prefix='/api/v1/medical-insurance-ai-agent')
+    app.include_router(governed_flow_router)
+    app.include_router(ops_health_router)
+    app.include_router(question_library_router)
+    app.include_router(ops_analytics_router)
     app.include_router(data_catalog_router, prefix='/api/v1/medical-insurance-ai-agent')
     print("[STARTUP] create_app: 完成", flush=True)
     return app
