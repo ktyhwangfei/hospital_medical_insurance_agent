@@ -9,7 +9,7 @@ ignore/reopen/resolved 流转；ops_remediation_runs 留痕每次 L1 自动修�
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from src.config.production import DATABASE_URL
@@ -18,12 +18,18 @@ from src.domain.ops.models import (
     FindingDraft,
     FindingRevisionConflictError,
     OpsAssetType,
+    OpsCheckerError,
     OpsFinding,
     OpsFindingEvent,
     OpsFindingEventType,
     OpsFindingNotFoundError,
     OpsFindingPage,
     OpsFindingStatus,
+    OpsInspectionNotFoundError,
+    OpsInspectionRun,
+    OpsInspectionScheduleState,
+    OpsInspectionStatus,
+    OpsInspectionTrigger,
     OpsRemediationRun,
     OpsSeverity,
     RemediationRiskLevel,
@@ -31,6 +37,7 @@ from src.domain.ops.models import (
     VerificationResult,
     finding_fingerprint,
     new_finding_id,
+    new_inspection_id,
 )
 
 OPS_FINDINGS_TABLE_SCHEMA = (
@@ -110,6 +117,44 @@ OPS_REMEDIATION_RUNS_TABLE_SCHEMA = (
     "CREATE INDEX IF NOT EXISTS idx_ops_remediation_runs_finding ON ops_remediation_runs(finding_id, created_at)",
 )
 
+# #52 巡检运行记录：手动与定时统一落此表（trigger_source 区分）
+OPS_INSPECTIONS_TABLE_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS ops_inspections (
+        inspection_id VARCHAR(64) PRIMARY KEY,
+        trigger_source VARCHAR(16) NOT NULL,
+        status VARCHAR(16) NOT NULL,
+        triggered_by VARCHAR(128) NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        finished_at TIMESTAMPTZ,
+        finding_count INTEGER NOT NULL DEFAULT 0,
+        new_finding_count INTEGER NOT NULL DEFAULT 0,
+        checker_errors JSONB NOT NULL DEFAULT '[]'::jsonb
+    )""",
+    "ALTER TABLE ops_inspections ADD COLUMN IF NOT EXISTS trigger_source VARCHAR(16)",
+    "ALTER TABLE ops_inspections ADD COLUMN IF NOT EXISTS status VARCHAR(16)",
+    "ALTER TABLE ops_inspections ADD COLUMN IF NOT EXISTS triggered_by VARCHAR(128)",
+    "ALTER TABLE ops_inspections ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
+    "ALTER TABLE ops_inspections ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
+    "ALTER TABLE ops_inspections ADD COLUMN IF NOT EXISTS finding_count INTEGER DEFAULT 0",
+    "ALTER TABLE ops_inspections ADD COLUMN IF NOT EXISTS new_finding_count INTEGER DEFAULT 0",
+    "ALTER TABLE ops_inspections ADD COLUMN IF NOT EXISTS checker_errors JSONB DEFAULT '[]'::jsonb",
+    "CREATE INDEX IF NOT EXISTS idx_ops_inspections_started ON ops_inspections(started_at DESC)",
+)
+
+# #52 调度行（单行表，CHECK 约束锁死 schedule_id=1）：active_inspection_id
+# 互斥位 + next_run_at 到期位，claim 用 FOR UPDATE SKIP LOCKED 抢占
+OPS_INSPECTION_SCHEDULE_TABLE_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS ops_inspection_schedule (
+        schedule_id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (schedule_id = 1),
+        next_run_at TIMESTAMPTZ NOT NULL,
+        active_inspection_id VARCHAR(64),
+        updated_at TIMESTAMPTZ NOT NULL
+    )""",
+    "ALTER TABLE ops_inspection_schedule ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ",
+    "ALTER TABLE ops_inspection_schedule ADD COLUMN IF NOT EXISTS active_inspection_id VARCHAR(64)",
+    "ALTER TABLE ops_inspection_schedule ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
+)
+
 _FINDING_COLUMNS = (
     "finding_id, asset_type, asset_id, check_id, severity, status, fingerprint, "
     "payload, first_seen_at, last_seen_at, occurrence_count, diagnosis, revision"
@@ -118,6 +163,11 @@ _FINDING_COLUMNS = (
 _RUN_COLUMNS = (
     "run_id, finding_id, action, risk_level, status, "
     "before_evidence, after_evidence, verification_result, created_by, created_at"
+)
+
+_INSPECTION_COLUMNS = (
+    "inspection_id, trigger_source, status, triggered_by, started_at, "
+    "finished_at, finding_count, new_finding_count, checker_errors"
 )
 
 
@@ -168,6 +218,22 @@ def _row_to_run(row: dict[str, Any]) -> OpsRemediationRun:
     )
 
 
+def _row_to_inspection(row: dict[str, Any]) -> OpsInspectionRun:
+    return OpsInspectionRun(
+        inspection_id=row["inspection_id"],
+        trigger_source=OpsInspectionTrigger(row["trigger_source"]),
+        status=OpsInspectionStatus(row["status"]),
+        triggered_by=row["triggered_by"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        finding_count=row["finding_count"],
+        new_finding_count=row["new_finding_count"],
+        checker_errors=[
+            OpsCheckerError.model_validate(item) for item in (row["checker_errors"] or [])
+        ],
+    )
+
+
 class PostgresOpsFindingStorage:
     def __init__(
         self,
@@ -187,8 +253,17 @@ class PostgresOpsFindingStorage:
                 *OPS_FINDINGS_TABLE_SCHEMA,
                 *OPS_FINDING_EVENTS_TABLE_SCHEMA,
                 *OPS_REMEDIATION_RUNS_TABLE_SCHEMA,
+                *OPS_INSPECTIONS_TABLE_SCHEMA,
+                *OPS_INSPECTION_SCHEDULE_TABLE_SCHEMA,
             ):
                 self._client.execute(statement)
+            # 调度行 bootstrap：首部署 next_run_at=now，worker 首轮即巡检
+            bootstrap_at = datetime.now(timezone.utc)
+            self._client.execute(
+                """INSERT INTO ops_inspection_schedule (schedule_id, next_run_at, updated_at)
+                   VALUES (1, %s, %s) ON CONFLICT (schedule_id) DO NOTHING""",
+                (bootstrap_at, bootstrap_at),
+            )
             self._schema_ensured = True
         return self._client
 
@@ -363,3 +438,113 @@ class PostgresOpsFindingStorage:
         if not rows:
             raise OpsFindingNotFoundError(finding_id)
         return _row_to_finding(rows[0])
+
+    # ── #52 定时巡检调度：claim 抢占 + 运行留痕（复用 claim_due_job 模式）──
+
+    def claim_inspection(
+        self,
+        now: datetime,
+        *,
+        trigger_source: OpsInspectionTrigger,
+        triggered_by: str,
+    ) -> OpsInspectionRun | None:
+        # manual 立即到期（force）；scheduled 需 next_run_at 到期。
+        # FOR UPDATE SKIP LOCKED：并发/多进程抢占同一调度行时后来者直接空手而归，
+        # active_inspection_id IS NULL 是第二重互斥（运行中不允许再抢）。
+        force = trigger_source is OpsInspectionTrigger.MANUAL
+        client = self._get_client()
+        with client.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT schedule_id FROM ops_inspection_schedule
+                       WHERE schedule_id = 1
+                         AND active_inspection_id IS NULL
+                         AND (next_run_at <= %s OR %s)
+                       FOR UPDATE SKIP LOCKED""",
+                    (now, force),
+                )
+                if cursor.fetchone() is None:
+                    return None
+                inspection_id = new_inspection_id()
+                cursor.execute(
+                    """INSERT INTO ops_inspections (
+                           inspection_id, trigger_source, status, triggered_by, started_at,
+                           finding_count, new_finding_count, checker_errors
+                       ) VALUES (%s, %s, 'running', %s, %s, 0, 0, '[]'::jsonb)""",
+                    (inspection_id, trigger_source.value, triggered_by, now),
+                )
+                cursor.execute(
+                    """UPDATE ops_inspection_schedule
+                       SET active_inspection_id = %s, updated_at = %s
+                       WHERE schedule_id = 1""",
+                    (inspection_id, now),
+                )
+        return OpsInspectionRun(
+            inspection_id=inspection_id,
+            trigger_source=trigger_source,
+            status=OpsInspectionStatus.RUNNING,
+            triggered_by=triggered_by,
+            started_at=now,
+        )
+
+    def complete_inspection(
+        self,
+        inspection_id: str,
+        *,
+        finished_at: datetime,
+        status: OpsInspectionStatus,
+        finding_count: int,
+        new_finding_count: int,
+        checker_errors: list[OpsCheckerError],
+        next_run_at: datetime,
+    ) -> OpsInspectionRun:
+        client = self._get_client()
+        with client.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE ops_inspections SET
+                           status = %s, finished_at = %s, finding_count = %s,
+                           new_finding_count = %s, checker_errors = %s
+                       WHERE inspection_id = %s""",
+                    (
+                        status.value, finished_at, finding_count, new_finding_count,
+                        json.dumps(
+                            [error.model_dump() for error in checker_errors],
+                            ensure_ascii=False,
+                        ),
+                        inspection_id,
+                    ),
+                )
+                cursor.execute(
+                    """UPDATE ops_inspection_schedule SET
+                           active_inspection_id = NULL, next_run_at = %s, updated_at = %s
+                       WHERE active_inspection_id = %s""",
+                    (next_run_at, finished_at, inspection_id),
+                )
+        return self.get_inspection(inspection_id)
+
+    def get_inspection(self, inspection_id: str) -> OpsInspectionRun:
+        rows = self._get_client().execute(
+            f"SELECT {_INSPECTION_COLUMNS} FROM ops_inspections WHERE inspection_id = %s",
+            (inspection_id,),
+        )
+        if not rows:
+            raise OpsInspectionNotFoundError(inspection_id)
+        return _row_to_inspection(rows[0])
+
+    def get_latest_inspection(self) -> OpsInspectionRun | None:
+        rows = self._get_client().execute(
+            f"""SELECT {_INSPECTION_COLUMNS} FROM ops_inspections
+                ORDER BY started_at DESC, inspection_id DESC LIMIT 1""",
+        )
+        return _row_to_inspection(rows[0]) if rows else None
+
+    def get_inspection_schedule(self) -> OpsInspectionScheduleState:
+        rows = self._get_client().execute(
+            """SELECT next_run_at, active_inspection_id FROM ops_inspection_schedule
+               WHERE schedule_id = 1""",
+        )
+        return OpsInspectionScheduleState(
+            next_run_at=rows[0]["next_run_at"],
+            active_inspection_id=rows[0]["active_inspection_id"],
+        )

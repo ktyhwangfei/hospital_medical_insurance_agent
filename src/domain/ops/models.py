@@ -55,6 +55,10 @@ def new_remediation_run_id() -> str:
     return uuid.uuid4().hex
 
 
+def new_inspection_id() -> str:
+    return uuid.uuid4().hex
+
+
 def finding_fingerprint(asset_type: OpsAssetType, asset_id: str, check_id: str) -> str:
     """问题身份键：同一资产上同一检查项的复现问题只累计，不重复建档。"""
     return f"{asset_type.value}:{asset_id}:{check_id}"
@@ -241,6 +245,70 @@ class OpsDiagnosisResult(BaseModel):
     report: OpsDiagnosisReport
 
 
+# ── #52 P1-6 定时巡检调度 ──
+
+
+class OpsInspectionTrigger(StrEnum):
+    """巡检触发方式：manual（页面/接口手动）或 scheduled（周期调度）。"""
+
+    MANUAL = "manual"
+    SCHEDULED = "scheduled"
+
+
+class OpsInspectionStatus(StrEnum):
+    """单次巡检运行状态：running 已抢占未收尾 / succeeded / failed。"""
+
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class OpsCheckerError(BaseModel):
+    """单检查器执行失败记录（不中断整次巡检）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    check_id: str = Field(min_length=1, max_length=64)
+    message: str = Field(min_length=1, max_length=500)
+
+
+class OpsInspectionRun(BaseModel):
+    """一次巡检运行留痕（Entity）：触发方式、起止时间与新发现数。
+
+    手动与定时统一经 claim 抢占写入 running 行：调度行
+    active_inspection_id 互斥保证同一时刻至多一条 running，
+    结束后回填终态与计数（new_finding_count 只计首见问题）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    inspection_id: str = Field(min_length=1, max_length=64)
+    trigger_source: OpsInspectionTrigger
+    status: OpsInspectionStatus
+    triggered_by: str = Field(min_length=1, max_length=128)
+    started_at: datetime
+    finished_at: datetime | None = None
+    finding_count: int = Field(default=0, ge=0)
+    new_finding_count: int = Field(default=0, ge=0)
+    checker_errors: list[OpsCheckerError] = Field(default_factory=list)
+
+
+class OpsInspectionScheduleState(BaseModel):
+    """单行调度状态：下次巡检时间与当前互斥的运行占位。"""
+
+    next_run_at: datetime
+    active_inspection_id: str | None = None
+
+
+class OpsInspectionSummary(BaseModel):
+    """巡检摘要（Portal 顶部摘要条）：周期 + 下次巡检 + 最近一次巡检。"""
+
+    interval_minutes: int = Field(ge=1)
+    next_run_at: datetime | None = None
+    in_progress: bool = False
+    latest: OpsInspectionRun | None = None
+
+
 class DiagnosisUnavailableError(Exception):
     """诊断不可用（模型未配置/调用失败/输出不可解析），不落库不覆盖旧报告。"""
 
@@ -288,3 +356,21 @@ class RemediationNotAllowedError(Exception):
         super().__init__(f"问题 {finding_id} 的检查项 {check_id} 不在自动修复白名单内")
         self.finding_id = finding_id
         self.check_id = check_id
+
+
+class OpsInspectionNotFoundError(Exception):
+    """巡检运行记录不存在（按 inspection_id 查询）。"""
+
+    def __init__(self, inspection_id: str) -> None:
+        super().__init__(f"巡检记录不存在: {inspection_id}")
+        self.inspection_id = inspection_id
+
+
+class InspectionInProgressError(Exception):
+    """已有巡检正在执行（claim 抢占失败），手动触发被拒绝。"""
+
+    def __init__(self, active_inspection_id: str | None) -> None:
+        super().__init__(
+            f"巡检 {active_inspection_id or '(未知)'} 正在执行中，请稍后重试"
+        )
+        self.active_inspection_id = active_inspection_id

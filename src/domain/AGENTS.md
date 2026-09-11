@@ -978,12 +978,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ### 14.7. 健康运营上下文（Ops Health）
 
-> 依据：issue #45 P0 + issue #50 生命周期 + issue #53 L1 自动修复 + issue #51 P1-5 LLM 智能诊断 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
-> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）、「手动处置」（#50：ignore/reopen 流转 + 事件留痕）、「解决」（#53：L1 白名单自动修复 + 修复后强制验证闭环）与「诊断」（#51：LLM 智能诊断，citations 强制）已落地。
+> 依据：issue #45 P0 + issue #50 生命周期 + issue #53 L1 自动修复 + issue #51 P1-5 LLM 智能诊断 + issue #52 P1-6 定时巡检调度 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
+> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）、「手动处置」（#50：ignore/reopen 流转 + 事件留痕）、「解决」（#53：L1 白名单自动修复 + 修复后强制验证闭环）、「诊断」（#51：LLM 智能诊断，citations 强制）与「调度」（#52：定时巡检，claim 抢占不重复执行）已落地。
 
 #### 文件位置
 
-`src/domain/ops/models.py`（领域模型）+ `src/runtime/ops/checkers.py`（检查器注册）+ `src/runtime/ops/remediation.py`（L1 修复白名单与执行器）+ `src/runtime/ops/service.py`（巡检编排与生命周期状态机）+ `src/data_platform/storage/ops/`（存储 ports/adapter 四件套）+ `src/runtime/api/ops_routes.py`（API）+ portal `/ops` 页（`src/apps/portal/app/ops/page.tsx` + `finding-detail-drawer.tsx` + `src/lib/ops-api.ts`）
+`src/domain/ops/models.py`（领域模型）+ `src/runtime/ops/checkers.py`（检查器注册）+ `src/runtime/ops/remediation.py`（L1 修复白名单与执行器）+ `src/runtime/ops/service.py`（巡检编排与生命周期状态机）+ `src/runtime/ops/scheduler.py`（巡检调度器）+ `src/runtime/ops/diagnosis.py`（LLM 智能诊断）+ `src/data_platform/storage/ops/`（存储 ports/adapter 四件套）+ `src/runtime/api/ops_routes.py`（API）+ `scripts/run_ops_inspection_worker.py`（定时巡检 worker）+ portal `/ops` 页（`src/apps/portal/app/ops/page.tsx` + `finding-detail-drawer.tsx` + `src/lib/ops-api.ts`）
 
 #### 通用语言字典
 
@@ -1001,7 +1001,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 检查器注册项 | `CheckSpec` | **Value Object** | frozen dataclass | 代码内注册（id/资产类型/描述/runner），不引入 YAML 配置系统 |
 | 检查器读取面 | `GovernanceStatusReader` | **Port** | `typing.Protocol` | 检查器对治理控制面的最小只读依赖（list_sources/get_job） |
 | 健康运营巡检服务 | `OpsHealthService` | **Domain Service** | — | 逐检查器只读取数→问题库去重落库；单检查器失败不中断整次巡检；承载 ignore/reopen/remediate 状态机 |
-| 巡检结果 | `OpsInspectionResult` | **DTO** | Pydantic `BaseModel` | checked_at / check_count / finding_count / findings / checker_errors |
+| 巡检结果 | `OpsInspectionResult` | **DTO** | Pydantic `BaseModel` | checked_at / check_count / finding_count / findings / checker_errors + 调度回填 inspection_id·trigger_source + computed new_finding_count（首见问题数） |
 | 修复运行 | `OpsRemediationRun` | **Entity** | Pydantic `BaseModel`（frozen） | 一次修复尝试留痕：status 记动作执行、verification_result 记修复后验证（None=未验证）；追加只增不改 |
 | 修复风险级 | `RemediationRiskLevel` | **Value Object** | `StrEnum` | L1（白名单自动执行）/ L2（人工确认） |
 | 修复运行状态 | `RemediationRunStatus` | **Value Object** | `StrEnum` | succeeded（动作已执行）/ failed（动作未发起，after_evidence 携带原因） |
@@ -1020,6 +1020,15 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 智能诊断服务 | `OpsDiagnosisService` | **Domain Service** | — | 证据目录（payload+定向补充，过脱敏）→ ModelGateway scene=asset_diagnosis → 校验落库；citations 硬约束 |
 | 证据目录构建 | `build_evidence_catalog()` | 值函数 | — | payload 逐字段 + 定向补充证据（`supplement.*`），统一 `redact_sensitive_text` 后编号 E1..En |
 | 定向证据采集器 | `EvidenceCollector` | **Port** | `typing.Protocol`（Callable） | `(OpsFinding) -> [(source, quote)]`；默认实现为门诊同步问题附最近尝试记录 |
+| 巡检运行 | `OpsInspectionRun` | **Entity** | Pydantic `BaseModel`（frozen） | 一次巡检留痕：trigger_source / status / triggered_by / 起止时间 / finding_count / new_finding_count / checker_errors；追加只增不改 |
+| 巡检触发方式 | `OpsInspectionTrigger` | **Value Object** | `StrEnum` | manual（手动，绕过到期检查）/ scheduled（定时，仅 next_run_at 到期可认领） |
+| 巡检状态 | `OpsInspectionStatus` | **Value Object** | `StrEnum` | running / succeeded / failed |
+| 检查器错误 | `OpsCheckerError` | **Value Object** | Pydantic `BaseModel`（frozen） | 单检查器执行失败记录（check_id + message），不中断整次巡检 |
+| 巡检调度状态 | `OpsInspectionScheduleState` | **DTO** | Pydantic `BaseModel` | 单行调度表投影：next_run_at + active_inspection_id 互斥位 |
+| 巡检摘要 | `OpsInspectionSummary` | **DTO** | Pydantic `BaseModel` | 周期 + 下次巡检时间 + in_progress + 最近一次运行；portal 摘要条数据 |
+| 巡检调度器 | `OpsInspectionScheduler` | **Domain Service** | — | run_manual / run_scheduled_once / get_summary；claim 抢占 + 完成推进 next_run_at |
+| 巡检认领 | `claim_inspection()` | Port 方法 | — | 事务内 `FOR UPDATE SKIP LOCKED` 抢占单行调度表（active 互斥 + 定时到期检查），败者得 None |
+| 巡检进行中 | `InspectionInProgressError` | 异常 | — | 手动触发被并发巡检抢占（API 409 `INSPECTION_IN_PROGRESS`） |
 
 #### 业务规则
 
@@ -1038,6 +1047,10 @@ HIS 系统 → HisPort → Patient (查询/读取)
 13. 诊断（#51）只读：`POST /ops/findings/{id}/diagnose`（ops:write）不改 status/revision；报告覆盖写入 `diagnosis` 列。citations 硬约束：引用只能从证据目录选取（模型只可挑选不可编造 quote）；引用为空 → status=insufficient_evidence、root_cause 置空、actions 清空，不驱动任何修复动作（负例测试守护）。
 14. 诊断输入过 `security/desensitization`：证据目录构建时统一 `redact_sensitive_text`，PHI 原值不进模型也不落库；报告记录 `model_route`（scene/model_type/实际 model_name）供审计。
 15. 诊断模型调用走 `ModelGateway` scene=`asset_diagnosis`、model_type=`llm`（路由表显式条目，治理路由发布优先）；模型失败/输出不可解析抛 `DiagnosisUnavailableError`（API 503），不落库不覆盖旧报告。
+16. 调度（#52）复用门诊同步 `claim_due_job` 单进程 PostgreSQL 模式（不引入 Airflow/Temporal/celery）：单行调度表 `ops_inspection_schedule`（schedule_id=1 CHECK）持 next_run_at 与 active_inspection_id 互斥位；claim 在事务内 `FOR UPDATE SKIP LOCKED` 抢占，并发恰一胜出、败者得 None（活库双连接验收）；手动触发被并发占用抛 `InspectionInProgressError`（API 409）。
+17. 触发语义：manual 绕过到期检查即可认领；scheduled 仅 next_run_at 到期可认领（worker 轮询，未到期返 None）；两类完成后统一推 next_run_at = 完成时间 + 周期（env `OPS_INSPECTION_INTERVAL_MINUTES` 默认 1440=每日，非法/<1 回退默认；周期不落库）。
+18. 失败语义：单检查器失败不中断整次巡检（记 checker_errors，status 仍 succeeded）；灾难性巡检失败落 failed 运行行——checker_errors 只存安全文案「巡检执行异常，详见服务端日志」（异常原文可能含连接信息不落库），next_run_at 顺延一整周期，worker 记日志不重试。
+19. 运行留痕：每次巡检写 `ops_inspections` 行（起止时间/触发人/两类计数/checker_errors）；`OpsInspectionResult.inspection_id`/`trigger_source` 由调度器回填——直接调用 `OpsHealthService.run_inspection`（未经调度器，如修复后验证）不留运行行。new_finding_count = occurrence_count==1 的首见问题数（复现累计不算新发现）。
 
 ---
 
@@ -1381,6 +1394,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `DiagnosisAction` | 诊断建议动作 | OpsHealth | Value Object |
 | `DiagnosisUnavailableError` | 诊断不可用异常 | OpsHealth | 异常 |
 | `OpsHealthService` | 健康运营巡检服务 | OpsHealth | Domain Service |
+| `OpsInspectionRun` | 巡检运行 | OpsHealth | Entity |
+| `OpsInspectionScheduleState` | 巡检调度状态 | OpsHealth | DTO |
+| `OpsInspectionStatus` | 巡检状态 | OpsHealth | Value Object |
+| `OpsInspectionSummary` | 巡检摘要 | OpsHealth | DTO |
+| `OpsInspectionScheduler` | 巡检调度器 | OpsHealth | Domain Service |
+| `OpsInspectionTrigger` | 巡检触发方式 | OpsHealth | Value Object |
+| `OpsCheckerError` | 检查器错误 | OpsHealth | Value Object |
+| `InspectionInProgressError` | 巡检进行中异常 | OpsHealth | 异常 |
 | `OpsInspectionResult` | 巡检结果 | OpsHealth | DTO |
 | `OpsRemediationRun` | 修复运行 | OpsHealth | Entity |
 | `OpsSeverity` | 问题严重度 | OpsHealth | Value Object |

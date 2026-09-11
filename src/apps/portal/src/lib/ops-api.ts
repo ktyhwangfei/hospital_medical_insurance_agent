@@ -44,6 +44,10 @@ export interface OpsInspectionResultDto {
   finding_count: number
   findings: OpsFindingDto[]
   checker_errors: OpsCheckerErrorDto[]
+  // ── #52：运行留痕字段（经调度器触发时回填）──
+  inspection_id: string | null
+  trigger_source: OpsInspectionTrigger | null
+  new_finding_count: number
 }
 
 export interface OpsFindingsQuery {
@@ -136,6 +140,30 @@ export interface OpsDiagnosisResultDto {
   report: OpsDiagnosisReportDto
 }
 
+// ── #52 P1-6 定时巡检调度 ──
+
+export type OpsInspectionTrigger = 'manual' | 'scheduled'
+export type OpsInspectionStatus = 'running' | 'succeeded' | 'failed'
+
+export interface OpsInspectionRunDto {
+  inspection_id: string
+  trigger_source: OpsInspectionTrigger
+  status: OpsInspectionStatus
+  triggered_by: string
+  started_at: string
+  finished_at: string | null
+  finding_count: number
+  new_finding_count: number
+  checker_errors: OpsCheckerErrorDto[]
+}
+
+export interface OpsInspectionSummaryDto {
+  interval_minutes: number
+  next_run_at: string | null
+  in_progress: boolean
+  latest: OpsInspectionRunDto | null
+}
+
 // ── 鉴权（与 data-governance-api 同模式：sessionStorage → dev 环境变量 token）──
 
 function opsToken(): string | null {
@@ -172,6 +200,10 @@ async function opsRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function runOpsInspection(): Promise<OpsInspectionResultDto> {
   return opsRequest<OpsInspectionResultDto>('/inspections', { method: 'POST' })
+}
+
+export async function getOpsInspectionSummary(): Promise<OpsInspectionSummaryDto> {
+  return opsRequest<OpsInspectionSummaryDto>('/inspection-summary')
 }
 
 export async function listOpsFindings(query: OpsFindingsQuery): Promise<OpsFindingPageDto> {

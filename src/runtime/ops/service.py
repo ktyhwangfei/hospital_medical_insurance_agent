@@ -5,19 +5,21 @@ import logging
 from datetime import datetime, timezone
 from typing import Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from src.data_platform.storage.ops.ops_ports import OpsFindingStorage
 from src.domain.ops.models import (
     FindingDraft,
     InvalidFindingTransitionError,
     OpsAssetType,
+    OpsCheckerError,
     OpsFinding,
     OpsFindingDetail,
     OpsFindingEvent,
     OpsFindingEventType,
     OpsFindingPage,
     OpsFindingStatus,
+    OpsInspectionTrigger,
     OpsRemediationRun,
     OpsSeverity,
     RemediationNotAllowedError,
@@ -39,21 +41,27 @@ logger = logging.getLogger(__name__)
 INSPECTION_ACTOR = "system:ops-inspector"
 
 
-class CheckerError(BaseModel):
-    """单检查器执行失败记录（不中断整次巡检）。"""
-
-    check_id: str
-    message: str
-
-
 class OpsInspectionResult(BaseModel):
-    """一次手动巡检的结果快照。"""
+    """一次巡检的结果快照。
+
+    new_finding_count 为首见问题数（occurrence_count == 1）；
+    inspection_id / trigger_source 由调度层（#52）回填——直接调用
+    run_inspection（未经调度器）时为空，不落运行留痕。
+    """
 
     checked_at: datetime
     check_count: int = Field(ge=1)
     finding_count: int = Field(ge=0)
     findings: list[OpsFinding]
-    checker_errors: list[CheckerError]
+    checker_errors: list[OpsCheckerError]
+    inspection_id: str | None = None
+    trigger_source: OpsInspectionTrigger | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def new_finding_count(self) -> int:
+        """本次巡检的首见问题数（复现累计不算新发现）。"""
+        return sum(1 for finding in self.findings if finding.occurrence_count == 1)
 
 
 class OpsRemediationResult(BaseModel):
@@ -83,13 +91,13 @@ class OpsHealthService:
         checked_at = now or datetime.now(timezone.utc)
         reader = self._reader_factory()
         findings: list[OpsFinding] = []
-        errors: list[CheckerError] = []
+        errors: list[OpsCheckerError] = []
         for spec in OPS_CHECKS:
             try:
                 drafts = spec.runner(reader, checked_at)
             except Exception as exc:  # 检查器只读，单点故障不拖垮整次巡检
                 logger.warning("ops 检查器 %s 执行失败: %s", spec.check_id, exc)
-                errors.append(CheckerError(check_id=spec.check_id, message=str(exc)))
+                errors.append(OpsCheckerError(check_id=spec.check_id, message=str(exc)))
                 continue
             for draft in drafts:
                 findings.append(self._record_recurrence(draft, seen_at=checked_at))

@@ -1,7 +1,9 @@
-// /ops 页公共标签与格式化 — 列表页与详情抽屉共享（#45 建立，#50 扩充状态/证据标签，#53 扩充修复标签，#51 扩充诊断标签）。
+// /ops 页公共标签与格式化 — 列表页与详情抽屉共享（#45 建立，#50 扩充状态/证据标签，#53 扩充修复标签，#51 扩充诊断标签，#52 扩充巡检调度标签）。
 import type {
   DiagnosisActionLevel,
   OpsFindingStatus,
+  OpsInspectionStatus,
+  OpsInspectionTrigger,
   OpsSeverity,
   RemediationRunStatus,
   VerificationResult,
@@ -67,6 +69,30 @@ export const DIAGNOSIS_LEVEL_LABELS: Record<DiagnosisActionLevel, string> = {
   L1: 'L1 可自动',
   L2: 'L2 需人工确认',
   L3: 'L3 禁止自动执行',
+}
+
+// ── #52 定时巡检调度标签 ──
+
+export const INSPECTION_STATUS_BADGES: Record<OpsInspectionStatus, string> = {
+  running: 'bg-amber-50 text-amber-700 ring-amber-200',
+  succeeded: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  failed: 'bg-red-50 text-red-700 ring-red-200',
+}
+export const INSPECTION_STATUS_LABELS: Record<OpsInspectionStatus, string> = {
+  running: '进行中',
+  succeeded: '完成',
+  failed: '失败',
+}
+export const INSPECTION_TRIGGER_LABELS: Record<OpsInspectionTrigger, string> = {
+  manual: '手动',
+  scheduled: '定时',
+}
+
+/** 巡检周期展示：1440=每天、整小时=每小时，其余按分钟 */
+export function inspectionIntervalLabel(minutes: number): string {
+  if (minutes % 1440 === 0) return minutes === 1440 ? '每天' : `每 ${minutes / 1440} 天`
+  if (minutes % 60 === 0) return minutes === 60 ? '每小时' : `每 ${minutes / 60} 小时`
+  return `每 ${minutes} 分钟`
 }
 
 /** 证据快照字段的展示名（未知键原样展示） */

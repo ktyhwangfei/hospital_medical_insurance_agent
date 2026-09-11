@@ -16,6 +16,7 @@ from src.data_platform.storage.ops.ops_factory import get_ops_finding_storage
 from src.domain.ops.models import (
     DiagnosisUnavailableError,
     FindingRevisionConflictError,
+    InspectionInProgressError,
     InvalidFindingTransitionError,
     OpsAssetType,
     OpsDiagnosisResult,
@@ -23,6 +24,7 @@ from src.domain.ops.models import (
     OpsFindingNotFoundError,
     OpsFindingPage,
     OpsFindingStatus,
+    OpsInspectionSummary,
     OpsSeverity,
     RemediationNotAllowedError,
     RemediationRiskLevel,
@@ -30,6 +32,7 @@ from src.domain.ops.models import (
 from src.gateway.auth import authenticator
 from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
 from src.runtime.ops.diagnosis import OpsDiagnosisService
+from src.runtime.ops.scheduler import OpsInspectionScheduler
 from src.runtime.ops.service import OpsHealthService, OpsInspectionResult, OpsRemediationResult
 from src.shared.schemas.responses import error_detail
 
@@ -56,6 +59,16 @@ def get_ops_diagnosis_service() -> OpsDiagnosisService:
         return ModelGateway()
 
     return OpsDiagnosisService(get_ops_finding_storage(), gateway_factory)
+
+
+def get_ops_inspection_scheduler() -> OpsInspectionScheduler:
+    """巡检调度器依赖注入 seam（#52）：与 /ops 共享问题库存储进程级单例。"""
+    # 巡检读取面复用治理控制面服务（lru_cache 单例，密钥缺失时端点 503）
+    from src.runtime.api.data_governance_routes import get_data_governance_service
+
+    storage = get_ops_finding_storage()
+    health = OpsHealthService(storage, get_data_governance_service)
+    return OpsInspectionScheduler(storage, health)
 
 
 def _require_permission(permission: str, authorization: str | None):
@@ -100,11 +113,33 @@ def require_ops_write(
     response_model=OpsInspectionResult,
 )
 def run_inspection(
-    _principal=Depends(require_ops_write),
-    service: OpsHealthService = Depends(get_ops_service),
+    principal: DataGovernancePrincipal = Depends(require_ops_write),
+    scheduler: OpsInspectionScheduler = Depends(get_ops_inspection_scheduler),
 ) -> OpsInspectionResult:
-    """手动触发一次巡检：全部检查器只读取数，问题按 fingerprint 去重落库。"""
-    return service.run_inspection()
+    """手动触发一次巡检（#52 起写 ops_inspections 运行留痕）。
+
+    全部检查器只读取数，问题按 fingerprint 去重落库；已有巡检执行中
+    （手动或定时）→ 409 INSPECTION_IN_PROGRESS。
+    """
+    try:
+        return scheduler.run_manual(actor=principal.user_id)
+    except InspectionInProgressError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_detail("INSPECTION_IN_PROGRESS", str(exc)),
+        ) from exc
+
+
+@router.get(
+    "/inspection-summary",
+    response_model=OpsInspectionSummary,
+)
+def get_inspection_summary(
+    _principal=Depends(require_ops_read),
+    scheduler: OpsInspectionScheduler = Depends(get_ops_inspection_scheduler),
+) -> OpsInspectionSummary:
+    """巡检摘要条数据（#52）：周期 + 下次巡检时间 + 最近一次巡检结果。"""
+    return scheduler.get_summary()
 
 
 @router.get(

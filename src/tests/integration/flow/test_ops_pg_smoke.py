@@ -1,14 +1,17 @@
 """健康运营问题库 PG 存储活库冒烟 — #45（DDL/去重/过滤分页）
-+ #50（事件表 DDL / 乐观锁流转 / 时间线）+ #53（修复留痕表 DDL / 闭环流转）。
++ #50（事件表 DDL / 乐观锁流转 / 时间线）+ #53（修复留痕表 DDL / 闭环流转）
++ #52（巡检运行表 DDL / claim 抢占互斥 / 调度行推进）。
 
-验证 ops_findings / ops_finding_events / ops_remediation_runs 表 DDL
-（CREATE+ALTER 双写幂等）、fingerprint 唯一索引 ON CONFLICT 去重累计、
-条件 UPDATE 乐观锁流转、L1 修复留痕与 resolved 闭环在真实 PostgreSQL
-上成立。
+验证 ops_findings / ops_finding_events / ops_remediation_runs /
+ops_inspections / ops_inspection_schedule 表 DDL（CREATE+ALTER 双写幂等）、
+fingerprint 唯一索引 ON CONFLICT 去重累计、条件 UPDATE 乐观锁流转、
+L1 修复留痕与 resolved 闭环、FOR UPDATE SKIP LOCKED 并发抢占不重复执行
+在真实 PostgreSQL 上成立。
 环境依赖: PostgreSQL（127.0.0.1:5432/hospital_mcp，与生产同构）；不可用时整组 skip。
 """
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -18,10 +21,13 @@ from src.domain.ops.models import (
     FindingDraft,
     FindingRevisionConflictError,
     OpsAssetType,
+    OpsCheckerError,
     OpsFindingEvent,
     OpsFindingEventType,
     OpsFindingNotFoundError,
     OpsFindingStatus,
+    OpsInspectionStatus,
+    OpsInspectionTrigger,
     OpsSeverity,
     RemediationRiskLevel,
     RemediationRunStatus,
@@ -34,6 +40,11 @@ from src.runtime.ops.service import OpsHealthService
 T0 = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
 T1 = T0 + timedelta(minutes=10)
 SMOKE_ASSET = "ops_pg_smoke_source"
+SMOKE_INSPECTOR = "ops-pg-smoke"
+# 本 pytest 会话开始时刻：#52 冒烟行的删除下界（roundtrip 行 triggered_by 是
+# system:ops-scheduler/ops-admin-1，无法按 triggered_by 过滤；且 run_manual
+# 会产生未来时间戳行——不删会永久占据 get_latest_inspection 排序首位）
+SESSION_STARTED_AT = datetime.now(timezone.utc)
 
 
 def _pg_ready() -> bool:
@@ -76,6 +87,18 @@ def _cleanup(storage: PostgresOpsFindingStorage):
         (SMOKE_ASSET,),
     )
     client.execute("DELETE FROM ops_findings WHERE asset_id = %s", (SMOKE_ASSET,))
+    # #52：清掉本次会话产生的全部巡检留痕，并把调度行无条件复位为立即到期
+    # （测试中途失败可能留下 running 占位；带 active IS NULL 守卫的复位治不了
+    # 这种卡死，反而让后续所有 claim 永久返回 None）
+    client.execute(
+        "DELETE FROM ops_inspections WHERE triggered_by = %s OR started_at >= %s",
+        (SMOKE_INSPECTOR, SESSION_STARTED_AT),
+    )
+    client.execute(
+        """UPDATE ops_inspection_schedule
+           SET next_run_at = NOW(), active_inspection_id = NULL, updated_at = NOW()
+           WHERE schedule_id = 1""",
+    )
 
 
 def _draft(check_id: str, severity: OpsSeverity, payload: dict) -> FindingDraft:
@@ -330,3 +353,132 @@ def test_diagnosis_report_persisted_on_live_pg(storage: PostgresOpsFindingStorag
     final = storage.get_finding(finding.finding_id)
     assert final.diagnosis["status"] == "insufficient_evidence"
     assert final.diagnosis["actions"] == []
+
+
+def _reset_schedule_due_now(storage: PostgresOpsFindingStorage) -> None:
+    """把调度行复位为立即到期，测试可确定性地抢占 scheduled 巡检。"""
+    storage._get_client().execute(
+        """UPDATE ops_inspection_schedule
+           SET next_run_at = NOW(), active_inspection_id = NULL, updated_at = NOW()
+           WHERE schedule_id = 1""",
+    )
+
+
+def test_concurrent_claim_exactly_one_wins_on_live_pg(storage: PostgresOpsFindingStorage):
+    """#52 验收：并发巡检不重复执行——双连接同时 claim，恰好一个成功。
+
+    FOR UPDATE SKIP LOCKED：先到者锁调度行写入 running；后到者跳过锁定行
+    （或提交后撞 active_inspection_id IS NULL 过滤）空手而归。
+    """
+    _reset_schedule_due_now(storage)
+    # 独立连接的第二存储实例：绕开单客户端操作锁，制造真实并发
+    storage_b = PostgresOpsFindingStorage()
+    now = datetime.now(timezone.utc)
+    barrier = threading.Barrier(2)
+    results: list = [None, None]
+
+    def claim(index: int, target: PostgresOpsFindingStorage):
+        barrier.wait()
+        results[index] = target.claim_inspection(
+            now,
+            trigger_source=OpsInspectionTrigger.SCHEDULED,
+            triggered_by=SMOKE_INSPECTOR,
+        )
+
+    threads = [
+        threading.Thread(target=claim, args=(0, storage)),
+        threading.Thread(target=claim, args=(1, storage_b)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    winners = [run for run in results if run is not None]
+    assert len(winners) == 1
+    assert winners[0].status is OpsInspectionStatus.RUNNING
+    # 调度行被胜者占用；失败方不产生 running 行
+    schedule = storage.get_inspection_schedule()
+    assert schedule.active_inspection_id == winners[0].inspection_id
+    assert storage.get_latest_inspection().inspection_id == winners[0].inspection_id
+
+    # 收尾释放占位并推进 next_run_at（60 分钟后）
+    finished = storage.complete_inspection(
+        winners[0].inspection_id,
+        finished_at=now,
+        status=OpsInspectionStatus.SUCCEEDED,
+        finding_count=2,
+        new_finding_count=1,
+        checker_errors=[OpsCheckerError(check_id="data_sync_failed", message="读取失败")],
+        next_run_at=now + timedelta(minutes=60),
+    )
+    assert finished.status is OpsInspectionStatus.SUCCEEDED
+    assert finished.checker_errors[0].check_id == "data_sync_failed"
+    schedule_after = storage.get_inspection_schedule()
+    assert schedule_after.active_inspection_id is None
+    assert schedule_after.next_run_at == now + timedelta(minutes=60)
+
+    # 未到期：scheduled 视为 idle；manual 立即到期仍可抢占（force 语义）
+    assert storage.claim_inspection(
+        now + timedelta(minutes=30),
+        trigger_source=OpsInspectionTrigger.SCHEDULED, triggered_by=SMOKE_INSPECTOR,
+    ) is None
+    manual = storage.claim_inspection(
+        now + timedelta(minutes=31),
+        trigger_source=OpsInspectionTrigger.MANUAL, triggered_by=SMOKE_INSPECTOR,
+    )
+    assert manual is not None and manual.trigger_source is OpsInspectionTrigger.MANUAL
+    storage.complete_inspection(
+        manual.inspection_id,
+        finished_at=now + timedelta(minutes=31),
+        status=OpsInspectionStatus.FAILED,
+        finding_count=0,
+        new_finding_count=0,
+        checker_errors=[],
+        next_run_at=now + timedelta(minutes=91),
+    )
+    latest = storage.get_latest_inspection()
+    assert latest.status is OpsInspectionStatus.FAILED
+    assert latest.trigger_source is OpsInspectionTrigger.MANUAL
+
+
+def test_scheduler_roundtrip_on_live_pg(storage: PostgresOpsFindingStorage):
+    """#52：调度器完整闭环在活库成立——claim → 巡检 → 留痕 + 摘要聚合。"""
+    from src.runtime.ops.scheduler import OpsInspectionScheduler
+    from src.runtime.ops.service import OpsHealthService, OpsInspectionResult
+
+    _reset_schedule_due_now(storage)
+    scheduled_at = datetime.now(timezone.utc)
+
+    class _HealthyReader:
+        def list_sources(self):
+            return []
+
+        def get_job(self, source_id):
+            raise LookupError(source_id)
+
+    health = OpsHealthService(storage, lambda: _HealthyReader())
+    scheduler = OpsInspectionScheduler(storage, health, interval_minutes=120)
+
+    run = scheduler.run_scheduled_once(now=scheduled_at)
+    assert run is not None and run.status is OpsInspectionStatus.SUCCEEDED
+    assert run.trigger_source is OpsInspectionTrigger.SCHEDULED
+    assert run.finding_count == 0 and run.new_finding_count == 0
+
+    # 完成后 next_run_at 推进 120 分钟；摘要条数据完整
+    schedule = storage.get_inspection_schedule()
+    assert schedule.next_run_at == scheduled_at + timedelta(minutes=120)
+    summary = scheduler.get_summary()
+    assert summary.interval_minutes == 120
+    assert summary.in_progress is False
+    assert summary.latest is not None
+    assert summary.latest.inspection_id == run.inspection_id
+    assert summary.latest.finished_at == scheduled_at
+
+    # 未到期再跑一轮 → idle；手动触发走同一互斥位
+    assert scheduler.run_scheduled_once(now=scheduled_at + timedelta(minutes=10)) is None
+    result = scheduler.run_manual(actor="ops-admin-1", now=scheduled_at + timedelta(minutes=11))
+    assert result.inspection_id is not None
+    assert result.trigger_source is OpsInspectionTrigger.MANUAL
+    assert storage.get_latest_inspection().inspection_id == result.inspection_id
+    assert OpsInspectionResult.model_validate(result.model_dump()).finding_count == 0

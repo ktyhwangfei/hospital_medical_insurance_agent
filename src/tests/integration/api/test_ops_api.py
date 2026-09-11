@@ -23,10 +23,11 @@ from src.data_platform.storage.postgresql.outpatient_governance_store import (
     OutpatientGovernanceNotFoundError,
 )
 from src.data_platform.storage.ops.ops_in_memory import InMemoryOpsFindingStorage
-from src.domain.ops.models import RemediationRiskLevel
+from src.domain.ops.models import OpsInspectionTrigger, RemediationRiskLevel
 from src.runtime.api.app import create_app
-from src.runtime.api.ops_routes import get_ops_service
+from src.runtime.api.ops_routes import get_ops_inspection_scheduler, get_ops_service
 from src.runtime.ops.remediation import RemediationActionOutcome, RemediationSpec
+from src.runtime.ops.scheduler import OpsInspectionScheduler
 from src.runtime.ops.service import OpsHealthService
 
 BASE = "/api/v1/medical-insurance-ai-agent/ops"
@@ -130,12 +131,16 @@ def _fake_whitelist(executor):
 def api_factory(monkeypatch):
     monkeypatch.setenv("AUTH_JWT_SECRET", JWT_SECRET)
 
-    def build(reader, *, executor=None) -> TestClient:
+    def build(reader, *, executor=None, storage=None) -> TestClient:
         # 依赖注入必须复用同一服务实例：lambda 内 new 存储会让每个请求拿到空库
+        # （#52 起 POST /inspections 走调度器，须与问题库服务共享同一存储）
         whitelist = _fake_whitelist(executor) if executor else None
-        service = OpsHealthService(InMemoryOpsFindingStorage(), lambda: reader, whitelist)
+        shared = storage if storage is not None else InMemoryOpsFindingStorage()
+        service = OpsHealthService(shared, lambda: reader, whitelist)
+        scheduler = OpsInspectionScheduler(shared, service)
         app = create_app()
         app.dependency_overrides[get_ops_service] = lambda: service
+        app.dependency_overrides[get_ops_inspection_scheduler] = lambda: scheduler
         return TestClient(app, raise_server_exceptions=False)
 
     return build
@@ -186,6 +191,58 @@ class TestInspection:
         assert {err["check_id"] for err in body["checker_errors"]} == {
             "data_sync_failed", "data_source_down",
         }
+
+
+class TestInspectionScheduling:
+    """#52：手动巡检写运行留痕 + 执行中 409 + 摘要端点。"""
+
+    def test_manual_inspection_returns_run_fields(self, api_factory):
+        api = api_factory(_Reader(
+            [_source(ConnectionStatus.ERROR)],
+            {"bjybdb": _job(SyncJobStatus.FAILED)},
+        ))
+        body = api.post(f"{BASE}/inspections", headers=_headers("ops:write")).json()
+        assert body["trigger_source"] == "manual"
+        assert body["inspection_id"]
+        assert body["new_finding_count"] == 2  # 首巡检两条问题均为首见
+
+        # 第二次巡检：复现累计，不再是新发现
+        second = api.post(f"{BASE}/inspections", headers=_headers("ops:write")).json()
+        assert second["finding_count"] == 2
+        assert second["new_finding_count"] == 0
+
+    def test_in_progress_returns_409(self, api_factory):
+        storage = InMemoryOpsFindingStorage()
+        # 预占一个 running 位（模拟定时巡检执行中），手动触发应被拒
+        claimed = storage.claim_inspection(
+            datetime.now(timezone.utc),
+            trigger_source=OpsInspectionTrigger.SCHEDULED,
+            triggered_by="system:ops-scheduler",
+        )
+        assert claimed is not None
+        api = api_factory(_Reader(), storage=storage)
+        resp = api.post(f"{BASE}/inspections", headers=_headers("ops:write"))
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error_code"] == "INSPECTION_IN_PROGRESS"
+
+    def test_summary_endpoint_shape_and_auth(self, api_factory):
+        api = api_factory(_Reader())
+        assert api.get(f"{BASE}/inspection-summary").status_code == 401
+        assert api.get(
+            f"{BASE}/inspection-summary", headers=_headers("ops:write")
+        ).status_code == 403
+
+        empty = api.get(f"{BASE}/inspection-summary", headers=_headers("ops:read")).json()
+        assert empty["latest"] is None
+        assert empty["in_progress"] is False
+        assert empty["interval_minutes"] == 1440  # 默认每日
+
+        api.post(f"{BASE}/inspections", headers=_headers("ops:write"))
+        body = api.get(f"{BASE}/inspection-summary", headers=_headers("ops:read")).json()
+        assert body["latest"]["status"] == "succeeded"
+        assert body["latest"]["trigger_source"] == "manual"
+        assert body["latest"]["finished_at"] is not None
+        assert body["next_run_at"] is not None
 
 
 class TestFindingsList:
