@@ -43,9 +43,10 @@ function Read-State {
     return $null
 }
 
-function Write-State([int]$be, [int]$fe, $workerPid = $null) {
+function Write-State([int]$be, [int]$fe, $workerPid = $null, $opsWorkerPid = $null) {
     $nextState = @{ backend_port = $be; frontend_port = $fe; updated_at = (Get-Date -Format o) }
     if ($workerPid) { $nextState.worker_pid = [int]$workerPid }
+    if ($opsWorkerPid) { $nextState.ops_worker_pid = [int]$opsWorkerPid }
     $nextState | ConvertTo-Json | Set-Content $STATE_FILE -Encoding UTF8
 }
 
@@ -222,8 +223,16 @@ $workerScript = Join-Path $WORKDIR "scripts\run_outpatient_sync_worker.py"
 $worker = Start-Process $pythonExe -ArgumentList $workerScript -WorkingDirectory $WORKDIR -WindowStyle Hidden -PassThru
 Start-Sleep -Seconds 1
 if ($worker.HasExited) { throw "Outpatient synchronization worker failed to start" }
-Write-State $PORT_BACKEND $PORT_FRONTEND $worker.Id
 Write-Host "  Worker PID $($worker.Id) running" -ForegroundColor Green
+
+# ---- [3b] Start ops inspection worker (scheduled inspections, issue #52) ----
+Write-Host "[3b/5] Start ops inspection worker..." -ForegroundColor Cyan
+$opsWorkerScript = Join-Path $WORKDIR "scripts\run_ops_inspection_worker.py"
+$opsWorker = Start-Process $pythonExe -ArgumentList $opsWorkerScript -WorkingDirectory $WORKDIR -WindowStyle Hidden -PassThru
+Start-Sleep -Seconds 1
+if ($opsWorker.HasExited) { throw "Ops inspection worker failed to start" }
+Write-State $PORT_BACKEND $PORT_FRONTEND $worker.Id $opsWorker.Id
+Write-Host "  Ops worker PID $($opsWorker.Id) running" -ForegroundColor Green
 
 # ---- [4] Start frontend (portal) on port $PORT_FRONTEND ----
 Write-Host "[4/5] Start frontend (portal) on port $PORT_FRONTEND..." -ForegroundColor Cyan
@@ -251,5 +260,6 @@ Write-Host "[5/5] Done" -ForegroundColor Green
 Write-Host "Backend: http://127.0.0.1:${PORT_BACKEND}  (PID $($be.Id))" -ForegroundColor Green
 Write-Host "Portal:  http://127.0.0.1:${PORT_FRONTEND}  (PID $($fe.Id))" -ForegroundColor Green
 Write-Host "Worker:  outpatient sync (PID $($worker.Id))" -ForegroundColor Green
+Write-Host "Worker:  ops inspection (PID $($opsWorker.Id))" -ForegroundColor Green
 Write-Host "Ports persisted in .server-ports.json (reused on next start)" -ForegroundColor DarkGray
 Write-Host "Stop:    .\stop-servers.ps1" -ForegroundColor DarkGray

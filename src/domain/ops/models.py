@@ -36,11 +36,12 @@ class OpsSeverity(StrEnum):
 
 
 class OpsFindingStatus(StrEnum):
-    """问题状态（open 由巡检产出；ignored 由 #50 手动忽略；resolved 由 #53 修复验证驱动）。"""
+    """问题状态（open 巡检产出；ignored #50 手动忽略；resolved #53 修复验证驱动；waiting_human #54 转人工处理中）。"""
 
     OPEN = "open"
     RESOLVED = "resolved"
     IGNORED = "ignored"
+    WAITING_HUMAN = "waiting_human"
 
 
 def new_finding_id() -> str:
@@ -52,6 +53,10 @@ def new_finding_event_id() -> str:
 
 
 def new_remediation_run_id() -> str:
+    return uuid.uuid4().hex
+
+
+def new_inspection_id() -> str:
     return uuid.uuid4().hex
 
 
@@ -109,11 +114,13 @@ class OpsFindingPage(BaseModel):
 
 
 class OpsFindingEventType(StrEnum):
-    """生命周期流转事件类型（手动操作与 #53 修复验证产生）。"""
+    """生命周期流转事件类型（手动操作、#53 修复验证与 #54 人工交接产生）。"""
 
     IGNORED = "ignored"
     REOPENED = "reopened"
     RESOLVED = "resolved"
+    MANUAL_REQUESTED = "manual_requested"
+    MANUAL_COMPLETED = "manual_completed"
 
 
 class OpsFindingEvent(BaseModel):
@@ -138,6 +145,7 @@ class OpsFindingDetail(BaseModel):
     finding: OpsFinding
     events: list[OpsFindingEvent]
     remediations: list["OpsRemediationRun"] = Field(default_factory=list)
+    manual_task: "OpsManualHandoff | None" = None  # #54 最新人工确认任务投影
 
 
 class RemediationRiskLevel(StrEnum):
@@ -182,6 +190,178 @@ class OpsRemediationRun(BaseModel):
     created_at: datetime
 
 
+# ── #51 P1-5 LLM 智能诊断 ──
+
+
+class DiagnosisStatus(StrEnum):
+    """诊断结论状态：无 citations 一律落 insufficient_evidence，不驱动动作。"""
+
+    COMPLETE = "complete"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+class DiagnosisActionLevel(StrEnum):
+    """建议动作分级：L1 自动白名单 / L2 人工确认 / L3 禁止（仅提示永不执行）。"""
+
+    L1 = "L1"
+    L2 = "L2"
+    L3 = "L3"
+
+
+class DiagnosisCitation(BaseModel):
+    """诊断证据引用：只能从证据目录中选取（quote 取自目录，模型不可编造）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    citation_id: str = Field(min_length=1, max_length=16)
+    source: str = Field(min_length=1, max_length=128)
+    quote: str = Field(min_length=1, max_length=500)
+
+
+class DiagnosisAction(BaseModel):
+    """分级建议动作（诊断只读产出，执行仍走 #53 白名单 / #54 人工流）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    level: DiagnosisActionLevel
+    description: str = Field(min_length=1, max_length=500)
+    citation_ids: list[str] = Field(min_length=1)
+
+
+class OpsDiagnosisReport(BaseModel):
+    """单条 finding 的诊断报告（存入 OpsFinding.diagnosis，最新一份覆盖）。"""
+
+    finding_id: str = Field(min_length=1, max_length=64)
+    status: DiagnosisStatus
+    root_cause: str | None = Field(default=None, max_length=2000)
+    citations: list[DiagnosisCitation] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    actions: list[DiagnosisAction] = Field(default_factory=list)
+    model_route: dict[str, Any] = Field(default_factory=dict)  # scene/model_name 审计
+    generated_by: str = Field(min_length=1, max_length=128)
+    generated_at: datetime
+
+
+class OpsDiagnosisResult(BaseModel):
+    """一次诊断的结果：刷新后的问题（含新报告）+ 报告本体。"""
+
+    finding: OpsFinding
+    report: OpsDiagnosisReport
+
+
+# ── #52 P1-6 定时巡检调度 ──
+
+
+class OpsInspectionTrigger(StrEnum):
+    """巡检触发方式：manual（页面/接口手动）或 scheduled（周期调度）。"""
+
+    MANUAL = "manual"
+    SCHEDULED = "scheduled"
+
+
+class OpsInspectionStatus(StrEnum):
+    """单次巡检运行状态：running 已抢占未收尾 / succeeded / failed。"""
+
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class OpsCheckerError(BaseModel):
+    """单检查器执行失败记录（不中断整次巡检）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    check_id: str = Field(min_length=1, max_length=64)
+    message: str = Field(min_length=1, max_length=500)
+
+
+class OpsInspectionRun(BaseModel):
+    """一次巡检运行留痕（Entity）：触发方式、起止时间与新发现数。
+
+    手动与定时统一经 claim 抢占写入 running 行：调度行
+    active_inspection_id 互斥保证同一时刻至多一条 running，
+    结束后回填终态与计数（new_finding_count 只计首见问题）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    inspection_id: str = Field(min_length=1, max_length=64)
+    trigger_source: OpsInspectionTrigger
+    status: OpsInspectionStatus
+    triggered_by: str = Field(min_length=1, max_length=128)
+    started_at: datetime
+    finished_at: datetime | None = None
+    finding_count: int = Field(default=0, ge=0)
+    new_finding_count: int = Field(default=0, ge=0)
+    checker_errors: list[OpsCheckerError] = Field(default_factory=list)
+
+
+class OpsInspectionScheduleState(BaseModel):
+    """单行调度状态：下次巡检时间与当前互斥的运行占位。"""
+
+    next_run_at: datetime
+    active_inspection_id: str | None = None
+
+
+class OpsInspectionSummary(BaseModel):
+    """巡检摘要（Portal 顶部摘要条）：周期 + 下次巡检 + 最近一次巡检。"""
+
+    interval_minutes: int = Field(ge=1)
+    next_run_at: datetime | None = None
+    in_progress: bool = False
+    latest: OpsInspectionRun | None = None
+
+
+# ── #54 P2-8 L2 人工确认修复流 ──
+
+
+class OpsManualTarget(StrEnum):
+    """L2 人工处理跳转目标（按资产类型映射到既有治理页面）。"""
+
+    POLICY_KNOWLEDGE = "policy_knowledge"  # 知识内容修正 → 政策知识审核/重提取管线
+    SKILL_DRAFT = "skill_draft"            # skill 草稿修改 → skills 草稿流程
+    EXTERNAL = "external"                  # data/runtime 资产：无门户治理页，外部系统处理
+
+
+def manual_target_for_asset(asset_type: "OpsAssetType") -> OpsManualTarget:
+    """资产类型 → 人工处理跳转目标（knowledge/skill 有治理页，其余走外部）。"""
+    if asset_type is OpsAssetType.KNOWLEDGE:
+        return OpsManualTarget.POLICY_KNOWLEDGE
+    if asset_type is OpsAssetType.SKILL:
+        return OpsManualTarget.SKILL_DRAFT
+    return OpsManualTarget.EXTERNAL
+
+
+class OpsManualHandoff(BaseModel):
+    """L2 人工确认任务的只读投影（源数据在 task_closure 任务表）。"""
+
+    task_id: str = Field(min_length=1, max_length=64)
+    status: str  # waiting_human_confirmation | completed
+    target: OpsManualTarget
+    requested_by: str = Field(min_length=1, max_length=128)
+    requested_at: datetime
+    note: str | None = Field(default=None, max_length=500)
+    handled_by: str | None = Field(default=None, max_length=128)
+    handled_at: datetime | None = None
+    result_note: str | None = Field(default=None, max_length=500)
+
+
+class OpsManualResult(BaseModel):
+    """人工交接操作（发起/完成）的返回：最新详情 + 任务投影。"""
+
+    detail: OpsFindingDetail
+    manual_task: OpsManualHandoff
+
+
+class DiagnosisUnavailableError(Exception):
+    """诊断不可用（模型未配置/调用失败/输出不可解析），不落库不覆盖旧报告。"""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"诊断不可用：{reason}")
+        self.reason = reason
+
+
 class OpsFindingNotFoundError(Exception):
     """问题不存在（按 finding_id 查询）。"""
 
@@ -221,3 +401,29 @@ class RemediationNotAllowedError(Exception):
         super().__init__(f"问题 {finding_id} 的检查项 {check_id} 不在自动修复白名单内")
         self.finding_id = finding_id
         self.check_id = check_id
+
+
+class ManualTaskNotFoundError(Exception):
+    """问题没有可操作的人工确认任务（未发起或任务类型不符）。"""
+
+    def __init__(self, finding_id: str) -> None:
+        super().__init__(f"问题 {finding_id} 没有等待中的人工确认任务")
+        self.finding_id = finding_id
+
+
+class OpsInspectionNotFoundError(Exception):
+    """巡检运行记录不存在（按 inspection_id 查询）。"""
+
+    def __init__(self, inspection_id: str) -> None:
+        super().__init__(f"巡检记录不存在: {inspection_id}")
+        self.inspection_id = inspection_id
+
+
+class InspectionInProgressError(Exception):
+    """已有巡检正在执行（claim 抢占失败），手动触发被拒绝。"""
+
+    def __init__(self, active_inspection_id: str | None) -> None:
+        super().__init__(
+            f"巡检 {active_inspection_id or '(未知)'} 正在执行中，请稍后重试"
+        )
+        self.active_inspection_id = active_inspection_id

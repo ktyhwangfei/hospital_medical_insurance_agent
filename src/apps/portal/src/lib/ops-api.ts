@@ -6,7 +6,7 @@ import { requestJson } from './api-client'
 
 export type OpsAssetType = 'skill' | 'knowledge' | 'data' | 'runtime'
 export type OpsSeverity = 'info' | 'warning' | 'critical'
-export type OpsFindingStatus = 'open' | 'resolved' | 'ignored'
+export type OpsFindingStatus = 'open' | 'resolved' | 'ignored' | 'waiting_human'
 
 // ── DTO ──
 
@@ -44,6 +44,10 @@ export interface OpsInspectionResultDto {
   finding_count: number
   findings: OpsFindingDto[]
   checker_errors: OpsCheckerErrorDto[]
+  // ── #52：运行留痕字段（经调度器触发时回填）──
+  inspection_id: string | null
+  trigger_source: OpsInspectionTrigger | null
+  new_finding_count: number
 }
 
 export interface OpsFindingsQuery {
@@ -54,7 +58,12 @@ export interface OpsFindingsQuery {
   page_size?: number
 }
 
-export type OpsFindingEventType = 'ignored' | 'reopened' | 'resolved'
+export type OpsFindingEventType =
+  | 'ignored'
+  | 'reopened'
+  | 'resolved'
+  | 'manual_requested'
+  | 'manual_completed'
 
 export interface OpsFindingEventDto {
   event_id: string
@@ -95,11 +104,92 @@ export interface OpsFindingDetailDto {
   finding: OpsFindingDto
   events: OpsFindingEventDto[]
   remediations: OpsRemediationRunDto[]
+  // ── #54：最新人工确认任务投影（无则 null）──
+  manual_task: OpsManualTaskDto | null
 }
 
 export interface OpsRemediationResultDto {
   run: OpsRemediationRunDto
   detail: OpsFindingDetailDto
+}
+
+// ── #54 L2 人工确认修复流 ──
+
+export type OpsManualTarget = 'policy_knowledge' | 'skill_draft' | 'external'
+
+export interface OpsManualTaskDto {
+  task_id: string
+  status: 'waiting_human_confirmation' | 'completed'
+  target: OpsManualTarget
+  requested_by: string
+  requested_at: string
+  note: string | null
+  handled_by: string | null
+  handled_at: string | null
+  result_note: string | null
+}
+
+export interface OpsManualResultDto {
+  detail: OpsFindingDetailDto
+  manual_task: OpsManualTaskDto
+}
+
+// ── #51 P1-5 LLM 智能诊断 ──
+
+export type DiagnosisStatus = 'complete' | 'insufficient_evidence'
+export type DiagnosisActionLevel = 'L1' | 'L2' | 'L3'
+
+export interface DiagnosisCitationDto {
+  citation_id: string
+  source: string
+  quote: string
+}
+
+export interface DiagnosisActionDto {
+  level: DiagnosisActionLevel
+  description: string
+  citation_ids: string[]
+}
+
+export interface OpsDiagnosisReportDto {
+  finding_id: string
+  status: DiagnosisStatus
+  root_cause: string | null
+  citations: DiagnosisCitationDto[]
+  uncertainties: string[]
+  actions: DiagnosisActionDto[]
+  model_route: { scene?: string; model_type?: string; model_name?: string }
+  generated_by: string
+  generated_at: string
+}
+
+export interface OpsDiagnosisResultDto {
+  finding: OpsFindingDto
+  report: OpsDiagnosisReportDto
+}
+
+// ── #52 P1-6 定时巡检调度 ──
+
+export type OpsInspectionTrigger = 'manual' | 'scheduled'
+export type OpsInspectionStatus = 'running' | 'succeeded' | 'failed'
+
+export interface OpsInspectionRunDto {
+  inspection_id: string
+  trigger_source: OpsInspectionTrigger
+  status: OpsInspectionStatus
+  triggered_by: string
+  started_at: string
+  finished_at: string | null
+  finding_count: number
+  new_finding_count: number
+  checker_errors: OpsCheckerErrorDto[]
+}
+
+export interface OpsInspectionSummaryDto {
+  interval_minutes: number
+  next_run_at: string | null
+  in_progress: boolean
+  latest: OpsInspectionRunDto | null
 }
 
 // ── 鉴权（与 data-governance-api 同模式：sessionStorage → dev 环境变量 token）──
@@ -138,6 +228,10 @@ async function opsRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function runOpsInspection(): Promise<OpsInspectionResultDto> {
   return opsRequest<OpsInspectionResultDto>('/inspections', { method: 'POST' })
+}
+
+export async function getOpsInspectionSummary(): Promise<OpsInspectionSummaryDto> {
+  return opsRequest<OpsInspectionSummaryDto>('/inspection-summary')
 }
 
 export async function listOpsFindings(query: OpsFindingsQuery): Promise<OpsFindingPageDto> {
@@ -189,5 +283,38 @@ export async function remediateOpsFinding(
   return opsRequest<OpsRemediationResultDto>(
     `/findings/${encodeURIComponent(findingId)}/remediate?expected_revision=${expectedRevision}`,
     { method: 'POST' },
+  )
+}
+
+export async function diagnoseOpsFinding(
+  findingId: string,
+): Promise<OpsDiagnosisResultDto> {
+  return opsRequest<OpsDiagnosisResultDto>(
+    `/findings/${encodeURIComponent(findingId)}/diagnose`,
+    { method: 'POST' },
+  )
+}
+
+// ── #54 人工交接端点 ──
+
+export async function requestManualHandoff(
+  findingId: string,
+  expectedRevision: number,
+  note: string | null,
+): Promise<OpsManualResultDto> {
+  return opsRequest<OpsManualResultDto>(
+    `/findings/${encodeURIComponent(findingId)}/manual-handoff?expected_revision=${expectedRevision}`,
+    { method: 'POST', body: JSON.stringify({ note }) },
+  )
+}
+
+export async function completeManualHandling(
+  findingId: string,
+  expectedRevision: number,
+  resultNote: string,
+): Promise<OpsManualResultDto> {
+  return opsRequest<OpsManualResultDto>(
+    `/findings/${encodeURIComponent(findingId)}/manual-complete?expected_revision=${expectedRevision}`,
+    { method: 'POST', body: JSON.stringify({ result_note: resultNote }) },
   )
 }

@@ -47,7 +47,7 @@ Agent 编码时根据以下映射定位代码位置：
 
 | 目录 | 职责 | 当前状态 |
 |------|------|----------|
-| `runtime/` | Agent 核心运行时：Policy QA API、会话上下文、结算/政策检索、确定性验证、有界恢复、任务闭环、事件日志及 Skill 管理；可信问题库（#37 确定性匹配+澄清降级）；门诊运营分析（#40 受控问数/下钻/周报） | 已实现（`api/policy_qa_routes.py`、`policy_qa/`、question_library、ops_analytics、context/memory/reasoning/task_closure/skill_management） |
+| `runtime/` | Agent 核心运行时：Policy QA API、会话上下文、结算/政策检索、确定性验证、有界恢复、任务闭环、事件日志及 Skill 管理；可信问题库（#37 确定性匹配+澄清降级）；门诊运营分析（#40 受控问数/下钻/周报）；资产健康运营（#45/#50/#53 问题库+生命周期+L1 修复、#51 LLM 智能诊断 citations 强制） | 已实现（`api/policy_qa_routes.py`、`policy_qa/`、question_library、ops_analytics、ops（checkers/remediation/diagnosis/service）、context/memory/reasoning/task_closure/skill_management） |
 | `model_service/` | 模型服务网关：统一调用入口、路由策略、OpenAI 兼容 Provider、流式生成、异常分类、模型配置管理、Provider 管理 | 已实现（gateway/router/providers/openai_compatible/exceptions/models/ports） |
 | `knowledge_extension/` | 知识与扩展：规则解释（含 Milvus 政策检索+SQL Server 数据源）、MCP 注册中心、扩展注册 | 已实现（common/extension_registry/mcp_registry/rule_explanation + policy_retrieval 含 Milvus/SQLServer/语义映射） |
 | `adapters/` | 外部系统防腐层：医保接口、事前审核、DRG/DIP、HIS、EMR、病案、收费、数据供给（#27 分档接入，`DataSupplyConnectionPort` + 一档 SQL Server 直连） | 7 个内存适配器 + base 基类（models/service）+ ports 端口定义均已实现；数据供给见 `docs/steering/数据接入规范.md` |
