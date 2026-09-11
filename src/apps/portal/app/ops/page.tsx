@@ -245,6 +245,7 @@ export default function OpsPage() {
           >
             <option value="">全部</option>
             <option value="open">开放</option>
+            <option value="waiting_human">转人工处理中</option>
             <option value="ignored">已忽略</option>
             <option value="resolved">已解决</option>
           </select>

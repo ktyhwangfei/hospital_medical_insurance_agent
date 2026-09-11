@@ -1,16 +1,19 @@
-"""健康运营服务 — 巡检编排、问题查询、生命周期流转与 L1 自动修复（#45/#50/#53）。"""
+"""健康运营服务 — 巡检编排、问题查询、生命周期流转与 L1 自动修复（#45/#50/#53）+ L2 人工确认流（#54）。"""
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field, computed_field
 
 from src.data_platform.storage.ops.ops_ports import OpsFindingStorage
 from src.domain.ops.models import (
     FindingDraft,
+    FindingRevisionConflictError,
     InvalidFindingTransitionError,
+    ManualTaskNotFoundError,
     OpsAssetType,
     OpsCheckerError,
     OpsFinding,
@@ -20,12 +23,16 @@ from src.domain.ops.models import (
     OpsFindingPage,
     OpsFindingStatus,
     OpsInspectionTrigger,
+    OpsManualHandoff,
+    OpsManualResult,
+    OpsManualTarget,
     OpsRemediationRun,
     OpsSeverity,
     RemediationNotAllowedError,
     RemediationRunStatus,
     VerificationResult,
     finding_fingerprint,
+    manual_target_for_asset,
     new_finding_event_id,
     new_remediation_run_id,
 )
@@ -34,11 +41,16 @@ from src.runtime.ops.remediation import (
     RemediationSpec,
     default_remediation_whitelist,
 )
+from src.runtime.task_closure import service as task_service
 
 logger = logging.getLogger(__name__)
 
 # 巡检复现时自动复活 resolved 问题的系统操作者（ignored 不复活，#50 规则）
 INSPECTION_ACTOR = "system:ops-inspector"
+
+# #54 L2 人工确认任务：复用 task_closure 既有任务表与 waiting_human_confirmation 状态
+MANUAL_TASK_TYPE = "ops_manual_remediation"
+MANUAL_RESPONSIBLE_ROLE = "ops_admin"
 
 
 class OpsInspectionResult(BaseModel):
@@ -69,6 +81,40 @@ class OpsRemediationResult(BaseModel):
 
     run: OpsRemediationRun
     detail: OpsFindingDetail
+
+
+def _parse_task_datetime(raw: Any) -> datetime:
+    """task_closure 任务时间字段（ISO 字符串或 datetime）→ aware datetime。"""
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    text = str(raw or "")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = datetime.now(timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _handoff_from_task(task: dict[str, Any]) -> OpsManualHandoff:
+    """task_closure 任务 dict → 人工交接只读投影（input/output_data 为唯一真源）。"""
+    input_data = task.get("input_data") or {}
+    output_data = task.get("output_data") or {}
+    return OpsManualHandoff(
+        task_id=str(task["task_id"]),
+        status=str(task.get("status") or "pending"),
+        target=OpsManualTarget(str(input_data.get("target") or OpsManualTarget.EXTERNAL.value)),
+        requested_by=str(input_data.get("requested_by") or "unknown"),
+        requested_at=_parse_task_datetime(
+            input_data.get("requested_at") or task.get("updated_at")
+        ),
+        note=(str(input_data["note"]) if input_data.get("note") else None),
+        handled_by=(str(output_data["handled_by"]) if output_data.get("handled_by") else None),
+        handled_at=(
+            _parse_task_datetime(output_data["handled_at"])
+            if output_data.get("handled_at") else None
+        ),
+        result_note=(str(output_data["result_note"]) if output_data.get("result_note") else None),
+    )
 
 
 class OpsHealthService:
@@ -151,13 +197,22 @@ class OpsHealthService:
     # ── #50 生命周期：详情 + ignore/reopen 流转 ──
 
     def get_finding_detail(self, finding_id: str) -> OpsFindingDetail:
-        """单条问题详情：当前状态 + 生命周期事件与修复留痕时间线。"""
+        """单条问题详情：当前状态 + 生命周期事件与修复留痕时间线 + 人工任务投影。"""
         finding = self._storage.get_finding(finding_id)
         return OpsFindingDetail(
             finding=finding,
             events=self._storage.list_finding_events(finding_id),
             remediations=self._storage.list_remediation_runs(finding_id),
+            manual_task=self._latest_manual_handoff(finding_id),
         )
+
+    def _latest_manual_handoff(self, finding_id: str) -> OpsManualHandoff | None:
+        """该问题最新一份人工确认任务（list 按 created_at 升序，取末位）。"""
+        tasks = [
+            task for task in task_service.list_tasks_by_workflow(finding_id)
+            if task.get("task_type") == MANUAL_TASK_TYPE
+        ]
+        return _handoff_from_task(tasks[-1]) if tasks else None
 
     def ignore_finding(
         self,
@@ -189,7 +244,7 @@ class OpsHealthService:
         expected_revision: int,
         actor: str,
     ) -> OpsFindingDetail:
-        """重开已忽略/已解决问题：ignored|resolved → open。"""
+        """重开问题：ignored|resolved|waiting_human → open（waiting_human 为撤回人工处理）。"""
         current = self._storage.get_finding(finding_id)
         if current.status == OpsFindingStatus.OPEN:
             raise InvalidFindingTransitionError(finding_id, "reopen", current.status)
@@ -297,6 +352,160 @@ class OpsHealthService:
             if finding_fingerprint(draft.asset_type, draft.asset_id, draft.check_id) == finding.fingerprint:
                 return draft
         return None
+
+    # ── #54 L2 人工确认修复流：转既有治理流程 + 完成后自动复检 ──
+
+    def request_manual_handling(
+        self,
+        finding_id: str,
+        *,
+        expected_revision: int,
+        actor: str,
+        note: str | None = None,
+    ) -> OpsManualResult:
+        """转人工处理（open → waiting_human）。
+
+        复用 task_closure 记录确认任务（status=waiting_human_confirmation，
+        workflow_id=finding_id 反查）；跳转目标按资产类型映射——knowledge →
+        政策知识治理页、skill → 技能草稿流程，其余为外部系统处理。
+        未完成确认前问题不允许进入 resolved（remediate/ignore 均要求 open）。
+        """
+        now = datetime.now(timezone.utc)
+        finding = self._storage.get_finding(finding_id)
+        if finding.status != OpsFindingStatus.OPEN:
+            raise InvalidFindingTransitionError(finding_id, "request_manual", finding.status)
+        if finding.revision != expected_revision:
+            # 先验版本再落任何写入：冲突时不留悬空任务
+            raise FindingRevisionConflictError(finding_id, expected_revision, finding.revision)
+
+        target = manual_target_for_asset(finding.asset_type)
+        task_id = f"opsmanual_{uuid.uuid4().hex}"
+        # 先流转后建任务：transition 仍持乐观锁兜底（并发窗口极窄）；
+        # 任务存储失败时问题可经 reopen 撤回，不留「有任务无挂起」的反向悬空。
+        self._storage.transition_finding(
+            finding_id,
+            expected_revision=expected_revision,
+            new_status=OpsFindingStatus.WAITING_HUMAN,
+            event=self._build_event(
+                finding_id,
+                OpsFindingEventType.MANUAL_REQUESTED,
+                actor,
+                (note or f"人工任务 {task_id} 已创建，跳转 {target.value}")[:500],
+                occurred_at=now,
+            ),
+        )
+        task_service.create_task(
+            task_id=task_id,
+            task_type=MANUAL_TASK_TYPE,
+            description=f"资产健康问题转人工处理 {finding.fingerprint}",
+            responsible_role=MANUAL_RESPONSIBLE_ROLE,
+            workflow_id=finding_id,
+            input_data={
+                "finding_id": finding_id,
+                "fingerprint": finding.fingerprint,
+                "asset_type": finding.asset_type.value,
+                "asset_id": finding.asset_id,
+                "check_id": finding.check_id,
+                "requested_by": actor,
+                "requested_at": now.isoformat(),
+                "note": (note or "")[:500],
+                "target": target.value,
+            },
+            status="waiting_human_confirmation",
+        )
+        task = task_service.get_task(task_id)
+        assert task is not None  # 刚创建必在（内存/PG 均同步写）
+        return OpsManualResult(
+            detail=self.get_finding_detail(finding_id),
+            manual_task=_handoff_from_task(task),
+        )
+
+    def complete_manual_handling(
+        self,
+        finding_id: str,
+        *,
+        expected_revision: int,
+        actor: str,
+        result_note: str,
+    ) -> OpsManualResult:
+        """人工处理完成（waiting_human → 自动复检，复用 #53 验证闭环）。
+
+        - 复检通过 → resolved（事件记人工处理结果）；
+        - 复检仍报 → 回 open 并按最新草稿累计复现；
+        - 检查器异常 → 不判定验证，回 open 留待下次巡检；
+        任务回填 handled_by/handled_at/result_note（重复完成幂等回读）。
+        """
+        task = self._latest_manual_task(finding_id)
+        if task is None:
+            raise ManualTaskNotFoundError(finding_id)
+        finding = self._storage.get_finding(finding_id)
+        if task.get("status") != "completed" or finding.status == OpsFindingStatus.WAITING_HUMAN:
+            if finding.status != OpsFindingStatus.WAITING_HUMAN:
+                raise InvalidFindingTransitionError(
+                    finding_id, "complete_manual", finding.status
+                )
+            now = datetime.now(timezone.utc)
+            if task.get("status") != "completed":
+                updated = dict(task)
+                updated["status"] = "completed"
+                updated["output_data"] = {
+                    "handled_by": actor,
+                    "result_note": result_note[:500],
+                    "handled_at": now.isoformat(),
+                }
+                updated["updated_at"] = now.isoformat()
+                task = task_service.save_task(updated)
+
+            after_evidence: dict[str, Any] = {}
+            still_open = self._verify_remediation(finding, after_evidence)
+            if "verification_error" in after_evidence:
+                reason = (
+                    f"人工处理完成（{result_note}）；复检异常："
+                    f"{after_evidence['verification_error']}，回到开放待下次巡检"
+                )
+                self._storage.transition_finding(
+                    finding_id,
+                    expected_revision=expected_revision,
+                    new_status=OpsFindingStatus.OPEN,
+                    event=self._build_event(
+                        finding_id, OpsFindingEventType.MANUAL_COMPLETED, actor,
+                        reason[:500], occurred_at=now,
+                    ),
+                )
+            elif still_open is None:
+                self._storage.transition_finding(
+                    finding_id,
+                    expected_revision=expected_revision,
+                    new_status=OpsFindingStatus.RESOLVED,
+                    event=self._build_event(
+                        finding_id, OpsFindingEventType.RESOLVED, actor,
+                        f"人工处理完成，复检通过：{result_note}"[:500], occurred_at=now,
+                    ),
+                )
+            else:
+                self._storage.transition_finding(
+                    finding_id,
+                    expected_revision=expected_revision,
+                    new_status=OpsFindingStatus.OPEN,
+                    event=self._build_event(
+                        finding_id, OpsFindingEventType.MANUAL_COMPLETED, actor,
+                        f"人工处理完成但复检仍报（{result_note}），回到开放"[:500],
+                        occurred_at=now,
+                    ),
+                )
+                # 验证未通过：按最新检查结果累计复现（同 #53 remediate 分支）
+                self._storage.upsert_finding(still_open, seen_at=now)
+        return OpsManualResult(
+            detail=self.get_finding_detail(finding_id),
+            manual_task=_handoff_from_task(task),
+        )
+
+    def _latest_manual_task(self, finding_id: str) -> dict[str, Any] | None:
+        tasks = [
+            task for task in task_service.list_tasks_by_workflow(finding_id)
+            if task.get("task_type") == MANUAL_TASK_TYPE
+        ]
+        return tasks[-1] if tasks else None
 
     @staticmethod
     def _build_event(

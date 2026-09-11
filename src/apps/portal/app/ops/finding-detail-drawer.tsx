@@ -2,19 +2,33 @@
 
 // 问题详情抽屉 — issue #50：证据快照 + 生命周期时间线 + 忽略/重开操作；
 // issue #53：白名单 L1「执行修复」+ 修复留痕时间线；
-// issue #51：「发起诊断」+ 诊断报告卡片（根因/可展开引用/分级建议/insufficient_evidence 专属态）。
+// issue #51：「发起诊断」+ 诊断报告卡片（根因/可展开引用/分级建议/insufficient_evidence 专属态）；
+// issue #54：诊断含 L2 建议时「转人工处理」入口 + 人工确认任务卡片（跳转治理页 + 完成登记回链）。
 // 由 /ops 列表行点开；操作成功后以响应回填详情并通知列表刷新。
+import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, Loader2, RotateCcw, Stethoscope, Wrench, X } from 'lucide-react'
 import {
+  AlertTriangle,
+  ExternalLink,
+  Loader2,
+  RotateCcw,
+  Stethoscope,
+  UserCheck,
+  Wrench,
+  X,
+} from 'lucide-react'
+import {
+  completeManualHandling,
   diagnoseOpsFinding,
   getOpsFinding,
   ignoreOpsFinding,
   listOpsRemediationActions,
   remediateOpsFinding,
   reopenOpsFinding,
+  requestManualHandoff,
   type OpsDiagnosisReportDto,
   type OpsFindingDetailDto,
+  type OpsManualTaskDto,
   type OpsRemediationActionDto,
   type OpsRemediationRunDto,
 } from '@/lib/ops-api'
@@ -25,6 +39,8 @@ import {
   CHECK_LABELS,
   DIAGNOSIS_LEVEL_BADGES,
   DIAGNOSIS_LEVEL_LABELS,
+  MANUAL_TARGET_LABELS,
+  MANUAL_TARGET_PATHS,
   PAYLOAD_KEY_LABELS,
   RUN_STATUS_LABELS,
   SEVERITY_BADGES,
@@ -72,7 +88,11 @@ function buildTimeline(detail: OpsFindingDetailDto): TimelineEntry[] {
         ? `由 ${event.actor} 忽略`
         : event.event_type === 'resolved'
           ? `由 ${event.actor} 解决`
-          : `由 ${event.actor} 重开`,
+          : event.event_type === 'manual_requested'
+            ? `由 ${event.actor} 转人工处理`
+            : event.event_type === 'manual_completed'
+              ? `由 ${event.actor} 登记人工处理结果`
+              : `由 ${event.actor} 重开`,
       sub: event.reason,
       subPrefix: '原因：',
     })),
@@ -182,6 +202,96 @@ function DiagnosisReportCard({ report }: { report: OpsDiagnosisReportDto }) {
   )
 }
 
+/** 人工确认任务卡片（#54）：跳转目标链接 + 发起/完成信息 + 完成登记表单 */
+function ManualTaskCard({
+  task,
+  canWrite,
+  busy,
+  completeNote,
+  onCompleteNoteChange,
+  onComplete,
+}: {
+  task: OpsManualTaskDto
+  canWrite: boolean
+  busy: boolean
+  completeNote: string
+  onCompleteNoteChange: (value: string) => void
+  onComplete: () => void
+}) {
+  const waiting = task.status === 'waiting_human_confirmation'
+  const targetPath = MANUAL_TARGET_PATHS[task.target]
+  return (
+    <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/50 p-3" data-testid="ops-manual-task-card">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={`inline-flex rounded-full px-2 py-px text-[10px] font-semibold ring-1 ${waiting ? 'bg-amber-100 text-amber-800 ring-amber-300' : 'bg-emerald-50 text-emerald-700 ring-emerald-200'}`} data-testid="ops-manual-task-status">
+          {waiting ? '等待人工确认' : '人工处理已完成'}
+        </span>
+        <span className="text-[11px] text-slate-500">
+          跳转目标：{MANUAL_TARGET_LABELS[task.target]}
+          {targetPath && (
+            <Link
+              href={targetPath}
+              className="ml-1.5 inline-flex items-center gap-0.5 font-medium text-sky-700 hover:underline"
+              data-testid="ops-manual-target-link"
+            >
+              前往处理<ExternalLink className="size-3" />
+            </Link>
+          )}
+        </span>
+      </div>
+      <dl className="space-y-1 text-[11px] text-slate-600">
+        <div className="flex gap-2">
+          <dt className="shrink-0 text-slate-400">发起</dt>
+          <dd>
+            {task.requested_by} · {formatTime(task.requested_at)}
+            {task.note && <span className="ml-1.5 text-slate-500">（{task.note}）</span>}
+          </dd>
+        </div>
+        {!waiting && (
+          <div className="flex gap-2">
+            <dt className="shrink-0 text-slate-400">处理结果</dt>
+            <dd data-testid="ops-manual-task-result">
+              {task.handled_by} · {formatTime(task.handled_at)}：{task.result_note}
+            </dd>
+          </div>
+        )}
+      </dl>
+      {waiting && (
+        <p className="text-[11px] text-amber-700">
+          未登记处理结果前，问题不会进入已解决；处理完成需回到此处登记并自动复检。
+        </p>
+      )}
+      {waiting && canWrite && (
+        <div className="space-y-1.5" data-testid="ops-manual-complete-form">
+          <label className="block text-slate-500" htmlFor="ops-manual-result-note">
+            处理结果（必填，登记后自动复检）
+          </label>
+          <textarea
+            id="ops-manual-result-note"
+            value={completeNote}
+            onChange={(e) => onCompleteNoteChange(e.target.value)}
+            rows={2}
+            maxLength={500}
+            placeholder="例：已在政策知识治理页修正该规则并重新发布"
+            className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs focus:border-slate-400 focus:outline-none"
+            data-testid="ops-manual-result-note-input"
+          />
+          <button
+            type="button"
+            onClick={onComplete}
+            disabled={busy || completeNote.trim() === ''}
+            className="inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-40"
+            data-testid="ops-manual-complete-button"
+          >
+            {busy && <Loader2 className="size-3.5 animate-spin" />}
+            登记处理结果
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function FindingDetailDrawer({
   findingId,
   canWrite,
@@ -198,6 +308,10 @@ export default function FindingDetailDrawer({
   const [actions, setActions] = useState<OpsRemediationActionDto[]>([])
   const [ignoreDraftOpen, setIgnoreDraftOpen] = useState(false)
   const [ignoreReason, setIgnoreReason] = useState('')
+  const [manualDraftOpen, setManualDraftOpen] = useState(false)
+  const [manualNote, setManualNote] = useState('')
+  const [manualBusy, setManualBusy] = useState(false)
+  const [manualCompleteNote, setManualCompleteNote] = useState('')
 
   useEffect(() => {
     if (!findingId) return
@@ -206,6 +320,9 @@ export default function FindingDetailDrawer({
     setActionError(null)
     setIgnoreDraftOpen(false)
     setIgnoreReason('')
+    setManualDraftOpen(false)
+    setManualNote('')
+    setManualCompleteNote('')
     getOpsFinding(findingId)
       .then(setDetail)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
@@ -298,6 +415,44 @@ export default function FindingDetailDrawer({
     }
   }, [detail])
 
+  const handleManualRequest = useCallback(async () => {
+    if (!detail) return
+    setManualBusy(true)
+    setActionError(null)
+    try {
+      const result = await requestManualHandoff(
+        detail.finding.finding_id, detail.finding.revision, manualNote.trim() || null,
+      )
+      setDetail(result.detail)
+      setManualDraftOpen(false)
+      setManualNote('')
+      onMutated()
+    } catch (e) {
+      setActionError(errorMessage(e))
+    } finally {
+      setManualBusy(false)
+    }
+  }, [detail, manualNote, onMutated])
+
+  const handleManualComplete = useCallback(async () => {
+    if (!detail) return
+    setManualBusy(true)
+    setActionError(null)
+    try {
+      // 完成登记后后端自动复检：通过 → resolved；仍报 → 回开放。回填含最新任务投影
+      const result = await completeManualHandling(
+        detail.finding.finding_id, detail.finding.revision, manualCompleteNote.trim(),
+      )
+      setDetail(result.detail)
+      setManualCompleteNote('')
+      onMutated()
+    } catch (e) {
+      setActionError(errorMessage(e))
+    } finally {
+      setManualBusy(false)
+    }
+  }, [detail, manualCompleteNote, onMutated])
+
   if (!findingId) return null
 
   const finding = detail?.finding
@@ -305,6 +460,9 @@ export default function FindingDetailDrawer({
   const remediation = finding
     ? actions.find((a) => a.check_id === finding.check_id) ?? null
     : null
+  // #54 入口门槛：诊断建议含 L2（需人工确认）动作时才展示「转人工处理」
+  const diagnosisReport = finding ? parseDiagnosis(finding.diagnosis) : null
+  const hasL2Action = diagnosisReport?.actions.some((a) => a.level === 'L2') ?? false
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end" data-testid="ops-detail-overlay">
@@ -443,6 +601,22 @@ export default function FindingDetailDrawer({
                 })()}
               </section>
 
+              {detail.manual_task && (
+                <section aria-label="人工处理">
+                  <h2 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-900">
+                    <UserCheck className="size-3.5 text-slate-400" />人工处理
+                  </h2>
+                  <ManualTaskCard
+                    task={detail.manual_task}
+                    canWrite={canWrite}
+                    busy={manualBusy || mutating}
+                    completeNote={manualCompleteNote}
+                    onCompleteNoteChange={setManualCompleteNote}
+                    onComplete={handleManualComplete}
+                  />
+                </section>
+              )}
+
               {canWrite && (
                 <section aria-label="状态操作" className="space-y-2">
                   <h2 className="text-xs font-semibold text-slate-900">状态操作</h2>
@@ -463,6 +637,60 @@ export default function FindingDetailDrawer({
                       <p className="text-[11px] text-slate-400">
                         {remediation.description}；执行后自动重跑检查验证，通过才标记已解决。
                       </p>
+                    </div>
+                  )}
+                  {finding.status === 'open' && hasL2Action && !manualDraftOpen && (
+                    <div className="space-y-1.5" data-testid="ops-detail-manual-block">
+                      <button
+                        type="button"
+                        onClick={() => setManualDraftOpen(true)}
+                        disabled={manualBusy || mutating}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-40"
+                        data-testid="ops-detail-manual-request"
+                      >
+                        <UserCheck className="size-3.5" />
+                        转人工处理
+                      </button>
+                      <p className="text-[11px] text-slate-400">
+                        诊断建议含 L2（需人工确认）动作：转人工后跳转对应治理页面处理，完成登记后自动复检。
+                      </p>
+                    </div>
+                  )}
+                  {finding.status === 'open' && manualDraftOpen && (
+                    <div className="space-y-2 rounded-lg border border-amber-200 p-3" data-testid="ops-detail-manual-form">
+                      <label className="block text-slate-500" htmlFor="ops-manual-note">
+                        转人工说明（选填，写入确认任务）
+                      </label>
+                      <textarea
+                        id="ops-manual-note"
+                        value={manualNote}
+                        onChange={(e) => setManualNote(e.target.value)}
+                        rows={3}
+                        maxLength={500}
+                        placeholder="例：需在政策知识治理页修正该规则后重新发布"
+                        className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs focus:border-slate-400 focus:outline-none"
+                        data-testid="ops-detail-manual-note"
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { setManualDraftOpen(false); setManualNote('') }}
+                          disabled={manualBusy}
+                          className="rounded-md px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleManualRequest}
+                          disabled={manualBusy}
+                          className="inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-40"
+                          data-testid="ops-detail-manual-confirm"
+                        >
+                          {manualBusy && <Loader2 className="size-3.5 animate-spin" />}
+                          确认转人工
+                        </button>
+                      </div>
                     </div>
                   )}
                   {finding.status === 'open' && !ignoreDraftOpen && (
@@ -524,7 +752,7 @@ export default function FindingDetailDrawer({
                       {mutating
                         ? <Loader2 className="size-3.5 animate-spin" />
                         : <RotateCcw className="size-3.5" />}
-                      重开此问题
+                      {finding.status === 'waiting_human' ? '撤回人工处理' : '重开此问题'}
                     </button>
                   )}
                 </section>

@@ -1,9 +1,10 @@
-// /ops 页公共标签与格式化 — 列表页与详情抽屉共享（#45 建立，#50 扩充状态/证据标签，#53 扩充修复标签，#51 扩充诊断标签，#52 扩充巡检调度标签）。
+// /ops 页公共标签与格式化 — 列表页与详情抽屉共享（#45 建立，#50 扩充状态/证据标签，#53 扩充修复标签，#51 扩充诊断标签，#52 扩充巡检调度标签，#54 扩充人工交接标签）。
 import type {
   DiagnosisActionLevel,
   OpsFindingStatus,
   OpsInspectionStatus,
   OpsInspectionTrigger,
+  OpsManualTarget,
   OpsSeverity,
   RemediationRunStatus,
   VerificationResult,
@@ -33,11 +34,13 @@ export const STATUS_BADGES: Record<OpsFindingStatus, string> = {
   open: 'bg-sky-50 text-sky-700 ring-sky-200',
   ignored: 'bg-slate-100 text-slate-600 ring-slate-200',
   resolved: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  waiting_human: 'bg-amber-50 text-amber-700 ring-amber-200',
 }
 export const STATUS_LABELS: Record<OpsFindingStatus, string> = {
   open: '开放',
   ignored: '已忽略',
   resolved: '已解决',
+  waiting_human: '转人工处理中',
 }
 
 // ── #53 L1 自动修复标签 ──
@@ -86,6 +89,21 @@ export const INSPECTION_STATUS_LABELS: Record<OpsInspectionStatus, string> = {
 export const INSPECTION_TRIGGER_LABELS: Record<OpsInspectionTrigger, string> = {
   manual: '手动',
   scheduled: '定时',
+}
+
+// ── #54 L2 人工确认修复流标签 ──
+
+/** 人工处理跳转目标 → 治理页面入口文案 */
+export const MANUAL_TARGET_LABELS: Record<OpsManualTarget, string> = {
+  policy_knowledge: '政策知识治理',
+  skill_draft: '技能草稿',
+  external: '外部系统',
+}
+
+/** 跳转目标 → 门户治理页路由（external 无门户页面，返回 null 由组件降级为文案） */
+export const MANUAL_TARGET_PATHS: Partial<Record<OpsManualTarget, string>> = {
+  policy_knowledge: '/policy-knowledge',
+  skill_draft: '/skills',
 }
 
 /** 巡检周期展示：1440=每天、整小时=每小时，其余按分钟 */

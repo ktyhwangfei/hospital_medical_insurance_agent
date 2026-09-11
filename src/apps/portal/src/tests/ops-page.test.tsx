@@ -199,6 +199,7 @@ describe('OpsPage 健康运营页', () => {
         created_at: '2026-09-09T04:05:00+00:00',
       }],
       remediations: [],
+      manual_task: null,
     }
     vi.mocked(getOpsFinding).mockResolvedValue(detailDto)
     vi.mocked(listOpsRemediationActions).mockResolvedValue([])

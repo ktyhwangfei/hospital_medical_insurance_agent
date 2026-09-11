@@ -36,11 +36,12 @@ class OpsSeverity(StrEnum):
 
 
 class OpsFindingStatus(StrEnum):
-    """问题状态（open 由巡检产出；ignored 由 #50 手动忽略；resolved 由 #53 修复验证驱动）。"""
+    """问题状态（open 巡检产出；ignored #50 手动忽略；resolved #53 修复验证驱动；waiting_human #54 转人工处理中）。"""
 
     OPEN = "open"
     RESOLVED = "resolved"
     IGNORED = "ignored"
+    WAITING_HUMAN = "waiting_human"
 
 
 def new_finding_id() -> str:
@@ -113,11 +114,13 @@ class OpsFindingPage(BaseModel):
 
 
 class OpsFindingEventType(StrEnum):
-    """生命周期流转事件类型（手动操作与 #53 修复验证产生）。"""
+    """生命周期流转事件类型（手动操作、#53 修复验证与 #54 人工交接产生）。"""
 
     IGNORED = "ignored"
     REOPENED = "reopened"
     RESOLVED = "resolved"
+    MANUAL_REQUESTED = "manual_requested"
+    MANUAL_COMPLETED = "manual_completed"
 
 
 class OpsFindingEvent(BaseModel):
@@ -142,6 +145,7 @@ class OpsFindingDetail(BaseModel):
     finding: OpsFinding
     events: list[OpsFindingEvent]
     remediations: list["OpsRemediationRun"] = Field(default_factory=list)
+    manual_task: "OpsManualHandoff | None" = None  # #54 最新人工确认任务投影
 
 
 class RemediationRiskLevel(StrEnum):
@@ -309,6 +313,47 @@ class OpsInspectionSummary(BaseModel):
     latest: OpsInspectionRun | None = None
 
 
+# ── #54 P2-8 L2 人工确认修复流 ──
+
+
+class OpsManualTarget(StrEnum):
+    """L2 人工处理跳转目标（按资产类型映射到既有治理页面）。"""
+
+    POLICY_KNOWLEDGE = "policy_knowledge"  # 知识内容修正 → 政策知识审核/重提取管线
+    SKILL_DRAFT = "skill_draft"            # skill 草稿修改 → skills 草稿流程
+    EXTERNAL = "external"                  # data/runtime 资产：无门户治理页，外部系统处理
+
+
+def manual_target_for_asset(asset_type: "OpsAssetType") -> OpsManualTarget:
+    """资产类型 → 人工处理跳转目标（knowledge/skill 有治理页，其余走外部）。"""
+    if asset_type is OpsAssetType.KNOWLEDGE:
+        return OpsManualTarget.POLICY_KNOWLEDGE
+    if asset_type is OpsAssetType.SKILL:
+        return OpsManualTarget.SKILL_DRAFT
+    return OpsManualTarget.EXTERNAL
+
+
+class OpsManualHandoff(BaseModel):
+    """L2 人工确认任务的只读投影（源数据在 task_closure 任务表）。"""
+
+    task_id: str = Field(min_length=1, max_length=64)
+    status: str  # waiting_human_confirmation | completed
+    target: OpsManualTarget
+    requested_by: str = Field(min_length=1, max_length=128)
+    requested_at: datetime
+    note: str | None = Field(default=None, max_length=500)
+    handled_by: str | None = Field(default=None, max_length=128)
+    handled_at: datetime | None = None
+    result_note: str | None = Field(default=None, max_length=500)
+
+
+class OpsManualResult(BaseModel):
+    """人工交接操作（发起/完成）的返回：最新详情 + 任务投影。"""
+
+    detail: OpsFindingDetail
+    manual_task: OpsManualHandoff
+
+
 class DiagnosisUnavailableError(Exception):
     """诊断不可用（模型未配置/调用失败/输出不可解析），不落库不覆盖旧报告。"""
 
@@ -356,6 +401,14 @@ class RemediationNotAllowedError(Exception):
         super().__init__(f"问题 {finding_id} 的检查项 {check_id} 不在自动修复白名单内")
         self.finding_id = finding_id
         self.check_id = check_id
+
+
+class ManualTaskNotFoundError(Exception):
+    """问题没有可操作的人工确认任务（未发起或任务类型不符）。"""
+
+    def __init__(self, finding_id: str) -> None:
+        super().__init__(f"问题 {finding_id} 没有等待中的人工确认任务")
+        self.finding_id = finding_id
 
 
 class OpsInspectionNotFoundError(Exception):

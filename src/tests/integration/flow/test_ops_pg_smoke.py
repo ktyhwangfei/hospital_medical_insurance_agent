@@ -70,6 +70,15 @@ def storage() -> PostgresOpsFindingStorage:
 def _cleanup(storage: PostgresOpsFindingStorage):
     yield
     client = storage._get_client()
+    # #54：人工确认任务先于问题行删除（按 workflow_id=finding_id 反查）
+    client.execute(
+        """
+        DELETE FROM tasks WHERE workflow_id IN (
+            SELECT finding_id FROM ops_findings WHERE asset_id = %s
+        )
+        """,
+        (SMOKE_ASSET,),
+    )
     client.execute(
         """
         DELETE FROM ops_remediation_runs WHERE finding_id IN (
@@ -482,3 +491,60 @@ def test_scheduler_roundtrip_on_live_pg(storage: PostgresOpsFindingStorage):
     assert result.trigger_source is OpsInspectionTrigger.MANUAL
     assert storage.get_latest_inspection().inspection_id == result.inspection_id
     assert OpsInspectionResult.model_validate(result.model_dump()).finding_count == 0
+
+
+def test_manual_handoff_closed_loop_on_live_pg(storage, monkeypatch):
+    """#54：人工确认任务真实落 tasks 表，完成回填 output_data + 复检 → resolved。"""
+    from src.config.production import DATABASE_URL
+    from src.data_platform.storage.postgresql.client import PostgreSQLClient
+    from src.runtime.task_closure import service as task_service
+    from src.runtime.task_closure.postgresql_store import PostgreSQLTaskStore
+
+    # 显式指向活库任务存储：避免模块单例在无 PG 环境下静默回退内存
+    task_store = PostgreSQLTaskStore(PostgreSQLClient(DATABASE_URL))
+    monkeypatch.setattr(task_service, "_task_store", task_store)
+
+    finding = storage.upsert_finding(
+        _draft("data_sync_failed", OpsSeverity.WARNING, {"problem": "sync_job_degraded"}),
+        seen_at=T0,
+    )
+    service = OpsHealthService(storage, lambda: _HealthyReader())
+
+    result = service.request_manual_handling(
+        finding.finding_id,
+        expected_revision=finding.revision,
+        actor="ops-admin-1",
+        note="冒烟：转人工处理",
+    )
+    assert result.detail.finding.status == OpsFindingStatus.WAITING_HUMAN
+    task_id = result.manual_task.task_id
+
+    # 任务行真实写入 tasks 表：状态 / 类型 / 反查键 / input_data（JSONB）往返
+    row = task_store.get_task(task_id)
+    assert row is not None
+    assert row["status"] == "waiting_human_confirmation"
+    assert row["task_type"] == "ops_manual_remediation"
+    assert row["workflow_id"] == finding.finding_id
+    assert row["input_data"]["target"] == "external"
+    assert row["input_data"]["requested_by"] == "ops-admin-1"
+
+    done = service.complete_manual_handling(
+        finding.finding_id,
+        expected_revision=result.detail.finding.revision,
+        actor="ops-admin-2",
+        result_note="冒烟：治理页已修正",
+    )
+    assert done.detail.finding.status == OpsFindingStatus.RESOLVED
+    # 完成回填 output_data（PG JSONB 往返），详情携带回链投影
+    completed = task_store.get_task(task_id)
+    assert completed["status"] == "completed"
+    assert completed["output_data"]["handled_by"] == "ops-admin-2"
+    assert completed["output_data"]["result_note"] == "冒烟：治理页已修正"
+    assert done.manual_task.handled_by == "ops-admin-2"
+    assert done.detail.manual_task.task_id == task_id
+    # 事件时间线：manual_requested → resolved
+    events = storage.list_finding_events(finding.finding_id)
+    assert [e.event_type for e in events] == [
+        OpsFindingEventType.MANUAL_REQUESTED,
+        OpsFindingEventType.RESOLVED,
+    ]

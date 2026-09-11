@@ -1,5 +1,6 @@
 // 问题详情抽屉测试 — #50（证据快照 / 忽略与重开流转 / 时间线 / 冲突错误）
-// + #53（白名单执行修复 / 修复留痕时间线 / 非白名单负例）。
+// + #53（白名单执行修复 / 修复留痕时间线 / 非白名单负例）
+// + #54（L2 转人工入口 / 人工任务卡片跳转链接 / 完成登记回链）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
@@ -18,22 +19,28 @@ vi.mock('@/lib/ops-api', async (importOriginal) => {
     listOpsRemediationActions: vi.fn(),
     remediateOpsFinding: vi.fn(),
     diagnoseOpsFinding: vi.fn(),
+    requestManualHandoff: vi.fn(),
+    completeManualHandling: vi.fn(),
   }
 })
 
 import FindingDetailDrawer from '../../app/ops/finding-detail-drawer'
 import {
+  completeManualHandling,
   diagnoseOpsFinding,
   getOpsFinding,
   ignoreOpsFinding,
   listOpsRemediationActions,
   remediateOpsFinding,
   reopenOpsFinding,
+  requestManualHandoff,
   type OpsDiagnosisReportDto,
   type OpsDiagnosisResultDto,
   type OpsFindingDetailDto,
   type OpsFindingDto,
   type OpsFindingEventDto,
+  type OpsManualResultDto,
+  type OpsManualTaskDto,
   type OpsRemediationActionDto,
   type OpsRemediationResultDto,
   type OpsRemediationRunDto,
@@ -102,7 +109,7 @@ function run(overrides: Partial<OpsRemediationRunDto> = {}): OpsRemediationRunDt
 }
 
 function detail(overrides: Partial<OpsFindingDetailDto> = {}): OpsFindingDetailDto {
-  return { finding: finding(), events: [], remediations: [], ...overrides }
+  return { finding: finding(), events: [], remediations: [], manual_task: null, ...overrides }
 }
 
 function renderDrawer(findingId: string | null = 'f1', canWrite = true) {
@@ -383,5 +390,168 @@ describe('FindingDetailDrawer 详情抽屉', () => {
     await waitFor(() => expect(screen.getByTestId('ops-detail-drawer')).toBeTruthy())
     expect(screen.queryByTestId('ops-diagnose-block')).toBeNull()
     expect(screen.getByTestId('ops-diagnosis-empty')).toBeTruthy()
+  })
+
+  // ── #54 L2 人工确认修复流 ──
+
+  function manualTask(overrides: Partial<OpsManualTaskDto> = {}): OpsManualTaskDto {
+    return {
+      task_id: 'opsmanual_abc123',
+      status: 'waiting_human_confirmation',
+      target: 'skill_draft',
+      requested_by: 'portal-dev-ops',
+      requested_at: '2026-09-10T04:30:00+00:00',
+      note: '需人工核对源库凭据',
+      handled_by: null,
+      handled_at: null,
+      result_note: null,
+      ...overrides,
+    }
+  }
+
+  it('诊断含 L2 建议的开放问题展示「转人工处理」入口；无 L2 建议不展示', async () => {
+    vi.mocked(getOpsFinding).mockResolvedValue(
+      detail({ finding: finding({ diagnosis: { ...DIAGNOSIS_COMPLETE } }) }),
+    )
+    renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-detail-manual-block')).toBeTruthy())
+
+    cleanup()
+    vi.mocked(getOpsFinding).mockResolvedValue(detail()) // 未诊断 → 不展示
+    renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-detail-drawer')).toBeTruthy())
+    expect(screen.queryByTestId('ops-detail-manual-block')).toBeNull()
+  })
+
+  it('转人工流程：选填说明提交带乐观锁版本，回填 waiting_human 与任务卡片并通知列表', async () => {
+    const result: OpsManualResultDto = {
+      detail: detail({
+        finding: finding({
+          status: 'waiting_human', revision: 4, diagnosis: { ...DIAGNOSIS_COMPLETE },
+        }),
+        events: [event({
+          event_type: 'manual_requested', reason: '需人工核对源库凭据',
+          created_at: '2026-09-10T04:30:00+00:00',
+        })],
+        manual_task: manualTask(),
+      }),
+      manual_task: manualTask(),
+    }
+    vi.mocked(requestManualHandoff).mockResolvedValue(result)
+    vi.mocked(getOpsFinding).mockResolvedValue(
+      detail({ finding: finding({ diagnosis: { ...DIAGNOSIS_COMPLETE } }) }),
+    )
+    const { onMutated } = renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-detail-manual-request')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('ops-detail-manual-request'))
+    await waitFor(() => expect(screen.getByTestId('ops-detail-manual-form')).toBeTruthy())
+    // 空说明可直接提交（选填）
+    fireEvent.change(screen.getByTestId('ops-detail-manual-note'), {
+      target: { value: '需人工核对源库凭据' },
+    })
+    fireEvent.click(screen.getByTestId('ops-detail-manual-confirm'))
+    await waitFor(() => expect(screen.getByTestId('ops-manual-task-card')).toBeTruthy())
+    expect(requestManualHandoff).toHaveBeenCalledWith('f1', 3, '需人工核对源库凭据')
+    // 状态徽标 + 任务卡片：等待确认 / 跳转链接指向技能草稿治理页
+    expect(screen.getByText('转人工处理中')).toBeTruthy()
+    expect(screen.getByTestId('ops-manual-task-status').textContent).toContain('等待人工确认')
+    expect(screen.getByTestId('ops-manual-target-link').getAttribute('href')).toBe('/skills')
+    // 时间线含转人工事件；重开按钮语义变为撤回
+    expect(screen.getByText(/由 portal-dev-ops 转人工处理/)).toBeTruthy()
+    expect(screen.getByTestId('ops-detail-reopen').textContent).toContain('撤回人工处理')
+    expect(onMutated).toHaveBeenCalled()
+  })
+
+  it('外部系统目标无跳转链接，只展示文案', async () => {
+    vi.mocked(getOpsFinding).mockResolvedValue(detail({
+      finding: finding({ status: 'waiting_human', revision: 4 }),
+      manual_task: manualTask({ target: 'external' }),
+    }))
+    renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-manual-task-card')).toBeTruthy())
+    expect(screen.getByText(/跳转目标：外部系统/)).toBeTruthy()
+    expect(screen.queryByTestId('ops-manual-target-link')).toBeNull()
+  })
+
+  it('完成登记：必填校验、提交带版本，回填已解决与处理结果回链', async () => {
+    const result: OpsManualResultDto = {
+      detail: detail({
+        finding: finding({ status: 'resolved', revision: 5 }),
+        events: [
+          event({
+            event_type: 'manual_requested', reason: '需人工核对源库凭据',
+            created_at: '2026-09-10T04:30:00+00:00',
+          }),
+          event({
+            event_type: 'resolved', reason: '人工处理完成，复检通过：已修正凭据并重跑同步',
+            created_at: '2026-09-10T05:00:00+00:00',
+          }),
+        ],
+        manual_task: manualTask({
+          status: 'completed',
+          handled_by: 'ops-admin-2',
+          handled_at: '2026-09-10T05:00:00+00:00',
+          result_note: '已修正凭据并重跑同步',
+        }),
+      }),
+      manual_task: manualTask({
+        status: 'completed',
+        handled_by: 'ops-admin-2',
+        handled_at: '2026-09-10T05:00:00+00:00',
+        result_note: '已修正凭据并重跑同步',
+      }),
+    }
+    vi.mocked(completeManualHandling).mockResolvedValue(result)
+    vi.mocked(getOpsFinding).mockResolvedValue(detail({
+      finding: finding({ status: 'waiting_human', revision: 4 }),
+      manual_task: manualTask(),
+    }))
+    const { onMutated } = renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-manual-complete-form')).toBeTruthy())
+
+    // 空结果不可提交（必填）
+    expect(screen.getByTestId('ops-manual-complete-button').hasAttribute('disabled')).toBe(true)
+    fireEvent.change(screen.getByTestId('ops-manual-result-note-input'), {
+      target: { value: '已修正凭据并重跑同步' },
+    })
+    fireEvent.click(screen.getByTestId('ops-manual-complete-button'))
+    await waitFor(() => expect(screen.getByTestId('ops-manual-task-result')).toBeTruthy())
+    expect(completeManualHandling).toHaveBeenCalledWith('f1', 4, '已修正凭据并重跑同步')
+    // 回链：已解决徽标 + 已完成任务 + 处理人/结果
+    expect(screen.getByText('已解决')).toBeTruthy()
+    expect(screen.getByTestId('ops-manual-task-status').textContent).toContain('人工处理已完成')
+    expect(screen.getByTestId('ops-manual-task-result').textContent).toContain('ops-admin-2')
+    expect(screen.getByTestId('ops-manual-task-result').textContent).toContain('已修正凭据并重跑同步')
+    expect(screen.getByText(/由 portal-dev-ops 登记人工处理结果|人工处理完成/)).toBeTruthy()
+    expect(onMutated).toHaveBeenCalled()
+  })
+
+  it('转人工版本冲突（409）时展示错误条且保持开放', async () => {
+    vi.mocked(requestManualHandoff).mockRejectedValue(new ApiClientError(409, {
+      error_code: 'FINDING_REVISION_CONFLICT',
+      message: '问题已被其他操作修改，请刷新后重试',
+    }))
+    vi.mocked(getOpsFinding).mockResolvedValue(
+      detail({ finding: finding({ diagnosis: { ...DIAGNOSIS_COMPLETE } }) }),
+    )
+    renderDrawer()
+    await waitFor(() => expect(screen.getByTestId('ops-detail-manual-request')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('ops-detail-manual-request'))
+    fireEvent.click(screen.getByTestId('ops-detail-manual-confirm'))
+    await waitFor(() => expect(screen.getByTestId('ops-detail-action-error')).toBeTruthy())
+    expect(screen.getByTestId('ops-detail-action-error').textContent).toContain('FINDING_REVISION_CONFLICT')
+    expect(screen.getByTestId('ops-detail-manual-form')).toBeTruthy() // 表单保留可重试
+  })
+
+  it('只读模式渲染任务卡片但不渲染完成登记表单', async () => {
+    vi.mocked(getOpsFinding).mockResolvedValue(detail({
+      finding: finding({ status: 'waiting_human', revision: 4 }),
+      manual_task: manualTask(),
+    }))
+    renderDrawer('f1', false)
+    await waitFor(() => expect(screen.getByTestId('ops-manual-task-card')).toBeTruthy())
+    expect(screen.queryByTestId('ops-manual-complete-form')).toBeNull()
+    expect(screen.queryByTestId('ops-detail-reopen')).toBeNull()
   })
 })

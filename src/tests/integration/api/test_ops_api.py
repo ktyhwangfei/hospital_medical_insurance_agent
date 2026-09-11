@@ -1,5 +1,6 @@
 """健康运营 /ops API 测试 — issue #45 P0（鉴权 + 巡检去重 + 列表过滤分页）
-+ #50（详情 / ignore / reopen 状态机与乐观锁）。"""
++ #50（详情 / ignore / reopen 状态机与乐观锁）
++ #54（L2 人工确认修复流：manual-handoff / manual-complete 与负例）。"""
 from __future__ import annotations
 
 import base64
@@ -7,6 +8,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,10 +31,43 @@ from src.runtime.api.ops_routes import get_ops_inspection_scheduler, get_ops_ser
 from src.runtime.ops.remediation import RemediationActionOutcome, RemediationSpec
 from src.runtime.ops.scheduler import OpsInspectionScheduler
 from src.runtime.ops.service import OpsHealthService
+from src.runtime.task_closure import service as task_service
 
 BASE = "/api/v1/medical-insurance-ai-agent/ops"
 JWT_SECRET = "ops-test-secret"
 NOW = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
+
+
+class _FakeTaskStore:
+    """task_closure 内存替身（#54 人工确认任务）：避免写活库 tasks 表。"""
+
+    def __init__(self):
+        self._tasks: dict[str, dict[str, Any]] = {}
+
+    def save_task(self, task):
+        self._tasks[task["task_id"]] = task
+        return task
+
+    def get_task(self, task_id):
+        return self._tasks.get(task_id)
+
+    def create_task(self, task_id, task_type, description, responsible_role,
+                    workflow_id=None, **kwargs):
+        task = {
+            "task_id": task_id, "task_type": task_type, "description": description,
+            "responsible_role": responsible_role,
+            "status": kwargs.get("status", "pending"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if workflow_id is not None:
+            task["workflow_id"] = workflow_id
+        for key in ("input_data", "output_data"):
+            if kwargs.get(key) is not None:
+                task[key] = kwargs[key]
+        return self.save_task(task)
+
+    def list_tasks_by_workflow(self, workflow_id):
+        return [t for t in self._tasks.values() if t.get("workflow_id") == workflow_id]
 
 
 def _token(permissions):
@@ -130,6 +165,8 @@ def _fake_whitelist(executor):
 @pytest.fixture
 def api_factory(monkeypatch):
     monkeypatch.setenv("AUTH_JWT_SECRET", JWT_SECRET)
+    # #54：人工确认任务走 task_closure 进程单例，测试替换为内存替身防写活库
+    monkeypatch.setattr(task_service, "_task_store", _FakeTaskStore())
 
     def build(reader, *, executor=None, storage=None) -> TestClient:
         # 依赖注入必须复用同一服务实例：lambda 内 new 存储会让每个请求拿到空库
@@ -549,3 +586,171 @@ class TestRemediation:
                         headers=_headers("ops:write"))
         assert resp.status_code == 404
         assert resp.json()["detail"]["error_code"] == "FINDING_NOT_FOUND"
+
+
+class TestManualFlow:
+    """#54：L2 人工确认修复流——转人工、完成复检回链、负例与鉴权。"""
+
+    @pytest.fixture
+    def harness(self, api_factory):
+        """DEGRADED 同步任务 → 巡检落库 open finding；reader 可切换驱动复检结果。"""
+        reader = _Reader([_source()], {"bjybdb": _job(SyncJobStatus.DEGRADED)})
+        api = api_factory(reader)
+        api.post(f"{BASE}/inspections", headers=_headers("ops:write"))
+        body = api.get(f"{BASE}/findings", headers=_headers("ops:read")).json()
+        assert body["total"] == 1
+        return api, reader, body["items"][0]
+
+    def _request(self, api, finding, revision=None, *, note=None):
+        return api.post(
+            f"{BASE}/findings/{finding['finding_id']}/manual-handoff"
+            f"?expected_revision={revision or finding['revision']}",
+            json={"note": note},
+            headers=_headers("ops:write"),
+        )
+
+    def _complete(self, api, finding_id, revision, *, result_note="已在治理页修正"):
+        return api.post(
+            f"{BASE}/findings/{finding_id}/manual-complete"
+            f"?expected_revision={revision}",
+            json={"result_note": result_note},
+            headers=_headers("ops:write"),
+        )
+
+    def test_manual_endpoints_require_auth_and_ops_write(self, harness):
+        api, _reader, finding = harness
+        fid = finding["finding_id"]
+        # 无 token → 401
+        assert api.post(
+            f"{BASE}/findings/{fid}/manual-handoff?expected_revision=1",
+            json={"note": None},
+        ).status_code == 401
+        assert api.post(
+            f"{BASE}/findings/{fid}/manual-complete?expected_revision=1",
+            json={"result_note": "x"},
+        ).status_code == 401
+        # 只读权限 → 403
+        assert api.post(
+            f"{BASE}/findings/{fid}/manual-handoff?expected_revision=1",
+            json={"note": None},
+            headers=_headers("ops:read"),
+        ).status_code == 403
+        assert api.post(
+            f"{BASE}/findings/{fid}/manual-complete?expected_revision=1",
+            json={"result_note": "x"},
+            headers=_headers("ops:read"),
+        ).status_code == 403
+
+    def test_request_moves_finding_to_waiting_human_with_task(self, harness):
+        api, _reader, finding = harness
+        resp = self._request(api, finding, note="非白名单问题，转人工处理")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["detail"]["finding"]["status"] == "waiting_human"
+        assert body["detail"]["finding"]["revision"] == 2
+        manual = body["manual_task"]
+        assert manual["status"] == "waiting_human_confirmation"
+        assert manual["target"] == "external"  # 数据资产 → 外部系统
+        assert manual["requested_by"] == "ops-admin-1"
+        assert manual["note"] == "非白名单问题，转人工处理"
+        assert manual["task_id"].startswith("opsmanual_")
+        # 详情回读同样携带人工任务（回链展示）
+        detail = api.get(
+            f"{BASE}/findings/{finding['finding_id']}", headers=_headers("ops:read")
+        ).json()
+        assert detail["finding"]["status"] == "waiting_human"
+        assert detail["manual_task"]["task_id"] == manual["task_id"]
+        assert [e["event_type"] for e in detail["events"]] == ["manual_requested"]
+
+    def test_request_on_ignored_finding_409(self, harness):
+        api, _reader, finding = harness
+        ignored = api.post(
+            f"{BASE}/findings/{finding['finding_id']}/ignore?expected_revision=1",
+            json={"reason": "排期维护"},
+            headers=_headers("ops:write"),
+        )
+        assert ignored.status_code == 200
+        resp = self._request(api, finding, revision=ignored.json()["finding"]["revision"])
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error_code"] == "FINDING_TRANSITION_INVALID"
+
+    def test_complete_after_fix_resolves_with_backfill(self, harness):
+        api, reader, finding = harness
+        fid = finding["finding_id"]
+        requested = self._request(api, finding).json()
+        task_id = requested["manual_task"]["task_id"]
+        reader._jobs["bjybdb"] = _job(SyncJobStatus.READY)  # 治理页修复后任务健康
+        resp = self._complete(api, fid, requested["detail"]["finding"]["revision"])
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["detail"]["finding"]["status"] == "resolved"
+        assert body["detail"]["finding"]["revision"] == 3
+        manual = body["manual_task"]
+        assert manual["task_id"] == task_id
+        assert manual["status"] == "completed"
+        assert manual["handled_by"] == "ops-admin-1"
+        assert manual["result_note"] == "已在治理页修正"
+        assert manual["handled_at"]
+        assert [e["event_type"] for e in body["detail"]["events"]] == [
+            "manual_requested", "resolved",
+        ]
+
+    def test_complete_with_still_failing_check_reopens(self, harness):
+        api, _reader, finding = harness
+        fid = finding["finding_id"]
+        requested = self._request(api, finding).json()
+        # 不修 reader：任务仍 DEGRADED → 复检仍报，回 open 且累计复现
+        resp = self._complete(api, fid, requested["detail"]["finding"]["revision"],
+                              result_note="修了但没修好")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["detail"]["finding"]["status"] == "open"
+        assert body["detail"]["finding"]["occurrence_count"] == 2
+        assert body["manual_task"]["status"] == "completed"
+        assert [e["event_type"] for e in body["detail"]["events"]] == [
+            "manual_requested", "manual_completed",
+        ]
+
+    def test_remediate_and_ignore_blocked_while_waiting_human(self, harness):
+        # 验收负例：未完成人工确认前，问题不得经 remediate/ignore 离开 waiting_human
+        api, reader, finding = harness
+        fid = finding["finding_id"]
+        requested = self._request(api, finding).json()
+        rev = requested["detail"]["finding"]["revision"]
+        remediate = api.post(
+            f"{BASE}/findings/{fid}/remediate?expected_revision={rev}",
+            headers=_headers("ops:write"),
+        )
+        assert remediate.status_code == 409
+        assert remediate.json()["detail"]["error_code"] == "FINDING_TRANSITION_INVALID"
+        ignore = api.post(
+            f"{BASE}/findings/{fid}/ignore?expected_revision={rev}",
+            json={"reason": "想直接忽略"},
+            headers=_headers("ops:write"),
+        )
+        assert ignore.status_code == 409
+        # reopen 允许撤回人工处理（waiting_human → open）
+        reopen = api.post(f"{BASE}/findings/{fid}/reopen?expected_revision={rev}",
+                          headers=_headers("ops:write"))
+        assert reopen.status_code == 200
+        assert reopen.json()["finding"]["status"] == "open"
+
+    def test_complete_without_prior_request_404(self, harness):
+        api, _reader, finding = harness
+        resp = self._complete(api, finding["finding_id"], 1)
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error_code"] == "MANUAL_TASK_NOT_FOUND"
+
+    def test_double_complete_is_idempotent(self, harness):
+        api, reader, finding = harness
+        fid = finding["finding_id"]
+        requested = self._request(api, finding).json()
+        rev = requested["detail"]["finding"]["revision"]
+        reader._jobs["bjybdb"] = _job(SyncJobStatus.READY)
+        first = self._complete(api, fid, rev)
+        assert first.status_code == 200
+        second = self._complete(api, fid, first.json()["detail"]["finding"]["revision"])
+        assert second.status_code == 200
+        body = second.json()
+        assert body["detail"]["finding"]["status"] == "resolved"
+        assert len(body["detail"]["events"]) == 2  # 不新增事件

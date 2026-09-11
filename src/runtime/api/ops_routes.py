@@ -1,5 +1,5 @@
 """健康运营 API — issue #45 P0（问题库 + 手动巡检）+ #50（详情与生命周期）
-+ #53（L1 白名单自动修复与强制验证）。
++ #53（L1 白名单自动修复与强制验证）+ #54（L2 人工确认修复流）。
 
 前缀 /api/v1/medical-insurance-ai-agent/ops；鉴权走签名 JWT 的
 ops:read / ops:write 权限（与 data-governance 同模式）。
@@ -18,6 +18,7 @@ from src.domain.ops.models import (
     FindingRevisionConflictError,
     InspectionInProgressError,
     InvalidFindingTransitionError,
+    ManualTaskNotFoundError,
     OpsAssetType,
     OpsDiagnosisResult,
     OpsFindingDetail,
@@ -25,6 +26,7 @@ from src.domain.ops.models import (
     OpsFindingPage,
     OpsFindingStatus,
     OpsInspectionSummary,
+    OpsManualResult,
     OpsSeverity,
     RemediationNotAllowedError,
     RemediationRiskLevel,
@@ -171,6 +173,18 @@ class IgnoreFindingRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class ManualHandoffRequest(BaseModel):
+    """转人工处理备注（可选，写入任务与事件留痕）。"""
+
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ManualCompleteRequest(BaseModel):
+    """人工处理结果（必填，回填任务 output_data 供回链展示）。"""
+
+    result_note: str = Field(min_length=1, max_length=500)
+
+
 class RemediationActionInfo(BaseModel):
     """修复白名单条目（Portal 据此渲染「执行修复」入口）。"""
 
@@ -186,6 +200,11 @@ def _raise_lifecycle_error(exc: Exception) -> None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=error_detail("FINDING_NOT_FOUND", str(exc)),
+        ) from exc
+    if isinstance(exc, ManualTaskNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_detail("MANUAL_TASK_NOT_FOUND", str(exc)),
         ) from exc
     if isinstance(exc, InvalidFindingTransitionError):
         raise HTTPException(
@@ -342,5 +361,69 @@ def remediate_finding(
         InvalidFindingTransitionError,
         FindingRevisionConflictError,
         RemediationNotAllowedError,
+    ) as exc:
+        _raise_lifecycle_error(exc)
+
+
+@router.post(
+    "/findings/{finding_id}/manual-handoff",
+    response_model=OpsManualResult,
+)
+def request_manual_handling(
+    finding_id: str,
+    request: ManualHandoffRequest,
+    expected_revision: int = Query(ge=1),
+    principal: DataGovernancePrincipal = Depends(require_ops_write),
+    service: OpsHealthService = Depends(get_ops_service),
+) -> OpsManualResult:
+    """转人工处理（#54，open → waiting_human）。
+
+    复用 task_closure 创建 waiting_human_confirmation 确认任务；跳转目标按
+    资产类型映射（knowledge → 政策知识治理 / skill → 技能草稿 / 其余外部）。
+    未完成确认前问题不得进入 resolved。
+    """
+    try:
+        return service.request_manual_handling(
+            finding_id,
+            expected_revision=expected_revision,
+            actor=principal.user_id,
+            note=request.note,
+        )
+    except (
+        OpsFindingNotFoundError,
+        InvalidFindingTransitionError,
+        FindingRevisionConflictError,
+    ) as exc:
+        _raise_lifecycle_error(exc)
+
+
+@router.post(
+    "/findings/{finding_id}/manual-complete",
+    response_model=OpsManualResult,
+)
+def complete_manual_handling(
+    finding_id: str,
+    request: ManualCompleteRequest,
+    expected_revision: int = Query(ge=1),
+    principal: DataGovernancePrincipal = Depends(require_ops_write),
+    service: OpsHealthService = Depends(get_ops_service),
+) -> OpsManualResult:
+    """人工处理完成（#54，waiting_human → 自动复检）。
+
+    复检通过 → resolved；仍报 → 回 open 累计复现；检查器异常 → 回 open
+    待下次巡检。处理结果回填任务 output_data 供 Portal 回链展示。
+    """
+    try:
+        return service.complete_manual_handling(
+            finding_id,
+            expected_revision=expected_revision,
+            actor=principal.user_id,
+            result_note=request.result_note,
+        )
+    except (
+        OpsFindingNotFoundError,
+        ManualTaskNotFoundError,
+        InvalidFindingTransitionError,
+        FindingRevisionConflictError,
     ) as exc:
         _raise_lifecycle_error(exc)

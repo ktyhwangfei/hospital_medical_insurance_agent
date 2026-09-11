@@ -6,7 +6,7 @@ import { requestJson } from './api-client'
 
 export type OpsAssetType = 'skill' | 'knowledge' | 'data' | 'runtime'
 export type OpsSeverity = 'info' | 'warning' | 'critical'
-export type OpsFindingStatus = 'open' | 'resolved' | 'ignored'
+export type OpsFindingStatus = 'open' | 'resolved' | 'ignored' | 'waiting_human'
 
 // ── DTO ──
 
@@ -58,7 +58,12 @@ export interface OpsFindingsQuery {
   page_size?: number
 }
 
-export type OpsFindingEventType = 'ignored' | 'reopened' | 'resolved'
+export type OpsFindingEventType =
+  | 'ignored'
+  | 'reopened'
+  | 'resolved'
+  | 'manual_requested'
+  | 'manual_completed'
 
 export interface OpsFindingEventDto {
   event_id: string
@@ -99,11 +104,34 @@ export interface OpsFindingDetailDto {
   finding: OpsFindingDto
   events: OpsFindingEventDto[]
   remediations: OpsRemediationRunDto[]
+  // ── #54：最新人工确认任务投影（无则 null）──
+  manual_task: OpsManualTaskDto | null
 }
 
 export interface OpsRemediationResultDto {
   run: OpsRemediationRunDto
   detail: OpsFindingDetailDto
+}
+
+// ── #54 L2 人工确认修复流 ──
+
+export type OpsManualTarget = 'policy_knowledge' | 'skill_draft' | 'external'
+
+export interface OpsManualTaskDto {
+  task_id: string
+  status: 'waiting_human_confirmation' | 'completed'
+  target: OpsManualTarget
+  requested_by: string
+  requested_at: string
+  note: string | null
+  handled_by: string | null
+  handled_at: string | null
+  result_note: string | null
+}
+
+export interface OpsManualResultDto {
+  detail: OpsFindingDetailDto
+  manual_task: OpsManualTaskDto
 }
 
 // ── #51 P1-5 LLM 智能诊断 ──
@@ -264,5 +292,29 @@ export async function diagnoseOpsFinding(
   return opsRequest<OpsDiagnosisResultDto>(
     `/findings/${encodeURIComponent(findingId)}/diagnose`,
     { method: 'POST' },
+  )
+}
+
+// ── #54 人工交接端点 ──
+
+export async function requestManualHandoff(
+  findingId: string,
+  expectedRevision: number,
+  note: string | null,
+): Promise<OpsManualResultDto> {
+  return opsRequest<OpsManualResultDto>(
+    `/findings/${encodeURIComponent(findingId)}/manual-handoff?expected_revision=${expectedRevision}`,
+    { method: 'POST', body: JSON.stringify({ note }) },
+  )
+}
+
+export async function completeManualHandling(
+  findingId: string,
+  expectedRevision: number,
+  resultNote: string,
+): Promise<OpsManualResultDto> {
+  return opsRequest<OpsManualResultDto>(
+    `/findings/${encodeURIComponent(findingId)}/manual-complete?expected_revision=${expectedRevision}`,
+    { method: 'POST', body: JSON.stringify({ result_note: resultNote }) },
   )
 }
