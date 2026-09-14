@@ -367,12 +367,18 @@ class TestCacheDisabled:
 class TestFactory:
     def test_factory_returns_in_memory_when_env_set(self):
         """USE_MEMORY_STORAGE=1 时返回 InMemoryKnowledgeAssetStorage"""
+        # unit conftest 已设 USE_MEMORY_STORAGE=1；显式保存并在 finally 恢复，
+        # 禁止 pop——那会把共享环境变量删掉，导致后续测试静默连真实 PostgreSQL。
+        previous = os.environ.get("USE_MEMORY_STORAGE")
         os.environ["USE_MEMORY_STORAGE"] = "1"
         try:
             storage = create_knowledge_asset_storage()
             assert isinstance(storage, InMemoryKnowledgeAssetStorage)
         finally:
-            os.environ.pop("USE_MEMORY_STORAGE", None)
+            if previous is None:
+                os.environ.pop("USE_MEMORY_STORAGE", None)
+            else:
+                os.environ["USE_MEMORY_STORAGE"] = previous
 
     def test_factory_returns_something(self):
         """默认环境下工厂返回有效存储实例"""

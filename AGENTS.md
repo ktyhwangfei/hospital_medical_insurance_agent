@@ -200,7 +200,6 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - 模型列表探测默认只直连公网地址并固定 DNS 解析 IP。探测内网/本机模型服务时，将主机名加入逗号分隔的 `MODEL_GOVERNANCE_PROBE_ALLOWED_HOSTS`，否则返回 403。
 - SSE 流式端点（`/api/v1/medical-insurance-ai-agent/policy-qa/stream`）的 `done` 事件标志流结束，并携带 `attempt_count` 与 `halt_reason`；前端需据此关闭流。
 - `src/apps/portal/` 为 Next.js 16.x 应用，API 和约定可能与训练数据不同，编码前应先查阅 `node_modules/next/dist/docs/`
-- `domain/tool/` 和 `data_platform/storage/tool/` 是完全空目录（无 `__init__.py`），import 会报错 — 不要使用
 - 旧 `/chat*`、`/workflows*`、`/tasks/confirm` 业务入口以及结算异常/出院质控编排已退役；禁止重新引用已删除的 `business_scenarios`、`scenario_executor`、`runtime/langgraph`。
 - boulder continuation 活跃时，`task(run_in_background=true)` 的通知与 system-reminder 互扰，导致后台任务结果丢失。串行多任务时用 `run_in_background=false`
 - `infra_skill_routes.py` 中草稿/物化/生命周期端点通过依赖注入（`get_skill_draft_service` / `get_skill_materializer` / `get_skill_lifecycle_service`）获取服务。API 测试中 override 这些依赖函数才能注入内存存储；直接调用 `get_skill_draft_service()` 的端点（如 P1 时期的 import 占位）不会响应 override，已全部改为依赖注入

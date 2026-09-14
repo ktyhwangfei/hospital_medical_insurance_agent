@@ -60,6 +60,7 @@ from src.runtime.policy_qa.broad_query_router import (
     BroadRouteDecision,
     route_broad_question,
 )
+from src.runtime.workflow.service import route_workflow_question, run_workflow_for_question
 from src.config.production import MILVUS_HOST, MILVUS_PORT
 from src.skill_infra.skill_router import route_question, get_assembler, get_skill_manifest
 from src.runtime.policy_qa.persistence import (
@@ -1008,6 +1009,116 @@ async def _policy_qa_stream(
 
     # Issue #25：宽泛政策问题标识（无结算单上下文，走 BM25+向量宽召回）
     is_broad = _is_broad_question(request, context_need)
+
+    # ── Workflow 路由：一次性关键词分类命中已声明 Workflow 时，走 Tool 编排分支 ──
+    # 先做零成本关键词匹配；只有命中 Workflow 时才检查高风险动作，避免退费类
+    # Workflow 关键词绕过人工确认，同时不给未命中的既有流量增加风控查询开销。
+    # 未命中 Workflow 时 workflow_public_result 为 None，完全不影响后续既有五步流程。
+    workflow_blocked_actions: list[tuple[str, str]] = []
+    workflow_public_result = None
+    matched_workflow = route_workflow_question(request.question)
+    if matched_workflow is not None:
+        workflow_blocked_actions = detect_blocked_actions(request.question)
+        if not workflow_blocked_actions:
+            try:
+                workflow_public_result = await run_workflow_for_question(
+                    request.question, settlement_id=request.settlement_id
+                )
+            except Exception as e:
+                logger.warning(f"Workflow routing failed, fallback to skill pipeline: {e}")
+                workflow_public_result = None
+
+    if workflow_blocked_actions:
+        confirmation = build_human_confirmation_response(workflow_blocked_actions)
+        blocked_public_result = _build_public_result(
+            answer=str(confirmation.result.get("message") or "该操作需要人工确认。"),
+            can_answer=False,
+            partial_answer=False,
+            policy_status="no_policy_matched",
+            policy_evidence=[],
+            calculation_steps=[],
+            definition=None,
+            warnings=[],
+            case_context=None,
+            outpatient_result={
+                "uncertainties": confirmation.uncertainties,
+                "next_actions": ["请医保经办人员在既有业务系统确认并执行。"],
+            },
+            action_status="waiting_human_confirmation",
+        )
+        halt_reason = "waiting_human_confirmation"
+        yield _sse_event(
+            "result",
+            {"qa_turn_id": qa_turn_id, "result": blocked_public_result.model_dump(mode="json")},
+        )
+        yield _sse_event(
+            "done",
+            {
+                "qa_turn_id": qa_turn_id,
+                "answer_status": blocked_public_result.answer_status,
+                "success": True,
+                "attempt_count": attempt_count,
+                "halt_reason": halt_reason,
+            },
+        )
+        return
+
+    if workflow_public_result is not None:
+        halt_reason = "verified"
+        yield _sse_event(
+            "result",
+            {"qa_turn_id": qa_turn_id, "result": workflow_public_result.model_dump(mode="json")},
+        )
+        duration_ms = int((_time.time() - start_time) * 1000)
+        try:
+            record_qa_task(
+                qa_turn_id=qa_turn_id,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                role=role,
+                question=request.question,
+                settlement_id=request.settlement_id,
+                status="completed",
+                output={
+                    "answer_excerpt": workflow_public_result.answer[:500],
+                    "answer_status": workflow_public_result.answer_status,
+                    "attempt_count": attempt_count,
+                    "halt_reason": halt_reason,
+                },
+                duration_ms=duration_ms,
+            )
+            finalize_workflow(workflow_id, "completed", accumulated_steps)
+        except Exception as e:
+            logger.warning(f"Failed to persist workflow QA result: {e}")
+        record_trajectory_turn(
+            qa_turn_id=qa_turn_id,
+            session_id=session_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            settlement_id=request.settlement_id,
+            question=request.question,
+            answer_status=workflow_public_result.answer_status,
+            payload={
+                "context_need": turn_context_need,
+                "memory_updates": turn_memory_updates,
+                "result": workflow_public_result.model_dump(mode="json"),
+                "attempt_count": attempt_count,
+                "halt_reason": halt_reason,
+            },
+        )
+        yield _sse_event(
+            "done",
+            {
+                "qa_turn_id": qa_turn_id,
+                "answer_status": workflow_public_result.answer_status,
+                "success": True,
+                "attempt_count": attempt_count,
+                "halt_reason": halt_reason,
+            },
+        )
+        return
 
     try:
         # 处理请求并 yield SSE 事件（Skill 驱动：五步流程）

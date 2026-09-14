@@ -29,6 +29,7 @@ from src.runtime.api.ops_routes import router as ops_health_router
 from src.runtime.api.catalog_routes import router as catalog_router
 from src.runtime.api.question_library_routes import router as question_library_router
 from src.runtime.api.ops_analytics_routes import router as ops_analytics_router
+from src.runtime.api.tool_workflow_routes import router as tool_workflow_router
 
 logger = logging.getLogger(__name__)
 
@@ -111,5 +112,6 @@ def create_app() -> FastAPI:
     app.include_router(catalog_router)
     app.include_router(question_library_router)
     app.include_router(ops_analytics_router)
+    app.include_router(tool_workflow_router)
     print("[STARTUP] create_app: 完成", flush=True)
     return app

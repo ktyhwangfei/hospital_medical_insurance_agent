@@ -292,7 +292,8 @@ class TestFactory:
 
     def test_postgres_without_cache_when_cache_disabled(self):
         """When CACHE_ENABLED_RULE=0 but cache provided, returns PostgresRuleStorage."""
-        with patch.dict("os.environ", {"CACHE_ENABLED_RULE": "0"}):
+        # 显式清掉 USE_MEMORY_STORAGE（unit conftest 设了 1），否则走内存分支。
+        with patch.dict("os.environ", {"USE_MEMORY_STORAGE": "", "CACHE_ENABLED_RULE": "0"}):
             from src.data_platform.storage.rule.factory import create_rule_storage
 
             storage = create_rule_storage(cache=InMemoryCacheClient())
@@ -300,7 +301,9 @@ class TestFactory:
 
     def test_cached_rule_storage_when_cache_enabled(self):
         """With cache provided and CACHE_ENABLED_RULE=1, returns CachedRuleStorage."""
-        with patch.dict("os.environ", {"CACHE_ENABLED_RULE": "1"}):
+        with patch.dict(
+            "os.environ", {"USE_MEMORY_STORAGE": "", "CACHE_ENABLED_RULE": "1"}
+        ):
             from src.data_platform.storage.rule.factory import create_rule_storage
 
             storage = create_rule_storage(cache=InMemoryCacheClient())
