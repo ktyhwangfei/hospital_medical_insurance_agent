@@ -265,6 +265,16 @@ class PolicyCompilationService:
                 rule_value = raw_rule.get("rule_value") or fields.get("rule_value")
                 if rule_value not in (None, ""):
                     result = {"value": rule_value}
+        # 编译期纠偏：result.ratio 撞上 personal_payment_ratio（补集错误）时，
+        # 以知识字段 payment_ratio 为准（实锤：统筹90%/个人10% 被编成 ratio=0.1）。
+        if isinstance(result, dict) and result.get("ratio") not in (None, ""):
+            from src.knowledge_extension.rule_explanation.fund_ratio_guard import (
+                correct_canonical_ratio,
+            )
+
+            corrected = correct_canonical_ratio(subject, result["ratio"], fields)
+            if corrected is not None:
+                result = {**result, "ratio": corrected}
         excluded = {
             "rule_id", "knowledge_id", "fact_id", "rule_type", "source_text",
             "confidence", "expression", "relations", "subject", "result", "value",

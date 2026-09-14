@@ -347,16 +347,25 @@ def test_compiler_rejects_fact_without_structured_result() -> None:
 
 
 def test_condition_value_outside_domain_reports_review_issue() -> None:
-    """枚举字段值不在受控值域（如 hosp_lv="社区"）→ REVIEW 级 issue，规则仍生成。"""
+    """枚举字段值不在受控值域（如 hosp_lv="特级"）→ REVIEW 级 issue，规则仍生成。"""
     result = PolicyRuleCompiler().compile([
-        fact("kn_1", conditions={"hosp_lv": "社区", "med_type": "门诊"}, ratio="0.9"),
+        fact("kn_1", conditions={"hosp_lv": "特级", "med_type": "门诊"}, ratio="0.9"),
     ])
     unmapped = [i for i in result.issues if i.code == "VALUE_DOMAIN_UNMAPPED"]
     assert len(unmapped) == 1
     assert unmapped[0].severity == "REVIEW"
     assert unmapped[0].stage == "CANONICALIZE"
     assert unmapped[0].fact_id == "kn_1"
-    assert "社区" in unmapped[0].message
+    assert "特级" in unmapped[0].message
+    assert len(result.rules) == 1
+
+
+def test_condition_value_community_now_in_domain() -> None:
+    """「社区」已进入 hosp_lv 受控值域（门诊医院/社区比例不同，必须独立），不再报 REVIEW。"""
+    result = PolicyRuleCompiler().compile([
+        fact("kn_1", conditions={"hosp_lv": "社区", "med_type": "门诊"}, ratio="0.9"),
+    ])
+    assert not [i for i in result.issues if i.code == "VALUE_DOMAIN_UNMAPPED"]
     assert len(result.rules) == 1
 
 

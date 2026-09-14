@@ -94,10 +94,6 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
     void sendQuestion(question)
   }
 
-  const handleFollowUp = (question: string) => {
-    void sendQuestion(question)
-  }
-
   // Issue #30：会话生命周期操作（仅 active 且已有对话时显示）
   const canOperate = stream.sessionStatus === 'active' && stream.messages.length > 0 && !stream.isStreaming
   const lastUserQuestion =
@@ -230,7 +226,7 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
       {stream.messages.length === 0 ? (
         <PolicyQAEmptyState onSelectQuestion={setInput} />
       ) : (
-        <PolicyMessageList messages={stream.messages} onFollowUp={handleFollowUp} />
+        <PolicyMessageList messages={stream.messages} />
       )}
 
       {stream.isStreaming && currentPublicMessage ? (

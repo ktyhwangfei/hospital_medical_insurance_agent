@@ -71,7 +71,8 @@ def build_ingest_records(
         extracted_at: 本次提取时间（ISO），写入字段级溯源。
         doc_metadata: 可选的 policy_documents 元数据，用于预填充适用性字段。
     Returns:
-        fact_records: 每条 {fact_id, doc_id, fact_text, vector, created_at}。
+        fact_records: 每条 {fact_id, doc_id, fact_text, vector, created_at,
+            unit_id, unit_source_text}（unit_id/unit_source_text 用于段落级溯源）。
         rule_entities: 每条为 rule_to_entity 产出 + fact_id。
     """
     fact_records: list[dict[str, Any]] = []
@@ -93,6 +94,9 @@ def build_ingest_records(
             "fact_text": fact_text,
             "vector": vector,
             "created_at": extracted_at,
+            # 段落级溯源：回溯到原文提取单元（dynamic field，向后兼容）
+            "unit_id": str(fact.get("unit_id") or ""),
+            "unit_source_text": str(fact.get("unit_source_text") or ""),
         })
 
         for rule in fact.get("rules", []):

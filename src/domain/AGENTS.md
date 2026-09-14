@@ -18,6 +18,7 @@ domain/
 ├── order_fee/      # Order, FeeItem, Drug, Consumable
 ├── common/         # Citation, Role 枚举
 ├── skill/          # Skill, SkillStep, SkillMetadata（Pydantic）
+├── trusted_qa/     # TrustedQuestion 可信问题（Pydantic，Issue #37）
 └── tool/           # Tool, ToolOwner, ToolType（Pydantic）
 ```
 
@@ -867,6 +868,56 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 13.7. 可信问题上下文（Trusted QA）
+
+> Issue #37 新增。可信问题库与匹配引擎：生产运行优先匹配可信问题，长尾再走受控语义生成；匹配不确定时必须澄清，不猜测执行。实现：`src/domain/trusted_qa/models.py`、`src/data_platform/storage/trusted_question/`。
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 可信问题 | `TrustedQuestion` | **Entity** | Pydantic `BaseModel`（frozen） | 经人工审核、绑定确定性查询计划（`query_plan` 快照）的标准问题；携带乐观锁 `version` |
+| 可信问题状态 | `TrustedQuestionStatus` | **Value Object** | `StrEnum` | draft / pending_review / active / retired；状态机：draft→pending_review→active→retired，驳回 pending_review→draft |
+| 同义表达 | `TrustedQuestionSynonym` | **Value Object** | Pydantic `BaseModel`（frozen） | 标准问题的等价问法（expression），记录运营人 added_by 与时间；active 状态也允许运营 |
+| 预期结果特征 | `expected_result_traits` | Value Object | `dict` | 命中执行后的结果校验特征（行数/非空列/值域等），支撑"命中即正确"验收 |
+| 状态机转移表 | `ALLOWED_TRANSITIONS` | Value Object | `dict` | 状态流转的唯一权威定义，`validate_transition` 统一裁定 |
+
+#### 业务规则
+
+- 仅 draft / pending_review 状态可编辑内容（`ensure_editable`）；active 需先退役，retired 只读
+- 任何内容变更（编辑/流转/同义表达运营）均递增 `version`，存储层乐观锁冲突抛 `TrustedQuestionConflictError`
+- approve / reject 必须留痕 `reviewed_by` / `reviewed_at`；冷启动批量导入一律进入 draft，禁止直接 active
+- `query_plan` 为语义层 `SemanticQuery` 的不透明 JSONB 快照，领域层不依赖 semantic_layer
+- approve 前必须绑定合法的 `SemanticQuery` query_plan（路由层闸门，400 `QUERY_PLAN_REQUIRED`/`QUERY_PLAN_INVALID`），无计划问题不得进入 active
+
+---
+
+### 13.8. 数据目录上下文（Data Catalog）
+
+> Issue #38 新增。数据资产目录：源表字段 → 语义对象/指标 → 消费方（skill/页面）+ 向量集合（Milvus 政策知识 RAG 资产）的可发现、可理解、可信任视图。实现：`src/domain/data_catalog/models.py`、`src/data_platform/storage/data_catalog/`。
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 数据资产 | `CatalogAsset` | **Entity** | Pydantic `BaseModel`（frozen） | 目录中的一条可检索资产；携带业务口径、负责人、更新频率、标签（`tags`）、值域码表、脱敏样例摘要 |
+| 资产类型 | `CatalogAssetType` | **Value Object** | `StrEnum` | source_table / semantic_object / metric / consumer / vector_collection |
+| 资产字段 | `CatalogColumn` | **Entity** | Pydantic `BaseModel`（frozen） | 列级元数据（源表列 / 向量集合 schema 字段）；`column_id` 由 `{asset_id}:{column_name}` 确定性派生，随刷新整体替换 |
+| 血缘边 | `CatalogLineageEdge` | **Entity** | Pydantic `BaseModel`（frozen） | upstream → downstream（feeds / belongs_to / consumed_by）；`edge_id` 确定性派生，刷新时推导落表 `data_catalog_lineage_edges` |
+| 资产自然键 | `asset_key` | Value Object | `str` | `{asset_type}:{业务标识}`，构建器幂等 upsert 的唯一键 |
+| 溯源指针 | `source_ref` | Value Object | `dict` | 指向数据集/表名/skill_id/页面路由等来源 |
+| 语义版本 | `semantic_version` | Value Object | `str` | 资产关联的语义对象发布版本，支撑"溯源到语义版本"验收 |
+| 数据批次 | `last_batch_id` | Value Object | `str` | 资产关联的最近同步批次，支撑"溯源到数据批次"验收 |
+
+#### 业务规则
+
+- 资产是目录构建器刷新的快照：按 `asset_key` 幂等 upsert，无审核状态机、无乐观锁
+- 全量刷新后 `delete_assets_except(keep_keys)` 清理失效资产；列快照（`replace_columns`）与血缘边（`replace_lineage_edges`）随刷新整体重建，与资产同刷同新
+- 血缘（批次→投影表→指标→消费方）刷新时从资产快照推导并落表，查询走索引而非全量现推；vector_collection 暂不参与血缘推导
+- 样例分布只存脱敏摘要（计数/值域/空值率），禁止行级数据入库
+
+---
+
 ### 14. 共享通用层（Shared / Common）
 
 #### 概述
@@ -978,12 +1029,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ### 14.7. 健康运营上下文（Ops Health）
 
-> 依据：issue #45 P0 + issue #50 生命周期 + issue #53 L1 自动修复 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
-> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）、「手动处置」（#50：ignore/reopen 流转 + 事件留痕）与「解决」（#53：L1 白名单自动修复 + 修复后强制验证闭环）已落地，诊断归后续分期。
+> 依据：issue #45 P0 + issue #50 生命周期 + issue #53 L1 自动修复 + issue #51 P1-5 LLM 智能诊断 + issue #52 P1-6 定时巡检调度 + issue #54 P2-8 L2 人工确认修复流 + `docs/research/资产健康运营平台-开源调研与落地方案-V1.0.md` §6。
+> 定位：横跨四类资产（skill/knowledge/data/runtime）的问题汇聚层；「发现」（#45：只读检查器 + fingerprint 去重落库）、「手动处置」（#50：ignore/reopen 流转 + 事件留痕）、「解决」（#53：L1 白名单自动修复 + 修复后强制验证闭环）、「诊断」（#51：LLM 智能诊断，citations 强制）、「调度」（#52：定时巡检，claim 抢占不重复执行）与「人工交接」（#54：L2 转人工 + 完成复检回链，复用 task_closure）已落地。
 
 #### 文件位置
 
-`src/domain/ops/models.py`（领域模型）+ `src/runtime/ops/checkers.py`（检查器注册）+ `src/runtime/ops/remediation.py`（L1 修复白名单与执行器）+ `src/runtime/ops/service.py`（巡检编排与生命周期状态机）+ `src/data_platform/storage/ops/`（存储 ports/adapter 四件套）+ `src/runtime/api/ops_routes.py`（API）+ portal `/ops` 页（`src/apps/portal/app/ops/page.tsx` + `finding-detail-drawer.tsx` + `src/lib/ops-api.ts`）
+`src/domain/ops/models.py`（领域模型）+ `src/runtime/ops/checkers.py`（检查器注册）+ `src/runtime/ops/remediation.py`（L1 修复白名单与执行器）+ `src/runtime/ops/service.py`（巡检编排与生命周期状态机）+ `src/runtime/ops/scheduler.py`（巡检调度器）+ `src/runtime/ops/diagnosis.py`（LLM 智能诊断）+ `src/data_platform/storage/ops/`（存储 ports/adapter 四件套）+ `src/runtime/api/ops_routes.py`（API）+ `scripts/run_ops_inspection_worker.py`（定时巡检 worker）+ portal `/ops` 页（`src/apps/portal/app/ops/page.tsx` + `finding-detail-drawer.tsx` + `src/lib/ops-api.ts`）
 
 #### 通用语言字典
 
@@ -994,14 +1045,14 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 问题指纹 | `finding_fingerprint()` | 值函数 | — | 去重键 `asset_type:asset_id:check_id`；同资产同检查项复现只累计 |
 | 受检资产类型 | `OpsAssetType` | **Value Object** | `StrEnum` | skill / knowledge / data / runtime 四域 |
 | 问题严重度 | `OpsSeverity` | **Value Object** | `StrEnum` | critical（立即处理）/ warning（排期）/ info（记录） |
-| 问题状态 | `OpsFindingStatus` | **Value Object** | `StrEnum` | open（#45 巡检产出）/ ignored（#50 忽略）/ resolved（#53 修复验证通过） |
+| 问题状态 | `OpsFindingStatus` | **Value Object** | `StrEnum` | open（#45 巡检产出）/ ignored（#50 忽略）/ resolved（#53 修复验证通过）/ waiting_human（#54 转人工处理中） |
 | 生命周期事件 | `OpsFindingEvent` | **Entity** | Pydantic `BaseModel`（frozen） | 一次 ignore/reopen/resolved/reopened 流转留痕（actor + 可选 reason + created_at），追加只增不改 |
-| 事件类型 | `OpsFindingEventType` | **Value Object** | `StrEnum` | ignored / reopened / resolved（#53 修复验证通过）/ reopened 复用（巡检发现已解决问题复发） |
-| 问题详情 | `OpsFindingDetail` | **DTO** | Pydantic `BaseModel` | finding 当前态 + events 时间线（升序）+ remediations 修复记录（升序），详情页/流转接口返回体 |
+| 事件类型 | `OpsFindingEventType` | **Value Object** | `StrEnum` | ignored / reopened / resolved（#53 修复验证通过）/ reopened 复用（巡检发现已解决问题复发）/ manual_requested · manual_completed（#54 人工交接发起与完成登记） |
+| 问题详情 | `OpsFindingDetail` | **DTO** | Pydantic `BaseModel` | finding 当前态 + events 时间线（升序）+ remediations 修复记录（升序）+ manual_task 最新人工任务投影（#54），详情页/流转接口返回体 |
 | 检查器注册项 | `CheckSpec` | **Value Object** | frozen dataclass | 代码内注册（id/资产类型/描述/runner），不引入 YAML 配置系统 |
 | 检查器读取面 | `GovernanceStatusReader` | **Port** | `typing.Protocol` | 检查器对治理控制面的最小只读依赖（list_sources/get_job） |
 | 健康运营巡检服务 | `OpsHealthService` | **Domain Service** | — | 逐检查器只读取数→问题库去重落库；单检查器失败不中断整次巡检；承载 ignore/reopen/remediate 状态机 |
-| 巡检结果 | `OpsInspectionResult` | **DTO** | Pydantic `BaseModel` | checked_at / check_count / finding_count / findings / checker_errors |
+| 巡检结果 | `OpsInspectionResult` | **DTO** | Pydantic `BaseModel` | checked_at / check_count / finding_count / findings / checker_errors + 调度回填 inspection_id·trigger_source + computed new_finding_count（首见问题数） |
 | 修复运行 | `OpsRemediationRun` | **Entity** | Pydantic `BaseModel`（frozen） | 一次修复尝试留痕：status 记动作执行、verification_result 记修复后验证（None=未验证）；追加只增不改 |
 | 修复风险级 | `RemediationRiskLevel` | **Value Object** | `StrEnum` | L1（白名单自动执行）/ L2（人工确认） |
 | 修复运行状态 | `RemediationRunStatus` | **Value Object** | `StrEnum` | succeeded（动作已执行）/ failed（动作未发起，after_evidence 携带原因） |
@@ -1010,6 +1061,31 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 修复白名单项 | `RemediationSpec` | **Value Object** | frozen dataclass | action_id ↔ check_id ↔ risk_level ↔ executor 的白名单注册；`default_remediation_whitelist()` 代码内注册 |
 | 修复执行器 | `RemediationExecutor` | **Port** | `typing.Protocol`（Callable） | `(OpsFinding, action_id) -> RemediationActionOutcome`；业务修复逻辑的唯一扩展点 |
 | 重试门诊同步 | `retry_data_sync` | 修复动作 | — | 本期唯一 L1 动作：复用 data_governance 同步入口重试失败/滞后的门诊同步任务 |
+| 诊断报告 | `OpsDiagnosisReport` | **DTO** | Pydantic `BaseModel` | 单条 finding 的 LLM 诊断（存 `OpsFinding.diagnosis`，最新覆盖）：status/root_cause/citations/uncertainties/actions/model_route |
+| 诊断结论状态 | `DiagnosisStatus` | **Value Object** | `StrEnum` | complete（有引用）/ insufficient_evidence（无引用，不落根因不留建议） |
+| 诊断建议分级 | `DiagnosisActionLevel` | **Value Object** | `StrEnum` | L1 自动白名单 / L2 人工确认 / L3 禁止自动执行（仅提示）；建议仅作指引，执行仍受 #53 白名单约束 |
+| 诊断证据引用 | `DiagnosisCitation` | **Value Object** | Pydantic `BaseModel`（frozen） | citation_id（E1..En）+ source + quote；**只能从证据目录选取，quote 取自目录原文，模型不可编造** |
+| 诊断建议动作 | `DiagnosisAction` | **Value Object** | Pydantic `BaseModel`（frozen） | level + description + citation_ids；未挂任何有效引用的建议在构建时丢弃 |
+| 诊断结果 | `OpsDiagnosisResult` | **DTO** | Pydantic `BaseModel` | diagnose 端点返回体：刷新后的 finding（含新报告）+ 报告本体 |
+| 诊断不可用 | `DiagnosisUnavailableError` | 异常 | — | 模型未配置/调用失败/输出不可解析；API 503 `DIAGNOSIS_UNAVAILABLE`，不落库不覆盖旧报告 |
+| 智能诊断服务 | `OpsDiagnosisService` | **Domain Service** | — | 证据目录（payload+定向补充，过脱敏）→ ModelGateway scene=asset_diagnosis → 校验落库；citations 硬约束 |
+| 证据目录构建 | `build_evidence_catalog()` | 值函数 | — | payload 逐字段 + 定向补充证据（`supplement.*`），统一 `redact_sensitive_text` 后编号 E1..En |
+| 定向证据采集器 | `EvidenceCollector` | **Port** | `typing.Protocol`（Callable） | `(OpsFinding) -> [(source, quote)]`；默认实现为门诊同步问题附最近尝试记录 |
+| 巡检运行 | `OpsInspectionRun` | **Entity** | Pydantic `BaseModel`（frozen） | 一次巡检留痕：trigger_source / status / triggered_by / 起止时间 / finding_count / new_finding_count / checker_errors；追加只增不改 |
+| 巡检触发方式 | `OpsInspectionTrigger` | **Value Object** | `StrEnum` | manual（手动，绕过到期检查）/ scheduled（定时，仅 next_run_at 到期可认领） |
+| 巡检状态 | `OpsInspectionStatus` | **Value Object** | `StrEnum` | running / succeeded / failed |
+| 检查器错误 | `OpsCheckerError` | **Value Object** | Pydantic `BaseModel`（frozen） | 单检查器执行失败记录（check_id + message），不中断整次巡检 |
+| 巡检调度状态 | `OpsInspectionScheduleState` | **DTO** | Pydantic `BaseModel` | 单行调度表投影：next_run_at + active_inspection_id 互斥位 |
+| 巡检摘要 | `OpsInspectionSummary` | **DTO** | Pydantic `BaseModel` | 周期 + 下次巡检时间 + in_progress + 最近一次运行；portal 摘要条数据 |
+| 巡检调度器 | `OpsInspectionScheduler` | **Domain Service** | — | run_manual / run_scheduled_once / get_summary；claim 抢占 + 完成推进 next_run_at |
+| 巡检认领 | `claim_inspection()` | Port 方法 | — | 事务内 `FOR UPDATE SKIP LOCKED` 抢占单行调度表（active 互斥 + 定时到期检查），败者得 None |
+| 巡检进行中 | `InspectionInProgressError` | 异常 | — | 手动触发被并发巡检抢占（API 409 `INSPECTION_IN_PROGRESS`） |
+| 人工交接目标 | `OpsManualTarget` | **Value Object** | `StrEnum` | policy_knowledge（知识修正→政策知识治理页）/ skill_draft（技能草稿流程）/ external（data/runtime 资产，外部系统处理） |
+| 资产→目标映射 | `manual_target_for_asset()` | 值函数 | — | knowledge→POLICY_KNOWLEDGE、skill→SKILL_DRAFT、其余→EXTERNAL；跳转目标按资产类型唯一决定 |
+| 人工确认任务投影 | `OpsManualHandoff` | **DTO** | Pydantic `BaseModel` | task_closure 任务的只读投影（task_id/status/target/发起与处理回填字段）；真源在任务表 input_data/output_data |
+| 人工交接结果 | `OpsManualResult` | **DTO** | Pydantic `BaseModel` | manual-handoff / manual-complete 端点返回体：最新详情 + 任务投影 |
+| 人工任务不存在 | `ManualTaskNotFoundError` | 异常 | — | 问题没有可操作的人工确认任务（未发起即完成）；API 404 `MANUAL_TASK_NOT_FOUND` |
+| 人工确认任务类型 | `ops_manual_remediation` | 常量 | — | task_type 标识（`MANUAL_TASK_TYPE`）；workflow_id=finding_id 反查，responsible_role=ops_admin |
 
 #### 业务规则
 
@@ -1025,6 +1101,16 @@ HIS 系统 → HisPort → Patient (查询/读取)
 10. 修复仅允许对 open 问题发起（同 ignore）；执行器先做动作、后强制重跑该问题的触发检查器（按 fingerprint 匹配草稿）：复跑通过→resolved（事件 reason 记 `L1 修复动作 xxx 验证通过`）；复跑仍报→upsert 复现（occurrence_count+1）保持 open；检查器异常→不判定验证结果，状态不动，`after_evidence.verification_error` 记原因。
 11. 修复运行留痕先于状态流转：动作未发起（如任务 paused/draft、同步任务不存在）记 `failed` 运行行且不触发验证，问题状态不动；`expected_revision` 乐观锁只约束 resolved 流转，冲突时运行行仍保留（动作幂等可重放）。
 12. 已解决问题复现：巡检 upsert 后自动 open（系统 actor `system:ops-inspector` 记 reopened 事件）；ignored 问题复现不复活（#50 规则）。
+13. 诊断（#51）只读：`POST /ops/findings/{id}/diagnose`（ops:write）不改 status/revision；报告覆盖写入 `diagnosis` 列。citations 硬约束：引用只能从证据目录选取（模型只可挑选不可编造 quote）；引用为空 → status=insufficient_evidence、root_cause 置空、actions 清空，不驱动任何修复动作（负例测试守护）。
+14. 诊断输入过 `security/desensitization`：证据目录构建时统一 `redact_sensitive_text`，PHI 原值不进模型也不落库；报告记录 `model_route`（scene/model_type/实际 model_name）供审计。
+15. 诊断模型调用走 `ModelGateway` scene=`asset_diagnosis`、model_type=`llm`（路由表显式条目，治理路由发布优先）；模型失败/输出不可解析抛 `DiagnosisUnavailableError`（API 503），不落库不覆盖旧报告。
+16. 调度（#52）复用门诊同步 `claim_due_job` 单进程 PostgreSQL 模式（不引入 Airflow/Temporal/celery）：单行调度表 `ops_inspection_schedule`（schedule_id=1 CHECK）持 next_run_at 与 active_inspection_id 互斥位；claim 在事务内 `FOR UPDATE SKIP LOCKED` 抢占，并发恰一胜出、败者得 None（活库双连接验收）；手动触发被并发占用抛 `InspectionInProgressError`（API 409）。
+17. 触发语义：manual 绕过到期检查即可认领；scheduled 仅 next_run_at 到期可认领（worker 轮询，未到期返 None）；两类完成后统一推 next_run_at = 完成时间 + 周期（env `OPS_INSPECTION_INTERVAL_MINUTES` 默认 1440=每日，非法/<1 回退默认；周期不落库）。
+18. 失败语义：单检查器失败不中断整次巡检（记 checker_errors，status 仍 succeeded）；灾难性巡检失败落 failed 运行行——checker_errors 只存安全文案「巡检执行异常，详见服务端日志」（异常原文可能含连接信息不落库），next_run_at 顺延一整周期，worker 记日志不重试。
+19. 运行留痕：每次巡检写 `ops_inspections` 行（起止时间/触发人/两类计数/checker_errors）；`OpsInspectionResult.inspection_id`/`trigger_source` 由调度器回填——直接调用 `OpsHealthService.run_inspection`（未经调度器，如修复后验证）不留运行行。new_finding_count = occurrence_count==1 的首见问题数（复现累计不算新发现）。
+20. L2 人工交接（#54）复用 task_closure，不新建确认机制：`request_manual_handling` 以 `task_type=ops_manual_remediation`、`status=waiting_human_confirmation`、`workflow_id=finding_id` 落确认任务（反查取最新）；跳转目标按资产映射（rule：knowledge→政策知识治理、skill→技能草稿、其余外部）——知识内容修正一律走既有政策知识审核/重提取管线，skill 修改走草稿流程，本流只做跳转与状态回链。
+21. 人工交接状态机：request 仅允许 open→waiting_human，写入次序为**版本先验→流转→建任务**（冲突或任务存储失败均不留悬空任务）；complete 仅允许对 waiting_human 发起（无可操作任务抛 `ManualTaskNotFoundError`），任务回填 handled_by/handled_at/result_note 后**复用 #53 `_verify_remediation` 自动复检**：通过→resolved、仍报→回 open 按最新草稿累计复现、检查器异常→回 open 待下次巡检；重复完成幂等回读当前状态。
+22. 未完成人工确认前问题不得进入 resolved：remediate/ignore 均要求 open（负例测试守护）；reopen 扩语义 waiting_human→open（撤回人工处理，任务留痕不删）；再次转人工创建新任务，`_latest_manual_task` 按创建序取末位。
 
 ---
 
@@ -1359,7 +1445,28 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `OpsFindingEventType` | 事件类型 | OpsHealth | Value Object |
 | `OpsFindingPage` | 问题分页结果 | OpsHealth | DTO |
 | `OpsFindingStatus` | 问题状态 | OpsHealth | Value Object |
+| `OpsDiagnosisReport` | 诊断报告 | OpsHealth | DTO |
+| `OpsDiagnosisResult` | 诊断结果 | OpsHealth | DTO |
+| `OpsDiagnosisService` | 智能诊断服务 | OpsHealth | Domain Service |
+| `DiagnosisStatus` | 诊断结论状态 | OpsHealth | Value Object |
+| `DiagnosisActionLevel` | 诊断建议分级 | OpsHealth | Value Object |
+| `DiagnosisCitation` | 诊断证据引用 | OpsHealth | Value Object |
+| `DiagnosisAction` | 诊断建议动作 | OpsHealth | Value Object |
+| `DiagnosisUnavailableError` | 诊断不可用异常 | OpsHealth | 异常 |
 | `OpsHealthService` | 健康运营巡检服务 | OpsHealth | Domain Service |
+| `OpsInspectionRun` | 巡检运行 | OpsHealth | Entity |
+| `OpsInspectionScheduleState` | 巡检调度状态 | OpsHealth | DTO |
+| `OpsInspectionStatus` | 巡检状态 | OpsHealth | Value Object |
+| `OpsInspectionSummary` | 巡检摘要 | OpsHealth | DTO |
+| `OpsInspectionScheduler` | 巡检调度器 | OpsHealth | Domain Service |
+| `OpsInspectionTrigger` | 巡检触发方式 | OpsHealth | Value Object |
+| `OpsCheckerError` | 检查器错误 | OpsHealth | Value Object |
+| `InspectionInProgressError` | 巡检进行中异常 | OpsHealth | 异常 |
+| `OpsManualTarget` | 人工交接目标 | OpsHealth | Value Object |
+| `manual_target_for_asset` | 资产→人工目标映射 | OpsHealth | 值函数 |
+| `OpsManualHandoff` | 人工确认任务投影 | OpsHealth | DTO |
+| `OpsManualResult` | 人工交接结果 | OpsHealth | DTO |
+| `ManualTaskNotFoundError` | 人工任务不存在异常 | OpsHealth | 异常 |
 | `OpsInspectionResult` | 巡检结果 | OpsHealth | DTO |
 | `OpsRemediationRun` | 修复运行 | OpsHealth | Entity |
 | `OpsSeverity` | 问题严重度 | OpsHealth | Value Object |

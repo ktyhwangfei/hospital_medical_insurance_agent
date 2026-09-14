@@ -55,6 +55,59 @@ DEFAULT_TEST_CASES: list[PolicyQATestCase] = [
         required=True,
         case_set_version=0,
     ),
+    # ── 黄金问答（表格单元格级，回归护栏）：防止表格行拆分/比例纠偏再次退化 ──
+    # precise 模式按维度过滤确定性命中；expected_knowledge_ids 为 canonical rule_id（重建稳定）
+    PolicyQATestCase(
+        case_id="golden_outpatient_employee_below20k",
+        name="黄金·在职门诊 2 万以下医院报销比例",
+        query="在职职工门诊2万元以下医院报销比例",
+        mode="precise",
+        expected_knowledge_ids=[
+            "rule_7f3f6f0c6fd2a758",
+            "rule_bd19807063be1fd8",
+            "rule_f7226be3f086fdcf",
+        ],
+        filters={
+            "psn_type": "在职职工",
+            "med_type": "门诊-普通门急诊",
+            "amount_band": "2万元以下",
+            "doc_id": "doc_7173172eb649",
+        },
+        required=True,
+        case_set_version=0,
+    ),
+    PolicyQATestCase(
+        case_id="golden_inpatient_employee_level1_band1",
+        name="黄金·在职住院一级医院 1300-3 万报销比例",
+        query="在职职工住院一级医院1300元至3万元报销比例",
+        mode="precise",
+        expected_knowledge_ids=["rule_c06ca6dd6c0c5788"],
+        filters={
+            "psn_type": "在职职工",
+            "med_type": "住院-普通住院",
+            "hosp_lv": "一级",
+            "amount_band": "1300元至3万元",
+            "doc_id": "doc_7173172eb649",
+        },
+        required=True,
+        case_set_version=0,
+    ),
+    PolicyQATestCase(
+        case_id="golden_inpatient_retiree_level1_band1",
+        name="黄金·退休住院一级医院 1300-3 万报销比例",
+        query="退休人员住院一级医院1300元至3万元报销比例",
+        mode="precise",
+        expected_knowledge_ids=["rule_9d877a1bc259109e"],
+        filters={
+            "psn_type": "退休人员",
+            "med_type": "住院-普通住院",
+            "hosp_lv": "一级",
+            "amount_band": "1300元至3万元",
+            "doc_id": "doc_7173172eb649",
+        },
+        required=True,
+        case_set_version=0,
+    ),
 ]
 
 

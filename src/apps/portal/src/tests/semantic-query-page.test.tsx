@@ -62,6 +62,12 @@ function installFetch() {
     if (metricObject) return response(METRICS[metricObject])
     if (url.includes('/metrics/total_amount')) return response({ ...METRICS.inpatient_settlement[0], fact_field_code: 'registration.total_amount', expression: null })
     if (url.includes('/metrics/second_amount')) return response({ ...METRICS.second_queryable[0], fact_field_code: 'second_data.amount', expression: null })
+    if (url.endsWith('/question-library/questions')) {
+      return new Response(JSON.stringify({ question_id: 'tq_new', status: 'draft' }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
     throw new Error(`Unexpected request: ${url}`)
   }))
 }
@@ -118,5 +124,61 @@ describe('SemanticQueryPage', () => {
         field_code: 'registration.registration_id',
       },
     )
+  })
+
+  it('执行验证成功后可存为可信问题草稿，提交体携带 query_plan 与指标/维度元数据', async () => {
+    const queryResult = {
+      plan: { kind: 'logical' },
+      result: {
+        rows: [{ total_amount: 1234.5 }],
+        result_grain: ['registration.registration_id'],
+        query_scope: 'whole_admission',
+        quality_status: 'complete',
+        evidence: { segment_count: 1, matched_segment_count: 1 },
+        warnings: [],
+      },
+      parameterized_sql: 'SELECT total_amount FROM dbo.yb_brdjxx',
+    }
+    semanticReviewJsonMock.mockImplementation(async (url: string) => {
+      if (url.includes('/query/test')) return queryResult
+      throw new Error('快照不可用')
+    })
+    const user = userEvent.setup()
+    render(<SemanticQueryPage />)
+
+    await waitFor(() => expect(screen.getByLabelText('锚点字段')).toHaveValue('registration.registration_id'))
+    expect(screen.queryByRole('button', { name: '存为可信问题草稿' })).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('锚点值'), '1671213')
+    await user.click(screen.getByRole('button', { name: '执行验证' }))
+
+    // 执行验证成功后出现“存为可信问题草稿”入口
+    await user.click(await screen.findByRole('button', { name: '存为可信问题草稿' }))
+    await user.type(await screen.findByLabelText('标准问题'), '住院总费用是多少？')
+    await user.type(screen.getByLabelText('同义表达'), '住院费用总额，住院花了多少')
+    await user.click(screen.getByRole('button', { name: '保存草稿' }))
+
+    // 成功提示 + 可信问题库链接（main 版 question_library 页）
+    expect(await screen.findByText('已保存为草稿，请到可信问题库提交审核')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '前往可信问题库' })).toHaveAttribute('href', '/question-library')
+
+    // 提交体：query_plan 为发给 /query/test 的同一请求对象，metrics/dimensions 与计划一致
+    const testCall = semanticReviewJsonMock.mock.calls.find(([url]) => String(url).includes('/query/test'))
+    expect(testCall).toBeDefined()
+    const fetchMock = vi.mocked(fetch)
+    const createCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/question-library/questions'))
+    expect(createCall).toBeDefined()
+    expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
+      standard_question: '住院总费用是多少？',
+      synonyms: ['住院费用总额', '住院花了多少'],
+      roles: [],
+      object_code: 'inpatient_settlement',
+      metrics: ['total_amount'],
+      dimensions: [],
+      time_scope: null,
+      filters: [],
+      query_plan: testCall?.[2],
+      allow_drilldown: true,
+      expected_result: {},
+    })
   })
 })

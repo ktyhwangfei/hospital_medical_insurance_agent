@@ -1,22 +1,21 @@
 'use client'
 
-import { AlertTriangle, Sparkles } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 
 import AnswerVerificationButton from '@/components/policy-qa/answer-verification-button'
 import CalculationDisclosure from '@/components/policy-qa/calculation-disclosure'
 import FeedbackDrawer from '@/components/policy-qa/feedback-drawer'
 import PolicySourcesDialog from '@/components/policy-qa/policy-sources-dialog'
 import VerificationSummary from '@/components/policy-qa/verification-summary'
-import { Button } from '@/components/ui/button'
 import type { PolicyQAChatMessage } from '@/lib/policy-qa-session'
 
 interface PolicyAgentAnswerProps {
   message: PolicyQAChatMessage
-  onFollowUp?: (question: string) => void
 }
 
-export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAnswerProps) {
+export default function PolicyAgentAnswer({ message }: PolicyAgentAnswerProps) {
   if (!message.content) return null
+  const isBroad = message.isBroad
 
   return (
     <article
@@ -25,7 +24,7 @@ export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAn
     >
       <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-900">{message.content}</p>
 
-      {message.verificationSummary ? (
+      {!isBroad && message.verificationSummary ? (
         <div
           data-testid="policy-qa-verification"
           data-status={message.answerStatus ?? 'unavailable'}
@@ -36,10 +35,10 @@ export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAn
           />
         </div>
       ) : null}
-      <CalculationDisclosure message={message} />
+      {!isBroad && <CalculationDisclosure message={message} />}
       <PolicySourcesDialog citations={message.citations ?? []} />
 
-      {message.uncertainties && message.uncertainties.length > 0 ? (
+      {!isBroad && message.uncertainties && message.uncertainties.length > 0 ? (
         <section aria-label="尚待核实" className="rounded-xl bg-amber-50 px-4 py-3">
           <div className="flex items-center gap-2 text-sm font-medium text-amber-900">
             <AlertTriangle className="size-4" aria-hidden />
@@ -53,26 +52,17 @@ export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAn
         </section>
       ) : null}
 
-      {message.qaTurnId ? (
+      {!isBroad && message.qaTurnId ? (
         <div className="flex flex-wrap items-center gap-3">
           <AnswerVerificationButton qaTurnId={message.qaTurnId} />
           <FeedbackDrawer qaTurnId={message.qaTurnId} />
         </div>
       ) : null}
 
-      {onFollowUp ? (
-        <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4">
-          <span className="text-xs text-slate-500">建议追问</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => onFollowUp('请用更通俗的语言解释刚才的回答')}
-          >
-            <Sparkles aria-hidden />
-            请用更通俗的话解释
-          </Button>
-        </div>
+      {isBroad ? (
+        <p className="text-xs text-slate-400">
+          政策可能动态调整，具体以当地医保经办机构解释为准。
+        </p>
       ) : null}
     </article>
   )

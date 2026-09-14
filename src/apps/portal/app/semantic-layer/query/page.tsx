@@ -1,11 +1,17 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { semanticReviewJson } from '@/lib/policy-knowledge-api'
-import { Loader2, Play, Plus, ShieldCheck, Trash2, Database } from 'lucide-react'
+import { createTrustedQuestionDraft } from '@/lib/question-library-api'
+import { Loader2, Play, Plus, ShieldCheck, Trash2, Database, BookmarkPlus } from 'lucide-react'
 
 const API = '/api/v1/medical-insurance-ai-agent/semantic'
 
@@ -69,6 +75,14 @@ export default function SemanticQueryPage() {
   const [output, setOutput] = useState<QueryResult | null>(null)
   const [snapshot, setSnapshot] = useState<ProcessedSnapshot | null>(null)
   const [snapshotError, setSnapshotError] = useState<string | null>(null)
+  // 存为可信问题草稿：保存发给 /query/test 的请求体作为 query_plan 快照
+  const [lastQueryPlan, setLastQueryPlan] = useState<Record<string, unknown> | null>(null)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [saveQuestion, setSaveQuestion] = useState('')
+  const [saveSynonyms, setSaveSynonyms] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveDone, setSaveDone] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -151,6 +165,7 @@ export default function SemanticQueryPage() {
     setOutput(null)
     setError(null)
     setSampleError(null)
+    setLastQueryPlan(null)
   }
 
   useEffect(() => {
@@ -222,29 +237,62 @@ export default function SemanticQueryPage() {
     setRunning(true)
     setError(null)
     setOutput(null)
+    setLastQueryPlan(null)
+    setSaveDone(false)
+    const requestBody = {
+      object_code: objectCode,
+      scope: {
+        entity_code: entityCode,
+        anchor: { field_code: anchorField, value: anchorValue },
+        query_scope: queryScope,
+      },
+      metrics: selectedMetrics,
+      group_by: groupBy,
+      filters: filters.map((item) => ({
+        field_code: item.field_code,
+        operator: item.operator,
+        value: ['is_null', 'is_not_null'].includes(item.operator) ? null : item.value,
+      })),
+      order_by: orderBy,
+      limit,
+    }
     try {
-      const result = await semanticReviewJson<QueryResult>(`${API}/query/test`, 'POST', {
-        object_code: objectCode,
-        scope: {
-          entity_code: entityCode,
-          anchor: { field_code: anchorField, value: anchorValue },
-          query_scope: queryScope,
-        },
-        metrics: selectedMetrics,
-        group_by: groupBy,
-        filters: filters.map((item) => ({
-          field_code: item.field_code,
-          operator: item.operator,
-          value: ['is_null', 'is_not_null'].includes(item.operator) ? null : item.value,
-        })),
-        order_by: orderBy,
-        limit,
-      })
+      const result = await semanticReviewJson<QueryResult>(`${API}/query/test`, 'POST', requestBody)
       setOutput(result)
+      // 执行验证成功后才允许存草稿：query_plan 直接使用本次请求体快照
+      setLastQueryPlan(requestBody)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '查询验证失败')
     } finally {
       setRunning(false)
+    }
+  }
+
+  async function saveTrustedQuestion() {
+    if (!lastQueryPlan || !saveQuestion.trim()) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      // 写入 main 版可信问题库（question_library）：操作人由 JWT 鉴权推导
+      await createTrustedQuestionDraft({
+        standard_question: saveQuestion.trim(),
+        synonyms: saveSynonyms.split(/[,，;；]/).map((item) => item.trim()).filter(Boolean),
+        roles: [],
+        object_code: objectCode,
+        metrics: selectedMetrics,
+        dimensions: groupBy,
+        time_scope: null,
+        filters: (lastQueryPlan.filters as Array<Record<string, unknown>>) ?? [],
+        query_plan: lastQueryPlan,
+        allow_drilldown: true,
+        expected_result: {},
+      })
+      setSaveDone(true)
+      setSaveOpen(false)
+    } catch (reason) {
+      setSaveError(reason instanceof Error ? reason.message : '保存失败')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -366,12 +414,56 @@ export default function SemanticQueryPage() {
 
       {output && (
         <div className="space-y-4">
+          {lastQueryPlan && !saveDone && (
+            <div className="flex justify-end">
+              <button type="button" onClick={() => { setSaveError(null); setSaveOpen(true) }} className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100">
+                <BookmarkPlus className="h-4 w-4" />存为可信问题草稿
+              </button>
+            </div>
+          )}
+          {saveDone && (
+            <Alert className="border-emerald-200 bg-emerald-50">
+              <AlertTitle className="text-emerald-700">已保存为草稿，请到可信问题库提交审核</AlertTitle>
+              <AlertDescription>
+                <Link href="/question-library" className="text-emerald-700 underline underline-offset-2 hover:text-emerald-800">前往可信问题库</Link>
+              </AlertDescription>
+            </Alert>
+          )}
           <Card className="border-slate-200 bg-white shadow-sm"><CardContent className="grid gap-4 px-5 py-4 sm:grid-cols-4"><div><p className="text-xs text-slate-500">查询范围</p><p className="mt-1 font-medium">{output.result.query_scope === 'whole_admission' ? '整次住院' : '单个分段'}</p></div><div><p className="text-xs text-slate-500">结果粒度</p><p className="mt-1 font-mono text-xs">{output.result.result_grain.join(', ')}</p></div><div><p className="text-xs text-slate-500">分段覆盖</p><p className="mt-1 font-medium">{output.result.evidence.matched_segment_count}/{output.result.evidence.segment_count}</p></div><div><p className="text-xs text-slate-500">质量状态</p><p className="mt-1 inline-flex items-center gap-1 font-medium"><ShieldCheck className="h-4 w-4" />{output.result.quality_status}</p></div></CardContent></Card>
           <Card><CardHeader><CardTitle className="text-sm">查询结果</CardTitle></CardHeader><CardContent><pre className="overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(output.result.rows, null, 2)}</pre></CardContent></Card>
           <Card><CardHeader><CardTitle className="text-sm">逻辑计划（只读）</CardTitle></CardHeader><CardContent><pre className="max-h-96 overflow-auto rounded-md bg-slate-100 p-3 text-xs text-slate-700">{JSON.stringify(output.plan, null, 2)}</pre></CardContent></Card>
           <details className="rounded-lg border border-slate-200 bg-white p-4"><summary className="cursor-pointer text-sm font-medium text-slate-700">管理员技术详情：参数化 SQL（只读）</summary><pre className="mt-3 max-h-96 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">{output.parameterized_sql}</pre></details>
         </div>
       )}
+
+      {/* 存为可信问题草稿 */}
+      <Dialog open={saveOpen} onOpenChange={(open) => { setSaveOpen(open); if (!open) setSaveError(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>存为可信问题草稿</DialogTitle>
+            <DialogDescription>将本次验证通过的查询计划快照绑定为标准问题，保存后需到可信问题库提交审核并生效。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="block text-xs text-slate-500">标准问题（必填）
+              <Input aria-label="标准问题" autoFocus className="mt-1" value={saveQuestion} onChange={(event) => setSaveQuestion(event.target.value)} placeholder="住院总费用是多少？" />
+            </label>
+            <label className="block text-xs text-slate-500">同义表达（可选，逗号分隔）
+              <Input aria-label="同义表达" className="mt-1" value={saveSynonyms} onChange={(event) => setSaveSynonyms(event.target.value)} placeholder="住院花了多少钱，住院费用总额" />
+            </label>
+            {saveError && <p className="text-xs text-red-600">{saveError}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveOpen(false)}>取消</Button>
+            <Button
+              className="bg-amber-600 text-white shadow-xs hover:bg-amber-700"
+              onClick={saveTrustedQuestion}
+              disabled={saving || !saveQuestion.trim()}
+            >
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}保存草稿
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

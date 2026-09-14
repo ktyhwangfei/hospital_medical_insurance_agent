@@ -23,7 +23,7 @@ from src.knowledge_extension.rule_explanation.release_resolver import (
 )
 
 # 核心维度（可做标量过滤）
-CORE_DIMS = ("rule_type", "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type")
+CORE_DIMS = ("rule_type", "insu_type", "med_type", "hosp_lv", "psn_type", "setl_type", "doc_id")
 
 # rules 输出字段（核心维度 + 关键详情字段）
 RULE_OUTPUT_FIELDS = [

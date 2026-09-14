@@ -93,12 +93,28 @@ def _now_iso() -> str:
 def _backfill_schema_fields(
     facts: list[dict[str, Any]], field_codes: list[str]
 ) -> list[dict[str, Any]]:
-    """按提取契约回填缺失字段，并将复合人群拆成原子规则。"""
-    if not field_codes:
-        return facts
+    """按提取契约回填缺失字段、纠正基金/个人比例误抽、展开表格压缩写法，
+    并将复合人群拆成原子规则。"""
+    from src.knowledge_extension.rule_explanation.fund_ratio_guard import (
+        correct_fund_personal_ratio,
+    )
+    from src.knowledge_extension.rule_explanation.table_rule_expander import (
+        expand_table_rule,
+    )
+
     for fact in facts:
         expanded: list[Any] = []
         for rule in fact.get("rules") or []:
+            if isinstance(rule, dict):
+                correct_fund_personal_ratio(rule)
+                # 表格压缩写法（「依次为90%/87%/85%」等）确定性展开为原子规则
+                table_rows = expand_table_rule(rule)
+                if table_rows:
+                    expanded.extend(table_rows)
+                    continue
+            if not field_codes:
+                expanded.append(rule)
+                continue
             if isinstance(rule, dict):
                 for code in field_codes:
                     rule.setdefault(code, "")
@@ -251,6 +267,26 @@ class PipelineOrchestrator:
                 confidences = [r.get("confidence", 0.7) for r in fact_rules]
                 avg_conf = sum(confidences) / len(confidences) if confidences else 0.7
 
+                # 确定性校验（覆盖率 + 维度诚实）：LLM 产候选，代码做验收。
+                # REVIEW 级随 extracted_fields 落库，供工作台/发布门禁消费。
+                from src.knowledge_extension.rule_explanation.extraction_validators import (
+                    check_dimension_honesty,
+                    check_value_coverage,
+                )
+
+                validation_issues = [
+                    {
+                        "code": issue.code,
+                        "level": issue.level,
+                        "message": issue.message,
+                        "context": dict(issue.context),
+                    }
+                    for issue in (
+                        *check_value_coverage(fact_text, fact_rules),
+                        *check_dimension_honesty(fact_text, fact_rules),
+                    )
+                ]
+
                 extraction_items.append({
                     "extraction_id": self._stable_extraction_id(
                         doc_id, unit_id, fact.get("fact_text", "")
@@ -262,6 +298,7 @@ class PipelineOrchestrator:
                         "fact_text": fact.get("fact_text", ""),
                         "rules": fact_rules,
                         "total_rules": len(fact_rules),
+                        "validation_issues": validation_issues,
                     },
                     "confidence": round(avg_conf, 2),
                 })
@@ -1158,7 +1195,12 @@ DISEASE(病种), DRUG(药品), DATE(日期), CONDITION(条件), LOCATION(地点)
             rules_col = create_policy_rules_v2_collection()
 
             fact_records, rule_entities = build_ingest_records(
-                [{"fact_text": fact_text, "rules": rules}],
+                [{
+                    "fact_text": fact_text,
+                    "rules": rules,
+                    "unit_id": ext.get("unit_id") or "",
+                    "unit_source_text": ext.get("source_text", ""),
+                }],
                 doc_id=doc_id,
                 provider=provider,
                 extracted_at=extracted_at,

@@ -190,20 +190,55 @@ def _knowledge_id(extraction_id: str, rule: dict[str, Any]) -> str:
     return _digest(f"{extraction_id}|{canonical}")
 
 
+def _context_phrase(rule: dict[str, Any]) -> str:
+    """把适用维度组织成可连读的前置条件短语（人员 / 医疗类别 / 医院等级 / 金额区间）。
+
+    人员与医疗类别直接连读（不加逗号），再追加医院等级、金额区间等维度。
+    只有人员类别时不足以区分规则，回退到原 "人员 + 就医" 句式，保持兼容性。
+    """
+    psn = str(rule.get("psn_type") or "") if _present(rule.get("psn_type")) else ""
+    med = str(rule.get("med_type") or "") if _present(rule.get("med_type")) else ""
+    parts: list[str] = []
+    if psn and med:
+        parts.append(f"{psn}{med}")
+    elif psn:
+        parts.append(psn)
+    elif med:
+        parts.append(med)
+    if _present(rule.get("hosp_lv")):
+        hosp = str(rule["hosp_lv"])
+        if hosp not in ("社区",):
+            hosp = hosp + "医院" if not hosp.endswith("医院") else hosp
+        parts.append(hosp)
+    if _present(rule.get("amount_band")):
+        parts.append(str(rule["amount_band"]))
+    # 没有医疗类别/医院等级/金额区间等区分字段时，不单独把人员当上下文
+    if not (med or _present(rule.get("hosp_lv")) or _present(rule.get("amount_band"))):
+        return ""
+    return "，".join(parts)
+
+
 def _sentence(rule: dict[str, Any]) -> str:
-    """按知识类型将字段组织成可连读的业务句。"""
+    """按知识类型将字段组织成可连读的业务句。
+
+    2026-09 修复：事实单元必须带区分字段（医院等级、金额区间等），否则多个
+    规则会生成完全相同的短句，导致向量单元不可区分、回答也变成 60/70/80/90。
+    """
     rule_type = str(rule.get("rule_type") or "")
-    person = str(rule.get("psn_type") or "参保人员")
-    medical = str(rule.get("med_type") or "就医")
+    context = _context_phrase(rule)
+    fallback_person = str(rule.get("psn_type") or "参保人员")
+    fallback_medical = str(rule.get("med_type") or "就医")
+    subject = context if context else f"{fallback_person}{fallback_medical}"
+
     if rule_type in {"payment_ratio", "支付比例"} and _present(rule.get("payment_ratio")):
-        return f"{person}{medical}时，统筹基金支付比例为{rule['payment_ratio']}。"
+        return f"{subject}时，统筹基金支付比例为{_ratio_text(rule['payment_ratio'])}。"
     if rule_type in {"deductible", "deductible_line", "起付线"} and _present(rule.get("deductible_amount")):
-        return f"{person}{medical}时，起付标准为{_amount_text(rule['deductible_amount'])}。"
+        return f"{subject}时，起付标准为{_amount_text(rule['deductible_amount'])}。"
     if rule_type in {"cap", "cap_amount", "封顶线"} and _present(rule.get("cap_amount")):
         fund = str(rule.get("jjgs") or "")
-        return f"{person}{medical}时，{fund}最高支付限额为{_amount_text(rule['cap_amount'])}。"
+        return f"{subject}时，{fund}最高支付限额为{_amount_text(rule['cap_amount'])}。"
     if rule_type in {"eligibility", "eligibility_rule"}:
-        return f"{person}适用于{medical}待遇。"
+        return f"{subject}适用于该待遇。"
     # 兜底：优先 rule_value（LLM 生成的自然业务描述）
     rule_value = rule.get("rule_value")
     if isinstance(rule_value, str) and rule_value.strip():
@@ -223,6 +258,20 @@ def _sentence(rule: dict[str, Any]) -> str:
 def _amount_text(value: Any) -> str:
     text = str(value)
     return f"{text}元" if text.replace(".", "", 1).isdigit() else text
+
+
+def _ratio_text(value: Any) -> str:
+    """比例字段统一为百分比显示。"""
+    text = str(value).strip()
+    if not text or "%" in text:
+        return text
+    try:
+        num = float(text)
+    except ValueError:
+        return text
+    if 0 < num <= 1:
+        return f"{num * 100:g}%"
+    return text
 
 
 def _confidence(rule: dict[str, Any], extraction: dict[str, Any]) -> KnowledgeConfidence:

@@ -39,6 +39,72 @@ class TestSourceAttribution:
         assert "施行" not in attr
 
 
+class TestFormatBroadEvidence:
+    def test_dedupes_identical_source_text(self):
+        """完全重复的 source_text 只保留一条，避免答案出现 3/4 完全相同的条目。"""
+        from src.runtime.api.policy_qa_routes import _format_broad_evidence
+
+        answer = _format_broad_evidence(
+            [
+                _ev("统筹基金支付90%，个人支付10%。", "城镇职工基本医疗保险"),
+                _ev("统筹基金支付90%，个人支付10%。", "城镇职工基本医疗保险"),
+            ]
+        )
+        # 两条去重后只剩一条
+        assert answer.count("统筹基金支付90%") == 1
+
+    def test_includes_context_dimensions(self):
+        """规则后补充医疗类别/医院等级/人员类别，解决'只有比例没有背景'。"""
+        from src.runtime.api.policy_qa_routes import _format_broad_evidence
+
+        answer = _format_broad_evidence(
+            [
+                {
+                    **_ev("统筹基金支付70%，个人支付30%。", "城镇职工基本医疗保险"),
+                    "med_type": "门诊-普通门急诊",
+                    "hosp_lv": "三级医院",
+                    "psn_type": "在职职工",
+                },
+            ]
+        )
+        assert "适用：门诊-普通门急诊 / 三级医院 / 在职职工" in answer
+
+
+class TestDocEnrichment:
+    def test_enrich_evidence_adds_title_and_excerpt(self, monkeypatch):
+        from src.knowledge_extension.rule_explanation.pipeline_store import PipelineStore
+        from src.runtime.api import policy_qa_routes
+
+        def _fake_get_document(self, doc_id: str):
+            return {
+                "title": "北京市基本医疗保险规定",
+                "content_text": "在本市定点医疗机构就医的在职职工，门诊医疗费用统筹基金支付60%，个人支付40%。",
+            }
+
+        monkeypatch.setattr(PipelineStore, "get_document", _fake_get_document)
+        enriched = policy_qa_routes._enrich_broad_evidence_with_docs(
+            [{**_ev("统筹基金支付60%，个人支付40%。", "城镇职工基本医疗保险"), "doc_id": "doc_001"}]
+        )
+        assert enriched[0]["doc_title"] == "北京市基本医疗保险规定"
+        assert "统筹基金支付60%" in enriched[0]["doc_excerpt"]
+
+    def test_format_includes_doc_title(self):
+        from src.runtime.api.policy_qa_routes import _format_broad_evidence
+
+        answer = _format_broad_evidence(
+            [
+                {
+                    "source_text": "统筹基金支付60%，个人支付40%。",
+                    "insu_type": "城镇职工基本医疗保险",
+                    "rule_type": "支付比例",
+                    "effective_date": "2001-04-01",
+                    "doc_title": "北京市基本医疗保险规定",
+                }
+            ]
+        )
+        assert "北京市基本医疗保险规定" in answer
+
+
 class TestFallbackBroadAnswer:
     def test_fallback_groups_by_insu_with_employee_first(self):
         """回答按险种分组呈现：职工医保在前、居民医保在后，两组都必须出现。"""

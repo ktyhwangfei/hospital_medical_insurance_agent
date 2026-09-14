@@ -54,6 +54,7 @@ from src.knowledge_extension.rule_explanation.published_snapshot_models import P
 from src.knowledge_extension.rule_explanation.published_snapshot_store import PublishedSnapshotStore
 from src.knowledge_extension.rule_explanation.knowledge_workbench_models import (
     KnowledgeWorkbenchDocument,
+    PolicyDocumentContent,
     WorkbenchDocumentList,
 )
 from src.knowledge_extension.rule_explanation.knowledge_workbench_service import (
@@ -504,6 +505,30 @@ def get_workbench_document(doc_id: str) -> KnowledgeWorkbenchDocument:
                 {"doc_id": doc_id},
             ),
         ) from exc
+
+
+@router.get("/documents/{doc_id}/content", response_model=PolicyDocumentContent)
+def get_workbench_document_content(doc_id: str) -> PolicyDocumentContent:
+    """返回原始政策文档全文，用于回答溯源。"""
+    doc = PipelineStore().get_document(doc_id)
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "POLICY_DOCUMENT_NOT_FOUND",
+                "文档不存在",
+                {"doc_id": doc_id},
+            ),
+        )
+    return PolicyDocumentContent(
+        doc_id=doc["doc_id"],
+        title=doc["title"],
+        content_text=doc["content_text"],
+        source_url=doc.get("source_url", ""),
+        issuing_agency=doc.get("issuing_agency", ""),
+        publish_date=doc.get("publish_date", ""),
+        validity=doc.get("validity", "unknown"),
+    )
 
 
 def _raise_build_preflight_error(result: KnowledgeBuildPreflight) -> None:
