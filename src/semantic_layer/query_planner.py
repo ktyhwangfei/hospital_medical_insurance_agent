@@ -1139,11 +1139,14 @@ class SemanticQueryPlanner:
 
     @staticmethod
     def _semantic_columns(dataset_code: str, columns: list[str], fields: dict[str, SemanticField]) -> list[str]:
-        by_column = {
-            item.column_name: item.field_code.rsplit(".", 1)[-1]
-            for item in fields.values()
-            if item.dataset_code == dataset_code
-        }
+        # 同列多字段共享时（如分段结束日期占位映射到 bcqsrq），先声明者胜出，
+        # 保证 common_grain 稳定落在真实字段（segment_start_date）而非占位字段。
+        by_column: dict[str, str] = {}
+        for item in fields.values():
+            if item.dataset_code == dataset_code:
+                by_column.setdefault(
+                    item.column_name, item.field_code.rsplit(".", 1)[-1]
+                )
         return [by_column.get(name, name) for name in columns]
 
     @staticmethod
