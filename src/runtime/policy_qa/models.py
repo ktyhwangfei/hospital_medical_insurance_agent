@@ -1,8 +1,17 @@
 """Policy QA API 输入模型。"""
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
+
+
+class PolicyQAMode(StrEnum):
+    """Policy QA 三态入口模式：政策问答 / 结算解释 / 运营问数。"""
+
+    POLICY_CHAT = "policy_chat"
+    SETTLEMENT_EXPLAIN = "settlement_explain"
+    DATA_QUERY = "data_query"
 
 
 @dataclass
@@ -10,6 +19,7 @@ class PolicyQARequest:
     """政策问答请求；结算单是业务上下文，宽泛政策问题可省略。"""
 
     question: str
+    mode: PolicyQAMode = PolicyQAMode.POLICY_CHAT
     settlement_id: str | None = None
     session_id: str | None = None
     user_id: str = ""

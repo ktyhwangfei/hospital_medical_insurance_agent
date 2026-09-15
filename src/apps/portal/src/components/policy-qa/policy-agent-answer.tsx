@@ -4,7 +4,9 @@ import { AlertTriangle } from 'lucide-react'
 
 import AnswerVerificationButton from '@/components/policy-qa/answer-verification-button'
 import CalculationDisclosure from '@/components/policy-qa/calculation-disclosure'
+import CitationCards from '@/components/policy-qa/citation-card'
 import FeedbackDrawer from '@/components/policy-qa/feedback-drawer'
+import OpsAnswerBlock from '@/components/policy-qa/ops-answer-block'
 import PolicySourcesDialog from '@/components/policy-qa/policy-sources-dialog'
 import VerificationSummary from '@/components/policy-qa/verification-summary'
 import type { PolicyQAChatMessage } from '@/lib/policy-qa-session'
@@ -16,6 +18,7 @@ interface PolicyAgentAnswerProps {
 export default function PolicyAgentAnswer({ message }: PolicyAgentAnswerProps) {
   if (!message.content) return null
   const isBroad = message.isBroad
+  const hasDataQuery = !!message.dataQueryResult
 
   return (
     <article
@@ -24,7 +27,11 @@ export default function PolicyAgentAnswer({ message }: PolicyAgentAnswerProps) {
     >
       <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-900">{message.content}</p>
 
-      {!isBroad && message.verificationSummary ? (
+      {hasDataQuery && message.dataQueryResult ? (
+        <OpsAnswerBlock result={message.dataQueryResult} />
+      ) : null}
+
+      {!isBroad && !hasDataQuery && message.verificationSummary ? (
         <div
           data-testid="policy-qa-verification"
           data-status={message.answerStatus ?? 'unavailable'}
@@ -35,8 +42,13 @@ export default function PolicyAgentAnswer({ message }: PolicyAgentAnswerProps) {
           />
         </div>
       ) : null}
-      {!isBroad && <CalculationDisclosure message={message} />}
-      <PolicySourcesDialog citations={message.citations ?? []} />
+      {!isBroad && !hasDataQuery && <CalculationDisclosure message={message} />}
+      {/* V4.0 §4.1：宽泛政策问答（政策问答智能体）来源卡片常显；结算类答案保留来源对话框 */}
+      {isBroad ? (
+        <CitationCards citations={message.citations ?? []} />
+      ) : (
+        <PolicySourcesDialog citations={message.citations ?? []} />
+      )}
 
       {!isBroad && message.uncertainties && message.uncertainties.length > 0 ? (
         <section aria-label="尚待核实" className="rounded-xl bg-amber-50 px-4 py-3">

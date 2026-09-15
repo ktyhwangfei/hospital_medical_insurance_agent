@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 import asyncio
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal, Protocol
+
+from pydantic import BaseModel
 
 from src.adapters.ports import DataSupplyConnectionPort
 from src.semantic_layer.query_planner import (
@@ -23,6 +26,43 @@ logger = logging.getLogger(__name__)
 
 
 # ── Data model for settlement context ─────────────────────────
+
+class SettlementListItem(BaseModel):
+    """按时间段列出的结算单摘要。"""
+
+    settlement_id: str
+    settlement_date: str = ""
+    person_type: str = ""
+    insurance_type: str = ""
+    service_type: str = ""
+    total_amount: float | None = None
+    coverage_status: Literal["complete", "partial", "unavailable"] = "complete"
+
+
+class PatientSummary(BaseModel):
+    """患者定位摘要（临时方案：正式接入登录验证后由登录态取代）。
+
+    身份证号脱敏后输出（安全约束：敏感数据脱敏后输出）；卡号用于
+    后续结算单过滤，不视为高敏字段。
+    """
+
+    card_no: str = ""
+    id_no_masked: str = ""
+    name: str = ""
+    gender: str = ""
+    birth_date: str = ""
+    registration_id: str = ""
+
+
+def mask_id_no(id_no: str) -> str:
+    """身份证号脱敏：保留前 3 后 4，中间打码；非 18 位原样返回。"""
+    if len(id_no) != 18:
+        return id_no
+    return f"{id_no[:3]}{'*' * 11}{id_no[-4:]}"
+
+
+_GENDER_MAP = {"1": "男", "2": "女"}
+
 
 @dataclass
 class SettlementContext:
@@ -70,6 +110,16 @@ class SettlementDataProvider(Protocol):
         """执行 Skill 声明的已发布只读语义查询。"""
         ...
 
+    async def list_settlements_by_date_range(
+        self, date_from: str, date_to: str, limit: int = 50
+    ) -> list[SettlementListItem]:
+        """按时间段列出结算单摘要。"""
+        ...
+
+    async def lookup_patient(self, key: str) -> PatientSummary | None:
+        """按身份证号或卡号定位患者（脱敏摘要）。"""
+        ...
+
 
 # ── Semantic query implementation ─────────────────────────────
 
@@ -101,6 +151,9 @@ class SemanticSettlementDataProvider:
                 supply = SqlServerDirectSupplyAdapter(connect_fn=source.open_connection)
             service = SemanticQueryService(self._registry, supply.connect)
         self._service = service
+        # 列表查询直连数据源：supply 参数或默认装配的 connect（须在默认 supply
+        # 构造之后取值，否则无参构造时 _connect 恒为 None → 列表端点误报 503）
+        self._connect = supply.connect if supply else None
         logger.info("[SETTLEMENT-DATA-PROVIDER] Semantic query provider initialized")
 
     async def get_settlement_context(self, settlement_id: str) -> SettlementContext:
@@ -151,6 +204,145 @@ class SemanticSettlementDataProvider:
             warnings=result.warnings,
             tables_queried=evidence.datasets_used,
             query_profile=f"semantic:{evidence.plan_hash}",
+        )
+
+    async def list_settlements_by_date_range(
+        self,
+        date_from: str,
+        date_to: str,
+        limit: int = 50,
+        patient_key: str | None = None,
+    ) -> list[SettlementListItem]:
+        """按结算时间段列出住院结算单摘要。
+
+        直接通过数据供给适配器查询，原因：语义查询模型当前以单结算单锚点
+        为主，未提供无锚点的列表聚合能力。本查询只读取，使用语义种子中登记
+        的表/列映射（一档 SQL Server 直连）。
+        patient_key 可选：身份证号（sfz）或卡号（kh），提供时仅返回该患者的
+        结算单（临时患者定位方案，正式由登录态取代）。
+        """
+        if self._connect is None:
+            raise RuntimeError(
+                "list_settlements_by_date_range 需要数据供给连接（DATA_SOURCE_MODE=real_db）"
+            )
+
+        # 校验日期格式（YYYY-MM-DD）
+        for label, value in (("date_from", date_from), ("date_to", date_to)):
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise ValueError(f"{label} 需为 YYYY-MM-DD 格式: {value}") from exc
+
+        # 字段/表名与语义种子 `seed.py` 中 `inpatient_settlement` 模型一致：
+        # 人员类别 PER_TYPE 在 yb_zyjyxx、险种 FUND_TYPE/医疗类别 yllb 在 yb_brdjxx、
+        # 结算日期取该单最后一段的报导结束日期 MAX(bdjzrq)（活库 yb_zyfdxx 无 bdjsrq 列）
+        # patient_key：临时患者定位（身份证 sfz / 卡号 kh），正式方案由登录态取代
+        patient_filter = "AND (r.sfz = ? OR r.kh = ?)" if patient_key else ""
+        sql = f"""
+        SELECT TOP (?) r.djh AS settlement_id,
+               MAX(t.PER_TYPE) AS person_type_code,
+               MAX(r.FUND_TYPE) AS insurance_type_code,
+               MAX(r.yllb) AS service_type_code,
+               SUM(p.bdfyzje) AS total_amount,
+               MAX(p.bdjzrq) AS settlement_date
+        FROM yb_brdjxx r
+        INNER JOIN yb_zyfdxx p ON r.djh = p.djh
+        LEFT JOIN yb_zyjyxx t ON r.djh = t.djh
+        WHERE 1 = 1 {patient_filter}
+        GROUP BY r.djh
+        HAVING MAX(p.bdjzrq) >= ? AND MAX(p.bdjzrq) <= ?
+        ORDER BY MAX(p.bdjzrq) DESC
+        """
+        params: tuple = (limit, date_from, date_to)
+        if patient_key:
+            params = (limit, patient_key, patient_key, date_from, date_to)
+
+        connection = None
+        try:
+            connection = self._connect("bjybdb")
+            cursor = connection.cursor()
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            columns = [item[0] for item in cursor.description] if cursor.description else []
+            raw_rows = [dict(zip(columns, row)) for row in rows]
+        except (ConnectionError, TimeoutError) as exc:
+            raise SettlementDataUnavailableError(str(exc)) from exc
+        except pyodbc.Error as exc:
+            sqlstate = str(exc.args[0]) if exc.args else ""
+            if sqlstate.startswith("08") or sqlstate in {"HYT00", "HYT01"}:
+                raise SettlementDataUnavailableError(str(exc)) from exc
+            raise
+        finally:
+            if connection:
+                connection.close()
+
+        items: list[SettlementListItem] = []
+        for row in raw_rows:
+            total = row.get("total_amount")
+            settlement_date = row.get("settlement_date")
+            if settlement_date is not None and not isinstance(settlement_date, str):
+                settlement_date = str(settlement_date)[:10]
+            items.append(
+                SettlementListItem(
+                    settlement_id=str(row.get("settlement_id", "")),
+                    settlement_date=settlement_date or "",
+                    person_type=self._resolve("PERSON_TYPE", row.get("person_type_code")),
+                    insurance_type=self._resolve("FUND_TYPE", row.get("insurance_type_code")),
+                    service_type=self._resolve("YLLB", row.get("service_type_code")),
+                    total_amount=float(total) if total is not None else None,
+                )
+            )
+        return items
+
+    async def lookup_patient(self, key: str) -> PatientSummary | None:
+        """按身份证号（sfz）或卡号（kh）定位患者，返回脱敏摘要。
+
+        临时患者定位方案：正式接入登录验证后由登录态直接给出患者身份，
+        本方法随之退役。未命中返回 None（调用方映射 404）。
+        """
+        if self._connect is None:
+            raise RuntimeError(
+                "lookup_patient 需要数据供给连接（DATA_SOURCE_MODE=real_db）"
+            )
+        text = key.strip()
+        if not text:
+            raise ValueError("key 不能为空")
+
+        sql = """
+        SELECT TOP (1) kh, sfz, xm, xb, csrq, djh
+        FROM yb_brdjxx
+        WHERE (sfz = ? OR kh = ?)
+        ORDER BY djh DESC
+        """
+        connection = None
+        try:
+            connection = self._connect("bjybdb")
+            cursor = connection.cursor()
+            cursor.execute(sql, (text, text))
+            row = cursor.fetchone()
+        except (ConnectionError, TimeoutError) as exc:
+            raise SettlementDataUnavailableError(str(exc)) from exc
+        except pyodbc.Error as exc:
+            sqlstate = str(exc.args[0]) if exc.args else ""
+            if sqlstate.startswith("08") or sqlstate in {"HYT00", "HYT01"}:
+                raise SettlementDataUnavailableError(str(exc)) from exc
+            raise
+        finally:
+            if connection:
+                connection.close()
+
+        if row is None:
+            return None
+
+        card_no, id_no, name, gender_code, birth, registration_id = row
+        birth_str = str(birth)[:10] if birth is not None else ""
+        return PatientSummary(
+            card_no=str(card_no or ""),
+            id_no_masked=mask_id_no(str(id_no or "")),
+            name=str(name or ""),
+            gender=_GENDER_MAP.get(str(gender_code or ""), str(gender_code or "")),
+            birth_date=birth_str,
+            registration_id=str(registration_id or ""),
         )
 
     async def run_semantic_query(self, query: SemanticQuery) -> SemanticQueryResult:

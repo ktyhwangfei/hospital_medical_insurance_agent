@@ -118,6 +118,7 @@ describe('restoreSessionState', () => {
 function makeStream(partial: Partial<UsePolicyQAStreamReturn> = {}): UsePolicyQAStreamReturn {
   return {
     sessionId: 'sess-test',
+    mode: 'policy_chat',
     anchor: {
       patientId: null,
       patientName: null,

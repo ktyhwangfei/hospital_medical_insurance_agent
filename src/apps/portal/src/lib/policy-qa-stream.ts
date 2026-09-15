@@ -34,6 +34,22 @@ export interface PolicyQASettlementField {
   state: 'non_zero' | 'reported_zero' | 'missing' | 'not_applicable'
 }
 
+export interface PolicyQADataQueryResult {
+  metricId: string
+  metricName: string
+  chart?: {
+    type: 'line' | 'bar' | 'pie' | 'table'
+    xAxis?: string[]
+    series: Array<{ name: string; data: (number | string)[] }>
+  }
+  table?: {
+    columns: Array<{ key: string; title: string }>
+    rows: Array<Record<string, string | number | null>>
+  }
+  summary: string
+  caliber?: string
+}
+
 export interface PolicyQAResult {
   answer: string
   answerStatus: 'complete' | 'partial' | 'unavailable'
@@ -47,6 +63,7 @@ export interface PolicyQAResult {
   scenarioId?: string
   settlementFields: PolicyQASettlementField[]
   isBroad?: boolean
+  dataQueryResult?: PolicyQADataQueryResult
 }
 
 export interface PolicyQASseEvent {
@@ -154,6 +171,7 @@ export function toPolicyQAResult(raw: unknown): PolicyQAResult {
     scenarioId: typeof raw.scenario_id === 'string' ? raw.scenario_id : undefined,
     settlementFields: toSettlementFields(raw.field_explanations),
     isBroad: raw.is_broad === true,
+    dataQueryResult: toDataQueryResult(raw.data_query_result),
   }
 }
 
@@ -271,6 +289,60 @@ function toDefinition(value: unknown): PolicyQAResult['definition'] {
     plainText: typeof value.plain_text === 'string' ? value.plain_text : '',
     excludes: stringArray(value.excludes),
   }
+}
+
+function toDataQueryResult(value: unknown): PolicyQADataQueryResult | undefined {
+  if (!isRecord(value)) return undefined
+  const metricId = typeof value.metric_id === 'string' ? value.metric_id : ''
+  const metricName = typeof value.metric_name === 'string' ? value.metric_name : ''
+  if (!metricId || !metricName) return undefined
+  return {
+    metricId,
+    metricName,
+    chart: toDataQueryChart(value.chart),
+    table: toDataQueryTable(value.table),
+    summary: typeof value.summary === 'string' ? value.summary : '',
+    caliber: typeof value.caliber === 'string' ? value.caliber : undefined,
+  }
+}
+
+function toDataQueryChart(value: unknown): PolicyQADataQueryResult['chart'] | undefined {
+  if (!isRecord(value)) return undefined
+  const type = value.type
+  if (type !== 'line' && type !== 'bar' && type !== 'pie' && type !== 'table') return undefined
+  const xAxis = Array.isArray(value.x_axis)
+    ? value.x_axis.filter((item): item is string => typeof item === 'string')
+    : undefined
+  const series = Array.isArray(value.series)
+    ? value.series.filter(isRecord).map((s) => ({
+        name: typeof s.name === 'string' ? s.name : '',
+        data: Array.isArray(s.data)
+          ? s.data.filter((v): v is number | string => typeof v === 'number' || typeof v === 'string')
+          : [],
+      }))
+    : []
+  return { type, xAxis, series }
+}
+
+function toDataQueryTable(value: unknown): PolicyQADataQueryResult['table'] | undefined {
+  if (!isRecord(value)) return undefined
+  const columns = Array.isArray(value.columns)
+    ? value.columns.filter(isRecord).map((col) => ({
+        key: typeof col.key === 'string' ? col.key : '',
+        title: typeof col.title === 'string' ? col.title : '',
+      }))
+    : []
+  const rows = Array.isArray(value.rows)
+    ? value.rows.filter(isRecord).map((row) => {
+        const safe: Record<string, string | number | null> = {}
+        for (const [k, v] of Object.entries(row)) {
+          if (typeof v === 'string' || typeof v === 'number' || v === null) safe[k] = v
+        }
+        return safe
+      })
+    : []
+  if (columns.length === 0 || rows.length === 0) return undefined
+  return { columns, rows }
 }
 
 function toCitations(value: unknown): PolicyQAResult['citations'] | undefined {

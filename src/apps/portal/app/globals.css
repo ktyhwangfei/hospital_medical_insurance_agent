@@ -16,14 +16,23 @@
   --secondary-foreground: oklch(0.205 0.042 265.755);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0.042 265.755);
+  --accent: oklch(0.55 0.09 195 / 0.08);
+  --accent-foreground: oklch(0.35 0.07 195);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0.165 254.624);
+  --ring: oklch(0.55 0.09 195);
   --radius: 0.625rem;
+
+  /* V4.0 Agent Hub 视觉系统 */
+  --font-sans: 'Noto Sans SC', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* 降饱和身份色：仅用于智能体切换器/高亮，不侵入工作区 */
+  --agent-policy: oklch(0.45 0.08 165);
+  --agent-settlement: oklch(0.55 0.09 195);
+  --agent-ops: oklch(0.62 0.09 85);
 }
 
 .dark {
@@ -39,13 +48,13 @@
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0.042 265.755);
   --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0.042 265.755);
-  --accent-foreground: oklch(0.985 0 0);
+  --accent: oklch(0.55 0.09 195 / 0.12);
+  --accent-foreground: oklch(0.85 0.05 195);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(1 0 0 / 0.1);
   --input: oklch(1 0 0 / 0.15);
-  --ring: oklch(0.546 0.245 262.881);
+  --ring: oklch(0.65 0.11 195);
 }
 
 @theme inline {
@@ -72,7 +81,11 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  --font-sans: 'Noto Sans SC', system-ui, sans-serif;
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --color-agent-policy: var(--agent-policy);
+  --color-agent-settlement: var(--agent-settlement);
+  --color-agent-ops: var(--agent-ops);
 }
 
 * {
@@ -83,6 +96,93 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+}
+
+/* ====== V4.0 动效（纯 CSS） ====== */
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes workspace-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 200ms ease-out forwards;
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s infinite linear;
+  background-size: 200% 100%;
+}
+
+.animate-caret {
+  animation: caret-blink 1s step-end infinite;
+}
+
+.animate-workspace-fade {
+  animation: workspace-fade 150ms ease-out forwards;
+}
+
+/* 打字光标 */
+.typing-caret::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: caret-blink 1s step-end infinite;
+}
+
+/* 骨架屏 shimmer 背景 */
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    oklch(0.922 0 0) 25%,
+    oklch(0.97 0 0) 50%,
+    oklch(0.922 0 0) 75%
+  );
+  background-size: 200% 100%;
+}
+
+/* 数字等宽 */
+.tabular-amounts {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 
 /* ====== Semantic Registry scoped dark theme ====== */

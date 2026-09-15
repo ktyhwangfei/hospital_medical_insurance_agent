@@ -1,5 +1,6 @@
 'use client'
 
+import { JetBrains_Mono, Noto_Sans_SC } from 'next/font/google'
 import { useCallback, useEffect, useRef, useState, createContext, useContext, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
@@ -25,6 +26,20 @@ import { ApiProvider, useApiContext } from '@/lib/api-context'
 import RoleSwitcher from '@/components/role-switcher'
 import type { RoleId } from '@/lib/types'
 import './globals.css'
+
+const notoSansSC = Noto_Sans_SC({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-sans',
+  display: 'swap',
+})
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  variable: '--font-mono',
+  display: 'swap',
+})
 
 // --- Role Context ---
 
@@ -317,8 +332,8 @@ export function LayoutShell({ children }: { children: ReactNode }) {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="zh-CN">
-      <body className="antialiased">
+    <html lang="zh-CN" className={`${notoSansSC.variable} ${jetbrainsMono.variable}`}>
+      <body className={`${notoSansSC.className} antialiased`}>
         <ApiProvider>
           <LayoutShell>{children}</LayoutShell>
         </ApiProvider>
