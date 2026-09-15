@@ -30,6 +30,7 @@ from src.runtime.policy_qa.explanation_mode import (
 )
 from src.runtime.policy_qa.models import (
     EscalateSessionRequest,
+    PolicyQAMode,
     PolicyQARequest,
     ResolveEscalationRequest,
     SuspendSessionRequest,
@@ -47,6 +48,8 @@ from src.runtime.policy_qa.public_contract import (
 from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
 from src.runtime.policy_qa.settlement_data_provider import (
     SettlementDataUnavailableError,
+    PatientSummary,
+    SettlementListItem,
     SettlementNotFoundError,
     create_settlement_data_provider,
 )
@@ -61,7 +64,11 @@ from src.runtime.policy_qa.broad_query_router import (
     BroadRouteDecision,
     route_broad_question,
 )
-from src.runtime.workflow.service import route_workflow_question, run_workflow_for_question
+from src.runtime.workflow.service import (
+    route_workflow_question,
+    run_workflow_by_mode,
+    run_workflow_for_question,
+)
 from src.config.production import MILVUS_HOST, MILVUS_PORT
 from src.skill_infra.skill_router import route_question, get_assembler, get_skill_manifest
 from src.runtime.policy_qa.persistence import (
@@ -1150,23 +1157,32 @@ async def _policy_qa_stream(
     # Issue #25：宽泛政策问题标识（无结算单上下文，走 BM25+向量宽召回）
     is_broad = _is_broad_question(request, context_need)
 
-    # ── Workflow 路由：一次性关键词分类命中已声明 Workflow 时，走 Tool 编排分支 ──
-    # 先做零成本关键词匹配；只有命中 Workflow 时才检查高风险动作，避免退费类
-    # Workflow 关键词绕过人工确认，同时不给未命中的既有流量增加风控查询开销。
-    # 未命中 Workflow 时 workflow_public_result 为 None，完全不影响后续既有五步流程。
+    # ── Workflow 路由：三态入口优先按 mode 显式路由，未命中则走关键词 fallback ──
+    # mode 显式路由：前端 Tab 切换直接指定 workflow，避免依赖关键词误匹配。
+    # 关键词 fallback：保留现有 wf_refund_verification / wf_outpatient_settlement_explain 的零成本拦截能力。
     workflow_blocked_actions: list[tuple[str, str]] = []
     workflow_public_result = None
-    matched_workflow = route_workflow_question(request.question)
-    if matched_workflow is not None:
-        workflow_blocked_actions = detect_blocked_actions(request.question)
-        if not workflow_blocked_actions:
-            try:
-                workflow_public_result = await run_workflow_for_question(
-                    request.question, settlement_id=request.settlement_id
-                )
-            except Exception as e:
-                logger.warning(f"Workflow routing failed, fallback to skill pipeline: {e}")
-                workflow_public_result = None
+
+    matched_workflow = await run_workflow_by_mode(
+        request.mode,
+        question=request.question,
+        settlement_id=request.settlement_id,
+    )
+    if matched_workflow is None:
+        # 未按 mode 命中（理论上不应发生，除非 mode 未映射），降级关键词匹配
+        keyword_workflow = route_workflow_question(request.question)
+        if keyword_workflow is not None:
+            workflow_blocked_actions = detect_blocked_actions(request.question)
+            if not workflow_blocked_actions:
+                try:
+                    workflow_public_result = await run_workflow_for_question(
+                        request.question, settlement_id=request.settlement_id
+                    )
+                except Exception as e:
+                    logger.warning(f"Workflow routing failed, fallback to skill pipeline: {e}")
+                    workflow_public_result = None
+    else:
+        workflow_public_result = matched_workflow
 
     if workflow_blocked_actions:
         confirmation = build_human_confirmation_response(workflow_blocked_actions)
@@ -2856,6 +2872,114 @@ async def get_settlement_explanation(
                 {"operation": "settlement_explanation"},
             ),
         )
+
+
+# ── 按时间段列结算单（V4.0 结算解释智能体）──────────────────────────
+
+@router.get("/settlements", response_model=list[SettlementListItem])
+async def list_settlements_by_date_range(
+    date_from: str = Query(..., description="开始日期（YYYY-MM-DD）"),
+    date_to: str = Query(..., description="结束日期（YYYY-MM-DD）"),
+    limit: int = Query(50, ge=1, le=200, description="最大返回条数"),
+    patient_key: str | None = Query(
+        None, description="患者定位键（身份证号或卡号，临时方案）"
+    ),
+) -> list[SettlementListItem]:
+    """按结算日期区间列出住院结算单摘要。
+
+    供 V4.0 结算解释智能体使用：先选时间范围，再点单查看费用构成解释。
+    patient_key 提供时仅返回该患者的结算单（隐私收敛：按人浏览）。
+    """
+    try:
+        provider = create_settlement_data_provider()
+        return await provider.list_settlements_by_date_range(
+            date_from, date_to, limit, patient_key=patient_key
+        )
+    except SettlementDataUnavailableError as exc:
+        logger.exception("Settlement list data unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_DATA_UNAVAILABLE",
+                "结算数据源暂时不可用，请稍后重试。",
+                {"operation": "settlement_list"},
+            ),
+        ) from exc
+    except RuntimeError as exc:
+        logger.exception("Settlement list runtime failure")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_UNAVAILABLE",
+                "政策问答服务暂时不可用，请稍后重试。",
+                {"operation": "settlement_list"},
+            ),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "POLICY_QA_INVALID_REQUEST",
+                str(exc),
+                {"operation": "settlement_list"},
+            ),
+        ) from exc
+
+
+# ── 患者定位（V4.0 结算解释智能体·临时方案）────────────────────────
+
+@router.get("/patient-lookup", response_model=PatientSummary)
+async def lookup_patient(
+    key: str = Query(..., min_length=1, description="身份证号或卡号"),
+) -> PatientSummary:
+    """按身份证号或卡号定位患者，返回脱敏摘要。
+
+    临时患者定位入口：正式接入登录验证后由登录态直接给出患者身份。
+    身份证号脱敏输出（保留前 3 后 4）。
+    """
+    try:
+        provider = create_settlement_data_provider()
+        summary = await provider.lookup_patient(key)
+    except SettlementDataUnavailableError as exc:
+        logger.exception("Patient lookup data unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_DATA_UNAVAILABLE",
+                "结算数据源暂时不可用，请稍后重试。",
+                {"operation": "patient_lookup"},
+            ),
+        ) from exc
+    except RuntimeError as exc:
+        logger.exception("Patient lookup runtime failure")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_UNAVAILABLE",
+                "政策问答服务暂时不可用，请稍后重试。",
+                {"operation": "patient_lookup"},
+            ),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "POLICY_QA_INVALID_REQUEST",
+                str(exc),
+                {"operation": "patient_lookup"},
+            ),
+        ) from exc
+
+    if summary is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "PATIENT_NOT_FOUND",
+                "未找到该患者，请核对身份证号或卡号。",
+                {"operation": "patient_lookup"},
+            ),
+        )
+    return summary
 
 
 # ── 问答历史端点 ──────────────────────────────────────────────

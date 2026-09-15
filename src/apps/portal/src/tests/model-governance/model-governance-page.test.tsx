@@ -26,7 +26,10 @@ import {
 } from '@/lib/model-governance-api'
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/policy-qa' }))
-vi.mock('next/font/google', () => ({ Noto_Sans_SC: () => ({ variable: '' }) }))
+vi.mock('next/font/google', () => ({
+  Noto_Sans_SC: () => ({ variable: '' }),
+  JetBrains_Mono: () => ({ variable: '' }),
+}))
 vi.mock('@/lib/api-context', () => ({
   ApiProvider: ({ children }: { children: ReactNode }) => children,
   useApiContext: () => ({ connectionStatus: 'unknown' }),

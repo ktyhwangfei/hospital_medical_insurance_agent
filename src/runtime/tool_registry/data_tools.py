@@ -13,9 +13,11 @@ from src.domain.tool.models import (
     ToolStatus,
     ToolVersion,
 )
+from src.runtime.policy_qa.data_query_intent_parser import parse_data_query_intent
 from src.runtime.tool_registry.service import ToolRegistryService
 
 TOOL_QUERY_SEMANTIC_METRICS = "tool_query_semantic_metrics"
+TOOL_PARSE_DATA_QUERY_INTENT = "tool_parse_data_query_intent"
 
 
 async def _query_semantic_metrics(
@@ -42,7 +44,7 @@ async def _query_semantic_metrics(
         scope=QueryScope(
             entity_code=entity_code,
             anchor=QueryAnchor(field_code=anchor_field, value=anchor_value),
-            query_scope=query_scope,
+            query_scope=query_scope,  # type: ignore[arg-type]
         ),
         metrics=list(metrics),
     )
@@ -54,6 +56,14 @@ async def _query_semantic_metrics(
         "metrics": list(metrics),
         "row_count": len(result.rows),
     }
+
+
+async def _parse_data_query_intent(question: str) -> dict:
+    """包装 data_query_intent_parser：NL → 已发布语义指标参数。
+
+    LLM 只做意图到受治理指标的映射；指标不在已发布目录内即返回澄清。
+    """
+    return await parse_data_query_intent(question)
 
 
 def register_data_tools(registry: ToolRegistryService) -> None:
@@ -122,4 +132,22 @@ def register_data_tools(registry: ToolRegistryService) -> None:
             status=ToolStatus.MATERIALIZED,
         ),
         implementation=_query_semantic_metrics,
+    )
+    registry.register(
+        ToolVersion(
+            version_id="tv_parse_data_query_intent_1",
+            tool_id=TOOL_PARSE_DATA_QUERY_INTENT,
+            semantic_version="1.0.0",
+            definition=ToolDefinition(
+                tool_id=TOOL_PARSE_DATA_QUERY_INTENT,
+                name="解析运营问数意图",
+                description="将自然语言问数映射到已发布的语义指标查询参数，不在目录内则澄清",
+                contract_kind=ToolContractKind.FUNCTION,
+                target_ref="src.runtime.policy_qa.data_query_intent_parser.parse_data_query_intent",
+                risk_level=ToolRiskLevel.LOW,
+                tags=["数据类", "语义层查询", "意图解析"],
+            ),
+            status=ToolStatus.MATERIALIZED,
+        ),
+        implementation=_parse_data_query_intent,
     )

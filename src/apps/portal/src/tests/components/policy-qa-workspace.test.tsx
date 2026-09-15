@@ -37,6 +37,7 @@ function makeStream(
 ): UsePolicyQAStreamReturn {
   return {
     sessionId: 'sess-test',
+    mode: 'policy_chat',
     anchor: makeAnchor(),
     memories: [],
     messages: [],
@@ -72,11 +73,50 @@ describe('PolicyQAWorkspace', () => {
     expect(screen.queryByText('本轮执行链路')).not.toBeInTheDocument()
   })
 
-  it('starts with the chat-first empty state and composer', () => {
+  // ── V4.0 智能体中心：切换器 + 三工作区分发 ──────────────────────
+
+  it('renders the agent switcher with policy agent active by default', () => {
+    render(<PolicyQAWorkspace />)
+
+    expect(screen.getByTestId('agent-switcher')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-switcher-policy')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('agent-workspace-policy')).toBeInTheDocument()
+  })
+
+  it('switches to the settlement workspace without leaving the page', () => {
+    render(<PolicyQAWorkspace />)
+
+    fireEvent.click(screen.getByTestId('agent-switcher-settlement'))
+
+    expect(screen.getByTestId('agent-workspace-settlement')).toBeInTheDocument()
+    expect(screen.queryByTestId('agent-workspace-policy')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '结算解释' })).toBeInTheDocument()
+  })
+
+  it('switches to the ops workspace and back to policy', () => {
+    render(<PolicyQAWorkspace />)
+
+    fireEvent.click(screen.getByTestId('agent-switcher-ops'))
+    expect(screen.getByTestId('agent-workspace-ops')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '运营问数' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('agent-switcher-policy'))
+    expect(screen.getByTestId('agent-workspace-policy')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '政策问答' })).toBeInTheDocument()
+  })
+
+  it('keeps a persistent new-session action in the workspace header', () => {
+    render(<PolicyQAWorkspace />)
+
+    expect(screen.getByRole('button', { name: '新会话' })).toBeInTheDocument()
+  })
+
+  it('starts with the policy-agent empty state and composer', () => {
     render(<PolicyQAWorkspace />)
 
     expect(screen.getByRole('heading', { name: '政策问答' })).toBeInTheDocument()
-    expect(screen.getByText('先问一个与当前结算相关的问题')).toBeInTheDocument()
+    // V4.0 §4.1：政策问答智能体无结算单锚点，空状态直接引导问政策
+    expect(screen.getByText('直接问政策问题')).toBeInTheDocument()
     expect(screen.getByRole('textbox')).toBeInTheDocument()
     expect(screen.getByText('回答仅供解释参考，不作为报销或结算依据。')).toBeInTheDocument()
   })

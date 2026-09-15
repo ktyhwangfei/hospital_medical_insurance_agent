@@ -1375,6 +1375,135 @@ class TestSettlementExplanationCompare:
         assert result["uncertainties"]
 
 
+class TestPolicyQASettlementsList:
+    """按时间段列结算单端点（V4.0 结算解释智能体）。"""
+
+    def _mount(self, monkeypatch, items):
+        from src.runtime.api import policy_qa_routes
+
+        class Provider:
+            async def list_settlements_by_date_range(
+                self, date_from, date_to, limit=50, patient_key=None
+            ):
+                self.calls.append((date_from, date_to, limit, patient_key))
+                return items
+
+            calls: list = []
+
+        provider = Provider()
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: provider
+        )
+        return provider
+
+    def test_list_settlements_by_date_range_returns_items(self, client, monkeypatch):
+        from src.runtime.policy_qa.settlement_data_provider import SettlementListItem
+
+        items = [
+            SettlementListItem(
+                settlement_id="S001",
+                settlement_date="2025-04-15",
+                person_type="退休人员",
+                insurance_type="城镇职工基本医疗保险",
+                service_type="普通住院",
+                total_amount=12386.40,
+            ),
+        ]
+        self._mount(monkeypatch, items)
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements",
+            params={"date_from": "2025-04-01", "date_to": "2025-04-30", "limit": 10},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["settlement_id"] == "S001"
+        assert data[0]["total_amount"] == 12386.40
+        assert data[0]["person_type"] == "退休人员"
+
+    def test_list_settlements_passes_patient_key_through(self, client, monkeypatch):
+        provider = self._mount(monkeypatch, [])
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements",
+            params={
+                "date_from": "2025-08-01",
+                "date_to": "2025-08-31",
+                "patient_key": "110103194203280937",
+            },
+        )
+
+        assert response.status_code == 200
+        assert provider.calls == [("2025-08-01", "2025-08-31", 50, "110103194203280937")]
+
+    def test_list_settlements_requires_dates(self, client):
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements",
+            params={"limit": 10},
+        )
+        assert response.status_code == 422
+
+
+class TestPolicyQAPatientLookup:
+    """患者定位端点（V4.0 结算解释智能体·临时方案，正式由登录态取代）。"""
+
+    def _mount(self, monkeypatch, summary):
+        from src.runtime.api import policy_qa_routes
+
+        class Provider:
+            async def lookup_patient(self, key):
+                return summary
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: Provider()
+        )
+
+    def test_patient_lookup_returns_masked_summary(self, client, monkeypatch):
+        from src.runtime.policy_qa.settlement_data_provider import PatientSummary
+
+        self._mount(
+            monkeypatch,
+            PatientSummary(
+                card_no="10065478600S",
+                id_no_masked="110***********0937",
+                name="张三",
+                gender="男",
+                birth_date="1942-03-28",
+                registration_id="1671213",
+            ),
+        )
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/patient-lookup",
+            params={"key": "110103194203280937"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id_no_masked"] == "110***********0937"
+        assert data["name"] == "张三"
+        assert "sfz" not in data and "id_no" not in data
+
+    def test_patient_lookup_not_found_404(self, client, monkeypatch):
+        self._mount(monkeypatch, None)
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/patient-lookup",
+            params={"key": "NOT-EXIST"},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"]["error_code"] == "PATIENT_NOT_FOUND"
+
+    def test_patient_lookup_requires_key(self, client):
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/patient-lookup",
+        )
+        assert response.status_code == 422
+
+
 class TestPolicyQAFeedback:
     """「回答有误」反馈端点：客户端不能伪造来源，服务端按 ID 读取并鉴权。"""
 

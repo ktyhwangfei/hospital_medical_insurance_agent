@@ -12,9 +12,12 @@
 import { toPolicyQAResult } from '@/lib/policy-qa-stream'
 import type {
   PolicyQACaseContext,
+  PolicyQADataQueryResult,
   PolicyQAResult,
   PolicyQAVerificationSummary,
 } from '@/lib/policy-qa-stream'
+
+export type { PolicyQADataQueryResult } from '@/lib/policy-qa-stream'
 
 // ── 前端会话级状态类型（camelCase，组件层只见这一套）──────────────
 
@@ -79,6 +82,8 @@ export interface PolicyQAChatMessage {
   caseContext?: PolicyQACaseContext
   scenarioId?: PolicyQAResult['scenarioId']
   settlementFields?: PolicyQAResult['settlementFields']
+  /** 运营问数结果（图表/表格） */
+  dataQueryResult?: PolicyQADataQueryResult
   /** 服务端为本轮生成的稳定 ID（result/done 共享）；仅该 ID 提交给反馈接口 */
   qaTurnId?: string
   /** 仅来自具备评测权限的历史 DTO；SSE 禁止携带，不得从流式响应中读取 */
@@ -253,19 +258,24 @@ export function emptyAnchor(): SessionAnchor {
 
 const SESSION_ID_STORAGE_KEY = 'policy-qa-session-id'
 
-export function loadPersistedSessionId(): string | null {
+/** V4.0 智能体中心：每智能体独立持久化 key（policy-qa-session-id-<agent>）。 */
+function scopedStorageKey(scope?: string): string {
+  return scope ? `${SESSION_ID_STORAGE_KEY}-${scope}` : SESSION_ID_STORAGE_KEY
+}
+
+export function loadPersistedSessionId(scope?: string): string | null {
   if (typeof window === 'undefined') return null
-  return window.localStorage.getItem(SESSION_ID_STORAGE_KEY)
+  return window.localStorage.getItem(scopedStorageKey(scope))
 }
 
-export function persistSessionId(sessionId: string): void {
+export function persistSessionId(sessionId: string, scope?: string): void {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(SESSION_ID_STORAGE_KEY, sessionId)
+  window.localStorage.setItem(scopedStorageKey(scope), sessionId)
 }
 
-export function clearPersistedSessionId(): void {
+export function clearPersistedSessionId(scope?: string): void {
   if (typeof window === 'undefined') return
-  window.localStorage.removeItem(SESSION_ID_STORAGE_KEY)
+  window.localStorage.removeItem(scopedStorageKey(scope))
 }
 
 /** 后端轨迹轮次 DTO（snake_case，GET /sessions/{id}/trajectory） */

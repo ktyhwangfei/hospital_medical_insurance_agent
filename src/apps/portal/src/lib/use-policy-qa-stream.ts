@@ -41,6 +41,16 @@ import {
   type PolicyQAResult,
 } from '@/lib/policy-qa-stream'
 
+export type PolicyQAMode = 'policy_chat' | 'settlement_explain' | 'data_query'
+
+/** V4.0 智能体中心：每个智能体工作区独立实例化本 hook 的配置。 */
+export interface UsePolicyQAStreamOptions {
+  /** 本智能体绑定的后端工作模式（固定，不随会话切换） */
+  mode?: PolicyQAMode
+  /** 每智能体独立会话持久化 key 后缀（policy-qa-session-id-<scope>） */
+  storageScope?: string
+}
+
 // ── 本轮执行步骤（对话流顶部的轻量 trace）─────────────────────────
 
 export interface PolicyQATurnStep {
@@ -59,6 +69,8 @@ export interface SessionEscalationInfo {
 export interface UsePolicyQAStreamReturn {
   /** 跨轮不变的会话 ID */
   sessionId: string
+  /** 本智能体绑定的政策 QA 工作模式（V4.0 起由智能体身份决定，只读） */
+  mode: PolicyQAMode
   anchor: SessionAnchor
   memories: MemoryCard[]
   messages: PolicyQAChatMessage[]
@@ -160,12 +172,16 @@ function applyPublicResult(
     uncertainties: result.uncertainties,
     verificationSummary: result.verificationSummary,
     isBroad: result.isBroad,
+    dataQueryResult: result.dataQueryResult,
     // 仅在消息尚未锁定 ID 时写入；result 与 done 不一致时以首轮锁定的为准
     qaTurnId: msg.qaTurnId ?? qaTurnId,
   }
 }
 
-export function usePolicyQAStream(): UsePolicyQAStreamReturn {
+export function usePolicyQAStream(
+  options: UsePolicyQAStreamOptions = {},
+): UsePolicyQAStreamReturn {
+  const { mode = 'policy_chat', storageScope } = options
   const [sessionId, setSessionId] = useState<string>(() => newSessionId())
   const [anchor, setAnchor] = useState<SessionAnchor>(() => emptyAnchor())
   const [memories, setMemories] = useState<MemoryCard[]>([])
@@ -195,7 +211,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
 
   // ── 刷新恢复：挂载时从持久化轨迹重建会话（Issue #30 §六）──
   useEffect(() => {
-    const persisted = loadPersistedSessionId()
+    const persisted = loadPersistedSessionId(storageScope)
     if (!persisted) return
     let cancelled = false
     void (async () => {
@@ -231,16 +247,23 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
           }
         } else {
           // 会话不存在（服务端重启/内存存储）：清除残留，开新会话
-          clearPersistedSessionId()
+          clearPersistedSessionId(storageScope)
         }
       } catch {
-        if (!cancelled) clearPersistedSessionId()
+        if (!cancelled) clearPersistedSessionId(storageScope)
       } finally {
         if (!cancelled) setRestoring(false)
       }
     })()
     return () => {
       cancelled = true
+    }
+  }, [storageScope])
+
+  // ── 卸载中止：智能体切换卸载工作区时中止在途 SSE，避免孤儿请求 ──
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort()
     }
   }, [])
 
@@ -364,7 +387,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
         setError('当前会话已挂起或升级中，请先恢复会话或新建会话。')
         return false
       }
-      persistSessionId(sessionIdRef.current)
+      persistSessionId(sessionIdRef.current, storageScope)
 
       abortRef.current?.abort()
       const controller = new AbortController()
@@ -392,18 +415,19 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
       const turnQaTurnId: { current: string | undefined } = { current: undefined }
 
       try {
-        const response = await fetch(STREAM_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            question: text,
-            settlement_id: settlementId,
-            session_id: sessionIdRef.current,
-            user_id: 'demo',
-            role: 'cashier',
-          }),
-          signal: controller.signal,
-        })
+      const response = await fetch(STREAM_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: text,
+          mode,
+          settlement_id: settlementId,
+          session_id: sessionIdRef.current,
+          user_id: 'demo',
+          role: 'cashier',
+        }),
+        signal: controller.signal,
+      })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         if (!response.body) throw new Error('浏览器不支持流式响应')
 
@@ -473,7 +497,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
       setIsStreaming(false)
       return true
     },
-    [dispatchEvent, isStreaming, sessionStatus],
+    [dispatchEvent, isStreaming, mode, sessionStatus],
   )
 
   // ── 新会话 ───────────────────────────────────────────────────
@@ -482,7 +506,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
     abortRef.current = null
     const sid = newSessionId()
     setSessionId(sid)
-    persistSessionId(sid)
+    persistSessionId(sid, storageScope)
     setAnchor(emptyAnchor())
     setMemories([])
     setMessages([])
@@ -493,7 +517,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
     setSessionStatus('active')
     setStatusReason('')
     setEscalation(null)
-  }, [])
+  }, [storageScope])
 
   // ── 会话生命周期动作（Issue #30）──────────────────────────
   const suspendSession = useCallback(async (reason = '') => {
@@ -593,6 +617,7 @@ export function usePolicyQAStream(): UsePolicyQAStreamReturn {
 
   return {
     sessionId,
+    mode,
     anchor,
     memories,
     messages,

@@ -9,6 +9,7 @@ describe('PolicyComposer', () => {
   it('shows settlement context inside the composer', () => {
     render(
       <PolicyComposer
+        mode="policy_chat"
         settlementId="1671213"
         value=""
         onChange={vi.fn()}
@@ -17,12 +18,29 @@ describe('PolicyComposer', () => {
     )
 
     expect(screen.getByText('结算单 1671213')).toBeInTheDocument()
-    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', '继续追问当前结算单…')
+    // V4.0 §4.1：政策问答智能体无结算单锚点语义，占位直接引导问政策
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', '直接问政策问题…')
+  })
+
+  it('uses the ops send label for the data_query agent', () => {
+    render(
+      <PolicyComposer
+        mode="data_query"
+        settlementId={null}
+        value=""
+        onChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', '用自然语言问运营数据…')
+    expect(screen.getByRole('button', { name: '问数' })).toBeInTheDocument()
   })
 
   it('gives the question textarea an accessible name', () => {
     render(
       <PolicyComposer
+        mode="policy_chat"
         settlementId={null}
         value=""
         onChange={vi.fn()}
@@ -36,6 +54,7 @@ describe('PolicyComposer', () => {
   it('keeps a visible keyboard focus ring on the textarea', () => {
     render(
       <PolicyComposer
+        mode="policy_chat"
         settlementId={null}
         value=""
         onChange={vi.fn()}
@@ -52,6 +71,7 @@ describe('PolicyComposer', () => {
     const onSend = vi.fn()
     render(
       <PolicyComposer
+        mode="policy_chat"
         settlementId="1671213"
         value="统筹自付为什么这么多"
         onChange={vi.fn()}
@@ -71,6 +91,7 @@ describe('PolicyComposer', () => {
     const onSend = vi.fn()
     render(
       <PolicyComposer
+        mode="policy_chat"
         settlementId="1671213"
         value="统筹自付"
         onChange={vi.fn()}
@@ -86,6 +107,7 @@ describe('PolicyComposer', () => {
   it('disables sending empty input or while streaming', () => {
     const { rerender } = render(
       <PolicyComposer
+        mode="policy_chat"
         settlementId={null}
         value="  "
         onChange={vi.fn()}
@@ -96,6 +118,7 @@ describe('PolicyComposer', () => {
 
     rerender(
       <PolicyComposer
+        mode="policy_chat"
         settlementId="1671213"
         value="继续追问"
         onChange={vi.fn()}

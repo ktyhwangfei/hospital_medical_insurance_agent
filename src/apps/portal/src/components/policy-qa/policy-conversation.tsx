@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { LoaderCircle, PauseCircle, PlayCircle, ShieldQuestion } from 'lucide-react'
+import { LoaderCircle, PauseCircle, PlayCircle, RotateCcw, ShieldQuestion } from 'lucide-react'
 
 import PolicyComposer from '@/components/policy-qa/policy-composer'
 import PolicyMessageList from '@/components/policy-qa/policy-message-list'
@@ -13,6 +13,21 @@ import {
 } from '@/lib/policy-qa-session'
 import type { UsePolicyQAStreamReturn } from '@/lib/use-policy-qa-stream'
 
+const MODE_HEADING: Record<UsePolicyQAStreamReturn['mode'], { title: string; subtitle: string }> = {
+  policy_chat: {
+    title: '政策问答',
+    subtitle: '直接用自然语言提问医保政策，回答附带可追溯的政策来源。',
+  },
+  settlement_explain: {
+    title: '结算解释',
+    subtitle: '针对指定结算单解释费用项目、自付比例与政策依据。',
+  },
+  data_query: {
+    title: '运营问数',
+    subtitle: '用自然语言提问运营指标，回答同时给出数据表格与图表。',
+  },
+}
+
 interface PolicyConversationProps {
   stream: UsePolicyQAStreamReturn
 }
@@ -21,6 +36,7 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
   const [input, setInput] = useState('')
   const conversationEndRef = useRef<HTMLDivElement>(null)
   const currentPublicMessage = stream.steps.at(-1)?.publicMessage
+  const isDataQuery = stream.mode === 'data_query'
 
   useEffect(() => {
     conversationEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -56,6 +72,12 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
         subjectChangeMsg: `已切换患者 ${command.patientId}，请提供新结算单号。`,
       })
       appendPromptForSettlement()
+      return
+    }
+
+    // 运营问数模式不强制绑定结算单，直接发送到后端对应 Workflow
+    if (isDataQuery) {
+      await stream.send(command.question)
       return
     }
 
@@ -127,30 +149,43 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
       <header className="space-y-1">
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-1">
-            <h1 className="text-xl font-semibold tracking-tight text-slate-950">政策问答</h1>
-            <p className="text-sm text-slate-500">围绕当前结算单持续追问费用构成与政策依据。</p>
+            <h1 className="text-xl font-semibold tracking-tight text-slate-950">{MODE_HEADING[stream.mode].title}</h1>
+            <p className="text-sm text-slate-500">{MODE_HEADING[stream.mode].subtitle}</p>
           </div>
-          {canOperate ? (
-            <div className="flex shrink-0 items-center gap-1.5" data-testid="policy-qa-session-actions">
-              <button
-                type="button"
-                onClick={handleSuspend}
-                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
-              >
-                <PauseCircle className="size-3.5" aria-hidden />
-                挂起
-              </button>
-              <button
-                type="button"
-                onClick={handleEscalate}
-                disabled={!input.trim() && !lastUserQuestion}
-                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700 hover:bg-amber-100 disabled:opacity-50"
-              >
-                <ShieldQuestion className="size-3.5" aria-hidden />
-                升级医保办
-              </button>
-            </div>
-          ) : null}
+          <div className="flex shrink-0 items-center gap-1.5" data-testid="policy-qa-session-actions">
+            {/* V4.0 §五 极简会话：新会话常驻（等价 @新会话），流式/恢复中禁用 */}
+            <button
+              type="button"
+              onClick={stream.resetSession}
+              disabled={stream.isStreaming || stream.restoring}
+              aria-label="新会话"
+              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <RotateCcw className="size-3.5" aria-hidden />
+              新会话
+            </button>
+            {canOperate ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleSuspend}
+                  className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  <PauseCircle className="size-3.5" aria-hidden />
+                  挂起
+                </button>
+                <button
+                  type="button"
+                  onClick={handleEscalate}
+                  disabled={!input.trim() && !lastUserQuestion}
+                  className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                >
+                  <ShieldQuestion className="size-3.5" aria-hidden />
+                  升级医保办
+                </button>
+              </>
+            ) : null}
+          </div>
         </div>
       </header>
 
@@ -224,7 +259,7 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
       ) : null}
 
       {stream.messages.length === 0 ? (
-        <PolicyQAEmptyState onSelectQuestion={setInput} />
+        <PolicyQAEmptyState onSelectQuestion={setInput} mode={stream.mode} />
       ) : (
         <PolicyMessageList messages={stream.messages} />
       )}
@@ -237,6 +272,7 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
       ) : null}
 
       <PolicyComposer
+        mode={stream.mode}
         settlementId={stream.anchor.settlementId}
         value={input}
         onChange={setInput}
