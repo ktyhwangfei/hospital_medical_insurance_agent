@@ -30,9 +30,9 @@ def _compare_settlement_vs_policy(settlement_fact: dict, policy_evidence: dict) 
 def register_calc_tools(registry: ToolRegistryService) -> None:
     registry.register(
         ToolVersion(
-            version_id="tv_compare_settlement_vs_policy_1",
+            version_id="tv_compare_settlement_vs_policy_2",
             tool_id=TOOL_COMPARE_SETTLEMENT_VS_POLICY,
-            semantic_version="1.0.0",
+            semantic_version="1.1.0",
             definition=ToolDefinition(
                 tool_id=TOOL_COMPARE_SETTLEMENT_VS_POLICY,
                 name="结算政策对比",
@@ -41,6 +41,32 @@ def register_calc_tools(registry: ToolRegistryService) -> None:
                 target_ref="src.runtime.policy_qa.settlement_policy_compare.compare_settlement_vs_policy",
                 risk_level=ToolRiskLevel.LOW,
                 tags=["对比计算类", "比例核验"],
+                input_schema={
+                    "settlement_fact": {
+                        "type": "object",
+                        "required": True,
+                        "description": "结算事实（上游 tool_get_settlement_fact 输出），取统筹支付/医保内金额",
+                    },
+                    "policy_evidence": {
+                        "type": "object",
+                        "required": True,
+                        "description": "政策证据（上游 tool_retrieve_policy_evidence 输出），取分段支付比例",
+                    },
+                },
+                output_schema={
+                    "comparisons": {"type": "array<object>", "description": "逐项对比明细（item/actual/expected/rule_ids/match/note）"},
+                    "all_match": {"type": "boolean", "description": "全部对比项是否一致"},
+                    "conclusion": {"type": "string", "description": "确定性对比结论（一致/差异待人工复核/字段缺失）"},
+                    "comparison_count": {"type": "integer", "description": "对比项数"},
+                },
+                execution_detail=(
+                    "核心公式（纯函数，无数据源、无 LLM，结论可溯源到 rule_id）：\n"
+                    "  实际比例 actual = basic_pooling_payment / medical_insurance_inner_amount（统筹支付 ÷ 医保内金额）\n"
+                    "  政策期望 expected = parse(payment_ratio)（'0.85'/'85%' → 0~1 浮点）\n"
+                    "  一致判定 match = |actual - expected| <= 0.02（容差 RATIO_TOLERANCE = ±2%）\n"
+                    "  all_match = 所有对比项均 match；无可用比例 → match=false（证据不足，不误报 complete）\n"
+                    "结论三态：一致 / 差异或证据不足待人工复核 / 金额字段缺失无法对比。"
+                ),
             ),
             status=ToolStatus.MATERIALIZED,
         ),

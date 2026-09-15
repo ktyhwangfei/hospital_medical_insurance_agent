@@ -2,6 +2,13 @@
 // DTO 字段与后端 src/runtime/workflow/catalog_view.py 逐字段对齐（snake_case 直传）。
 import { requestJson } from './api-client'
 
+// 单个输入/输出字段的契约信息（与后端 ToolDefinition.input_schema/output_schema 对齐）。
+export interface ToolFieldInfoDto {
+  type: string
+  required?: boolean
+  description: string
+}
+
 export interface ToolSummaryDto {
   tool_id: string
   name: string
@@ -13,6 +20,9 @@ export interface ToolSummaryDto {
   semantic_version: string
   bound: boolean
   tags: string[]
+  input_schema: Record<string, ToolFieldInfoDto>
+  output_schema: Record<string, ToolFieldInfoDto>
+  execution_detail: string
 }
 
 export interface ToolCatalogDto {

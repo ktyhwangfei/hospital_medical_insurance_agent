@@ -59,9 +59,9 @@ async def _query_semantic_metrics(
 def register_data_tools(registry: ToolRegistryService) -> None:
     registry.register(
         ToolVersion(
-            version_id="tv_query_semantic_metrics_1",
+            version_id="tv_query_semantic_metrics_2",
             tool_id=TOOL_QUERY_SEMANTIC_METRICS,
-            semantic_version="1.0.0",
+            semantic_version="1.1.0",
             definition=ToolDefinition(
                 tool_id=TOOL_QUERY_SEMANTIC_METRICS,
                 name="语义指标查询",
@@ -70,6 +70,54 @@ def register_data_tools(registry: ToolRegistryService) -> None:
                 target_ref="src.semantic_layer.query_planner.SemanticQueryService.execute",
                 risk_level=ToolRiskLevel.LOW,
                 tags=["数据类", "语义层查询"],
+                input_schema={
+                    "object_code": {
+                        "type": "string",
+                        "required": True,
+                        "description": "语义对象编码（仅限已发布查询模型）",
+                    },
+                    "entity_code": {
+                        "type": "string",
+                        "required": True,
+                        "description": "数据集/实体编码（数据源路由依据）",
+                    },
+                    "anchor_field": {
+                        "type": "string",
+                        "required": True,
+                        "description": "锚点字段编码（如结算单号字段）",
+                    },
+                    "anchor_value": {
+                        "type": "string",
+                        "required": True,
+                        "description": "锚点值（如具体结算单号）",
+                    },
+                    "metrics": {
+                        "type": "array<string>",
+                        "required": True,
+                        "description": "指标编码列表（仅限已发布指标）",
+                    },
+                    "query_scope": {
+                        "type": "string",
+                        "required": False,
+                        "description": "查询范围，默认 whole_admission（全就诊口径）",
+                    },
+                },
+                output_schema={
+                    "rows": {"type": "array<object>", "description": "按指标聚合的查询结果行"},
+                    "row_count": {"type": "integer", "description": "结果行数"},
+                    "quality_status": {"type": "string", "description": "数据质量状态（complete/partial/unavailable）"},
+                    "model_version": {"type": "string", "description": "发布版本，结果可溯源"},
+                    "metrics": {"type": "array<string>", "description": "实际返回的指标编码列表"},
+                },
+                execution_detail=(
+                    "执行链：SemanticQueryPlanner.compile → SQLAlchemy Core 组装 → 出口白名单断言（仅只读聚合 SELECT）→ SQL Server 执行\n"
+                    "SQL 形态（按发布版本编译，运行时生成）：\n"
+                    "  SELECT <指标聚合表达式> AS <metric_code>, COUNT(*) AS _anchor_count, ...\n"
+                    "  FROM <object_code 对应发布数据集@发布版本>\n"
+                    "  WHERE <anchor_field> = :anchor_value GROUP BY <数据集键>\n"
+                    "数据集/字段表达式全部来自已发布语义模型，禁止绕过语义层直连出 SQL；\n"
+                    "越界（对象/指标未发布、anchor 非法）由语义层 fail-closed 拒绝。"
+                ),
             ),
             status=ToolStatus.MATERIALIZED,
         ),

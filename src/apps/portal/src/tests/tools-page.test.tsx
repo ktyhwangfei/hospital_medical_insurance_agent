@@ -33,6 +33,15 @@ const toolCatalog: ToolCatalogDto = {
       semantic_version: '1.1.0',
       bound: true,
       tags: ['数据类', '结算事实'],
+      input_schema: {
+        settlement_id: { type: 'string', required: true, description: '结算单号，来自会话上下文或用户澄清补充' },
+      },
+      output_schema: {
+        basic_pooling_payment: { type: 'number', description: '统筹支付（比例分子）' },
+        medical_insurance_inner_amount: { type: 'number', description: '医保内金额（比例分母）' },
+      },
+      execution_detail:
+        '执行链：SemanticQueryPlanner.compile → SQLAlchemy Core 组装 → 出口白名单断言（仅只读聚合 SELECT）→ SQL Server 执行',
     },
     {
       tool_id: 'tool_get_refund_record',
@@ -45,6 +54,13 @@ const toolCatalog: ToolCatalogDto = {
       semantic_version: '1.0.0',
       bound: false,
       tags: ['数据类', '退费记录'],
+      input_schema: {
+        settlement_id: { type: 'string', required: true, description: '结算单号，定位其退费/冲正记录' },
+      },
+      output_schema: {
+        records: { type: 'array<object>', description: '退费/冲正记录列表，未接入数据源前恒 unavailable' },
+      },
+      execution_detail: '无执行语句：目标 Adapter Protocol 尚无真实数据源接入，故意不绑定实现，调用即降级 unavailable。',
     },
     {
       tool_id: 'tool_comprehensive_knowledge_lookup',
@@ -57,6 +73,15 @@ const toolCatalog: ToolCatalogDto = {
       semantic_version: '1.0.0',
       bound: true,
       tags: ['知识类', '综合检索'],
+      input_schema: {
+        question: { type: 'string', required: true, description: '用户自然语言问题' },
+        settlement_fact: { type: 'object', required: false, description: '结算事实，向量降级时提供适用性维度' },
+      },
+      output_schema: {
+        lookup_kind: { type: 'string', description: '命中路径（structured_hit / vector_evidence）' },
+      },
+      execution_detail:
+        '核心公式：实际比例 = basic_pooling_payment / medical_insurance_inner_amount，容差 ±2%；无 LLM。',
     },
   ],
 }
@@ -142,6 +167,40 @@ describe('ToolsPage Tool 与 Workflow 可视化页', () => {
     expect(screen.getByTestId('tool-item-tool_get_settlement_fact').textContent).toContain('数据类')
     expect(screen.getByTestId('tool-item-tool_get_refund_record').textContent).toContain('未绑定 · 无数据源')
     expect(screen.getByTestId('tool-item-tool_comprehensive_knowledge_lookup').textContent).toContain('知识类')
+  })
+
+  it('Tool 卡片优先展示输入参数与输出字段的契约信息', async () => {
+    render(<ToolsPage />)
+    await waitFor(() => expect(screen.getByTestId('tool-catalog')).toBeTruthy())
+
+    const inputs = screen.getByTestId('tool-input-fields-tool_get_settlement_fact')
+    expect(inputs.textContent).toContain('settlement_id')
+    expect(inputs.textContent).toContain('必填')
+    expect(inputs.textContent).toContain('结算单号')
+
+    const outputs = screen.getByTestId('tool-output-fields-tool_get_settlement_fact')
+    expect(outputs.textContent).toContain('basic_pooling_payment')
+    expect(outputs.textContent).toContain('统筹支付（比例分子）')
+
+    const lookupInputs = screen.getByTestId('tool-input-fields-tool_comprehensive_knowledge_lookup')
+    expect(lookupInputs.textContent).toContain('settlement_fact')
+    expect(lookupInputs.textContent).toContain('可选')
+  })
+
+  it('Tool 卡片展示执行细节（SQL 编译链 / 核心公式），未绑定诚实声明无执行语句', async () => {
+    render(<ToolsPage />)
+    await waitFor(() => expect(screen.getByTestId('tool-catalog')).toBeTruthy())
+
+    const sqlChain = screen.getByTestId('tool-execution-detail-tool_get_settlement_fact')
+    expect(sqlChain.textContent).toContain('SemanticQueryPlanner.compile')
+    expect(sqlChain.textContent).toContain('只读聚合 SELECT')
+
+    const formula = screen.getByTestId('tool-execution-detail-tool_comprehensive_knowledge_lookup')
+    expect(formula.textContent).toContain('basic_pooling_payment / medical_insurance_inner_amount')
+    expect(formula.textContent).toContain('±2%')
+
+    const unbound = screen.getByTestId('tool-execution-detail-tool_get_refund_record')
+    expect(unbound.textContent).toContain('无执行语句')
   })
 
   it('切换到 Workflow 页签展示步骤链，未绑定步骤高亮无数据源', async () => {
