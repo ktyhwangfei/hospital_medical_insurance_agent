@@ -10,6 +10,7 @@ import inspect
 from typing import Any, Awaitable, Callable
 
 from src.data_platform.storage.tool.factory import get_tool_version_storage
+from src.data_platform.storage.tool.ports import ToolVersionStorage
 from src.domain.tool.models import ToolStatus, ToolVersion
 
 
@@ -50,8 +51,10 @@ def _filter_kwargs(implementation: ToolCallable, kwargs: dict[str, Any], tool_id
 class ToolRegistryService:
     """Tool 注册与调用服务，单例由 factory 函数持有。"""
 
-    def __init__(self) -> None:
-        self._storage = get_tool_version_storage()
+    def __init__(self, storage: ToolVersionStorage | None = None) -> None:
+        # storage 可注入：测试用独立内存存储隔离进程级单例，避免 stub 版本
+        # 以 created_at 压过内置版本污染其他用例的 get_latest_materialized。
+        self._storage = storage or get_tool_version_storage()
         self._bindings: dict[str, ToolCallable] = {}
         self._registered_tool_ids: list[str] = []
 

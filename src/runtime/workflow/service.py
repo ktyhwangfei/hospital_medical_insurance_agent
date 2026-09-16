@@ -10,11 +10,12 @@ from src.runtime.policy_qa.models import PolicyQAMode
 from src.runtime.policy_qa.public_contract import PolicyQAPublicResult
 from src.runtime.tool_registry.factory import get_tool_registry
 from src.runtime.workflow.definitions import (
-    ALL_WORKFLOWS,
+    KEYWORD_ROUTED_WORKFLOWS,
     WF_DATA_QUERY,
     WF_OUTPATIENT_SETTLEMENT_EXPLAIN,
     WF_POLICY_CHAT,
 )
+from src.runtime.workflow.domain_nodes import DOMAIN_HANDLERS
 from src.runtime.workflow.executor import WorkflowExecutor
 from src.runtime.workflow.public_result import build_workflow_public_result
 from src.runtime.workflow.router import WorkflowRouter
@@ -29,16 +30,16 @@ _WORKFLOW_BY_MODE: dict[PolicyQAMode, WorkflowDefinition] = {
 
 @lru_cache(maxsize=1)
 def _get_router() -> WorkflowRouter:
-    return WorkflowRouter(ALL_WORKFLOWS)
+    return WorkflowRouter(KEYWORD_ROUTED_WORKFLOWS)
 
 
 @lru_cache(maxsize=1)
 def _get_executor() -> WorkflowExecutor:
-    return WorkflowExecutor(get_tool_registry())
+    return WorkflowExecutor(get_tool_registry(), domain_handlers=DOMAIN_HANDLERS)
 
 
 def route_workflow_question(question: str) -> WorkflowDefinition | None:
-    """一次性关键词分类：命中则返回对应 Workflow，否则返回 None（不介入原有流程）。"""
+    """窄场景关键词 fallback；政策问答和运营问数不参与，避免重叠词误路由。"""
     return _get_router().route(question)
 
 

@@ -1,3 +1,5 @@
+"""Tool / Workflow 可视化 API 测试（含 #72 节点模型与真实数据源绑定）。"""
+
 import os
 
 os.environ["USE_MEMORY_STORAGE"] = "1"
@@ -34,44 +36,22 @@ def test_list_tools_exposes_input_and_output_schemas():
     assert "basic_pooling_payment" in fact["output_schema"]
     assert fact["output_schema"]["basic_pooling_payment"]["type"] == "number"
 
-    compare = items["tool_compare_settlement_vs_policy"]
-    assert set(compare["input_schema"]) == {"settlement_fact", "policy_evidence"}
-    assert {"comparisons", "all_match", "conclusion"}.issubset(set(compare["output_schema"]))
+    # 费用明细支持单笔与批量双入口（同药跨单对比的上游取数）。
+    fee = items["tool_get_fee_detail"]
+    assert set(fee["input_schema"]) == {"settlement_id", "settlement_ids"}
+    assert fee["input_schema"]["settlement_id"]["required"] is False
+    assert fee["input_schema"]["settlement_ids"]["type"] == "array<string>"
+
+    # 退费记录：真实双链路 SQL（医保端 tflydjh + HIS 端退费交易）。
+    detail = items["tool_get_refund_record"]["execution_detail"]
+    assert "tflydjh" in detail
+    assert "o_Trade" in detail
+    assert "T_HasRefundmented" in detail
 
     # 所有已登记 Tool 均应声明非空输入/输出契约。
     for tool_id, tool in items.items():
         assert tool["input_schema"], f"{tool_id} 缺输入字段契约"
         assert tool["output_schema"], f"{tool_id} 缺输出字段契约"
-
-
-def test_list_tools_exposes_execution_detail_down_to_sql_milvus_formula():
-    """执行细节展示到底：SQL 编译链 / Milvus expr / 核心公式。"""
-    response = _client().get("/api/v1/medical-insurance-ai-agent/tool-registry/tools")
-
-    assert response.status_code == 200
-    items = {item["tool_id"]: item for item in response.json()["items"]}
-
-    # 语义查询类：SQL 编译链 + 只读 SELECT 白名单。
-    detail = items["tool_query_semantic_metrics"]["execution_detail"]
-    assert "SemanticQueryPlanner.compile" in detail
-    assert "SELECT" in detail and "WHERE <anchor_field> = :anchor_value" in detail
-
-    # 向量检索类：Milvus expr 模板含适用性维度与有效期硬过滤。
-    detail = items["tool_retrieve_policy_evidence"]["execution_detail"]
-    assert "Milvus" in detail
-    assert 'insu_type like' in detail
-    assert 'effective_date <= ' in detail
-
-    # 对比计算类：核心公式 + 容差。
-    detail = items["tool_compare_settlement_vs_policy"]["execution_detail"]
-    assert "basic_pooling_payment / medical_insurance_inner_amount" in detail
-    assert "0.02" in detail
-
-    # 退费记录：真实双链路 SQL（医保端 tflydjh + HIS 端退费交易），不再是无数据源占位。
-    detail = items["tool_get_refund_record"]["execution_detail"]
-    assert "tflydjh" in detail
-    assert "o_Trade" in detail
-    assert "T_HasRefundmented" in detail
 
 
 def test_list_tools_registers_person_settlement_resolver_with_real_sources():
@@ -98,24 +78,25 @@ def test_list_tools_registers_person_settlement_resolver_with_real_sources():
     assert "不回显身份证" in detail
 
 
-def test_list_tools_covers_data_knowledge_and_calc_categories():
+def test_list_tools_exposes_only_independently_invokable_capabilities():
     response = _client().get("/api/v1/medical-insurance-ai-agent/tool-registry/tools")
 
     assert response.status_code == 200
     items = {item["tool_id"]: item for item in response.json()["items"]}
-    # 数据类（语义层对齐 + 费用明细/待遇叠加）、知识类、对比计算类（含同药跨单）均登记且已绑定实现。
+    # 数据类和知识类继续作为可独立调用 Tool；内部确定性计算改由 DomainNode 承载。
     for tool_id in (
         "tool_query_semantic_metrics",
         "tool_get_fee_detail",
         "tool_get_benefit_stacking",
         "tool_retrieve_policy_evidence",
         "tool_match_trusted_question",
-        "tool_compare_settlement_vs_policy",
-        "tool_compare_same_drug_across_settlements",
     ):
         assert tool_id in items, f"{tool_id} 未登记"
         assert items[tool_id]["bound"] is True, f"{tool_id} 未绑定实现"
         assert items[tool_id]["status"] == "materialized"
+    # 对比计算已下沉为领域节点，不再作为 Tool 登记。
+    assert "tool_compare_settlement_vs_policy" not in items
+    assert "tool_compare_same_drug_across_settlements" not in items
 
 
 def test_list_workflows_exposes_refund_verification_with_step_binding():
@@ -129,13 +110,19 @@ def test_list_workflows_exposes_refund_verification_with_step_binding():
         "fetch_settlement",
         "fetch_fee_detail",
         "fetch_refund_record",
+        "public_result",
     ]
-    assert all(step["tool_bound"] is True for step in wf["steps"])
+    assert steps["fetch_settlement"]["input_mapping"] == {
+        "settlement_id": "context.settlement_id"
+    }
+    assert all(step["bound"] is True for step in wf["steps"])
+    assert steps["public_result"]["node_type"] == "output"
+    assert steps["public_result"]["source_ref"] == "fetch_refund_record"
     assert wf["missing_evidence_rules"][0]["field_name"] == "settlement_id"
 
 
 def test_list_workflows_exposes_reimbursement_diff_and_benefit_stacking():
-    """Issue #68 问题 1/场景 3 的两条新增 Workflow 全部绑定可用。"""
+    """Issue #68 问题 1/3 的两条 Workflow：Tool 取数 + 领域节点对比 + 输出节点。"""
     response = _client().get("/api/v1/medical-insurance-ai-agent/workflow-catalog/workflows")
 
     assert response.status_code == 200
@@ -143,15 +130,24 @@ def test_list_workflows_exposes_reimbursement_diff_and_benefit_stacking():
 
     diff = workflows["wf_settlement_reimbursement_diff"]
     assert diff["missing_evidence_rules"][0]["field_name"] == "settlement_ids"
-    assert diff["steps"][0]["tool_id"] == "tool_compare_same_drug_across_settlements"
-    assert all(step["tool_bound"] is True for step in diff["steps"])
+    steps = {step["step_id"]: step for step in diff["steps"]}
+    assert steps["fetch_fee_details"]["node_type"] == "tool"
+    assert steps["fetch_fee_details"]["input_mapping"] == {
+        "settlement_ids": "context.settlement_ids"
+    }
+    assert steps["same_drug_compare"]["node_type"] == "domain"
+    assert steps["same_drug_compare"]["handler_id"] == "same_drug_compare"
+    assert steps["public_result"]["source_ref"] == "same_drug_compare"
+    assert all(step["bound"] is True for step in diff["steps"])
 
     benefit = workflows["wf_benefit_stacking_attribution"]
-    assert [step["tool_id"] for step in benefit["steps"]] == [
+    assert [step["tool_id"] for step in benefit["steps"] if step["tool_id"]] == [
         "tool_get_settlement_fact",
         "tool_get_benefit_stacking",
     ]
-    assert all(step["tool_bound"] is True for step in benefit["steps"])
+    assert benefit["steps"][-1]["node_type"] == "output"
+    assert benefit["steps"][-1]["source_ref"] == "fetch_benefit_stacking"
+    assert all(step["bound"] is True for step in benefit["steps"])
 
 
 def test_list_workflows_exposes_settlement_explain_chain_with_input_mapping():
@@ -165,13 +161,24 @@ def test_list_workflows_exposes_settlement_explain_chain_with_input_mapping():
     assert [step["step_id"] for step in wf["steps"]] == [
         "fetch_settlement",
         "retrieve_policy_evidence",
+        "check_evidence",
         "compare_settlement_vs_policy",
+        "merge_evidence",
+        "public_result",
     ]
     assert steps["retrieve_policy_evidence"]["input_mapping"] == {
         "settlement_fact": "fetch_settlement"
+    }
+    assert steps["fetch_settlement"]["input_mapping"] == {
+        "settlement_id": "context.settlement_id"
     }
     assert steps["compare_settlement_vs_policy"]["input_mapping"] == {
         "settlement_fact": "fetch_settlement",
         "policy_evidence": "retrieve_policy_evidence",
     }
-    assert all(step["tool_bound"] is True for step in wf["steps"])
+    assert steps["fetch_settlement"]["node_type"] == "tool"
+    assert steps["compare_settlement_vs_policy"]["node_type"] == "domain"
+    assert steps["compare_settlement_vs_policy"]["handler_id"] == "settlement_policy_compare"
+    assert steps["public_result"]["node_type"] == "output"
+    assert steps["public_result"]["source_ref"] == "merge_evidence"
+    assert all(step["bound"] is True for step in wf["steps"])

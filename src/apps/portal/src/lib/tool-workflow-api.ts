@@ -36,9 +36,17 @@ export interface MissingEvidenceRuleSummaryDto {
 
 export interface WorkflowStepSummaryDto {
   step_id: string
-  tool_id: string
+  node_type: 'tool' | 'domain' | 'decision' | 'output'
+  tool_id?: string | null
+  handler_id?: string | null
+  handler_version?: string | null
+  source_ref?: string | null
+  condition_ref?: string | null
+  expected_value?: unknown
+  match_step_id?: string | null
+  default_step_id?: string | null
   description: string
-  tool_bound: boolean
+  bound: boolean
   input_mapping: Record<string, string>
 }
 

@@ -138,13 +138,13 @@ def register_data_tools(registry: ToolRegistryService) -> None:
     )
     registry.register(
         ToolVersion(
-            version_id="tv_get_fee_detail_1",
+            version_id="tv_get_fee_detail_2",
             tool_id=TOOL_GET_FEE_DETAIL,
-            semantic_version="1.0.0",
+            semantic_version="1.1.0",
             definition=ToolDefinition(
                 tool_id=TOOL_GET_FEE_DETAIL,
                 name="查询费用明细",
-                description="按结算单号查询逐项目费用明细（含国标码/数量/单价/医保内外/先行自付），住院与门诊双链路",
+                description="按结算单号查询逐项目费用明细（含国标码/数量/单价/医保内外/先行自付）；支持单笔或批量（同药跨单对比的上游取数）",
                 contract_kind=ToolContractKind.FUNCTION,
                 target_ref="src.runtime.policy_qa.settlement_record_lookup.get_fee_detail",
                 risk_level=ToolRiskLevel.LOW,
@@ -152,8 +152,13 @@ def register_data_tools(registry: ToolRegistryService) -> None:
                 input_schema={
                     "settlement_id": {
                         "type": "string",
-                        "required": True,
-                        "description": "结算单号（djh）",
+                        "required": False,
+                        "description": "结算单号（djh），单笔查询入口",
+                    },
+                    "settlement_ids": {
+                        "type": "array<string>",
+                        "required": False,
+                        "description": "结算单号列表（≥2 笔），批量查询入口；与 settlement_id 二选一，批量时返回逐单 details",
                     },
                 },
                 output_schema={
@@ -171,7 +176,8 @@ def register_data_tools(registry: ToolRegistryService) -> None:
                     "    FROM dbo.yb_zyfymx WHERE djh = :settlement_id ORDER BY xh\n"
                     "  门诊（住院未命中时）：SELECT xh, xmdm, xmmc, NATION_CODE, sflb, sl, dj, zje, ybnje, ybwje, grziftw\n"
                     "    FROM dbo.yb_mzfymx WHERE djh = :settlement_id ORDER BY xh\n"
-                    "同药对齐键：NATION_CODE（国标码），回退 xmdm；不含患者身份输出。"
+                    "  批量入口 settlement_ids：循环单笔查询后聚合为 {details: {settlement_id: 单笔输出}}，\n"
+                    "  供同药跨单对比领域节点（same_drug_compare）消费；同药对齐键 NATION_CODE，回退 xmdm；不含患者身份输出。"
                 ),
             ),
             status=ToolStatus.MATERIALIZED,
@@ -223,9 +229,9 @@ def register_data_tools(registry: ToolRegistryService) -> None:
     )
     registry.register(
         ToolVersion(
-            version_id="tv_parse_data_query_intent_1",
+            version_id="tv_parse_data_query_intent_3",
             tool_id=TOOL_PARSE_DATA_QUERY_INTENT,
-            semantic_version="1.0.0",
+            semantic_version="1.2.0",
             definition=ToolDefinition(
                 tool_id=TOOL_PARSE_DATA_QUERY_INTENT,
                 name="解析运营问数意图",

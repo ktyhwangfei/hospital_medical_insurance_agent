@@ -15,11 +15,17 @@ from src.runtime.policy_qa.public_contract import (
 
 
 def _completed_outputs(result: WorkflowExecutionResult) -> dict[str, dict]:
-    return {
+    outputs = {
         step.step_id: step.output
         for step in result.step_results
         if step.status.value == "completed"
     }
+    final_outputs = {
+        step.step_id: step.output
+        for step in result.step_results
+        if step.node_type.value == "output" and step.status.value == "completed"
+    }
+    return final_outputs or outputs
 
 
 def _collect_evidence(outputs: dict[str, dict]) -> list[dict]:
@@ -30,11 +36,24 @@ def _collect_evidence(outputs: dict[str, dict]) -> list[dict]:
 
 
 def _collect_conclusion(outputs: dict[str, dict]) -> str | None:
-    """取末端分析步骤的结论（倒序遍历）：如退费链应取退费记录而非费用明细的摘要。"""
-    for output in reversed(list(outputs.values())):
+    for output in outputs.values():
         if isinstance(output.get("conclusion"), str) and output["conclusion"]:
             return output["conclusion"]
     return None
+
+
+def _collect_uncertainties(outputs: dict[str, dict]) -> list[str]:
+    """汇总输出节点/末端步骤的缺失证据与不确定性声明（低保缺失、规则未接入等）。"""
+    items: list[str] = []
+    for output in outputs.values():
+        for missing in output.get("missing_evidence", []):
+            message = f"缺少{missing}，相关结论存在不确定性"
+            if message not in items:
+                items.append(message)
+        for item in output.get("uncertainties", []):
+            if item not in items:
+                items.append(item)
+    return items
 
 
 def build_workflow_public_result(result: WorkflowExecutionResult) -> PolicyQAPublicResult:
@@ -52,7 +71,9 @@ def build_workflow_public_result(result: WorkflowExecutionResult) -> PolicyQAPub
         )
 
     settlement_checked = any(
-        step.tool_id.startswith("tool_get_settlement") and step.status.value == "completed"
+        bool(step.tool_id)
+        and step.tool_id.startswith("tool_get_settlement")
+        and step.status.value == "completed"
         for step in result.step_results
     )
     if result.status == WorkflowExecutionStatus.UNAVAILABLE:
@@ -71,6 +92,10 @@ def build_workflow_public_result(result: WorkflowExecutionResult) -> PolicyQAPub
     outputs = _completed_outputs(result)
     evidence_items = _collect_evidence(outputs)
     conclusion = _collect_conclusion(outputs)
+    uncertainties = list(result.uncertainties)
+    uncertainties.extend(
+        item for item in _collect_uncertainties(outputs) if item not in uncertainties
+    )
     compare_outputs = [output for output in outputs.values() if "comparisons" in output]
     all_match = all(output.get("all_match") for output in compare_outputs) if compare_outputs else None
     calculation_checked = bool(compare_outputs)
@@ -85,7 +110,7 @@ def build_workflow_public_result(result: WorkflowExecutionResult) -> PolicyQAPub
     return PolicyQAPublicResult(
         answer=conclusion or "已完成核对，未发现异常。",
         answer_status=answer_status,
-        uncertainties=list(result.uncertainties),
+        uncertainties=uncertainties,
         policy_evidence=[
             PolicyEvidence(
                 title=(ev.get("rule_id") or "政策规则") if isinstance(ev, dict) else "政策规则",

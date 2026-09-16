@@ -121,8 +121,24 @@ def resolve_settlement_by_person(
         conn.close()
 
 
-def get_fee_detail(settlement_id: str) -> dict:
-    """按结算单查询费用明细（供 tool_get_fee_detail 包装）。"""
+def get_fee_detail(settlement_id: str = "", settlement_ids: list[str] | None = None) -> dict:
+    """按结算单查询费用明细（供 tool_get_fee_detail 包装）。
+
+    双入口：单笔 settlement_id，或批量 settlement_ids（同药跨单对比的上游取数）。
+    批量返回 {"details": {settlement_id: 单笔输出}}；单笔返回单笔结构。
+    """
+    if settlement_ids:
+        ids = [s for s in ((settlement_ids,) if isinstance(settlement_ids, str) else settlement_ids) if s]
+        details = {sid: get_fee_detail(sid) for sid in ids}
+        missing = [sid for sid, d in details.items() if not d.get("items")]
+        return {
+            "details": details,
+            "settlement_count": len(details),
+            "conclusion": (
+                f"已取回 {len(details)} 笔结算单费用明细"
+                + (f"，其中 {len(missing)} 笔无明细" if missing else "")
+            ),
+        }
     conn = _open_connection()
     try:
         result = queries.query_fee_detail(conn, settlement_id)
@@ -235,31 +251,3 @@ def compare_same_drug_fee_details(
         "conclusion": conclusion,
         "uncertainties": uncertainties,
     }
-
-
-def compare_same_drug_across_settlements(settlement_ids: list[str]) -> dict:
-    """跨结算单同药对比（供 tool_compare_same_drug_across_settlements 包装）。
-
-    逐单查询费用明细后调用纯函数 compare_same_drug_fee_details。
-    """
-    ids = [s for s in ((settlement_ids,) if isinstance(settlement_ids, str) else (settlement_ids or [])) if s]
-    if len(ids) < 2:
-        return {
-            "comparisons": [],
-            "comparison_count": 0,
-            "all_match": None,
-            "conclusion": "至少需要两笔结算单号才能对比",
-            "uncertainties": ["请补充至少两笔结算单号"],
-        }
-    fee_details: dict[str, dict] = {}
-    unavailable: list[str] = []
-    for sid in ids:
-        detail = get_fee_detail(sid)
-        fee_details[sid] = detail
-        if not detail.get("items"):
-            unavailable.append(f"结算单 {sid} 无费用明细（{detail.get('conclusion', '')}）")
-    result = compare_same_drug_fee_details(fee_details)
-    result["uncertainties"] = list(result["uncertainties"]) + [
-        f"{u}（不影响其余结算单对比）" for u in unavailable
-    ]
-    return result

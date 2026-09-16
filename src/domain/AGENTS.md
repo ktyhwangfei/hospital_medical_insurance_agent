@@ -808,7 +808,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 #### 文件位置
 
-`src/runtime/memory/` + `src/runtime/context_composer/` + `src/runtime/intent/planner.py` + `src/runtime/reasoning/` + `src/runtime/runtime_state/models.py` + `src/data_platform/storage/memory/`
+`src/runtime/memory/` + `src/runtime/context_composer/` + `src/runtime/intent/planner.py` + `src/runtime/reasoning/` + `src/runtime/runtime_state/models.py` + `src/domain/workflow/models.py` + `src/runtime/workflow/` + `src/data_platform/storage/memory/`
 
 #### 通用语言字典
 
@@ -829,6 +829,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 上下文编排器 | `ContextComposer` | **Domain Service**（实现） | — | 从 Memory 挑选最有价值信息并排序，按 Token 预算组织为 LLM Context；超预算时摘要（summarize）而非截断（truncate） |
 | LLM 上下文 | `LLMContext` | **DTO** | Pydantic `BaseModel` | Context Composer 的输出契约：会话摘要 + 选中记忆（`MemoryBrief`）+ 推理链 + 预算用量 |
 | 推理状态管理器 | `ReasoningStateManager` | **Domain Service**（实现） | — | 推理链维护、假设管理（创建/确认/拒绝）、连续追问的推理复用 |
+| 运行时工作流定义 | `WorkflowDefinition` | **Aggregate Root** | Pydantic `BaseModel`（frozen） | Policy QA 的静态、可审计节点序列；与治理数据流 `FlowDefinition` 严格分离 |
+| Tool 节点 | `ToolNode` | **Entity** | Pydantic `BaseModel`（frozen） | 调用可独立发现和治理的 Tool；外部数据与知识能力继续走 Tool Registry |
+| 领域节点 | `DomainNode` | **Entity** | Pydantic `BaseModel`（frozen） | 调用代码侧白名单、强类型、确定性的医保业务处理器；不直接暴露给 Agent |
+| 决策节点 | `DecisionNode` | **Entity** | Pydantic `BaseModel`（frozen） | 以已解析事实与字面量相等比较选择静态前向分支；不执行表达式或用户代码 |
+| 输出节点 | `OutputNode` | **Entity** | Pydantic `BaseModel`（frozen） | 将指定上游结果声明为 Workflow 最终公开结果来源 |
+| 工作流节点类型 | `WorkflowNodeType` | **Value Object** | `StrEnum` | tool / domain / decision / output；不支持任意代码节点 |
 
 #### 业务规则
 
@@ -838,6 +844,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - `ReasoningStep` 必须携带 `citations` 或 `source_memory_ids` 以满足"来源可追溯"安全约束
 - 推理状态是会话级临时态，不复用为知识；与 LangGraph 图执行状态（checkpoint）分离存储
 - `MemoryStore` 遵循 ports/adapter 模式，默认 PostgreSQL，`USE_MEMORY_STORAGE=1` 回退内存实现
+- Runtime Workflow 只编排 Tool、白名单领域处理和控制语义，不与 Governed Data Flow 合并，也不接受动态 import、`eval` 或用户脚本
+- DomainNode 的 `handler_id + handler_version` 必须命中代码侧白名单，输入输出均通过 Pydantic 契约校验，失败时 fail-closed
+- DecisionNode 只能跳转到定义中后续的已知节点；重复 `step_id`、未知目标和回跳在定义校验阶段拒绝，条件缺失时 fail-closed
 
 #### 生命周期
 
@@ -1392,7 +1401,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Diagnosis` | 诊断记录 | MedicalRecord | Entity |
 | `DimensionCandidateProposal` | 维度候选提议 | Knowledge | Value Object |
 | `DimensionReviewConclusion` | 维度建模结论 | Knowledge | Value Object |
+| `DecisionNode` | 决策节点 | Runtime | Entity |
 | `DipGroupResult` | DIP 分组结果 | DrgDip | Value Object |
+| `DomainNode` | 领域节点 | Runtime | Entity |
 | `DrgDipPort` | DRG/DIP 适配器端口 | DrgDip | Domain Service |
 | `DrgGroupResult` | DRG 分组结果 | DrgDip | Value Object |
 | `Drug` | 药品 | OrderFee | Value Object |
@@ -1482,6 +1493,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `OpsWeekDelta` | 周环比 | OpsAnalytics | Value Object |
 | `OpsWeeklyReport` | 运营周报 | OpsAnalytics | Value Object |
 | `Order` | 医嘱 | OrderFee | Aggregate Root |
+| `OutputNode` | 输出节点 | Runtime | Entity |
 | `OutpatientPartialPreRefundAnalysis` | 门诊部分项目预退费分析 | Insurance | Domain Service |
 | `Patient` | 患者 | Patient | Entity |
 | `PaymentRate` | 支付费率 | DrgDip | Value Object |
@@ -1539,6 +1551,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Surgery` | 手术记录 | MedicalRecord | Entity |
 | `TaskConfirmRequest` | 任务确认请求 | TaskClosure | DTO |
 | `TokenUsage` | Token 用量 | ModelService | Value Object |
+| `ToolNode` | Tool 节点 | Runtime | Entity |
 | `ToolOwner` | 技能拥有者 | SkillTool | Value Object |
 | `TrajectoryPrefix` | 评测轨迹接力点 | SkillTool | Value Object |
 | `Treatment` | 诊疗项目 | OrderFee | Value Object |
@@ -1549,6 +1562,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `VerificationResult` | 验证结果 | OpsHealth | Value Object |
 | `VisibilityScope` | 可见性范围 | Knowledge | Value Object |
 | `ValidationIssue` | 校验问题 | Knowledge | Value Object |
+| `WorkflowDefinition` | 运行时工作流定义 | Runtime | Aggregate Root |
+| `WorkflowNodeType` | 工作流节点类型 | Runtime | Value Object |
 
 ---
 

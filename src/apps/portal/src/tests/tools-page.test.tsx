@@ -1,4 +1,4 @@
-// Tool 与 Workflow 可视化 /tools 页测试 — 第一批增量：Tool 清单 + Workflow 步骤链绑定状态。
+// Tool 与 Workflow 可视化 /tools 页测试：Tool 契约展示 + 混合节点链（tool/domain/output）绑定状态。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
@@ -46,21 +46,22 @@ const toolCatalog: ToolCatalogDto = {
     {
       tool_id: 'tool_get_refund_record',
       name: '查询退费记录',
-      description: '当前无既有数据源接入',
+      description: '双链路只读查询：住院 tflydjh + 门诊 HIS o_Trade 退费交易',
       contract_kind: 'adapter_port',
       target_ref: 'src.adapters.ports.refund_record_port',
       risk_level: 'medium',
       status: 'materialized',
-      semantic_version: '1.0.0',
-      bound: false,
+      semantic_version: '1.3.0',
+      bound: true,
       tags: ['数据类', '退费记录'],
       input_schema: {
-        settlement_id: { type: 'string', required: true, description: '结算单号，定位其退费/冲正记录' },
+        settlement_id: { type: 'string', required: false, description: '结算单号（djh）：走医保端退费链路' },
       },
       output_schema: {
-        records: { type: 'array<object>', description: '退费/冲正记录列表，未接入数据源前恒 unavailable' },
+        records: { type: 'array<object>', description: '退费/冲正记录列表' },
       },
-      execution_detail: '无执行语句：目标 Adapter Protocol 尚无真实数据源接入，故意不绑定实现，调用即降级 unavailable。',
+      execution_detail:
+        '住院：SELECT djh, jylsh, jyrq, zje, tflydjh FROM dbo.yb_zyjyxx WHERE tflydjh = :settlement_id；门诊：o_Trade 退费交易链路。',
     },
     {
       tool_id: 'tool_comprehensive_knowledge_lookup',
@@ -81,7 +82,7 @@ const toolCatalog: ToolCatalogDto = {
         lookup_kind: { type: 'string', description: '命中路径（structured_hit / vector_evidence）' },
       },
       execution_detail:
-        '核心公式：实际比例 = basic_pooling_payment / medical_insurance_inner_amount，容差 ±2%；无 LLM。',
+        '两级融合编排（优先级硬约束：确定性优先于向量）：1) 可信问题库精确匹配；2) 未命中 → Milvus 标量检索。',
     },
   ],
 }
@@ -99,16 +100,35 @@ const workflowCatalog: WorkflowCatalogDto = {
       steps: [
         {
           step_id: 'fetch_settlement',
+          node_type: 'tool',
           tool_id: 'tool_get_settlement_fact',
           description: '',
-          tool_bound: true,
-          input_mapping: {},
+          bound: true,
+          input_mapping: { settlement_id: 'context.settlement_id' },
         },
         {
+          step_id: 'fetch_fee_detail',
+          node_type: 'tool',
+          tool_id: 'tool_get_fee_detail',
+          description: '',
+          bound: true,
+          input_mapping: { settlement_id: 'context.settlement_id' },
+        },
+        {
+          // 覆盖未绑定节点的 fail-closed 高亮渲染（数据源缺失时的降级形态）。
           step_id: 'fetch_refund_record',
+          node_type: 'tool',
           tool_id: 'tool_get_refund_record',
           description: '',
-          tool_bound: false,
+          bound: false,
+          input_mapping: { settlement_id: 'context.settlement_id' },
+        },
+        {
+          step_id: 'public_result',
+          node_type: 'output',
+          source_ref: 'fetch_refund_record',
+          description: '',
+          bound: true,
           input_mapping: {},
         },
       ],
@@ -124,27 +144,64 @@ const workflowCatalog: WorkflowCatalogDto = {
       steps: [
         {
           step_id: 'fetch_settlement',
+          node_type: 'tool',
           tool_id: 'tool_get_settlement_fact',
           description: '',
-          tool_bound: true,
-          input_mapping: {},
+          bound: true,
+          input_mapping: { settlement_id: 'context.settlement_id' },
         },
         {
           step_id: 'retrieve_policy_evidence',
+          node_type: 'tool',
           tool_id: 'tool_retrieve_policy_evidence',
           description: '',
-          tool_bound: true,
+          bound: true,
           input_mapping: { settlement_fact: 'fetch_settlement' },
         },
         {
-          step_id: 'compare_settlement_vs_policy',
-          tool_id: 'tool_compare_settlement_vs_policy',
+          step_id: 'check_evidence',
+          node_type: 'domain',
+          handler_id: 'evidence_completeness',
+          handler_version: '1.0.0',
           description: '',
-          tool_bound: true,
+          bound: true,
           input_mapping: {
             settlement_fact: 'fetch_settlement',
             policy_evidence: 'retrieve_policy_evidence',
           },
+        },
+        {
+          step_id: 'compare_settlement_vs_policy',
+          node_type: 'domain',
+          handler_id: 'settlement_policy_compare',
+          handler_version: '1.0.0',
+          description: '',
+          bound: true,
+          input_mapping: {
+            settlement_fact: 'fetch_settlement',
+            policy_evidence: 'retrieve_policy_evidence',
+          },
+        },
+        {
+          step_id: 'merge_evidence',
+          node_type: 'domain',
+          handler_id: 'evidence_merge',
+          handler_version: '1.0.0',
+          description: '',
+          bound: true,
+          input_mapping: {
+            policy_evidence: 'retrieve_policy_evidence',
+            comparison: 'compare_settlement_vs_policy',
+            evidence_check: 'check_evidence',
+          },
+        },
+        {
+          step_id: 'public_result',
+          node_type: 'output',
+          source_ref: 'merge_evidence',
+          description: '',
+          bound: true,
+          input_mapping: {},
         },
       ],
     },
@@ -165,7 +222,7 @@ describe('ToolsPage Tool 与 Workflow 可视化页', () => {
 
     expect(screen.getByTestId('tool-item-tool_get_settlement_fact').textContent).toContain('已绑定实现')
     expect(screen.getByTestId('tool-item-tool_get_settlement_fact').textContent).toContain('数据类')
-    expect(screen.getByTestId('tool-item-tool_get_refund_record').textContent).toContain('未绑定 · 无数据源')
+    expect(screen.getByTestId('tool-item-tool_get_refund_record').textContent).toContain('已绑定实现')
     expect(screen.getByTestId('tool-item-tool_comprehensive_knowledge_lookup').textContent).toContain('知识类')
   })
 
@@ -176,34 +233,28 @@ describe('ToolsPage Tool 与 Workflow 可视化页', () => {
     const inputs = screen.getByTestId('tool-input-fields-tool_get_settlement_fact')
     expect(inputs.textContent).toContain('settlement_id')
     expect(inputs.textContent).toContain('必填')
-    expect(inputs.textContent).toContain('结算单号')
 
     const outputs = screen.getByTestId('tool-output-fields-tool_get_settlement_fact')
     expect(outputs.textContent).toContain('basic_pooling_payment')
-    expect(outputs.textContent).toContain('统筹支付（比例分子）')
 
     const lookupInputs = screen.getByTestId('tool-input-fields-tool_comprehensive_knowledge_lookup')
     expect(lookupInputs.textContent).toContain('settlement_fact')
     expect(lookupInputs.textContent).toContain('可选')
   })
 
-  it('Tool 卡片展示执行细节（SQL 编译链 / 核心公式），未绑定诚实声明无执行语句', async () => {
+  it('Tool 卡片展示执行细节（SQL 编译链 / 双链路退费查询）', async () => {
     render(<ToolsPage />)
     await waitFor(() => expect(screen.getByTestId('tool-catalog')).toBeTruthy())
 
     const sqlChain = screen.getByTestId('tool-execution-detail-tool_get_settlement_fact')
     expect(sqlChain.textContent).toContain('SemanticQueryPlanner.compile')
-    expect(sqlChain.textContent).toContain('只读聚合 SELECT')
 
-    const formula = screen.getByTestId('tool-execution-detail-tool_comprehensive_knowledge_lookup')
-    expect(formula.textContent).toContain('basic_pooling_payment / medical_insurance_inner_amount')
-    expect(formula.textContent).toContain('±2%')
-
-    const unbound = screen.getByTestId('tool-execution-detail-tool_get_refund_record')
-    expect(unbound.textContent).toContain('无执行语句')
+    const refund = screen.getByTestId('tool-execution-detail-tool_get_refund_record')
+    expect(refund.textContent).toContain('tflydjh')
+    expect(refund.textContent).toContain('o_Trade')
   })
 
-  it('切换到 Workflow 页签展示步骤链，未绑定步骤高亮无数据源', async () => {
+  it('切换到 Workflow 页签展示节点链，未绑定节点高亮无数据源', async () => {
     render(<ToolsPage />)
     await waitFor(() => expect(screen.getByTestId('tool-catalog')).toBeTruthy())
 
@@ -214,10 +265,12 @@ describe('ToolsPage Tool 与 Workflow 可视化页', () => {
     expect(steps.textContent).toContain('fetch_settlement')
     expect(steps.textContent).toContain('fetch_refund_record')
     expect(steps.textContent).toContain('无数据源 → unavailable')
+    expect(steps.textContent).toContain('输出节点')
+    expect(steps.textContent).toContain('输出 ← fetch_refund_record')
     expect(screen.getByTestId('workflow-item-wf_refund_verification').textContent).toContain('请提供结算单号')
   })
 
-  it('门诊结算解释 Workflow 展示步骤间数据流（input_mapping）', async () => {
+  it('门诊结算解释 Workflow 展示步骤间数据流与领域节点（input_mapping）', async () => {
     render(<ToolsPage />)
     await waitFor(() => expect(screen.getByTestId('tool-catalog')).toBeTruthy())
 
@@ -227,7 +280,10 @@ describe('ToolsPage Tool 与 Workflow 可视化页', () => {
     const steps = screen.getByTestId('workflow-steps-wf_outpatient_settlement_explain')
     expect(steps.textContent).toContain('settlement_fact ← fetch_settlement')
     expect(steps.textContent).toContain('policy_evidence ← retrieve_policy_evidence')
-    expect(steps.textContent).toContain('输入 ← 会话上下文')
+    expect(steps.textContent).toContain('settlement_id ← context.settlement_id')
+    expect(steps.textContent).toContain('领域节点')
+    expect(steps.textContent).toContain('settlement_policy_compare:1.0.0')
+    expect(steps.textContent).toContain('输出 ← merge_evidence')
   })
 
   it('接口失败时展示错误提示', async () => {

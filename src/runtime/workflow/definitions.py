@@ -1,13 +1,19 @@
-"""静态 Workflow 定义登记表（#68 四个真实问题中可落地的场景 + 三态入口）。"""
+"""静态 Workflow 定义登记表（#68 四个真实问题中可落地的场景 + 三态入口）。
 
-from src.domain.workflow.models import MissingEvidenceRule, WorkflowDefinition, WorkflowStep
+节点模型（#72）：外部 I/O 走 ToolNode，编排内部确定性计算走代码侧白名单
+DomainNode，最终公开结果由 OutputNode 显式声明来源。
+"""
+
+from src.domain.workflow.models import (
+    DomainNode,
+    MissingEvidenceRule,
+    OutputNode,
+    WorkflowDefinition,
+    WorkflowStep,
+)
 from src.runtime.tool_registry.builtin_tools import (
     TOOL_GET_REFUND_RECORD,
     TOOL_GET_SETTLEMENT_FACT,
-)
-from src.runtime.tool_registry.calc_tools import (
-    TOOL_COMPARE_SAME_DRUG_ACROSS_SETTLEMENTS,
-    TOOL_COMPARE_SETTLEMENT_VS_POLICY,
 )
 from src.runtime.tool_registry.data_tools import (
     TOOL_GET_BENEFIT_STACKING,
@@ -16,6 +22,13 @@ from src.runtime.tool_registry.data_tools import (
     TOOL_QUERY_SEMANTIC_METRICS,
 )
 from src.runtime.tool_registry.knowledge_tools import TOOL_COMPREHENSIVE_KNOWLEDGE_LOOKUP
+from src.runtime.workflow.domain_nodes import (
+    DOMAIN_HANDLER_VERSION,
+    EVIDENCE_COMPLETENESS,
+    EVIDENCE_MERGE,
+    SAME_DRUG_COMPARE,
+    SETTLEMENT_POLICY_COMPARE,
+)
 
 WF_REFUND_VERIFICATION = WorkflowDefinition(
     workflow_id="wf_refund_verification",
@@ -33,16 +46,24 @@ WF_REFUND_VERIFICATION = WorkflowDefinition(
             step_id="fetch_settlement",
             tool_id=TOOL_GET_SETTLEMENT_FACT,
             description="查询结算单基础事实",
+            input_mapping={"settlement_id": "context.settlement_id"},
         ),
         WorkflowStep(
             step_id="fetch_fee_detail",
             tool_id=TOOL_GET_FEE_DETAIL,
             description="查询逐项目费用明细（含国标码/先行自付），供退费项定位",
+            input_mapping={"settlement_id": "context.settlement_id"},
         ),
         WorkflowStep(
             step_id="fetch_refund_record",
             tool_id=TOOL_GET_REFUND_RECORD,
             description="查询退费/冲正记录（医保端 tflydjh + HIS 端退费链路）",
+            input_mapping={"settlement_id": "context.settlement_id"},
+        ),
+        OutputNode(
+            step_id="public_result",
+            source_ref="fetch_refund_record",
+            description="公开结果取末端退费核对结论",
         ),
     ],
 )
@@ -51,8 +72,9 @@ WF_SETTLEMENT_REIMBURSEMENT_DIFF = WorkflowDefinition(
     workflow_id="wf_settlement_reimbursement_diff",
     name="同药跨单报销差异核验",
     description=(
-        "同一患者多张结算单的同一药品/项目费用事实对比：按国标码对齐后逐项对比"
-        "单价/数量/医保内占比/先行自付，差异归因边界如实声明（Issue #68 场景：同药三次报销比例不同）"
+        "同一患者多张结算单的同一药品/项目费用事实对比：批量取费用明细（Tool）后"
+        "按国标码对齐逐项对比（领域节点），差异归因边界如实声明"
+        "（Issue #68 场景：同药三次报销比例不同）"
     ),
     intent_keywords=[
         "报销比例不同",
@@ -72,10 +94,22 @@ WF_SETTLEMENT_REIMBURSEMENT_DIFF = WorkflowDefinition(
     ],
     steps=[
         WorkflowStep(
-            step_id="compare_same_drug",
-            tool_id=TOOL_COMPARE_SAME_DRUG_ACROSS_SETTLEMENTS,
-            description="逐单取费用明细后按国标码对齐对比（工具内部循环，输出确定性差异清单）",
+            step_id="fetch_fee_details",
+            tool_id=TOOL_GET_FEE_DETAIL,
+            description="批量取多笔结算单费用明细（Tool：外部只读取数）",
             input_mapping={"settlement_ids": "context.settlement_ids"},
+        ),
+        DomainNode(
+            step_id="same_drug_compare",
+            handler_id=SAME_DRUG_COMPARE,
+            handler_version=DOMAIN_HANDLER_VERSION,
+            description="按国标码对齐后确定性对比单价/数量/医保内占比/先行自付（领域节点）",
+            input_mapping={"fee_details": "fetch_fee_details.details"},
+        ),
+        OutputNode(
+            step_id="public_result",
+            source_ref="same_drug_compare",
+            description="公开结果取同药对比结论",
         ),
     ],
 )
@@ -91,7 +125,6 @@ WF_BENEFIT_STACKING_ATTRIBUTION = WorkflowDefinition(
         "特病",
         "低保",
         "二次报销",
-        "救助",
         "待遇叠加",
         "血友病",
     ],
@@ -106,11 +139,18 @@ WF_BENEFIT_STACKING_ATTRIBUTION = WorkflowDefinition(
             step_id="fetch_settlement",
             tool_id=TOOL_GET_SETTLEMENT_FACT,
             description="查询结算单基础事实",
+            input_mapping={"settlement_id": "context.settlement_id"},
         ),
         WorkflowStep(
             step_id="fetch_benefit_stacking",
             tool_id=TOOL_GET_BENEFIT_STACKING,
             description="查询特病登记与逐笔分摊事实（低保维度缺失时声明 uncertainties）",
+            input_mapping={"settlement_id": "context.settlement_id"},
+        ),
+        OutputNode(
+            step_id="public_result",
+            source_ref="fetch_benefit_stacking",
+            description="公开结果取待遇叠加分摊结论",
         ),
     ],
 )
@@ -143,6 +183,7 @@ WF_OUTPATIENT_SETTLEMENT_EXPLAIN = WorkflowDefinition(
             step_id="fetch_settlement",
             tool_id=TOOL_GET_SETTLEMENT_FACT,
             description="查询结算单事实（数据类：语义层结算 provider）",
+            input_mapping={"settlement_id": "context.settlement_id"},
         ),
         WorkflowStep(
             step_id="retrieve_policy_evidence",
@@ -150,14 +191,41 @@ WF_OUTPATIENT_SETTLEMENT_EXPLAIN = WorkflowDefinition(
             description="按结算适用性维度检索政策证据（知识类：向量）",
             input_mapping={"settlement_fact": "fetch_settlement"},
         ),
-        WorkflowStep(
-            step_id="compare_settlement_vs_policy",
-            tool_id=TOOL_COMPARE_SETTLEMENT_VS_POLICY,
-            description="对比实际报销比例与政策分段比例（对比计算类）",
+        DomainNode(
+            step_id="check_evidence",
+            handler_id=EVIDENCE_COMPLETENESS,
+            handler_version=DOMAIN_HANDLER_VERSION,
+            description="校验结算事实与政策证据是否完整（确定性领域节点）",
             input_mapping={
                 "settlement_fact": "fetch_settlement",
                 "policy_evidence": "retrieve_policy_evidence",
             },
+        ),
+        DomainNode(
+            step_id="compare_settlement_vs_policy",
+            handler_id=SETTLEMENT_POLICY_COMPARE,
+            handler_version=DOMAIN_HANDLER_VERSION,
+            description="对比实际报销比例与政策分段比例（确定性领域节点）",
+            input_mapping={
+                "settlement_fact": "fetch_settlement",
+                "policy_evidence": "retrieve_policy_evidence",
+            },
+        ),
+        DomainNode(
+            step_id="merge_evidence",
+            handler_id=EVIDENCE_MERGE,
+            handler_version=DOMAIN_HANDLER_VERSION,
+            description="归并政策引用、对比结果与证据缺口",
+            input_mapping={
+                "policy_evidence": "retrieve_policy_evidence",
+                "comparison": "compare_settlement_vs_policy",
+                "evidence_check": "check_evidence",
+            },
+        ),
+        OutputNode(
+            step_id="public_result",
+            source_ref="merge_evidence",
+            description="声明经过校验和归并的公开结果来源",
         ),
     ],
 )
@@ -230,4 +298,14 @@ ALL_WORKFLOWS: list[WorkflowDefinition] = [
     WF_OUTPATIENT_SETTLEMENT_EXPLAIN,
     WF_POLICY_CHAT,
     WF_DATA_QUERY,
+]
+
+# 关键词 fallback 仅承载没有显式 mode 的窄场景；政策问答继续走既有 Skill 管线，
+# 运营问数只接受前端显式 DATA_QUERY mode，避免“报销比例”等重叠词误路由。
+# 同药跨单/待遇叠加的关键词高度特异（同药/三次结算/特病/低保等），参与 fallback。
+KEYWORD_ROUTED_WORKFLOWS: list[WorkflowDefinition] = [
+    WF_REFUND_VERIFICATION,
+    WF_SETTLEMENT_REIMBURSEMENT_DIFF,
+    WF_BENEFIT_STACKING_ATTRIBUTION,
+    WF_OUTPATIENT_SETTLEMENT_EXPLAIN,
 ]

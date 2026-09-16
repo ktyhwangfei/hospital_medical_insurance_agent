@@ -1,4 +1,4 @@
-"""Tool Registry 全量登记测试：数据/知识/对比计算三类工具的注册与绑定。"""
+"""Tool Registry 全量登记测试：仅登记可独立调用的数据/知识能力。"""
 
 import os
 
@@ -13,15 +13,19 @@ def test_registry_registers_all_category_tools_bound() -> None:
 
     expected_bound = {
         "tool_get_settlement_fact",
+        "tool_get_fee_detail",
+        "tool_get_benefit_stacking",
         "tool_query_semantic_metrics",
         "tool_retrieve_policy_evidence",
         "tool_match_trusted_question",
         "tool_comprehensive_knowledge_lookup",
-        "tool_compare_settlement_vs_policy",
     }
     assert expected_bound <= tool_ids
     for tool_id in expected_bound:
         assert registry.is_bound(tool_id), f"{tool_id} 应绑定实现"
+    # 对比计算已下沉为代码侧白名单领域节点，不再作为 Tool 登记。
+    assert "tool_compare_settlement_vs_policy" not in tool_ids
+    assert "tool_compare_same_drug_across_settlements" not in tool_ids
 
 
 def test_registry_tags_carry_category_taxonomy() -> None:
@@ -31,13 +35,13 @@ def test_registry_tags_carry_category_taxonomy() -> None:
         tool_id: (registry.get_tool(tool_id).definition.tags[0] if tool_id in registry.list_registered_tool_ids() else None)
         for tool_id in (
             "tool_get_settlement_fact",
+            "tool_get_fee_detail",
             "tool_query_semantic_metrics",
             "tool_retrieve_policy_evidence",
             "tool_comprehensive_knowledge_lookup",
-            "tool_compare_settlement_vs_policy",
         )
     }
-    assert set(categories.values()) == {"数据类", "知识类", "对比计算类"}
+    assert set(categories.values()) == {"数据类", "知识类"}
 
 
 def test_registry_binds_refund_record_with_real_source() -> None:
