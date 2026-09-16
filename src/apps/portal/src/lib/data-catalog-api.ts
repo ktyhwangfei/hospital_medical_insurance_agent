@@ -3,7 +3,7 @@ import { requestJson } from './api-client'
 // ── 数据目录 API（Issue #38）──
 // 对应后端 src/runtime/api/data_catalog_routes.py（裸 Pydantic 响应，非 AgentResponse 包装）
 
-export type CatalogAssetType = 'source_table' | 'semantic_object' | 'metric' | 'consumer' | 'vector_collection'
+export type CatalogAssetType = 'source_table' | 'semantic_object' | 'metric' | 'consumer' | 'vector_collection' | 'data_model'
 
 export interface CatalogAsset {
   asset_id: string

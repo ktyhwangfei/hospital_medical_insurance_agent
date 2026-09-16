@@ -75,7 +75,13 @@ def derive_edges(assets: list[CatalogAsset]) -> list[CatalogLineageEdge]:
 
     edges: list[CatalogLineageEdge] = []
     for asset in assets:
-        if asset.asset_type == CatalogAssetType.METRIC:
+        if asset.asset_type == CatalogAssetType.DATA_MODEL:
+            # 落地表 → 数据模型（feeds）：选表同步产物标准化进结构契约
+            for landing_table in asset.source_ref.get("landing_tables", []):
+                table = by_key.get(f"source_table:{landing_table}")
+                if table:
+                    edges.append(_edge(table.asset_id, asset.asset_id, "feeds"))
+        elif asset.asset_type == CatalogAssetType.METRIC:
             # 指标 → 语义对象
             if asset.semantic_object_code:
                 obj = by_key.get(f"semantic_object:{asset.semantic_object_code}")

@@ -1269,6 +1269,63 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.13. 数据模型（Data Model）
+
+> 依据：架构设计 V3.0（docs/steering/数据资产-语义模型-数据治理体系架构设计-V3.0.md）§4。定位：可信数据的**结构契约**——粒度 + 字段 + 角色 + 多源标准化映射，是 ODS 与语义层之间的独立一层；语义指标经 model_field_ref 绑定模型字段，治理 Flow 以模型为物化输出契约。
+
+#### 文件位置
+
+`src/domain/data_model/models.py`（领域模型）+ `src/runtime/data_governance/modeling/service.py`（领域服务）+ 存储 `src/data_platform/storage/data_model/`（ports / in_memory / postgres / factory）+ API `src/runtime/api/data_model_routes.py`（挂载 `/data-governance/models`）+ portal `src/apps/portal/app/data-governance/(manage)/modeling/page.tsx`
+
+#### 通用语言字典
+
+| 英文命名 | 中文术语 | DDD 分类 | 说明 |
+|---------|---------|---------|------|
+| `DataModel` | 数据模型 | **Aggregate Root** | 结构契约：粒度 + 字段清单 + 业务实体 + 分层；文档整体编辑（与 Flow nodes 同模式），乐观锁 revision |
+| `DataModelField` | 模型字段 | Value Object | field_code/name/data_type/field_role/value_domain；fact 可带 expression+dependencies 派生 |
+| `DataModelMapping` | 多源映射 | **Entity** | 一个模型字段 ← 某数据源物理列；transform_rule 空=直通；按 (model, field, source) 行级确认 |
+| `DataModelLayer` | 数仓分层 | Value Object | ods / dwd / dws / ads 白名单 |
+| `DataModelStatus` | 模型状态 | Value Object | draft → published → deprecated（终态）；published 结构冻结只可退役 |
+| `ModelFieldRole` | 字段角色 | Value Object | identifier / dimension / fact / datetime（与语义层 field_role 口径一致） |
+| `MappingStatus` | 映射状态 | Value Object | draft（候选）→ confirmed（人工确认生效）；confirmed 不可删 |
+| `DataModelingService` | 数据建模服务 | Domain Service | 生命周期流转 + 发布门槛校验 + 映射确认流 |
+| `DataModelStorage` | 数据模型存储端口 | Port | 模型 CRUD（乐观锁）+ 映射 upsert/确认/删除 |
+
+#### 业务规则
+
+1. **粒度合法**：grain 必须是 identifier 角色字段；字段编码模型内唯一；派生 dependencies 必须引用模型内已声明字段；expression 仅允许 fact 角色。
+2. **发布门槛**：字段非空 + 至少一个 identifier；纯维度/登记类模型（诊断、病人登记）无 fact 属合法形态。发布后结构冻结（不可编辑/删除），只能 deprecate。
+3. **多源标准化**：一个模型字段可挂 N 个数据源的物理列映射；只有 confirmed 映射参与物化（Slice 2）；编辑已确认映射保持 confirmed 状态（改列不降级）。
+4. **指标绑定**：语义指标经 `model_field_ref`（model_code.field_code）绑定模型字段，与存量 source_field 直绑并存过渡；双路径数值一致性由 Slice 3 一致性测试强制。
+
+---
+
+### 14.14. 选表同步（Selected Table Sync）
+
+> 依据：架构设计 V3.0 数据接入阶段（2026-09-16 落地）。定位：与门诊定制契约管道并行的**通用通道**——探查画像后人工选表，源表全列直通落地 PG 同名表，供数据建模/加工消费；CDC 全表对接为占位模式（待 DBA）。
+
+#### 文件位置
+
+`src/data_platform/table_sync.py`（领域模型 + 类型映射）+ `src/data_platform/table_sync_executor.py`（执行器）+ 存储 `src/data_platform/storage/table_sync/store.py`（配置表 `data_source_sync_tables` + 通用落地表 DDL/覆盖写入）+ worker 集成 `src/runtime/data_governance/worker.py`（主契约同步成功后顺带执行）+ API 挂载 `src/runtime/api/data_governance_routes.py`（`/data-sources/{id}/sync-tables`）
+
+#### 通用语言字典
+
+| 英文命名 | 中文术语 | DDD 分类 | 说明 |
+|---------|---------|---------|------|
+| `SelectedSyncTable` | 选中同步表 | **Entity** | 源表 → 落地表配置（key_columns/time_column/status + 最近同步状态）；落地表名=源表名小写 |
+| `TableSyncRunResult` | 表同步结果 | Value Object | 行数 + 耗时 |
+| `TableSyncStore` | 选表同步存储端口 | Port | 配置 CRUD + 落地表 DDL 对齐（补列不改列型）+ 全量覆盖写入 |
+| `TableSyncExecutor` | 表同步执行器 | Domain Service | 探查列 → DDL 对齐 → 单事务 DELETE+INSERT 覆盖；逐表独立成败 |
+
+#### 业务规则
+
+1. **全量覆盖**：快照替换（单事务 DELETE+INSERT），幂等；增量/实时由 CDC 通道承接。
+2. **只读源库**：不在源库执行任何 DDL；落地表仅供治理链路消费，不回写。
+3. **类型映射宁宽勿窄**：int/money→数值、datetime→时间戳、其余→TEXT；列名保留大小写（双引号）。
+4. **失败隔离**：单表失败记 `last_error` 不阻断他表；主契约任务失败不影响选表通道。
+
+---
+
 
 ### 15. AI 编程工作流契约
 

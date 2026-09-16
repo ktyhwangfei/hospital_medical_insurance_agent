@@ -96,6 +96,7 @@ def build_catalog_columns(
     *,
     versions_by_object: dict[str, "BusinessObjectVersion"],
     collections: list[dict[str, Any]] | None = None,
+    data_models: list[Any] | None = None,
 ) -> list[CatalogColumn]:
     """纯函数：发布版本字段 + Milvus 集合 schema → 列快照（可独立单测）。
 
@@ -145,6 +146,25 @@ def build_catalog_columns(
                     ordinal=idx,
                 )
             )
+    # 数据模型列：模型字段即结构标准（field_code/角色/类型）
+    for model in data_models or []:
+        if model.status != "published":
+            continue
+        asset_id = _asset_id(f"data_model:{model.model_code}")
+        for idx, field in enumerate(model.fields):
+            columns.append(
+                CatalogColumn(
+                    column_id=_column_id(asset_id, field.field_code),
+                    asset_id=asset_id,
+                    column_name=field.field_code,
+                    name=field.name,
+                    data_type=field.data_type,
+                    field_role=field.field_role,
+                    nullable=True,
+                    value_domain=field.value_domain,
+                    ordinal=idx,
+                )
+            )
     return columns
 
 
@@ -158,6 +178,9 @@ def build_catalog_assets(
     skills: list[dict[str, Any]] | None = None,
     value_domains: dict[str, list[str]] | None = None,
     collections: list[dict[str, Any]] | None = None,
+    data_models: list[Any] | None = None,
+    model_mappings: dict[str, list[Any]] | None = None,
+    sync_tables: list[Any] | None = None,
 ) -> list[CatalogAsset]:
     """纯函数：扫描结果 → 资产快照列表（可独立单测）。
 
@@ -345,6 +368,72 @@ def build_catalog_assets(
             )
         )
 
+    # ── 选表同步落地表（探查后选表通道产物）──
+    for table in sync_tables or []:
+        key = f"source_table:{table.target_table}"
+        sample_summary = {
+            k: v
+            for k, v in {
+                "row_count": table.last_row_count,
+                "last_synced_at": table.last_synced_at,
+            }.items()
+            if v is not None
+        }
+        assets.append(
+            CatalogAsset(
+                asset_id=_asset_id(key),
+                asset_type=CatalogAssetType.SOURCE_TABLE,
+                asset_key=key,
+                name=table.table_name,
+                description=f"public.{table.target_table}（选表直通落地）",
+                owner="data_governance",
+                refresh_freq="全量覆盖同步",
+                tags=["选表同步"],
+                sample_summary=sample_summary,
+                source_ref={
+                    "dataset_code": table.target_table,
+                    "schema_name": "public",
+                    "table_name": table.target_table,
+                    "source_table": table.table_name,
+                    "selected_table_sync": True,
+                },
+            )
+        )
+
+    # ── 数据模型（V3.0 结构契约层，published 才入册）──
+    model_mappings = model_mappings or {}
+    for model in data_models or []:
+        if model.status != "published":
+            continue
+        key = f"data_model:{model.model_code}"
+        mappings = model_mappings.get(model.model_code, [])
+        confirmed = [m for m in mappings if m.status == "confirmed"]
+        assets.append(
+            CatalogAsset(
+                asset_id=_asset_id(key),
+                asset_type=CatalogAssetType.DATA_MODEL,
+                asset_key=key,
+                name=model.name,
+                description=model.description or f"{model.layer.upper()} 模型，粒度 {model.grain}",
+                owner=model.owner,
+                refresh_freq="随数据同步批次",
+                tags=[model.layer, "数据模型"],
+                sample_summary={
+                    "field_count": len(model.fields),
+                    "confirmed_mappings": len(confirmed),
+                    "model_version": model.version,
+                },
+                source_ref={
+                    "model_code": model.model_code,
+                    "layer": model.layer,
+                    "grain": model.grain,
+                    "entity_code": model.entity_code,
+                    # 血缘推导用：模型消费的落地表清单（已确认映射的物理表）
+                    "landing_tables": sorted({m.physical_table for m in confirmed}),
+                },
+            )
+        )
+
     return assets
 
 
@@ -455,6 +544,27 @@ def refresh_data_catalog(storage: DataCatalogStorage | None = None) -> dict[str,
     except Exception:
         logger.warning("skill 注册表不可用，跳过消费方扫描", exc_info=True)
 
+    # 选表同步清单与已发布数据模型（V3.0 数据建模层资产）
+    sync_tables: list[Any] = []
+    data_models: list[Any] = []
+    model_mappings: dict[str, list[Any]] = {}
+    try:
+        from src.data_platform.storage.data_model.data_model_factory import (
+            get_data_model_storage,
+        )
+        from src.data_platform.storage.table_sync.store import TableSyncStore
+
+        sync_tables = [
+            t for t in TableSyncStore().list_tables("bjybdb") if t.last_synced_at
+        ]
+        model_storage = get_data_model_storage()
+        data_models = model_storage.list_models()
+        model_mappings = {
+            m.model_code: model_storage.list_mappings(m.model_code) for m in data_models
+        }
+    except Exception:
+        logger.warning("数据模型/选表同步扫描不可用，跳过", exc_info=True)
+
     collections: list[dict[str, Any]] = []
     try:
         collections = _scan_milvus_collections()
@@ -470,14 +580,18 @@ def refresh_data_catalog(storage: DataCatalogStorage | None = None) -> dict[str,
         skills=skills,
         value_domains=value_domains,
         collections=collections,
+        data_models=data_models,
+        model_mappings=model_mappings,
+        sync_tables=sync_tables,
     )
     for asset in assets:
         storage.upsert_asset(asset)
     pruned = storage.delete_assets_except([a.asset_key for a in assets])
 
-    # 列快照整体重建（source_table 来自发布版本字段，vector_collection 来自集合 schema）
+    # 列快照整体重建（source_table 来自发布版本字段，vector_collection 来自集合 schema，
+    # data_model 列来自已发布模型字段）
     columns = build_catalog_columns(
-        versions_by_object=versions_by_object, collections=collections
+        versions_by_object=versions_by_object, collections=collections, data_models=data_models
     )
     # 裁剪掉已 prune 资产的列（列按资产快照全量重建，asset_id 必须在册）
     live_ids = {a.asset_id for a in assets}
