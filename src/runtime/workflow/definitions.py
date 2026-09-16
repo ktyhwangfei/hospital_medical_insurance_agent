@@ -8,6 +8,7 @@ from src.runtime.tool_registry.builtin_tools import (
 from src.runtime.tool_registry.calc_tools import TOOL_COMPARE_SETTLEMENT_VS_POLICY
 from src.runtime.tool_registry.data_tools import (
     TOOL_PARSE_DATA_QUERY_INTENT,
+    TOOL_QUERY_FLOW_METRICS,
     TOOL_QUERY_SEMANTIC_METRICS,
 )
 from src.runtime.tool_registry.knowledge_tools import TOOL_COMPREHENSIVE_KNOWLEDGE_LOOKUP
@@ -28,11 +29,13 @@ WF_REFUND_VERIFICATION = WorkflowDefinition(
             step_id="fetch_settlement",
             tool_id=TOOL_GET_SETTLEMENT_FACT,
             description="查询结算单基础事实",
+            input_mapping={"settlement_id": "context.settlement_id"},
         ),
         WorkflowStep(
             step_id="fetch_refund_record",
             tool_id=TOOL_GET_REFUND_RECORD,
             description="查询退费/冲正记录",
+            input_mapping={"settlement_id": "context.settlement_id"},
         ),
     ],
 )
@@ -65,6 +68,7 @@ WF_OUTPATIENT_SETTLEMENT_EXPLAIN = WorkflowDefinition(
             step_id="fetch_settlement",
             tool_id=TOOL_GET_SETTLEMENT_FACT,
             description="查询结算单事实（数据类：语义层结算 provider）",
+            input_mapping={"settlement_id": "context.settlement_id"},
         ),
         WorkflowStep(
             step_id="retrieve_policy_evidence",
@@ -110,7 +114,7 @@ WF_POLICY_CHAT = WorkflowDefinition(
 WF_DATA_QUERY = WorkflowDefinition(
     workflow_id="wf_data_query",
     name="运营指标问数",
-    description="自然语言解析为语义指标查询参数，走语义层固定 SQL 执行；指标不在目录内则澄清",
+    description="自然语言解析为 Flow 消费契约指标码，经受控视图与勾稽门禁执行；指标不在目录内则澄清",
     intent_keywords=[
         "门诊人次",
         "费用趋势",
@@ -126,20 +130,18 @@ WF_DATA_QUERY = WorkflowDefinition(
         WorkflowStep(
             step_id="parse_intent",
             tool_id=TOOL_PARSE_DATA_QUERY_INTENT,
-            description="NL → 已发布语义指标参数",
+            description="NL → 已发布消费契约指标码",
             input_mapping={"question": "context.question"},
         ),
         WorkflowStep(
-            step_id="query_semantic_metrics",
-            tool_id=TOOL_QUERY_SEMANTIC_METRICS,
-            description="语义层受控查询",
+            step_id="query_flow_metrics",
+            tool_id=TOOL_QUERY_FLOW_METRICS,
+            description="Flow 消费契约受控查询（勾稽门禁）",
             input_mapping={
-                "object_code": "parse_intent.object_code",
-                "entity_code": "parse_intent.entity_code",
-                "anchor_field": "parse_intent.anchor_field",
-                "anchor_value": "parse_intent.anchor_value",
-                "metrics": "parse_intent.metrics",
-                "query_scope": "parse_intent.query_scope",
+                "metric_codes": "parse_intent.metric_codes",
+                "dimensions": "parse_intent.dimensions",
+                "clarification_needed": "parse_intent.clarification_needed",
+                "clarification_message": "parse_intent.clarification_message",
             },
         ),
     ],

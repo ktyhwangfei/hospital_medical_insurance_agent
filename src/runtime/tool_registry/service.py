@@ -21,10 +21,13 @@ ToolCallable = Callable[..., Any] | Callable[..., Awaitable[Any]]
 
 
 class ToolRegistryService:
-    """Tool 注册与调用服务，单例由 factory 函数持有。"""
+    """Tool 注册与调用服务，单例由 factory 函数持有。
 
-    def __init__(self) -> None:
-        self._storage = get_tool_version_storage()
+    storage 可注入（测试隔离 seam）；缺省走进程级存储工厂单例。
+    """
+
+    def __init__(self, storage=None) -> None:
+        self._storage = storage or get_tool_version_storage()
         self._bindings: dict[str, ToolCallable] = {}
         self._registered_tool_ids: list[str] = []
 

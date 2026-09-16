@@ -205,3 +205,27 @@ async def test_execute_supports_context_field_reference() -> None:
 
     assert result.status == WorkflowExecutionStatus.COMPLETE
     assert result.step_results[0].output["echo"] == "S009"
+
+
+@pytest.mark.asyncio
+async def test_execute_domain_error_inside_tool_degrades_step_not_crash() -> None:
+    """缺陷回归（2026-09-15 SSE 静默断流）：Tool 内部抛领域异常（如
+    SemanticQueryPlanningError）曾被穿透，导致 SSE 生成器崩溃、前端静默断流。
+    正确语义：fail-closed——该步骤降级 unavailable + uncertainty，绝不穿透。"""
+    registry = ToolRegistryService()
+
+    def _boom(**_kwargs):
+        raise ValueError("锚点字段未在已发布模型登记为 identifier")
+
+    registry.register(_tool_version("tool_boom"), implementation=_boom)
+    executor = WorkflowExecutor(registry)
+
+    definition = _definition(
+        missing_evidence_rules=[],
+        steps=[WorkflowStep(step_id="s1", tool_id="tool_boom")],
+    )
+    result = await executor.execute(definition, context={"settlement_id": "S001"})
+
+    assert result.status == WorkflowExecutionStatus.UNAVAILABLE
+    assert result.step_results[0].status.value == "unavailable"
+    assert any("锚点字段" in message for message in result.uncertainties)

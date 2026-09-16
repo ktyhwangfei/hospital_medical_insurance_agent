@@ -123,6 +123,19 @@ class WorkflowExecutor:
                         uncertainty=message,
                     )
                 )
+            except Exception as exc:
+                # fail-closed 兜底：工具内部领域异常（如语义规划失败）不得穿透
+                # 崩掉 SSE 流；该步骤降级 unavailable 并如实记录不确定性
+                message = f"步骤 {step.step_id}（{step.tool_id}）执行失败：{exc}"
+                uncertainties.append(message)
+                step_results.append(
+                    WorkflowStepResult(
+                        step_id=step.step_id,
+                        tool_id=step.tool_id,
+                        status=WorkflowStepStatus.UNAVAILABLE,
+                        uncertainty=message,
+                    )
+                )
 
         overall_status = (
             WorkflowExecutionStatus.UNAVAILABLE
