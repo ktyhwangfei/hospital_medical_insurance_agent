@@ -27,6 +27,12 @@ class DataModelingService:
     # ── 模型 CRUD ──────────────────────────────────────────────────
 
     def create_model(self, model: DataModel) -> DataModel:
+        # 同 code 重建仅限 deprecated（退出消费后允许重开）；draft/published 占用即拒
+        existing = self._storage.get_model(model.model_code)
+        if existing is not None and existing.status is not DataModelStatus.DEPRECATED:
+            from src.domain.data_model.models import DataModelConflictError
+
+            raise DataModelConflictError(f"数据模型 {model.model_code} 已存在")
         draft = model.model_copy(deep=True, update={
             "status": DataModelStatus.DRAFT,
             "version": 1,
@@ -35,6 +41,9 @@ class DataModelingService:
         draft.content_hash = compute_model_content_hash(draft)
         draft.created_at = utc_now_iso()
         draft.updated_at = draft.created_at
+        if existing is not None and existing.status is DataModelStatus.DEPRECATED:
+            # 重建：删除旧 deprecated 文档（映射外键级联清掉），再建新草稿
+            self._storage.delete_model(model.model_code, existing.revision)
         return self._storage.create_model(draft)
 
     def get_model(self, model_code: str) -> DataModel:
@@ -77,11 +86,27 @@ class DataModelingService:
 
     # ── 生命周期 ────────────────────────────────────────────────────
 
-    def publish_model(self, model_code: str) -> DataModel:
+    def submit_review(self, model_code: str) -> DataModel:
+        """draft → pending_review：发布前必经评审（治理动作有治理）。"""
         current = self.get_model(model_code)
         if current.status is not DataModelStatus.DRAFT:
             raise DataModelStateInvalidError(
-                f"publish 仅允许 draft，当前 {current.status.value}"
+                f"submit-review 仅允许 draft，当前 {current.status.value}"
+            )
+        validate_for_publish(current)
+        submitted = current.model_copy(deep=True, update={
+            "status": DataModelStatus.PENDING_REVIEW,
+            "revision": current.revision + 1,
+            "updated_at": utc_now_iso(),
+        })
+        submitted.content_hash = compute_model_content_hash(submitted)
+        return self._storage.update_model(submitted, current.revision)
+
+    def publish_model(self, model_code: str) -> DataModel:
+        current = self.get_model(model_code)
+        if current.status is not DataModelStatus.PENDING_REVIEW:
+            raise DataModelStateInvalidError(
+                f"publish 仅允许 pending_review，当前 {current.status.value}（请先提交评审）"
             )
         validate_for_publish(current)
         published = current.model_copy(deep=True, update={

@@ -1303,7 +1303,7 @@ HIS 系统 → HisPort → Patient (查询/读取)
 #### 业务规则
 
 1. **粒度合法**：grain 必须是 identifier 角色字段；字段编码模型内唯一；派生 dependencies 必须引用模型内已声明字段；expression 仅允许 fact 角色。
-2. **发布门槛**：字段非空 + 至少一个 identifier；纯维度/登记类模型（诊断、病人登记）无 fact 属合法形态。发布后结构冻结（不可编辑/删除），只能 deprecate。
+2. **发布门槛与评审**：字段非空 + 至少一个 identifier；纯维度/登记类模型（诊断、病人登记）无 fact 属合法形态。状态机 draft → pending_review（提交评审过门槛校验）→ published → deprecated（终态）；published 结构冻结（不可编辑/删除），deprecated 允许同 code 重建（结构修订唯一通道）。
 3. **多源标准化**：一个模型字段可挂 N 个数据源的物理列映射；只有 confirmed 映射参与物化（Slice 2）；编辑已确认映射保持 confirmed 状态（改列不降级）。
 4. **指标绑定**：语义指标经 `model_field_ref`（model_code.field_code）绑定模型字段，与存量 source_field 直绑并存过渡；双路径数值一致性由 Slice 3 一致性测试强制。
 

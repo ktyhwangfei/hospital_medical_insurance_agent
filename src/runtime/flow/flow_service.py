@@ -276,6 +276,14 @@ class FlowGovernanceService:
         # pending_review（fail closed，禁止"证据已发布但视图不存在"）
         self._view_deployer.deploy_view(artifact.view_sql)
 
+        # Slice 2 物化：指定了输出模型则按已确认映射额外物化 dwd 明细视图，
+        # 并注册为语义 dataset（query_planner 消费侧零改动）
+        if flow.materialize_model:
+            # 物化注册的语义对象编码取 Flow 源契约（模型 entity_code 是通用实体名，
+            # 语义层 dataset 外键要求已注册对象编码）
+            object_code = flow.source_contracts[0].object_code if flow.source_contracts else model.entity_code
+            self._materialize_model(flow.materialize_model, object_code)
+
         published_at = _utc_now_iso()
         revision = FlowPublishedRevision(
             revision_id=f"{flow_id}-rev{flow.revision}",
@@ -363,3 +371,43 @@ class FlowGovernanceService:
             )
         except ValueError as exc:
             raise FlowStateInvalidError(f"编译失败: {exc}") from exc
+
+    def _materialize_model(self, model_code: str, object_code: str) -> None:
+        """按数据模型已确认映射物化 dwd 明细视图并注册语义 dataset。
+
+        object_code 取 Flow 源契约声明的已注册语义对象（dataset 外键约束）。
+        失败抛错（publish 链路 fail closed：物化失败则无发布证据）。
+        """
+        from src.data_platform.storage.data_model.data_model_factory import (
+            get_data_model_storage,
+        )
+        from src.domain.governed_flow.compiler import compile_model_materialization
+
+        model_storage = get_data_model_storage()
+        model = model_storage.get_model(model_code)
+        if model is None:
+            raise FlowStateInvalidError(f"物化目标数据模型 {model_code} 不存在")
+        if model.status != "published":
+            raise FlowStateInvalidError(
+                f"物化目标数据模型 {model_code} 未发布（当前 {model.status}）"
+            )
+        mappings = model_storage.list_mappings(model_code)
+        view_sql = compile_model_materialization(model_code, mappings)
+        self._view_deployer.deploy_view(view_sql)
+
+        # 注册语义 dataset（幂等）：dwd 视图进入语义层可消费目录
+        from src.semantic_layer.models import SemanticDataset
+        from src.semantic_layer.registry import get_semantic_registry
+
+        store = get_semantic_registry()._store
+        dataset_code = model_code  # 模型编码自带分层前缀，物化视图名=dataset_code=模型编码
+        if store.get_dataset(dataset_code) is None:
+            store.save_dataset(SemanticDataset(
+                dataset_code=dataset_code,
+                object_code=object_code,
+                datasource_id="outpatient_postgres",
+                schema_name="public",
+                table_name=dataset_code,
+                name=f"{model.name}（物化视图）",
+                status="published",
+            ))

@@ -88,10 +88,10 @@ class TestLifecycle:
         # 无 identifier：创建时结构 validator 即拦截（粒度必须 identifier）
         with pytest.raises(ValidationError, match="identifier"):
             _model(fields=[_field("pooling_payment")])
-        # 空字段：创建合法、发布门槛拦截
+        # 空字段：创建合法、提交评审时发布门槛拦截
         service.create_model(_model(fields=[]))
         with pytest.raises(DataModelStateInvalidError, match="不能为空"):
-            service.publish_model("dwd_mz_settlement")
+            service.submit_review("dwd_mz_settlement")
 
     def test_dimension_only_model_can_publish(self):
         """纯维度/登记类模型（如诊断表）无 fact 属合法形态，允许发布。"""
@@ -100,12 +100,14 @@ class TestLifecycle:
             _field("trade_no", "identifier", data_type="varchar"),
             _field("diagnose_name", "dimension", data_type="nvarchar"),
         ]))
+        service.submit_review("dwd_mz_settlement")
         published = service.publish_model("dwd_mz_settlement")
         assert published.status == "published"
 
     def test_publish_then_deprecate_happy_path(self):
         service = _service()
         service.create_model(_model())
+        service.submit_review("dwd_mz_settlement")
         published = service.publish_model("dwd_mz_settlement")
         assert published.status == "published"
         assert published.version == 2
@@ -115,6 +117,7 @@ class TestLifecycle:
     def test_published_model_frozen(self):
         service = _service()
         service.create_model(_model())
+        service.submit_review("dwd_mz_settlement")
         service.publish_model("dwd_mz_settlement")
         with pytest.raises(DataModelStateInvalidError, match="冻结"):
             service.update_model("dwd_mz_settlement", _model(), expected_revision=2)
@@ -177,3 +180,22 @@ class TestMappingFlow:
         edited = service.save_mapping(self._mapping().model_copy(update={"physical_column": "T_FundPay2"}))
         assert edited.status == "confirmed"
         assert edited.physical_column == "T_FundPay2"
+
+
+class TestDeprecatedRebuild:
+    def test_deprecated_model_code_can_be_recreated(self):
+        """deprecated 模型退出消费后允许同 code 重建（结构修订的唯一通道）。"""
+        service = _service()
+        service.create_model(_model())
+        service.submit_review("dwd_mz_settlement")
+        service.publish_model("dwd_mz_settlement")
+        service.deprecate_model("dwd_mz_settlement")
+        rebuilt = service.create_model(_model(name="重建版"))
+        assert rebuilt.status == "draft"
+        assert rebuilt.name == "重建版"
+
+    def test_active_model_code_recreate_rejected(self):
+        service = _service()
+        service.create_model(_model())
+        with pytest.raises(DataModelConflictError):
+            service.create_model(_model())

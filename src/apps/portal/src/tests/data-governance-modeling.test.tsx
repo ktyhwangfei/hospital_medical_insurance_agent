@@ -8,6 +8,7 @@ import {
   createDataModel,
   listDataModelMappings,
   listDataModels,
+  submitDataModelReview,
   publishDataModel,
   type DataModel,
 } from '@/lib/data-model-api'
@@ -22,6 +23,7 @@ vi.mock('@/lib/data-model-api', async (importOriginal) => ({
   createDataModel: vi.fn(),
   updateDataModel: vi.fn(),
   publishDataModel: vi.fn(),
+  submitDataModelReview: vi.fn(),
   deprecateDataModel: vi.fn(),
   listDataModelMappings: vi.fn(),
   saveDataModelMapping: vi.fn(),
@@ -66,12 +68,20 @@ describe('数据建模页', () => {
     expect(screen.getByText('草稿')).toBeTruthy()
   })
 
-  it('草稿可编辑与发布；published 只显示退役', async () => {
+  it('草稿可编辑与提交评审；待评审可发布；published 只显示退役', async () => {
     render(<DataModelingPage />)
     const row = await screen.findByTestId('model-row-dwd_mz_settlement')
     expect(row.textContent).toContain('编辑')
-    expect(row.textContent).toContain('发布')
+    expect(row.textContent).toContain('提交评审')
+    expect(row.textContent).not.toContain('退役')
 
+    // draft → 提交评审 → pending_review → 发布
+    vi.mocked(listDataModels).mockResolvedValue([model({ status: 'pending_review' })])
+    vi.mocked(submitDataModelReview).mockResolvedValue(model({ status: 'pending_review' }))
+    fireEvent.click(screen.getByRole('button', { name: /提交评审/ }))
+    await waitFor(() => expect(submitDataModelReview).toHaveBeenCalledWith('dwd_mz_settlement'))
+
+    await waitFor(() => screen.getByRole('button', { name: /发布/ }))
     vi.mocked(listDataModels).mockResolvedValue([model({ status: 'published', version: 2 })])
     vi.mocked(publishDataModel).mockResolvedValue(model({ status: 'published', version: 2 }))
     fireEvent.click(screen.getByRole('button', { name: /发布/ }))

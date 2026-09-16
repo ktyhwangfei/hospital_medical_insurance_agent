@@ -61,7 +61,6 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
 
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const [publishedBy, setPublishedBy] = useState('')
   const nodeSeq = useRef(0)
 
   const readOnly = flow?.status === 'deprecated'
@@ -99,7 +98,6 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
         setFlow(loaded)
         setNodes(canvas.nodes)
         setEdges(canvas.edges)
-        setPublishedBy(loaded.owner)
         nodeSeq.current = loaded.nodes.length
         reloadRevisions()
       } catch (error) {
@@ -198,11 +196,8 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
   })
 
   const handlePublish = () => run('publish', async () => {
-    if (!publishedBy.trim()) {
-      setMessage('发布人不能为空')
-      return
-    }
-    await publishFlow(flowId, publishedBy.trim())
+    // 发布人由后端从认证主体取（禁止自报），无需输入
+    await publishFlow(flowId, '')
     setFlow(await getFlow(flowId))
     await reloadRevisions()
     setMessage('发布成功，发布证据不可变、可回滚')
@@ -303,17 +298,11 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
             {busy === 'submit' ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
             提交评审
           </button>
-          <span className="flex items-center gap-1">
-            <input
-              className="w-28 rounded-md border border-slate-200 px-2 py-1.5 text-xs focus:border-slate-400 focus:outline-none"
-              value={publishedBy} placeholder="发布人"
-              onChange={(e) => setPublishedBy(e.target.value)} />
-            <button type="button" onClick={handlePublish} disabled={!!busy || !canPublish}
+          <button type="button" onClick={handlePublish} disabled={!!busy || !canPublish}
               className={`${actionBtn.base} ${canPublish ? 'bg-emerald-600 text-white hover:bg-emerald-500' : actionBtn.secondary}`}>
               {busy === 'publish' ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
               发布
             </button>
-          </span>
           <button type="button" onClick={handleDeprecate} disabled={!!busy || !canDeprecate}
             className={`${actionBtn.base} ${actionBtn.danger}`}>
             {busy === 'deprecate' ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}

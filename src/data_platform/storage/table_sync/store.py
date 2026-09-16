@@ -28,6 +28,16 @@ CREATE TABLE IF NOT EXISTS data_source_sync_tables (
     last_error TEXT,
     PRIMARY KEY (source_id, table_name)
 );
+CREATE TABLE IF NOT EXISTS data_source_sync_events (
+    event_id VARCHAR(64) PRIMARY KEY,
+    source_id VARCHAR(64) NOT NULL,
+    table_name VARCHAR(128) NOT NULL,
+    action VARCHAR(16) NOT NULL,
+    actor VARCHAR(128) NOT NULL,
+    row_count INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sync_events_source ON data_source_sync_events(source_id, created_at DESC);
 """
 
 
@@ -105,6 +115,36 @@ class TableSyncStore:
             SET last_error = %s WHERE source_id = %s AND table_name = %s
             """,
             (error[:500], source_id, table_name),
+        )
+
+    def record_event(
+        self,
+        source_id: str,
+        table_name: str,
+        action: str,
+        actor: str,
+        row_count: int | None = None,
+    ) -> None:
+        """选表同步治理事件留痕（选表/移除/同步执行）。"""
+        import uuid
+
+        self._get_client().execute(
+            """
+            INSERT INTO data_source_sync_events
+                (event_id, source_id, table_name, action, actor, row_count)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (f"ste_{uuid.uuid4().hex[:12]}", source_id, table_name, action, actor, row_count),
+        )
+
+    def list_events(self, source_id: str, limit: int = 50) -> list[dict]:
+        return self._get_client().execute(
+            """
+            SELECT event_id, table_name, action, actor, row_count, created_at
+            FROM data_source_sync_events WHERE source_id = %s
+            ORDER BY created_at DESC LIMIT %s
+            """,
+            (source_id, limit),
         )
 
     @staticmethod

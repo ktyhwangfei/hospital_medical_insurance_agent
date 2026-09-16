@@ -230,7 +230,7 @@ interface SyncJobDto {
   last_error_code: string | null
 }
 
-function governanceToken(): string | null {
+export function governanceToken(): string | null {
   if (typeof window !== 'undefined') {
     const token = window.sessionStorage.getItem('data-governance-token')
     if (token) return token

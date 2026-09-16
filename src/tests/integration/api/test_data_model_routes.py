@@ -125,6 +125,7 @@ class TestModelCrud:
 class TestLifecycleApi:
     def test_publish_freezes_model(self, client):
         _create(client)
+        res = client.post(f"{PREFIX}/dwd_mz_settlement/submit-review", headers=WRITE)
         res = client.post(f"{PREFIX}/dwd_mz_settlement/publish", headers=WRITE)
         assert res.status_code == 200
         assert res.json()["status"] == "published"
@@ -140,14 +141,17 @@ class TestLifecycleApi:
         # 空字段模型：创建合法（结构 validator 跳过），发布门槛拦截
         payload = _model_payload(fields=[])
         client.post(PREFIX, json=payload, headers=WRITE)
+        res = client.post(f"{PREFIX}/dwd_mz_settlement/submit-review", headers=WRITE)
         res = client.post(f"{PREFIX}/dwd_mz_settlement/publish", headers=WRITE)
         assert res.status_code == 422
 
     def test_deprecate_terminal(self, client):
         _create(client)
-        client.post(f"{PREFIX}/dwd_mz_settlement/publish", headers=WRITE)
+        client.post(f"{PREFIX}/dwd_mz_settlement/submit-review", headers=WRITE)
+        res = client.post(f"{PREFIX}/dwd_mz_settlement/publish", headers=WRITE)
         res = client.post(f"{PREFIX}/dwd_mz_settlement/deprecate", headers=WRITE)
         assert res.json()["status"] == "deprecated"
+        res = client.post(f"{PREFIX}/dwd_mz_settlement/submit-review", headers=WRITE)
         res = client.post(f"{PREFIX}/dwd_mz_settlement/publish", headers=WRITE)
         assert res.status_code == 422
 

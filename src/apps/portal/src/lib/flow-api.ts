@@ -2,6 +2,7 @@
 // DTO 字段与后端 src/domain/governed_flow/models.py 逐字段对齐（snake_case 直传）；
 // 画布 XYFlow camelCase 映射见 src/components/flow/canvas-dto.ts（契约 §3.3）。
 import { requestJson } from './api-client'
+import { governanceToken } from './data-governance-api'
 
 // ── 枚举白名单（与后端冻结值一致，勿单侧扩充）──
 
@@ -262,9 +263,15 @@ export function submitFlowReview(flowId: string): Promise<FlowDefinitionDto> {
 }
 
 export function publishFlow(flowId: string, publishedBy: string): Promise<FlowPublishedRevisionDto> {
+  // publishedBy 参数已废弃：后端从认证主体取发布人（V3.0 治理加固），
+  // 这里仅带凭据；请求体字段保留仅为向后兼容（服务端忽略）。
+  const headers = new Headers({ 'Content-Type': 'application/json' })
+  const token = governanceToken()
+  if (token) headers.set('Authorization', token.startsWith('Bearer ') ? token : `Bearer ${token}`)
   return requestJson(`/flow/${encodeURIComponent(flowId)}/publish`, {
     method: 'POST',
-    body: JSON.stringify({ published_by: publishedBy }),
+    headers,
+    body: JSON.stringify({ published_by: '' }),
   })
 }
 

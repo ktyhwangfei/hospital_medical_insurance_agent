@@ -33,9 +33,10 @@ class DataModelLayer(StrEnum):
 
 
 class DataModelStatus(StrEnum):
-    """状态机：draft → published → deprecated（终态）。"""
+    """状态机：draft → pending_review → published → deprecated（终态）。"""
 
     DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
     PUBLISHED = "published"
     DEPRECATED = "deprecated"
 

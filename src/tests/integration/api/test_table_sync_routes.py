@@ -48,6 +48,9 @@ class _FakeStore:
     def remove_table(self, source_id, table_name):
         self.tables.pop(table_name, None)
 
+    def record_event(self, source_id, table_name, action, actor, row_count=None):
+        pass
+
 
 class _FakeExecutor:
     def __init__(self):

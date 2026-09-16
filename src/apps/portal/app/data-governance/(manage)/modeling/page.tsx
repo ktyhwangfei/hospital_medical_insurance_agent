@@ -16,6 +16,7 @@ import {
   listDataModels,
   publishDataModel,
   saveDataModelMapping,
+  submitDataModelReview,
   updateDataModel,
   type DataModel,
   type DataModelField,
@@ -25,9 +26,10 @@ import {
 } from '@/lib/data-model-api'
 
 const LAYER_LABELS: Record<DataModelLayer, string> = { ods: 'ODS', dwd: 'DWD', dws: 'DWS', ads: 'ADS' }
-const STATUS_LABELS: Record<string, string> = { draft: '草稿', published: '已发布', deprecated: '已退役' }
+const STATUS_LABELS: Record<string, string> = { draft: '草稿', pending_review: '待评审', published: '已发布', deprecated: '已退役' }
 const STATUS_BADGES: Record<string, string> = {
   draft: 'bg-slate-100 text-slate-700',
+  pending_review: 'bg-amber-100 text-amber-700',
   published: 'bg-emerald-100 text-emerald-700',
   deprecated: 'bg-zinc-200 text-zinc-500',
 }
@@ -162,10 +164,16 @@ function DataModelingContent() {
                 {model.status === 'draft' && <>
                   <Button size="sm" variant="outline" onClick={() => setEditing(model)}>编辑</Button>
                   <Button size="sm" variant="outline" disabled={busy !== null}
+                    onClick={() => void act(`review:${model.model_code}`, () => submitDataModelReview(model.model_code), `已提交评审 ${model.model_code}`)}>
+                    <Send />提交评审
+                  </Button>
+                </>}
+                {model.status === 'pending_review' && (
+                  <Button size="sm" variant="outline" disabled={busy !== null}
                     onClick={() => void act(`publish:${model.model_code}`, () => publishDataModel(model.model_code), `已发布 ${model.model_code}`)}>
                     <Send />发布
                   </Button>
-                </>}
+                )}
                 {model.status === 'published' && (
                   <Button size="sm" variant="outline" disabled={busy !== null}
                     onClick={() => void act(`deprecate:${model.model_code}`, () => deprecateDataModel(model.model_code), `已退役 ${model.model_code}`)}>

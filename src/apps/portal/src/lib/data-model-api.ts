@@ -3,7 +3,7 @@
 import { dataGovernanceRequest } from './data-governance-api'
 
 export type DataModelLayer = 'ods' | 'dwd' | 'dws' | 'ads'
-export type DataModelStatus = 'draft' | 'published' | 'deprecated'
+export type DataModelStatus = 'draft' | 'pending_review' | 'published' | 'deprecated'
 export type ModelFieldRole = 'identifier' | 'dimension' | 'fact' | 'datetime'
 export type MappingStatus = 'draft' | 'confirmed'
 
@@ -80,3 +80,6 @@ export const confirmDataModelMapping = (modelCode: string, fieldCode: string, so
     `/models/${encodeURIComponent(modelCode)}/mappings/${encodeURIComponent(fieldCode)}/${encodeURIComponent(sourceId)}/confirm`,
     { method: 'POST' },
   )
+
+export const submitDataModelReview = (code: string) =>
+  dataGovernanceRequest<DataModel>(`/models/${encodeURIComponent(code)}/submit-review`, { method: 'POST' })

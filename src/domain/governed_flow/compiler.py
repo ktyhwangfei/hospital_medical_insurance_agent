@@ -367,3 +367,43 @@ def compile_flow_view(
         query_plan=steps,
         artifact_hash=compute_artifact_hash(view_sql),
     )
+
+
+def compile_model_materialization(
+    model_code: str,
+    mappings: list,
+) -> str:
+    """数据模型物化 SQL（V3.0 Slice 2）：按已确认映射把物理列直通重命名为模型字段。
+
+    首期仅支持直通映射（transform_rule 为空）；带转换规则的映射拒绝编译
+    （fail closed，不静默忽略转换逻辑）。
+    多映射表（同一模型字段映射多个物理来源）按源分 UNION ALL 合并。
+    """
+    confirmed = [m for m in mappings if getattr(m, "status", None) == "confirmed"
+                 or str(getattr(m, "status", "")) == "confirmed"]
+    if not confirmed:
+        raise FlowCompileError(
+            "FLOW_MATERIALIZE_NO_MAPPING",
+            f"模型 {model_code} 无已确认映射，不可物化",
+        )
+    by_table: dict[str, list] = {}
+    for mapping in confirmed:
+        if mapping.transform_rule:
+            raise FlowCompileError(
+                "FLOW_MATERIALIZE_TRANSFORM_UNSUPPORTED",
+                f"映射 {mapping.field_code}@{mapping.source_id} 带转换规则，首期仅支持直通",
+            )
+        by_table.setdefault(mapping.physical_table, []).append(mapping)
+
+    def _quote(name: str) -> str:
+        return '"' + name.replace('"', '""') + '"'
+
+    # 模型编码自带分层前缀（如 dwd_mz_settlement），视图名即模型编码，不再叠加
+    view_name = model_code
+    selects = []
+    for table, items in sorted(by_table.items()):
+        parts = ",\n  ".join(
+            f"{_quote(m.physical_column)} AS {_quote(m.field_code)}" for m in items
+        )
+        selects.append(f"SELECT\n  {parts}\nFROM {_quote(table)}")
+    return f"CREATE OR REPLACE VIEW {view_name} AS\n" + "\nUNION ALL\n".join(selects) + ";"

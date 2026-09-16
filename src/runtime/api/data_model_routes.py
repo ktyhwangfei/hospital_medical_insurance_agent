@@ -120,6 +120,18 @@ def delete_model(
         raise _http_error(exc) from exc
 
 
+@router.post("/{model_code}/submit-review")
+def submit_model_review(
+    model_code: str,
+    _: object = Depends(require_data_governance_write),
+    service: ModelingService = Depends(get_data_modeling_service),
+) -> DataModel:
+    try:
+        return service.submit_review(model_code)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
 @router.post("/{model_code}/publish")
 def publish_model(
     model_code: str,

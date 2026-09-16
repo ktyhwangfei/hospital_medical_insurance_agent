@@ -388,7 +388,7 @@ def select_sync_table(
     source_id: str,
     table_name: str,
     request: SyncTableUpsertRequest,
-    _: WritePrincipal,
+    principal: WritePrincipal,
     executor: SyncExecutor,
 ):
     """探查后选表：自动探查主键（未显式给出时），落地表 = 源表名小写。"""
@@ -402,19 +402,26 @@ def select_sync_table(
             time_column=request.time_column,
         )
         executor._store.save_table(table)
+        executor._store.record_event(source_id, table_name, "select", principal.user_id)
         return table.model_dump(mode="json")
     return {"result": _call(_action)}
 
 
 @router.delete("/data-sources/{source_id}/sync-tables/{table_name}")
-def remove_sync_table(source_id: str, table_name: str, _: WritePrincipal, executor: SyncExecutor):
-    return {"result": _call(lambda: executor._store.remove_table(source_id, table_name) or {"removed": table_name})}
+def remove_sync_table(source_id: str, table_name: str, principal: WritePrincipal, executor: SyncExecutor):
+    def _action():
+        executor._store.remove_table(source_id, table_name)
+        executor._store.record_event(source_id, table_name, "remove", principal.user_id)
+        return {"removed": table_name}
+    return {"result": _call(_action)}
 
 
 @router.post("/data-sources/{source_id}/sync-tables/run")
-def run_sync_tables(source_id: str, _: WritePrincipal, executor: SyncExecutor):
+def run_sync_tables(source_id: str, principal: WritePrincipal, executor: SyncExecutor):
     """立即全量同步全部 active 选表（逐表独立成败，失败记 last_error 不阻断他表）。"""
     results = _call(lambda: executor.sync_all_active(source_id))
+    for r in results:
+        executor._store.record_event(source_id, r.table_name, "run", principal.user_id, r.row_count)
     return {"result": [r.model_dump(mode="json") for r in results]}
 
 
