@@ -2,7 +2,7 @@
 
 // Tool 可视化管理与 Workflow 编排 /tools 页 — 第一批增量的只读展示。
 // Tool 页签：已注册 Tool 清单（契约类型/包装目标/风险等级/是否已绑定实现）。
-// Workflow 页签：静态 Workflow 定义可视化为步骤链（未绑定实现的步骤高亮，对应
+// Workflow 页签：静态 Workflow 定义可视化为混合节点链（未绑定实现的节点高亮，对应
 // fail-closed：该步骤运行时会报 unavailable，不会编造结果）。
 import { useEffect, useState } from 'react'
 import { ArrowRight, Boxes, Loader2, Workflow as WorkflowIcon } from 'lucide-react'
@@ -23,8 +23,14 @@ const RISK_BADGES: Record<string, string> = {
 const CATEGORY_BADGES: Record<string, string> = {
   数据类: 'border-sky-200 bg-sky-50 text-sky-700',
   知识类: 'border-violet-200 bg-violet-50 text-violet-700',
-  对比计算类: 'border-orange-200 bg-orange-50 text-orange-700',
 }
+
+const NODE_LABELS = {
+  tool: 'Tool 节点',
+  domain: '领域节点',
+  decision: '决策节点',
+  output: '输出节点',
+} as const
 
 function BoundBadge({ bound }: { bound: boolean }) {
   return (
@@ -78,7 +84,7 @@ export default function ToolsPage() {
         <div>
           <h1 className="text-lg font-semibold text-slate-900">Tool 与 Workflow</h1>
           <p className="mt-0.5 text-xs text-slate-500">
-            将既有能力包装为可视化治理的 Tool，再由 Workflow 声明式编排；只读展示，不新增业务写入口
+            Tool、确定性领域处理与输出节点统一编排；只读展示，不新增业务写入口
           </p>
         </div>
       </header>
@@ -189,15 +195,30 @@ export default function ToolsPage() {
                   <div key={step.step_id} className="flex items-center gap-1.5">
                     <div
                       className={`rounded-md border px-2.5 py-1.5 text-xs ${
-                        step.tool_bound
+                        step.bound
                           ? 'border-slate-200 bg-white text-slate-700'
                           : 'border-dashed border-slate-300 bg-slate-50 text-slate-400'
                       }`}
                       title={step.description}
                     >
-                      <div className="font-medium">{step.step_id}</div>
-                      <div className="font-mono text-[10px]">{step.tool_id}</div>
-                      {Object.keys(step.input_mapping).length > 0 ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">{step.step_id}</span>
+                        <span className="rounded bg-slate-100 px-1 py-0.5 text-[9px] text-slate-500">
+                          {NODE_LABELS[step.node_type]}
+                        </span>
+                      </div>
+                      <div className="font-mono text-[10px]">
+                        {step.node_type === 'tool' && step.tool_id}
+                        {step.node_type === 'domain' && `${step.handler_id}:${step.handler_version}`}
+                        {step.node_type === 'decision' && `${step.condition_ref} = ${String(step.expected_value)}`}
+                        {step.node_type === 'output' && `输出 ← ${step.source_ref}`}
+                      </div>
+                      {step.node_type === 'decision' && (
+                        <div className="mt-1 border-t border-slate-100 pt-1 font-mono text-[10px] text-slate-500">
+                          是 → {step.match_step_id}；否 → {step.default_step_id}
+                        </div>
+                      )}
+                      {step.node_type !== 'output' && Object.keys(step.input_mapping).length > 0 ? (
                         <div className="mt-1 space-y-0.5 border-t border-slate-100 pt-1">
                           {Object.entries(step.input_mapping).map(([param, ref]) => (
                             <div key={param} className="font-mono text-[10px] text-slate-500">
@@ -205,12 +226,16 @@ export default function ToolsPage() {
                             </div>
                           ))}
                         </div>
-                      ) : (
+                      ) : step.node_type !== 'output' ? (
                         <div className="mt-1 border-t border-slate-100 pt-1 font-mono text-[10px] text-slate-400">
                           输入 ← 会话上下文
                         </div>
+                      ) : null}
+                      {!step.bound && (
+                        <div className="mt-0.5 text-[10px] text-red-500">
+                          {step.node_type === 'tool' ? '无数据源' : '未绑定实现'} → unavailable
+                        </div>
                       )}
-                      {!step.tool_bound && <div className="mt-0.5 text-[10px] text-red-500">无数据源 → unavailable</div>}
                     </div>
                     {index < workflow.steps.length - 1 && (
                       <ArrowRight className="size-3.5 shrink-0 text-slate-300" />

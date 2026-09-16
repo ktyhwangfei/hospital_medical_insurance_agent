@@ -1,7 +1,7 @@
 'use client'
 
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, FileText, Anchor, Lightbulb, FlaskConical } from 'lucide-react'
+import { LayoutDashboard, FileText, Anchor, Lightbulb, Network, FlaskConical } from 'lucide-react'
 
 interface NavTab {
   label: string
@@ -16,15 +16,17 @@ const NAV_TABS: NavTab[] = [
   { label: '文档', href: '/policy-knowledge/documents', icon: FileText },
   { label: '单元', href: '/policy-knowledge/units', icon: Anchor },
   { label: '知识', href: '/policy-knowledge/knowledge', icon: Lightbulb },
+  { label: '知识体系', href: '/policy-knowledge/knowledge-map', icon: Network },
   { label: '测试', href: '/policy-knowledge/test', icon: FlaskConical },
 ]
 
 function getActiveTab(pathname: string): string {
   if (pathname === '/policy-knowledge') return '/policy-knowledge'
-  for (const tab of NAV_TABS) {
-    if (tab.href !== '/policy-knowledge' && pathname.startsWith(tab.href)) return tab.href
-  }
-  return '/policy-knowledge'
+  // 最长前缀匹配：/policy-knowledge/knowledge-map 不会被 /policy-knowledge/knowledge 抢占
+  const matches = NAV_TABS
+    .filter((tab) => tab.href !== '/policy-knowledge' && pathname.startsWith(tab.href))
+    .sort((a, b) => b.href.length - a.href.length)
+  return matches[0]?.href ?? '/policy-knowledge'
 }
 
 export default function PolicyKnowledgeLayout({ children }: { children: React.ReactNode }) {

@@ -1,17 +1,28 @@
 """静态 Workflow 定义登记表（#68 四个真实问题中可落地的场景 + 三态入口）。"""
 
-from src.domain.workflow.models import MissingEvidenceRule, WorkflowDefinition, WorkflowStep
+from src.domain.workflow.models import (
+    DomainNode,
+    MissingEvidenceRule,
+    OutputNode,
+    WorkflowDefinition,
+    WorkflowStep,
+)
 from src.runtime.tool_registry.builtin_tools import (
     TOOL_GET_REFUND_RECORD,
     TOOL_GET_SETTLEMENT_FACT,
 )
-from src.runtime.tool_registry.calc_tools import TOOL_COMPARE_SETTLEMENT_VS_POLICY
 from src.runtime.tool_registry.data_tools import (
     TOOL_PARSE_DATA_QUERY_INTENT,
     TOOL_QUERY_FLOW_METRICS,
     TOOL_QUERY_SEMANTIC_METRICS,
 )
 from src.runtime.tool_registry.knowledge_tools import TOOL_COMPREHENSIVE_KNOWLEDGE_LOOKUP
+from src.runtime.workflow.domain_nodes import (
+    DOMAIN_HANDLER_VERSION,
+    EVIDENCE_COMPLETENESS,
+    EVIDENCE_MERGE,
+    SETTLEMENT_POLICY_COMPARE,
+)
 
 WF_REFUND_VERIFICATION = WorkflowDefinition(
     workflow_id="wf_refund_verification",
@@ -76,14 +87,41 @@ WF_OUTPATIENT_SETTLEMENT_EXPLAIN = WorkflowDefinition(
             description="按结算适用性维度检索政策证据（知识类：向量）",
             input_mapping={"settlement_fact": "fetch_settlement"},
         ),
-        WorkflowStep(
-            step_id="compare_settlement_vs_policy",
-            tool_id=TOOL_COMPARE_SETTLEMENT_VS_POLICY,
-            description="对比实际报销比例与政策分段比例（对比计算类）",
+        DomainNode(
+            step_id="check_evidence",
+            handler_id=EVIDENCE_COMPLETENESS,
+            handler_version=DOMAIN_HANDLER_VERSION,
+            description="校验结算事实与政策证据是否完整（确定性领域节点）",
             input_mapping={
                 "settlement_fact": "fetch_settlement",
                 "policy_evidence": "retrieve_policy_evidence",
             },
+        ),
+        DomainNode(
+            step_id="compare_settlement_vs_policy",
+            handler_id=SETTLEMENT_POLICY_COMPARE,
+            handler_version=DOMAIN_HANDLER_VERSION,
+            description="对比实际报销比例与政策分段比例（确定性领域节点）",
+            input_mapping={
+                "settlement_fact": "fetch_settlement",
+                "policy_evidence": "retrieve_policy_evidence",
+            },
+        ),
+        DomainNode(
+            step_id="merge_evidence",
+            handler_id=EVIDENCE_MERGE,
+            handler_version=DOMAIN_HANDLER_VERSION,
+            description="归并政策引用、对比结果与证据缺口",
+            input_mapping={
+                "policy_evidence": "retrieve_policy_evidence",
+                "comparison": "compare_settlement_vs_policy",
+                "evidence_check": "check_evidence",
+            },
+        ),
+        OutputNode(
+            step_id="public_result",
+            source_ref="merge_evidence",
+            description="声明经过校验和归并的公开结果来源",
         ),
     ],
 )
@@ -152,4 +190,11 @@ ALL_WORKFLOWS: list[WorkflowDefinition] = [
     WF_OUTPATIENT_SETTLEMENT_EXPLAIN,
     WF_POLICY_CHAT,
     WF_DATA_QUERY,
+]
+
+# 关键词 fallback 仅承载没有显式 mode 的窄场景；政策问答继续走既有 Skill 管线，
+# 运营问数只接受前端显式 DATA_QUERY mode，避免“报销比例”等重叠词误路由。
+KEYWORD_ROUTED_WORKFLOWS: list[WorkflowDefinition] = [
+    WF_REFUND_VERIFICATION,
+    WF_OUTPATIENT_SETTLEMENT_EXPLAIN,
 ]

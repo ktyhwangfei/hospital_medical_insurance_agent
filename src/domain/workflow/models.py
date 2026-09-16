@@ -1,11 +1,12 @@
-"""Workflow 领域模型：声明式 Tool 编排，不引入通用 Graph/自由规划。
+"""Workflow 领域模型：声明式类型化节点编排，不引入通用 Graph/自由规划。
 
 WorkflowExecutor 只是这些声明的一个"薄解释器"，不做动态规划。
 """
 
 from enum import StrEnum
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class MissingEvidenceRule(BaseModel):
@@ -17,7 +18,16 @@ class MissingEvidenceRule(BaseModel):
     clarify_message: str
 
 
-class WorkflowStep(BaseModel):
+class WorkflowNodeType(StrEnum):
+    """首期支持的 Workflow 节点类型。"""
+
+    TOOL = "tool"
+    DOMAIN = "domain"
+    DECISION = "decision"
+    OUTPUT = "output"
+
+
+class ToolNode(BaseModel):
     """Workflow 中的一个 Tool 调用节点。
 
     input_mapping 声明步骤间数据流：键 = 工具入参名，值 = 引用表达式：
@@ -29,14 +39,60 @@ class WorkflowStep(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    node_type: Literal[WorkflowNodeType.TOOL] = WorkflowNodeType.TOOL
     step_id: str
     tool_id: str
     description: str = ""
     input_mapping: dict[str, str] = Field(default_factory=dict)
 
 
+class DomainNode(BaseModel):
+    """代码侧白名单登记的确定性医保业务节点。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_type: Literal[WorkflowNodeType.DOMAIN] = WorkflowNodeType.DOMAIN
+    step_id: str
+    handler_id: str
+    handler_version: str
+    description: str = ""
+    input_mapping: dict[str, str] = Field(default_factory=dict)
+
+
+class DecisionNode(BaseModel):
+    """按上游事实选择一个前向分支，不支持表达式、循环或动态目标。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_type: Literal[WorkflowNodeType.DECISION] = WorkflowNodeType.DECISION
+    step_id: str
+    condition_ref: str
+    expected_value: Any
+    match_step_id: str
+    default_step_id: str
+    description: str = ""
+
+
+class OutputNode(BaseModel):
+    """把指定上游节点结果声明为 Workflow 最终输出。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_type: Literal[WorkflowNodeType.OUTPUT] = WorkflowNodeType.OUTPUT
+    step_id: str
+    source_ref: str
+    description: str = ""
+
+
+# 保留既有名称，避免 Tool-only Workflow 和调用方一次性迁移。
+WorkflowStep = ToolNode
+WorkflowNode = Annotated[
+    ToolNode | DomainNode | DecisionNode | OutputNode, Field(discriminator="node_type")
+]
+
+
 class WorkflowDefinition(BaseModel):
-    """静态 Workflow 定义：意图关键词 + 缺失证据规则 + Tool 调用序列。"""
+    """静态 Workflow 定义：意图关键词 + 缺失证据规则 + 节点序列。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -45,7 +101,24 @@ class WorkflowDefinition(BaseModel):
     description: str
     intent_keywords: list[str] = Field(min_length=1)
     missing_evidence_rules: list[MissingEvidenceRule] = Field(default_factory=list)
-    steps: list[WorkflowStep] = Field(min_length=1)
+    steps: list[WorkflowNode] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_static_control_flow(self) -> "WorkflowDefinition":
+        """发布前拒绝重复节点、未知目标和回跳，保持解释器有界。"""
+        indexes = {step.step_id: index for index, step in enumerate(self.steps)}
+        if len(indexes) != len(self.steps):
+            raise ValueError("Workflow 节点 step_id 必须唯一")
+        for index, step in enumerate(self.steps):
+            if not isinstance(step, DecisionNode):
+                continue
+            for target in (step.match_step_id, step.default_step_id):
+                target_index = indexes.get(target)
+                if target_index is None:
+                    raise ValueError(f"DecisionNode 目标节点不存在：{target}")
+                if target_index <= index:
+                    raise ValueError("DecisionNode 目标必须位于决策节点之后，禁止回跳")
+        return self
 
 
 class WorkflowStepStatus(StrEnum):
@@ -61,7 +134,11 @@ class WorkflowStepResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     step_id: str
-    tool_id: str
+    node_type: WorkflowNodeType
+    tool_id: str | None = None
+    handler_id: str | None = None
+    handler_version: str | None = None
+    selected_step_id: str | None = None
     status: WorkflowStepStatus
     output: dict = Field(default_factory=dict)
     uncertainty: str | None = None

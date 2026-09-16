@@ -246,3 +246,5 @@ def test_settlement_check_reports_partial_when_policy_evidence_missing(monkeypat
     assert result["answer_status"] == "partial"
     assert "证据不足" in result["answer"]
     assert result["verification_summary"]["policy_count"] == 0
+    assert result["citations"] or result["uncertainties"]
+    assert any("政策证据" in item for item in result["uncertainties"])
