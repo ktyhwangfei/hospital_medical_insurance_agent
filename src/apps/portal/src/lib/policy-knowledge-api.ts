@@ -1239,6 +1239,8 @@ export interface SemanticSummary {
   mapped_count: number
   unmapped_count: number
   mapping_rate: number
+  objects_count?: number
+  domains_count?: number
 }
 
 export const getSemanticSummary = () =>
