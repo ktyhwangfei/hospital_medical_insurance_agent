@@ -154,14 +154,12 @@ WF_DATA_QUERY = WorkflowDefinition(
     name="运营指标问数",
     description="自然语言解析为 Flow 消费契约指标码，经受控视图与勾稽门禁执行；指标不在目录内则澄清",
     intent_keywords=[
-        "门诊人次",
-        "费用趋势",
-        "科室排名",
-        "药占比",
-        "次均费用",
-        "报销比例",
-        "运营指标",
-        "统计",
+        # 运营聚合问法（金额向；不含「比例」类政策词，避免误伤政策咨询链路）
+        "支付是多少", "支付金额", "支付总额", "支付一共",
+        "门诊总费用", "门诊总金额", "费用总额", "结算总金额", "结算总额",
+        "大额支付", "个人账户支付", "现金支付", "医保门诊结算",
+        "门诊人次", "费用趋势", "科室排名", "药占比", "次均费用",
+        "运营指标", "统计",
     ],
     missing_evidence_rules=[],
     steps=[
@@ -197,4 +195,9 @@ ALL_WORKFLOWS: list[WorkflowDefinition] = [
 KEYWORD_ROUTED_WORKFLOWS: list[WorkflowDefinition] = [
     WF_REFUND_VERIFICATION,
     WF_OUTPATIENT_SETTLEMENT_EXPLAIN,
+    # 运营问数参与关键词 fallback（2026-09-16 验收缺陷修复）：
+    # 默认政策问答 Tab 下的运营金额问法（无结算单号、无 mode）必须路由到问数链，
+    # 否则被政策问答链路答非所问（答政策条文而非数值）。
+    # 词表已剔除比例类政策词；指标不在 Flow 消费契约内时由意图解析诚实澄清。
+    WF_DATA_QUERY,
 ]
