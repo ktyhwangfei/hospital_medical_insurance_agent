@@ -1234,6 +1234,54 @@ export interface PolicyKnowledgeStats {
 export const getPolicyKnowledgeStats = () =>
   request<PolicyKnowledgeStats>('/api/v1/medical-insurance-ai-agent/policy-knowledge/stats')
 
+export interface KnowledgeMapCollection {
+  name: string
+  kind: 'rules' | 'facts'
+  row_count: number
+  active: boolean
+}
+
+/** 知识体系规则投影：维度字段 + 叶子卡片详情（后端已解包 FieldTrace 并字符串化） */
+export interface KnowledgeMapRule {
+  rule_id: string
+  doc_id: string
+  rule_type: string
+  insu_type: string
+  med_type: string
+  hosp_lv: string
+  psn_type: string
+  setl_type: string
+  region: string
+  effective_date: string
+  expiry_date: string
+  publish_status: string
+  policy_version: string
+  // 以下为 Milvus 动态字段，按需存在：规则没有该维度时 JSON 中整个键缺失
+  amount_band?: string
+  amount_band_min?: string
+  amount_band_max?: string
+  admission_order?: string
+  priority?: string
+  payment_ratio?: string
+  personal_payment_ratio?: string
+  deductible_amount?: string
+  cap_amount?: string
+  rule_value?: string
+  source_text?: string
+}
+
+export interface KnowledgeMapData {
+  active_release_id: string
+  rules_collection: string
+  facts_collection: string
+  collections: KnowledgeMapCollection[]
+  rules: KnowledgeMapRule[]
+  facts_by_doc: Array<{ doc_id: string; count: number }>
+}
+
+export const getKnowledgeMap = () =>
+  request<KnowledgeMapData>('/api/v1/medical-insurance-ai-agent/policy-knowledge/knowledge-map')
+
 export interface SemanticSummary {
   metrics_count: number
   mapped_count: number

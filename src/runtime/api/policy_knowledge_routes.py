@@ -8,6 +8,7 @@
   DELETE /policy-knowledge/rules/{id}    — 删除规则
   POST /policy-knowledge/rules/query     — 表达式查询
   GET  /policy-knowledge/stats           — 集合统计
+  GET  /policy-knowledge/knowledge-map   — 知识体系全景（集合盘点 + 规则维度投影）
 """
 
 from __future__ import annotations
@@ -202,4 +203,118 @@ def get_stats():
         "available": num > 0,
         "total": num,
         "distributions": distributions,
+    }
+
+
+# ── 知识体系全景（迭代 22）─────────────────────────────────────────
+
+# 规则投影字段：树形聚合用维度 + 叶子卡片用详情（FieldTrace 经 _row_to_dict 解包）
+KNOWLEDGE_MAP_RULE_FIELDS = (
+    "rule_id", "doc_id", "rule_type", "insu_type", "med_type", "hosp_lv",
+    "psn_type", "setl_type", "region", "effective_date", "expiry_date",
+    "publish_status", "policy_version", "amount_band", "amount_band_min",
+    "amount_band_max", "admission_order", "priority", "payment_ratio",
+    "personal_payment_ratio", "deductible_amount", "cap_amount",
+    "rule_value", "source_text",
+)
+
+
+def _resolve_knowledge_map_sources() -> dict:
+    """建立 MilvusClient 并解析当前读路径集合（测试用 monkeypatch 替换点）。"""
+    from pymilvus import MilvusClient
+
+    from src.config.production import MILVUS_HOST, MILVUS_PORT
+    from src.knowledge_extension.rule_explanation.release_resolver import (
+        get_active_release,
+        resolve_facts_collection,
+        resolve_rules_collection,
+    )
+
+    host, port = MILVUS_HOST, str(MILVUS_PORT)
+    active = get_active_release()
+    return {
+        "client": MilvusClient(uri=f"http://{host}:{port}"),
+        "rules_collection": resolve_rules_collection(host, port),
+        "facts_collection": resolve_facts_collection(host, port),
+        "release_id": str(getattr(active, "release_id", "") or ""),
+    }
+
+
+@router.get("/knowledge-map")
+def get_knowledge_map():
+    """知识体系全景：Milvus 政策集合盘点 + active 规则集合全量维度投影。
+
+    供 /policy-knowledge/knowledge-map 页面消费：
+    - collections: 所有 policy_rules_* / policy_facts_* 集合（名称/类型/行数/是否读路径目标）
+    - rules: 当前读路径规则集合的维度投影，前端按维度路线聚合成树
+    - facts_by_doc: 当前读路径 facts 集合按 doc_id 的条数分布（查询失败降级为空）
+    """
+    try:
+        sources = _resolve_knowledge_map_sources()
+    except ImportError:
+        raise HTTPException(status_code=503, detail=error_detail("MILVUS_UNAVAILABLE", "pymilvus 未安装", {}))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=error_detail("MILVUS_UNAVAILABLE", f"Milvus 连接失败: {e}", {}))
+
+    client = sources["client"]
+    rules_name = sources["rules_collection"]
+    facts_name = sources["facts_collection"]
+
+    try:
+        names = list(client.list_collections() or [])
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=error_detail("MILVUS_UNAVAILABLE", f"Milvus 集合列举失败: {e}", {}))
+
+    collections = []
+    for name in sorted(names):
+        if name.startswith("policy_rules"):
+            kind = "rules"
+        elif name.startswith("policy_facts"):
+            kind = "facts"
+        else:
+            continue
+        try:
+            row_count = int(client.get_collection_stats(name).get("row_count", 0))
+        except Exception:
+            row_count = 0
+        collections.append({
+            "name": name,
+            "kind": kind,
+            "row_count": row_count,
+            "active": name == (rules_name if kind == "rules" else facts_name),
+        })
+
+    try:
+        rows = client.query(
+            collection_name=rules_name, filter="",
+            output_fields=list(KNOWLEDGE_MAP_RULE_FIELDS), limit=10000,
+        ) or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=error_detail("QUERY_ERROR", str(e), {}))
+    rules = [_row_to_dict(r) for r in rows]
+
+    # 向量化事实按文档分布：属于展示增强，失败降级为空不阻塞整页
+    facts_by_doc: list[dict] = []
+    try:
+        facts_rows = client.query(
+            collection_name=facts_name, filter="", output_fields=["doc_id"], limit=10000,
+        ) or []
+        dist: dict[str, int] = {}
+        for r in facts_rows:
+            doc = str(r.get("doc_id", "") or "")
+            dist[doc] = dist.get(doc, 0) + 1
+        facts_by_doc = sorted(
+            ({"doc_id": k, "count": v} for k, v in dist.items()),
+            key=lambda x: -x["count"],
+        )
+    except Exception as e:
+        logger.warning("knowledge-map facts distribution unavailable: %s", e)
+
+    return {
+        "active_release_id": sources["release_id"],
+        "rules_collection": rules_name,
+        "facts_collection": facts_name,
+        "collections": collections,
+        "rules": rules,
+        "facts_by_doc": facts_by_doc,
     }
