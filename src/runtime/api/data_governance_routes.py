@@ -7,6 +7,7 @@ from typing import Annotated, Callable, TypeVar
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from src.data_platform.storage.postgresql.outpatient_governance_store import (
     OutpatientGovernanceConflictError,
@@ -353,6 +354,68 @@ def run_sync_job_once(source_id: str, principal: WritePrincipal, service: Govern
     return SyncJobResponse(result=_call(
         lambda: service.request_run_once(source_id, principal.user_id)
     ))
+
+
+# ── 选表同步（探查后选表 SQL 同步通道；CDC 全表对接为占位模式）─────────
+
+from src.data_platform.storage.table_sync.store import TableSyncStore
+from src.data_platform.table_sync import SelectedSyncTable
+from src.data_platform.table_sync_executor import TableSyncExecutor
+
+
+def get_table_sync_executor() -> TableSyncExecutor:
+    """依赖注入 seam：复用数据治理受控连接（凭据库 + 连接工厂）。"""
+    service = get_data_governance_service()
+    return TableSyncExecutor(TableSyncStore(), service.open_source_connection)
+
+
+SyncExecutor = Annotated[TableSyncExecutor, Depends(get_table_sync_executor)]
+
+
+class SyncTableUpsertRequest(BaseModel):
+    key_columns: list[str] = Field(default_factory=list)
+    time_column: str | None = None
+
+
+@router.get("/data-sources/{source_id}/sync-tables")
+def list_sync_tables(source_id: str, _: ReadPrincipal, executor: SyncExecutor):
+    """已选同步表清单（含最近同步状态）。"""
+    return {"result": [t.model_dump(mode="json") for t in executor._store.list_tables(source_id)]}
+
+
+@router.put("/data-sources/{source_id}/sync-tables/{table_name}", status_code=status.HTTP_201_CREATED)
+def select_sync_table(
+    source_id: str,
+    table_name: str,
+    request: SyncTableUpsertRequest,
+    _: WritePrincipal,
+    executor: SyncExecutor,
+):
+    """探查后选表：自动探查主键（未显式给出时），落地表 = 源表名小写。"""
+    def _action():
+        key_columns = request.key_columns or executor.probe_table_keys(source_id, table_name)
+        table = SelectedSyncTable(
+            source_id=source_id,
+            table_name=table_name,
+            target_table=table_name.lower(),
+            key_columns=key_columns,
+            time_column=request.time_column,
+        )
+        executor._store.save_table(table)
+        return table.model_dump(mode="json")
+    return {"result": _call(_action)}
+
+
+@router.delete("/data-sources/{source_id}/sync-tables/{table_name}")
+def remove_sync_table(source_id: str, table_name: str, _: WritePrincipal, executor: SyncExecutor):
+    return {"result": _call(lambda: executor._store.remove_table(source_id, table_name) or {"removed": table_name})}
+
+
+@router.post("/data-sources/{source_id}/sync-tables/run")
+def run_sync_tables(source_id: str, _: WritePrincipal, executor: SyncExecutor):
+    """立即全量同步全部 active 选表（逐表独立成败，失败记 last_error 不阻断他表）。"""
+    results = _call(lambda: executor.sync_all_active(source_id))
+    return {"result": [r.model_dump(mode="json") for r in results]}
 
 
 @router.get("/sync-jobs/{source_id}/runs", response_model=SyncRunListResponse)

@@ -1,8 +1,11 @@
 """门诊同步任务的单进程 PostgreSQL 调度 worker。"""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel
 
@@ -97,12 +100,24 @@ def run_outpatient_job(
             )
         else:
             source = polling
-    return OutpatientSyncService(
+    result = OutpatientSyncService(
         source,
         data_store,
         semantic_registry,
         source_id=job.source_id,
     ).run_once(force_baseline=force_baseline)
+    # 选表同步（探查后选表通道）：主契约同步成功后顺带执行；
+    # 失败只记 last_error，不拖垮主任务
+    try:
+        from src.data_platform.storage.table_sync.store import TableSyncStore
+        from src.data_platform.table_sync_executor import TableSyncExecutor
+
+        TableSyncExecutor(
+            TableSyncStore(), governance_service.open_source_connection
+        ).sync_all_active(job.source_id)
+    except Exception:
+        logger.warning("选表同步失败（不影响主契约同步）source=%s", job.source_id, exc_info=True)
+    return result
 
 
 class _FixedBatchSource:

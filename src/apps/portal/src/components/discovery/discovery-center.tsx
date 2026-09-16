@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -398,9 +399,11 @@ function ScanProgressList({
 function QuickMetricForm({
   field,
   onCancel,
+  mappingBaseUrl = '/semantic-layer/mapping',
 }: {
   field: ScanResultField
   onCancel: () => void
+  mappingBaseUrl?: string
 }) {
   const [form, setForm] = useState<QuickMetricForm>({
     name: field.description || field.field_name,
@@ -412,8 +415,8 @@ function QuickMetricForm({
   })
   const handleSubmit = useCallback(() => {
     const params = new URLSearchParams({ object_code: form.object_code, table: field.table_name, field: field.field_name })
-    window.location.assign(`/semantic-layer/mapping?${params}`)
-  }, [form.object_code, field])
+    window.location.assign(`${mappingBaseUrl}?${params}`)
+  }, [form.object_code, field, mappingBaseUrl])
 
   return (
     <div className="space-y-3">
@@ -781,9 +784,19 @@ function FieldExpandDetail({
   )
 }
 
-// ── Main Page ───────────────────────────────────────────────────
+// ── 发现中心共享组件（语义层发现页 + 数据治理探查页复用）─────────
 
-export default function DiscoveryCenterPage() {
+export interface DiscoveryCenterProps {
+  /** 「纳入数据模型」跳转基座：语义层发现页默认 /semantic-layer/mapping；
+   *  数据治理探查页传 /data-governance/modeling（跳转型预留在数据治理内完成） */
+  mappingBaseUrl?: string
+}
+
+export function DiscoveryCenter({ mappingBaseUrl = '/semantic-layer/mapping' }: DiscoveryCenterProps) {
+  return <DiscoveryCenterContent mappingBaseUrl={mappingBaseUrl} />
+}
+
+function DiscoveryCenterContent({ mappingBaseUrl = '/semantic-layer/mapping' }: DiscoveryCenterProps) {
   // ── Scan state ──
   const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null)
   const [scanning, setScanning] = useState(false)
@@ -835,17 +848,20 @@ export default function DiscoveryCenterPage() {
   // ── Controlled data source state ──
   const [dataSources, setDataSources] = useState<DataSource[]>([])
   const [dataSourceId, setDataSourceId] = useState('')
+  // 数据源治理页「语义发现」入口带 ?source= 预选（仅在该源健康时生效）
+  const preferredSourceId = useSearchParams().get('source') ?? ''
 
   useEffect(() => {
     void listDataSources().then((items) => {
       const healthy = items.filter((item) => item.credentialConfigured && item.connectionStatus === 'healthy')
       setDataSources(healthy)
-      setDataSourceId((value) => value || healthy[0]?.sourceId || '')
+      const preferred = healthy.find((item) => item.sourceId === preferredSourceId)
+      setDataSourceId((value) => value || preferred?.sourceId || healthy[0]?.sourceId || '')
     }, () => {
       setDataSources([])
       setDataSourceId('')
     })
-  }, [])
+  }, [preferredSourceId])
 
   // ── History state ──
   const [history, setHistory] = useState<HistoryItem[]>([])
@@ -1457,7 +1473,7 @@ export default function DiscoveryCenterPage() {
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
-                  onClick={() => window.location.assign('/semantic-layer/mapping')}
+                  onClick={() => window.location.assign(mappingBaseUrl)}
                   disabled={batchSubmitting || selectedFieldKeys.size === 0}
                   className="gap-1 bg-blue-50 text-blue-600 text-xs hover:bg-blue-100"
                 >

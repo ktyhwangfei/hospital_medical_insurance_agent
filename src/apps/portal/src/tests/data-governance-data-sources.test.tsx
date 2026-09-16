@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import DataSourcesPage from '../../app/data-governance/data-sources/page'
+import DataSourcesPage from '../../app/data-governance/(manage)/data-sources/page'
 import {
   checkDataSourceCdc,
   createDataSource,

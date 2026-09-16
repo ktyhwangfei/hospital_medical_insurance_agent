@@ -87,7 +87,8 @@ describe('semantic governance writers', () => {
   })
 
   it('语义发现只提交受控数据源 ID，不在浏览器保存数据库密码', () => {
-    const source = readFileSync(resolve(process.cwd(), 'app/semantic-layer/discovery/page.tsx'), 'utf8')
+    // 发现中心主体已提取为共享组件（语义层页与数据治理探查页复用）
+    const source = readFileSync(resolve(process.cwd(), 'src/components/discovery/discovery-center.tsx'), 'utf8')
     expect(source).toContain('datasource_id')
     expect(source).not.toContain('discovery_datasource_config')
     expect(source).not.toContain('source_config')

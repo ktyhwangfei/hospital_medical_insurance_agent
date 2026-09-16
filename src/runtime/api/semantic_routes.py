@@ -2458,10 +2458,13 @@ async def get_scan_status(task_id: str):
 
 
 @router.get("/discovery/results", response_model=DiscoveryResultsResponse)
-def get_discovery_results():
-    """Return the latest scan results from PostgreSQL, or empty if none cached."""
+def get_discovery_results(datasource_id: str | None = Query(default=None)):
+    """Return the latest scan results from PostgreSQL, or empty if none cached.
+
+    datasource_id 指定时按数据源隔离（探查页传当前数据源，避免被其他链路的
+    小范围扫描覆盖 HIS 全库结果）。"""
     store = _get_discovery_store()
-    latest_result = store.get_latest_result()
+    latest_result = store.get_latest_result(datasource_id)
 
     if latest_result is None:
         latest_result = {"tables": [], "total_tables": 0, "total_fields": 0, "mapped_fields": 0, "unmapped_fields": 0, "fields": []}
