@@ -74,17 +74,19 @@ const workflowCatalog: WorkflowCatalogDto = {
       steps: [
         {
           step_id: 'fetch_settlement',
+          node_type: 'tool',
           tool_id: 'tool_get_settlement_fact',
           description: '',
-          tool_bound: true,
-          input_mapping: {},
+          bound: true,
+          input_mapping: { settlement_id: 'context.settlement_id' },
         },
         {
           step_id: 'fetch_refund_record',
+          node_type: 'tool',
           tool_id: 'tool_get_refund_record',
           description: '',
-          tool_bound: false,
-          input_mapping: {},
+          bound: false,
+          input_mapping: { settlement_id: 'context.settlement_id' },
         },
       ],
     },
@@ -99,27 +101,64 @@ const workflowCatalog: WorkflowCatalogDto = {
       steps: [
         {
           step_id: 'fetch_settlement',
+          node_type: 'tool',
           tool_id: 'tool_get_settlement_fact',
           description: '',
-          tool_bound: true,
-          input_mapping: {},
+          bound: true,
+          input_mapping: { settlement_id: 'context.settlement_id' },
         },
         {
           step_id: 'retrieve_policy_evidence',
+          node_type: 'tool',
           tool_id: 'tool_retrieve_policy_evidence',
           description: '',
-          tool_bound: true,
+          bound: true,
           input_mapping: { settlement_fact: 'fetch_settlement' },
         },
         {
-          step_id: 'compare_settlement_vs_policy',
-          tool_id: 'tool_compare_settlement_vs_policy',
+          step_id: 'check_evidence',
+          node_type: 'domain',
+          handler_id: 'evidence_completeness',
+          handler_version: '1.0.0',
           description: '',
-          tool_bound: true,
+          bound: true,
           input_mapping: {
             settlement_fact: 'fetch_settlement',
             policy_evidence: 'retrieve_policy_evidence',
           },
+        },
+        {
+          step_id: 'compare_settlement_vs_policy',
+          node_type: 'domain',
+          handler_id: 'settlement_policy_compare',
+          handler_version: '1.0.0',
+          description: '',
+          bound: true,
+          input_mapping: {
+            settlement_fact: 'fetch_settlement',
+            policy_evidence: 'retrieve_policy_evidence',
+          },
+        },
+        {
+          step_id: 'merge_evidence',
+          node_type: 'domain',
+          handler_id: 'evidence_merge',
+          handler_version: '1.0.0',
+          description: '',
+          bound: true,
+          input_mapping: {
+            policy_evidence: 'retrieve_policy_evidence',
+            comparison: 'compare_settlement_vs_policy',
+            evidence_check: 'check_evidence',
+          },
+        },
+        {
+          step_id: 'public_result',
+          node_type: 'output',
+          source_ref: 'merge_evidence',
+          description: '',
+          bound: true,
+          input_mapping: {},
         },
       ],
     },
@@ -168,7 +207,11 @@ describe('ToolsPage Tool 与 Workflow 可视化页', () => {
     const steps = screen.getByTestId('workflow-steps-wf_outpatient_settlement_explain')
     expect(steps.textContent).toContain('settlement_fact ← fetch_settlement')
     expect(steps.textContent).toContain('policy_evidence ← retrieve_policy_evidence')
-    expect(steps.textContent).toContain('输入 ← 会话上下文')
+    expect(steps.textContent).toContain('settlement_id ← context.settlement_id')
+    expect(steps.textContent).toContain('领域节点')
+    expect(steps.textContent).toContain('settlement_policy_compare:1.0.0')
+    expect(steps.textContent).toContain('输出节点')
+    expect(steps.textContent).toContain('输出 ← merge_evidence')
   })
 
   it('接口失败时展示错误提示', async () => {

@@ -1,4 +1,4 @@
-"""Tool Registry 全量登记测试：数据/知识/对比计算三类工具的注册与绑定。"""
+"""Tool Registry 全量登记测试：仅登记可独立调用的数据/知识能力。"""
 
 import os
 
@@ -17,11 +17,11 @@ def test_registry_registers_all_category_tools_bound() -> None:
         "tool_retrieve_policy_evidence",
         "tool_match_trusted_question",
         "tool_comprehensive_knowledge_lookup",
-        "tool_compare_settlement_vs_policy",
     }
     assert expected_bound <= tool_ids
     for tool_id in expected_bound:
         assert registry.is_bound(tool_id), f"{tool_id} 应绑定实现"
+    assert "tool_compare_settlement_vs_policy" not in tool_ids
 
 
 def test_registry_tags_carry_category_taxonomy() -> None:
@@ -34,10 +34,9 @@ def test_registry_tags_carry_category_taxonomy() -> None:
             "tool_query_semantic_metrics",
             "tool_retrieve_policy_evidence",
             "tool_comprehensive_knowledge_lookup",
-            "tool_compare_settlement_vs_policy",
         )
     }
-    assert set(categories.values()) == {"数据类", "知识类", "对比计算类"}
+    assert set(categories.values()) == {"数据类", "知识类"}
 
 
 def test_registry_keeps_refund_record_unbound_by_design() -> None:

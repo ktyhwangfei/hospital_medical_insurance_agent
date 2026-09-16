@@ -7,10 +7,17 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
-from src.domain.workflow.models import WorkflowDefinition
+from src.domain.workflow.models import (
+    DecisionNode,
+    DomainNode,
+    OutputNode,
+    ToolNode,
+    WorkflowDefinition,
+)
 from src.runtime.tool_registry.factory import get_tool_registry
 from src.runtime.tool_registry.service import ToolRegistryService
 from src.runtime.workflow.definitions import ALL_WORKFLOWS
+from src.runtime.workflow.domain_nodes import DOMAIN_HANDLERS
 
 
 class ToolSummary(BaseModel):
@@ -38,9 +45,17 @@ class WorkflowStepSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_id: str
-    tool_id: str
+    node_type: str
+    tool_id: str | None = None
+    handler_id: str | None = None
+    handler_version: str | None = None
+    source_ref: str | None = None
+    condition_ref: str | None = None
+    expected_value: object | None = None
+    match_step_id: str | None = None
+    default_step_id: str | None = None
     description: str
-    tool_bound: bool
+    bound: bool
     input_mapping: dict[str, str]
 
 
@@ -100,6 +115,57 @@ def build_tool_catalog() -> ToolCatalog:
 def _workflow_summary(
     registry: ToolRegistryService, definition: WorkflowDefinition
 ) -> WorkflowSummary:
+    step_summaries: list[WorkflowStepSummary] = []
+    for step in definition.steps:
+        if isinstance(step, ToolNode):
+            step_summaries.append(
+                WorkflowStepSummary(
+                    step_id=step.step_id,
+                    node_type=step.node_type.value,
+                    tool_id=step.tool_id,
+                    description=step.description,
+                    bound=registry.is_bound(step.tool_id),
+                    input_mapping=dict(step.input_mapping),
+                )
+            )
+        elif isinstance(step, DomainNode):
+            step_summaries.append(
+                WorkflowStepSummary(
+                    step_id=step.step_id,
+                    node_type=step.node_type.value,
+                    handler_id=step.handler_id,
+                    handler_version=step.handler_version,
+                    description=step.description,
+                    bound=(step.handler_id, step.handler_version) in DOMAIN_HANDLERS,
+                    input_mapping=dict(step.input_mapping),
+                )
+            )
+        elif isinstance(step, DecisionNode):
+            step_summaries.append(
+                WorkflowStepSummary(
+                    step_id=step.step_id,
+                    node_type=step.node_type.value,
+                    condition_ref=step.condition_ref,
+                    expected_value=step.expected_value,
+                    match_step_id=step.match_step_id,
+                    default_step_id=step.default_step_id,
+                    description=step.description,
+                    bound=True,
+                    input_mapping={},
+                )
+            )
+        elif isinstance(step, OutputNode):
+            step_summaries.append(
+                WorkflowStepSummary(
+                    step_id=step.step_id,
+                    node_type=step.node_type.value,
+                    source_ref=step.source_ref,
+                    description=step.description,
+                    bound=True,
+                    input_mapping={},
+                )
+            )
+
     return WorkflowSummary(
         workflow_id=definition.workflow_id,
         name=definition.name,
@@ -111,16 +177,7 @@ def _workflow_summary(
             )
             for rule in definition.missing_evidence_rules
         ],
-        steps=[
-            WorkflowStepSummary(
-                step_id=step.step_id,
-                tool_id=step.tool_id,
-                description=step.description,
-                tool_bound=registry.is_bound(step.tool_id),
-                input_mapping=dict(step.input_mapping),
-            )
-            for step in definition.steps
-        ],
+        steps=step_summaries,
     )
 
 

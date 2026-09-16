@@ -3,6 +3,7 @@ import os
 os.environ["USE_MEMORY_STORAGE"] = "1"
 
 import pytest
+from pydantic import BaseModel
 
 from src.domain.tool.models import (
     ToolContractKind,
@@ -11,13 +12,24 @@ from src.domain.tool.models import (
     ToolVersion,
 )
 from src.domain.workflow.models import (
+    DecisionNode,
+    DomainNode,
     MissingEvidenceRule,
+    OutputNode,
     WorkflowDefinition,
     WorkflowExecutionStatus,
     WorkflowStep,
 )
 from src.runtime.tool_registry.service import ToolRegistryService
-from src.runtime.workflow.executor import WorkflowExecutor
+from src.runtime.workflow.executor import DomainHandler, WorkflowExecutor
+
+
+class _DoubleInput(BaseModel):
+    amount: int
+
+
+class _DoubleOutput(BaseModel):
+    doubled: int
 
 
 def _tool_version(tool_id: str) -> ToolVersion:
@@ -205,3 +217,201 @@ async def test_execute_supports_context_field_reference() -> None:
 
     assert result.status == WorkflowExecutionStatus.COMPLETE
     assert result.step_results[0].output["echo"] == "S009"
+
+
+@pytest.mark.asyncio
+async def test_execute_supports_tool_domain_and_output_nodes() -> None:
+    registry = ToolRegistryService()
+    registry.register(
+        _tool_version("tool_fetch"),
+        implementation=lambda settlement_id: {"amount": 50},
+    )
+    executor = WorkflowExecutor(
+        registry,
+        domain_handlers={
+            ("double_amount", "1.0.0"): DomainHandler(
+                input_model=_DoubleInput,
+                output_model=_DoubleOutput,
+                implementation=lambda amount: {"doubled": amount * 2},
+            )
+        },
+    )
+    definition = _definition(
+        missing_evidence_rules=[],
+        steps=[
+            WorkflowStep(step_id="fetch", tool_id="tool_fetch"),
+            DomainNode(
+                step_id="calculate",
+                handler_id="double_amount",
+                handler_version="1.0.0",
+                input_mapping={"amount": "fetch.amount"},
+            ),
+            OutputNode(step_id="result", source_ref="calculate"),
+        ],
+    )
+
+    result = await executor.execute(definition, context={"settlement_id": "S001"})
+
+    assert result.status == WorkflowExecutionStatus.COMPLETE
+    assert [step.node_type for step in result.step_results] == [
+        "tool",
+        "domain",
+        "output",
+    ]
+    assert result.step_results[-1].output == {"doubled": 100}
+
+
+@pytest.mark.asyncio
+async def test_execute_fails_closed_for_unregistered_domain_handler() -> None:
+    executor = WorkflowExecutor(ToolRegistryService())
+    definition = _definition(
+        missing_evidence_rules=[],
+        steps=[
+            DomainNode(
+                step_id="calculate",
+                handler_id="unknown_handler",
+                handler_version="9.9.9",
+            )
+        ],
+    )
+
+    result = await executor.execute(definition, context={"settlement_id": "S001"})
+
+    assert result.status == WorkflowExecutionStatus.UNAVAILABLE
+    assert result.step_results[0].handler_id == "unknown_handler"
+    assert "未绑定实现" in result.uncertainties[0]
+
+
+@pytest.mark.asyncio
+async def test_execute_fails_closed_when_domain_output_breaks_contract() -> None:
+    executor = WorkflowExecutor(
+        ToolRegistryService(),
+        domain_handlers={
+            ("broken", "1.0.0"): DomainHandler(
+                input_model=_DoubleInput,
+                output_model=_DoubleOutput,
+                implementation=lambda amount: {"unexpected": amount},
+            )
+        },
+    )
+    definition = _definition(
+        missing_evidence_rules=[],
+        steps=[
+            DomainNode(
+                step_id="broken",
+                handler_id="broken",
+                handler_version="1.0.0",
+                input_mapping={"amount": "context.amount"},
+            )
+        ],
+    )
+
+    result = await executor.execute(
+        definition, context={"settlement_id": "S001", "amount": 10}
+    )
+
+    assert result.status == WorkflowExecutionStatus.UNAVAILABLE
+    assert "输出不符合契约" in result.uncertainties[0]
+
+
+@pytest.mark.asyncio
+async def test_execute_fails_closed_when_domain_handler_raises() -> None:
+    def _raise(_amount: int) -> dict:
+        raise RuntimeError("sensitive implementation detail")
+
+    executor = WorkflowExecutor(
+        ToolRegistryService(),
+        domain_handlers={
+            ("broken", "1.0.0"): DomainHandler(
+                input_model=_DoubleInput,
+                output_model=_DoubleOutput,
+                implementation=lambda amount: _raise(amount),
+            )
+        },
+    )
+    definition = _definition(
+        missing_evidence_rules=[],
+        steps=[
+            DomainNode(
+                step_id="broken",
+                handler_id="broken",
+                handler_version="1.0.0",
+                input_mapping={"amount": "context.amount"},
+            )
+        ],
+    )
+
+    result = await executor.execute(
+        definition, context={"settlement_id": "S001", "amount": 10}
+    )
+
+    assert result.status == WorkflowExecutionStatus.UNAVAILABLE
+    assert "领域节点执行失败" in result.uncertainties[0]
+    assert "sensitive implementation detail" not in result.uncertainties[0]
+
+
+@pytest.mark.asyncio
+async def test_execute_decision_routes_to_the_selected_forward_node() -> None:
+    registry = ToolRegistryService()
+    registry.register(
+        _tool_version("tool_fetch"),
+        implementation=lambda **kwargs: {"match": {"result": "approved"}, "default": {"result": "manual_review"}},
+    )
+    executor = WorkflowExecutor(registry)
+    definition = _definition(
+        missing_evidence_rules=[],
+        steps=[
+            WorkflowStep(step_id="fetch", tool_id="tool_fetch"),
+            DecisionNode(
+                step_id="route",
+                condition_ref="context.approved",
+                expected_value=True,
+                match_step_id="selected",
+                default_step_id="default",
+            ),
+            OutputNode(step_id="default", source_ref="fetch.default"),
+            OutputNode(step_id="selected", source_ref="fetch.match"),
+        ],
+    )
+
+    result = await executor.execute(definition, context={"approved": True})
+
+    assert [step.step_id for step in result.step_results] == ["fetch", "route", "selected"]
+    assert result.step_results[1].selected_step_id == "selected"
+    assert result.step_results[2].output == {"result": "approved"}
+
+    default_result = await executor.execute(definition, context={"approved": False})
+
+    assert [step.step_id for step in default_result.step_results] == ["fetch", "route", "default"]
+    assert default_result.step_results[1].selected_step_id == "default"
+    assert default_result.step_results[2].output == {"result": "manual_review"}
+
+
+def test_workflow_definition_rejects_invalid_decision_targets() -> None:
+    with pytest.raises(ValueError, match="目标节点不存在"):
+        _definition(
+            steps=[
+                DecisionNode(
+                    step_id="route",
+                    condition_ref="context.approved",
+                    expected_value=True,
+                    match_step_id="missing",
+                    default_step_id="later",
+                ),
+                WorkflowStep(step_id="later", tool_id="tool_a"),
+            ]
+        )
+
+    with pytest.raises(ValueError, match="必须位于决策节点之后"):
+        _definition(
+            steps=[
+                WorkflowStep(step_id="first", tool_id="tool_a"),
+                DecisionNode(
+                    step_id="route",
+                    condition_ref="context.approved",
+                    expected_value=True,
+                    match_step_id="first",
+                    default_step_id="missing",
+                ),
+            ]
+        )
