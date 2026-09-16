@@ -40,7 +40,7 @@ vi.mock('@/lib/flow-api', async (importOriginal) => {
   }
 })
 
-import FlowEditorPage from '../../app/flow/[flowId]/page'
+import FlowEditorPage from '../../app/data-governance/flows/[flowId]/page'
 import {
   getFlow, updateFlow, validateFlow, submitFlowReview,
 } from '@/lib/flow-api'
