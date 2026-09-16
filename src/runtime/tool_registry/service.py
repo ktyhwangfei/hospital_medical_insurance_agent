@@ -20,6 +20,33 @@ class ToolInvocationError(Exception):
 ToolCallable = Callable[..., Any] | Callable[..., Awaitable[Any]]
 
 
+def _filter_kwargs(implementation: ToolCallable, kwargs: dict[str, Any], tool_id: str) -> dict[str, Any]:
+    """按实现签名过滤调用参数。
+
+    WorkflowExecutor 未声明 input_mapping 的步骤整包透传执行上下文（含 question 等
+    非工具入参），按签名裁剪避免 TypeError；声明了但实现不存在的必填参数降级为
+    ToolInvocationError（fail-closed），不静默吞掉。
+    """
+    parameters = inspect.signature(implementation).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return kwargs
+    accepted = {
+        name
+        for name, p in parameters.items()
+        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    missing = [
+        name
+        for name, p in parameters.items()
+        if p.default is inspect.Parameter.empty
+        and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and name not in kwargs
+    ]
+    if missing:
+        raise ToolInvocationError(f"Tool {tool_id} 缺少必填参数: {', '.join(missing)}")
+    return {k: v for k, v in kwargs.items() if k in accepted}
+
+
 class ToolRegistryService:
     """Tool 注册与调用服务，单例由 factory 函数持有。"""
 
@@ -58,7 +85,7 @@ class ToolRegistryService:
         if implementation is None:
             raise ToolInvocationError(f"Tool {tool_id} 未绑定可调用实现")
 
-        result = implementation(**kwargs)
+        result = implementation(**_filter_kwargs(implementation, kwargs, tool_id))
         if inspect.isawaitable(result):
             result = await result
         return result

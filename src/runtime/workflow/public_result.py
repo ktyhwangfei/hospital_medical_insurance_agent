@@ -30,7 +30,8 @@ def _collect_evidence(outputs: dict[str, dict]) -> list[dict]:
 
 
 def _collect_conclusion(outputs: dict[str, dict]) -> str | None:
-    for output in outputs.values():
+    """取末端分析步骤的结论（倒序遍历）：如退费链应取退费记录而非费用明细的摘要。"""
+    for output in reversed(list(outputs.values())):
         if isinstance(output.get("conclusion"), str) and output["conclusion"]:
             return output["conclusion"]
     return None

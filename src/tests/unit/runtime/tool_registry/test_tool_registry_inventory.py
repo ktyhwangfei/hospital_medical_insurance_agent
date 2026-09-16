@@ -40,11 +40,12 @@ def test_registry_tags_carry_category_taxonomy() -> None:
     assert set(categories.values()) == {"数据类", "知识类", "对比计算类"}
 
 
-def test_registry_keeps_refund_record_unbound_by_design() -> None:
+def test_registry_binds_refund_record_with_real_source() -> None:
+    """2026-09-16 盘点后：退费记录接入真实数据源（HIS o_Trade 链路 + 住院 tflydjh）并绑定实现。"""
     registry = get_tool_registry()
 
     assert "tool_get_refund_record" in registry.list_registered_tool_ids()
-    assert not registry.is_bound("tool_get_refund_record")
+    assert registry.is_bound("tool_get_refund_record")
 
 
 def test_semantic_metric_tool_target_ref_within_whitelist() -> None:

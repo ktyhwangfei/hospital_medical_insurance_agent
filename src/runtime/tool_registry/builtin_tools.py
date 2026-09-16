@@ -14,6 +14,8 @@ from src.domain.tool.models import (
 )
 from src.runtime.tool_registry.service import ToolRegistryService
 
+from src.runtime.policy_qa import settlement_record_lookup
+
 TOOL_GET_SETTLEMENT_FACT = "tool_get_settlement_fact"
 TOOL_GET_REFUND_RECORD = "tool_get_refund_record"
 TOOL_RESOLVE_SETTLEMENT_BY_PERSON = "tool_resolve_settlement_by_person"
@@ -50,10 +52,36 @@ async def _get_settlement_fact(settlement_id: str) -> dict:
     }
 
 
+def _get_refund_record(
+    settlement_id: str = "", id_card: str = "", insurance_card_no: str = "", visit_date: str = ""
+) -> dict:
+    """包装退费记录查询能力：住院 djh→tflydjh 医保端链路；门诊人员标识→HIS o_Trade 链路。"""
+    return settlement_record_lookup.get_refund_record(
+        settlement_id=settlement_id,
+        id_card=id_card,
+        insurance_card_no=insurance_card_no,
+        visit_date=visit_date,
+    )
+
+
+def _resolve_settlement_by_person(
+    *,
+    id_card: str = "",
+    patient_id: str = "",
+    insurance_card_no: str = "",
+    visit_date: str = "",
+) -> dict:
+    """包装人员定位结算单能力：门诊 o_Trade（P_IDNo/P_ICNo）+ 住院 yb_brdjxx（sfz/kh）。"""
+    return settlement_record_lookup.resolve_settlement_by_person(
+        id_card=id_card,
+        patient_id=patient_id,
+        insurance_card_no=insurance_card_no,
+        visit_date=visit_date,
+    )
+
+
 def register_builtin_tools(registry: ToolRegistryService) -> None:
-    """登记内置 Tool。`tool_get_refund_record` 无既有数据源，故意不绑定实现，
-    调用时由 Registry 抛出 ToolInvocationError，交由 Workflow 层降级为 unavailable。
-    """
+    """登记内置 Tool。全部绑定真实实现（2026-09-16 盘点后退费/人员定位已接入数据源）。"""
     registry.register(
         ToolVersion(
             version_id="tv_settlement_fact_3",
@@ -108,9 +136,9 @@ def register_builtin_tools(registry: ToolRegistryService) -> None:
 
     registry.register(
         ToolVersion(
-            version_id="tv_resolve_settlement_by_person_1",
+            version_id="tv_resolve_settlement_by_person_2",
             tool_id=TOOL_RESOLVE_SETTLEMENT_BY_PERSON,
-            semantic_version="1.0.0",
+            semantic_version="1.1.0",
             definition=ToolDefinition(
                 tool_id=TOOL_RESOLVE_SETTLEMENT_BY_PERSON,
                 name="人员定位结算单",
@@ -131,7 +159,7 @@ def register_builtin_tools(registry: ToolRegistryService) -> None:
                     "patient_id": {
                         "type": "string",
                         "required": False,
-                        "description": "患者ID，HIS 内部主键（人员唯一标识三选一）",
+                        "description": "患者ID，HIS 内部主键（当前数据源未启用该标识，保留占位）",
                     },
                     "insurance_card_no": {
                         "type": "string",
@@ -159,29 +187,31 @@ def register_builtin_tools(registry: ToolRegistryService) -> None:
                     },
                 },
                 execution_detail=(
-                    "无执行语句（fail-closed）：平台数据模型现状盘点——\n"
-                    "  门诊 mz_trade 84 列无人员身份字段（无身份证/姓名/患者ID，锚点为 T_TradeNo/T_SetTid）；\n"
-                    "  住院语义模型锚点为登记号 djh，语义字段无患者身份；\n"
-                    "  PostgreSQL patients 表仅 patient_id+name（样例），insurance_transactions 为上传事务表（无金额/结算日期）。\n"
-                    "绑定路径：HIS 患者主索引或医保结算身份字段接入后，实现 SettlementResolverPort 并绑定，\n"
-                    "  目标查询形态：SELECT 结算单号, 结算日期, 总金额 FROM <结算事实表>\n"
-                    "               WHERE <人员身份字段> = :id AND <就诊日期> BETWEEN <入院-结算区间>；\n"
-                    "  硬约束：多笔命中 → multiple_candidates 供澄清；输出不回显身份证原文（脱敏规范）。"
+                    "双源查询（只读 SELECT，参数化，输出不含身份原文）：\n"
+                    "  门诊（HIS 收费端）：SELECT T_TradeNo, T_TradeDate, T_FeeAll FROM dbo.o_Trade\n"
+                    "    WHERE T_TradeDate >= :visit_date AND T_TradeDate < DATEADD(day,1,:visit_date)\n"
+                    "    AND (P_IDNo = :id_card OR P_ICNo = :card OR P_CardNo = :card)\n"
+                    "  住院（医保端）：SELECT b.djh, b.ryrq, b.cyrq, z.zje FROM dbo.yb_brdjxx b\n"
+                    "    LEFT JOIN dbo.yb_zyjyxx z ON z.djh = b.djh\n"
+                    "    WHERE b.ryrq <= :visit_date AND (b.cyrq IS NULL OR b.cyrq >= :visit_date)\n"
+                    "    AND (b.sfz = :id_card OR b.kh = :card)\n"
+                    "硬约束：多笔命中 → multiple_candidates 供澄清，禁止自动选定执行；输出不回显身份证原文。"
                 ),
             ),
             status=ToolStatus.MATERIALIZED,
-        )
+        ),
+        implementation=_resolve_settlement_by_person,
     )
 
     registry.register(
         ToolVersion(
-            version_id="tv_refund_record_3",
+            version_id="tv_refund_record_4",
             tool_id=TOOL_GET_REFUND_RECORD,
-            semantic_version="1.2.0",
+            semantic_version="1.3.0",
             definition=ToolDefinition(
                 tool_id=TOOL_GET_REFUND_RECORD,
                 name="查询退费记录",
-                description="查询指定结算单的退费/冲正记录（当前无既有数据源接入，故意不绑定实现）",
+                description="查询指定结算单或人员（+就诊日期）的已发生退费/冲正记录（真实数据源：HIS o_Trade 退费链路 + 住院 tflydjh）",
                 contract_kind=ToolContractKind.ADAPTER_PORT,
                 target_ref="src.adapters.ports.refund_record_port",
                 risk_level=ToolRiskLevel.MEDIUM,
@@ -189,22 +219,49 @@ def register_builtin_tools(registry: ToolRegistryService) -> None:
                 input_schema={
                     "settlement_id": {
                         "type": "string",
-                        "required": True,
-                        "description": "结算单号，定位其退费/冲正记录",
+                        "required": False,
+                        "description": "结算单号（djh）：走医保端退费链路（住院 tflydjh）",
+                    },
+                    "id_card": {
+                        "type": "string",
+                        "required": False,
+                        "description": "身份证号：与就诊日期配合走门诊 HIS 退费链路（输出不回显原文）",
+                    },
+                    "insurance_card_no": {
+                        "type": "string",
+                        "required": False,
+                        "description": "医保卡/社保卡号：与身份证二选一",
+                    },
+                    "visit_date": {
+                        "type": "string",
+                        "required": False,
+                        "description": "就诊日期 YYYY-MM-DD，门诊链路的过滤窗口",
                     },
                 },
                 output_schema={
                     "records": {
                         "type": "array<object>",
-                        "description": "退费/冲正记录列表（含退费时间/金额/原因），未接入数据源前恒 unavailable",
+                        "description": "退费/冲正记录列表（trade_no/trade_date/fee_all/original_trade_no/partial_return_flag/refund_side）",
+                    },
+                    "refunded_count": {"type": "integer", "description": "命中退费相关交易笔数"},
+                    "conclusion": {"type": "string", "description": "确定性摘要（有/无退费记录）"},
+                    "uncertainties": {
+                        "type": "array<string>",
+                        "description": "边界声明（退费重算规则未接入，仅陈述事实不做金额归因）",
                     },
                 },
                 execution_detail=(
-                    "无执行语句：目标 Adapter Protocol（src.adapters.ports.refund_record_port）尚无真实数据源接入，"
-                    "故意不绑定实现；调用即 ToolInvocationError，Workflow 层降级为 unavailable（fail-closed，不编造结果）。"
-                    "接入后执行方式由该 Protocol 实现决定并在此补充。"
+                    "双链路只读查询（参数化，不含身份原文输出）：\n"
+                    "  住院（医保端）：SELECT djh, jylsh, jyrq, zje, tflydjh FROM dbo.yb_zyjyxx\n"
+                    "    WHERE tflydjh = :settlement_id AND tflydjh <> 0\n"
+                    "  门诊（HIS 收费端）：SELECT T_TradeNo, T_TradeDate, T_FeeAll, TR_OraginalTradeNo,\n"
+                    "    T_PartialReturnFlag FROM dbo.o_Trade WHERE (TR_OraginalTradeNo <> '' OR T_HasRefundmented = 1\n"
+                    "    OR T_FeeAll < 0) AND (P_IDNo = :id_card OR P_ICNo/:P_CardNo = :card) AND T_TradeDate 窗口\n"
+                    "边界：测试库中医保端 djh 与 HIS 端 T_TradeNo 无直接 join，门诊退费必须走人员标识；\n"
+                    "退费重算规则（T7）未接入，结论仅陈述退费事实，不做金额重算归因（uncertainties 声明）。"
                 ),
             ),
             status=ToolStatus.MATERIALIZED,
         ),
+        implementation=_get_refund_record,
     )

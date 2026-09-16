@@ -5,8 +5,13 @@ from src.runtime.tool_registry.builtin_tools import (
     TOOL_GET_REFUND_RECORD,
     TOOL_GET_SETTLEMENT_FACT,
 )
-from src.runtime.tool_registry.calc_tools import TOOL_COMPARE_SETTLEMENT_VS_POLICY
+from src.runtime.tool_registry.calc_tools import (
+    TOOL_COMPARE_SAME_DRUG_ACROSS_SETTLEMENTS,
+    TOOL_COMPARE_SETTLEMENT_VS_POLICY,
+)
 from src.runtime.tool_registry.data_tools import (
+    TOOL_GET_BENEFIT_STACKING,
+    TOOL_GET_FEE_DETAIL,
     TOOL_PARSE_DATA_QUERY_INTENT,
     TOOL_QUERY_SEMANTIC_METRICS,
 )
@@ -15,7 +20,7 @@ from src.runtime.tool_registry.knowledge_tools import TOOL_COMPREHENSIVE_KNOWLED
 WF_REFUND_VERIFICATION = WorkflowDefinition(
     workflow_id="wf_refund_verification",
     name="退费核对",
-    description="核对结算单是否存在对应退费/冲正记录（Issue #68 场景：多扣未退款）",
+    description="核对结算单是否存在对应退费/冲正记录，并调取费用明细供逐项比对（Issue #68 场景：退药未退款/多扣）",
     intent_keywords=["退费", "退款", "多扣", "未退款", "冲正", "退药"],
     missing_evidence_rules=[
         MissingEvidenceRule(
@@ -30,9 +35,82 @@ WF_REFUND_VERIFICATION = WorkflowDefinition(
             description="查询结算单基础事实",
         ),
         WorkflowStep(
+            step_id="fetch_fee_detail",
+            tool_id=TOOL_GET_FEE_DETAIL,
+            description="查询逐项目费用明细（含国标码/先行自付），供退费项定位",
+        ),
+        WorkflowStep(
             step_id="fetch_refund_record",
             tool_id=TOOL_GET_REFUND_RECORD,
-            description="查询退费/冲正记录",
+            description="查询退费/冲正记录（医保端 tflydjh + HIS 端退费链路）",
+        ),
+    ],
+)
+
+WF_SETTLEMENT_REIMBURSEMENT_DIFF = WorkflowDefinition(
+    workflow_id="wf_settlement_reimbursement_diff",
+    name="同药跨单报销差异核验",
+    description=(
+        "同一患者多张结算单的同一药品/项目费用事实对比：按国标码对齐后逐项对比"
+        "单价/数量/医保内占比/先行自付，差异归因边界如实声明（Issue #68 场景：同药三次报销比例不同）"
+    ),
+    intent_keywords=[
+        "报销比例不同",
+        "比例不一样",
+        "同药",
+        "同一药品",
+        "同一患者",
+        "三次结算",
+        "跨结算",
+        "比例差异",
+    ],
+    missing_evidence_rules=[
+        MissingEvidenceRule(
+            field_name="settlement_ids",
+            clarify_message="请提供需要对比的至少两笔结算单号后再继续。",
+        ),
+    ],
+    steps=[
+        WorkflowStep(
+            step_id="compare_same_drug",
+            tool_id=TOOL_COMPARE_SAME_DRUG_ACROSS_SETTLEMENTS,
+            description="逐单取费用明细后按国标码对齐对比（工具内部循环，输出确定性差异清单）",
+            input_mapping={"settlement_ids": "context.settlement_ids"},
+        ),
+    ],
+)
+
+WF_BENEFIT_STACKING_ATTRIBUTION = WorkflowDefinition(
+    workflow_id="wf_benefit_stacking_attribution",
+    name="待遇叠加归因",
+    description=(
+        "查询结算单的特病登记状态与逐笔分摊事实（特病/大病/民政救助），"
+        "叠加顺序规则未接入前仅陈述实际分摊并声明不确定性（Issue #68 场景：特病+低保二次报销个人支付偏高）"
+    ),
+    intent_keywords=[
+        "特病",
+        "低保",
+        "二次报销",
+        "救助",
+        "待遇叠加",
+        "血友病",
+    ],
+    missing_evidence_rules=[
+        MissingEvidenceRule(
+            field_name="settlement_id",
+            clarify_message="请提供需要归因分析的结算单号后再继续。",
+        ),
+    ],
+    steps=[
+        WorkflowStep(
+            step_id="fetch_settlement",
+            tool_id=TOOL_GET_SETTLEMENT_FACT,
+            description="查询结算单基础事实",
+        ),
+        WorkflowStep(
+            step_id="fetch_benefit_stacking",
+            tool_id=TOOL_GET_BENEFIT_STACKING,
+            description="查询特病登记与逐笔分摊事实（低保维度缺失时声明 uncertainties）",
         ),
     ],
 )
@@ -147,6 +225,8 @@ WF_DATA_QUERY = WorkflowDefinition(
 
 ALL_WORKFLOWS: list[WorkflowDefinition] = [
     WF_REFUND_VERIFICATION,
+    WF_SETTLEMENT_REIMBURSEMENT_DIFF,
+    WF_BENEFIT_STACKING_ATTRIBUTION,
     WF_OUTPATIENT_SETTLEMENT_EXPLAIN,
     WF_POLICY_CHAT,
     WF_DATA_QUERY,
