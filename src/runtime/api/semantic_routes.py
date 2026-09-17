@@ -261,6 +261,7 @@ class DiscoveryResultsResponse(BaseModel):
     mapped_fields: int
     unmapped_fields: int
     fields: list[DiscoveryResultItem]
+    table_labels: dict[str, str] = Field(default_factory=dict, description="源表 → 中文名（取语义数据集登记名）")
 
 
 class DiscoveryHistoryItem(BaseModel):
@@ -2486,6 +2487,21 @@ def get_discovery_results(datasource_id: str | None = Query(default=None)):
                 usage_map[m.source_field] = m.usage_count
     except Exception:
         logger.warning("get_discovery_results: 构建 mapped_fields_set 失败，降级为全未映射", exc_info=True)
+    # 并入数据模型已确认映射（V3.0 数据建模层；选表通道落地表与源表同名小写归一）
+    try:
+        from src.data_platform.storage.data_model.data_model_factory import (
+            get_data_model_storage,
+        )
+        model_storage = get_data_model_storage()
+        for model in model_storage.list_models():
+            for mapping in model_storage.list_mappings(model.model_code):
+                if mapping.status != "confirmed":
+                    continue
+                column = mapping.physical_column.lower().strip()
+                mapped_fields_set.add(column)
+                mapped_fields_set.add(f"{mapping.physical_table.lower().strip()}.{column}")
+    except Exception:
+        logger.warning("get_discovery_results: 数据模型映射并入失败", exc_info=True)
 
     # 批量预取全部字段释义，避免循环内逐条查询（N+1 → 1）
     try:
@@ -2543,12 +2559,23 @@ def get_discovery_results(datasource_id: str | None = Query(default=None)):
             value_score=calc_field_value_score(f, usage_count=usage_map.get(f.get("field_name", ""), 0)),
         ))
 
+    # 表级中文名：取语义数据集登记名（如 yb_mzjyxx → 医保门诊交易信息）
+    table_labels: dict[str, str] = {}
+    try:
+        for dataset in reg._store.list_datasets():
+            if dataset.name:
+                table_labels[dataset.table_name] = dataset.name
+                table_labels[dataset.dataset_code] = dataset.name
+    except Exception:
+        logger.warning("get_discovery_results: 表中文名加载失败", exc_info=True)
+
     return DiscoveryResultsResponse(
         tables_count=len(tables_seen),
         fields_count=mapped_count + unmapped_count,
         mapped_fields=mapped_count,
         unmapped_fields=unmapped_count,
         fields=fields,
+        table_labels=table_labels,
     )
 
 

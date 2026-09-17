@@ -59,7 +59,7 @@ class _FakeExecutor:
     def probe_table_keys(self, source_id, table_name):
         return ["djh"]
 
-    def sync_all_active(self, source_id):
+    def sync_all_active(self, source_id, *, manual=False):
         return [
             TableSyncRunResult(
                 table_name=t.table_name, target_table=t.target_table,

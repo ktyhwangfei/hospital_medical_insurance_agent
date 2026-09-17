@@ -39,6 +39,7 @@ interface DiscoveryResults {
   tables_count?: number
   fields_count?: number
   fields?: ProfiledField[]
+  table_labels?: Record<string, string>
 }
 
 interface HistoryItem {
@@ -444,7 +445,12 @@ function ProfilingContent() {
               <button type="button" onClick={() => toggle(group.table)} aria-expanded={isOpen}
                 className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-blue-700">
                 {isOpen ? <ChevronDown className="size-4 shrink-0 text-slate-400" /> : <ChevronRight className="size-4 shrink-0 text-slate-400" />}
-                <span className="truncate font-mono text-sm font-medium text-slate-800">{group.table}</span>
+                <span className="min-w-0">
+                  <span className="block truncate font-mono text-sm font-medium text-slate-800">{group.table}</span>
+                  {results?.table_labels?.[group.table] && (
+                    <span className="block truncate text-xs text-slate-500">{results.table_labels[group.table]}</span>
+                  )}
+                </span>
                 <span className="shrink-0 text-xs text-slate-500">
                   {group.fields.length} 字段 · 已映射 {group.mappedCount}
                   {group.primaryKeys.length > 0 && <> · 主键 {group.primaryKeys.join(',')}</>}
@@ -471,11 +477,14 @@ function ProfilingContent() {
               <div className="overflow-x-auto border-t border-slate-100">
                 <table className="w-full text-left text-xs" data-testid={`fields-${group.table}`}>
                   <thead className="bg-slate-50 text-slate-500">
-                    <tr><th className="px-4 py-2">字段</th><th className="px-4 py-2">类型</th><th className="px-4 py-2">非空率</th><th className="px-4 py-2">样本值</th><th className="px-4 py-2">主键</th><th className="px-4 py-2">映射</th><th className="px-4 py-2">操作</th></tr>
+                    <tr><th className="px-4 py-2">字段</th><th className="px-4 py-2">中文名</th><th className="px-4 py-2">类型</th><th className="px-4 py-2">非空率</th><th className="px-4 py-2">样本值</th><th className="px-4 py-2">主键</th><th className="px-4 py-2">映射</th><th className="px-4 py-2">操作</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {group.fields.map((field) => <tr key={field.field_name}>
                       <td className="px-4 py-2 font-mono">{field.field_name}</td>
+                      <td className="max-w-32 truncate px-4 py-2 text-slate-600" title={field.description ?? ''}>
+                        {field.description ?? '—'}
+                      </td>
                       <td className="px-4 py-2 font-mono text-slate-500">{field.data_type}</td>
                       <td className={`px-4 py-2 font-mono ${nonNullTone(field.non_null_rate)}`}>{field.non_null_rate.toFixed(1)}%</td>
                       <td className="max-w-40 truncate px-4 py-2 font-mono text-slate-500" title={field.sample_value ?? ''}>

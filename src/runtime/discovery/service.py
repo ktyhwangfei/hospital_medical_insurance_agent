@@ -20,10 +20,26 @@ def _get_registry_source_fields() -> set[str]:
                 fields.add(value)
                 if '.' in value:
                     fields.add(value.split('.', 1)[1])
-        return fields
     except Exception as exc:
         logger.warning("获取 registry source fields 失败: %s", exc)
         return set()
+    # 并入数据模型已确认映射（V3.0 数据建模层）：选表通道落地表与源表同名
+    # （小写归一后 o_Diagnose == o_diagnose，列名直通匹配）
+    try:
+        from src.data_platform.storage.data_model.data_model_factory import (
+            get_data_model_storage,
+        )
+        model_storage = get_data_model_storage()
+        for model in model_storage.list_models():
+            for mapping in model_storage.list_mappings(model.model_code):
+                if mapping.status != "confirmed":
+                    continue
+                column = mapping.physical_column.lower().strip()
+                fields.add(column)
+                fields.add(f"{mapping.physical_table.lower().strip()}.{column}")
+    except Exception as exc:
+        logger.warning("获取数据模型映射失败: %s", exc)
+    return fields
 
 
 def _is_mapped(field_name: str, table_name: str, source_fields: set[str]) -> bool:
