@@ -56,6 +56,9 @@ class ToolDefinition(BaseModel):
     risk_level: ToolRiskLevel = ToolRiskLevel.LOW
     input_schema: dict = Field(default_factory=dict)
     output_schema: dict = Field(default_factory=dict)
+    # 执行细节：展示到底层实现——SQL 编译链 / Milvus 检索语句 / 核心公式等静态描述。
+    # 仅治理工作台展示用，不是运行时可执行代码。
+    execution_detail: str = ""
     tags: list[str] = Field(default_factory=list)
 
     @field_validator("target_ref")

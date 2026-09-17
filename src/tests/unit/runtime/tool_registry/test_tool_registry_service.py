@@ -76,3 +76,25 @@ async def test_invoke_raises_for_unknown_tool() -> None:
 
     with pytest.raises(ToolInvocationError):
         await registry.invoke("unknown_tool")
+
+
+@pytest.mark.asyncio
+async def test_invoke_filters_extra_context_kwargs_for_fixed_signature() -> None:
+    """缺陷回归：WorkflowExecutor 未声明 input_mapping 的步骤整包透传上下文，
+    固定签名实现不得因多余 kwargs（如 question）抛 TypeError；
+    缺必填参数时降级为 ToolInvocationError（fail-closed），不静默吞掉。
+    """
+
+    def _impl(settlement_id: str) -> dict:
+        return {"settlement_id": settlement_id}
+
+    registry = ToolRegistryService()
+    registry.register(_version(), implementation=_impl)
+
+    # 多余的 question 不报错，仅裁剪。
+    result = await registry.invoke("demo_tool", question="退费核验", settlement_id="S001")
+    assert result == {"settlement_id": "S001"}
+
+    # 缺必填参数 → ToolInvocationError 而非 TypeError。
+    with pytest.raises(ToolInvocationError, match="缺少必填参数"):
+        await registry.invoke("demo_tool", question="退费核验")

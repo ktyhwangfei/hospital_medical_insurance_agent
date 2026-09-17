@@ -264,7 +264,7 @@ def _seed_settlement_query_model(store: RegistryStore) -> None:
                    entity_code="admission_segment", key_type="unique", columns=["djh", "bcqsrq"]),
         DatasetKey(key_code="payment_segment_pk", dataset_code="payment_segments",
                    entity_code="admission_segment", key_type="primary",
-                   columns=["djh", "bdqsrq", "bdjsrq"]),
+                   columns=["djh", "bdqsrq", "bdjzrq"]),
         DatasetKey(key_code="payment_admission_fk", dataset_code="payment_segments",
                    entity_code="inpatient_admission", key_type="foreign", columns=["djh"]),
         DatasetKey(key_code="payment_segment_fk", dataset_code="payment_segments",
@@ -281,13 +281,18 @@ def _seed_settlement_query_model(store: RegistryStore) -> None:
         ("inpatient_registration.service_type", "inpatient_registration", "yllb", "医疗类别", "dimension", "Enum", True),
         ("benefit_segments.admission_id", "benefit_segments", "djh", "住院登记号", "identifier", "String", False),
         ("benefit_segments.segment_start_date", "benefit_segments", "bcqsrq", "分段开始日期", "identifier", "Date", False),
-        ("benefit_segments.segment_end_date", "benefit_segments", "bcjsrq", "分段结束日期", "dimension", "Date", True),
+        # 真实 yb_dyxxzy 只有 bcqsrq，没有分段结束日期列（INFORMATION_SCHEMA 实测）；
+        # 该字段退化为开始日期占位，待业务确认口径。nullable 必须与同列的
+        # segment_start_date 一致（False），否则 validate_query_model 的
+        # nullable_by_column 按 (dataset, column) 建字典时两者互相覆盖，
+        # 会依字段迭代顺序随机报「primary key contains nullable columns」。
+        ("benefit_segments.segment_end_date", "benefit_segments", "bcqsrq", "分段结束日期", "dimension", "Date", False),
         ("benefit_segments.cycle_no", "benefit_segments", "zqxh", "周期序号", "identifier", "String", False),
         ("benefit_segments.deductible", "benefit_segments", "bcqfje", "起付线", "fact", "Amount", True),
         ("benefit_segments.medical_insurance_inner_amount", "benefit_segments", "bcybnje", "医保内费用", "fact", "Amount", True),
         ("payment_segments.admission_id", "payment_segments", "djh", "住院登记号", "identifier", "String", False),
         ("payment_segments.segment_start_date", "payment_segments", "bdqsrq", "分段开始日期", "identifier", "Date", False),
-        ("payment_segments.segment_end_date", "payment_segments", "bdjsrq", "分段结束日期", "identifier", "Date", False),
+        ("payment_segments.segment_end_date", "payment_segments", "bdjzrq", "分段结束日期", "identifier", "Date", False),
         ("payment_segments.total_amount", "payment_segments", "bdfyzje", "住院总费用", "fact", "Amount", True),
         ("payment_segments.basic_pooling_payment", "payment_segments", "bdtczfje", "统筹支付", "fact", "Amount", True),
         ("payment_segments.basic_pooling_self_pay", "payment_segments", "bdtczf", "统筹自付", "fact", "Amount", True),
@@ -378,6 +383,86 @@ def publish_seed_query_object(registry) -> None:
         changelog="住院费用整次住院分段汇总查询模型",
     )
 
+
+# ── 住院结算查询模型列映射自愈（bjybdb 真实表结构对齐）─────────────
+# 事故：种子曾把分段结束日期映射到 yb_dyxxzy.bcjsrq / yb_zyfdxx.bdjsrq，
+# 但真实库不存在这两列（yb_dyxxzy 只有 bcqsrq；yb_zyfdxx 只有 bdjzrq），
+# 编译出的 SQL 报 42S22「Invalid column name」，使结算单问答在 settlement_query
+# 步骤整体失败（POLICY_QA_FAILED）。两条既有守卫使存量库无法自愈：
+# ``_seed_settlement_query_model`` 在数据集已存在时提前返回，
+# ``publish_seed_query_object`` 在已有版本时提前返回；而运行时读的是最新
+# 已发布版本的冻结快照（QueryPlanner._published_version → versions[-1]）。
+# 故此处同时修草稿字段/键，并在快照仍为旧列时重发布一个新版本。
+_INPATIENT_FIELD_REPAIRS = {
+    # field_code: (column_name, nullable)
+    "benefit_segments.segment_end_date": ("bcqsrq", False),
+    "payment_segments.segment_end_date": ("bdjzrq", False),
+}
+_INPATIENT_KEY_COLUMN_REPAIRS = {
+    "payment_segment_pk": ["djh", "bdqsrq", "bdjzrq"],
+}
+
+
+def ensure_inpatient_query_model_columns(store: RegistryStore, registry=None) -> list[str]:
+    """幂等修复住院结算查询模型的分段日期列映射，返回实际执行的修复动作。
+
+    同时纠正 ``nullable``：``bcqsrq`` 在 benefit_segments 上被 segment_start_date
+    与 segment_end_date 两个字段共享，而 ``validate_query_model`` 的
+    ``nullable_by_column`` 以 (dataset, column) 为键，可空性不一致时会依字段迭代
+    顺序随机触发「primary key contains nullable columns」发布拒绝。
+
+    已正确时为无操作（返回空列表），因此可在每次进程启动安全重复执行。
+    """
+    object_code = "inpatient_settlement"
+    if store.get_dataset("payment_segments") is None:
+        return []
+
+    actions: list[str] = []
+    for field_code, (column_name, nullable) in _INPATIENT_FIELD_REPAIRS.items():
+        field = store.get_field(field_code)
+        if field is None:
+            continue
+        if field.column_name == column_name and field.nullable == nullable:
+            continue
+        store.save_field(field.model_copy(update={
+            "column_name": column_name, "nullable": nullable,
+        }))
+        actions.append(
+            f"field {field_code}: ({field.column_name}, nullable={field.nullable})"
+            f" -> ({column_name}, nullable={nullable})"
+        )
+    for key_code, columns in _INPATIENT_KEY_COLUMN_REPAIRS.items():
+        key = store.get_dataset_key(key_code)
+        if key is None or list(key.columns) == columns:
+            continue
+        store.save_dataset_key(key.model_copy(update={"columns": columns}))
+        actions.append(f"key {key_code}: {list(key.columns)} -> {columns}")
+
+    versions = store.list_object_versions(object_code)
+    if versions:
+        latest = versions[-1]
+        published_fields = {item.field_code: item for item in latest.fields}
+        published_keys = {item.key_code: list(item.columns) for item in latest.keys}
+        stale = any(
+            (field := published_fields.get(code)) is None
+            or field.column_name != column
+            or field.nullable != nullable
+            for code, (column, nullable) in _INPATIENT_FIELD_REPAIRS.items()
+        ) or any(
+            published_keys.get(code) != columns
+            for code, columns in _INPATIENT_KEY_COLUMN_REPAIRS.items()
+        )
+        if stale:
+            if registry is None:
+                from src.semantic_layer.registry import SemanticRegistry
+                registry = SemanticRegistry(store)
+            published = registry.publish_object(
+                object_code,
+                changelog="修复住院分段结束日期列映射（bcjsrq/bdjsrq → bcqsrq/bdjzrq）",
+                published_by="seed-self-heal",
+            )
+            actions.append(f"republished version {published.version}")
+    return actions
 
 
 def publish_seed_outpatient_query_object(registry) -> None:

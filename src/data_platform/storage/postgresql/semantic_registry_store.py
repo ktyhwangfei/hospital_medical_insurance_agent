@@ -345,6 +345,7 @@ class PostgresRegistryStore:
             ensure_yb_dictionary_mappings(self)
             from src.semantic_layer.seed import (
                 _seed_settlement_query_model,
+                ensure_inpatient_query_model_columns,
                 ensure_outpatient_query_model,
                 publish_seed_outpatient_query_object,
                 publish_seed_query_object,
@@ -355,6 +356,15 @@ class PostgresRegistryStore:
             registry = SemanticRegistry(self)
             publish_seed_query_object(registry)
             publish_seed_outpatient_query_object(registry)
+            # 住院分段日期列映射自愈：草稿字段/键 + 已发布冻结快照一起纠正，
+            # 否则存量库的 42S22（bcjsrq/bdjsrq 不存在）会一直复发。
+            try:
+                repaired = ensure_inpatient_query_model_columns(self, registry)
+            except Exception:
+                logger.error("住院结算查询模型列映射自愈失败", exc_info=True)
+            else:
+                if repaired:
+                    logger.warning("住院结算查询模型列映射已自愈: %s", repaired)
         except Exception:
             logger.warning("ensure_yb_dictionary_mappings 失败，跳过", exc_info=True)
 

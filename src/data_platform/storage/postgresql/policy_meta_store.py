@@ -6,6 +6,7 @@
 - ``policy_schema_update_task``: 重新结构化任务（schema 演化的异步载体）
 - ``policy_golden_sample``: 质量门禁黄金样本集（已审核规则抽样 + 人工锁定）
 - ``policy_datasource``: 数据源注册表（多源：SQL Server ×N + Milvus ×1）
+- ``record_query_mappings``: 记录查询映射（各院区物理 schema 覆盖，多院扩展点）
 
 [来源: docs/steering/政策知识管线设计.md §3.4]
 """
@@ -55,6 +56,14 @@ CREATE TABLE IF NOT EXISTS policy_golden_sample (
 );
 CREATE INDEX IF NOT EXISTS idx_golden_metric ON policy_golden_sample(metric_code);
 
+-- 记录查询映射：退费/费用明细/待遇叠加/人员定位的各院区物理 schema 覆盖
+CREATE TABLE IF NOT EXISTS record_query_mappings (
+    datasource_id VARCHAR(64) PRIMARY KEY,
+    mapping JSONB NOT NULL,
+    updated_by VARCHAR(64) DEFAULT 'onboarding',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 数据源注册表（多源：语义层取数与发现的统一数据源抽象）
 CREATE TABLE IF NOT EXISTS policy_datasource (
     id VARCHAR(64) PRIMARY KEY,
@@ -81,6 +90,37 @@ class PolicyMetaStore:
 
     def _ensure_schema(self) -> None:
         self._client.execute(_SCHEMA)
+
+    # ── 记录查询映射（多院扩展点，#69 产品化）──
+
+    def get_record_query_mapping(self, datasource_id: str) -> Optional[dict[str, Any]]:
+        """取指定数据源的记录查询映射覆盖；未登记返回 None（用默认映射）。"""
+        rows = self._client.execute(
+            "SELECT mapping FROM record_query_mappings WHERE datasource_id = %s",
+            (datasource_id,),
+        )
+        if not rows:
+            return None
+        mapping = rows[0].get("mapping")
+        if isinstance(mapping, str):
+            try:
+                mapping = json.loads(mapping)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return mapping or None
+
+    def set_record_query_mapping(
+        self, datasource_id: str, mapping: dict[str, Any], *, updated_by: str = "onboarding"
+    ) -> None:
+        """登记/更新数据源的记录查询映射（幂等覆盖）。"""
+        self._client.execute(
+            "INSERT INTO record_query_mappings (datasource_id, mapping, updated_by, updated_at) "
+            "VALUES (%s, %s, %s, CURRENT_TIMESTAMP) "
+            "ON CONFLICT (datasource_id) DO UPDATE SET "
+            "mapping = EXCLUDED.mapping, updated_by = EXCLUDED.updated_by, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (datasource_id, json.dumps(mapping, ensure_ascii=False), updated_by),
+        )
 
     @contextmanager
     def registry_transaction(self, registry_store: object):

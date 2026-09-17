@@ -7,12 +7,14 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from src.runtime.policy_qa.settlement_policy_compare import compare_settlement_vs_policy
+from src.runtime.policy_qa.settlement_record_lookup import compare_same_drug_fee_details
 from src.runtime.workflow.executor import DomainHandler
 
 DOMAIN_HANDLER_VERSION = "1.0.0"
 EVIDENCE_COMPLETENESS = "evidence_completeness"
 SETTLEMENT_POLICY_COMPARE = "settlement_policy_compare"
 EVIDENCE_MERGE = "evidence_merge"
+SAME_DRUG_COMPARE = "same_drug_compare"
 
 
 class EvidenceCompletenessInput(BaseModel):
@@ -64,6 +66,24 @@ class EvidenceMergeOutput(BaseModel):
     missing_evidence: list[str]
 
 
+class SameDrugCompareInput(BaseModel):
+    """同药跨单对比输入：上游 ToolNode 批量取回的逐单费用明细。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fee_details: dict[str, Any]
+
+
+class SameDrugCompareOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    comparisons: list[dict[str, Any]]
+    comparison_count: int
+    all_match: bool | None
+    conclusion: str
+    uncertainties: list[str]
+
+
 def _check_evidence(
     settlement_fact: dict[str, Any], policy_evidence: dict[str, Any]
 ) -> dict[str, Any]:
@@ -112,5 +132,11 @@ DOMAIN_HANDLERS: dict[tuple[str, str], DomainHandler] = {
         input_model=EvidenceMergeInput,
         output_model=EvidenceMergeOutput,
         implementation=_merge_evidence,
+    ),
+    # 同药跨单费用对比（#68 问题 1）：纯确定性对齐与差异标记，外部取数在上游 ToolNode。
+    (SAME_DRUG_COMPARE, DOMAIN_HANDLER_VERSION): DomainHandler(
+        input_model=SameDrugCompareInput,
+        output_model=SameDrugCompareOutput,
+        implementation=lambda fee_details: compare_same_drug_fee_details(fee_details),
     ),
 }

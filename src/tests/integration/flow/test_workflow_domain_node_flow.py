@@ -25,9 +25,9 @@ def _tool_version(tool_id: str) -> ToolVersion:
     return ToolVersion(
         version_id=f"tv-flow-{tool_id}",
         tool_id=tool_id,
-        # 9.9.9 避免与内置工具（tool_retrieve_policy_evidence@1.0.0 等）在进程级
-        # 内存存储单例中语义版本冲突
-        semantic_version="9.9.9",
+        # 版本号回内宣 1.0.0：本测试使用独立内存存储（见下），不会与进程级
+        # 单例中的内置工具版本冲突，也不会以 created_at 压过内置版本污染其他用例。
+        semantic_version="1.0.0",
         definition=ToolDefinition(
             tool_id=tool_id,
             name=tool_id,
@@ -41,7 +41,9 @@ def _tool_version(tool_id: str) -> ToolVersion:
 
 @pytest.mark.asyncio
 async def test_settlement_workflow_runs_tool_domain_and_output_nodes() -> None:
-    registry = ToolRegistryService()
+    from src.data_platform.storage.tool.in_memory import InMemoryToolVersionStorage
+
+    registry = ToolRegistryService(storage=InMemoryToolVersionStorage())
     registry.register(
         _tool_version(TOOL_GET_SETTLEMENT_FACT),
         implementation=lambda settlement_id: {

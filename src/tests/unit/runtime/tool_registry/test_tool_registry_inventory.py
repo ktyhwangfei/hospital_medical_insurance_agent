@@ -13,6 +13,8 @@ def test_registry_registers_all_category_tools_bound() -> None:
 
     expected_bound = {
         "tool_get_settlement_fact",
+        "tool_get_fee_detail",
+        "tool_get_benefit_stacking",
         "tool_query_semantic_metrics",
         "tool_retrieve_policy_evidence",
         "tool_match_trusted_question",
@@ -21,7 +23,9 @@ def test_registry_registers_all_category_tools_bound() -> None:
     assert expected_bound <= tool_ids
     for tool_id in expected_bound:
         assert registry.is_bound(tool_id), f"{tool_id} 应绑定实现"
+    # 对比计算已下沉为代码侧白名单领域节点，不再作为 Tool 登记。
     assert "tool_compare_settlement_vs_policy" not in tool_ids
+    assert "tool_compare_same_drug_across_settlements" not in tool_ids
 
 
 def test_registry_tags_carry_category_taxonomy() -> None:
@@ -31,6 +35,7 @@ def test_registry_tags_carry_category_taxonomy() -> None:
         tool_id: (registry.get_tool(tool_id).definition.tags[0] if tool_id in registry.list_registered_tool_ids() else None)
         for tool_id in (
             "tool_get_settlement_fact",
+            "tool_get_fee_detail",
             "tool_query_semantic_metrics",
             "tool_retrieve_policy_evidence",
             "tool_comprehensive_knowledge_lookup",
@@ -39,11 +44,12 @@ def test_registry_tags_carry_category_taxonomy() -> None:
     assert set(categories.values()) == {"数据类", "知识类"}
 
 
-def test_registry_keeps_refund_record_unbound_by_design() -> None:
+def test_registry_binds_refund_record_with_real_source() -> None:
+    """2026-09-16 盘点后：退费记录接入真实数据源（HIS o_Trade 链路 + 住院 tflydjh）并绑定实现。"""
     registry = get_tool_registry()
 
     assert "tool_get_refund_record" in registry.list_registered_tool_ids()
-    assert not registry.is_bound("tool_get_refund_record")
+    assert registry.is_bound("tool_get_refund_record")
 
 
 def test_semantic_metric_tool_target_ref_within_whitelist() -> None:

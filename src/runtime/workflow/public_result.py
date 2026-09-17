@@ -43,12 +43,16 @@ def _collect_conclusion(outputs: dict[str, dict]) -> str | None:
 
 
 def _collect_uncertainties(outputs: dict[str, dict]) -> list[str]:
+    """汇总输出节点/末端步骤的缺失证据与不确定性声明（低保缺失、规则未接入等）。"""
     items: list[str] = []
     for output in outputs.values():
         for missing in output.get("missing_evidence", []):
             message = f"缺少{missing}，相关结论存在不确定性"
             if message not in items:
                 items.append(message)
+        for item in output.get("uncertainties", []):
+            if item not in items:
+                items.append(item)
     return items
 
 

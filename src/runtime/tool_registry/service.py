@@ -10,6 +10,7 @@ import inspect
 from typing import Any, Awaitable, Callable
 
 from src.data_platform.storage.tool.factory import get_tool_version_storage
+from src.data_platform.storage.tool.ports import ToolVersionStorage
 from src.domain.tool.models import ToolStatus, ToolVersion
 
 
@@ -20,13 +21,39 @@ class ToolInvocationError(Exception):
 ToolCallable = Callable[..., Any] | Callable[..., Awaitable[Any]]
 
 
-class ToolRegistryService:
-    """Tool 注册与调用服务，单例由 factory 函数持有。
+def _filter_kwargs(implementation: ToolCallable, kwargs: dict[str, Any], tool_id: str) -> dict[str, Any]:
+    """按实现签名过滤调用参数。
 
-    storage 可注入（测试隔离 seam）；缺省走进程级存储工厂单例。
+    WorkflowExecutor 未声明 input_mapping 的步骤整包透传执行上下文（含 question 等
+    非工具入参），按签名裁剪避免 TypeError；声明了但实现不存在的必填参数降级为
+    ToolInvocationError（fail-closed），不静默吞掉。
     """
+    parameters = inspect.signature(implementation).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return kwargs
+    accepted = {
+        name
+        for name, p in parameters.items()
+        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    missing = [
+        name
+        for name, p in parameters.items()
+        if p.default is inspect.Parameter.empty
+        and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and name not in kwargs
+    ]
+    if missing:
+        raise ToolInvocationError(f"Tool {tool_id} 缺少必填参数: {', '.join(missing)}")
+    return {k: v for k, v in kwargs.items() if k in accepted}
 
-    def __init__(self, storage=None) -> None:
+
+class ToolRegistryService:
+    """Tool 注册与调用服务，单例由 factory 函数持有。"""
+
+    def __init__(self, storage: ToolVersionStorage | None = None) -> None:
+        # storage 可注入：测试用独立内存存储隔离进程级单例，避免 stub 版本
+        # 以 created_at 压过内置版本污染其他用例的 get_latest_materialized。
         self._storage = storage or get_tool_version_storage()
         self._bindings: dict[str, ToolCallable] = {}
         self._registered_tool_ids: list[str] = []
@@ -61,7 +88,7 @@ class ToolRegistryService:
         if implementation is None:
             raise ToolInvocationError(f"Tool {tool_id} 未绑定可调用实现")
 
-        result = implementation(**kwargs)
+        result = implementation(**_filter_kwargs(implementation, kwargs, tool_id))
         if inspect.isawaitable(result):
             result = await result
         return result

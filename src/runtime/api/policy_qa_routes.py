@@ -1167,6 +1167,9 @@ async def _policy_qa_stream(
         request.mode,
         question=request.question,
         settlement_id=request.settlement_id,
+        settlement_ids=request.settlement_ids,
+        id_card=request.id_card,
+        visit_date=request.visit_date,
     )
     if matched_workflow is None:
         # 未按 mode 命中（理论上不应发生，除非 mode 未映射），降级关键词匹配
@@ -1176,7 +1179,11 @@ async def _policy_qa_stream(
             if not workflow_blocked_actions:
                 try:
                     workflow_public_result = await run_workflow_for_question(
-                        request.question, settlement_id=request.settlement_id
+                        request.question,
+                        settlement_id=request.settlement_id,
+                        settlement_ids=request.settlement_ids,
+                        id_card=request.id_card,
+                        visit_date=request.visit_date,
                     )
                 except Exception as e:
                     logger.warning(f"Workflow routing failed, fallback to skill pipeline: {e}")

@@ -10,6 +10,7 @@ import {
   listTools,
   listWorkflows,
   type ToolCatalogDto,
+  type ToolFieldInfoDto,
   type WorkflowCatalogDto,
 } from '@/lib/tool-workflow-api'
 import { ApiClientError } from '@/lib/types'
@@ -43,6 +44,43 @@ function BoundBadge({ bound }: { bound: boolean }) {
     >
       {bound ? '已绑定实现' : '未绑定 · 无数据源'}
     </span>
+  )
+}
+
+// 输入/输出字段契约区块：优先展示 Tool 的输入参数与返回字段（字段名/类型/必填/说明）。
+function ToolFieldTable({
+  title,
+  fields,
+  testId,
+}: {
+  title: string
+  fields: Record<string, ToolFieldInfoDto>
+  testId: string
+}) {
+  const entries = Object.entries(fields)
+  if (entries.length === 0) return null
+  return (
+    <div className="mt-2 min-w-0 overflow-hidden rounded-md border border-slate-100 bg-slate-50/60" data-testid={testId}>
+      <div className="border-b border-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500">{title}</div>
+      <table className="w-full table-fixed border-collapse text-left">
+        <tbody>
+          {entries.map(([fieldName, info]) => (
+            <tr key={fieldName} className="align-top">
+              <td className="w-[30%] px-2.5 py-1 font-mono text-[11px] text-slate-700">{fieldName}</td>
+              <td className="w-[18%] px-1 py-1 font-mono text-[10px] text-slate-500">
+                {info.type}
+                {'required' in info && (
+                  <span className={info.required ? 'text-red-500' : 'text-slate-400'}>
+                    {info.required ? ' 必填' : ' 可选'}
+                  </span>
+                )}
+              </td>
+              <td className="px-2.5 py-1 text-[11px] text-slate-600">{info.description}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -144,6 +182,26 @@ export default function ToolsPage() {
                   <BoundBadge bound={tool.bound} />
                 </div>
                 <p className="mt-1.5 text-xs text-slate-600">{tool.description}</p>
+                <ToolFieldTable
+                  title={`输入（${Object.keys(tool.input_schema).length} 个参数）`}
+                  fields={tool.input_schema}
+                  testId={`tool-input-fields-${tool.tool_id}`}
+                />
+                <ToolFieldTable
+                  title={`输出（${Object.keys(tool.output_schema).length} 个字段）`}
+                  fields={tool.output_schema}
+                  testId={`tool-output-fields-${tool.tool_id}`}
+                />
+                {tool.execution_detail && (
+                  <details className="mt-2 rounded-md border border-slate-200 bg-slate-900/95" data-testid={`tool-execution-detail-${tool.tool_id}`}>
+                    <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[11px] font-medium text-slate-300">
+                      执行细节（SQL / 检索语句 / 核心公式）
+                    </summary>
+                    <pre className="overflow-x-auto border-t border-slate-700/60 px-2.5 py-2 font-mono text-[10px] leading-relaxed text-slate-200">
+                      {tool.execution_detail}
+                    </pre>
+                  </details>
+                )}
                 <p className="mt-1 font-mono text-[11px] text-slate-400">target_ref: {tool.target_ref}</p>
               </li>
             ))}
@@ -166,6 +224,11 @@ export default function ToolsPage() {
                 <WorkflowIcon className="size-4 text-slate-500" />
                 <span className="text-sm font-medium text-slate-800">{workflow.name}</span>
                 <span className="font-mono text-[11px] text-slate-400">{workflow.workflow_id}</span>
+                {workflow.enabled === false && (
+                  <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">
+                    已停用（环境开关）
+                  </span>
+                )}
               </div>
               <p className="mt-1.5 text-xs text-slate-600">{workflow.description}</p>
 

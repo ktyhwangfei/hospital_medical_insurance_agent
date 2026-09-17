@@ -67,6 +67,8 @@
     ".next-3127/dev/types/**/*.ts",
     ".next-3186/types/**/*.ts",
     ".next-3186/dev/types/**/*.ts",
+    ".next-3182/types/**/*.ts",
+    ".next-3182/dev/types/**/*.ts",
     ".next-3172/types/**/*.ts",
     ".next-3172/dev/types/**/*.ts",
     ".next-3133/types/**/*.ts",

@@ -46,9 +46,12 @@ def test_refund_question_without_settlement_id_asks_for_clarification():
 
 
 def test_refund_question_with_settlement_id_reports_unavailable_step_as_uncertainty(monkeypatch):
+    """断库 fail-closed：退费链工具不可用时步骤降级 unavailable 并声明不确定性（环境无关）。"""
     from types import SimpleNamespace
 
     from src.runtime.policy_qa.settlement_data_provider import SettlementContext
+    from src.runtime.policy_qa import settlement_record_lookup
+    from src.runtime.tool_registry.service import ToolInvocationError
 
     class FakeSettlementDataProvider:
         async def get_settlement_context(self, settlement_id: str) -> SettlementContext:
@@ -59,10 +62,15 @@ def test_refund_question_with_settlement_id_reports_unavailable_step_as_uncertai
                 coverage_status="complete",
             )
 
+    def _unavailable(*args, **kwargs):
+        raise ToolInvocationError("结算记录数据源不可用（模拟断库）")
+
     monkeypatch.setattr(
         "src.runtime.policy_qa.settlement_data_provider.create_settlement_data_provider",
         lambda: FakeSettlementDataProvider(),
     )
+    monkeypatch.setattr(settlement_record_lookup, "get_fee_detail", _unavailable)
+    monkeypatch.setattr(settlement_record_lookup, "get_refund_record", _unavailable)
 
     response = _client().post(
         "/api/v1/medical-insurance-ai-agent/policy-qa/stream",

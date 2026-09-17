@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.domain.workflow.models import (
     DecisionNode,
@@ -18,6 +18,7 @@ from src.runtime.tool_registry.factory import get_tool_registry
 from src.runtime.tool_registry.service import ToolRegistryService
 from src.runtime.workflow.definitions import ALL_WORKFLOWS
 from src.runtime.workflow.domain_nodes import DOMAIN_HANDLERS
+from src.runtime.workflow.service import is_workflow_enabled
 
 
 class ToolSummary(BaseModel):
@@ -33,6 +34,11 @@ class ToolSummary(BaseModel):
     semantic_version: str
     bound: bool
     tags: list[str]
+    # 输入/输出字段契约：{字段名: {type/required/description}}，供 Portal 优先展示。
+    input_schema: dict = Field(default_factory=dict)
+    output_schema: dict = Field(default_factory=dict)
+    # 执行细节：SQL / Milvus expr / 核心公式等底层实现描述，治理页展示到底。
+    execution_detail: str = ""
 
 
 class ToolCatalog(BaseModel):
@@ -70,6 +76,7 @@ class WorkflowSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workflow_id: str
+    enabled: bool = True
     name: str
     description: str
     intent_keywords: list[str]
@@ -99,6 +106,9 @@ def _tool_summary(registry: ToolRegistryService, tool_id: str) -> ToolSummary | 
         semantic_version=version.semantic_version,
         bound=registry.is_bound(tool_id),
         tags=list(definition.tags),
+        input_schema=dict(definition.input_schema),
+        output_schema=dict(definition.output_schema),
+        execution_detail=definition.execution_detail,
     )
 
 
@@ -168,6 +178,7 @@ def _workflow_summary(
 
     return WorkflowSummary(
         workflow_id=definition.workflow_id,
+        enabled=is_workflow_enabled(definition.workflow_id),
         name=definition.name,
         description=definition.description,
         intent_keywords=list(definition.intent_keywords),
