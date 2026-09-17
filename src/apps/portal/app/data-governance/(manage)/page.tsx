@@ -7,12 +7,9 @@ import { AlertTriangle, Clock3, Database, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { NextStepCard } from '@/components/next-step-card'
 import { DataGovernancePipeline } from '@/components/data-governance-pipeline'
-import { getDataGovernanceOverview, type DataGovernanceOverview } from '@/lib/data-governance-api'
+import { getDataGovernanceOverview, listSyncTables, type DataGovernanceOverview } from '@/lib/data-governance-api'
 
 const connectionLabel = { unknown: '未检测', healthy: '连接正常', error: '连接异常' }
-const cdcLabel = {
-  not_applicable: '不适用', not_checked: '未检测', waiting_dba: '等待 DBA', ready: '已就绪', invalid: '配置异常',
-}
 const syncLabel: Record<string, string> = {
   draft: '草稿', ready: '已启用', running: '运行中', paused: '已暂停', degraded: '需重建基线', failed: '执行失败',
 }
@@ -49,6 +46,7 @@ function LoadingState() {
 export default function DataGovernanceOverviewPage() {
   const [overview, setOverview] = useState<DataGovernanceOverview | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [syncTableCounts, setSyncTableCounts] = useState<Record<string, number>>({})
 
   const refresh = useCallback(async () => {
     try {
@@ -73,6 +71,18 @@ export default function DataGovernanceOverviewPage() {
       window.clearInterval(timer)
     }
   }, [refresh])
+
+  // 选表同步表数（按数据源），与概览并行加载，失败降级为不显示
+  useEffect(() => {
+    if (!overview) return
+    let cancelled = false
+    void Promise.all(
+      overview.sources.map(async (s) => [s.sourceId, await listSyncTables(s.sourceId).then((t) => t.length).catch(() => 0)] as const),
+    ).then((entries) => {
+      if (!cancelled) setSyncTableCounts(Object.fromEntries(entries))
+    })
+    return () => { cancelled = true }
+  }, [overview])
 
   if (!overview && !error) return <LoadingState />
   if (!overview && error) return <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">
@@ -154,14 +164,19 @@ export default function DataGovernanceOverviewPage() {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[860px] text-left text-sm">
           <thead className="bg-slate-50 text-xs text-slate-600">
-            <tr><th className="px-4 py-3 font-medium">医院与数据源</th><th className="px-4 py-3 font-medium">门诊源表</th><th className="px-4 py-3 font-medium">CDC</th><th className="px-4 py-3 font-medium">同步</th><th className="px-4 py-3 font-medium">质量</th><th className="px-4 py-3 font-medium">最近成功</th><th className="px-4 py-3 font-medium">延迟</th></tr>
+            <tr><th className="px-4 py-3 font-medium">医院与数据源</th><th className="px-4 py-3 font-medium">连接</th><th className="px-4 py-3 font-medium">同步通道</th><th className="px-4 py-3 font-medium">质量</th><th className="px-4 py-3 font-medium">最近成功</th><th className="px-4 py-3 font-medium">延迟</th></tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {overview.sources.map((source) => <tr key={source.sourceId} className="text-slate-700">
               <td className="px-4 py-3"><p className="font-medium text-slate-900">{source.hospitalName}</p><p className="mt-0.5 text-xs text-slate-500">{source.name} ({source.sourceId})</p></td>
               <td className="px-4 py-3"><Status label={connectionLabel[source.connectionStatus]} tone={source.connectionStatus === 'healthy' ? 'good' : source.connectionStatus === 'error' ? 'bad' : 'neutral'} /></td>
-              <td className="px-4 py-3"><Status label={cdcLabel[source.cdcStatus]} tone={source.cdcStatus === 'ready' ? 'good' : source.cdcStatus === 'invalid' ? 'bad' : source.cdcStatus === 'waiting_dba' ? 'warn' : 'neutral'} /></td>
-              <td className="px-4 py-3"><p>{source.sourceMode ? modeLabel[source.sourceMode] : '未配置'}</p><p className="mt-0.5 text-xs text-slate-500">{source.syncStatus ? syncLabel[source.syncStatus] ?? source.syncStatus : '未创建任务'}</p></td>
+              <td className="px-4 py-3">
+                <p>契约管道：{source.sourceMode === 'cdc' ? 'CDC' : '定时 SQL'}</p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {source.syncStatus ? syncLabel[source.syncStatus] ?? source.syncStatus : '未创建任务'}
+                  {syncTableCounts[source.sourceId] ? ` · 选表同步 ${syncTableCounts[source.sourceId]} 张` : ''}
+                </p>
+              </td>
               <td className="px-4 py-3">{source.qualityStatus === 'accepted' ? <Status label="通过" tone="good" /> : source.qualityStatus === 'blocked' ? <Status label="已阻断" tone="bad" /> : <Status label="暂无" />}</td>
               <td className="whitespace-nowrap px-4 py-3">{formatTime(source.lastSucceededAt)}</td>
               <td className="whitespace-nowrap px-4 py-3 font-mono">{source.latestLatencySeconds === null ? '暂无' : `${Math.round(source.latestLatencySeconds)} 秒`}</td>

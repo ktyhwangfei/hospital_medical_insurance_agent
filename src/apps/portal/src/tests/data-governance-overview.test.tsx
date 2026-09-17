@@ -71,8 +71,10 @@ describe('数据治理运行概览', () => {
     expect(screen.getByText('数据底座')).toBeInTheDocument()
     expect(screen.getByText('可用')).toBeInTheDocument()
     expect(screen.getByText('PostgreSQL 门诊结构及读写已就绪')).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: '门诊源表' })).toBeInTheDocument()
-    expect(screen.getByText('等待 DBA')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '同步通道' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '连接' })).toBeInTheDocument()
+    // CDC 列已移除（未配置不展示）；同步通道显示契约管道模式 + 选表同步数
+    expect(screen.queryByText('等待 DBA')).not.toBeInTheDocument()
     expect(screen.getAllByText('42 秒').length).toBeGreaterThan(0)
     expect(screen.getByText('batch-1')).toBeInTheDocument()
     expect(screen.queryByText('暂无数据源，请先新增')).not.toBeInTheDocument()
