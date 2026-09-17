@@ -431,6 +431,10 @@ class FlowDefinition(BaseModel):
     source_contracts: list[SourceContract] = Field(..., min_length=1)
     metric_outputs: list[MetricOutputBinding] = Field(..., min_length=1)
     materialization: MaterializationStrategy = MaterializationStrategy.VIEW
+    materialize_model: Optional[str] = Field(
+        default=None,
+        description="物化目标数据模型（V3.0 Slice 2）：发布时按模型已确认映射额外物化 dwd 明细视图并注册语义 dataset",
+    )
     revision: int = Field(default=1, ge=1, description="乐观锁修订号")
     content_hash: str = Field(default="", max_length=64)
     published_at: Optional[str] = None

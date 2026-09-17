@@ -283,6 +283,7 @@ describe('ToolsPage Tool 与 Workflow 可视化页', () => {
     expect(steps.textContent).toContain('settlement_id ← context.settlement_id')
     expect(steps.textContent).toContain('领域节点')
     expect(steps.textContent).toContain('settlement_policy_compare:1.0.0')
+    expect(steps.textContent).toContain('输出节点')
     expect(steps.textContent).toContain('输出 ← merge_evidence')
   })
 

@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { AlertTriangle, Clock3, Database, RefreshCw } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { NextStepCard } from '@/components/next-step-card'
+import { DataGovernancePipeline } from '@/components/data-governance-pipeline'
 import { getDataGovernanceOverview, type DataGovernanceOverview } from '@/lib/data-governance-api'
 
 const connectionLabel = { unknown: '未检测', healthy: '连接正常', error: '连接异常' }
@@ -96,6 +98,8 @@ export default function DataGovernanceOverviewPage() {
   ]
 
   return <div aria-live="polite" className="space-y-5">
+    <DataGovernancePipeline />
+
     <section aria-label="运行指标" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
       {metrics.map(([label, value, note]) => <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <p className="text-sm font-medium text-slate-600">{label}</p>
@@ -159,5 +163,8 @@ export default function DataGovernanceOverviewPage() {
         </table>
       </div>}
     </section>
-  </div>
+  
+    <NextStepCard href="C:/Program Files/Git/data-governance/data-sources" title="登记数据源并配置同步"
+      description="接入是治理的起点" />
+</div>
 }

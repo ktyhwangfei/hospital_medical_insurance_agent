@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 const push = vi.fn()
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push, prefetch: vi.fn(), replace: vi.fn() }),
-  usePathname: () => '/flow',
+  usePathname: () => '/data-governance/flows',
 }))
 
 vi.mock('@/lib/flow-api', async (importOriginal) => {
@@ -18,7 +18,7 @@ vi.mock('@/lib/flow-api', async (importOriginal) => {
   }
 })
 
-import FlowListPage from '../../app/flow/page'
+import FlowListPage from '../../app/data-governance/(manage)/flows/page'
 import { createFlow, listFlows } from '@/lib/flow-api'
 import type { FlowDefinitionDto } from '@/lib/flow-api'
 
@@ -87,7 +87,7 @@ describe('FlowListPage 列表页', () => {
     expect(definition.source_contracts[0]).toEqual({
       dataset_code: 'mz_trade', object_code: 'mzjyxx', fields: ['T_TradeNo'],
     })
-    expect(push).toHaveBeenCalledWith('/flow/flow_op_outpatient_processed')
+    expect(push).toHaveBeenCalledWith('/data-governance/flows/flow_op_outpatient_processed')
   })
 
   it('新建对话框键盘可达：role=dialog、初始焦点落 flow_id、Escape 关闭并归还焦点', async () => {

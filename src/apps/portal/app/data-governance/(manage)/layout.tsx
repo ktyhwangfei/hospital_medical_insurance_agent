@@ -6,8 +6,13 @@ import { usePathname } from 'next/navigation'
 
 const tabs = [
   { href: '/data-governance', label: '运行概览' },
-  { href: '/data-governance/data-sources', label: '数据源' },
-  { href: '/data-governance/sync-jobs', label: '同步任务' },
+  { href: '/data-governance/data-sources', label: '数据接入' },
+  { href: '/data-governance/profiling', label: '数据探查' },
+  { href: '/data-governance/sync-jobs', label: '数据同步' },
+  { href: '/data-governance/modeling', label: '数据建模' },
+  { href: '/data-governance/flows', label: '数据加工' },
+  { href: '/data-governance/quality', label: '质量与发布' },
+  { href: '/data-governance/assets', label: '数据资产' },
 ]
 
 export default function DataGovernanceLayout({ children }: { children: ReactNode }) {
@@ -16,7 +21,7 @@ export default function DataGovernanceLayout({ children }: { children: ReactNode
     <header>
       <h1 className="text-xl font-semibold tracking-tight text-slate-900">数据治理中心</h1>
       <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-        管理医院门诊数据接入、CDC 或定时 SQL 同步，并查看数据质量与运行状态。
+        数据资产生命周期：数据接入 → 数据探查 → 数据同步 → 数据建模 → 数据加工 → 质量与发布 → 数据资产；语义标准横向贯穿全流程。
       </p>
     </header>
     <nav aria-label="数据治理导航" className="flex gap-1 border-b border-slate-200">

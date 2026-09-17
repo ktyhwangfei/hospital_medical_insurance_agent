@@ -16,6 +16,7 @@ ALLOWED_TARGET_REF_PREFIXES = (
     "src.adapters.ports.",
     "src.skill_infra.",
     "src.semantic_layer.",
+    "src.runtime.flow.",  # 治理 Flow 消费查询（FlowQueryService，既有能力，V3.0 运营问数通道）
 )
 
 

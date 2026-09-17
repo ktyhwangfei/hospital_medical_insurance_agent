@@ -159,6 +159,10 @@ class Metric(BaseModel):
         None, max_length=32, description="A/B 判别位: policy_rate|policy_elig(政策绑定类) 或 None/''（运营事实类 B）")
     policy_carrier: Optional[dict[str, Any]] = Field(
         None, description="A 类发布硬卡组: doc_number/region_scope/effective_start[/effective_end]/policy_rule_ref")
+    # ── 数据模型绑定（V3.0 Slice 3）：指标绑定数据模型字段（结构契约层）──
+    model_field_ref: Optional[str] = Field(
+        None, max_length=256,
+        description="数据模型字段引用 model_code.field_code；登记层溯源指针，查询路径切换随对象版本发布")
 
     def governance_missing_fields(self) -> list[str]:
         required = {

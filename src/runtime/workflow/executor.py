@@ -304,6 +304,29 @@ class WorkflowExecutor:
                         uncertainty=message,
                     )
                 )
+            except Exception as exc:
+                # fail-closed 兜底（2026-09-15 SSE 静默断流修复）：工具/领域节点内部
+                # 未预期异常（如语义规划失败）不得穿透崩掉 SSE 流；降级 unavailable
+                node_ref = (
+                    step.tool_id
+                    if isinstance(step, ToolNode)
+                    else f"{step.handler_id}:{step.handler_version}"
+                )
+                message = f"步骤 {step.step_id}（{node_ref}）执行失败：{exc}"
+                uncertainties.append(message)
+                step_results.append(
+                    WorkflowStepResult(
+                        step_id=step.step_id,
+                        node_type=step.node_type,
+                        tool_id=step.tool_id if isinstance(step, ToolNode) else None,
+                        handler_id=step.handler_id if isinstance(step, DomainNode) else None,
+                        handler_version=(
+                            step.handler_version if isinstance(step, DomainNode) else None
+                        ),
+                        status=WorkflowStepStatus.UNAVAILABLE,
+                        uncertainty=message,
+                    )
+                )
             step_index += 1
 
         overall_status = (

@@ -3,8 +3,8 @@ import { act, cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import DataGovernanceLayout from '../../app/data-governance/layout'
-import DataGovernanceOverviewPage from '../../app/data-governance/page'
+import DataGovernanceLayout from '../../app/data-governance/(manage)/layout'
+import DataGovernanceOverviewPage from '../../app/data-governance/(manage)/page'
 import { LayoutShell } from '../../app/layout'
 import { getDataGovernanceOverview, type DataGovernanceOverview } from '@/lib/data-governance-api'
 
@@ -76,8 +76,10 @@ describe('数据治理运行概览', () => {
     expect(screen.getAllByText('42 秒').length).toBeGreaterThan(0)
     expect(screen.getByText('batch-1')).toBeInTheDocument()
     expect(screen.queryByText('暂无数据源，请先新增')).not.toBeInTheDocument()
-    expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual([
-      '运行概览', '数据源', '同步任务',
+    // 页签链接限定在数据治理导航内（页面内容区还有流程条等其他链接）
+    const nav = screen.getByRole('navigation', { name: '数据治理导航' })
+    expect(within(nav).getAllByRole('link').map((link) => link.textContent)).toEqual([
+      '运行概览', '数据接入', '数据探查', '数据同步', '数据建模', '数据加工', '质量与发布', '数据资产',
     ])
   })
 
@@ -112,13 +114,14 @@ describe('数据治理运行概览', () => {
     vi.useFakeTimers()
     const { unmount } = render(<DataGovernanceOverviewPage />)
     await act(async () => { await Promise.resolve() })
-    expect(getDataGovernanceOverview).toHaveBeenCalledTimes(1)
+    // 首屏调用两次：概览指标 + 五阶段流程条（DataGovernancePipeline 独立聚合）
+    expect(getDataGovernanceOverview).toHaveBeenCalledTimes(2)
 
     await act(async () => { vi.advanceTimersByTime(15_000); await Promise.resolve() })
-    expect(getDataGovernanceOverview).toHaveBeenCalledTimes(2)
+    expect(getDataGovernanceOverview).toHaveBeenCalledTimes(3)
     unmount()
     await act(async () => { vi.advanceTimersByTime(30_000) })
-    expect(getDataGovernanceOverview).toHaveBeenCalledTimes(2)
+    expect(getDataGovernanceOverview).toHaveBeenCalledTimes(3)
   })
 
   it('顶级侧栏提供数据治理入口', () => {

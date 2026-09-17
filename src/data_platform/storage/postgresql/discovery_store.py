@@ -209,14 +209,27 @@ class DiscoveryStore:
         )
         return rows[0] if rows else None
 
-    def get_latest_completed_result(self) -> dict | None:
-        """获取最近一次成功扫描的完整结果数据。"""
+    def get_latest_completed_result(self, datasource_id: str | None = None) -> dict | None:
+        """获取最近一次成功扫描的完整结果数据。
+
+        datasource_id 指定时按数据源隔离取最新——多链路共享扫描任务表
+        （政策库/投影池小扫描）不会覆盖 HIS 全库扫描结果（2026-09-16 探查页只显示 2 表事故）。
+        """
         client = self._get_client()
-        rows = client.execute(
-            """SELECT * FROM discovery_scan_tasks
-               WHERE status = 'completed' AND result_data IS NOT NULL
-               ORDER BY completed_at DESC LIMIT 1"""
-        )
+        if datasource_id:
+            rows = client.execute(
+                """SELECT * FROM discovery_scan_tasks
+                   WHERE status = 'completed' AND result_data IS NOT NULL
+                     AND source_config->>'datasource_id' = %s
+                   ORDER BY completed_at DESC LIMIT 1""",
+                (datasource_id,),
+            )
+        else:
+            rows = client.execute(
+                """SELECT * FROM discovery_scan_tasks
+                   WHERE status = 'completed' AND result_data IS NOT NULL
+                   ORDER BY completed_at DESC LIMIT 1"""
+            )
         if not rows:
             return None
         row = rows[0]
@@ -225,9 +238,9 @@ class DiscoveryStore:
             result = json.loads(result)
         return result
 
-    def get_latest_result(self) -> dict | None:
+    def get_latest_result(self, datasource_id: str | None = None) -> dict | None:
         """获取最近一次成功扫描的原始字段数据（兼容旧接口）。"""
-        return self.get_latest_completed_result()
+        return self.get_latest_completed_result(datasource_id)
 
     def get_latest_source_config(self) -> dict | None:
         """获取最近一次成功扫描使用的 source_config（含 SQL Server 连接配置）。

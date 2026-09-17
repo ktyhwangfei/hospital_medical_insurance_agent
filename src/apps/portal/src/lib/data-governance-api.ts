@@ -230,7 +230,7 @@ interface SyncJobDto {
   last_error_code: string | null
 }
 
-function governanceToken(): string | null {
+export function governanceToken(): string | null {
   if (typeof window !== 'undefined') {
     const token = window.sessionStorage.getItem('data-governance-token')
     if (token) return token
@@ -599,6 +599,85 @@ export async function getMappingSqlPreview(
       method: 'POST',
       body: JSON.stringify({ captures: draftCaptures }),
     } : { method: 'POST' },
+  )
+  return response.result
+}
+
+// ── 选表同步（探查后选表 SQL 通道）─────────────────────────────────
+
+export interface SelectedSyncTable {
+  source_id: string
+  table_name: string
+  target_table: string
+  key_columns: string[]
+  time_column: string | null
+  status: 'active' | 'paused'
+  last_synced_at: string | null
+  last_row_count: number | null
+  last_error: string | null
+}
+
+export interface TableSyncRunResult {
+  table_name: string
+  target_table: string
+  row_count: number
+  duration_ms: number
+}
+
+export async function listSyncTables(sourceId: string): Promise<SelectedSyncTable[]> {
+  const response = await dataGovernanceRequest<{ result: SelectedSyncTable[] }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/sync-tables`,
+  )
+  return response.result
+}
+
+export async function selectSyncTable(
+  sourceId: string,
+  tableName: string,
+  input: { key_columns?: string[]; time_column?: string | null } = {},
+): Promise<SelectedSyncTable> {
+  const response = await dataGovernanceRequest<{ result: SelectedSyncTable }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/sync-tables/${encodeURIComponent(tableName)}`,
+    { method: 'PUT', body: JSON.stringify(input) },
+  )
+  return response.result
+}
+
+export async function removeSyncTable(sourceId: string, tableName: string): Promise<void> {
+  await dataGovernanceRequest(
+    `/data-sources/${encodeURIComponent(sourceId)}/sync-tables/${encodeURIComponent(tableName)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export async function runSyncTables(sourceId: string): Promise<TableSyncRunResult[]> {
+  const response = await dataGovernanceRequest<{ result: TableSyncRunResult[] }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/sync-tables/run`,
+    { method: 'POST' },
+  )
+  return response.result
+}
+
+// ── 源库对照（验收工具：落地值 vs 源库值并排）────────────────────────
+
+export interface SourceCompareResult {
+  table_name: string
+  target_table: string
+  op: string
+  column: string | null
+  source_value: number | null
+  landing_value: number | null
+  diff: number | null
+  match: boolean
+}
+
+export async function compareSource(
+  sourceId: string,
+  input: { table_name: string; column?: string | null; op?: string },
+): Promise<SourceCompareResult> {
+  const response = await dataGovernanceRequest<{ result: SourceCompareResult }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/compare-source`,
+    { method: 'POST', body: JSON.stringify(input) },
   )
   return response.result
 }

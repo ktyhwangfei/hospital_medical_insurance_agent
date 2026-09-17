@@ -20,11 +20,12 @@ def _utc_now() -> datetime:
 
 
 class CatalogAssetType(StrEnum):
-    """数据资产类型（三级资产 + 源表）。"""
+    """数据资产类型（三级资产 + 源表 + 数据模型）。"""
 
-    SOURCE_TABLE = "source_table"  # 源表/投影表（如 outpatient_trade_current）
+    SOURCE_TABLE = "source_table"  # 源表/投影表/选表直通落地表
     SEMANTIC_OBJECT = "semantic_object"  # 语义对象（如 mzjyxx 门诊交易）
     METRIC = "metric"  # 语义指标（如 mzjyxx.T_FundPay）
+    DATA_MODEL = "data_model"  # 数据模型（如 dwd_mz_settlement，V3.0 结构契约层）
     CONSUMER = "consumer"  # 消费方（skill / portal 页面）
     VECTOR_COLLECTION = "vector_collection"  # Milvus 向量集合（政策知识 RAG 资产）
 

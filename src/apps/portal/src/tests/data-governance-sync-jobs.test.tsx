@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import SyncJobsPage from '../../app/data-governance/sync-jobs/page'
+import SyncJobsPage from '../../app/data-governance/(manage)/sync-jobs/page'
 import {
   getSyncJob, listDataSources, listSyncRuns, runSyncJobOnce, saveSyncJob, startSyncJob,
   type DataSource, type SyncJob,

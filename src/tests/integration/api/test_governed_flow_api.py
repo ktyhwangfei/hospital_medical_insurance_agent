@@ -37,6 +37,22 @@ def api(monkeypatch):
     return TestClient(app, raise_server_exceptions=False)
 
 
+
+def _writer_headers() -> dict:
+    """发布/回滚需 data_governance:write 签名主体（published_by 由后端取自 token）。"""
+    import base64, hashlib, hmac, json as _json
+    from datetime import datetime, timedelta, timezone
+    h = base64.urlsafe_b64encode(_json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).decode().rstrip("=")
+    p = base64.urlsafe_b64encode(_json.dumps({
+        "sub": "flow-reviewer", "roles": ["system_admin"],
+        "permissions": ["data_governance:write"],
+        "exp": (datetime.now(timezone.utc) + timedelta(minutes=5)).timestamp(),
+    }).encode()).decode().rstrip("=")
+    sig = base64.urlsafe_b64encode(
+        hmac.new(b"governed-flow-test-secret", f"{h}.{p}".encode(), hashlib.sha256).digest()
+    ).decode().rstrip("=")
+    return {"Authorization": f"Bearer {h}.{p}.{sig}"}
+
 def _golden_payload() -> dict:
     return build_golden_flow().model_dump(mode="json")
 
@@ -130,6 +146,7 @@ class TestValidateAndReview:
         assert api.post(f"{BASE}/flow_op_outpatient_processed/submit-review").status_code == 200
         resp = api.post(
             f"{BASE}/flow_op_outpatient_processed/publish",
+            headers=_writer_headers(),
             json={"published_by": "reviewer"},
         )
         assert resp.status_code == 422
@@ -151,6 +168,7 @@ class TestPublish:
         api.post(f"{BASE}/flow_op_outpatient_processed/submit-review")
         resp = api.post(
             f"{BASE}/flow_op_outpatient_processed/publish",
+            headers=_writer_headers(),
             json={"published_by": "医保数据组"},
         )
         assert resp.status_code == 201
@@ -158,16 +176,18 @@ class TestPublish:
         assert evidence["revision_id"] == "flow_op_outpatient_processed-rev2"
         assert len(evidence["artifact_hash"]) == 64
         assert len(evidence["semantic_revision"]) == 64
-        assert evidence["published_by"] == "医保数据组"
+        # 治理加固：published_by 来自认证主体（token sub），自报字段被忽略
+        assert evidence["published_by"] == "flow-reviewer"
         # 主表翻转为 published
         flow = api.get(f"{BASE}/flow_op_outpatient_processed").json()
         assert flow["status"] == "published"
-        assert flow["published_by"] == "医保数据组"
+        assert flow["published_by"] == "flow-reviewer"
 
     def test_publish_only_from_pending_review(self, api):
         api.post(BASE, json=_golden_payload())
         resp = api.post(
             f"{BASE}/flow_op_outpatient_processed/publish",
+            headers=_writer_headers(),
             json={"published_by": "reviewer"},
         )
         assert resp.status_code == 409
@@ -175,7 +195,7 @@ class TestPublish:
     def test_revisions_list_marks_active(self, api):
         api.post(BASE, json=_golden_payload())
         api.post(f"{BASE}/flow_op_outpatient_processed/submit-review")
-        api.post(f"{BASE}/flow_op_outpatient_processed/publish", json={"published_by": "r"})
+        api.post(f"{BASE}/flow_op_outpatient_processed/publish", headers=_writer_headers(), json={"published_by": "r"})
         revisions = api.get(f"{BASE}/flow_op_outpatient_processed/revisions").json()
         assert len(revisions) == 1
         assert revisions[0]["is_active"] is True
@@ -193,7 +213,7 @@ class TestPublish:
     def test_delete_published_rejected(self, api):
         api.post(BASE, json=_golden_payload())
         api.post(f"{BASE}/flow_op_outpatient_processed/submit-review")
-        api.post(f"{BASE}/flow_op_outpatient_processed/publish", json={"published_by": "r"})
+        api.post(f"{BASE}/flow_op_outpatient_processed/publish", headers=_writer_headers(), json={"published_by": "r"})
         flow = api.get(f"{BASE}/flow_op_outpatient_processed").json()
         resp = api.delete(
             f"{BASE}/flow_op_outpatient_processed?expected_revision={flow['revision']}"

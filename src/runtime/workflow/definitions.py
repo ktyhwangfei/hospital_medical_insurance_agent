@@ -19,7 +19,7 @@ from src.runtime.tool_registry.data_tools import (
     TOOL_GET_BENEFIT_STACKING,
     TOOL_GET_FEE_DETAIL,
     TOOL_PARSE_DATA_QUERY_INTENT,
-    TOOL_QUERY_SEMANTIC_METRICS,
+    TOOL_QUERY_FLOW_METRICS,
 )
 from src.runtime.tool_registry.knowledge_tools import TOOL_COMPREHENSIVE_KNOWLEDGE_LOOKUP
 from src.runtime.workflow.domain_nodes import (
@@ -260,36 +260,32 @@ WF_POLICY_CHAT = WorkflowDefinition(
 WF_DATA_QUERY = WorkflowDefinition(
     workflow_id="wf_data_query",
     name="运营指标问数",
-    description="自然语言解析为语义指标查询参数，走语义层固定 SQL 执行；指标不在目录内则澄清",
+    description="自然语言解析为 Flow 消费契约指标码，经受控视图与勾稽门禁执行；指标不在目录内则澄清",
     intent_keywords=[
-        "门诊人次",
-        "费用趋势",
-        "科室排名",
-        "药占比",
-        "次均费用",
-        "报销比例",
-        "运营指标",
-        "统计",
+        # 运营聚合问法（金额向；不含「比例」类政策词，避免误伤政策咨询链路）
+        "支付是多少", "支付金额", "支付总额", "支付一共",
+        "门诊总费用", "门诊总金额", "费用总额", "结算总金额", "结算总额",
+        "大额支付", "个人账户支付", "现金支付", "医保门诊结算",
+        "门诊人次", "费用趋势", "科室排名", "药占比", "次均费用",
+        "运营指标", "统计",
     ],
     missing_evidence_rules=[],
     steps=[
         WorkflowStep(
             step_id="parse_intent",
             tool_id=TOOL_PARSE_DATA_QUERY_INTENT,
-            description="NL → 已发布语义指标参数",
+            description="NL → 已发布消费契约指标码",
             input_mapping={"question": "context.question"},
         ),
         WorkflowStep(
-            step_id="query_semantic_metrics",
-            tool_id=TOOL_QUERY_SEMANTIC_METRICS,
-            description="语义层受控查询",
+            step_id="query_flow_metrics",
+            tool_id=TOOL_QUERY_FLOW_METRICS,
+            description="Flow 消费契约受控查询（勾稽门禁）",
             input_mapping={
-                "object_code": "parse_intent.object_code",
-                "entity_code": "parse_intent.entity_code",
-                "anchor_field": "parse_intent.anchor_field",
-                "anchor_value": "parse_intent.anchor_value",
-                "metrics": "parse_intent.metrics",
-                "query_scope": "parse_intent.query_scope",
+                "metric_codes": "parse_intent.metric_codes",
+                "dimensions": "parse_intent.dimensions",
+                "clarification_needed": "parse_intent.clarification_needed",
+                "clarification_message": "parse_intent.clarification_message",
             },
         ),
     ],
@@ -312,4 +308,9 @@ KEYWORD_ROUTED_WORKFLOWS: list[WorkflowDefinition] = [
     WF_SETTLEMENT_REIMBURSEMENT_DIFF,
     WF_BENEFIT_STACKING_ATTRIBUTION,
     WF_OUTPATIENT_SETTLEMENT_EXPLAIN,
+    # 运营问数参与关键词 fallback（2026-09-16 验收缺陷修复）：
+    # 默认政策问答 Tab 下的运营金额问法（无结算单号、无 mode）必须路由到问数链，
+    # 否则被政策问答链路答非所问（答政策条文而非数值）。
+    # 词表已剔除比例类政策词；指标不在 Flow 消费契约内时由意图解析诚实澄清。
+    WF_DATA_QUERY,
 ]

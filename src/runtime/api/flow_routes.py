@@ -151,7 +151,7 @@ class FlowRevisionView(BaseModel):
 
 
 class PublishRequest(BaseModel):
-    published_by: str
+    published_by: str = ""  # 废弃自报字段：发布人改从认证主体取（V3.0 治理加固）
 
 
 class RollbackRequest(BaseModel):
@@ -239,14 +239,30 @@ def submit_review(
         raise _http_error(exc) from exc
 
 
+def get_flow_writer(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> str:
+    """发布/回滚等治理写操作：验签 + 从主体取操作人（禁止自报 published_by）。"""
+    if not authorization:
+        raise HTTPException(status_code=401, detail=error_detail("AUTH_REQUIRED", "缺少 Authorization 凭据"))
+    auth = authenticator.validate_signed_token(authorization)
+    if not auth.is_success:
+        raise HTTPException(status_code=401, detail=error_detail("AUTH_INVALID", auth.error_message or "登录凭据无效"))
+    permitted = authenticator.check_permission(auth, "data_governance:write")
+    if not permitted.is_success:
+        raise HTTPException(status_code=403, detail=error_detail("AUTH_FORBIDDEN", "权限不足"))
+    return auth.user_id
+
+
 @router.post("/{flow_id}/publish", status_code=201)
 def publish_flow(
     flow_id: str,
     request: PublishRequest,
+    operator: str = Depends(get_flow_writer),
     service: FlowGovernanceService = Depends(get_flow_service),
 ) -> FlowPublishedRevision:
     try:
-        return service.publish_flow(flow_id, request.published_by)
+        return service.publish_flow(flow_id, operator)
     except Exception as exc:
         raise _http_error(exc) from exc
 

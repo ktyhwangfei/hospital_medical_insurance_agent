@@ -21,6 +21,74 @@ TOOL_QUERY_SEMANTIC_METRICS = "tool_query_semantic_metrics"
 TOOL_PARSE_DATA_QUERY_INTENT = "tool_parse_data_query_intent"
 TOOL_GET_FEE_DETAIL = "tool_get_fee_detail"
 TOOL_GET_BENEFIT_STACKING = "tool_get_benefit_stacking"
+TOOL_QUERY_FLOW_METRICS = "tool_query_flow_metrics"
+
+
+def _flow_query_service():
+    """Flow 消费查询服务工厂 seam（测试 monkeypatch 此函数注入 stub）。"""
+    from src.data_platform.storage.flow.flow_factory import (
+        get_flow_view_reader,
+        get_governed_flow_storage,
+    )
+    from src.runtime.flow.flow_query_service import FlowQueryService
+
+    return FlowQueryService(get_governed_flow_storage(), get_flow_view_reader())
+
+
+def _query_flow_metrics(
+    metric_codes: list[str],
+    dimensions: list[str] | None = None,
+    caller_role: str | None = None,
+    clarification_needed: bool = False,
+    clarification_message: str | None = None,
+) -> dict:
+    """运营问数执行面：指标码 → Flow 已发布消费契约 → 受控视图（勾稽门禁在内）。
+
+    与单笔锚点查询（SemanticQuery）不同，运营聚合问法无 anchor；
+    消费契约白名单 + T8 防篡改 + 勾稽恒等门由 FlowQueryService 强制。
+    上游澄清场景（无指标码）直接透传澄清话术为结论，诚实降级不猜数。
+    """
+    if not metric_codes:
+        return {
+            "rows": [],
+            "metrics": [],
+            "quality_status": "unavailable",
+            "conclusion": clarification_message or "未能识别要查询的运营指标，请换一种方式提问。",
+            "citations": [],
+        }
+    result = _flow_query_service().query_by_metrics(
+        metric_codes, dimensions=dimensions, caller_role=caller_role,
+    )
+    payload = result.model_dump(mode="json")
+    rows = payload.get("rows") or []
+    first = rows[0] if rows else {}
+    # 指标中文名映射（flow 定义的 metric_outputs），答案对用户可读
+    names: dict[str, str] = {}
+    try:
+        from src.data_platform.storage.flow.flow_factory import get_governed_flow_storage
+
+        flow = get_governed_flow_storage().get_flow(payload.get("flow_id") or "")
+        if flow is not None:
+            names = {m.metric_code: m.name for m in flow.metric_outputs}
+    except Exception:
+        pass
+    # conclusion 供 workflow public_result 渲染为答案文本；citations 携带发布证据
+    parts = [
+        f"{names.get(code, code)}：{first.get(code)}"
+        for code in payload.get("metrics", []) if code in first
+    ]
+    payload["conclusion"] = (
+        f"{'、'.join(parts)}（来源：{payload.get('view_name')}，质量 {payload.get('quality_status')}）"
+        if parts else "查询完成，但结果为空。"
+    )
+    payload["citations"] = [{
+        "flow_id": payload.get("flow_id"),
+        "revision_id": payload.get("revision_id"),
+        "artifact_hash": payload.get("artifact_hash"),
+        "published_by": payload.get("published_by"),
+        "published_at": payload.get("published_at"),
+    }]
+    return payload
 
 
 async def _query_semantic_metrics(
@@ -260,4 +328,22 @@ def register_data_tools(registry: ToolRegistryService) -> None:
             status=ToolStatus.MATERIALIZED,
         ),
         implementation=_parse_data_query_intent,
+    )
+    registry.register(
+        ToolVersion(
+            version_id="tv_query_flow_metrics_1",
+            tool_id=TOOL_QUERY_FLOW_METRICS,
+            semantic_version="1.0.0",
+            definition=ToolDefinition(
+                tool_id=TOOL_QUERY_FLOW_METRICS,
+                name="运营指标受控查询",
+                description="按 Flow 已发布消费契约指标码查询运营聚合结果（受控视图+勾稽门禁），禁止绕过 Flow 直连数据库",
+                contract_kind=ToolContractKind.FUNCTION,
+                target_ref="src.runtime.flow.flow_query_service.FlowQueryService.query_by_metrics",
+                risk_level=ToolRiskLevel.LOW,
+                tags=["数据类", "运营问数", "Flow消费"],
+            ),
+            status=ToolStatus.MATERIALIZED,
+        ),
+        implementation=_query_flow_metrics,
     )

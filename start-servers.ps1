@@ -107,7 +107,7 @@ if (-not $env:DATA_GOVERNANCE_MASTER_KEY) {
 if (-not $env:AUTH_JWT_SECRET) { $env:AUTH_JWT_SECRET = [Guid]::NewGuid().ToString("N") }
 if (-not $env:NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN) {
     $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-    $jwtPayloadJson = @{ sub = "portal-dev-reviewer"; roles = @("information_department"); permissions = @("semantic:review"); exp = [DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+    $jwtPayloadJson = @{ sub = "portal-dev-reviewer"; roles = @("information_department"); permissions = @("semantic:review"); exp = [DateTimeOffset]::UtcNow.AddHours(24).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
     $jwtPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jwtPayloadJson)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
     $jwtHmac = New-Object System.Security.Cryptography.HMACSHA256
     $jwtHmac.Key = [Text.Encoding]::UTF8.GetBytes($env:AUTH_JWT_SECRET)
@@ -117,7 +117,7 @@ if (-not $env:NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN) {
 }
 if (-not $env:NEXT_PUBLIC_DATA_GOVERNANCE_TOKEN) {
     $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-    $jwtPayloadJson = @{ sub = "portal-dev-data-governance"; roles = @("information_department"); permissions = @("data_governance:read", "data_governance:write"); exp = [DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+    $jwtPayloadJson = @{ sub = "portal-dev-data-governance"; roles = @("information_department"); permissions = @("data_governance:read", "data_governance:write"); exp = [DateTimeOffset]::UtcNow.AddHours(24).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
     $jwtPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jwtPayloadJson)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
     $jwtHmac = New-Object System.Security.Cryptography.HMACSHA256
     $jwtHmac.Key = [Text.Encoding]::UTF8.GetBytes($env:AUTH_JWT_SECRET)
@@ -127,7 +127,7 @@ if (-not $env:NEXT_PUBLIC_DATA_GOVERNANCE_TOKEN) {
 }
 if (-not $env:NEXT_PUBLIC_OPS_TOKEN) {
     $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-    $jwtPayloadJson = @{ sub = "portal-dev-ops"; roles = @("information_department"); permissions = @("ops:read", "ops:write"); exp = [DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+    $jwtPayloadJson = @{ sub = "portal-dev-ops"; roles = @("information_department"); permissions = @("ops:read", "ops:write"); exp = [DateTimeOffset]::UtcNow.AddHours(24).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
     $jwtPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jwtPayloadJson)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
     $jwtHmac = New-Object System.Security.Cryptography.HMACSHA256
     $jwtHmac.Key = [Text.Encoding]::UTF8.GetBytes($env:AUTH_JWT_SECRET)
@@ -138,7 +138,7 @@ if (-not $env:NEXT_PUBLIC_OPS_TOKEN) {
 # 可信问题库（#37）治理会话：审核流 + 同义表达运营
 if (-not $env:NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN) {
     $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-    $jwtPayloadJson = @{ sub = "portal-dev-question-library"; roles = @("information_department"); permissions = @("question_library:read", "question_library:write"); exp = [DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+    $jwtPayloadJson = @{ sub = "portal-dev-question-library"; roles = @("information_department"); permissions = @("question_library:read", "question_library:write"); exp = [DateTimeOffset]::UtcNow.AddHours(24).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
     $jwtPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jwtPayloadJson)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
     $jwtHmac = New-Object System.Security.Cryptography.HMACSHA256
     $jwtHmac.Key = [Text.Encoding]::UTF8.GetBytes($env:AUTH_JWT_SECRET)

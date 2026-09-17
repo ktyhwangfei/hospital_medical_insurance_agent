@@ -24,6 +24,7 @@ from src.runtime.api.pdsc_routes import router as pdsc_router
 from src.runtime.api.policy_workbench_routes import router as policy_workbench_router
 from src.runtime.api.model_governance_routes import router as model_governance_router
 from src.runtime.api.data_governance_routes import router as data_governance_router
+from src.runtime.api.data_model_routes import router as data_model_router
 from src.runtime.api.flow_routes import router as governed_flow_router
 from src.runtime.api.ops_routes import router as ops_health_router
 from src.runtime.api.question_library_routes import router as question_library_router
@@ -107,6 +108,7 @@ def create_app() -> FastAPI:
     app.include_router(policy_workbench_router)
     app.include_router(model_governance_router)
     app.include_router(data_governance_router)
+    app.include_router(data_model_router)
     app.include_router(governed_flow_router)
     app.include_router(ops_health_router)
     app.include_router(question_library_router)

@@ -7,6 +7,7 @@ from typing import Annotated, Callable, TypeVar
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from src.data_platform.storage.postgresql.outpatient_governance_store import (
     OutpatientGovernanceConflictError,
@@ -353,6 +354,136 @@ def run_sync_job_once(source_id: str, principal: WritePrincipal, service: Govern
     return SyncJobResponse(result=_call(
         lambda: service.request_run_once(source_id, principal.user_id)
     ))
+
+
+# ── 选表同步（探查后选表 SQL 同步通道；CDC 全表对接为占位模式）─────────
+
+from src.data_platform.storage.table_sync.store import TableSyncStore
+from src.data_platform.table_sync import SelectedSyncTable
+from src.data_platform.table_sync_executor import TableSyncExecutor
+
+
+def get_table_sync_executor() -> TableSyncExecutor:
+    """依赖注入 seam：复用数据治理受控连接（凭据库 + 连接工厂）。"""
+    service = get_data_governance_service()
+    return TableSyncExecutor(TableSyncStore(), service.open_source_connection)
+
+
+SyncExecutor = Annotated[TableSyncExecutor, Depends(get_table_sync_executor)]
+
+
+class SyncTableUpsertRequest(BaseModel):
+    key_columns: list[str] = Field(default_factory=list)
+    time_column: str | None = None
+
+
+@router.get("/data-sources/{source_id}/sync-tables")
+def list_sync_tables(source_id: str, _: ReadPrincipal, executor: SyncExecutor):
+    """已选同步表清单（含最近同步状态）。"""
+    return {"result": [t.model_dump(mode="json") for t in executor._store.list_tables(source_id)]}
+
+
+@router.put("/data-sources/{source_id}/sync-tables/{table_name}", status_code=status.HTTP_201_CREATED)
+def select_sync_table(
+    source_id: str,
+    table_name: str,
+    request: SyncTableUpsertRequest,
+    principal: WritePrincipal,
+    executor: SyncExecutor,
+):
+    """探查后选表：自动探查主键（未显式给出时），落地表 = 源表名小写。"""
+    def _action():
+        key_columns = request.key_columns or executor.probe_table_keys(source_id, table_name)
+        table = SelectedSyncTable(
+            source_id=source_id,
+            table_name=table_name,
+            target_table=table_name.lower(),
+            key_columns=key_columns,
+            time_column=request.time_column,
+        )
+        executor._store.save_table(table)
+        executor._store.record_event(source_id, table_name, "select", principal.user_id)
+        return table.model_dump(mode="json")
+    return {"result": _call(_action)}
+
+
+@router.delete("/data-sources/{source_id}/sync-tables/{table_name}")
+def remove_sync_table(source_id: str, table_name: str, principal: WritePrincipal, executor: SyncExecutor):
+    def _action():
+        executor._store.remove_table(source_id, table_name)
+        executor._store.record_event(source_id, table_name, "remove", principal.user_id)
+        return {"removed": table_name}
+    return {"result": _call(_action)}
+
+
+@router.post("/data-sources/{source_id}/sync-tables/run")
+def run_sync_tables(source_id: str, principal: WritePrincipal, executor: SyncExecutor):
+    """立即全量同步全部 active 选表（逐表独立成败，失败记 last_error 不阻断他表）。"""
+    results = _call(lambda: executor.sync_all_active(source_id))
+    for r in results:
+        executor._store.record_event(source_id, r.table_name, "run", principal.user_id, r.row_count)
+    return {"result": [r.model_dump(mode="json") for r in results]}
+
+
+# ── 源库对照（验收工具：系统落地值 vs 源库值并排，数字可信度自证）─────────
+
+class SourceCompareRequest(BaseModel):
+    table_name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_@$#]{0,127}$")
+    column: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_@$#]{0,127}$")
+    op: str = Field(default="count", pattern="^(count|sum|min|max|avg)$")
+
+
+@router.post("/data-sources/{source_id}/compare-source")
+def compare_source(
+    source_id: str,
+    request: SourceCompareRequest,
+    _: ReadPrincipal,
+    service: GovernanceService,
+):
+    """对照验收：同一指标在源库（SQL Server）与落地库（PG）的值并排。
+
+    白名单约束：table 仅限已选同步表或契约投影表；column 限标识符；
+    op 白名单 count/sum/min/max/avg。两侧同口径聚合，差异直出。"""
+    from src.data_platform.storage.table_sync.store import TableSyncStore
+
+    def _action():
+        sync_tables = {t.table_name: t.target_table for t in TableSyncStore().list_tables(source_id)}
+        allowed = {**sync_tables, 'o_Trade': 'mz_trade', 'o_FeeItem': 'mz_fee_item'}
+        target = allowed.get(request.table_name)
+        if target is None:
+            raise SyncJobInvalidStateError(
+                f"表 {request.table_name} 未在同步范围内，可对照表：{sorted(allowed)}"
+            )
+        op_sql = 'COUNT(*)' if request.op == 'count' else f'{request.op.upper()}("{request.column}")'
+        # 源库（pyodbc 参数化不可用于标识符，表/列已过白名单+标识符校验）
+        connection = service.open_source_connection(source_id)
+        try:
+            cursor = connection.cursor()
+            cursor.execute(f"SELECT {op_sql} FROM dbo.[{request.table_name}]")
+            source_value = cursor.fetchone()[0]
+        finally:
+            connection.close()
+        from src.data_platform.storage.postgresql.client import PostgreSQLClient
+        landing_rows = PostgreSQLClient().execute(
+            f'SELECT {op_sql} AS v FROM "{target}"'
+        )
+        landing_value = landing_rows[0]['v'] if landing_rows else None
+        diff = None
+        try:
+            diff = float(landing_value) - float(source_value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            pass
+        return {
+            'table_name': request.table_name,
+            'target_table': target,
+            'op': request.op,
+            'column': request.column,
+            'source_value': float(source_value) if source_value is not None else None,
+            'landing_value': float(landing_value) if landing_value is not None else None,
+            'diff': diff,
+            'match': diff == 0,
+        }
+    return {'result': _call(_action)}
 
 
 @router.get("/sync-jobs/{source_id}/runs", response_model=SyncRunListResponse)

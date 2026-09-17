@@ -105,6 +105,7 @@ describe('flow-api client', () => {
       .mockResolvedValueOnce(jsonResponse({ ...FLOW, status: 'published' }))
       .mockResolvedValueOnce(jsonResponse({ revision: { revision_id: 'r1' }, is_active: true }))
     vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('NEXT_PUBLIC_DATA_GOVERNANCE_TOKEN', 'test-governance-token')
 
     await validateFlow('f')
     await submitFlowReview('f')
@@ -117,7 +118,9 @@ describe('flow-api client', () => {
 
     const publish = fetchMock.mock.calls[2]
     expect(publish[0]).toContain('/flow/f/publish')
-    expect(JSON.parse(publish[1].body)).toEqual({ published_by: '医保数据组' })
+    // 治理加固：发布人由后端从认证主体取，前端不再传自报值，仅携带凭据
+    expect(JSON.parse(publish[1].body)).toEqual({ published_by: '' })
+    expect(String(publish[1].headers.get('Authorization') ?? '')).toBe('Bearer test-governance-token')
 
     const rollback = fetchMock.mock.calls[3]
     expect(rollback[0]).toContain('/flow/f/rollback')

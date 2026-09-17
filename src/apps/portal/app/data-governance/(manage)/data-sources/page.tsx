@@ -1,9 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Database, Download, KeyRound, Pencil, PlugZap, RefreshCw, X } from 'lucide-react'
+import Link from 'next/link'
+import { Database, Download, KeyRound, Pencil, PlugZap, RefreshCw, ScanSearch, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { NextStepCard } from '@/components/next-step-card'
 import {
   SourceExploreModal,
   SourceMappingModal,
@@ -190,6 +192,18 @@ export default function DataSourcesPage() {
       {canWrite && <Button onClick={openCreate}>新增数据源</Button>}
     </div>
 
+    {/* 两种接入模式：CDC 全表对接（待 DBA 开通，占位）/ 探查后选表 SQL 同步（当前可用） */}
+    <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2" data-testid="ingestion-modes">
+      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50/60 p-3">
+        <p className="text-sm font-medium text-slate-700">CDC 全表对接<span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-500">占位 · 待 DBA 开通</span></p>
+        <p className="mt-1 text-xs text-slate-500">变更数据捕获实时同步整表。当前环境未开启 CDC，「下载 CDC 脚本」供 DBA 评估执行。</p>
+      </div>
+      <Link href="/data-governance/profiling" className="rounded-lg border border-blue-200 bg-blue-50/50 p-3 transition-colors hover:border-blue-300">
+        <p className="text-sm font-medium text-blue-800">探查后选表同步<span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] text-blue-600">当前可用</span></p>
+        <p className="mt-1 text-xs text-blue-700/80">先在数据探查中查看表画像，再选择需要同步的表，走定时 SQL 全量直通落地 PostgreSQL。</p>
+      </Link>
+    </section>
+
     {(message || error) && <div role={error ? 'alert' : 'status'} className={`rounded-lg border px-4 py-3 text-sm ${error ? 'border-red-200 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{error ?? message}</div>}
 
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -213,6 +227,17 @@ export default function DataSourcesPage() {
             <Button size="sm" variant="outline" aria-label="轮换凭据" onClick={() => setRotating(source)}><KeyRound /></Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => setExploring(source)}>表探查</Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => setMappingSource(source)}>字段映射</Button>
+            {/* 数据探查入口：跳转数据治理探查页（含扫描与选表同步） */}
+            {source.connectionStatus === 'healthy' ? (
+              <Link
+                href={`/data-governance/profiling?source=${encodeURIComponent(source.sourceId)}`}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 text-xs font-medium text-slate-700 hover:border-slate-500"
+              ><ScanSearch className="size-3.5" />数据探查</Link>
+            ) : (
+              <Button size="sm" variant="outline" disabled title="连接健康后可进行数据探查">
+                <ScanSearch />数据探查
+              </Button>
+            )}
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act(source.sourceId, 'test')}><PlugZap />测试连接</Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act(source.sourceId, 'download')}><Download />下载 CDC 脚本</Button>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act(source.sourceId, 'check')}><RefreshCw />重新检测 CDC</Button>
@@ -245,5 +270,8 @@ export default function DataSourcesPage() {
       onClose={() => setMappingSource(null)}
       onSaved={(text) => { setMappingSource(null); setMessage(text); void load() }}
     />}
-  </div>
+  
+    <NextStepCard href="C:/Program Files/Git/data-governance/profiling" title="探查源表画像，选择要同步的表"
+      description="探查决定同步范围" />
+</div>
 }

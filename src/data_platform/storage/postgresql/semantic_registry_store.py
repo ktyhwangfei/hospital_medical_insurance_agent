@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS semantic_metrics (
     precision INTEGER,
     subkind VARCHAR(32),
     policy_carrier JSONB,
+    model_field_ref VARCHAR(256),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -230,6 +231,7 @@ def _row_to_metric(row: dict) -> Metric:
         default_value=row.get("default_value"),
         source_object=row.get("source_object"),
         source_field=row.get("source_field"),
+        model_field_ref=row.get("model_field_ref"),
         source_adapter_port=row.get("source_adapter_port"),
         transformation=transformation,
         value_domain=row.get("value_domain"),
@@ -403,6 +405,7 @@ class PostgresRegistryStore:
             )
             for statement in [
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS fact_field_code VARCHAR(256)",
+                "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS model_field_ref VARCHAR(256)",
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS aggregation VARCHAR(32)",
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS expression TEXT",
                 "ALTER TABLE semantic_metrics ADD COLUMN IF NOT EXISTS dependencies JSONB NOT NULL DEFAULT '[]'::jsonb",
@@ -584,8 +587,8 @@ class PostgresRegistryStore:
                 metric_kind, indexed, extraction_hint, schema_version,
                 fact_field_code, aggregation, expression, dependencies, non_additive_dimensions,
                 synonyms, compatible_dimensions, default_time_role, refresh_frequency,
-                permission_level, owner, reviewer, precision, subkind, policy_carrier, created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                permission_level, owner, reviewer, precision, subkind, policy_carrier, model_field_ref, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (metric_code) DO UPDATE SET
                    object_code = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.object_code ELSE semantic_metrics.object_code END,
                    name = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.name ELSE semantic_metrics.name END,
@@ -623,6 +626,7 @@ class PostgresRegistryStore:
                    precision = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.precision ELSE semantic_metrics.precision END,
                    subkind = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.subkind ELSE semantic_metrics.subkind END,
                    policy_carrier = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.policy_carrier ELSE semantic_metrics.policy_carrier END,
+                   model_field_ref = CASE WHEN EXCLUDED.schema_version >= semantic_metrics.schema_version THEN EXCLUDED.model_field_ref ELSE semantic_metrics.model_field_ref END,
                    schema_version = GREATEST(semantic_metrics.schema_version, EXCLUDED.schema_version),
                    updated_at = EXCLUDED.updated_at""",
             (metric.metric_code, metric.object_code, metric.name, metric.definition,
@@ -638,6 +642,7 @@ class PostgresRegistryStore:
              metric.owner, metric.reviewer, metric.precision,
              metric.subkind,
              json.dumps(metric.policy_carrier, ensure_ascii=False) if metric.policy_carrier else None,
+             metric.model_field_ref,
              metric.created_at, metric.updated_at),
         )
 
