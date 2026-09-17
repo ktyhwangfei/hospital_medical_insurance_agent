@@ -11,6 +11,7 @@ import type {
   AggregateOperator, FilterOperator, ConsumerKind, PermissionLevel, ValidationSeverity,
 } from '@/lib/flow-api'
 import { NODE_TYPE_LABELS } from './canvas-dto'
+import { listDataModels } from '@/lib/data-model-api'
 
 const FILTER_OPERATORS: FilterOperator[] = [
   'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in', 'in_or_null', 'is_null', 'is_not_null',
@@ -504,6 +505,46 @@ function DefinitionEditors({ flow, readOnly, onFlowPatch }: {
           ))}
         </Rows>
       </section>
+      <section className="space-y-2 rounded-lg border border-slate-200 p-3" data-testid="flow-materialize-editor">
+        <FlowMaterializeTarget flow={flow} readOnly={readOnly} onFlowPatch={onFlowPatch} />
+      </section>
+    </div>
+  )
+}
+
+// ── 物化目标（V3.0 Slice 2）：发布时按模型已确认映射物化明细视图并注册语义数据集 ──
+
+function FlowMaterializeTarget({ flow, readOnly, onFlowPatch }: {
+  flow: FlowDefinitionDto; readOnly: boolean
+  onFlowPatch: (patch: Partial<FlowDefinitionDto>) => void
+}) {
+  const [models, setModels] = useState<{ model_code: string; name: string }[]>([])
+  useEffect(() => {
+    let cancelled = false
+    void listDataModels().then((items) => {
+      if (cancelled) return
+      setModels(items.filter((m) => m.status === 'published').map((m) => ({ model_code: m.model_code, name: m.name })))
+    }).catch(() => { /* 模型服务不可用时下拉为空 */ })
+    return () => { cancelled = true }
+  }, [])
+  return (
+    <div>
+      <p className="mb-1 text-xs font-medium text-slate-600">物化目标数据模型（可选）</p>
+      <select
+        className={inputCls}
+        value={flow.materialize_model ?? ''}
+        disabled={readOnly}
+        data-testid="materialize-model-select"
+        onChange={(e) => onFlowPatch({ materialize_model: e.target.value || null })}
+      >
+        <option value="">不物化（仅消费视图）</option>
+        {models.map((m) => (
+          <option key={m.model_code} value={m.model_code}>{m.name}（{m.model_code}）</option>
+        ))}
+      </select>
+      <p className="mt-1 text-[11px] text-slate-400">
+        发布后按模型已确认映射额外物化明细视图（视图名=模型编码），注册为语义数据集供受控查询。
+      </p>
     </div>
   )
 }

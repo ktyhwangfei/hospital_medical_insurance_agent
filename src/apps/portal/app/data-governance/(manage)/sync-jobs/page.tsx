@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { CircleAlert, Pause, Play, RefreshCw, Save } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { NextStepCard } from '@/components/next-step-card'
 import {
   getSyncJob,
   hasDataGovernancePermission,
@@ -243,5 +244,8 @@ export default function SyncJobsPage() {
         </tr>)}</tbody>
       </table></div>}
     </section>
-  </div>
+  
+    <NextStepCard href="C:/Program Files/Git/data-governance/modeling" title="为落地数据建结构契约"
+      description="建模定义可信数据的结构标准" />
+</div>
 }

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { Database, Download, KeyRound, Pencil, PlugZap, RefreshCw, ScanSearch, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { NextStepCard } from '@/components/next-step-card'
 import {
   SourceExploreModal,
   SourceMappingModal,
@@ -269,5 +270,8 @@ export default function DataSourcesPage() {
       onClose={() => setMappingSource(null)}
       onSaved={(text) => { setMappingSource(null); setMessage(text); void load() }}
     />}
-  </div>
+  
+    <NextStepCard href="C:/Program Files/Git/data-governance/profiling" title="探查源表画像，选择要同步的表"
+      description="探查决定同步范围" />
+</div>
 }

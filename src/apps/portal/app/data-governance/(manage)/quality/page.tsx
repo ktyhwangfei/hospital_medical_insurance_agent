@@ -6,10 +6,11 @@
 // 均为既有只读接口聚合，不新增后端写路径。
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, ShieldCheck } from 'lucide-react'
+import { ArrowLeftRight, Loader2, ShieldCheck } from 'lucide-react'
 
-import { getDataGovernanceOverview, type DataGovernanceOverview } from '@/lib/data-governance-api'
+import { compareSource, getDataGovernanceOverview, type DataGovernanceOverview, type SourceCompareResult } from '@/lib/data-governance-api'
 import { listFlowRevisions, listFlows, type FlowDefinitionDto, type FlowRevisionViewDto } from '@/lib/flow-api'
+import { NextStepCard } from '@/components/next-step-card'
 
 interface FlowRelease {
   flow: FlowDefinitionDto
@@ -19,6 +20,79 @@ interface FlowRelease {
 
 function formatTime(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
+}
+
+// ── 源库对照：系统落地值 vs 源库值并排，数字可信度自证 ───────────────
+
+const COMPARE_PRESETS = [
+  { label: '门诊交易笔数', table: 'o_Trade', column: null, op: 'count' },
+  { label: '门诊费用明细行数', table: 'o_FeeItem', column: null, op: 'count' },
+  { label: '门诊总费用合计', table: 'o_Trade', column: 'T_FeeAll', op: 'sum' },
+  { label: '统筹支付合计', table: 'o_Trade', column: 'T_FundPay', op: 'sum' },
+  { label: '医保门诊交易笔数', table: 'yb_mzjyxx', column: null, op: 'count' },
+  { label: '医保结算总金额', table: 'yb_mzjyxx', column: 'zje', op: 'sum' },
+] as const
+
+function SourceComparePanel({ sourceId }: { sourceId: string }) {
+  const [selected, setSelected] = useState(0)
+  const [result, setResult] = useState<SourceCompareResult | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const preset = COMPARE_PRESETS[selected]
+      setResult(await compareSource(sourceId, {
+        table_name: preset.table, column: preset.column, op: preset.op,
+      }))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '对照查询失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm" data-testid="source-compare">
+      <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
+        <ArrowLeftRight className="size-4 text-slate-500" />
+        <h3 className="font-semibold text-slate-900">源库对照</h3>
+        <span className="text-xs text-slate-500">系统落地值与源库值并排——数字可信度自证</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+        <select aria-label="对照项" value={selected} onChange={(e) => { setSelected(Number(e.target.value)); setResult(null) }}
+          className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs outline-none focus:border-blue-500">
+          {COMPARE_PRESETS.map((p, i) => <option key={p.label} value={i}>{p.label}（{p.table}）</option>)}
+        </select>
+        <button type="button" onClick={() => void run()} disabled={busy}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-40"
+          data-testid="compare-run">
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}对照
+        </button>
+        {error && <span role="alert" className="text-xs text-red-700">{error}</span>}
+      </div>
+      {result && (
+        <div className="grid gap-3 border-t border-slate-100 px-4 py-3 sm:grid-cols-3" data-testid="compare-result">
+          <div className="rounded-lg bg-slate-50 p-3">
+            <p className="text-[11px] text-slate-500">源库（{result.table_name}）</p>
+            <p className="mt-1 font-mono text-lg font-semibold text-slate-900">{result.source_value ?? '—'}</p>
+          </div>
+          <div className="rounded-lg bg-slate-50 p-3">
+            <p className="text-[11px] text-slate-500">落地库（{result.target_table}）</p>
+            <p className="mt-1 font-mono text-lg font-semibold text-slate-900">{result.landing_value ?? '—'}</p>
+          </div>
+          <div className={`rounded-lg p-3 ${result.match ? 'bg-emerald-50' : 'bg-red-50'}`}>
+            <p className="text-[11px] text-slate-500">差异</p>
+            <p className={`mt-1 font-mono text-lg font-semibold ${result.match ? 'text-emerald-700' : 'text-red-700'}`}>
+              {result.diff ?? '—'}{result.match ? ' ✓ 一致' : ' ✗ 不一致'}
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  )
 }
 
 export default function DataQualityPage() {
@@ -97,6 +171,10 @@ export default function DataQualityPage() {
       </section>
     )}
 
+    {!loading && overview && (
+      <SourceComparePanel sourceId={overview.sources[0]?.sourceId ?? ''} />
+    )}
+
     {!loading && (
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm" data-testid="flow-releases">
         <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
@@ -129,5 +207,8 @@ export default function DataQualityPage() {
           </table>}
       </section>
     )}
-  </div>
+  
+      <NextStepCard href="C:/Program Files/Git/data-governance/assets" title="在数据目录查看资产与血缘"
+        description="资产是治理的最终产物" />
+</div>
 }

@@ -425,6 +425,67 @@ def run_sync_tables(source_id: str, principal: WritePrincipal, executor: SyncExe
     return {"result": [r.model_dump(mode="json") for r in results]}
 
 
+# ── 源库对照（验收工具：系统落地值 vs 源库值并排，数字可信度自证）─────────
+
+class SourceCompareRequest(BaseModel):
+    table_name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_@$#]{0,127}$")
+    column: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_@$#]{0,127}$")
+    op: str = Field(default="count", pattern="^(count|sum|min|max|avg)$")
+
+
+@router.post("/data-sources/{source_id}/compare-source")
+def compare_source(
+    source_id: str,
+    request: SourceCompareRequest,
+    _: ReadPrincipal,
+    service: GovernanceService,
+):
+    """对照验收：同一指标在源库（SQL Server）与落地库（PG）的值并排。
+
+    白名单约束：table 仅限已选同步表或契约投影表；column 限标识符；
+    op 白名单 count/sum/min/max/avg。两侧同口径聚合，差异直出。"""
+    from src.data_platform.storage.table_sync.store import TableSyncStore
+
+    def _action():
+        sync_tables = {t.table_name: t.target_table for t in TableSyncStore().list_tables(source_id)}
+        allowed = {**sync_tables, 'o_Trade': 'mz_trade', 'o_FeeItem': 'mz_fee_item'}
+        target = allowed.get(request.table_name)
+        if target is None:
+            raise SyncJobInvalidStateError(
+                f"表 {request.table_name} 未在同步范围内，可对照表：{sorted(allowed)}"
+            )
+        op_sql = 'COUNT(*)' if request.op == 'count' else f'{request.op.upper()}("{request.column}")'
+        # 源库（pyodbc 参数化不可用于标识符，表/列已过白名单+标识符校验）
+        connection = service.open_source_connection(source_id)
+        try:
+            cursor = connection.cursor()
+            cursor.execute(f"SELECT {op_sql} FROM dbo.[{request.table_name}]")
+            source_value = cursor.fetchone()[0]
+        finally:
+            connection.close()
+        from src.data_platform.storage.postgresql.client import PostgreSQLClient
+        landing_rows = PostgreSQLClient().execute(
+            f'SELECT {op_sql} AS v FROM "{target}"'
+        )
+        landing_value = landing_rows[0]['v'] if landing_rows else None
+        diff = None
+        try:
+            diff = float(landing_value) - float(source_value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            pass
+        return {
+            'table_name': request.table_name,
+            'target_table': target,
+            'op': request.op,
+            'column': request.column,
+            'source_value': float(source_value) if source_value is not None else None,
+            'landing_value': float(landing_value) if landing_value is not None else None,
+            'diff': diff,
+            'match': diff == 0,
+        }
+    return {'result': _call(_action)}
+
+
 @router.get("/sync-jobs/{source_id}/runs", response_model=SyncRunListResponse)
 def list_sync_runs(source_id: str, _: ReadPrincipal, service: GovernanceService):
     return SyncRunListResponse(result=SyncRunListResult(

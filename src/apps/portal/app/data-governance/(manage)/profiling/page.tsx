@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { NextStepCard } from '@/components/next-step-card'
 import {
   listDataSources, listSyncTables, runSyncTables, selectSyncTable,
   type DataSource,
@@ -137,6 +138,8 @@ function ProfilingContent() {
   const [filter, setFilter] = useState<'all' | 'selected' | 'unmapped'>('all')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [busyTable, setBusyTable] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 50
 
   const load = useCallback(async (datasourceId: string) => {
     const [r, h, tables] = await Promise.all([
@@ -202,6 +205,12 @@ function ProfilingContent() {
       return true
     })
   }, [groups, search, filter, syncTables])
+
+  // 分页：356 表全量渲染会卡，每页 50 表
+  const totalPages = Math.max(1, Math.ceil(visibleGroups.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pagedGroups = visibleGroups.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  useEffect(() => { setPage(1) }, [search, filter])
 
   // ── 操作 ──
   const startScan = async () => {
@@ -336,7 +345,7 @@ function ProfilingContent() {
       </section>
     ) : (
       <section className="space-y-2" data-testid="table-list">
-        {visibleGroups.map((group) => {
+        {pagedGroups.map((group) => {
           const isOpen = expanded.has(group.table)
           const rowCount = syncTables.get(group.table)
           const isSelected = syncTables.has(group.table)
@@ -405,5 +414,19 @@ function ProfilingContent() {
         })}
       </section>
     )}
-  </div>
+    {totalPages > 1 && (
+      <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs text-slate-500" data-testid="table-pagination">
+        <span>第 <span className="font-mono text-slate-700">{safePage}</span> / {totalPages} 页 · 共 {visibleGroups.length} 张表</span>
+        <div className="flex gap-1">
+          <button type="button" disabled={safePage <= 1} onClick={() => setPage((p) => p - 1)}
+            className="rounded border border-slate-200 px-2 py-1 disabled:opacity-40 hover:border-slate-400">上一页</button>
+          <button type="button" disabled={safePage >= totalPages} onClick={() => setPage((p) => p + 1)}
+            className="rounded border border-slate-200 px-2 py-1 disabled:opacity-40 hover:border-slate-400">下一页</button>
+        </div>
+      </div>
+    )}
+  
+    <NextStepCard href="C:/Program Files/Git/data-governance/sync-jobs" title="执行选表同步，数据落 PostgreSQL"
+      description="同步把数据搬进治理底座" />
+</div>
 }

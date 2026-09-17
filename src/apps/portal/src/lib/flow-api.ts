@@ -168,6 +168,8 @@ export interface FlowDefinitionDto {
   source_contracts: SourceContract[]
   metric_outputs: MetricOutputBinding[]
   materialization?: MaterializationStrategy
+  /** 物化目标数据模型（V3.0 Slice 2）：发布时按模型已确认映射物化 dwd 明细视图 */
+  materialize_model?: string | null
   revision: number
   content_hash?: string
   published_at?: string | null

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { AlertTriangle, Clock3, Database, RefreshCw } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { NextStepCard } from '@/components/next-step-card'
 import { DataGovernancePipeline } from '@/components/data-governance-pipeline'
 import { getDataGovernanceOverview, type DataGovernanceOverview } from '@/lib/data-governance-api'
 
@@ -162,5 +163,8 @@ export default function DataGovernanceOverviewPage() {
         </table>
       </div>}
     </section>
-  </div>
+  
+    <NextStepCard href="C:/Program Files/Git/data-governance/data-sources" title="登记数据源并配置同步"
+      description="接入是治理的起点" />
+</div>
 }

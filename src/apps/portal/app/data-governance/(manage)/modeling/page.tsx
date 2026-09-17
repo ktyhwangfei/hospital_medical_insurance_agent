@@ -4,9 +4,12 @@
 // 数据模型是可信数据的结构契约（粒度 + 字段 + 角色）；published 结构冻结，只可退役。
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { Layers, Loader2, Plus, RefreshCw, Send, Trash2, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { listFlows } from '@/lib/flow-api'
+import { NextStepCard } from '@/components/next-step-card'
 import {
   confirmDataModelMapping,
   createDataModel,
@@ -317,6 +320,7 @@ function ModelEditModal({ model, onClose, onSaved }: {
 
 function ModelDetailModal({ model, onClose }: { model: DataModel; onClose: () => void }) {
   const [mappings, setMappings] = useState<DataModelMapping[]>([])
+  const [materializedBy, setMaterializedBy] = useState<{ flowId: string; name: string } | null>(null)
   const [mappingForm, setMappingForm] = useState({ field_code: '', source_id: '', physical_table: '', physical_column: '' })
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -330,6 +334,17 @@ function ModelDetailModal({ model, onClose }: { model: DataModel; onClose: () =>
   }, [model.model_code])
 
   useEffect(() => { void loadMappings() }, [loadMappings])
+
+  // 物化状态：哪个已发布 Flow 以本模型为物化目标（Slice 2 链路可见性）
+  useEffect(() => {
+    let cancelled = false
+    void listFlows().then((flows) => {
+      if (cancelled) return
+      const hit = flows.find((f) => f.materialize_model === model.model_code && f.status === 'published')
+      setMaterializedBy(hit ? { flowId: hit.flow_id, name: hit.name } : null)
+    }).catch(() => { /* 物化状态加载失败降级隐藏 */ })
+    return () => { cancelled = true }
+  }, [model.model_code])
 
   const saveMapping = async (event: FormEvent) => {
     event.preventDefault()
@@ -348,6 +363,24 @@ function ModelDetailModal({ model, onClose }: { model: DataModel; onClose: () =>
 
   return <Modal title={`${model.name}（${model.model_code}）`} onClose={onClose} wide>
     <div className="space-y-5 p-5" data-testid="model-detail">
+      {/* 物化状态：模型 → Flow 物化 → 明细视图 链路可见 */}
+      <section className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5" data-testid="materialize-status">
+        <h3 className="text-xs font-semibold text-slate-700">物化状态</h3>
+        {model.status !== 'published' ? (
+          <p className="mt-1 text-xs text-slate-500">模型未发布，不可物化</p>
+        ) : materializedBy ? (
+          <p className="mt-1 text-xs text-slate-600">
+            已由 Flow <Link href={`/data-governance/flows/${encodeURIComponent(materializedBy.flowId)}`} className="font-medium text-blue-700 hover:underline">{materializedBy.name}</Link> 物化为明细视图
+            <code className="ml-1 rounded bg-white px-1 py-0.5 font-mono text-[11px] text-slate-700">{model.model_code}</code>
+            ，可在语义层受控查询。
+          </p>
+        ) : (
+          <p className="mt-1 text-xs text-slate-500">
+            未被物化。到 <Link href="/data-governance/flows" className="text-blue-600 hover:underline">数据加工</Link> 创建 Flow 并在属性面板选择物化目标为本模型。
+          </p>
+        )}
+      </section>
+
       <section>
         <h3 className="mb-2 text-xs font-semibold text-slate-700">模型字段</h3>
         <table className="w-full text-left text-xs">
@@ -412,6 +445,9 @@ function ModelDetailModal({ model, onClose }: { model: DataModel; onClose: () =>
           <Button type="submit" size="sm" variant="outline" disabled={busy}>保存映射（待确认）</Button>
         </form>
       </section>
-    </div>
+    
+      <NextStepCard href="C:/Program Files/Git/data-governance/flows" title="编排 Flow 把模型加工为消费视图"
+        description="加工产出可消费的指标" />
+</div>
   </Modal>
 }

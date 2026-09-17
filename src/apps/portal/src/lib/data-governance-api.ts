@@ -657,3 +657,27 @@ export async function runSyncTables(sourceId: string): Promise<TableSyncRunResul
   )
   return response.result
 }
+
+// ── 源库对照（验收工具：落地值 vs 源库值并排）────────────────────────
+
+export interface SourceCompareResult {
+  table_name: string
+  target_table: string
+  op: string
+  column: string | null
+  source_value: number | null
+  landing_value: number | null
+  diff: number | null
+  match: boolean
+}
+
+export async function compareSource(
+  sourceId: string,
+  input: { table_name: string; column?: string | null; op?: string },
+): Promise<SourceCompareResult> {
+  const response = await dataGovernanceRequest<{ result: SourceCompareResult }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/compare-source`,
+    { method: 'POST', body: JSON.stringify(input) },
+  )
+  return response.result
+}
