@@ -3,6 +3,7 @@
 WorkflowExecutor 只是这些声明的一个"薄解释器"，不做动态规划。
 """
 
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -163,3 +164,22 @@ class WorkflowExecutionResult(BaseModel):
     step_results: list[WorkflowStepResult] = Field(default_factory=list)
     clarify_message: str | None = None
     uncertainties: list[str] = Field(default_factory=list)
+
+
+class WorkflowConfigOverride(BaseModel):
+    """Workflow 治理覆盖（关键词 / 启停），按院区维度存放。
+
+    `hospital_code=""` 表示平台全局默认覆盖；院区行优先于全局行，
+    全局行优先于代码内声明（definitions.py）。设计目标：院区个性化不再
+    需要改代码重发版（一套产品多院复用）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    workflow_id: str
+    hospital_code: str = ""
+    enabled: bool = True
+    # None = 继承平台默认关键词（区别于空列表 = 显式清空）
+    intent_keywords: list[str] | None = None
+    updated_by: str = ""
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

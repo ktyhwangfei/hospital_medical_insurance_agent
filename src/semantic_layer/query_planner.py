@@ -22,6 +22,7 @@ from src.semantic_layer.models import (
     SemanticDataset,
     SemanticField,
 )
+from src.semantic_layer.guard import HospitalScopeViolationError, assert_hospital_scope
 from src.semantic_layer.registry import (
     SemanticRegistry,
     _DEFERRED_OUTPATIENT_METRICS,
@@ -30,6 +31,14 @@ from src.semantic_layer.registry import (
 
 
 QueryScopeName = Literal["whole_admission", "segment", "whole_settlement", "fee_item"]
+
+
+def _assert_dataset_scope(datasets: Any) -> None:
+    """院区守卫异常统一纳入规划错误体系（API 的 4xx 映射保持单一契约）。"""
+    try:
+        assert_hospital_scope(datasets)
+    except HospitalScopeViolationError as exc:
+        raise SemanticQueryPlanningError(str(exc)) from exc
 
 
 def _assert_metric_in_force(code: str, metric: ObjectVersionMetric) -> None:
@@ -171,6 +180,7 @@ class SemanticQueryPlanner:
         if query.scope.query_scope in {"whole_settlement", "fee_item"}:
             return self._plan_flat_query(query, version)
         datasets = {item.dataset_code: item for item in version.datasets}
+        _assert_dataset_scope(datasets.values())
         if len({item.datasource_id for item in datasets.values()}) != 1:
             raise SemanticQueryPlanningError("查询模型只能使用一个数据源")
         fields = {item.field_code: item for item in version.fields}
@@ -481,6 +491,7 @@ class SemanticQueryPlanner:
         version: BusinessObjectVersion,
     ) -> LogicalQueryPlan:
         datasets = {item.dataset_code: item for item in version.datasets}
+        _assert_dataset_scope(datasets.values())
         if len({item.datasource_id for item in datasets.values()}) != 1:
             raise SemanticQueryPlanningError("查询模型只能使用一个数据源")
         fields = {item.field_code: item for item in version.fields}
