@@ -138,9 +138,9 @@ def register_data_tools(registry: ToolRegistryService) -> None:
     )
     registry.register(
         ToolVersion(
-            version_id="tv_get_fee_detail_2",
+            version_id="tv_get_fee_detail_3",
             tool_id=TOOL_GET_FEE_DETAIL,
-            semantic_version="1.1.0",
+            semantic_version="1.2.0",
             definition=ToolDefinition(
                 tool_id=TOOL_GET_FEE_DETAIL,
                 name="查询费用明细",
@@ -171,11 +171,11 @@ def register_data_tools(registry: ToolRegistryService) -> None:
                     "conclusion": {"type": "string", "description": "摘要"},
                 },
                 execution_detail=(
-                    "双链路只读查询（参数化，djh 锚点，2026-09-16 盘点 NATION_CODE 100% 填充）：\n"
+                    "双链路映射化只读查询（表/列可按数据源映射 record_query_mappings 配置，换院零代码；\n"
+                    "基线形态：住院 yb_zyfymx / 门诊 yb_mzfymx，djh 锚点，2026-09-16 盘点 NATION_CODE 100% 填充）：\n"
                     "  住院：SELECT xh, xmdm, xmmc, NATION_CODE, sflb, sl, dj, zje, ybnje, ybwje, txfy, grziftw\n"
-                    "    FROM dbo.yb_zyfymx WHERE djh = :settlement_id ORDER BY xh\n"
-                    "  门诊（住院未命中时）：SELECT xh, xmdm, xmmc, NATION_CODE, sflb, sl, dj, zje, ybnje, ybwje, grziftw\n"
-                    "    FROM dbo.yb_mzfymx WHERE djh = :settlement_id ORDER BY xh\n"
+                    "    FROM <住院费用明细表> WHERE djh = :settlement_id ORDER BY xh\n"
+                    "  门诊（住院未命中时）：同列集（无先行自付列）FROM <门诊费用明细表>\n"
                     "  批量入口 settlement_ids：循环单笔查询后聚合为 {details: {settlement_id: 单笔输出}}，\n"
                     "  供同药跨单对比领域节点（same_drug_compare）消费；同药对齐键 NATION_CODE，回退 xmdm；不含患者身份输出。"
                 ),

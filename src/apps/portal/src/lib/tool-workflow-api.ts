@@ -52,6 +52,7 @@ export interface WorkflowStepSummaryDto {
 
 export interface WorkflowSummaryDto {
   workflow_id: string
+  enabled?: boolean
   name: string
   description: string
   intent_keywords: string[]

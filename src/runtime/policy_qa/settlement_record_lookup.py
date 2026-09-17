@@ -1,10 +1,9 @@
 """结算事实记录查询能力：退费记录 / 人员定位 / 费用明细 / 待遇叠加 / 同药跨单对比。
 
-组合根：解析已注册 SQL Server 数据源（PolicyMetaStore 首个启用的库级数据源，
-回退 discovery 最近扫描 / 环境变量链），建连后调用
-`src.adapters.data_supply.settlement_record_queries` 的只读查询，
-输出为可直接进 Workflow/Tool 的 dict。本模块不写业务规则（T7/T8 规则未接入，
-相关结论一律落 uncertainties，不编造）。
+组合根：解析已注册 SQL Server 数据源 + 该数据源的记录查询映射（各院区覆盖，
+见 record_query_mappings 与 scripts/set_record_query_mapping.py），建连后调用
+`src.adapters.data_supply.settlement_record_queries` 的只读查询。
+本模块不写业务规则（T7/T8 规则未接入，相关结论一律落 uncertainties，不编造）。
 """
 
 from __future__ import annotations
@@ -14,16 +13,20 @@ from typing import Any
 from src.runtime.tool_registry.service import ToolInvocationError
 
 from src.adapters.data_supply import settlement_record_queries as queries
+from src.adapters.data_supply.record_query_mappings import (
+    DEFAULT_RECORD_QUERY_MAPPING,
+    RecordQueryMapping,
+)
 
 # 同药对比判定阈值：金额/比例差异在此容差内视为一致（与结算政策对比口径一致）。
 DIFF_TOLERANCE = 0.02
 
 
-def _open_connection() -> Any:
-    """按注册数据源建连：首个启用的 SQL Server 数据源 → 既有回退链。
+def _connect_with_mapping() -> tuple[Any, RecordQueryMapping]:
+    """建连并解析该数据源的记录查询映射。
 
-    连接失败拋 ToolInvocationError：Workflow 层捕获后降级为该步骤 unavailable，
-    而非 500（瞬时断库 fail-closed，不编造结果）。
+    优先取注册表中首个启用的库级数据源及其覆盖映射；注册表不可用回退
+    discovery/env 链 + 默认映射。连接失败抛 ToolInvocationError（fail-closed）。
     """
     try:
         from src.runtime.discovery.semantic_source import get_semantic_data_source
@@ -32,13 +35,17 @@ def _open_connection() -> Any:
         try:
             from src.data_platform.storage.postgresql.policy_meta_store import PolicyMetaStore
 
-            for ds in PolicyMetaStore().list_datasources(enabled_only=True):
+            meta = PolicyMetaStore()
+            for ds in meta.list_datasources(enabled_only=True):
                 cfg = ds.get("connection_config") or {}
                 if cfg.get("sqlserver") or cfg.get("host"):
-                    return source.connect_datasource(ds["id"])
+                    conn = source.connect_datasource(ds["id"])
+                    override = meta.get_record_query_mapping(ds["id"])
+                    mapping = RecordQueryMapping(**(override or {}))
+                    return conn, mapping
         except Exception:  # noqa: BLE001 — 注册表不可用时回退 discovery/env 链
             pass
-        return source.open_connection()
+        return source.open_connection(), DEFAULT_RECORD_QUERY_MAPPING
     except Exception as exc:  # noqa: BLE001
         raise ToolInvocationError(f"结算记录数据源不可用：{exc}") from exc
 
@@ -47,6 +54,11 @@ def _require_success(result, capability: str) -> None:
     """适配器 FAILED（SQL 异常等）也统一拋 ToolInvocationError，交 Workflow 降级。"""
     if result.status.value != "success":
         raise ToolInvocationError(f"{capability} 查询失败：{result.message or '数据源异常'}")
+
+
+_REFUND_RULE_UNCERTAINTY = (
+    "退费重算规则（统筹/自付如何随退费回冲）尚无权威规则来源，本结论仅陈述退费事实，不做金额重算归因"
+)
 
 
 def get_refund_record(
@@ -58,8 +70,10 @@ def get_refund_record(
 ) -> dict:
     """查询已发生退费/冲正记录（target_ref 能力入口，供 tool_get_refund_record 包装）。
 
-    settlement_id 走医保端链路（住院 tflydjh）；人员标识 + 日期走 HIS 端 o_Trade
-    退费交易链路（门诊，测试库医保端与 HIS 端无 djh 直接 join）。
+    三条链路按结算侧别路由（诚实边界，不静默空结论）：
+    - 住院（医保端 djh）：tflydjh 退费链；
+    - 门诊（医保端 djh）：医保端无门诊退费链，HIS 端需人员身份——未提供时显式声明；
+    - HIS 交易号（人员定位返回的 T_TradeNo）：按原交易号关联退费交易对。
     """
     if not settlement_id and not (id_card or insurance_card_no):
         return {
@@ -68,22 +82,45 @@ def get_refund_record(
             "conclusion": "缺少结算单号且无人员标识，无法定位退费记录",
             "uncertainties": ["需要结算单号，或人员唯一标识 + 就诊日期"],
         }
-    conn = _open_connection()
+    conn, mapping = _connect_with_mapping()
     try:
-        uncertainties = [
-            "退费重算规则（统筹/自付如何随退费回冲）尚无权威规则来源，本结论仅陈述退费事实，不做金额重算归因"
-        ]
+        uncertainties = [_REFUND_RULE_UNCERTAINTY]
         records: list[dict] = []
+        conclusion = ""
+
         if settlement_id:
-            result = queries.query_inpatient_refund_records(conn, settlement_id)
-            _require_success(result, "住院退费记录")
-            records = result.data.get("records", [])
-            conclusion = result.data.get("conclusion", "")
-        else:
-            conclusion = ""
+            side = queries.detect_settlement_side(conn, settlement_id, mapping)
+            if side == "inpatient":
+                result = queries.query_inpatient_refund_records(conn, settlement_id, mapping)
+                _require_success(result, "住院退费记录")
+                records = result.data.get("records", [])
+                conclusion = result.data.get("conclusion", "")
+            elif side == "outpatient":
+                uncertainties.append(
+                    "该结算单为门诊医保结算：医保端无门诊退费链路（tflydjh 仅住院），"
+                    "HIS 端退费核对需提供人员身份证/卡号 + 就诊日期，当前请求未提供——"
+                    "无法核对门诊退费，不做“无退费”结论"
+                )
+                conclusion = "门诊结算退费核对需人员身份+就诊日期（当前未提供），未执行 HIS 端核对"
+            else:
+                # 非医保端 djh：尝试按 HIS 交易号关联（人员定位返回的单号即此形态）
+                result = queries.query_outpatient_refund_records(
+                    conn, original_trade_no=settlement_id, mapping=mapping
+                )
+                _require_success(result, "门诊退费记录")
+                if result.data.get("refunded_count"):
+                    records = result.data.get("records", [])
+                    conclusion = f"按 HIS 交易号关联到 {len(records)} 笔退费相关交易"
+                else:
+                    conclusion = "结算单号在医保端与 HIS 端均未命中退费记录"
+
         if id_card or insurance_card_no:
             result = queries.query_outpatient_refund_records(
-                conn, id_card=id_card, insurance_card_no=insurance_card_no, visit_date=visit_date
+                conn,
+                id_card=id_card,
+                insurance_card_no=insurance_card_no,
+                visit_date=visit_date,
+                mapping=mapping,
             )
             _require_success(result, "门诊退费记录")
             records.extend(result.data.get("records", []))
@@ -106,7 +143,7 @@ def resolve_settlement_by_person(
     visit_date: str = "",
 ) -> dict:
     """人员唯一标识 + 就诊日期 → 结算单候选（供 tool_resolve_settlement_by_person 包装）。"""
-    conn = _open_connection()
+    conn, mapping = _connect_with_mapping()
     try:
         result = queries.resolve_settlements_by_person(
             conn,
@@ -114,6 +151,7 @@ def resolve_settlement_by_person(
             patient_id=patient_id,
             insurance_card_no=insurance_card_no,
             visit_date=visit_date,
+            mapping=mapping,
         )
         _require_success(result, "人员定位结算单")
         return dict(result.data)
@@ -128,7 +166,11 @@ def get_fee_detail(settlement_id: str = "", settlement_ids: list[str] | None = N
     批量返回 {"details": {settlement_id: 单笔输出}}；单笔返回单笔结构。
     """
     if settlement_ids:
-        ids = [s for s in ((settlement_ids,) if isinstance(settlement_ids, str) else settlement_ids) if s]
+        ids = [
+            s
+            for s in ((settlement_ids,) if isinstance(settlement_ids, str) else settlement_ids)
+            if s
+        ]
         details = {sid: get_fee_detail(sid) for sid in ids}
         missing = [sid for sid, d in details.items() if not d.get("items")]
         return {
@@ -136,12 +178,17 @@ def get_fee_detail(settlement_id: str = "", settlement_ids: list[str] | None = N
             "settlement_count": len(details),
             "conclusion": (
                 f"已取回 {len(details)} 笔结算单费用明细"
-                + (f"，其中 {len(missing)} 笔无明细" if missing else "")
+                + (
+                    f"，其中 {len(missing)} 笔无明细（医保端明细覆盖率边界，"
+                    "门诊医保端明细仅覆盖走医保结算的交易）"
+                    if missing
+                    else ""
+                )
             ),
         }
-    conn = _open_connection()
+    conn, mapping = _connect_with_mapping()
     try:
-        result = queries.query_fee_detail(conn, settlement_id)
+        result = queries.query_fee_detail(conn, settlement_id, mapping)
         _require_success(result, "费用明细")
         return dict(result.data)
     finally:
@@ -150,9 +197,9 @@ def get_fee_detail(settlement_id: str = "", settlement_ids: list[str] | None = N
 
 def get_benefit_stacking(settlement_id: str) -> dict:
     """按结算单查询待遇叠加分摊事实（供 tool_get_benefit_stacking 包装）。"""
-    conn = _open_connection()
+    conn, mapping = _connect_with_mapping()
     try:
-        result = queries.query_benefit_stacking(conn, settlement_id)
+        result = queries.query_benefit_stacking(conn, settlement_id, mapping)
         _require_success(result, "待遇叠加")
         return dict(result.data)
     finally:
@@ -240,9 +287,13 @@ def compare_same_drug_fee_details(
     elif diff_count == 0:
         conclusion = f"{len(comparisons)} 个跨单同码项目逐项一致，未发现费用事实差异"
     else:
-        conclusion = f"{len(comparisons)} 个跨单同码项目中 {diff_count} 个存在事实差异（单价/数量/医保内占比/先行自付），差异归因需结合政策时段与待遇累计进一步核验"
+        conclusion = (
+            f"{len(comparisons)} 个跨单同码项目中 {diff_count} 个存在事实差异"
+            "（单价/数量/医保内占比/先行自付），差异归因需结合政策时段与待遇累计进一步核验"
+        )
     uncertainties = [
-        "同药对比仅核验费用事实（单价/数量/占比/先行自付）；差异的报销归因（政策时段变化、乙类先行自付规则、年度累计）需权威规则来源，当前未接入"
+        "同药对比仅核验费用事实（单价/数量/占比/先行自付）；差异的报销归因"
+        "（政策时段变化、乙类先行自付规则、年度累计）需权威规则来源，当前未接入"
     ]
     return {
         "comparisons": comparisons,

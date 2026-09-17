@@ -1,6 +1,6 @@
 """Policy QA API 输入模型。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -16,11 +16,19 @@ class PolicyQAMode(StrEnum):
 
 @dataclass
 class PolicyQARequest:
-    """政策问答请求；结算单是业务上下文，宽泛政策问题可省略。"""
+    """政策问答请求；结算单是业务上下文，宽泛政策问题可省略。
+
+    settlement_ids：同药跨单对比（Q1 型）的多单号入口；
+    id_card/visit_date：门诊 HIS 退费核对（Q2/Q4 型）的人员身份入口——
+    仅在进程内用于查询过滤，不落轨迹/日志（脱敏硬约束）。
+    """
 
     question: str
     mode: PolicyQAMode = PolicyQAMode.POLICY_CHAT
     settlement_id: str | None = None
+    settlement_ids: list[str] = field(default_factory=list)
+    id_card: str = ""
+    visit_date: str = ""
     session_id: str | None = None
     user_id: str = ""
     role: str = ""

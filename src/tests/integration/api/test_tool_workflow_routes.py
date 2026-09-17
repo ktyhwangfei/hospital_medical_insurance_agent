@@ -42,11 +42,12 @@ def test_list_tools_exposes_input_and_output_schemas():
     assert fee["input_schema"]["settlement_id"]["required"] is False
     assert fee["input_schema"]["settlement_ids"]["type"] == "array<string>"
 
-    # 退费记录：真实双链路 SQL（医保端 tflydjh + HIS 端退费交易）。
+    # 退费记录：三链路路由 + 映射化执行细节（无硬编码物理表，换院零代码）。
     detail = items["tool_get_refund_record"]["execution_detail"]
     assert "tflydjh" in detail
-    assert "o_Trade" in detail
-    assert "T_HasRefundmented" in detail
+    assert "门诊交易表" in detail
+    assert "record_query_mappings" in detail
+    assert "起付线" in detail
 
     # 所有已登记 Tool 均应声明非空输入/输出契约。
     for tool_id, tool in items.items():
@@ -70,10 +71,10 @@ def test_list_tools_registers_person_settlement_resolver_with_real_sources():
     assert "match_status" in tool["output_schema"]
     assert "settlement_candidates" in tool["output_schema"]
 
-    # 执行细节：双源 SQL（门诊 HIS + 住院医保端）+ 不回显身份证。
+    # 执行细节：双源映射化 SQL + 不回显身份证。
     detail = tool["execution_detail"]
-    assert "o_Trade" in detail
-    assert "yb_brdjxx" in detail
+    assert "交易表" in detail
+    assert "登记表" in detail
     assert "multiple_candidates" in detail
     assert "不回显身份证" in detail
 

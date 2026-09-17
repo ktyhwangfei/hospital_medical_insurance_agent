@@ -57,8 +57,12 @@ WF_REFUND_VERIFICATION = WorkflowDefinition(
         WorkflowStep(
             step_id="fetch_refund_record",
             tool_id=TOOL_GET_REFUND_RECORD,
-            description="查询退费/冲正记录（医保端 tflydjh + HIS 端退费链路）",
-            input_mapping={"settlement_id": "context.settlement_id"},
+            description="查询退费/冲正记录（住院 tflydjh / HIS 交易号链路 / 人员身份+日期链路）",
+            input_mapping={
+                "settlement_id": "context.settlement_id",
+                "id_card": "context.id_card",
+                "visit_date": "context.visit_date",
+            },
         ),
         OutputNode(
             step_id="public_result",

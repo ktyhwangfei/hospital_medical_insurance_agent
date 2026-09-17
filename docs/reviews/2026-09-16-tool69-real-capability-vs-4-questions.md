@@ -185,3 +185,22 @@ Workflow：`wf_refund_verification`（Q2/Q4 → 必然 partial unavailable）、
 **验证**：单元（新增签名过滤缺陷回归 1 例、同药对比 5 例、适配器 6 例；先红后绿确认）+ API（tool/workflow 路由 45 例）+ 相关单元目录 224 例全部通过；全量 integration/api 500 例通过、6 例失败经干净 HEAD 检出复现甛别为预存（与本轮无关）。真实 bjybdb 数据冒烟：同药跨单对比命中 2 个跨码项目并正确标记事实差异（含负数量冲同行）；住院退费查询正确返回无退费 + uncertainties；待遇叠加正确返回分摊事实 + 低保缺失声明；人员定位多候选正确要求人工澄清；门诊退费链路真实命中 HIS 端退费交易。
 
 **未做（后续）**：费用明细级语义对象（`yb_zyfymx` 入语义模型，Q1 跨单对比当前走适配器直查）、PG 落地视图 mz_trade 扩列、T7/T8 权威规则取证、住院退费链路真实数据验证（测试库 tflydjh 全 0）。
+
+### 6.6 产品化第二轮（2026-09-16，多院扩展 + 入口闭环 + Golden）
+
+> 背景：需求方确认产品定位为多院区部署（各院单独接数据源，功能代码零改动）且四问无原始单据。本轮按维度评估落地：
+
+| 项 | 落地 | 位置 |
+|---|---|---|
+| **D1 映射层**：四记录查询去 schema 硬编码，表/列/方言外置为可注册映射（换院=登记 JSON，零代码） | `RecordQueryMapping` + 默认映射 + 部分覆盖合并 + PG 存表 `record_query_mappings` + 登记脚本 `scripts/set_record_query_mapping.py`；行投影/SQL 渲染全部经映射 | `adapters/data_supply/record_query_mappings.py` 等 |
+| **D2 入口契约**：`PolicyQARequest` 新增 `settlement_ids`（Q1 型多单号）/`id_card`/`visit_date`（Q2/Q4 型门诊退费），上下文默认值化贯通 mode/关键词两路 | models.py + service._build_context + routes 两调用点；退费步骤 input_mapping 接身份 | 同左 |
+| **D2 退费三链路 + 诚实边界**：住院 djh→tflydjh；HIS 交易号→退费交易对（关联原交易起付线/年度累计，Q4 事实）；身份+日期→门诊 HIS；门诊医保结算无身份时显式声明不可核对，不再偺“无退费” | lookup.get_refund_record 侧别路由 + adapter OR 括号修复 | settlement_record_lookup.py |
+| **D6 停用开关**：`WORKFLOW_DISABLED` 环境变量逐条下线（关键词/模式路由过滤 + 目录 enabled 标记 + Portal 停用徽标），无需改代码回滚 | service + catalog + api.ts/page | 同左 |
+| **D4 Golden 同型替代**：四问从基线库挖掘同型数据（Q1 同患者 55 单同码取 687/689/691；Q2/Q4 交易族 007/008/009 含退药负数量明细+同日重开；Q3 djh=687 特病 502+大病 5161.16+救助 16756.09），实库门控回归 4 例全绿 | `docs/reviews/2026-09-16-tool69-golden-cases.md` + `test_tool69_golden_workflows.py`（TOOL69_LIVE_DB=1） | 同左 |
+| **D7 数据边界**：批量取数结论声明医保端门诊明细覆盖率边界 | get_fee_detail 批量聚合 | settlement_record_lookup.py |
+
+**顺带修复**：退费 SQL 基础 OR 条件未整体括号——身份/日期过滤会被运算优先级吞掉（生产查询漏过滤，真实 bug）；入口连通测试（无库环境可跑）与停用开关测试新增。
+
+**验证**：无库聚焦 56 例 + 实库 golden 4 例 + Portal Vitest 6 例 + tsc 零错误；全量 integration/api 504+ passed（仅剩 infra_skill 2 例预存）。
+
+**仍待上线闸门**：生产库 schema 验证、身份字段前端输入 UI、答案 LLM 组装/citations、Tool/Workflow 治理发布流、监控与容量基线（见评审记录 gate 清单）。

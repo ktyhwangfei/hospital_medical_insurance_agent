@@ -136,9 +136,9 @@ def register_builtin_tools(registry: ToolRegistryService) -> None:
 
     registry.register(
         ToolVersion(
-            version_id="tv_resolve_settlement_by_person_2",
+            version_id="tv_resolve_settlement_by_person_3",
             tool_id=TOOL_RESOLVE_SETTLEMENT_BY_PERSON,
-            semantic_version="1.1.0",
+            semantic_version="1.2.0",
             definition=ToolDefinition(
                 tool_id=TOOL_RESOLVE_SETTLEMENT_BY_PERSON,
                 name="人员定位结算单",
@@ -187,14 +187,10 @@ def register_builtin_tools(registry: ToolRegistryService) -> None:
                     },
                 },
                 execution_detail=(
-                    "双源查询（只读 SELECT，参数化，输出不含身份原文）：\n"
-                    "  门诊（HIS 收费端）：SELECT T_TradeNo, T_TradeDate, T_FeeAll FROM dbo.o_Trade\n"
-                    "    WHERE T_TradeDate >= :visit_date AND T_TradeDate < DATEADD(day,1,:visit_date)\n"
-                    "    AND (P_IDNo = :id_card OR P_ICNo = :card OR P_CardNo = :card)\n"
-                    "  住院（医保端）：SELECT b.djh, b.ryrq, b.cyrq, z.zje FROM dbo.yb_brdjxx b\n"
-                    "    LEFT JOIN dbo.yb_zyjyxx z ON z.djh = b.djh\n"
-                    "    WHERE b.ryrq <= :visit_date AND (b.cyrq IS NULL OR b.cyrq >= :visit_date)\n"
-                    "    AND (b.sfz = :id_card OR b.kh = :card)\n"
+                    "双源映射化查询（表/列可按数据源映射 record_query_mappings 配置；只读 SELECT，参数化，输出不含身份原文）：\n"
+                    "  门诊（HIS 交易表）：SELECT 交易号, 交易日期, 总金额 WHERE 交易日期窗口 AND (身份证号 = :id_card OR 医保卡号 = :card)\n"
+                    "  住院（医保端登记表）：登记号, 入院日期, 出院日期 LEFT JOIN 住院结算表取总金额\n"
+                    "    WHERE 入院日期 <= :visit_date AND (出院日期 IS NULL OR 出院日期 >= :visit_date) AND (身份证号 = :id_card OR 卡号 = :card)\n"
                     "硬约束：多笔命中 → multiple_candidates 供澄清，禁止自动选定执行；输出不回显身份证原文。"
                 ),
             ),
@@ -205,13 +201,13 @@ def register_builtin_tools(registry: ToolRegistryService) -> None:
 
     registry.register(
         ToolVersion(
-            version_id="tv_refund_record_4",
+            version_id="tv_refund_record_5",
             tool_id=TOOL_GET_REFUND_RECORD,
-            semantic_version="1.3.0",
+            semantic_version="1.4.0",
             definition=ToolDefinition(
                 tool_id=TOOL_GET_REFUND_RECORD,
                 name="查询退费记录",
-                description="查询指定结算单或人员（+就诊日期）的已发生退费/冲正记录（真实数据源：HIS o_Trade 退费链路 + 住院 tflydjh）",
+                description="按结算单（住院 djh→tflydjh / HIS 交易号→退费交易对）或人员身份+就诊日期（门诊 HIS）查询已发生退费/冲正记录；门诊医保结算无身份时显式声明不可核对，不偺无退费结论",
                 contract_kind=ToolContractKind.ADAPTER_PORT,
                 target_ref="src.adapters.ports.refund_record_port",
                 risk_level=ToolRiskLevel.MEDIUM,
@@ -251,13 +247,15 @@ def register_builtin_tools(registry: ToolRegistryService) -> None:
                     },
                 },
                 execution_detail=(
-                    "双链路只读查询（参数化，不含身份原文输出）：\n"
-                    "  住院（医保端）：SELECT djh, jylsh, jyrq, zje, tflydjh FROM dbo.yb_zyjyxx\n"
+                    "三链路按结算侧别路由（表/列可按数据源映射 record_query_mappings 配置，换院零代码）：\n"
+                    "  住院（医保端 djh）：SELECT jylsh, jyrq, zje, tflydjh FROM <住院结算表>\n"
                     "    WHERE tflydjh = :settlement_id AND tflydjh <> 0\n"
-                    "  门诊（HIS 收费端）：SELECT T_TradeNo, T_TradeDate, T_FeeAll, TR_OraginalTradeNo,\n"
-                    "    T_PartialReturnFlag FROM dbo.o_Trade WHERE (TR_OraginalTradeNo <> '' OR T_HasRefundmented = 1\n"
-                    "    OR T_FeeAll < 0) AND (P_IDNo = :id_card OR P_ICNo/:P_CardNo = :card) AND T_TradeDate 窗口\n"
-                    "边界：测试库中医保端 djh 与 HIS 端 T_TradeNo 无直接 join，门诊退费必须走人员标识；\n"
+                    "  HIS 交易号：SELECT r.交易号, r.金额, r.原交易号, o.起付线, o.年度累计 FROM <门诊交易表> r\n"
+                    "    LEFT JOIN <门诊交易表> o ON o.交易号 = r.原交易号 WHERE r.原交易号 = :trade_no\n"
+                    "    （关联原交易取起付线/年度累计，供退费结算架构核验）\n"
+                    "  人员身份+日期（门诊）：同表按 P_IDNo/P_ICNo + 日期窗口过滤退费相关交易\n"
+                    "  （退费条件带整体括号：OR 链不被后续 AND 过滤吞掉）\n"
+                    "边界：门诊医保结算（djh 在门诊结算表）无身份时显式声明不可核对；\n"
                     "退费重算规则（T7）未接入，结论仅陈述退费事实，不做金额重算归因（uncertainties 声明）。"
                 ),
             ),

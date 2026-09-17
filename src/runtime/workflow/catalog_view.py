@@ -18,6 +18,7 @@ from src.runtime.tool_registry.factory import get_tool_registry
 from src.runtime.tool_registry.service import ToolRegistryService
 from src.runtime.workflow.definitions import ALL_WORKFLOWS
 from src.runtime.workflow.domain_nodes import DOMAIN_HANDLERS
+from src.runtime.workflow.service import is_workflow_enabled
 
 
 class ToolSummary(BaseModel):
@@ -75,6 +76,7 @@ class WorkflowSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workflow_id: str
+    enabled: bool = True
     name: str
     description: str
     intent_keywords: list[str]
@@ -176,6 +178,7 @@ def _workflow_summary(
 
     return WorkflowSummary(
         workflow_id=definition.workflow_id,
+        enabled=is_workflow_enabled(definition.workflow_id),
         name=definition.name,
         description=definition.description,
         intent_keywords=list(definition.intent_keywords),

@@ -4,6 +4,93 @@ import pytest
 
 from src.adapters.base.models import AdapterCallStatus
 from src.adapters.data_supply import settlement_record_queries as queries
+from src.adapters.data_supply.record_query_mappings import RecordQueryMapping
+
+
+def test_custom_mapping_changes_sql_and_row_keys() -> None:
+    """多院扩展点：换表名/列名后 SQL 与结果键随映射变化，代码零改动。"""
+    captured = {}
+
+    class _CaptureCursor:
+        def __init__(self, captured):
+            self._captured = captured
+            self.description = [
+                (c,)
+                for c in (
+                    "ITEM_DM", "GB_CODE", "XM_MC", "XH", "SFLB", "SL", "DJ",
+                    "ZJE", "YBNJE", "YBWJE", "GRZIFTW", "FSRQ",
+                )
+            ]
+            self.rows = [
+                ("X9", "GB9", "某药", 1, "西药", 2, 10.0, 20.0, 17.0, 3.0, 0.0, "2026-01-01")
+            ]
+
+        def execute(self, sql, params):
+            self._captured["sql"] = sql
+            self._captured["params"] = params
+
+        def fetchall(self):
+            return self.rows
+
+        def close(self):
+            pass
+
+    class _CaptureConn:
+        def cursor(self):
+            return _CaptureCursor(captured)
+
+    mapping = RecordQueryMapping(
+        inpatient_fee_table="his.ZY_MX",
+        columns={"fee_item_code": "ITEM_DM", "fee_nation_code": "GB_CODE", "fee_item_name": "XM_MC"},
+    )
+
+    result = queries.query_fee_detail(_CaptureConn(), "88", mapping)
+
+    assert result.status == AdapterCallStatus.SUCCESS
+    assert "[his].[ZY_MX]" in captured["sql"]
+    assert "[ITEM_DM]" in captured["sql"]
+    item = result.data["items"][0]
+    assert item["item_code"] == "X9"
+    assert item["nation_code"] == "GB9"
+    assert item["item_name"] == "某药"
+
+
+def test_mapping_dialect_quoting_and_column_merge() -> None:
+    """二档 PG 方言引用 + 部分列覆盖与默认合并。"""
+    from src.adapters.data_supply.record_query_mappings import DEFAULT_COLUMNS, RecordQueryDialect
+
+    m = RecordQueryMapping(dialect=RecordQueryDialect.POSTGRESQL, columns={"fee_qty": "SL_NEW"})
+    resolved = m.resolved_columns()
+    assert resolved["fee_qty"] == "SL_NEW"
+    assert resolved["fee_item_code"] == DEFAULT_COLUMNS["fee_item_code"]
+    assert m.quote("public.mz_fee_item") == '"public"."mz_fee_item"'
+
+
+def test_detect_settlement_side_routes_by_mapping() -> None:
+    class _SideConn:
+        def __init__(self):
+            self._n = 0
+
+        def cursor(self):
+            return _SideCursor(self)
+
+    class _SideCursor:
+        def __init__(self, parent):
+            self._parent = parent
+
+        def execute(self, sql, params):
+            self._parent._n += 1
+            # 第一次（住院表）无行，第二次（门诊表）命中
+            self.description = [("djh",)]
+            self.rows = [] if self._parent._n == 1 else [(88,)]
+
+        def fetchall(self):
+            return self.rows
+
+        def close(self):
+            pass
+
+    assert queries.detect_settlement_side(_SideConn(), "88") == "outpatient"
 
 
 def test_assert_read_only_select_rejects_non_select_and_multi_statement() -> None:

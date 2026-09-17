@@ -224,6 +224,11 @@ export default function ToolsPage() {
                 <WorkflowIcon className="size-4 text-slate-500" />
                 <span className="text-sm font-medium text-slate-800">{workflow.name}</span>
                 <span className="font-mono text-[11px] text-slate-400">{workflow.workflow_id}</span>
+                {workflow.enabled === false && (
+                  <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">
+                    已停用（环境开关）
+                  </span>
+                )}
               </div>
               <p className="mt-1.5 text-xs text-slate-600">{workflow.description}</p>
 
