@@ -5,10 +5,12 @@
 // Workflow 页签：静态 Workflow 定义可视化为混合节点链（未绑定实现的节点高亮，对应
 // fail-closed：该步骤运行时会报 unavailable，不会编造结果）。
 import { useEffect, useState } from 'react'
-import { ArrowRight, Boxes, Loader2, Workflow as WorkflowIcon } from 'lucide-react'
+import { ArrowRight, Boxes, Loader2, Power, Workflow as WorkflowIcon } from 'lucide-react'
 import {
   listTools,
   listWorkflows,
+  updateWorkflowConfig,
+  hasWorkflowWritePermission,
   type ToolCatalogDto,
   type ToolFieldInfoDto,
   type WorkflowCatalogDto,
@@ -90,27 +92,49 @@ export default function ToolsPage() {
   const [workflows, setWorkflows] = useState<WorkflowCatalogDto | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  // 治理配置：启停开关 + 关键词编辑（写入治理库，同进程立即生效）
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [keywordDraft, setKeywordDraft] = useState('')
+  const canWrite = hasWorkflowWritePermission()
 
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
+  const reload = () =>
     Promise.all([listTools(), listWorkflows()])
       .then(([toolCatalog, workflowCatalog]) => {
-        if (cancelled) return
         setTools(toolCatalog)
         setWorkflows(workflowCatalog)
         setError(null)
       })
-      .catch((e) => {
-        if (cancelled) return
-        setError(e instanceof ApiClientError ? e.message : String(e))
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+      .catch((e) => setError(e instanceof ApiClientError ? e.message : String(e)))
+
+  const saveConfig = async (
+    workflowId: string,
+    payload: { enabled: boolean; intent_keywords?: string[] | null },
+  ) => {
+    setSavingId(workflowId)
+    setActionError(null)
+    try {
+      await updateWorkflowConfig(workflowId, payload)
+      await reload()
+      setEditingId(null)
+    } catch (e) {
+      setActionError(e instanceof ApiClientError ? e.message : String(e))
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    reload().finally(() => {
+      if (!cancelled) setLoading(false)
+    })
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
@@ -122,7 +146,7 @@ export default function ToolsPage() {
         <div>
           <h1 className="text-lg font-semibold text-slate-900">Tool 与 Workflow</h1>
           <p className="mt-0.5 text-xs text-slate-500">
-            Tool、确定性领域处理与输出节点统一编排；只读展示，不新增业务写入口
+            Tool、确定性领域处理与输出节点统一编排；配置院区关键词与启停，不新增业务写入口
           </p>
         </div>
       </header>
@@ -212,6 +236,12 @@ export default function ToolsPage() {
         </section>
       )}
 
+      {actionError && (
+        <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700" data-testid="workflow-action-error">
+          {actionError}
+        </p>
+      )}
+
       {!loading && tab === 'workflows' && workflows && (
         <section className="mt-4 space-y-4" data-testid="workflow-catalog">
           {workflows.items.map((workflow) => (
@@ -226,10 +256,87 @@ export default function ToolsPage() {
                 <span className="font-mono text-[11px] text-slate-400">{workflow.workflow_id}</span>
                 {workflow.enabled === false && (
                   <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">
-                    已停用（环境开关）
+                    已停用
                   </span>
                 )}
+                {workflow.keyword_source && workflow.keyword_source !== 'default' && (
+                  <span
+                    className="rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-700"
+                    data-testid={`workflow-keyword-source-${workflow.workflow_id}`}
+                  >
+                    关键词：治理配置（{workflow.keyword_source.replace('+env_disabled', '')}）
+                  </span>
+                )}
+                <span className="ml-auto flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={!canWrite || savingId === workflow.workflow_id}
+                    onClick={() =>
+                      saveConfig(workflow.workflow_id, { enabled: workflow.enabled === false })
+                    }
+                    title={canWrite ? undefined : '缺少 workflow:write 权限'}
+                    className="flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 disabled:opacity-40"
+                    data-testid={`workflow-toggle-${workflow.workflow_id}`}
+                  >
+                    <Power className="size-3" />
+                    {workflow.enabled === false ? '启用' : '停用'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canWrite}
+                    onClick={() => {
+                      setEditingId(workflow.workflow_id)
+                      setKeywordDraft(workflow.intent_keywords.join('、'))
+                    }}
+                    className="rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 disabled:opacity-40"
+                    data-testid={`workflow-edit-keywords-${workflow.workflow_id}`}
+                  >
+                    编辑关键词
+                  </button>
+                </span>
               </div>
+
+              {editingId === workflow.workflow_id && (
+                <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2" data-testid={`workflow-keyword-editor-${workflow.workflow_id}`}>
+                  <label className="text-[11px] text-slate-500">
+                    关键词（顿号/逗号分隔）——决定关键词 fallback 路由命中，改完立即生效
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={keywordDraft}
+                    onChange={(e) => setKeywordDraft(e.target.value)}
+                    className="mt-1 w-full rounded border border-slate-300 px-2 py-1 font-mono text-[11px]"
+                    data-testid={`workflow-keyword-input-${workflow.workflow_id}`}
+                  />
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={savingId === workflow.workflow_id}
+                      onClick={() =>
+                        saveConfig(workflow.workflow_id, {
+                          enabled: workflow.enabled !== false,
+                          intent_keywords: keywordDraft
+                            .split(/[、,，\n]/)
+                            .map((item) => item.trim())
+                            .filter(Boolean),
+                        })
+                      }
+                      className="rounded bg-slate-900 px-2.5 py-1 text-[11px] font-medium text-white disabled:opacity-40"
+                      data-testid={`workflow-keyword-save-${workflow.workflow_id}`}
+                    >
+                      保存
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingId(null)}
+                      className="rounded border border-slate-200 px-2.5 py-1 text-[11px] text-slate-600"
+                    >
+                      取消
+                    </button>
+                    <span className="text-[11px] text-slate-400">保存后写入治理库，路由立即生效（无需重启）</span>
+                  </div>
+                </div>
+              )}
               <p className="mt-1.5 text-xs text-slate-600">{workflow.description}</p>
 
               <div className="mt-2 flex flex-wrap gap-1.5">
