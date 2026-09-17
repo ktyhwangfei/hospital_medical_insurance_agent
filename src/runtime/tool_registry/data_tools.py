@@ -331,9 +331,9 @@ def register_data_tools(registry: ToolRegistryService) -> None:
     )
     registry.register(
         ToolVersion(
-            version_id="tv_query_flow_metrics_1",
+            version_id="tv_query_flow_metrics_2",
             tool_id=TOOL_QUERY_FLOW_METRICS,
-            semantic_version="1.0.0",
+            semantic_version="1.1.0",
             definition=ToolDefinition(
                 tool_id=TOOL_QUERY_FLOW_METRICS,
                 name="运营指标受控查询",
@@ -342,6 +342,43 @@ def register_data_tools(registry: ToolRegistryService) -> None:
                 target_ref="src.runtime.flow.flow_query_service.FlowQueryService.query_by_metrics",
                 risk_level=ToolRiskLevel.LOW,
                 tags=["数据类", "运营问数", "Flow消费"],
+                input_schema={
+                    "metric_codes": {
+                        "type": "array<string>",
+                        "required": True,
+                        "description": "Flow 已发布消费契约指标码列表",
+                    },
+                    "dimensions": {
+                        "type": "array<string>",
+                        "required": False,
+                        "description": "分组维度码（受 Flow 契约白名单约束）",
+                    },
+                    "clarification_needed": {
+                        "type": "boolean",
+                        "required": False,
+                        "description": "上游意图解析判定需要澄清",
+                    },
+                    "clarification_message": {
+                        "type": "string",
+                        "required": False,
+                        "description": "上游澄清话术，无指标码时作为结论返回",
+                    },
+                    "caller_role": {
+                        "type": "string",
+                        "required": False,
+                        "description": "调用方角色（服务端注入，用于维度权限判定）",
+                    },
+                },
+                output_schema={
+                    "rows": {"type": "array<object>", "description": "聚合结果行"},
+                    "metrics": {"type": "array<string>", "description": "本次查询的指标码"},
+                    "quality_status": {"type": "string", "description": "质量门状态"},
+                    "conclusion": {"type": "string", "description": "面向用户的结论文本"},
+                    "citations": {
+                        "type": "array<object>",
+                        "description": "发布证据（flow/revision/artifact_hash）",
+                    },
+                },
             ),
             status=ToolStatus.MATERIALIZED,
         ),
