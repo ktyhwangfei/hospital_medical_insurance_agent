@@ -7,6 +7,7 @@ import {
   listDataSources,
   listSyncTables,
   selectSyncTable,
+  getTimeCandidates,
 } from '@/lib/data-governance-api'
 
 vi.mock('next/navigation', () => ({
@@ -17,6 +18,7 @@ vi.mock('@/lib/data-governance-api', async (importOriginal) => ({
   listDataSources: vi.fn(),
   listSyncTables: vi.fn(),
   selectSyncTable: vi.fn(),
+  getTimeCandidates: vi.fn(),
   runSyncTables: vi.fn(),
 }))
 
@@ -78,12 +80,22 @@ describe('数据探查页（自包含版）', () => {
     expect(link.getAttribute('href')).toContain('field=')
   })
 
-  it('加入同步调用 API 并更新为待同步状态', async () => {
+  it('加入同步：弹窗配置时间字段后确认才调 API', async () => {
     vi.mocked(selectSyncTable).mockResolvedValue({} as never)
+    vi.mocked(getTimeCandidates).mockResolvedValue(['T_TradeDate', 'SETL_DATE'] as never)
     render(<DataProfilingPage />)
     await waitFor(() => screen.getByTestId('select-sync-o_Trade'))
     fireEvent.click(screen.getByTestId('select-sync-o_Trade'))
-    await waitFor(() => expect(selectSyncTable).toHaveBeenCalledWith('bjybdb', 'o_Trade'))
+    // 弹窗出现且未调 API
+    const dialog = await screen.findByTestId('select-sync-dialog')
+    expect(dialog.textContent).toContain('加入同步：o_Trade')
+    expect(selectSyncTable).not.toHaveBeenCalled()
+    // 选择增量时间字段后确认
+    fireEvent.change(dialog.querySelector('select')!, { target: { value: 'T_TradeDate' } })
+    fireEvent.click(screen.getByRole('button', { name: /确认加入/ }))
+    await waitFor(() => expect(selectSyncTable).toHaveBeenCalledWith('bjybdb', 'o_Trade', {
+      time_column: 'T_TradeDate', sync_mode: 'incremental', lookback_minutes: 5,
+    }))
     await waitFor(() => expect(screen.getByTestId('table-o_Trade').textContent).toContain('待同步'))
   })
 

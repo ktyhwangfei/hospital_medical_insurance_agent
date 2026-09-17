@@ -15,7 +15,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { NextStepCard } from '@/components/next-step-card'
 import {
-  listDataSources, listSyncTables, runSyncTables, selectSyncTable,
+  listDataSources, listSyncTables, runSyncTables, selectSyncTable, getTimeCandidates,
   type DataSource,
 } from '@/lib/data-governance-api'
 
@@ -140,6 +140,10 @@ function ProfilingContent() {
   const [busyTable, setBusyTable] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 50
+  // 选表配置弹窗（增量字段/模式/回看窗口）
+  const [configuring, setConfiguring] = useState<string | null>(null)
+  const [timeCandidates, setTimeCandidates] = useState<string[]>([])
+  const [syncForm, setSyncForm] = useState({ time_column: '', sync_mode: 'full' as 'full' | 'incremental', lookback_minutes: 5 })
 
   const load = useCallback(async (datasourceId: string) => {
     const [r, h, tables] = await Promise.all([
@@ -240,13 +244,29 @@ function ProfilingContent() {
     }
   }
 
-  const addToSync = async (table: string) => {
+  const addToSync = (table: string) => {
+    // 打开配置弹窗：加载候选时间字段（datetime/date 列），人工确认增量字段
+    setConfiguring(table)
+    setSyncForm({ time_column: '', sync_mode: 'full', lookback_minutes: 5 })
+    void getTimeCandidates(sourceId, table)
+      .then(setTimeCandidates)
+      .catch(() => setTimeCandidates([]))
+  }
+
+  const confirmSelect = async () => {
+    if (!configuring) return
+    const table = configuring
     setBusyTable(table)
     setMessage(null)
     try {
-      await selectSyncTable(sourceId, table)
+      await selectSyncTable(sourceId, table, {
+        time_column: syncForm.time_column || null,
+        sync_mode: syncForm.time_column ? syncForm.sync_mode : 'full',
+        lookback_minutes: syncForm.lookback_minutes,
+      })
       setSyncTables((current) => new Map(current).set(table, null))
-      setMessage(`已加入同步：${table}（落地表 ${table.toLowerCase()}）`)
+      setMessage(`已加入同步：${table}（${syncForm.time_column ? `增量，时间字段 ${syncForm.time_column}` : '全量，限频日同步'}）`)
+      setConfiguring(null)
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '加入同步失败')
     } finally {
@@ -282,6 +302,44 @@ function ProfilingContent() {
   const totalMapped = results?.fields?.filter((f) => f.mapped).length ?? 0
 
   return <div className="space-y-4" data-testid="data-profiling-page">
+    {/* 选表配置弹窗：增量时间字段 + 模式 + 回看窗口 */}
+    {configuring && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4" role="presentation">
+        <section role="dialog" aria-modal="true" aria-label="选表同步配置" data-testid="select-sync-dialog"
+          className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+          <h3 className="font-semibold text-slate-900">加入同步：{configuring}</h3>
+          <div className="mt-4 space-y-3">
+            <label className="grid gap-1 text-xs font-medium text-slate-600">增量时间字段（可选）
+              <select className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs outline-none focus:border-blue-500"
+                value={syncForm.time_column}
+                onChange={(e) => setSyncForm({ ...syncForm, time_column: e.target.value, sync_mode: e.target.value ? 'incremental' : 'full' })}>
+                <option value="">无（全量同步，每日限频）</option>
+                {timeCandidates.map((col) => <option key={col} value={col}>{col}</option>)}
+              </select>
+            </label>
+            {syncForm.time_column && (
+              <label className="grid gap-1 text-xs font-medium text-slate-600">回看窗口（分钟，防边界漏数）
+                <input type="number" min={0} max={1440} value={syncForm.lookback_minutes}
+                  onChange={(e) => setSyncForm({ ...syncForm, lookback_minutes: Number(e.target.value) })}
+                  className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs outline-none focus:border-blue-500" />
+              </label>
+            )}
+            <p className="text-[11px] text-slate-400">
+              {syncForm.time_column
+                ? `增量模式：从上次水位线前 ${syncForm.lookback_minutes} 分钟回拉，主键去重覆盖`
+                : '全量模式：快照覆盖，每日最多一次'}
+            </p>
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setConfiguring(null)}>取消</Button>
+            <Button size="sm" disabled={busyTable !== null} onClick={() => void confirmSelect()}>
+              {busyTable === configuring ? <Loader2 className="size-3.5 animate-spin" /> : null}确认加入
+            </Button>
+          </div>
+        </section>
+      </div>
+    )}
+
     <div>
       <h2 className="font-semibold text-slate-900">数据探查</h2>
       <p className="mt-1 text-sm text-slate-600">
@@ -373,7 +431,7 @@ function ProfilingContent() {
                 </Button>
               ) : (
                 <Button size="sm" variant="outline" disabled={busyTable !== null}
-                  onClick={() => void addToSync(group.table)} data-testid={`select-sync-${group.table}`}>
+                  onClick={() => addToSync(group.table)} data-testid={`select-sync-${group.table}`}>
                   {busyTable === group.table ? <Loader2 className="size-3.5 animate-spin" /> : <PlusCircle className="size-3.5" />}加入同步
                 </Button>
               )}

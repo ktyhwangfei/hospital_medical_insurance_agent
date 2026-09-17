@@ -26,6 +26,13 @@ class SyncTableStatus(StrEnum):
     PAUSED = "paused"
 
 
+class SyncMode(StrEnum):
+    """同步模式：incremental 需 time_column；无时间字段降级 full（限频日同步）。"""
+
+    FULL = "full"
+    INCREMENTAL = "incremental"
+
+
 class SelectedSyncTable(BaseModel):
     """一张选中同步表的配置（实体）。"""
 
@@ -34,12 +41,22 @@ class SelectedSyncTable(BaseModel):
     target_table: str = Field(pattern=_IDENTIFIER)
     key_columns: list[str] = Field(default_factory=list)
     time_column: Optional[str] = None
+    sync_mode: SyncMode = SyncMode.FULL
+    lookback_minutes: int = Field(default=5, ge=0, le=1440)
     status: SyncTableStatus = SyncTableStatus.ACTIVE
     revision: int = Field(default=1, ge=1)
     updated_at: Optional[str] = None
     last_synced_at: Optional[str] = None
     last_row_count: Optional[int] = None
     last_error: Optional[str] = None
+    last_watermark: Optional[str] = None
+
+    @property
+    def effective_mode(self) -> SyncMode:
+        """无时间字段的表强制降级全量（增量无从谈起）。"""
+        if self.sync_mode is SyncMode.INCREMENTAL and not self.time_column:
+            return SyncMode.FULL
+        return self.sync_mode
 
 
 class TableSyncRunResult(BaseModel):

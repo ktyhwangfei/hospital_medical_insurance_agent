@@ -375,6 +375,14 @@ SyncExecutor = Annotated[TableSyncExecutor, Depends(get_table_sync_executor)]
 class SyncTableUpsertRequest(BaseModel):
     key_columns: list[str] = Field(default_factory=list)
     time_column: str | None = None
+    sync_mode: str = Field(default="full", pattern="^(full|incremental)$")
+    lookback_minutes: int = Field(default=5, ge=0, le=1440)
+
+
+@router.get("/data-sources/{source_id}/sync-tables/{table_name}/time-candidates")
+def sync_table_time_candidates(source_id: str, table_name: str, _: ReadPrincipal, executor: SyncExecutor):
+    """候选增量时间字段（datetime/date 类型列），选表配置时推荐。"""
+    return {"result": _call(lambda: executor.probe_time_candidates(source_id, table_name))}
 
 
 @router.get("/data-sources/{source_id}/sync-tables")
@@ -400,6 +408,8 @@ def select_sync_table(
             target_table=table_name.lower(),
             key_columns=key_columns,
             time_column=request.time_column,
+            sync_mode=request.sync_mode,
+            lookback_minutes=request.lookback_minutes,
         )
         executor._store.save_table(table)
         executor._store.record_event(source_id, table_name, "select", principal.user_id)
@@ -419,7 +429,7 @@ def remove_sync_table(source_id: str, table_name: str, principal: WritePrincipal
 @router.post("/data-sources/{source_id}/sync-tables/run")
 def run_sync_tables(source_id: str, principal: WritePrincipal, executor: SyncExecutor):
     """立即全量同步全部 active 选表（逐表独立成败，失败记 last_error 不阻断他表）。"""
-    results = _call(lambda: executor.sync_all_active(source_id))
+    results = _call(lambda: executor.sync_all_active(source_id, manual=True))
     for r in results:
         executor._store.record_event(source_id, r.table_name, "run", principal.user_id, r.row_count)
     return {"result": [r.model_dump(mode="json") for r in results]}

@@ -232,12 +232,17 @@ export default function SyncJobsPage() {
       {syncTables.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">
         暂无选中表。到<Link href="/data-governance/profiling" className="mx-1 text-blue-600 hover:underline">数据探查</Link>查看表画像并加入同步。
       </p> : <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm">
-        <thead className="bg-slate-50 text-xs text-slate-600"><tr><th className="px-4 py-3 font-medium">源表</th><th className="px-4 py-3 font-medium">落地表</th><th className="px-4 py-3 font-medium">主键</th><th className="px-4 py-3 font-medium">状态</th><th className="px-4 py-3 font-medium">最近同步</th><th className="px-4 py-3 font-medium">行数</th><th className="px-4 py-3 font-medium">错误</th></tr></thead>
+        <thead className="bg-slate-50 text-xs text-slate-600"><tr><th className="px-4 py-3 font-medium">源表</th><th className="px-4 py-3 font-medium">落地表</th><th className="px-4 py-3 font-medium">模式</th><th className="px-4 py-3 font-medium">主键</th><th className="px-4 py-3 font-medium">水位线</th><th className="px-4 py-3 font-medium">最近同步</th><th className="px-4 py-3 font-medium">行数</th><th className="px-4 py-3 font-medium">错误</th></tr></thead>
         <tbody className="divide-y divide-slate-100">{syncTables.map((table) => <tr key={table.table_name} data-testid={`sync-table-${table.table_name}`}>
           <td className="px-4 py-3 font-mono text-xs">{table.table_name}</td>
           <td className="px-4 py-3 font-mono text-xs text-slate-600">{table.target_table}</td>
+          <td className="px-4 py-3">
+            {table.sync_mode === 'incremental'
+              ? <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-700">增量 · {table.time_column}</span>
+              : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">全量</span>}
+          </td>
           <td className="px-4 py-3 font-mono text-xs text-slate-500">{table.key_columns.join(', ') || '—'}</td>
-          <td className="px-4 py-3">{table.status === 'active' ? <span className="rounded bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">启用</span> : <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500">暂停</span>}</td>
+          <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{table.last_watermark ? timeText(table.last_watermark) : '—'}</td>
           <td className="px-4 py-3 text-xs text-slate-500">{table.last_synced_at ? timeText(table.last_synced_at) : '未同步'}</td>
           <td className="px-4 py-3 font-mono text-xs">{table.last_row_count ?? '—'}</td>
           <td className="max-w-56 truncate px-4 py-3 text-xs text-red-700" title={table.last_error ?? ''}>{table.last_error ?? '—'}</td>

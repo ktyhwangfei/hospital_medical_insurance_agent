@@ -611,6 +611,9 @@ export interface SelectedSyncTable {
   target_table: string
   key_columns: string[]
   time_column: string | null
+  sync_mode: 'full' | 'incremental'
+  lookback_minutes: number
+  last_watermark: string | null
   status: 'active' | 'paused'
   last_synced_at: string | null
   last_row_count: number | null
@@ -634,7 +637,7 @@ export async function listSyncTables(sourceId: string): Promise<SelectedSyncTabl
 export async function selectSyncTable(
   sourceId: string,
   tableName: string,
-  input: { key_columns?: string[]; time_column?: string | null } = {},
+  input: { key_columns?: string[]; time_column?: string | null; sync_mode?: string; lookback_minutes?: number } = {},
 ): Promise<SelectedSyncTable> {
   const response = await dataGovernanceRequest<{ result: SelectedSyncTable }>(
     `/data-sources/${encodeURIComponent(sourceId)}/sync-tables/${encodeURIComponent(tableName)}`,
@@ -669,6 +672,13 @@ export interface SourceCompareResult {
   landing_value: number | null
   diff: number | null
   match: boolean
+}
+
+export async function getTimeCandidates(sourceId: string, tableName: string): Promise<string[]> {
+  const response = await dataGovernanceRequest<{ result: string[] }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/sync-tables/${encodeURIComponent(tableName)}/time-candidates`,
+  )
+  return response.result
 }
 
 export async function compareSource(
