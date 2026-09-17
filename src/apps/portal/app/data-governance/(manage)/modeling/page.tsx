@@ -39,6 +39,12 @@ const STATUS_BADGES: Record<string, string> = {
 const ROLE_LABELS: Record<ModelFieldRole, string> = {
   identifier: '标识', dimension: '维度', fact: '事实', datetime: '时间',
 }
+const ROLE_HINTS: Record<ModelFieldRole, string> = {
+  identifier: '唯一标识一行（如交易号、登记号）',
+  dimension: '分析分组维度（如险种、科室、人员类别）',
+  fact: '可聚合的数值（如金额、数量）',
+  datetime: '时间字段（如结算日期、发生日期）',
+}
 
 const EMPTY_FIELD: DataModelField = { field_code: '', name: '', data_type: 'decimal', field_role: 'fact' }
 
@@ -74,7 +80,7 @@ function DataModelingContent() {
   const [detail, setDetail] = useState<DataModel | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
-  // 探查页「纳入建模」入口：?table=&field=&field_code=&name= 预填新建表单
+  // 探查页「纳入建模」入口：?table=&field=&field_code=&name=&role=&data_type= 预填新建表单
   const searchParams = useSearchParams()
   const prefillField = searchParams.get('field')
   useEffect(() => {
@@ -82,12 +88,14 @@ function DataModelingContent() {
     const table = searchParams.get('table') ?? ''
     const fieldCode = searchParams.get('field_code') ?? ''
     const fieldName = searchParams.get('name') ?? prefillField
+    const role = (searchParams.get('role') as ModelFieldRole | null) ?? 'fact'
+    const dataType = searchParams.get('data_type') ?? 'varchar'
     setEditing({
       model_code: '', name: '', layer: 'dwd', grain: '', entity_code: 'settlement',
       status: 'draft', owner: 'data_governance',
       description: table ? `来源表 ${table}（数据探查纳入）` : '',
       fields: fieldCode ? [{
-        field_code: fieldCode, name: fieldName, data_type: 'varchar', field_role: 'fact',
+        field_code: fieldCode, name: fieldName, data_type: dataType, field_role: role,
       }] : [],
       version: 1, revision: 1,
     })
@@ -283,9 +291,10 @@ function ModelEditModal({ model, onClose, onSaved }: {
                 value={field.data_type}
                 onChange={(e) => setField(index, { data_type: e.target.value })} />
               <select aria-label="字段角色" className={inputClass} value={field.field_role}
+                title={ROLE_HINTS[field.field_role]}
                 onChange={(e) => setField(index, { field_role: e.target.value as ModelFieldRole })}>
                 {(['identifier', 'dimension', 'fact', 'datetime'] as const).map((r) => (
-                  <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                  <option key={r} value={r}>{ROLE_LABELS[r]}（{ROLE_HINTS[r]}）</option>
                 ))}
               </select>
               {field.field_role === 'fact' && (

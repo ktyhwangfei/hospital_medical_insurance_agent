@@ -89,6 +89,26 @@ export default function DataGovernanceOverviewPage() {
   </div>
 
   if (!overview) return null
+
+  // 总体健康指示：业务用户第一眼要看到「数据能不能用」
+  const blockingCount = overview.issues.filter((i) => i.severity === 'blocking').length
+  const health: 'good' | 'warn' | 'bad' = !overview.platformReady || blockingCount > 0
+    ? 'bad'
+    : overview.issueCount > 0
+      ? 'warn'
+      : 'good'
+  const healthText = {
+    good: '数据可信，可以使用',
+    warn: '数据可用，但有待处理项',
+    bad: '数据暂不可用，请先处理阻断项',
+  }[health]
+  const healthCls = {
+    good: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    warn: 'border-amber-200 bg-amber-50 text-amber-800',
+    bad: 'border-red-200 bg-red-50 text-red-800',
+  }[health]
+  const healthDot = { good: 'bg-emerald-500', warn: 'bg-amber-500', bad: 'bg-red-500' }[health]
+
   const metrics = [
     ['数据底座', overview.platformReady ? '可用' : '未就绪', overview.postgresql.safeMessage],
     ['数据源', String(overview.dataSourceCount), '已登记医院门诊数据源'],
@@ -99,6 +119,17 @@ export default function DataGovernanceOverviewPage() {
 
   return <div aria-live="polite" className="space-y-5">
     <DataGovernancePipeline />
+
+    {/* 总体健康指示：一眼看到数据能不能用 */}
+    <section data-testid="health-banner" className={`flex items-center gap-2.5 rounded-xl border px-4 py-3 ${healthCls}`}>
+      <span className={`size-2.5 rounded-full ${healthDot}`} />
+      <p className="text-sm font-medium">{healthText}</p>
+      {overview.latestLatencySeconds !== null && (
+        <span className="ml-auto text-xs opacity-70">
+          最新数据延迟 {Math.round(overview.latestLatencySeconds)} 秒
+        </span>
+      )}
+    </section>
 
     <section aria-label="运行指标" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
       {metrics.map(([label, value, note]) => <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

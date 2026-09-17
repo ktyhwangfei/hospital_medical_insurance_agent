@@ -104,10 +104,33 @@ function formatTime(iso: string | null | undefined): string {
   return iso ? new Date(iso).toLocaleString('zh-CN', { hour12: false }) : '—'
 }
 
+/** 相对时间（业务友好）：3 分钟前 / 2 小时前 / 昨天 */
+function formatRelative(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const diff = Date.now() - new Date(iso).getTime()
+  const minutes = Math.floor(diff / 60000)
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days} 天前`
+  return formatTime(iso)
+}
+
 /** 源字段名 → 模型字段编码候选（field_code 规则 ^[a-z][a-z0-9_]） */
 function suggestFieldCode(name: string): string {
   const snake = name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().replace(/[^a-z0-9_]/g, '_')
   return /^[a-z]/.test(snake) ? snake : `f_${snake}`
+}
+
+/** 按探查画像推荐字段角色：主键→标识，数值→事实，时间→时间，其余→维度 */
+function suggestFieldRole(field: ProfiledField): string {
+  if (field.is_primary_key) return 'identifier'
+  const t = field.data_type.toLowerCase()
+  if (['int', 'bigint', 'smallint', 'tinyint', 'numeric', 'decimal', 'money', 'float', 'real'].includes(t)) return 'fact'
+  if (['datetime', 'datetime2', 'smalldatetime', 'date'].includes(t)) return 'datetime'
+  return 'dimension'
 }
 
 // ── 页面 ──────────────────────────────────────────────────────────
@@ -210,10 +233,18 @@ function ProfilingContent() {
     })
   }, [groups, search, filter, syncTables])
 
-  // 分页：356 表全量渲染会卡，每页 50 表
+  // 推荐表置顶：运营常用表（门诊/医保核心六表）+ 已选同步表优先，其余在后
+  const RECOMMENDED_TABLES = ['o_Trade', 'o_FeeItem', 'o_Diagnose', 'yb_mzjyxx', 'yb_mzfymx', 'yb_brdjxx']
+  const recommendedGroups = visibleGroups.filter(
+    (g) => RECOMMENDED_TABLES.includes(g.table) || syncTables.has(g.table),
+  )
+  const restGroups = visibleGroups.filter(
+    (g) => !RECOMMENDED_TABLES.includes(g.table) && !syncTables.has(g.table),
+  )
+  // 分页：每页 50 表
   const totalPages = Math.max(1, Math.ceil(visibleGroups.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
-  const pagedGroups = visibleGroups.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const pagedGroups = [...recommendedGroups, ...restGroups].slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
   useEffect(() => { setPage(1) }, [search, filter])
 
   // ── 操作 ──
@@ -364,7 +395,7 @@ function ProfilingContent() {
         {scanning ? '扫描中…' : '重新扫描'}
       </Button>
       <span className="text-xs text-slate-500">
-        {lastScan ? `上次扫描 ${formatTime(lastScan.started_at)}` : '尚未扫描'}
+        {lastScan ? `上次扫描 ${formatRelative(lastScan.started_at)}` : '尚未扫描'}
       </span>
       <span className="ml-auto text-xs text-slate-600" data-testid="profiling-stats">
         {groups.length} 表 · {totalFields} 字段 · 已映射 <span className="text-emerald-700">{totalMapped}</span>
@@ -458,7 +489,7 @@ function ProfilingContent() {
                       </td>
                       <td className="px-4 py-2">
                         <Link
-                          href={`/data-governance/modeling?table=${encodeURIComponent(group.table)}&field=${encodeURIComponent(field.field_name)}&field_code=${encodeURIComponent(suggestFieldCode(field.field_name))}&name=${encodeURIComponent(field.description || field.field_name)}`}
+                          href={`/data-governance/modeling?table=${encodeURIComponent(group.table)}&field=${encodeURIComponent(field.field_name)}&field_code=${encodeURIComponent(suggestFieldCode(field.field_name))}&name=${encodeURIComponent(field.description || field.field_name)}&role=${suggestFieldRole(field)}&data_type=${encodeURIComponent(field.data_type)}`}
                           className="text-blue-600 hover:underline">
                           纳入建模 →
                         </Link>

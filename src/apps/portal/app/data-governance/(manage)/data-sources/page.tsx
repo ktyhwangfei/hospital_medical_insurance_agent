@@ -33,7 +33,14 @@ const connectionLabel = { unknown: '未检测', healthy: '连接正常', error: 
 const cdcLabel = { not_applicable: '不适用', not_checked: '未检测', waiting_dba: '等待 DBA', ready: 'CDC 已就绪', invalid: '配置异常' }
 
 function safeMessage(error: unknown): string {
-  return error instanceof Error ? error.message : '操作失败，请稍后重试'
+  // 错误码翻译为操作指引（业务友好）；技术细节留 message 原文
+  const text = error instanceof Error ? error.message : '操作失败，请稍后重试'
+  if (text.includes('pending_review') || text.includes('提交评审')) return '请先点击「提交评审」，评审通过后再发布'
+  if (text.includes('deprecated')) return '该模型已退役，如需修改请重新创建同名模型'
+  if (text.includes('published') && text.includes('冻结')) return '已发布的模型不可修改，如需调整请先退役后重建'
+  if (text.includes('限频')) return '该表为全量同步模式，每日最多同步一次，请明天再试或改用增量模式'
+  if (text.includes('正在同步')) return '该表正在同步中，请稍后重试'
+  return text
 }
 
 function maskedEndpoint(source: DataSource): string {

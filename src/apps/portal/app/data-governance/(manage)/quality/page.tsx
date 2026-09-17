@@ -10,6 +10,7 @@ import { ArrowLeftRight, Loader2, ShieldCheck } from 'lucide-react'
 
 import { compareSource, getDataGovernanceOverview, type DataGovernanceOverview, type SourceCompareResult } from '@/lib/data-governance-api'
 import { listFlowRevisions, listFlows, type FlowDefinitionDto, type FlowRevisionViewDto } from '@/lib/flow-api'
+import { Term } from '@/components/term'
 import { NextStepCard } from '@/components/next-step-card'
 
 interface FlowRelease {
@@ -134,7 +135,7 @@ export default function DataQualityPage() {
     <div>
       <h2 className="font-semibold text-slate-900">质量与发布</h2>
       <p className="mt-1 text-sm text-slate-600">
-        质量门禁状态与发布证据：同步批次质量门、Flow 活跃发布版本（产物哈希可溯源、可回滚）。
+        <Term>勾稽</Term>质量门禁与发布证据：同步批次质量门、Flow 活跃发布版本（可溯源、可回滚），以及源库对照自证。
       </p>
     </div>
 

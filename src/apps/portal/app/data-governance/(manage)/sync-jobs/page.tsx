@@ -6,6 +6,7 @@ import { CircleAlert, Pause, Play, RefreshCw, Save } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { NextStepCard } from '@/components/next-step-card'
+import { Term } from '@/components/term'
 import {
   getSyncJob,
   hasDataGovernancePermission,
@@ -232,14 +233,14 @@ export default function SyncJobsPage() {
       {syncTables.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">
         暂无选中表。到<Link href="/data-governance/profiling" className="mx-1 text-blue-600 hover:underline">数据探查</Link>查看表画像并加入同步。
       </p> : <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm">
-        <thead className="bg-slate-50 text-xs text-slate-600"><tr><th className="px-4 py-3 font-medium">源表</th><th className="px-4 py-3 font-medium">落地表</th><th className="px-4 py-3 font-medium">模式</th><th className="px-4 py-3 font-medium">主键</th><th className="px-4 py-3 font-medium">水位线</th><th className="px-4 py-3 font-medium">最近同步</th><th className="px-4 py-3 font-medium">行数</th><th className="px-4 py-3 font-medium">错误</th></tr></thead>
+        <thead className="bg-slate-50 text-xs text-slate-600"><tr><th className="px-4 py-3 font-medium">源表</th><th className="px-4 py-3 font-medium">落地表</th><th className="px-4 py-3 font-medium">模式</th><th className="px-4 py-3 font-medium"><Term>主键</Term></th><th className="px-4 py-3 font-medium"><Term>水位线</Term></th><th className="px-4 py-3 font-medium">最近同步</th><th className="px-4 py-3 font-medium">行数</th><th className="px-4 py-3 font-medium">错误</th></tr></thead>
         <tbody className="divide-y divide-slate-100">{syncTables.map((table) => <tr key={table.table_name} data-testid={`sync-table-${table.table_name}`}>
           <td className="px-4 py-3 font-mono text-xs">{table.table_name}</td>
           <td className="px-4 py-3 font-mono text-xs text-slate-600">{table.target_table}</td>
           <td className="px-4 py-3">
             {table.sync_mode === 'incremental'
-              ? <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-700">增量 · {table.time_column}</span>
-              : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">全量</span>}
+              ? <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-700"><Term>增量同步</Term> · {table.time_column}</span>
+              : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500"><Term>全量同步</Term></span>}
           </td>
           <td className="px-4 py-3 font-mono text-xs text-slate-500">{table.key_columns.join(', ') || '—'}</td>
           <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{table.last_watermark ? timeText(table.last_watermark) : '—'}</td>
