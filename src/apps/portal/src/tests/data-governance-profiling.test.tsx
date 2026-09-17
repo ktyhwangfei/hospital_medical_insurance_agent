@@ -68,16 +68,20 @@ describe('数据探查页（自包含版）', () => {
     expect(screen.getByTestId('table-yb_mzjyxx').textContent).toContain('已同步 33 行')
   })
 
-  it('展开字段画像并提供「纳入建模」治理内跳转', async () => {
+  it('已映射字段不显示纳入建模，未映射字段提供治理内跳转', async () => {
     render(<DataProfilingPage />)
     await waitFor(() => screen.getByTestId('table-o_Trade'))
     fireEvent.click(screen.getByText('o_Trade'))
-    const fields = await screen.findByTestId('fields-o_Trade')
-    expect(fields.textContent).toContain('99.8%')
-    expect(fields.textContent).toContain('113.66')
-    const link = screen.getAllByRole('link', { name: /纳入建模/ })[0]
+    const tradeFields = await screen.findByTestId('fields-o_Trade')
+    // o_Trade 两个字段均已映射：不显示纳入建模入口
+    expect(tradeFields.textContent).toContain('已在模型中')
+    expect(tradeFields.querySelector('a')).toBeNull()
+    // yb_mzjyxx.zje 未映射：显示纳入建模链接
+    fireEvent.click(screen.getByText('yb_mzjyxx'))
+    await screen.findByTestId('fields-yb_mzjyxx')
+    const link = screen.getByRole('link', { name: /纳入建模/ })
     expect(link.getAttribute('href')).toContain('/data-governance/modeling')
-    expect(link.getAttribute('href')).toContain('field=')
+    expect(link.getAttribute('href')).toContain('field=zje')
   })
 
   it('加入同步：弹窗配置时间字段后确认才调 API', async () => {

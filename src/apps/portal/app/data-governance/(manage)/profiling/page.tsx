@@ -497,11 +497,16 @@ function ProfilingContent() {
                           : <span className="text-slate-400">未映射</span>}
                       </td>
                       <td className="px-4 py-2">
-                        <Link
-                          href={`/data-governance/modeling?table=${encodeURIComponent(group.table)}&field=${encodeURIComponent(field.field_name)}&field_code=${encodeURIComponent(suggestFieldCode(field.field_name))}&name=${encodeURIComponent(field.description || field.field_name)}&role=${suggestFieldRole(field)}&data_type=${encodeURIComponent(field.data_type)}`}
-                          className="text-blue-600 hover:underline">
-                          纳入建模 →
-                        </Link>
+                        {field.mapped ? (
+                          // 已映射字段不再提供纳入建模入口（重复纳入会产生重复映射）
+                          <span className="text-xs text-slate-300">已在模型中</span>
+                        ) : (
+                          <Link
+                            href={`/data-governance/modeling?table=${encodeURIComponent(group.table)}&field=${encodeURIComponent(field.field_name)}&field_code=${encodeURIComponent(suggestFieldCode(field.field_name))}&name=${encodeURIComponent(field.description || field.field_name)}&role=${suggestFieldRole(field)}&data_type=${encodeURIComponent(field.data_type)}`}
+                            className="text-blue-600 hover:underline">
+                            纳入建模 →
+                          </Link>
+                        )}
                       </td>
                     </tr>)}
                   </tbody>
