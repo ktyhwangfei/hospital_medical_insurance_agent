@@ -54,11 +54,17 @@ class BusinessObject(BaseModel):
 
 
 class SemanticDataset(BaseModel):
-    """已登记、可查询的物理表或视图。"""
+    """已登记、可查询的物理表或视图。
+
+    hospital_code 为空串 = 平台通用绑定（多院共用）；非空 = 该院专属绑定。
+    院区专属绑定只能在同院区部署内被查询（规划期 fail-closed 校验），避免
+    A 院的绑定被 B 院部署静默使用。
+    """
 
     dataset_code: str = Field(..., max_length=128)
     object_code: str = Field(..., max_length=64)
     datasource_id: str = Field(..., max_length=64)
+    hospital_code: str = Field(default="", max_length=64)
     schema_name: str = Field(default="dbo", max_length=128)
     table_name: str = Field(..., max_length=256)
     name: str = Field(..., max_length=256)

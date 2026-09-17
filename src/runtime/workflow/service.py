@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from typing import Any
 
@@ -17,6 +16,11 @@ from src.runtime.workflow.definitions import (
     WF_POLICY_CHAT,
 )
 from src.runtime.workflow.domain_nodes import DOMAIN_HANDLERS
+from src.runtime.workflow.config_service import (
+    EffectiveWorkflowConfig,
+    current_hospital_code,
+    get_workflow_config_service,
+)
 from src.runtime.workflow.executor import WorkflowExecutor
 from src.runtime.workflow.public_result import build_workflow_public_result
 from src.runtime.workflow.router import WorkflowRouter
@@ -29,27 +33,45 @@ _WORKFLOW_BY_MODE: dict[PolicyQAMode, WorkflowDefinition] = {
 }
 
 
-def _disabled_workflow_ids() -> set[str]:
-    """运维停用开关：WORKFLOW_DISABLED=wf_a,wf_b（逗号分隔，无需改代码即可下线单条）。
-
-    ponytail: 环境变量级开关；PG 化的治理启停（发布/版本）留待编排发布阶段。
-    """
-    raw = os.getenv("WORKFLOW_DISABLED", "")
-    return {item.strip() for item in raw.split(",") if item.strip()}
+@lru_cache(maxsize=1)
+def _effective_config() -> dict[str, EffectiveWorkflowConfig]:
+    """生效配置（平台默认 + 全局/院区覆盖 + 运维 kill-switch），进程内缓存。"""
+    return get_workflow_config_service().effective(current_hospital_code())
 
 
 def _enabled(definition: WorkflowDefinition) -> bool:
-    return definition.workflow_id not in _disabled_workflow_ids()
+    config = _effective_config().get(definition.workflow_id)
+    return True if config is None else config.enabled
 
 
 def is_workflow_enabled(workflow_id: str) -> bool:
-    """目录/路由统一查询停用状态。"""
-    return workflow_id not in _disabled_workflow_ids()
+    """目录/路由/模式入口统一查询启用状态。"""
+    config = _effective_config().get(workflow_id)
+    return True if config is None else config.enabled
+
+
+def effective_workflow_config(workflow_id: str) -> EffectiveWorkflowConfig | None:
+    """供目录接口展示生效关键词与来源。"""
+    return _effective_config().get(workflow_id)
+
+
+def invalidate_workflow_caches() -> None:
+    """治理配置写入后调用：单进程 uvicorn 内立即生效（无需重启）。"""
+    _effective_config.cache_clear()
+    _get_router.cache_clear()
 
 
 @lru_cache(maxsize=1)
 def _get_router() -> WorkflowRouter:
-    return WorkflowRouter([d for d in KEYWORD_ROUTED_WORKFLOWS if _enabled(d)])
+    """路由用生效关键词构造；停用的工作流不进入路由表。"""
+    routed: list[WorkflowDefinition] = []
+    for definition in KEYWORD_ROUTED_WORKFLOWS:
+        config = _effective_config().get(definition.workflow_id)
+        if config is not None and not config.enabled:
+            continue
+        keywords = definition.intent_keywords if config is None else config.intent_keywords
+        routed.append(definition.model_copy(update={"intent_keywords": list(keywords)}))
+    return WorkflowRouter(routed)
 
 
 @lru_cache(maxsize=1)

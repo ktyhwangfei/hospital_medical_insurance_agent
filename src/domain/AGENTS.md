@@ -835,6 +835,10 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 决策节点 | `DecisionNode` | **Entity** | Pydantic `BaseModel`（frozen） | 以已解析事实与字面量相等比较选择静态前向分支；不执行表达式或用户代码 |
 | 输出节点 | `OutputNode` | **Entity** | Pydantic `BaseModel`（frozen） | 将指定上游结果声明为 Workflow 最终公开结果来源 |
 | 工作流节点类型 | `WorkflowNodeType` | **Value Object** | `StrEnum` | tool / domain / decision / output；不支持任意代码节点 |
+| 工作流治理覆盖 | `WorkflowConfigOverride` | **Entity** | Pydantic `BaseModel`（frozen） | 按 (workflow_id, hospital_code) 存放关键词/启停覆盖；`hospital_code=""` 为平台默认行。院区个性化只落配置层，不改代码重发版 |
+| 生效工作流配置 | `EffectiveWorkflowConfig` | **Value Object** | Pydantic `BaseModel`（frozen） | 三层解析结果（代码默认 ← 全局覆盖 ← 院区覆盖，运维 kill-switch 最高优先）含 `source` 便于诊断 |
+| 院区编码 | `hospital_code` | **Value Object** | `str` | 部署级院区身份（`PLATFORM_HOSPITAL_CODE`）；空串 = 平台通用，用于配置与语义绑定的院区隔离 |
+| 院区范围违例 | `HospitalScopeViolationError` | **Domain Service 异常** | `ValueError` 子类 | 院区专属语义绑定被跨院区使用；规划期由 `assert_hospital_scope` fail-closed 抛出 |
 
 #### 业务规则
 
@@ -847,6 +851,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 - Runtime Workflow 只编排 Tool、白名单领域处理和控制语义，不与 Governed Data Flow 合并，也不接受动态 import、`eval` 或用户脚本
 - DomainNode 的 `handler_id + handler_version` 必须命中代码侧白名单，输入输出均通过 Pydantic 契约校验，失败时 fail-closed
 - DecisionNode 只能跳转到定义中后续的已知节点；重复 `step_id`、未知目标和回跳在定义校验阶段拒绝，条件缺失时 fail-closed
+- 院区个性化只允许落在配置层（`workflow_config` 覆盖表 + 语义绑定 `hospital_code`），不允许在代码里写"某院特殊"分支——新接一家医院应做到代码 diff 为空
+- 院区专属语义绑定（`SemanticDataset.hospital_code` 非空）只能在同院区部署内规划使用；跨院区使用由 `assert_hospital_scope` 拒绝，不静默回落
 
 #### 生命周期
 
@@ -1621,6 +1627,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `ValidationIssue` | 校验问题 | Knowledge | Value Object |
 | `WorkflowDefinition` | 运行时工作流定义 | Runtime | Aggregate Root |
 | `WorkflowNodeType` | 工作流节点类型 | Runtime | Value Object |
+| `WorkflowConfigOverride` | 工作流治理覆盖 | Runtime | Entity |
+| `EffectiveWorkflowConfig` | 生效工作流配置 | Runtime | Value Object |
+| `WorkflowConfigStorage` | 工作流治理配置存储端口 | Runtime | Port |
 
 ---
 

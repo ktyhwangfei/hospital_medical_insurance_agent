@@ -146,6 +146,16 @@ if (-not $env:NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN) {
     $jwtHmac.Dispose()
     $env:NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN = "$jwtHeader.$jwtPayload.$jwtSignature"
 }
+if (-not $env:NEXT_PUBLIC_WORKFLOW_TOKEN) {
+    $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtPayloadJson = @{ sub = "portal-dev-workflow"; roles = @("information_department"); permissions = @("workflow:read", "workflow:write"); exp = [DateTimeOffset]::UtcNow.AddHours(24).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+    $jwtPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jwtPayloadJson)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtHmac = New-Object System.Security.Cryptography.HMACSHA256
+    $jwtHmac.Key = [Text.Encoding]::UTF8.GetBytes($env:AUTH_JWT_SECRET)
+    $jwtSignature = [Convert]::ToBase64String($jwtHmac.ComputeHash([Text.Encoding]::ASCII.GetBytes("$jwtHeader.$jwtPayload"))).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtHmac.Dispose()
+    $env:NEXT_PUBLIC_WORKFLOW_TOKEN = "$jwtHeader.$jwtPayload.$jwtSignature"
+}
 # Inject MSSQL connection env vars for the backend process (SqlServerBusinessDataClient
 # requires MSSQL_DATABASE/USER/PASSWORD). Pre-set env vars win; the password is NOT
 # hardcoded here - it is read from the gitignored deploy/docker/.env (SA_PASSWORD).

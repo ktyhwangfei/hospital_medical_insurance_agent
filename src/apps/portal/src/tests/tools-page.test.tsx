@@ -13,11 +13,12 @@ vi.mock('@/lib/tool-workflow-api', async (importOriginal) => {
     ...actual,
     listTools: vi.fn(),
     listWorkflows: vi.fn(),
+    updateWorkflowConfig: vi.fn(),
   }
 })
 
 import ToolsPage from '../../app/tools/page'
-import { listTools, listWorkflows } from '@/lib/tool-workflow-api'
+import { listTools, listWorkflows, updateWorkflowConfig } from '@/lib/tool-workflow-api'
 import type { ToolCatalogDto, WorkflowCatalogDto } from '@/lib/tool-workflow-api'
 
 const toolCatalog: ToolCatalogDto = {
@@ -137,6 +138,8 @@ const workflowCatalog: WorkflowCatalogDto = {
       workflow_id: 'wf_outpatient_settlement_explain',
       name: '门诊结算解释',
       description: '结算事实 → 政策证据 → 确定性对比的标准核验链',
+      enabled: true,
+      keyword_source: 'global',
       intent_keywords: ['核对结算', '结算单对不对'],
       missing_evidence_rules: [
         { field_name: 'settlement_id', clarify_message: '请提供需要核对解释的结算单号后再继续。' },
@@ -293,5 +296,63 @@ describe('ToolsPage Tool 与 Workflow 可视化页', () => {
 
     await waitFor(() => expect(screen.getByTestId('tool-workflow-error')).toBeTruthy())
     expect(screen.getByTestId('tool-workflow-error').textContent).toContain('网络错误')
+  })
+
+  async function openWorkflowTab() {
+    render(<ToolsPage />)
+    await waitFor(() => expect(screen.getByTestId('tool-catalog')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Workflow 编排' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('workflow-item-wf_outpatient_settlement_explain')).toBeTruthy(),
+    )
+  }
+
+  it('停用按钮把 enabled 翻转写入治理配置（无需重启）', async () => {
+    vi.mocked(updateWorkflowConfig).mockResolvedValue({
+      workflow_id: 'wf_outpatient_settlement_explain',
+      enabled: false,
+      intent_keywords: ['核对结算'],
+      source: 'global',
+    })
+    await openWorkflowTab()
+
+    fireEvent.click(screen.getByTestId('workflow-toggle-wf_outpatient_settlement_explain'))
+
+    await waitFor(() =>
+      expect(updateWorkflowConfig).toHaveBeenCalledWith('wf_outpatient_settlement_explain', {
+        enabled: false,
+      }),
+    )
+  })
+
+  it('编辑关键词保存时按顿号/逗号拆分并写入治理配置', async () => {
+    vi.mocked(updateWorkflowConfig).mockResolvedValue({
+      workflow_id: 'wf_outpatient_settlement_explain',
+      enabled: true,
+      intent_keywords: ['退费', '多扣', '未退款'],
+      source: 'global',
+    })
+    await openWorkflowTab()
+
+    fireEvent.click(screen.getByTestId('workflow-edit-keywords-wf_outpatient_settlement_explain'))
+    fireEvent.change(
+      screen.getByTestId('workflow-keyword-input-wf_outpatient_settlement_explain'),
+      { target: { value: '退费,多扣、未退款' } },
+    )
+    fireEvent.click(screen.getByTestId('workflow-keyword-save-wf_outpatient_settlement_explain'))
+
+    await waitFor(() =>
+      expect(updateWorkflowConfig).toHaveBeenCalledWith('wf_outpatient_settlement_explain', {
+        enabled: true,
+        intent_keywords: ['退费', '多扣', '未退款'],
+      }),
+    )
+  })
+
+  it('关键词来自治理配置时回显来源标记', async () => {
+    await openWorkflowTab()
+    expect(
+      screen.getByTestId('workflow-keyword-source-wf_outpatient_settlement_explain').textContent,
+    ).toContain('治理配置')
   })
 })

@@ -18,7 +18,7 @@ from src.runtime.tool_registry.factory import get_tool_registry
 from src.runtime.tool_registry.service import ToolRegistryService
 from src.runtime.workflow.definitions import ALL_WORKFLOWS
 from src.runtime.workflow.domain_nodes import DOMAIN_HANDLERS
-from src.runtime.workflow.service import is_workflow_enabled
+from src.runtime.workflow.service import effective_workflow_config, is_workflow_enabled
 
 
 class ToolSummary(BaseModel):
@@ -77,6 +77,8 @@ class WorkflowSummary(BaseModel):
 
     workflow_id: str
     enabled: bool = True
+    # 关键词来源：default（代码声明）/ global / hospital（治理配置覆盖）
+    keyword_source: str = "default"
     name: str
     description: str
     intent_keywords: list[str]
@@ -176,12 +178,18 @@ def _workflow_summary(
                 )
             )
 
+    effective = effective_workflow_config(definition.workflow_id)
     return WorkflowSummary(
         workflow_id=definition.workflow_id,
         enabled=is_workflow_enabled(definition.workflow_id),
+        keyword_source="default" if effective is None else effective.source,
         name=definition.name,
         description=definition.description,
-        intent_keywords=list(definition.intent_keywords),
+        intent_keywords=(
+            list(definition.intent_keywords)
+            if effective is None
+            else list(effective.intent_keywords)
+        ),
         missing_evidence_rules=[
             MissingEvidenceRuleSummary(
                 field_name=rule.field_name, clarify_message=rule.clarify_message
