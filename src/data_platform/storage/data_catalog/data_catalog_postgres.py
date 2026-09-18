@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS data_catalog_lineage_edges (
     edge_id VARCHAR(96) PRIMARY KEY,
     upstream_asset_id VARCHAR(96) NOT NULL,
     downstream_asset_id VARCHAR(96) NOT NULL,
-    relation VARCHAR(32) NOT NULL
+    relation VARCHAR(128) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_data_catalog_lineage_upstream
     ON data_catalog_lineage_edges(upstream_asset_id);
@@ -103,7 +103,7 @@ ALTER TABLE data_catalog_columns ADD COLUMN IF NOT EXISTS ordinal INTEGER NOT NU
 ALTER TABLE data_catalog_lineage_edges ADD COLUMN IF NOT EXISTS edge_id VARCHAR(96);
 ALTER TABLE data_catalog_lineage_edges ADD COLUMN IF NOT EXISTS upstream_asset_id VARCHAR(96);
 ALTER TABLE data_catalog_lineage_edges ADD COLUMN IF NOT EXISTS downstream_asset_id VARCHAR(96);
-ALTER TABLE data_catalog_lineage_edges ADD COLUMN IF NOT EXISTS relation VARCHAR(32);
+ALTER TABLE data_catalog_lineage_edges ADD COLUMN IF NOT EXISTS relation VARCHAR(128);
 """
 
 

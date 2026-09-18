@@ -33,6 +33,13 @@ class SyncMode(StrEnum):
     INCREMENTAL = "incremental"
 
 
+class SyncPurpose(StrEnum):
+    """落地目的：governed（默认，可建模可消费）/ reference（裸对照，禁止建模）。"""
+
+    GOVERNED = "governed"
+    REFERENCE = "reference"
+
+
 class SelectedSyncTable(BaseModel):
     """一张选中同步表的配置（实体）。"""
 
@@ -43,6 +50,7 @@ class SelectedSyncTable(BaseModel):
     time_column: Optional[str] = None
     sync_mode: SyncMode = SyncMode.FULL
     lookback_minutes: int = Field(default=5, ge=0, le=1440)
+    purpose: SyncPurpose = SyncPurpose.GOVERNED
     status: SyncTableStatus = SyncTableStatus.ACTIVE
     revision: int = Field(default=1, ge=1)
     updated_at: Optional[str] = None

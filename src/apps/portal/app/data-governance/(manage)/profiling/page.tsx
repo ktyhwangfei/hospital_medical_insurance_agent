@@ -166,7 +166,7 @@ function ProfilingContent() {
   const PAGE_SIZE = 50
   // 选表配置弹窗（增量字段/模式/回看窗口）
   const [configuring, setConfiguring] = useState<string | null>(null)
-  const [timeCandidates, setTimeCandidates] = useState<string[]>([])
+  const [timeCandidates, setTimeCandidates] = useState<{ columns: { column: string; max_value: string | null; non_null_rate: number }[]; warning: string; has_audit_column: boolean }>({ columns: [], warning: '', has_audit_column: false })
   const [syncForm, setSyncForm] = useState({ time_column: '', sync_mode: 'full' as 'full' | 'incremental', lookback_minutes: 5 })
 
   const load = useCallback(async (datasourceId: string) => {
@@ -282,7 +282,7 @@ function ProfilingContent() {
     setSyncForm({ time_column: '', sync_mode: 'full', lookback_minutes: 5 })
     void getTimeCandidates(sourceId, table)
       .then(setTimeCandidates)
-      .catch(() => setTimeCandidates([]))
+      .catch(() => setTimeCandidates({ columns: [], warning: '', has_audit_column: false }))
   }
 
   const confirmSelect = async () => {
@@ -346,9 +346,18 @@ function ProfilingContent() {
                 value={syncForm.time_column}
                 onChange={(e) => setSyncForm({ ...syncForm, time_column: e.target.value, sync_mode: e.target.value ? 'incremental' : 'full' })}>
                 <option value="">无（全量同步，每日限频）</option>
-                {timeCandidates.map((col) => <option key={col} value={col}>{col}</option>)}
+                {timeCandidates.columns.map((c) => (
+                  <option key={c.column} value={c.column}>
+                    {c.column}（{c.non_null_rate}% 非空{c.max_value ? `，最大 ${c.max_value.slice(0, 10)}` : ''}）
+                  </option>
+                ))}
               </select>
             </label>
+            {timeCandidates.warning && (
+              <div className={`rounded-md px-2.5 py-2 text-[11px] leading-4 ${timeCandidates.has_audit_column ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`} data-testid="time-column-warning">
+                {timeCandidates.warning}
+              </div>
+            )}
             {syncForm.time_column && (
               <label className="grid gap-1 text-xs font-medium text-slate-600">回看窗口（分钟，防边界漏数）
                 <input type="number" min={0} max={1440} value={syncForm.lookback_minutes}

@@ -144,5 +144,7 @@ class TestDataSourceChecker:
 
 class TestRegistry:
     def test_p0_registry_two_data_checks(self):
-        assert [spec.check_id for spec in OPS_CHECKS] == ["data_sync_failed", "data_source_down"]
+        assert [spec.check_id for spec in OPS_CHECKS][:2] == ["data_sync_failed", "data_source_down"]
+        # 数据质量规则（拷问轮 Q5）追加注册
+        assert "governed_table_quality" in [spec.check_id for spec in OPS_CHECKS]
         assert all(spec.asset_type is OpsAssetType.DATA for spec in OPS_CHECKS)

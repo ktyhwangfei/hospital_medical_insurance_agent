@@ -86,7 +86,15 @@ describe('数据探查页（自包含版）', () => {
 
   it('加入同步：弹窗配置时间字段后确认才调 API', async () => {
     vi.mocked(selectSyncTable).mockResolvedValue({} as never)
-    vi.mocked(getTimeCandidates).mockResolvedValue(['T_TradeDate', 'SETL_DATE'] as never)
+    vi.mocked(getTimeCandidates).mockResolvedValue({
+      columns: [
+        { column: 'T_TradeDate', data_type: 'datetime', max_value: '2026-09-16', non_null_rate: 100 },
+        { column: 'SETL_DATE', data_type: 'datetime', max_value: '2026-09-15', non_null_rate: 99.8 },
+      ],
+      has_audit_column: false,
+      audit_columns: [],
+      warning: '未检出审计时间列（变更时间）：增量只能捕获新写入行，不能捕获存量行变更（退费冲正/稽核调整），存量变更由每日全量对账兑底。',
+    } as never)
     render(<DataProfilingPage />)
     await waitFor(() => screen.getByTestId('select-sync-o_Trade'))
     fireEvent.click(screen.getByTestId('select-sync-o_Trade'))

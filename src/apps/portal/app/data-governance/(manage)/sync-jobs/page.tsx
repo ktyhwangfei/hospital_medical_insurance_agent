@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import Link from 'next/link'
-import { CircleAlert, Pause, Play, RefreshCw, Save } from 'lucide-react'
+import { CircleAlert, Clock3, Pause, Play, RefreshCw, Save } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { NextStepCard } from '@/components/next-step-card'
 import { Term } from '@/components/term'
+import { getDataCutoff, getSyncConfigHealth, type DataCutoffInfo, type SyncConfigIssue } from '@/lib/data-governance-api'
 import {
   getSyncJob,
   hasDataGovernancePermission,
@@ -71,6 +72,8 @@ export default function SyncJobsPage() {
   const [canWrite, setCanWrite] = useState(false)
   const [syncTables, setSyncTables] = useState<SelectedSyncTable[]>([])
   const [tableSyncBusy, setTableSyncBusy] = useState(false)
+  const [configIssues, setConfigIssues] = useState<SyncConfigIssue[]>([])
+  const [cutoff, setCutoff] = useState<DataCutoffInfo | null>(null)
 
   useEffect(() => {
     void listDataSources().then((items) => {
@@ -96,6 +99,9 @@ export default function SyncJobsPage() {
       setRuns(nextRuns)
       // 选表同步清单（探查后选表通道；失败降级为空不阻断主任务区）
       setSyncTables(await listSyncTables(selected).catch(() => []))
+      // 配置卫生（Q2）+ 数据截止时间（Q7）
+      getSyncConfigHealth(selected).then((h) => setConfigIssues(h.issues)).catch(() => setConfigIssues([]))
+      getDataCutoff(selected).then(setCutoff).catch(() => setCutoff(null))
       setForm(nextJob ? {
         sourceMode: nextJob.sourceMode,
         cdcPollIntervalSeconds: nextJob.cdcPollIntervalSeconds,
@@ -206,6 +212,41 @@ export default function SyncJobsPage() {
         <tbody className="divide-y divide-slate-100">{runs.map((run) => <tr key={run.attemptId}><td className="whitespace-nowrap px-4 py-3">{timeText(run.startedAt)}</td><td className="whitespace-nowrap px-4 py-3">{timeText(run.finishedAt)}</td><td className="px-4 py-3">{modeLabel[run.sourceMode]}</td><td className="px-4 py-3">{runKindLabel[run.runKind] ?? run.runKind}</td><td className="px-4 py-3">{run.status === 'succeeded' ? '成功' : run.status === 'running' ? '执行中' : '失败'}</td><td className="px-4 py-3 font-mono">{run.rowCount}</td><td className="px-4 py-3 font-mono text-xs">{run.batchId ?? '暂无'}</td><td className="px-4 py-3 text-red-700">{run.safeMessage ?? '无'}</td></tr>)}</tbody>
       </table></div>}
     </section>
+    {/* 配置卫生警告（Q2）：有时间字段但全量模式等配置不一致 */}
+    {configIssues.length > 0 && (
+      <section className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3" data-testid="config-health-warning">
+        <p className="text-xs font-semibold text-amber-900">配置卫生：{configIssues.length} 项待确认</p>
+        <ul className="mt-1 space-y-0.5">
+          {configIssues.map((i) => (
+            <li key={i.table_name} className="text-[11px] text-amber-800">
+              {i.table_name}（{i.time_column}）：{i.issue}——{i.suggestion}
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    {/* 数据截止时间（Q7：快照一致性）——跨表分析的安全边界 */}
+    {cutoff && cutoff.safe_analysis_boundary && (
+      <section className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm" data-testid="data-cutoff">
+        <div className="flex flex-wrap items-center gap-2">
+          <Clock3 className="size-4 text-slate-500" />
+          <h3 className="font-semibold text-slate-900">数据截止时间</h3>
+          <span className="rounded bg-blue-50 px-2 py-0.5 font-mono text-xs text-blue-700">
+            安全分析边界 {cutoff.safe_analysis_boundary.slice(0, 10)}
+          </span>
+          <span className="text-xs text-slate-500">{cutoff.warning}</span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {cutoff.tables.filter((t) => t.purpose === 'governed').map((t) => (
+            <span key={t.table_name} className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${t.table_name === cutoff.laggard_table ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-600'}`}>
+              {t.table_name} → {t.watermark ? t.watermark.slice(0, 10) : '—'}
+            </span>
+          ))}
+        </div>
+      </section>
+    )}
+
     {/* 选表同步通道：探查后选中的表，全量直通落地 PostgreSQL */}
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm" data-testid="selected-table-sync">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">

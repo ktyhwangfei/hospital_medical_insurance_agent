@@ -602,6 +602,29 @@ def refresh_data_catalog(storage: DataCatalogStorage | None = None) -> dict[str,
     from src.runtime.data_catalog.lineage import derive_edges
 
     edges = derive_edges(assets)
+    # 字段级血缘（数据专家拷问轮 Q6）：data_model_mappings 直接作为字段边落表。
+    # relation = field_map:<物理列>→<模型字段>；edge_id 确定性派生幂等。
+    try:
+        from src.domain.data_catalog.models import CatalogLineageEdge
+        from src.runtime.data_catalog.lineage import _edge_id
+
+        for model in data_models or []:
+            if model.status != "published":
+                continue
+            downstream_id = _asset_id(f"data_model:{model.model_code}")
+            for mapping in (model_mappings or {}).get(model.model_code, []):
+                if mapping.status != "confirmed":
+                    continue
+                upstream_id = _asset_id(f"source_table:{mapping.physical_table}")
+                relation = f"field_map:{mapping.physical_column}>{mapping.field_code}"
+                edges.append(CatalogLineageEdge(
+                    edge_id=_edge_id(upstream_id, downstream_id, relation),
+                    upstream_asset_id=upstream_id,
+                    downstream_asset_id=downstream_id,
+                    relation=relation,
+                ))
+    except Exception:
+        logger.warning("字段级血缘推导失败，跳过", exc_info=True)
     storage.replace_lineage_edges(edges)
 
     return {

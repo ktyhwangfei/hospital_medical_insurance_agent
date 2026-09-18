@@ -68,12 +68,50 @@ class TableSyncExecutor:
         finally:
             connection.close()
 
-    def probe_time_candidates(self, source_id: str, table_name: str) -> list[str]:
-        """候选增量时间字段：datetime/date 类型列（选表配置时推荐，人工确认）。"""
-        return [
-            name for name, sql_type in self.probe_table_columns(source_id, table_name)
-            if sql_type.lower() in ("datetime", "datetime2", "smalldatetime", "date")
-        ]
+    def probe_time_candidates(self, source_id: str, table_name: str) -> list[dict]:
+        """候选增量时间字段（datetime/date 列）+ 适用性信息（Q1：业务时间 ≠ 变更时间）。
+
+        返回每列：名称、类型、最大值、非空率。UI 据此展示警告：
+        无审计时间列（LastModified 类）的表，增量只能捕获新增，不能捕获
+        存量行变更（退费冲正/稽核调整）——由每日全量对账兑底。
+        """
+        connection = self._connection_factory(source_id)
+        try:
+            cursor = connection.cursor()
+            cursor.execute(_SOURCE_COLUMNS_SQL, table_name)
+            columns = [(row[0], row[1]) for row in cursor.fetchall()]
+            candidates = []
+            for name, sql_type in columns:
+                if sql_type.lower() not in ("datetime", "datetime2", "smalldatetime", "date"):
+                    continue
+                cursor.execute(
+                    f"SELECT MAX([{name}]), COUNT([{name}]), COUNT(*) FROM dbo.[{table_name}]"
+                )
+                max_value, non_null, total = cursor.fetchone()
+                candidates.append({
+                    "column": name,
+                    "data_type": sql_type,
+                    "max_value": str(max_value) if max_value is not None else None,
+                    "non_null_rate": round(non_null / total * 100, 1) if total else 0,
+                })
+            # 是否有审计时间列（变更时间语义）
+            audit_candidates = [
+                name for name, sql_type in columns
+                if name.lower() in ("lastmodified", "updatetime", "modifieddate", "operdate", "bgrq", "oper_date", "updated_at")
+            ]
+            return {
+                "columns": candidates,
+                "has_audit_column": bool(audit_candidates),
+                "audit_columns": audit_candidates,
+                "warning": (
+                    "未检出审计时间列（变更时间）：增量只能捕获新写入行，不能捕获存量行变更"
+                    "（退费冲正/稽核调整），存量变更由每日全量对账兜底。"
+                    if not audit_candidates else
+                    f"检出审计时间列 {audit_candidates}，优先用它做增量时间字段（能捕获变更）。"
+                ),
+            }
+        finally:
+            connection.close()
 
     # ── 同步主入口 ──────────────────────────────────────────────────
 

@@ -379,9 +379,96 @@ class SyncTableUpsertRequest(BaseModel):
     lookback_minutes: int = Field(default=5, ge=0, le=1440)
 
 
+@router.get("/data-sources/{source_id}/sync-tables/config-health")
+def sync_table_config_health(source_id: str, _: ReadPrincipal):
+    """配置卫生检查（Q2）：有 time_column 但 mode=full 的表列出，要求显式归因。"""
+    from src.data_platform.storage.table_sync.store import TableSyncStore
+
+    def _action():
+        c = TableSyncStore()._get_client()
+        issues = []
+        for row in c.execute(
+            """SELECT table_name, sync_mode, time_column, purpose FROM data_source_sync_tables
+               WHERE source_id = %s AND status = 'active' ORDER BY table_name""",
+            (source_id,),
+        ):
+            if row["sync_mode"] == "full" and row["time_column"]:
+                issues.append({
+                    "table_name": row["table_name"],
+                    "time_column": row["time_column"],
+                    "issue": "有时间字段但未启用增量",
+                    "suggestion": "确认业务时间可靠性后切换增量，或归因「业务时间不可靠跑全量」",
+                })
+            if row["sync_mode"] == "incremental" and not row["time_column"]:
+                issues.append({
+                    "table_name": row["table_name"],
+                    "time_column": None,
+                    "issue": "增量模式但无时间字段（运行时已降级全量）",
+                    "suggestion": "补选时间字段或显式改全量",
+                })
+        return {"total": len(issues), "issues": issues}
+    return {"result": _call(_action)}
+
+
+@router.get("/data-sources/{source_id}/sync-tables/data-cutoff")
+def sync_table_data_cutoff(source_id: str, _: ReadPrincipal):
+    """数据截止时间（Q7：快照一致性）：各表可用数据的时间边界 + 最落后表。
+
+    分析师的安全分析边界 = min(相关表水位线)；跨表对账必须裁剪到边界内。
+    """
+    from src.data_platform.storage.table_sync.store import TableSyncStore
+    from src.data_platform.storage.postgresql.client import PostgreSQLClient
+
+    def _action():
+        c = TableSyncStore()._get_client()
+        rows = c.execute(
+            """SELECT table_name, sync_mode, last_watermark, last_synced_at, last_row_count, purpose
+               FROM data_source_sync_tables WHERE source_id = %s AND status = 'active'""",
+            (source_id,),
+        )
+        pg = PostgreSQLClient()
+        tables = []
+        watermarks = []
+        for r in rows:
+            entry = {
+                "table_name": r["table_name"],
+                "sync_mode": r["sync_mode"],
+                "watermark": r["last_watermark"].isoformat() if r.get("last_watermark") else None,
+                "last_synced_at": r["last_synced_at"].isoformat() if r.get("last_synced_at") else None,
+                "row_count": r.get("last_row_count"),
+                "purpose": r.get("purpose") or "governed",
+            }
+            # 全量表：水位线取落地表最大业务时间（仅治理表；reference 不入安全边界）
+            if entry["watermark"] is None and entry["purpose"] == "governed":
+                try:
+                    target = r["table_name"].lower()
+                    wm_rows = pg.execute(
+                        f'SELECT MAX("{r["time_column"]}") AS wm FROM "{target}"' if r.get("time_column") else f'SELECT NULL AS wm'
+                    )
+                    if wm_rows and wm_rows[0].get("wm"):
+                        entry["watermark"] = str(wm_rows[0]["wm"])
+                except Exception:
+                    pass
+            if entry["watermark"] and entry["purpose"] == "governed":
+                watermarks.append((entry["table_name"], entry["watermark"]))
+            tables.append(entry)
+        # 安全分析边界 = 治理表最小水位线
+        laggard = min(watermarks, key=lambda x: x[1]) if watermarks else None
+        return {
+            "tables": tables,
+            "safe_analysis_boundary": laggard[1] if laggard else None,
+            "laggard_table": laggard[0] if laggard else None,
+            "warning": (
+                f"安全分析边界 = {laggard[1]}（受限于 {laggard[0]}）；跨表分析请裁剪到边界内，否则会得出错误结论"
+                if laggard else "无可用治理表水位线"
+            ),
+        }
+    return {"result": _call(_action)}
+
+
 @router.get("/data-sources/{source_id}/sync-tables/{table_name}/time-candidates")
 def sync_table_time_candidates(source_id: str, table_name: str, _: ReadPrincipal, executor: SyncExecutor):
-    """候选增量时间字段（datetime/date 类型列），选表配置时推荐。"""
+    """候选增量时间字段 + 适用性警告（Q1：业务时间≠变更时间）。"""
     return {"result": _call(lambda: executor.probe_time_candidates(source_id, table_name))}
 
 

@@ -674,8 +674,22 @@ export interface SourceCompareResult {
   match: boolean
 }
 
-export async function getTimeCandidates(sourceId: string, tableName: string): Promise<string[]> {
-  const response = await dataGovernanceRequest<{ result: string[] }>(
+export interface TimeCandidateColumn {
+  column: string
+  data_type: string
+  max_value: string | null
+  non_null_rate: number
+}
+
+export interface TimeCandidatesInfo {
+  columns: TimeCandidateColumn[]
+  has_audit_column: boolean
+  audit_columns: string[]
+  warning: string
+}
+
+export async function getTimeCandidates(sourceId: string, tableName: string): Promise<TimeCandidatesInfo> {
+  const response = await dataGovernanceRequest<{ result: TimeCandidatesInfo }>(
     `/data-sources/${encodeURIComponent(sourceId)}/sync-tables/${encodeURIComponent(tableName)}/time-candidates`,
   )
   return response.result
@@ -688,6 +702,45 @@ export async function compareSource(
   const response = await dataGovernanceRequest<{ result: SourceCompareResult }>(
     `/data-sources/${encodeURIComponent(sourceId)}/compare-source`,
     { method: 'POST', body: JSON.stringify(input) },
+  )
+  return response.result
+}
+
+// ── 配置卫生（Q2）+ 数据截止时间（Q7）────────────────────────────
+
+export interface SyncConfigIssue {
+  table_name: string
+  time_column: string | null
+  issue: string
+  suggestion: string
+}
+
+export interface DataCutoffTable {
+  table_name: string
+  sync_mode: string
+  watermark: string | null
+  last_synced_at: string | null
+  row_count: number | null
+  purpose: string
+}
+
+export interface DataCutoffInfo {
+  tables: DataCutoffTable[]
+  safe_analysis_boundary: string | null
+  laggard_table: string | null
+  warning: string
+}
+
+export async function getSyncConfigHealth(sourceId: string): Promise<{ total: number; issues: SyncConfigIssue[] }> {
+  const response = await dataGovernanceRequest<{ result: { total: number; issues: SyncConfigIssue[] } }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/sync-tables/config-health`,
+  )
+  return response.result
+}
+
+export async function getDataCutoff(sourceId: string): Promise<DataCutoffInfo> {
+  const response = await dataGovernanceRequest<{ result: DataCutoffInfo }>(
+    `/data-sources/${encodeURIComponent(sourceId)}/sync-tables/data-cutoff`,
   )
   return response.result
 }

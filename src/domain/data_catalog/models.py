@@ -91,4 +91,4 @@ class CatalogLineageEdge(BaseModel):
     edge_id: str = Field(min_length=1, max_length=96)
     upstream_asset_id: str = Field(min_length=1, max_length=96)
     downstream_asset_id: str = Field(min_length=1, max_length=96)
-    relation: str = Field(min_length=1, max_length=32)  # feeds / belongs_to / consumed_by
+    relation: str = Field(min_length=1, max_length=128)  # feeds / belongs_to / consumed_by / field_map:<列>→<字段>（字段级血缘）

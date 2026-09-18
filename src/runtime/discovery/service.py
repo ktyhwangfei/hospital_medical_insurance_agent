@@ -86,3 +86,57 @@ def run_discovery(
         "fields": fields,
         "table_statuses": result.get("table_statuses", []),
     }
+
+
+def check_model_semantic_consistency() -> dict:
+    """元数据一致性校验（数据专家拷问轮 Q4）：模型层 vs 语义层字段定义比对。
+
+    冻结契约（写入 V3.0 设计文档 §4.1）：
+    - 数据模型是结构 master（字段、角色、映射的唯一权威在模型层）
+    - 语义层消费模型定义派生 datasets/fields（物化时注册）
+    - 本检查不自动同步，只报告漂移；两处不一致时告警（一致性任务比双向同步现实）
+    """
+    from src.data_platform.storage.data_model.data_model_factory import (
+        get_data_model_storage,
+    )
+    from src.semantic_layer.registry import get_semantic_registry
+
+    model_storage = get_data_model_storage()
+    reg = get_semantic_registry()
+
+    issues: list[dict] = []
+    # 语义层已注册的物化 dataset（dwd_*），其 fields 应与模型定义一致
+    for model in model_storage.list_models():
+        if model.status != "published":
+            continue
+        dataset_code = model.model_code  # Slice 2 物化注册约定：视图名=模型编码
+        dataset = reg._store.get_dataset(dataset_code)
+        if dataset is None:
+            continue  # 未物化的模型不参与比对（无派生面）
+
+        # 模型声明字段 vs 语义版本字段
+        model_fields = {f.field_code for f in model.fields}
+        versions = reg.list_object_versions(dataset.object_code)
+        if not versions:
+            continue
+        version = versions[-1]
+        semantic_fields = {
+            f.field_code.rsplit(".", 1)[-1]
+            for f in version.fields if f.dataset_code == dataset_code
+        }
+        missing_in_semantic = model_fields - semantic_fields
+        extra_in_semantic = semantic_fields - model_fields
+        if missing_in_semantic:
+            issues.append({
+                "model": model.model_code,
+                "issue": f"模型字段未同步到语义层: {sorted(missing_in_semantic)[:5]}",
+                "severity": "warning",
+            })
+        if extra_in_semantic:
+            issues.append({
+                "model": model.model_code,
+                "issue": f"语义层存在模型未声明字段: {sorted(extra_in_semantic)[:5]}",
+                "severity": "warning",
+            })
+
+    return {"master": "data_model", "checked_datasets": sum(1 for m in model_storage.list_models() if m.status == "published"), "issues": issues}

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS data_source_sync_tables (
     last_watermark TIMESTAMPTZ,
     sync_mode VARCHAR(16) NOT NULL DEFAULT 'full',
     lookback_minutes INTEGER NOT NULL DEFAULT 5,
+    purpose VARCHAR(16) NOT NULL DEFAULT 'governed',
     PRIMARY KEY (source_id, table_name)
 );
 CREATE TABLE IF NOT EXISTS data_source_sync_events (
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS data_source_sync_events (
 CREATE INDEX IF NOT EXISTS idx_sync_events_source ON data_source_sync_events(source_id, created_at DESC);
 ALTER TABLE data_source_sync_tables ADD COLUMN IF NOT EXISTS sync_mode VARCHAR(16) NOT NULL DEFAULT 'full';
 ALTER TABLE data_source_sync_tables ADD COLUMN IF NOT EXISTS lookback_minutes INTEGER NOT NULL DEFAULT 5;
+ALTER TABLE data_source_sync_tables ADD COLUMN IF NOT EXISTS purpose VARCHAR(16) NOT NULL DEFAULT 'governed';
 ALTER TABLE data_source_sync_tables ADD COLUMN IF NOT EXISTS last_watermark TIMESTAMPTZ;
 ALTER TABLE data_source_sync_events ADD COLUMN IF NOT EXISTS note TEXT;
 """
@@ -68,12 +70,21 @@ class TableSyncStore:
     # ── 配置 ────────────────────────────────────────────────────────
 
     def save_table(self, table: SelectedSyncTable) -> SelectedSyncTable:
+        # Q3 落地表唯一性仲裁：同一源表在治理底座只能有一个落地通道。
+        # 契约管道覆盖表（o_Trade/o_FeeItem）走选表通道需显式声明为对照表（禁止建模）。
+        CONTRACT_TABLES = {"o_Trade": "mz_trade", "o_FeeItem": "mz_fee_item"}
+        if table.table_name in CONTRACT_TABLES and table.purpose != "reference":
+            existing = CONTRACT_TABLES[table.table_name]
+            raise ValueError(
+                f"源表 {table.table_name} 已由契约管道落地为 {existing}（有质量门与批次管理）；"
+                f"如需裸对照请显式声明 purpose=reference（禁止建模）"
+            )
         self._get_client().execute(
             """
             INSERT INTO data_source_sync_tables
                 (source_id, table_name, target_table, key_columns, time_column, status, revision,
-                 sync_mode, lookback_minutes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 sync_mode, lookback_minutes, purpose)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source_id, table_name) DO UPDATE
             SET target_table = EXCLUDED.target_table,
                 key_columns = EXCLUDED.key_columns,
@@ -81,13 +92,14 @@ class TableSyncStore:
                 status = EXCLUDED.status,
                 sync_mode = EXCLUDED.sync_mode,
                 lookback_minutes = EXCLUDED.lookback_minutes,
+                purpose = EXCLUDED.purpose,
                 revision = data_source_sync_tables.revision + 1,
                 updated_at = CURRENT_TIMESTAMP
             """,
             (
                 table.source_id, table.table_name, table.target_table,
                 json.dumps(table.key_columns), table.time_column, table.status.value,
-                table.revision, table.sync_mode.value, table.lookback_minutes,
+                table.revision, table.sync_mode.value, table.lookback_minutes, table.purpose.value,
             ),
         )
         return table
@@ -97,7 +109,7 @@ class TableSyncStore:
             """
             SELECT source_id, table_name, target_table, key_columns, time_column, status,
                    revision, last_synced_at, last_row_count, last_error,
-                   sync_mode, lookback_minutes, last_watermark
+                   sync_mode, lookback_minutes, last_watermark, purpose
             FROM data_source_sync_tables WHERE source_id = %s ORDER BY table_name
             """,
             (source_id,),
@@ -175,6 +187,7 @@ class TableSyncStore:
             time_column=row["time_column"],
             sync_mode=row.get("sync_mode") or "full",
             lookback_minutes=row.get("lookback_minutes") or 5,
+            purpose=row.get("purpose") or "governed",
             status=row["status"],
             revision=row["revision"],
             last_synced_at=row["last_synced_at"].isoformat() if row.get("last_synced_at") else None,
