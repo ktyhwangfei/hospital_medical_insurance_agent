@@ -576,6 +576,7 @@ import type {
 } from './types'
 import { skillControlHeaders, skillEvaluationHeaders } from './skill-auth'
 import { ApiClientError } from './types'
+import { authHeaders, clearToken } from './auth'
 
 export const API_PREFIX = '/api/v1/medical-insurance-ai-agent'
 
@@ -665,9 +666,33 @@ export async function parseError(response: Response): Promise<ApiClientError> {
   )
 }
 
+// Issue #75：认证类 401 统一清理登录态并跳登录页（后端为唯一裁决者）
+const AUTH_ERROR_CODES = new Set([
+  'AUTH_REQUIRED',
+  'EXPIRED_TOKEN',
+  'AUTH_INVALID',
+  'AUTHENTICATION_REQUIRED',
+  'INVALID_AUTHENTICATION',
+])
+
+function handleAuthFailure(status: number, error: ApiClientError): void {
+  if (status !== 401) return
+  if (!AUTH_ERROR_CODES.has(error.detail.error_code)) return
+  if (typeof window === 'undefined') return
+  clearToken()
+  const redirect = window.location.pathname
+  window.location.assign(`/login?redirect=${encodeURIComponent(redirect)}`)
+}
+
 export async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   headers.set('Accept', 'application/json')
+
+  // 统一附带登录态（P1）：有 token 即携带，未登录端点不受影响
+  const auth = authHeaders()
+  if (auth.Authorization && !headers.has('Authorization')) {
+    headers.set('Authorization', auth.Authorization)
+  }
 
   if (init?.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
@@ -679,7 +704,9 @@ export async function requestJson<T>(path: string, init?: RequestInit): Promise<
   })
 
   if (!response.ok) {
-    throw await parseError(response)
+    const error = await parseError(response)
+    handleAuthFailure(response.status, error)
+    throw error
   }
 
   const text = await response.text()

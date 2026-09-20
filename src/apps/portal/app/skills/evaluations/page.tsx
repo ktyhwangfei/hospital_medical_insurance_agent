@@ -29,6 +29,7 @@ import OutpatientSelfTestPanel from '@/components/skills/outpatient-self-test-pa
 import RunDetail from '@/components/skills/skill-eval-run-detail'
 import SkillEvalLaunchPanel from '@/components/skills/skill-eval-launch-panel'
 import SkillEvalSuitePanel from '@/components/skills/skill-eval-suite-panel'
+import { hasSkillEvaluationPermission } from '@/lib/skill-auth'
 import { ApiClientError } from '@/lib/types'
 import type {
   SkillEvalBenchmarkResponse,
@@ -102,6 +103,9 @@ function EvaluationsContent() {
   const [benchmarks, setBenchmarks] = useState<SkillEvalBenchmarkResponse[]>([])
   const [runs, setRuns] = useState<SkillEvalRunListResponse>({ items: [], total: 0 })
   const [newQuestion, setNewQuestion] = useState('')
+  // 后端评测写端点校验 skill:evaluate；体验层预判禁用+给原因
+  const canEvaluate = hasSkillEvaluationPermission()
+  const evalBlockedTitle = canEvaluate ? undefined : '缺少 skill:evaluate 权限，请联系管理员'
   const [benchmarkName, setBenchmarkName] = useState('门诊费用解释基准')
   const [runtimeVersion, setRuntimeVersion] = useState('current')
   const [dataSourceMode, setDataSourceMode] = useState('configured')
@@ -356,7 +360,8 @@ function EvaluationsContent() {
               <button
                 type="button"
                 onClick={() => void createBenchmark()}
-                disabled={busy || !skillFilter || !selectedDatasetId || !runtimeVersion.trim() || !dataSourceMode.trim()}
+                disabled={busy || !skillFilter || !selectedDatasetId || !runtimeVersion.trim() || !dataSourceMode.trim() || !canEvaluate}
+                title={canEvaluate ? undefined : evalBlockedTitle}
                 className="h-9 rounded-md bg-blue-700 px-3 text-sm font-medium text-white hover:bg-blue-800 disabled:opacity-50"
               >
                 创建 Benchmark
@@ -380,7 +385,8 @@ function EvaluationsContent() {
                 <button
                   type="button"
                   onClick={() => void addCase()}
-                  disabled={busy || !newQuestion.trim()}
+                  disabled={busy || !newQuestion.trim() || !canEvaluate}
+                  title={canEvaluate ? undefined : evalBlockedTitle}
                   className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 disabled:opacity-50"
                 >
                   <Plus className="h-4 w-4" /> 新增
@@ -394,7 +400,7 @@ function EvaluationsContent() {
                     <div className="font-medium text-slate-800">{item.question_template}</div>
                     <div className="mt-0.5 text-slate-500">{item.source_type}</div>
                   </div>
-                  <button type="button" onClick={() => void removeCase(item.case_id)} className="text-rose-700 hover:underline">
+                  <button type="button" onClick={() => void removeCase(item.case_id)} disabled={!canEvaluate} title={canEvaluate ? undefined : evalBlockedTitle} className="text-rose-700 hover:underline disabled:opacity-50">
                     删除
                   </button>
                 </div>

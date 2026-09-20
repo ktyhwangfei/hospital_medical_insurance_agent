@@ -10,6 +10,7 @@ import {
   createTrustedQuestionDraft,
   executeQuestion,
   getQuestionLibraryStats,
+  hasQuestionLibraryPermission,
   listColdStartCandidates,
   listQuestionMatchEvents,
   listTrustedQuestions,
@@ -44,6 +45,10 @@ const STATUS_BADGES: Record<TrustedQuestionStatusDto, string> = {
   published: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   archived: 'border-slate-200 bg-slate-100 text-slate-500',
 }
+
+// 写权限预判（后端 question_library:write 硬裁决；体验层禁用+给原因）
+const canWrite = () => hasQuestionLibraryPermission('write')
+const writeBlockedTitle = '缺少 question_library:write 权限，请联系管理员'
 
 type Tab = 'library' | 'try' | 'loop' | 'coldstart'
 
@@ -218,6 +223,8 @@ function LibraryTab({
           type="button"
           data-testid="qlib-create-button"
           className={btnCls}
+          disabled={!canWrite()}
+          title={canWrite() ? undefined : writeBlockedTitle}
           onClick={() => { setPrefill(''); setShowCreate(true) }}
         >
           新建草稿
@@ -265,6 +272,8 @@ function LibraryTab({
                         type="button"
                         data-testid="qlib-approve-button"
                         className={btnCls}
+                        disabled={!canWrite()}
+                        title={canWrite() ? undefined : writeBlockedTitle}
                         onClick={() =>
                           act(
                             () => reviewTrustedQuestion(item.question_id, { approve: true, reviewer: 'portal-reviewer', expected_revision: item.revision }),
@@ -277,6 +286,8 @@ function LibraryTab({
                       <button
                         type="button"
                         className={btnGhostCls}
+                        disabled={!canWrite()}
+                        title={canWrite() ? undefined : writeBlockedTitle}
                         onClick={() =>
                           act(
                             () => reviewTrustedQuestion(item.question_id, { approve: false, reviewer: 'portal-reviewer', expected_revision: item.revision }),
@@ -292,6 +303,8 @@ function LibraryTab({
                     <button
                       type="button"
                       className={btnGhostCls}
+                      disabled={!canWrite()}
+                      title={canWrite() ? undefined : writeBlockedTitle}
                       onClick={() =>
                         act(
                           () => archiveTrustedQuestion(item.question_id, item.revision),
@@ -379,7 +392,8 @@ function AddSynonymInline({
       />
       <button
         type="button"
-        disabled={!value.trim() || busy}
+        disabled={!value.trim() || busy || !canWrite()}
+        title={canWrite() ? undefined : writeBlockedTitle}
         className={btnGhostCls}
         onClick={async () => {
           try {
@@ -682,7 +696,8 @@ function LoopTab({
                 <button
                   type="button"
                   data-testid={`qlib-loop-adopt-${event.event_id}`}
-                  disabled={!target[event.event_id]}
+                  disabled={!target[event.event_id] || !canWrite()}
+                  title={canWrite() ? undefined : writeBlockedTitle}
                   className={btnCls}
                   onClick={async () => {
                     const questionId = target[event.event_id]
@@ -760,7 +775,7 @@ function ColdStartTab({
                 <td className="py-2 text-slate-900">{candidate.question_text}</td>
                 <td className="py-2 text-slate-600">{candidate.frequency}</td>
                 <td className="py-2">
-                  <button type="button" className={btnGhostCls} onClick={() => { setCreating(candidate.question_text); setPlanText(DEFAULT_PLAN) }}>
+                  <button type="button" className={btnGhostCls} disabled={!canWrite()} title={canWrite() ? undefined : writeBlockedTitle} onClick={() => { setCreating(candidate.question_text); setPlanText(DEFAULT_PLAN) }}>
                     创建草稿
                   </button>
                 </td>
@@ -789,7 +804,8 @@ function ColdStartTab({
               <button
                 type="button"
                 data-testid="qlib-cold-submit"
-                disabled={busy}
+                disabled={busy || !canWrite()}
+                title={canWrite() ? undefined : writeBlockedTitle}
                 className={btnCls}
                 onClick={async () => {
                   let plan: Record<string, unknown>

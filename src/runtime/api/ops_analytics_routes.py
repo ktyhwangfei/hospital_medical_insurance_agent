@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
-from src.gateway.auth import authenticator
+from src.runtime.api.auth_deps import resolve_principal
 from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
 from src.runtime.ops_analytics.service import OpsAnalyticsService
 from src.shared.schemas.responses import error_detail
@@ -32,26 +32,7 @@ def get_ops_analytics_service() -> OpsAnalyticsService:
 def _require_ops_read(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> DataGovernancePrincipal:
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_detail("AUTH_REQUIRED", "缺少 Authorization 凭据"),
-        )
-    auth = authenticator.validate_signed_token(authorization)
-    if not auth.is_success or not auth.user_id.strip():
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_detail("AUTH_INVALID", auth.error_message or "登录凭据无效"),
-        )
-    permitted = authenticator.check_permission(auth, "ops:read")
-    if not permitted.is_success:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=error_detail("AUTH_FORBIDDEN", "权限不足"),
-        )
-    return DataGovernancePrincipal(
-        user_id=auth.user_id, roles=auth.roles, permissions=auth.permissions,
-    )
+    return resolve_principal("ops:read", authorization)
 
 
 @router.get("/overview")

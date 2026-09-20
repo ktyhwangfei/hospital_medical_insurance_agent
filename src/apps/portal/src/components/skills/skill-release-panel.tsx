@@ -5,6 +5,7 @@ import { CheckCircle2, RefreshCw, ShieldCheck } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { hasSkillControlPermission } from '@/lib/skill-auth'
 import {
   activateSkillRelease,
   approveSkillRelease,
@@ -106,6 +107,9 @@ export default function SkillReleasePanel({
   const [mutating, setMutating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [gateFailures, setGateFailures] = useState<string[]>([])
+  // 后端校验 skill:release:test；体验层预判禁用+给原因
+  const canRelease = hasSkillControlPermission()
+  const releaseBlockedTitle = canRelease ? undefined : '缺少 skill:release:test 权限，请联系管理员'
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -238,7 +242,8 @@ export default function SkillReleasePanel({
           {!readOnly && action !== 'none' && (
             <Button
               onClick={runPrimaryAction}
-              disabled={mutating || (action === 'create_candidate' && !eligible)}
+              disabled={mutating || !canRelease || (action === 'create_candidate' && !eligible)}
+              title={releaseBlockedTitle}
             >
               {ACTION_LABELS[action]}
             </Button>

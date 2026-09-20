@@ -245,4 +245,44 @@ describe('QuestionLibraryPage 可信问题库页', () => {
     await waitFor(() => expect(screen.getByTestId('qlib-error')).toBeTruthy())
     expect(screen.getByTestId('qlib-error').textContent).toContain('无法连接可信问题库')
   })
+
+  // ── 权限渲染（#75 A3）：无 question_library:write 时写按钮禁用并给出原因 ──
+
+  function portalToken(permissions: string[]): string {
+    const payload = btoa(JSON.stringify({
+      sub: 'readonly-user',
+      roles: ['reviewer'],
+      permissions,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+    return `header.${payload}.signature`
+  }
+
+  it('无 question_library:write 时新建草稿禁用并展示原因', async () => {
+    window.sessionStorage.setItem('portal-token', portalToken(['question_library:read']))
+    render(<QuestionLibraryPage />)
+    const createButton = await waitFor(() => {
+      const button = screen.getByTestId('qlib-create-button') as HTMLButtonElement
+      expect(button).toBeTruthy()
+      return button
+    })
+    expect(createButton.disabled).toBe(true)
+    expect(createButton.title).toContain('缺少 question_library:write 权限')
+    window.sessionStorage.clear()
+  })
+
+  it('无 question_library:write 时草稿审核按钮禁用', async () => {
+    window.sessionStorage.setItem('portal-token', portalToken(['question_library:read']))
+    vi.mocked(listTrustedQuestions).mockResolvedValue({ items: [question()], total: 1, page: 1, page_size: 50 })
+    render(<QuestionLibraryPage />)
+    fireEvent.click(await waitFor(() => screen.getByTestId('qlib-row')))
+    const approve = await waitFor(() => {
+      const button = screen.getByTestId('qlib-approve-button') as HTMLButtonElement
+      expect(button).toBeTruthy()
+      return button
+    })
+    expect(approve.disabled).toBe(true)
+    expect(approve.title).toContain('缺少 question_library:write 权限')
+    window.sessionStorage.clear()
+  })
 })

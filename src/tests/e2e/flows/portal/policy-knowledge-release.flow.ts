@@ -1,11 +1,16 @@
 import { expect, test } from '@playwright/test';
 import { PolicyKnowledgePage } from '../../pages/portal/policy-knowledge.page';
+import { seedPortalSession } from '../../utils/portal-session';
 
 const prefix = '**/api/v1/medical-insurance-ai-agent';
 const qualityConfigHash = '197ceb8357b8a65b5db3db7044838ff7fd7010ab36caf2b11270e4ab61607e22';
 const activeCase = { case_id: 'case_1', name: '住院支付比例', query: '职工住院支付比例', mode: 'semantic', expected_knowledge_ids: ['kn_1'], filters: {}, required: true, active: true, case_set_version: 1 };
 
 test.describe('政策知识工作台与整批发布门禁', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedPortalSession(page);
+  });
+
   test('知识页进入构建主页并仅展示新的三级工作区', async ({ page }) => {
     await page.route(`${prefix}/policy-workbench/knowledge-build/eligible-units`, (route) => route.fulfill({ json: [] }));
     await page.route(`${prefix}/policy-workbench/knowledge-build/tasks`, (route) => route.fulfill({ json: [] }));

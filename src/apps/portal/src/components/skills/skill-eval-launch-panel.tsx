@@ -6,6 +6,7 @@ import {
   createSkillEvalBenchmarkRun,
   listInfraSkillVersions,
 } from '@/lib/api-client'
+import { hasSkillEvaluationPermission } from '@/lib/skill-auth'
 import { ApiClientError } from '@/lib/types'
 import type { SkillEvalRunResponse, SkillVersionResponse } from '@/lib/types'
 
@@ -26,6 +27,8 @@ export default function SkillEvalLaunchPanel({
   const [loadingVersions, setLoadingVersions] = useState(Boolean(skillId))
   const [launching, setLaunching] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 后端校验 skill:evaluate；体验层预判禁用+给原因
+  const canEvaluate = hasSkillEvaluationPermission()
 
   useEffect(() => {
     if (!skillId) return
@@ -94,7 +97,8 @@ export default function SkillEvalLaunchPanel({
           type="button"
           data-testid="eval-launch-button"
           onClick={() => void launch()}
-          disabled={launching || !benchmarkId || !selectedVersion}
+          disabled={launching || !benchmarkId || !selectedVersion || !canEvaluate}
+          title={canEvaluate ? undefined : '缺少 skill:evaluate 权限，请联系管理员'}
           className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
           {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}

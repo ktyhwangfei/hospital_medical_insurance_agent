@@ -20,6 +20,7 @@ import type {
   FlowRevisionViewDto, FlowStatus, FlowValidationReportDto,
 } from '@/lib/flow-api'
 import { ApiClientError } from '@/lib/types'
+import { hasDataGovernancePermission } from '@/lib/data-governance-api'
 import { MAX_FLOW_NODES } from '@/lib/flow-api'
 import {
   canvasToDefinition, definitionToCanvas, newNodeDefinition, nextEdgeId,
@@ -263,6 +264,9 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
   const canSubmit = flow.status === 'draft' || flow.status === 'validating'
   const canPublish = flow.status === 'pending_review'
   const canDeprecate = flow.status === 'published'
+  // 后端写端点校验 data_governance:write；体验层预判禁用+给原因
+  const canWrite = hasDataGovernancePermission('write')
+  const writeBlockedTitle = canWrite ? undefined : '缺少 data_governance:write 权限，请联系管理员'
 
   // 窄屏（390px）中段纵向堆叠由内容撑高、外层 main 滚动；桌面恢复 h-full 画布布局
   return (
@@ -283,27 +287,32 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
           <span className="shrink-0 text-xs text-slate-400">rev {flow.revision}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={handleSave} disabled={!!busy || readOnly}
+          <button type="button" onClick={handleSave} disabled={!!busy || readOnly || !canWrite}
+            title={writeBlockedTitle}
             className={`${actionBtn.base} ${actionBtn.primary}`}>
             {busy === 'save' ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
             保存修订
           </button>
-          <button type="button" onClick={handleValidate} disabled={!!busy || !canValidate}
+          <button type="button" onClick={handleValidate} disabled={!!busy || !canValidate || !canWrite}
+            title={writeBlockedTitle}
             className={`${actionBtn.base} ${actionBtn.secondary}`}>
             {busy === 'validate' ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
             校验
           </button>
-          <button type="button" onClick={handleSubmit} disabled={!!busy || !canSubmit}
+          <button type="button" onClick={handleSubmit} disabled={!!busy || !canSubmit || !canWrite}
+            title={writeBlockedTitle}
             className={`${actionBtn.base} ${actionBtn.secondary}`}>
             {busy === 'submit' ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
             提交评审
           </button>
-          <button type="button" onClick={handlePublish} disabled={!!busy || !canPublish}
+          <button type="button" onClick={handlePublish} disabled={!!busy || !canPublish || !canWrite}
+              title={writeBlockedTitle}
               className={`${actionBtn.base} ${canPublish ? 'bg-emerald-600 text-white hover:bg-emerald-500' : actionBtn.secondary}`}>
               {busy === 'publish' ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
               发布
             </button>
-          <button type="button" onClick={handleDeprecate} disabled={!!busy || !canDeprecate}
+          <button type="button" onClick={handleDeprecate} disabled={!!busy || !canDeprecate || !canWrite}
+            title={writeBlockedTitle}
             className={`${actionBtn.base} ${actionBtn.danger}`}>
             {busy === 'deprecate' ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
             退役
@@ -362,7 +371,7 @@ export default function FlowEditorPage({ params }: { params: Promise<{ flowId: s
             <PreviewPanel artifact={artifact} loading={previewLoading} onRefresh={loadPreview} />
           )}
           {detailTab === 'revisions' && (
-            <RevisionsPanel revisions={revisions} onRollback={handleRollback}
+            <RevisionsPanel revisions={revisions} onRollback={handleRollback} canRollback={canWrite}
               rollbackBusy={busy?.startsWith('rollback:') ? busy.slice(9) : null} />
           )}
         </div>

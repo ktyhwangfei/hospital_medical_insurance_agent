@@ -1,6 +1,7 @@
 // 健康运营 API 客户端 — issue #45 P0（/ops 问题库 + 手动巡检）。
 // DTO 字段与后端 src/domain/ops/models.py 逐字段对齐（snake_case 直传）。
 import { requestJson } from './api-client'
+import { authHeaders, getToken, hasPermission } from '@/lib/auth'
 
 // ── 枚举白名单（与后端冻结值一致，勿单侧扩充）──
 
@@ -192,35 +193,21 @@ export interface OpsInspectionSummaryDto {
   latest: OpsInspectionRunDto | null
 }
 
-// ── 鉴权（与 data-governance-api 同模式：sessionStorage → dev 环境变量 token）──
+// ── 鉴权（统一走 portal-token，Issue #75；sessionStorage 旧键与 dev env token 已下线）──
 
 function opsToken(): string | null {
-  if (typeof window !== 'undefined') {
-    const token = window.sessionStorage.getItem('ops-token')
-    if (token) return token
-  }
-  return process.env.NODE_ENV === 'production'
-    ? null
-    : process.env.NEXT_PUBLIC_OPS_TOKEN || null
+  return getToken()
 }
 
 export function hasOpsPermission(permission: 'read' | 'write'): boolean {
-  const token = opsToken()
-  if (!token) return process.env.NODE_ENV !== 'production'
-  try {
-    const payload = token.replace(/^Bearer\s+/i, '').split('.')[1]
-    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=')
-    const permissions = JSON.parse(atob(base64)).permissions
-    return Array.isArray(permissions) && permissions.includes(`ops:${permission}`)
-  } catch {
-    return false
-  }
+  return hasPermission(`ops:${permission}`)
 }
 
 async function opsRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers)
-  const token = opsToken()
-  if (token) headers.set('Authorization', token.startsWith('Bearer ') ? token : `Bearer ${token}`)
+  const headers = new Headers(authHeaders())
+  if (init?.headers) {
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value))
+  }
   return requestJson<T>(`/ops${path}`, { ...init, headers })
 }
 

@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { SemanticProposalsPage } from '../../pages/portal/semantic-proposals.page';
+import { seedPortalSession } from '../../utils/portal-session';
 
 const proposal = {
   proposal_id: 'proposal-e2e', fingerprint: 'fingerprint-e2e', proposal_type: 'metric',
@@ -20,6 +21,7 @@ const proposal = {
 };
 
 test('政策未知概念可在提议页审阅并发布', async ({ page }) => {
+  await seedPortalSession(page);
   let status = 'proposed';
   const actions: string[] = [];
   await page.route('**/api/v1/medical-insurance-ai-agent/semantic/alignment/proposals**', async (route) => {

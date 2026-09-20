@@ -59,7 +59,7 @@ Agent 编码时根据以下映射定位代码位置：
 | `shared/` | 共享基础：异常模型、响应契约、Schema 契约、技能加载器/注册表 | 已实现（exceptions/schemas/skills） |
 | `gateway/` | 统一接入网关：API网关、渠道识别、认证鉴权、租户隔离、限流熔断、请求安全校验、接入日志 | 已实现（api_gateway/channel/auth/tenant/rate_limiter/request_guard/access_log） |
 | `interaction/` | 多模态交互层：Chat对话、文件上传、语音交互、页面上下文、消息提醒、知识上传 | 已实现（chat/file/voice/page_context/notification/knowledge_upload） |
-| `apps/` | SaaS 应用入口层：Next.js 16 Portal；`/policy-qa` 是唯一业务入口，其余页面是治理与支撑工作台 | 已实现（policy-qa/semantic-layer/policy-knowledge/skills/model-governance/qa-history/data-governance/catalog/flow/ops/ops-analytics/question-library） |
+| `apps/` | SaaS 应用入口层：Next.js 16 Portal；`/policy-qa` 是唯一业务入口，其余页面是治理与支撑工作台 | 已实现（policy-qa/semantic-layer/policy-knowledge/skills/model-governance/qa-history/data-governance/catalog/flow/ops/ops-analytics/question-library/login，Issue #75 起 portal-token 统一登录鉴权） |
 | `skills/` | Skill 驱动架构：自包含的医保业务能力包（费用解释、起付线、大额自付等），通过 YAML 配置 + Python assembler 实现声明式业务逻辑。每个 Skill 通过 `business_action` + `business_object` 挂载到平台七类业务动作 | 已实现（settlement_explain_skill/ 含 SKILL.md + schemas + templates + scripts，已声明 `explain` + `settlement`） |
 | `src/skill_infra/` | Skill 基础设施：动态加载器（SkillLoader）、关键词路由器（SkillRouter），自动扫描 skills/ 目录发现和加载 skill 包 | 已实现（skill_loader.py, skill_router.py） |
 | `src/domain/common/actions.py` | Business Action 枚举：平台最高层业务分类（七类动作 + 十类对象 + 能力矩阵白名单） | 已实现（BusinessAction, BusinessObject, VALID_ACTION_OBJECT_PAIRS） |
@@ -125,7 +125,7 @@ Portal `/policy-qa`
 路由前缀: `/api/v1/medical-insurance-ai-agent`（除 `/health` 外）。完整接口清单见 `docs/steering/接口设计文档.md`。
 
 前端应用目录: `src/apps/portal/`（Next.js 16 应用，当前唯一前端入口）：
-- **portal/** — `/policy-qa` 是唯一业务入口；`/` 重定向到它。`/settlement`、`/qc`、`/dashboard` 已退役并返回 404。`/semantic-layer`、`/policy-knowledge`、`/skills`、`/model-governance`、`/qa-history` 是治理与支撑页面。
+- **portal/** — `/policy-qa` 是唯一业务入口；`/` 重定向到它。`/settlement`、`/qc`、`/dashboard` 已退役并返回 404。`/semantic-layer`、`/policy-knowledge`、`/skills`、`/model-governance`、`/qa-history` 是治理与支撑页面。`/login` 是统一登录入口（Issue #75）：后端 `/auth/login` 签发 JWT，前端存 `sessionStorage["portal-token"]`，各域 token 孤岛已收敛到 `lib/auth.ts`（`hasPermission(scope)` + `authHeaders()`），dev 假 token 兜底仅 model-governance/skill 保留。
 
 应用独立构建运行，调用后端 API（`/api/v1/medical-insurance-ai-agent/*`）。
 
@@ -223,6 +223,8 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - Milvus release 产物集合（`policy_rules_REL_*`）的适用性字段（region/effective_date/publish_status/amount_band_min/max 等）是 dynamic key，`describe_collection` 的固定字段列表看不到；只读 describe 结果做字段存在性检查会让过滤被**静默跳过**且无任何报错（Issue #33 实测生产适用性过滤从未生效）。判字段必须同时检查 `enable_dynamic_field`，为真时并入 `structured_policy_retriever._KNOWN_DYNAMIC_FILTERABLE_FIELDS`；dynamic key 可按名进 expr 过滤和 output_fields 取回。
 - Milvus 动态字段按行存在：规则没有该维度时 `query` 返回的 dict 里**整个键缺失**（不是空串），JSON 序列化后前端拿到 `undefined`。前端展示代码直接 `value.trim()` 会 TypeError 崩组件（knowledge-map 展开报错实测：418 条规则 25 条无 payment_ratio、380 条无 personal_payment_ratio）；且测试夹具填满全部字段会掩盖此类崩溃，夹具必须包含 delete 键的稀疏用例。DTO 中这类字段应声明可选。
 - 多检出目录的 outpatient sync worker 共享同一 PostgreSQL 时互相抢任务：后启动方 bootstrap 用本目录主密钥重封共享凭据，旧 worker 认领后解封即失败并把任务打成 `failed`，且其 `fail_job` 覆盖 `active_attempt_id` 导致另一 worker 已成功批次被孤儿化（任务行丢失成功状态）。排查用 `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*sync_worker*' }`，杀掉非本工作区 PID；启动同步前先确认单 worker；认领护栏 `active_attempt_id IS NULL` 已入回归测试。
+- 前端单测自造 JWT claims 与后端真实签发格式漂移（如自造 `user_id`、后端签标准 `sub`），Vitest 全绿但真实浏览器登录后 principal 恒 null、UserMenu 永显「登录」。新增消费 JWT 的前端逻辑时，测试 token 必须按 `gateway/auth/token_issuer.py` 实际输出构造，并以真实浏览器点击级验收（Playwright）把关。
+- 后端六域统一 401 错误码 `AUTH_REQUIRED`（auth_deps 无凭证）漏收进前端 `AUTH_ERROR_CODES` 集合时，未登录访问治理页只显错误横幅、不跳 /login。前后端认证错误码词汇表必须逐码对齐（api-client.ts 与 auth_deps.py PrincipalErrorCodes）。
 - 可信问题库（Issue #37）禁止从政策问答历史（`policy_qa_trajectories`）冷启动挖掘：那是结算单解释类问题，与受控问数场景问题类型错位且天然无 `query_plan`，入库即死数据。草稿创建必须绑定经 `SemanticQueryPlanner` 干跑验证的合法查询计划快照（`question_library` 服务内强校验，422 `QUESTION_DRAFT_INVALID`）；正确沉淀路径是问数工作台 `/semantic-layer/query` 执行验证后“存为可信问题草稿”。
 
 - PG 落地视图（mz_trade/mz_fee_item）列名保留大小写（AS "T_TradeNo"），SQL 裸引用被 PG 折叠小写报 `column "t_tradeno" does not exist`，必须双引号包裹（编译器 _identifier 已统一引号化）。且 `CREATE OR REPLACE VIEW` 不能改既有视图列类型（`cannot change data type of view column ... from text to numeric`），改列类型（如状态码列 text→numeric）须 DROP 重建走迁移，勿直接改 outpatient_store 的 `_TRADE_NUMERIC_FIELDS` 期望幂等生效（活库已实测报错）。

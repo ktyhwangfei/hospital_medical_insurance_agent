@@ -1,5 +1,6 @@
 import { API_PREFIX, parseError, requestJson } from './api-client'
 import { ApiClientError } from './types'
+import { authHeaders, getToken, hasPermission } from '@/lib/auth'
 
 export type ConnectionStatus = 'unknown' | 'healthy' | 'error'
 export type CdcStatus = 'not_applicable' | 'not_checked' | 'waiting_dba' | 'ready' | 'invalid'
@@ -231,32 +232,18 @@ interface SyncJobDto {
 }
 
 export function governanceToken(): string | null {
-  if (typeof window !== 'undefined') {
-    const token = window.sessionStorage.getItem('data-governance-token')
-    if (token) return token
-  }
-  return process.env.NODE_ENV === 'production'
-    ? null
-    : process.env.NEXT_PUBLIC_DATA_GOVERNANCE_TOKEN || null
+  return getToken()
 }
 
 export function hasDataGovernancePermission(permission: 'read' | 'write'): boolean {
-  const token = governanceToken()
-  if (!token) return process.env.NODE_ENV !== 'production'
-  try {
-    const payload = token.replace(/^Bearer\s+/i, '').split('.')[1]
-    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=')
-    const permissions = JSON.parse(atob(base64)).permissions
-    return Array.isArray(permissions) && permissions.includes(`data_governance:${permission}`)
-  } catch {
-    return false
-  }
+  return hasPermission(`data_governance:${permission}`)
 }
 
 export async function dataGovernanceRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers)
-  const token = governanceToken()
-  if (token) headers.set('Authorization', token.startsWith('Bearer ') ? token : `Bearer ${token}`)
+  const headers = new Headers(authHeaders())
+  if (init?.headers) {
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value))
+  }
   try {
     return await requestJson<T>(`/data-governance${path}`, { ...init, headers })
   } catch (error) {
@@ -432,9 +419,7 @@ export async function testDataSourceConnection(sourceId: string): Promise<Connec
 }
 
 export async function downloadCdcScript(sourceId: string): Promise<void> {
-  const headers = new Headers()
-  const token = governanceToken()
-  if (token) headers.set('Authorization', token.startsWith('Bearer ') ? token : `Bearer ${token}`)
+  const headers = new Headers(authHeaders())
   const response = await fetch(`${API_PREFIX}/data-governance/data-sources/${encodeURIComponent(sourceId)}/cdc-script`, { headers })
   if (!response.ok) throw await parseError(response)
   const url = URL.createObjectURL(await response.blob())

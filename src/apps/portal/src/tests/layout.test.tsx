@@ -20,6 +20,7 @@ vi.mock('@/lib/api-context', () => ({
 vi.mock('@/components/role-switcher', () => ({ default: () => <button type="button">切换角色</button> }))
 
 import { LayoutShell } from '../../app/layout'
+import { AuthProvider } from '@/components/auth-provider'
 
 describe('LayoutShell responsive sidebar', () => {
   afterEach(cleanup)
@@ -38,7 +39,7 @@ describe('LayoutShell responsive sidebar', () => {
 
   it('uses a zero-width mobile drawer, keyboard controls, and leaves the page with one H1', async () => {
     const user = userEvent.setup()
-    const { container } = render(<LayoutShell><h1>Skill 日常治理</h1></LayoutShell>)
+    const { container } = render(<AuthProvider><LayoutShell><h1>Skill 日常治理</h1></LayoutShell></AuthProvider>)
 
     const sidebar = container.querySelector('aside')!
     const toggle = await screen.findByRole('button', { name: '打开导航菜单' })
@@ -69,7 +70,7 @@ describe('LayoutShell responsive sidebar', () => {
 
   it('restores focus after button and overlay closes', async () => {
     const user = userEvent.setup()
-    render(<LayoutShell><h1>Skill 日常治理</h1></LayoutShell>)
+    render(<AuthProvider><LayoutShell><h1>Skill 日常治理</h1></LayoutShell></AuthProvider>)
 
     const open = await screen.findByRole('button', { name: '打开导航菜单' })
     await user.click(open)
@@ -85,7 +86,7 @@ describe('LayoutShell responsive sidebar', () => {
   })
 
   it('keeps the mobile header compact and prevents product or connection labels from character wrapping', async () => {
-    const { container } = render(<LayoutShell><h1>Skill 日常治理</h1></LayoutShell>)
+    const { container } = render(<AuthProvider><LayoutShell><h1>Skill 日常治理</h1></LayoutShell></AuthProvider>)
 
     await screen.findByRole('button', { name: '打开导航菜单' })
     const header = container.querySelector('header')!
@@ -95,7 +96,7 @@ describe('LayoutShell responsive sidebar', () => {
 
   it('makes the main area inert, loops drawer focus, and closes the drawer from navigation', async () => {
     const user = userEvent.setup()
-    render(<LayoutShell><h1>Skill 日常治理</h1></LayoutShell>)
+    render(<AuthProvider><LayoutShell><h1>Skill 日常治理</h1></LayoutShell></AuthProvider>)
 
     const mainArea = screen.getByRole('main').parentElement!
     await user.click(await screen.findByRole('button', { name: '打开导航菜单' }))
@@ -124,7 +125,7 @@ describe('LayoutShell responsive sidebar', () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     } as unknown as MediaQueryList)
-    render(<LayoutShell><h1>Skill 日常治理</h1></LayoutShell>)
+    render(<AuthProvider><LayoutShell><h1>Skill 日常治理</h1></LayoutShell></AuthProvider>)
 
     await user.click(screen.getByRole('button', { name: '收起侧栏' }))
     expect(screen.getByRole('link', { name: '技能' })).toBeVisible()

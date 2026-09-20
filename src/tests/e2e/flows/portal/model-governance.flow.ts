@@ -4,6 +4,7 @@ import { expect, test } from '@playwright/test';
 
 import { ModelGovernancePage } from '../../pages/portal/model-governance.page';
 import { E2E_BACKEND_URL } from '../../utils/workspace-ports';
+import { seedPortalSession } from '../../utils/portal-session';
 
 const apiKey = 'e2e-api-key-value';
 const governanceApi = `${E2E_BACKEND_URL}/api/v1/medical-insurance-ai-agent/model-governance`;
@@ -141,6 +142,8 @@ test.afterEach(async ({ request }) => {
 test('收费员管理真实模型、路由与提示词版本且密钥不泄漏', async ({ page, browserName }, testInfo) => {
   test.skip(browserName !== 'chromium', '治理写流程只需一个 Chromium 实例，避免共享活动版本并发冲突');
   test.setTimeout(120_000);
+
+  await seedPortalSession(page);
 
   const governance = new ModelGovernancePage(page);
   await governance.goto();

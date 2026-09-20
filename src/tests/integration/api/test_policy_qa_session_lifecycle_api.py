@@ -13,6 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.runtime.api.app import create_app
+from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
+from src.runtime.api.policy_qa_routes import require_policy_qa_ask
 from src.tests.integration.api.test_policy_qa_routes import (
     safe_policy_qa_dependencies,  # noqa: F401 — 复用同层 fixture
 )
@@ -22,7 +24,11 @@ API = "/api/v1/medical-insurance-ai-agent/policy-qa"
 
 @pytest.fixture
 def client():
-    return TestClient(create_app())
+    app = create_app()
+    app.dependency_overrides[require_policy_qa_ask] = lambda: DataGovernancePrincipal(
+        user_id="qa-tester", roles=["ops_admin"], permissions=["policy_qa:ask"]
+    )
+    return TestClient(app)
 
 
 def _stream(client, session_id, question="统筹自付为什么这么多？"):

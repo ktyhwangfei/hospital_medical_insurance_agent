@@ -26,6 +26,7 @@ from src.knowledge_extension.rule_explanation.answer_verification.verifier impor
 )
 from src.runtime.api import policy_qa_routes
 from src.runtime.api.app import create_app
+from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
 from src.runtime.policy_qa.verification_trace import (
     InMemoryAnswerVerificationTraceStore,
     build_verification_envelope,
@@ -111,6 +112,11 @@ def _client(
         lambda: store if store is not None else InMemoryAnswerVerificationTraceStore()
     )
     app.dependency_overrides[policy_qa_routes.get_answer_verification_rule_port] = lambda: port
+    app.dependency_overrides[policy_qa_routes.require_policy_qa_ask] = (
+        lambda: DataGovernancePrincipal(
+            user_id="qa-tester", roles=["ops_admin"], permissions=["policy_qa:ask"]
+        )
+    )
     if authenticated:
         app.dependency_overrides[policy_qa_routes.get_policy_qa_feedback_principal] = (
             lambda: RegressionPrincipal(user_id="qa-governance", tenant_id="default")

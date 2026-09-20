@@ -57,6 +57,7 @@ const FLOW: FlowDefinitionDto = {
 describe('flow-api client', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    window.sessionStorage.clear()
   })
 
   it('lists flows', async () => {
@@ -105,7 +106,8 @@ describe('flow-api client', () => {
       .mockResolvedValueOnce(jsonResponse({ ...FLOW, status: 'published' }))
       .mockResolvedValueOnce(jsonResponse({ revision: { revision_id: 'r1' }, is_active: true }))
     vi.stubGlobal('fetch', fetchMock)
-    vi.stubEnv('NEXT_PUBLIC_DATA_GOVERNANCE_TOKEN', 'test-governance-token')
+    // Issue #75：发布凭据统一走 portal-token（旧 data-governance-token 键与 env 回退已下线）
+    window.sessionStorage.setItem('portal-token', 'test-governance-token')
 
     await validateFlow('f')
     await submitFlowReview('f')

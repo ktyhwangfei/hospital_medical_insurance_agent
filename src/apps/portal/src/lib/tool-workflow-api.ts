@@ -1,6 +1,7 @@
 // Tool 可视化管理与 Workflow 编排 — 只读 API 客户端（不新增鉴权面）。
 // DTO 字段与后端 src/runtime/workflow/catalog_view.py 逐字段对齐（snake_case 直传）。
 import { requestJson } from './api-client'
+import { authHeaders, getToken, hasPermission } from '@/lib/auth'
 
 // 单个输入/输出字段的契约信息（与后端 ToolDefinition.input_schema/output_schema 对齐）。
 export interface ToolFieldInfoDto {
@@ -74,32 +75,14 @@ export function listWorkflows(): Promise<WorkflowCatalogDto> {
 }
 
 // ── Workflow 治理配置写入（院区个性化落配置层，不改代码重发版）──
-// 鉴权与 ops-api / 可信问题库同模式：sessionStorage → dev 环境变量 token。
+// 鉴权统一走 portal-token（Issue #75），sessionStorage 旧键与 dev env token 已下线。
 
 function workflowToken(): string | null {
-  if (typeof window !== 'undefined') {
-    const token = window.sessionStorage.getItem('workflow-token')
-    if (token) return token
-  }
-  return process.env.NODE_ENV === 'production'
-    ? null
-    : process.env.NEXT_PUBLIC_WORKFLOW_TOKEN || null
+  return getToken()
 }
 
 export function hasWorkflowWritePermission(): boolean {
-  const token = workflowToken()
-  if (!token) return process.env.NODE_ENV !== 'production'
-  try {
-    const payload = token.replace(/^Bearer\s+/i, '').split('.')[1]
-    const base64 = payload
-      .replace(/-/g, '+')
-      .replace(/_/g, '/')
-      .padEnd(Math.ceil(payload.length / 4) * 4, '=')
-    const permissions = JSON.parse(atob(base64)).permissions
-    return Array.isArray(permissions) && permissions.includes('workflow:write')
-  } catch {
-    return false
-  }
+  return hasPermission('workflow:write')
 }
 
 // intent_keywords 省略 = 保持该行已有词表；null = 清除覆盖回落代码默认。
@@ -119,11 +102,8 @@ export function updateWorkflowConfig(
   workflowId: string,
   payload: WorkflowConfigPayload,
 ): Promise<EffectiveWorkflowConfigDto> {
-  const token = workflowToken()
-  const headers: Record<string, string> = {}
-  if (token) headers.Authorization = token.startsWith('Bearer ') ? token : `Bearer ${token}`
   return requestJson<EffectiveWorkflowConfigDto>(
     `/workflow-catalog/workflows/${encodeURIComponent(workflowId)}/config`,
-    { method: 'PUT', headers, body: JSON.stringify(payload) },
+    { method: 'PUT', headers: authHeaders(), body: JSON.stringify(payload) },
   )
 }

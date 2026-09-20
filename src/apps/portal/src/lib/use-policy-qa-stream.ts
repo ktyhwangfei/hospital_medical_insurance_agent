@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { authHeaders, redirectToLogin } from '@/lib/auth'
 import {
   applyContextNeed,
   clearPersistedSessionId,
@@ -114,7 +115,11 @@ const STREAM_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/stream'
 const SESSIONS_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/sessions'
 
 async function fetchJson(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const response = await fetch(url, init)
+  const response = await fetch(url, {
+    ...init,
+    headers: { ...authHeaders(), ...(init?.headers as Record<string, string> | undefined) },
+  })
+  if (response.status === 401) redirectToLogin()
   let data: unknown = null
   try {
     data = await response.json()
@@ -417,7 +422,7 @@ export function usePolicyQAStream(
       try {
       const response = await fetch(STREAM_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           question: text,
           mode,
@@ -428,6 +433,10 @@ export function usePolicyQAStream(
         }),
         signal: controller.signal,
       })
+        if (response.status === 401) {
+          redirectToLogin()
+          throw new Error('登录已过期，请重新登录')
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         if (!response.body) throw new Error('浏览器不支持流式响应')
 

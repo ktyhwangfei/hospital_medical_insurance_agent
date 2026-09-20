@@ -1,6 +1,7 @@
 import { expect, Page, test } from '@playwright/test';
 
 import { SkillCatalogPage } from '../../pages/portal/skill-catalog.page';
+import { seedPortalSession } from '../../utils/portal-session';
 
 const API_PREFIX = '/api/v1/medical-insurance-ai-agent';
 const CONFIG = {
@@ -109,6 +110,10 @@ async function mockAuthoringAPI(page: Page): Promise<void> {
 }
 
 test.describe('Skill AI 创作主链路', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedPortalSession(page);
+  });
+
   test('从已发布指标生成草稿，人工接受、优化、校验并评测候选版本', async ({ page }) => {
     await mockAuthoringAPI(page);
     const skills = new SkillCatalogPage(page);

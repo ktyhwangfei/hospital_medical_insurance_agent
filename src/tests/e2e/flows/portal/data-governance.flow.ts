@@ -1,6 +1,7 @@
 import { expect, test, type Route } from '@playwright/test';
 
 import { DataGovernancePage } from '../../pages/portal/data-governance.page';
+import { seedPortalSession } from '../../utils/portal-session';
 
 const secret = 'e2e-sqlserver-password';
 const source = {
@@ -25,6 +26,7 @@ async function respond(route: Route, result: unknown, status = 200): Promise<voi
 }
 
 test.beforeEach(async ({ page }) => {
+  await seedPortalSession(page);
   sources = [];
   capturedPassword = undefined;
   job = {

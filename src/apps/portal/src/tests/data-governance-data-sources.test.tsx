@@ -88,8 +88,13 @@ describe('数据源配置', () => {
   })
 
   it('只读用户看得到状态但没有写操作', async () => {
-    const payload = btoa(JSON.stringify({ permissions: ['data_governance:read'] }))
-    sessionStorage.setItem('data-governance-token', `header.${payload}.signature`)
+    // Issue #75：统一 portal-token，payload 主体为标准 sub claim（对齐后端签发格式）
+    const payload = btoa(JSON.stringify({
+      sub: 'governance-reader',
+      permissions: ['data_governance:read'],
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }))
+    sessionStorage.setItem('portal-token', `header.${payload}.signature`)
     vi.mocked(listDataSources).mockResolvedValue([source])
 
     render(<DataSourcesPage />)

@@ -31,7 +31,7 @@ from src.domain.governed_flow.models import (
     FLOW_CALLER_ROLE_LEVELS,
     PermissionLevel,
 )
-from src.gateway.auth import authenticator
+from src.runtime.api.auth_deps import resolve_principal
 from src.domain.governed_flow.validation import FlowValidationReport
 from src.runtime.flow.flow_query_service import (
     FlowConsumeAmbiguousError,
@@ -41,6 +41,7 @@ from src.runtime.flow.flow_query_service import (
     FlowQueryService,
 )
 from src.runtime.flow.flow_service import FlowGovernanceService, FlowPublishBlockedError
+from src.security.audit.governance_audit import record_governance_action
 from src.shared.schemas.responses import error_detail
 
 logger = logging.getLogger(__name__)
@@ -69,29 +70,13 @@ def get_flow_caller_role(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> str | None:
     """校验 flow:read 后从签名主体读取查询角色。"""
-    if not authorization:
-        raise HTTPException(
-            status_code=401,
-            detail=error_detail("AUTH_REQUIRED", "缺少 Authorization 凭据"),
-        )
-    auth = authenticator.validate_signed_token(authorization)
-    if not auth.is_success:
-        raise HTTPException(
-            status_code=401,
-            detail=error_detail("AUTH_INVALID", auth.error_message or "登录凭据无效"),
-        )
-    permitted = authenticator.check_permission(auth, "flow:read")
-    if not permitted.is_success:
-        raise HTTPException(
-            status_code=403,
-            detail=error_detail("AUTH_FORBIDDEN", "权限不足"),
-        )
+    principal = resolve_principal("flow:read", authorization)
     # 多角色主体按最高已声明级别取值；未知角色不会获得权限。
     detail_roles = {
         role for role, level in FLOW_CALLER_ROLE_LEVELS.items()
         if level is PermissionLevel.DETAIL
     }
-    return next((role for role in auth.roles if role in detail_roles), None)
+    return next((role for role in principal.roles if role in detail_roles), None)
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -243,15 +228,7 @@ def get_flow_writer(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> str:
     """发布/回滚等治理写操作：验签 + 从主体取操作人（禁止自报 published_by）。"""
-    if not authorization:
-        raise HTTPException(status_code=401, detail=error_detail("AUTH_REQUIRED", "缺少 Authorization 凭据"))
-    auth = authenticator.validate_signed_token(authorization)
-    if not auth.is_success:
-        raise HTTPException(status_code=401, detail=error_detail("AUTH_INVALID", auth.error_message or "登录凭据无效"))
-    permitted = authenticator.check_permission(auth, "data_governance:write")
-    if not permitted.is_success:
-        raise HTTPException(status_code=403, detail=error_detail("AUTH_FORBIDDEN", "权限不足"))
-    return auth.user_id
+    return resolve_principal("data_governance:write", authorization).user_id
 
 
 @router.post("/{flow_id}/publish", status_code=201)
@@ -262,9 +239,17 @@ def publish_flow(
     service: FlowGovernanceService = Depends(get_flow_service),
 ) -> FlowPublishedRevision:
     try:
-        return service.publish_flow(flow_id, operator)
+        revision = service.publish_flow(flow_id, operator)
     except Exception as exc:
         raise _http_error(exc) from exc
+    record_governance_action(
+        user_id=operator,
+        roles=[],
+        action="flow.publish",
+        target_ref=f"flow_id={flow_id}",
+        request_path=f"/api/v1/medical-insurance-ai-agent/flow/{flow_id}/publish",
+    )
+    return revision
 
 
 @router.post("/{flow_id}/rollback")

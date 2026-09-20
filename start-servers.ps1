@@ -146,6 +146,10 @@ if (-not $env:NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN) {
     $jwtHmac.Dispose()
     $env:NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN = "$jwtHeader.$jwtPayload.$jwtSignature"
 }
+# Issue #75：门户登录与授权 — dev 种子账号（登录页可用，幂等初始化，仅插入不存在的账号）
+if (-not $env:PORTAL_SEED_ACCOUNTS) {
+    $env:PORTAL_SEED_ACCOUNTS = '[{"username":"admin","password":"Admin@123456","role":"admin"},{"username":"reviewer","password":"Reviewer@123456","role":"reviewer"}]'
+}
 if (-not $env:NEXT_PUBLIC_WORKFLOW_TOKEN) {
     $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
     $jwtPayloadJson = @{ sub = "portal-dev-workflow"; roles = @("information_department"); permissions = @("workflow:read", "workflow:write"); exp = [DateTimeOffset]::UtcNow.AddHours(24).ToUnixTimeSeconds() } | ConvertTo-Json -Compress

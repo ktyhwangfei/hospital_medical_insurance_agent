@@ -2,6 +2,7 @@
 // DTO 字段与后端 src/domain/ops_analytics/models.py 逐字段对齐（snake_case 直传）。
 // 鉴权与 /ops 同一 token（ops:read 权限同一签名 JWT）。
 import { requestJson } from './api-client'
+import { authHeaders, getToken } from '@/lib/auth'
 
 // ── 枚举白名单（与后端冻结值一致，勿单侧扩充）──
 
@@ -113,22 +114,17 @@ export interface OpsWeeklyReportDto {
   data_batch_ids: string[]
 }
 
-// ── 鉴权（与 ops-api 同 token：ops:read 同一签名 JWT）──
+// ── 鉴权（统一走 portal-token，Issue #75；ops:read 与 /ops 同一签名 JWT）──
 
 function opsToken(): string | null {
-  if (typeof window !== 'undefined') {
-    const token = window.sessionStorage.getItem('ops-token')
-    if (token) return token
-  }
-  return process.env.NODE_ENV === 'production'
-    ? null
-    : process.env.NEXT_PUBLIC_OPS_TOKEN || null
+  return getToken()
 }
 
 async function opsAnalyticsRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers)
-  const token = opsToken()
-  if (token) headers.set('Authorization', token.startsWith('Bearer ') ? token : `Bearer ${token}`)
+  const headers = new Headers(authHeaders())
+  if (init?.headers) {
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value))
+  }
   return requestJson<T>(`/ops-analytics${path}`, { ...init, headers })
 }
 

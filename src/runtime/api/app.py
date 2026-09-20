@@ -31,6 +31,7 @@ from src.runtime.api.question_library_routes import router as question_library_r
 from src.runtime.api.ops_analytics_routes import router as ops_analytics_router
 from src.runtime.api.tool_workflow_routes import router as tool_workflow_router
 from src.runtime.api.data_catalog_routes import router as data_catalog_router
+from src.runtime.api.auth_routes import router as portal_auth_router
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(question_library_router)
     app.include_router(ops_analytics_router)
     app.include_router(tool_workflow_router)
+    app.include_router(portal_auth_router)
     app.include_router(data_catalog_router, prefix='/api/v1/medical-insurance-ai-agent')
     print("[STARTUP] create_app: 完成", flush=True)
     return app

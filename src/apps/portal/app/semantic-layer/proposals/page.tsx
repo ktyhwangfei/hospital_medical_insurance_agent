@@ -10,6 +10,7 @@ import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from
 import { Input } from '@/components/ui/input'
 import {
   acceptSemanticProposal,
+  hasSemanticReviewPermission,
   listSemanticProposals,
   previewDatabaseEvidence,
   publishSemanticProposal,
@@ -198,6 +199,7 @@ interface ProposalCardProps {
   pending: boolean
   rejecting: boolean
   rejectReason: string
+  canReview: boolean
   onToggle: () => void
   onAccept: () => void
   onRejectStart: () => void
@@ -218,6 +220,7 @@ function ProposalCard({
   pending,
   rejecting,
   rejectReason,
+  canReview,
   onToggle,
   onAccept,
   onRejectStart,
@@ -233,6 +236,7 @@ function ProposalCard({
   const [resolutionReason, setResolutionReason] = useState('')
   const label = proposalLabel(proposal)
   const terminal = ['published', 'rejected', 'stale', 'superseded'].includes(proposal.status)
+  const reviewBlockedTitle = canReview ? undefined : '缺少 semantic:review 权限，请联系管理员'
   const evidenceSummary = proposal.evidence[0]?.excerpt
     ?? proposal.value_draft?.evidence
     ?? '已记录结构化来源证据'
@@ -320,7 +324,8 @@ function ProposalCard({
                 variant="destructive"
                 size="sm"
                 aria-label={`确认驳回 ${label}`}
-                disabled={pending || !rejectReason.trim()}
+                disabled={pending || !rejectReason.trim() || !canReview}
+                title={reviewBlockedTitle}
                 onClick={onReject}
               >
                 确认驳回
@@ -361,7 +366,8 @@ function ProposalCard({
               type="button"
               className="justify-self-end"
               aria-label={`提交建模结论 ${label}`}
-              disabled={pending || !conclusion || (conclusion === 'new_dimension' && (!suggestedName.trim() || !suggestedCode.trim()))}
+              disabled={pending || !conclusion || (conclusion === 'new_dimension' && (!suggestedName.trim() || !suggestedCode.trim())) || !canReview}
+              title={reviewBlockedTitle}
               onClick={() => conclusion && onResolve(conclusion, suggestedName, suggestedCode, resolutionReason)}
             >
               {pending ? '处理中…' : '提交建模结论'}
@@ -369,8 +375,8 @@ function ProposalCard({
           </CardFooter>
         ) : (
           <CardFooter className="justify-end gap-2">
-            <Button type="button" variant="outline" aria-label={`驳回 ${label}`} onClick={onRejectStart} disabled={pending}>驳回</Button>
-            <Button type="button" aria-label={`${proposal.proposal_type === 'rule_governance' ? '批准变更计划' : '通过并发布'} ${label}`} onClick={onAccept} disabled={pending}>
+            <Button type="button" variant="outline" aria-label={`驳回 ${label}`} onClick={onRejectStart} disabled={pending || !canReview} title={reviewBlockedTitle}>驳回</Button>
+            <Button type="button" aria-label={`${proposal.proposal_type === 'rule_governance' ? '批准变更计划' : '通过并发布'} ${label}`} onClick={onAccept} disabled={pending || !canReview} title={reviewBlockedTitle}>
               {pending ? '处理中…' : proposal.proposal_type === 'rule_governance' ? '批准变更计划' : '通过并发布'}
             </Button>
           </CardFooter>
@@ -399,6 +405,8 @@ export default function SemanticProposalsPage() {
   const [previewEvidence, setPreviewEvidence] = useState<SemanticProposalEvidence[]>([])
   const [previewing, setPreviewing] = useState(false)
   const [previewError, setPreviewError] = useState('')
+  // 后端审核写端点校验 semantic:review；体验层预判禁用+给原因
+  const canReview = hasSemanticReviewPermission()
 
   useEffect(() => {
     let cancelled = false
@@ -463,7 +471,8 @@ export default function SemanticProposalsPage() {
       else next.delete(proposal.proposal_id)
       return next
     })
-    if (!opening || proposal.status !== 'proposed') return
+    // 展开证据触发的转入审核中是写操作：无权限时仅展开，不调用
+    if (!opening || proposal.status !== 'proposed' || !canReview) return
     beginMutation(proposal.proposal_id)
     try {
       await ensureReviewing(proposal)
@@ -648,6 +657,7 @@ export default function SemanticProposalsPage() {
               pending={pendingId === proposal.proposal_id}
               rejecting={rejectingId === proposal.proposal_id}
               rejectReason={rejectingId === proposal.proposal_id ? rejectReason : ''}
+              canReview={canReview}
               onToggle={() => void toggleEvidence(proposal)}
               onAccept={() => void acceptAndPublish(proposal)}
               onRejectStart={() => { setRejectingId(proposal.proposal_id); setRejectReason(''); setActionError('') }}

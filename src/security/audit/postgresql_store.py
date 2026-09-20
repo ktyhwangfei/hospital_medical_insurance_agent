@@ -1,7 +1,10 @@
 import json
+import logging
 from typing import Any
 
 from src.data_platform.storage.postgresql.client import PostgreSQLClient
+
+logger = logging.getLogger(__name__)
 
 
 class PostgreSQLAuditLog:
@@ -15,6 +18,42 @@ class PostgreSQLAuditLog:
 
     def __init__(self, client: PostgreSQLClient):
         self._client = client
+        self._ensured = False
+
+    def ensure_tables(self) -> None:
+        """建表 + 补列（CREATE + ALTER 双写；活库 CREATE IF NOT EXISTS 不重建）。"""
+        self._client.execute("""
+            create table if not exists audit_logs (
+                id serial primary key,
+                event_type varchar(64) not null,
+                workflow_id varchar(128),
+                step_id varchar(128),
+                payload json not null default '{}',
+                -- v3.0 网关审计字段
+                user_id varchar(64),
+                session_id varchar(128),
+                role varchar(32),
+                request_path varchar(512),
+                request_method varchar(16),
+                request_summary jsonb,
+                response_status integer,
+                response_summary jsonb,
+                client_ip varchar(64),
+                user_agent varchar(512),
+                duration_ms integer,
+                -- #75 治理操作审计字段
+                action varchar(128),
+                target_ref varchar(256),
+                created_at timestamptz not null default current_timestamp
+            )
+        """)
+        self._client.execute(
+            "alter table audit_logs add column if not exists action varchar(128)"
+        )
+        self._client.execute(
+            "alter table audit_logs add column if not exists target_ref varchar(256)"
+        )
+        self._ensured = True
 
     def record_event(
         self,
@@ -34,6 +73,9 @@ class PostgreSQLAuditLog:
         client_ip: str | None = None,
         user_agent: str | None = None,
         duration_ms: int | None = None,
+        # #75 治理操作审计字段
+        action: str | None = None,
+        target_ref: str | None = None,
     ) -> dict[str, Any]:
         """Record an audit event.
 
@@ -48,22 +90,27 @@ class PostgreSQLAuditLog:
              user_id, session_id, role,
              request_path, request_method, request_summary,
              response_status, response_summary,
-             client_ip, user_agent, duration_ms)
+             client_ip, user_agent, duration_ms,
+             action, target_ref)
             values (%s, %s, %s, %s,
                     %s, %s, %s,
                     %s, %s, %s,
                     %s, %s,
-                    %s, %s, %s)"""
+                    %s, %s, %s,
+                    %s, %s)"""
         try:
+            if not self._ensured:
+                self.ensure_tables()
             self._client.execute(sql, (
                 event_type, workflow_id, step_id, payload_json,
                 user_id, session_id, role,
                 request_path, request_method, request_summary_json,
                 response_status, response_summary_json,
                 client_ip, user_agent, duration_ms,
+                action, target_ref,
             ))
         except RuntimeError:
-            pass
+            logger.warning("审计写入失败（audit_logs 不可达）", exc_info=True)
         return {
             "event_type": event_type,
             "workflow_id": workflow_id,
@@ -84,7 +131,8 @@ class PostgreSQLAuditLog:
         }
         # v3.0 网关审计字段
         for field in ("user_id", "session_id", "role", "request_path", "request_method",
-                      "response_status", "client_ip", "user_agent", "duration_ms"):
+                      "response_status", "client_ip", "user_agent", "duration_ms",
+                      "action", "target_ref"):
             if row.get(field) is not None:
                 result[field] = row[field]
         for field in ("request_summary", "response_summary"):

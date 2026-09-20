@@ -1,6 +1,7 @@
 // 可信问题库 API 客户端 — issue #37（匹配/审核流/同义运营/冷启动）。
 // DTO 字段与后端 src/runtime/api/question_library_routes.py 逐字段对齐（snake_case 直传）。
 import { requestJson } from './api-client'
+import { authHeaders, getToken, hasPermission } from '@/lib/auth'
 
 export type TrustedQuestionStatusDto = 'draft' | 'published' | 'archived'
 export type QuestionMatchKindDto = 'hit' | 'clarify'
@@ -88,35 +89,21 @@ export interface CreateDraftBody {
   expected_result: Record<string, unknown>
 }
 
-// ── 鉴权（与 ops-api 同模式：sessionStorage → dev 环境变量 token）──
+// ── 鉴权（统一走 portal-token，Issue #75；sessionStorage 旧键与 dev env token 已下线）──
 
 function questionLibraryToken(): string | null {
-  if (typeof window !== 'undefined') {
-    const token = window.sessionStorage.getItem('question-library-token')
-    if (token) return token
-  }
-  return process.env.NODE_ENV === 'production'
-    ? null
-    : process.env.NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN || null
+  return getToken()
 }
 
 export function hasQuestionLibraryPermission(permission: 'read' | 'write'): boolean {
-  const token = questionLibraryToken()
-  if (!token) return process.env.NODE_ENV !== 'production'
-  try {
-    const payload = token.replace(/^Bearer\s+/i, '').split('.')[1]
-    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=')
-    const permissions = JSON.parse(atob(base64)).permissions
-    return Array.isArray(permissions) && permissions.includes(`question_library:${permission}`)
-  } catch {
-    return false
-  }
+  return hasPermission(`question_library:${permission}`)
 }
 
 async function qlibRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers)
-  const token = questionLibraryToken()
-  if (token) headers.set('Authorization', token.startsWith('Bearer ') ? token : `Bearer ${token}`)
+  const headers = new Headers(authHeaders())
+  if (init?.headers) {
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value))
+  }
   return requestJson<T>(`/question-library${path}`, { ...init, headers })
 }
 

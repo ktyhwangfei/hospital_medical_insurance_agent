@@ -81,6 +81,8 @@ from src.runtime.policy_qa.persistence import (
 from src.data_platform.storage.session.factory import session_storage
 from src.runtime.infra_event.context import set_infra_context
 from src.shared.schemas.responses import error_detail
+from src.runtime.api.auth_deps import resolve_principal
+from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
 from src.security.risk_control.service import (
     build_human_confirmation_response,
     detect_blocked_actions,
@@ -133,6 +135,14 @@ from src.runtime.policy_qa.verification_trace import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def require_policy_qa_ask(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> DataGovernancePrincipal:
+    """政策问答主链路鉴权（P1）：需 policy_qa:ask，所有门户角色默认持有。"""
+    return resolve_principal("policy_qa:ask", authorization)
+
 
 MAX_POLICY_QA_ATTEMPTS = 2
 
@@ -2058,6 +2068,7 @@ async def _policy_qa_stream(
 @router.post("/stream")
 async def policy_qa_stream(
     request: PolicyQARequest,
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> StreamingResponse:
     """
     政策问答SSE流式端点
@@ -2100,7 +2111,10 @@ async def policy_qa_stream(
 
 
 @router.post("/test")
-async def policy_qa_test(request: PolicyQARequest) -> dict:
+async def policy_qa_test(
+    request: PolicyQARequest,
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
+) -> dict:
     """
     政策问答测试端点 (非流式)
 
@@ -2134,6 +2148,7 @@ async def policy_qa_test(request: PolicyQARequest) -> dict:
 async def debug_structured_policy_search(
     settlement_id: str,
     target_field: str = "统筹自付",
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> dict:
     """
     调试端点：展示结构化政策规则检索的完整过程。
@@ -2233,6 +2248,7 @@ def verify_policy_qa_answer(
     qa_turn_id: str,
     store: AnswerVerificationTraceStoreDependency,
     port: AnswerVerificationRulePortDependency,
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> QAVerificationOutcome:
     """对一次政策问答回答做答案验证（引用真实性/结论/计算/覆盖，确定性优先）。
 
@@ -2660,6 +2676,7 @@ async def get_settlement_explanation(
     settlement_id: str,
     question: str = "",
     compare_with: str = "",
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> PolicyQAPublicResult:
     """
     GET settlement explanation from REAL DATABASE.
@@ -2891,6 +2908,7 @@ async def list_settlements_by_date_range(
     patient_key: str | None = Query(
         None, description="患者定位键（身份证号或卡号，临时方案）"
     ),
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> list[SettlementListItem]:
     """按结算日期区间列出住院结算单摘要。
 
@@ -2938,6 +2956,7 @@ async def list_settlements_by_date_range(
 @router.get("/patient-lookup", response_model=PatientSummary)
 async def lookup_patient(
     key: str = Query(..., min_length=1, description="身份证号或卡号"),
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> PatientSummary:
     """按身份证号或卡号定位患者，返回脱敏摘要。
 
@@ -2996,6 +3015,7 @@ async def get_qa_history(
     user_id: str | None = Query(None, description="按用户ID过滤（不传则返回全部）"),
     limit: int = Query(50, ge=1, le=500, description="每页条数"),
     offset: int = Query(0, ge=0, description="偏移量"),
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> dict:
     """
     获取政策问答历史记录（含全量 session、workflow、task 数据）。
@@ -3066,6 +3086,7 @@ def _lifecycle_http_error(e: SessionLifecycleError) -> HTTPException:
 def list_qa_sessions(
     user_id: str = Query(default="demo", description="用户ID（SSO 接入后改为认证上下文）"),
     limit: int = Query(50, ge=1, le=200),
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> dict:
     """用户可恢复会话列表（含生命周期状态与轮次摘要）。"""
     try:
@@ -3079,6 +3100,7 @@ def list_qa_sessions(
 def get_qa_session_detail(
     session_id: str,
     user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> dict:
     """会话详情：状态、状态原因、升级工单与回复。"""
     try:
@@ -3094,6 +3116,7 @@ def get_qa_session_detail(
 def get_qa_session_trajectory(
     session_id: str,
     user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> dict:
     """按会话回放全部轮次轨迹快照（Issue #30 §五）。"""
     try:
@@ -3110,6 +3133,7 @@ def suspend_qa_session(
     session_id: str,
     user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
     request: SuspendSessionRequest | None = None,
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> dict:
     """挂起会话（active → suspended）。"""
     reason = (request.reason if request else "") or ""
@@ -3124,6 +3148,7 @@ def suspend_qa_session(
 def resume_qa_session(
     session_id: str,
     user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> dict:
     """恢复挂起会话（suspended → active），响应携带完整轨迹供前端重建。"""
     try:
@@ -3147,6 +3172,7 @@ def escalate_qa_session(
     session_id: str,
     request: EscalateSessionRequest,
     user_id: str = Query(default="demo", description="会话归属用户（所有权校验）"),
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
 ) -> dict:
     """升级问题至医保办（active → escalated，创建人工工单）。"""
     try:
@@ -3163,7 +3189,11 @@ def escalate_qa_session(
 
 
 @router.post("/escalations/{task_id}/resolve")
-def resolve_qa_escalation(task_id: str, request: ResolveEscalationRequest) -> dict:
+def resolve_qa_escalation(
+    task_id: str,
+    request: ResolveEscalationRequest,
+    principal: DataGovernancePrincipal = Depends(require_policy_qa_ask),
+) -> dict:
     """医保办回复升级工单；回填后所属会话恢复 active。"""
     try:
         return session_lifecycle.resolve_escalation(task_id, request.reply, request.resolved_by)

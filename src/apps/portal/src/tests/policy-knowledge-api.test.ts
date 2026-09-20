@@ -124,18 +124,23 @@ describe('policy knowledge api', () => {
     window.sessionStorage.clear()
   })
 
-  it('uses the configured local review token when the browser session has none', async () => {
-    window.sessionStorage.removeItem('semantic-review-token')
-    vi.stubEnv('NODE_ENV', 'development')
-    vi.stubEnv('NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN', 'signed-local-review-token')
+  it('uses the unified portal-token from the browser session', async () => {
+    window.sessionStorage.setItem('portal-token', 'signed-local-review-token')
 
     const init = await semanticReviewRequest()
 
     expect(init.headers).toEqual({ Authorization: 'Bearer signed-local-review-token' })
   })
 
+  it('rejects semantic review requests when no portal-token exists', async () => {
+    await expect(semanticReviewRequest()).rejects.toMatchObject({
+      status: 401,
+      errorCode: 'AUTHENTICATION_REQUIRED',
+    })
+  })
+
   it('authenticates semantic metric updates and adds the expected version only for contract changes', async () => {
-    window.sessionStorage.setItem('semantic-review-token', 'review-token')
+    window.sessionStorage.setItem('portal-token', 'review-token')
     const fetchMock = stubFetchJson({
       status: 'ok', metric_code: 'zcgz.payment_amount', schema_version: 5,
       requires_reextract: true, task_id: 'task-1', task_status: 'pending',
@@ -169,7 +174,7 @@ describe('policy knowledge api', () => {
   })
 
   it('authenticates medical category overrides without sending a client actor', async () => {
-    window.sessionStorage.setItem('semantic-review-token', 'review-token')
+    window.sessionStorage.setItem('portal-token', 'review-token')
     const fetchMock = stubFetchJson({ reset: true })
 
     await setUnitMedType('doc/1', 'unit-1', '门诊')
@@ -194,7 +199,7 @@ describe('policy knowledge api', () => {
   })
 
   it('rejects governed semantic writes when the backend returns forbidden', async () => {
-    window.sessionStorage.setItem('semantic-review-token', 'review-token')
+    window.sessionStorage.setItem('portal-token', 'review-token')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       detail: {
         error_code: 'SEMANTIC_REVIEW_PERMISSION_REQUIRED',

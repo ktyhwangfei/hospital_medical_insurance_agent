@@ -19,6 +19,7 @@ domain/
 ├── common/         # Citation, Role 枚举
 ├── skill/          # Skill, SkillStep, SkillMetadata（Pydantic）
 ├── trusted_qa/     # TrustedQuestion 可信问题（Pydantic，Issue #37）
+├── portal_account/ # PortalAccount, PortalAccountStatus（Issue #75 登录与授权）
 └── tool/           # Tool, ToolOwner, ToolType（Pydantic）
 ```
 
@@ -760,6 +761,10 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 高风险动作 | `HIGH_RISK_ACTIONS` | Value Object | `set` | 需人工确认的高风险操作集合 |
 | 角色 | `Role` | **Value Object** | `StrEnum` | CASHIER / MEDICAL_OFFICE / INFORMATION_DEPARTMENT / MEDICAL_RECORD_STAFF / CLINICIAN |
 | 审计事件 | `AuditEvent` | **Value Object** | Pydantic `BaseModel` | 审计日志的事件结构 |
+| 门户账号 | `PortalAccount` | **Value Object** | frozen dataclass | Issue #75 登录与授权：username/password_hash/role/status，过渡账号体系（SSO 接入前） |
+| 门户账号状态 | `PortalAccountStatus` | **Value Object** | `StrEnum` | active / disabled |
+| 门户密码哈希器 | `PortalPasswordHasher` | **Domain Service** | — | PBKDF2-HMAC-SHA256（stdlib，格式 `pbkdf2$<iter>$<salt>$<hash>`） |
+| 门户角色权限矩阵 | `PORTAL_ROLE_PERMISSIONS` | Value Object | `dict` | 角色 → scope 映射（`src/config/security_policy/portal_roles.py`），admin/governance_admin/ops_admin/knowledge_admin/reviewer/skill_admin |
 
 #### 业务规则
 

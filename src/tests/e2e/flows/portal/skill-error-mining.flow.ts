@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { EvalMiningPage } from '../../pages/portal/eval-mining.page';
+import { seedPortalSession } from '../../utils/portal-session';
 import { PolicyQAPage } from '../../pages/portal/policy-qa.page';
 
 const PREFIX = '/api/v1/medical-insurance-ai-agent';
@@ -130,6 +131,10 @@ async function mockConfirm(page: Page): Promise<void> {
 }
 
 test.describe('Skill 错误挖掘主链路（mock API）', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedPortalSession(page);
+  });
+
   test('用户反馈 → 入池 → 案例分型编辑 → 确认投影', async ({ page }) => {
     await mockPolicyQAStream(page, 'qat_e2e');
     await mockFeedback(page);

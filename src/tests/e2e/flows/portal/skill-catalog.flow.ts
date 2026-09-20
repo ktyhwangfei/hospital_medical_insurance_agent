@@ -1,11 +1,16 @@
 import { expect, test } from '@playwright/test';
 
 import { SkillCatalogPage } from '../../pages/portal/skill-catalog.page';
+import { seedPortalSession } from '../../utils/portal-session';
 
 const SKILL_ID = 'settlement_explain_skill';
 
 test.describe('Skill 日常治理工作台', () => {
   test.describe.configure({ mode: 'serial' });
+
+  test.beforeEach(async ({ page }) => {
+    await seedPortalSession(page);
+  });
 
   test('从当前事实推进到人工复审和 Test Shadow', async ({ page }) => {
     const workbench = new SkillCatalogPage(page);

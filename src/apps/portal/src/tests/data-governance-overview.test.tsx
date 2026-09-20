@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DataGovernanceLayout from '../../app/data-governance/(manage)/layout'
 import DataGovernanceOverviewPage from '../../app/data-governance/(manage)/page'
 import { LayoutShell } from '../../app/layout'
+import { AuthProvider } from '@/components/auth-provider'
 import { getDataGovernanceOverview, type DataGovernanceOverview } from '@/lib/data-governance-api'
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/data-governance' }))
@@ -127,7 +128,7 @@ describe('数据治理运行概览', () => {
   })
 
   it('顶级侧栏提供数据治理入口', () => {
-    render(<LayoutShell><h1>测试页</h1></LayoutShell>)
+    render(<AuthProvider><LayoutShell><h1>测试页</h1></LayoutShell></AuthProvider>)
     expect(screen.getByRole('link', { name: '数据治理' })).toHaveAttribute('href', '/data-governance')
   })
 })

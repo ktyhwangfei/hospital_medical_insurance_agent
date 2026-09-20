@@ -6,6 +6,8 @@
  * 另含时段（今天/本周/自定义）日期计算纯函数，可单测。
  */
 
+import { authHeaders, redirectToLogin } from '@/lib/auth'
+
 export interface SettlementListItemDTO {
   settlementId: string
   settlementDate: string
@@ -66,7 +68,13 @@ export async function fetchSettlementsByDateRange(
 ): Promise<SettlementListItemDTO[]> {
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, limit: String(limit) })
   if (patientKey) params.set('patient_key', patientKey)
-  const response = await fetch(`${SETTLEMENTS_URL}?${params.toString()}`)
+  const response = await fetch(`${SETTLEMENTS_URL}?${params.toString()}`, {
+    headers: authHeaders(),
+  })
+  if (response.status === 401) {
+    redirectToLogin()
+    throw new Error('登录已过期，请重新登录')
+  }
   if (!response.ok) {
     throw new Error(`结算单列表查询失败（HTTP ${response.status}）`)
   }
@@ -89,7 +97,13 @@ interface RawPatientSummary {
  */
 export async function fetchPatientLookup(key: string): Promise<PatientSummaryDTO | null> {
   const params = new URLSearchParams({ key })
-  const response = await fetch(`${PATIENT_LOOKUP_URL}?${params.toString()}`)
+  const response = await fetch(`${PATIENT_LOOKUP_URL}?${params.toString()}`, {
+    headers: authHeaders(),
+  })
+  if (response.status === 401) {
+    redirectToLogin()
+    throw new Error('登录已过期，请重新登录')
+  }
   if (response.status === 404) return null
   if (!response.ok) {
     throw new Error(`患者定位失败（HTTP ${response.status}）`)

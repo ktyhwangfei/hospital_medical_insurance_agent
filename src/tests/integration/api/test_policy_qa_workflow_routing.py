@@ -8,6 +8,8 @@ os.environ["USE_MEMORY_STORAGE"] = "1"
 from fastapi.testclient import TestClient
 
 from src.runtime.api.app import create_app
+from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
+from src.runtime.api.policy_qa_routes import require_policy_qa_ask
 
 
 def _sse_events(body: str) -> list[tuple[str, dict]]:
@@ -26,7 +28,11 @@ def _sse_events(body: str) -> list[tuple[str, dict]]:
 
 
 def _client() -> TestClient:
-    return TestClient(create_app())
+    app = create_app()
+    app.dependency_overrides[require_policy_qa_ask] = lambda: DataGovernancePrincipal(
+        user_id="qa-tester", roles=["ops_admin"], permissions=["policy_qa:ask"]
+    )
+    return TestClient(app)
 
 
 def test_refund_question_without_settlement_id_asks_for_clarification():

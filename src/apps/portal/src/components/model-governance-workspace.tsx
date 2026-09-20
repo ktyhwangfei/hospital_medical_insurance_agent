@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { getToken } from '@/lib/auth'
+
 import {
   Dialog,
   DialogClose,
@@ -18,6 +20,7 @@ import {
   getGovernanceAssets,
   getGovernanceReleases,
   getGovernanceVersions,
+  hasModelGovernancePermission,
   probeModelList,
   publishGovernanceDraft,
   requestGovernanceReview,
@@ -248,6 +251,15 @@ export function ModelGovernanceWorkspace() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('overview')
   const [environment, setEnvironment] = useState<GovernanceEnvironment>('dev')
   const [identity, setIdentity] = useState<GovernanceDevIdentity>('editor')
+  // 权限预判（后端 model_governance:write/review/publish 硬裁决；体验层禁用+给原因）
+  const canWrite = hasModelGovernancePermission('write')
+  const canReview = hasModelGovernancePermission('review')
+  const canPublish = hasModelGovernancePermission('publish')
+  const writeBlockedTitle = canWrite ? undefined : '缺少 model_governance:write 权限，请联系管理员'
+  const reviewBlockedTitle = canReview ? undefined : '缺少 model_governance:review 权限，请联系管理员'
+  const publishBlockedTitle = canPublish ? undefined : '缺少 model_governance:publish 权限，请联系管理员'
+  // 审核人视角：已登录（portal token）按 model_governance:review；dev 未登录由身份下拉模拟
+  const isReviewer = getToken() ? canReview : identity === 'reviewer'
   const [assets, setAssets] = useState<GovernanceAssetsResult>(emptyAssets)
   const [releases, setReleases] = useState<GovernanceRelease[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -592,7 +604,7 @@ export function ModelGovernanceWorkspace() {
       {!loading && !error && activeTab !== 'overview' && activeTab !== 'releases' && <div className="min-w-0">
         <div className="mb-4 flex items-center justify-between gap-3">
           <p className="text-sm text-slate-500">基线、工作版本与活动发布按资产合并展示。</p>
-          <button type="button" disabled={busy || (activeTab === 'route_rule' && noRouteModels)} onClick={(event) => openNew(activeTab, event.currentTarget)} className="shrink-0 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 active:translate-y-px disabled:opacity-50">新建{typeLabel[activeTab]}</button>
+          <button type="button" disabled={busy || (activeTab === 'route_rule' && noRouteModels) || !canWrite} title={writeBlockedTitle} onClick={(event) => openNew(activeTab, event.currentTarget)} className="shrink-0 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 active:translate-y-px disabled:opacity-50">新建{typeLabel[activeTab]}</button>
         </div>
         {activeTab === 'route_rule' && noRouteModels && <p className="mb-4 text-sm text-amber-700">请先创建并启用模型，再创建路由规则。</p>}
         {visibleRows.length === 0 ? <p className="rounded bg-slate-50 p-6 text-center text-sm text-slate-500">暂无{typeLabel[activeTab]}资产</p> : <div className="overflow-hidden rounded-lg border border-slate-200">
@@ -612,7 +624,7 @@ export function ModelGovernanceWorkspace() {
       {!loading && !error && activeTab === 'releases' && <div className="space-y-3">
         {releases.length === 0 ? <p className="text-sm text-slate-500">暂无发布记录</p> : releases.map((release) => <article key={release.release_id} className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-4 text-sm">
           <div className="min-w-0"><p className="break-all font-medium">{release.asset_id}</p><p className="break-all font-mono text-xs text-slate-500">{release.version_id}</p></div>
-          <div className="flex items-center gap-2"><span className="text-xs">{release.status === 'active' ? '活动版本' : '历史版本'}</span>{release.status === 'retired' && <button type="button" disabled={busy || identity !== 'editor'} onClick={() => void rollback(release)} className="rounded border border-blue-300 px-2 py-1 text-xs text-blue-700 disabled:opacity-50">回滚</button>}</div>
+          <div className="flex items-center gap-2"><span className="text-xs">{release.status === 'active' ? '活动版本' : '历史版本'}</span>{release.status === 'retired' && <button type="button" disabled={busy || identity !== 'editor' || !canPublish} title={publishBlockedTitle} onClick={() => void rollback(release)} className="rounded border border-blue-300 px-2 py-1 text-xs text-blue-700 disabled:opacity-50">回滚</button>}</div>
         </article>)}
       </div>}
     </div>
@@ -629,14 +641,14 @@ export function ModelGovernanceWorkspace() {
 
           <section aria-labelledby="working-version-title" className="border-t border-slate-200 pt-5">
             <div className="mb-3 flex items-center justify-between gap-3"><h4 id="working-version-title" className="font-semibold text-slate-800">工作版本</h4>{selected?.draft && <span className="text-xs text-slate-500">{statusLabel[selected.draft.status]} · revision {selected.draft.revision}</span>}</div>
-            {selected && !selected.draft ? <button type="button" disabled={busy} onClick={() => void startVersion()} className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">{selected.published ? '新建版本' : '创建首个草稿'}</button> : <AssetForm type={drawerType} form={form} setForm={updateForm} lockedId={Boolean(selected)} publishedModels={routeModels} canProbe={identity === 'editor' && !busy} />}
+            {selected && !selected.draft ? <button type="button" disabled={busy || !canWrite} title={writeBlockedTitle} onClick={() => void startVersion()} className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">{selected.published ? '新建版本' : '创建首个草稿'}</button> : <AssetForm type={drawerType} form={form} setForm={updateForm} lockedId={Boolean(selected)} publishedModels={routeModels} canProbe={identity === 'editor' && !busy && canWrite} />}
             {(!selected || selected.draft) && <div className="mt-4 flex flex-wrap gap-2">
-              <button type="button" disabled={busy || !form.assetId || assetIdInvalid || routeUnavailable} onClick={() => void saveDraft()} className="rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">保存工作版本</button>
-              {selected?.draft?.status === 'editing' && <button type="button" disabled={busy} onClick={() => void changeDraft((draft) => validateGovernanceDraft(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">校验</button>}
-              {selected?.draft?.status === 'validated' && <button type="button" disabled={busy || identity !== 'editor'} onClick={() => void changeDraft((draft) => requestGovernanceReview(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">申请审核</button>}
-              {selected?.draft?.status === 'review_pending' && identity === 'reviewer' && <button type="button" disabled={busy} onClick={() => void changeDraft((draft) => approveGovernanceDraft(draft.draft_id, draft.revision, '开发环境审核通过'))} className="rounded bg-emerald-600 px-3 py-2 text-xs text-white">审核通过</button>}
-              {selected?.draft?.content.asset_type === 'model_profile' && <button type="button" disabled={busy || identity !== 'editor' || modelFormDirty} onClick={() => void testConnection()} className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50">测试连接</button>}
-              {selected?.draft && <button type="button" disabled={busy || selected.draft.status !== 'approved' || identity !== 'editor' || (selected.draft.content.asset_type === 'model_profile' && modelTest?.status !== 'success')} onClick={() => void publish()} className="rounded bg-indigo-600 px-3 py-2 text-xs text-white disabled:opacity-50">发布到{environment}环境</button>}
+              <button type="button" disabled={busy || !form.assetId || assetIdInvalid || routeUnavailable || !canWrite} title={writeBlockedTitle} onClick={() => void saveDraft()} className="rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">保存工作版本</button>
+              {selected?.draft?.status === 'editing' && <button type="button" disabled={busy || !canWrite} title={writeBlockedTitle} onClick={() => void changeDraft((draft) => validateGovernanceDraft(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">校验</button>}
+              {selected?.draft?.status === 'validated' && <button type="button" disabled={busy || identity !== 'editor' || !canWrite} title={writeBlockedTitle} onClick={() => void changeDraft((draft) => requestGovernanceReview(draft.draft_id, draft.revision))} className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700">申请审核</button>}
+              {selected?.draft?.status === 'review_pending' && isReviewer && <button type="button" disabled={busy || !canReview} title={reviewBlockedTitle} onClick={() => void changeDraft((draft) => approveGovernanceDraft(draft.draft_id, draft.revision, '开发环境审核通过'))} className="rounded bg-emerald-600 px-3 py-2 text-xs text-white">审核通过</button>}
+              {selected?.draft?.content.asset_type === 'model_profile' && <button type="button" disabled={busy || identity !== 'editor' || modelFormDirty || !canWrite} title={writeBlockedTitle} onClick={() => void testConnection()} className="rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-50">测试连接</button>}
+              {selected?.draft && <button type="button" disabled={busy || selected.draft.status !== 'approved' || identity !== 'editor' || !canPublish || (selected.draft.content.asset_type === 'model_profile' && modelTest?.status !== 'success')} title={publishBlockedTitle} onClick={() => void publish()} className="rounded bg-indigo-600 px-3 py-2 text-xs text-white disabled:opacity-50">发布到{environment}环境</button>}
             </div>}
             {selected?.draft?.content.asset_type === 'model_profile' && modelFormDirty && <p className="mt-3 text-xs text-amber-700">请先保存模型工作版本，再测试连接。</p>}
             {modelTest && <p role="status" className={`mt-3 rounded p-3 text-xs ${modelTest.status === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{modelTest.safe_message} · {new Date(modelTest.tested_at).toLocaleString('zh-CN')} · {modelTest.latency_ms}ms</p>}
@@ -646,7 +658,7 @@ export function ModelGovernanceWorkspace() {
 
           {selected && <section aria-labelledby="version-history-title" className="border-t border-slate-200 pt-5"><h4 id="version-history-title" className="mb-3 font-semibold text-slate-800">版本历史</h4>{versions.versions.length === 0 ? <p className="text-sm text-slate-500">暂无已发布版本</p> : <div className="space-y-2">{versions.versions.map((version) => {
             const release = versions.releases.find((item) => item.version_id === version.version_id)
-            return <div key={version.version_id} className="flex flex-wrap items-center justify-between gap-2 rounded bg-slate-50 p-3 text-xs"><div><p className="font-medium">版本 {version.version_number} · {release?.status === 'active' ? '活动' : '历史'}</p><p className="mt-1 text-slate-500">{release?.created_by ?? version.created_by} · {new Date(release?.created_at ?? version.created_at).toLocaleString('zh-CN')}</p></div>{release?.status === 'retired' && <button type="button" disabled={busy || identity !== 'editor'} onClick={() => void rollback(release)} className="rounded border border-blue-300 px-2 py-1 text-blue-700">回滚至此版本</button>}</div>
+            return <div key={version.version_id} className="flex flex-wrap items-center justify-between gap-2 rounded bg-slate-50 p-3 text-xs"><div><p className="font-medium">版本 {version.version_number} · {release?.status === 'active' ? '活动' : '历史'}</p><p className="mt-1 text-slate-500">{release?.created_by ?? version.created_by} · {new Date(release?.created_at ?? version.created_at).toLocaleString('zh-CN')}</p></div>{release?.status === 'retired' && <button type="button" disabled={busy || identity !== 'editor' || !canPublish} title={publishBlockedTitle} onClick={() => void rollback(release)} className="rounded border border-blue-300 px-2 py-1 text-blue-700">回滚至此版本</button>}</div>
           })}</div>}</section>}
         </div>
         <DialogFooter className="m-0! flex-row! justify-end rounded-none! border-t border-slate-200 bg-white px-4 py-3 sm:px-5"><DialogClose className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-600">关闭</DialogClose></DialogFooter>

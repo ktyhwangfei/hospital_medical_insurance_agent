@@ -3,8 +3,13 @@ import { MCPPage } from '../pages/admin/mcp.page';
 import { KnowledgePage } from '../pages/admin/knowledge.page';
 import { ModelPage } from '../pages/admin/model.page';
 import { SkillsPage } from '../pages/admin/skills.page';
+import { seedPortalSession } from '../utils/portal-session';
 
 test.describe('Admin 冒烟测试', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedPortalSession(page);
+  });
+
   test('MCP 管理页面加载', async ({ page }) => {
     const mcpPage = new MCPPage(page);
     await mcpPage.goto();

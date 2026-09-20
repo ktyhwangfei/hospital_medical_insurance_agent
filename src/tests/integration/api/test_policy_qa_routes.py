@@ -8,6 +8,9 @@ import json
 import os
 import pytest
 
+from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
+from src.runtime.api.policy_qa_routes import require_policy_qa_ask
+
 # 设置使用内存存储
 os.environ["USE_MEMORY_STORAGE"] = "1"
 
@@ -81,8 +84,11 @@ def test_pre_refund_draft_is_not_exposed_by_policy_qa_api():
 
 @pytest.fixture
 def client():
-    """创建测试客户端"""
+    """创建测试客户端（P1 鉴权后：注入 policy_qa:ask 测试主体）"""
     app = create_app()
+    app.dependency_overrides[require_policy_qa_ask] = lambda: DataGovernancePrincipal(
+        user_id="qa-tester", roles=["ops_admin"], permissions=["policy_qa:ask"]
+    )
     return TestClient(app)
 
 

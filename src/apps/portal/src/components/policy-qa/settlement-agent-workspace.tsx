@@ -15,6 +15,7 @@ import SettlementResultBlock from '@/components/policy-qa/settlement-result-bloc
 import SettlementTimeBrowser from '@/components/policy-qa/settlement-time-browser'
 import { toPolicyQAResult, type PolicyQAResult } from '@/lib/policy-qa-stream'
 import { parsePolicyQACommand } from '@/lib/policy-qa-session'
+import { authHeaders, redirectToLogin } from '@/lib/auth'
 import { usePolicyQAStream } from '@/lib/use-policy-qa-stream'
 
 /**
@@ -28,7 +29,13 @@ const EXPLANATION_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/settlement
 
 async function fetchSettlementExplanation(settlementId: string): Promise<PolicyQAResult> {
   const params = new URLSearchParams({ settlement_id: settlementId })
-  const response = await fetch(`${EXPLANATION_URL}?${params.toString()}`)
+  const response = await fetch(`${EXPLANATION_URL}?${params.toString()}`, {
+    headers: authHeaders(),
+  })
+  if (response.status === 401) {
+    redirectToLogin()
+    throw new Error('登录已过期，请重新登录')
+  }
   if (!response.ok) {
     throw new Error(`结算解释查询失败（HTTP ${response.status}）`)
   }

@@ -89,10 +89,11 @@ export function PreviewPanel({ artifact, loading, onRefresh }: {
   )
 }
 
-export function RevisionsPanel({ revisions, onRollback, rollbackBusy }: {
+export function RevisionsPanel({ revisions, onRollback, rollbackBusy, canRollback = true }: {
   revisions: FlowRevisionViewDto[]
   onRollback: (revisionId: string) => void
   rollbackBusy: string | null
+  canRollback?: boolean
 }) {
   if (revisions.length === 0) {
     return <p className="px-1 py-2 text-xs text-slate-500">尚无发布修订；发布后此处出现不可变证据链。</p>
@@ -117,7 +118,8 @@ export function RevisionsPanel({ revisions, onRollback, rollbackBusy }: {
           </div>
           {!is_active && (
             <button type="button" onClick={() => onRollback(revision.revision_id)}
-              disabled={rollbackBusy === revision.revision_id}
+              disabled={rollbackBusy === revision.revision_id || !canRollback}
+              title={canRollback ? undefined : '缺少 data_governance:write 权限，请联系管理员'}
               className="inline-flex shrink-0 items-center gap-1 rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-700 transition-colors hover:border-slate-500 disabled:opacity-40">
               {rollbackBusy === revision.revision_id ? <Loader2 className="size-3 animate-spin" /> : <Undo2 className="size-3" />}
               回滚到此版

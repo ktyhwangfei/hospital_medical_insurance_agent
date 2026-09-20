@@ -18,7 +18,7 @@ function jsonResponse(body: unknown, status = 200) {
 describe('semantic governance writers', () => {
   beforeEach(() => {
     sessionStorage.clear()
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     vi.stubGlobal('alert', vi.fn())
   })
 

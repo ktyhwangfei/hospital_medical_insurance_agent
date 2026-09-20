@@ -14,6 +14,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.runtime.api.app import create_app
+from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
+from src.runtime.api.policy_qa_routes import require_policy_qa_ask
 from src.tests.integration.api.test_policy_qa_routes import (
     safe_policy_qa_dependencies,  # noqa: F401
 )
@@ -21,9 +23,18 @@ from src.tests.integration.api.test_policy_qa_routes import (
 API = "/api/v1/medical-insurance-ai-agent/policy-qa"
 
 
+def _authed_app():
+    """P1 鉴权后：注入 policy_qa:ask 测试主体的应用实例。"""
+    app = create_app()
+    app.dependency_overrides[require_policy_qa_ask] = lambda: DataGovernancePrincipal(
+        user_id="qa-tester", roles=["ops_admin"], permissions=["policy_qa:ask"]
+    )
+    return app
+
+
 @pytest.fixture
 def client():
-    return TestClient(create_app())
+    return TestClient(_authed_app())
 
 
 def _ask(client, sid, question, settlement_id="S123456789"):
@@ -63,7 +74,7 @@ def test_trajectory_suspend_escalation_full_flow(client, safe_policy_qa_dependen
     assert "result" in turn2
 
     # ── 第二幕：刷新重建 —— 新客户端仅凭 session_id 从轨迹恢复完整对话 ──
-    fresh_client = TestClient(create_app())
+    fresh_client = TestClient(_authed_app())
     traj = fresh_client.get(f"{API}/sessions/{sid}/trajectory", params={"user_id": "demo"})
     assert traj.status_code == 200
     turns = traj.json()["turns"]

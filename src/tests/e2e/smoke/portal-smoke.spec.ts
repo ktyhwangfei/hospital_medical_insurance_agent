@@ -1,7 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { PolicyQAPage } from '../pages/portal/policy-qa.page';
+import { seedPortalSession } from '../utils/portal-session';
 
 test.describe('Portal 冒烟测试', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedPortalSession(page);
+  });
+
   test('根路径进入唯一业务入口 policy-qa', async ({ page }) => {
     await page.goto('/');
     await expect(page).toHaveURL(/\/policy-qa$/);

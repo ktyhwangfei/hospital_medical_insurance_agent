@@ -1,4 +1,5 @@
 import { requestJson } from './api-client'
+import { getToken, hasPermission } from '@/lib/auth'
 
 export type PromptSourceKind = 'code' | 'yaml' | 'dynamic'
 export type GatewayStatus = 'routed' | 'direct' | 'unknown'
@@ -282,11 +283,20 @@ export function selectGovernanceDevIdentity(identity: GovernanceDevIdentity): vo
 function modelGovernanceHeaders(): HeadersInit {
   const headers: Record<string, string> = {}
   if (typeof window !== 'undefined') {
-    const token = window.sessionStorage.getItem('model-governance-token')
+    // Issue #75：portal-token 登录态优先；dev 身份下拉写入的旧键与 dev 假 token 兜底保留（D8）
+    const token = getToken()
+      ?? window.sessionStorage.getItem('model-governance-token')
       ?? (process.env.NODE_ENV !== 'production' ? devToken('editor') : null)
     if (token) headers.Authorization = `Bearer ${token}`
   }
   return headers
+}
+
+// 治理写/审/发权限预判（后端按 model_governance:write/review/publish 硬裁决；体验层禁用）
+export function hasModelGovernancePermission(
+  permission: 'write' | 'review' | 'publish',
+): boolean {
+  return hasPermission(`model_governance:${permission}`)
 }
 
 export async function getModelGovernanceSnapshot(): Promise<ModelGovernanceSnapshot> {

@@ -1,3 +1,5 @@
+import { authHeaders, hasPermission } from '@/lib/auth'
+
 const WORKBENCH_API = '/api/v1/medical-insurance-ai-agent/policy-workbench'
 const ALIGNMENT_API = '/api/v1/medical-insurance-ai-agent/semantic/alignment'
 const SEMANTIC_PROPOSALS_API = `${ALIGNMENT_API}/proposals`
@@ -295,19 +297,17 @@ const json = (method: string, body?: unknown): RequestInit => ({
   ...(body === undefined ? {} : { body: JSON.stringify(body) }),
 })
 
+// 语义审核写权限（后端 semantic_alignment 路由校验 semantic:review；体验层预判）
+export function hasSemanticReviewPermission(): boolean {
+  return hasPermission('semantic:review')
+}
+
 export async function semanticReviewRequest(method = 'GET', body?: unknown): Promise<RequestInit> {
-  const sessionToken = typeof window === 'undefined'
-    ? null
-    : window.sessionStorage.getItem('semantic-review-token')?.trim()
-  const token = sessionToken || (process.env.NODE_ENV !== 'production'
-    ? process.env.NEXT_PUBLIC_SEMANTIC_REVIEW_TOKEN?.trim()
-    : null)
-  if (!token) {
+  const auth = authHeaders()
+  if (!auth.Authorization) {
     throw new PolicyKnowledgeApiError('缺少语义审核登录凭证', 401, 'AUTHENTICATION_REQUIRED', {})
   }
-  const headers: Record<string, string> = {
-    Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
-  }
+  const headers: Record<string, string> = { Authorization: auth.Authorization }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   return {
     method,

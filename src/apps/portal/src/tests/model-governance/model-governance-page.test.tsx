@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ModelGovernancePage from '../../../app/model-governance/page'
 import { LayoutShell, useRoleContext } from '../../../app/layout'
+import { AuthProvider } from '@/components/auth-provider'
 import {
   approveGovernanceDraft,
   createGovernanceDraft,
@@ -711,7 +712,7 @@ describe('模型治理资产中心', () => {
 
   it('侧栏向所有角色提供底部后台管理入口', () => {
     vi.mocked(useRoleContext).mockReturnValue({ currentRole: 'cashier', setCurrentRole: vi.fn() })
-    render(<LayoutShell><div>页面内容</div></LayoutShell>)
+    render(<AuthProvider><LayoutShell><div>页面内容</div></LayoutShell></AuthProvider>)
     const adminLink = screen.getByRole('link', { name: '后台管理' })
     expect(adminLink).toHaveAttribute('href', '/model-governance')
     const adminNav = adminLink.closest('nav')

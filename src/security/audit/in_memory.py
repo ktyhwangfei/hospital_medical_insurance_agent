@@ -10,6 +10,12 @@ class InMemoryAuditLog:
         self.records.append(event)
         return event
 
+    def record_event(self, event_type: str, **kwargs: Any) -> dict[str, Any]:
+        """PostgreSQLAuditLog.record_event 的内存对齐（#75 治理审计可用内存存储测试）。"""
+        event = {'event_type': event_type, **kwargs}
+        self.records.append(event)
+        return event
+
     def by_workflow(self, workflow_id: str) -> list[dict[str, Any]]:
         return [record for record in self.records if record.get('workflow_id') == workflow_id]
 

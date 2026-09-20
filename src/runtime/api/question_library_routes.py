@@ -33,9 +33,10 @@ from src.domain.question_library.models import (
     TrustedQuestionPage,
     TrustedQuestionStatus,
 )
-from src.gateway.auth import authenticator
+from src.runtime.api.auth_deps import resolve_principal
 from src.runtime.api.data_governance_schemas import DataGovernancePrincipal
 from src.runtime.question_library.service import QuestionLibraryService
+from src.security.audit.governance_audit import record_governance_action
 from src.shared.schemas.responses import error_detail
 
 router = APIRouter(
@@ -102,28 +103,7 @@ def get_question_library_service() -> QuestionLibraryService:
 
 
 def _require_permission(permission: str, authorization: str | None):
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_detail("AUTH_REQUIRED", "缺少 Authorization 凭据"),
-        )
-    auth = authenticator.validate_signed_token(authorization)
-    if not auth.is_success or not auth.user_id.strip():
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_detail("AUTH_INVALID", auth.error_message or "登录凭据无效"),
-        )
-    permitted = authenticator.check_permission(auth, permission)
-    if not permitted.is_success:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=error_detail("AUTH_FORBIDDEN", "权限不足"),
-        )
-    return DataGovernancePrincipal(
-        user_id=auth.user_id,
-        roles=auth.roles,
-        permissions=auth.permissions,
-    )
+    return resolve_principal(permission, authorization)
 
 
 def require_question_library_read(
@@ -149,7 +129,8 @@ class CreateDraftRequest(TrustedQuestionDraft):
 
 class ReviewRequest(BaseModel):
     approve: bool
-    reviewer: str = Field(min_length=1, max_length=128)
+    # 废弃自报字段：审核人改从认证主体取（对齐 flow 发布 published_by 先例，#75）
+    reviewer: str | None = Field(default=None, max_length=128)
     reason: str | None = Field(default=None, max_length=500)
     expected_revision: int = Field(ge=1)
 
@@ -251,7 +232,7 @@ def review_question(
         question = service.review(
             question_id,
             approve=request.approve,
-            reviewer=request.reviewer,
+            reviewer=principal.user_id,
             expected_revision=request.expected_revision,
         )
     except (TrustedQuestionNotFoundError, InvalidQuestionTransitionError, QuestionRevisionConflictError) as exc:
@@ -261,6 +242,13 @@ def review_question(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=error_detail("QUESTION_REVIEW_INVALID", str(exc)),
         )
+    record_governance_action(
+        user_id=principal.user_id,
+        roles=principal.roles,
+        action="question.review",
+        target_ref=f"question_id={question_id}",
+        request_path=f"/api/v1/medical-insurance-ai-agent/question-library/questions/{question_id}/review",
+    )
     return {"question_id": question.question_id, "status": question.status.value, "version": question.version}
 
 

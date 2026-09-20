@@ -220,7 +220,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('renders all proposal types in one unified list with type badges', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     installFetch()
     render(<SemanticProposalsPage />)
 
@@ -236,7 +236,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('filters the unified list by proposal type', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     installFetch()
     render(<SemanticProposalsPage />)
 
@@ -252,7 +252,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('shows conflict evidence and submits a dimension modeling conclusion', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     const fetchMock = installFetch()
     render(<SemanticProposalsPage />)
 
@@ -276,7 +276,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('shows bjyb field candidates and explicit rejection reasons', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     installFetch()
     render(<SemanticProposalsPage />)
 
@@ -289,7 +289,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('previews database evidence without an existing proposal and can show history', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     const fetchMock = installFetch(METRIC, VALUE, { ...DIMENSION, status: 'published' })
     render(<SemanticProposalsPage />)
 
@@ -315,7 +315,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('marks a proposed item as reviewing when evidence is expanded', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     const fetchMock = installFetch()
     render(<SemanticProposalsPage />)
 
@@ -333,7 +333,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('accepts then publishes in one reviewer action', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     const fetchMock = installFetch({ ...METRIC, status: 'reviewing' })
     render(<SemanticProposalsPage />)
 
@@ -350,7 +350,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('requires a nonblank rejection reason and submits the trimmed value', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     const fetchMock = installFetch({ ...METRIC, status: 'reviewing' })
     render(<SemanticProposalsPage />)
 
@@ -368,7 +368,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('shows loading then an empty state', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     const resolvers: Array<(value: Response) => void> = []
     const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { resolvers.push(resolve) }))
     vi.stubGlobal('fetch', fetchMock)
@@ -380,7 +380,7 @@ describe('SemanticProposalsPage', () => {
   })
 
   it('shows an actionable load error', async () => {
-    sessionStorage.setItem('semantic-review-token', 'review-token')
+    sessionStorage.setItem('portal-token', 'review-token')
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('网络不可用')))
     render(<SemanticProposalsPage />)
     expect(await screen.findByRole('alert')).toHaveTextContent('网络不可用')

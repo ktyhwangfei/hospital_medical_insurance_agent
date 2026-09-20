@@ -21,7 +21,9 @@ import {
   Boxes,
 } from 'lucide-react'
 import { ApiProvider, useApiContext } from '@/lib/api-context'
+import { AuthProvider } from '@/components/auth-provider'
 import RoleSwitcher from '@/components/role-switcher'
+import { UserMenu } from '@/components/user-menu'
 import type { RoleId } from '@/lib/types'
 import './globals.css'
 
@@ -312,6 +314,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
             </div>
             <div className="flex shrink-0 items-center gap-2 sm:gap-3">
               <ConnectionBadge />
+              <UserMenu />
               <RoleSwitcher currentRole={currentRole} onRoleChange={setCurrentRole} />
             </div>
           </header>
@@ -331,7 +334,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="zh-CN" className={`${notoSansSC.variable} ${jetbrainsMono.variable}`}>
       <body className={`${notoSansSC.className} antialiased`}>
         <ApiProvider>
-          <LayoutShell>{children}</LayoutShell>
+          <AuthProvider>
+            <LayoutShell>{children}</LayoutShell>
+          </AuthProvider>
         </ApiProvider>
       </body>
     </html>

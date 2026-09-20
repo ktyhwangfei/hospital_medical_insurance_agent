@@ -15,7 +15,7 @@ from src.data_platform.storage.postgresql.outpatient_governance_store import (
     OutpatientGovernanceStore,
 )
 from src.data_platform.storage.postgresql.outpatient_store import OutpatientPostgresStore
-from src.gateway.auth import authenticator
+from src.runtime.api.auth_deps import resolve_principal
 from src.runtime.api.data_governance_schemas import (
     CdcProbeResponse,
     CdcProbeResult,
@@ -86,28 +86,7 @@ def get_data_governance_service() -> DataGovernanceService:
 
 
 def _require_permission(permission: str, authorization: str | None) -> DataGovernancePrincipal:
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_detail("AUTH_REQUIRED", "缺少 Authorization 凭据"),
-        )
-    auth = authenticator.validate_signed_token(authorization)
-    if not auth.is_success or not auth.user_id.strip():
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_detail("AUTH_INVALID", auth.error_message or "登录凭据无效"),
-        )
-    permitted = authenticator.check_permission(auth, permission)
-    if not permitted.is_success:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=error_detail("AUTH_FORBIDDEN", "权限不足"),
-        )
-    return DataGovernancePrincipal(
-        user_id=auth.user_id,
-        roles=auth.roles,
-        permissions=auth.permissions,
-    )
+    return resolve_principal(permission, authorization)
 
 
 def require_data_governance_read(
