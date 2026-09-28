@@ -1,0 +1,25 @@
+{
+  "datasource": "bjybdb",
+  "hospital_code": "01110003",
+  "filter": "P_FundType='3'（城镇职工） AND T_CureType='11'（普通门诊）",
+  "rounding_mode_assumed": "round_half_up",
+  "candidate_calibers": {
+    "accumulation_caliber_confirmed": "TB_FeeIn/TB_BigPay 交易前口径（决策记录 D3/D4/D5，待签核）",
+    "derive_eligibility_from_codes": "公疗/军残/退休补充资格由院内码表列派生（决策记录 D6/D7/D8，待签核）"
+  },
+  "verdict_basis": "仅内核独立重算字段（independent_recalculation）；账面内部核对单列",
+  "total_trades": 81,
+  "verdict_counts": {
+    "准确": 78,
+    "不可用": 3
+  },
+  "accuracy_all": 0.9629629629629629,
+  "accuracy_decidable": 1.0,
+  "decidable_trades": 78,
+  "book_internal_mismatch_trades": 20,
+  "note": "detail_aggregation/identity_check 的 mismatched 是账面内部一致性信号，不计入 verdict；亚分精度差为源系统明细 4 位小数 vs 交易分位的精度特征。",
+  "uncertainty_histogram": {
+    "UNSUPPORTED_REVERSAL_OR_NEGATIVE": 3,
+    "ACCUMULATION_DERIVED_IN_HOSPITAL": 1
+  }
+}

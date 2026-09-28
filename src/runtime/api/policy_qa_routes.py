@@ -38,6 +38,7 @@ from src.runtime.policy_qa.models import (
 from src.runtime.policy_qa import session_lifecycle
 from src.runtime.policy_qa.session_lifecycle import SessionLifecycleError
 from src.runtime.policy_qa.public_contract import (
+    FeeDecompositionPublic,
     OutpatientAmountCheck,
     OutpatientContextCheck,
     OutpatientFieldExplanation,
@@ -45,6 +46,12 @@ from src.runtime.policy_qa.public_contract import (
     PolicyQAPublicResult,
     VerificationSummary,
 )
+from src.runtime.policy_qa.fee_decomposition.integration import (
+    DecompositionPresentation,
+    maybe_decompose_outpatient,
+    maybe_decompose_special_outpatient,
+)
+from src.runtime.policy_qa.fee_decomposition.public_view import build_public_view_dict
 from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
 from src.runtime.policy_qa.settlement_data_provider import (
     SettlementDataUnavailableError,
@@ -827,6 +834,7 @@ def _build_public_result(
     outpatient_result: dict | None = None,
     action_status: str | None = None,
     deterministic_refusal: str = "",
+    fee_decomposition: DecompositionPresentation | None = None,
 ) -> PolicyQAPublicResult:
     """用字段白名单把内部执行结果重建为唯一公开回答契约。"""
     safe_context = None
@@ -959,6 +967,21 @@ def _build_public_result(
         if str(item or "").strip()
     ]
 
+    # Issue #78：费用分解公开视图（文本字段统一过 _public_text 消毒，金额十进制字符串透传）
+    safe_fee_decomposition = None
+    if fee_decomposition is not None:
+        _fd_view = build_public_view_dict(
+            fee_decomposition.result,
+            summary_text=fee_decomposition.summary_text,
+            summary_source=fee_decomposition.summary_source,
+        )
+        _fd_view["summary_text"] = _public_text(_fd_view["summary_text"])
+        for _fd_field in _fd_view["fields"]:
+            _fd_field["label"] = _public_text(_fd_field["label"])
+        for _fd_uncertainty in _fd_view["uncertainties"]:
+            _fd_uncertainty["message"] = _public_text(_fd_uncertainty["message"])
+        safe_fee_decomposition = FeeDecompositionPublic.model_validate(_fd_view)
+
     answer_text = _sanitize_public_text(answer)
     safe_answer = answer_text.text
     has_meaningful_answer = answer_text.is_publicly_meaningful
@@ -1061,12 +1084,23 @@ def _build_public_result(
         anomalies=safe_anomalies,
         next_actions=safe_next_actions,
         action_status=action_status,
+        fee_decomposition=safe_fee_decomposition,
     )
 
 
 def _looks_like_outpatient_trade_no(settlement_id: str | None) -> bool:
     """当前门诊交易号为不含分隔符的长字母数字串；宽泛问题无 settlement_id 时返回 False。"""
     return bool(settlement_id) and re.fullmatch(r"[A-Za-z0-9]{15,}", settlement_id) is not None
+
+
+def _mentions_special_outpatient(question: str) -> bool:
+    """问题是否指向门诊特殊病（门特）组合（Issue #78 第二流程路由信号）。
+
+    门特登记号 djh 与普通门诊 T_TradeNo 形态不同（短数字 vs 长字母数字），
+    且门特不在 o_Trade/语义层门特对象中；用问题关键词作显式路由信号，
+    不试查表判单号类型（设计 §4 显式映射纪律）。
+    """
+    return any(term in question for term in ("门特", "特殊病", "门诊特殊"))
 
 
 def _enrich_outpatient_question(question: str, context: Any) -> str:
@@ -1322,6 +1356,8 @@ async def _policy_qa_stream(
         skill_id: str | None = None
         prefetched_semantic_results: list[Any] | None = None
         prefetched_settlement_context: Any | None = None
+        # Issue #78 步骤 5：费用分解增强证据（默认关闭，门控见 integration.py；失败返回 None 不阻塞主链路）
+        fee_decomposition: DecompositionPresentation | None = None
         if evaluation_prefix is not None:
             routing_question = evaluation_prefix.rewritten_question
             skill_id = evaluation_prefix.selected_skill_id
@@ -1357,6 +1393,14 @@ async def _policy_qa_stream(
                         routing_question = _enrich_outpatient_question(
                             request.question, routing_context
                         )
+                        # Issue #78 步骤 5：费用分解（算法输入不依赖问题文本，设计 §4；
+                        # 门控未启用或失败时返回 None，公开结果不携带 fee_decomposition）
+                        fee_decomposition = await _loop.run_in_executor(
+                            None,
+                            lambda: maybe_decompose_outpatient(
+                                provider, request.settlement_id, routing_context
+                            ),
+                        )
                         break
                     except SettlementDataUnavailableError:
                         failure_class = "settlement_data_unavailable"
@@ -1373,6 +1417,22 @@ async def _policy_qa_stream(
                             "recovery", "done", "结算数据源暂时不可用，正在重试…"
                         ):
                             yield _ev
+
+        # Issue #78 第二流程（门特）：问题显式指向门诊特殊病且带登记号时尝试门特分解。
+        # 门控/env 与普通门诊一致；profile 需 ESP-CODE-001/002 签核（未注册前恒 unavailable），
+        # 门控未启用或非门特登记号（REGISTRATION_NOT_FOUND）→ unavailable/None，不阻塞主链路。
+        if (
+            evaluation_prefix is None
+            and fee_decomposition is None
+            and _mentions_special_outpatient(request.question)
+            and request.settlement_id
+        ):
+            fee_decomposition = await _loop.run_in_executor(
+                None,
+                lambda: maybe_decompose_special_outpatient(
+                    provider, request.settlement_id, SimpleNamespace(),
+                ),
+            )
 
         _notify_evaluation(
             evaluation_observer,
@@ -1886,6 +1946,7 @@ async def _policy_qa_stream(
             is_broad=is_broad,
             outpatient_result=_outpatient_result,
             deterministic_refusal=_router_refusal_message,
+            fee_decomposition=fee_decomposition,
         )
         _notify_evaluation(
             evaluation_observer,

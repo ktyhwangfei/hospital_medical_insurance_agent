@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -51,6 +50,7 @@ DEFAULT_COLUMNS: dict[str, str] = {
     "op_ref_trade_no": "TR_RefundmentTradeNo",
     "op_partial_return": "T_PartialReturnFlag",
     "op_reversal_original_no": "T_OraginalTradeNo",
+    "op_no_right_reason": "PN_NoRightReason",  # 无待遇原因码（'4'/'5' 实证全额自费，决策记录 D15）
     "op_id_card": "P_IDNo",
     "op_card_ic": "P_ICNo",
     "op_card_no": "P_CardNo",
@@ -58,6 +58,70 @@ DEFAULT_COLUMNS: dict[str, str] = {
     "op_first_pay": "T_FirstPay",
     "op_year": "TB_Year",
     "op_year_times": "TB_MZTimes",
+    # ── Issue #78 费用分解补充列（o_Trade）。候选映射，待黄金样本确认（设计 §16 P0）──
+    "op_fund_type": "P_FundType",  # 险种代码（职工/居民码表待确认）
+    "op_cure_type": "T_CureType",  # 医疗类别代码（普通门诊/门特码表待确认）
+    "op_person_type": "PN_PersonType",  # 人员类别代码
+    "op_birthday": "P_Birthday",  # 出生日期（仅内核计算年龄档，结果不外泄原文）
+    "op_hosp_code": "T_HospCode",  # 费用发生机构代码
+    "op_prior_fee_in": "TB_FeeIn",  # 年度医保内费用累计（交易前口径，实证见决策记录 D3）
+    "op_prior_big_pay": "TB_BigPay",  # 年度大额累计支付（交易前口径，实证见决策记录 D4）
+    "op_official": "P_Official",  # 公务员待遇标识（字典 flid=150：0=享受 1=不享受）
+    "op_official_code": "P_OfficialCode",  # 公疗待遇类别码（取值 '2'/'3' 语义待确认，决策记录 D6）
+    "op_jc_level": "P_JCLevel",  # 军残等级候选列（0=无，1-4/5-6 档，决策记录 D7）
+    "op_fee_out": "T_FeeOut",
+    "op_self_pay_2": "T_SelfPay2",
+    "op_big_pay": "T_BigPay",
+    "op_big_self_pay": "T_BigSelfPay",
+    "op_bc_pay": "T_BCPay",
+    "op_jc_pay": "T_JCPay",
+    "op_official_pay": "T_OfficalPay",
+    "op_self_pay_1": "T_SelfPay1",
+    "op_self_pay_all": "T_SelfPayAll",
+    "op_person_count_pay": "T_PersonCountPay",
+    "op_cash_pay": "T_CashPay",
+    # ── Issue #78 门诊交易费用明细（o_FeeItem）。候选映射，待黄金样本确认（设计 §16 P0）──
+    "opf_line_id": "ItemId",  # 行键候选
+    "opf_trade_no": "T_TradeNo",
+    "opf_item_type": "ItemType",  # 0=药品；其余取值语义待确认
+    "opf_item_code": "ItemCode",
+    "opf_fee_type": "FeeType",
+    "opf_unit_price": "UnitPrice",
+    "opf_count": "Count",
+    "opf_fee": "Fee",
+    "opf_fee_in": "FeeIn",
+    "opf_fee_out": "FeeOut",
+    "opf_self_pay_2": "SelfPay2",
+    "opf_medic_l": "MEDIC_L",  # 明细行实际先行自付比例（>0 时为结算事实，决策记录 D18）
+    "opf_sp_scale": "SP_SCALE",  # 明细行结算时限价（>0 时为结算事实，决策记录 D17）
+    # 费用发生日期列：实测 o_FeeItem 无独立发生日期列（2026-09-28 真实库 schema 核实），
+    # 置空 = 该列不进入 SELECT，组装层降级用交易日期并留痕
+    "opf_fee_date": "",
+    # ── Issue #78 药品目录（yb_ypzdml）。列名已经真实库 schema 核实（2026-09-28）──
+    "cat_drug_code": "ypbm",
+    "cat_drug_effective": "sxrq",
+    "cat_drug_expiry": "jzrq",
+    "cat_drug_sflb": "sflb",
+    "cat_drug_self_pay_ratio": "zfbl",  # 原自付比例列
+    "cat_drug_a_ypbs": "A_ypbs",  # 集采标识（实测为大写 A_ 前缀）
+    "cat_drug_a_mzxj": "A_mzxj",  # 门诊限价（A_zyxj 住院限价本流程不使用，不映射）
+    "cat_drug_a_xbbl": "A_xbbl",  # 超限价自付比例：增量/最终语义未确认，保留原值不编码公式
+    "cat_drug_ypfl": "ypfl",  # 药品分类（16/6 自制剂候选）
+    "cat_drug_bzjg": "bzjg",  # 自制剂标准价格
+    # 自制剂所属机构列：实测 yb_ypzdml 无此列（2026-09-28），置空 → 组装层按 None 处理
+    "cat_drug_preparation_hospital": "",
+    # ── Issue #78 诊疗/服务设施目录（yb_xzzlfwxm）。列名已经真实库 schema 核实 ──
+    "cat_svc_code": "xmbm",
+    "cat_svc_effective": "sxrq",
+    "cat_svc_expiry": "jzrq",
+    "cat_svc_sfxmdj": "sfxmdj",  # 收费项目等级：1 无自付/2 有自付/3 全自付
+    "cat_svc_self_pay_ratio": "zfbl",  # 自付比例列
+    # 单价限额列：实测 yb_xzzlfwxm 无此列（2026-09-28），置空 → 限额规则不适用
+    "cat_svc_unit_price_limit": "",
+    # ── Issue #78 机构表（m_institution）。连接键已经真实库 schema 核实（2026-09-28）──
+    "ins_code": "H_CODE",
+    "ins_h_level": "H_LEVEL",
+    "ins_h_type": "H_TYPE",  # 医院类型（字典 k80：04=社区卫生站 06=村卫生室，决策记录 D9）
     # 病人登记表（yb_brdjxx）
     "reg_djh": "djh",
     "reg_id_card": "sfz",
@@ -91,9 +155,14 @@ _TABLES = (
     "inpatient_settlement_table",
     "outpatient_settlement_table",
     "outpatient_trade_table",
+    "outpatient_trade_fee_table",
     "inpatient_fee_table",
     "outpatient_fee_table",
     "registration_table",
+    "drug_catalog_table",
+    "service_catalog_table",
+    "material_catalog_table",
+    "institution_table",
 )
 
 
@@ -106,9 +175,17 @@ class RecordQueryMapping(BaseModel):
     inpatient_settlement_table: str = "dbo.yb_zyjyxx"
     outpatient_settlement_table: str = "dbo.yb_mzjyxx"
     outpatient_trade_table: str = "dbo.o_Trade"
+    # Issue #78 费用分解：门诊交易明细表（候选映射，待黄金样本确认，设计 §16 P0）
+    outpatient_trade_fee_table: str = "dbo.o_FeeItem"
     inpatient_fee_table: str = "dbo.yb_zyfymx"
     outpatient_fee_table: str = "dbo.yb_mzfymx"
     registration_table: str = "dbo.yb_brdjxx"
+    # Issue #78 费用分解：目录与机构表（候选映射，待黄金样本确认，设计 §16 P0/P1）
+    drug_catalog_table: str = "dbo.yb_ypzdml"
+    service_catalog_table: str = "dbo.yb_xzzlfwxm"
+    # 材料是否完整包含在 yb_xzzlfwxm 待确认，先同表（设计 §5.2）
+    material_catalog_table: str = "dbo.yb_xzzlfwxm"
+    institution_table: str = "dbo.m_institution"
     columns: dict[str, str] = Field(default_factory=dict)
 
     @field_validator(*_TABLES)
@@ -133,3 +210,18 @@ class RecordQueryMapping(BaseModel):
 
 
 DEFAULT_RECORD_QUERY_MAPPING = RecordQueryMapping()
+
+
+def mapping_fingerprint(mapping: RecordQueryMapping) -> str:
+    """映射内容哈希（映射版本标识）：方言 + 全部表名 + 合并后列映射的 sha256。"""
+    import hashlib
+    import json
+
+    payload = {
+        "dialect": mapping.dialect.value,
+        "tables": {t: getattr(mapping, t) for t in _TABLES},
+        "columns": mapping.resolved_columns(),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()

@@ -111,6 +111,58 @@ class OutpatientFieldExplanation(BaseModel):
     citations: list[str] = Field(min_length=1)
 
 
+class DecompositionFieldView(BaseModel):
+    """费用分解单字段公开视图（设计 §10/§11；金额为十进制字符串）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field_code: str
+    label: str
+    check_type: str
+    check_status: str
+    observed_amount: str | None = None
+    calculated_amount: str | None = None
+    difference: str | None = None
+    explanation_level: str
+
+
+class DecompositionUncertaintyView(BaseModel):
+    """费用分解不确定性公开视图（缺规则/缺数据显式列出）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    message: str
+
+
+class DecompositionCoverageView(BaseModel):
+    """费用分解覆盖统计（设计 §11 coverage）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_field_count: int = Field(ge=0)
+    independently_explained_count: int = Field(ge=0)
+    amount_reconciled_count: int = Field(ge=0)
+    observed_only_count: int = Field(ge=0)
+
+
+class FeeDecompositionPublic(BaseModel):
+    """结算费用分解公开结果（Issue #78，schema 版本化；不含审计级分支/计算细节）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str
+    algorithm_version: str
+    execution_status: Literal["complete", "partial", "unavailable"]
+    reconciliation_status: str
+    summary_text: str = ""
+    summary_source: Literal["template", "model"] = "template"
+    may_claim_full_explanation: bool = False
+    fields: list[DecompositionFieldView] = Field(default_factory=list)
+    uncertainties: list[DecompositionUncertaintyView] = Field(default_factory=list)
+    coverage: DecompositionCoverageView | None = None
+
+
 class PolicyQAPublicResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -144,5 +196,8 @@ class PolicyQAPublicResult(BaseModel):
         default_factory=list, exclude_if=lambda value: not value,
     )
     action_status: Literal["waiting_human_confirmation"] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    fee_decomposition: FeeDecompositionPublic | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )

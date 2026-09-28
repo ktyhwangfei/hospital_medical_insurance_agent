@@ -288,6 +288,41 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 门诊部分项目预退费分析 | `OutpatientPartialPreRefundAnalysis` | **Domain Service** | Skill | 基于院端官方预结算结果，对拟退明细进行只读分析 |
 | 拟退项目 | `PartialRefundItemRequest` | **Value Object** | `@dataclass(frozen=True)` | 指定费用明细 ID 与拟退数量的只读预结算输入 |
 | 预结算结果 | `PartialRefundPreview` | **Value Object** | `@dataclass(frozen=True)` | 医院收费系统对门诊部分项目预退费的权威只读结果 |
+| 分解输入快照 | `DecompositionSnapshot` | **Value Object** | `@dataclass(frozen=True)` | 费用分解固定输入：交易锚点+身份+机构+年度累计+明细+目录+观测值+显式取整模式（#78） |
+| 交易锚点 | `TradeAnchor` | **Value Object** | `@dataclass(frozen=True)` | 交易号/结算日期/发生机构/冲正识别（#78） |
+| 人员身份快照 | `PersonProfile` | **Value Object** | `@dataclass(frozen=True)` | 人员类别码、出生日期、退休类别、军残/公疗资格；未知为 None，禁止金额反推（#78） |
+| 机构快照 | `InstitutionProfile` | **Value Object** | `@dataclass(frozen=True)` | 机构键与 H_LEVEL 原值；分支判断在计算层（#78） |
+| 年度累计上下文 | `AnnualAccumulation` | **Value Object** | `@dataclass(frozen=True)` | 交易前医保内费用累计/基金支付累计及口径确认标志（#78） |
+| 费用明细行快照 | `FeeLineItem` | **Value Object** | `@dataclass(frozen=True)` | 行键/目录类别/账面金额/费用发生日期/集采包装与一致性评价（#78） |
+| 药品目录条目 | `DrugCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sflb/自付比例/集采限价/自制剂标准价；空截止日期不默认永久有效（#78） |
+| 诊疗服务目录条目 | `ServiceCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sfxmdj（1 无自付/2 有自付/3 全自付，空=未知）/自付比例/单价限额（#78） |
+| 医用材料目录条目 | `MaterialCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | 人工器官/集采中选例外标志（#78） |
+| 结算账面观测值 | `ObservedSettlementAmounts` | **Value Object** | `@dataclass(frozen=True)` | T_* 结算字段观测值，仅作核对目标；None=未知不是零（#78） |
+| 分支轨迹 | `BranchTrace` | **Value Object** | `@dataclass(frozen=True)` | step/parent/module/condition/outcome 三值逻辑/reason/refs（#78，设计 §8） |
+| 分支结果 | `BranchOutcome` | **Value Object** | `StrEnum` | true/false/unknown/not_evaluated/blocked/not_applicable（#78） |
+| 分支条件 | `BranchCondition` | **Value Object** | `@dataclass(frozen=True)` | 条件代码+中文含义+比较操作+左右值（#78） |
+| 计算记录 | `CalculationRecord` | **Value Object** | `@dataclass(frozen=True)` | formula_id/版本/操作数引用与值/未取整结果/取整规则/最终金额（#78） |
+| 计算操作数 | `CalculationOperand` | **Value Object** | `@dataclass(frozen=True)` | 操作数引用+十进制字符串值（#78） |
+| 分解不确定性 | `DecompositionUncertainty` | **Value Object** | `@dataclass(frozen=True)` | 缺规则/缺数据显式声明及影响字段（#78） |
+| 分解证据引用 | `DecompositionCitation` | **Value Object** | `@dataclass(frozen=True)` | 来源区分 issue_note/approved_business_rule/policy_document/source_catalog（#78） |
+| 字段核对结果 | `FieldReconciliation` | **Value Object** | `@dataclass(frozen=True)` | check_type/check_status/difference=calculated-observed（#78，设计 §10） |
+| 核对类型 | `CheckType` | **Value Object** | `StrEnum` | independent_recalculation/detail_aggregation/identity_check（#78） |
+| 核对状态 | `CheckStatus` | **Value Object** | `StrEnum` | matched/mismatched/not_verifiable/not_applicable（#78） |
+| 执行状态 | `ExecutionStatus` | **Value Object** | `StrEnum` | complete/partial/unavailable（#78） |
+| 解释等级 | `ExplanationLevel` | **Value Object** | `StrEnum` | causally_explained/amount_reconciled/observed_only/unexplained（#78） |
+| 取整模式 | `RoundingMode` | **Value Object** | `StrEnum` | 显式传入无默认（EOP-RND-001 待确认，#78） |
+| 人员身份分类 | `PersonKind` | **Value Object** | `StrEnum` | employed/retired/unknown（未知不默认在职，#78） |
+| 机构类别 | `InstitutionKind` | **Value Object** | `StrEnum` | community/other/unknown（#78） |
+| 目录类别 | `CatalogKind` | **Value Object** | `StrEnum` | drug/service/material/unknown（#78） |
+| 集采包装类型 | `PackagingType` | **Value Object** | `StrEnum` | whole_pack/split_pack；未给定按规则默认整包（#78） |
+| 金额取整 | `apply_rounding()` | 值函数 | 纯函数 | 显式模式 + quantum 取整（默认到分），无默认模式（#78） |
+| 十进制输出 | `decimal_to_str()` | 值函数 | 纯函数 | Decimal → 十进制字符串，不经过 float（#78） |
+| 门特费用明细行快照 | `SpecialFeeLineItem` | **Value Object** | `@dataclass(frozen=True)` | yb_zyfymx 行：xh 行键/xmdm/sflb/sfxmdj 自付档/zje/ybnje/ybwje/grziftw 先行自付/dj/sl/fsrq（#78 门特，实测候选口径待数据字典确认） |
+| 门特结算账面观测值 | `SpecialObservedAmounts` | **Value Object** | `@dataclass(frozen=True)` | yb_zyjyxx 14 字段（zje/ybn/ybw/ybnqfje/tczhf/tczif/degwyzhf/degwyzif/bczhf/jczhf/gfylbchbx/xjzf/zhzf/grziftw），仅作核对目标（#78 门特） |
+| 门特结算周期上下文 | `SpecialCycleContext` | **Value Object** | `@dataclass(frozen=True)` | 起付标准/周期内已交起付/年度统筹/大额基金累计 + evidence_status 三态（confirmed/assumed/unknown）（#78 门特） |
+| 门特人员快照 | `SpecialPersonProfile` | **Value Object** | `@dataclass(frozen=True)` | cblb 人员类别码、csrq 出生日期、tsbqsrq/tsbjzrq 特殊病备案起止（备案有效期≠结算周期）、retirement_category 退休类别（normal/prepaid，未知 None 不默认 50%）（#78 门特） |
+| 门特机构快照 | `SpecialInstitutionProfile` | **Value Object** | `@dataclass(frozen=True)` | 机构键与 H_LEVEL 原值；住院口径等级映射（01-05 三级/06-09 二级/10-13 一级）在计算层（#78 门特） |
+| 门特分解输入快照 | `OutpatientSpecialSnapshot` | **Value Object** | `@dataclass(frozen=True)` | 职工×门特固定输入：djh/结算日期/人员/机构/周期上下文/明细/观测值/显式取整模式/allow_observed_deductible 评估开关（#78 门特） |
 
 #### 业务规则
 
@@ -1429,11 +1464,16 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `AuditResult` | 审核结果 | AuditRisk | Aggregate Root |
 | `AuditService` | 审计服务 | Security | Domain Service |
 | `BillingPort` | 收费系统适配器端口 | Insurance | Domain Service |
+| `BranchCondition` | 分支条件 | Insurance | Value Object |
+| `BranchOutcome` | 分支结果 | Insurance | Value Object |
+| `BranchTrace` | 分支轨迹 | Insurance | Value Object |
 | `BusinessAction` | 业务动作 | Common | Value Object |
 | `BusinessMemory` | 业务记忆 | Runtime | Entity |
 | `BusinessObject` | 业务对象 | Common | Value Object |
 | `ChatRequest` | Chat 请求 | Shared | DTO |
 | `Citation` | 引用来源 | Shared / Knowledge | Value Object |
+| `CheckStatus` | 核对状态 | Insurance | Value Object |
+| `CheckType` | 核对类型 | Insurance | Value Object |
 | `ClosureTask` | 闭环任务 | TaskClosure | Entity |
 | `Coding` | 编码信息 | MedicalRecord | Value Object |
 | `ColdStartCandidate` | 冷启动候选 | QuestionLibrary | Value Object |
@@ -1465,6 +1505,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `DimensionCandidateProposal` | 维度候选提议 | Knowledge | Value Object |
 | `DimensionReviewConclusion` | 维度建模结论 | Knowledge | Value Object |
 | `DecisionNode` | 决策节点 | Runtime | Entity |
+| `DecompositionCitation` | 分解证据引用 | Insurance | Value Object |
+| `DecompositionSnapshot` | 分解输入快照 | Insurance | Value Object |
+| `DecompositionUncertainty` | 分解不确定性 | Insurance | Value Object |
 | `DipGroupResult` | DIP 分组结果 | DrgDip | Value Object |
 | `DomainNode` | 领域节点 | Runtime | Entity |
 | `DrgDipPort` | DRG/DIP 适配器端口 | DrgDip | Domain Service |
@@ -1477,6 +1520,8 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `Evidence` | 证据材料 | Appeal | Entity |
 | `ExecutionProfileSpec` | 执行场景 | SkillTool | Value Object |
 | `FeeItem` | 费用明细 | OrderFee | Entity |
+| `FeeLineItem` | 费用明细行快照 | Insurance | Value Object |
+| `FieldReconciliation` | 字段核对结果 | Insurance | Value Object |
 | `FailureAttribution` | 评测失败归因 | SkillTool | Value Object |
 | `FindingDraft` | 问题草稿 | OpsHealth | Value Object |
 | `FlowDefinition` | 治理数据流 | GovernedFlow | Aggregate Root |
@@ -1556,6 +1601,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `OpsWeekDelta` | 周环比 | OpsAnalytics | Value Object |
 | `OpsWeeklyReport` | 运营周报 | OpsAnalytics | Value Object |
 | `Order` | 医嘱 | OrderFee | Aggregate Root |
+| `ObservedSettlementAmounts` | 结算账面观测值 | Insurance | Value Object |
+| `PackagingType` | 集采包装类型 | Insurance | Value Object |
+| `PersonKind` | 人员身份分类 | Insurance | Value Object |
+| `RoundingMode` | 取整模式 | Insurance | Value Object |
+| `ExecutionStatus` | 执行状态 | Insurance | Value Object |
+| `ExplanationLevel` | 解释等级 | Insurance | Value Object |
 | `OutputNode` | 输出节点 | Runtime | Entity |
 | `OutpatientPartialPreRefundAnalysis` | 门诊部分项目预退费分析 | Insurance | Domain Service |
 | `Patient` | 患者 | Patient | Entity |
@@ -1610,6 +1661,12 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | `SkillMetadata` | 技能元数据 | SkillTool | Value Object |
 | `SkillNextAction` | 技能下一步动作 | SkillTool | Value Object |
 | `SkillStep` | 技能步骤 | SkillTool | Entity |
+| `SpecialCycleContext` | 门特结算周期上下文 | Insurance | Value Object |
+| `SpecialFeeLineItem` | 门特费用明细行快照 | Insurance | Value Object |
+| `SpecialInstitutionProfile` | 门特机构快照 | Insurance | Value Object |
+| `SpecialObservedAmounts` | 门特结算账面观测值 | Insurance | Value Object |
+| `SpecialPersonProfile` | 门特人员快照 | Insurance | Value Object |
+| `OutpatientSpecialSnapshot` | 门特分解输入快照 | Insurance | Value Object |
 | `StreamChunk` | 流式块 | ModelService | DTO |
 | `Surgery` | 手术记录 | MedicalRecord | Entity |
 | `TaskConfirmRequest` | 任务确认请求 | TaskClosure | DTO |
