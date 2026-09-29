@@ -91,12 +91,15 @@ def decompose_outpatient_special_settlement(
     allow_observed_deductible: bool = False,
     cycle_context_override: SpecialCycleContext | None = None,
     profile: tuple[str, str] | None = None,
+    retirement_category_override: str | None = None,
 ) -> SettlementDecompositionResult:
     """登记号 → 完整事实快照 → 职工门特费用分解。
 
     - profile=None：险种/医疗类别置 unknown（ESP-CODE-001/002 实测待码表确认，不猜测）；
     - cycle_context_override=None：周期上下文 evidence_status="unknown"
-      （院端抽取不含跨院累计，证据不足标 unknown，不强行推断）。
+      （院端抽取不含跨院累计，证据不足标 unknown，不强行推断）；
+    - retirement_category_override：评估口径注入退休类别（normal/prepaid），
+      对应门诊批量评估决策 D8（cblb 21/22→普通退休）；生产默认 None 保持 fail-closed。
     """
     # 1. 定位门特登记：0 条未找到 / >1 条歧义均降级，不取首条
     located = locate_special_registration(conn, djh)
@@ -168,6 +171,15 @@ def decompose_outpatient_special_settlement(
     except ValueError as exc:
         return _unavailable_result(djh, "SNAPSHOT_ASSEMBLY_FAILED", str(exc))
     notes.extend(asm_notes)
+
+    # 8.1 评估口径注入退休类别（门诊批量评估决策 D8 的门特对应；生产不启用）
+    if retirement_category_override is not None:
+        from dataclasses import replace
+        snapshot = replace(snapshot, person=replace(
+            snapshot.person, retirement_category=retirement_category_override))
+        notes.append(
+            f"RETIREMENT_CATEGORY_ASSUMED：评估口径注入 retirement_category="
+            f"{retirement_category_override}（对应门诊 D8 决策），非签核字段映射")
 
     # 9. 读取元数据（来源/行数/内容哈希；门特用实测物理表，不经 RecordQueryMapping）
     from datetime import datetime, timezone

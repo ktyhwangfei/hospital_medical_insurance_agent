@@ -659,8 +659,8 @@ def _split_service(
             f"catalog.service_class.{item.line_key}", BranchOutcome.TRUE, scope,
             BranchCondition("sfxmdj", "收费项目等级", "eq", "2", "2 有自付"),
             rule_refs=("EOP-CAT-007",)))
-        if entry.self_pay_ratio is not None:
-            svc_ratio = _applied_ratio(item, entry.self_pay_ratio)
+        svc_ratio = _applied_ratio(item, entry.self_pay_ratio)
+        if svc_ratio is not None:
             unrounded = item.fee * svc_ratio
             sp2 = apply_rounding(unrounded, rounding_mode)
             calc = _calc(

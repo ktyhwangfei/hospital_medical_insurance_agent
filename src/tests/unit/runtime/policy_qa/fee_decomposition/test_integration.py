@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from src.adapters.base.models import (
+    AdapterCallResult,
+    AdapterCallStatus,
+    DataQualityStatus,
+)
 from src.domain.insurance.fee_decomposition import RoundingMode
 from src.runtime.policy_qa.fee_decomposition import integration
 from src.runtime.policy_qa.fee_decomposition.integration import (
@@ -188,6 +193,167 @@ class TestDecomposeCall:
         assert conn.closed is True
 
 
+def _locate_result(match_status: str) -> AdapterCallResult:
+    """登记定位桩：仅携带消歧所需的 match_status。"""
+    return AdapterCallResult(
+        status=AdapterCallStatus.SUCCESS, source_system="test", capability="test",
+        data={"match_status": match_status, "registration_row": None, "row_count": 0})
+
+
+def _locate_failed() -> AdapterCallResult:
+    return AdapterCallResult(
+        status=AdapterCallStatus.FAILED, source_system="test", capability="test",
+        data={}, data_quality=DataQualityStatus.MISSING, message="query failed")
+
+
+def _stub_locates(monkeypatch, zy: AdapterCallResult, mz: AdapterCallResult) -> None:
+    monkeypatch.setattr(
+        integration, "locate_special_registration", lambda _conn, _djh: zy)
+    monkeypatch.setattr(
+        integration, "locate_special_mz_registration", lambda _conn, _djh: mz)
+
+
+class TestSpecialSuiteRouting:
+    """djh → mz/zy 套表消歧（Issue #79 生产接入）：fail-closed，不猜测套表。"""
+
+    def test_zy_unique_routes_to_zy_service(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_result("unique_match"), _locate_result("not_found"))
+        conn = _FakeConn()
+        called = {}
+
+        def fake_zy(c, djh, hospital_code, rounding_mode, **kwargs):
+            called["zy"] = (djh, kwargs)
+            return _canned_result()
+
+        def fake_mz(c, djh, hospital_code, rounding_mode, **kwargs):
+            called["mz"] = (djh, kwargs)
+            return _canned_result()
+
+        monkeypatch.setattr(integration, "decompose_outpatient_special_settlement", fake_zy)
+        monkeypatch.setattr(integration, "decompose_special_mz_settlement", fake_mz)
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(conn), "604", SimpleNamespace())
+
+        assert isinstance(presentation, DecompositionPresentation)
+        assert called["zy"][0] == "604"
+        assert "mz" not in called
+        assert conn.closed is True
+
+    def test_mz_unique_routes_to_mz_service(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_result("not_found"), _locate_result("unique_match"))
+        conn = _FakeConn()
+        called = {}
+
+        def fake_zy(c, djh, hospital_code, rounding_mode, **kwargs):
+            called["zy"] = (djh, kwargs)
+            return _canned_result()
+
+        def fake_mz(c, djh, hospital_code, rounding_mode, **kwargs):
+            called["mz"] = (djh, kwargs)
+            return _canned_result()
+
+        monkeypatch.setattr(integration, "decompose_outpatient_special_settlement", fake_zy)
+        monkeypatch.setattr(integration, "decompose_special_mz_settlement", fake_mz)
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(conn), "567", SimpleNamespace())
+
+        assert isinstance(presentation, DecompositionPresentation)
+        assert called["mz"][0] == "567"
+        # mz 服务无 cycle_context_override 参数（周期上下文由 dyxxtsb/dyxxnd 推导）
+        assert "cycle_context_override" not in called["mz"][1]
+        assert "zy" not in called
+        assert conn.closed is True
+
+    def test_both_not_found_returns_unavailable(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_result("not_found"), _locate_result("not_found"))
+        called = []
+        monkeypatch.setattr(
+            integration, "decompose_outpatient_special_settlement",
+            lambda *a, **k: called.append("zy") or _canned_result())
+        monkeypatch.setattr(
+            integration, "decompose_special_mz_settlement",
+            lambda *a, **k: called.append("mz") or _canned_result())
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(_FakeConn()), "999", SimpleNamespace())
+
+        assert presentation is not None
+        assert presentation.result.execution_status == "unavailable"
+        assert presentation.result.uncertainties[0].code == "REGISTRATION_NOT_FOUND"
+        assert called == []
+
+    def test_both_unique_is_ambiguous(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        _stub_locates(
+            monkeypatch, _locate_result("unique_match"), _locate_result("unique_match"))
+        called = []
+        monkeypatch.setattr(
+            integration, "decompose_outpatient_special_settlement",
+            lambda *a, **k: called.append("zy") or _canned_result())
+        monkeypatch.setattr(
+            integration, "decompose_special_mz_settlement",
+            lambda *a, **k: called.append("mz") or _canned_result())
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(_FakeConn()), "604", SimpleNamespace())
+
+        assert presentation is not None
+        assert presentation.result.execution_status == "unavailable"
+        assert presentation.result.uncertainties[0].code == "REGISTRATION_AMBIGUOUS"
+        assert called == []
+
+    def test_within_suite_ambiguous_is_fail_closed(self, monkeypatch):
+        """一套表内歧义（多条登记）即使另一套未命中也不猜测。"""
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_result("ambiguous"), _locate_result("not_found"))
+        called = []
+        monkeypatch.setattr(
+            integration, "decompose_outpatient_special_settlement",
+            lambda *a, **k: called.append("zy") or _canned_result())
+        monkeypatch.setattr(
+            integration, "decompose_special_mz_settlement",
+            lambda *a, **k: called.append("mz") or _canned_result())
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(_FakeConn()), "604", SimpleNamespace())
+
+        assert presentation is not None
+        assert presentation.result.execution_status == "unavailable"
+        assert presentation.result.uncertainties[0].code == "REGISTRATION_AMBIGUOUS"
+        assert called == []
+
+    def test_locate_read_failed_is_fail_closed(self, monkeypatch):
+        """任一定位查询失败即无法排除歧义，不进入任何套表。"""
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_failed(), _locate_result("unique_match"))
+        called = []
+        monkeypatch.setattr(
+            integration, "decompose_outpatient_special_settlement",
+            lambda *a, **k: called.append("zy") or _canned_result())
+        monkeypatch.setattr(
+            integration, "decompose_special_mz_settlement",
+            lambda *a, **k: called.append("mz") or _canned_result())
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(_FakeConn()), "604", SimpleNamespace())
+
+        assert presentation is not None
+        assert presentation.result.execution_status == "unavailable"
+        assert presentation.result.uncertainties[0].code == "READ_FAILED"
+        assert called == []
+
+
 class TestSpecialDecomposeCall:
     """门特（第二流程）integration 入口：门控一致、profile 解析透传、连接关闭保证。"""
 
@@ -204,6 +370,8 @@ class TestSpecialDecomposeCall:
 
     def test_happy_path_passes_profile_and_closes_conn(self, monkeypatch):
         _enable_gate(monkeypatch)
+        # 套表消歧：zy 唯一命中（yllb=16），mz 无命中
+        _stub_locates(monkeypatch, _locate_result("unique_match"), _locate_result("not_found"))
         conn = _FakeConn()
         captured = {}
 

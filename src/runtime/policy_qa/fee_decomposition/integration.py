@@ -21,6 +21,13 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from src.adapters.base.models import AdapterCallStatus
+from src.adapters.data_supply.outpatient_special_mz_queries import (
+    locate_special_mz_registration,
+)
+from src.adapters.data_supply.outpatient_special_queries import (
+    locate_special_registration,
+)
 from src.domain.insurance.fee_decomposition import RoundingMode
 from src.runtime.policy_qa.fee_decomposition.public_view import render_summary
 from src.runtime.policy_qa.fee_decomposition.result import SettlementDecompositionResult
@@ -28,7 +35,11 @@ from src.runtime.policy_qa.fee_decomposition.snapshot_service import (
     decompose_outpatient_trade,
 )
 from src.runtime.policy_qa.fee_decomposition.snapshot_service_special import (
+    _unavailable_result,
     decompose_outpatient_special_settlement,
+)
+from src.runtime.policy_qa.fee_decomposition.snapshot_service_special_mz import (
+    decompose_special_mz_settlement,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,6 +176,28 @@ def maybe_decompose_outpatient(
         result=result, summary_text=summary_text, summary_source=summary_source)
 
 
+def _resolve_special_suite(conn: Any, djh: str) -> str:
+    """djh → 门特套表判定（Issue #79 生产接入：mz/zy 消歧）。
+
+    返回 "zy"（住院套表 yllb=16）/ "mz"（门诊套表 yllb=12）/ "none" / "ambiguous"
+    / "read_failed"。fail-closed：仅当一套唯一命中且另一套无命中才选定；双套表同时
+    命中、表内歧义、任一定位读取失败均不猜测。
+    """
+    zy = locate_special_registration(conn, djh)
+    mz = locate_special_mz_registration(conn, djh)
+    if zy.status != AdapterCallStatus.SUCCESS or mz.status != AdapterCallStatus.SUCCESS:
+        return "read_failed"
+    zy_status = zy.data["match_status"]
+    mz_status = mz.data["match_status"]
+    if zy_status == "unique_match" and mz_status == "not_found":
+        return "zy"
+    if mz_status == "unique_match" and zy_status == "not_found":
+        return "mz"
+    if zy_status == "not_found" and mz_status == "not_found":
+        return "none"
+    return "ambiguous"
+
+
 def maybe_decompose_special_outpatient(
     provider: Any,
     djh: str,
@@ -173,11 +206,16 @@ def maybe_decompose_special_outpatient(
     cycle_context_override: Any = None,
     allow_observed_deductible: bool = False,
 ) -> DecompositionPresentation | None:
-    """门特登记号（djh）→ 费用分解表述（Issue #78 第二流程）。
+    """门特登记号（djh）→ 费用分解表述（Issue #78 第二流程 + Issue #79 mz 套表）。
 
     门控与 maybe_decompose_outpatient 一致；profile 仅接受显式确认的险种×类别
     精确匹配（ESP-CODE-001/002 待码表确认，未注册 → None → UNSUPPORTED_PROFILE/unavailable）。
-    cycle_context_override/allow_observed_deductible 为评估口径开关，生产默认不注入。
+    djh 先经 _resolve_special_suite 消歧：唯一命中门诊套表（yllb=12，Issue #79）走
+    mz 快照服务，唯一命中住院套表（yllb=16）走原快照服务，其余（双命中/歧义/未命中/
+    读取失败）一律 unavailable，不猜测套表。
+    cycle_context_override/allow_observed_deductible 为评估口径开关，生产默认不注入
+    （cycle_context_override 仅作用于住院套表路径；mz 路径周期上下文由
+    dyxxtsb/dyxxnd 交易后快照推导）。
     """
     rounding_mode = _rounding_mode_from_env()
     hospital_code = os.getenv(_HOSPITAL_ENV, "").strip()
@@ -190,15 +228,39 @@ def maybe_decompose_special_outpatient(
     conn = None
     try:
         conn = connect("bjybdb")
-        result = decompose_outpatient_special_settlement(
-            conn,
-            djh,
-            hospital_code,
-            rounding_mode,
-            profile=profile,
-            cycle_context_override=cycle_context_override,
-            allow_observed_deductible=allow_observed_deductible,
-        )
+        suite = _resolve_special_suite(conn, djh)
+        if suite == "zy":
+            result = decompose_outpatient_special_settlement(
+                conn,
+                djh,
+                hospital_code,
+                rounding_mode,
+                profile=profile,
+                cycle_context_override=cycle_context_override,
+                allow_observed_deductible=allow_observed_deductible,
+            )
+        elif suite == "mz":
+            result = decompose_special_mz_settlement(
+                conn,
+                djh,
+                hospital_code,
+                rounding_mode,
+                profile=profile,
+                allow_observed_deductible=allow_observed_deductible,
+            )
+        elif suite == "none":
+            result = _unavailable_result(
+                djh, "REGISTRATION_NOT_FOUND",
+                "登记号未命中职工门特登记（门诊套表 yllb=12 与住院套表 yllb=16 均无），"
+                "不做费用分解")
+        elif suite == "ambiguous":
+            result = _unavailable_result(
+                djh, "REGISTRATION_AMBIGUOUS",
+                "登记号门特登记歧义（双套表同时命中或表内多条登记），不猜测套表，"
+                "不做费用分解")
+        else:  # read_failed
+            result = _unavailable_result(
+                djh, "READ_FAILED", "门特登记定位查询失败，无法判定套表，不做费用分解")
     except Exception as exc:  # noqa: BLE001 — 分解失败不影响主问答链路
         logger.warning("[FEE-DECOMP] 门特费用分解失败，本次不附带分解结果: %s", exc)
         return None

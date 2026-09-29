@@ -18,6 +18,7 @@ os.environ["USE_MEMORY_STORAGE"] = "1"
 
 from fastapi.testclient import TestClient
 
+from src.adapters.base.models import AdapterCallResult, AdapterCallStatus
 from src.runtime.api import policy_qa_routes
 from src.runtime.api.app import create_app
 from src.runtime.policy_qa.fee_decomposition.integration import DecompositionPresentation
@@ -273,6 +274,20 @@ class TestFeeDecompositionPublicContract:
             captured["profile"] = profile
             return _canned_presentation().result
 
+        # 套表消歧桩（Issue #79 生产接入）：zy（yllb=16）唯一命中，mz（yllb=12）无命中
+        def _locate(match_status: str):
+            return AdapterCallResult(
+                status=AdapterCallStatus.SUCCESS, source_system="test",
+                capability="test",
+                data={"match_status": match_status,
+                      "registration_row": None, "row_count": 0})
+
+        monkeypatch.setattr(
+            integration, "locate_special_registration",
+            lambda _conn, _djh: _locate("unique_match"))
+        monkeypatch.setattr(
+            integration, "locate_special_mz_registration",
+            lambda _conn, _djh: _locate("not_found"))
         monkeypatch.setattr(
             integration, "decompose_outpatient_special_settlement", fake_special_decompose)
         monkeypatch.setattr(

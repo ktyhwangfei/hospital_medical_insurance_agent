@@ -335,6 +335,9 @@ class SpecialCycleContext:
     prior_cycle_deductible_paid: Decimal | None = None  # 本周期内交易前已交起付
     prior_annual_pool_fund_payment: Decimal | None = None  # 交易前年度统筹基金累计支付
     prior_annual_large_fund_payment: Decimal | None = None  # 交易前年度大额互助基金累计支付
+    # 周期内交易前医保内费用累计（yb_dyxxtsb.bqljybnje 交易后口径 − 本笔 tsbybn）：
+    # confirmed 时给出，作为统筹分段绝对坐标起点；None=未知（按下界/守卫规则处理）
+    prior_cycle_in_scope_total: Decimal | None = None
     evidence_status: str = "unknown"
     evidence_note: str = ""
 
@@ -349,6 +352,13 @@ class SpecialPersonProfile:
     special_record_end: date | None = None  # tsbjzrq 特殊病备案截止
     # 退休补充类别：normal 普通 / prepaid 社会化（预提）；字段未映射时 None=未知（不默认 50%）
     retirement_category: str | None = None
+    # 军残等级组（Issue #79 字段映射候选口径：yb_brdjxx.cjjrdj）：
+    # "1-4" / "5-6"；None=无资格或未知（raw 为空/'0' 视为无资格候选）
+    military_grade: str | None = None
+    military_grade_raw: str | None = None  # cjjrdj 原值留痕
+    # 公疗（公务员/公费医疗）资格（Issue #79 字段映射候选口径：yb_brdjxx.gwydybz，
+    # 与红名单相反：0=享受，1=不享受）；None=字段缺失未知
+    civil_medical_eligible: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -380,6 +390,11 @@ class OutpatientSpecialSnapshot:
     # 评估口径开关（默认 False）：cycle context 非 confirmed 时允许取账面 ybnqfje
     # 作为条件输入继续计算（deductible.source=observed_book，勾稽级非因果级）
     allow_observed_deductible: bool = False
+    # 评估口径开关（默认 False，Issue #79 mz 套表流程启用）：分段绝对坐标
+    # （cycle.prior_cycle_in_scope_total）未知时，若无法证明唯一比例分配，
+    # 统筹/大额字段 not_verifiable（SEGMENT_COORDINATE_UNDERDETERMINED），
+    # 不按坐标下界硬算（与封顶「未跨界可证明才可算」同一原则）
+    segment_coordinate_guard: bool = False
 
 
 # ── 轨迹与核对记录（值对象） ───────────────────────────────────

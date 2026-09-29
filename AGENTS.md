@@ -231,6 +231,7 @@ Angular 格式：`feat: | fix: | refactor: | docs: | test: | chore: <描述>`
 - 部分唯一索引（`CREATE UNIQUE INDEX ... WHERE is_active`）上执行单条多行翻转 UPDATE（`SET is_active = (revision_id = %s)`）报 `UniqueViolation: uq_governed_flow_active_revision`——PG 非可延迟索引逐行检查，目标行先翻 TRUE 而旧行仍 TRUE 即瞬态重复。必须拆「先撤旧值、再启目标」两条语句（`flow_postgres.set_active_revision` 已修，pg_smoke 回归）。
 - 本克隆 `git stash list` 存有他人旧 stash（issue-20 时期）。`git stash push` 参数写错（如 `-- src/ -q` 中 `-q` 被当 pathspec）会静默失败，随后 `git stash pop` 弹出他人 stash 污染工作区（UU 冲突 + untracked 泄入）。pop 前必须 `git stash list` 确认栈顶；甄别预存失败用 `git worktree add` 干净检出复跑，不用 stash。
 - 门诊费用分解（Issue #78，policy-qa 门诊分支）默认关闭：须同时配置 `FEE_DECOMPOSITION_ROUNDING_MODE`（取整模式，EOP-RND-001 待确认、无默认）与 `FEE_DECOMPOSITION_HOSPITAL_CODE`（源系统 o_Trade 院区列取值，**不是** `PLATFORM_HOSPITAL_CODE` 部署口径）才启用；任一缺失/非法即静默跳过，公开结果不含 `fee_decomposition`，不报错。
+- `settlement_record_queries._fetch_all` 返回 dict 行的键是**物理列名小写**（SQL Server `TB_Year` → `tb_year`）。在快照/服务层用字面物理名（尤其大小写）`row.get("TB_Year")` 会静默拿到 None（推导分支整体不触发、无报错）。取键必须经 `_k(mapping, key)`。
 ### 陷阱模板
 
 新增陷阱按以下格式写入，禁止自由格式：

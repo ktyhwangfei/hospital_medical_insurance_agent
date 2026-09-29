@@ -291,10 +291,10 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 分解输入快照 | `DecompositionSnapshot` | **Value Object** | `@dataclass(frozen=True)` | 费用分解固定输入：交易锚点+身份+机构+年度累计+明细+目录+观测值+显式取整模式（#78） |
 | 交易锚点 | `TradeAnchor` | **Value Object** | `@dataclass(frozen=True)` | 交易号/结算日期/发生机构/冲正识别（#78） |
 | 人员身份快照 | `PersonProfile` | **Value Object** | `@dataclass(frozen=True)` | 人员类别码、出生日期、退休类别、军残/公疗资格；未知为 None，禁止金额反推（#78） |
-| 机构快照 | `InstitutionProfile` | **Value Object** | `@dataclass(frozen=True)` | 机构键与 H_LEVEL 原值；分支判断在计算层（#78） |
+| 机构快照 | `InstitutionProfile` | **Value Object** | `@dataclass(frozen=True)` | 机构键与 H_LEVEL/H_TYPE 原值；社区判定主依据 H_TYPE（字典 k80），分支判断在计算层（#78） |
 | 年度累计上下文 | `AnnualAccumulation` | **Value Object** | `@dataclass(frozen=True)` | 交易前医保内费用累计/基金支付累计及口径确认标志（#78） |
-| 费用明细行快照 | `FeeLineItem` | **Value Object** | `@dataclass(frozen=True)` | 行键/目录类别/账面金额/费用发生日期/集采包装与一致性评价（#78） |
-| 药品目录条目 | `DrugCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sflb/自付比例/集采限价/自制剂标准价；空截止日期不默认永久有效（#78） |
+| 费用明细行快照 | `FeeLineItem` | **Value Object** | `@dataclass(frozen=True)` | 行键/目录类别/账面金额/费用发生日期/集采包装与一致性评价/明细行结算事实（MEDIC_L 实际自付比例、SP_SCALE 结算时限价）（#78） |
+| 药品目录条目 | `DrugCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sflb/自付比例/集采限价/超限价自付比例 a_xbbl/自制剂标准价；空截止日期不默认永久有效（#78） |
 | 诊疗服务目录条目 | `ServiceCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sfxmdj（1 无自付/2 有自付/3 全自付，空=未知）/自付比例/单价限额（#78） |
 | 医用材料目录条目 | `MaterialCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | 人工器官/集采中选例外标志（#78） |
 | 结算账面观测值 | `ObservedSettlementAmounts` | **Value Object** | `@dataclass(frozen=True)` | T_* 结算字段观测值，仅作核对目标；None=未知不是零（#78） |

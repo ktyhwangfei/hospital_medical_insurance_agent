@@ -1,0 +1,82 @@
+{
+  "datasource": "bjybdb",
+  "hospital_code": "01110003",
+  "scope": "城镇职工（FUND_TYPE=3）× 门特（yllb='12'）× 按项目付费（fyfs='0'）",
+  "rounding_mode_assumed": "round_half_up",
+  "total_settlements": 14,
+  "verdict_counts": {
+    "准确": 8,
+    "差异（实质）": 1,
+    "无法核对": 5
+  },
+  "field_level": {
+    "accurate": 147,
+    "mismatched": 1,
+    "not_verifiable": 20,
+    "accuracy_decidable": 0.9932432432432432,
+    "accuracy_all": 0.875
+  },
+  "per_field_stats": {
+    "ZJE": {
+      "accurate": 14,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "YBN": {
+      "accurate": 14,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "YBW": {
+      "accurate": 14,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "GRZIFTW": {
+      "accurate": 14,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "YBNQFJE": {
+      "accurate": 14,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "TCZHF": {
+      "accurate": 9,
+      "mismatched": 0,
+      "not_verifiable": 5
+    },
+    "TCZIF": {
+      "accurate": 9,
+      "mismatched": 0,
+      "not_verifiable": 5
+    },
+    "DEGWYZHF": {
+      "accurate": 9,
+      "mismatched": 0,
+      "not_verifiable": 5
+    },
+    "DEGWYZIF": {
+      "accurate": 9,
+      "mismatched": 0,
+      "not_verifiable": 5
+    },
+    "BCZHF": {
+      "accurate": 14,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "JCZHF": {
+      "accurate": 14,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "GFYLBCHBX": {
+      "accurate": 13,
+      "mismatched": 1,
+      "not_verifiable": 0
+    }
+  },
+  "metric_note": "准确率按 12 个费用分解字段统计；支付渠道（XJZF/ZHZF/恒等式）为信息性核对不计入"
+}

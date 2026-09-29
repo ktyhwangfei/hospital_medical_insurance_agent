@@ -104,3 +104,29 @@ SELECT * FROM dbo.yb_zyjyxx WHERE djh = 604;
 SELECT xh, xmdm, xmmc, xmlb, sflb, sl, dj, zje, ybnje, ybwje, sfxmdj
 FROM dbo.yb_zyfymx WHERE djh = 604 ORDER BY xh;
 ```
+---
+
+## 2026-09-28 字段语义实测补充（bjyb 6 笔全量核对）
+
+全量回放脚本 `scripts/eval/fee_decomposition_special_batch.py`（strict / eval / eval_large 三种口径），
+结果落 `issue78_special_batch_result.csv` / `..._summary.json`。以下字段语义为**实测候选口径，待数据字典确认**：
+
+- `bczhf` = 退休补充保险补助。退休人员全部吻合：统筹共付段自付×50%（djh=705：229.61×0.5=114.805→**114.81**；
+  djh=707：177.12）；大额共付段自付×50%（djh=681/723：510.25×0.5=255.125→**255.13**；djh=813：905.96）。
+  两例半分均符合四舍五入到分（ESP-RND-001 样本方向，不构成规则确认）。
+- `jczhf` = 军残补助。djh=604（在职）1285.55 = 起付 650+统筹自付 635.55 全额（在职 1-4 级 100% 方向）；
+  djh=707（退休）88.56 = (354.24-177.12)×50%（退休 5-6 级方向）。**资格字段未映射**（RETIRE_OFFICER_FLAG/
+  CIVIL_TYPE/gwydybz 均不能解释），内核一律 observed_only，不由金额反推资格。
+- `grziftw` = 医保外中的先行自付（自付二口径候选）：6 笔全部满足 Σ明细 grziftw == 结算 grziftw；
+  ybw - grziftw = 全自费部分（djh=705：504.40-164.40=340.00 = Σ sfxmdj=3 项目 zje）。
+- `degwyzhf/degwyzif` = 大额医疗互助资金支付/自付。djh=681/723/813（付克琴）全额走大额段：
+  2041.01=2551.26×80%、7247.68=9059.60×80%（退休 80%，ESP-LGP-003）；其年度统筹累计在院端抽取中为 0，
+  「统筹封顶后直接进入大额免起付」（ESP-DED-004）方向一致但数值不可证——eval 口径如实呈现矛盾，
+  eval_large 口径（假定累计已达 10 万封顶）下内核计算与账面 6 字段全吻合。
+- djh=705 现金恒等式差 **38.26**：xjzf=580.94 = ybn×(1-97%)+ybw（76.54+504.40），与住院类公疗退休
+  「起付线以上 97%」目标精确吻合（ESP-PMED-002），且该笔 RETIRE_OFFICER_FLAG='1'（军休干部线索）；
+  但 gfylbchbx 账面为 0、公疗资格字段未确认 → 差异如实保留，不凑平。
+- 机构：`m_institution` H_CODE='01110003'（协和）H_LEVEL='02' → 三级（住院分段口径：
+  01-05 三级 / 06-09 二级 / 10-13 一级及家庭病床；14 社区为门诊口径，门特按未知 fail-closed）。
+- 同人同日多笔结算（刘畅 602/603/605 住院起付 1300/325/325 并存）证明院端抽取**无法重建结算周期状态**，
+  起付独立重算必须依赖医保中心侧周期/累计数据，strict 口径下全部 not_verifiable 为设计内行为。

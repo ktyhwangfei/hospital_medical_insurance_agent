@@ -415,3 +415,136 @@ def test_custom_mapping_changes_sql_and_row_keys() -> None:
     assert result.data["trade_row"]["total_fee"] == "3000.00"
     sql, _ = conn.cursor_instance.executed[0]
     assert "[JYH]" in sql and "[TOTAL_FEE]" in sql
+
+
+# ── 批量评估实证决策（D6/D7/D8/D16）适配器级回归 ──
+
+
+def _trade_row_full(**overrides) -> dict:
+    """直接 dict 交易行（含资格/累计新列），绕过 _TRADE_COLS 元组夹具。"""
+    base = {
+        "t_tradeno": "T001", "t_tradedate": "2024-06-01", "t_hospcode": "H001",
+        "p_fundtype": "3", "t_curetype": "11", "pn_persontype": "11",
+        "p_birthday": "1980-01-01", "p_icno": "IC001", "tb_year": "2024",
+        "tb_feein": "0.00", "tb_bigpay": "0.00",
+        "p_official": "1", "p_officialcode": "0", "p_jclevel": "0",
+        "pn_norightreason": "",
+        "t_feeall": "3000.00", "t_feein": "3000.00", "t_feeout": "0.00",
+        "t_fundpay": "1080.00", "t_selfpay2": "0.00", "t_firstpay": "1800.00",
+        "t_bigpay": "1080.00", "t_bigselfpay": "120.00", "t_bcpay": "0.00",
+        "t_jcpay": "0.00", "t_officalpay": "0.00", "t_selfpay1": "1920.00",
+        "t_selfpayall": "1920.00", "t_personcountpay": "0.00", "t_cashpay": "1920.00",
+        "t_hasrefundmented": 0, "t_partialreturnflag": "",
+        "tr_oraginaltradeno": "", "t_oraginaltradeno": "",
+    }
+    base.update(overrides)
+    return base
+
+
+def _build_direct(trade_row: dict, **kwargs):
+    return q.build_snapshot(
+        trade_row=trade_row,
+        item_rows=[],
+        drug_catalog_rows=[],
+        service_catalog_rows=[],
+        material_catalog_rows=[],
+        institution_h_level="02",
+        rounding_mode=MODE,
+        **kwargs,
+    )
+
+
+def test_d6_d7_d8_eligibility_default_off_fail_closed() -> None:
+    """默认不开派生：资格字段全部 None（禁止金额反推资格）。"""
+    snapshot, notes = _build_direct(_trade_row_full())
+    p = snapshot.person
+    assert p.is_disabled_veteran is None
+    assert p.public_medical_eligible is None
+    assert p.retirement_category is None
+    assert not any("ELIGIBILITY_DERIVED" in n for n in notes)
+
+
+def test_d6_pmed_eligibility_from_official_codes() -> None:
+    """公疗资格：P_Official='0'（字典150 享受）且 P_OfficialCode='3' → True；其余 False。"""
+    snap, _ = _build_direct(
+        _trade_row_full(p_official="0", p_officialcode="3"),
+        derive_eligibility_from_codes=True)
+    assert snap.person.public_medical_eligible is True
+    assert snap.person.public_medical_designated is True
+    snap2, _ = _build_direct(
+        _trade_row_full(p_official="1", p_officialcode="3"),
+        derive_eligibility_from_codes=True)
+    assert snap2.person.public_medical_eligible is False
+    assert snap2.person.public_medical_designated is None
+
+
+def test_d7_disabled_veteran_from_person_type() -> None:
+    """军残资格：PN_PersonType 属字典 290 伤残军人类别码；P_JCLevel 1-4/5-6 映射等级。"""
+    snap, _ = _build_direct(
+        _trade_row_full(pn_persontype="13", p_jclevel="5"),
+        derive_eligibility_from_codes=True)
+    assert snap.person.is_disabled_veteran is True
+    assert snap.person.military_disability_grade == "5-6"
+    assert snap.person.is_rural_disabled_veteran is False
+    snap2, _ = _build_direct(
+        _trade_row_full(pn_persontype="49", p_jclevel="3"),
+        derive_eligibility_from_codes=True)
+    assert snap2.person.is_rural_disabled_veteran is True
+    assert snap2.person.military_disability_grade == "1-4"
+    snap3, _ = _build_direct(
+        _trade_row_full(pn_persontype="11"),
+        derive_eligibility_from_codes=True)
+    assert snap3.person.is_disabled_veteran is False
+
+
+def test_d8_retire_category_normal_and_enroll_fallback() -> None:
+    """退休补充：21/22 → 普通（normal），纳入日期按规则起始日 2006-04-01 占位。"""
+    snap, _ = _build_direct(
+        _trade_row_full(pn_persontype="21"), derive_eligibility_from_codes=True)
+    assert snap.person.retirement_category == "normal"
+    assert snap.person.retire_supplement_enroll_date == date(2006, 4, 1)
+    # 社会化退休代码（61）类别未确认 → 保持 None（fail-closed）
+    snap2, _ = _build_direct(
+        _trade_row_full(pn_persontype="61"), derive_eligibility_from_codes=True)
+    assert snap2.person.retirement_category is None
+    assert snap2.person.retire_supplement_enroll_date is None
+
+
+def test_d16_accumulation_overrides() -> None:
+    """累计口径：TB_BigPay 账面取用与 TB_FeeIn 覆盖（服务层推导注入点）。"""
+    snap, _ = _build_direct(
+        _trade_row_full(tb_bigpay="1234.56"),
+        prior_in_scope_fee_is_pre_trade=True,
+        use_book_prior_big_pay=True,
+        prior_in_scope_fee_override=Decimal("77.70"),
+        in_scope_basis_aligned=True,
+    )
+    acc = snap.accumulation
+    assert acc.prior_fund_payment == Decimal("1234.56")
+    assert acc.prior_fund_payment_is_pre_trade is True
+    assert acc.prior_in_scope_fee == Decimal("77.70")  # 覆盖账面 TB_FeeIn=0
+    assert acc.in_scope_basis_aligned is True
+
+
+def test_d16_derive_in_hospital_accumulation_anchor_floor() -> None:
+    """同人同年推导：未维护行累加，锚点行（TB_Year=交易年）抬升 floor，排除自身与未来。"""
+    cols = ("T_TradeNo", "T_TradeDate", "TB_Year", "TB_FeeIn", "T_FeeIn",
+            "TB_BigPay", "T_BigPay")
+    rows = [
+        ("T-A", "2024-01-05 10:00:00", "2000", "0.00", "100.00", "0.00", "10.00"),
+        ("T-B", "2024-02-01 10:00:00", "2024", "500.00", "50.00", "200.00", "5.00"),
+        ("T-C", "2024-03-01 10:00:00", "2000", "0.00", "25.00", "0.00", "2.00"),
+        ("T-NOW", "2024-03-10 10:00:00", "2000", "0.00", "999.00", "0.00", "99.00"),
+        ("T-FUTURE", "2024-04-01 10:00:00", "2000", "0.00", "777.00", "0.00", "77.00"),
+    ]
+    conn = _RoutingConn({"o_Trade": (cols, rows)})
+    from datetime import datetime
+    result = q.derive_in_hospital_accumulation(
+        conn, "IC001", "3", datetime(2024, 3, 10, 10, 0, 0), "T-NOW")
+    assert result.status == AdapterCallStatus.SUCCESS
+    # floor：100 → max(100,500)+50=550 → +25=575；自身与未来排除
+    assert result.data["prior_in_scope_fee"] == Decimal("575.00")
+    # fund floor：10 → max(10,200)+5=205 → +2=207
+    assert result.data["prior_fund_payment"] == Decimal("207.00")
+    assert result.data["anchor_count"] == 1
+    assert result.data["prior_trade_count"] == 3

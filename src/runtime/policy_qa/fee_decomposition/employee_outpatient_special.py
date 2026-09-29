@@ -48,7 +48,9 @@ from src.runtime.policy_qa.fee_decomposition.employee_outpatient import (
 from src.runtime.policy_qa.fee_decomposition.params_employee_outpatient_special import (
     select_large_cap,
     select_large_fund_rate,
+    select_military_param,
     select_pool_cap,
+    select_public_medical_param,
     select_retire_supplement_rates,
     select_retired_factor,
     select_segment_rates,
@@ -447,11 +449,46 @@ def _compute_funds(
             affected_fields=("TCZHF", "TCZIF")))
         return _blocked_fund("PERSON_KIND_UNKNOWN", tuple(branches), tuple(uncertainties))
 
-    # 本笔费用坐标下界 C0 = max(D - F, 0)（D 未知取 F=观察起付 → C0=0）；
-    # 段边界为周期内医保内费用累计绝对坐标（含起付段）
+    # 分段绝对坐标：confirmed 且携带周期内交易前医保内累计 P（yb_dyxxtsb 交易后口径−本笔）
+    # 时用精确坐标 start=P+F；否则按下界 C0=max(D-F,0)（D 未知取 F=观察起付→C0=0，下界假定）
     paid = deductible.deductible_paid if deductible.deductible_paid is not None else Decimal("0")
     d_floor = deductible.deductible_standard if deductible.deductible_standard is not None else paid
-    c0 = max(d_floor - paid, Decimal("0"))
+    prior_in_scope = snapshot.cycle.prior_cycle_in_scope_total
+    exact_coordinate = (snapshot.cycle.evidence_status == "confirmed"
+                        and prior_in_scope is not None)
+    c0 = prior_in_scope if exact_coordinate else max(d_floor - paid, Decimal("0"))
+
+    # 坐标守卫（Issue #79 mz 套表评估口径）：坐标未确认且各段自付比例不完全相同时，
+    # 唯一比例分配不可证明（与封顶「未跨界可证明才可算」同一原则），不按下界硬算
+    if snapshot.segment_coordinate_guard and not exact_coordinate:
+        distinct_ratios = {seg.employed_self_pay_ratio * factor for seg in seg_sel.segments}
+        if len(distinct_ratios) > 1:
+            branches.append(BranchTrace(
+                step_id="pool.coordinate_guard", module_id="pool_fund", scope_ref="settlement",
+                condition=BranchCondition("segment_coordinate",
+                                          "分段坐标未知且各段比例不同，唯一比例分配不可证明",
+                                          "provable", "false", "唯一分配可证明"),
+                outcome=BranchOutcome.BLOCKED, reason_code="SEGMENT_COORDINATE_UNDERDETERMINED",
+                input_refs=("fact.cycle.prior_cycle_in_scope_total",),
+                rule_refs=tuple(seg.rule_id for seg in seg_sel.segments)))
+            uncertainties.append(DecompositionUncertainty(
+                id="u.pool.coordinate", code="SEGMENT_COORDINATE_UNDERDETERMINED",
+                message="结算周期内医保内费用累计坐标在院端数据中不可得（跨院/新系统无 dyxxtsb 行），"
+                        "本笔可能落入不同比例段，统筹/大额字段不可确定，不按坐标下界硬算。",
+                affected_fields=("TCZHF", "TCZIF", "DEGWYZHF", "DEGWYZIF")))
+            return _blocked_fund("SEGMENT_COORDINATE_UNDERDETERMINED", tuple(branches),
+                                 tuple(uncertainties))
+    branches.append(BranchTrace(
+        step_id="pool.coordinate", module_id="pool_fund", scope_ref="settlement",
+        condition=BranchCondition("segment_coordinate",
+                                  "共付段起点坐标（confirmed=精确 P；否则下界 C0）",
+                                  "eq", decimal_to_str(c0),
+                                  "exact" if exact_coordinate else "lower_bound"),
+        outcome=BranchOutcome.TRUE,
+        reason_code=None if exact_coordinate else "SEGMENT_COORDINATE_LOWER_BOUND",
+        input_refs=("fact.cycle.prior_cycle_in_scope_total",),
+        rule_refs=tuple(seg.rule_id for seg in seg_sel.segments)))
+
     start = c0 + paid  # 共付段起点坐标
     end = start + copay_base
 
@@ -472,7 +509,9 @@ def _compute_funds(
     pool_base = Decimal("0")
     operands: list[CalculationOperand] = [
         CalculationOperand("calc.deductible.copay_base", decimal_to_str(copay_base)),
-        CalculationOperand("calc.cycle_position_lower_bound", decimal_to_str(c0)),
+        CalculationOperand(
+            "calc.cycle_position_exact" if exact_coordinate
+            else "calc.cycle_position_lower_bound", decimal_to_str(c0)),
     ]
     unrounded_total = Decimal("0")
     for seg_name, amount, self_ratio, rule_id in segment_amounts:
@@ -673,6 +712,8 @@ class _RetireOutcome:
     amount: Decimal | None
     outcome: BranchOutcome
     reason_code: str | None = None
+    pool_part: Decimal | None = None  # 统筹共付段补助部分（军残/公疗剩余自付口径依赖）
+    large_part: Decimal | None = None  # 大额共付段补助部分
     branches: tuple[BranchTrace, ...] = ()
     calculations: tuple[CalculationRecord, ...] = ()
     uncertainties: tuple[DecompositionUncertainty, ...] = ()
@@ -705,8 +746,10 @@ def _retire_supplement(
             input_refs=("fact.registration.cblb",)))
         if person_kind == PersonKind.EMPLOYED:
             return _RetireOutcome(Decimal("0"), BranchOutcome.NOT_APPLICABLE, "NOT_RETIRED",
-                                  tuple(branches))
-        return _RetireOutcome(None, BranchOutcome.UNKNOWN, "PERSON_KIND_UNKNOWN", tuple(branches))
+                                  pool_part=Decimal("0"), large_part=Decimal("0"),
+                                  branches=tuple(branches))
+        return _RetireOutcome(None, BranchOutcome.UNKNOWN, "PERSON_KIND_UNKNOWN",
+                              branches=tuple(branches))
 
     # 资格时点：门特以费用发生日期为准（ESP-RSUP-005，2006-04-01 起）
     rsup_effective = select_retire_supplement_rates("normal", snapshot.settle_date)
@@ -719,7 +762,8 @@ def _retire_supplement(
                                       "fsrq"),
             outcome=BranchOutcome.UNKNOWN, reason_code="FEE_DATE_MISSING",
             input_refs=("fact.items.fee_date",), rule_refs=("ESP-RSUP-005",)))
-        return _RetireOutcome(None, BranchOutcome.UNKNOWN, "FEE_DATE_MISSING", tuple(branches),
+        return _RetireOutcome(None, BranchOutcome.UNKNOWN, "FEE_DATE_MISSING",
+                              branches=tuple(branches),
                               uncertainties=(DecompositionUncertainty(
                                   id="u.rsup.fee_date", code="FEE_DATE_MISSING",
                                   message="部分明细缺费用发生日期，退休补助资格时点不能判定。",
@@ -732,7 +776,7 @@ def _retire_supplement(
             outcome=BranchOutcome.BLOCKED, reason_code="CROSS_DATE_ALLOCATION_UNCONFIRMED",
             rule_refs=("ESP-RSUP-005",)))
         return _RetireOutcome(None, BranchOutcome.BLOCKED, "CROSS_DATE_ALLOCATION_UNCONFIRMED",
-                              tuple(branches),
+                              branches=tuple(branches),
                               uncertainties=(DecompositionUncertainty(
                                   id="u.rsup.cross_date", code="CROSS_DATE_ALLOCATION_UNCONFIRMED",
                                   message="存在早于退休补充实施日的费用发生日期，跨日费用在各段的分配依据未确认，不按比例摊分。",
@@ -751,7 +795,8 @@ def _retire_supplement(
                                       None, "pool_self/large_self"),
             outcome=BranchOutcome.BLOCKED, reason_code="UPSTREAM_BASE_MISSING",
             input_refs=("calc.pool.segmented",)))
-        return _RetireOutcome(None, BranchOutcome.BLOCKED, "UPSTREAM_BASE_MISSING", tuple(branches),
+        return _RetireOutcome(None, BranchOutcome.BLOCKED, "UPSTREAM_BASE_MISSING",
+                              branches=tuple(branches),
                               uncertainties=(DecompositionUncertainty(
                                   id="u.rsup.base", code="UPSTREAM_BASE_MISSING",
                                   message="统筹/大额共付段自付未得出，退休补助阻断。",
@@ -771,7 +816,8 @@ def _retire_supplement(
     if rates.pool.outcome != BranchOutcome.TRUE or rates.pool.param is None \
             or rates.pool.param.ratio is None:
         return _RetireOutcome(None, BranchOutcome.UNKNOWN,
-                              rates.pool.reason_code or "PARAM_VERSION_NOT_FOUND", tuple(branches))
+                              rates.pool.reason_code or "PARAM_VERSION_NOT_FOUND",
+                              branches=tuple(branches))
 
     rounding = snapshot.rounding_mode
     pool_ratio = rates.pool.param.ratio
@@ -802,7 +848,8 @@ def _retire_supplement(
                         "不默认 50%，退休补助整体不可确定（统筹段部分仍为独立计算值）。",
                 affected_fields=("BCZHF",)))
             return _RetireOutcome(None, BranchOutcome.BLOCKED, "RETIREMENT_CATEGORY_UNKNOWN",
-                                  tuple(branches), tuple(calcs), tuple(uncertainties))
+                                  branches=tuple(branches), calculations=tuple(calcs),
+                                  uncertainties=tuple(uncertainties))
         large_ratio = rates.large.param.ratio
         large_unrounded = large_self_pay * large_ratio
         large_part = apply_rounding(large_unrounded, rounding)
@@ -828,8 +875,301 @@ def _retire_supplement(
         rule_refs=(rates.pool.param.rule_id,)
         + ((rates.large.param.rule_id,) if large_self_pay > 0 and rates.large.param else ()),
         calculation_refs=tuple(c.calculation_id for c in calcs)))
-    return _RetireOutcome(amount, BranchOutcome.TRUE, None, tuple(branches), tuple(calcs),
-                          tuple(uncertainties))
+    return _RetireOutcome(amount, BranchOutcome.TRUE, None,
+                          pool_part=pool_part, large_part=large_part,
+                          branches=tuple(branches), calculations=tuple(calcs),
+                          uncertainties=tuple(uncertainties))
+
+
+# ── 军残补助（ESP-DVET-001..005） ────────────────────────────
+
+
+@dataclass(frozen=True)
+class _MilitaryOutcome:
+    amount: Decimal | None
+    deductible_ratio: Decimal  # 起付段补助比例 a（公疗公式依赖；无资格/未知=0）
+    outcome: BranchOutcome
+    reason_code: str | None = None
+    branches: tuple[BranchTrace, ...] = ()
+    calculations: tuple[CalculationRecord, ...] = ()
+    uncertainties: tuple[DecompositionUncertainty, ...] = ()
+
+
+def _military_supplement(
+    snapshot: OutpatientSpecialSnapshot,
+    person_kind: PersonKind,
+    deductible: _DeductibleOutcome,
+    funds: _FundOutcome,
+    rsup: _RetireOutcome,
+) -> _MilitaryOutcome:
+    """军残补助：起付×a + 统筹共付段（剩余）自付×a + 大额共付段（剩余）自付×a。
+
+    在职基数为自付原值（ESP-DVET-001/002）；退休基数为扣除退休补助后的剩余自付
+    （ESP-DVET-003/004，依赖退休补助独立计算结果，R 未知不得用零代替）。
+    资格由 person.military_grade（yb_brdjxx.cjjrdj，Issue #79 候选口径）给出。
+    """
+    mid = "military_supplement"
+    branches: list[BranchTrace] = []
+    calcs: list[CalculationRecord] = []
+    uncertainties: list[DecompositionUncertainty] = []
+
+    grade = snapshot.person.military_grade
+    raw = snapshot.person.military_grade_raw
+    eligible = grade in ("1-4", "5-6")
+    branches.append(BranchTrace(
+        step_id="dvet.eligibility", module_id=mid, scope_ref="settlement",
+        condition=BranchCondition("dvet_eligibility", "军残等级（cjjrdj→等级组）", "in",
+                                  f"raw={raw},grade={grade}", "1-4/5-6"),
+        outcome=(BranchOutcome.TRUE if eligible
+                 else BranchOutcome.NOT_APPLICABLE if raw in (None, "", "0")
+                 else BranchOutcome.UNKNOWN),
+        reason_code=(None if eligible
+                     else "NOT_DISABLED_VETERAN" if raw in (None, "", "0")
+                     else "MILITARY_GRADE_UNKNOWN"),
+        input_refs=("fact.registration.cjjrdj",),
+        rule_refs=("ESP-DVET-001", "ESP-DVET-002", "ESP-DVET-003", "ESP-DVET-004",
+                   "ESP-DVET-005")))
+    if not eligible:
+        if raw in (None, "", "0"):
+            return _MilitaryOutcome(Decimal("0"), Decimal("0"), BranchOutcome.NOT_APPLICABLE,
+                                    "NOT_DISABLED_VETERAN", tuple(branches))
+        return _MilitaryOutcome(None, Decimal("0"), BranchOutcome.UNKNOWN,
+                                "MILITARY_GRADE_UNKNOWN", tuple(branches))
+
+    # 比例档选择（在职/退休 × 1-4/5-6）
+    rate_sel = select_military_param(person_kind, grade, snapshot.settle_date)
+    branches.append(BranchTrace(
+        step_id="dvet.rate_select", module_id=mid, scope_ref="settlement",
+        condition=BranchCondition("dvet_rate", "军残补助比例档选择", "select",
+                                  f"{person_kind.value}+{grade}", "ESP-DVET-001..004"),
+        outcome=rate_sel.outcome, reason_code=rate_sel.reason_code,
+        rule_refs=("ESP-DVET-001", "ESP-DVET-002", "ESP-DVET-003", "ESP-DVET-004")))
+    if rate_sel.outcome != BranchOutcome.TRUE or rate_sel.param is None \
+            or rate_sel.param.ratio is None:
+        uncertainties.append(DecompositionUncertainty(
+            id="u.dvet.rate", code=rate_sel.reason_code or "PARAM_VERSION_NOT_FOUND",
+            message="军残补助比例档不能确定。", affected_fields=("JCZHF",)))
+        return _MilitaryOutcome(None, Decimal("0"), rate_sel.outcome,
+                                rate_sel.reason_code or "PARAM_VERSION_NOT_FOUND",
+                                tuple(branches), (), tuple(uncertainties))
+    ratio = rate_sel.param.ratio
+
+    # 基数：起付 + 统筹/大额共付段（剩余）自付
+    if deductible.deductible_paid is None or funds.pool_self_pay is None \
+            or funds.large_self_pay is None:
+        branches.append(BranchTrace(
+            step_id="dvet.base", module_id=mid, scope_ref="settlement",
+            condition=BranchCondition("dvet_base", "起付/统筹/大额自付可用性", "not_null",
+                                      None, "F/pool_self/large_self"),
+            outcome=BranchOutcome.BLOCKED, reason_code="UPSTREAM_BASE_MISSING",
+            input_refs=("calc.deductible.split", "calc.pool.segmented")))
+        uncertainties.append(DecompositionUncertainty(
+            id="u.dvet.base", code="UPSTREAM_BASE_MISSING",
+            message="起付或统筹/大额自付未得出，军残补助阻断。", affected_fields=("JCZHF",)))
+        return _MilitaryOutcome(None, Decimal("0"), BranchOutcome.BLOCKED,
+                                "UPSTREAM_BASE_MISSING", tuple(branches), (),
+                                tuple(uncertainties))
+
+    if person_kind == PersonKind.RETIRED:
+        if rsup.pool_part is None or rsup.large_part is None:
+            branches.append(BranchTrace(
+                step_id="dvet.base", module_id=mid, scope_ref="settlement",
+                condition=BranchCondition("dvet_base", "退休补助分段部分可用性（剩余自付口径）",
+                                          "not_null", None, "rsup.pool_part/large_part"),
+                outcome=BranchOutcome.BLOCKED, reason_code="RETIRE_SUPPLEMENT_BASE_MISSING",
+                input_refs=("calc.rsup.pool", "calc.rsup.large"),
+                rule_refs=("ESP-DVET-003", "ESP-DVET-004")))
+            uncertainties.append(DecompositionUncertainty(
+                id="u.dvet.rsup_base", code="RETIRE_SUPPLEMENT_BASE_MISSING",
+                message="退休补助未独立得出，剩余自付基数不可用零代替，军残补助阻断。",
+                affected_fields=("JCZHF",)))
+            return _MilitaryOutcome(None, Decimal("0"), BranchOutcome.BLOCKED,
+                                    "RETIRE_SUPPLEMENT_BASE_MISSING", tuple(branches), (),
+                                    tuple(uncertainties))
+        base_pool = funds.pool_self_pay - rsup.pool_part
+        base_large = funds.large_self_pay - rsup.large_part
+        base_note = "退休：剩余自付=自付-退休补助"
+    else:
+        base_pool = funds.pool_self_pay
+        base_large = funds.large_self_pay
+        base_note = "在职：自付原值"
+    base_ded = deductible.deductible_paid
+
+    rounding = snapshot.rounding_mode
+    ded_unrounded = base_ded * ratio
+    ded_part = apply_rounding(ded_unrounded, rounding)
+    pool_unrounded = base_pool * ratio
+    pool_part = apply_rounding(pool_unrounded, rounding)
+    large_unrounded = base_large * ratio
+    large_part = apply_rounding(large_unrounded, rounding)
+    calcs.append(CalculationRecord(
+        calculation_id="calc.dvet.amount", formula_id="special_military_supplement_v1",
+        formula_version="v1",
+        operands=(
+            CalculationOperand("calc.deductible.paid", decimal_to_str(base_ded)),
+            CalculationOperand("calc.pool.self_pay_residual", decimal_to_str(base_pool)),
+            CalculationOperand("calc.large.self_pay_residual", decimal_to_str(base_large)),
+            CalculationOperand(f"rule.{rate_sel.param.rule_id}", decimal_to_str(ratio)),
+        ),
+        unrounded_result=decimal_to_str(ded_unrounded + pool_unrounded + large_unrounded),
+        rounding_rule=f"explicit:{rounding.value}(ESP-RND-001 待确认；起付/统筹/大额三部分分别取整后求和)",
+        result=decimal_to_str(ded_part + pool_part + large_part)))
+    amount = ded_part + pool_part + large_part
+    branches.append(BranchTrace(
+        step_id="dvet.amount", module_id=mid, scope_ref="settlement",
+        condition=BranchCondition("dvet_amount",
+                                  f"军残=Σ(起付/统筹/大额基数)×{decimal_to_str(ratio)}（{base_note}）",
+                                  "formula", decimal_to_str(amount), None),
+        outcome=BranchOutcome.TRUE, rule_refs=(rate_sel.param.rule_id, "ESP-DVET-005"),
+        calculation_refs=("calc.dvet.amount",)))
+    return _MilitaryOutcome(amount, ratio, BranchOutcome.TRUE, None,
+                            tuple(branches), tuple(calcs), tuple(uncertainties))
+
+
+# ── 公费医疗补助（ESP-PMED-001..005） ─────────────────────────
+
+#: 公疗目标支付比例（含公疗后基金目标）：参数表 ESP-PMED-001/002 为文本值，
+#: 此处按人员身份显式编码（退休 95%/97%，在职 90%/94%），规则引用随计算记录保留
+_PMED_BELOW_TARGET = {PersonKind.RETIRED: Decimal("0.95"), PersonKind.EMPLOYED: Decimal("0.90")}
+_PMED_ABOVE_TARGET = {PersonKind.RETIRED: Decimal("0.97"), PersonKind.EMPLOYED: Decimal("0.94")}
+
+
+@dataclass(frozen=True)
+class _PmedOutcome:
+    amount: Decimal | None
+    outcome: BranchOutcome
+    reason_code: str | None = None
+    branches: tuple[BranchTrace, ...] = ()
+    calculations: tuple[CalculationRecord, ...] = ()
+    uncertainties: tuple[DecompositionUncertainty, ...] = ()
+
+
+def _public_medical_supplement(
+    snapshot: OutpatientSpecialSnapshot,
+    person_kind: PersonKind,
+    deductible: _DeductibleOutcome,
+    funds: _FundOutcome,
+    rsup: _RetireOutcome,
+    dvet: _MilitaryOutcome,
+) -> _PmedOutcome:
+    """公疗补助（一般公疗，ESP-PMED-001/002/004）。
+
+    起付线以下部分 = F×(c−a)；起付线以上部分 = max(0, B×d − tczhf − degwyzhf
+    − bczhf − jczhf + F×a)；c/d 为含公疗后基金目标比例（退休 95%/97%，在职 90%/94%），
+    a 为军残起付段补助比例。结算顺序：统筹/大额→退休补助→军残→公疗（ESP-PMED-004）。
+    资格由 person.civil_medical_eligible（yb_brdjxx.gwydybz，Issue #79 候选口径）给出。
+    """
+    mid = "public_medical"
+    branches: list[BranchTrace] = []
+    calcs: list[CalculationRecord] = []
+    uncertainties: list[DecompositionUncertainty] = []
+
+    eligible = snapshot.person.civil_medical_eligible
+    branches.append(BranchTrace(
+        step_id="pmed.eligibility", module_id=mid, scope_ref="settlement",
+        condition=BranchCondition("pmed_eligibility", "公疗资格（gwydybz：0=享受/1=不享受）",
+                                  "eq", str(eligible), "True"),
+        outcome=(BranchOutcome.TRUE if eligible else BranchOutcome.NOT_APPLICABLE),
+        reason_code=None if eligible else "NOT_PUBLIC_MEDICAL",
+        input_refs=("fact.registration.gwydybz",),
+        rule_refs=("ESP-PMED-001", "ESP-PMED-005")))
+    if not eligible:
+        return _PmedOutcome(Decimal("0"), BranchOutcome.NOT_APPLICABLE,
+                            "NOT_PUBLIC_MEDICAL", tuple(branches))
+
+    if person_kind == PersonKind.UNKNOWN:
+        branches.append(BranchTrace(
+            step_id="pmed.target_ratio", module_id=mid, scope_ref="settlement",
+            condition=BranchCondition("pmed_target", "公疗目标比例需人员身份确定", "select",
+                                      None, "退休95%/97% 在职90%/94%"),
+            outcome=BranchOutcome.UNKNOWN, reason_code="PERSON_KIND_UNKNOWN",
+            rule_refs=("ESP-PMED-001", "ESP-PMED-002")))
+        return _PmedOutcome(None, BranchOutcome.UNKNOWN, "PERSON_KIND_UNKNOWN", tuple(branches))
+
+    # 版本门控：ESP-PMED-001/002 按结算日期选版本（值为文本，比例显式编码于内核）
+    below_sel = select_public_medical_param("below_deductible", snapshot.settle_date)
+    above_sel = select_public_medical_param("above_deductible", snapshot.settle_date)
+    branches.append(BranchTrace(
+        step_id="pmed.target_ratio", module_id=mid, scope_ref="settlement",
+        condition=BranchCondition("pmed_target", "公疗目标比例版本选择", "select",
+                                  snapshot.settle_date.isoformat(), "ESP-PMED-001/002"),
+        outcome=(BranchOutcome.TRUE
+                 if below_sel.outcome == BranchOutcome.TRUE
+                 and above_sel.outcome == BranchOutcome.TRUE else BranchOutcome.UNKNOWN),
+        reason_code=below_sel.reason_code or above_sel.reason_code,
+        rule_refs=("ESP-PMED-001", "ESP-PMED-002")))
+    if below_sel.outcome != BranchOutcome.TRUE or above_sel.outcome != BranchOutcome.TRUE:
+        uncertainties.append(DecompositionUncertainty(
+            id="u.pmed.param", code=below_sel.reason_code or above_sel.reason_code
+            or "PARAM_VERSION_NOT_FOUND",
+            message="公疗目标比例版本不能确定。", affected_fields=("GFYLBCHBX",)))
+        return _PmedOutcome(None, BranchOutcome.UNKNOWN,
+                            below_sel.reason_code or above_sel.reason_code
+                            or "PARAM_VERSION_NOT_FOUND",
+                            tuple(branches), (), tuple(uncertainties))
+
+    # 依赖基数：起付 F、共付段基数 B、统筹/大额支付、退休补助、军残补助
+    rsup_amount = rsup.amount if rsup.amount is not None else Decimal("0")
+    if person_kind == PersonKind.RETIRED and rsup.outcome != BranchOutcome.TRUE:
+        rsup_amount = None  # 退休人员退休补助未知不得按零代入
+    missing = (deductible.deductible_paid is None or deductible.copay_base is None
+               or funds.pool_pay is None or funds.large_pay is None
+               or dvet.amount is None or rsup_amount is None)
+    if missing:
+        branches.append(BranchTrace(
+            step_id="pmed.base", module_id=mid, scope_ref="settlement",
+            condition=BranchCondition("pmed_base", "起付/共付基数/各基金支付可用性", "not_null",
+                                      None, "F/B/tczhf/degwyzhf/bczhf/jczhf"),
+            outcome=BranchOutcome.BLOCKED, reason_code="UPSTREAM_BASE_MISSING",
+            rule_refs=("ESP-PMED-004",)))
+        uncertainties.append(DecompositionUncertainty(
+            id="u.pmed.base", code="UPSTREAM_BASE_MISSING",
+            message="公疗计算顺序上游（统筹/大额/退休补助/军残）未完整得出，公疗补助阻断。",
+            affected_fields=("GFYLBCHBX",)))
+        return _PmedOutcome(None, BranchOutcome.BLOCKED, "UPSTREAM_BASE_MISSING",
+                            tuple(branches), (), tuple(uncertainties))
+
+    paid = deductible.deductible_paid
+    copay_base = deductible.copay_base
+    a = dvet.deductible_ratio
+    c = _PMED_BELOW_TARGET[person_kind]
+    d = _PMED_ABOVE_TARGET[person_kind]
+    rounding = snapshot.rounding_mode
+
+    below_unrounded = paid * max(c - a, Decimal("0"))
+    below_part = apply_rounding(below_unrounded, rounding)
+    above_unrounded = (copay_base * d - funds.pool_pay - funds.large_pay
+                       - rsup_amount - dvet.amount + paid * a)
+    above_part = apply_rounding(max(above_unrounded, Decimal("0")), rounding)
+    calcs.append(CalculationRecord(
+        calculation_id="calc.pmed.amount", formula_id="special_public_medical_v1",
+        formula_version="v1",
+        operands=(
+            CalculationOperand("calc.deductible.paid", decimal_to_str(paid)),
+            CalculationOperand("calc.deductible.copay_base", decimal_to_str(copay_base)),
+            CalculationOperand("calc.pool.pay", decimal_to_str(funds.pool_pay)),
+            CalculationOperand("calc.large.pay", decimal_to_str(funds.large_pay)),
+            CalculationOperand("calc.rsup.amount", decimal_to_str(rsup_amount)),
+            CalculationOperand("calc.dvet.amount", decimal_to_str(dvet.amount)),
+            CalculationOperand("rule.ESP-PMED-001.target", decimal_to_str(c)),
+            CalculationOperand("rule.ESP-PMED-002.target", decimal_to_str(d)),
+            CalculationOperand("rule.dvet.deductible_ratio", decimal_to_str(a)),
+        ),
+        unrounded_result=decimal_to_str(below_unrounded + above_unrounded),
+        rounding_rule=f"explicit:{rounding.value}(ESP-RND-001 待确认；起付线以下/以上两部分分别取整后求和)",
+        result=decimal_to_str(below_part + above_part)))
+    amount = below_part + above_part
+    branches.append(BranchTrace(
+        step_id="pmed.amount", module_id=mid, scope_ref="settlement",
+        condition=BranchCondition("pmed_amount",
+                                  "公疗=F×(c-a)+max(0,B×d-各基金支付-补助+F×a)",
+                                  "formula", decimal_to_str(amount),
+                                  f"c={decimal_to_str(c)},d={decimal_to_str(d)},a={decimal_to_str(a)}"),
+        outcome=BranchOutcome.TRUE,
+        rule_refs=("ESP-PMED-001", "ESP-PMED-002", "ESP-PMED-004"),
+        calculation_refs=("calc.pmed.amount",)))
+    return _PmedOutcome(amount, BranchOutcome.TRUE, None, tuple(branches), tuple(calcs),
+                        tuple(uncertainties))
 
 
 # ── 主流程 ────────────────────────────────────────────────────
@@ -1000,31 +1340,53 @@ def decompose_employee_outpatient_special(
     calcs.extend(rsup.calculations)
     uncertainties.extend(rsup.uncertainties)
 
-    # 8. 军残/公疗：资格字段未映射 → 一律 observed_only；账面非零追加 uncertainty
+    # 8. 军残/公疗：资格字段已映射（Issue #79 mz 套表 cjjrdj/gwydybz 候选口径）→ 独立计算；
+    # 未映射（zy 套表流程）→ 保持 observed_only，账面非零追加 uncertainty
     obs = snapshot.observed
-    branches.append(BranchTrace(
-        step_id="dvet.eligibility", module_id="military_supplement", scope_ref="settlement",
-        condition=BranchCondition("dvet_eligibility", "军残资格字段", "mapped", None, "资格/等级/有效期"),
-        outcome=BranchOutcome.UNKNOWN, reason_code="MILITARY_ELIGIBILITY_FIELD_UNMAPPED",
-        rule_refs=("ESP-DVET-001", "ESP-DVET-002", "ESP-DVET-003", "ESP-DVET-004", "ESP-DVET-005")))
-    if obs.jczhf is not None and obs.jczhf != 0:
-        uncertainties.append(DecompositionUncertainty(
-            id="u.dvet.book_nonzero", code="BOOK_NONZERO_BUT_ELIGIBILITY_UNKNOWN",
-            message=f"账面军残补助 jczhf={decimal_to_str(obs.jczhf)} 非零，但军残资格字段未映射，"
-                    "不得由金额反推资格；该金额仅作观测值保留。",
-            affected_fields=("JCZHF",)))
-    branches.append(BranchTrace(
-        step_id="pmed.eligibility", module_id="public_medical", scope_ref="settlement",
-        condition=BranchCondition("pmed_eligibility", "公疗资格/本人定点字段", "mapped", None,
-                                  "资格+本人定点"),
-        outcome=BranchOutcome.UNKNOWN, reason_code="PMED_ELIGIBILITY_FIELD_UNMAPPED",
-        rule_refs=("ESP-PMED-001", "ESP-PMED-002", "ESP-PMED-003", "ESP-PMED-004", "ESP-PMED-005")))
-    if obs.gfylbchbx is not None and obs.gfylbchbx != 0:
-        uncertainties.append(DecompositionUncertainty(
-            id="u.pmed.book_nonzero", code="BOOK_NONZERO_BUT_ELIGIBILITY_UNKNOWN",
-            message=f"账面公疗补助 gfylbchbx={decimal_to_str(obs.gfylbchbx)} 非零，但公疗资格字段未映射，"
-                    "不得由金额反推资格；该金额仅作观测值保留。",
-            affected_fields=("GFYLBCHBX",)))
+    if snapshot.person.military_grade is not None \
+            or snapshot.person.military_grade_raw is not None:
+        dvet = _military_supplement(snapshot, person_kind, deductible, funds, rsup)
+        branches.extend(dvet.branches)
+        calcs.extend(dvet.calculations)
+        uncertainties.extend(dvet.uncertainties)
+    else:
+        dvet = None
+        branches.append(BranchTrace(
+            step_id="dvet.eligibility", module_id="military_supplement", scope_ref="settlement",
+            condition=BranchCondition("dvet_eligibility", "军残资格字段", "mapped", None,
+                                      "资格/等级/有效期"),
+            outcome=BranchOutcome.UNKNOWN, reason_code="MILITARY_ELIGIBILITY_FIELD_UNMAPPED",
+            rule_refs=("ESP-DVET-001", "ESP-DVET-002", "ESP-DVET-003", "ESP-DVET-004",
+                       "ESP-DVET-005")))
+        if obs.jczhf is not None and obs.jczhf != 0:
+            uncertainties.append(DecompositionUncertainty(
+                id="u.dvet.book_nonzero", code="BOOK_NONZERO_BUT_ELIGIBILITY_UNKNOWN",
+                message=f"账面军残补助 jczhf={decimal_to_str(obs.jczhf)} 非零，但军残资格字段未映射，"
+                        "不得由金额反推资格；该金额仅作观测值保留。",
+                affected_fields=("JCZHF",)))
+
+    if snapshot.person.civil_medical_eligible is not None:
+        if dvet is None:
+            raise AssertionError("公疗计算依赖军残结果，军残未计算时公疗资格不应已映射")
+        pmed = _public_medical_supplement(snapshot, person_kind, deductible, funds, rsup, dvet)
+        branches.extend(pmed.branches)
+        calcs.extend(pmed.calculations)
+        uncertainties.extend(pmed.uncertainties)
+    else:
+        pmed = None
+        branches.append(BranchTrace(
+            step_id="pmed.eligibility", module_id="public_medical", scope_ref="settlement",
+            condition=BranchCondition("pmed_eligibility", "公疗资格/本人定点字段", "mapped", None,
+                                      "资格+本人定点"),
+            outcome=BranchOutcome.UNKNOWN, reason_code="PMED_ELIGIBILITY_FIELD_UNMAPPED",
+            rule_refs=("ESP-PMED-001", "ESP-PMED-002", "ESP-PMED-003", "ESP-PMED-004",
+                       "ESP-PMED-005")))
+        if obs.gfylbchbx is not None and obs.gfylbchbx != 0:
+            uncertainties.append(DecompositionUncertainty(
+                id="u.pmed.book_nonzero", code="BOOK_NONZERO_BUT_ELIGIBILITY_UNKNOWN",
+                message=f"账面公疗补助 gfylbchbx={decimal_to_str(obs.gfylbchbx)} 非零，但公疗资格字段未映射，"
+                        "不得由金额反推资格；该金额仅作观测值保留。",
+                affected_fields=("GFYLBCHBX",)))
 
     # 9. 取整规则待确认的全局不确定性（ESP-RND-001；模式已显式传入并记录于各计算记录）
     uncertainties.append(DecompositionUncertainty(
@@ -1047,7 +1409,8 @@ def decompose_employee_outpatient_special(
                 value=rule_id, approval_status=param.confirmation_status))
 
     # 10. 逐字段核对（含账面恒等式）
-    fields, identity_uncertainties = _build_fields(snapshot, sums, deductible, funds, rsup)
+    fields, identity_uncertainties = _build_fields(snapshot, sums, deductible, funds, rsup,
+                                                   dvet, pmed)
     uncertainties.extend(identity_uncertainties)
     recon_status = overall_reconciliation_status(tuple(fields))
 
@@ -1085,6 +1448,8 @@ def _build_fields(
     deductible: _DeductibleOutcome,
     funds: _FundOutcome,
     rsup: _RetireOutcome,
+    dvet: _MilitaryOutcome | None,
+    pmed: _PmedOutcome | None,
 ) -> tuple[list[FieldReconciliation], list[DecompositionUncertainty]]:
     """按核对矩阵生成全部目标字段结果项（含零值与缺失值；观测值仅作核对目标）。"""
     obs = snapshot.observed
@@ -1141,14 +1506,31 @@ def _build_fields(
                         rsup.amount, obs.bczhf, rsup.outcome, rsup.reason_code,
                         calculation_refs=tuple(c.calculation_id for c in rsup.calculations),
                         uncertainty_refs=tuple(caliber_refs)),
-        # 军残/公疗：资格字段未映射 → observed_only（not_verifiable），账面非零另有 uncertainty
-        reconcile_field("JCZHF", _FIELD_LABELS["JCZHF"], CheckType.INDEPENDENT_RECALCULATION,
-                        None, obs.jczhf, BranchOutcome.UNKNOWN,
-                        "MILITARY_ELIGIBILITY_FIELD_UNMAPPED"),
-        reconcile_field("GFYLBCHBX", _FIELD_LABELS["GFYLBCHBX"], CheckType.INDEPENDENT_RECALCULATION,
-                        None, obs.gfylbchbx, BranchOutcome.UNKNOWN,
-                        "PMED_ELIGIBILITY_FIELD_UNMAPPED"),
     ]
+
+    # 军残/公疗：资格已映射 → 独立计算值核对；未映射 → observed_only（not_verifiable）
+    if dvet is not None:
+        entries.append(reconcile_field(
+            "JCZHF", _FIELD_LABELS["JCZHF"], CheckType.INDEPENDENT_RECALCULATION,
+            dvet.amount, obs.jczhf, dvet.outcome, dvet.reason_code,
+            calculation_refs=tuple(c.calculation_id for c in dvet.calculations),
+            uncertainty_refs=tuple(caliber_refs)))
+    else:
+        entries.append(reconcile_field(
+            "JCZHF", _FIELD_LABELS["JCZHF"], CheckType.INDEPENDENT_RECALCULATION,
+            None, obs.jczhf, BranchOutcome.UNKNOWN,
+            "MILITARY_ELIGIBILITY_FIELD_UNMAPPED"))
+    if pmed is not None:
+        entries.append(reconcile_field(
+            "GFYLBCHBX", _FIELD_LABELS["GFYLBCHBX"], CheckType.INDEPENDENT_RECALCULATION,
+            pmed.amount, obs.gfylbchbx, pmed.outcome, pmed.reason_code,
+            calculation_refs=tuple(c.calculation_id for c in pmed.calculations),
+            uncertainty_refs=tuple(caliber_refs)))
+    else:
+        entries.append(reconcile_field(
+            "GFYLBCHBX", _FIELD_LABELS["GFYLBCHBX"], CheckType.INDEPENDENT_RECALCULATION,
+            None, obs.gfylbchbx, BranchOutcome.UNKNOWN,
+            "PMED_ELIGIBILITY_FIELD_UNMAPPED"))
 
     # 账面恒等式 1：zje = ybn + ybw（只证明账面字段间等式，不证明字段原因）
     entries.append(identity_field("ZJE.identity", _FIELD_LABELS["ZJE"] + "（账面恒等 医保内+医保外）",
