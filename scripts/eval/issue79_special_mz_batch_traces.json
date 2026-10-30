@@ -20,7 +20,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_fee"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -45,12 +47,14 @@
         "label": "医保外费用",
         "check_type": "detail_aggregation",
         "check_status": "matched",
-        "observed_amount": "0",
+        "observed_amount": "0.00",
         "calculated_amount": "0.0000",
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_out_scope"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -64,7 +68,25 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_advance"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIF1",
+        "label": "个人支付自付（一）金额",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": "1723.0000",
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "SELF_PAY_1_BOOK_COLUMN_UNMAINTAINED",
+        "calculation_refs": [
+          "calc.self_pay_1.parts"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -79,7 +101,8 @@
         "explanation_level": "amount_reconciled",
         "reason_code": null,
         "calculation_refs": [
-          "calc.deductible.split"
+          "calc.deductible.split",
+          "calc.deductible.copay_base"
         ],
         "citation_refs": [],
         "uncertainty_refs": []
@@ -126,7 +149,9 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.large.settle"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -140,7 +165,9 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.large.self_pay"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -155,7 +182,8 @@
         "explanation_level": "amount_reconciled",
         "reason_code": null,
         "calculation_refs": [
-          "calc.rsup.pool"
+          "calc.rsup.pool",
+          "calc.rsup.amount"
         ],
         "citation_refs": [],
         "uncertainty_refs": []
@@ -171,6 +199,8 @@
         "explanation_level": "amount_reconciled",
         "reason_code": null,
         "calculation_refs": [
+          "calc.pool.self_pay_residual",
+          "calc.large.self_pay_residual",
           "calc.dvet.amount"
         ],
         "citation_refs": [],
@@ -616,6 +646,102 @@
         "calculation_refs": []
       },
       {
+        "step_id": "pool.segment.seg1.intersection",
+        "module_id": "pool_fund",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "segment_intersection",
+          "description": "本笔费用与分段区间交集",
+          "operator": "gt",
+          "actual_value": "4700.0000",
+          "expected_ref": "max(0,min(6000.0000,10000)-max(1300.0000,1300))"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.deductible.copay_base",
+          "calc.cycle_position_exact",
+          "calc.deductible.paid"
+        ],
+        "rule_refs": [
+          "ESP-RATE-101"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "pool.segment.seg2.intersection",
+        "module_id": "pool_fund",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "segment_intersection",
+          "description": "本笔费用与分段区间交集",
+          "operator": "gt",
+          "actual_value": "0",
+          "expected_ref": "max(0,min(6000.0000,30000)-max(1300.0000,10000))"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.deductible.copay_base",
+          "calc.cycle_position_exact",
+          "calc.deductible.paid"
+        ],
+        "rule_refs": [
+          "ESP-RATE-102"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "pool.segment.seg3.intersection",
+        "module_id": "pool_fund",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "segment_intersection",
+          "description": "本笔费用与分段区间交集",
+          "operator": "gt",
+          "actual_value": "0",
+          "expected_ref": "max(0,min(6000.0000,40000)-max(1300.0000,30000))"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.deductible.copay_base",
+          "calc.cycle_position_exact",
+          "calc.deductible.paid"
+        ],
+        "rule_refs": [
+          "ESP-RATE-103"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "pool.segment.seg4.intersection",
+        "module_id": "pool_fund",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "segment_intersection",
+          "description": "本笔费用与分段区间交集",
+          "operator": "gt",
+          "actual_value": "0",
+          "expected_ref": "max(0,min(6000.0000,无上限)-max(1300.0000,40000))"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.deductible.copay_base",
+          "calc.cycle_position_exact",
+          "calc.deductible.paid"
+        ],
+        "rule_refs": [
+          "ESP-RATE-104"
+        ],
+        "calculation_refs": []
+      },
+      {
         "step_id": "pool.settle",
         "module_id": "pool_fund",
         "outcome": "true",
@@ -701,7 +827,10 @@
           "ESP-LGP-002",
           "ESP-LGP-003"
         ],
-        "calculation_refs": []
+        "calculation_refs": [
+          "calc.large.settle",
+          "calc.large.self_pay"
+        ]
       },
       {
         "step_id": "rsup.eligible_date",
@@ -767,7 +896,8 @@
           "ESP-RSUP-001"
         ],
         "calculation_refs": [
-          "calc.rsup.pool"
+          "calc.rsup.pool",
+          "calc.rsup.amount"
         ]
       },
       {
@@ -1036,6 +1166,48 @@
         "result": "6000.0000"
       },
       {
+        "calculation_id": "calc.detail.total_fee",
+        "formula_id": "special_detail_fee_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.zje",
+            "value": "6000.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "6000.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_out_scope",
+        "formula_id": "special_detail_out_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.ybwje",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_advance",
+        "formula_id": "special_detail_advance_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.grziftw",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "0.00"
+      },
+      {
         "calculation_id": "calc.deductible.split",
         "formula_id": "special_deductible_split_v1",
         "formula_version": "v1",
@@ -1058,6 +1230,90 @@
         "result": "1300.0000"
       },
       {
+        "calculation_id": "calc.deductible.copay_base",
+        "formula_id": "copay_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.detail.total_in_scope",
+            "value": "6000.0000"
+          },
+          {
+            "ref": "calc.deductible.split",
+            "value": "1300.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "4700.0000"
+      },
+      {
+        "calculation_id": "calc.cycle_position_exact",
+        "formula_id": "cycle_coordinate_exact_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.cycle.prior_cycle_in_scope_total",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.pool.segment.ESP-RATE-101.base",
+        "formula_id": "special_segment_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.cycle_position_exact",
+            "value": "0.0000"
+          },
+          {
+            "ref": "calc.deductible.paid",
+            "value": "1300.0000"
+          },
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "4700.0000"
+          },
+          {
+            "ref": "input.segment.seg1.lower",
+            "value": "1300"
+          },
+          {
+            "ref": "input.segment.seg1.upper",
+            "value": "10000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "4700.0000"
+      },
+      {
+        "calculation_id": "calc.pool.segment.ESP-RATE-101.self_ratio",
+        "formula_id": "special_segment_self_ratio_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "rule.ESP-RATE-101",
+            "value": "0.15"
+          },
+          {
+            "ref": "rule.ESP-RATE-113",
+            "value": "0.6"
+          },
+          {
+            "ref": "rule.issue82.pool_self_pay_reduction",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0.090"
+      },
+      {
         "calculation_id": "calc.pool.segmented",
         "formula_id": "special_pool_segmented_v1",
         "formula_version": "v1",
@@ -1071,11 +1327,11 @@
             "value": "0.0000"
           },
           {
-            "ref": "rule.ESP-RATE-101",
+            "ref": "calc.pool.segment.ESP-RATE-101.base",
             "value": "4700.0000"
           },
           {
-            "ref": "rule.ESP-RATE-101.self_ratio",
+            "ref": "calc.pool.segment.ESP-RATE-101.self_ratio",
             "value": "0.090"
           },
           {
@@ -1086,6 +1342,46 @@
         "unrounded_result": "4277.0000000",
         "rounding_rule": "explicit:round_half_up(ESP-RND-001 待确认；逐段取整层级待确认)",
         "result": "4277.00"
+      },
+      {
+        "calculation_id": "calc.pool.base",
+        "formula_id": "special_pool_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "4700.0000"
+          },
+          {
+            "ref": "fact.cycle.prior_pool_fund_payment",
+            "value": "0.0000"
+          },
+          {
+            "ref": "rule.ESP-CAP-003",
+            "value": "100000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "4700.0000"
+      },
+      {
+        "calculation_id": "calc.large.base",
+        "formula_id": "copay_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "4700.0000"
+          },
+          {
+            "ref": "calc.pool.base",
+            "value": "4700.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0"
       },
       {
         "calculation_id": "calc.pool.self_pay",
@@ -1106,6 +1402,34 @@
         "result": "423.0000"
       },
       {
+        "calculation_id": "calc.large.settle",
+        "formula_id": "special_large_settle_zero_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.large.base",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0"
+      },
+      {
+        "calculation_id": "calc.large.self_pay",
+        "formula_id": "special_large_self_pay_zero_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.large.base",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0"
+      },
+      {
         "calculation_id": "calc.rsup.pool",
         "formula_id": "special_retire_supplement_pool_v1",
         "formula_version": "v1",
@@ -1122,6 +1446,60 @@
         "unrounded_result": "211.50000",
         "rounding_rule": "explicit:round_half_up(ESP-RND-001 待确认)",
         "result": "211.50"
+      },
+      {
+        "calculation_id": "calc.rsup.amount",
+        "formula_id": "special_retire_supplement_total_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.rsup.pool",
+            "value": "211.50"
+          },
+          {
+            "ref": "input.rsup.large_not_applicable",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "211.50"
+      },
+      {
+        "calculation_id": "calc.pool.self_pay_residual",
+        "formula_id": "special_pool_self_pay_residual_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.pool.self_pay",
+            "value": "423.0000"
+          },
+          {
+            "ref": "calc.rsup.pool",
+            "value": "-211.50"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "211.5000"
+      },
+      {
+        "calculation_id": "calc.large.self_pay_residual",
+        "formula_id": "special_large_self_pay_residual_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.large.self_pay",
+            "value": "0"
+          },
+          {
+            "ref": "input.rsup.large_not_applicable",
+            "value": "-0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0"
       },
       {
         "calculation_id": "calc.dvet.amount",
@@ -1150,6 +1528,28 @@
         "result": "1511.50"
       },
       {
+        "calculation_id": "calc.self_pay_1.parts",
+        "formula_id": "self_pay_1_components_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.split",
+            "value": "1300.0000"
+          },
+          {
+            "ref": "calc.pool.self_pay",
+            "value": "423.0000"
+          },
+          {
+            "ref": "calc.large.self_pay",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": "1723.0000",
+        "rounding_rule": "not_applicable（加法，无取整）",
+        "result": "1723.0000"
+      },
+      {
         "calculation_id": "calc.identity.zje",
         "formula_id": "identity_fee_all_v1",
         "formula_version": "v1",
@@ -1160,7 +1560,7 @@
           },
           {
             "ref": "YBW",
-            "value": "0"
+            "value": "0.00"
           }
         ],
         "unrounded_result": "6000.00",
@@ -1182,7 +1582,7 @@
           },
           {
             "ref": "DEGWYZHF",
-            "value": "0.00"
+            "value": "-0.00"
           },
           {
             "ref": "BCZHF",
@@ -1194,24 +1594,76 @@
           },
           {
             "ref": "GFYLBCHBX",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "BIG_ILL_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "CIVIL_IN",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "RETIRE_OFFICER_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           }
         ],
         "unrounded_result": "0.0000",
         "rounding_rule": "not_applicable（账面分量加减，无取整）",
         "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.secondary.personal_base",
+        "formula_id": "secondary_personal_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.paid",
+            "value": "1300.0000"
+          },
+          {
+            "ref": "calc.pool.self_pay",
+            "value": "423.0000"
+          },
+          {
+            "ref": "calc.large.self_pay",
+            "value": "0"
+          },
+          {
+            "ref": "calc.rsup.amount",
+            "value": "211.50"
+          },
+          {
+            "ref": "calc.dvet.amount",
+            "value": "1511.50"
+          },
+          {
+            "ref": "calc.pmed.amount",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0"
+      },
+      {
+        "calculation_id": "calc.secondary.current_base",
+        "formula_id": "secondary_current_base_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "0"
+          },
+          {
+            "ref": "calc.secondary.proportional_self_pay_2",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": "0",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0"
       },
       {
         "calculation_id": "calc.secondary.self_pay_1",
@@ -1240,6 +1692,60 @@
         "unrounded_result": "0",
         "rounding_rule": "not_applicable（精确运算）",
         "result": "0"
+      },
+      {
+        "calculation_id": "calc.secondary.db_deductible",
+        "formula_id": "secondary_db_deductible_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-DB-001.base_deductible",
+            "value": "30404"
+          },
+          {
+            "ref": "rule.SC-DB-002.divisor",
+            "value": "2"
+          }
+        ],
+        "unrounded_result": "15202",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "15202"
+      },
+      {
+        "calculation_id": "calc.secondary.db_first_rate",
+        "formula_id": "secondary_db_first_rate_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-DB-001.db_first_rate",
+            "value": "0.60"
+          },
+          {
+            "ref": "rule.SC-DB-002.increment",
+            "value": "0.05"
+          }
+        ],
+        "unrounded_result": "0.65",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.65"
+      },
+      {
+        "calculation_id": "calc.secondary.db_second_rate",
+        "formula_id": "secondary_db_second_rate_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-DB-001.db_second_rate",
+            "value": "0.70"
+          },
+          {
+            "ref": "rule.SC-DB-002.increment",
+            "value": "0.05"
+          }
+        ],
+        "unrounded_result": "0.75",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.75"
       },
       {
         "calculation_id": "calc.secondary.feein_db_pay",
@@ -1340,6 +1846,24 @@
         "result": "0.00"
       },
       {
+        "calculation_id": "calc.secondary.remaining_base",
+        "formula_id": "secondary_remaining_base_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.after_db_one",
+            "value": "0.00"
+          },
+          {
+            "ref": "calc.secondary.after_db_two",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "0.00",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.00"
+      },
+      {
         "calculation_id": "calc.secondary.feein_maf_pay",
         "formula_id": "secondary_feein_maf_pay_v1",
         "formula_version": "2023-01-01",
@@ -1424,7 +1948,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -1498,7 +2022,7 @@
       {
         "id": "rule.ESP-CODE-001",
         "kind": "policy_document",
-        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 src/semantic_layer/seed.py:98 16=门特",
+        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 16=门特",
         "value": "ESP-CODE-001",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -1514,7 +2038,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -1754,8 +2278,8 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-15T03:49:04.977910+00:00",
-        "value": "98d598d259f3d9e464738cf895b37dba6d808cdb96e482f89a8a2a999308a89e",
+        "ref": "hospital_record_store#special:2026-10-30T02:42:49.141259+00:00",
+        "value": "986c4d889889211af13fcf65dd513cee8c914299e16ec2e4bcfcd6df86f6a902",
         "values": [
           "annual=1",
           "cycle=1",
@@ -1779,7 +2303,7 @@
       }
     ],
     "coverage": {
-      "target_field_count": 23,
+      "target_field_count": 24,
       "independently_explained_count": 14,
       "amount_reconciled_count": 20,
       "observed_only_count": 3
@@ -1810,7 +2334,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_fee"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -1835,12 +2361,14 @@
         "label": "医保外费用",
         "check_type": "detail_aggregation",
         "check_status": "matched",
-        "observed_amount": "0",
+        "observed_amount": "0.00",
         "calculated_amount": "0.0000",
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_out_scope"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -1854,7 +2382,25 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_advance"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIF1",
+        "label": "个人支付自付（一）金额",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": "1048.9700",
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "SELF_PAY_1_BOOK_COLUMN_UNMAINTAINED",
+        "calculation_refs": [
+          "calc.self_pay_1.parts"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -1869,7 +2415,8 @@
         "explanation_level": "amount_reconciled",
         "reason_code": null,
         "calculation_refs": [
-          "calc.deductible.split"
+          "calc.deductible.split",
+          "calc.deductible.copay_base"
         ],
         "citation_refs": [],
         "uncertainty_refs": []
@@ -1916,7 +2463,9 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.large.settle"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -1930,7 +2479,9 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.large.self_pay"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -1945,7 +2496,8 @@
         "explanation_level": "amount_reconciled",
         "reason_code": null,
         "calculation_refs": [
-          "calc.rsup.pool"
+          "calc.rsup.pool",
+          "calc.rsup.amount"
         ],
         "citation_refs": [],
         "uncertainty_refs": []
@@ -2406,6 +2958,102 @@
         "calculation_refs": []
       },
       {
+        "step_id": "pool.segment.seg1.intersection",
+        "module_id": "pool_fund",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "segment_intersection",
+          "description": "本笔费用与分段区间交集",
+          "operator": "gt",
+          "actual_value": "4433.0000",
+          "expected_ref": "max(0,min(5083.0000,10000)-max(650.0000,650))"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.deductible.copay_base",
+          "calc.cycle_position_exact",
+          "calc.deductible.paid"
+        ],
+        "rule_refs": [
+          "ESP-RATE-101"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "pool.segment.seg2.intersection",
+        "module_id": "pool_fund",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "segment_intersection",
+          "description": "本笔费用与分段区间交集",
+          "operator": "gt",
+          "actual_value": "0",
+          "expected_ref": "max(0,min(5083.0000,30000)-max(650.0000,10000))"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.deductible.copay_base",
+          "calc.cycle_position_exact",
+          "calc.deductible.paid"
+        ],
+        "rule_refs": [
+          "ESP-RATE-102"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "pool.segment.seg3.intersection",
+        "module_id": "pool_fund",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "segment_intersection",
+          "description": "本笔费用与分段区间交集",
+          "operator": "gt",
+          "actual_value": "0",
+          "expected_ref": "max(0,min(5083.0000,40000)-max(650.0000,30000))"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.deductible.copay_base",
+          "calc.cycle_position_exact",
+          "calc.deductible.paid"
+        ],
+        "rule_refs": [
+          "ESP-RATE-103"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "pool.segment.seg4.intersection",
+        "module_id": "pool_fund",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "segment_intersection",
+          "description": "本笔费用与分段区间交集",
+          "operator": "gt",
+          "actual_value": "0",
+          "expected_ref": "max(0,min(5083.0000,无上限)-max(650.0000,40000))"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.deductible.copay_base",
+          "calc.cycle_position_exact",
+          "calc.deductible.paid"
+        ],
+        "rule_refs": [
+          "ESP-RATE-104"
+        ],
+        "calculation_refs": []
+      },
+      {
         "step_id": "pool.settle",
         "module_id": "pool_fund",
         "outcome": "true",
@@ -2491,7 +3139,10 @@
           "ESP-LGP-002",
           "ESP-LGP-003"
         ],
-        "calculation_refs": []
+        "calculation_refs": [
+          "calc.large.settle",
+          "calc.large.self_pay"
+        ]
       },
       {
         "step_id": "rsup.eligible_date",
@@ -2557,7 +3208,8 @@
           "ESP-RSUP-001"
         ],
         "calculation_refs": [
-          "calc.rsup.pool"
+          "calc.rsup.pool",
+          "calc.rsup.amount"
         ]
       },
       {
@@ -2848,6 +3500,48 @@
         "result": "5083.0000"
       },
       {
+        "calculation_id": "calc.detail.total_fee",
+        "formula_id": "special_detail_fee_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.zje",
+            "value": "5083.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "5083.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_out_scope",
+        "formula_id": "special_detail_out_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.ybwje",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_advance",
+        "formula_id": "special_detail_advance_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.grziftw",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "0.00"
+      },
+      {
         "calculation_id": "calc.deductible.split",
         "formula_id": "special_deductible_split_v1",
         "formula_version": "v1",
@@ -2870,6 +3564,90 @@
         "result": "650.0000"
       },
       {
+        "calculation_id": "calc.deductible.copay_base",
+        "formula_id": "copay_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.detail.total_in_scope",
+            "value": "5083.0000"
+          },
+          {
+            "ref": "calc.deductible.split",
+            "value": "650.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "4433.0000"
+      },
+      {
+        "calculation_id": "calc.cycle_position_exact",
+        "formula_id": "cycle_coordinate_exact_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.cycle.prior_cycle_in_scope_total",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.pool.segment.ESP-RATE-101.base",
+        "formula_id": "special_segment_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.cycle_position_exact",
+            "value": "0.0000"
+          },
+          {
+            "ref": "calc.deductible.paid",
+            "value": "650.0000"
+          },
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "4433.0000"
+          },
+          {
+            "ref": "input.segment.seg1.lower",
+            "value": "650"
+          },
+          {
+            "ref": "input.segment.seg1.upper",
+            "value": "10000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "4433.0000"
+      },
+      {
+        "calculation_id": "calc.pool.segment.ESP-RATE-101.self_ratio",
+        "formula_id": "special_segment_self_ratio_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "rule.ESP-RATE-101",
+            "value": "0.15"
+          },
+          {
+            "ref": "rule.ESP-RATE-113",
+            "value": "0.6"
+          },
+          {
+            "ref": "rule.issue82.pool_self_pay_reduction",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0.090"
+      },
+      {
         "calculation_id": "calc.pool.segmented",
         "formula_id": "special_pool_segmented_v1",
         "formula_version": "v1",
@@ -2883,11 +3661,11 @@
             "value": "0.0000"
           },
           {
-            "ref": "rule.ESP-RATE-101",
+            "ref": "calc.pool.segment.ESP-RATE-101.base",
             "value": "4433.0000"
           },
           {
-            "ref": "rule.ESP-RATE-101.self_ratio",
+            "ref": "calc.pool.segment.ESP-RATE-101.self_ratio",
             "value": "0.090"
           },
           {
@@ -2898,6 +3676,46 @@
         "unrounded_result": "4034.0300000",
         "rounding_rule": "explicit:round_half_up(ESP-RND-001 待确认；逐段取整层级待确认)",
         "result": "4034.03"
+      },
+      {
+        "calculation_id": "calc.pool.base",
+        "formula_id": "special_pool_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "4433.0000"
+          },
+          {
+            "ref": "fact.cycle.prior_pool_fund_payment",
+            "value": "7917.0000"
+          },
+          {
+            "ref": "rule.ESP-CAP-003",
+            "value": "100000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "4433.0000"
+      },
+      {
+        "calculation_id": "calc.large.base",
+        "formula_id": "copay_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "4433.0000"
+          },
+          {
+            "ref": "calc.pool.base",
+            "value": "4433.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0"
       },
       {
         "calculation_id": "calc.pool.self_pay",
@@ -2918,6 +3736,34 @@
         "result": "398.9700"
       },
       {
+        "calculation_id": "calc.large.settle",
+        "formula_id": "special_large_settle_zero_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.large.base",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0"
+      },
+      {
+        "calculation_id": "calc.large.self_pay",
+        "formula_id": "special_large_self_pay_zero_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.large.base",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "0"
+      },
+      {
         "calculation_id": "calc.rsup.pool",
         "formula_id": "special_retire_supplement_pool_v1",
         "formula_version": "v1",
@@ -2933,6 +3779,24 @@
         ],
         "unrounded_result": "199.48500",
         "rounding_rule": "explicit:round_half_up(ESP-RND-001 待确认)",
+        "result": "199.49"
+      },
+      {
+        "calculation_id": "calc.rsup.amount",
+        "formula_id": "special_retire_supplement_total_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.rsup.pool",
+            "value": "199.49"
+          },
+          {
+            "ref": "input.rsup.large_not_applicable",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
         "result": "199.49"
       },
       {
@@ -2982,6 +3846,28 @@
         "result": "683.99"
       },
       {
+        "calculation_id": "calc.self_pay_1.parts",
+        "formula_id": "self_pay_1_components_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.split",
+            "value": "650.0000"
+          },
+          {
+            "ref": "calc.pool.self_pay",
+            "value": "398.9700"
+          },
+          {
+            "ref": "calc.large.self_pay",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": "1048.9700",
+        "rounding_rule": "not_applicable（加法，无取整）",
+        "result": "1048.9700"
+      },
+      {
         "calculation_id": "calc.identity.zje",
         "formula_id": "identity_fee_all_v1",
         "formula_version": "v1",
@@ -2992,7 +3878,7 @@
           },
           {
             "ref": "YBW",
-            "value": "0"
+            "value": "0.00"
           }
         ],
         "unrounded_result": "5083.00",
@@ -3014,7 +3900,7 @@
           },
           {
             "ref": "DEGWYZHF",
-            "value": "0.00"
+            "value": "-0.00"
           },
           {
             "ref": "BCZHF",
@@ -3022,28 +3908,80 @@
           },
           {
             "ref": "JCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "GFYLBCHBX",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "BIG_ILL_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "CIVIL_IN",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "RETIRE_OFFICER_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           }
         ],
         "unrounded_result": "849.4800",
         "rounding_rule": "not_applicable（账面分量加减，无取整）",
         "result": "849.4800"
+      },
+      {
+        "calculation_id": "calc.secondary.personal_base",
+        "formula_id": "secondary_personal_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.paid",
+            "value": "650.0000"
+          },
+          {
+            "ref": "calc.pool.self_pay",
+            "value": "398.9700"
+          },
+          {
+            "ref": "calc.large.self_pay",
+            "value": "0"
+          },
+          {
+            "ref": "calc.rsup.amount",
+            "value": "199.49"
+          },
+          {
+            "ref": "calc.dvet.amount",
+            "value": "0"
+          },
+          {
+            "ref": "calc.pmed.amount",
+            "value": "683.99"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable",
+        "result": "165.4900"
+      },
+      {
+        "calculation_id": "calc.secondary.current_base",
+        "formula_id": "secondary_current_base_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "165.4900"
+          },
+          {
+            "ref": "calc.secondary.proportional_self_pay_2",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": "165.4900",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "165.4900"
       },
       {
         "calculation_id": "calc.secondary.self_pay_1",
@@ -3067,6 +4005,112 @@
           {
             "ref": "input.secondary.proportional_self_pay_2",
             "value": "0"
+          }
+        ],
+        "unrounded_result": "0",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0"
+      },
+      {
+        "calculation_id": "calc.secondary.db_deductible",
+        "formula_id": "secondary_db_deductible_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-DB-001.base_deductible",
+            "value": "30404"
+          },
+          {
+            "ref": "rule.SC-DB-002.divisor",
+            "value": "1"
+          }
+        ],
+        "unrounded_result": "30404",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "30404"
+      },
+      {
+        "calculation_id": "calc.secondary.db_first_rate",
+        "formula_id": "secondary_db_first_rate_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-DB-001.db_first_rate",
+            "value": "0.60"
+          },
+          {
+            "ref": "rule.SC-DB-002.increment",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": "0.60",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.60"
+      },
+      {
+        "calculation_id": "calc.secondary.db_second_rate",
+        "formula_id": "secondary_db_second_rate_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-DB-001.db_second_rate",
+            "value": "0.70"
+          },
+          {
+            "ref": "rule.SC-DB-002.increment",
+            "value": "0"
+          }
+        ],
+        "unrounded_result": "0.70",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.70"
+      },
+      {
+        "calculation_id": "calc.secondary.first_band_base",
+        "formula_id": "secondary_first_band_base_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.annual_prior",
+            "value": "3216.5000"
+          },
+          {
+            "ref": "calc.secondary.current_base",
+            "value": "165.4900"
+          },
+          {
+            "ref": "rule.SC-DB-001.deductible",
+            "value": "30404"
+          },
+          {
+            "ref": "rule.SC-DB-001.band_width",
+            "value": "50000"
+          }
+        ],
+        "unrounded_result": "0",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0"
+      },
+      {
+        "calculation_id": "calc.secondary.second_band_base",
+        "formula_id": "secondary_second_band_base_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.annual_prior",
+            "value": "3216.5000"
+          },
+          {
+            "ref": "calc.secondary.current_base",
+            "value": "165.4900"
+          },
+          {
+            "ref": "rule.SC-DB-001.deductible",
+            "value": "30404"
+          },
+          {
+            "ref": "rule.SC-DB-001.band_width",
+            "value": "50000"
           }
         ],
         "unrounded_result": "0",
@@ -3257,7 +4301,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -3331,7 +4375,7 @@
       {
         "id": "rule.ESP-CODE-001",
         "kind": "policy_document",
-        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 src/semantic_layer/seed.py:98 16=门特",
+        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 16=门特",
         "value": "ESP-CODE-001",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -3347,7 +4391,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -3603,8 +4647,8 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-15T03:49:04.992811+00:00",
-        "value": "f20af583c06f0cc9aac552af4264b8c77f457fb6b204ae65e4730a27aa55f4a6",
+        "ref": "hospital_record_store#special:2026-10-30T02:42:49.239297+00:00",
+        "value": "9659f6227dee2f39af12e43cd2e3959973a27041651b2eebad3a85d2f51804ba",
         "values": [
           "annual=1",
           "cycle=1",
@@ -3637,7 +4681,7 @@
       }
     ],
     "coverage": {
-      "target_field_count": 23,
+      "target_field_count": 24,
       "independently_explained_count": 13,
       "amount_reconciled_count": 18,
       "observed_only_count": 5
@@ -3668,7 +4712,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_fee"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -3693,12 +4739,14 @@
         "label": "医保外费用",
         "check_type": "detail_aggregation",
         "check_status": "matched",
-        "observed_amount": "0",
+        "observed_amount": "0.00",
         "calculated_amount": "0.0000",
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_out_scope"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -3712,6 +4760,22 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
+        "calculation_refs": [
+          "calc.detail.total_advance"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIF1",
+        "label": "个人支付自付（一）金额",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "SELF_PAY_1_COMPONENTS_MISSING",
         "calculation_refs": [],
         "citation_refs": [],
         "uncertainty_refs": []
@@ -4406,6 +5470,48 @@
         "result": "184.7900"
       },
       {
+        "calculation_id": "calc.detail.total_fee",
+        "formula_id": "special_detail_fee_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.zje",
+            "value": "184.7900"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "184.7900"
+      },
+      {
+        "calculation_id": "calc.detail.total_out_scope",
+        "formula_id": "special_detail_out_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.ybwje",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_advance",
+        "formula_id": "special_detail_advance_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.grziftw",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "0.00"
+      },
+      {
         "calculation_id": "calc.deductible.observed",
         "formula_id": "observed_deductible_passthrough_v1",
         "formula_version": "v1",
@@ -4430,7 +5536,7 @@
           },
           {
             "ref": "YBW",
-            "value": "0"
+            "value": "0.00"
           }
         ],
         "unrounded_result": "184.79",
@@ -4452,31 +5558,31 @@
           },
           {
             "ref": "DEGWYZHF",
-            "value": "0.00"
+            "value": "-0.00"
           },
           {
             "ref": "BCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "JCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "GFYLBCHBX",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "BIG_ILL_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "CIVIL_IN",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "RETIRE_OFFICER_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           }
         ],
         "unrounded_result": "9.2400",
@@ -4515,7 +5621,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -4565,7 +5671,7 @@
       {
         "id": "rule.ESP-CODE-001",
         "kind": "policy_document",
-        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 src/semantic_layer/seed.py:98 16=门特",
+        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 16=门特",
         "value": "ESP-CODE-001",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -4581,7 +5687,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -4757,8 +5863,8 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-15T03:49:05.005325+00:00",
-        "value": "4ff22b13283e177f39fbe1dfdaf2f870f07e7ca0f9cbb8a91a5180c45d2f054f",
+        "ref": "hospital_record_store#special:2026-10-30T02:42:49.340623+00:00",
+        "value": "bcbb1b26933e749d0ce7669fddb428af2d609c31a6b18849c70c6922ad5a28af",
         "values": [
           "annual=0",
           "cycle=0",
@@ -4819,7 +5925,7 @@
       }
     ],
     "coverage": {
-      "target_field_count": 23,
+      "target_field_count": 24,
       "independently_explained_count": 4,
       "amount_reconciled_count": 10,
       "observed_only_count": 13
@@ -4850,7 +5956,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_fee"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -4880,7 +5988,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_out_scope"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -4894,6 +6004,22 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
+        "calculation_refs": [
+          "calc.detail.total_advance"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIF1",
+        "label": "个人支付自付（一）金额",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "SELF_PAY_1_COMPONENTS_MISSING",
         "calculation_refs": [],
         "citation_refs": [],
         "uncertainty_refs": []
@@ -5590,6 +6716,78 @@
         "calculation_refs": []
       },
       {
+        "step_id": "catalog.drug_class.1.selected",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "adopted_fee_category",
+          "description": "采用收费类别",
+          "operator": "select",
+          "actual_value": "0102",
+          "expected_ref": "药品目录"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.preparation_check.1",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "preparation_check",
+          "description": "本次是否进入自制剂规则",
+          "operator": "in",
+          "actual_value": "2",
+          "expected_ref": "16 / 6"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.ncp_check.1",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "centralized_procurement",
+          "description": "本次集采规则判定",
+          "operator": "eq",
+          "actual_value": "否",
+          "expected_ref": "集采药品"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.drug_limit_check.1",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "positive_drug_limit",
+          "description": "本次是否采用正值门诊限价",
+          "operator": "gt",
+          "actual_value": "0.0000",
+          "expected_ref": "0"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
         "step_id": "catalog.fee_quantity_check.1",
         "module_id": "catalog_split",
         "outcome": "true",
@@ -5625,6 +6823,48 @@
         "unrounded_result": null,
         "rounding_rule": "not_applicable（求和，无取整）",
         "result": "6750.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_fee",
+        "formula_id": "special_detail_fee_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.zje",
+            "value": "7500.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "7500.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_out_scope",
+        "formula_id": "special_detail_out_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.ybwje",
+            "value": "750.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "750.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_advance",
+        "formula_id": "special_detail_advance_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.grziftw",
+            "value": "750.00"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "750.00"
       },
       {
         "calculation_id": "calc.deductible.observed",
@@ -5673,31 +6913,31 @@
           },
           {
             "ref": "DEGWYZHF",
-            "value": "0.00"
+            "value": "-0.00"
           },
           {
             "ref": "BCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "JCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "GFYLBCHBX",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "BIG_ILL_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "CIVIL_IN",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "RETIRE_OFFICER_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           }
         ],
         "unrounded_result": "1087.5000",
@@ -5746,7 +6986,77 @@
           }
         ],
         "unrounded_result": "750.00000000",
-        "rounding_rule": "explicit:round_half_up(EOP-RND-001 待确认)",
+        "rounding_rule": "explicit:round_half_up(RSP-RND-001 待确认)",
+        "result": "750.00"
+      },
+      {
+        "calculation_id": "calc.catalog.total_fee",
+        "formula_id": "catalog_total_fee_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.fee",
+            "value": "7500.0000"
+          }
+        ],
+        "unrounded_result": "7500.0000",
+        "rounding_rule": "not_applicable（明细逐行合计，无取整）",
+        "result": "7500.0000"
+      },
+      {
+        "calculation_id": "calc.catalog.total_in_scope",
+        "formula_id": "catalog_total_in_scope_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.catalog.lines.in_scope",
+            "value": "6750.0000"
+          }
+        ],
+        "unrounded_result": "6750.0000",
+        "rounding_rule": "not_applicable（明细逐行合计，无取整）",
+        "result": "6750.0000"
+      },
+      {
+        "calculation_id": "calc.catalog.total_out_scope",
+        "formula_id": "catalog_total_out_scope_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.catalog.lines.out_scope",
+            "value": "750.00"
+          }
+        ],
+        "unrounded_result": "750.00",
+        "rounding_rule": "not_applicable（明细逐行合计，无取整）",
+        "result": "750.00"
+      },
+      {
+        "calculation_id": "calc.catalog.total_self_pay_2",
+        "formula_id": "catalog_total_self_pay_2_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.catalog.lines.self_pay_2",
+            "value": "750.00"
+          }
+        ],
+        "unrounded_result": "750.00",
+        "rounding_rule": "not_applicable（明细逐行合计，无取整）",
+        "result": "750.00"
+      },
+      {
+        "calculation_id": "calc.catalog.total_proportional_self_pay",
+        "formula_id": "catalog_total_proportional_self_pay_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.catalog.lines.proportional_self_pay",
+            "value": "750.00"
+          }
+        ],
+        "unrounded_result": "750.00",
+        "rounding_rule": "not_applicable（明细逐行合计，无取整）",
         "result": "750.00"
       }
     ],
@@ -5754,7 +7064,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -5804,7 +7114,7 @@
       {
         "id": "rule.ESP-CODE-001",
         "kind": "policy_document",
-        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 src/semantic_layer/seed.py:98 16=门特",
+        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 16=门特",
         "value": "ESP-CODE-001",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -5820,7 +7130,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -5996,8 +7306,8 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-15T03:49:05.021374+00:00",
-        "value": "3fd6a2b7ec50e8f64b9808ca4cc55734b25ce99d467197d79c21ad58af1a1513",
+        "ref": "hospital_record_store#special:2026-10-30T02:42:49.432634+00:00",
+        "value": "48930acbdf8efdc8a543143c7f8f6c53a0a2186d6335b86b5747ea0862d745a0",
         "values": [
           "annual=0",
           "cycle=0",
@@ -6059,7 +7369,7 @@
       {
         "id": "u.catalog.rule_confirmation.drug:4:XL01XCB194B002010179436",
         "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
-        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "message": "目录划分语义引用 RSP-CAT-001 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
         "affected_fields": [
           "T_FeeIn",
           "T_FeeOut"
@@ -6067,7 +7377,7 @@
       }
     ],
     "coverage": {
-      "target_field_count": 23,
+      "target_field_count": 24,
       "independently_explained_count": 4,
       "amount_reconciled_count": 10,
       "observed_only_count": 13
@@ -6098,7 +7408,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_fee"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -6128,7 +7440,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_out_scope"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -6142,6 +7456,22 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
+        "calculation_refs": [
+          "calc.detail.total_advance"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIF1",
+        "label": "个人支付自付（一）金额",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "SELF_PAY_1_COMPONENTS_MISSING",
         "calculation_refs": [],
         "citation_refs": [],
         "uncertainty_refs": []
@@ -6838,6 +8168,78 @@
         "calculation_refs": []
       },
       {
+        "step_id": "catalog.drug_class.1.selected",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "adopted_fee_category",
+          "description": "采用收费类别",
+          "operator": "select",
+          "actual_value": "0101",
+          "expected_ref": "药品目录"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.preparation_check.1",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "preparation_check",
+          "description": "本次是否进入自制剂规则",
+          "operator": "in",
+          "actual_value": "2",
+          "expected_ref": "16 / 6"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.ncp_check.1",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "centralized_procurement",
+          "description": "本次集采规则判定",
+          "operator": "eq",
+          "actual_value": "否",
+          "expected_ref": "集采药品"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.drug_limit_check.1",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "positive_drug_limit",
+          "description": "本次是否采用正值门诊限价",
+          "operator": "gt",
+          "actual_value": "0.0000",
+          "expected_ref": "0"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
         "step_id": "catalog.fee_quantity_check.1",
         "module_id": "catalog_split",
         "outcome": "true",
@@ -6909,6 +8311,78 @@
           "operator": "count_eq",
           "actual_value": "1",
           "expected_ref": "有效目录条目"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.drug_class.3.selected",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:3",
+        "condition": {
+          "code": "adopted_fee_category",
+          "description": "采用收费类别",
+          "operator": "select",
+          "actual_value": "0101",
+          "expected_ref": "药品目录"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.preparation_check.3",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:3",
+        "condition": {
+          "code": "preparation_check",
+          "description": "本次是否进入自制剂规则",
+          "operator": "in",
+          "actual_value": "2",
+          "expected_ref": "16 / 6"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.ncp_check.3",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:3",
+        "condition": {
+          "code": "centralized_procurement",
+          "description": "本次集采规则判定",
+          "operator": "eq",
+          "actual_value": "否",
+          "expected_ref": "集采药品"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.drug_limit_check.3",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:3",
+        "condition": {
+          "code": "positive_drug_limit",
+          "description": "本次是否采用正值门诊限价",
+          "operator": "gt",
+          "actual_value": "0.0000",
+          "expected_ref": "0"
         },
         "reason_code": null,
         "input_refs": [],
@@ -7227,6 +8701,48 @@
         "result": "6831.2000"
       },
       {
+        "calculation_id": "calc.detail.total_fee",
+        "formula_id": "special_detail_fee_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.zje",
+            "value": "7581.2000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "7581.2000"
+      },
+      {
+        "calculation_id": "calc.detail.total_out_scope",
+        "formula_id": "special_detail_out_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.ybwje",
+            "value": "750.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "750.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_advance",
+        "formula_id": "special_detail_advance_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.grziftw",
+            "value": "750.00"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "750.00"
+      },
+      {
         "calculation_id": "calc.deductible.observed",
         "formula_id": "observed_deductible_passthrough_v1",
         "formula_version": "v1",
@@ -7273,31 +8789,31 @@
           },
           {
             "ref": "DEGWYZHF",
-            "value": "0.00"
+            "value": "-0.00"
           },
           {
             "ref": "BCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "JCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "GFYLBCHBX",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "BIG_ILL_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "CIVIL_IN",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "RETIRE_OFFICER_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           }
         ],
         "unrounded_result": "1091.5600",
@@ -7330,13 +8846,27 @@
         "unrounded_result": "0",
         "rounding_rule": "explicit:round_half_up",
         "result": "0"
+      },
+      {
+        "calculation_id": "calc.catalog.total_fee",
+        "formula_id": "catalog_total_fee_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.fee",
+            "value": "7581.2000"
+          }
+        ],
+        "unrounded_result": "7581.2000",
+        "rounding_rule": "not_applicable（明细逐行合计，无取整）",
+        "result": "7581.2000"
       }
     ],
     "citations": [
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -7386,7 +8916,7 @@
       {
         "id": "rule.ESP-CODE-001",
         "kind": "policy_document",
-        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 src/semantic_layer/seed.py:98 16=门特",
+        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 16=门特",
         "value": "ESP-CODE-001",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -7402,7 +8932,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -7578,8 +9108,8 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-15T03:49:05.036885+00:00",
-        "value": "05649399dc25125ebd2d84b4cdb49f48add7b17aafcf97490480ab45f0fa0e56",
+        "ref": "hospital_record_store#special:2026-10-30T02:42:49.528785+00:00",
+        "value": "78cc1897455621e2c7e5c94f0f59df4fc891ac21d00c79ab70a5a174c9212f80",
         "values": [
           "annual=0",
           "cycle=0",
@@ -7641,7 +9171,7 @@
       {
         "id": "u.catalog.rule_confirmation.drug:0:XB05XAL211B002010200967",
         "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
-        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "message": "目录划分语义引用 RSP-CAT-001 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
         "affected_fields": [
           "T_FeeIn",
           "T_FeeOut"
@@ -7660,7 +9190,7 @@
       {
         "id": "u.catalog.rule_confirmation.drug:0:XB05XAL211B002010200967",
         "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
-        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "message": "目录划分语义引用 RSP-CAT-001 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
         "affected_fields": [
           "T_FeeIn",
           "T_FeeOut"
@@ -7733,7 +9263,7 @@
       }
     ],
     "coverage": {
-      "target_field_count": 23,
+      "target_field_count": 24,
       "independently_explained_count": 4,
       "amount_reconciled_count": 10,
       "observed_only_count": 13
@@ -7764,7 +9294,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_fee"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -7789,12 +9321,14 @@
         "label": "医保外费用",
         "check_type": "detail_aggregation",
         "check_status": "matched",
-        "observed_amount": "0",
+        "observed_amount": "0.00",
         "calculated_amount": "0.0000",
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_out_scope"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -7808,6 +9342,22 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
+        "calculation_refs": [
+          "calc.detail.total_advance"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIF1",
+        "label": "个人支付自付（一）金额",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "SELF_PAY_1_COMPONENTS_MISSING",
         "calculation_refs": [],
         "citation_refs": [],
         "uncertainty_refs": []
@@ -8502,6 +10052,48 @@
         "result": "291.1800"
       },
       {
+        "calculation_id": "calc.detail.total_fee",
+        "formula_id": "special_detail_fee_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.zje",
+            "value": "291.1800"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "291.1800"
+      },
+      {
+        "calculation_id": "calc.detail.total_out_scope",
+        "formula_id": "special_detail_out_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.ybwje",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_advance",
+        "formula_id": "special_detail_advance_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.grziftw",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "0.00"
+      },
+      {
         "calculation_id": "calc.deductible.observed",
         "formula_id": "observed_deductible_passthrough_v1",
         "formula_version": "v1",
@@ -8526,7 +10118,7 @@
           },
           {
             "ref": "YBW",
-            "value": "0"
+            "value": "0.00"
           }
         ],
         "unrounded_result": "291.18",
@@ -8548,31 +10140,31 @@
           },
           {
             "ref": "DEGWYZHF",
-            "value": "0.00"
+            "value": "-0.00"
           },
           {
             "ref": "BCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "JCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "GFYLBCHBX",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "BIG_ILL_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "CIVIL_IN",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "RETIRE_OFFICER_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           }
         ],
         "unrounded_result": "14.5600",
@@ -8611,7 +10203,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -8661,7 +10253,7 @@
       {
         "id": "rule.ESP-CODE-001",
         "kind": "policy_document",
-        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 src/semantic_layer/seed.py:98 16=门特",
+        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 16=门特",
         "value": "ESP-CODE-001",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -8677,7 +10269,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -8853,8 +10445,8 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-15T03:49:05.049217+00:00",
-        "value": "82ade17e8c5383ef44fec5ca1f5dd0f84bba9cbd61b9053c13da90e318760a53",
+        "ref": "hospital_record_store#special:2026-10-30T02:42:49.621256+00:00",
+        "value": "0905701098119c5eafdfa0ff0d16de91ccded457234e7eedb60d3920944cd99e",
         "values": [
           "annual=0",
           "cycle=0",
@@ -8915,7 +10507,7 @@
       }
     ],
     "coverage": {
-      "target_field_count": 23,
+      "target_field_count": 24,
       "independently_explained_count": 4,
       "amount_reconciled_count": 10,
       "observed_only_count": 13
@@ -8946,7 +10538,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_fee"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -8976,7 +10570,9 @@
         "difference": "0.0000",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
-        "calculation_refs": [],
+        "calculation_refs": [
+          "calc.detail.total_out_scope"
+        ],
         "citation_refs": [],
         "uncertainty_refs": []
       },
@@ -8990,6 +10586,22 @@
         "difference": "0.00",
         "explanation_level": "amount_reconciled",
         "reason_code": null,
+        "calculation_refs": [
+          "calc.detail.total_advance"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIF1",
+        "label": "个人支付自付（一）金额",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "SELF_PAY_1_COMPONENTS_MISSING",
         "calculation_refs": [],
         "citation_refs": [],
         "uncertainty_refs": []
@@ -9686,6 +11298,78 @@
         "calculation_refs": []
       },
       {
+        "step_id": "catalog.drug_class.1.selected",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "adopted_fee_category",
+          "description": "采用收费类别",
+          "operator": "select",
+          "actual_value": "0101",
+          "expected_ref": "药品目录"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.preparation_check.1",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "preparation_check",
+          "description": "本次是否进入自制剂规则",
+          "operator": "in",
+          "actual_value": "2",
+          "expected_ref": "16 / 6"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.ncp_check.1",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "centralized_procurement",
+          "description": "本次集采规则判定",
+          "operator": "eq",
+          "actual_value": "否",
+          "expected_ref": "集采药品"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.drug_limit_check.1",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "positive_drug_limit",
+          "description": "本次是否采用正值门诊限价",
+          "operator": "gt",
+          "actual_value": "0.0000",
+          "expected_ref": "0"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
         "step_id": "catalog.fee_quantity_check.1",
         "module_id": "catalog_split",
         "outcome": "true",
@@ -9757,6 +11441,78 @@
           "operator": "count_eq",
           "actual_value": "1",
           "expected_ref": "有效目录条目"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.drug_class.3.selected",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:3",
+        "condition": {
+          "code": "adopted_fee_category",
+          "description": "采用收费类别",
+          "operator": "select",
+          "actual_value": "0101",
+          "expected_ref": "药品目录"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.preparation_check.3",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:3",
+        "condition": {
+          "code": "preparation_check",
+          "description": "本次是否进入自制剂规则",
+          "operator": "in",
+          "actual_value": "2",
+          "expected_ref": "16 / 6"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.ncp_check.3",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:3",
+        "condition": {
+          "code": "centralized_procurement",
+          "description": "本次集采规则判定",
+          "operator": "eq",
+          "actual_value": "否",
+          "expected_ref": "集采药品"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.drug_limit_check.3",
+        "module_id": "catalog_split",
+        "outcome": "false",
+        "parent_step_id": null,
+        "scope_ref": "item:3",
+        "condition": {
+          "code": "positive_drug_limit",
+          "description": "本次是否采用正值门诊限价",
+          "operator": "gt",
+          "actual_value": "0.0000",
+          "expected_ref": "0"
         },
         "reason_code": null,
         "input_refs": [],
@@ -10075,6 +11831,48 @@
         "result": "6831.2000"
       },
       {
+        "calculation_id": "calc.detail.total_fee",
+        "formula_id": "special_detail_fee_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.zje",
+            "value": "7581.2000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "7581.2000"
+      },
+      {
+        "calculation_id": "calc.detail.total_out_scope",
+        "formula_id": "special_detail_out_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.ybwje",
+            "value": "750.0000"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "750.0000"
+      },
+      {
+        "calculation_id": "calc.detail.total_advance",
+        "formula_id": "special_detail_advance_sum_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.grziftw",
+            "value": "750.00"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（求和，无取整）",
+        "result": "750.00"
+      },
+      {
         "calculation_id": "calc.deductible.observed",
         "formula_id": "observed_deductible_passthrough_v1",
         "formula_version": "v1",
@@ -10121,31 +11919,31 @@
           },
           {
             "ref": "DEGWYZHF",
-            "value": "0.00"
+            "value": "-0.00"
           },
           {
             "ref": "BCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "JCZHF",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "GFYLBCHBX",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "BIG_ILL_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "CIVIL_IN",
-            "value": "0.0000"
+            "value": "-0.0000"
           },
           {
             "ref": "RETIRE_OFFICER_PAY",
-            "value": "0.0000"
+            "value": "-0.0000"
           }
         ],
         "unrounded_result": "1774.6800",
@@ -10178,13 +11976,27 @@
         "unrounded_result": "0",
         "rounding_rule": "explicit:round_half_up",
         "result": "0"
+      },
+      {
+        "calculation_id": "calc.catalog.total_fee",
+        "formula_id": "catalog_total_fee_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.items.fee",
+            "value": "7581.2000"
+          }
+        ],
+        "unrounded_result": "7581.2000",
+        "rounding_rule": "not_applicable（明细逐行合计，无取整）",
+        "result": "7581.2000"
       }
     ],
     "citations": [
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -10234,7 +12046,7 @@
       {
         "id": "rule.ESP-CODE-001",
         "kind": "policy_document",
-        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 src/semantic_layer/seed.py:98 16=门特",
+        "ref": "bjyb 库 yb_brdjxx 实测；YLLB 码表 16=门特",
         "value": "ESP-CODE-001",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -10250,7 +12062,7 @@
       {
         "id": "rule.ESP-CODE-003",
         "kind": "policy_document",
-        "ref": "bjyb 库 6 笔门特样本实测（11=在职刘畅；21/61=退休付克琴/任启旺/袁健）",
+        "ref": "bjyb 库 6 笔门特样本实测（11=在职；21/61=退休）",
         "value": "ESP-CODE-003",
         "values": [],
         "approval_status": "实测待码表确认"
@@ -10426,8 +12238,8 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-15T03:49:05.062672+00:00",
-        "value": "a53ba31283c1008d789d111d340d6e992325475523e92600f3acb2737c73c4ac",
+        "ref": "hospital_record_store#special:2026-10-30T02:42:49.713038+00:00",
+        "value": "75d5bb9ff8412bdb5b20c9a65c1abd55b65dd77402e951ed5067962373709425",
         "values": [
           "annual=0",
           "cycle=0",
@@ -10489,7 +12301,7 @@
       {
         "id": "u.catalog.rule_confirmation.drug:0:XB05XAL211B002010200967",
         "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
-        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "message": "目录划分语义引用 RSP-CAT-001 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
         "affected_fields": [
           "T_FeeIn",
           "T_FeeOut"
@@ -10508,7 +12320,7 @@
       {
         "id": "u.catalog.rule_confirmation.drug:0:XB05XAL211B002010200967",
         "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
-        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "message": "目录划分语义引用 RSP-CAT-001 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
         "affected_fields": [
           "T_FeeIn",
           "T_FeeOut"
@@ -10581,7 +12393,7 @@
       }
     ],
     "coverage": {
-      "target_field_count": 23,
+      "target_field_count": 24,
       "independently_explained_count": 4,
       "amount_reconciled_count": 10,
       "observed_only_count": 13

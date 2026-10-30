@@ -11,22 +11,23 @@
   "verdict_basis": "仅内核独立重算字段（independent_recalculation）；账面内部核对单列",
   "total_registrations": 3,
   "verdict_counts": {
-    "差异（实质）": 2,
-    "无法核对": 1
+    "无法核对": 3
   },
   "accuracy_all": 0.0,
-  "accuracy_decidable": 0.0,
-  "decidable_trades": 2,
+  "accuracy_decidable": null,
+  "decidable_trades": 0,
   "kernel_field_level": {
-    "matched": 28,
-    "mismatched": 8,
-    "accuracy": 0.7777777777777778
+    "matched": 26,
+    "mismatched": 4,
+    "accuracy": 0.8666666666666667
   },
   "field_status_histogram": {
     "BCZHF:not_applicable": 3,
-    "BIG_ILL_PAY:mismatched": 2,
+    "BIG_ILL_PAY:matched": 1,
+    "BIG_ILL_PAY:mismatched": 1,
     "BIG_ILL_PAY:not_verifiable": 1,
-    "CIVIL_IN:mismatched": 2,
+    "CIVIL_IN:matched": 1,
+    "CIVIL_IN:mismatched": 1,
     "CIVIL_IN:not_verifiable": 1,
     "DEGWYZHF:matched": 2,
     "DEGWYZHF:not_verifiable": 1,
@@ -38,28 +39,27 @@
     "FEEIN_MAF_PAY:matched": 1,
     "FEEIN_MAF_PAY:mismatched": 1,
     "FEEIN_MAF_PAY:not_verifiable": 1,
-    "FEEOUT_DB_PAY:matched": 1,
-    "FEEOUT_DB_PAY:mismatched": 1,
+    "FEEOUT_DB_PAY:matched": 2,
     "FEEOUT_DB_PAY:not_verifiable": 1,
-    "FEEOUT_MAF_PAY:matched": 1,
-    "FEEOUT_MAF_PAY:mismatched": 1,
+    "FEEOUT_MAF_PAY:matched": 2,
     "FEEOUT_MAF_PAY:not_verifiable": 1,
     "GFYLBCHBX:not_applicable": 3,
+    "GRZIF1:not_verifiable": 3,
     "GRZIFTW:matched": 3,
     "JCZHF:not_applicable": 3,
     "PERSON_PAYABLE:matched": 2,
     "PERSON_PAYABLE:not_verifiable": 1,
-    "TCZHF:matched": 3,
-    "TCZIF:matched": 3,
+    "TCZHF:not_applicable": 3,
+    "TCZIF:not_applicable": 3,
     "TSBYBN:matched": 3,
     "TSBYBW:matched": 3,
     "YBNQFJE:matched": 3
   },
   "uncertainty_histogram": {
-    "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION": 1,
+    "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION": 3,
+    "ROUNDING_RULE_PENDING_CONFIRMATION": 3,
     "CYCLE_TABLE_LAGGING": 1,
     "FUND_CUMULATIVE_MISSING": 1,
-    "ROUNDING_RULE_PENDING_CONFIRMATION": 1,
     "SECONDARY_BASE_MISSING": 1
   }
 }

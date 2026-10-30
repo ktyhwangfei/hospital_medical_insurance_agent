@@ -656,7 +656,13 @@ def _build_fields(
 
     # 自付一：能按本单独立计算的起付承担＋大额个人自付分解时走重算；
     # 分量缺失才退回账面恒等式（只用观测分量，不证明字段原因）。
-    if deductible.deductible_paid is not None and big.big_self_pay is not None:
+    # 注意：账面自付一还会扣减公疗/军残/退休补助等渠道（如 2026 样本：医保内-大额-公疗），
+    # 分量式只含起付+大额自付，遇到非零补助渠道必须退回恒等式，否则会与账面差出补助金额。
+    subsidy_channels_absent = all(
+        value is None or value == 0
+        for value in (obs.official_pay, obs.jc_pay, obs.bc_pay))
+    if (deductible.deductible_paid is not None and big.big_self_pay is not None
+            and subsidy_channels_absent):
         self_pay_1_parts = deductible.deductible_paid + big.big_self_pay
         identity_calcs.append(CalculationRecord(
             calculation_id="calc.self_pay_1.parts",

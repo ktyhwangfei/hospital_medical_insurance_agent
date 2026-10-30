@@ -92,7 +92,12 @@ def _classify(result) -> tuple[str, str, str, str]:
     verdict 只依据内核独立重算字段（independent_recalculation）；
     账面内部核对字段（detail_aggregation/identity_check）单列摘要，不进 verdict。
     """
-    kernel_fields = [f for f in result.fields if f.check_type == "independent_recalculation"]
+    # SETTLEMENT_FACT_ONLY（如退役医疗费）是明确“只作原单事实、不独立重算”的字段，
+    # 不参与可判定性判断；它既不构成差异，也不应把整笔交易打成“无法核对”。
+    kernel_fields = [
+        f for f in result.fields
+        if f.check_type == "independent_recalculation"
+        and f.reason_code != "SETTLEMENT_FACT_ONLY"]
     book_fields = [f for f in result.fields if f.check_type != "independent_recalculation"]
 
     mismatched: list[str] = []
