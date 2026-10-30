@@ -520,15 +520,28 @@ def decompose_resident_outpatient_special(
     fields, identity_calcs = _build_fields(snapshot, split, deductible, funds)
     calcs.extend(identity_calcs)
     from src.runtime.policy_qa.fee_decomposition.secondary_coverage import decompose_secondary_coverage
-    base = (deductible.deductible_paid + funds.big_self_pay
-            if deductible.deductible_paid is not None and funds.big_self_pay is not None else None)
+    computed_base = (deductible.deductible_paid + funds.big_self_pay
+                     if deductible.deductible_paid is not None and funds.big_self_pay is not None else None)
+    # 大病可报基数：原单 grzif1 有值时以它为准（690/718 实测：972.40×65%＝632.06 与账面一致）；
+    # 原单未维护（0/空，如 688）才用本单分量（起付+大额自付）。
+    observed_base = snapshot.observed.grzif1
+    use_observed = observed_base is not None and observed_base > 0
+    base = observed_base if use_observed else computed_base
     if base is not None:
-        assert deductible.deductible_paid is not None and funds.big_self_pay is not None
-        calcs.append(CalculationRecord(
-            calculation_id="calc.secondary.personal_base", formula_id="secondary_resident_personal_base_v1", formula_version="v1",
-            operands=(CalculationOperand("calc.deductible.paid", decimal_to_str(deductible.deductible_paid)),
-                      CalculationOperand("calc.big_pay.self_pay", decimal_to_str(funds.big_self_pay))),
-            result=decimal_to_str(base), rounding_rule="not_applicable"))
+        if use_observed:
+            calcs.append(CalculationRecord(
+                calculation_id="calc.secondary.personal_base",
+                formula_id="secondary_resident_personal_base_v1", formula_version="v1",
+                operands=(CalculationOperand("fact.settlement.grzif1", decimal_to_str(observed_base)),),
+                result=decimal_to_str(base), rounding_rule="not_applicable（按原单自付一列）"))
+        else:
+            assert deductible.deductible_paid is not None and funds.big_self_pay is not None
+            calcs.append(CalculationRecord(
+                calculation_id="calc.secondary.personal_base",
+                formula_id="secondary_resident_personal_base_v1", formula_version="v1",
+                operands=(CalculationOperand("calc.deductible.paid", decimal_to_str(deductible.deductible_paid)),
+                          CalculationOperand("calc.big_pay.self_pay", decimal_to_str(funds.big_self_pay))),
+                result=decimal_to_str(base), rounding_rule="not_applicable"))
     secondary = decompose_secondary_coverage(snapshot, self_pay_1=base,
         proportional_self_pay_2=split.total_proportional_self_pay if split is not None else None,
         total_out_scope=split.total_out_scope if split is not None else None)

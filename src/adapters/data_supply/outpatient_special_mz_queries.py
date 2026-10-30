@@ -589,6 +589,12 @@ def build_special_mz_snapshot(
     from src.adapters.data_supply.settlement_template_bindings import observed_template_amounts
     template = get_settlement_template('resident_special' if insurance_type == 'resident' else 'employee_special')
     observed = SpecialObservedAmounts(**observed_template_amounts(template, {'outpatient_settlement_table': settlement_row}))
+    # grzif1：模板按“项目付费单该列为 0”未绑定为核对目标，但 690/718 实测有值且
+    # 恰为大病可报基数（972.40×65%＝632.06 与账面一致），这里保留原单事实供内核判用。
+    raw_grzif1 = settlement_row.get('grzif1')
+    if raw_grzif1 is not None:
+        from dataclasses import replace as _dc_replace
+        observed = _dc_replace(observed, grzif1=_to_decimal(raw_grzif1))
 
     snapshot = OutpatientSpecialSnapshot(
         settlement_ref=f"special_mz_settlement:{djh}",

@@ -375,6 +375,7 @@ class SpecialObservedAmounts:
     xjzf: Decimal | None = None  # 现金支付
     zhzf: Decimal | None = None  # 账户支付
     grziftw: Decimal | None = None  # 先行自付（结算口径，=Σ明细 grziftw）
+    grzif1: Decimal | None = None  # 原单自付一（部分项目付费结算会维护，等于大病可报基数）
     big_ill_pay: Decimal | None = None  # 基本医保和补助后的二次大病保险
     civil_in: Decimal | None = None  # 医疗救助
     feein_db_pay: Decimal | None = None

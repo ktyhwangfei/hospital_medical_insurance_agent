@@ -1920,7 +1920,7 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-30T02:42:09.407992+00:00",
+        "ref": "hospital_record_store#special:2026-10-30T03:34:30.697858+00:00",
         "value": "63cad7ac95d1ddce04a9e7be0071bb356bb4138701beb25a9574a57750404b37",
         "values": [
           "annual=1",
@@ -2277,11 +2277,11 @@
         "field_code": "BIG_ILL_PAY",
         "label": "大病保险支付（二次保障）",
         "check_type": "independent_recalculation",
-        "check_status": "mismatched",
+        "check_status": "matched",
         "observed_amount": "632.0600",
-        "calculated_amount": "790.08",
-        "difference": "158.0200",
-        "explanation_level": "observed_only",
+        "calculated_amount": "632.06",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
         "reason_code": null,
         "calculation_refs": [
           "calc.secondary.big_ill_pay"
@@ -2296,11 +2296,11 @@
         "field_code": "FEEIN_DB_PAY",
         "label": "医保内个人自付一的大病支付",
         "check_type": "independent_recalculation",
-        "check_status": "mismatched",
+        "check_status": "matched",
         "observed_amount": "632.0600",
-        "calculated_amount": "790.08",
-        "difference": "158.0200",
-        "explanation_level": "observed_only",
+        "calculated_amount": "632.06",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
         "reason_code": null,
         "calculation_refs": [
           "calc.secondary.feein_db_pay"
@@ -2334,11 +2334,11 @@
         "field_code": "CIVIL_IN",
         "label": "医疗救助支付",
         "check_type": "independent_recalculation",
-        "check_status": "mismatched",
+        "check_status": "matched",
         "observed_amount": "340.3400",
-        "calculated_amount": "425.42",
-        "difference": "85.0800",
-        "explanation_level": "observed_only",
+        "calculated_amount": "340.34",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
         "reason_code": null,
         "calculation_refs": [
           "calc.secondary.civil_in"
@@ -2353,11 +2353,11 @@
         "field_code": "FEEIN_MAF_PAY",
         "label": "医保内剩余个人负担的救助",
         "check_type": "independent_recalculation",
-        "check_status": "mismatched",
+        "check_status": "matched",
         "observed_amount": "340.3400",
-        "calculated_amount": "425.42",
-        "difference": "85.0800",
-        "explanation_level": "observed_only",
+        "calculated_amount": "340.34",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
         "reason_code": null,
         "calculation_refs": [
           "calc.secondary.feein_maf_pay"
@@ -2729,7 +2729,7 @@
           "code": "annual_bands",
           "description": "年度大病分段重叠：起付以上五万元及其以上部分",
           "operator": "overlap",
-          "actual_value": "16091.2000",
+          "actual_value": "16334.3000",
           "expected_ref": "17306.7000"
         },
         "reason_code": null,
@@ -2752,7 +2752,7 @@
           "code": "feein_db_pay",
           "description": "医保内个人自付一的大病支付",
           "operator": "formula",
-          "actual_value": "790.08",
+          "actual_value": "632.06",
           "expected_ref": null
         },
         "reason_code": null,
@@ -2796,7 +2796,7 @@
           "code": "big_ill_pay",
           "description": "大病保险支付（二次保障）",
           "operator": "formula",
-          "actual_value": "790.08",
+          "actual_value": "632.06",
           "expected_ref": null
         },
         "reason_code": null,
@@ -2818,7 +2818,7 @@
           "code": "feein_maf_pay",
           "description": "医保内剩余个人负担的救助",
           "operator": "formula",
-          "actual_value": "425.42",
+          "actual_value": "340.34",
           "expected_ref": null
         },
         "reason_code": null,
@@ -2862,7 +2862,7 @@
           "code": "civil_in",
           "description": "医疗救助支付",
           "operator": "formula",
-          "actual_value": "425.42",
+          "actual_value": "340.34",
           "expected_ref": null
         },
         "reason_code": null,
@@ -3158,17 +3158,13 @@
         "formula_version": "v1",
         "operands": [
           {
-            "ref": "calc.deductible.paid",
-            "value": "0.0000"
-          },
-          {
-            "ref": "calc.big_pay.self_pay",
-            "value": "1215.5000"
+            "ref": "fact.settlement.grzif1",
+            "value": "972.4000"
           }
         ],
         "unrounded_result": null,
-        "rounding_rule": "not_applicable",
-        "result": "1215.5000"
+        "rounding_rule": "not_applicable（按原单自付一列）",
+        "result": "972.4000"
       },
       {
         "calculation_id": "calc.secondary.current_base",
@@ -3177,16 +3173,16 @@
         "operands": [
           {
             "ref": "calc.secondary.self_pay_1",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "calc.secondary.proportional_self_pay_2",
             "value": "0.00"
           }
         ],
-        "unrounded_result": "1215.5000",
+        "unrounded_result": "972.4000",
         "rounding_rule": "not_applicable（精确运算）",
-        "result": "1215.5000"
+        "result": "972.4000"
       },
       {
         "calculation_id": "calc.secondary.self_pay_1",
@@ -3195,12 +3191,12 @@
         "operands": [
           {
             "ref": "input.secondary.self_pay_1_after_supplements",
-            "value": "1215.5000"
+            "value": "972.4000"
           }
         ],
-        "unrounded_result": "1215.5000",
+        "unrounded_result": "972.4000",
         "rounding_rule": "not_applicable（精确运算）",
-        "result": "1215.5000"
+        "result": "972.4000"
       },
       {
         "calculation_id": "calc.secondary.proportional_self_pay_2",
@@ -3277,11 +3273,11 @@
         "operands": [
           {
             "ref": "calc.secondary.annual_prior",
-            "value": "16091.2000"
+            "value": "16334.3000"
           },
           {
             "ref": "calc.secondary.current_base",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "rule.SC-DB-001.deductible",
@@ -3292,9 +3288,9 @@
             "value": "50000"
           }
         ],
-        "unrounded_result": "1215.5000",
+        "unrounded_result": "972.4000",
         "rounding_rule": "not_applicable（精确运算）",
-        "result": "1215.5000"
+        "result": "972.4000"
       },
       {
         "calculation_id": "calc.secondary.second_band_base",
@@ -3303,11 +3299,11 @@
         "operands": [
           {
             "ref": "calc.secondary.annual_prior",
-            "value": "16091.2000"
+            "value": "16334.3000"
           },
           {
             "ref": "calc.secondary.current_base",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "rule.SC-DB-001.deductible",
@@ -3333,16 +3329,16 @@
           },
           {
             "ref": "input.secondary.current_compliant_base",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "fact.secondary.is_post_trade",
             "value": "1"
           }
         ],
-        "unrounded_result": "16091.2000",
+        "unrounded_result": "16334.3000",
         "rounding_rule": "not_applicable（精确运算）",
-        "result": "16091.2000"
+        "result": "16334.3000"
       },
       {
         "calculation_id": "calc.secondary.db_band_total",
@@ -3351,11 +3347,11 @@
         "operands": [
           {
             "ref": "calc.secondary.annual_prior",
-            "value": "16091.2000"
+            "value": "16334.3000"
           },
           {
             "ref": "input.secondary.current_compliant_base",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "rule.SC-DB-001.deductible",
@@ -3367,7 +3363,7 @@
           },
           {
             "ref": "input.secondary.first_band_overlap",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "rule.SC-DB-001.first_rate",
@@ -3382,9 +3378,9 @@
             "value": "0.75"
           }
         ],
-        "unrounded_result": "790.075000",
+        "unrounded_result": "632.060000",
         "rounding_rule": "not_applicable（精确运算）",
-        "result": "790.075000"
+        "result": "632.060000"
       },
       {
         "calculation_id": "calc.secondary.feein_db_pay",
@@ -3393,20 +3389,20 @@
         "operands": [
           {
             "ref": "calc.secondary.self_pay_1",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "input.secondary.current_compliant_base",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "calc.secondary.db_band_total",
-            "value": "790.075000"
+            "value": "632.060000"
           }
         ],
-        "unrounded_result": "790.075000",
+        "unrounded_result": "632.060000",
         "rounding_rule": "explicit:round_half_up",
-        "result": "790.08"
+        "result": "632.06"
       },
       {
         "calculation_id": "calc.secondary.feeout_db_pay",
@@ -3419,11 +3415,11 @@
           },
           {
             "ref": "input.secondary.current_compliant_base",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "calc.secondary.db_band_total",
-            "value": "790.075000"
+            "value": "632.060000"
           }
         ],
         "unrounded_result": "0.0000",
@@ -3437,16 +3433,16 @@
         "operands": [
           {
             "ref": "calc.secondary.feein_db_pay",
-            "value": "790.08"
+            "value": "632.06"
           },
           {
             "ref": "calc.secondary.feeout_db_pay",
             "value": "0.00"
           }
         ],
-        "unrounded_result": "790.075000",
+        "unrounded_result": "632.060000",
         "rounding_rule": "explicit:round_half_up",
-        "result": "790.08"
+        "result": "632.06"
       },
       {
         "calculation_id": "calc.secondary.after_db_one",
@@ -3455,16 +3451,16 @@
         "operands": [
           {
             "ref": "calc.secondary.self_pay_1",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "calc.secondary.feein_db_pay",
-            "value": "790.08"
+            "value": "632.06"
           }
         ],
-        "unrounded_result": "425.4200",
+        "unrounded_result": "340.3400",
         "rounding_rule": "not_applicable（精确运算）",
-        "result": "425.4200"
+        "result": "340.3400"
       },
       {
         "calculation_id": "calc.secondary.after_db_two",
@@ -3491,16 +3487,16 @@
         "operands": [
           {
             "ref": "calc.secondary.after_db_one",
-            "value": "425.4200"
+            "value": "340.3400"
           },
           {
             "ref": "calc.secondary.after_db_two",
             "value": "0.00"
           }
         ],
-        "unrounded_result": "425.4200",
+        "unrounded_result": "340.3400",
         "rounding_rule": "not_applicable（精确运算）",
-        "result": "425.4200"
+        "result": "340.3400"
       },
       {
         "calculation_id": "calc.secondary.feein_maf_pay",
@@ -3509,16 +3505,16 @@
         "operands": [
           {
             "ref": "calc.secondary.after_db_one",
-            "value": "425.4200"
+            "value": "340.3400"
           },
           {
             "ref": "rule.SC-MAF-001",
             "value": "1"
           }
         ],
-        "unrounded_result": "425.4200",
+        "unrounded_result": "340.3400",
         "rounding_rule": "explicit:round_half_up",
-        "result": "425.42"
+        "result": "340.34"
       },
       {
         "calculation_id": "calc.secondary.feeout_maf_pay",
@@ -3545,16 +3541,16 @@
         "operands": [
           {
             "ref": "calc.secondary.feein_maf_pay",
-            "value": "425.42"
+            "value": "340.34"
           },
           {
             "ref": "calc.secondary.feeout_maf_pay",
             "value": "0.00"
           }
         ],
-        "unrounded_result": "425.4200",
+        "unrounded_result": "340.3400",
         "rounding_rule": "explicit:round_half_up",
-        "result": "425.42"
+        "result": "340.34"
       },
       {
         "calculation_id": "calc.secondary.person_payable",
@@ -3563,7 +3559,7 @@
         "operands": [
           {
             "ref": "calc.secondary.self_pay_1",
-            "value": "1215.5000"
+            "value": "972.4000"
           },
           {
             "ref": "input.secondary.total_out_scope",
@@ -3571,11 +3567,11 @@
           },
           {
             "ref": "calc.secondary.big_ill_pay",
-            "value": "790.08"
+            "value": "632.06"
           },
           {
             "ref": "calc.secondary.civil_in",
-            "value": "425.42"
+            "value": "340.34"
           }
         ],
         "unrounded_result": "0.0000",
@@ -3739,7 +3735,7 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-30T02:42:09.499235+00:00",
+        "ref": "hospital_record_store#special:2026-10-30T03:34:30.767897+00:00",
         "value": "7dac38fdf86b9f700ea471e64bb905a6f828eb0f9b753caf4cccc41588e96a1d",
         "values": [
           "annual=1",
@@ -3776,9 +3772,9 @@
     ],
     "coverage": {
       "target_field_count": 26,
-      "independently_explained_count": 9,
-      "amount_reconciled_count": 13,
-      "observed_only_count": 12
+      "independently_explained_count": 13,
+      "amount_reconciled_count": 17,
+      "observed_only_count": 8
     },
     "answer_constraints": {
       "may_claim_full_explanation": false,
@@ -4081,13 +4077,15 @@
         "field_code": "BIG_ILL_PAY",
         "label": "大病保险支付（二次保障）",
         "check_type": "independent_recalculation",
-        "check_status": "not_verifiable",
+        "check_status": "matched",
         "observed_amount": "0.0000",
-        "calculated_amount": null,
-        "difference": null,
-        "explanation_level": "observed_only",
-        "reason_code": "CALCULATION_UNAVAILABLE",
-        "calculation_refs": [],
+        "calculated_amount": "0.00",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.big_ill_pay"
+        ],
         "citation_refs": [
           "rule.SC-DB-001",
           "rule.SC-MAF-001"
@@ -4098,13 +4096,15 @@
         "field_code": "FEEIN_DB_PAY",
         "label": "医保内个人自付一的大病支付",
         "check_type": "independent_recalculation",
-        "check_status": "not_verifiable",
+        "check_status": "matched",
         "observed_amount": "0.0000",
-        "calculated_amount": null,
-        "difference": null,
-        "explanation_level": "observed_only",
-        "reason_code": "CALCULATION_UNAVAILABLE",
-        "calculation_refs": [],
+        "calculated_amount": "0.00",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feein_db_pay"
+        ],
         "citation_refs": [
           "rule.SC-DB-001",
           "rule.SC-MAF-001"
@@ -4115,13 +4115,15 @@
         "field_code": "FEEOUT_DB_PAY",
         "label": "按比例先行自付的大病支付",
         "check_type": "independent_recalculation",
-        "check_status": "not_verifiable",
+        "check_status": "matched",
         "observed_amount": "0.0000",
-        "calculated_amount": null,
-        "difference": null,
-        "explanation_level": "observed_only",
-        "reason_code": "CALCULATION_UNAVAILABLE",
-        "calculation_refs": [],
+        "calculated_amount": "0.00",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feeout_db_pay"
+        ],
         "citation_refs": [
           "rule.SC-DB-001",
           "rule.SC-MAF-001"
@@ -4132,13 +4134,15 @@
         "field_code": "CIVIL_IN",
         "label": "医疗救助支付",
         "check_type": "independent_recalculation",
-        "check_status": "not_verifiable",
+        "check_status": "matched",
         "observed_amount": "634.3000",
-        "calculated_amount": null,
-        "difference": null,
-        "explanation_level": "observed_only",
-        "reason_code": "CALCULATION_UNAVAILABLE",
-        "calculation_refs": [],
+        "calculated_amount": "634.30",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.civil_in"
+        ],
         "citation_refs": [
           "rule.SC-DB-001",
           "rule.SC-MAF-001"
@@ -4149,13 +4153,15 @@
         "field_code": "FEEIN_MAF_PAY",
         "label": "医保内剩余个人负担的救助",
         "check_type": "independent_recalculation",
-        "check_status": "not_verifiable",
+        "check_status": "matched",
         "observed_amount": "570.7200",
-        "calculated_amount": null,
-        "difference": null,
-        "explanation_level": "observed_only",
-        "reason_code": "CALCULATION_UNAVAILABLE",
-        "calculation_refs": [],
+        "calculated_amount": "570.72",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feein_maf_pay"
+        ],
         "citation_refs": [
           "rule.SC-DB-001",
           "rule.SC-MAF-001"
@@ -4166,13 +4172,15 @@
         "field_code": "FEEOUT_MAF_PAY",
         "label": "按比例先行自付剩余负担的救助",
         "check_type": "independent_recalculation",
-        "check_status": "not_verifiable",
+        "check_status": "matched",
         "observed_amount": "63.5800",
-        "calculated_amount": null,
-        "difference": null,
-        "explanation_level": "observed_only",
-        "reason_code": "CALCULATION_UNAVAILABLE",
-        "calculation_refs": [],
+        "calculated_amount": "63.58",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feeout_maf_pay"
+        ],
         "citation_refs": [
           "rule.SC-DB-001",
           "rule.SC-MAF-001"
@@ -4183,13 +4191,15 @@
         "field_code": "PERSON_PAYABLE",
         "label": "个人应付（对照现金与账户合计）",
         "check_type": "independent_recalculation",
-        "check_status": "not_verifiable",
+        "check_status": "matched",
         "observed_amount": "111.94",
-        "calculated_amount": null,
-        "difference": null,
-        "explanation_level": "observed_only",
-        "reason_code": "CALCULATION_UNAVAILABLE",
-        "calculation_refs": [],
+        "calculated_amount": "111.9400",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.person_payable"
+        ],
         "citation_refs": [
           "rule.SC-DB-001",
           "rule.SC-MAF-001"
@@ -4616,16 +4626,181 @@
         "calculation_refs": []
       },
       {
-        "step_id": "secondary.secondary_base_missing",
+        "step_id": "secondary.db_bands",
         "module_id": "secondary_coverage",
-        "outcome": "unknown",
+        "outcome": "true",
         "parent_step_id": null,
         "scope_ref": "settlement",
-        "condition": null,
-        "reason_code": "SECONDARY_BASE_MISSING",
-        "input_refs": [],
-        "rule_refs": [],
+        "condition": {
+          "code": "annual_bands",
+          "description": "年度大病分段重叠：起付以上五万元及其以上部分",
+          "operator": "overlap",
+          "actual_value": "0.0000",
+          "expected_ref": "746.2400"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.secondary.big_ill_scope_total"
+        ],
+        "rule_refs": [
+          "SC-DB-001",
+          "SC-DB-002"
+        ],
         "calculation_refs": []
+      },
+      {
+        "step_id": "secondary.feein_db_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feein_db_pay",
+          "description": "医保内个人自付一的大病支付",
+          "operator": "formula",
+          "actual_value": "0.00",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-DB-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feein_db_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.feeout_db_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feeout_db_pay",
+          "description": "按比例先行自付的大病支付",
+          "operator": "formula",
+          "actual_value": "0.00",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-DB-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feeout_db_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.big_ill_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "big_ill_pay",
+          "description": "大病保险支付（二次保障）",
+          "operator": "formula",
+          "actual_value": "0.00",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-DB-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.big_ill_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.feein_maf_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feein_maf_pay",
+          "description": "医保内剩余个人负担的救助",
+          "operator": "formula",
+          "actual_value": "570.72",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feein_maf_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.feeout_maf_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feeout_maf_pay",
+          "description": "按比例先行自付剩余负担的救助",
+          "operator": "formula",
+          "actual_value": "63.58",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feeout_maf_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.civil_in",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "civil_in",
+          "description": "医疗救助支付",
+          "operator": "formula",
+          "actual_value": "634.30",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.civil_in"
+        ]
+      },
+      {
+        "step_id": "secondary.person_payable",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "person_payable",
+          "description": "个人应付（对照现金与账户合计）",
+          "operator": "formula",
+          "actual_value": "111.9400",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.person_payable"
+        ]
       }
     ],
     "calculations": [
@@ -4816,6 +4991,470 @@
         "unrounded_result": "3152.2000",
         "rounding_rule": "not_applicable（账面分量加减，无取整）",
         "result": "3152.2000"
+      },
+      {
+        "calculation_id": "calc.secondary.personal_base",
+        "formula_id": "secondary_resident_personal_base_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.settlement.grzif1",
+            "value": "671.4400"
+          }
+        ],
+        "unrounded_result": null,
+        "rounding_rule": "not_applicable（按原单自付一列）",
+        "result": "671.4400"
+      },
+      {
+        "calculation_id": "calc.secondary.current_base",
+        "formula_id": "secondary_current_base_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "671.4400"
+          },
+          {
+            "ref": "calc.secondary.proportional_self_pay_2",
+            "value": "74.80"
+          }
+        ],
+        "unrounded_result": "746.2400",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "746.2400"
+      },
+      {
+        "calculation_id": "calc.secondary.self_pay_1",
+        "formula_id": "secondary_self_pay_1_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "input.secondary.self_pay_1_after_supplements",
+            "value": "671.4400"
+          }
+        ],
+        "unrounded_result": "671.4400",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "671.4400"
+      },
+      {
+        "calculation_id": "calc.secondary.proportional_self_pay_2",
+        "formula_id": "secondary_proportional_self_pay_2_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "input.secondary.proportional_self_pay_2",
+            "value": "74.80"
+          }
+        ],
+        "unrounded_result": "74.80",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "74.80"
+      },
+      {
+        "calculation_id": "calc.secondary.db_deductible",
+        "formula_id": "secondary_db_deductible_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-DB-001.base_deductible",
+            "value": "30404"
+          },
+          {
+            "ref": "rule.SC-DB-002.divisor",
+            "value": "2"
+          }
+        ],
+        "unrounded_result": "15202",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "15202"
+      },
+      {
+        "calculation_id": "calc.secondary.db_first_rate",
+        "formula_id": "secondary_db_first_rate_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-DB-001.db_first_rate",
+            "value": "0.60"
+          },
+          {
+            "ref": "rule.SC-DB-002.increment",
+            "value": "0.05"
+          }
+        ],
+        "unrounded_result": "0.65",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.65"
+      },
+      {
+        "calculation_id": "calc.secondary.db_second_rate",
+        "formula_id": "secondary_db_second_rate_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-DB-001.db_second_rate",
+            "value": "0.70"
+          },
+          {
+            "ref": "rule.SC-DB-002.increment",
+            "value": "0.05"
+          }
+        ],
+        "unrounded_result": "0.75",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.75"
+      },
+      {
+        "calculation_id": "calc.secondary.first_band_base",
+        "formula_id": "secondary_first_band_base_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.annual_prior",
+            "value": "0.0000"
+          },
+          {
+            "ref": "calc.secondary.current_base",
+            "value": "746.2400"
+          },
+          {
+            "ref": "rule.SC-DB-001.deductible",
+            "value": "15202"
+          },
+          {
+            "ref": "rule.SC-DB-001.band_width",
+            "value": "50000"
+          }
+        ],
+        "unrounded_result": "0",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0"
+      },
+      {
+        "calculation_id": "calc.secondary.second_band_base",
+        "formula_id": "secondary_second_band_base_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.annual_prior",
+            "value": "0.0000"
+          },
+          {
+            "ref": "calc.secondary.current_base",
+            "value": "746.2400"
+          },
+          {
+            "ref": "rule.SC-DB-001.deductible",
+            "value": "15202"
+          },
+          {
+            "ref": "rule.SC-DB-001.band_width",
+            "value": "50000"
+          }
+        ],
+        "unrounded_result": "0",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0"
+      },
+      {
+        "calculation_id": "calc.secondary.annual_prior",
+        "formula_id": "secondary_annual_prior_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "fact.secondary.big_ill_scope_total",
+            "value": "746.2400"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "746.2400"
+          },
+          {
+            "ref": "fact.secondary.is_post_trade",
+            "value": "1"
+          }
+        ],
+        "unrounded_result": "0.0000",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.secondary.db_band_total",
+        "formula_id": "secondary_db_band_total_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.annual_prior",
+            "value": "0.0000"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "746.2400"
+          },
+          {
+            "ref": "rule.SC-DB-001.deductible",
+            "value": "15202"
+          },
+          {
+            "ref": "rule.SC-DB-001.band_width",
+            "value": "50000"
+          },
+          {
+            "ref": "input.secondary.first_band_overlap",
+            "value": "0"
+          },
+          {
+            "ref": "rule.SC-DB-001.first_rate",
+            "value": "0.65"
+          },
+          {
+            "ref": "input.secondary.second_band_overlap",
+            "value": "0"
+          },
+          {
+            "ref": "rule.SC-DB-001.second_rate",
+            "value": "0.75"
+          }
+        ],
+        "unrounded_result": "0.00",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.secondary.feein_db_pay",
+        "formula_id": "secondary_feein_db_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "671.4400"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "746.2400"
+          },
+          {
+            "ref": "calc.secondary.db_band_total",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "0.00",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.secondary.feeout_db_pay",
+        "formula_id": "secondary_feeout_db_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.proportional_self_pay_2",
+            "value": "74.80"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "746.2400"
+          },
+          {
+            "ref": "calc.secondary.db_band_total",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "0",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.secondary.big_ill_pay",
+        "formula_id": "secondary_big_ill_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.feein_db_pay",
+            "value": "0.00"
+          },
+          {
+            "ref": "calc.secondary.feeout_db_pay",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "0.00",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.secondary.after_db_one",
+        "formula_id": "secondary_after_db_one_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "671.4400"
+          },
+          {
+            "ref": "calc.secondary.feein_db_pay",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "671.4400",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "671.4400"
+      },
+      {
+        "calculation_id": "calc.secondary.after_db_two",
+        "formula_id": "secondary_after_db_two_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.proportional_self_pay_2",
+            "value": "74.80"
+          },
+          {
+            "ref": "calc.secondary.feeout_db_pay",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "74.80",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "74.80"
+      },
+      {
+        "calculation_id": "calc.secondary.remaining_base",
+        "formula_id": "secondary_remaining_base_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.after_db_one",
+            "value": "671.4400"
+          },
+          {
+            "ref": "calc.secondary.after_db_two",
+            "value": "74.80"
+          }
+        ],
+        "unrounded_result": "746.2400",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "746.2400"
+      },
+      {
+        "calculation_id": "calc.secondary.civil_cap_room",
+        "formula_id": "secondary_civil_cap_room_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "rule.SC-MAF-001.cap",
+            "value": "160000"
+          },
+          {
+            "ref": "fact.secondary.civil_fund_payment_total",
+            "value": "634.3000"
+          },
+          {
+            "ref": "fact.secondary.is_post_trade",
+            "value": "1"
+          }
+        ],
+        "unrounded_result": "159365.7000",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "159365.7000"
+      },
+      {
+        "calculation_id": "calc.secondary.feein_maf_pay",
+        "formula_id": "secondary_feein_maf_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.after_db_one",
+            "value": "671.4400"
+          },
+          {
+            "ref": "rule.SC-MAF-001",
+            "value": "0.85"
+          },
+          {
+            "ref": "calc.secondary.civil_cap_room",
+            "value": "159365.7000"
+          },
+          {
+            "ref": "input.secondary.remaining_base",
+            "value": "746.2400"
+          }
+        ],
+        "unrounded_result": "570.724000",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "570.72"
+      },
+      {
+        "calculation_id": "calc.secondary.feeout_maf_pay",
+        "formula_id": "secondary_feeout_maf_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.after_db_two",
+            "value": "74.80"
+          },
+          {
+            "ref": "rule.SC-MAF-001",
+            "value": "0.85"
+          },
+          {
+            "ref": "calc.secondary.civil_cap_room",
+            "value": "159365.7000"
+          },
+          {
+            "ref": "input.secondary.remaining_base",
+            "value": "746.2400"
+          }
+        ],
+        "unrounded_result": "63.5800",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "63.58"
+      },
+      {
+        "calculation_id": "calc.secondary.civil_in",
+        "formula_id": "secondary_civil_in_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.feein_maf_pay",
+            "value": "570.72"
+          },
+          {
+            "ref": "calc.secondary.feeout_maf_pay",
+            "value": "63.58"
+          }
+        ],
+        "unrounded_result": "634.304000",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "634.30"
+      },
+      {
+        "calculation_id": "calc.secondary.person_payable",
+        "formula_id": "secondary_person_payable_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "671.4400"
+          },
+          {
+            "ref": "input.secondary.total_out_scope",
+            "value": "74.80"
+          },
+          {
+            "ref": "calc.secondary.big_ill_pay",
+            "value": "0.00"
+          },
+          {
+            "ref": "calc.secondary.civil_in",
+            "value": "634.30"
+          }
+        ],
+        "unrounded_result": "111.9400",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "111.9400"
       }
     ],
     "citations": [
@@ -4974,7 +5613,7 @@
       {
         "id": "source.snapshot_read_meta",
         "kind": "source_catalog",
-        "ref": "hospital_record_store#special:2026-10-30T02:42:09.587423+00:00",
+        "ref": "hospital_record_store#special:2026-10-30T03:34:30.834627+00:00",
         "value": "da942497d4afd32ba7bd3e7c0f5bc137d7bcbf7c85853a6d57a580f5d8b8549f",
         "values": [
           "annual=1",
@@ -5037,27 +5676,13 @@
         "code": "ROUNDING_RULE_PENDING_CONFIRMATION",
         "message": "取整规则 RSP-RND-001 待确认；本次计算显式采用 round_half_up，结果不升级为已确认口径。",
         "affected_fields": []
-      },
-      {
-        "id": "u.secondary.secondary_base_missing",
-        "code": "SECONDARY_BASE_MISSING",
-        "message": "基本医保、补助或按比例先行负担尚不能确定，二次保障不取账面目标反算。",
-        "affected_fields": [
-          "BIG_ILL_PAY",
-          "FEEIN_DB_PAY",
-          "FEEOUT_DB_PAY",
-          "CIVIL_IN",
-          "FEEIN_MAF_PAY",
-          "FEEOUT_MAF_PAY",
-          "PERSON_PAYABLE"
-        ]
       }
     ],
     "coverage": {
       "target_field_count": 26,
-      "independently_explained_count": 4,
-      "amount_reconciled_count": 8,
-      "observed_only_count": 17
+      "independently_explained_count": 11,
+      "amount_reconciled_count": 15,
+      "observed_only_count": 10
     },
     "answer_constraints": {
       "may_claim_full_explanation": false,
