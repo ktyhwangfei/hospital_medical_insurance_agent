@@ -29,6 +29,7 @@ _TRADE_COLS = (
     "T_BigPay", "T_BigSelfPay", "T_BCPay", "T_JCPay", "T_OfficalPay",
     "T_SelfPay1", "T_SelfPayAll", "T_PersonCountPay", "T_CashPay",
     "T_HasRefundmented", "T_PartialReturnFlag", "TR_OraginalTradeNo", "T_OraginalTradeNo",
+    "RETIRE_OFFICER_PAY", "RETIRE_OFFICER_FLAG",
 )
 _ITEM_COLS = (
     "ItemId", "ItemType", "ItemCode", "FeeType", "UnitPrice", "Count",
@@ -147,6 +148,26 @@ def _field(result, code: str):
 # ── 手工行 → build_snapshot → 全流程分解 ──────────────────────
 
 
+def test_retire_officer_columns_reach_snapshot_without_deriving_eligibility():
+    snapshot, _ = build_snapshot(
+        trade_row=_trade_row(RETIRE_OFFICER_PAY="44.30", RETIRE_OFFICER_FLAG=0),
+        item_rows=[], drug_catalog_rows=[], service_catalog_rows=[], material_catalog_rows=[],
+        institution_h_level="02", rounding_mode=MODE,
+    )
+    assert snapshot.observed.retire_officer_pay == Decimal("44.30")
+    assert snapshot.person.retire_officer_flag == "0"
+    assert snapshot.person.person_type_code == "11"
+    assert snapshot.person.public_medical_eligible is None
+    assert snapshot.person.is_disabled_veteran is None
+    missing, _ = build_snapshot(
+        trade_row=_trade_row(), item_rows=[], drug_catalog_rows=[],
+        service_catalog_rows=[], material_catalog_rows=[],
+        institution_h_level="02", rounding_mode=MODE,
+    )
+    assert missing.observed.retire_officer_pay is None
+    assert missing.person.retire_officer_flag is None
+
+
 def test_build_snapshot_full_pipeline_employed_community_90pct() -> None:
     """在职/社区/2024：E=3000，F=1800，B=1200，大额 90%=1080（EOP-RATE-105），S=120。
 
@@ -185,7 +206,7 @@ def test_build_snapshot_full_pipeline_employed_community_90pct() -> None:
 
 def test_service_unknown_profile_never_guesses() -> None:
     """默认无 resolver：险种/医疗类别置 unknown，内核 UNSUPPORTED_PROFILE，不猜测职工。"""
-    result = decompose_outpatient_trade(_service_conn(), "T001", "H001", MODE)
+    result = decompose_outpatient_trade(_service_conn(), "T001", "H001", MODE).result
     assert result.execution_status == "unavailable"
     assert result.profile.insurance_type == "unknown"
     assert result.profile.medical_category == "unknown"
@@ -197,19 +218,19 @@ def test_service_unknown_profile_never_guesses() -> None:
 
 
 def test_service_adapter_failure_degrades_to_unavailable() -> None:
-    result = decompose_outpatient_trade(_service_conn(fail=True), "T001", "H001", MODE)
+    result = decompose_outpatient_trade(_service_conn(fail=True), "T001", "H001", MODE).result
     assert result.execution_status == "unavailable"
     assert any(u.code == "READ_FAILED" for u in result.uncertainties)
     assert result.fields == []  # 不抛异常栈，空字段结果
 
 
 def test_service_trade_not_found_and_ambiguous() -> None:
-    not_found = decompose_outpatient_trade(_service_conn(trade_rows=[]), "T404", "H001", MODE)
+    not_found = decompose_outpatient_trade(_service_conn(trade_rows=[]), "T404", "H001", MODE).result
     assert not_found.execution_status == "unavailable"
     assert any(u.code == "TRADE_NOT_FOUND" for u in not_found.uncertainties)
 
     ambiguous = decompose_outpatient_trade(
-        _service_conn(trade_rows=[_trade_row(), _trade_row()]), "T001", "H001", MODE)
+        _service_conn(trade_rows=[_trade_row(), _trade_row()]), "T001", "H001", MODE).result
     assert ambiguous.execution_status == "unavailable"
     assert any(u.code == "TRADE_AMBIGUOUS" for u in ambiguous.uncertainties)
 
@@ -218,7 +239,7 @@ def test_service_reversal_trade_unavailable() -> None:
     """冲正交易（关联原交易号）：即使 profile 已确认也进入未支持重算状态。"""
     conn = _service_conn(trade_rows=[_trade_row(TR_OraginalTradeNo="T000")])
     result = decompose_outpatient_trade(
-        conn, "T001", "H001", MODE, profile_resolver=_employee_resolver)
+        conn, "T001", "H001", MODE, profile_resolver=_employee_resolver).result
     assert result.execution_status == "unavailable"
     assert result.profile.insurance_type == "employee"  # resolver 生效
     assert any(u.code == "UNSUPPORTED_REVERSAL_OR_NEGATIVE" for u in result.uncertainties)
@@ -231,7 +252,7 @@ def test_service_confirmed_profile_runs_full_decomposition() -> None:
     即使观测金额吻合也不升级为独立重算成功（禁止反推）。
     """
     result = decompose_outpatient_trade(
-        _service_conn(), "T001", "H001", MODE, profile_resolver=_employee_resolver)
+        _service_conn(), "T001", "H001", MODE, profile_resolver=_employee_resolver).result
     assert result.execution_status in ("partial", "complete")
     assert _field(result, "T_FeeAll").check_status == "matched"  # 明细汇总核对走通
     first_pay = _field(result, "T_FirstPay")
@@ -240,3 +261,14 @@ def test_service_confirmed_profile_runs_full_decomposition() -> None:
     # 读元数据 citations：来源 + 内容哈希
     meta = [c for c in result.citations if c.kind == "source_catalog"]
     assert meta and meta[0].value
+
+
+def test_read_hash_includes_institution_tier() -> None:
+    """机构等级是实际采用的起付/比例输入：等级变化必须改变读取摘要。"""
+    def _hash(level: str) -> str:
+        result = decompose_outpatient_trade(
+            _service_conn(inst_rows=[("H001", level)]), "T001", "H001", MODE,
+            profile_resolver=_employee_resolver).result
+        return next(c.value for c in result.citations if c.kind == "source_catalog")
+
+    assert _hash("14") != _hash("02")

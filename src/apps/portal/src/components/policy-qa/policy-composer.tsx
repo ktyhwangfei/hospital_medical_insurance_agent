@@ -37,8 +37,8 @@ const MODE_META: Record<
   settlement_explain: {
     badge: null,
     icon: <ReceiptText className="size-3.5" aria-hidden />,
-    placeholder: '输入结算单号或费用项目，例如：查询住院费用，结算单 1671213',
-    hint: '结算解释模式下优先调用结算单结构化解释工作流',
+    placeholder: '例如：为什么按这个比例报销？这笔金额是怎么算出来的？',
+    hint: '可直接追问本单的报销比例、支付金额或待遇原因',
     sendLabel: '发送',
   },
   data_query: {

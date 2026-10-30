@@ -153,6 +153,7 @@ def main() -> int:
                     accumulation_caliber_confirmed=True,  # 决策记录 D3/D4/D5（候选口径，待签核）
                     derive_eligibility_from_codes=True,  # 决策记录 D6/D7/D8（候选口径，待签核）
                 )
+                result = result.result  # DecompositionOutcome 侧车：批量回放只用分解结果
                 verdict, mismatched, codes, book_note = _classify(result)
                 rows.append({
                     "trade_no": trade_no,

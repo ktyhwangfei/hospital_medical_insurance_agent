@@ -8,22 +8,21 @@
 - 险种/医疗类别由 SQL WHERE 按码值筛定，profile 直接传入 ('employee','outpatient_special')
   （ESP-CODE-001/002 实测码值候选）；
 - 取整模式显式 RoundingMode.HALF_UP（ESP-RND-001 待确认，属假定口径，如实标注）；
-- 周期上下文：dyxxtsb/dyxxnd 交易后快照 − 本笔账面 → 交易前口径（confirmed）；
+- 周期上下文：同年度、本笔流水匹配的 dyxxtsb/dyxxnd 快照按字段减本笔；缺失或负差未知；
   无行（2025 年起表未维护）→ unknown，此时 allow_observed_deductible=True
   取账面起付作条件输入（勾稽级）+ segment_coordinate_guard（坐标不可证明即不硬算）；
 - 资格字段 cjjrdj/gwydybz/cblb=61 按 Issue #79 手工验证候选口径映射（留痕候选状态）。
 
 产出（统一 CSV，验收用）：
     scripts/eval/issue79_special_mz_batch_result.csv — 全部记录：
-      row_type=verdict   每笔总判定（12 个费用分解字段 matched/mismatched/not_verifiable 计数）
+      row_type=verdict   每笔总判定（19 个费用分解字段 matched/mismatched/not_verifiable 计数）
       row_type=field     逐字段：账面值/计算值/差异/核对状态/说明（含恒等式与支付渠道）
       row_type=calc      计算过程：公式/操作数/未取整结果/取整规则/结果
       row_type=item      费用明细行（库里面记录的各项费用）
       row_type=branch    分支轨迹：条件/实际值/命中/规则引用
     scripts/eval/issue79_special_mz_batch_summary.json — 汇总与字段级准确率
 
-准确率定义（费用分解字段 12 个：ZJE/YBN/YBW/GRZIFTW 明细汇总核对 +
-YBNQFJE/TCZHF/TCZIF/DEGWYZHF/DEGWYZIF/BCZHF/JCZHF/GFYLBCHBX 独立重算）：
+准确率定义（19个目标：明细汇总4个、基本医保和补助8个、二次大病/救助及个人应付7个）：
 - matched 或 not_applicable 且与账面一致 → 准确；
 - mismatched 或 not_applicable 与账面冲突 → 差异；
 - not_verifiable → 不计入可判定（院端数据不可得，如实排除，不视为错误）；
@@ -61,7 +60,7 @@ ROUNDING_MODE = RoundingMode.HALF_UP  # 假定口径：ESP-RND-001 待确认
 DJH_SQL = (
     "SELECT b.djh FROM dbo.yb_brdjxx b "
     "JOIN dbo.yb_mzjyxx m ON b.djh = m.djh "
-    "WHERE b.FUND_TYPE = 3 AND b.yllb = '12' AND m.fyfs = '0' ORDER BY b.djh"
+    "WHERE b.FUND_TYPE = 3 AND b.yllb = '12' AND m.fyfs = '0' AND COALESCE(b.tsb1,'') NOT IN ('503','504') AND COALESCE(b.tsb2,'') NOT IN ('503','504') AND COALESCE(b.tsb3,'') NOT IN ('503','504') ORDER BY b.djh"
 )
 
 CSV_PATH = Path(__file__).parent / "issue79_special_mz_batch_result.csv"
@@ -71,6 +70,7 @@ SUMMARY_PATH = Path(__file__).parent / "issue79_special_mz_batch_summary.json"
 DECOMPOSITION_FIELDS = (
     "ZJE", "YBN", "YBW", "GRZIFTW",
     "YBNQFJE", "TCZHF", "TCZIF", "DEGWYZHF", "DEGWYZIF", "BCZHF", "JCZHF", "GFYLBCHBX",
+    "BIG_ILL_PAY", "FEEIN_DB_PAY", "FEEOUT_DB_PAY", "CIVIL_IN", "FEEIN_MAF_PAY", "FEEOUT_MAF_PAY", "PERSON_PAYABLE",
 )
 
 VERDICT_ACCURATE = "准确"
@@ -92,25 +92,42 @@ def _field_verdict(status: str, observed: str | None) -> str:
     return "not_verifiable"
 
 
-def main() -> int:
+def main(*, kidney_fixed: bool = False) -> int:
+    query, csv_path, summary_path = DJH_SQL, CSV_PATH, SUMMARY_PATH
+    trace_name = "issue79_special_mz_batch_traces.json"
+    service = decompose_special_mz_settlement
+    target_fields = DECOMPOSITION_FIELDS
+    scope = "职工门特按项目付费（排除503/504）"
+    if kidney_fixed:
+        from src.adapters.data_supply.outpatient_special_fixed_kidney_queries import KIDNEY_SCOPE_SQL
+        from src.runtime.policy_qa.fee_decomposition.snapshot_service_special_fixed_kidney import decompose_special_fixed_kidney_settlement
+        service = decompose_special_fixed_kidney_settlement
+        query = "SELECT b.djh FROM dbo.yb_brdjxx b JOIN dbo.yb_mzjyxx m ON b.djh=m.djh WHERE b.FUND_TYPE=3 AND b.yllb='12' AND m.fyfs='0' AND " + KIDNEY_SCOPE_SQL + " ORDER BY b.djh"
+        csv_path = CSV_PATH.with_name("issue82_fixed_kidney_batch_result.csv")
+        summary_path = SUMMARY_PATH.with_name("issue82_fixed_kidney_batch_summary.json")
+        trace_name = "issue82_fixed_kidney_batch_traces.json"
+        target_fields += ("QUOTA_AMOUNT", "GRZIF1", "AGENCY_PAY")
+        scope = "职工门特定额肾/肝肾移植抗排异（503/504）"
     source = get_semantic_data_source()
     conn = source.open_connection(DATASOURCE_ID)
     rows: list[dict[str, str]] = []
+    traces = {}
     trade_stats: list[dict] = []
     try:
         cursor = conn.cursor()
-        cursor.execute(DJH_SQL)
+        cursor.execute(query)
         djh_list = [str(r[0]) for r in cursor.fetchall()]
         cursor.close()
-        print(f"命中职工门特·按项目付费结算 {len(djh_list)} 笔", flush=True)
+        print(f"命中{scope}结算 {len(djh_list)} 笔", flush=True)
 
         for djh in djh_list:
             print(f"  djh={djh} ...", flush=True)
             try:
-                result = decompose_special_mz_settlement(
+                result = service(
                     conn, djh, HOSPITAL_CODE, ROUNDING_MODE,
                     allow_observed_deductible=True,
                     profile=("employee", "outpatient_special"))
+                result = result.result  # DecompositionOutcome 侧车：批量回放只用分解结果
             except Exception as exc:  # noqa: BLE001 — 单笔异常不中断批量
                 rows.append({"row_type": "verdict", "djh": djh, "verdict": VERDICT_SCRIPT_ERROR,
                              "note": f"{type(exc).__name__}: {exc}"})
@@ -122,7 +139,7 @@ def main() -> int:
             field_detail: dict[str, str] = {}
             for f in result.fields:
                 v = _field_verdict(f.check_status, f.observed_amount)
-                if f.field_code in DECOMPOSITION_FIELDS:
+                if f.field_code in target_fields:
                     counts[v] += 1
                     field_detail[f.field_code] = (
                         f"{f.check_status}(账{f.observed_amount}/算{f.calculated_amount})")
@@ -134,9 +151,10 @@ def main() -> int:
                     "calculated_amount": f.calculated_amount or "",
                     "difference": f.difference or "",
                     "reason_code": f.reason_code or "",
-                    "verdict": v if f.field_code in DECOMPOSITION_FIELDS else "信息性",
+                    "verdict": v if f.field_code in target_fields else "信息性",
                 })
 
+            traces[djh] = result.model_dump(mode="json")
             # ── 计算过程行 ──
             for c in result.calculations:
                 rows.append({
@@ -186,7 +204,7 @@ def main() -> int:
                 "accurate_fields": str(counts["accurate"]),
                 "mismatched_fields": str(counts["mismatched"]),
                 "not_verifiable_fields": str(counts["not_verifiable"]),
-                **{f"field_{k}": field_detail.get(k, "") for k in DECOMPOSITION_FIELDS},
+                **{f"field_{k}": field_detail.get(k, "") for k in target_fields},
             })
             trade_stats.append({"djh": djh, "verdict": verdict, "fields": field_detail,
                                 "counts": dict(counts)})
@@ -222,12 +240,12 @@ def main() -> int:
         "code", "message", "affected_fields",
         "execution_status", "reconciliation_status", "cycle_evidence",
         "accurate_fields", "mismatched_fields", "not_verifiable_fields",
-        *[f"field_{k}" for k in DECOMPOSITION_FIELDS],
+        *[f"field_{k}" for k in target_fields],
         "xh", "xmdm", "xmmc", "xmlb", "sflb", "sfxmdj", "tsbbs", "dj", "sl",
         "zje", "ybnje", "ybwje", "grziftw", "fsrq",
         "cfh", "note",
     ]
-    with CSV_PATH.open("w", newline="", encoding="utf-8-sig") as fp:
+    with csv_path.open("w", newline="", encoding="utf-8-sig") as fp:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
@@ -239,7 +257,7 @@ def main() -> int:
     total_not_verifiable = sum(
         t["counts"].get("not_verifiable", 0) for t in trade_stats if t.get("counts"))
     field_stats: dict[str, dict[str, int]] = {}
-    for code in DECOMPOSITION_FIELDS:
+    for code in target_fields:
         acc = sum(1 for t in trade_stats
                   if t["fields"].get(code, "").startswith(("matched", "not_applicable")))
         mis = sum(1 for t in trade_stats if t["fields"].get(code, "").startswith("mismatched"))
@@ -249,7 +267,7 @@ def main() -> int:
     summary = {
         "datasource": DATASOURCE_ID,
         "hospital_code": HOSPITAL_CODE,
-        "scope": "城镇职工（FUND_TYPE=3）× 门特（yllb='12'）× 按项目付费（fyfs='0'）",
+        "scope": scope,
         "rounding_mode_assumed": ROUNDING_MODE.value,
         "total_settlements": len(trade_stats),
         "verdict_counts": dict(verdict_counts),
@@ -262,9 +280,11 @@ def main() -> int:
             if (decidable + total_not_verifiable) else None,
         },
         "per_field_stats": field_stats,
-        "metric_note": "准确率按 12 个费用分解字段统计；支付渠道（XJZF/ZHZF/恒等式）为信息性核对不计入",
+        "metric_note": f"按{len(target_fields)}个目标字段核对金额，含二次大病、救助及个人应付；定额链含条件核对，matched不表示日标准已独立核定；unknown不作为通过",
     }
-    SUMMARY_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary_path.with_name(trace_name).write_text(
+        json.dumps(traces, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("\n===== 汇总 =====")
     print(f"verdict: {dict(verdict_counts)}")
@@ -273,8 +293,8 @@ def main() -> int:
     print(f"准确率（全字段）: {summary['field_level']['accuracy_all']}")
     for code, st in field_stats.items():
         print(f"  {code}: 准确 {st['accurate']} 差异 {st['mismatched']} 不可核对 {st['not_verifiable']}")
-    print(f"\n统一 CSV: {CSV_PATH}")
-    print(f"汇总 JSON: {SUMMARY_PATH}")
+    print(f"\n统一 CSV: {csv_path}")
+    print(f"汇总 JSON: {summary_path}")
     return 0
 
 

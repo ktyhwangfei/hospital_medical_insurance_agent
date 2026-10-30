@@ -156,6 +156,17 @@ if (-not $env:NEXT_PUBLIC_WORKFLOW_TOKEN) {
     $jwtHmac.Dispose()
     $env:NEXT_PUBLIC_WORKFLOW_TOKEN = "$jwtHeader.$jwtPayload.$jwtSignature"
 }
+# Fee decomposition workbench session (Issue #78): read-only scope, 24h dev token
+if (-not $env:NEXT_PUBLIC_FEE_DECOMPOSITION_TOKEN) {
+    $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtPayloadJson = @{ sub = "portal-dev-fee-decomposition"; roles = @("information_department"); permissions = @("fee_decomposition:read"); exp = [DateTimeOffset]::UtcNow.AddHours(24).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+    $jwtPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jwtPayloadJson)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtHmac = New-Object System.Security.Cryptography.HMACSHA256
+    $jwtHmac.Key = [Text.Encoding]::UTF8.GetBytes($env:AUTH_JWT_SECRET)
+    $jwtSignature = [Convert]::ToBase64String($jwtHmac.ComputeHash([Text.Encoding]::ASCII.GetBytes("$jwtHeader.$jwtPayload"))).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtHmac.Dispose()
+    $env:NEXT_PUBLIC_FEE_DECOMPOSITION_TOKEN = "$jwtHeader.$jwtPayload.$jwtSignature"
+}
 # Inject MSSQL connection env vars for the backend process (SqlServerBusinessDataClient
 # requires MSSQL_DATABASE/USER/PASSWORD). Pre-set env vars win; the password is NOT
 # hardcoded here - it is read from the gitignored deploy/docker/.env (SA_PASSWORD).
@@ -203,6 +214,16 @@ if (-not $env:DATA_SOURCE_MODE) { $env:DATA_SOURCE_MODE = "real_db" }
 if (-not $env:SKILL_CONTROL_DEV_MODE) { $env:SKILL_CONTROL_DEV_MODE = "1" }
 # Local-only model governance endpoints use the mock authenticator. Production remains disabled.
 if (-not $env:MODEL_GOVERNANCE_DEV_MODE) { $env:MODEL_GOVERNANCE_DEV_MODE = "1" }
+# Fee decomposition gates (Issue #78 workbench). CANDIDATE CALIBERS PENDING BUSINESS SIGN-OFF:
+# - ROUNDING_MODE: no default by design (EOP-RND-001 pending); assumed round_half_up (decision D10)
+# - HOSPITAL_CODE: source-system o_Trade site column value (NOT the deployment-level PLATFORM_HOSPITAL_CODE)
+# - EVAL_CALIBERS=1: replay-verified candidate calibers (accumulation D3-D5, eligibility D6-D8),
+#   workbench entry only; the policy-qa production path stays fail-closed
+if (-not $env:FEE_DECOMPOSITION_ROUNDING_MODE) { $env:FEE_DECOMPOSITION_ROUNDING_MODE = "round_half_up" }
+if (-not $env:FEE_DECOMPOSITION_HOSPITAL_CODE) { $env:FEE_DECOMPOSITION_HOSPITAL_CODE = "01110003" }
+if (-not $env:FEE_DECOMPOSITION_EVAL_CALIBERS) { $env:FEE_DECOMPOSITION_EVAL_CALIBERS = "1" }
+# 费用解释：structured/adjust 共用结构化事实与 explanation_prompt.yaml；deterministic 供离线测试
+if (-not $env:FEE_EXPLANATION_MODE) { $env:FEE_EXPLANATION_MODE = "structured" }
 # NOTE: uvicorn --reload spawns multiprocessing workers; if the master dies the workers
 #   become orphans holding the port + stale code (see stop-servers.ps1). Use single process
 #   for daily dev; restart via .\stop-servers.ps1; .\start-servers.ps1 after backend edits.

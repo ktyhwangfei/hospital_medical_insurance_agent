@@ -1,0 +1,131 @@
+{
+  "datasource": "bjybdb",
+  "hospital_code": "01110003",
+  "scope": "职工门特定额肾/肝肾移植抗排异（503/504）",
+  "rounding_mode_assumed": "round_half_up",
+  "total_settlements": 7,
+  "verdict_counts": {
+    "无法核对": 6,
+    "不可用": 1
+  },
+  "field_level": {
+    "accurate": 126,
+    "mismatched": 0,
+    "not_verifiable": 28,
+    "accuracy_decidable": 1.0,
+    "accuracy_all": 0.8181818181818182
+  },
+  "per_field_stats": {
+    "ZJE": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "YBN": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "YBW": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "GRZIFTW": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "YBNQFJE": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "TCZHF": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "TCZIF": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "DEGWYZHF": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "DEGWYZIF": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "BCZHF": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "JCZHF": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "GFYLBCHBX": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "BIG_ILL_PAY": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "FEEIN_DB_PAY": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "FEEOUT_DB_PAY": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "CIVIL_IN": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "FEEIN_MAF_PAY": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "FEEOUT_MAF_PAY": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "PERSON_PAYABLE": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "QUOTA_AMOUNT": {
+      "accurate": 0,
+      "mismatched": 0,
+      "not_verifiable": 7
+    },
+    "GRZIF1": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    },
+    "AGENCY_PAY": {
+      "accurate": 6,
+      "mismatched": 0,
+      "not_verifiable": 1
+    }
+  },
+  "metric_note": "按22个目标字段核对金额，含二次大病、救助及个人应付；定额链含条件核对，matched不表示日标准已独立核定；unknown不作为通过"
+}

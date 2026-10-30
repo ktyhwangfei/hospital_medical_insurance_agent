@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   CalendarDays,
   ChevronRight,
@@ -17,6 +17,7 @@ import {
   thisWeekRange,
   todayRange,
   type PatientSummaryDTO,
+  type SettlementDecompositionChain,
   type SettlementListItemDTO,
   type SettlementPreset,
 } from '@/lib/policy-qa-settlement-list'
@@ -31,9 +32,17 @@ import {
 
 interface SettlementTimeBrowserProps {
   selectedId: string | null
-  onSelect: (settlementId: string) => void
+  /** 点选结算单：传整项（工作区需要结算时间/医疗类别渲染账单头） */
+  onSelect: (item: SettlementListItemDTO) => void
   /** 患者定位/换人时通知工作区（用于清掉上一患者的选中结算单） */
   onPatientChange?: (patient: PatientSummaryDTO | null) => void
+  /** 候选列表变化时上报（工作区 @换结算 只能命中等值条目） */
+  onCandidatesChange?: (items: SettlementListItemDTO[]) => void
+}
+
+const CHAIN_BADGE: Record<Exclude<SettlementDecompositionChain, null>, string> = {
+  outpatient: '门诊分解',
+  special: '门特分解',
 }
 
 const PRESETS: Array<{ id: SettlementPreset; label: string }> = [
@@ -46,6 +55,7 @@ export default function SettlementTimeBrowser({
   selectedId,
   onSelect,
   onPatientChange,
+  onCandidatesChange,
 }: SettlementTimeBrowserProps) {
   // ── 患者定位（临时方案）─────────────────────────────────────
   const [patient, setPatient] = useState<PatientSummaryDTO | null>(null)
@@ -61,6 +71,18 @@ export default function SettlementTimeBrowser({
   const [items, setItems] = useState<SettlementListItemDTO[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 患者/查询上下文代次：换人、重新定位、改时段、卸载都递增；
+  // 旧请求（成功/失败/finally）只有代次匹配才能写回（R1）。
+  const contextRef = useRef(0)
+  const mountedRef = useRef(true)
+
+  // 使在途列表请求失效并清空旧结果/候选（新查询、换人、改时段、卸载共用）。
+  const invalidateList = useCallback(() => {
+    contextRef.current += 1
+    setItems([])
+    setError(null)
+    setLoading(false)
+  }, [])
 
   const resolveRange = useCallback((): { dateFrom: string; dateTo: string } | null => {
     if (preset === 'today') return todayRange()
@@ -72,10 +94,12 @@ export default function SettlementTimeBrowser({
   const load = useCallback(async () => {
     const range = resolveRange()
     if (!range) {
+      invalidateList()
       setError('请选择有效的自定义日期范围（开始 ≤ 结束）。')
-      setItems([])
       return
     }
+    // 新请求让旧请求立即失效（同一患者换时段/刷新也不允许旧结果回写）
+    const ticket = ++contextRef.current
     setLoading(true)
     setError(null)
     try {
@@ -85,51 +109,70 @@ export default function SettlementTimeBrowser({
         50,
         patientKey ?? undefined,
       )
+      if (ticket !== contextRef.current || !mountedRef.current) return
       setItems(data)
     } catch (e) {
+      if (ticket !== contextRef.current || !mountedRef.current) return
       setError(e instanceof Error ? e.message : '结算单列表查询失败')
       setItems([])
     } finally {
-      setLoading(false)
+      if (ticket === contextRef.current && mountedRef.current) setLoading(false)
     }
-  }, [resolveRange, patientKey])
+  }, [resolveRange, patientKey, invalidateList])
 
   // 定位患者后按当前预设时段自动加载；自定义模式由「查询」按钮触发
   useEffect(() => {
     if (patientKey && preset !== 'custom') void load()
   }, [patientKey, preset, load])
 
+  // 候选列表上报给工作区：@换结算 命令按完整列表项复用选单入口。
+  // 只在当前上下文代次的有效 items 上发布；换人/改时段/卸载已清空或不再发布。
+  useEffect(() => {
+    if (!mountedRef.current) return
+    onCandidatesChange?.(items)
+  }, [items, onCandidatesChange])
+
+  // 卸载后不得再有在途结果改写状态或发布候选
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      contextRef.current += 1
+    }
+  }, [])
+
   const handleLocate = () => {
     const key = keyInput.trim()
     if (!key || lookupLoading) return
     setLookupLoading(true)
     setLookupError(null)
+    // 新定位立即丢弃上一患者的在途列表与结果，不等待查询返回
+    invalidateList()
     void (async () => {
       try {
         const found = await fetchPatientLookup(key)
+        if (!mountedRef.current) return
         if (found) {
           setPatient(found)
           setPatientKey(key)
-          setItems([])
-          setError(null)
           onPatientChange?.(found)
         } else {
           setLookupError('未找到该患者，请核对身份证号或卡号。')
         }
       } catch (e) {
+        if (!mountedRef.current) return
         setLookupError(e instanceof Error ? e.message : '患者定位失败')
       } finally {
-        setLookupLoading(false)
+        if (mountedRef.current) setLookupLoading(false)
       }
     })()
   }
 
   const handleSwitchPatient = () => {
+    invalidateList()
     setPatient(null)
     setPatientKey(null)
     setKeyInput('')
-    setItems([])
-    setError(null)
     setLookupError(null)
     onPatientChange?.(null)
   }
@@ -221,7 +264,11 @@ export default function SettlementTimeBrowser({
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setPreset(item.id)}
+                onClick={() => {
+                  // 改时段：旧列表/候选立即作废，等新查询成功后再恢复
+                  invalidateList()
+                  setPreset(item.id)
+                }}
                 aria-pressed={active}
                 disabled={!patient}
                 data-testid={`settlement-preset-${item.id}`}
@@ -244,7 +291,10 @@ export default function SettlementTimeBrowser({
               type="date"
               aria-label="开始日期"
               value={customFrom}
-              onChange={(event) => setCustomFrom(event.target.value)}
+              onChange={(event) => {
+                invalidateList()
+                setCustomFrom(event.target.value)
+              }}
               className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
             />
             <span className="text-xs text-slate-400">至</span>
@@ -253,7 +303,10 @@ export default function SettlementTimeBrowser({
               aria-label="结束日期"
               value={customTo}
               min={customFrom || undefined}
-              onChange={(event) => setCustomTo(event.target.value)}
+              onChange={(event) => {
+                invalidateList()
+                setCustomTo(event.target.value)
+              }}
               className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
             />
             <button
@@ -313,14 +366,17 @@ export default function SettlementTimeBrowser({
                   该时段暂无结算单，切换时段或刷新试试。
                 </p>
               ) : (
-                <ul className="divide-y divide-slate-100" data-testid="settlement-list">
+                <ul
+                  className="max-h-[420px] divide-y divide-slate-100 overflow-y-auto"
+                  data-testid="settlement-list"
+                >
                   {items.map((item) => {
                     const selected = item.settlementId === selectedId
                     return (
                       <li key={item.settlementId}>
                         <button
                           type="button"
-                          onClick={() => onSelect(item.settlementId)}
+                          onClick={() => onSelect(item)}
                           aria-pressed={selected}
                           data-testid={`settlement-item-${item.settlementId}`}
                           className={[
@@ -333,11 +389,19 @@ export default function SettlementTimeBrowser({
                               {item.settlementId}
                             </span>
                             <span className="block truncate text-xs text-slate-500">
-                              {[item.settlementDate, item.personType, item.serviceType]
+                              {[item.settlementDate.slice(0, 16), item.personType, item.serviceType]
                                 .filter(Boolean)
                                 .join(' · ')}
                             </span>
                           </span>
+                          {item.decompositionChain ? (
+                            <span
+                              data-testid={`settlement-chain-badge-${item.settlementId}`}
+                              className="shrink-0 rounded-full bg-agent-settlement/10 px-2 py-0.5 text-[11px] font-medium text-agent-settlement"
+                            >
+                              {CHAIN_BADGE[item.decompositionChain]}
+                            </span>
+                          ) : null}
                           {item.insuranceType ? (
                             <span className="hidden shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 sm:inline">
                               {item.insuranceType}

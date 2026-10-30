@@ -296,18 +296,22 @@ class ProfileStrategy:
                 value=None if value is None else str(value),
                 status="missing" if value is None else "present",
             ))
-        # 问题相关性精简：个人负担场景只列先自付相关明细，且只保留关键字段；
+        # 个人负担同时可能来自先自付和其他范围外费用，不能过滤后者。
         # 其余场景（如费用明细医保范围解释）保留全量字段。
         liability_focus = profile_id == "personal-liability-explanation"
         liability_labels = {
             "ItemName": "项目", "Fee": "金额",
-            "FeeOut": "医保外", "FeeItem_SelfPay2": "先自付",
+            "FeeOut": "医保范围外金额", "FeeItem_SelfPay2": "个人自付二",
         }
         fee_item_index = 0
         for item in context.fee_items:
-            if liability_focus and money(item.get("FeeItem_SelfPay2")) in (
+            has_self_pay_two = money(item.get("FeeItem_SelfPay2")) not in (
                 None, Decimal("0.00")
-            ):
+            )
+            has_out_of_scope = money(item.get("FeeOut")) not in (
+                None, Decimal("0.00")
+            )
+            if liability_focus and not (has_self_pay_two or has_out_of_scope):
                 continue
             fee_item_index += 1
             labels = (
@@ -319,7 +323,8 @@ class ProfileStrategy:
             )
             fact_checks.append(ContextCheck(
                 name=(
-                    "费用明细（先自付相关）" if liability_focus
+                    ("费用明细（先自付相关）" if has_self_pay_two
+                     else "费用明细（医保范围外费用）") if liability_focus
                     else f"费用明细 {fee_item_index}"
                 ),
                 value=value, status="present"

@@ -179,10 +179,28 @@ def military_supplement(
     public_medical_eligible: bool | None,
     fee_dates: tuple[date, ...],
     rounding_mode: RoundingMode,
+    *,
+    military_disability_level_code: str | None = None,
 ) -> SupplementResult:
     """军残补助。资格按费用发生日期；退休军残基数为 S-R；公疗在乡军残跳过。"""
     mid = "military_supplement"
     branches: list[BranchTrace] = []
+
+    # 等级0是原始不享受待遇事实，独立于账面金额及正向资格派生开关。
+    if military_disability_level_code == "0":
+        conflict = is_disabled_veteran is True
+        reason = "MILITARY_ELIGIBILITY_FACT_CONFLICT" if conflict else "NO_MILITARY_DISABILITY_BENEFIT"
+        outcome = BranchOutcome.UNKNOWN if conflict else BranchOutcome.NOT_APPLICABLE
+        branches.append(BranchTrace(
+            step_id="dvet.eligibility", module_id=mid, scope_ref="trade",
+            condition=BranchCondition("military_disability_level_code", "伤残待遇等级（0为不享受）", "in", "0", "1-6"),
+            outcome=outcome, reason_code=reason,
+            input_refs=("fact.person.military_disability_level_code",)))
+        return _result(mid, "dvet", None if conflict else Decimal("0"), outcome, reason, tuple(branches),
+                       uncertainties=(DecompositionUncertainty(
+                           id="u.dvet.source_conflict", code=reason,
+                           message="伤残待遇等级为不享受，但军残资格标识为享受，来源冲突。",
+                           affected_fields=("T_JCPay",)),) if conflict else ())
 
     if is_disabled_veteran is False:
         branches.append(BranchTrace(
@@ -372,6 +390,8 @@ def public_medical_supplement(
     prior_fund_on_segment: Decimal | None,
     settlement_date: date,
     rounding_mode: RoundingMode,
+    raw_indicator: str | None = None,
+    raw_code: str | None = None,
 ) -> SupplementResult:
     """公疗补助：医保内年度累计超 1300 元部分补足目标比例（退休 95%/在职 90%/在乡 100%）。
 
@@ -382,16 +402,44 @@ def public_medical_supplement(
     mid = "public_medical"
     branches: list[BranchTrace] = []
 
+    # 通道未选择与患者永久资格不同；只接入明确零码，不将陌生码当作否。
+    if raw_code == "0" or raw_indicator == "1":
+        conflict = public_medical_eligible is True
+        reason = ("PUBLIC_MEDICAL_CHANNEL_CONFLICT" if conflict else
+                  "PUBLIC_MEDICAL_CHANNEL_NOT_SELECTED" if raw_code == "0" else
+                  "NOT_PUBLIC_MEDICAL")
+        outcome = BranchOutcome.UNKNOWN if conflict else BranchOutcome.NOT_APPLICABLE
+        channel_not_selected = raw_code == "0"
+        ref = "fact.person.public_medical_treatment_code" if channel_not_selected else "fact.person.public_medical_flag"
+        branches.append(BranchTrace(
+            step_id="pmed.eligibility", module_id=mid, scope_ref="trade",
+            condition=BranchCondition(
+                "public_medical_treatment_code" if channel_not_selected else "public_medical_flag",
+                "本笔单位补充医疗保险（原公疗）待遇类别" if channel_not_selected else "公务员待遇标志（0为享受）",
+                "eq", raw_code if channel_not_selected else raw_indicator, "3" if channel_not_selected else "0"),
+            outcome=outcome, reason_code=reason, input_refs=(ref,)))
+        return _result(mid, "pmed", None if conflict else Decimal("0"), outcome, reason, tuple(branches),
+                       uncertainties=(DecompositionUncertainty(
+                           id="u.pmed.source_conflict", code=reason,
+                           message="原公疗通道未选择或标志为不享受，但显式公疗资格为享受，来源冲突。",
+                           affected_fields=("T_OfficalPay",)),) if conflict else ())
+
     if public_medical_eligible is None:
         branches.append(BranchTrace(
             step_id="pmed.eligibility", module_id=mid, scope_ref="trade",
             condition=BranchCondition("pmed_eligible", "公疗资格", "eq", None, "true"),
             outcome=BranchOutcome.UNKNOWN, reason_code="PMED_ELIGIBILITY_UNKNOWN"))
+        message = "公疗资格未知，不默认覆盖剩余个人负担。"
+        if raw_indicator not in (None, "") or raw_code not in (None, ""):
+            met = raw_indicator == "0" and raw_code == "3"
+            message = (f"本单原单公疗标识为 {raw_indicator or '空'}、公疗类别码为 {raw_code or '空'}；"
+                       f"按待签核口径（标识=0 且类别码=3 才享受）判定为{'已满足' if met else '未满足'}，"
+                       "当前仍缺独立资格确认，不能据此判定应支付金额。")
         return _result(mid, "pmed", None, BranchOutcome.UNKNOWN, "PMED_ELIGIBILITY_UNKNOWN",
                        tuple(branches),
                        uncertainties=(DecompositionUncertainty(
                            id="u.pmed.eligibility", code="PMED_ELIGIBILITY_UNKNOWN",
-                           message="公疗资格未知，不默认覆盖剩余个人负担。",
+                           message=message,
                            affected_fields=("T_OfficalPay",)),))
     if public_medical_eligible is False:
         branches.append(BranchTrace(

@@ -1,0 +1,14 @@
+rule_id,dimension,value,effective_date,source,status
+SC-DB-001,deductible,30404,2023-01-01,用户2026-10-13补充规则,用户指定口径
+SC-DB-001,assisted_deductible_factor,0.5,2023-01-01,京医保发〔2022〕37号第五条,已核对政策
+SC-DB-001,first_band_width_above_deductible,50000,2023-01-01,北京市医保局政策文件（验收报告链接）,已核对政策
+SC-DB-001,first_rate,0.60,2023-01-01,用户2026-10-13补充规则,用户指定口径
+SC-DB-001,second_rate,0.70,2023-01-01,用户2026-10-13补充规则,用户指定口径
+SC-DB-002,assisted_rate_increment,0.05,2023-01-01,京医保发〔2022〕37号第五条,已核对政策
+SC-MAF-001,civil_25_26_ratio,1.00,2023-01-01,京医保发〔2022〕37号第六及第七条,门特采用住院档
+SC-MAF-001,civil_25_26_cap,unlimited,2023-01-01,京医保发〔2022〕37号第六及第七条,门特采用住院档
+SC-MAF-001,civil_336001_ratio,0.85,2023-01-01,京医保发〔2022〕37号第六及第七条,门特采用住院档
+SC-MAF-001,civil_336001_cap,unlimited,2023-01-01,京医保发〔2022〕37号第六及第七条,门特采用住院档
+SC-MAF-001,civil_336011_2364_ratio,0.85,2023-01-01,京医保发〔2022〕37号第六及第七条,门特采用住院档
+SC-MAF-001,civil_336011_2364_cap,160000,2023-01-01,京医保发〔2022〕37号第六及第七条,门特采用住院档
+SC-RND-001,rounding_mode,explicit_no_default,2023-01-01,项目取整门控及源分位差异,HALF_UP为本次评估假定仍待签核

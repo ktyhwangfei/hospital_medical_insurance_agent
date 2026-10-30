@@ -13,12 +13,17 @@ from src.domain.insurance.fee_decomposition import (
     PackagingType,
     RoundingMode,
     ServiceCatalogEntry,
+    decimal_to_str,
 )
-from src.runtime.policy_qa.fee_decomposition.catalog_split import split_catalog
+from src.runtime.policy_qa.fee_decomposition.catalog_split import CatalogRuleLabels, split_catalog
+from src.runtime.policy_qa.fee_decomposition.formula_display import formula_display
 
 MODE = RoundingMode.HALF_UP
 D = date
 HOSP = "H001"
+
+#: 职工门诊链规则编号口径（split_catalog 要求各链显式传入，不串链）
+RULES = CatalogRuleLabels(rounding_rule_id="EOP-RND-001", catalog_rule_ref="EOP-CAT 系列")
 
 
 def _drug_item(**kw) -> FeeLineItem:
@@ -35,7 +40,7 @@ def _drug_entry(**kw) -> DrugCatalogEntry:
     base = dict(
         entry_id="E1", item_code="D001",
         effective_date=D(2024, 1, 1), expiry_date=D(2024, 12, 31),
-        sflb="无自付",
+        sflb="无自付", a_ypbs_known=True,
     )
     base.update(kw)
     return DrugCatalogEntry(**base)
@@ -49,7 +54,7 @@ def _run(item, entry, kind="drug"):
         kwargs["service_catalog"] = (entry,)
     elif isinstance(entry, MaterialCatalogEntry):
         kwargs["material_catalog"] = (entry,)
-    return split_catalog((item,), rounding_mode=MODE, hospital_code=HOSP, **kwargs)
+    return split_catalog((item,), rounding_mode=MODE, hospital_code=HOSP, rules=RULES, **kwargs)
 
 
 def _branch(res, step_suffix: str):
@@ -106,7 +111,7 @@ def test_missing_catalog_not_first_match():
 def test_ambiguous_catalog_not_first_match():
     e2 = DrugCatalogEntry(entry_id="E2", item_code="D001",
                           effective_date=D(2024, 3, 1), expiry_date=D(2024, 12, 31), sflb="全自付")
-    res = split_catalog((_drug_item(),), (_drug_entry(), e2), (), (), HOSP, MODE)
+    res = split_catalog((_drug_item(),), (_drug_entry(), e2), (), (), HOSP, MODE, rules=RULES)
     b = _branch(res, "L1")
     assert b.outcome == BranchOutcome.UNKNOWN and b.reason_code == "AMBIGUOUS_CATALOG"
     assert res.lines[0].status == BranchOutcome.UNKNOWN
@@ -126,7 +131,7 @@ def test_open_ended_entry_does_not_mask_potential_ambiguity():
     # 空截止条目可能同样适用 → 潜在多命中，不得按唯一命中放行
     open_entry = DrugCatalogEntry(entry_id="E2", item_code="D001",
                                   effective_date=D(2024, 1, 1), expiry_date=None, sflb="全自付")
-    res = split_catalog((_drug_item(),), (_drug_entry(), open_entry), (), (), HOSP, MODE)
+    res = split_catalog((_drug_item(),), (_drug_entry(), open_entry), (), (), HOSP, MODE, rules=RULES)
     b = _branch(res, "L1")
     assert b.outcome == BranchOutcome.UNKNOWN and b.reason_code == "CATALOG_VALIDITY_UNKNOWN"
     assert res.lines[0].status == BranchOutcome.UNKNOWN
@@ -314,7 +319,7 @@ def test_cross_year_items_use_own_versions():
     i2 = _material_item(line_key="M2", fee=Decimal("600.00"), unit_price=Decimal("600.00"),
                         fee_occurrence_date=D(2023, 1, 5))
     entry = _material_entry()
-    res = split_catalog((i1, i2), (), (), (entry,), HOSP, MODE)
+    res = split_catalog((i1, i2), (), (), (entry,), HOSP, MODE, rules=RULES)
     by_key = {ln.line_key: ln for ln in res.lines}
     assert by_key["M1"].in_scope == Decimal("420.00")  # 2022 档 70%
     assert by_key["M2"].in_scope == Decimal("600.00")  # 2023 档 <1000 全额
@@ -333,6 +338,68 @@ def test_fee_quantity_mismatch_flagged_but_fee_kept():
 
 def test_duplicate_line_keys_fatal():
     items = (_drug_item(), _drug_item())  # 同 line_key
-    res = split_catalog(items, (_drug_entry(),), (), (), HOSP, MODE)
+    res = split_catalog(items, (_drug_entry(),), (), (), HOSP, MODE, rules=RULES)
     assert res.fatal_issue == "DUPLICATE_LINE_KEY"
     assert res.lines == () and not res.is_complete
+
+
+def test_chain_rule_labels_are_call_site_supplied_not_employee_hardcoded():
+    # 规则编号按链显式传入：居民门诊（ROP）口径下取整规则与目录语义引用不得串用职工 EOP 编号
+    rules = CatalogRuleLabels(rounding_rule_id="ROP-RND-001", catalog_rule_ref="ROP-CAT-000")
+    res = split_catalog(
+        (_drug_item(),), (_drug_entry(sflb="有自付", self_pay_ratio=Decimal("0.10")),),
+        (), (), HOSP, MODE, rules=rules)
+    calc = _calc(res, "calc.catalog.self_pay_2.L1")
+    assert calc.rounding_rule is not None
+    assert "ROP-RND-001" in calc.rounding_rule and "EOP" not in calc.rounding_rule
+    rule_unc = next(u for u in res.uncertainties
+                    if u.code == "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION")
+    assert "ROP-CAT-000" in rule_unc.message and "EOP" not in rule_unc.message
+    # 职工口径保持原编号（回归保护）
+    employee_calc = _calc(_run(_drug_item(), _drug_entry(
+        sflb="有自付", self_pay_ratio=Decimal("0.10"))), "calc.catalog.self_pay_2.L1")
+    assert employee_calc.rounding_rule is not None
+    assert "EOP-RND-001" in employee_calc.rounding_rule
+
+
+# ── 汇总计算轨迹（解释投影 1.1：已算出的合计落 CalculationRecord，金额不变） ──
+
+
+def _calc(res, calc_id: str):
+    for c in res.calculations:
+        if c.calculation_id == calc_id:
+            return c
+    raise AssertionError(
+        f"calc {calc_id} not found: {[c.calculation_id for c in res.calculations]}")
+
+
+def test_summary_calculations_recorded_when_complete():
+    # 有自付 10%（100 → 内 90/外 10/自付二 10）：合计值等于既有 CatalogSplitResult 合计
+    res = _run(_drug_item(), _drug_entry(sflb="有自付", self_pay_ratio=Decimal("0.10")))
+    assert res.is_complete
+    expected = {
+        "calc.catalog.total_fee": res.total_fee,
+        "calc.catalog.total_in_scope": res.total_in_scope,
+        "calc.catalog.total_out_scope": res.total_out_scope,
+        "calc.catalog.total_self_pay_2": res.total_self_pay_2,
+        "calc.catalog.total_proportional_self_pay": res.total_proportional_self_pay,
+    }
+    for calc_id, total in expected.items():
+        calc = _calc(res, calc_id)
+        assert total is not None
+        assert calc.result == decimal_to_str(total)
+        assert calc.unrounded_result == calc.result
+        assert calc.rounding_rule is not None and calc.rounding_rule.startswith("not_applicable")
+        # formula_id 已登记展示名，不回落"计算步骤"
+        assert formula_display(calc.formula_id).display_name != "计算步骤"
+
+
+def test_summary_calculations_incomplete_only_total_fee():
+    # 目录分解不完整：合计不可用，仅总费用（恒可合计）落记录
+    res = _run(_drug_item(item_code="NOPE"), _drug_entry())
+    assert not res.is_complete
+    ids = {c.calculation_id for c in res.calculations}
+    assert "calc.catalog.total_fee" in ids
+    assert "calc.catalog.total_in_scope" not in ids
+    assert "calc.catalog.total_out_scope" not in ids
+    assert "calc.catalog.total_self_pay_2" not in ids

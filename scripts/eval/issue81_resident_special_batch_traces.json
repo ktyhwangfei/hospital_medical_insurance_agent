@@ -1,0 +1,4012 @@
+{
+  "688": {
+    "schema_version": "1.0",
+    "algorithm_version": "resident_outpatient_special_v1",
+    "settlement_ref": "special_mz_settlement:688",
+    "profile": {
+      "insurance_type": "resident",
+      "medical_category": "outpatient_special"
+    },
+    "execution_status": "complete",
+    "reconciliation_status": "mismatched",
+    "fields": [
+      {
+        "field_code": "ZJE",
+        "label": "总费用",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "1187.00",
+        "calculated_amount": "1187.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBN",
+        "label": "特殊病医保内",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "1117.10",
+        "calculated_amount": "1117.1000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.catalog.self_pay_2.1",
+          "calc.catalog.self_pay_2.2"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBN.detail",
+        "label": "特殊病医保内（明细账面汇总 Σybnje）",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "1117.10",
+        "calculated_amount": "1117.1000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBW",
+        "label": "特殊病医保外",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "69.90",
+        "calculated_amount": "69.90",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBW.detail",
+        "label": "特殊病医保外（明细账面汇总 Σybwje）",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "69.90",
+        "calculated_amount": "69.9000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIFTW",
+        "label": "个人自付二（先行自付）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "69.90",
+        "calculated_amount": "69.90",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIFTW.detail",
+        "label": "个人自付二（先行自付）（明细账面汇总 Σgrziftw）",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "69.90",
+        "calculated_amount": "69.90",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "YBNQFJE",
+        "label": "本次起付金额",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.0000",
+        "calculated_amount": "0.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.deductible.split"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TCZHF",
+        "label": "统筹基金支付（居民门特不设统筹）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TCZIF",
+        "label": "统筹自付（居民门特不设统筹）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "DEGWYZHF",
+        "label": "基本医保基金支付",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "837.83",
+        "calculated_amount": "837.83",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.big_pay.capped",
+          "calc.big_pay.self_pay"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "DEGWYZIF",
+        "label": "基本医保基金支付后自付",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "279.27",
+        "calculated_amount": "279.2700",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.big_pay.self_pay"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "BCZHF",
+        "label": "退休补助（居民不适用）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_applicable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "RESIDENT_SUPPLEMENT_NOT_APPLICABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "JCZHF",
+        "label": "军残补助（居民不适用）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_applicable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "RESIDENT_SUPPLEMENT_NOT_APPLICABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GFYLBCHBX",
+        "label": "公疗补助（居民不适用）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_applicable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "RESIDENT_SUPPLEMENT_NOT_APPLICABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "SELF_PAY_1",
+        "label": "个人自付一（=起付+统筹自付+大额自付）",
+        "check_type": "identity_check",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "IDENTITY_COMPONENTS_INCOMPLETE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "AGENCY_PAY",
+        "label": "机构支付合计（含基本医保、大病保险及救助，对照总费用−个人渠道）",
+        "check_type": "identity_check",
+        "check_status": "matched",
+        "observed_amount": "1187.00",
+        "calculated_amount": "1187.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.identity.agency_pay"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "XJZF",
+        "label": "现金支付",
+        "check_type": "detail_aggregation",
+        "check_status": "not_verifiable",
+        "observed_amount": "0.00",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "PAYMENT_CHANNEL_REPLAY_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "ZHZF",
+        "label": "账户支付",
+        "check_type": "detail_aggregation",
+        "check_status": "not_verifiable",
+        "observed_amount": "0.00",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "PAYMENT_CHANNEL_REPLAY_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "BIG_ILL_PAY",
+        "label": "大病保险支付（二次保障）",
+        "check_type": "independent_recalculation",
+        "check_status": "mismatched",
+        "observed_amount": "226.9600",
+        "calculated_amount": "226.97",
+        "difference": "0.0100",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.big_ill_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEIN_DB_PAY",
+        "label": "医保内个人自付一的大病支付",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "181.5300",
+        "calculated_amount": "181.53",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feein_db_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEOUT_DB_PAY",
+        "label": "按比例先行自付的大病支付",
+        "check_type": "independent_recalculation",
+        "check_status": "mismatched",
+        "observed_amount": "45.4300",
+        "calculated_amount": "45.44",
+        "difference": "0.0100",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feeout_db_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "CIVIL_IN",
+        "label": "医疗救助支付",
+        "check_type": "independent_recalculation",
+        "check_status": "mismatched",
+        "observed_amount": "122.2100",
+        "calculated_amount": "122.20",
+        "difference": "-0.0100",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.civil_in"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEIN_MAF_PAY",
+        "label": "医保内剩余个人负担的救助",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "97.7400",
+        "calculated_amount": "97.74",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feein_maf_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEOUT_MAF_PAY",
+        "label": "按比例先行自付剩余负担的救助",
+        "check_type": "independent_recalculation",
+        "check_status": "mismatched",
+        "observed_amount": "24.4700",
+        "calculated_amount": "24.46",
+        "difference": "-0.0100",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feeout_maf_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "PERSON_PAYABLE",
+        "label": "个人应付（对照现金与账户合计）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.person_payable"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      }
+    ],
+    "branches": [
+      {
+        "step_id": "flow.profile_select",
+        "module_id": "resident_outpatient_special",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "profile",
+          "description": "险种×医疗类别组合",
+          "operator": "eq",
+          "actual_value": "resident+outpatient_special",
+          "expected_ref": "resident+outpatient_special"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-CAT-001"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "flow.negative_check",
+        "module_id": "resident_outpatient_special",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "negative_amount",
+          "description": "负金额/负数量明细",
+          "operator": "eq",
+          "actual_value": "false",
+          "expected_ref": "false"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "institution.classify",
+        "module_id": "person_classification",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "h_level",
+          "description": "机构等级（住院口径档）",
+          "operator": "in",
+          "actual_value": "02",
+          "expected_ref": "01-05=3/06-09=2/10+=1"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.institution.h_level"
+        ],
+        "rule_refs": [
+          "RSP-DED-001",
+          "RSP-RATE-001"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.match.1",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "catalog_match",
+          "description": "药品目录匹配",
+          "operator": "count_eq",
+          "actual_value": "1",
+          "expected_ref": "有效目录条目"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.ncp_price.1",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "ncp_price_le_limit",
+          "description": "集采单价≤门诊限价",
+          "operator": "le",
+          "actual_value": "233.0000",
+          "expected_ref": "809.0000"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.item.1.unit_price",
+          "fact.catalog.drug:1:XL01BAP030B001010178396.ncp_limit"
+        ],
+        "rule_refs": [
+          "EOP-NCP-001",
+          "EOP-NCP-002"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.fee_quantity_check.1",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "fee_equals_unit_price_times_count",
+          "description": "账面费用与单价×数量一致性",
+          "operator": "eq",
+          "actual_value": "699.0000",
+          "expected_ref": "699.000000"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.item.1.fee",
+          "fact.item.1.unit_price_count"
+        ],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.match.2",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:2",
+        "condition": {
+          "code": "catalog_match",
+          "description": "药品目录匹配",
+          "operator": "count_eq",
+          "actual_value": "1",
+          "expected_ref": "有效目录条目"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.fee_quantity_check.2",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:2",
+        "condition": {
+          "code": "fee_equals_unit_price_times_count",
+          "description": "账面费用与单价×数量一致性",
+          "operator": "eq",
+          "actual_value": "488.0000",
+          "expected_ref": "488.000000"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.item.2.fee",
+          "fact.item.2.unit_price_count"
+        ],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "deductible.param_select",
+        "module_id": "resident_special_deductible",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "deductible_param",
+          "description": "起付标准选择（人员×机构档×周期位置）",
+          "operator": "select",
+          "actual_value": "70/3/first",
+          "expected_ref": "RSP-DED 系列"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-DED-001",
+          "RSP-DED-002",
+          "RSP-DED-003",
+          "RSP-DED-101",
+          "RSP-DED-102",
+          "RSP-DED-103",
+          "RSP-DED-104"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "deductible.split",
+        "module_id": "resident_special_deductible",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "deductible_split",
+          "description": "本次起付 ybnqfje=min(E,max(D−A,0))",
+          "operator": "formula",
+          "actual_value": "0.0000",
+          "expected_ref": "E=1117.1000,A=1300.0000,D=1300"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.catalog.total_in_scope",
+          "fact.cycle.prior_cycle_deductible_paid"
+        ],
+        "rule_refs": [
+          "RSP-DED-001"
+        ],
+        "calculation_refs": [
+          "calc.deductible.split"
+        ]
+      },
+      {
+        "step_id": "pool.not_applicable",
+        "module_id": "resident_special_pool",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "pool_channel",
+          "description": "统筹分段适用性（居民门特）",
+          "operator": "eq",
+          "actual_value": "0",
+          "expected_ref": "tczhf/tczif 恒 0"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-POOL-001"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "big_pay.rate_select",
+        "module_id": "resident_special_big_pay",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "big_pay_rate",
+          "description": "基本基金支付比例档选择（机构档）",
+          "operator": "select",
+          "actual_value": "3@2024-09-25",
+          "expected_ref": "RSP-RATE-001/002/003"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-RATE-001",
+          "RSP-RATE-002",
+          "RSP-RATE-003"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "big_pay.cap_regime",
+        "module_id": "resident_special_big_pay",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "cap_regime",
+          "description": "年度基金封顶规则适用",
+          "operator": "select",
+          "actual_value": "2024-09-25",
+          "expected_ref": "RSP-CAP-001/002"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-CAP-001",
+          "RSP-CAP-002"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "big_pay.settle",
+        "module_id": "resident_special_big_pay",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "big_pay_settle",
+          "description": "degwyzhf=clamp((E−F)×比例, −大额已付, 封顶−大额已付)",
+          "operator": "formula",
+          "actual_value": "837.83",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-RATE-001",
+          "RSP-CAP-002"
+        ],
+        "calculation_refs": [
+          "calc.big_pay.capped",
+          "calc.big_pay.self_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.db_bands",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "annual_bands",
+          "description": "年度大病分段重叠：起付以上五万元及其以上部分",
+          "operator": "overlap",
+          "actual_value": "23142.2500",
+          "expected_ref": "23491.4200"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.secondary.big_ill_scope_total"
+        ],
+        "rule_refs": [
+          "SC-DB-001",
+          "SC-DB-002"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "secondary.feein_db_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feein_db_pay",
+          "description": "医保内个人自付一的大病支付",
+          "operator": "formula",
+          "actual_value": "181.53",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-DB-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feein_db_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.feeout_db_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feeout_db_pay",
+          "description": "按比例先行自付的大病支付",
+          "operator": "formula",
+          "actual_value": "45.44",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-DB-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feeout_db_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.big_ill_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "big_ill_pay",
+          "description": "大病保险支付（二次保障）",
+          "operator": "formula",
+          "actual_value": "226.97",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-DB-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.big_ill_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.feein_maf_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feein_maf_pay",
+          "description": "医保内剩余个人负担的救助",
+          "operator": "formula",
+          "actual_value": "97.74",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feein_maf_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.feeout_maf_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feeout_maf_pay",
+          "description": "按比例先行自付剩余负担的救助",
+          "operator": "formula",
+          "actual_value": "24.46",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feeout_maf_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.civil_in",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "civil_in",
+          "description": "医疗救助支付",
+          "operator": "formula",
+          "actual_value": "122.20",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.civil_in"
+        ]
+      },
+      {
+        "step_id": "secondary.person_payable",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "person_payable",
+          "description": "个人应付（对照现金与账户合计）",
+          "operator": "formula",
+          "actual_value": "0.0000",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.person_payable"
+        ]
+      }
+    ],
+    "calculations": [
+      {
+        "calculation_id": "calc.catalog.self_pay_2.1",
+        "formula_id": "catalog_self_pay_2_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.item.1.fee",
+            "value": "699.0000"
+          },
+          {
+            "ref": "fact.catalog.self_pay_ratio",
+            "value": "0.1000"
+          }
+        ],
+        "unrounded_result": "69.90000000",
+        "rounding_rule": "explicit:round_half_up(EOP-RND-001 待确认)",
+        "result": "69.90"
+      },
+      {
+        "calculation_id": "calc.catalog.self_pay_2.2",
+        "formula_id": "catalog_self_pay_2_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.item.2.fee",
+            "value": "488.0000"
+          },
+          {
+            "ref": "fact.catalog.self_pay_ratio",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": "0.00000000",
+        "rounding_rule": "explicit:round_half_up(EOP-RND-001 待确认)",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.deductible.split",
+        "formula_id": "resident_special_deductible_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.catalog.total_in_scope",
+            "value": "1117.1000"
+          },
+          {
+            "ref": "fact.cycle.prior_cycle_deductible_paid",
+            "value": "1300.0000"
+          },
+          {
+            "ref": "rule.RSP-DED-001",
+            "value": "1300"
+          }
+        ],
+        "unrounded_result": "0.0000",
+        "rounding_rule": "not_applicable（min/max 运算，无取整）",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.big_pay.capped",
+        "formula_id": "resident_special_big_pay_clamp_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "1117.1000"
+          },
+          {
+            "ref": "rule.RSP-RATE-001",
+            "value": "0.75"
+          },
+          {
+            "ref": "fact.cycle.prior_annual_large_fund_payment",
+            "value": "51981.7500"
+          },
+          {
+            "ref": "rule.RSP-CAP-002",
+            "value": "250000"
+          }
+        ],
+        "unrounded_result": "837.825000",
+        "rounding_rule": "explicit:round_half_up(RSP-RND-001 待确认)",
+        "result": "837.83"
+      },
+      {
+        "calculation_id": "calc.big_pay.self_pay",
+        "formula_id": "big_self_pay_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "1117.1000"
+          },
+          {
+            "ref": "calc.big_pay",
+            "value": "837.83"
+          }
+        ],
+        "unrounded_result": "279.2700",
+        "rounding_rule": "not_applicable（减法运算，无取整）",
+        "result": "279.2700"
+      },
+      {
+        "calculation_id": "calc.identity.agency_pay",
+        "formula_id": "identity_agency_pay_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "TCZHF",
+            "value": "0.00"
+          },
+          {
+            "ref": "DEGWYZHF",
+            "value": "837.83"
+          },
+          {
+            "ref": "BCZHF",
+            "value": "0.0000"
+          },
+          {
+            "ref": "JCZHF",
+            "value": "0.0000"
+          },
+          {
+            "ref": "GFYLBCHBX",
+            "value": "0.0000"
+          },
+          {
+            "ref": "BIG_ILL_PAY",
+            "value": "226.9600"
+          },
+          {
+            "ref": "CIVIL_IN",
+            "value": "122.2100"
+          },
+          {
+            "ref": "RETIRE_OFFICER_PAY",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": "1187.0000",
+        "rounding_rule": "not_applicable（账面分量加减，无取整）",
+        "result": "1187.0000"
+      },
+      {
+        "calculation_id": "calc.secondary.self_pay_1",
+        "formula_id": "secondary_self_pay_1_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "input.secondary.self_pay_1_after_supplements",
+            "value": "279.2700"
+          }
+        ],
+        "unrounded_result": "279.2700",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "279.2700"
+      },
+      {
+        "calculation_id": "calc.secondary.proportional_self_pay_2",
+        "formula_id": "secondary_proportional_self_pay_2_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "input.secondary.proportional_self_pay_2",
+            "value": "69.90"
+          }
+        ],
+        "unrounded_result": "69.90",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "69.90"
+      },
+      {
+        "calculation_id": "calc.secondary.annual_prior",
+        "formula_id": "secondary_annual_prior_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "fact.secondary.big_ill_scope_total",
+            "value": "23491.4200"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "349.1700"
+          },
+          {
+            "ref": "fact.secondary.is_post_trade",
+            "value": "1"
+          }
+        ],
+        "unrounded_result": "23142.2500",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "23142.2500"
+      },
+      {
+        "calculation_id": "calc.secondary.db_band_total",
+        "formula_id": "secondary_db_band_total_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.annual_prior",
+            "value": "23142.2500"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "349.1700"
+          },
+          {
+            "ref": "rule.SC-DB-001.deductible",
+            "value": "15202"
+          },
+          {
+            "ref": "rule.SC-DB-001.band_width",
+            "value": "50000"
+          },
+          {
+            "ref": "input.secondary.first_band_overlap",
+            "value": "349.1700"
+          },
+          {
+            "ref": "rule.SC-DB-001.first_rate",
+            "value": "0.65"
+          },
+          {
+            "ref": "input.secondary.second_band_overlap",
+            "value": "0"
+          },
+          {
+            "ref": "rule.SC-DB-001.second_rate",
+            "value": "0.75"
+          }
+        ],
+        "unrounded_result": "226.960500",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "226.960500"
+      },
+      {
+        "calculation_id": "calc.secondary.feein_db_pay",
+        "formula_id": "secondary_feein_db_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "279.2700"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "349.1700"
+          },
+          {
+            "ref": "calc.secondary.db_band_total",
+            "value": "226.960500"
+          }
+        ],
+        "unrounded_result": "181.525500",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "181.53"
+      },
+      {
+        "calculation_id": "calc.secondary.feeout_db_pay",
+        "formula_id": "secondary_feeout_db_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.proportional_self_pay_2",
+            "value": "69.90"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "349.1700"
+          },
+          {
+            "ref": "calc.secondary.db_band_total",
+            "value": "226.960500"
+          }
+        ],
+        "unrounded_result": "45.4350",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "45.44"
+      },
+      {
+        "calculation_id": "calc.secondary.big_ill_pay",
+        "formula_id": "secondary_big_ill_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.feein_db_pay",
+            "value": "181.53"
+          },
+          {
+            "ref": "calc.secondary.feeout_db_pay",
+            "value": "45.44"
+          }
+        ],
+        "unrounded_result": "226.960500",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "226.97"
+      },
+      {
+        "calculation_id": "calc.secondary.after_db_one",
+        "formula_id": "secondary_after_db_one_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "279.2700"
+          },
+          {
+            "ref": "calc.secondary.feein_db_pay",
+            "value": "181.53"
+          }
+        ],
+        "unrounded_result": "97.7400",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "97.7400"
+      },
+      {
+        "calculation_id": "calc.secondary.after_db_two",
+        "formula_id": "secondary_after_db_two_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.proportional_self_pay_2",
+            "value": "69.90"
+          },
+          {
+            "ref": "calc.secondary.feeout_db_pay",
+            "value": "45.44"
+          }
+        ],
+        "unrounded_result": "24.46",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "24.46"
+      },
+      {
+        "calculation_id": "calc.secondary.feein_maf_pay",
+        "formula_id": "secondary_feein_maf_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.after_db_one",
+            "value": "97.7400"
+          },
+          {
+            "ref": "rule.SC-MAF-001",
+            "value": "1"
+          }
+        ],
+        "unrounded_result": "97.7400",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "97.74"
+      },
+      {
+        "calculation_id": "calc.secondary.feeout_maf_pay",
+        "formula_id": "secondary_feeout_maf_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.after_db_two",
+            "value": "24.46"
+          },
+          {
+            "ref": "rule.SC-MAF-001",
+            "value": "1"
+          }
+        ],
+        "unrounded_result": "24.46",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "24.46"
+      },
+      {
+        "calculation_id": "calc.secondary.civil_in",
+        "formula_id": "secondary_civil_in_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.feein_maf_pay",
+            "value": "97.74"
+          },
+          {
+            "ref": "calc.secondary.feeout_maf_pay",
+            "value": "24.46"
+          }
+        ],
+        "unrounded_result": "122.2000",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "122.20"
+      },
+      {
+        "calculation_id": "calc.secondary.person_payable",
+        "formula_id": "secondary_person_payable_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "279.2700"
+          },
+          {
+            "ref": "input.secondary.total_out_scope",
+            "value": "69.90"
+          },
+          {
+            "ref": "calc.secondary.big_ill_pay",
+            "value": "226.97"
+          },
+          {
+            "ref": "calc.secondary.civil_in",
+            "value": "122.20"
+          }
+        ],
+        "unrounded_result": "0.0000",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "0.0000"
+      }
+    ],
+    "citations": [
+      {
+        "id": "rule.person_type_codes.issue81",
+        "kind": "issue_note",
+        "ref": "https://github.com/ktyhwangfei/hospital_medical_insurance_agent/issues/81",
+        "value": null,
+        "values": [],
+        "approval_status": "pending"
+      },
+      {
+        "id": "fact.settlement.settle_date",
+        "kind": "settlement_fact",
+        "ref": "snapshot:special_mz_settlement:688/settlement/jyrq",
+        "value": "2024-09-25",
+        "values": [],
+        "approval_status": null
+      },
+      {
+        "id": "rule.RSP-CAP-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§封顶线",
+        "value": "RSP-CAP-001",
+        "values": [],
+        "approval_status": "文档明确"
+      },
+      {
+        "id": "rule.RSP-CAP-002",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2019年1月1日）",
+        "value": "RSP-CAP-002",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-CAT-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§门诊特殊病的费用分解；Issue #81 flid=250",
+        "value": "RSP-CAT-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-002",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-002",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-003",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§学生儿童起付标准",
+        "value": "RSP-DED-003",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-101",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-101",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-102",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-102",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-103",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§学生儿童起付标准",
+        "value": "RSP-DED-103",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-104",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§学生儿童起付标准",
+        "value": "RSP-DED-104",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-POOL-001",
+        "kind": "policy_document",
+        "ref": "GitHub Issue #81 原文；实证 3/3 笔账面统筹字段为 0",
+        "value": "RSP-POOL-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-RATE-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2018年1月1日按医院等级区分）",
+        "value": "RSP-RATE-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-RATE-002",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2018年1月1日按医院等级区分）",
+        "value": "RSP-RATE-002",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-RATE-003",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2018年1月1日按医院等级区分）",
+        "value": "RSP-RATE-003",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.SC-DB-001",
+        "kind": "policy_document",
+        "ref": "https://ybj.beijing.gov.cn/zwgk/2024zcwj/202406/t20240614_3712569.html",
+        "value": null,
+        "values": [],
+        "approval_status": "用户补充规则，2023-01-01起"
+      },
+      {
+        "id": "rule.SC-DB-002",
+        "kind": "policy_document",
+        "ref": "https://www.beijing.gov.cn/zhengce/zhengcefagui/202303/t20230328_2946600.html",
+        "value": null,
+        "values": [],
+        "approval_status": "用户补充规则，救助身份起付减半、各段比例加5个百分点"
+      },
+      {
+        "id": "rule.SC-MAF-001",
+        "kind": "policy_document",
+        "ref": "https://www.beijing.gov.cn/zhengce/zhengcefagui/202303/t20230328_2946600.html",
+        "value": null,
+        "values": [],
+        "approval_status": "用户补充规则，门特按住院救助档"
+      },
+      {
+        "id": "source.snapshot_read_meta",
+        "kind": "source_catalog",
+        "ref": "hospital_record_store#special:2026-10-15T03:49:06.261118+00:00",
+        "value": "42e93a18d3a7cde333da49a826679776c3112d196c542487dfd98fa158e97c51",
+        "values": [
+          "annual=1",
+          "cycle=1",
+          "drug_catalog=7",
+          "fee_items=2",
+          "institution=1",
+          "material_catalog=0",
+          "registration=1",
+          "service_catalog=0",
+          "settlement=1",
+          "CYCLE_CONTEXT_CONFIRMED：完整交易后快照减本笔账面，交易前口径已确认",
+          "ELIGIBILITY_CANDIDATE_MAPPING：资格字段按 Issue #79 候选口径映射（cjjrdj=0→grade=None；gwydybz=1→civil=False；cblb=70→retirement_category=None），签核前不升级为已确认字段语义"
+        ],
+        "approval_status": null
+      }
+    ],
+    "uncertainties": [
+      {
+        "id": "u.catalog.rule_confirmation.drug:1:XL01BAP030B001010178396",
+        "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
+        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "affected_fields": [
+          "T_FeeIn",
+          "T_FeeOut"
+        ]
+      },
+      {
+        "id": "u.catalog.rule_confirmation.drug:6:XL04ADT002E001020304641",
+        "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
+        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "affected_fields": [
+          "T_FeeIn",
+          "T_FeeOut"
+        ]
+      },
+      {
+        "id": "u.rounding.rule",
+        "code": "ROUNDING_RULE_PENDING_CONFIRMATION",
+        "message": "取整规则 RSP-RND-001 待确认；本次计算显式采用 round_half_up，结果不升级为已确认口径。",
+        "affected_fields": []
+      }
+    ],
+    "coverage": {
+      "target_field_count": 26,
+      "independently_explained_count": 11,
+      "amount_reconciled_count": 16,
+      "observed_only_count": 9
+    },
+    "answer_constraints": {
+      "may_claim_full_explanation": false,
+      "may_infer_missing_rules": false
+    }
+  },
+  "690": {
+    "schema_version": "1.0",
+    "algorithm_version": "resident_outpatient_special_v1",
+    "settlement_ref": "special_mz_settlement:690",
+    "profile": {
+      "insurance_type": "resident",
+      "medical_category": "outpatient_special"
+    },
+    "execution_status": "complete",
+    "reconciliation_status": "mismatched",
+    "fields": [
+      {
+        "field_code": "ZJE",
+        "label": "总费用",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "4862.00",
+        "calculated_amount": "4862.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBN",
+        "label": "特殊病医保内",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "4862.00",
+        "calculated_amount": "4862.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.catalog.self_pay_2.1"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBN.detail",
+        "label": "特殊病医保内（明细账面汇总 Σybnje）",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "4862.00",
+        "calculated_amount": "4862.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBW",
+        "label": "特殊病医保外",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0",
+        "calculated_amount": "0.00",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBW.detail",
+        "label": "特殊病医保外（明细账面汇总 Σybwje）",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "0",
+        "calculated_amount": "0.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIFTW",
+        "label": "个人自付二（先行自付）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIFTW.detail",
+        "label": "个人自付二（先行自付）（明细账面汇总 Σgrziftw）",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0.00",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "YBNQFJE",
+        "label": "本次起付金额",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.0000",
+        "calculated_amount": "0.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.deductible.split"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TCZHF",
+        "label": "统筹基金支付（居民门特不设统筹）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TCZIF",
+        "label": "统筹自付（居民门特不设统筹）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "DEGWYZHF",
+        "label": "基本医保基金支付",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "3646.50",
+        "calculated_amount": "3646.50",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.big_pay.capped",
+          "calc.big_pay.self_pay"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "DEGWYZIF",
+        "label": "基本医保基金支付后自付",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "1215.50",
+        "calculated_amount": "1215.5000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.big_pay.self_pay"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "BCZHF",
+        "label": "退休补助（居民不适用）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_applicable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "RESIDENT_SUPPLEMENT_NOT_APPLICABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "JCZHF",
+        "label": "军残补助（居民不适用）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_applicable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "RESIDENT_SUPPLEMENT_NOT_APPLICABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GFYLBCHBX",
+        "label": "公疗补助（居民不适用）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_applicable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "RESIDENT_SUPPLEMENT_NOT_APPLICABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "SELF_PAY_1",
+        "label": "个人自付一（=起付+统筹自付+大额自付）",
+        "check_type": "identity_check",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "IDENTITY_COMPONENTS_INCOMPLETE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "AGENCY_PAY",
+        "label": "机构支付合计（含基本医保、大病保险及救助，对照总费用−个人渠道）",
+        "check_type": "identity_check",
+        "check_status": "mismatched",
+        "observed_amount": "4862.00",
+        "calculated_amount": "4618.9000",
+        "difference": "-243.1000",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.identity.agency_pay"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "XJZF",
+        "label": "现金支付",
+        "check_type": "detail_aggregation",
+        "check_status": "not_verifiable",
+        "observed_amount": "0.00",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "PAYMENT_CHANNEL_REPLAY_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "ZHZF",
+        "label": "账户支付",
+        "check_type": "detail_aggregation",
+        "check_status": "not_verifiable",
+        "observed_amount": "0.00",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "PAYMENT_CHANNEL_REPLAY_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "BIG_ILL_PAY",
+        "label": "大病保险支付（二次保障）",
+        "check_type": "independent_recalculation",
+        "check_status": "mismatched",
+        "observed_amount": "632.0600",
+        "calculated_amount": "790.08",
+        "difference": "158.0200",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.big_ill_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEIN_DB_PAY",
+        "label": "医保内个人自付一的大病支付",
+        "check_type": "independent_recalculation",
+        "check_status": "mismatched",
+        "observed_amount": "632.0600",
+        "calculated_amount": "790.08",
+        "difference": "158.0200",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feein_db_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEOUT_DB_PAY",
+        "label": "按比例先行自付的大病支付",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.0000",
+        "calculated_amount": "0.00",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feeout_db_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "CIVIL_IN",
+        "label": "医疗救助支付",
+        "check_type": "independent_recalculation",
+        "check_status": "mismatched",
+        "observed_amount": "340.3400",
+        "calculated_amount": "425.42",
+        "difference": "85.0800",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.civil_in"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEIN_MAF_PAY",
+        "label": "医保内剩余个人负担的救助",
+        "check_type": "independent_recalculation",
+        "check_status": "mismatched",
+        "observed_amount": "340.3400",
+        "calculated_amount": "425.42",
+        "difference": "85.0800",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feein_maf_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEOUT_MAF_PAY",
+        "label": "按比例先行自付剩余负担的救助",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.0000",
+        "calculated_amount": "0.00",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.feeout_maf_pay"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "PERSON_PAYABLE",
+        "label": "个人应付（对照现金与账户合计）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.secondary.person_payable"
+        ],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      }
+    ],
+    "branches": [
+      {
+        "step_id": "flow.profile_select",
+        "module_id": "resident_outpatient_special",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "profile",
+          "description": "险种×医疗类别组合",
+          "operator": "eq",
+          "actual_value": "resident+outpatient_special",
+          "expected_ref": "resident+outpatient_special"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-CAT-001"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "flow.negative_check",
+        "module_id": "resident_outpatient_special",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "negative_amount",
+          "description": "负金额/负数量明细",
+          "operator": "eq",
+          "actual_value": "false",
+          "expected_ref": "false"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "institution.classify",
+        "module_id": "person_classification",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "h_level",
+          "description": "机构等级（住院口径档）",
+          "operator": "in",
+          "actual_value": "02",
+          "expected_ref": "01-05=3/06-09=2/10+=1"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.institution.h_level"
+        ],
+        "rule_refs": [
+          "RSP-DED-001",
+          "RSP-RATE-001"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.match.1",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "catalog_match",
+          "description": "药品目录匹配",
+          "operator": "count_eq",
+          "actual_value": "1",
+          "expected_ref": "有效目录条目"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.fee_quantity_check.1",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "fee_equals_unit_price_times_count",
+          "description": "账面费用与单价×数量一致性",
+          "operator": "eq",
+          "actual_value": "4862.0000",
+          "expected_ref": "4862.000000"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.item.1.fee",
+          "fact.item.1.unit_price_count"
+        ],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "deductible.param_select",
+        "module_id": "resident_special_deductible",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "deductible_param",
+          "description": "起付标准选择（人员×机构档×周期位置）",
+          "operator": "select",
+          "actual_value": "70/3/first",
+          "expected_ref": "RSP-DED 系列"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-DED-001",
+          "RSP-DED-002",
+          "RSP-DED-003",
+          "RSP-DED-101",
+          "RSP-DED-102",
+          "RSP-DED-103",
+          "RSP-DED-104"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "deductible.split",
+        "module_id": "resident_special_deductible",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "deductible_split",
+          "description": "本次起付 ybnqfje=min(E,max(D−A,0))",
+          "operator": "formula",
+          "actual_value": "0.0000",
+          "expected_ref": "E=4862.0000,A=1300.0000,D=1300"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.catalog.total_in_scope",
+          "fact.cycle.prior_cycle_deductible_paid"
+        ],
+        "rule_refs": [
+          "RSP-DED-001"
+        ],
+        "calculation_refs": [
+          "calc.deductible.split"
+        ]
+      },
+      {
+        "step_id": "pool.not_applicable",
+        "module_id": "resident_special_pool",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "pool_channel",
+          "description": "统筹分段适用性（居民门特）",
+          "operator": "eq",
+          "actual_value": "0",
+          "expected_ref": "tczhf/tczif 恒 0"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-POOL-001"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "big_pay.rate_select",
+        "module_id": "resident_special_big_pay",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "big_pay_rate",
+          "description": "基本基金支付比例档选择（机构档）",
+          "operator": "select",
+          "actual_value": "3@2024-09-25",
+          "expected_ref": "RSP-RATE-001/002/003"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-RATE-001",
+          "RSP-RATE-002",
+          "RSP-RATE-003"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "big_pay.cap_regime",
+        "module_id": "resident_special_big_pay",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "cap_regime",
+          "description": "年度基金封顶规则适用",
+          "operator": "select",
+          "actual_value": "2024-09-25",
+          "expected_ref": "RSP-CAP-001/002"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-CAP-001",
+          "RSP-CAP-002"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "big_pay.settle",
+        "module_id": "resident_special_big_pay",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "big_pay_settle",
+          "description": "degwyzhf=clamp((E−F)×比例, −大额已付, 封顶−大额已付)",
+          "operator": "formula",
+          "actual_value": "3646.50",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-RATE-001",
+          "RSP-CAP-002"
+        ],
+        "calculation_refs": [
+          "calc.big_pay.capped",
+          "calc.big_pay.self_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.db_bands",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "annual_bands",
+          "description": "年度大病分段重叠：起付以上五万元及其以上部分",
+          "operator": "overlap",
+          "actual_value": "16091.2000",
+          "expected_ref": "17306.7000"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.secondary.big_ill_scope_total"
+        ],
+        "rule_refs": [
+          "SC-DB-001",
+          "SC-DB-002"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "secondary.feein_db_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feein_db_pay",
+          "description": "医保内个人自付一的大病支付",
+          "operator": "formula",
+          "actual_value": "790.08",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-DB-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feein_db_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.feeout_db_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feeout_db_pay",
+          "description": "按比例先行自付的大病支付",
+          "operator": "formula",
+          "actual_value": "0.00",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-DB-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feeout_db_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.big_ill_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "big_ill_pay",
+          "description": "大病保险支付（二次保障）",
+          "operator": "formula",
+          "actual_value": "790.08",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-DB-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.big_ill_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.feein_maf_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feein_maf_pay",
+          "description": "医保内剩余个人负担的救助",
+          "operator": "formula",
+          "actual_value": "425.42",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feein_maf_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.feeout_maf_pay",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "feeout_maf_pay",
+          "description": "按比例先行自付剩余负担的救助",
+          "operator": "formula",
+          "actual_value": "0.00",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.feeout_maf_pay"
+        ]
+      },
+      {
+        "step_id": "secondary.civil_in",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "civil_in",
+          "description": "医疗救助支付",
+          "operator": "formula",
+          "actual_value": "425.42",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.civil_in"
+        ]
+      },
+      {
+        "step_id": "secondary.person_payable",
+        "module_id": "secondary_coverage",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "person_payable",
+          "description": "个人应付（对照现金与账户合计）",
+          "operator": "formula",
+          "actual_value": "0.0000",
+          "expected_ref": null
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "SC-MAF-001"
+        ],
+        "calculation_refs": [
+          "calc.secondary.person_payable"
+        ]
+      }
+    ],
+    "calculations": [
+      {
+        "calculation_id": "calc.catalog.self_pay_2.1",
+        "formula_id": "catalog_self_pay_2_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.item.1.fee",
+            "value": "4862.0000"
+          },
+          {
+            "ref": "fact.catalog.self_pay_ratio",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": "0.00000000",
+        "rounding_rule": "explicit:round_half_up(EOP-RND-001 待确认)",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.deductible.split",
+        "formula_id": "resident_special_deductible_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.catalog.total_in_scope",
+            "value": "4862.0000"
+          },
+          {
+            "ref": "fact.cycle.prior_cycle_deductible_paid",
+            "value": "1300.0000"
+          },
+          {
+            "ref": "rule.RSP-DED-001",
+            "value": "1300"
+          }
+        ],
+        "unrounded_result": "0.0000",
+        "rounding_rule": "not_applicable（min/max 运算，无取整）",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.big_pay.capped",
+        "formula_id": "resident_special_big_pay_clamp_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "4862.0000"
+          },
+          {
+            "ref": "rule.RSP-RATE-001",
+            "value": "0.75"
+          },
+          {
+            "ref": "fact.cycle.prior_annual_large_fund_payment",
+            "value": "33852.0000"
+          },
+          {
+            "ref": "rule.RSP-CAP-002",
+            "value": "250000"
+          }
+        ],
+        "unrounded_result": "3646.500000",
+        "rounding_rule": "explicit:round_half_up(RSP-RND-001 待确认)",
+        "result": "3646.50"
+      },
+      {
+        "calculation_id": "calc.big_pay.self_pay",
+        "formula_id": "big_self_pay_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.deductible.copay_base",
+            "value": "4862.0000"
+          },
+          {
+            "ref": "calc.big_pay",
+            "value": "3646.50"
+          }
+        ],
+        "unrounded_result": "1215.5000",
+        "rounding_rule": "not_applicable（减法运算，无取整）",
+        "result": "1215.5000"
+      },
+      {
+        "calculation_id": "calc.identity.agency_pay",
+        "formula_id": "identity_agency_pay_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "TCZHF",
+            "value": "0.00"
+          },
+          {
+            "ref": "DEGWYZHF",
+            "value": "3646.50"
+          },
+          {
+            "ref": "BCZHF",
+            "value": "0.0000"
+          },
+          {
+            "ref": "JCZHF",
+            "value": "0.0000"
+          },
+          {
+            "ref": "GFYLBCHBX",
+            "value": "0.0000"
+          },
+          {
+            "ref": "BIG_ILL_PAY",
+            "value": "632.0600"
+          },
+          {
+            "ref": "CIVIL_IN",
+            "value": "340.3400"
+          },
+          {
+            "ref": "RETIRE_OFFICER_PAY",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": "4618.9000",
+        "rounding_rule": "not_applicable（账面分量加减，无取整）",
+        "result": "4618.9000"
+      },
+      {
+        "calculation_id": "calc.secondary.self_pay_1",
+        "formula_id": "secondary_self_pay_1_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "input.secondary.self_pay_1_after_supplements",
+            "value": "1215.5000"
+          }
+        ],
+        "unrounded_result": "1215.5000",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "1215.5000"
+      },
+      {
+        "calculation_id": "calc.secondary.proportional_self_pay_2",
+        "formula_id": "secondary_proportional_self_pay_2_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "input.secondary.proportional_self_pay_2",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "0.00",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.secondary.annual_prior",
+        "formula_id": "secondary_annual_prior_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "fact.secondary.big_ill_scope_total",
+            "value": "17306.7000"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "1215.5000"
+          },
+          {
+            "ref": "fact.secondary.is_post_trade",
+            "value": "1"
+          }
+        ],
+        "unrounded_result": "16091.2000",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "16091.2000"
+      },
+      {
+        "calculation_id": "calc.secondary.db_band_total",
+        "formula_id": "secondary_db_band_total_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.annual_prior",
+            "value": "16091.2000"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "1215.5000"
+          },
+          {
+            "ref": "rule.SC-DB-001.deductible",
+            "value": "15202"
+          },
+          {
+            "ref": "rule.SC-DB-001.band_width",
+            "value": "50000"
+          },
+          {
+            "ref": "input.secondary.first_band_overlap",
+            "value": "1215.5000"
+          },
+          {
+            "ref": "rule.SC-DB-001.first_rate",
+            "value": "0.65"
+          },
+          {
+            "ref": "input.secondary.second_band_overlap",
+            "value": "0"
+          },
+          {
+            "ref": "rule.SC-DB-001.second_rate",
+            "value": "0.75"
+          }
+        ],
+        "unrounded_result": "790.075000",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "790.075000"
+      },
+      {
+        "calculation_id": "calc.secondary.feein_db_pay",
+        "formula_id": "secondary_feein_db_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "1215.5000"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "1215.5000"
+          },
+          {
+            "ref": "calc.secondary.db_band_total",
+            "value": "790.075000"
+          }
+        ],
+        "unrounded_result": "790.075000",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "790.08"
+      },
+      {
+        "calculation_id": "calc.secondary.feeout_db_pay",
+        "formula_id": "secondary_feeout_db_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.proportional_self_pay_2",
+            "value": "0.00"
+          },
+          {
+            "ref": "input.secondary.current_compliant_base",
+            "value": "1215.5000"
+          },
+          {
+            "ref": "calc.secondary.db_band_total",
+            "value": "790.075000"
+          }
+        ],
+        "unrounded_result": "0.0000",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.secondary.big_ill_pay",
+        "formula_id": "secondary_big_ill_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.feein_db_pay",
+            "value": "790.08"
+          },
+          {
+            "ref": "calc.secondary.feeout_db_pay",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "790.075000",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "790.08"
+      },
+      {
+        "calculation_id": "calc.secondary.after_db_one",
+        "formula_id": "secondary_after_db_one_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "1215.5000"
+          },
+          {
+            "ref": "calc.secondary.feein_db_pay",
+            "value": "790.08"
+          }
+        ],
+        "unrounded_result": "425.4200",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "425.4200"
+      },
+      {
+        "calculation_id": "calc.secondary.after_db_two",
+        "formula_id": "secondary_after_db_two_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.proportional_self_pay_2",
+            "value": "0.00"
+          },
+          {
+            "ref": "calc.secondary.feeout_db_pay",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "0.00",
+        "rounding_rule": "not_applicable（精确运算）",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.secondary.feein_maf_pay",
+        "formula_id": "secondary_feein_maf_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.after_db_one",
+            "value": "425.4200"
+          },
+          {
+            "ref": "rule.SC-MAF-001",
+            "value": "1"
+          }
+        ],
+        "unrounded_result": "425.4200",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "425.42"
+      },
+      {
+        "calculation_id": "calc.secondary.feeout_maf_pay",
+        "formula_id": "secondary_feeout_maf_pay_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.after_db_two",
+            "value": "0.00"
+          },
+          {
+            "ref": "rule.SC-MAF-001",
+            "value": "1"
+          }
+        ],
+        "unrounded_result": "0.00",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.secondary.civil_in",
+        "formula_id": "secondary_civil_in_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.feein_maf_pay",
+            "value": "425.42"
+          },
+          {
+            "ref": "calc.secondary.feeout_maf_pay",
+            "value": "0.00"
+          }
+        ],
+        "unrounded_result": "425.4200",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "425.42"
+      },
+      {
+        "calculation_id": "calc.secondary.person_payable",
+        "formula_id": "secondary_person_payable_v1",
+        "formula_version": "2023-01-01",
+        "operands": [
+          {
+            "ref": "calc.secondary.self_pay_1",
+            "value": "1215.5000"
+          },
+          {
+            "ref": "input.secondary.total_out_scope",
+            "value": "0.00"
+          },
+          {
+            "ref": "calc.secondary.big_ill_pay",
+            "value": "790.08"
+          },
+          {
+            "ref": "calc.secondary.civil_in",
+            "value": "425.42"
+          }
+        ],
+        "unrounded_result": "0.0000",
+        "rounding_rule": "explicit:round_half_up",
+        "result": "0.0000"
+      }
+    ],
+    "citations": [
+      {
+        "id": "rule.person_type_codes.issue81",
+        "kind": "issue_note",
+        "ref": "https://github.com/ktyhwangfei/hospital_medical_insurance_agent/issues/81",
+        "value": null,
+        "values": [],
+        "approval_status": "pending"
+      },
+      {
+        "id": "fact.settlement.settle_date",
+        "kind": "settlement_fact",
+        "ref": "snapshot:special_mz_settlement:690/settlement/jyrq",
+        "value": "2024-09-25",
+        "values": [],
+        "approval_status": null
+      },
+      {
+        "id": "rule.RSP-CAP-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§封顶线",
+        "value": "RSP-CAP-001",
+        "values": [],
+        "approval_status": "文档明确"
+      },
+      {
+        "id": "rule.RSP-CAP-002",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2019年1月1日）",
+        "value": "RSP-CAP-002",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-CAT-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§门诊特殊病的费用分解；Issue #81 flid=250",
+        "value": "RSP-CAT-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-002",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-002",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-003",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§学生儿童起付标准",
+        "value": "RSP-DED-003",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-101",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-101",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-102",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-102",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-103",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§学生儿童起付标准",
+        "value": "RSP-DED-103",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-104",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§学生儿童起付标准",
+        "value": "RSP-DED-104",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-POOL-001",
+        "kind": "policy_document",
+        "ref": "GitHub Issue #81 原文；实证 3/3 笔账面统筹字段为 0",
+        "value": "RSP-POOL-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-RATE-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2018年1月1日按医院等级区分）",
+        "value": "RSP-RATE-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-RATE-002",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2018年1月1日按医院等级区分）",
+        "value": "RSP-RATE-002",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-RATE-003",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2018年1月1日按医院等级区分）",
+        "value": "RSP-RATE-003",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.SC-DB-001",
+        "kind": "policy_document",
+        "ref": "https://ybj.beijing.gov.cn/zwgk/2024zcwj/202406/t20240614_3712569.html",
+        "value": null,
+        "values": [],
+        "approval_status": "用户补充规则，2023-01-01起"
+      },
+      {
+        "id": "rule.SC-DB-002",
+        "kind": "policy_document",
+        "ref": "https://www.beijing.gov.cn/zhengce/zhengcefagui/202303/t20230328_2946600.html",
+        "value": null,
+        "values": [],
+        "approval_status": "用户补充规则，救助身份起付减半、各段比例加5个百分点"
+      },
+      {
+        "id": "rule.SC-MAF-001",
+        "kind": "policy_document",
+        "ref": "https://www.beijing.gov.cn/zhengce/zhengcefagui/202303/t20230328_2946600.html",
+        "value": null,
+        "values": [],
+        "approval_status": "用户补充规则，门特按住院救助档"
+      },
+      {
+        "id": "source.snapshot_read_meta",
+        "kind": "source_catalog",
+        "ref": "hospital_record_store#special:2026-10-15T03:49:06.271931+00:00",
+        "value": "3037ebf75124c4e6a69a4ae24c2bb12267289a02521a217d1742735691ceff47",
+        "values": [
+          "annual=1",
+          "cycle=1",
+          "drug_catalog=5",
+          "fee_items=1",
+          "institution=1",
+          "material_catalog=0",
+          "registration=1",
+          "service_catalog=0",
+          "settlement=1",
+          "CYCLE_CONTEXT_CONFIRMED：完整交易后快照减本笔账面，交易前口径已确认",
+          "ELIGIBILITY_CANDIDATE_MAPPING：资格字段按 Issue #79 候选口径映射（cjjrdj=0→grade=None；gwydybz=1→civil=False；cblb=70→retirement_category=None），签核前不升级为已确认字段语义"
+        ],
+        "approval_status": null
+      }
+    ],
+    "uncertainties": [
+      {
+        "id": "u.catalog.rule_confirmation.drug:4:XL04ADT002E001020304641",
+        "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
+        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "affected_fields": [
+          "T_FeeIn",
+          "T_FeeOut"
+        ]
+      },
+      {
+        "id": "u.rounding.rule",
+        "code": "ROUNDING_RULE_PENDING_CONFIRMATION",
+        "message": "取整规则 RSP-RND-001 待确认；本次计算显式采用 round_half_up，结果不升级为已确认口径。",
+        "affected_fields": []
+      }
+    ],
+    "coverage": {
+      "target_field_count": 26,
+      "independently_explained_count": 11,
+      "amount_reconciled_count": 15,
+      "observed_only_count": 10
+    },
+    "answer_constraints": {
+      "may_claim_full_explanation": false,
+      "may_infer_missing_rules": false
+    }
+  },
+  "718": {
+    "schema_version": "1.0",
+    "algorithm_version": "resident_outpatient_special_v1",
+    "settlement_ref": "special_mz_settlement:718",
+    "profile": {
+      "insurance_type": "resident",
+      "medical_category": "outpatient_special"
+    },
+    "execution_status": "partial",
+    "reconciliation_status": "mismatched",
+    "fields": [
+      {
+        "field_code": "ZJE",
+        "label": "总费用",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "3432.00",
+        "calculated_amount": "3432.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBN",
+        "label": "特殊病医保内",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "3357.20",
+        "calculated_amount": "3357.2000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.catalog.self_pay_2.1",
+          "calc.catalog.self_pay_2.2"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBN.detail",
+        "label": "特殊病医保内（明细账面汇总 Σybnje）",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "3357.20",
+        "calculated_amount": "3357.2000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBW",
+        "label": "特殊病医保外",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "74.80",
+        "calculated_amount": "74.80",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TSBYBW.detail",
+        "label": "特殊病医保外（明细账面汇总 Σybwje）",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "74.80",
+        "calculated_amount": "74.8000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIFTW",
+        "label": "个人自付二（先行自付）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "74.80",
+        "calculated_amount": "74.80",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GRZIFTW.detail",
+        "label": "个人自付二（先行自付）（明细账面汇总 Σgrziftw）",
+        "check_type": "detail_aggregation",
+        "check_status": "matched",
+        "observed_amount": "74.80",
+        "calculated_amount": "74.80",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "YBNQFJE",
+        "label": "本次起付金额",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.0000",
+        "calculated_amount": "0.0000",
+        "difference": "0.0000",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.deductible.split"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TCZHF",
+        "label": "统筹基金支付（居民门特不设统筹）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "TCZIF",
+        "label": "统筹自付（居民门特不设统筹）",
+        "check_type": "independent_recalculation",
+        "check_status": "matched",
+        "observed_amount": "0.00",
+        "calculated_amount": "0",
+        "difference": "0.00",
+        "explanation_level": "amount_reconciled",
+        "reason_code": null,
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "DEGWYZHF",
+        "label": "基本医保基金支付",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": "2517.90",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "CALCULATION_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "DEGWYZIF",
+        "label": "基本医保基金支付后自付",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": "839.30",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "CALCULATION_UNAVAILABLE",
+        "calculation_refs": [
+          "calc.big_pay.self_pay"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "BCZHF",
+        "label": "退休补助（居民不适用）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_applicable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "RESIDENT_SUPPLEMENT_NOT_APPLICABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "JCZHF",
+        "label": "军残补助（居民不适用）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_applicable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "RESIDENT_SUPPLEMENT_NOT_APPLICABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "GFYLBCHBX",
+        "label": "公疗补助（居民不适用）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_applicable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "RESIDENT_SUPPLEMENT_NOT_APPLICABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "SELF_PAY_1",
+        "label": "个人自付一（=起付+统筹自付+大额自付）",
+        "check_type": "identity_check",
+        "check_status": "not_verifiable",
+        "observed_amount": null,
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "unexplained",
+        "reason_code": "IDENTITY_COMPONENTS_INCOMPLETE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "AGENCY_PAY",
+        "label": "机构支付合计（含基本医保、大病保险及救助，对照总费用−个人渠道）",
+        "check_type": "identity_check",
+        "check_status": "mismatched",
+        "observed_amount": "3320.06",
+        "calculated_amount": "3152.2000",
+        "difference": "-167.8600",
+        "explanation_level": "observed_only",
+        "reason_code": null,
+        "calculation_refs": [
+          "calc.identity.agency_pay"
+        ],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "XJZF",
+        "label": "现金支付",
+        "check_type": "detail_aggregation",
+        "check_status": "not_verifiable",
+        "observed_amount": "111.94",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "PAYMENT_CHANNEL_REPLAY_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "ZHZF",
+        "label": "账户支付",
+        "check_type": "detail_aggregation",
+        "check_status": "not_verifiable",
+        "observed_amount": "0.00",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "PAYMENT_CHANNEL_REPLAY_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "BIG_ILL_PAY",
+        "label": "大病保险支付（二次保障）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "CALCULATION_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEIN_DB_PAY",
+        "label": "医保内个人自付一的大病支付",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "CALCULATION_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEOUT_DB_PAY",
+        "label": "按比例先行自付的大病支付",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": "0.0000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "CALCULATION_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "CIVIL_IN",
+        "label": "医疗救助支付",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": "634.3000",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "CALCULATION_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEIN_MAF_PAY",
+        "label": "医保内剩余个人负担的救助",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": "570.7200",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "CALCULATION_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "FEEOUT_MAF_PAY",
+        "label": "按比例先行自付剩余负担的救助",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": "63.5800",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "CALCULATION_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      },
+      {
+        "field_code": "PERSON_PAYABLE",
+        "label": "个人应付（对照现金与账户合计）",
+        "check_type": "independent_recalculation",
+        "check_status": "not_verifiable",
+        "observed_amount": "111.94",
+        "calculated_amount": null,
+        "difference": null,
+        "explanation_level": "observed_only",
+        "reason_code": "CALCULATION_UNAVAILABLE",
+        "calculation_refs": [],
+        "citation_refs": [
+          "rule.SC-DB-001",
+          "rule.SC-MAF-001"
+        ],
+        "uncertainty_refs": []
+      }
+    ],
+    "branches": [
+      {
+        "step_id": "flow.profile_select",
+        "module_id": "resident_outpatient_special",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "profile",
+          "description": "险种×医疗类别组合",
+          "operator": "eq",
+          "actual_value": "resident+outpatient_special",
+          "expected_ref": "resident+outpatient_special"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-CAT-001"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "flow.negative_check",
+        "module_id": "resident_outpatient_special",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "negative_amount",
+          "description": "负金额/负数量明细",
+          "operator": "eq",
+          "actual_value": "false",
+          "expected_ref": "false"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "institution.classify",
+        "module_id": "person_classification",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "h_level",
+          "description": "机构等级（住院口径档）",
+          "operator": "in",
+          "actual_value": "02",
+          "expected_ref": "01-05=3/06-09=2/10+=1"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.institution.h_level"
+        ],
+        "rule_refs": [
+          "RSP-DED-001",
+          "RSP-RATE-001"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.match.1",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "catalog_match",
+          "description": "药品目录匹配",
+          "operator": "count_eq",
+          "actual_value": "1",
+          "expected_ref": "有效目录条目"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.fee_quantity_check.1",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:1",
+        "condition": {
+          "code": "fee_equals_unit_price_times_count",
+          "description": "账面费用与单价×数量一致性",
+          "operator": "eq",
+          "actual_value": "2684.0000",
+          "expected_ref": "2684.000000"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.item.1.fee",
+          "fact.item.1.unit_price_count"
+        ],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.match.2",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:2",
+        "condition": {
+          "code": "catalog_match",
+          "description": "药品目录匹配",
+          "operator": "count_eq",
+          "actual_value": "1",
+          "expected_ref": "有效目录条目"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "catalog.fee_quantity_check.2",
+        "module_id": "catalog_split",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "item:2",
+        "condition": {
+          "code": "fee_equals_unit_price_times_count",
+          "description": "账面费用与单价×数量一致性",
+          "operator": "eq",
+          "actual_value": "748.0000",
+          "expected_ref": "748.000000"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "fact.item.2.fee",
+          "fact.item.2.unit_price_count"
+        ],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "deductible.param_select",
+        "module_id": "resident_special_deductible",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "deductible_param",
+          "description": "起付标准选择（人员×机构档×周期位置）",
+          "operator": "select",
+          "actual_value": "17/3/first",
+          "expected_ref": "RSP-DED 系列"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-DED-001",
+          "RSP-DED-002",
+          "RSP-DED-003",
+          "RSP-DED-101",
+          "RSP-DED-102",
+          "RSP-DED-103",
+          "RSP-DED-104"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "deductible.split",
+        "module_id": "resident_special_deductible",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "deductible_split",
+          "description": "本次起付 ybnqfje=min(E,max(D−A,0))",
+          "operator": "formula",
+          "actual_value": "0.0000",
+          "expected_ref": "E=3357.2000,A=1300.0000,D=1300"
+        },
+        "reason_code": null,
+        "input_refs": [
+          "calc.catalog.total_in_scope",
+          "fact.cycle.prior_cycle_deductible_paid"
+        ],
+        "rule_refs": [
+          "RSP-DED-001"
+        ],
+        "calculation_refs": [
+          "calc.deductible.split"
+        ]
+      },
+      {
+        "step_id": "pool.not_applicable",
+        "module_id": "resident_special_pool",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "pool_channel",
+          "description": "统筹分段适用性（居民门特）",
+          "operator": "eq",
+          "actual_value": "0",
+          "expected_ref": "tczhf/tczif 恒 0"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-POOL-001"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "big_pay.rate_select",
+        "module_id": "resident_special_big_pay",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "big_pay_rate",
+          "description": "基本基金支付比例档选择（机构档）",
+          "operator": "select",
+          "actual_value": "3@2024-09-27",
+          "expected_ref": "RSP-RATE-001/002/003"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-RATE-001",
+          "RSP-RATE-002",
+          "RSP-RATE-003"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "big_pay.cap_regime",
+        "module_id": "resident_special_big_pay",
+        "outcome": "true",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "cap_regime",
+          "description": "年度基金封顶规则适用",
+          "operator": "select",
+          "actual_value": "2024-09-27",
+          "expected_ref": "RSP-CAP-001/002"
+        },
+        "reason_code": null,
+        "input_refs": [],
+        "rule_refs": [
+          "RSP-CAP-001",
+          "RSP-CAP-002"
+        ],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "big_pay.fund_cumulative",
+        "module_id": "resident_special_big_pay",
+        "outcome": "unknown",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": {
+          "code": "prior_large_fund",
+          "description": "交易前年度大额累计可用且口径已确认",
+          "operator": "confirmed",
+          "actual_value": null,
+          "expected_ref": "大额基金累计（交易前）"
+        },
+        "reason_code": "FUND_CUMULATIVE_MISSING",
+        "input_refs": [
+          "fact.cycle.prior_annual_large_fund_payment"
+        ],
+        "rule_refs": [],
+        "calculation_refs": []
+      },
+      {
+        "step_id": "secondary.secondary_base_missing",
+        "module_id": "secondary_coverage",
+        "outcome": "unknown",
+        "parent_step_id": null,
+        "scope_ref": "settlement",
+        "condition": null,
+        "reason_code": "SECONDARY_BASE_MISSING",
+        "input_refs": [],
+        "rule_refs": [],
+        "calculation_refs": []
+      }
+    ],
+    "calculations": [
+      {
+        "calculation_id": "calc.catalog.self_pay_2.1",
+        "formula_id": "catalog_self_pay_2_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.item.1.fee",
+            "value": "2684.0000"
+          },
+          {
+            "ref": "fact.catalog.self_pay_ratio",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": "0.00000000",
+        "rounding_rule": "explicit:round_half_up(EOP-RND-001 待确认)",
+        "result": "0.00"
+      },
+      {
+        "calculation_id": "calc.catalog.self_pay_2.2",
+        "formula_id": "catalog_self_pay_2_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "fact.item.2.fee",
+            "value": "748.0000"
+          },
+          {
+            "ref": "fact.catalog.self_pay_ratio",
+            "value": "0.1000"
+          }
+        ],
+        "unrounded_result": "74.80000000",
+        "rounding_rule": "explicit:round_half_up(EOP-RND-001 待确认)",
+        "result": "74.80"
+      },
+      {
+        "calculation_id": "calc.deductible.split",
+        "formula_id": "resident_special_deductible_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "calc.catalog.total_in_scope",
+            "value": "3357.2000"
+          },
+          {
+            "ref": "fact.cycle.prior_cycle_deductible_paid",
+            "value": "1300.0000"
+          },
+          {
+            "ref": "rule.RSP-DED-001",
+            "value": "1300"
+          }
+        ],
+        "unrounded_result": "0.0000",
+        "rounding_rule": "not_applicable（min/max 运算，无取整）",
+        "result": "0.0000"
+      },
+      {
+        "calculation_id": "calc.identity.agency_pay",
+        "formula_id": "identity_agency_pay_v1",
+        "formula_version": "v1",
+        "operands": [
+          {
+            "ref": "TCZHF",
+            "value": "0.00"
+          },
+          {
+            "ref": "DEGWYZHF",
+            "value": "2517.90"
+          },
+          {
+            "ref": "BCZHF",
+            "value": "0.0000"
+          },
+          {
+            "ref": "JCZHF",
+            "value": "0.0000"
+          },
+          {
+            "ref": "GFYLBCHBX",
+            "value": "0.0000"
+          },
+          {
+            "ref": "BIG_ILL_PAY",
+            "value": "0.0000"
+          },
+          {
+            "ref": "CIVIL_IN",
+            "value": "634.3000"
+          },
+          {
+            "ref": "RETIRE_OFFICER_PAY",
+            "value": "0.0000"
+          }
+        ],
+        "unrounded_result": "3152.2000",
+        "rounding_rule": "not_applicable（账面分量加减，无取整）",
+        "result": "3152.2000"
+      }
+    ],
+    "citations": [
+      {
+        "id": "rule.person_type_codes.issue81",
+        "kind": "issue_note",
+        "ref": "https://github.com/ktyhwangfei/hospital_medical_insurance_agent/issues/81",
+        "value": null,
+        "values": [],
+        "approval_status": "pending"
+      },
+      {
+        "id": "fact.settlement.settle_date",
+        "kind": "settlement_fact",
+        "ref": "snapshot:special_mz_settlement:718/settlement/jyrq",
+        "value": "2024-09-27",
+        "values": [],
+        "approval_status": null
+      },
+      {
+        "id": "rule.RSP-CAP-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§封顶线",
+        "value": "RSP-CAP-001",
+        "values": [],
+        "approval_status": "文档明确"
+      },
+      {
+        "id": "rule.RSP-CAP-002",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2019年1月1日）",
+        "value": "RSP-CAP-002",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-CAT-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§门诊特殊病的费用分解；Issue #81 flid=250",
+        "value": "RSP-CAT-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-002",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-002",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-003",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§学生儿童起付标准",
+        "value": "RSP-DED-003",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-101",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-101",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-102",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§起付标准（新2018年1月1日）",
+        "value": "RSP-DED-102",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-103",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§学生儿童起付标准",
+        "value": "RSP-DED-103",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-DED-104",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§学生儿童起付标准",
+        "value": "RSP-DED-104",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-POOL-001",
+        "kind": "policy_document",
+        "ref": "GitHub Issue #81 原文；实证 3/3 笔账面统筹字段为 0",
+        "value": "RSP-POOL-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-RATE-001",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2018年1月1日按医院等级区分）",
+        "value": "RSP-RATE-001",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-RATE-002",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2018年1月1日按医院等级区分）",
+        "value": "RSP-RATE-002",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.RSP-RATE-003",
+        "kind": "policy_document",
+        "ref": "mz.docx 城乡居民基本医疗保险-住院§新政策（2018年1月1日按医院等级区分）",
+        "value": "RSP-RATE-003",
+        "values": [],
+        "approval_status": "文档明确-待官方核证"
+      },
+      {
+        "id": "rule.SC-DB-001",
+        "kind": "policy_document",
+        "ref": "https://ybj.beijing.gov.cn/zwgk/2024zcwj/202406/t20240614_3712569.html",
+        "value": null,
+        "values": [],
+        "approval_status": "用户补充规则，2023-01-01起"
+      },
+      {
+        "id": "rule.SC-DB-002",
+        "kind": "policy_document",
+        "ref": "https://www.beijing.gov.cn/zhengce/zhengcefagui/202303/t20230328_2946600.html",
+        "value": null,
+        "values": [],
+        "approval_status": "用户补充规则，救助身份起付减半、各段比例加5个百分点"
+      },
+      {
+        "id": "rule.SC-MAF-001",
+        "kind": "policy_document",
+        "ref": "https://www.beijing.gov.cn/zhengce/zhengcefagui/202303/t20230328_2946600.html",
+        "value": null,
+        "values": [],
+        "approval_status": "用户补充规则，门特按住院救助档"
+      },
+      {
+        "id": "source.snapshot_read_meta",
+        "kind": "source_catalog",
+        "ref": "hospital_record_store#special:2026-10-15T03:49:06.278973+00:00",
+        "value": "70d0b90f922e61616c2c046d2b358e43bb6e8a058bd283efbb1e55da0b90989b",
+        "values": [
+          "annual=1",
+          "cycle=1",
+          "drug_catalog=9",
+          "fee_items=2",
+          "institution=1",
+          "material_catalog=0",
+          "registration=1",
+          "service_catalog=0",
+          "settlement=1",
+          "CYCLE_TABLE_LAGGING：prior_annual_large_fund_payment 推导为负 -930.3400，交易前累计未知，不将原值升级为已确认",
+          "ELIGIBILITY_CANDIDATE_MAPPING：资格字段按 Issue #79 候选口径映射（cjjrdj=0→grade=None；gwydybz=1→civil=False；cblb=17→retirement_category=None），签核前不升级为已确认字段语义"
+        ],
+        "approval_status": null
+      }
+    ],
+    "uncertainties": [
+      {
+        "id": "u.catalog.rule_confirmation.drug:8:XL04ADT002E001020304641",
+        "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
+        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "affected_fields": [
+          "T_FeeIn",
+          "T_FeeOut"
+        ]
+      },
+      {
+        "id": "u.catalog.rule_confirmation.drug:3:XL04AAA362A001010204641",
+        "code": "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
+        "message": "目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        "affected_fields": [
+          "T_FeeIn",
+          "T_FeeOut"
+        ]
+      },
+      {
+        "id": "u.cycle.lagging",
+        "code": "CYCLE_TABLE_LAGGING",
+        "message": "年度快照疑似滞后，原累计不能证实为交易前口径；依赖字段不硬算。",
+        "affected_fields": [
+          "DEGWYZHF",
+          "DEGWYZIF",
+          "BIG_ILL_PAY",
+          "CIVIL_IN",
+          "PERSON_PAYABLE"
+        ]
+      },
+      {
+        "id": "u.big_pay.fund_cumulative",
+        "code": "FUND_CUMULATIVE_MISSING",
+        "message": "缺少交易前年度大额累计（或口径未确认），封顶切档不能确定。",
+        "affected_fields": [
+          "DEGWYZHF",
+          "DEGWYZIF"
+        ]
+      },
+      {
+        "id": "u.rounding.rule",
+        "code": "ROUNDING_RULE_PENDING_CONFIRMATION",
+        "message": "取整规则 RSP-RND-001 待确认；本次计算显式采用 round_half_up，结果不升级为已确认口径。",
+        "affected_fields": []
+      },
+      {
+        "id": "u.secondary.secondary_base_missing",
+        "code": "SECONDARY_BASE_MISSING",
+        "message": "基本医保、补助或按比例先行负担尚不能确定，二次保障不取账面目标反算。",
+        "affected_fields": [
+          "BIG_ILL_PAY",
+          "FEEIN_DB_PAY",
+          "FEEOUT_DB_PAY",
+          "CIVIL_IN",
+          "FEEIN_MAF_PAY",
+          "FEEOUT_MAF_PAY",
+          "PERSON_PAYABLE"
+        ]
+      }
+    ],
+    "coverage": {
+      "target_field_count": 26,
+      "independently_explained_count": 6,
+      "amount_reconciled_count": 10,
+      "observed_only_count": 15
+    },
+    "answer_constraints": {
+      "may_claim_full_explanation": false,
+      "may_infer_missing_rules": false
+    }
+  }
+}

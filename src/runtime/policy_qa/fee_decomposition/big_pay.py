@@ -229,6 +229,26 @@ def decompose_big_pay(
         pay1 = apply_rounding(b1 * base_rate, rounding_mode)
         pay2 = apply_rounding(b2 * excess_rate, rounding_mode)
         pay = pay1 + pay2
+        calcs.extend((
+            CalculationRecord("calc.big_pay.segment.base.base", "ordinary_first_segment_base_v1", "v1",
+                operands=(CalculationOperand("calc.deductible.copay_base", decimal_to_str(copay_base)),
+                          CalculationOperand("fact.trade.prior_fund_payment", decimal_to_str(prior_fund_payment)),
+                          CalculationOperand(f"rule.{base_rule_id}", decimal_to_str(base_rate)),
+                          CalculationOperand(f"rule.{excess_sel.param.rule_id}.threshold", decimal_to_str(_EXCESS_FUND_THRESHOLD))),
+                result=decimal_to_str(b1)),
+            CalculationRecord("calc.big_pay.segment.excess_20k.base", "copay_base_v1", "v1",
+                operands=(CalculationOperand("calc.deductible.copay_base", decimal_to_str(copay_base)),
+                          CalculationOperand("calc.big_pay.segment.base.base", decimal_to_str(b1))), result=decimal_to_str(b2))))
+        for segment_name, amount, ratio, paid_amount, rule_id in (
+            ("base", b1, base_rate, pay1, base_rule_id), ("excess_20k", b2, excess_rate, pay2, excess_sel.param.rule_id)):
+            calcs.append(CalculationRecord(f"calc.big_pay.segment.{segment_name}.pay", "ordinary_segment_pay_v1", "v1",
+                operands=(CalculationOperand(f"calc.big_pay.segment.{segment_name}.base", decimal_to_str(amount)),
+                          CalculationOperand(f"rule.{rule_id}", decimal_to_str(ratio))),
+                result=decimal_to_str(paid_amount), rounding_rule=f"explicit:{rounding_mode.value}(EOP-RND-001 待确认)"))
+            branches.append(BranchTrace(step_id=f"big_pay.segment.{segment_name}.intersection", module_id=MODULE_ID, scope_ref="trade",
+                condition=BranchCondition("segment_intersection", "本笔进入基金累计分段的基数", "gt", decimal_to_str(amount), "0"),
+                outcome=BranchOutcome.TRUE if amount > 0 else BranchOutcome.FALSE,
+                input_refs=(f"calc.big_pay.segment.{segment_name}.base",), rule_refs=(rule_id,)))
         calcs.append(CalculationRecord(
             calculation_id="calc.big_pay.segmented", formula_id="big_pay_segmented_v1", formula_version="v1",
             operands=(
@@ -236,6 +256,11 @@ def decompose_big_pay(
                 CalculationOperand(f"rule.{base_rule_id}", decimal_to_str(base_rate)),
                 CalculationOperand("fact.trade.prior_fund_payment", decimal_to_str(prior_fund_payment)),
                 CalculationOperand(f"rule.{excess_sel.param.rule_id}", decimal_to_str(excess_rate)),
+                CalculationOperand("calc.big_pay.segment.base.pay", decimal_to_str(pay1)),
+                CalculationOperand("calc.big_pay.segment.excess_20k.pay", decimal_to_str(pay2)),
+                # 段内基数：让"段内基金×比例＝段基金支付"可逐段复算
+                CalculationOperand("calc.big_pay.segment.base.base", decimal_to_str(b1)),
+                CalculationOperand("calc.big_pay.segment.excess_20k.base", decimal_to_str(b2)),
             ),
             unrounded_result=decimal_to_str(b1 * base_rate + b2 * excess_rate),
             rounding_rule=f"explicit:{rounding_mode.value}(EOP-RND-001 待确认；逐段取整层级待确认)",

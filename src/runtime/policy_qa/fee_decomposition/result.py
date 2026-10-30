@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from src.runtime.policy_qa.fee_decomposition.fee_items import FeeItemExplanation
+from src.runtime.policy_qa.fee_decomposition.explanation_evidence import ExplanationEvidence
 
 from src.domain.insurance.fee_decomposition import (
     BranchOutcome,
@@ -111,6 +113,8 @@ class SettlementDecompositionResult(BaseModel):
     """结算费用分解结构化结果（设计 §11）。"""
 
     schema_version: str = SCHEMA_VERSION
+    fee_items: list[FeeItemExplanation] = Field(default_factory=list, exclude=True)
+    explanation_evidence: ExplanationEvidence | None = Field(default=None, exclude=True)
     algorithm_version: str = ALGORITHM_VERSION
     settlement_ref: str
     profile: DecompositionProfile

@@ -66,6 +66,9 @@ DEFAULT_COLUMNS: dict[str, str] = {
     "op_hosp_code": "T_HospCode",  # 费用发生机构代码
     "op_prior_fee_in": "TB_FeeIn",  # 年度医保内费用累计（交易前口径，实证见决策记录 D3）
     "op_prior_big_pay": "TB_BigPay",  # 年度大额累计支付（交易前口径，实证见决策记录 D4）
+    # 交易后累计（TA_ 列）：仅用于逐交易增量恒等式自证（TA−TB==T，阶段 E），不作金额输入
+    "op_after_fee_in": "TA_FeeIn",  # 年度医保内费用累计（交易后口径，恒等式自证用）
+    "op_after_big_pay": "TA_BigPay",  # 年度大额累计支付（交易后口径，恒等式自证用）
     "op_official": "P_Official",  # 公务员待遇标识（字典 flid=150：0=享受 1=不享受）
     "op_official_code": "P_OfficialCode",  # 公疗待遇类别码（取值 '2'/'3' 语义待确认，决策记录 D6）
     "op_jc_level": "P_JCLevel",  # 军残等级候选列（0=无，1-4/5-6 档，决策记录 D7）
@@ -73,6 +76,7 @@ DEFAULT_COLUMNS: dict[str, str] = {
     "op_self_pay_2": "T_SelfPay2",
     "op_big_pay": "T_BigPay",
     "op_big_self_pay": "T_BigSelfPay",
+    "op_beyond_big": "T_BeyondBig",
     "op_bc_pay": "T_BCPay",
     "op_jc_pay": "T_JCPay",
     "op_official_pay": "T_OfficalPay",
@@ -80,8 +84,14 @@ DEFAULT_COLUMNS: dict[str, str] = {
     "op_self_pay_all": "T_SelfPayAll",
     "op_person_count_pay": "T_PersonCountPay",
     "op_cash_pay": "T_CashPay",
+    # ── Issue #80 居民扩展渠道列（o_Trade）：大病保险支付/民政救助支付观测值 ──
+    "op_bigill_pay": "T_BigillPay",  # 大病保险支付（居民门诊大额封顶后渠道，240914 组实证）
+    "op_civil_pay": "NT_CivilPay",  # 民政救助支付（国家平台列；5975/6969 实证，8000 年度封顶）
+    "op_retire_officer_pay": "RETIRE_OFFICER_PAY",
+    "op_retire_officer_flag": "RETIRE_OFFICER_FLAG",
     # ── Issue #78 门诊交易费用明细（o_FeeItem）。候选映射，待黄金样本确认（设计 §16 P0）──
     "opf_line_id": "ItemId",  # 行键候选
+    "opf_item_name": "ItemName",
     "opf_trade_no": "T_TradeNo",
     "opf_item_type": "ItemType",  # 0=药品；其余取值语义待确认
     "opf_item_code": "ItemCode",
@@ -98,6 +108,8 @@ DEFAULT_COLUMNS: dict[str, str] = {
     # 置空 = 该列不进入 SELECT，组装层降级用交易日期并留痕
     "opf_fee_date": "",
     # ── Issue #78 药品目录（yb_ypzdml）。列名已经真实库 schema 核实（2026-09-28）──
+    "cat_drug_special_marker": "tsbyybz",
+    "cat_svc_special_marker": "tsbbz",
     "cat_drug_code": "ypbm",
     "cat_drug_effective": "sxrq",
     "cat_drug_expiry": "jzrq",
@@ -116,8 +128,9 @@ DEFAULT_COLUMNS: dict[str, str] = {
     "cat_svc_expiry": "jzrq",
     "cat_svc_sfxmdj": "sfxmdj",  # 收费项目等级：1 无自付/2 有自付/3 全自付
     "cat_svc_self_pay_ratio": "zfbl",  # 自付比例列
-    # 单价限额列：实测 yb_xzzlfwxm 无此列（2026-09-28），置空 → 限额规则不适用
-    "cat_svc_unit_price_limit": "",
+    # 单价限额列：xb（2026-09-28 schema 核实漏报；2026-10-13 复核确认存在，561 行 xb>0，
+    # 含医事服务费限额 40/60——Issue #80 居民医事服务费通道分解依赖）
+    "cat_svc_unit_price_limit": "xb",
     # ── Issue #78 机构表（m_institution）。连接键已经真实库 schema 核实（2026-09-28）──
     "ins_code": "H_CODE",
     "ins_h_level": "H_LEVEL",

@@ -23,6 +23,7 @@ from decimal import Decimal
 from src.domain.insurance.fee_decomposition import (
     BranchOutcome,
     InstitutionKind,
+    InstitutionLevelTier,
     PersonKind,
 )
 
@@ -60,6 +61,8 @@ class EmployeeOutpatientParam:
     age_band: str | None = None  # "lt70" / "ge70"
     institution_kind: InstitutionKind | None = None
     segment: str = "base"  # "base" 基础段 / "excess_20k" 超 2 万基金支付段
+    # 居民门诊机构等级档选择维度（Issue #80；职工参数不使用，保持 None）
+    institution_tier: InstitutionLevelTier | None = None
 
     @property
     def ratio(self) -> Decimal | None:

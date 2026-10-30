@@ -62,6 +62,9 @@ def _snapshot(
     allow_observed_deductible: bool = False,
     segment_coordinate_guard: bool = True,
 ) -> OutpatientSpecialSnapshot:
+    if djh == "567":
+        from dataclasses import replace
+        observed = replace(observed, big_ill_pay=Decimal("0"), civil_in=Decimal("0"), retire_officer_pay=Decimal("0"))
     return OutpatientSpecialSnapshot(
         settlement_ref=f"special_mz:djh={djh}",
         insurance_type="employee", medical_category="outpatient_special",
@@ -127,6 +130,37 @@ def test_golden_djh567_retired_military_grade14_full_cover():
     assert fields["JCZHF"].calculated_amount == "1511.50"
     # 现金恒等式：全额基金支付，个人 0
     assert fields["XJZF.identity"].check_status == "matched"
+    # 自付一＝起付＋统筹自付＋大额自付（项目付费单 grzif1 列在已核样本中未维护，
+    # 查询层未取该列：observed=None 诚实降级，不自比自产出 matched）
+    assert fields["GRZIF1"].label == "个人支付自付（一）金额"
+    assert fields["GRZIF1"].check_status == "not_verifiable"
+    assert fields["GRZIF1"].observed_amount is None
+    assert fields["GRZIF1"].reason_code == "SELF_PAY_1_BOOK_COLUMN_UNMAINTAINED"
+    assert fields["GRZIF1"].calculated_amount == "1723.00"
+    self_pay_1 = next(c for c in result.calculations if c.calculation_id == "calc.self_pay_1.parts")
+    assert self_pay_1.formula_id == "self_pay_1_components_v1"
+
+
+def test_employee_special_self_pay_1_summary_does_not_claim_book_amount():
+    """公开 summary：GRZIF1 不得虚称"结算记录 X 元"，须表达"列未维护、分量计算、不作账面核对"。"""
+    from src.runtime.policy_qa.fee_decomposition.public_view import (
+        build_public_view_dict,
+        render_summary,
+    )
+
+    result = decompose_employee_outpatient_special(_snapshot_djh567())
+    text = render_summary(result)
+    line = next(ln for ln in text.split("\n") if "自付（一）金额" in ln)
+    assert "结算记录" not in line
+    assert "无此列" not in line
+    assert "未维护" in line
+    assert "不作账面核对" in line
+    # brief 同样表达裁决措辞，且不得被套用"算法待补全"占位理由
+    view = build_public_view_dict(result, summary_text=text, summary_source="template")
+    field = next(f for f in view["fields"] if f["field_code"] == "GRZIF1")
+    assert field["brief"] is not None
+    assert "未维护" in field["brief"] and "不作账面核对" in field["brief"]
+    assert field["explanation_reason"] is None
 
 
 # ── djh=609：退休，军残 5-6 级 + 公疗（585=1300×(95%-50%)） ──
@@ -301,16 +335,15 @@ def test_unknown_cycle_segment_guard_not_verifiable():
     assert "SEGMENT_COORDINATE_UNDERDETERMINED" in codes
 
 
-def test_guard_off_lower_bound_computation_preserved():
-    """守卫关闭时保持坐标下界计算（zy 套表评估口径行为不变）。"""
+def test_guard_off_does_not_bypass_missing_annual_cap_evidence():
+    """关闭分段坐标守卫仍不能用未知年度累计证明未跨封顶。"""
     snapshot = _snapshot_2025_unknown_cycle()
     from dataclasses import replace
     snapshot = replace(snapshot, segment_coordinate_guard=False)
     result = decompose_employee_outpatient_special(snapshot)
     fields = _fields(result)
-    # 下界 C0=0 → 三级在职 85%：6750×0.85=5737.50（与账面 95% 档 6412.50 差异如实呈现）
-    assert fields["TCZHF"].calculated_amount == "5737.50"
-    assert fields["TCZHF"].check_status == "mismatched"
+    assert fields["TCZHF"].calculated_amount is None
+    assert fields["TCZHF"].reason_code == "POOL_CAP_CROSSING_UNVERIFIABLE"
 
 
 # ── derive_mz_cycle_context 纯函数 ──
@@ -383,3 +416,60 @@ def test_map_civil_medical_eligible_value_domain():
     assert map_civil_medical_eligible(1) == (False, None)
     eligible, note = map_civil_medical_eligible(None)
     assert eligible is None and note is not None
+
+
+def test_public_sources_do_not_leak_internal_paths_or_patient_names():
+    """参数来源文本进入公开投影前必须脱敏：内部代码路径与真实患者姓名不得出现。"""
+    import json
+
+    from src.runtime.api.policy_qa_routes import _public_text
+    from src.runtime.policy_qa.fee_decomposition.explanation_evidence import attach_evidence
+    from src.runtime.policy_qa.fee_decomposition.public_view import (
+        render_summary,
+        to_public_contract_dict,
+    )
+
+    snapshot = _snapshot_djh567()
+    result = attach_evidence(decompose_employee_outpatient_special(snapshot), snapshot)
+    view = to_public_contract_dict(
+        result, summary_text=render_summary(result), summary_source="template",
+        sanitize=_public_text)
+    blob = json.dumps(view["sources"], ensure_ascii=False)
+    assert "src/" not in blob
+    for name in ("刘畅", "付克琴", "任启旺", "袁健"):
+        assert name not in blob
+    # 规则候选的 source 同样进入公开 rule_choices，不得绕过消毒
+    choices_blob = json.dumps(view["rule_choices"], ensure_ascii=False)
+    assert "src/" not in choices_blob
+    for name in ("刘畅", "付克琴", "任启旺", "袁健"):
+        assert name not in choices_blob
+
+
+def test_zero_large_base_records_zero_fund_settle_calculation():
+    """大额段基数为 0：DEGWYZHF 也必须有零值基金支付计算记录与分支留痕，
+    不得 check_type=independent_recalculation 而 calculation_refs 为空。"""
+    result = decompose_employee_outpatient_special(_snapshot_djh567())
+    fields = _fields(result)
+    assert "calc.large.settle" in fields["DEGWYZHF"].calculation_refs
+    settle = next(c for c in result.calculations if c.calculation_id == "calc.large.settle")
+    assert settle.formula_id == "special_large_settle_zero_v1"
+    assert settle.result == "0"
+    branch = next(b for b in result.branches if b.step_id == "large.enter")
+    assert "calc.large.settle" in branch.calculation_refs
+
+
+def test_zero_large_base_public_conclusion_consistent_with_summary():
+    """零大额基数：summary 说"按规则重算 0 元"时，conclusion 不得再说"未独立重算"。"""
+    from src.runtime.policy_qa.fee_decomposition.explanation_evidence import attach_evidence
+    from src.runtime.policy_qa.fee_decomposition.public_view import (
+        build_public_view_dict,
+        render_summary,
+    )
+
+    snapshot = _snapshot_djh567()
+    result = attach_evidence(decompose_employee_outpatient_special(snapshot), snapshot)
+    view = build_public_view_dict(
+        result, summary_text=render_summary(result), summary_source="template")
+    field = next(f for f in view["fields"] if f["field_code"] == "DEGWYZHF")
+    assert field["calculation_refs"]
+    assert "未独立重算" not in field["conclusion_text"]

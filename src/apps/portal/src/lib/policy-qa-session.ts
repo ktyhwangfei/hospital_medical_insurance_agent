@@ -13,11 +13,12 @@ import { toPolicyQAResult } from '@/lib/policy-qa-stream'
 import type {
   PolicyQACaseContext,
   PolicyQADataQueryResult,
+  PolicyQAFeeDecomposition,
   PolicyQAResult,
   PolicyQAVerificationSummary,
 } from '@/lib/policy-qa-stream'
 
-export type { PolicyQADataQueryResult } from '@/lib/policy-qa-stream'
+export type { PolicyQADataQueryResult, PolicyQAFeeDecomposition } from '@/lib/policy-qa-stream'
 
 // ── 前端会话级状态类型（camelCase，组件层只见这一套）──────────────
 
@@ -82,6 +83,8 @@ export interface PolicyQAChatMessage {
   caseContext?: PolicyQACaseContext
   scenarioId?: PolicyQAResult['scenarioId']
   settlementFields?: PolicyQAResult['settlementFields']
+  /** 门诊费用分解公开结果（Issue #78；后端 SSE result 顺带下发时挂接） */
+  feeDecomposition?: PolicyQAFeeDecomposition
   /** 运营问数结果（图表/表格） */
   dataQueryResult?: PolicyQADataQueryResult
   /** 服务端为本轮生成的稳定 ID（result/done 共享）；仅该 ID 提交给反馈接口 */
@@ -350,6 +353,7 @@ export function restoreSessionState(trajectory: TrajectoryResponseDTO): Restored
             definition: result.definition,
             warnings: result.warnings,
             caseContext: result.caseContext,
+            feeDecomposition: result.feeDecomposition,
             qaTurnId: turn.qa_turn_id,
           },
     )

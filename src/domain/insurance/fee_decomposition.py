@@ -87,6 +87,18 @@ class InstitutionKind(StrEnum):
     UNKNOWN = "unknown"
 
 
+class InstitutionLevelTier(StrEnum):
+    """机构等级档（居民门诊起付/支付比例分档维度，Issue #80）。
+
+    按 m_institution.H_LEVEL 数值分档：>=10 为一级及以下（含 14=未评级，
+    政策明确未评级与一级同档 55%）；<10 为二级及以上；缺失/非法为未知。
+    """
+
+    LEVEL_1_AND_BELOW = "level_1_and_below"
+    LEVEL_2_AND_ABOVE = "level_2_and_above"
+    UNKNOWN = "unknown"
+
+
 class CatalogKind(StrEnum):
     """明细所属目录类别。"""
 
@@ -115,8 +127,14 @@ class TradeAnchor:
     hospital_code: str  # 费用发生机构
     is_reversal: bool = False  # 冲正/退款交易标记
     original_trade_no: str | None = None  # 原交易关联单号
-    # 无待遇原因码（PN_NoRightReason）：'4'/'5' 实证为全额自费结算（决策记录 D15）
+    # 无待遇原因码（PN_NoRightReason）：'4'/'5' 实证为全额自费结算（决策记录 D15）；
+    # 居民口径（Issue #80）：非空即全额自费（取值含 '3'/'4'/'5'/'3^5' 复合码）
     no_right_reason: str | None = None
+    # 医疗类别码原值（T_CureType，Issue #80 居民通道分流依据：11/19 门诊大额通道、
+    # 17/18 医事服务费通道候选）；职工内核不消费该字段
+    cure_type: str | None = None
+    # 险种码原值（P_FundType；居民='91'/'92'/'93'），仅留痕核对，不作分流依据
+    fund_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,12 +149,17 @@ class PersonProfile:
     # 军残资格
     is_disabled_veteran: bool | None = None
     military_disability_grade: str | None = None  # "1-4" / "5-6"
+    military_disability_level_code: str | None = None  # 原始伤残待遇等级，0=不享受；空值不是0
     military_eligible_from: date | None = None  # 军残资格生效日期（费用发生日期口径）
     military_eligible_to: date | None = None
     # 公疗资格
     is_rural_disabled_veteran: bool | None = None  # 在乡残疾军人
-    public_medical_eligible: bool | None = None  # 公疗资格
+    public_medical_eligible: bool | None = None  # 公疗资格（派生口径，受门控）
     public_medical_designated: bool | None = None  # 费用发生在本人定点医疗机构
+    # 原单资格码表事实：只用于解释“为什么是 0”，不据此派生资格（派生仍受门控）
+    public_medical_flag: str | None = None
+    public_medical_treatment_code: str | None = None
+    retire_officer_flag: str | None = None  # 原单退役医疗费标志，仅保留事实，不由此推导待遇
 
 
 @dataclass(frozen=True)
@@ -164,6 +187,27 @@ class AnnualAccumulation:
     prior_fund_payment_is_pre_trade: bool = False
     # 起付累计口径与公疗 1300 门槛累计口径是否确认一致（设计 §7.5.4）
     in_scope_basis_aligned: bool = False
+    # 累计值是否为“可证下界”（如仅同人同年本院历史推导，跨院缺失）：下界不等于真实累计，
+    # 依赖它的支付/封顶结论不得标记为已独立算平。
+    prior_is_lower_bound: bool = False
+    # 本交易增量恒等式自证（阶段 E）：TB_Year==交易年且 TA−TB==T 两条恒等式成立
+    # （容差 0.005，与探针一致）时由服务层置 True。仅证明院内 HIS 表内一致；
+    # 跨院累计不在本院库，口径待业务签核。
+    self_proven: bool = False
+
+
+@dataclass(frozen=True)
+class OriginalPolicyContext:
+    """退费原单的已确认政策身份；累计年度属于被退年度，非退费当天年度。"""
+
+    policy_date: date
+    person: PersonProfile
+    institution: InstitutionProfile
+    insurance_type: str
+    medical_category: str
+    accumulation_year: int | None
+    cure_type: str | None = None
+    no_right_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +251,9 @@ class DrugCatalogEntry:
     ypfl: str | None = None  # 药品分类（16/6 为自制剂候选）
     bzjg: Decimal | None = None  # 自制剂标准价格
     preparation_hospital_code: str | None = None  # 自制剂所属机构
+    special_disease_marker: str | None = None  # tsbyybz，特殊病适用标志原值，普通门诊不消费
+    a_ypbs_known: bool = False  # 仅解释用：空值/未识别值不能陈述为已确认非集采
+    a_ypbs_raw: str | None = None  # 原始标志仅留在快照，不改变既有真假映射
 
 
 @dataclass(frozen=True)
@@ -220,6 +267,7 @@ class ServiceCatalogEntry:
     sfxmdj: str | None = None  # 1=无自付 2=有自付 3=全自付；空必须未知
     self_pay_ratio: Decimal | None = None
     unit_price_limit: Decimal | None = None  # 单价限额（超出部分入自付二）
+    special_disease_marker: str | None = None  # tsbbz，特殊病适用标志
 
 
 @dataclass(frozen=True)
@@ -232,6 +280,8 @@ class MaterialCatalogEntry:
     expiry_date: date | None
     is_artificial_organ: bool = False  # 人工器官（EOP-MAT-005 例外，政策参数未覆盖）
     is_centralized_selected: bool = False  # 集采中选（同上例外）
+    special_disease_marker: str | None = None  # tsbbz，特殊病适用标志
+    sfxmdj: str | None = None  # 收费项目等级（同表 yb_xzzlfwxm：1 无自付/2 有自付/3 全自付），仅用于目录属性展示
 
 
 @dataclass(frozen=True)
@@ -253,6 +303,12 @@ class ObservedSettlementAmounts:
     self_pay_all: Decimal | None = None  # T_SelfPayAll 最终个人承担
     person_count_pay: Decimal | None = None  # T_PersonCountPay 账户支付
     cash_pay: Decimal | None = None  # T_CashPay 现金支付
+    # 居民门诊扩展渠道观测值（Issue #80）：大病保险支付（T_BigillPay）与
+    # 民政救助支付（NT_CivilPay）。仅用于渠道存在性检测与账面恒等核对，
+    # 不作同字段重算输入；None=未知不是零
+    bigill_pay: Decimal | None = None
+    civil_pay: Decimal | None = None
+    retire_officer_pay: Decimal | None = None  # 退役医疗费支付：可参与其他金额的账面构成，不独立推导本项待遇
 
 
 @dataclass(frozen=True)
@@ -274,17 +330,18 @@ class DecompositionSnapshot:
     material_catalog: tuple[MaterialCatalogEntry, ...] = ()
     # 本单是否另有非零基金渠道（T_FundPay 候选公式适用性；None=未知）
     has_other_fund_channels: bool | None = None
+    original_policy_context: OriginalPolicyContext | None = None
 
 
 # ── 门特（门诊特殊病，视同住院）输入快照（Issue #78 第二流程） ──
 #
-# 字段语义均为 bjyb 住院套表（yb_brdjxx/yb_zyjyxx/yb_zyfymx）实测候选口径，
+# 字段语义均为 bjyb 门诊套表（yb_brdjxx/yb_mzjyxx/yb_mzfymx）实测候选口径，
 # 待数据字典确认（参数表 ESP-CODE-001..003，实测待码表确认）。
 
 
 @dataclass(frozen=True)
 class SpecialFeeLineItem:
-    """门特费用明细行快照（yb_zyfymx）。账面值原样保留，行键重复即数据异常。"""
+    """门特费用明细行快照（yb_mzfymx）。账面值原样保留，行键重复即数据异常。"""
 
     line_key: str  # djh+xh 中的 xh（行号）
     item_code: str  # xmdm 项目编码
@@ -302,7 +359,7 @@ class SpecialFeeLineItem:
 
 @dataclass(frozen=True)
 class SpecialObservedAmounts:
-    """门特结算账面观测值（yb_zyjyxx，14 字段）：仅作核对目标，None=未知不是零。"""
+    """门特结算账面观测值（yb_mzjyxx，14 字段）：仅作核对目标，None=未知不是零。"""
 
     zje: Decimal | None = None  # 总费用
     ybn: Decimal | None = None  # 医保内
@@ -318,6 +375,24 @@ class SpecialObservedAmounts:
     xjzf: Decimal | None = None  # 现金支付
     zhzf: Decimal | None = None  # 账户支付
     grziftw: Decimal | None = None  # 先行自付（结算口径，=Σ明细 grziftw）
+    big_ill_pay: Decimal | None = None  # 基本医保和补助后的二次大病保险
+    civil_in: Decimal | None = None  # 医疗救助
+    feein_db_pay: Decimal | None = None
+    feeout_db_pay: Decimal | None = None
+    feein_maf_pay: Decimal | None = None
+    feeout_maf_pay: Decimal | None = None
+    retire_officer_pay: Decimal | None = None  # 军休渠道仅作账面渠道核对，不反推其规则
+
+
+@dataclass(frozen=True)
+class SecondaryCoverageContext:
+    """二次保障年度快照；时点未知时不把累计当作交易前事实。"""
+
+    big_ill_scope_total: Decimal | None = None  # BIG_ILL_SUM_IN 合规个人负担累计
+    civil_fund_payment_total: Decimal | None = None  # CIVIL_SUM_PAY 年度救助支付
+    is_post_trade: bool | None = None
+    evidence_status: str = "unknown"
+    evidence_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -338,8 +413,19 @@ class SpecialCycleContext:
     # 周期内交易前医保内费用累计（yb_dyxxtsb.bqljybnje 交易后口径 − 本笔 tsbybn）：
     # confirmed 时给出，作为统筹分段绝对坐标起点；None=未知（按下界/守卫规则处理）
     prior_cycle_in_scope_total: Decimal | None = None
+    # 周期位置（Issue #81 居民门特起付分档判定）："first" 年度第一个住院类结算周期
+    # （bnzqslj<=1）/ "subsequent" 第二及以后；None=未知（职工流程不使用，保持 None）
+    cycle_position: str | None = None
     evidence_status: str = "unknown"
     evidence_note: str = ""
+    confirmed_fields: tuple[str, ...] = ()  # 分字段证据，稀疏累计仅阻断依赖缺项的计算
+
+    def is_confirmed(self, *fields: str) -> bool:
+        """字段非空且有已确认来源；其他累计缺失不抹掉本字段证据。"""
+        return all(getattr(self, name) is not None for name in fields) and (
+            self.evidence_status == "confirmed"
+            or all(name in self.confirmed_fields for name in fields)
+        )
 
 
 @dataclass(frozen=True)
@@ -359,6 +445,7 @@ class SpecialPersonProfile:
     # 公疗（公务员/公费医疗）资格（Issue #79 字段映射候选口径：yb_brdjxx.gwydybz，
     # 与红名单相反：0=享受，1=不享受）；None=字段缺失未知
     civil_medical_eligible: bool | None = None
+    civil_type: str | None = None  # v_CIVIL_TYPE 救助身份；None不默认非救助
 
 
 @dataclass(frozen=True)
@@ -370,16 +457,30 @@ class SpecialInstitutionProfile:
 
 
 @dataclass(frozen=True)
+class KidneyFixedQuotaContext:
+    """肾/肝肾抗排异定额条件输入；定额账面值不等于独立核定的日标准。"""
+
+    special_codes: tuple[str, ...] = ()
+    designated_hospital_flag: str | None = None
+    quota_amount: Decimal | None = None
+    medication_start: date | None = None
+    medication_end: date | None = None
+    cycle_start: date | None = None
+    initial_self_pay_observed: Decimal | None = None
+    agency_pay_observed: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class OutpatientSpecialSnapshot:
     """门特（职工×门诊特殊病）固定输入快照。"""
 
     settlement_ref: str
     insurance_type: str  # 标准险种：employee
     medical_category: str  # 标准医疗类别：outpatient_special
-    djh: str  # 登记号（住院套表键）
+    djh: str  # 登记号（门诊套表键）
     settle_date: date  # jyrq 结算日期
     admit_date: date | None  # ryrq 入院/登记日期
-    yllb: str | None  # 医疗类别码（'16'=门特）
+    yllb: str | None  # 医疗类别码（'12'=门诊特殊病）
     fund_type: str | None  # 险种码（'3'=城镇职工）
     person: SpecialPersonProfile
     institution: SpecialInstitutionProfile
@@ -395,6 +496,9 @@ class OutpatientSpecialSnapshot:
     # 统筹/大额字段 not_verifiable（SEGMENT_COORDINATE_UNDERDETERMINED），
     # 不按坐标下界硬算（与封顶「未跨界可证明才可算」同一原则）
     segment_coordinate_guard: bool = False
+    secondary_coverage: SecondaryCoverageContext = SecondaryCoverageContext()
+    proportional_self_pay_2: Decimal | None = None  # 目录独立划分的合规先行负担，不含超限价
+    kidney_fixed_quota: KidneyFixedQuotaContext | None = None
 
 
 # ── 轨迹与核对记录（值对象） ───────────────────────────────────
@@ -506,5 +610,13 @@ def apply_rounding(value: Decimal, mode: RoundingMode, quantum: Decimal = CENT) 
 
 
 def decimal_to_str(value: Decimal) -> str:
-    """金额/比例统一输出十进制字符串（如 "123.45"、"0.80"），不经过 float。"""
+    """金额/比例统一输出十进制字符串（如 "123.45"、"0.80"），不经过 float。
+
+    负零保留符号（"-0.00"）：恒等式/差额记录的减项取负后经本函数落记录，
+    公开公式按值是否以 "-" 开头渲染 ＋/－，丢符号会把减项渲染成加号。
+    注意一元取负 ``-x`` 对零丢符号（十进制上下文 0-x 语义），减项取负必须用
+    ``value.copy_negate()``。
+    """
+    if value == 0 and value.is_signed():
+        return "-" + format(value.copy_abs(), "f")
     return format(value, "f")

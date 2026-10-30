@@ -2,19 +2,17 @@
 
 import { ReceiptText } from 'lucide-react'
 
-import CalculationDisclosure from '@/components/policy-qa/calculation-disclosure'
+import FeeDecompositionBlock from '@/components/policy-qa/fee-decomposition-block'
 import PolicySourcesDialog from '@/components/policy-qa/policy-sources-dialog'
-import VerificationSummary from '@/components/policy-qa/verification-summary'
 import { SERIES_COLORS } from '@/components/policy-qa/ops-answer-block'
 import { formatAmount } from '@/lib/policy-qa-settlement-list'
-import type { PolicyQAChatMessage } from '@/lib/policy-qa-session'
 import type { PolicyQAResult } from '@/lib/policy-qa-stream'
 
 /**
  * V4.0 结算解释智能体：单笔费用构成富块（设计 §4.2）。
  *
- * 总费用等宽大字 + 单色分段条（费用字段占比）+ 字段明细 + 完整解释
- * （answer / 计算依据 / 政策来源 / 核验摘要复用既有组件）。
+ * 总费用等宽大字 + 单色分段条（费用字段占比）+ 字段明细 + 回答与政策来源。
+ * 核验状态和通用计算依据不在结算解释答案中重复展示。
  * 金额一律 --font-mono + tabular-nums（§6.1 金融数据质感）。
  */
 
@@ -29,19 +27,6 @@ export default function SettlementResultBlock({
 }: SettlementResultBlockProps) {
   const total = result.caseContext?.totalAmount ?? null
   const segments = result.settlementFields.filter((field) => field.state === 'non_zero')
-
-  // 以 message 视图复用计算依据展开（calculationSteps/caseContext/definition）
-  const message: PolicyQAChatMessage = {
-    role: 'assistant',
-    content: result.answer,
-    answerStatus: result.answerStatus,
-    calculationSteps: result.calculationSteps,
-    definition: result.definition,
-    caseContext: result.caseContext,
-    citations: result.citations,
-    uncertainties: result.uncertainties,
-    verificationSummary: result.verificationSummary,
-  }
 
   return (
     <article
@@ -108,12 +93,7 @@ export default function SettlementResultBlock({
 
       <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-900">{result.answer}</p>
 
-      {result.verificationSummary ? (
-        <div data-testid="policy-qa-verification" data-status={result.answerStatus}>
-          <VerificationSummary summary={result.verificationSummary} answerStatus={result.answerStatus} />
-        </div>
-      ) : null}
-      <CalculationDisclosure message={message} />
+      <FeeDecompositionBlock feeDecomposition={result.feeDecomposition} />
       <PolicySourcesDialog citations={result.citations} />
     </article>
   )

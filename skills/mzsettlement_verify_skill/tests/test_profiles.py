@@ -236,6 +236,47 @@ def test_generic_outpatient_explanation_routes_to_overall_profile():
     )
 
 
+def _all_out_of_scope_personal_liability_result():
+    assembler = OutpatientSettlementVerifierAssembler()
+    context = assembler.build_context(
+        [
+            SimpleNamespace(rows=[{
+                "T_FeeAll": "400.00", "T_FeeIn": "0.00",
+                "T_FeeOut": "400.00", "T_FundPay": "0.00",
+                "T_SelfPayAll": "400.00", "T_SelfPay1": "0.00",
+                "T_SelfPay2": "0.00", "T_PersonCountPay": "400.00",
+                "T_CashPay": "0.00",
+            }]),
+            SimpleNamespace(rows=[{
+                "ItemName": "范围外检查项目", "Fee": "400.00",
+                "FeeIn": "0.00", "FeeOut": "400.00",
+                "FeeItem_SelfPay2": "0.00",
+            }]),
+        ],
+        "personal-liability-explanation",
+    )
+    return assembler.execute(context, profile_id="personal-liability-explanation")
+
+
+def test_personal_liability_includes_out_of_scope_cost_without_false_anomaly():
+    result = _all_out_of_scope_personal_liability_result()
+
+    assert "差异 400.00 元 待人工核对" not in result.summary
+    assert not any("统筹自付低于" in item for item in result.uncertainties)
+    assert (
+        "个人支付总金额 400.00 元 = 个人自付一 0.00 元"
+        " + 医保范围外金额 400.00 元" in result.summary
+    )
+    assert "个人账户支付 400.00 元 + 现金支付 0.00 元" in result.summary
+
+
+def test_personal_liability_keeps_out_of_scope_items_without_self_pay_two():
+    result = _all_out_of_scope_personal_liability_result()
+
+    assert "范围外检查项目" in result.summary
+    assert "医保范围外金额=400.00" in result.summary
+
+
 def test_personal_liability_queries_summary_and_fee_item_breakdown():
     assembler = OutpatientSettlementVerifierAssembler()
 

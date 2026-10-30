@@ -58,6 +58,7 @@ from src.runtime.policy_qa.fee_decomposition.params_employee_outpatient_special 
 )
 from src.runtime.policy_qa.fee_decomposition.reconciliation import (
     coverage_counts,
+    identity_calculation,
     identity_field,
     overall_reconciliation_status,
     reconcile_field,
@@ -89,6 +90,7 @@ _FIELD_LABELS = {
     "YBN": "医保内费用",
     "YBW": "医保外费用",
     "GRZIFTW": "先行自付（明细汇总）",
+    "GRZIF1": "个人支付自付（一）金额",
     "YBNQFJE": "本次起付金额",
     "TCZHF": "统筹基金支付",
     "TCZIF": "统筹自付",
@@ -214,7 +216,7 @@ def _decompose_deductible(
         return _DeductibleOutcome(None, None, None, "unavailable", BranchOutcome.BLOCKED,
                                   "UPSTREAM_BASE_MISSING", tuple(branches), (), tuple(uncertainties))
 
-    status = ctx.evidence_status
+    status = "confirmed" if ctx.is_confirmed("deductible_standard", "prior_cycle_deductible_paid") else ctx.evidence_status
     branches.append(BranchTrace(
         step_id="deductible.cycle_context", module_id="deductible", scope_ref="settlement",
         condition=BranchCondition("cycle_evidence", "结算周期/年度累计证据状态", "eq",
@@ -336,6 +338,11 @@ def _split_deductible(
         unrounded_result=decimal_to_str(paid),
         rounding_rule="not_applicable（min/max 运算，无取整）",
         result=decimal_to_str(paid)))
+    calcs.append(CalculationRecord(
+        calculation_id="calc.deductible.copay_base", formula_id="copay_base_v1", formula_version="v1",
+        operands=(CalculationOperand("calc.detail.total_in_scope", decimal_to_str(in_scope)),
+                  CalculationOperand("calc.deductible.split", decimal_to_str(paid))),
+        result=decimal_to_str(in_scope - paid), rounding_rule="not_applicable"))
     return paid
 
 
@@ -382,6 +389,9 @@ def _compute_funds(
     person_kind: PersonKind,
     institution_level: str | None,
     deductible: _DeductibleOutcome,
+    *,
+    pool_self_pay_reduction: Decimal = Decimal("0"),
+    large_self_pay_reduction: Decimal = Decimal("0"),
 ) -> _FundOutcome:
     """统筹分段支付 + 统筹封顶 + 大额互助（跨段用交集公式）。"""
     branches: list[BranchTrace] = []
@@ -454,9 +464,11 @@ def _compute_funds(
     paid = deductible.deductible_paid if deductible.deductible_paid is not None else Decimal("0")
     d_floor = deductible.deductible_standard if deductible.deductible_standard is not None else paid
     prior_in_scope = snapshot.cycle.prior_cycle_in_scope_total
-    exact_coordinate = (snapshot.cycle.evidence_status == "confirmed"
-                        and prior_in_scope is not None)
+    exact_coordinate = snapshot.cycle.is_confirmed("prior_cycle_in_scope_total")
+    if exact_coordinate:
+        assert prior_in_scope is not None
     c0 = prior_in_scope if exact_coordinate else max(d_floor - paid, Decimal("0"))
+    assert c0 is not None
 
     # 坐标守卫（Issue #79 mz 套表评估口径）：坐标未确认且各段自付比例不完全相同时，
     # 唯一比例分配不可证明（与封顶「未跨界可证明才可算」同一原则），不按下界硬算
@@ -491,6 +503,13 @@ def _compute_funds(
 
     start = c0 + paid  # 共付段起点坐标
     end = start + copay_base
+    coordinate_ref = "calc.cycle_position_exact" if exact_coordinate else "calc.cycle_position_lower_bound"
+    calcs.append(CalculationRecord(
+        calculation_id=coordinate_ref, formula_id="cycle_coordinate_exact_v1" if exact_coordinate else "cycle_coordinate_lower_bound_v1",
+        formula_version="v1", result=decimal_to_str(c0), rounding_rule="not_applicable",
+        operands=(CalculationOperand("fact.cycle.prior_cycle_in_scope_total", decimal_to_str(c0)),) if exact_coordinate else (
+            CalculationOperand("fact.cycle.deductible_standard", decimal_to_str(d_floor)),
+            CalculationOperand("calc.deductible.paid", decimal_to_str(paid)))))
 
     # 逐段交集：a_i = max(0, min(end, upper) - max(start, lower))
     segment_amounts: list[tuple[str, Decimal, Decimal, str]] = []  # (seg, amount, self_ratio, rule_id)
@@ -500,9 +519,28 @@ def _compute_funds(
         hi = end if upper is None else min(end, upper)
         lo = max(start, lower)
         amount = max(Decimal("0"), hi - lo)
-        self_ratio = seg.employed_self_pay_ratio * factor
+        self_ratio = max(Decimal("0"), seg.employed_self_pay_ratio * factor - pool_self_pay_reduction)
+        branches.append(BranchTrace(
+            step_id=f"pool.segment.{seg.segment}.intersection", module_id="pool_fund", scope_ref="settlement",
+            condition=BranchCondition("segment_intersection", "本笔费用与分段区间交集", "gt", decimal_to_str(amount),
+                f"max(0,min({decimal_to_str(end)},{decimal_to_str(upper) if upper is not None else '无上限'})-max({decimal_to_str(start)},{decimal_to_str(lower)}))"),
+            outcome=BranchOutcome.TRUE if amount > 0 else BranchOutcome.FALSE,
+            input_refs=("calc.deductible.copay_base", coordinate_ref, "calc.deductible.paid"), rule_refs=(seg.rule_id,)))
         if amount > 0:
             segment_amounts.append((seg.segment, amount, self_ratio, seg.rule_id))
+            calcs.extend((
+                CalculationRecord(calculation_id=f"calc.pool.segment.{seg.rule_id}.base", formula_id="special_segment_base_v1", formula_version="v1",
+                    operands=(CalculationOperand(coordinate_ref, decimal_to_str(c0)),
+                              CalculationOperand("calc.deductible.paid", decimal_to_str(paid)),
+                              CalculationOperand("calc.deductible.copay_base", decimal_to_str(copay_base)),
+                              CalculationOperand(f"input.segment.{seg.segment}.lower", decimal_to_str(lower)),
+                              CalculationOperand(f"input.segment.{seg.segment}.upper", decimal_to_str(upper) if upper is not None else "无上限")),
+                    result=decimal_to_str(amount), rounding_rule="not_applicable"),
+                CalculationRecord(calculation_id=f"calc.pool.segment.{seg.rule_id}.self_ratio", formula_id="special_segment_self_ratio_v1", formula_version="v1",
+                    operands=(CalculationOperand(f"rule.{seg.rule_id}", decimal_to_str(seg.employed_self_pay_ratio)),
+                              CalculationOperand(f"rule.{factor_rule}" if factor_rule else "input.employed.factor", decimal_to_str(factor)),
+                              CalculationOperand("rule.issue82.pool_self_pay_reduction", decimal_to_str(pool_self_pay_reduction))),
+                    result=decimal_to_str(self_ratio), rounding_rule="not_applicable")))
 
     # 逐段取整后求和（逐段/汇总取整层级 ESP-RND-001 待确认，如实标注）
     pool_pay = Decimal("0")
@@ -513,6 +551,8 @@ def _compute_funds(
             "calc.cycle_position_exact" if exact_coordinate
             else "calc.cycle_position_lower_bound", decimal_to_str(c0)),
     ]
+    if pool_self_pay_reduction:
+        operands.append(CalculationOperand("rule.issue82.pool_self_pay_reduction", decimal_to_str(pool_self_pay_reduction)))
     unrounded_total = Decimal("0")
     for seg_name, amount, self_ratio, rule_id in segment_amounts:
         unrounded = amount * (Decimal("1") - self_ratio)
@@ -520,8 +560,8 @@ def _compute_funds(
         pool_pay += pay_i
         pool_base += amount
         unrounded_total += unrounded
-        operands.append(CalculationOperand(f"rule.{rule_id}", decimal_to_str(amount)))
-        operands.append(CalculationOperand(f"rule.{rule_id}.self_ratio", decimal_to_str(self_ratio)))
+        operands.append(CalculationOperand(f"calc.pool.segment.{rule_id}.base", decimal_to_str(amount)))
+        operands.append(CalculationOperand(f"calc.pool.segment.{rule_id}.self_ratio", decimal_to_str(self_ratio)))
     if factor_rule is not None:
         operands.append(CalculationOperand(f"rule.{factor_rule}", decimal_to_str(factor)))
     calcs.append(CalculationRecord(
@@ -561,29 +601,11 @@ def _compute_funds(
     prior_pool = snapshot.cycle.prior_annual_pool_fund_payment
     large_base = Decimal("0")
     if prior_pool is None:
-        if pool_pay <= pool_cap:
-            branches.append(BranchTrace(
-                step_id="pool.cap_check", module_id="pool_fund", scope_ref="settlement",
-                condition=BranchCondition("pool_cap_check",
-                                          "prior 未知：按下界 prior=0 计算未超封顶（未跨界可证明）",
-                                          "le", decimal_to_str(pool_pay), decimal_to_str(pool_cap)),
-                outcome=BranchOutcome.TRUE, reason_code="CAP_CROSSING_PROVABLY_ABSENT",
-                input_refs=("fact.cycle.prior_pool_fund_payment",),
-                rule_refs=(cap_sel.param.rule_id,)))
-        else:
-            branches.append(BranchTrace(
-                step_id="pool.cap_check", module_id="pool_fund", scope_ref="settlement",
-                condition=BranchCondition("pool_cap_check",
-                                          "prior 未知且本笔统筹支付超封顶，跨界不可证否",
-                                          "le", decimal_to_str(pool_pay), decimal_to_str(pool_cap)),
-                outcome=BranchOutcome.BLOCKED, reason_code="POOL_CAP_CROSSING_UNVERIFIABLE",
-                rule_refs=(cap_sel.param.rule_id,)))
-            uncertainties.append(DecompositionUncertainty(
-                id="u.pool.cap_crossing", code="POOL_CAP_CROSSING_UNVERIFIABLE",
-                message="缺交易前年度统筹基金累计支付，且本笔统筹支付超封顶，封顶跨界不可证否，统筹/大额划分阻断。",
-                affected_fields=("TCZHF", "TCZIF", "DEGWYZHF", "DEGWYZIF")))
-            return _blocked_fund("POOL_CAP_CROSSING_UNVERIFIABLE", tuple(branches),
-                                 tuple(uncertainties))
+        uncertainties.append(DecompositionUncertainty(
+            id="u.pool.cap_crossing", code="POOL_CAP_CROSSING_UNVERIFIABLE",
+            message="缺交易前年度统筹基金累计支付，无法证明剩余额度；不以本笔低于封顶替代累计证据。",
+            affected_fields=("TCZHF", "TCZIF", "DEGWYZHF", "DEGWYZIF")))
+        return _blocked_fund("POOL_CAP_CROSSING_UNVERIFIABLE", tuple(branches), tuple(uncertainties))
     elif prior_pool >= pool_cap:
         # 周期开始时统筹累计已达封顶：全部进入大额（ESP-DED-004 同向）
         branches.append(BranchTrace(
@@ -619,15 +641,47 @@ def _compute_funds(
                              tuple(uncertainties))
 
     pool_self = pool_base - pool_pay
+    calcs.extend((
+        CalculationRecord(calculation_id="calc.pool.base", formula_id="special_pool_base_v1", formula_version="v1",
+            operands=(CalculationOperand("calc.deductible.copay_base", decimal_to_str(copay_base)),
+                      CalculationOperand("fact.cycle.prior_pool_fund_payment", decimal_to_str(prior_pool)),
+                      CalculationOperand(f"rule.{cap_sel.param.rule_id}", decimal_to_str(pool_cap))),
+            result=decimal_to_str(pool_base), rounding_rule="not_applicable"),
+        CalculationRecord(calculation_id="calc.large.base", formula_id="copay_base_v1", formula_version="v1",
+            operands=(CalculationOperand("calc.deductible.copay_base", decimal_to_str(copay_base)),
+                      CalculationOperand("calc.pool.base", decimal_to_str(pool_base))),
+            result=decimal_to_str(large_base), rounding_rule="not_applicable")))
+    calcs.append(CalculationRecord(
+        calculation_id="calc.pool.self_pay", formula_id="special_pool_self_pay_v1",
+        formula_version="v1",
+        operands=(
+            CalculationOperand("calc.pool.base", decimal_to_str(pool_base)),
+            CalculationOperand("calc.pool.segmented", decimal_to_str(pool_pay.copy_negate())),
+        ),
+        unrounded_result=decimal_to_str(pool_self),
+        rounding_rule="not_applicable（支付后差额，无取整）",
+        result=decimal_to_str(pool_self)))
 
     # 大额互助：封顶以上部分按在职 85%/退休 80%
     if large_base == 0:
+        # 零基数同样留痕基金支付计算（与 calc.large.self_pay 零值记录对称）：
+        # DEGWYZHF 的 independent_recalculation 必须有计算记录支撑，
+        # 否则公开投影"按规则重算 0 元"与结论"未独立重算"互相矛盾。
+        calcs.append(CalculationRecord(
+            calculation_id="calc.large.settle", formula_id="special_large_settle_zero_v1", formula_version="v1",
+            operands=(CalculationOperand("calc.large.base", decimal_to_str(large_base)),),
+            result="0", rounding_rule="not_applicable"))
+        calcs.append(CalculationRecord(
+            calculation_id="calc.large.self_pay", formula_id="special_large_self_pay_zero_v1", formula_version="v1",
+            operands=(CalculationOperand("calc.large.base", decimal_to_str(large_base)),),
+            result="0", rounding_rule="not_applicable"))
         branches.append(BranchTrace(
             step_id="large.enter", module_id="large_fund", scope_ref="settlement",
             condition=BranchCondition("large_enter", "存在封顶以上费用进入大额互助", "gt",
                                       "0", "0"),
             outcome=BranchOutcome.FALSE, reason_code="BELOW_POOL_CAP",
-            rule_refs=("ESP-LGP-002", "ESP-LGP-003")))
+            rule_refs=("ESP-LGP-002", "ESP-LGP-003"),
+            calculation_refs=("calc.large.settle", "calc.large.self_pay")))
         return _FundOutcome(pool_base, pool_pay, pool_self, Decimal("0"), Decimal("0"),
                             Decimal("0"), BranchOutcome.TRUE, None,
                             tuple(branches), tuple(calcs), tuple(uncertainties))
@@ -646,7 +700,7 @@ def _compute_funds(
             message="大额互助支付比例不能确定。", affected_fields=("DEGWYZHF", "DEGWYZIF")))
         return _blocked_fund(rate_sel.reason_code or "PARAM_VERSION_NOT_FOUND",
                              tuple(branches), tuple(uncertainties))
-    large_rate = rate_sel.param.ratio
+    large_rate = min(Decimal("1"), rate_sel.param.ratio + large_self_pay_reduction)
 
     large_unrounded = large_base * large_rate
     large_pay = apply_rounding(large_unrounded, rounding)
@@ -668,13 +722,11 @@ def _compute_funds(
     large_cap = lcap_sel.param.value
     prior_large = snapshot.cycle.prior_annual_large_fund_payment
     if prior_large is None:
-        if large_pay > large_cap:
-            uncertainties.append(DecompositionUncertainty(
-                id="u.large.cap_crossing", code="LARGE_CAP_CROSSING_UNVERIFIABLE",
-                message="缺交易前年度大额基金累计支付，且本笔大额支付超封顶，跨界不可证否。",
-                affected_fields=("DEGWYZHF", "DEGWYZIF")))
-            return _blocked_fund("LARGE_CAP_CROSSING_UNVERIFIABLE", tuple(branches),
-                                 tuple(uncertainties))
+        uncertainties.append(DecompositionUncertainty(
+            id="u.large.cap_crossing", code="LARGE_CAP_CROSSING_UNVERIFIABLE",
+            message="缺交易前年度大额基金累计支付，无法证明剩余额度。",
+            affected_fields=("DEGWYZHF", "DEGWYZIF")))
+        return _blocked_fund("LARGE_CAP_CROSSING_UNVERIFIABLE", tuple(branches), tuple(uncertainties))
     elif prior_large + large_pay > large_cap:
         uncertainties.append(DecompositionUncertainty(
             id="u.large.cap_split", code="LARGE_CAP_CROSSING_SPLIT_UNCONFIRMED",
@@ -689,10 +741,20 @@ def _compute_funds(
         operands=(
             CalculationOperand("calc.large.base", decimal_to_str(large_base)),
             CalculationOperand(f"rule.{rate_sel.param.rule_id}", decimal_to_str(large_rate)),
+            CalculationOperand("rule.issue82.large_self_pay_reduction", decimal_to_str(large_self_pay_reduction)),
         ),
         unrounded_result=decimal_to_str(large_unrounded),
         rounding_rule=f"explicit:{rounding.value}(ESP-RND-001 待确认)",
         result=decimal_to_str(large_pay)))
+    calcs.append(CalculationRecord(
+        calculation_id="calc.large.self_pay", formula_id="big_self_pay_v1", formula_version="v1",
+        operands=(
+            CalculationOperand("calc.large.base", decimal_to_str(large_base)),
+            CalculationOperand("calc.large.settle", decimal_to_str(large_pay.copy_negate())),
+        ),
+        unrounded_result=decimal_to_str(large_self),
+        rounding_rule="not_applicable（支付后差额，无取整）",
+        result=decimal_to_str(large_self)))
     branches.append(BranchTrace(
         step_id="large.settle", module_id="large_fund", scope_ref="settlement",
         condition=BranchCondition("large_settle", "大额支付=B_large×比例", "formula",
@@ -867,6 +929,11 @@ def _retire_supplement(
         large_part = Decimal("0")
 
     amount = pool_part + large_part
+    calcs.append(CalculationRecord(
+        calculation_id="calc.rsup.amount", formula_id="special_retire_supplement_total_v1", formula_version="v1",
+        operands=(CalculationOperand("calc.rsup.pool", decimal_to_str(pool_part)),
+                  CalculationOperand("calc.rsup.large" if large_self_pay > 0 else "input.rsup.large_not_applicable", decimal_to_str(large_part))),
+        result=decimal_to_str(amount), rounding_rule="not_applicable"))
     branches.append(BranchTrace(
         step_id="rsup.amount", module_id=mid, scope_ref="settlement",
         condition=BranchCondition("rsup_amount", "R=统筹段自付×50%+大额段自付×比例", "formula",
@@ -988,6 +1055,19 @@ def _military_supplement(
                                     tuple(uncertainties))
         base_pool = funds.pool_self_pay - rsup.pool_part
         base_large = funds.large_self_pay - rsup.large_part
+        # 将已执行的减法记为实际依赖，避免军残公式只拿到无上游的中间值。
+        calcs.extend((
+            CalculationRecord(
+                calculation_id="calc.pool.self_pay_residual", formula_id="special_pool_self_pay_residual_v1", formula_version="v1",
+                operands=(CalculationOperand("calc.pool.self_pay", decimal_to_str(funds.pool_self_pay)),
+                          CalculationOperand("calc.rsup.pool", decimal_to_str(rsup.pool_part.copy_negate()))),
+                result=decimal_to_str(base_pool), rounding_rule="not_applicable"),
+            CalculationRecord(
+                calculation_id="calc.large.self_pay_residual", formula_id="special_large_self_pay_residual_v1", formula_version="v1",
+                operands=(CalculationOperand("calc.large.self_pay", decimal_to_str(funds.large_self_pay)),
+                          CalculationOperand("calc.rsup.large" if funds.large_self_pay > 0 else "input.rsup.large_not_applicable",
+                                             decimal_to_str(rsup.large_part.copy_negate()))),
+                result=decimal_to_str(base_large), rounding_rule="not_applicable")))
         base_note = "退休：剩余自付=自付-退休补助"
     else:
         base_pool = funds.pool_self_pay
@@ -1007,8 +1087,8 @@ def _military_supplement(
         formula_version="v1",
         operands=(
             CalculationOperand("calc.deductible.paid", decimal_to_str(base_ded)),
-            CalculationOperand("calc.pool.self_pay_residual", decimal_to_str(base_pool)),
-            CalculationOperand("calc.large.self_pay_residual", decimal_to_str(base_large)),
+            CalculationOperand("calc.pool.self_pay_residual" if person_kind == PersonKind.RETIRED else "calc.pool.self_pay", decimal_to_str(base_pool)),
+            CalculationOperand("calc.large.self_pay_residual" if person_kind == PersonKind.RETIRED else "calc.large.self_pay", decimal_to_str(base_large)),
             CalculationOperand(f"rule.{rate_sel.param.rule_id}", decimal_to_str(ratio)),
         ),
         unrounded_result=decimal_to_str(ded_unrounded + pool_unrounded + large_unrounded),
@@ -1131,6 +1211,9 @@ def _public_medical_supplement(
 
     paid = deductible.deductible_paid
     copay_base = deductible.copay_base
+    assert paid is not None and copay_base is not None
+    assert funds.pool_pay is not None and funds.large_pay is not None
+    assert rsup_amount is not None and dvet.amount is not None
     a = dvet.deductible_ratio
     c = _PMED_BELOW_TARGET[person_kind]
     d = _PMED_ABOVE_TARGET[person_kind]
@@ -1201,10 +1284,12 @@ def _empty_result(
 
 def _base_citations(snapshot: OutpatientSpecialSnapshot) -> list[DecompositionCitation]:
     """基础证据引用：码值映射（实测待码表确认）与关键事实。"""
+    code_param = try_get_param("ESP-CODE-003")
+    assert code_param is not None
     return [
         DecompositionCitation(
             id="rule.ESP-CODE-003", kind="policy_document",
-            ref=try_get_param("ESP-CODE-003").source, value="ESP-CODE-003",
+            ref=code_param.source, value="ESP-CODE-003",
             approval_status="实测待码表确认"),
         DecompositionCitation(
             id="rule.h_level_codes.issue78_special", kind="issue_note",
@@ -1221,18 +1306,20 @@ def _base_citations(snapshot: OutpatientSpecialSnapshot) -> list[DecompositionCi
             value=snapshot.institution.h_level),
         DecompositionCitation(
             id="fact.settlement.settle_date", kind="settlement_fact",
-            ref=f"snapshot:{snapshot.settlement_ref}/yb_zyjyxx/jyrq",
+            ref=f"snapshot:{snapshot.settlement_ref}/yb_mzjyxx/jyrq",
             value=snapshot.settle_date.isoformat()),
         DecompositionCitation(
             id="fact.cycle_context", kind="settlement_fact",
             ref=f"snapshot:{snapshot.settlement_ref}/cycle_context",
             value=snapshot.cycle.evidence_status,
-            values=([snapshot.cycle.evidence_note] if snapshot.cycle.evidence_note else [])),
+            values=((snapshot.cycle.evidence_note,) if snapshot.cycle.evidence_note else ())),
     ]
 
 
 def decompose_employee_outpatient_special(
     snapshot: OutpatientSpecialSnapshot,
+    *,
+    _fixed_quota: bool = False,
 ) -> SettlementDecompositionResult:
     """职工门特（门诊特殊病，视同住院）费用分解主流程。"""
     branches: list[BranchTrace] = []
@@ -1298,14 +1385,22 @@ def decompose_employee_outpatient_special(
 
     # 4. 明细汇总核对（ybnje/ybwje 已是划分结果，本期不做目录独立重算）
     sums = _sum_details(snapshot)
-    calcs.append(CalculationRecord(
-        calculation_id="calc.detail.total_in_scope", formula_id="special_detail_sum_v1",
-        formula_version="v1",
-        operands=(CalculationOperand("fact.items.ybnje",
-                                     decimal_to_str(sums.total_in_scope)
-                                     if sums.total_in_scope is not None else "incomplete"),),
-        unrounded_result=None, rounding_rule="not_applicable（求和，无取整）",
-        result=decimal_to_str(sums.total_in_scope) if sums.total_in_scope is not None else None))
+    def _detail_sum(calculation_id: str, formula_id: str, ref: str, total):
+        return CalculationRecord(
+            calculation_id=calculation_id, formula_id=formula_id, formula_version="v1",
+            operands=(CalculationOperand(ref, decimal_to_str(total) if total is not None else "incomplete"),),
+            unrounded_result=None, rounding_rule="not_applicable（求和，无取整）",
+            result=decimal_to_str(total) if total is not None else None)
+
+    calcs.append(_detail_sum("calc.detail.total_in_scope", "special_detail_sum_v1",
+                             "fact.items.ybnje", sums.total_in_scope))
+    # 明细逐行合计：总费用/医保外/先行自付二，供字段独立重算（原先只有医保内合计）
+    calcs.append(_detail_sum("calc.detail.total_fee", "special_detail_fee_sum_v1",
+                             "fact.items.zje", sums.total_fee))
+    calcs.append(_detail_sum("calc.detail.total_out_scope", "special_detail_out_sum_v1",
+                             "fact.items.ybwje", sums.total_out_scope))
+    calcs.append(_detail_sum("calc.detail.total_advance", "special_detail_advance_sum_v1",
+                             "fact.items.grziftw", sums.total_advance))
     branches.append(BranchTrace(
         step_id="detail.aggregation", module_id="detail_aggregation", scope_ref="settlement",
         condition=BranchCondition("detail_sums", "明细汇总完整性（zje/ybnje/ybwje/grziftw）", "not_null",
@@ -1328,10 +1423,19 @@ def decompose_employee_outpatient_special(
     uncertainties.extend(deductible.uncertainties)
 
     # 6. 统筹分段 + 封顶 + 大额互助
-    funds = _compute_funds(snapshot, person_kind, institution_level, deductible)
+    funds = _compute_funds(snapshot, person_kind, institution_level, deductible,
+        pool_self_pay_reduction=Decimal("0.02") if _fixed_quota else Decimal("0"),
+        large_self_pay_reduction=Decimal("0.05") if _fixed_quota else Decimal("0"))
     branches.extend(funds.branches)
     calcs.extend(funds.calculations)
     uncertainties.extend(funds.uncertainties)
+    patient_funds = funds
+    if _fixed_quota:
+        from src.runtime.policy_qa.fee_decomposition.employee_special_fixed_kidney import compute_quota_hospital_funds
+        funds = compute_quota_hospital_funds(snapshot, deductible, patient_funds)
+        branches.extend(funds.branches)
+        calcs.extend(funds.calculations)
+        uncertainties.extend(funds.uncertainties)
 
     # 7. 退休补充保险补助（ESP-RSUP）
     rsup = _retire_supplement(snapshot, person_kind, funds.pool_self_pay, funds.large_self_pay,
@@ -1341,7 +1445,7 @@ def decompose_employee_outpatient_special(
     uncertainties.extend(rsup.uncertainties)
 
     # 8. 军残/公疗：资格字段已映射（Issue #79 mz 套表 cjjrdj/gwydybz 候选口径）→ 独立计算；
-    # 未映射（zy 套表流程）→ 保持 observed_only，账面非零追加 uncertainty
+    # 未映射→ 保持 observed_only，账面非零追加 uncertainty
     obs = snapshot.observed
     if snapshot.person.military_grade is not None \
             or snapshot.person.military_grade_raw is not None:
@@ -1368,7 +1472,16 @@ def decompose_employee_outpatient_special(
     if snapshot.person.civil_medical_eligible is not None:
         if dvet is None:
             raise AssertionError("公疗计算依赖军残结果，军残未计算时公疗资格不应已映射")
-        pmed = _public_medical_supplement(snapshot, person_kind, deductible, funds, rsup, dvet)
+        public_deductible, public_funds = deductible, funds
+        if _fixed_quota and snapshot.kidney_fixed_quota is not None:
+            from dataclasses import replace
+            quota = snapshot.kidney_fixed_quota.quota_amount
+            if quota is not None and sums.total_in_scope is not None and deductible.deductible_paid is not None:
+                public_base = min(sums.total_in_scope, quota)
+                public_deductible = replace(deductible, copay_base=max(Decimal("0"), public_base - deductible.deductible_paid))
+                if sums.total_in_scope < quota:
+                    public_funds = patient_funds
+        pmed = _public_medical_supplement(snapshot, person_kind, public_deductible, public_funds, rsup, dvet)
         branches.extend(pmed.branches)
         calcs.extend(pmed.calculations)
         uncertainties.extend(pmed.uncertainties)
@@ -1409,9 +1522,51 @@ def decompose_employee_outpatient_special(
                 value=rule_id, approval_status=param.confirmation_status))
 
     # 10. 逐字段核对（含账面恒等式）
-    fields, identity_uncertainties = _build_fields(snapshot, sums, deductible, funds, rsup,
-                                                   dvet, pmed)
+    fields, identity_uncertainties, identity_calcs = _build_fields(snapshot, sums, deductible,
+                                                                   funds, rsup, dvet, pmed)
     uncertainties.extend(identity_uncertainties)
+    calcs.extend(identity_calcs)
+    from src.runtime.policy_qa.fee_decomposition.secondary_coverage import decompose_secondary_coverage
+    components = (deductible.deductible_paid, funds.pool_self_pay, funds.large_self_pay,
+                  rsup.amount, dvet.amount if dvet is not None else None,
+                  pmed.amount if pmed is not None else None)
+    personal_base = None
+    known_components = tuple(value for value in components if value is not None)
+    if len(known_components) == len(components):
+        personal_base = max(Decimal("0"), sum(known_components[:3], Decimal("0")) - sum(known_components[3:], Decimal("0")))
+        calcs.append(CalculationRecord(
+            calculation_id="calc.secondary.personal_base", formula_id="secondary_personal_base_v1", formula_version="v1",
+            operands=tuple(CalculationOperand(ref, decimal_to_str(value)) for ref, value in zip(
+                ("calc.deductible.paid", "calc.pool.self_pay", "calc.large.self_pay", "calc.rsup.amount", "calc.dvet.amount", "calc.pmed.amount"), known_components)),
+            result=decimal_to_str(personal_base), rounding_rule="not_applicable"))
+    advance = Decimal("0") if sums.total_advance == 0 else snapshot.proportional_self_pay_2
+    secondary = decompose_secondary_coverage(snapshot, self_pay_1=personal_base,
+        proportional_self_pay_2=advance, total_out_scope=sums.total_out_scope)
+    fields.extend(secondary.fields)
+    branches.extend(secondary.branches)
+    calcs.extend(secondary.calculations)
+    uncertainties.extend(secondary.uncertainties)
+    citations.extend(secondary.citations)
+    if _fixed_quota:
+        from src.runtime.policy_qa.fee_decomposition.employee_special_fixed_kidney import quota_reconciliations
+        extra_fields, extra_calcs, extra_uncertainties = quota_reconciliations(
+            snapshot, deductible, patient_funds, funds, rsup, dvet, pmed, secondary)
+        fields.extend(extra_fields)
+        calcs.extend(extra_calcs)
+        uncertainties.extend(extra_uncertainties)
+        from dataclasses import replace
+        dependent_fields = {"TCZHF", "DEGWYZHF"}
+        quota_context = snapshot.kidney_fixed_quota
+        assert quota_context is not None
+        if snapshot.person.civil_medical_eligible is not False and (
+            quota_context.quota_amount is None or sums.total_in_scope is None
+            or sums.total_in_scope > quota_context.quota_amount):
+            dependent_fields.update(("GFYLBCHBX", "BIG_ILL_PAY", "FEEIN_DB_PAY", "FEEOUT_DB_PAY",
+                "CIVIL_IN", "FEEIN_MAF_PAY", "FEEOUT_MAF_PAY", "PERSON_PAYABLE"))
+        fields = [replace(field, check_type=CheckType.IDENTITY_CHECK,
+                          calculation_refs=("calc.fixed.hospital_fund",) if field.field_code in ("TCZHF", "DEGWYZHF") else field.calculation_refs,
+                          uncertainty_refs=(*field.uncertainty_refs, "u.fixed.quota"))
+                  if field.field_code in dependent_fields else field for field in fields]
     recon_status = overall_reconciliation_status(tuple(fields))
 
     # 11. 总体执行状态：unknown/blocked 分支、明细不完整、非 confirmed 周期口径 → partial
@@ -1421,6 +1576,8 @@ def decompose_employee_outpatient_special(
     execution = ("complete"
                  if (sums.total_in_scope is not None and not has_unknown and not assumption_caliber)
                  else "partial")
+    if _fixed_quota:
+        execution = "partial"  # 定额日标准和管理目录待核定，条件输入不能升级为完整解释。
 
     cov = coverage_counts(tuple(fields))
     return SettlementDecompositionResult(
@@ -1442,6 +1599,42 @@ def decompose_employee_outpatient_special(
     )
 
 
+def _self_pay_1_entry(
+    deductible: "_DeductibleOutcome",
+    funds: "_FundOutcome",
+    obs,
+    calcs: list[CalculationRecord],
+) -> FieldReconciliation:
+    """个人支付自付（一）金额 = 起付承担 + 统筹自付 + 大额自付（项目付费单无可用 grzif1 账面值）。
+
+    grzif1 列在已核样本中未维护（实测 567/675/688 均为 0），查询层未取该列，
+    无独立账面核对目标：observed=None 诚实降级为 not_verifiable，
+    calculated 保留本单分量合计并按加法留痕，不把自算值当 observed 自比自。
+    """
+    parts = (deductible.deductible_paid, funds.pool_self_pay, funds.large_self_pay)
+    if all(value is not None for value in parts):
+        total = sum(parts, Decimal("0"))  # type: ignore[arg-type]
+        calcs.append(CalculationRecord(
+            calculation_id="calc.self_pay_1.parts",
+            formula_id="self_pay_1_components_v1",
+            formula_version="v1",
+            operands=(
+                CalculationOperand("calc.deductible.split", decimal_to_str(deductible.deductible_paid)),
+                CalculationOperand("calc.pool.self_pay", decimal_to_str(funds.pool_self_pay)),
+                CalculationOperand("calc.large.self_pay", decimal_to_str(funds.large_self_pay)),
+            ),
+            unrounded_result=decimal_to_str(total),
+            rounding_rule="not_applicable（加法，无取整）",
+            result=decimal_to_str(total)))
+        return reconcile_field(
+            "GRZIF1", _FIELD_LABELS["GRZIF1"], CheckType.INDEPENDENT_RECALCULATION,
+            total, None, BranchOutcome.TRUE, "SELF_PAY_1_BOOK_COLUMN_UNMAINTAINED",
+            calculation_refs=("calc.self_pay_1.parts",))
+    return reconcile_field(
+        "GRZIF1", _FIELD_LABELS["GRZIF1"], CheckType.INDEPENDENT_RECALCULATION,
+        None, None, BranchOutcome.UNKNOWN, "SELF_PAY_1_COMPONENTS_MISSING")
+
+
 def _build_fields(
     snapshot: OutpatientSpecialSnapshot,
     sums: _DetailSums,
@@ -1450,10 +1643,27 @@ def _build_fields(
     rsup: _RetireOutcome,
     dvet: _MilitaryOutcome | None,
     pmed: _PmedOutcome | None,
-) -> tuple[list[FieldReconciliation], list[DecompositionUncertainty]]:
-    """按核对矩阵生成全部目标字段结果项（含零值与缺失值；观测值仅作核对目标）。"""
+) -> tuple[list[FieldReconciliation], list[DecompositionUncertainty], list[CalculationRecord]]:
+    """按核对矩阵生成全部目标字段结果项（含零值与缺失值；观测值仅作核对目标）。
+
+    返回 (字段结果, 恒等式不确定性, 恒等式轨迹记录)；轨迹只记录本来已执行的加减。
+    """
     obs = snapshot.observed
     identity_uncertainties: list[DecompositionUncertainty] = []
+    identity_calcs: list[CalculationRecord] = []
+
+    def _identity(field_code, label, observed, operands, *, calculation_id, formula_id):
+        """账面恒等字段 + 轨迹记录（解释投影 1.1）；分量缺失时不产生记录。"""
+        components = tuple(value for _, value in operands)
+        if observed is None or any(v is None for v in components):
+            return identity_field(field_code, label, observed, components)
+        calc = identity_calculation(
+            calculation_id, formula_id,
+            tuple(CalculationOperand(ref, decimal_to_str(value))
+                  for ref, value in operands if value is not None))
+        identity_calcs.append(calc)
+        return identity_field(field_code, label, observed, components,
+                              calculation_refs=(calc.calculation_id,))
 
     # 假设/条件输入口径的 uncertainty 引用（下游字段勾稽级标注）
     caliber_refs: list[str] = []
@@ -1466,7 +1676,8 @@ def _build_fields(
 
     entries: list[FieldReconciliation] = [
         reconcile_field("ZJE", _FIELD_LABELS["ZJE"], CheckType.DETAIL_AGGREGATION,
-                        sums.total_fee, obs.zje, BranchOutcome.TRUE),
+                        sums.total_fee, obs.zje, BranchOutcome.TRUE,
+                        calculation_refs=("calc.detail.total_fee",)),
         reconcile_field("YBN", _FIELD_LABELS["YBN"], CheckType.DETAIL_AGGREGATION,
                         sums.total_in_scope, obs.ybn,
                         BranchOutcome.TRUE if sums.total_in_scope is not None
@@ -1475,11 +1686,16 @@ def _build_fields(
         reconcile_field("YBW", _FIELD_LABELS["YBW"], CheckType.DETAIL_AGGREGATION,
                         sums.total_out_scope, obs.ybw,
                         BranchOutcome.TRUE if sums.total_out_scope is not None
-                        else BranchOutcome.UNKNOWN),
+                        else BranchOutcome.UNKNOWN,
+                        calculation_refs=("calc.detail.total_out_scope",)),
         reconcile_field("GRZIFTW", _FIELD_LABELS["GRZIFTW"], CheckType.DETAIL_AGGREGATION,
                         sums.total_advance, obs.grziftw,
                         BranchOutcome.TRUE if sums.total_advance is not None
-                        else BranchOutcome.UNKNOWN),
+                        else BranchOutcome.UNKNOWN,
+                        calculation_refs=("calc.detail.total_advance",)),
+        # 自付一：项目付费单的 grzif1 列未维护（定额结算才填），按本单独立计算
+        # 起付承担＋统筹自付＋大额自付 重算；不把未维护的列当核对目标。
+        _self_pay_1_entry(deductible, funds, obs, identity_calcs),
         # 起付：observed_book 路径计算值即账面条件输入，显式标注来源
         reconcile_field("YBNQFJE", _FIELD_LABELS["YBNQFJE"], CheckType.INDEPENDENT_RECALCULATION,
                         deductible.deductible_paid, obs.ybnqfje, deductible.outcome,
@@ -1492,15 +1708,16 @@ def _build_fields(
                         uncertainty_refs=tuple(caliber_refs)),
         reconcile_field("TCZIF", _FIELD_LABELS["TCZIF"], CheckType.INDEPENDENT_RECALCULATION,
                         funds.pool_self_pay, obs.tczif, funds.outcome, funds.reason_code,
-                        calculation_refs=("calc.pool.segmented",),
+                        calculation_refs=("calc.pool.self_pay",)
+                        if funds.pool_self_pay is not None else (),
                         uncertainty_refs=tuple(caliber_refs)),
         reconcile_field("DEGWYZHF", _FIELD_LABELS["DEGWYZHF"], CheckType.INDEPENDENT_RECALCULATION,
                         funds.large_pay, obs.degwyzhf, funds.outcome, funds.reason_code,
-                        calculation_refs=("calc.large.settle",) if funds.large_base else (),
+                        calculation_refs=("calc.large.settle",) if funds.large_pay is not None else (),
                         uncertainty_refs=tuple(caliber_refs)),
         reconcile_field("DEGWYZIF", _FIELD_LABELS["DEGWYZIF"], CheckType.INDEPENDENT_RECALCULATION,
                         funds.large_self_pay, obs.degwyzif, funds.outcome, funds.reason_code,
-                        calculation_refs=("calc.large.settle",) if funds.large_base else (),
+                        calculation_refs=("calc.large.self_pay",) if funds.large_self_pay is not None else (),
                         uncertainty_refs=tuple(caliber_refs)),
         reconcile_field("BCZHF", _FIELD_LABELS["BCZHF"], CheckType.INDEPENDENT_RECALCULATION,
                         rsup.amount, obs.bczhf, rsup.outcome, rsup.reason_code,
@@ -1533,18 +1750,31 @@ def _build_fields(
             "PMED_ELIGIBILITY_FIELD_UNMAPPED"))
 
     # 账面恒等式 1：zje = ybn + ybw（只证明账面字段间等式，不证明字段原因）
-    entries.append(identity_field("ZJE.identity", _FIELD_LABELS["ZJE"] + "（账面恒等 医保内+医保外）",
-                                  obs.zje, (obs.ybn, obs.ybw)))
+    entries.append(_identity("ZJE.identity", _FIELD_LABELS["ZJE"] + "（账面恒等 医保内+医保外）",
+                             obs.zje, (("YBN", obs.ybn), ("YBW", obs.ybw)),
+                             calculation_id="calc.identity.zje",
+                             formula_id="identity_fee_all_v1"))
     # 账面恒等式 2：xjzf + zhzf = zje - tczhf - degwyzhf - bczhf - jczhf - gfylbchbx
     channel_sum = (obs.xjzf + obs.zhzf) if (obs.xjzf is not None and obs.zhzf is not None) else None
-    cash_identity = identity_field(
+    fund_deductions = (
+        ("TCZHF", obs.tczhf), ("DEGWYZHF", obs.degwyzhf), ("BCZHF", obs.bczhf),
+        ("JCZHF", obs.jczhf), ("GFYLBCHBX", obs.gfylbchbx), ("BIG_ILL_PAY", obs.big_ill_pay),
+        ("CIVIL_IN", obs.civil_in), ("RETIRE_OFFICER_PAY", obs.retire_officer_pay))
+    if snapshot.kidney_fixed_quota is not None:
+        # 肾定额口径：恒等基数为医院定额+医保外费用（与实际总费用口径分开）
+        quota = snapshot.kidney_fixed_quota.quota_amount
+        identity_operands: tuple[tuple[str, Decimal | None], ...] = (
+            (("QUOTA_AMOUNT", quota), ("YBW", obs.ybw))
+            + tuple((ref, v.copy_negate() if v is not None else None) for ref, v in fund_deductions))
+    else:
+        identity_operands = (
+            (("ZJE", obs.zje),)
+            + tuple((ref, v.copy_negate() if v is not None else None) for ref, v in fund_deductions))
+    cash_identity = _identity(
         "XJZF.identity", "现金+账户支付（账面恒等：总费用-各基金支付）", channel_sum,
-        (obs.zje,
-         -obs.tczhf if obs.tczhf is not None else None,
-         -obs.degwyzhf if obs.degwyzhf is not None else None,
-         -obs.bczhf if obs.bczhf is not None else None,
-         -obs.jczhf if obs.jczhf is not None else None,
-         -obs.gfylbchbx if obs.gfylbchbx is not None else None))
+        identity_operands,
+        calculation_id="calc.identity.xjzf_channel",
+        formula_id="identity_xjzf_channel_v1")
     entries.append(cash_identity)
     if cash_identity.check_status.value == "mismatched" and cash_identity.difference is not None:
         identity_uncertainties.append(DecompositionUncertainty(
@@ -1558,4 +1788,4 @@ def _build_fields(
         entries.append(reconcile_field(
             code, _FIELD_LABELS[code], CheckType.DETAIL_AGGREGATION,
             None, value, BranchOutcome.UNKNOWN, "PAYMENT_CHANNEL_REPLAY_UNAVAILABLE"))
-    return entries, identity_uncertainties
+    return entries, identity_uncertainties, identity_calcs

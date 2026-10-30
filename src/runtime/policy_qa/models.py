@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -32,6 +33,7 @@ class PolicyQARequest:
     session_id: str | None = None
     user_id: str = ""
     role: str = ""
+    decomposition_chain: Literal["outpatient", "special"] | None = None
 
 
 class SuspendSessionRequest(BaseModel):

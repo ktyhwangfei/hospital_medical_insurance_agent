@@ -212,3 +212,36 @@ def test_query_flat_skips_group_with_no_connection():
     src._connect = lambda cfg: (connected.append(cfg["host"]), _FakeConn())[1]
     src.query(["o.m1", "o.m2"], context={"djh": 1})
     assert connected == ["h1"]  # 只连了存在的源
+
+
+def test_datasource_kind_marks_platform_pg_as_postgresql():
+    """#78：datasource_kind 供执行通道选方言；platform_pg → postgresql，其余 mssql。"""
+    meta = _FakeMeta({
+        "outpatient_postgres": {"enabled": True, "connection_config": {"kind": "platform_pg"}},
+        "bjybdb": {"enabled": True, "connection_config": {"host": "h", "database": "d"}},
+    })
+    src = _make_source_with_meta(meta)
+    assert src.datasource_kind("outpatient_postgres") == "postgresql"
+    assert src.datasource_kind("bjybdb") == "mssql"
+    assert src.datasource_kind("missing") == "mssql"
+
+
+def test_connect_dispatches_platform_pg_to_psycopg(monkeypatch):
+    """#78 缺陷复现：platform_pg 数据源此前被喂给 SQL Server 连接器（Guest 登录失败）。"""
+    import psycopg
+
+    src = _make_source_with_meta(_FakeMeta({}))
+    captured: dict = {}
+    sentinel = object()
+
+    def fake_connect(dsn, **kwargs):
+        captured["dsn"] = dsn
+        captured["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+
+    conn = src._connect({"kind": "platform_pg"})
+
+    assert conn is sentinel
+    assert captured["dsn"]  # 平台 PG 连接串（DATABASE_URL / POSTGRES_* 合成）

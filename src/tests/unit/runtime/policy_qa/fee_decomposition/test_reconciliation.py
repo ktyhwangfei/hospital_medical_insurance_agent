@@ -99,3 +99,39 @@ def test_coverage_counts():
         "amount_reconciled_count": 1,
         "observed_only_count": 1,
     }
+
+
+def test_decimal_to_str_preserves_negative_zero_sign():
+    # 负零必须带符号输出：恒等式/差额计算记录的减项取负后，
+    # 公式渲染层按值是否以 "-" 开头决定 ＋/－，丢符号会渲染成加号
+    from src.domain.insurance.fee_decomposition import decimal_to_str
+
+    assert decimal_to_str(Decimal("-0.00")) == "-0.00"
+    assert decimal_to_str(Decimal("0.00").copy_negate()) == "-0.00"
+    # 正常零不受影响
+    assert decimal_to_str(Decimal("0.00")) == "0.00"
+    assert decimal_to_str(Decimal("0")) == "0"
+    # 注意：一元取负 -Decimal("0.00") 在十进制上下文中等同 0-0.00，本身即丢符号，
+    # 因此减项取负一律用 copy_negate（见各链恒等式分量构造）
+    assert not (-Decimal("0.00")).is_signed()
+
+
+def test_identity_calculation_signed_zero_subtrahend_renders_minus():
+    # 恒等式减项为零（如大额互助支付 0.00）：分量取负必须保留符号，
+    # 计算记录与公开公式都渲染为减项而非"＋ 0.00"
+    from src.domain.insurance.fee_decomposition import CalculationOperand, decimal_to_str
+    from src.runtime.policy_qa.fee_decomposition.formula_text import calculation_formula
+    from src.runtime.policy_qa.fee_decomposition.reconciliation import identity_calculation
+
+    calc = identity_calculation(
+        "calc.identity.xjzf_channel", "identity_xjzf_channel_v1",
+        (CalculationOperand("ZJE", "6000.00"),
+         CalculationOperand("DEGWYZHF", decimal_to_str(Decimal("0.00").copy_negate()))))
+    assert calc.operands[1].value == "-0.00"
+    formula = calculation_formula(calc, [
+        {"display_name": "总费用", "value": "6000.00"},
+        {"display_name": "大额互助支付", "value": calc.operands[1].value},
+    ])
+    assert formula is not None
+    assert "－ 大额互助支付 0.00" in formula
+    assert "＋ 大额互助支付" not in formula

@@ -642,3 +642,192 @@ def test_policy_carrier_effective_interval_clips_revoked_and_future_metrics():
     assert planner.compile(_outpatient_query(
         "fee_item", ["item_fee"], group_by=["mz_fee_item.item_name"],
     ))
+
+
+# ── #78 缺陷修复：PG 数据源方言与传参（门诊 mzjyxx 已落 outpatient_postgres）──
+
+class _PgCursor:
+    """psycopg 风格游标：参数序列整体传入（非 splat）。"""
+
+    def __init__(self, rows, columns):
+        self._rows = rows
+        self.description = [(name,) for name in columns]
+        self.executed: list[tuple[str, object]] = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+    def fetchall(self):
+        return self._rows
+
+
+class _PgConnection:
+    def __init__(self, rows, columns):
+        self.cursor_instance = _PgCursor(rows, columns)
+        self.closed = False
+
+    def cursor(self):
+        return self.cursor_instance
+
+    def close(self):
+        self.closed = True
+
+
+def test_compile_postgresql_dialect_uses_percent_s_and_quoted_identifiers():
+    compiled = SemanticQueryPlanner(_outpatient_registry()).compile(
+        _outpatient_query("whole_settlement", ["total_amount"]),
+        dialect_kind="postgresql",
+    )
+    assert "%s" in compiled.sql
+    assert "?" not in compiled.sql
+    # PG 落地视图列名保留大小写，必须双引号包裹（AGENTS.md 已知陷阱）
+    assert '"T_TradeNo"' in compiled.sql or '"T_FeeAll"' in compiled.sql
+
+
+def test_execute_postgresql_datasource_compiles_pg_and_passes_params_as_sequence():
+    """缺陷复现：门诊语义查询模型 §9 后落 outpatient_postgres（PG），执行通道此前
+    固定 mssql qmark + pyodbc splat，psycopg 下无法运行（policy-qa 门诊追问
+    POLICY_QA_FAILED 的根因之一）。"""
+    conn = _PgConnection(rows=[(100.0, 1)], columns=["total_amount", "_anchor_count"])
+    service = SemanticQueryService(
+        _outpatient_registry(),
+        lambda _datasource_id: conn,
+        datasource_kind=lambda _datasource_id: "postgresql",
+    )
+
+    result = service.execute(_outpatient_query("whole_settlement", ["total_amount"]))
+
+    sql, params = conn.cursor_instance.executed[0]
+    assert "%s" in sql and "?" not in sql
+    assert isinstance(params, (list, tuple))  # psycopg 传参约定：参数序列整体传入
+    assert conn.closed is True
+    assert result.rows[0]["total_amount"] == 100.0
+
+
+def test_execute_without_kind_resolver_keeps_mssql_qmark_splat():
+    """未注入方言解析时保持 mssql 行为（住院等存量链路不回归）。"""
+    executed: list[tuple] = []
+
+    class Cursor:
+        description = [("total_amount",), ("_anchor_count",)]
+
+        def execute(self, sql, *values):
+            executed.append((sql, values))
+
+        def fetchall(self):
+            return [(100.0, 1)]
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def close(self):
+            pass
+
+    service = SemanticQueryService(_outpatient_registry(), lambda _ds: Connection())
+    result = service.execute(_outpatient_query("whole_settlement", ["total_amount"]))
+
+    sql, values = executed[0]
+    assert "?" in sql and "%s" not in sql
+    assert "SET-001" in values
+    assert result.rows[0]["total_amount"] == 100.0
+
+
+# ── #78：执行期数据源偏好（默认 SQL Server 直库，PG 落地库为后续演进）──
+
+def _two_datasource_registry():
+    """mzjyxx 双版本：v1 落 SQL Server（o_Trade/o_FeeItem@bjybdb），
+    v2 落 PG 落地库（public.mz_trade/mz_fee_item@outpatient_postgres）。"""
+    registry = _outpatient_registry()
+    store = registry._store
+    v1 = store._object_versions["mzjyxx"][0]
+    pg_tables = {"mz_trade": "mz_trade", "mz_fee_item": "mz_fee_item"}
+    pg_datasets = [
+        item.model_copy(update={
+            "datasource_id": "outpatient_postgres",
+            "schema_name": "public",
+            "table_name": pg_tables[item.dataset_code],
+        })
+        for item in v1.datasets
+    ]
+    store.save_object_version(v1.model_copy(update={
+        "version_id": "mzjyxx-v2", "version": "2", "datasets": pg_datasets,
+    }))
+    return registry
+
+
+def _kind_resolver(datasource_id):
+    return "postgresql" if datasource_id == "outpatient_postgres" else "mssql"
+
+
+def test_execute_sqlserver_mode_prefers_latest_all_mssql_version():
+    """默认（sqlserver）：多版本时选数据集全落 SQL Server 的最近版本执行。"""
+    executed: list[tuple] = []
+
+    class Cursor:
+        description = [("total_amount",), ("_anchor_count",)]
+
+        def execute(self, sql, *values):
+            executed.append((sql, values))
+
+        def fetchall(self):
+            return [(100.0, 1)]
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def close(self):
+            pass
+
+    service = SemanticQueryService(
+        _two_datasource_registry(),
+        lambda _ds: Connection(),
+        datasource_kind=_kind_resolver,
+        datasource_mode="sqlserver",
+    )
+    result = service.execute(_outpatient_query("whole_settlement", ["total_amount"]))
+
+    sql = executed[0][0]
+    assert "o_Trade" in sql and "?" in sql  # v1（SQL Server）编译
+    assert "public" not in sql
+    assert result.rows[0]["total_amount"] == 100.0
+
+
+def test_execute_registry_mode_uses_latest_published_version():
+    """datasource_mode=registry：恢复按注册中心最新发布版本执行（含 PG 落地库）。"""
+    conn = _PgConnection(rows=[(100.0, 1)], columns=["total_amount", "_anchor_count"])
+    service = SemanticQueryService(
+        _two_datasource_registry(),
+        lambda _ds: conn,
+        datasource_kind=_kind_resolver,
+        datasource_mode="registry",
+    )
+    result = service.execute(_outpatient_query("whole_settlement", ["total_amount"]))
+
+    sql, params = conn.cursor_instance.executed[0]
+    assert "%s" in sql and "public" in sql  # v2（PG 落地库）编译
+    assert isinstance(params, list)
+    assert result.rows[0]["total_amount"] == 100.0
+
+
+def test_sqlserver_mode_falls_back_to_latest_when_no_mssql_version():
+    """全部版本都在 PG 时回落最新版（PG-only 模型不受影响）。"""
+    registry = _two_datasource_registry()
+    store = registry._store
+    v2 = store._object_versions["mzjyxx"][1]
+    # 把 v1 也改成 PG：两版全 PG，选择器只能回落最新
+    store._object_versions["mzjyxx"][0] = store._object_versions["mzjyxx"][1]
+
+    conn = _PgConnection(rows=[(100.0, 1)], columns=["total_amount", "_anchor_count"])
+    service = SemanticQueryService(
+        registry,
+        lambda _ds: conn,
+        datasource_kind=_kind_resolver,
+        datasource_mode="sqlserver",
+    )
+    result = service.execute(_outpatient_query("whole_settlement", ["total_amount"]))
+
+    sql, _params = conn.cursor_instance.executed[0]
+    assert "%s" in sql  # 回落最新（PG）版本
+    assert result.rows[0]["total_amount"] == 100.0

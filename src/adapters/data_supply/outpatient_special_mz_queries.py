@@ -1,17 +1,16 @@
 """职工门特·按项目付费费用分解事实快照读取适配器（Issue #79，门诊套表）。
 
-与 Issue #78 住院套表流程（``outpatient_special_queries.py``，yllb='16'）互补：
 Issue #79 明确门特·按项目付费走**门诊套表**（SQL Server bjybdb）：
 - ``dbo.yb_brdjxx`` 登记：键 djh；yllb='12'=门诊特殊病（ESP-CODE-001 候选扩展）；
 - ``dbo.yb_mzjyxx`` 结算：每 djh 恰好 1 行；fyfs='0'=项目付费（费用方式码表实测）；
 - ``dbo.yb_mzfymx`` 明细：djh+xh 行键；
 - ``dbo.yb_dyxxtsb`` 门特结算周期：bqqsrq/bqljybnje/bqqfje（交易后口径，医保中心侧数据，
-  含跨院累计——解决住院套表流程「周期上下文不可重建」缺口）；
+  含跨院累计）；
 - ``dbo.yb_dyxxnd`` 年度待遇：bnzqslj/bntczfje/bndezfje（交易后口径）；
 - 资格字段：cjjrdj 军残等级、gwydybz 公疗标志（0=享受/1=不享受，与红名单相反，
   Issue #79 手工验证结论）、cblb=61 社会化退休（退休补充类别候选映射）。
 
-约定与 ``outpatient_special_queries.py`` 一致：只接受注入的 PEP 249 连接、只读参数化
+读取约定：只接受注入的 PEP 249 连接、只读参数化
 单语句 SELECT、不 SELECT 身份证/姓名、全部返回 AdapterCallResult 不抛业务异常
 （``build_special_mz_snapshot`` 为纯组装函数，脏数据抛 ValueError 由服务层降级）。
 
@@ -24,16 +23,11 @@ Issue #79 明确门特·按项目付费走**门诊套表**（SQL Server bjybdb�
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
 
 from src.adapters.base.models import AdapterCallResult, AdapterCallStatus, DataQualityStatus
-from src.adapters.data_supply.outpatient_special_queries import (
-    _to_date,
-    _to_decimal,
-    _to_str,
-)
 from src.adapters.data_supply.settlement_record_queries import (
     _fetch_all,
     assert_read_only_select,
@@ -46,6 +40,7 @@ from src.domain.insurance.fee_decomposition import (
     SpecialInstitutionProfile,
     SpecialObservedAmounts,
     SpecialPersonProfile,
+    SecondaryCoverageContext,
 )
 
 #: 门特医疗类别码 / 险种码 / 项目付费费用方式码（Issue #79 实测候选口径，待码表确认）
@@ -59,6 +54,55 @@ _DEDUCTIBLE_SUBSEQUENT = Decimal("650")
 
 _SOURCE = "hospital_record_store"
 _CAPABILITY = "outpatient_special_mz_decomposition_snapshot"
+
+
+def load_special_institution_level(conn: Any, hospital_code: str) -> AdapterCallResult:
+    """机构 H_LEVEL 读取（m_institution）。0 条/多条均不取值（h_level=None + note）。"""
+    sql = "SELECT H_CODE, H_LEVEL FROM dbo.m_institution WHERE H_CODE = ?"
+    assert_read_only_select(sql)
+    try:
+        rows = _fetch_all(conn, sql, [hospital_code])
+    except Exception as exc:  # noqa: BLE001
+        return _failed(f"机构等级读取失败: {exc}")
+    if len(rows) != 1:
+        note = ("机构表未命中" if not rows else f"机构表命中 {len(rows)} 条（歧义，未取首条）")
+        return _result(
+            {"h_level": None, "row_count": len(rows), "note": note + "；机构等级按未知处理"},
+            quality=DataQualityStatus.MISSING, message=note,
+        )
+    raw = rows[0].get("h_level")
+    return _result({
+        "h_level": (None if raw is None else str(raw).strip()),
+        "row_count": 1,
+    })
+
+
+def _to_decimal(value: Any) -> Decimal | None:
+    """金额构造不经过 float（设计 §9）；None/空串 → None（未知不是零）。"""
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    text = str(value).strip()
+    return Decimal(text) if text else None
+
+
+def _to_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    return date.fromisoformat(text[:10]) if text else None
+
+
+def _to_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _result(data: dict, *, quality: DataQualityStatus = DataQualityStatus.COMPLETE,
@@ -78,23 +122,30 @@ def _failed(message: str) -> AdapterCallResult:
 
 _REGISTRATION_COLUMNS = (
     "djh", "ryrq", "cblb", "csrq", "yllb", "FUND_TYPE", "tsbqsrq", "tsbjzrq",
-    "cjjrdj", "gwydybz",
+    "cjjrdj", "gwydybz", "CIVIL_TYPE", "RETIRE_OFFICER_FLAG", "tsb1", "tsb2", "tsb3", "SPEC_HOSP_FLAG",
 )
 
-_SETTLEMENT_COLUMNS = (
-    "djh", "jyrq", "fyfs", "zje", "ptybn", "ptybw", "tsbybn", "tsbybw",
-    "ybnqfje", "grziftw", "tczhf", "tczif", "degwyzhf", "degwyzif",
-    "bczhf", "jczhf", "gfylbchbx", "xjzf", "zhzf",
-)
+from src.config.settlement_templates import settlement_template_columns
+
+_SETTLEMENT_COLUMNS = tuple(dict.fromkeys((
+    'djh', 'jyrq', 'fyfs', 'jylsh',
+    *settlement_template_columns('employee_special', 'outpatient_settlement_table'),
+    *settlement_template_columns('resident_special', 'outpatient_settlement_table'),
+)))
 
 _FEE_ITEM_COLUMNS = (
     "djh", "xh", "xmdm", "xmmc", "sflb", "sfxmdj", "tsbbs",
     "dj", "sl", "zje", "ybnje", "ybwje", "grziftw", "fsrq",
+    # Issue #81 居民门特目录独立分解补充列（职工流程不消费，多读无副作用）：
+    # xmlb 项目类别（0=药品/1=诊疗/3=材料，与 o_FeeItem.ItemType 同构）；
+    # FEE_MEDIC_L/FEE_SP_SCALE 结算事实比例/限价（同 o_FeeItem.MEDIC_L/SP_SCALE 口径）
+    "xmlb", "FEE_MEDIC_L", "FEE_SP_SCALE",
 )
 
 _CYCLE_COLUMNS = ("djh", "fynd", "zqxh", "bqqsrq", "bqljybnje", "bqqfje")
 
-_ANNUAL_COLUMNS = ("djh", "fynd", "bnzqslj", "bnybnje", "bntczfje", "bndezfje", "bnmcjylsh")
+_ANNUAL_COLUMNS = ("djh", "fynd", "bnzqslj", "bnybnje", "bntczfje", "bndezfje", "bnmcjylsh",
+                   "BIG_ILL_SUM_IN", "BIG_ILL_SUM_PAY", "CIVIL_SUM_IN", "CIVIL_SUM_PAY")
 
 
 # ── 登记定位 ──────────────────────────────────────────────────
@@ -105,7 +156,10 @@ def locate_special_mz_registration(conn: Any, djh: str) -> AdapterCallResult:
     cols = ", ".join(_REGISTRATION_COLUMNS)
     sql = (
         f"SELECT {cols} FROM dbo.yb_brdjxx "
-        "WHERE djh = ? AND yllb = ? AND FUND_TYPE = ?"
+        "WHERE djh = ? AND yllb = ? AND FUND_TYPE = ? "
+        "AND COALESCE(tsb1,'') NOT IN ('503','504') "
+        "AND COALESCE(tsb2,'') NOT IN ('503','504') "
+        "AND COALESCE(tsb3,'') NOT IN ('503','504')"
     )
     assert_read_only_select(sql)
     try:
@@ -250,50 +304,136 @@ def derive_mz_cycle_context(
                           "周期与年度累计证据不足",
         ), tuple(notes)
 
-    # 交易后 → 交易前：各累计减去本笔发生额；任一推导为负即矛盾，降 unknown 不硬算
-    tsbybn = _to_decimal(settlement_row.get("tsbybn")) or Decimal("0")
-    ybnqfje = _to_decimal(settlement_row.get("ybnqfje")) or Decimal("0")
-    tczhf = _to_decimal(settlement_row.get("tczhf")) or Decimal("0")
-    degwyzhf = _to_decimal(settlement_row.get("degwyzhf")) or Decimal("0")
+    context, derived_notes = _derive_cycle_context(cycle_row, annual_row, settlement_row, employee=True)
+    return context, tuple(notes) + derived_notes
 
-    cycle_no = _to_decimal(annual_row.get("bnzqslj"))
-    deductible_standard = (_DEDUCTIBLE_FIRST if cycle_no is not None and cycle_no <= 1
-                           else _DEDUCTIBLE_SUBSEQUENT)
-    prior_deductible = (_to_decimal(cycle_row.get("bqqfje")) or Decimal("0")) - ybnqfje
-    prior_in_scope = (_to_decimal(cycle_row.get("bqljybnje")) or Decimal("0")) - tsbybn
-    prior_pool = (_to_decimal(annual_row.get("bntczfje")) or Decimal("0")) - tczhf
-    prior_large = (_to_decimal(annual_row.get("bndezfje")) or Decimal("0")) - degwyzhf
 
-    derived = {
-        "prior_cycle_deductible_paid": prior_deductible,
-        "prior_cycle_in_scope_total": prior_in_scope,
-        "prior_annual_pool_fund_payment": prior_pool,
-        "prior_annual_large_fund_payment": prior_large,
-    }
-    negative = {k: v for k, v in derived.items() if v < 0}
-    if negative:
-        notes.append(
-            "CYCLE_DERIVATION_CONTRADICTION：交易前口径推导出现负值 "
-            + ",".join(f"{k}={v}" for k, v in negative.items())
-            + "（交易后快照与本笔账面不一致），周期上下文降 unknown")
-        return SpecialCycleContext(
-            evidence_status="unknown",
-            evidence_note="交易前口径推导矛盾（负值），周期证据不完整",
-        ), tuple(notes)
+def _derive_cycle_context(
+    cycle_row: Mapping[str, Any] | None,
+    annual_row: Mapping[str, Any] | None,
+    settlement_row: Mapping[str, Any],
+    *,
+    employee: bool,
+) -> tuple[SpecialCycleContext, tuple[str, ...]]:
+    """分字段推导；未知不当零，负差不反认定滞后原值就是交易前事实。"""
+    from decimal import InvalidOperation
 
-    notes.append(
-        f"CYCLE_CONTEXT_CONFIRMED：dyxxtsb/dyxxnd 交易后口径−本笔账面 → 交易前口径"
-        f"（D={deductible_standard}（bnzqslj={cycle_no}），A={prior_deductible}，"
-        f"P={prior_in_scope}，统筹累计={prior_pool}，大额累计={prior_large}）")
+    if cycle_row is None or annual_row is None:
+        return SpecialCycleContext(evidence_note="缺周期或年度快照"), ()
+    notes: list[str] = []
+    def number(row, key):
+        try:
+            value = _to_decimal(row.get(key))
+            if value is not None and value.is_finite():
+                return value
+        except (InvalidOperation, ValueError, TypeError):
+            pass
+        notes.append(f"CYCLE_INPUT_MISSING：{key} 缺失或非法")
+        return None
+
+    cycle_no = number(annual_row, "bnzqslj")
+    position = None
+    if cycle_no is not None and cycle_no >= 1 and cycle_no == cycle_no.to_integral_value():
+        position = "first" if cycle_no <= 1 else "subsequent"
+    else:
+        notes.append("CYCLE_INPUT_MISSING：周期序号无法确定")
+    derived = {}
+    pairs = (
+        ("prior_cycle_deductible_paid", cycle_row, "bqqfje", "ybnqfje"),
+        ("prior_cycle_in_scope_total", cycle_row, "bqljybnje", "tsbybn"),
+        ("prior_annual_pool_fund_payment", annual_row, "bntczfje", "tczhf"),
+        ("prior_annual_large_fund_payment", annual_row, "bndezfje", "degwyzhf"),
+    )
+    for field, row, cumulative_key, amount_key in pairs:
+        cumulative, amount = number(row, cumulative_key), number(settlement_row, amount_key)
+        value = cumulative - amount if cumulative is not None and amount is not None else None
+        if value is not None and value < 0:
+            code = "CYCLE_DERIVATION_CONTRADICTION" if employee else "CYCLE_TABLE_LAGGING"
+            notes.append(f"{code}：{field} 推导为负 {value}，交易前累计未知，不将原值升级为已确认")
+            value = None
+        derived[field] = value
+    # 真实读取投影包含两列流水；不一致时无法证明年度表是本笔交易后快照。
+    if "jylsh" in settlement_row or "bnmcjylsh" in annual_row:
+        current = _to_str(settlement_row.get("jylsh"))
+        last = _to_str(annual_row.get("bnmcjylsh"))
+        if not current or current != last:
+            notes.append("ANNUAL_SNAPSHOT_ANCHOR_MISMATCH：年度快照流水与本笔不一致，交易前口径未确认")
+            derived = {field: None for field in derived}
+            position = None
+    if "jyrq" in settlement_row or "fynd" in annual_row or "fynd" in cycle_row:
+        settlement_date = _to_date(settlement_row.get("jyrq"))
+        year = str(settlement_date.year) if settlement_date is not None else None
+        if not year or _to_str(annual_row.get("fynd")) != year or _to_str(cycle_row.get("fynd")) != year:
+            notes.append("ANNUAL_SNAPSHOT_YEAR_MISMATCH：周期/年度快照不属于本笔结算年度，累计未确认")
+            derived = {field: None for field in derived}
+            position = None
+    standard = (_DEDUCTIBLE_FIRST if position == "first" else _DEDUCTIBLE_SUBSEQUENT) if employee and position else None
+    confirmed = tuple(field for field, value in derived.items() if value is not None)
+    if position:
+        confirmed += ("cycle_position",)
+    if standard is not None:
+        confirmed += ("deductible_standard",)
+    complete = all(value is not None for value in derived.values()) and position is not None
+    if complete:
+        notes.append("CYCLE_CONTEXT_CONFIRMED：完整交易后快照减本笔账面，交易前口径已确认")
     return SpecialCycleContext(
-        deductible_standard=deductible_standard,
-        prior_cycle_deductible_paid=prior_deductible,
-        prior_annual_pool_fund_payment=prior_pool,
-        prior_annual_large_fund_payment=prior_large,
-        prior_cycle_in_scope_total=prior_in_scope,
-        evidence_status="confirmed",
-        evidence_note="yb_dyxxtsb/yb_dyxxnd 交易后快照减本笔账面推导（医保中心侧数据，含跨院累计）",
+        deductible_standard=standard, cycle_position=position,
+        **derived, confirmed_fields=confirmed,
+        evidence_status="confirmed" if complete else "unknown",
+        evidence_note=("交易后快照减本笔账面，分字段证据完整" if complete else
+            "CYCLE_TABLE_LAGGING：年度快照金额滞后，部分交易前累计无法确认" if any("CYCLE_TABLE_LAGGING" in note for note in notes) else
+            "周期或年度累计缺失、矛盾或时点不符，部分累计无法确认"),
     ), tuple(notes)
+
+
+#: 居民门特险种码集合（Issue #81：FUND_TYPE∈91/92/93 判定城乡居民）
+RESIDENT_FUND_TYPE_CODES = ("91", "92", "93")
+
+
+def locate_special_mz_resident_registration(conn: Any, djh: str) -> AdapterCallResult:
+    """按登记号定位居民门特登记（yllb='12' 且 FUND_TYPE∈91/92/93，Issue #81 口径）。
+
+    与职工版（FUND_TYPE=3）的唯一差异是险种集合；其余定位/歧义语义一致。
+    """
+    cols = ", ".join(_REGISTRATION_COLUMNS)
+    sql = (
+        f"SELECT {cols} FROM dbo.yb_brdjxx "
+        "WHERE djh = ? AND yllb = ? AND FUND_TYPE IN ('91','92','93')"
+    )
+    assert_read_only_select(sql)
+    try:
+        rows = _fetch_all(conn, sql, [djh, SPECIAL_MZ_YLLB])
+    except Exception as exc:  # noqa: BLE001
+        return _failed(f"居民门特（mz 套表）登记定位查询失败: {exc}")
+    if not rows:
+        return _result(
+            {"match_status": "not_found", "registration_row": None, "row_count": 0},
+            quality=DataQualityStatus.MISSING,
+            message=f"登记号 {djh} 未命中门特（yllb=12）居民（FUND_TYPE∈91/92/93）登记",
+        )
+    if len(rows) > 1:
+        return _result(
+            {"match_status": "ambiguous", "registration_row": None, "row_count": len(rows)},
+            quality=DataQualityStatus.MISSING,
+            message=f"登记号 {djh} 命中 {len(rows)} 条居民门特登记，属歧义数据异常，未取首条",
+        )
+    return _result({"match_status": "unique_match", "registration_row": rows[0], "row_count": 1})
+
+
+def derive_mz_resident_cycle_context(
+    cycle_row: Mapping[str, Any] | None,
+    annual_row: Mapping[str, Any] | None,
+    settlement_row: Mapping[str, Any],
+) -> tuple[SpecialCycleContext, tuple[str, ...]]:
+    """居民门特周期上下文推导（Issue #81）。
+
+    与职工版（derive_mz_cycle_context）的差异：不内嵌起付标准（居民起付标准由
+    内核经 RSP-DED 参数表按人员类别×机构档×周期位置选择）；仅推导交易前口径
+    累计值（周期内已交起付/周期内医保内累计/年度统筹/大额累计）与周期序号位置。
+    deductible_standard 置 None 由内核填充；cycle_position（first/subsequent）经
+    周期位置通过 cycle_position 和 confirmed_fields 显式传递，缺失值保持未知。
+    """
+    return _derive_cycle_context(cycle_row, annual_row, settlement_row, employee=False)
 
 
 # ── 资格字段映射（Issue #79 手工验证候选口径） ─────────────────
@@ -324,6 +464,34 @@ def map_civil_medical_eligible(gwydybz: Any) -> tuple[bool | None, str | None]:
 # ── 纯组装：行 dict → OutpatientSpecialSnapshot（与 SQL 分离，便于无库单测） ──
 
 
+def derive_secondary_coverage_context(
+    annual_row: Mapping[str, Any] | None,
+    settlement_row: Mapping[str, Any],
+) -> SecondaryCoverageContext:
+    """只有同年度、本筆流水吻合的年度快照可作为交易后累计。"""
+    from decimal import InvalidOperation
+
+    if annual_row is None:
+        return SecondaryCoverageContext(evidence_note="缺二次保障年度累计")
+    settle_date = _to_date(settlement_row.get("jyrq"))
+    last, current = _to_str(annual_row.get("bnmcjylsh")), _to_str(settlement_row.get("jylsh"))
+    same_year = settle_date is not None and _to_str(annual_row.get("fynd")) == str(settle_date.year)
+    confirmed = bool(same_year and current and current == last)
+    def amount(key):
+        try:
+            value = _to_decimal(annual_row.get(key))
+            return value if value is not None and value.is_finite() and value >= 0 else None
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+    return SecondaryCoverageContext(
+        big_ill_scope_total=amount("big_ill_sum_in"),
+        civil_fund_payment_total=amount("civil_sum_pay"),
+        is_post_trade=True if confirmed else None,
+        evidence_status="confirmed" if confirmed else "unknown",
+        evidence_note="年度与本笔流水吻合，交易后快照" if confirmed else "年度/流水锚点不一致，累计时点未确认",
+    )
+
+
 def build_special_mz_snapshot(
     *,
     registration_row: Mapping[str, Any],
@@ -338,10 +506,11 @@ def build_special_mz_snapshot(
     retirement_category: str | None = None,
     allow_observed_deductible: bool = False,
     segment_coordinate_guard: bool = False,
+    secondary_coverage: SecondaryCoverageContext | None = None,
 ) -> tuple[OutpatientSpecialSnapshot, tuple[str, ...]]:
     """行 dict → OutpatientSpecialSnapshot（mz 套表）。返回 (快照, 组装留痕 notes)。
 
-    与住院套表组装的差异：
+    组装约定：
     - 医保内/外观测值 = 特殊病 + 普通（tsbybn+ptybn / tsbybw+ptybw），
       与明细 Σybnje/Σybwje 核对；非特殊病费用（ptybn/ptybw）非零属不支持范围
       （ESP-CAT-002 普通门诊处理未实现），抛 ValueError 由服务层降级；
@@ -385,6 +554,7 @@ def build_special_mz_snapshot(
         military_grade=grade,
         military_grade_raw=grade_raw,
         civil_medical_eligible=civil_eligible,
+        civil_type=_to_str(registration_row.get("civil_type")),
     )
     institution = SpecialInstitutionProfile(hospital_code=hospital_code,
                                             h_level=institution_h_level)
@@ -415,27 +585,10 @@ def build_special_mz_snapshot(
         notes.append(
             "FEE_DATE_MISSING：部分明细缺费用发生日期（fsrq），退休补助资格时点判定将受阻")
 
-    def _total(special: Decimal | None, normal: Decimal | None) -> Decimal | None:
-        if special is None and normal is None:
-            return None
-        return (special or Decimal("0")) + (normal or Decimal("0"))
-
-    observed = SpecialObservedAmounts(
-        zje=_to_decimal(settlement_row.get("zje")),
-        ybn=_total(_to_decimal(settlement_row.get("tsbybn")), ptybn),
-        ybw=_total(_to_decimal(settlement_row.get("tsbybw")), ptybw),
-        ybnqfje=_to_decimal(settlement_row.get("ybnqfje")),
-        tczhf=_to_decimal(settlement_row.get("tczhf")),
-        tczif=_to_decimal(settlement_row.get("tczif")),
-        degwyzhf=_to_decimal(settlement_row.get("degwyzhf")),
-        degwyzif=_to_decimal(settlement_row.get("degwyzif")),
-        bczhf=_to_decimal(settlement_row.get("bczhf")),
-        jczhf=_to_decimal(settlement_row.get("jczhf")),
-        gfylbchbx=_to_decimal(settlement_row.get("gfylbchbx")),
-        xjzf=_to_decimal(settlement_row.get("xjzf")),
-        zhzf=_to_decimal(settlement_row.get("zhzf")),
-        grziftw=_to_decimal(settlement_row.get("grziftw")),
-    )
+    from src.config.settlement_templates import get_settlement_template
+    from src.adapters.data_supply.settlement_template_bindings import observed_template_amounts
+    template = get_settlement_template('resident_special' if insurance_type == 'resident' else 'employee_special')
+    observed = SpecialObservedAmounts(**observed_template_amounts(template, {'outpatient_settlement_table': settlement_row}))
 
     snapshot = OutpatientSpecialSnapshot(
         settlement_ref=f"special_mz_settlement:{djh}",
@@ -454,5 +607,6 @@ def build_special_mz_snapshot(
         rounding_mode=rounding_mode,
         allow_observed_deductible=allow_observed_deductible,
         segment_coordinate_guard=segment_coordinate_guard,
+        secondary_coverage=secondary_coverage or SecondaryCoverageContext(),
     )
     return snapshot, tuple(notes)

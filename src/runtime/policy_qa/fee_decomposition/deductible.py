@@ -133,6 +133,11 @@ def decompose_deductible(
         result=decimal_to_str(paid),
     )
     calcs.append(calc)
+    calcs.append(CalculationRecord(
+        calculation_id="calc.deductible.copay_base", formula_id="copay_base_v1", formula_version="v1",
+        operands=(CalculationOperand("calc.catalog.total_in_scope", decimal_to_str(eligible_in_scope)),
+                  CalculationOperand("calc.deductible.split", decimal_to_str(paid))),
+        result=decimal_to_str(copay_base), rounding_rule="not_applicable"))
     branches.append(BranchTrace(
         step_id="deductible.split", module_id=MODULE_ID, scope_ref="trade",
         condition=BranchCondition("deductible_split", "本次起付承担 F=min(E,max(D-A,0))",

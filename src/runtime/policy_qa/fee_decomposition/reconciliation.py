@@ -14,6 +14,8 @@ from decimal import Decimal
 
 from src.domain.insurance.fee_decomposition import (
     BranchOutcome,
+    CalculationOperand,
+    CalculationRecord,
     CheckStatus,
     CheckType,
     ExplanationLevel,
@@ -90,11 +92,13 @@ def identity_field(
     observed: Decimal | None,
     components: tuple[Decimal | None, ...],
     citation_refs: tuple[str, ...] = (),
+    calculation_refs: tuple[str, ...] = (),
 ) -> FieldReconciliation:
     """恒等式核对：calculated 由**账面观测分量**求和/差得出，显式标注 identity_check。
 
     只证明账面字段之间满足等式，不证明各字段原因（设计 §10）。
     任一分量未知 → not_verifiable（未知不按零处理）。
+    calculation_refs 仅记录本恒等式已执行加减的轨迹元数据，不改变核对语义。
     """
     if observed is None or any(c is None for c in components):
         return FieldReconciliation(
@@ -105,7 +109,7 @@ def identity_field(
             explanation_level=ExplanationLevel.OBSERVED_ONLY if observed is not None
             else ExplanationLevel.UNEXPLAINED,
             reason_code="IDENTITY_COMPONENTS_INCOMPLETE",
-            citation_refs=citation_refs)
+            citation_refs=citation_refs, calculation_refs=calculation_refs)
     total = sum(components, Decimal("0"))  # type: ignore[arg-type]
     diff = total - observed
     matched = diff == 0
@@ -117,7 +121,28 @@ def identity_field(
         difference=decimal_to_str(diff),
         explanation_level=ExplanationLevel.AMOUNT_RECONCILED if matched
         else ExplanationLevel.OBSERVED_ONLY,
-        citation_refs=citation_refs)
+        citation_refs=citation_refs, calculation_refs=calculation_refs)
+
+
+def identity_calculation(
+    calculation_id: str,
+    formula_id: str,
+    operands: tuple[CalculationOperand, ...],
+) -> CalculationRecord:
+    """账面恒等式已执行加减的轨迹记录：result 为有符号分量合计（解释投影 1.1）。
+
+    只记录内核本来已执行的恒等加减，不引入新运算；分量带符号（减项为负值）。
+    """
+    total = sum((Decimal(o.value) for o in operands), Decimal("0"))
+    return CalculationRecord(
+        calculation_id=calculation_id,
+        formula_id=formula_id,
+        formula_version="v1",
+        operands=operands,
+        unrounded_result=decimal_to_str(total),
+        rounding_rule="not_applicable（账面分量加减，无取整）",
+        result=decimal_to_str(total),
+    )
 
 
 def overall_reconciliation_status(entries: tuple[FieldReconciliation, ...]) -> str:

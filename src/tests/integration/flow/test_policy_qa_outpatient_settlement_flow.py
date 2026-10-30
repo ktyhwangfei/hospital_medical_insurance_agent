@@ -98,7 +98,9 @@ async def test_outpatient_question_routes_queries_verifies_and_finishes(monkeypa
         if item["field_name"] == "费用总金额"
     )
     assert total_amount["value"] == 1916.72
-    assert "1916.72" not in result["answer"]
+    # 确定性账面勾稽可以展示真实金额；缺政策证据仍保持partial，不能隐藏总费用。
+    assert "费用总金额 1916.72 元 = 基金支付总金额 1326.43 元 + 个人支付总金额 590.29 元" in result["answer"]
+    assert "费用总金额 1916.72 元 = 医保范围内金额 1812.37 元 + 医保范围外金额 104.35 元" in result["answer"]
     assert result["case_context"]["total_amount"] == 1916.72
     assert result["amount_checks"][0]["status"] == "passed"
     assert result["citations"] or result["uncertainties"]

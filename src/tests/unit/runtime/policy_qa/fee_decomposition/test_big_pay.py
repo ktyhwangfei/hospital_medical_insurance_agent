@@ -148,3 +148,20 @@ def test_base_missing_blocked():
     res = decompose_big_pay(None, PersonKind.EMPLOYED, None, InstitutionKind.OTHER,
                             D(2024, 6, 1), Decimal("0"), True, MODE)
     assert res.branches[0].outcome == BranchOutcome.BLOCKED
+
+
+def test_segmented_formula_no_false_equation_on_prior_cumulative():
+    # 分段公式尾部不得把"交易前基金累计"拼成"累计 X 元＝结果"的假等式；
+    # 交易前累计移到段首括注，末尾"＝结果"挂在两段合计上（首段 420.00＋后段 0.00＝420.00）。
+    from src.runtime.policy_qa.fee_decomposition.formula_text import calculation_formula
+
+    res = _run(base="600.00", on=D(2024, 6, 1), prior_fund=Decimal("0.00"))
+    calc = next(c for c in res.calculations if c.calculation_id == "calc.big_pay.segmented")
+    assert len(calc.operands) == 8
+    formula = calculation_formula(calc, [])
+    assert formula is not None
+    assert formula.startswith("大额分段支付＝（交易前基金累计 0.00 元）")
+    assert "累计 0.00 元＝" not in formula
+    assert "首段基金支付＝基金累计2万元以内段基数 600.00 元×首段比例 0.7＝420.00 元" in formula
+    assert "后段基金支付＝超2万元段基数 0.00 元×后段比例 0.6＝0.00 元" in formula
+    assert formula.endswith("两段合计 420.00＋0.00＝420.00 元")

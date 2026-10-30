@@ -113,10 +113,17 @@ class SemanticDataSource:
         return None
 
     def _connect(self, cfg: dict):
-        """复用 sqlserver_source 的驱动降级连接逻辑。
+        """复用 sqlserver_source 的驱动降级连接逻辑；PG 落地库走 psycopg。
 
-        优先用传入 cfg；失败时（若 cfg 允许）回退环境变量。
+        kind=platform_pg（outpatient_postgres，#78 §9 门诊落地库）→ 平台 PG 连接；
+        其余按 SQL Server 处理，失败时（若 cfg 允许）回退环境变量。
         """
+        if cfg.get("kind") == "platform_pg":
+            import psycopg
+
+            from src.config.production import DATABASE_URL
+
+            return psycopg.connect(DATABASE_URL, connect_timeout=10, autocommit=True)
         if cfg:
             try:
                 conn, _driver = _try_connect(cfg)
@@ -143,6 +150,24 @@ class SemanticDataSource:
         if not cfg:
             raise RuntimeError(f"数据源 '{datasource_id}' 未注册、未启用或缺少连接配置")
         return self._connect(cfg)
+
+    def datasource_kind(self, datasource_id: str) -> str:
+        """数据源方言标识（#78）：platform_pg → "postgresql"，其余/未注册 → "mssql"。
+
+        供 SemanticQueryService 选择编译方言与传参约定；进程内缓存（执行期
+        版本选择器会按数据集多次调用）。
+        """
+        cache = getattr(self, "_kind_cache", None)
+        if cache is None:
+            cache = self._kind_cache = {}
+        if datasource_id not in cache:
+            cfg = self._resolve_datasource_connection(datasource_id)
+            cache[datasource_id] = (
+                "postgresql"
+                if isinstance(cfg, dict) and cfg.get("kind") == "platform_pg"
+                else "mssql"
+            )
+        return cache[datasource_id]
 
     def open_connection(self, datasource_id: str | None = None) -> Any:
         """公开供给端口入口（#27）：按注册数据源建立只读连接，未注册回退默认源。

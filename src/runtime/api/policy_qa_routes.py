@@ -17,11 +17,12 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import asyncio
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from src.runtime.policy_qa.explanation_mode import (
     ExplanationMode,
@@ -46,12 +47,31 @@ from src.runtime.policy_qa.public_contract import (
     PolicyQAPublicResult,
     VerificationSummary,
 )
+from src.adapters.data_supply.outpatient_special_mz_queries import (
+    load_special_mz_fee_items,
+)
+from src.adapters.data_supply.decomposition_person_queries import is_id_card_format
 from src.runtime.policy_qa.fee_decomposition.integration import (
     DecompositionPresentation,
+    cache_session_decomposition,
+    decompose_for_workbench,
+    get_cached_session_decomposition,
     maybe_decompose_outpatient,
     maybe_decompose_special_outpatient,
 )
-from src.runtime.policy_qa.fee_decomposition.public_view import build_public_view_dict
+from src.runtime.policy_qa.fee_decomposition.model_explanation import (
+    LineRef,
+    QuestionTarget,
+    explain_decomposition,
+    resolve_question_target,
+    selected_line_policy_evidence,
+    selected_ratio_policy_evidence,
+    settlement_context_from_fee,
+)
+from src.runtime.policy_qa.fee_decomposition.followup_target import (
+    resolve_session_question_target,
+)
+from src.runtime.policy_qa.fee_decomposition.public_view import to_public_contract_dict
 from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
 from src.runtime.policy_qa.settlement_data_provider import (
     SettlementDataUnavailableError,
@@ -446,6 +466,31 @@ class TaskBackedQASourceReader(QASourceReader):
         )
 
 
+def ensure_fee_decomposition_read(authorization: str | None) -> None:
+    """结算金额/明细读取统一授权：与 /fee-decomposition 同一 scope。
+
+    policy-qa 的患者定位只是业务入口（临时方案），不能代替服务端权限控制；
+    读取同单金额的三个入口（结算列表、费用明细、结算解释流）都走这里。
+    """
+    from src.gateway.auth import authenticator
+
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("AUTH_REQUIRED", "缺少 Authorization 凭据"),
+        )
+    auth = authenticator.validate_signed_token(authorization)
+    if not auth.is_success or not auth.user_id.strip():
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("AUTH_INVALID", auth.error_message or "登录凭据无效"),
+        )
+    if not authenticator.check_permission(auth, "fee_decomposition:read").is_success:
+        raise HTTPException(
+            status_code=403,
+            detail=error_detail("AUTH_FORBIDDEN", "权限不足：需要 fee_decomposition:read"),
+        )
+
 def get_policy_qa_feedback_principal(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> RegressionPrincipal:
@@ -835,6 +880,9 @@ def _build_public_result(
     action_status: str | None = None,
     deterministic_refusal: str = "",
     fee_decomposition: DecompositionPresentation | None = None,
+    # 费用分解链路：只按当前目标字段及其依赖生成“计算已核对”结论；
+    # None=沿用通用判定（非分解链路），False=目标不可独立解释/未识别到目标。
+    calculation_checked_override: bool | None = None,
 ) -> PolicyQAPublicResult:
     """用字段白名单把内部执行结果重建为唯一公开回答契约。"""
     safe_context = None
@@ -967,20 +1015,19 @@ def _build_public_result(
         if str(item or "").strip()
     ]
 
-    # Issue #78：费用分解公开视图（文本字段统一过 _public_text 消毒，金额十进制字符串透传）
+    # Issue #78：费用分解公开视图（与工作台路由共用同一投影入口 to_public_contract_dict，
+    # 文本统一过 _public_text 消毒，金额十进制字符串透传）
     safe_fee_decomposition = None
     if fee_decomposition is not None:
-        _fd_view = build_public_view_dict(
-            fee_decomposition.result,
-            summary_text=fee_decomposition.summary_text,
-            summary_source=fee_decomposition.summary_source,
+        safe_fee_decomposition = FeeDecompositionPublic.model_validate(
+            to_public_contract_dict(
+                fee_decomposition.result,
+                summary_text=fee_decomposition.summary_text,
+                summary_source=fee_decomposition.summary_source,
+                settlement_facts=fee_decomposition.settlement_facts,
+                sanitize=_public_text,
+            )
         )
-        _fd_view["summary_text"] = _public_text(_fd_view["summary_text"])
-        for _fd_field in _fd_view["fields"]:
-            _fd_field["label"] = _public_text(_fd_field["label"])
-        for _fd_uncertainty in _fd_view["uncertainties"]:
-            _fd_uncertainty["message"] = _public_text(_fd_uncertainty["message"])
-        safe_fee_decomposition = FeeDecompositionPublic.model_validate(_fd_view)
 
     answer_text = _sanitize_public_text(answer)
     safe_answer = answer_text.text
@@ -998,6 +1045,9 @@ def _build_public_result(
         bool(safe_amount_checks)
         and all(item.status == "passed" for item in safe_amount_checks)
     )
+    if calculation_checked_override is not None:
+        # 整单其他步骤成功不能代替当前问题的字段已核对。
+        calculation_checked = calculation_checked_override
     calculation_satisfied = calculation_checked or (
         bool(outpatient_result) and not safe_amount_checks
     )
@@ -1041,7 +1091,8 @@ def _build_public_result(
             uncertainties.append("公开回答未包含可核验的业务内容。")
         if is_overview:
             uncertainties.append("费用总览不涉及单项政策匹配或单项计算过程核验。")
-        elif not citations:
+        elif not citations and fee_decomposition is None:
+            # 结算解释以本单事实与计算为主，没有政策依据卡片时不再提示“未检索到政策依据”。
             uncertainties.append("未检索到可展示的政策依据。")
         if answer_status == "partial":
             uncertainties.append("政策依据不完整，当前回答仅供核对真实结算金额。")
@@ -1091,6 +1142,50 @@ def _build_public_result(
 def _looks_like_outpatient_trade_no(settlement_id: str | None) -> bool:
     """当前门诊交易号为不含分隔符的长字母数字串；宽泛问题无 settlement_id 时返回 False。"""
     return bool(settlement_id) and re.fullmatch(r"[A-Za-z0-9]{15,}", settlement_id) is not None
+
+
+def _fee_fields_all_checked(model_fee, codes: list[str]) -> bool:
+    """全部被问字段可核对才算 True；bill.* 模板未绑定字段无独立计算，不计为已核对。"""
+    if not codes:
+        return False
+    resolved = [field for field in model_fee.fields if field.field_code in codes]
+    return len(resolved) == len(codes) and all(field.explainable for field in resolved)
+
+
+def _normalized_decomposition_chain(settlement_id: str, chain_hint: str) -> str:
+    """本次请求的规范化链路：auto 按与工作台同款识别规则推导（评审问题 7）。"""
+    if chain_hint in ("outpatient", "special"):
+        return chain_hint
+    return "outpatient" if _looks_like_outpatient_trade_no(settlement_id) else "special"
+
+
+def _decompose_for_session(
+    session_id: str,
+    settlement_id: str,
+    chain_hint: str,
+    provider: Any,
+):
+    """会话级共享分解实例：命中缓存直接复用；未命中按主链 fail-closed 口径计算并写缓存。
+
+    policy-qa 主流与 GET /sessions/{id}/decomposition 共用本入口，保证右侧面板与
+    聊天消息引用同一次分解运行实例；口径恒 fail-closed（allow_eval_calibers=False），
+    不受 FEE_DECOMPOSITION_EVAL_CALIBERS 影响。
+
+    只缓存可复用结果（评审问题 7）：not_configured 与 execution_status=unavailable
+    都不可复用（门控修复/数据源恢复后必须能重算）；链路不一致视为未命中，
+    用户显式纠正的链路不能被旧缓存忽略，旧缓存也不因错链路请求被覆盖。
+    """
+    requested_chain = _normalized_decomposition_chain(settlement_id, chain_hint)
+    cached = get_cached_session_decomposition(session_id, settlement_id)
+    if cached is not None and cached.chain == requested_chain:
+        return cached
+    outcome = decompose_for_workbench(
+        settlement_id, chain_hint, provider, allow_eval_calibers=False)
+    presentation = outcome.presentation
+    if (outcome.status == "ok" and presentation is not None
+            and presentation.result.execution_status != "unavailable"):
+        cache_session_decomposition(session_id, settlement_id, outcome)
+    return outcome
 
 
 def _mentions_special_outpatient(question: str) -> bool:
@@ -1197,15 +1292,26 @@ async def _policy_qa_stream(
     workflow_blocked_actions: list[tuple[str, str]] = []
     workflow_public_result = None
 
-    matched_workflow = await run_workflow_by_mode(
-        request.mode,
-        question=request.question,
-        settlement_id=request.settlement_id,
-        settlement_ids=request.settlement_ids,
-        id_card=request.id_card,
-        visit_date=request.visit_date,
+    # 门诊交易号不是住院结算模型的锚点：wf_outpatient_settlement_explain 的
+    # fetch_settlement 走 inpatient_settlement（按住院登记号锚定），门诊交易号必然
+    # 查不到（PG 侧甚至 bigint 类型报错）。此类问题直接进门诊技能管线（#78）。
+    skip_mode_workflow = (
+        request.mode == PolicyQAMode.SETTLEMENT_EXPLAIN
+        and (_looks_like_outpatient_trade_no(request.settlement_id) or request.decomposition_chain is not None)
     )
-    if matched_workflow is None:
+    matched_workflow = (
+        None
+        if skip_mode_workflow
+        else await run_workflow_by_mode(
+            request.mode,
+            question=request.question,
+            settlement_id=request.settlement_id,
+            settlement_ids=request.settlement_ids,
+            id_card=request.id_card,
+            visit_date=request.visit_date,
+        )
+    )
+    if matched_workflow is None and not skip_mode_workflow:
         # 未按 mode 命中（理论上不应发生，除非 mode 未映射），降级关键词匹配
         keyword_workflow = route_workflow_question(request.question)
         if keyword_workflow is not None:
@@ -1358,6 +1464,28 @@ async def _policy_qa_stream(
         prefetched_settlement_context: Any | None = None
         # Issue #78 步骤 5：费用分解增强证据（默认关闭，门控见 integration.py；失败返回 None 不阻塞主链路）
         fee_decomposition: DecompositionPresentation | None = None
+        model_fee: FeeDecompositionPublic | None = None
+        # 阶段 D：本问目标只解析一次（含会话级追问继承），来源筛选/模型解释/核对状态共用
+        fee_question_target: QuestionTarget | None = None
+        if evaluation_prefix is None and request.mode == PolicyQAMode.SETTLEMENT_EXPLAIN and request.settlement_id and (
+            request.decomposition_chain is not None or _looks_like_outpatient_trade_no(request.settlement_id)
+        ):
+            # 结算解释复用工作台读数，但候选口径（D3-D8）仅限工作台：主链强制 fail-closed。
+            # 会话级共享实例：命中缓存即复用，与右侧面板 GET 端点同源（阶段 A）。
+            outcome = await _loop.run_in_executor(None, lambda: _decompose_for_session(
+                session_id, request.settlement_id, request.decomposition_chain or 'outpatient', provider))
+            if outcome.presentation is not None:
+                fee_decomposition = outcome.presentation
+                model_fee = FeeDecompositionPublic.model_validate(to_public_contract_dict(fee_decomposition.result,
+                    summary_text=fee_decomposition.summary_text, summary_source=fee_decomposition.summary_source,
+                    settlement_facts=fee_decomposition.settlement_facts, sanitize=_public_text))
+                # 阶段 D：先显式解析；指代词且无显式目标时继承 (session, settlement) 键下的上一问目标
+                fee_question_target = resolve_session_question_target(
+                    model_fee, request.question or "", session_id, request.settlement_id)
+                prefetched_settlement_context = settlement_context_from_fee(model_fee)
+                if not prefetched_settlement_context.record_found:
+                    raise SettlementNotFoundError('未查询到该单的费用分解数据。')
+                prefetched_semantic_results = []
         if evaluation_prefix is not None:
             routing_question = evaluation_prefix.rewritten_question
             skill_id = evaluation_prefix.selected_skill_id
@@ -1367,6 +1495,7 @@ async def _policy_qa_stream(
         outpatient_assembler = get_assembler("mzsettlement_verify_skill")
         if (
             evaluation_prefix is None
+            and model_fee is None
             and outpatient_assembler is not None
             and _looks_like_outpatient_trade_no(request.settlement_id)
             and "住院" not in request.question
@@ -1474,6 +1603,7 @@ async def _policy_qa_stream(
             getattr(assembler, "build_semantic_queries", None)
         )
         profile_id = (
+            'overall-settlement-verification' if model_fee is not None else
             assembler.detect_profile(routing_question) if uses_declared_queries else None
         )
         if uses_declared_queries and profile_id is None:
@@ -1702,6 +1832,60 @@ async def _policy_qa_stream(
                 })
             if len(policy_evidence) > 0:
                 policy_status = "partial_policy_matched"
+        elif model_fee is not None:
+            # 只展示本单实际采用的待遇比例来源；来源元数据不等于全部政策原文。
+            # 来源筛选与 calculation_checked 共用同一目标解析（Issue #78 明细行目标；
+            # 阶段 D：解析一次并含会话追问继承）。
+            _fee_target = fee_question_target or resolve_question_target(model_fee, request.question or "")
+            if _fee_target.kind == "fee_line":
+                # 单行问题：来源围绕本行实际执行的限价/比例路径，不附整单全部待遇比例。
+                policy_evidence = [
+                    {"title": title, "excerpt": excerpt}
+                    for title, excerpt in selected_line_policy_evidence(
+                        model_fee, _fee_target)
+                ]
+            elif _fee_target.kind in ("multi_line", "cover_all"):
+                # 多行/全覆盖：逐行执行分支来源合并去重（cover_all 另含整单采用档来源）。
+                merged: dict[str, str] = {}
+                line_refs = _fee_target.lines if _fee_target.kind == "multi_line" else [
+                    LineRef(line_id=item.line_id, display_no=index + 1)
+                    for index, item in enumerate(model_fee.fee_items)]
+                for line_ref in line_refs:
+                    for title, excerpt in selected_line_policy_evidence(
+                            model_fee, QuestionTarget(
+                                kind="fee_line", line_id=line_ref.line_id,
+                                display_no=line_ref.display_no)):
+                        merged.setdefault(title, excerpt)
+                if _fee_target.kind == "cover_all":
+                    for title, excerpt in selected_ratio_policy_evidence(model_fee):
+                        merged.setdefault(title, excerpt)
+                policy_evidence = [
+                    {"title": title, "excerpt": excerpt} for title, excerpt in merged.items()
+                ]
+            elif _fee_target.kind == "mixed":
+                # 混合目标：来源为全部目标实际来源的去重并集（评审问题 2）。
+                merged = {}
+                for line_ref in _fee_target.lines:
+                    for title, excerpt in selected_line_policy_evidence(
+                            model_fee, QuestionTarget(
+                                kind="fee_line", line_id=line_ref.line_id,
+                                display_no=line_ref.display_no)):
+                        merged.setdefault(title, excerpt)
+                for title, excerpt in selected_ratio_policy_evidence(
+                        model_fee, _fee_target.field_codes):
+                    merged.setdefault(title, excerpt)
+                policy_evidence = [
+                    {"title": title, "excerpt": excerpt} for title, excerpt in merged.items()
+                ]
+            else:
+                policy_evidence = [
+                    {"title": title, "excerpt": excerpt}
+                    for title, excerpt in selected_ratio_policy_evidence(
+                        model_fee,
+                        _fee_target.field_codes
+                        if _fee_target.kind in ("summary_fields", "comparison") else [])
+                ]
+            policy_status = 'partial_policy_matched' if policy_evidence else 'no_policy_matched'
         elif not _is_overview and not _coverage_incomplete:
             if uses_declared_queries:
                 _normalized_ctx = {
@@ -1808,6 +1992,7 @@ async def _policy_qa_stream(
         overview_payload: dict | None = None
         result_answer = ""
         _single_skill_result = None
+        decomposition_model_result = None
         _outpatient_result: dict | None = None
         if is_broad:
             # 宽泛问题：用 doc_id 回查原始文档，补充政策标题（answer 与 citations 共用）
@@ -1821,6 +2006,11 @@ async def _policy_qa_stream(
                     None,
                     lambda: _generate_broad_answer(request.question or "", policy_evidence),
                 )
+        elif model_fee is not None:
+            decomposition_model_result = await _loop.run_in_executor(None, lambda: explain_decomposition(
+                model_fee, request.question, question_target=fee_question_target))
+            result_answer = decomposition_model_result.answer
+            _outpatient_result = {'scenario_id': 'fee-decomposition-explanation', 'uncertainties': decomposition_model_result.uncertainties}
         elif _coverage_incomplete:
             result_answer = _incomplete_coverage_payload(
                 settlement_context, request.question
@@ -1886,6 +2076,19 @@ async def _policy_qa_stream(
             _definition = None
             _warnings = []
             _case_context = None
+        elif decomposition_model_result is not None and model_fee is not None:
+            # 费用分解正文由后端确定性证据整块生成（评审问题 1 整改）：
+            # 回答可用性依据"是否有可交付证据正文"，不再等同 used_model。
+            has_evidence_answer = decomposition_model_result.evidence_answer_status == "rendered"
+            trace_can_answer = has_evidence_answer
+            # 有可交付证据正文即按 partial 交付；无证据维持 unavailable，不整题吞掉已有证据
+            trace_partial_answer = has_evidence_answer
+            _warnings = decomposition_model_result.uncertainties
+            _case_context = {'total_amount': settlement_context.total_amount, 'deductible': settlement_context.deductible_amount,
+                'personal_total_pay': settlement_context.personal_total_amount, 'person_type': settlement_context.person_type,
+                'insurance_type': settlement_context.insurance_type, 'service_type': settlement_context.service_type}
+            _calc_steps = [{'description': calc.display_name, 'formula': calc.formula or '', 'result': calc.result or ''}
+                for calc in model_fee.calculations if calc.explainable]
         elif _coverage_incomplete:
             _incomplete = _incomplete_coverage_payload(settlement_context, request.question)
             trace_can_answer = False
@@ -1932,6 +2135,40 @@ async def _policy_qa_stream(
         # ── 所有步骤完成：发送合并结果 ──
         logger.info(f'[POLICY-QA] 处理完成，发送 result 事件（共 {len(public_steps)} 个步骤）')
 
+        fee_calculation_checked: bool | None = None
+        if model_fee is not None:
+            _fee_target = fee_question_target or resolve_question_target(model_fee, request.question or "")
+            if _fee_target.kind == "fee_line":
+                # 单行问题：已核对 = 目标行可解释（与来源筛选共用同一目标）。
+                fee_calculation_checked = bool(
+                    model_fee.fee_items[_fee_target.display_no - 1].explainable)
+            elif _fee_target.kind == "multi_line":
+                # 多行问题：全部目标行可解释才算已核对。
+                fee_calculation_checked = bool(_fee_target.lines) and all(
+                    model_fee.fee_items[ref.display_no - 1].explainable
+                    for ref in _fee_target.lines)
+            elif _fee_target.kind == "cover_all":
+                # 全覆盖：全部展示字段（含 bill.* 模板字段）与全部明细行均可核对才算已核对；
+                # 不能仅因明细行可解释就标整题计算已核对（评审问题 2）。
+                fields_checked = _fee_fields_all_checked(model_fee, _fee_target.field_codes)
+                fee_calculation_checked = (
+                    fields_checked and bool(model_fee.fee_items)
+                    and all(item.explainable for item in model_fee.fee_items))
+            elif _fee_target.kind == "mixed":
+                # 混合目标：全部被问字段与全部被问行均可核对（评审问题 2）。
+                fields_checked = _fee_fields_all_checked(model_fee, _fee_target.field_codes)
+                lines_checked = bool(_fee_target.lines) and all(
+                    model_fee.fee_items[ref.display_no - 1].explainable
+                    for ref in _fee_target.lines)
+                fee_calculation_checked = fields_checked and lines_checked
+            elif _fee_target.kind in ("summary_fields", "comparison"):
+                # 全部被问字段可核对（bill.* 模板未绑定字段无独立计算，不计为已核对）。
+                fee_calculation_checked = _fee_fields_all_checked(model_fee, _fee_target.field_codes)
+            else:
+                # 未识别到目标字段（如“超封顶金额”）或目标无法定位（ambiguous/invalid）：
+                # 不得借用整单成功声称当前计算已核对。
+                fee_calculation_checked = False
+
         public_result = _build_public_result(
             answer=result_answer,
             can_answer=trace_can_answer,
@@ -1947,6 +2184,7 @@ async def _policy_qa_stream(
             outpatient_result=_outpatient_result,
             deterministic_refusal=_router_refusal_message,
             fee_decomposition=fee_decomposition,
+            calculation_checked_override=fee_calculation_checked,
         )
         _notify_evaluation(
             evaluation_observer,
@@ -2119,6 +2357,7 @@ async def _policy_qa_stream(
 @router.post("/stream")
 async def policy_qa_stream(
     request: PolicyQARequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> StreamingResponse:
     """
     政策问答SSE流式端点
@@ -2132,6 +2371,9 @@ async def policy_qa_stream(
     # 验证请求
     if not request.question:
         raise HTTPException(status_code=400, detail="问题不能为空")
+    # 结算解释会读取同单金额：与 /fee-decomposition 共用同一服务端授权。
+    if request.mode == PolicyQAMode.SETTLEMENT_EXPLAIN:
+        ensure_fee_decomposition_read(authorization)
 
     # Issue #25：宽泛政策问题允许省略 settlement_id（走 BM25+向量宽召回）
 
@@ -2195,6 +2437,7 @@ async def policy_qa_test(request: PolicyQARequest) -> dict:
 async def debug_structured_policy_search(
     settlement_id: str,
     target_field: str = "统筹自付",
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict:
     """
     调试端点：展示结构化政策规则检索的完整过程。
@@ -2211,6 +2454,7 @@ async def debug_structured_policy_search(
     """
     if not settlement_id:
         raise HTTPException(status_code=400, detail="settlement_id is required")
+    ensure_fee_decomposition_read(authorization)
 
     try:
         provider = create_settlement_data_provider()
@@ -2721,6 +2965,7 @@ async def get_settlement_explanation(
     settlement_id: str,
     question: str = "",
     compare_with: str = "",
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> PolicyQAPublicResult:
     """
     GET settlement explanation from REAL DATABASE.
@@ -2743,6 +2988,9 @@ async def get_settlement_explanation(
         HTTPException 404: settlement_id / compare_with not found in DB
         HTTPException 503: DB connection/query failure
     """
+    # 读取鉴权先于任何 provider 创建/单单与 compare 查询：与费用分解同一 scope，
+    # 旧入口不能绕过前端患者定位与服务端权限（评审问题 5）。
+    ensure_fee_decomposition_read(authorization)
     if not settlement_id:
         raise HTTPException(
             status_code=400,
@@ -2952,12 +3200,14 @@ async def list_settlements_by_date_range(
     patient_key: str | None = Query(
         None, description="患者定位键（身份证号或卡号，临时方案）"
     ),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> list[SettlementListItem]:
     """按结算日期区间列出住院结算单摘要。
 
     供 V4.0 结算解释智能体使用：先选时间范围，再点单查看费用构成解释。
     patient_key 提供时仅返回该患者的结算单（隐私收敛：按人浏览）。
     """
+    ensure_fee_decomposition_read(authorization)
     try:
         provider = create_settlement_data_provider()
         return await provider.list_settlements_by_date_range(
@@ -2994,17 +3244,139 @@ async def list_settlements_by_date_range(
         ) from exc
 
 
+# ── 门诊费用明细（policy-qa 结算单「费用明细」页签）────────────────────
+
+
+class OutpatientFeeItem(BaseModel):
+    """门诊费用明细行（金额保留十进制字符串，不做数值化）。"""
+
+    item_name: str
+    item_type: str
+    item_code: str
+    quantity: str
+    unit_price: str
+    total_fee: str
+    insurance_inner: str
+    insurance_outer: str
+    self_pay_2: str
+
+
+_FEE_ITEM_TYPE_LABELS = {"0": "药品", "1": "诊疗", "2": "服务设施", "3": "材料"}
+
+# 普通门诊明细（o_FeeItem，职工/居民链路共用表）
+_OUTPATIENT_FEE_ITEMS_SQL = (
+    "SELECT ItemName, ItemType, ItemCode, [Count], UnitPrice,"
+    " Fee, FeeIn, FeeOut, SelfPay2"
+    " FROM dbo.o_FeeItem WHERE T_TradeNo = ?"
+    " ORDER BY ItemId, ItemNo"
+)
+
+
+def _fee_cell(row: dict, key: str) -> str:
+    value = row.get(key)
+    # Decimal('0.0000')/int 0 为 falsy，不能用 or 兜底，否则 0 金额被吞成空串
+    return "" if value is None else str(value)
+
+
+def _trade_fee_item_to_public(row: dict) -> OutpatientFeeItem:
+    """o_FeeItem 行（cursor.description 原样列名）→ 公开明细行。"""
+    return OutpatientFeeItem(
+        item_name=str(row.get("ItemName") or ""),
+        # ItemType 在 SQL Server 为 int（0=药品），0 是 falsy，不能用 or 兜底
+        item_type=_FEE_ITEM_TYPE_LABELS.get(_fee_cell(row, "ItemType"), "其他"),
+        item_code=str(row.get("ItemCode") or ""),
+        quantity=_fee_cell(row, "Count"),
+        unit_price=_fee_cell(row, "UnitPrice"),
+        total_fee=_fee_cell(row, "Fee"),
+        insurance_inner=_fee_cell(row, "FeeIn"),
+        insurance_outer=_fee_cell(row, "FeeOut"),
+        self_pay_2=_fee_cell(row, "SelfPay2"),
+    )
+
+
+def _special_fee_item_to_public(row: dict) -> OutpatientFeeItem:
+    """门特 yb_mzfymx 行（_fetch_all 小写键）→ 公开明细行。
+
+    xmlb 项目类别与 o_FeeItem.ItemType 同构（0=药品/1=诊疗/3=材料）。
+    """
+    return OutpatientFeeItem(
+        item_name=str(row.get("xmmc") or ""),
+        item_type=_FEE_ITEM_TYPE_LABELS.get(_fee_cell(row, "xmlb"), "其他"),
+        item_code=str(row.get("xmdm") or ""),
+        quantity=_fee_cell(row, "sl"),
+        unit_price=_fee_cell(row, "dj"),
+        total_fee=_fee_cell(row, "zje"),
+        insurance_inner=_fee_cell(row, "ybnje"),
+        insurance_outer=_fee_cell(row, "ybwje"),
+        self_pay_2=_fee_cell(row, "grziftw"),
+    )
+
+
+@router.get("/settlements/{settlement_id}/fee-items", response_model=list[OutpatientFeeItem])
+async def list_outpatient_fee_items(
+    settlement_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> list[OutpatientFeeItem]:
+    """按结算单列出费用明细（SQL Server 直库，与四条分解链路同表同源）。
+
+    普通门诊（职工/居民共用）：交易号 → o_FeeItem（T_TradeNo）；
+    门特（职工/居民/肾病固定额度共用 mz 套表）：登记号 djh → yb_mzfymx。
+    """
+    ensure_fee_decomposition_read(authorization)
+    is_trade_no = _looks_like_outpatient_trade_no(settlement_id)
+    try:
+        provider = create_settlement_data_provider()
+        connect = getattr(provider, "_connect", None)
+        if connect is None:
+            raise RuntimeError("结算数据 provider 无数据供给连接工厂")
+        conn = None
+        try:
+            conn = connect("bjybdb")
+            if is_trade_no:
+                cursor = conn.cursor()
+                cursor.execute(_OUTPATIENT_FEE_ITEMS_SQL, settlement_id)
+                columns = (
+                    [item[0] for item in cursor.description] if cursor.description else []
+                )
+                raw_rows: list[dict] = [
+                    dict(zip(columns, row)) for row in cursor.fetchall()
+                ]
+                rows = [_trade_fee_item_to_public(row) for row in raw_rows]
+            else:
+                # 门特：复用分解链路同款适配器（只读断言 + 完整读取不分页）
+                items_res = load_special_mz_fee_items(conn, settlement_id)
+                rows = [_special_fee_item_to_public(row) for row in items_res.data["item_rows"]]
+        finally:
+            if conn is not None:
+                conn.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Outpatient fee items query failed")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_DATA_UNAVAILABLE",
+                "费用明细数据源暂时不可用，请稍后重试。",
+                {"operation": "outpatient_fee_items"},
+            ),
+        ) from exc
+    return rows
+
+
 # ── 患者定位（V4.0 结算解释智能体·临时方案）────────────────────────
 
 @router.get("/patient-lookup", response_model=PatientSummary)
 async def lookup_patient(
     key: str = Query(..., min_length=1, description="身份证号或卡号"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> PatientSummary:
     """按身份证号或卡号定位患者，返回脱敏摘要。
 
     临时患者定位入口：正式接入登录验证后由登录态直接给出患者身份。
     身份证号脱敏输出（保留前 3 后 4）。
     """
+    ensure_fee_decomposition_read(authorization)
     try:
         provider = create_settlement_data_provider()
         summary = await provider.lookup_patient(key)
@@ -3164,6 +3536,83 @@ def get_qa_session_trajectory(
     except Exception:
         logger.exception("Failed to get session trajectory")
         raise HTTPException(status_code=500, detail=error_detail("TRAJECTORY_READ_FAILED", "轨迹读取失败"))
+
+
+# ── 会话级共享费用分解实例（阶段 A：面板↔聊天同源）─────────────────────────
+
+
+class SessionDecompositionMeta(BaseModel):
+    """会话共享分解 meta（与 /fee-decomposition/decompose 的 FeeDecompositionMeta 同构）。
+
+    caliber 恒为 fail_closed：会话口径不读 FEE_DECOMPOSITION_EVAL_CALIBERS。
+    """
+
+    identifier: str
+    chain: str
+    profile: str | None = None
+    algorithm_version: str
+    caliber: str = "fail_closed"
+
+
+class SessionDecompositionResponse(FeeDecompositionPublic):
+    """费用分解公开契约全字段 + meta（与 FeeDecompositionDecomposeResponse 同构）。"""
+
+    meta: SessionDecompositionMeta
+
+
+@router.get("/sessions/{session_id}/decomposition")
+def get_session_decomposition(
+    session_id: str,
+    settlement_id: str = Query(..., min_length=1, max_length=64),
+    chain: Literal["auto", "outpatient", "special"] = Query("auto"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    """会话级共享费用分解实例：与政策问答主流同源（同一实例、同一 fail-closed 口径）。
+
+    命中 (session_id, settlement_id) 缓存直接返回；未命中按主链同款 fail-closed
+    口径计算并写缓存。chain=auto 走 _looks_like_outpatient_trade_no 同款自动识别，
+    显式传入时优先。分解不可用 → 200 + execution_status=unavailable（与工作台一致）；
+    门控未配置 → 503 FEE_DECOMPOSITION_NOT_CONFIGURED。
+    """
+    ensure_fee_decomposition_read(authorization)
+    # 防误判：身份证号会被交易号自动识别规则吞掉，显式 422 引导按人定位（不回显原文）
+    if is_id_card_format(settlement_id):
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "IDENTIFIER_IS_ID_CARD",
+                "settlement_id 为身份证号格式，本端点仅支持门诊交易号/门特登记号；"
+                "请改用 POST /fee-decomposition/resolve-person 按人定位候选后再分解"),
+        )
+    provider = create_settlement_data_provider()
+    outcome = _decompose_for_session(session_id, settlement_id, chain, provider)
+    if outcome.status == "not_configured":
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail("FEE_DECOMPOSITION_NOT_CONFIGURED", outcome.message),
+        )
+    presentation = outcome.presentation
+    assert presentation is not None  # status=ok 必携带表述
+    # 与工作台/主链共用同一公开投影入口：投影 + 公开文本消毒一站式完成
+    public = FeeDecompositionPublic.model_validate(
+        to_public_contract_dict(
+            presentation.result,
+            summary_text=presentation.summary_text,
+            summary_source=presentation.summary_source,
+            settlement_facts=presentation.settlement_facts,
+            sanitize=_public_text,
+        )
+    )
+    return SessionDecompositionResponse(
+        **public.model_dump(),
+        meta=SessionDecompositionMeta(
+            identifier=settlement_id,
+            chain=outcome.chain,
+            profile="/".join(outcome.profile) if outcome.profile else None,
+            caliber=outcome.caliber,
+            algorithm_version=public.algorithm_version,
+        ),
+    ).model_dump()
 
 
 @router.post("/sessions/{session_id}/suspend")

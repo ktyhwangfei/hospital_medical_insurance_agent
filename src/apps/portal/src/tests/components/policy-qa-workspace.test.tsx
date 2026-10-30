@@ -83,14 +83,17 @@ describe('PolicyQAWorkspace', () => {
     expect(screen.getByTestId('agent-workspace-policy')).toBeInTheDocument()
   })
 
-  it('switches to the settlement workspace without leaving the page', () => {
+  it('switches to a wide settlement workspace without leaving the page', () => {
     render(<PolicyQAWorkspace />)
+    const readingColumn = screen.getByTestId('policy-qa-reading-column')
+    expect(readingColumn).toHaveClass('max-w-[840px]')
 
     fireEvent.click(screen.getByTestId('agent-switcher-settlement'))
 
     expect(screen.getByTestId('agent-workspace-settlement')).toBeInTheDocument()
     expect(screen.queryByTestId('agent-workspace-policy')).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '结算解释' })).toBeInTheDocument()
+    expect(readingColumn).toHaveClass('max-w-[1600px]')
   })
 
   it('switches to the ops workspace and back to policy', () => {

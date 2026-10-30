@@ -1,82 +1,117 @@
 {
   "datasource": "bjybdb",
   "hospital_code": "01110003",
-  "scope": "城镇职工（FUND_TYPE=3）× 门特（yllb='12'）× 按项目付费（fyfs='0'）",
+  "scope": "职工门特按项目付费（排除503/504）",
   "rounding_mode_assumed": "round_half_up",
-  "total_settlements": 14,
+  "total_settlements": 7,
   "verdict_counts": {
-    "准确": 8,
+    "准确": 1,
     "差异（实质）": 1,
     "无法核对": 5
   },
   "field_level": {
-    "accurate": 147,
+    "accurate": 92,
     "mismatched": 1,
-    "not_verifiable": 20,
-    "accuracy_decidable": 0.9932432432432432,
-    "accuracy_all": 0.875
+    "not_verifiable": 40,
+    "accuracy_decidable": 0.989247311827957,
+    "accuracy_all": 0.6917293233082706
   },
   "per_field_stats": {
     "ZJE": {
-      "accurate": 14,
+      "accurate": 7,
       "mismatched": 0,
       "not_verifiable": 0
     },
     "YBN": {
-      "accurate": 14,
+      "accurate": 7,
       "mismatched": 0,
       "not_verifiable": 0
     },
     "YBW": {
-      "accurate": 14,
+      "accurate": 7,
       "mismatched": 0,
       "not_verifiable": 0
     },
     "GRZIFTW": {
-      "accurate": 14,
+      "accurate": 7,
       "mismatched": 0,
       "not_verifiable": 0
     },
     "YBNQFJE": {
-      "accurate": 14,
+      "accurate": 7,
       "mismatched": 0,
       "not_verifiable": 0
     },
     "TCZHF": {
-      "accurate": 9,
+      "accurate": 2,
       "mismatched": 0,
       "not_verifiable": 5
     },
     "TCZIF": {
-      "accurate": 9,
+      "accurate": 2,
       "mismatched": 0,
       "not_verifiable": 5
     },
     "DEGWYZHF": {
-      "accurate": 9,
+      "accurate": 2,
       "mismatched": 0,
       "not_verifiable": 5
     },
     "DEGWYZIF": {
-      "accurate": 9,
+      "accurate": 2,
       "mismatched": 0,
       "not_verifiable": 5
     },
     "BCZHF": {
-      "accurate": 14,
+      "accurate": 7,
       "mismatched": 0,
       "not_verifiable": 0
     },
     "JCZHF": {
-      "accurate": 14,
+      "accurate": 7,
       "mismatched": 0,
       "not_verifiable": 0
     },
     "GFYLBCHBX": {
-      "accurate": 13,
+      "accurate": 6,
       "mismatched": 1,
       "not_verifiable": 0
+    },
+    "BIG_ILL_PAY": {
+      "accurate": 2,
+      "mismatched": 0,
+      "not_verifiable": 5
+    },
+    "FEEIN_DB_PAY": {
+      "accurate": 2,
+      "mismatched": 0,
+      "not_verifiable": 5
+    },
+    "FEEOUT_DB_PAY": {
+      "accurate": 2,
+      "mismatched": 0,
+      "not_verifiable": 5
+    },
+    "CIVIL_IN": {
+      "accurate": 7,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "FEEIN_MAF_PAY": {
+      "accurate": 7,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "FEEOUT_MAF_PAY": {
+      "accurate": 7,
+      "mismatched": 0,
+      "not_verifiable": 0
+    },
+    "PERSON_PAYABLE": {
+      "accurate": 2,
+      "mismatched": 0,
+      "not_verifiable": 5
     }
   },
-  "metric_note": "准确率按 12 个费用分解字段统计；支付渠道（XJZF/ZHZF/恒等式）为信息性核对不计入"
+  "metric_note": "按19个目标字段核对金额，含二次大病、救助及个人应付；定额链含条件核对，matched不表示日标准已独立核定；unknown不作为通过"
 }

@@ -67,6 +67,50 @@ def test_money_state_keeps_zero_missing_and_not_applicable_distinct():
     assert state_of(0, applicable=False) == "not_applicable"
 
 
+def test_decomposition_does_not_add_self_pay_two_twice_to_out_of_scope_costs():
+    from skills.mzsettlement_verify_skill.verifier import decompose_personal_payment
+
+    context = OutpatientSettlementContext(
+        total_amount="250.00", in_scope_amount="221.50", out_of_scope_amount="28.50",
+        self_pay_one="66.45", self_pay_two="8.50", personal_total_amount="50.65",
+        large_fund_payment="155.05", retired_medical_payment="44.30",
+    )
+
+    lines, uncertainties = decompose_personal_payment(context)
+
+    assert any(
+        "个人支付总金额 50.65 元 = 个人自付一 66.45 元"
+        " + 医保范围外金额 28.50 元 - 退役医疗支付 44.30 元" in line
+        for line in lines
+    )
+    assert any("已包含个人自付二 8.50 元" in line for line in lines)
+    assert uncertainties == []
+
+
+def test_missing_out_of_scope_costs_do_not_prove_settlement_anomaly():
+    from skills.mzsettlement_verify_skill.verifier import decompose_personal_payment
+
+    lines, uncertainties = decompose_personal_payment(OutpatientSettlementContext(
+        total_amount="400.00", in_scope_amount="0.00",
+        self_pay_one="0.00", self_pay_two="0.00", personal_total_amount="400.00",
+    ))
+
+    assert any("费用构成尚未解释" in line for line in lines)
+    assert uncertainties
+    assert not any("异常" in text for text in (*lines, *uncertainties))
+
+
+def test_out_of_scope_costs_do_not_hide_a_real_personal_total_mismatch():
+    result = verify_settlement(OutpatientSettlementContext(
+        total_amount="400.00", in_scope_amount="0.00", out_of_scope_amount="400.00",
+        fund_total_amount="0.00", personal_total_amount="500.00",
+        self_pay_one="0.00", self_pay_two="0.00",
+    ))
+
+    assert result.anomalies
+    assert any(check.status == "failed" for check in result.amount_checks)
+
+
 def test_amount_tolerance_is_one_cent():
     passing = verify_settlement(OutpatientSettlementContext(
         total_amount="100.01", in_scope_amount="90.00", out_of_scope_amount="10.00",

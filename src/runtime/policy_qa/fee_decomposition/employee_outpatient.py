@@ -18,6 +18,7 @@ from src.domain.insurance.fee_decomposition import (
     BranchCondition,
     BranchOutcome,
     BranchTrace,
+    CalculationOperand,
     CalculationRecord,
     CheckStatus,
     CheckType,
@@ -30,11 +31,12 @@ from src.domain.insurance.fee_decomposition import (
     decimal_to_str,
 )
 from src.runtime.policy_qa.fee_decomposition.big_pay import decompose_big_pay
-from src.runtime.policy_qa.fee_decomposition.catalog_split import split_catalog
+from src.runtime.policy_qa.fee_decomposition.catalog_split import CatalogRuleLabels, split_catalog
 from src.runtime.policy_qa.fee_decomposition.deductible import decompose_deductible
 from src.runtime.policy_qa.fee_decomposition.params_employee_outpatient import try_get_param
 from src.runtime.policy_qa.fee_decomposition.reconciliation import (
     coverage_counts,
+    identity_calculation,
     identity_field,
     overall_reconciliation_status,
     reconcile_field,
@@ -83,6 +85,7 @@ _FIELD_LABELS = {
     "T_BCPay": "退休补充保险补助",
     "T_JCPay": "军残支付",
     "T_OfficalPay": "公疗补充支付",
+    "RETIRE_OFFICER_PAY": "退役医疗费支付",
     "T_SelfPay1": "自付一",
     "T_FundPay": "基金合计",
     "T_SelfPayAll": "最终个人承担",
@@ -250,11 +253,21 @@ def decompose_employee_outpatient(
         id="fact.trade.person_type_code", kind="settlement_fact",
         ref=f"snapshot:{snapshot.settlement_ref}/trade/PN_PersonType",
         value=snapshot.person.person_type_code))
+    for ref, column, value in (
+        ("fact.person.military_disability_level_code", "P_JCLevel", snapshot.person.military_disability_level_code),
+        ("fact.person.public_medical_flag", "P_Official", snapshot.person.public_medical_flag),
+        ("fact.person.public_medical_treatment_code", "P_OfficialCode", snapshot.person.public_medical_treatment_code),
+    ):
+        if value is not None:
+            citations.append(DecompositionCitation(
+                id=ref, kind="settlement_fact",
+                ref=f"snapshot:{snapshot.settlement_ref}/trade/{column}", value=value))
 
-    # 4. 三大目录逐项分解（按费用发生日期匹配）
+    # 4. 三大目录逐项分解（按费用发生日期匹配；规则编号按本链 EOP 口径显式传入）
     split = split_catalog(
         snapshot.items, snapshot.drug_catalog, snapshot.service_catalog,
-        snapshot.material_catalog, snapshot.trade.hospital_code, snapshot.rounding_mode)
+        snapshot.material_catalog, snapshot.trade.hospital_code, snapshot.rounding_mode,
+        rules=CatalogRuleLabels(rounding_rule_id="EOP-RND-001", catalog_rule_ref="EOP-CAT 系列"))
     branches.extend(split.branches)
     calcs.extend(split.calculations)
     uncertainties.extend(split.uncertainties)
@@ -297,7 +310,8 @@ def decompose_employee_outpatient(
         snapshot.person.military_eligible_from, snapshot.person.military_eligible_to,
         snapshot.person.is_rural_disabled_veteran, snapshot.person.public_medical_eligible,
         tuple(it.fee_occurrence_date for it in snapshot.items),
-        snapshot.rounding_mode)
+        snapshot.rounding_mode,
+        military_disability_level_code=snapshot.person.military_disability_level_code)
     branches.extend(dvet.branches)
     calcs.extend(dvet.calculations)
     uncertainties.extend(dvet.uncertainties)
@@ -322,7 +336,9 @@ def decompose_employee_outpatient(
         split.total_in_scope if split.is_complete else None,
         person_kind, snapshot.person.is_rural_disabled_veteran,
         snapshot.person.public_medical_eligible, snapshot.person.public_medical_designated,
-        prior_fund_on_g, snapshot.trade.trade_date, snapshot.rounding_mode)
+        prior_fund_on_g, snapshot.trade.trade_date, snapshot.rounding_mode,
+        raw_indicator=snapshot.person.public_medical_flag,
+        raw_code=snapshot.person.public_medical_treatment_code)
     branches.extend(pmed.branches)
     calcs.extend(pmed.calculations)
     uncertainties.extend(pmed.uncertainties)
@@ -345,14 +361,15 @@ def decompose_employee_outpatient(
         if param is not None:
             citations.append(DecompositionCitation(
                 id=f"rule.{rule_id}", kind="policy_document", ref=param.source,
-                value=rule_id, approval_status=param.confirmation_status))
+                value=rule_id, values=(param.version,), approval_status=param.confirmation_status))
     citations.append(DecompositionCitation(
         id="fact.trade.trade_date", kind="settlement_fact",
         ref=f"snapshot:{snapshot.settlement_ref}/trade/T_TradeDate",
         value=snapshot.trade.trade_date.isoformat()))
 
     # 9. 逐字段核对（§10）：观测值仅作核对目标
-    fields = _build_fields(snapshot, split, deductible, big, rsup, dvet, pmed)
+    fields, identity_calcs = _build_fields(snapshot, split, deductible, big, rsup, dvet, pmed)
+    calcs.extend(identity_calcs)
     recon_status = overall_reconciliation_status(tuple(fields))
 
     # 10. 总体执行状态：存在 unknown/blocked 分支或目录不完整 → partial
@@ -366,6 +383,7 @@ def decompose_employee_outpatient(
         profile=DecompositionProfile(
             insurance_type=snapshot.insurance_type, medical_category=snapshot.medical_category),
         execution_status=execution,
+        fee_items=list(split.explanations),
         reconciliation_status=recon_status,
         fields=[field_to_model(f) for f in fields],
         branches=[branch_to_model(b) for b in branches],
@@ -379,6 +397,37 @@ def decompose_employee_outpatient(
     )
 
 
+def _identity_entry(
+    field_code: str,
+    label: str,
+    observed: Decimal | None,
+    operands: tuple[tuple[str, Decimal | None], ...],
+    *,
+    calculation_id: str,
+    formula_id: str,
+) -> tuple[FieldReconciliation, CalculationRecord | None]:
+    """账面恒等字段 + 轨迹记录：分量齐全时附 CalculationRecord（解释投影 1.1）。
+
+    只记录本来已执行的恒等加减，不改变核对语义；分量缺失时不产生记录，
+    字段回落"未记录本步计算"的保守解释。
+    """
+    components = tuple(value for _, value in operands)
+    if observed is None or any(v is None for v in components):
+        return identity_field(field_code, label, observed, components), None
+    calc = identity_calculation(
+        calculation_id, formula_id,
+        tuple(
+            CalculationOperand(ref, decimal_to_str(value))
+            for ref, value in operands
+            if value is not None
+        ))
+    return (
+        identity_field(field_code, label, observed, components,
+                       calculation_refs=(calc.calculation_id,)),
+        calc,
+    )
+
+
 def _no_benefit_result(
     snapshot: DecompositionSnapshot,
     branches: list[BranchTrace],
@@ -389,11 +438,32 @@ def _no_benefit_result(
     obs = snapshot.observed
     sum_fee = sum((it.fee for it in snapshot.items), Decimal("0"))
     zero = Decimal("0")
+    identity_calcs: list[CalculationRecord] = []
+
+    def _identity(field_code, label, observed, operands, *, calculation_id, formula_id):
+        entry, calc = _identity_entry(
+            field_code, label, observed, operands,
+            calculation_id=calculation_id, formula_id=formula_id)
+        if calc is not None:
+            identity_calcs.append(calc)
+        return entry
+
+    # 无待遇全额自费：总额与个人支付均由明细逐行合计得出（不依赖目录/待遇计算）
+    if sum_fee is not None:
+        identity_calcs.append(CalculationRecord(
+            calculation_id="calc.catalog.total_fee", formula_id="catalog_total_fee_v1",
+            formula_version="v1",
+            operands=(CalculationOperand("fact.items.fee", decimal_to_str(sum_fee)),),
+            unrounded_result=decimal_to_str(sum_fee),
+            rounding_rule="not_applicable（明细逐行合计，无取整）",
+            result=decimal_to_str(sum_fee)))
     entries: list[FieldReconciliation] = [
         reconcile_field("T_FeeAll", _FIELD_LABELS["T_FeeAll"], CheckType.DETAIL_AGGREGATION,
-                        sum_fee, obs.fee_all, BranchOutcome.TRUE),
-        identity_field("T_FeeAll.identity", _FIELD_LABELS["T_FeeAll"] + "（账面恒等 In+Out）",
-                       obs.fee_all, (obs.fee_in, obs.fee_out)),
+                        sum_fee, obs.fee_all, BranchOutcome.TRUE,
+                        calculation_refs=("calc.catalog.total_fee",)),
+        _identity("T_FeeAll.identity", _FIELD_LABELS["T_FeeAll"] + "（账面恒等 In+Out）",
+                  obs.fee_all, (("T_FeeIn", obs.fee_in), ("T_FeeOut", obs.fee_out)),
+                  calculation_id="calc.identity.fee_all", formula_id="identity_fee_all_v1"),
         # 无待遇规则：医保内=0、全部费用计入医保外（个人承担），自付二=0
         reconcile_field("T_FeeIn", _FIELD_LABELS["T_FeeIn"], CheckType.INDEPENDENT_RECALCULATION,
                         zero, obs.fee_in, BranchOutcome.TRUE),
@@ -415,20 +485,23 @@ def _no_benefit_result(
         reconcile_field("T_OfficalPay", _FIELD_LABELS["T_OfficalPay"],
                         CheckType.INDEPENDENT_RECALCULATION,
                         zero, obs.official_pay, BranchOutcome.TRUE),
-        identity_field("T_SelfPay1", _FIELD_LABELS["T_SelfPay1"], obs.self_pay_1,
-                       (obs.fee_in,
-                        -obs.big_pay if obs.big_pay is not None else None,
-                        -obs.official_pay if obs.official_pay is not None else None)),
-        identity_field("T_SelfPayAll", _FIELD_LABELS["T_SelfPayAll"], obs.self_pay_all,
-                       (obs.first_pay, obs.fee_out, obs.big_self_pay,
-                        -obs.bc_pay if obs.bc_pay is not None else None,
-                        -obs.jc_pay if obs.jc_pay is not None else None,
-                        -obs.official_pay if obs.official_pay is not None else None)),
-        identity_field("T_SelfPayAll.vs_fee_all_minus_fund",
-                       _FIELD_LABELS["T_SelfPayAll"] + "（对照 FeeAll-FundPay）",
-                       obs.self_pay_all,
-                       (obs.fee_all,
-                        -obs.fund_pay if obs.fund_pay is not None else None)),
+        reconcile_field("RETIRE_OFFICER_PAY", _FIELD_LABELS["RETIRE_OFFICER_PAY"],
+                        CheckType.INDEPENDENT_RECALCULATION, None, obs.retire_officer_pay,
+                        BranchOutcome.UNKNOWN, "SETTLEMENT_FACT_ONLY"),
+        _identity("T_SelfPay1", _FIELD_LABELS["T_SelfPay1"], obs.self_pay_1,
+                  (("T_FeeIn", obs.fee_in),
+                   ("T_BigPay", obs.big_pay.copy_negate() if obs.big_pay is not None else None),
+                   ("T_OfficalPay", obs.official_pay.copy_negate() if obs.official_pay is not None else None)),
+                  calculation_id="calc.identity.self_pay_1",
+                  formula_id="identity_self_pay_1_v1"),
+        _no_benefit_self_pay_all(sum_fee, obs, identity_calcs),
+        _identity("T_SelfPayAll.vs_fee_all_minus_fund",
+                  _FIELD_LABELS["T_SelfPayAll"] + "（对照 FeeAll-FundPay）",
+                  obs.self_pay_all,
+                  (("T_FeeAll", obs.fee_all),
+                   ("T_FundPay", obs.fund_pay.copy_negate() if obs.fund_pay is not None else None)),
+                  calculation_id="calc.identity.self_pay_all_vs_fund",
+                  formula_id="identity_self_pay_all_vs_fund_v1"),
     ]
     for code in ("T_PersonCountPay", "T_CashPay"):
         value = obs.person_count_pay if code == "T_PersonCountPay" else obs.cash_pay
@@ -445,6 +518,7 @@ def _no_benefit_result(
         reconciliation_status=recon_status,
         fields=[field_to_model(f) for f in entries],
         branches=[branch_to_model(b) for b in branches],
+        calculations=[calc_to_model(c) for c in identity_calcs],
         citations=[citation_to_model(c) for c in citations],
         uncertainties=[uncertainty_to_model(u) for u in uncertainties],
         coverage=CoverageSummary(**cov),
@@ -452,6 +526,30 @@ def _no_benefit_result(
             may_claim_full_explanation=(recon_status == "matched"),
             may_infer_missing_rules=False),
     )
+
+
+def _no_benefit_self_pay_all(sum_fee: Decimal | None, obs, calcs: list[CalculationRecord]) -> FieldReconciliation:
+    """无待遇全额自费：个人支付 = 明细逐行费用合计，不依赖待遇计算。"""
+    if sum_fee is not None:
+        calcs.append(CalculationRecord(
+            calculation_id="calc.self_pay_all.parts", formula_id="self_pay_all_components_v1",
+            formula_version="v1",
+            operands=(CalculationOperand("calc.catalog.total_fee", decimal_to_str(sum_fee)),),
+            unrounded_result=decimal_to_str(sum_fee),
+            rounding_rule="not_applicable（明细逐行合计，无取整）",
+            result=decimal_to_str(sum_fee)))
+        return reconcile_field(
+            "T_SelfPayAll", _FIELD_LABELS["T_SelfPayAll"], CheckType.INDEPENDENT_RECALCULATION,
+            sum_fee, obs.self_pay_all, BranchOutcome.TRUE,
+            calculation_refs=("calc.self_pay_all.parts",))
+    return identity_field(
+        "T_SelfPayAll", _FIELD_LABELS["T_SelfPayAll"], obs.self_pay_all,
+        (obs.first_pay, obs.fee_out, obs.big_self_pay,
+         obs.bc_pay.copy_negate() if obs.bc_pay is not None else None,
+         obs.jc_pay.copy_negate() if obs.jc_pay is not None else None,
+         obs.official_pay.copy_negate() if obs.official_pay is not None else None,
+         obs.retire_officer_pay.copy_negate() if obs.retire_officer_pay is not None else None),
+        calculation_refs=("calc.identity.self_pay_all",))
 
 
 def _build_fields(
@@ -462,8 +560,11 @@ def _build_fields(
     rsup,
     dvet,
     pmed,
-) -> list[FieldReconciliation]:
-    """按设计 §10 核对矩阵生成全部目标字段结果项（含零值与缺失值）。"""
+) -> tuple[list[FieldReconciliation], list[CalculationRecord]]:
+    """按设计 §10 核对矩阵生成全部目标字段结果项（含零值与缺失值）。
+
+    返回 (字段结果, 恒等式轨迹记录)；轨迹只记录本来已执行的加减，不改核对语义。
+    """
     obs = snapshot.observed
     sum_fee = split.total_fee if split.fatal_issue is None else None
     sum_book_in = sum((it.fee_in for it in snapshot.items if it.fee_in is not None), Decimal("0"))
@@ -473,25 +574,38 @@ def _build_fields(
     sum_book_sp2 = sum((it.self_pay_2 for it in snapshot.items if it.self_pay_2 is not None), Decimal("0"))
     book_sp2_complete = all(it.self_pay_2 is not None for it in snapshot.items)
 
+    identity_calcs: list[CalculationRecord] = []
+
+    def _identity(field_code, label, observed, operands, *, calculation_id, formula_id):
+        entry, calc = _identity_entry(
+            field_code, label, observed, operands,
+            calculation_id=calculation_id, formula_id=formula_id)
+        if calc is not None:
+            identity_calcs.append(calc)
+        return entry
+
     entries: list[FieldReconciliation] = [
         # 总费用：明细账面 ΣFee 汇总核对；另列账面恒等 T_FeeIn+T_FeeOut 对照
         reconcile_field("T_FeeAll", _FIELD_LABELS["T_FeeAll"], CheckType.DETAIL_AGGREGATION,
                         sum_fee, obs.fee_all,
-                        BranchOutcome.TRUE if sum_fee is not None else BranchOutcome.BLOCKED),
-        identity_field("T_FeeAll.identity", _FIELD_LABELS["T_FeeAll"] + "（账面恒等 In+Out）",
-                       obs.fee_all, (obs.fee_in, obs.fee_out)),
+                        BranchOutcome.TRUE if sum_fee is not None else BranchOutcome.BLOCKED,
+                        calculation_refs=("calc.catalog.total_fee",)),
+        _identity("T_FeeAll.identity", _FIELD_LABELS["T_FeeAll"] + "（账面恒等 In+Out）",
+                  obs.fee_all, (("T_FeeIn", obs.fee_in), ("T_FeeOut", obs.fee_out)),
+                  calculation_id="calc.identity.fee_all", formula_id="identity_fee_all_v1"),
         # 医保内：独立目录分解 vs 交易账面；另列明细账面汇总三层差异
         reconcile_field("T_FeeIn", _FIELD_LABELS["T_FeeIn"], CheckType.INDEPENDENT_RECALCULATION,
                         split.total_in_scope, obs.fee_in,
                         BranchOutcome.TRUE if split.is_complete else BranchOutcome.UNKNOWN,
-                        calculation_refs=tuple(c.calculation_id for c in split.calculations)),
+                        calculation_refs=("calc.catalog.total_in_scope",)),
         reconcile_field("T_FeeIn.detail", _FIELD_LABELS["T_FeeIn"] + "（明细账面汇总）",
                         CheckType.DETAIL_AGGREGATION,
                         sum_book_in if book_in_complete else None, obs.fee_in,
                         BranchOutcome.TRUE if book_in_complete else BranchOutcome.UNKNOWN),
         reconcile_field("T_FeeOut", _FIELD_LABELS["T_FeeOut"], CheckType.INDEPENDENT_RECALCULATION,
                         split.total_out_scope, obs.fee_out,
-                        BranchOutcome.TRUE if split.is_complete else BranchOutcome.UNKNOWN),
+                        BranchOutcome.TRUE if split.is_complete else BranchOutcome.UNKNOWN,
+                        calculation_refs=("calc.catalog.total_out_scope",)),
         reconcile_field("T_FeeOut.detail", _FIELD_LABELS["T_FeeOut"] + "（明细账面汇总）",
                         CheckType.DETAIL_AGGREGATION,
                         sum_book_out if book_out_complete else None, obs.fee_out,
@@ -499,7 +613,8 @@ def _build_fields(
         # 自付二：独立逐行计算 vs 交易账面；明细账面汇总另列（不自付二重复计入个人负担）
         reconcile_field("T_SelfPay2", _FIELD_LABELS["T_SelfPay2"], CheckType.INDEPENDENT_RECALCULATION,
                         split.total_self_pay_2, obs.self_pay_2,
-                        BranchOutcome.TRUE if split.is_complete else BranchOutcome.UNKNOWN),
+                        BranchOutcome.TRUE if split.is_complete else BranchOutcome.UNKNOWN,
+                        calculation_refs=("calc.catalog.total_self_pay_2",)),
         reconcile_field("T_SelfPay2.detail", _FIELD_LABELS["T_SelfPay2"] + "（明细账面汇总）",
                         CheckType.DETAIL_AGGREGATION,
                         sum_book_sp2 if book_sp2_complete else None, obs.self_pay_2,
@@ -525,19 +640,46 @@ def _build_fields(
                         calculation_refs=tuple(c.calculation_id for c in rsup.calculations)),
         reconcile_field("T_JCPay", _FIELD_LABELS["T_JCPay"], CheckType.INDEPENDENT_RECALCULATION,
                         dvet.amount, obs.jc_pay, dvet.outcome, dvet.reason_code,
-                        calculation_refs=tuple(c.calculation_id for c in dvet.calculations)),
+                        calculation_refs=tuple(c.calculation_id for c in dvet.calculations),
+                        citation_refs=tuple(ref for branch in dvet.branches for ref in branch.input_refs
+                                            if ref == "fact.person.military_disability_level_code")),
         reconcile_field("T_OfficalPay", _FIELD_LABELS["T_OfficalPay"],
                         CheckType.INDEPENDENT_RECALCULATION,
                         pmed.amount, obs.official_pay, pmed.outcome, pmed.reason_code,
-                        calculation_refs=tuple(c.calculation_id for c in pmed.calculations)),
+                        calculation_refs=tuple(c.calculation_id for c in pmed.calculations),
+                        citation_refs=tuple(ref for branch in pmed.branches for ref in branch.input_refs
+                                            if ref in ("fact.person.public_medical_flag", "fact.person.public_medical_treatment_code"))),
+        reconcile_field("RETIRE_OFFICER_PAY", _FIELD_LABELS["RETIRE_OFFICER_PAY"],
+                        CheckType.INDEPENDENT_RECALCULATION, None, obs.retire_officer_pay,
+                        BranchOutcome.UNKNOWN, "SETTLEMENT_FACT_ONLY"),
     ]
 
-    # S1 候选恒等式：只用账面观测分量，显式标注 identity_check，不证明字段原因
-    entries.append(identity_field(
-        "T_SelfPay1", _FIELD_LABELS["T_SelfPay1"], obs.self_pay_1,
-        (obs.fee_in,
-         -obs.big_pay if obs.big_pay is not None else None,
-         -obs.official_pay if obs.official_pay is not None else None)))
+    # 自付一：能按本单独立计算的起付承担＋大额个人自付分解时走重算；
+    # 分量缺失才退回账面恒等式（只用观测分量，不证明字段原因）。
+    if deductible.deductible_paid is not None and big.big_self_pay is not None:
+        self_pay_1_parts = deductible.deductible_paid + big.big_self_pay
+        identity_calcs.append(CalculationRecord(
+            calculation_id="calc.self_pay_1.parts",
+            formula_id="self_pay_1_components_v1",
+            formula_version="v1",
+            operands=(
+                CalculationOperand("calc.deductible.split", decimal_to_str(deductible.deductible_paid)),
+                CalculationOperand("calc.big_pay.self_pay", decimal_to_str(big.big_self_pay)),
+            ),
+            unrounded_result=decimal_to_str(self_pay_1_parts),
+            rounding_rule="not_applicable（加法，无取整）",
+            result=decimal_to_str(self_pay_1_parts)))
+        entries.append(reconcile_field(
+            "T_SelfPay1", _FIELD_LABELS["T_SelfPay1"], CheckType.INDEPENDENT_RECALCULATION,
+            self_pay_1_parts, obs.self_pay_1, BranchOutcome.TRUE,
+            calculation_refs=("calc.self_pay_1.parts",)))
+    else:
+        entries.append(_identity(
+            "T_SelfPay1", _FIELD_LABELS["T_SelfPay1"], obs.self_pay_1,
+            (("T_FeeIn", obs.fee_in),
+             ("T_BigPay", obs.big_pay.copy_negate() if obs.big_pay is not None else None),
+             ("T_OfficalPay", obs.official_pay.copy_negate() if obs.official_pay is not None else None)),
+            calculation_id="calc.identity.self_pay_1", formula_id="identity_self_pay_1_v1"))
     # 基金合计候选公式：本单另有非零基金渠道则不适用；渠道是否穷尽未知则不可核对
     if snapshot.has_other_fund_channels is True:
         entries.append(FieldReconciliation(
@@ -547,33 +689,106 @@ def _build_fields(
             observed_amount=decimal_to_str(obs.fund_pay) if obs.fund_pay is not None else None,
             reason_code="FUND_CHANNELS_NOT_EXHAUSTED"))
     elif snapshot.has_other_fund_channels is None:
-        entries.append(FieldReconciliation(
-            field_code="T_FundPay", label=_FIELD_LABELS["T_FundPay"],
-            check_type=CheckType.IDENTITY_CHECK,
-            check_status=CheckStatus.NOT_VERIFIABLE,
-            observed_amount=decimal_to_str(obs.fund_pay) if obs.fund_pay is not None else None,
-            reason_code="FUND_CHANNELS_EXHAUSTIVENESS_UNKNOWN"))
+        # 渠道穷尽性未知时仍可给出"已列示渠道重算"：退役医疗费为 0 且各渠道均有独立计算。
+        channel_amounts = (big.big_pay, rsup.amount, dvet.amount, pmed.amount)
+        fund_ready = obs.retire_officer_pay == 0 and all(amount is not None for amount in channel_amounts)
+        fund_channels = [(cid, amount) for cid, amount in (
+            ("calc.big_pay.segmented", big.big_pay),
+            *((records[-1].calculation_id, amount) for records, amount in (
+                (rsup.calculations, rsup.amount), (dvet.calculations, dvet.amount),
+                (pmed.calculations, pmed.amount)) if amount is not None and amount != 0 and records),
+        ) if amount is not None and amount != 0] if fund_ready else []
+        if fund_ready:
+            fund_total = sum((amount for _, amount in fund_channels), Decimal("0"))
+            identity_calcs.append(CalculationRecord(
+                calculation_id="calc.fund.total.parts", formula_id="fund_total_components_v1",
+                formula_version="v1",
+                operands=tuple(CalculationOperand(cid, decimal_to_str(amount)) for cid, amount in fund_channels),
+                unrounded_result=decimal_to_str(fund_total), rounding_rule="not_applicable（加法，无取整）",
+                result=decimal_to_str(fund_total)))
+            entries.append(reconcile_field(
+                "T_FundPay", _FIELD_LABELS["T_FundPay"], CheckType.INDEPENDENT_RECALCULATION,
+                fund_total, obs.fund_pay, BranchOutcome.TRUE,
+                calculation_refs=("calc.fund.total.parts",)))
+        else:
+            entries.append(FieldReconciliation(
+                field_code="T_FundPay", label=_FIELD_LABELS["T_FundPay"],
+                check_type=CheckType.IDENTITY_CHECK,
+                check_status=CheckStatus.NOT_VERIFIABLE,
+                observed_amount=decimal_to_str(obs.fund_pay) if obs.fund_pay is not None else None,
+                reason_code="FUND_CHANNELS_EXHAUSTIVENESS_UNKNOWN"))
     else:
-        entries.append(identity_field(
+        entries.append(_identity(
             "T_FundPay", _FIELD_LABELS["T_FundPay"], obs.fund_pay,
-            (obs.big_pay, obs.bc_pay, obs.jc_pay, obs.official_pay)))
-    entries.append(identity_field(
-        "T_SelfPayAll", _FIELD_LABELS["T_SelfPayAll"], obs.self_pay_all,
-        (obs.first_pay, obs.fee_out, obs.big_self_pay,
-         -obs.bc_pay if obs.bc_pay is not None else None,
-         -obs.jc_pay if obs.jc_pay is not None else None,
-         -obs.official_pay if obs.official_pay is not None else None)))
+            (("T_BigPay", obs.big_pay), ("T_BCPay", obs.bc_pay),
+             ("T_JCPay", obs.jc_pay), ("T_OfficalPay", obs.official_pay),
+             ("RETIRE_OFFICER_PAY", obs.retire_officer_pay)),
+            calculation_id="calc.identity.fund_pay", formula_id="identity_fund_pay_v1"))
+    # 仅核对已读取的支付事实，不据此宣称基金渠道已穷尽或退役待遇已独立重算。
+    entries.append(_identity(
+        "T_FundPay.listed_channels", "基金合计（已列示渠道账面构成）", obs.fund_pay,
+        (("T_BigPay", obs.big_pay), ("T_BCPay", obs.bc_pay),
+         ("T_JCPay", obs.jc_pay), ("T_OfficalPay", obs.official_pay),
+         ("RETIRE_OFFICER_PAY", obs.retire_officer_pay),
+         ("T_BigillPay", obs.bigill_pay), ("NT_CivilPay", obs.civil_pay)),
+        calculation_id="calc.identity.fund_pay.listed_channels", formula_id="identity_listed_fund_pay_v1"))
+    personal_parts = [
+        ("calc.deductible.split", deductible.deductible_paid, 1),
+        ("calc.catalog.total_out_scope", split.total_out_scope, 1),
+        ("calc.big_pay.self_pay", big.big_self_pay, 1),
+    ]
+    for records, amount in ((rsup.calculations, rsup.amount), (dvet.calculations, dvet.amount),
+                            (pmed.calculations, pmed.amount)):
+        if amount is not None and records:
+            personal_parts.append((records[-1].calculation_id, amount, -1))
+    # 退役医疗费仅账面列示且无独立计算：非零或未取得时不得声称已独立重算。
+    personal_ready = (all(value is not None for _, value, _ in personal_parts)
+                      and obs.retire_officer_pay is not None and obs.retire_officer_pay == 0)
+    if personal_ready:
+        personal_total = sum((value * sign for _, value, sign in personal_parts if value is not None), Decimal("0"))
+        identity_calcs.append(CalculationRecord(
+            calculation_id="calc.self_pay_all.parts",
+            formula_id="self_pay_all_components_v1",
+            formula_version="v1",
+            operands=tuple(CalculationOperand(cid, decimal_to_str(value * sign))
+                           for cid, value, sign in personal_parts),
+            unrounded_result=decimal_to_str(personal_total),
+            rounding_rule="not_applicable（加减，无取整）",
+            result=decimal_to_str(personal_total)))
+        entries.append(reconcile_field(
+            "T_SelfPayAll", _FIELD_LABELS["T_SelfPayAll"], CheckType.INDEPENDENT_RECALCULATION,
+            personal_total, obs.self_pay_all, BranchOutcome.TRUE,
+            calculation_refs=("calc.self_pay_all.parts",)))
+    else:
+        entries.append(_identity(
+            "T_SelfPayAll", _FIELD_LABELS["T_SelfPayAll"], obs.self_pay_all,
+            (("T_FirstPay", obs.first_pay), ("T_FeeOut", obs.fee_out),
+             ("T_BigSelfPay", obs.big_self_pay),
+             ("T_BCPay", obs.bc_pay.copy_negate() if obs.bc_pay is not None else None),
+             ("T_JCPay", obs.jc_pay.copy_negate() if obs.jc_pay is not None else None),
+             ("T_OfficalPay", obs.official_pay.copy_negate() if obs.official_pay is not None else None),
+             ("RETIRE_OFFICER_PAY", obs.retire_officer_pay.copy_negate() if obs.retire_officer_pay is not None else None)),
+            calculation_id="calc.identity.self_pay_all", formula_id="identity_self_pay_all_v1"))
     # 与 FeeAll-FundPay 独立核对（账面恒等，不证明字段原因）
-    entries.append(identity_field(
+    entries.append(_identity(
         "T_SelfPayAll.vs_fee_all_minus_fund",
         _FIELD_LABELS["T_SelfPayAll"] + "（对照 FeeAll-FundPay）",
         obs.self_pay_all,
-        (obs.fee_all,
-         -obs.fund_pay if obs.fund_pay is not None else None)))
+        (("T_FeeAll", obs.fee_all),
+         ("T_FundPay", obs.fund_pay.copy_negate() if obs.fund_pay is not None else None)),
+        calculation_id="calc.identity.self_pay_all_vs_fund",
+        formula_id="identity_self_pay_all_vs_fund_v1"))
+    # 渠道恒等（对照居民链）：账户支付+现金支付 = 最终个人承担
+    entries.append(_identity(
+        "T_SelfPayAll.channel", _FIELD_LABELS["T_SelfPayAll"] + "（渠道恒等 账户+现金）",
+        obs.self_pay_all,
+        (("T_PersonCountPay", obs.person_count_pay), ("T_CashPay", obs.cash_pay)),
+        calculation_id="calc.identity.self_pay_all_channel",
+        formula_id="identity_self_pay_channel_v1"))
     # 账户/现金：缺少当时扣款规则与支付流水，仅报告账面渠道金额
     for code in ("T_PersonCountPay", "T_CashPay"):
         value = obs.person_count_pay if code == "T_PersonCountPay" else obs.cash_pay
         entries.append(reconcile_field(
             code, _FIELD_LABELS[code], CheckType.DETAIL_AGGREGATION,
             None, value, BranchOutcome.UNKNOWN, "PAYMENT_CHANNEL_REPLAY_UNAVAILABLE"))
-    return entries
+    return entries, identity_calcs

@@ -23,7 +23,7 @@ export class PolicyQAPage extends BasePage {
     this.answer = page.locator('[data-testid="policy-qa-answer"]');
     this.verification = page.locator('[data-testid="policy-qa-verification"]');
     this.settlementChip = page.getByTestId('policy-qa-composer').getByText(/结算单 \d+/);
-    this.sourcesButton = page.getByRole('button', { name: /查看 \d+ 条政策来源/ });
+    this.sourcesButton = page.getByRole('button', { name: /查看 \d+ 篇政策来源/ });
     this.sourcesDialog = page.locator('[data-testid="policy-qa-sources"]');
     this.doneIndicator = page.locator('[data-testid="policy-qa-stream-done"]');
     this.feedbackDrawer = page.locator('[data-testid="policy-qa-feedback-drawer"]');

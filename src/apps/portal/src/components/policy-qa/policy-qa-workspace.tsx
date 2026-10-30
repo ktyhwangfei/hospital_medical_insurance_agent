@@ -25,7 +25,7 @@ export default function PolicyQAWorkspace() {
   return (
     <div
       data-testid="policy-qa-reading-column"
-      className="mx-auto flex w-full max-w-[840px] flex-col px-6 py-8"
+      className={`mx-auto flex w-full flex-col px-6 py-8 ${agent === 'settlement' ? 'max-w-[1600px]' : 'max-w-[840px]'}`}
     >
       <AgentSwitcher agent={agent} onChange={setAgent} disabled={busy} />
       <div key={agent} className="animate-workspace-fade" data-testid={`agent-workspace-${agent}`}>

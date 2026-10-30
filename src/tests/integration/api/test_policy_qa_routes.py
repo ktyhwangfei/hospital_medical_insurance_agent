@@ -4,8 +4,13 @@
 测试policy_qa相关的API端点
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import os
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 # 设置使用内存存储
@@ -79,11 +84,88 @@ def test_pre_refund_draft_is_not_exposed_by_policy_qa_api():
     assert not hasattr(policy_qa_routes, "get_pre_refund_billing_adapter")
 
 
+_FEE_READ_SECRET = "policy-qa-routes-test-secret"
+
+
+def _fee_read_headers(permission: str = "fee_decomposition:read") -> dict[str, str]:
+    header = {"alg": "HS256", "typ": "JWT"}
+    payload = {
+        "sub": "policy-qa-routes-tester",
+        "roles": ["information_department"],
+        "permissions": [permission],
+        "exp": (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp(),
+    }
+    h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+    b = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    sig = base64.urlsafe_b64encode(hmac.new(
+        _FEE_READ_SECRET.encode(), f"{h}.{b}".encode(), hashlib.sha256).digest()).decode().rstrip("=")
+    return {"Authorization": f"Bearer {h}.{b}.{sig}"}
+
+
+def test_settlement_reads_require_same_fee_permission(monkeypatch):
+    """结算解释流与 /fee-decomposition 同权：无令牌 401、缺 scope 403。"""
+    monkeypatch.setenv("AUTH_JWT_SECRET", _FEE_READ_SECRET)
+    bare = TestClient(create_app())
+    stream = bare.post(
+        "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+        json={"question": "解释这笔结算", "mode": "settlement_explain",
+              "settlement_id": "011100030X240311000031"},
+    )
+    assert stream.status_code == 401
+    assert bare.get(
+        "/api/v1/medical-insurance-ai-agent/policy-qa/settlements",
+        params={"date_from": "2024-01-01", "date_to": "2024-01-31"},
+    ).status_code == 401
+
+    wrong_scope = TestClient(create_app(), headers=_fee_read_headers("policy_qa:read"))
+    assert wrong_scope.post(
+        "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+        json={"question": "解释这笔结算", "mode": "settlement_explain",
+              "settlement_id": "011100030X240311000031"},
+    ).status_code == 403
+    assert wrong_scope.get(
+        "/api/v1/medical-insurance-ai-agent/policy-qa/settlements/1/fee-items",
+    ).status_code == 403
+
+
+def test_settlement_explanation_get_requires_fee_read_permission(monkeypatch):
+    """旧 GET /settlement-explanation 与费用分解同权：鉴权先于创建 provider/查询。"""
+    from src.runtime.api import policy_qa_routes
+
+    calls: list[str] = []
+
+    def spy_provider():
+        calls.append("provider")
+        raise AssertionError("鉴权失败时不得创建 provider")
+
+    monkeypatch.setenv("AUTH_JWT_SECRET", _FEE_READ_SECRET)
+    monkeypatch.setattr(policy_qa_routes, "create_settlement_data_provider", spy_provider)
+    url = "/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation"
+
+    bare = TestClient(create_app(), raise_server_exceptions=False)
+    for params in ({"settlement_id": "1671213"},
+                   {"settlement_id": "S001", "compare_with": "S002"}):
+        assert bare.get(url, params=params).status_code == 401
+
+    wrong_scope = TestClient(
+        create_app(), headers=_fee_read_headers("policy_qa:read"),
+        raise_server_exceptions=False)
+    for params in ({"settlement_id": "1671213"},
+                   {"settlement_id": "S001", "compare_with": "S002"}):
+        response = wrong_scope.get(url, params=params)
+        assert response.status_code == 403
+        assert response.json()["detail"]["error_code"] == "AUTH_FORBIDDEN"
+
+    # 普通与 compare 两条分支都必须在 provider 之前拦下
+    assert calls == []
+
+
 @pytest.fixture
-def client():
-    """创建测试客户端"""
+def client(monkeypatch):
+    """创建测试客户端；结算金额读取需 fee_decomposition:read，默认携带测试令牌。"""
+    monkeypatch.setenv("AUTH_JWT_SECRET", _FEE_READ_SECRET)
     app = create_app()
-    return TestClient(app)
+    return TestClient(app, headers=_fee_read_headers())
 
 
 @pytest.mark.parametrize(
@@ -260,6 +342,148 @@ class TestPolicyQAStreamEndpoint:
         assert len(result["field_explanations"]) == 19
         assert all(item["citations"] for item in result["field_explanations"])
         assert events[-1][0] == "done"
+
+    @pytest.mark.parametrize("all_out_of_scope", [False, True])
+    def test_outpatient_trade_no_skips_mode_workflow_and_uses_skill_pipeline(
+        self, client, monkeypatch, all_out_of_scope
+    ):
+        """#78 缺陷复现：mode=settlement_explain + 门诊交易号此前进入
+        wf_outpatient_settlement_explain，其 fetch_settlement 走住院语义模型
+        （inpatient_settlement 按登记号锚定），门诊交易号必然查不到/类型报错。
+        门诊交易号应跳过 mode 工作流，直接进门诊技能管线。"""
+        from types import SimpleNamespace
+
+        from skills.mzsettlement_verify_skill.assembler import (
+            OutpatientSettlementVerifierAssembler,
+        )
+        from src.runtime.api import policy_qa_routes
+
+        class Provider:
+            queries = []
+
+            async def run_semantic_query(self, query):
+                self.queries.append(query)
+                if all_out_of_scope:
+                    row = {
+                        "T_FeeAll": "400.00", "T_FeeIn": "0.00",
+                        "T_FeeOut": "400.00", "T_FundPay": "0.00",
+                        "T_SelfPayAll": "400.00", "T_SelfPay1": "0.00",
+                        "T_SelfPay2": "0.00", "T_PersonCountPay": "400.00",
+                        "T_CashPay": "0.00",
+                    }
+                    if query.scope.query_scope == "fee_item":
+                        row = {
+                            "ItemName": "范围外检查项目", "Fee": "400.00",
+                            "FeeIn": "0.00", "FeeOut": "400.00",
+                            "FeeItem_SelfPay2": "0.00",
+                        }
+                    return SimpleNamespace(rows=[row], quality_status="complete")
+                return SimpleNamespace(
+                    rows=[{
+                        "T_FeeAll": 100,
+                        "T_FeeIn": 80,
+                        "T_FeeOut": 20,
+                        "T_FundPay": 70,
+                        "T_SelfPayAll": 30,
+                        "P_FundType": "职工",
+                        "PN_PersonType": "在职",
+                        "T_CureType": "普通门诊",
+                        "HospitalLevel": "三级",
+                        "P_JCLevel": "不享受伤残待遇",
+                        "T_TradeDate": "2026-08-26",
+                    }],
+                    quality_status="complete",
+                )
+
+        provider = Provider()
+        workflow_calls: list = []
+
+        async def _record_workflow(*args, **kwargs):
+            workflow_calls.append(kwargs.get("settlement_id"))
+            return None
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: provider
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "run_workflow_by_mode", _record_workflow
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "route_question", lambda _question: "mzsettlement_verify_skill"
+        )
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "get_assembler",
+            lambda _skill_id: OutpatientSettlementVerifierAssembler(),
+        )
+        monkeypatch.setattr(
+            policy_qa_routes,
+            "retrieve_policy_evidence",
+            lambda **_kwargs: SimpleNamespace(
+                selected_evidence=[], missing_required_rules=["政策证据"]
+            ),
+        )
+
+        response = client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={
+                "question": "这笔门诊费用的「最终个人承担」是怎么算的？",
+                "settlement_id": "011100030X240409000004",
+                "mode": "settlement_explain",
+            },
+        )
+        events = _sse_events(response.text)
+
+        # mode 工作流不得承接门诊交易号（其 fetch_settlement 锚定住院模型）
+        assert workflow_calls == []
+        # 技能管线承接：门诊语义查询执行且流正常完结
+        assert len(provider.queries) >= 1
+        assert events[-1][0] == "done"
+        if all_out_of_scope:
+            result = next(data["result"] for name, data in events if name == "result")
+            assert "个人自付一 0.00 元 + 医保范围外金额 400.00 元" in result["answer"]
+            assert "范围外检查项目" in result["answer"]
+            assert "个人账户支付 400.00 元 + 现金支付 0.00 元" in result["answer"]
+            assert "差异 400.00 元 待人工核对" not in result["answer"]
+            assert result["answer_status"] == "partial"
+
+    def test_inpatient_djh_with_settlement_explain_mode_still_uses_mode_workflow(
+        self, client, monkeypatch
+    ):
+        """对照：住院登记号（非门诊交易号形态）仍由 mode 工作流承接。"""
+        from src.runtime.api import policy_qa_routes
+
+        workflow_calls: list = []
+
+        async def _record_workflow(*args, **kwargs):
+            workflow_calls.append(kwargs.get("settlement_id"))
+            return None
+
+        class Provider:
+            async def get_settlement_context(self, settlement_id):
+                from src.runtime.policy_qa.settlement_data_provider import (
+                    SettlementNotFoundError,
+                )
+
+                raise SettlementNotFoundError("not found")
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: Provider()
+        )
+        monkeypatch.setattr(
+            policy_qa_routes, "run_workflow_by_mode", _record_workflow
+        )
+
+        client.post(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/stream",
+            json={
+                "question": "结算单核对",
+                "settlement_id": "1671213",
+                "mode": "settlement_explain",
+            },
+        )
+
+        assert workflow_calls == ["1671213"]
 
     def test_trade_number_context_is_loaded_before_skill_routing(self, client, monkeypatch):
         from types import SimpleNamespace
@@ -1445,6 +1669,71 @@ class TestPolicyQASettlementsList:
         )
         assert response.status_code == 422
 
+    def test_list_settlements_with_patient_key_includes_outpatient_chain(
+        self, client, monkeypatch
+    ):
+        """带 patient_key 的列表含门诊条目：chain 标记 + 字段完整。"""
+        from src.runtime.policy_qa.settlement_data_provider import SettlementListItem
+
+        items = [
+            SettlementListItem(
+                settlement_id="T1001",
+                settlement_date="2025-08-20",
+                person_type="",
+                insurance_type="城镇职工",
+                service_type="门诊",
+                total_amount=52.50,
+                decomposition_chain="outpatient",
+            ),
+            SettlementListItem(
+                settlement_id="DJH9001",
+                settlement_date="2025-08-25",
+                service_type="门诊特殊病",
+                total_amount=100.0,
+                decomposition_chain="special",
+            ),
+        ]
+        self._mount(monkeypatch, items)
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements",
+            params={
+                "date_from": "2025-08-01",
+                "date_to": "2025-08-31",
+                "patient_key": "132201198705101616",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        by_id = {item["settlement_id"]: item for item in data}
+        assert by_id["T1001"]["decomposition_chain"] == "outpatient"
+        assert by_id["T1001"]["service_type"] == "门诊"
+        assert by_id["T1001"]["total_amount"] == 52.50
+        assert by_id["DJH9001"]["decomposition_chain"] == "special"
+        assert by_id["DJH9001"]["service_type"] == "门诊特殊病"
+
+    def test_list_settlements_inpatient_item_chain_is_null(self, client, monkeypatch):
+        """无 patient_key 回归：住院单 decomposition_chain 为 null。"""
+        from src.runtime.policy_qa.settlement_data_provider import SettlementListItem
+
+        self._mount(monkeypatch, [
+            SettlementListItem(
+                settlement_id="S001",
+                settlement_date="2025-04-15",
+                service_type="普通住院",
+                total_amount=12386.40,
+            ),
+        ])
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements",
+            params={"date_from": "2025-04-01", "date_to": "2025-04-30"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()[0]["decomposition_chain"] is None
+
 
 class TestPolicyQAPatientLookup:
     """患者定位端点（V4.0 结算解释智能体·临时方案，正式由登录态取代）。"""
@@ -1486,6 +1775,35 @@ class TestPolicyQAPatientLookup:
         assert data["name"] == "张三"
         assert "sfz" not in data and "id_no" not in data
 
+    def test_patient_lookup_otrade_fallback_returns_masked_summary(
+        self, client, monkeypatch
+    ):
+        """o_Trade 回退命中的门诊患者摘要 200：无登记号，身份证不回显原文。"""
+        from src.runtime.policy_qa.settlement_data_provider import PatientSummary
+
+        self._mount(
+            monkeypatch,
+            PatientSummary(
+                card_no="MZ0001",
+                id_no_masked="132***********1616",
+                name="李四",
+                gender="女",
+                birth_date="1987-05-10",
+                registration_id="",
+            ),
+        )
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/patient-lookup",
+            params={"key": "132201198705101616"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["registration_id"] == ""
+        assert data["id_no_masked"] == "132***********1616"
+        assert "132201198705101616" not in response.text
+
     def test_patient_lookup_not_found_404(self, client, monkeypatch):
         self._mount(monkeypatch, None)
 
@@ -1502,6 +1820,148 @@ class TestPolicyQAPatientLookup:
             "/api/v1/medical-insurance-ai-agent/policy-qa/patient-lookup",
         )
         assert response.status_code == 422
+
+
+class TestPolicyQAOutpatientFeeItems:
+    """门诊费用明细端点（policy-qa 结算单「费用明细」页签数据源，SQL Server 直库 o_FeeItem）。"""
+
+    def _mount(self, monkeypatch, rows):
+        from src.runtime.api import policy_qa_routes
+
+        class Cursor:
+            description = [
+                ("ItemName",), ("ItemType",), ("ItemCode",), ("Count",),
+                ("UnitPrice",), ("Fee",), ("FeeIn",), ("FeeOut",), ("SelfPay2",),
+            ]
+
+            def __init__(self):
+                self.executed = []
+
+            def execute(self, sql, *params):
+                self.executed.append((sql, params))
+
+            def fetchall(self):
+                return rows
+
+        class Connection:
+            def __init__(self):
+                self.cursor_instance = Cursor()
+
+            def cursor(self):
+                return self.cursor_instance
+
+            def close(self):
+                pass
+
+        class Provider:
+            def __init__(self):
+                self._conn = Connection()
+
+            def _connect(self, datasource_id):
+                assert datasource_id == "bjybdb"
+                return self._conn
+
+        provider = Provider()
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: provider
+        )
+        return provider
+
+    def test_fee_items_returns_normalized_rows(self, client, monkeypatch):
+        from decimal import Decimal
+
+        provider = self._mount(monkeypatch, [
+            (
+                # ItemType 在 SQL Server 为 int（0=药品，falsy），勿用 or 兜底
+                "注射用培美曲塞二钠", 0, "XL01BAP030B001010178396",
+                Decimal("4.00"), Decimal("100.0000"), Decimal("400.0000"),
+                Decimal("0.0000"), Decimal("400.0000"), Decimal("0.0000"),
+            ),
+        ])
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements/"
+            "011100030X240409000004/fee-items"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        item = data[0]
+        assert item["item_name"] == "注射用培美曲塞二钠"
+        assert item["item_type"] == "药品"
+        assert item["quantity"] == "4.00"
+        assert item["total_fee"] == "400.0000"
+        # 0 金额（Decimal('0.0000') 为 falsy）必须原样保留，不得被吞成空串
+        assert item["insurance_inner"] == "0.0000"
+        assert item["self_pay_2"] == "0.0000"
+        # 查询落 SQL Server 直库 o_FeeItem，按交易号过滤
+        sql, params = provider._conn.cursor_instance.executed[0]
+        assert "o_FeeItem" in sql and "T_TradeNo = ?" in sql
+        assert params == ("011100030X240409000004",)
+
+    def test_fee_items_special_registration_reads_mzfymx(self, client, monkeypatch):
+        """门特登记号（djh）：读 yb_mzfymx（与门特分解链路同表），映射到统一明细行。"""
+        from decimal import Decimal
+        from types import SimpleNamespace
+
+        from src.runtime.api import policy_qa_routes
+
+        class Provider:
+            def _connect(self, datasource_id):
+                assert datasource_id == "bjybdb"
+                return SimpleNamespace(close=lambda: None)
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: Provider()
+        )
+        captured: dict = {}
+
+        def fake_load(conn, djh):
+            captured["djh"] = djh
+            return SimpleNamespace(data={"item_rows": [{
+                "xmmc": "血液透析", "xmlb": 1, "xmdm": "T001", "sl": Decimal("2"),
+                "dj": Decimal("30.00"), "zje": Decimal("60.00"),
+                "ybnje": Decimal("60.00"), "ybwje": Decimal("0.00"),
+                "grziftw": Decimal("0.00"),
+            }]})
+
+        monkeypatch.setattr(
+            policy_qa_routes, "load_special_mz_fee_items", fake_load
+        )
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements/814/fee-items"
+        )
+
+        assert response.status_code == 200
+        assert captured["djh"] == "814"
+        item = response.json()[0]
+        assert item["item_name"] == "血液透析"
+        assert item["item_type"] == "诊疗"
+        assert item["quantity"] == "2"
+        assert item["total_fee"] == "60.00"
+        assert item["insurance_inner"] == "60.00"
+        assert item["insurance_outer"] == "0.00"
+
+    def test_fee_items_query_failure_is_503(self, client, monkeypatch):
+        from src.runtime.api import policy_qa_routes
+
+        class BrokenProvider:
+            def _connect(self, datasource_id):
+                raise ConnectionError("sqlserver down")
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: BrokenProvider()
+        )
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements/"
+            "011100030X240409000004/fee-items"
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error_code"] == "POLICY_QA_DATA_UNAVAILABLE"
 
 
 class TestPolicyQAFeedback:

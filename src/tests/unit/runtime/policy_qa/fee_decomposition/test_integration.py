@@ -33,6 +33,21 @@ from src.runtime.policy_qa.fee_decomposition.result import (
     FieldExplanationModel,
     SettlementDecompositionResult,
 )
+from src.runtime.policy_qa.fee_decomposition.settlement_facts import (
+    DecompositionOutcome,
+    SettlementFactsItem,
+    SettlementFactsView,
+)
+
+
+def _canned_facts() -> SettlementFactsView:
+    return SettlementFactsView(
+        chain="outpatient", identifier="T001", trade_date="2024-06-01",
+        medical_category="11", insurance_type="3", person_type="11",
+        hospital_level=None,
+        items=[SettlementFactsItem(label="费用总金额", value="100.00")],
+        payment_items=[SettlementFactsItem(label="个人账户支付", value="0.00")],
+    )
 
 
 def _canned_result() -> SettlementDecompositionResult:
@@ -104,8 +119,13 @@ class TestProfileResolution:
     def test_exact_match(self):
         assert _resolve_profile_from_context(_EMPLOYEE_CONTEXT) == ("employee", "outpatient")
 
-    def test_resident_insurance_not_matched(self):
+    def test_resident_insurance_matched(self):
+        """Issue #80：城乡居民×普通门诊已注册映射到 resident 内核。"""
         ctx = SimpleNamespace(insurance_type="城乡居民基本医疗保险", service_type="普通门诊")
+        assert _resolve_profile_from_context(ctx) == ("resident", "outpatient")
+
+    def test_unregistered_insurance_not_matched(self):
+        ctx = SimpleNamespace(insurance_type="离休统筹", service_type="普通门诊")
         assert _resolve_profile_from_context(ctx) is None
 
     def test_special_outpatient_not_matched(self):
@@ -140,7 +160,7 @@ class TestDecomposeCall:
             captured.update(
                 trade_no=trade_no, hospital_code=hospital_code,
                 rounding_mode=rounding_mode, profile_resolver=profile_resolver)
-            return _canned_result()
+            return DecompositionOutcome(_canned_result(), _canned_facts())
 
         monkeypatch.setattr(integration, "decompose_outpatient_trade", fake_decompose)
         monkeypatch.setattr(
@@ -157,6 +177,10 @@ class TestDecomposeCall:
         assert conn.closed is True
         assert "总费用" in presentation.summary_text
         assert presentation.summary_source == "template"
+        # 结算事实侧车透传（1.2）
+        assert presentation.settlement_facts is not None
+        assert presentation.settlement_facts.identifier == "T001"
+        assert presentation.settlement_facts.chain == "outpatient"
 
     def test_unmatched_profile_passes_none_resolver(self, monkeypatch):
         _enable_gate(monkeypatch)
@@ -164,12 +188,13 @@ class TestDecomposeCall:
 
         def fake_decompose(_c, _t, _h, _r, profile_resolver=None):
             captured["profile_resolver"] = profile_resolver
-            return _canned_result()
+            return DecompositionOutcome(_canned_result())
 
         monkeypatch.setattr(integration, "decompose_outpatient_trade", fake_decompose)
         monkeypatch.setattr(
             integration, "polish_summary", lambda text: (text, "template"))
-        ctx = SimpleNamespace(insurance_type="城乡居民基本医疗保险", service_type="普通门诊")
+        # 未注册组合（离休统筹）不映射 resolver，内核走 UNSUPPORTED_PROFILE，不猜测
+        ctx = SimpleNamespace(insurance_type="离休统筹", service_type="普通门诊")
 
         assert maybe_decompose_outpatient(_FakeProvider(_FakeConn()), "T001", ctx)
         assert captured["profile_resolver"] is None
@@ -206,211 +231,143 @@ def _locate_failed() -> AdapterCallResult:
         data={}, data_quality=DataQualityStatus.MISSING, message="query failed")
 
 
-def _stub_locates(monkeypatch, zy: AdapterCallResult, mz: AdapterCallResult) -> None:
-    monkeypatch.setattr(
-        integration, "locate_special_registration", lambda _conn, _djh: zy)
+def _stub_locates(monkeypatch, mz: AdapterCallResult,
+                  resident_mz: AdapterCallResult | None = None) -> None:
+    monkeypatch.setattr(integration, "locate_special_fixed_kidney_registration", lambda *args: _locate_result("not_found"))
+    if mz.data.get("match_status") == "unique_match":
+        mz = mz.model_copy(update={"data": {**mz.data, "registration_row": {"fund_type": "3", "yllb": "12"}}})
+    if resident_mz is not None and resident_mz.data.get("match_status") == "unique_match":
+        resident_mz = resident_mz.model_copy(update={"data": {**resident_mz.data, "registration_row": {"fund_type": "93", "yllb": "12"}}})
     monkeypatch.setattr(
         integration, "locate_special_mz_registration", lambda _conn, _djh: mz)
+    monkeypatch.setattr(
+        integration, "locate_special_mz_resident_registration",
+        lambda _conn, _djh: resident_mz or _locate_result("not_found"))
 
 
 class TestSpecialSuiteRouting:
-    """djh → mz/zy 套表消歧（Issue #79 生产接入）：fail-closed，不猜测套表。"""
+    """Only employee/resident outpatient suites participate in routing."""
 
-    def test_zy_unique_routes_to_zy_service(self, monkeypatch):
+    def test_unsupported_registration_does_not_fall_back(self, monkeypatch):
         _enable_gate(monkeypatch)
-        _stub_locates(monkeypatch, _locate_result("unique_match"), _locate_result("not_found"))
+        _stub_locates(monkeypatch, _locate_result("not_found"))
         conn = _FakeConn()
-        called = {}
-
-        def fake_zy(c, djh, hospital_code, rounding_mode, **kwargs):
-            called["zy"] = (djh, kwargs)
-            return _canned_result()
-
-        def fake_mz(c, djh, hospital_code, rounding_mode, **kwargs):
-            called["mz"] = (djh, kwargs)
-            return _canned_result()
-
-        monkeypatch.setattr(integration, "decompose_outpatient_special_settlement", fake_zy)
-        monkeypatch.setattr(integration, "decompose_special_mz_settlement", fake_mz)
+        called = []
+        monkeypatch.setattr(integration, "decompose_special_mz_settlement",
+                            lambda *a, **k: called.append("mz") or DecompositionOutcome(_canned_result()))
+        monkeypatch.setattr(integration, "decompose_special_mz_resident_settlement",
+                            lambda *a, **k: called.append("resident_mz") or DecompositionOutcome(_canned_result()))
         monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
-
         presentation = maybe_decompose_special_outpatient(
             _FakeProvider(conn), "604", SimpleNamespace())
-
-        assert isinstance(presentation, DecompositionPresentation)
-        assert called["zy"][0] == "604"
-        assert "mz" not in called
+        assert presentation.result.execution_status == "unavailable"
+        assert presentation.result.uncertainties[0].code == "REGISTRATION_NOT_FOUND"
+        assert called == []
         assert conn.closed is True
 
     def test_mz_unique_routes_to_mz_service(self, monkeypatch):
         _enable_gate(monkeypatch)
-        _stub_locates(monkeypatch, _locate_result("not_found"), _locate_result("unique_match"))
-        conn = _FakeConn()
-        called = {}
-
-        def fake_zy(c, djh, hospital_code, rounding_mode, **kwargs):
-            called["zy"] = (djh, kwargs)
-            return _canned_result()
-
-        def fake_mz(c, djh, hospital_code, rounding_mode, **kwargs):
-            called["mz"] = (djh, kwargs)
-            return _canned_result()
-
-        monkeypatch.setattr(integration, "decompose_outpatient_special_settlement", fake_zy)
-        monkeypatch.setattr(integration, "decompose_special_mz_settlement", fake_mz)
-        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
-
-        presentation = maybe_decompose_special_outpatient(
-            _FakeProvider(conn), "567", SimpleNamespace())
-
-        assert isinstance(presentation, DecompositionPresentation)
-        assert called["mz"][0] == "567"
-        # mz 服务无 cycle_context_override 参数（周期上下文由 dyxxtsb/dyxxnd 推导）
-        assert "cycle_context_override" not in called["mz"][1]
-        assert "zy" not in called
-        assert conn.closed is True
-
-    def test_both_not_found_returns_unavailable(self, monkeypatch):
-        _enable_gate(monkeypatch)
-        _stub_locates(monkeypatch, _locate_result("not_found"), _locate_result("not_found"))
-        called = []
-        monkeypatch.setattr(
-            integration, "decompose_outpatient_special_settlement",
-            lambda *a, **k: called.append("zy") or _canned_result())
-        monkeypatch.setattr(
-            integration, "decompose_special_mz_settlement",
-            lambda *a, **k: called.append("mz") or _canned_result())
-        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
-
-        presentation = maybe_decompose_special_outpatient(
-            _FakeProvider(_FakeConn()), "999", SimpleNamespace())
-
-        assert presentation is not None
-        assert presentation.result.execution_status == "unavailable"
-        assert presentation.result.uncertainties[0].code == "REGISTRATION_NOT_FOUND"
-        assert called == []
-
-    def test_both_unique_is_ambiguous(self, monkeypatch):
-        _enable_gate(monkeypatch)
-        _stub_locates(
-            monkeypatch, _locate_result("unique_match"), _locate_result("unique_match"))
-        called = []
-        monkeypatch.setattr(
-            integration, "decompose_outpatient_special_settlement",
-            lambda *a, **k: called.append("zy") or _canned_result())
-        monkeypatch.setattr(
-            integration, "decompose_special_mz_settlement",
-            lambda *a, **k: called.append("mz") or _canned_result())
-        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
-
-        presentation = maybe_decompose_special_outpatient(
-            _FakeProvider(_FakeConn()), "604", SimpleNamespace())
-
-        assert presentation is not None
-        assert presentation.result.execution_status == "unavailable"
-        assert presentation.result.uncertainties[0].code == "REGISTRATION_AMBIGUOUS"
-        assert called == []
-
-    def test_within_suite_ambiguous_is_fail_closed(self, monkeypatch):
-        """一套表内歧义（多条登记）即使另一套未命中也不猜测。"""
-        _enable_gate(monkeypatch)
-        _stub_locates(monkeypatch, _locate_result("ambiguous"), _locate_result("not_found"))
-        called = []
-        monkeypatch.setattr(
-            integration, "decompose_outpatient_special_settlement",
-            lambda *a, **k: called.append("zy") or _canned_result())
-        monkeypatch.setattr(
-            integration, "decompose_special_mz_settlement",
-            lambda *a, **k: called.append("mz") or _canned_result())
-        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
-
-        presentation = maybe_decompose_special_outpatient(
-            _FakeProvider(_FakeConn()), "604", SimpleNamespace())
-
-        assert presentation is not None
-        assert presentation.result.execution_status == "unavailable"
-        assert presentation.result.uncertainties[0].code == "REGISTRATION_AMBIGUOUS"
-        assert called == []
-
-    def test_locate_read_failed_is_fail_closed(self, monkeypatch):
-        """任一定位查询失败即无法排除歧义，不进入任何套表。"""
-        _enable_gate(monkeypatch)
-        _stub_locates(monkeypatch, _locate_failed(), _locate_result("unique_match"))
-        called = []
-        monkeypatch.setattr(
-            integration, "decompose_outpatient_special_settlement",
-            lambda *a, **k: called.append("zy") or _canned_result())
-        monkeypatch.setattr(
-            integration, "decompose_special_mz_settlement",
-            lambda *a, **k: called.append("mz") or _canned_result())
-        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
-
-        presentation = maybe_decompose_special_outpatient(
-            _FakeProvider(_FakeConn()), "604", SimpleNamespace())
-
-        assert presentation is not None
-        assert presentation.result.execution_status == "unavailable"
-        assert presentation.result.uncertainties[0].code == "READ_FAILED"
-        assert called == []
-
-
-class TestSpecialDecomposeCall:
-    """门特（第二流程）integration 入口：门控一致、profile 解析透传、连接关闭保证。"""
-
-    def test_gates_unset_disables_all(self, monkeypatch):
-        monkeypatch.delenv("FEE_DECOMPOSITION_ROUNDING_MODE", raising=False)
-        monkeypatch.delenv("FEE_DECOMPOSITION_HOSPITAL_CODE", raising=False)
-        assert maybe_decompose_special_outpatient(
-            object(), "604", SimpleNamespace()) is None
-
-    def test_provider_without_connect_disables(self, monkeypatch):
-        _enable_gate(monkeypatch)
-        assert maybe_decompose_special_outpatient(
-            object(), "604", SimpleNamespace()) is None
-
-    def test_happy_path_passes_profile_and_closes_conn(self, monkeypatch):
-        _enable_gate(monkeypatch)
-        # 套表消歧：zy 唯一命中（yllb=16），mz 无命中
-        _stub_locates(monkeypatch, _locate_result("unique_match"), _locate_result("not_found"))
+        _stub_locates(monkeypatch, _locate_result("unique_match"))
         conn = _FakeConn()
         captured = {}
-
-        def fake_decompose(c, djh, hospital_code, rounding_mode,
-                           profile=None, cycle_context_override=None,
-                           allow_observed_deductible=False):
-            captured.update(
-                djh=djh, hospital_code=hospital_code,
-                rounding_mode=rounding_mode, profile=profile,
-                cycle_context_override=cycle_context_override,
-                allow_observed_deductible=allow_observed_deductible)
-            return _canned_result()
-
-        monkeypatch.setattr(
-            integration, "decompose_outpatient_special_settlement", fake_decompose)
-        monkeypatch.setattr(
-            integration, "polish_summary", lambda text: (text, "template"))
-
-        ctx = SimpleNamespace(
-            insurance_type="城镇职工基本医疗保险", service_type="门诊特殊疾病")
+        def fake_mz(c, djh, hospital_code, rounding_mode, **kwargs):
+            captured.update(djh=djh, hospital_code=hospital_code,
+                            rounding_mode=rounding_mode, **kwargs)
+            return DecompositionOutcome(_canned_result())
+        monkeypatch.setattr(integration, "decompose_special_mz_settlement", fake_mz)
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
         presentation = maybe_decompose_special_outpatient(
-            _FakeProvider(conn), "604", ctx)
-
+            _FakeProvider(conn), "567", SimpleNamespace())
         assert isinstance(presentation, DecompositionPresentation)
-        assert captured["djh"] == "604"
+        assert captured["djh"] == "567"
         assert captured["hospital_code"] == "H001"
         assert captured["rounding_mode"] is RoundingMode.HALF_UP
-        # ESP-CODE-001/002 未登记：profile 保持 None（fail-closed，不猜测职工门特）
-        assert captured["profile"] is None
-        assert captured["cycle_context_override"] is None
+        assert captured["profile"] == ("employee", "outpatient_special")
         assert captured["allow_observed_deductible"] is False
         assert conn.closed is True
 
+    def test_resident_mz_unique_routes_to_resident_service(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_result("not_found"), _locate_result("unique_match"))
+        conn = _FakeConn()
+        called = {}
+        def fake_resident(c, djh, hospital_code, rounding_mode, **kwargs):
+            called["resident_mz"] = (djh, kwargs)
+            return DecompositionOutcome(_canned_result())
+        monkeypatch.setattr(integration, "decompose_special_mz_resident_settlement", fake_resident)
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(conn), "688", SimpleNamespace())
+        assert isinstance(presentation, DecompositionPresentation)
+        assert called["resident_mz"][0] == "688"
+        assert conn.closed is True
+
+    def test_resident_mz_profile_mapped_when_context_confirmed(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_result("not_found"), _locate_result("unique_match"))
+        conn = _FakeConn()
+        called = {}
+        def fake_resident(c, djh, hospital_code, rounding_mode, **kwargs):
+            called["resident_mz"] = (djh, kwargs)
+            return DecompositionOutcome(_canned_result())
+        monkeypatch.setattr(integration, "decompose_special_mz_resident_settlement", fake_resident)
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+        insurance, service = next(iter(integration._SPECIAL_PROFILE_MAP))
+        context = SimpleNamespace(insurance_type=insurance, service_type=service)
+        presentation = maybe_decompose_special_outpatient(_FakeProvider(conn), "688", context)
+        assert isinstance(presentation, DecompositionPresentation)
+        assert called["resident_mz"][1]["profile"] == ("resident", "outpatient_special")
+        assert conn.closed is True
+
+    def test_both_unique_is_ambiguous(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_result("unique_match"), _locate_result("unique_match"))
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(_FakeConn()), "567", SimpleNamespace())
+        assert presentation.result.uncertainties[0].code == "REGISTRATION_AMBIGUOUS"
+
+    def test_within_suite_ambiguous_is_fail_closed(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_result("ambiguous"))
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(_FakeConn()), "567", SimpleNamespace())
+        assert presentation.result.uncertainties[0].code == "REGISTRATION_AMBIGUOUS"
+
+    def test_unique_with_ambiguous_alternative_is_fail_closed(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+        for mz, resident in (("unique_match", "ambiguous"), ("ambiguous", "unique_match")):
+            _stub_locates(monkeypatch, _locate_result(mz), _locate_result(resident))
+            presentation = maybe_decompose_special_outpatient(
+                _FakeProvider(_FakeConn()), "567", SimpleNamespace())
+            assert presentation.result.execution_status == "unavailable"
+            assert presentation.result.uncertainties[0].code == "REGISTRATION_AMBIGUOUS"
+
+    def test_locate_read_failed_is_fail_closed(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        _stub_locates(monkeypatch, _locate_failed(), _locate_result("unique_match"))
+        monkeypatch.setattr(integration, "polish_summary", lambda text: (text, "template"))
+        presentation = maybe_decompose_special_outpatient(
+            _FakeProvider(_FakeConn()), "567", SimpleNamespace())
+        assert presentation.result.uncertainties[0].code == "READ_FAILED"
+
+
+class TestSpecialDecomposeCall:
+    def test_gates_unset_disables_all(self, monkeypatch):
+        monkeypatch.delenv("FEE_DECOMPOSITION_ROUNDING_MODE", raising=False)
+        monkeypatch.delenv("FEE_DECOMPOSITION_HOSPITAL_CODE", raising=False)
+        assert maybe_decompose_special_outpatient(object(), "567", SimpleNamespace()) is None
+
+    def test_provider_without_connect_disables(self, monkeypatch):
+        _enable_gate(monkeypatch)
+        assert maybe_decompose_special_outpatient(object(), "567", SimpleNamespace()) is None
+
     def test_connect_failure_returns_none(self, monkeypatch):
         _enable_gate(monkeypatch)
-        provider = SimpleNamespace(
-            _connect=lambda _db: (_ for _ in ()).throw(ConnectionError("down")))
-        assert maybe_decompose_special_outpatient(
-            provider, "707", SimpleNamespace()) is None
+        provider = SimpleNamespace(_connect=lambda _db: (_ for _ in ()).throw(ConnectionError("down")))
+        assert maybe_decompose_special_outpatient(provider, "567", SimpleNamespace()) is None
 
 
 class TestPolishSummary:
@@ -424,15 +381,15 @@ class TestPolishSummary:
         text = "总费用 100.00 元，一致。"
         assert polish_summary(text) == (text, "template")
 
-    def test_model_output_with_same_numbers_is_used(self, monkeypatch):
+    def test_model_output_with_same_numbers_does_not_rewrite_financial_summary(self, monkeypatch):
         class OkGateway:
             def generate(self, **_kwargs):
                 return SimpleNamespace(content="本次总费用为 100.00 元，核对一致。")
 
         monkeypatch.setattr("src.model_service.gateway.ModelGateway", OkGateway)
         text, source = polish_summary("总费用 100.00 元，一致。")
-        assert source == "model"
-        assert "100.00" in text
+        assert source == "template"
+        assert text == "总费用 100.00 元，一致。"
 
     def test_model_output_with_new_number_falls_back(self, monkeypatch):
         class EvilGateway:

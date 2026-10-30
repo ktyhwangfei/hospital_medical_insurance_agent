@@ -6,6 +6,11 @@
  * 另含时段（今天/本周/自定义）日期计算纯函数，可单测。
  */
 
+import { feeReadAuthHeaders } from './fee-decomposition-api'
+
+/** 费用分解链路：门诊交易='outpatient'（settlementId=交易号）、门特='special'（settlementId=djh 登记号）、住院=null。 */
+export type SettlementDecompositionChain = 'outpatient' | 'special' | null
+
 export interface SettlementListItemDTO {
   settlementId: string
   settlementDate: string
@@ -14,6 +19,8 @@ export interface SettlementListItemDTO {
   serviceType: string
   totalAmount: number | null
   coverageStatus: 'complete' | 'partial' | 'unavailable'
+  /** 门诊/门特单的分解链路；住院或后端未下发为 null（非法值归一为 null）。 */
+  decompositionChain?: SettlementDecompositionChain
 }
 
 /** 患者定位摘要（身份证号已由后端脱敏；正式接入登录验证后由登录态取代）。 */
@@ -37,15 +44,20 @@ interface RawSettlementItem {
   service_type?: string | null
   total_amount?: number | null
   coverage_status?: string | null
+  decomposition_chain?: string | null
 }
 
-function toSettlementItem(raw: RawSettlementItem): SettlementListItemDTO {
+export function toSettlementItem(raw: RawSettlementItem): SettlementListItemDTO {
   const coverage =
     raw.coverage_status === 'complete' ||
     raw.coverage_status === 'partial' ||
     raw.coverage_status === 'unavailable'
       ? raw.coverage_status
       : 'complete'
+  const decompositionChain: SettlementDecompositionChain =
+    raw.decomposition_chain === 'outpatient' || raw.decomposition_chain === 'special'
+      ? raw.decomposition_chain
+      : null
   return {
     settlementId: String(raw.settlement_id ?? ''),
     settlementDate: String(raw.settlement_date ?? ''),
@@ -54,6 +66,7 @@ function toSettlementItem(raw: RawSettlementItem): SettlementListItemDTO {
     serviceType: String(raw.service_type ?? ''),
     totalAmount: typeof raw.total_amount === 'number' ? raw.total_amount : null,
     coverageStatus: coverage,
+    decompositionChain,
   }
 }
 
@@ -66,7 +79,7 @@ export async function fetchSettlementsByDateRange(
 ): Promise<SettlementListItemDTO[]> {
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, limit: String(limit) })
   if (patientKey) params.set('patient_key', patientKey)
-  const response = await fetch(`${SETTLEMENTS_URL}?${params.toString()}`)
+  const response = await fetch(`${SETTLEMENTS_URL}?${params.toString()}`, { headers: feeReadAuthHeaders() })
   if (!response.ok) {
     throw new Error(`结算单列表查询失败（HTTP ${response.status}）`)
   }
@@ -89,7 +102,7 @@ interface RawPatientSummary {
  */
 export async function fetchPatientLookup(key: string): Promise<PatientSummaryDTO | null> {
   const params = new URLSearchParams({ key })
-  const response = await fetch(`${PATIENT_LOOKUP_URL}?${params.toString()}`)
+  const response = await fetch(`${PATIENT_LOOKUP_URL}?${params.toString()}`, { headers: feeReadAuthHeaders() })
   if (response.status === 404) return null
   if (!response.ok) {
     throw new Error(`患者定位失败（HTTP ${response.status}）`)
@@ -140,4 +153,52 @@ export function thisWeekRange(now = new Date()): DateRange {
 export function formatAmount(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return '—'
   return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+// ── 门诊费用明细（policy-qa 结算单「费用明细」页签）────────────────────
+
+/** 门诊费用明细行（金额为十进制字符串，展示层只格式化不运算）。 */
+export interface OutpatientFeeItemDTO {
+  itemName: string
+  itemType: string
+  itemCode: string
+  quantity: string
+  unitPrice: string
+  totalFee: string
+  insuranceInner: string
+  insuranceOuter: string
+  selfPay2: string
+}
+
+export async function fetchOutpatientFeeItems(
+  settlementId: string,
+): Promise<OutpatientFeeItemDTO[]> {
+  const response = await fetch(
+    `${SETTLEMENTS_URL}/${encodeURIComponent(settlementId)}/fee-items`,
+    { headers: feeReadAuthHeaders() },
+  )
+  if (!response.ok) {
+    throw new Error(`费用明细查询失败（HTTP ${response.status}）`)
+  }
+  const data = (await response.json()) as Array<Record<string, unknown>>
+  if (!Array.isArray(data)) return []
+  return data.map((raw) => ({
+    itemName: String(raw.item_name ?? ''),
+    itemType: String(raw.item_type ?? ''),
+    itemCode: String(raw.item_code ?? ''),
+    quantity: String(raw.quantity ?? ''),
+    unitPrice: String(raw.unit_price ?? ''),
+    totalFee: String(raw.total_fee ?? ''),
+    insuranceInner: String(raw.insurance_inner ?? ''),
+    insuranceOuter: String(raw.insurance_outer ?? ''),
+    selfPay2: String(raw.self_pay_2 ?? ''),
+  }))
+}
+
+/** 十进制字符串金额两位小数展示（纯展示格式化，不参与运算）。 */
+export function formatDecimal2(value: string): string {
+  if (!value) return '—'
+  const num = Number(value)
+  if (!Number.isFinite(num)) return value
+  return num.toFixed(2)
 }

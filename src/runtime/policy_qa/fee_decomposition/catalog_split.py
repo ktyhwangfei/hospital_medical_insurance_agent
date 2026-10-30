@@ -40,8 +40,18 @@ from src.runtime.policy_qa.fee_decomposition.params_employee_outpatient import (
     select_check_fee_param,
     select_material_rule,
 )
+from src.runtime.policy_qa.fee_decomposition.fee_items import FeeItemExplanation
 
 MODULE_ID = "catalog_split"
+
+
+@dataclass(frozen=True)
+class CatalogRuleLabels:
+    """各链目录划分的规则编号口径：四链共用本模块计算，但取整规则与目录语义
+    引用编号按链登记（EOP/ROP/RSP），不得串用职工编号。"""
+
+    rounding_rule_id: str  # 取整规则编号（如 EOP-RND-001 / ROP-RND-001 / RSP-RND-001）
+    catalog_rule_ref: str  # 目录划分语义引用（如 EOP-CAT 系列 / ROP-CAT-000 / RSP-CAT-001）
 
 #: S1 候选目录收费类别（无自付/有自付/全自付 与 甲/乙/丙 两套写法）
 _NO_SELF_PAY = ("无自付", "甲")
@@ -81,6 +91,7 @@ class LineDecomposition:
     out_scope: Decimal | None = None
     self_pay_2: Decimal | None = None  # 可追踪子项，不预先认定为第三项（设计 §7.2）
     labels: tuple[str, ...] = ()  # 非互斥解释标签（乙类/集采/超限价等）
+    proportional_self_pay: Decimal = Decimal("0")  # 仅按比例先行负担，排除全自费/限价以上费用
 
 
 @dataclass(frozen=True)
@@ -96,6 +107,8 @@ class CatalogSplitResult:
     total_out_scope: Decimal | None = None
     total_self_pay_2: Decimal | None = None
     is_complete: bool = False
+    total_proportional_self_pay: Decimal | None = None
+    explanations: tuple[FeeItemExplanation, ...] = ()  # 仅供展示，不参与金额汇总或待遇判断
 
 
 @dataclass(frozen=True)
@@ -138,6 +151,7 @@ def _calc(
     unrounded: Decimal | None,
     result: Decimal | None,
     rounding_mode: RoundingMode,
+    rules: CatalogRuleLabels,
 ) -> CalculationRecord:
     return CalculationRecord(
         calculation_id=calc_id,
@@ -145,8 +159,21 @@ def _calc(
         formula_version="v1",
         operands=operands,
         unrounded_result=decimal_to_str(unrounded) if unrounded is not None else None,
-        rounding_rule=f"explicit:{rounding_mode.value}(EOP-RND-001 待确认)",
+        rounding_rule=f"explicit:{rounding_mode.value}({rules.rounding_rule_id} 待确认)",
         result=decimal_to_str(result) if result is not None else None,
+    )
+
+
+def _summary_calc(calc_id: str, formula_id: str, source_ref: str, value: Decimal) -> CalculationRecord:
+    """目录合计轨迹记录（解释投影 1.1）：只记录已执行的逐行加总，不再取整、不改金额。"""
+    return CalculationRecord(
+        calculation_id=calc_id,
+        formula_id=formula_id,
+        formula_version="v1",
+        operands=(CalculationOperand(source_ref, decimal_to_str(value)),),
+        unrounded_result=decimal_to_str(value),
+        rounding_rule="not_applicable（明细逐行合计，无取整）",
+        result=decimal_to_str(value),
     )
 
 
@@ -157,8 +184,13 @@ def split_catalog(
     material_catalog: tuple[MaterialCatalogEntry, ...],
     hospital_code: str,
     rounding_mode: RoundingMode,
+    *,
+    rules: CatalogRuleLabels,
 ) -> CatalogSplitResult:
-    """三大目录逐项分解入口。重复行键属数据异常，不静默去重（设计 §5.3）。"""
+    """三大目录逐项分解入口。重复行键属数据异常，不静默去重（设计 §5.3）。
+
+    rules：调用链自己的规则编号口径（取整规则 + 目录语义引用），由各链调用点显式传入。
+    """
     keys = [it.line_key for it in items]
     if len(set(keys)) != len(keys):
         return CatalogSplitResult(
@@ -178,26 +210,58 @@ def split_catalog(
     branches: list[BranchTrace] = []
     calcs: list[CalculationRecord] = []
     uncertainties: list[DecompositionUncertainty] = []
+    explanations = []
+    from src.runtime.policy_qa.fee_decomposition.fee_items import catalog_item_explanation
+    catalogs = {CatalogKind.DRUG: drug_catalog, CatalogKind.SERVICE: service_catalog, CatalogKind.MATERIAL: material_catalog}
     for item in items:
         out = _split_line(
-            item, drug_catalog, service_catalog, material_catalog, hospital_code, rounding_mode
+            item, drug_catalog, service_catalog, material_catalog, hospital_code, rounding_mode,
+            rules,
         )
         lines.append(out.line)
         branches.extend(out.branches)
         calcs.extend(out.calculations)
         uncertainties.extend(out.uncertainties)
+        matches, validity_unknown = _match_catalog(catalogs.get(item.catalog_kind, ()), item.item_code, item.fee_occurrence_date)
+        entry = matches[0] if len(matches) == 1 and not validity_unknown else None
+        explanation = catalog_item_explanation(item, out.line, out.branches, out.calculations, entry)
+        explanation.notes.extend(u.message for u in out.uncertainties)
+        explanations.append(explanation)
 
-    complete = all(ln.status == BranchOutcome.TRUE for ln in lines)
+    complete = all(ln.status == BranchOutcome.TRUE and ln.in_scope is not None and ln.out_scope is not None for ln in lines)
+    total_fee = sum((ln.fee for ln in lines), Decimal("0"))
+    total_in_scope = sum((ln.in_scope for ln in lines if ln.in_scope is not None), Decimal("0")) if complete else None
+    total_out_scope = sum((ln.out_scope for ln in lines if ln.out_scope is not None), Decimal("0")) if complete else None
+    total_self_pay_2 = sum((ln.self_pay_2 or Decimal("0") for ln in lines), Decimal("0")) if complete else None
+    total_proportional_self_pay = sum((ln.proportional_self_pay for ln in lines), Decimal("0")) if complete else None
+    # 汇总轨迹（解释投影 1.1）：已算出的合计落 CalculationRecord，
+    # 供下游起付/大额等模块引用的 calc.catalog.* 中间量可回溯；金额语义不变
+    calcs.append(_summary_calc(
+        "calc.catalog.total_fee", "catalog_total_fee_v1", "fact.items.fee", total_fee))
+    for calc_id, formula_id, ref, value in (
+        ("calc.catalog.total_in_scope", "catalog_total_in_scope_v1",
+         "calc.catalog.lines.in_scope", total_in_scope),
+        ("calc.catalog.total_out_scope", "catalog_total_out_scope_v1",
+         "calc.catalog.lines.out_scope", total_out_scope),
+        ("calc.catalog.total_self_pay_2", "catalog_total_self_pay_2_v1",
+         "calc.catalog.lines.self_pay_2", total_self_pay_2),
+        ("calc.catalog.total_proportional_self_pay", "catalog_total_proportional_self_pay_v1",
+         "calc.catalog.lines.proportional_self_pay", total_proportional_self_pay),
+    ):
+        if value is not None:
+            calcs.append(_summary_calc(calc_id, formula_id, ref, value))
     return CatalogSplitResult(
+        explanations=tuple(explanations),
         lines=tuple(lines),
         branches=tuple(branches),
         calculations=tuple(calcs),
         uncertainties=tuple(uncertainties),
-        total_fee=sum((ln.fee for ln in lines), Decimal("0")),
-        total_in_scope=sum((ln.in_scope for ln in lines), Decimal("0")) if complete else None,
-        total_out_scope=sum((ln.out_scope for ln in lines), Decimal("0")) if complete else None,
-        total_self_pay_2=sum((ln.self_pay_2 or Decimal("0") for ln in lines), Decimal("0")) if complete else None,
+        total_fee=total_fee,
+        total_in_scope=total_in_scope,
+        total_out_scope=total_out_scope,
+        total_self_pay_2=total_self_pay_2,
         is_complete=complete,
+        total_proportional_self_pay=total_proportional_self_pay,
     )
 
 
@@ -208,15 +272,16 @@ def _split_line(
     material_catalog: tuple[MaterialCatalogEntry, ...],
     hospital_code: str,
     rounding_mode: RoundingMode,
+    rules: CatalogRuleLabels,
 ) -> _LineOut:
     scope = f"item:{item.line_key}"
     fee_check = _fee_quantity_check(item, scope)
     if item.catalog_kind == CatalogKind.DRUG or item.item_type == "0":
-        out = _split_drug(item, drug_catalog, hospital_code, rounding_mode, scope)
+        out = _split_drug(item, drug_catalog, hospital_code, rounding_mode, scope, rules)
     elif item.catalog_kind == CatalogKind.SERVICE:
-        out = _split_service(item, service_catalog, rounding_mode, scope)
+        out = _split_service(item, service_catalog, rounding_mode, scope, rules)
     elif item.catalog_kind == CatalogKind.MATERIAL:
-        out = _split_material(item, material_catalog, rounding_mode, scope)
+        out = _split_material(item, material_catalog, rounding_mode, scope, rules)
     else:
         out = _LineOut(
             line=LineDecomposition(item.line_key, item.fee, BranchOutcome.UNKNOWN),
@@ -324,6 +389,10 @@ def _classify_ratio(
         return None, None, tuple(branches)
     cls = sflb_group if sflb_group is not None else fee_type_group
     if cls is not None and cls != "unknown":
+        branches.append(_branch(f"{parent}.selected", BranchOutcome.TRUE, scope,
+            BranchCondition("adopted_fee_category", "采用收费类别", "select",
+                            entry_sflb if sflb_group is not None else item.fee_type,
+                            "药品目录" if sflb_group is not None else "结算明细收费类别")))
         if cls == "partial":
             if entry_ratio is None:
                 branches.append(_branch(
@@ -344,7 +413,8 @@ def _classify_ratio(
 
 
 def _apply_division(
-    item: FeeLineItem, cls: str, ratio: Decimal | None, rounding_mode: RoundingMode, scope: str
+    item: FeeLineItem, cls: str, ratio: Decimal | None, rounding_mode: RoundingMode, scope: str,
+    rules: CatalogRuleLabels,
 ) -> tuple[LineDecomposition, tuple[CalculationRecord, ...]]:
     """按类别分解金额：无自付全额医保内；全自付全额自费；
     有自付按比例先行自付——账面口径实证（决策记录 D14）：先行自付不进报销基数
@@ -364,11 +434,11 @@ def _apply_division(
         f"calc.catalog.self_pay_2.{item.line_key}", "catalog_self_pay_2_v1",
         (CalculationOperand(f"fact.item.{item.line_key}.fee", decimal_to_str(item.fee)),
          CalculationOperand("fact.catalog.self_pay_ratio", decimal_to_str(ratio))),
-        unrounded, sp2, rounding_mode,
+        unrounded, sp2, rounding_mode, rules,
     )
     return LineDecomposition(item.line_key, item.fee, BranchOutcome.TRUE,
                              in_scope=item.fee - sp2, out_scope=sp2,
-                             self_pay_2=sp2, labels=("partial_self_pay",)), (calc,)
+                             self_pay_2=sp2, proportional_self_pay=sp2, labels=("partial_self_pay",)), (calc,)
 
 
 def _applied_ratio(item: FeeLineItem, catalog_ratio: Decimal | None) -> Decimal | None:
@@ -385,6 +455,7 @@ def _split_drug(
     hospital_code: str,
     rounding_mode: RoundingMode,
     scope: str,
+    rules: CatalogRuleLabels,
 ) -> _LineOut:
     branches: list[BranchTrace] = []
     matches, validity_unknown = _match_catalog(catalog, item.item_code, item.fee_occurrence_date)
@@ -411,13 +482,16 @@ def _split_drug(
     if cls == "full":
         branches.append(_branch(
             f"catalog.drug_full_self_pay.{item.line_key}", BranchOutcome.TRUE, scope,
-            BranchCondition("full_self_pay", "全自付行自制剂/集采分支不评估", "eq", "full", "out=fee"),
+            BranchCondition("full_self_pay", "全自付行自制剂/集采分支不评估", "eq", "全自付档", "本行费用全部计入医保范围外"),
             rule_refs=("EOP-CAT-001",)))
-        line, calcs = _apply_division(item, cls, None, rounding_mode, scope)
-        return _LineOut(line, tuple(branches), calcs, rule_uncertainties(entry))
+        line, calcs = _apply_division(item, cls, None, rounding_mode, scope, rules)
+        return _LineOut(line, tuple(branches), calcs, rule_uncertainties(entry, rules))
 
     # 自制剂候选规则（ypfl∈{16,6}）：本院使用 + 单价≤标准价格方可纳入（EOP-CAT-002/003）
     is_preparation = entry.ypfl in _HOSPITAL_PREPARATION_YPFL
+    branches.append(_branch(f"catalog.preparation_check.{item.line_key}",
+        BranchOutcome.TRUE if is_preparation else BranchOutcome.FALSE, scope,
+        BranchCondition("preparation_check", "本次是否进入自制剂规则", "in", entry.ypfl, "16 / 6")))
     if is_preparation and entry.a_ypbs:
         branches.append(_branch(
             f"catalog.preparation_ncp_overlap.{item.line_key}", BranchOutcome.UNKNOWN, scope,
@@ -478,8 +552,62 @@ def _split_drug(
                             decimal_to_str(item.unit_price), decimal_to_str(entry.bzjg)),
             rule_refs=("EOP-CAT-003",)))
 
+    # 结算事实限价统一优先（Issue #80，与 D17 同族候选口径）：明细行结算时限价
+    # SP_SCALE>0 且单价超限时，无论集采与否均按限价公式拆分：
+    # FeeIn=限价×数量×(1−自付比例)、FeeOut=超限部分+限价内自付。
+    # 实证：居民 240506 组乌拉地尔（单价 100、SP_SCALE=9.8、乙类 0.1）账面
+    # FeeIn=8.82/FeeOut=91.18（=9.8×0.9 / 90.2+0.98）；职工 81 笔集采行 SP_SCALE
+    # 均为 0（实证），本分支不改变职工链路既有行为。
+    if item.sp_scale is not None and item.sp_scale > 0 and item.unit_price is not None and item.unit_price <= item.sp_scale:
+        branches.append(_branch(f"catalog.settlement_limit_check.{item.line_key}", BranchOutcome.TRUE, scope,
+            BranchCondition("settlement_price_le_limit", "单价≤明细结算时限价，未进入超限早返回分支", "le",
+                            decimal_to_str(item.unit_price), decimal_to_str(item.sp_scale))))
+    if (
+        item.sp_scale is not None and item.sp_scale > 0
+        and item.unit_price is not None and item.unit_price > item.sp_scale
+    ):
+        if cls == "partial" and resolved_ratio is None:
+            return _unknown_line(item, branches, "SELF_PAY_RATIO_MISSING",
+                                 "限价内部分自付比例缺失，停未知。")
+        if item.count is None:
+            return _unknown_line(item, branches, "COUNT_MISSING", "限价分解需要数量，缺失时不能默认一件。")
+        within = item.sp_scale * item.count
+        if cls == "partial":
+            assert resolved_ratio is not None
+            in_scope = apply_rounding(within * (1 - resolved_ratio), rounding_mode)
+        else:  # none：限内全额纳入
+            in_scope = within
+        sp2 = item.fee - in_scope
+        calc = _calc(
+            f"calc.catalog.price_limit.{item.line_key}", "drug_unit_price_limit_v1",
+            (CalculationOperand(f"fact.item.{item.line_key}.fee", decimal_to_str(item.fee)),
+             CalculationOperand(f"fact.item.{item.line_key}.sp_scale", decimal_to_str(item.sp_scale)),
+             CalculationOperand(f"fact.item.{item.line_key}.count", decimal_to_str(item.count)),
+             CalculationOperand("fact.line_or_catalog.self_pay_ratio",
+                                decimal_to_str(resolved_ratio) if resolved_ratio is not None else "0")),
+            in_scope, in_scope, rounding_mode, rules)
+        branches.append(_branch(
+            f"catalog.price_limit.{item.line_key}", BranchOutcome.TRUE, scope,
+            BranchCondition("unit_price_over_limit", "单价超结算时限价：限内按比例、超限全自担",
+                            "gt", decimal_to_str(item.unit_price), decimal_to_str(item.sp_scale)),
+            calculation_refs=(calc.calculation_id,)))
+        limit_uncertainty = DecompositionUncertainty(
+            id=f"u.catalog.price_limit_candidate.{item.line_key}",
+            code="DRUG_PRICE_LIMIT_RULE_CANDIDATE",
+            message="结算事实限价（SP_SCALE）分解（限内按比例、超限全自担）属实证候选口径（决策记录 D17 + Issue #80 公式），待签核。",
+            affected_fields=("T_FeeIn", "T_FeeOut", "T_SelfPay2"))
+        return _LineOut(
+            LineDecomposition(item.line_key, item.fee, BranchOutcome.TRUE,
+                              in_scope=in_scope, out_scope=sp2, self_pay_2=sp2, proportional_self_pay=within-in_scope,
+                              labels=("unit_price_limit",)),
+            tuple(branches), (calc,), (limit_uncertainty,))
+
     # 集采（a_ypbs=1）：限价内按自付档；超限价按超限价自付比例 a_xbbl 最终比例语义
     # （决策记录 D19：实证 2 行 sp2=fee×a_xbbl，与 docx「原自付+上浮 10%」最终比例一致）
+    branches.append(_branch(f"catalog.ncp_check.{item.line_key}",
+        BranchOutcome.TRUE if entry.a_ypbs else BranchOutcome.FALSE, scope,
+        BranchCondition("centralized_procurement", "本次集采规则判定", "eq",
+            ("是" if entry.a_ypbs else "否") if entry.a_ypbs_known else None, "集采药品")))
     if entry.a_ypbs:
         ncp = _ncp_price_check(item, entry, scope)
         branches.extend(ncp[1])
@@ -488,6 +616,9 @@ def _split_drug(
                 return _unknown_line(item, branches, ncp[0], ncp[2])
             if item.consistency_evaluation_passed is False:
                 return _unknown_line(item, branches, ncp[0], ncp[2])
+            branches.append(_branch(f"catalog.ncp_consistency_guard.{item.line_key}", BranchOutcome.FALSE, scope,
+                BranchCondition("ncp_consistency_guard", "本次是否触发未通过一致性评价拦截", "eq",
+                    "已通过" if item.consistency_evaluation_passed is True else "未取得", "明确未通过")))
             # 超限价：实际比例 = 明细行 MEDIC_L>0 优先，否则目录 a_xbbl
             excess_ratio = _applied_ratio(item, entry.a_xbbl)
             if excess_ratio is None:
@@ -498,7 +629,7 @@ def _split_drug(
                 f"calc.catalog.ncp_excess.{item.line_key}", "ncp_excess_final_ratio_v1",
                 (CalculationOperand(f"fact.item.{item.line_key}.fee", decimal_to_str(item.fee)),
                  CalculationOperand("fact.line_or_catalog.excess_ratio", decimal_to_str(excess_ratio))),
-                unrounded, sp2, rounding_mode)
+                unrounded, sp2, rounding_mode, rules)
             branches.append(_branch(
                 f"catalog.ncp_excess.{item.line_key}", BranchOutcome.TRUE, scope,
                 BranchCondition("ncp_excess_final_ratio", "集采超限价按最终自付比例", "formula",
@@ -513,7 +644,7 @@ def _split_drug(
             return _LineOut(
                 LineDecomposition(item.line_key, item.fee, BranchOutcome.TRUE,
                                   in_scope=item.fee - sp2, out_scope=sp2,
-                                  self_pay_2=sp2,
+                                  self_pay_2=sp2, proportional_self_pay=sp2,
                                   labels=("centralized_procurement", "ncp_over_limit")),
                 tuple(branches), (calc,), (ncp_uncertainty,))
 
@@ -521,6 +652,15 @@ def _split_drug(
     # 单价超限价：超限价部分全额个人承担，限内部分按自付档划分
     if not entry.a_ypbs:
         limit = item.sp_scale if (item.sp_scale is not None and item.sp_scale > 0) else entry.a_mzxj
+        if limit is not None and limit > 0 and item.unit_price is not None:
+            branches.append(_branch(f"catalog.drug_price_check.{item.line_key}",
+                BranchOutcome.TRUE if item.unit_price <= limit else BranchOutcome.FALSE, scope,
+                BranchCondition("drug_price_le_limit", "单价≤本次采用门诊限价", "le",
+                                decimal_to_str(item.unit_price), decimal_to_str(limit))))
+        else:
+            branches.append(_branch(f"catalog.drug_limit_check.{item.line_key}", BranchOutcome.FALSE, scope,
+                BranchCondition("positive_drug_limit", "本次是否采用正值门诊限价", "gt",
+                                decimal_to_str(limit) if limit is not None else None, "0")))
         if (
             limit is not None and limit > 0
             and item.unit_price is not None and item.unit_price > limit
@@ -541,12 +681,11 @@ def _split_drug(
                  CalculationOperand("fact.line_or_catalog.unit_price_limit", decimal_to_str(limit)),
                  CalculationOperand("fact.line_or_catalog.self_pay_ratio",
                                     decimal_to_str(resolved_ratio) if resolved_ratio is not None else "0")),
-                in_scope, in_scope, rounding_mode)
+                in_scope, in_scope, rounding_mode, rules)
             branches.append(_branch(
                 f"catalog.price_limit.{item.line_key}", BranchOutcome.TRUE, scope,
-                BranchCondition("unit_price_over_limit", "单价超门诊限价：限内按比例、超限全自担", "formula",
-                                decimal_to_str(in_scope),
-                                f"limit={decimal_to_str(limit)}"),
+                BranchCondition("unit_price_over_limit", "单价超门诊限价：限内按比例、超限全自担", "gt",
+                                decimal_to_str(item.unit_price), decimal_to_str(limit)),
                 calculation_refs=(calc.calculation_id,)))
             limit_uncertainty = DecompositionUncertainty(
                 id=f"u.catalog.price_limit_candidate.{item.line_key}",
@@ -555,16 +694,17 @@ def _split_drug(
                 affected_fields=("T_FeeIn", "T_FeeOut", "T_SelfPay2"))
             return _LineOut(
                 LineDecomposition(item.line_key, item.fee, BranchOutcome.TRUE,
-                                  in_scope=in_scope, out_scope=sp2, self_pay_2=sp2,
+                                  in_scope=in_scope, out_scope=sp2, self_pay_2=sp2, proportional_self_pay=within-in_scope,
                                   labels=("unit_price_limit",)),
                 tuple(branches), (calc,), (limit_uncertainty,))
 
-    line, calcs = _apply_division(item, cls, resolved_ratio, rounding_mode, scope)
+    line, calcs = _apply_division(item, cls, resolved_ratio, rounding_mode, scope, rules)
     if entry.a_ypbs:
         line = LineDecomposition(line.line_key, line.fee, line.status, line.in_scope,
-                                 line.out_scope, line.self_pay_2, line.labels + ("centralized_procurement",))
+                                 line.out_scope, line.self_pay_2, line.labels + ("centralized_procurement",),
+                                 line.proportional_self_pay)
     return _LineOut(line, tuple(branches), calcs,
-                    rule_uncertainties(entry))
+                    rule_uncertainties(entry, rules))
 
 
 def _ncp_price_check(item: FeeLineItem, entry: DrugCatalogEntry, scope: str):
@@ -574,6 +714,10 @@ def _ncp_price_check(item: FeeLineItem, entry: DrugCatalogEntry, scope: str):
     """
     branches: list[BranchTrace] = []
     packaging = item.packaging_type or PackagingType.WHOLE_PACK
+    branches.append(_branch(f"catalog.ncp_packaging.{item.line_key}", BranchOutcome.TRUE, scope,
+        BranchCondition("ncp_packaging", "本次采用包装规则", "select",
+            "整包" if packaging == PackagingType.WHOLE_PACK else "拆包",
+            "明细包装类型" if item.packaging_type is not None else "未取得包装类型，按既有整包默认规则计算")))
     limit = entry.a_mzxj if packaging == PackagingType.WHOLE_PACK else entry.ncp_unit_limit
     if limit is None or item.unit_price is None:
         branches.append(_branch(
@@ -606,6 +750,7 @@ def _split_service(
     catalog: tuple[ServiceCatalogEntry, ...],
     rounding_mode: RoundingMode,
     scope: str,
+    rules: CatalogRuleLabels,
 ) -> _LineOut:
     branches: list[BranchTrace] = []
     matches, validity_unknown = _match_catalog(catalog, item.item_code, item.fee_occurrence_date)
@@ -660,20 +805,32 @@ def _split_service(
             BranchCondition("sfxmdj", "收费项目等级", "eq", "2", "2 有自付"),
             rule_refs=("EOP-CAT-007",)))
         svc_ratio = _applied_ratio(item, entry.self_pay_ratio)
-        if svc_ratio is not None:
+        branches.append(_branch(f"catalog.service_ratio_select.{item.line_key}",
+            BranchOutcome.TRUE if svc_ratio is not None and svc_ratio > 0 else BranchOutcome.FALSE, scope,
+            BranchCondition("positive_service_ratio", "本次是否按正值自付比例划分", "gt",
+                            decimal_to_str(svc_ratio) if svc_ratio is not None else None, "0")))
+        # 比例缺失或为 0 时不走比例分支（Issue #80：zfbl=0 / B_bxbs=4 或 Null → 按单价限额）；
+        # zfbl=0 的语义是「不按比例」而非「0% 自付」（实证：医事服务费 w0101020010
+        # zfbl=0 且 xb=40，账面按限额 40 拆分 FeeIn=40/FeeOut=10；职工链路 ItemType=1/2
+        # 中无 sfxmdj=2 且 zfbl=0 的行，本修改对职工 81 笔回放零影响）
+        if svc_ratio is not None and svc_ratio > 0:
             unrounded = item.fee * svc_ratio
             sp2 = apply_rounding(unrounded, rounding_mode)
             calc = _calc(
                 f"calc.catalog.self_pay_2.{item.line_key}", "catalog_self_pay_2_v1",
                 (CalculationOperand(f"fact.item.{item.line_key}.fee", decimal_to_str(item.fee)),
                  CalculationOperand("fact.line_or_catalog.self_pay_ratio", decimal_to_str(svc_ratio))),
-                unrounded, sp2, rounding_mode)
+                unrounded, sp2, rounding_mode, rules)
             # 账面口径实证（决策记录 D14）：先行自付不进报销基数且计入医保外
             return _LineOut(LineDecomposition(item.line_key, item.fee, BranchOutcome.TRUE,
                                               in_scope=item.fee - sp2, out_scope=sp2,
-                                              self_pay_2=sp2, labels=("partial_self_pay",)),
+                                              self_pay_2=sp2, proportional_self_pay=sp2, labels=("partial_self_pay",)),
                             tuple(branches), (calc,))
         if entry.unit_price_limit is not None and item.unit_price is not None and item.count is not None:
+            branches.append(_branch(f"catalog.service_limit_check.{item.line_key}",
+                BranchOutcome.TRUE if item.unit_price <= entry.unit_price_limit else BranchOutcome.FALSE, scope,
+                BranchCondition("service_price_le_limit", "单价≤本次采用项目限额", "le",
+                                decimal_to_str(item.unit_price), decimal_to_str(entry.unit_price_limit))))
             # 按单价限额：超出限额部分划入个人自付二（不进报销基数，计入医保外，决策记录 D14）
             excess = max(item.unit_price - entry.unit_price_limit, Decimal("0")) * item.count
             sp2 = apply_rounding(excess, rounding_mode)
@@ -682,7 +839,7 @@ def _split_service(
                 (CalculationOperand(f"fact.item.{item.line_key}.unit_price", decimal_to_str(item.unit_price)),
                  CalculationOperand("fact.catalog.unit_price_limit", decimal_to_str(entry.unit_price_limit)),
                  CalculationOperand(f"fact.item.{item.line_key}.count", decimal_to_str(item.count))),
-                excess, sp2, rounding_mode)
+                excess, sp2, rounding_mode, rules)
             return _LineOut(LineDecomposition(item.line_key, item.fee, BranchOutcome.TRUE,
                                               in_scope=item.fee - sp2, out_scope=sp2,
                                               self_pay_2=sp2, labels=("unit_price_limit",)),
@@ -705,6 +862,7 @@ def _split_material(
     catalog: tuple[MaterialCatalogEntry, ...],
     rounding_mode: RoundingMode,
     scope: str,
+    rules: CatalogRuleLabels,
 ) -> _LineOut:
     branches: list[BranchTrace] = []
     matches, validity_unknown = _match_catalog(catalog, item.item_code, item.fee_occurrence_date)
@@ -737,6 +895,42 @@ def _split_material(
             BranchCondition("unit_price", "材料单价存在性", "not_null", None, "单价"),
             "UNIT_PRICE_MISSING"))
         return _unknown_line(item, branches, "UNIT_PRICE_MISSING", "材料单价缺失，无法适用单价门槛规则。")
+
+    # 结算事实限价分支（Issue #80，类推药品 D17 候选口径）：明细行结算时限价 SP_SCALE>0
+    # 且单价超限价 → 限价内纳入医保内、超限部分个人自费（实证：人工晶体 1935 元按限价
+    # 1835 拆分，FeeIn=1835/FeeOut=100；退费行数量为负同样成立）。
+    # 该分支优先于单价门槛比例规则：限价管理材料（人工器官等）不按门槛比例纳入。
+    if (
+        item.sp_scale is not None and item.sp_scale > 0
+        and item.unit_price > item.sp_scale
+    ):
+        if item.count is None:
+            return _unknown_line(item, branches, "COUNT_MISSING", "限价分解需要数量，缺失时不能默认一件。")
+        count = item.count
+        in_scope = item.sp_scale * count
+        sp2 = item.fee - in_scope
+        calc = _calc(
+            f"calc.catalog.material_price_limit.{item.line_key}", "material_price_limit_v1",
+            (CalculationOperand(f"fact.item.{item.line_key}.fee", decimal_to_str(item.fee)),
+             CalculationOperand(f"fact.item.{item.line_key}.sp_scale", decimal_to_str(item.sp_scale)),
+             CalculationOperand(f"fact.item.{item.line_key}.count", decimal_to_str(count))),
+            in_scope, in_scope, rounding_mode, rules)
+        branches.append(_branch(
+            f"catalog.material_price_limit.{item.line_key}", BranchOutcome.TRUE, scope,
+            BranchCondition("material_price_limit", "材料单价超结算时限价：限内纳入、超限自担",
+                            "gt", decimal_to_str(item.unit_price), decimal_to_str(item.sp_scale)),
+            rule_refs=("EOP-MAT-005",),
+            calculation_refs=(calc.calculation_id,)))
+        limit_uncertainty = DecompositionUncertainty(
+            id=f"u.catalog.material_price_limit_candidate.{item.line_key}",
+            code="MATERIAL_PRICE_LIMIT_RULE_CANDIDATE",
+            message="材料按结算事实限价（SP_SCALE）拆分（限内纳入、超限自担）属实证候选口径，待签核。",
+            affected_fields=("T_FeeIn", "T_FeeOut", "T_SelfPay2"))
+        return _LineOut(
+            LineDecomposition(item.line_key, item.fee, BranchOutcome.TRUE,
+                              in_scope=in_scope, out_scope=sp2, self_pay_2=sp2,
+                              labels=("material_price_limit",)),
+            tuple(branches), (calc,), (limit_uncertainty,))
 
     sel = select_material_rule(item.fee_occurrence_date)
     branches.append(_branch(
@@ -778,7 +972,7 @@ def _split_material(
         f"calc.catalog.material_included.{item.line_key}", "material_included_ratio_v1",
         (CalculationOperand(f"fact.item.{item.line_key}.fee", decimal_to_str(item.fee)),
          CalculationOperand("rule.material.included_ratio", decimal_to_str(included_ratio))),
-        unrounded_in, in_scope, rounding_mode)
+        unrounded_in, in_scope, rounding_mode, rules)
     branches.append(_branch(
         f"catalog.material_threshold.{item.line_key}", BranchOutcome.FALSE, scope,
         BranchCondition("unit_price_lt_threshold", "材料单价低于纳入门槛", "lt",
@@ -786,7 +980,7 @@ def _split_material(
         calculation_refs=(calc.calculation_id,)))
     return _LineOut(LineDecomposition(item.line_key, item.fee, BranchOutcome.TRUE,
                                       in_scope=in_scope, out_scope=sp2,
-                                      self_pay_2=sp2, labels=("material_threshold",)),
+                                      self_pay_2=sp2, proportional_self_pay=sp2, labels=("material_threshold",)),
                     tuple(branches), (calc,))
 
 
@@ -799,10 +993,11 @@ def _unknown_line(item: FeeLineItem, branches: list[BranchTrace], reason: str, m
             affected_fields=("T_FeeIn", "T_FeeOut", "T_SelfPay2")),))
 
 
-def rule_uncertainties(entry: DrugCatalogEntry) -> tuple[DecompositionUncertainty, ...]:
+def rule_uncertainties(entry: DrugCatalogEntry,
+                       rules: CatalogRuleLabels) -> tuple[DecompositionUncertainty, ...]:
     """结构性划分语义引用自待官方核证的目录规则，显式声明（不使用即补全）。"""
     return (DecompositionUncertainty(
         id=f"u.catalog.rule_confirmation.{entry.entry_id}",
         code="CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION",
-        message="目录划分语义引用 EOP-CAT 系列规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
+        message=f"目录划分语义引用 {rules.catalog_rule_ref} 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。",
         affected_fields=("T_FeeIn", "T_FeeOut")),)

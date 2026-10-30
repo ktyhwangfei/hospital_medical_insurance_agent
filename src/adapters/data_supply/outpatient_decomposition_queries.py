@@ -78,23 +78,25 @@ _SOURCE = "hospital_record_store"
 _CAPABILITY = "outpatient_decomposition_snapshot"
 
 #: 交易定位读取的 o_Trade 列（不含身份证/姓名等身份原文列）
-_TRADE_COLUMNS = (
+from src.config.settlement_templates import settlement_template_columns
+
+_TRADE_COLUMNS = tuple(dict.fromkeys((
     "op_trade_no", "op_trade_date", "op_hosp_code",
     "op_fund_type", "op_cure_type", "op_person_type", "op_birthday",
     "op_card_ic", "op_year",
     "op_prior_fee_in", "op_prior_big_pay",
+    "op_after_fee_in", "op_after_big_pay",
     "op_official", "op_official_code", "op_jc_level",
-    "op_fee_all", "op_fee_in", "op_fee_out", "op_fund_pay",
-    "op_self_pay_2", "op_first_pay", "op_big_pay", "op_big_self_pay",
-    "op_bc_pay", "op_jc_pay", "op_official_pay", "op_self_pay_1",
-    "op_self_pay_all", "op_person_count_pay", "op_cash_pay",
+    "op_retire_officer_flag",
     "op_has_refundmented", "op_partial_return",
     "op_ref_original_no", "op_reversal_original_no",
     "op_no_right_reason",
-)
+    *settlement_template_columns('employee_outpatient', 'outpatient_trade_table'),
+    *settlement_template_columns('resident_outpatient', 'outpatient_trade_table'),
+)))
 
 _FEE_ITEM_COLUMNS = (
-    "opf_line_id", "opf_item_type", "opf_item_code", "opf_fee_type",
+    "opf_line_id", "opf_item_name", "opf_item_type", "opf_item_code", "opf_fee_type",
     "opf_unit_price", "opf_count", "opf_fee", "opf_fee_in", "opf_fee_out",
     "opf_self_pay_2", "opf_medic_l", "opf_sp_scale", "opf_fee_date",
 )
@@ -103,13 +105,13 @@ _DRUG_COLUMNS = (
     "cat_drug_code", "cat_drug_effective", "cat_drug_expiry", "cat_drug_sflb",
     "cat_drug_self_pay_ratio", "cat_drug_a_ypbs", "cat_drug_a_mzxj",
     "cat_drug_a_xbbl", "cat_drug_ypfl", "cat_drug_bzjg",
-    "cat_drug_preparation_hospital",
+    "cat_drug_preparation_hospital", "cat_drug_special_marker",
 )
 
 #: 诊疗/材料同表（yb_xzzlfwxm）共用列；材料的人工器官/集采中选标志列未映射（待确认）
 _SERVICE_COLUMNS = (
     "cat_svc_code", "cat_svc_effective", "cat_svc_expiry", "cat_svc_sfxmdj",
-    "cat_svc_self_pay_ratio", "cat_svc_unit_price_limit",
+    "cat_svc_self_pay_ratio", "cat_svc_unit_price_limit", "cat_svc_special_marker",
 )
 
 
@@ -523,6 +525,8 @@ def build_snapshot(
         trade_no=trade_no, trade_date=trade_date, hospital_code=hospital_code,
         is_reversal=is_reversal, original_trade_no=original_trade_no,
         no_right_reason=_to_str(trade_row.get(_k(m, "op_no_right_reason"))),
+        cure_type=_to_str(trade_row.get(_k(m, "op_cure_type"))),
+        fund_type=_to_str(trade_row.get(_k(m, "op_fund_type"))),
     )
 
     # 人员：默认仅映射人员类别与出生日期；资格字段仅在显式开启时从码表列派生
@@ -568,8 +572,12 @@ def build_snapshot(
             "ELIGIBILITY_DERIVED_FROM_CODES：待遇资格由院内码表列派生（候选口径，"
             "决策记录 D6/D7/D8，签核前仅评估链路使用）")
     person = PersonProfile(
+        military_disability_level_code=_to_str(trade_row.get(_k(m, "op_jc_level"))),
+        public_medical_flag=_to_str(trade_row.get(_k(m, "op_official"))),
+        public_medical_treatment_code=_to_str(trade_row.get(_k(m, "op_official_code"))),
         person_type_code=person_type_code,
         birth_date=_to_date(trade_row.get(_k(m, "op_birthday"))),
+        retire_officer_flag=_to_str(trade_row.get(_k(m, "op_retire_officer_flag"))),
         **person_kwargs,
     )
 
@@ -655,27 +663,16 @@ def build_snapshot(
             item_code=_to_str(row.get(_k(m, "cat_svc_code"))) or "",
             effective_date=_to_date(row.get(_k(m, "cat_svc_effective"))),
             expiry_date=_to_date(row.get(_k(m, "cat_svc_expiry"))),
+            sfxmdj=_to_str(row.get(_k(m, "cat_svc_sfxmdj"))),
         )
         for i, row in enumerate(material_catalog_rows)
     )
 
-    observed = ObservedSettlementAmounts(
-        fee_all=_to_decimal(trade_row.get(_k(m, "op_fee_all"))),
-        fee_in=_to_decimal(trade_row.get(_k(m, "op_fee_in"))),
-        fee_out=_to_decimal(trade_row.get(_k(m, "op_fee_out"))),
-        self_pay_2=_to_decimal(trade_row.get(_k(m, "op_self_pay_2"))),
-        first_pay=_to_decimal(trade_row.get(_k(m, "op_first_pay"))),
-        big_pay=_to_decimal(trade_row.get(_k(m, "op_big_pay"))),
-        big_self_pay=_to_decimal(trade_row.get(_k(m, "op_big_self_pay"))),
-        bc_pay=_to_decimal(trade_row.get(_k(m, "op_bc_pay"))),
-        jc_pay=_to_decimal(trade_row.get(_k(m, "op_jc_pay"))),
-        official_pay=_to_decimal(trade_row.get(_k(m, "op_official_pay"))),
-        self_pay_1=_to_decimal(trade_row.get(_k(m, "op_self_pay_1"))),
-        fund_pay=_to_decimal(trade_row.get(_k(m, "op_fund_pay"))),
-        self_pay_all=_to_decimal(trade_row.get(_k(m, "op_self_pay_all"))),
-        person_count_pay=_to_decimal(trade_row.get(_k(m, "op_person_count_pay"))),
-        cash_pay=_to_decimal(trade_row.get(_k(m, "op_cash_pay"))),
-    )
+    from src.config.settlement_templates import get_settlement_template
+    from src.adapters.data_supply.settlement_template_bindings import observed_template_amounts
+    # 原单与核对目标取同一份列绑定；未知身份只取表结构，不据此升级待遇资格。
+    template = get_settlement_template('resident_outpatient' if insurance_type == 'resident' else 'employee_outpatient')
+    observed = ObservedSettlementAmounts(**observed_template_amounts(template, {'outpatient_trade_table': trade_row}, m))
 
     snapshot = DecompositionSnapshot(
         settlement_ref=f"settlement:{trade_no}",
@@ -712,9 +709,12 @@ def _drug_entry(
         sflb=_to_str(row.get(_k(m, "cat_drug_sflb"))),
         self_pay_ratio=_to_decimal(row.get(_k(m, "cat_drug_self_pay_ratio"))),
         a_ypbs=_truthy(a_ypbs_raw),
+        a_ypbs_known=str(a_ypbs_raw).strip() in ("0", "0.0", "False", "false", "1", "1.0", "True", "true"),
+        a_ypbs_raw=_to_str(a_ypbs_raw),
         a_mzxj=_to_decimal(row.get(_k(m, "cat_drug_a_mzxj"))),
         a_xbbl=_to_decimal(row.get(_k(m, "cat_drug_a_xbbl"))),
         ypfl=_to_str(row.get(_k(m, "cat_drug_ypfl"))),
         bzjg=_to_decimal(row.get(_k(m, "cat_drug_bzjg"))),
         preparation_hospital_code=_to_str(row.get(_k(m, "cat_drug_preparation_hospital"))),
+        special_disease_marker=_to_str(row.get(_k(m, "cat_drug_special_marker"))),
     )

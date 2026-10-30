@@ -1,0 +1,415 @@
+{
+  "templates": [
+    {
+      "template_id": "resident_outpatient",
+      "version": "1.0.0",
+      "chain": "outpatient",
+      "insurance_type": "resident",
+      "title": "医保门诊实时结算详细信息查询",
+      "layout_status": "provisional",
+      "generation_method": "AI assisted image / schema / existing assembly matching; frozen configuration at runtime",
+      "reference": "Image #1：仅保存字段名称与布局；不保存图片中的个人身份数据",
+      "fields": [
+        {
+          "key": "fee_all",
+          "label": "费用总金额",
+          "section": "transaction",
+          "row": 1,
+          "column": 1,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_fee_all"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_FeeAll",
+          "observed_attribute": "fee_all",
+          "legacy_label": "费用总金额",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 0,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "personal_total",
+          "label": "个人支付总金额",
+          "section": "transaction",
+          "row": 1,
+          "column": 2,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_self_pay_all"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_SelfPayAll",
+          "observed_attribute": "self_pay_all",
+          "legacy_label": "个人支付总金额",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 13,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "fee_in",
+          "label": "医疗保险范围内金额",
+          "section": "transaction",
+          "row": 2,
+          "column": 1,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_fee_in"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_FeeIn",
+          "observed_attribute": "fee_in",
+          "legacy_label": "医保范围内金额",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 1,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "fee_out",
+          "label": "医疗保险范围外金额",
+          "section": "transaction",
+          "row": 2,
+          "column": 2,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_fee_out"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_FeeOut",
+          "observed_attribute": "fee_out",
+          "legacy_label": "医保范围外金额",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 2,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "self_pay_1",
+          "label": "个人支付自付（一）金额",
+          "section": "transaction",
+          "row": 3,
+          "column": 1,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_self_pay_1"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_SelfPay1",
+          "observed_attribute": "self_pay_1",
+          "legacy_label": "自付一",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 3,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "self_pay_2",
+          "label": "个人支付自付（二）金额",
+          "section": "transaction",
+          "row": 3,
+          "column": 2,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_self_pay_2"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_SelfPay2",
+          "observed_attribute": "self_pay_2",
+          "legacy_label": "自付二",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 4,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "first_pay",
+          "label": "起付金额",
+          "section": "transaction",
+          "row": 4,
+          "column": 1,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_first_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_FirstPay",
+          "observed_attribute": "first_pay",
+          "legacy_label": "起付金额",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 5,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "big_self_pay",
+          "label": "大额自付金额",
+          "section": "transaction",
+          "row": 4,
+          "column": 2,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_big_self_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_BigSelfPay",
+          "observed_attribute": "big_self_pay",
+          "legacy_label": "大额个人自付",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 7,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "beyond_cap",
+          "label": "大额超封顶金额",
+          "section": "transaction",
+          "row": 5,
+          "column": 1,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_beyond_big"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": null,
+          "observed_attribute": null,
+          "legacy_label": null,
+          "evidence": "AI 匹配：semantic_layer/seed.py 与 outpatient_store.py 均定义 T_BeyondBig 为超门诊大额封顶部分; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 99,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "fund_total",
+          "label": "基金支付金额",
+          "section": "transaction",
+          "row": 5,
+          "column": 2,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_fund_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_FundPay",
+          "observed_attribute": "fund_pay",
+          "legacy_label": "基金合计",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 12,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "account_pay",
+          "label": "当次个人帐户支付金额",
+          "section": "transaction",
+          "row": 6,
+          "column": 1,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_person_count_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_PersonCountPay",
+          "observed_attribute": "person_count_pay",
+          "legacy_label": "个人账户支付",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 16,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "big_pay",
+          "label": "当次门诊大额基金支付金额",
+          "section": "transaction",
+          "row": 6,
+          "column": 2,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_big_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_BigPay",
+          "observed_attribute": "big_pay",
+          "legacy_label": "大额支付",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 6,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "military_pay",
+          "label": "残疾军人补助支付金额",
+          "section": "transaction",
+          "row": 7,
+          "column": 2,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_jc_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_JCPay",
+          "observed_attribute": "jc_pay",
+          "legacy_label": "军残支付",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 9,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "cash_pay",
+          "label": "当次个人现金支付金额",
+          "section": "transaction",
+          "row": 8,
+          "column": 1,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_cash_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_CashPay",
+          "observed_attribute": "cash_pay",
+          "legacy_label": "现金支付",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 17,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "retire_pay",
+          "label": "补充保险支付金额",
+          "section": "transaction",
+          "row": 8,
+          "column": 2,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_bc_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_BCPay",
+          "observed_attribute": "bc_pay",
+          "legacy_label": "退休补充保险补助",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 8,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "big_ill_pay",
+          "label": "大病支付",
+          "section": "transaction",
+          "row": 9,
+          "column": 1,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_bigill_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_BigillPay",
+          "observed_attribute": "bigill_pay",
+          "legacy_label": "大病保险支付",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 14,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "aid_pay",
+          "label": "救助支付",
+          "section": "transaction",
+          "row": 9,
+          "column": 2,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_civil_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "NT_CivilPay",
+          "observed_attribute": "civil_pay",
+          "legacy_label": "民政救助支付",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 15,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "retire_officer_pay",
+          "label": "退役医疗费",
+          "section": "transaction",
+          "row": 10,
+          "column": 1,
+          "span": 1,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_retire_officer_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "RETIRE_OFFICER_PAY",
+          "observed_attribute": "retire_officer_pay",
+          "legacy_label": "退役医疗费支付",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 11,
+          "binding_status": "schema_verified"
+        },
+        {
+          "key": "official_pay",
+          "label": "单位补充医疗保险（原公疗）支付金额",
+          "section": "transaction",
+          "row": 11,
+          "column": 1,
+          "span": 2,
+          "scope": "patient_actual",
+          "source_table": "outpatient_trade_table",
+          "column_keys": [
+            "op_official_pay"
+          ],
+          "record_mapping": true,
+          "operation": "column",
+          "field_code": "T_OfficalPay",
+          "observed_attribute": "official_pay",
+          "legacy_label": "公疗补充支付",
+          "evidence": "Image #1 名称/位置；record_query_mappings.DEFAULT_COLUMNS 与 ObservedSettlementAmounts 组装; schema existence checked against bjybdb.INFORMATION_SCHEMA.COLUMNS on 2026-10-21",
+          "legacy_order": 10,
+          "binding_status": "schema_verified"
+        }
+      ]
+    }
+  ]
+}

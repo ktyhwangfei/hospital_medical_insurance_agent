@@ -1,0 +1,65 @@
+{
+  "datasource": "bjybdb",
+  "hospital_code": "01110003",
+  "filter": "P_FundType IN ('91','92','93')（城乡居民）AND T_HospCode='01110003'，门诊全量（内核通道分流）",
+  "rounding_mode_assumed": "round_half_up",
+  "candidate_calibers": {
+    "accumulation_caliber_confirmed": "TB_FeeIn/TB_BigPay 交易前口径（居民实证同职工 D3/D4/D5，待签核）",
+    "cure_type_extension": "T_CureType 17/18/19 院内扩展码语义待确认（ROP-CURE-001）",
+    "no_benefit_nonempty": "PN_NoRightReason 非空即全额自费（ROP-NRB-001，实证 25/25）"
+  },
+  "verdict_basis": "仅内核独立重算字段（independent_recalculation）；账面内部核对单列",
+  "total_trades": 59,
+  "verdict_counts": {
+    "准确": 54,
+    "无法核对": 5
+  },
+  "accuracy_all": 0.9152542372881356,
+  "accuracy_decidable": 1.0,
+  "decidable_trades": 54,
+  "kernel_field_level": {
+    "matched": 483,
+    "mismatched": 2,
+    "accuracy": 0.9958762886597938,
+    "note": "字段级口径=内核独立重算字段 matched/(matched+mismatched)（门特 #79 口径）"
+  },
+  "field_status_histogram": {
+    "T_BCPay:matched": 24,
+    "T_BCPay:not_applicable": 35,
+    "T_BigPay:matched": 56,
+    "T_BigPay:not_verifiable": 3,
+    "T_BigSelfPay:matched": 54,
+    "T_BigSelfPay:not_verifiable": 5,
+    "T_BigillPay:matched": 3,
+    "T_BigillPay:not_applicable": 32,
+    "T_FeeIn:matched": 59,
+    "T_FeeOut:matched": 57,
+    "T_FeeOut:not_verifiable": 2,
+    "T_FirstPay:matched": 56,
+    "T_FirstPay:not_verifiable": 3,
+    "T_FundPay:matched": 3,
+    "T_JCPay:matched": 24,
+    "T_JCPay:not_applicable": 35,
+    "T_OfficalPay:matched": 24,
+    "T_OfficalPay:not_applicable": 35,
+    "T_SelfPay1:matched": 21,
+    "T_SelfPay1:mismatched": 1,
+    "T_SelfPay2:matched": 57,
+    "T_SelfPay2:not_verifiable": 2,
+    "T_SelfPayAll:matched": 45,
+    "T_SelfPayAll:mismatched": 1
+  },
+  "book_internal_mismatch_trades": 5,
+  "note": "detail_aggregation/identity_check 的 mismatched 是账面内部一致性信号，不计入 verdict；亚分精度差为源系统明细 4 位小数 vs 交易分位的精度特征。",
+  "uncertainty_histogram": {
+    "CURE_TYPE_EXTENSION_SEMANTICS_UNCONFIRMED": 5,
+    "ROUNDING_RULE_PENDING_CONFIRMATION": 5,
+    "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION": 4,
+    "ACCUMULATION_DERIVED_IN_HOSPITAL": 3,
+    "PRIOR_ACCUMULATION_CALIBER_UNCONFIRMED": 3,
+    "UPSTREAM_BASE_MISSING": 3,
+    "CIVIL_PAY_CHANNEL_PRESENT": 2,
+    "ACCUMULATION_CROSS_HOSPITAL_UNVERIFIED": 1,
+    "BEYOND_CAP_FIELD_ATTRIBUTION_UNCONFIRMED": 1
+  }
+}

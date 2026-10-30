@@ -289,20 +289,23 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 拟退项目 | `PartialRefundItemRequest` | **Value Object** | `@dataclass(frozen=True)` | 指定费用明细 ID 与拟退数量的只读预结算输入 |
 | 预结算结果 | `PartialRefundPreview` | **Value Object** | `@dataclass(frozen=True)` | 医院收费系统对门诊部分项目预退费的权威只读结果 |
 | 分解输入快照 | `DecompositionSnapshot` | **Value Object** | `@dataclass(frozen=True)` | 费用分解固定输入：交易锚点+身份+机构+年度累计+明细+目录+观测值+显式取整模式（#78） |
-| 交易锚点 | `TradeAnchor` | **Value Object** | `@dataclass(frozen=True)` | 交易号/结算日期/发生机构/冲正识别（#78） |
-| 人员身份快照 | `PersonProfile` | **Value Object** | `@dataclass(frozen=True)` | 人员类别码、出生日期、退休类别、军残/公疗资格；未知为 None，禁止金额反推（#78） |
+| 交易锚点 | `TradeAnchor` | **Value Object** | `@dataclass(frozen=True)` | 交易号/结算日期/发生机构/冲正识别/无待遇原因码（#78）；cure_type/fund_type 原值（#80 居民通道分流依据，职工内核不消费） |
+| 人员身份快照 | `PersonProfile` | **Value Object** | `@dataclass(frozen=True)` | 人员类别码、出生日期、退休类别、军残/公疗资格；retire_officer_flag 保留退役医疗标志；military_disability_level_code 保留原始伤残待遇等级（0=不享受），public_medical_flag 保留公务员待遇标志（0=享受），public_medical_treatment_code 保留原公疗通道类别（0=本笔未选择）。零分支与正向资格分别判断，未知为 None，禁止金额反推（#78） |
 | 机构快照 | `InstitutionProfile` | **Value Object** | `@dataclass(frozen=True)` | 机构键与 H_LEVEL/H_TYPE 原值；社区判定主依据 H_TYPE（字典 k80），分支判断在计算层（#78） |
-| 年度累计上下文 | `AnnualAccumulation` | **Value Object** | `@dataclass(frozen=True)` | 交易前医保内费用累计/基金支付累计及口径确认标志（#78） |
+| 年度累计上下文 | `AnnualAccumulation` | **Value Object** | `@dataclass(frozen=True)` | 交易前医保内费用累计/基金支付累计及口径确认标志（含逐交易恒等式自证 self_proven）（#78） |
 | 费用明细行快照 | `FeeLineItem` | **Value Object** | `@dataclass(frozen=True)` | 行键/目录类别/账面金额/费用发生日期/集采包装与一致性评价/明细行结算事实（MEDIC_L 实际自付比例、SP_SCALE 结算时限价）（#78） |
-| 药品目录条目 | `DrugCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sflb/自付比例/集采限价/超限价自付比例 a_xbbl/自制剂标准价；空截止日期不默认永久有效（#78） |
+| 药品目录条目 | `DrugCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sflb/自付比例/集采限价/超限价自付比例 a_xbbl/自制剂标准价；`a_ypbs_known` 保留集采标志已知性，仅供解释，不改变计算；空截止日期不默认永久有效（#78） |
 | 诊疗服务目录条目 | `ServiceCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sfxmdj（1 无自付/2 有自付/3 全自付，空=未知）/自付比例/单价限额（#78） |
 | 医用材料目录条目 | `MaterialCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | 人工器官/集采中选例外标志（#78） |
-| 结算账面观测值 | `ObservedSettlementAmounts` | **Value Object** | `@dataclass(frozen=True)` | T_* 结算字段观测值，仅作核对目标；None=未知不是零（#78） |
+| 结算账面观测值 | `ObservedSettlementAmounts` | **Value Object** | `@dataclass(frozen=True)` | T_* 结算字段观测值，不作独立重算依据；None=未知不是零（#78）；bigill_pay/civil_pay 大病/救助渠道观测值（#80）；retire_officer_pay 为 RETIRE_OFFICER_PAY 退役医疗费支付，可作其他金额账面构成的加减项，不证明本项待遇原因 |
+| 结算单展示模板 | `SettlementDisplayTemplate` | **Value Object**（配置契约） | 冻结 Pydantic BaseModel（config 边界） | 四链路独立维护标准字段名、布局、来源列和算法观测绑定；定额另设变体。维护展示或列映射时先读 `docs/steering/结算单展示模板与字段映射.md`；公开视图为 `SettlementDisplayView`，不携带物理表列 |
 | 分支轨迹 | `BranchTrace` | **Value Object** | `@dataclass(frozen=True)` | step/parent/module/condition/outcome 三值逻辑/reason/refs（#78，设计 §8） |
 | 分支结果 | `BranchOutcome` | **Value Object** | `StrEnum` | true/false/unknown/not_evaluated/blocked/not_applicable（#78） |
 | 分支条件 | `BranchCondition` | **Value Object** | `@dataclass(frozen=True)` | 条件代码+中文含义+比较操作+左右值（#78） |
 | 计算记录 | `CalculationRecord` | **Value Object** | `@dataclass(frozen=True)` | formula_id/版本/操作数引用与值/未取整结果/取整规则/最终金额（#78） |
 | 计算操作数 | `CalculationOperand` | **Value Object** | `@dataclass(frozen=True)` | 操作数引用+十进制字符串值（#78） |
+| 公式输入证据投影 | `FormulaInput` | 应用层公开 DTO | Pydantic BaseModel | 原始输入或上游计算的稳定引用、中文名称、值、来源与 verified/unverified/missing/conflict；不因金额相符升级验证状态（#78 交互投影 1.4） |
+| 参数候选判定投影 | `RuleChoiceGroup` / `RuleCandidate` | 应用层公开 DTO | Pydantic BaseModel | 同险种、同支付项目、结算日有效版本的全部数值候选，逐条件采用/排除/未知/冲突；共用字段与输入引用，两种解释视图复用（#78） |
 | 分解不确定性 | `DecompositionUncertainty` | **Value Object** | `@dataclass(frozen=True)` | 缺规则/缺数据显式声明及影响字段（#78） |
 | 分解证据引用 | `DecompositionCitation` | **Value Object** | `@dataclass(frozen=True)` | 来源区分 issue_note/approved_business_rule/policy_document/source_catalog（#78） |
 | 字段核对结果 | `FieldReconciliation` | **Value Object** | `@dataclass(frozen=True)` | check_type/check_status/difference=calculated-observed（#78，设计 §10） |
@@ -313,16 +316,28 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 取整模式 | `RoundingMode` | **Value Object** | `StrEnum` | 显式传入无默认（EOP-RND-001 待确认，#78） |
 | 人员身份分类 | `PersonKind` | **Value Object** | `StrEnum` | employed/retired/unknown（未知不默认在职，#78） |
 | 机构类别 | `InstitutionKind` | **Value Object** | `StrEnum` | community/other/unknown（#78） |
+| 机构等级档 | `InstitutionLevelTier` | **Value Object** | `StrEnum` | level_1_and_below（含未评级）/level_2_and_above/unknown；居民门诊起付与支付比例分档维度（#80） |
 | 目录类别 | `CatalogKind` | **Value Object** | `StrEnum` | drug/service/material/unknown（#78） |
 | 集采包装类型 | `PackagingType` | **Value Object** | `StrEnum` | whole_pack/split_pack；未给定按规则默认整包（#78） |
 | 金额取整 | `apply_rounding()` | 值函数 | 纯函数 | 显式模式 + quantum 取整（默认到分），无默认模式（#78） |
 | 十进制输出 | `decimal_to_str()` | 值函数 | 纯函数 | Decimal → 十进制字符串，不经过 float（#78） |
-| 门特费用明细行快照 | `SpecialFeeLineItem` | **Value Object** | `@dataclass(frozen=True)` | yb_zyfymx 行：xh 行键/xmdm/sflb/sfxmdj 自付档/zje/ybnje/ybwje/grziftw 先行自付/dj/sl/fsrq（#78 门特，实测候选口径待数据字典确认） |
-| 门特结算账面观测值 | `SpecialObservedAmounts` | **Value Object** | `@dataclass(frozen=True)` | yb_zyjyxx 14 字段（zje/ybn/ybw/ybnqfje/tczhf/tczif/degwyzhf/degwyzif/bczhf/jczhf/gfylbchbx/xjzf/zhzf/grziftw），仅作核对目标（#78 门特） |
+| 门特费用明细行快照 | `SpecialFeeLineItem` | **Value Object** | `@dataclass(frozen=True)` | yb_mzfymx 行：xh 行键/xmdm/sflb/sfxmdj 自付档/zje/ybnje/ybwje/grziftw 先行自付/dj/sl/fsrq（#78 门特，实测候选口径待数据字典确认） |
+| 门特结算账面观测值 | `SpecialObservedAmounts` | **Value Object** | `@dataclass(frozen=True)` | 基本医保、补助、现金/账户、大病和救助各分桶金额及额外补助；缺失不当零。用户确认二次保障分桶取整仅差一分时采用本笔原单金额，并据此计算合计及下游；其余差异仍只核对、不反推基数 |
 | 门特结算周期上下文 | `SpecialCycleContext` | **Value Object** | `@dataclass(frozen=True)` | 起付标准/周期内已交起付/年度统筹/大额基金累计 + evidence_status 三态（confirmed/assumed/unknown）（#78 门特） |
 | 门特人员快照 | `SpecialPersonProfile` | **Value Object** | `@dataclass(frozen=True)` | cblb 人员类别码、csrq 出生日期、tsbqsrq/tsbjzrq 特殊病备案起止（备案有效期≠结算周期）、retirement_category 退休类别（normal/prepaid，未知 None 不默认 50%）（#78 门特） |
 | 门特机构快照 | `SpecialInstitutionProfile` | **Value Object** | `@dataclass(frozen=True)` | 机构键与 H_LEVEL 原值；住院口径等级映射（01-05 三级/06-09 二级/10-13 一级）在计算层（#78 门特） |
-| 门特分解输入快照 | `OutpatientSpecialSnapshot` | **Value Object** | `@dataclass(frozen=True)` | 职工×门特固定输入：djh/结算日期/人员/机构/周期上下文/明细/观测值/显式取整模式/allow_observed_deductible 评估开关（#78 门特） |
+| 门特分解输入快照 | `OutpatientSpecialSnapshot` | **Value Object** | `@dataclass(frozen=True)` | 职工/居民门特mz输入，包含二次保障上下文和目录独立识别的比例先行负担；账面目标不反推待遇基数 |
+| 肾移植抗排异定额上下文 | `KidneyFixedQuotaContext` | **Value Object** | `@dataclass(frozen=True)` | 503/504备案码、本人定点标识、独立周期起点及给药起止；账面定额为条件输入，个人自付按实际费用计算，医院基金按定额减原始自付；不由支付目标反算日标准（#82） |
+| 门特周期位置 | `SpecialCycleContext.cycle_position` | **Value Object** | `str \| None` | first/subsequent；周期序号缺失或非法时未知，不默认后续周期 |
+| 周期分字段证据 | `SpecialCycleContext.confirmed_fields` | **Value Object** | `tuple[str, ...]` | 完整、同年度本笔流水且非负的各累计单独确认，年度表滞后不采用原值替代 |
+| 原交易政策上下文 | `OriginalPolicyContext` | **Value Object** | `@dataclass(frozen=True)` | 退费关联原单的政策日期、人员、历史机构、险种、医疗类别与累计年度；缺失时不得套退款日政策 |
+| 二次保障累计上下文 | `SecondaryCoverageContext` | **Value Object** | `@dataclass(frozen=True)` | 大病范围年度累计、救助已支付累计、交易前/后时点和证据状态；不从本笔支付目标反算 |
+| 救助身份 | `SpecialPersonProfile.civil_type` | **Value Object** | `str \| None` | 原始CIVIL_TYPE；0/25/26/336001/336011/2364经源字典核对，未知不默认非救助 |
+| 比例先行负担 | `OutpatientSpecialSnapshot.proportional_self_pay_2` | **Value Object** | `Decimal \| None` | 目录比例自付二；排除全自费和超限价部分，进入二次保障 |
+| 特殊病目录适用标志 | `special_disease_marker` | **Value Object** | `str \| None` | 药品/服务/材料目录行的特殊病适用证据；居民门特未确认时依赖分支未知 |
+| 二次保障分解 | `decompose_secondary_coverage()` | **Domain Service** | 纯函数模块 | 基本医保及补助之后，按年度分段计算BIG_ILL_PAY，再按门特住院救助档计算CIVIL_IN及个人应付 |
+| 居民门特分解内核 | `decompose_resident_outpatient_special()` | **Domain Service** | 纯函数模块 | 目录独立重算、三维起付、基本医保基金年度封顶，再接二次大病和医疗救助；DEGWYZHF与BIG_ILL_PAY为不同支付层 |
+| 居民门诊分解内核 | `decompose_resident_outpatient()` | **Domain Service** | 纯函数模块 | 城乡居民×普通门诊费用分解（#80）：机构等级档起付/比例/封顶（ROP-* 参数表），区间重叠公式支持退费交易，T_CureType 通道分流（11/19 门诊大额、17/18 医事服务费、大病/救助渠道候选），复用职工目录分解与核对框架 |
 
 #### 业务规则
 

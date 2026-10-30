@@ -22,6 +22,23 @@ describe('PolicyComposer', () => {
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', '直接问政策问题…')
   })
 
+  it('prompts settlement follow-up questions about rates and amounts', () => {
+    render(
+      <PolicyComposer
+        mode="settlement_explain"
+        settlementId="T123"
+        value=""
+        onChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('textbox')).toHaveAttribute(
+      'placeholder',
+      '例如：为什么按这个比例报销？这笔金额是怎么算出来的？',
+    )
+  })
+
   it('uses the ops send label for the data_query agent', () => {
     render(
       <PolicyComposer

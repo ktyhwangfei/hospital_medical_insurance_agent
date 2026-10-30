@@ -1,0 +1,65 @@
+{
+  "datasource": "bjybdb",
+  "hospital_code": "01110003",
+  "filter": "yb_brdjxx.yllb='12' × FUND_TYPE∈('91','92','93') × yb_mzjyxx.fyfs='0'（项目付费）",
+  "rounding_mode_assumed": "round_half_up",
+  "candidate_calibers": {
+    "cycle_derive": "同年度本笔流水快照分字段减本笔；缺失或负差保持未知，滞后原值不能认作交易前累计",
+    "catalog_split": "目录独立分解复用 split_catalog（RSP-CAT-001，与居民门诊同规则）",
+    "basic_pay_rate": "基本医保基金比例按机构档住院口径（三级 75%，RSP-RATE-001）；二次大病保险另按年度分段计算"
+  },
+  "verdict_basis": "仅内核独立重算字段（independent_recalculation）；账面内部核对单列",
+  "total_registrations": 3,
+  "verdict_counts": {
+    "差异（实质）": 2,
+    "无法核对": 1
+  },
+  "accuracy_all": 0.0,
+  "accuracy_decidable": 0.0,
+  "decidable_trades": 2,
+  "kernel_field_level": {
+    "matched": 28,
+    "mismatched": 8,
+    "accuracy": 0.7777777777777778
+  },
+  "field_status_histogram": {
+    "BCZHF:not_applicable": 3,
+    "BIG_ILL_PAY:mismatched": 2,
+    "BIG_ILL_PAY:not_verifiable": 1,
+    "CIVIL_IN:mismatched": 2,
+    "CIVIL_IN:not_verifiable": 1,
+    "DEGWYZHF:matched": 2,
+    "DEGWYZHF:not_verifiable": 1,
+    "DEGWYZIF:matched": 2,
+    "DEGWYZIF:not_verifiable": 1,
+    "FEEIN_DB_PAY:matched": 1,
+    "FEEIN_DB_PAY:mismatched": 1,
+    "FEEIN_DB_PAY:not_verifiable": 1,
+    "FEEIN_MAF_PAY:matched": 1,
+    "FEEIN_MAF_PAY:mismatched": 1,
+    "FEEIN_MAF_PAY:not_verifiable": 1,
+    "FEEOUT_DB_PAY:matched": 1,
+    "FEEOUT_DB_PAY:mismatched": 1,
+    "FEEOUT_DB_PAY:not_verifiable": 1,
+    "FEEOUT_MAF_PAY:matched": 1,
+    "FEEOUT_MAF_PAY:mismatched": 1,
+    "FEEOUT_MAF_PAY:not_verifiable": 1,
+    "GFYLBCHBX:not_applicable": 3,
+    "GRZIFTW:matched": 3,
+    "JCZHF:not_applicable": 3,
+    "PERSON_PAYABLE:matched": 2,
+    "PERSON_PAYABLE:not_verifiable": 1,
+    "TCZHF:matched": 3,
+    "TCZIF:matched": 3,
+    "TSBYBN:matched": 3,
+    "TSBYBW:matched": 3,
+    "YBNQFJE:matched": 3
+  },
+  "uncertainty_histogram": {
+    "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION": 1,
+    "CYCLE_TABLE_LAGGING": 1,
+    "FUND_CUMULATIVE_MISSING": 1,
+    "ROUNDING_RULE_PENDING_CONFIRMATION": 1,
+    "SECONDARY_BASE_MISSING": 1
+  }
+}

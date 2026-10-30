@@ -21,7 +21,7 @@ from src.domain.insurance.fee_decomposition import (
     RoundingMode,
     TradeAnchor,
 )
-from src.runtime.policy_qa.fee_decomposition.catalog_split import split_catalog
+from src.runtime.policy_qa.fee_decomposition.catalog_split import CatalogRuleLabels, split_catalog
 from src.runtime.policy_qa.fee_decomposition.employee_outpatient import (
     classify_institution,
     decompose_employee_outpatient,
@@ -56,6 +56,7 @@ def _run(item, entry):
     return split_catalog(
         (item,), drug_catalog=(entry,), service_catalog=(), material_catalog=(),
         rounding_mode=MODE, hospital_code=HOSP,
+        rules=CatalogRuleLabels(rounding_rule_id="EOP-RND-001", catalog_rule_ref="EOP-CAT 系列"),
     )
 
 

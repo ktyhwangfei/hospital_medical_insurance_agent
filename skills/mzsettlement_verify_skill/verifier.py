@@ -187,31 +187,43 @@ def decompose_personal_payment(
                 f"；个人账户支付 {_yuan(account)} + 现金支付 {_yuan(cash)}"
             )
         combined = sp1 + sp2
+        composition = f"统筹自付（自付一 + 自付二）{_yuan(combined)}"
+        # 医保范围外金额包含先自付；还存在其他范围外费用时，不能只加自付二。
+        if out_scope is not None and out_scope > sp2 >= Decimal("0.00"):
+            combined = sp1 + out_scope
+            composition = (
+                f"个人自付一 {_yuan(sp1)} + 医保范围外金额 {_yuan(out_scope)}"
+            )
+            if sp2 > Decimal("0.00"):
+                lines.append(
+                    f"医保范围外金额 {_yuan(out_scope)} 已包含个人自付二 {_yuan(sp2)}，"
+                    "计算个人支付总金额时不重复相加。"
+                )
         gap = combined - personal_total
         if gap == Decimal("0.00"):
             lines.append(
-                f"个人支付总金额 {_yuan(personal_total)} = 统筹自付（自付一 + 自付二）"
-                f"{_yuan(combined)}，全部由个人承担{channel_note}"
+                f"个人支付总金额 {_yuan(personal_total)} = {composition}"
+                f"，全部由个人承担{channel_note}"
             )
         elif gap > Decimal("0.00"):
             combos = _matching_channel_combos(context, gap)
             if len(combos) == 1:
                 lines.append(
-                    f"个人支付总金额 {_yuan(personal_total)} = 统筹自付（自付一 + 自付二）"
-                    f"{_yuan(combined)} - {_combo_text(combos[0])}（该部分由基金/专项渠道替个人承担{channel_note}）"
+                    f"个人支付总金额 {_yuan(personal_total)} = {composition}"
+                    f" - {_combo_text(combos[0])}（该部分由基金/专项渠道替个人承担{channel_note}）"
                 )
             else:
                 lines.append(
-                    f"统筹自付（自付一 + 自付二）{_yuan(combined)} 与个人支付总金额"
+                    f"{composition} 与个人支付总金额"
                     f" {_yuan(personal_total)} 差额 {_yuan(gap)}，无法归因到具体支付渠道"
                 )
-                uncertainties.append("统筹自付与个人支付总金额的差额渠道待人工核对。")
+                uncertainties.append("个人支付总金额的差额渠道待人工核对。")
         else:
             lines.append(
-                f"统筹自付（自付一 + 自付二）{_yuan(combined)} 低于个人支付总金额"
-                f" {_yuan(personal_total)}，差异 {_yuan(-gap)} 待人工核对"
+                f"现有自付金额 {_yuan(combined)} 尚未覆盖个人支付总金额"
+                f" {_yuan(personal_total)}，其余 {_yuan(-gap)} 的费用构成尚未解释"
             )
-            uncertainties.append("统筹自付低于个人支付总金额，金额口径异常，待人工核对。")
+            uncertainties.append("个人支付总金额的费用构成尚未完整解释，需补充范围外费用及支付口径。")
     return lines, uncertainties
 
 

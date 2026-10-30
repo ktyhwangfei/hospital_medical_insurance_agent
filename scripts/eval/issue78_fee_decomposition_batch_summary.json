@@ -10,16 +10,25 @@
   "verdict_basis": "仅内核独立重算字段（independent_recalculation）；账面内部核对单列",
   "total_trades": 81,
   "verdict_counts": {
-    "准确": 78,
-    "不可用": 3
+    "无法核对": 77,
+    "不可用": 3,
+    "脚本异常": 1
   },
-  "accuracy_all": 0.9629629629629629,
-  "accuracy_decidable": 1.0,
-  "decidable_trades": 78,
-  "book_internal_mismatch_trades": 20,
+  "accuracy_all": 0.0,
+  "accuracy_decidable": null,
+  "decidable_trades": 0,
+  "book_internal_mismatch_trades": 18,
   "note": "detail_aggregation/identity_check 的 mismatched 是账面内部一致性信号，不计入 verdict；亚分精度差为源系统明细 4 位小数 vs 交易分位的精度特征。",
   "uncertainty_histogram": {
+    "ACCUMULATION_DERIVED_IN_HOSPITAL": 56,
+    "ROUNDING_RULE_PENDING_CONFIRMATION": 51,
+    "CATALOG_RULE_PENDING_OFFICIAL_CONFIRMATION": 47,
+    "PRIOR_ACCUMULATION_CALIBER_UNCONFIRMED": 41,
+    "UPSTREAM_BASE_MISSING": 41,
+    "NO_BENEFIT_REASON_SEMANTICS_UNCONFIRMED": 26,
+    "ACCUMULATION_CROSS_HOSPITAL_UNVERIFIED": 22,
     "UNSUPPORTED_REVERSAL_OR_NEGATIVE": 3,
-    "ACCUMULATION_DERIVED_IN_HOSPITAL": 1
+    "NCP_EXCESS_RULE_CANDIDATE": 2,
+    "DRUG_PRICE_LIMIT_RULE_CANDIDATE": 1
   }
 }

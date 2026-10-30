@@ -5,6 +5,7 @@ import {
   thisWeekRange,
   toDateInput,
   todayRange,
+  toSettlementItem,
 } from '@/lib/policy-qa-settlement-list'
 
 describe('policy-qa-settlement-list 时段与格式化（纯逻辑）', () => {
@@ -39,5 +40,28 @@ describe('policy-qa-settlement-list 时段与格式化（纯逻辑）', () => {
     expect(formatAmount(12386.4)).toBe('12,386.40')
     expect(formatAmount(0)).toBe('0.00')
     expect(formatAmount(null)).toBe('—')
+  })
+
+  it('toSettlementItem 透传合法 decomposition_chain（outpatient / special）', () => {
+    expect(
+      toSettlementItem({ settlement_id: 'T123456789012345', decomposition_chain: 'outpatient' })
+        .decompositionChain,
+    ).toBe('outpatient')
+    expect(
+      toSettlementItem({ settlement_id: '604', decomposition_chain: 'special' })
+        .decompositionChain,
+    ).toBe('special')
+  })
+
+  it('toSettlementItem 非法/缺失 decomposition_chain 归一为 null（住院路径）', () => {
+    expect(
+      toSettlementItem({ settlement_id: '1671213', decomposition_chain: 'inpatient' })
+        .decompositionChain,
+    ).toBeNull()
+    expect(
+      toSettlementItem({ settlement_id: '1671213', decomposition_chain: null })
+        .decompositionChain,
+    ).toBeNull()
+    expect(toSettlementItem({ settlement_id: '1671213' }).decompositionChain).toBeNull()
   })
 })

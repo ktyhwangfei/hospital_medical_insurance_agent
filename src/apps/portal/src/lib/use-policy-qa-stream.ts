@@ -13,6 +13,7 @@
  * - 降级友好：任一 Runtime 事件解析失败只记日志，不阻塞 step/result 主流程
  */
 
+import { feeReadAuthHeaders } from './fee-decomposition-api'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   applyContextNeed,
@@ -91,9 +92,9 @@ export interface UsePolicyQAStreamReturn {
    * 两者皆空返回 false（调用方提示用户先锚定结算单号）；
    * 非活跃会话（挂起/升级中）拒绝发送。
    */
-  send: (question: string, opts?: { settlementId?: string }) => Promise<boolean>
-  /** 新建会话：新 sessionId + 清空记忆/消息/锚点/持久化 */
-  resetSession: () => void
+  send: (question: string, opts?: { settlementId?: string; decompositionChain?: 'outpatient' | 'special' }) => Promise<boolean>
+  /** 新建会话：新 sessionId + 清空记忆/消息/锚点/持久化；返回新会话 ID（供调用方立刻使用） */
+  resetSession: () => string
   /** 挂起当前会话 */
   suspendSession: (reason?: string) => Promise<void>
   /** 恢复挂起会话并重建轨迹 */
@@ -173,6 +174,7 @@ function applyPublicResult(
     verificationSummary: result.verificationSummary,
     isBroad: result.isBroad,
     dataQueryResult: result.dataQueryResult,
+    feeDecomposition: result.feeDecomposition,
     // 仅在消息尚未锁定 ID 时写入；result 与 done 不一致时以首轮锁定的为准
     qaTurnId: msg.qaTurnId ?? qaTurnId,
   }
@@ -372,7 +374,7 @@ export function usePolicyQAStream(
 
   // ── 发起一轮对话 ─────────────────────────────────────────────
   const send = useCallback(
-    async (question: string, opts?: { settlementId?: string }): Promise<boolean> => {
+    async (question: string, opts?: { settlementId?: string; decompositionChain?: 'outpatient' | 'special' }): Promise<boolean> => {
       const text = question.trim()
       const settlementId = opts?.settlementId ?? anchorRef.current.settlementId
       // Issue #33 路由/拒答：无结算单的宽泛问题放行到后端 broad router（结构化引用/确定性拒答），
@@ -417,11 +419,12 @@ export function usePolicyQAStream(
       try {
       const response = await fetch(STREAM_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...feeReadAuthHeaders() },
         body: JSON.stringify({
           question: text,
           mode,
           settlement_id: settlementId,
+          ...(opts?.decompositionChain ? { decomposition_chain: opts.decompositionChain } : {}),
           session_id: sessionIdRef.current,
           user_id: 'demo',
           role: 'cashier',
@@ -437,6 +440,7 @@ export function usePolicyQAStream(
         try {
           while (true) {
             const { done, value } = await reader.read()
+            if (controller.signal.aborted) break
             if (done) {
               buffer += decoder.decode()
               break
@@ -445,6 +449,7 @@ export function usePolicyQAStream(
             const blocks = buffer.split(/\r?\n\r?\n/)
             buffer = blocks.pop() ?? ''
             for (const block of blocks) {
+              if (controller.signal.aborted) break
               const evt = parseSseBlock(block)
               if (evt) {
                 dispatchEvent(
@@ -461,7 +466,7 @@ export function usePolicyQAStream(
           }
           // 处理尾部残留
           const tail = parseSseBlock(buffer)
-          if (tail) {
+          if (tail && !controller.signal.aborted) {
             dispatchEvent(
               tail.event,
               sanitizePublicPayload(tail.data),
@@ -494,17 +499,19 @@ export function usePolicyQAStream(
         )
       }
 
-      setIsStreaming(false)
+      if (abortRef.current === controller) setIsStreaming(false)
       return true
     },
     [dispatchEvent, isStreaming, mode, sessionStatus],
   )
 
   // ── 新会话 ───────────────────────────────────────────────────
-  const resetSession = useCallback(() => {
+  const resetSession = useCallback((): string => {
     abortRef.current?.abort()
     abortRef.current = null
     const sid = newSessionId()
+    sessionIdRef.current = sid
+    anchorRef.current = emptyAnchor()
     setSessionId(sid)
     persistSessionId(sid, storageScope)
     setAnchor(emptyAnchor())
@@ -517,6 +524,7 @@ export function usePolicyQAStream(
     setSessionStatus('active')
     setStatusReason('')
     setEscalation(null)
+    return sid
   }, [storageScope])
 
   // ── 会话生命周期动作（Issue #30）──────────────────────────
@@ -563,7 +571,7 @@ export function usePolicyQAStream(
       `${SESSIONS_URL}/${encodeURIComponent(sessionIdRef.current)}/escalate?user_id=demo`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...feeReadAuthHeaders() },
         body: JSON.stringify({ question, reason }),
       },
     )
@@ -588,7 +596,7 @@ export function usePolicyQAStream(
       `${SESSIONS_URL.replace('/sessions', '')}/escalations/${encodeURIComponent(taskId)}/resolve`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...feeReadAuthHeaders() },
         body: JSON.stringify({ reply, resolved_by: 'dev-simulated' }),
       },
     )
