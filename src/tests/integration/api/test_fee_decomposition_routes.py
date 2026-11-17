@@ -56,6 +56,27 @@ def _canned_facts() -> SettlementFactsView:
     )
 
 
+def test_payment_condition_facts_cross_workbench_api_without_upgrading_verdict(api, monkeypatch, gate_on):
+    from src.runtime.policy_qa.fee_decomposition.payment_condition_context import PaymentConditionContext, DiagnosisFact
+    context = PaymentConditionContext(
+        bz="限胃肠镜检查和腹部影像学检查", catalog_status="unique", catalog_source="药品目录",
+        hospital_level="02", hospital_level_name="三级", diagnosis_status="recorded",
+        diagnoses=[DiagnosisFact(code="R19.4", name="大便习惯改变", association="same_prescription")])
+    result = _canned_result(fee_items=[FeeItemExplanation(
+        line_id="1", item_code="DRUG", item_name="测试药", total_fee="33",
+        observed_in_scope="29.7", observed_out_scope="3.3", payment_condition_context=context)])
+    monkeypatch.setattr(integration, "decompose_outpatient_trade",
+        lambda *a, **k: DecompositionOutcome(result, _canned_facts()))
+    response = api.post(f"{BASE}/decompose", json={"identifier": TRADE_NO}, headers=_headers())
+    assert response.status_code == 200
+    item = response.json()["fee_items"][0]
+    assert item["total_fee"] == "33" and item["observed_out_scope"] == "3.3"
+    assert item["payment_condition_context"]["bz"] == context.bz
+    assert item["payment_condition_context"]["diagnoses"][0]["name"] == "大便习惯改变"
+    assert item["payment_condition_context"]["clinical_conditions_verified"] is False
+    assert item["payment_condition_context"]["symptoms"] is None
+
+
 def test_template_names_and_safe_binding_cross_workbench_api(api, monkeypatch, gate_on):
     from src.runtime.policy_qa.fee_decomposition.settlement_facts import build_outpatient_facts
     facts = build_outpatient_facts({'p_fundtype': '3', 't_feein': '1812.37', 't_beyondbig': '0.00'})

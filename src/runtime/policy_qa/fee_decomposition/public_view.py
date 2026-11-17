@@ -133,6 +133,11 @@ def _field_line(field) -> str:
     return f"{field.label}：{observed}，暂不能独立计算。"
 
 
+def _patient_uncertainties(uncertainties):
+    """退休补充纳入日期缺失只约束计算，不进入患者可见说明。"""
+    return [item for item in uncertainties if "不默认已纳入" not in (item.message or "")]
+
+
 def render_summary(result: SettlementDecompositionResult) -> str:
     """确定性模板渲染：总览状态行 + 逐字段行 + 未决事项。
 
@@ -151,9 +156,11 @@ def render_summary(result: SettlementDecompositionResult) -> str:
             f"费用分解（算法版本 {result.algorithm_version}）：{status_word}，账面核对{recon_word}。",
             *(f"- {_field_line(field)}" for field in result.fields),
         ]
-    if result.uncertainties:
+    shown_uncertainties = _patient_uncertainties(result.uncertainties)
+    if shown_uncertainties:
         # 同一未决文案可能被多个来源重复命中（仅 id 不同）：按文案保序去重
-        lines.append("未决事项：" + "；".join(dict.fromkeys(u.message for u in result.uncertainties)))
+        lines.append("未决事项：" + "；".join(
+            dict.fromkeys(u.message for u in shown_uncertainties)))
     return "\n".join(lines)
 
 
@@ -235,8 +242,9 @@ def build_public_view_dict(
         result.calculations, lambda c: c.calculation_id)
     cit_index, _cit_conflicts = _index_with_conflicts(
         result.citations, lambda c: c.id)
+    shown_uncertainties = _patient_uncertainties(result.uncertainties)
     unc_index, _unc_conflicts = _index_with_conflicts(
-        result.uncertainties, lambda u: u.id)
+        shown_uncertainties, lambda u: u.id)
     field_labels = {f.field_code: f.label for f in result.fields}
     calc_names = {
         cid: formula_display(c.formula_id).display_name for cid, c in calc_index.items()
@@ -406,7 +414,7 @@ def build_public_view_dict(
                 label=tf.label, field=None, gap_messages=extra_gaps,
                 composition_override=override).model_dump()
     uncertainty_views = []
-    for uncertainty in result.uncertainties:
+    for uncertainty in shown_uncertainties:
         affected = list(uncertainty.affected_fields)
         if not affected:
             affected = _infer_affected_fields(uncertainty.code, fields, calc_view_by_id)

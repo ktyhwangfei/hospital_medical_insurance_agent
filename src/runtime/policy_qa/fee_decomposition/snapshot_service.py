@@ -192,7 +192,13 @@ def decompose_outpatient_trade(
     item_rows = []
 
     def _outcome(result: SettlementDecompositionResult) -> DecompositionOutcome:
-        return DecompositionOutcome(attach_item_rows(result, item_rows, special=False, mapping=mapping), label_facts(facts, domains))
+        from src.runtime.policy_qa.fee_decomposition.payment_condition_context import attach_payment_condition_context
+        labeled = label_facts(facts, domains)
+        result = attach_item_rows(result, item_rows, special=False, mapping=mapping)
+        result = attach_payment_condition_context(result, conn, trade_no, special=False,
+            mapping=mapping, hospital_level=labeled.hospital_level,
+            hospital_level_name=labeled.metadata_names.get("hospital_level"))
+        return DecompositionOutcome(result, labeled)
 
     # 2. 明细完整读取
     items_res = load_outpatient_fee_items(conn, trade_no, mapping)
