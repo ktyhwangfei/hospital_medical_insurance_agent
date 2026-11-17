@@ -253,13 +253,11 @@ def _longest_name_span(name: str, text: str) -> tuple[int, int] | None:
     return None
 
 
-def _billing_name_hits(
-    names: list[str], text: str, item_types: list[str | None],
-) -> list[int]:
-    """收费边界问题里的短项目名：取问句里的名称片段，较长片段盖住被它包含的短片段。
+def _billing_name_hits(names: list[str], text: str) -> list[int]:
+    """收费边界问题里的短项目名：两字及以上的名称片段即可对上，不受四字阈值限制。
 
-    「总蛋白」盖住「蛋白」，所以不误中白蛋白。「活检钳」盖住「活检」。
-    问句只说「活检」、没说「钳」时，不把耗材活检钳算进来。
+    较长片段盖住被它包含的短片段。「总蛋白」盖住「蛋白」。问句写出「活检钳」时只对活检钳；
+    只说「活检」时，活检术和活检钳都保留。
     """
     spans: dict[int, tuple[int, int]] = {}
     for index, name in enumerate(names):
@@ -281,13 +279,6 @@ def _billing_name_hits(
             and other_span[1] - other_span[0] > span[1] - span[0]
             for other, other_span in spans.items()
         ):
-            continue
-        piece = text[span[0]:span[1]]
-        name = names[index]
-        if (item_types[index] == "耗材" and name.startswith(piece) and len(name) > len(piece)
-                and name[len(piece):] not in text
-                and any(text[other[0]:other[1]] == piece and item_types[other_index] != "耗材"
-                        for other_index, other in spans.items() if other_index != index)):
             continue
         kept.append(index)
     return kept
@@ -311,9 +302,7 @@ def _item_name_hits(public: FeeDecompositionPublic, text: str) -> list[int]:
         if matched:
             hits.append(index)
     if _is_billing_boundary_question(text):
-        for index in _billing_name_hits(
-            names, text, [item.item_type for item in public.fee_items],
-        ):
+        for index in _billing_name_hits(names, text):
             if index not in hits:
                 hits.append(index)
     return hits

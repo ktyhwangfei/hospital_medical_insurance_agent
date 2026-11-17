@@ -365,9 +365,9 @@ def test_paren_lab_name_stays_on_its_billing_boundary(monkeypatch):
 
 
 def test_spoken_colonoscopy_and_biopsy_stay_on_that_boundary(monkeypatch):
-    """「肠镜已经收了，活检为什么还要单收」：短称定位肠镜与活检术。
+    """两字口语「肠镜」「活检」对上全名；活检术和活检钳都可以解释。
 
-    不把胃镜或活检钳算进来，也不展开整单其余金额和退休补充缺证。
+    不把胃镜算进来，也不展开整单其余金额和退休补充缺证。
     """
     _deterministic(monkeypatch)
     public = _with_retire_gap(_public_with_items(_sample_a_items()))
@@ -375,7 +375,7 @@ def test_spoken_colonoscopy_and_biopsy_stay_on_that_boundary(monkeypatch):
     target = resolve_question_target(public, question)
     assert target.kind == "multi_line"
     names = {public.fee_items[ref.display_no - 1].item_name for ref in target.lines}
-    assert names == {"电子结肠镜检查", "消化道内镜活检术"}
+    assert names == {"电子结肠镜检查", "消化道内镜活检术", "活检钳"}
     payload = build_model_input(public, question)
     # 模型资料里不能再有整单汇总金额和退休补充缺证，否则会写进正文和「尚待核实」。
     assert payload.target_evidence == []
@@ -391,7 +391,7 @@ def test_spoken_colonoscopy_and_biopsy_stay_on_that_boundary(monkeypatch):
     assert "消化道内镜活检术" in result.answer
     assert "不含监护、活检、病理学检查" in result.answer
     assert "电子胃镜检查" not in result.answer
-    assert "活检钳" not in result.answer
+    assert "活检钳" in result.answer
     assert "费用总金额" not in result.answer
     assert "3435.00" not in result.answer
     assert "蜡块" not in result.answer
