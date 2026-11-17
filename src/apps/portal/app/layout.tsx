@@ -1,6 +1,6 @@
 'use client'
 
-import { JetBrains_Mono, Noto_Sans_SC } from 'next/font/google'
+import { JetBrains_Mono } from 'next/font/google'
 import { useCallback, useEffect, useRef, useState, createContext, useContext, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
@@ -25,13 +25,9 @@ import RoleSwitcher from '@/components/role-switcher'
 import type { RoleId } from '@/lib/types'
 import './globals.css'
 
-const notoSansSC = Noto_Sans_SC({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-sans',
-  display: 'swap',
-})
-
+// Noto Sans SC 不再走 next/font/google：Google 现返回带 & 的 /l/font?kit= 地址，
+// Turbopack 按 query 拆开后报 “queries have exactly one entry”，整站 500。
+// 正文字体用 globals.css 的 --font-sans（Noto Sans SC, system-ui, sans-serif）。
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
   weight: ['400', '500', '600'],
@@ -328,8 +324,8 @@ export function LayoutShell({ children }: { children: ReactNode }) {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="zh-CN" className={`${notoSansSC.variable} ${jetbrainsMono.variable}`}>
-      <body className={`${notoSansSC.className} antialiased`}>
+    <html lang="zh-CN" className={jetbrainsMono.variable}>
+      <body className="antialiased">
         <ApiProvider>
           <LayoutShell>{children}</LayoutShell>
         </ApiProvider>
