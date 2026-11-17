@@ -424,6 +424,60 @@ def test_spoken_colonoscopy_and_biopsy_stay_on_that_boundary(monkeypatch):
         assert word not in result.answer
 
 
+def test_colonoscopy_biopsy_spoken_question_regression(monkeypatch):
+    """回归：问句「肠镜已经收了，活检为什么还要单收」。
+
+    对上电子结肠镜检查与消化道内镜活检术的目录内涵。
+    活检钳是耗材，问句带出这一行时可以另计，但不得写成它的目录内涵，也不得展开整单清单。
+    答案和尚待核实都不出现退休补充纳入日期缺证。
+    """
+    _deterministic(monkeypatch)
+    public = _with_retire_gap(_public_with_items(_sample_a_items()))
+    result = explanation.explain_decomposition(public, "肠镜已经收了，活检为什么还要单收")
+    assert "电子结肠镜检查" in result.answer
+    assert "不含监护、活检、病理学检查" in result.answer
+    assert "消化道内镜活检术" in result.answer
+    assert "不含消化内镜检查、病理学检查" in result.answer
+    assert "活检钳" in result.answer
+    assert "电子胃镜检查" not in result.answer
+    assert "活检钳的目录内涵" not in result.answer
+    for phrase in ("费用总金额", "本单其余各项金额", "其余各项金额", "项，如"):
+        assert phrase not in result.answer
+    for text in (result.answer, *result.uncertainties):
+        assert "不默认已纳入" not in text
+        assert "缺少退休补充保险纳入起始日期" not in text
+    for word in BANNED:
+        assert word not in result.answer
+
+
+def test_colonoscopy_biopsy_model_answer_drops_the_enroll_gap(monkeypatch):
+    """结构化模型若把退休补充缺证写进这句原话的正文，公开答案仍只留内涵，不整段回退。"""
+    from types import SimpleNamespace
+
+    def generate(self, **kwargs):
+        return SimpleNamespace(content=(
+            "电子结肠镜检查的目录内涵注明「不含监护、活检、病理学检查」。"
+            "消化道内镜活检术的目录内涵注明「不含消化内镜检查、病理学检查」。"
+            "活检钳为耗材，82.00元另计。"
+            "尚待核实：缺少退休补充保险纳入起始日期，不默认已纳入。"
+        ))
+
+    monkeypatch.setattr("src.model_service.gateway.ModelGateway.generate", generate)
+    monkeypatch.setenv("FEE_EXPLANATION_MODE", "structured")
+    public = _with_retire_gap(_public_with_items(_sample_a_items()))
+    result = explanation.explain_decomposition(public, "肠镜已经收了，活检为什么还要单收")
+    assert result.used_model
+    assert "不含监护、活检、病理学检查" in result.answer
+    assert "不含消化内镜检查、病理学检查" in result.answer
+    assert "活检钳" in result.answer
+    assert "82.00" in result.answer
+    for phrase in ("费用总金额", "本单其余各项金额", "其余各项金额", "项，如"):
+        assert phrase not in result.answer
+    for text in (result.answer, *result.uncertainties):
+        assert "不默认已纳入" not in text
+        assert "缺少退休补充保险纳入起始日期" not in text
+
+
 def test_billing_scope_paraphrases_stay_on_the_named_line(monkeypatch):
     """收费项目内涵 / 为何还要单收是同一类，不因换一种说法就退回整单。"""
     _deterministic(monkeypatch)
