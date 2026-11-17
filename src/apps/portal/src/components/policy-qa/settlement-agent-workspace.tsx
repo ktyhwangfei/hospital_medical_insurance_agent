@@ -30,6 +30,8 @@ import { usePolicyQAStream } from '@/lib/use-policy-qa-stream'
  * Issue #87 第一批：点选扩展为最多两张——选中两张后右侧按时间生成两个
  * tab（默认最新一张，可切换），此时提问按两张单对比作答（复用既有
  * `GET /policy-qa/settlement-explanation?compare_with=` 能力，不做金额加总）。
+ * 布局：选中后两列——左列患者定位/时段列表/对话流，右列解释区（一张或
+ * 两张同一位置，两张时出 tab），宽屏 sticky（用户现场确认口径）。
  */
 
 const EXPLANATION_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation'
@@ -341,99 +343,116 @@ export default function SettlementAgentWorkspace({
         </div>
       ) : null}
 
-      {/* 主输入：患者定位 + 时间选择器 + 时段列表（临时患者定位，正式由登录态取代） */}
-      <SettlementTimeBrowser
-        selectedIds={selectedItems.map((item) => item.settlementId)}
-        onToggle={handleToggle}
-        onPatientChange={handlePatientChange}
-      />
-
-      {/* 右侧解释区：一张 = 单笔费用构成；两张 = 按时间两个 tab（默认最新） */}
-      {selectedItems.length === 2 ? (
-        <div data-testid="settlement-compare-tabs" className="space-y-3">
-          <div
-            role="tablist"
-            aria-label="结算单切换"
-            className="flex w-fit items-center gap-1 rounded-full bg-slate-100 p-1"
-          >
-            {sortedSelected.map((item) => {
-              const active = item.settlementId === activeTabId
-              return (
-                <button
-                  key={item.settlementId}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  data-testid={`settlement-tab-${item.settlementId}`}
-                  onClick={() => setActiveTabId(item.settlementId)}
-                  className={[
-                    'rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
-                    active
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-900',
-                  ].join(' ')}
-                >
-                  {item.settlementDate || '日期待定'} · {item.settlementId}
-                </button>
-              )
-            })}
-          </div>
-          {activeTabId ? (
-            <SettlementExplanationPane
-              settlementId={activeTabId}
-              state={activeExplanation}
-            />
-          ) : null}
-        </div>
-      ) : selectedItems.length === 1 ? (
-        <SettlementExplanationPane
-          settlementId={selectedItems[0].settlementId}
-          state={explanations[selectedItems[0].settlementId]}
-        />
-      ) : null}
-
-      {/* 针对选中单的追问对话流（含两单对比问答） */}
-      {stream.messages.length > 0 ? <PolicyMessageList messages={stream.messages} /> : null}
-
-      {busy && currentPublicMessage ? (
-        <div role="status" className="flex items-center gap-2 py-3 text-sm text-slate-500">
-          <LoaderCircle className="size-4 animate-spin" aria-hidden />
-          <span>{currentPublicMessage}</span>
-        </div>
-      ) : null}
-      {comparing ? (
-        <div role="status" className="flex items-center gap-2 py-3 text-sm text-slate-500">
-          <LoaderCircle className="size-4 animate-spin" aria-hidden />
-          正在对比两张结算单…
-        </div>
-      ) : null}
-
-      {selectedItems.length === 2 && comparingBaseline ? (
-        <p
-          data-testid="settlement-compare-hint"
-          className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs leading-5 text-slate-500"
-        >
-          已选两张结算单，提问将按两张对比作答（以较早一张 {comparingBaseline.settlementDate || comparingBaseline.settlementId} 为基准，金额逐单呈现不加总）；只想问其中一张，先取消另一张的选择。
-        </p>
-      ) : null}
-
-      <PolicyComposer
-        mode="settlement_explain"
-        settlementId={composerSettlementId}
-        value={input}
-        onChange={setInput}
-        onSend={handleSend}
-        isStreaming={busy}
-        disabled={
-          stream.sessionStatus === 'suspended' ||
-          stream.sessionStatus === 'escalated' ||
-          stream.sessionStatus === 'closed'
+      {/*
+        选中结算单后分两列：左列 = 患者定位/时段列表/对话流/输入框，
+        右列（aside）= 解释区——一张为单笔解释，两张为按时间的两个 tab
+        （默认最新）。解释区一张/两张都在同一右侧位置（Issue #87 用户确认口径）。
+      */}
+      <div
+        className={
+          selectedItems.length > 0
+            ? 'grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,440px)]'
+            : 'space-y-6'
         }
-      />
+      >
+        <div className="min-w-0 space-y-6">
+          {/* 主输入：患者定位 + 时间选择器 + 时段列表（临时患者定位，正式由登录态取代） */}
+          <SettlementTimeBrowser
+            selectedIds={selectedItems.map((item) => item.settlementId)}
+            onToggle={handleToggle}
+            onPatientChange={handlePatientChange}
+          />
 
-      <p className="text-center text-xs leading-5 text-slate-400">
-        回答仅供解释参考，不作为报销或结算依据。
-      </p>
+          {/* 针对选中单的追问对话流（含两单对比问答） */}
+          {stream.messages.length > 0 ? <PolicyMessageList messages={stream.messages} /> : null}
+
+          {busy && currentPublicMessage ? (
+            <div role="status" className="flex items-center gap-2 py-3 text-sm text-slate-500">
+              <LoaderCircle className="size-4 animate-spin" aria-hidden />
+              <span>{currentPublicMessage}</span>
+            </div>
+          ) : null}
+          {comparing ? (
+            <div role="status" className="flex items-center gap-2 py-3 text-sm text-slate-500">
+              <LoaderCircle className="size-4 animate-spin" aria-hidden />
+              正在对比两张结算单…
+            </div>
+          ) : null}
+
+          {selectedItems.length === 2 && comparingBaseline ? (
+            <p
+              data-testid="settlement-compare-hint"
+              className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs leading-5 text-slate-500"
+            >
+              已选两张结算单，提问将按两张对比作答（以较早一张 {comparingBaseline.settlementDate || comparingBaseline.settlementId} 为基准，金额逐单呈现不加总）；只想问其中一张，先取消另一张的选择。
+            </p>
+          ) : null}
+
+          <PolicyComposer
+            mode="settlement_explain"
+            settlementId={composerSettlementId}
+            value={input}
+            onChange={setInput}
+            onSend={handleSend}
+            isStreaming={busy}
+            disabled={
+              stream.sessionStatus === 'suspended' ||
+              stream.sessionStatus === 'escalated' ||
+              stream.sessionStatus === 'closed'
+            }
+          />
+
+          <p className="text-center text-xs leading-5 text-slate-400">
+            回答仅供解释参考，不作为报销或结算依据。
+          </p>
+        </div>
+
+        {/* 右侧解释区：一张 = 单笔费用构成；两张 = 按时间两个 tab（默认最新） */}
+        {selectedItems.length > 0 ? (
+          <aside
+            data-testid="settlement-explanation-aside"
+            aria-label="结算单解释"
+            className="min-w-0 space-y-3 xl:sticky xl:top-4"
+          >
+            {selectedItems.length === 2 ? (
+              <div
+                role="tablist"
+                aria-label="结算单切换"
+                data-testid="settlement-compare-tabs"
+                className="flex w-fit items-center gap-1 rounded-full bg-slate-100 p-1"
+              >
+                {sortedSelected.map((item) => {
+                  const active = item.settlementId === activeTabId
+                  return (
+                    <button
+                      key={item.settlementId}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      data-testid={`settlement-tab-${item.settlementId}`}
+                      onClick={() => setActiveTabId(item.settlementId)}
+                      className={[
+                        'rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
+                        active
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-900',
+                      ].join(' ')}
+                    >
+                      {item.settlementDate || '日期待定'} · {item.settlementId}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+            {activeTabId ? (
+              <SettlementExplanationPane
+                settlementId={activeTabId}
+                state={activeExplanation}
+              />
+            ) : null}
+          </aside>
+        ) : null}
+      </div>
     </section>
   )
 }

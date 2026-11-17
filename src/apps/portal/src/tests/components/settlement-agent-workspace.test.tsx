@@ -199,6 +199,36 @@ describe('SettlementAgentWorkspace（Issue #87 两单选择与对比）', () => 
     expect(screen.getByTestId('settlement-result-block')).toHaveTextContent('结算单 803')
   })
 
+  it('解释区固定在右侧栏：一张或两张选中时均展示在同一右侧 aside', async () => {
+    stubFetch()
+    render(<SettlementAgentWorkspace />)
+    await locatePatient()
+
+    // 未选单：无右侧解释栏
+    expect(screen.queryByTestId('settlement-explanation-aside')).not.toBeInTheDocument()
+
+    // 选一张：解释进右侧栏，无 tab
+    fireEvent.click(screen.getByTestId('settlement-item-803'))
+    await waitFor(() => {
+      expect(screen.getByTestId('settlement-explanation-aside')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('settlement-explanation-aside')).toContainElement(
+      screen.getByTestId('settlement-result-block'),
+    )
+
+    // 选两张：tab 与激活单解释都在同一右侧栏内
+    fireEvent.click(screen.getByTestId('settlement-item-821'))
+    await waitFor(() => {
+      expect(screen.getByTestId('settlement-compare-tabs')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('settlement-explanation-aside')).toContainElement(
+      screen.getByTestId('settlement-compare-tabs'),
+    )
+    expect(screen.getByTestId('settlement-explanation-aside')).toContainElement(
+      screen.getByTestId('settlement-result-block'),
+    )
+  })
+
   it('换人清空上一患者的选中单与解释（禁止跨患者锚定）', async () => {
     stubFetch()
     render(<SettlementAgentWorkspace />)
