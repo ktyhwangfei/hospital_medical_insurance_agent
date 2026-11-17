@@ -226,13 +226,12 @@ _COMPARISON_MARKERS = (
 
 #: 项目名里的括号缩写（总蛋白(TP)测定、抗HCV）去掉后再与问句比整名。
 _PAREN_GROUP = re.compile(r"[（(][^（）()]{0,20}[）)]")
-#: 只问收费打包边界、没有点名汇总金额时，不把整单目标金额装进解释。
-_BILLING_BOUNDARY_QUESTION_MARKERS = (
-    "单独收费", "单独计费", "另行收费", "另行计费", "分开收费", "分开计费",
-    "为什么还收", "单收", "含什么", "包含什么", "目录内涵", "项目内涵",
+#: 收费项目内涵 / 为何还要单收是同一类。覆盖换说法，不按已出现过的原句逐条登记。
+#: 「个人支付为什么还要收」不含这些说法，仍按汇总金额解释。
+_BILLING_BOUNDARY_QUESTION = re.compile(
+    r"内涵|含什么|包含什么|含哪些|包含哪些|"
+    r"(?:单独|另行|另外|分开|单|另)收|(?:单独|另行|另外|分开)计费"
 )
-#: 患者口语短称。长词在前。问句里整段出现、且是费用行名称的子串时才定位。
-_SPOKEN_ITEM_ALIASES = ("结肠镜", "活检术", "胃镜", "肠镜", "活检")
 
 
 def _name_without_paren(name: str) -> str:
@@ -240,31 +239,58 @@ def _name_without_paren(name: str) -> str:
 
 
 def _is_billing_boundary_question(text: str) -> bool:
-    return any(marker in text for marker in _BILLING_BOUNDARY_QUESTION_MARKERS)
+    return _BILLING_BOUNDARY_QUESTION.search(text or "") is not None
 
 
-def _spoken_name_hit(
-    name: str, text: str, all_names: list[str], item_type: str | None,
-) -> bool:
-    """短称定位：肠镜对上电子结肠镜检查，活检对上活检术。
+def _longest_name_span(name: str, text: str) -> tuple[int, int] | None:
+    """名称里出现在问句中的最长连续片段（至少两字）。"""
+    for length in range(len(name), 1, -1):
+        for start in range(0, len(name) - length + 1):
+            piece = name[start:start + length]
+            at = text.find(piece)
+            if at >= 0:
+                return at, at + length
+    return None
 
-    问句已经写出更长的费用名（活检钳）时，不用短称再牵连其他行。
-    短称只是耗材名前缀、问句又没写后缀（活检/钳）时，不把耗材行算进来。
+
+def _billing_name_hits(
+    names: list[str], text: str, item_types: list[str | None],
+) -> list[int]:
+    """收费边界问题里的短项目名：取问句里的名称片段，较长片段盖住被它包含的短片段。
+
+    「总蛋白」盖住「蛋白」，所以不误中白蛋白。「活检钳」盖住「活检」。
+    问句只说「活检」、没说「钳」时，不把耗材活检钳算进来。
     """
-    for alias in _SPOKEN_ITEM_ALIASES:
-        if alias not in text or alias not in name:
+    spans: dict[int, tuple[int, int]] = {}
+    for index, name in enumerate(names):
+        if not name:
             continue
-        longer_in_question = [
-            other for other in all_names
-            if other and alias in other and len(other) > len(alias) and other in text
-        ]
-        if longer_in_question and name not in longer_in_question:
+        variants = {name, _name_without_paren(name)}
+        best: tuple[int, int] | None = None
+        for variant in variants:
+            span = _longest_name_span(variant, text)
+            if span is not None and (best is None or span[1] - span[0] > best[1] - best[0]):
+                best = span
+        if best is not None:
+            spans[index] = best
+    kept: list[int] = []
+    for index, span in spans.items():
+        if any(
+            other != index
+            and other_span[0] <= span[0] and span[1] <= other_span[1]
+            and other_span[1] - other_span[0] > span[1] - span[0]
+            for other, other_span in spans.items()
+        ):
             continue
-        if (item_type == "耗材" and name.startswith(alias) and len(name) > len(alias)
-                and name[len(alias):] not in text):
+        piece = text[span[0]:span[1]]
+        name = names[index]
+        if (item_types[index] == "耗材" and name.startswith(piece) and len(name) > len(piece)
+                and name[len(piece):] not in text
+                and any(text[other[0]:other[1]] == piece and item_types[other_index] != "耗材"
+                        for other_index, other in spans.items() if other_index != index)):
             continue
-        return True
-    return False
+        kept.append(index)
+    return kept
 
 
 def _item_name_hits(public: FeeDecompositionPublic, text: str) -> list[int]:
@@ -282,11 +308,14 @@ def _item_name_hits(public: FeeDecompositionPublic, text: str) -> list[int]:
             # 问句写出去掉括号缩写后的全名才命中（总蛋白测定 → 总蛋白(TP)测定）。
             # 必须整名包含，避免「总蛋白测定」误中「白蛋白测定」。
             matched = len(bare) >= 4 and bare != name and bare in text
-        if not matched:
-            matched = _spoken_name_hit(
-                name, text, names, public.fee_items[index].item_type)
         if matched:
             hits.append(index)
+    if _is_billing_boundary_question(text):
+        for index in _billing_name_hits(
+            names, text, [item.item_type for item in public.fee_items],
+        ):
+            if index not in hits:
+                hits.append(index)
     return hits
 
 
@@ -645,11 +674,8 @@ def _name_only_target(
         narrowed = _narrow_by_amount_clues(public, text, hits)
         if len(narrowed) == 1:
             hits = narrowed
-        elif re.search(r"都|两项|两行|全部|所有", text) or (
-            # 点了两个不同项目问为什么分开收：解释这两行的收费边界，不追问是哪一行。
-            _is_billing_boundary_question(text)
-            and len({(items[index].item_name or "") for index in hits}) > 1
-        ):
+        elif re.search(r"都|两项|两行|全部|所有", text) or _is_billing_boundary_question(text):
+            # 收费边界问题点到多行（含同名采血管）时一起解释，不追问是哪一行。
             lines = [LineRef(line_id=items[index].line_id, display_no=index + 1,
                              attributes=_line_attributes(text)) for index in hits]
             if codes:

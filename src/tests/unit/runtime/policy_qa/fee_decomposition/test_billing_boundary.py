@@ -401,6 +401,60 @@ def test_spoken_colonoscopy_and_biopsy_stay_on_that_boundary(monkeypatch):
         assert word not in result.answer
 
 
+def test_billing_scope_paraphrases_stay_on_the_named_line(monkeypatch):
+    """收费项目内涵 / 为何还要单收是同一类，不因换一种说法就退回整单。"""
+    _deterministic(monkeypatch)
+    public = _with_retire_gap(_public_with_items(_sample_a_items()))
+
+    protein = explanation.explain_decomposition(public, "总蛋白为什么还要单收")
+    assert "总蛋白(TP)测定" in protein.answer
+    assert "白蛋白" not in protein.answer
+    assert "费用总金额" not in protein.answer
+    assert "3435.00" not in protein.answer
+    assert _RETIRE_GAP not in protein.uncertainties
+
+    albumin = explanation.explain_decomposition(public, "白蛋白怎么还单独收")
+    assert "白蛋白(Alb)测定" in albumin.answer
+    assert "总蛋白" not in albumin.answer
+    assert "3435.00" not in albumin.answer
+    assert _RETIRE_GAP not in albumin.uncertainties
+
+    tubes = explanation.explain_decomposition(public, "采血管为何还要单收")
+    assert "真空采血管" in tubes.answer
+    assert "除外内容：采血管" in tubes.answer
+    assert "电子胃镜检查" not in tubes.answer
+    assert "3435.00" not in tubes.answer
+    assert _RETIRE_GAP not in tubes.uncertainties
+
+    scope = explanation.explain_decomposition(public, "采血管这项的内涵是什么")
+    assert "真空采血管" in scope.answer
+    assert "除外内容：采血管" in scope.answer
+    assert "费用总金额" not in scope.answer
+    assert _RETIRE_GAP not in scope.uncertainties
+
+
+def test_other_separate_charge_wording_drops_the_bill_summary(monkeypatch):
+    """「另外收费」和「单独收费」是同一类，模型资料里同样不能有整单金额。"""
+    _deterministic(monkeypatch)
+    public = _with_retire_gap(_public_with_items(_sample_b_items()))
+    question = "圈套器为什么另外收费"
+    payload = build_model_input(public, question)
+    assert payload.decomposition.settlement_facts is None
+    assert payload.decomposition.uncertainties == []
+    result = explanation.explain_decomposition(public, question)
+    assert "圈套器" in result.answer
+    assert "套扎器（圈）" in result.answer
+    assert "3435.00" not in result.answer
+    assert _RETIRE_GAP not in result.uncertainties
+
+
+def test_summary_amount_question_is_not_a_billing_boundary_question():
+    """问汇总金额为什么还要收，仍解释该金额，不改判成收费边界。"""
+    public = _public_0408()
+    target = resolve_question_target(public, "个人支付为什么还要收")
+    assert target.kind == "summary_fields"
+
+
 def test_forceps_full_name_does_not_pull_the_biopsy_procedure():
     """问句已经写出「活检钳」时，不因短称「活检」再牵连活检术。"""
     public = _public_with_items(_sample_a_items())
