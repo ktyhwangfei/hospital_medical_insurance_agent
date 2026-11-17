@@ -18,6 +18,9 @@ class _FakeDiscoverySource:
         self.calls.append(datasource_id)
         return f"conn:{datasource_id}"
 
+    def datasource_kind(self, datasource_id):
+        return "mssql"
+
 
 def test_sqlserver_direct_adapter_satisfies_port_and_delegates():
     """一档适配器满足 DataSupplyConnectionPort 合同，connect 透传 datasource_id。"""

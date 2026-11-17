@@ -66,6 +66,8 @@ def _default_query_executor():
     query_service = SemanticQueryService(
         get_semantic_registry(),
         get_semantic_data_source().open_connection,
+        # #78：门诊查询模型落 PG 落地库，按数据源方言编译/传参
+        datasource_kind=get_semantic_data_source().datasource_kind,
     )
 
     def executor(plan: dict[str, Any]) -> dict[str, Any]:

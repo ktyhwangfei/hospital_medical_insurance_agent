@@ -143,13 +143,20 @@ class SemanticSettlementDataProvider:
         if service is None:
             # #27 供给收敛：默认装配一档 SQL Server 直连适配器（组合根在此，
             # adapters 不反向依赖 runtime）；二档医院替换 supply 实现即可。
+            from src.runtime.discovery.semantic_source import get_semantic_data_source
+
             if supply is None:
                 from src.adapters.data_supply import SqlServerDirectSupplyAdapter
-                from src.runtime.discovery.semantic_source import get_semantic_data_source
 
-                source = get_semantic_data_source()
-                supply = SqlServerDirectSupplyAdapter(connect_fn=source.open_connection)
-            service = SemanticQueryService(self._registry, supply.connect)
+                supply = SqlServerDirectSupplyAdapter(
+                    connect_fn=get_semantic_data_source().open_connection
+                )
+            # #78：门诊查询模型落 PG 落地库，按数据源方言编译/传参
+            service = SemanticQueryService(
+                self._registry,
+                supply.connect,
+                datasource_kind=get_semantic_data_source().datasource_kind,
+            )
         self._service = service
         # 列表查询直连数据源：supply 参数或默认装配的 connect（须在默认 supply
         # 构造之后取值，否则无参构造时 _connect 恒为 None → 列表端点误报 503）

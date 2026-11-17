@@ -2072,7 +2072,9 @@ def _get_semantic_query_runtime() -> tuple[SemanticQueryPlanner, SemanticQuerySe
             config = source._resolve_source_config()
         return source._connect(config)
 
-    return SemanticQueryPlanner(registry), SemanticQueryService(registry, connect)
+    return SemanticQueryPlanner(registry), SemanticQueryService(
+        registry, connect, datasource_kind=source.datasource_kind
+    )
 
 
 @router.post("/query/test", response_model=SemanticQueryTestResponse)

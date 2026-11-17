@@ -151,3 +151,9 @@ CACHE_ENABLED_APPEAL = os.getenv("CACHE_ENABLED_APPEAL", "1")
 # "mock" (默认) — 使用内存中的模拟数据
 # "real_db" — 查询真实 SQL Server 业务数据库
 DATA_SOURCE_MODE = os.getenv("DATA_SOURCE_MODE", "mock")
+
+# 语义查询执行的模型版本偏好（#78）：
+# "sqlserver" (默认) — 同一对象存在多个已发布版本时，优先选择数据集全部落在
+#   SQL Server 直库（非 platform_pg）的最近版本（PG 落地库为后续演进，默认不读）；
+# "registry" — 按注册中心最新发布版本执行（含 PG 落地库）。
+SEMANTIC_QUERY_DATASOURCE_MODE = os.getenv("SEMANTIC_QUERY_DATASOURCE_MODE", "sqlserver")

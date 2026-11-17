@@ -12,7 +12,7 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, bindparam, column, func, literal, select, table
-from sqlalchemy.dialects import mssql
+from sqlalchemy.dialects import mssql, postgresql
 
 from src.semantic_layer.models import (
     BusinessObjectVersion,
@@ -172,8 +172,14 @@ class CompiledSemanticQuery:
 class SemanticQueryPlanner:
     """只消费已发布查询模型并生成确定性 SQL Server 查询。"""
 
-    def __init__(self, registry: SemanticRegistry):
+    def __init__(
+        self,
+        registry: SemanticRegistry,
+        version_selector: "Callable[[str, list[BusinessObjectVersion]], BusinessObjectVersion] | None" = None,
+    ) -> None:
         self._registry = registry
+        # 执行期版本选择（#78：默认偏好 SQL Server 直库版本，见 SemanticQueryService）
+        self._version_selector = version_selector
 
     def plan(self, query: SemanticQuery) -> LogicalQueryPlan:
         version = self._published_version(query.object_code)
@@ -356,7 +362,7 @@ class SemanticQueryPlanner:
         if not re.match(r"(?is)^\s*(WITH\b|SELECT\b)", sql_text):
             raise SemanticQueryPlanningError("SQL 必须以 SELECT(或只读 WITH…SELECT)开头")
 
-    def compile(self, query: SemanticQuery) -> CompiledSemanticQuery:
+    def compile(self, query: SemanticQuery, *, dialect_kind: str = "mssql") -> CompiledSemanticQuery:
         plan = self.plan(query)
         version = self._published_version(query.object_code)
         statement = (
@@ -364,8 +370,15 @@ class SemanticQueryPlanner:
             if query.scope.query_scope in {"whole_settlement", "fee_item"}
             else self._build_statement(query, version)
         )
+        # #78：门诊查询模型已落 PG 落地库（outpatient_postgres），按数据源方言编译；
+        # postgresql format 参数风格产出 %s 占位且保留 positiontup，供 psycopg 序列传参
+        dialect = (
+            postgresql.dialect(paramstyle="format")
+            if dialect_kind == "postgresql"
+            else mssql.dialect(paramstyle="qmark")
+        )
         compiled = statement.compile(
-            dialect=mssql.dialect(paramstyle="qmark"),
+            dialect=dialect,
             compile_kwargs={"render_postcompile": True},
         )
         sql_text = str(compiled)
@@ -997,7 +1010,11 @@ class SemanticQueryPlanner:
         versions = self._registry.list_object_versions(object_code)
         if not versions:
             raise SemanticQueryPlanningError(f"对象 '{object_code}' 没有已发布查询模型")
-        version = versions[-1]
+        version = (
+            self._version_selector(object_code, versions)
+            if self._version_selector is not None
+            else versions[-1]
+        )
         if not version.datasets or not version.fields or not version.keys:
             raise SemanticQueryPlanningError(f"对象 '{object_code}' 的已发布版本不是可查询模型")
         return version
@@ -1259,25 +1276,67 @@ class SemanticQueryPlanner:
 
 
 class SemanticQueryService:
-    """运行已编译只读查询；连接由既有 SQL Server 防腐通道注入。"""
+    """运行已编译只读查询；连接由既有 SQL Server 防腐通道注入。
+
+    dialect_kind 按数据源方言编译/传参（#78：门诊模型落 PG 落地库）：
+    mssql（默认）→ qmark `?` + pyodbc splat 传参；
+    postgresql → format `%s` + psycopg 参数序列整体传入。
+    """
 
     def __init__(
         self,
         registry: SemanticRegistry,
         connect: Callable[[str], Any],
+        datasource_kind: Callable[[str], str] | None = None,
+        datasource_mode: str | None = None,
     ) -> None:
-        self._planner = SemanticQueryPlanner(registry)
         self._connect = connect
+        self._datasource_kind = datasource_kind
+        if datasource_mode is None:
+            from src.config.production import SEMANTIC_QUERY_DATASOURCE_MODE
+
+            datasource_mode = SEMANTIC_QUERY_DATASOURCE_MODE
+        # #78 默认读 SQL Server 直库：同一对象多版本时选数据集全部落在 mssql
+        # 数据源的最近版本；datasource_mode="registry" 恢复按最新发布版本执行
+        selector = (
+            self._select_sqlserver_version
+            if datasource_mode == "sqlserver" and datasource_kind is not None
+            else None
+        )
+        self._planner = SemanticQueryPlanner(registry, version_selector=selector)
+
+    def _select_sqlserver_version(
+        self, object_code: str, versions: list[BusinessObjectVersion]
+    ) -> BusinessObjectVersion:
+        """数据集全部落在 mssql 数据源的最近发布版本；无匹配回落最新版。"""
+        for version in reversed(versions):
+            datasets = getattr(version, "datasets", None) or []
+            if datasets and all(
+                self._resolve_kind(item.datasource_id) == "mssql" for item in datasets
+            ):
+                return version
+        return versions[-1]
+
+    def _resolve_kind(self, datasource_id: str) -> str:
+        if self._datasource_kind is None:
+            return "mssql"
+        kind = self._datasource_kind(datasource_id)
+        return "postgresql" if kind == "postgresql" else "mssql"
 
     def execute(self, query: SemanticQuery) -> SemanticQueryResult:
         started = time.perf_counter()
-        compiled = self._planner.compile(query)
         datasource_id = self._planner._published_version(query.object_code).datasets[0].datasource_id
+        kind = self._resolve_kind(datasource_id)
+        compiled = self._planner.compile(query, dialect_kind=kind)
         connection = self._connect(datasource_id)
         try:
             cursor = connection.cursor()
             values = [compiled.params[name] for name in compiled.positiontup]
-            cursor.execute(compiled.sql, *values)
+            if kind == "postgresql":
+                # psycopg 约定：参数序列作为整体第二参，非 pyodbc 的 splat
+                cursor.execute(compiled.sql, values)
+            else:
+                cursor.execute(compiled.sql, *values)
             rows = cursor.fetchall()
             columns = [item[0] for item in cursor.description] if cursor.description else []
             raw_rows = [dict(zip(columns, row)) for row in rows]
@@ -1315,27 +1374,36 @@ class SemanticQueryService:
         if dataset is None:
             raise SemanticQueryPlanningError("锚点数据集不存在")
 
+        kind = self._resolve_kind(dataset.datasource_id)
         source = table(
             dataset.table_name,
             column(field.column_name),
             schema=dataset.schema_name,
         )
         # ponytail: 管理员验证低频取样；大表实测变慢时改为有界候选集随机。
+        # newid() 为 mssql 专属；PG 方言用 random()（#78）
         statement = (
             select(source.c[field.column_name])
             .where(source.c[field.column_name].is_not(None))
-            .order_by(func.newid())
+            .order_by(func.random() if kind == "postgresql" else func.newid())
             .limit(1)
         )
         compiled = statement.compile(
-            dialect=mssql.dialect(paramstyle="qmark"),
+            dialect=(
+                postgresql.dialect(paramstyle="format")
+                if kind == "postgresql"
+                else mssql.dialect(paramstyle="qmark")
+            ),
             compile_kwargs={"render_postcompile": True},
         )
         connection = self._connect(dataset.datasource_id)
         try:
             cursor = connection.cursor()
             values = [compiled.params[name] for name in (compiled.positiontup or ())]
-            cursor.execute(str(compiled), *values)
+            if kind == "postgresql":
+                cursor.execute(str(compiled), values)
+            else:
+                cursor.execute(str(compiled), *values)
             row = cursor.fetchone()
             return row[0] if row else None
         finally:
