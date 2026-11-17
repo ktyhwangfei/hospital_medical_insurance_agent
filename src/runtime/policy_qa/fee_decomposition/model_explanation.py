@@ -1260,6 +1260,13 @@ def _build_lines_model_input(
     evidences = [build_line_target_evidence(public, QuestionTarget(
         kind="fee_line", line_id=ref.line_id, display_no=ref.display_no,
         attributes=ref.attributes)) for ref in refs]
+    # 收费边界问题不附整单项目名单，否则模型会据此写「本单其余各项金额如下」。
+    include_bill = (not _is_billing_boundary_question(question)
+                    and any(item.payment_condition_context and item.payment_condition_context.bz
+                            for item in items))
+    billed_items = [BilledItemFact(display_no=index + 1,
+        item_name=item.item_name or item.item_code, item_type=item.item_type)
+        for index, item in enumerate(public.fee_items)] if include_bill else []
     # 整单口径块不默认进入行问题。
     return FeeExplanationInput(question=question, decomposition=data,
         actual_payment_shares=[], payment_reconciliation=PaymentReconciliation(),
@@ -1270,10 +1277,7 @@ def _build_lines_model_input(
         unexplained_fields=[],
         billing_boundaries=build_billing_boundary_payload(
             public.fee_items, {ref.display_no for ref in refs}),
-        billed_items=[BilledItemFact(display_no=index + 1,
-            item_name=item.item_name or item.item_code, item_type=item.item_type)
-            for index, item in enumerate(public.fee_items)]
-        if any(item.payment_condition_context and item.payment_condition_context.bz for item in items) else [])
+        billed_items=billed_items)
 
 
 def _build_line_model_input(
@@ -1865,10 +1869,25 @@ def _component_issues(text: str, payload: FeeExplanationInput) -> list[str]:
     return list(dict.fromkeys(missing))
 
 
+#: 收费边界正文禁止带出的汇总清单说法。所问费用行自己的目录划分不受此限。
+_BILLING_INVENTORY_MARKERS = ("其余各项金额", "费用总金额")
+
+
+def _billing_inventory_issues(text: str, payload: FeeExplanationInput) -> list[str]:
+    """收费边界问题只讲所问费用行和原文内涵，不接受整单汇总清单。"""
+    if not _is_billing_boundary_question(payload.question):
+        return []
+    if payload.target_kind in ("summary_fields", "comparison", "mixed", "cover_all", "whole_settlement"):
+        return []
+    if not any(marker in (text or "") for marker in _BILLING_INVENTORY_MARKERS):
+        return []
+    return ["收费边界问题只讲所问费用行和目录内涵原文，不要写「本单其余各项金额如下」或费用总金额等汇总清单。"]
+
+
 def _answer_issues(text: str, payload: FeeExplanationInput, public: FeeDecompositionPublic) -> list[str]:
     if not text:
         return ["回答为空。"]
-    issues = []
+    issues = _billing_inventory_issues(text, payload)
     allowed = _supported_numbers(payload.model_dump(mode="json"))
     if not _decimal_set(text).issubset(allowed):
         unsupported = list(dict.fromkeys(raw for raw in _NUMBER_TOKEN.findall(text)

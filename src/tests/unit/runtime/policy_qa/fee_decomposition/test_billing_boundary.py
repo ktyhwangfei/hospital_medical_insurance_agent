@@ -229,8 +229,10 @@ def test_focus_selects_only_relevant_explanations():
     assert [source.display_no for source in payload.source_explanations] == [3]
     text = "；".join(payload.source_explanations[0].sentences)
     assert "不含监护、实验室检验、活检" in text
-    assert "第2行" in text and "活检" in text  # 活检术被点名
-    assert "测定" in text  # 检验类项目被点名
+    # 只问胃镜时引用原文内涵，不把没问到的检验行开成清单。
+    assert "测定" not in text
+    assert "项，如" not in text
+    assert payload.source_explanations[0].matches[0].targets == []
     assert "病理" not in text  # 对不上的不讲
 
 
@@ -268,12 +270,33 @@ def test_line_question_delivers_backward_boundary(monkeypatch):
 def test_source_question_delivers_forward_boundary(monkeypatch):
     _deterministic(monkeypatch)
     public = _public_with_items(_sample_a_items())
-    result = explanation.explain_decomposition(public, "第3行电子胃镜检查这项含什么")
+    question = "第3行电子胃镜检查这项含什么"
+    payload = build_model_input(public, question)
+    assert payload.billed_items == []
+    result = explanation.explain_decomposition(public, question)
     assert "不含监护、实验室检验、活检" in result.answer
     assert "活检术" in result.answer
+    assert "电子胃镜检查" in result.answer
+    # 只讲所问费用行和原文内涵，不列同单其余项目和汇总金额。
+    assert "测定" not in result.answer
+    assert "项，如" not in result.answer
+    assert "本单其余各项金额如下" not in result.answer
+    assert "费用总金额" not in result.answer
     # 样例A无病理行：不得点名病理行单独计费（引用原文片段中出现「病理学检查」属对得上）。
     assert "病理诊断" not in result.answer
     assert "病理" not in result.answer.replace("病理学检查」", "")
+
+
+def test_billing_inventory_phrase_is_rejected_for_boundary_questions():
+    """模型若补写汇总清单，事实校验要打回；汇总金额问题本身不受这条限制。"""
+    public = _public_with_items(_sample_a_items())
+    boundary = build_model_input(public, "电子胃镜检查这项含什么")
+    rejected = explanation._billing_inventory_issues(
+        "电子胃镜检查的目录内涵注明「不含监护、实验室检验、活检」。"
+        "本单其余各项金额如下：费用总金额 410.00 元。", boundary)
+    assert rejected
+    summary = build_model_input(public, "费用总金额是多少")
+    assert explanation._billing_inventory_issues("费用总金额 3435.00 元。", summary) == []
 
 
 def test_hcv_question_says_confirmatory_test_included(monkeypatch):

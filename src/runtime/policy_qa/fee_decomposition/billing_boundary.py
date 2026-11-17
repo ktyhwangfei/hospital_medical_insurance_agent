@@ -280,14 +280,24 @@ def build_billing_boundary_payload(
         clue_matches: list[SourceClueMatch] = []
         sentences: list[str] = []
         for match in by_source.get(source_index, []):
-            target_indexes = _narrow_to_focus(match.target_indexes, focus)
-            desc = _target_desc(items, target_indexes)
-            sentence = f"第{display_no}行{name}的目录内涵注明「{match.clue.fragment}」，同单{desc}为单独计费项目。"
+            # 只点到内涵所在行时，引用原文即可；没问到的同单行不逐项开列，避免变成其余金额清单。
+            if focus is None:
+                target_indexes = match.target_indexes
+            else:
+                target_indexes = [index for index in match.target_indexes if (index + 1) in focus]
+            if target_indexes:
+                desc = _target_desc(items, target_indexes)
+                sentence = (
+                    f"第{display_no}行{name}的目录内涵注明「{match.clue.fragment}」，"
+                    f"同单{desc}为单独计费项目。")
+                spoken_targets = [
+                    BoundaryTarget(display_no=index + 1, item_name=items[index].item_name or "")
+                    for index in target_indexes]
+            else:
+                sentence = f"第{display_no}行{name}的目录内涵注明「{match.clue.fragment}」。"
+                spoken_targets = []
             clue_matches.append(SourceClueMatch(
-                fragment=match.clue.fragment,
-                targets=[BoundaryTarget(display_no=i + 1, item_name=items[i].item_name or "")
-                         for i in target_indexes],
-                sentence=sentence))
+                fragment=match.clue.fragment, targets=spoken_targets, sentence=sentence))
             sentences.append(sentence)
         fragments = included.get(source_index, [])
         for fragment in fragments:
