@@ -64,6 +64,7 @@ from src.runtime.policy_qa.broad_query_router import (
     BroadRouteDecision,
     route_broad_question,
 )
+from src.runtime.policy_qa.ops_screening_public import answer_ops_screening
 from src.runtime.workflow.service import (
     route_workflow_question,
     run_workflow_by_mode,
@@ -1163,15 +1164,21 @@ async def _policy_qa_stream(
     workflow_blocked_actions: list[tuple[str, str]] = []
     workflow_public_result = None
 
-    matched_workflow = await run_workflow_by_mode(
-        request.mode,
-        question=request.question,
-        settlement_id=request.settlement_id,
-        settlement_ids=request.settlement_ids,
-        id_card=request.id_card,
-        visit_date=request.visit_date,
-    )
-    if matched_workflow is None:
+    # 运营问数里的筛查问法先按结果表作答。识别不到则仍走原有指标问数。
+    if request.mode == PolicyQAMode.DATA_QUERY:
+        workflow_public_result = answer_ops_screening(request.question)
+
+    matched_workflow = None
+    if workflow_public_result is None:
+        matched_workflow = await run_workflow_by_mode(
+            request.mode,
+            question=request.question,
+            settlement_id=request.settlement_id,
+            settlement_ids=request.settlement_ids,
+            id_card=request.id_card,
+            visit_date=request.visit_date,
+        )
+    if workflow_public_result is None and matched_workflow is None:
         # 未按 mode 命中（理论上不应发生，除非 mode 未映射），降级关键词匹配
         keyword_workflow = route_workflow_question(request.question)
         if keyword_workflow is not None:
@@ -1188,7 +1195,7 @@ async def _policy_qa_stream(
                 except Exception as e:
                     logger.warning(f"Workflow routing failed, fallback to skill pipeline: {e}")
                     workflow_public_result = None
-    else:
+    elif workflow_public_result is None:
         workflow_public_result = matched_workflow
 
     if workflow_blocked_actions:

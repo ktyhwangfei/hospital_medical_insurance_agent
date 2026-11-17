@@ -146,6 +146,16 @@ if (-not $env:NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN) {
     $jwtHmac.Dispose()
     $env:NEXT_PUBLIC_QUESTION_LIBRARY_TOKEN = "$jwtHeader.$jwtPayload.$jwtSignature"
 }
+if (-not $env:NEXT_PUBLIC_RULE_MANAGEMENT_TOKEN) {
+    $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtPayloadJson = @{ sub = "portal-dev-rule-management"; roles = @("information_department"); permissions = @("rule_management:read", "rule_management:write"); exp = [DateTimeOffset]::UtcNow.AddHours(24).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+    $jwtPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($jwtPayloadJson)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtHmac = New-Object System.Security.Cryptography.HMACSHA256
+    $jwtHmac.Key = [Text.Encoding]::UTF8.GetBytes($env:AUTH_JWT_SECRET)
+    $jwtSignature = [Convert]::ToBase64String($jwtHmac.ComputeHash([Text.Encoding]::ASCII.GetBytes("$jwtHeader.$jwtPayload"))).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $jwtHmac.Dispose()
+    $env:NEXT_PUBLIC_RULE_MANAGEMENT_TOKEN = "$jwtHeader.$jwtPayload.$jwtSignature"
+}
 if (-not $env:NEXT_PUBLIC_WORKFLOW_TOKEN) {
     $jwtHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
     $jwtPayloadJson = @{ sub = "portal-dev-workflow"; roles = @("information_department"); permissions = @("workflow:read", "workflow:write"); exp = [DateTimeOffset]::UtcNow.AddHours(24).ToUnixTimeSeconds() } | ConvertTo-Json -Compress

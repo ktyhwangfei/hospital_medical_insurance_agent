@@ -13,9 +13,10 @@ import type { PolicyQAChatMessage } from '@/lib/policy-qa-session'
 
 interface PolicyAgentAnswerProps {
   message: PolicyQAChatMessage
+  onFollowUp?: (question: string) => void
 }
 
-export default function PolicyAgentAnswer({ message }: PolicyAgentAnswerProps) {
+export default function PolicyAgentAnswer({ message, onFollowUp }: PolicyAgentAnswerProps) {
   if (!message.content) return null
   const isBroad = message.isBroad
   const hasDataQuery = !!message.dataQueryResult
@@ -28,7 +29,7 @@ export default function PolicyAgentAnswer({ message }: PolicyAgentAnswerProps) {
       <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-900">{message.content}</p>
 
       {hasDataQuery && message.dataQueryResult ? (
-        <OpsAnswerBlock result={message.dataQueryResult} />
+        <OpsAnswerBlock result={message.dataQueryResult} onFollowUp={onFollowUp} />
       ) : null}
 
       {!isBroad && !hasDataQuery && message.verificationSummary ? (

@@ -3,9 +3,10 @@ import type { PolicyQAChatMessage } from '@/lib/policy-qa-session'
 
 interface PolicyMessageListProps {
   messages: PolicyQAChatMessage[]
+  onFollowUp?: (question: string) => void
 }
 
-export default function PolicyMessageList({ messages }: PolicyMessageListProps) {
+export default function PolicyMessageList({ messages, onFollowUp }: PolicyMessageListProps) {
   return (
     <ol aria-label="政策问答消息" className="space-y-5">
       {messages.map((message, index) => (
@@ -15,7 +16,7 @@ export default function PolicyMessageList({ messages }: PolicyMessageListProps) 
               {message.content}
             </div>
           ) : (
-            <PolicyAgentAnswer message={message} />
+            <PolicyAgentAnswer message={message} onFollowUp={onFollowUp} />
           )}
         </li>
       ))}

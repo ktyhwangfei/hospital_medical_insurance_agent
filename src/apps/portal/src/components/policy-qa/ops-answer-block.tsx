@@ -23,6 +23,12 @@ export const SERIES_COLORS = [
 
 interface OpsAnswerBlockProps {
   result: PolicyQADataQueryResult
+  /** 下钻和核实结论都通过追问完成，这里没有规则管理动作。 */
+  onFollowUp?: (question: string) => void
+}
+
+function cellText(value: string | number | null | undefined): string {
+  return value === null || value === undefined ? '' : String(value)
 }
 
 function toNumber(value: number | string): number {
@@ -168,7 +174,7 @@ function ChartBlock({ chart }: { chart: NonNullable<PolicyQADataQueryResult['cha
   )
 }
 
-export default function OpsAnswerBlock({ result }: OpsAnswerBlockProps) {
+export default function OpsAnswerBlock({ result, onFollowUp }: OpsAnswerBlockProps) {
   return (
     <div
       data-testid="ops-answer-block"
@@ -197,18 +203,65 @@ export default function OpsAnswerBlock({ result }: OpsAnswerBlockProps) {
                       {col.title}
                     </th>
                   ))}
+                  {onFollowUp && result.table.rows.some((row) => cellText(row.settlement_no) || cellText(row.finding_no)) ? (
+                    <th className="px-3 py-2 font-medium">核实</th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {result.table.rows.map((row, i) => (
+                {result.table.rows.map((row, i) => {
+                  const settlementNo = cellText(row.settlement_no)
+                  const findingNo = cellText(row.finding_no)
+                  return (
                   <tr key={i}>
                     {result.table!.columns.map((col) => (
                       <td key={col.key} className="tabular-amounts px-3 py-2 text-slate-700">
                         {row[col.key] ?? '-'}
                       </td>
                     ))}
+                    {onFollowUp && (settlementNo || findingNo) ? (
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          {settlementNo ? (
+                            <button
+                              type="button"
+                              className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600"
+                              onClick={() => onFollowUp(`打开结算单 ${settlementNo}，看看依据是什么`)}
+                            >
+                              查看依据
+                            </button>
+                          ) : null}
+                          {findingNo ? (
+                            <>
+                              <button
+                                type="button"
+                                className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600"
+                                onClick={() => onFollowUp(`把疑点 ${findingNo} 标为跟`)}
+                              >
+                                标为跟
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600"
+                                onClick={() => onFollowUp(`把疑点 ${findingNo} 标为不跟`)}
+                              >
+                                标为不跟
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600"
+                                onClick={() => onFollowUp(`把疑点 ${findingNo} 标为材料不足`)}
+                              >
+                                标为材料不足
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      </td>
+                    ) : null}
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
