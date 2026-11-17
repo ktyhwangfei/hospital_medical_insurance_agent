@@ -364,6 +364,41 @@ def test_paren_lab_name_stays_on_its_billing_boundary(monkeypatch):
     assert _RETIRE_GAP not in result.uncertainties
 
 
+def test_spoken_colonoscopy_and_biopsy_stay_on_that_boundary(monkeypatch):
+    """「肠镜已经收了，活检为什么还要单收」：短称定位肠镜与活检术。
+
+    不把胃镜或活检钳算进来，也不展开整单其余金额和退休补充缺证。
+    """
+    _deterministic(monkeypatch)
+    public = _with_retire_gap(_public_with_items(_sample_a_items()))
+    question = "肠镜已经收了，活检为什么还要单收"
+    target = resolve_question_target(public, question)
+    assert target.kind == "multi_line"
+    names = {public.fee_items[ref.display_no - 1].item_name for ref in target.lines}
+    assert names == {"电子结肠镜检查", "消化道内镜活检术"}
+    result = explanation.explain_decomposition(public, question)
+    assert "电子结肠镜检查" in result.answer
+    assert "消化道内镜活检术" in result.answer
+    assert "不含监护、活检、病理学检查" in result.answer
+    assert "电子胃镜检查" not in result.answer
+    assert "活检钳" not in result.answer
+    assert "费用总金额" not in result.answer
+    assert "3435.00" not in result.answer
+    assert "蜡块" not in result.answer
+    assert _RETIRE_GAP not in result.answer
+    assert _RETIRE_GAP not in result.uncertainties
+    for word in BANNED:
+        assert word not in result.answer
+
+
+def test_forceps_full_name_does_not_pull_the_biopsy_procedure():
+    """问句已经写出「活检钳」时，不因短称「活检」再牵连活检术。"""
+    public = _public_with_items(_sample_a_items())
+    target = resolve_question_target(public, "活检钳这笔多少钱")
+    assert target.kind == "fee_line"
+    assert public.fee_items[target.display_no - 1].item_name == "活检钳"
+
+
 def test_unnamed_billing_boundary_question_skips_other_amounts(monkeypatch):
     """没点名项目、只问为什么还单独收费：只交付收费边界，不逐项解释整单金额。"""
     _deterministic(monkeypatch)

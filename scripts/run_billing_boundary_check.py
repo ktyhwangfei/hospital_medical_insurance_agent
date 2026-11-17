@@ -47,6 +47,13 @@ ACCEPTANCE = [
      [], ["蜡块"]),
 ]
 
+# 窗口原话，不加「第N行」前缀。
+RAW_QUESTIONS = [
+    ("样例A", "肠镜已经收了，活检为什么还要单收",
+     ["不含监护、活检、病理学检查", "消化道内镜活检术", "电子结肠镜检查"],
+     ["电子胃镜检查", "活检钳", "蜡块", "费用总金额"]),
+]
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -100,6 +107,24 @@ def main() -> int:
             report["cases"].append({
                 "sample": label, "trade_no": trade_no, "display_no": target + 1,
                 "question": line_question, "status": status,
+                "must_contain": must, "must_not_contain": must_not,
+                "missed": missed, "leaked": leaked, "banned_found": banned,
+                "answer": answer})
+        for sample, question, must, must_not in RAW_QUESTIONS:
+            if sample != label:
+                continue
+            answer = explain_decomposition(public, question).answer
+            missed = [text for text in must if text not in answer]
+            leaked = [text for text in must_not if text in answer]
+            banned = [word for word in BANNED_WORDS if word in answer]
+            status = "pass" if not missed and not leaked and not banned else "fail"
+            if status == "fail":
+                failures.append(
+                    f"{label} 原话 {question}: missed={missed} leaked={leaked} banned={banned}")
+            print(f"\n[{status}] {label} 问：{question}\n{answer}")
+            report["cases"].append({
+                "sample": label, "trade_no": trade_no, "display_no": None,
+                "question": question, "status": status,
                 "must_contain": must, "must_not_contain": must_not,
                 "missed": missed, "leaked": leaked, "banned_found": banned,
                 "answer": answer})

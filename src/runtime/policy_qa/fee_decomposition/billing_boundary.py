@@ -211,6 +211,18 @@ def _target_desc(items: list[FeeItemExplanation], indexes: list[int]) -> str:
     return f"{numbers}（共{len(indexes)}项，如{preview}）"
 
 
+def _narrow_to_focus(indexes: list[int], focus: set[int] | None) -> list[int]:
+    """问题同时点到来源行和目标行时，只保留点名的那一侧。
+
+    例如问的是肠镜和活检，活检术的回看只引用肠镜内涵，不把同单胃镜内涵一并带上。
+    点名行与这组下标没有交集时保持原样：只问活检术时，胃镜和肠镜两处依据都保留。
+    """
+    if focus is None:
+        return indexes
+    kept = [index for index in indexes if (index + 1) in focus]
+    return kept if kept else indexes
+
+
 def build_billing_boundary_payload(
     items: list[FeeItemExplanation], focus: set[int] | None,
 ) -> BillingBoundaryPayload | None:
@@ -232,11 +244,14 @@ def build_billing_boundary_payload(
         if focus is not None and display_no not in focus:
             continue
         item = items[target_index]
+        paired = sorted(by_target[target_index])
+        kept_sources = set(_narrow_to_focus([source for source, _clue in paired], focus))
         citations = [
             BoundaryCitation(display_no=source_index + 1,
                              item_name=items[source_index].item_name or "",
                              fragment=clue.fragment)
-            for source_index, clue in sorted(by_target[target_index])
+            for source_index, clue in paired
+            if source_index in kept_sources
         ]
         basis = "；".join(f"第{c.display_no}行{c.item_name}的目录内涵注明「{c.fragment}」"
                           for c in citations)
@@ -265,12 +280,13 @@ def build_billing_boundary_payload(
         clue_matches: list[SourceClueMatch] = []
         sentences: list[str] = []
         for match in by_source.get(source_index, []):
-            desc = _target_desc(items, match.target_indexes)
+            target_indexes = _narrow_to_focus(match.target_indexes, focus)
+            desc = _target_desc(items, target_indexes)
             sentence = f"第{display_no}行{name}的目录内涵注明「{match.clue.fragment}」，同单{desc}为单独计费项目。"
             clue_matches.append(SourceClueMatch(
                 fragment=match.clue.fragment,
                 targets=[BoundaryTarget(display_no=i + 1, item_name=items[i].item_name or "")
-                         for i in match.target_indexes],
+                         for i in target_indexes],
                 sentence=sentence))
             sentences.append(sentence)
         fragments = included.get(source_index, [])

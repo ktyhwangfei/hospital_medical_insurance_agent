@@ -229,8 +229,10 @@ _PAREN_GROUP = re.compile(r"[（(][^（）()]{0,20}[）)]")
 #: 只问收费打包边界、没有点名汇总金额时，不把整单目标金额装进解释。
 _BILLING_BOUNDARY_QUESTION_MARKERS = (
     "单独收费", "单独计费", "另行收费", "另行计费", "分开收费", "分开计费",
-    "为什么还收", "含什么", "包含什么", "目录内涵", "项目内涵",
+    "为什么还收", "单收", "含什么", "包含什么", "目录内涵", "项目内涵",
 )
+#: 患者口语短称。长词在前。问句里整段出现、且是费用行名称的子串时才定位。
+_SPOKEN_ITEM_ALIASES = ("结肠镜", "活检术", "胃镜", "肠镜", "活检")
 
 
 def _name_without_paren(name: str) -> str:
@@ -241,11 +243,35 @@ def _is_billing_boundary_question(text: str) -> bool:
     return any(marker in text for marker in _BILLING_BOUNDARY_QUESTION_MARKERS)
 
 
+def _spoken_name_hit(
+    name: str, text: str, all_names: list[str], item_type: str | None,
+) -> bool:
+    """短称定位：肠镜对上电子结肠镜检查，活检对上活检术。
+
+    问句已经写出更长的费用名（活检钳）时，不用短称再牵连其他行。
+    短称只是耗材名前缀、问句又没写后缀（活检/钳）时，不把耗材行算进来。
+    """
+    for alias in _SPOKEN_ITEM_ALIASES:
+        if alias not in text or alias not in name:
+            continue
+        longer_in_question = [
+            other for other in all_names
+            if other and alias in other and len(other) > len(alias) and other in text
+        ]
+        if longer_in_question and name not in longer_in_question:
+            continue
+        if (item_type == "耗材" and name.startswith(alias) and len(name) > len(alias)
+                and name[len(alias):] not in text):
+            continue
+        return True
+    return False
+
+
 def _item_name_hits(public: FeeDecompositionPublic, text: str) -> list[int]:
     """项目名称命中（返回 fee_items 下标）：整名包含，或与行名最长公共子串达阈值。"""
+    names = [(item.item_name or "").strip() for item in public.fee_items]
     hits: list[int] = []
-    for index, item in enumerate(public.fee_items):
-        name = (item.item_name or "").strip()
+    for index, name in enumerate(names):
         if not name:
             continue
         # 长名允许口语片段（如“人工晶体”），短名（阈值=全长）需整名出现。
@@ -256,6 +282,9 @@ def _item_name_hits(public: FeeDecompositionPublic, text: str) -> list[int]:
             # 问句写出去掉括号缩写后的全名才命中（总蛋白测定 → 总蛋白(TP)测定）。
             # 必须整名包含，避免「总蛋白测定」误中「白蛋白测定」。
             matched = len(bare) >= 4 and bare != name and bare in text
+        if not matched:
+            matched = _spoken_name_hit(
+                name, text, names, public.fee_items[index].item_type)
         if matched:
             hits.append(index)
     return hits
@@ -616,7 +645,11 @@ def _name_only_target(
         narrowed = _narrow_by_amount_clues(public, text, hits)
         if len(narrowed) == 1:
             hits = narrowed
-        elif re.search(r"都|两项|两行|全部|所有", text):
+        elif re.search(r"都|两项|两行|全部|所有", text) or (
+            # 点了两个不同项目问为什么分开收：解释这两行的收费边界，不追问是哪一行。
+            _is_billing_boundary_question(text)
+            and len({(items[index].item_name or "") for index in hits}) > 1
+        ):
             lines = [LineRef(line_id=items[index].line_id, display_no=index + 1,
                              attributes=_line_attributes(text)) for index in hits]
             if codes:
