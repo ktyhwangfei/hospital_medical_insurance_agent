@@ -1238,6 +1238,10 @@ def _build_lines_model_input(
                     if condition.step_id in condition_ids
                     or ids.intersection(condition.calculation_refs)],
         path_steps=steps))
+    # 收费边界问题只留被点名的费用行。整单汇总金额和退休补充缺证留在资料里时，
+    # 模型会先讲内涵，再被要求补全其余目标金额，并把缺证写进「尚待核实」。
+    if _is_billing_boundary_question(question):
+        data = _drop_bill_summary(data)
     evidences = [build_line_target_evidence(public, QuestionTarget(
         kind="fee_line", line_id=ref.line_id, display_no=ref.display_no,
         attributes=ref.attributes)) for ref in refs]
@@ -1308,16 +1312,23 @@ def _boundary_display_nos(boundaries: BillingBoundaryPayload) -> set[int]:
     return numbers
 
 
+def _drop_bill_summary(public: FeeDecompositionPublic) -> FeeDecompositionPublic:
+    """去掉整单汇总金额、模板说明和内部缺证，避免进入收费边界问题的模型资料。"""
+    return public.model_copy(update=dict(
+        summary_text="", settlement_facts=None, uncertainties=[],
+        template_explanations={}, stages=[], trace=None, coverage=None))
+
+
 def _billing_boundary_only_input(
     public: FeeDecompositionPublic, question: str, boundaries: BillingBoundaryPayload,
 ) -> FeeExplanationInput:
     """内涵或单独收费问题：只装载收费边界和被解释的费用行，不装载整单汇总金额。"""
     mentioned = _boundary_display_nos(boundaries)
     items = [item for index, item in enumerate(public.fee_items) if index + 1 in mentioned]
-    data = public.model_copy(update=dict(
-        summary_text="", fields=[], calculations=[], fee_items=items,
+    data = _drop_bill_summary(public.model_copy(update=dict(
+        fields=[], calculations=[], fee_items=items,
         sources=[], formula_inputs=[], rule_choices=[], conditions=[],
-        path_steps=[], uncertainties=[]))
+        path_steps=[])))
     return FeeExplanationInput(
         question=question, decomposition=data, target_evidence=[],
         target_kind="billing_boundary", billing_boundaries=boundaries)

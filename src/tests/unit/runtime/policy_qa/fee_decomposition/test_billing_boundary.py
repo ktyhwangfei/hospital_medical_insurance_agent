@@ -376,6 +376,16 @@ def test_spoken_colonoscopy_and_biopsy_stay_on_that_boundary(monkeypatch):
     assert target.kind == "multi_line"
     names = {public.fee_items[ref.display_no - 1].item_name for ref in target.lines}
     assert names == {"电子结肠镜检查", "消化道内镜活检术"}
+    payload = build_model_input(public, question)
+    # 模型资料里不能再有整单汇总金额和退休补充缺证，否则会写进正文和「尚待核实」。
+    assert payload.target_evidence == []
+    assert payload.decomposition.fields == []
+    assert payload.decomposition.settlement_facts is None
+    assert payload.decomposition.uncertainties == []
+    model_blob = payload.model_dump_json()
+    assert "费用总金额" not in model_blob
+    assert "3435.00" not in model_blob
+    assert "不默认已纳入" not in model_blob
     result = explanation.explain_decomposition(public, question)
     assert "电子结肠镜检查" in result.answer
     assert "消化道内镜活检术" in result.answer
