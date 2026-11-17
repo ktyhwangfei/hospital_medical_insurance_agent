@@ -50,7 +50,7 @@ describe('PolicyAgentAnswer', () => {
     expect(answer.closest('article')?.firstElementChild).toBe(answer)
     expect(screen.getByText('已核对当前结算单与 2 条政策依据。')).toBeInTheDocument()
     expect(screen.queryByText('本轮执行链路')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '查看 2 篇政策来源（2 条命中单元）' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '查看 2 篇政策来源（2 条依据）' })).toBeInTheDocument()
     expect(screen.getByText('计算依据')).toBeInTheDocument()
     expect(screen.getByText('计算依据').closest('details')).not.toHaveAttribute('open')
     fireEvent.click(screen.getByText('计算依据'))
@@ -63,7 +63,7 @@ describe('PolicyAgentAnswer', () => {
   it('shows only policy title and excerpt in the sources dialog', () => {
     render(<PolicyAgentAnswer message={completeMessage} />)
 
-    fireEvent.click(screen.getByRole('button', { name: '查看 2 篇政策来源（2 条命中单元）' }))
+    fireEvent.click(screen.getByRole('button', { name: '查看 2 篇政策来源（2 条依据）' }))
 
     expect(screen.getByText('基本医疗保险住院待遇政策')).toBeInTheDocument()
     expect(screen.getByText('参保人员按规定承担统筹范围内费用。')).toBeInTheDocument()
@@ -97,7 +97,7 @@ describe('PolicyAgentAnswer', () => {
     )
 
     fireEvent.click(
-      screen.getByRole('button', { name: '查看 2 篇政策来源（3 条命中单元）' }),
+      screen.getByRole('button', { name: '查看 2 篇政策来源（3 条依据）' }),
     )
 
     // 同一篇文档只出现一次标题与一个“查看原文”链接
@@ -180,6 +180,61 @@ describe('PolicyAgentAnswer', () => {
     expect(summary).toHaveClass('border-slate-200')
     expect(summary.querySelector('.lucide-badge-check')).not.toBeInTheDocument()
     expect(summary.querySelector('.lucide-circle-alert')).toBeInTheDocument()
+  })
+
+  it('settlement conversations hide generic check statuses but retain specific gaps and policy sources', () => {
+    render(
+      <PolicyAgentAnswer
+        message={{
+          ...completeMessage,
+          uncertainties: [
+            '政策依据不完整，当前回答仅供核对真实结算金额。',
+            '材料按结算事实限价（SP_SCALE）拆分（限内纳入、超限自担）属实证候选口径，待签核。',
+            '未检索到可展示的政策依据。',
+            '本单适用条件仍待确认。',
+          ],
+        }}
+        settlementConversation
+      />,
+    )
+
+    expect(screen.queryByLabelText('核验摘要')).not.toBeInTheDocument()
+    expect(screen.queryByText('计算依据')).not.toBeInTheDocument()
+    expect(screen.queryByText('政策依据不完整，当前回答仅供核对真实结算金额。')).not.toBeInTheDocument()
+    expect(screen.queryByText(/SP_SCALE/)).not.toBeInTheDocument()
+    expect(screen.queryByText('未检索到可展示的政策依据。')).not.toBeInTheDocument()
+    expect(screen.getByText('本单适用条件仍待确认。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '查看 2 篇政策来源（2 条依据）' })).toBeInTheDocument()
+  })
+
+  it('settlement conversations hide the internal answer-verification diagnostic', () => {
+    render(
+      <PolicyAgentAnswer
+        message={{ ...completeMessage, qaTurnId: 'qat_test' }}
+        settlementConversation
+      />,
+    )
+    expect(screen.queryByRole('button', { name: /答案验证/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /反馈问题/ })).toBeInTheDocument()
+  })
+
+  it('keeps answer verification for non-settlement policy answers', () => {
+    render(<PolicyAgentAnswer message={{ ...completeMessage, qaTurnId: 'qat_test' }} />)
+    expect(screen.getByRole('button', { name: /答案验证/ })).toBeInTheDocument()
+  })
+
+  it('feedback stays a compact trigger until the user opens it', () => {
+    render(
+      <PolicyAgentAnswer
+        message={{ ...completeMessage, qaTurnId: 'qat_test' }}
+        settlementConversation
+      />,
+    )
+
+    expect(screen.queryByText('计算错误')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /反馈问题/ }))
+    expect(screen.getByRole('menuitem', { name: '计算错误' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: '其他' })).toBeInTheDocument()
   })
 
   it('shows outpatient source amounts without exposing intermediate calculations', () => {

@@ -56,15 +56,16 @@ describe('SettlementResultBlock（单笔费用构成富块）', () => {
     expect(list).toHaveTextContent('（缺失）')
   })
 
-  it('解释文本、核验摘要与政策来源入口保留', () => {
+  it('保留解释正文与政策来源，不展示核验徽标或重复计算依据', () => {
     render(<SettlementResultBlock settlementId="1671213" result={result} />)
 
     expect(
       screen.getByText('本结算单费用构成为统筹支付 8,432.50 元、个人自付 2,953.90 元。'),
     ).toBeInTheDocument()
-    expect(screen.getByText('已核对当前结算单与 1 条政策依据。')).toBeInTheDocument()
+    expect(screen.queryByText('已核对当前结算单与 1 条政策依据。')).not.toBeInTheDocument()
+    expect(screen.queryByText('计算依据')).not.toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: '查看 1 篇政策来源（1 条命中单元）' }),
+      screen.getByRole('button', { name: '查看 1 篇政策来源（1 条依据）' }),
     ).toBeInTheDocument()
   })
 

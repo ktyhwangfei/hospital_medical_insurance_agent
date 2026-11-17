@@ -363,8 +363,10 @@ export default function SettlementAgentWorkspace({
             onPatientChange={handlePatientChange}
           />
 
-          {/* 针对选中单的追问对话流（含两单对比问答） */}
-          {stream.messages.length > 0 ? <PolicyMessageList messages={stream.messages} /> : null}
+          {/* 针对选中单的追问对话流（含两单对比问答）；结算会话口径：不重复展示核验摘要/计算依据 */}
+          {stream.messages.length > 0 ? (
+            <PolicyMessageList messages={stream.messages} settlementConversation />
+          ) : null}
 
           {busy && currentPublicMessage ? (
             <div role="status" className="flex items-center gap-2 py-3 text-sm text-slate-500">
