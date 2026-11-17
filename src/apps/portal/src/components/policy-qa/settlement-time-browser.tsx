@@ -7,6 +7,8 @@ import {
   LoaderCircle,
   RefreshCw,
   Search,
+  Square,
+  SquareCheck,
   UserRound,
 } from 'lucide-react'
 
@@ -26,15 +28,21 @@ import {
  *
  * 主输入链：先定位患者（身份证号/卡号，临时方案——正式由登录态给出
  * 患者身份），再按时段浏览该患者的结算单，点单看费用构成解释。
- * 未定位患者时不加载列表（隐私收敛：不按全院浏览）。
+ * Issue #87：点选支持最多两张（再点取消），供工作区按时间出两个 tab
+ * 并对两张单做对比提问；未定位患者时不加载列表（隐私收敛：不按全院浏览）。
  */
 
 interface SettlementTimeBrowserProps {
-  selectedId: string | null
-  onSelect: (settlementId: string) => void
+  /** 已选中的结算单 ID（最多两张，Issue #87：支持两单选择后对比提问） */
+  selectedIds: string[]
+  /** 点选/取消点选一张结算单（携带整行摘要，供工作区按时间生成 tab） */
+  onToggle: (item: SettlementListItemDTO) => void
   /** 患者定位/换人时通知工作区（用于清掉上一患者的选中结算单） */
   onPatientChange?: (patient: PatientSummaryDTO | null) => void
 }
+
+/** 同时可选结算单上限：窗口对比场景两张即可（Issue #87 第一批口径）。 */
+export const MAX_SETTLEMENT_SELECTION = 2
 
 const PRESETS: Array<{ id: SettlementPreset; label: string }> = [
   { id: 'today', label: '今天' },
@@ -43,8 +51,8 @@ const PRESETS: Array<{ id: SettlementPreset; label: string }> = [
 ]
 
 export default function SettlementTimeBrowser({
-  selectedId,
-  onSelect,
+  selectedIds,
+  onToggle,
   onPatientChange,
 }: SettlementTimeBrowserProps) {
   // ── 患者定位（临时方案）─────────────────────────────────────
@@ -61,6 +69,18 @@ export default function SettlementTimeBrowser({
   const [items, setItems] = useState<SettlementListItemDTO[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 超出两张上限时的内联提示（不改变选择，等用户先取消一张）
+  const [selectHint, setSelectHint] = useState<string | null>(null)
+
+  const handleRowClick = (item: SettlementListItemDTO) => {
+    const selected = selectedIds.includes(item.settlementId)
+    if (!selected && selectedIds.length >= MAX_SETTLEMENT_SELECTION) {
+      setSelectHint(`最多同时选择 ${MAX_SETTLEMENT_SELECTION} 张结算单；先取消一张再选。`)
+      return
+    }
+    setSelectHint(null)
+    onToggle(item)
+  }
 
   const resolveRange = useCallback((): { dateFrom: string; dateTo: string } | null => {
     if (preset === 'today') return todayRange()
@@ -131,6 +151,7 @@ export default function SettlementTimeBrowser({
     setItems([])
     setError(null)
     setLookupError(null)
+    setSelectHint(null)
     onPatientChange?.(null)
   }
 
@@ -307,7 +328,17 @@ export default function SettlementTimeBrowser({
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
               <p className="border-b border-slate-100 px-4 py-2.5 text-xs text-slate-500">
                 {preset === 'today' ? '今日' : preset === 'this_week' ? '本周' : '所选时段'}结算单（{items.length} 笔）
+                {selectedIds.length > 0 ? (
+                  <span className="ml-2 text-agent-settlement" data-testid="settlement-selected-count">
+                    已选 {selectedIds.length}/{MAX_SETTLEMENT_SELECTION} 张
+                  </span>
+                ) : null}
               </p>
+              {selectHint ? (
+                <p role="alert" className="border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-700">
+                  {selectHint}
+                </p>
+              ) : null}
               {items.length === 0 ? (
                 <p className="px-4 py-8 text-center text-sm text-slate-400">
                   该时段暂无结算单，切换时段或刷新试试。
@@ -315,12 +346,12 @@ export default function SettlementTimeBrowser({
               ) : (
                 <ul className="divide-y divide-slate-100" data-testid="settlement-list">
                   {items.map((item) => {
-                    const selected = item.settlementId === selectedId
+                    const selected = selectedIds.includes(item.settlementId)
                     return (
                       <li key={item.settlementId}>
                         <button
                           type="button"
-                          onClick={() => onSelect(item.settlementId)}
+                          onClick={() => handleRowClick(item)}
                           aria-pressed={selected}
                           data-testid={`settlement-item-${item.settlementId}`}
                           className={[
@@ -328,6 +359,11 @@ export default function SettlementTimeBrowser({
                             selected ? 'bg-slate-50' : 'hover:bg-slate-50/70',
                           ].join(' ')}
                         >
+                          {selected ? (
+                            <SquareCheck className="size-4 shrink-0 text-agent-settlement" aria-hidden />
+                          ) : (
+                            <Square className="size-4 shrink-0 text-slate-300" aria-hidden />
+                          )}
                           <span className="tabular-amounts min-w-0 flex-1">
                             <span className="block truncate text-sm font-medium text-slate-900">
                               {item.settlementId}
