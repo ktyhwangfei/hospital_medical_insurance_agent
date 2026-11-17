@@ -16,6 +16,7 @@ domain/
 ├── drg_dip/        # DrgGroupResult, DipGroupResult, PaymentRate
 ├── medical_record/ # MedicalRecordHomepage, Diagnosis, Surgery
 ├── order_fee/      # Order, FeeItem, Drug, Consumable
+├── screening_rules/# ScreeningRule, ScreeningRun, ScreeningFinding（issue #86）
 ├── common/         # Citation, Role 枚举
 ├── skill/          # Skill, SkillStep, SkillMetadata（Pydantic）
 ├── trusted_qa/     # TrustedQuestion 可信问题（Pydantic，Issue #37）
@@ -74,6 +75,7 @@ domain/
 14.10. [数据供给分档（Data Supply）](#1410-数据供给分档data-supply)
 14.11. [可信问题库（Trusted Question Library）](#1411-可信问题库trusted-question-library)
 14.12. [门诊运营分析（Ops Analytics）](#1412-门诊运营分析ops-analytics)
+14.15. [筛查结果问数（Screening Result Q&A）](#1415-筛查结果问数screening-result-qa)
 15. [AI 编程工作流契约](#15-ai-编程工作流契约)
 
 ---
@@ -1284,6 +1286,40 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+### 14.12.1 筛查规则管理（Screening Rules）
+
+> 依据：issue #86「规则管理生成并执行筛查规则，运营问数基于结果交互下钻」的规则管理半区。定位：规则管理是与运营问数分离的管理入口——上传政策/问题清单 → 逐条分类 → 带原条款的候选规则 → 人批准 → 对 bjyb 历史诊次跑数 → 批次与两本名单。命中只作为疑点，判定与整改留在医保办。
+
+#### 文件位置
+
+`src/domain/screening_rules/`（models + classifier + executor 纯函数）+ `src/runtime/screening_rules/`（service + fee_line_loader 执行数据面）+ 存储 `src/data_platform/storage/screening_rules/`（ports / in_memory / sqlserver / factory）+ API `src/runtime/api/screening_rule_routes.py`（`/rule-management`，权限 `rule_management:read/write`）+ portal `src/apps/portal/app/rule-management/page.tsx` + 可重复 DDL 脚本 `scripts/create_screening_rule_tables.py`
+
+#### 通用语言字典
+
+| 英文命名 | 中文术语 | DDD 分类 | 说明 |
+|---------|---------|---------|------|
+| `ScreeningRule` | 筛查规则 | **Entity** | 候选/已批准/已关闭；`source_clause` 原条款必填 |
+| `RuleClass` | 条目分类 | Value Object | `executable` / `needs_mapping`（写清 mapping_gap）/ `not_executable` |
+| `RuleStatus` | 规则状态 | Value Object | `candidate` → `approved` → `disabled`；已批准规则被修改后退回 `candidate` |
+| `ScreeningRun` | 执行批次 | **Entity** | `running` / `succeeded` / `failed`；无命中也算 succeeded 且命中为 0 |
+| `ScreeningFinding` | 疑点命中 | **Entity** | `mismatch` 明显对不上 / `insufficient_material` 材料不足 |
+| `primary_finding_id` | 主疑点 | Value Object | 同一费用行只计一次金额：主疑点 = 自身 finding_id，其余指向主疑点 |
+| `VerifyStatus` | 核实结论 | Value Object | `pending` / `follow` / `not_follow` / `insufficient`，医保办核实后记在疑点上 |
+| `FeeLine` | 费用行 | Value Object | 执行器输入：`settlement_key` = o_Trade.T_TradeNo |
+| `SettlementContext` | 就诊上下文 | Value Object | 执行器输入：o_Trade.P_Birthday/P_Sex + o_Diagnose 诊断，`age_at_trade` 就诊年龄 |
+| `condition_spec.kind` | 条件类型 | Value Object | `cocharge`（同单项目组合）/ `drug_age_indication`（药品限适应症+年龄分支；诊断/出生日期缺失记 insufficient_material） |
+| `RuleNotApprovedError` | 批准门禁 | 异常 | 未批准规则执行整批拒绝，结果表不出现新命中 |
+
+#### 业务规则
+
+1. 结果表 `ai_screen_rule / ai_screen_run / ai_screen_run_rule / ai_screen_finding` 建在 bjyb 的 SQL Server（`dbo`），问数按这些表名只读；字段名与取值以 issue #86 任务书为准，不得漂移。
+2. 引不出原条款的疑点不输出；候选规则必须携带原条款（`source_clause` 非空否则禁止批准/执行）。
+3. 批准门禁：只有 `approved` + `executable` 的规则可进入批次；`disabled` 规则不再进入后续批次。
+4. 执行数据面 `fee_line_loader` / `context_loader` 注入（生产查 `dbo.o_Trade × dbo.o_FeeItem`，费用行号取 `ItemId`；药品年龄规则才读 `P_Birthday` / `P_Sex` 与 `dbo.o_Diagnose`。测试注入 fake），服务不拼 SQL。一次跑数不超过 92 天。
+5. 突变/用药线数/前置治疗等材料经常缺失的条件分类为 `not_executable`，首轮不生成待办规则；`needs_mapping` 必须写清缺什么，不得悄悄执行。
+
+---
+
 ### 14.13. 数据模型（Data Model）
 
 > 依据：架构设计 V3.0（docs/steering/数据资产-语义模型-数据治理体系架构设计-V3.0.md）§4。定位：可信数据的**结构契约**——粒度 + 字段 + 角色 + 多源标准化映射，是 ODS 与语义层之间的独立一层；语义指标经 model_field_ref 绑定模型字段，治理 Flow 以模型为物化输出契约。
@@ -1341,6 +1377,31 @@ HIS 系统 → HisPort → Patient (查询/读取)
 
 ---
 
+
+### 14.15. 筛查结果问数（Screening Result Q&A）
+
+> 依据：Issue #86 运营问数。交互层只读模型，不是新的规则聚合。规则的上传、批准、关闭和跑数不在问数里。
+
+#### 文件位置
+
+`src/interaction/ops_screening/`（意图、只读 SQL、回答）+ `src/runtime/policy_qa/ops_screening_public.py`（收成政策问答公开结果）。入口是 `/policy-qa` 的运营问数（`data_query`），不进入 `/ops` 与 `/ops-analytics`。
+
+#### 通用语言字典
+
+| 英文命名 | 中文术语 | DDD 分类 | 说明 |
+|---------|---------|---------|------|
+| `ScreeningRun` | 执行批次 | Value Object | 一次筛查跑数。问数默认取最新 `succeeded` 批次 |
+| `ScreeningFinding` | 筛查疑点 | Value Object | 命中线索。`settlement_key` 对结算单，`fee_line_id` 对费用行 |
+| `FindingBook` | 名单分本 | Value Object | `mismatch` 明显对不上（默认）；`insufficient_material` 材料不足（点名才出） |
+| `VerifyMark` | 核实结论 | Value Object | 跟 / 不跟 / 材料不足。只记在疑点上，不改规则 |
+
+#### 业务规则
+
+1. **默认口径**：最新成功批次 + 明显对不上 + 主疑点（同一费用只计一次）。口径写明批次时间。分组合计必须等于总数，对不上则不展示数字。
+2. **没有成功批次**：明确说还没有跑数结果，并指向规则管理。不得回答 0，也不得编造。
+3. **话术隔离**：单笔可摘录结算明细给患者看，这段话不得出现疑点、符合或不符合。监管依据只给医保办。
+
+---
 
 ### 15. AI 编程工作流契约
 

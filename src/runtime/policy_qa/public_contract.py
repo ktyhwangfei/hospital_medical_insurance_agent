@@ -111,6 +111,54 @@ class OutpatientFieldExplanation(BaseModel):
     citations: list[str] = Field(min_length=1)
 
 
+class OpsDataQuerySeries(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    data: list[float]
+
+
+class OpsDataQueryChart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["bar", "line", "pie", "table"]
+    x_axis: list[str] = Field(default_factory=list)
+    series: list[OpsDataQuerySeries]
+
+
+class OpsDataQueryColumn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    title: str
+
+
+class OpsDataQueryRow(BaseModel):
+    """行内字段随问法变化，只允许标量。"""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class OpsDataQueryTable(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    columns: list[OpsDataQueryColumn]
+    rows: list[OpsDataQueryRow]
+
+
+class OpsDataQueryBlock(BaseModel):
+    """运营问数富块。筛查问数与指标问数共用前端表格。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric_id: str
+    metric_name: str
+    summary: str
+    caliber: str = ""
+    table: OpsDataQueryTable | None = None
+    chart: OpsDataQueryChart | None = None
+
+
 class PolicyQAPublicResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -144,5 +192,8 @@ class PolicyQAPublicResult(BaseModel):
         default_factory=list, exclude_if=lambda value: not value,
     )
     action_status: Literal["waiting_human_confirmation"] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    data_query_result: OpsDataQueryBlock | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )

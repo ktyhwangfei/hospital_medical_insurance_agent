@@ -24,7 +24,7 @@ const MODE_HEADING: Record<UsePolicyQAStreamReturn['mode'], { title: string; sub
   },
   data_query: {
     title: '运营问数',
-    subtitle: '用自然语言提问运营指标，回答同时给出数据表格与图表。',
+    subtitle: '用自然语言问已跑出的筛查疑点，或问运营指标。回答带口径，可下钻到结算单。',
   },
 }
 
@@ -261,7 +261,10 @@ export default function PolicyConversation({ stream }: PolicyConversationProps) 
       {stream.messages.length === 0 ? (
         <PolicyQAEmptyState onSelectQuestion={setInput} mode={stream.mode} />
       ) : (
-        <PolicyMessageList messages={stream.messages} />
+        <PolicyMessageList
+          messages={stream.messages}
+          onFollowUp={isDataQuery ? (question) => void sendQuestion(question) : undefined}
+        />
       )}
 
       {stream.isStreaming && currentPublicMessage ? (

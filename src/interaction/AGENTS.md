@@ -31,8 +31,6 @@ Interaction layer contract defining 6 multi-modal interaction domains, all curre
 
 ## STATUS
 
-- All 6 subdirs: `__init__.py` with module-level stub code only.
-- Actual interaction logic is in `runtime/api/` and downstream.
-- No dedicated unit tests — coverage via integration flow tests only.
-- Pattern: define protocol/interface here → implement in runtime layer.
-  Do NOT put orchestration logic in this directory.
+- `ops_screening/`：运营问数对筛查结果的只读查询（Issue #86）。读 bjyb 里已有的结算/费用/诊断，并关联规则执行结果；不建表、不改规则。核实结论只写疑点的 `verify_status`。
+- 其余 6 个子目录仍是契约桩。
+- 业务入口仍是 `runtime/api/policy_qa_routes.py` 的 `data_query` 模式，不另做管理台。
