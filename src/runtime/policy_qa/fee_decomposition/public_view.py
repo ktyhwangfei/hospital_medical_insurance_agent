@@ -133,9 +133,48 @@ def _field_line(field) -> str:
     return f"{field.label}：{observed}，暂不能独立计算。"
 
 
+#: 这句话只约束退休补充是否已纳入，计算仍 fail-closed，但不对患者展示。
+_ENROLL_DATE_GAP_MARKERS = ("不默认已纳入", "缺少退休补充保险纳入起始日期")
+_ENROLL_DATE_GAP_LABELS = frozenset({"尚待核实", "未决事项", "待核实"})
+
+
 def _patient_uncertainties(uncertainties):
     """退休补充纳入日期缺失只约束计算，不进入患者可见说明。"""
-    return [item for item in uncertainties if "不默认已纳入" not in (item.message or "")]
+    return [item for item in uncertainties
+            if not any(marker in (item.message or "") for marker in _ENROLL_DATE_GAP_MARKERS)]
+
+
+def omit_enroll_date_gap(text: str) -> str:
+    """从患者可见正文里去掉退休补充纳入日期缺证。
+
+    只删含该缺证的分句；同一回答里已核对的金额说明保留。
+    金额里的千分位逗号不切分。没有这句缺证时原文不动。
+    """
+    if not text or not any(marker in text for marker in _ENROLL_DATE_GAP_MARKERS):
+        return text
+
+    def keep(clause: str) -> bool:
+        if any(marker in clause for marker in _ENROLL_DATE_GAP_MARKERS):
+            return False
+        bare = clause.strip().strip("：:。；; ")
+        return bare not in _ENROLL_DATE_GAP_LABELS
+
+    lines: list[str] = []
+    for line in text.split("\n"):
+        sentences: list[str] = []
+        for sentence in re.split(r"(?<=[。；;])", line):
+            if not sentence:
+                continue
+            ending = sentence[-1] if sentence[-1] in "。；;" else ""
+            body = sentence[:-1] if ending else sentence
+            kept = [part.strip() for part in body.split("，") if part.strip() and keep(part.strip())]
+            if not kept:
+                continue
+            sentences.append("，".join(kept) + ending)
+        rebuilt = "".join(sentences).strip()
+        if rebuilt:
+            lines.append(rebuilt)
+    return "\n".join(lines)
 
 
 def render_summary(result: SettlementDecompositionResult) -> str:

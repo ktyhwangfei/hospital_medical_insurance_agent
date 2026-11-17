@@ -19,6 +19,7 @@ from src.runtime.policy_qa.fee_decomposition.explanation_evidence import input_i
 from src.runtime.policy_qa.fee_decomposition.formula_text import trim_trailing_zeros as _trim_trailing_zeros
 from src.runtime.policy_qa.fee_decomposition.field_explanations import (
     FieldExplanationView, render_field_explanation)
+from src.runtime.policy_qa.fee_decomposition.public_view import omit_enroll_date_gap
 from src.runtime.policy_qa.public_contract import FeeDecompositionPublic
 
 logger = logging.getLogger(__name__)
@@ -1937,8 +1938,8 @@ def _structured_answer(payload: FeeExplanationInput,
     for attempt in range(2):
         response = gateway.generate(
             messages=messages, model_type="llm", scene="fee_explanation", max_tokens=3000)
-        text = _public_safe_answer((response.content or "").strip(),
-                                   _item_name_protection(public))
+        text = omit_enroll_date_gap(_public_safe_answer(
+            (response.content or "").strip(), _item_name_protection(public))).strip()
         issues = _answer_issues(text, payload, public)
         if not issues:
             return FeeModelExplanation(answer=text, used_model=True, model_attempted=True)
@@ -2033,8 +2034,11 @@ def explain_decomposition(
     logger.info("[FEE-EXPLANATION] mode=%s attempted=%s used_model=%s fallback_reason=%s",
                 mode, generated.model_attempted, generated.used_model, generated.fallback_reason)
     return generated.model_copy(update={
-        "answer": generated.answer if generated.used_model else _public_safe_answer(
-            rendered.body, _item_name_protection(public)),
-        "uncertainties": [_public_safe_answer(message) for message in rendered.uncertainties],
+        "answer": generated.answer if generated.used_model else omit_enroll_date_gap(
+            _public_safe_answer(rendered.body, _item_name_protection(public))),
+        "uncertainties": [
+            text for message in rendered.uncertainties
+            if (text := omit_enroll_date_gap(_public_safe_answer(message)).strip())
+        ],
         "evidence_answer_status": "rendered" if rendered.has_evidence else "none",
     })

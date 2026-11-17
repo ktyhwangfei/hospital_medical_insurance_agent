@@ -105,3 +105,32 @@ def test_broad_question_with_evidence_remains_partial():
     )
 
     assert result.answer_status == "partial"
+
+
+def test_enroll_date_gap_is_removed_from_public_answer_and_uncertainties():
+    """窗口正文、尚待核实和 warnings 都不展示退休补充纳入日期缺证。"""
+    gap = "缺少退休补充保险纳入起始日期，不默认已纳入。"
+    result = _build_public_result(
+        answer=f"现金支付 100 元。尚待核实：{gap}",
+        can_answer=True,
+        partial_answer=False,
+        policy_status="no_policy_matched",
+        policy_evidence=[],
+        calculation_steps=[],
+        definition=None,
+        warnings=[gap, "另一项待核对说明。"],
+        case_context={"total_amount": 100},
+        is_overview=False,
+        outpatient_result={
+            "scenario_id": "fee-decomposition-explanation",
+            "uncertainties": [gap, "目录划分语义待确认。"],
+        },
+    )
+    assert "现金支付 100 元" in result.answer
+    assert "不默认已纳入" not in result.answer
+    assert "缺少退休补充保险纳入起始日期" not in result.answer
+    assert "尚待核实" not in result.answer
+    assert gap not in result.uncertainties
+    assert gap not in result.warnings
+    assert "目录划分语义待确认。" in result.uncertainties
+    assert "另一项待核对说明。" in result.warnings
