@@ -46,6 +46,10 @@ async function fetchSettlementExplanation(
   if (opts?.question) params.set('question', opts.question)
   const response = await fetch(`${EXPLANATION_URL}?${params.toString()}`)
   if (!response.ok) {
+    // 门诊单号不属于住院费用构成语义模型（后端映射为 404），给出可执行口径而非 HTTP 码
+    if (response.status === 404) {
+      throw new Error('该结算单暂不支持费用构成解释（当前仅覆盖住院结算单），可在对话中直接提问。')
+    }
     throw new Error(`结算解释查询失败（HTTP ${response.status}）`)
   }
   const payload = (await response.json()) as { result?: unknown } & Record<string, unknown>
@@ -69,6 +73,11 @@ function sortBySettlementDate(items: SettlementListItemDTO[]): SettlementListIte
     if (keyA === keyB) return 0
     return keyA < keyB ? -1 : 1
   })
+}
+
+/** 门诊单：右侧解释区（住院费用构成语义模型）暂不覆盖，门诊问答走对话流。 */
+function isOutpatient(item: SettlementListItemDTO): boolean {
+  return item.serviceType.includes('门诊')
 }
 
 /** 由对比结果组装一条对话消息（本地追加；对比走 REST 端点，不占 SSE 轮次）。 */
@@ -139,7 +148,8 @@ export default function SettlementAgentWorkspace({
       } else {
         if (selectedItems.length >= 2) return
         next = [...selectedItems, item]
-        void ensureExplanation(item.settlementId)
+        // 门诊单不请求住院费用构成解释（右侧改为诚实说明，门诊问答走对话流）
+        if (!isOutpatient(item)) void ensureExplanation(item.settlementId)
       }
       setSelectedItems(next)
       // 任何选择变化后默认聚焦最新一张（按结算日期；未知日期视为最新兜底）
@@ -201,6 +211,17 @@ export default function SettlementAgentWorkspace({
     if (command.kind === 'question' && selectedItems.length === 2) {
       const [older, newer] = sortBySettlementDate(selectedItems)
       stream.appendLocalMessage({ role: 'user', content: command.question })
+      if (selectedItems.some(isOutpatient)) {
+        // 既有对比链路只覆盖住院费用构成；门诊单不得塞进住院对比逻辑
+        stream.appendLocalMessage({
+          role: 'assistant',
+          content:
+            '两张单中含门诊结算单，当前对比仅支持两张住院结算单。请先取消门诊单再对比；门诊费用问题可只选该门诊单后在对话中直接提问。',
+          answerStatus: 'unavailable',
+          uncertainties: ['门诊与住院结算单的对比未生成，未核对任何金额。'],
+        })
+        return
+      }
       setComparing(true)
       try {
         const result = await fetchSettlementExplanation(older.settlementId, {
@@ -386,7 +407,9 @@ export default function SettlementAgentWorkspace({
               data-testid="settlement-compare-hint"
               className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs leading-5 text-slate-500"
             >
-              已选两张结算单，提问将按两张对比作答（以较早一张 {comparingBaseline.settlementDate || comparingBaseline.settlementId} 为基准，金额逐单呈现不加总）；只想问其中一张，先取消另一张的选择。
+              {selectedItems.some(isOutpatient)
+                ? '已选两张，其中含门诊结算单。对比暂仅支持两张住院结算单；门诊费用请只选该门诊单后在对话中直接提问。'
+                : `已选两张结算单，提问将按两张对比作答（以较早一张 ${comparingBaseline.settlementDate || comparingBaseline.settlementId} 为基准，金额逐单呈现不加总）；只想问其中一张，先取消另一张的选择。`}
             </p>
           ) : null}
 
@@ -449,6 +472,10 @@ export default function SettlementAgentWorkspace({
             {activeTabId ? (
               <SettlementExplanationPane
                 settlementId={activeTabId}
+                serviceType={
+                  selectedItems.find((item) => item.settlementId === activeTabId)
+                    ?.serviceType ?? ''
+                }
                 state={activeExplanation}
               />
             ) : null}
@@ -459,14 +486,27 @@ export default function SettlementAgentWorkspace({
   )
 }
 
-/** 单张结算单的解释展示：加载中 / 失败 / 富块三态。 */
+/** 单张结算单的解释展示：门诊说明 / 加载中 / 失败 / 富块三态。 */
 function SettlementExplanationPane({
   settlementId,
+  serviceType,
   state,
 }: {
   settlementId: string
+  serviceType: string
   state?: ExplanationState
 }) {
+  if (serviceType.includes('门诊')) {
+    return (
+      <div
+        role="note"
+        data-testid="settlement-outpatient-note"
+        className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600"
+      >
+        结算单 {settlementId} 是门诊单据，右侧费用构成解释暂只覆盖住院结算单。请在左下输入框直接提问门诊费用问题（如「这笔门诊为什么自付这么多」），系统会按门诊结算链路作答。
+      </div>
+    )
+  }
   if (!state || state.status === 'loading') {
     return (
       <div role="status" className="flex items-center gap-2 py-3 text-sm text-slate-500">

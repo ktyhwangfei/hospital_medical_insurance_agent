@@ -179,10 +179,63 @@ class _FakeSupply:
         self._rows = rows
         self._description = description
         self.last_connection: _FakeConnection | None = None
+        # 保留全部连接：按患者列单时会追加门诊/门特查询，首条 SQL 不再固定在最后一条连接上
+        self.connections: list[_FakeConnection] = []
 
     def connect(self, datasource_id):
         connection = _FakeConnection(self._rows, self._description)
+        self.connections.append(connection)
         self.last_connection = connection
+        return connection
+
+
+class _RoutedCursor:
+    """按 SQL 标记词返回不同行/列，模拟住院 + 门诊多次查询。"""
+
+    def __init__(self, routes):
+        self._routes = routes
+        self._current_rows = []
+        self.description = []
+        self.executed: list[tuple[str, tuple]] = []
+
+    def execute(self, sql, params):
+        self.executed.append((sql, params))
+        for marker, rows, description in self._routes:
+            if marker in sql:
+                self._current_rows = rows
+                self.description = description
+                return
+        self._current_rows = []
+        self.description = []
+
+    def fetchall(self):
+        return self._current_rows
+
+    def fetchone(self):
+        return self._current_rows[0] if self._current_rows else None
+
+
+class _RoutedConnection:
+    def __init__(self, routes):
+        self._routes = routes
+        self.last_cursor: _RoutedCursor | None = None
+
+    def cursor(self):
+        self.last_cursor = _RoutedCursor(self._routes)
+        return self.last_cursor
+
+    def close(self):
+        pass
+
+
+class _RoutedSupply:
+    def __init__(self, routes):
+        self._routes = routes
+        self.connections: list[_RoutedConnection] = []
+
+    def connect(self, datasource_id):
+        connection = _RoutedConnection(self._routes)
+        self.connections.append(connection)
         return connection
 
 
@@ -286,7 +339,7 @@ async def test_list_settlements_by_date_range_with_patient_key_filters_sql():
         "2025-08-01", "2025-08-31", limit=10, patient_key="10065478600S"
     )
 
-    sql, params = supply.last_connection.last_cursor.executed[0]
+    sql, params = supply.connections[0].last_cursor.executed[0]
     assert "AND (r.sfz = ? OR r.kh = ?)" in sql
     assert params == (10, "10065478600S", "10065478600S", "2025-08-01", "2025-08-31")
 
@@ -301,3 +354,143 @@ async def test_list_settlements_by_date_range_without_patient_key_has_no_filter(
     sql, params = supply.last_connection.last_cursor.executed[0]
     assert "r.sfz = ?" not in sql
     assert params == (10, "2025-08-01", "2025-08-31")
+
+
+# ── 门诊单纳入患者时段列表（定位不漏门诊）──────────────────────
+
+_INPATIENT_DESCRIPTION = [
+    ("settlement_id",), ("person_type_code",), ("insurance_type_code",),
+    ("service_type_code",), ("total_amount",), ("settlement_date",),
+]
+_TRADE_DESCRIPTION = [
+    ("T_TradeNo",), ("T_TradeDate",), ("T_FeeAll",), ("P_FundType",),
+    ("reg_djh",), ("reg_yllb",), ("setl_date",), ("setl_amount",),
+]
+_SPECIAL_DESCRIPTION = [
+    ("settlement_id",), ("settlement_date",), ("total_amount",), ("fund_type",),
+]
+
+
+def _routed_outpatient_supply():
+    inpatient_rows = [("1671213", "2", "3", "21", 12386.40, "2025-04-15")]
+    trade_rows = [
+        # 普通门诊：以交易号作为 settlement_id
+        ("011100030X260417004975", "2026-04-17 09:12:00", 88.50, "3", None, None, None, None),
+        # 门特：yllb=12，按登记号 djh 收敛，日期/金额取结算行口径
+        ("011100030X260418008888", "2026-04-18 08:00:00", 30.00, "3", "803", "12", "2026-04-18 10:00:00", 120.00),
+    ]
+    special_rows = [("803", "2026-04-18 10:00:00", 120.00, "3")]
+    return _RoutedSupply([
+        ("FROM yb_brdjxx r", inpatient_rows, _INPATIENT_DESCRIPTION),
+        ("FROM o_Trade t", trade_rows, _TRADE_DESCRIPTION),
+        ("FROM yb_brdjxx b", special_rows, _SPECIAL_DESCRIPTION),
+    ])
+
+
+@pytest.mark.asyncio
+async def test_list_settlements_with_patient_key_includes_outpatient_and_special():
+    supply = _routed_outpatient_supply()
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    items = await provider.list_settlements_by_date_range(
+        "2025-04-01", "2026-04-30", limit=10, patient_key="110102195904070447"
+    )
+
+    by_id = {item.settlement_id: item for item in items}
+    assert set(by_id) == {"1671213", "011100030X260417004975", "803"}
+    assert by_id["011100030X260417004975"].service_type == "门诊"
+    assert by_id["011100030X260417004975"].total_amount == 88.50
+    # 门特按 djh 收敛且去重（交易关联结果与按人直查同一结算行只保留一条）
+    assert by_id["803"].service_type == "门诊特殊病"
+    assert by_id["803"].total_amount == 120.00
+    assert by_id["803"].settlement_date == "2026-04-18 10:00:00"
+    assert by_id["1671213"].service_type == "普通住院"
+    # 时间倒序：门诊/门特在前，住院在后
+    assert [item.settlement_id for item in items] == [
+        "803", "011100030X260417004975", "1671213",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_settlements_with_patient_key_limit_applies_after_merge():
+    supply = _routed_outpatient_supply()
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    items = await provider.list_settlements_by_date_range(
+        "2025-04-01", "2026-04-30", limit=2, patient_key="110102195904070447"
+    )
+
+    assert [item.settlement_id for item in items] == ["803", "011100030X260417004975"]
+
+
+@pytest.mark.asyncio
+async def test_list_settlements_without_patient_key_stays_inpatient_only():
+    supply = _routed_outpatient_supply()
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    items = await provider.list_settlements_by_date_range("2025-04-01", "2026-04-30", limit=10)
+
+    assert [item.settlement_id for item in items] == ["1671213"]
+    # 未提供患者定位时不追加门诊查询（隐私收敛 + 避免院内全量目录）
+    assert len(supply.connections) == 1
+
+
+_TRADE_PATIENT_DESCRIPTION = [
+    ("P_Name",), ("P_Sex",), ("P_Birthday",), ("P_IDNo",), ("P_CardNo",),
+]
+
+
+@pytest.mark.asyncio
+async def test_lookup_patient_falls_back_to_outpatient_trade():
+    from datetime import datetime as dt
+
+    supply = _RoutedSupply([
+        ("FROM yb_brdjxx", [], _LOOKUP_DESCRIPTION),
+        ("FROM o_Trade", [("于婕", "2", dt(1959, 4, 7), "110102195904070447", "C-001")], _TRADE_PATIENT_DESCRIPTION),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    summary = await provider.lookup_patient("110102195904070447")
+
+    assert summary is not None
+    assert summary.name == "于婕"
+    assert summary.id_no_masked == "110***********0447"
+    assert summary.gender == "女"
+    assert summary.birth_date == "1959-04-07"
+    assert summary.card_no == "C-001"
+    # 门诊交易无住院登记号
+    assert summary.registration_id == ""
+
+
+class _RaisingQueryService:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def execute(self, query):
+        raise self.exc
+
+
+@pytest.mark.asyncio
+async def test_outpatient_trade_conversion_error_maps_to_not_found():
+    import pyodbc
+
+    provider = SemanticSettlementDataProvider(
+        service=_RaisingQueryService(pyodbc.DataError("22018", "Conversion failed")),
+        registry=_registry(),
+    )
+
+    with pytest.raises(SettlementNotFoundError):
+        await provider.get_settlement_context("011100030X260417004975")
+
+
+@pytest.mark.asyncio
+async def test_other_data_errors_still_propagate():
+    import pyodbc
+
+    provider = SemanticSettlementDataProvider(
+        service=_RaisingQueryService(pyodbc.DataError("22007", "Invalid datetime")),
+        registry=_registry(),
+    )
+
+    with pytest.raises(pyodbc.DataError):
+        await provider.get_settlement_context("1671213")

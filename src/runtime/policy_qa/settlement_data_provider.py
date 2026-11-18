@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
@@ -111,7 +111,11 @@ class SettlementDataProvider(Protocol):
         ...
 
     async def list_settlements_by_date_range(
-        self, date_from: str, date_to: str, limit: int = 50
+        self,
+        date_from: str,
+        date_to: str,
+        limit: int = 50,
+        patient_key: str | None = None,
     ) -> list[SettlementListItem]:
         """按时间段列出结算单摘要。"""
         ...
@@ -299,7 +303,150 @@ class SemanticSettlementDataProvider:
                     total_amount=float(total) if total is not None else None,
                 )
             )
+
+        # 门诊患者的身份与交易只在 o_Trade，住院链路查不到；仅按人浏览
+        # （patient_key）时追加门诊单，无 patient_key 保持住院-only 不变。
+        if patient_key:
+            items.extend(
+                self._list_outpatient_settlements(date_from, date_to, patient_key)
+            )
+            items.sort(key=lambda item: item.settlement_date, reverse=True)
+            del items[limit:]
         return items
+
+    def _list_outpatient_settlements(
+        self, date_from: str, date_to: str, patient_key: str
+    ) -> list[SettlementListItem]:
+        """按患者身份列门诊交易摘要（#78 口径，逐字移植）。
+
+        经 o_Trade.T_FeeNo ↔ yb_mzjyxx.SETL_ID ↔ yb_brdjxx.djh 判断门特
+        （yllb='12'）：门特粒度是 mzjyxx 的 djh 结算行，以登记号 djh 作为
+        settlement_id、日期/金额取 m.jyrq/m.zje 结算口径；其余普通门诊以
+        交易号 T_TradeNo 保持交易行粒度。
+        """
+        date_to_exclusive = (
+            datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+        sql = """
+        SELECT t.T_TradeNo, t.T_TradeDate, t.T_FeeAll, t.P_FundType,
+               b.djh AS reg_djh, b.yllb AS reg_yllb,
+               m.jyrq AS setl_date, m.zje AS setl_amount
+        FROM o_Trade t
+        LEFT JOIN yb_mzjyxx m ON m.SETL_ID = t.T_FeeNo
+        LEFT JOIN yb_brdjxx b ON b.djh = m.djh
+        WHERE (t.P_IDNo = ? OR t.P_ICNo = ? OR t.P_CardNo = ?)
+          AND t.T_TradeDate >= ? AND t.T_TradeDate < ?
+        ORDER BY t.T_TradeDate DESC
+        """
+        params = (patient_key, patient_key, patient_key, date_from, date_to_exclusive)
+        raw_rows = self._query_rows(sql, params)
+
+        outpatient_items: list[SettlementListItem] = []
+        # 门特按 djh 收敛：多笔 HIS 交易汇入同一门特结算；djh 缺失时按交易行兜底。
+        special_by_key: dict[str, SettlementListItem] = {}
+        for row in raw_rows:
+            trade_date = row.get("T_TradeDate")
+            if trade_date is not None and not isinstance(trade_date, str):
+                trade_date = str(trade_date)[:19]
+            if isinstance(trade_date, str):
+                trade_date = trade_date.replace("T", " ")
+            total = row.get("T_FeeAll")
+            if str(row.get("reg_yllb") or "") == "12":
+                djh = str(row.get("reg_djh") or "")
+                key = djh or f"__trade__{row.get('T_TradeNo') or ''}"
+                setl_date = row.get("setl_date") or trade_date
+                if setl_date is not None and not isinstance(setl_date, str):
+                    setl_date = str(setl_date)[:19]
+                if isinstance(setl_date, str):
+                    setl_date = setl_date.replace("T", " ")
+                setl_amount = row.get("setl_amount")
+                if setl_amount is None:
+                    setl_amount = total
+                existing = special_by_key.get(key)
+                if existing is None or (setl_date or "") > existing.settlement_date:
+                    special_by_key[key] = SettlementListItem(
+                        settlement_id=djh,
+                        settlement_date=setl_date or "",
+                        insurance_type=self._resolve("FUND_TYPE", row.get("P_FundType")),
+                        service_type="门诊特殊病",
+                        total_amount=float(setl_amount) if setl_amount is not None else None,
+                    )
+                continue
+            outpatient_items.append(
+                SettlementListItem(
+                    settlement_id=str(row.get("T_TradeNo") or ""),
+                    settlement_date=trade_date or "",
+                    insurance_type=self._resolve("FUND_TYPE", row.get("P_FundType")),
+                    service_type="门诊",
+                    total_amount=float(total) if total is not None else None,
+                )
+            )
+        # 门特身份在登记表 yb_brdjxx，o_Trade.T_FeeNo 与医保结算号体系不同，
+        # 仅靠交易号关联会整单漏掉门特结算，故按人直查一次。
+        for item in self._list_special_settlements(date_from, date_to, patient_key):
+            existing = special_by_key.get(item.settlement_id)
+            if existing is None or item.settlement_date > existing.settlement_date:
+                special_by_key[item.settlement_id] = item
+        return outpatient_items + list(special_by_key.values())
+
+    def _list_special_settlements(
+        self, date_from: str, date_to: str, patient_key: str
+    ) -> list[SettlementListItem]:
+        """按身份直接列门特结算（yb_brdjxx.sfz/kh × yb_mzjyxx 结算行）。"""
+        date_to_exclusive = (
+            datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+        sql = """
+        SELECT b.djh AS settlement_id, m.jyrq AS settlement_date, m.zje AS total_amount,
+               b.FUND_TYPE AS fund_type
+        FROM yb_brdjxx b
+        INNER JOIN yb_mzjyxx m ON m.djh = b.djh
+        WHERE (b.sfz = ? OR b.kh = ?) AND b.yllb = '12'
+          AND m.jyrq >= ? AND m.jyrq < ?
+        ORDER BY m.jyrq DESC
+        """
+        raw_rows = self._query_rows(sql, (patient_key, patient_key, date_from, date_to_exclusive))
+
+        items: dict[str, SettlementListItem] = {}
+        for row in raw_rows:
+            settlement_date = row.get("settlement_date")
+            if settlement_date is not None and not isinstance(settlement_date, str):
+                settlement_date = str(settlement_date)[:19]
+            if isinstance(settlement_date, str):
+                settlement_date = settlement_date.replace("T", " ")
+            key = str(row.get("settlement_id") or "")
+            if not key or key in items:
+                continue
+            total = row.get("total_amount")
+            items[key] = SettlementListItem(
+                settlement_id=key,
+                settlement_date=settlement_date or "",
+                insurance_type=self._resolve("FUND_TYPE", row.get("fund_type")),
+                service_type="门诊特殊病",
+                total_amount=float(total) if total is not None else None,
+            )
+        return list(items.values())
+
+    def _query_rows(self, sql: str, params: tuple) -> list[dict]:
+        """执行只读直连查询并返回列名映射行（连接/超时统一映射为数据源不可用）。"""
+        connection = None
+        try:
+            connection = self._connect("bjybdb")
+            cursor = connection.cursor()
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            columns = [item[0] for item in cursor.description] if cursor.description else []
+            return [dict(zip(columns, row)) for row in rows]
+        except (ConnectionError, TimeoutError) as exc:
+            raise SettlementDataUnavailableError(str(exc)) from exc
+        except pyodbc.Error as exc:
+            sqlstate = str(exc.args[0]) if exc.args else ""
+            if sqlstate.startswith("08") or sqlstate in {"HYT00", "HYT01"}:
+                raise SettlementDataUnavailableError(str(exc)) from exc
+            raise
+        finally:
+            if connection:
+                connection.close()
 
     async def lookup_patient(self, key: str) -> PatientSummary | None:
         """按身份证号（sfz）或卡号（kh）定位患者，返回脱敏摘要。
@@ -339,7 +486,28 @@ class SemanticSettlementDataProvider:
                 connection.close()
 
         if row is None:
-            return None
+            # 回退 o_Trade：门诊患者身份只在门诊交易主表，yb_brdjxx（住院登记）
+            # 按 sfz/kh 命中 0 行；按身份列取最近一笔交易组装脱敏摘要（#78 口径）。
+            fallback_sql = """
+            SELECT TOP (1) P_Name, P_Sex, P_Birthday, P_IDNo, P_CardNo
+            FROM o_Trade
+            WHERE (P_IDNo = ? OR P_ICNo = ? OR P_CardNo = ?)
+            ORDER BY T_TradeDate DESC
+            """
+            rows = self._query_rows(fallback_sql, (text, text, text))
+            if not rows:
+                return None
+            trade = rows[0]
+            birth = trade.get("P_Birthday")
+            return PatientSummary(
+                card_no=str(trade.get("P_CardNo") or ""),
+                id_no_masked=mask_id_no(str(trade.get("P_IDNo") or "")),
+                name=str(trade.get("P_Name") or ""),
+                gender=_GENDER_MAP.get(str(trade.get("P_Sex") or ""), str(trade.get("P_Sex") or "")),
+                birth_date=str(birth)[:10] if birth is not None else "",
+                # 门诊交易无住院登记号
+                registration_id="",
+            )
 
         card_no, id_no, name, gender_code, birth, registration_id = row
         birth_str = str(birth)[:10] if birth is not None else ""
@@ -359,6 +527,16 @@ class SemanticSettlementDataProvider:
             )
         except (ConnectionError, TimeoutError) as exc:
             raise SettlementDataUnavailableError(str(exc)) from exc
+        except pyodbc.DataError as exc:
+            # 门诊普通单号是 o_Trade 交易号（字母数字），绑定到住院登记号的
+            # 数字列会报 22018 转换失败：该单不在住院语义模型内，按未找到
+            # 结算记录诚实告知，避免误报为数据源不可用（503）。
+            sqlstate = str(exc.args[0]) if exc.args else ""
+            if sqlstate.startswith("22018"):
+                raise SettlementNotFoundError(
+                    f"住院结算模型中无此结算单: anchor={query.scope.anchor.value}"
+                ) from exc
+            raise
         except pyodbc.Error as exc:
             sqlstate = str(exc.args[0]) if exc.args else ""
             if sqlstate.startswith("08") or sqlstate in {"HYT00", "HYT01"}:

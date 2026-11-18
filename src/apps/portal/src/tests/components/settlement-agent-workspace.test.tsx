@@ -38,6 +38,15 @@ const RAW_ITEMS = [
     total_amount: 2030.0,
     coverage_status: 'complete',
   },
+  {
+    settlement_id: 'OUTP-2024-1205-001',
+    settlement_date: '2024-12-05 10:30:00',
+    person_type: '',
+    insurance_type: '城镇职工',
+    service_type: '门诊',
+    total_amount: 88.5,
+    coverage_status: 'complete',
+  },
 ]
 
 function makeExplanationPayload(settlementId: string, total: number) {
@@ -246,5 +255,50 @@ describe('SettlementAgentWorkspace（Issue #87 两单选择与对比）', () => 
       expect(screen.queryByTestId('settlement-result-block')).not.toBeInTheDocument()
     })
     expect(screen.getByTestId('patient-locate-form')).toBeInTheDocument()
+  })
+
+  it('门诊单选入右侧解释区给出诚实说明，不请求住院解释端点', async () => {
+    const fetchMock = stubFetch()
+    render(<SettlementAgentWorkspace />)
+    await locatePatient()
+
+    fireEvent.click(screen.getByTestId('settlement-item-OUTP-2024-1205-001'))
+    await waitFor(() => {
+      expect(screen.getByTestId('settlement-outpatient-note')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('settlement-outpatient-note')).toHaveTextContent('暂只覆盖住院结算单')
+    expect(screen.queryByTestId('settlement-result-block')).not.toBeInTheDocument()
+    const explanationCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes('/policy-qa/settlement-explanation'),
+    )
+    expect(explanationCalls).toHaveLength(0)
+  })
+
+  it('含门诊单的两张提问不做住院对比，提示分开提问', async () => {
+    const fetchMock = stubFetch()
+    render(<SettlementAgentWorkspace />)
+    await locatePatient()
+
+    fireEvent.click(screen.getByTestId('settlement-item-803'))
+    fireEvent.click(screen.getByTestId('settlement-item-OUTP-2024-1205-001'))
+    await waitFor(() => {
+      expect(screen.getByTestId('settlement-compare-tabs')).toBeInTheDocument()
+    })
+    // 默认激活最新一张：门诊单，右侧为门诊说明
+    expect(screen.getByTestId('settlement-outpatient-note')).toBeInTheDocument()
+    expect(screen.getByTestId('settlement-compare-hint')).toHaveTextContent('对比暂仅支持两张住院结算单')
+
+    fireEvent.change(screen.getByRole('textbox', { name: '政策问题' }), {
+      target: { value: '两次结算为什么不一样' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/当前对比仅支持两张住院结算单/)).toBeInTheDocument()
+    })
+    const compareCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes('compare_with='),
+    )
+    expect(compareCalls).toHaveLength(0)
   })
 })
