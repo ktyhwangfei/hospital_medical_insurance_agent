@@ -21,6 +21,28 @@ const RAW_ITEMS = [
   },
 ]
 
+const RAW_ITEMS_THREE = [
+  RAW_ITEMS[0],
+  {
+    settlement_id: '1671200',
+    settlement_date: '2026-09-10',
+    person_type: '退休人员',
+    insurance_type: '城镇职工',
+    service_type: '普通住院',
+    total_amount: 8592.0,
+    coverage_status: 'complete',
+  },
+  {
+    settlement_id: '1671190',
+    settlement_date: '2026-09-02',
+    person_type: '退休人员',
+    insurance_type: '城镇职工',
+    service_type: '普通住院',
+    total_amount: 3155.66,
+    coverage_status: 'complete',
+  },
+]
+
 const RAW_PATIENT = {
   card_no: '10065478600S',
   id_no_masked: '110***********0937',
@@ -65,7 +87,7 @@ describe('SettlementTimeBrowser（患者定位 + 时间浏览）', () => {
   it('未定位患者时只显示定位表单与引导，不请求列表', () => {
     const fetchMock = stubFetch({ '/policy-qa/settlements': RAW_ITEMS })
 
-    render(<SettlementTimeBrowser selectedId={null} onSelect={() => {}} />)
+    render(<SettlementTimeBrowser selectedIds={[]} onToggle={() => {}} />)
 
     expect(screen.getByTestId('patient-locate-form')).toBeInTheDocument()
     expect(screen.getByText('先定位患者，再看 TA 的时段结算单。')).toBeInTheDocument()
@@ -83,8 +105,8 @@ describe('SettlementTimeBrowser（患者定位 + 时间浏览）', () => {
     const onPatientChange = vi.fn()
     render(
       <SettlementTimeBrowser
-        selectedId={null}
-        onSelect={() => {}}
+        selectedIds={[]}
+        onToggle={() => {}}
         onPatientChange={onPatientChange}
       />,
     )
@@ -111,26 +133,56 @@ describe('SettlementTimeBrowser（患者定位 + 时间浏览）', () => {
     expect(screen.getByText('12,386.40')).toBeInTheDocument()
   })
 
-  it('点击结算单行触发 onSelect(settlementId)', async () => {
+  it('点击结算单行触发 onToggle（携带整行摘要）', async () => {
     stubFetch({
       '/policy-qa/patient-lookup': RAW_PATIENT,
       '/policy-qa/settlements': RAW_ITEMS,
     })
-    const onSelect = vi.fn()
-    render(<SettlementTimeBrowser selectedId={null} onSelect={onSelect} />)
+    const onToggle = vi.fn()
+    render(<SettlementTimeBrowser selectedIds={[]} onToggle={onToggle} />)
 
     await locatePatient()
     await waitFor(() => {
       expect(screen.getByTestId('settlement-item-1671213')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByTestId('settlement-item-1671213'))
-    expect(onSelect).toHaveBeenCalledWith('1671213')
+    expect(onToggle).toHaveBeenCalledWith(expect.objectContaining({ settlementId: '1671213' }))
+  })
+
+  it('已选两张时第三张被拦截并提示，取消选择始终允许（Issue #87 上限两张）', async () => {
+    stubFetch({
+      '/policy-qa/patient-lookup': RAW_PATIENT,
+      '/policy-qa/settlements': RAW_ITEMS_THREE,
+    })
+    const onToggle = vi.fn()
+    render(
+      <SettlementTimeBrowser
+        selectedIds={['1671213', '1671200']}
+        onToggle={onToggle}
+      />,
+    )
+
+    await locatePatient()
+    await waitFor(() => {
+      expect(screen.getByTestId('settlement-item-1671190')).toBeInTheDocument()
+    })
+    // 已选计数展示
+    expect(screen.getByTestId('settlement-selected-count')).toHaveTextContent('已选 2/2 张')
+
+    // 第三张：拦截 + 提示，不回调
+    fireEvent.click(screen.getByTestId('settlement-item-1671190'))
+    expect(onToggle).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('最多同时选择 2 张结算单')
+
+    // 取消已选的一张：始终放行
+    fireEvent.click(screen.getByTestId('settlement-item-1671200'))
+    expect(onToggle).toHaveBeenCalledWith(expect.objectContaining({ settlementId: '1671200' }))
   })
 
   it('定位未命中显示错误提示，不进入患者卡', async () => {
     stubFetch({ '/policy-qa/patient-lookup': 404 })
 
-    render(<SettlementTimeBrowser selectedId={null} onSelect={() => {}} />)
+    render(<SettlementTimeBrowser selectedIds={[]} onToggle={() => {}} />)
 
     fireEvent.change(screen.getByRole('textbox', { name: '患者身份证号或卡号' }), {
       target: { value: 'NOT-EXIST' },
@@ -149,7 +201,7 @@ describe('SettlementTimeBrowser（患者定位 + 时间浏览）', () => {
       '/policy-qa/settlements': 503,
     })
 
-    render(<SettlementTimeBrowser selectedId={null} onSelect={() => {}} />)
+    render(<SettlementTimeBrowser selectedIds={[]} onToggle={() => {}} />)
 
     await locatePatient()
     await waitFor(() => {
@@ -163,7 +215,7 @@ describe('SettlementTimeBrowser（患者定位 + 时间浏览）', () => {
       '/policy-qa/settlements': [],
     })
 
-    render(<SettlementTimeBrowser selectedId={null} onSelect={() => {}} />)
+    render(<SettlementTimeBrowser selectedIds={[]} onToggle={() => {}} />)
 
     await locatePatient()
     await waitFor(() => {
@@ -179,8 +231,8 @@ describe('SettlementTimeBrowser（患者定位 + 时间浏览）', () => {
     const onPatientChange = vi.fn()
     render(
       <SettlementTimeBrowser
-        selectedId={null}
-        onSelect={() => {}}
+        selectedIds={[]}
+        onToggle={() => {}}
         onPatientChange={onPatientChange}
       />,
     )
@@ -198,7 +250,7 @@ describe('SettlementTimeBrowser（患者定位 + 时间浏览）', () => {
 
   it('空输入禁用定位按钮', () => {
     stubFetch({})
-    render(<SettlementTimeBrowser selectedId={null} onSelect={() => {}} />)
+    render(<SettlementTimeBrowser selectedIds={[]} onToggle={() => {}} />)
 
     expect(screen.getByRole('button', { name: '定位' })).toBeDisabled()
   })

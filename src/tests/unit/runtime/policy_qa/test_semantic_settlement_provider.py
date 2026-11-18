@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from src.runtime.policy_qa.settlement_data_provider import (
+    _SPECIAL_BILL_FIELDS,
+    _TRADE_BILL_FIELDS,
     SemanticSettlementDataProvider,
     SettlementListItem,
     SettlementNotFoundError,
@@ -179,10 +181,63 @@ class _FakeSupply:
         self._rows = rows
         self._description = description
         self.last_connection: _FakeConnection | None = None
+        # 保留全部连接：按患者列单时会追加门诊/门特查询，首条 SQL 不再固定在最后一条连接上
+        self.connections: list[_FakeConnection] = []
 
     def connect(self, datasource_id):
         connection = _FakeConnection(self._rows, self._description)
+        self.connections.append(connection)
         self.last_connection = connection
+        return connection
+
+
+class _RoutedCursor:
+    """按 SQL 标记词返回不同行/列，模拟住院 + 门诊多次查询。"""
+
+    def __init__(self, routes):
+        self._routes = routes
+        self._current_rows = []
+        self.description = []
+        self.executed: list[tuple[str, tuple]] = []
+
+    def execute(self, sql, params):
+        self.executed.append((sql, params))
+        for marker, rows, description in self._routes:
+            if marker in sql:
+                self._current_rows = rows
+                self.description = description
+                return
+        self._current_rows = []
+        self.description = []
+
+    def fetchall(self):
+        return self._current_rows
+
+    def fetchone(self):
+        return self._current_rows[0] if self._current_rows else None
+
+
+class _RoutedConnection:
+    def __init__(self, routes):
+        self._routes = routes
+        self.last_cursor: _RoutedCursor | None = None
+
+    def cursor(self):
+        self.last_cursor = _RoutedCursor(self._routes)
+        return self.last_cursor
+
+    def close(self):
+        pass
+
+
+class _RoutedSupply:
+    def __init__(self, routes):
+        self._routes = routes
+        self.connections: list[_RoutedConnection] = []
+
+    def connect(self, datasource_id):
+        connection = _RoutedConnection(self._routes)
+        self.connections.append(connection)
         return connection
 
 
@@ -286,7 +341,7 @@ async def test_list_settlements_by_date_range_with_patient_key_filters_sql():
         "2025-08-01", "2025-08-31", limit=10, patient_key="10065478600S"
     )
 
-    sql, params = supply.last_connection.last_cursor.executed[0]
+    sql, params = supply.connections[0].last_cursor.executed[0]
     assert "AND (r.sfz = ? OR r.kh = ?)" in sql
     assert params == (10, "10065478600S", "10065478600S", "2025-08-01", "2025-08-31")
 
@@ -301,3 +356,318 @@ async def test_list_settlements_by_date_range_without_patient_key_has_no_filter(
     sql, params = supply.last_connection.last_cursor.executed[0]
     assert "r.sfz = ?" not in sql
     assert params == (10, "2025-08-01", "2025-08-31")
+
+
+# ── 门诊单纳入患者时段列表（定位不漏门诊）──────────────────────
+
+_INPATIENT_DESCRIPTION = [
+    ("settlement_id",), ("person_type_code",), ("insurance_type_code",),
+    ("service_type_code",), ("total_amount",), ("settlement_date",),
+]
+_TRADE_DESCRIPTION = [
+    ("T_TradeNo",), ("T_TradeDate",), ("T_FeeAll",), ("P_FundType",),
+    ("reg_djh",), ("reg_yllb",), ("setl_date",), ("setl_amount",),
+]
+_SPECIAL_DESCRIPTION = [
+    ("settlement_id",), ("settlement_date",), ("total_amount",), ("fund_type",),
+]
+
+
+def _routed_outpatient_supply():
+    inpatient_rows = [("1671213", "2", "3", "21", 12386.40, "2025-04-15")]
+    trade_rows = [
+        # 普通门诊：以交易号作为 settlement_id
+        ("011100030X260417004975", "2026-04-17 09:12:00", 88.50, "3", None, None, None, None),
+        # 门特：yllb=12，按登记号 djh 收敛，日期/金额取结算行口径
+        ("011100030X260418008888", "2026-04-18 08:00:00", 30.00, "3", "803", "12", "2026-04-18 10:00:00", 120.00),
+    ]
+    special_rows = [("803", "2026-04-18 10:00:00", 120.00, "3")]
+    return _RoutedSupply([
+        ("FROM yb_brdjxx r", inpatient_rows, _INPATIENT_DESCRIPTION),
+        ("FROM o_Trade t", trade_rows, _TRADE_DESCRIPTION),
+        ("FROM yb_brdjxx b", special_rows, _SPECIAL_DESCRIPTION),
+    ])
+
+
+@pytest.mark.asyncio
+async def test_list_settlements_with_patient_key_includes_outpatient_and_special():
+    supply = _routed_outpatient_supply()
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    items = await provider.list_settlements_by_date_range(
+        "2025-04-01", "2026-04-30", limit=10, patient_key="110102195904070447"
+    )
+
+    by_id = {item.settlement_id: item for item in items}
+    assert set(by_id) == {"1671213", "011100030X260417004975", "803"}
+    assert by_id["011100030X260417004975"].service_type == "门诊"
+    assert by_id["011100030X260417004975"].total_amount == 88.50
+    # 门特按 djh 收敛且去重（交易关联结果与按人直查同一结算行只保留一条）
+    assert by_id["803"].service_type == "门诊特殊病"
+    assert by_id["803"].total_amount == 120.00
+    assert by_id["803"].settlement_date == "2026-04-18 10:00:00"
+    assert by_id["1671213"].service_type == "普通住院"
+    # 时间倒序：门诊/门特在前，住院在后
+    assert [item.settlement_id for item in items] == [
+        "803", "011100030X260417004975", "1671213",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_settlements_with_patient_key_limit_applies_after_merge():
+    supply = _routed_outpatient_supply()
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    items = await provider.list_settlements_by_date_range(
+        "2025-04-01", "2026-04-30", limit=2, patient_key="110102195904070447"
+    )
+
+    assert [item.settlement_id for item in items] == ["803", "011100030X260417004975"]
+
+
+@pytest.mark.asyncio
+async def test_list_settlements_without_patient_key_stays_inpatient_only():
+    supply = _routed_outpatient_supply()
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    items = await provider.list_settlements_by_date_range("2025-04-01", "2026-04-30", limit=10)
+
+    assert [item.settlement_id for item in items] == ["1671213"]
+    # 未提供患者定位时不追加门诊查询（隐私收敛 + 避免院内全量目录）
+    assert len(supply.connections) == 1
+
+
+_TRADE_PATIENT_DESCRIPTION = [
+    ("P_Name",), ("P_Sex",), ("P_Birthday",), ("P_IDNo",), ("P_CardNo",),
+]
+
+
+@pytest.mark.asyncio
+async def test_lookup_patient_falls_back_to_outpatient_trade():
+    from datetime import datetime as dt
+
+    supply = _RoutedSupply([
+        ("FROM yb_brdjxx", [], _LOOKUP_DESCRIPTION),
+        ("FROM o_Trade", [("于婕", "2", dt(1959, 4, 7), "110102195904070447", "C-001")], _TRADE_PATIENT_DESCRIPTION),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    summary = await provider.lookup_patient("110102195904070447")
+
+    assert summary is not None
+    assert summary.name == "于婕"
+    assert summary.id_no_masked == "110***********0447"
+    assert summary.gender == "女"
+    assert summary.birth_date == "1959-04-07"
+    assert summary.card_no == "C-001"
+    # 门诊交易无住院登记号
+    assert summary.registration_id == ""
+
+
+class _RaisingQueryService:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def execute(self, query):
+        raise self.exc
+
+
+@pytest.mark.asyncio
+async def test_outpatient_trade_conversion_error_maps_to_not_found():
+    import pyodbc
+
+    provider = SemanticSettlementDataProvider(
+        service=_RaisingQueryService(pyodbc.DataError("22018", "Conversion failed")),
+        registry=_registry(),
+    )
+
+    with pytest.raises(SettlementNotFoundError):
+        await provider.get_settlement_context("011100030X260417004975")
+
+
+@pytest.mark.asyncio
+async def test_other_data_errors_still_propagate():
+    import pyodbc
+
+    provider = SemanticSettlementDataProvider(
+        service=_RaisingQueryService(pyodbc.DataError("22007", "Invalid datetime")),
+        registry=_registry(),
+    )
+
+    with pytest.raises(pyodbc.DataError):
+        await provider.get_settlement_context("1671213")
+
+
+# ── 单张结算单费用构成 + 费用明细（右侧栏）──────────────────────
+
+_TRADE_BILL_DESCRIPTION = [("T_TradeDate",)] + [
+    (col,) for col, _ in _TRADE_BILL_FIELDS
+]
+_SPECIAL_BILL_DESCRIPTION = [("jyrq",)] + [
+    (col,) for col in dict.fromkeys(c for _, _, c in _SPECIAL_BILL_FIELDS if c)
+]
+_FEE_TABLE_DESCRIPTION = [
+    ("xmdm",), ("xmmc",), ("xmlb",), ("sl",), ("dj",), ("zje",), ("ybnje",), ("ybwje",),
+]
+_O_FEE_ITEM_DESCRIPTION = [
+    ("ItemCode",), ("ItemName",), ("ItemType",), ("Count",),
+    ("UnitPrice",), ("Fee",), ("FeeIn",), ("FeeOut",),
+]
+
+
+def _row(description, **values):
+    return tuple(values.get(name) for (name,) in description)
+
+
+def _trade_bill_row(**overrides):
+    base = dict(
+        T_TradeDate="2026-04-17 09:12:00",
+        T_FeeAll=88.50, T_SelfPayAll=18.50, T_FeeIn=80, T_FeeOut=8.50,
+        T_FirstPay=0, T_SelfPay1=0, T_SelfPay2=0, T_BeyondBig=0,
+        T_FundPay=70, T_PersonCountPay=10, T_BigPay=0, T_JCPay=0,
+        T_CashPay=8.50, T_BCPay=0, T_BigillPay=0, NT_CivilPay=0,
+        RETIRE_OFFICER_PAY=0, T_OfficalPay=0,
+    )
+    base.update(overrides)
+    return _row(_TRADE_BILL_DESCRIPTION, **base)
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_for_outpatient_trade_reads_composition_and_fee_items():
+    supply = _RoutedSupply([
+        (
+            "FROM o_Trade WHERE T_TradeNo",
+            [_trade_bill_row()],
+            _TRADE_BILL_DESCRIPTION,
+        ),
+        (
+            "FROM o_FeeItem",
+            [("310100001", "负压吸引（中心泵）", 1, 1, 6.0, 6.0, 6.0, 0.0)],
+            _O_FEE_ITEM_DESCRIPTION,
+        ),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    bill = await provider.get_settlement_bill("011100030X260417004975", "门诊")
+
+    assert bill.service_type == "门诊"
+    assert bill.settlement_date == "2026-04-17 09:12:00"
+    fields = {item.key: item for item in bill.fields}
+    assert fields["T_FeeAll"].label == "费用总金额"
+    assert fields["T_FeeAll"].amount == "88.50"
+    assert fields["T_FundPay"].amount == "70.00"
+    assert fields["T_PersonCountPay"].label == "当次个人帐户支付金额"
+
+    assert bill.fee_items_state == "complete"
+    assert len(bill.fee_items) == 1
+    item = bill.fee_items[0]
+    assert item.item_name == "负压吸引（中心泵）"
+    assert item.item_type == "诊疗项目"
+    assert item.quantity == "1"
+    assert item.unit_price == "6.00"
+    assert item.total_amount == "6.00"
+    assert item.insurance_outer == "0.00"
+    sql, params = supply.connections[0].last_cursor.executed[0]
+    assert params == ("011100030X260417004975",)
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_for_special_sums_cash_and_account_payment():
+    supply = _RoutedSupply([
+        (
+            "FROM yb_mzjyxx WHERE djh",
+            [_row(
+                _SPECIAL_BILL_DESCRIPTION,
+                jyrq="2026-04-18 10:00:00",
+                zje=120.0, tsbybn=110.0, tsbybw=10.0, ptybn=0.0, ptybw=0.0,
+                ybnqfje=0.0, grziftw=2.0, grzif1=3.0, tczhf=100.0, tczif=5.0,
+                degwyzhf=0.0, degwyzif=0.0, bczhf=0.0, jczhf=0.0,
+                BIG_ILL_PAY=0.0, CIVIL_IN=0.0, zhzf=10.0, xjzf=5.5,
+                RETIRE_OFFICER_PAY=0.0, gfylbchbx=0.0,
+                FEEIN_DB_PAY=0.0, FEEOUT_DB_PAY=0.0,
+                FEEIN_MAF_PAY=0.0, FEEOUT_MAF_PAY=0.0,
+            )],
+            _SPECIAL_BILL_DESCRIPTION,
+        ),
+        (
+            "FROM yb_mzfymx",
+            [("X001", "门特用药", "0", 2, 3.5, 7.0, 7.0, 0.0)],
+            _FEE_TABLE_DESCRIPTION,
+        ),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    bill = await provider.get_settlement_bill("803", "门诊特殊病")
+
+    assert bill.service_type == "门诊特殊病"
+    fields = {item.key: item for item in bill.fields}
+    assert fields["personal_total_pay"].label == "个人支付总金额"
+    assert fields["personal_total_pay"].amount == "15.50"
+    assert fields["zje"].amount == "120.00"
+    assert bill.fee_items[0].item_type == "药品"
+    assert bill.fee_items[0].quantity == "2"
+    assert bill.fee_items[0].total_amount == "7.00"
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_for_inpatient_uses_semantic_context_and_fee_table():
+    service = _FakeQueryService(_result(rows=[{
+        "total_amount": 3000,
+        "medical_insurance_inner_amount": 2600,
+        "deductible": 500,
+        "basic_pooling_payment": 1800,
+        "basic_pooling_self_pay": 300,
+        "large_amount_payment": 100,
+        "large_amount_self_pay": 50,
+        "personal_total_pay": 1100,
+        "yearly_cycle_count": 1,
+        "person_type": "2",
+        "insurance_type": "3",
+        "service_type": "21",
+    }]))
+    supply = _RoutedSupply([
+        (
+            "FROM yb_zyfymx",
+            [("Z001", "住院用药", "0", 1, 100.0, 100.0, 90.0, 10.0)],
+            _FEE_TABLE_DESCRIPTION,
+        ),
+    ])
+    provider = SemanticSettlementDataProvider(
+        service=service, supply=supply, registry=_registry()
+    )
+
+    bill = await provider.get_settlement_bill("1671213", "普通住院")
+
+    assert bill.service_type == "普通住院"
+    assert bill.settlement_date == "2025-04-15"
+    fields = {item.key: item for item in bill.fields}
+    assert fields["total_amount"].label == "住院总费用"
+    assert fields["total_amount"].amount == "3000.00"
+    assert fields["basic_pooling_payment"].amount == "1800.00"
+    assert bill.fee_items[0].insurance_inner == "90.00"
+    assert bill.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_missing_trade_row_raises_not_found():
+    supply = _RoutedSupply([
+        ("FROM o_Trade WHERE T_TradeNo", [], _TRADE_BILL_DESCRIPTION),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    with pytest.raises(SettlementNotFoundError):
+        await provider.get_settlement_bill("011100030X260417004975", "门诊")
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_without_fee_items_reports_missing_state():
+    supply = _RoutedSupply([
+        ("FROM o_Trade WHERE T_TradeNo", [_trade_bill_row()], _TRADE_BILL_DESCRIPTION),
+        ("FROM o_FeeItem", [], _O_FEE_ITEM_DESCRIPTION),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    bill = await provider.get_settlement_bill("011100030X260417004975", "门诊")
+
+    assert bill.fee_items == []
+    assert bill.fee_items_state == "missing"

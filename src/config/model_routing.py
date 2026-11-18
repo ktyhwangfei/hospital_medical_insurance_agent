@@ -43,6 +43,8 @@ ROUTING_TABLE: dict = {
     ("skill_routing", "llm"): "deepseek-chat",
     ("policy_qa", "llm"): "deepseek-chat",
     ("fee_explanation", "llm"): "deepseek-chat",
+    # 两张结算单费用分解对比解释（Issue #87 门诊/门特）
+    ("settlement_compare_answer", "llm"): "deepseek-chat",
     ("policy_fact_extraction", "llm"): "deepseek-chat",
     # 健康运营场景（运营周报摘要 #40 / LLM 智能诊断 #51）
     ("ops_weekly_summary", "llm"): "deepseek-chat",

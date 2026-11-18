@@ -51,7 +51,7 @@ export default function PolicySourcesDialog({ citations }: PolicySourcesDialogPr
     <>
       <Button type="button" variant="outline" onClick={() => setOpen(true)}>
         <BookOpenText aria-hidden />
-        查看 {groups.length} 篇政策来源（{citations.length} 条命中单元）
+        查看 {groups.length} 篇政策来源（{citations.length} 条依据）
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
@@ -61,7 +61,7 @@ export default function PolicySourcesDialog({ citations }: PolicySourcesDialogPr
           <DialogHeader>
             <DialogTitle>政策来源</DialogTitle>
             <DialogDescription>
-              向量检索命中的是语义单元，同一篇文档可能命中多条，已按文档合并。
+              政策问答展示命中的条文摘录；结算解释仅列出本单采用的比例档、适用条件与来源登记。
             </DialogDescription>
           </DialogHeader>
           <ol className="space-y-3">
