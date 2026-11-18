@@ -323,7 +323,7 @@ describe('SettlementAgentWorkspace（Issue #87 两单选择与对比）', () => 
     expect(explanationCalls).toHaveLength(0)
   })
 
-  it('含门诊单的两张提问不做住院对比，提示分开提问', async () => {
+  it('含门诊单的两张提问基于两张费用分解对比作答，不再拦截', async () => {
     const fetchMock = stubFetch()
     render(<SettlementAgentWorkspace />)
     await locatePatient()
@@ -340,7 +340,9 @@ describe('SettlementAgentWorkspace（Issue #87 两单选择与对比）', () => 
       )
     })
     expect(screen.queryByTestId('settlement-result-block')).not.toBeInTheDocument()
-    expect(screen.getByTestId('settlement-compare-hint')).toHaveTextContent('对比暂仅支持两张住院结算单')
+    const hint = screen.getByTestId('settlement-compare-hint')
+    expect(hint).toHaveTextContent('按两张对比作答')
+    expect(hint).not.toHaveTextContent('对比暂仅支持')
 
     fireEvent.change(screen.getByRole('textbox', { name: '政策问题' }), {
       target: { value: '两次结算为什么不一样' },
@@ -348,8 +350,12 @@ describe('SettlementAgentWorkspace（Issue #87 两单选择与对比）', () => 
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await waitFor(() => {
-      expect(screen.getByText(/当前对比仅支持两张住院结算单/)).toBeInTheDocument()
+      expect(screen.getByText(/【费用构成差异】/)).toBeInTheDocument()
     })
+    // 以较早的住院单 803 为基准，逐单对照门诊单
+    expect(screen.getByText(/以较早的结算单 803/)).toBeInTheDocument()
+    expect(screen.getAllByText(/结算单 OUTP-2024-1205-001/).length).toBeGreaterThan(0)
+    // 门诊单不走住院对比端点
     const compareCalls = fetchMock.mock.calls.filter((call) =>
       String(call[0]).includes('compare_with='),
     )

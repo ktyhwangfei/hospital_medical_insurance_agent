@@ -14,6 +14,7 @@ import PolicyMessageList from '@/components/policy-qa/policy-message-list'
 import SettlementBillPane from '@/components/policy-qa/settlement-bill-pane'
 import SettlementResultBlock from '@/components/policy-qa/settlement-result-block'
 import SettlementTimeBrowser from '@/components/policy-qa/settlement-time-browser'
+import { buildBillCompareMessage } from '@/lib/policy-qa-bill-compare'
 import { toPolicyQAResult, type PolicyQAResult } from '@/lib/policy-qa-stream'
 import {
   parsePolicyQACommand,
@@ -33,8 +34,9 @@ import { usePolicyQAStream } from '@/lib/use-policy-qa-stream'
  * 点单看费用构成富块 → 可针对此单追问（走 stream，已锚定）。
  *
  * Issue #87 第一批：点选扩展为最多两张——选中两张后右侧按时间生成两个
- * tab（默认最新一张，可切换），此时提问按两张单对比作答（复用既有
- * `GET /policy-qa/settlement-explanation?compare_with=` 能力，不做金额加总）。
+ * tab（默认最新一张，可切换），此时提问按两张单对比作答，不做金额加总：
+ * 住院-住院复用 `GET /policy-qa/settlement-explanation?compare_with=`；
+ * 含门诊/门特的两张走两张费用分解的确定性核对（门诊不在住院语义模型内）。
  * 布局：选中后两列——左列患者定位/时段列表/对话流，右列解释区（一张或
  * 两张同一位置，两张时出 tab），宽屏 sticky（用户现场确认口径）。
  */
@@ -176,6 +178,18 @@ export default function SettlementAgentWorkspace({
     }
   }, [])
 
+  // 两张对比时按需取费用分解（优先用点选时已缓存的结果）
+  const loadBillForCompare = useCallback(
+    async (item: SettlementListItemDTO): Promise<SettlementBillDTO> => {
+      const cached = bills[item.settlementId]
+      if (cached?.status === 'ready' && cached.bill) return cached.bill
+      const bill = await fetchSettlementBill(item.settlementId, item.serviceType)
+      setBills((prev) => ({ ...prev, [item.settlementId]: { status: 'ready', bill } }))
+      return bill
+    },
+    [bills],
+  )
+
   // 点选/取消点选（Issue #87：最多两张，上限拦截在列表组件内）
   const handleToggle = useCallback(
     (item: SettlementListItemDTO) => {
@@ -252,28 +266,30 @@ export default function SettlementAgentWorkspace({
     if (command.kind === 'question' && selectedItems.length === 2) {
       const [older, newer] = sortBySettlementDate(selectedItems)
       stream.appendLocalMessage({ role: 'user', content: command.question })
-      if (selectedItems.some(isOutpatient)) {
-        // 既有对比链路只覆盖住院费用构成；门诊单不得塞进住院对比逻辑
-        stream.appendLocalMessage({
-          role: 'assistant',
-          content:
-            '两张单中含门诊结算单，当前对比仅支持两张住院结算单。请先取消门诊单再对比；门诊费用问题可只选该门诊单后在对话中直接提问。',
-          answerStatus: 'unavailable',
-          uncertainties: ['门诊与住院结算单的对比未生成，未核对任何金额。'],
-        })
-        return
-      }
+      const hasOutpatient = selectedItems.some(isOutpatient)
       setComparing(true)
       try {
-        const result = await fetchSettlementExplanation(older.settlementId, {
-          compareWith: newer.settlementId,
-          question: command.question,
-        })
-        stream.appendLocalMessage(toCompareMessage(result))
+        if (hasOutpatient) {
+          // 门诊/门特不在住院语义模型内，后端对比端点无法解释：
+          // 直接基于两张费用分解做确定性核对，仍按两张单作答
+          const [olderBill, newerBill] = await Promise.all([
+            loadBillForCompare(older),
+            loadBillForCompare(newer),
+          ])
+          stream.appendLocalMessage(
+            buildBillCompareMessage({ older, newer, olderBill, newerBill }),
+          )
+        } else {
+          const result = await fetchSettlementExplanation(older.settlementId, {
+            compareWith: newer.settlementId,
+            question: command.question,
+          })
+          stream.appendLocalMessage(toCompareMessage(result))
+        }
       } catch (e) {
         stream.appendLocalMessage({
           role: 'assistant',
-          content: `两张结算单对比查询失败：${e instanceof Error ? e.message : '服务暂时不可用'}。请稍后重试，或先取消一张只看单笔解释。`,
+          content: `两张结算单对比失败：${e instanceof Error ? e.message : '服务暂时不可用'}。请稍后重试，或先取消一张只看单笔解释。`,
           answerStatus: 'unavailable',
           uncertainties: ['对比结果未生成，未核对任何金额。'],
         })
@@ -460,9 +476,7 @@ export default function SettlementAgentWorkspace({
               data-testid="settlement-compare-hint"
               className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs leading-5 text-slate-500"
             >
-              {selectedItems.some(isOutpatient)
-                ? '已选两张，其中含门诊结算单。对比暂仅支持两张住院结算单；门诊费用请只选该门诊单后在对话中直接提问。'
-                : `已选两张结算单，提问将按两张对比作答（以较早一张 ${comparingBaseline.settlementDate || comparingBaseline.settlementId} 为基准，金额逐单呈现不加总）；只想问其中一张，先取消另一张的选择。`}
+              {`已选两张结算单，提问将按两张对比作答（以较早一张 ${comparingBaseline.settlementDate || comparingBaseline.settlementId} 为基准，金额逐单呈现不加总，不作合规判断）；只想问其中一张，先取消另一张的选择。`}
             </p>
           ) : null}
 
