@@ -49,6 +49,7 @@ from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
 from src.runtime.policy_qa.settlement_data_provider import (
     SettlementDataUnavailableError,
     PatientSummary,
+    SettlementBill,
     SettlementListItem,
     SettlementNotFoundError,
     create_settlement_data_provider,
@@ -2929,6 +2930,56 @@ async def list_settlements_by_date_range(
                 "POLICY_QA_INVALID_REQUEST",
                 str(exc),
                 {"operation": "settlement_list"},
+            ),
+        ) from exc
+
+
+# ── 单张结算单费用构成 + 费用明细（右侧栏展示）────────────────────
+
+@router.get("/settlements/{settlement_id}/bill", response_model=SettlementBill)
+async def get_settlement_bill(
+    settlement_id: str,
+    service_type: str = Query(
+        "", description="结算单类型（列表项 service_type，用于区分门诊/门特/住院）"
+    ),
+) -> SettlementBill:
+    """单张结算单右侧栏展示数据：费用构成行 + 费用明细行。
+
+    门诊单走 HIS 交易/收费明细，门特走医保门诊结算/费用明细，住院走
+    已发布语义模型 + 住院费用明细；缺失如实标记，不构造金额。
+    """
+    try:
+        provider = create_settlement_data_provider()
+        return await provider.get_settlement_bill(
+            settlement_id, service_type=service_type
+        )
+    except SettlementNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "POLICY_QA_SETTLEMENT_NOT_FOUND",
+                "未找到对应的结算记录。",
+                {"operation": "settlement_bill"},
+            ),
+        ) from exc
+    except SettlementDataUnavailableError as exc:
+        logger.exception("Settlement bill data unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_DATA_UNAVAILABLE",
+                "结算数据源暂时不可用，请稍后重试。",
+                {"operation": "settlement_bill"},
+            ),
+        ) from exc
+    except RuntimeError as exc:
+        logger.exception("Settlement bill runtime failure")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_UNAVAILABLE",
+                "政策问答服务暂时不可用，请稍后重试。",
+                {"operation": "settlement_bill"},
             ),
         ) from exc
 

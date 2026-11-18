@@ -69,6 +69,32 @@ function makeExplanationPayload(settlementId: string, total: number) {
   }
 }
 
+function makeBillPayload(settlementId: string, serviceType: string, total: number) {
+  return {
+    settlement_id: settlementId,
+    service_type: serviceType,
+    settlement_date: '2024-11-29',
+    fields: [
+      { key: 'T_FeeAll', label: '费用总金额', amount: total.toFixed(2) },
+      { key: 'T_FundPay', label: '基金支付金额', amount: '100.00' },
+    ],
+    fee_items: [
+      {
+        item_code: `X-${settlementId}`,
+        item_name: `明细-${settlementId}`,
+        item_type: '诊疗项目',
+        quantity: '1',
+        unit_price: '6.00',
+        total_amount: '6.00',
+        insurance_inner: '6.00',
+        insurance_outer: '0.00',
+      },
+    ],
+    fee_items_state: 'complete',
+    warnings: [],
+  }
+}
+
 const COMPARE_PAYLOAD = {
   answer: '两张结算单逐项差异：费用总额 3155.66 → 2030.00，主要差异在统筹支付。',
   answer_status: 'partial',
@@ -97,6 +123,14 @@ function stubFetch() {
         json: async () => payload,
       }) as Response
     if (url.includes('/policy-qa/patient-lookup')) return respond(RAW_PATIENT)
+    if (url.includes('/bill')) {
+      const match = /settlements\/([^/?]+)\/bill/.exec(url)
+      const id = decodeURIComponent(match?.[1] ?? '')
+      const item = RAW_ITEMS.find((row) => row.settlement_id === id)
+      return respond(
+        makeBillPayload(id, item?.service_type ?? '', item?.total_amount ?? 0),
+      )
+    }
     if (url.includes('/policy-qa/settlements')) return respond(RAW_ITEMS)
     if (url.includes('/policy-qa/settlement-explanation')) {
       if (url.includes('compare_with=')) return respond(COMPARE_PAYLOAD)
@@ -147,12 +181,20 @@ describe('SettlementAgentWorkspace（Issue #87 两单选择与对比）', () => 
     expect(tab803).toHaveAttribute('aria-selected', 'false')
     expect(tab821).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('settlement-result-block')).toHaveTextContent('结算单 821')
+    // 每张 tab 各自展示费用构成 + 费用明细
+    await waitFor(() => {
+      expect(screen.getByTestId('settlement-bill')).toHaveTextContent('明细-821')
+    })
+    expect(screen.getByTestId('settlement-bill-fields')).toHaveTextContent('费用总金额')
+    expect(screen.getByTestId('settlement-fee-table')).toHaveTextContent('明细-821')
 
     // 切换到较早一张
     fireEvent.click(tab803)
     await waitFor(() => {
       expect(screen.getByTestId('settlement-result-block')).toHaveTextContent('结算单 803')
     })
+    expect(screen.getByTestId('settlement-bill')).toHaveTextContent('明细-803')
+    expect(screen.getByTestId('settlement-fee-table')).toHaveTextContent('明细-803')
     expect(tab803).toHaveAttribute('aria-selected', 'true')
     expect(tab821).toHaveAttribute('aria-selected', 'false')
   })
@@ -257,16 +299,23 @@ describe('SettlementAgentWorkspace（Issue #87 两单选择与对比）', () => 
     expect(screen.getByTestId('patient-locate-form')).toBeInTheDocument()
   })
 
-  it('门诊单选入右侧解释区给出诚实说明，不请求住院解释端点', async () => {
+  it('门诊单选入右侧展示费用构成与明细，不请求住院解释端点', async () => {
     const fetchMock = stubFetch()
     render(<SettlementAgentWorkspace />)
     await locatePatient()
 
     fireEvent.click(screen.getByTestId('settlement-item-OUTP-2024-1205-001'))
     await waitFor(() => {
-      expect(screen.getByTestId('settlement-outpatient-note')).toBeInTheDocument()
+      expect(screen.getByTestId('settlement-bill')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('settlement-outpatient-note')).toHaveTextContent('暂只覆盖住院结算单')
+    expect(screen.getByTestId('settlement-bill')).toHaveTextContent(
+      'OUTP-2024-1205-001',
+    )
+    expect(screen.getByTestId('settlement-bill-fields')).toHaveTextContent('88.50')
+    expect(screen.getByTestId('settlement-fee-table')).toHaveTextContent(
+      '明细-OUTP-2024-1205-001',
+    )
+    // 门诊不生成住院口径文字解释
     expect(screen.queryByTestId('settlement-result-block')).not.toBeInTheDocument()
     const explanationCalls = fetchMock.mock.calls.filter((call) =>
       String(call[0]).includes('/policy-qa/settlement-explanation'),
@@ -284,8 +333,13 @@ describe('SettlementAgentWorkspace（Issue #87 两单选择与对比）', () => 
     await waitFor(() => {
       expect(screen.getByTestId('settlement-compare-tabs')).toBeInTheDocument()
     })
-    // 默认激活最新一张：门诊单，右侧为门诊说明
-    expect(screen.getByTestId('settlement-outpatient-note')).toBeInTheDocument()
+    // 默认激活最新一张：门诊单，右侧照常展示费用构成/明细（不生成住院文字解释）
+    await waitFor(() => {
+      expect(screen.getByTestId('settlement-bill')).toHaveTextContent(
+        '明细-OUTP-2024-1205-001',
+      )
+    })
+    expect(screen.queryByTestId('settlement-result-block')).not.toBeInTheDocument()
     expect(screen.getByTestId('settlement-compare-hint')).toHaveTextContent('对比暂仅支持两张住院结算单')
 
     fireEvent.change(screen.getByRole('textbox', { name: '政策问题' }), {

@@ -1446,6 +1446,103 @@ class TestPolicyQASettlementsList:
         assert response.status_code == 422
 
 
+class TestPolicyQASettlementBill:
+    """单张结算单费用构成 + 费用明细端点（右侧栏展示）。"""
+
+    def test_settlement_bill_returns_composition_and_fee_items(self, client, monkeypatch):
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.settlement_data_provider import (
+            SettlementBill,
+            SettlementBillFeeItem,
+            SettlementBillField,
+        )
+
+        calls: list[tuple[str, str]] = []
+
+        class Provider:
+            async def get_settlement_bill(self, settlement_id, service_type=""):
+                calls.append((settlement_id, service_type))
+                return SettlementBill(
+                    settlement_id=settlement_id,
+                    service_type=service_type,
+                    settlement_date="2026-04-17 09:12:00",
+                    fields=[
+                        SettlementBillField(
+                            key="T_FeeAll", label="费用总金额", amount="88.50"
+                        ),
+                    ],
+                    fee_items=[
+                        SettlementBillFeeItem(
+                            item_code="310100001",
+                            item_name="负压吸引（中心泵）",
+                            item_type="诊疗项目",
+                            quantity="1",
+                            unit_price="6.00",
+                            total_amount="6.00",
+                            insurance_inner="6.00",
+                            insurance_outer="0.00",
+                        ),
+                    ],
+                )
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: Provider()
+        )
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements/"
+            "011100030X260417004975/bill",
+            params={"service_type": "门诊"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert calls == [("011100030X260417004975", "门诊")]
+        assert data["fields"][0]["amount"] == "88.50"
+        assert data["fee_items"][0]["item_name"] == "负压吸引（中心泵）"
+        assert data["fee_items_state"] == "complete"
+
+    def test_settlement_bill_not_found_404(self, client, monkeypatch):
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.settlement_data_provider import SettlementNotFoundError
+
+        class Provider:
+            async def get_settlement_bill(self, settlement_id, service_type=""):
+                raise SettlementNotFoundError("missing")
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: Provider()
+        )
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements/NOPE/bill"
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"]["error_code"] == "POLICY_QA_SETTLEMENT_NOT_FOUND"
+
+    def test_settlement_bill_data_unavailable_503(self, client, monkeypatch):
+        from src.runtime.api import policy_qa_routes
+        from src.runtime.policy_qa.settlement_data_provider import (
+            SettlementDataUnavailableError,
+        )
+
+        class Provider:
+            async def get_settlement_bill(self, settlement_id, service_type=""):
+                raise SettlementDataUnavailableError("db down")
+
+        monkeypatch.setattr(
+            policy_qa_routes, "create_settlement_data_provider", lambda: Provider()
+        )
+
+        response = client.get(
+            "/api/v1/medical-insurance-ai-agent/policy-qa/settlements/S001/bill"
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error_code"] == "POLICY_QA_DATA_UNAVAILABLE"
+
+
 class TestPolicyQAPatientLookup:
     """患者定位端点（V4.0 结算解释智能体·临时方案，正式由登录态取代）。"""
 

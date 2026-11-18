@@ -26,6 +26,36 @@ export interface PatientSummaryDTO {
   registrationId: string
 }
 
+/** 单张结算单费用构成行（金额为后端格式化字符串，缺失为 null）。 */
+export interface SettlementBillFieldDTO {
+  key: string
+  label: string
+  amount: string | null
+}
+
+/** 费用明细行；只含源表已有字段（不做目录属性/限价推导）。 */
+export interface SettlementBillFeeItemDTO {
+  itemCode: string
+  itemName: string
+  itemType: string
+  quantity: string | null
+  unitPrice: string | null
+  totalAmount: string | null
+  insuranceInner: string | null
+  insuranceOuter: string | null
+}
+
+/** 单张结算单右侧栏展示数据：费用构成 + 费用明细。 */
+export interface SettlementBillDTO {
+  settlementId: string
+  serviceType: string
+  settlementDate: string
+  fields: SettlementBillFieldDTO[]
+  feeItems: SettlementBillFeeItemDTO[]
+  feeItemsState: 'complete' | 'missing'
+  warnings: string[]
+}
+
 const SETTLEMENTS_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/settlements'
 const PATIENT_LOOKUP_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/patient-lookup'
 
@@ -72,6 +102,67 @@ export async function fetchSettlementsByDateRange(
   }
   const data = (await response.json()) as RawSettlementItem[]
   return Array.isArray(data) ? data.map(toSettlementItem) : []
+}
+
+interface RawSettlementBill {
+  settlement_id?: string
+  service_type?: string | null
+  settlement_date?: string | null
+  fields?: Array<{ key?: string; label?: string; amount?: string | null }>
+  fee_items?: Array<{
+    item_code?: string | null
+    item_name?: string | null
+    item_type?: string | null
+    quantity?: string | null
+    unit_price?: string | null
+    total_amount?: string | null
+    insurance_inner?: string | null
+    insurance_outer?: string | null
+  }>
+  fee_items_state?: string | null
+  warnings?: string[] | null
+}
+
+/** 单张结算单费用构成 + 费用明细（右侧栏每张 tab 各自加载）。 */
+export async function fetchSettlementBill(
+  settlementId: string,
+  serviceType = '',
+): Promise<SettlementBillDTO> {
+  const params = new URLSearchParams()
+  if (serviceType) params.set('service_type', serviceType)
+  const query = params.toString()
+  const response = await fetch(
+    `${SETTLEMENTS_URL}/${encodeURIComponent(settlementId)}/bill${query ? `?${query}` : ''}`,
+  )
+  if (response.status === 404) {
+    throw new Error('未找到该结算单的费用数据，请重新选择结算单。')
+  }
+  if (!response.ok) {
+    throw new Error(`结算单费用数据查询失败（HTTP ${response.status}）`)
+  }
+  const raw = (await response.json()) as RawSettlementBill
+  return {
+    settlementId: String(raw.settlement_id ?? settlementId),
+    serviceType: String(raw.service_type ?? serviceType),
+    settlementDate: String(raw.settlement_date ?? ''),
+    fields: (raw.fields ?? []).map((field) => ({
+      key: String(field.key ?? ''),
+      label: String(field.label ?? ''),
+      amount: field.amount ?? null,
+    })),
+    feeItems: (raw.fee_items ?? []).map((item) => ({
+      itemCode: String(item.item_code ?? ''),
+      itemName: String(item.item_name ?? ''),
+      itemType: String(item.item_type ?? ''),
+      quantity: item.quantity ?? null,
+      unitPrice: item.unit_price ?? null,
+      totalAmount: item.total_amount ?? null,
+      insuranceInner: item.insurance_inner ?? null,
+      insuranceOuter: item.insurance_outer ?? null,
+    })),
+    feeItemsState: raw.fee_items_state === 'missing' ? 'missing' : 'complete',
+    warnings: raw.warnings ?? [],
+  }
 }
 
 interface RawPatientSummary {

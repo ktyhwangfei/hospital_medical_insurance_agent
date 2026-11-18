@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from src.runtime.policy_qa.settlement_data_provider import (
+    _SPECIAL_BILL_FIELDS,
+    _TRADE_BILL_FIELDS,
     SemanticSettlementDataProvider,
     SettlementListItem,
     SettlementNotFoundError,
@@ -494,3 +496,178 @@ async def test_other_data_errors_still_propagate():
 
     with pytest.raises(pyodbc.DataError):
         await provider.get_settlement_context("1671213")
+
+
+# ── 单张结算单费用构成 + 费用明细（右侧栏）──────────────────────
+
+_TRADE_BILL_DESCRIPTION = [("T_TradeDate",)] + [
+    (col,) for col, _ in _TRADE_BILL_FIELDS
+]
+_SPECIAL_BILL_DESCRIPTION = [("jyrq",)] + [
+    (col,) for col in dict.fromkeys(c for _, _, c in _SPECIAL_BILL_FIELDS if c)
+]
+_FEE_TABLE_DESCRIPTION = [
+    ("xmdm",), ("xmmc",), ("xmlb",), ("sl",), ("dj",), ("zje",), ("ybnje",), ("ybwje",),
+]
+_O_FEE_ITEM_DESCRIPTION = [
+    ("ItemCode",), ("ItemName",), ("ItemType",), ("Count",),
+    ("UnitPrice",), ("Fee",), ("FeeIn",), ("FeeOut",),
+]
+
+
+def _row(description, **values):
+    return tuple(values.get(name) for (name,) in description)
+
+
+def _trade_bill_row(**overrides):
+    base = dict(
+        T_TradeDate="2026-04-17 09:12:00",
+        T_FeeAll=88.50, T_SelfPayAll=18.50, T_FeeIn=80, T_FeeOut=8.50,
+        T_FirstPay=0, T_SelfPay1=0, T_SelfPay2=0, T_BeyondBig=0,
+        T_FundPay=70, T_PersonCountPay=10, T_BigPay=0, T_JCPay=0,
+        T_CashPay=8.50, T_BCPay=0, T_BigillPay=0, NT_CivilPay=0,
+        RETIRE_OFFICER_PAY=0, T_OfficalPay=0,
+    )
+    base.update(overrides)
+    return _row(_TRADE_BILL_DESCRIPTION, **base)
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_for_outpatient_trade_reads_composition_and_fee_items():
+    supply = _RoutedSupply([
+        (
+            "FROM o_Trade WHERE T_TradeNo",
+            [_trade_bill_row()],
+            _TRADE_BILL_DESCRIPTION,
+        ),
+        (
+            "FROM o_FeeItem",
+            [("310100001", "负压吸引（中心泵）", 1, 1, 6.0, 6.0, 6.0, 0.0)],
+            _O_FEE_ITEM_DESCRIPTION,
+        ),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    bill = await provider.get_settlement_bill("011100030X260417004975", "门诊")
+
+    assert bill.service_type == "门诊"
+    assert bill.settlement_date == "2026-04-17 09:12:00"
+    fields = {item.key: item for item in bill.fields}
+    assert fields["T_FeeAll"].label == "费用总金额"
+    assert fields["T_FeeAll"].amount == "88.50"
+    assert fields["T_FundPay"].amount == "70.00"
+    assert fields["T_PersonCountPay"].label == "当次个人帐户支付金额"
+
+    assert bill.fee_items_state == "complete"
+    assert len(bill.fee_items) == 1
+    item = bill.fee_items[0]
+    assert item.item_name == "负压吸引（中心泵）"
+    assert item.item_type == "诊疗项目"
+    assert item.quantity == "1"
+    assert item.unit_price == "6.00"
+    assert item.total_amount == "6.00"
+    assert item.insurance_outer == "0.00"
+    sql, params = supply.connections[0].last_cursor.executed[0]
+    assert params == ("011100030X260417004975",)
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_for_special_sums_cash_and_account_payment():
+    supply = _RoutedSupply([
+        (
+            "FROM yb_mzjyxx WHERE djh",
+            [_row(
+                _SPECIAL_BILL_DESCRIPTION,
+                jyrq="2026-04-18 10:00:00",
+                zje=120.0, tsbybn=110.0, tsbybw=10.0, ptybn=0.0, ptybw=0.0,
+                ybnqfje=0.0, grziftw=2.0, grzif1=3.0, tczhf=100.0, tczif=5.0,
+                degwyzhf=0.0, degwyzif=0.0, bczhf=0.0, jczhf=0.0,
+                BIG_ILL_PAY=0.0, CIVIL_IN=0.0, zhzf=10.0, xjzf=5.5,
+                RETIRE_OFFICER_PAY=0.0, gfylbchbx=0.0,
+                FEEIN_DB_PAY=0.0, FEEOUT_DB_PAY=0.0,
+                FEEIN_MAF_PAY=0.0, FEEOUT_MAF_PAY=0.0,
+            )],
+            _SPECIAL_BILL_DESCRIPTION,
+        ),
+        (
+            "FROM yb_mzfymx",
+            [("X001", "门特用药", "0", 2, 3.5, 7.0, 7.0, 0.0)],
+            _FEE_TABLE_DESCRIPTION,
+        ),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    bill = await provider.get_settlement_bill("803", "门诊特殊病")
+
+    assert bill.service_type == "门诊特殊病"
+    fields = {item.key: item for item in bill.fields}
+    assert fields["personal_total_pay"].label == "个人支付总金额"
+    assert fields["personal_total_pay"].amount == "15.50"
+    assert fields["zje"].amount == "120.00"
+    assert bill.fee_items[0].item_type == "药品"
+    assert bill.fee_items[0].quantity == "2"
+    assert bill.fee_items[0].total_amount == "7.00"
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_for_inpatient_uses_semantic_context_and_fee_table():
+    service = _FakeQueryService(_result(rows=[{
+        "total_amount": 3000,
+        "medical_insurance_inner_amount": 2600,
+        "deductible": 500,
+        "basic_pooling_payment": 1800,
+        "basic_pooling_self_pay": 300,
+        "large_amount_payment": 100,
+        "large_amount_self_pay": 50,
+        "personal_total_pay": 1100,
+        "yearly_cycle_count": 1,
+        "person_type": "2",
+        "insurance_type": "3",
+        "service_type": "21",
+    }]))
+    supply = _RoutedSupply([
+        (
+            "FROM yb_zyfymx",
+            [("Z001", "住院用药", "0", 1, 100.0, 100.0, 90.0, 10.0)],
+            _FEE_TABLE_DESCRIPTION,
+        ),
+    ])
+    provider = SemanticSettlementDataProvider(
+        service=service, supply=supply, registry=_registry()
+    )
+
+    bill = await provider.get_settlement_bill("1671213", "普通住院")
+
+    assert bill.service_type == "普通住院"
+    assert bill.settlement_date == "2025-04-15"
+    fields = {item.key: item for item in bill.fields}
+    assert fields["total_amount"].label == "住院总费用"
+    assert fields["total_amount"].amount == "3000.00"
+    assert fields["basic_pooling_payment"].amount == "1800.00"
+    assert bill.fee_items[0].insurance_inner == "90.00"
+    assert bill.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_missing_trade_row_raises_not_found():
+    supply = _RoutedSupply([
+        ("FROM o_Trade WHERE T_TradeNo", [], _TRADE_BILL_DESCRIPTION),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    with pytest.raises(SettlementNotFoundError):
+        await provider.get_settlement_bill("011100030X260417004975", "门诊")
+
+
+@pytest.mark.asyncio
+async def test_settlement_bill_without_fee_items_reports_missing_state():
+    supply = _RoutedSupply([
+        ("FROM o_Trade WHERE T_TradeNo", [_trade_bill_row()], _TRADE_BILL_DESCRIPTION),
+        ("FROM o_FeeItem", [], _O_FEE_ITEM_DESCRIPTION),
+    ])
+    provider = SemanticSettlementDataProvider(supply=supply, registry=_registry())
+
+    bill = await provider.get_settlement_bill("011100030X260417004975", "门诊")
+
+    assert bill.fee_items == []
+    assert bill.fee_items_state == "missing"

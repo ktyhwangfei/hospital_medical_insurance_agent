@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Literal, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.adapters.ports import DataSupplyConnectionPort
 from src.semantic_layer.query_planner import (
@@ -39,6 +41,39 @@ class SettlementListItem(BaseModel):
     coverage_status: Literal["complete", "partial", "unavailable"] = "complete"
 
 
+class SettlementBillField(BaseModel):
+    """费用构成行；金额为展示字符串（两位小数），源字段缺失时为 None。"""
+
+    key: str
+    label: str
+    amount: str | None = None
+
+
+class SettlementBillFeeItem(BaseModel):
+    """费用明细行（只展示源表已有字段，不做目录属性推导）。"""
+
+    item_code: str = ""
+    item_name: str = ""
+    item_type: str = ""
+    quantity: str | None = None
+    unit_price: str | None = None
+    total_amount: str | None = None
+    insurance_inner: str | None = None
+    insurance_outer: str | None = None
+
+
+class SettlementBill(BaseModel):
+    """单张结算单右侧栏展示数据：费用构成 + 费用明细。"""
+
+    settlement_id: str
+    service_type: str = ""
+    settlement_date: str = ""
+    fields: list[SettlementBillField] = Field(default_factory=list)
+    fee_items: list[SettlementBillFeeItem] = Field(default_factory=list)
+    fee_items_state: Literal["complete", "missing"] = "complete"
+    warnings: list[str] = Field(default_factory=list)
+
+
 class PatientSummary(BaseModel):
     """患者定位摘要（临时方案：正式接入登录验证后由登录态取代）。
 
@@ -62,6 +97,118 @@ def mask_id_no(id_no: str) -> str:
 
 
 _GENDER_MAP = {"1": "男", "2": "女"}
+
+
+# ── 结算单费用构成字段口径 ────────────────────────────────────
+# 门诊普通交易（o_Trade）：字段--标签对齐 #85 settlement_templates
+# （employee/resident_outpatient），只含源表真实列。
+_TRADE_BILL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("T_FeeAll", "费用总金额"),
+    ("T_SelfPayAll", "个人支付总金额"),
+    ("T_FeeIn", "医疗保险范围内金额"),
+    ("T_FeeOut", "范围外金额"),
+    ("T_FirstPay", "起付金额"),
+    ("T_SelfPay1", "个人支付自付（一）"),
+    ("T_SelfPay2", "个人支付自付（二）"),
+    ("T_BeyondBig", "大额超封顶金额"),
+    ("T_FundPay", "基金支付金额"),
+    ("T_PersonCountPay", "当次个人帐户支付金额"),
+    ("T_BigPay", "当次门诊大额基金支付金额"),
+    ("T_JCPay", "残疾军人补助支付金额"),
+    ("T_CashPay", "当次个人现金支付金额"),
+    ("T_BCPay", "补充保险支付金额"),
+    ("T_BigillPay", "大病支付"),
+    ("NT_CivilPay", "救助支付"),
+    ("RETIRE_OFFICER_PAY", "退役医疗费"),
+    ("T_OfficalPay", "单位补充医疗保险（原公疗）支付金额"),
+)
+
+# 门特（yb_mzjyxx）：第三项为物理列；个人支付总金额为 xjzf+zhzf 派生。
+_SPECIAL_BILL_FIELDS: tuple[tuple[str, str, str | None], ...] = (
+    ("zje", "费用总金额", "zje"),
+    ("personal_total_pay", "个人支付总金额", None),
+    ("tsbybn", "医疗保险范围内金额", "tsbybn"),
+    ("tsbybw", "范围外金额", "tsbybw"),
+    ("ptybn", "普通门诊范围内金额", "ptybn"),
+    ("ptybw", "普通门诊范围外金额", "ptybw"),
+    ("ybnqfje", "起付金额", "ybnqfje"),
+    ("grziftw", "个人支付自付（二）", "grziftw"),
+    ("grzif1", "个人支付自付（一）", "grzif1"),
+    ("tczhf", "统筹基金支付", "tczhf"),
+    ("tczif", "统筹自付", "tczif"),
+    ("degwyzhf", "当次门诊大额基金支付金额", "degwyzhf"),
+    ("degwyzif", "大额自付金额", "degwyzif"),
+    ("bczhf", "补充保险支付金额", "bczhf"),
+    ("jczhf", "残疾军人补助支付金额", "jczhf"),
+    ("BIG_ILL_PAY", "大病支付", "BIG_ILL_PAY"),
+    ("CIVIL_IN", "救助支付", "CIVIL_IN"),
+    ("zhzf", "当次个人帐户支付金额", "zhzf"),
+    ("xjzf", "当次个人现金支付金额", "xjzf"),
+    ("RETIRE_OFFICER_PAY", "退役医疗费", "RETIRE_OFFICER_PAY"),
+    ("gfylbchbx", "单位补充医疗保险（原公疗）支付金额", "gfylbchbx"),
+    ("FEEIN_DB_PAY", "大病支付（医保内）", "FEEIN_DB_PAY"),
+    ("FEEOUT_DB_PAY", "大病支付（医保外）", "FEEOUT_DB_PAY"),
+    ("FEEIN_MAF_PAY", "救助支付（医保内）", "FEEIN_MAF_PAY"),
+    ("FEEOUT_MAF_PAY", "救助支付（医保外）", "FEEOUT_MAF_PAY"),
+)
+
+# 住院：标签沿用语义种子 inpatient_settlement 的指标名。
+_INPATIENT_BILL_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("total_amount", "住院总费用", "total_amount"),
+    ("personal_total_pay", "个人总支付", "personal_total_pay"),
+    ("medical_insurance_inner_amount", "医保内费用", "medical_insurance_inner_amount"),
+    ("deductible", "起付线", "deductible"),
+    ("basic_pooling_payment", "统筹支付", "basic_pooling_payment"),
+    ("basic_pooling_self_pay", "统筹自付", "basic_pooling_self_pay"),
+    ("large_amount_payment", "大额支付", "large_amount_payment"),
+    ("large_amount_self_pay", "大额自付", "large_amount_self_pay"),
+)
+
+_BILL_ITEM_TYPE_LABELS = {"0": "药品", "1": "诊疗项目", "2": "服务设施", "3": "耗材"}
+_TRADE_ID_RE = re.compile(r"[A-Za-z0-9]{15,}")
+
+
+def _to_decimal(value) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _bill_amount(value) -> str | None:
+    number = _to_decimal(value)
+    return None if number is None else f"{number:.2f}"
+
+
+def _bill_quantity(value) -> str | None:
+    number = _to_decimal(value)
+    if number is None:
+        return None
+    return format(number.normalize(), "f")
+
+
+def _bill_sum(*values) -> Decimal | None:
+    present = [number for number in (_to_decimal(v) for v in values) if number is not None]
+    return sum(present) if present else None
+
+
+def _bill_date(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.replace("T", " ")[:19]
+    return str(value)[:19]
+
+
+def _bill_item_type(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    return _BILL_ITEM_TYPE_LABELS.get(text, "")
 
 
 @dataclass
@@ -122,6 +269,12 @@ class SettlementDataProvider(Protocol):
 
     async def lookup_patient(self, key: str) -> PatientSummary | None:
         """按身份证号或卡号定位患者（脱敏摘要）。"""
+        ...
+
+    async def get_settlement_bill(
+        self, settlement_id: str, service_type: str = ""
+    ) -> SettlementBill:
+        """单张结算单的费用构成与费用明细（右侧栏展示）。"""
         ...
 
 
@@ -447,6 +600,178 @@ class SemanticSettlementDataProvider:
         finally:
             if connection:
                 connection.close()
+
+    # ── 单张结算单：费用构成 + 费用明细（右侧栏）────────────────
+
+    def _bill_kind(self, settlement_id: str, service_type: str) -> str:
+        """判定取数链路：special（门特）/ trade（门诊 HIS 交易）/ inpatient。"""
+        text = service_type or ""
+        if "门诊特殊病" in text:
+            return "special"
+        if "门诊" in text:
+            return "trade"
+        # @换结算 指令不带 service_type：字母数字长单号是门诊 HIS 交易号
+        return "trade" if _TRADE_ID_RE.fullmatch(settlement_id or "") else "inpatient"
+
+    def _bill_fee_items(
+        self, kind: str, settlement_id: str, warnings: list[str]
+    ) -> tuple[list[SettlementBillFeeItem], Literal["complete", "missing"]]:
+        """费用明细：门诊走 o_FeeItem，门特/住院走医保费用明细表。
+
+        明细读取失败不拖垮费用构成，如实降级为 missing 并附 warning。
+        """
+        if kind == "trade":
+            sql = (
+                "SELECT ItemCode, ItemName, ItemType, [Count], UnitPrice, "
+                "Fee, FeeIn, FeeOut FROM o_FeeItem "
+                "WHERE T_TradeNo = ? ORDER BY ItemId, ItemNo"
+            )
+        elif kind == "special":
+            sql = (
+                "SELECT xmdm, xmmc, xmlb, sl, dj, zje, ybnje, ybwje "
+                "FROM yb_mzfymx WHERE djh = ? ORDER BY xh"
+            )
+        else:
+            sql = (
+                "SELECT xmdm, xmmc, xmlb, sl, dj, zje, ybnje, ybwje "
+                "FROM yb_zyfymx WHERE djh = ? ORDER BY xh"
+            )
+        try:
+            rows = self._query_rows(sql, (settlement_id,))
+        except SettlementDataUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[settlement-bill] 费用明细读取失败 kind=%s id=%s: %s",
+                kind, settlement_id, exc,
+            )
+            warnings.append("费用明细读取失败，暂只展示费用构成。")
+            return [], "missing"
+        if not rows:
+            return [], "missing"
+
+        items: list[SettlementBillFeeItem] = []
+        for row in rows:
+            if kind == "trade":
+                items.append(
+                    SettlementBillFeeItem(
+                        item_code=str(row.get("ItemCode") or ""),
+                        item_name=str(row.get("ItemName") or ""),
+                        item_type=_bill_item_type(row.get("ItemType")),
+                        quantity=_bill_quantity(row.get("Count")),
+                        unit_price=_bill_amount(row.get("UnitPrice")),
+                        total_amount=_bill_amount(row.get("Fee")),
+                        insurance_inner=_bill_amount(row.get("FeeIn")),
+                        insurance_outer=_bill_amount(row.get("FeeOut")),
+                    )
+                )
+            else:
+                items.append(
+                    SettlementBillFeeItem(
+                        item_code=str(row.get("xmdm") or ""),
+                        item_name=str(row.get("xmmc") or ""),
+                        item_type=_bill_item_type(row.get("xmlb")),
+                        quantity=_bill_quantity(row.get("sl")),
+                        unit_price=_bill_amount(row.get("dj")),
+                        total_amount=_bill_amount(row.get("zje")),
+                        insurance_inner=_bill_amount(row.get("ybnje")),
+                        insurance_outer=_bill_amount(row.get("ybwje")),
+                    )
+                )
+        return items, "complete"
+
+    async def get_settlement_bill(
+        self, settlement_id: str, service_type: str = ""
+    ) -> SettlementBill:
+        """单张结算单的费用构成与费用明细。
+
+        service_type 来自列表项（门诊/门诊特殊病/住院）：门特 djh 为纯数字，
+        与住院登记号同形，必须靠该字段区分取数链路。
+        """
+        if self._connect is None:
+            raise RuntimeError(
+                "get_settlement_bill 需要数据供给连接（DATA_SOURCE_MODE=real_db）"
+            )
+        kind = self._bill_kind(settlement_id, service_type)
+        warnings: list[str] = []
+
+        if kind == "inpatient":
+            context = await self.get_settlement_context(settlement_id)
+            if not context.amounts_reliable:
+                warnings.append("该结算单的金额字段未通过语义模型完整校验，展示值可能不完整。")
+            items, state = self._bill_fee_items(kind, settlement_id, warnings)
+            return SettlementBill(
+                settlement_id=settlement_id,
+                service_type=context.service_type or service_type,
+                settlement_date=context.settlement_date,
+                fields=[
+                    SettlementBillField(
+                        key=key, label=label, amount=_bill_amount(getattr(context, attr))
+                    )
+                    for key, label, attr in _INPATIENT_BILL_FIELDS
+                ],
+                fee_items=items,
+                fee_items_state=state,
+                warnings=warnings,
+            )
+
+        if kind == "special":
+            cols = list(dict.fromkeys(
+                col for _, _, col in _SPECIAL_BILL_FIELDS if col
+            ))
+            rows = self._query_rows(
+                "SELECT TOP (1) jyrq, " + ", ".join(cols)
+                + " FROM yb_mzjyxx WHERE djh = ? ORDER BY jyrq DESC",
+                (settlement_id,),
+            )
+            if not rows:
+                raise SettlementNotFoundError(
+                    f"未查询到门特结算记录: djh={settlement_id}"
+                )
+            row = rows[0]
+            fields = [
+                SettlementBillField(
+                    key=key,
+                    label=label,
+                    amount=_bill_amount(
+                        _bill_sum(row.get("xjzf"), row.get("zhzf"))
+                        if key == "personal_total_pay"
+                        else row.get(col or key)
+                    ),
+                )
+                for key, label, col in _SPECIAL_BILL_FIELDS
+            ]
+            service_label = "门诊特殊病"
+            settlement_date = _bill_date(row.get("jyrq"))
+        else:
+            cols = [col for col, _ in _TRADE_BILL_FIELDS]
+            rows = self._query_rows(
+                "SELECT TOP (1) T_TradeDate, " + ", ".join(cols)
+                + " FROM o_Trade WHERE T_TradeNo = ?",
+                (settlement_id,),
+            )
+            if not rows:
+                raise SettlementNotFoundError(
+                    f"未查询到门诊交易记录: T_TradeNo={settlement_id}"
+                )
+            row = rows[0]
+            fields = [
+                SettlementBillField(key=col, label=label, amount=_bill_amount(row.get(col)))
+                for col, label in _TRADE_BILL_FIELDS
+            ]
+            service_label = "门诊"
+            settlement_date = _bill_date(row.get("T_TradeDate"))
+
+        items, state = self._bill_fee_items(kind, settlement_id, warnings)
+        return SettlementBill(
+            settlement_id=settlement_id,
+            service_type=service_label,
+            settlement_date=settlement_date,
+            fields=fields,
+            fee_items=items,
+            fee_items_state=state,
+            warnings=warnings,
+        )
 
     async def lookup_patient(self, key: str) -> PatientSummary | None:
         """按身份证号（sfz）或卡号（kh）定位患者，返回脱敏摘要。

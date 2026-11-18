@@ -11,6 +11,7 @@ import {
 
 import PolicyComposer from '@/components/policy-qa/policy-composer'
 import PolicyMessageList from '@/components/policy-qa/policy-message-list'
+import SettlementBillPane from '@/components/policy-qa/settlement-bill-pane'
 import SettlementResultBlock from '@/components/policy-qa/settlement-result-block'
 import SettlementTimeBrowser from '@/components/policy-qa/settlement-time-browser'
 import { toPolicyQAResult, type PolicyQAResult } from '@/lib/policy-qa-stream'
@@ -18,7 +19,11 @@ import {
   parsePolicyQACommand,
   type PolicyQAChatMessage,
 } from '@/lib/policy-qa-session'
-import type { SettlementListItemDTO } from '@/lib/policy-qa-settlement-list'
+import {
+  fetchSettlementBill,
+  type SettlementBillDTO,
+  type SettlementListItemDTO,
+} from '@/lib/policy-qa-settlement-list'
 import { usePolicyQAStream } from '@/lib/use-policy-qa-stream'
 
 /**
@@ -65,6 +70,13 @@ interface ExplanationState {
   error?: string
 }
 
+/** 单张结算单的费用构成/费用明细加载状态（每张 tab 独立缓存）。 */
+interface BillState {
+  status: 'loading' | 'ready' | 'error'
+  bill?: SettlementBillDTO
+  error?: string
+}
+
 /** 按结算日期升序（未知日期排最后）；tab 顺序与「较早一张为对比基准」共用此排序。 */
 function sortBySettlementDate(items: SettlementListItemDTO[]): SettlementListItemDTO[] {
   return [...items].sort((a, b) => {
@@ -75,7 +87,7 @@ function sortBySettlementDate(items: SettlementListItemDTO[]): SettlementListIte
   })
 }
 
-/** 门诊单：右侧解释区（住院费用构成语义模型）暂不覆盖，门诊问答走对话流。 */
+/** 门诊单右侧同样展示费用构成/明细，只是不再生成住院口径的文字解释。 */
 function isOutpatient(item: SettlementListItemDTO): boolean {
   return item.serviceType.includes('门诊')
 }
@@ -104,6 +116,7 @@ export default function SettlementAgentWorkspace({
   const stream = usePolicyQAStream({ mode: 'settlement_explain', storageScope: 'settlement' })
   const [selectedItems, setSelectedItems] = useState<SettlementListItemDTO[]>([])
   const [explanations, setExplanations] = useState<Record<string, ExplanationState>>({})
+  const [bills, setBills] = useState<Record<string, BillState>>({})
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [comparing, setComparing] = useState(false)
   const [input, setInput] = useState('')
@@ -138,6 +151,31 @@ export default function SettlementAgentWorkspace({
     }
   }, [])
 
+  const ensureBill = useCallback(async (item: SettlementListItemDTO) => {
+    let skip = false
+    setBills((prev) => {
+      const current = prev[item.settlementId]
+      if (current && current.status !== 'error') {
+        skip = true
+        return prev
+      }
+      return { ...prev, [item.settlementId]: { status: 'loading' } }
+    })
+    if (skip) return
+    try {
+      const bill = await fetchSettlementBill(item.settlementId, item.serviceType)
+      setBills((prev) => ({ ...prev, [item.settlementId]: { status: 'ready', bill } }))
+    } catch (e) {
+      setBills((prev) => ({
+        ...prev,
+        [item.settlementId]: {
+          status: 'error',
+          error: e instanceof Error ? e.message : '结算单费用数据查询失败',
+        },
+      }))
+    }
+  }, [])
+
   // 点选/取消点选（Issue #87：最多两张，上限拦截在列表组件内）
   const handleToggle = useCallback(
     (item: SettlementListItemDTO) => {
@@ -148,7 +186,8 @@ export default function SettlementAgentWorkspace({
       } else {
         if (selectedItems.length >= 2) return
         next = [...selectedItems, item]
-        // 门诊单不请求住院费用构成解释（右侧改为诚实说明，门诊问答走对话流）
+        // 每张单都要在右侧展示费用构成/费用明细；门诊单不请求住院文字解释
+        void ensureBill(item)
         if (!isOutpatient(item)) void ensureExplanation(item.settlementId)
       }
       setSelectedItems(next)
@@ -162,7 +201,7 @@ export default function SettlementAgentWorkspace({
         subjectChangeMsg: null,
       })
     },
-    [selectedItems, ensureExplanation, stream.updateAnchor],
+    [selectedItems, ensureExplanation, ensureBill, stream.updateAnchor],
   )
 
   // 患者定位/换人（临时方案）：换人时清掉上一患者的选中结算单、解释与锚点，
@@ -170,6 +209,7 @@ export default function SettlementAgentWorkspace({
   const handlePatientChange = useCallback(() => {
     setSelectedItems([])
     setExplanations({})
+    setBills({})
     setActiveTabId(null)
     stream.updateAnchor({ settlementId: null, subjectChanged: false, subjectChangeMsg: null })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -190,9 +230,10 @@ export default function SettlementAgentWorkspace({
       setSelectedItems([item])
       setActiveTabId(settlementId)
       stream.updateAnchor({ settlementId, subjectChanged: false, subjectChangeMsg: null })
+      void ensureBill(item)
       void ensureExplanation(settlementId)
     },
-    [ensureExplanation, stream.updateAnchor],
+    [ensureBill, ensureExplanation, stream.updateAnchor],
   )
 
   const sendQuestion = async (question: string) => {
@@ -267,6 +308,18 @@ export default function SettlementAgentWorkspace({
   const sortedSelected = sortBySettlementDate(selectedItems)
   const comparingBaseline = sortedSelected.length === 2 ? sortedSelected[0] : null
   const activeExplanation = activeTabId ? explanations[activeTabId] : undefined
+  const activeBill = activeTabId ? bills[activeTabId] : undefined
+  const activeItem = activeTabId
+    ? selectedItems.find((item) => item.settlementId === activeTabId) ?? {
+        settlementId: activeTabId,
+        settlementDate: '',
+        personType: '',
+        insuranceType: '',
+        serviceType: '',
+        totalAmount: null,
+        coverageStatus: 'complete' as const,
+      }
+    : null
 
   return (
     <section className="space-y-6">
@@ -469,14 +522,11 @@ export default function SettlementAgentWorkspace({
                 })}
               </div>
             ) : null}
-            {activeTabId ? (
+            {activeItem ? (
               <SettlementExplanationPane
-                settlementId={activeTabId}
-                serviceType={
-                  selectedItems.find((item) => item.settlementId === activeTabId)
-                    ?.serviceType ?? ''
-                }
-                state={activeExplanation}
+                item={activeItem}
+                billState={activeBill}
+                explanationState={activeExplanation}
               />
             ) : null}
           </aside>
@@ -486,46 +536,67 @@ export default function SettlementAgentWorkspace({
   )
 }
 
-/** 单张结算单的解释展示：门诊说明 / 加载中 / 失败 / 富块三态。 */
+/**
+ * 单张结算单右侧栏：费用构成 + 费用明细（门诊/门特/住院一致），
+ * 住院另附可展开的文字解释与政策来源（文字在上方表格之后，不抢主视觉）。
+ */
 function SettlementExplanationPane({
-  settlementId,
-  serviceType,
-  state,
+  item,
+  billState,
+  explanationState,
 }: {
-  settlementId: string
-  serviceType: string
-  state?: ExplanationState
+  item: SettlementListItemDTO
+  billState?: BillState
+  explanationState?: ExplanationState
 }) {
-  if (serviceType.includes('门诊')) {
-    return (
-      <div
-        role="note"
-        data-testid="settlement-outpatient-note"
-        className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600"
-      >
-        结算单 {settlementId} 是门诊单据，右侧费用构成解释暂只覆盖住院结算单。请在左下输入框直接提问门诊费用问题（如「这笔门诊为什么自付这么多」），系统会按门诊结算链路作答。
-      </div>
-    )
-  }
-  if (!state || state.status === 'loading') {
+  const settlementId = item.settlementId
+
+  if (!billState || billState.status === 'loading') {
     return (
       <div role="status" className="flex items-center gap-2 py-3 text-sm text-slate-500">
         <LoaderCircle className="size-4 animate-spin" aria-hidden />
-        正在生成结算单 {settlementId} 的费用构成解释…
+        正在加载结算单 {settlementId} 的费用构成与费用明细…
       </div>
     )
   }
-  if (state.status === 'error') {
+  if (billState.status === 'error' || !billState.bill) {
     return (
       <div
         role="alert"
         className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
       >
-        {state.error}
+        {billState.error ?? '结算单费用数据暂不可用。'}
       </div>
     )
   }
-  return state.result ? (
-    <SettlementResultBlock settlementId={settlementId} result={state.result} />
-  ) : null
+
+  return (
+    <div className="space-y-3">
+      <SettlementBillPane bill={billState.bill} />
+      {isOutpatient(item) ? null : explanationState?.status === 'ready' &&
+        explanationState.result ? (
+        <details
+          data-testid="settlement-answer-details"
+          className="rounded-2xl border border-slate-200 bg-white shadow-sm"
+        >
+          <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700">
+            查看文字解释与政策来源
+          </summary>
+          <div className="px-3 pb-3">
+            <SettlementResultBlock
+              settlementId={settlementId}
+              result={explanationState.result}
+            />
+          </div>
+        </details>
+      ) : explanationState?.status === 'error' ? (
+        <p className="px-1 text-xs text-amber-700">{explanationState.error}</p>
+      ) : (
+        <p role="status" className="flex items-center gap-2 px-1 text-xs text-slate-500">
+          <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
+          正在生成结算单 {settlementId} 的文字解释…
+        </p>
+      )}
+    </div>
+  )
 }
