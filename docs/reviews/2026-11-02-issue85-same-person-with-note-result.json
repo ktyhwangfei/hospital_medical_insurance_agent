@@ -1,0 +1,34 @@
+{
+  "observed_at": "2026-11-02T18:49:40.894125",
+  "query_file": "2026-11-02-issue85-same-person-with-note-check.sql",
+  "assertions_passed": true,
+  "criteria": [
+    "四条费用分解既有回放覆盖的157笔/488行",
+    "同一非空身份证原文归一化关联；不按姓名猜测",
+    "同一药品编码",
+    "每笔必须有费用当日有效、非空的目录备注",
+    "正金额；分别比较医保外/总额和自付二/总额"
+  ],
+  "results": [
+    [
+      {
+        "note_fee_rows": 34,
+        "drug_codes": 9
+      }
+    ],
+    [
+      {
+        "person_drug_groups": 22,
+        "outer_ratio_change_groups": 0,
+        "self2_ratio_change_groups": 0
+      }
+    ]
+  ],
+  "conclusion": "未找到符合全部条件的同人同码比例变化组。",
+  "withdrawn_candidate": {
+    "code": "XL01BAP030B001010178396",
+    "name": "注射用培美曲塞二钠",
+    "reason": "2024费用当日有效目录备注为空，不符合本轮必须有项目内涵的条件；撤回作为本需求候选，不撤销原同身份/同编码/金额差异事实。"
+  },
+  "scope_limit": "仅覆盖现有四链路本库157笔；非空备注包含支付标准等文字，不能把34行全当临床适用性规则；即使采用这一更宽口径仍无变化组。未扩到住院或其他患者混配。"
+}

@@ -149,6 +149,25 @@ class TestRenderSummary:
         assert "未决事项：目录划分语义待确认。；取整规则待确认。" in text
         assert text.count("目录划分语义待确认。") == 1
 
+    def test_retire_enroll_date_gap_is_omitted_from_patient_text(self):
+        message = "缺少退休补充保险纳入起始日期，不默认已纳入。"
+        result = _result(
+            fields=[_field(field_code="T_BCPay", label="退休补充保险补助")],
+            uncertainties=[
+                UncertaintyModel(
+                    id="u.rsup.enroll", code="SUPPLEMENT_ENROLL_DATE_MISSING",
+                    message=message, affected_fields=("T_BCPay",)),
+                UncertaintyModel(id="u.other", code="C", message="取整规则待确认。"),
+            ],
+        )
+        assert message not in render_summary(result)
+        view = build_public_view_dict(result, summary_text="s", summary_source="template")
+        assert all(item["message"] != message for item in view["uncertainties"])
+        assert any(item["message"] == "取整规则待确认。" for item in view["uncertainties"])
+        field = next(item for item in view["fields"] if item["field_code"] == "T_BCPay")
+        explanation = field.get("explanation") or {}
+        assert message not in str(explanation.get("boundary") or "")
+
 
 class TestBuildPublicViewDict:
     def test_mapping_and_amount_passthrough(self):

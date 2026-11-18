@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping
 from pydantic import BaseModel, ConfigDict, Field
 from src.domain.insurance.fee_decomposition import BranchOutcome, FeeLineItem, decimal_to_str
 from src.runtime.policy_qa.fee_decomposition.formula_display import rounding_display
+from src.runtime.policy_qa.fee_decomposition.payment_condition_context import PaymentConditionContext
 
 if TYPE_CHECKING:
     from src.runtime.policy_qa.fee_decomposition.result import SettlementDecompositionResult
@@ -87,6 +88,8 @@ class FeeItemExplanation(BaseModel):
     settlement_price_limit: str | None = Field(default=None, exclude_if=lambda value: value is None)
     # 本行中文解释：逐字取自本行已执行的公式与来源说明，不另造词。
     explanation: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    # 原始目录条件与临床记录独立于金额可解释性，未核对行也保留事实。
+    payment_condition_context: PaymentConditionContext | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 def catalog_item_explanation(item: FeeLineItem, line: Any, branches: tuple, calculations: tuple,

@@ -71,7 +71,10 @@ from src.runtime.policy_qa.fee_decomposition.model_explanation import (
 from src.runtime.policy_qa.fee_decomposition.followup_target import (
     resolve_session_question_target,
 )
-from src.runtime.policy_qa.fee_decomposition.public_view import to_public_contract_dict
+from src.runtime.policy_qa.fee_decomposition.public_view import (
+    omit_enroll_date_gap,
+    to_public_contract_dict,
+)
 from src.runtime.policy_qa.runtime_bridge import get_runtime_bridge
 from src.runtime.policy_qa.settlement_data_provider import (
     SettlementDataUnavailableError,
@@ -1029,7 +1032,7 @@ def _build_public_result(
             )
         )
 
-    answer_text = _sanitize_public_text(answer)
+    answer_text = _sanitize_public_text(omit_enroll_date_gap(answer))
     safe_answer = answer_text.text
     has_meaningful_answer = answer_text.is_publicly_meaningful
     has_real_amount = bool(safe_context) and any(
@@ -1084,8 +1087,8 @@ def _build_public_result(
     uncertainties: list[str] = []
     if not is_broad:
         uncertainties.extend(
-            _public_text(item) for item in outpatient_result.get("uncertainties", [])
-            if str(item or "").strip()
+            text for item in outpatient_result.get("uncertainties", [])
+            if (text := omit_enroll_date_gap(_public_text(item)).strip())
         )
         if not has_meaningful_answer:
             uncertainties.append("公开回答未包含可核验的业务内容。")
@@ -1114,7 +1117,10 @@ def _build_public_result(
         case_context=safe_context,
         calculation_steps=safe_steps,
         definition=safe_definition,
-        warnings=[] if is_broad else [_public_text(item) for item in warnings or [] if str(item or "").strip()],
+        warnings=[] if is_broad else [
+            text for item in warnings or []
+            if (text := omit_enroll_date_gap(_public_text(item)).strip())
+        ],
         policy_evidence=safe_evidence,
         is_broad=is_broad,
         citations=citations,

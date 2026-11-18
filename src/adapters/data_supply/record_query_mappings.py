@@ -107,12 +107,27 @@ DEFAULT_COLUMNS: dict[str, str] = {
     # 费用发生日期列：实测 o_FeeItem 无独立发生日期列（2026-09-28 真实库 schema 核实），
     # 置空 = 该列不进入 SELECT，组装层降级用交易日期并留痕
     "opf_fee_date": "",
+    # Issue #85：仅供解释的原始条件上下文，不参与金额分解。
+    "opf_recipe_no": "RecipeNo",
+    "opf_specification": "Specification",
+    "opf_unit": "Unit",
+    "opf_usage": "HowToUse",
+    "diag_trade_no": "T_TradeNo",
+    "diag_recipe_no": "RecipeNo",
+    "diag_code": "DiagnoseCode",
+    "diag_name": "DiagnoseName",
+    "diag_department": "Sectionname",
+    "diag_prescriber_level": "DrLevel",
     # ── Issue #78 药品目录（yb_ypzdml）。列名已经真实库 schema 核实（2026-09-28）──
     "cat_drug_special_marker": "tsbyybz",
     "cat_svc_special_marker": "tsbbz",
     "cat_drug_code": "ypbm",
     "cat_drug_effective": "sxrq",
     "cat_drug_expiry": "jzrq",
+    "cat_drug_note": "bz",
+    "cat_drug_hospital_level": "yyjb",
+    "cat_drug_hospital_type": "yylb",
+    "cat_drug_use_restriction": "syxzdj",
     "cat_drug_sflb": "sflb",
     "cat_drug_self_pay_ratio": "zfbl",  # 原自付比例列
     "cat_drug_a_ypbs": "A_ypbs",  # 集采标识（实测为大写 A_ 前缀）
@@ -126,6 +141,7 @@ DEFAULT_COLUMNS: dict[str, str] = {
     "cat_svc_code": "xmbm",
     "cat_svc_effective": "sxrq",
     "cat_svc_expiry": "jzrq",
+    "cat_svc_note": "bz",
     "cat_svc_sfxmdj": "sfxmdj",  # 收费项目等级：1 无自付/2 有自付/3 全自付
     "cat_svc_self_pay_ratio": "zfbl",  # 自付比例列
     # 单价限额列：xb（2026-09-28 schema 核实漏报；2026-10-13 复核确认存在，561 行 xb>0，
@@ -162,6 +178,17 @@ DEFAULT_COLUMNS: dict[str, str] = {
     "fee_pre_self": "txfy",
     "fee_indiv_first": "grziftw",
     "fee_date": "fsrq",
+    "fee_djh": "djh",
+    "fee_item_type": "xmlb",
+    "fee_recipe_no": "cfh",
+    "fee_specification": "gg",
+    "fee_unit": "dw",
+    "fee_usage": "Usage_Method",
+    "special_diag_trade_no": "jylsh",
+    "special_diag_recipe_no": "cfh",
+    "special_diag_code": "zdbm",
+    "special_diag_name": "zdmc",
+    "op_set_date": "jyrq",
 }
 
 _TABLES = (
@@ -176,6 +203,8 @@ _TABLES = (
     "service_catalog_table",
     "material_catalog_table",
     "institution_table",
+    "outpatient_diagnosis_table",
+    "special_outpatient_diagnosis_table",
 )
 
 
@@ -199,6 +228,8 @@ class RecordQueryMapping(BaseModel):
     # 材料是否完整包含在 yb_xzzlfwxm 待确认，先同表（设计 §5.2）
     material_catalog_table: str = "dbo.yb_xzzlfwxm"
     institution_table: str = "dbo.m_institution"
+    outpatient_diagnosis_table: str = "dbo.o_Diagnose"
+    special_outpatient_diagnosis_table: str = "dbo.yb_mzzd_mz"
     columns: dict[str, str] = Field(default_factory=dict)
 
     @field_validator(*_TABLES)

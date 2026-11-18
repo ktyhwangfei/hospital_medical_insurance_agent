@@ -1,0 +1,1825 @@
+{
+  "observed_at": "2026-11-05T05:22:51.076155Z",
+  "case_ref": "552a2da13bd0",
+  "scope_note": "只读草稿回放；不是经独立临床审核的正式核验，不代表基金支付原因",
+  "trade_header": {
+    "trade_date": "2026-04-16T12:31:40",
+    "fund_type": "93",
+    "state": 4,
+    "has_refunded": 0,
+    "fee_all": "3140.30",
+    "fee_in": "3133.51",
+    "fee_out": "3.34",
+    "fund_pay": "1598.36",
+    "no_right_reason": null
+  },
+  "bill_line_count": 11,
+  "restricted_inpay_lines": 2,
+  "line_results": [
+    {
+      "line_id": "0",
+      "item_code": "C14230620500000",
+      "item_name": "输血器",
+      "lookup": {
+        "status": "not_evaluated",
+        "reason": "catalog：已查询但字段或记录为空，未执行规则匹配",
+        "rule": null
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "C14230620500000",
+        "item_name": "输血器",
+        "unit_price": "8.0000",
+        "count": "1.00",
+        "specification": "",
+        "fee": "8.0000",
+        "fee_in": "8.0000",
+        "fee_out": "0.0000",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": null,
+        "catalog_effective_from": null,
+        "catalog_effective_to": null,
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:bc479de09da3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:bc479de09da3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "empty",
+            "source": "yb_ypzdml:bc479de09da3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:bc479de09da3",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:bc479de09da3",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:bc479de09da3",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:bc479de09da3",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:bc479de09da3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:bc479de09da3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "empty",
+            "source": "o_FeeItem.Specification:bc479de09da3",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [],
+      "result": null,
+      "patient_explanation": "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
+      "ops_explanation": "catalog：已查询但字段或记录为空，未执行规则匹配"
+    },
+    {
+      "line_id": "1",
+      "item_code": "XB05XAL211B002010200967",
+      "item_name": "氯化钠注射液",
+      "lookup": {
+        "status": "not_found",
+        "reason": "当日目录未记载本类限制",
+        "rule": null
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "XB05XAL211B002010200967",
+        "item_name": "氯化钠注射液",
+        "unit_price": "5.0000",
+        "count": "1.00",
+        "specification": "100ml：0.9g",
+        "fee": "5.0000",
+        "fee_in": "5.0000",
+        "fee_out": "0.0000",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": null,
+        "catalog_effective_from": "2021-01-01",
+        "catalog_effective_to": "2050-12-31",
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:d4d2fa0272d3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:d4d2fa0272d3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "present",
+            "source": "yb_ypzdml:d4d2fa0272d3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:d4d2fa0272d3",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:d4d2fa0272d3",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:d4d2fa0272d3",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:d4d2fa0272d3",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:d4d2fa0272d3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:d4d2fa0272d3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "present",
+            "source": "o_FeeItem.Specification:d4d2fa0272d3",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [
+        {
+          "code": "XB05XAL211B002010200967",
+          "bz": null,
+          "effective_from": "2021-01-01",
+          "effective_to": "2050-12-31"
+        }
+      ],
+      "result": null,
+      "patient_explanation": "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
+      "ops_explanation": "当日目录未记载本类限制"
+    },
+    {
+      "line_id": "2",
+      "item_code": "AAAC0001",
+      "item_name": "门/急诊留观诊察费",
+      "lookup": {
+        "status": "not_evaluated",
+        "reason": "catalog：已查询但字段或记录为空，未执行规则匹配",
+        "rule": null
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "AAAC0001",
+        "item_name": "门/急诊留观诊察费",
+        "unit_price": "20.0000",
+        "count": "1.00",
+        "specification": "",
+        "fee": "20.0000",
+        "fee_in": "20.0000",
+        "fee_out": "0.0000",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": null,
+        "catalog_effective_from": null,
+        "catalog_effective_to": null,
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:9caab8043e08",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:9caab8043e08",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "empty",
+            "source": "yb_ypzdml:9caab8043e08",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:9caab8043e08",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:9caab8043e08",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:9caab8043e08",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:9caab8043e08",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:9caab8043e08",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:9caab8043e08",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "empty",
+            "source": "o_FeeItem.Specification:9caab8043e08",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [],
+      "result": null,
+      "patient_explanation": "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
+      "ops_explanation": "catalog：已查询但字段或记录为空，未执行规则匹配"
+    },
+    {
+      "line_id": "3",
+      "item_code": "XB05XAL211B002010200967",
+      "item_name": "氯化钠注射液",
+      "lookup": {
+        "status": "not_found",
+        "reason": "当日目录未记载本类限制",
+        "rule": null
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "XB05XAL211B002010200967",
+        "item_name": "氯化钠注射液",
+        "unit_price": "5.0000",
+        "count": "1.00",
+        "specification": "100ml：0.9g",
+        "fee": "5.0000",
+        "fee_in": "5.0000",
+        "fee_out": "0.0000",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": null,
+        "catalog_effective_from": "2021-01-01",
+        "catalog_effective_to": "2050-12-31",
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:389926ec052a",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:389926ec052a",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "present",
+            "source": "yb_ypzdml:389926ec052a",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:389926ec052a",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:389926ec052a",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:389926ec052a",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:389926ec052a",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:389926ec052a",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:389926ec052a",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "present",
+            "source": "o_FeeItem.Specification:389926ec052a",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [
+        {
+          "code": "XB05XAL211B002010200967",
+          "bz": null,
+          "effective_from": "2021-01-01",
+          "effective_to": "2050-12-31"
+        }
+      ],
+      "result": null,
+      "patient_explanation": "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
+      "ops_explanation": "当日目录未记载本类限制"
+    },
+    {
+      "line_id": "4",
+      "item_code": "XA02BCA084B001010100453",
+      "item_name": "注射用艾普拉唑钠",
+      "lookup": {
+        "status": "not_found",
+        "reason": "限制原文已取得，规则待审核发布",
+        "rule": {
+          "rule_id": "rule-XA02BCA084B001010100453-20240320",
+          "item_code": "XA02BCA084B001010100453",
+          "item_name": "注射用艾普拉唑钠",
+          "catalog_effective_from": "2024-03-20",
+          "catalog_effective_to": "2050-12-31",
+          "condition_groups": [
+            {
+              "conditions": [
+                {
+                  "condition_type": "disease",
+                  "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+                  "source_span": "预防重症患者应激性溃疡出血",
+                  "price_cap": null
+                },
+                {
+                  "condition_type": "disease",
+                  "concept_code": "dg.peptic_ulcer_bleeding",
+                  "source_span": "消化性溃疡出血",
+                  "price_cap": null
+                }
+              ],
+              "logic": "any_of"
+            },
+            {
+              "conditions": [
+                {
+                  "condition_type": "price_cap",
+                  "concept_code": "unit.vial_10mg",
+                  "source_span": "支付标准不得高于：63.00元(10mg/支)",
+                  "price_cap": {
+                    "amount": "63.00",
+                    "unit": "支",
+                    "strength_text": "10mg",
+                    "basis": "unknown"
+                  }
+                }
+              ],
+              "logic": "any_of"
+            }
+          ],
+          "source_bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+          "revision": 1,
+          "status": "draft",
+          "reviewed_by": "",
+          "catalog_source": "bjyb.yb_ypzdml"
+        }
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "unit_price": "52.6000",
+        "count": "1.00",
+        "specification": "10MG/支",
+        "fee": "52.6000",
+        "fee_in": "47.3400",
+        "fee_out": "5.2600",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+        "catalog_effective_from": "2024-03-20",
+        "catalog_effective_to": "2050-12-31",
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:715a2afc434d",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:715a2afc434d",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "present",
+            "source": "yb_ypzdml:715a2afc434d",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:715a2afc434d",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:715a2afc434d",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:715a2afc434d",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:715a2afc434d",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:715a2afc434d",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:715a2afc434d",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "present",
+            "source": "o_FeeItem.Specification:715a2afc434d",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [
+        {
+          "code": "XA02BCA084B001010100453",
+          "bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+          "effective_from": "2024-03-20",
+          "effective_to": "2050-12-31"
+        }
+      ],
+      "result": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "rule_revision": 1,
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "verdicts": [
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+              "source_span": "预防重症患者应激性溃疡出血",
+              "price_cap": null
+            },
+            "status": "unverifiable",
+            "evidence": [
+              {
+                "kind": "mapping_missing",
+                "summary": "概念码 dg.stress_ulcer_prophylaxis_critical 无有效 diagnosis 值域映射，fail-closed 不予核验",
+                "source": "value_domain_mappings"
+              }
+            ],
+            "missing": "缺少 dg.stress_ulcer_prophylaxis_critical 的诊断值域映射",
+            "match_status": "not_evaluated",
+            "used_mapping_ids": []
+          },
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.peptic_ulcer_bleeding",
+              "source_span": "消化性溃疡出血",
+              "price_cap": null
+            },
+            "status": "unverifiable",
+            "evidence": [],
+            "missing": "dg.peptic_ulcer_bleeding 值域映射待审核",
+            "match_status": "not_evaluated",
+            "used_mapping_ids": []
+          },
+          {
+            "condition": {
+              "condition_type": "price_cap",
+              "concept_code": "unit.vial_10mg",
+              "source_span": "支付标准不得高于：63.00元(10mg/支)",
+              "price_cap": {
+                "amount": "63.00",
+                "unit": "支",
+                "strength_text": "10mg",
+                "basis": "unknown"
+              }
+            },
+            "status": "unverifiable",
+            "evidence": [],
+            "missing": "价格政策适用口径尚未确认",
+            "match_status": "not_evaluated",
+            "used_mapping_ids": []
+          }
+        ],
+        "risk_tier": "review",
+        "fee": "52.6000",
+        "fee_in": "47.3400",
+        "fee_out": "5.2600",
+        "status": "unverifiable",
+        "rule_status": "draft",
+        "explanation_ready": false,
+        "engine_version": "1.1"
+      },
+      "patient_explanation": "注射用艾普拉唑钠：当前限制规则尚未完成审核，本次仅作草稿回放，暂不能据此确认是否符合支付条件。具体费用请参照本结算单费用解释。",
+      "ops_explanation": "草稿回放（规则未审核，不作正式结论）：抽查建议：注射用艾普拉唑钠 按医保内结算 47.34 元，目录限制条件的支持证据不足。条件「预防重症患者应激性溃疡出血」：缺少 dg.stress_ulcer_prophylaxis_critical 的诊断值域映射；条件「消化性溃疡出血」：dg.peptic_ulcer_bleeding 值域映射待审核；条件「支付标准不得高于：63.00元(10mg/支)」：价格政策适用口径尚未确认。资料缺失不构成违规结论，建议调取病历或医嘱核实。"
+    },
+    {
+      "line_id": "5",
+      "item_code": "ABCA0001",
+      "item_name": "静脉输液",
+      "lookup": {
+        "status": "not_evaluated",
+        "reason": "catalog：已查询但字段或记录为空，未执行规则匹配",
+        "rule": null
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "ABCA0001",
+        "item_name": "静脉输液",
+        "unit_price": "7.0000",
+        "count": "1.00",
+        "specification": "",
+        "fee": "7.0000",
+        "fee_in": "7.0000",
+        "fee_out": "0.0000",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": null,
+        "catalog_effective_from": null,
+        "catalog_effective_to": null,
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:eeec4017d0a3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:eeec4017d0a3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "empty",
+            "source": "yb_ypzdml:eeec4017d0a3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:eeec4017d0a3",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:eeec4017d0a3",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:eeec4017d0a3",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:eeec4017d0a3",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:eeec4017d0a3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:eeec4017d0a3",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "empty",
+            "source": "o_FeeItem.Specification:eeec4017d0a3",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [],
+      "result": null,
+      "patient_explanation": "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
+      "ops_explanation": "catalog：已查询但字段或记录为空，未执行规则匹配"
+    },
+    {
+      "line_id": "6",
+      "item_code": "C14230120200001",
+      "item_name": "输液器",
+      "lookup": {
+        "status": "not_evaluated",
+        "reason": "catalog：已查询但字段或记录为空，未执行规则匹配",
+        "rule": null
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "C14230120200001",
+        "item_name": "输液器",
+        "unit_price": "14.5000",
+        "count": "1.00",
+        "specification": "",
+        "fee": "14.5000",
+        "fee_in": "14.5000",
+        "fee_out": "0.0000",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": null,
+        "catalog_effective_from": null,
+        "catalog_effective_to": null,
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:bb80334fddeb",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:bb80334fddeb",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "empty",
+            "source": "yb_ypzdml:bb80334fddeb",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:bb80334fddeb",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:bb80334fddeb",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:bb80334fddeb",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:bb80334fddeb",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:bb80334fddeb",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:bb80334fddeb",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "empty",
+            "source": "o_FeeItem.Specification:bb80334fddeb",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [],
+      "result": null,
+      "patient_explanation": "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
+      "ops_explanation": "catalog：已查询但字段或记录为空，未执行规则匹配"
+    },
+    {
+      "line_id": "7",
+      "item_code": "C16050119401001",
+      "item_name": "静脉留置针",
+      "lookup": {
+        "status": "not_evaluated",
+        "reason": "catalog：已查询但字段或记录为空，未执行规则匹配",
+        "rule": null
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "C16050119401001",
+        "item_name": "静脉留置针",
+        "unit_price": "16.8000",
+        "count": "1.00",
+        "specification": "",
+        "fee": "16.8000",
+        "fee_in": "16.8000",
+        "fee_out": "0.0000",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": null,
+        "catalog_effective_from": null,
+        "catalog_effective_to": null,
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:f11748185884",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:f11748185884",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "empty",
+            "source": "yb_ypzdml:f11748185884",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:f11748185884",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:f11748185884",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:f11748185884",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:f11748185884",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:f11748185884",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:f11748185884",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "empty",
+            "source": "o_FeeItem.Specification:f11748185884",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [],
+      "result": null,
+      "patient_explanation": "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
+      "ops_explanation": "catalog：已查询但字段或记录为空，未执行规则匹配"
+    },
+    {
+      "line_id": "8",
+      "item_code": "XB05XAL211B002040304948",
+      "item_name": "氯化钠注射液",
+      "lookup": {
+        "status": "not_found",
+        "reason": "当日目录未记载本类限制",
+        "rule": null
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "XB05XAL211B002040304948",
+        "item_name": "氯化钠注射液",
+        "unit_price": "6.1200",
+        "count": "1.00",
+        "specification": "250ml：2.25g",
+        "fee": "6.1200",
+        "fee_in": "6.1200",
+        "fee_out": "0.0000",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": null,
+        "catalog_effective_from": "2021-01-01",
+        "catalog_effective_to": "2050-12-31",
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:5c2fad261531",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:5c2fad261531",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "present",
+            "source": "yb_ypzdml:5c2fad261531",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:5c2fad261531",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:5c2fad261531",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:5c2fad261531",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:5c2fad261531",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:5c2fad261531",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:5c2fad261531",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "present",
+            "source": "o_FeeItem.Specification:5c2fad261531",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [
+        {
+          "code": "XB05XAL211B002040304948",
+          "bz": null,
+          "effective_from": "2021-01-01",
+          "effective_to": "2050-12-31"
+        }
+      ],
+      "result": null,
+      "patient_explanation": "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
+      "ops_explanation": "当日目录未记载本类限制"
+    },
+    {
+      "line_id": "9",
+      "item_code": "XB02BXK018B001010201504",
+      "item_name": "注射用卡络磺钠",
+      "lookup": {
+        "status": "not_found",
+        "reason": "限制原文已取得，规则待审核发布",
+        "rule": {
+          "rule_id": "rule-XB02BXK018B001010201504-20240601",
+          "item_code": "XB02BXK018B001010201504",
+          "item_name": "注射用卡络磺钠",
+          "catalog_effective_from": "2024-06-01",
+          "catalog_effective_to": "2050-12-31",
+          "condition_groups": [
+            {
+              "conditions": [
+                {
+                  "condition_type": "disease",
+                  "concept_code": "dg.unable_oral_intake",
+                  "source_span": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+                  "price_cap": null
+                }
+              ],
+              "logic": "any_of"
+            }
+          ],
+          "source_bz": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+          "revision": 1,
+          "status": "draft",
+          "reviewed_by": "",
+          "catalog_source": "bjyb.yb_ypzdml"
+        }
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "XB02BXK018B001010201504",
+        "item_name": "注射用卡络磺钠",
+        "unit_price": "3.8200",
+        "count": "4.00",
+        "specification": "20MG 5西林/盒",
+        "fee": "15.2800",
+        "fee_in": "13.7520",
+        "fee_out": "1.5280",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+        "catalog_effective_from": "2024-06-01",
+        "catalog_effective_to": "2050-12-31",
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:b41f9fe7e597",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:b41f9fe7e597",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "present",
+            "source": "yb_ypzdml:b41f9fe7e597",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:b41f9fe7e597",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:b41f9fe7e597",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:b41f9fe7e597",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:b41f9fe7e597",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:b41f9fe7e597",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:b41f9fe7e597",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "present",
+            "source": "o_FeeItem.Specification:b41f9fe7e597",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [
+        {
+          "code": "XB02BXK018B001010201504",
+          "bz": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+          "effective_from": "2024-06-01",
+          "effective_to": "2050-12-31"
+        }
+      ],
+      "result": {
+        "rule_id": "rule-XB02BXK018B001010201504-20240601",
+        "rule_revision": 1,
+        "item_code": "XB02BXK018B001010201504",
+        "item_name": "注射用卡络磺钠",
+        "verdicts": [
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.unable_oral_intake",
+              "source_span": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+              "price_cap": null
+            },
+            "status": "unverifiable",
+            "evidence": [],
+            "missing": "dg.unable_oral_intake 值域映射待审核",
+            "match_status": "not_evaluated",
+            "used_mapping_ids": []
+          }
+        ],
+        "risk_tier": "review",
+        "fee": "15.2800",
+        "fee_in": "13.7520",
+        "fee_out": "1.5280",
+        "status": "unverifiable",
+        "rule_status": "draft",
+        "explanation_ready": false,
+        "engine_version": "1.1"
+      },
+      "patient_explanation": "注射用卡络磺钠：当前限制规则尚未完成审核，本次仅作草稿回放，暂不能据此确认是否符合支付条件。具体费用请参照本结算单费用解释。",
+      "ops_explanation": "草稿回放（规则未审核，不作正式结论）：抽查建议：注射用卡络磺钠 按医保内结算 13.75 元，目录限制条件的支持证据不足。条件「限无法口服卡络磺钠（肾上腺色腙）的患者」：dg.unable_oral_intake 值域映射待审核。资料缺失不构成违规结论，建议调取病历或医嘱核实。"
+    },
+    {
+      "line_id": "10",
+      "item_code": "XB02BDR012B001010103115",
+      "item_name": "人凝血因子Ⅷ",
+      "lookup": {
+        "status": "not_found",
+        "reason": "当日目录未记载本类限制",
+        "rule": null
+      },
+      "context": {
+        "hospital_code": "01110003",
+        "trade_date": "2026-04-16",
+        "item_code": "XB02BDR012B001010103115",
+        "item_name": "人凝血因子Ⅷ",
+        "unit_price": "299.0000",
+        "count": "10.00",
+        "specification": "200U/瓶",
+        "fee": "2990.0000",
+        "fee_in": "2990.0000",
+        "fee_out": "0.0000",
+        "same_recipe_diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "medical_record": "",
+            "association": "same_prescription"
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": "",
+            "association": "same_prescription"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": "",
+        "region_code": "",
+        "payment_base": null,
+        "catalog_bz": null,
+        "catalog_effective_from": "2021-01-01",
+        "catalog_effective_to": "2050-12-31",
+        "field_states": {
+          "item.code": {
+            "status": "present",
+            "source": "o_FeeItem.ItemCode:ad4d28655ada",
+            "association": "same_line",
+            "reason": ""
+          },
+          "fee.date": {
+            "status": "present",
+            "source": "o_Trade.T_TradeDate:ad4d28655ada",
+            "association": "same_line",
+            "reason": ""
+          },
+          "catalog": {
+            "status": "present",
+            "source": "yb_ypzdml:ad4d28655ada",
+            "association": "same_line",
+            "reason": ""
+          },
+          "diagnosis.code": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseCode:ad4d28655ada",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.name": {
+            "status": "present",
+            "source": "o_Diagnose.DiagnoseName:ad4d28655ada",
+            "association": "same_prescription",
+            "reason": ""
+          },
+          "diagnosis.medical_record": {
+            "status": "not_available",
+            "source": "probe:ad4d28655ada",
+            "association": "same_line",
+            "reason": "本轮不获取非结构化病历"
+          },
+          "price.payment_base": {
+            "status": "not_available",
+            "source": "probe:ad4d28655ada",
+            "association": "same_line",
+            "reason": "未取得费用分解的支付基数，禁止从FeeIn倒推"
+          },
+          "price.unit_price": {
+            "status": "present",
+            "source": "o_FeeItem.UnitPrice:ad4d28655ada",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.count": {
+            "status": "present",
+            "source": "o_FeeItem.Count:ad4d28655ada",
+            "association": "same_line",
+            "reason": ""
+          },
+          "item.specification": {
+            "status": "present",
+            "source": "o_FeeItem.Specification:ad4d28655ada",
+            "association": "same_line",
+            "reason": ""
+          }
+        }
+      },
+      "catalog_candidates": [
+        {
+          "code": "XB02BDR012B001010103115",
+          "bz": null,
+          "effective_from": "2021-01-01",
+          "effective_to": "2050-12-31"
+        }
+      ],
+      "result": null,
+      "patient_explanation": "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
+      "ops_explanation": "当日目录未记载本类限制"
+    }
+  ],
+  "rules_snapshot": [
+    {
+      "rule_id": "rule-XA02BCA084B001010100453-20240320",
+      "rule_revision": 1,
+      "engine_version": "1.1",
+      "status": "draft",
+      "item": {
+        "code": "XA02BCA084B001010100453",
+        "name": "注射用艾普拉唑钠"
+      },
+      "catalog_version": {
+        "effective_from": "2024-03-20",
+        "effective_to": "2050-12-31",
+        "source": "bjyb.yb_ypzdml"
+      },
+      "source_bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+      "condition_groups": [
+        {
+          "conditions": [
+            {
+              "condition_type": "disease",
+              "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+              "source_span": "预防重症患者应激性溃疡出血",
+              "price_cap": null
+            },
+            {
+              "condition_type": "disease",
+              "concept_code": "dg.peptic_ulcer_bleeding",
+              "source_span": "消化性溃疡出血",
+              "price_cap": null
+            }
+          ],
+          "logic": "any_of"
+        },
+        {
+          "conditions": [
+            {
+              "condition_type": "price_cap",
+              "concept_code": "unit.vial_10mg",
+              "source_span": "支付标准不得高于：63.00元(10mg/支)",
+              "price_cap": {
+                "amount": "63.00",
+                "unit": "支",
+                "strength_text": "10mg",
+                "basis": "unknown"
+              }
+            }
+          ],
+          "logic": "any_of"
+        }
+      ],
+      "reviewed_by": "",
+      "created_by": "",
+      "content_hash": "",
+      "published_at": null
+    },
+    {
+      "rule_id": "rule-XB02BXK018B001010201504-20240601",
+      "rule_revision": 1,
+      "engine_version": "1.1",
+      "status": "draft",
+      "item": {
+        "code": "XB02BXK018B001010201504",
+        "name": "注射用卡络磺钠"
+      },
+      "catalog_version": {
+        "effective_from": "2024-06-01",
+        "effective_to": "2050-12-31",
+        "source": "bjyb.yb_ypzdml"
+      },
+      "source_bz": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+      "condition_groups": [
+        {
+          "conditions": [
+            {
+              "condition_type": "disease",
+              "concept_code": "dg.unable_oral_intake",
+              "source_span": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+              "price_cap": null
+            }
+          ],
+          "logic": "any_of"
+        }
+      ],
+      "reviewed_by": "",
+      "created_by": "",
+      "content_hash": "",
+      "published_at": null
+    }
+  ],
+  "mappings_snapshot": [
+    {
+      "mapping_id": "map-dg-pub-icd-K250",
+      "domain": "diagnosis",
+      "concept_code": "dg.peptic_ulcer_bleeding",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "icd_prefix",
+      "target_value": "K25.0",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-pub-icd-K254",
+      "domain": "diagnosis",
+      "concept_code": "dg.peptic_ulcer_bleeding",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "icd_prefix",
+      "target_value": "K25.4",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-pub-icd-K260",
+      "domain": "diagnosis",
+      "concept_code": "dg.peptic_ulcer_bleeding",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "icd_prefix",
+      "target_value": "K26.0",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-pub-icd-K264",
+      "domain": "diagnosis",
+      "concept_code": "dg.peptic_ulcer_bleeding",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "icd_prefix",
+      "target_value": "K26.4",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-pub-icd-K270",
+      "domain": "diagnosis",
+      "concept_code": "dg.peptic_ulcer_bleeding",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "icd_prefix",
+      "target_value": "K27.0",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-pub-icd-K274",
+      "domain": "diagnosis",
+      "concept_code": "dg.peptic_ulcer_bleeding",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "icd_prefix",
+      "target_value": "K27.4",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-pub-icd-K280",
+      "domain": "diagnosis",
+      "concept_code": "dg.peptic_ulcer_bleeding",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "icd_prefix",
+      "target_value": "K28.0",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-pub-icd-K284",
+      "domain": "diagnosis",
+      "concept_code": "dg.peptic_ulcer_bleeding",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "icd_prefix",
+      "target_value": "K28.4",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-uoi-name-1",
+      "domain": "diagnosis",
+      "concept_code": "dg.unable_oral_intake",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "name_pattern",
+      "target_value": "吞咽困难",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-uoi-name-2",
+      "domain": "diagnosis",
+      "concept_code": "dg.unable_oral_intake",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "name_pattern",
+      "target_value": "禁食",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-uoi-name-3",
+      "domain": "diagnosis",
+      "concept_code": "dg.unable_oral_intake",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "name_pattern",
+      "target_value": "鼻饲",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    },
+    {
+      "mapping_id": "map-dg-uoi-name-4",
+      "domain": "diagnosis",
+      "concept_code": "dg.unable_oral_intake",
+      "scope": "default",
+      "scope_key": "",
+      "target_type": "name_pattern",
+      "target_value": "无法口服",
+      "source": "manual",
+      "revision": 1,
+      "reviewed_by": ""
+    }
+  ]
+}

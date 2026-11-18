@@ -36,6 +36,19 @@ const FULL_RAW = {
 }
 
 describe('toFeeDecomposition', () => {
+  it('保留支付条件事实、未知症状和诊断关联，剔除任意身份字段', () => {
+    const result = toFeeDecomposition({ ...FULL_RAW, fee_items: [{ line_id: '1',
+      payment_condition_context: { bz: '限胃肠镜检查', catalog_status: 'unique',
+        diagnoses: [{ name: '大便习惯改变', association: 'same_prescription', patient_name: '不应透传' }],
+        symptoms: null, clinical_conditions_verified: false, patient_name: '不应透传' },
+    }, { line_id: '2', payment_condition_context: null }] })!
+    expect(result.feeItems?.[0].paymentConditionContext).toMatchObject({
+      bz: '限胃肠镜检查', catalog_status: 'unique', symptoms: null,
+      clinical_conditions_verified: false, diagnoses: [{ name: '大便习惯改变', association: 'same_prescription' }],
+    })
+    expect(result.feeItems?.[1].paymentConditionContext).toBeUndefined()
+    expect(JSON.stringify(result)).not.toContain('不应透传')
+  })
   it('1.3 中文名、逐行算法与条件引用使用白名单，数值金额不强制转换', () => {
     const result = toFeeDecomposition({ ...FULL_RAW, schema_version: '1.3',
       settlement_facts: { chain: 'special', metadata_names: { medical_category: '门诊特殊病', invalid: 2 } },

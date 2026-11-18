@@ -151,6 +151,12 @@ def decompose_special_mz_settlement(
     item_rows = []
 
     def _outcome(result: SettlementDecompositionResult) -> DecompositionOutcome:
+        from src.runtime.policy_qa.fee_decomposition.payment_condition_context import attach_payment_condition_context
+        result = attach_item_rows(result, item_rows, special=True)
+        labeled = label_facts(facts, domains)
+        result = attach_payment_condition_context(result, conn, djh, special=True,
+            hospital_level=labeled.hospital_level,
+            hospital_level_name=labeled.metadata_names.get("hospital_level"))
         # 自付一：项目付费单 grzif1 列不维护，展示值取内核按本单分量计算的结果。
         self_pay_1 = next((f for f in result.fields if f.field_code == "GRZIF1"), None)
         if self_pay_1 is not None and self_pay_1.calculated_amount is not None:
@@ -169,9 +175,9 @@ def decompose_special_mz_settlement(
                 ]})
             patched = facts.model_copy(update={"items": items, "display_template": template})
             return DecompositionOutcome(
-                attach_item_rows(result, item_rows, special=True),
+                result,
                 label_facts(patched, domains))
-        return DecompositionOutcome(attach_item_rows(result, item_rows, special=True), label_facts(facts, domains))
+        return DecompositionOutcome(result, labeled)
 
     fyfs = settlement_row.get("fyfs")
     fyfs_s = None if fyfs is None else str(fyfs).strip()

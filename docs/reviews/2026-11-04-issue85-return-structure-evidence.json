@@ -1,0 +1,1303 @@
+{
+  "observed_at": "2026-11-04T11:49:38.374893+00:00",
+  "method": "同源只读公开投影；模型序列化使用现有函数exclude定义；不调用模型、不写业务数据",
+  "cases": [
+    {
+      "chain": "resident_outpatient",
+      "case_ref": "eadf82c0aee0",
+      "fee_item_count": 11,
+      "public_bytes": 154038,
+      "public_bytes_without_context": 137957,
+      "context_added_bytes": 16081,
+      "top_level_bytes": {
+        "schema_version": 6,
+        "formula_inputs": 10926,
+        "rule_choices": 6958,
+        "fee_items": 54847,
+        "algorithm_version": 24,
+        "execution_status": 10,
+        "reconciliation_status": 12,
+        "summary_text": 2,
+        "summary_source": 10,
+        "may_claim_full_explanation": 5,
+        "fields": 32021,
+        "uncertainties": 3587,
+        "coverage": 112,
+        "calculations": 17199,
+        "sources": 4856,
+        "conditions": 3688,
+        "settlement_facts": 6791,
+        "path_steps": 1721,
+        "stages": 1494,
+        "trace": 238,
+        "template_explanations": 9177
+      },
+      "context_count": 11,
+      "diagnosis_copies": 44,
+      "distinct_diagnosis_facts": 4,
+      "read_snapshot_hashes": 1,
+      "hospital_level_values": [
+        "三级甲等"
+      ],
+      "duplicate_catalog_dates": 11,
+      "targets": [
+        {
+          "display_no": 5,
+          "line_id": "4",
+          "item_name": "注射用艾普拉唑钠",
+          "question": "第5行注射用艾普拉唑钠为什么有自付？目录支付条件与本单记录能说明什么？",
+          "wire_bytes": 14873,
+          "wire_top_level_bytes": {
+            "question": 105,
+            "decomposition": 10471,
+            "actual_payment_shares": 2,
+            "payment_reconciliation": 201,
+            "self_pay_2_breakdown": 77,
+            "target_evidence": 2,
+            "line_evidence": 2480,
+            "line_evidences": 2,
+            "target_kind": 10,
+            "comparison_note": 4,
+            "unexplained_fields": 2,
+            "target_gaps": 2,
+            "billed_items": 1269
+          },
+          "decomposition_sections_bytes": {
+            "schema_version": 6,
+            "formula_inputs": 731,
+            "fee_items": 5781,
+            "algorithm_version": 24,
+            "execution_status": 10,
+            "reconciliation_status": 12,
+            "summary_source": 10,
+            "may_claim_full_explanation": 5,
+            "fields": 2,
+            "uncertainties": 1830,
+            "calculations": 648,
+            "settlement_facts": 1185
+          },
+          "model_fee_item": {
+            "line_id": "4",
+            "item_code": "XA02BCA084B001010100453",
+            "item_name": "注射用艾普拉唑钠",
+            "item_type": "药品",
+            "fee_date": "2026-04-16",
+            "unit_price": "52.6000",
+            "quantity": "1.00",
+            "total_fee": "52.6000",
+            "observed_in_scope": "47.3400",
+            "observed_out_scope": "5.2600",
+            "observed_self_pay_2": "5.2600",
+            "calculated_in_scope": "47.3400",
+            "calculated_out_scope": "5.26",
+            "calculated_self_pay_2": "5.26",
+            "calculated_proportional_self_pay": "5.26",
+            "status": "calculated",
+            "verification_status": "unverified",
+            "division_method": "ratio",
+            "self_pay_ratio": "0.1000",
+            "included_ratio": null,
+            "unit_price_limit": "63.0000",
+            "conditions": [
+              "项目编码 XA02BCA084B001010100453 命中目录条目 drug:4:XA02BCA084B001010100453；费用日期 2026-04-16；目录有效期 2024-03-20 至 2050-12-31。",
+              "药品目录匹配；本行 1；比较条件 有效目录条目 → 满足",
+              "采用收费类别；本行 0102；比较条件 药品目录 → 满足",
+              "本次是否进入自制剂规则；本行 2；比较条件 16 / 6 → 不满足",
+              "本次集采规则判定；本行 否；比较条件 集采药品 → 不满足",
+              "单价≤本次采用门诊限价；本行 52.6000；比较条件 63.0000 → 满足",
+              "账面费用与单价×数量一致性；本行 52.6000；比较条件 52.600000 → 满足",
+              "目录收费类别：0102；账面收费类别：0102。"
+            ],
+            "formulas": [
+              "单价 52.6000 元×数量 1.00＝52.600000 元；原单费用 52.6000 元，两者一致。",
+              "自付二＝取整（费用金额 52.6000 元×采用自付比例 0.1000）＝5.26 元",
+              "医保内金额＝费用金额 52.6000 元－医保外金额 5.26 元＝47.3400 元",
+              "医保外金额＝费用金额 52.6000 元－医保内金额 47.3400 元＝5.26 元"
+            ],
+            "notes": [
+              "比例来源：采用明细结算时比例 0.1000，按既有规则优先于目录比例。",
+              "本行取整记录：按本次配置：四舍五入到分(ROP-RND-001 待确认)",
+              "自付二 5.26 元已包含在医保外金额中，不再额外加一次。",
+              "目录划分语义引用 ROP-CAT-000 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。"
+            ],
+            "classification_code": "0102",
+            "classification_label": "乙类西药",
+            "classification_source": "药品目录",
+            "centralized_procurement": false,
+            "catalog_entry_id": "drug:4:XA02BCA084B001010100453",
+            "effective_from": "2024-03-20",
+            "effective_to": "2050-12-31",
+            "ratio_source": "明细结算时比例（正值优先）",
+            "ratio_basis": "本行费用金额",
+            "limit_source": "本次命中目录限价",
+            "decision_path": [
+              {
+                "code": "catalog_match",
+                "label": "药品目录匹配",
+                "operator": "count_eq",
+                "actual": "1",
+                "expected": "有效目录条目",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "adopted_fee_category",
+                "label": "采用收费类别",
+                "operator": "select",
+                "actual": "0102",
+                "expected": "药品目录",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "preparation_check",
+                "label": "本次是否进入自制剂规则",
+                "operator": "in",
+                "actual": "2",
+                "expected": "16 / 6",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "centralized_procurement",
+                "label": "本次集采规则判定",
+                "operator": "eq",
+                "actual": "否",
+                "expected": "集采药品",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "drug_price_le_limit",
+                "label": "单价≤本次采用门诊限价",
+                "operator": "le",
+                "actual": "52.6000",
+                "expected": "63.0000",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "fee_equals_unit_price_times_count",
+                "label": "账面费用与单价×数量一致性",
+                "operator": "eq",
+                "actual": "52.6000",
+                "expected": "52.600000",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              }
+            ],
+            "calculation_refs": [
+              "calc.catalog.self_pay_2.4"
+            ],
+            "reconciliations": [
+              {
+                "label": "医保范围内",
+                "observed": "47.3400",
+                "calculated": "47.3400",
+                "difference": "0.0000",
+                "check_status": "matched"
+              },
+              {
+                "label": "医保范围外",
+                "observed": "5.2600",
+                "calculated": "5.26",
+                "difference": "0.0000",
+                "check_status": "matched"
+              },
+              {
+                "label": "自付二",
+                "observed": "5.2600",
+                "calculated": "5.26",
+                "difference": "0.0000",
+                "check_status": "matched"
+              }
+            ],
+            "explainable": true,
+            "explanation_reason": null,
+            "a_ypbs": "否",
+            "a_mzxj": "63.0000",
+            "a_xbbl": "0.0000",
+            "ypfl": "2",
+            "bzjg": "0.0000",
+            "settlement_price_limit": "0.0000",
+            "explanation": "乙类西药；比例来源：采用明细结算时比例 0.1000，按既有规则优先于目录比例。；自付二＝取整（费用金额 52.6000 元×采用自付比例 0.1000）＝5.26 元；医保内金额＝费用金额 52.6000 元－医保外金额 5.26 元＝47.3400 元",
+            "payment_condition_context": {
+              "bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+              "catalog_status": "unique",
+              "catalog_source": "药品目录",
+              "effective_from": "2024-03-20",
+              "effective_to": "2050-12-31",
+              "fee_date": "2026-04-16",
+              "date_basis": "settlement_date_fallback",
+              "specification": "10MG/支",
+              "unit": "支",
+              "usage": "01",
+              "hospital_level": "02",
+              "hospital_level_name": "三级甲等",
+              "catalog_hospital_level": null,
+              "catalog_hospital_type": null,
+              "catalog_use_restriction": null,
+              "diagnoses": [
+                {
+                  "code": "D66.x01",
+                  "name": "血友病A型",
+                  "association": "same_prescription",
+                  "is_placeholder": false,
+                  "department": "急诊科专业",
+                  "prescriber_level": null
+                },
+                {
+                  "code": "K92.209",
+                  "name": "下消化道出血",
+                  "association": "same_prescription",
+                  "is_placeholder": false,
+                  "department": "急诊科专业",
+                  "prescriber_level": null
+                },
+                {
+                  "code": "D64.903",
+                  "name": "重度贫血",
+                  "association": "same_prescription",
+                  "is_placeholder": false,
+                  "department": "急诊科专业",
+                  "prescriber_level": null
+                },
+                {
+                  "code": "K27.400x004",
+                  "name": "消化性溃疡伴出血",
+                  "association": "same_prescription",
+                  "is_placeholder": false,
+                  "department": "急诊科专业",
+                  "prescriber_level": null
+                }
+              ],
+              "diagnosis_status": "recorded",
+              "symptoms": null,
+              "symptoms_status": "not_available_in_current_source",
+              "clinical_conditions_verified": false
+            }
+          },
+          "line_evidence": {
+            "display_no": 5,
+            "line_id": "4",
+            "item_name": "注射用艾普拉唑钠",
+            "item_code": "XA02BCA084B001010100453",
+            "unit_price": "52.6000",
+            "quantity": "1.00",
+            "total_fee": "52.6000",
+            "observed_in_scope": "47.3400",
+            "observed_out_scope": "5.2600",
+            "observed_self_pay_2": "5.2600",
+            "calculated_in_scope": "47.3400",
+            "calculated_out_scope": "5.26",
+            "calculated_self_pay_2": "5.26",
+            "division_method": "ratio",
+            "unit_price_limit": "63.0000",
+            "self_pay_ratio": "0.1000",
+            "limit_source": "本次命中目录限价",
+            "ratio_source": "明细结算时比例（正值优先）",
+            "decision_path": [
+              {
+                "code": "catalog_match",
+                "label": "药品目录匹配",
+                "operator": "count_eq",
+                "actual": "1",
+                "expected": "有效目录条目",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "adopted_fee_category",
+                "label": "采用收费类别",
+                "operator": "select",
+                "actual": "0102",
+                "expected": "药品目录",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "preparation_check",
+                "label": "本次是否进入自制剂规则",
+                "operator": "in",
+                "actual": "2",
+                "expected": "16 / 6",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "centralized_procurement",
+                "label": "本次集采规则判定",
+                "operator": "eq",
+                "actual": "否",
+                "expected": "集采药品",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "drug_price_le_limit",
+                "label": "单价≤本次采用门诊限价",
+                "operator": "le",
+                "actual": "52.6000",
+                "expected": "63.0000",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "fee_equals_unit_price_times_count",
+                "label": "账面费用与单价×数量一致性",
+                "operator": "eq",
+                "actual": "52.6000",
+                "expected": "52.600000",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              }
+            ],
+            "formulas": [
+              "单价 52.6000 元×数量 1.00＝52.600000 元；原单费用 52.6000 元，两者一致。",
+              "自付二＝取整（费用金额 52.6000 元×采用自付比例 0.1000）＝5.26 元",
+              "医保内金额＝费用金额 52.6000 元－医保外金额 5.26 元＝47.3400 元",
+              "医保外金额＝费用金额 52.6000 元－医保内金额 47.3400 元＝5.26 元"
+            ],
+            "notes": [
+              "比例来源：采用明细结算时比例 0.1000，按既有规则优先于目录比例。",
+              "本行取整记录：按本次配置：四舍五入到分(ROP-RND-001 待确认)",
+              "自付二 5.26 元已包含在医保外金额中，不再额外加一次。",
+              "目录划分语义引用 ROP-CAT-000 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。"
+            ],
+            "explainable": true,
+            "explanation_reason": null,
+            "attributes": []
+          },
+          "retained_whole_bill_items": 16,
+          "billed_items_count": 11,
+          "billed_items": [
+            {
+              "display_no": 1,
+              "item_name": "输血器",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 2,
+              "item_name": "氯化钠注射液",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 3,
+              "item_name": "门/急诊留观诊察费",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 4,
+              "item_name": "氯化钠注射液",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 5,
+              "item_name": "注射用艾普拉唑钠",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 6,
+              "item_name": "静脉输液",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 7,
+              "item_name": "输液器",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 8,
+              "item_name": "静脉留置针",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 9,
+              "item_name": "氯化钠注射液",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 10,
+              "item_name": "注射用卡络磺钠",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 11,
+              "item_name": "人凝血因子Ⅷ",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            }
+          ],
+          "display_no_9_authorized_as_numeric": true,
+          "last_response_global_attribution_collisions": [
+            {
+              "matched_label": "自付二",
+              "answer_amount": "5.26",
+              "whole_bill_expected": "3.34",
+              "answer_scope": "当前单行问题"
+            }
+          ],
+          "last_response_equation_findings": [
+            {
+              "segment": "- 单价52.60元×数量1.00＝52.60元",
+              "parsed_values": [
+                "-52.6000",
+                "52.60"
+              ],
+              "issue": "unequal"
+            },
+            {
+              "segment": "- 先行自付＝52.60×0.10＝5.26元",
+              "issue": "cannot_parse"
+            },
+            {
+              "segment": "- 医保内金额＝52.60－5.26＝47.34元",
+              "issue": "cannot_parse"
+            }
+          ]
+        },
+        {
+          "display_no": 10,
+          "line_id": "9",
+          "item_name": "注射用卡络磺钠",
+          "question": "第10行注射用卡络磺钠为什么有自付？目录支付条件与本单记录能说明什么？",
+          "wire_bytes": 8260,
+          "wire_top_level_bytes": {
+            "question": 103,
+            "decomposition": 5740,
+            "actual_payment_shares": 2,
+            "payment_reconciliation": 201,
+            "self_pay_2_breakdown": 77,
+            "target_evidence": 2,
+            "line_evidence": 600,
+            "line_evidences": 2,
+            "target_kind": 10,
+            "comparison_note": 4,
+            "unexplained_fields": 2,
+            "target_gaps": 2,
+            "billed_items": 1269
+          },
+          "decomposition_sections_bytes": {
+            "schema_version": 6,
+            "fee_items": 2463,
+            "algorithm_version": 24,
+            "execution_status": 10,
+            "reconciliation_status": 12,
+            "summary_source": 10,
+            "may_claim_full_explanation": 5,
+            "fields": 2,
+            "uncertainties": 1830,
+            "settlement_facts": 1185
+          },
+          "model_fee_item": {
+            "line_id": "9",
+            "item_code": "XB02BXK018B001010201504",
+            "item_name": "注射用卡络磺钠",
+            "item_type": "药品",
+            "fee_date": "2026-04-16",
+            "unit_price": "3.8200",
+            "quantity": "4.00",
+            "total_fee": "15.2800",
+            "observed_in_scope": "13.7520",
+            "observed_out_scope": "1.5280",
+            "observed_self_pay_2": "1.5280",
+            "calculated_in_scope": null,
+            "calculated_out_scope": null,
+            "calculated_self_pay_2": null,
+            "calculated_proportional_self_pay": null,
+            "status": "calculated",
+            "verification_status": "unverified",
+            "division_method": "ratio",
+            "self_pay_ratio": null,
+            "included_ratio": null,
+            "unit_price_limit": null,
+            "conditions": [],
+            "formulas": [],
+            "notes": [],
+            "classification_code": "0102",
+            "classification_label": "乙类西药",
+            "classification_source": "药品目录",
+            "centralized_procurement": false,
+            "catalog_entry_id": "drug:9:XB02BXK018B001010201504",
+            "effective_from": "2024-06-01",
+            "effective_to": "2050-12-31",
+            "ratio_source": null,
+            "ratio_basis": null,
+            "limit_source": null,
+            "decision_path": [],
+            "calculation_refs": [],
+            "reconciliations": [],
+            "explainable": false,
+            "explanation_reason": null,
+            "a_ypbs": "否",
+            "a_mzxj": "0.0000",
+            "a_xbbl": "0.0000",
+            "ypfl": "2",
+            "bzjg": "0.0000",
+            "settlement_price_limit": "0.0000",
+            "explanation": "本行尚未逐项算平，算法待补全",
+            "payment_condition_context": {
+              "bz": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+              "catalog_status": "unique",
+              "catalog_source": "药品目录",
+              "effective_from": "2024-06-01",
+              "effective_to": "2050-12-31",
+              "fee_date": "2026-04-16",
+              "date_basis": "settlement_date_fallback",
+              "specification": "20MG 5西林/盒",
+              "unit": "西林",
+              "usage": "14",
+              "hospital_level": "02",
+              "hospital_level_name": "三级甲等",
+              "catalog_hospital_level": null,
+              "catalog_hospital_type": null,
+              "catalog_use_restriction": null,
+              "diagnoses": [
+                {
+                  "code": "D66.x01",
+                  "name": "血友病A型",
+                  "association": "same_prescription",
+                  "is_placeholder": false,
+                  "department": "急诊科专业",
+                  "prescriber_level": null
+                },
+                {
+                  "code": "K92.209",
+                  "name": "下消化道出血",
+                  "association": "same_prescription",
+                  "is_placeholder": false,
+                  "department": "急诊科专业",
+                  "prescriber_level": null
+                },
+                {
+                  "code": "D64.903",
+                  "name": "重度贫血",
+                  "association": "same_prescription",
+                  "is_placeholder": false,
+                  "department": "急诊科专业",
+                  "prescriber_level": null
+                },
+                {
+                  "code": "K27.400x004",
+                  "name": "消化性溃疡伴出血",
+                  "association": "same_prescription",
+                  "is_placeholder": false,
+                  "department": "急诊科专业",
+                  "prescriber_level": null
+                }
+              ],
+              "diagnosis_status": "recorded",
+              "symptoms": null,
+              "symptoms_status": "not_available_in_current_source",
+              "clinical_conditions_verified": false
+            }
+          },
+          "line_evidence": {
+            "display_no": 10,
+            "line_id": "9",
+            "item_name": "注射用卡络磺钠",
+            "item_code": "XB02BXK018B001010201504",
+            "unit_price": "3.8200",
+            "quantity": "4.00",
+            "total_fee": "15.2800",
+            "observed_in_scope": "13.7520",
+            "observed_out_scope": "1.5280",
+            "observed_self_pay_2": "1.5280",
+            "calculated_in_scope": null,
+            "calculated_out_scope": null,
+            "calculated_self_pay_2": null,
+            "division_method": "ratio",
+            "unit_price_limit": null,
+            "self_pay_ratio": null,
+            "limit_source": null,
+            "ratio_source": null,
+            "decision_path": [],
+            "formulas": [],
+            "notes": [],
+            "explainable": false,
+            "explanation_reason": "本行尚未逐项算平，算法待补全",
+            "attributes": []
+          },
+          "retained_whole_bill_items": 16,
+          "billed_items_count": 11,
+          "billed_items": [
+            {
+              "display_no": 1,
+              "item_name": "输血器",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 2,
+              "item_name": "氯化钠注射液",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 3,
+              "item_name": "门/急诊留观诊察费",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 4,
+              "item_name": "氯化钠注射液",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 5,
+              "item_name": "注射用艾普拉唑钠",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 6,
+              "item_name": "静脉输液",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 7,
+              "item_name": "输液器",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 8,
+              "item_name": "静脉留置针",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 9,
+              "item_name": "氯化钠注射液",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 10,
+              "item_name": "注射用卡络磺钠",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 11,
+              "item_name": "人凝血因子Ⅷ",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            }
+          ],
+          "display_no_9_authorized_as_numeric": true,
+          "last_response_global_attribution_collisions": [
+            {
+              "matched_label": "自付二",
+              "answer_amount": "1.53",
+              "whole_bill_expected": "3.34",
+              "answer_scope": "当前单行问题"
+            }
+          ],
+          "last_response_equation_findings": []
+        }
+      ],
+      "nonempty_bz_line_count": 4,
+      "fee_prescription_count": 3,
+      "diagnosis_prescription_count": 3
+    },
+    {
+      "chain": "employee_outpatient",
+      "case_ref": "a1f3048c9526",
+      "fee_item_count": 32,
+      "public_bytes": 282837,
+      "public_bytes_without_context": 250201,
+      "context_added_bytes": 32636,
+      "top_level_bytes": {
+        "schema_version": 6,
+        "formula_inputs": 19845,
+        "rule_choices": 8667,
+        "fee_items": 136074,
+        "algorithm_version": 24,
+        "execution_status": 9,
+        "reconciliation_status": 12,
+        "summary_text": 2,
+        "summary_source": 10,
+        "may_claim_full_explanation": 5,
+        "fields": 50466,
+        "uncertainties": 2459,
+        "coverage": 112,
+        "calculations": 27230,
+        "sources": 5352,
+        "conditions": 4190,
+        "settlement_facts": 6794,
+        "path_steps": 2203,
+        "stages": 1505,
+        "trace": 239,
+        "template_explanations": 17279
+      },
+      "context_count": 32,
+      "diagnosis_copies": 32,
+      "distinct_diagnosis_facts": 1,
+      "read_snapshot_hashes": 1,
+      "hospital_level_values": [
+        "三级甲等"
+      ],
+      "duplicate_catalog_dates": 32,
+      "targets": [
+        {
+          "display_no": 7,
+          "line_id": "6",
+          "item_name": "西甲硅油乳剂",
+          "question": "第7行西甲硅油乳剂为什么有自付？目录支付条件与本单记录能说明什么？",
+          "wire_bytes": 16374,
+          "wire_top_level_bytes": {
+            "question": 99,
+            "decomposition": 9298,
+            "actual_payment_shares": 2,
+            "payment_reconciliation": 201,
+            "self_pay_2_breakdown": 77,
+            "target_evidence": 2,
+            "line_evidence": 2447,
+            "line_evidences": 2,
+            "target_kind": 10,
+            "comparison_note": 4,
+            "unexplained_fields": 2,
+            "target_gaps": 2,
+            "billed_items": 3982
+          },
+          "decomposition_sections_bytes": {
+            "schema_version": 6,
+            "formula_inputs": 731,
+            "fee_items": 5199,
+            "algorithm_version": 24,
+            "execution_status": 9,
+            "reconciliation_status": 12,
+            "summary_source": 10,
+            "may_claim_full_explanation": 5,
+            "fields": 2,
+            "uncertainties": 1242,
+            "calculations": 648,
+            "settlement_facts": 1183
+          },
+          "model_fee_item": {
+            "line_id": "6",
+            "item_code": "XA03AXX007X003010178278",
+            "item_name": "西甲硅油乳剂",
+            "item_type": "药品",
+            "fee_date": "2026-04-17",
+            "unit_price": "33.0000",
+            "quantity": "1.00",
+            "total_fee": "33.0000",
+            "observed_in_scope": "29.7000",
+            "observed_out_scope": "3.3000",
+            "observed_self_pay_2": "3.3000",
+            "calculated_in_scope": "29.7000",
+            "calculated_out_scope": "3.30",
+            "calculated_self_pay_2": "3.30",
+            "calculated_proportional_self_pay": "3.30",
+            "status": "calculated",
+            "verification_status": "unverified",
+            "division_method": "ratio",
+            "self_pay_ratio": "0.1000",
+            "included_ratio": null,
+            "unit_price_limit": null,
+            "conditions": [
+              "项目编码 XA03AXX007X003010178278 命中目录条目 drug:0:XA03AXX007X003010178278；费用日期 2026-04-17；目录有效期 2021-01-01 至 2050-12-31。",
+              "药品目录匹配；本行 1；比较条件 有效目录条目 → 满足",
+              "采用收费类别；本行 0102；比较条件 药品目录 → 满足",
+              "本次是否进入自制剂规则；本行 2；比较条件 16 / 6 → 不满足",
+              "本次集采规则判定；本行 否；比较条件 集采药品 → 不满足",
+              "本次是否采用正值门诊限价；本行 0.0000；比较条件 0 → 不满足",
+              "账面费用与单价×数量一致性；本行 33.0000；比较条件 33.000000 → 满足",
+              "目录收费类别：0102；账面收费类别：0102。"
+            ],
+            "formulas": [
+              "单价 33.0000 元×数量 1.00＝33.000000 元；原单费用 33.0000 元，两者一致。",
+              "自付二＝取整（费用金额 33.0000 元×采用自付比例 0.1000）＝3.30 元",
+              "医保内金额＝费用金额 33.0000 元－医保外金额 3.30 元＝29.7000 元",
+              "医保外金额＝费用金额 33.0000 元－医保内金额 29.7000 元＝3.30 元"
+            ],
+            "notes": [
+              "比例来源：采用明细结算时比例 0.1000，按既有规则优先于目录比例。",
+              "本行取整记录：按本次配置：四舍五入到分(EOP-RND-001 待确认)",
+              "自付二 3.30 元已包含在医保外金额中，不再额外加一次。",
+              "目录划分语义引用 EOP-CAT 系列 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。"
+            ],
+            "classification_code": "0102",
+            "classification_label": "乙类西药",
+            "classification_source": "药品目录",
+            "centralized_procurement": false,
+            "catalog_entry_id": "drug:0:XA03AXX007X003010178278",
+            "effective_from": "2021-01-01",
+            "effective_to": "2050-12-31",
+            "ratio_source": "明细结算时比例（正值优先）",
+            "ratio_basis": "本行费用金额",
+            "limit_source": null,
+            "decision_path": [
+              {
+                "code": "catalog_match",
+                "label": "药品目录匹配",
+                "operator": "count_eq",
+                "actual": "1",
+                "expected": "有效目录条目",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "adopted_fee_category",
+                "label": "采用收费类别",
+                "operator": "select",
+                "actual": "0102",
+                "expected": "药品目录",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "preparation_check",
+                "label": "本次是否进入自制剂规则",
+                "operator": "in",
+                "actual": "2",
+                "expected": "16 / 6",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "centralized_procurement",
+                "label": "本次集采规则判定",
+                "operator": "eq",
+                "actual": "否",
+                "expected": "集采药品",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "positive_drug_limit",
+                "label": "本次是否采用正值门诊限价",
+                "operator": "gt",
+                "actual": "0.0000",
+                "expected": "0",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "fee_equals_unit_price_times_count",
+                "label": "账面费用与单价×数量一致性",
+                "operator": "eq",
+                "actual": "33.0000",
+                "expected": "33.000000",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              }
+            ],
+            "calculation_refs": [
+              "calc.catalog.self_pay_2.6"
+            ],
+            "reconciliations": [
+              {
+                "label": "医保范围内",
+                "observed": "29.7000",
+                "calculated": "29.7000",
+                "difference": "0.0000",
+                "check_status": "matched"
+              },
+              {
+                "label": "医保范围外",
+                "observed": "3.3000",
+                "calculated": "3.30",
+                "difference": "0.0000",
+                "check_status": "matched"
+              },
+              {
+                "label": "自付二",
+                "observed": "3.3000",
+                "calculated": "3.30",
+                "difference": "0.0000",
+                "check_status": "matched"
+              }
+            ],
+            "explainable": true,
+            "explanation_reason": null,
+            "a_ypbs": "否",
+            "a_mzxj": "0.0000",
+            "a_xbbl": "0.0000",
+            "ypfl": "2",
+            "bzjg": "0.0000",
+            "settlement_price_limit": "0.0000",
+            "explanation": "乙类西药；比例来源：采用明细结算时比例 0.1000，按既有规则优先于目录比例。；自付二＝取整（费用金额 33.0000 元×采用自付比例 0.1000）＝3.30 元；医保内金额＝费用金额 33.0000 元－医保外金额 3.30 元＝29.7000 元",
+            "payment_condition_context": {
+              "bz": "限胃肠镜检查和腹部影像学检查",
+              "catalog_status": "unique",
+              "catalog_source": "药品目录",
+              "effective_from": "2021-01-01",
+              "effective_to": "2050-12-31",
+              "fee_date": "2026-04-17",
+              "date_basis": "settlement_date_fallback",
+              "specification": "1.2G 30ML/瓶",
+              "unit": "瓶",
+              "usage": "01",
+              "hospital_level": "02",
+              "hospital_level_name": "三级甲等",
+              "catalog_hospital_level": null,
+              "catalog_hospital_type": null,
+              "catalog_use_restriction": null,
+              "diagnoses": [
+                {
+                  "code": "R19.400",
+                  "name": "大便习惯改变",
+                  "association": "same_prescription",
+                  "is_placeholder": false,
+                  "department": "消化内科专业",
+                  "prescriber_level": null
+                }
+              ],
+              "diagnosis_status": "recorded",
+              "symptoms": null,
+              "symptoms_status": "not_available_in_current_source",
+              "clinical_conditions_verified": false
+            }
+          },
+          "line_evidence": {
+            "display_no": 7,
+            "line_id": "6",
+            "item_name": "西甲硅油乳剂",
+            "item_code": "XA03AXX007X003010178278",
+            "unit_price": "33.0000",
+            "quantity": "1.00",
+            "total_fee": "33.0000",
+            "observed_in_scope": "29.7000",
+            "observed_out_scope": "3.3000",
+            "observed_self_pay_2": "3.3000",
+            "calculated_in_scope": "29.7000",
+            "calculated_out_scope": "3.30",
+            "calculated_self_pay_2": "3.30",
+            "division_method": "ratio",
+            "unit_price_limit": null,
+            "self_pay_ratio": "0.1000",
+            "limit_source": null,
+            "ratio_source": "明细结算时比例（正值优先）",
+            "decision_path": [
+              {
+                "code": "catalog_match",
+                "label": "药品目录匹配",
+                "operator": "count_eq",
+                "actual": "1",
+                "expected": "有效目录条目",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "adopted_fee_category",
+                "label": "采用收费类别",
+                "operator": "select",
+                "actual": "0102",
+                "expected": "药品目录",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "preparation_check",
+                "label": "本次是否进入自制剂规则",
+                "operator": "in",
+                "actual": "2",
+                "expected": "16 / 6",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "centralized_procurement",
+                "label": "本次集采规则判定",
+                "operator": "eq",
+                "actual": "否",
+                "expected": "集采药品",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "positive_drug_limit",
+                "label": "本次是否采用正值门诊限价",
+                "operator": "gt",
+                "actual": "0.0000",
+                "expected": "0",
+                "outcome": "false",
+                "rule_refs": [],
+                "calculation_refs": []
+              },
+              {
+                "code": "fee_equals_unit_price_times_count",
+                "label": "账面费用与单价×数量一致性",
+                "operator": "eq",
+                "actual": "33.0000",
+                "expected": "33.000000",
+                "outcome": "true",
+                "rule_refs": [],
+                "calculation_refs": []
+              }
+            ],
+            "formulas": [
+              "单价 33.0000 元×数量 1.00＝33.000000 元；原单费用 33.0000 元，两者一致。",
+              "自付二＝取整（费用金额 33.0000 元×采用自付比例 0.1000）＝3.30 元",
+              "医保内金额＝费用金额 33.0000 元－医保外金额 3.30 元＝29.7000 元",
+              "医保外金额＝费用金额 33.0000 元－医保内金额 29.7000 元＝3.30 元"
+            ],
+            "notes": [
+              "比例来源：采用明细结算时比例 0.1000，按既有规则优先于目录比例。",
+              "本行取整记录：按本次配置：四舍五入到分(EOP-RND-001 待确认)",
+              "自付二 3.30 元已包含在医保外金额中，不再额外加一次。",
+              "目录划分语义引用 EOP-CAT 系列 规则（文档明确-待官方核证），计算结果不升级为已确认政策解释。"
+            ],
+            "explainable": true,
+            "explanation_reason": null,
+            "attributes": []
+          },
+          "retained_whole_bill_items": 16,
+          "billed_items_count": 32,
+          "billed_items": [
+            {
+              "display_no": 1,
+              "item_name": "负压吸引（中心泵）",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 2,
+              "item_name": "活检钳",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 3,
+              "item_name": "盐酸奥布卡因凝胶",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 4,
+              "item_name": "消化道内镜活检术",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 5,
+              "item_name": "肛门指诊",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 6,
+              "item_name": "硫酸镁钠钾口服用浓溶液",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 7,
+              "item_name": "西甲硅油乳剂",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 8,
+              "item_name": "开塞露",
+              "item_type": "药品",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 9,
+              "item_name": "电子胃镜检查",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 10,
+              "item_name": "真空采血管",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 11,
+              "item_name": "静脉采血",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 12,
+              "item_name": "真空采血管",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 13,
+              "item_name": "真空采血管",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 14,
+              "item_name": "肛门指诊",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 15,
+              "item_name": "肛门直肠测压",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 16,
+              "item_name": "消化道动力监测",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 17,
+              "item_name": "直肠测压导管",
+              "item_type": "耗材",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 18,
+              "item_name": "电子结肠镜检查",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 19,
+              "item_name": "全血细胞计数+5分类检测",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 20,
+              "item_name": "总蛋白(TP)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 21,
+              "item_name": "白蛋白(Alb)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 22,
+              "item_name": "前白蛋白(PA)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 23,
+              "item_name": "丙氨酸氨基转移酶(ALT)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 24,
+              "item_name": "总胆红素(T-Bil)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 25,
+              "item_name": "直接胆红素(D-Bil)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 26,
+              "item_name": "乙型肝炎表面抗原定量(HBsAg)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 27,
+              "item_name": "丙型肝炎抗体(抗HCV)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 28,
+              "item_name": "人免疫缺陷病毒抗体(抗HIV)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 29,
+              "item_name": "梅毒螺旋体抗体(抗TP)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 30,
+              "item_name": "肌酐(Cr)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 31,
+              "item_name": "尿素(Urea)测定",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            },
+            {
+              "display_no": 32,
+              "item_name": "幽门螺杆菌尿素酶检测",
+              "item_type": "诊疗项目",
+              "association": "same_settlement_charge_only"
+            }
+          ],
+          "display_no_9_authorized_as_numeric": true,
+          "last_response_global_attribution_collisions": [],
+          "last_response_equation_findings": [
+            {
+              "segment": "- 因此医保内金额＝33.00－3.30＝29.70元",
+              "issue": "cannot_parse"
+            }
+          ]
+        }
+      ],
+      "nonempty_bz_line_count": 25,
+      "fee_prescription_count": 3,
+      "diagnosis_prescription_count": 3
+    }
+  ],
+  "deterministic_counterexamples": {
+    "correct_equation_without_bullet": [],
+    "same_equation_with_bullet": [
+      "算式两边金额不一致，请引用资料中的计算关系。"
+    ],
+    "line_amount_checked_against_whole_bill": false,
+    "line_amount_checked_in_own_scope": true,
+    "wrong_line_amount_in_own_scope": false
+  }
+}

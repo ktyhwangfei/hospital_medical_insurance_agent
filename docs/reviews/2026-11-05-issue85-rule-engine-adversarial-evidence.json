@@ -1,0 +1,989 @@
+{
+  "observed_at": "2026-11-05T02:59:25.060802+00:00",
+  "scope": "仅合成输入的只读反例；非新增真实病例或专家临床裁定；未修改产品代码",
+  "existing_unit_tests": {
+    "command": "python -m pytest src/tests/unit/domain/directory_compliance -q",
+    "passed": 17
+  },
+  "source_sha256": {
+    "docs\\steering\\限制性备注合规核验-规则引擎设计-V1.0.md": "44ff969116dcff80a402bc78b278087a1bf6577310f580f9792dc87195d3284c",
+    "src\\domain\\directory_compliance\\__init__.py": "feaf29bfa4a4fdbdedc026ff33adc126e4f2efd4fa16ed7765e3bf9de1836c6d",
+    "src\\domain\\directory_compliance\\engine.py": "9feb2e60cd019bf9fe0667ba6edb0958d50c957e4e15e83242e6fe4e06048d3c",
+    "src\\domain\\directory_compliance\\explanation.py": "c646a4a33a0d7827c3e4a1d13946051d2dc44852430a53a4ea9acbd11014b36f",
+    "src\\domain\\directory_compliance\\models.py": "c533c91948177f326b6f6fffd5263d671503cb5cd67efe5f6833459d6b3efcc9",
+    "src\\domain\\directory_compliance\\rules_seed.py": "e8cace8480f2ce4a2b637070464d70bfcca2c4bed1d8def8e158d119261547c5"
+  },
+  "schema_example_errors": [
+    {
+      "loc": [
+        "item_code"
+      ],
+      "type": "missing"
+    },
+    {
+      "loc": [
+        "item_name"
+      ],
+      "type": "missing"
+    },
+    {
+      "loc": [
+        "catalog_effective_from"
+      ],
+      "type": "missing"
+    },
+    {
+      "loc": [
+        "catalog_effective_to"
+      ],
+      "type": "missing"
+    },
+    {
+      "loc": [
+        "condition_groups",
+        0,
+        "conditions",
+        0,
+        "condition_type"
+      ],
+      "type": "missing"
+    },
+    {
+      "loc": [
+        "condition_groups",
+        0,
+        "conditions",
+        0,
+        "concept_code"
+      ],
+      "type": "missing"
+    },
+    {
+      "loc": [
+        "condition_groups",
+        0,
+        "conditions",
+        1,
+        "condition_type"
+      ],
+      "type": "missing"
+    },
+    {
+      "loc": [
+        "condition_groups",
+        0,
+        "conditions",
+        1,
+        "concept_code"
+      ],
+      "type": "missing"
+    },
+    {
+      "loc": [
+        "condition_groups",
+        1,
+        "conditions",
+        0,
+        "condition_type"
+      ],
+      "type": "missing"
+    },
+    {
+      "loc": [
+        "condition_groups",
+        1,
+        "conditions",
+        0,
+        "concept_code"
+      ],
+      "type": "missing"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "C1_disease_without_bleeding",
+      "synthetic": true,
+      "rule_id": "rule-XA02BCA084B001010100453-20240320",
+      "rule": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "catalog_effective_from": "2024-03-20",
+        "catalog_effective_to": "2050-12-31",
+        "condition_groups": [
+          {
+            "conditions": [
+              {
+                "condition_type": "disease",
+                "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+                "source_span": "预防重症患者应激性溃疡出血",
+                "price_cap": null
+              },
+              {
+                "condition_type": "disease",
+                "concept_code": "dg.peptic_ulcer_bleeding",
+                "source_span": "消化性溃疡出血",
+                "price_cap": null
+              }
+            ]
+          },
+          {
+            "conditions": [
+              {
+                "condition_type": "price_cap",
+                "concept_code": "unit.vial_10mg",
+                "source_span": "支付标准不得高于：63.00元(10mg/支)",
+                "price_cap": {
+                  "amount": "63.00",
+                  "unit": "支",
+                  "strength_text": "10mg"
+                }
+              }
+            ]
+          }
+        ],
+        "source_bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+        "revision": 1
+      },
+      "input": {
+        "hospital_code": "SYNTHETIC",
+        "trade_date": "2026-04-16",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "unit_price": "52.60",
+        "count": "1",
+        "specification": "10MG/支",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26",
+        "same_recipe_diagnoses": [
+          {
+            "code": "K27.9",
+            "name": "消化性溃疡",
+            "medical_record": ""
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": ""
+      },
+      "expected": "未提供出血事实，不能确认消化性溃疡出血条件；至少应保留未知",
+      "actual": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "rule_revision": 1,
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "verdicts": [
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+              "source_span": "预防重症患者应激性溃疡出血",
+              "price_cap": null
+            },
+            "status": "unverifiable",
+            "evidence": [
+              {
+                "kind": "mapping_missing",
+                "summary": "概念码 dg.stress_ulcer_prophylaxis_critical 无有效 diagnosis 值域映射，fail-closed 不予核验",
+                "source": "value_domain_mappings"
+              }
+            ],
+            "missing": "缺少 dg.stress_ulcer_prophylaxis_critical 的诊断值域映射"
+          },
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.peptic_ulcer_bleeding",
+              "source_span": "消化性溃疡出血",
+              "price_cap": null
+            },
+            "status": "supported",
+            "evidence": [
+              {
+                "kind": "diagnosis_match",
+                "summary": "同处方诊断名称/病历「消化性溃疡/」命中病种条件「消化性溃疡出血」",
+                "source": "o_Diagnose.DiagnoseName=消化性溃疡"
+              }
+            ],
+            "missing": ""
+          },
+          {
+            "condition": {
+              "condition_type": "price_cap",
+              "concept_code": "unit.vial_10mg",
+              "source_span": "支付标准不得高于：63.00元(10mg/支)",
+              "price_cap": {
+                "amount": "63.00",
+                "unit": "支",
+                "strength_text": "10mg"
+              }
+            },
+            "status": "supported",
+            "evidence": [
+              {
+                "kind": "price_check",
+                "summary": "换算后单价 52.6000 元/支 未超支付标准 63.00 元/支（规格单位一致，直接可比）",
+                "source": "o_FeeItem.UnitPrice=52.60, 规则 支付标准不得高于：63.00元(10mg/支)"
+              }
+            ],
+            "missing": ""
+          }
+        ],
+        "risk_tier": "clear",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26"
+      },
+      "patient_text": "注射用艾普拉唑钠 52.60 元：该药在医保目录内，本次就诊记录符合目录限定的支付范围，按医保内结算。其中 5.26 元为乙类先行自付部分，其余已纳入医保结算。"
+    },
+    {
+      "case_id": "C2_negated_oral_difficulty",
+      "synthetic": true,
+      "rule_id": "rule-XB02BXK018B001010201504-20240601",
+      "rule": {
+        "rule_id": "rule-XB02BXK018B001010201504-20240601",
+        "item_code": "XB02BXK018B001010201504",
+        "item_name": "注射用卡络磺钠",
+        "catalog_effective_from": "2024-06-01",
+        "catalog_effective_to": "2050-12-31",
+        "condition_groups": [
+          {
+            "conditions": [
+              {
+                "condition_type": "disease",
+                "concept_code": "dg.unable_oral_intake",
+                "source_span": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+                "price_cap": null
+              }
+            ]
+          }
+        ],
+        "source_bz": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+        "revision": 1
+      },
+      "input": {
+        "hospital_code": "SYNTHETIC",
+        "trade_date": "2026-04-16",
+        "item_code": "XB02BXK018B001010201504",
+        "item_name": "注射用卡络磺钠",
+        "unit_price": "52.60",
+        "count": "1",
+        "specification": "10MG/支",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26",
+        "same_recipe_diagnoses": [
+          {
+            "code": "R00",
+            "name": "其他症状",
+            "medical_record": "无吞咽困难，可正常口服药物"
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": ""
+      },
+      "expected": "不得把否定的吞咽困难当成无法口服的支持证据",
+      "actual": {
+        "rule_id": "rule-XB02BXK018B001010201504-20240601",
+        "rule_revision": 1,
+        "item_code": "XB02BXK018B001010201504",
+        "item_name": "注射用卡络磺钠",
+        "verdicts": [
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.unable_oral_intake",
+              "source_span": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+              "price_cap": null
+            },
+            "status": "supported",
+            "evidence": [
+              {
+                "kind": "diagnosis_match",
+                "summary": "同处方诊断名称/病历「其他症状/无吞咽困难，可正常口服药物」命中病种条件「限无法口服卡络磺钠（肾上腺色腙）的患者」",
+                "source": "o_Diagnose.DiagnoseName=其他症状"
+              }
+            ],
+            "missing": ""
+          }
+        ],
+        "risk_tier": "clear",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26"
+      },
+      "patient_text": "注射用卡络磺钠 52.60 元：该药在医保目录内，本次就诊记录符合目录限定的支付范围，按医保内结算。其中 5.26 元为乙类先行自付部分，其余已纳入医保结算。"
+    },
+    {
+      "case_id": "C3_correctly_split",
+      "synthetic": true,
+      "rule_id": "SYNTHETIC_payment_standard",
+      "rule": {
+        "rule_id": "SYNTHETIC_payment_standard",
+        "item_code": "SYNTHETIC",
+        "item_name": "合成药品",
+        "catalog_effective_from": "2026-01-01",
+        "catalog_effective_to": "2026-12-31",
+        "condition_groups": [
+          {
+            "conditions": [
+              {
+                "condition_type": "price_cap",
+                "concept_code": "unit.vial_10mg",
+                "source_span": "支付标准80元/10mg支",
+                "price_cap": {
+                  "amount": "80",
+                  "unit": "支",
+                  "strength_text": "10mg"
+                }
+              }
+            ]
+          }
+        ],
+        "source_bz": "合成政策前提：支付标准80元/10mg支，允许超标准部分自付",
+        "revision": 1
+      },
+      "input": {
+        "hospital_code": "SYNTHETIC",
+        "trade_date": "2026-04-16",
+        "item_code": "SYNTHETIC",
+        "item_name": "合成药品",
+        "unit_price": "100",
+        "count": "1",
+        "specification": "10MG/支",
+        "fee": "100",
+        "fee_in": "72",
+        "fee_out": "28",
+        "same_recipe_diagnoses": [
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": ""
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": ""
+      },
+      "expected": "在明确允许超标准自付且先行10%的合成前提下，72/28与90/10不应仅因售价相同得到相同的支付基数判断",
+      "actual": {
+        "rule_id": "SYNTHETIC_payment_standard",
+        "rule_revision": 1,
+        "item_code": "SYNTHETIC",
+        "item_name": "合成药品",
+        "verdicts": [
+          {
+            "condition": {
+              "condition_type": "price_cap",
+              "concept_code": "unit.vial_10mg",
+              "source_span": "支付标准80元/10mg支",
+              "price_cap": {
+                "amount": "80",
+                "unit": "支",
+                "strength_text": "10mg"
+              }
+            },
+            "status": "contradicted",
+            "evidence": [
+              {
+                "kind": "price_check",
+                "summary": "换算后单价 100.0000 元/支 超出支付标准 80 元/支（规格单位一致，直接可比）",
+                "source": "o_FeeItem.UnitPrice=100, 规则 支付标准80元/10mg支"
+              }
+            ],
+            "missing": ""
+          }
+        ],
+        "risk_tier": "contra",
+        "fee": "100",
+        "fee_in": "72",
+        "fee_out": "28"
+      },
+      "patient_text": "合成药品 100.00 元：该药的医保支付附带有特定使用条件，目前发现本次记录与条件存在不一致之处，医院医保部门正在进一步核实。核实不影响您的就诊安排，本次费用以结算单为准；如有疑问可到门诊医保窗口咨询核实进展。"
+    },
+    {
+      "case_id": "C4_unsplit",
+      "synthetic": true,
+      "rule_id": "SYNTHETIC_payment_standard",
+      "rule": {
+        "rule_id": "SYNTHETIC_payment_standard",
+        "item_code": "SYNTHETIC",
+        "item_name": "合成药品",
+        "catalog_effective_from": "2026-01-01",
+        "catalog_effective_to": "2026-12-31",
+        "condition_groups": [
+          {
+            "conditions": [
+              {
+                "condition_type": "price_cap",
+                "concept_code": "unit.vial_10mg",
+                "source_span": "支付标准80元/10mg支",
+                "price_cap": {
+                  "amount": "80",
+                  "unit": "支",
+                  "strength_text": "10mg"
+                }
+              }
+            ]
+          }
+        ],
+        "source_bz": "合成政策前提：支付标准80元/10mg支，允许超标准部分自付",
+        "revision": 1
+      },
+      "input": {
+        "hospital_code": "SYNTHETIC",
+        "trade_date": "2026-04-16",
+        "item_code": "SYNTHETIC",
+        "item_name": "合成药品",
+        "unit_price": "100",
+        "count": "1",
+        "specification": "10MG/支",
+        "fee": "100",
+        "fee_in": "90",
+        "fee_out": "10",
+        "same_recipe_diagnoses": [
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": ""
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": ""
+      },
+      "expected": "在明确允许超标准自付且先行10%的合成前提下，72/28与90/10不应仅因售价相同得到相同的支付基数判断",
+      "actual": {
+        "rule_id": "SYNTHETIC_payment_standard",
+        "rule_revision": 1,
+        "item_code": "SYNTHETIC",
+        "item_name": "合成药品",
+        "verdicts": [
+          {
+            "condition": {
+              "condition_type": "price_cap",
+              "concept_code": "unit.vial_10mg",
+              "source_span": "支付标准80元/10mg支",
+              "price_cap": {
+                "amount": "80",
+                "unit": "支",
+                "strength_text": "10mg"
+              }
+            },
+            "status": "contradicted",
+            "evidence": [
+              {
+                "kind": "price_check",
+                "summary": "换算后单价 100.0000 元/支 超出支付标准 80 元/支（规格单位一致，直接可比）",
+                "source": "o_FeeItem.UnitPrice=100, 规则 支付标准80元/10mg支"
+              }
+            ],
+            "missing": ""
+          }
+        ],
+        "risk_tier": "contra",
+        "fee": "100",
+        "fee_in": "90",
+        "fee_out": "10"
+      },
+      "patient_text": "合成药品 100.00 元：该药的医保支付附带有特定使用条件，目前发现本次记录与条件存在不一致之处，医院医保部门正在进一步核实。核实不影响您的就诊安排，本次费用以结算单为准；如有疑问可到门诊医保窗口咨询核实进展。"
+    },
+    {
+      "case_id": "C5_strength_unit_mismatch",
+      "synthetic": true,
+      "rule_id": "rule-XA02BCA084B001010100453-20240320",
+      "rule": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "catalog_effective_from": "2024-03-20",
+        "catalog_effective_to": "2050-12-31",
+        "condition_groups": [
+          {
+            "conditions": [
+              {
+                "condition_type": "disease",
+                "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+                "source_span": "预防重症患者应激性溃疡出血",
+                "price_cap": null
+              },
+              {
+                "condition_type": "disease",
+                "concept_code": "dg.peptic_ulcer_bleeding",
+                "source_span": "消化性溃疡出血",
+                "price_cap": null
+              }
+            ]
+          },
+          {
+            "conditions": [
+              {
+                "condition_type": "price_cap",
+                "concept_code": "unit.vial_10mg",
+                "source_span": "支付标准不得高于：63.00元(10mg/支)",
+                "price_cap": {
+                  "amount": "63.00",
+                  "unit": "支",
+                  "strength_text": "10mg"
+                }
+              }
+            ]
+          }
+        ],
+        "source_bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+        "revision": 1
+      },
+      "input": {
+        "hospital_code": "SYNTHETIC",
+        "trade_date": "2026-04-16",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "unit_price": "52.60",
+        "count": "1",
+        "specification": "10g/支",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26",
+        "same_recipe_diagnoses": [
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": ""
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": ""
+      },
+      "expected": "10g与10mg不等价，必须先统一量纲或保留未知",
+      "actual": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "rule_revision": 1,
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "verdicts": [
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+              "source_span": "预防重症患者应激性溃疡出血",
+              "price_cap": null
+            },
+            "status": "unverifiable",
+            "evidence": [
+              {
+                "kind": "mapping_missing",
+                "summary": "概念码 dg.stress_ulcer_prophylaxis_critical 无有效 diagnosis 值域映射，fail-closed 不予核验",
+                "source": "value_domain_mappings"
+              }
+            ],
+            "missing": "缺少 dg.stress_ulcer_prophylaxis_critical 的诊断值域映射"
+          },
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.peptic_ulcer_bleeding",
+              "source_span": "消化性溃疡出血",
+              "price_cap": null
+            },
+            "status": "supported",
+            "evidence": [
+              {
+                "kind": "diagnosis_match",
+                "summary": "同处方诊断 K27.400x004 消化性溃疡伴出血 命中病种条件「消化性溃疡出血」",
+                "source": "o_Diagnose.DiagnoseCode=K27.400x004"
+              }
+            ],
+            "missing": ""
+          },
+          {
+            "condition": {
+              "condition_type": "price_cap",
+              "concept_code": "unit.vial_10mg",
+              "source_span": "支付标准不得高于：63.00元(10mg/支)",
+              "price_cap": {
+                "amount": "63.00",
+                "unit": "支",
+                "strength_text": "10mg"
+              }
+            },
+            "status": "supported",
+            "evidence": [
+              {
+                "kind": "price_check",
+                "summary": "换算后单价 52.6000 元/支 未超支付标准 63.00 元/支（规格单位一致，直接可比）",
+                "source": "o_FeeItem.UnitPrice=52.60, 规则 支付标准不得高于：63.00元(10mg/支)"
+              }
+            ],
+            "missing": ""
+          }
+        ],
+        "risk_tier": "clear",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26"
+      },
+      "patient_text": "注射用艾普拉唑钠 52.60 元：该药在医保目录内，本次就诊记录符合目录限定的支付范围，按医保内结算。其中 5.26 元为乙类先行自付部分，其余已纳入医保结算。"
+    },
+    {
+      "case_id": "C6_fee_out_not_typed",
+      "synthetic": true,
+      "rule_id": "rule-XA02BCA084B001010100453-20240320",
+      "rule": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "catalog_effective_from": "2024-03-20",
+        "catalog_effective_to": "2050-12-31",
+        "condition_groups": [
+          {
+            "conditions": [
+              {
+                "condition_type": "disease",
+                "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+                "source_span": "预防重症患者应激性溃疡出血",
+                "price_cap": null
+              },
+              {
+                "condition_type": "disease",
+                "concept_code": "dg.peptic_ulcer_bleeding",
+                "source_span": "消化性溃疡出血",
+                "price_cap": null
+              }
+            ]
+          },
+          {
+            "conditions": [
+              {
+                "condition_type": "price_cap",
+                "concept_code": "unit.vial_10mg",
+                "source_span": "支付标准不得高于：63.00元(10mg/支)",
+                "price_cap": {
+                  "amount": "63.00",
+                  "unit": "支",
+                  "strength_text": "10mg"
+                }
+              }
+            ]
+          }
+        ],
+        "source_bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+        "revision": 1
+      },
+      "input": {
+        "hospital_code": "SYNTHETIC",
+        "trade_date": "2026-04-16",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "unit_price": "52.60",
+        "count": "1",
+        "specification": "10MG/支",
+        "fee": "52.60",
+        "fee_in": "0",
+        "fee_out": "52.60",
+        "same_recipe_diagnoses": [
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": ""
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": ""
+      },
+      "expected": "没有负担类别和结算原因字段，不能确定全部医保外金额为乙类先行自付",
+      "actual": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "rule_revision": 1,
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "verdicts": [
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+              "source_span": "预防重症患者应激性溃疡出血",
+              "price_cap": null
+            },
+            "status": "unverifiable",
+            "evidence": [
+              {
+                "kind": "mapping_missing",
+                "summary": "概念码 dg.stress_ulcer_prophylaxis_critical 无有效 diagnosis 值域映射，fail-closed 不予核验",
+                "source": "value_domain_mappings"
+              }
+            ],
+            "missing": "缺少 dg.stress_ulcer_prophylaxis_critical 的诊断值域映射"
+          },
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.peptic_ulcer_bleeding",
+              "source_span": "消化性溃疡出血",
+              "price_cap": null
+            },
+            "status": "supported",
+            "evidence": [
+              {
+                "kind": "diagnosis_match",
+                "summary": "同处方诊断 K27.400x004 消化性溃疡伴出血 命中病种条件「消化性溃疡出血」",
+                "source": "o_Diagnose.DiagnoseCode=K27.400x004"
+              }
+            ],
+            "missing": ""
+          },
+          {
+            "condition": {
+              "condition_type": "price_cap",
+              "concept_code": "unit.vial_10mg",
+              "source_span": "支付标准不得高于：63.00元(10mg/支)",
+              "price_cap": {
+                "amount": "63.00",
+                "unit": "支",
+                "strength_text": "10mg"
+              }
+            },
+            "status": "supported",
+            "evidence": [
+              {
+                "kind": "price_check",
+                "summary": "换算后单价 52.6000 元/支 未超支付标准 63.00 元/支（规格单位一致，直接可比）",
+                "source": "o_FeeItem.UnitPrice=52.60, 规则 支付标准不得高于：63.00元(10mg/支)"
+              }
+            ],
+            "missing": ""
+          }
+        ],
+        "risk_tier": "clear",
+        "fee": "52.60",
+        "fee_in": "0",
+        "fee_out": "52.60"
+      },
+      "patient_text": "注射用艾普拉唑钠 52.60 元：该药在医保目录内，本次就诊记录符合目录限定的支付范围，按医保内结算。其中 52.60 元为乙类先行自付部分，其余已纳入医保结算。"
+    },
+    {
+      "case_id": "C7_empty_rule",
+      "synthetic": true,
+      "rule_id": "rule-XA02BCA084B001010100453-20240320",
+      "rule": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "catalog_effective_from": "2024-03-20",
+        "catalog_effective_to": "2050-12-31",
+        "condition_groups": [],
+        "source_bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+        "revision": 1
+      },
+      "input": {
+        "hospital_code": "SYNTHETIC",
+        "trade_date": "2026-04-16",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "unit_price": "52.60",
+        "count": "1",
+        "specification": "10MG/支",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26",
+        "same_recipe_diagnoses": [
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "medical_record": ""
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": ""
+      },
+      "expected": "受限备注存在而条件树为空，应拒绝规则而不能返回通过",
+      "actual": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "rule_revision": 1,
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "verdicts": [],
+        "risk_tier": "clear",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26"
+      },
+      "patient_text": "注射用艾普拉唑钠 52.60 元：该药在医保目录内，本次就诊记录符合目录限定的支付范围，按医保内结算。其中 5.26 元为乙类先行自付部分，其余已纳入医保结算。"
+    },
+    {
+      "case_id": "C8_replay_changed_source",
+      "synthetic": true,
+      "rule_id": "rule-XA02BCA084B001010100453-20240320",
+      "rule": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "catalog_effective_from": "2024-03-20",
+        "catalog_effective_to": "2050-12-31",
+        "condition_groups": [
+          {
+            "conditions": [
+              {
+                "condition_type": "disease",
+                "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+                "source_span": "预防重症患者应激性溃疡出血",
+                "price_cap": null
+              },
+              {
+                "condition_type": "disease",
+                "concept_code": "dg.peptic_ulcer_bleeding",
+                "source_span": "消化性溃疡出血",
+                "price_cap": null
+              }
+            ]
+          },
+          {
+            "conditions": [
+              {
+                "condition_type": "price_cap",
+                "concept_code": "unit.vial_10mg",
+                "source_span": "支付标准不得高于：63.00元(10mg/支)",
+                "price_cap": {
+                  "amount": "63.00",
+                  "unit": "支",
+                  "strength_text": "10mg"
+                }
+              }
+            ]
+          }
+        ],
+        "source_bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+        "revision": 1
+      },
+      "input": {
+        "hospital_code": "SYNTHETIC",
+        "trade_date": "2026-04-16",
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "unit_price": "52.60",
+        "count": "1",
+        "specification": "10MG/支",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26",
+        "same_recipe_diagnoses": [
+          {
+            "code": "01",
+            "name": "1",
+            "medical_record": ""
+          }
+        ],
+        "same_bill_item_names": [],
+        "section_name": "",
+        "dr_level": "",
+        "patient_birthday": null,
+        "patient_sex": ""
+      },
+      "expected": "固定规则与映射但回查事实变化，无法复现先前clear；真正回放必须固定事实快照",
+      "actual": {
+        "rule_id": "rule-XA02BCA084B001010100453-20240320",
+        "rule_revision": 1,
+        "item_code": "XA02BCA084B001010100453",
+        "item_name": "注射用艾普拉唑钠",
+        "verdicts": [
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+              "source_span": "预防重症患者应激性溃疡出血",
+              "price_cap": null
+            },
+            "status": "unverifiable",
+            "evidence": [
+              {
+                "kind": "mapping_missing",
+                "summary": "概念码 dg.stress_ulcer_prophylaxis_critical 无有效 diagnosis 值域映射，fail-closed 不予核验",
+                "source": "value_domain_mappings"
+              }
+            ],
+            "missing": "缺少 dg.stress_ulcer_prophylaxis_critical 的诊断值域映射"
+          },
+          {
+            "condition": {
+              "condition_type": "disease",
+              "concept_code": "dg.peptic_ulcer_bleeding",
+              "source_span": "消化性溃疡出血",
+              "price_cap": null
+            },
+            "status": "insufficient_evidence",
+            "evidence": [
+              {
+                "kind": "placeholder_input",
+                "summary": "同处方诊断编码与名称均为占位值，不能据此判定病种条件不符",
+                "source": "o_Diagnose"
+              }
+            ],
+            "missing": "同处方诊断为占位值"
+          },
+          {
+            "condition": {
+              "condition_type": "price_cap",
+              "concept_code": "unit.vial_10mg",
+              "source_span": "支付标准不得高于：63.00元(10mg/支)",
+              "price_cap": {
+                "amount": "63.00",
+                "unit": "支",
+                "strength_text": "10mg"
+              }
+            },
+            "status": "supported",
+            "evidence": [
+              {
+                "kind": "price_check",
+                "summary": "换算后单价 52.6000 元/支 未超支付标准 63.00 元/支（规格单位一致，直接可比）",
+                "source": "o_FeeItem.UnitPrice=52.60, 规则 支付标准不得高于：63.00元(10mg/支)"
+              }
+            ],
+            "missing": ""
+          }
+        ],
+        "risk_tier": "review",
+        "fee": "52.60",
+        "fee_in": "47.34",
+        "fee_out": "5.26"
+      },
+      "patient_text": "注射用艾普拉唑钠 52.60 元：该药的医保支付附带有特定使用条件。本次结算已完成，费用以结算单为准；目前在就诊记录中没有看到该条件所需的记录，这不代表存在问题。如果您当时确有相关情况，可到门诊医保窗口说明，由工作人员调取病历进一步核实。"
+    }
+  ],
+  "official_sources_checked": [
+    {
+      "url": "https://ybj.beijing.gov.cn/zwgk/2024zcwj/202512/W020251230589322821268.pdf",
+      "page_1_based": 118,
+      "item": "协议期内谈判药品部分第1项：注射用艾普拉唑钠",
+      "payment_standard_amount": "52.60",
+      "strength": "10mg",
+      "unit": "瓶",
+      "agreement_from": "2026-01-01",
+      "agreement_to": "2027-12-31",
+      "limitation": "与院内旧63元/支记录的规格、单位和适用政策关系仍需核实；本次不裁定实际样例支付错误"
+    },
+    {
+      "url": "https://www.beijing.gov.cn/zhengce/zhengcefagui/202604/t20260415_4582611.html",
+      "clause": "京医保发〔2025〕21号第一部分（三）",
+      "scope": "对于确定支付标准的竞价药品和国家集中带量采购中选药品，存在超支付标准部分个人承担的情形；不能泛化到所有品种"
+    }
+  ]
+}

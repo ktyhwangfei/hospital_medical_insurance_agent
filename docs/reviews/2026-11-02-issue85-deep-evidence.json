@@ -1,0 +1,1955 @@
+{
+  "observed_at": "2026-11-02T10:46:27.994285",
+  "method": "read-only SELECT; raw identifiers hashed before saving",
+  "column_metadata": [
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "T_TradeNo",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "DiagnoseNo",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "RecipeNo",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "RecipeDate",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "DiagnoseName",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "DiagnoseCode",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "MedicalRecord",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "SectionCode",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "Sectionname",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "HISSectionName",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "DrID",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "DrName",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "RecipeType",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "DrLevel",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "AgentFlag",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "RecipeNote",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "CorresDiagID",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "DocumentType",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "DecoctionNumber",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "FaceIdentifySn",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "similarity",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "md5",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "HelpMedicineIDType",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "HelpMedicineIDNo",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "HelpMedicineName",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "DiagnoseType",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "helpmedicinetel",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "helpmedicinerels",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_Diagnose",
+      "COLUMN_NAME": "helpmedicineothrels",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "T_TradeNo",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "ItemId",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "ItemNo",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "RecipeNo",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "HisCode",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "ItemCode",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "ItemName",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "ItemType",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "UnitPrice",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "Count",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "Fee",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "FeeIn",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "FeeOut",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "SelfPay2",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "PreferentialScale",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "PreferentialFee",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "FeeType",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "State",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "Dose",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "Specification",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "Unit",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "HowToUse",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "Dosage",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "packaging",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "MinPackage",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "Conversion",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "Days",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "HisName",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "ApprovalNumber",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "DecoctionOem",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "UsageMethod",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "DecoctionClass",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "DecoctionMiniPack",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "F_LEVEL",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "SP_SCALE",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "MEDIC_L",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "FEE_SP_SCALE",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "FEE_MEDIC_L",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "PACK_FLAG",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "StandardCode",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "o_FeeItem",
+      "COLUMN_NAME": "SPEDRUG_FLAG",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "xzbh",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "ypbm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "ypmc",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "sflb",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "cfybz",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "zjf",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "jldw",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "bzjg",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "mzbs",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "zybs",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "tsbs",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "zfbl",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "jx",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "yf",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "rcgyl",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "ypdj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "tsbyybz",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "ypfl",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "ypflbm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "cd",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "syxzdj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "bz",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "sxrq",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "yysrm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "czdm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "yyjb",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "yylb",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "jzrq",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "zzxj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "bzgg",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "ypcj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "scrq",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "yxrq",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "yplbbm1",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "yplbbm2",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "yplbbm3",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "yplbbm4",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "sqbs",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "sqxj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "xzlx",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "A_bzgg",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "A_mzxj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "A_zyxj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "A_xbbl",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "A_ypbs",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "A_zhb",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "A_yzxpj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "mzgzy",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "B_gjybbm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "B_bc",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "B_pzwh",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "B_zccpID",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "B_zxzjdw",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "B_spmc",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "A_jcypfl",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "B_pzwh_old",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "stdypbs",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_ypzdml",
+      "COLUMN_NAME": "mzfbs",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "djh",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "xh",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "yzh",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "fsrq",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "xmdm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "xmmc",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "xmlb",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "sflb",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "jx",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "gg",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "sl",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "dw",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "dj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "zje",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "ybnje",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "ybwje",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "sfxmdj",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "fjzt",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "cydybz",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "drbz",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "ybbz",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "drhisbm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "drhismc",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "sczt",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "grziftw",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "txbz",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "bjbz",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "bjjg",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "gllbbm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "sylbbm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "yblbbm",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "txfy",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "xmybn",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "xmybw",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "xmgrziftw",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "approval_number",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "MEDIC_L",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "SP_SCALE",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "FEE_SP_SCALE",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "FEE_MEDIC_L",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "Decoction_Code",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "Decoction_Name",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "Decoction_Specs",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "Decoction_Oem",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "Usage_Method",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "Decoction_Usage",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "Decoction_Number",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "OtherHosp_Fee_Flag",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "PACK_FLAG",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "NATION_CODE",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "SPEDRUG_FLAG",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "PRE_IPT_FLAG",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "ACT_FEE_OCUR_TIME",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "NEW_DRGU_TECH_FLAG",
+      "description": null
+    },
+    {
+      "TABLE_NAME": "yb_zyfymx",
+      "COLUMN_NAME": "hisNo",
+      "description": null
+    }
+  ],
+  "candidate_raw_tables": [
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "binganimportlog"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "Cent_ReMsg_Check_Log"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "DL_REDLIST"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "o_CheckResult_D"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "o_LogError"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_cfqyzt"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_ddyyzt"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_jsfs_YZDE"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_jsfs_YZDE_All"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_jyzt"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "V_Order_Status"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "V_Order_Type"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_tpcjlx_yzmz"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_upload_nation_status"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_User_Login"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_ybcbrylb_GLYZ"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_yd_cyyyzd"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "v_yyzdCurr"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_Appeal_Log"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_byzdgl"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_byzlfwxm"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_byzlfwxmtemp"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "Yb_Cardless_Trans_Log"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_cyzgxx"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_gs_deal_log"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_gs_deal_log_back"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_gs_yyzd"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_His_bmb_log"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_His_bmzhb_log"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_InformDownLoadRecord"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_InformDownLoadRecordHosp"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_jh_qgyzxx"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_Log_InterfaceRecord"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_Log_OperLogin"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_monitorlog"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_qx_czy2czyz"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_qx_czyz"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_qx_czyz2gncd"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_qx_czyz2qxd"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_recipelistTable"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_sjyz"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_UploadSelfPaidInfoConfig"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_UploadTradeBill"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_UploadTradeBill_Record"
+    },
+    {
+      "TABLE_SCHEMA": "dbo",
+      "TABLE_NAME": "yb_yyzd"
+    }
+  ],
+  "raw_inventory": {
+    "yb_Log_InterfaceRecord": {
+      "columns": [
+        {
+          "COLUMN_NAME": "djh",
+          "DATA_TYPE": "int"
+        },
+        {
+          "COLUMN_NAME": "BizType",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "InputInfo",
+          "DATA_TYPE": "nvarchar"
+        },
+        {
+          "COLUMN_NAME": "OutputInfo",
+          "DATA_TYPE": "nvarchar"
+        },
+        {
+          "COLUMN_NAME": "OperID",
+          "DATA_TYPE": "numeric"
+        },
+        {
+          "COLUMN_NAME": "OperTime",
+          "DATA_TYPE": "datetime"
+        }
+      ],
+      "rows": 0
+    },
+    "o_CheckResult_D": {
+      "columns": [
+        {
+          "COLUMN_NAME": "Code",
+          "DATA_TYPE": "nvarchar"
+        },
+        {
+          "COLUMN_NAME": "Name",
+          "DATA_TYPE": "nvarchar"
+        },
+        {
+          "COLUMN_NAME": "input_code",
+          "DATA_TYPE": "varchar"
+        }
+      ],
+      "rows": 58
+    },
+    "Cent_ReMsg_Check_Log": {
+      "columns": [
+        {
+          "COLUMN_NAME": "Msg_Sn",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "Oper_Id",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "Check_Date",
+          "DATA_TYPE": "datetime"
+        }
+      ],
+      "rows": 0
+    },
+    "yb_UploadTradeBill_Record": {
+      "columns": [
+        {
+          "COLUMN_NAME": "T_TradeNo",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "T_CureType",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "T_FeeAll",
+          "DATA_TYPE": "decimal"
+        },
+        {
+          "COLUMN_NAME": "P_ICNo",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "T_BillNo",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "T_SetTid",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "T_InsertTime",
+          "DATA_TYPE": "datetime"
+        },
+        {
+          "COLUMN_NAME": "T_UploadTimes",
+          "DATA_TYPE": "int"
+        },
+        {
+          "COLUMN_NAME": "T_LastUploadTime",
+          "DATA_TYPE": "datetime"
+        },
+        {
+          "COLUMN_NAME": "T_UploadFlag",
+          "DATA_TYPE": "varchar"
+        }
+      ],
+      "rows": 26
+    },
+    "yb_His_bmzhb_log": {
+      "columns": [
+        {
+          "COLUMN_NAME": "HISbm",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "HISmc",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "zhbm",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "sxrq",
+          "DATA_TYPE": "datetime"
+        },
+        {
+          "COLUMN_NAME": "jzrq",
+          "DATA_TYPE": "datetime"
+        },
+        {
+          "COLUMN_NAME": "qyrq",
+          "DATA_TYPE": "datetime"
+        },
+        {
+          "COLUMN_NAME": "UseFlag",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "ypbm",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "ypmc",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "ypgg",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "A_bzgg",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "OperDate",
+          "DATA_TYPE": "datetime"
+        },
+        {
+          "COLUMN_NAME": "Oper",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "UpOperDate",
+          "DATA_TYPE": "datetime"
+        },
+        {
+          "COLUMN_NAME": "UpOper",
+          "DATA_TYPE": "varchar"
+        }
+      ],
+      "rows": 0
+    },
+    "yb_InformDownLoadRecord": {
+      "columns": [
+        {
+          "COLUMN_NAME": "NAME",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "QUERY_TYPE",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "INFORM_CREATE_DATE",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "DOWNLOAD_INFORM_DATE",
+          "DATA_TYPE": "datetime"
+        },
+        {
+          "COLUMN_NAME": "CHECK_FLAG",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "CHECK_DATE",
+          "DATA_TYPE": "datetime"
+        },
+        {
+          "COLUMN_NAME": "CHECK_OPER",
+          "DATA_TYPE": "varchar"
+        },
+        {
+          "COLUMN_NAME": "REPORT_NO",
+          "DATA_TYPE": "varchar"
+        }
+      ],
+      "rows": 47
+    }
+  },
+  "albumin_raw_fields": [
+    {
+      "xh": 3742,
+      "fsrq": "2025-04-11 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "748.0000",
+      "ybnje": "0.0000",
+      "ybwje": "748.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3736,
+      "fsrq": "2025-05-14 00:00:00",
+      "xmdm": "XB05AAR021B001010181789",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "789.8000",
+      "ybnje": "710.8200",
+      "ybwje": "78.9800",
+      "grziftw": "78.98",
+      "txbz": 0,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "0.1000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3737,
+      "fsrq": "2025-05-15 00:00:00",
+      "xmdm": "XB05AAR021B001010181789",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "789.8000",
+      "ybnje": "710.8200",
+      "ybwje": "78.9800",
+      "grziftw": "78.98",
+      "txbz": 0,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "0.1000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3738,
+      "fsrq": "2025-05-16 00:00:00",
+      "xmdm": "XB05AAR021B001010181789",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "789.8000",
+      "ybnje": "710.8200",
+      "ybwje": "78.9800",
+      "grziftw": "78.98",
+      "txbz": 0,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "0.1000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3739,
+      "fsrq": "2025-05-26 00:00:00",
+      "xmdm": "XB05AAR021B001010181789",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "789.8000",
+      "ybnje": "710.8200",
+      "ybwje": "78.9800",
+      "grziftw": "78.98",
+      "txbz": 0,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "0.1000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3740,
+      "fsrq": "2025-05-27 00:00:00",
+      "xmdm": "XB05AAR021B001010181789",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "789.8000",
+      "ybnje": "710.8200",
+      "ybwje": "78.9800",
+      "grziftw": "78.98",
+      "txbz": 0,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "0.1000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3741,
+      "fsrq": "2025-05-28 00:00:00",
+      "xmdm": "XB05AAR021B001010181789",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "789.8000",
+      "ybnje": "710.8200",
+      "ybwje": "78.9800",
+      "grziftw": "78.98",
+      "txbz": 0,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "0.1000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3743,
+      "fsrq": "2025-06-05 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "374.0000",
+      "ybnje": "0.0000",
+      "ybwje": "374.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3744,
+      "fsrq": "2025-06-06 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "374.0000",
+      "ybnje": "0.0000",
+      "ybwje": "374.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3745,
+      "fsrq": "2025-06-07 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "374.0000",
+      "ybnje": "0.0000",
+      "ybwje": "374.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3746,
+      "fsrq": "2025-06-16 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "374.0000",
+      "ybnje": "0.0000",
+      "ybwje": "374.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3747,
+      "fsrq": "2025-06-17 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "374.0000",
+      "ybnje": "0.0000",
+      "ybwje": "374.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3748,
+      "fsrq": "2025-06-18 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "374.0000",
+      "ybnje": "0.0000",
+      "ybwje": "374.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3749,
+      "fsrq": "2025-06-24 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "748.0000",
+      "ybnje": "0.0000",
+      "ybwje": "748.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3750,
+      "fsrq": "2025-06-25 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "748.0000",
+      "ybnje": "0.0000",
+      "ybwje": "748.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    },
+    {
+      "xh": 3751,
+      "fsrq": "2025-06-26 00:00:00",
+      "xmdm": "XB05AAR021B001010179250",
+      "sflb": "0102",
+      "sfxmdj": "2",
+      "zje": "748.0000",
+      "ybnje": "0.0000",
+      "ybwje": "748.0000",
+      "grziftw": "0.00",
+      "txbz": 1,
+      "txfy": "0.0000",
+      "xmybn": "0.0000",
+      "xmybw": "0.0000",
+      "xmgrziftw": "0.0000",
+      "SP_SCALE": "1.0000",
+      "MEDIC_L": "999999.00",
+      "FEE_SP_SCALE": "0.00",
+      "FEE_MEDIC_L": "0.00",
+      "bjbz": 0,
+      "bjjg": "0.0000",
+      "sczt": null,
+      "drbz": 1,
+      "ybbz": 1,
+      "fjzt": 0,
+      "drhisbm": "",
+      "case_ref": "95606a1327aa"
+    }
+  ],
+  "ilaprazole_prescription_link": [
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "D66.x01",
+      "DiagnoseName": "血友病A型",
+      "DiagnoseType": "",
+      "same_recipe": 0,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "c4fdca8bce9f"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "D66.x01",
+      "DiagnoseName": "血友病A型",
+      "DiagnoseType": "",
+      "same_recipe": 1,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "ace25bb3c189"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "D66.x01",
+      "DiagnoseName": "血友病A型",
+      "DiagnoseType": "",
+      "same_recipe": 0,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "0de2f85683eb"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "K92.209",
+      "DiagnoseName": "下消化道出血",
+      "DiagnoseType": "",
+      "same_recipe": 0,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "c4fdca8bce9f"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "K92.209",
+      "DiagnoseName": "下消化道出血",
+      "DiagnoseType": "",
+      "same_recipe": 1,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "ace25bb3c189"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "K92.209",
+      "DiagnoseName": "下消化道出血",
+      "DiagnoseType": "",
+      "same_recipe": 0,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "0de2f85683eb"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "D64.903",
+      "DiagnoseName": "重度贫血",
+      "DiagnoseType": "",
+      "same_recipe": 0,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "c4fdca8bce9f"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "D64.903",
+      "DiagnoseName": "重度贫血",
+      "DiagnoseType": "",
+      "same_recipe": 1,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "ace25bb3c189"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "D64.903",
+      "DiagnoseName": "重度贫血",
+      "DiagnoseType": "",
+      "same_recipe": 0,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "0de2f85683eb"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "K27.400x004",
+      "DiagnoseName": "消化性溃疡伴出血",
+      "DiagnoseType": "",
+      "same_recipe": 0,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "c4fdca8bce9f"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "K27.400x004",
+      "DiagnoseName": "消化性溃疡伴出血",
+      "DiagnoseType": "",
+      "same_recipe": 1,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "ace25bb3c189"
+    },
+    {
+      "ItemId": 4,
+      "RecipeDate": "2026-04-16 12:13:00",
+      "DiagnoseCode": "K27.400x004",
+      "DiagnoseName": "消化性溃疡伴出血",
+      "DiagnoseType": "",
+      "same_recipe": 0,
+      "case_ref": "eadf82c0aee0",
+      "fee_recipe_hash": "ace25bb3c189",
+      "diagnosis_recipe_hash": "0de2f85683eb"
+    }
+  ],
+  "checks": {
+    "arithmetic_reconstruction_matches": 16,
+    "arithmetic_reconstruction_total": 16,
+    "groups": [
+      {
+        "code": "XB05AAR021B001010179250",
+        "rows": 10,
+        "outer": "5236.0000",
+        "total": "5236.0000",
+        "txbz_values": [
+          1
+        ],
+        "SP_SCALE_values": [
+          "1.0000"
+        ]
+      },
+      {
+        "code": "XB05AAR021B001010181789",
+        "rows": 6,
+        "outer": "473.8800",
+        "total": "4738.8000",
+        "txbz_values": [
+          0
+        ],
+        "SP_SCALE_values": [
+          "0.1000"
+        ]
+      }
+    ],
+    "not_proven": "field semantics, data lineage, actual payer cause and policy eligibility"
+  },
+  "external_sources": [
+    {
+      "url": "https://ybj.beijing.gov.cn/zwgk/2024zcwj/202412/t20241224_3972557.html",
+      "document": "京医保发[2024]21号",
+      "locator": "凡例(十一),(十六)",
+      "verification": "official HTML read; 2025 applicable period, not all 2026 policies"
+    },
+    {
+      "url": "https://ybj.beijing.gov.cn/zwgk/2024zcwj/202412/W020241226408996925293.pdf",
+      "locator": "PDF page 13 (zero-based 12), western drugs no.277",
+      "verification": "web extracted text read; screenshot timed out; local download HTTP403; visual verification not completed"
+    }
+  ],
+  "independent_sql_execution": {
+    "query_count": 4,
+    "group_row_counts": [
+      10,
+      6
+    ],
+    "arithmetic_matches": 16,
+    "interface_log_rows": 0,
+    "diagnoses_with_same_recipe_match": 4,
+    "result": "passed; independent query path, not independent human certification",
+    "sql_sha256": "a9f350752a0c45d87f669f218d577f05d51bd75ea89e45de56f682a37c990780"
+  }
+}

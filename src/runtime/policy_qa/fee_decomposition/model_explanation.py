@@ -13,10 +13,13 @@ from pydantic import BaseModel, Field
 
 from skills.mzsettlement_verify_skill.models import OutpatientSettlementContext
 from src.runtime.policy_qa.fee_decomposition.answer_validation import equation_issues
+from src.runtime.policy_qa.fee_decomposition.billing_boundary import (
+    BillingBoundaryPayload, build_billing_boundary_payload)
 from src.runtime.policy_qa.fee_decomposition.explanation_evidence import input_id
 from src.runtime.policy_qa.fee_decomposition.formula_text import trim_trailing_zeros as _trim_trailing_zeros
 from src.runtime.policy_qa.fee_decomposition.field_explanations import (
     FieldExplanationView, render_field_explanation)
+from src.runtime.policy_qa.fee_decomposition.public_view import omit_enroll_date_gap
 from src.runtime.policy_qa.public_contract import FeeDecompositionPublic
 
 logger = logging.getLogger(__name__)
@@ -85,6 +88,15 @@ class TargetEvidence(BaseModel):
     sentence: str | None = None
 
 
+class BilledItemFact(BaseModel):
+    """同单收费线索，不携带其他行金额，也不代表执行或实际联合用药。"""
+
+    display_no: int
+    item_name: str
+    item_type: str | None = None
+    association: Literal["same_settlement_charge_only"] = "same_settlement_charge_only"
+
+
 class FeeExplanationInput(BaseModel):
     question: str
     decomposition: FeeDecompositionPublic
@@ -102,6 +114,11 @@ class FeeExplanationInput(BaseModel):
     unexplained_fields: list[str] = Field(default_factory=list)
     #: 被点名但未产出证据的目标逐项缺口（确定性正文逐项列明，不整题吞掉已有证据）
     target_gaps: list[str] = Field(default_factory=list)
+    billed_items: list[BilledItemFact] = Field(default_factory=list)
+    #: 收费边界解释（Issue #85）：诊疗/价格项目内涵「不含/除外内容/另收/包含」
+    #: 对上同单费用行的事实与预组句子；对不上内涵或费用的行不在其中。
+    billing_boundaries: BillingBoundaryPayload | None = Field(
+        default=None, exclude_if=lambda value: value is None)
 
 
 #: 问题里的口语说法 → 后端字段；命中后才提供该字段的证据（Issue #83 第 3 项）。
@@ -208,17 +225,87 @@ _COMPARISON_MARKERS = (
 )
 
 
+#: 项目名里的括号缩写（总蛋白(TP)测定、抗HCV）去掉后再与问句比整名。
+_PAREN_GROUP = re.compile(r"[（(][^（）()]{0,20}[）)]")
+#: 收费项目内涵 / 为何还要单收是同一类。覆盖换说法，不按已出现过的原句逐条登记。
+#: 「个人支付为什么还要收」不含这些说法，仍按汇总金额解释。
+_BILLING_BOUNDARY_QUESTION = re.compile(
+    r"内涵|含什么|包含什么|含哪些|包含哪些|"
+    r"(?:单独|另行|另外|分开|单|另)收|(?:单独|另行|另外|分开)计费"
+)
+
+
+def _name_without_paren(name: str) -> str:
+    return _PAREN_GROUP.sub("", name).strip()
+
+
+def _is_billing_boundary_question(text: str) -> bool:
+    return _BILLING_BOUNDARY_QUESTION.search(text or "") is not None
+
+
+def _longest_name_span(name: str, text: str) -> tuple[int, int] | None:
+    """名称里出现在问句中的最长连续片段（至少两字）。"""
+    for length in range(len(name), 1, -1):
+        for start in range(0, len(name) - length + 1):
+            piece = name[start:start + length]
+            at = text.find(piece)
+            if at >= 0:
+                return at, at + length
+    return None
+
+
+def _billing_name_hits(names: list[str], text: str) -> list[int]:
+    """收费边界问题里的短项目名：两字及以上的名称片段即可对上，不受四字阈值限制。
+
+    较长片段盖住被它包含的短片段。「总蛋白」盖住「蛋白」。问句写出「活检钳」时只对活检钳；
+    只说「活检」时，活检术和活检钳都保留。
+    """
+    spans: dict[int, tuple[int, int]] = {}
+    for index, name in enumerate(names):
+        if not name:
+            continue
+        variants = {name, _name_without_paren(name)}
+        best: tuple[int, int] | None = None
+        for variant in variants:
+            span = _longest_name_span(variant, text)
+            if span is not None and (best is None or span[1] - span[0] > best[1] - best[0]):
+                best = span
+        if best is not None:
+            spans[index] = best
+    kept: list[int] = []
+    for index, span in spans.items():
+        if any(
+            other != index
+            and other_span[0] <= span[0] and span[1] <= other_span[1]
+            and other_span[1] - other_span[0] > span[1] - span[0]
+            for other, other_span in spans.items()
+        ):
+            continue
+        kept.append(index)
+    return kept
+
+
 def _item_name_hits(public: FeeDecompositionPublic, text: str) -> list[int]:
     """项目名称命中（返回 fee_items 下标）：整名包含，或与行名最长公共子串达阈值。"""
+    names = [(item.item_name or "").strip() for item in public.fee_items]
     hits: list[int] = []
-    for index, item in enumerate(public.fee_items):
-        name = (item.item_name or "").strip()
+    for index, name in enumerate(names):
         if not name:
             continue
         # 长名允许口语片段（如“人工晶体”），短名（阈值=全长）需整名出现。
         threshold = min(len(name), 4)
-        if SequenceMatcher(None, text, name).find_longest_match().size >= threshold:
+        matched = SequenceMatcher(None, text, name).find_longest_match().size >= threshold
+        if not matched:
+            bare = _name_without_paren(name)
+            # 问句写出去掉括号缩写后的全名才命中（总蛋白测定 → 总蛋白(TP)测定）。
+            # 必须整名包含，避免「总蛋白测定」误中「白蛋白测定」。
+            matched = len(bare) >= 4 and bare != name and bare in text
+        if matched:
             hits.append(index)
+    if _is_billing_boundary_question(text):
+        for index in _billing_name_hits(names, text):
+            if index not in hits:
+                hits.append(index)
     return hits
 
 
@@ -577,7 +664,8 @@ def _name_only_target(
         narrowed = _narrow_by_amount_clues(public, text, hits)
         if len(narrowed) == 1:
             hits = narrowed
-        elif re.search(r"都|两项|两行|全部|所有", text):
+        elif re.search(r"都|两项|两行|全部|所有", text) or _is_billing_boundary_question(text):
+            # 收费边界问题点到多行（含同名采血管）时一起解释，不追问是哪一行。
             lines = [LineRef(line_id=items[index].line_id, display_no=index + 1,
                              attributes=_line_attributes(text)) for index in hits]
             if codes:
@@ -1166,9 +1254,20 @@ def _build_lines_model_input(
                     if condition.step_id in condition_ids
                     or ids.intersection(condition.calculation_refs)],
         path_steps=steps))
+    # 收费边界问题只留被点名的费用行。整单汇总金额和退休补充缺证留在资料里时，
+    # 模型会先讲内涵，再被要求补全其余目标金额，并把缺证写进「尚待核实」。
+    if _is_billing_boundary_question(question):
+        data = _drop_bill_summary(data)
     evidences = [build_line_target_evidence(public, QuestionTarget(
         kind="fee_line", line_id=ref.line_id, display_no=ref.display_no,
         attributes=ref.attributes)) for ref in refs]
+    # 收费边界问题不附整单项目名单，否则模型会据此写「本单其余各项金额如下」。
+    include_bill = (not _is_billing_boundary_question(question)
+                    and any(item.payment_condition_context and item.payment_condition_context.bz
+                            for item in items))
+    billed_items = [BilledItemFact(display_no=index + 1,
+        item_name=item.item_name or item.item_code, item_type=item.item_type)
+        for index, item in enumerate(public.fee_items)] if include_bill else []
     # 整单口径块不默认进入行问题。
     return FeeExplanationInput(question=question, decomposition=data,
         actual_payment_shares=[], payment_reconciliation=PaymentReconciliation(),
@@ -1176,7 +1275,10 @@ def _build_lines_model_input(
         line_evidence=evidences[0] if len(evidences) == 1 else None,
         line_evidences=[] if len(evidences) == 1 else evidences,
         target_kind="fee_line" if len(evidences) == 1 else "multi_line",
-        unexplained_fields=[])
+        unexplained_fields=[],
+        billing_boundaries=build_billing_boundary_payload(
+            public.fee_items, {ref.display_no for ref in refs}),
+        billed_items=billed_items)
 
 
 def _build_line_model_input(
@@ -1221,6 +1323,37 @@ def _comparison_note(public: FeeDecompositionPublic, codes: list[str]) -> str | 
     return "；".join(meanings) or None
 
 
+def _boundary_display_nos(boundaries: BillingBoundaryPayload) -> set[int]:
+    numbers = {line.display_no for line in boundaries.line_explanations}
+    for source in boundaries.source_explanations:
+        numbers.add(source.display_no)
+        for match in source.matches:
+            numbers.update(target.display_no for target in match.targets)
+    return numbers
+
+
+def _drop_bill_summary(public: FeeDecompositionPublic) -> FeeDecompositionPublic:
+    """去掉整单汇总金额、模板说明和内部缺证，避免进入收费边界问题的模型资料。"""
+    return public.model_copy(update=dict(
+        summary_text="", settlement_facts=None, uncertainties=[],
+        template_explanations={}, stages=[], trace=None, coverage=None))
+
+
+def _billing_boundary_only_input(
+    public: FeeDecompositionPublic, question: str, boundaries: BillingBoundaryPayload,
+) -> FeeExplanationInput:
+    """内涵或单独收费问题：只装载收费边界和被解释的费用行，不装载整单汇总金额。"""
+    mentioned = _boundary_display_nos(boundaries)
+    items = [item for index, item in enumerate(public.fee_items) if index + 1 in mentioned]
+    data = _drop_bill_summary(public.model_copy(update=dict(
+        fields=[], calculations=[], fee_items=items,
+        sources=[], formula_inputs=[], rule_choices=[], conditions=[],
+        path_steps=[])))
+    return FeeExplanationInput(
+        question=question, decomposition=data, target_evidence=[],
+        target_kind="billing_boundary", billing_boundaries=boundaries)
+
+
 def build_model_input(
     public: FeeDecompositionPublic, question: str,
     question_target: QuestionTarget | None = None,
@@ -1239,7 +1372,14 @@ def build_model_input(
             kind="fee_line", line_id=ref.line_id, display_no=ref.display_no,
             attributes=ref.attributes)) for ref in question_target.lines]
         return field_payload.model_copy(update=dict(
-            line_evidences=line_evidences, target_kind="mixed"))
+            line_evidences=line_evidences, target_kind="mixed",
+            billing_boundaries=build_billing_boundary_payload(
+                public.fee_items, {ref.display_no for ref in question_target.lines})))
+    # 没点名行、也没点名汇总字段，只问内涵或单独收费：不把整单金额当目标。
+    if question_target.kind == "whole_settlement" and _is_billing_boundary_question(question):
+        boundaries = build_billing_boundary_payload(public.fee_items, None)
+        if boundaries is not None:
+            return _billing_boundary_only_input(public, question, boundaries)
     # 再确定目标字段，只提供该字段需要的证据（Issue #83 第 3 项）；对比题同样按字段收敛。
     targets = question_target.field_codes if question_target.kind in ("summary_fields", "comparison") else []
     source_ids: set[str] | None = None
@@ -1329,6 +1469,9 @@ def build_model_input(
         comparison_note=_comparison_note(public, targets)
         if question_target.kind == "comparison" else None,
         unexplained_fields=_unexplained_fields(public),
+        # 收费边界（Issue #85）：整单/全覆盖装载全量；字段题/对比题与费用行无关，不装载。
+        billing_boundaries=None if question_target.kind in ("summary_fields", "comparison")
+        else build_billing_boundary_payload(public.fee_items, None),
         # 被点名但未产出证据的目标逐项列缺口（bill.* 等未绑定字段不借用其他字段的成功）
         target_gaps=_missing_target_gaps(public, evidence_codes, target_evidence)
         if targets or question_target.kind == "cover_all" else [])
@@ -1558,6 +1701,12 @@ def render_evidence_answer(payload: FeeExplanationInput) -> DeterministicAnswer 
             body_lines.extend(formula for formula in evidence.formulas if formula != evidence.sentence)
     else:
         body_lines.extend(field_lines)
+    # 收费边界（Issue #85）：目录内涵对上同单费用行的句子，与金额证据并列交付；
+    # 只做收费边界说明，不含符合性、违规或超收判断（构造侧已剔除）。
+    if payload.billing_boundaries is not None:
+        body_lines.extend(line.sentence for line in payload.billing_boundaries.line_explanations)
+        for source in payload.billing_boundaries.source_explanations:
+            body_lines.extend(source.sentences)
     if not body_lines and payload.target_kind in (None, "whole_settlement"):
         # 整单问法未识别到具体目标字段时，用本单已可解释的计算记录兜底（最多 6 条）。
         body_lines.extend(calc.formula for calc in payload.decomposition.calculations
@@ -1602,25 +1751,39 @@ _PUBLIC_RULE_ID_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])[A-Z][A-Z0-9]{1,}(?:-[A-Z0-9]{1,})+(?![A-Za-z0-9_])")
 
 
-def _public_safe_answer(text: str) -> str:
+def _public_safe_answer(text: str, protect_phrases: tuple[str, ...] = ()) -> str:
     """回答出口消毒：内部字段名/物理列名替换为中性表述（与路由层 _public_text 同口径）。
 
     业务规则编号先占位保护，其余内部编码再替换；回答正文与 uncertainties 共用本函数，
-    避免同一事实两处写法不一致。
+    避免同一事实两处写法不一致。protect_phrases 为原单项目名等原文短语：其中的
+    全大写片段（抗HCV、ALT 测定等）是项目名称的一部分，不是内部编码，先占位保护。
     """
     source = text or ""
     protected: list[str] = []
 
-    def protect(match: re.Match) -> str:
-        protected.append(match.group(0))
+    def placeholder(value: str) -> str:
+        protected.append(value)
         # 占位符用小写字母，避免被只匹配大写内部编码的正则再次命中
         return f"ruleidkeep{len(protected) - 1}end"
 
-    masked = _PUBLIC_RULE_ID_PATTERN.sub(protect, source)
+    def protect(match: re.Match) -> str:
+        return placeholder(match.group(0))
+
+    masked = source
+    for phrase in sorted(protect_phrases, key=len, reverse=True):
+        if phrase:
+            masked = masked.replace(phrase, placeholder(phrase))
+    masked = _PUBLIC_RULE_ID_PATTERN.sub(protect, masked)
     masked = _INTERNAL_ANSWER_PATTERN.sub("结算数据字段", masked)
     for index, value in enumerate(protected):
         masked = masked.replace(f"ruleidkeep{index}end", value)
     return masked
+
+
+def _item_name_protection(public: FeeDecompositionPublic) -> tuple[str, ...]:
+    """原单项目名原文：消毒时整体保护，避免 ALT/抗HCV 等名称片段被误当内部编码。"""
+    return tuple(dict.fromkeys(
+        item.item_name for item in public.fee_items if item.item_name))
 
 
 #: 回答正文不再展示的来源/取整/累计待签核类说明（保留在 citations 与结果审计里）。
@@ -1628,7 +1791,7 @@ def _public_safe_answer(text: str) -> str:
 #: 只去掉“取整规则…待确认”这类状态说明（由“待确认/签核”等词覆盖）。
 _HIDDEN_ANSWER_MARKERS = ("显式采用", "跨院", "恒等式", "自证",
                           "签核", "依据来源", "采用依据", "依据待", "待确认",
-                          "核证", "政策文件")
+                          "核证", "政策文件", "不默认已纳入")
 
 #: 正常解释只有一份提示词；adjust 作为历史配置别名使用同一条生成链路。
 _MODE_ENV = "FEE_EXPLANATION_MODE"
@@ -1707,10 +1870,25 @@ def _component_issues(text: str, payload: FeeExplanationInput) -> list[str]:
     return list(dict.fromkeys(missing))
 
 
+#: 收费边界正文禁止带出的汇总清单说法。所问费用行自己的目录划分不受此限。
+_BILLING_INVENTORY_MARKERS = ("其余各项金额", "费用总金额")
+
+
+def _billing_inventory_issues(text: str, payload: FeeExplanationInput) -> list[str]:
+    """收费边界问题只讲所问费用行和原文内涵，不接受整单汇总清单。"""
+    if not _is_billing_boundary_question(payload.question):
+        return []
+    if payload.target_kind in ("summary_fields", "comparison", "mixed", "cover_all", "whole_settlement"):
+        return []
+    if not any(marker in (text or "") for marker in _BILLING_INVENTORY_MARKERS):
+        return []
+    return ["收费边界问题只讲所问费用行和目录内涵原文，不要写「本单其余各项金额如下」或费用总金额等汇总清单。"]
+
+
 def _answer_issues(text: str, payload: FeeExplanationInput, public: FeeDecompositionPublic) -> list[str]:
     if not text:
         return ["回答为空。"]
-    issues = []
+    issues = _billing_inventory_issues(text, payload)
     allowed = _supported_numbers(payload.model_dump(mode="json"))
     if not _decimal_set(text).issubset(allowed):
         unsupported = list(dict.fromkeys(raw for raw in _NUMBER_TOKEN.findall(text)
@@ -1750,6 +1928,7 @@ def _structured_answer(payload: FeeExplanationInput,
             "sources": {"__all__": {"confirmation_status"}},
             "rule_choices": {"__all__": {"candidates": {"__all__": {"confirmation_status", "reason"}}}},
             "settlement_facts": {"display_template"},
+            "fee_items": {"__all__": {"payment_condition_context": {"source_hash", "read_at"}}},
             "fields": {"__all__": {"brief": True, "conclusion_text": True, "explanation_reason": True,
                                   "explanation": {"composition", "basis_text", "boundary"}}},
         },
@@ -1759,7 +1938,8 @@ def _structured_answer(payload: FeeExplanationInput,
     for attempt in range(2):
         response = gateway.generate(
             messages=messages, model_type="llm", scene="fee_explanation", max_tokens=3000)
-        text = _public_safe_answer((response.content or "").strip())
+        text = omit_enroll_date_gap(_public_safe_answer(
+            (response.content or "").strip(), _item_name_protection(public))).strip()
         issues = _answer_issues(text, payload, public)
         if not issues:
             return FeeModelExplanation(answer=text, used_model=True, model_attempted=True)
@@ -1854,7 +2034,11 @@ def explain_decomposition(
     logger.info("[FEE-EXPLANATION] mode=%s attempted=%s used_model=%s fallback_reason=%s",
                 mode, generated.model_attempted, generated.used_model, generated.fallback_reason)
     return generated.model_copy(update={
-        "answer": generated.answer if generated.used_model else _public_safe_answer(rendered.body),
-        "uncertainties": [_public_safe_answer(message) for message in rendered.uncertainties],
+        "answer": generated.answer if generated.used_model else omit_enroll_date_gap(
+            _public_safe_answer(rendered.body, _item_name_protection(public))),
+        "uncertainties": [
+            text for message in rendered.uncertainties
+            if (text := omit_enroll_date_gap(_public_safe_answer(message)).strip())
+        ],
         "evidence_answer_status": "rendered" if rendered.has_evidence else "none",
     })

@@ -158,7 +158,34 @@ export interface SettlementPathStepDto {
   condition_refs?: string[]
 }
 
+/** 原始支付条件资料；不表示模型或程序已经确认符合条件。 */
+export interface PaymentConditionContextDto {
+  bz: string | null
+  catalog_status: string
+  catalog_source: string | null
+  effective_from: string | null
+  effective_to: string | null
+  fee_date: string | null
+  date_basis: string | null
+  specification: string | null
+  unit: string | null
+  usage: string | null
+  hospital_level: string | null
+  hospital_level_name: string | null
+  catalog_hospital_level: string | null
+  catalog_hospital_type: string | null
+  catalog_use_restriction: string | null
+  diagnosis_status: string
+  diagnoses: Array<{ code: string | null; name: string | null; association: string; is_placeholder: boolean; department: string | null; prescriber_level: string | null }>
+  symptoms: string | null
+  symptoms_status: string
+  clinical_conditions_verified: false
+  source_hash: string
+  read_at: string
+}
+
 export interface FeeItemExplanationDto {
+  payment_condition_context?: PaymentConditionContextDto | null
   explainable?: boolean
   explanation_reason?: string | null
   classification_code?: string | null

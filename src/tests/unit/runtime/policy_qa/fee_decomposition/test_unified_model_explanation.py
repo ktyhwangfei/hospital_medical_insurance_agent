@@ -169,6 +169,22 @@ def test_mixed_summary_and_line_use_one_model_answer(monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("answer", [
+    "现金支付 1,837.50 元，是个人负担的支付方式。尚待核实：缺少退休补充保险纳入起始日期，不默认已纳入。",
+    "现金支付 1,837.50 元，缺少退休补充保险纳入起始日期，不默认已纳入。",
+])
+def test_structured_answer_drops_enroll_date_gap_but_keeps_the_amount(monkeypatch, answer):
+    """模型把退休补充缺证写进正文或「尚待核实」时，仍采用其余已核对金额，不整段回退。"""
+    _model(monkeypatch, answer)
+    result = explanation.explain_decomposition(_public_0408(), "现金支付是多少")
+    assert result.used_model
+    assert "1,837.50" in result.answer
+    assert "不默认已纳入" not in result.answer
+    assert "缺少退休补充保险纳入起始日期" not in result.answer
+    assert "尚待核实" not in result.answer
+    assert all("不默认已纳入" not in item for item in result.uncertainties)
+
+
 @pytest.mark.parametrize('text', [
     '本行费用＝80×0.125＝10.00元。',
     '大病医保内支付＝取整（279.27×65%）＝181.53元。',

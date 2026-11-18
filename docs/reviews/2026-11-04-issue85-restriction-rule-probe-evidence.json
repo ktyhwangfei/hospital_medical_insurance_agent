@@ -1,0 +1,127 @@
+{
+  "observed_at": "2026-11-05T09:42:44.453504",
+  "case_ref": "552a2da13bd0",
+  "scope_note": "只读核验；bjyb 测试库实存记录，不代表已认证的生产临床样本",
+  "trade_header": {
+    "trade_date": "2026-04-16T12:31:40",
+    "fund_type": 93,
+    "cure_type": 19,
+    "state": 4,
+    "has_refunded": 0,
+    "fee_all": 3140.3,
+    "fee_in": 3133.51,
+    "fee_out": 3.34,
+    "fund_pay": 1598.36,
+    "no_right_reason": ""
+  },
+  "bill_line_count": 11,
+  "restricted_inpay_lines": 2,
+  "line_results": [
+    {
+      "item_id": 4,
+      "item_code": "XA02BCA084B001010100453",
+      "item_name": "注射用艾普拉唑钠",
+      "catalog": {
+        "ypdj": "2",
+        "zfbl": 0.1,
+        "bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+        "sxrq": "2024-03-20T00:00:00",
+        "jzrq": "2050-12-31T23:59:59"
+      },
+      "rule_id": "rule-XA02BCA084B001010100453-20240320",
+      "rule_revision": 1,
+      "source_bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+      "risk_tier": "clear",
+      "amounts": {
+        "fee": 52.6,
+        "fee_in": 47.34,
+        "fee_out": 5.26
+      },
+      "verdicts": [
+        {
+          "condition_type": "disease",
+          "concept_code": "dg.stress_ulcer_prophylaxis_critical",
+          "source_span": "预防重症患者应激性溃疡出血",
+          "status": "unverifiable",
+          "evidence": [
+            {
+              "kind": "mapping_missing",
+              "summary": "概念码 dg.stress_ulcer_prophylaxis_critical 无有效 diagnosis 值域映射，fail-closed 不予核验",
+              "source": "value_domain_mappings"
+            }
+          ],
+          "missing": "缺少 dg.stress_ulcer_prophylaxis_critical 的诊断值域映射"
+        },
+        {
+          "condition_type": "disease",
+          "concept_code": "dg.peptic_ulcer_bleeding",
+          "source_span": "消化性溃疡出血",
+          "status": "supported",
+          "evidence": [
+            {
+              "kind": "diagnosis_match",
+              "summary": "同处方诊断 K27.400x004 消化性溃疡伴出血 命中病种条件「消化性溃疡出血」",
+              "source": "o_Diagnose.DiagnoseCode=K27.400x004"
+            }
+          ],
+          "missing": ""
+        },
+        {
+          "condition_type": "price_cap",
+          "concept_code": "unit.vial_10mg",
+          "source_span": "支付标准不得高于：63.00元(10mg/支)",
+          "status": "supported",
+          "evidence": [
+            {
+              "kind": "price_check",
+              "summary": "换算后单价 52.6000 元/支 未超支付标准 63.00 元/支（规格单位一致，直接可比）",
+              "source": "o_FeeItem.UnitPrice=52.6000, 规则 支付标准不得高于：63.00元(10mg/支)"
+            }
+          ],
+          "missing": ""
+        }
+      ],
+      "patient_explanation": "注射用艾普拉唑钠 52.60 元：该药在医保目录内，本次就诊记录符合目录限定的支付范围，按医保内结算。其中 5.26 元为乙类先行自付部分，其余已纳入医保结算。",
+      "ops_explanation": "核验通过：注射用艾普拉唑钠 按医保内结算 47.34 元，目录限制条件有记录支持。条件「预防重症患者应激性溃疡出血」：缺少 dg.stress_ulcer_prophylaxis_critical 的诊断值域映射；条件「消化性溃疡出血」：同处方诊断 K27.400x004 消化性溃疡伴出血 命中病种条件「消化性溃疡出血」；条件「支付标准不得高于：63.00元(10mg/支)」：换算后单价 52.6000 元/支 未超支付标准 63.00 元/支（规格单位一致，直接可比）。"
+    },
+    {
+      "item_id": 9,
+      "item_code": "XB02BXK018B001010201504",
+      "item_name": "注射用卡络磺钠",
+      "catalog": {
+        "ypdj": "2",
+        "zfbl": 0.1,
+        "bz": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+        "sxrq": "2024-06-01T00:00:00",
+        "jzrq": "2050-12-31T23:59:59"
+      },
+      "rule_id": "rule-XB02BXK018B001010201504-20240601",
+      "rule_revision": 1,
+      "source_bz": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+      "risk_tier": "review",
+      "amounts": {
+        "fee": 15.28,
+        "fee_in": 13.752,
+        "fee_out": 1.528
+      },
+      "verdicts": [
+        {
+          "condition_type": "disease",
+          "concept_code": "dg.unable_oral_intake",
+          "source_span": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+          "status": "insufficient_evidence",
+          "evidence": [
+            {
+              "kind": "diagnosis_absent",
+              "summary": "同处方诊断为真实值（D66.x01 血友病A型、K92.209 下消化道出血、D64.903 重度贫血、K27.400x004 消化性溃疡伴出血），未见与「限无法口服卡络磺钠（肾上腺色腙）的患者」相符的记录；诊断未记载不等于条件不成立",
+              "source": "o_Diagnose"
+            }
+          ],
+          "missing": "同方诊断中未见与「限无法口服卡络磺钠（肾上腺色腙）的患者」相符的记录"
+        }
+      ],
+      "patient_explanation": "注射用卡络磺钠 15.28 元：该药的医保支付附带有特定使用条件。本次结算已完成，费用以结算单为准；目前在就诊记录中没有看到该条件所需的记录，这不代表存在问题。如果您当时确有相关情况，可到门诊医保窗口说明，由工作人员调取病历进一步核实。",
+      "ops_explanation": "抽查建议：注射用卡络磺钠 按医保内结算 13.75 元，目录限制条件的支持证据不足。条件「限无法口服卡络磺钠（肾上腺色腙）的患者」：同方诊断中未见与「限无法口服卡络磺钠（肾上腺色腙）的患者」相符的记录。资料缺失不构成违规结论，建议调取病历或医嘱核实。"
+    }
+  ]
+}
