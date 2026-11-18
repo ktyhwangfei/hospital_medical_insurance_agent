@@ -229,6 +229,8 @@ export interface PolicyQASettlementPathStep {
 }
 
 export interface PolicyQAFeeItem {
+  /** 仅保留原始资料供查证；当前不新增患者展示块。 */
+  paymentConditionContext?: import('./fee-decomposition-api').PaymentConditionContextDto
   explainable?: boolean
   explanationReason?: string | null
   classificationCode?: string | null
@@ -936,10 +938,35 @@ export function toFeeDecomposition(raw: unknown): PolicyQAFeeDecomposition | und
   }
 }
 
+function toPaymentConditionContext(value: unknown): import('./fee-decomposition-api').PaymentConditionContextDto | undefined {
+  if (!isRecord(value)) return undefined
+  return {
+    bz: nullableString(value.bz) ?? null, catalog_status: nullableString(value.catalog_status) ?? 'unavailable',
+    catalog_source: nullableString(value.catalog_source) ?? null,
+    effective_from: nullableString(value.effective_from) ?? null, effective_to: nullableString(value.effective_to) ?? null,
+    fee_date: nullableString(value.fee_date) ?? null, date_basis: nullableString(value.date_basis) ?? null,
+    specification: nullableString(value.specification) ?? null, unit: nullableString(value.unit) ?? null, usage: nullableString(value.usage) ?? null,
+    hospital_level: nullableString(value.hospital_level) ?? null, hospital_level_name: nullableString(value.hospital_level_name) ?? null,
+    catalog_hospital_level: nullableString(value.catalog_hospital_level) ?? null,
+    catalog_hospital_type: nullableString(value.catalog_hospital_type) ?? null,
+    catalog_use_restriction: nullableString(value.catalog_use_restriction) ?? null,
+    diagnosis_status: nullableString(value.diagnosis_status) ?? 'unavailable',
+    diagnoses: Array.isArray(value.diagnoses) ? value.diagnoses.filter(isRecord).map((diagnosis) => ({
+      code: nullableString(diagnosis.code) ?? null, name: nullableString(diagnosis.name) ?? null,
+      association: nullableString(diagnosis.association) ?? 'same_settlement', is_placeholder: diagnosis.is_placeholder === true,
+      department: nullableString(diagnosis.department) ?? null, prescriber_level: nullableString(diagnosis.prescriber_level) ?? null,
+    })) : [],
+    symptoms: nullableString(value.symptoms) ?? null, symptoms_status: nullableString(value.symptoms_status) ?? 'not_available_in_current_source',
+    clinical_conditions_verified: false,
+    source_hash: nullableString(value.source_hash) ?? '', read_at: nullableString(value.read_at) ?? '',
+  }
+}
+
 function toFeeItems(value: unknown): PolicyQAFeeItem[] | undefined {
   if (!Array.isArray(value)) return undefined
   return value.filter(isRecord).map((item) => ({
     lineId: nullableString(item.line_id) ?? '', itemCode: nullableString(item.item_code) ?? '',
+    paymentConditionContext: toPaymentConditionContext(item.payment_condition_context),
     explainable: item.explainable === true,
     explanationReason: nullableString(item.explanation_reason) ?? null,
     classificationCode: nullableString(item.classification_code) ?? null,
