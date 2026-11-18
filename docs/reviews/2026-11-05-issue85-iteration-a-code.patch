@@ -1,0 +1,1342 @@
+--- a/scripts/run_restriction_compliance_probe.py
++++ b/scripts/run_restriction_compliance_probe.py
+@@ -1,10 +1 @@
+-"""限制性备注合规核验实库探针（Issue #85 Slice 1 样例验证）。
+-
+-对指定结算单（默认 2026-04-16 急诊样例单）执行：
+-1. 只读拉取交易头 + 明细 + 同方诊断 + 当日目录版本；
+-2. 明细行与种子规则按项目编码关联，全部关联规则逐一核验；
+-3. 输出每条规则的验证结果、验证链路证据与双方向解释。
+-
+-只读，不写库；输出中交易号散列化，不输出姓名/身份证。
+-用法：uv run python scripts/run_restriction_compliance_probe.py [--trade-no XXX] [--output PATH]
+-"""
++"""限制性备注单单只读回放；输出全部费用行的状态及可复核脱敏输入。"""
+@@ -15 +5,0 @@
+-import json
+@@ -18 +8,2 @@
+-from datetime import date, datetime
++from collections import Counter
++from datetime import date, datetime, timezone
+@@ -20,0 +12,3 @@
++from typing import Any, Literal, Mapping, Sequence
++
++from pydantic import BaseModel, ConfigDict, ValidationError
+@@ -24,5 +18,3 @@
+-from src.domain.directory_compliance.engine import evaluate_rule
+-from src.domain.directory_compliance.explanation import (
+-    build_ops_explanation,
+-    build_patient_explanation,
+-)
++from src.domain.directory_compliance.configuration import RuleDocument
++from src.domain.directory_compliance.engine import evaluate_rule, is_placeholder_text, locate_rule
++from src.domain.directory_compliance.explanation import build_ops_explanation, build_patient_explanation
+@@ -30,2 +22,2 @@
+-    DiagnosisFact,
+-    SettlementLineContext,
++    ComplianceRule, DiagnosisFact, FieldObservation, FieldReadStatus, LineComplianceResult,
++    RuleLookupResult, RuleLookupStatus, SettlementLineContext, ValueDomainMapping,
+@@ -33,0 +26 @@
++from src.security.desensitization.detection import redact_sensitive_text
+@@ -68,9 +61,194 @@
+-def _ser(value):
+-    if isinstance(value, (datetime, date)):
+-        return value.isoformat()
+-    if isinstance(value, Decimal):
+-        return float(value)
+-    return value
+-
+-
+-def run_probe(trade_no: str) -> dict:
++
++class CatalogSnapshot(BaseModel):
++    model_config = ConfigDict(extra="forbid", frozen=True)
++    code: str
++    bz: str | None = None
++    effective_from: date | None = None
++    effective_to: date | None = None
++
++
++class TradeHeaderSnapshot(BaseModel):
++    model_config = ConfigDict(extra="forbid", frozen=True)
++    trade_date: datetime
++    fund_type: str | None = None
++    state: int | None = None
++    has_refunded: int | None = None
++    fee_all: Decimal | None = None
++    fee_in: Decimal | None = None
++    fee_out: Decimal | None = None
++    fund_pay: Decimal | None = None
++    no_right_reason: str | None = None
++
++
++class ProbeLineReport(BaseModel):
++    model_config = ConfigDict(extra="forbid", frozen=True)
++    line_id: str
++    item_code: str
++    item_name: str
++    lookup: RuleLookupResult
++    context: SettlementLineContext | None = None
++    catalog_candidates: tuple[CatalogSnapshot, ...] = ()
++    result: LineComplianceResult | None = None
++    patient_explanation: str
++    ops_explanation: str
++
++
++class ProbeReport(BaseModel):
++    model_config = ConfigDict(extra="forbid", frozen=True)
++    observed_at: datetime
++    case_ref: str
++    scope_note: str = "只读草稿回放；不是经独立临床审核的正式核验，不代表基金支付原因"
++    trade_header: TradeHeaderSnapshot
++    bill_line_count: int
++    restricted_inpay_lines: int
++    line_results: tuple[ProbeLineReport, ...]
++    rules_snapshot: tuple[RuleDocument, ...]
++    mappings_snapshot: tuple[ValueDomainMapping, ...]
++
++
++def _date(value: Any) -> date | None:
++    if isinstance(value, datetime):
++        return value.date()
++    if isinstance(value, date):
++        return value
++    try:
++        return date.fromisoformat(str(value)[:10])
++    except ValueError:
++        return None
++
++
++def _text(value: Any) -> str:
++    return str(value).strip() if value is not None else ""
++
++
++def build_probe_report(
++    header: Mapping[str, Any], fee_lines: Sequence[Mapping[str, Any]],
++    diagnoses: Sequence[Mapping[str, Any]], catalog_rows: Sequence[Mapping[str, Any]],
++    *, catalog_failed: bool = False, diagnosis_failed: bool = False,
++    rules: Sequence[ComplianceRule] = SEED_RULES,
++    mappings: Sequence[ValueDomainMapping] = BASELINE_MAPPINGS,
++) -> ProbeReport:
++    """纯装配入口便于离线验证；查询失败与查询无记录分开。"""
++    case_ref = hashlib.sha256(_text(header.get("T_TradeNo")).encode()).hexdigest()[:12]
++    trade_date = _date(header.get("T_TradeDate"))
++    if trade_date is None:
++        raise ValueError("结算日期缺失或无效，不能定位当日规则")
++    catalog_by_code: dict[str, list[CatalogSnapshot]] = {}
++    for row in catalog_rows:
++        code = _text(row.get("ypbm"))
++        catalog_by_code.setdefault(code, []).append(CatalogSnapshot(
++            code=code, bz=redact_sensitive_text(_text(row.get("bz"))) or None,
++            effective_from=_date(row.get("sxrq")), effective_to=_date(row.get("jzrq")),
++        ))
++    results: list[ProbeLineReport] = []
++    restricted_count = 0
++    key_counts = Counter(_text(row.get("ItemId")) for row in fee_lines)
++    for index, row in enumerate(fee_lines, 1):
++        code = _text(row.get("ItemCode"))
++        name = redact_sensitive_text(_text(row.get("ItemName")))
++        line_id = _text(row.get("ItemId")) or f"row-{index}"
++        source_ref = hashlib.sha256(f"{case_ref}:{line_id}".encode()).hexdigest()[:12]
++        candidates = tuple(c for c in catalog_by_code.get(code, ()) if (
++            c.effective_from is None or c.effective_to is None
++            or c.effective_from <= trade_date <= c.effective_to
++        ))
++        catalog = candidates[0] if len(candidates) == 1 else None
++        catalog_status = (
++            FieldReadStatus.FETCH_FAILED if catalog_failed else
++            FieldReadStatus.AMBIGUOUS if len(candidates) > 1 else
++            FieldReadStatus.INVALID if catalog and (
++                catalog.effective_from is None or catalog.effective_to is None
++            ) else FieldReadStatus.PRESENT if catalog else FieldReadStatus.EMPTY
++        )
++        recipe = _text(row.get("RecipeNo"))
++        selected = [d for d in diagnoses if recipe and _text(d.get("RecipeNo")) == recipe]
++        facts = tuple(DiagnosisFact(
++            code=redact_sensitive_text(_text(d.get("DiagnoseCode"))) or None,
++            name=redact_sensitive_text(_text(d.get("DiagnoseName"))) or None,
++            association="same_prescription",
++        ) for d in selected)
++        diagnosis_status = (
++            FieldReadStatus.FETCH_FAILED if diagnosis_failed else
++            FieldReadStatus.INVALID if not recipe else
++            FieldReadStatus.EMPTY if not facts else
++            FieldReadStatus.PLACEHOLDER if all(
++                is_placeholder_text(d.code or "") and is_placeholder_text(d.name or "") for d in facts
++            ) else FieldReadStatus.PRESENT
++        )
++        def observed(status: FieldReadStatus, source: str,
++                     association: Literal["same_line", "same_prescription", "same_settlement", "unknown"] = "same_line",
++                     reason: str = "") -> FieldObservation:
++            return FieldObservation(status=status, source=f"{source}:{source_ref}",
++                                    association=association, reason=reason)
++        states = {
++            "item.code": observed(FieldReadStatus.PRESENT if code else FieldReadStatus.EMPTY, "o_FeeItem.ItemCode"),
++            "fee.date": observed(FieldReadStatus.PRESENT, "o_Trade.T_TradeDate"),
++            "catalog": observed(catalog_status, "yb_ypzdml"),
++            "diagnosis.code": observed(diagnosis_status, "o_Diagnose.DiagnoseCode", "same_prescription"),
++            "diagnosis.name": observed(diagnosis_status, "o_Diagnose.DiagnoseName", "same_prescription"),
++            "diagnosis.medical_record": observed(FieldReadStatus.NOT_AVAILABLE, "probe",
++                                                  reason="本轮不获取非结构化病历"),
++            "price.payment_base": observed(FieldReadStatus.NOT_AVAILABLE, "probe",
++                                            reason="未取得费用分解的支付基数，禁止从FeeIn倒推"),
++        }
++        for key, column in (("price.unit_price", "UnitPrice"), ("item.count", "Count"),
++                            ("item.specification", "Specification")):
++            value = row.get(column)
++            state = FieldReadStatus.EMPTY if value is None or value == "" else FieldReadStatus.PRESENT
++            states[key] = observed(state, f"o_FeeItem.{column}")
++        try:
++            context = SettlementLineContext.model_validate({
++                "hospital_code": HOSP_CODE, "trade_date": trade_date, "item_code": code, "item_name": name,
++                "unit_price": row.get("UnitPrice"), "count": row.get("Count"), "specification": row.get("Specification"),
++                "fee": row.get("Fee"), "fee_in": row.get("FeeIn"), "fee_out": row.get("FeeOut"),
++                "same_recipe_diagnoses": facts, "field_states": states, "catalog_bz": catalog.bz if catalog else None,
++                "catalog_effective_from": catalog.effective_from if catalog else None,
++                "catalog_effective_to": catalog.effective_to if catalog else None,
++            })
++        except ValidationError:
++            results.append(ProbeLineReport(
++                line_id=line_id, item_code=code, item_name=name, catalog_candidates=candidates,
++                lookup=RuleLookupResult(status=RuleLookupStatus.NOT_EVALUATED, reason="行输入类型或金额无效"),
++                patient_explanation="本行资料尚不能用于条件解释，请参照原结算记录。",
++                ops_explanation="行输入校验未通过，未执行匹配。",
++            ))
++            continue
++        if not _text(row.get("ItemId")):
++            lookup = RuleLookupResult(status=RuleLookupStatus.NOT_EVALUATED, reason="费用行源键缺失")
++        elif key_counts[line_id] > 1:
++            lookup = RuleLookupResult(status=RuleLookupStatus.AMBIGUOUS, reason="费用行源键重复，未执行核验")
++        elif (header.get("T_State") != 4 or header.get("T_HasRefundmented") != 0
++                or context.fee <= 0):
++            lookup = RuleLookupResult(status=RuleLookupStatus.NOT_EVALUATED, reason="结算状态/退费或非正费用不在本次核验范围")
++        else:
++            lookup = locate_rule(context, rules)
++        # 唯一草稿仅用于回放；不冒充已发布规则命中或正式患者结论。
++        rule = lookup.rule
++        result = evaluate_rule(rule, context, mappings) if rule else None
++        if rule and context.fee_in > 0:
++            restricted_count += 1
++        results.append(ProbeLineReport(
++            line_id=line_id, item_code=code, item_name=name, lookup=lookup, context=context,
++            catalog_candidates=candidates, result=result,
++            patient_explanation=build_patient_explanation(result) if result else
++                "目前未形成可核实的支付条件结论，具体费用请参照原费用解释。",
++            ops_explanation=build_ops_explanation(result) if result else lookup.reason,
++        ))
++    return ProbeReport(
++        observed_at=datetime.now(timezone.utc), case_ref=case_ref,
++        trade_header=TradeHeaderSnapshot(
++            trade_date=header["T_TradeDate"], fund_type=_text(header.get("P_FundType")) or None,
++            state=header.get("T_State"), has_refunded=header.get("T_HasRefundmented"),
++            fee_all=header.get("T_FeeAll"), fee_in=header.get("T_FeeIn"),
++            fee_out=header.get("T_FeeOut"), fund_pay=header.get("T_FundPay"),
++            no_right_reason=_text(header.get("PN_NoRightReason")) or None,
++        ),
++        bill_line_count=len(fee_lines), restricted_inpay_lines=restricted_count,
++        line_results=tuple(results), rules_snapshot=tuple(RuleDocument.from_rule(r) for r in rules),
++        mappings_snapshot=tuple(mappings),
++    )
++
++
++def run_probe(trade_no: str) -> ProbeReport:
++    import pyodbc
++
+@@ -78,11 +256,41 @@
+-    cur = conn.cursor()
+-
+-    cur.execute(
+-        "SELECT T_TradeNo, T_TradeDate, P_FundType, T_CureType, T_State, T_HasRefundmented,"
+-        " T_FeeAll, T_FeeIn, T_FeeOut, T_FundPay, PN_NoRightReason, P_Sex, P_Birthday"
+-        " FROM dbo.o_Trade WHERE T_TradeNo=? AND T_HospCode=?",
+-        trade_no, HOSP_CODE,
+-    )
+-    header_cols = [c[0] for c in cur.description]
+-    header_row = cur.fetchone()
+-    if header_row is None:
++    try:
++        cur = conn.cursor()
++        cur.execute(
++            "SELECT T_TradeNo,T_TradeDate,P_FundType,T_State,T_HasRefundmented,"
++            "T_FeeAll,T_FeeIn,T_FeeOut,T_FundPay,PN_NoRightReason"
++            " FROM dbo.o_Trade WHERE T_TradeNo=? AND T_HospCode=?", trade_no, HOSP_CODE,
++        )
++        columns = [c[0] for c in cur.description]
++        raw = cur.fetchone()
++        if raw is None:
++            raise RuntimeError("结算单不存在或不属于本院")
++        header = dict(zip(columns, raw))
++        cur.execute(
++            "SELECT ItemId,ItemCode,ItemName,UnitPrice,Count,Specification,Fee,FeeIn,FeeOut,RecipeNo"
++            " FROM dbo.o_FeeItem WHERE T_TradeNo=? ORDER BY ItemId", trade_no,
++        )
++        columns = [c[0] for c in cur.description]
++        lines = [dict(zip(columns, r)) for r in cur.fetchall()]
++        diagnosis_failed = catalog_failed = False
++        try:
++            cur.execute("SELECT RecipeNo,DiagnoseCode,DiagnoseName FROM dbo.o_Diagnose WHERE T_TradeNo=?", trade_no)
++            columns = [c[0] for c in cur.description]
++            diagnoses = [dict(zip(columns, r)) for r in cur.fetchall()]
++        except pyodbc.Error:
++            diagnoses, diagnosis_failed = [], True
++        codes = sorted({_text(row.get("ItemCode")) for row in lines} - {""})
++        catalog_rows = []
++        if codes:
++            try:
++                placeholders = ",".join("?" for _ in codes)
++                cur.execute(
++                    "SELECT ypbm,bz,sxrq,jzrq FROM dbo.yb_ypzdml WHERE ypbm IN (" + placeholders + ")",
++                    *codes,
++                )
++                columns = [c[0] for c in cur.description]
++                catalog_rows = [dict(zip(columns, r)) for r in cur.fetchall()]
++            except pyodbc.Error:
++                catalog_failed = True
++        return build_probe_report(header, lines, diagnoses, catalog_rows,
++                                  diagnosis_failed=diagnosis_failed, catalog_failed=catalog_failed)
++    finally:
+@@ -90,114 +297,0 @@
+-        raise RuntimeError(f"结算单不存在或不属于本院：{trade_no}")
+-    header = dict(zip(header_cols, header_row))
+-
+-    cur.execute(
+-        "SELECT ItemId, ItemCode, ItemName, UnitPrice, Count, Specification,"
+-        " Fee, FeeIn, FeeOut, RecipeNo FROM dbo.o_FeeItem WHERE T_TradeNo=? ORDER BY ItemId",
+-        trade_no,
+-    )
+-    fee_cols = [c[0] for c in cur.description]
+-    fee_lines = [dict(zip(fee_cols, r)) for r in cur.fetchall()]
+-
+-    cur.execute(
+-        "SELECT RecipeNo, DiagnoseCode, DiagnoseName, MedicalRecord, Sectionname"
+-        " FROM dbo.o_Diagnose WHERE T_TradeNo=?",
+-        trade_no,
+-    )
+-    diag_cols = [c[0] for c in cur.description]
+-    diagnoses = [dict(zip(diag_cols, r)) for r in cur.fetchall()]
+-
+-    item_codes = sorted({line["ItemCode"] for line in fee_lines})
+-    catalog = {}
+-    if item_codes:
+-        placeholders = ",".join("?" for _ in item_codes)
+-        cur.execute(
+-            f"SELECT ypbm, ypdj, zfbl, bz, sxrq, jzrq FROM dbo.yb_ypzdml WHERE ypbm IN ({placeholders})",
+-            *item_codes,
+-        )
+-        for row in cur.fetchall():
+-            code, ypdj, zfbl, bz, sxrq, jzrq = row
+-            if sxrq <= header["T_TradeDate"] <= jzrq:
+-                catalog[code] = {"ypdj": ypdj, "zfbl": zfbl, "bz": bz, "sxrq": sxrq, "jzrq": jzrq}
+-    conn.close()
+-
+-    case_ref = hashlib.sha256(trade_no.encode()).hexdigest()[:12]
+-    rules_by_item = {rule.item_code: rule for rule in SEED_RULES}
+-    bill_item_names = tuple(line["ItemName"] for line in fee_lines)
+-
+-    line_results = []
+-    for line in fee_lines:
+-        rule = rules_by_item.get(line["ItemCode"])
+-        if rule is None or not (line["Fee"] > 0 and line["FeeIn"] > 0):
+-            continue
+-        context = SettlementLineContext(
+-            hospital_code=HOSP_CODE,
+-            trade_date=header["T_TradeDate"].date(),
+-            item_code=line["ItemCode"],
+-            item_name=line["ItemName"],
+-            unit_price=line["UnitPrice"],
+-            count=line["Count"],
+-            specification=line["Specification"] or "",
+-            fee=line["Fee"],
+-            fee_in=line["FeeIn"],
+-            fee_out=line["FeeOut"],
+-            same_recipe_diagnoses=tuple(
+-                DiagnosisFact(code=d["DiagnoseCode"], name=d["DiagnoseName"],
+-                              medical_record=d["MedicalRecord"] or "")
+-                for d in diagnoses if d["RecipeNo"] == line["RecipeNo"]
+-            ),
+-            same_bill_item_names=bill_item_names,
+-            section_name=next(
+-                (d["Sectionname"] for d in diagnoses if d["RecipeNo"] == line["RecipeNo"]), ""
+-            ),
+-            patient_birthday=header["P_Birthday"].date() if header["P_Birthday"] else None,
+-            patient_sex=str(header["P_Sex"]),
+-        )
+-        result = evaluate_rule(rule, context, BASELINE_MAPPINGS)
+-        line_results.append({
+-            "item_id": line["ItemId"],
+-            "item_code": line["ItemCode"],
+-            "item_name": line["ItemName"],
+-            "catalog": {k: _ser(v) for k, v in catalog.get(line["ItemCode"], {}).items()},
+-            "rule_id": result.rule_id,
+-            "rule_revision": result.rule_revision,
+-            "source_bz": rule.source_bz,
+-            "risk_tier": result.risk_tier.value,
+-            "amounts": {"fee": _ser(result.fee), "fee_in": _ser(result.fee_in), "fee_out": _ser(result.fee_out)},
+-            "verdicts": [
+-                {
+-                    "condition_type": v.condition.condition_type.value,
+-                    "concept_code": v.condition.concept_code,
+-                    "source_span": v.condition.source_span,
+-                    "status": v.status.value,
+-                    "evidence": [
+-                        {"kind": e.kind, "summary": e.summary, "source": e.source}
+-                        for e in v.evidence
+-                    ],
+-                    "missing": v.missing,
+-                }
+-                for v in result.verdicts
+-            ],
+-            "patient_explanation": build_patient_explanation(result),
+-            "ops_explanation": build_ops_explanation(result),
+-        })
+-
+-    return {
+-        "observed_at": datetime.now().isoformat(),
+-        "case_ref": case_ref,
+-        "scope_note": "只读核验；bjyb 测试库实存记录，不代表已认证的生产临床样本",
+-        "trade_header": {
+-            "trade_date": _ser(header["T_TradeDate"]),
+-            "fund_type": _ser(header["P_FundType"]),
+-            "cure_type": _ser(header["T_CureType"]),
+-            "state": _ser(header["T_State"]),
+-            "has_refunded": _ser(header["T_HasRefundmented"]),
+-            "fee_all": _ser(header["T_FeeAll"]),
+-            "fee_in": _ser(header["T_FeeIn"]),
+-            "fee_out": _ser(header["T_FeeOut"]),
+-            "fund_pay": _ser(header["T_FundPay"]),
+-            "no_right_reason": header["PN_NoRightReason"],
+-        },
+-        "bill_line_count": len(fee_lines),
+-        "restricted_inpay_lines": len(line_results),
+-        "line_results": line_results,
+-    }
+@@ -207 +301 @@
+-    parser = argparse.ArgumentParser()
++    parser = argparse.ArgumentParser(description=__doc__)
+@@ -209 +303 @@
+-    parser.add_argument("--output", default="")
++    parser.add_argument("--output")
+@@ -211 +304,0 @@
+-
+@@ -213 +305,0 @@
+-    text = json.dumps(report, ensure_ascii=False, indent=2, default=str)
+@@ -215,11 +307,8 @@
+-        Path(args.output).write_text(text, encoding="utf-8")
+-    for line in report["line_results"]:
+-        print(f"[{line['risk_tier']}] {line['item_name']} fee={line['amounts']['fee']}")
+-        for verdict in line["verdicts"]:
+-            print(f"  - {verdict['condition_type']}/{verdict['concept_code']}: {verdict['status']}")
+-            for ev in verdict["evidence"]:
+-                print(f"      证据: {ev['summary']}（{ev['source']}）")
+-            if verdict["missing"]:
+-                print(f"      缺失: {verdict['missing']}")
+-        print(f"  患者解释: {line['patient_explanation']}")
+-        print(f"  医保办解释: {line['ops_explanation']}")
++        Path(args.output).write_text(report.model_dump_json(indent=2), encoding="utf-8")
++    for line in report.line_results:
++        outcome = line.result.status.value if line.result else line.lookup.status.value
++        print(f"[{outcome}] {line.item_name}: {line.lookup.reason}")
++        if line.result:
++            for verdict in line.result.verdicts:
++                print(f"  {verdict.condition.source_span}: {verdict.status.value}; {verdict.missing}")
++        print(f"  {line.patient_explanation}")
+--- /dev/null
++++ b/src/domain/directory_compliance/configuration.py
+@@ -0,0 +1,64 @@
++"""配置文档到领域规则的一处转换，存储和治理入口后续复用。"""
++from datetime import date
++
++from pydantic import BaseModel, ConfigDict, Field, model_validator
++
++from src.domain.directory_compliance.models import (
++    ComplianceRule, ConditionGroup, NonBlank, RuleStatus,
++)
++
++
++class RuleItem(BaseModel):
++    model_config = ConfigDict(extra="forbid", frozen=True)
++    code: NonBlank
++    name: NonBlank
++
++
++class CatalogVersion(BaseModel):
++    model_config = ConfigDict(extra="forbid", frozen=True)
++    effective_from: date
++    effective_to: date
++    source: str = ""
++
++
++class RuleDocument(BaseModel):
++    model_config = ConfigDict(extra="forbid", frozen=True)
++    rule_id: NonBlank
++    rule_revision: int = Field(default=1, ge=1)
++    engine_version: str = "1.1"
++    status: RuleStatus = RuleStatus.DRAFT
++    item: RuleItem
++    catalog_version: CatalogVersion
++    source_bz: NonBlank
++    condition_groups: tuple[ConditionGroup, ...] = Field(min_length=1)
++    reviewed_by: str = ""
++    created_by: str = ""
++    content_hash: str = ""
++    published_at: str | None = None
++
++    @model_validator(mode="after")
++    def validate_domain_rule(self) -> "RuleDocument":
++        self.to_rule()
++        return self
++
++    def to_rule(self) -> ComplianceRule:
++        return ComplianceRule(
++            rule_id=self.rule_id, revision=self.rule_revision, status=self.status,
++            item_code=self.item.code, item_name=self.item.name,
++            catalog_effective_from=self.catalog_version.effective_from,
++            catalog_effective_to=self.catalog_version.effective_to,
++            source_bz=self.source_bz, condition_groups=self.condition_groups,
++            reviewed_by=self.reviewed_by,
++            catalog_source=self.catalog_version.source,
++        )
++
++    @classmethod
++    def from_rule(cls, rule: ComplianceRule) -> "RuleDocument":
++        return cls(
++            rule_id=rule.rule_id, rule_revision=rule.revision, status=rule.status,
++            item=RuleItem(code=rule.item_code, name=rule.item_name),
++            catalog_version=CatalogVersion(effective_from=rule.catalog_effective_from,
++                                           effective_to=rule.catalog_effective_to, source=rule.catalog_source),
++            source_bz=rule.source_bz, condition_groups=rule.condition_groups,
++            reviewed_by=rule.reviewed_by,
++        )
+--- a/src/domain/directory_compliance/engine.py
++++ b/src/domain/directory_compliance/engine.py
+@@ -15 +15 @@
+-from decimal import Decimal
++from decimal import Decimal, InvalidOperation
+@@ -22,0 +23 @@
++    FieldReadStatus,
+@@ -25,0 +27,2 @@
++    MatchStatus,
++    PriceBasis,
+@@ -27,0 +31,3 @@
++    RuleLookupResult,
++    RuleLookupStatus,
++    RuleStatus,
+@@ -35,0 +42 @@
++_ICD_CODE_RE = re.compile(r"^[A-Z]\d{2}(?:\.[A-Z0-9]+)?$", re.IGNORECASE)
+@@ -43,0 +51,8 @@
++_READ_STATUS_LABELS = {
++    FieldReadStatus.EMPTY: "已查询但字段或记录为空",
++    FieldReadStatus.PLACEHOLDER: "字段为占位值",
++    FieldReadStatus.INVALID: "字段或关联依据无效",
++    FieldReadStatus.NOT_AVAILABLE: "当前未接入该字段来源",
++    FieldReadStatus.FETCH_FAILED: "字段查询失败",
++    FieldReadStatus.AMBIGUOUS: "存在多条来源，无法唯一关联",
++}
+@@ -55,0 +71 @@
++    region_code: str = "",
+@@ -68 +84,3 @@
+-            if m.scope == scope and (scope == MappingScope.DEFAULT or m.scope_key == hospital_code)
++            if m.scope == scope and (scope == MappingScope.DEFAULT or m.scope_key == (
++                hospital_code if scope == MappingScope.HOSPITAL else region_code
++            ))
+@@ -72,0 +91,51 @@
++
++
++def _field_gap(condition: RuleCondition, line: SettlementLineContext, *keys: str) -> ConditionVerdict | None:
++    values = {"price.unit_price": line.unit_price, "item.specification": line.specification,
++              "item.count": line.count, "price.payment_base": line.payment_base}
++    for key in keys:
++        state = line.field_states.get(key)
++        if state is None or state.status != FieldReadStatus.PRESENT:
++            status = (VerdictStatus.INSUFFICIENT_EVIDENCE if state and state.status in (
++                FieldReadStatus.EMPTY, FieldReadStatus.PLACEHOLDER, FieldReadStatus.INVALID,
++            ) else VerdictStatus.UNVERIFIABLE)
++            reason = (state.reason or _READ_STATUS_LABELS[state.status]) if state else "未提供取得状态"
++            return ConditionVerdict(condition=condition, status=status, missing=f"{key}：{reason}")
++        if state.association not in ("same_line", "same_prescription"):
++            return ConditionVerdict(condition=condition, status=VerdictStatus.INSUFFICIENT_EVIDENCE,
++                                    missing=f"{key} 缺少本行/同处方关联依据")
++        if key in values and (values[key] is None or values[key] == ""):
++            return ConditionVerdict(condition=condition, status=VerdictStatus.INSUFFICIENT_EVIDENCE,
++                                    missing=f"{key} 已查询但值为空")
++    return None
++
++
++def locate_rule(line: SettlementLineContext, rules: Iterable[ComplianceRule]) -> RuleLookupResult:
++    """字段确实取得后才定位；草稿只作为诊断候选返回，不成为命中。"""
++    for key in ("item.code", "fee.date", "catalog"):
++        state = line.field_states.get(key)
++        if state and state.status == FieldReadStatus.AMBIGUOUS:
++            return RuleLookupResult(status=RuleLookupStatus.AMBIGUOUS, reason=f"{key} 来源歧义")
++        if state is None or state.status != FieldReadStatus.PRESENT or state.association != "same_line":
++            reason = (state.reason or _READ_STATUS_LABELS.get(state.status, "缺少本行关联依据")) if state else "未提供取得状态"
++            return RuleLookupResult(status=RuleLookupStatus.NOT_EVALUATED, reason=f"{key}：{reason}，未执行规则匹配")
++    if (line.catalog_effective_from is None or line.catalog_effective_to is None
++            or not line.catalog_effective_from <= line.trade_date <= line.catalog_effective_to):
++        return RuleLookupResult(status=RuleLookupStatus.NOT_EVALUATED, reason="当日目录版本未确认")
++    if not line.item_code.strip():
++        return RuleLookupResult(status=RuleLookupStatus.NOT_EVALUATED, reason="项目编码为空")
++    catalog_bz = (line.catalog_bz or "").strip()
++    if not catalog_bz:
++        return RuleLookupResult(status=RuleLookupStatus.NOT_FOUND, reason="当日目录未记载本类限制")
++    candidates = tuple(r for r in rules if r.item_code == line.item_code
++                       and r.catalog_effective_from <= line.trade_date <= r.catalog_effective_to
++                       and r.source_bz.strip() == catalog_bz)
++    published = tuple(r for r in candidates if r.status == RuleStatus.PUBLISHED)
++    if len(published) > 1:
++        return RuleLookupResult(status=RuleLookupStatus.AMBIGUOUS, reason="适用的已发布规则区间重叠")
++    if published:
++        return RuleLookupResult(status=RuleLookupStatus.MATCHED, reason="取得唯一适用的已发布规则", rule=published[0])
++    drafts = tuple(r for r in candidates if r.status == RuleStatus.DRAFT)
++    return RuleLookupResult(status=RuleLookupStatus.NOT_FOUND,
++                            reason="限制原文已取得，规则待审核发布" if drafts else "限制原文已取得，无适用规则",
++                            rule=drafts[0] if len(drafts) == 1 else None)
+@@ -80 +149,2 @@
+-    resolved = resolve_mappings(mappings, ValueDomain.DIAGNOSIS, condition.concept_code, line.hospital_code)
++    resolved = resolve_mappings(mappings, ValueDomain.DIAGNOSIS, condition.concept_code,
++                                line.hospital_code, line.region_code)
+@@ -92,2 +162,8 @@
+-    icd_prefixes = tuple(m.target_value for m in resolved if m.target_type == MappingTargetType.ICD_PREFIX)
+-    name_patterns = tuple(m.target_value for m in resolved if m.target_type == MappingTargetType.NAME_PATTERN)
++    approved = tuple(m for m in resolved if m.reviewed_by.strip())
++    if not approved:
++        return ConditionVerdict(condition=condition, status=VerdictStatus.UNVERIFIABLE,
++                                missing=f"{condition.concept_code} 值域映射待审核")
++    gap = _field_gap(condition, line, "diagnosis.code")
++    if gap:
++        return gap
++    icd_mappings = tuple(m for m in approved if m.target_type == MappingTargetType.ICD_PREFIX)
+@@ -102 +178 @@
+-    if all(is_placeholder_text(d.code) and is_placeholder_text(d.name) for d in diagnoses):
++    if all(is_placeholder_text(d.code or "") and is_placeholder_text(d.name or "") for d in diagnoses):
+@@ -112,0 +189,8 @@
++    diagnoses = tuple(d for d in diagnoses if d.association == "same_prescription")
++    if not diagnoses:
++        return ConditionVerdict(condition=condition, status=VerdictStatus.INSUFFICIENT_EVIDENCE,
++                                missing="缺少可靠的同处方诊断关联")
++    diagnoses = tuple(d for d in diagnoses if d.code and _ICD_CODE_RE.fullmatch(d.code))
++    if not diagnoses:
++        return ConditionVerdict(condition=condition, status=VerdictStatus.INSUFFICIENT_EVIDENCE,
++                                missing="同处方诊断编码为空、占位或无效；名称/病历仅作线索")
+@@ -114 +198,2 @@
+-        if any(d.code.startswith(prefix) for prefix in icd_prefixes):
++        hits = tuple(m.mapping_id for m in icd_mappings if d.code and d.code.startswith(m.target_value))
++        if hits:
+@@ -117,0 +203,2 @@
++                match_status=MatchStatus.MATCHED,
++                used_mapping_ids=hits,
+@@ -120,12 +207,2 @@
+-                    summary=f"同处方诊断 {d.code} {d.name} 命中病种条件「{condition.source_span}」",
+-                    source=f"o_Diagnose.DiagnoseCode={d.code}",
+-                ),),
+-            )
+-        if any(pattern and (pattern in d.name or pattern in d.medical_record) for pattern in name_patterns):
+-            return ConditionVerdict(
+-                condition=condition,
+-                status=VerdictStatus.SUPPORTED,
+-                evidence=(ConditionEvidence(
+-                    kind="diagnosis_match",
+-                    summary=f"同处方诊断名称/病历「{d.name}/{d.medical_record}」命中病种条件「{condition.source_span}」",
+-                    source=f"o_Diagnose.DiagnoseName={d.name}",
++                    summary=f"同处方诊断编码 {d.code} 命中经审核的条件映射「{condition.source_span}」",
++                    source=f"{line.field_states['diagnosis.code'].source}; code={d.code}",
+@@ -135 +212 @@
+-    listed = "、".join(f"{d.code} {d.name}" for d in diagnoses if not is_placeholder_text(d.code))
++    listed = "、".join(d.code or "" for d in diagnoses if not is_placeholder_text(d.code or ""))
+@@ -138,0 +216 @@
++        match_status=MatchStatus.NOT_MATCHED if icd_mappings else MatchStatus.NOT_EVALUATED,
+@@ -141,2 +219,2 @@
+-            summary=f"同处方诊断为真实值（{listed}），未见与「{condition.source_span}」相符的记录；诊断未记载不等于条件不成立",
+-            source="o_Diagnose",
++            summary=f"同处方诊断编码（{listed}）未能支持「{condition.source_span}」；名称或病历关键词仅作线索，未记载不等于条件不成立",
++            source=line.field_states["diagnosis.code"].source,
+@@ -159 +237,3 @@
+-    return Decimal(strength), strength_unit.lower(), unit
++    normalized_unit = strength_unit.lower()
++    multiplier = {"g": Decimal("1000"), "ug": Decimal("0.001"), "μg": Decimal("0.001")}.get(normalized_unit, Decimal(1))
++    return Decimal(strength) * multiplier, "ml" if normalized_unit == "ml" else "mg", unit
+@@ -171 +251,8 @@
+-    parsed = _parse_spec(line.specification)
++    if cap.basis == PriceBasis.UNKNOWN:
++        return ConditionVerdict(condition=condition, status=VerdictStatus.UNVERIFIABLE,
++                                missing="价格政策适用口径尚未确认")
++    gap = _field_gap(condition, line, "price.unit_price", "item.specification")
++    if gap:
++        return gap
++    assert line.unit_price is not None
++    parsed = _parse_spec(line.specification or "")
+@@ -180,2 +267 @@
+-    cap_strength_value = cap_strength[0] if cap_strength else None
+-    if cap_strength_value is not None and strength != cap_strength_value:
++    if cap_strength is None or (strength, strength_unit) != cap_strength[:2]:
+@@ -187 +273,3 @@
+-    distinct_units = set(_PACK_UNITS_RE.findall(line.specification))
++    distinct_units = set(_PACK_UNITS_RE.findall(line.specification or ""))
++    multiplier = Decimal(1)
++    used_mapping_ids: tuple[str, ...] = ()
+@@ -193,3 +281,3 @@
+-            mappings, ValueDomain.PRICE_UNIT, f"pack.{line.item_code}", line.hospital_code
+-        )
+-        conversion = tuple(m for m in conversion if m.target_type == MappingTargetType.SPEC_CONVERSION)
++            mappings, ValueDomain.PRICE_UNIT, f"pack.{line.item_code}", line.hospital_code, line.region_code
++        )
++        conversion = tuple(m for m in conversion if m.target_type == MappingTargetType.SPEC_CONVERSION and m.reviewed_by.strip())
+@@ -206,2 +294,8 @@
+-        multiplier = Decimal(conversion[0].target_value)
+-        if multiplier <= 0:
++        if len(conversion) != 1:
++            return ConditionVerdict(condition=condition, status=VerdictStatus.UNVERIFIABLE,
++                                    missing="包装换算存在多条映射，不能任取第一条")
++        try:
++            multiplier = Decimal(conversion[0].target_value)
++        except InvalidOperation:
++            multiplier = Decimal("NaN")
++        if not multiplier.is_finite() or multiplier <= 0:
+@@ -210,0 +305 @@
++        used_mapping_ids = (conversion[0].mapping_id,)
+@@ -213 +308,15 @@
+-    if effective_price > cap.amount:
++    if cap.basis == PriceBasis.PAYMENT_STANDARD:
++        gap = _field_gap(condition, line, "item.count", "price.payment_base")
++        if gap:
++            return gap
++        if line.count is None or line.count <= 0:
++            return ConditionVerdict(condition=condition, status=VerdictStatus.INSUFFICIENT_EVIDENCE,
++                                    missing="缺少正数量，无法核验支付基数上限")
++        assert line.payment_base is not None
++        limit = min(effective_price, cap.amount) * line.count * multiplier
++        checked, threshold = line.payment_base, limit
++        comparison = f"已取得支付基数 {checked} 元，按规格/数量核验的支付基数上限 {threshold} 元"
++    else:
++        checked, threshold = effective_price, cap.amount
++        comparison = f"换算后单价 {effective_price:.4f} 元/{cap.unit}，收费上限 {cap.amount} 元/{cap.unit}"
++    if checked > threshold:
+@@ -216,0 +326,2 @@
++            match_status=MatchStatus.NOT_MATCHED,
++            used_mapping_ids=used_mapping_ids,
+@@ -219,2 +330,5 @@
+-                summary=f"换算后单价 {effective_price:.4f} 元/{cap.unit} 超出支付标准 {cap.amount} 元/{cap.unit}（{conversion_note}）",
+-                source=f"o_FeeItem.UnitPrice={line.unit_price}, 规则 {condition.source_span}",
++                summary=f"{comparison}，超出适用上限（{conversion_note}）",
++                source="; ".join(line.field_states[k].source for k in (
++                    ("price.unit_price", "item.specification", "item.count", "price.payment_base")
++                    if cap.basis == PriceBasis.PAYMENT_STANDARD else ("price.unit_price", "item.specification")
++                )),
+@@ -225,0 +340,2 @@
++        match_status=MatchStatus.MATCHED,
++        used_mapping_ids=used_mapping_ids,
+@@ -228,2 +344,5 @@
+-            summary=f"换算后单价 {effective_price:.4f} 元/{cap.unit} 未超支付标准 {cap.amount} 元/{cap.unit}（{conversion_note}）",
+-            source=f"o_FeeItem.UnitPrice={line.unit_price}, 规则 {condition.source_span}",
++            summary=f"{comparison}，未超适用上限（{conversion_note}）",
++            source="; ".join(line.field_states[k].source for k in (
++                ("price.unit_price", "item.specification", "item.count", "price.payment_base")
++                if cap.basis == PriceBasis.PAYMENT_STANDARD else ("price.unit_price", "item.specification")
++            )),
+@@ -256,0 +376,4 @@
++    if not rule.condition_groups or any(not group.conditions for group in rule.condition_groups):
++        raise ValueError("空规则或空条件组不可执行")
++    mappings = tuple(mappings)
++    applicable = rule.item_code == line.item_code and rule.catalog_effective_from <= line.trade_date <= rule.catalog_effective_to
+@@ -258,0 +382,2 @@
++        if applicable else ConditionVerdict(condition=condition, status=VerdictStatus.UNVERIFIABLE,
++                                           missing="规则不适用本行项目或费用日期")
+@@ -281,0 +407 @@
++        status = VerdictStatus.CONTRADICTED
+@@ -283,0 +410 @@
++        status = VerdictStatus.SUPPORTED
+@@ -285,0 +413,2 @@
++        status = (VerdictStatus.INSUFFICIENT_EVIDENCE if VerdictStatus.INSUFFICIENT_EVIDENCE in group_statuses
++                  else VerdictStatus.UNVERIFIABLE)
+@@ -295,0 +425,5 @@
++        status=status,
++        rule_status=rule.status,
++        explanation_ready=rule.status == RuleStatus.PUBLISHED and status in (
++            VerdictStatus.SUPPORTED, VerdictStatus.CONTRADICTED,
++        ),
+--- a/src/domain/directory_compliance/explanation.py
++++ b/src/domain/directory_compliance/explanation.py
+@@ -13,0 +14 @@
++    RuleStatus,
+@@ -43 +44,3 @@
+-    if result.risk_tier == ComplianceRiskTier.CLEAR:
++    if result.rule_status != RuleStatus.PUBLISHED:
++        return f"{name}：当前限制规则尚未完成审核，本次仅作草稿回放，暂不能据此确认是否符合支付条件。具体费用请参照本结算单费用解释。"
++    if result.risk_tier == ComplianceRiskTier.CLEAR and result.explanation_ready:
+@@ -45,2 +48,3 @@
+-            f"{name} {_money(fee)} 元：该药在医保目录内，本次就诊记录符合目录限定的支付范围，"
+-            f"按医保内结算。其中 {_money(fee_out)} 元为乙类先行自付部分，其余已纳入医保结算。"
++            f"{name}：本次规则所覆盖的支付条件有记录支持。"
++            f"本行记录费用 {_money(fee)} 元，其中医保内 {_money(result.fee_in)} 元、医保外 {_money(fee_out)} 元；"
++            "具体负担类别和计算原因请参照原费用分解，不由条件核验结果推定。"
+@@ -48 +52 @@
+-    if result.risk_tier == ComplianceRiskTier.CONTRA:
++    if result.risk_tier == ComplianceRiskTier.CONTRA and result.explanation_ready:
+@@ -51,2 +55 @@
+-            f"医院医保部门正在进一步核实。核实不影响您的就诊安排，本次费用以结算单为准；"
+-            f"如有疑问可到门诊医保窗口咨询核实进展。"
++            f"本次费用以结算单为准；如需了解该条件与费用处理的关系，可向医保窗口核实。"
+@@ -54,0 +58,3 @@
++    spans = "、".join(dict.fromkeys(v.condition.source_span for v in result.verdicts if v.status in (
++        VerdictStatus.INSUFFICIENT_EVIDENCE, VerdictStatus.UNVERIFIABLE,
++    )))
+@@ -56,3 +62,3 @@
+-        f"{name} {_money(fee)} 元：该药的医保支付附带有特定使用条件。本次结算已完成，费用以结算单为准；"
+-        f"目前在就诊记录中没有看到该条件所需的记录，这不代表存在问题。"
+-        f"如果您当时确有相关情况，可到门诊医保窗口说明，由工作人员调取病历进一步核实。"
++        f"{name} {_money(fee)} 元：该药的医保支付附带有特定使用条件，费用以结算单为准；"
++        f"目前对「{spans}」尚缺足够的核验依据，这不代表存在问题，也不能据此确认条件符合。"
++        f"如需补充核实，可向医保窗口了解所需资料。"
+@@ -66 +72 @@
+-        ComplianceRiskTier.CONTRA: f"飞检自查候选：{name} 按医保内结算 {_money(result.fee_in)} 元，存在与目录限制明确冲突的事实。",
++        ComplianceRiskTier.CONTRA: f"核实线索：{name} 记录医保内 {_money(result.fee_in)} 元，所核验规则存在条件冲突，不等于基金损失或正式违规结论。",
+@@ -69 +75 @@
+-        ComplianceRiskTier.CLEAR: f"核验通过：{name} 按医保内结算 {_money(result.fee_in)} 元，目录限制条件有记录支持。",
++        ComplianceRiskTier.CLEAR: f"核验结果：{name} 记录医保内 {_money(result.fee_in)} 元，本次规则覆盖条件有记录支持。",
+@@ -74 +80,2 @@
+-    return f"{header}{lines}。{tail}".rstrip("。") + "。"
++    prefix = "草稿回放（规则未审核，不作正式结论）：" if result.rule_status != RuleStatus.PUBLISHED else ""
++    return f"{prefix}{header}{lines}。{tail}".rstrip("。") + "。"
+--- a/src/domain/directory_compliance/models.py
++++ b/src/domain/directory_compliance/models.py
+@@ -11,2 +11,50 @@
+-
+-from pydantic import BaseModel, ConfigDict
++from typing import Annotated, Literal, Self
++
++from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StringConstraints, model_validator
++
++NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
++FiniteAmount = Annotated[Decimal, Field(allow_inf_nan=False)]
++
++
++class FieldReadStatus(StrEnum):
++    PRESENT = "present"
++    EMPTY = "empty"
++    PLACEHOLDER = "placeholder"
++    INVALID = "invalid"
++    NOT_AVAILABLE = "not_available"
++    FETCH_FAILED = "fetch_failed"
++    AMBIGUOUS = "ambiguous"
++
++
++class FieldObservation(BaseModel):
++    """本次字段的取得质量；不代替条件核验结论。"""
++    model_config = ConfigDict(frozen=True, extra="forbid")
++    status: FieldReadStatus
++    source: NonBlank
++    association: Literal["same_line", "same_prescription", "same_settlement", "unknown"] = "unknown"
++    reason: str = ""
++
++
++class MatchStatus(StrEnum):
++    MATCHED = "matched"
++    NOT_MATCHED = "not_matched"
++    NOT_EVALUATED = "not_evaluated"
++
++
++class RuleStatus(StrEnum):
++    DRAFT = "draft"
++    PUBLISHED = "published"
++    RETIRED = "retired"
++
++
++class RuleLookupStatus(StrEnum):
++    MATCHED = "matched"
++    NOT_FOUND = "not_found"
++    NOT_EVALUATED = "not_evaluated"
++    AMBIGUOUS = "ambiguous"
++
++
++class PriceBasis(StrEnum):
++    UNKNOWN = "unknown"
++    SALE_CEILING = "sale_ceiling"
++    PAYMENT_STANDARD = "payment_standard"
+@@ -70,5 +118,6 @@
+-    model_config = ConfigDict(frozen=True)
+-
+-    amount: Decimal        # 限价金额
+-    unit: str              # 计价单位（支/粒/瓶）
+-    strength_text: str     # 规格原文（如 "10mg"）
++    model_config = ConfigDict(frozen=True, extra="forbid")
++
++    amount: Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
++    unit: NonBlank
++    strength_text: NonBlank
++    basis: PriceBasis = PriceBasis.UNKNOWN
+@@ -79,5 +128,5 @@
+-    model_config = ConfigDict(frozen=True)
+-
+-    condition_type: RestrictionConditionType
+-    concept_code: str      # 内部概念码，如 dg.peptic_ulcer_bleeding
+-    source_span: str       # bz 原文片段，解析留痕
++    model_config = ConfigDict(frozen=True, extra="forbid")
++
++    condition_type: RestrictionConditionType = Field(validation_alias=AliasChoices("condition_type", "type"))
++    concept_code: NonBlank = Field(validation_alias=AliasChoices("concept_code", "concept"))
++    source_span: NonBlank
+@@ -92,3 +141,4 @@
+-    model_config = ConfigDict(frozen=True)
+-
+-    conditions: tuple[RuleCondition, ...]
++    model_config = ConfigDict(frozen=True, extra="forbid")
++
++    conditions: Annotated[tuple[RuleCondition, ...], Field(min_length=1)]
++    logic: Literal["any_of"] = "any_of"
+@@ -99,5 +149,5 @@
+-    model_config = ConfigDict(frozen=True)
+-
+-    rule_id: str
+-    item_code: str
+-    item_name: str
++    model_config = ConfigDict(frozen=True, extra="forbid")
++
++    rule_id: NonBlank
++    item_code: NonBlank
++    item_name: NonBlank
+@@ -106,3 +156,29 @@
+-    condition_groups: tuple[ConditionGroup, ...]
+-    source_bz: str          # 目录备注原文
+-    revision: int = 1
++    condition_groups: Annotated[tuple[ConditionGroup, ...], Field(min_length=1)]
++    source_bz: NonBlank
++    revision: Annotated[int, Field(ge=1)] = 1
++    status: RuleStatus = RuleStatus.DRAFT
++    reviewed_by: str = ""
++    catalog_source: str = ""
++
++    @model_validator(mode="after")
++    def validate_rule(self) -> Self:
++        if self.catalog_effective_to < self.catalog_effective_from:
++            raise ValueError("规则有效区间倒置")
++        for group in self.condition_groups:
++            for condition in group.conditions:
++                if condition.condition_type == RestrictionConditionType.PRICE_CAP and condition.price_cap is None:
++                    raise ValueError("价格条件缺少参数")
++                if self.status == RuleStatus.PUBLISHED and condition.condition_type not in (
++                    RestrictionConditionType.DISEASE, RestrictionConditionType.PRICE_CAP,
++                ):
++                    raise ValueError("未实现的核验器不能发布")
++        if self.status == RuleStatus.PUBLISHED and not self.reviewed_by.strip():
++            raise ValueError("发布规则须提供审核人")
++        return self
++
++
++class RuleLookupResult(BaseModel):
++    model_config = ConfigDict(frozen=True, extra="forbid")
++    status: RuleLookupStatus
++    reason: NonBlank
++    rule: ComplianceRule | None = None
+@@ -113 +189 @@
+-    model_config = ConfigDict(frozen=True)
++    model_config = ConfigDict(frozen=True, extra="forbid")
+@@ -121 +197 @@
+-    target_value: str
++    target_value: NonBlank
+@@ -122,0 +199,2 @@
++    revision: Annotated[int, Field(ge=1)] = 1
++    reviewed_by: str = ""
+@@ -127,4 +205,4 @@
+-    model_config = ConfigDict(frozen=True)
+-
+-    code: str
+-    name: str
++    model_config = ConfigDict(frozen=True, extra="forbid")
++
++    code: str | None = None
++    name: str | None = None
+@@ -131,0 +210 @@
++    association: Literal["same_prescription", "same_settlement", "unknown"] = "unknown"
+@@ -136 +215 @@
+-    model_config = ConfigDict(frozen=True)
++    model_config = ConfigDict(frozen=True, extra="forbid")
+@@ -142,6 +221,6 @@
+-    unit_price: Decimal
+-    count: Decimal
+-    specification: str
+-    fee: Decimal
+-    fee_in: Decimal
+-    fee_out: Decimal
++    unit_price: Annotated[Decimal, Field(ge=0, allow_inf_nan=False)] | None = None
++    count: Annotated[Decimal, Field(ge=0, allow_inf_nan=False)] | None = None
++    specification: str | None = None
++    fee: FiniteAmount
++    fee_in: FiniteAmount
++    fee_out: FiniteAmount
+@@ -153,0 +233,6 @@
++    region_code: str = ""
++    payment_base: Annotated[Decimal, Field(ge=0, allow_inf_nan=False)] | None = None
++    catalog_bz: str | None = None
++    catalog_effective_from: date | None = None
++    catalog_effective_to: date | None = None
++    field_states: dict[str, FieldObservation] = Field(default_factory=dict)
+@@ -158 +243 @@
+-    model_config = ConfigDict(frozen=True)
++    model_config = ConfigDict(frozen=True, extra="forbid")
+@@ -167 +252 @@
+-    model_config = ConfigDict(frozen=True)
++    model_config = ConfigDict(frozen=True, extra="forbid")
+@@ -172,0 +258,2 @@
++    match_status: MatchStatus = MatchStatus.NOT_EVALUATED
++    used_mapping_ids: tuple[str, ...] = ()
+@@ -177 +264 @@
+-    model_config = ConfigDict(frozen=True)
++    model_config = ConfigDict(frozen=True, extra="forbid")
+@@ -187,0 +275,4 @@
++    status: VerdictStatus
++    rule_status: RuleStatus
++    explanation_ready: bool
++    engine_version: str = "1.1"
+--- a/src/domain/directory_compliance/rules_seed.py
++++ b/src/domain/directory_compliance/rules_seed.py
+@@ -5 +5 @@
+-艾普拉唑病种前缀集为人工拟定的初稿，未经临床审核，正式启用前需医保办确认。
++规则及映射均保留草稿/未审核状态，正式启用前需核实政策版本、价格口径及临床映射。
+@@ -40,9 +39,0 @@
+-    ValueDomainMapping(
+-        mapping_id="map-dg-pub-name-1",
+-        domain=ValueDomain.DIAGNOSIS,
+-        concept_code="dg.peptic_ulcer_bleeding",
+-        scope=MappingScope.DEFAULT,
+-        target_type=MappingTargetType.NAME_PATTERN,
+-        target_value="消化性溃疡",
+-        source="manual",
+-    ),
+@@ -71,0 +63 @@
++    catalog_source="bjyb.yb_ypzdml",
+@@ -102,0 +95 @@
++    catalog_source="bjyb.yb_ypzdml",
+--- a/src/tests/unit/domain/directory_compliance/test_engine.py
++++ b/src/tests/unit/domain/directory_compliance/test_engine.py
+@@ -28,0 +29 @@
++    PriceBasis,
+@@ -30,0 +32 @@
++    RuleStatus,
+@@ -38,4 +40,14 @@
+-    BASELINE_MAPPINGS,
+-    RULE_CARBAZOCHROME,
+-    RULE_ILAPRAZOLE,
+-)
++    BASELINE_MAPPINGS as DRAFT_MAPPINGS,
++    RULE_CARBAZOCHROME as DRAFT_CARBAZOCHROME,
++    RULE_ILAPRAZOLE as DRAFT_ILAPRAZOLE,
++)
++
++# 合成审核配置仅测试算法，不把种子或临床映射视为已完成正式审核。
++BASELINE_MAPPINGS = tuple(m.model_copy(update={"reviewed_by": "synthetic-review"}) for m in DRAFT_MAPPINGS)
++_payload = DRAFT_ILAPRAZOLE.model_dump(mode="json")
++_payload.update(status="published", reviewed_by="synthetic-review")
++_payload["condition_groups"][1]["conditions"][0]["price_cap"]["basis"] = "sale_ceiling"
++RULE_ILAPRAZOLE = ComplianceRule.model_validate(_payload)
++RULE_CARBAZOCHROME = DRAFT_CARBAZOCHROME.model_copy(update={
++    "status": RuleStatus.PUBLISHED, "reviewed_by": "synthetic-review",
++})
+@@ -46,4 +58,4 @@
+-    DiagnosisFact(code="D66.x01", name="血友病A型"),
+-    DiagnosisFact(code="K92.209", name="下消化道出血"),
+-    DiagnosisFact(code="D64.903", name="重度贫血"),
+-    DiagnosisFact(code="K27.400x004", name="消化性溃疡伴出血", medical_record="消化性溃疡出血"),
++    DiagnosisFact(association="same_prescription", code="D66.x01", name="血友病A型"),
++    DiagnosisFact(association="same_prescription", code="K92.209", name="下消化道出血"),
++    DiagnosisFact(association="same_prescription", code="D64.903", name="重度贫血"),
++    DiagnosisFact(association="same_prescription", code="K27.400x004", name="消化性溃疡伴出血", medical_record="消化性溃疡出血"),
+@@ -67,0 +80,3 @@
++        "field_states": {key: {"status": "present", "source": "synthetic",
++                               "association": "same_prescription" if key.startswith("diagnosis") else "same_line"}
++                         for key in ("diagnosis.code", "price.unit_price", "item.specification", "item.count")},
+@@ -85 +100 @@
+-    line = _line(same_recipe_diagnoses=(DiagnosisFact(code="01", name="1"),))
++    line = _line(same_recipe_diagnoses=(DiagnosisFact(association="same_prescription", code="01", name="1"),))
+@@ -175 +190 @@
+-        price_cap=PriceCapSpec(amount=Decimal("48.00"), unit="瓶", strength_text="176ml"),
++        price_cap=PriceCapSpec(amount=Decimal("48.00"), unit="瓶", strength_text="176ml", basis=PriceBasis.SALE_CEILING),
+@@ -183,0 +199 @@
++        reviewed_by="synthetic-review",
+@@ -237 +253 @@
+-                price_cap=PriceCapSpec(amount=Decimal("10.00"), unit="支", strength_text="10mg"),
++                price_cap=PriceCapSpec(amount=Decimal("10.00"), unit="支", strength_text="10mg", basis=PriceBasis.SALE_CEILING),
+@@ -247 +263 @@
+-    line = _line(unit_price=Decimal("70.00"), fee=Decimal("70.00"))
++    line = _line(item_code="X", unit_price=Decimal("70.00"), fee=Decimal("70.00"))
+@@ -257 +273,2 @@
+-    assert "乙类先行自付" in text
++    assert "医保外" in text
++    assert "乙类先行自付" not in text
+--- /dev/null
++++ b/src/tests/unit/domain/directory_compliance/test_quality_contract.py
+@@ -0,0 +1,192 @@
++"""核验质量边界的回归样例，全部为合成输入，不代表真实患者结论。"""
++from datetime import date
++from decimal import Decimal
++
++import pytest
++from pydantic import ValidationError
++
++from src.domain.directory_compliance.engine import evaluate_rule, verify_condition
++from src.domain.directory_compliance.explanation import build_patient_explanation
++from src.domain.directory_compliance.models import ComplianceRule, SettlementLineContext
++from src.domain.directory_compliance.rules_seed import (
++    BASELINE_MAPPINGS, RULE_CARBAZOCHROME, RULE_ILAPRAZOLE,
++)
++
++
++def line(**updates):
++    fields = ("item.code", "fee.date", "catalog", "diagnosis.code", "diagnosis.name",
++              "price.unit_price", "item.specification", "item.count", "price.payment_base")
++    return SettlementLineContext.model_validate({
++        "hospital_code": "TEST", "trade_date": "2026-04-16",
++        "item_code": RULE_ILAPRAZOLE.item_code, "item_name": "合成测试药品",
++        "unit_price": "52.60", "count": "1", "specification": "10mg/支",
++        "fee": "52.60", "fee_in": "47.34", "fee_out": "5.26",
++        "payment_base": "52.60", "catalog_bz": RULE_ILAPRAZOLE.source_bz,
++        "catalog_effective_from": "2024-03-20", "catalog_effective_to": "2050-12-31",
++        "same_recipe_diagnoses": [{"code": "K27.400x004", "name": "消化性溃疡伴出血",
++                                    "association": "same_prescription"}],
++        "field_states": {key: {"status": "present", "source": "synthetic",
++                               "association": "same_prescription" if key.startswith("diagnosis") else "same_line"}
++                         for key in fields}, **updates,
++    })
++
++
++def mappings():
++    return tuple(m.model_copy(update={"reviewed_by": "synthetic-review"}) for m in BASELINE_MAPPINGS)
++
++
++def price_condition(basis="payment_standard", amount="63", strength="10mg"):
++    payload = RULE_ILAPRAZOLE.condition_groups[1].conditions[0].model_dump(mode="json")
++    payload["price_cap"].update(basis=basis, amount=amount, strength_text=strength)
++    return type(RULE_ILAPRAZOLE.condition_groups[1].conditions[0]).model_validate(payload)
++
++
++def published_rule():
++    payload = RULE_ILAPRAZOLE.model_dump(mode="json")
++    payload.update(status="published", reviewed_by="synthetic-review")
++    payload["condition_groups"][1]["conditions"][0]["price_cap"]["basis"] = "payment_standard"
++    return ComplianceRule.model_validate(payload)
++
++
++def test_ulcer_without_bleeding_cannot_support_bleeding_condition():
++    facts = [{"code": "K27.9", "name": "消化性溃疡", "association": "same_prescription"}]
++    result = verify_condition(RULE_ILAPRAZOLE.condition_groups[0].conditions[1],
++                              line(same_recipe_diagnoses=facts), mappings())
++    assert result.status.value == "insufficient_evidence"
++
++
++def test_negated_text_is_not_positive_clinical_evidence():
++    facts = [{"code": "R00", "name": "其他症状", "medical_record": "无吞咽困难，可正常口服药物",
++              "association": "same_prescription"}]
++    result = verify_condition(RULE_CARBAZOCHROME.condition_groups[0].conditions[0],
++                              line(same_recipe_diagnoses=facts), mappings())
++    assert result.status.value != "supported"
++
++
++@pytest.mark.parametrize("state", ["fetch_failed", "not_available", "placeholder", "ambiguous"])
++def test_unusable_field_is_not_an_executed_non_match(state):
++    context = line()
++    payload = context.model_dump(mode="json")
++    payload["field_states"]["diagnosis.code"]["status"] = state
++    result = verify_condition(RULE_ILAPRAZOLE.condition_groups[0].conditions[1],
++                              SettlementLineContext.model_validate(payload), mappings())
++    assert result.status.value != "supported"
++    assert result.match_status.value == "not_evaluated"
++
++
++def test_available_diagnosis_non_match_is_distinct_from_not_fetched():
++    facts = [{"code": "K27.9", "name": "其他疾病", "association": "same_prescription"}]
++    result = verify_condition(RULE_ILAPRAZOLE.condition_groups[0].conditions[1],
++                              line(same_recipe_diagnoses=facts), mappings())
++    assert result.match_status.value == "not_matched"
++    assert result.status.value == "insufficient_evidence"
++
++
++def test_same_settlement_diagnosis_is_not_silently_promoted_to_same_prescription():
++    facts = [{"code": "K27.400x004", "name": "消化性溃疡伴出血", "association": "same_settlement"}]
++    result = verify_condition(RULE_ILAPRAZOLE.condition_groups[0].conditions[1],
++                              line(same_recipe_diagnoses=facts), mappings())
++    assert result.status.value != "supported"
++
++
++@pytest.mark.parametrize(("base", "expected"), [("80", "supported"), ("100", "contradicted")])
++def test_payment_standard_checks_supplied_base_not_sale_price(base, expected):
++    result = verify_condition(price_condition(amount="80"),
++                              line(unit_price="100", fee="100", fee_in="72", fee_out="28", payment_base=base),
++                              mappings())
++    assert result.status.value == expected
++
++
++def test_missing_payment_base_is_not_inferred_from_fee_in_or_ratio():
++    result = verify_condition(price_condition(), line(payment_base=None), mappings())
++    assert result.status.value == "insufficient_evidence"
++    assert result.match_status.value == "not_evaluated"
++
++
++def test_actual_sale_ceiling_can_directly_check_sale_price():
++    result = verify_condition(price_condition(basis="sale_ceiling", amount="40"), line(), mappings())
++    assert result.status.value == "contradicted"
++
++
++@pytest.mark.parametrize(("spec", "expected"), [("10g/支", "insufficient_evidence"),
++                                                ("0.01g/支", "supported")])
++def test_strength_is_compared_after_unit_normalization(spec, expected):
++    result = verify_condition(price_condition(), line(specification=spec), mappings())
++    assert result.status.value == expected
++
++
++def test_no_invented_self_pay_category_or_workflow_promise():
++    result = evaluate_rule(published_rule(), line(fee_in="0", fee_out="52.60"), mappings())
++    text = build_patient_explanation(result)
++    assert "乙类先行自付" not in text
++    assert "正在进一步核实" not in text
++    assert "规则" in text or "条件" in text
++
++
++def test_draft_rule_never_claims_formally_verified_payment_eligibility():
++    result = evaluate_rule(RULE_ILAPRAZOLE, line(), mappings())
++    assert not result.explanation_ready
++    assert "符合目录限定的支付范围" not in build_patient_explanation(result)
++
++
++@pytest.mark.parametrize("change", [{"condition_groups": []}, {"condition_groups": [{"conditions": []}]},
++                                  {"catalog_effective_to": "2000-01-01"}])
++def test_invalid_rule_is_rejected_before_evaluation(change):
++    with pytest.raises(ValidationError):
++        ComplianceRule.model_validate(RULE_ILAPRAZOLE.model_dump(mode="json") | change)
++
++
++def test_rule_lookup_distinguishes_failed_fetch_and_missing_published_rule():
++    from src.domain.directory_compliance.engine import locate_rule
++    context = line()
++    missing = locate_rule(context, ())
++    assert missing.status.value == "not_found"
++    assert missing.reason
++    payload = context.model_dump(mode="json")
++    payload["field_states"]["catalog"]["status"] = "fetch_failed"
++    failed = locate_rule(SettlementLineContext.model_validate(payload), ())
++    assert failed.status.value == "not_evaluated"
++
++
++def test_rule_lookup_rejects_overlapping_published_rules():
++    from src.domain.directory_compliance.engine import locate_rule
++    first = published_rule()
++    second = first.model_copy(update={"rule_id": "second", "catalog_effective_from": date(2025, 1, 1)})
++    assert locate_rule(line(), (first, second)).status.value == "ambiguous"
++
++
++def test_configuration_document_round_trip():
++    from src.domain.directory_compliance.configuration import RuleDocument
++    rule = published_rule()
++    document = RuleDocument.from_rule(rule)
++    assert RuleDocument.model_validate_json(document.model_dump_json()).to_rule() == rule
++
++
++def test_non_finite_price_is_rejected():
++    with pytest.raises(ValidationError):
++        line(unit_price=Decimal("NaN"))
++
++
++def test_missing_field_observations_are_not_assumed_successful():
++    result = verify_condition(RULE_ILAPRAZOLE.condition_groups[0].conditions[1],
++                              line(field_states={}), mappings())
++    assert result.status.value == "unverifiable"
++    assert result.match_status.value == "not_evaluated"
++
++
++def test_unreviewed_mapping_never_becomes_positive_evidence():
++    result = verify_condition(RULE_ILAPRAZOLE.condition_groups[0].conditions[1], line(), BASELINE_MAPPINGS)
++    assert result.status.value == "unverifiable"
++
++
++def test_placeholder_code_with_real_name_is_still_not_an_executed_code_match():
++    facts = [{"code": "01", "name": "消化性溃疡出血", "association": "same_prescription"}]
++    result = verify_condition(RULE_ILAPRAZOLE.condition_groups[0].conditions[1],
++                              line(same_recipe_diagnoses=facts), mappings())
++    assert result.status.value == "insufficient_evidence"
++    assert result.match_status.value == "not_evaluated"
++
++
++def test_mapping_iterator_is_stable_across_multiple_conditions():
++    result = evaluate_rule(published_rule(), line(), iter(mappings()))
++    assert result.status.value == "supported"
+--- /dev/null
++++ b/src/tests/unit/scripts/test_restriction_compliance_probe.py
+@@ -0,0 +1,80 @@
++"""探针装配边界：不连接实库，以合成行验证不静默丢数据。"""
++from datetime import datetime
++from decimal import Decimal
++
++from src.domain.directory_compliance.rules_seed import RULE_ILAPRAZOLE
++
++
++def report(*, catalogs=None, diagnoses=None, duplicate=False, blank_recipe=False, **kwargs):
++    from scripts.run_restriction_compliance_probe import build_probe_report
++    header = {"T_TradeNo": "synthetic-secret", "T_TradeDate": datetime(2026, 4, 16),
++              "T_State": 4, "T_HasRefundmented": 0, "P_FundType": 93, "T_CureType": 19,
++              "T_FeeAll": Decimal("52.6"), "T_FeeIn": Decimal("47.34"),
++              "T_FeeOut": Decimal("5.26"), "T_FundPay": Decimal("0")}
++    lines = [{"ItemId": 1, "ItemCode": RULE_ILAPRAZOLE.item_code, "ItemName": "合成药品",
++              "UnitPrice": Decimal("52.6"), "Count": Decimal(1), "Specification": "10mg/支",
++              "Fee": Decimal("52.6"), "FeeIn": Decimal("47.34"), "FeeOut": Decimal("5.26"),
++              "RecipeNo": "prescription-secret"},
++             {"ItemId": 2, "ItemCode": "NO_RULE", "ItemName": "未配置项目",
++              "UnitPrice": Decimal(1), "Count": Decimal(1), "Specification": "1mg/支",
++              "Fee": Decimal(1), "FeeIn": Decimal(1), "FeeOut": Decimal(0), "RecipeNo": "prescription-secret"}]
++    if duplicate:
++        lines.append(dict(lines[0]))
++    if blank_recipe:
++        lines[0]["RecipeNo"] = None
++    if catalogs is None:
++        catalogs = [{"ypbm": RULE_ILAPRAZOLE.item_code, "bz": RULE_ILAPRAZOLE.source_bz,
++                     "sxrq": datetime(2024, 3, 20), "jzrq": datetime(2050, 12, 31)}]
++    if diagnoses is None:
++        diagnoses = [{"RecipeNo": "prescription-secret", "DiagnoseCode": "K27.400x004",
++                      "DiagnoseName": "消化性溃疡伴出血"}]
++    return build_probe_report(header, lines, diagnoses, catalogs, **kwargs)
++
++
++def test_every_line_has_result_even_when_no_rule_exists():
++    result = report()
++    assert result.bill_line_count == 2
++    assert len(result.line_results) == 2
++    assert result.line_results[1].lookup.status.value != "matched"
++    assert result.line_results[1].lookup.reason
++
++
++def test_multiple_current_catalog_rows_are_not_last_write_wins():
++    catalog = {"ypbm": RULE_ILAPRAZOLE.item_code, "bz": RULE_ILAPRAZOLE.source_bz,
++               "sxrq": datetime(2024, 3, 20), "jzrq": datetime(2050, 12, 31)}
++    result = report(catalogs=[catalog, dict(catalog)])
++    assert result.line_results[0].lookup.status.value == "ambiguous"
++    assert result.line_results[0].result is None
++
++
++def test_catalog_query_failure_is_not_no_rule():
++    result = report(catalogs=[], catalog_failed=True)
++    assert result.line_results[0].lookup.status.value == "not_evaluated"
++    assert result.line_results[0].context.field_states["catalog"].status.value == "fetch_failed"
++
++
++def test_snapshot_is_replayable_without_patient_or_prescription_identifiers():
++    result = report()
++    text = result.model_dump_json()
++    assert "synthetic-secret" not in text
++    assert "prescription-secret" not in text
++    assert result.rules_snapshot and result.mappings_snapshot
++    assert result.line_results[0].context.same_recipe_diagnoses
++
++
++def test_diagnosis_query_failure_remains_explicit():
++    result = report(diagnoses=[], diagnosis_failed=True)
++    assert result.line_results[0].context.field_states["diagnosis.code"].status.value == "fetch_failed"
++
++
++def test_duplicate_fee_keys_are_reported_not_re_evaluated():
++    result = report(duplicate=True)
++    assert len(result.line_results) == 3
++    assert result.line_results[0].lookup.status.value == "ambiguous"
++    assert result.line_results[0].result is None
++
++
++def test_empty_prescription_is_not_joined_to_other_empty_prescriptions():
++    result = report(blank_recipe=True, diagnoses=[{"RecipeNo": None, "DiagnoseCode": "K27.400x004"}])
++    assert not result.line_results[0].context.same_recipe_diagnoses
++    assert result.line_results[0].context.field_states["diagnosis.code"].status.value == "invalid"

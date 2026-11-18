@@ -1,0 +1,390 @@
+{
+  "observed_at": "2026-11-04T14:58:12.834946",
+  "method": "read-only SELECT via local docker SQL Server bjybdb; trade numbers hashed to case_ref; no names/ID numbers",
+  "sql_file": "docs/reviews/2026-11-04-issue85-texu-scope-check.sql",
+  "sql_sha256": "ed4d9a0d641a240805b932bd3c63331138d1a2898784e6cc43561893ce4bfc17",
+  "scope": "four fee-decomposition chains (职工门诊/居民门诊/职工门特/居民门特), hosp 01110003",
+  "results": [
+    {
+      "statement": 1,
+      "row_count": 10,
+      "rows": [
+        {
+          "chain": "居民门诊",
+          "PN_NoRightReason": "5",
+          "reason_name": "住院期间就诊",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "rows_n": 9.0,
+          "total_fee": 2960.0
+        },
+        {
+          "chain": "居民门诊",
+          "PN_NoRightReason": "3^5",
+          "reason_name": null,
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "rows_n": 6.0,
+          "total_fee": 2170.0
+        },
+        {
+          "chain": "居民门诊",
+          "PN_NoRightReason": "5",
+          "reason_name": "住院期间就诊",
+          "ypdj": "1",
+          "zfbl": 0.0,
+          "rows_n": 6.0,
+          "total_fee": 1000.0
+        },
+        {
+          "chain": "居民门诊",
+          "PN_NoRightReason": "4",
+          "reason_name": "欠费",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "rows_n": 4.0,
+          "total_fee": 993.59
+        },
+        {
+          "chain": "居民门诊",
+          "PN_NoRightReason": "4",
+          "reason_name": "欠费",
+          "ypdj": "1",
+          "zfbl": 0.0,
+          "rows_n": 1.0,
+          "total_fee": 440.0
+        },
+        {
+          "chain": "居民门诊",
+          "PN_NoRightReason": "3^5",
+          "reason_name": null,
+          "ypdj": "1",
+          "zfbl": 0.0,
+          "rows_n": 2.0,
+          "total_fee": 40.0
+        },
+        {
+          "chain": "职工门诊",
+          "PN_NoRightReason": "4",
+          "reason_name": "欠费",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "rows_n": 35.0,
+          "total_fee": 2952.86
+        },
+        {
+          "chain": "职工门诊",
+          "PN_NoRightReason": "4",
+          "reason_name": "欠费",
+          "ypdj": "1",
+          "zfbl": 0.0,
+          "rows_n": 10.0,
+          "total_fee": 360.0
+        },
+        {
+          "chain": "职工门诊",
+          "PN_NoRightReason": "5",
+          "reason_name": "住院期间就诊",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "rows_n": 2.0,
+          "total_fee": 85.0
+        },
+        {
+          "chain": "职工门诊",
+          "PN_NoRightReason": "5",
+          "reason_name": "住院期间就诊",
+          "ypdj": "1",
+          "zfbl": 0.0,
+          "rows_n": 1.0,
+          "total_fee": 20.0
+        }
+      ]
+    },
+    {
+      "statement": 2,
+      "row_count": 8,
+      "rows": [
+        {
+          "ItemId": 0.0,
+          "T_TradeDate": "2024-09-13T14:55:21",
+          "ItemCode": "ZA12BAF0349010100941",
+          "ItemName": "复方丹参滴丸",
+          "Fee": 20.0,
+          "FeeOut": 20.0,
+          "PN_NoRightReason": "3^5",
+          "ypdj": "1",
+          "zfbl": 0.0,
+          "bz": "",
+          "case_ref": "d007492e9dbb"
+        },
+        {
+          "ItemId": 1.0,
+          "T_TradeDate": "2024-09-13T14:55:21",
+          "ItemCode": "XL01BAP030B001010178396",
+          "ItemName": "注射用培美曲塞二钠",
+          "Fee": 60.0,
+          "FeeOut": 60.0,
+          "PN_NoRightReason": "3^5",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "bz": "",
+          "case_ref": "d007492e9dbb"
+        },
+        {
+          "ItemId": 2.0,
+          "T_TradeDate": "2024-09-13T14:55:21",
+          "ItemCode": "XB03XAL373E001010180523",
+          "ItemName": "罗沙司他胶囊",
+          "Fee": 25.0,
+          "FeeOut": 25.0,
+          "PN_NoRightReason": "3^5",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "bz": "限慢性肾脏病(CKD)引起的贫血。支付标准不得高于：24.90元(20mg/粒)；50.22元(50mg/粒)",
+          "case_ref": "d007492e9dbb"
+        },
+        {
+          "ItemId": 0.0,
+          "T_TradeDate": "2024-09-13T15:03:06",
+          "ItemCode": "ZA12BAF0349010100941",
+          "ItemName": "复方丹参滴丸",
+          "Fee": 20.0,
+          "FeeOut": 20.0,
+          "PN_NoRightReason": "3^5",
+          "ypdj": "1",
+          "zfbl": 0.0,
+          "bz": "",
+          "case_ref": "6d5742de52d4"
+        },
+        {
+          "ItemId": 1.0,
+          "T_TradeDate": "2024-09-13T15:03:06",
+          "ItemCode": "XL01BAP030B001010178396",
+          "ItemName": "注射用培美曲塞二钠",
+          "Fee": 60.0,
+          "FeeOut": 60.0,
+          "PN_NoRightReason": "3^5",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "bz": "",
+          "case_ref": "6d5742de52d4"
+        },
+        {
+          "ItemId": 2.0,
+          "T_TradeDate": "2024-09-13T15:03:06",
+          "ItemCode": "XB03XAL373E001010180523",
+          "ItemName": "罗沙司他胶囊",
+          "Fee": 25.0,
+          "FeeOut": 25.0,
+          "PN_NoRightReason": "3^5",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "bz": "限慢性肾脏病(CKD)引起的贫血。支付标准不得高于：24.90元(20mg/粒)；50.22元(50mg/粒)",
+          "case_ref": "6d5742de52d4"
+        },
+        {
+          "ItemId": 0.0,
+          "T_TradeDate": "2024-09-25T11:00:06",
+          "ItemCode": "XL01BAP030B001010178396",
+          "ItemName": "注射用培美曲塞二钠",
+          "Fee": 1000.0,
+          "FeeOut": 1000.0,
+          "PN_NoRightReason": "3^5",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "bz": "",
+          "case_ref": "a4022ff919aa"
+        },
+        {
+          "ItemId": 0.0,
+          "T_TradeDate": "2024-09-25T11:00:24",
+          "ItemCode": "XL01BAP030B001010178396",
+          "ItemName": "注射用培美曲塞二钠",
+          "Fee": 1000.0,
+          "FeeOut": 1000.0,
+          "PN_NoRightReason": "3^5",
+          "ypdj": "2",
+          "zfbl": 0.1,
+          "bz": "",
+          "case_ref": "a37bbb19b1ab"
+        }
+      ]
+    },
+    {
+      "statement": 3,
+      "row_count": 5,
+      "rows": [
+        {
+          "chain": "居民门特",
+          "grade": "甲类",
+          "rows_n": 3.0,
+          "full_outer": 0.0,
+          "fee": 8034.0,
+          "outer_fee": 0.0
+        },
+        {
+          "chain": "居民门特",
+          "grade": "乙类",
+          "rows_n": 2.0,
+          "full_outer": 0.0,
+          "fee": 1447.0,
+          "outer_fee": 144.7
+        },
+        {
+          "chain": "职工门特",
+          "grade": "甲类",
+          "rows_n": 14.0,
+          "full_outer": 0.0,
+          "fee": 19473.0,
+          "outer_fee": 0.0
+        },
+        {
+          "chain": "职工门特",
+          "grade": "未匹配药品目录",
+          "rows_n": 68.0,
+          "full_outer": 0.0,
+          "fee": 15618.37,
+          "outer_fee": 1500.0
+        },
+        {
+          "chain": "职工门特",
+          "grade": "乙类",
+          "rows_n": 1.0,
+          "full_outer": 0.0,
+          "fee": 7500.0,
+          "outer_fee": 750.0
+        }
+      ]
+    },
+    {
+      "statement": 4,
+      "row_count": 1,
+      "rows": [
+        {
+          "txbz": 0.0,
+          "rows_n": 88.0
+        }
+      ]
+    },
+    {
+      "statement": 5,
+      "row_count": 2,
+      "rows": [
+        {
+          "flid": "053",
+          "bm": "63",
+          "mc": "特需门诊"
+        },
+        {
+          "flid": "350",
+          "bm": "2",
+          "mc": "特需医疗部"
+        }
+      ]
+    },
+    {
+      "statement": 6,
+      "row_count": 1,
+      "rows": [
+        {
+          "texu_clinic_trades": 0.0
+        }
+      ]
+    },
+    {
+      "statement": 7,
+      "row_count": 11,
+      "rows": [
+        {
+          "ItemName": "注射用培美曲塞二钠",
+          "ypdj": "2",
+          "PN_NoRightReason": "4",
+          "rows_n": 26.0,
+          "total_fee": 2897.86
+        },
+        {
+          "ItemName": "注射用培美曲塞二钠",
+          "ypdj": "2",
+          "PN_NoRightReason": "5",
+          "rows_n": 8.0,
+          "total_fee": 2220.0
+        },
+        {
+          "ItemName": "注射用培美曲塞二钠",
+          "ypdj": "2",
+          "PN_NoRightReason": "3^5",
+          "rows_n": 4.0,
+          "total_fee": 2120.0
+        },
+        {
+          "ItemName": "复方丹参滴丸",
+          "ypdj": "1",
+          "PN_NoRightReason": "5",
+          "rows_n": 7.0,
+          "total_fee": 1020.0
+        },
+        {
+          "ItemName": "罗沙司他胶囊",
+          "ypdj": "2",
+          "PN_NoRightReason": "4",
+          "rows_n": 11.0,
+          "total_fee": 855.0
+        },
+        {
+          "ItemName": "罗沙司他胶囊",
+          "ypdj": "2",
+          "PN_NoRightReason": "5",
+          "rows_n": 3.0,
+          "total_fee": 825.0
+        },
+        {
+          "ItemName": "复方丹参滴丸",
+          "ypdj": "1",
+          "PN_NoRightReason": "4",
+          "rows_n": 11.0,
+          "total_fee": 800.0
+        },
+        {
+          "ItemName": "瑞舒伐他汀钙片",
+          "ypdj": "2",
+          "PN_NoRightReason": "4",
+          "rows_n": 1.0,
+          "total_fee": 155.2
+        },
+        {
+          "ItemName": "罗沙司他胶囊",
+          "ypdj": "2",
+          "PN_NoRightReason": "3^5",
+          "rows_n": 2.0,
+          "total_fee": 50.0
+        },
+        {
+          "ItemName": "复方丹参滴丸",
+          "ypdj": "1",
+          "PN_NoRightReason": "3^5",
+          "rows_n": 2.0,
+          "total_fee": 40.0
+        },
+        {
+          "ItemName": "依折麦布片",
+          "ypdj": "2",
+          "PN_NoRightReason": "4",
+          "rows_n": 1.0,
+          "total_fee": 38.39
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "in_catalog_AB_full_outer_total": 76.0,
+    "in_catalog_AB_full_outer_after_excluding_4_5": 8,
+    "all_remaining_are_composite_3_5": true,
+    "mente_chain_in_catalog_AB_full_outer": 0.0,
+    "mente_txbz_values": [
+      0.0
+    ],
+    "texu_clinic_trades": 0.0,
+    "not_proven": "txbz field semantics; whether 特需门诊 visits bypass insurance trades entirely; catalog date-version match completeness"
+  }
+}

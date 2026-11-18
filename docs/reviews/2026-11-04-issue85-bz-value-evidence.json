@@ -1,0 +1,89 @@
+{
+  "source": "D:\\project\\hospital_medical_insurance_agent\\yb_ypzdml_项目内涵.xlsx",
+  "sha256": "56d7235195bec9b4031fd16b5a5c21a670764befc2bc2d16687f22238b3cc5fc",
+  "sheet": "yb_ypzdml_202610301019",
+  "header": "bz",
+  "nonempty_distinct_notes": 2058,
+  "source_columns": 1,
+  "keyword_counts": {
+    "contains_payment_standard": 722,
+    "mentions_institution": 657,
+    "mentions_personal_share": 287,
+    "literal_indication_marker": 241
+  },
+  "price_clause_context": {
+    "payment_standard_rows": 722,
+    "with_limit_text_before_price_clause": 722,
+    "conclusion": "这722条在支付标准之前都含有限定文字，不能因为价格字段已有就将整条备注视为重复数值；文本形态统计不等于已完成临床语义审核。"
+  },
+  "count_limit": "关键词独立计数，可重叠；不代表独立规则数、有效项目数、现有费用覆盖或已兑现业务价值。",
+  "samples": {
+    "disease": [
+      {
+        "excel_row": 1429,
+        "bz": "限慢性肾脏病(CKD)引起的贫血。支付标准不得高于：24.90元(20mg/粒)；50.22元(50mg/粒)"
+      }
+    ],
+    "usage": [
+      {
+        "excel_row": 478,
+        "bz": "限胃肠镜检查和腹部影像学检查"
+      }
+    ],
+    "oral_inability": [
+      {
+        "excel_row": 782,
+        "bz": "限无法口服卡络磺钠（肾上腺色腙）的患者"
+      }
+    ],
+    "prior_treatment_and_first_prescription": [
+      {
+        "excel_row": 367,
+        "bz": "限二甲双胍等口服降糖药或胰岛素控制效果不佳的BMI≥25的患者，首次处方时需由二级及以上医疗机构专科医师开具处方。支付标准不得高于：110元(0.5ml:0.1mg/支)；187元(0.5ml:0.2mg/支)"
+      },
+      {
+        "excel_row": 526,
+        "bz": "限二甲双胍等口服降糖药或胰岛素控制效果不佳的BMI≥25的患者，首次处方时需由二级及以上医疗机构专科医师开具处方。支付标准不得高于：72.56元(0.75mg：0.5ml/支)；123.35元(1.5mg：0.5ml/支)"
+      }
+    ],
+    "hospital": [
+      {
+        "excel_row": 710,
+        "bz": "仅限中国医学科学院北京协和医院使用"
+      }
+    ],
+    "combined_use": [
+      {
+        "excel_row": 940,
+        "bz": "限与脂肪乳、氨基酸等肠外营养药物配合使用时支付，单独使用不予支付"
+      }
+    ],
+    "price": [
+      {
+        "excel_row": 19,
+        "bz": "限晚期转移性结直肠癌或晚期非鳞非小细胞肺癌。支付标准不得高于：1934.26元（100mg/瓶）"
+      },
+      {
+        "excel_row": 24,
+        "bz": "限新发的急性缺血性脑卒中患者在发作72小时内开始使用，支付不超过20天。支付标准不得高于：3.36元(0.1g/粒)"
+      }
+    ],
+    "multi_spec_distinct_conditions": [
+      {
+        "excel_row": 366,
+        "bz": "规格60mg(1.0ml)/支(预充式注射器)报销限制内容为“限绝经后妇女的重度骨质疏松”；规格120mg/1.7mL/支报销限制内容为“限不可手术切除或者手术切除可能导致严重功能障碍的骨巨细胞瘤。”支付标准不得高于：623.53元(60mg(1.0ml)/支(预充式注射器))；1060元(120mg/1.7mL/支)"
+      }
+    ],
+    "population": [
+      {
+        "excel_row": 95,
+        "bz": "限儿童及吞咽困难者。费用需由个人部分负担。"
+      },
+      {
+        "excel_row": 109,
+        "bz": "[适]重症流感。费用需由个人部分负担。限儿童。"
+      }
+    ]
+  },
+  "interpretation_boundary": "本表只有去重备注文字，没有项目编码或有效期；业务使用必须回到项目目录核对编码、版本与适用条件。"
+}

@@ -1,0 +1,61 @@
+{
+  "verified_at": "2026-11-05T05:28:49.660649+00:00",
+  "scope": "iteration A core and diagnostic probe only",
+  "unit": {
+    "passed": 140,
+    "command": "python -m pytest src/tests/unit/domain src/tests/unit/scripts/test_restriction_compliance_probe.py -q"
+  },
+  "api": {
+    "passed": 18,
+    "deselected": 54,
+    "command": "python -m pytest src/tests/integration/api/test_policy_qa_routes.py src/tests/integration/api/test_policy_qa_verification_api.py -q -k \"verification or pre_refund or retired_business_api or outpatient_skill_uses_declared_semantic_queries or trade_number_context_is_loaded or outpatient_write_action_is_stopped or stream_endpoint_does_not_expose_internal_trace_events or stream_endpoint_returns_single_safe_answer_contract or stream_failure_has_safe_terminal_contract\""
+  },
+  "api_unfiltered": {
+    "status": "interrupted",
+    "reason": "existing unisolated source request waited; full-suite success not claimed"
+  },
+  "flow": {
+    "passed": 98,
+    "failed": 1,
+    "command": "python -m pytest src/tests/integration/flow/test_policy_qa_outpatient_settlement_flow.py src/tests/integration/flow/test_policy_qa_pooling_self_pay_flow.py -q",
+    "node": "test_policy_qa_outpatient_settlement_flow.py::test_outpatient_question_routes_queries_verifies_and_finishes",
+    "assertion": "expected 1916.72 absent from answer, but implementation includes it",
+    "baseline_same_failure": true,
+    "baseline_commit": "4cf488fcba84bc5cb2035bab1a7803c91b2014b0",
+    "baseline_method": "git archive HEAD into separate temporary directory; same test run in baseline and current tree with USE_MEMORY_STORAGE=1; both fail at line 101"
+  },
+  "ruff": "passed",
+  "pyright": {
+    "errors": 0,
+    "warnings": 0
+  },
+  "real_probe": {
+    "line_count": 11,
+    "replayed_rules": 2,
+    "amounts_unchanged_vs_prior_evidence": true,
+    "formal_explanation_ready": false,
+    "artifact": "docs/reviews/2026-11-05-issue85-iteration-a-probe.json"
+  },
+  "source_sha256": {
+    "scripts/run_restriction_compliance_probe.py": "3475bbcd4c7d09839230cbf55273fd0c53f9ef3e42804c8de0f314282bbcbfca",
+    "src/domain/directory_compliance/__init__.py": "feaf29bfa4a4fdbdedc026ff33adc126e4f2efd4fa16ed7765e3bf9de1836c6d",
+    "src/domain/directory_compliance/configuration.py": "0abddf7bf5d5fe5b1145f8894430cc66f3282a3317b7e58893555dd20c9e0223",
+    "src/domain/directory_compliance/engine.py": "981d8137d68e37f5f8cd66abf93b45903f2c1388f6e36f8c02e130426df20a32",
+    "src/domain/directory_compliance/explanation.py": "a91aec5a2ba01b5c6b95068efbec55a8d3d5c8c6a92b7a7008f7b93ff16ccbed",
+    "src/domain/directory_compliance/models.py": "0c5303ebc91d9960519deee339feeaf54e8688c052a4b7346dc2ea9c84313e27",
+    "src/domain/directory_compliance/rules_seed.py": "0740f5c3c17071731c28766fc454244ed5c719cf5e44114502abb168a19f7b60",
+    "src/tests/unit/domain/directory_compliance/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/tests/unit/domain/directory_compliance/test_engine.py": "b87cbd5a6740762a01a112d7e2efdd6168ee6c7093f008af111bfa6959646357",
+    "src/tests/unit/domain/directory_compliance/test_quality_contract.py": "f00d18048d8c6c606f3b8a04b48804793b274b4531761007034e0051a5e2edf4",
+    "src/tests/unit/scripts/test_restriction_compliance_probe.py": "8dbe68d279c5722dd9a098c96e33184c0e0560dc93d513f693d4529d99c96b8e"
+  },
+  "probe_sha256": "7a39478fa7b5d8b3318168b5175eccbc4c34cec02c5f7d55b1f50d2e793a1c3d",
+  "rollback_patch": "docs/reviews/2026-11-05-issue85-iteration-a-code.patch",
+  "rollback_reverse_check": "git apply --reverse --check --unidiff-zero --ignore-space-change docs/reviews/2026-11-05-issue85-iteration-a-code.patch",
+  "rollback_check_passed": true,
+  "not_checked": [
+    "production four-chain integration (iteration B)",
+    "new model comparison",
+    "browser E2E and load tests; no runtime consumer added"
+  ]
+}

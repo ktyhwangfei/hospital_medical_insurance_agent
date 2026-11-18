@@ -1,0 +1,425 @@
+{
+  "observed_at": "2026-11-04T11:18:38.318238+00:00",
+  "source": "bjybdb测试库，四链路只读",
+  "cases": [
+    {
+      "label": "艾普拉唑",
+      "chain": "resident_outpatient",
+      "case_ref": "eadf82c0aee0",
+      "line_id": "4",
+      "item_name": "注射用艾普拉唑钠",
+      "total_fee": "52.6000",
+      "observed_in_scope": "47.3400",
+      "observed_out_scope": "5.2600",
+      "amounts_and_verdict_unchanged": true,
+      "context": {
+        "bz": "限：1.预防重症患者应激性溃疡出血；2.消化性溃疡出血。支付标准不得高于：63.00元(10mg/支)",
+        "catalog_status": "unique",
+        "catalog_source": "药品目录",
+        "effective_from": "2024-03-20",
+        "effective_to": "2050-12-31",
+        "fee_date": "2026-04-16",
+        "date_basis": "settlement_date_fallback",
+        "specification": "10MG/支",
+        "unit": "支",
+        "usage": "01",
+        "hospital_level": "02",
+        "hospital_level_name": "三级甲等",
+        "catalog_hospital_level": null,
+        "catalog_hospital_type": null,
+        "catalog_use_restriction": null,
+        "diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "association": "same_prescription",
+            "is_placeholder": false,
+            "department": "急诊科专业",
+            "prescriber_level": null
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "association": "same_prescription",
+            "is_placeholder": false,
+            "department": "急诊科专业",
+            "prescriber_level": null
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "association": "same_prescription",
+            "is_placeholder": false,
+            "department": "急诊科专业",
+            "prescriber_level": null
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "association": "same_prescription",
+            "is_placeholder": false,
+            "department": "急诊科专业",
+            "prescriber_level": null
+          }
+        ],
+        "diagnosis_status": "recorded",
+        "symptoms": null,
+        "symptoms_status": "not_available_in_current_source",
+        "clinical_conditions_verified": false,
+        "source_hash": "fa7b61b0748ddc891395c3fdf0cab2aac4ca20fb6c3a1c8c10962fb0ef020f9d",
+        "read_at": "2026-11-04T11:18:38.776358+00:00"
+      },
+      "question": "第5行注射用艾普拉唑钠为什么有自付？目录支付条件与本单记录能说明什么？",
+      "comparisons": [
+        {
+          "arm": "without_context",
+          "input_sha256": "a085ff2d4d8e7411190c320003de2905a16422758560c3e6ae761c8df411ff84",
+          "used_model": false,
+          "model_attempted": true,
+          "fallback_reason": "validation_rejected",
+          "answer": "- 第 5 行注射用艾普拉唑钠；本行费用 52.60 元＝单价 52.6 元×数量 1；47.34 元进入医保范围内，5.26 元进入医保范围外，其中先行自付 5.26 元（明细结算时比例（正值优先））已包含在医保外金额中不重复相加；医保范围内金额还需按本单待遇规则计算基金与个人分担，不等于基金实际报销金额。\n- 单价 52.6000 元×数量 1.00＝52.600000 元；原单费用 52.6000 元，两者一致。\n- 自付二＝取整（费用金额 52.6000 元×采用自付比例 0.1000）＝5.26 元\n- 医保内金额＝费用金额 52.6000 元－医保外金额 5.26 元＝47.3400 元\n- 医保外金额＝费用金额 52.6000 元－医保内金额 47.3400 元＝5.26 元",
+          "model_responses": [
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第5行“注射用艾普拉唑钠”的自付来自乙类药品的先行自付比例，不是超限价造成的。\n\n本行费用52.60元（单价52.60元×数量1.00），单价没有超过本次门诊限价63.00元，也不属于集采药品。该药按乙类西药管理，本行采用结算时先行自付比例10%，先行自付额为52.60×0.10＝5.26元，这部分就是本行的自付二，同时计入医保外；剩余47.34元计入医保内。所以本行医保内47.34元、医保外5.26元、自付二5.26元，自付二已含在医保外中，不重复计算。\n\n目录支付条件方面：本行命中有效药品目录条目，收费类别与药品目录一致，目录限价63.00元，本行单价在限价以内。现有记录能核对的是目录匹配、类别、限价和费用一致性这些支付管理条件；至于该药的具体限定支付备注、与本单诊断的对应关系等临床适用条件，当前资料没有提供可核对的完整内容，因此不能据此判断本次用药是否符合某项限定支付条件，也不能把5.26元自付归因于目录备注限制。"
+            },
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第5行“注射用艾普拉唑钠”的自付来自乙类药品的先行自付比例，不是超限价造成的。\n\n本行费用52.60元（单价52.60元×数量1.00），单价没有超过本次门诊限价63.00元，也不属于集采药品。该药按乙类西药管理，本行采用结算时先行自付比例10%，先行自付额为52.60×0.10＝5.26元，这部分就是本行的自付二，同时计入医保外；剩余47.34元计入医保内。所以本行医保内47.34元、医保外5.26元、自付二5.26元，自付二已含在医保外中，不重复计算。\n\n目录支付条件方面：本行命中有效药品目录条目，收费类别与药品目录一致，目录限价63.00元，本行单价在限价以内。现有记录能核对的是目录匹配、类别、限价和费用一致性这些支付管理条件；至于该药的具体限定支付备注、与本单诊断的对应关系等临床适用条件，当前资料没有提供可核对的完整内容，因此不能据此判断本次用药是否符合某项限定支付条件，也不能把5.26元自付归因于目录备注限制。"
+            }
+          ]
+        },
+        {
+          "arm": "with_context",
+          "input_sha256": "b5071ff1197f753358a8c661657648aeef5ebbbf3faaf5e7daf2ebad7f2c0f5a",
+          "used_model": true,
+          "model_attempted": true,
+          "fallback_reason": null,
+          "answer": "第5行注射用艾普拉唑钠（10mg/支，1支）费用52.60元，其中自付二5.26元，医保内47.34元。\n\n自付的原因：这一行按乙类西药处理，采用本单明细结算时的先行自付比例10%，以本行费用金额为基数计算：52.60×0.10＝5.26元。这5.26元就是自付二，已包含在医保外金额中，不再另加一次；剩余47.34元计入医保内。本行单价52.60元未超过本次门诊限价63.00元，超限价部分为0，所以自付二全部来自这10%的比例先行自付，不是超限价造成的。本行也未进入集采和自制剂规则。\n\n目录支付条件方面：该药目录备注限定用于“预防重症患者应激性溃疡出血”和“消化性溃疡出血”，并注明支付标准不高于63.00元（10mg/支）。本单同处方诊断中记录有“消化性溃疡伴出血”，与第二条限定方向对应；但本单未取得独立的症状等临床记录，临床条件未经核实，因此只能说明现有诊断记录可供核对这一限定，不能据此断定本次已完全符合或不符合该支付条件。限价方面，本行单价52.60元低于备注的63.00元支付标准，符合限价要求。",
+          "model_responses": [
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第5行注射用艾普拉唑钠（10mg/支，1支）费用52.60元，其中自付二5.26元，医保内47.34元。\n\n自付的原因：这一行按乙类西药处理，采用本单明细结算时的先行自付比例10%，以本行费用金额为基数计算：52.60×0.10＝5.26元。这5.26元就是自付二，已包含在医保外金额中，不再另加一次；剩余47.34元计入医保内。本行单价52.60元未超过本次门诊限价63.00元，超限价部分为0，所以自付二全部来自这10%的比例先行自付，不是超限价造成的。本行也未进入集采和自制剂规则。\n\n目录支付条件方面：该药目录备注限定用于“预防重症患者应激性溃疡出血”和“消化性溃疡出血”，并注明支付标准不高于63.00元（10mg/支）。本单同处方诊断中记录有“消化性溃疡伴出血”，与第二条限定方向对应；但本单未取得独立的症状等临床记录，临床条件未经核实，因此只能说明现有诊断记录可供核对这一限定，不能据此断定本次已完全符合或不符合该支付条件。限价方面，本行单价52.60元低于备注的63.00元支付标准，符合限价要求。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "西甲硅油",
+      "chain": "employee_outpatient",
+      "case_ref": "a1f3048c9526",
+      "line_id": "6",
+      "item_name": "西甲硅油乳剂",
+      "total_fee": "33.0000",
+      "observed_in_scope": "29.7000",
+      "observed_out_scope": "3.3000",
+      "amounts_and_verdict_unchanged": true,
+      "context": {
+        "bz": "限胃肠镜检查和腹部影像学检查",
+        "catalog_status": "unique",
+        "catalog_source": "药品目录",
+        "effective_from": "2021-01-01",
+        "effective_to": "2050-12-31",
+        "fee_date": "2026-04-17",
+        "date_basis": "settlement_date_fallback",
+        "specification": "1.2G 30ML/瓶",
+        "unit": "瓶",
+        "usage": "01",
+        "hospital_level": "02",
+        "hospital_level_name": "三级甲等",
+        "catalog_hospital_level": null,
+        "catalog_hospital_type": null,
+        "catalog_use_restriction": null,
+        "diagnoses": [
+          {
+            "code": "R19.400",
+            "name": "大便习惯改变",
+            "association": "same_prescription",
+            "is_placeholder": false,
+            "department": "消化内科专业",
+            "prescriber_level": null
+          }
+        ],
+        "diagnosis_status": "recorded",
+        "symptoms": null,
+        "symptoms_status": "not_available_in_current_source",
+        "clinical_conditions_verified": false,
+        "source_hash": "78ec21ddff42f1bb2da1d4278470ac274ab00049df5b0063b4098dc369a68714",
+        "read_at": "2026-11-04T11:19:09.487639+00:00"
+      },
+      "question": "第7行西甲硅油乳剂为什么有自付？目录支付条件与本单记录能说明什么？",
+      "comparisons": [
+        {
+          "arm": "without_context",
+          "input_sha256": "26e5f76cace6fa6bf99b426c376a6fb030251355ed2453d39b5068d018f8a266",
+          "used_model": false,
+          "model_attempted": true,
+          "fallback_reason": "validation_rejected",
+          "answer": "- 第 7 行西甲硅油乳剂；本行费用 33.00 元＝单价 33 元×数量 1；29.70 元进入医保范围内，3.30 元进入医保范围外，其中先行自付 3.30 元（明细结算时比例（正值优先））已包含在医保外金额中不重复相加；医保范围内金额还需按本单待遇规则计算基金与个人分担，不等于基金实际报销金额。\n- 单价 33.0000 元×数量 1.00＝33.000000 元；原单费用 33.0000 元，两者一致。\n- 自付二＝取整（费用金额 33.0000 元×采用自付比例 0.1000）＝3.30 元\n- 医保内金额＝费用金额 33.0000 元－医保外金额 3.30 元＝29.7000 元\n- 医保外金额＝费用金额 33.0000 元－医保内金额 29.7000 元＝3.30 元",
+          "model_responses": [
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第7行西甲硅油乳剂有自付，是因为它按乙类西药结算，本行采用了10%的先行自付比例，先划出一部分由个人承担，剩余部分才计入医保内。\n\n本行金额构成：\n1. 本行费用为33.00元（单价33.00元×数量1.00，与原单费用一致）。\n2. 自付二＝33.00元×10%＝3.30元。这3.30元就是本行的先行自付，已包含在医保外金额中，不再另加一次。\n3. 医保内金额＝33.00元－3.30元＝29.70元。\n\n本行没有进入自制剂规则，也不属于集采药品，未采用正值门诊限价，因此没有超限价形成的自付；3.30元全部来自比例先行自付。\n\n关于目录支付条件：本行命中有效药品目录条目（费用日期2026-04-17在目录有效期内），收费类别为0102乙类西药，这是产生先行自付的前提。但目录备注的具体限定内容、规格用法等，本单记录未提供可核对的明细，因此只能说明本行按乙类比例结算，不能据此判断是否存在其他限定支付条件或本次是否符合某项临床条件。"
+            },
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第7行西甲硅油乳剂有自付，是因为它按乙类西药结算，本行采用了10%的先行自付比例，先划出一部分由个人承担，剩余部分才计入医保内。\n\n本行金额构成：\n1. 本行费用为33.00元（单价33.00元×数量1.00，与原单费用一致）。\n2. 自付二＝33.00元×10%＝3.30元。这3.30元就是本行的先行自付，已包含在医保外金额中，不再另加一次。\n3. 医保内金额＝33.00元－3.30元＝29.70元。\n\n本行没有进入自制剂规则，也不属于集采药品，未采用正值门诊限价，因此没有超限价形成的自付；3.30元全部来自比例先行自付。\n\n关于目录支付条件：本行命中有效药品目录条目（费用日期2026-04-17在目录有效期内），收费类别为0102乙类西药，这是产生先行自付的前提。但目录备注的具体限定内容、规格用法等，本单记录未提供可核对的明细，因此只能说明本行按乙类比例结算，不能据此判断是否存在其他限定支付条件或本次是否符合某项临床条件。"
+            }
+          ]
+        },
+        {
+          "arm": "with_context",
+          "input_sha256": "c4466314c251867966e2ec2bd66ee6e4f7054a689a7888a185fbd3fa0f4c0551",
+          "used_model": false,
+          "model_attempted": true,
+          "fallback_reason": "validation_rejected",
+          "answer": "- 第 7 行西甲硅油乳剂；本行费用 33.00 元＝单价 33 元×数量 1；29.70 元进入医保范围内，3.30 元进入医保范围外，其中先行自付 3.30 元（明细结算时比例（正值优先））已包含在医保外金额中不重复相加；医保范围内金额还需按本单待遇规则计算基金与个人分担，不等于基金实际报销金额。\n- 单价 33.0000 元×数量 1.00＝33.000000 元；原单费用 33.0000 元，两者一致。\n- 自付二＝取整（费用金额 33.0000 元×采用自付比例 0.1000）＝3.30 元\n- 医保内金额＝费用金额 33.0000 元－医保外金额 3.30 元＝29.7000 元\n- 医保外金额＝费用金额 33.0000 元－医保内金额 29.7000 元＝3.30 元",
+          "model_responses": [
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第7行西甲硅油乳剂有自付，是因为这一行按乙类西药处理，先按本行费用乘先行自付比例划出一部分自付二，剩余部分才计入医保内。\n\n本行金额构成：\n- 单价 33.0000 元 × 数量 1.00 = 33.0000 元，与原单费用一致。\n- 自付二 = 33.0000 元 × 采用自付比例 0.1000 = 3.30 元。\n- 医保内金额 = 33.0000 − 3.30 = 29.7000 元。\n- 医保外金额 = 3.30 元，这 3.30 元就是自付二，已包含在医保外里，不再另加一次。\n\n本行没有采用门诊限价，也不属于集采药品，所以自付二只来自这 10% 的先行自付比例，没有超限价部分。\n\n目录支付条件方面：该药目录备注为“限胃肠镜检查和腹部影像学检查”。本单同处方诊断记录为“大便习惯改变”（消化内科专业），但现有资料没有提供胃肠镜或腹部影像学检查的执行记录，也没有独立的症状字段，临床条件尚未核实。因此，这条备注说明了目录限定的使用场景，但本单记录还不足以核对本次是否满足该条件；本次自付二 3.30 元是按先行自付比例形成的，不能据此认定自费是由该条件造成的。"
+            },
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第7行西甲硅油乳剂有自付，是因为这一行按乙类西药处理，先按本行费用乘先行自付比例划出一部分自付二，剩余部分才计入医保内。\n\n本行金额构成：\n- 单价 33.0000 元 × 数量 1.00 = 33.0000 元，与原单费用一致。\n- 自付二 = 33.0000 元 × 0.1000 = 3.30 元。\n- 医保内金额 = 33.0000 元 − 3.30 元 = 29.7000 元。\n- 医保外金额为 3.30 元，这 3.30 元就是自付二，已包含在医保外里，不再另加一次。\n\n本行没有采用门诊限价，也不属于集采药品，所以自付二只来自这 10% 的先行自付比例，没有超限价部分。\n\n目录支付条件方面：该药目录备注为“限胃肠镜检查和腹部影像学检查”。本单同处方诊断记录为“大便习惯改变”（消化内科专业），但现有资料没有提供胃肠镜或腹部影像学检查的执行记录，也没有独立的症状字段，临床条件尚未核实。因此，这条备注说明了目录限定的使用场景，但本单记录还不足以核对本次是否满足该条件；本次自付二 3.30 元是按先行自付比例形成的，不能据此认定自费是由该条件造成的。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "卡络磺钠",
+      "chain": "resident_outpatient",
+      "case_ref": "eadf82c0aee0",
+      "line_id": "9",
+      "item_name": "注射用卡络磺钠",
+      "total_fee": "15.2800",
+      "observed_in_scope": "13.7520",
+      "observed_out_scope": "1.5280",
+      "amounts_and_verdict_unchanged": true,
+      "context": {
+        "bz": "限无法口服卡络磺钠（肾上腺色腙）的患者",
+        "catalog_status": "unique",
+        "catalog_source": "药品目录",
+        "effective_from": "2024-06-01",
+        "effective_to": "2050-12-31",
+        "fee_date": "2026-04-16",
+        "date_basis": "settlement_date_fallback",
+        "specification": "20MG 5西林/盒",
+        "unit": "西林",
+        "usage": "14",
+        "hospital_level": "02",
+        "hospital_level_name": "三级甲等",
+        "catalog_hospital_level": null,
+        "catalog_hospital_type": null,
+        "catalog_use_restriction": null,
+        "diagnoses": [
+          {
+            "code": "D66.x01",
+            "name": "血友病A型",
+            "association": "same_prescription",
+            "is_placeholder": false,
+            "department": "急诊科专业",
+            "prescriber_level": null
+          },
+          {
+            "code": "K92.209",
+            "name": "下消化道出血",
+            "association": "same_prescription",
+            "is_placeholder": false,
+            "department": "急诊科专业",
+            "prescriber_level": null
+          },
+          {
+            "code": "D64.903",
+            "name": "重度贫血",
+            "association": "same_prescription",
+            "is_placeholder": false,
+            "department": "急诊科专业",
+            "prescriber_level": null
+          },
+          {
+            "code": "K27.400x004",
+            "name": "消化性溃疡伴出血",
+            "association": "same_prescription",
+            "is_placeholder": false,
+            "department": "急诊科专业",
+            "prescriber_level": null
+          }
+        ],
+        "diagnosis_status": "recorded",
+        "symptoms": null,
+        "symptoms_status": "not_available_in_current_source",
+        "clinical_conditions_verified": false,
+        "source_hash": "fa7b61b0748ddc891395c3fdf0cab2aac4ca20fb6c3a1c8c10962fb0ef020f9d",
+        "read_at": "2026-11-04T11:19:45.229456+00:00"
+      },
+      "question": "第10行注射用卡络磺钠为什么有自付？目录支付条件与本单记录能说明什么？",
+      "comparisons": [
+        {
+          "arm": "without_context",
+          "input_sha256": "79f1f8cc5c57b9e6246233c7cdf2a1e3ff7ac4d7c55f2d339555565b2b4119d8",
+          "used_model": true,
+          "model_attempted": true,
+          "fallback_reason": null,
+          "answer": "第10行注射用卡络磺钠（本单行号9）金额15.28元，其中医保内13.75元、医保外1.53元，自付二也是1.53元。也就是说，这一行的自付来自按比例先行自付：15.28元中有1.53元先由个人承担，剩余13.75元进入医保内范围。该行属于乙类西药，非集采品种。\n\n不过，本行目前只能确认“按比例划分”这一方式，具体先行自付比例、比例来源和限价比较结果在资料中均为空，逐项计算尚未算平，因此无法进一步说明1.53元是按哪个比例、以什么为基数得出的，也不能判断是否含超限价部分。\n\n目录支付条件方面：本行目录备注状态为可用且备注为空，即该药品当日没有额外的限定支付备注；本单记录中也没有针对该行的诊断关联或条件记录。因此，目录侧目前只能说明“当日无备注限制”，不能据此认定本单满足或不符合任何支付条件，也不能把自付归因于某个目录条件。",
+          "model_responses": [
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第10行注射用卡络磺钠（本单行号9）金额15.28元，其中医保内13.75元、医保外1.53元，自付二也是1.53元。也就是说，这一行的自付来自按比例先行自付：15.28元中有1.53元先由个人承担，剩余13.75元进入医保内范围。该行属于乙类西药，非集采品种。\n\n不过，本行目前只能确认“按比例划分”这一方式，具体先行自付比例、比例来源和限价比较结果在资料中均为空，逐项计算尚未算平，因此无法进一步说明1.53元是按哪个比例、以什么为基数得出的，也不能判断是否含超限价部分。\n\n目录支付条件方面：本行目录备注状态为可用且备注为空，即该药品当日没有额外的限定支付备注；本单记录中也没有针对该行的诊断关联或条件记录。因此，目录侧目前只能说明“当日无备注限制”，不能据此认定本单满足或不符合任何支付条件，也不能把自付归因于某个目录条件。"
+            }
+          ]
+        },
+        {
+          "arm": "with_context",
+          "input_sha256": "76e51c65e411ec71f4ae471cc6e9b89533bfe3844a357c56816eb7ad6d196683",
+          "used_model": true,
+          "model_attempted": true,
+          "fallback_reason": null,
+          "answer": "第10行注射用卡络磺钠（本单行号9）总费用15.28元，其中医保内13.75元、医保外1.53元，这1.53元同时就是本行的自付二。\n\n为什么有自付：这一行按乙类西药、比例划分方式处理，本行记录显示先行自付部分为1.53元，剩余13.75元计入医保内。本行没有设置单价限价，不存在超限价情形，所以自付二来自比例先行自付，而不是超限价。需要说明的是，本行逐项计算尚未算平（计算列为空、可解释标记为否），上述划分采用的是本单已记录的观察值；资料未给出本行自付比例的具体数值和比例来源，因此不能列出代入数值的完整算式。\n\n目录支付条件能说明什么：该药品当日目录备注为“限无法口服卡络磺钠（肾上腺色腙）的患者”。本单同处方诊断记录了血友病A型、下消化道出血、重度贫血、消化性溃疡伴出血，开方科室为急诊科专业；这些记录可以支持核对是否存在出血相关用药情形，但资料中没有独立的症状字段，也没有不能口服的用药执行记录，临床条件未经核实。因此，这条备注限定了什么、本单记录能核对到什么，目前只能说到这里；不能据此断定本次自付是因为不符合该条件，也不能认定医院或患者存在违规。",
+          "model_responses": [
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第10行注射用卡络磺钠（本单行号9）总费用15.28元，其中医保内13.75元、医保外1.53元，这1.53元同时就是本行的自付二。\n\n为什么有自付：这一行按乙类西药、比例划分方式处理，本行记录显示先行自付部分为1.53元，即总费用的10%左右（15.28×10%＝1.53），剩余13.75元计入医保内。本行没有超限价情形（未设单价限价），所以自付二全部来自比例先行自付，不是超限价造成。需要说明的是，本行逐项计算尚未算平（计算列为空、可解释标记为否），上述划分采用的是本单已记录的观察值，比例来源未在资料中给出。\n\n目录支付条件能说明什么：该药品当日目录备注为“限无法口服卡络磺钠（肾上腺色腙）的患者”。本单同处方诊断记录了血友病A型、下消化道出血、重度贫血、消化性溃疡伴出血，开方科室为急诊科专业；这些记录可以支持核对“是否存在出血相关用药情形”，但资料中没有独立的症状字段，也没有不能口服的用药执行记录，临床条件未经核实。因此，这条备注限定了什么、本单记录能核对到什么，目前只能说到这里；不能据此断定本次自付是因为不符合该条件，也不能认定医院或患者存在违规。"
+            },
+            {
+              "model_name": "deepseek-flash",
+              "finish_reason": "stop",
+              "answer": "第10行注射用卡络磺钠（本单行号9）总费用15.28元，其中医保内13.75元、医保外1.53元，这1.53元同时就是本行的自付二。\n\n为什么有自付：这一行按乙类西药、比例划分方式处理，本行记录显示先行自付部分为1.53元，剩余13.75元计入医保内。本行没有设置单价限价，不存在超限价情形，所以自付二来自比例先行自付，而不是超限价。需要说明的是，本行逐项计算尚未算平（计算列为空、可解释标记为否），上述划分采用的是本单已记录的观察值；资料未给出本行自付比例的具体数值和比例来源，因此不能列出代入数值的完整算式。\n\n目录支付条件能说明什么：该药品当日目录备注为“限无法口服卡络磺钠（肾上腺色腙）的患者”。本单同处方诊断记录了血友病A型、下消化道出血、重度贫血、消化性溃疡伴出血，开方科室为急诊科专业；这些记录可以支持核对是否存在出血相关用药情形，但资料中没有独立的症状字段，也没有不能口服的用药执行记录，临床条件未经核实。因此，这条备注限定了什么、本单记录能核对到什么，目前只能说到这里；不能据此断定本次自付是因为不符合该条件，也不能认定医院或患者存在违规。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "职工门诊",
+      "chain": "employee_outpatient",
+      "case_ref": "8d28b7422f92",
+      "line_id": "2",
+      "item_name": "罗沙司他胶囊",
+      "total_fee": "25.0000",
+      "observed_in_scope": "22.5000",
+      "observed_out_scope": "2.5000",
+      "amounts_and_verdict_unchanged": true,
+      "context": {
+        "bz": "限慢性肾脏病(CKD)引起的贫血。支付标准不得高于：24.90元(20mg/粒)；50.22元(50mg/粒)",
+        "catalog_status": "unique",
+        "catalog_source": "药品目录",
+        "effective_from": "2024-03-20",
+        "effective_to": "2050-12-31",
+        "fee_date": "2024-09-13",
+        "date_basis": "settlement_date_fallback",
+        "specification": "盒",
+        "unit": "片",
+        "usage": "01",
+        "hospital_level": "02",
+        "hospital_level_name": "三级甲等",
+        "catalog_hospital_level": null,
+        "catalog_hospital_type": null,
+        "catalog_use_restriction": null,
+        "diagnoses": [
+          {
+            "code": "01",
+            "name": "1",
+            "association": "same_prescription",
+            "is_placeholder": true,
+            "department": "全科医疗科",
+            "prescriber_level": null
+          }
+        ],
+        "diagnosis_status": "placeholder",
+        "symptoms": null,
+        "symptoms_status": "not_available_in_current_source",
+        "clinical_conditions_verified": false,
+        "source_hash": "8d091d3329c94d415c670a38e8bc90fc2fb880c2d13ac105dd9003a3e00a093e",
+        "read_at": "2026-11-04T11:19:59.732640+00:00"
+      },
+      "question": "第3行罗沙司他胶囊为什么有自付？目录支付条件与本单记录能说明什么？",
+      "comparisons": []
+    },
+    {
+      "label": "职工门特",
+      "chain": "employee_special",
+      "case_ref": "dc8402ceb945",
+      "line_id": "1",
+      "item_name": "他克莫司胶囊",
+      "total_fee": "6000.0000",
+      "observed_in_scope": "6000.0000",
+      "observed_out_scope": "0.0000",
+      "amounts_and_verdict_unchanged": true,
+      "context": {
+        "bz": null,
+        "catalog_status": "unique",
+        "catalog_source": "药品目录",
+        "effective_from": "2022-10-10",
+        "effective_to": "2024-05-31",
+        "fee_date": "2024-04-30",
+        "date_basis": "fee_date",
+        "specification": "1mg",
+        "unit": null,
+        "usage": null,
+        "hospital_level": "02",
+        "hospital_level_name": "三级甲等",
+        "catalog_hospital_level": null,
+        "catalog_hospital_type": null,
+        "catalog_use_restriction": null,
+        "diagnoses": [],
+        "diagnosis_status": "not_found",
+        "symptoms": null,
+        "symptoms_status": "not_available_in_current_source",
+        "clinical_conditions_verified": false,
+        "source_hash": "e522db3d1103b876e15704e0754278a4825c46380138d4eb33d76a7fae9326f6",
+        "read_at": "2026-11-04T11:19:59.921002+00:00"
+      },
+      "question": "第1行他克莫司胶囊为什么有自付？目录支付条件与本单记录能说明什么？",
+      "comparisons": []
+    },
+    {
+      "label": "居民门特",
+      "chain": "resident_special",
+      "case_ref": "513bbe104082",
+      "line_id": "1",
+      "item_name": "注射用培美曲塞二钠",
+      "total_fee": "699.0000",
+      "observed_in_scope": "629.1000",
+      "observed_out_scope": "69.9000",
+      "amounts_and_verdict_unchanged": true,
+      "context": {
+        "bz": null,
+        "catalog_status": "unique",
+        "catalog_source": "药品目录",
+        "effective_from": "2023-03-01",
+        "effective_to": "2050-12-31",
+        "fee_date": "2024-09-25",
+        "date_basis": "fee_date",
+        "specification": "0.1g",
+        "unit": null,
+        "usage": null,
+        "hospital_level": "02",
+        "hospital_level_name": "三级甲等",
+        "catalog_hospital_level": null,
+        "catalog_hospital_type": null,
+        "catalog_use_restriction": null,
+        "diagnoses": [],
+        "diagnosis_status": "not_found",
+        "symptoms": null,
+        "symptoms_status": "not_available_in_current_source",
+        "clinical_conditions_verified": false,
+        "source_hash": "f26c07e19ffc8616dede3bba1e2d6f4fcfe61b24d76548c31725877b6a7ea0ba",
+        "read_at": "2026-11-04T11:20:00.101581+00:00"
+      },
+      "question": "第1行注射用培美曲塞二钠为什么有自付？目录支付条件与本单记录能说明什么？",
+      "comparisons": []
+    }
+  ]
+}
