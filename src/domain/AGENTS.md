@@ -16,6 +16,7 @@ domain/
 ├── drg_dip/        # DrgGroupResult, DipGroupResult, PaymentRate
 ├── medical_record/ # MedicalRecordHomepage, Diagnosis, Surgery
 ├── order_fee/      # Order, FeeItem, Drug, Consumable
+├── directory_compliance/  # ComplianceRule, ValueDomainMapping, ConditionVerdict（Issue #85）
 ├── common/         # Citation, Role 枚举
 ├── skill/          # Skill, SkillStep, SkillMetadata（Pydantic）
 ├── trusted_qa/     # TrustedQuestion 可信问题（Pydantic，Issue #37）
@@ -294,6 +295,9 @@ HIS 系统 → HisPort → Patient (查询/读取)
 | 机构快照 | `InstitutionProfile` | **Value Object** | `@dataclass(frozen=True)` | 机构键与 H_LEVEL/H_TYPE 原值；社区判定主依据 H_TYPE（字典 k80），分支判断在计算层（#78） |
 | 年度累计上下文 | `AnnualAccumulation` | **Value Object** | `@dataclass(frozen=True)` | 交易前医保内费用累计/基金支付累计及口径确认标志（含逐交易恒等式自证 self_proven）（#78） |
 | 费用明细行快照 | `FeeLineItem` | **Value Object** | `@dataclass(frozen=True)` | 行键/目录类别/账面金额/费用发生日期/集采包装与一致性评价/明细行结算事实（MEDIC_L 实际自付比例、SP_SCALE 结算时限价）（#78） |
+| 支付条件解释上下文 | `PaymentConditionContext` | **DTO** | Pydantic `BaseModel` | #85 解释侧车：当日唯一目录bz/有效期、规格单位用法、机构等级、诊断关联与缺失状态；不进入金额内核，不代表临床条件已核验 |
+| 诊断事实投影 | `DiagnosisFact` | **DTO** | Pydantic `BaseModel` | 本单读取到的编码/名称、同处方或仅同单关联、占位标识及科室/医师等级原值；区别于病案领域实体Diagnosis，不推断病因或资质 |
+| 同单收费线索 | `BilledItemFact` | **DTO** | Pydantic `BaseModel` | 模型输入中的同单项目名称/类别与展示序号；不提供其他行金额，不代表检查执行或药物配合使用 |
 | 药品目录条目 | `DrugCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sflb/自付比例/集采限价/超限价自付比例 a_xbbl/自制剂标准价；`a_ypbs_known` 保留集采标志已知性，仅供解释，不改变计算；空截止日期不默认永久有效（#78） |
 | 诊疗服务目录条目 | `ServiceCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | sfxmdj（1 无自付/2 有自付/3 全自付，空=未知）/自付比例/单价限额（#78） |
 | 医用材料目录条目 | `MaterialCatalogEntry` | **Value Object** | `@dataclass(frozen=True)` | 人工器官/集采中选例外标志（#78） |
@@ -389,6 +393,52 @@ HIS 系统 → HisPort → Patient (查询/读取)
 ```
 医生开医嘱 → HIS 系统 → HisPort → Order (聚合 FeeItems) → 出院前质控 / 结算异常分析
 ```
+
+---
+
+### 4.5 目录合规核验上下文（Directory Compliance）
+
+#### 概述
+
+管理由目录限制性备注（bz）生成的规则、内部标准值域映射与核验裁定。实施本上下文时读 `docs/steering/限制性备注合规核验-规则引擎设计-V1.0.md`（内版V1.1）及同目录现有代码优化实施方案；字段取得、匹配动作与条件结论分开，质量合格后用于解释。
+
+#### 文件位置
+
+`src/domain/directory_compliance/`
+
+#### 通用语言字典
+
+| 中文术语 | 英文命名 | DDD 战术分类 | 类型 | 说明 |
+|---------|---------|-------------|------|------|
+| 合规验证规则 | `ComplianceRule` | **Aggregate Root** | Pydantic BaseModel (frozen) | 一个受限项目一个目录版本一条，发布后结构冻结 |
+| 规则条件 | `RuleCondition` | **Value Object** | Pydantic BaseModel (frozen) | 原子条件：condition_type + 概念码 + 原文 source_span |
+| 条件组 | `ConditionGroup` | **Value Object** | Pydantic BaseModel (frozen) | 组内 any_of、组间 all_of 的组合单元 |
+| 限制条件类型 | `RestrictionConditionType` | **Value Object** | StrEnum | disease/usage/institution/prescriber/filing/price_cap/population |
+| 内部标准值域 | `ValueDomain` | **Value Object** | StrEnum | diagnosis/procedure/institution_level/prescriber/population/price_unit |
+| 值域映射 | `ValueDomainMapping` | **Entity** | Pydantic BaseModel (frozen) | 概念码+作用域 → 真实代码绑定（hospital>regional>default） |
+| 映射作用域 | `MappingScope` | **Value Object** | StrEnum | default（bjyb 基线）/ regional / hospital |
+| 支付标准限价参数 | `PriceCapSpec` | **Value Object** | Pydantic BaseModel (frozen) | 限价金额/计价单位/规格原文，属规则而非映射 |
+| 结算单行上下文 | `SettlementLineContext` | **DTO** | Pydantic BaseModel (frozen) | 核验输入：行金额/规格 + 同方诊断 + 同单项目 + 患者属性 |
+| 诊断事实 | `DiagnosisFact` | **Value Object** | Pydantic BaseModel (frozen) | 同处方诊断的编码/名称/病历摘要 |
+| 裁定证据 | `ConditionEvidence` | **Value Object** | Pydantic BaseModel (frozen) | 验证链路的可解释单元（kind/summary/source） |
+| 条件核验裁定 | `ConditionVerdict` | **Value Object** | Pydantic BaseModel (frozen) | 条件 + 三态裁定 + 证据/缺失项，禁止裸结论 |
+| 核验裁定状态 | `VerdictStatus` | **Value Object** | StrEnum | supported/contradicted/unverifiable/insufficient_evidence |
+| 行级合规结果 | `LineComplianceResult` | **Entity** | Pydantic BaseModel (frozen) | 一行全部裁定 + 风险层 + 三分金额口径 |
+| 合规风险层 | `ComplianceRiskTier` | **Value Object** | StrEnum | contra/suspect/review/clear |
+| 合规核验引擎 | `engine.evaluate_rule` | **Domain Service** | 纯函数 | 规则 AST + 行上下文 + 映射 → 行级裁定 |
+| 本次字段质量 | `FieldReadStatus` / `FieldObservation` | **Value Object** | StrEnum / frozen BaseModel | 实际取数状态、来源关联及缺失原因，不代替条件结论 |
+| 匹配动作状态 | `MatchStatus` | **Value Object** | StrEnum | matched / not_matched / not_evaluated |
+| 规则状态与定位 | `RuleStatus` / `RuleLookupStatus` / `RuleLookupResult` | **Value Object** | StrEnum / frozen BaseModel | 已发布规则唯一命中；草稿只返回回放候选 |
+| 价格核验口径 | `PriceBasis` | **Value Object** | StrEnum | unknown / sale_ceiling / payment_standard；支付基数不从FeeIn倒推 |
+| 规则配置文档 | `RuleDocument` / `RuleItem` / `CatalogVersion` | **DTO** | frozen BaseModel | 配置态结构、校验及领域规则转换，位于configuration.py |
+
+#### 业务规则
+
+- 占位、无取数状态、查询失败不执行匹配；已取到的真实诊断未匹配也不自动构成反证。只有经审核映射和可靠同处方编码可支持，名称/病历子串仅作线索
+- 价格先统一量纲与包装；收费上限核售价，支付标准核实际取得的支付基数。口径/换算/基数缺失保留未知，不从售价超标准直接判冲突
+- 概念码无有效映射 fail-closed 判 `unverifiable` 并指明缺哪条映射
+- 草稿、未审核映射不生成正式患者确定性结论；条件结果不自行确定医保外金额类别或本次结算因果
+- 患者侧解释禁用定性/承诺用语（违规/开错/退费等，`PATIENT_BANNED_WORDS` 防回归断言）
 
 ---
 
