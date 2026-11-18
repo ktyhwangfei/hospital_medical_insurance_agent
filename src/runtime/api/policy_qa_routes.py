@@ -54,6 +54,11 @@ from src.runtime.policy_qa.settlement_data_provider import (
     SettlementNotFoundError,
     create_settlement_data_provider,
 )
+from src.runtime.policy_qa.settlement_bill_compare import (
+    SettlementBillCompareRequest,
+    bill_compare_data_notes,
+    generate_bill_compare_answer,
+)
 from src.runtime.policy_qa.structured_policy_retriever import (
     PolicyRetrievalUnavailableError,
     StructuredPolicyEvidence,
@@ -2982,6 +2987,118 @@ async def get_settlement_bill(
                 {"operation": "settlement_bill"},
             ),
         ) from exc
+
+
+@router.post("/settlement-bill-compare", response_model=PolicyQAPublicResult)
+async def explain_settlement_bill_compare(
+    payload: SettlementBillCompareRequest,
+) -> PolicyQAPublicResult:
+    """两张结算单费用分解的模型解释（Issue #87 门诊/门特两单对比）。
+
+    把两张单的费用构成与费用明细结构化后交给 ModelGateway 生成解释；
+    模型不可用时返回 503，由前端降级为确定性账面核对。
+    金额逐单呈现、不加总，不作合规判断（硬约束见提示词）。
+    """
+    items = payload.items
+    if len(items) != 2:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "POLICY_QA_INVALID_COMPARISON",
+                "两单对比需要且仅需要两张结算单。",
+                {"operation": "settlement_bill_compare"},
+            ),
+        )
+    if items[0].settlement_id == items[1].settlement_id:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "POLICY_QA_INVALID_COMPARISON",
+                "对比结算单不能是同一张单。",
+                {"operation": "settlement_bill_compare"},
+            ),
+        )
+
+    try:
+        provider = create_settlement_data_provider()
+        bills = [
+            await provider.get_settlement_bill(
+                item.settlement_id, service_type=item.service_type
+            )
+            for item in items
+        ]
+    except SettlementNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "POLICY_QA_SETTLEMENT_NOT_FOUND",
+                "未找到对应的结算记录。",
+                {"operation": "settlement_bill_compare"},
+            ),
+        ) from exc
+    except SettlementDataUnavailableError as exc:
+        logger.exception("Settlement bill compare data unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_DATA_UNAVAILABLE",
+                "结算数据源暂时不可用，请稍后重试。",
+                {"operation": "settlement_bill_compare"},
+            ),
+        ) from exc
+    except RuntimeError as exc:
+        logger.exception("Settlement bill compare runtime failure")
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_UNAVAILABLE",
+                "政策问答服务暂时不可用，请稍后重试。",
+                {"operation": "settlement_bill_compare"},
+            ),
+        ) from exc
+
+    # 模型输入按结算日期从早到晚排列（较早一张在前）
+    bills.sort(key=lambda bill: bill.settlement_date or "\uffff")
+
+    try:
+        answer = generate_bill_compare_answer(payload.question, bills)
+    except Exception as exc:
+        logger.warning("[settlement-bill-compare] 模型解释失败: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_MODEL_UNAVAILABLE",
+                "模型解释暂时不可用，请稍后重试。",
+                {"operation": "settlement_bill_compare"},
+            ),
+        ) from exc
+    if not answer:
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail(
+                "POLICY_QA_MODEL_UNAVAILABLE",
+                "模型未返回有效解释，请稍后重试。",
+                {"operation": "settlement_bill_compare"},
+            ),
+        )
+
+    warnings: list[str] = []
+    for bill in bills:
+        warnings.extend(bill.warnings)
+    return _build_public_result(
+        answer=answer,
+        can_answer=True,
+        partial_answer=True,
+        policy_status="no_policy_matched",
+        policy_evidence=[],
+        calculation_steps=[],
+        definition=None,
+        warnings=list(dict.fromkeys(warnings)),
+        case_context={
+            "service_type": " / ".join(bill.service_type or "未知" for bill in bills),
+        },
+        outpatient_result={"uncertainties": bill_compare_data_notes(bills)},
+    )
 
 
 # ── 患者定位（V4.0 结算解释智能体·临时方案）────────────────────────

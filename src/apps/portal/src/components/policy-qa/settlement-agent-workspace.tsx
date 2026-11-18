@@ -42,6 +42,7 @@ import { usePolicyQAStream } from '@/lib/use-policy-qa-stream'
  */
 
 const EXPLANATION_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/settlement-explanation'
+const BILL_COMPARE_URL = '/api/v1/medical-insurance-ai-agent/policy-qa/settlement-bill-compare'
 
 /** 单笔解释 / 两单对比共用同一既有端点；compareWith 提供时进入对比模式。 */
 async function fetchSettlementExplanation(
@@ -58,6 +59,32 @@ async function fetchSettlementExplanation(
       throw new Error('该结算单暂不支持费用构成解释（当前仅覆盖住院结算单），可在对话中直接提问。')
     }
     throw new Error(`结算解释查询失败（HTTP ${response.status}）`)
+  }
+  const payload = (await response.json()) as { result?: unknown } & Record<string, unknown>
+  // 端点直接返回 PolicyQAPublicResult（非 { result: ... } 包装）
+  const raw = payload.result ?? payload
+  return toPolicyQAResult(raw)
+}
+
+/** 两张结算单费用分解交给模型生成对比解释（模型不可用时前端降级为账面核对）。 */
+async function fetchBillCompareExplanation(
+  older: SettlementListItemDTO,
+  newer: SettlementListItemDTO,
+  question: string,
+): Promise<PolicyQAResult> {
+  const response = await fetch(BILL_COMPARE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      items: [
+        { settlement_id: older.settlementId, service_type: older.serviceType },
+        { settlement_id: newer.settlementId, service_type: newer.serviceType },
+      ],
+      question,
+    }),
+  })
+  if (!response.ok) {
+    throw new Error(`模型解释不可用（HTTP ${response.status}）`)
   }
   const payload = (await response.json()) as { result?: unknown } & Record<string, unknown>
   // 端点直接返回 PolicyQAPublicResult（非 { result: ... } 包装）
@@ -270,15 +297,25 @@ export default function SettlementAgentWorkspace({
       setComparing(true)
       try {
         if (hasOutpatient) {
-          // 门诊/门特不在住院语义模型内，后端对比端点无法解释：
-          // 直接基于两张费用分解做确定性核对，仍按两张单作答
+          // 门诊/门特不在住院语义模型内：两张费用分解交给模型生成解释，
+          // 模型不可用时降级为确定性账面核对，仍按两张单作答
           const [olderBill, newerBill] = await Promise.all([
             loadBillForCompare(older),
             loadBillForCompare(newer),
           ])
-          stream.appendLocalMessage(
-            buildBillCompareMessage({ older, newer, olderBill, newerBill }),
-          )
+          try {
+            const result = await fetchBillCompareExplanation(older, newer, command.question)
+            stream.appendLocalMessage(toCompareMessage(result))
+          } catch {
+            const fallback = buildBillCompareMessage({ older, newer, olderBill, newerBill })
+            stream.appendLocalMessage({
+              ...fallback,
+              uncertainties: [
+                ...(fallback.uncertainties ?? []),
+                '模型解释暂时不可用，以上为账面核对。',
+              ],
+            })
+          }
         } else {
           const result = await fetchSettlementExplanation(older.settlementId, {
             compareWith: newer.settlementId,

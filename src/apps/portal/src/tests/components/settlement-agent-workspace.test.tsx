@@ -112,9 +112,27 @@ const COMPARE_PAYLOAD = {
   is_broad: false,
 }
 
-/** 路由桩：patient-lookup / settlements / settlement-explanation（含 compare_with）。 */
-function stubFetch() {
-  const fetchMock = vi.fn(async (input: string | URL | RequestInfo) => {
+const MODEL_COMPARE_PAYLOAD = {
+  answer:
+    '【个人支付差异】\n803：个人支付 100.00 元；门诊单 OUTP-2024-1205-001：个人支付 88.50 元。\n【说明】以上为账面差异，未附政策依据。',
+  answer_status: 'partial',
+  calculation_steps: [],
+  warnings: [],
+  policy_evidence: [],
+  citations: [],
+  uncertainties: ['未附政策依据，政策原因需向医保办核实。'],
+  verification_summary: {
+    settlement_checked: true,
+    calculation_checked: false,
+    policy_count: 0,
+    message: '已核对两张结算单费用分解',
+  },
+  is_broad: false,
+}
+
+/** 路由桩：patient-lookup / settlements / bill / settlement-explanation / 两单模型对比。 */
+function stubFetch(options: { compareFails?: boolean } = {}) {
+  const fetchMock = vi.fn(async (input: string | URL | RequestInfo, _init?: RequestInit) => {
     const url = String(input)
     const respond = (payload: unknown, status = 200) =>
       ({
@@ -122,6 +140,11 @@ function stubFetch() {
         status,
         json: async () => payload,
       }) as Response
+    if (url.includes('/policy-qa/settlement-bill-compare')) {
+      return options.compareFails
+        ? respond({ detail: 'unavailable' }, 503)
+        : respond(MODEL_COMPARE_PAYLOAD)
+    }
     if (url.includes('/policy-qa/patient-lookup')) return respond(RAW_PATIENT)
     if (url.includes('/bill')) {
       const match = /settlements\/([^/?]+)\/bill/.exec(url)
@@ -350,15 +373,46 @@ describe('SettlementAgentWorkspace（Issue #87 两单选择与对比）', () => 
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await waitFor(() => {
-      expect(screen.getByText(/【费用构成差异】/)).toBeInTheDocument()
+      expect(screen.getByText(/【个人支付差异】/)).toBeInTheDocument()
     })
-    // 以较早的住院单 803 为基准，逐单对照门诊单
-    expect(screen.getByText(/以较早的结算单 803/)).toBeInTheDocument()
-    expect(screen.getAllByText(/结算单 OUTP-2024-1205-001/).length).toBeGreaterThan(0)
+    // 门诊/门特对比走模型解释端点，逐单呈现金额
+    const modelCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes('/policy-qa/settlement-bill-compare'),
+    )
+    expect(modelCalls).toHaveLength(1)
+    const body = JSON.parse(String((modelCalls[0]?.[1] as RequestInit | undefined)?.body ?? '{}'))
+    expect(body.items.map((item: { settlement_id: string }) => item.settlement_id)).toEqual([
+      '803',
+      'OUTP-2024-1205-001',
+    ])
+    expect(body.question).toBe('两次结算为什么不一样')
     // 门诊单不走住院对比端点
     const compareCalls = fetchMock.mock.calls.filter((call) =>
       String(call[0]).includes('compare_with='),
     )
     expect(compareCalls).toHaveLength(0)
+  })
+
+  it('模型解释不可用时降级为确定性账面核对', async () => {
+    stubFetch({ compareFails: true })
+    render(<SettlementAgentWorkspace />)
+    await locatePatient()
+
+    fireEvent.click(screen.getByTestId('settlement-item-803'))
+    fireEvent.click(screen.getByTestId('settlement-item-OUTP-2024-1205-001'))
+    await waitFor(() => {
+      expect(screen.getByTestId('settlement-compare-tabs')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByRole('textbox', { name: '政策问题' }), {
+      target: { value: '为什么两次结算的金额不一样' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/【费用构成差异】/)).toBeInTheDocument()
+    })
+    expect(screen.getByText(/以较早的结算单 803/)).toBeInTheDocument()
+    expect(screen.getByText('模型解释暂时不可用，以上为账面核对。')).toBeInTheDocument()
   })
 })
